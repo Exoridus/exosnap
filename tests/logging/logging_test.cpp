@@ -8,11 +8,11 @@
 namespace {
 
 using recorder_core::logging::LogField;
-using recorder_core::logging::LogLevel;
 using recorder_core::logging::LoggerConfig;
+using recorder_core::logging::LogLevel;
 
 class LoggingTest : public ::testing::Test {
-protected:
+  protected:
     void SetUp() override {
         recorder_core::logging::shutdown();
     }
@@ -26,8 +26,7 @@ protected:
     }
 
     std::filesystem::path makeTempPath() {
-        auto name =
-            "exosnap_test_" + std::to_string(counter_++) + ".jsonl";
+        auto name = "exosnap_test_" + std::to_string(counter_++) + ".jsonl";
         auto path = std::filesystem::temp_directory_path() / name;
         tempFiles_.push_back(path);
         return path;
@@ -56,16 +55,14 @@ TEST_F(LoggingTest, ToStringReturnsStableLevelNames) {
     EXPECT_EQ(recorder_core::logging::to_string(LogLevel::Info), "info");
     EXPECT_EQ(recorder_core::logging::to_string(LogLevel::Warn), "warn");
     EXPECT_EQ(recorder_core::logging::to_string(LogLevel::Error), "error");
-    EXPECT_EQ(recorder_core::logging::to_string(LogLevel::Critical),
-              "critical");
+    EXPECT_EQ(recorder_core::logging::to_string(LogLevel::Critical), "critical");
 }
 
 TEST_F(LoggingTest, InitializeRejectsZeroRingCapacity) {
     LoggerConfig cfg;
     cfg.filePath = makeTempPath();
     cfg.ringCapacity = 0;
-    EXPECT_THROW(recorder_core::logging::initialize(cfg),
-                 std::invalid_argument);
+    EXPECT_THROW(recorder_core::logging::initialize(cfg), std::invalid_argument);
 }
 
 TEST_F(LoggingTest, RingBufferKeepsNewestRecordsInChronologicalOrder) {
@@ -119,8 +116,7 @@ TEST_F(LoggingTest, FileSinkWritesStructuredJsonLines) {
     std::vector<LogField> fields;
     fields.push_back({"key1", "value1"});
     fields.push_back({"key2", "value2"});
-    recorder_core::logging::log(LogLevel::Info, "test_comp", "test message",
-                                fields);
+    recorder_core::logging::log(LogLevel::Info, "test_comp", "test message", fields);
 
     recorder_core::logging::shutdown();
 

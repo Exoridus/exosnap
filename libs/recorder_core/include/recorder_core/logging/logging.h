@@ -9,14 +9,7 @@
 
 namespace recorder_core::logging {
 
-enum class LogLevel {
-    Trace,
-    Debug,
-    Info,
-    Warn,
-    Error,
-    Critical
-};
+enum class LogLevel { Trace, Debug, Info, Warn, Error, Critical };
 
 struct LogField {
     std::string key;
@@ -43,10 +36,7 @@ void initialize(const LoggerConfig& config);
 
 void shutdown() noexcept;
 
-void log(LogLevel level,
-         std::string_view component,
-         std::string_view message,
-         std::span<const LogField> fields = {});
+void log(LogLevel level, std::string_view component, std::string_view message, std::span<const LogField> fields = {});
 
 std::vector<LogRecord> snapshot_ring_buffer();
 

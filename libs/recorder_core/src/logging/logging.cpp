@@ -1,8 +1,8 @@
 #include <recorder_core/logging/logging.h>
 
-#include <spdlog/spdlog.h>
-#include <spdlog/sinks/basic_file_sink.h>
 #include <nlohmann/json.hpp>
+#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/spdlog.h>
 
 #include <deque>
 #include <mutex>
@@ -83,8 +83,7 @@ void initialize(const LoggerConfig& config) {
 
     reset_state_locked(s);
 
-    auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
-        config.filePath.string(), true);
+    auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(config.filePath.string(), true);
     s.logger = std::make_shared<spdlog::logger>("exosnap", sink);
     s.logger->set_pattern("%v");
     s.logger->set_level(spdlog::level::trace);
@@ -101,10 +100,7 @@ void shutdown() noexcept {
     reset_state_locked(s);
 }
 
-void log(LogLevel level,
-         std::string_view component,
-         std::string_view message,
-         std::span<const LogField> fields) {
+void log(LogLevel level, std::string_view component, std::string_view message, std::span<const LogField> fields) {
     auto& s = state();
     std::lock_guard lock(s.mutex);
 
@@ -131,9 +127,7 @@ void log(LogLevel level,
 
     nlohmann::json j;
     j["timestamp_unix_ms"] =
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            record.timestamp.time_since_epoch())
-            .count();
+        std::chrono::duration_cast<std::chrono::milliseconds>(record.timestamp.time_since_epoch()).count();
     j["level"] = to_string(record.level);
     j["component"] = record.component;
     j["message"] = record.message;
