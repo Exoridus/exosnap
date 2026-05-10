@@ -11,6 +11,7 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 enable_testing()
 
 include(cmake/exosnap_warnings.cmake)
+include(cmake/exosnap_testing.cmake)
 
 add_subdirectory(third_party)
 add_subdirectory(libs/recorder_core)

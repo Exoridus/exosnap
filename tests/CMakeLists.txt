@@ -1,12 +1,5 @@
-add_executable(recorder_smoke_tests
-  smoke/smoke_test.cpp
+exosnap_add_gtest(
+  NAME recorder_smoke_tests
+  SOURCES smoke/smoke_test.cpp
+  LIBRARIES recorder_core
 )
-
-target_link_libraries(recorder_smoke_tests PRIVATE
-  GTest::gtest_main
-  recorder_core
-  exosnap::warnings
-)
-
-include(GoogleTest)
-gtest_discover_tests(recorder_smoke_tests)
