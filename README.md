@@ -46,6 +46,15 @@ docs/
   prompts/
 ```
 
+## Coding standards
+
+- C++ code is formatted with `clang-format`.
+- Static analysis baseline uses `clang-tidy`.
+- Repository-owned targets compile with strict warnings.
+- Third-party dependencies do not inherit project warning flags.
+- Developers can run `scripts/pre-commit.ps1` before committing.
+- The script runs formatting checks, optional clang-tidy when a compilation database exists, configure/build/test.
+
 ## Working rule
 
 This pack is the initial source of truth. If implementation work discovers a real conflict, update the relevant spec and add or revise an ADR before letting the codebase drift.
