@@ -58,3 +58,7 @@ docs/
 ## Working rule
 
 This pack is the initial source of truth. If implementation work discovers a real conflict, update the relevant spec and add or revise an ADR before letting the codebase drift.
+
+## Continuous integration
+
+GitHub Actions runs configure, build, and test on Windows for both `windows-x64-debug` and `windows-x64-release`. Test logs are uploaded as artifacts only when a CI test step fails. A status badge can be added after the repository exists remotely.
