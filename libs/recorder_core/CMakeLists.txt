@@ -1,5 +1,6 @@
 add_library(recorder_core STATIC
   src/version.cpp
+  src/logging/logging.cpp
 )
 
 target_include_directories(recorder_core PUBLIC include)
