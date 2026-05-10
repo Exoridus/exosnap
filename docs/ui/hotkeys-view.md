@@ -40,10 +40,14 @@ Accepted chord:
 - exactly one keyboard key
 
 Behavior:
-- `Esc` cancels capture
-- duplicate internal assignment must be rejected or explained
-- unavailable global combinations must be rejected or explained
-- `Unset` clears the binding
+- `Esc` cancels capture and leaves the previous binding unchanged.
+- A chord that duplicates another internal binding is rejected;
+  the user is shown which action already uses it.
+- A chord that the OS refuses to register globally
+  (e.g. `RegisterHotKey` failure or already owned by another
+  process) is rejected as unavailable; the previous binding is
+  kept and the failure reason is shown.
+- `Unset` clears the binding.
 
 ## Default bindings
 

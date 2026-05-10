@@ -127,7 +127,8 @@ The user should never need to mentally simulate the merge result.
 - Or select a specific input device
 
 ### SYS
-- Follow Windows default output device where endpoint semantics apply
+- Derived from the selected application / process tree via Process Loopback EXCLUDE
+- No separate endpoint or device binding in the MVP
 
 ### APP
 - Bound to selected application / process tree
@@ -145,3 +146,17 @@ APP  MIC  SYS
 - No optional convenience mixdown track in the MVP.
 - No hidden automatic source reclassification.
 - No UI-side duplicate resolver logic.
+
+## Technical realisation
+
+APP and SYS share a single capture mechanism (WASAPI Process Loopback)
+against the same target process tree, distinguished only by mode:
+
+| Source | Capture API | Process-tree mode |
+|---|---|---|
+| APP | WASAPI Process Loopback | INCLUDE target process tree |
+| SYS | WASAPI Process Loopback | EXCLUDE target process tree |
+| MIC | WASAPI Capture | not applicable; default or explicit input device |
+
+Because APP and SYS use the same target process tree with inverse modes,
+they are guaranteed disjoint — no audio sample appears in both.

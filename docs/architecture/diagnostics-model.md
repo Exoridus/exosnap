@@ -90,6 +90,9 @@ The selftest should exercise real pipeline initialization enough to validate:
 - live metrics
 - basic timing health
 
+The selftest performs a 2-second headless recording into
+`%TEMP%\exosnap-selftest\` and removes its artefacts on completion.
+
 ## Fix policy
 
 ### Allowed in MVP

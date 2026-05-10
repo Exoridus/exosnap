@@ -3,8 +3,7 @@
 ## Standard controls
 
 - Output frame rate
-  - 60 fps default
-  - other allowed values may be added later
+  - CFR 60 fps (fixed for MVP)
 - Resolution
   - source resolution default
   - optional scaling target
@@ -64,3 +63,5 @@ Advanced
 - Show why AV1 is recommended when available.
 - Do not expose unsupported codec choices as valid.
 - Keep the standard area simple.
+- Output frame rate is fixed at CFR 60 in MVP. Alternative output rates
+   are out-of-scope, including under Advanced.

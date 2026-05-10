@@ -95,6 +95,9 @@ OutputSettings
   fileNamePattern
   createDateSubfolders
   createApplicationSubfolders
+  codecMemoryByContainer
+    mkv : AudioCodec
+    mp4 : AudioCodec
 ```
 
 MVP defaults:
@@ -117,9 +120,10 @@ One binding per supported action:
 
 ### MKV
 May expose:
-- Opus
+- Opus (default)
 - AAC
-- optional PCM if supported
+
+PCM is out-of-scope for MVP.
 
 ### MP4
 May expose only compatible choices.
@@ -129,6 +133,10 @@ MVP expectation:
 ### Reconciliation behavior
 - When changing container, selected audio codec must be changed to a valid codec if needed.
 - The previous valid selection for a container may be remembered and restored when returning to that container.
+- The previously valid audio codec for each container is persisted in
+  `codecMemoryByContainer`. When returning to a container, the stored
+  codec is restored if still valid; otherwise the container's MVP
+  default is selected.
 
 ## Validation boundary
 

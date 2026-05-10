@@ -86,6 +86,8 @@ APP ▂▅▇  MIC ▂▃  SYS ▂▅▇
 - `ENC` means encode timing for the video path
 - `WRT` means write timing
 - `A/V` means measured audio/video drift
+- `LAT` is measured from the capture-frame acquire QPC timestamp to
+   the NVENC submit QPC timestamp.
 
 ## Bar meters
 

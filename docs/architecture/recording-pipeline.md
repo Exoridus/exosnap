@@ -99,6 +99,8 @@ Idle
   → Stopping
   → Idle
 
+Recording ⇄ Paused
+
 Error transitions may enter Failed.
 ```
 
@@ -121,6 +123,14 @@ The system must fail early and visibly when:
 - muxer cannot initialize
 - target path is invalid or unwritable
 - storage selftest fails beyond allowed threshold
+
+### APP process tree exit
+- Exit of a child process within the target APP process tree is logged
+  as a device-change-style event; the recording session continues.
+- Exit of the root process of the target APP process tree, or any
+  loss of the selected video capture source, is handled by the
+  existing source-loss policy: the session stops cleanly, a failure
+  log entry is written, and no partially-corrupted output is produced.
 
 ## Preview
 

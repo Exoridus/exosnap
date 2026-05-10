@@ -40,9 +40,10 @@ Estimated output
 
 ### MKV
 Expose:
-- Opus
+- Opus (default)
 - AAC
-- optional PCM if implemented
+
+PCM is out-of-scope for MVP.
 
 ### MP4
 Expose only compatible options.
