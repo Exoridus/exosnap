@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">x64</Platform>
+    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
+    <RootNamespace>exosnap</RootNamespace>
+    <ApplicationType>Windows Store</ApplicationType>
+    <AppxPackage>true</AppxPackage>
+    <WindowsAppContainer>false</WindowsAppContainer>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <UseWinUI>true</UseWinUI>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformMinVersion>10.0.17763.0</WindowsTargetPlatformMinVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets" />
+  <PropertyGroup Label="UserMacros" />
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK">
+      <Version>1.6.250205002</Version>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="App.xaml.h" />
+    <ClInclude Include="MainWindow.xaml.h" />
+    <ClInclude Include="pages\AdvancedPage.h" />
+    <ClInclude Include="pages\AudioPage.h" />
+    <ClInclude Include="pages\DiagnosticsPage.h" />
+    <ClInclude Include="pages\HotkeysPage.h" />
+    <ClInclude Include="pages\LogsPage.h" />
+    <ClInclude Include="pages\OutputPage.h" />
+    <ClInclude Include="pages\RecordPage.h" />
+    <ClInclude Include="pages\VideoPage.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="App.xaml.cpp" />
+    <ClCompile Include="MainWindow.xaml.cpp" />
+    <ClCompile Include="pages\AdvancedPage.cpp" />
+    <ClCompile Include="pages\AudioPage.cpp" />
+    <ClCompile Include="pages\DiagnosticsPage.cpp" />
+    <ClCompile Include="pages\HotkeysPage.cpp" />
+    <ClCompile Include="pages\LogsPage.cpp" />
+    <ClCompile Include="pages\OutputPage.cpp" />
+    <ClCompile Include="pages\RecordPage.cpp" />
+    <ClCompile Include="pages\VideoPage.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <Page Include="App.xaml">
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="MainWindow.xaml">
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="pages\AdvancedPage.xaml">
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="pages\AudioPage.xaml">
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="pages\DiagnosticsPage.xaml">
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="pages\HotkeysPage.xaml">
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="pages\LogsPage.xaml">
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="pages\OutputPage.xaml">
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="pages\RecordPage.xaml">
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="pages\VideoPage.xaml">
+      <SubType>Designer</SubType>
+    </Page>
+  </ItemGroup>
+  <ItemGroup>
+    <AppxManifest Include="Package.appxmanifest" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="packages\Microsoft.WindowsAppSDK.1.6.250205002\build\native\Microsoft.WindowsAppSDK.targets" Condition="Exists('packages\Microsoft.WindowsAppSDK.1.6.250205002\build\native\Microsoft.WindowsAppSDK.targets')" />
+  </ImportGroup>
+  <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
+    <PropertyGroup>
+      <ErrorText>This project references NuGet packages missing on this computer. Use NuGet Package Restore to download them. For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
+    </PropertyGroup>
+  </Target>
+</Project>

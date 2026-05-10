@@ -18,6 +18,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Windows App SDK tooling
+        shell: pwsh
+        run: |
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          Write-Host "VS path: $vsPath"
+          $componentId = "Microsoft.VisualStudio.ComponentGroup.WindowsAppSDK.Cpp"
+          $vsInstaller = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
+          & $vsInstaller modify --installPath $vsPath --add $componentId --quiet --norestart --wait
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "vs_installer returned $LASTEXITCODE — tooling may already be present"
+          }
+
       - name: Configure (${{ matrix.preset }})
         run: cmake --preset ${{ matrix.preset }}
 
