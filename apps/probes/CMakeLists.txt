@@ -1,3 +1,3 @@
-# placeholder, no probes yet
+# probes
 
-add_library(probes_placeholder INTERFACE)
+add_subdirectory(probe_wgc_preview)
