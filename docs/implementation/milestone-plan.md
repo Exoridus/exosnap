@@ -15,7 +15,9 @@ Establish product, architecture, UI, and workflow baselines.
 
 ---
 
-## M1 — Repository Foundation
+## M1 — Repository Foundation ✅
+
+*Status: completed. See [M1 Implementation Notes](notes/M1.md).*
 
 ### Goal
 Create a clean engineering baseline.
