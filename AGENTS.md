@@ -69,3 +69,25 @@ Build a Windows-native, diagnostics-first recording application MVP with a high-
 - Sonnet implements substantial bounded features from approved specs.
 - Codex handles repo bootstrap, mechanical work, tests, refactors, build fixes, and explicit task lists.
 - No agent should silently expand MVP scope.
+
+## Project agent roles
+
+OpenCode agent profiles live in `.opencode/agent/`. Each profile has a system prompt, model assignment, and permission set.
+
+| Agent | Model intent | Role |
+|---|---|---|
+| `exo-architect` | Claude Opus | Architecture, hard API rescue (NVENC/WASAPI/MF/WAS), rescue planning, implementation briefs. Read-first; writes only when explicitly asked. |
+| `exo-builder` | DeepSeek V4 Pro | Bounded implementation from approved briefs. Stops on first gate failure. No scope expansion. |
+| `exo-hygiene` | DeepSeek V4 Pro | Formatting, branch cleanup, small CMake registration, docs-only mechanical updates. Touches only explicitly allowed files. |
+| `exo-research` | Claude Opus | Primary-source research and API verification. Read/web only; cites official sources; stops if sources unavailable. |
+| `exo-reviewer` | Claude Opus | Final PR review before commit/merge. Scope compliance, diff review, acceptance checklist. Read/diff only by default; does not silently fix. |
+
+**Shared rules for all agents:**
+- One branch = one PR = one task. Do not mix unrelated fixes.
+- Do not expand MVP scope silently.
+- Do not commit unless explicitly instructed.
+- At end of work: summary / files changed / commands + exit codes / unresolved issues / `git diff --stat` / `git status --short`.
+- For hard APIs (NVENC, WASAPI Process Loopback, Windows App SDK, Media Foundation): cite official primary sources; stop if unavailable.
+- Stop on first failing validation gate unless explicitly told to continue.
+- Never restore old WIP stashes that contain unrelated files or generated binaries.
+- Generated binaries must not be committed.
