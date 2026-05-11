@@ -7,3 +7,4 @@ CMakeUserPresets.json
 apps/recorder_app/obj/
 apps/recorder_app/packages/
 *.suo
+probe_nvenc_output/
