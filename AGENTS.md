@@ -72,7 +72,12 @@ Build a Windows-native, diagnostics-first recording application MVP with a high-
 
 ## Project agent roles
 
-OpenCode agent profiles live in `.opencode/agent/`. Each profile has a system prompt, model assignment, and permission set.
+Agent profiles exist for two tools:
+
+- **OpenCode**: `.opencode/agent/` — model assignment, permission set, system prompt; invoke with `opencode --agent <name>`
+- **Claude Code**: `.claude/agents/` — tool restrictions, system prompt; invoke with `/agents` picker or `@<name>`
+
+Both sets define the same five roles with equivalent behavior.
 
 | Agent | Model intent | Role |
 |---|---|---|
