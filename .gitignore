@@ -9,3 +9,4 @@ apps/recorder_app/packages/
 *.suo
 probe_nvenc_output/
 probe_wgc_nvenc_output/
+probe_wgc_nvenc_gpu_output/
