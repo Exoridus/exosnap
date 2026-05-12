@@ -27,3 +27,14 @@ FetchContent_Declare(
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 set(JSON_Install OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(nlohmann_json)
+
+FetchContent_Declare(
+  libwebm
+  GIT_REPOSITORY https://github.com/webmproject/libwebm.git
+  GIT_TAG        libwebm-1.0.0.32
+)
+set(ENABLE_SAMPLE_PROGRAMS OFF CACHE INTERNAL "")
+set(ENABLE_TESTS           OFF CACHE INTERNAL "")
+set(ENABLE_WEBMTS          OFF CACHE INTERNAL "")
+set(ENABLE_WEBMINFO        OFF CACHE INTERNAL "")
+FetchContent_MakeAvailable(libwebm)
