@@ -89,6 +89,7 @@ if(WINUI_TOOLING_AVAILABLE)
     message(STATUS "WinUI 3 app (recorder_app) — included in default build (XAML targets found)")
 elseif(MSBUILD_EXE)
     add_custom_target(recorder_app
+        EXCLUDE_FROM_ALL
         COMMAND "${MSBUILD_EXE}" "${APP_VCPROJ}"
             "/p:Configuration=$<CONFIG>"
             "/p:Platform=x64"
@@ -106,6 +107,7 @@ elseif(MSBUILD_EXE)
     message(WARNING "Install the component: Microsoft.VisualStudio.ComponentGroup.WindowsAppSDK.Cpp")
 else()
     add_custom_target(recorder_app
+        EXCLUDE_FROM_ALL
         COMMAND "${CMAKE_COMMAND}" -E echo "recorder_app skipped: MSBuild.exe not found"
     )
     message(WARNING "MSBuild.exe not found. recorder_app cannot build.")
