@@ -1,0 +1,8 @@
+// cppcheck suppress file — add entries as: [error-id]:[file-path]  or  [error-id] for global
+// Use //cppcheck-suppress <id> inline in source for single-line local suppressions.
+
+// Win32/DXGI/WASAPI system headers are not provided to cppcheck.
+missingIncludeSystem
+
+// Suppress noise when a suppression entry no longer matches (remove once list is stable).
+unmatchedSuppression

@@ -1,3 +1,10 @@
+# Disabled checks and why:
+#   cppcoreguidelines-avoid-magic-numbers         pervasive in codec/timing/Win32 API code; enforce via code review instead
+#   cppcoreguidelines-pro-bounds-array-to-pointer-decay  required for C API interop (Win32, printf-family)
+#   cppcoreguidelines-pro-type-vararg             required for printf-style output in CLI harness
+#   modernize-use-trailing-return-type            LLVM style uses leading return types; trailing is not idiomatic here
+#   readability-identifier-length                 single-char variables are idiomatic in loops and math
+
 Checks: >
   bugprone-*,
   cppcoreguidelines-*,
