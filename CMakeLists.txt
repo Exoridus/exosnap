@@ -15,6 +15,7 @@ include(cmake/exosnap_testing.cmake)
 
 add_subdirectory(third_party)
 add_subdirectory(libs/recorder_core)
+add_subdirectory(libs/capability)
 add_subdirectory(libs/recorder_facade)
 add_subdirectory(apps/recorder_cli)
 add_subdirectory(apps/recorder_app)
