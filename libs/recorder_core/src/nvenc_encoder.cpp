@@ -196,6 +196,15 @@ bool NvencEncoder::InitEncoder(
     uint32_t frame_rate_num, uint32_t frame_rate_den,
     std::string& out_error)
 {
+    // 2-second keyframe interval — recording-friendly default.
+    // Improves timeline seek responsiveness while keeping bitrate overhead modest.
+    const uint32_t kGopFrames =
+        (frame_rate_den > 0 && frame_rate_num > 0)
+        ? static_cast<uint32_t>((2ull * frame_rate_num) / frame_rate_den)
+        : 120u; // fallback: 60 fps × 2 s
+    m_encodeConfig.gopLength                              = kGopFrames;
+    m_encodeConfig.encodeCodecConfig.av1Config.idrPeriod = kGopFrames;
+
     NV_ENC_INITIALIZE_PARAMS p{};
     p.version         = NV_ENC_INITIALIZE_PARAMS_VER;
     p.encodeGUID      = NV_ENC_CODEC_AV1_GUID;
@@ -397,7 +406,7 @@ bool NvencEncoder::EncodeFrame(
     pic.outputBitstream = m_bitstreamBuffer;
     pic.bufferFmt       = mapRes.mappedBufferFmt;
     pic.pictureStruct   = NV_ENC_PIC_STRUCT_FRAME;
-    pic.encodePicFlags  = 0;
+    pic.encodePicFlags  = NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
     pic.inputTimeStamp  = m_frameIdx++;
 
     st = m_funcs.nvEncEncodePicture(m_encoder, &pic);
