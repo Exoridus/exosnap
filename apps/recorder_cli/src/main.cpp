@@ -1,3 +1,10 @@
+#include <capability/capability_builder.h>
+#include <capability/config_types.h>
+#include <capability/resolver.h>
+#include <capability/support_level.h>
+#include <capability/translation.h>
+#include <capability/user_config.h>
+
 #include <recorder_core/codec_types.h>
 #include <recorder_core/error_types.h>
 #include <recorder_core/recorder_session.h>
@@ -53,12 +60,168 @@ static const char* kind_string(recorder_core::CaptureTarget::Kind kind) {
     }
 }
 
+static const char* support_level_string(exosnap::capability::SupportLevel level) {
+    using L = exosnap::capability::SupportLevel;
+    switch (level) {
+        case L::Available:        return "Available";
+        case L::ValidUnvalidated: return "ValidUnvalidated";
+        case L::NotImplemented:   return "NotImplemented";
+        case L::Invalid:          return "Invalid";
+        default:                  return "Unknown";
+    }
+}
+
+static const char* yes_no(bool value) {
+    return value ? "yes" : "no";
+}
+
+static void print_support_line(
+    const char* dimension,
+    const std::string& name,
+    const exosnap::capability::SupportAnnotation& annotation) {
+    std::printf(
+        "  %-10s %-20s : %-16s",
+        dimension,
+        name.c_str(),
+        support_level_string(annotation.level));
+    if (!annotation.reason.empty()) {
+        std::printf(" | %s", annotation.reason.c_str());
+    }
+    std::puts("");
+}
+
+static void print_adjustments(const exosnap::capability::ResolveResult& result) {
+    if (result.adjustments.empty()) {
+        return;
+    }
+
+    std::puts("  Adjustments:");
+    for (const auto& adjustment : result.adjustments) {
+        std::printf(
+            "    - %s: %s -> %s",
+            adjustment.field.c_str(),
+            adjustment.from.c_str(),
+            adjustment.to.c_str());
+        if (!adjustment.reason.empty()) {
+            std::printf(" (%s)", adjustment.reason.c_str());
+        }
+        std::puts("");
+    }
+}
+
+static void print_warnings(const exosnap::capability::ResolveResult& result) {
+    if (result.warnings.empty()) {
+        return;
+    }
+
+    std::puts("  Warnings:");
+    for (const auto& warning : result.warnings) {
+        if (warning.code.empty()) {
+            std::printf("    - %s\n", warning.message.c_str());
+        } else {
+            std::printf("    - [%s] %s\n", warning.code.c_str(), warning.message.c_str());
+        }
+    }
+}
+
+static void print_invalidity(const exosnap::capability::ResolveResult& result) {
+    if (result.invalidity.empty()) {
+        return;
+    }
+
+    std::puts("  Invalidity:");
+    for (const auto& invalid : result.invalidity) {
+        std::printf("    - %s: %s\n", invalid.field.c_str(), invalid.message.c_str());
+    }
+}
+
+static exosnap::capability::SupportAnnotation query_combo_for_config(
+    const exosnap::capability::CapabilitySet& caps,
+    const exosnap::capability::UserRecorderConfig& config) {
+    return caps.QueryCombo(
+        config.container,
+        config.video_codec,
+        config.audio_codec,
+        config.chroma,
+        config.bit_depth);
+}
+
+static int run_capabilities_mode() {
+    using namespace exosnap::capability;
+
+    try {
+        const CapabilitySet caps = CapabilityBuilder::BuildFromHardwareQuery();
+        const RuntimeCapabilitySnapshot& runtime = caps.runtime;
+
+        std::puts("\n=== Runtime Facts ===");
+        std::printf("  %-25s : %s\n", "OS version", runtime.os.version_string.c_str());
+        std::printf("  %-25s : %s\n", "Adapter", runtime.nvidia.adapter_name.c_str());
+        std::printf("  %-25s : %s\n", "NVENC DLL present", yes_no(runtime.nvidia.nvenc_dll_present));
+        std::printf(
+            "  %-25s : %s (version: 0x%08X)\n",
+            "NVENC API version valid",
+            yes_no(runtime.nvidia.nvenc_api_version_valid),
+            runtime.nvidia.nvenc_api_version);
+        std::printf("  %-25s : %s\n", "MF AAC MFTEnumEx found", yes_no(runtime.mf_aac.mftenum_found));
+        std::printf("  %-25s : %s\n", "MF AAC CLSID instantiable", yes_no(runtime.mf_aac.clsid_instantiable));
+        std::printf("  %-25s : %s\n", "MF AAC effective", yes_no(runtime.mf_aac.available()));
+
+        std::puts("\n=== Dimension Support ===");
+        for (const auto container : AllContainers()) {
+            print_support_line("Container", std::string(ToString(container)), caps.QueryContainer(container));
+        }
+        std::puts("");
+        for (const auto video : AllVideoCodecs()) {
+            print_support_line("VideoCodec", std::string(ToString(video)), caps.QueryVideoCodec(video));
+        }
+        std::puts("");
+        for (const auto audio : AllAudioCodecs()) {
+            std::string audio_name = std::string(ToString(audio));
+            if (audio == AudioCodec::AacMf) {
+                audio_name = "AAC (MF)";
+            }
+            print_support_line("AudioCodec", audio_name, caps.QueryAudioCodec(audio));
+        }
+        std::puts("");
+        for (const auto chroma : AllChromaModes()) {
+            print_support_line("Chroma", std::string(ToString(chroma)), caps.QueryChroma(chroma));
+        }
+        std::puts("");
+        for (const auto bit_depth : AllBitDepths()) {
+            print_support_line("BitDepth", std::string(ToString(bit_depth)), caps.QueryBitDepth(bit_depth));
+        }
+
+        const UserRecorderConfig default_user_config{};
+        const SettingsResolver resolver(caps);
+        const ResolveResult validation = resolver.ValidateConfig(default_user_config);
+        const SupportAnnotation combo = query_combo_for_config(caps, validation.resolved_config);
+
+        std::puts("\n=== Primary Profile Validation (MKV + AV1 NVENC + AAC-MF + 4:2:0 + 8-bit) ===");
+        std::printf("  %-15s : %s\n", "Combo support", support_level_string(combo.level));
+        std::printf("  %-15s : %s\n", "Selectable", yes_no(IsSelectable(combo.level)));
+        std::printf("  %-15s : %s\n", "Status", validation.succeeded ? "READY" : "BLOCKED");
+
+        print_adjustments(validation);
+        print_warnings(validation);
+        print_invalidity(validation);
+
+        return validation.succeeded ? 0 : 1;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "Capability initialization failed: %s\n", e.what());
+        return 2;
+    } catch (...) {
+        std::fputs("Capability initialization failed: unknown error.\n", stderr);
+        return 2;
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Argument parsing (optional flags: --list, --target N)
+// Argument parsing (optional flags: --list, --target N, --capabilities)
 // ---------------------------------------------------------------------------
 
 struct CliArgs {
     bool     list_only    = false;
+    bool     capabilities = false;
     int      target_index = -1; // 1-based, -1 = prompt user
 };
 
@@ -68,6 +231,8 @@ static CliArgs parse_args(int argc, char* argv[]) {
         std::string arg = argv[i];
         if (arg == "--list") {
             args.list_only = true;
+        } else if (arg == "--capabilities") {
+            args.capabilities = true;
         } else if (arg == "--target" && i + 1 < argc) {
             ++i;
             args.target_index = std::stoi(argv[i]);
@@ -127,10 +292,15 @@ static void print_result(const recorder_core::RecorderResult& result) {
 // ---------------------------------------------------------------------------
 
 int main(int argc, char* argv[]) {
+    using namespace exosnap::capability;
+
     std::printf("recorder_cli — exosnap recorder_core harness (version: %s)\n",
                 std::string(recorder_core::version()).c_str());
 
     const CliArgs cli = parse_args(argc, argv);
+    if (cli.capabilities) {
+        return run_capabilities_mode();
+    }
 
     // 1. Enumerate capture targets
     const auto targets = recorder_core::RecorderSession::EnumerateTargets();
@@ -174,7 +344,7 @@ int main(int argc, char* argv[]) {
 
     const recorder_core::CaptureTarget& chosen_target = targets[selected_index];
 
-    // 3. Build config
+    // 3. Build output location
     const std::filesystem::path output_dir  = "recorder_cli_output";
     const std::filesystem::path output_path = output_dir / "recorder_core_av1_aac.mkv";
 
@@ -187,15 +357,63 @@ int main(int argc, char* argv[]) {
     }
 
     recorder_core::RecorderConfig config;
-    config.output_path   = output_path;
-    config.target        = chosen_target;
-    config.container     = recorder_core::Container::Matroska;
-    config.video_codec   = recorder_core::VideoCodec::Av1Nvenc;
-    config.audio_codec   = recorder_core::AudioCodec::AacMf;
-    config.chroma        = recorder_core::ChromaSubsampling::Cs420;
-    config.bit_depth     = recorder_core::BitDepth::Bit8;
-    config.frame_rate_num = 60;
-    config.frame_rate_den = 1;
+    try {
+        const CapabilitySet caps = CapabilityBuilder::BuildFromHardwareQuery();
+        UserRecorderConfig user_config{};
+        SettingsResolver resolver(caps);
+        const ResolveResult validation = resolver.ValidateConfig(user_config);
+        if (!validation.succeeded) {
+            std::fputs("Default recording configuration is not available on this machine:\n", stderr);
+            for (const auto& invalid : validation.invalidity) {
+                std::fprintf(stderr, "  - %s: %s\n", invalid.field.c_str(), invalid.message.c_str());
+            }
+            for (const auto& adjustment : validation.adjustments) {
+                std::fprintf(
+                    stderr,
+                    "  - adjustment %s: %s -> %s (%s)\n",
+                    adjustment.field.c_str(),
+                    adjustment.from.c_str(),
+                    adjustment.to.c_str(),
+                    adjustment.reason.c_str());
+            }
+            for (const auto& warning : validation.warnings) {
+                std::fprintf(stderr, "  - warning %s: %s\n", warning.code.c_str(), warning.message.c_str());
+            }
+            return 1;
+        }
+
+        ResolveResult translation_validation;
+        try {
+            config = ToRecorderCoreConfig(user_config, caps, &translation_validation);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "Default recording configuration cannot be translated: %s\n", e.what());
+            for (const auto& invalid : translation_validation.invalidity) {
+                std::fprintf(stderr, "  - %s: %s\n", invalid.field.c_str(), invalid.message.c_str());
+            }
+            for (const auto& adjustment : translation_validation.adjustments) {
+                std::fprintf(
+                    stderr,
+                    "  - adjustment %s: %s -> %s (%s)\n",
+                    adjustment.field.c_str(),
+                    adjustment.from.c_str(),
+                    adjustment.to.c_str(),
+                    adjustment.reason.c_str());
+            }
+            for (const auto& warning : translation_validation.warnings) {
+                std::fprintf(stderr, "  - warning %s: %s\n", warning.code.c_str(), warning.message.c_str());
+            }
+            return 1;
+        }
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "Capability initialization failed: %s\n", e.what());
+        return 1;
+    } catch (...) {
+        std::fputs("Capability initialization failed: unknown error.\n", stderr);
+        return 1;
+    }
+
+    config.output_path = output_path;
+    config.target      = chosen_target;
 
     std::printf("Output path: %s\n", output_path.string().c_str());
 

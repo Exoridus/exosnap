@@ -53,6 +53,34 @@ Select target non-interactively (1-based index):
 .\build\windows-x64-debug\apps\recorder_cli\Debug\recorder_cli.exe --target 1
 ```
 
+Print runtime capability facts, effective support states, and primary profile validation:
+
+```powershell
+.\build\windows-x64-debug\apps\recorder_cli\Debug\recorder_cli.exe --capabilities
+```
+
+---
+
+## Capability mode exit codes
+
+| Code | Meaning                                   |
+| ---- | ----------------------------------------- |
+| 0    | Primary recording profile available       |
+| 1    | Primary recording profile blocked         |
+| 2    | Unexpected/fatal capability query failure |
+
+---
+
+## Recording path capability gate
+
+Before starting a recording, `recorder_cli` now:
+
+1. Builds effective runtime capabilities via `CapabilityBuilder::BuildFromHardwareQuery()`.
+2. Validates default user config via `SettingsResolver::ValidateConfig(UserRecorderConfig{})`.
+3. Translates via `ToRecorderCoreConfig(...)`.
+
+If validation fails, recording is blocked and the CLI exits with a clear reason list.
+
 ---
 
 ## Expected output file
