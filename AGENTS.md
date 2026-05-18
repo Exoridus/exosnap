@@ -92,7 +92,7 @@ Both sets define the same five roles with equivalent behavior.
 - Do not expand MVP scope silently.
 - Do not commit unless explicitly instructed.
 - At end of work: summary / files changed / commands + exit codes / unresolved issues / `git diff --stat` / `git status --short`.
-- For hard APIs (NVENC, WASAPI Process Loopback, Windows App SDK, Media Foundation): cite official primary sources; stop if unavailable.
+- For hard APIs (NVENC, WASAPI Process Loopback, Media Foundation, Qt internals): cite official primary sources; stop if unavailable.
 - Stop on first failing validation gate unless explicitly told to continue.
 - Never restore old WIP stashes that contain unrelated files or generated binaries.
 - Generated binaries must not be committed.

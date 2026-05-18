@@ -18,17 +18,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Windows App SDK tooling
-        shell: pwsh
-        run: |
-          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          Write-Host "VS path: $vsPath"
-          $componentId = "Microsoft.VisualStudio.ComponentGroup.WindowsAppSDK.Cpp"
-          $vsInstaller = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
-          & $vsInstaller modify --installPath $vsPath --add $componentId --quiet --norestart --wait
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "vs_installer returned $LASTEXITCODE — tooling may already be present"
-          }
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.9.0'
+          arch: 'win64_msvc2022_64'
+          cache: true
 
       - name: Configure (${{ matrix.preset }})
         run: cmake --preset ${{ matrix.preset }}

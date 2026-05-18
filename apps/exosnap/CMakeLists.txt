@@ -5,9 +5,18 @@ if(NOT Qt6_DIR)
     list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.9.0/msvc2022_64")
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6 QUIET COMPONENTS Core Gui Widgets)
 
-qt_add_executable(recorder_app WIN32
+if(NOT Qt6_FOUND)
+    add_custom_target(exosnap
+        COMMAND ${CMAKE_COMMAND} -E echo "exosnap skipped: Qt6 not found"
+    )
+    message(WARNING "Qt6 not found — exosnap app will not be built. "
+                    "Install Qt 6 and set Qt6_DIR or CMAKE_PREFIX_PATH.")
+    return()
+endif()
+
+qt_add_executable(exosnap WIN32
     main.cpp
     startup_log.h
     startup_log.cpp
@@ -35,9 +44,12 @@ qt_add_executable(recorder_app WIN32
     viewmodels/RecordViewModel.cpp
 )
 
-set_target_properties(recorder_app PROPERTIES AUTOMOC ON)
+set_target_properties(exosnap PROPERTIES
+    AUTOMOC ON
+    OUTPUT_NAME "exosnap"
+)
 
-target_link_libraries(recorder_app PRIVATE
+target_link_libraries(exosnap PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
@@ -46,4 +58,4 @@ target_link_libraries(recorder_app PRIVATE
     exosnap::warnings
 )
 
-target_include_directories(recorder_app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(exosnap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
