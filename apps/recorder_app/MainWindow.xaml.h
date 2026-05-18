@@ -5,14 +5,14 @@ namespace winrt::exosnap::implementation {
 struct MainWindow : MainWindowT<MainWindow> {
     MainWindow();
 
-    void
-    NavView_SelectionChanged(winrt::Microsoft::UI::Xaml::Controls::NavigationView const& sender,
-                             winrt::Microsoft::UI::Xaml::Controls::NavigationViewSelectionChangedEventArgs const& args);
+    void NavList_SelectionChanged(winrt::Windows::Foundation::IInspectable const& sender,
+                                  winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const& args);
 
   private:
-    winrt::Microsoft::UI::Xaml::Controls::NavigationView nav_view_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::ListBox nav_list_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Frame content_frame_{nullptr};
 
+    winrt::Microsoft::UI::Xaml::UIElement BuildSectionContent(winrt::hstring const& pageTag);
     void NavigateToPage(winrt::hstring const& pageTag);
 };
 } // namespace winrt::exosnap::implementation

@@ -140,7 +140,41 @@ void MainWindowT<MainWindow>::InitializeComponent() {
     }
 }
 
-EXO_DEFINE_XAML_COMPAT_STUBS(MainWindowT, MainWindow)
+template <>
+void MainWindowT<MainWindow>::Connect(
+    int32_t connection_id,
+    winrt::Windows::Foundation::IInspectable const& target) {
+    LogConnectorCall("MainWindowT<MainWindow>::Connect", connection_id);
+    switch (connection_id) {
+    case 2:
+        ContentFrame(target.try_as<winrt::Microsoft::UI::Xaml::Controls::Frame>());
+        break;
+    case 3:
+        NavList(target.try_as<winrt::Microsoft::UI::Xaml::Controls::ListBox>());
+        break;
+    default:
+        break;
+    }
+    _contentLoaded = true;
+}
+
+template <>
+winrt::Microsoft::UI::Xaml::Markup::IComponentConnector MainWindowT<MainWindow>::GetBindingConnector(
+    int32_t connection_id,
+    winrt::Windows::Foundation::IInspectable const&) {
+    LogConnectorCall("MainWindowT<MainWindow>::GetBindingConnector", connection_id);
+    return nullptr;
+}
+
+template <>
+void MainWindowT<MainWindow>::UnloadObject(winrt::Microsoft::UI::Xaml::DependencyObject const&) {
+    ::exosnap::startup_log::WriteNarrow("MainWindowT<MainWindow>::UnloadObject");
+}
+
+template <>
+void MainWindowT<MainWindow>::DisconnectUnloadedObject(int32_t connection_id) {
+    LogConnectorCall("MainWindowT<MainWindow>::DisconnectUnloadedObject", connection_id);
+}
 
 EXO_DEFINE_SIMPLE_XAML_COMPAT(AdvancedPageT, AdvancedPage, L"ms-appx:///pages/AdvancedPage.xaml")
 EXO_DEFINE_SIMPLE_XAML_COMPAT(AudioPageT, AudioPage, L"ms-appx:///pages/AudioPage.xaml")
