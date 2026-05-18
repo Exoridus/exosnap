@@ -2,7 +2,7 @@ include_guard(GLOBAL)
 
 function(exosnap_add_gtest)
   set(options)
-  set(one_value_args NAME)
+  set(one_value_args NAME TEST_PREFIX)
   set(multi_value_args SOURCES LIBRARIES)
 
   cmake_parse_arguments(
@@ -30,5 +30,9 @@ function(exosnap_add_gtest)
   )
 
   include(GoogleTest)
-  gtest_discover_tests(${ARG_NAME})
+  if(ARG_TEST_PREFIX)
+    gtest_discover_tests(${ARG_NAME} TEST_PREFIX "${ARG_TEST_PREFIX}")
+  else()
+    gtest_discover_tests(${ARG_NAME})
+  endif()
 endfunction()
