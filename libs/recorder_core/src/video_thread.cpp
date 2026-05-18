@@ -198,34 +198,15 @@ void VideoThread::Run() {
         }
     }
 
-    // --- NV12 texture + video processor ---
-    winrt::com_ptr<ID3D11Texture2D>                nv12Texture;
+    // --- NV12 texture ring + video processor ---
+    static constexpr int32_t kSlotCount = 8;
+    winrt::com_ptr<ID3D11Texture2D>                nv12Textures[kSlotCount];
     winrt::com_ptr<ID3D11VideoProcessorEnumerator> videoEnum;
     winrt::com_ptr<ID3D11VideoProcessor>           videoProcessor;
-    winrt::com_ptr<ID3D11VideoProcessorOutputView> videoOutputView;
+    winrt::com_ptr<ID3D11VideoProcessorOutputView> videoOutputViews[kSlotCount];
 
     {
-        // NV12 texture
-        D3D11_TEXTURE2D_DESC desc{};
-        desc.Width          = encodeWidth;
-        desc.Height         = encodeHeight;
-        desc.MipLevels      = 1;
-        desc.ArraySize      = 1;
-        desc.Format         = DXGI_FORMAT_NV12;
-        desc.SampleDesc     = { 1, 0 };
-        desc.Usage          = D3D11_USAGE_DEFAULT;
-        desc.BindFlags      = D3D11_BIND_RENDER_TARGET;
-
-        hr = d3dDevice->CreateTexture2D(&desc, nullptr, nv12Texture.put());
-        if (FAILED(hr)) {
-            char buf[80];
-            snprintf(buf, sizeof(buf), "CreateTexture2D(NV12) failed 0x%08lX", static_cast<unsigned long>(hr));
-            m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
-            if (com_inited) CoUninitialize();
-            return;
-        }
-
-        // Video processor enumerator
+        // Video processor enumerator (shared across all slots)
         D3D11_VIDEO_PROCESSOR_CONTENT_DESC contentDesc{};
         contentDesc.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
         contentDesc.InputWidth       = encodeWidth;
@@ -252,27 +233,49 @@ void VideoThread::Run() {
             return;
         }
 
-        // Output view
-        D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC ovDesc{};
-        ovDesc.ViewDimension      = D3D11_VPOV_DIMENSION_TEXTURE2D;
-        ovDesc.Texture2D.MipSlice = 0;
+        // Create NV12 textures and output views for each slot
+        for (int32_t i = 0; i < kSlotCount; ++i) {
+            D3D11_TEXTURE2D_DESC desc{};
+            desc.Width      = encodeWidth;
+            desc.Height     = encodeHeight;
+            desc.MipLevels  = 1;
+            desc.ArraySize  = 1;
+            desc.Format     = DXGI_FORMAT_NV12;
+            desc.SampleDesc = { 1, 0 };
+            desc.Usage      = D3D11_USAGE_DEFAULT;
+            desc.BindFlags  = D3D11_BIND_RENDER_TARGET;
 
-        hr = videoDevice->CreateVideoProcessorOutputView(
-            nv12Texture.get(), videoEnum.get(), &ovDesc, videoOutputView.put());
-        if (FAILED(hr)) {
-            char buf[80];
-            snprintf(buf, sizeof(buf), "CreateVideoProcessorOutputView failed 0x%08lX", static_cast<unsigned long>(hr));
-            m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
-            if (com_inited) CoUninitialize();
-            return;
-        }
+            hr = d3dDevice->CreateTexture2D(&desc, nullptr, nv12Textures[i].put());
+            if (FAILED(hr)) {
+                char buf[80];
+                snprintf(buf, sizeof(buf), "CreateTexture2D(NV12[%d]) failed 0x%08lX",
+                         static_cast<int>(i), static_cast<unsigned long>(hr));
+                m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
+                if (com_inited) CoUninitialize();
+                return;
+            }
 
-        // Register NV12 texture with NVENC
-        std::string err;
-        if (!nvenc.RegisterNv12Texture(nv12Texture.get(), err)) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "NVENC register NV12: " + err);
-            if (com_inited) CoUninitialize();
-            return;
+            D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC ovDesc{};
+            ovDesc.ViewDimension      = D3D11_VPOV_DIMENSION_TEXTURE2D;
+            ovDesc.Texture2D.MipSlice = 0;
+
+            hr = videoDevice->CreateVideoProcessorOutputView(
+                nv12Textures[i].get(), videoEnum.get(), &ovDesc, videoOutputViews[i].put());
+            if (FAILED(hr)) {
+                char buf[80];
+                snprintf(buf, sizeof(buf), "CreateVideoProcessorOutputView[%d] failed 0x%08lX",
+                         static_cast<int>(i), static_cast<unsigned long>(hr));
+                m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
+                if (com_inited) CoUninitialize();
+                return;
+            }
+
+            std::string err;
+            if (!nvenc.RegisterSlotTexture(i, nv12Textures[i].get(), err)) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "NVENC register slot: " + err);
+                if (com_inited) CoUninitialize();
+                return;
+            }
         }
     }
 
@@ -361,6 +364,7 @@ void VideoThread::Run() {
     uint64_t lastVideoPts        = 0;
     uint64_t videoFramesCaptured = 0;
     uint64_t droppedFrames       = 0;
+    uint64_t slotStallCount      = 0;
 
     while (!m_state.stop_requested.load()) {
         MSG msg{};
@@ -391,7 +395,7 @@ void VideoThread::Run() {
                     ::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
                 winrt::com_ptr<ID3D11Texture2D> tex;
                 if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
-                    if (latestTex != nullptr) ++droppedFrames; // previous frame dropped
+                    if (latestTex != nullptr) ++droppedFrames;
                     latestTex             = tex;
                     latestFrameTicks100ns = frame.SystemRelativeTime().count();
                 }
@@ -410,96 +414,102 @@ void VideoThread::Run() {
             uint64_t framePts_ns = static_cast<uint64_t>(deltaTicks) * 100ULL;
             lastVideoPts = framePts_ns;
 
-            // BGRA -> NV12 via VideoProcessorBlt
-            D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
-            ivDesc.ViewDimension        = D3D11_VPIV_DIMENSION_TEXTURE2D;
-            ivDesc.Texture2D.MipSlice   = 0;
-            ivDesc.Texture2D.ArraySlice = 0;
+            // Acquire a free input slot
+            int32_t slot = nvenc.AcquireFreeSlot();
 
-            winrt::com_ptr<ID3D11VideoProcessorInputView> inputView;
-            hr = videoDevice->CreateVideoProcessorInputView(
-                latestTex.get(), videoEnum.get(), &ivDesc, inputView.put());
+            if (slot >= 0) {
+                // BGRA -> NV12 via VideoProcessorBlt into the selected slot's view
+                D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
+                ivDesc.ViewDimension        = D3D11_VPIV_DIMENSION_TEXTURE2D;
+                ivDesc.Texture2D.MipSlice   = 0;
+                ivDesc.Texture2D.ArraySlice = 0;
 
-            if (SUCCEEDED(hr) && inputView != nullptr) {
-                D3D11_VIDEO_PROCESSOR_STREAM stream{};
-                stream.Enable        = TRUE;
-                stream.pInputSurface = inputView.get();
+                winrt::com_ptr<ID3D11VideoProcessorInputView> inputView;
+                hr = videoDevice->CreateVideoProcessorInputView(
+                    latestTex.get(), videoEnum.get(), &ivDesc, inputView.put());
 
-                hr = videoContext->VideoProcessorBlt(
-                    videoProcessor.get(), videoOutputView.get(), 0, 1, &stream);
+                if (SUCCEEDED(hr) && inputView != nullptr) {
+                    D3D11_VIDEO_PROCESSOR_STREAM stream{};
+                    stream.Enable        = TRUE;
+                    stream.pInputSurface = inputView.get();
 
-                inputView  = nullptr;
-                latestTex  = nullptr;
+                    hr = videoContext->VideoProcessorBlt(
+                        videoProcessor.get(), videoOutputViews[slot].get(), 0, 1, &stream);
 
-                if (SUCCEEDED(hr)) {
-                    // Encode frame
-                    EncodedVideoPacket pkt;
-                    std::string encErr;
-                    bool encOk = nvenc.EncodeFrame(
-                        framePts_ns, encodeWidth, encodeHeight, &pkt, encErr);
+                    inputView  = nullptr;
+                    latestTex  = nullptr;
 
-                    if (!encOk) {
-                        m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
-                                              "NVENC encode: " + encErr);
-                        break;
-                    }
+                    if (SUCCEEDED(hr)) {
+                        // Encode frame on the acquired slot
+                        EncodedVideoPacket pkt;
+                        std::string encErr;
+                        bool encOk = nvenc.EncodeFrame(
+                            slot, framePts_ns, encodeWidth, encodeHeight, &pkt, encErr);
 
-                    ++videoFramesCaptured;
-
-                    // If packet has data, push to premux or mux queue
-                    const size_t pkt_bytes_count = pkt.bytes.size();
-                    if (!pkt.bytes.empty()) {
-                        // Check for AV1 codec private
-                        if (!av1CodecPrivateReady && pkt.keyframe) {
-                            char reason[256] = {};
-                            uint8_t cp[4] = {};
-                            if (codec_private::DeriveAv1CodecPrivate(
-                                    pkt.bytes.data(), pkt.bytes.size(), cp, reason, sizeof(reason))) {
-                                std::lock_guard lk(m_state.premux_mutex);
-                                std::memcpy(m_state.codec_private.av1_codec_private, cp, 4);
-                                m_state.codec_private.av1_ready = true;
-                                av1CodecPrivateReady = true;
-                                m_state.premux_cv.notify_all();
-                            }
+                        if (!encOk) {
+                            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
+                                                  "NVENC encode: " + encErr);
+                            break;
                         }
 
-                        // Route to premux or mux
-                        {
-                            std::unique_lock lk(m_state.premux_mutex);
-                            bool bothReady = m_state.codec_private.av1_ready
-                                          && m_state.codec_private.aac_ready;
-                            if (!bothReady) {
-                                // Pre-mux buffering
-                                if (m_state.video_premux.size() >= SessionState::kVideoPremuxLimit) {
-                                    lk.unlock();
-                                    m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                                        "Pre-mux video buffer limit (120 packets) exceeded "
-                                        "before codec private data was ready");
-                                    goto end_encode_loop;
+                        ++videoFramesCaptured;
+
+                        // If packet has data, push to premux or mux queue
+                        const size_t pkt_bytes_count = pkt.bytes.size();
+                        if (!pkt.bytes.empty()) {
+                            // Check for AV1 codec private
+                            if (!av1CodecPrivateReady && pkt.keyframe) {
+                                char reason[256] = {};
+                                uint8_t cp[4] = {};
+                                if (codec_private::DeriveAv1CodecPrivate(
+                                        pkt.bytes.data(), pkt.bytes.size(), cp, reason, sizeof(reason))) {
+                                    std::lock_guard lk(m_state.premux_mutex);
+                                    std::memcpy(m_state.codec_private.av1_codec_private, cp, 4);
+                                    m_state.codec_private.av1_ready = true;
+                                    av1CodecPrivateReady = true;
+                                    m_state.premux_cv.notify_all();
                                 }
-                                m_state.video_premux.push_back(std::move(pkt));
-                            } else {
-                                lk.unlock();
-                                // Route to mux queue
-                                MuxItem mux_item;
-                                mux_item.payload = std::move(pkt);
-                                std::lock_guard mlk(m_state.mux_mutex);
-                                m_state.mux_queue.push_back(std::move(mux_item));
-                                m_state.mux_cv.notify_one();
                             }
-                        }
 
-                        // Update stats
-                        std::lock_guard slk(m_state.stats_mutex);
-                        m_state.stats.video_frames_captured = videoFramesCaptured;
-                        m_state.stats.encoded_video_packets++;
-                        m_state.stats.video_bytes += pkt_bytes_count;
+                            // Route to premux or mux
+                            {
+                                std::unique_lock lk(m_state.premux_mutex);
+                                bool bothReady = m_state.codec_private.av1_ready
+                                              && m_state.codec_private.aac_ready;
+                                if (!bothReady) {
+                                    if (m_state.video_premux.size() >= SessionState::kVideoPremuxLimit) {
+                                        lk.unlock();
+                                        m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
+                                            "Pre-mux video buffer limit (120 packets) exceeded "
+                                            "before codec private data was ready");
+                                        goto end_encode_loop;
+                                    }
+                                    m_state.video_premux.push_back(std::move(pkt));
+                                } else {
+                                    lk.unlock();
+                                    MuxItem mux_item;
+                                    mux_item.payload = std::move(pkt);
+                                    std::lock_guard mlk(m_state.mux_mutex);
+                                    m_state.mux_queue.push_back(std::move(mux_item));
+                                    m_state.mux_cv.notify_one();
+                                }
+                            }
+
+                            std::lock_guard slk(m_state.stats_mutex);
+                            m_state.stats.video_frames_captured = videoFramesCaptured;
+                            m_state.stats.encoded_video_packets++;
+                            m_state.stats.video_bytes += pkt_bytes_count;
+                        }
+                    } else {
+                        latestTex = nullptr;
                     }
                 } else {
                     latestTex = nullptr;
                 }
             } else {
+                // No free slot — drop the frame and skip
                 latestTex = nullptr;
+                ++slotStallCount;
             }
 
             anyWork = true;
@@ -526,13 +536,15 @@ end_encode_loop:
     {
         std::vector<EncodedVideoPacket> drainPkts;
         std::string flushErr;
+        // flushErr is not escalated — a partial drain is acceptable; any encoded
+        // output already in the mux queue is preserved regardless of flush outcome.
         nvenc.Flush(drainPkts, flushErr);
-        // flushErr is non-fatal; partially drained output is acceptable
 
         for (auto& pkt : drainPkts) {
             if (pkt.bytes.empty()) continue;
 
-            // Check codec private on drain packets too
+            const size_t drain_bytes = pkt.bytes.size();
+
             if (!av1CodecPrivateReady && pkt.keyframe) {
                 char reason[256] = {};
                 uint8_t cp[4] = {};
@@ -546,7 +558,6 @@ end_encode_loop:
                 }
             }
 
-            // Route drain packets
             {
                 std::unique_lock lk(m_state.premux_mutex);
                 bool bothReady = m_state.codec_private.av1_ready
@@ -564,22 +575,25 @@ end_encode_loop:
                     m_state.mux_cv.notify_one();
                 }
             }
+
+            {
+                std::lock_guard slk(m_state.stats_mutex);
+                m_state.stats.encoded_video_packets++;
+                m_state.stats.video_bytes += drain_bytes;
+            }
         }
     }
 
-    // --- Unregister NVENC resource ---
-    {
-        std::string err;
-        nvenc.UnregisterResource(err);
-    }
+    // --- Unregister NVENC resources + destroy ---
+    nvenc.UnregisterAllSlots();
     nvenc.Destroy();
 
     // --- Update final stats ---
     {
         std::lock_guard lk(m_state.stats_mutex);
-        m_state.stats.video_frames_captured        = videoFramesCaptured;
-        m_state.stats.dropped_or_skipped_video_frames = droppedFrames;
-        m_state.stats.video_duration_ns            = lastVideoPts;
+        m_state.stats.video_frames_captured            = videoFramesCaptured;
+        m_state.stats.dropped_or_skipped_video_frames   = droppedFrames + slotStallCount;
+        m_state.stats.video_duration_ns                = lastVideoPts;
     }
 
     // --- Push video EOS sentinel ---
@@ -591,15 +605,17 @@ end_encode_loop:
         m_state.mux_cv.notify_one();
     }
 
-    // Cleanup
-    videoOutputView = nullptr;
-    videoProcessor  = nullptr;
-    videoEnum       = nullptr;
-    nv12Texture     = nullptr;
-    videoContext    = nullptr;
-    videoDevice     = nullptr;
-    d3dContext      = nullptr;
-    d3dDevice       = nullptr;
+    // Cleanup slot views and textures
+    for (int32_t i = 0; i < kSlotCount; ++i) {
+        videoOutputViews[i] = nullptr;
+        nv12Textures[i]     = nullptr;
+    }
+    videoProcessor = nullptr;
+    videoEnum      = nullptr;
+    videoContext   = nullptr;
+    videoDevice    = nullptr;
+    d3dContext     = nullptr;
+    d3dDevice      = nullptr;
 
     if (com_inited && hr != RPC_E_CHANGED_MODE) CoUninitialize();
 }

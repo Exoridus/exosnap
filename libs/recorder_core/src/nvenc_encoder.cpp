@@ -175,6 +175,15 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
     std::memcpy(&m_encodeConfig, &m_presetConfig.presetCfg, sizeof(NV_ENC_CONFIG));
     m_encodeConfig.version = NV_ENC_CONFIG_VER;
     m_encodeConfig.encodeCodecConfig.av1Config.chromaFormatIDC = 1; // YUV420/NV12
+
+    // M3.2 committed low-latency config: zero lookahead and P-only (no B-frames).
+    // Required to prevent the 8-slot NVENC input ring from exhausting — zero encoder
+    // delay means each slot is released as soon as its output is consumed, keeping
+    // slot acquisition always available for the next captured frame.
+    m_encodeConfig.rcParams.enableLookahead = 0;
+    m_encodeConfig.rcParams.lookaheadDepth = 0;
+    m_encodeConfig.frameIntervalP = 1;
+
     return true;
 }
 
@@ -228,10 +237,23 @@ bool NvencEncoder::CreateBitstreamBuffer(std::string& out_error) {
 }
 
 // ---------------------------------------------------------------------------
-// RegisterNv12Texture
+// RegisterSlotTexture
 // ---------------------------------------------------------------------------
 
-bool NvencEncoder::RegisterNv12Texture(ID3D11Texture2D* texture, std::string& out_error) {
+bool NvencEncoder::RegisterSlotTexture(
+    int32_t              slot_idx,
+    ID3D11Texture2D*     texture,
+    std::string&         out_error)
+{
+    if (slot_idx < 0 || slot_idx >= 8) {
+        out_error = "RegisterSlotTexture: slot_idx out of range [0,7]";
+        return false;
+    }
+    if (m_slots[slot_idx].registeredResource != nullptr) {
+        out_error = "RegisterSlotTexture: slot already registered";
+        return false;
+    }
+
     D3D11_TEXTURE2D_DESC desc{};
     texture->GetDesc(&desc);
 
@@ -251,8 +273,8 @@ bool NvencEncoder::RegisterNv12Texture(ID3D11Texture2D* texture, std::string& ou
         out_error = std::string("nvEncRegisterResource: ") + NvencStatusName(st);
         return false;
     }
-    m_registeredResource = reg.registeredResource;
-    if (!m_registeredResource) {
+    m_slots[slot_idx].registeredResource = reg.registeredResource;
+    if (!m_slots[slot_idx].registeredResource) {
         out_error = "registeredResource is null after successful nvEncRegisterResource";
         return false;
     }
@@ -260,18 +282,20 @@ bool NvencEncoder::RegisterNv12Texture(ID3D11Texture2D* texture, std::string& ou
 }
 
 // ---------------------------------------------------------------------------
-// UnregisterResource
+// AcquireFreeSlot
 // ---------------------------------------------------------------------------
 
-bool NvencEncoder::UnregisterResource(std::string& out_error) {
-    if (!m_registeredResource) return true;
-    NVENCSTATUS st = m_funcs.nvEncUnregisterResource(m_encoder, m_registeredResource);
-    if (st != NV_ENC_SUCCESS) {
-        out_error = std::string("nvEncUnregisterResource: ") + NvencStatusName(st);
-        return false;
+int32_t NvencEncoder::AcquireFreeSlot() {
+    for (int i = 0; i < 8; ++i) {
+        int32_t idx = (m_slotCursor + i) % 8;
+        InputSlot& slot = m_slots[idx];
+        if (!slot.in_flight && !slot.mapped) {
+            slot.in_flight = true;
+            m_slotCursor   = (idx + 1) % 8;
+            return idx;
+        }
     }
-    m_registeredResource = nullptr;
-    return true;
+    return -1;
 }
 
 // ---------------------------------------------------------------------------
@@ -296,6 +320,22 @@ bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::
         m_pendingPts.pop();
     }
 
+    // Release the associated input slot
+    if (!m_pendingSlots.empty()) {
+        int32_t slot_idx = m_pendingSlots.front();
+        m_pendingSlots.pop();
+
+        if (slot_idx >= 0 && slot_idx < 8) {
+            InputSlot& slot = m_slots[slot_idx];
+            if (slot.mapped && slot.mappedResource != nullptr) {
+                m_funcs.nvEncUnmapInputResource(m_encoder, slot.mappedResource);
+                slot.mappedResource = nullptr;
+            }
+            slot.mapped     = false;
+            slot.in_flight  = false;
+        }
+    }
+
     bool isKey = (lockBS.pictureType == NV_ENC_PIC_TYPE_IDR
                || lockBS.pictureType == NV_ENC_PIC_TYPE_I);
 
@@ -314,25 +354,39 @@ bool NvencEncoder::LockAndConsumeBitstream(EncodedVideoPacket& out_packet, std::
 // ---------------------------------------------------------------------------
 
 bool NvencEncoder::EncodeFrame(
+    int32_t             slot_idx,
     uint64_t            pts_ns,
     uint32_t            width,
     uint32_t            height,
     EncodedVideoPacket* out_packet,
     std::string&        out_error)
 {
-    // Map registered NV12 resource
+    if (slot_idx < 0 || slot_idx >= 8) {
+        out_error = "EncodeFrame: slot_idx out of range [0,7]";
+        return false;
+    }
+    InputSlot& slot = m_slots[slot_idx];
+    if (slot.mapped) {
+        out_error = "EncodeFrame: slot already mapped";
+        return false;
+    }
+
+    // Map this slot's registered NV12 resource
     NV_ENC_MAP_INPUT_RESOURCE mapRes{};
     mapRes.version            = NV_ENC_MAP_INPUT_RESOURCE_VER;
-    mapRes.registeredResource = m_registeredResource;
+    mapRes.registeredResource = slot.registeredResource;
 
     NVENCSTATUS st = m_funcs.nvEncMapInputResource(m_encoder, &mapRes);
     if (st != NV_ENC_SUCCESS) {
         out_error = std::string("nvEncMapInputResource: ") + NvencStatusName(st);
         return false;
     }
+    slot.mappedResource = mapRes.mappedResource;
+    slot.mapped         = true;
 
-    // Push PTS before submit (FIFO: one entry per submitted frame)
+    // Push PTS and slot index before submission (FIFO: one entry per submitted frame)
     m_pendingPts.push(pts_ns);
+    m_pendingSlots.push(slot_idx);
 
     NV_ENC_PIC_PARAMS pic{};
     pic.version         = NV_ENC_PIC_PARAMS_VER;
@@ -347,32 +401,51 @@ bool NvencEncoder::EncodeFrame(
     pic.inputTimeStamp  = m_frameIdx++;
 
     st = m_funcs.nvEncEncodePicture(m_encoder, &pic);
-    m_funcs.nvEncUnmapInputResource(m_encoder, mapRes.mappedResource);
 
     if (st == NV_ENC_SUCCESS) {
-        // Output available immediately
+        // Output available immediately.
+        // LockAndConsumeBitstream pops the earliest pending PTS+slot and
+        // releases that slot (unmap + mark free).
         if (out_packet) {
             std::string lockErr;
             if (!LockAndConsumeBitstream(*out_packet, lockErr)) {
-                // Pop PTS we just pushed since the packet was rejected
-                // Actually: LockAndConsumeBitstream already pops it on success.
-                // If it fails, the PTS is consumed but we have no packet — clear it.
-                if (!m_pendingPts.empty()) m_pendingPts.pop();
+                // Bitstream lock failed: clean up the current slot.
+                m_funcs.nvEncUnmapInputResource(m_encoder, slot.mappedResource);
+                slot.mappedResource = nullptr;
+                slot.mapped    = false;
+                slot.in_flight = false;
+
+                // Pop our own PTS+slot entries; LockAndConsumeBitstream
+                // may have already popped them if it got partway through.
+                // Best-effort: drain matching pair if present.
+                if (!m_pendingPts.empty() && !m_pendingSlots.empty()) {
+                    m_pendingPts.pop();
+                    m_pendingSlots.pop();
+                }
                 out_error = lockErr;
                 return false;
             }
         }
         return true;
     } else if (st == NV_ENC_ERR_NEED_MORE_INPUT) {
-        // Buffered — PTS is queued; will be consumed during Flush()
+        // Buffered — PTS and slot are queued; do not unmap.
+        // The slot will be released later when its output is consumed.
         ++m_needMoreInputCount;
         if (out_packet) {
-            out_packet->bytes.clear(); // signal: no output yet
+            out_packet->bytes.clear();
         }
         return true;
     } else {
-        // Encode failed — remove the PTS we pushed
+        // Fatal encode error — clean up this slot
+        m_funcs.nvEncUnmapInputResource(m_encoder, slot.mappedResource);
+        slot.mappedResource = nullptr;
+        slot.mapped    = false;
+        slot.in_flight = false;
+
+        // Remove the PTS+slot we just pushed (best-effort, front of queue)
         if (!m_pendingPts.empty()) m_pendingPts.pop();
+        if (!m_pendingSlots.empty()) m_pendingSlots.pop();
+
         out_error = std::string("nvEncEncodePicture: ") + NvencStatusName(st);
         return false;
     }
@@ -394,14 +467,14 @@ bool NvencEncoder::Flush(std::vector<EncodedVideoPacket>& out_packets, std::stri
         return false;
     }
 
-    // Drain buffered frames
+    // Drain buffered frames.
+    // LockAndConsumeBitstream releases each slot after output is consumed.
     for (int i = 0; i < m_needMoreInputCount; ++i) {
-        if (m_pendingPts.empty()) break; // no more expected output
+        if (m_pendingPts.empty()) break;
 
         EncodedVideoPacket pkt;
         std::string lockErr;
         if (!LockAndConsumeBitstream(pkt, lockErr)) {
-            // Non-fatal drain truncation: log and stop draining
             out_error = std::string("Flush drain stopped: ") + lockErr;
             break;
         }
@@ -413,10 +486,32 @@ bool NvencEncoder::Flush(std::vector<EncodedVideoPacket>& out_packets, std::stri
 }
 
 // ---------------------------------------------------------------------------
+// UnregisterAllSlots
+// ---------------------------------------------------------------------------
+
+void NvencEncoder::UnregisterAllSlots() {
+    for (auto& slot : m_slots) {
+        if (slot.mapped && slot.mappedResource != nullptr) {
+            m_funcs.nvEncUnmapInputResource(m_encoder, slot.mappedResource);
+            slot.mappedResource = nullptr;
+            slot.mapped    = false;
+        }
+        slot.in_flight = false;
+
+        if (slot.registeredResource != nullptr) {
+            m_funcs.nvEncUnregisterResource(m_encoder, slot.registeredResource);
+            slot.registeredResource = nullptr;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Destroy
 // ---------------------------------------------------------------------------
 
 void NvencEncoder::Destroy() {
+    UnregisterAllSlots();
+
     if (m_encoder && m_funcs.nvEncDestroyBitstreamBuffer && m_bitstreamBuffer) {
         m_funcs.nvEncDestroyBitstreamBuffer(m_encoder, m_bitstreamBuffer);
         m_bitstreamBuffer = nullptr;

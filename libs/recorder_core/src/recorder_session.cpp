@@ -205,12 +205,40 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     audioThread.Start();
     muxThread.Start();
 
-    // Join all threads (10 s timeout each)
-    constexpr unsigned kJoinTimeoutMs = 10000;
+    // Parallel join: all three threads share a single 120-second budget.
+    // VideoThread's NVENC EOS drain can take 15-40+ seconds for a 30-second
+    // recording at 60fps with ~1250 GPU-buffered frames.  Sequential 10s timeouts
+    // cause a cascade where MuxThread never receives VideoEosSentinel in time.
+    //
+    // IMPORTANT: NativeHandle() must be called BEFORE any Join() because the
+    // handle becomes invalid once the std::thread is joined.
+    HANDLE joinHandles[3] = {
+        videoThread.NativeHandle(),
+        audioThread.NativeHandle(),
+        muxThread.NativeHandle(),
+    };
+    constexpr DWORD kParallelJoinTimeoutMs = 120000;
 
-    bool videoJoined = videoThread.Join(kJoinTimeoutMs);
-    bool audioJoined = audioThread.Join(kJoinTimeoutMs);
-    bool muxJoined   = muxThread.Join(kJoinTimeoutMs);
+    DWORD joinWait = WaitForMultipleObjects(3, joinHandles, TRUE, kParallelJoinTimeoutMs);
+
+    bool videoJoined = false;
+    bool audioJoined = false;
+    bool muxJoined   = false;
+
+    if (joinWait == WAIT_OBJECT_0) {
+        // All three signalled within the budget — join them cleanly (non-blocking).
+        videoJoined = videoThread.Join(0);
+        audioJoined = audioThread.Join(0);
+        muxJoined   = muxThread.Join(0);
+    } else {
+        // At least one thread timed out; collect whichever finished in time.
+        videoJoined = (WaitForSingleObject(joinHandles[0], 0) == WAIT_OBJECT_0);
+        if (videoJoined) videoThread.Join(0);
+        audioJoined = (WaitForSingleObject(joinHandles[1], 0) == WAIT_OBJECT_0);
+        if (audioJoined) audioThread.Join(0);
+        muxJoined = (WaitForSingleObject(joinHandles[2], 0) == WAIT_OBJECT_0);
+        if (muxJoined) muxThread.Join(0);
+    }
 
     // Stop stats collector
     statsCollector.Stop();
@@ -253,6 +281,16 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     {
         std::lock_guard slk(m_impl->state.stats_mutex);
         result.stats = m_impl->state.stats;
+    }
+
+    // Defensive: if nominally succeeded but no output file was produced
+    if (result.succeeded && result.stats.output_file_bytes == 0) {
+        result.succeeded   = false;
+        result.error_code  = E_FAIL;
+        result.error_phase = ErrorPhase::Mux;
+        if (result.error_detail.empty()) {
+            result.error_detail = "Mux completed without writing output file";
+        }
     }
 
     // Compute skew in result stats
