@@ -69,6 +69,7 @@ if ($cppcheck) {
             --inline-suppr `
             "--suppressions-list=.cppcheck-suppress" `
             --library=windows `
+            --library=qt `
             -q `
             -I libs/recorder_core/include `
             -I libs/capability/include `

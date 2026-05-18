@@ -39,7 +39,7 @@ class RecordingCoordinator {
     void StopRecording();
 
     UiRecordingState State() const noexcept;
-    std::wstring CapabilityStatusText() const;
+    const std::wstring& CapabilityStatusText() const;
     std::filesystem::path CurrentOutputPath() const;
 
     void SetStateChangedCallback(StateChangedCallback cb);
@@ -47,7 +47,7 @@ class RecordingCoordinator {
     void SetResultReadyCallback(ResultReadyCallback cb);
 
   private:
-    void RecordingThreadProc(recorder_core::RecorderConfig config, std::filesystem::path output_path);
+    void RecordingThreadProc(const recorder_core::RecorderConfig& config, const std::filesystem::path& output_path);
     void PostStateChange(UiRecordingState new_state);
     void PostResult(UiRecordingResult result);
     void PostStats(recorder_core::SessionStats stats);

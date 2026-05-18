@@ -1926,8 +1926,6 @@ bool WgcNvencAacMkvProbe::Phase18_DeriveAv1CodecPrivate() {
     size_t i = 0;
 
     while (i < bsLen) {
-        if (i >= bsLen)
-            break;
         uint8_t header_byte = bs[i++];
         uint32_t obu_type = (header_byte >> 3) & 0x0F;
         uint32_t extension_flag = (header_byte >> 2) & 0x1;

@@ -22,6 +22,7 @@ if(EXOSNAP_CPPCHECK)
         "--inline-suppr"
         "--suppressions-list=${CMAKE_SOURCE_DIR}/.cppcheck-suppress"
         "--library=windows"
+        "--library=qt"
         "-q"
     )
 endif()

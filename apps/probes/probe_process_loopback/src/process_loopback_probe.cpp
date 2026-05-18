@@ -116,6 +116,7 @@ BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
 class ActivationHandler : public IActivateAudioInterfaceCompletionHandler {
   public:
     ActivationHandler() {
+        // cppcheck-suppress useInitializationList -- HANDLE init depends on COM setup order; body init is intentional
         m_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         HRESULT ftmHr =
             CoCreateFreeThreadedMarshaler(static_cast<IActivateAudioInterfaceCompletionHandler*>(this), &m_ftm);

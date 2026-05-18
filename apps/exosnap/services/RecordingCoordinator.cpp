@@ -115,8 +115,8 @@ void RecordingCoordinator::StopRecording() {
     session_.Stop();
 }
 
-void RecordingCoordinator::RecordingThreadProc(recorder_core::RecorderConfig config,
-                                               std::filesystem::path output_path) {
+void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConfig& config,
+                                               const std::filesystem::path& output_path) {
     auto result = session_.Record(config);
     is_recording_ = false;
 
@@ -134,7 +134,7 @@ void RecordingCoordinator::RecordingThreadProc(recorder_core::RecorderConfig con
 UiRecordingState RecordingCoordinator::State() const noexcept {
     return state_;
 }
-std::wstring RecordingCoordinator::CapabilityStatusText() const {
+const std::wstring& RecordingCoordinator::CapabilityStatusText() const {
     return capability_status_text_;
 }
 std::filesystem::path RecordingCoordinator::CurrentOutputPath() const {

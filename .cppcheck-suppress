@@ -4,5 +4,9 @@
 // Win32/DXGI/WASAPI system headers are not provided to cppcheck.
 missingIncludeSystem
 
+// GoogleTest TEST() / TEST_F() macros expand to class definitions that cppcheck
+// cannot parse without the full GoogleTest headers. Suppress in test files only.
+syntaxError:*/tests/*
+
 // Suppress noise when a suppression entry no longer matches (remove once list is stable).
 unmatchedSuppression
