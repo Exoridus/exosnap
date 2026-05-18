@@ -24,21 +24,16 @@ namespace recorder_core {
 namespace {
 
 struct InterleavePacket {
-    uint64_t pts_ns      = 0;
-    uint64_t track_num   = 0;
-    bool     is_key      = false;
+    uint64_t pts_ns = 0;
+    uint64_t track_num = 0;
+    bool is_key = false;
     std::vector<uint8_t> bytes;
 };
 
 // Write a single interleave packet to the segment.
 // Returns false on error.
 bool WritePacket(mkvmuxer::Segment& seg, const InterleavePacket& ip) {
-    return seg.AddFrame(
-        ip.bytes.data(),
-        static_cast<uint64_t>(ip.bytes.size()),
-        ip.track_num,
-        ip.pts_ns,
-        ip.is_key);
+    return seg.AddFrame(ip.bytes.data(), static_cast<uint64_t>(ip.bytes.size()), ip.track_num, ip.pts_ns, ip.is_key);
 }
 
 } // anonymous namespace
@@ -47,12 +42,12 @@ bool WritePacket(mkvmuxer::Segment& seg, const InterleavePacket& ip) {
 // MuxThread
 // ---------------------------------------------------------------------------
 
-MuxThread::MuxThread(SessionState& state)
-    : m_state(state)
-{}
+MuxThread::MuxThread(SessionState& state) : m_state(state) {
+}
 
 MuxThread::~MuxThread() {
-    if (m_thread.joinable()) m_thread.detach();
+    if (m_thread.joinable())
+        m_thread.detach();
 }
 
 void MuxThread::Start() {
@@ -60,7 +55,8 @@ void MuxThread::Start() {
 }
 
 bool MuxThread::Join(unsigned timeout_ms) {
-    if (!m_thread.joinable()) return true;
+    if (!m_thread.joinable())
+        return true;
     HANDLE h = m_thread.native_handle();
     DWORD r = WaitForSingleObject(h, static_cast<DWORD>(timeout_ms));
     if (r == WAIT_OBJECT_0) {
@@ -79,14 +75,13 @@ void MuxThread::Run() {
     {
         std::unique_lock lk(m_state.premux_mutex);
         m_state.premux_cv.wait(lk, [&] {
-            return (m_state.codec_private.av1_ready && m_state.codec_private.aac_ready)
-                || m_state.stop_requested.load();
+            return (m_state.codec_private.av1_ready && m_state.codec_private.aac_ready) ||
+                   m_state.stop_requested.load();
         });
 
         if (!(m_state.codec_private.av1_ready && m_state.codec_private.aac_ready)) {
             lk.unlock();
-            m_state.RecordFailure(E_FAIL, ErrorPhase::Mux,
-                                  "Codec private data not available at mux start");
+            m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Codec private data not available at mux start");
             return;
         }
     }
@@ -117,21 +112,23 @@ void MuxThread::Run() {
         std::lock_guard lk(m_state.premux_mutex);
 
         for (auto& pkt : m_state.video_premux) {
-            if (pkt.bytes.empty()) continue;
+            if (pkt.bytes.empty())
+                continue;
             InterleavePacket ip;
-            ip.pts_ns    = pkt.pts_ns;
+            ip.pts_ns = pkt.pts_ns;
             ip.track_num = 1;
-            ip.is_key    = pkt.keyframe;
-            ip.bytes     = std::move(pkt.bytes);
+            ip.is_key = pkt.keyframe;
+            ip.bytes = std::move(pkt.bytes);
             allPackets.push_back(std::move(ip));
         }
         for (auto& pkt : m_state.audio_premux) {
-            if (pkt.bytes.empty()) continue;
+            if (pkt.bytes.empty())
+                continue;
             InterleavePacket ip;
-            ip.pts_ns    = pkt.pts_ns;
+            ip.pts_ns = pkt.pts_ns;
             ip.track_num = 2;
-            ip.is_key    = true;
-            ip.bytes     = std::move(pkt.bytes);
+            ip.is_key = true;
+            ip.bytes = std::move(pkt.bytes);
             allPackets.push_back(std::move(ip));
         }
 
@@ -144,47 +141,50 @@ void MuxThread::Run() {
     bool audioEos = false;
 
     while (!(videoEos && audioEos)) {
-        if (m_state.HasFailure()) break;
+        if (m_state.HasFailure())
+            break;
 
         {
             std::unique_lock lk(m_state.mux_mutex);
-            m_state.mux_cv.wait_for(lk, std::chrono::milliseconds(5), [&] {
-                return !m_state.mux_queue.empty() || m_state.stop_requested.load();
-            });
+            m_state.mux_cv.wait_for(lk, std::chrono::milliseconds(5),
+                                    [&] { return !m_state.mux_queue.empty() || m_state.stop_requested.load(); });
 
-            if (m_state.HasFailure()) break;
+            if (m_state.HasFailure())
+                break;
 
             while (!m_state.mux_queue.empty()) {
                 MuxItem item = std::move(m_state.mux_queue.front());
                 m_state.mux_queue.pop_front();
                 lk.unlock();
 
-                std::visit([&](auto&& payload) {
-                    using T = std::decay_t<decltype(payload)>;
-                    if constexpr (std::is_same_v<T, EncodedVideoPacket>) {
-                        if (!payload.bytes.empty()) {
-                            InterleavePacket ip;
-                            ip.pts_ns    = payload.pts_ns;
-                            ip.track_num = 1;
-                            ip.is_key    = payload.keyframe;
-                            ip.bytes     = std::move(payload.bytes);
-                            allPackets.push_back(std::move(ip));
+                std::visit(
+                    [&](auto&& payload) {
+                        using T = std::decay_t<decltype(payload)>;
+                        if constexpr (std::is_same_v<T, EncodedVideoPacket>) {
+                            if (!payload.bytes.empty()) {
+                                InterleavePacket ip;
+                                ip.pts_ns = payload.pts_ns;
+                                ip.track_num = 1;
+                                ip.is_key = payload.keyframe;
+                                ip.bytes = std::move(payload.bytes);
+                                allPackets.push_back(std::move(ip));
+                            }
+                        } else if constexpr (std::is_same_v<T, EncodedAudioPacket>) {
+                            if (!payload.bytes.empty()) {
+                                InterleavePacket ip;
+                                ip.pts_ns = payload.pts_ns;
+                                ip.track_num = 2;
+                                ip.is_key = true;
+                                ip.bytes = std::move(payload.bytes);
+                                allPackets.push_back(std::move(ip));
+                            }
+                        } else if constexpr (std::is_same_v<T, VideoEosSentinel>) {
+                            videoEos = true;
+                        } else if constexpr (std::is_same_v<T, AudioEosSentinel>) {
+                            audioEos = true;
                         }
-                    } else if constexpr (std::is_same_v<T, EncodedAudioPacket>) {
-                        if (!payload.bytes.empty()) {
-                            InterleavePacket ip;
-                            ip.pts_ns    = payload.pts_ns;
-                            ip.track_num = 2;
-                            ip.is_key    = true;
-                            ip.bytes     = std::move(payload.bytes);
-                            allPackets.push_back(std::move(ip));
-                        }
-                    } else if constexpr (std::is_same_v<T, VideoEosSentinel>) {
-                        videoEos = true;
-                    } else if constexpr (std::is_same_v<T, AudioEosSentinel>) {
-                        audioEos = true;
-                    }
-                }, item.payload);
+                    },
+                    item.payload);
 
                 lk.lock();
             }
@@ -198,36 +198,36 @@ void MuxThread::Run() {
             MuxItem item = std::move(m_state.mux_queue.front());
             m_state.mux_queue.pop_front();
 
-            std::visit([&](auto&& payload) {
-                using T = std::decay_t<decltype(payload)>;
-                if constexpr (std::is_same_v<T, EncodedVideoPacket>) {
-                    if (!payload.bytes.empty()) {
-                        InterleavePacket ip;
-                        ip.pts_ns    = payload.pts_ns;
-                        ip.track_num = 1;
-                        ip.is_key    = payload.keyframe;
-                        ip.bytes     = std::move(payload.bytes);
-                        allPackets.push_back(std::move(ip));
+            std::visit(
+                [&](auto&& payload) {
+                    using T = std::decay_t<decltype(payload)>;
+                    if constexpr (std::is_same_v<T, EncodedVideoPacket>) {
+                        if (!payload.bytes.empty()) {
+                            InterleavePacket ip;
+                            ip.pts_ns = payload.pts_ns;
+                            ip.track_num = 1;
+                            ip.is_key = payload.keyframe;
+                            ip.bytes = std::move(payload.bytes);
+                            allPackets.push_back(std::move(ip));
+                        }
+                    } else if constexpr (std::is_same_v<T, EncodedAudioPacket>) {
+                        if (!payload.bytes.empty()) {
+                            InterleavePacket ip;
+                            ip.pts_ns = payload.pts_ns;
+                            ip.track_num = 2;
+                            ip.is_key = true;
+                            ip.bytes = std::move(payload.bytes);
+                            allPackets.push_back(std::move(ip));
+                        }
                     }
-                } else if constexpr (std::is_same_v<T, EncodedAudioPacket>) {
-                    if (!payload.bytes.empty()) {
-                        InterleavePacket ip;
-                        ip.pts_ns    = payload.pts_ns;
-                        ip.track_num = 2;
-                        ip.is_key    = true;
-                        ip.bytes     = std::move(payload.bytes);
-                        allPackets.push_back(std::move(ip));
-                    }
-                }
-            }, item.payload);
+                },
+                item.payload);
         }
     }
 
     // --- Step 3: Stable-sort by PTS ---
     std::stable_sort(allPackets.begin(), allPackets.end(),
-        [](const InterleavePacket& a, const InterleavePacket& b) {
-            return a.pts_ns < b.pts_ns;
-        });
+                     [](const InterleavePacket& a, const InterleavePacket& b) { return a.pts_ns < b.pts_ns; });
 
     // Do not emit a container when failure was recorded and no usable payload exists.
     if (m_state.HasFailure() && allPackets.empty()) {
@@ -254,10 +254,7 @@ void MuxThread::Run() {
     segment.set_mode(mkvmuxer::Segment::kFile);
 
     // --- Step 5: Add video and audio tracks ---
-    uint64_t videoTrackNum = segment.AddVideoTrack(
-        static_cast<int32_t>(encW),
-        static_cast<int32_t>(encH),
-        1);
+    uint64_t videoTrackNum = segment.AddVideoTrack(static_cast<int32_t>(encW), static_cast<int32_t>(encH), 1);
     if (videoTrackNum == 0) {
         mkvWriter.Close();
         m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "AddVideoTrack returned 0");
@@ -267,15 +264,13 @@ void MuxThread::Run() {
     auto* vt = static_cast<mkvmuxer::VideoTrack*>(segment.GetTrackByNumber(videoTrackNum));
     vt->set_codec_id("V_AV1");
     vt->SetCodecPrivate(av1Cp, 4);
-    vt->set_frame_rate(
-        static_cast<double>(m_state.config.frame_rate_num)
-        / static_cast<double>(m_state.config.frame_rate_den));
+    vt->set_frame_rate(static_cast<double>(m_state.config.frame_rate_num) /
+                       static_cast<double>(m_state.config.frame_rate_den));
 
     segment.OutputCues(true);
     if (!segment.CuesTrack(videoTrackNum)) {
         mkvWriter.Close();
-        m_state.RecordFailure(E_FAIL, ErrorPhase::Mux,
-                              "segment.CuesTrack failed for video track");
+        m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "segment.CuesTrack failed for video track");
         return;
     }
 
@@ -305,8 +300,7 @@ void MuxThread::Run() {
     for (const auto& ip : allPackets) {
         if (!WritePacket(segment, ip)) {
             mkvWriter.Close();
-            m_state.RecordFailure(E_FAIL, ErrorPhase::Mux,
-                                  "segment.AddFrame failed during final write");
+            m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "segment.AddFrame failed during final write");
             return;
         }
     }
@@ -314,8 +308,7 @@ void MuxThread::Run() {
     // --- Step 8: Finalize ---
     if (!segment.Finalize()) {
         mkvWriter.Close();
-        m_state.RecordFailure(E_FAIL, ErrorPhase::Finalize,
-                              "mkvmuxer::Segment::Finalize returned false");
+        m_state.RecordFailure(E_FAIL, ErrorPhase::Finalize, "mkvmuxer::Segment::Finalize returned false");
         return;
     }
 

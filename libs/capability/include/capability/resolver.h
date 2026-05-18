@@ -28,17 +28,17 @@ struct InvalidReason {
 };
 
 struct ResolveResult {
-    bool                     succeeded = false;
-    UserRecorderConfig       resolved_config;
-    std::vector<Adjustment>  adjustments;
-    std::vector<Warning>     warnings;
+    bool succeeded = false;
+    UserRecorderConfig resolved_config;
+    std::vector<Adjustment> adjustments;
+    std::vector<Warning> warnings;
     std::vector<InvalidReason> invalidity;
 };
 
 class RequestedChange {
-public:
+  public:
     struct ResolutionValue {
-        uint32_t width  = 0;
+        uint32_t width = 0;
         uint32_t height = 0;
     };
 
@@ -53,25 +53,22 @@ public:
 
     const Value& value() const noexcept;
 
-private:
+  private:
     explicit RequestedChange(Value value);
 
     Value value_;
 };
 
 class SettingsResolver {
-public:
+  public:
     explicit SettingsResolver(const CapabilitySet& caps);
 
-    ResolveResult ResolveChange(
-        const UserRecorderConfig& current,
-        const RequestedChange& change) const;
+    ResolveResult ResolveChange(const UserRecorderConfig& current, const RequestedChange& change) const;
 
     ResolveResult ValidateConfig(const UserRecorderConfig& config) const;
 
-private:
+  private:
     const CapabilitySet& caps_;
 };
 
 } // namespace exosnap::capability
-

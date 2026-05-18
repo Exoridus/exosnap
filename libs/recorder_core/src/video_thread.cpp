@@ -31,12 +31,12 @@
 
 namespace recorder_core {
 
-VideoThread::VideoThread(SessionState& state)
-    : m_state(state)
-{}
+VideoThread::VideoThread(SessionState& state) : m_state(state) {
+}
 
 VideoThread::~VideoThread() {
-    if (m_thread.joinable()) m_thread.detach();
+    if (m_thread.joinable())
+        m_thread.detach();
 }
 
 void VideoThread::Start() {
@@ -44,7 +44,8 @@ void VideoThread::Start() {
 }
 
 bool VideoThread::Join(unsigned timeout_ms) {
-    if (!m_thread.joinable()) return true;
+    if (!m_thread.joinable())
+        return true;
     // Windows thread join with timeout: use a timed wait on the native handle
     HANDLE h = m_thread.native_handle();
     DWORD r = WaitForSingleObject(h, static_cast<DWORD>(timeout_ms));
@@ -71,26 +72,25 @@ void VideoThread::Run() {
     }
 
     // --- D3D11 video-capable device (exclusive to this thread's context) ---
-    winrt::com_ptr<ID3D11Device>        d3dDevice;
+    winrt::com_ptr<ID3D11Device> d3dDevice;
     winrt::com_ptr<ID3D11DeviceContext> d3dContext;
-    winrt::com_ptr<ID3D11VideoDevice>   videoDevice;
-    winrt::com_ptr<ID3D11VideoContext>  videoContext;
+    winrt::com_ptr<ID3D11VideoDevice> videoDevice;
+    winrt::com_ptr<ID3D11VideoContext> videoContext;
 
     {
-        D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0 };
+        D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
         UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
 
-        hr = D3D11CreateDevice(
-            nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
-            levels, static_cast<UINT>(std::size(levels)),
-            D3D11_SDK_VERSION,
-            d3dDevice.put(), nullptr, d3dContext.put());
+        hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, levels,
+                               static_cast<UINT>(std::size(levels)), D3D11_SDK_VERSION, d3dDevice.put(), nullptr,
+                               d3dContext.put());
 
         if (FAILED(hr) || !d3dDevice) {
             char buf[80];
             snprintf(buf, sizeof(buf), "D3D11CreateDevice failed 0x%08lX", static_cast<unsigned long>(hr));
             m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
-            if (com_inited && hr != RPC_E_CHANGED_MODE) CoUninitialize();
+            if (com_inited && hr != RPC_E_CHANGED_MODE)
+                CoUninitialize();
             return;
         }
 
@@ -99,7 +99,8 @@ void VideoThread::Run() {
             char buf[80];
             snprintf(buf, sizeof(buf), "QI ID3D11VideoDevice failed 0x%08lX", static_cast<unsigned long>(hr));
             m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
-            if (com_inited && hr != RPC_E_CHANGED_MODE) CoUninitialize();
+            if (com_inited && hr != RPC_E_CHANGED_MODE)
+                CoUninitialize();
             return;
         }
 
@@ -108,7 +109,8 @@ void VideoThread::Run() {
             char buf[80];
             snprintf(buf, sizeof(buf), "QI ID3D11VideoContext failed 0x%08lX", static_cast<unsigned long>(hr));
             m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
-            if (com_inited && hr != RPC_E_CHANGED_MODE) CoUninitialize();
+            if (com_inited && hr != RPC_E_CHANGED_MODE)
+                CoUninitialize();
             return;
         }
     }
@@ -118,19 +120,16 @@ void VideoThread::Run() {
     {
         const CaptureTarget& target = m_state.config.target;
         try {
-            auto interop = winrt::get_activation_factory<
-                winrt::Windows::Graphics::Capture::GraphicsCaptureItem,
-                IGraphicsCaptureItemInterop>();
+            auto interop = winrt::get_activation_factory<winrt::Windows::Graphics::Capture::GraphicsCaptureItem,
+                                                         IGraphicsCaptureItemInterop>();
 
             if (target.kind == CaptureTarget::Kind::Monitor) {
                 winrt::check_hresult(interop->CreateForMonitor(
-                    target.hmonitor,
-                    winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(),
+                    target.hmonitor, winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(),
                     winrt::put_abi(item)));
             } else {
                 winrt::check_hresult(interop->CreateForWindow(
-                    target.hwnd,
-                    winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(),
+                    target.hwnd, winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(),
                     winrt::put_abi(item)));
             }
         } catch (const winrt::hresult_error& e) {
@@ -138,30 +137,32 @@ void VideoThread::Run() {
             snprintf(buf, sizeof(buf), "CreateForMonitor/Window failed 0x%08X",
                      static_cast<unsigned int>(e.code().value));
             m_state.RecordFailure(static_cast<HRESULT>(e.code().value), ErrorPhase::VideoCapture, buf);
-            if (com_inited && hr != RPC_E_CHANGED_MODE) CoUninitialize();
+            if (com_inited && hr != RPC_E_CHANGED_MODE)
+                CoUninitialize();
             return;
         }
     }
 
     // Capture dimensions
     auto sz = item.Size();
-    uint32_t sourceWidth  = static_cast<uint32_t>(sz.Width);
+    uint32_t sourceWidth = static_cast<uint32_t>(sz.Width);
     uint32_t sourceHeight = static_cast<uint32_t>(sz.Height);
-    uint32_t encodeWidth  = sourceWidth  & ~1u;
+    uint32_t encodeWidth = sourceWidth & ~1u;
     uint32_t encodeHeight = sourceHeight & ~1u;
 
     if (encodeWidth < 2 || encodeHeight < 2) {
         char buf[96];
-        snprintf(buf, sizeof(buf), "source %ux%u rounds to %ux%u — too small for NV12",
-                 sourceWidth, sourceHeight, encodeWidth, encodeHeight);
+        snprintf(buf, sizeof(buf), "source %ux%u rounds to %ux%u — too small for NV12", sourceWidth, sourceHeight,
+                 encodeWidth, encodeHeight);
         m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, buf);
-        if (com_inited && hr != RPC_E_CHANGED_MODE) CoUninitialize();
+        if (com_inited && hr != RPC_E_CHANGED_MODE)
+            CoUninitialize();
         return;
     }
 
     {
         std::lock_guard lk(m_state.stats_mutex);
-        m_state.encode_width  = encodeWidth;
+        m_state.encode_width = encodeWidth;
         m_state.encode_height = encodeHeight;
     }
 
@@ -171,56 +172,61 @@ void VideoThread::Run() {
         std::string err;
         if (!nvenc.Open(d3dDevice.get(), err)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "NVENC open: " + err);
-            if (com_inited && hr != RPC_E_CHANGED_MODE) CoUninitialize();
+            if (com_inited && hr != RPC_E_CHANGED_MODE)
+                CoUninitialize();
             return;
         }
         if (!nvenc.QueryAv1Nv12Support(err)) {
             m_state.RecordFailure(E_NOTIMPL, ErrorPhase::Prepare, "NVENC AV1/NV12 support: " + err);
-            if (com_inited && hr != RPC_E_CHANGED_MODE) CoUninitialize();
+            if (com_inited && hr != RPC_E_CHANGED_MODE)
+                CoUninitialize();
             return;
         }
         if (!nvenc.FetchPresetConfig(err)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "NVENC preset config: " + err);
-            if (com_inited && hr != RPC_E_CHANGED_MODE) CoUninitialize();
+            if (com_inited && hr != RPC_E_CHANGED_MODE)
+                CoUninitialize();
             return;
         }
-        if (!nvenc.InitEncoder(encodeWidth, encodeHeight,
-                               m_state.config.frame_rate_num,
-                               m_state.config.frame_rate_den, err)) {
+        if (!nvenc.InitEncoder(encodeWidth, encodeHeight, m_state.config.frame_rate_num, m_state.config.frame_rate_den,
+                               err)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC init: " + err);
-            if (com_inited && hr != RPC_E_CHANGED_MODE) CoUninitialize();
+            if (com_inited && hr != RPC_E_CHANGED_MODE)
+                CoUninitialize();
             return;
         }
         if (!nvenc.CreateBitstreamBuffer(err)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC bitstream buffer: " + err);
-            if (com_inited && hr != RPC_E_CHANGED_MODE) CoUninitialize();
+            if (com_inited && hr != RPC_E_CHANGED_MODE)
+                CoUninitialize();
             return;
         }
     }
 
     // --- NV12 texture ring + video processor ---
     static constexpr int32_t kSlotCount = 8;
-    winrt::com_ptr<ID3D11Texture2D>                nv12Textures[kSlotCount];
+    winrt::com_ptr<ID3D11Texture2D> nv12Textures[kSlotCount];
     winrt::com_ptr<ID3D11VideoProcessorEnumerator> videoEnum;
-    winrt::com_ptr<ID3D11VideoProcessor>           videoProcessor;
+    winrt::com_ptr<ID3D11VideoProcessor> videoProcessor;
     winrt::com_ptr<ID3D11VideoProcessorOutputView> videoOutputViews[kSlotCount];
 
     {
         // Video processor enumerator (shared across all slots)
         D3D11_VIDEO_PROCESSOR_CONTENT_DESC contentDesc{};
         contentDesc.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
-        contentDesc.InputWidth       = encodeWidth;
-        contentDesc.InputHeight      = encodeHeight;
-        contentDesc.OutputWidth      = encodeWidth;
-        contentDesc.OutputHeight     = encodeHeight;
-        contentDesc.Usage            = D3D11_VIDEO_USAGE_OPTIMAL_SPEED;
+        contentDesc.InputWidth = encodeWidth;
+        contentDesc.InputHeight = encodeHeight;
+        contentDesc.OutputWidth = encodeWidth;
+        contentDesc.OutputHeight = encodeHeight;
+        contentDesc.Usage = D3D11_VIDEO_USAGE_OPTIMAL_SPEED;
 
         hr = videoDevice->CreateVideoProcessorEnumerator(&contentDesc, videoEnum.put());
         if (FAILED(hr)) {
             char buf[80];
             snprintf(buf, sizeof(buf), "CreateVideoProcessorEnumerator failed 0x%08lX", static_cast<unsigned long>(hr));
             m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
-            if (com_inited) CoUninitialize();
+            if (com_inited)
+                CoUninitialize();
             return;
         }
 
@@ -229,51 +235,55 @@ void VideoThread::Run() {
             char buf[80];
             snprintf(buf, sizeof(buf), "CreateVideoProcessor failed 0x%08lX", static_cast<unsigned long>(hr));
             m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
-            if (com_inited) CoUninitialize();
+            if (com_inited)
+                CoUninitialize();
             return;
         }
 
         // Create NV12 textures and output views for each slot
         for (int32_t i = 0; i < kSlotCount; ++i) {
             D3D11_TEXTURE2D_DESC desc{};
-            desc.Width      = encodeWidth;
-            desc.Height     = encodeHeight;
-            desc.MipLevels  = 1;
-            desc.ArraySize  = 1;
-            desc.Format     = DXGI_FORMAT_NV12;
-            desc.SampleDesc = { 1, 0 };
-            desc.Usage      = D3D11_USAGE_DEFAULT;
-            desc.BindFlags  = D3D11_BIND_RENDER_TARGET;
+            desc.Width = encodeWidth;
+            desc.Height = encodeHeight;
+            desc.MipLevels = 1;
+            desc.ArraySize = 1;
+            desc.Format = DXGI_FORMAT_NV12;
+            desc.SampleDesc = {1, 0};
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.BindFlags = D3D11_BIND_RENDER_TARGET;
 
             hr = d3dDevice->CreateTexture2D(&desc, nullptr, nv12Textures[i].put());
             if (FAILED(hr)) {
                 char buf[80];
-                snprintf(buf, sizeof(buf), "CreateTexture2D(NV12[%d]) failed 0x%08lX",
-                         static_cast<int>(i), static_cast<unsigned long>(hr));
+                snprintf(buf, sizeof(buf), "CreateTexture2D(NV12[%d]) failed 0x%08lX", static_cast<int>(i),
+                         static_cast<unsigned long>(hr));
                 m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
-                if (com_inited) CoUninitialize();
+                if (com_inited)
+                    CoUninitialize();
                 return;
             }
 
             D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC ovDesc{};
-            ovDesc.ViewDimension      = D3D11_VPOV_DIMENSION_TEXTURE2D;
+            ovDesc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
             ovDesc.Texture2D.MipSlice = 0;
 
-            hr = videoDevice->CreateVideoProcessorOutputView(
-                nv12Textures[i].get(), videoEnum.get(), &ovDesc, videoOutputViews[i].put());
+            hr = videoDevice->CreateVideoProcessorOutputView(nv12Textures[i].get(), videoEnum.get(), &ovDesc,
+                                                             videoOutputViews[i].put());
             if (FAILED(hr)) {
                 char buf[80];
-                snprintf(buf, sizeof(buf), "CreateVideoProcessorOutputView[%d] failed 0x%08lX",
-                         static_cast<int>(i), static_cast<unsigned long>(hr));
+                snprintf(buf, sizeof(buf), "CreateVideoProcessorOutputView[%d] failed 0x%08lX", static_cast<int>(i),
+                         static_cast<unsigned long>(hr));
                 m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
-                if (com_inited) CoUninitialize();
+                if (com_inited)
+                    CoUninitialize();
                 return;
             }
 
             std::string err;
             if (!nvenc.RegisterSlotTexture(i, nv12Textures[i].get(), err)) {
                 m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "NVENC register slot: " + err);
-                if (com_inited) CoUninitialize();
+                if (com_inited)
+                    CoUninitialize();
                 return;
             }
         }
@@ -282,34 +292,29 @@ void VideoThread::Run() {
     // --- WGC frame pool and session ---
     bool sourceLost = false;
     winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool framePool{nullptr};
-    winrt::Windows::Graphics::Capture::GraphicsCaptureSession     captureSession{nullptr};
+    winrt::Windows::Graphics::Capture::GraphicsCaptureSession captureSession{nullptr};
     winrt::event_token closedToken{};
 
     try {
         winrt::com_ptr<IDXGIDevice> dxgiDev = d3dDevice.as<IDXGIDevice>();
         winrt::com_ptr<IInspectable> insp;
         winrt::check_hresult(CreateDirect3D11DeviceFromDXGIDevice(dxgiDev.get(), insp.put()));
-        auto d3dWinRTDev = insp.as<
-            winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
+        auto d3dWinRTDev = insp.as<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
 
         auto capSz = item.Size();
         framePool = winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool::Create(
-            d3dWinRTDev,
-            winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized,
-            3, capSz);
+            d3dWinRTDev, winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, capSz);
 
         captureSession = framePool.CreateCaptureSession(item);
         captureSession.StartCapture();
 
-        closedToken = item.Closed([&sourceLost](const auto&, const auto&) {
-            sourceLost = true;
-        });
+        closedToken = item.Closed([&sourceLost](const auto&, const auto&) { sourceLost = true; });
     } catch (const winrt::hresult_error& e) {
         char buf[96];
-        snprintf(buf, sizeof(buf), "WGC frame pool init failed 0x%08X",
-                 static_cast<unsigned int>(e.code().value));
+        snprintf(buf, sizeof(buf), "WGC frame pool init failed 0x%08X", static_cast<unsigned int>(e.code().value));
         m_state.RecordFailure(static_cast<HRESULT>(e.code().value), ErrorPhase::VideoCapture, buf);
-        if (com_inited) CoUninitialize();
+        if (com_inited)
+            CoUninitialize();
         return;
     }
 
@@ -324,52 +329,62 @@ void VideoThread::Run() {
         while (!gotFirst && !m_state.stop_requested.load()) {
             MSG msg{};
             while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-                TranslateMessage(&msg); DispatchMessageW(&msg);
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
             }
 
             QueryPerformanceCounter(&tNow);
-            double elapsed = static_cast<double>(tNow.QuadPart - tStart.QuadPart)
-                           / static_cast<double>(freq.QuadPart);
+            double elapsed = static_cast<double>(tNow.QuadPart - tStart.QuadPart) / static_cast<double>(freq.QuadPart);
             if (elapsed > kTimeoutSec) {
-                m_state.RecordFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT),
-                                      ErrorPhase::VideoCapture,
+                m_state.RecordFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT), ErrorPhase::VideoCapture,
                                       "WGC: timeout waiting for first frame (5 s)");
-                if (captureSession != nullptr) captureSession.Close();
-                if (framePool != nullptr) framePool.Close();
-                if (com_inited) CoUninitialize();
+                if (captureSession != nullptr)
+                    captureSession.Close();
+                if (framePool != nullptr)
+                    framePool.Close();
+                if (com_inited)
+                    CoUninitialize();
                 return;
             }
 
             if (sourceLost) {
-                m_state.RecordFailure(E_ABORT, ErrorPhase::VideoCapture,
-                                      "WGC: source lost before first frame");
-                if (captureSession != nullptr) captureSession.Close();
-                if (framePool != nullptr) framePool.Close();
-                if (com_inited) CoUninitialize();
+                m_state.RecordFailure(E_ABORT, ErrorPhase::VideoCapture, "WGC: source lost before first frame");
+                if (captureSession != nullptr)
+                    captureSession.Close();
+                if (framePool != nullptr)
+                    framePool.Close();
+                if (com_inited)
+                    CoUninitialize();
                 return;
             }
 
             try {
                 auto frame = framePool.TryGetNextFrame();
-                if (frame != nullptr) { gotFirst = true; }
-                else { Sleep(1); }
-            } catch (...) { Sleep(1); }
+                if (frame != nullptr) {
+                    gotFirst = true;
+                } else {
+                    Sleep(1);
+                }
+            } catch (...) {
+                Sleep(1);
+            }
         }
     }
 
     // --- Capture + encode loop ---
-    bool    videoEpochSet        = false;
+    bool videoEpochSet = false;
     int64_t videoEpochTicks100ns = 0;
-    bool    av1CodecPrivateReady = false;
-    uint64_t lastVideoPts        = 0;
+    bool av1CodecPrivateReady = false;
+    uint64_t lastVideoPts = 0;
     uint64_t videoFramesCaptured = 0;
-    uint64_t droppedFrames       = 0;
-    uint64_t slotStallCount      = 0;
+    uint64_t droppedFrames = 0;
+    uint64_t slotStallCount = 0;
 
     while (!m_state.stop_requested.load()) {
         MSG msg{};
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&msg); DispatchMessageW(&msg);
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
         }
 
         if (sourceLost) {
@@ -388,29 +403,32 @@ void VideoThread::Run() {
         try {
             while (true) {
                 auto frame = framePool.TryGetNextFrame();
-                if (frame == nullptr) break;
+                if (frame == nullptr)
+                    break;
 
                 auto surface = frame.Surface();
-                auto access  = surface.as<
-                    ::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+                auto access = surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
                 winrt::com_ptr<ID3D11Texture2D> tex;
                 if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
-                    if (latestTex != nullptr) ++droppedFrames;
-                    latestTex             = tex;
+                    if (latestTex != nullptr)
+                        ++droppedFrames;
+                    latestTex = tex;
                     latestFrameTicks100ns = frame.SystemRelativeTime().count();
                 }
             }
-        } catch (...) {}
+        } catch (...) {
+        }
 
         if (latestTex != nullptr) {
             // Establish video epoch
             if (!videoEpochSet) {
                 videoEpochTicks100ns = latestFrameTicks100ns;
-                videoEpochSet        = true;
+                videoEpochSet = true;
             }
 
             int64_t deltaTicks = latestFrameTicks100ns - videoEpochTicks100ns;
-            if (deltaTicks < 0) deltaTicks = 0;
+            if (deltaTicks < 0)
+                deltaTicks = 0;
             uint64_t framePts_ns = static_cast<uint64_t>(deltaTicks) * 100ULL;
             lastVideoPts = framePts_ns;
 
@@ -420,35 +438,33 @@ void VideoThread::Run() {
             if (slot >= 0) {
                 // BGRA -> NV12 via VideoProcessorBlt into the selected slot's view
                 D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
-                ivDesc.ViewDimension        = D3D11_VPIV_DIMENSION_TEXTURE2D;
-                ivDesc.Texture2D.MipSlice   = 0;
+                ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+                ivDesc.Texture2D.MipSlice = 0;
                 ivDesc.Texture2D.ArraySlice = 0;
 
                 winrt::com_ptr<ID3D11VideoProcessorInputView> inputView;
-                hr = videoDevice->CreateVideoProcessorInputView(
-                    latestTex.get(), videoEnum.get(), &ivDesc, inputView.put());
+                hr = videoDevice->CreateVideoProcessorInputView(latestTex.get(), videoEnum.get(), &ivDesc,
+                                                                inputView.put());
 
                 if (SUCCEEDED(hr) && inputView != nullptr) {
                     D3D11_VIDEO_PROCESSOR_STREAM stream{};
-                    stream.Enable        = TRUE;
+                    stream.Enable = TRUE;
                     stream.pInputSurface = inputView.get();
 
-                    hr = videoContext->VideoProcessorBlt(
-                        videoProcessor.get(), videoOutputViews[slot].get(), 0, 1, &stream);
+                    hr = videoContext->VideoProcessorBlt(videoProcessor.get(), videoOutputViews[slot].get(), 0, 1,
+                                                         &stream);
 
-                    inputView  = nullptr;
-                    latestTex  = nullptr;
+                    inputView = nullptr;
+                    latestTex = nullptr;
 
                     if (SUCCEEDED(hr)) {
                         // Encode frame on the acquired slot
                         EncodedVideoPacket pkt;
                         std::string encErr;
-                        bool encOk = nvenc.EncodeFrame(
-                            slot, framePts_ns, encodeWidth, encodeHeight, &pkt, encErr);
+                        bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, &pkt, encErr);
 
                         if (!encOk) {
-                            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
-                                                  "NVENC encode: " + encErr);
+                            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode: " + encErr);
                             break;
                         }
 
@@ -461,8 +477,8 @@ void VideoThread::Run() {
                             if (!av1CodecPrivateReady && pkt.keyframe) {
                                 char reason[256] = {};
                                 uint8_t cp[4] = {};
-                                if (codec_private::DeriveAv1CodecPrivate(
-                                        pkt.bytes.data(), pkt.bytes.size(), cp, reason, sizeof(reason))) {
+                                if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp, reason,
+                                                                         sizeof(reason))) {
                                     std::lock_guard lk(m_state.premux_mutex);
                                     std::memcpy(m_state.codec_private.av1_codec_private, cp, 4);
                                     m_state.codec_private.av1_ready = true;
@@ -474,14 +490,13 @@ void VideoThread::Run() {
                             // Route to premux or mux
                             {
                                 std::unique_lock lk(m_state.premux_mutex);
-                                bool bothReady = m_state.codec_private.av1_ready
-                                              && m_state.codec_private.aac_ready;
+                                bool bothReady = m_state.codec_private.av1_ready && m_state.codec_private.aac_ready;
                                 if (!bothReady) {
                                     if (m_state.video_premux.size() >= SessionState::kVideoPremuxLimit) {
                                         lk.unlock();
                                         m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                                            "Pre-mux video buffer limit (120 packets) exceeded "
-                                            "before codec private data was ready");
+                                                              "Pre-mux video buffer limit (120 packets) exceeded "
+                                                              "before codec private data was ready");
                                         goto end_encode_loop;
                                     }
                                     m_state.video_premux.push_back(std::move(pkt));
@@ -515,7 +530,8 @@ void VideoThread::Run() {
             anyWork = true;
         }
 
-        if (!anyWork) Sleep(1);
+        if (!anyWork)
+            Sleep(1);
     }
 
 end_encode_loop:
@@ -529,8 +545,12 @@ end_encode_loop:
             framePool.Close();
             framePool = nullptr;
         }
-        try { item.Closed(closedToken); } catch (...) {}
-    } catch (...) {}
+        try {
+            item.Closed(closedToken);
+        } catch (...) {
+        }
+    } catch (...) {
+    }
 
     // --- Flush NVENC EOS ---
     {
@@ -541,15 +561,16 @@ end_encode_loop:
         nvenc.Flush(drainPkts, flushErr);
 
         for (auto& pkt : drainPkts) {
-            if (pkt.bytes.empty()) continue;
+            if (pkt.bytes.empty())
+                continue;
 
             const size_t drain_bytes = pkt.bytes.size();
 
             if (!av1CodecPrivateReady && pkt.keyframe) {
                 char reason[256] = {};
                 uint8_t cp[4] = {};
-                if (codec_private::DeriveAv1CodecPrivate(
-                        pkt.bytes.data(), pkt.bytes.size(), cp, reason, sizeof(reason))) {
+                if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp, reason,
+                                                         sizeof(reason))) {
                     std::lock_guard lk(m_state.premux_mutex);
                     std::memcpy(m_state.codec_private.av1_codec_private, cp, 4);
                     m_state.codec_private.av1_ready = true;
@@ -560,8 +581,7 @@ end_encode_loop:
 
             {
                 std::unique_lock lk(m_state.premux_mutex);
-                bool bothReady = m_state.codec_private.av1_ready
-                              && m_state.codec_private.aac_ready;
+                bool bothReady = m_state.codec_private.av1_ready && m_state.codec_private.aac_ready;
                 if (!bothReady) {
                     if (m_state.video_premux.size() < SessionState::kVideoPremuxLimit) {
                         m_state.video_premux.push_back(std::move(pkt));
@@ -591,9 +611,9 @@ end_encode_loop:
     // --- Update final stats ---
     {
         std::lock_guard lk(m_state.stats_mutex);
-        m_state.stats.video_frames_captured            = videoFramesCaptured;
-        m_state.stats.dropped_or_skipped_video_frames   = droppedFrames + slotStallCount;
-        m_state.stats.video_duration_ns                = lastVideoPts;
+        m_state.stats.video_frames_captured = videoFramesCaptured;
+        m_state.stats.dropped_or_skipped_video_frames = droppedFrames + slotStallCount;
+        m_state.stats.video_duration_ns = lastVideoPts;
     }
 
     // --- Push video EOS sentinel ---
@@ -608,16 +628,17 @@ end_encode_loop:
     // Cleanup slot views and textures
     for (int32_t i = 0; i < kSlotCount; ++i) {
         videoOutputViews[i] = nullptr;
-        nv12Textures[i]     = nullptr;
+        nv12Textures[i] = nullptr;
     }
     videoProcessor = nullptr;
-    videoEnum      = nullptr;
-    videoContext   = nullptr;
-    videoDevice    = nullptr;
-    d3dContext     = nullptr;
-    d3dDevice      = nullptr;
+    videoEnum = nullptr;
+    videoContext = nullptr;
+    videoDevice = nullptr;
+    d3dContext = nullptr;
+    d3dDevice = nullptr;
 
-    if (com_inited && hr != RPC_E_CHANGED_MODE) CoUninitialize();
+    if (com_inited && hr != RPC_E_CHANGED_MODE)
+        CoUninitialize();
 }
 
 } // namespace recorder_core

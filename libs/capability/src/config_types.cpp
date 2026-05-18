@@ -61,4 +61,3 @@ std::string_view ToString(BitDepth value) noexcept {
 }
 
 } // namespace exosnap::capability
-

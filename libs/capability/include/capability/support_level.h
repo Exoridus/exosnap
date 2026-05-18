@@ -13,7 +13,7 @@ enum class SupportLevel {
 
 struct SupportAnnotation {
     SupportLevel level = SupportLevel::Invalid;
-    std::string  reason;
+    std::string reason;
 };
 
 inline bool IsSelectable(SupportLevel level) noexcept {
@@ -33,4 +33,3 @@ inline bool IsHardInvalid(const SupportAnnotation& annotation) noexcept {
 }
 
 } // namespace exosnap::capability
-

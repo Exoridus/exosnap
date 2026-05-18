@@ -92,4 +92,3 @@ TEST(OptionQueryTest, PreviewChangeMatchesResolverResult) {
 
 } // namespace
 } // namespace exosnap::capability
-

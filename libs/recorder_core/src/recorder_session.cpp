@@ -18,8 +18,8 @@ namespace recorder_core {
 // ---------------------------------------------------------------------------
 
 struct RecorderSession::Impl {
-    SessionState      state;
-    StatsCallback     stats_callback;
+    SessionState state;
+    StatsCallback stats_callback;
     std::atomic<bool> recording{false};
 };
 
@@ -27,9 +27,8 @@ struct RecorderSession::Impl {
 // Constructor / Destructor
 // ---------------------------------------------------------------------------
 
-RecorderSession::RecorderSession()
-    : m_impl(new Impl{})
-{}
+RecorderSession::RecorderSession() : m_impl(new Impl{}) {
+}
 
 RecorderSession::~RecorderSession() {
     delete m_impl;
@@ -59,9 +58,9 @@ void RecorderSession::SetStatsCallback(StatsCallback cb) {
 bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out_result) {
     auto fail = [&](HRESULT hr, ErrorPhase phase, const std::string& detail) -> bool {
         if (out_result) {
-            out_result->succeeded    = false;
-            out_result->error_code   = hr;
-            out_result->error_phase  = phase;
+            out_result->succeeded = false;
+            out_result->error_code = hr;
+            out_result->error_phase = phase;
             out_result->error_detail = detail;
         }
         return false;
@@ -81,14 +80,12 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
 
     // Container: only Matroska supported
     if (config.container != Container::Matroska) {
-        return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                    "Only Container::Matroska is supported in M3.1");
+        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only Container::Matroska is supported in M3.1");
     }
 
     // Video codec: only Av1Nvenc supported
     if (config.video_codec != VideoCodec::Av1Nvenc) {
-        return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                    "Only VideoCodec::Av1Nvenc is supported in M3.1");
+        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only VideoCodec::Av1Nvenc is supported in M3.1");
     }
 
     // Audio codec: Opus is a future placeholder only — must fail here
@@ -97,44 +94,36 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
                     "AudioCodec::Opus is not implemented in M3.1; use AudioCodec::AacMf");
     }
     if (config.audio_codec != AudioCodec::AacMf) {
-        return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                    "Only AudioCodec::AacMf is supported in M3.1");
+        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only AudioCodec::AacMf is supported in M3.1");
     }
 
     // Chroma: only Cs420 supported
     if (config.chroma != ChromaSubsampling::Cs420) {
-        return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                    "Only ChromaSubsampling::Cs420 is supported in M3.1");
+        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only ChromaSubsampling::Cs420 is supported in M3.1");
     }
 
     // Bit depth: only Bit8 supported
     if (config.bit_depth != BitDepth::Bit8) {
-        return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                    "Only BitDepth::Bit8 is supported in M3.1");
+        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only BitDepth::Bit8 is supported in M3.1");
     }
 
     // Frame rate sanity
     if (config.frame_rate_num == 0 || config.frame_rate_den == 0) {
-        return fail(E_INVALIDARG, ErrorPhase::Prepare,
-                    "frame_rate_num and frame_rate_den must be non-zero");
+        return fail(E_INVALIDARG, ErrorPhase::Prepare, "frame_rate_num and frame_rate_den must be non-zero");
     }
 
     // Capture target: must have a valid handle for the stated kind
-    if (config.target.kind == CaptureTarget::Kind::Monitor
-        && config.target.hmonitor == nullptr) {
-        return fail(E_INVALIDARG, ErrorPhase::Prepare,
-                    "CaptureTarget::Kind::Monitor requires a non-null hmonitor");
+    if (config.target.kind == CaptureTarget::Kind::Monitor && config.target.hmonitor == nullptr) {
+        return fail(E_INVALIDARG, ErrorPhase::Prepare, "CaptureTarget::Kind::Monitor requires a non-null hmonitor");
     }
-    if (config.target.kind == CaptureTarget::Kind::Window
-        && config.target.hwnd == nullptr) {
-        return fail(E_INVALIDARG, ErrorPhase::Prepare,
-                    "CaptureTarget::Kind::Window requires a non-null hwnd");
+    if (config.target.kind == CaptureTarget::Kind::Window && config.target.hwnd == nullptr) {
+        return fail(E_INVALIDARG, ErrorPhase::Prepare, "CaptureTarget::Kind::Window requires a non-null hwnd");
     }
 
     if (out_result) {
-        out_result->succeeded    = true;
-        out_result->error_code   = S_OK;
-        out_result->error_phase  = ErrorPhase::None;
+        out_result->succeeded = true;
+        out_result->error_code = S_OK;
+        out_result->error_phase = ErrorPhase::None;
         out_result->error_detail = {};
     }
     return true;
@@ -168,7 +157,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         {
             std::lock_guard lk(st.failure_mutex);
             st.failure_recorded = false;
-            st.failure          = {};
+            st.failure = {};
         }
         {
             std::lock_guard lk(st.premux_mutex);
@@ -185,7 +174,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             st.stats = {};
         }
         st.config = config;
-        st.encode_width  = 0;
+        st.encode_width = 0;
         st.encode_height = 0;
         st.stats_callback = m_impl->stats_callback;
     }
@@ -199,7 +188,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     // Start worker threads
     VideoThread videoThread(m_impl->state);
     AudioThread audioThread(m_impl->state);
-    MuxThread   muxThread(m_impl->state);
+    MuxThread muxThread(m_impl->state);
 
     videoThread.Start();
     audioThread.Start();
@@ -223,21 +212,24 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
 
     bool videoJoined = false;
     bool audioJoined = false;
-    bool muxJoined   = false;
+    bool muxJoined = false;
 
     if (joinWait == WAIT_OBJECT_0) {
         // All three signalled within the budget — join them cleanly (non-blocking).
         videoJoined = videoThread.Join(0);
         audioJoined = audioThread.Join(0);
-        muxJoined   = muxThread.Join(0);
+        muxJoined = muxThread.Join(0);
     } else {
         // At least one thread timed out; collect whichever finished in time.
         videoJoined = (WaitForSingleObject(joinHandles[0], 0) == WAIT_OBJECT_0);
-        if (videoJoined) videoThread.Join(0);
+        if (videoJoined)
+            videoThread.Join(0);
         audioJoined = (WaitForSingleObject(joinHandles[1], 0) == WAIT_OBJECT_0);
-        if (audioJoined) audioThread.Join(0);
+        if (audioJoined)
+            audioThread.Join(0);
         muxJoined = (WaitForSingleObject(joinHandles[2], 0) == WAIT_OBJECT_0);
-        if (muxJoined) muxThread.Join(0);
+        if (muxJoined)
+            muxThread.Join(0);
     }
 
     // Stop stats collector
@@ -252,28 +244,26 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
 
         std::lock_guard flk(st.failure_mutex);
         if (st.failure_recorded) {
-            result.succeeded    = false;
-            result.error_code   = st.failure.error_code;
-            result.error_phase  = st.failure.error_phase;
+            result.succeeded = false;
+            result.error_code = st.failure.error_code;
+            result.error_phase = st.failure.error_phase;
             result.error_detail = st.failure.error_detail;
         } else {
-            result.succeeded   = true;
-            result.error_code  = S_OK;
+            result.succeeded = true;
+            result.error_code = S_OK;
             result.error_phase = ErrorPhase::None;
         }
 
         // Append join timeout info if any thread didn't join cleanly
         if (!videoJoined || !audioJoined || !muxJoined) {
             if (result.error_detail.empty()) {
-                result.succeeded   = false;
-                result.error_code  = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+                result.succeeded = false;
+                result.error_code = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
                 result.error_phase = ErrorPhase::Shutdown;
             }
-            result.error_detail += " [join timeout: v="
-                + std::string(videoJoined ? "ok" : "TIMEOUT")
-                + " a=" + std::string(audioJoined ? "ok" : "TIMEOUT")
-                + " m=" + std::string(muxJoined   ? "ok" : "TIMEOUT")
-                + "]";
+            result.error_detail += " [join timeout: v=" + std::string(videoJoined ? "ok" : "TIMEOUT") +
+                                   " a=" + std::string(audioJoined ? "ok" : "TIMEOUT") +
+                                   " m=" + std::string(muxJoined ? "ok" : "TIMEOUT") + "]";
         }
     }
 
@@ -285,8 +275,8 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
 
     // Defensive: if nominally succeeded but no output file was produced
     if (result.succeeded && result.stats.output_file_bytes == 0) {
-        result.succeeded   = false;
-        result.error_code  = E_FAIL;
+        result.succeeded = false;
+        result.error_code = E_FAIL;
         result.error_phase = ErrorPhase::Mux;
         if (result.error_detail.empty()) {
             result.error_detail = "Mux completed without writing output file";

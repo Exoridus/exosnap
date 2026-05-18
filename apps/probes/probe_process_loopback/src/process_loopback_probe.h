@@ -1,9 +1,9 @@
 #pragma once
 
-#include <windows.h>
 #include <Audioclient.h>
 #include <audioclientactivationparams.h>
 #include <mmdeviceapi.h>
+#include <windows.h>
 
 #include <winrt/base.h>
 

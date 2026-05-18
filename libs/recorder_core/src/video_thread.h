@@ -16,11 +16,11 @@
 namespace recorder_core {
 
 class VideoThread {
-public:
+  public:
     explicit VideoThread(SessionState& state);
     ~VideoThread();
 
-    VideoThread(const VideoThread&)            = delete;
+    VideoThread(const VideoThread&) = delete;
     VideoThread& operator=(const VideoThread&) = delete;
 
     void Start();
@@ -30,13 +30,15 @@ public:
 
     // Returns the native HANDLE for use with WaitForMultipleObjects before joining.
     // Not valid after Join() completes.  Not const: std::thread::native_handle is not const.
-    HANDLE NativeHandle() noexcept { return m_thread.joinable() ? m_thread.native_handle() : nullptr; }
+    HANDLE NativeHandle() noexcept {
+        return m_thread.joinable() ? m_thread.native_handle() : nullptr;
+    }
 
-private:
+  private:
     void Run();
 
     SessionState& m_state;
-    std::thread   m_thread;
+    std::thread m_thread;
 };
 
 } // namespace recorder_core

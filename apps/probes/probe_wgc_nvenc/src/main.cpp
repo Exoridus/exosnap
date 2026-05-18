@@ -26,8 +26,8 @@ int main() {
     try {
         winrt::init_apartment(winrt::apartment_type::single_threaded);
     } catch (const winrt::hresult_error& e) {
-        fwprintf(stderr, L"[probe] FATAL: winrt::init_apartment failed: %s (0x%08X)\n",
-                 e.message().c_str(), static_cast<unsigned int>(e.code().value));
+        fwprintf(stderr, L"[probe] FATAL: winrt::init_apartment failed: %s (0x%08X)\n", e.message().c_str(),
+                 static_cast<unsigned int>(e.code().value));
         fflush(stderr);
         return 100;
     } catch (...) {
@@ -49,8 +49,7 @@ int main() {
 
         wprintf(L"\n%zu capturable targets found:\n\n", targets.size());
         for (std::size_t i = 0; i < targets.size(); ++i) {
-            auto kindStr = targets[i].kind == wgc_nvenc::CaptureTarget::Kind::Monitor
-                           ? L"MONITOR" : L"WINDOW";
+            auto kindStr = targets[i].kind == wgc_nvenc::CaptureTarget::Kind::Monitor ? L"MONITOR" : L"WINDOW";
             wprintf(L"  [%zu] %s: %s\n", i, kindStr, targets[i].description.c_str());
         }
 
@@ -83,8 +82,8 @@ int main() {
 
         const auto& target = targets[static_cast<std::size_t>(selectedIndex)];
         auto kindStr = target.kind == wgc_nvenc::CaptureTarget::Kind::Monitor ? L"monitor" : L"window";
-        wprintf(L"\n[probe] target selected: index=%d kind=%s desc=\"%s\"\n",
-                selectedIndex, kindStr, target.description.c_str());
+        wprintf(L"\n[probe] target selected: index=%d kind=%s desc=\"%s\"\n", selectedIndex, kindStr,
+                target.description.c_str());
 
         wgc_nvenc::WgcNvencProbe probe(target);
         exitCode = probe.Run();
@@ -92,8 +91,8 @@ int main() {
         fprintf(stderr, "[probe] probe exited normally\n");
         fflush(stderr);
     } catch (const winrt::hresult_error& e) {
-        fwprintf(stderr, L"[probe] FATAL WinRT error: %s (0x%08X)\n",
-                 e.message().c_str(), static_cast<unsigned int>(e.code().value));
+        fwprintf(stderr, L"[probe] FATAL WinRT error: %s (0x%08X)\n", e.message().c_str(),
+                 static_cast<unsigned int>(e.code().value));
         fflush(stderr);
         return 1;
     } catch (const std::exception& e) {

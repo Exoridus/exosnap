@@ -6,16 +6,14 @@
 namespace exosnap::capability {
 
 class CapabilityBuilder {
-public:
+  public:
     static CapabilitySet BuildStaticValidatedBaseline();
 
     static RuntimeCapabilitySnapshot QueryRuntimeFacts();
 
-    static CapabilitySet BuildEffectiveCapabilities(
-        const RuntimeCapabilitySnapshot& snapshot);
+    static CapabilitySet BuildEffectiveCapabilities(const RuntimeCapabilitySnapshot& snapshot);
 
     static CapabilitySet BuildFromHardwareQuery();
 };
 
 } // namespace exosnap::capability
-

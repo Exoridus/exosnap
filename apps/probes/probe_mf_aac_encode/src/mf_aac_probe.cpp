@@ -56,9 +56,7 @@ bool Probe::IsFormatCompatible(const WAVEFORMATEX* pwfx) {
 // Converts interleaved Float32 samples to PCM int16.
 // sampleCount = numFrames * numChannels
 /*static*/
-void Probe::ConvertFloat32ToPcm16(
-    const float* src, int16_t* dst, size_t sampleCount)
-{
+void Probe::ConvertFloat32ToPcm16(const float* src, int16_t* dst, size_t sampleCount) {
     for (size_t i = 0; i < sampleCount; ++i) {
         float clamped = std::clamp(src[i], -1.0f, 1.0f);
         dst[i] = static_cast<int16_t>(clamped * 32767.0f);
@@ -131,11 +129,10 @@ bool Probe::Phase02_EnumerateMFT() {
     fprintf(stdout, "[phase 02] enumerating AAC encoder MFT...\n");
     fflush(stdout);
 
-    MFT_REGISTER_TYPE_INFO inputTypeInfo  = {MFMediaType_Audio, MFAudioFormat_Float};
+    MFT_REGISTER_TYPE_INFO inputTypeInfo = {MFMediaType_Audio, MFAudioFormat_Float};
     MFT_REGISTER_TYPE_INFO outputTypeInfo = {MFMediaType_Audio, MFAudioFormat_AAC};
 
-    constexpr DWORD kEnumFlags =
-        MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_LOCALMFT | MFT_ENUM_FLAG_SORTANDFILTER;
+    constexpr DWORD kEnumFlags = MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_LOCALMFT | MFT_ENUM_FLAG_SORTANDFILTER;
 
     fprintf(stdout,
             "[phase 02] MFTEnumEx params: category=MFT_CATEGORY_AUDIO_ENCODER"
@@ -146,14 +143,8 @@ bool Probe::Phase02_EnumerateMFT() {
     IMFActivate** ppActivate = nullptr;
     UINT32 count = 0;
 
-    HRESULT hr = MFTEnumEx(
-        MFT_CATEGORY_AUDIO_ENCODER,
-        kEnumFlags,
-        &inputTypeInfo,
-        &outputTypeInfo,
-        &ppActivate,
-        &count
-    );
+    HRESULT hr =
+        MFTEnumEx(MFT_CATEGORY_AUDIO_ENCODER, kEnumFlags, &inputTypeInfo, &outputTypeInfo, &ppActivate, &count);
 
     if (FAILED(hr)) {
         fprintf(stderr, "[phase 02] FAIL: MFTEnumEx %s\n", HrToHex(hr).c_str());
@@ -167,32 +158,23 @@ bool Probe::Phase02_EnumerateMFT() {
             ppActivate = nullptr;
         }
 
-        fprintf(stdout,
-                "[phase 02] MFTEnumEx returned 0 — trying direct CLSID_AACMFTEncoder instantiation\n");
+        fprintf(stdout, "[phase 02] MFTEnumEx returned 0 — trying direct CLSID_AACMFTEncoder instantiation\n");
         fflush(stdout);
 
-        hr = CoCreateInstance(
-            CLSID_AACMFTEncoder,
-            nullptr,
-            CLSCTX_INPROC_SERVER,
-            IID_PPV_ARGS(&m_pMFT)
-        );
+        hr = CoCreateInstance(CLSID_AACMFTEncoder, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&m_pMFT));
 
         if (SUCCEEDED(hr)) {
             m_usedDirectClsid = true;
-            fprintf(stdout,
-                    "[phase 02] AAC encoder instantiated directly via CLSID_AACMFTEncoder\n");
+            fprintf(stdout, "[phase 02] AAC encoder instantiated directly via CLSID_AACMFTEncoder\n");
             fprintf(stdout, "[phase 02] PASS\n");
             fflush(stdout);
             return true;
         }
 
-        fprintf(stderr, "[phase 02] FAIL: CoCreateInstance(CLSID_AACMFTEncoder) %s\n",
-                HrToHex(hr).c_str());
-        fprintf(stderr,
-                "[phase 02] FAIL: Media Feature Pack is installed, but CLSID_AACMFTEncoder could "
-                "not be instantiated. On Windows N/ReviOS this may indicate removed or "
-                "unregistered codec components.\n");
+        fprintf(stderr, "[phase 02] FAIL: CoCreateInstance(CLSID_AACMFTEncoder) %s\n", HrToHex(hr).c_str());
+        fprintf(stderr, "[phase 02] FAIL: Media Feature Pack is installed, but CLSID_AACMFTEncoder could "
+                        "not be instantiated. On Windows N/ReviOS this may indicate removed or "
+                        "unregistered codec components.\n");
         fflush(stderr);
         return false;
     }
@@ -241,21 +223,17 @@ bool Probe::Phase03_InstantiateMFT() {
 // ---------------------------------------------------------------------------
 
 // Builds a fully-specified audio media type with all required attributes.
-static HRESULT BuildAudioMediaType(
-    const GUID& subtype,
-    UINT32 sampleRate,
-    UINT32 channels,
-    UINT32 bitsPerSample,
-    IMFMediaType** ppType)
-{
+static HRESULT BuildAudioMediaType(const GUID& subtype, UINT32 sampleRate, UINT32 channels, UINT32 bitsPerSample,
+                                   IMFMediaType** ppType) {
     *ppType = nullptr;
     IMFMediaType* pType = nullptr;
     HRESULT hr = MFCreateMediaType(&pType);
-    if (FAILED(hr)) return hr;
+    if (FAILED(hr))
+        return hr;
 
-    UINT32 blockAlign         = channels * (bitsPerSample / 8);
-    UINT32 avgBytesPerSec     = sampleRate * blockAlign;
-    UINT32 channelMask        = 0x3; // SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT
+    UINT32 blockAlign = channels * (bitsPerSample / 8);
+    UINT32 avgBytesPerSec = sampleRate * blockAlign;
+    UINT32 channelMask = 0x3; // SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT
 
     bool ok = true;
     ok = ok && SUCCEEDED(pType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio));
@@ -286,22 +264,23 @@ bool Probe::Phase04_SetInputType() {
 
     // Candidate to carry the best matching type found from GetInputAvailableType
     struct Candidate {
-        GUID   subtype        = {};
-        UINT32 sampleRate     = 0;
-        UINT32 channels       = 0;
-        UINT32 bitsPerSample  = 0;
-        UINT32 blockAlign     = 0;
+        GUID subtype = {};
+        UINT32 sampleRate = 0;
+        UINT32 channels = 0;
+        UINT32 bitsPerSample = 0;
+        UINT32 blockAlign = 0;
         UINT32 avgBytesPerSec = 0;
-        UINT32 channelMask    = 0;
-        int    priority       = INT_MAX; // lower is better
+        UINT32 channelMask = 0;
+        int priority = INT_MAX; // lower is better
     };
 
     Candidate bestCandidate;
 
-    for (DWORD i = 0; ; ++i) {
+    for (DWORD i = 0;; ++i) {
         IMFMediaType* pCand = nullptr;
         HRESULT hr = m_pMFT->GetInputAvailableType(0, i, &pCand);
-        if (hr == MF_E_NO_MORE_TYPES) break;
+        if (hr == MF_E_NO_MORE_TYPES)
+            break;
         if (FAILED(hr)) {
             fprintf(stdout, "[phase 04] GetInputAvailableType[%lu] failed %s — stopping enumeration\n",
                     static_cast<unsigned long>(i), HrToHex(hr).c_str());
@@ -309,13 +288,13 @@ bool Probe::Phase04_SetInputType() {
             break;
         }
 
-        GUID   subtype        = {};
-        UINT32 sampleRate     = 0;
-        UINT32 channels       = 0;
-        UINT32 bitsPerSample  = 0;
-        UINT32 blockAlign     = 0;
+        GUID subtype = {};
+        UINT32 sampleRate = 0;
+        UINT32 channels = 0;
+        UINT32 bitsPerSample = 0;
+        UINT32 blockAlign = 0;
         UINT32 avgBytesPerSec = 0;
-        UINT32 channelMask    = 0;
+        UINT32 channelMask = 0;
 
         pCand->GetGUID(MF_MT_SUBTYPE, &subtype);
         pCand->GetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, &sampleRate);
@@ -329,15 +308,16 @@ bool Probe::Phase04_SetInputType() {
 
         // Format subtype as human-readable tag
         const char* subtypeTag = "(other)";
-        if (subtype == MFAudioFormat_PCM)   subtypeTag = "PCM";
-        if (subtype == MFAudioFormat_Float) subtypeTag = "Float";
+        if (subtype == MFAudioFormat_PCM)
+            subtypeTag = "PCM";
+        if (subtype == MFAudioFormat_Float)
+            subtypeTag = "Float";
 
         fprintf(stdout,
                 "[phase 04]   candidate[%lu]: subtype=%s sampleRate=%u ch=%u bps=%u "
                 "blockAlign=%u avgBytes/s=%u channelMask=0x%X\n",
-                static_cast<unsigned long>(i),
-                subtypeTag, sampleRate, channels, bitsPerSample,
-                blockAlign, avgBytesPerSec, channelMask);
+                static_cast<unsigned long>(i), subtypeTag, sampleRate, channels, bitsPerSample, blockAlign,
+                avgBytesPerSec, channelMask);
         fflush(stdout);
 
         // -----------------------------------------------------------------------
@@ -367,14 +347,14 @@ bool Probe::Phase04_SetInputType() {
         }
 
         if (priority < bestCandidate.priority) {
-            bestCandidate.subtype        = subtype;
-            bestCandidate.sampleRate     = sampleRate;
-            bestCandidate.channels       = channels;
-            bestCandidate.bitsPerSample  = bitsPerSample;
-            bestCandidate.blockAlign     = blockAlign;
+            bestCandidate.subtype = subtype;
+            bestCandidate.sampleRate = sampleRate;
+            bestCandidate.channels = channels;
+            bestCandidate.bitsPerSample = bitsPerSample;
+            bestCandidate.blockAlign = blockAlign;
             bestCandidate.avgBytesPerSec = avgBytesPerSec;
-            bestCandidate.channelMask    = channelMask;
-            bestCandidate.priority       = priority;
+            bestCandidate.channelMask = channelMask;
+            bestCandidate.priority = priority;
         }
     }
 
@@ -385,7 +365,7 @@ bool Probe::Phase04_SetInputType() {
     // -----------------------------------------------------------------------
 
     struct TryEntry {
-        GUID   subtype;
+        GUID subtype;
         UINT32 bitsPerSample;
         const char* label;
     };
@@ -401,12 +381,11 @@ bool Probe::Phase04_SetInputType() {
 
     // If enumeration gave us a result, insert it at the front
     if (bestCandidate.priority != INT_MAX) {
-        const char* subtypeLabel =
-            (bestCandidate.subtype == MFAudioFormat_PCM) ? "PCM" :
-            (bestCandidate.subtype == MFAudioFormat_Float) ? "Float" : "other";
-        fprintf(stdout,
-                "[phase 04] best candidate from enumeration: subtype=%s %u bps (priority %d)\n",
-                subtypeLabel, bestCandidate.bitsPerSample, bestCandidate.priority);
+        const char* subtypeLabel = (bestCandidate.subtype == MFAudioFormat_PCM)     ? "PCM"
+                                   : (bestCandidate.subtype == MFAudioFormat_Float) ? "Float"
+                                                                                    : "other";
+        fprintf(stdout, "[phase 04] best candidate from enumeration: subtype=%s %u bps (priority %d)\n", subtypeLabel,
+                bestCandidate.bitsPerSample, bestCandidate.priority);
         fflush(stdout);
         tryList.push_back({bestCandidate.subtype, bestCandidate.bitsPerSample, subtypeLabel});
     }
@@ -414,32 +393,33 @@ bool Probe::Phase04_SetInputType() {
     // Append fallback types that are not already in the list
     auto alreadyInList = [&](const GUID& sub, UINT32 bps) {
         for (const auto& e : tryList) {
-            if (e.subtype == sub && e.bitsPerSample == bps) return true;
+            if (e.subtype == sub && e.bitsPerSample == bps)
+                return true;
         }
         return false;
     };
-    if (!alreadyInList(MFAudioFormat_PCM, 16))   tryList.push_back({MFAudioFormat_PCM,   16, "PCM-16"});
-    if (!alreadyInList(MFAudioFormat_PCM, 32))   tryList.push_back({MFAudioFormat_PCM,   32, "PCM-32"});
-    if (!alreadyInList(MFAudioFormat_Float, 32)) tryList.push_back({MFAudioFormat_Float, 32, "Float-32"});
+    if (!alreadyInList(MFAudioFormat_PCM, 16))
+        tryList.push_back({MFAudioFormat_PCM, 16, "PCM-16"});
+    if (!alreadyInList(MFAudioFormat_PCM, 32))
+        tryList.push_back({MFAudioFormat_PCM, 32, "PCM-32"});
+    if (!alreadyInList(MFAudioFormat_Float, 32))
+        tryList.push_back({MFAudioFormat_Float, 32, "Float-32"});
 
     // -----------------------------------------------------------------------
     // Step 3 (continued) — attempt SetInputType for each candidate in order
     // -----------------------------------------------------------------------
 
     for (const auto& entry : tryList) {
-        fprintf(stdout,
-                "[phase 04] trying SetInputType: %s %u bps, %u Hz, %u ch...\n",
-                entry.label, entry.bitsPerSample, kRequiredSampleRate, kRequiredChannels);
+        fprintf(stdout, "[phase 04] trying SetInputType: %s %u bps, %u Hz, %u ch...\n", entry.label,
+                entry.bitsPerSample, kRequiredSampleRate, kRequiredChannels);
         fflush(stdout);
 
         IMFMediaType* pType = nullptr;
-        HRESULT hr = BuildAudioMediaType(
-            entry.subtype, kRequiredSampleRate, kRequiredChannels,
-            entry.bitsPerSample, &pType);
+        HRESULT hr =
+            BuildAudioMediaType(entry.subtype, kRequiredSampleRate, kRequiredChannels, entry.bitsPerSample, &pType);
 
         if (FAILED(hr)) {
-            fprintf(stderr, "[phase 04] WARN: BuildAudioMediaType failed %s — skipping\n",
-                    HrToHex(hr).c_str());
+            fprintf(stderr, "[phase 04] WARN: BuildAudioMediaType failed %s — skipping\n", HrToHex(hr).c_str());
             fflush(stderr);
             continue;
         }
@@ -452,22 +432,22 @@ bool Probe::Phase04_SetInputType() {
             // ---------------------------------------------------------------
             // Step 4 — store selected format in member variables
             // ---------------------------------------------------------------
-            m_inputSubtype        = entry.subtype;
-            m_inputBitsPerSample  = entry.bitsPerSample;
-            m_inputBlockAlign     = kRequiredChannels * (entry.bitsPerSample / 8);
+            m_inputSubtype = entry.subtype;
+            m_inputBitsPerSample = entry.bitsPerSample;
+            m_inputBlockAlign = kRequiredChannels * (entry.bitsPerSample / 8);
             m_inputAvgBytesPerSec = kRequiredSampleRate * m_inputBlockAlign;
 
             fprintf(stdout,
                     "[phase 04] SetInputType OK: %s %u bps, %u Hz, %u ch "
                     "(blockAlign=%u avgBytes/s=%u)\n",
-                    entry.label, m_inputBitsPerSample, kRequiredSampleRate,
-                    kRequiredChannels, m_inputBlockAlign, m_inputAvgBytesPerSec);
+                    entry.label, m_inputBitsPerSample, kRequiredSampleRate, kRequiredChannels, m_inputBlockAlign,
+                    m_inputAvgBytesPerSec);
             fflush(stdout);
             return true;
         }
 
-        fprintf(stdout, "[phase 04] SetInputType %s %u bps failed %s — trying next\n",
-                entry.label, entry.bitsPerSample, HrToHex(hr).c_str());
+        fprintf(stdout, "[phase 04] SetInputType %s %u bps failed %s — trying next\n", entry.label, entry.bitsPerSample,
+                HrToHex(hr).c_str());
         fflush(stdout);
     }
 
@@ -542,10 +522,8 @@ bool Probe::Phase06_QueryStreamInfo() {
         return false;
     }
 
-    fprintf(stdout, "[phase 06] output stream info: cbSize=%u flags=0x%08lX alignment=%u\n",
-            streamInfo.cbSize,
-            static_cast<unsigned long>(streamInfo.dwFlags),
-            streamInfo.cbAlignment);
+    fprintf(stdout, "[phase 06] output stream info: cbSize=%u flags=0x%08lX alignment=%u\n", streamInfo.cbSize,
+            static_cast<unsigned long>(streamInfo.dwFlags), streamInfo.cbAlignment);
     fflush(stdout);
     return true;
 }
@@ -562,10 +540,7 @@ bool Probe::Phase07_OpenWasapiLoopback() {
 
     // Get device enumerator
     IMMDeviceEnumerator* pEnumerator = nullptr;
-    hr = CoCreateInstance(
-        __uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-        IID_PPV_ARGS(&pEnumerator)
-    );
+    hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&pEnumerator));
     if (FAILED(hr)) {
         fprintf(stderr, "[phase 07] FAIL: CoCreateInstance(MMDeviceEnumerator) 0x%08lX\n",
                 static_cast<unsigned long>(hr));
@@ -576,8 +551,7 @@ bool Probe::Phase07_OpenWasapiLoopback() {
     hr = pEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &m_pDevice);
     pEnumerator->Release();
     if (FAILED(hr)) {
-        fprintf(stderr, "[phase 07] FAIL: GetDefaultAudioEndpoint(eRender) 0x%08lX\n",
-                static_cast<unsigned long>(hr));
+        fprintf(stderr, "[phase 07] FAIL: GetDefaultAudioEndpoint(eRender) 0x%08lX\n", static_cast<unsigned long>(hr));
         fflush(stderr);
         return false;
     }
@@ -601,8 +575,7 @@ bool Probe::Phase07_OpenWasapiLoopback() {
     fflush(stdout);
 
     // Activate IAudioClient
-    hr = m_pDevice->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-                              reinterpret_cast<void**>(&m_pAudioClient));
+    hr = m_pDevice->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(&m_pAudioClient));
     if (FAILED(hr)) {
         fprintf(stderr, "[phase 07] FAIL: Activate(IAudioClient) 0x%08lX\n", static_cast<unsigned long>(hr));
         fflush(stderr);
@@ -618,12 +591,8 @@ bool Probe::Phase07_OpenWasapiLoopback() {
         return false;
     }
 
-    fprintf(stdout, "[phase 07] mix format: tag=0x%04X %u Hz, %u ch, %u-bit, block=%u\n",
-            pwfx->wFormatTag,
-            pwfx->nSamplesPerSec,
-            pwfx->nChannels,
-            pwfx->wBitsPerSample,
-            pwfx->nBlockAlign);
+    fprintf(stdout, "[phase 07] mix format: tag=0x%04X %u Hz, %u ch, %u-bit, block=%u\n", pwfx->wFormatTag,
+            pwfx->nSamplesPerSec, pwfx->nChannels, pwfx->wBitsPerSample, pwfx->nBlockAlign);
     fflush(stdout);
 
     if (!IsFormatCompatible(pwfx)) {
@@ -631,11 +600,7 @@ bool Probe::Phase07_OpenWasapiLoopback() {
                 "[phase 07] FAIL: mix format does not meet requirements (need 48000 Hz, 2 ch).\n"
                 "  actual: tag=0x%04X %u Hz, %u ch, %u-bit\n"
                 "  required: %u Hz, %u ch (any sample format — Float32 is converted to PCM16 if needed)\n",
-                pwfx->wFormatTag,
-                pwfx->nSamplesPerSec,
-                pwfx->nChannels,
-                pwfx->wBitsPerSample,
-                kRequiredSampleRate,
+                pwfx->wFormatTag, pwfx->nSamplesPerSec, pwfx->nChannels, pwfx->wBitsPerSample, kRequiredSampleRate,
                 kRequiredChannels);
         fflush(stderr);
         CoTaskMemFree(pwfx);
@@ -643,14 +608,8 @@ bool Probe::Phase07_OpenWasapiLoopback() {
     }
 
     // Initialize loopback with 200ms buffer
-    hr = m_pAudioClient->Initialize(
-        AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_LOOPBACK,
-        kHnsBuffer,
-        0,
-        pwfx,
-        nullptr
-    );
+    hr = m_pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, kHnsBuffer, 0, pwfx,
+                                    nullptr);
     CoTaskMemFree(pwfx);
 
     if (FAILED(hr)) {
@@ -663,8 +622,7 @@ bool Probe::Phase07_OpenWasapiLoopback() {
     // Get capture client
     hr = m_pAudioClient->GetService(IID_PPV_ARGS(&m_pCaptureClient));
     if (FAILED(hr)) {
-        fprintf(stderr, "[phase 07] FAIL: GetService(IAudioCaptureClient) 0x%08lX\n",
-                static_cast<unsigned long>(hr));
+        fprintf(stderr, "[phase 07] FAIL: GetService(IAudioCaptureClient) 0x%08lX\n", static_cast<unsigned long>(hr));
         fflush(stderr);
         return false;
     }
@@ -730,9 +688,9 @@ void Probe::DrainOutput() {
     while (true) {
         MFT_OUTPUT_DATA_BUFFER outBuf{};
         outBuf.dwStreamID = 0;
-        outBuf.pSample    = nullptr;
-        outBuf.dwStatus   = 0;
-        outBuf.pEvents    = nullptr;
+        outBuf.pSample = nullptr;
+        outBuf.dwStatus = 0;
+        outBuf.pEvents = nullptr;
 
         // If the MFT does not provide its own samples, allocate one for it.
         if (!mftProvidesSamples) {
@@ -759,13 +717,17 @@ void Probe::DrainOutput() {
         }
 
         if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) {
-            if (outBuf.pSample) { outBuf.pSample->Release(); }
+            if (outBuf.pSample) {
+                outBuf.pSample->Release();
+            }
             break;
         }
         if (FAILED(hr)) {
             fprintf(stderr, "[drain] WARN: ProcessOutput failed 0x%08lX\n", static_cast<unsigned long>(hr));
             fflush(stderr);
-            if (outBuf.pSample) { outBuf.pSample->Release(); }
+            if (outBuf.pSample) {
+                outBuf.pSample->Release();
+            }
             break;
         }
 
@@ -803,7 +765,7 @@ bool Probe::Phase10_EncodeLoop() {
     fflush(stdout);
 
     auto startTime = std::chrono::steady_clock::now();
-    auto endTime   = startTime + std::chrono::seconds(kDurationSec);
+    auto endTime = startTime + std::chrono::seconds(kDurationSec);
 
     LONGLONG sampleTime = 0; // in 100ns units
 
@@ -836,13 +798,12 @@ bool Probe::Phase10_EncodeLoop() {
             continue;
         }
 
-        BYTE*  pData        = nullptr;
-        DWORD  captureFlags = 0;
+        BYTE* pData = nullptr;
+        DWORD captureFlags = 0;
         UINT64 devicePosition = 0;
-        UINT64 qpcPosition    = 0;
+        UINT64 qpcPosition = 0;
 
-        hr = m_pCaptureClient->GetBuffer(&pData, &numFrames, &captureFlags,
-                                          &devicePosition, &qpcPosition);
+        hr = m_pCaptureClient->GetBuffer(&pData, &numFrames, &captureFlags, &devicePosition, &qpcPosition);
 
         if (hr == AUDCLNT_E_DEVICE_INVALIDATED) {
             fprintf(stderr, "[phase 10] WARN: AUDCLNT_E_DEVICE_INVALIDATED during GetBuffer\n");
@@ -864,13 +825,12 @@ bool Probe::Phase10_EncodeLoop() {
         }
 
         // Compute timing for this packet
-        LONGLONG sampleDuration = static_cast<LONGLONG>(numFrames) * 10000000LL /
-                                  static_cast<LONGLONG>(kRequiredSampleRate);
+        LONGLONG sampleDuration =
+            static_cast<LONGLONG>(numFrames) * 10000000LL / static_cast<LONGLONG>(kRequiredSampleRate);
 
         // Determine whether we need Float32 -> PCM16 conversion.
         // WASAPI loopback delivers Float32; if the encoder requires PCM int16, convert.
-        const bool needPcm16Conversion =
-            (m_inputSubtype == MFAudioFormat_PCM && m_inputBitsPerSample == 16);
+        const bool needPcm16Conversion = (m_inputSubtype == MFAudioFormat_PCM && m_inputBitsPerSample == 16);
 
         UINT32 dataBytes = numFrames * m_inputBlockAlign;
 
@@ -893,10 +853,7 @@ bool Probe::Phase10_EncodeLoop() {
         } else if (needPcm16Conversion) {
             // Step 5 — convert WASAPI Float32 loopback data to PCM int16
             size_t sampleCount = static_cast<size_t>(numFrames) * kRequiredChannels;
-            ConvertFloat32ToPcm16(
-                reinterpret_cast<const float*>(pData),
-                reinterpret_cast<int16_t*>(pDst),
-                sampleCount);
+            ConvertFloat32ToPcm16(reinterpret_cast<const float*>(pData), reinterpret_cast<int16_t*>(pDst), sampleCount);
         } else {
             std::memcpy(pDst, pData, dataBytes);
         }
@@ -947,8 +904,7 @@ bool Probe::Phase10_EncodeLoop() {
     m_elapsedSec = std::chrono::duration<double>(actualEnd - startTime).count();
 
     fprintf(stdout, "[phase 10] encode loop done — captured %llu frames in %.2f s\n",
-            static_cast<unsigned long long>(m_capturedFrames),
-            m_elapsedSec);
+            static_cast<unsigned long long>(m_capturedFrames), m_elapsedSec);
     fflush(stdout);
 
     (void)deviceInvalidated; // documented fallthrough to EOS drain
@@ -965,16 +921,14 @@ bool Probe::Phase11_EosDrain() {
 
     HRESULT hr = m_pMFT->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0);
     if (FAILED(hr)) {
-        fprintf(stderr, "[phase 11] WARN: MFT_MESSAGE_NOTIFY_END_OF_STREAM 0x%08lX\n",
-                static_cast<unsigned long>(hr));
+        fprintf(stderr, "[phase 11] WARN: MFT_MESSAGE_NOTIFY_END_OF_STREAM 0x%08lX\n", static_cast<unsigned long>(hr));
         fflush(stderr);
         // Non-fatal — still try DRAIN
     }
 
     hr = m_pMFT->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
     if (FAILED(hr)) {
-        fprintf(stderr, "[phase 11] WARN: MFT_MESSAGE_COMMAND_DRAIN 0x%08lX\n",
-                static_cast<unsigned long>(hr));
+        fprintf(stderr, "[phase 11] WARN: MFT_MESSAGE_COMMAND_DRAIN 0x%08lX\n", static_cast<unsigned long>(hr));
         fflush(stderr);
         // Non-fatal — still drain output
     }
@@ -1015,8 +969,7 @@ bool Probe::Phase12_WriteAdtsFile() {
     fclose(fp);
 
     if (written != m_aacPackets.size()) {
-        fprintf(stderr, "[phase 12] FAIL: fwrite wrote %zu of %zu bytes\n",
-                written, m_aacPackets.size());
+        fprintf(stderr, "[phase 12] FAIL: fwrite wrote %zu of %zu bytes\n", written, m_aacPackets.size());
         fflush(stderr);
         return false;
     }
@@ -1035,11 +988,8 @@ bool Probe::Phase13_VerifyOutput() {
     fflush(stdout);
 
     WIN32_FILE_ATTRIBUTE_DATA fileInfo{};
-    BOOL ok = GetFileAttributesExW(
-        L"probe_mf_aac_encode_output\\wasapi_loopback_aac.aac",
-        GetFileExInfoStandard,
-        &fileInfo
-    );
+    BOOL ok =
+        GetFileAttributesExW(L"probe_mf_aac_encode_output\\wasapi_loopback_aac.aac", GetFileExInfoStandard, &fileInfo);
     if (!ok) {
         fprintf(stderr, "[phase 13] FAIL: GetFileAttributesExW error %lu\n", GetLastError());
         fflush(stderr);
@@ -1048,7 +998,7 @@ bool Probe::Phase13_VerifyOutput() {
 
     ULARGE_INTEGER fileSize;
     fileSize.HighPart = fileInfo.nFileSizeHigh;
-    fileSize.LowPart  = fileInfo.nFileSizeLow;
+    fileSize.LowPart = fileInfo.nFileSizeLow;
     uint64_t sz = fileSize.QuadPart;
 
     if (sz <= 4096) {
@@ -1068,45 +1018,52 @@ bool Probe::Phase13_VerifyOutput() {
 // ---------------------------------------------------------------------------
 
 bool Probe::Run() {
-    if (!Phase01_MFStartup())       return false;
-    if (!Phase02_EnumerateMFT())    return false;
-    if (!Phase03_InstantiateMFT())  return false;
-    if (!Phase04_SetInputType())    return false;
-    if (!Phase05_SetOutputType())   return false;
-    if (!Phase06_QueryStreamInfo()) return false;
-    if (!Phase07_OpenWasapiLoopback()) return false;
-    if (!Phase08_09_BeginStreaming()) return false;
-    if (!Phase10_EncodeLoop())      return false;
-    if (!Phase11_EosDrain())        return false;
-    if (!Phase12_WriteAdtsFile())   return false;
-    if (!Phase13_VerifyOutput())    return false;
+    if (!Phase01_MFStartup())
+        return false;
+    if (!Phase02_EnumerateMFT())
+        return false;
+    if (!Phase03_InstantiateMFT())
+        return false;
+    if (!Phase04_SetInputType())
+        return false;
+    if (!Phase05_SetOutputType())
+        return false;
+    if (!Phase06_QueryStreamInfo())
+        return false;
+    if (!Phase07_OpenWasapiLoopback())
+        return false;
+    if (!Phase08_09_BeginStreaming())
+        return false;
+    if (!Phase10_EncodeLoop())
+        return false;
+    if (!Phase11_EosDrain())
+        return false;
+    if (!Phase12_WriteAdtsFile())
+        return false;
+    if (!Phase13_VerifyOutput())
+        return false;
 
     // Print summary metrics
     fprintf(stdout, "\n=== MF AAC ENCODE PROBE SUMMARY ===\n");
-    const char* inputSubtypeLabel =
-        (m_inputSubtype == MFAudioFormat_PCM)   ? "PCM" :
-        (m_inputSubtype == MFAudioFormat_Float) ? "Float32" : "unknown";
+    const char* inputSubtypeLabel = (m_inputSubtype == MFAudioFormat_PCM)     ? "PCM"
+                                    : (m_inputSubtype == MFAudioFormat_Float) ? "Float32"
+                                                                              : "unknown";
     fprintf(stdout, "  endpoint        : %s\n", m_endpointName.c_str());
-    fprintf(stdout, "  input format    : %u Hz, %u ch, %s %u-bit\n",
-            kRequiredSampleRate, kRequiredChannels,
+    fprintf(stdout, "  input format    : %u Hz, %u ch, %s %u-bit\n", kRequiredSampleRate, kRequiredChannels,
             inputSubtypeLabel, m_inputBitsPerSample);
-    fprintf(stdout, "  captured frames : %llu\n",
-            static_cast<unsigned long long>(m_capturedFrames));
+    fprintf(stdout, "  captured frames : %llu\n", static_cast<unsigned long long>(m_capturedFrames));
     fprintf(stdout, "  encoded bytes   : %zu\n", m_aacPackets.size());
     fprintf(stdout, "  elapsed         : %.1f s\n", m_elapsedSec);
-    fprintf(stdout, "  discontinuities : %llu\n",
-            static_cast<unsigned long long>(m_discontinuities));
+    fprintf(stdout, "  discontinuities : %llu\n", static_cast<unsigned long long>(m_discontinuities));
     fprintf(stdout, "  output path     : probe_mf_aac_encode_output\\wasapi_loopback_aac.aac\n");
 
     WIN32_FILE_ATTRIBUTE_DATA fileInfo{};
-    if (GetFileAttributesExW(
-            L"probe_mf_aac_encode_output\\wasapi_loopback_aac.aac",
-            GetFileExInfoStandard, &fileInfo)) {
+    if (GetFileAttributesExW(L"probe_mf_aac_encode_output\\wasapi_loopback_aac.aac", GetFileExInfoStandard,
+                             &fileInfo)) {
         ULARGE_INTEGER fileSize;
         fileSize.HighPart = fileInfo.nFileSizeHigh;
-        fileSize.LowPart  = fileInfo.nFileSizeLow;
-        fprintf(stdout, "  file size       : %llu bytes\n",
-                static_cast<unsigned long long>(fileSize.QuadPart));
+        fileSize.LowPart = fileInfo.nFileSizeLow;
+        fprintf(stdout, "  file size       : %llu bytes\n", static_cast<unsigned long long>(fileSize.QuadPart));
     }
     fflush(stdout);
 

@@ -12,12 +12,12 @@
 
 namespace recorder_core {
 
-AudioThread::AudioThread(SessionState& state)
-    : m_state(state)
-{}
+AudioThread::AudioThread(SessionState& state) : m_state(state) {
+}
 
 AudioThread::~AudioThread() {
-    if (m_thread.joinable()) m_thread.detach();
+    if (m_thread.joinable())
+        m_thread.detach();
 }
 
 void AudioThread::Start() {
@@ -25,7 +25,8 @@ void AudioThread::Start() {
 }
 
 bool AudioThread::Join(unsigned timeout_ms) {
-    if (!m_thread.joinable()) return true;
+    if (!m_thread.joinable())
+        return true;
     HANDLE h = m_thread.native_handle();
     DWORD r = WaitForSingleObject(h, static_cast<DWORD>(timeout_ms));
     if (r == WAIT_OBJECT_0) {
@@ -45,8 +46,7 @@ void AudioThread::Run() {
     bool com_inited = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
     if (!com_inited) {
         char buf[80];
-        snprintf(buf, sizeof(buf), "AudioThread: CoInitializeEx failed 0x%08lX",
-                 static_cast<unsigned long>(hr));
+        snprintf(buf, sizeof(buf), "AudioThread: CoInitializeEx failed 0x%08lX", static_cast<unsigned long>(hr));
         m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
         return;
     }
@@ -56,9 +56,9 @@ void AudioThread::Run() {
     {
         std::string err;
         if (!aacEnc.Init(48000, 2, err)) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode,
-                                  "MF AAC encoder init: " + err);
-            if (com_inited && hr != RPC_E_CHANGED_MODE) CoUninitialize();
+            m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode, "MF AAC encoder init: " + err);
+            if (com_inited && hr != RPC_E_CHANGED_MODE)
+                CoUninitialize();
             return;
         }
     }
@@ -68,10 +68,10 @@ void AudioThread::Run() {
         char reason[256] = {};
         uint8_t cp[2] = {};
         if (!codec_private::DeriveAacCodecPrivate(aacEnc.OutputMediaType(), cp, reason, sizeof(reason))) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode,
-                                  std::string("AAC codec private: ") + reason);
+            m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode, std::string("AAC codec private: ") + reason);
             aacEnc.Shutdown();
-            if (com_inited && hr != RPC_E_CHANGED_MODE) CoUninitialize();
+            if (com_inited && hr != RPC_E_CHANGED_MODE)
+                CoUninitialize();
             return;
         }
         std::lock_guard lk(m_state.premux_mutex);
@@ -85,37 +85,37 @@ void AudioThread::Run() {
     {
         std::string err;
         if (!wasapi.Init(err)) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture,
-                                  "WASAPI loopback init: " + err);
+            m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture, "WASAPI loopback init: " + err);
             aacEnc.Shutdown();
-            if (com_inited && hr != RPC_E_CHANGED_MODE) CoUninitialize();
+            if (com_inited && hr != RPC_E_CHANGED_MODE)
+                CoUninitialize();
             return;
         }
     }
 
     constexpr uint32_t kSampleRate = 48000;
-    constexpr uint32_t kChannels   = 2;
+    constexpr uint32_t kChannels = 2;
 
     uint64_t audioAccumulatedFrames = 0;
-    uint64_t lastAudioPts           = 0;
+    uint64_t lastAudioPts = 0;
 
     // Helper: push encoded audio packets to premux or mux queue
     auto routeAudioPackets = [&](std::vector<EncodedAudioPacket>& pkts) {
         for (auto& pkt : pkts) {
-            if (pkt.bytes.empty()) continue;
+            if (pkt.bytes.empty())
+                continue;
 
             lastAudioPts = pkt.pts_ns;
 
             {
                 std::unique_lock lk(m_state.premux_mutex);
-                bool bothReady = m_state.codec_private.av1_ready
-                              && m_state.codec_private.aac_ready;
+                bool bothReady = m_state.codec_private.av1_ready && m_state.codec_private.aac_ready;
                 if (!bothReady) {
                     if (m_state.audio_premux.size() >= SessionState::kAudioPremuxLimit) {
                         lk.unlock();
                         m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                            "Pre-mux audio buffer limit (600 packets) exceeded "
-                            "before codec private data was ready");
+                                              "Pre-mux audio buffer limit (600 packets) exceeded "
+                                              "before codec private data was ready");
                         return false;
                     }
                     m_state.audio_premux.push_back(std::move(pkt));
@@ -142,47 +142,35 @@ void AudioThread::Run() {
 
         bool anyWork = false;
         while (wasapi.GetNextPacketSize() > 0) {
-            BYTE*  pData        = nullptr;
-            DWORD  captureFlags = 0;
-            bool   silent       = false;
+            BYTE* pData = nullptr;
+            DWORD captureFlags = 0;
+            bool silent = false;
 
-            if (!wasapi.GetNextPacket(&pData, &numFrames, &captureFlags, &silent)) break;
+            if (!wasapi.GetNextPacket(&pData, &numFrames, &captureFlags, &silent))
+                break;
 
             uint64_t audio_ts_ns = audioAccumulatedFrames * 1000000000ULL / kSampleRate;
-            LONGLONG sampleDuration = static_cast<LONGLONG>(numFrames) * 10000000LL
-                                      / static_cast<LONGLONG>(kSampleRate);
+            LONGLONG sampleDuration =
+                static_cast<LONGLONG>(numFrames) * 10000000LL / static_cast<LONGLONG>(kSampleRate);
 
             std::vector<EncodedAudioPacket> pkts;
 
             if (silent) {
                 // Feed silence
                 std::vector<uint8_t> silenceData(numFrames * aacEnc.InputBlockAlign(), 0);
-                aacEnc.FeedRaw(
-                    silenceData.data(),
-                    static_cast<DWORD>(silenceData.size()),
-                    audio_ts_ns,
-                    sampleDuration,
-                    pkts);
+                aacEnc.FeedRaw(silenceData.data(), static_cast<DWORD>(silenceData.size()), audio_ts_ns, sampleDuration,
+                               pkts);
             } else if (aacEnc.UsesPcm16()) {
                 // Convert float32 -> pcm16 then feed
                 size_t totalSamples = static_cast<size_t>(numFrames) * kChannels;
-                aacEnc.FeedFloat32(
-                    reinterpret_cast<const float*>(pData),
-                    totalSamples,
-                    audio_ts_ns,
-                    audioAccumulatedFrames,
-                    kSampleRate,
-                    kChannels,
-                    pkts);
+                aacEnc.FeedFloat32(reinterpret_cast<const float*>(pData), totalSamples, audio_ts_ns,
+                                   audioAccumulatedFrames, kSampleRate, kChannels, pkts);
                 // FeedFloat32 already increments accumulated_frames, reset to avoid double-count
                 audioAccumulatedFrames -= numFrames;
             } else {
                 // Feed raw bytes
                 UINT32 dataBytes = numFrames * aacEnc.InputBlockAlign();
-                aacEnc.FeedRaw(
-                    pData, dataBytes,
-                    audio_ts_ns, sampleDuration,
-                    pkts);
+                aacEnc.FeedRaw(pData, dataBytes, audio_ts_ns, sampleDuration, pkts);
             }
 
             wasapi.ReleasePacket(numFrames);
@@ -197,12 +185,14 @@ void AudioThread::Run() {
                 }
             }
 
-            if (!routeAudioPackets(pkts)) goto end_audio_loop;
+            if (!routeAudioPackets(pkts))
+                goto end_audio_loop;
 
             anyWork = true;
         }
 
-        if (!anyWork) Sleep(1);
+        if (!anyWork)
+            Sleep(1);
     }
 
 end_audio_loop:
@@ -241,7 +231,8 @@ end_audio_loop:
     }
 
     aacEnc.Shutdown();
-    if (com_inited && hr != RPC_E_CHANGED_MODE) CoUninitialize();
+    if (com_inited && hr != RPC_E_CHANGED_MODE)
+        CoUninitialize();
 }
 
 } // namespace recorder_core

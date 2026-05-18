@@ -41,10 +41,10 @@ struct MuxItem {
 
 struct CodecPrivateData {
     uint8_t av1_codec_private[4] = {};
-    bool    av1_ready            = false;
+    bool av1_ready = false;
 
     uint8_t aac_codec_private[2] = {};
-    bool    aac_ready            = false;
+    bool aac_ready = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -52,8 +52,8 @@ struct CodecPrivateData {
 // ---------------------------------------------------------------------------
 
 struct SessionFailure {
-    HRESULT    error_code   = S_OK;
-    ErrorPhase error_phase  = ErrorPhase::None;
+    HRESULT error_code = S_OK;
+    ErrorPhase error_phase = ErrorPhase::None;
     std::string error_detail;
 };
 
@@ -67,8 +67,8 @@ struct SessionState {
 
     // First-error-wins: only the first failing thread records here
     mutable std::mutex failure_mutex;
-    bool               failure_recorded = false;
-    SessionFailure     failure;
+    bool failure_recorded = false;
+    SessionFailure failure;
 
     // Pre-mux buffering queues: video and audio are buffered here until
     // codec-private data from both tracks is available and Matroska tracks
@@ -83,7 +83,7 @@ struct SessionState {
     static constexpr size_t kVideoPremuxLimit = 120;
     static constexpr size_t kAudioPremuxLimit = 600;
 
-    std::mutex             premux_mutex;
+    std::mutex premux_mutex;
     std::condition_variable premux_cv;
 
     std::deque<EncodedVideoPacket> video_premux;
@@ -94,12 +94,12 @@ struct SessionState {
 
     // Mux queue (post-premux phase): after tracks are initialized, encoded
     // packets are pushed here directly.
-    std::mutex             mux_mutex;
+    std::mutex mux_mutex;
     std::condition_variable mux_cv;
-    std::deque<MuxItem>    mux_queue;
+    std::deque<MuxItem> mux_queue;
 
     // Live stats (written by worker threads, read by stats timer)
-    std::mutex   stats_mutex;
+    std::mutex stats_mutex;
     SessionStats stats;
 
     // Stats callback (set before Record())
@@ -109,7 +109,7 @@ struct SessionState {
     RecorderConfig config;
 
     // Video dimensions (set by VideoThread during prepare)
-    uint32_t encode_width  = 0;
+    uint32_t encode_width = 0;
     uint32_t encode_height = 0;
 
     // ---------------------------------------------------------------------------
@@ -121,10 +121,10 @@ struct SessionState {
         {
             std::lock_guard lk(failure_mutex);
             if (!failure_recorded) {
-                failure_recorded       = true;
-                failure.error_code     = hr;
-                failure.error_phase    = phase;
-                failure.error_detail   = detail;
+                failure_recorded = true;
+                failure.error_code = hr;
+                failure.error_phase = phase;
+                failure.error_detail = detail;
             }
         }
         stop_requested.store(true);

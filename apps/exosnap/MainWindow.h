@@ -7,14 +7,14 @@ namespace exosnap {
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
-public:
+  public:
     explicit MainWindow(QWidget* parent = nullptr);
 
-private slots:
+  private slots:
     void onNavChanged(QListWidgetItem* current, QListWidgetItem* previous);
 
-private:
-    QListWidget*    nav_;
+  private:
+    QListWidget* nav_;
     QStackedWidget* stack_;
 };
 

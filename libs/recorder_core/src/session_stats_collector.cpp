@@ -2,9 +2,8 @@
 
 namespace recorder_core {
 
-SessionStatsCollector::SessionStatsCollector(SessionState& state)
-    : m_state(state)
-{}
+SessionStatsCollector::SessionStatsCollector(SessionState& state) : m_state(state) {
+}
 
 SessionStatsCollector::~SessionStatsCollector() {
     Stop();
@@ -18,7 +17,8 @@ void SessionStatsCollector::Start() {
 
 void SessionStatsCollector::Stop() {
     m_stop.store(true);
-    if (m_thread.joinable()) m_thread.join();
+    if (m_thread.joinable())
+        m_thread.join();
 }
 
 void SessionStatsCollector::Run() {
@@ -26,7 +26,8 @@ void SessionStatsCollector::Run() {
 
     while (!m_stop.load()) {
         std::this_thread::sleep_for(kInterval);
-        if (m_stop.load()) break;
+        if (m_stop.load())
+            break;
 
         // Snapshot stats
         SessionStats snapshot;
@@ -37,8 +38,7 @@ void SessionStatsCollector::Run() {
 
         // Update elapsed
         auto now = std::chrono::steady_clock::now();
-        snapshot.elapsed_seconds =
-            std::chrono::duration<double>(now - m_start_time).count();
+        snapshot.elapsed_seconds = std::chrono::duration<double>(now - m_start_time).count();
 
         // Compute skew
         if (snapshot.video_duration_ns > 0 && snapshot.audio_duration_ns > 0) {

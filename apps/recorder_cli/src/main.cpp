@@ -25,49 +25,67 @@
 // ---------------------------------------------------------------------------
 
 static std::string narrow(const std::wstring& ws) {
-    if (ws.empty()) return {};
-    int sz = ::WideCharToMultiByte(CP_UTF8, 0, ws.data(), static_cast<int>(ws.size()),
-                                   nullptr, 0, nullptr, nullptr);
-    if (sz <= 0) return {};
+    if (ws.empty())
+        return {};
+    int sz = ::WideCharToMultiByte(CP_UTF8, 0, ws.data(), static_cast<int>(ws.size()), nullptr, 0, nullptr, nullptr);
+    if (sz <= 0)
+        return {};
     std::string s(static_cast<size_t>(sz), '\0');
-    ::WideCharToMultiByte(CP_UTF8, 0, ws.data(), static_cast<int>(ws.size()),
-                          s.data(), sz, nullptr, nullptr);
+    ::WideCharToMultiByte(CP_UTF8, 0, ws.data(), static_cast<int>(ws.size()), s.data(), sz, nullptr, nullptr);
     return s;
 }
 
 static const char* to_string(recorder_core::ErrorPhase phase) {
     using P = recorder_core::ErrorPhase;
     switch (phase) {
-        case P::None:         return "None";
-        case P::Prepare:      return "Prepare";
-        case P::VideoCapture: return "VideoCapture";
-        case P::VideoEncode:  return "VideoEncode";
-        case P::AudioCapture: return "AudioCapture";
-        case P::AudioEncode:  return "AudioEncode";
-        case P::Mux:          return "Mux";
-        case P::Finalize:     return "Finalize";
-        case P::Shutdown:     return "Shutdown";
-        default:              return "Unknown";
+    case P::None:
+        return "None";
+    case P::Prepare:
+        return "Prepare";
+    case P::VideoCapture:
+        return "VideoCapture";
+    case P::VideoEncode:
+        return "VideoEncode";
+    case P::AudioCapture:
+        return "AudioCapture";
+    case P::AudioEncode:
+        return "AudioEncode";
+    case P::Mux:
+        return "Mux";
+    case P::Finalize:
+        return "Finalize";
+    case P::Shutdown:
+        return "Shutdown";
+    default:
+        return "Unknown";
     }
 }
 
 static const char* kind_string(recorder_core::CaptureTarget::Kind kind) {
     using K = recorder_core::CaptureTarget::Kind;
     switch (kind) {
-        case K::Monitor: return "Monitor";
-        case K::Window:  return "Window";
-        default:         return "Unknown";
+    case K::Monitor:
+        return "Monitor";
+    case K::Window:
+        return "Window";
+    default:
+        return "Unknown";
     }
 }
 
 static const char* support_level_string(exosnap::capability::SupportLevel level) {
     using L = exosnap::capability::SupportLevel;
     switch (level) {
-        case L::Available:        return "Available";
-        case L::ValidUnvalidated: return "ValidUnvalidated";
-        case L::NotImplemented:   return "NotImplemented";
-        case L::Invalid:          return "Invalid";
-        default:                  return "Unknown";
+    case L::Available:
+        return "Available";
+    case L::ValidUnvalidated:
+        return "ValidUnvalidated";
+    case L::NotImplemented:
+        return "NotImplemented";
+    case L::Invalid:
+        return "Invalid";
+    default:
+        return "Unknown";
     }
 }
 
@@ -75,15 +93,9 @@ static const char* yes_no(bool value) {
     return value ? "yes" : "no";
 }
 
-static void print_support_line(
-    const char* dimension,
-    const std::string& name,
-    const exosnap::capability::SupportAnnotation& annotation) {
-    std::printf(
-        "  %-10s %-20s : %-16s",
-        dimension,
-        name.c_str(),
-        support_level_string(annotation.level));
+static void print_support_line(const char* dimension, const std::string& name,
+                               const exosnap::capability::SupportAnnotation& annotation) {
+    std::printf("  %-10s %-20s : %-16s", dimension, name.c_str(), support_level_string(annotation.level));
     if (!annotation.reason.empty()) {
         std::printf(" | %s", annotation.reason.c_str());
     }
@@ -97,11 +109,7 @@ static void print_adjustments(const exosnap::capability::ResolveResult& result) 
 
     std::puts("  Adjustments:");
     for (const auto& adjustment : result.adjustments) {
-        std::printf(
-            "    - %s: %s -> %s",
-            adjustment.field.c_str(),
-            adjustment.from.c_str(),
-            adjustment.to.c_str());
+        std::printf("    - %s: %s -> %s", adjustment.field.c_str(), adjustment.from.c_str(), adjustment.to.c_str());
         if (!adjustment.reason.empty()) {
             std::printf(" (%s)", adjustment.reason.c_str());
         }
@@ -135,15 +143,10 @@ static void print_invalidity(const exosnap::capability::ResolveResult& result) {
     }
 }
 
-static exosnap::capability::SupportAnnotation query_combo_for_config(
-    const exosnap::capability::CapabilitySet& caps,
-    const exosnap::capability::UserRecorderConfig& config) {
-    return caps.QueryCombo(
-        config.container,
-        config.video_codec,
-        config.audio_codec,
-        config.chroma,
-        config.bit_depth);
+static exosnap::capability::SupportAnnotation
+query_combo_for_config(const exosnap::capability::CapabilitySet& caps,
+                       const exosnap::capability::UserRecorderConfig& config) {
+    return caps.QueryCombo(config.container, config.video_codec, config.audio_codec, config.chroma, config.bit_depth);
 }
 
 static int run_capabilities_mode() {
@@ -157,11 +160,8 @@ static int run_capabilities_mode() {
         std::printf("  %-25s : %s\n", "OS version", runtime.os.version_string.c_str());
         std::printf("  %-25s : %s\n", "Adapter", runtime.nvidia.adapter_name.c_str());
         std::printf("  %-25s : %s\n", "NVENC DLL present", yes_no(runtime.nvidia.nvenc_dll_present));
-        std::printf(
-            "  %-25s : %s (version: 0x%08X)\n",
-            "NVENC API version valid",
-            yes_no(runtime.nvidia.nvenc_api_version_valid),
-            runtime.nvidia.nvenc_api_version);
+        std::printf("  %-25s : %s (version: 0x%08X)\n", "NVENC API version valid",
+                    yes_no(runtime.nvidia.nvenc_api_version_valid), runtime.nvidia.nvenc_api_version);
         std::printf("  %-25s : %s\n", "MF AAC MFTEnumEx found", yes_no(runtime.mf_aac.mftenum_found));
         std::printf("  %-25s : %s\n", "MF AAC CLSID instantiable", yes_no(runtime.mf_aac.clsid_instantiable));
         std::printf("  %-25s : %s\n", "MF AAC effective", yes_no(runtime.mf_aac.available()));
@@ -220,9 +220,9 @@ static int run_capabilities_mode() {
 // ---------------------------------------------------------------------------
 
 struct CliArgs {
-    bool     list_only    = false;
-    bool     capabilities = false;
-    int      target_index = -1; // 1-based, -1 = prompt user
+    bool list_only = false;
+    bool capabilities = false;
+    int target_index = -1; // 1-based, -1 = prompt user
 };
 
 static CliArgs parse_args(int argc, char* argv[]) {
@@ -246,14 +246,11 @@ static CliArgs parse_args(int argc, char* argv[]) {
 // ---------------------------------------------------------------------------
 
 static void print_stats(const recorder_core::SessionStats& s) {
-    std::printf(
-        "\r[%.1fs] vcap=%llu vpkt=%llu apkt=%llu vbytes=%llu abytes=%llu",
-        s.elapsed_seconds,
-        static_cast<unsigned long long>(s.video_frames_captured),
-        static_cast<unsigned long long>(s.encoded_video_packets),
-        static_cast<unsigned long long>(s.audio_packets),
-        static_cast<unsigned long long>(s.video_bytes),
-        static_cast<unsigned long long>(s.audio_bytes));
+    std::printf("\r[%.1fs] vcap=%llu vpkt=%llu apkt=%llu vbytes=%llu abytes=%llu", s.elapsed_seconds,
+                static_cast<unsigned long long>(s.video_frames_captured),
+                static_cast<unsigned long long>(s.encoded_video_packets),
+                static_cast<unsigned long long>(s.audio_packets), static_cast<unsigned long long>(s.video_bytes),
+                static_cast<unsigned long long>(s.audio_bytes));
     std::fflush(stdout);
 }
 
@@ -272,18 +269,18 @@ static void print_result(const recorder_core::RecorderResult& result) {
     }
     std::puts("---------- Session Stats  -----------");
     const auto& s = result.stats;
-    std::printf("  elapsed_seconds    : %.3f\n",  s.elapsed_seconds);
-    std::printf("  video_frames_capt  : %llu\n",  static_cast<unsigned long long>(s.video_frames_captured));
-    std::printf("  encoded_video_pkts : %llu\n",  static_cast<unsigned long long>(s.encoded_video_packets));
-    std::printf("  audio_packets      : %llu\n",  static_cast<unsigned long long>(s.audio_packets));
-    std::printf("  video_bytes        : %llu\n",  static_cast<unsigned long long>(s.video_bytes));
-    std::printf("  audio_bytes        : %llu\n",  static_cast<unsigned long long>(s.audio_bytes));
-    std::printf("  output_file_bytes  : %llu\n",  static_cast<unsigned long long>(s.output_file_bytes));
-    std::printf("  video_duration_ns  : %llu\n",  static_cast<unsigned long long>(s.video_duration_ns));
-    std::printf("  audio_duration_ns  : %llu\n",  static_cast<unsigned long long>(s.audio_duration_ns));
-    std::printf("  duration_skew_ms   : %.3f\n",  s.duration_skew_ms);
-    std::printf("  dropped_frames     : %llu\n",  static_cast<unsigned long long>(s.dropped_or_skipped_video_frames));
-    std::printf("  source_loss        : %s\n",    s.source_loss ? "true" : "false");
+    std::printf("  elapsed_seconds    : %.3f\n", s.elapsed_seconds);
+    std::printf("  video_frames_capt  : %llu\n", static_cast<unsigned long long>(s.video_frames_captured));
+    std::printf("  encoded_video_pkts : %llu\n", static_cast<unsigned long long>(s.encoded_video_packets));
+    std::printf("  audio_packets      : %llu\n", static_cast<unsigned long long>(s.audio_packets));
+    std::printf("  video_bytes        : %llu\n", static_cast<unsigned long long>(s.video_bytes));
+    std::printf("  audio_bytes        : %llu\n", static_cast<unsigned long long>(s.audio_bytes));
+    std::printf("  output_file_bytes  : %llu\n", static_cast<unsigned long long>(s.output_file_bytes));
+    std::printf("  video_duration_ns  : %llu\n", static_cast<unsigned long long>(s.video_duration_ns));
+    std::printf("  audio_duration_ns  : %llu\n", static_cast<unsigned long long>(s.audio_duration_ns));
+    std::printf("  duration_skew_ms   : %.3f\n", s.duration_skew_ms);
+    std::printf("  dropped_frames     : %llu\n", static_cast<unsigned long long>(s.dropped_or_skipped_video_frames));
+    std::printf("  source_loss        : %s\n", s.source_loss ? "true" : "false");
     std::puts("-------------------------------------");
 }
 
@@ -312,10 +309,7 @@ int main(int argc, char* argv[]) {
 
     std::puts("\nAvailable capture targets:");
     for (size_t i = 0; i < targets.size(); ++i) {
-        std::printf("  [%zu] %-8s  %s\n",
-                    i + 1,
-                    kind_string(targets[i].kind),
-                    narrow(targets[i].description).c_str());
+        std::printf("  [%zu] %-8s  %s\n", i + 1, kind_string(targets[i].kind), narrow(targets[i].description).c_str());
     }
 
     if (cli.list_only) {
@@ -327,9 +321,7 @@ int main(int argc, char* argv[]) {
 
     if (cli.target_index >= 1 && static_cast<size_t>(cli.target_index) <= targets.size()) {
         selected_index = static_cast<size_t>(cli.target_index) - 1;
-        std::printf("\nUsing target [%d]: %s\n",
-                    cli.target_index,
-                    narrow(targets[selected_index].description).c_str());
+        std::printf("\nUsing target [%d]: %s\n", cli.target_index, narrow(targets[selected_index].description).c_str());
     } else {
         // Interactive prompt
         std::printf("\nSelect target (1-%zu): ", targets.size());
@@ -348,15 +340,15 @@ int main(int argc, char* argv[]) {
     wchar_t profile_buf[MAX_PATH] = {};
     DWORD profile_len = GetEnvironmentVariableW(L"USERPROFILE", profile_buf, MAX_PATH);
     std::filesystem::path output_dir = (profile_len > 0 && profile_len < MAX_PATH)
-        ? std::filesystem::path(profile_buf) / L"Videos" / L"exosnap"
-        : std::filesystem::path(L"C:\\Users\\Public\\Videos\\exosnap");
+                                           ? std::filesystem::path(profile_buf) / L"Videos" / L"exosnap"
+                                           : std::filesystem::path(L"C:\\Users\\Public\\Videos\\exosnap");
     const std::filesystem::path output_path = output_dir / "recorder_core_av1_aac.mkv";
 
     std::error_code ec;
     std::filesystem::create_directories(output_dir, ec);
     if (ec) {
-        std::fprintf(stderr, "ERROR: Could not create output directory '%s': %s\n",
-                     output_dir.string().c_str(), ec.message().c_str());
+        std::fprintf(stderr, "ERROR: Could not create output directory '%s': %s\n", output_dir.string().c_str(),
+                     ec.message().c_str());
         return 1;
     }
 
@@ -372,13 +364,8 @@ int main(int argc, char* argv[]) {
                 std::fprintf(stderr, "  - %s: %s\n", invalid.field.c_str(), invalid.message.c_str());
             }
             for (const auto& adjustment : validation.adjustments) {
-                std::fprintf(
-                    stderr,
-                    "  - adjustment %s: %s -> %s (%s)\n",
-                    adjustment.field.c_str(),
-                    adjustment.from.c_str(),
-                    adjustment.to.c_str(),
-                    adjustment.reason.c_str());
+                std::fprintf(stderr, "  - adjustment %s: %s -> %s (%s)\n", adjustment.field.c_str(),
+                             adjustment.from.c_str(), adjustment.to.c_str(), adjustment.reason.c_str());
             }
             for (const auto& warning : validation.warnings) {
                 std::fprintf(stderr, "  - warning %s: %s\n", warning.code.c_str(), warning.message.c_str());
@@ -395,13 +382,8 @@ int main(int argc, char* argv[]) {
                 std::fprintf(stderr, "  - %s: %s\n", invalid.field.c_str(), invalid.message.c_str());
             }
             for (const auto& adjustment : translation_validation.adjustments) {
-                std::fprintf(
-                    stderr,
-                    "  - adjustment %s: %s -> %s (%s)\n",
-                    adjustment.field.c_str(),
-                    adjustment.from.c_str(),
-                    adjustment.to.c_str(),
-                    adjustment.reason.c_str());
+                std::fprintf(stderr, "  - adjustment %s: %s -> %s (%s)\n", adjustment.field.c_str(),
+                             adjustment.from.c_str(), adjustment.to.c_str(), adjustment.reason.c_str());
             }
             for (const auto& warning : translation_validation.warnings) {
                 std::fprintf(stderr, "  - warning %s: %s\n", warning.code.c_str(), warning.message.c_str());
@@ -417,7 +399,7 @@ int main(int argc, char* argv[]) {
     }
 
     config.output_path = output_path;
-    config.target      = chosen_target;
+    config.target = chosen_target;
 
     std::printf("Output path: %s\n", output_path.string().c_str());
 
@@ -428,8 +410,7 @@ int main(int argc, char* argv[]) {
     if (!session.Validate(config, &validation_result)) {
         std::fprintf(stderr, "ERROR: Validation failed\n");
         std::fprintf(stderr, "  error_phase  : %s\n", to_string(validation_result.error_phase));
-        std::fprintf(stderr, "  error_code   : 0x%08lX\n",
-                     static_cast<unsigned long>(validation_result.error_code));
+        std::fprintf(stderr, "  error_code   : 0x%08lX\n", static_cast<unsigned long>(validation_result.error_code));
         std::fprintf(stderr, "  error_detail : %s\n", validation_result.error_detail.c_str());
         return 1;
     }
@@ -446,8 +427,7 @@ int main(int argc, char* argv[]) {
         session.Stop();
     });
 
-    std::printf("\nRecording for up to %d seconds (Ctrl+C to abort)...\n",
-                kRecordingDurationSeconds);
+    std::printf("\nRecording for up to %d seconds (Ctrl+C to abort)...\n", kRecordingDurationSeconds);
 
     // 7. Record() blocks until Stop() or fatal error
     recorder_core::RecorderResult result = session.Record(config);

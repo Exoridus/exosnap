@@ -22,10 +22,10 @@ namespace recorder_core {
 struct CaptureTarget {
     enum class Kind { Monitor, Window };
 
-    Kind         kind        = Kind::Monitor;
+    Kind kind = Kind::Monitor;
     std::wstring description;
-    HMONITOR     hmonitor    = nullptr;
-    HWND         hwnd        = nullptr;
+    HMONITOR hmonitor = nullptr;
+    HWND hwnd = nullptr;
 };
 
 // ---------------------------------------------------------------------------
@@ -41,11 +41,11 @@ struct RecorderConfig {
 
     // Format — M3.1 only supports the primary path below.
     // Validate() rejects any other combination.
-    Container         container  = Container::Matroska;
-    VideoCodec        video_codec = VideoCodec::Av1Nvenc;
-    AudioCodec        audio_codec = AudioCodec::AacMf;
-    ChromaSubsampling chroma     = ChromaSubsampling::Cs420;
-    BitDepth          bit_depth  = BitDepth::Bit8;
+    Container container = Container::Matroska;
+    VideoCodec video_codec = VideoCodec::Av1Nvenc;
+    AudioCodec audio_codec = AudioCodec::AacMf;
+    ChromaSubsampling chroma = ChromaSubsampling::Cs420;
+    BitDepth bit_depth = BitDepth::Bit8;
 
     // Frame rate (numerator/denominator)
     uint32_t frame_rate_num = 60;
@@ -57,11 +57,11 @@ struct RecorderConfig {
 // ---------------------------------------------------------------------------
 
 struct RecorderResult {
-    bool         succeeded    = false;
-    HRESULT      error_code   = S_OK;
-    ErrorPhase   error_phase  = ErrorPhase::None;
+    bool succeeded = false;
+    HRESULT error_code = S_OK;
+    ErrorPhase error_phase = ErrorPhase::None;
     SessionStats stats;
-    std::string  error_detail;
+    std::string error_detail;
 };
 
 // ---------------------------------------------------------------------------
@@ -69,11 +69,11 @@ struct RecorderResult {
 // ---------------------------------------------------------------------------
 
 class RecorderSession {
-public:
+  public:
     RecorderSession();
     ~RecorderSession();
 
-    RecorderSession(const RecorderSession&)            = delete;
+    RecorderSession(const RecorderSession&) = delete;
     RecorderSession& operator=(const RecorderSession&) = delete;
 
     // Enumerate available capture targets (monitors and top-level windows).
@@ -95,7 +95,7 @@ public:
     // internal worker thread.  Must be set before calling Record().
     void SetStatsCallback(StatsCallback cb);
 
-private:
+  private:
     struct Impl;
     Impl* m_impl = nullptr;
 };

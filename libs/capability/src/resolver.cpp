@@ -40,20 +40,15 @@ AudioCodec PreferredAudioCodecForContainer(Container container) {
 }
 
 SupportAnnotation QueryResolvedCombo(const CapabilitySet& caps, const UserRecorderConfig& config) {
-    return caps.QueryCombo(
-        config.container,
-        config.video_codec,
-        config.audio_codec,
-        config.chroma,
-        config.bit_depth);
+    return caps.QueryCombo(config.container, config.video_codec, config.audio_codec, config.chroma, config.bit_depth);
 }
 
 void AddWarningForUnvalidated(ResolveResult& result, const SupportAnnotation& annotation) {
     if (annotation.level == SupportLevel::ValidUnvalidated) {
-        result.warnings.push_back(Warning{
-            "combo.valid_unvalidated",
-            annotation.reason.empty() ? "Selected combination is valid but not validated on this system." : annotation.reason
-        });
+        result.warnings.push_back(
+            Warning{"combo.valid_unvalidated", annotation.reason.empty()
+                                                   ? "Selected combination is valid but not validated on this system."
+                                                   : annotation.reason});
     }
 }
 
@@ -72,21 +67,15 @@ bool ValidateResolution(const CapabilitySet& caps, const UserRecorderConfig& con
     }
 
     const ResolutionConstraint& constraint = caps.resolution_constraint;
-    const uint32_t width  = config.output_width;
+    const uint32_t width = config.output_width;
     const uint32_t height = config.output_height;
 
     if (constraint.max_width != 0 && width > constraint.max_width) {
-        AddInvalid(
-            result,
-            "output_width",
-            "Requested width exceeds maximum supported width.");
+        AddInvalid(result, "output_width", "Requested width exceeds maximum supported width.");
         return false;
     }
     if (constraint.max_height != 0 && height > constraint.max_height) {
-        AddInvalid(
-            result,
-            "output_height",
-            "Requested height exceeds maximum supported height.");
+        AddInvalid(result, "output_height", "Requested height exceeds maximum supported height.");
         return false;
     }
 
@@ -111,9 +100,8 @@ bool FinalizeSelectableResult(const CapabilitySet& caps, ResolveResult& result, 
 
     const SupportAnnotation combo = QueryResolvedCombo(caps, result.resolved_config);
     if (!IsSelectable(combo.level)) {
-        const std::string message = combo.reason.empty()
-            ? "The requested configuration is not selectable."
-            : combo.reason;
+        const std::string message =
+            combo.reason.empty() ? "The requested configuration is not selectable." : combo.reason;
         AddInvalid(result, field, message);
         return false;
     }
@@ -125,8 +113,7 @@ bool FinalizeSelectableResult(const CapabilitySet& caps, ResolveResult& result, 
 
 } // namespace
 
-RequestedChange::RequestedChange(Value value)
-    : value_(std::move(value)) {
+RequestedChange::RequestedChange(Value value) : value_(std::move(value)) {
 }
 
 RequestedChange RequestedChange::ForContainer(Container value) {
@@ -157,13 +144,10 @@ const RequestedChange::Value& RequestedChange::value() const noexcept {
     return value_;
 }
 
-SettingsResolver::SettingsResolver(const CapabilitySet& caps)
-    : caps_(caps) {
+SettingsResolver::SettingsResolver(const CapabilitySet& caps) : caps_(caps) {
 }
 
-ResolveResult SettingsResolver::ResolveChange(
-    const UserRecorderConfig& current,
-    const RequestedChange& change) const {
+ResolveResult SettingsResolver::ResolveChange(const UserRecorderConfig& current, const RequestedChange& change) const {
     ResolveResult result;
     result.resolved_config = current;
 
@@ -178,21 +162,16 @@ ResolveResult SettingsResolver::ResolveChange(
                 candidate.audio_codec = preferred;
                 const SupportAnnotation fallback_combo = QueryResolvedCombo(caps_, candidate);
                 if (IsSelectable(fallback_combo.level)) {
-                    result.adjustments.push_back(Adjustment{
-                        "audio_codec",
-                        Stringify(result.resolved_config.audio_codec),
-                        Stringify(preferred),
-                        "Adjusted to preferred codec for selected container."
-                    });
+                    result.adjustments.push_back(
+                        Adjustment{"audio_codec", Stringify(result.resolved_config.audio_codec), Stringify(preferred),
+                                   "Adjusted to preferred codec for selected container."});
                     result.resolved_config = candidate;
                     FinalizeSelectableResult(caps_, result, "container");
                     return result;
                 }
-                AddInvalid(
-                    result,
-                    "audio_codec",
-                    "Container requires audio fallback, but preferred codec is not selectable: "
-                        + fallback_combo.reason);
+                AddInvalid(result, "audio_codec",
+                           "Container requires audio fallback, but preferred codec is not selectable: " +
+                               fallback_combo.reason);
                 return result;
             }
         }
@@ -214,12 +193,9 @@ ResolveResult SettingsResolver::ResolveChange(
                 return result;
             }
 
-            result.adjustments.push_back(Adjustment{
-                "chroma",
-                Stringify(result.resolved_config.chroma),
-                Stringify(ChromaSubsampling::Cs420),
-                "Adjusted to supported chroma for selected video codec."
-            });
+            result.adjustments.push_back(Adjustment{"chroma", Stringify(result.resolved_config.chroma),
+                                                    Stringify(ChromaSubsampling::Cs420),
+                                                    "Adjusted to supported chroma for selected video codec."});
             result.resolved_config.chroma = ChromaSubsampling::Cs420;
             combo = QueryResolvedCombo(caps_, result.resolved_config);
         }
@@ -231,21 +207,16 @@ ResolveResult SettingsResolver::ResolveChange(
                 return result;
             }
 
-            result.adjustments.push_back(Adjustment{
-                "bit_depth",
-                Stringify(result.resolved_config.bit_depth),
-                Stringify(BitDepth::Bit8),
-                "Adjusted to supported bit depth for selected video codec."
-            });
+            result.adjustments.push_back(Adjustment{"bit_depth", Stringify(result.resolved_config.bit_depth),
+                                                    Stringify(BitDepth::Bit8),
+                                                    "Adjusted to supported bit depth for selected video codec."});
             result.resolved_config.bit_depth = BitDepth::Bit8;
             combo = QueryResolvedCombo(caps_, result.resolved_config);
         }
 
         if (!IsSelectable(combo.level)) {
-            AddInvalid(
-                result,
-                "video_codec",
-                combo.reason.empty() ? "Requested video codec combination is not selectable." : combo.reason);
+            AddInvalid(result, "video_codec",
+                       combo.reason.empty() ? "Requested video codec combination is not selectable." : combo.reason);
             return result;
         }
 
@@ -282,7 +253,7 @@ ResolveResult SettingsResolver::ResolveChange(
     }
 
     if (const auto* resolution = std::get_if<RequestedChange::ResolutionValue>(&change.value())) {
-        result.resolved_config.output_width  = resolution->width;
+        result.resolved_config.output_width = resolution->width;
         result.resolved_config.output_height = resolution->height;
         if (!FinalizeSelectableResult(caps_, result, "resolution")) {
             return result;
@@ -339,39 +310,28 @@ ResolveResult SettingsResolver::ValidateConfig(const UserRecorderConfig& config)
             }
 
             if (IsSelectable(fallback_combo.level)) {
-                result.adjustments.push_back(Adjustment{
-                    "audio_codec",
-                    Stringify(result.resolved_config.audio_codec),
-                    Stringify(preferred),
-                    "Adjusted to preferred codec for selected container."
-                });
+                result.adjustments.push_back(Adjustment{"audio_codec", Stringify(result.resolved_config.audio_codec),
+                                                        Stringify(preferred),
+                                                        "Adjusted to preferred codec for selected container."});
 
                 if (chroma_fallback_applied) {
-                    result.adjustments.push_back(Adjustment{
-                        "chroma",
-                        Stringify(original_chroma),
-                        Stringify(ChromaSubsampling::Cs420),
-                        "Adjusted to supported chroma while validating profile."
-                    });
+                    result.adjustments.push_back(Adjustment{"chroma", Stringify(original_chroma),
+                                                            Stringify(ChromaSubsampling::Cs420),
+                                                            "Adjusted to supported chroma while validating profile."});
                 }
 
                 if (bit_depth_fallback_applied) {
-                    result.adjustments.push_back(Adjustment{
-                        "bit_depth",
-                        Stringify(original_bit_depth),
-                        Stringify(BitDepth::Bit8),
-                        "Adjusted to supported bit depth while validating profile."
-                    });
+                    result.adjustments.push_back(
+                        Adjustment{"bit_depth", Stringify(original_bit_depth), Stringify(BitDepth::Bit8),
+                                   "Adjusted to supported bit depth while validating profile."});
                 }
 
                 result.resolved_config = candidate;
                 combo = fallback_combo;
             } else {
-                AddInvalid(
-                    result,
-                    "audio_codec",
-                    "Container requires audio fallback, but preferred codec is not selectable: "
-                        + fallback_combo.reason);
+                AddInvalid(result, "audio_codec",
+                           "Container requires audio fallback, but preferred codec is not selectable: " +
+                               fallback_combo.reason);
                 return result;
             }
         }
@@ -383,12 +343,9 @@ ResolveResult SettingsResolver::ValidateConfig(const UserRecorderConfig& config)
             AddInvalid(result, "chroma", "Fallback chroma 4:2:0 is not selectable.");
             return result;
         }
-        result.adjustments.push_back(Adjustment{
-            "chroma",
-            Stringify(result.resolved_config.chroma),
-            Stringify(ChromaSubsampling::Cs420),
-            "Adjusted to supported chroma for selected video codec."
-        });
+        result.adjustments.push_back(Adjustment{"chroma", Stringify(result.resolved_config.chroma),
+                                                Stringify(ChromaSubsampling::Cs420),
+                                                "Adjusted to supported chroma for selected video codec."});
         result.resolved_config.chroma = ChromaSubsampling::Cs420;
         combo = QueryResolvedCombo(caps_, result.resolved_config);
     }
@@ -399,21 +356,15 @@ ResolveResult SettingsResolver::ValidateConfig(const UserRecorderConfig& config)
             AddInvalid(result, "bit_depth", "Fallback bit depth 8-bit is not selectable.");
             return result;
         }
-        result.adjustments.push_back(Adjustment{
-            "bit_depth",
-            Stringify(result.resolved_config.bit_depth),
-            Stringify(BitDepth::Bit8),
-            "Adjusted to supported bit depth for selected video codec."
-        });
+        result.adjustments.push_back(Adjustment{"bit_depth", Stringify(result.resolved_config.bit_depth),
+                                                Stringify(BitDepth::Bit8),
+                                                "Adjusted to supported bit depth for selected video codec."});
         result.resolved_config.bit_depth = BitDepth::Bit8;
         combo = QueryResolvedCombo(caps_, result.resolved_config);
     }
 
     if (!IsSelectable(combo.level)) {
-        AddInvalid(
-            result,
-            "config",
-            combo.reason.empty() ? "Configuration is not selectable." : combo.reason);
+        AddInvalid(result, "config", combo.reason.empty() ? "Configuration is not selectable." : combo.reason);
         return result;
     }
 

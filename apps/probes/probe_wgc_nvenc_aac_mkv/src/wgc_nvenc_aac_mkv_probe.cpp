@@ -27,9 +27,11 @@ constexpr int kPadColumn = 56;
 void PrintPhasePass(int phase, const char* label) {
     char prefix[128];
     int n = snprintf(prefix, sizeof(prefix), "[phase %02d] %s ", phase, label);
-    if (n < 0) n = 0;
+    if (n < 0)
+        n = 0;
     fwrite(prefix, 1, static_cast<size_t>(n), stdout);
-    for (int i = n; i < kPadColumn; ++i) fputc('.', stdout);
+    for (int i = n; i < kPadColumn; ++i)
+        fputc('.', stdout);
     fprintf(stdout, " PASS\n");
     fflush(stdout);
 }
@@ -37,9 +39,11 @@ void PrintPhasePass(int phase, const char* label) {
 void PrintPhaseFail(int phase, const char* label, const char* reason) {
     char prefix[128];
     int n = snprintf(prefix, sizeof(prefix), "[phase %02d] %s ", phase, label);
-    if (n < 0) n = 0;
+    if (n < 0)
+        n = 0;
     fwrite(prefix, 1, static_cast<size_t>(n), stdout);
-    for (int i = n; i < kPadColumn; ++i) fputc('.', stdout);
+    for (int i = n; i < kPadColumn; ++i)
+        fputc('.', stdout);
     fprintf(stdout, " FAIL: %s\n", reason);
     fflush(stdout);
 }
@@ -51,40 +55,66 @@ void PrintDetail(const char* line) {
 
 } // namespace
 
-
 // ---------------------------------------------------------------------------
 // NvencStatusName
 // ---------------------------------------------------------------------------
 
 const char* NvencStatusName(NVENCSTATUS st) {
     switch (st) {
-    case NV_ENC_SUCCESS:                      return "NV_ENC_SUCCESS";
-    case NV_ENC_ERR_NO_ENCODE_DEVICE:         return "NV_ENC_ERR_NO_ENCODE_DEVICE";
-    case NV_ENC_ERR_UNSUPPORTED_DEVICE:       return "NV_ENC_ERR_UNSUPPORTED_DEVICE";
-    case NV_ENC_ERR_INVALID_ENCODERDEVICE:    return "NV_ENC_ERR_INVALID_ENCODERDEVICE";
-    case NV_ENC_ERR_INVALID_DEVICE:           return "NV_ENC_ERR_INVALID_DEVICE";
-    case NV_ENC_ERR_DEVICE_NOT_EXIST:         return "NV_ENC_ERR_DEVICE_NOT_EXIST";
-    case NV_ENC_ERR_INVALID_PTR:              return "NV_ENC_ERR_INVALID_PTR";
-    case NV_ENC_ERR_INVALID_EVENT:            return "NV_ENC_ERR_INVALID_EVENT";
-    case NV_ENC_ERR_INVALID_PARAM:            return "NV_ENC_ERR_INVALID_PARAM";
-    case NV_ENC_ERR_INVALID_CALL:             return "NV_ENC_ERR_INVALID_CALL";
-    case NV_ENC_ERR_OUT_OF_MEMORY:            return "NV_ENC_ERR_OUT_OF_MEMORY";
-    case NV_ENC_ERR_ENCODER_NOT_INITIALIZED:  return "NV_ENC_ERR_ENCODER_NOT_INITIALIZED";
-    case NV_ENC_ERR_UNSUPPORTED_PARAM:        return "NV_ENC_ERR_UNSUPPORTED_PARAM";
-    case NV_ENC_ERR_LOCK_BUSY:                return "NV_ENC_ERR_LOCK_BUSY";
-    case NV_ENC_ERR_NOT_ENOUGH_BUFFER:        return "NV_ENC_ERR_NOT_ENOUGH_BUFFER";
-    case NV_ENC_ERR_INVALID_VERSION:          return "NV_ENC_ERR_INVALID_VERSION";
-    case NV_ENC_ERR_MAP_FAILED:               return "NV_ENC_ERR_MAP_FAILED";
-    case NV_ENC_ERR_NEED_MORE_INPUT:          return "NV_ENC_ERR_NEED_MORE_INPUT";
-    case NV_ENC_ERR_ENCODER_BUSY:             return "NV_ENC_ERR_ENCODER_BUSY";
-    case NV_ENC_ERR_EVENT_NOT_REGISTERD:      return "NV_ENC_ERR_EVENT_NOT_REGISTERD";
-    case NV_ENC_ERR_GENERIC:                  return "NV_ENC_ERR_GENERIC";
-    case NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY:  return "NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY";
-    case NV_ENC_ERR_UNIMPLEMENTED:            return "NV_ENC_ERR_UNIMPLEMENTED";
-    case NV_ENC_ERR_RESOURCE_REGISTER_FAILED: return "NV_ENC_ERR_RESOURCE_REGISTER_FAILED";
-    case NV_ENC_ERR_RESOURCE_NOT_REGISTERED:  return "NV_ENC_ERR_RESOURCE_NOT_REGISTERED";
-    case NV_ENC_ERR_RESOURCE_NOT_MAPPED:      return "NV_ENC_ERR_RESOURCE_NOT_MAPPED";
-    default:                                  return "NV_ENC_ERR_UNKNOWN";
+    case NV_ENC_SUCCESS:
+        return "NV_ENC_SUCCESS";
+    case NV_ENC_ERR_NO_ENCODE_DEVICE:
+        return "NV_ENC_ERR_NO_ENCODE_DEVICE";
+    case NV_ENC_ERR_UNSUPPORTED_DEVICE:
+        return "NV_ENC_ERR_UNSUPPORTED_DEVICE";
+    case NV_ENC_ERR_INVALID_ENCODERDEVICE:
+        return "NV_ENC_ERR_INVALID_ENCODERDEVICE";
+    case NV_ENC_ERR_INVALID_DEVICE:
+        return "NV_ENC_ERR_INVALID_DEVICE";
+    case NV_ENC_ERR_DEVICE_NOT_EXIST:
+        return "NV_ENC_ERR_DEVICE_NOT_EXIST";
+    case NV_ENC_ERR_INVALID_PTR:
+        return "NV_ENC_ERR_INVALID_PTR";
+    case NV_ENC_ERR_INVALID_EVENT:
+        return "NV_ENC_ERR_INVALID_EVENT";
+    case NV_ENC_ERR_INVALID_PARAM:
+        return "NV_ENC_ERR_INVALID_PARAM";
+    case NV_ENC_ERR_INVALID_CALL:
+        return "NV_ENC_ERR_INVALID_CALL";
+    case NV_ENC_ERR_OUT_OF_MEMORY:
+        return "NV_ENC_ERR_OUT_OF_MEMORY";
+    case NV_ENC_ERR_ENCODER_NOT_INITIALIZED:
+        return "NV_ENC_ERR_ENCODER_NOT_INITIALIZED";
+    case NV_ENC_ERR_UNSUPPORTED_PARAM:
+        return "NV_ENC_ERR_UNSUPPORTED_PARAM";
+    case NV_ENC_ERR_LOCK_BUSY:
+        return "NV_ENC_ERR_LOCK_BUSY";
+    case NV_ENC_ERR_NOT_ENOUGH_BUFFER:
+        return "NV_ENC_ERR_NOT_ENOUGH_BUFFER";
+    case NV_ENC_ERR_INVALID_VERSION:
+        return "NV_ENC_ERR_INVALID_VERSION";
+    case NV_ENC_ERR_MAP_FAILED:
+        return "NV_ENC_ERR_MAP_FAILED";
+    case NV_ENC_ERR_NEED_MORE_INPUT:
+        return "NV_ENC_ERR_NEED_MORE_INPUT";
+    case NV_ENC_ERR_ENCODER_BUSY:
+        return "NV_ENC_ERR_ENCODER_BUSY";
+    case NV_ENC_ERR_EVENT_NOT_REGISTERD:
+        return "NV_ENC_ERR_EVENT_NOT_REGISTERD";
+    case NV_ENC_ERR_GENERIC:
+        return "NV_ENC_ERR_GENERIC";
+    case NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY:
+        return "NV_ENC_ERR_INCOMPATIBLE_CLIENT_KEY";
+    case NV_ENC_ERR_UNIMPLEMENTED:
+        return "NV_ENC_ERR_UNIMPLEMENTED";
+    case NV_ENC_ERR_RESOURCE_REGISTER_FAILED:
+        return "NV_ENC_ERR_RESOURCE_REGISTER_FAILED";
+    case NV_ENC_ERR_RESOURCE_NOT_REGISTERED:
+        return "NV_ENC_ERR_RESOURCE_NOT_REGISTERED";
+    case NV_ENC_ERR_RESOURCE_NOT_MAPPED:
+        return "NV_ENC_ERR_RESOURCE_NOT_MAPPED";
+    default:
+        return "NV_ENC_ERR_UNKNOWN";
     }
 }
 
@@ -93,9 +123,7 @@ const char* NvencStatusName(NVENCSTATUS st) {
 // ---------------------------------------------------------------------------
 
 /*static*/
-void WgcNvencAacMkvProbe::ConvertFloat32ToPcm16(
-    const float* src, int16_t* dst, size_t sampleCount)
-{
+void WgcNvencAacMkvProbe::ConvertFloat32ToPcm16(const float* src, int16_t* dst, size_t sampleCount) {
     for (size_t i = 0; i < sampleCount; ++i) {
         float clamped = std::clamp(src[i], -1.0f, 1.0f);
         dst[i] = static_cast<int16_t>(clamped * 32767.0f);
@@ -104,9 +132,11 @@ void WgcNvencAacMkvProbe::ConvertFloat32ToPcm16(
 
 /*static*/
 std::string WgcNvencAacMkvProbe::WideToUtf8(const wchar_t* wstr) {
-    if (wstr == nullptr || wstr[0] == L'\0') return "(unnamed)";
+    if (wstr == nullptr || wstr[0] == L'\0')
+        return "(unnamed)";
     int len = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
-    if (len <= 0) return "(unnamed)";
+    if (len <= 0)
+        return "(unnamed)";
     std::string result(static_cast<size_t>(len - 1), '\0');
     WideCharToMultiByte(CP_UTF8, 0, wstr, -1, result.data(), len, nullptr, nullptr);
     return result;
@@ -122,23 +152,17 @@ std::vector<CaptureTarget> WgcNvencAacMkvProbe::EnumerateTargets() {
     winrt::com_ptr<IDXGIFactory1> factory;
     if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(factory.put())))) {
         winrt::com_ptr<IDXGIAdapter1> adapter;
-        for (UINT i = 0;
-             factory->EnumAdapters1(i, adapter.put()) != DXGI_ERROR_NOT_FOUND;
-             ++i) {
+        for (UINT i = 0; factory->EnumAdapters1(i, adapter.put()) != DXGI_ERROR_NOT_FOUND; ++i) {
             winrt::com_ptr<IDXGIOutput> output;
-            for (UINT j = 0;
-                 adapter->EnumOutputs(j, output.put()) != DXGI_ERROR_NOT_FOUND;
-                 ++j) {
+            for (UINT j = 0; adapter->EnumOutputs(j, output.put()) != DXGI_ERROR_NOT_FOUND; ++j) {
                 DXGI_OUTPUT_DESC desc{};
                 if (SUCCEEDED(output->GetDesc(&desc)) && desc.AttachedToDesktop) {
                     MONITORINFOEXW mi{};
                     mi.cbSize = sizeof(mi);
                     CaptureTarget t;
-                    t.kind     = CaptureTarget::Kind::Monitor;
+                    t.kind = CaptureTarget::Kind::Monitor;
                     t.hmonitor = desc.Monitor;
-                    t.description = GetMonitorInfoW(desc.Monitor, &mi)
-                                        ? mi.szDevice
-                                        : std::to_wstring(targets.size());
+                    t.description = GetMonitorInfoW(desc.Monitor, &mi) ? mi.szDevice : std::to_wstring(targets.size());
                     targets.push_back(std::move(t));
                 }
                 output = nullptr;
@@ -150,15 +174,19 @@ std::vector<CaptureTarget> WgcNvencAacMkvProbe::EnumerateTargets() {
     EnumWindows(
         [](HWND hwnd, LPARAM lParam) -> BOOL {
             auto& vec = *reinterpret_cast<std::vector<CaptureTarget>*>(lParam);
-            if (!IsWindowVisible(hwnd)) return TRUE;
-            if ((GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CHILD) != 0) return TRUE;
-            if (GetWindow(hwnd, GW_OWNER) != nullptr) return TRUE;
+            if (!IsWindowVisible(hwnd))
+                return TRUE;
+            if ((GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CHILD) != 0)
+                return TRUE;
+            if (GetWindow(hwnd, GW_OWNER) != nullptr)
+                return TRUE;
             wchar_t title[256] = {};
-            if (GetWindowTextW(hwnd, title, 256) == 0) return TRUE;
+            if (GetWindowTextW(hwnd, title, 256) == 0)
+                return TRUE;
             CaptureTarget t;
-            t.kind        = CaptureTarget::Kind::Window;
+            t.kind = CaptureTarget::Kind::Window;
             t.description = title;
-            t.hwnd        = hwnd;
+            t.hwnd = hwnd;
             vec.push_back(std::move(t));
             return TRUE;
         },
@@ -171,8 +199,8 @@ std::vector<CaptureTarget> WgcNvencAacMkvProbe::EnumerateTargets() {
 // Constructor / Destructor
 // ---------------------------------------------------------------------------
 
-WgcNvencAacMkvProbe::WgcNvencAacMkvProbe(const CaptureTarget& target)
-    : m_target(target) {}
+WgcNvencAacMkvProbe::WgcNvencAacMkvProbe(const CaptureTarget& target) : m_target(target) {
+}
 
 WgcNvencAacMkvProbe::~WgcNvencAacMkvProbe() {
     CleanupCapture();
@@ -180,13 +208,13 @@ WgcNvencAacMkvProbe::~WgcNvencAacMkvProbe() {
     CleanupAudio();
 
     m_videoOutputView = nullptr;
-    m_nv12Texture     = nullptr;
-    m_videoProcessor  = nullptr;
-    m_videoEnum       = nullptr;
-    m_videoContext    = nullptr;
-    m_videoDevice     = nullptr;
-    m_d3dContext      = nullptr;
-    m_d3dDevice       = nullptr;
+    m_nv12Texture = nullptr;
+    m_videoProcessor = nullptr;
+    m_videoEnum = nullptr;
+    m_videoContext = nullptr;
+    m_videoDevice = nullptr;
+    m_d3dContext = nullptr;
+    m_d3dDevice = nullptr;
 
     if (m_nvencDll != nullptr) {
         FreeLibrary(m_nvencDll);
@@ -204,15 +232,17 @@ void WgcNvencAacMkvProbe::CleanupCapture() {
         m_framePool = nullptr;
     }
     if (m_item != nullptr) {
-        try { m_item.Closed(m_closedToken); } catch (...) {}
+        try {
+            m_item.Closed(m_closedToken);
+        } catch (...) {
+        }
         m_closedToken = {};
-        m_item        = nullptr;
+        m_item = nullptr;
     }
 }
 
 void WgcNvencAacMkvProbe::CleanupEncoder() {
-    if (m_encoder != nullptr && m_nvencFuncs.nvEncDestroyBitstreamBuffer != nullptr
-        && m_bitstreamBuffer != nullptr) {
+    if (m_encoder != nullptr && m_nvencFuncs.nvEncDestroyBitstreamBuffer != nullptr && m_bitstreamBuffer != nullptr) {
         m_nvencFuncs.nvEncDestroyBitstreamBuffer(m_encoder, m_bitstreamBuffer);
         m_bitstreamBuffer = nullptr;
     }
@@ -223,13 +253,35 @@ void WgcNvencAacMkvProbe::CleanupEncoder() {
 }
 
 void WgcNvencAacMkvProbe::CleanupAudio() {
-    if (m_pCaptureClient) { m_pCaptureClient->Release(); m_pCaptureClient = nullptr; }
-    if (m_pAudioClient)   { m_pAudioClient->Stop(); m_pAudioClient->Release(); m_pAudioClient = nullptr; }
-    if (m_pDevice)        { m_pDevice->Release(); m_pDevice = nullptr; }
-    if (m_pOutputType)    { m_pOutputType->Release(); m_pOutputType = nullptr; }
-    if (m_pMFT)           { m_pMFT->Release(); m_pMFT = nullptr; }
-    if (m_pActivate)      { m_pActivate->Release(); m_pActivate = nullptr; }
-    if (m_mfStarted)      { MFShutdown(); m_mfStarted = false; }
+    if (m_pCaptureClient) {
+        m_pCaptureClient->Release();
+        m_pCaptureClient = nullptr;
+    }
+    if (m_pAudioClient) {
+        m_pAudioClient->Stop();
+        m_pAudioClient->Release();
+        m_pAudioClient = nullptr;
+    }
+    if (m_pDevice) {
+        m_pDevice->Release();
+        m_pDevice = nullptr;
+    }
+    if (m_pOutputType) {
+        m_pOutputType->Release();
+        m_pOutputType = nullptr;
+    }
+    if (m_pMFT) {
+        m_pMFT->Release();
+        m_pMFT = nullptr;
+    }
+    if (m_pActivate) {
+        m_pActivate->Release();
+        m_pActivate = nullptr;
+    }
+    if (m_mfStarted) {
+        MFShutdown();
+        m_mfStarted = false;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -264,14 +316,12 @@ bool WgcNvencAacMkvProbe::Phase01_InitComAndMF() {
 // ---------------------------------------------------------------------------
 
 bool WgcNvencAacMkvProbe::Phase02_InitD3D11VideoDevice() {
-    D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0 };
+    D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
     UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
 
-    HRESULT hr = D3D11CreateDevice(
-        nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
-        levels, static_cast<UINT>(std::size(levels)),
-        D3D11_SDK_VERSION,
-        m_d3dDevice.put(), nullptr, m_d3dContext.put());
+    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, levels,
+                                   static_cast<UINT>(std::size(levels)), D3D11_SDK_VERSION, m_d3dDevice.put(), nullptr,
+                                   m_d3dContext.put());
 
     if (FAILED(hr) || m_d3dDevice == nullptr) {
         char buf[80];
@@ -308,19 +358,16 @@ bool WgcNvencAacMkvProbe::Phase02_InitD3D11VideoDevice() {
 
 bool WgcNvencAacMkvProbe::Phase03_CreateCaptureItem() {
     try {
-        auto interop = winrt::get_activation_factory<
-            winrt::Windows::Graphics::Capture::GraphicsCaptureItem,
-            IGraphicsCaptureItemInterop>();
+        auto interop = winrt::get_activation_factory<winrt::Windows::Graphics::Capture::GraphicsCaptureItem,
+                                                     IGraphicsCaptureItemInterop>();
 
         if (m_target.kind == CaptureTarget::Kind::Monitor) {
             winrt::check_hresult(interop->CreateForMonitor(
-                m_target.hmonitor,
-                winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(),
+                m_target.hmonitor, winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(),
                 winrt::put_abi(m_item)));
         } else {
             winrt::check_hresult(interop->CreateForWindow(
-                m_target.hwnd,
-                winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(),
+                m_target.hwnd, winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(),
                 winrt::put_abi(m_item)));
         }
     } catch (const winrt::hresult_error& e) {
@@ -339,8 +386,8 @@ bool WgcNvencAacMkvProbe::Phase03_CreateCaptureItem() {
         return false;
     }
 
-    auto sz        = m_item.Size();
-    m_sourceWidth  = static_cast<uint32_t>(sz.Width);
+    auto sz = m_item.Size();
+    m_sourceWidth = static_cast<uint32_t>(sz.Width);
     m_sourceHeight = static_cast<uint32_t>(sz.Height);
 
     PrintPhasePass(3, "create WGC capture item");
@@ -355,13 +402,13 @@ bool WgcNvencAacMkvProbe::Phase03_CreateCaptureItem() {
 // ---------------------------------------------------------------------------
 
 bool WgcNvencAacMkvProbe::Phase04_ValidateDimensions() {
-    m_encodeWidth  = m_sourceWidth  & ~1u;
+    m_encodeWidth = m_sourceWidth & ~1u;
     m_encodeHeight = m_sourceHeight & ~1u;
 
     if (m_encodeWidth < 2 || m_encodeHeight < 2) {
         char buf[96];
-        snprintf(buf, sizeof(buf), "source %ux%u rounds to %ux%u — too small for NV12",
-                 m_sourceWidth, m_sourceHeight, m_encodeWidth, m_encodeHeight);
+        snprintf(buf, sizeof(buf), "source %ux%u rounds to %ux%u — too small for NV12", m_sourceWidth, m_sourceHeight,
+                 m_encodeWidth, m_encodeHeight);
         PrintPhaseFail(4, "validate source dimensions", buf);
         return false;
     }
@@ -388,15 +435,13 @@ bool WgcNvencAacMkvProbe::Phase05_LoadNvencDll() {
     }
 
     using PFN = NVENCSTATUS(NVENCAPI*)(NV_ENCODE_API_FUNCTION_LIST*);
-    auto pCreate = reinterpret_cast<PFN>(
-        GetProcAddress(m_nvencDll, "NvEncodeAPICreateInstance"));
+    auto pCreate = reinterpret_cast<PFN>(GetProcAddress(m_nvencDll, "NvEncodeAPICreateInstance"));
     if (pCreate == nullptr) {
-        PrintPhaseFail(5, "load NVENC DLL + open encode session",
-                       "NvEncodeAPICreateInstance not exported");
+        PrintPhaseFail(5, "load NVENC DLL + open encode session", "NvEncodeAPICreateInstance not exported");
         return false;
     }
 
-    m_nvencFuncs         = {};
+    m_nvencFuncs = {};
     m_nvencFuncs.version = NV_ENCODE_API_FUNCTION_LIST_VER;
     NVENCSTATUS st = pCreate(&m_nvencFuncs);
     if (st != NV_ENC_SUCCESS) {
@@ -405,9 +450,9 @@ bool WgcNvencAacMkvProbe::Phase05_LoadNvencDll() {
     }
 
     NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS params{};
-    params.version    = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
+    params.version = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
     params.deviceType = NV_ENC_DEVICE_TYPE_DIRECTX;
-    params.device     = m_d3dDevice.get();
+    params.device = m_d3dDevice.get();
     params.apiVersion = NVENCAPI_VERSION;
 
     st = m_nvencFuncs.nvEncOpenEncodeSessionEx(&params, &m_encoder);
@@ -419,8 +464,7 @@ bool WgcNvencAacMkvProbe::Phase05_LoadNvencDll() {
     PrintPhasePass(5, "load NVENC DLL + open encode session");
     char detail[80];
     snprintf(detail, sizeof(detail), "NVENCAPI_VERSION major=%u minor=%u",
-             static_cast<unsigned>(NVENCAPI_MAJOR_VERSION),
-             static_cast<unsigned>(NVENCAPI_MINOR_VERSION));
+             static_cast<unsigned>(NVENCAPI_MAJOR_VERSION), static_cast<unsigned>(NVENCAPI_MINOR_VERSION));
     PrintDetail(detail);
     return true;
 }
@@ -445,7 +489,10 @@ bool WgcNvencAacMkvProbe::Phase06_QueryAv1Support() {
     }
     bool av1Found = false;
     for (uint32_t i = 0; i < got; ++i) {
-        if (IsEqualGUID(guids[i], NV_ENC_CODEC_AV1_GUID) != 0) { av1Found = true; break; }
+        if (IsEqualGUID(guids[i], NV_ENC_CODEC_AV1_GUID) != 0) {
+            av1Found = true;
+            break;
+        }
     }
     if (!av1Found) {
         PrintPhaseFail(6, "AV1 GUID + NV12 format support",
@@ -460,19 +507,20 @@ bool WgcNvencAacMkvProbe::Phase06_QueryAv1Support() {
         return false;
     }
     std::vector<NV_ENC_BUFFER_FORMAT> fmts(count);
-    st = m_nvencFuncs.nvEncGetInputFormats(m_encoder, NV_ENC_CODEC_AV1_GUID,
-                                            fmts.data(), count, &got);
+    st = m_nvencFuncs.nvEncGetInputFormats(m_encoder, NV_ENC_CODEC_AV1_GUID, fmts.data(), count, &got);
     if (st != NV_ENC_SUCCESS) {
         PrintPhaseFail(6, "AV1 GUID + NV12 format support", NvencStatusName(st));
         return false;
     }
     bool nv12Found = false;
     for (uint32_t i = 0; i < got; ++i) {
-        if (fmts[i] == NV_ENC_BUFFER_FORMAT_NV12) { nv12Found = true; break; }
+        if (fmts[i] == NV_ENC_BUFFER_FORMAT_NV12) {
+            nv12Found = true;
+            break;
+        }
     }
     if (!nv12Found) {
-        PrintPhaseFail(6, "AV1 GUID + NV12 format support",
-                       "NV_ENC_BUFFER_FORMAT_NV12 not in AV1 input formats");
+        PrintPhaseFail(6, "AV1 GUID + NV12 format support", "NV_ENC_BUFFER_FORMAT_NV12 not in AV1 input formats");
         return false;
     }
 
@@ -485,12 +533,12 @@ bool WgcNvencAacMkvProbe::Phase06_QueryAv1Support() {
 // ---------------------------------------------------------------------------
 
 bool WgcNvencAacMkvProbe::Phase07_FetchPresetConfig() {
-    m_presetConfig                   = {};
-    m_presetConfig.version           = NV_ENC_PRESET_CONFIG_VER;
+    m_presetConfig = {};
+    m_presetConfig.version = NV_ENC_PRESET_CONFIG_VER;
     m_presetConfig.presetCfg.version = NV_ENC_CONFIG_VER;
 
-    NVENCSTATUS st = m_nvencFuncs.nvEncGetEncodePresetConfigEx(
-        m_encoder, NV_ENC_CODEC_AV1_GUID, m_presetGuid, m_tuningInfo, &m_presetConfig);
+    NVENCSTATUS st = m_nvencFuncs.nvEncGetEncodePresetConfigEx(m_encoder, NV_ENC_CODEC_AV1_GUID, m_presetGuid,
+                                                               m_tuningInfo, &m_presetConfig);
     if (st != NV_ENC_SUCCESS) {
         PrintPhaseFail(7, "fetch AV1 preset config", NvencStatusName(st));
         return false;
@@ -512,20 +560,20 @@ bool WgcNvencAacMkvProbe::Phase07_FetchPresetConfig() {
 
 bool WgcNvencAacMkvProbe::Phase08_InitAv1Encoder() {
     NV_ENC_INITIALIZE_PARAMS p{};
-    p.version         = NV_ENC_INITIALIZE_PARAMS_VER;
-    p.encodeGUID      = NV_ENC_CODEC_AV1_GUID;
-    p.presetGUID      = m_presetGuid;
-    p.tuningInfo      = m_tuningInfo;
-    p.encodeWidth     = m_encodeWidth;
-    p.encodeHeight    = m_encodeHeight;
-    p.darWidth        = m_encodeWidth;
-    p.darHeight       = m_encodeHeight;
-    p.maxEncodeWidth  = m_encodeWidth;
+    p.version = NV_ENC_INITIALIZE_PARAMS_VER;
+    p.encodeGUID = NV_ENC_CODEC_AV1_GUID;
+    p.presetGUID = m_presetGuid;
+    p.tuningInfo = m_tuningInfo;
+    p.encodeWidth = m_encodeWidth;
+    p.encodeHeight = m_encodeHeight;
+    p.darWidth = m_encodeWidth;
+    p.darHeight = m_encodeHeight;
+    p.maxEncodeWidth = m_encodeWidth;
     p.maxEncodeHeight = m_encodeHeight;
-    p.frameRateNum    = m_frameRateNum;
-    p.frameRateDen    = m_frameRateDen;
-    p.enablePTD       = 1;
-    p.encodeConfig    = &m_encodeConfig;
+    p.frameRateNum = m_frameRateNum;
+    p.frameRateDen = m_frameRateDen;
+    p.enablePTD = 1;
+    p.encodeConfig = &m_encodeConfig;
 
     NVENCSTATUS st = m_nvencFuncs.nvEncInitializeEncoder(m_encoder, &p);
     if (st != NV_ENC_SUCCESS) {
@@ -535,8 +583,8 @@ bool WgcNvencAacMkvProbe::Phase08_InitAv1Encoder() {
 
     PrintPhasePass(8, "init AV1 encoder");
     char detail[128];
-    snprintf(detail, sizeof(detail), "%ux%u @ %u/%u fps, AV1, preset P4, enablePTD=1",
-             m_encodeWidth, m_encodeHeight, m_frameRateNum, m_frameRateDen);
+    snprintf(detail, sizeof(detail), "%ux%u @ %u/%u fps, AV1, preset P4, enablePTD=1", m_encodeWidth, m_encodeHeight,
+             m_frameRateNum, m_frameRateDen);
     PrintDetail(detail);
     return true;
 }
@@ -563,16 +611,16 @@ bool WgcNvencAacMkvProbe::Phase09_BitstreamNv12VideoProcessorRegister() {
     // --- NV12 texture ---
     {
         D3D11_TEXTURE2D_DESC desc{};
-        desc.Width          = m_encodeWidth;
-        desc.Height         = m_encodeHeight;
-        desc.MipLevels      = 1;
-        desc.ArraySize      = 1;
-        desc.Format         = DXGI_FORMAT_NV12;
-        desc.SampleDesc     = { 1, 0 };
-        desc.Usage          = D3D11_USAGE_DEFAULT;
-        desc.BindFlags      = D3D11_BIND_RENDER_TARGET;
+        desc.Width = m_encodeWidth;
+        desc.Height = m_encodeHeight;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_NV12;
+        desc.SampleDesc = {1, 0};
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_RENDER_TARGET;
         desc.CPUAccessFlags = 0;
-        desc.MiscFlags      = 0;
+        desc.MiscFlags = 0;
 
         HRESULT hr = m_d3dDevice->CreateTexture2D(&desc, nullptr, m_nv12Texture.put());
         if (FAILED(hr) || m_nv12Texture == nullptr) {
@@ -587,11 +635,11 @@ bool WgcNvencAacMkvProbe::Phase09_BitstreamNv12VideoProcessorRegister() {
     {
         D3D11_VIDEO_PROCESSOR_CONTENT_DESC contentDesc{};
         contentDesc.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
-        contentDesc.InputWidth       = m_encodeWidth;
-        contentDesc.InputHeight      = m_encodeHeight;
-        contentDesc.OutputWidth      = m_encodeWidth;
-        contentDesc.OutputHeight     = m_encodeHeight;
-        contentDesc.Usage            = D3D11_VIDEO_USAGE_OPTIMAL_SPEED;
+        contentDesc.InputWidth = m_encodeWidth;
+        contentDesc.InputHeight = m_encodeHeight;
+        contentDesc.OutputWidth = m_encodeWidth;
+        contentDesc.OutputHeight = m_encodeHeight;
+        contentDesc.Usage = D3D11_VIDEO_USAGE_OPTIMAL_SPEED;
 
         HRESULT hr = m_videoDevice->CreateVideoProcessorEnumerator(&contentDesc, m_videoEnum.put());
         if (FAILED(hr) || m_videoEnum == nullptr) {
@@ -610,11 +658,11 @@ bool WgcNvencAacMkvProbe::Phase09_BitstreamNv12VideoProcessorRegister() {
         }
 
         D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC ovDesc{};
-        ovDesc.ViewDimension      = D3D11_VPOV_DIMENSION_TEXTURE2D;
+        ovDesc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
         ovDesc.Texture2D.MipSlice = 0;
 
-        hr = m_videoDevice->CreateVideoProcessorOutputView(
-            m_nv12Texture.get(), m_videoEnum.get(), &ovDesc, m_videoOutputView.put());
+        hr = m_videoDevice->CreateVideoProcessorOutputView(m_nv12Texture.get(), m_videoEnum.get(), &ovDesc,
+                                                           m_videoOutputView.put());
         if (FAILED(hr) || m_videoOutputView == nullptr) {
             char buf[80];
             snprintf(buf, sizeof(buf), "CreateVideoProcessorOutputView failed 0x%08lX", static_cast<unsigned long>(hr));
@@ -626,15 +674,15 @@ bool WgcNvencAacMkvProbe::Phase09_BitstreamNv12VideoProcessorRegister() {
     // --- Register NV12 with NVENC ---
     {
         NV_ENC_REGISTER_RESOURCE reg{};
-        reg.version            = NV_ENC_REGISTER_RESOURCE_VER;
-        reg.resourceType       = NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
-        reg.width              = m_encodeWidth;
-        reg.height             = m_encodeHeight;
-        reg.pitch              = 0;
-        reg.subResourceIndex   = 0;
+        reg.version = NV_ENC_REGISTER_RESOURCE_VER;
+        reg.resourceType = NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
+        reg.width = m_encodeWidth;
+        reg.height = m_encodeHeight;
+        reg.pitch = 0;
+        reg.subResourceIndex = 0;
         reg.resourceToRegister = m_nv12Texture.get();
-        reg.bufferFormat       = NV_ENC_BUFFER_FORMAT_NV12;
-        reg.bufferUsage        = NV_ENC_INPUT_IMAGE;
+        reg.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
+        reg.bufferUsage = NV_ENC_INPUT_IMAGE;
 
         NVENCSTATUS st = m_nvencFuncs.nvEncRegisterResource(m_encoder, &reg);
         if (st != NV_ENC_SUCCESS) {
@@ -660,49 +708,48 @@ bool WgcNvencAacMkvProbe::Phase09_BitstreamNv12VideoProcessorRegister() {
 // Phase 10 — AAC encoder (payload type 0 = raw, NOT ADTS)
 // ---------------------------------------------------------------------------
 
-static HRESULT BuildAudioMediaType(
-    const GUID& subtype,
-    UINT32 sampleRate, UINT32 channels, UINT32 bitsPerSample,
-    IMFMediaType** ppType)
-{
+static HRESULT BuildAudioMediaType(const GUID& subtype, UINT32 sampleRate, UINT32 channels, UINT32 bitsPerSample,
+                                   IMFMediaType** ppType) {
     *ppType = nullptr;
     IMFMediaType* pType = nullptr;
     HRESULT hr = MFCreateMediaType(&pType);
-    if (FAILED(hr)) return hr;
+    if (FAILED(hr))
+        return hr;
 
-    UINT32 blockAlign     = channels * (bitsPerSample / 8);
+    UINT32 blockAlign = channels * (bitsPerSample / 8);
     UINT32 avgBytesPerSec = sampleRate * blockAlign;
-    UINT32 channelMask    = 0x3; // SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT
+    UINT32 channelMask = 0x3; // SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT
 
     bool ok = true;
-    ok = ok && SUCCEEDED(pType->SetGUID  (MF_MT_MAJOR_TYPE,               MFMediaType_Audio));
-    ok = ok && SUCCEEDED(pType->SetGUID  (MF_MT_SUBTYPE,                  subtype));
-    ok = ok && SUCCEEDED(pType->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS,       channels));
+    ok = ok && SUCCEEDED(pType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio));
+    ok = ok && SUCCEEDED(pType->SetGUID(MF_MT_SUBTYPE, subtype));
+    ok = ok && SUCCEEDED(pType->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, channels));
     ok = ok && SUCCEEDED(pType->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, sampleRate));
-    ok = ok && SUCCEEDED(pType->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE,    bitsPerSample));
-    ok = ok && SUCCEEDED(pType->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT,    blockAlign));
+    ok = ok && SUCCEEDED(pType->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, bitsPerSample));
+    ok = ok && SUCCEEDED(pType->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, blockAlign));
     ok = ok && SUCCEEDED(pType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, avgBytesPerSec));
-    ok = ok && SUCCEEDED(pType->SetUINT32(MF_MT_AUDIO_CHANNEL_MASK,       channelMask));
+    ok = ok && SUCCEEDED(pType->SetUINT32(MF_MT_AUDIO_CHANNEL_MASK, channelMask));
 
-    if (!ok) { pType->Release(); return E_FAIL; }
+    if (!ok) {
+        pType->Release();
+        return E_FAIL;
+    }
     *ppType = pType;
     return S_OK;
 }
 
 bool WgcNvencAacMkvProbe::Phase10_InitAacEncoder() {
     constexpr uint32_t kRequiredSampleRate = 48000;
-    constexpr uint32_t kRequiredChannels   = 2;
+    constexpr uint32_t kRequiredChannels = 2;
 
     // Step 1: MFTEnumEx with Float input, AAC output
-    MFT_REGISTER_TYPE_INFO inType  = { MFMediaType_Audio, MFAudioFormat_Float };
-    MFT_REGISTER_TYPE_INFO outType = { MFMediaType_Audio, MFAudioFormat_AAC   };
-    constexpr DWORD kEnumFlags =
-        MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_LOCALMFT | MFT_ENUM_FLAG_SORTANDFILTER;
+    MFT_REGISTER_TYPE_INFO inType = {MFMediaType_Audio, MFAudioFormat_Float};
+    MFT_REGISTER_TYPE_INFO outType = {MFMediaType_Audio, MFAudioFormat_AAC};
+    constexpr DWORD kEnumFlags = MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_LOCALMFT | MFT_ENUM_FLAG_SORTANDFILTER;
 
     IMFActivate** ppActivate = nullptr;
     UINT32 count = 0;
-    HRESULT hr = MFTEnumEx(MFT_CATEGORY_AUDIO_ENCODER, kEnumFlags,
-                            &inType, &outType, &ppActivate, &count);
+    HRESULT hr = MFTEnumEx(MFT_CATEGORY_AUDIO_ENCODER, kEnumFlags, &inType, &outType, &ppActivate, &count);
     if (FAILED(hr)) {
         char buf[80];
         snprintf(buf, sizeof(buf), "MFTEnumEx failed 0x%08lX", static_cast<unsigned long>(hr));
@@ -711,10 +758,12 @@ bool WgcNvencAacMkvProbe::Phase10_InitAacEncoder() {
     }
 
     if (count == 0) {
-        if (ppActivate) { CoTaskMemFree(ppActivate); ppActivate = nullptr; }
+        if (ppActivate) {
+            CoTaskMemFree(ppActivate);
+            ppActivate = nullptr;
+        }
         // Fallback: direct CLSID
-        hr = CoCreateInstance(CLSID_AACMFTEncoder, nullptr, CLSCTX_INPROC_SERVER,
-                              IID_PPV_ARGS(&m_pMFT));
+        hr = CoCreateInstance(CLSID_AACMFTEncoder, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&m_pMFT));
         if (FAILED(hr)) {
             char buf[96];
             snprintf(buf, sizeof(buf), "MFTEnumEx=0 + CoCreateInstance(CLSID_AACMFTEncoder) 0x%08lX",
@@ -725,7 +774,8 @@ bool WgcNvencAacMkvProbe::Phase10_InitAacEncoder() {
         m_usedDirectClsid = true;
     } else {
         m_pActivate = ppActivate[0];
-        for (UINT32 i = 1; i < count; ++i) ppActivate[i]->Release();
+        for (UINT32 i = 1; i < count; ++i)
+            ppActivate[i]->Release();
         CoTaskMemFree(ppActivate);
 
         hr = m_pActivate->ActivateObject(IID_PPV_ARGS(&m_pMFT));
@@ -738,11 +788,15 @@ bool WgcNvencAacMkvProbe::Phase10_InitAacEncoder() {
     }
 
     // Step 2: SetInputType — same negotiation as mf_aac_probe Phase04
-    struct TryEntry { GUID subtype; UINT32 bps; const char* label; };
+    struct TryEntry {
+        GUID subtype;
+        UINT32 bps;
+        const char* label;
+    };
     TryEntry tryList[] = {
-        { MFAudioFormat_PCM,   16, "PCM-16"   },
-        { MFAudioFormat_PCM,   32, "PCM-32"   },
-        { MFAudioFormat_Float, 32, "Float-32" },
+        {MFAudioFormat_PCM, 16, "PCM-16"},
+        {MFAudioFormat_PCM, 32, "PCM-32"},
+        {MFAudioFormat_Float, 32, "Float-32"},
     };
 
     bool inputSet = false;
@@ -753,9 +807,9 @@ bool WgcNvencAacMkvProbe::Phase10_InitAacEncoder() {
         hr = m_pMFT->SetInputType(0, pType, 0);
         pType->Release();
         if (SUCCEEDED(hr)) {
-            m_inputSubtype        = e.subtype;
-            m_inputBitsPerSample  = e.bps;
-            m_inputBlockAlign     = kRequiredChannels * (e.bps / 8);
+            m_inputSubtype = e.subtype;
+            m_inputBitsPerSample = e.bps;
+            m_inputBlockAlign = kRequiredChannels * (e.bps / 8);
             m_inputAvgBytesPerSec = kRequiredSampleRate * m_inputBlockAlign;
             inputSet = true;
             char detail[96];
@@ -779,14 +833,15 @@ bool WgcNvencAacMkvProbe::Phase10_InitAacEncoder() {
         }
 
         bool ok = true;
-        ok = ok && SUCCEEDED(pOutputType->SetGUID  (MF_MT_MAJOR_TYPE,                       MFMediaType_Audio));
-        ok = ok && SUCCEEDED(pOutputType->SetGUID  (MF_MT_SUBTYPE,                           MFAudioFormat_AAC));
-        ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND,          kRequiredSampleRate));
-        ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS,                kRequiredChannels));
-        ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE,             16));
-        ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND,        24000));  // 192 kbps
-        ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE,                  0));      // RAW, not ADTS
-        ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AAC_AUDIO_PROFILE_LEVEL_INDICATION, 0x29));  // AAC-LC stereo 48kHz
+        ok = ok && SUCCEEDED(pOutputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio));
+        ok = ok && SUCCEEDED(pOutputType->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_AAC));
+        ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, kRequiredSampleRate));
+        ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, kRequiredChannels));
+        ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16));
+        ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 24000)); // 192 kbps
+        ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE, 0));               // RAW, not ADTS
+        ok = ok &&
+             SUCCEEDED(pOutputType->SetUINT32(MF_MT_AAC_AUDIO_PROFILE_LEVEL_INDICATION, 0x29)); // AAC-LC stereo 48kHz
 
         if (!ok) {
             pOutputType->Release();
@@ -824,7 +879,7 @@ bool WgcNvencAacMkvProbe::Phase10_InitAacEncoder() {
             return false;
         }
         m_mftProvidesSamples = (si.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES) != 0;
-        m_mftOutBufSize      = (si.cbSize > 0) ? si.cbSize : 8192;
+        m_mftOutBufSize = (si.cbSize > 0) ? si.cbSize : 8192;
     }
 
     // Step 6: Begin streaming
@@ -855,12 +910,11 @@ bool WgcNvencAacMkvProbe::Phase10_InitAacEncoder() {
 
 bool WgcNvencAacMkvProbe::Phase11_InitWasapiLoopback() {
     constexpr uint32_t kRequiredSampleRate = 48000;
-    constexpr uint32_t kRequiredChannels   = 2;
-    constexpr LONGLONG kHnsBuffer          = 2000000LL; // 200 ms
+    constexpr uint32_t kRequiredChannels = 2;
+    constexpr LONGLONG kHnsBuffer = 2000000LL; // 200 ms
 
     IMMDeviceEnumerator* pEnum = nullptr;
-    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
-                                  CLSCTX_ALL, IID_PPV_ARGS(&pEnum));
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&pEnum));
     if (FAILED(hr)) {
         char buf[80];
         snprintf(buf, sizeof(buf), "CoCreateInstance(MMDeviceEnumerator) 0x%08lX", static_cast<unsigned long>(hr));
@@ -888,11 +942,11 @@ bool WgcNvencAacMkvProbe::Phase11_InitWasapiLoopback() {
             PropVariantClear(&var);
             pProps->Release();
         }
-        if (m_endpointName.empty()) m_endpointName = "(unnamed)";
+        if (m_endpointName.empty())
+            m_endpointName = "(unnamed)";
     }
 
-    hr = m_pDevice->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-                              reinterpret_cast<void**>(&m_pAudioClient));
+    hr = m_pDevice->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(&m_pAudioClient));
     if (FAILED(hr)) {
         char buf[80];
         snprintf(buf, sizeof(buf), "Activate(IAudioClient) 0x%08lX", static_cast<unsigned long>(hr));
@@ -911,16 +965,15 @@ bool WgcNvencAacMkvProbe::Phase11_InitWasapiLoopback() {
 
     if (pwfx->nSamplesPerSec != kRequiredSampleRate || pwfx->nChannels != kRequiredChannels) {
         char buf[128];
-        snprintf(buf, sizeof(buf),
-                 "mix format mismatch: %u Hz %u ch (need %u Hz 2 ch)",
-                 pwfx->nSamplesPerSec, pwfx->nChannels, kRequiredSampleRate);
+        snprintf(buf, sizeof(buf), "mix format mismatch: %u Hz %u ch (need %u Hz 2 ch)", pwfx->nSamplesPerSec,
+                 pwfx->nChannels, kRequiredSampleRate);
         CoTaskMemFree(pwfx);
         PrintPhaseFail(11, "init WASAPI loopback", buf);
         return false;
     }
 
-    hr = m_pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
-                                     kHnsBuffer, 0, pwfx, nullptr);
+    hr = m_pAudioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, kHnsBuffer, 0, pwfx,
+                                    nullptr);
     CoTaskMemFree(pwfx);
     if (FAILED(hr)) {
         char buf[80];
@@ -965,25 +1018,19 @@ bool WgcNvencAacMkvProbe::Phase12_EstablishEpochAndStartWgc() {
         winrt::com_ptr<IDXGIDevice> dxgiDev = m_d3dDevice.as<IDXGIDevice>();
         winrt::com_ptr<IInspectable> insp;
         winrt::check_hresult(CreateDirect3D11DeviceFromDXGIDevice(dxgiDev.get(), insp.put()));
-        auto d3dWinRTDev = insp.as<
-            winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
+        auto d3dWinRTDev = insp.as<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
 
         auto sz = m_item.Size();
         m_framePool = winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool::Create(
-            d3dWinRTDev,
-            winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized,
-            3, sz);
+            d3dWinRTDev, winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, sz);
 
         m_session = m_framePool.CreateCaptureSession(m_item);
         m_session.StartCapture();
 
-        m_closedToken = m_item.Closed([this](const auto&, const auto&) {
-            m_sourceLost = true;
-        });
+        m_closedToken = m_item.Closed([this](const auto&, const auto&) { m_sourceLost = true; });
     } catch (const winrt::hresult_error& e) {
         char buf[96];
-        snprintf(buf, sizeof(buf), "WGC frame pool init failed 0x%08X",
-                 static_cast<unsigned int>(e.code().value));
+        snprintf(buf, sizeof(buf), "WGC frame pool init failed 0x%08X", static_cast<unsigned int>(e.code().value));
         PrintPhaseFail(12, "establish epoch + start WGC", buf);
         return false;
     } catch (...) {
@@ -1011,7 +1058,8 @@ bool WgcNvencAacMkvProbe::Phase13_WaitForFirstFrame() {
     while (true) {
         MSG msg{};
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&msg); DispatchMessageW(&msg);
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
         }
 
         if (m_sourceLost) {
@@ -1020,8 +1068,7 @@ bool WgcNvencAacMkvProbe::Phase13_WaitForFirstFrame() {
         }
 
         QueryPerformanceCounter(&tNow);
-        double elapsed = static_cast<double>(tNow.QuadPart - tStart.QuadPart)
-                       / static_cast<double>(m_qpcFreq.QuadPart);
+        double elapsed = static_cast<double>(tNow.QuadPart - tStart.QuadPart) / static_cast<double>(m_qpcFreq.QuadPart);
         if (elapsed > kTimeoutSec) {
             PrintPhaseFail(13, "wait for first WGC frame", "timeout (5 s)");
             return false;
@@ -1029,14 +1076,19 @@ bool WgcNvencAacMkvProbe::Phase13_WaitForFirstFrame() {
 
         try {
             auto frame = m_framePool.TryGetNextFrame();
-            if (frame == nullptr) { Sleep(1); continue; }
+            if (frame == nullptr) {
+                Sleep(1);
+                continue;
+            }
 
             auto surface = frame.Surface();
-            auto access  = surface.as<
-                ::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+            auto access = surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
             winrt::com_ptr<ID3D11Texture2D> tex;
             HRESULT hr = access->GetInterface(IID_PPV_ARGS(tex.put()));
-            if (FAILED(hr) || tex == nullptr) { Sleep(1); continue; }
+            if (FAILED(hr) || tex == nullptr) {
+                Sleep(1);
+                continue;
+            }
 
             D3D11_TEXTURE2D_DESC desc{};
             tex->GetDesc(&desc);
@@ -1050,8 +1102,8 @@ bool WgcNvencAacMkvProbe::Phase13_WaitForFirstFrame() {
             }
             if (desc.Width != m_encodeWidth || desc.Height != m_encodeHeight) {
                 char buf[128];
-                snprintf(buf, sizeof(buf), "first frame %ux%u != encode %ux%u",
-                         desc.Width, desc.Height, m_encodeWidth, m_encodeHeight);
+                snprintf(buf, sizeof(buf), "first frame %ux%u != encode %ux%u", desc.Width, desc.Height, m_encodeWidth,
+                         m_encodeHeight);
                 PrintPhaseFail(13, "wait for first WGC frame", buf);
                 return false;
             }
@@ -1064,8 +1116,7 @@ bool WgcNvencAacMkvProbe::Phase13_WaitForFirstFrame() {
 
         } catch (const winrt::hresult_error& e) {
             char buf[80];
-            snprintf(buf, sizeof(buf), "TryGetNextFrame exception 0x%08X",
-                     static_cast<unsigned int>(e.code().value));
+            snprintf(buf, sizeof(buf), "TryGetNextFrame exception 0x%08X", static_cast<unsigned int>(e.code().value));
             PrintPhaseFail(13, "wait for first WGC frame", buf);
             return false;
         } catch (...) {
@@ -1083,15 +1134,19 @@ void WgcNvencAacMkvProbe::DrainAacOutput() {
     while (true) {
         MFT_OUTPUT_DATA_BUFFER outBuf{};
         outBuf.dwStreamID = 0;
-        outBuf.pSample    = nullptr;
-        outBuf.dwStatus   = 0;
-        outBuf.pEvents    = nullptr;
+        outBuf.pSample = nullptr;
+        outBuf.dwStatus = 0;
+        outBuf.pEvents = nullptr;
 
         if (!m_mftProvidesSamples) {
             IMFMediaBuffer* pMFBuf = nullptr;
-            if (FAILED(MFCreateMemoryBuffer(m_mftOutBufSize, &pMFBuf))) break;
+            if (FAILED(MFCreateMemoryBuffer(m_mftOutBufSize, &pMFBuf)))
+                break;
             IMFSample* pOutSample = nullptr;
-            if (FAILED(MFCreateSample(&pOutSample))) { pMFBuf->Release(); break; }
+            if (FAILED(MFCreateSample(&pOutSample))) {
+                pMFBuf->Release();
+                break;
+            }
             pOutSample->AddBuffer(pMFBuf);
             pMFBuf->Release();
             outBuf.pSample = pOutSample;
@@ -1100,14 +1155,21 @@ void WgcNvencAacMkvProbe::DrainAacOutput() {
         DWORD status = 0;
         HRESULT hr = m_pMFT->ProcessOutput(0, 1, &outBuf, &status);
 
-        if (outBuf.pEvents) { outBuf.pEvents->Release(); outBuf.pEvents = nullptr; }
+        if (outBuf.pEvents) {
+            outBuf.pEvents->Release();
+            outBuf.pEvents = nullptr;
+        }
 
         if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) {
-            if (outBuf.pSample) { outBuf.pSample->Release(); }
+            if (outBuf.pSample) {
+                outBuf.pSample->Release();
+            }
             break;
         }
         if (FAILED(hr)) {
-            if (outBuf.pSample) { outBuf.pSample->Release(); }
+            if (outBuf.pSample) {
+                outBuf.pSample->Release();
+            }
             break;
         }
 
@@ -1124,8 +1186,8 @@ void WgcNvencAacMkvProbe::DrainAacOutput() {
                 for (DWORD b = 0; b < bufCount; ++b) {
                     IMFMediaBuffer* pBuf = nullptr;
                     if (SUCCEEDED(outBuf.pSample->GetBufferByIndex(b, &pBuf))) {
-                        BYTE* pData   = nullptr;
-                        DWORD cbCurr  = 0;
+                        BYTE* pData = nullptr;
+                        DWORD cbCurr = 0;
                         if (SUCCEEDED(pBuf->Lock(&pData, nullptr, &cbCurr)) && cbCurr > 0) {
                             size_t old = pkt.bytes.size();
                             pkt.bytes.resize(old + cbCurr);
@@ -1153,20 +1215,26 @@ void WgcNvencAacMkvProbe::DrainAacOutput() {
 bool WgcNvencAacMkvProbe::Phase14_DualCaptureLoop() {
     constexpr double kDurationSec = 30.0;
     constexpr uint32_t kRequiredSampleRate = 48000;
-    constexpr uint32_t kRequiredChannels   = 2;
+    constexpr uint32_t kRequiredChannels = 2;
 
     LARGE_INTEGER tLoopStart, tNow;
     QueryPerformanceCounter(&tLoopStart);
 
-    int      videoFrameIdx         = 0;
+    int videoFrameIdx = 0;
     uint64_t audioAccumulatedFrames = 0;
 
     while (true) {
         QueryPerformanceCounter(&tNow);
-        double elapsed = static_cast<double>(tNow.QuadPart - tLoopStart.QuadPart)
-                       / static_cast<double>(m_qpcFreq.QuadPart);
-        if (elapsed >= kDurationSec) { m_terminationReason = TerminationReason::TimeLimit; break; }
-        if (m_sourceLost)            { m_terminationReason = TerminationReason::SourceLoss; break; }
+        double elapsed =
+            static_cast<double>(tNow.QuadPart - tLoopStart.QuadPart) / static_cast<double>(m_qpcFreq.QuadPart);
+        if (elapsed >= kDurationSec) {
+            m_terminationReason = TerminationReason::TimeLimit;
+            break;
+        }
+        if (m_sourceLost) {
+            m_terminationReason = TerminationReason::SourceLoss;
+            break;
+        }
 
         bool anyWork = false;
 
@@ -1179,64 +1247,66 @@ bool WgcNvencAacMkvProbe::Phase14_DualCaptureLoop() {
             try {
                 while (true) {
                     auto frame = m_framePool.TryGetNextFrame();
-                    if (frame == nullptr) break;
+                    if (frame == nullptr)
+                        break;
                     m_wgcFramesTotal++;
 
                     auto surface = frame.Surface();
-                    auto access  = surface.as<
-                        ::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+                    auto access = surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
                     winrt::com_ptr<ID3D11Texture2D> tex;
                     if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
-                        latestTex             = tex;
-                        lastWgcFrame          = frame;
+                        latestTex = tex;
+                        lastWgcFrame = frame;
                         // SystemRelativeTime is a std::chrono::duration<int64_t, 100ns>
                         latestFrameTicks100ns = frame.SystemRelativeTime().count();
                     }
                 }
-            } catch (...) {}
+            } catch (...) {
+            }
 
             if (latestTex != nullptr) {
                 // Establish video epoch from the first captured frame's SystemRelativeTime.
                 if (!m_videoEpochSet) {
                     m_videoEpochTicks100ns = latestFrameTicks100ns;
-                    m_videoEpochSet        = true;
+                    m_videoEpochSet = true;
                 }
 
                 // Compute capture-time PTS in nanoseconds relative to video epoch.
                 // SystemRelativeTime ticks are 100 ns units; epoch may be >= frame time
                 // if the system clock wraps (extremely rare), so clamp to 0.
                 int64_t deltaTicks = latestFrameTicks100ns - m_videoEpochTicks100ns;
-                if (deltaTicks < 0) deltaTicks = 0;
+                if (deltaTicks < 0)
+                    deltaTicks = 0;
                 uint64_t framePts_ns = static_cast<uint64_t>(deltaTicks) * 100ULL;
 
                 // Create per-frame input view for the WGC BGRA texture
                 D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
-                ivDesc.FourCC                    = 0;
-                ivDesc.ViewDimension             = D3D11_VPIV_DIMENSION_TEXTURE2D;
-                ivDesc.Texture2D.MipSlice        = 0;
-                ivDesc.Texture2D.ArraySlice      = 0;
+                ivDesc.FourCC = 0;
+                ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+                ivDesc.Texture2D.MipSlice = 0;
+                ivDesc.Texture2D.ArraySlice = 0;
 
                 winrt::com_ptr<ID3D11VideoProcessorInputView> inputView;
-                HRESULT hr = m_videoDevice->CreateVideoProcessorInputView(
-                    latestTex.get(), m_videoEnum.get(), &ivDesc, inputView.put());
+                HRESULT hr = m_videoDevice->CreateVideoProcessorInputView(latestTex.get(), m_videoEnum.get(), &ivDesc,
+                                                                          inputView.put());
 
                 if (SUCCEEDED(hr) && inputView != nullptr) {
                     // GPU BGRA->NV12 via VideoProcessorBlt
                     D3D11_VIDEO_PROCESSOR_STREAM stream{};
-                    stream.Enable        = TRUE;
+                    stream.Enable = TRUE;
                     stream.pInputSurface = inputView.get();
 
-                    hr = m_videoContext->VideoProcessorBlt(
-                        m_videoProcessor.get(), m_videoOutputView.get(), 0, 1, &stream);
+                    hr = m_videoContext->VideoProcessorBlt(m_videoProcessor.get(), m_videoOutputView.get(), 0, 1,
+                                                           &stream);
 
-                    inputView    = nullptr;
-                    latestTex    = nullptr;
+                    inputView = nullptr;
+                    latestTex = nullptr;
                     lastWgcFrame = nullptr;
 
                     if (SUCCEEDED(hr)) {
                         // Map NVENC resource
                         NV_ENC_MAP_INPUT_RESOURCE mapRes{};
-                        mapRes.version            = NV_ENC_MAP_INPUT_RESOURCE_VER;
+                        mapRes.version = NV_ENC_MAP_INPUT_RESOURCE_VER;
                         mapRes.registeredResource = m_registeredResource;
 
                         NVENCSTATUS nvSt = m_nvencFuncs.nvEncMapInputResource(m_encoder, &mapRes);
@@ -1248,19 +1318,19 @@ bool WgcNvencAacMkvProbe::Phase14_DualCaptureLoop() {
                             m_pendingVideoPts.push(framePts_ns);
 
                             NV_ENC_PIC_PARAMS pic{};
-                            pic.version         = NV_ENC_PIC_PARAMS_VER;
-                            pic.inputWidth      = m_encodeWidth;
-                            pic.inputHeight     = m_encodeHeight;
-                            pic.inputPitch      = 0;
-                            pic.inputBuffer     = mapRes.mappedResource;
+                            pic.version = NV_ENC_PIC_PARAMS_VER;
+                            pic.inputWidth = m_encodeWidth;
+                            pic.inputHeight = m_encodeHeight;
+                            pic.inputPitch = 0;
+                            pic.inputBuffer = mapRes.mappedResource;
                             pic.outputBitstream = m_bitstreamBuffer;
-                            pic.bufferFmt       = mapRes.mappedBufferFmt;
-                            pic.pictureStruct   = NV_ENC_PIC_STRUCT_FRAME;
-                            pic.encodePicFlags  = 0;
+                            pic.bufferFmt = mapRes.mappedBufferFmt;
+                            pic.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
+                            pic.encodePicFlags = 0;
                             // Use the frame index as the opaque inputTimeStamp for
                             // NVENC's internal ordering; actual PTS assignment comes
                             // from m_pendingVideoPts below.
-                            pic.inputTimeStamp  = static_cast<uint64_t>(videoFrameIdx);
+                            pic.inputTimeStamp = static_cast<uint64_t>(videoFrameIdx);
 
                             nvSt = m_nvencFuncs.nvEncEncodePicture(m_encoder, &pic);
 
@@ -1268,9 +1338,9 @@ bool WgcNvencAacMkvProbe::Phase14_DualCaptureLoop() {
                                 m_capturedVideoFrames++;
 
                                 NV_ENC_LOCK_BITSTREAM lockBS{};
-                                lockBS.version         = NV_ENC_LOCK_BITSTREAM_VER;
+                                lockBS.version = NV_ENC_LOCK_BITSTREAM_VER;
                                 lockBS.outputBitstream = m_bitstreamBuffer;
-                                lockBS.doNotWait       = 0;
+                                lockBS.doNotWait = 0;
 
                                 nvSt = m_nvencFuncs.nvEncLockBitstream(m_encoder, &lockBS);
                                 if (nvSt == NV_ENC_SUCCESS) {
@@ -1283,16 +1353,15 @@ bool WgcNvencAacMkvProbe::Phase14_DualCaptureLoop() {
                                         m_pendingVideoPts.pop();
                                     }
 
-                                    bool isKey = (lockBS.pictureType == NV_ENC_PIC_TYPE_IDR
-                                               || lockBS.pictureType == NV_ENC_PIC_TYPE_I);
+                                    bool isKey = (lockBS.pictureType == NV_ENC_PIC_TYPE_IDR ||
+                                                  lockBS.pictureType == NV_ENC_PIC_TYPE_I);
 
                                     VideoPacket vp;
                                     vp.timestamp_ns = ts_ns;
-                                    vp.is_keyframe  = isKey;
-                                    vp.bytes.assign(
-                                        static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr),
-                                        static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr)
-                                            + lockBS.bitstreamSizeInBytes);
+                                    vp.is_keyframe = isKey;
+                                    vp.bytes.assign(static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr),
+                                                    static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr) +
+                                                        lockBS.bitstreamSizeInBytes);
                                     m_totalVideoBytes += lockBS.bitstreamSizeInBytes;
                                     m_videoPackets.push_back(std::move(vp));
 
@@ -1316,11 +1385,11 @@ bool WgcNvencAacMkvProbe::Phase14_DualCaptureLoop() {
                         }
                     } else {
                         // VideoProcessorBlt failed — release kept alive refs
-                        latestTex    = nullptr;
+                        latestTex = nullptr;
                         lastWgcFrame = nullptr;
                     }
                 } else {
-                    latestTex    = nullptr;
+                    latestTex = nullptr;
                     lastWgcFrame = nullptr;
                 }
 
@@ -1333,19 +1402,17 @@ bool WgcNvencAacMkvProbe::Phase14_DualCaptureLoop() {
         {
             UINT32 numFrames = 0;
             while (SUCCEEDED(m_pCaptureClient->GetNextPacketSize(&numFrames)) && numFrames > 0) {
-                BYTE*  pData        = nullptr;
-                DWORD  captureFlags = 0;
-                if (FAILED(m_pCaptureClient->GetBuffer(&pData, &numFrames, &captureFlags,
-                                                        nullptr, nullptr)))
+                BYTE* pData = nullptr;
+                DWORD captureFlags = 0;
+                if (FAILED(m_pCaptureClient->GetBuffer(&pData, &numFrames, &captureFlags, nullptr, nullptr)))
                     break;
 
                 // Sample-count-derived PTS
                 uint64_t audio_ts_ns = audioAccumulatedFrames * 1000000000ULL / kRequiredSampleRate;
-                LONGLONG sampleDuration = static_cast<LONGLONG>(numFrames) * 10000000LL
-                                          / static_cast<LONGLONG>(kRequiredSampleRate);
+                LONGLONG sampleDuration =
+                    static_cast<LONGLONG>(numFrames) * 10000000LL / static_cast<LONGLONG>(kRequiredSampleRate);
 
-                const bool needPcm16 = (m_inputSubtype == MFAudioFormat_PCM
-                                        && m_inputBitsPerSample == 16);
+                const bool needPcm16 = (m_inputSubtype == MFAudioFormat_PCM && m_inputBitsPerSample == 16);
                 UINT32 dataBytes = numFrames * m_inputBlockAlign;
 
                 IMFMediaBuffer* pMFBuf = nullptr;
@@ -1361,10 +1428,8 @@ bool WgcNvencAacMkvProbe::Phase14_DualCaptureLoop() {
                 if (captureFlags & AUDCLNT_BUFFERFLAGS_SILENT) {
                     std::memset(pDst, 0, dataBytes);
                 } else if (needPcm16) {
-                    ConvertFloat32ToPcm16(
-                        reinterpret_cast<const float*>(pData),
-                        reinterpret_cast<int16_t*>(pDst),
-                        static_cast<size_t>(numFrames) * kRequiredChannels);
+                    ConvertFloat32ToPcm16(reinterpret_cast<const float*>(pData), reinterpret_cast<int16_t*>(pDst),
+                                          static_cast<size_t>(numFrames) * kRequiredChannels);
                 } else {
                     std::memcpy(pDst, pData, dataBytes);
                 }
@@ -1376,7 +1441,10 @@ bool WgcNvencAacMkvProbe::Phase14_DualCaptureLoop() {
 
                 IMFSample* pSample = nullptr;
                 hr = MFCreateSample(&pSample);
-                if (FAILED(hr)) { pMFBuf->Release(); continue; }
+                if (FAILED(hr)) {
+                    pMFBuf->Release();
+                    continue;
+                }
 
                 pSample->AddBuffer(pMFBuf);
                 pMFBuf->Release();
@@ -1399,20 +1467,20 @@ bool WgcNvencAacMkvProbe::Phase14_DualCaptureLoop() {
             }
         } // audio block
 
-        if (!anyWork) Sleep(1);
+        if (!anyWork)
+            Sleep(1);
     } // main loop
 
     QueryPerformanceCounter(&tNow);
-    m_elapsedSeconds = static_cast<double>(tNow.QuadPart - tLoopStart.QuadPart)
-                     / static_cast<double>(m_qpcFreq.QuadPart);
+    m_elapsedSeconds =
+        static_cast<double>(tNow.QuadPart - tLoopStart.QuadPart) / static_cast<double>(m_qpcFreq.QuadPart);
 
     PrintPhasePass(14, "30-second dual capture/encode loop");
     char detail[128];
-    snprintf(detail, sizeof(detail), "video frames encoded: %d, audio packets: %zu",
-             m_capturedVideoFrames, m_audioPackets.size());
+    snprintf(detail, sizeof(detail), "video frames encoded: %d, audio packets: %zu", m_capturedVideoFrames,
+             m_audioPackets.size());
     PrintDetail(detail);
-    snprintf(detail, sizeof(detail), "elapsed: %.2f s, termination: %s",
-             m_elapsedSeconds,
+    snprintf(detail, sizeof(detail), "elapsed: %.2f s, termination: %s", m_elapsedSeconds,
              m_terminationReason == TerminationReason::SourceLoss ? "source loss" : "time limit");
     PrintDetail(detail);
     return true;
@@ -1424,7 +1492,7 @@ bool WgcNvencAacMkvProbe::Phase14_DualCaptureLoop() {
 
 bool WgcNvencAacMkvProbe::Phase15_DrainAv1Encoder() {
     NV_ENC_PIC_PARAMS eos{};
-    eos.version        = NV_ENC_PIC_PARAMS_VER;
+    eos.version = NV_ENC_PIC_PARAMS_VER;
     eos.encodePicFlags = NV_ENC_PIC_FLAG_EOS;
 
     NVENCSTATUS st = m_nvencFuncs.nvEncEncodePicture(m_encoder, &eos);
@@ -1447,9 +1515,9 @@ bool WgcNvencAacMkvProbe::Phase15_DrainAv1Encoder() {
         }
 
         NV_ENC_LOCK_BITSTREAM lockBS{};
-        lockBS.version         = NV_ENC_LOCK_BITSTREAM_VER;
+        lockBS.version = NV_ENC_LOCK_BITSTREAM_VER;
         lockBS.outputBitstream = m_bitstreamBuffer;
-        lockBS.doNotWait       = 0;
+        lockBS.doNotWait = 0;
 
         st = m_nvencFuncs.nvEncLockBitstream(m_encoder, &lockBS);
         if (st != NV_ENC_SUCCESS) {
@@ -1463,15 +1531,13 @@ bool WgcNvencAacMkvProbe::Phase15_DrainAv1Encoder() {
         uint64_t ts_ns = m_pendingVideoPts.front();
         m_pendingVideoPts.pop();
 
-        bool isKey = (lockBS.pictureType == NV_ENC_PIC_TYPE_IDR
-                   || lockBS.pictureType == NV_ENC_PIC_TYPE_I);
+        bool isKey = (lockBS.pictureType == NV_ENC_PIC_TYPE_IDR || lockBS.pictureType == NV_ENC_PIC_TYPE_I);
 
         VideoPacket vp;
         vp.timestamp_ns = ts_ns;
-        vp.is_keyframe  = isKey;
-        vp.bytes.assign(
-            static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr),
-            static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr) + lockBS.bitstreamSizeInBytes);
+        vp.is_keyframe = isKey;
+        vp.bytes.assign(static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr),
+                        static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr) + lockBS.bitstreamSizeInBytes);
         m_totalVideoBytes += lockBS.bitstreamSizeInBytes;
         m_videoPackets.push_back(std::move(vp));
 
@@ -1481,8 +1547,7 @@ bool WgcNvencAacMkvProbe::Phase15_DrainAv1Encoder() {
 
     PrintPhasePass(15, "drain AV1 encoder");
     char detail[80];
-    snprintf(detail, sizeof(detail), "drained %d buffered frames (needMoreInput=%d)",
-             drained, m_needMoreInputCount);
+    snprintf(detail, sizeof(detail), "drained %d buffered frames (needMoreInput=%d)", drained, m_needMoreInputCount);
     PrintDetail(detail);
     return true;
 }
@@ -1533,13 +1598,14 @@ bool WgcNvencAacMkvProbe::Phase17_UnregisterNvencResource() {
 namespace {
 
 struct BitReader {
-    const uint8_t* data       = nullptr;
-    size_t         total_bits = 0;
-    size_t         pos        = 0;
-    bool           overflow   = false;
+    const uint8_t* data = nullptr;
+    size_t total_bits = 0;
+    size_t pos = 0;
+    bool overflow = false;
 
     uint32_t f(int n) {
-        if (n <= 0) return 0;
+        if (n <= 0)
+            return 0;
         if (pos + static_cast<size_t>(n) > total_bits) {
             overflow = true;
             return 0;
@@ -1547,7 +1613,7 @@ struct BitReader {
         uint32_t val = 0;
         for (int i = 0; i < n; ++i) {
             size_t byte_idx = pos / 8;
-            size_t bit_idx  = 7 - (pos % 8);
+            size_t bit_idx = 7 - (pos % 8);
             val = (val << 1) | ((data[byte_idx] >> bit_idx) & 1);
             ++pos;
         }
@@ -1559,77 +1625,96 @@ struct BitReader {
         int leadingZeros = 0;
         while (true) {
             uint32_t bit = f(1);
-            if (overflow) return 0;
-            if (bit == 1) break;
+            if (overflow)
+                return 0;
+            if (bit == 1)
+                break;
             ++leadingZeros;
-            if (leadingZeros >= 32) { overflow = true; return 0; }
+            if (leadingZeros >= 32) {
+                overflow = true;
+                return 0;
+            }
         }
-        if (leadingZeros == 0) return 0;
+        if (leadingZeros == 0)
+            return 0;
         uint32_t value = f(leadingZeros);
-        if (overflow) return 0;
+        if (overflow)
+            return 0;
         return value + (1u << leadingZeros) - 1;
     }
 };
 
 // Returns false on failure (sets *reason to a short diagnostic)
-bool ParseSequenceHeaderObu(
-    const uint8_t* obu_payload, size_t obu_size,
-    uint32_t* out_seq_profile,
-    uint32_t* out_seq_level_idx_0,
-    uint32_t* out_seq_tier_0,
-    uint32_t* out_high_bitdepth,
-    uint32_t* out_twelve_bit,
-    uint32_t* out_mono_chrome,
-    uint32_t* out_subsampling_x,
-    uint32_t* out_subsampling_y,
-    uint32_t* out_chroma_sample_position,
-    char*     reason, size_t reason_size)
-{
+bool ParseSequenceHeaderObu(const uint8_t* obu_payload, size_t obu_size, uint32_t* out_seq_profile,
+                            uint32_t* out_seq_level_idx_0, uint32_t* out_seq_tier_0, uint32_t* out_high_bitdepth,
+                            uint32_t* out_twelve_bit, uint32_t* out_mono_chrome, uint32_t* out_subsampling_x,
+                            uint32_t* out_subsampling_y, uint32_t* out_chroma_sample_position, char* reason,
+                            size_t reason_size) {
     BitReader br;
-    br.data       = obu_payload;
+    br.data = obu_payload;
     br.total_bits = obu_size * 8;
-    br.pos        = 0;
-    br.overflow   = false;
+    br.pos = 0;
+    br.overflow = false;
 
-#define CHECK_OVERFLOW(ctx) \
-    if (br.overflow) { snprintf(reason, reason_size, "BitReader overflow at " ctx); return false; }
+#define CHECK_OVERFLOW(ctx)                                                                                            \
+    if (br.overflow) {                                                                                                 \
+        snprintf(reason, reason_size, "BitReader overflow at " ctx);                                                   \
+        return false;                                                                                                  \
+    }
 
-    uint32_t seq_profile = br.f(3); CHECK_OVERFLOW("seq_profile");
-    uint32_t still_picture = br.f(1); (void)still_picture; CHECK_OVERFLOW("still_picture");
-    uint32_t reduced_still_picture_header = br.f(1); CHECK_OVERFLOW("reduced_still_picture_header");
+    uint32_t seq_profile = br.f(3);
+    CHECK_OVERFLOW("seq_profile");
+    uint32_t still_picture = br.f(1);
+    (void)still_picture;
+    CHECK_OVERFLOW("still_picture");
+    uint32_t reduced_still_picture_header = br.f(1);
+    CHECK_OVERFLOW("reduced_still_picture_header");
 
     if (reduced_still_picture_header) {
         snprintf(reason, reason_size, "reduced_still_picture_header=1 — cannot derive full color config");
         return false;
     }
 
-    uint32_t timing_info_present_flag = br.f(1); CHECK_OVERFLOW("timing_info_present_flag");
+    uint32_t timing_info_present_flag = br.f(1);
+    CHECK_OVERFLOW("timing_info_present_flag");
     uint32_t decoder_model_info_present_flag = 0;
 
     if (timing_info_present_flag) {
-        br.f(32); CHECK_OVERFLOW("num_units_in_display_tick");
-        br.f(32); CHECK_OVERFLOW("time_scale");
-        uint32_t equal_picture_interval = br.f(1); CHECK_OVERFLOW("equal_picture_interval");
-        if (equal_picture_interval) { br.uvlc(); CHECK_OVERFLOW("num_ticks_per_picture_minus_1"); }
+        br.f(32);
+        CHECK_OVERFLOW("num_units_in_display_tick");
+        br.f(32);
+        CHECK_OVERFLOW("time_scale");
+        uint32_t equal_picture_interval = br.f(1);
+        CHECK_OVERFLOW("equal_picture_interval");
+        if (equal_picture_interval) {
+            br.uvlc();
+            CHECK_OVERFLOW("num_ticks_per_picture_minus_1");
+        }
 
-        decoder_model_info_present_flag = br.f(1); CHECK_OVERFLOW("decoder_model_info_present_flag");
+        decoder_model_info_present_flag = br.f(1);
+        CHECK_OVERFLOW("decoder_model_info_present_flag");
         if (decoder_model_info_present_flag) {
             snprintf(reason, reason_size, "decoder_model_info_present_flag=1 — too complex to skip");
             return false;
         }
     }
 
-    uint32_t initial_display_delay_present_flag = br.f(1); CHECK_OVERFLOW("initial_display_delay_present_flag");
-    uint32_t operating_points_cnt_minus_1       = br.f(5); CHECK_OVERFLOW("operating_points_cnt_minus_1");
+    uint32_t initial_display_delay_present_flag = br.f(1);
+    CHECK_OVERFLOW("initial_display_delay_present_flag");
+    uint32_t operating_points_cnt_minus_1 = br.f(5);
+    CHECK_OVERFLOW("operating_points_cnt_minus_1");
 
     uint32_t seq_level_idx[32] = {};
-    uint32_t seq_tier[32]      = {};
+    uint32_t seq_tier[32] = {};
 
     for (uint32_t i = 0; i <= operating_points_cnt_minus_1; ++i) {
-        br.f(12); CHECK_OVERFLOW("operating_point_idc"); // operating_point_idc
-        seq_level_idx[i] = br.f(5); CHECK_OVERFLOW("seq_level_idx");
+        br.f(12);
+        CHECK_OVERFLOW("operating_point_idc"); // operating_point_idc
+        seq_level_idx[i] = br.f(5);
+        CHECK_OVERFLOW("seq_level_idx");
         if (seq_level_idx[i] >= 4) {
-            seq_tier[i] = br.f(1); CHECK_OVERFLOW("seq_tier");
+            seq_tier[i] = br.f(1);
+            CHECK_OVERFLOW("seq_tier");
         } else {
             seq_tier[i] = 0;
         }
@@ -1638,91 +1723,127 @@ bool ParseSequenceHeaderObu(
             return false;
         }
         if (initial_display_delay_present_flag) {
-            uint32_t delay_present = br.f(1); CHECK_OVERFLOW("initial_display_delay_present_for_this_op");
-            if (delay_present) { br.f(4); CHECK_OVERFLOW("initial_display_delay_minus_1"); }
+            uint32_t delay_present = br.f(1);
+            CHECK_OVERFLOW("initial_display_delay_present_for_this_op");
+            if (delay_present) {
+                br.f(4);
+                CHECK_OVERFLOW("initial_display_delay_minus_1");
+            }
         }
     }
 
     uint32_t seq_level_idx_0 = seq_level_idx[0];
-    uint32_t seq_tier_0      = seq_tier[0];
+    uint32_t seq_tier_0 = seq_tier[0];
 
-    uint32_t frame_width_bits_minus_1  = br.f(4); CHECK_OVERFLOW("frame_width_bits_minus_1");
-    uint32_t frame_height_bits_minus_1 = br.f(4); CHECK_OVERFLOW("frame_height_bits_minus_1");
-    br.f(frame_width_bits_minus_1  + 1); CHECK_OVERFLOW("max_frame_width_minus_1");
-    br.f(frame_height_bits_minus_1 + 1); CHECK_OVERFLOW("max_frame_height_minus_1");
+    uint32_t frame_width_bits_minus_1 = br.f(4);
+    CHECK_OVERFLOW("frame_width_bits_minus_1");
+    uint32_t frame_height_bits_minus_1 = br.f(4);
+    CHECK_OVERFLOW("frame_height_bits_minus_1");
+    br.f(frame_width_bits_minus_1 + 1);
+    CHECK_OVERFLOW("max_frame_width_minus_1");
+    br.f(frame_height_bits_minus_1 + 1);
+    CHECK_OVERFLOW("max_frame_height_minus_1");
 
     // frame_id_numbers_present_flag (only if !reduced_still_picture_header, which we checked)
-    uint32_t frame_id_numbers_present_flag = br.f(1); CHECK_OVERFLOW("frame_id_numbers_present_flag");
+    uint32_t frame_id_numbers_present_flag = br.f(1);
+    CHECK_OVERFLOW("frame_id_numbers_present_flag");
     if (frame_id_numbers_present_flag) {
-        br.f(4); CHECK_OVERFLOW("delta_frame_id_length_minus_2");
-        br.f(3); CHECK_OVERFLOW("additional_frame_id_length_minus_1");
+        br.f(4);
+        CHECK_OVERFLOW("delta_frame_id_length_minus_2");
+        br.f(3);
+        CHECK_OVERFLOW("additional_frame_id_length_minus_1");
     }
 
-    br.f(1); CHECK_OVERFLOW("use_128x128_superblock");
-    br.f(1); CHECK_OVERFLOW("enable_filter_intra");
-    br.f(1); CHECK_OVERFLOW("enable_intra_edge_filter");
+    br.f(1);
+    CHECK_OVERFLOW("use_128x128_superblock");
+    br.f(1);
+    CHECK_OVERFLOW("enable_filter_intra");
+    br.f(1);
+    CHECK_OVERFLOW("enable_intra_edge_filter");
 
     // The following only when !reduced_still_picture_header (already verified)
-    br.f(1); CHECK_OVERFLOW("enable_interintra_compound");
-    br.f(1); CHECK_OVERFLOW("enable_masked_compound");
-    br.f(1); CHECK_OVERFLOW("enable_warped_motion");
-    br.f(1); CHECK_OVERFLOW("enable_dual_filter");
+    br.f(1);
+    CHECK_OVERFLOW("enable_interintra_compound");
+    br.f(1);
+    CHECK_OVERFLOW("enable_masked_compound");
+    br.f(1);
+    CHECK_OVERFLOW("enable_warped_motion");
+    br.f(1);
+    CHECK_OVERFLOW("enable_dual_filter");
 
-    uint32_t enable_order_hint = br.f(1); CHECK_OVERFLOW("enable_order_hint");
+    uint32_t enable_order_hint = br.f(1);
+    CHECK_OVERFLOW("enable_order_hint");
     if (enable_order_hint) {
-        br.f(1); CHECK_OVERFLOW("enable_jnt_comp");
-        br.f(1); CHECK_OVERFLOW("enable_ref_frame_mvs");
+        br.f(1);
+        CHECK_OVERFLOW("enable_jnt_comp");
+        br.f(1);
+        CHECK_OVERFLOW("enable_ref_frame_mvs");
     }
 
-    uint32_t seq_choose_screen_content_tools = br.f(1); CHECK_OVERFLOW("seq_choose_screen_content_tools");
-    uint32_t seq_force_screen_content_tools  = 0;
+    uint32_t seq_choose_screen_content_tools = br.f(1);
+    CHECK_OVERFLOW("seq_choose_screen_content_tools");
+    uint32_t seq_force_screen_content_tools = 0;
     if (seq_choose_screen_content_tools) {
         seq_force_screen_content_tools = 2; // SELECT_SCREEN_CONTENT_TOOLS
     } else {
-        seq_force_screen_content_tools = br.f(1); CHECK_OVERFLOW("seq_force_screen_content_tools");
+        seq_force_screen_content_tools = br.f(1);
+        CHECK_OVERFLOW("seq_force_screen_content_tools");
     }
 
     if (seq_force_screen_content_tools > 0) {
-        uint32_t seq_choose_integer_mv = br.f(1); CHECK_OVERFLOW("seq_choose_integer_mv");
+        uint32_t seq_choose_integer_mv = br.f(1);
+        CHECK_OVERFLOW("seq_choose_integer_mv");
         if (!seq_choose_integer_mv) {
-            br.f(1); CHECK_OVERFLOW("seq_force_integer_mv");
+            br.f(1);
+            CHECK_OVERFLOW("seq_force_integer_mv");
         }
     }
 
     if (enable_order_hint) {
-        br.f(3); CHECK_OVERFLOW("order_hint_bits_minus_1");
+        br.f(3);
+        CHECK_OVERFLOW("order_hint_bits_minus_1");
     }
 
-    br.f(1); CHECK_OVERFLOW("enable_superres");
-    br.f(1); CHECK_OVERFLOW("enable_cdef");
-    br.f(1); CHECK_OVERFLOW("enable_restoration");
+    br.f(1);
+    CHECK_OVERFLOW("enable_superres");
+    br.f(1);
+    CHECK_OVERFLOW("enable_cdef");
+    br.f(1);
+    CHECK_OVERFLOW("enable_restoration");
 
     // color_config()
-    uint32_t high_bitdepth = br.f(1); CHECK_OVERFLOW("high_bitdepth");
-    uint32_t twelve_bit    = 0;
+    uint32_t high_bitdepth = br.f(1);
+    CHECK_OVERFLOW("high_bitdepth");
+    uint32_t twelve_bit = 0;
     if (seq_profile == 2 && high_bitdepth) {
-        twelve_bit = br.f(1); CHECK_OVERFLOW("twelve_bit");
+        twelve_bit = br.f(1);
+        CHECK_OVERFLOW("twelve_bit");
     }
     uint32_t mono_chrome = 0;
     if (seq_profile == 1) {
         mono_chrome = 0;
     } else {
-        mono_chrome = br.f(1); CHECK_OVERFLOW("mono_chrome");
+        mono_chrome = br.f(1);
+        CHECK_OVERFLOW("mono_chrome");
     }
 
-    uint32_t color_description_present_flag = br.f(1); CHECK_OVERFLOW("color_description_present_flag");
-    uint32_t color_primaries          = 2;
+    uint32_t color_description_present_flag = br.f(1);
+    CHECK_OVERFLOW("color_description_present_flag");
+    uint32_t color_primaries = 2;
     uint32_t transfer_characteristics = 2;
-    uint32_t matrix_coefficients      = 2;
+    uint32_t matrix_coefficients = 2;
     if (color_description_present_flag) {
-        color_primaries          = br.f(8); CHECK_OVERFLOW("color_primaries");
-        transfer_characteristics = br.f(8); CHECK_OVERFLOW("transfer_characteristics");
-        matrix_coefficients      = br.f(8); CHECK_OVERFLOW("matrix_coefficients");
+        color_primaries = br.f(8);
+        CHECK_OVERFLOW("color_primaries");
+        transfer_characteristics = br.f(8);
+        CHECK_OVERFLOW("transfer_characteristics");
+        matrix_coefficients = br.f(8);
+        CHECK_OVERFLOW("matrix_coefficients");
     }
 
-    uint32_t subsampling_x           = 0;
-    uint32_t subsampling_y           = 0;
-    uint32_t chroma_sample_position  = 0;
+    uint32_t subsampling_x = 0;
+    uint32_t subsampling_y = 0;
+    uint32_t chroma_sample_position = 0;
 
     if (mono_chrome) {
         br.f(1); // color_range
@@ -1754,7 +1875,8 @@ bool ParseSequenceHeaderObu(
             }
         }
         if (subsampling_x && subsampling_y) {
-            chroma_sample_position = br.f(2); CHECK_OVERFLOW("chroma_sample_position");
+            chroma_sample_position = br.f(2);
+            CHECK_OVERFLOW("chroma_sample_position");
         }
         br.f(1); // separate_uv_delta_q
         CHECK_OVERFLOW("separate_uv_delta_q");
@@ -1762,14 +1884,14 @@ bool ParseSequenceHeaderObu(
 
 #undef CHECK_OVERFLOW
 
-    *out_seq_profile           = seq_profile;
-    *out_seq_level_idx_0       = seq_level_idx_0;
-    *out_seq_tier_0            = seq_tier_0;
-    *out_high_bitdepth         = high_bitdepth;
-    *out_twelve_bit            = twelve_bit;
-    *out_mono_chrome           = mono_chrome;
-    *out_subsampling_x         = subsampling_x;
-    *out_subsampling_y         = subsampling_y;
+    *out_seq_profile = seq_profile;
+    *out_seq_level_idx_0 = seq_level_idx_0;
+    *out_seq_tier_0 = seq_tier_0;
+    *out_high_bitdepth = high_bitdepth;
+    *out_twelve_bit = twelve_bit;
+    *out_mono_chrome = mono_chrome;
+    *out_subsampling_x = subsampling_x;
+    *out_subsampling_y = subsampling_y;
     *out_chroma_sample_position = chroma_sample_position;
     return true;
 }
@@ -1785,30 +1907,35 @@ bool WgcNvencAacMkvProbe::Phase18_DeriveAv1CodecPrivate() {
     // Step 1: Find first keyframe packet
     const VideoPacket* keyPkt = nullptr;
     for (const auto& vp : m_videoPackets) {
-        if (vp.is_keyframe) { keyPkt = &vp; break; }
+        if (vp.is_keyframe) {
+            keyPkt = &vp;
+            break;
+        }
     }
     if (keyPkt == nullptr) {
         // Fall back to first packet
         keyPkt = &m_videoPackets[0];
     }
 
-    const uint8_t* bs   = keyPkt->bytes.data();
-    size_t         bsLen = keyPkt->bytes.size();
+    const uint8_t* bs = keyPkt->bytes.data();
+    size_t bsLen = keyPkt->bytes.size();
 
     // Step 2: Scan OBUs looking for Sequence Header (type 1)
-    const uint8_t* obu_payload      = nullptr;
-    size_t         obu_payload_size = 0;
-    size_t         i                = 0;
+    const uint8_t* obu_payload = nullptr;
+    size_t obu_payload_size = 0;
+    size_t i = 0;
 
     while (i < bsLen) {
-        if (i >= bsLen) break;
-        uint8_t header_byte    = bs[i++];
-        uint32_t obu_type      = (header_byte >> 3) & 0x0F;
+        if (i >= bsLen)
+            break;
+        uint8_t header_byte = bs[i++];
+        uint32_t obu_type = (header_byte >> 3) & 0x0F;
         uint32_t extension_flag = (header_byte >> 2) & 0x1;
         uint32_t has_size_field = (header_byte >> 1) & 0x1;
 
         if (extension_flag) {
-            if (i >= bsLen) break;
+            if (i >= bsLen)
+                break;
             ++i; // skip extension header byte
         }
 
@@ -1817,11 +1944,15 @@ bool WgcNvencAacMkvProbe::Phase18_DeriveAv1CodecPrivate() {
             // LEB128
             size_t leb_shift = 0;
             for (int b = 0; b < 8; ++b) {
-                if (i >= bsLen) { payload_size = 0; break; }
+                if (i >= bsLen) {
+                    payload_size = 0;
+                    break;
+                }
                 uint8_t leb_byte = bs[i++];
                 payload_size |= static_cast<size_t>(leb_byte & 0x7F) << leb_shift;
                 leb_shift += 7;
-                if ((leb_byte & 0x80) == 0) break;
+                if ((leb_byte & 0x80) == 0)
+                    break;
             }
         } else {
             // No size field — payload extends to end of packet
@@ -1831,23 +1962,22 @@ bool WgcNvencAacMkvProbe::Phase18_DeriveAv1CodecPrivate() {
         if (obu_type == 1) {
             // Sequence Header OBU found
             if (i + payload_size > bsLen) {
-                PrintPhaseFail(18, "derive AV1 CodecPrivate",
-                               "Sequence Header OBU size exceeds packet boundary");
+                PrintPhaseFail(18, "derive AV1 CodecPrivate", "Sequence Header OBU size exceeds packet boundary");
                 return false;
             }
-            obu_payload      = bs + i;
+            obu_payload = bs + i;
             obu_payload_size = payload_size;
             break;
         }
 
         // Skip this OBU's payload
         i += payload_size;
-        if (i > bsLen) break;
+        if (i > bsLen)
+            break;
     }
 
     if (obu_payload == nullptr) {
-        PrintPhaseFail(18, "derive AV1 CodecPrivate",
-                       "Sequence Header OBU (type 1) not found in first keyframe");
+        PrintPhaseFail(18, "derive AV1 CodecPrivate", "Sequence Header OBU (type 1) not found in first keyframe");
         return false;
     }
 
@@ -1855,14 +1985,11 @@ bool WgcNvencAacMkvProbe::Phase18_DeriveAv1CodecPrivate() {
     uint32_t seq_profile = 0, seq_level_idx_0 = 0, seq_tier_0 = 0;
     uint32_t high_bitdepth = 0, twelve_bit = 0, mono_chrome = 0;
     uint32_t subsampling_x = 0, subsampling_y = 0, chroma_sample_position = 0;
-    char     parseReason[256] = {};
+    char parseReason[256] = {};
 
-    bool ok = ParseSequenceHeaderObu(
-        obu_payload, obu_payload_size,
-        &seq_profile, &seq_level_idx_0, &seq_tier_0,
-        &high_bitdepth, &twelve_bit, &mono_chrome,
-        &subsampling_x, &subsampling_y, &chroma_sample_position,
-        parseReason, sizeof(parseReason));
+    bool ok = ParseSequenceHeaderObu(obu_payload, obu_payload_size, &seq_profile, &seq_level_idx_0, &seq_tier_0,
+                                     &high_bitdepth, &twelve_bit, &mono_chrome, &subsampling_x, &subsampling_y,
+                                     &chroma_sample_position, parseReason, sizeof(parseReason));
 
     if (!ok) {
         PrintPhaseFail(18, "derive AV1 CodecPrivate", parseReason);
@@ -1872,28 +1999,20 @@ bool WgcNvencAacMkvProbe::Phase18_DeriveAv1CodecPrivate() {
     // Step 4: Build AV1CodecConfigurationRecord (4 bytes)
     m_av1CodecPrivate[0] = 0x81; // marker=1, version=1
     m_av1CodecPrivate[1] = static_cast<uint8_t>((seq_profile << 5) | (seq_level_idx_0 & 0x1F));
-    m_av1CodecPrivate[2] = static_cast<uint8_t>(
-        (seq_tier_0            << 7) |
-        (high_bitdepth         << 6) |
-        (twelve_bit            << 5) |
-        (mono_chrome           << 4) |
-        (subsampling_x         << 3) |
-        (subsampling_y         << 2) |
-        (chroma_sample_position & 0x03));
+    m_av1CodecPrivate[2] =
+        static_cast<uint8_t>((seq_tier_0 << 7) | (high_bitdepth << 6) | (twelve_bit << 5) | (mono_chrome << 4) |
+                             (subsampling_x << 3) | (subsampling_y << 2) | (chroma_sample_position & 0x03));
     m_av1CodecPrivate[3] = 0x00;
 
     PrintPhasePass(18, "derive AV1 CodecPrivate");
     char detail[128];
-    snprintf(detail, sizeof(detail),
-             "AV1CodecConfigurationRecord: %02X %02X %02X %02X",
-             m_av1CodecPrivate[0], m_av1CodecPrivate[1],
-             m_av1CodecPrivate[2], m_av1CodecPrivate[3]);
+    snprintf(detail, sizeof(detail), "AV1CodecConfigurationRecord: %02X %02X %02X %02X", m_av1CodecPrivate[0],
+             m_av1CodecPrivate[1], m_av1CodecPrivate[2], m_av1CodecPrivate[3]);
     PrintDetail(detail);
     snprintf(detail, sizeof(detail),
              "seq_profile=%u level=%u tier=%u high_bitdepth=%u twelve_bit=%u mono=%u subX=%u subY=%u csp=%u",
-             seq_profile, seq_level_idx_0, seq_tier_0,
-             high_bitdepth, twelve_bit, mono_chrome,
-             subsampling_x, subsampling_y, chroma_sample_position);
+             seq_profile, seq_level_idx_0, seq_tier_0, high_bitdepth, twelve_bit, mono_chrome, subsampling_x,
+             subsampling_y, chroma_sample_position);
     PrintDetail(detail);
     return true;
 }
@@ -1912,9 +2031,8 @@ bool WgcNvencAacMkvProbe::Phase19_DeriveAacCodecPrivate() {
     HRESULT hr = m_pOutputType->GetBlobSize(MF_MT_USER_DATA, &blobSize);
     if (FAILED(hr) || blobSize < 14) {
         char buf[96];
-        snprintf(buf, sizeof(buf),
-                 "MF_MT_USER_DATA missing or too small (blobSize=%u, hr=0x%08lX)",
-                 blobSize, static_cast<unsigned long>(hr));
+        snprintf(buf, sizeof(buf), "MF_MT_USER_DATA missing or too small (blobSize=%u, hr=0x%08lX)", blobSize,
+                 static_cast<unsigned long>(hr));
         PrintPhaseFail(19, "derive AAC CodecPrivate", buf);
         return false;
     }
@@ -1934,8 +2052,7 @@ bool WgcNvencAacMkvProbe::Phase19_DeriveAacCodecPrivate() {
 
     PrintPhasePass(19, "derive AAC CodecPrivate");
     char detail[64];
-    snprintf(detail, sizeof(detail), "AudioSpecificConfig: %02X %02X",
-             m_aacCodecPrivate[0], m_aacCodecPrivate[1]);
+    snprintf(detail, sizeof(detail), "AudioSpecificConfig: %02X %02X", m_aacCodecPrivate[0], m_aacCodecPrivate[1]);
     PrintDetail(detail);
     return true;
 }
@@ -1950,7 +2067,7 @@ bool WgcNvencAacMkvProbe::Phase20_WriteAndVerifyMkv() {
         return false;
     }
 
-    const char* outDir  = "probe_wgc_nvenc_aac_mkv_output";
+    const char* outDir = "probe_wgc_nvenc_aac_mkv_output";
     const char* outPath = "probe_wgc_nvenc_aac_mkv_output\\av1_aac.mkv";
 
     CreateDirectoryW(L"probe_wgc_nvenc_aac_mkv_output", nullptr);
@@ -1973,10 +2090,8 @@ bool WgcNvencAacMkvProbe::Phase20_WriteAndVerifyMkv() {
     segment.set_mode(mkvmuxer::Segment::kFile);
 
     // 20c: Add tracks
-    uint64_t video_track_num = segment.AddVideoTrack(
-        static_cast<int32_t>(m_encodeWidth),
-        static_cast<int32_t>(m_encodeHeight),
-        1);
+    uint64_t video_track_num =
+        segment.AddVideoTrack(static_cast<int32_t>(m_encodeWidth), static_cast<int32_t>(m_encodeHeight), 1);
     if (video_track_num == 0) {
         mkvWriter.Close();
         PrintPhaseFail(20, "add video track", "AddVideoTrack returned 0");
@@ -2004,20 +2119,16 @@ bool WgcNvencAacMkvProbe::Phase20_WriteAndVerifyMkv() {
     mux_list.reserve(m_videoPackets.size() + m_audioPackets.size());
 
     for (const auto& vp : m_videoPackets)
-        mux_list.push_back({vp.timestamp_ns, video_track_num, vp.is_keyframe,
-                            vp.bytes.data(), vp.bytes.size()});
+        mux_list.push_back({vp.timestamp_ns, video_track_num, vp.is_keyframe, vp.bytes.data(), vp.bytes.size()});
     for (const auto& ap : m_audioPackets)
-        mux_list.push_back({ap.timestamp_ns, audio_track_num, true,
-                            ap.bytes.data(), ap.bytes.size()});
+        mux_list.push_back({ap.timestamp_ns, audio_track_num, true, ap.bytes.data(), ap.bytes.size()});
 
     std::stable_sort(mux_list.begin(), mux_list.end(),
-        [](const MuxPacket& a, const MuxPacket& b) {
-            return a.timestamp_ns < b.timestamp_ns;
-        });
+                     [](const MuxPacket& a, const MuxPacket& b) { return a.timestamp_ns < b.timestamp_ns; });
 
     for (const auto& pkt : mux_list) {
-        if (!segment.AddFrame(pkt.data, static_cast<uint64_t>(pkt.size),
-                               pkt.track_number, pkt.timestamp_ns, pkt.is_key)) {
+        if (!segment.AddFrame(pkt.data, static_cast<uint64_t>(pkt.size), pkt.track_number, pkt.timestamp_ns,
+                              pkt.is_key)) {
             mkvWriter.Close();
             PrintPhaseFail(20, "write MKV frames", "segment.AddFrame returned false");
             return false;
@@ -2034,8 +2145,7 @@ bool WgcNvencAacMkvProbe::Phase20_WriteAndVerifyMkv() {
 
     // 20f: Verify
     WIN32_FILE_ATTRIBUTE_DATA fileData{};
-    if (!GetFileAttributesExW(L"probe_wgc_nvenc_aac_mkv_output\\av1_aac.mkv",
-                               GetFileExInfoStandard, &fileData)) {
+    if (!GetFileAttributesExW(L"probe_wgc_nvenc_aac_mkv_output\\av1_aac.mkv", GetFileExInfoStandard, &fileData)) {
         PrintPhaseFail(20, "verify output file", "file not found");
         return false;
     }
@@ -2044,8 +2154,7 @@ bool WgcNvencAacMkvProbe::Phase20_WriteAndVerifyMkv() {
 
     if (fileSize < 1024 * 1024) {
         char buf[80];
-        snprintf(buf, sizeof(buf), "file size %llu < 1 MiB",
-                 static_cast<unsigned long long>(fileSize));
+        snprintf(buf, sizeof(buf), "file size %llu < 1 MiB", static_cast<unsigned long long>(fileSize));
         PrintPhaseFail(20, "verify output file", buf);
         return false;
     }
@@ -2066,11 +2175,10 @@ bool WgcNvencAacMkvProbe::Phase20_WriteAndVerifyMkv() {
 
     PrintPhasePass(20, "write and verify MKV");
     char detail[128];
-    snprintf(detail, sizeof(detail), "output: %s (%llu bytes)",
-             outPath, static_cast<unsigned long long>(fileSize));
+    snprintf(detail, sizeof(detail), "output: %s (%llu bytes)", outPath, static_cast<unsigned long long>(fileSize));
     PrintDetail(detail);
-    snprintf(detail, sizeof(detail), "video packets: %zu, audio packets: %zu",
-             m_videoPackets.size(), m_audioPackets.size());
+    snprintf(detail, sizeof(detail), "video packets: %zu, audio packets: %zu", m_videoPackets.size(),
+             m_audioPackets.size());
     PrintDetail(detail);
 
     (void)outDir;
@@ -2083,35 +2191,36 @@ bool WgcNvencAacMkvProbe::Phase20_WriteAndVerifyMkv() {
 
 void WgcNvencAacMkvProbe::PrintSummary() {
     uint64_t lastVideoTs = 0;
-    if (!m_videoPackets.empty()) lastVideoTs = m_videoPackets.back().timestamp_ns;
+    if (!m_videoPackets.empty())
+        lastVideoTs = m_videoPackets.back().timestamp_ns;
 
     uint64_t lastAudioTs = 0;
-    if (!m_audioPackets.empty()) lastAudioTs = m_audioPackets.back().timestamp_ns;
+    if (!m_audioPackets.empty())
+        lastAudioTs = m_audioPackets.back().timestamp_ns;
 
     double videoDur = static_cast<double>(lastVideoTs) / 1e9;
     double audioDur = static_cast<double>(lastAudioTs) / 1e9;
-    double skewMs   = std::abs(videoDur - audioDur) * 1000.0;
+    double skewMs = std::abs(videoDur - audioDur) * 1000.0;
 
     auto kindStr = (m_target.kind == CaptureTarget::Kind::Monitor) ? L"monitor" : L"window";
 
     fprintf(stdout, "\n=== SUMMARY ===\n");
     fwprintf(stdout, L"  target               : %s -- %s\n", kindStr, m_target.description.c_str());
-    fprintf(stdout,  "  wgc frames total     : %d\n", m_wgcFramesTotal);
-    fprintf(stdout,  "  video frames captured: %d\n", m_capturedVideoFrames);
-    fprintf(stdout,  "  encoded video packets: %zu\n", m_videoPackets.size());
-    fprintf(stdout,  "  audio AAC packets    : %zu\n", m_audioPackets.size());
-    fprintf(stdout,  "  video bytes          : %llu\n", static_cast<unsigned long long>(m_totalVideoBytes));
-    fprintf(stdout,  "  audio bytes          : %llu\n", static_cast<unsigned long long>(m_totalAudioBytes));
-    fprintf(stdout,  "  elapsed              : %.1f s\n", m_elapsedSeconds);
-    fprintf(stdout,  "  video duration       : %.3f s\n", videoDur);
-    fprintf(stdout,  "  audio duration       : %.3f s\n", audioDur);
-    fprintf(stdout,  "  duration skew        : %.1f ms\n", skewMs);
-    fprintf(stdout,  "  source loss          : %s\n", m_sourceLost ? "yes" : "no");
-    fprintf(stdout,  "  output path          : probe_wgc_nvenc_aac_mkv_output\\av1_aac.mkv\n");
+    fprintf(stdout, "  wgc frames total     : %d\n", m_wgcFramesTotal);
+    fprintf(stdout, "  video frames captured: %d\n", m_capturedVideoFrames);
+    fprintf(stdout, "  encoded video packets: %zu\n", m_videoPackets.size());
+    fprintf(stdout, "  audio AAC packets    : %zu\n", m_audioPackets.size());
+    fprintf(stdout, "  video bytes          : %llu\n", static_cast<unsigned long long>(m_totalVideoBytes));
+    fprintf(stdout, "  audio bytes          : %llu\n", static_cast<unsigned long long>(m_totalAudioBytes));
+    fprintf(stdout, "  elapsed              : %.1f s\n", m_elapsedSeconds);
+    fprintf(stdout, "  video duration       : %.3f s\n", videoDur);
+    fprintf(stdout, "  audio duration       : %.3f s\n", audioDur);
+    fprintf(stdout, "  duration skew        : %.1f ms\n", skewMs);
+    fprintf(stdout, "  source loss          : %s\n", m_sourceLost ? "yes" : "no");
+    fprintf(stdout, "  output path          : probe_wgc_nvenc_aac_mkv_output\\av1_aac.mkv\n");
 
     WIN32_FILE_ATTRIBUTE_DATA fd{};
-    if (GetFileAttributesExW(L"probe_wgc_nvenc_aac_mkv_output\\av1_aac.mkv",
-                              GetFileExInfoStandard, &fd)) {
+    if (GetFileAttributesExW(L"probe_wgc_nvenc_aac_mkv_output\\av1_aac.mkv", GetFileExInfoStandard, &fd)) {
         uint64_t sz = (static_cast<uint64_t>(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
         fprintf(stdout, "  output file size     : %llu bytes\n", static_cast<unsigned long long>(sz));
     }
@@ -2124,8 +2233,7 @@ void WgcNvencAacMkvProbe::PrintSummary() {
 // ---------------------------------------------------------------------------
 
 int WgcNvencAacMkvProbe::Run() {
-    fprintf(stdout,
-            "[probe] === WGC+NVENC AV1 / WASAPI+MF AAC -> Matroska MKV integration probe (M2.8) ===\n");
+    fprintf(stdout, "[probe] === WGC+NVENC AV1 / WASAPI+MF AAC -> Matroska MKV integration probe (M2.8) ===\n");
     auto kindStr = (m_target.kind == CaptureTarget::Kind::Monitor) ? L"monitor" : L"window";
     fwprintf(stdout, L"[probe] target: %s -- %s\n", kindStr, m_target.description.c_str());
     fflush(stdout);
@@ -2135,26 +2243,26 @@ int WgcNvencAacMkvProbe::Run() {
         bool (WgcNvencAacMkvProbe::*fn)();
     };
     const Phase phases[] = {
-        {"init COM + Media Foundation",          &WgcNvencAacMkvProbe::Phase01_InitComAndMF},
-        {"init D3D11 video-capable device",      &WgcNvencAacMkvProbe::Phase02_InitD3D11VideoDevice},
-        {"create WGC capture item",              &WgcNvencAacMkvProbe::Phase03_CreateCaptureItem},
-        {"validate source dimensions",           &WgcNvencAacMkvProbe::Phase04_ValidateDimensions},
+        {"init COM + Media Foundation", &WgcNvencAacMkvProbe::Phase01_InitComAndMF},
+        {"init D3D11 video-capable device", &WgcNvencAacMkvProbe::Phase02_InitD3D11VideoDevice},
+        {"create WGC capture item", &WgcNvencAacMkvProbe::Phase03_CreateCaptureItem},
+        {"validate source dimensions", &WgcNvencAacMkvProbe::Phase04_ValidateDimensions},
         {"load NVENC DLL + open encode session", &WgcNvencAacMkvProbe::Phase05_LoadNvencDll},
-        {"AV1 GUID + NV12 format support",       &WgcNvencAacMkvProbe::Phase06_QueryAv1Support},
-        {"fetch AV1 preset config",              &WgcNvencAacMkvProbe::Phase07_FetchPresetConfig},
-        {"init AV1 encoder",                     &WgcNvencAacMkvProbe::Phase08_InitAv1Encoder},
-        {"bitstream+NV12+vidproc+register",      &WgcNvencAacMkvProbe::Phase09_BitstreamNv12VideoProcessorRegister},
-        {"init AAC encoder",                     &WgcNvencAacMkvProbe::Phase10_InitAacEncoder},
-        {"init WASAPI loopback",                 &WgcNvencAacMkvProbe::Phase11_InitWasapiLoopback},
-        {"establish epoch + start WGC",          &WgcNvencAacMkvProbe::Phase12_EstablishEpochAndStartWgc},
-        {"wait for first WGC frame",             &WgcNvencAacMkvProbe::Phase13_WaitForFirstFrame},
-        {"30-second dual capture/encode loop",   &WgcNvencAacMkvProbe::Phase14_DualCaptureLoop},
-        {"drain AV1 encoder",                    &WgcNvencAacMkvProbe::Phase15_DrainAv1Encoder},
-        {"drain AAC encoder",                    &WgcNvencAacMkvProbe::Phase16_DrainAacEncoder},
-        {"unregister NVENC resource",            &WgcNvencAacMkvProbe::Phase17_UnregisterNvencResource},
-        {"derive AV1 CodecPrivate",              &WgcNvencAacMkvProbe::Phase18_DeriveAv1CodecPrivate},
-        {"derive AAC CodecPrivate",              &WgcNvencAacMkvProbe::Phase19_DeriveAacCodecPrivate},
-        {"write and verify MKV",                 &WgcNvencAacMkvProbe::Phase20_WriteAndVerifyMkv},
+        {"AV1 GUID + NV12 format support", &WgcNvencAacMkvProbe::Phase06_QueryAv1Support},
+        {"fetch AV1 preset config", &WgcNvencAacMkvProbe::Phase07_FetchPresetConfig},
+        {"init AV1 encoder", &WgcNvencAacMkvProbe::Phase08_InitAv1Encoder},
+        {"bitstream+NV12+vidproc+register", &WgcNvencAacMkvProbe::Phase09_BitstreamNv12VideoProcessorRegister},
+        {"init AAC encoder", &WgcNvencAacMkvProbe::Phase10_InitAacEncoder},
+        {"init WASAPI loopback", &WgcNvencAacMkvProbe::Phase11_InitWasapiLoopback},
+        {"establish epoch + start WGC", &WgcNvencAacMkvProbe::Phase12_EstablishEpochAndStartWgc},
+        {"wait for first WGC frame", &WgcNvencAacMkvProbe::Phase13_WaitForFirstFrame},
+        {"30-second dual capture/encode loop", &WgcNvencAacMkvProbe::Phase14_DualCaptureLoop},
+        {"drain AV1 encoder", &WgcNvencAacMkvProbe::Phase15_DrainAv1Encoder},
+        {"drain AAC encoder", &WgcNvencAacMkvProbe::Phase16_DrainAacEncoder},
+        {"unregister NVENC resource", &WgcNvencAacMkvProbe::Phase17_UnregisterNvencResource},
+        {"derive AV1 CodecPrivate", &WgcNvencAacMkvProbe::Phase18_DeriveAv1CodecPrivate},
+        {"derive AAC CodecPrivate", &WgcNvencAacMkvProbe::Phase19_DeriveAacCodecPrivate},
+        {"write and verify MKV", &WgcNvencAacMkvProbe::Phase20_WriteAndVerifyMkv},
     };
     constexpr int kTotalPhases = static_cast<int>(sizeof(phases) / sizeof(phases[0]));
 
@@ -2168,8 +2276,7 @@ int WgcNvencAacMkvProbe::Run() {
     }
 
     PrintSummary();
-    fprintf(stdout,
-            "[probe] PASS — WGC+NVENC AV1 / WASAPI+MF AAC -> Matroska MKV validated.\n");
+    fprintf(stdout, "[probe] PASS — WGC+NVENC AV1 / WASAPI+MF AAC -> Matroska MKV validated.\n");
     fflush(stdout);
     return 0;
 }

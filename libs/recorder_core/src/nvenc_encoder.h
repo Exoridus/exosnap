@@ -27,10 +27,10 @@ const char* NvencStatusName(NVENCSTATUS st) noexcept;
 // ---------------------------------------------------------------------------
 
 struct InputSlot {
-    NV_ENC_REGISTERED_PTR  registeredResource = nullptr;
-    NV_ENC_INPUT_PTR       mappedResource     = nullptr;
-    bool                   in_flight          = false;
-    bool                   mapped             = false;
+    NV_ENC_REGISTERED_PTR registeredResource = nullptr;
+    NV_ENC_INPUT_PTR mappedResource = nullptr;
+    bool in_flight = false;
+    bool mapped = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -38,11 +38,11 @@ struct InputSlot {
 // ---------------------------------------------------------------------------
 
 class NvencEncoder {
-public:
+  public:
     NvencEncoder() = default;
     ~NvencEncoder();
 
-    NvencEncoder(const NvencEncoder&)            = delete;
+    NvencEncoder(const NvencEncoder&) = delete;
     NvencEncoder& operator=(const NvencEncoder&) = delete;
 
     // Load nvEncodeAPI64.dll and open a D3D11 encode session.
@@ -56,20 +56,15 @@ public:
     bool FetchPresetConfig(std::string& out_error);
 
     // Initialize the encoder for the given dimensions and frame rate.
-    bool InitEncoder(
-        uint32_t width, uint32_t height,
-        uint32_t frame_rate_num, uint32_t frame_rate_den,
-        std::string& out_error);
+    bool InitEncoder(uint32_t width, uint32_t height, uint32_t frame_rate_num, uint32_t frame_rate_den,
+                     std::string& out_error);
 
     // Create bitstream buffer.  Must be called after InitEncoder.
     bool CreateBitstreamBuffer(std::string& out_error);
 
     // Register one slot's NV12 D3D11 texture with NVENC.
     // Must be called after InitEncoder, once per slot (0..7).
-    bool RegisterSlotTexture(
-        int32_t              slot_idx,
-        ID3D11Texture2D*     texture,
-        std::string&         out_error);
+    bool RegisterSlotTexture(int32_t slot_idx, ID3D11Texture2D* texture, std::string& out_error);
 
     // Acquire the next free input slot for writing.
     // Returns slot index (0–7) or -1 if none free.
@@ -82,13 +77,8 @@ public:
     //   true  + packet populated  -> output available immediately
     //   true  + packet empty      -> NV_ENC_ERR_NEED_MORE_INPUT (buffered, PTS queued)
     //   false                     -> fatal encode error (out_error set)
-    bool EncodeFrame(
-        int32_t              slot_idx,
-        uint64_t             pts_ns,
-        uint32_t             width,
-        uint32_t             height,
-        EncodedVideoPacket*  out_packet,
-        std::string&         out_error);
+    bool EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width, uint32_t height, EncodedVideoPacket* out_packet,
+                     std::string& out_error);
 
     // Flush all buffered frames (EOS drain).
     // Appends any remaining packets to out_packets.
@@ -100,31 +90,31 @@ public:
     // Destroy bitstream buffer and encoder session.
     void Destroy();
 
-private:
-    HMODULE                     m_dll             = nullptr;
+  private:
+    HMODULE m_dll = nullptr;
     NV_ENCODE_API_FUNCTION_LIST m_funcs{};
-    void*                       m_encoder         = nullptr;
-    NV_ENC_PRESET_CONFIG        m_presetConfig{};
-    NV_ENC_CONFIG               m_encodeConfig{};
-    NV_ENC_OUTPUT_PTR           m_bitstreamBuffer  = nullptr;
+    void* m_encoder = nullptr;
+    NV_ENC_PRESET_CONFIG m_presetConfig{};
+    NV_ENC_CONFIG m_encodeConfig{};
+    NV_ENC_OUTPUT_PTR m_bitstreamBuffer = nullptr;
 
     // Input-slot ring: 8 independent NV12 input resources
     std::array<InputSlot, 8> m_slots;
-    int32_t                  m_slotCursor = 0;
+    int32_t m_slotCursor = 0;
 
-    const GUID               m_presetGuid  = NV_ENC_PRESET_P4_GUID;
-    const NV_ENC_TUNING_INFO m_tuningInfo  = NV_ENC_TUNING_INFO_HIGH_QUALITY;
+    const GUID m_presetGuid = NV_ENC_PRESET_P4_GUID;
+    const NV_ENC_TUNING_INFO m_tuningInfo = NV_ENC_TUNING_INFO_HIGH_QUALITY;
 
     // Pending PTS FIFO — one entry per submitted frame not yet returned as output
     std::queue<uint64_t> m_pendingPts;
 
     // Pending slot FIFO — mirrors m_pendingPts; associates slot indices with pending output
-    std::queue<int32_t>  m_pendingSlots;
+    std::queue<int32_t> m_pendingSlots;
 
-    int                  m_needMoreInputCount = 0;
+    int m_needMoreInputCount = 0;
 
     // Per-instance monotonic frame index for NVENC inputTimeStamp
-    uint64_t             m_frameIdx           = 0;
+    uint64_t m_frameIdx = 0;
 
     // Lock one bitstream and return an EncodedVideoPacket.
     // Also releases the associated input slot (unmap + mark free).

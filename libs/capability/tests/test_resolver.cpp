@@ -35,8 +35,7 @@ TEST(SettingsResolverTest, ContainerChangeToWebMFailsWhenOpusIsNotImplemented) {
     const SettingsResolver resolver(caps);
     const UserRecorderConfig current{};
 
-    const ResolveResult result =
-        resolver.ResolveChange(current, RequestedChange::ForContainer(Container::WebM));
+    const ResolveResult result = resolver.ResolveChange(current, RequestedChange::ForContainer(Container::WebM));
 
     EXPECT_FALSE(result.succeeded);
     EXPECT_FALSE(result.invalidity.empty());
@@ -47,28 +46,19 @@ TEST(SettingsResolverTest, ContainerChangeToWebMNotImplementedOpusEntersFallback
     const SettingsResolver resolver(caps);
     const UserRecorderConfig current{};
 
-    const ResolveResult result =
-        resolver.ResolveChange(current, RequestedChange::ForContainer(Container::WebM));
+    const ResolveResult result = resolver.ResolveChange(current, RequestedChange::ForContainer(Container::WebM));
 
     EXPECT_FALSE(result.succeeded);
     ASSERT_FALSE(result.invalidity.empty());
     EXPECT_EQ(result.invalidity.front().field, "audio_codec");
-    EXPECT_NE(
-        result.invalidity.front().message.find("preferred codec is not selectable"),
-        std::string::npos);
+    EXPECT_NE(result.invalidity.front().message.find("preferred codec is not selectable"), std::string::npos);
 }
 
 TEST(SettingsResolverTest, ContainerChangeToWebMAdjustsAudioWhenOpusOverrideIsAvailable) {
     CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
-    caps.combo_overrides[ComboKey{
-        Container::WebM,
-        VideoCodec::Av1Nvenc,
-        AudioCodec::Opus,
-        ChromaSubsampling::Cs420,
-        BitDepth::Bit8}] = SupportAnnotation{
-        SupportLevel::Available,
-        "Test override for WebM Opus availability."
-    };
+    caps.combo_overrides[ComboKey{Container::WebM, VideoCodec::Av1Nvenc, AudioCodec::Opus, ChromaSubsampling::Cs420,
+                                  BitDepth::Bit8}] =
+        SupportAnnotation{SupportLevel::Available, "Test override for WebM Opus availability."};
 
     const SettingsResolver resolver(caps);
     const ResolveResult result =
@@ -89,8 +79,7 @@ TEST(SettingsResolverTest, ExplicitAudioChangeToOpusUnderMp4FailsWithoutFallback
     config.container = Container::Mp4;
     config.audio_codec = AudioCodec::AacMf;
 
-    const ResolveResult result =
-        resolver.ResolveChange(config, RequestedChange::ForAudioCodec(AudioCodec::Opus));
+    const ResolveResult result = resolver.ResolveChange(config, RequestedChange::ForAudioCodec(AudioCodec::Opus));
 
     EXPECT_FALSE(result.succeeded);
     EXPECT_TRUE(result.adjustments.empty());
@@ -111,19 +100,11 @@ TEST(SettingsResolverTest, ExplicitBitDepthChangeToTenBitFailsWithoutFallback) {
 
 TEST(SettingsResolverTest, VideoCodecValidUnvalidatedCanSucceedWithWarning) {
     CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
-    caps.video_codecs[VideoCodec::H264Nvenc] = SupportAnnotation{
-        SupportLevel::ValidUnvalidated,
-        "H.264 has not been validated in current runtime tests."
-    };
-    caps.combo_overrides[ComboKey{
-        Container::Matroska,
-        VideoCodec::H264Nvenc,
-        AudioCodec::AacMf,
-        ChromaSubsampling::Cs420,
-        BitDepth::Bit8}] = SupportAnnotation{
-        SupportLevel::ValidUnvalidated,
-        "Synthetic valid-unvalidated combo for test."
-    };
+    caps.video_codecs[VideoCodec::H264Nvenc] =
+        SupportAnnotation{SupportLevel::ValidUnvalidated, "H.264 has not been validated in current runtime tests."};
+    caps.combo_overrides[ComboKey{Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::AacMf,
+                                  ChromaSubsampling::Cs420, BitDepth::Bit8}] =
+        SupportAnnotation{SupportLevel::ValidUnvalidated, "Synthetic valid-unvalidated combo for test."};
 
     const SettingsResolver resolver(caps);
     const ResolveResult result =
@@ -136,15 +117,9 @@ TEST(SettingsResolverTest, VideoCodecValidUnvalidatedCanSucceedWithWarning) {
 
 TEST(SettingsResolverTest, ValidateConfigAppliesAllowedFallbacksForProfileLikeInput) {
     CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
-    caps.combo_overrides[ComboKey{
-        Container::WebM,
-        VideoCodec::Av1Nvenc,
-        AudioCodec::Opus,
-        ChromaSubsampling::Cs420,
-        BitDepth::Bit8}] = SupportAnnotation{
-        SupportLevel::Available,
-        "Synthetic supported WebM path for profile fallback test."
-    };
+    caps.combo_overrides[ComboKey{Container::WebM, VideoCodec::Av1Nvenc, AudioCodec::Opus, ChromaSubsampling::Cs420,
+                                  BitDepth::Bit8}] =
+        SupportAnnotation{SupportLevel::Available, "Synthetic supported WebM path for profile fallback test."};
 
     UserRecorderConfig profile_config;
     profile_config.container = Container::WebM;
@@ -168,8 +143,7 @@ TEST(SettingsResolverTest, ValidateConfigAppliesAllowedFallbacksForProfileLikeIn
 TEST(TranslationTest, ToRecorderCoreConfigAcceptsDefaultM32Combo) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
     ResolveResult validation;
-    const recorder_core::RecorderConfig translated =
-        ToRecorderCoreConfig(UserRecorderConfig{}, caps, &validation);
+    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(UserRecorderConfig{}, caps, &validation);
 
     EXPECT_TRUE(validation.succeeded);
     EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
@@ -181,27 +155,16 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsDefaultM32Combo) {
 
 TEST(TranslationTest, ToRecorderCoreConfigRejectsNonM32ComboEvenWhenSelectable) {
     CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
-    caps.video_codecs[VideoCodec::H264Nvenc] = SupportAnnotation{
-        SupportLevel::ValidUnvalidated,
-        "Test override."
-    };
-    caps.combo_overrides[ComboKey{
-        Container::Matroska,
-        VideoCodec::H264Nvenc,
-        AudioCodec::AacMf,
-        ChromaSubsampling::Cs420,
-        BitDepth::Bit8}] = SupportAnnotation{
-        SupportLevel::ValidUnvalidated,
-        "Test override."
-    };
+    caps.video_codecs[VideoCodec::H264Nvenc] = SupportAnnotation{SupportLevel::ValidUnvalidated, "Test override."};
+    caps.combo_overrides[ComboKey{Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::AacMf,
+                                  ChromaSubsampling::Cs420, BitDepth::Bit8}] =
+        SupportAnnotation{SupportLevel::ValidUnvalidated, "Test override."};
 
     UserRecorderConfig config;
     config.video_codec = VideoCodec::H264Nvenc;
 
     ResolveResult validation;
-    EXPECT_THROW(
-        static_cast<void>(ToRecorderCoreConfig(config, caps, &validation)),
-        std::invalid_argument);
+    EXPECT_THROW(static_cast<void>(ToRecorderCoreConfig(config, caps, &validation)), std::invalid_argument);
     EXPECT_FALSE(validation.succeeded);
     EXPECT_FALSE(validation.invalidity.empty());
     EXPECT_EQ(validation.invalidity.back().field, "translation");

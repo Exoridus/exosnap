@@ -61,9 +61,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     sideLayout->setSpacing(0);
 
     auto* logo = new QLabel("exosnap", sidebar);
-    logo->setStyleSheet(
-        "color: #E8EAED; font-size: 16px; font-weight: 700;"
-        "padding: 18px 20px 14px 20px; background: transparent;");
+    logo->setStyleSheet("color: #E8EAED; font-size: 16px; font-weight: 700;"
+                        "padding: 18px 20px 14px 20px; background: transparent;");
     sideLayout->addWidget(logo);
 
     auto* sep = new QFrame(sidebar);
@@ -77,10 +76,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     nav_->setFocusPolicy(Qt::NoFocus);
     nav_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
-    const char* pages[] = {
-        "Record", "Video", "Audio", "Output",
-        "Hotkeys", "Diagnostics", "Logs", "Advanced"
-    };
+    const char* pages[] = {"Record", "Video", "Audio", "Output", "Hotkeys", "Diagnostics", "Logs", "Advanced"};
     for (auto* name : pages) {
         nav_->addItem(name);
     }
@@ -109,14 +105,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     root->addWidget(sidebar);
     root->addWidget(contentBg);
 
-    connect(nav_, &QListWidget::currentItemChanged,
-            this, &MainWindow::onNavChanged);
+    connect(nav_, &QListWidget::currentItemChanged, this, &MainWindow::onNavChanged);
 
     nav_->setCurrentRow(0);
 }
 
 void MainWindow::onNavChanged(QListWidgetItem* current, QListWidgetItem*) {
-    if (current) stack_->setCurrentIndex(nav_->row(current));
+    if (current)
+        stack_->setCurrentIndex(nav_->row(current));
 }
 
 } // namespace exosnap

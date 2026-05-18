@@ -8,10 +8,7 @@
 
 namespace exosnap::capability {
 
-recorder_core::RecorderConfig ToRecorderCoreConfig(
-    const UserRecorderConfig& config,
-    const CapabilitySet& caps,
-    ResolveResult* validation = nullptr);
+recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& config, const CapabilitySet& caps,
+                                                   ResolveResult* validation = nullptr);
 
 } // namespace exosnap::capability
-

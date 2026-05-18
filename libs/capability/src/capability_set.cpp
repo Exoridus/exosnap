@@ -19,9 +19,7 @@ int SeverityRank(SupportLevel level) noexcept {
     return 3;
 }
 
-SupportAnnotation CombineAnnotations(
-    const SupportAnnotation& current,
-    const SupportAnnotation& candidate) {
+SupportAnnotation CombineAnnotations(const SupportAnnotation& current, const SupportAnnotation& candidate) {
     if (SeverityRank(candidate.level) > SeverityRank(current.level)) {
         return candidate;
     }
@@ -32,14 +30,11 @@ SupportAnnotation CombineAnnotations(
 }
 
 template <typename MapT, typename KeyT>
-SupportAnnotation LookupAnnotation(
-    const MapT& map,
-    const KeyT& key,
-    std::string_view dimension_name) {
+SupportAnnotation LookupAnnotation(const MapT& map, const KeyT& key, std::string_view dimension_name) {
     const auto it = map.find(key);
     if (it == map.end()) {
         SupportAnnotation missing;
-        missing.level  = SupportLevel::Invalid;
+        missing.level = SupportLevel::Invalid;
         missing.reason = std::string("Missing capability annotation for ") + std::string(dimension_name);
         return missing;
     }
@@ -83,7 +78,8 @@ SupportAnnotation BaseContainerVideoAudioAnnotation(Container c, VideoCodec v, A
             return {SupportLevel::Available, "Validated M3.2 path."};
         }
         if (v == VideoCodec::Av1Nvenc && (a == AudioCodec::Opus || a == AudioCodec::Pcm)) {
-            return {SupportLevel::NotImplemented, "MKV + AV1 with this audio codec is planned but not implemented yet."};
+            return {SupportLevel::NotImplemented,
+                    "MKV + AV1 with this audio codec is planned but not implemented yet."};
         }
         if ((v == VideoCodec::H264Nvenc || v == VideoCodec::HevcNvenc) && a == AudioCodec::AacMf) {
             return {SupportLevel::NotImplemented, "MKV + NVENC H.264/HEVC + AAC is planned but not implemented yet."};
@@ -94,22 +90,14 @@ SupportAnnotation BaseContainerVideoAudioAnnotation(Container c, VideoCodec v, A
     return {SupportLevel::Invalid, "Unknown container in capability matrix."};
 }
 
-SupportAnnotation StaticMatrixAnnotation(
-    Container c,
-    VideoCodec v,
-    AudioCodec a,
-    ChromaSubsampling cs,
-    BitDepth bd) {
+SupportAnnotation StaticMatrixAnnotation(Container c, VideoCodec v, AudioCodec a, ChromaSubsampling cs, BitDepth bd) {
     const SupportAnnotation base = BaseContainerVideoAudioAnnotation(c, v, a);
     if (base.level == SupportLevel::Invalid) {
         return base;
     }
 
     if (cs != ChromaSubsampling::Cs420 || bd != BitDepth::Bit8) {
-        return {
-            SupportLevel::NotImplemented,
-            "Only 4:2:0 / 8-bit is implemented for current validated paths."
-        };
+        return {SupportLevel::NotImplemented, "Only 4:2:0 / 8-bit is implemented for current validated paths."};
     }
 
     return base;
@@ -119,9 +107,7 @@ SupportAnnotation StaticMatrixAnnotation(
 
 size_t ComboKeyHash::operator()(const ComboKey& key) const noexcept {
     size_t seed = 0;
-    auto combine = [&seed](size_t value) {
-        seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6u) + (seed >> 2u);
-    };
+    auto combine = [&seed](size_t value) { seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6u) + (seed >> 2u); };
 
     combine(static_cast<size_t>(key.c));
     combine(static_cast<size_t>(key.v));
@@ -131,12 +117,8 @@ size_t ComboKeyHash::operator()(const ComboKey& key) const noexcept {
     return seed;
 }
 
-SupportAnnotation CapabilitySet::QueryCombo(
-    Container c,
-    VideoCodec v,
-    AudioCodec a,
-    ChromaSubsampling cs,
-    BitDepth bd) const {
+SupportAnnotation CapabilitySet::QueryCombo(Container c, VideoCodec v, AudioCodec a, ChromaSubsampling cs,
+                                            BitDepth bd) const {
     SupportAnnotation result = StaticMatrixAnnotation(c, v, a, cs, bd);
     result = CombineAnnotations(result, QueryContainer(c));
     result = CombineAnnotations(result, QueryVideoCodec(v));
@@ -174,4 +156,3 @@ SupportAnnotation CapabilitySet::QueryBitDepth(BitDepth bd) const {
 }
 
 } // namespace exosnap::capability
-

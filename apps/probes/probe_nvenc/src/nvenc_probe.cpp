@@ -549,8 +549,7 @@ bool BaselineProbe::Phase13_FlushAndCleanup() {
         }
 
         char detail[96];
-        snprintf(detail, sizeof(detail), "post-EOS bitstreamSizeInBytes=%u, pictureType=%u",
-                 sizeInBytes, picType);
+        snprintf(detail, sizeof(detail), "post-EOS bitstreamSizeInBytes=%u, pictureType=%u", sizeInBytes, picType);
         PrintDetail(detail);
     }
 
@@ -633,8 +632,7 @@ bool BaselineProbe::Phase16_QueryAv1Nv12Format() {
             return true;
         }
     }
-    PrintPhaseFail(16, "AV1 NV12 input format",
-                   "NV_ENC_BUFFER_FORMAT_NV12 not in supported AV1 input formats");
+    PrintPhaseFail(16, "AV1 NV12 input format", "NV_ENC_BUFFER_FORMAT_NV12 not in supported AV1 input formats");
     return false;
 }
 
@@ -643,8 +641,7 @@ bool BaselineProbe::Phase17_FetchAv1PresetConfig() {
     m_av1PresetConfig.version = NV_ENC_PRESET_CONFIG_VER;
     m_av1PresetConfig.presetCfg.version = NV_ENC_CONFIG_VER;
 
-    NVENCSTATUS st = m_funcs.nvEncGetEncodePresetConfigEx(m_encoder, NV_ENC_CODEC_AV1_GUID,
-                                                          m_presetGuid, m_tuningInfo,
+    NVENCSTATUS st = m_funcs.nvEncGetEncodePresetConfigEx(m_encoder, NV_ENC_CODEC_AV1_GUID, m_presetGuid, m_tuningInfo,
                                                           &m_av1PresetConfig);
     if (st != NV_ENC_SUCCESS) {
         PrintPhaseFail(17, "fetch AV1 preset config", NvencStatusName(st));
@@ -856,8 +853,7 @@ bool BaselineProbe::Phase23_Av1FlushAndCleanup() {
         }
 
         char detail[96];
-        snprintf(detail, sizeof(detail), "post-EOS bitstreamSizeInBytes=%u, pictureType=%u",
-                 sizeInBytes, picType);
+        snprintf(detail, sizeof(detail), "post-EOS bitstreamSizeInBytes=%u, pictureType=%u", sizeInBytes, picType);
         PrintDetail(detail);
     }
 
@@ -874,16 +870,16 @@ bool BaselineProbe::RunAv1Validation() {
         bool (BaselineProbe::*fn)();
     };
     const Phase phases[] = {
-        {"open AV1 encode session",               &BaselineProbe::Phase14_OpenAv1Session},
-        {"AV1 GUID support",                      &BaselineProbe::Phase15_QueryAv1Support},
-        {"AV1 NV12 input format",                 &BaselineProbe::Phase16_QueryAv1Nv12Format},
-        {"fetch AV1 preset config",               &BaselineProbe::Phase17_FetchAv1PresetConfig},
-        {"AV1 encoder init",                      &BaselineProbe::Phase18_InitAv1Encoder},
-        {"create AV1 input/output buffers",       &BaselineProbe::Phase19_CreateAv1Buffers},
-        {"fill one NV12 frame",                   &BaselineProbe::Phase20_FillAv1Frame},
-        {"submit one AV1 frame",                  &BaselineProbe::Phase21_SubmitAv1Frame},
+        {"open AV1 encode session", &BaselineProbe::Phase14_OpenAv1Session},
+        {"AV1 GUID support", &BaselineProbe::Phase15_QueryAv1Support},
+        {"AV1 NV12 input format", &BaselineProbe::Phase16_QueryAv1Nv12Format},
+        {"fetch AV1 preset config", &BaselineProbe::Phase17_FetchAv1PresetConfig},
+        {"AV1 encoder init", &BaselineProbe::Phase18_InitAv1Encoder},
+        {"create AV1 input/output buffers", &BaselineProbe::Phase19_CreateAv1Buffers},
+        {"fill one NV12 frame", &BaselineProbe::Phase20_FillAv1Frame},
+        {"submit one AV1 frame", &BaselineProbe::Phase21_SubmitAv1Frame},
         {"lock AV1 bitstream / verify bytes > 0", &BaselineProbe::Phase22_LockAv1Bitstream},
-        {"AV1 EOS flush and cleanup",             &BaselineProbe::Phase23_Av1FlushAndCleanup},
+        {"AV1 EOS flush and cleanup", &BaselineProbe::Phase23_Av1FlushAndCleanup},
     };
     constexpr int kTotalPhases = sizeof(phases) / sizeof(phases[0]);
 
@@ -898,21 +894,21 @@ bool BaselineProbe::RunAv1Validation() {
 }
 
 bool BaselineProbe::Phase24_OpenAv1SustainedSession() {
-    m_sv_framesSubmitted    = 0;
-    m_sv_packetsLocked      = 0;
+    m_sv_framesSubmitted = 0;
+    m_sv_packetsLocked = 0;
     m_sv_needMoreInputCount = 0;
-    m_sv_totalBytes         = 0;
-    m_sv_elapsedSeconds     = 0.0;
+    m_sv_totalBytes = 0;
+    m_sv_elapsedSeconds = 0.0;
     m_sv_packets.clear();
 
     CleanupEncoder();
     m_needMoreInput = false;
-    m_inputPitch    = 0;
+    m_inputPitch = 0;
 
     NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS params{};
-    params.version    = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
+    params.version = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
     params.deviceType = NV_ENC_DEVICE_TYPE_DIRECTX;
-    params.device     = m_d3dDevice.get();
+    params.device = m_d3dDevice.get();
     params.apiVersion = NVENCAPI_VERSION;
 
     NVENCSTATUS st = m_funcs.nvEncOpenEncodeSessionEx(&params, &m_encoder);
@@ -922,10 +918,9 @@ bool BaselineProbe::Phase24_OpenAv1SustainedSession() {
     }
 
     m_av1PresetConfig = {};
-    m_av1PresetConfig.version            = NV_ENC_PRESET_CONFIG_VER;
-    m_av1PresetConfig.presetCfg.version  = NV_ENC_CONFIG_VER;
-    st = m_funcs.nvEncGetEncodePresetConfigEx(m_encoder, NV_ENC_CODEC_AV1_GUID,
-                                              m_presetGuid, m_tuningInfo,
+    m_av1PresetConfig.version = NV_ENC_PRESET_CONFIG_VER;
+    m_av1PresetConfig.presetCfg.version = NV_ENC_CONFIG_VER;
+    st = m_funcs.nvEncGetEncodePresetConfigEx(m_encoder, NV_ENC_CODEC_AV1_GUID, m_presetGuid, m_tuningInfo,
                                               &m_av1PresetConfig);
     if (st != NV_ENC_SUCCESS) {
         PrintPhaseFail(24, "open AV1 sustained session", NvencStatusName(st));
@@ -936,20 +931,20 @@ bool BaselineProbe::Phase24_OpenAv1SustainedSession() {
     m_av1EncodeConfig.encodeCodecConfig.av1Config.chromaFormatIDC = 1;
 
     NV_ENC_INITIALIZE_PARAMS initParams{};
-    initParams.version         = NV_ENC_INITIALIZE_PARAMS_VER;
-    initParams.encodeGUID      = NV_ENC_CODEC_AV1_GUID;
-    initParams.presetGUID      = m_presetGuid;
-    initParams.tuningInfo      = m_tuningInfo;
-    initParams.encodeWidth     = m_encodeWidth;
-    initParams.encodeHeight    = m_encodeHeight;
-    initParams.darWidth        = m_encodeWidth;
-    initParams.darHeight       = m_encodeHeight;
-    initParams.maxEncodeWidth  = m_encodeWidth;
+    initParams.version = NV_ENC_INITIALIZE_PARAMS_VER;
+    initParams.encodeGUID = NV_ENC_CODEC_AV1_GUID;
+    initParams.presetGUID = m_presetGuid;
+    initParams.tuningInfo = m_tuningInfo;
+    initParams.encodeWidth = m_encodeWidth;
+    initParams.encodeHeight = m_encodeHeight;
+    initParams.darWidth = m_encodeWidth;
+    initParams.darHeight = m_encodeHeight;
+    initParams.maxEncodeWidth = m_encodeWidth;
     initParams.maxEncodeHeight = m_encodeHeight;
-    initParams.frameRateNum    = m_frameRateNum;
-    initParams.frameRateDen    = m_frameRateDen;
-    initParams.enablePTD       = 1;
-    initParams.encodeConfig    = &m_av1EncodeConfig;
+    initParams.frameRateNum = m_frameRateNum;
+    initParams.frameRateDen = m_frameRateDen;
+    initParams.enablePTD = 1;
+    initParams.encodeConfig = &m_av1EncodeConfig;
 
     st = m_funcs.nvEncInitializeEncoder(m_encoder, &initParams);
     if (st != NV_ENC_SUCCESS) {
@@ -958,9 +953,9 @@ bool BaselineProbe::Phase24_OpenAv1SustainedSession() {
     }
 
     NV_ENC_CREATE_INPUT_BUFFER inputBufParams{};
-    inputBufParams.version   = NV_ENC_CREATE_INPUT_BUFFER_VER;
-    inputBufParams.width     = m_encodeWidth;
-    inputBufParams.height    = m_encodeHeight;
+    inputBufParams.version = NV_ENC_CREATE_INPUT_BUFFER_VER;
+    inputBufParams.width = m_encodeWidth;
+    inputBufParams.height = m_encodeHeight;
     inputBufParams.bufferFmt = NV_ENC_BUFFER_FORMAT_NV12;
 
     st = m_funcs.nvEncCreateInputBuffer(m_encoder, &inputBufParams);
@@ -993,9 +988,9 @@ bool BaselineProbe::Phase25_Av1SustainedEncodeLoop() {
 
     for (int frameIdx = 0; frameIdx < kFrameCount; ++frameIdx) {
         NV_ENC_LOCK_INPUT_BUFFER lockIn{};
-        lockIn.version     = NV_ENC_LOCK_INPUT_BUFFER_VER;
+        lockIn.version = NV_ENC_LOCK_INPUT_BUFFER_VER;
         lockIn.inputBuffer = m_inputBuffer;
-        lockIn.doNotWait   = 0;
+        lockIn.doNotWait = 0;
 
         NVENCSTATUS st = m_funcs.nvEncLockInputBuffer(m_encoder, &lockIn);
         if (st != NV_ENC_SUCCESS) {
@@ -1024,16 +1019,16 @@ bool BaselineProbe::Phase25_Av1SustainedEncodeLoop() {
         }
 
         NV_ENC_PIC_PARAMS picParams{};
-        picParams.version         = NV_ENC_PIC_PARAMS_VER;
-        picParams.inputWidth      = m_encodeWidth;
-        picParams.inputHeight     = m_encodeHeight;
-        picParams.inputPitch      = (m_inputPitch != 0) ? m_inputPitch : m_encodeWidth;
-        picParams.inputBuffer     = m_inputBuffer;
+        picParams.version = NV_ENC_PIC_PARAMS_VER;
+        picParams.inputWidth = m_encodeWidth;
+        picParams.inputHeight = m_encodeHeight;
+        picParams.inputPitch = (m_inputPitch != 0) ? m_inputPitch : m_encodeWidth;
+        picParams.inputBuffer = m_inputBuffer;
         picParams.outputBitstream = m_bitstreamBuffer;
-        picParams.bufferFmt       = NV_ENC_BUFFER_FORMAT_NV12;
-        picParams.pictureStruct   = NV_ENC_PIC_STRUCT_FRAME;
-        picParams.encodePicFlags  = 0;
-        picParams.inputTimeStamp  = static_cast<uint64_t>(frameIdx);
+        picParams.bufferFmt = NV_ENC_BUFFER_FORMAT_NV12;
+        picParams.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
+        picParams.encodePicFlags = 0;
+        picParams.inputTimeStamp = static_cast<uint64_t>(frameIdx);
 
         st = m_funcs.nvEncEncodePicture(m_encoder, &picParams);
 
@@ -1041,9 +1036,9 @@ bool BaselineProbe::Phase25_Av1SustainedEncodeLoop() {
             m_sv_framesSubmitted++;
 
             NV_ENC_LOCK_BITSTREAM lockBS{};
-            lockBS.version         = NV_ENC_LOCK_BITSTREAM_VER;
+            lockBS.version = NV_ENC_LOCK_BITSTREAM_VER;
             lockBS.outputBitstream = m_bitstreamBuffer;
-            lockBS.doNotWait       = 0;
+            lockBS.doNotWait = 0;
 
             st = m_funcs.nvEncLockBitstream(m_encoder, &lockBS);
             if (st != NV_ENC_SUCCESS) {
@@ -1059,10 +1054,8 @@ bool BaselineProbe::Phase25_Av1SustainedEncodeLoop() {
             {
                 Av1SustainedPacket pkt;
                 pkt.timestamp = lockBS.outputTimeStamp;
-                pkt.bytes.assign(
-                    static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr),
-                    static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr) + lockBS.bitstreamSizeInBytes
-                );
+                pkt.bytes.assign(static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr),
+                                 static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr) + lockBS.bitstreamSizeInBytes);
                 m_sv_packets.push_back(std::move(pkt));
             }
 
@@ -1087,17 +1080,14 @@ bool BaselineProbe::Phase25_Av1SustainedEncodeLoop() {
 
         if ((frameIdx + 1) % 60 == 0) {
             char detail[96];
-            snprintf(detail, sizeof(detail),
-                     "[frame %03d/300] submitted=%d packets=%d bytes=%llu",
-                     frameIdx + 1, m_sv_framesSubmitted, m_sv_packetsLocked,
-                     static_cast<unsigned long long>(m_sv_totalBytes));
+            snprintf(detail, sizeof(detail), "[frame %03d/300] submitted=%d packets=%d bytes=%llu", frameIdx + 1,
+                     m_sv_framesSubmitted, m_sv_packetsLocked, static_cast<unsigned long long>(m_sv_totalBytes));
             PrintDetail(detail);
         }
     }
 
     QueryPerformanceCounter(&tEnd);
-    m_sv_elapsedSeconds = static_cast<double>(tEnd.QuadPart - tStart.QuadPart)
-                        / static_cast<double>(freq.QuadPart);
+    m_sv_elapsedSeconds = static_cast<double>(tEnd.QuadPart - tStart.QuadPart) / static_cast<double>(freq.QuadPart);
 
     PrintPhasePass(25, "AV1 300-frame encode loop");
     return true;
@@ -1105,7 +1095,7 @@ bool BaselineProbe::Phase25_Av1SustainedEncodeLoop() {
 
 bool BaselineProbe::Phase26_Av1SustainedDrainAndReport() {
     NV_ENC_PIC_PARAMS eosParams{};
-    eosParams.version        = NV_ENC_PIC_PARAMS_VER;
+    eosParams.version = NV_ENC_PIC_PARAMS_VER;
     eosParams.encodePicFlags = NV_ENC_PIC_FLAG_EOS;
 
     NVENCSTATUS st = m_funcs.nvEncEncodePicture(m_encoder, &eosParams);
@@ -1118,15 +1108,14 @@ bool BaselineProbe::Phase26_Av1SustainedDrainAndReport() {
     // Stop early if a lock fails — do not treat that as a hard error.
     for (int i = 0; i < m_sv_needMoreInputCount; ++i) {
         NV_ENC_LOCK_BITSTREAM lockBS{};
-        lockBS.version         = NV_ENC_LOCK_BITSTREAM_VER;
+        lockBS.version = NV_ENC_LOCK_BITSTREAM_VER;
         lockBS.outputBitstream = m_bitstreamBuffer;
-        lockBS.doNotWait       = 0;
+        lockBS.doNotWait = 0;
 
         st = m_funcs.nvEncLockBitstream(m_encoder, &lockBS);
         if (st != NV_ENC_SUCCESS) {
             char note[96];
-            snprintf(note, sizeof(note), "post-EOS drain stopped at attempt %d: %s",
-                     i + 1, NvencStatusName(st));
+            snprintf(note, sizeof(note), "post-EOS drain stopped at attempt %d: %s", i + 1, NvencStatusName(st));
             PrintDetail(note);
             break;
         }
@@ -1137,10 +1126,8 @@ bool BaselineProbe::Phase26_Av1SustainedDrainAndReport() {
         {
             Av1SustainedPacket pkt;
             pkt.timestamp = lockBS.outputTimeStamp;
-            pkt.bytes.assign(
-                static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr),
-                static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr) + lockBS.bitstreamSizeInBytes
-            );
+            pkt.bytes.assign(static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr),
+                             static_cast<const uint8_t*>(lockBS.bitstreamBufferPtr) + lockBS.bitstreamSizeInBytes);
             m_sv_packets.push_back(std::move(pkt));
         }
 
@@ -1166,8 +1153,7 @@ bool BaselineProbe::Phase26_Av1SustainedDrainAndReport() {
     PrintDetail(detail);
     snprintf(detail, sizeof(detail), "NEED_MORE_INPUT   : %d", m_sv_needMoreInputCount);
     PrintDetail(detail);
-    snprintf(detail, sizeof(detail), "total bytes       : %llu",
-              static_cast<unsigned long long>(m_sv_totalBytes));
+    snprintf(detail, sizeof(detail), "total bytes       : %llu", static_cast<unsigned long long>(m_sv_totalBytes));
     PrintDetail(detail);
     snprintf(detail, sizeof(detail), "elapsed           : %.3f s", m_sv_elapsedSeconds);
     PrintDetail(detail);
@@ -1183,8 +1169,7 @@ bool BaselineProbe::Phase27_WriteIvfFile() {
     }
     if (m_sv_packets.size() > 300) {
         char buf[80];
-        snprintf(buf, sizeof(buf), "unexpected packet count: %zu (expected <= 300)",
-                 m_sv_packets.size());
+        snprintf(buf, sizeof(buf), "unexpected packet count: %zu (expected <= 300)", m_sv_packets.size());
         PrintPhaseFail(27, "write AV1 IVF file", buf);
         return false;
     }
@@ -1195,8 +1180,7 @@ bool BaselineProbe::Phase27_WriteIvfFile() {
         DWORD err = GetLastError();
         if (err != ERROR_ALREADY_EXISTS) {
             char buf[64];
-            snprintf(buf, sizeof(buf), "CreateDirectoryW failed: error %lu",
-                     static_cast<unsigned long>(err));
+            snprintf(buf, sizeof(buf), "CreateDirectoryW failed: error %lu", static_cast<unsigned long>(err));
             PrintPhaseFail(27, "write AV1 IVF file", buf);
             return false;
         }
@@ -1212,18 +1196,16 @@ bool BaselineProbe::Phase27_WriteIvfFile() {
     }
 
     auto writeU16 = [](FILE* fp, uint16_t v) -> bool {
-        uint8_t b[2] = { uint8_t(v), uint8_t(v >> 8) };
+        uint8_t b[2] = {uint8_t(v), uint8_t(v >> 8)};
         return fwrite(b, 1, 2, fp) == 2;
     };
     auto writeU32 = [](FILE* fp, uint32_t v) -> bool {
-        uint8_t b[4] = { uint8_t(v), uint8_t(v>>8), uint8_t(v>>16), uint8_t(v>>24) };
+        uint8_t b[4] = {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16), uint8_t(v >> 24)};
         return fwrite(b, 1, 4, fp) == 4;
     };
     auto writeU64 = [](FILE* fp, uint64_t v) -> bool {
-        uint8_t b[8] = {
-            uint8_t(v),     uint8_t(v>>8),  uint8_t(v>>16), uint8_t(v>>24),
-            uint8_t(v>>32), uint8_t(v>>40), uint8_t(v>>48), uint8_t(v>>56)
-        };
+        uint8_t b[8] = {uint8_t(v),       uint8_t(v >> 8),  uint8_t(v >> 16), uint8_t(v >> 24),
+                        uint8_t(v >> 32), uint8_t(v >> 40), uint8_t(v >> 48), uint8_t(v >> 56)};
         return fwrite(b, 1, 8, fp) == 8;
     };
 
@@ -1268,18 +1250,15 @@ bool BaselineProbe::Phase27_WriteIvfFile() {
     PrintDetail(detail);
     snprintf(detail, sizeof(detail), "ivf frame count   : %u", ivfFrameCount);
     PrintDetail(detail);
-    snprintf(detail, sizeof(detail), "bytes written     : %llu",
-              static_cast<unsigned long long>(bytesWritten));
+    snprintf(detail, sizeof(detail), "bytes written     : %llu", static_cast<unsigned long long>(bytesWritten));
     PrintDetail(detail);
     return true;
 }
 
 bool BaselineProbe::Phase28_VerifyIvfFile() {
     WIN32_FILE_ATTRIBUTE_DATA data{};
-    if (!GetFileAttributesExW(L"probe_nvenc_output\\av1_300f.ivf",
-                              GetFileExInfoStandard, &data)) {
-        PrintPhaseFail(28, "verify IVF file",
-                       "GetFileAttributesExW failed — file not found or inaccessible");
+    if (!GetFileAttributesExW(L"probe_nvenc_output\\av1_300f.ivf", GetFileExInfoStandard, &data)) {
+        PrintPhaseFail(28, "verify IVF file", "GetFileAttributesExW failed — file not found or inaccessible");
         return false;
     }
 
@@ -1287,8 +1266,7 @@ bool BaselineProbe::Phase28_VerifyIvfFile() {
 
     if (fileSize <= 32) {
         char buf[80];
-        snprintf(buf, sizeof(buf), "file size %llu <= IVF header size (32)",
-                 static_cast<unsigned long long>(fileSize));
+        snprintf(buf, sizeof(buf), "file size %llu <= IVF header size (32)", static_cast<unsigned long long>(fileSize));
         PrintPhaseFail(28, "verify IVF file", buf);
         return false;
     }
@@ -1305,8 +1283,7 @@ bool BaselineProbe::Phase28_VerifyIvfFile() {
     PrintPhasePass(28, "verify IVF file");
     PrintDetail("file: probe_nvenc_output\\av1_300f.ivf");
     char detail[96];
-    snprintf(detail, sizeof(detail), "size: %llu bytes",
-             static_cast<unsigned long long>(fileSize));
+    snprintf(detail, sizeof(detail), "size: %llu bytes", static_cast<unsigned long long>(fileSize));
     PrintDetail(detail);
     PrintDetail("expected ~13-14 KB for 300-frame deterministic AV1");
     return true;
@@ -1321,11 +1298,11 @@ bool BaselineProbe::RunAv1SustainedValidation() {
         bool (BaselineProbe::*fn)();
     };
     const Phase phases[] = {
-        {"open AV1 sustained session",     &BaselineProbe::Phase24_OpenAv1SustainedSession},
-        {"AV1 300-frame encode loop",      &BaselineProbe::Phase25_Av1SustainedEncodeLoop},
+        {"open AV1 sustained session", &BaselineProbe::Phase24_OpenAv1SustainedSession},
+        {"AV1 300-frame encode loop", &BaselineProbe::Phase25_Av1SustainedEncodeLoop},
         {"AV1 sustained drain and report", &BaselineProbe::Phase26_Av1SustainedDrainAndReport},
-        {"write AV1 IVF file",             &BaselineProbe::Phase27_WriteIvfFile},
-        {"verify IVF file",                &BaselineProbe::Phase28_VerifyIvfFile},
+        {"write AV1 IVF file", &BaselineProbe::Phase27_WriteIvfFile},
+        {"verify IVF file", &BaselineProbe::Phase28_VerifyIvfFile},
     };
     constexpr int kTotalPhases = sizeof(phases) / sizeof(phases[0]);
 
@@ -1351,19 +1328,19 @@ int BaselineProbe::Run() {
         bool (BaselineProbe::*fn)();
     };
     const Phase phases[] = {
-        {"load nvEncodeAPI64.dll",              &BaselineProbe::Phase01_LoadDll},
-        {"create NVENC API instance",           &BaselineProbe::Phase02_CreateApiInstance},
-        {"create D3D11 device",                 &BaselineProbe::Phase03_CreateD3D11Device},
-        {"open encode session",                 &BaselineProbe::Phase04_OpenEncodeSession},
-        {"H.264 GUID support",                  &BaselineProbe::Phase05_QueryH264Support},
-        {"NV12 input format support",           &BaselineProbe::Phase06_QueryNv12Support},
-        {"fetch preset config",                 &BaselineProbe::Phase07_FetchPresetConfig},
-        {"H.264 baseline init",                 &BaselineProbe::Phase08_InitializeEncoder},
-        {"create NVENC input/output buffers",   &BaselineProbe::Phase09_CreateBuffers},
-        {"fill one NV12 frame",                 &BaselineProbe::Phase10_FillFrame},
-        {"submit one H.264 frame",              &BaselineProbe::Phase11_SubmitFrame},
-        {"lock bitstream / verify bytes > 0",   &BaselineProbe::Phase12_LockBitstream},
-        {"EOS flush and cleanup",               &BaselineProbe::Phase13_FlushAndCleanup},
+        {"load nvEncodeAPI64.dll", &BaselineProbe::Phase01_LoadDll},
+        {"create NVENC API instance", &BaselineProbe::Phase02_CreateApiInstance},
+        {"create D3D11 device", &BaselineProbe::Phase03_CreateD3D11Device},
+        {"open encode session", &BaselineProbe::Phase04_OpenEncodeSession},
+        {"H.264 GUID support", &BaselineProbe::Phase05_QueryH264Support},
+        {"NV12 input format support", &BaselineProbe::Phase06_QueryNv12Support},
+        {"fetch preset config", &BaselineProbe::Phase07_FetchPresetConfig},
+        {"H.264 baseline init", &BaselineProbe::Phase08_InitializeEncoder},
+        {"create NVENC input/output buffers", &BaselineProbe::Phase09_CreateBuffers},
+        {"fill one NV12 frame", &BaselineProbe::Phase10_FillFrame},
+        {"submit one H.264 frame", &BaselineProbe::Phase11_SubmitFrame},
+        {"lock bitstream / verify bytes > 0", &BaselineProbe::Phase12_LockBitstream},
+        {"EOS flush and cleanup", &BaselineProbe::Phase13_FlushAndCleanup},
     };
     constexpr int kTotalPhases = sizeof(phases) / sizeof(phases[0]);
 
@@ -1387,7 +1364,9 @@ int BaselineProbe::Run() {
         return 1;
     }
 
-    fprintf(stdout, "[probe] encode probe PASS — H.264 one-frame, AV1 one-frame, AV1 300-frame, IVF file written and verified.\n");
+    fprintf(
+        stdout,
+        "[probe] encode probe PASS — H.264 one-frame, AV1 one-frame, AV1 300-frame, IVF file written and verified.\n");
     fflush(stdout);
     return 0;
 }

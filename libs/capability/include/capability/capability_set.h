@@ -11,11 +11,11 @@
 namespace exosnap::capability {
 
 struct ComboKey {
-    Container         c;
-    VideoCodec        v;
-    AudioCodec        a;
+    Container c;
+    VideoCodec v;
+    AudioCodec a;
     ChromaSubsampling cs;
-    BitDepth          bd;
+    BitDepth bd;
 
     bool operator==(const ComboKey&) const noexcept = default;
 };
@@ -26,27 +26,22 @@ struct ComboKeyHash {
 
 struct CapabilitySet {
     std::string gpu_adapter_name;
-    bool        nvenc_dll_present = false;
-    bool        mf_aac_available  = false;
+    bool nvenc_dll_present = false;
+    bool mf_aac_available = false;
 
     RuntimeCapabilitySnapshot runtime;
 
-    std::unordered_map<Container, SupportAnnotation>         containers;
-    std::unordered_map<VideoCodec, SupportAnnotation>        video_codecs;
-    std::unordered_map<AudioCodec, SupportAnnotation>        audio_codecs;
+    std::unordered_map<Container, SupportAnnotation> containers;
+    std::unordered_map<VideoCodec, SupportAnnotation> video_codecs;
+    std::unordered_map<AudioCodec, SupportAnnotation> audio_codecs;
     std::unordered_map<ChromaSubsampling, SupportAnnotation> chroma_modes;
-    std::unordered_map<BitDepth, SupportAnnotation>          bit_depths;
+    std::unordered_map<BitDepth, SupportAnnotation> bit_depths;
 
     std::unordered_map<ComboKey, SupportAnnotation, ComboKeyHash> combo_overrides;
 
     ResolutionConstraint resolution_constraint;
 
-    SupportAnnotation QueryCombo(
-        Container c,
-        VideoCodec v,
-        AudioCodec a,
-        ChromaSubsampling cs,
-        BitDepth bd) const;
+    SupportAnnotation QueryCombo(Container c, VideoCodec v, AudioCodec a, ChromaSubsampling cs, BitDepth bd) const;
 
     SupportAnnotation QueryContainer(Container c) const;
     SupportAnnotation QueryVideoCodec(VideoCodec v) const;
@@ -56,4 +51,3 @@ struct CapabilitySet {
 };
 
 } // namespace exosnap::capability
-

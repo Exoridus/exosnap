@@ -12,11 +12,11 @@
 namespace recorder_core {
 
 class SessionStatsCollector {
-public:
+  public:
     explicit SessionStatsCollector(SessionState& state);
     ~SessionStatsCollector();
 
-    SessionStatsCollector(const SessionStatsCollector&)            = delete;
+    SessionStatsCollector(const SessionStatsCollector&) = delete;
     SessionStatsCollector& operator=(const SessionStatsCollector&) = delete;
 
     // Start the stats timer thread.
@@ -25,7 +25,7 @@ public:
     // Stop the stats timer thread (blocks until the thread exits).
     void Stop();
 
-private:
+  private:
     void Run();
 
     SessionState& m_state;

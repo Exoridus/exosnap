@@ -13,9 +13,9 @@ enum class ChromaSubsampling { Cs420, Cs422, Cs444 };
 enum class BitDepth { Bit8, Bit10 };
 
 struct ResolutionConstraint {
-    uint32_t max_width    = 0;
-    uint32_t max_height   = 0;
-    bool     must_be_even = true;
+    uint32_t max_width = 0;
+    uint32_t max_height = 0;
+    bool must_be_even = true;
 };
 
 constexpr auto AllContainers() noexcept -> std::array<Container, 3> {
@@ -45,4 +45,3 @@ std::string_view ToString(ChromaSubsampling value) noexcept;
 std::string_view ToString(BitDepth value) noexcept;
 
 } // namespace exosnap::capability
-

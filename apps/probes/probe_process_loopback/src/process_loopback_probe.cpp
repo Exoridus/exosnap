@@ -18,21 +18,20 @@ constexpr uint32_t kActivationTimeoutMs = 5000;
 const IID kIidAudioClient = __uuidof(IAudioClient);
 const IID kIidAudioCaptureClient = __uuidof(IAudioCaptureClient);
 
-typedef HRESULT(STDAPICALLTYPE* PFN_ActivateAudioInterfaceAsync)(LPCWSTR deviceInterfacePath, REFIID riid,
-                                                                 PROPVARIANT* activationParams,
-                                                                 IActivateAudioInterfaceCompletionHandler* completionHandler,
-                                                                 IActivateAudioInterfaceAsyncOperation** operation);
+typedef HRESULT(STDAPICALLTYPE* PFN_ActivateAudioInterfaceAsync)(
+    LPCWSTR deviceInterfacePath, REFIID riid, PROPVARIANT* activationParams,
+    IActivateAudioInterfaceCompletionHandler* completionHandler, IActivateAudioInterfaceAsyncOperation** operation);
 
 PFN_ActivateAudioInterfaceAsync s_pfnActivateAudioInterfaceAsync = nullptr;
 HMODULE s_hMmdevapi = nullptr;
 
-HRESULT CallActivateAudioInterfaceAsyncSafe(LPCWSTR deviceInterfacePath, REFIID riid,
-                                            PROPVARIANT* activationParams,
+HRESULT CallActivateAudioInterfaceAsyncSafe(LPCWSTR deviceInterfacePath, REFIID riid, PROPVARIANT* activationParams,
                                             IActivateAudioInterfaceCompletionHandler* completionHandler,
                                             IActivateAudioInterfaceAsyncOperation** operation) {
     HRESULT hr = E_FAIL;
     __try {
-        hr = s_pfnActivateAudioInterfaceAsync(deviceInterfacePath, riid, activationParams, completionHandler, operation);
+        hr =
+            s_pfnActivateAudioInterfaceAsync(deviceInterfacePath, riid, activationParams, completionHandler, operation);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         fflush(stdout);
         fflush(stderr);
@@ -118,8 +117,8 @@ class ActivationHandler : public IActivateAudioInterfaceCompletionHandler {
   public:
     ActivationHandler() {
         m_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        HRESULT ftmHr = CoCreateFreeThreadedMarshaler(
-            static_cast<IActivateAudioInterfaceCompletionHandler*>(this), &m_ftm);
+        HRESULT ftmHr =
+            CoCreateFreeThreadedMarshaler(static_cast<IActivateAudioInterfaceCompletionHandler*>(this), &m_ftm);
         if (FAILED(ftmHr)) {
             m_ftm = nullptr;
         }
@@ -139,8 +138,7 @@ class ActivationHandler : public IActivateAudioInterfaceCompletionHandler {
     ActivationHandler(const ActivationHandler&) = delete;
     ActivationHandler& operator=(const ActivationHandler&) = delete;
 
-    HRESULT STDMETHODCALLTYPE ActivateCompleted(
-        IActivateAudioInterfaceAsyncOperation* operation) override {
+    HRESULT STDMETHODCALLTYPE ActivateCompleted(IActivateAudioInterfaceAsyncOperation* operation) override {
         HRESULT hr = operation->GetActivateResult(&m_activateResult, m_activatedObject.put());
         SetEvent(m_event);
         return hr;
@@ -335,8 +333,7 @@ bool Probe::InitStream(Stream& st, PROCESS_LOOPBACK_MODE mode) {
 
     if (FAILED(hr)) {
         if (hr != E_UNEXPECTED) {
-            fprintf(stderr, "[probe] FAIL: ActivateAudioInterfaceAsync 0x%08lX\n",
-                    static_cast<unsigned long>(hr));
+            fprintf(stderr, "[probe] FAIL: ActivateAudioInterfaceAsync 0x%08lX\n", static_cast<unsigned long>(hr));
             fprintf(stderr, "[probe] Check: handler must be agile (Free-Threaded Marshaler).\n");
             fprintf(stderr, "[probe] Check: AUDIOCLIENT_ACTIVATION_PARAMS shape matches SDK.\n");
             fprintf(stderr, "[probe] Check: device path is VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK.\n");
@@ -348,8 +345,7 @@ bool Probe::InitStream(Stream& st, PROCESS_LOOPBACK_MODE mode) {
 
     hr = handler->Wait();
     if (FAILED(hr)) {
-        fprintf(stderr, "[probe] FAIL: activation did not complete (0x%08lX)\n",
-                static_cast<unsigned long>(hr));
+        fprintf(stderr, "[probe] FAIL: activation did not complete (0x%08lX)\n", static_cast<unsigned long>(hr));
         fflush(stderr);
         handler->Release();
         return false;
@@ -376,8 +372,7 @@ bool Probe::InitStream(Stream& st, PROCESS_LOOPBACK_MODE mode) {
     st.bytesPerFrame = st.mixFormat.Format.nBlockAlign;
 
     DWORD streamFlags = AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM;
-    hr = st.audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, streamFlags,
-                                    0, 0, &st.mixFormat.Format, nullptr);
+    hr = st.audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, streamFlags, 0, 0, &st.mixFormat.Format, nullptr);
     if (FAILED(hr)) {
         fprintf(stderr, "[probe] FAIL: Initialize 0x%08lX\n", static_cast<unsigned long>(hr));
         fflush(stderr);
@@ -393,8 +388,7 @@ bool Probe::InitStream(Stream& st, PROCESS_LOOPBACK_MODE mode) {
 
     hr = st.audioClient->GetService(kIidAudioCaptureClient, st.captureClient.put_void());
     if (FAILED(hr)) {
-        fprintf(stderr, "[probe] FAIL: GetService(IAudioCaptureClient) 0x%08lX\n",
-                static_cast<unsigned long>(hr));
+        fprintf(stderr, "[probe] FAIL: GetService(IAudioCaptureClient) 0x%08lX\n", static_cast<unsigned long>(hr));
         fflush(stderr);
         return false;
     }
@@ -521,15 +515,15 @@ void Probe::PrintMetrics(const StreamSnapshot& s) {
                 "[metrics] stream=%s pid=%lu rate=%u channels=%u packets=%llu frames=%llu rms=%.3f "
                 "peak=%.3f silence=n/a discontinuities=%llu\n",
                 s.kind.c_str(), static_cast<unsigned long>(s.pid), s.sampleRate, s.channels,
-                static_cast<unsigned long long>(s.packets), static_cast<unsigned long long>(s.frames),
-                s.rms, s.peak, static_cast<unsigned long long>(s.discontinuities));
+                static_cast<unsigned long long>(s.packets), static_cast<unsigned long long>(s.frames), s.rms, s.peak,
+                static_cast<unsigned long long>(s.discontinuities));
     } else {
         fprintf(stdout,
                 "[metrics] stream=%s pid=%lu rate=%u channels=%u packets=%llu frames=%llu rms=%.3f "
                 "peak=%.3f silence=%.1f%% discontinuities=%llu\n",
                 s.kind.c_str(), static_cast<unsigned long>(s.pid), s.sampleRate, s.channels,
-                static_cast<unsigned long long>(s.packets), static_cast<unsigned long long>(s.frames),
-                s.rms, s.peak, s.silencePct, static_cast<unsigned long long>(s.discontinuities));
+                static_cast<unsigned long long>(s.packets), static_cast<unsigned long long>(s.frames), s.rms, s.peak,
+                s.silencePct, static_cast<unsigned long long>(s.discontinuities));
     }
     fflush(stdout);
 }

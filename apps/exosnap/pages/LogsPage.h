@@ -4,7 +4,7 @@
 namespace exosnap {
 class LogsPage : public QWidget {
     Q_OBJECT
-public:
+  public:
     explicit LogsPage(QWidget* parent = nullptr);
 };
 } // namespace exosnap

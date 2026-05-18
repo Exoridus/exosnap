@@ -21,8 +21,8 @@
 
 // Media Foundation
 #include <mfapi.h>
-#include <mftransform.h>
 #include <mfidl.h>
+#include <mftransform.h>
 
 // COM smart pointer support
 #include <wrl/client.h>
@@ -56,9 +56,8 @@ void ProbeNvidia(NvidiaRuntimeFacts& nvidia) {
     if (!nvenc_module) {
         nvidia.nvenc_dll_present = false;
         char buf[128];
-        std::snprintf(buf, sizeof(buf),
-            "LoadLibraryW(nvEncodeAPI64.dll) failed, GetLastError=%lu",
-            static_cast<unsigned long>(GetLastError()));
+        std::snprintf(buf, sizeof(buf), "LoadLibraryW(nvEncodeAPI64.dll) failed, GetLastError=%lu",
+                      static_cast<unsigned long>(GetLastError()));
         nvidia.failure_detail = buf;
         return;
     }
@@ -71,9 +70,8 @@ void ProbeNvidia(NvidiaRuntimeFacts& nvidia) {
 
     if (!fn) {
         char buf[128];
-        std::snprintf(buf, sizeof(buf),
-            "GetProcAddress(NvEncodeAPIGetMaxSupportedVersion) failed, GetLastError=%lu",
-            static_cast<unsigned long>(GetLastError()));
+        std::snprintf(buf, sizeof(buf), "GetProcAddress(NvEncodeAPIGetMaxSupportedVersion) failed, GetLastError=%lu",
+                      static_cast<unsigned long>(GetLastError()));
         nvidia.failure_detail = buf;
         FreeLibrary(nvenc_module);
         return;
@@ -84,12 +82,11 @@ void ProbeNvidia(NvidiaRuntimeFacts& nvidia) {
     const uint32_t nvenc_result = fn(&api_version);
     if (nvenc_result == 0u) {
         nvidia.nvenc_api_version_valid = true;
-        nvidia.nvenc_api_version       = api_version;
+        nvidia.nvenc_api_version = api_version;
     } else {
         char buf[128];
-        std::snprintf(buf, sizeof(buf),
-            "NvEncodeAPIGetMaxSupportedVersion returned non-zero status: %u",
-            static_cast<unsigned int>(nvenc_result));
+        std::snprintf(buf, sizeof(buf), "NvEncodeAPIGetMaxSupportedVersion returned non-zero status: %u",
+                      static_cast<unsigned int>(nvenc_result));
         nvidia.failure_detail = buf;
     }
 
@@ -108,9 +105,7 @@ void ProbeAdapterName(NvidiaRuntimeFacts& nvidia) {
     // are still alive.
 
     Microsoft::WRL::ComPtr<IDXGIFactory> factory;
-    HRESULT hr = CreateDXGIFactory(
-        __uuidof(IDXGIFactory),
-        reinterpret_cast<void**>(factory.GetAddressOf()));
+    HRESULT hr = CreateDXGIFactory(__uuidof(IDXGIFactory), reinterpret_cast<void**>(factory.GetAddressOf()));
     if (FAILED(hr)) {
         // Not a critical failure; adapter_name stays empty.
         return;
@@ -130,22 +125,13 @@ void ProbeAdapterName(NvidiaRuntimeFacts& nvidia) {
             continue;
         }
         // Convert wide description to narrow UTF-8 using WideCharToMultiByte.
-        const int len = WideCharToMultiByte(
-            CP_UTF8, 0,
-            desc.Description, -1,
-            nullptr, 0,
-            nullptr, nullptr);
+        const int len = WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, nullptr, 0, nullptr, nullptr);
         if (len > 1) {
             std::string name(static_cast<size_t>(len - 1), '\0');
-            WideCharToMultiByte(
-                CP_UTF8, 0,
-                desc.Description, -1,
-                name.data(), len,
-                nullptr, nullptr);
+            WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name.data(), len, nullptr, nullptr);
 
             // Prefer first non-software adapter.
-            const bool is_software =
-                (desc.VendorId == 0x1414u && desc.DeviceId == 0x008cu); // WARP / Microsoft Basic
+            const bool is_software = (desc.VendorId == 0x1414u && desc.DeviceId == 0x008cu); // WARP / Microsoft Basic
             if (best_name.empty() || (!is_software && best_name.find("Microsoft Basic") != std::string::npos)) {
                 best_name = std::move(name);
             }
@@ -188,18 +174,14 @@ void ProbeMfAac(MfAacRuntimeFacts& mf_aac) {
         // Target: audio encoder outputting AAC (MFAudioFormat_AAC).
         MFT_REGISTER_TYPE_INFO output_type{};
         output_type.guidMajorType = MFMediaType_Audio;
-        output_type.guidSubtype   = MFAudioFormat_AAC;
+        output_type.guidSubtype = MFAudioFormat_AAC;
 
         IMFActivate** activate_array = nullptr;
-        UINT32        count          = 0;
+        UINT32 count = 0;
 
-        const HRESULT enum_hr = MFTEnumEx(
-            MFT_CATEGORY_AUDIO_ENCODER,
-            MFT_ENUM_FLAG_ALL,
-            nullptr,       // any input type
-            &output_type,
-            &activate_array,
-            &count);
+        const HRESULT enum_hr = MFTEnumEx(MFT_CATEGORY_AUDIO_ENCODER, MFT_ENUM_FLAG_ALL,
+                                          nullptr, // any input type
+                                          &output_type, &activate_array, &count);
 
         if (SUCCEEDED(enum_hr)) {
             mf_aac.mftenum_found = (count > 0);
@@ -222,29 +204,20 @@ void ProbeMfAac(MfAacRuntimeFacts& mf_aac) {
     {
         // CLSID_AACMFTEncoder = {32D186A7-218F-4C75-8876-DD77273A8999}
         static const CLSID kClsidAacMftEncoder = {
-            0x32D186A7u,
-            0x218Fu,
-            0x4C75u,
-            {0x88u, 0x76u, 0xDDu, 0x77u, 0x27u, 0x3Au, 0x89u, 0x99u}
-        };
+            0x32D186A7u, 0x218Fu, 0x4C75u, {0x88u, 0x76u, 0xDDu, 0x77u, 0x27u, 0x3Au, 0x89u, 0x99u}};
 
         Microsoft::WRL::ComPtr<IUnknown> aac_encoder;
-        const HRESULT clsid_hr = CoCreateInstance(
-            kClsidAacMftEncoder,
-            nullptr,
-            CLSCTX_INPROC_SERVER,
-            IID_IUnknown,
-            reinterpret_cast<void**>(aac_encoder.GetAddressOf()));
+        const HRESULT clsid_hr = CoCreateInstance(kClsidAacMftEncoder, nullptr, CLSCTX_INPROC_SERVER, IID_IUnknown,
+                                                  reinterpret_cast<void**>(aac_encoder.GetAddressOf()));
 
         mf_aac.clsid_instantiable = SUCCEEDED(clsid_hr);
     }
 
     // Populate failure_detail only when both paths fail.
     if (!mf_aac.available()) {
-        mf_aac.failure_detail =
-            "MFTEnumEx found no AAC encoders and direct CLSID_AACMFTEncoder "
-            "instantiation failed. Media Foundation AAC encoder is not available "
-            "on this system.";
+        mf_aac.failure_detail = "MFTEnumEx found no AAC encoders and direct CLSID_AACMFTEncoder "
+                                "instantiation failed. Media Foundation AAC encoder is not available "
+                                "on this system.";
     }
 
     // Shutdown in reverse order.
@@ -270,8 +243,7 @@ void ProbeOs(OsRuntimeFacts& os) {
         return;
     }
 
-    auto RtlGetVersionFn = reinterpret_cast<RtlGetVersion_t>(
-        GetProcAddress(ntdll, "RtlGetVersion"));
+    auto RtlGetVersionFn = reinterpret_cast<RtlGetVersion_t>(GetProcAddress(ntdll, "RtlGetVersion"));
     if (!RtlGetVersionFn) {
         os.failure_detail = "GetProcAddress(RtlGetVersion) failed; OS version unavailable.";
         return;
@@ -282,9 +254,8 @@ void ProbeOs(OsRuntimeFacts& os) {
     const LONG status = RtlGetVersionFn(&info);
     if (status != 0) { // STATUS_SUCCESS = 0
         char buf[64];
-        std::snprintf(buf, sizeof(buf),
-            "RtlGetVersion returned NTSTATUS 0x%08lX",
-            static_cast<unsigned long>(static_cast<ULONG>(status)));
+        std::snprintf(buf, sizeof(buf), "RtlGetVersion returned NTSTATUS 0x%08lX",
+                      static_cast<unsigned long>(static_cast<ULONG>(status)));
         os.failure_detail = buf;
         return;
     }
@@ -292,10 +263,8 @@ void ProbeOs(OsRuntimeFacts& os) {
     os.build_number = static_cast<uint32_t>(info.dwBuildNumber);
 
     char buf[64];
-    std::snprintf(buf, sizeof(buf), "%lu.%lu.%lu",
-        static_cast<unsigned long>(info.dwMajorVersion),
-        static_cast<unsigned long>(info.dwMinorVersion),
-        static_cast<unsigned long>(info.dwBuildNumber));
+    std::snprintf(buf, sizeof(buf), "%lu.%lu.%lu", static_cast<unsigned long>(info.dwMajorVersion),
+                  static_cast<unsigned long>(info.dwMinorVersion), static_cast<unsigned long>(info.dwBuildNumber));
     os.version_string = buf;
 }
 

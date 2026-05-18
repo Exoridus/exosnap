@@ -29,8 +29,7 @@ int main(int argc, char* argv[]) {
         fprintf(stdout, "[probe] available capture targets (%zu):\n", targets.size());
         for (size_t i = 0; i < targets.size(); ++i) {
             const auto& t = targets[i];
-            const char* kind = (t.kind == wgc_nvenc_aac_mkv::CaptureTarget::Kind::Monitor)
-                               ? "monitor" : "window";
+            const char* kind = (t.kind == wgc_nvenc_aac_mkv::CaptureTarget::Kind::Monitor) ? "monitor" : "window";
             fwprintf(stdout, L"  [%zu] %hs -- %s\n", i, kind, t.description.c_str());
         }
         fflush(stdout);
@@ -42,8 +41,7 @@ int main(int argc, char* argv[]) {
         char* end = nullptr;
         long v = std::strtol(argv[1], &end, 10);
         if (end == argv[1] || v < 0 || static_cast<size_t>(v) >= targets.size()) {
-            fprintf(stderr, "[probe] ERROR: invalid target index '%s' (0..%zu)\n",
-                    argv[1], targets.size() - 1);
+            fprintf(stderr, "[probe] ERROR: invalid target index '%s' (0..%zu)\n", argv[1], targets.size() - 1);
             return 1;
         }
         idx = static_cast<size_t>(v);

@@ -4,7 +4,7 @@
 namespace exosnap {
 class AudioPage : public QWidget {
     Q_OBJECT
-public:
+  public:
     explicit AudioPage(QWidget* parent = nullptr);
 };
 } // namespace exosnap

@@ -17,11 +17,11 @@
 namespace recorder_core {
 
 class MuxThread {
-public:
+  public:
     explicit MuxThread(SessionState& state);
     ~MuxThread();
 
-    MuxThread(const MuxThread&)            = delete;
+    MuxThread(const MuxThread&) = delete;
     MuxThread& operator=(const MuxThread&) = delete;
 
     void Start();
@@ -31,13 +31,15 @@ public:
 
     // Returns the native HANDLE for use with WaitForMultipleObjects before joining.
     // Not valid after Join() completes.  Not const: std::thread::native_handle is not const.
-    HANDLE NativeHandle() noexcept { return m_thread.joinable() ? m_thread.native_handle() : nullptr; }
+    HANDLE NativeHandle() noexcept {
+        return m_thread.joinable() ? m_thread.native_handle() : nullptr;
+    }
 
-private:
+  private:
     void Run();
 
     SessionState& m_state;
-    std::thread   m_thread;
+    std::thread m_thread;
 };
 
 } // namespace recorder_core

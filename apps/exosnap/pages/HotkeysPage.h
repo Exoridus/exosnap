@@ -4,7 +4,7 @@
 namespace exosnap {
 class HotkeysPage : public QWidget {
     Q_OBJECT
-public:
+  public:
     explicit HotkeysPage(QWidget* parent = nullptr);
 };
 } // namespace exosnap

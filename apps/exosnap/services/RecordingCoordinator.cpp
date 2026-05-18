@@ -11,9 +11,11 @@
 namespace exosnap {
 
 static std::wstring ToWide(const std::string& s) {
-    if (s.empty()) return {};
+    if (s.empty())
+        return {};
     int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
-    if (n <= 0) return {};
+    if (n <= 0)
+        return {};
     std::wstring w(static_cast<size_t>(n), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
     return w;
@@ -27,25 +29,23 @@ RecordingCoordinator::~RecordingCoordinator() {
     }
 }
 
-void RecordingCoordinator::OnCapabilitiesReady(
-    const exosnap::capability::CapabilitySet& caps,
-    const exosnap::capability::ResolveResult& validation) {
-    caps_              = &caps;
+void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::CapabilitySet& caps,
+                                               const exosnap::capability::ResolveResult& validation) {
+    caps_ = &caps;
     validation_result_ = validation;
     if (validation.succeeded) {
-        resolved_user_config_   = validation.resolved_config;
-        state_                  = UiRecordingState::Ready;
+        resolved_user_config_ = validation.resolved_config;
+        state_ = UiRecordingState::Ready;
         capability_status_text_ = L"Ready: MKV · AV1 NVENC · AAC · 60 fps";
     } else {
         state_ = UiRecordingState::Blocked;
-        capability_status_text_ = validation.invalidity.empty()
-            ? L"Recording unavailable"
-            : ToWide(validation.invalidity.front().message);
+        capability_status_text_ =
+            validation.invalidity.empty() ? L"Recording unavailable" : ToWide(validation.invalidity.front().message);
     }
 }
 
 void RecordingCoordinator::OnCapabilityFailure(std::wstring message) {
-    state_                  = UiRecordingState::Blocked;
+    state_ = UiRecordingState::Blocked;
     capability_status_text_ = std::move(message);
 }
 
@@ -54,15 +54,16 @@ std::vector<recorder_core::CaptureTarget> RecordingCoordinator::EnumerateTargets
 }
 
 bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& target) {
-    if (is_recording_) return false;
-    if (state_ != UiRecordingState::Ready &&
-        state_ != UiRecordingState::Completed &&
+    if (is_recording_)
+        return false;
+    if (state_ != UiRecordingState::Ready && state_ != UiRecordingState::Completed &&
         state_ != UiRecordingState::Failed) {
         return false;
     }
-    if (!caps_) return false;
+    if (!caps_)
+        return false;
 
-    auto output_path     = GenerateOutputPath();
+    auto output_path = GenerateOutputPath();
     current_output_path_ = output_path;
 
     std::error_code ec;
@@ -70,7 +71,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     if (ec) {
         PostStateChange(UiRecordingState::Failed);
         UiRecordingResult result;
-        result.succeeded    = false;
+        result.succeeded = false;
         result.error_detail = L"Failed to create output directory: " + ToWide(ec.message());
         PostResult(std::move(result));
         return false;
@@ -78,54 +79,51 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
 
     PostStateChange(UiRecordingState::Preparing);
 
-    auto config       = exosnap::capability::ToRecorderCoreConfig(resolved_user_config_, *caps_);
-    config.target      = target;
+    auto config = exosnap::capability::ToRecorderCoreConfig(resolved_user_config_, *caps_);
+    config.target = target;
     config.output_path = output_path;
 
     recorder_core::RecorderResult validate_result;
     if (!session_.Validate(config, &validate_result)) {
         PostStateChange(UiRecordingState::Failed);
         UiRecordingResult result;
-        result.succeeded    = false;
-        result.output_path  = output_path.wstring();
-        result.error_phase  = FormatErrorPhase(validate_result.error_phase);
+        result.succeeded = false;
+        result.output_path = output_path.wstring();
+        result.error_phase = FormatErrorPhase(validate_result.error_phase);
         result.hresult_text = FormatHResult(validate_result.error_code);
         result.error_detail = ToWide(validate_result.error_detail);
         PostResult(std::move(result));
         return false;
     }
 
-    session_.SetStatsCallback([this](const recorder_core::SessionStats& stats) {
-        PostStats(stats);
-    });
+    session_.SetStatsCallback([this](const recorder_core::SessionStats& stats) { PostStats(stats); });
 
     is_recording_ = true;
     PostStateChange(UiRecordingState::Recording);
 
-    recording_thread_ = std::jthread(
-        [this, cfg = std::move(config), op = std::move(output_path)](std::stop_token) {
-            RecordingThreadProc(cfg, op);
-        });
+    recording_thread_ = std::jthread([this, cfg = std::move(config), op = std::move(output_path)](std::stop_token) {
+        RecordingThreadProc(cfg, op);
+    });
 
     return true;
 }
 
 void RecordingCoordinator::StopRecording() {
-    if (!is_recording_) return;
+    if (!is_recording_)
+        return;
     PostStateChange(UiRecordingState::Stopping);
     session_.Stop();
 }
 
-void RecordingCoordinator::RecordingThreadProc(
-    recorder_core::RecorderConfig config,
-    std::filesystem::path output_path) {
-    auto result   = session_.Record(config);
+void RecordingCoordinator::RecordingThreadProc(recorder_core::RecorderConfig config,
+                                               std::filesystem::path output_path) {
+    auto result = session_.Record(config);
     is_recording_ = false;
 
     UiRecordingResult ui_result;
-    ui_result.succeeded    = result.succeeded;
-    ui_result.output_path  = output_path.wstring();
-    ui_result.error_phase  = FormatErrorPhase(result.error_phase);
+    ui_result.succeeded = result.succeeded;
+    ui_result.output_path = output_path.wstring();
+    ui_result.error_phase = FormatErrorPhase(result.error_phase);
     ui_result.hresult_text = FormatHResult(result.error_code);
     ui_result.error_detail = ToWide(result.error_detail);
 
@@ -133,42 +131,56 @@ void RecordingCoordinator::RecordingThreadProc(
     PostStateChange(result.succeeded ? UiRecordingState::Completed : UiRecordingState::Failed);
 }
 
-UiRecordingState RecordingCoordinator::State() const noexcept { return state_; }
-std::wstring RecordingCoordinator::CapabilityStatusText() const { return capability_status_text_; }
-std::filesystem::path RecordingCoordinator::CurrentOutputPath() const { return current_output_path_; }
+UiRecordingState RecordingCoordinator::State() const noexcept {
+    return state_;
+}
+std::wstring RecordingCoordinator::CapabilityStatusText() const {
+    return capability_status_text_;
+}
+std::filesystem::path RecordingCoordinator::CurrentOutputPath() const {
+    return current_output_path_;
+}
 
-void RecordingCoordinator::SetStateChangedCallback(StateChangedCallback cb) { on_state_changed_ = std::move(cb); }
-void RecordingCoordinator::SetStatsUpdatedCallback(StatsUpdatedCallback cb) { on_stats_updated_ = std::move(cb); }
-void RecordingCoordinator::SetResultReadyCallback(ResultReadyCallback cb)   { on_result_ready_  = std::move(cb); }
+void RecordingCoordinator::SetStateChangedCallback(StateChangedCallback cb) {
+    on_state_changed_ = std::move(cb);
+}
+void RecordingCoordinator::SetStatsUpdatedCallback(StatsUpdatedCallback cb) {
+    on_stats_updated_ = std::move(cb);
+}
+void RecordingCoordinator::SetResultReadyCallback(ResultReadyCallback cb) {
+    on_result_ready_ = std::move(cb);
+}
 
 void RecordingCoordinator::PostStateChange(UiRecordingState new_state) {
     state_ = new_state;
-    if (!on_state_changed_) return;
+    if (!on_state_changed_)
+        return;
     auto cb = on_state_changed_;
-    QMetaObject::invokeMethod(QCoreApplication::instance(),
-        [cb, new_state]() { cb(new_state); }, Qt::QueuedConnection);
+    QMetaObject::invokeMethod(QCoreApplication::instance(), [cb, new_state]() { cb(new_state); }, Qt::QueuedConnection);
 }
 
 void RecordingCoordinator::PostResult(UiRecordingResult result) {
-    if (!on_result_ready_) return;
+    if (!on_result_ready_)
+        return;
     auto cb = on_result_ready_;
-    QMetaObject::invokeMethod(QCoreApplication::instance(),
-        [cb, r = std::move(result)]() { cb(r); }, Qt::QueuedConnection);
+    QMetaObject::invokeMethod(
+        QCoreApplication::instance(), [cb, r = std::move(result)]() { cb(r); }, Qt::QueuedConnection);
 }
 
 void RecordingCoordinator::PostStats(recorder_core::SessionStats stats) {
-    if (!on_stats_updated_) return;
+    if (!on_stats_updated_)
+        return;
     auto cb = on_stats_updated_;
-    QMetaObject::invokeMethod(QCoreApplication::instance(),
-        [cb, s = std::move(stats)]() { cb(s); }, Qt::QueuedConnection);
+    QMetaObject::invokeMethod(
+        QCoreApplication::instance(), [cb, s = std::move(stats)]() { cb(s); }, Qt::QueuedConnection);
 }
 
 std::filesystem::path RecordingCoordinator::GenerateOutputPath() {
     wchar_t profile[MAX_PATH] = {};
     DWORD len = GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
     std::filesystem::path base_dir = (len > 0 && len < MAX_PATH)
-        ? std::filesystem::path(profile) / L"Videos" / L"Exosnap"
-        : std::filesystem::path(L"C:\\Users\\Public\\Videos\\Exosnap");
+                                         ? std::filesystem::path(profile) / L"Videos" / L"Exosnap"
+                                         : std::filesystem::path(L"C:\\Users\\Public\\Videos\\Exosnap");
 
     std::time_t t = std::time(nullptr);
     std::tm tm{};
@@ -179,7 +191,8 @@ std::filesystem::path RecordingCoordinator::GenerateOutputPath() {
 }
 
 std::wstring RecordingCoordinator::FormatHResult(HRESULT hr) {
-    if (hr == S_OK) return {};
+    if (hr == S_OK)
+        return {};
     wchar_t buf[32] = {};
     _snwprintf_s(buf, _TRUNCATE, L"0x%08X", static_cast<unsigned int>(hr));
     return buf;
@@ -187,16 +200,26 @@ std::wstring RecordingCoordinator::FormatHResult(HRESULT hr) {
 
 std::wstring RecordingCoordinator::FormatErrorPhase(recorder_core::ErrorPhase phase) {
     switch (phase) {
-    case recorder_core::ErrorPhase::None:         return {};
-    case recorder_core::ErrorPhase::Prepare:      return L"Prepare";
-    case recorder_core::ErrorPhase::VideoCapture: return L"VideoCapture";
-    case recorder_core::ErrorPhase::VideoEncode:  return L"VideoEncode";
-    case recorder_core::ErrorPhase::AudioCapture: return L"AudioCapture";
-    case recorder_core::ErrorPhase::AudioEncode:  return L"AudioEncode";
-    case recorder_core::ErrorPhase::Mux:          return L"Mux";
-    case recorder_core::ErrorPhase::Finalize:     return L"Finalize";
-    case recorder_core::ErrorPhase::Shutdown:     return L"Shutdown";
-    default:                                      return L"Unknown";
+    case recorder_core::ErrorPhase::None:
+        return {};
+    case recorder_core::ErrorPhase::Prepare:
+        return L"Prepare";
+    case recorder_core::ErrorPhase::VideoCapture:
+        return L"VideoCapture";
+    case recorder_core::ErrorPhase::VideoEncode:
+        return L"VideoEncode";
+    case recorder_core::ErrorPhase::AudioCapture:
+        return L"AudioCapture";
+    case recorder_core::ErrorPhase::AudioEncode:
+        return L"AudioEncode";
+    case recorder_core::ErrorPhase::Mux:
+        return L"Mux";
+    case recorder_core::ErrorPhase::Finalize:
+        return L"Finalize";
+    case recorder_core::ErrorPhase::Shutdown:
+        return L"Shutdown";
+    default:
+        return L"Unknown";
     }
 }
 

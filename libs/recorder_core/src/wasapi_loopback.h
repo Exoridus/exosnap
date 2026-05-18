@@ -17,11 +17,11 @@ namespace recorder_core {
 // ---------------------------------------------------------------------------
 
 class WasapiLoopback {
-public:
+  public:
     WasapiLoopback() = default;
     ~WasapiLoopback();
 
-    WasapiLoopback(const WasapiLoopback&)            = delete;
+    WasapiLoopback(const WasapiLoopback&) = delete;
     WasapiLoopback& operator=(const WasapiLoopback&) = delete;
 
     // Initialize and start the loopback stream.
@@ -31,11 +31,7 @@ public:
     // Retrieve the next available packet.
     // Returns false if no data is available or on error.
     // Sets silent=true if AUDCLNT_BUFFERFLAGS_SILENT is set.
-    bool GetNextPacket(
-        BYTE**   out_data,
-        UINT32*  out_num_frames,
-        DWORD*   out_capture_flags,
-        bool*    out_silent);
+    bool GetNextPacket(BYTE** out_data, UINT32* out_num_frames, DWORD* out_capture_flags, bool* out_silent);
 
     // Release the current packet (must be called after GetNextPacket succeeds).
     bool ReleasePacket(UINT32 num_frames);
@@ -46,13 +42,15 @@ public:
     // Stop and release all WASAPI resources.
     void Shutdown();
 
-    const std::string& EndpointName() const { return m_endpointName; }
+    const std::string& EndpointName() const {
+        return m_endpointName;
+    }
 
-private:
-    IMMDevice*           m_pDevice        = nullptr;
-    IAudioClient*        m_pAudioClient   = nullptr;
+  private:
+    IMMDevice* m_pDevice = nullptr;
+    IAudioClient* m_pAudioClient = nullptr;
     IAudioCaptureClient* m_pCaptureClient = nullptr;
-    std::string          m_endpointName;
+    std::string m_endpointName;
 };
 
 } // namespace recorder_core

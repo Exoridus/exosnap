@@ -1,7 +1,7 @@
 #include "startup_log.h"
 
-#include <windows.h>
 #include <sstream>
+#include <windows.h>
 
 #include <array>
 #include <fstream>
@@ -29,11 +29,8 @@ std::wstring Timestamp() {
     SYSTEMTIME st{};
     GetLocalTime(&st);
     std::wostringstream oss;
-    oss << std::setfill(L'0')
-        << std::setw(2) << st.wHour << L":"
-        << std::setw(2) << st.wMinute << L":"
-        << std::setw(2) << st.wSecond << L"."
-        << std::setw(3) << st.wMilliseconds;
+    oss << std::setfill(L'0') << std::setw(2) << st.wHour << L":" << std::setw(2) << st.wMinute << L":" << std::setw(2)
+        << st.wSecond << L"." << std::setw(3) << st.wMilliseconds;
     return oss.str();
 }
 

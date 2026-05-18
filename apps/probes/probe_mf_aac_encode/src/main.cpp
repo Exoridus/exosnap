@@ -12,8 +12,7 @@ int main() {
 
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(hr)) {
-        fprintf(stderr, "[probe] FATAL: CoInitializeEx failed 0x%08lX\n",
-                static_cast<unsigned long>(hr));
+        fprintf(stderr, "[probe] FATAL: CoInitializeEx failed 0x%08lX\n", static_cast<unsigned long>(hr));
         fflush(stderr);
         return 1;
     }

@@ -74,24 +74,24 @@ class BaselineProbe {
     NV_ENC_CONFIG m_encodeConfig{};
 
     NV_ENC_PRESET_CONFIG m_av1PresetConfig{};
-    NV_ENC_CONFIG        m_av1EncodeConfig{};
+    NV_ENC_CONFIG m_av1EncodeConfig{};
 
-    NV_ENC_INPUT_PTR  m_inputBuffer     = nullptr;
+    NV_ENC_INPUT_PTR m_inputBuffer = nullptr;
     NV_ENC_OUTPUT_PTR m_bitstreamBuffer = nullptr;
-    bool              m_needMoreInput   = false;
-    uint32_t          m_inputPitch      = 0;
+    bool m_needMoreInput = false;
+    uint32_t m_inputPitch = 0;
 
     struct Av1SustainedPacket {
         std::vector<uint8_t> bytes;
-        uint64_t             timestamp;
+        uint64_t timestamp;
     };
 
     // Sustained-encode state (reset at start of Phase24)
-    int      m_sv_framesSubmitted    = 0;
-    int      m_sv_packetsLocked      = 0;
-    int      m_sv_needMoreInputCount = 0;
-    uint64_t m_sv_totalBytes         = 0;
-    double   m_sv_elapsedSeconds     = 0.0;
+    int m_sv_framesSubmitted = 0;
+    int m_sv_packetsLocked = 0;
+    int m_sv_needMoreInputCount = 0;
+    uint64_t m_sv_totalBytes = 0;
+    double m_sv_elapsedSeconds = 0.0;
     std::vector<Av1SustainedPacket> m_sv_packets;
 
     const uint32_t m_encodeWidth = 1920;

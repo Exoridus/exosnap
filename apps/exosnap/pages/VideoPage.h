@@ -4,7 +4,7 @@
 namespace exosnap {
 class VideoPage : public QWidget {
     Q_OBJECT
-public:
+  public:
     explicit VideoPage(QWidget* parent = nullptr);
 };
 } // namespace exosnap
