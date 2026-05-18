@@ -1,0 +1,2 @@
+#!/bin/sh
+pwsh -NonInteractive -File "$(git rev-parse --show-toplevel)/scripts/check-format.ps1"

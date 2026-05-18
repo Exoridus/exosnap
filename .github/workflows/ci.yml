@@ -5,6 +5,31 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    name: lint
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.9.0'
+          arch: 'win64_msvc2022_64'
+          cache: true
+
+      - name: Install cppcheck
+        run: choco install cppcheck -y
+
+      - name: Check clang-format
+        run: pwsh -NonInteractive -File scripts/check-format.ps1
+
+      - name: Configure (lint preset)
+        run: cmake --preset windows-x64-lint
+
+      - name: Build with static analysis
+        run: cmake --build --preset windows-x64-lint
+
   build-test:
     name: build-test (${{ matrix.preset }})
     runs-on: windows-latest

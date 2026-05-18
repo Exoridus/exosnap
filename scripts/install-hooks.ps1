@@ -1,30 +1,17 @@
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
-$hooksDir = Join-Path $repoRoot '.git\hooks'
 
-if (-not (Test-Path $hooksDir)) {
-    throw ".git/hooks not found — is this a git repository?"
+if (-not (Test-Path (Join-Path $repoRoot '.git'))) {
+    throw "Not a git repository: $repoRoot"
 }
 
-# pre-commit: format check only (fast, ~1s)
-$preCommitPath = Join-Path $hooksDir 'pre-commit'
-$preCommitScript = @"
-#!/bin/sh
-pwsh -NonInteractive -File "`$(git rev-parse --show-toplevel)/scripts/check-format.ps1"
-"@
-[System.IO.File]::WriteAllText($preCommitPath, $preCommitScript.Replace("`r`n", "`n"))
+# Point git at the tracked .githooks/ directory.
+# CMake configure does this automatically; run this script manually after a
+# bare clone without a configure step.
+git -C $repoRoot config core.hooksPath .githooks
+if ($LASTEXITCODE -ne 0) { throw "git config failed." }
 
-# pre-push: full quality check (clang-tidy + cppcheck + build + test)
-$prePushPath = Join-Path $hooksDir 'pre-push'
-$prePushScript = @"
-#!/bin/sh
-pwsh -NonInteractive -File "`$(git rev-parse --show-toplevel)/scripts/check-quality.ps1"
-"@
-[System.IO.File]::WriteAllText($prePushPath, $prePushScript.Replace("`r`n", "`n"))
-
-Write-Host "Git hooks installed:"
+Write-Host "Git hooks path set to .githooks/"
 Write-Host "  pre-commit -> scripts/check-format.ps1   (clang-format)"
 Write-Host "  pre-push   -> scripts/check-quality.ps1  (clang-tidy + cppcheck + build + test)"
-Write-Host ""
-Write-Host "Re-run this script after cloning to reinstall hooks."
