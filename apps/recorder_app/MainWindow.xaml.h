@@ -10,6 +10,9 @@ struct MainWindow : MainWindowT<MainWindow> {
                              winrt::Microsoft::UI::Xaml::Controls::NavigationViewSelectionChangedEventArgs const& args);
 
   private:
+    winrt::Microsoft::UI::Xaml::Controls::NavigationView nav_view_{nullptr};
+    winrt::Microsoft::UI::Xaml::Controls::Frame content_frame_{nullptr};
+
     void NavigateToPage(winrt::hstring const& pageTag);
 };
 } // namespace winrt::exosnap::implementation

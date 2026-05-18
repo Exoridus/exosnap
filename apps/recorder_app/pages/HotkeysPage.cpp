@@ -1,6 +1,6 @@
 #include "HotkeysPage.h"
-#if __has_include("HotkeysPage.xaml.g.hpp")
-#include "HotkeysPage.xaml.g.hpp"
+#if __has_include("pages/HotkeysPage.xaml.g.hpp")
+#include "pages/HotkeysPage.xaml.g.hpp"
 #endif
 
 namespace winrt::exosnap::implementation {

@@ -1,6 +1,6 @@
 #include "AdvancedPage.h"
-#if __has_include("AdvancedPage.xaml.g.hpp")
-#include "AdvancedPage.xaml.g.hpp"
+#if __has_include("pages/AdvancedPage.xaml.g.hpp")
+#include "pages/AdvancedPage.xaml.g.hpp"
 #endif
 
 namespace winrt::exosnap::implementation {

@@ -1,6 +1,6 @@
 #include "LogsPage.h"
-#if __has_include("LogsPage.xaml.g.hpp")
-#include "LogsPage.xaml.g.hpp"
+#if __has_include("pages/LogsPage.xaml.g.hpp")
+#include "pages/LogsPage.xaml.g.hpp"
 #endif
 
 namespace winrt::exosnap::implementation {

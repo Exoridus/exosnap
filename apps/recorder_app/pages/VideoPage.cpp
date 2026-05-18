@@ -1,6 +1,6 @@
 #include "VideoPage.h"
-#if __has_include("VideoPage.xaml.g.hpp")
-#include "VideoPage.xaml.g.hpp"
+#if __has_include("pages/VideoPage.xaml.g.hpp")
+#include "pages/VideoPage.xaml.g.hpp"
 #endif
 
 namespace winrt::exosnap::implementation {

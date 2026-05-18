@@ -12,11 +12,13 @@
 #include <capability/user_config.h>
 
 #include <winrt/Microsoft.UI.Dispatching.h>
+#include <winrt/base.h>
 
 namespace winrt::exosnap::implementation {
 
 struct App : AppT<App> {
     App();
+    ~App();
     void OnLaunched(Microsoft::UI::Xaml::LaunchActivatedEventArgs const&);
 
     // Capability callbacks that RecordPage registers.
@@ -42,6 +44,7 @@ struct App : AppT<App> {
     std::optional<::exosnap::capability::ResolveResult>   primary_validation_;
     std::jthread                                           capability_thread_;
     winrt::Microsoft::UI::Dispatching::DispatcherQueue     ui_dispatcher_{ nullptr };
+    winrt::event_token                                      unhandled_exception_token_{};
 
     CapabilityReadyCallback  on_capability_ready_;
     CapabilityFailedCallback on_capability_failed_;

@@ -24,6 +24,8 @@ set(APP_SOURCES
     "${APP_PROJECT_DIR}/MainWindow.xaml.h"
     "${APP_PROJECT_DIR}/MainWindow.xaml.cpp"
     "${APP_PROJECT_DIR}/main.cpp"
+    "${APP_PROJECT_DIR}/startup_log.h"
+    "${APP_PROJECT_DIR}/startup_log.cpp"
     "${APP_PROJECT_DIR}/XamlGeneratedCompat.cpp"
     "${APP_PROJECT_DIR}/pages/AdvancedPage.xaml"
     "${APP_PROJECT_DIR}/pages/AdvancedPage.h"

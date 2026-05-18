@@ -1,23 +1,5 @@
 <Window x:Class="exosnap.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Exosnap Recorder">
-    <Grid>
-        <NavigationView x:Name="NavView"
-                        IsBackButtonVisible="Collapsed"
-                        IsSettingsVisible="False"
-                        SelectionChanged="NavView_SelectionChanged">
-            <NavigationView.MenuItems>
-                <NavigationViewItem Content="Record" Tag="Record" Icon="Camera" />
-                <NavigationViewItem Content="Video" Tag="Video" Icon="Slideshow" />
-                <NavigationViewItem Content="Audio" Tag="Audio" Icon="Audio" />
-                <NavigationViewItem Content="Output" Tag="Output" Icon="Save" />
-                <NavigationViewItem Content="Hotkeys" Tag="Hotkeys" Icon="Keyboard" />
-                <NavigationViewItem Content="Diagnostics" Tag="Diagnostics" Icon="Admin" />
-                <NavigationViewItem Content="Logs" Tag="Logs" Icon="Document" />
-                <NavigationViewItem Content="Advanced" Tag="Advanced" Icon="Setting" />
-            </NavigationView.MenuItems>
-            <Frame x:Name="ContentFrame" />
-        </NavigationView>
-    </Grid>
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid />
 </Window>

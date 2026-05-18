@@ -1,6 +1,6 @@
 #include "AudioPage.h"
-#if __has_include("AudioPage.xaml.g.hpp")
-#include "AudioPage.xaml.g.hpp"
+#if __has_include("pages/AudioPage.xaml.g.hpp")
+#include "pages/AudioPage.xaml.g.hpp"
 #endif
 
 namespace winrt::exosnap::implementation {

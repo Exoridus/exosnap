@@ -3,11 +3,13 @@
   <ItemGroup>
     <ClInclude Include="App.xaml.h" />
     <ClInclude Include="MainWindow.xaml.h" />
+    <ClInclude Include="startup_log.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="App.xaml.cpp" />
     <ClCompile Include="MainWindow.xaml.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="startup_log.cpp" />
     <ClCompile Include="XamlGeneratedCompat.cpp" />
   </ItemGroup>
   <ItemGroup>

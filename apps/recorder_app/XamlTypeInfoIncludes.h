@@ -1,6 +1,11 @@
 #pragma once
 
 #include <unknwn.h>
+// Windows headers may define GetCurrentTime as a macro; that collides with
+// WinRT projection members such as Microsoft.UI.Xaml.Media.Animation::GetCurrentTime.
+#ifdef GetCurrentTime
+#undef GetCurrentTime
+#endif
 
 #include "App.xaml.h"
 #include "MainWindow.xaml.h"

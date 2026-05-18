@@ -64,6 +64,7 @@
   <ItemGroup>
     <ClInclude Include="App.xaml.h" />
     <ClInclude Include="MainWindow.xaml.h" />
+    <ClInclude Include="startup_log.h" />
     <ClInclude Include="services\RecordingCoordinator.h" />
     <ClInclude Include="viewmodels\RecordViewModel.h" />
     <ClInclude Include="pages\AdvancedPage.h" />
@@ -79,6 +80,7 @@
     <ClCompile Include="App.xaml.cpp" />
     <ClCompile Include="MainWindow.xaml.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="startup_log.cpp" />
     <ClCompile Include="XamlGeneratedCompat.cpp" />
     <ClCompile Include="services\RecordingCoordinator.cpp" />
     <ClCompile Include="viewmodels\RecordViewModel.cpp" />

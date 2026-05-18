@@ -7,10 +7,12 @@
 #include "pages/OutputPage.h"
 #include "pages/RecordPage.h"
 #include "pages/VideoPage.h"
+#include "startup_log.h"
 #if __has_include("MainWindow.xaml.g.hpp")
 #include "MainWindow.xaml.g.hpp"
 #endif
 
+#include <exception>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.UI.Xaml.Interop.h>
 
@@ -20,9 +22,36 @@ using namespace Microsoft::UI::Xaml::Controls;
 
 namespace winrt::exosnap::implementation {
 MainWindow::MainWindow() {
-    InitializeComponent();
-    NavView().SelectedItem(NavView().MenuItems().GetAt(0));
-    ContentFrame().Navigate(winrt::xaml_typename<winrt::exosnap::RecordPage>());
+    ::exosnap::startup_log::Write(L"window: MainWindow ctor entry");
+    try {
+        ::exosnap::startup_log::Write(L"window: MainWindow before InitializeComponent");
+        InitializeComponent();
+        ::exosnap::startup_log::Write(L"window: MainWindow after InitializeComponent");
+        ::exosnap::startup_log::Write(L"window: MainWindow before preview content setup");
+
+        auto root = Content().try_as<winrt::Microsoft::UI::Xaml::Controls::Grid>();
+        if (!root) {
+            throw winrt::hresult_error(E_FAIL, L"MainWindow root Grid not found");
+        }
+        ::exosnap::startup_log::Write(L"window: MainWindow got root Grid");
+        auto title = winrt::Microsoft::UI::Xaml::Controls::TextBlock{};
+        title.Text(L"Recorder App UI Preview");
+        title.FontSize(24.0);
+        title.HorizontalAlignment(winrt::Microsoft::UI::Xaml::HorizontalAlignment::Center);
+        title.VerticalAlignment(winrt::Microsoft::UI::Xaml::VerticalAlignment::Center);
+        root.Children().Append(title);
+        ::exosnap::startup_log::Write(L"window: MainWindow preview content setup complete");
+    } catch (winrt::hresult_error const& ex) {
+        ::exosnap::startup_log::WriteHResult("window: MainWindow ctor caught hresult_error", ex);
+        throw;
+    } catch (std::exception const& ex) {
+        ::exosnap::startup_log::WriteNarrow("window: MainWindow ctor caught std::exception");
+        ::exosnap::startup_log::WriteNarrow(ex.what());
+        throw;
+    } catch (...) {
+        ::exosnap::startup_log::Write(L"window: MainWindow ctor caught unknown exception");
+        throw;
+    }
 }
 
 void MainWindow::NavView_SelectionChanged(NavigationView const&, NavigationViewSelectionChangedEventArgs const& args) {
@@ -32,23 +61,28 @@ void MainWindow::NavView_SelectionChanged(NavigationView const&, NavigationViewS
 }
 
 void MainWindow::NavigateToPage(hstring const& pageTag) {
+    if (!content_frame_) {
+        return;
+    }
+
     if (pageTag == L"Record") {
-        ContentFrame().Navigate(winrt::xaml_typename<winrt::exosnap::RecordPage>());
+        content_frame_.Navigate(winrt::xaml_typename<winrt::exosnap::RecordPage>());
     } else if (pageTag == L"Video") {
-        ContentFrame().Navigate(winrt::xaml_typename<winrt::exosnap::VideoPage>());
+        content_frame_.Navigate(winrt::xaml_typename<winrt::exosnap::VideoPage>());
     } else if (pageTag == L"Audio") {
-        ContentFrame().Navigate(winrt::xaml_typename<winrt::exosnap::AudioPage>());
+        content_frame_.Navigate(winrt::xaml_typename<winrt::exosnap::AudioPage>());
     } else if (pageTag == L"Output") {
-        ContentFrame().Navigate(winrt::xaml_typename<winrt::exosnap::OutputPage>());
+        content_frame_.Navigate(winrt::xaml_typename<winrt::exosnap::OutputPage>());
     } else if (pageTag == L"Hotkeys") {
-        ContentFrame().Navigate(winrt::xaml_typename<winrt::exosnap::HotkeysPage>());
+        content_frame_.Navigate(winrt::xaml_typename<winrt::exosnap::HotkeysPage>());
     } else if (pageTag == L"Diagnostics") {
-        ContentFrame().Navigate(winrt::xaml_typename<winrt::exosnap::DiagnosticsPage>());
+        content_frame_.Navigate(winrt::xaml_typename<winrt::exosnap::DiagnosticsPage>());
     } else if (pageTag == L"Logs") {
-        ContentFrame().Navigate(winrt::xaml_typename<winrt::exosnap::LogsPage>());
+        content_frame_.Navigate(winrt::xaml_typename<winrt::exosnap::LogsPage>());
     } else if (pageTag == L"Advanced") {
-        ContentFrame().Navigate(winrt::xaml_typename<winrt::exosnap::AdvancedPage>());
+        content_frame_.Navigate(winrt::xaml_typename<winrt::exosnap::AdvancedPage>());
     }
 }
 } // namespace winrt::exosnap::implementation
+
 

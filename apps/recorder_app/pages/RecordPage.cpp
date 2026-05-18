@@ -1,9 +1,11 @@
 #include "RecordPage.h"
 #include "../App.xaml.h"
-#if __has_include("RecordPage.xaml.g.hpp")
-#include "RecordPage.xaml.g.hpp"
+#include "../startup_log.h"
+#if __has_include("pages/RecordPage.xaml.g.hpp")
+#include "pages/RecordPage.xaml.g.hpp"
 #endif
 
+#include <exception>
 #include <winrt/Microsoft.UI.Dispatching.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.h>
@@ -20,41 +22,61 @@ namespace winrt::exosnap::implementation {
 // ---------------------------------------------------------------------------
 
 RecordPage::RecordPage() {
-    InitializeComponent();
+    ::exosnap::startup_log::Write(L"record: RecordPage ctor entry");
+    try {
+        ::exosnap::startup_log::Write(L"record: RecordPage before InitializeComponent");
+        InitializeComponent();
+        ::exosnap::startup_log::Write(L"record: RecordPage after InitializeComponent");
 
-    InitCoordinator();
+        ::exosnap::startup_log::Write(L"record: RecordPage before coordinator creation");
+        InitCoordinator();
+        ::exosnap::startup_log::Write(L"record: RecordPage after coordinator creation");
 
-    // Populate capture targets
-    view_model_.targets = coordinator_->EnumerateTargets();
-    for (const auto& t : view_model_.targets) {
-        std::wstring prefix = (t.kind == recorder_core::CaptureTarget::Kind::Monitor)
-                                  ? L"[Monitor] "
-                                  : L"[Window] ";
-        view_model_.target_display_names.push_back(prefix + t.description);
-    }
+        ::exosnap::startup_log::Write(L"record: RecordPage before target enumeration");
+        // Populate capture targets
+        view_model_.targets = coordinator_->EnumerateTargets();
+        ::exosnap::startup_log::Write(L"record: RecordPage after target enumeration");
 
-    // Select first Monitor, or first entry
-    view_model_.selected_target_index = -1;
-    for (int i = 0; i < static_cast<int>(view_model_.targets.size()); ++i) {
-        if (view_model_.targets[i].kind == recorder_core::CaptureTarget::Kind::Monitor) {
-            view_model_.selected_target_index = i;
-            break;
+        for (const auto& t : view_model_.targets) {
+            std::wstring prefix = (t.kind == recorder_core::CaptureTarget::Kind::Monitor)
+                                      ? L"[Monitor] "
+                                      : L"[Window] ";
+            view_model_.target_display_names.push_back(prefix + t.description);
         }
-    }
-    if (view_model_.selected_target_index < 0 && !view_model_.targets.empty()) {
-        view_model_.selected_target_index = 0;
-    }
 
-    // Populate ComboBox
-    auto items = TargetCombo().Items();
-    for (const auto& name : view_model_.target_display_names) {
-        items.Append(box_value(winrt::hstring(name)));
-    }
-    if (view_model_.selected_target_index >= 0) {
-        TargetCombo().SelectedIndex(view_model_.selected_target_index);
-    }
+        // Select first Monitor, or first entry
+        view_model_.selected_target_index = -1;
+        for (int i = 0; i < static_cast<int>(view_model_.targets.size()); ++i) {
+            if (view_model_.targets[i].kind == recorder_core::CaptureTarget::Kind::Monitor) {
+                view_model_.selected_target_index = i;
+                break;
+            }
+        }
+        if (view_model_.selected_target_index < 0 && !view_model_.targets.empty()) {
+            view_model_.selected_target_index = 0;
+        }
 
-    Refresh();
+        // Populate ComboBox
+        auto items = TargetCombo().Items();
+        for (const auto& name : view_model_.target_display_names) {
+            items.Append(box_value(winrt::hstring(name)));
+        }
+        if (view_model_.selected_target_index >= 0) {
+            TargetCombo().SelectedIndex(view_model_.selected_target_index);
+        }
+
+        Refresh();
+    } catch (winrt::hresult_error const& ex) {
+        ::exosnap::startup_log::WriteHResult("record: RecordPage ctor caught hresult_error", ex);
+        throw;
+    } catch (std::exception const& ex) {
+        ::exosnap::startup_log::WriteNarrow("record: RecordPage ctor caught std::exception");
+        ::exosnap::startup_log::WriteNarrow(ex.what());
+        throw;
+    } catch (...) {
+        ::exosnap::startup_log::Write(L"record: RecordPage ctor caught unknown exception");
+        throw;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -199,4 +221,5 @@ void RecordPage::UpdateResultDisplay() {
 }
 
 } // namespace winrt::exosnap::implementation
+
 

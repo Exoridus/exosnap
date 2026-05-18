@@ -1,6 +1,6 @@
 #include "OutputPage.h"
-#if __has_include("OutputPage.xaml.g.hpp")
-#include "OutputPage.xaml.g.hpp"
+#if __has_include("pages/OutputPage.xaml.g.hpp")
+#include "pages/OutputPage.xaml.g.hpp"
 #endif
 
 namespace winrt::exosnap::implementation {
