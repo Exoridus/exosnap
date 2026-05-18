@@ -1,4 +1,7 @@
 #include <capability/capability_builder.h>
+#include <capability/runtime_snapshot.h>
+
+#include <string>
 
 namespace exosnap::capability {
 
@@ -62,10 +65,90 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
     return caps;
 }
 
+CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(
+    const RuntimeCapabilitySnapshot& snapshot) {
+    CapabilitySet caps = BuildStaticValidatedBaseline();
+    caps.runtime = snapshot;
+
+    // Propagate best-effort metadata from snapshot into legacy fields.
+    caps.gpu_adapter_name   = snapshot.nvidia.adapter_name;
+    caps.nvenc_dll_present  = snapshot.nvidia.nvenc_dll_present;
+    caps.mf_aac_available   = snapshot.mf_aac.available();
+
+    // --- Downgrade rule A: missing NVENC blocks AV1 path ---
+    // NVENC is required when the DLL is not present or API version is not valid.
+    if (!snapshot.nvidia.nvenc_dll_present || !snapshot.nvidia.nvenc_api_version_valid) {
+        const std::string nvenc_reason =
+            "NVENC unavailable: " +
+            (snapshot.nvidia.failure_detail.empty()
+                 ? "DLL not present or API version not confirmed"
+                 : snapshot.nvidia.failure_detail);
+
+        // Lower the dimension-level annotation for AV1/NVENC.
+        caps.video_codecs[VideoCodec::Av1Nvenc] = SupportAnnotation{
+            SupportLevel::NotImplemented,
+            nvenc_reason
+        };
+
+        // Force the primary M3.2 combo to non-selectable via combo_override.
+        const ComboKey m32_key{
+            Container::Matroska,
+            VideoCodec::Av1Nvenc,
+            AudioCodec::AacMf,
+            ChromaSubsampling::Cs420,
+            BitDepth::Bit8
+        };
+        caps.combo_overrides[m32_key] = SupportAnnotation{
+            SupportLevel::NotImplemented,
+            nvenc_reason
+        };
+    }
+
+    // --- Downgrade rule B: missing AAC blocks AAC path ---
+    if (!snapshot.mf_aac.available()) {
+        const std::string aac_reason =
+            "Media Foundation AAC unavailable: " +
+            (snapshot.mf_aac.failure_detail.empty()
+                 ? "MFTEnumEx found no encoders and direct CLSID_AACMFTEncoder instantiation failed"
+                 : snapshot.mf_aac.failure_detail);
+
+        // Lower the dimension-level annotation for AacMf.
+        caps.audio_codecs[AudioCodec::AacMf] = SupportAnnotation{
+            SupportLevel::NotImplemented,
+            aac_reason
+        };
+
+        // Force the primary M3.2 combo to non-selectable via combo_override.
+        // If NVENC was already lowered, this upserts with the AAC reason to cover both axes.
+        const ComboKey m32_key{
+            Container::Matroska,
+            VideoCodec::Av1Nvenc,
+            AudioCodec::AacMf,
+            ChromaSubsampling::Cs420,
+            BitDepth::Bit8
+        };
+        // Preserve a more-severe existing override; otherwise apply AAC reason.
+        const auto it = caps.combo_overrides.find(m32_key);
+        if (it == caps.combo_overrides.end()) {
+            caps.combo_overrides[m32_key] = SupportAnnotation{
+                SupportLevel::NotImplemented,
+                aac_reason
+            };
+        }
+        // If an NVENC override already exists, both are NotImplemented — no change needed.
+    }
+
+    // --- Invariant C & D: H.264 and HEVC remain NotImplemented regardless ---
+    // The static baseline already sets these to NotImplemented.
+    // We explicitly enforce by never promoting them here.
+    // (No action needed; this invariant is upheld by not touching these entries.)
+
+    return caps;
+}
+
 CapabilitySet CapabilityBuilder::BuildFromHardwareQuery() {
-    // M3.3A intentionally does not perform runtime hardware probing.
-    // Hardware discovery is deferred to M3.3B.
-    return BuildStaticValidatedBaseline();
+    const RuntimeCapabilitySnapshot snapshot = QueryRuntimeFacts();
+    return BuildEffectiveCapabilities(snapshot);
 }
 
 } // namespace exosnap::capability

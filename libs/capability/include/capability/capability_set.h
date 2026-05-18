@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config_types.h"
+#include "runtime_snapshot.h"
 #include "support_level.h"
 
 #include <cstddef>
@@ -27,6 +28,8 @@ struct CapabilitySet {
     std::string gpu_adapter_name;
     bool        nvenc_dll_present = false;
     bool        mf_aac_available  = false;
+
+    RuntimeCapabilitySnapshot runtime;
 
     std::unordered_map<Container, SupportAnnotation>         containers;
     std::unordered_map<VideoCodec, SupportAnnotation>        video_codecs;

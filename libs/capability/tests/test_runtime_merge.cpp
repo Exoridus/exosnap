@@ -1,0 +1,257 @@
+#include <gtest/gtest.h>
+
+#include <capability/capability_builder.h>
+#include <capability/capability_set.h>
+#include <capability/config_types.h>
+#include <capability/runtime_snapshot.h>
+#include <capability/support_level.h>
+
+#include <string>
+
+namespace exosnap::capability {
+namespace {
+
+// Helper: build a fully-favorable synthetic snapshot.
+RuntimeCapabilitySnapshot MakeFavorableSnapshot() {
+    RuntimeCapabilitySnapshot snap;
+    snap.nvidia.nvenc_dll_present       = true;
+    snap.nvidia.nvenc_api_version_valid = true;
+    snap.nvidia.nvenc_api_version       = 0x000D0000u; // dummy version
+    snap.nvidia.adapter_name            = "NVIDIA GeForce RTX 9999 (synthetic)";
+    snap.mf_aac.mftenum_found           = true;
+    snap.mf_aac.clsid_instantiable      = false; // mftenum_found alone is sufficient
+    snap.os.build_number                = 26100u;
+    snap.os.version_string              = "10.0.26100";
+    return snap;
+}
+
+// Shorthand for the primary M3.2 combo key.
+constexpr Container kC = Container::Matroska;
+constexpr VideoCodec kV = VideoCodec::Av1Nvenc;
+constexpr AudioCodec kA = AudioCodec::AacMf;
+constexpr ChromaSubsampling kCS = ChromaSubsampling::Cs420;
+constexpr BitDepth kBD = BitDepth::Bit8;
+
+// -------------------------------------------------------------------------
+// TC-1: All runtime prerequisites present keeps M3.2 combo Available
+// -------------------------------------------------------------------------
+TEST(RuntimeMergeTest, TC1_AllPrerequisitesPresentKeepM32ComboAvailable) {
+    const RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+
+    // M3.2 primary combo must remain Available.
+    const SupportAnnotation combo = caps.QueryCombo(kC, kV, kA, kCS, kBD);
+    EXPECT_EQ(combo.level, SupportLevel::Available)
+        << "M3.2 combo should be Available when NVENC and AAC are both present. reason: "
+        << combo.reason;
+
+    // AV1/NVENC dimension must be selectable.
+    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Av1Nvenc)))
+        << "VideoCodec::Av1Nvenc should be selectable.";
+
+    // AacMf dimension must be selectable.
+    EXPECT_TRUE(IsSelectable(caps.QueryAudioCodec(AudioCodec::AacMf)))
+        << "AudioCodec::AacMf should be selectable.";
+}
+
+// -------------------------------------------------------------------------
+// TC-2: NVENC DLL missing blocks AV1 path
+// -------------------------------------------------------------------------
+TEST(RuntimeMergeTest, TC2_NvencDllMissingBlocksAv1Path) {
+    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    snap.nvidia.nvenc_dll_present       = false;
+    snap.nvidia.nvenc_api_version_valid = false;
+
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+
+    // AV1 dimension must not be selectable.
+    const SupportAnnotation av1 = caps.QueryVideoCodec(VideoCodec::Av1Nvenc);
+    EXPECT_FALSE(IsSelectable(av1))
+        << "VideoCodec::Av1Nvenc must not be selectable when NVENC DLL is absent.";
+
+    // M3.2 primary combo must not be selectable.
+    const SupportAnnotation combo = caps.QueryCombo(kC, kV, kA, kCS, kBD);
+    EXPECT_FALSE(IsSelectable(combo))
+        << "M3.2 combo must not be selectable when NVENC DLL is absent.";
+
+    // Reason must mention NVENC.
+    const bool mentions_nvenc =
+        (av1.reason.find("NVENC") != std::string::npos) ||
+        (combo.reason.find("NVENC") != std::string::npos);
+    EXPECT_TRUE(mentions_nvenc)
+        << "Downgrade reason should mention NVENC. av1.reason='"
+        << av1.reason << "' combo.reason='" << combo.reason << "'";
+}
+
+// -------------------------------------------------------------------------
+// TC-3: NVENC API version unavailable blocks AV1 path
+// -------------------------------------------------------------------------
+TEST(RuntimeMergeTest, TC3_NvencApiVersionUnavailableBlocksAv1Path) {
+    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    snap.nvidia.nvenc_dll_present       = true;   // DLL loads
+    snap.nvidia.nvenc_api_version_valid = false;  // but API version call fails
+
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+
+    // AV1 dimension must not be selectable.
+    const SupportAnnotation av1 = caps.QueryVideoCodec(VideoCodec::Av1Nvenc);
+    EXPECT_FALSE(IsSelectable(av1))
+        << "VideoCodec::Av1Nvenc must not be selectable when NVENC API version is invalid.";
+
+    // M3.2 combo must not be selectable.
+    const SupportAnnotation combo = caps.QueryCombo(kC, kV, kA, kCS, kBD);
+    EXPECT_FALSE(IsSelectable(combo))
+        << "M3.2 combo must not be selectable when NVENC API version is invalid.";
+
+    // Reason must mention NVENC (API/version).
+    const bool mentions_nvenc =
+        (av1.reason.find("NVENC") != std::string::npos) ||
+        (combo.reason.find("NVENC") != std::string::npos);
+    EXPECT_TRUE(mentions_nvenc)
+        << "Downgrade reason should mention NVENC/API/version. av1.reason='"
+        << av1.reason << "' combo.reason='" << combo.reason << "'";
+}
+
+// -------------------------------------------------------------------------
+// TC-4: AAC unavailable blocks AAC path
+// -------------------------------------------------------------------------
+TEST(RuntimeMergeTest, TC4_AacUnavailableBlocksAacPath) {
+    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    snap.mf_aac.mftenum_found      = false;
+    snap.mf_aac.clsid_instantiable = false;
+
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+
+    // AacMf dimension must not be selectable.
+    const SupportAnnotation aac = caps.QueryAudioCodec(AudioCodec::AacMf);
+    EXPECT_FALSE(IsSelectable(aac))
+        << "AudioCodec::AacMf must not be selectable when MF AAC is unavailable.";
+
+    // M3.2 primary combo must not be selectable.
+    const SupportAnnotation combo = caps.QueryCombo(kC, kV, kA, kCS, kBD);
+    EXPECT_FALSE(IsSelectable(combo))
+        << "M3.2 combo must not be selectable when MF AAC is unavailable.";
+
+    // Reason must mention AAC or Media Foundation.
+    const bool mentions_aac =
+        (aac.reason.find("AAC") != std::string::npos) ||
+        (aac.reason.find("Media Foundation") != std::string::npos) ||
+        (combo.reason.find("AAC") != std::string::npos) ||
+        (combo.reason.find("Media Foundation") != std::string::npos);
+    EXPECT_TRUE(mentions_aac)
+        << "Downgrade reason should mention AAC or Media Foundation. aac.reason='"
+        << aac.reason << "' combo.reason='" << combo.reason << "'";
+}
+
+// -------------------------------------------------------------------------
+// TC-5: Direct AAC CLSID fallback is sufficient (mirrors M2.7 discovery)
+// -------------------------------------------------------------------------
+TEST(RuntimeMergeTest, TC5_DirectAacClsidFallbackIsSufficient) {
+    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    snap.mf_aac.mftenum_found      = false;  // enumeration returns 0
+    snap.mf_aac.clsid_instantiable = true;   // but direct instantiation succeeds
+
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+
+    // available() must return true when only clsid_instantiable is true.
+    EXPECT_TRUE(snap.mf_aac.available())
+        << "MfAacRuntimeFacts::available() must be true when clsid_instantiable is true.";
+
+    // AacMf must remain selectable.
+    EXPECT_TRUE(IsSelectable(caps.QueryAudioCodec(AudioCodec::AacMf)))
+        << "AudioCodec::AacMf should remain selectable when CLSID fallback succeeds.";
+
+    // M3.2 combo must remain Available.
+    const SupportAnnotation combo = caps.QueryCombo(kC, kV, kA, kCS, kBD);
+    EXPECT_EQ(combo.level, SupportLevel::Available)
+        << "M3.2 combo should remain Available when CLSID AAC fallback succeeds. reason: "
+        << combo.reason;
+}
+
+// -------------------------------------------------------------------------
+// TC-6: H.264 remains NotImplemented regardless of favorable runtime
+// -------------------------------------------------------------------------
+TEST(RuntimeMergeTest, TC6_H264RemainsNotImplemented) {
+    const RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+
+    const SupportAnnotation h264 = caps.QueryVideoCodec(VideoCodec::H264Nvenc);
+    EXPECT_EQ(h264.level, SupportLevel::NotImplemented)
+        << "H.264 must remain NotImplemented regardless of favorable runtime facts.";
+    EXPECT_FALSE(IsSelectable(h264))
+        << "H.264 must not be selectable.";
+}
+
+// -------------------------------------------------------------------------
+// TC-7: HEVC remains NotImplemented regardless of favorable runtime
+// -------------------------------------------------------------------------
+TEST(RuntimeMergeTest, TC7_HevcRemainsNotImplemented) {
+    const RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+
+    const SupportAnnotation hevc = caps.QueryVideoCodec(VideoCodec::HevcNvenc);
+    EXPECT_EQ(hevc.level, SupportLevel::NotImplemented)
+        << "HEVC must remain NotImplemented regardless of favorable runtime facts.";
+    EXPECT_FALSE(IsSelectable(hevc))
+        << "HEVC must not be selectable.";
+}
+
+// -------------------------------------------------------------------------
+// TC-8: Runtime snapshot is preserved in the returned CapabilitySet
+// -------------------------------------------------------------------------
+TEST(RuntimeMergeTest, TC8_RuntimeSnapshotPreserved) {
+    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    snap.nvidia.nvenc_api_version = 0xABCDEF01u;
+    snap.os.build_number          = 22621u;
+    snap.os.version_string        = "10.0.22621";
+
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+
+    EXPECT_EQ(caps.runtime.nvidia.nvenc_dll_present,       snap.nvidia.nvenc_dll_present);
+    EXPECT_EQ(caps.runtime.nvidia.nvenc_api_version_valid, snap.nvidia.nvenc_api_version_valid);
+    EXPECT_EQ(caps.runtime.nvidia.nvenc_api_version,       snap.nvidia.nvenc_api_version);
+    EXPECT_EQ(caps.runtime.nvidia.adapter_name,            snap.nvidia.adapter_name);
+    EXPECT_EQ(caps.runtime.mf_aac.mftenum_found,           snap.mf_aac.mftenum_found);
+    EXPECT_EQ(caps.runtime.mf_aac.clsid_instantiable,      snap.mf_aac.clsid_instantiable);
+    EXPECT_EQ(caps.runtime.os.build_number,                snap.os.build_number);
+    EXPECT_EQ(caps.runtime.os.version_string,              snap.os.version_string);
+}
+
+// -------------------------------------------------------------------------
+// TC-9: BuildFromHardwareQuery is callable — integration-style smoke test
+// Does not assert machine-specific availability.
+// -------------------------------------------------------------------------
+TEST(RuntimeMergeTest, TC9_BuildFromHardwareQueryCallable) {
+    // Must not throw.
+    CapabilitySet caps;
+    ASSERT_NO_THROW(caps = CapabilityBuilder::BuildFromHardwareQuery());
+
+    // Returned object must be coherent: all expected dimension keys must be present.
+    EXPECT_FALSE(caps.containers.empty())
+        << "containers map must be populated";
+    EXPECT_FALSE(caps.video_codecs.empty())
+        << "video_codecs map must be populated";
+    EXPECT_FALSE(caps.audio_codecs.empty())
+        << "audio_codecs map must be populated";
+    EXPECT_FALSE(caps.chroma_modes.empty())
+        << "chroma_modes map must be populated";
+    EXPECT_FALSE(caps.bit_depths.empty())
+        << "bit_depths map must be populated";
+
+    // The M3.2 combo must at minimum be queryable (may or may not be Available
+    // depending on whether this machine has NVENC and AAC).
+    const SupportAnnotation combo = caps.QueryCombo(kC, kV, kA, kCS, kBD);
+    // Just verifies we get a valid annotation without crashing.
+    (void)combo;
+
+    // H.264 must still be NotImplemented regardless of hardware.
+    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::H264Nvenc).level, SupportLevel::NotImplemented)
+        << "H.264 must remain NotImplemented even after real hardware query.";
+
+    // HEVC must still be NotImplemented regardless of hardware.
+    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::HevcNvenc).level, SupportLevel::NotImplemented)
+        << "HEVC must remain NotImplemented even after real hardware query.";
+}
+
+} // namespace
+} // namespace exosnap::capability
