@@ -1,8 +1,71 @@
 <Page x:Class="exosnap.DiagnosticsPage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Grid>
-        <TextBlock Text="Diagnostics" Style="{StaticResource TitleTextBlockStyle}"
-                   HorizontalAlignment="Center" VerticalAlignment="Center" />
-    </Grid>
+    <ScrollViewer>
+        <StackPanel Margin="24,20,24,24" Spacing="16">
+            <TextBlock Text="Diagnostics" Style="{StaticResource TitleTextBlockStyle}" />
+            <TextBlock Text="Overall status: Ready with 2 notices" Style="{StaticResource BodyStrongTextBlockStyle}" />
+            <TextBlock Opacity="0.75" Text="Last check: 18 May 2026, 16:00" />
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Content="Run System &amp; Pipeline Check" Style="{StaticResource AccentButtonStyle}" />
+                <Button Content="Export Diagnostic Report" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Spacing="16">
+                <TextBlock Text="0 Blockers" Foreground="#A7F3D0" />
+                <TextBlock Text="2 Notices" Foreground="#FDE68A" />
+                <TextBlock Text="18 Passes" Foreground="#93C5FD" />
+            </StackPanel>
+
+            <Border Background="#1B2230" CornerRadius="6" Padding="12">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Operating System" FontWeight="SemiBold" />
+                    <TextBlock Opacity="0.75" Text="Pass: supported version detected." />
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1B2230" CornerRadius="6" Padding="12">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="GPU &amp; Encoder" FontWeight="SemiBold" />
+                    <TextBlock Opacity="0.75" Text="Notice: driver older than validated baseline." />
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1B2230" CornerRadius="6" Padding="12">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Display" FontWeight="SemiBold" />
+                    <TextBlock Opacity="0.75" Text="Pass: target display source available." />
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1B2230" CornerRadius="6" Padding="12">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Audio" FontWeight="SemiBold" />
+                    <TextBlock Opacity="0.75" Text="Pass: APP / MIC / SYS sources detected." />
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1B2230" CornerRadius="6" Padding="12">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Storage" FontWeight="SemiBold" />
+                    <TextBlock Opacity="0.75" Text="Pass: destination path writable with free space." />
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1B2230" CornerRadius="6" Padding="12">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Pipeline" FontWeight="SemiBold" />
+                    <TextBlock Opacity="0.75" Text="Pass: startup path and coordinator checks nominal." />
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1B2230" CornerRadius="6" Padding="12">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Settings Compatibility" FontWeight="SemiBold" />
+                    <TextBlock Opacity="0.75" Text="Notice: MP4 with non-AAC audio will be auto-reconciled." />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
 </Page>

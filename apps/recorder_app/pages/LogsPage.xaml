@@ -1,8 +1,36 @@
 <Page x:Class="exosnap.LogsPage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Grid>
-        <TextBlock Text="Logs" Style="{StaticResource TitleTextBlockStyle}"
-                   HorizontalAlignment="Center" VerticalAlignment="Center" />
-    </Grid>
+    <ScrollViewer>
+        <StackPanel Margin="24,20,24,24" Spacing="16">
+            <TextBlock Text="Logs" Style="{StaticResource TitleTextBlockStyle}" />
+            <TextBlock Opacity="0.75" Text="Structured session and runtime event history preview." />
+
+            <StackPanel Spacing="6">
+                <TextBlock Text="Sessions" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <Border Background="#1B2230" CornerRadius="6" Padding="12">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="2026-05-18 15:42 — Game.exe — 00:42:11 — Completed" />
+                        <TextBlock Text="2026-05-18 14:09 — Game.exe — 00:03:04 — Failed: disk full" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <StackPanel Spacing="6">
+                <TextBlock Text="Events" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <Border Background="#1B2230" CornerRadius="6" Padding="12">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="15:44:08 — Marker added at 00:02:14" />
+                        <TextBlock Text="15:50:19 — Split created: segment 2" />
+                        <TextBlock Text="15:56:04 — MIC default device changed" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Content="Export selected" />
+                <Button Content="Open log folder" />
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
 </Page>

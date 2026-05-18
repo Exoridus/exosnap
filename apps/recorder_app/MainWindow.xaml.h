@@ -12,7 +12,7 @@ struct MainWindow : MainWindowT<MainWindow> {
     winrt::Microsoft::UI::Xaml::Controls::ListBox nav_list_{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Frame content_frame_{nullptr};
 
-    winrt::Microsoft::UI::Xaml::UIElement BuildSectionContent(winrt::hstring const& pageTag);
+    winrt::Microsoft::UI::Xaml::UIElement BuildPageContent(winrt::hstring const& pageTag);
     void NavigateToPage(winrt::hstring const& pageTag);
 };
 } // namespace winrt::exosnap::implementation

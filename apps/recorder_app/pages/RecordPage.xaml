@@ -3,11 +3,27 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <ScrollViewer>
         <StackPanel Margin="24,24,24,24" Spacing="16">
+            <TextBlock Text="Record" Style="{StaticResource TitleTextBlockStyle}" />
+            <TextBlock Opacity="0.75" Text="Operational view for target selection, readiness, and live runtime stats." />
 
             <!-- Section A: Capability Banner -->
             <Border x:Name="CapabilityBanner" CornerRadius="4" Padding="12,8">
                 <TextBlock x:Name="CapabilityText" TextWrapping="Wrap" />
             </Border>
+
+            <!-- Preview block -->
+            <StackPanel Spacing="8">
+                <TextBlock Text="Live Preview" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <Border Background="#111827" CornerRadius="6" Padding="12" Height="190">
+                    <Grid>
+                        <TextBlock Text="Preview surface placeholder"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Opacity="0.7" />
+                    </Grid>
+                </Border>
+                <TextBlock Opacity="0.75" Text="Source metadata and live thumbnail wiring will be attached to capture pipeline output." />
+            </StackPanel>
 
             <!-- Section B: Capture Target -->
             <StackPanel Spacing="8">
@@ -21,12 +37,27 @@
                 <TextBlock x:Name="OutputPathText" Text="--" TextWrapping="Wrap" Opacity="0.7" />
             </StackPanel>
 
+            <StackPanel Spacing="6">
+                <TextBlock Text="Readiness" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <TextBlock Opacity="0.75" Text="Start is blocked automatically while active blockers are present." />
+            </StackPanel>
+
             <!-- Section D: Controls -->
             <StackPanel Spacing="8" Orientation="Horizontal">
                 <Button x:Name="StartButton" Content="Start Recording" Click="StartButton_Click" Style="{StaticResource AccentButtonStyle}" />
                 <Button x:Name="StopButton" Content="Stop Recording" Click="StopButton_Click" />
             </StackPanel>
             <TextBlock x:Name="StateText" />
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Content="Add Marker" />
+                <Button Content="Split Recording" />
+            </StackPanel>
+
+            <StackPanel Spacing="6">
+                <TextBlock Text="Audio activity" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <TextBlock Opacity="0.75" Text="APP ▂▅▇    MIC ▂▃    SYS ▂▅▇" />
+            </StackPanel>
 
             <!-- Section E: Live Stats (shown during Recording/Stopping) -->
             <Border x:Name="StatsPanel" CornerRadius="4" Padding="12,8">

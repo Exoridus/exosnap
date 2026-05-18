@@ -1,8 +1,64 @@
 <Page x:Class="exosnap.HotkeysPage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Grid>
-        <TextBlock Text="Hotkeys" Style="{StaticResource TitleTextBlockStyle}"
-                   HorizontalAlignment="Center" VerticalAlignment="Center" />
-    </Grid>
+    <ScrollViewer>
+        <StackPanel Margin="24,20,24,24" Spacing="16">
+            <TextBlock Text="Hotkeys" Style="{StaticResource TitleTextBlockStyle}" />
+            <TextBlock Opacity="0.75"
+                       Text="Global shortcuts preview. Binding capture/validation wiring is pending." />
+
+            <Grid ColumnSpacing="12" RowSpacing="10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="290" />
+                    <ColumnDefinition Width="130" />
+                    <ColumnDefinition Width="80" />
+                    <ColumnDefinition Width="80" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="Start/Stop Recording" />
+                <TextBlock Grid.Row="0" Grid.Column="1" Text="Alt+F9" />
+                <Button Grid.Row="0" Grid.Column="2" Content="Set" />
+                <Button Grid.Row="0" Grid.Column="3" Content="Unset" />
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="Pause/Resume Recording" />
+                <TextBlock Grid.Row="1" Grid.Column="1" Text="Unset" />
+                <Button Grid.Row="1" Grid.Column="2" Content="Set" />
+                <Button Grid.Row="1" Grid.Column="3" Content="Unset" />
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="Split Active Recording" />
+                <TextBlock Grid.Row="2" Grid.Column="1" Text="Unset" />
+                <Button Grid.Row="2" Grid.Column="2" Content="Set" />
+                <Button Grid.Row="2" Grid.Column="3" Content="Unset" />
+
+                <TextBlock Grid.Row="3" Grid.Column="0" Text="Mute/Unmute Microphone" />
+                <TextBlock Grid.Row="3" Grid.Column="1" Text="Unset" />
+                <Button Grid.Row="3" Grid.Column="2" Content="Set" />
+                <Button Grid.Row="3" Grid.Column="3" Content="Unset" />
+
+                <TextBlock Grid.Row="4" Grid.Column="0" Text="Mute/Unmute App Audio" />
+                <TextBlock Grid.Row="4" Grid.Column="1" Text="Unset" />
+                <Button Grid.Row="4" Grid.Column="2" Content="Set" />
+                <Button Grid.Row="4" Grid.Column="3" Content="Unset" />
+
+                <TextBlock Grid.Row="5" Grid.Column="0" Text="Mute/Unmute System Audio" />
+                <TextBlock Grid.Row="5" Grid.Column="1" Text="Unset" />
+                <Button Grid.Row="5" Grid.Column="2" Content="Set" />
+                <Button Grid.Row="5" Grid.Column="3" Content="Unset" />
+
+                <TextBlock Grid.Row="6" Grid.Column="0" Text="Add Marker" />
+                <TextBlock Grid.Row="6" Grid.Column="1" Text="Unset" />
+                <Button Grid.Row="6" Grid.Column="2" Content="Set" />
+                <Button Grid.Row="6" Grid.Column="3" Content="Unset" />
+            </Grid>
+        </StackPanel>
+    </ScrollViewer>
 </Page>

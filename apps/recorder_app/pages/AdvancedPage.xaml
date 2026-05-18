@@ -1,8 +1,40 @@
 <Page x:Class="exosnap.AdvancedPage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Grid>
-        <TextBlock Text="Advanced" Style="{StaticResource TitleTextBlockStyle}"
-                   HorizontalAlignment="Center" VerticalAlignment="Center" />
-    </Grid>
+    <ScrollViewer>
+        <StackPanel Margin="24,20,24,24" Spacing="16">
+            <TextBlock Text="Advanced" Style="{StaticResource TitleTextBlockStyle}" />
+            <Border Background="#1B2230" CornerRadius="6" Padding="12">
+                <TextBlock TextWrapping="Wrap"
+                           Text="These settings override profile defaults. They are intended for testing, benchmarking, or expert tuning." />
+            </Border>
+
+            <StackPanel Spacing="6">
+                <TextBlock Text="Effective settings summary" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <TextBlock Text="Container: MKV" />
+                <TextBlock Text="Video: AV1 NVENC, CFR 60 fps" />
+                <TextBlock Text="Audio: Opus (APP / MIC / SYS tracks)" />
+            </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="Developer tooling" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <ComboBox Width="220" SelectedIndex="1">
+                    <ComboBoxItem Content="Logging: Error" />
+                    <ComboBoxItem Content="Logging: Info" />
+                    <ComboBoxItem Content="Logging: Verbose" />
+                </ComboBox>
+                <ToggleSwitch Header="Enable NVTX/profiling markers" IsOn="False" />
+            </StackPanel>
+
+            <Expander Header="Advanced encoder overrides">
+                <StackPanel Spacing="8" Margin="0,8,0,0">
+                    <TextBox Header="CQ override" PlaceholderText="Auto" Width="220" />
+                    <TextBox Header="GOP override" PlaceholderText="Auto" Width="220" />
+                    <ToggleSwitch Header="Force low-latency tuning" IsOn="False" />
+                </StackPanel>
+            </Expander>
+
+            <Button Content="Reset advanced overrides" Width="220" />
+        </StackPanel>
+    </ScrollViewer>
 </Page>

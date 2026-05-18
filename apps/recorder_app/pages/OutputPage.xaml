@@ -1,8 +1,49 @@
 <Page x:Class="exosnap.OutputPage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Grid>
-        <TextBlock Text="Output" Style="{StaticResource TitleTextBlockStyle}"
-                   HorizontalAlignment="Center" VerticalAlignment="Center" />
-    </Grid>
+    <ScrollViewer>
+        <StackPanel Margin="24,20,24,24" Spacing="16">
+            <TextBlock Text="Output" Style="{StaticResource TitleTextBlockStyle}" />
+            <TextBlock Opacity="0.75"
+                       Text="Container, codec and destination settings for the recording output." />
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="Container" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <ComboBox x:Name="ContainerCombo" Width="220">
+                    <ComboBoxItem Content="MKV" />
+                    <ComboBoxItem Content="MP4" />
+                </ComboBox>
+            </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="Audio codec" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <ComboBox x:Name="AudioCodecCombo" Width="220" />
+            </StackPanel>
+
+            <Border Background="#1B2230" CornerRadius="6" Padding="12">
+                <TextBlock x:Name="Mp4InfoText"
+                           TextWrapping="Wrap"
+                           Text="MP4 is less crash-resilient than MKV. If recording is interrupted unexpectedly, the file may require recovery or be unusable." />
+            </Border>
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="Destination" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBox Text="D:\Recordings\" Width="420" />
+                    <Button Content="Browse" />
+                </StackPanel>
+            </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="File naming" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <TextBox Text="{}{date}_{time}_{app}_{profile}" Width="420" />
+            </StackPanel>
+
+            <StackPanel Spacing="6">
+                <TextBlock Text="Estimated output" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <TextBlock Text="Current bitrate: 42.1 Mb/s" />
+                <TextBlock Text="≈ 18.5 GB / hour" />
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
 </Page>
