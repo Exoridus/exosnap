@@ -1,104 +1,38 @@
 #include "OutputPage.h"
-#include "../startup_log.h"
-#if __has_include("pages/OutputPage.xaml.g.hpp")
-#include "pages/OutputPage.xaml.g.hpp"
-#endif
+#include <QFrame>
+#include <QLabel>
+#include <QScrollArea>
+#include <QVBoxLayout>
 
-#include <winrt/Microsoft.UI.Xaml.h>
-#include <winrt/Microsoft.UI.Xaml.Controls.h>
-#include <winrt/Windows.Foundation.Collections.h>
-#include <winrt/Windows.Foundation.h>
+namespace exosnap {
 
-namespace winrt::exosnap::implementation {
-OutputPage::OutputPage() {
-    InitializeComponent();
+OutputPage::OutputPage(QWidget* parent) : QWidget(parent) {
+    auto* scroll = new QScrollArea(this);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
 
-    if (auto root = this->try_as<winrt::Microsoft::UI::Xaml::FrameworkElement>()) {
-        container_combo_ = root.FindName(L"ContainerCombo").try_as<winrt::Microsoft::UI::Xaml::Controls::ComboBox>();
-        audio_codec_combo_ = root.FindName(L"AudioCodecCombo").try_as<winrt::Microsoft::UI::Xaml::Controls::ComboBox>();
-        mp4_info_text_ = root.FindName(L"Mp4InfoText").try_as<winrt::Microsoft::UI::Xaml::Controls::TextBlock>();
-    }
+    auto* content = new QWidget();
+    content->setStyleSheet("QWidget { background: transparent; }");
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(24, 24, 24, 24);
+    layout->setSpacing(14);
 
-    if (!container_combo_ || !audio_codec_combo_ || !mp4_info_text_) {
-        ::exosnap::startup_log::Write(L"output: failed to resolve named controls");
-        return;
-    }
+    auto* title = new QLabel("Output", content);
+    title->setStyleSheet("font-size: 22px; font-weight: 600; color: #E8EAED;");
+    layout->addWidget(title);
 
-    container_combo_.SelectionChanged({this, &OutputPage::ContainerCombo_SelectionChanged});
-    container_combo_.SelectedIndex(0);
-    ApplyContainerCompatibility();
+    auto* subtitle = new QLabel("Container format, output directory, and file naming.", content);
+    subtitle->setStyleSheet("color: #8A9099; font-size: 13px;");
+    subtitle->setWordWrap(true);
+    layout->addWidget(subtitle);
+
+    layout->addStretch();
+    scroll->setWidget(content);
+
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->addWidget(scroll);
 }
 
-winrt::hstring OutputPage::SelectedItemText(
-    winrt::Microsoft::UI::Xaml::Controls::ComboBox const& combo) const {
-    if (!combo) {
-        return L"";
-    }
-
-    if (auto item = combo.SelectedItem().try_as<winrt::Microsoft::UI::Xaml::Controls::ComboBoxItem>()) {
-        return winrt::unbox_value_or<winrt::hstring>(item.Content(), L"");
-    }
-
-    return L"";
-}
-
-void OutputPage::SetAudioCodecChoices(bool mp4_mode) {
-    if (!audio_codec_combo_) {
-        return;
-    }
-
-    auto items = audio_codec_combo_.Items();
-    items.Clear();
-
-    if (mp4_mode) {
-        auto aac = winrt::Microsoft::UI::Xaml::Controls::ComboBoxItem{};
-        aac.Content(winrt::box_value(winrt::hstring{L"AAC"}));
-        items.Append(aac);
-        audio_codec_combo_.SelectedIndex(0);
-        return;
-    }
-
-    auto opus = winrt::Microsoft::UI::Xaml::Controls::ComboBoxItem{};
-    opus.Content(winrt::box_value(winrt::hstring{L"Opus"}));
-    items.Append(opus);
-
-    auto aac = winrt::Microsoft::UI::Xaml::Controls::ComboBoxItem{};
-    aac.Content(winrt::box_value(winrt::hstring{L"AAC"}));
-    items.Append(aac);
-
-    auto target_codec = last_mkv_codec_;
-    if (target_codec != L"Opus" && target_codec != L"AAC") {
-        target_codec = L"Opus";
-    }
-
-    audio_codec_combo_.SelectedIndex(target_codec == L"AAC" ? 1 : 0);
-}
-
-void OutputPage::ApplyContainerCompatibility() {
-    if (!container_combo_ || !audio_codec_combo_ || !mp4_info_text_) {
-        return;
-    }
-
-    auto container = SelectedItemText(container_combo_);
-    if (container.empty()) {
-        container = L"MKV";
-    }
-
-    auto selected_codec_before = SelectedItemText(audio_codec_combo_);
-    if (container != L"MP4" && (selected_codec_before == L"Opus" || selected_codec_before == L"AAC")) {
-        last_mkv_codec_ = selected_codec_before;
-    }
-
-    auto mp4_mode = container == L"MP4";
-    SetAudioCodecChoices(mp4_mode);
-    mp4_info_text_.Visibility(mp4_mode ? winrt::Microsoft::UI::Xaml::Visibility::Visible
-                                       : winrt::Microsoft::UI::Xaml::Visibility::Collapsed);
-}
-
-void OutputPage::ContainerCombo_SelectionChanged(
-    winrt::Windows::Foundation::IInspectable const&,
-    winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const&) {
-    ApplyContainerCompatibility();
-}
-} // namespace winrt::exosnap::implementation
-
+} // namespace exosnap

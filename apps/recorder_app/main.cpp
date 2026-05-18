@@ -1,48 +1,37 @@
-#include "App.xaml.h"
-#include "startup_log.h"
+#include <QApplication>
+#include <QPalette>
 
-#include <exception>
+#include "MainWindow.h"
 
-#include <winrt/Microsoft.UI.Xaml.h>
+static void applyDarkPalette(QApplication& app) {
+    app.setStyle("Fusion");
+    QPalette p;
+    p.setColor(QPalette::Window,          QColor(15,  19,  26));
+    p.setColor(QPalette::WindowText,      QColor(220, 220, 220));
+    p.setColor(QPalette::Base,            QColor(21,  26,  36));
+    p.setColor(QPalette::AlternateBase,   QColor(18,  22,  30));
+    p.setColor(QPalette::Text,            QColor(220, 220, 220));
+    p.setColor(QPalette::Button,          QColor(30,  35,  46));
+    p.setColor(QPalette::ButtonText,      QColor(220, 220, 220));
+    p.setColor(QPalette::Highlight,       QColor(42,  130, 218));
+    p.setColor(QPalette::HighlightedText, QColor(255, 255, 255));
+    p.setColor(QPalette::Link,            QColor(42,  130, 218));
+    p.setColor(QPalette::ToolTipBase,     QColor(40,  45,  55));
+    p.setColor(QPalette::ToolTipText,     QColor(220, 220, 220));
+    p.setColor(QPalette::PlaceholderText, QColor(120, 120, 130));
+    p.setColor(QPalette::Disabled, QPalette::Text,       QColor(80, 85, 95));
+    p.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(80, 85, 95));
+    app.setPalette(p);
+}
 
-int __stdcall wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
-    exosnap::startup_log::Write(L"main: wWinMain entry");
-    try {
-        exosnap::startup_log::Write(L"main: before init_apartment");
-        winrt::init_apartment(winrt::apartment_type::single_threaded);
-        exosnap::startup_log::Write(L"main: after init_apartment");
+int main(int argc, char* argv[]) {
+    QApplication app(argc, argv);
+    app.setApplicationName("exosnap");
+    applyDarkPalette(app);
 
-        exosnap::startup_log::Write(L"main: before Application::Start");
-        winrt::Microsoft::UI::Xaml::Application::Start(
-            [](auto&&) {
-                exosnap::startup_log::Write(L"main: Application::Start lambda enter");
-                try {
-                    exosnap::startup_log::Write(L"main: lambda before make<App>");
-                    winrt::make<winrt::exosnap::implementation::App>();
-                    exosnap::startup_log::Write(L"main: lambda after make<App>");
-                } catch (winrt::hresult_error const& ex) {
-                    exosnap::startup_log::WriteHResult("main: lambda caught hresult_error", ex);
-                    throw;
-                } catch (std::exception const& ex) {
-                    exosnap::startup_log::WriteNarrow("main: lambda caught std::exception");
-                    exosnap::startup_log::WriteNarrow(ex.what());
-                    throw;
-                } catch (...) {
-                    exosnap::startup_log::Write(L"main: lambda caught unknown exception");
-                    throw;
-                }
-            });
-        exosnap::startup_log::Write(L"main: after Application::Start");
-        return 0;
-    } catch (winrt::hresult_error const& ex) {
-        exosnap::startup_log::WriteHResult("main: wWinMain caught hresult_error", ex);
-        return static_cast<int>(ex.code().value);
-    } catch (std::exception const& ex) {
-        exosnap::startup_log::WriteNarrow("main: wWinMain caught std::exception");
-        exosnap::startup_log::WriteNarrow(ex.what());
-        return -1;
-    } catch (...) {
-        exosnap::startup_log::Write(L"main: wWinMain caught unknown exception");
-        return -1;
-    }
+    exosnap::MainWindow win;
+    win.resize(1100, 700);
+    win.show();
+
+    return app.exec();
 }

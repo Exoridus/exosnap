@@ -1,12 +1,10 @@
 #pragma once
-#include "AudioPage.g.h"
+#include <QWidget>
 
-namespace winrt::exosnap::implementation {
-struct AudioPage : AudioPageT<AudioPage> {
-    AudioPage();
+namespace exosnap {
+class AudioPage : public QWidget {
+    Q_OBJECT
+public:
+    explicit AudioPage(QWidget* parent = nullptr);
 };
-} // namespace winrt::exosnap::implementation
-
-namespace winrt::exosnap::factory_implementation {
-struct AudioPage : AudioPageT<AudioPage, implementation::AudioPage> {};
-} // namespace winrt::exosnap::factory_implementation
+} // namespace exosnap

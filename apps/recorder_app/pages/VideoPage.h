@@ -1,12 +1,10 @@
 #pragma once
-#include "VideoPage.g.h"
+#include <QWidget>
 
-namespace winrt::exosnap::implementation {
-struct VideoPage : VideoPageT<VideoPage> {
-    VideoPage();
+namespace exosnap {
+class VideoPage : public QWidget {
+    Q_OBJECT
+public:
+    explicit VideoPage(QWidget* parent = nullptr);
 };
-} // namespace winrt::exosnap::implementation
-
-namespace winrt::exosnap::factory_implementation {
-struct VideoPage : VideoPageT<VideoPage, implementation::VideoPage> {};
-} // namespace winrt::exosnap::factory_implementation
+} // namespace exosnap

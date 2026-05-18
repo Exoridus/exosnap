@@ -1,57 +1,55 @@
-# Recorder App (WinUI 3)
+# Recorder App (Qt 6 + Qt Widgets)
 
 ## Building
 
-The `recorder_app` target builds a Windows App SDK / WinUI 3 packaged desktop app.
-
 ### Prerequisites
 
-- Windows 10/11 (1903+)
-- Visual Studio 2022 with the **Windows App SDK C++ workload**
-- The **NuGet Package Manager** integrated with Visual Studio
+- Qt 6.9+ installed at `C:\Qt\6.9.0\msvc2022_64` (via `aqtinstall` or the Qt Online Installer)
+- Visual Studio 2022 with C++ workload
+- CMake 3.27+
 
-### Build via CMake
+Override the Qt path by passing `-DQt6_DIR=<path>/lib/cmake/Qt6` to CMake.
+
+### Build via CMake preset
 
 ```pwsh
 cmake --preset windows-x64-debug
 cmake --build --preset windows-x64-debug --target recorder_app
 ```
 
-The CMakeLists.txt invokes `MSBuild.exe` against `recorder_app.vcxproj`, which handles
-XAML compilation, MIDL generation, and NuGet package restore.
+### Deploy Qt DLLs (first run)
 
-### Build via Visual Studio
-
-Open `apps/recorder_app/recorder_app.vcxproj` directly in Visual Studio 2022.
-
-### Known limitations
-
-- XAML compilation requires the Windows App SDK NuGet package. The project must be
-  built via MSBuild (invoked by CMake or directly in Visual Studio).
-- The CMake target is a custom command wrapper around MSBuild; CMake-level IDE features
-  (IntelliSense, Go To Definition for XAML types) require opening the project in
-  Visual Studio rather than CMake-preset mode.
-- If MSBuild is not found at configure time, the `recorder_app` target is a no-op
-  that prints a warning.
+```pwsh
+C:\Qt\6.9.0\msvc2022_64\bin\windeployqt6.exe `
+    build\windows-x64-debug\apps\recorder_app\Debug\recorder_app.exe
+```
 
 ## Project structure
 
 ```
 recorder_app/
-├── App.xaml / .h / .cpp          Application entry point (dark theme, creates MainWindow)
-├── MainWindow.xaml / .h / .cpp   NavigationView shell with page routing
+├── main.cpp                        Qt entry point, dark Fusion palette
+├── MainWindow.h / .cpp             QMainWindow: sidebar nav + QStackedWidget
 ├── pages/
-│   ├── RecordPage.xaml / .h / .cpp
-│   ├── VideoPage.xaml / .h / .cpp
-│   ├── AudioPage.xaml / .h / .cpp
-│   ├── OutputPage.xaml / .h / .cpp
-│   ├── HotkeysPage.xaml / .h / .cpp
-│   ├── DiagnosticsPage.xaml / .h / .cpp
-│   ├── LogsPage.xaml / .h / .cpp
-│   └── AdvancedPage.xaml / .h / .cpp
-├── Package.appxmanifest           MSIX packaging manifest
-├── recorder_app.vcxproj           MSBuild project (XAML + WinUI compilation)
-├── recorder_app.vcxproj.filters   Solution Explorer filters
-├── CMakeLists.txt                 CMake integration (invokes MSBuild)
-└── README.md
+│   ├── RecordPage.h / .cpp         Full UI: target picker, start/stop, stats
+│   ├── VideoPage.h / .cpp          Stub
+│   ├── AudioPage.h / .cpp          Stub
+│   ├── OutputPage.h / .cpp         Stub
+│   ├── HotkeysPage.h / .cpp        Stub
+│   ├── DiagnosticsPage.h / .cpp    Stub
+│   ├── LogsPage.h / .cpp           Stub
+│   └── AdvancedPage.h / .cpp       Stub
+├── services/
+│   └── RecordingCoordinator.h/.cpp Engine bridge (thread-safe via QMetaObject)
+├── viewmodels/
+│   └── RecordViewModel.h/.cpp      Pure C++ view model
+├── startup_log.h / .cpp            File + OutputDebugString logger
+└── CMakeLists.txt                  find_package(Qt6), qt_add_executable
 ```
+
+## Design notes
+
+- Dark theme via Fusion style + custom `QPalette` (set in `main.cpp`)
+- `RecordingCoordinator` posts callbacks to the main thread using
+  `QMetaObject::invokeMethod(..., Qt::QueuedConnection)` — no WinRT dispatcher needed
+- Engine (`recorder_core`, `exosnap_capability`) remains UI-agnostic

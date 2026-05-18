@@ -1,12 +1,10 @@
 #pragma once
-#include "LogsPage.g.h"
+#include <QWidget>
 
-namespace winrt::exosnap::implementation {
-struct LogsPage : LogsPageT<LogsPage> {
-    LogsPage();
+namespace exosnap {
+class LogsPage : public QWidget {
+    Q_OBJECT
+public:
+    explicit LogsPage(QWidget* parent = nullptr);
 };
-} // namespace winrt::exosnap::implementation
-
-namespace winrt::exosnap::factory_implementation {
-struct LogsPage : LogsPageT<LogsPage, implementation::LogsPage> {};
-} // namespace winrt::exosnap::factory_implementation
+} // namespace exosnap

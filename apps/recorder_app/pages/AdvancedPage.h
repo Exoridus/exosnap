@@ -1,12 +1,10 @@
 #pragma once
-#include "AdvancedPage.g.h"
+#include <QWidget>
 
-namespace winrt::exosnap::implementation {
-struct AdvancedPage : AdvancedPageT<AdvancedPage> {
-    AdvancedPage();
+namespace exosnap {
+class AdvancedPage : public QWidget {
+    Q_OBJECT
+public:
+    explicit AdvancedPage(QWidget* parent = nullptr);
 };
-} // namespace winrt::exosnap::implementation
-
-namespace winrt::exosnap::factory_implementation {
-struct AdvancedPage : AdvancedPageT<AdvancedPage, implementation::AdvancedPage> {};
-} // namespace winrt::exosnap::factory_implementation
+} // namespace exosnap

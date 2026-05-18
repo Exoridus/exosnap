@@ -2,7 +2,7 @@
 
 ## Project intent
 
-Build a Windows-native, diagnostics-first recording application MVP with a high-performance C++ engine and a simple WinUI 3 user interface.
+Build a Windows-native, diagnostics-first recording application MVP with a high-performance C++ engine and a Qt 6 + Qt Widgets user interface.
 
 ## Canonical product decisions
 

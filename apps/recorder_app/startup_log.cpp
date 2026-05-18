@@ -1,6 +1,7 @@
 #include "startup_log.h"
 
 #include <windows.h>
+#include <sstream>
 
 #include <array>
 #include <fstream>
@@ -75,11 +76,11 @@ void WriteNarrow(char const* message) noexcept {
     Append(wide);
 }
 
-void WriteHResult(char const* context, winrt::hresult_error const& ex) noexcept {
+void WriteHResult(char const* context, long hresult) noexcept {
     std::ostringstream oss;
-    oss << context << " hresult=0x" << std::hex << std::uppercase << static_cast<uint32_t>(ex.code().value);
+    oss << context << " hresult=0x" << std::hex << std::uppercase
+        << static_cast<unsigned long>(static_cast<unsigned int>(hresult));
     WriteNarrow(oss.str().c_str());
-    Write(ex.message().c_str());
 }
 
 } // namespace exosnap::startup_log

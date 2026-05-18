@@ -1,12 +1,10 @@
 #pragma once
-#include "DiagnosticsPage.g.h"
+#include <QWidget>
 
-namespace winrt::exosnap::implementation {
-struct DiagnosticsPage : DiagnosticsPageT<DiagnosticsPage> {
-    DiagnosticsPage();
+namespace exosnap {
+class DiagnosticsPage : public QWidget {
+    Q_OBJECT
+public:
+    explicit DiagnosticsPage(QWidget* parent = nullptr);
 };
-} // namespace winrt::exosnap::implementation
-
-namespace winrt::exosnap::factory_implementation {
-struct DiagnosticsPage : DiagnosticsPageT<DiagnosticsPage, implementation::DiagnosticsPage> {};
-} // namespace winrt::exosnap::factory_implementation
+} // namespace exosnap

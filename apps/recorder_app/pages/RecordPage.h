@@ -1,33 +1,54 @@
 #pragma once
-#include "RecordPage.g.h"
-
+#include <QWidget>
 #include <memory>
 
 #include "../services/RecordingCoordinator.h"
 #include "../viewmodels/RecordViewModel.h"
 
-namespace winrt::exosnap::implementation {
+class QComboBox;
+class QFrame;
+class QLabel;
+class QPushButton;
 
-struct RecordPage : RecordPageT<RecordPage> {
-    RecordPage();
+namespace exosnap {
 
-    void StartButton_Click(winrt::Windows::Foundation::IInspectable const&,
-                           winrt::Microsoft::UI::Xaml::RoutedEventArgs const&);
-    void StopButton_Click(winrt::Windows::Foundation::IInspectable const&,
-                          winrt::Microsoft::UI::Xaml::RoutedEventArgs const&);
+class RecordPage : public QWidget {
+    Q_OBJECT
+public:
+    explicit RecordPage(QWidget* parent = nullptr);
+
+private slots:
+    void onStart();
+    void onStop();
 
 private:
-    void InitCoordinator();
-    void Refresh();
-    void UpdateStatsDisplay();
-    void UpdateResultDisplay();
+    void initCoordinator();
+    void refresh();
+    void updateStatsDisplay();
+    void updateResultDisplay();
 
-    ::exosnap::RecordViewModel                   view_model_;
-    std::unique_ptr<::exosnap::RecordingCoordinator> coordinator_;
+    RecordViewModel                       view_model_;
+    std::unique_ptr<RecordingCoordinator> coordinator_;
+
+    QLabel*      capability_label_    = nullptr;
+    QComboBox*   target_combo_        = nullptr;
+    QLabel*      output_path_label_   = nullptr;
+    QPushButton* start_btn_           = nullptr;
+    QPushButton* stop_btn_            = nullptr;
+    QLabel*      state_label_         = nullptr;
+    QFrame*      stats_panel_         = nullptr;
+    QLabel*      elapsed_label_       = nullptr;
+    QLabel*      frames_label_        = nullptr;
+    QLabel*      video_packets_label_ = nullptr;
+    QLabel*      audio_packets_label_ = nullptr;
+    QLabel*      dropped_label_       = nullptr;
+    QLabel*      size_label_          = nullptr;
+    QFrame*      result_panel_        = nullptr;
+    QLabel*      result_status_label_  = nullptr;
+    QLabel*      result_path_label_    = nullptr;
+    QLabel*      result_phase_label_   = nullptr;
+    QLabel*      result_hresult_label_ = nullptr;
+    QLabel*      result_detail_label_  = nullptr;
 };
 
-} // namespace winrt::exosnap::implementation
-
-namespace winrt::exosnap::factory_implementation {
-struct RecordPage : RecordPageT<RecordPage, implementation::RecordPage> {};
-} // namespace winrt::exosnap::factory_implementation
+} // namespace exosnap

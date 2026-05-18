@@ -1,12 +1,10 @@
 #pragma once
-#include "HotkeysPage.g.h"
+#include <QWidget>
 
-namespace winrt::exosnap::implementation {
-struct HotkeysPage : HotkeysPageT<HotkeysPage> {
-    HotkeysPage();
+namespace exosnap {
+class HotkeysPage : public QWidget {
+    Q_OBJECT
+public:
+    explicit HotkeysPage(QWidget* parent = nullptr);
 };
-} // namespace winrt::exosnap::implementation
-
-namespace winrt::exosnap::factory_implementation {
-struct HotkeysPage : HotkeysPageT<HotkeysPage, implementation::HotkeysPage> {};
-} // namespace winrt::exosnap::factory_implementation
+} // namespace exosnap
