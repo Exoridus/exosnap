@@ -197,8 +197,9 @@ void RecordPage::initCoordinator() {
     for (const auto& t : view_model_.targets) {
         bool isMonitor = (t.kind == recorder_core::CaptureTarget::Kind::Monitor);
         std::wstring prefix = isMonitor ? L"[Monitor] " : L"[Window] ";
-        view_model_.target_display_names.push_back(prefix + t.description);
-        target_combo_->addItem(QString::fromStdWString(prefix + t.description));
+        std::wstring desc = QString::fromStdString(t.description).toStdWString();
+        view_model_.target_display_names.push_back(prefix + desc);
+        target_combo_->addItem(QString::fromStdWString(prefix + desc));
     }
 
     view_model_.selected_target_index = -1;

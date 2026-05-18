@@ -190,11 +190,11 @@ std::filesystem::path RecordingCoordinator::GenerateOutputPath() {
     return base_dir / (std::wstring(L"exosnap_") + ts + L".mkv");
 }
 
-std::wstring RecordingCoordinator::FormatHResult(HRESULT hr) {
-    if (hr == S_OK)
+std::wstring RecordingCoordinator::FormatHResult(int32_t hr) {
+    if (hr == 0)
         return {};
     wchar_t buf[32] = {};
-    _snwprintf_s(buf, _TRUNCATE, L"0x%08X", static_cast<unsigned int>(hr));
+    _snwprintf_s(buf, _TRUNCATE, L"0x%08X", static_cast<uint32_t>(hr));
     return buf;
 }
 

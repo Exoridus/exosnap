@@ -52,7 +52,7 @@ struct CodecPrivateData {
 // ---------------------------------------------------------------------------
 
 struct SessionFailure {
-    HRESULT error_code = S_OK;
+    int32_t error_code = 0; // HRESULT on Windows; 0 == success
     ErrorPhase error_phase = ErrorPhase::None;
     std::string error_detail;
 };
@@ -117,7 +117,8 @@ struct SessionState {
     // ---------------------------------------------------------------------------
 
     // Record first failure; triggers stop_requested.
-    void RecordFailure(HRESULT hr, ErrorPhase phase, const std::string& detail) {
+    // hr: platform error code (HRESULT on Windows); 0 == success.
+    void RecordFailure(int32_t hr, ErrorPhase phase, const std::string& detail) {
         {
             std::lock_guard lk(failure_mutex);
             if (!failure_recorded) {

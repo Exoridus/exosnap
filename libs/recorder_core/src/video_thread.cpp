@@ -125,12 +125,12 @@ void VideoThread::Run() {
 
             if (target.kind == CaptureTarget::Kind::Monitor) {
                 winrt::check_hresult(interop->CreateForMonitor(
-                    target.hmonitor, winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(),
-                    winrt::put_abi(item)));
+                    reinterpret_cast<HMONITOR>(target.native_id),
+                    winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(), winrt::put_abi(item)));
             } else {
                 winrt::check_hresult(interop->CreateForWindow(
-                    target.hwnd, winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(),
-                    winrt::put_abi(item)));
+                    reinterpret_cast<HWND>(target.native_id),
+                    winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(), winrt::put_abi(item)));
             }
         } catch (const winrt::hresult_error& e) {
             char buf[96];

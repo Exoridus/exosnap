@@ -10,9 +10,6 @@
 #include <string>
 #include <vector>
 
-// Windows types needed for monitor/window handles
-#include <windows.h>
-
 namespace recorder_core {
 
 // ---------------------------------------------------------------------------
@@ -23,9 +20,10 @@ struct CaptureTarget {
     enum class Kind { Monitor, Window };
 
     Kind kind = Kind::Monitor;
-    std::wstring description;
-    HMONITOR hmonitor = nullptr;
-    HWND hwnd = nullptr;
+    // Platform-native handle stored as an opaque integer.
+    // On Windows: HMONITOR or HWND cast via reinterpret_cast<uintptr_t>.
+    uintptr_t native_id = 0;
+    std::string description;
 };
 
 // ---------------------------------------------------------------------------
@@ -58,7 +56,9 @@ struct RecorderConfig {
 
 struct RecorderResult {
     bool succeeded = false;
-    HRESULT error_code = S_OK;
+    // Platform error code stored as a signed 32-bit integer.
+    // On Windows: HRESULT. S_OK == 0. Negative values indicate failure.
+    int32_t error_code = 0;
     ErrorPhase error_phase = ErrorPhase::None;
     SessionStats stats;
     std::string error_detail;

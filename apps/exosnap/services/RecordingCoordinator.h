@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -53,7 +54,7 @@ class RecordingCoordinator {
     void PostStats(recorder_core::SessionStats stats);
 
     static std::filesystem::path GenerateOutputPath();
-    static std::wstring FormatHResult(HRESULT hr);
+    static std::wstring FormatHResult(int32_t hr);
     static std::wstring FormatErrorPhase(recorder_core::ErrorPhase phase);
 
     const exosnap::capability::CapabilitySet* caps_ = nullptr;

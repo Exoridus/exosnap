@@ -24,17 +24,6 @@
 // Helpers
 // ---------------------------------------------------------------------------
 
-static std::string narrow(const std::wstring& ws) {
-    if (ws.empty())
-        return {};
-    int sz = ::WideCharToMultiByte(CP_UTF8, 0, ws.data(), static_cast<int>(ws.size()), nullptr, 0, nullptr, nullptr);
-    if (sz <= 0)
-        return {};
-    std::string s(static_cast<size_t>(sz), '\0');
-    ::WideCharToMultiByte(CP_UTF8, 0, ws.data(), static_cast<int>(ws.size()), s.data(), sz, nullptr, nullptr);
-    return s;
-}
-
 static const char* to_string(recorder_core::ErrorPhase phase) {
     using P = recorder_core::ErrorPhase;
     switch (phase) {
@@ -263,7 +252,7 @@ static void print_result(const recorder_core::RecorderResult& result) {
     std::puts("---------- Recording Result ----------");
     std::printf("  succeeded          : %s\n", result.succeeded ? "true" : "false");
     std::printf("  error_phase        : %s\n", to_string(result.error_phase));
-    std::printf("  error_code (hex)   : 0x%08lX\n", static_cast<unsigned long>(result.error_code));
+    std::printf("  error_code (hex)   : 0x%08X\n", static_cast<uint32_t>(result.error_code));
     if (!result.error_detail.empty()) {
         std::printf("  error_detail       : %s\n", result.error_detail.c_str());
     }
@@ -309,7 +298,7 @@ int main(int argc, char* argv[]) {
 
     std::puts("\nAvailable capture targets:");
     for (size_t i = 0; i < targets.size(); ++i) {
-        std::printf("  [%zu] %-8s  %s\n", i + 1, kind_string(targets[i].kind), narrow(targets[i].description).c_str());
+        std::printf("  [%zu] %-8s  %s\n", i + 1, kind_string(targets[i].kind), targets[i].description.c_str());
     }
 
     if (cli.list_only) {
@@ -321,7 +310,7 @@ int main(int argc, char* argv[]) {
 
     if (cli.target_index >= 1 && static_cast<size_t>(cli.target_index) <= targets.size()) {
         selected_index = static_cast<size_t>(cli.target_index) - 1;
-        std::printf("\nUsing target [%d]: %s\n", cli.target_index, narrow(targets[selected_index].description).c_str());
+        std::printf("\nUsing target [%d]: %s\n", cli.target_index, targets[selected_index].description.c_str());
     } else {
         // Interactive prompt
         std::printf("\nSelect target (1-%zu): ", targets.size());
@@ -410,7 +399,7 @@ int main(int argc, char* argv[]) {
     if (!session.Validate(config, &validation_result)) {
         std::fprintf(stderr, "ERROR: Validation failed\n");
         std::fprintf(stderr, "  error_phase  : %s\n", to_string(validation_result.error_phase));
-        std::fprintf(stderr, "  error_code   : 0x%08lX\n", static_cast<unsigned long>(validation_result.error_code));
+        std::fprintf(stderr, "  error_code   : 0x%08X\n", static_cast<uint32_t>(validation_result.error_code));
         std::fprintf(stderr, "  error_detail : %s\n", validation_result.error_detail.c_str());
         return 1;
     }

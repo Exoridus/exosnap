@@ -56,7 +56,7 @@ void RecorderSession::SetStatsCallback(StatsCallback cb) {
 // ---------------------------------------------------------------------------
 
 bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out_result) {
-    auto fail = [&](HRESULT hr, ErrorPhase phase, const std::string& detail) -> bool {
+    auto fail = [&](int32_t hr, ErrorPhase phase, const std::string& detail) -> bool {
         if (out_result) {
             out_result->succeeded = false;
             out_result->error_code = hr;
@@ -113,11 +113,11 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
     }
 
     // Capture target: must have a valid handle for the stated kind
-    if (config.target.kind == CaptureTarget::Kind::Monitor && config.target.hmonitor == nullptr) {
-        return fail(E_INVALIDARG, ErrorPhase::Prepare, "CaptureTarget::Kind::Monitor requires a non-null hmonitor");
+    if (config.target.kind == CaptureTarget::Kind::Monitor && config.target.native_id == 0) {
+        return fail(E_INVALIDARG, ErrorPhase::Prepare, "CaptureTarget::Kind::Monitor requires a non-zero native_id");
     }
-    if (config.target.kind == CaptureTarget::Kind::Window && config.target.hwnd == nullptr) {
-        return fail(E_INVALIDARG, ErrorPhase::Prepare, "CaptureTarget::Kind::Window requires a non-null hwnd");
+    if (config.target.kind == CaptureTarget::Kind::Window && config.target.native_id == 0) {
+        return fail(E_INVALIDARG, ErrorPhase::Prepare, "CaptureTarget::Kind::Window requires a non-zero native_id");
     }
 
     if (out_result) {

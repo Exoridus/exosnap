@@ -19,8 +19,9 @@ std::vector<CaptureTarget> EnumerateWgcTargets() {
                     mi.cbSize = sizeof(mi);
                     CaptureTarget t;
                     t.kind = CaptureTarget::Kind::Monitor;
-                    t.hmonitor = desc.Monitor;
-                    t.description = GetMonitorInfoW(desc.Monitor, &mi) ? mi.szDevice : std::to_wstring(targets.size());
+                    t.native_id = reinterpret_cast<uintptr_t>(desc.Monitor);
+                    t.description =
+                        GetMonitorInfoW(desc.Monitor, &mi) ? WideToUtf8(mi.szDevice) : std::to_string(targets.size());
                     targets.push_back(std::move(t));
                 }
                 output = nullptr;
@@ -43,8 +44,8 @@ std::vector<CaptureTarget> EnumerateWgcTargets() {
                 return TRUE;
             CaptureTarget t;
             t.kind = CaptureTarget::Kind::Window;
-            t.description = title;
-            t.hwnd = hwnd;
+            t.native_id = reinterpret_cast<uintptr_t>(hwnd);
+            t.description = WideToUtf8(title);
             vec.push_back(std::move(t));
             return TRUE;
         },
