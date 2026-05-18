@@ -1,5 +1,5 @@
 #pragma once
-#include "VideoPage.xaml.g.h"
+#include "VideoPage.g.h"
 
 namespace winrt::exosnap::implementation {
 struct VideoPage : VideoPageT<VideoPage> {

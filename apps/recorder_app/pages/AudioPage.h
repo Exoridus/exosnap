@@ -1,5 +1,5 @@
 #pragma once
-#include "AudioPage.xaml.g.h"
+#include "AudioPage.g.h"
 
 namespace winrt::exosnap::implementation {
 struct AudioPage : AudioPageT<AudioPage> {

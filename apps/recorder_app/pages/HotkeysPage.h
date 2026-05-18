@@ -1,5 +1,5 @@
 #pragma once
-#include "HotkeysPage.xaml.g.h"
+#include "HotkeysPage.g.h"
 
 namespace winrt::exosnap::implementation {
 struct HotkeysPage : HotkeysPageT<HotkeysPage> {

@@ -7,6 +7,8 @@
   <ItemGroup>
     <ClCompile Include="App.xaml.cpp" />
     <ClCompile Include="MainWindow.xaml.cpp" />
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="XamlGeneratedCompat.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Page Include="App.xaml" />
@@ -95,5 +97,23 @@
   </ItemGroup>
   <ItemGroup>
     <Filter Include="pages" />
+    <Filter Include="services" />
+    <Filter Include="viewmodels" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="services\RecordingCoordinator.h">
+      <Filter>services</Filter>
+    </ClInclude>
+    <ClInclude Include="viewmodels\RecordViewModel.h">
+      <Filter>viewmodels</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="services\RecordingCoordinator.cpp">
+      <Filter>services</Filter>
+    </ClCompile>
+    <ClCompile Include="viewmodels\RecordViewModel.cpp">
+      <Filter>viewmodels</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>

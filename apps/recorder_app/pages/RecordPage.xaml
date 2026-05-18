@@ -1,8 +1,56 @@
 <Page x:Class="exosnap.RecordPage"
       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Grid>
-        <TextBlock Text="Record" Style="{StaticResource TitleTextBlockStyle}"
-                   HorizontalAlignment="Center" VerticalAlignment="Center" />
-    </Grid>
+    <ScrollViewer>
+        <StackPanel Margin="24,24,24,24" Spacing="16">
+
+            <!-- Section A: Capability Banner -->
+            <Border x:Name="CapabilityBanner" CornerRadius="4" Padding="12,8">
+                <TextBlock x:Name="CapabilityText" TextWrapping="Wrap" />
+            </Border>
+
+            <!-- Section B: Capture Target -->
+            <StackPanel Spacing="8">
+                <TextBlock Text="Capture Target" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <ComboBox x:Name="TargetCombo" HorizontalAlignment="Stretch" />
+            </StackPanel>
+
+            <!-- Section C: Output Path -->
+            <StackPanel Spacing="8">
+                <TextBlock Text="Output Path" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <TextBlock x:Name="OutputPathText" Text="--" TextWrapping="Wrap" Opacity="0.7" />
+            </StackPanel>
+
+            <!-- Section D: Controls -->
+            <StackPanel Spacing="8" Orientation="Horizontal">
+                <Button x:Name="StartButton" Content="Start Recording" Click="StartButton_Click" Style="{StaticResource AccentButtonStyle}" />
+                <Button x:Name="StopButton" Content="Stop Recording" Click="StopButton_Click" />
+            </StackPanel>
+            <TextBlock x:Name="StateText" />
+
+            <!-- Section E: Live Stats (shown during Recording/Stopping) -->
+            <Border x:Name="StatsPanel" CornerRadius="4" Padding="12,8">
+                <StackPanel Spacing="4">
+                    <TextBlock x:Name="ElapsedText" />
+                    <TextBlock x:Name="FramesCapturedText" />
+                    <TextBlock x:Name="VideoPacketsText" />
+                    <TextBlock x:Name="AudioPacketsText" />
+                    <TextBlock x:Name="DroppedFramesText" />
+                    <TextBlock x:Name="OutputSizeText" />
+                </StackPanel>
+            </Border>
+
+            <!-- Section F: Result (shown after Completed/Failed) -->
+            <Border x:Name="ResultPanel" CornerRadius="4" Padding="12,8">
+                <StackPanel Spacing="4">
+                    <TextBlock x:Name="ResultStatusText" />
+                    <TextBlock x:Name="ResultOutputPathText" TextWrapping="Wrap" />
+                    <TextBlock x:Name="ResultErrorPhaseText" />
+                    <TextBlock x:Name="ResultHResultText" />
+                    <TextBlock x:Name="ResultErrorDetailText" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
+        </StackPanel>
+    </ScrollViewer>
 </Page>

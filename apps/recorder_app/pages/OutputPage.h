@@ -1,5 +1,5 @@
 #pragma once
-#include "OutputPage.xaml.g.h"
+#include "OutputPage.g.h"
 
 namespace winrt::exosnap::implementation {
 struct OutputPage : OutputPageT<OutputPage> {

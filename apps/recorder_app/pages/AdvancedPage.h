@@ -1,5 +1,5 @@
 #pragma once
-#include "AdvancedPage.xaml.g.h"
+#include "AdvancedPage.g.h"
 
 namespace winrt::exosnap::implementation {
 struct AdvancedPage : AdvancedPageT<AdvancedPage> {

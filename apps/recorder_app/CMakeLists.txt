@@ -5,6 +5,9 @@ set(APP_VCPROJ "${APP_PROJECT_DIR}/recorder_app.vcxproj")
 
 find_program(MSBUILD_EXE NAMES MSBuild.exe msbuild
     PATHS
+        "C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin"
+        "C:/Program Files/Microsoft Visual Studio/18/Professional/MSBuild/Current/Bin"
+        "C:/Program Files/Microsoft Visual Studio/18/Enterprise/MSBuild/Current/Bin"
         "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin"
         "C:/Program Files/Microsoft Visual Studio/2022/Professional/MSBuild/Current/Bin"
         "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/MSBuild/Current/Bin"
@@ -20,6 +23,8 @@ set(APP_SOURCES
     "${APP_PROJECT_DIR}/MainWindow.xaml"
     "${APP_PROJECT_DIR}/MainWindow.xaml.h"
     "${APP_PROJECT_DIR}/MainWindow.xaml.cpp"
+    "${APP_PROJECT_DIR}/main.cpp"
+    "${APP_PROJECT_DIR}/XamlGeneratedCompat.cpp"
     "${APP_PROJECT_DIR}/pages/AdvancedPage.xaml"
     "${APP_PROJECT_DIR}/pages/AdvancedPage.h"
     "${APP_PROJECT_DIR}/pages/AdvancedPage.cpp"
@@ -44,6 +49,10 @@ set(APP_SOURCES
     "${APP_PROJECT_DIR}/pages/VideoPage.xaml"
     "${APP_PROJECT_DIR}/pages/VideoPage.h"
     "${APP_PROJECT_DIR}/pages/VideoPage.cpp"
+    "${APP_PROJECT_DIR}/services/RecordingCoordinator.h"
+    "${APP_PROJECT_DIR}/services/RecordingCoordinator.cpp"
+    "${APP_PROJECT_DIR}/viewmodels/RecordViewModel.h"
+    "${APP_PROJECT_DIR}/viewmodels/RecordViewModel.cpp"
 )
 
 set(WINUI_TOOLING_AVAILABLE FALSE)
@@ -62,6 +71,10 @@ if(MSBUILD_EXE)
             ERROR_QUIET
         )
         if(VS_INSTALL_PATH)
+            set(VS_MSBUILD_EXE "${VS_INSTALL_PATH}/MSBuild/Current/Bin/MSBuild.exe")
+            if(EXISTS "${VS_MSBUILD_EXE}")
+                set(MSBUILD_EXE "${VS_MSBUILD_EXE}")
+            endif()
             foreach(VS_VER 18.0 17.0 16.0)
                 set(XAML_TARGETS "${VS_INSTALL_PATH}/MSBuild/Microsoft/WindowsXaml/v${VS_VER}/Microsoft.Windows.UI.Xaml.Cpp.targets")
                 if(EXISTS "${XAML_TARGETS}")
@@ -78,8 +91,9 @@ if(WINUI_TOOLING_AVAILABLE)
         COMMAND "${MSBUILD_EXE}" "${APP_VCPROJ}"
             "/p:Configuration=$<CONFIG>"
             "/p:Platform=x64"
-            "/p:OutDir=${CMAKE_BINARY_DIR}/apps/recorder_app/$<CONFIG>"
-            "/p:IntDir=${CMAKE_BINARY_DIR}/apps/recorder_app/$<CONFIG>/obj"
+            "/p:OutDir=${CMAKE_BINARY_DIR}/apps/recorder_app/$<CONFIG>/"
+            "/p:IntDir=${CMAKE_BINARY_DIR}/apps/recorder_app/$<CONFIG>/obj/"
+            "/p:ExoLibDir=${CMAKE_BINARY_DIR}/"
             /nologo
             /restore
         VERBATIM
@@ -89,12 +103,12 @@ if(WINUI_TOOLING_AVAILABLE)
     message(STATUS "WinUI 3 app (recorder_app) — included in default build (XAML targets found)")
 elseif(MSBUILD_EXE)
     add_custom_target(recorder_app
-        EXCLUDE_FROM_ALL
         COMMAND "${MSBUILD_EXE}" "${APP_VCPROJ}"
             "/p:Configuration=$<CONFIG>"
             "/p:Platform=x64"
-            "/p:OutDir=${CMAKE_BINARY_DIR}/apps/recorder_app/$<CONFIG>"
-            "/p:IntDir=${CMAKE_BINARY_DIR}/apps/recorder_app/$<CONFIG>/obj"
+            "/p:OutDir=${CMAKE_BINARY_DIR}/apps/recorder_app/$<CONFIG>/"
+            "/p:IntDir=${CMAKE_BINARY_DIR}/apps/recorder_app/$<CONFIG>/obj/"
+            "/p:ExoLibDir=${CMAKE_BINARY_DIR}/"
             /nologo
             /restore
         VERBATIM
@@ -107,7 +121,6 @@ elseif(MSBUILD_EXE)
     message(WARNING "Install the component: Microsoft.VisualStudio.ComponentGroup.WindowsAppSDK.Cpp")
 else()
     add_custom_target(recorder_app
-        EXCLUDE_FROM_ALL
         COMMAND "${CMAKE_COMMAND}" -E echo "recorder_app skipped: MSBuild.exe not found"
     )
     message(WARNING "MSBuild.exe not found. recorder_app cannot build.")

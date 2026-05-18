@@ -1,5 +1,5 @@
 #pragma once
-#include "MainWindow.xaml.g.h"
+#include "MainWindow.g.h"
 
 namespace winrt::exosnap::implementation {
 struct MainWindow : MainWindowT<MainWindow> {

@@ -1,5 +1,5 @@
 #pragma once
-#include "LogsPage.xaml.g.h"
+#include "LogsPage.g.h"
 
 namespace winrt::exosnap::implementation {
 struct LogsPage : LogsPageT<LogsPage> {
