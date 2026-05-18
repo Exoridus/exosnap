@@ -1,15 +1,21 @@
+# Build output
 /build/
 /out/
+
+# IDE
 /.vs/
 /.vscode/
 *.user
-CMakeUserPresets.json
-apps/recorder_app/obj/
-apps/recorder_app/packages/
 *.suo
-probe_nvenc_output/
-probe_wgc_nvenc_output/
-probe_wgc_nvenc_gpu_output/
-probe_mf_aac_encode_output/
-probe_wgc_nvenc_aac_mkv_output/
-recorder_cli_output/
+CMakeUserPresets.json
+
+# Qt / MSBuild artifacts
+apps/exosnap/Generated Files/
+apps/exosnap/obj/
+apps/exosnap/packages/
+
+# Log files
+*.log
+
+# Spec pack installer metadata
+manifest.json

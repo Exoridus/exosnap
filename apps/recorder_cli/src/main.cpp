@@ -344,8 +344,12 @@ int main(int argc, char* argv[]) {
 
     const recorder_core::CaptureTarget& chosen_target = targets[selected_index];
 
-    // 3. Build output location
-    const std::filesystem::path output_dir  = "recorder_cli_output";
+    // 3. Build output location — %USERPROFILE%\Videos\exosnap\recorder_core_av1_aac.mkv
+    wchar_t profile_buf[MAX_PATH] = {};
+    DWORD profile_len = GetEnvironmentVariableW(L"USERPROFILE", profile_buf, MAX_PATH);
+    std::filesystem::path output_dir = (profile_len > 0 && profile_len < MAX_PATH)
+        ? std::filesystem::path(profile_buf) / L"Videos" / L"exosnap"
+        : std::filesystem::path(L"C:\\Users\\Public\\Videos\\exosnap");
     const std::filesystem::path output_path = output_dir / "recorder_core_av1_aac.mkv";
 
     std::error_code ec;
