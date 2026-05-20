@@ -5,11 +5,14 @@
 #include "session_internal.h"
 #include "session_stats_collector.h"
 #include "video_thread.h"
+#include "wasapi_capture_src.h"
+#include "wasapi_loopback_src.h"
 #include "wgc_capture.h"
 
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <memory>
 
 namespace recorder_core {
 
@@ -186,6 +189,22 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         st.stats_callback = m_impl->stats_callback;
     }
 
+    std::unique_ptr<IAudioCaptureSource> audioSource;
+    if (config.audio_track_plan.tracks.empty()) {
+        audioSource = std::make_unique<WasapiLoopbackSrc>();
+    } else if (config.audio_track_plan.tracks.size() == 1 && config.audio_track_plan.tracks[0].sources.size() == 1 &&
+               config.audio_track_plan.tracks[0].sources[0] == AudioSourceKind::Mic) {
+        audioSource = std::make_unique<WasapiCaptureSrc>();
+    } else {
+        RecorderResult r;
+        r.succeeded = false;
+        r.error_code = E_NOTIMPL;
+        r.error_phase = ErrorPhase::Prepare;
+        r.error_detail = "AudioSourceKind::App/Sys or multi-track audio is not implemented in Phase 4";
+        m_impl->recording.store(false);
+        return r;
+    }
+
     m_impl->recording.store(true);
 
     // Start stats collector
@@ -194,7 +213,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
 
     // Start worker threads
     VideoThread videoThread(m_impl->state);
-    AudioThread audioThread(m_impl->state);
+    AudioThread audioThread(m_impl->state, std::move(audioSource), 0);
     MuxThread muxThread(m_impl->state);
 
     videoThread.Start();

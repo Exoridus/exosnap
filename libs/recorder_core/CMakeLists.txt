@@ -75,7 +75,9 @@ add_library(recorder_core STATIC
     src/wgc_capture.cpp
     src/nvenc_encoder.cpp
     src/mf_aac_encoder.cpp
+    src/wasapi_capture_src.cpp
     src/wasapi_loopback.cpp
+    src/wasapi_loopback_src.cpp
     src/opus_audio_encoder.cpp
     src/session_stats_collector.cpp
     src/video_thread.cpp
@@ -143,3 +145,11 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_opus_encoder PRIVATE src)
+
+exosnap_add_gtest(
+    NAME test_audio_thread_source_agnostic
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_audio_thread_source_agnostic.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_audio_thread_source_agnostic PRIVATE src)

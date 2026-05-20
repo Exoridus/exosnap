@@ -1,16 +1,19 @@
 #pragma once
 
-// AudioThread: WASAPI loopback capture + Media Foundation AAC encode.
+// AudioThread: capture source -> audio encode -> mux routing.
 
 #include "session_internal.h"
 
+#include <recorder_core/interfaces/IAudioCaptureSource.h>
+
+#include <memory>
 #include <thread>
 
 namespace recorder_core {
 
 class AudioThread {
   public:
-    explicit AudioThread(SessionState& state);
+    AudioThread(SessionState& state, std::unique_ptr<IAudioCaptureSource> source, uint32_t track_id);
     ~AudioThread();
 
     AudioThread(const AudioThread&) = delete;
@@ -31,6 +34,8 @@ class AudioThread {
     void Run();
 
     SessionState& m_state;
+    std::unique_ptr<IAudioCaptureSource> source_;
+    uint32_t track_id_ = 0;
     std::thread m_thread;
 };
 

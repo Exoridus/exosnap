@@ -66,6 +66,7 @@ Muxer
   1. APP
   2. MIC
   3. SYS
+- Phase 4 adds a default microphone capture source via WasapiCaptureSrc for a single-source MIC → Opus → MKV vertical slice.
 
 ### Audio metrics
 - per-source peak/bar meter
