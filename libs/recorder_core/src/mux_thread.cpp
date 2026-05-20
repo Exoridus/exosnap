@@ -8,6 +8,8 @@
 #include "mkvmuxer/mkvwriter.h"
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -71,28 +73,38 @@ bool MuxThread::Join(unsigned timeout_ms) {
 // ---------------------------------------------------------------------------
 
 void MuxThread::Run() {
-    // --- Step 1: Wait for both codec private data to be ready ---
+    // --- Step 1: Wait for codec private data to be ready ---
+    uint32_t track_count = 1;
     {
         std::unique_lock lk(m_state.premux_mutex);
         m_state.premux_cv.wait(lk, [&] {
-            return (m_state.codec_private.av1_ready && m_state.codec_private.aac_ready) ||
+            return (m_state.codec_private.av1_ready && m_state.codec_private.AudioAllReady(m_state.audio_track_count)) ||
                    m_state.stop_requested.load();
         });
 
-        if (!(m_state.codec_private.av1_ready && m_state.codec_private.aac_ready)) {
+        if (!(m_state.codec_private.av1_ready && m_state.codec_private.AudioAllReady(m_state.audio_track_count))) {
             lk.unlock();
             m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Codec private data not available at mux start");
             return;
         }
+
+        track_count = m_state.audio_track_count;
+    }
+
+    if (track_count == 0 || track_count > CodecPrivateData::kMaxAudioTracks) {
+        m_state.RecordFailure(E_INVALIDARG, ErrorPhase::Mux, "Invalid audio track count for mux");
+        return;
     }
 
     // Save codec private data and encode dimensions for deferred track init
     uint8_t av1Cp[4] = {};
-    uint8_t aacCp[2] = {};
+    std::array<AacCodecPrivate, CodecPrivateData::kMaxAudioTracks> aacCp{};
     {
         std::lock_guard lk(m_state.premux_mutex);
         std::memcpy(av1Cp, m_state.codec_private.av1_codec_private, 4);
-        std::memcpy(aacCp, m_state.codec_private.aac_codec_private, 2);
+        for (uint32_t i = 0; i < track_count; ++i) {
+            aacCp[i] = m_state.codec_private.aac_codec_private[i];
+        }
     }
 
     uint32_t encW = 0, encH = 0;
@@ -106,7 +118,7 @@ void MuxThread::Run() {
     std::vector<InterleavePacket> allPackets;
 
     // 2a. Drain premux buffers into batch collection
-    //     Use placeholder track IDs: 1=video, 2=audio
+    //     Use placeholder track IDs: 1=video, 2+audio_track_id=audio
     //     Remapped after actual track init in Step 5.
     {
         std::lock_guard lk(m_state.premux_mutex);
@@ -124,9 +136,15 @@ void MuxThread::Run() {
         for (auto& pkt : m_state.audio_premux) {
             if (pkt.bytes.empty())
                 continue;
+            if (pkt.track_id >= track_count || pkt.track_id >= CodecPrivateData::kMaxAudioTracks) {
+                std::fprintf(stderr,
+                             "MuxThread: skipping premux audio packet with out-of-range track_id=%u (track_count=%u)\n",
+                             pkt.track_id, track_count);
+                continue;
+            }
             InterleavePacket ip;
             ip.pts_ns = pkt.pts_ns;
-            ip.track_num = 2;
+            ip.track_num = 2 + pkt.track_id;
             ip.is_key = true;
             ip.bytes = std::move(pkt.bytes);
             allPackets.push_back(std::move(ip));
@@ -138,9 +156,17 @@ void MuxThread::Run() {
 
     // 2b. Wait for both EOS sentinels, collecting from mux_queue
     bool videoEos = false;
-    bool audioEos = false;
+    std::array<bool, CodecPrivateData::kMaxAudioTracks> audioEosReceived{};
+    const auto all_audio_eos_received = [&]() {
+        for (uint32_t i = 0; i < track_count; ++i) {
+            if (!audioEosReceived[i]) {
+                return false;
+            }
+        }
+        return true;
+    };
 
-    while (!(videoEos && audioEos)) {
+    while (!(videoEos && all_audio_eos_received())) {
         if (m_state.HasFailure())
             break;
 
@@ -171,9 +197,18 @@ void MuxThread::Run() {
                             }
                         } else if constexpr (std::is_same_v<T, EncodedAudioPacket>) {
                             if (!payload.bytes.empty()) {
+                                if (payload.track_id >= track_count ||
+                                    payload.track_id >= CodecPrivateData::kMaxAudioTracks) {
+                                    std::fprintf(
+                                        stderr,
+                                        "MuxThread: skipping queued audio packet with out-of-range track_id=%u "
+                                        "(track_count=%u)\n",
+                                        payload.track_id, track_count);
+                                    return;
+                                }
                                 InterleavePacket ip;
                                 ip.pts_ns = payload.pts_ns;
-                                ip.track_num = 2;
+                                ip.track_num = 2 + payload.track_id;
                                 ip.is_key = true;
                                 ip.bytes = std::move(payload.bytes);
                                 allPackets.push_back(std::move(ip));
@@ -181,7 +216,15 @@ void MuxThread::Run() {
                         } else if constexpr (std::is_same_v<T, VideoEosSentinel>) {
                             videoEos = true;
                         } else if constexpr (std::is_same_v<T, AudioEosSentinel>) {
-                            audioEos = true;
+                            if (payload.track_id >= track_count ||
+                                payload.track_id >= CodecPrivateData::kMaxAudioTracks) {
+                                std::fprintf(stderr,
+                                             "MuxThread: ignoring audio EOS with out-of-range track_id=%u "
+                                             "(track_count=%u)\n",
+                                             payload.track_id, track_count);
+                            } else {
+                                audioEosReceived[payload.track_id] = true;
+                            }
                         }
                     },
                     item.payload);
@@ -212,12 +255,29 @@ void MuxThread::Run() {
                         }
                     } else if constexpr (std::is_same_v<T, EncodedAudioPacket>) {
                         if (!payload.bytes.empty()) {
+                            if (payload.track_id >= track_count ||
+                                payload.track_id >= CodecPrivateData::kMaxAudioTracks) {
+                                std::fprintf(stderr,
+                                             "MuxThread: skipping final-drain audio packet with out-of-range "
+                                             "track_id=%u (track_count=%u)\n",
+                                             payload.track_id, track_count);
+                                return;
+                            }
                             InterleavePacket ip;
                             ip.pts_ns = payload.pts_ns;
-                            ip.track_num = 2;
+                            ip.track_num = 2 + payload.track_id;
                             ip.is_key = true;
                             ip.bytes = std::move(payload.bytes);
                             allPackets.push_back(std::move(ip));
+                        }
+                    } else if constexpr (std::is_same_v<T, AudioEosSentinel>) {
+                        if (payload.track_id >= track_count || payload.track_id >= CodecPrivateData::kMaxAudioTracks) {
+                            std::fprintf(stderr,
+                                         "MuxThread: ignoring final-drain audio EOS with out-of-range track_id=%u "
+                                         "(track_count=%u)\n",
+                                         payload.track_id, track_count);
+                        } else {
+                            audioEosReceived[payload.track_id] = true;
                         }
                     }
                 },
@@ -274,23 +334,44 @@ void MuxThread::Run() {
         return;
     }
 
-    uint64_t audioTrackNum = segment.AddAudioTrack(48000, 2, 2);
-    if (audioTrackNum == 0) {
-        mkvWriter.Close();
-        m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "AddAudioTrack returned 0");
-        return;
-    }
+    std::array<uint64_t, CodecPrivateData::kMaxAudioTracks> audioTrackNums{};
+    for (uint32_t i = 0; i < track_count; ++i) {
+        const uint64_t trackNum = segment.AddAudioTrack(48000, 2, static_cast<int32_t>(2 + i));
+        if (trackNum == 0) {
+            mkvWriter.Close();
+            m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "AddAudioTrack returned 0");
+            return;
+        }
 
-    auto* at = static_cast<mkvmuxer::AudioTrack*>(segment.GetTrackByNumber(audioTrackNum));
-    at->set_codec_id("A_AAC");
-    at->SetCodecPrivate(aacCp, 2);
+        auto* at = static_cast<mkvmuxer::AudioTrack*>(segment.GetTrackByNumber(trackNum));
+        at->set_codec_id("A_AAC");
+        at->SetCodecPrivate(aacCp[i].bytes.data(), 2);
+
+        audioTrackNums[i] = trackNum;
+    }
 
     // --- Step 6: Remap placeholder track IDs to real mkvmuxer track numbers ---
     for (auto& ip : allPackets) {
         if (ip.track_num == 1) {
             ip.track_num = videoTrackNum;
-        } else if (ip.track_num == 2) {
-            ip.track_num = audioTrackNum;
+        } else {
+            if (ip.track_num < 2) {
+                std::fprintf(stderr, "MuxThread: skipping packet with invalid placeholder track_num=%llu\n",
+                             static_cast<unsigned long long>(ip.track_num));
+                ip.track_num = 0;
+                continue;
+            }
+
+            const uint32_t audioId = static_cast<uint32_t>(ip.track_num - 2);
+            if (audioId >= track_count || audioId >= CodecPrivateData::kMaxAudioTracks) {
+                std::fprintf(stderr,
+                             "MuxThread: skipping packet with out-of-range audio placeholder=%u (track_count=%u)\n",
+                             audioId, track_count);
+                ip.track_num = 0;
+                continue;
+            }
+
+            ip.track_num = audioTrackNums[audioId];
         }
     }
 
@@ -298,6 +379,9 @@ void MuxThread::Run() {
     // Note: video_bytes and audio_bytes are already accumulated by the encode
     // paths (video_thread / audio_thread) and must not be added here again.
     for (const auto& ip : allPackets) {
+        if (ip.track_num == 0) {
+            continue;
+        }
         if (!WritePacket(segment, ip)) {
             mkvWriter.Close();
             m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "segment.AddFrame failed during final write");

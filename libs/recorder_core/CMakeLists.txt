@@ -30,6 +30,21 @@ if(NOT EXISTS "${_nvenc_header}")
         LIBRARIES recorder_core
     )
 
+    exosnap_add_gtest(
+        NAME test_multi_track_packet_types
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_multi_track_packet_types.cpp
+        LIBRARIES recorder_core
+    )
+
+    exosnap_add_gtest(
+        NAME test_codec_private_readiness
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_codec_private_readiness.cpp
+        LIBRARIES recorder_core
+    )
+    target_include_directories(test_codec_private_readiness PRIVATE src)
+
     return()
 endif()
 
@@ -91,3 +106,18 @@ exosnap_add_gtest(
     SOURCES tests/test_audio_track_resolver.cpp
     LIBRARIES recorder_core
 )
+
+exosnap_add_gtest(
+    NAME test_multi_track_packet_types
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_multi_track_packet_types.cpp
+    LIBRARIES recorder_core
+)
+
+exosnap_add_gtest(
+    NAME test_codec_private_readiness
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_codec_private_readiness.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_codec_private_readiness PRIVATE src)

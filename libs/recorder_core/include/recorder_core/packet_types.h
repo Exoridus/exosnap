@@ -14,6 +14,7 @@ struct EncodedVideoPacket {
 struct EncodedAudioPacket {
     std::vector<uint8_t> bytes;
     uint64_t pts_ns = 0;
+    uint32_t track_id = 0;
 };
 
 } // namespace recorder_core

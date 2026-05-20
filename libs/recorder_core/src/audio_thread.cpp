@@ -75,8 +75,8 @@ void AudioThread::Run() {
             return;
         }
         std::lock_guard lk(m_state.premux_mutex);
-        std::memcpy(m_state.codec_private.aac_codec_private, cp, 2);
-        m_state.codec_private.aac_ready = true;
+        std::memcpy(m_state.codec_private.aac_codec_private[0].bytes.data(), cp, 2);
+        m_state.codec_private.aac_track_ready[0] = true;
         m_state.premux_cv.notify_all();
     }
 
@@ -109,7 +109,8 @@ void AudioThread::Run() {
 
             {
                 std::unique_lock lk(m_state.premux_mutex);
-                bool bothReady = m_state.codec_private.av1_ready && m_state.codec_private.aac_ready;
+                bool bothReady =
+                    m_state.codec_private.av1_ready && m_state.codec_private.AudioAllReady(m_state.audio_track_count);
                 if (!bothReady) {
                     if (m_state.audio_premux.size() >= SessionState::kAudioPremuxLimit) {
                         lk.unlock();
@@ -224,7 +225,7 @@ end_audio_loop:
     // --- Push audio EOS sentinel ---
     {
         MuxItem eos;
-        eos.payload = AudioEosSentinel{};
+        eos.payload = AudioEosSentinel{0};
         std::lock_guard lk(m_state.mux_mutex);
         m_state.mux_queue.push_back(std::move(eos));
         m_state.mux_cv.notify_one();

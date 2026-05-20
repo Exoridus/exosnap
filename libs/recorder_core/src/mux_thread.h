@@ -3,7 +3,8 @@
 // MuxThread: batch-collect Matroska writer.
 //
 // Startup sequence (Stage 1 — correctness-first):
-//   1. Waits until both codec-private data are ready (av1_ready && aac_ready).
+//   1. Waits until video codec private is ready and all expected audio tracks
+//      report codec private readiness (av1_ready && AudioAllReady(audio_track_count)).
 //   2. Drains premux buffers into an in-memory batch collection.
 //   3. Collects all encoded packets from the mux_queue until both EOS sentinels arrive.
 //   4. Stable-sorts the entire collected packet set by PTS (global ordering).

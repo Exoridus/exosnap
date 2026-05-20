@@ -9,6 +9,7 @@
 #include <recorder_core/recorder_session.h>
 #include <recorder_core/session_stats.h>
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -28,7 +29,9 @@ namespace recorder_core {
 // ---------------------------------------------------------------------------
 
 struct VideoEosSentinel {};
-struct AudioEosSentinel {};
+struct AudioEosSentinel {
+    uint32_t track_id = 0;
+};
 
 struct MuxItem {
     // Discriminated union: encoded packet or EOS sentinel
@@ -39,12 +42,34 @@ struct MuxItem {
 // Codec private data (shared between threads via SessionState)
 // ---------------------------------------------------------------------------
 
+struct AacCodecPrivate {
+    std::array<uint8_t, 2> bytes{};
+};
+
 struct CodecPrivateData {
     uint8_t av1_codec_private[4] = {};
     bool av1_ready = false;
 
-    uint8_t aac_codec_private[2] = {};
-    bool aac_ready = false;
+    static constexpr uint32_t kMaxAudioTracks = 3;
+
+    std::array<AacCodecPrivate, kMaxAudioTracks> aac_codec_private{};
+    std::array<bool, kMaxAudioTracks> aac_track_ready{};
+
+    [[nodiscard]] bool AudioAllReady(uint32_t track_count) const {
+        if (track_count == 0) {
+            return true;
+        }
+        if (track_count > kMaxAudioTracks) {
+            return false;
+        }
+
+        for (uint32_t i = 0; i < track_count; ++i) {
+            if (!aac_track_ready[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -71,8 +96,8 @@ struct SessionState {
     SessionFailure failure;
 
     // Pre-mux buffering queues: video and audio are buffered here until
-    // codec-private data from both tracks is available and Matroska tracks
-    // can be initialized.
+    // codec-private data from the video track and all expected audio tracks
+    // is available and Matroska tracks can be initialized.
     //
     // Limits:
     //   video_premux limit: 120 packets
@@ -107,6 +132,9 @@ struct SessionState {
 
     // Record config captured at Record() time
     RecorderConfig config;
+
+    // Number of expected output audio tracks for mux readiness/routing.
+    uint32_t audio_track_count = 1;
 
     // Video dimensions (set by VideoThread during prepare)
     uint32_t encode_width = 0;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <recorder_core/audio_track_model.h>
+
 #include "codec_types.h"
 #include "error_types.h"
 #include "session_stats.h"
@@ -48,6 +50,10 @@ struct RecorderConfig {
     // Frame rate (numerator/denominator)
     uint32_t frame_rate_num = 60;
     uint32_t frame_rate_den = 1;
+
+    // Resolved output audio tracks from the APP/MIC/SYS source model.
+    // Phase 2 legacy compatibility: empty plan means single audio track.
+    AudioTrackPlan audio_track_plan;
 };
 
 // ---------------------------------------------------------------------------

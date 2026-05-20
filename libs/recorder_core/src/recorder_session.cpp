@@ -112,6 +112,10 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         return fail(E_INVALIDARG, ErrorPhase::Prepare, "frame_rate_num and frame_rate_den must be non-zero");
     }
 
+    if (config.audio_track_plan.tracks.size() > CodecPrivateData::kMaxAudioTracks) {
+        return fail(E_INVALIDARG, ErrorPhase::Prepare, "audio_track_plan: max 3 audio tracks supported");
+    }
+
     // Capture target: must have a valid handle for the stated kind
     if (config.target.kind == CaptureTarget::Kind::Monitor && config.target.native_id == 0) {
         return fail(E_INVALIDARG, ErrorPhase::Prepare, "CaptureTarget::Kind::Monitor requires a non-zero native_id");
@@ -174,6 +178,8 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             st.stats = {};
         }
         st.config = config;
+        st.audio_track_count =
+            config.audio_track_plan.tracks.empty() ? 1u : static_cast<uint32_t>(config.audio_track_plan.tracks.size());
         st.encode_width = 0;
         st.encode_height = 0;
         st.stats_callback = m_impl->stats_callback;

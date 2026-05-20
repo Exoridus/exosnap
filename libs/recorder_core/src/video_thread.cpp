@@ -490,7 +490,8 @@ void VideoThread::Run() {
                             // Route to premux or mux
                             {
                                 std::unique_lock lk(m_state.premux_mutex);
-                                bool bothReady = m_state.codec_private.av1_ready && m_state.codec_private.aac_ready;
+                                bool bothReady = m_state.codec_private.av1_ready &&
+                                                 m_state.codec_private.AudioAllReady(m_state.audio_track_count);
                                 if (!bothReady) {
                                     if (m_state.video_premux.size() >= SessionState::kVideoPremuxLimit) {
                                         lk.unlock();
@@ -581,7 +582,8 @@ end_encode_loop:
 
             {
                 std::unique_lock lk(m_state.premux_mutex);
-                bool bothReady = m_state.codec_private.av1_ready && m_state.codec_private.aac_ready;
+                bool bothReady = m_state.codec_private.av1_ready &&
+                                 m_state.codec_private.AudioAllReady(m_state.audio_track_count);
                 if (!bothReady) {
                     if (m_state.video_premux.size() < SessionState::kVideoPremuxLimit) {
                         m_state.video_premux.push_back(std::move(pkt));
