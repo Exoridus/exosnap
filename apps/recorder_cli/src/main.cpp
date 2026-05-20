@@ -11,6 +11,8 @@
 #include <recorder_core/session_stats.h>
 #include <recorder_core/version.h>
 
+#include <windows.h>
+
 #include <atomic>
 #include <chrono>
 #include <cstdio>
