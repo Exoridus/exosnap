@@ -38,3 +38,15 @@ set(ENABLE_TESTS           OFF CACHE INTERNAL "")
 set(ENABLE_WEBMTS          OFF CACHE INTERNAL "")
 set(ENABLE_WEBMINFO        OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(libwebm)
+
+FetchContent_Declare(
+  libopus
+  GIT_REPOSITORY https://github.com/xiph/opus.git
+  GIT_TAG        v1.5.2
+)
+set(OPUS_BUILD_SHARED_LIBRARY        OFF CACHE INTERNAL "")
+set(OPUS_BUILD_TESTING               OFF CACHE INTERNAL "")
+set(OPUS_BUILD_PROGRAMS              OFF CACHE INTERNAL "")
+set(OPUS_INSTALL_PKG_CONFIG_MODULE   OFF CACHE INTERNAL "")
+set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE INTERNAL "")
+FetchContent_MakeAvailable(libopus)

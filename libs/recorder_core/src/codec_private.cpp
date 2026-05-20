@@ -439,4 +439,28 @@ bool DeriveAacCodecPrivate(IMFMediaType* output_media_type, uint8_t out_aac_code
     return true;
 }
 
+void BuildOpusCodecPrivate(uint32_t sample_rate, uint32_t channels, uint16_t pre_skip, uint8_t* out_19) {
+    if (out_19 == nullptr) {
+        return;
+    }
+
+    // "OpusHead" magic.
+    static constexpr uint8_t kMagic[8] = {'O', 'p', 'u', 's', 'H', 'e', 'a', 'd'};
+    std::memcpy(out_19, kMagic, sizeof(kMagic));
+
+    out_19[8] = 0x01;                                  // version
+    out_19[9] = static_cast<uint8_t>(channels);        // channels
+    out_19[10] = static_cast<uint8_t>(pre_skip);       // pre_skip lo
+    out_19[11] = static_cast<uint8_t>(pre_skip >> 8u); // pre_skip hi
+
+    out_19[12] = static_cast<uint8_t>(sample_rate);
+    out_19[13] = static_cast<uint8_t>(sample_rate >> 8u);
+    out_19[14] = static_cast<uint8_t>(sample_rate >> 16u);
+    out_19[15] = static_cast<uint8_t>(sample_rate >> 24u);
+
+    out_19[16] = 0x00; // output_gain lo
+    out_19[17] = 0x00; // output_gain hi
+    out_19[18] = 0x00; // mapping_family
+}
+
 } // namespace recorder_core::codec_private

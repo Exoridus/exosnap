@@ -77,9 +77,11 @@ SupportAnnotation BaseContainerVideoAudioAnnotation(Container c, VideoCodec v, A
         if (v == VideoCodec::Av1Nvenc && a == AudioCodec::AacMf) {
             return {SupportLevel::Available, "Validated M3.2 path."};
         }
-        if (v == VideoCodec::Av1Nvenc && (a == AudioCodec::Opus || a == AudioCodec::Pcm)) {
-            return {SupportLevel::NotImplemented,
-                    "MKV + AV1 with this audio codec is planned but not implemented yet."};
+        if (v == VideoCodec::Av1Nvenc && a == AudioCodec::Opus) {
+            return {SupportLevel::Available, "Validated M4 Opus path (MKV + AV1 NVENC + Opus)."};
+        }
+        if (v == VideoCodec::Av1Nvenc && a == AudioCodec::Pcm) {
+            return {SupportLevel::NotImplemented, "MKV + AV1 + PCM is not implemented."};
         }
         if ((v == VideoCodec::H264Nvenc || v == VideoCodec::HevcNvenc) && a == AudioCodec::AacMf) {
             return {SupportLevel::NotImplemented, "MKV + NVENC H.264/HEVC + AAC is planned but not implemented yet."};

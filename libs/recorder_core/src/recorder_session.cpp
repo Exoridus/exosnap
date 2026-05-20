@@ -88,13 +88,14 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only VideoCodec::Av1Nvenc is supported in M3.1");
     }
 
-    // Audio codec: Opus is a future placeholder only — must fail here
+    // Audio codec: AAC and Opus are supported; Opus is MKV-only.
     if (config.audio_codec == AudioCodec::Opus) {
+        if (config.container != Container::Matroska) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare, "AudioCodec::Opus requires Container::Matroska");
+        }
+    } else if (config.audio_codec != AudioCodec::AacMf) {
         return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                    "AudioCodec::Opus is not implemented in M3.1; use AudioCodec::AacMf");
-    }
-    if (config.audio_codec != AudioCodec::AacMf) {
-        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only AudioCodec::AacMf is supported in M3.1");
+                    "Unsupported audio codec; supported: AudioCodec::AacMf, AudioCodec::Opus");
     }
 
     // Chroma: only Cs420 supported

@@ -8,11 +8,12 @@
 
 namespace {
 
+using recorder_core::AudioCodec;
 using recorder_core::AudioSourceKind;
 using recorder_core::AudioTrackPlan;
 using recorder_core::EncodedAudioPacket;
-using recorder_core::RecorderResult;
 using recorder_core::RecorderConfig;
+using recorder_core::RecorderResult;
 using recorder_core::RecorderSession;
 using recorder_core::ResolvedAudioTrack;
 
@@ -90,6 +91,34 @@ TEST(MultiTrackPacketTypesTest, Validate_RejectsAudioTrackPlanAboveMax) {
     RecorderResult validation{};
     EXPECT_FALSE(session.Validate(cfg, &validation));
     EXPECT_EQ(validation.error_detail, "audio_track_plan: max 3 audio tracks supported");
+}
+
+TEST(MultiTrackPacketTypesTest, Validate_AcceptsOpusForMatroska) {
+    RecorderSession session;
+    RecorderConfig cfg{};
+
+    cfg.output_path = std::filesystem::current_path() / "validate_opus_ok.mkv";
+    cfg.target.kind = recorder_core::CaptureTarget::Kind::Monitor;
+    cfg.target.native_id = 1;
+    cfg.audio_codec = AudioCodec::Opus;
+
+    RecorderResult validation{};
+    EXPECT_TRUE(session.Validate(cfg, &validation));
+    EXPECT_TRUE(validation.succeeded);
+}
+
+TEST(MultiTrackPacketTypesTest, Validate_RejectsUnknownAudioCodec) {
+    RecorderSession session;
+    RecorderConfig cfg{};
+
+    cfg.output_path = std::filesystem::current_path() / "validate_unknown_audio_codec.mkv";
+    cfg.target.kind = recorder_core::CaptureTarget::Kind::Monitor;
+    cfg.target.native_id = 1;
+    cfg.audio_codec = static_cast<AudioCodec>(999);
+
+    RecorderResult validation{};
+    EXPECT_FALSE(session.Validate(cfg, &validation));
+    EXPECT_EQ(validation.error_detail, "Unsupported audio codec; supported: AudioCodec::AacMf, AudioCodec::Opus");
 }
 
 } // namespace

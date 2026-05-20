@@ -9,6 +9,8 @@ if(NOT EXISTS "${_nvenc_header}")
         src/version.cpp
         src/logging/logging.cpp
         src/audio_track_model.cpp
+        src/codec_private.cpp
+        src/opus_audio_encoder.cpp
     )
 
     target_include_directories(recorder_core PUBLIC include)
@@ -20,6 +22,8 @@ if(NOT EXISTS "${_nvenc_header}")
     target_link_libraries(recorder_core PRIVATE
         spdlog::spdlog
         nlohmann_json::nlohmann_json
+        Opus::opus
+        mfuuid.lib
         exosnap::warnings
     )
 
@@ -45,6 +49,14 @@ if(NOT EXISTS "${_nvenc_header}")
     )
     target_include_directories(test_codec_private_readiness PRIVATE src)
 
+    exosnap_add_gtest(
+        NAME test_opus_encoder
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_opus_encoder.cpp
+        LIBRARIES recorder_core
+    )
+    target_include_directories(test_opus_encoder PRIVATE src)
+
     return()
 endif()
 
@@ -64,6 +76,7 @@ add_library(recorder_core STATIC
     src/nvenc_encoder.cpp
     src/mf_aac_encoder.cpp
     src/wasapi_loopback.cpp
+    src/opus_audio_encoder.cpp
     src/session_stats_collector.cpp
     src/video_thread.cpp
     src/audio_thread.cpp
@@ -86,6 +99,7 @@ target_link_libraries(recorder_core
     PRIVATE
         spdlog::spdlog
         nlohmann_json::nlohmann_json
+        Opus::opus
         mkvmuxer
         d3d11.lib
         dxgi.lib
@@ -121,3 +135,11 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_codec_private_readiness PRIVATE src)
+
+exosnap_add_gtest(
+    NAME test_opus_encoder
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_opus_encoder.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_opus_encoder PRIVATE src)

@@ -38,8 +38,8 @@ TEST(OptionQueryTest, MatroskaAv1AudioOptionsMatchBaseline) {
     EXPECT_TRUE(aac->selectable);
     EXPECT_EQ(aac->level, SupportLevel::Available);
 
-    EXPECT_FALSE(opus->selectable);
-    EXPECT_EQ(opus->level, SupportLevel::NotImplemented);
+    EXPECT_TRUE(opus->selectable);
+    EXPECT_EQ(opus->level, SupportLevel::Available);
 
     EXPECT_FALSE(pcm->selectable);
     EXPECT_EQ(pcm->level, SupportLevel::NotImplemented);

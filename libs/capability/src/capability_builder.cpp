@@ -29,9 +29,9 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
                               SupportAnnotation{SupportLevel::NotImplemented,
                                                 "H.264 product surface exists but runtime path is not implemented."});
 
-    caps.audio_codecs.emplace(AudioCodec::Opus,
-                              SupportAnnotation{SupportLevel::NotImplemented,
-                                                "Opus product surface exists but runtime path is not implemented."});
+    caps.audio_codecs.emplace(
+        AudioCodec::Opus,
+        SupportAnnotation{SupportLevel::Available, "Opus encoder implemented via libopus (static); M4 Phase 3."});
     caps.audio_codecs.emplace(AudioCodec::AacMf,
                               SupportAnnotation{SupportLevel::Available, "Validated AAC-LC Media Foundation path."});
     caps.audio_codecs.emplace(AudioCodec::Pcm,

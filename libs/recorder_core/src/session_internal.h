@@ -42,8 +42,8 @@ struct MuxItem {
 // Codec private data (shared between threads via SessionState)
 // ---------------------------------------------------------------------------
 
-struct AacCodecPrivate {
-    std::array<uint8_t, 2> bytes{};
+struct AudioCodecPrivateSlot {
+    std::vector<uint8_t> bytes;
 };
 
 struct CodecPrivateData {
@@ -52,8 +52,8 @@ struct CodecPrivateData {
 
     static constexpr uint32_t kMaxAudioTracks = 3;
 
-    std::array<AacCodecPrivate, kMaxAudioTracks> aac_codec_private{};
-    std::array<bool, kMaxAudioTracks> aac_track_ready{};
+    std::array<AudioCodecPrivateSlot, kMaxAudioTracks> audio_codec_private{};
+    std::array<bool, kMaxAudioTracks> audio_track_ready{};
 
     [[nodiscard]] bool AudioAllReady(uint32_t track_count) const {
         if (track_count == 0) {
@@ -64,7 +64,7 @@ struct CodecPrivateData {
         }
 
         for (uint32_t i = 0; i < track_count; ++i) {
-            if (!aac_track_ready[i]) {
+            if (!audio_track_ready[i]) {
                 return false;
             }
         }

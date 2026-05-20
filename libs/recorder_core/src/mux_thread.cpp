@@ -78,7 +78,8 @@ void MuxThread::Run() {
     {
         std::unique_lock lk(m_state.premux_mutex);
         m_state.premux_cv.wait(lk, [&] {
-            return (m_state.codec_private.av1_ready && m_state.codec_private.AudioAllReady(m_state.audio_track_count)) ||
+            return (m_state.codec_private.av1_ready &&
+                    m_state.codec_private.AudioAllReady(m_state.audio_track_count)) ||
                    m_state.stop_requested.load();
         });
 
@@ -98,12 +99,12 @@ void MuxThread::Run() {
 
     // Save codec private data and encode dimensions for deferred track init
     uint8_t av1Cp[4] = {};
-    std::array<AacCodecPrivate, CodecPrivateData::kMaxAudioTracks> aacCp{};
+    std::array<AudioCodecPrivateSlot, CodecPrivateData::kMaxAudioTracks> audioCp{};
     {
         std::lock_guard lk(m_state.premux_mutex);
         std::memcpy(av1Cp, m_state.codec_private.av1_codec_private, 4);
         for (uint32_t i = 0; i < track_count; ++i) {
-            aacCp[i] = m_state.codec_private.aac_codec_private[i];
+            audioCp[i] = m_state.codec_private.audio_codec_private[i];
         }
     }
 
@@ -335,6 +336,7 @@ void MuxThread::Run() {
     }
 
     std::array<uint64_t, CodecPrivateData::kMaxAudioTracks> audioTrackNums{};
+    const bool use_opus = (m_state.config.audio_codec == AudioCodec::Opus);
     for (uint32_t i = 0; i < track_count; ++i) {
         const uint64_t trackNum = segment.AddAudioTrack(48000, 2, static_cast<int32_t>(2 + i));
         if (trackNum == 0) {
@@ -344,8 +346,28 @@ void MuxThread::Run() {
         }
 
         auto* at = static_cast<mkvmuxer::AudioTrack*>(segment.GetTrackByNumber(trackNum));
-        at->set_codec_id("A_AAC");
-        at->SetCodecPrivate(aacCp[i].bytes.data(), 2);
+        const auto& slot = audioCp[i];
+        if (use_opus) {
+            if (slot.bytes.size() < 19) {
+                mkvWriter.Close();
+                m_state.RecordFailure(E_FAIL, ErrorPhase::Mux,
+                                      "Opus CodecPrivate is incomplete; expected full 19-byte OpusHead");
+                return;
+            }
+
+            at->set_codec_id("A_OPUS");
+            at->SetCodecPrivate(slot.bytes.data(), static_cast<uint64_t>(slot.bytes.size()));
+
+            const uint16_t pre_skip =
+                static_cast<uint16_t>(slot.bytes[10]) | (static_cast<uint16_t>(slot.bytes[11]) << 8u);
+            const uint64_t codec_delay_ns = static_cast<uint64_t>(pre_skip) * 1000000000ULL / 48000u;
+            at->set_codec_delay(codec_delay_ns);
+            at->set_seek_pre_roll(80000000ULL);
+        } else {
+            at->set_codec_id("A_AAC");
+            at->SetCodecPrivate(slot.bytes.empty() ? nullptr : slot.bytes.data(),
+                                static_cast<uint64_t>(slot.bytes.size()));
+        }
 
         audioTrackNums[i] = trackNum;
     }

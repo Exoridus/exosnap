@@ -25,4 +25,9 @@ bool DeriveAv1CodecPrivate(const uint8_t* bitstream_data, size_t bitstream_size,
 bool DeriveAacCodecPrivate(IMFMediaType* output_media_type, uint8_t out_aac_codec_private[2], char* reason_buf,
                            size_t reason_buf_size);
 
+// Builds the 19-byte OpusHead (Matroska A_OPUS CodecPrivate).
+// pre_skip: encoder lookahead from OPUS_GET_LOOKAHEAD.
+// out_19 must point to at least 19 bytes.
+void BuildOpusCodecPrivate(uint32_t sample_rate, uint32_t channels, uint16_t pre_skip, uint8_t* out_19);
+
 } // namespace recorder_core::codec_private

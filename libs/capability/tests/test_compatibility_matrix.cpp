@@ -38,6 +38,11 @@ TEST(CapabilityMatrixTest, MatrixRequiredPairsMatchBaseline) {
                   .level,
               SupportLevel::Available);
 
+    EXPECT_EQ(caps.QueryCombo(Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::Opus, ChromaSubsampling::Cs420,
+                              BitDepth::Bit8)
+                  .level,
+              SupportLevel::Available);
+
     EXPECT_EQ(caps.QueryCombo(Container::WebM, VideoCodec::Av1Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
                               BitDepth::Bit8)
                   .level,

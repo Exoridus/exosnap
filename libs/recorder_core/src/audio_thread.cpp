@@ -2,13 +2,13 @@
 
 #include "codec_private.h"
 #include "mf_aac_encoder.h"
+#include "opus_audio_encoder.h"
 #include "session_internal.h"
 #include "wasapi_loopback.h"
 
 #include <recorder_core/packet_types.h>
 
 #include <cstdio>
-#include <cstring>
 
 namespace recorder_core {
 
@@ -51,6 +51,172 @@ void AudioThread::Run() {
         return;
     }
 
+    if (m_state.config.audio_codec == AudioCodec::Opus) {
+        // --- Opus encoder init ---
+        OpusAudioEncoder opusEnc;
+        {
+            std::string err;
+            if (!opusEnc.Init(48000, 2, err)) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode, "Opus encoder init: " + err);
+                if (com_inited && hr != RPC_E_CHANGED_MODE)
+                    CoUninitialize();
+                return;
+            }
+        }
+
+        // M4 Phase 3 remains single-audio-producer; Phase 4+ will supply per-track IDs.
+        // Signal codec private for track 0.
+        {
+            std::lock_guard lk(m_state.premux_mutex);
+            m_state.codec_private.audio_codec_private[0].bytes = opusEnc.CodecPrivateBytes();
+            m_state.codec_private.audio_track_ready[0] = true;
+            m_state.premux_cv.notify_all();
+        }
+
+        // --- Init WASAPI loopback ---
+        WasapiLoopback wasapi;
+        {
+            std::string err;
+            if (!wasapi.Init(err)) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture, "WASAPI loopback init (Opus path): " + err);
+                opusEnc.Shutdown();
+                if (com_inited && hr != RPC_E_CHANGED_MODE)
+                    CoUninitialize();
+                return;
+            }
+        }
+
+        constexpr uint32_t kSampleRate = 48000;
+        constexpr uint32_t kChannels = 2;
+
+        uint64_t encoderAccumulatedFrames = 0;
+        uint64_t lastAudioPts = 0;
+
+        // Helper: push encoded audio packets to premux or mux queue
+        auto routeAudioPackets = [&](std::vector<EncodedAudioPacket>& pkts) {
+            for (auto& pkt : pkts) {
+                if (pkt.bytes.empty())
+                    continue;
+
+                lastAudioPts = pkt.pts_ns;
+
+                {
+                    std::unique_lock lk(m_state.premux_mutex);
+                    bool bothReady = m_state.codec_private.av1_ready &&
+                                     m_state.codec_private.AudioAllReady(m_state.audio_track_count);
+                    if (!bothReady) {
+                        if (m_state.audio_premux.size() >= SessionState::kAudioPremuxLimit) {
+                            lk.unlock();
+                            m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
+                                                  "Pre-mux audio buffer limit (600 packets) exceeded "
+                                                  "before codec private data was ready");
+                            return false;
+                        }
+                        m_state.audio_premux.push_back(std::move(pkt));
+                    } else {
+                        lk.unlock();
+                        MuxItem mi;
+                        mi.payload = std::move(pkt);
+                        std::lock_guard mlk(m_state.mux_mutex);
+                        m_state.mux_queue.push_back(std::move(mi));
+                        m_state.mux_cv.notify_one();
+                    }
+                }
+            }
+            return true;
+        };
+
+        // --- Capture / encode loop ---
+        while (!m_state.stop_requested.load()) {
+            UINT32 numFrames = wasapi.GetNextPacketSize();
+            if (numFrames == 0) {
+                Sleep(1);
+                continue;
+            }
+
+            bool anyWork = false;
+            while (wasapi.GetNextPacketSize() > 0) {
+                BYTE* pData = nullptr;
+                DWORD captureFlags = 0;
+                bool silent = false;
+
+                if (!wasapi.GetNextPacket(&pData, &numFrames, &captureFlags, &silent))
+                    break;
+
+                std::vector<EncodedAudioPacket> pkts;
+                if (silent) {
+                    std::vector<float> silence(static_cast<size_t>(numFrames) * kChannels, 0.0f);
+                    opusEnc.FeedFloat32(silence.data(), silence.size(), 0, encoderAccumulatedFrames, kSampleRate,
+                                        kChannels, pkts);
+                } else {
+                    opusEnc.FeedFloat32(reinterpret_cast<const float*>(pData),
+                                        static_cast<size_t>(numFrames) * kChannels, 0, encoderAccumulatedFrames,
+                                        kSampleRate, kChannels, pkts);
+                }
+
+                wasapi.ReleasePacket(numFrames);
+
+                // Update stats
+                {
+                    std::lock_guard slk(m_state.stats_mutex);
+                    for (const auto& p : pkts) {
+                        m_state.stats.audio_packets++;
+                        m_state.stats.audio_bytes += p.bytes.size();
+                    }
+                }
+
+                if (!routeAudioPackets(pkts))
+                    goto end_opus_loop;
+
+                anyWork = true;
+            }
+
+            if (!anyWork)
+                Sleep(1);
+        }
+
+    end_opus_loop:
+        // --- Stop WASAPI ---
+        wasapi.Shutdown();
+
+        // --- Drain Opus encoder ---
+        {
+            std::vector<EncodedAudioPacket> drainPkts;
+            opusEnc.Flush(drainPkts);
+
+            {
+                std::lock_guard slk(m_state.stats_mutex);
+                for (const auto& p : drainPkts) {
+                    m_state.stats.audio_packets++;
+                    m_state.stats.audio_bytes += p.bytes.size();
+                }
+            }
+
+            routeAudioPackets(drainPkts);
+        }
+
+        // --- Update final stats ---
+        {
+            std::lock_guard lk(m_state.stats_mutex);
+            m_state.stats.audio_duration_ns = lastAudioPts;
+        }
+
+        // --- Push audio EOS sentinel ---
+        {
+            // M4 Phase 3 remains single-audio-producer; EOS is emitted on track_id 0.
+            MuxItem eos;
+            eos.payload = AudioEosSentinel{0};
+            std::lock_guard lk(m_state.mux_mutex);
+            m_state.mux_queue.push_back(std::move(eos));
+            m_state.mux_cv.notify_one();
+        }
+
+        opusEnc.Shutdown();
+        if (com_inited && hr != RPC_E_CHANGED_MODE)
+            CoUninitialize();
+        return;
+    }
+
     // --- Init AAC encoder ---
     MfAacEncoder aacEnc;
     {
@@ -74,9 +240,11 @@ void AudioThread::Run() {
                 CoUninitialize();
             return;
         }
+        // M4 Phase 3 remains single-audio-producer; Phase 4+ will supply per-track IDs.
+        // AAC codec private is published on track 0.
         std::lock_guard lk(m_state.premux_mutex);
-        std::memcpy(m_state.codec_private.aac_codec_private[0].bytes.data(), cp, 2);
-        m_state.codec_private.aac_track_ready[0] = true;
+        m_state.codec_private.audio_codec_private[0].bytes.assign(cp, cp + 2);
+        m_state.codec_private.audio_track_ready[0] = true;
         m_state.premux_cv.notify_all();
     }
 
@@ -224,6 +392,7 @@ end_audio_loop:
 
     // --- Push audio EOS sentinel ---
     {
+        // M4 Phase 3 remains single-audio-producer; EOS is emitted on track_id 0.
         MuxItem eos;
         eos.payload = AudioEosSentinel{0};
         std::lock_guard lk(m_state.mux_mutex);

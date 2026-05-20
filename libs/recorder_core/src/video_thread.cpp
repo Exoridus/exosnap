@@ -582,8 +582,8 @@ end_encode_loop:
 
             {
                 std::unique_lock lk(m_state.premux_mutex);
-                bool bothReady = m_state.codec_private.av1_ready &&
-                                 m_state.codec_private.AudioAllReady(m_state.audio_track_count);
+                bool bothReady =
+                    m_state.codec_private.av1_ready && m_state.codec_private.AudioAllReady(m_state.audio_track_count);
                 if (!bothReady) {
                     if (m_state.video_premux.size() < SessionState::kVideoPremuxLimit) {
                         m_state.video_premux.push_back(std::move(pkt));

@@ -12,7 +12,7 @@ enum class VideoCodec {
 
 enum class AudioCodec {
     AacMf, // Media Foundation AAC-LC — primary supported codec for M3.1
-    Opus,  // Future placeholder only — NOT implemented; Validate() returns E_NOTIMPL
+    Opus,  // libopus — implemented in M4 Phase 3; MKV only
 };
 
 enum class ChromaSubsampling {

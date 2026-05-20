@@ -153,6 +153,19 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsDefaultM32Combo) {
     EXPECT_EQ(translated.bit_depth, recorder_core::BitDepth::Bit8);
 }
 
+TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvAv1OpusCombo) {
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    UserRecorderConfig config;
+    config.audio_codec = AudioCodec::Opus;
+
+    ResolveResult validation;
+    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+
+    EXPECT_TRUE(validation.succeeded);
+    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Opus);
+}
+
 TEST(TranslationTest, ToRecorderCoreConfigRejectsNonM32ComboEvenWhenSelectable) {
     CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
     caps.video_codecs[VideoCodec::H264Nvenc] = SupportAnnotation{SupportLevel::ValidUnvalidated, "Test override."};
