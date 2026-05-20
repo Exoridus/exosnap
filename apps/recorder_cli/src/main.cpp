@@ -213,6 +213,8 @@ static int run_capabilities_mode() {
 struct CliArgs {
     bool list_only = false;
     bool capabilities = false;
+    bool mic_opus = false;
+    bool help = false;
     int target_index = -1; // 1-based, -1 = prompt user
 };
 
@@ -224,12 +226,25 @@ static CliArgs parse_args(int argc, char* argv[]) {
             args.list_only = true;
         } else if (arg == "--capabilities") {
             args.capabilities = true;
+        } else if (arg == "--mic-opus") {
+            args.mic_opus = true;
+        } else if (arg == "--help") {
+            args.help = true;
         } else if (arg == "--target" && i + 1 < argc) {
             ++i;
             args.target_index = std::stoi(argv[i]);
         }
     }
     return args;
+}
+
+static void print_usage(const char* program) {
+    std::printf("Usage: %s [--list] [--target N] [--capabilities] [--mic-opus] [--help]\n\n", program);
+    std::puts("  --list           List capture targets and exit");
+    std::puts("  --target N       Select target N (1-based) without prompting");
+    std::puts("  --capabilities   Show hardware capability report and exit");
+    std::puts("  --mic-opus       [Phase-4 validation] Mic source + Opus codec, MKV output");
+    std::puts("  --help           Show this help");
 }
 
 // ---------------------------------------------------------------------------
@@ -286,6 +301,10 @@ int main(int argc, char* argv[]) {
                 std::string(recorder_core::version()).c_str());
 
     const CliArgs cli = parse_args(argc, argv);
+    if (cli.help) {
+        print_usage(argv[0]);
+        return 0;
+    }
     if (cli.capabilities) {
         return run_capabilities_mode();
     }
@@ -333,7 +352,8 @@ int main(int argc, char* argv[]) {
     std::filesystem::path output_dir = (profile_len > 0 && profile_len < MAX_PATH)
                                            ? std::filesystem::path(profile_buf) / L"Videos" / L"exosnap"
                                            : std::filesystem::path(L"C:\\Users\\Public\\Videos\\exosnap");
-    const std::filesystem::path output_path = output_dir / "recorder_core_av1_aac.mkv";
+    const std::filesystem::path output_path =
+        output_dir / (cli.mic_opus ? "recorder_core_av1_opus_mic.mkv" : "recorder_core_av1_aac.mkv");
 
     std::error_code ec;
     std::filesystem::create_directories(output_dir, ec);
@@ -391,6 +411,17 @@ int main(int argc, char* argv[]) {
 
     config.output_path = output_path;
     config.target = chosen_target;
+
+    if (cli.mic_opus) {
+        config.audio_codec = recorder_core::AudioCodec::Opus;
+        recorder_core::AudioTrackPlan plan;
+        recorder_core::ResolvedAudioTrack track;
+        track.sources.push_back(recorder_core::AudioSourceKind::Mic);
+        track.track_index = 0;
+        plan.tracks.push_back(std::move(track));
+        config.audio_track_plan = std::move(plan);
+        std::puts("[mic-opus] AudioCodec=Opus  AudioTrackPlan={ Mic -> track 0 }");
+    }
 
     std::printf("Output path: %s\n", output_path.string().c_str());
 
