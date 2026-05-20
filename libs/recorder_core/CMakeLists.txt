@@ -8,6 +8,7 @@ if(NOT EXISTS "${_nvenc_header}")
     add_library(recorder_core STATIC
         src/version.cpp
         src/logging/logging.cpp
+        src/audio_track_model.cpp
     )
 
     target_include_directories(recorder_core PUBLIC include)
@@ -20,6 +21,13 @@ if(NOT EXISTS "${_nvenc_header}")
         spdlog::spdlog
         nlohmann_json::nlohmann_json
         exosnap::warnings
+    )
+
+    exosnap_add_gtest(
+        NAME test_audio_track_resolver
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_audio_track_resolver.cpp
+        LIBRARIES recorder_core
     )
 
     return()
@@ -45,6 +53,7 @@ add_library(recorder_core STATIC
     src/video_thread.cpp
     src/audio_thread.cpp
     src/mux_thread.cpp
+    src/audio_track_model.cpp
 )
 
 target_include_directories(recorder_core
@@ -74,4 +83,11 @@ target_link_libraries(recorder_core
         mfuuid.lib
         wmcodecdspuuid.lib
         exosnap::warnings
+)
+
+exosnap_add_gtest(
+    NAME test_audio_track_resolver
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_audio_track_resolver.cpp
+    LIBRARIES recorder_core
 )
