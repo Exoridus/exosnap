@@ -1,9 +1,14 @@
 #pragma once
+
 #include <QWidget>
+#include <vector>
 
 class QButtonGroup;
 class QCheckBox;
-class QPushButton;
+
+namespace exosnap::ui::widgets {
+class CodecCard;
+}
 
 namespace exosnap {
 
@@ -12,17 +17,14 @@ class VideoPage : public QWidget {
   public:
     explicit VideoPage(QWidget* parent = nullptr);
 
-  private slots:
-    void onExpandAdvanced();
-
   private:
-    QButtonGroup* codec_group_ = nullptr;
+    void selectCodecCard(ui::widgets::CodecCard* selected_card);
+
     QButtonGroup* quality_group_ = nullptr;
     QButtonGroup* resolution_group_ = nullptr;
     QCheckBox* cursor_check_ = nullptr;
-    QWidget* advanced_panel_ = nullptr;
-    QPushButton* expand_btn_ = nullptr;
-    bool advanced_expanded_ = false;
+    QWidget* rail_widget_ = nullptr;
+    std::vector<ui::widgets::CodecCard*> codec_cards_;
 };
 
 } // namespace exosnap

@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/theme">
+        <file>exosnap_dark.qss</file>
+    </qresource>
+</RCC>

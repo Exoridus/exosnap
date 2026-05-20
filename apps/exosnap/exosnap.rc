@@ -1,0 +1,3 @@
+#include "exosnap_resource.h"
+
+IDI_EXOSNAP_APP_ICON ICON "assets/brand/exosnap-logo-light-bg-dark.ico"

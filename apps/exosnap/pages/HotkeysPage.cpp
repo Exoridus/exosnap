@@ -8,21 +8,29 @@
 #include <QScrollArea>
 #include <QVBoxLayout>
 
+#include "../ui/theme/ExoSnapMetrics.h"
+
 namespace exosnap {
 
 namespace {
 
-QLabel* makeTitle(const QString& text, QWidget* parent) {
+QLabel* makeSubLabel(const QString& text, QWidget* parent) {
     auto* l = new QLabel(text, parent);
-    l->setStyleSheet("font-size: 22px; font-weight: 600; color: #E8EAED;");
+    l->setProperty("labelRole", "subtitle");
+    l->setWordWrap(true);
     return l;
 }
 
-QLabel* makeSubLabel(const QString& text, QWidget* parent) {
+QLabel* makeSectionLabel(const QString& text, QWidget* parent) {
     auto* l = new QLabel(text, parent);
-    l->setStyleSheet("color: #8A9099; font-size: 13px;");
-    l->setWordWrap(true);
+    l->setProperty("labelRole", "section");
     return l;
+}
+
+QFrame* makePanel(QWidget* parent) {
+    auto* panel = new QFrame(parent);
+    panel->setProperty("panelRole", "panel");
+    return panel;
 }
 
 QString bindingText(const QKeySequence& seq) {
@@ -35,18 +43,12 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
 
     auto* content = new QWidget();
-    content->setStyleSheet("QWidget { background: transparent; }");
     auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(24, 24, 24, 24);
-    layout->setSpacing(6);
-
-    layout->addWidget(makeTitle("Hotkeys", content));
-    layout->addWidget(makeSubLabel("Global keyboard shortcuts for recording control.", content));
-
-    layout->addSpacing(8);
+    layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
+                               ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
+    layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
 
     // clang-format off
     const struct { const char* action; QKeySequence binding; } kActions[7] = {
@@ -60,8 +62,42 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
     };
     // clang-format on
 
+    layout->addWidget(makeSectionLabel("Recording Commands", content));
+    auto* commands_panel = makePanel(content);
+    auto* commands_layout = new QVBoxLayout(commands_panel);
+    commands_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceMd,
+                                        ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceMd);
+    commands_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
+    commands_layout->addWidget(
+        makeSubLabel("Global commands are staged here and applied through a later integration pass.", commands_panel));
+
     for (int i = 0; i < 7; ++i)
-        buildRow(i, kActions[i].action, kActions[i].binding, layout, content);
+        buildRow(i, kActions[i].action, kActions[i].binding, commands_layout, commands_panel);
+
+    layout->addWidget(commands_panel);
+
+    layout->addWidget(makeSectionLabel("Global Shortcut Behavior", content));
+    auto* policy_panel = makePanel(content);
+    auto* policy_layout = new QVBoxLayout(policy_panel);
+    policy_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
+                                      ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
+    policy_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceXs);
+    policy_layout->addWidget(
+        makeSubLabel("Hotkeys are expected to work globally while ExoSnap is running.", policy_panel));
+    auto* policy_note = new QLabel("If a shortcut is unavailable, binding remains unchanged.", policy_panel);
+    policy_note->setProperty("labelRole", "subtle");
+    policy_layout->addWidget(policy_note);
+    layout->addWidget(policy_panel);
+
+    layout->addWidget(makeSectionLabel("Conflict / Availability Placeholder", content));
+    auto* conflict_panel = makePanel(content);
+    auto* conflict_layout = new QVBoxLayout(conflict_panel);
+    conflict_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
+                                        ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
+    auto* conflict_hint = new QLabel("Conflict detection summary is shown here in a later pass.", conflict_panel);
+    conflict_hint->setProperty("labelRole", "subtle");
+    conflict_layout->addWidget(conflict_hint);
+    layout->addWidget(conflict_panel);
 
     layout->addStretch();
     scroll->setWidget(content);
@@ -76,36 +112,32 @@ void HotkeysPage::buildRow(int index, const QString& action, const QKeySequence&
     rows_[index].current_binding = default_binding;
 
     auto* row_frame = new QFrame(parent_widget);
-    row_frame->setStyleSheet("QFrame { background: #141A26; border-radius: 6px; }");
+    row_frame->setProperty("panelRole", "compactRow");
 
     auto* row_layout = new QHBoxLayout(row_frame);
-    row_layout->setContentsMargins(14, 9, 10, 9);
-    row_layout->setSpacing(8);
+    row_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceSm,
+                                   ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceSm);
+    row_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
 
     // Action label
     auto* action_label = new QLabel(action, row_frame);
-    action_label->setStyleSheet("color: #C0C4CC; font-size: 13px;");
+    action_label->setProperty("labelRole", "body");
 
     // Normal-mode widgets: binding label + Set + Unset buttons
     auto* normal_container = new QWidget(row_frame);
     auto* normal_layout = new QHBoxLayout(normal_container);
     normal_layout->setContentsMargins(0, 0, 0, 0);
-    normal_layout->setSpacing(8);
+    normal_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
 
     rows_[index].binding_label = new QLabel(bindingText(default_binding), normal_container);
-    rows_[index].binding_label->setStyleSheet("color: #8A9099; font-size: 12px; min-width: 100px;");
+    rows_[index].binding_label->setProperty("labelRole", "mono");
+    rows_[index].binding_label->setMinimumWidth(100);
 
     rows_[index].set_btn = new QPushButton("Set", normal_container);
-    rows_[index].set_btn->setStyleSheet(
-        "QPushButton { background: #252C3C; border: 1px solid #3A4254; border-radius: 3px;"
-        " padding: 4px 12px; color: #C0C4CC; font-size: 12px; }"
-        "QPushButton:hover { background: #2E3648; }");
+    rows_[index].set_btn->setProperty("role", "utility");
 
     rows_[index].unset_btn = new QPushButton("Unset", normal_container);
-    rows_[index].unset_btn->setStyleSheet(
-        "QPushButton { background: transparent; border: 1px solid #2A3349; border-radius: 3px;"
-        " padding: 4px 12px; color: #6A7280; font-size: 12px; }"
-        "QPushButton:hover { color: #C0C4CC; border-color: #3A4254; }");
+    rows_[index].unset_btn->setProperty("role", "utility");
     rows_[index].unset_btn->setEnabled(!default_binding.isEmpty());
 
     normal_layout->addWidget(rows_[index].binding_label);
@@ -116,21 +148,18 @@ void HotkeysPage::buildRow(int index, const QString& action, const QKeySequence&
     rows_[index].capture_container = new QWidget(row_frame);
     auto* capture_layout = new QHBoxLayout(rows_[index].capture_container);
     capture_layout->setContentsMargins(0, 0, 0, 0);
-    capture_layout->setSpacing(8);
+    capture_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
 
     auto* capture_hint = new QLabel("Enter hotkey now…", rows_[index].capture_container);
-    capture_hint->setStyleSheet("color: #6A8AAC; font-size: 12px;");
+    capture_hint->setProperty("labelRole", "signal");
 
     rows_[index].capture_edit = new QKeySequenceEdit(rows_[index].capture_container);
     rows_[index].capture_edit->setMaximumSequenceLength(1);
-    rows_[index].capture_edit->setStyleSheet(
-        "QKeySequenceEdit { background: #1A2133; border: 1px solid #2468C0; border-radius: 3px;"
-        " padding: 4px 8px; color: #C8CBD0; font-size: 12px; min-width: 100px; }");
+    rows_[index].capture_edit->setProperty("role", "capture");
+    rows_[index].capture_edit->setMinimumWidth(100);
 
     auto* cancel_btn = new QPushButton("Cancel", rows_[index].capture_container);
-    cancel_btn->setStyleSheet("QPushButton { background: transparent; border: 1px solid #2A3349; border-radius: 3px;"
-                              " padding: 4px 12px; color: #6A7280; font-size: 12px; }"
-                              "QPushButton:hover { color: #C0C4CC; border-color: #3A4254; }");
+    cancel_btn->setProperty("role", "utility");
 
     capture_layout->addWidget(capture_hint);
     capture_layout->addWidget(rows_[index].capture_edit);

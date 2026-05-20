@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>ExoSnap — Visual Direction</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="styles.css"/>
+<style>
+  html, body { margin: 0; padding: 0; background: #f0eee9; height: 100%; font-family: "Inter", system-ui, sans-serif; }
+  /* Override dc grid bg to feel more aligned to project tone */
+</style>
+</head>
+<body>
+<template id="__bundler_thumbnail" data-bg-color="#0e0d0b">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#0e0d0b"/>
+    <g transform="translate(600 400)">
+      <g transform="translate(-120 -120) scale(15)">
+        <path d="M3 9V5a2 2 0 012-2h4" stroke="#f1b400" stroke-width="2" fill="none"/>
+        <path d="M29 23v4a2 2 0 01-2 2h-4" stroke="#f1b400" stroke-width="2" fill="none"/>
+        <path d="M22 5L10 27" stroke="#f1ece1" stroke-width="1.8" stroke-linecap="square"/>
+        <circle cx="22" cy="5" r="1.6" fill="#f1b400"/>
+        <circle cx="10" cy="27" r="1.6" fill="#f1b400"/>
+      </g>
+    </g>
+    <text x="600" y="680" text-anchor="middle" font-family="monospace" font-size="32" letter-spacing="8" fill="#f1ece1">EXO·SNAP</text>
+  </svg>
+</template>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="chrome.jsx"></script>
+<script type="text/babel" src="directions.jsx"></script>
+<script type="text/babel" src="record-page.jsx"></script>
+<script type="text/babel" src="video-audio.jsx"></script>
+<script type="text/babel" src="system-and-logos.jsx"></script>
+
+<script type="text/babel" data-presets="env,react">
+const { DesignCanvas, DCSection, DCArtboard, DCPostIt: PostIt } = window;
+
+function App() {
+  return (
+    <DesignCanvas title="ExoSnap — Visual Direction" subtitle="3 directions · chosen direction screens · design system · logo exploration">
+
+      {/* ============ Phase 1: 3 directions ============ */}
+      <DCSection id="directions" title="Phase 1 — Three Visual Directions" subtitle="Each direction is a complete art-direction proposal: palette, type, controls, status language, and logo lineage.">
+
+        <DCArtboard id="dir-console" label="01 — Console (chosen)" width={760} height={760}>
+          <ConsoleDirection/>
+        </DCArtboard>
+
+        <DCArtboard id="dir-aperture" label="02 — Aperture" width={760} height={760}>
+          <ApertureDirection/>
+        </DCArtboard>
+
+        <DCArtboard id="dir-frame" label="03 — Frame" width={760} height={760}>
+          <FrameDirection/>
+        </DCArtboard>
+
+        <PostIt x={20} y={-110} width={300}>
+          <b>Read me first.</b><br/><br/>
+          Three complete directions on the left. The chosen one (Console) is broken open in the sections below — full Record / Video / Audio screens, design tokens, and three logo concepts.<br/><br/>
+          The Record screen is <b>fully interactive</b>: click Start, toggle audio sources, switch capture targets, drag CQ.
+        </PostIt>
+      </DCSection>
+
+      {/* ============ Recommendation ============ */}
+      <DCSection id="chosen" title="Recommendation" subtitle="Why Console wins, and what it costs.">
+        <DCArtboard id="rationale" label="Why Console" width={900} height={400}>
+          <ChosenRationale/>
+        </DCArtboard>
+      </DCSection>
+
+      {/* ============ Refined Screens ============ */}
+      <DCSection id="screens" title="Refined Screens — Console direction" subtitle="Record is the operational console of the app. Video and Audio set the language for all configuration screens.">
+
+        <DCArtboard id="record" label="Record — interactive · click Start" width={1100} height={740}>
+          <RecordPage/>
+        </DCArtboard>
+
+        <DCArtboard id="video" label="Video — settings system" width={1100} height={740}>
+          <VideoPage/>
+        </DCArtboard>
+
+        <DCArtboard id="audio" label="Audio — sources + tracks" width={1100} height={740}>
+          <AudioPage/>
+        </DCArtboard>
+
+        <PostIt x={20} y={-110} width={280}>
+          <b>What changed.</b><br/><br/>
+          Record now has a prominent preview + amber-pulsed live state, a right-rail control deck, an explicit readiness checklist, and live audio activity with metering.<br/><br/>
+          Video adds an always-visible <i>Effective Output</i> rail in monospace — the user always sees the encoder verdict.<br/><br/>
+          Audio gets per-row tags (APP/MIC/SYS), live meters, dB readouts, and a clear <i>Resulting Tracks</i> preview.
+        </PostIt>
+      </DCSection>
+
+      {/* ============ Design System ============ */}
+      <DCSection id="ds" title="Mini Design System" subtitle="The tokens and rules behind Console.">
+        <DCArtboard id="system" label="Tokens · surfaces · controls · Qt notes" width={1100} height={820}>
+          <DesignSystemCard/>
+        </DCArtboard>
+      </DCSection>
+
+      {/* ============ Logos ============ */}
+      <DCSection id="logos" title="Logo Exploration" subtitle="Three concepts built from the same geometric DNA — corner brackets, frame, signal slice.">
+        <DCArtboard id="logo-set" label="Three logo concepts · sized 48 → 16" width={1100} height={780}>
+          <LogoSet/>
+        </DCArtboard>
+      </DCSection>
+
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>

@@ -10,34 +10,36 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include "../ui/theme/ExoSnapMetrics.h"
+
 namespace exosnap {
 
 namespace {
 
-QLabel* makeTitle(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setStyleSheet("font-size: 22px; font-weight: 600; color: #E8EAED;");
-    return l;
-}
-
 QLabel* makeSubLabel(const QString& text, QWidget* parent) {
     auto* l = new QLabel(text, parent);
-    l->setStyleSheet("color: #8A9099; font-size: 13px;");
+    l->setProperty("labelRole", "subtitle");
     l->setWordWrap(true);
     return l;
 }
 
 QLabel* makeSectionLabel(const QString& text, QWidget* parent) {
     auto* l = new QLabel(text, parent);
-    l->setStyleSheet("font-size: 13px; font-weight: 600; color: #C0C4CC; margin-top: 4px;");
+    l->setProperty("labelRole", "section");
     return l;
 }
 
 QLabel* makePlaceholderRow(const QString& text, QWidget* parent) {
     auto* l = new QLabel(text, parent);
-    l->setStyleSheet("color: #4A5166; font-size: 12px; padding: 10px 14px;"
-                     " background: #141A26; border-radius: 6px;");
+    l->setProperty("panelRole", "placeholder");
+    l->setProperty("labelRole", "mono");
     return l;
+}
+
+QFrame* makePanel(QWidget* parent) {
+    auto* panel = new QFrame(parent);
+    panel->setProperty("panelRole", "panel");
+    return panel;
 }
 
 } // namespace
@@ -46,45 +48,63 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
 
     auto* content = new QWidget();
-    content->setStyleSheet("QWidget { background: transparent; }");
     auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(24, 24, 24, 24);
-    layout->setSpacing(14);
+    layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
+                               ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
+    layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
 
-    layout->addWidget(makeTitle("Logs", content));
-    layout->addWidget(makeSubLabel("Startup and runtime log output.", content));
+    // Log viewer surface
+    layout->addWidget(makeSectionLabel("Log Viewer Surface", content));
+    auto* viewer_panel = makePanel(content);
+    auto* viewer_layout = new QVBoxLayout(viewer_panel);
+    viewer_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
+                                      ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
+    viewer_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
+    viewer_layout->addWidget(
+        makeSubLabel("Runtime and startup logs are displayed here once the log store is wired.", viewer_panel));
+    viewer_layout->addWidget(makePlaceholderRow("[viewer] log stream not initialized", viewer_panel));
+    viewer_layout->addWidget(makePlaceholderRow("[viewer] waiting for integrated session source", viewer_panel));
+    layout->addWidget(viewer_panel);
 
-    // Sessions section
-    layout->addWidget(makeSectionLabel("Sessions", content));
-    layout->addWidget(makePlaceholderRow("No sessions recorded yet.", content));
+    // Filters / scope placeholder
+    layout->addWidget(makeSectionLabel("Filters / Scope Placeholder", content));
+    auto* filters_panel = makePanel(content);
+    auto* filters_layout = new QVBoxLayout(filters_panel);
+    filters_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
+                                       ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
+    auto* filters_note = new QLabel("Filter and scope controls are introduced in a later pass.", filters_panel);
+    filters_note->setProperty("labelRole", "subtle");
+    filters_layout->addWidget(filters_note);
+    layout->addWidget(filters_panel);
 
-    // Events section
-    layout->addWidget(makeSectionLabel("Events", content));
-    layout->addWidget(makePlaceholderRow("No events recorded yet.", content));
+    // Session export actions
+    layout->addWidget(makeSectionLabel("Export / Session Trace", content));
+    auto* actions_panel = makePanel(content);
+    auto* actions_layout = new QVBoxLayout(actions_panel);
+    actions_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
+                                       ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
+    actions_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
 
-    // Action buttons
     auto* btn_row = new QHBoxLayout();
-    btn_row->setSpacing(8);
+    btn_row->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
 
-    auto* export_btn = new QPushButton("Export Selected", content);
-    export_btn->setStyleSheet("QPushButton { background: #252C3C; border: 1px solid #3A4254;"
-                              " border-radius: 4px; padding: 7px 16px; color: #C0C4CC; }"
-                              "QPushButton:hover { background: #2E3648; }"
-                              "QPushButton:disabled { background: #1A2030; color: #454C5E; }");
+    auto* export_btn = new QPushButton("Export Selected", actions_panel);
+    export_btn->setProperty("role", "ghost");
     export_btn->setEnabled(false);
 
-    auto* open_btn = new QPushButton("Open Log Folder", content);
-    open_btn->setStyleSheet("QPushButton { background: #252C3C; border: 1px solid #3A4254;"
-                            " border-radius: 4px; padding: 7px 16px; color: #C0C4CC; }"
-                            "QPushButton:hover { background: #2E3648; }");
+    auto* open_btn = new QPushButton("Open Log Folder", actions_panel);
+    open_btn->setProperty("role", "ghost");
 
     btn_row->addWidget(export_btn);
     btn_row->addWidget(open_btn);
     btn_row->addStretch();
-    layout->addLayout(btn_row);
+    actions_layout->addLayout(btn_row);
+    auto* actions_note = new QLabel("Export remains disabled until session log selection is available.", actions_panel);
+    actions_note->setProperty("labelRole", "subtle");
+    actions_layout->addWidget(actions_note);
+    layout->addWidget(actions_panel);
 
     layout->addStretch();
     scroll->setWidget(content);

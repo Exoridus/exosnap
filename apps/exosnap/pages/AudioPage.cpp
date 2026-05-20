@@ -1,228 +1,193 @@
 #include "AudioPage.h"
 
-#include <QCheckBox>
+#include "../ui/theme/ExoSnapMetrics.h"
+#include "../ui/widgets/AudioSourceRow.h"
+#include "../ui/widgets/SectionRuleHeader.h"
+
 #include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QScrollArea>
 #include <QVBoxLayout>
 
 namespace exosnap {
-
 namespace {
 
-QLabel* makeTitle(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setStyleSheet("font-size: 22px; font-weight: 600; color: #E8EAED;");
-    return l;
+QFrame* makePanel(QWidget* parent) {
+    auto* panel = new QFrame(parent);
+    panel->setProperty("panelRole", "panel");
+    return panel;
 }
 
-QLabel* makeSubLabel(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setStyleSheet("color: #8A9099; font-size: 13px;");
-    l->setWordWrap(true);
-    return l;
+QLabel* makeLabel(const QString& text, const char* role, QWidget* parent) {
+    auto* label = new QLabel(text, parent);
+    label->setProperty("labelRole", role);
+    return label;
 }
 
-QLabel* makeSectionLabel(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setStyleSheet("font-size: 13px; font-weight: 600; color: #C0C4CC; margin-top: 4px;");
-    return l;
+QFrame* makeDivider(QWidget* parent) {
+    auto* divider = new QFrame(parent);
+    divider->setFrameShape(QFrame::HLine);
+    divider->setProperty("frameRole", "sectionRuleLine");
+    return divider;
 }
 
-QFrame* makeSourcePanel(QWidget* parent) {
-    auto* f = new QFrame(parent);
-    f->setStyleSheet("QFrame { background: #141A26; border-radius: 6px; }");
-    return f;
+QWidget* makeTrackRow(QWidget* parent, const QString& index, const QString& name, const QString& meta, bool first_row) {
+    auto* row = new QWidget(parent);
+    row->setObjectName("audioTrackRow");
+    row->setProperty("firstRow", first_row);
+
+    auto* row_layout = new QHBoxLayout(row);
+    row_layout->setContentsMargins(14, 14, 14, 14);
+    row_layout->setSpacing(12);
+
+    auto* index_label = makeLabel(index, "audioTrackIndex", row);
+    index_label->setFixedWidth(36);
+    auto* name_label = makeLabel(name, "audioTrackName", row);
+    auto* meta_label = makeLabel(meta, "audioTrackMeta", row);
+    meta_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+    row_layout->addWidget(index_label);
+    row_layout->addWidget(name_label, 1);
+    row_layout->addWidget(meta_label);
+    return row;
 }
 
-QCheckBox* makeCheck(const QString& text, QWidget* parent) {
-    auto* c = new QCheckBox(text, parent);
-    c->setStyleSheet("QCheckBox { color: #C8CBD0; font-size: 13px; spacing: 6px; }"
-                     "QCheckBox::indicator { width: 14px; height: 14px; border: 2px solid #3A4254;"
-                     " border-radius: 2px; background: #1A2133; }"
-                     "QCheckBox::indicator:checked { border: 2px solid #2468C0; background: #2468C0; }");
-    return c;
+void addEncodingRow(QGridLayout* layout, QWidget* parent, int row, const QString& key, const QString& value,
+                    const char* value_role) {
+    auto* key_label = new QLabel(key, parent);
+    key_label->setProperty("labelRole", "audioKvKey");
+
+    auto* value_label = new QLabel(value, parent);
+    value_label->setProperty("labelRole", value_role);
+
+    layout->addWidget(key_label, row, 0);
+    layout->addWidget(value_label, row, 1);
 }
 
 } // namespace
 
 AudioPage::AudioPage(QWidget* parent) : QWidget(parent) {
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
+
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
-
-    auto* content = new QWidget();
-    content->setStyleSheet("QWidget { background: transparent; }");
-    auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(24, 24, 24, 24);
-    layout->setSpacing(14);
-
-    layout->addWidget(makeTitle("Audio", content));
-    layout->addWidget(makeSubLabel("Audio source configuration and track layout.", content));
-
-    layout->addWidget(makeSectionLabel("Sources & Tracks", content));
-    layout->addWidget(makeSubLabel("Drag to reorder the recording track layout.", content));
-
-    // APP source row
-    {
-        auto* row = makeSourcePanel(content);
-        auto* row_layout = new QVBoxLayout(row);
-        row_layout->setContentsMargins(14, 10, 14, 10);
-        row_layout->setSpacing(5);
-
-        auto* header = new QHBoxLayout();
-        header->setSpacing(8);
-        auto* title = new QLabel("APP — Selected application audio", row);
-        title->setStyleSheet("color: #C0C4CC; font-size: 13px; font-weight: 600;");
-        app_enable_ = makeCheck("Enabled", row);
-        app_enable_->setChecked(true);
-        header->addWidget(title);
-        header->addStretch();
-        header->addWidget(app_enable_);
-        row_layout->addLayout(header);
-
-        auto* desc = new QLabel("Source: Game.exe + child processes", row);
-        desc->setStyleSheet("color: #6A7280; font-size: 12px;");
-        row_layout->addWidget(desc);
-        layout->addWidget(row);
-    }
-
-    // MIC source row
-    {
-        auto* row = makeSourcePanel(content);
-        auto* row_layout = new QVBoxLayout(row);
-        row_layout->setContentsMargins(14, 10, 14, 10);
-        row_layout->setSpacing(5);
-
-        auto* header = new QHBoxLayout();
-        header->setSpacing(8);
-        auto* title = new QLabel("MIC — Microphone", row);
-        title->setStyleSheet("color: #C0C4CC; font-size: 13px; font-weight: 600;");
-        mic_merge_ = makeCheck("Merge with above", row);
-        mic_enable_ = makeCheck("Enabled", row);
-        mic_enable_->setChecked(true);
-        header->addWidget(title);
-        header->addStretch();
-        header->addWidget(mic_merge_);
-        header->addWidget(mic_enable_);
-        row_layout->addLayout(header);
-
-        auto* desc = new QLabel("Device: Follow Windows default", row);
-        desc->setStyleSheet("color: #6A7280; font-size: 12px;");
-        row_layout->addWidget(desc);
-        layout->addWidget(row);
-    }
-
-    // SYS source row
-    {
-        auto* row = makeSourcePanel(content);
-        auto* row_layout = new QVBoxLayout(row);
-        row_layout->setContentsMargins(14, 10, 14, 10);
-        row_layout->setSpacing(5);
-
-        auto* header = new QHBoxLayout();
-        header->setSpacing(8);
-        auto* title = new QLabel("SYS — Other system audio", row);
-        title->setStyleSheet("color: #C0C4CC; font-size: 13px; font-weight: 600;");
-        sys_merge_ = makeCheck("Merge with above", row);
-        sys_enable_ = makeCheck("Enabled", row);
-        sys_enable_->setChecked(true);
-        header->addWidget(title);
-        header->addStretch();
-        header->addWidget(sys_merge_);
-        header->addWidget(sys_enable_);
-        row_layout->addLayout(header);
-
-        auto* desc = new QLabel("Source: Everything except selected application", row);
-        desc->setStyleSheet("color: #6A7280; font-size: 12px;");
-        row_layout->addWidget(desc);
-        layout->addWidget(row);
-    }
-
-    // Resulting tracks
-    layout->addWidget(makeSectionLabel("Resulting Tracks", content));
-    resulting_tracks_label_ = new QLabel(content);
-    resulting_tracks_label_->setStyleSheet("color: #8A9099; font-size: 13px;");
-    layout->addWidget(resulting_tracks_label_);
-
-    // Encoding codec
-    layout->addWidget(makeSectionLabel("Encoding", content));
-    auto* codec_label = new QLabel("Codec: Opus", content);
-    codec_label->setStyleSheet("color: #8A9099; font-size: 13px;");
-    layout->addWidget(codec_label);
-
-    layout->addStretch();
-    scroll->setWidget(content);
-
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(0, 0, 0, 0);
     root->addWidget(scroll);
 
-    connect(app_enable_, &QCheckBox::toggled, this, [this](bool) { onSourceStateChanged(); });
-    connect(mic_enable_, &QCheckBox::toggled, this, [this](bool) { onSourceStateChanged(); });
-    connect(mic_merge_, &QCheckBox::toggled, this, [this](bool) { onSourceStateChanged(); });
-    connect(sys_enable_, &QCheckBox::toggled, this, [this](bool) { onSourceStateChanged(); });
-    connect(sys_merge_, &QCheckBox::toggled, this, [this](bool) { onSourceStateChanged(); });
+    auto* content = new QWidget(scroll);
+    auto* content_layout = new QVBoxLayout(content);
+    content_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
+                                       ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
+    content_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
 
-    onSourceStateChanged();
-}
+    auto* sources_header = new ui::widgets::SectionRuleHeader("SOURCES", content);
+    sources_header->setMeta("DRAG TO REORDER · MERGE COMBINES ROWS");
+    content_layout->addWidget(sources_header);
 
-void AudioPage::onSourceStateChanged() {
-    updateMergeVisibility();
-    updateResultingTracks();
-}
+    ui::widgets::AudioSourceRow::Config app_config;
+    app_config.tag = "APP";
+    app_config.title = "Selected application audio";
+    app_config.subtitle = "SOURCE · Game.exe + child processes";
+    app_config.db_value = "-19 dB";
+    app_config.has_merge_control = false;
+    app_config.enabled = true;
+    app_row_ = new ui::widgets::AudioSourceRow(app_config, content);
+    app_row_->setLevel(0.58F); // Placeholder level until live audio telemetry is wired.
+    content_layout->addWidget(app_row_);
 
-void AudioPage::updateMergeVisibility() {
-    bool app_on = app_enable_->isChecked();
-    bool mic_on = mic_enable_->isChecked();
+    ui::widgets::AudioSourceRow::Config mic_config;
+    mic_config.tag = "MIC";
+    mic_config.title = "Microphone";
+    mic_config.subtitle = "SOURCE · Follow Windows default";
+    mic_config.db_value = "-31 dB";
+    mic_config.has_merge_control = true;
+    mic_config.enabled = true;
+    mic_row_ = new ui::widgets::AudioSourceRow(mic_config, content);
+    mic_row_->setLevel(0.24F); // Placeholder level until live audio telemetry is wired.
+    mic_row_->setMergeChecked(false);
+    content_layout->addWidget(mic_row_);
 
-    // MIC can merge only when APP is above it and MIC itself is enabled
-    bool mic_can_merge = app_on && mic_on;
-    mic_merge_->setVisible(mic_can_merge);
-    if (!mic_can_merge)
-        mic_merge_->setChecked(false);
+    ui::widgets::AudioSourceRow::Config sys_config;
+    sys_config.tag = "SYS";
+    sys_config.title = "Other system audio";
+    sys_config.subtitle = "SOURCE · Everything except selected app";
+    sys_config.db_value = "-30 dB";
+    sys_config.has_merge_control = true;
+    sys_config.enabled = true;
+    sys_row_ = new ui::widgets::AudioSourceRow(sys_config, content);
+    sys_row_->setLevel(0.29F); // Placeholder level until live audio telemetry is wired.
+    sys_row_->setMergeChecked(false);
+    content_layout->addWidget(sys_row_);
 
-    // SYS can merge when there is at least one enabled source above it
-    bool any_above_sys = app_on || mic_on;
-    bool sys_can_merge = any_above_sys && sys_enable_->isChecked();
-    sys_merge_->setVisible(sys_can_merge);
-    if (!sys_can_merge)
-        sys_merge_->setChecked(false);
-}
+    auto* lower_zone = new QWidget(content);
+    auto* lower_layout = new QHBoxLayout(lower_zone);
+    lower_layout->setContentsMargins(0, 0, 0, 0);
+    lower_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
 
-void AudioPage::updateResultingTracks() {
-    struct SrcInfo {
-        const char* name;
-        bool enabled;
-        bool merge;
-    };
-    const SrcInfo sources[] = {
-        {"APP", app_enable_->isChecked(), false},
-        {"MIC", mic_enable_->isChecked(), mic_merge_->isChecked()},
-        {"SYS", sys_enable_->isChecked(), sys_merge_->isChecked()},
-    };
+    auto* tracks_col = new QWidget(lower_zone);
+    auto* tracks_col_layout = new QVBoxLayout(tracks_col);
+    tracks_col_layout->setContentsMargins(0, 0, 0, 0);
+    tracks_col_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
 
-    QStringList tracks;
-    for (const auto& src : sources) {
-        if (!src.enabled)
-            continue;
-        if (src.merge && !tracks.isEmpty())
-            tracks.back() += QString(" + ") + src.name;
-        else
-            tracks.append(src.name);
-    }
+    auto* tracks_header = new ui::widgets::SectionRuleHeader("RESULTING TRACKS", tracks_col);
+    tracks_header->setMeta("3 TRACKS");
+    tracks_col_layout->addWidget(tracks_header);
 
-    if (tracks.isEmpty()) {
-        resulting_tracks_label_->setText("(no tracks — all sources disabled)");
-        return;
-    }
+    auto* tracks_panel = makePanel(tracks_col);
+    tracks_panel->setObjectName("resultingTracksPanel");
+    auto* tracks_panel_layout = new QVBoxLayout(tracks_panel);
+    tracks_panel_layout->setContentsMargins(0, 0, 0, 0);
+    tracks_panel_layout->setSpacing(0);
+    tracks_panel_layout->addWidget(makeTrackRow(tracks_panel, "01", "APP", "STEREO · 48 kHz", true));
+    tracks_panel_layout->addWidget(makeTrackRow(tracks_panel, "02", "MIC", "STEREO · 48 kHz", false));
+    tracks_panel_layout->addWidget(makeTrackRow(tracks_panel, "03", "SYS", "STEREO · 48 kHz", false));
+    tracks_col_layout->addWidget(tracks_panel);
 
-    QString text;
-    for (int i = 0; i < tracks.size(); ++i)
-        text += QString::number(i + 1) + ". " + tracks[i] + "\n";
-    resulting_tracks_label_->setText(text.trimmed());
+    auto* encoding_col = new QWidget(lower_zone);
+    auto* encoding_col_layout = new QVBoxLayout(encoding_col);
+    encoding_col_layout->setContentsMargins(0, 0, 0, 0);
+    encoding_col_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
+
+    auto* encoding_header = new ui::widgets::SectionRuleHeader("ENCODING", encoding_col);
+    encoding_col_layout->addWidget(encoding_header);
+
+    auto* encoding_panel = makePanel(encoding_col);
+    encoding_panel->setObjectName("audioEncodingPanel");
+    auto* encoding_panel_layout = new QVBoxLayout(encoding_panel);
+    encoding_panel_layout->setContentsMargins(14, 14, 14, 14);
+    encoding_panel_layout->setSpacing(10);
+
+    auto* kv_layout = new QGridLayout();
+    kv_layout->setContentsMargins(0, 0, 0, 0);
+    kv_layout->setHorizontalSpacing(14);
+    kv_layout->setVerticalSpacing(6);
+    kv_layout->setColumnStretch(0, 0);
+    kv_layout->setColumnStretch(1, 1);
+    addEncodingRow(kv_layout, encoding_panel, 0, "CODEC", "Opus", "audioKvValueAccent");
+    addEncodingRow(kv_layout, encoding_panel, 1, "BITRATE", "192 kb/s · per track", "audioKvValue");
+    addEncodingRow(kv_layout, encoding_panel, 2, "SAMPLE RATE", "48 000 Hz", "audioKvValue");
+    addEncodingRow(kv_layout, encoding_panel, 3, "CHANNELS", "Stereo", "audioKvValue");
+    addEncodingRow(kv_layout, encoding_panel, 4, "APP CAPTURE", "WASAPI loopback · per-process", "audioKvValue");
+    encoding_panel_layout->addLayout(kv_layout);
+    encoding_panel_layout->addWidget(makeDivider(encoding_panel));
+
+    auto* note =
+        makeLabel("Codec is determined by the container — switch to MP4 on the Output page to use AAC instead.",
+                  "audioEncodingNote", encoding_panel);
+    note->setWordWrap(true);
+    encoding_panel_layout->addWidget(note);
+    encoding_col_layout->addWidget(encoding_panel);
+
+    lower_layout->addWidget(tracks_col, 6);
+    lower_layout->addWidget(encoding_col, 4);
+    content_layout->addWidget(lower_zone);
+    content_layout->addStretch(1);
+
+    scroll->setWidget(content);
 }
 
 } // namespace exosnap

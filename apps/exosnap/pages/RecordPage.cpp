@@ -1,40 +1,108 @@
 #include "RecordPage.h"
 
+#include "../ui/theme/ExoSnapMetrics.h"
+#include "../ui/widgets/CaptureTargetCard.h"
+#include "../ui/widgets/PreviewSurface.h"
+#include "../ui/widgets/SectionRuleHeader.h"
+#include "../ui/widgets/StatusPill.h"
+#include "../ui/widgets/TogglePill.h"
+#include "../ui/widgets/VUMeterWidget.h"
+
 #include <QComboBox>
 #include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QStyle>
 #include <QVBoxLayout>
 
 namespace exosnap {
-
 namespace {
 
-QLabel* makeTitle(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setStyleSheet("font-size: 22px; font-weight: 600; color: #E8EAED;");
-    return l;
+QFrame* makePanel(QWidget* parent, const char* role = "panel") {
+    auto* panel = new QFrame(parent);
+    panel->setProperty("panelRole", role);
+    return panel;
 }
 
-QLabel* makeSubLabel(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setStyleSheet("color: #8A9099; font-size: 13px;");
-    l->setWordWrap(true);
-    return l;
+QLabel* makeLabel(const QString& text, const char* role, QWidget* parent) {
+    auto* label = new QLabel(text, parent);
+    label->setProperty("labelRole", role);
+    return label;
 }
 
-QLabel* makeSectionLabel(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setStyleSheet("font-size: 13px; font-weight: 600; color: #C0C4CC; margin-top: 4px;");
-    return l;
+void setStyledStringProperty(QWidget* widget, const char* property_name, const QString& value) {
+    if (widget->property(property_name).toString() == value)
+        return;
+    widget->setProperty(property_name, value);
+    widget->style()->unpolish(widget);
+    widget->style()->polish(widget);
+    widget->update();
 }
 
-QFrame* makePanel(QWidget* parent) {
-    auto* f = new QFrame(parent);
-    f->setStyleSheet("QFrame { background: #141A26; border-radius: 6px; padding: 2px; }");
-    return f;
+QString stateDisplay(UiRecordingState state) {
+    switch (state) {
+    case UiRecordingState::LoadingCapabilities:
+        return "CHECKING";
+    case UiRecordingState::Ready:
+        return "READY TO RECORD";
+    case UiRecordingState::Blocked:
+        return "BLOCKED";
+    case UiRecordingState::Preparing:
+        return "PREPARING";
+    case UiRecordingState::Recording:
+        return "RECORDING";
+    case UiRecordingState::Stopping:
+        return "STOPPING";
+    case UiRecordingState::Completed:
+        return "COMPLETED";
+    case UiRecordingState::Failed:
+    default:
+        return "FAILED";
+    }
+}
+
+QString toClock(const std::wstring& elapsed_text) {
+    const QString text = QString::fromStdWString(elapsed_text);
+    const QStringList parts = text.split(':');
+    bool ok_a = false;
+    bool ok_b = false;
+    int minutes = 0;
+    int seconds = 0;
+    if (parts.size() == 2) {
+        minutes = parts[0].toInt(&ok_a);
+        seconds = parts[1].toInt(&ok_b);
+    }
+    if (!ok_a || !ok_b)
+        return "00:00:00";
+
+    const int hours = minutes / 60;
+    const int rem_minutes = minutes % 60;
+    return QString("%1:%2:%3")
+        .arg(hours, 2, 10, QChar('0'))
+        .arg(rem_minutes, 2, 10, QChar('0'))
+        .arg(seconds, 2, 10, QChar('0'));
+}
+
+QString checkGlyph(bool ok, bool blocked) {
+    if (ok)
+        return "✓";
+    if (blocked)
+        return "✕";
+    return "·";
+}
+
+QString targetLabelFor(const recorder_core::CaptureTarget& target) {
+    switch (target.kind) {
+    case recorder_core::CaptureTarget::Kind::Monitor:
+        return "Monitor";
+    case recorder_core::CaptureTarget::Kind::Window:
+        return "Window";
+    default:
+        return "Target";
+    }
 }
 
 } // namespace
@@ -43,136 +111,288 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
 
     auto* content = new QWidget();
-    content->setStyleSheet("QWidget { background: transparent; }");
     auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(24, 24, 24, 24);
-    layout->setSpacing(14);
+    layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
+                               ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
+    layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
 
-    layout->addWidget(makeTitle("Record", content));
-    layout->addWidget(
-        makeSubLabel("Operational view for target selection, readiness, and live runtime stats.", content));
-
-    // Capability banner
-    capability_label_ = new QLabel(content);
+    capability_label_ = makeLabel("", "recordCapabilityBanner", content);
     capability_label_->setWordWrap(true);
-    capability_label_->setStyleSheet("background: #1A2133; border-radius: 5px;"
-                                     "padding: 10px 14px; color: #8A9099; font-size: 12px;");
+    capability_label_->setProperty("panelRole", "note");
+    capability_label_->setVisible(false);
     layout->addWidget(capability_label_);
 
-    // Preview surface
-    layout->addWidget(makeSectionLabel("Live Preview", content));
-    auto* previewBox = new QFrame(content);
-    previewBox->setFixedHeight(180);
-    previewBox->setStyleSheet("QFrame { background: #0D1017; border-radius: 6px; border: 1px solid #1E2535; }");
-    auto* previewLayout = new QVBoxLayout(previewBox);
-    auto* previewHint = new QLabel("Preview surface placeholder", previewBox);
-    previewHint->setAlignment(Qt::AlignCenter);
-    previewHint->setStyleSheet("color: #3E4555; font-size: 12px;");
-    previewLayout->addWidget(previewHint);
-    layout->addWidget(previewBox);
+    auto* hero_grid = new QGridLayout();
+    hero_grid->setHorizontalSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
+    hero_grid->setVerticalSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
+    hero_grid->setColumnStretch(0, 5);
+    hero_grid->setColumnStretch(1, 2);
+    layout->addLayout(hero_grid);
 
-    // Capture target
-    layout->addWidget(makeSectionLabel("Capture Target", content));
+    preview_surface_ = new ui::widgets::PreviewSurface(content);
+    hero_grid->addWidget(preview_surface_, 0, 0, 1, 1);
+
+    auto* rail_column = new QWidget(content);
+    auto* rail_layout = new QVBoxLayout(rail_column);
+    rail_layout->setContentsMargins(0, 0, 0, 0);
+    rail_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
+
+    auto* control_panel = makePanel(rail_column);
+    control_panel->setObjectName("recordControlPanel");
+    auto* control_layout = new QVBoxLayout(control_panel);
+    control_layout->setContentsMargins(14, 12, 14, 12);
+    control_layout->setSpacing(10);
+
+    auto* control_head = new QHBoxLayout();
+    control_head->setContentsMargins(0, 0, 0, 0);
+    control_head->setSpacing(8);
+    control_state_label_ = makeLabel("READY TO RECORD", "recordControlState", control_panel);
+    auto* hotkey_label = makeLabel("ALT+F9", "recordHotkeyBadge", control_panel);
+    hotkey_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    control_head->addWidget(control_state_label_);
+    control_head->addStretch(1);
+    control_head->addWidget(hotkey_label);
+    control_layout->addLayout(control_head);
+
+    start_btn_ = new QPushButton("START RECORDING", control_panel);
+    start_btn_->setProperty("role", "primaryRecordStart");
+    start_btn_->setMinimumHeight(46);
+    control_layout->addWidget(start_btn_);
+
+    stop_btn_ = new QPushButton("■ STOP", control_panel);
+    stop_btn_->setProperty("role", "recordStop");
+    stop_btn_->setMinimumHeight(46);
+    stop_btn_->hide();
+    control_layout->addWidget(stop_btn_);
+
+    timer_label_ = makeLabel("00:00:00", "recordTimer", control_panel);
+    timer_label_->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
+    control_layout->addWidget(timer_label_);
+
+    auto* size_grid = new QGridLayout();
+    size_grid->setHorizontalSpacing(10);
+    size_grid->setVerticalSpacing(2);
+    size_grid->addWidget(makeLabel("SIZE", "recordMetricKey", control_panel), 0, 0);
+    size_value_label_ = makeLabel("0 KB", "recordMetricValue", control_panel);
+    size_value_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    size_grid->addWidget(size_value_label_, 0, 1);
+    size_grid->addWidget(makeLabel("EST", "recordMetricKey", control_panel), 1, 0);
+    est_value_label_ = makeLabel("~-- GB/h", "recordMetricValue", control_panel);
+    est_value_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    size_grid->addWidget(est_value_label_, 1, 1);
+    control_layout->addLayout(size_grid);
+
+    rail_layout->addWidget(control_panel);
+
+    auto* toggles_panel = makePanel(rail_column);
+    auto* toggles_layout = new QVBoxLayout(toggles_panel);
+    toggles_layout->setContentsMargins(14, 12, 14, 12);
+    toggles_layout->setSpacing(6);
+    toggles_layout->addWidget(makeLabel("QUICK TOGGLES", "recordQuickTogglesHead", toggles_panel));
+    const struct QuickToggleRow {
+        const char* label;
+        bool on_by_default;
+    } quick_toggles[] = {
+        {"Capture cursor", true},
+        {"Hardware encode", true},
+        {"Auto-split @ 4 h", false},
+    };
+    for (const auto& toggle : quick_toggles) {
+        auto* row = new QWidget(toggles_panel);
+        auto* row_layout = new QHBoxLayout(row);
+        row_layout->setContentsMargins(0, 1, 0, 1);
+        row_layout->setSpacing(8);
+        row_layout->addWidget(makeLabel(QString::fromUtf8(toggle.label), "recordToggleLabel", row), 1);
+
+        auto* pill = new ui::widgets::TogglePill(row);
+        pill->setOn(toggle.on_by_default);
+        row_layout->addWidget(pill, 0, Qt::AlignRight | Qt::AlignVCenter);
+        toggles_layout->addWidget(row);
+    }
+    quick_toggle_note_label_ = makeLabel("Placeholder controls: wiring follows a later integration pass.",
+                                         "recordPlaceholderNote", toggles_panel);
+    quick_toggle_note_label_->setWordWrap(true);
+    toggles_layout->addWidget(quick_toggle_note_label_);
+    rail_layout->addWidget(toggles_panel);
+    rail_layout->addStretch(1);
+
+    hero_grid->addWidget(rail_column, 0, 1, 1, 1);
+
+    capture_header_ = new ui::widgets::SectionRuleHeader("CAPTURE TARGET", content);
+    capture_header_->setMeta("DISPLAY1 · 2560×1440 · 60 fps");
+    layout->addWidget(capture_header_);
+
+    auto* cards_row = new QWidget(content);
+    auto* cards_layout = new QHBoxLayout(cards_row);
+    cards_layout->setContentsMargins(0, 0, 0, 0);
+    cards_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
+    monitor_card_ = new ui::widgets::CaptureTargetCard(cards_row);
+    monitor_card_->setTitle("Monitor");
+    window_card_ = new ui::widgets::CaptureTargetCard(cards_row);
+    window_card_->setTitle("Window");
+    region_card_ = new ui::widgets::CaptureTargetCard(cards_row);
+    region_card_->setTitle("Region");
+    cards_layout->addWidget(monitor_card_, 1);
+    cards_layout->addWidget(window_card_, 1);
+    cards_layout->addWidget(region_card_, 1);
+    layout->addWidget(cards_row);
+
     target_combo_ = new QComboBox(content);
-    target_combo_->setMinimumWidth(300);
-    target_combo_->setStyleSheet("QComboBox { background: #1A2133; border: 1px solid #2A3349;"
-                                 " border-radius: 4px; padding: 6px 12px; color: #C8CBD0; }"
-                                 "QComboBox::drop-down { border: none; }"
-                                 "QComboBox QAbstractItemView { background: #1A2133; color: #C8CBD0;"
-                                 " selection-background-color: #263050; border: 1px solid #2A3349; }");
+    target_combo_->setVisible(false);
     layout->addWidget(target_combo_);
 
-    // Output path
-    layout->addWidget(makeSectionLabel("Output Path", content));
-    output_path_label_ = new QLabel("--", content);
-    output_path_label_->setWordWrap(true);
-    output_path_label_->setStyleSheet("color: #8A9099; font-size: 12px;");
-    layout->addWidget(output_path_label_);
+    readiness_header_ = new ui::widgets::SectionRuleHeader("READINESS", content);
+    readiness_header_->setMeta("ALL CLEAR");
+    layout->addWidget(readiness_header_);
 
-    // Readiness
-    layout->addWidget(makeSectionLabel("Readiness", content));
-    layout->addWidget(makeSubLabel("Start is blocked automatically while active blockers are present.", content));
+    readiness_panel_ = makePanel(content);
+    auto* readiness_layout = new QVBoxLayout(readiness_panel_);
+    readiness_layout->setContentsMargins(0, 0, 0, 0);
+    readiness_layout->setSpacing(0);
+    for (const QString& title :
+         {QString("NVENC AV1 encoder"), QString("Display capture"), QString("Audio loopback (APP)"),
+          QString("Output destination"), QString("Session state")}) {
+        auto* row = new QWidget(readiness_panel_);
+        row->setObjectName("readinessRow");
+        row->setProperty("firstRow", readiness_rows_.empty());
+        auto* row_layout = new QHBoxLayout(row);
+        row_layout->setContentsMargins(14, 10, 14, 10);
+        row_layout->setSpacing(10);
 
-    // Controls
-    auto* btnRow = new QHBoxLayout();
-    btnRow->setSpacing(10);
+        auto* icon = makeLabel("·", "readinessGlyph", row);
+        icon->setFixedWidth(12);
+        auto* row_title = makeLabel(title, "readinessTitle", row);
+        auto* detail = makeLabel("", "readinessDetail", row);
+        detail->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        detail->setWordWrap(false);
 
-    start_btn_ = new QPushButton("Start Recording", content);
-    start_btn_->setStyleSheet("QPushButton { background: #2468C0; border: none; border-radius: 4px;"
-                              " padding: 8px 18px; color: #FFFFFF; font-weight: 600; }"
-                              "QPushButton:hover { background: #3078D0; }"
-                              "QPushButton:pressed { background: #1A58B0; }"
-                              "QPushButton:disabled { background: #1E2535; color: #454C5E; }");
+        row_layout->addWidget(icon);
+        row_layout->addWidget(row_title);
+        row_layout->addStretch(1);
+        row_layout->addWidget(detail, 0, Qt::AlignRight | Qt::AlignVCenter);
+        readiness_layout->addWidget(row);
 
-    stop_btn_ = new QPushButton("Stop Recording", content);
-    stop_btn_->setStyleSheet("QPushButton { background: #252C3C; border: 1px solid #3A4254;"
-                             " border-radius: 4px; padding: 8px 18px; color: #C0C4CC; }"
-                             "QPushButton:hover { background: #2E3648; }"
-                             "QPushButton:disabled { background: #1A2030; color: #454C5E; }");
-
-    btnRow->addWidget(start_btn_);
-    btnRow->addWidget(stop_btn_);
-    btnRow->addStretch();
-    layout->addLayout(btnRow);
-
-    state_label_ = new QLabel(content);
-    state_label_->setStyleSheet("color: #8A9099; font-size: 12px;");
-    layout->addWidget(state_label_);
-
-    // Audio activity placeholder
-    layout->addWidget(makeSectionLabel("Audio activity", content));
-    layout->addWidget(makeSubLabel("APP ◂◅◇    MIC ◂◃    SYS ◂◅◇", content));
-
-    // Live stats panel
-    stats_panel_ = makePanel(content);
-    auto* statsLayout = new QVBoxLayout(stats_panel_);
-    statsLayout->setSpacing(4);
-    statsLayout->setContentsMargins(14, 10, 14, 10);
-    elapsed_label_ = new QLabel(stats_panel_);
-    frames_label_ = new QLabel(stats_panel_);
-    video_packets_label_ = new QLabel(stats_panel_);
-    audio_packets_label_ = new QLabel(stats_panel_);
-    dropped_label_ = new QLabel(stats_panel_);
-    size_label_ = new QLabel(stats_panel_);
-    for (auto* lbl :
-         {elapsed_label_, frames_label_, video_packets_label_, audio_packets_label_, dropped_label_, size_label_}) {
-        lbl->setStyleSheet("color: #C0C4CC; font-size: 12px;");
-        statsLayout->addWidget(lbl);
+        readiness_rows_.push_back({icon, row_title, detail});
     }
-    stats_panel_->hide();
-    layout->addWidget(stats_panel_);
+    layout->addWidget(readiness_panel_);
 
-    // Result panel
-    result_panel_ = makePanel(content);
-    auto* resultLayout = new QVBoxLayout(result_panel_);
-    resultLayout->setSpacing(4);
-    resultLayout->setContentsMargins(14, 10, 14, 10);
-    result_status_label_ = new QLabel(result_panel_);
-    result_path_label_ = new QLabel(result_panel_);
-    result_phase_label_ = new QLabel(result_panel_);
-    result_hresult_label_ = new QLabel(result_panel_);
-    result_detail_label_ = new QLabel(result_panel_);
-    for (auto* lbl :
-         {result_status_label_, result_path_label_, result_phase_label_, result_hresult_label_, result_detail_label_}) {
-        lbl->setWordWrap(true);
-        lbl->setStyleSheet("color: #C0C4CC; font-size: 12px;");
-        resultLayout->addWidget(lbl);
-    }
-    result_panel_->hide();
+    audio_header_ = new ui::widgets::SectionRuleHeader("AUDIO ACTIVITY", content);
+    audio_header_->setMeta("PLACEHOLDER · NOT LIVE ENGINE METERS");
+    layout->addWidget(audio_header_);
+
+    auto* audio_panel = makePanel(content);
+    auto* audio_layout = new QVBoxLayout(audio_panel);
+    audio_layout->setContentsMargins(0, 0, 0, 0);
+    audio_layout->setSpacing(0);
+
+    auto addAudioRow = [&](const QString& tag, const QString& title, ui::widgets::VUMeterWidget** meter_out,
+                           QLabel** db_label_out) {
+        auto* row = new QWidget(audio_panel);
+        row->setObjectName("audioActivityRow");
+        row->setProperty("firstRow", (*meter_out == nullptr));
+        auto* row_layout = new QHBoxLayout(row);
+        row_layout->setContentsMargins(14, 9, 14, 9);
+        row_layout->setSpacing(12);
+
+        auto* tag_label = makeLabel(tag, "audioTag", row);
+        tag_label->setFixedWidth(44);
+        row_layout->addWidget(tag_label);
+
+        auto* title_label = makeLabel(title, "audioRowTitle", row);
+        row_layout->addWidget(title_label, 1);
+
+        auto* meter = new ui::widgets::VUMeterWidget(row);
+        meter->setSegmentCount(24);
+        row_layout->addWidget(meter, 1);
+
+        auto* db_label = makeLabel("-- dB", "audioDb", row);
+        db_label->setFixedWidth(118);
+        db_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        row_layout->addWidget(db_label);
+
+        audio_layout->addWidget(row);
+
+        *meter_out = meter;
+        *db_label_out = db_label;
+    };
+
+    addAudioRow("APP", "Selected application audio", &app_meter_, &app_db_label_);
+    addAudioRow("MIC", "Microphone (placeholder source)", &mic_meter_, &mic_db_label_);
+    addAudioRow("SYS", "Other system audio", &sys_meter_, &sys_db_label_);
+    layout->addWidget(audio_panel);
+
+    destination_header_ = new ui::widgets::SectionRuleHeader("DESTINATION", content);
+    destination_header_->setMeta("MKV · AV1 · OPUS");
+    layout->addWidget(destination_header_);
+
+    auto* destination_panel = makePanel(content);
+    auto* destination_layout = new QHBoxLayout(destination_panel);
+    destination_layout->setContentsMargins(14, 12, 14, 12);
+    destination_layout->setSpacing(10);
+
+    auto* dest_left = new QWidget(destination_panel);
+    auto* dest_left_layout = new QVBoxLayout(dest_left);
+    dest_left_layout->setContentsMargins(0, 0, 0, 0);
+    dest_left_layout->setSpacing(2);
+    output_path_label_ = makeLabel("--", "destinationPath", dest_left);
+    output_meta_label_ =
+        makeLabel("Path is resolved by coordinator after capability checks.", "destinationMeta", dest_left);
+    output_meta_label_->setWordWrap(true);
+    dest_left_layout->addWidget(output_path_label_);
+    dest_left_layout->addWidget(output_meta_label_);
+
+    auto* dest_buttons = new QWidget(destination_panel);
+    auto* dest_buttons_layout = new QHBoxLayout(dest_buttons);
+    dest_buttons_layout->setContentsMargins(0, 0, 0, 0);
+    dest_buttons_layout->setSpacing(6);
+    auto* reveal_btn = new QPushButton("Reveal (placeholder)", dest_buttons);
+    reveal_btn->setProperty("role", "ghost");
+    reveal_btn->setEnabled(false);
+    auto* change_btn = new QPushButton("Change (placeholder)", dest_buttons);
+    change_btn->setProperty("role", "ghost");
+    change_btn->setEnabled(false);
+    dest_buttons_layout->addWidget(reveal_btn);
+    dest_buttons_layout->addWidget(change_btn);
+
+    destination_layout->addWidget(dest_left, 1);
+    destination_layout->addWidget(dest_buttons, 0, Qt::AlignRight | Qt::AlignVCenter);
+    layout->addWidget(destination_panel);
+
+    result_panel_ = makePanel(content, "resultPanel");
+    auto* result_layout = new QVBoxLayout(result_panel_);
+    result_layout->setContentsMargins(14, 10, 14, 10);
+    result_layout->setSpacing(4);
+    result_status_label_ = makeLabel("", "resultStatus", result_panel_);
+    result_path_label_ = makeLabel("", "resultDetail", result_panel_);
+    result_phase_label_ = makeLabel("", "resultDetail", result_panel_);
+    result_hresult_label_ = makeLabel("", "resultDetail", result_panel_);
+    result_detail_label_ = makeLabel("", "resultDetail", result_panel_);
+    result_path_label_->setWordWrap(true);
+    result_phase_label_->setWordWrap(true);
+    result_hresult_label_->setWordWrap(true);
+    result_detail_label_->setWordWrap(true);
+    result_layout->addWidget(result_status_label_);
+    result_layout->addWidget(result_path_label_);
+    result_layout->addWidget(result_phase_label_);
+    result_layout->addWidget(result_hresult_label_);
+    result_layout->addWidget(result_detail_label_);
+    result_panel_->setVisible(false);
     layout->addWidget(result_panel_);
 
-    layout->addStretch();
+    layout->addStretch(1);
     scroll->setWidget(content);
 
-    auto* rootLayout = new QVBoxLayout(this);
-    rootLayout->setContentsMargins(0, 0, 0, 0);
-    rootLayout->addWidget(scroll);
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->addWidget(scroll);
 
     connect(start_btn_, &QPushButton::clicked, this, &RecordPage::onStart);
     connect(stop_btn_, &QPushButton::clicked, this, &RecordPage::onStop);
+    connect(monitor_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectMonitorTarget);
+    connect(window_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectWindowTarget);
+    connect(region_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectRegionTarget);
 
     initCoordinator();
 }
@@ -194,25 +414,27 @@ void RecordPage::initCoordinator() {
     });
 
     view_model_.targets = coordinator_->EnumerateTargets();
-    for (const auto& t : view_model_.targets) {
-        bool isMonitor = (t.kind == recorder_core::CaptureTarget::Kind::Monitor);
-        std::wstring prefix = isMonitor ? L"[Monitor] " : L"[Window] ";
-        std::wstring desc = QString::fromStdString(t.description).toStdWString();
-        view_model_.target_display_names.push_back(prefix + desc);
-        target_combo_->addItem(QString::fromStdWString(prefix + desc));
+    for (const auto& target : view_model_.targets) {
+        const bool is_monitor = (target.kind == recorder_core::CaptureTarget::Kind::Monitor);
+        const std::wstring prefix = is_monitor ? L"[Monitor] " : L"[Window] ";
+        const std::wstring display = prefix + QString::fromStdString(target.description).toStdWString();
+        view_model_.target_display_names.push_back(display);
+        target_combo_->addItem(QString::fromStdWString(display));
     }
 
     view_model_.selected_target_index = -1;
     for (int i = 0; i < static_cast<int>(view_model_.targets.size()); ++i) {
-        if (view_model_.targets[i].kind == recorder_core::CaptureTarget::Kind::Monitor) {
-            view_model_.selected_target_index = i;
-            target_combo_->setCurrentIndex(i);
-            break;
-        }
+        const auto& target = view_model_.targets[static_cast<std::size_t>(i)];
+        if (target.kind == recorder_core::CaptureTarget::Kind::Monitor && monitor_target_index_ < 0)
+            monitor_target_index_ = i;
+        if (target.kind == recorder_core::CaptureTarget::Kind::Window && window_target_index_ < 0)
+            window_target_index_ = i;
     }
-    if (view_model_.selected_target_index < 0 && !view_model_.targets.empty()) {
-        view_model_.selected_target_index = 0;
-        target_combo_->setCurrentIndex(0);
+
+    if (monitor_target_index_ >= 0) {
+        syncTargetSelectionToCombo(monitor_target_index_);
+    } else if (!view_model_.targets.empty()) {
+        syncTargetSelectionToCombo(0);
     }
 
     view_model_.SetState(coordinator_->State());
@@ -220,49 +442,243 @@ void RecordPage::initCoordinator() {
     refresh();
 }
 
+void RecordPage::syncTargetSelectionToCombo(int target_index) {
+    if (target_index < 0 || target_index >= static_cast<int>(view_model_.targets.size()))
+        return;
+    view_model_.selected_target_index = target_index;
+    target_combo_->setCurrentIndex(target_index);
+    updateTargetCards();
+}
+
 void RecordPage::onStart() {
-    int idx = target_combo_->currentIndex();
+    const int idx = target_combo_->currentIndex();
     view_model_.selected_target_index = idx;
     if (idx < 0 || idx >= static_cast<int>(view_model_.targets.size()))
         return;
+
     view_model_.ResetStats();
-    coordinator_->StartRecording(view_model_.targets[idx]);
+    coordinator_->StartRecording(view_model_.targets[static_cast<std::size_t>(idx)]);
 }
 
 void RecordPage::onStop() {
     coordinator_->StopRecording();
 }
 
+void RecordPage::onSelectMonitorTarget() {
+    syncTargetSelectionToCombo(monitor_target_index_);
+    refresh();
+}
+
+void RecordPage::onSelectWindowTarget() {
+    syncTargetSelectionToCombo(window_target_index_);
+    refresh();
+}
+
+void RecordPage::onSelectRegionTarget() {
+    if (region_target_index_ >= 0) {
+        syncTargetSelectionToCombo(region_target_index_);
+        refresh();
+    }
+}
+
 void RecordPage::refresh() {
-    capability_label_->setText(QString::fromStdWString(view_model_.capability_status_text));
-    target_combo_->setEnabled(view_model_.CanStart());
-    output_path_label_->setText(QString::fromStdWString(view_model_.output_path_display));
+    const QString capability_text = QString::fromStdWString(view_model_.capability_status_text).trimmed();
+    const bool blocked = (view_model_.state == UiRecordingState::Blocked);
+    const bool checking = (view_model_.state == UiRecordingState::LoadingCapabilities);
+    const bool recording =
+        (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Stopping);
+
+    capability_label_->setText(capability_text);
+    capability_label_->setVisible((blocked || checking) && !capability_text.isEmpty());
+    if (capability_label_->isVisible()) {
+        setStyledStringProperty(capability_label_, "panelRole", blocked ? "blocker" : "note");
+    }
+
+    start_btn_->setVisible(!recording);
+    stop_btn_->setVisible(recording);
     start_btn_->setEnabled(view_model_.CanStart());
     stop_btn_->setEnabled(view_model_.CanStop());
-    state_label_->setText(QString::fromStdWString(view_model_.state_text));
-    stats_panel_->setVisible(view_model_.ShouldShowStats());
-    if (view_model_.ShouldShowStats())
-        updateStatsDisplay();
+
+    control_state_label_->setText(stateDisplay(view_model_.state));
+    setStyledStringProperty(control_state_label_, "stateRole",
+                            blocked ? "blocked" : (recording ? "recording" : "ready"));
+
+    output_path_label_->setText(QString::fromStdWString(view_model_.output_path_display));
+
+    preview_surface_->setRecording(recording);
+    preview_surface_->setStatusText(recording ? QStringLiteral("REC")
+                                              : (blocked ? QStringLiteral("BLOCKED") : QStringLiteral("READY")));
+    preview_surface_->statusPill()->setTone(
+        recording ? ui::widgets::StatusPill::Tone::Recording
+                  : (blocked ? ui::widgets::StatusPill::Tone::Blocked : ui::widgets::StatusPill::Tone::Ready));
+    preview_surface_->setCenterSubtitle(recording ? QStringLiteral("CAPTURING")
+                                                  : QStringLiteral("IDLE · DDA TEX SHARED"));
+    preview_surface_->setBottomRightText("AV1 · CQ 24");
+
+    if (view_model_.selected_target_index >= 0 &&
+        view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {
+        const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+        const QString target_desc = QString::fromStdString(target.description);
+        capture_header_->setMeta(QString("%1 · 60 fps").arg(target_desc.isEmpty() ? "Target" : target_desc));
+        preview_surface_->setTopMetaText(QString("%1 · 60 fps").arg(target_desc.isEmpty() ? "TARGET" : target_desc));
+    } else {
+        capture_header_->setMeta("NO TARGET");
+        preview_surface_->setTopMetaText("NO TARGET");
+    }
+
+    updateTargetCards();
+    updateReadinessRows();
+    updateAudioPlaceholders();
+    updateStatsDisplay();
+
     result_panel_->setVisible(view_model_.HasResult());
     if (view_model_.HasResult())
         updateResultDisplay();
+
+    if (view_model_.selected_target_index >= 0 &&
+        view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {
+        const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+        emit chromeStateChanged(recording, recording ? QStringLiteral("REC") : QStringLiteral("READY"),
+                                QString("%1 · 60 fps · AV1")
+                                    .arg(QString::fromStdString(target.description).isEmpty()
+                                             ? targetLabelFor(target)
+                                             : QString::fromStdString(target.description)));
+    } else {
+        emit chromeStateChanged(recording, recording ? QStringLiteral("REC") : QStringLiteral("READY"),
+                                QString("NO TARGET · 60 fps · AV1"));
+    }
 }
 
 void RecordPage::updateStatsDisplay() {
-    elapsed_label_->setText("Elapsed: " + QString::fromStdWString(view_model_.elapsed_text));
-    frames_label_->setText("Frames: " + QString::number(view_model_.frames_captured));
-    video_packets_label_->setText("Video packets: " + QString::number(view_model_.video_packets));
-    audio_packets_label_->setText("Audio packets: " + QString::number(view_model_.audio_packets));
-    dropped_label_->setText("Dropped frames: " + QString::number(view_model_.dropped_frames));
-    size_label_->setText("Size: " + QString::fromStdWString(view_model_.output_size_text));
+    timer_label_->setText(toClock(view_model_.elapsed_text));
+    size_value_label_->setText(QString::fromStdWString(view_model_.output_size_text));
+    est_value_label_->setText("~-- GB/h");
+    preview_surface_->setBottomLeftText(QString("FRAMES %1 · VPKT %2 · DROP %3")
+                                            .arg(view_model_.frames_captured)
+                                            .arg(view_model_.video_packets)
+                                            .arg(view_model_.dropped_frames));
 }
 
 void RecordPage::updateResultDisplay() {
+    setStyledStringProperty(result_status_label_, "labelRole",
+                            view_model_.last_succeeded ? "resultStatusOk" : "resultStatusErr");
     result_status_label_->setText(QString::fromStdWString(view_model_.result_status_text));
-    result_path_label_->setText(QString::fromStdWString(view_model_.result_output_path));
-    result_phase_label_->setText(QString::fromStdWString(view_model_.result_error_phase));
-    result_hresult_label_->setText(QString::fromStdWString(view_model_.result_hresult_text));
-    result_detail_label_->setText(QString::fromStdWString(view_model_.result_error_detail));
+
+    const QString output_path = QString::fromStdWString(view_model_.result_output_path).trimmed();
+    const QString error_phase = QString::fromStdWString(view_model_.result_error_phase).trimmed();
+    const QString hresult = QString::fromStdWString(view_model_.result_hresult_text).trimmed();
+    const QString detail = QString::fromStdWString(view_model_.result_error_detail).trimmed();
+
+    result_path_label_->setText("Output: " + output_path);
+    result_path_label_->setVisible(!output_path.isEmpty());
+    result_phase_label_->setText("Phase: " + error_phase);
+    result_phase_label_->setVisible(!error_phase.isEmpty());
+    result_hresult_label_->setText("HRESULT: " + hresult);
+    result_hresult_label_->setVisible(!hresult.isEmpty());
+    result_detail_label_->setText("Detail: " + detail);
+    result_detail_label_->setVisible(!detail.isEmpty());
+}
+
+void RecordPage::updateTargetCards() {
+    const int current = target_combo_->currentIndex();
+    const bool monitor_selected = (current == monitor_target_index_);
+    const bool window_selected = (current == window_target_index_);
+    const bool region_selected = (current == region_target_index_ && region_target_index_ >= 0);
+
+    monitor_card_->setSelected(monitor_selected);
+    window_card_->setSelected(window_selected);
+    region_card_->setSelected(region_selected);
+    region_card_->setEnabled(region_target_index_ >= 0);
+
+    if (monitor_target_index_ >= 0 && monitor_target_index_ < static_cast<int>(view_model_.targets.size())) {
+        monitor_card_->setSubtitle(
+            QString::fromStdString(view_model_.targets[static_cast<std::size_t>(monitor_target_index_)].description));
+    } else {
+        monitor_card_->setSubtitle("No monitor target detected");
+    }
+
+    if (window_target_index_ >= 0 && window_target_index_ < static_cast<int>(view_model_.targets.size())) {
+        window_card_->setSubtitle(
+            QString::fromStdString(view_model_.targets[static_cast<std::size_t>(window_target_index_)].description));
+    } else {
+        window_card_->setSubtitle("No window target detected");
+    }
+
+    if (region_target_index_ >= 0) {
+        region_card_->setSubtitle("Region target available");
+        if (!region_selected)
+            region_card_->setStatusText("○");
+    } else {
+        region_card_->setSubtitle("Region card is placeholder in this pass");
+        region_card_->setStatusText("PLACEHOLDER");
+    }
+}
+
+void RecordPage::updateReadinessRows() {
+    if (readiness_rows_.size() < 5)
+        return;
+
+    const bool blocked = (view_model_.state == UiRecordingState::Blocked);
+    readiness_header_->setMeta(blocked ? "BLOCKERS PRESENT" : "ALL CLEAR");
+
+    const QString target_detail =
+        (view_model_.selected_target_index >= 0 &&
+         view_model_.selected_target_index < static_cast<int>(view_model_.targets.size()))
+            ? QString::fromStdString(
+                  view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)].description)
+            : QString("No target selected");
+
+    const QString output_detail = QString::fromStdWString(view_model_.output_path_display);
+    const QString session_state = QString::fromStdWString(view_model_.state_text);
+    const QString capability_text = QString::fromStdWString(view_model_.capability_status_text).trimmed();
+
+    const bool encoder_ok = !blocked;
+    const bool target_ok = !target_detail.isEmpty() && target_detail != "No target selected";
+    const bool output_ok = !output_detail.isEmpty() && output_detail != "--";
+
+    const struct RowData {
+        bool ok;
+        bool hard_blocked;
+        QString detail;
+    } rows[] = {
+        {encoder_ok, blocked, blocked ? capability_text : QString("Available")},
+        {target_ok, false, target_detail},
+        {true, false, QString("WASAPI loopback path available (no live meter binding in this pass)")},
+        {output_ok, false, output_detail},
+        {!blocked, blocked, session_state},
+    };
+
+    for (int i = 0; i < 5; ++i) {
+        auto& row_widgets = readiness_rows_[static_cast<std::size_t>(i)];
+        row_widgets.icon->setText(checkGlyph(rows[i].ok, rows[i].hard_blocked));
+        setStyledStringProperty(row_widgets.icon, "stateRole",
+                                rows[i].hard_blocked ? "blocked" : (rows[i].ok ? "ready" : "muted"));
+        row_widgets.detail->setText(rows[i].detail);
+    }
+}
+
+void RecordPage::updateAudioPlaceholders() {
+    const bool recording =
+        (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Stopping);
+
+    app_meter_->setActive(true);
+    mic_meter_->setActive(true);
+    sys_meter_->setActive(true);
+    if (recording) {
+        app_meter_->setLevel(0.58F);
+        mic_meter_->setLevel(0.26F);
+        sys_meter_->setLevel(0.34F);
+        app_db_label_->setText("-19 dB · placeholder");
+        mic_db_label_->setText("-31 dB · placeholder");
+        sys_db_label_->setText("-28 dB · placeholder");
+    } else {
+        app_meter_->setLevel(0.36F);
+        mic_meter_->setLevel(0.18F);
+        sys_meter_->setLevel(0.22F);
+        app_db_label_->setText("-24 dB · placeholder");
+        mic_db_label_->setText("-35 dB · placeholder");
+        sys_db_label_->setText("-32 dB · placeholder");
+    }
 }
 
 } // namespace exosnap

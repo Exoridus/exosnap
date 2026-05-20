@@ -13,38 +13,33 @@
 #include <QStandardPaths>
 #include <QVBoxLayout>
 
+#include "../ui/theme/ExoSnapMetrics.h"
+
 namespace exosnap {
 
 namespace {
 
-QLabel* makeTitle(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setStyleSheet("font-size: 22px; font-weight: 600; color: #E8EAED;");
-    return l;
-}
-
 QLabel* makeSubLabel(const QString& text, QWidget* parent) {
     auto* l = new QLabel(text, parent);
-    l->setStyleSheet("color: #8A9099; font-size: 13px;");
+    l->setProperty("labelRole", "subtitle");
     l->setWordWrap(true);
     return l;
 }
 
 QLabel* makeSectionLabel(const QString& text, QWidget* parent) {
     auto* l = new QLabel(text, parent);
-    l->setStyleSheet("font-size: 13px; font-weight: 600; color: #C0C4CC; margin-top: 4px;");
+    l->setProperty("labelRole", "section");
     return l;
 }
 
 QRadioButton* makeRadio(const QString& text, QWidget* parent) {
-    auto* r = new QRadioButton(text, parent);
-    r->setStyleSheet("QRadioButton { color: #C8CBD0; font-size: 13px; spacing: 6px; }"
-                     "QRadioButton::indicator { width: 14px; height: 14px; }"
-                     "QRadioButton::indicator:unchecked { border: 2px solid #3A4254; border-radius: 7px;"
-                     " background: #1A2133; }"
-                     "QRadioButton::indicator:checked { border: 2px solid #2468C0; border-radius: 7px;"
-                     " background: #2468C0; }");
-    return r;
+    return new QRadioButton(text, parent);
+}
+
+QFrame* makePanel(QWidget* parent) {
+    auto* panel = new QFrame(parent);
+    panel->setProperty("panelRole", "panel");
+    return panel;
 }
 
 } // namespace
@@ -53,78 +48,96 @@ OutputPage::OutputPage(QWidget* parent) : QWidget(parent) {
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
 
     auto* content = new QWidget();
-    content->setStyleSheet("QWidget { background: transparent; }");
     auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(24, 24, 24, 24);
-    layout->setSpacing(14);
+    layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
+                               ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
+    layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
 
-    layout->addWidget(makeTitle("Output", content));
-    layout->addWidget(makeSubLabel("Container format, output directory, and file naming.", content));
+    // Destination
+    layout->addWidget(makeSectionLabel("Destination", content));
+    auto* destination_panel = makePanel(content);
+    auto* destination_layout = new QVBoxLayout(destination_panel);
+    destination_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
+                                           ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
+    destination_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
+    destination_layout->addWidget(makeSubLabel("Define output path and file naming behavior.", destination_panel));
 
-    // Container
-    layout->addWidget(makeSectionLabel("Container", content));
-    auto* mkv = makeRadio("MKV", content);
-    auto* mp4 = makeRadio("MP4", content);
+    auto* dest_row = new QHBoxLayout();
+    dest_row->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
+    destination_edit_ = new QLineEdit(destination_panel);
+    browse_btn_ = new QPushButton("Browse…", destination_panel);
+    browse_btn_->setProperty("role", "ghost");
+    dest_row->addWidget(destination_edit_);
+    dest_row->addWidget(browse_btn_);
+    destination_layout->addLayout(dest_row);
+
+    destination_layout->addWidget(makeSectionLabel("File Naming", destination_panel));
+    naming_edit_ = new QLineEdit(destination_panel);
+    naming_edit_->setPlaceholderText("exosnap_{date}_{time}");
+    naming_edit_->setText("exosnap_{date}_{time}");
+    destination_layout->addWidget(naming_edit_);
+    layout->addWidget(destination_panel);
+
+    // Container & compatibility
+    layout->addWidget(makeSectionLabel("Container & Compatibility", content));
+    auto* container_panel = makePanel(content);
+    auto* container_layout = new QVBoxLayout(container_panel);
+    container_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
+                                         ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
+    container_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
+
+    auto* mkv = makeRadio("MKV", container_panel);
+    auto* mp4 = makeRadio("MP4", container_panel);
     mkv->setChecked(true);
     container_group_ = new QButtonGroup(this);
     container_group_->addButton(mkv, 0);
     container_group_->addButton(mp4, 1);
-    layout->addWidget(mkv);
-    layout->addWidget(mp4);
+    container_layout->addWidget(mkv);
+    container_layout->addWidget(mp4);
 
     // MP4 info note (hidden by default)
     mp4_info_label_ = new QLabel("MP4 is less crash-resilient than MKV. If recording is interrupted unexpectedly,"
                                  " the file may require recovery or be unusable.",
-                                 content);
+                                 container_panel);
     mp4_info_label_->setWordWrap(true);
-    mp4_info_label_->setStyleSheet("background: #1A2133; border-radius: 5px; padding: 10px 14px;"
-                                   " color: #8A9099; font-size: 12px;");
+    mp4_info_label_->setProperty("panelRole", "note");
     mp4_info_label_->hide();
-    layout->addWidget(mp4_info_label_);
+    container_layout->addWidget(mp4_info_label_);
 
-    // Audio codec
-    layout->addWidget(makeSectionLabel("Audio Codec", content));
-    audio_codec_combo_ = new QComboBox(content);
+    container_layout->addWidget(makeSectionLabel("Audio Codec", container_panel));
+    audio_codec_combo_ = new QComboBox(container_panel);
     audio_codec_combo_->setMinimumWidth(200);
-    audio_codec_combo_->setStyleSheet("QComboBox { background: #1A2133; border: 1px solid #2A3349; border-radius: 4px;"
-                                      " padding: 6px 12px; color: #C8CBD0; }"
-                                      "QComboBox::drop-down { border: none; }"
-                                      "QComboBox QAbstractItemView { background: #1A2133; color: #C8CBD0;"
-                                      " selection-background-color: #263050; border: 1px solid #2A3349; }");
-    layout->addWidget(audio_codec_combo_);
+    container_layout->addWidget(audio_codec_combo_);
+    layout->addWidget(container_panel);
 
-    // Destination
-    layout->addWidget(makeSectionLabel("Destination", content));
-    auto* dest_row = new QHBoxLayout();
-    dest_row->setSpacing(8);
-    destination_edit_ = new QLineEdit(content);
-    destination_edit_->setStyleSheet("QLineEdit { background: #1A2133; border: 1px solid #2A3349;"
-                                     " border-radius: 4px; padding: 6px 10px; color: #C8CBD0; }");
-    browse_btn_ = new QPushButton("Browse…", content);
-    browse_btn_->setStyleSheet("QPushButton { background: #252C3C; border: 1px solid #3A4254;"
-                               " border-radius: 4px; padding: 6px 14px; color: #C0C4CC; }"
-                               "QPushButton:hover { background: #2E3648; }");
-    dest_row->addWidget(destination_edit_);
-    dest_row->addWidget(browse_btn_);
-    layout->addLayout(dest_row);
+    // Recording output behavior
+    layout->addWidget(makeSectionLabel("Recording Output Behavior", content));
+    auto* behavior_panel = makePanel(content);
+    auto* behavior_layout = new QVBoxLayout(behavior_panel);
+    behavior_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
+                                        ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
+    behavior_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceXs);
+    auto* est_label = new QLabel("Estimated size appears once a session is active.", behavior_panel);
+    est_label->setProperty("labelRole", "muted");
+    behavior_layout->addWidget(est_label);
+    behavior_layout->addWidget(
+        makeSubLabel("Container and codec selections are applied when recording starts.", behavior_panel));
+    layout->addWidget(behavior_panel);
 
-    // File naming
-    layout->addWidget(makeSectionLabel("File Naming", content));
-    naming_edit_ = new QLineEdit(content);
-    naming_edit_->setStyleSheet("QLineEdit { background: #1A2133; border: 1px solid #2A3349;"
-                                " border-radius: 4px; padding: 6px 10px; color: #C8CBD0; }");
-    naming_edit_->setPlaceholderText("exosnap_{date}_{time}");
-    naming_edit_->setText("exosnap_{date}_{time}");
-    layout->addWidget(naming_edit_);
-
-    // Estimated output
-    layout->addWidget(makeSectionLabel("Estimated Output", content));
-    auto* est_label = new QLabel("Start a recording to see estimated output size.", content);
-    est_label->setStyleSheet("color: #8A9099; font-size: 12px;");
-    layout->addWidget(est_label);
+    // Effective output placeholder
+    layout->addWidget(makeSectionLabel("Effective Output (Placeholder)", content));
+    auto* effective_panel = makePanel(content);
+    auto* effective_layout = new QVBoxLayout(effective_panel);
+    effective_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
+                                         ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
+    effective_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceXs);
+    auto* effective_hint =
+        new QLabel("Resolved output summary is shown here in a later integration pass.", effective_panel);
+    effective_hint->setProperty("labelRole", "subtle");
+    effective_layout->addWidget(effective_hint);
+    layout->addWidget(effective_panel);
 
     layout->addStretch();
     scroll->setWidget(content);

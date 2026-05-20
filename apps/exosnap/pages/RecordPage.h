@@ -1,6 +1,7 @@
 #pragma once
 #include <QWidget>
 #include <memory>
+#include <vector>
 
 #include "../services/RecordingCoordinator.h"
 #include "../viewmodels/RecordViewModel.h"
@@ -12,37 +13,78 @@ class QPushButton;
 
 namespace exosnap {
 
+namespace ui::widgets {
+class CaptureTargetCard;
+class PreviewSurface;
+class SectionRuleHeader;
+class VUMeterWidget;
+} // namespace ui::widgets
+
 class RecordPage : public QWidget {
     Q_OBJECT
   public:
     explicit RecordPage(QWidget* parent = nullptr);
 
+  signals:
+    void chromeStateChanged(bool recording, const QString& status_label, const QString& context_text);
+
   private slots:
     void onStart();
     void onStop();
+    void onSelectMonitorTarget();
+    void onSelectWindowTarget();
+    void onSelectRegionTarget();
 
   private:
+    struct ReadinessRow {
+        QLabel* icon = nullptr;
+        QLabel* title = nullptr;
+        QLabel* detail = nullptr;
+    };
+
     void initCoordinator();
     void refresh();
     void updateStatsDisplay();
     void updateResultDisplay();
+    void updateTargetCards();
+    void updateReadinessRows();
+    void updateAudioPlaceholders();
+    void syncTargetSelectionToCombo(int target_index);
+
+    int monitor_target_index_ = -1;
+    int window_target_index_ = -1;
+    int region_target_index_ = -1;
 
     RecordViewModel view_model_;
     std::unique_ptr<RecordingCoordinator> coordinator_;
 
     QLabel* capability_label_ = nullptr;
     QComboBox* target_combo_ = nullptr;
-    QLabel* output_path_label_ = nullptr;
+    ui::widgets::PreviewSurface* preview_surface_ = nullptr;
+    QLabel* control_state_label_ = nullptr;
+    QLabel* timer_label_ = nullptr;
+    QLabel* size_value_label_ = nullptr;
+    QLabel* est_value_label_ = nullptr;
     QPushButton* start_btn_ = nullptr;
     QPushButton* stop_btn_ = nullptr;
-    QLabel* state_label_ = nullptr;
-    QFrame* stats_panel_ = nullptr;
-    QLabel* elapsed_label_ = nullptr;
-    QLabel* frames_label_ = nullptr;
-    QLabel* video_packets_label_ = nullptr;
-    QLabel* audio_packets_label_ = nullptr;
-    QLabel* dropped_label_ = nullptr;
-    QLabel* size_label_ = nullptr;
+    QLabel* quick_toggle_note_label_ = nullptr;
+    ui::widgets::SectionRuleHeader* capture_header_ = nullptr;
+    ui::widgets::CaptureTargetCard* monitor_card_ = nullptr;
+    ui::widgets::CaptureTargetCard* window_card_ = nullptr;
+    ui::widgets::CaptureTargetCard* region_card_ = nullptr;
+    ui::widgets::SectionRuleHeader* readiness_header_ = nullptr;
+    QFrame* readiness_panel_ = nullptr;
+    std::vector<ReadinessRow> readiness_rows_;
+    ui::widgets::SectionRuleHeader* audio_header_ = nullptr;
+    ui::widgets::VUMeterWidget* app_meter_ = nullptr;
+    ui::widgets::VUMeterWidget* mic_meter_ = nullptr;
+    ui::widgets::VUMeterWidget* sys_meter_ = nullptr;
+    QLabel* app_db_label_ = nullptr;
+    QLabel* mic_db_label_ = nullptr;
+    QLabel* sys_db_label_ = nullptr;
+    ui::widgets::SectionRuleHeader* destination_header_ = nullptr;
+    QLabel* output_path_label_ = nullptr;
+    QLabel* output_meta_label_ = nullptr;
     QFrame* result_panel_ = nullptr;
     QLabel* result_status_label_ = nullptr;
     QLabel* result_path_label_ = nullptr;

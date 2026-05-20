@@ -28,8 +28,14 @@ C:\Qt\6.9.0\msvc2022_64\bin\windeployqt6.exe `
 
 ```
 apps/exosnap/
-├── main.cpp                        Qt entry point, dark Fusion palette
+├── main.cpp                        Qt entry point, centralized theme application
 ├── MainWindow.h / .cpp             QMainWindow: sidebar nav + QStackedWidget
+├── ui/theme/
+│   ├── ExoSnapPalette.h            Central color tokens
+│   ├── ExoSnapMetrics.h            Central spacing/sizing tokens
+│   ├── ExoSnapTheme.h/.cpp         Theme bootstrap (Fusion, palette, QSS)
+│   ├── exosnap_dark.qss            Global warm dark console styling
+│   └── exosnap_theme.qrc           Theme resource registration
 ├── pages/
 │   ├── RecordPage.h / .cpp         Full UI: target picker, start/stop, stats, result
 │   ├── VideoPage.h / .cpp          Stub
@@ -49,7 +55,7 @@ apps/exosnap/
 
 ## Design notes
 
-- Dark theme: Fusion style + custom `QPalette` set in `main.cpp`
+- Dark theme: Fusion + centralized ExoSnap theme tokens + global QSS
 - `RecordingCoordinator` dispatches background thread callbacks to the main thread via
   `QMetaObject::invokeMethod(..., Qt::QueuedConnection)` — no WinRT required
 - Recording engine (`recorder_core`, `exosnap::capability`) is fully UI-agnostic
