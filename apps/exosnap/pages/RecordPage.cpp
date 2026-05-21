@@ -8,6 +8,10 @@
 #include "../ui/widgets/TogglePill.h"
 #include "../ui/widgets/VUMeterWidget.h"
 
+#include <capability/capability_builder.h>
+#include <capability/resolver.h>
+#include <capability/user_config.h>
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDebug>
@@ -21,6 +25,7 @@
 #include <QStyle>
 #include <QVBoxLayout>
 
+#include <exception>
 #include <iterator>
 
 namespace exosnap {
@@ -108,6 +113,18 @@ QString targetLabelFor(const recorder_core::CaptureTarget& target) {
     default:
         return "Target";
     }
+}
+
+capability::UserRecorderConfig primaryRecorderConfig() {
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Matroska;
+    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+    config.chroma = capability::ChromaSubsampling::Cs420;
+    config.bit_depth = capability::BitDepth::Bit8;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+    return config;
 }
 
 } // namespace
@@ -468,6 +485,19 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 void RecordPage::initCoordinator() {
     coordinator_ = std::make_unique<RecordingCoordinator>();
     view_model_.ApplyTargetKind(capability::CaptureTargetKind::Display);
+
+    try {
+        const auto caps = capability::CapabilityBuilder::BuildFromHardwareQuery();
+        capability::SettingsResolver resolver(caps);
+        const auto validation = resolver.ValidateConfig(primaryRecorderConfig());
+        coordinator_->OnCapabilitiesReady(caps, validation);
+    } catch (const std::exception& ex) {
+        coordinator_->OnCapabilityFailure(L"Capability check failed.");
+        qWarning() << "Capability check failed:" << ex.what();
+    } catch (...) {
+        coordinator_->OnCapabilityFailure(L"Capability check failed.");
+        qWarning() << "Capability check failed with unknown error.";
+    }
 
     coordinator_->SetStateChangedCallback([this](UiRecordingState state) {
         view_model_.SetState(state);
@@ -861,7 +891,8 @@ void RecordPage::updateReadinessRows() {
         return;
 
     const bool blocked = (view_model_.state == UiRecordingState::Blocked);
-    readiness_header_->setMeta(blocked ? "BLOCKERS PRESENT" : "ALL CLEAR");
+    const bool checking = (view_model_.state == UiRecordingState::LoadingCapabilities);
+    readiness_header_->setMeta(checking ? "CHECKING" : (blocked ? "BLOCKERS PRESENT" : "ALL CLEAR"));
 
     const QString target_detail =
         (view_model_.selected_target_index >= 0 &&
@@ -874,7 +905,7 @@ void RecordPage::updateReadinessRows() {
     const QString session_state = QString::fromStdWString(view_model_.state_text);
     const QString capability_text = QString::fromStdWString(view_model_.capability_status_text).trimmed();
 
-    const bool encoder_ok = !blocked;
+    const bool encoder_ok = !blocked && !checking;
     const bool target_ok = !target_detail.isEmpty() && target_detail != "No target selected";
     const bool output_ok = !output_detail.isEmpty() && output_detail != "--";
 
@@ -883,11 +914,12 @@ void RecordPage::updateReadinessRows() {
         bool hard_blocked;
         QString detail;
     } rows[] = {
-        {encoder_ok, blocked, blocked ? capability_text : QString("Available")},
+        {encoder_ok, blocked,
+         checking ? QString("Checking capabilities...") : (blocked ? capability_text : QString("Available"))},
         {target_ok, false, target_detail},
         {true, false, QString("WASAPI loopback path available (no live meter binding in this pass)")},
         {output_ok, false, output_detail},
-        {!blocked, blocked, session_state},
+        {!blocked && !checking, blocked, session_state},
     };
 
     for (int i = 0; i < 5; ++i) {

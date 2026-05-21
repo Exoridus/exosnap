@@ -42,12 +42,13 @@ RecordingCoordinator::~RecordingCoordinator() {
 
 void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::CapabilitySet& caps,
                                                const exosnap::capability::ResolveResult& validation) {
-    caps_ = &caps;
+    caps_ = caps;
+    has_caps_ = true;
     validation_result_ = validation;
     if (validation.succeeded) {
         resolved_user_config_ = validation.resolved_config;
         state_ = UiRecordingState::Ready;
-        capability_status_text_ = L"Ready: MKV · AV1 NVENC · AAC · 60 fps";
+        capability_status_text_ = L"Ready: MKV · AV1 NVENC · OPUS · 60 fps";
     } else {
         state_ = UiRecordingState::Blocked;
         capability_status_text_ =
@@ -56,6 +57,7 @@ void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::Capabi
 }
 
 void RecordingCoordinator::OnCapabilityFailure(std::wstring message) {
+    has_caps_ = false;
     state_ = UiRecordingState::Blocked;
     capability_status_text_ = std::move(message);
 }
@@ -72,7 +74,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         state_ != UiRecordingState::Failed) {
         return false;
     }
-    if (!caps_)
+    if (!has_caps_)
         return false;
 
     auto output_path = GenerateOutputPath();
@@ -91,7 +93,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
 
     PostStateChange(UiRecordingState::Preparing);
 
-    auto config = exosnap::capability::ToRecorderCoreConfig(resolved_user_config_, *caps_);
+    auto config = exosnap::capability::ToRecorderCoreConfig(resolved_user_config_, caps_);
     config.target = target;
     config.output_path = output_path;
 

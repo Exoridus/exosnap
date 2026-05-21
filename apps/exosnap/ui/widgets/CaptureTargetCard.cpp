@@ -33,11 +33,15 @@ CaptureTargetCard::CaptureTargetCard(QWidget* parent) : QFrame(parent) {
     title_label_ = new QLabel(this);
     title_label_->setProperty("labelRole", "captureCardTitle");
     title_label_->setText("Monitor");
+    title_label_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    title_label_->installEventFilter(this);
 
     status_label_ = new QLabel(this);
     status_label_->setProperty("labelRole", "captureCardStatus");
     status_label_->setText("○");
     status_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    status_label_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    status_label_->installEventFilter(this);
 
     top_row->addWidget(title_label_);
     top_row->addStretch(1);
@@ -47,6 +51,8 @@ CaptureTargetCard::CaptureTargetCard(QWidget* parent) : QFrame(parent) {
     subtitle_label_->setProperty("labelRole", "captureCardSubtitle");
     subtitle_label_->setText("DISPLAY1 · 2560×1440 · DDA");
     subtitle_label_->setWordWrap(true);
+    subtitle_label_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    subtitle_label_->installEventFilter(this);
 
     root->addLayout(top_row);
     root->addWidget(subtitle_label_);
@@ -90,10 +96,34 @@ bool CaptureTargetCard::isSelected() const noexcept {
     return selected_;
 }
 
+bool CaptureTargetCard::eventFilter(QObject* watched, QEvent* event) {
+    const bool is_child = watched == title_label_ || watched == status_label_ || watched == subtitle_label_;
+    if (is_child) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            const auto* mouse = static_cast<QMouseEvent*>(event);
+            click_armed_ = (mouse->button() == Qt::LeftButton);
+        } else if (event->type() == QEvent::MouseButtonRelease) {
+            const auto* mouse = static_cast<QMouseEvent*>(event);
+            if (click_armed_ && mouse->button() == Qt::LeftButton) {
+                emit clicked();
+            }
+            click_armed_ = false;
+        }
+    }
+    return QFrame::eventFilter(watched, event);
+}
+
 void CaptureTargetCard::mousePressEvent(QMouseEvent* event) {
-    if (event->button() == Qt::LeftButton)
-        emit clicked();
+    click_armed_ = (event->button() == Qt::LeftButton);
     QFrame::mousePressEvent(event);
+}
+
+void CaptureTargetCard::mouseReleaseEvent(QMouseEvent* event) {
+    if (click_armed_ && event->button() == Qt::LeftButton && rect().contains(event->pos())) {
+        emit clicked();
+    }
+    click_armed_ = false;
+    QFrame::mouseReleaseEvent(event);
 }
 
 } // namespace exosnap::ui::widgets

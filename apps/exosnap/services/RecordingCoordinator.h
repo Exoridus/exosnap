@@ -58,7 +58,8 @@ class RecordingCoordinator {
     static std::wstring FormatHResult(int32_t hr);
     static std::wstring FormatErrorPhase(recorder_core::ErrorPhase phase);
 
-    const exosnap::capability::CapabilitySet* caps_ = nullptr;
+    exosnap::capability::CapabilitySet caps_{};
+    bool has_caps_ = false;
     exosnap::capability::ResolveResult validation_result_;
     exosnap::capability::UserRecorderConfig resolved_user_config_;
 

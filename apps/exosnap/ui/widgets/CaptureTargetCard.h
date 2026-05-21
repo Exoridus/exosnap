@@ -3,6 +3,8 @@
 #include <QFrame>
 
 class QLabel;
+class QObject;
+class QEvent;
 
 namespace exosnap::ui::widgets {
 
@@ -27,13 +29,16 @@ class CaptureTargetCard : public QFrame {
     void clicked();
 
   protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
 
   private:
     QLabel* title_label_ = nullptr;
     QLabel* status_label_ = nullptr;
     QLabel* subtitle_label_ = nullptr;
     bool selected_ = false;
+    bool click_armed_ = false;
 };
 
 } // namespace exosnap::ui::widgets
