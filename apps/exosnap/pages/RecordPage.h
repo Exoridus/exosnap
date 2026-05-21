@@ -114,11 +114,13 @@ class RecordPage : public QWidget {
     QLabel* output_path_label_ = nullptr;
     QLabel* output_meta_label_ = nullptr;
     QFrame* result_panel_ = nullptr;
-    QLabel* result_status_label_ = nullptr;
+    QLabel* result_title_label_ = nullptr;
+    QLabel* result_message_label_ = nullptr;
+    QLabel* result_action_label_ = nullptr;
+    QLabel* result_stats_label_ = nullptr;
     QLabel* result_path_label_ = nullptr;
-    QLabel* result_phase_label_ = nullptr;
-    QLabel* result_hresult_label_ = nullptr;
-    QLabel* result_detail_label_ = nullptr;
+    QLabel* result_technical_label_ = nullptr;
+    QFrame* result_technical_separator_ = nullptr;
 };
 
 } // namespace exosnap

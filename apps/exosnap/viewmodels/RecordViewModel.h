@@ -63,6 +63,10 @@ class RecordViewModel {
     std::wstring result_error_phase;
     std::wstring result_hresult_text;
     std::wstring result_error_detail;
+    std::wstring result_user_title;
+    std::wstring result_user_message;
+    std::wstring result_action_hint;
+    std::wstring result_stats_text;
 
     // Live stats fields
     std::wstring elapsed_text = L"0:00";

@@ -67,6 +67,8 @@ qt_add_executable(exosnap WIN32
     pages/AdvancedPage.cpp
     services/RecordingCoordinator.h
     services/RecordingCoordinator.cpp
+    diagnostics/error_message.h
+    diagnostics/error_message.cpp
     viewmodels/RecordViewModel.h
     viewmodels/RecordViewModel.cpp
 )
@@ -104,4 +106,17 @@ exosnap_add_gtest(
     recorder_core
 )
 target_include_directories(record_viewmodel_audio_tests
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+  NAME error_message_tests
+  TEST_PREFIX diagnostics.
+  SOURCES
+    tests/test_error_message.cpp
+    diagnostics/error_message.cpp
+  LIBRARIES
+    exosnap_capability
+    recorder_core
+)
+target_include_directories(error_message_tests
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

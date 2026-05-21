@@ -1,5 +1,7 @@
 #include "RecordViewModel.h"
 
+#include "../diagnostics/error_message.h"
+
 #include <cstddef>
 #include <cstdio>
 
@@ -112,6 +114,17 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
     result_error_phase = result.error_phase;
     result_hresult_text = result.hresult_text;
     result_error_detail = result.error_detail;
+
+    const auto msg = exosnap::diagnostics::MapErrorToUserMessage(result);
+    result_user_title = msg.title;
+    result_user_message = msg.message;
+    result_action_hint = msg.action_hint;
+
+    if (result.succeeded) {
+        result_stats_text = elapsed_text + L"  ·  " + output_size_text;
+    } else {
+        result_stats_text = {};
+    }
 }
 
 void RecordViewModel::ResetStats() {
@@ -124,6 +137,10 @@ void RecordViewModel::ResetStats() {
     audio_rms_app = 0.0f;
     audio_rms_sys = 0.0f;
     audio_rms_mic = 0.0f;
+    result_user_title = {};
+    result_user_message = {};
+    result_action_hint = {};
+    result_stats_text = {};
 }
 
 void RecordViewModel::ApplyTargetKind(capability::CaptureTargetKind kind) {

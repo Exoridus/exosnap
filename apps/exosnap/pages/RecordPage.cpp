@@ -495,22 +495,31 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 
     result_panel_ = makePanel(content, "resultPanel");
     auto* result_layout = new QVBoxLayout(result_panel_);
-    result_layout->setContentsMargins(14, 10, 14, 10);
-    result_layout->setSpacing(4);
-    result_status_label_ = makeLabel("", "resultStatus", result_panel_);
-    result_path_label_ = makeLabel("", "resultDetail", result_panel_);
-    result_phase_label_ = makeLabel("", "resultDetail", result_panel_);
-    result_hresult_label_ = makeLabel("", "resultDetail", result_panel_);
-    result_detail_label_ = makeLabel("", "resultDetail", result_panel_);
+    result_layout->setContentsMargins(14, 12, 14, 12);
+    result_layout->setSpacing(6);
+    result_title_label_ = makeLabel("", "resultTitleOk", result_panel_);
+    result_message_label_ = makeLabel("", "resultUserMessage", result_panel_);
+    result_action_label_ = makeLabel("", "resultActionHint", result_panel_);
+    result_stats_label_ = makeLabel("", "resultStats", result_panel_);
+    result_path_label_ = makeLabel("", "resultPath", result_panel_);
+    result_technical_separator_ = new QFrame(result_panel_);
+    result_technical_separator_->setFrameShape(QFrame::NoFrame);
+    result_technical_separator_->setFixedHeight(1);
+    result_technical_separator_->setProperty("frameRole", "resultTechnicalSeparator");
+    result_technical_label_ = makeLabel("", "resultTechnical", result_panel_);
+    result_message_label_->setWordWrap(true);
+    result_action_label_->setWordWrap(true);
     result_path_label_->setWordWrap(true);
-    result_phase_label_->setWordWrap(true);
-    result_hresult_label_->setWordWrap(true);
-    result_detail_label_->setWordWrap(true);
-    result_layout->addWidget(result_status_label_);
+    result_technical_label_->setWordWrap(true);
+    result_layout->addWidget(result_title_label_);
+    result_layout->addWidget(result_message_label_);
+    result_layout->addWidget(result_action_label_);
+    result_layout->addWidget(result_stats_label_);
     result_layout->addWidget(result_path_label_);
-    result_layout->addWidget(result_phase_label_);
-    result_layout->addWidget(result_hresult_label_);
-    result_layout->addWidget(result_detail_label_);
+    result_layout->addWidget(result_technical_separator_);
+    result_layout->addWidget(result_technical_label_);
+    result_technical_separator_->setVisible(false);
+    result_technical_label_->setVisible(false);
     result_panel_->setVisible(false);
     layout->addWidget(result_panel_);
 
@@ -966,9 +975,7 @@ void RecordPage::refresh() {
     updateAudioMeterLevels();
     updateStatsDisplay();
 
-    result_panel_->setVisible(view_model_.HasResult());
-    if (view_model_.HasResult())
-        updateResultDisplay();
+    updateResultDisplay();
 
     if (view_model_.selected_target_index >= 0 &&
         view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {
@@ -996,33 +1003,61 @@ void RecordPage::updateStatsDisplay() {
 }
 
 void RecordPage::updateResultDisplay() {
-    setStyledStringProperty(result_status_label_, "labelRole",
-                            view_model_.last_succeeded ? "resultStatusOk" : "resultStatusErr");
-    result_status_label_->setText(QString::fromStdWString(view_model_.result_status_text));
-
-    const QString output_path = QString::fromStdWString(view_model_.result_output_path).trimmed();
-    const QString error_phase = QString::fromStdWString(view_model_.result_error_phase).trimmed();
-    const QString hresult = QString::fromStdWString(view_model_.result_hresult_text).trimmed();
-    const QString detail = QString::fromStdWString(view_model_.result_error_detail).trimmed();
-    QString display_detail = detail;
-
-    if (!view_model_.last_succeeded) {
-        const QString phase = QString::fromStdWString(view_model_.result_error_phase);
-        const QString raw_detail = QString::fromStdWString(view_model_.result_error_detail);
-        if (phase.contains("Audio") && raw_detail.contains("GetDevice")) {
-            display_detail = "Microphone not found. The selected input device may have been disconnected.\n"
-                             "Refresh the device list, replug the microphone, or select a different input.";
+    if (!result_panel_ || !view_model_.HasResult()) {
+        if (result_panel_) {
+            result_panel_->setVisible(false);
         }
+        return;
     }
 
-    result_path_label_->setText("Output: " + output_path);
-    result_path_label_->setVisible(!output_path.isEmpty());
-    result_phase_label_->setText("Phase: " + error_phase);
-    result_phase_label_->setVisible(!error_phase.isEmpty());
-    result_hresult_label_->setText("HRESULT: " + hresult);
-    result_hresult_label_->setVisible(!hresult.isEmpty());
-    result_detail_label_->setText("Detail: " + display_detail);
-    result_detail_label_->setVisible(!display_detail.isEmpty());
+    result_panel_->setVisible(true);
+
+    setStyledStringProperty(result_panel_, "resultKind", view_model_.last_succeeded ? "success" : "error");
+    setStyledStringProperty(result_title_label_, "labelRole",
+                            view_model_.last_succeeded ? "resultTitleOk" : "resultTitleErr");
+
+    result_title_label_->setText(QString::fromStdWString(view_model_.result_user_title));
+    result_title_label_->setVisible(!view_model_.result_user_title.empty());
+
+    result_message_label_->setText(QString::fromStdWString(view_model_.result_user_message));
+    result_message_label_->setVisible(!view_model_.last_succeeded && !view_model_.result_user_message.empty());
+
+    result_action_label_->setText(QString::fromStdWString(view_model_.result_action_hint));
+    result_action_label_->setVisible(!view_model_.last_succeeded && !view_model_.result_action_hint.empty());
+
+    result_stats_label_->setText(QString::fromStdWString(view_model_.result_stats_text));
+    result_stats_label_->setVisible(view_model_.last_succeeded && !view_model_.result_stats_text.empty());
+
+    const QString path = QString::fromStdWString(view_model_.result_output_path).trimmed();
+    result_path_label_->setText(path.isEmpty() ? QString{} : QStringLiteral("→ ") + path);
+    result_path_label_->setVisible(!path.isEmpty());
+
+    const QString phase = QString::fromStdWString(view_model_.result_error_phase).trimmed();
+    const QString hr = QString::fromStdWString(view_model_.result_hresult_text).trimmed();
+    const QString detail = QString::fromStdWString(view_model_.result_error_detail).trimmed();
+
+    QString technical;
+    if (!phase.isEmpty()) {
+        technical += QStringLiteral("Phase: ") + phase;
+    }
+    if (!hr.isEmpty()) {
+        technical += (technical.isEmpty() ? QString{} : QStringLiteral("  ·  "));
+        technical += QStringLiteral("HRESULT: ") + hr;
+    }
+    if (!detail.isEmpty()) {
+        const QString short_detail = detail.length() > 120 ? detail.left(120) + QStringLiteral("…") : detail;
+        technical += technical.isEmpty() ? QString{} : QStringLiteral("\n");
+        technical += short_detail;
+    }
+
+    result_technical_label_->setText(technical);
+    result_technical_label_->setVisible(!technical.isEmpty());
+    if (result_technical_separator_) {
+        result_technical_separator_->setVisible(!technical.isEmpty());
+    }
+
+    result_panel_->style()->unpolish(result_panel_);
+    result_panel_->style()->polish(result_panel_);
 }
 
 void RecordPage::updateTargetCards() {
