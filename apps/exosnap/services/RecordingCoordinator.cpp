@@ -21,6 +21,17 @@ static std::wstring ToWide(const std::string& s) {
     return w;
 }
 
+static bool PlanRequiresTargetPid(const recorder_core::AudioTrackPlan& plan) {
+    for (const auto& track : plan.tracks) {
+        for (const auto source : track.sources) {
+            if (source == recorder_core::AudioSourceKind::App || source == recorder_core::AudioSourceKind::Sys) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 RecordingCoordinator::RecordingCoordinator() = default;
 
 RecordingCoordinator::~RecordingCoordinator() {
@@ -53,7 +64,8 @@ std::vector<recorder_core::CaptureTarget> RecordingCoordinator::EnumerateTargets
     return recorder_core::RecorderSession::EnumerateTargets();
 }
 
-bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& target) {
+bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& target,
+                                          const capability::AudioUiState& audio_ui_state) {
     if (is_recording_)
         return false;
     if (state_ != UiRecordingState::Ready && state_ != UiRecordingState::Completed &&
@@ -82,6 +94,33 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     auto config = exosnap::capability::ToRecorderCoreConfig(resolved_user_config_, *caps_);
     config.target = target;
     config.output_path = output_path;
+
+    capability::AudioUiState audio_state = audio_ui_state;
+    if (target.kind == recorder_core::CaptureTarget::Kind::Window && target.native_id != 0) {
+        HWND hwnd = reinterpret_cast<HWND>(target.native_id);
+        DWORD pid = 0;
+        if (::GetWindowThreadProcessId(hwnd, &pid) != 0 && pid != 0) {
+            audio_state.selected_window_pid = static_cast<uint32_t>(pid);
+        }
+    }
+
+    const capability::AudioPlanResult plan = capability::BuildAudioPlan(audio_state);
+
+    config.record_audio = plan.record_audio;
+    config.audio_track_plan = plan.plan;
+    config.audio_target_process_id = plan.audio_target_process_id;
+    config.mic_channel_mode = plan.mic_channel_mode;
+
+    if (plan.record_audio && PlanRequiresTargetPid(plan.plan) && !plan.audio_target_process_id.has_value()) {
+        PostStateChange(UiRecordingState::Failed);
+        UiRecordingResult result;
+        result.succeeded = false;
+        result.output_path = output_path.wstring();
+        result.error_phase = FormatErrorPhase(recorder_core::ErrorPhase::Prepare);
+        result.error_detail = L"Window target PID unavailable; the selected window may have been closed.";
+        PostResult(std::move(result));
+        return false;
+    }
 
     recorder_core::RecorderResult validate_result;
     if (!session_.Validate(config, &validate_result)) {

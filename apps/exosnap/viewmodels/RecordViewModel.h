@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include <capability/audio_track_preview.h>
+#include <capability/audio_ui_state.h>
 #include <recorder_core/recorder_session.h>
 
 namespace exosnap {
@@ -47,6 +49,9 @@ class RecordViewModel {
     std::vector<recorder_core::CaptureTarget> targets;
     std::vector<std::wstring> target_display_names;
     int selected_target_index = -1;
+    capability::AudioUiState audio_ui_state;
+    capability::AudioPlanResult audio_plan;
+    std::vector<capability::AudioTrackPreview> audio_track_preview;
 
     std::wstring output_path_display = L"--";
     std::wstring state_text;
@@ -79,6 +84,8 @@ class RecordViewModel {
     void UpdateStats(const recorder_core::SessionStats& stats);
     void SetResult(const UiRecordingResult& result);
     void ResetStats();
+    void ApplyTargetKind(capability::CaptureTargetKind kind);
+    void RebuildAudioPlan();
 
     // Formatting helpers
     static std::wstring FormatElapsed(double elapsed_seconds);

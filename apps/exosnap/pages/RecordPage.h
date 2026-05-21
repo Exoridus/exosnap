@@ -7,9 +7,11 @@
 #include "../viewmodels/RecordViewModel.h"
 
 class QComboBox;
+class QCheckBox;
 class QFrame;
 class QLabel;
 class QPushButton;
+class QVBoxLayout;
 
 namespace exosnap {
 
@@ -49,7 +51,15 @@ class RecordPage : public QWidget {
     void updateTargetCards();
     void updateReadinessRows();
     void updateAudioPlaceholders();
+    void updateAudioControls();
+    void updateAudioControlsVisibility();
+    void updateAudioTrackPreview();
     void syncTargetSelectionToCombo(int target_index);
+    void onAppAudioToggled(bool checked);
+    void onSysAudioToggled(bool checked);
+    void onSeparateTracksToggled(bool checked);
+    void onMicToggled(bool checked);
+    void onMicChannelChanged(int index);
 
     int monitor_target_index_ = -1;
     int window_target_index_ = -1;
@@ -75,6 +85,17 @@ class RecordPage : public QWidget {
     ui::widgets::SectionRuleHeader* readiness_header_ = nullptr;
     QFrame* readiness_panel_ = nullptr;
     std::vector<ReadinessRow> readiness_rows_;
+    ui::widgets::SectionRuleHeader* audio_settings_header_ = nullptr;
+    QCheckBox* app_audio_check_ = nullptr;
+    QCheckBox* sys_audio_check_ = nullptr;
+    QCheckBox* separate_tracks_check_ = nullptr;
+    QCheckBox* mic_check_ = nullptr;
+    QWidget* mic_device_row_ = nullptr;
+    QComboBox* mic_device_combo_ = nullptr;
+    QWidget* mic_channel_row_ = nullptr;
+    QComboBox* mic_channel_combo_ = nullptr;
+    QFrame* track_preview_panel_ = nullptr;
+    QVBoxLayout* track_preview_layout_ = nullptr;
     ui::widgets::SectionRuleHeader* audio_header_ = nullptr;
     ui::widgets::VUMeterWidget* app_meter_ = nullptr;
     ui::widgets::VUMeterWidget* mic_meter_ = nullptr;

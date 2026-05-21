@@ -8,15 +8,20 @@
 #include "../ui/widgets/TogglePill.h"
 #include "../ui/widgets/VUMeterWidget.h"
 
+#include <QCheckBox>
 #include <QComboBox>
+#include <QDebug>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QStyle>
 #include <QVBoxLayout>
+
+#include <iterator>
 
 namespace exosnap {
 namespace {
@@ -278,6 +283,63 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     }
     layout->addWidget(readiness_panel_);
 
+    audio_settings_header_ = new ui::widgets::SectionRuleHeader("AUDIO SETTINGS", content);
+    audio_settings_header_->setMeta("OUTPUT · INPUT · TRACK PREVIEW");
+    layout->addWidget(audio_settings_header_);
+
+    auto* audio_settings_panel = makePanel(content);
+    auto* audio_settings_layout = new QVBoxLayout(audio_settings_panel);
+    audio_settings_layout->setContentsMargins(14, 12, 14, 12);
+    audio_settings_layout->setSpacing(10);
+
+    audio_settings_layout->addWidget(makeLabel("Audio Output", "audioSettingsGroupTitle", audio_settings_panel));
+    app_audio_check_ = new QCheckBox("Record Application Audio", audio_settings_panel);
+    sys_audio_check_ = new QCheckBox("Record System Audio", audio_settings_panel);
+    separate_tracks_check_ = new QCheckBox("Use separate output tracks", audio_settings_panel);
+    audio_settings_layout->addWidget(app_audio_check_);
+    audio_settings_layout->addWidget(sys_audio_check_);
+    audio_settings_layout->addWidget(separate_tracks_check_);
+
+    audio_settings_layout->addSpacing(6);
+    audio_settings_layout->addWidget(makeLabel("Audio Input", "audioSettingsGroupTitle", audio_settings_panel));
+    mic_check_ = new QCheckBox("Record Microphone", audio_settings_panel);
+    audio_settings_layout->addWidget(mic_check_);
+
+    mic_device_row_ = new QWidget(audio_settings_panel);
+    auto* mic_device_row_layout = new QHBoxLayout(mic_device_row_);
+    mic_device_row_layout->setContentsMargins(0, 0, 0, 0);
+    mic_device_row_layout->setSpacing(10);
+    mic_device_row_layout->addWidget(makeLabel("Input Device:", "audioSettingsRowLabel", mic_device_row_));
+    mic_device_combo_ = new QComboBox(mic_device_row_);
+    mic_device_combo_->addItem("Default Microphone");
+    mic_device_row_layout->addWidget(mic_device_combo_, 1);
+    audio_settings_layout->addWidget(mic_device_row_);
+
+    mic_channel_row_ = new QWidget(audio_settings_panel);
+    auto* mic_channel_row_layout = new QHBoxLayout(mic_channel_row_);
+    mic_channel_row_layout->setContentsMargins(0, 0, 0, 0);
+    mic_channel_row_layout->setSpacing(10);
+    mic_channel_row_layout->addWidget(makeLabel("Channel:", "audioSettingsRowLabel", mic_channel_row_));
+    mic_channel_combo_ = new QComboBox(mic_channel_row_);
+    mic_channel_combo_->addItem("Auto");
+    mic_channel_combo_->addItem("Preserve Stereo");
+    mic_channel_combo_->addItem("Mono Mix");
+    mic_channel_combo_->addItem("Left to Stereo");
+    mic_channel_combo_->addItem("Right to Stereo");
+    mic_channel_row_layout->addWidget(mic_channel_combo_, 1);
+    audio_settings_layout->addWidget(mic_channel_row_);
+
+    audio_settings_layout->addSpacing(6);
+    audio_settings_layout->addWidget(
+        makeLabel("Tracks to be recorded", "audioSettingsGroupTitle", audio_settings_panel));
+    track_preview_panel_ = makePanel(audio_settings_panel, "audioTrackPreviewPanel");
+    track_preview_layout_ = new QVBoxLayout(track_preview_panel_);
+    track_preview_layout_->setContentsMargins(0, 0, 0, 0);
+    track_preview_layout_->setSpacing(0);
+    audio_settings_layout->addWidget(track_preview_panel_);
+
+    layout->addWidget(audio_settings_panel);
+
     audio_header_ = new ui::widgets::SectionRuleHeader("AUDIO ACTIVITY", content);
     audio_header_->setMeta("PLACEHOLDER · NOT LIVE ENGINE METERS");
     layout->addWidget(audio_header_);
@@ -393,12 +455,19 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(monitor_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectMonitorTarget);
     connect(window_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectWindowTarget);
     connect(region_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectRegionTarget);
+    connect(app_audio_check_, &QCheckBox::toggled, this, &RecordPage::onAppAudioToggled);
+    connect(sys_audio_check_, &QCheckBox::toggled, this, &RecordPage::onSysAudioToggled);
+    connect(separate_tracks_check_, &QCheckBox::toggled, this, &RecordPage::onSeparateTracksToggled);
+    connect(mic_check_, &QCheckBox::toggled, this, &RecordPage::onMicToggled);
+    connect(mic_channel_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &RecordPage::onMicChannelChanged);
 
     initCoordinator();
 }
 
 void RecordPage::initCoordinator() {
     coordinator_ = std::make_unique<RecordingCoordinator>();
+    view_model_.ApplyTargetKind(capability::CaptureTargetKind::Display);
 
     coordinator_->SetStateChangedCallback([this](UiRecordingState state) {
         view_model_.SetState(state);
@@ -447,6 +516,16 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
         return;
     view_model_.selected_target_index = target_index;
     target_combo_->setCurrentIndex(target_index);
+
+    const auto& target = view_model_.targets[static_cast<std::size_t>(target_index)];
+    if (target.kind == recorder_core::CaptureTarget::Kind::Window) {
+        view_model_.ApplyTargetKind(capability::CaptureTargetKind::Window);
+    } else if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+        view_model_.ApplyTargetKind(capability::CaptureTargetKind::Display);
+    } else {
+        qWarning() << "Unsupported capture target kind for audio mapping";
+    }
+
     updateTargetCards();
 }
 
@@ -457,7 +536,7 @@ void RecordPage::onStart() {
         return;
 
     view_model_.ResetStats();
-    coordinator_->StartRecording(view_model_.targets[static_cast<std::size_t>(idx)]);
+    coordinator_->StartRecording(view_model_.targets[static_cast<std::size_t>(idx)], view_model_.audio_ui_state);
 }
 
 void RecordPage::onStop() {
@@ -478,6 +557,167 @@ void RecordPage::onSelectRegionTarget() {
     if (region_target_index_ >= 0) {
         syncTargetSelectionToCombo(region_target_index_);
         refresh();
+    }
+}
+
+void RecordPage::onAppAudioToggled(bool checked) {
+    view_model_.audio_ui_state.record_application_audio = checked;
+
+    if (!view_model_.audio_ui_state.record_application_audio || !view_model_.audio_ui_state.record_system_audio) {
+        view_model_.audio_ui_state.separate_output_tracks = false;
+    }
+
+    view_model_.RebuildAudioPlan();
+    updateAudioControls();
+    updateAudioTrackPreview();
+}
+
+void RecordPage::onSysAudioToggled(bool checked) {
+    view_model_.audio_ui_state.record_system_audio = checked;
+
+    if (!view_model_.audio_ui_state.record_application_audio || !view_model_.audio_ui_state.record_system_audio) {
+        view_model_.audio_ui_state.separate_output_tracks = false;
+    }
+
+    view_model_.RebuildAudioPlan();
+    updateAudioControls();
+    updateAudioTrackPreview();
+}
+
+void RecordPage::onSeparateTracksToggled(bool checked) {
+    view_model_.audio_ui_state.separate_output_tracks = checked;
+    view_model_.RebuildAudioPlan();
+    updateAudioControls();
+    updateAudioTrackPreview();
+}
+
+void RecordPage::onMicToggled(bool checked) {
+    view_model_.audio_ui_state.record_microphone = checked;
+    view_model_.RebuildAudioPlan();
+    updateAudioControls();
+    updateAudioTrackPreview();
+}
+
+void RecordPage::onMicChannelChanged(int index) {
+    static constexpr recorder_core::MicChannelMode kModes[] = {
+        recorder_core::MicChannelMode::Auto,          recorder_core::MicChannelMode::PreserveStereo,
+        recorder_core::MicChannelMode::MonoMix,       recorder_core::MicChannelMode::LeftToStereo,
+        recorder_core::MicChannelMode::RightToStereo,
+    };
+
+    if (index >= 0 && index < static_cast<int>(std::size(kModes))) {
+        view_model_.audio_ui_state.mic_channel_mode = kModes[static_cast<std::size_t>(index)];
+    }
+
+    view_model_.RebuildAudioPlan();
+    updateAudioTrackPreview();
+}
+
+void RecordPage::updateAudioControls() {
+    if (!app_audio_check_ || !sys_audio_check_ || !separate_tracks_check_ || !mic_check_ || !mic_channel_combo_) {
+        return;
+    }
+
+    QSignalBlocker b1(app_audio_check_);
+    QSignalBlocker b2(sys_audio_check_);
+    QSignalBlocker b3(separate_tracks_check_);
+    QSignalBlocker b4(mic_check_);
+    QSignalBlocker b5(mic_channel_combo_);
+
+    app_audio_check_->setChecked(view_model_.audio_ui_state.record_application_audio);
+    sys_audio_check_->setChecked(view_model_.audio_ui_state.record_system_audio);
+    separate_tracks_check_->setChecked(view_model_.audio_ui_state.separate_output_tracks);
+    mic_check_->setChecked(view_model_.audio_ui_state.record_microphone);
+
+    const auto mode = view_model_.audio_ui_state.mic_channel_mode;
+    int channel_index = 0;
+    switch (mode) {
+    case recorder_core::MicChannelMode::Auto:
+        channel_index = 0;
+        break;
+    case recorder_core::MicChannelMode::PreserveStereo:
+        channel_index = 1;
+        break;
+    case recorder_core::MicChannelMode::MonoMix:
+        channel_index = 2;
+        break;
+    case recorder_core::MicChannelMode::LeftToStereo:
+        channel_index = 3;
+        break;
+    case recorder_core::MicChannelMode::RightToStereo:
+        channel_index = 4;
+        break;
+    }
+    mic_channel_combo_->setCurrentIndex(channel_index);
+
+    updateAudioControlsVisibility();
+}
+
+void RecordPage::updateAudioControlsVisibility() {
+    const bool is_window = view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window;
+
+    const bool app = view_model_.audio_ui_state.record_application_audio;
+    const bool sys = view_model_.audio_ui_state.record_system_audio;
+    const bool mic = view_model_.audio_ui_state.record_microphone;
+
+    const bool busy = view_model_.state == UiRecordingState::Preparing ||
+                      view_model_.state == UiRecordingState::Recording ||
+                      view_model_.state == UiRecordingState::Stopping;
+
+    app_audio_check_->setVisible(is_window);
+    separate_tracks_check_->setVisible(is_window && app && sys);
+
+    app_audio_check_->setEnabled(!busy);
+    sys_audio_check_->setEnabled(!busy);
+    separate_tracks_check_->setEnabled(!busy);
+    mic_check_->setEnabled(!busy);
+
+    mic_device_row_->setVisible(mic);
+    mic_channel_row_->setVisible(mic);
+
+    mic_device_combo_->setEnabled(!busy);
+    mic_channel_combo_->setEnabled(!busy);
+}
+
+void RecordPage::updateAudioTrackPreview() {
+    if (!track_preview_layout_) {
+        return;
+    }
+
+    QLayoutItem* item = nullptr;
+    while ((item = track_preview_layout_->takeAt(0)) != nullptr) {
+        if (QWidget* widget = item->widget()) {
+            widget->deleteLater();
+        }
+        delete item;
+    }
+
+    if (view_model_.audio_track_preview.empty()) {
+        auto* label = makeLabel("No audio tracks will be recorded.", "audioTrackPreviewEmpty", track_preview_panel_);
+        label->setContentsMargins(14, 10, 14, 10);
+        track_preview_layout_->addWidget(label);
+        return;
+    }
+
+    bool first = true;
+    for (const auto& preview_item : view_model_.audio_track_preview) {
+        auto* row = new QWidget(track_preview_panel_);
+        row->setObjectName("audioTrackPreviewRow");
+        row->setProperty("firstRow", first);
+        first = false;
+
+        auto* rl = new QHBoxLayout(row);
+        rl->setContentsMargins(14, 8, 14, 8);
+        rl->setSpacing(10);
+
+        auto* idx = makeLabel(QString::number(preview_item.track_number), "audioTrackIndex", row);
+        idx->setFixedWidth(24);
+        rl->addWidget(idx);
+
+        rl->addWidget(makeLabel(QString::fromStdString(preview_item.display_label), "audioTrackName", row));
+        rl->addStretch(1);
+
+        track_preview_layout_->addWidget(row);
     }
 }
 
@@ -528,6 +768,8 @@ void RecordPage::refresh() {
 
     updateTargetCards();
     updateReadinessRows();
+    updateAudioControls();
+    updateAudioTrackPreview();
     updateAudioPlaceholders();
     updateStatsDisplay();
 

@@ -9,6 +9,7 @@
 
 #include <windows.h>
 
+#include <capability/audio_ui_state.h>
 #include <capability/capability_set.h>
 #include <capability/resolver.h>
 #include <capability/translation.h>
@@ -36,7 +37,7 @@ class RecordingCoordinator {
     void OnCapabilityFailure(std::wstring message);
 
     std::vector<recorder_core::CaptureTarget> EnumerateTargets();
-    bool StartRecording(const recorder_core::CaptureTarget& target);
+    bool StartRecording(const recorder_core::CaptureTarget& target, const capability::AudioUiState& audio_ui_state);
     void StopRecording();
 
     UiRecordingState State() const noexcept;

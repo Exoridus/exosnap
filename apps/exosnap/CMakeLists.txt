@@ -92,3 +92,16 @@ target_link_libraries(exosnap PRIVATE
 )
 
 target_include_directories(exosnap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+  NAME record_viewmodel_audio_tests
+  TEST_PREFIX viewmodel.
+  SOURCES
+    tests/test_record_view_model_audio.cpp
+    viewmodels/RecordViewModel.cpp
+  LIBRARIES
+    exosnap_capability
+    recorder_core
+)
+target_include_directories(record_viewmodel_audio_tests
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -97,6 +97,33 @@ void RecordViewModel::ResetStats() {
     output_size_text = L"0 KB";
 }
 
+void RecordViewModel::ApplyTargetKind(capability::CaptureTargetKind kind) {
+    audio_ui_state.target_kind = kind;
+    audio_ui_state.selected_window_pid.reset();
+    // Privacy-first MVP default: microphone recording starts disabled.
+
+    if (kind == capability::CaptureTargetKind::Window) {
+        audio_ui_state.record_application_audio = true;
+        audio_ui_state.record_system_audio = true;
+        audio_ui_state.separate_output_tracks = true;
+        audio_ui_state.record_microphone = false;
+        audio_ui_state.mic_channel_mode = recorder_core::MicChannelMode::Auto;
+    } else {
+        audio_ui_state.record_application_audio = false;
+        audio_ui_state.record_system_audio = true;
+        audio_ui_state.separate_output_tracks = false;
+        audio_ui_state.record_microphone = false;
+        audio_ui_state.mic_channel_mode = recorder_core::MicChannelMode::Auto;
+    }
+
+    RebuildAudioPlan();
+}
+
+void RecordViewModel::RebuildAudioPlan() {
+    audio_plan = capability::BuildAudioPlan(audio_ui_state);
+    audio_track_preview = capability::BuildAudioTrackPreview(audio_plan);
+}
+
 // ---------------------------------------------------------------------------
 // Formatting helpers
 // ---------------------------------------------------------------------------
