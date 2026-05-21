@@ -25,6 +25,8 @@
 #include <QSignalBlocker>
 #include <QStyle>
 #include <QVBoxLayout>
+#include <algorithm>
+#include <cmath>
 
 #include <exception>
 #include <iterator>
@@ -410,7 +412,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     layout->addWidget(audio_settings_panel);
 
     audio_header_ = new ui::widgets::SectionRuleHeader("AUDIO ACTIVITY", content);
-    audio_header_->setMeta("PLACEHOLDER · NOT LIVE ENGINE METERS");
+    audio_header_->setMeta("LIVE · RMS");
     layout->addWidget(audio_header_);
 
     auto* audio_panel = makePanel(content);
@@ -450,7 +452,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     };
 
     addAudioRow("APP", "Selected application audio", &app_meter_, &app_db_label_);
-    addAudioRow("MIC", "Microphone (placeholder source)", &mic_meter_, &mic_db_label_);
+    addAudioRow("MIC", "Microphone input", &mic_meter_, &mic_db_label_);
     addAudioRow("SYS", "Other system audio", &sys_meter_, &sys_db_label_);
     layout->addWidget(audio_panel);
 
@@ -961,7 +963,7 @@ void RecordPage::refresh() {
     updateReadinessRows();
     updateAudioControls();
     updateAudioTrackPreview();
-    updateAudioPlaceholders();
+    updateAudioMeterLevels();
     updateStatsDisplay();
 
     result_panel_->setVisible(view_model_.HasResult());
@@ -990,6 +992,7 @@ void RecordPage::updateStatsDisplay() {
                                             .arg(view_model_.frames_captured)
                                             .arg(view_model_.video_packets)
                                             .arg(view_model_.dropped_frames));
+    updateAudioMeterLevels();
 }
 
 void RecordPage::updateResultDisplay() {
@@ -1091,7 +1094,7 @@ void RecordPage::updateReadinessRows() {
         {encoder_ok, blocked,
          checking ? QString("Checking capabilities...") : (blocked ? capability_text : QString("Available"))},
         {target_ok, false, target_detail},
-        {true, false, QString("WASAPI loopback path available (no live meter binding in this pass)")},
+        {true, false, QString("WASAPI loopback path available")},
         {output_ok, false, output_detail},
         {!blocked && !checking, blocked, session_state},
     };
@@ -1105,28 +1108,32 @@ void RecordPage::updateReadinessRows() {
     }
 }
 
-void RecordPage::updateAudioPlaceholders() {
-    const bool recording =
-        (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Stopping);
+void RecordPage::updateAudioMeterLevels() {
+    const bool live =
+        view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Stopping;
 
-    app_meter_->setActive(true);
-    mic_meter_->setActive(true);
-    sys_meter_->setActive(true);
-    if (recording) {
-        app_meter_->setLevel(0.58F);
-        mic_meter_->setLevel(0.26F);
-        sys_meter_->setLevel(0.34F);
-        app_db_label_->setText("-19 dB · placeholder");
-        mic_db_label_->setText("-31 dB · placeholder");
-        sys_db_label_->setText("-28 dB · placeholder");
-    } else {
-        app_meter_->setLevel(0.36F);
-        mic_meter_->setLevel(0.18F);
-        sys_meter_->setLevel(0.22F);
-        app_db_label_->setText("-24 dB · placeholder");
-        mic_db_label_->setText("-35 dB · placeholder");
-        sys_db_label_->setText("-32 dB · placeholder");
-    }
+    auto applyMeter = [live](ui::widgets::VUMeterWidget* meter, QLabel* db_label, float rms, bool active) {
+        if (!meter || !db_label) {
+            return;
+        }
+
+        const bool show_live = live && active;
+        meter->setActive(show_live);
+
+        if (show_live) {
+            const float db = rms > 0.0f ? (std::max)(-60.0f, 20.0f * std::log10(rms)) : -60.0f;
+            const float meter01 = std::clamp((db + 60.0f) / 60.0f, 0.0f, 1.0f);
+            meter->setLevel(meter01);
+            db_label->setText(QString::number(static_cast<int>(std::round(db))) + QStringLiteral(" dB"));
+        } else {
+            meter->setLevel(0.0f);
+            db_label->setText(active ? QStringLiteral("-- dB") : QStringLiteral("—"));
+        }
+    };
+
+    applyMeter(app_meter_, app_db_label_, view_model_.audio_rms_app, view_model_.audio_active_app);
+    applyMeter(sys_meter_, sys_db_label_, view_model_.audio_rms_sys, view_model_.audio_active_sys);
+    applyMeter(mic_meter_, mic_db_label_, view_model_.audio_rms_mic, view_model_.audio_active_mic);
 }
 
 } // namespace exosnap

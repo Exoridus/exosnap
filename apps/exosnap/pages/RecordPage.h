@@ -51,7 +51,7 @@ class RecordPage : public QWidget {
     void updateResultDisplay();
     void updateTargetCards();
     void updateReadinessRows();
-    void updateAudioPlaceholders();
+    void updateAudioMeterLevels();
     void updateAudioControls();
     void updateAudioControlsVisibility();
     void updateAudioTrackPreview();

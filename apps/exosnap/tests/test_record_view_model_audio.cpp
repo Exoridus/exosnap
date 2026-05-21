@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include "viewmodels/RecordViewModel.h"
 
 namespace exosnap {
@@ -90,6 +92,109 @@ TEST(RecordViewModelAudioTest, RecordViewModel_RebuildAudioPlan_PropagatesMicDev
 
     ASSERT_TRUE(vm.audio_plan.mic_device_id.has_value());
     EXPECT_EQ(vm.audio_plan.mic_device_id.value(), "device-123");
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_RebuildAudioPlan_SetsActiveFlagsForWindowTracks) {
+    RecordViewModel vm;
+
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+
+    EXPECT_TRUE(vm.audio_active_app);
+    EXPECT_TRUE(vm.audio_active_sys);
+    EXPECT_FALSE(vm.audio_active_mic);
+
+    vm.audio_ui_state.record_microphone = true;
+    vm.RebuildAudioPlan();
+
+    EXPECT_TRUE(vm.audio_active_mic);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_RebuildAudioPlan_SystemOutputActivatesSysMeter) {
+    RecordViewModel vm;
+
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+    vm.audio_ui_state.record_application_audio = true;
+    vm.audio_ui_state.record_system_audio = true;
+    vm.audio_ui_state.separate_output_tracks = false;
+    vm.RebuildAudioPlan();
+
+    EXPECT_TRUE(vm.audio_active_sys);
+    EXPECT_FALSE(vm.audio_active_app);
+    EXPECT_FALSE(vm.audio_active_mic);
+
+    const bool has_system_output =
+        std::any_of(vm.audio_track_preview.begin(), vm.audio_track_preview.end(),
+                    [](const capability::AudioTrackPreview& preview) { return preview.source_key == "system_output"; });
+    EXPECT_TRUE(has_system_output);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MapsPerTrackRmsToSources) {
+    RecordViewModel vm;
+
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+
+    recorder_core::SessionStats stats;
+    stats.per_track_rms[0] = 0.25f;
+    stats.per_track_rms[1] = 0.50f;
+
+    vm.UpdateStats(stats);
+
+    EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.25f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_sys, 0.50f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_mic, 0.0f);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MapsMicRms) {
+    RecordViewModel vm;
+
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+    vm.audio_ui_state.record_microphone = true;
+    vm.RebuildAudioPlan();
+
+    recorder_core::SessionStats stats;
+    stats.per_track_rms[2] = 0.75f;
+
+    vm.UpdateStats(stats);
+
+    EXPECT_FLOAT_EQ(vm.audio_rms_mic, 0.75f);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_SystemOutputMapsToSys) {
+    RecordViewModel vm;
+
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+    vm.audio_ui_state.record_application_audio = true;
+    vm.audio_ui_state.record_system_audio = true;
+    vm.audio_ui_state.separate_output_tracks = false;
+    vm.RebuildAudioPlan();
+
+    recorder_core::SessionStats stats;
+    stats.per_track_rms[0] = 0.4f;
+
+    vm.UpdateStats(stats);
+
+    EXPECT_FLOAT_EQ(vm.audio_rms_sys, 0.4f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.0f);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_IgnoresInvalidTrackNumbers) {
+    RecordViewModel vm;
+
+    vm.audio_track_preview = {
+        capability::AudioTrackPreview{0, "app", "invalid"},
+        capability::AudioTrackPreview{99, "sys", "invalid"},
+    };
+
+    recorder_core::SessionStats stats;
+    stats.per_track_rms[0] = 0.9f;
+    stats.per_track_rms[1] = 0.8f;
+    stats.per_track_rms[2] = 0.7f;
+
+    vm.UpdateStats(stats);
+
+    EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.0f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_sys, 0.0f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_mic, 0.0f);
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_TrackPreviewDisplayTarget_SystemOutput) {

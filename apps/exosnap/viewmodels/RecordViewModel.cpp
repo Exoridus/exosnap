@@ -1,5 +1,6 @@
 #include "RecordViewModel.h"
 
+#include <cstddef>
 #include <cstdio>
 
 namespace exosnap {
@@ -77,6 +78,31 @@ void RecordViewModel::UpdateStats(const recorder_core::SessionStats& stats) {
     audio_packets = stats.audio_packets;
     dropped_frames = stats.dropped_or_skipped_video_frames;
     output_size_text = FormatBytes(stats.output_file_bytes);
+
+    audio_rms_app = 0.0f;
+    audio_rms_sys = 0.0f;
+    audio_rms_mic = 0.0f;
+
+    for (const auto& preview : audio_track_preview) {
+        if (preview.track_number == 0) {
+            continue;
+        }
+
+        const std::size_t track_index = static_cast<std::size_t>(preview.track_number - 1);
+        if (track_index >= stats.per_track_rms.size()) {
+            continue;
+        }
+
+        const float rms = stats.per_track_rms[track_index];
+
+        if (preview.source_key == "app") {
+            audio_rms_app = rms;
+        } else if (preview.source_key == "sys" || preview.source_key == "system_output") {
+            audio_rms_sys = rms;
+        } else if (preview.source_key == "mic") {
+            audio_rms_mic = rms;
+        }
+    }
 }
 
 void RecordViewModel::SetResult(const UiRecordingResult& result) {
@@ -95,6 +121,9 @@ void RecordViewModel::ResetStats() {
     audio_packets = 0;
     dropped_frames = 0;
     output_size_text = L"0 KB";
+    audio_rms_app = 0.0f;
+    audio_rms_sys = 0.0f;
+    audio_rms_mic = 0.0f;
 }
 
 void RecordViewModel::ApplyTargetKind(capability::CaptureTargetKind kind) {
@@ -122,6 +151,20 @@ void RecordViewModel::ApplyTargetKind(capability::CaptureTargetKind kind) {
 void RecordViewModel::RebuildAudioPlan() {
     audio_plan = capability::BuildAudioPlan(audio_ui_state);
     audio_track_preview = capability::BuildAudioTrackPreview(audio_plan);
+
+    audio_active_app = false;
+    audio_active_sys = false;
+    audio_active_mic = false;
+
+    for (const auto& preview : audio_track_preview) {
+        if (preview.source_key == "app") {
+            audio_active_app = true;
+        } else if (preview.source_key == "sys" || preview.source_key == "system_output") {
+            audio_active_sys = true;
+        } else if (preview.source_key == "mic") {
+            audio_active_mic = true;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
