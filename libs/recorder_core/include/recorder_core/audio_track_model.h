@@ -9,6 +9,7 @@ enum class AudioSourceKind {
     App,
     Mic,
     Sys,
+    SystemOutput, // Full system output via WasapiLoopbackSrc; no PID required.
 };
 
 struct AudioSourceRow {

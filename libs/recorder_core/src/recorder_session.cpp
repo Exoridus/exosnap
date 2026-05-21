@@ -118,21 +118,23 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         return fail(E_INVALIDARG, ErrorPhase::Prepare, "frame_rate_num and frame_rate_den must be non-zero");
     }
 
-    if (config.audio_track_plan.tracks.size() > CodecPrivateData::kMaxAudioTracks) {
-        return fail(E_INVALIDARG, ErrorPhase::Prepare, "audio_track_plan: max 3 audio tracks supported");
-    }
-
-    for (const auto& track : config.audio_track_plan.tracks) {
-        if (track.sources.size() != 1) {
-            return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                        "Merged audio tracks are not supported. Use separate tracks for each audio source.");
+    if (config.record_audio) {
+        if (config.audio_track_plan.tracks.size() > CodecPrivateData::kMaxAudioTracks) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare, "audio_track_plan: max 3 audio tracks supported");
         }
 
-        const auto kind = track.sources[0];
-        if ((kind == AudioSourceKind::App || kind == AudioSourceKind::Sys) &&
-            (!config.audio_target_process_id.has_value() || config.audio_target_process_id.value() == 0)) {
-            return fail(E_INVALIDARG, ErrorPhase::Prepare,
-                        "audio_target_process_id must be a non-zero PID for App/Sys audio sources");
+        for (const auto& track : config.audio_track_plan.tracks) {
+            if (track.sources.size() != 1) {
+                return fail(E_NOTIMPL, ErrorPhase::Prepare,
+                            "Merged audio tracks are not supported. Use separate tracks for each audio source.");
+            }
+
+            const auto kind = track.sources[0];
+            if ((kind == AudioSourceKind::App || kind == AudioSourceKind::Sys) &&
+                (!config.audio_target_process_id.has_value() || config.audio_target_process_id.value() == 0)) {
+                return fail(E_INVALIDARG, ErrorPhase::Prepare,
+                            "audio_target_process_id must be a non-zero PID for App/Sys audio sources");
+            }
         }
     }
 
@@ -198,8 +200,13 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             st.stats = {};
         }
         st.config = config;
-        st.audio_track_count =
-            config.audio_track_plan.tracks.empty() ? 1u : static_cast<uint32_t>(config.audio_track_plan.tracks.size());
+        if (!config.record_audio) {
+            st.audio_track_count = 0;
+        } else {
+            st.audio_track_count = config.audio_track_plan.tracks.empty()
+                                       ? 1u
+                                       : static_cast<uint32_t>(config.audio_track_plan.tracks.size());
+        }
         st.encode_width = 0;
         st.encode_height = 0;
         st.stats_callback = m_impl->stats_callback;
@@ -227,13 +234,17 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             return std::make_unique<WasapiProcessLoopbackSrc>(
                 static_cast<DWORD>(config.audio_target_process_id.value_or(0u)),
                 ProcessLoopbackMode::ExcludeProcessTree);
+        case AudioSourceKind::SystemOutput:
+            return std::make_unique<WasapiLoopbackSrc>();
         default:
             return nullptr;
         }
     };
 
     std::vector<std::unique_ptr<AudioThread>> audioWorkers;
-    if (config.audio_track_plan.tracks.empty()) {
+    if (!config.record_audio) {
+        // Video-only path: no audio workers.
+    } else if (config.audio_track_plan.tracks.empty()) {
         auto source = std::make_unique<WasapiLoopbackSrc>();
         audioWorkers.push_back(std::make_unique<AudioThread>(m_impl->state, std::move(source), 0));
     } else {

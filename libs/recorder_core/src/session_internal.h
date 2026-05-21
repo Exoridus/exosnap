@@ -134,7 +134,7 @@ struct SessionState {
     RecorderConfig config;
 
     // Number of expected output audio tracks for mux readiness/routing.
-    uint32_t audio_track_count = 1;
+    uint32_t audio_track_count = 0;
 
     // Video dimensions (set by VideoThread during prepare)
     uint32_t encode_width = 0;

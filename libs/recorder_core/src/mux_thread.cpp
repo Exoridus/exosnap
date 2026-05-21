@@ -74,7 +74,7 @@ bool MuxThread::Join(unsigned timeout_ms) {
 
 void MuxThread::Run() {
     // --- Step 1: Wait for codec private data to be ready ---
-    uint32_t track_count = 1;
+    uint32_t track_count = 0;
     {
         std::unique_lock lk(m_state.premux_mutex);
         m_state.premux_cv.wait(lk, [&] {
@@ -92,8 +92,8 @@ void MuxThread::Run() {
         track_count = m_state.audio_track_count;
     }
 
-    if (track_count == 0 || track_count > CodecPrivateData::kMaxAudioTracks) {
-        m_state.RecordFailure(E_INVALIDARG, ErrorPhase::Mux, "Invalid audio track count for mux");
+    if (track_count > CodecPrivateData::kMaxAudioTracks) {
+        m_state.RecordFailure(E_INVALIDARG, ErrorPhase::Mux, "Audio track count exceeds maximum supported");
         return;
     }
 

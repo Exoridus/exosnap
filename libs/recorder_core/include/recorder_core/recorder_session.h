@@ -65,6 +65,10 @@ struct RecorderConfig {
     // Phase 2 legacy compatibility: empty plan means single audio track.
     AudioTrackPlan audio_track_plan;
 
+    // When false, no audio threads are started and audio_track_plan is ignored.
+    // Default true preserves backward compatibility: empty plan -> WasapiLoopbackSrc.
+    bool record_audio = true;
+
     // MIC input channel mapping policy (applies to explicit MIC capture plan).
     MicChannelMode mic_channel_mode = MicChannelMode::Auto;
 

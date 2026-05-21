@@ -172,6 +172,13 @@ exosnap_add_gtest(
 )
 
 exosnap_add_gtest(
+    NAME test_audio_source_semantics
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_audio_source_semantics.cpp
+    LIBRARIES recorder_core
+)
+
+exosnap_add_gtest(
     NAME test_audio_duration_stats
     TEST_PREFIX recorder_core.
     SOURCES tests/test_audio_duration_stats.cpp

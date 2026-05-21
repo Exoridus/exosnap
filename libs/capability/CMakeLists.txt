@@ -6,6 +6,7 @@ add_library(exosnap_capability STATIC
   src/resolver.cpp
   src/option_query.cpp
   src/translation.cpp
+  src/audio_ui_state.cpp
 )
 
 add_library(exosnap::capability ALIAS exosnap_capability)
@@ -49,5 +50,12 @@ exosnap_add_gtest(
   NAME capability_runtime_merge_tests
   TEST_PREFIX capability.
   SOURCES tests/test_runtime_merge.cpp
+  LIBRARIES exosnap_capability
+)
+
+exosnap_add_gtest(
+  NAME capability_audio_plan_builder_tests
+  TEST_PREFIX capability.
+  SOURCES tests/test_audio_plan_builder.cpp
   LIBRARIES exosnap_capability
 )
