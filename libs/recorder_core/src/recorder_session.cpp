@@ -7,12 +7,14 @@
 #include "video_thread.h"
 #include "wasapi_capture_src.h"
 #include "wasapi_loopback_src.h"
+#include "wasapi_process_loopback_src.h"
 #include "wgc_capture.h"
 
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <vector>
 
 namespace recorder_core {
 
@@ -120,6 +122,20 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         return fail(E_INVALIDARG, ErrorPhase::Prepare, "audio_track_plan: max 3 audio tracks supported");
     }
 
+    for (const auto& track : config.audio_track_plan.tracks) {
+        if (track.sources.size() != 1) {
+            return fail(E_NOTIMPL, ErrorPhase::Prepare,
+                        "Merged audio tracks are not supported. Use separate tracks for each audio source.");
+        }
+
+        const auto kind = track.sources[0];
+        if ((kind == AudioSourceKind::App || kind == AudioSourceKind::Sys) &&
+            (!config.audio_target_process_id.has_value() || config.audio_target_process_id.value() == 0)) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare,
+                        "audio_target_process_id must be a non-zero PID for App/Sys audio sources");
+        }
+    }
+
     // Capture target: must have a valid handle for the stated kind
     if (config.target.kind == CaptureTarget::Kind::Monitor && config.target.native_id == 0) {
         return fail(E_INVALIDARG, ErrorPhase::Prepare, "CaptureTarget::Kind::Monitor requires a non-zero native_id");
@@ -189,20 +205,59 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         st.stats_callback = m_impl->stats_callback;
     }
 
-    std::unique_ptr<IAudioCaptureSource> audioSource;
-    if (config.audio_track_plan.tracks.empty()) {
-        audioSource = std::make_unique<WasapiLoopbackSrc>();
-    } else if (config.audio_track_plan.tracks.size() == 1 && config.audio_track_plan.tracks[0].sources.size() == 1 &&
-               config.audio_track_plan.tracks[0].sources[0] == AudioSourceKind::Mic) {
-        audioSource = std::make_unique<WasapiCaptureSrc>(config.mic_channel_mode);
-    } else {
+    auto failPrepare = [&](int32_t hr, const std::string& detail) -> RecorderResult {
         RecorderResult r;
         r.succeeded = false;
-        r.error_code = E_NOTIMPL;
+        r.error_code = hr;
         r.error_phase = ErrorPhase::Prepare;
-        r.error_detail = "AudioSourceKind::App/Sys or multi-track audio is not implemented in Phase 4";
+        r.error_detail = detail;
         m_impl->recording.store(false);
         return r;
+    };
+
+    auto createAudioSource = [&](AudioSourceKind kind) -> std::unique_ptr<IAudioCaptureSource> {
+        switch (kind) {
+        case AudioSourceKind::Mic:
+            return std::make_unique<WasapiCaptureSrc>(config.mic_channel_mode);
+        case AudioSourceKind::App:
+            return std::make_unique<WasapiProcessLoopbackSrc>(
+                static_cast<DWORD>(config.audio_target_process_id.value_or(0u)),
+                ProcessLoopbackMode::IncludeProcessTree);
+        case AudioSourceKind::Sys:
+            return std::make_unique<WasapiProcessLoopbackSrc>(
+                static_cast<DWORD>(config.audio_target_process_id.value_or(0u)),
+                ProcessLoopbackMode::ExcludeProcessTree);
+        default:
+            return nullptr;
+        }
+    };
+
+    std::vector<std::unique_ptr<AudioThread>> audioWorkers;
+    if (config.audio_track_plan.tracks.empty()) {
+        auto source = std::make_unique<WasapiLoopbackSrc>();
+        audioWorkers.push_back(std::make_unique<AudioThread>(m_impl->state, std::move(source), 0));
+    } else {
+        audioWorkers.reserve(config.audio_track_plan.tracks.size());
+        for (const auto& track : config.audio_track_plan.tracks) {
+            if (track.sources.size() != 1) {
+                return failPrepare(E_NOTIMPL,
+                                   "Merged audio tracks are not supported. Use separate tracks for each audio source.");
+            }
+
+            const AudioSourceKind kind = track.sources[0];
+            if ((kind == AudioSourceKind::App || kind == AudioSourceKind::Sys) &&
+                (!config.audio_target_process_id.has_value() || config.audio_target_process_id.value() == 0)) {
+                return failPrepare(E_INVALIDARG,
+                                   "audio_target_process_id must be a non-zero PID for App/Sys audio sources");
+            }
+
+            auto source = createAudioSource(kind);
+            if (!source) {
+                return failPrepare(E_NOTIMPL, "Unsupported audio source kind for Phase 5A");
+            }
+
+            audioWorkers.push_back(std::make_unique<AudioThread>(m_impl->state, std::move(source), track.track_index));
+        }
     }
 
     m_impl->recording.store(true);
@@ -213,49 +268,74 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
 
     // Start worker threads
     VideoThread videoThread(m_impl->state);
-    AudioThread audioThread(m_impl->state, std::move(audioSource), 0);
     MuxThread muxThread(m_impl->state);
 
+    for (auto& worker : audioWorkers) {
+        worker->Start();
+    }
     videoThread.Start();
-    audioThread.Start();
     muxThread.Start();
 
-    // Parallel join: all three threads share a single 120-second budget.
-    // VideoThread's NVENC EOS drain can take 15-40+ seconds for a 30-second
-    // recording at 60fps with ~1250 GPU-buffered frames.  Sequential 10s timeouts
-    // cause a cascade where MuxThread never receives VideoEosSentinel in time.
+    // Parallel join: all workers share a single 120-second budget.
     //
     // IMPORTANT: NativeHandle() must be called BEFORE any Join() because the
     // handle becomes invalid once the std::thread is joined.
-    HANDLE joinHandles[3] = {
-        videoThread.NativeHandle(),
-        audioThread.NativeHandle(),
-        muxThread.NativeHandle(),
-    };
-    constexpr DWORD kParallelJoinTimeoutMs = 120000;
+    std::vector<HANDLE> allHandles;
+    allHandles.reserve(audioWorkers.size() + 2);
+    allHandles.push_back(videoThread.NativeHandle());
+    for (auto& worker : audioWorkers) {
+        allHandles.push_back(worker->NativeHandle());
+    }
+    allHandles.push_back(muxThread.NativeHandle());
 
-    DWORD joinWait = WaitForMultipleObjects(3, joinHandles, TRUE, kParallelJoinTimeoutMs);
+    bool hasNullHandle = false;
+    for (HANDLE h : allHandles) {
+        if (h == nullptr) {
+            hasNullHandle = true;
+            break;
+        }
+    }
+
+    constexpr DWORD kParallelJoinTimeoutMs = 120000;
+    DWORD joinWait = WAIT_FAILED;
+    if (!hasNullHandle) {
+        joinWait = WaitForMultipleObjects(static_cast<DWORD>(allHandles.size()), allHandles.data(), TRUE,
+                                          kParallelJoinTimeoutMs);
+        if (joinWait == WAIT_FAILED) {
+            m_impl->state.RecordFailure(HRESULT_FROM_WIN32(GetLastError()), ErrorPhase::Shutdown,
+                                        "WaitForMultipleObjects failed during thread join");
+        }
+    } else {
+        m_impl->state.RecordFailure(E_FAIL, ErrorPhase::Shutdown, "Thread native handle is null before join");
+    }
 
     bool videoJoined = false;
-    bool audioJoined = false;
+    std::vector<bool> audioJoined(audioWorkers.size(), false);
     bool muxJoined = false;
 
     if (joinWait == WAIT_OBJECT_0) {
-        // All three signalled within the budget — join them cleanly (non-blocking).
         videoJoined = videoThread.Join(0);
-        audioJoined = audioThread.Join(0);
+        for (size_t i = 0; i < audioWorkers.size(); ++i) {
+            audioJoined[i] = audioWorkers[i]->Join(0);
+        }
         muxJoined = muxThread.Join(0);
     } else {
-        // At least one thread timed out; collect whichever finished in time.
-        videoJoined = (WaitForSingleObject(joinHandles[0], 0) == WAIT_OBJECT_0);
-        if (videoJoined)
+        videoJoined = (allHandles[0] != nullptr && WaitForSingleObject(allHandles[0], 0) == WAIT_OBJECT_0);
+        if (videoJoined) {
             videoThread.Join(0);
-        audioJoined = (WaitForSingleObject(joinHandles[1], 0) == WAIT_OBJECT_0);
-        if (audioJoined)
-            audioThread.Join(0);
-        muxJoined = (WaitForSingleObject(joinHandles[2], 0) == WAIT_OBJECT_0);
-        if (muxJoined)
+        }
+        for (size_t i = 0; i < audioWorkers.size(); ++i) {
+            const HANDLE h = allHandles[1 + i];
+            audioJoined[i] = (h != nullptr && WaitForSingleObject(h, 0) == WAIT_OBJECT_0);
+            if (audioJoined[i]) {
+                audioWorkers[i]->Join(0);
+            }
+        }
+        const HANDLE muxHandle = allHandles[1 + audioWorkers.size()];
+        muxJoined = (muxHandle != nullptr && WaitForSingleObject(muxHandle, 0) == WAIT_OBJECT_0);
+        if (muxJoined) {
             muxThread.Join(0);
+        }
     }
 
     // Stop stats collector
@@ -281,15 +361,25 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         }
 
         // Append join timeout info if any thread didn't join cleanly
-        if (!videoJoined || !audioJoined || !muxJoined) {
+        bool allAudioJoined = true;
+        for (bool joined : audioJoined) {
+            if (!joined) {
+                allAudioJoined = false;
+                break;
+            }
+        }
+
+        if (!videoJoined || !allAudioJoined || !muxJoined) {
             if (result.error_detail.empty()) {
                 result.succeeded = false;
                 result.error_code = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
                 result.error_phase = ErrorPhase::Shutdown;
             }
-            result.error_detail += " [join timeout: v=" + std::string(videoJoined ? "ok" : "TIMEOUT") +
-                                   " a=" + std::string(audioJoined ? "ok" : "TIMEOUT") +
-                                   " m=" + std::string(muxJoined ? "ok" : "TIMEOUT") + "]";
+            result.error_detail += " [join timeout: v=" + std::string(videoJoined ? "ok" : "TIMEOUT");
+            for (size_t i = 0; i < audioJoined.size(); ++i) {
+                result.error_detail += " a" + std::to_string(i) + "=" + std::string(audioJoined[i] ? "ok" : "TIMEOUT");
+            }
+            result.error_detail += " m=" + std::string(muxJoined ? "ok" : "TIMEOUT") + "]";
         }
     }
 

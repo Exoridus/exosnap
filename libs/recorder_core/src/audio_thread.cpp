@@ -247,7 +247,9 @@ void AudioThread::Run() {
         // --- Update final stats ---
         {
             std::lock_guard lk(m_state.stats_mutex);
-            m_state.stats.audio_duration_ns = lastAudioPts;
+            if (lastAudioPts > m_state.stats.audio_duration_ns) {
+                m_state.stats.audio_duration_ns = lastAudioPts;
+            }
         }
 
         // --- Push audio EOS sentinel ---
@@ -406,7 +408,9 @@ end_audio_loop:
     // --- Update final stats ---
     {
         std::lock_guard lk(m_state.stats_mutex);
-        m_state.stats.audio_duration_ns = lastAudioPts;
+        if (lastAudioPts > m_state.stats.audio_duration_ns) {
+            m_state.stats.audio_duration_ns = lastAudioPts;
+        }
     }
 
     // --- Push audio EOS sentinel ---

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -66,6 +67,10 @@ struct RecorderConfig {
 
     // MIC input channel mapping policy (applies to explicit MIC capture plan).
     MicChannelMode mic_channel_mode = MicChannelMode::Auto;
+
+    // Optional target process id for process-loopback sources (App/Sys).
+    // When empty, legacy loopback mode (empty audio_track_plan) remains valid.
+    std::optional<uint32_t> audio_target_process_id;
 };
 
 // ---------------------------------------------------------------------------

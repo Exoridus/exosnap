@@ -78,6 +78,8 @@ add_library(recorder_core STATIC
     src/wasapi_capture_src.cpp
     src/wasapi_loopback.cpp
     src/wasapi_loopback_src.cpp
+    src/wasapi_process_loopback_src.cpp
+    src/wasapi_process_loopback_src.h
     src/opus_audio_encoder.cpp
     src/session_stats_collector.cpp
     src/video_thread.cpp
@@ -161,3 +163,18 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_mic_channel_mapping PRIVATE src)
+
+exosnap_add_gtest(
+    NAME test_audio_plan_validate
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_audio_plan_validate.cpp
+    LIBRARIES recorder_core
+)
+
+exosnap_add_gtest(
+    NAME test_audio_duration_stats
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_audio_duration_stats.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_audio_duration_stats PRIVATE src)
