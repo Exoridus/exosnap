@@ -63,6 +63,7 @@ class RecordPage : public QWidget {
     void onMicDeviceChanged(int index);
     void onMicChannelChanged(int index);
     void populateMicDeviceCombo();
+    void updateMicDeviceNoteLabel();
 
     int monitor_target_index_ = -1;
     int window_target_index_ = -1;
@@ -96,6 +97,8 @@ class RecordPage : public QWidget {
     QCheckBox* mic_check_ = nullptr;
     QWidget* mic_device_row_ = nullptr;
     QComboBox* mic_device_combo_ = nullptr;
+    QPushButton* mic_refresh_btn_ = nullptr;
+    QLabel* mic_device_note_label_ = nullptr;
     QWidget* mic_channel_row_ = nullptr;
     QComboBox* mic_channel_combo_ = nullptr;
     QFrame* track_preview_panel_ = nullptr;

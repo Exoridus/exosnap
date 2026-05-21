@@ -29,6 +29,8 @@
 #include <exception>
 #include <iterator>
 #include <optional>
+#include <string>
+#include <unordered_map>
 
 namespace exosnap {
 namespace {
@@ -127,6 +129,41 @@ capability::UserRecorderConfig primaryRecorderConfig() {
     config.frame_rate_num = 60;
     config.frame_rate_den = 1;
     return config;
+}
+
+std::vector<std::string> BuildMicDeviceLabels(const std::vector<recorder_core::AudioInputDeviceInfo>& devices) {
+    std::vector<std::string> base_names;
+    base_names.reserve(devices.size());
+
+    std::unordered_map<std::string, int> base_counts;
+    for (const auto& dev : devices) {
+        const std::string base_name = dev.display_name.empty() ? dev.device_id : dev.display_name;
+        base_names.push_back(base_name);
+        ++base_counts[base_name];
+    }
+
+    std::unordered_map<std::string, int> base_seen;
+    std::vector<std::string> labels;
+    labels.reserve(devices.size());
+
+    for (std::size_t i = 0; i < devices.size(); ++i) {
+        const auto& dev = devices[i];
+        const std::string& base_name = base_names[i];
+
+        std::string label = base_name;
+        if (base_counts[base_name] > 1) {
+            const int dedup_index = ++base_seen[base_name];
+            label += " [" + std::to_string(dedup_index) + "]";
+        }
+
+        if (dev.is_default) {
+            label += " (Default)";
+        }
+
+        labels.push_back(std::move(label));
+    }
+
+    return labels;
 }
 
 } // namespace
@@ -335,9 +372,17 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     mic_device_row_layout->setSpacing(10);
     mic_device_row_layout->addWidget(makeLabel("Input Device", "audioSettingsRowLabel", mic_device_row_));
     mic_device_combo_ = new QComboBox(mic_device_row_);
-    populateMicDeviceCombo();
     mic_device_row_layout->addWidget(mic_device_combo_, 1);
+    mic_refresh_btn_ = new QPushButton("↻", mic_device_row_);
+    mic_refresh_btn_->setToolTip("Refresh device list");
+    mic_device_row_layout->addWidget(mic_refresh_btn_);
+    populateMicDeviceCombo();
     audio_settings_layout->addWidget(mic_device_row_);
+    mic_device_note_label_ = makeLabel("", "audioSettingsNote", audio_settings_panel);
+    mic_device_note_label_->setProperty("labelRole", "audioSettingsNote");
+    mic_device_note_label_->setWordWrap(true);
+    mic_device_note_label_->setVisible(false);
+    audio_settings_layout->addWidget(mic_device_note_label_);
 
     mic_channel_row_ = new QWidget(audio_settings_panel);
     auto* mic_channel_row_layout = new QHBoxLayout(mic_channel_row_);
@@ -483,6 +528,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(sys_audio_check_, &QCheckBox::toggled, this, &RecordPage::onSysAudioToggled);
     connect(separate_tracks_check_, &QCheckBox::toggled, this, &RecordPage::onSeparateTracksToggled);
     connect(mic_check_, &QCheckBox::toggled, this, &RecordPage::onMicToggled);
+    connect(mic_refresh_btn_, &QPushButton::clicked, this, &RecordPage::populateMicDeviceCombo);
     connect(mic_device_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &RecordPage::onMicDeviceChanged);
     connect(mic_channel_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -642,30 +688,44 @@ void RecordPage::populateMicDeviceCombo() {
         return;
     }
 
+    const auto previous_id = view_model_.audio_ui_state.selected_mic_device_id;
+
     QSignalBlocker blocker(mic_device_combo_);
 
     mic_device_combo_->clear();
     mic_devices_.clear();
 
-    mic_device_combo_->addItem("Default Microphone");
+    mic_device_combo_->addItem("System Default Microphone");
     mic_devices_.push_back({});
 
     const auto devices = recorder_core::EnumerateAudioInputDevices();
-    for (const auto& dev : devices) {
-        const QString name = QString::fromStdString(dev.display_name.empty() ? dev.device_id : dev.display_name);
-
-        QString label = name;
-        if (dev.is_default) {
-            label += QStringLiteral(" (Default)");
-        }
-
-        mic_device_combo_->addItem(label);
-        mic_devices_.push_back(dev);
+    const auto labels = BuildMicDeviceLabels(devices);
+    for (std::size_t i = 0; i < devices.size() && i < labels.size(); ++i) {
+        mic_device_combo_->addItem(QString::fromStdString(labels[i]));
+        mic_devices_.push_back(devices[i]);
     }
 
-    mic_device_combo_->setCurrentIndex(0);
-    view_model_.audio_ui_state.selected_mic_device_id = std::nullopt;
+    int restore_index = 0;
+    if (previous_id.has_value()) {
+        for (int i = 1; i < static_cast<int>(mic_devices_.size()); ++i) {
+            if (mic_devices_[static_cast<std::size_t>(i)].device_id == *previous_id) {
+                restore_index = i;
+                break;
+            }
+        }
+    }
+
+    mic_device_combo_->setCurrentIndex(restore_index);
+    if (restore_index <= 0 || restore_index >= static_cast<int>(mic_devices_.size())) {
+        view_model_.audio_ui_state.selected_mic_device_id = std::nullopt;
+    } else {
+        const auto& selected = mic_devices_[static_cast<std::size_t>(restore_index)];
+        view_model_.audio_ui_state.selected_mic_device_id =
+            selected.device_id.empty() ? std::nullopt : std::optional<std::string>(selected.device_id);
+    }
+
     view_model_.RebuildAudioPlan();
+    updateMicDeviceNoteLabel();
 }
 
 void RecordPage::onMicDeviceChanged(int index) {
@@ -678,6 +738,7 @@ void RecordPage::onMicDeviceChanged(int index) {
     }
 
     view_model_.RebuildAudioPlan();
+    updateMicDeviceNoteLabel();
     updateAudioTrackPreview();
 }
 
@@ -760,6 +821,41 @@ void RecordPage::updateAudioControlsVisibility() {
 
     mic_device_combo_->setEnabled(!busy);
     mic_channel_combo_->setEnabled(!busy);
+    if (mic_refresh_btn_) {
+        mic_refresh_btn_->setEnabled(!busy);
+    }
+    updateMicDeviceNoteLabel();
+}
+
+void RecordPage::updateMicDeviceNoteLabel() {
+    if (!mic_device_note_label_ || !mic_device_combo_ || !mic_device_row_) {
+        return;
+    }
+
+    const bool mic_on = view_model_.audio_ui_state.record_microphone;
+    const bool show_note = mic_on && mic_device_row_->isVisible() && mic_device_combo_->currentIndex() == 0;
+    if (!show_note) {
+        mic_device_note_label_->setVisible(false);
+        return;
+    }
+
+    QString default_name;
+    for (std::size_t i = 1; i < mic_devices_.size(); ++i) {
+        const auto& dev = mic_devices_[i];
+        if (!dev.is_default) {
+            continue;
+        }
+        const std::string fallback = dev.display_name.empty() ? dev.device_id : dev.display_name;
+        default_name = QString::fromStdString(fallback);
+        break;
+    }
+
+    if (!default_name.isEmpty()) {
+        mic_device_note_label_->setText(QStringLiteral("→ Currently: %1").arg(default_name));
+    } else {
+        mic_device_note_label_->setText(QStringLiteral("→ Follows the Windows default input device"));
+    }
+    mic_device_note_label_->setVisible(true);
 }
 
 void RecordPage::updateAudioTrackPreview() {
@@ -905,6 +1001,16 @@ void RecordPage::updateResultDisplay() {
     const QString error_phase = QString::fromStdWString(view_model_.result_error_phase).trimmed();
     const QString hresult = QString::fromStdWString(view_model_.result_hresult_text).trimmed();
     const QString detail = QString::fromStdWString(view_model_.result_error_detail).trimmed();
+    QString display_detail = detail;
+
+    if (!view_model_.last_succeeded) {
+        const QString phase = QString::fromStdWString(view_model_.result_error_phase);
+        const QString raw_detail = QString::fromStdWString(view_model_.result_error_detail);
+        if (phase.contains("Audio") && raw_detail.contains("GetDevice")) {
+            display_detail = "Microphone not found. The selected input device may have been disconnected.\n"
+                             "Refresh the device list, replug the microphone, or select a different input.";
+        }
+    }
 
     result_path_label_->setText("Output: " + output_path);
     result_path_label_->setVisible(!output_path.isEmpty());
@@ -912,8 +1018,8 @@ void RecordPage::updateResultDisplay() {
     result_phase_label_->setVisible(!error_phase.isEmpty());
     result_hresult_label_->setText("HRESULT: " + hresult);
     result_hresult_label_->setVisible(!hresult.isEmpty());
-    result_detail_label_->setText("Detail: " + detail);
-    result_detail_label_->setVisible(!detail.isEmpty());
+    result_detail_label_->setText("Detail: " + display_detail);
+    result_detail_label_->setVisible(!display_detail.isEmpty());
 }
 
 void RecordPage::updateTargetCards() {
