@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -215,8 +216,50 @@ struct CliArgs {
     bool capabilities = false;
     bool mic_opus = false;
     bool help = false;
+    bool mic_channel_set = false;
+    recorder_core::MicChannelMode mic_channel_mode = recorder_core::MicChannelMode::Auto;
+    bool parse_ok = true;
+    std::string parse_error;
     int target_index = -1; // 1-based, -1 = prompt user
 };
+
+static std::optional<recorder_core::MicChannelMode> parse_mic_channel_mode(const std::string& mode) {
+    using recorder_core::MicChannelMode;
+    if (mode == "auto") {
+        return MicChannelMode::Auto;
+    }
+    if (mode == "preserve") {
+        return MicChannelMode::PreserveStereo;
+    }
+    if (mode == "mono-mix") {
+        return MicChannelMode::MonoMix;
+    }
+    if (mode == "left") {
+        return MicChannelMode::LeftToStereo;
+    }
+    if (mode == "right") {
+        return MicChannelMode::RightToStereo;
+    }
+    return std::nullopt;
+}
+
+static const char* mic_channel_mode_string(recorder_core::MicChannelMode mode) {
+    using recorder_core::MicChannelMode;
+    switch (mode) {
+    case MicChannelMode::Auto:
+        return "auto";
+    case MicChannelMode::PreserveStereo:
+        return "preserve";
+    case MicChannelMode::MonoMix:
+        return "mono-mix";
+    case MicChannelMode::LeftToStereo:
+        return "left";
+    case MicChannelMode::RightToStereo:
+        return "right";
+    default:
+        return "preserve";
+    }
+}
 
 static CliArgs parse_args(int argc, char* argv[]) {
     CliArgs args;
@@ -228,23 +271,49 @@ static CliArgs parse_args(int argc, char* argv[]) {
             args.capabilities = true;
         } else if (arg == "--mic-opus") {
             args.mic_opus = true;
+        } else if (arg == "--mic-channel") {
+            if (i + 1 >= argc) {
+                args.parse_ok = false;
+                args.parse_error = "--mic-channel requires one of: auto, preserve, mono-mix, left, right";
+                return args;
+            }
+            ++i;
+            std::string mode_value = argv[i];
+            auto mode = parse_mic_channel_mode(mode_value);
+            if (!mode.has_value()) {
+                args.parse_ok = false;
+                args.parse_error = "Invalid --mic-channel value '" + mode_value +
+                                   "' (expected: auto, preserve, mono-mix, left, right)";
+                return args;
+            }
+            args.mic_channel_set = true;
+            args.mic_channel_mode = mode.value();
         } else if (arg == "--help") {
             args.help = true;
         } else if (arg == "--target" && i + 1 < argc) {
             ++i;
             args.target_index = std::stoi(argv[i]);
+        } else {
+            args.parse_ok = false;
+            args.parse_error = "Unknown argument: " + arg;
+            return args;
         }
     }
     return args;
 }
 
 static void print_usage(const char* program) {
-    std::printf("Usage: %s [--list] [--target N] [--capabilities] [--mic-opus] [--help]\n\n", program);
+    std::printf("Usage: %s [--list] [--target N] [--capabilities] [--mic-opus] [--mic-channel MODE] [--help]\n\n",
+                program);
     std::puts("  --list           List capture targets and exit");
     std::puts("  --target N       Select target N (1-based) without prompting");
     std::puts("  --capabilities   Show hardware capability report and exit");
     std::puts("  --mic-opus       [Phase-4 validation] Mic source + Opus codec, MKV output");
+    std::puts("  --mic-channel    [MIC only] auto | preserve | mono-mix | left | right");
     std::puts("  --help           Show this help");
+    std::puts("");
+    std::puts("Example:");
+    std::puts("  recorder_cli.exe --target 1 --mic-opus --mic-channel left");
 }
 
 // ---------------------------------------------------------------------------
@@ -301,9 +370,19 @@ int main(int argc, char* argv[]) {
                 std::string(recorder_core::version()).c_str());
 
     const CliArgs cli = parse_args(argc, argv);
+    if (!cli.parse_ok) {
+        std::fprintf(stderr, "ERROR: %s\n\n", cli.parse_error.c_str());
+        print_usage(argv[0]);
+        return 1;
+    }
     if (cli.help) {
         print_usage(argv[0]);
         return 0;
+    }
+    if (cli.mic_channel_set && !cli.mic_opus) {
+        std::fputs("ERROR: --mic-channel can only be used together with --mic-opus.\n\n", stderr);
+        print_usage(argv[0]);
+        return 1;
     }
     if (cli.capabilities) {
         return run_capabilities_mode();
@@ -420,7 +499,9 @@ int main(int argc, char* argv[]) {
         track.track_index = 0;
         plan.tracks.push_back(std::move(track));
         config.audio_track_plan = std::move(plan);
-        std::puts("[mic-opus] AudioCodec=Opus  AudioTrackPlan={ Mic -> track 0 }");
+        config.mic_channel_mode = cli.mic_channel_set ? cli.mic_channel_mode : recorder_core::MicChannelMode::Auto;
+        std::printf("[mic-opus] AudioCodec=Opus  AudioTrackPlan={ Mic -> track 0 }  mic_channel=%s\n",
+                    mic_channel_mode_string(config.mic_channel_mode));
     }
 
     std::printf("Output path: %s\n", output_path.string().c_str());

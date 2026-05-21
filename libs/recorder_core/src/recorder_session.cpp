@@ -194,7 +194,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         audioSource = std::make_unique<WasapiLoopbackSrc>();
     } else if (config.audio_track_plan.tracks.size() == 1 && config.audio_track_plan.tracks[0].sources.size() == 1 &&
                config.audio_track_plan.tracks[0].sources[0] == AudioSourceKind::Mic) {
-        audioSource = std::make_unique<WasapiCaptureSrc>();
+        audioSource = std::make_unique<WasapiCaptureSrc>(config.mic_channel_mode);
     } else {
         RecorderResult r;
         r.succeeded = false;

@@ -4,6 +4,8 @@
 
 #include <functiondiscoverykeys_devpkey.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -14,8 +16,19 @@ namespace {
 constexpr uint32_t kRequiredSampleRate = 48000;
 constexpr uint32_t kRequiredOutputChannels = 2;
 constexpr REFERENCE_TIME kFallbackDevicePeriodHns = 100000; // 10 ms
+constexpr uint64_t kAutoDetectMinFrames = 48000;            // 1 second
 
 enum class AcceptedSampleKind { Float32, Pcm16, Unsupported };
+
+int16_t ClampInt32ToInt16(int32_t value) {
+    if (value > 32767) {
+        return 32767;
+    }
+    if (value < -32768) {
+        return -32768;
+    }
+    return static_cast<int16_t>(value);
+}
 
 WORD ResolveWaveFormatTag(const WAVEFORMATEX* fmt) {
     if (fmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE && fmt->cbSize >= 22) {
@@ -37,6 +50,163 @@ AcceptedSampleKind DetectAcceptedSampleKind(const WAVEFORMATEX* fmt) {
 }
 
 } // namespace
+
+namespace mic_channel_detail {
+
+void MapStereoFrameFloat32(MicChannelMode mode, float input_l, float input_r, float& output_l, float& output_r) {
+    switch (mode) {
+    case MicChannelMode::Auto:
+        output_l = input_l;
+        output_r = input_r;
+        return;
+    case MicChannelMode::PreserveStereo:
+        output_l = input_l;
+        output_r = input_r;
+        return;
+    case MicChannelMode::MonoMix: {
+        const float mixed = 0.5f * (input_l + input_r);
+        output_l = mixed;
+        output_r = mixed;
+        return;
+    }
+    case MicChannelMode::LeftToStereo:
+        output_l = input_l;
+        output_r = input_l;
+        return;
+    case MicChannelMode::RightToStereo:
+        output_l = input_r;
+        output_r = input_r;
+        return;
+    default:
+        output_l = input_l;
+        output_r = input_r;
+        return;
+    }
+}
+
+void MapStereoFrameInt16(MicChannelMode mode, int16_t input_l, int16_t input_r, int16_t& output_l, int16_t& output_r) {
+    switch (mode) {
+    case MicChannelMode::Auto:
+        output_l = input_l;
+        output_r = input_r;
+        return;
+    case MicChannelMode::PreserveStereo:
+        output_l = input_l;
+        output_r = input_r;
+        return;
+    case MicChannelMode::MonoMix: {
+        const int32_t mixed = (static_cast<int32_t>(input_l) + static_cast<int32_t>(input_r)) / 2;
+        const int16_t clamped = ClampInt32ToInt16(mixed);
+        output_l = clamped;
+        output_r = clamped;
+        return;
+    }
+    case MicChannelMode::LeftToStereo:
+        output_l = input_l;
+        output_r = input_l;
+        return;
+    case MicChannelMode::RightToStereo:
+        output_l = input_r;
+        output_r = input_r;
+        return;
+    default:
+        output_l = input_l;
+        output_r = input_r;
+        return;
+    }
+}
+
+MicChannelMode ResolveAutoChannelMode(double rms_left, double rms_right) {
+    constexpr double kSilenceFloor = 0.0025;    // about -52 dBFS
+    constexpr double kDominanceRatio = 4.0;     // ~12 dB
+    constexpr double kNearSilenceFactor = 0.35; // side channel effectively silent
+
+    if (rms_left < kSilenceFloor && rms_right < kSilenceFloor) {
+        return MicChannelMode::PreserveStereo;
+    }
+
+    if (rms_left >= kSilenceFloor && rms_right < (kSilenceFloor * kNearSilenceFactor)) {
+        return MicChannelMode::LeftToStereo;
+    }
+    if (rms_right >= kSilenceFloor && rms_left < (kSilenceFloor * kNearSilenceFactor)) {
+        return MicChannelMode::RightToStereo;
+    }
+
+    if (rms_right > 0.0 && (rms_left / rms_right) >= kDominanceRatio) {
+        return MicChannelMode::LeftToStereo;
+    }
+    if (rms_left > 0.0 && (rms_right / rms_left) >= kDominanceRatio) {
+        return MicChannelMode::RightToStereo;
+    }
+
+    return MicChannelMode::PreserveStereo;
+}
+
+void UpdateAutoModeStateFloat32(AutoModeState& state, const float* interleaved_stereo, uint32_t num_frames,
+                                bool silent) {
+    if (state.locked || num_frames == 0) {
+        return;
+    }
+
+    if (!silent && interleaved_stereo != nullptr) {
+        for (size_t i = 0; i < static_cast<size_t>(num_frames); ++i) {
+            const double l = static_cast<double>(interleaved_stereo[(i * 2) + 0]);
+            const double r = static_cast<double>(interleaved_stereo[(i * 2) + 1]);
+            state.energy_left += (l * l);
+            state.energy_right += (r * r);
+        }
+    }
+
+    state.analyzed_frames += num_frames;
+    if (state.analyzed_frames < kAutoDetectMinFrames) {
+        return;
+    }
+
+    const double denom = static_cast<double>(std::max<uint64_t>(1u, state.analyzed_frames));
+    const double rms_left = std::sqrt(state.energy_left / denom);
+    const double rms_right = std::sqrt(state.energy_right / denom);
+    state.resolved_mode = ResolveAutoChannelMode(rms_left, rms_right);
+    state.locked = true;
+}
+
+void UpdateAutoModeStateInt16(AutoModeState& state, const int16_t* interleaved_stereo, uint32_t num_frames,
+                              bool silent) {
+    if (state.locked || num_frames == 0) {
+        return;
+    }
+
+    if (!silent && interleaved_stereo != nullptr) {
+        for (size_t i = 0; i < static_cast<size_t>(num_frames); ++i) {
+            const double l = static_cast<double>(interleaved_stereo[(i * 2) + 0]) / 32768.0;
+            const double r = static_cast<double>(interleaved_stereo[(i * 2) + 1]) / 32768.0;
+            state.energy_left += (l * l);
+            state.energy_right += (r * r);
+        }
+    }
+
+    state.analyzed_frames += num_frames;
+    if (state.analyzed_frames < kAutoDetectMinFrames) {
+        return;
+    }
+
+    const double denom = static_cast<double>(std::max<uint64_t>(1u, state.analyzed_frames));
+    const double rms_left = std::sqrt(state.energy_left / denom);
+    const double rms_right = std::sqrt(state.energy_right / denom);
+    state.resolved_mode = ResolveAutoChannelMode(rms_left, rms_right);
+    state.locked = true;
+}
+
+MicChannelMode EffectiveAutoMode(const AutoModeState& state) {
+    if (state.locked) {
+        return state.resolved_mode;
+    }
+    return MicChannelMode::PreserveStereo;
+}
+
+} // namespace mic_channel_detail
+
+WasapiCaptureSrc::WasapiCaptureSrc(MicChannelMode channel_mode) : requested_channel_mode_(channel_mode) {
+}
 
 WasapiCaptureSrc::~WasapiCaptureSrc() {
     Shutdown();
@@ -210,6 +380,11 @@ bool WasapiCaptureSrc::Init(std::string& out_error) {
         (selectedKind == AcceptedSampleKind::Pcm16) ? AudioSampleFormat::Int16 : AudioSampleFormat::Float32;
     pending_capture_error_ = false;
     pending_capture_error_msg_.clear();
+    auto_mode_locked_ = false;
+    auto_resolved_mode_ = MicChannelMode::PreserveStereo;
+    auto_detect_frames_ = 0;
+    auto_energy_left_ = 0.0;
+    auto_energy_right_ = 0.0;
 
     return true;
 }
@@ -292,7 +467,13 @@ bool WasapiCaptureSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_e
     buffer_acquired_ = true;
     acquired_frames_ = numFrames;
 
-    if (!mono_to_stereo_) {
+    UpdateAutoModeFromBuffer(reinterpret_cast<const uint8_t*>(data), numFrames, silent);
+    const MicChannelMode effective_mode = EffectiveChannelMode();
+
+    const bool needs_mapping_buffer =
+        mono_to_stereo_ || (input_channels_ == 2 && effective_mode != MicChannelMode::PreserveStereo);
+
+    if (!needs_mapping_buffer) {
         out_buf.bytes = reinterpret_cast<const uint8_t*>(data);
         out_buf.num_frames = numFrames;
         out_buf.silent = silent;
@@ -301,34 +482,58 @@ bool WasapiCaptureSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_e
 
     const size_t outputSamples = static_cast<size_t>(numFrames) * kRequiredOutputChannels;
     if (sample_format_ == AudioSampleFormat::Float32) {
-        mono_expand_buffer_.resize(outputSamples * sizeof(float));
-        float* dst = reinterpret_cast<float*>(mono_expand_buffer_.data());
+        mapped_buffer_.resize(outputSamples * sizeof(float));
+        float* dst = reinterpret_cast<float*>(mapped_buffer_.data());
         if (silent || data == nullptr) {
-            std::memset(dst, 0, mono_expand_buffer_.size());
+            std::memset(dst, 0, mapped_buffer_.size());
         } else {
-            const float* src = reinterpret_cast<const float*>(data);
-            for (size_t i = 0; i < static_cast<size_t>(numFrames); ++i) {
-                const float s = src[i];
-                dst[(i * 2) + 0] = s;
-                dst[(i * 2) + 1] = s;
+            if (input_channels_ == 1) {
+                const float* src = reinterpret_cast<const float*>(data);
+                for (size_t i = 0; i < static_cast<size_t>(numFrames); ++i) {
+                    const float s = src[i];
+                    dst[(i * 2) + 0] = s;
+                    dst[(i * 2) + 1] = s;
+                }
+            } else {
+                const float* src = reinterpret_cast<const float*>(data);
+                for (size_t i = 0; i < static_cast<size_t>(numFrames); ++i) {
+                    float outL = 0.0f;
+                    float outR = 0.0f;
+                    mic_channel_detail::MapStereoFrameFloat32(effective_mode, src[(i * 2) + 0], src[(i * 2) + 1], outL,
+                                                              outR);
+                    dst[(i * 2) + 0] = outL;
+                    dst[(i * 2) + 1] = outR;
+                }
             }
         }
     } else {
-        mono_expand_buffer_.resize(outputSamples * sizeof(int16_t));
-        int16_t* dst = reinterpret_cast<int16_t*>(mono_expand_buffer_.data());
+        mapped_buffer_.resize(outputSamples * sizeof(int16_t));
+        int16_t* dst = reinterpret_cast<int16_t*>(mapped_buffer_.data());
         if (silent || data == nullptr) {
-            std::memset(dst, 0, mono_expand_buffer_.size());
+            std::memset(dst, 0, mapped_buffer_.size());
         } else {
-            const int16_t* src = reinterpret_cast<const int16_t*>(data);
-            for (size_t i = 0; i < static_cast<size_t>(numFrames); ++i) {
-                const int16_t s = src[i];
-                dst[(i * 2) + 0] = s;
-                dst[(i * 2) + 1] = s;
+            if (input_channels_ == 1) {
+                const int16_t* src = reinterpret_cast<const int16_t*>(data);
+                for (size_t i = 0; i < static_cast<size_t>(numFrames); ++i) {
+                    const int16_t s = src[i];
+                    dst[(i * 2) + 0] = s;
+                    dst[(i * 2) + 1] = s;
+                }
+            } else {
+                const int16_t* src = reinterpret_cast<const int16_t*>(data);
+                for (size_t i = 0; i < static_cast<size_t>(numFrames); ++i) {
+                    int16_t outL = 0;
+                    int16_t outR = 0;
+                    mic_channel_detail::MapStereoFrameInt16(effective_mode, src[(i * 2) + 0], src[(i * 2) + 1], outL,
+                                                            outR);
+                    dst[(i * 2) + 0] = outL;
+                    dst[(i * 2) + 1] = outR;
+                }
             }
         }
     }
 
-    out_buf.bytes = mono_expand_buffer_.data();
+    out_buf.bytes = mapped_buffer_.data();
     out_buf.num_frames = numFrames;
     out_buf.silent = silent;
     return true;
@@ -363,9 +568,45 @@ const std::string& WasapiCaptureSrc::EndpointName() const {
     return endpoint_name_;
 }
 
+void WasapiCaptureSrc::UpdateAutoModeFromBuffer(const uint8_t* data, uint32_t num_frames, bool silent) {
+    if (requested_channel_mode_ != MicChannelMode::Auto || auto_mode_locked_ || input_channels_ != 2 ||
+        num_frames == 0) {
+        return;
+    }
+
+    mic_channel_detail::AutoModeState state{};
+    state.analyzed_frames = auto_detect_frames_;
+    state.energy_left = auto_energy_left_;
+    state.energy_right = auto_energy_right_;
+    state.locked = auto_mode_locked_;
+    state.resolved_mode = auto_resolved_mode_;
+
+    if (sample_format_ == AudioSampleFormat::Float32) {
+        mic_channel_detail::UpdateAutoModeStateFloat32(state, reinterpret_cast<const float*>(data), num_frames, silent);
+    } else {
+        mic_channel_detail::UpdateAutoModeStateInt16(state, reinterpret_cast<const int16_t*>(data), num_frames, silent);
+    }
+
+    auto_detect_frames_ = state.analyzed_frames;
+    auto_energy_left_ = state.energy_left;
+    auto_energy_right_ = state.energy_right;
+    auto_mode_locked_ = state.locked;
+    auto_resolved_mode_ = state.resolved_mode;
+}
+
+MicChannelMode WasapiCaptureSrc::EffectiveChannelMode() const {
+    if (requested_channel_mode_ != MicChannelMode::Auto) {
+        return requested_channel_mode_;
+    }
+    mic_channel_detail::AutoModeState state{};
+    state.locked = auto_mode_locked_;
+    state.resolved_mode = auto_resolved_mode_;
+    return mic_channel_detail::EffectiveAutoMode(state);
+}
+
 void WasapiCaptureSrc::Shutdown() {
     ReleaseBuffer();
-    mono_expand_buffer_.clear();
+    mapped_buffer_.clear();
     pending_capture_error_ = false;
     pending_capture_error_msg_.clear();
 
@@ -389,6 +630,11 @@ void WasapiCaptureSrc::Shutdown() {
     sample_rate_ = 0;
     channels_ = 0;
     mono_to_stereo_ = false;
+    auto_mode_locked_ = false;
+    auto_resolved_mode_ = MicChannelMode::PreserveStereo;
+    auto_detect_frames_ = 0;
+    auto_energy_left_ = 0.0;
+    auto_energy_right_ = 0.0;
 }
 
 } // namespace recorder_core

@@ -12,6 +12,7 @@ using recorder_core::AudioCodec;
 using recorder_core::AudioSourceKind;
 using recorder_core::AudioTrackPlan;
 using recorder_core::EncodedAudioPacket;
+using recorder_core::MicChannelMode;
 using recorder_core::RecorderConfig;
 using recorder_core::RecorderResult;
 using recorder_core::RecorderSession;
@@ -37,6 +38,11 @@ TEST(MultiTrackPacketTypesTest, EncodedAudioPacket_AllowsTrackIdTwo) {
 TEST(MultiTrackPacketTypesTest, RecorderConfig_DefaultTrackPlanIsEmpty) {
     const RecorderConfig cfg{};
     EXPECT_TRUE(cfg.audio_track_plan.tracks.empty());
+}
+
+TEST(MultiTrackPacketTypesTest, RecorderConfig_DefaultMicChannelModeIsAuto) {
+    const RecorderConfig cfg{};
+    EXPECT_EQ(cfg.mic_channel_mode, MicChannelMode::Auto);
 }
 
 TEST(MultiTrackPacketTypesTest, RecorderConfig_StoresOneTrackPlan) {

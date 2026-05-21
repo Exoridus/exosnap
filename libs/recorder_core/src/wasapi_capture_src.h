@@ -1,6 +1,7 @@
 #pragma once
 
 #include <recorder_core/interfaces/IAudioCaptureSource.h>
+#include <recorder_core/recorder_session.h>
 
 #include <Audioclient.h>
 #include <mmdeviceapi.h>
@@ -12,9 +13,30 @@
 
 namespace recorder_core {
 
+namespace mic_channel_detail {
+
+struct AutoModeState {
+    uint64_t analyzed_frames = 0;
+    double energy_left = 0.0;
+    double energy_right = 0.0;
+    bool locked = false;
+    MicChannelMode resolved_mode = MicChannelMode::PreserveStereo;
+};
+
+void MapStereoFrameFloat32(MicChannelMode mode, float input_l, float input_r, float& output_l, float& output_r);
+void MapStereoFrameInt16(MicChannelMode mode, int16_t input_l, int16_t input_r, int16_t& output_l, int16_t& output_r);
+MicChannelMode ResolveAutoChannelMode(double rms_left, double rms_right);
+void UpdateAutoModeStateFloat32(AutoModeState& state, const float* interleaved_stereo, uint32_t num_frames,
+                                bool silent);
+void UpdateAutoModeStateInt16(AutoModeState& state, const int16_t* interleaved_stereo, uint32_t num_frames,
+                              bool silent);
+MicChannelMode EffectiveAutoMode(const AutoModeState& state);
+
+} // namespace mic_channel_detail
+
 class WasapiCaptureSrc : public IAudioCaptureSource {
   public:
-    WasapiCaptureSrc() = default;
+    explicit WasapiCaptureSrc(MicChannelMode channel_mode = MicChannelMode::Auto);
     ~WasapiCaptureSrc() override;
 
     WasapiCaptureSrc(const WasapiCaptureSrc&) = delete;
@@ -33,6 +55,9 @@ class WasapiCaptureSrc : public IAudioCaptureSource {
     void Shutdown() override;
 
   private:
+    void UpdateAutoModeFromBuffer(const uint8_t* data, uint32_t num_frames, bool silent);
+    MicChannelMode EffectiveChannelMode() const;
+
     IMMDevice* device_ = nullptr;
     IAudioClient* audio_client_ = nullptr;
     IAudioCaptureClient* capture_client_ = nullptr;
@@ -50,7 +75,14 @@ class WasapiCaptureSrc : public IAudioCaptureSource {
     bool pending_capture_error_ = false;
     std::string pending_capture_error_msg_;
 
-    std::vector<uint8_t> mono_expand_buffer_;
+    MicChannelMode requested_channel_mode_ = MicChannelMode::Auto;
+    MicChannelMode auto_resolved_mode_ = MicChannelMode::PreserveStereo;
+    bool auto_mode_locked_ = false;
+    uint64_t auto_detect_frames_ = 0;
+    double auto_energy_left_ = 0.0;
+    double auto_energy_right_ = 0.0;
+
+    std::vector<uint8_t> mapped_buffer_;
 };
 
 } // namespace recorder_core

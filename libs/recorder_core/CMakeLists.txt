@@ -153,3 +153,11 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_audio_thread_source_agnostic PRIVATE src)
+
+exosnap_add_gtest(
+    NAME test_mic_channel_mapping
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_mic_channel_mapping.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_mic_channel_mapping PRIVATE src)

@@ -28,6 +28,15 @@ struct CaptureTarget {
     std::string description;
 };
 
+// Microphone channel mapping policy for MIC capture in M4 Phase 4.2.
+enum class MicChannelMode {
+    Auto,
+    PreserveStereo,
+    MonoMix,
+    LeftToStereo,
+    RightToStereo,
+};
+
 // ---------------------------------------------------------------------------
 // RecorderConfig
 // ---------------------------------------------------------------------------
@@ -54,6 +63,9 @@ struct RecorderConfig {
     // Resolved output audio tracks from the APP/MIC/SYS source model.
     // Phase 2 legacy compatibility: empty plan means single audio track.
     AudioTrackPlan audio_track_plan;
+
+    // MIC input channel mapping policy (applies to explicit MIC capture plan).
+    MicChannelMode mic_channel_mode = MicChannelMode::Auto;
 };
 
 // ---------------------------------------------------------------------------
