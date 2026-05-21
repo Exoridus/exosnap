@@ -354,6 +354,13 @@ QLabel[labelRole="recordPlaceholderNote"] {
     color: ${text3};
 }
 
+QLabel[labelRole="audioSettingsGroupTitle"] {
+    font-family: ${font-mono};
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    color: ${text2};
+}
+
 QWidget#captureTargetCard {
     background: ${bg2};
     border: 1px solid ${line1};
@@ -1046,7 +1053,7 @@ QCheckBox::indicator {
     width: 14px;
     height: 14px;
     border: 1px solid ${line2};
-    border-radius: 8px;
+    border-radius: 3px;
     background: ${bg3};
 }
 

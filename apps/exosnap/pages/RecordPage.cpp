@@ -353,7 +353,8 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 
     audio_settings_layout->addSpacing(6);
     audio_settings_layout->addWidget(makeLabel("Resulting Tracks", "audioSettingsGroupTitle", audio_settings_panel));
-    track_preview_panel_ = makePanel(audio_settings_panel, "audioTrackPreviewPanel");
+    track_preview_panel_ = makePanel(audio_settings_panel);
+    track_preview_panel_->setObjectName("resultingTracksPanel");
     track_preview_layout_ = new QVBoxLayout(track_preview_panel_);
     track_preview_layout_->setContentsMargins(0, 0, 0, 0);
     track_preview_layout_->setSpacing(0);
@@ -897,14 +898,17 @@ void RecordPage::updateTargetCards() {
         if (!region_selected)
             region_card_->setStatusText("○");
     } else {
-        region_card_->setSubtitle("Region card is placeholder in this pass");
-        region_card_->setStatusText("PLACEHOLDER");
+        region_card_->setSubtitle("Not available in this version");
+        region_card_->setStatusText("○");
     }
 }
 
 void RecordPage::updateReadinessRows() {
     if (readiness_rows_.size() < 5)
         return;
+
+    const bool is_window_target = view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window;
+    readiness_rows_[2].title->setText(is_window_target ? "Audio loopback (APP)" : "Audio loopback (SYS)");
 
     const bool blocked = (view_model_.state == UiRecordingState::Blocked);
     const bool checking = (view_model_.state == UiRecordingState::LoadingCapabilities);
