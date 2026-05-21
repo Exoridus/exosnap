@@ -8,6 +8,9 @@
 #include <ctime>
 #include <sstream>
 
+#include "../models/FilenameBuilder.h"
+#include "../models/OutputPathValidator.h"
+
 namespace exosnap {
 
 static std::wstring ToWide(const std::string& s) {
@@ -32,7 +35,8 @@ static bool PlanRequiresTargetPid(const recorder_core::AudioTrackPlan& plan) {
     return false;
 }
 
-RecordingCoordinator::RecordingCoordinator() = default;
+RecordingCoordinator::RecordingCoordinator() : output_settings_(OutputSettingsModel::Defaults()) {
+}
 
 RecordingCoordinator::~RecordingCoordinator() {
     if (is_recording_) {
@@ -70,6 +74,17 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
                                           const capability::AudioUiState& audio_ui_state) {
     if (is_recording_)
         return false;
+    const auto folder_check = ValidateOutputFolder(output_settings_.output_folder);
+    if (folder_check != FolderValidationResult::Ok) {
+        PostStateChange(UiRecordingState::Failed);
+
+        UiRecordingResult result;
+        result.succeeded = false;
+        result.error_detail = FolderValidationMessage(folder_check);
+        PostResult(std::move(result));
+
+        return false;
+    }
     if (state_ != UiRecordingState::Ready && state_ != UiRecordingState::Completed &&
         state_ != UiRecordingState::Failed) {
         return false;
@@ -182,6 +197,9 @@ const std::wstring& RecordingCoordinator::CapabilityStatusText() const {
 std::filesystem::path RecordingCoordinator::CurrentOutputPath() const {
     return current_output_path_;
 }
+void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings) {
+    output_settings_ = settings;
+}
 
 void RecordingCoordinator::SetStateChangedCallback(StateChangedCallback cb) {
     on_state_changed_ = std::move(cb);
@@ -217,19 +235,9 @@ void RecordingCoordinator::PostStats(recorder_core::SessionStats stats) {
         QCoreApplication::instance(), [cb, s = std::move(stats)]() { cb(s); }, Qt::QueuedConnection);
 }
 
-std::filesystem::path RecordingCoordinator::GenerateOutputPath() {
-    wchar_t profile[MAX_PATH] = {};
-    DWORD len = GetEnvironmentVariableW(L"USERPROFILE", profile, MAX_PATH);
-    std::filesystem::path base_dir = (len > 0 && len < MAX_PATH)
-                                         ? std::filesystem::path(profile) / L"Videos" / L"Exosnap"
-                                         : std::filesystem::path(L"C:\\Users\\Public\\Videos\\Exosnap");
-
-    std::time_t t = std::time(nullptr);
-    std::tm tm{};
-    localtime_s(&tm, &t);
-    wchar_t ts[32] = {};
-    wcsftime(ts, _countof(ts), L"%Y%m%d_%H%M%S", &tm);
-    return base_dir / (std::wstring(L"exosnap_") + ts + L".mkv");
+std::filesystem::path RecordingCoordinator::GenerateOutputPath() const {
+    return BuildOutputPath(output_settings_.output_folder, output_settings_.naming_pattern, output_settings_.container,
+                           std::time(nullptr));
 }
 
 std::wstring RecordingCoordinator::FormatHResult(int32_t hr) {

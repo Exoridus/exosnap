@@ -67,6 +67,12 @@ qt_add_executable(exosnap WIN32
     pages/AdvancedPage.cpp
     services/RecordingCoordinator.h
     services/RecordingCoordinator.cpp
+    models/OutputSettingsModel.h
+    models/OutputSettingsModel.cpp
+    models/FilenameBuilder.h
+    models/FilenameBuilder.cpp
+    models/OutputPathValidator.h
+    models/OutputPathValidator.cpp
     diagnostics/error_message.h
     diagnostics/error_message.cpp
     viewmodels/RecordViewModel.h
@@ -119,4 +125,19 @@ exosnap_add_gtest(
     recorder_core
 )
 target_include_directories(error_message_tests
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+  NAME output_settings_tests
+  TEST_PREFIX output.
+  SOURCES
+    tests/test_output_settings.cpp
+    models/OutputSettingsModel.cpp
+    models/FilenameBuilder.cpp
+    models/OutputPathValidator.cpp
+  LIBRARIES
+    exosnap_capability
+    recorder_core
+)
+target_include_directories(output_settings_tests
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
