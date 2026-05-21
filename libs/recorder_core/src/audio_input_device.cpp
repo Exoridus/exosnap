@@ -1,9 +1,14 @@
 #include <recorder_core/audio_input_device.h>
 
-#include <functiondiscoverykeys_devpkey.h>
-#include <mmdeviceapi.h>
-#include <propsys.h>
+// clang-format off
 #include <windows.h>
+
+#include <mmdeviceapi.h>
+#include <propidl.h>
+#include <propkey.h>
+#include <functiondiscoverykeys_devpkey.h>
+#include <propsys.h>
+// clang-format on
 
 #include <string_view>
 #include <utility>
@@ -36,9 +41,19 @@ std::string WideToUtf8(std::wstring_view value) {
 } // namespace
 
 std::vector<AudioInputDeviceInfo> EnumerateAudioInputDevices() {
+    const HRESULT init_hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    const bool should_uninitialize = init_hr == S_OK || init_hr == S_FALSE;
+    const bool com_ready = SUCCEEDED(init_hr) || init_hr == RPC_E_CHANGED_MODE;
+    if (!com_ready) {
+        return {};
+    }
+
     IMMDeviceEnumerator* enumerator = nullptr;
     HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
     if (FAILED(hr) || enumerator == nullptr) {
+        if (should_uninitialize) {
+            CoUninitialize();
+        }
         return {};
     }
 
@@ -63,6 +78,9 @@ std::vector<AudioInputDeviceInfo> EnumerateAudioInputDevices() {
     hr = enumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &collection);
     if (FAILED(hr) || collection == nullptr) {
         enumerator->Release();
+        if (should_uninitialize) {
+            CoUninitialize();
+        }
         return {};
     }
 
@@ -71,6 +89,9 @@ std::vector<AudioInputDeviceInfo> EnumerateAudioInputDevices() {
     if (FAILED(hr)) {
         collection->Release();
         enumerator->Release();
+        if (should_uninitialize) {
+            CoUninitialize();
+        }
         return {};
     }
 
@@ -124,6 +145,9 @@ std::vector<AudioInputDeviceInfo> EnumerateAudioInputDevices() {
 
     collection->Release();
     enumerator->Release();
+    if (should_uninitialize) {
+        CoUninitialize();
+    }
     return devices;
 }
 
