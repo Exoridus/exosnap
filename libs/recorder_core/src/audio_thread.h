@@ -36,6 +36,7 @@ class AudioThread {
     SessionState& m_state;
     std::unique_ptr<IAudioCaptureSource> source_;
     uint32_t track_id_ = 0;
+    float m_smoothed_rms_ = 0.0f;
     std::thread m_thread;
 };
 

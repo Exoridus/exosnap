@@ -3,17 +3,21 @@
 #include "codec_private.h"
 #include "mf_aac_encoder.h"
 #include "opus_audio_encoder.h"
+#include "recorder_core/audio_meter.h"
 #include "session_internal.h"
 
 #include <recorder_core/packet_types.h>
 
+#include <cstdint>
 #include <cstdio>
 
 namespace recorder_core {
 
 namespace {
 
-void ConvertInt16ToFloat32(const int16_t* src, float* dst, size_t sample_count) {
+constexpr float kRmsEmaAlpha = 0.3f;
+
+void ConvertInt16ToFloat32(const std::int16_t* src, float* dst, size_t sample_count) {
     for (size_t i = 0; i < sample_count; ++i) {
         dst[i] = static_cast<float>(src[i]) / 32768.0f;
     }
@@ -182,6 +186,7 @@ void AudioThread::Run() {
                 }
 
                 std::vector<EncodedAudioPacket> pkts;
+                float new_rms = 0.0f;
                 if (raw.silent) {
                     std::vector<float> silence(static_cast<size_t>(raw.num_frames) * kChannels, 0.0f);
                     opusEnc.FeedFloat32(silence.data(), silence.size(), 0, encoderAccumulatedFrames, kSampleRate,
@@ -192,17 +197,20 @@ void AudioThread::Run() {
                                           "Audio source returned null bytes for non-silent packet");
                     goto end_opus_loop;
                 } else if (sourceFormat == AudioSampleFormat::Float32) {
-                    opusEnc.FeedFloat32(reinterpret_cast<const float*>(raw.bytes),
-                                        static_cast<size_t>(raw.num_frames) * kChannels, 0, encoderAccumulatedFrames,
-                                        kSampleRate, kChannels, pkts);
+                    const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(kChannels);
+                    new_rms = ComputeRmsLinear(reinterpret_cast<const float*>(raw.bytes), totalSamples);
+                    opusEnc.FeedFloat32(reinterpret_cast<const float*>(raw.bytes), totalSamples, 0,
+                                        encoderAccumulatedFrames, kSampleRate, kChannels, pkts);
                 } else {
                     const size_t totalSamples = static_cast<size_t>(raw.num_frames) * kChannels;
                     floatScratch.resize(totalSamples);
-                    ConvertInt16ToFloat32(reinterpret_cast<const int16_t*>(raw.bytes), floatScratch.data(),
+                    ConvertInt16ToFloat32(reinterpret_cast<const std::int16_t*>(raw.bytes), floatScratch.data(),
                                           totalSamples);
+                    new_rms = ComputeRmsLinear(floatScratch.data(), floatScratch.size());
                     opusEnc.FeedFloat32(floatScratch.data(), floatScratch.size(), 0, encoderAccumulatedFrames,
                                         kSampleRate, kChannels, pkts);
                 }
+                m_smoothed_rms_ = kRmsEmaAlpha * new_rms + (1.0f - kRmsEmaAlpha) * m_smoothed_rms_;
 
                 source_->ReleaseBuffer();
 
@@ -212,6 +220,9 @@ void AudioThread::Run() {
                     for (const auto& p : pkts) {
                         m_state.stats.audio_packets++;
                         m_state.stats.audio_bytes += p.bytes.size();
+                    }
+                    if (track_id_ < m_state.stats.per_track_rms.size()) {
+                        m_state.stats.per_track_rms[track_id_] = m_smoothed_rms_;
                     }
                 }
 
@@ -326,6 +337,8 @@ void AudioThread::Run() {
                 static_cast<LONGLONG>(raw.num_frames) * 10000000LL / static_cast<LONGLONG>(kSampleRate);
 
             std::vector<EncodedAudioPacket> pkts;
+            float new_rms = 0.0f;
+            const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(kChannels);
 
             if (raw.silent) {
                 // Feed silence
@@ -339,10 +352,11 @@ void AudioThread::Run() {
                 goto end_audio_loop;
             } else if (aacEnc.UsesPcm16()) {
                 if (sourceFormat == AudioSampleFormat::Int16) {
+                    new_rms = ComputeRmsFromInt16(reinterpret_cast<const std::int16_t*>(raw.bytes), totalSamples);
                     UINT32 dataBytes = raw.num_frames * aacEnc.InputBlockAlign();
                     aacEnc.FeedRaw(raw.bytes, dataBytes, audio_ts_ns, sampleDuration, pkts);
                 } else {
-                    const size_t totalSamples = static_cast<size_t>(raw.num_frames) * kChannels;
+                    new_rms = ComputeRmsLinear(reinterpret_cast<const float*>(raw.bytes), totalSamples);
                     aacEnc.FeedFloat32(reinterpret_cast<const float*>(raw.bytes), totalSamples, audio_ts_ns,
                                        audioAccumulatedFrames, kSampleRate, kChannels, pkts);
                     // FeedFloat32 already increments accumulated_frames, reset to avoid double-count
@@ -350,19 +364,21 @@ void AudioThread::Run() {
                 }
             } else {
                 if (sourceFormat == AudioSampleFormat::Int16) {
-                    const size_t totalSamples = static_cast<size_t>(raw.num_frames) * kChannels;
                     floatScratch.resize(totalSamples);
-                    ConvertInt16ToFloat32(reinterpret_cast<const int16_t*>(raw.bytes), floatScratch.data(),
+                    ConvertInt16ToFloat32(reinterpret_cast<const std::int16_t*>(raw.bytes), floatScratch.data(),
                                           totalSamples);
+                    new_rms = ComputeRmsLinear(floatScratch.data(), floatScratch.size());
                     aacEnc.FeedFloat32(floatScratch.data(), totalSamples, audio_ts_ns, audioAccumulatedFrames,
                                        kSampleRate, kChannels, pkts);
                     // FeedFloat32 already increments accumulated_frames, reset to avoid double-count
                     audioAccumulatedFrames -= raw.num_frames;
                 } else {
+                    new_rms = ComputeRmsLinear(reinterpret_cast<const float*>(raw.bytes), totalSamples);
                     UINT32 dataBytes = raw.num_frames * aacEnc.InputBlockAlign();
                     aacEnc.FeedRaw(raw.bytes, dataBytes, audio_ts_ns, sampleDuration, pkts);
                 }
             }
+            m_smoothed_rms_ = kRmsEmaAlpha * new_rms + (1.0f - kRmsEmaAlpha) * m_smoothed_rms_;
 
             source_->ReleaseBuffer();
             audioAccumulatedFrames += raw.num_frames;
@@ -373,6 +389,9 @@ void AudioThread::Run() {
                 for (const auto& p : pkts) {
                     m_state.stats.audio_packets++;
                     m_state.stats.audio_bytes += p.bytes.size();
+                }
+                if (track_id_ < m_state.stats.per_track_rms.size()) {
+                    m_state.stats.per_track_rms[track_id_] = m_smoothed_rms_;
                 }
             }
 

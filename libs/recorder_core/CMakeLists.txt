@@ -11,6 +11,8 @@ if(NOT EXISTS "${_nvenc_header}")
         src/audio_input_device.cpp
         src/audio_track_model.cpp
         src/codec_private.cpp
+        include/recorder_core/audio_meter.h
+        src/audio_meter.cpp
         src/opus_audio_encoder.cpp
     )
 
@@ -59,6 +61,13 @@ if(NOT EXISTS "${_nvenc_header}")
     )
     target_include_directories(test_opus_encoder PRIVATE src)
 
+    exosnap_add_gtest(
+        NAME test_audio_meter
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_audio_meter.cpp
+        LIBRARIES recorder_core
+    )
+
     return()
 endif()
 
@@ -75,6 +84,8 @@ add_library(recorder_core STATIC
     src/recorder_session.cpp
     src/audio_input_device.cpp
     src/codec_private.cpp
+    include/recorder_core/audio_meter.h
+    src/audio_meter.cpp
     src/wgc_capture.cpp
     src/nvenc_encoder.cpp
     src/mf_aac_encoder.cpp
@@ -188,3 +199,10 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_audio_duration_stats PRIVATE src)
+
+exosnap_add_gtest(
+    NAME test_audio_meter
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_audio_meter.cpp
+    LIBRARIES recorder_core
+)

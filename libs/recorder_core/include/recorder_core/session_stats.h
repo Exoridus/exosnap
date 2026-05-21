@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <functional>
 
@@ -17,6 +18,9 @@ struct SessionStats {
     uint64_t audio_duration_ns = 0;
     double duration_skew_ms = 0.0;
     uint64_t dropped_or_skipped_video_frames = 0;
+    // Smoothed linear RMS level [0..1] per audio track.
+    // Index is AudioThread track_id_ and is bounded by CodecPrivateData::kMaxAudioTracks.
+    std::array<float, 3> per_track_rms{};
     bool source_loss = false;
 };
 
