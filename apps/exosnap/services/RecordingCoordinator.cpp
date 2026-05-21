@@ -246,13 +246,13 @@ std::wstring RecordingCoordinator::FormatErrorPhase(recorder_core::ErrorPhase ph
     case recorder_core::ErrorPhase::Prepare:
         return L"Prepare";
     case recorder_core::ErrorPhase::VideoCapture:
-        return L"VideoCapture";
+        return L"Video Capture";
     case recorder_core::ErrorPhase::VideoEncode:
-        return L"VideoEncode";
+        return L"Video Encoder";
     case recorder_core::ErrorPhase::AudioCapture:
-        return L"AudioCapture";
+        return L"Audio Capture";
     case recorder_core::ErrorPhase::AudioEncode:
-        return L"AudioEncode";
+        return L"Audio Encoder";
     case recorder_core::ErrorPhase::Mux:
         return L"Mux";
     case recorder_core::ErrorPhase::Finalize:

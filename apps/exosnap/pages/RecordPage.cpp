@@ -259,6 +259,11 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     cards_layout->addWidget(monitor_card_, 1);
     cards_layout->addWidget(window_card_, 1);
     cards_layout->addWidget(region_card_, 1);
+    monitor_card_->setAccessibleName("Monitor target");
+    window_card_->setAccessibleName("Window target");
+    region_card_->setAccessibleName("Region target");
+    QWidget::setTabOrder(monitor_card_, window_card_);
+    QWidget::setTabOrder(window_card_, region_card_);
     layout->addWidget(cards_row);
 
     target_combo_ = new QComboBox(content);
@@ -312,7 +317,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     audio_settings_layout->addWidget(makeLabel("Audio Output", "audioSettingsGroupTitle", audio_settings_panel));
     app_audio_check_ = new QCheckBox("Record Application Audio", audio_settings_panel);
     sys_audio_check_ = new QCheckBox("Record System Audio", audio_settings_panel);
-    separate_tracks_check_ = new QCheckBox("Use separate output tracks", audio_settings_panel);
+    separate_tracks_check_ = new QCheckBox("Separate output tracks", audio_settings_panel);
     audio_settings_layout->addWidget(app_audio_check_);
     audio_settings_layout->addWidget(sys_audio_check_);
     audio_settings_layout->addWidget(separate_tracks_check_);
@@ -326,7 +331,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     auto* mic_device_row_layout = new QHBoxLayout(mic_device_row_);
     mic_device_row_layout->setContentsMargins(0, 0, 0, 0);
     mic_device_row_layout->setSpacing(10);
-    mic_device_row_layout->addWidget(makeLabel("Input Device:", "audioSettingsRowLabel", mic_device_row_));
+    mic_device_row_layout->addWidget(makeLabel("Input Device", "audioSettingsRowLabel", mic_device_row_));
     mic_device_combo_ = new QComboBox(mic_device_row_);
     mic_device_combo_->addItem("Default Microphone");
     mic_device_row_layout->addWidget(mic_device_combo_, 1);
@@ -336,7 +341,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     auto* mic_channel_row_layout = new QHBoxLayout(mic_channel_row_);
     mic_channel_row_layout->setContentsMargins(0, 0, 0, 0);
     mic_channel_row_layout->setSpacing(10);
-    mic_channel_row_layout->addWidget(makeLabel("Channel:", "audioSettingsRowLabel", mic_channel_row_));
+    mic_channel_row_layout->addWidget(makeLabel("Channel", "audioSettingsRowLabel", mic_channel_row_));
     mic_channel_combo_ = new QComboBox(mic_channel_row_);
     mic_channel_combo_->addItem("Auto");
     mic_channel_combo_->addItem("Preserve Stereo");
@@ -347,8 +352,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     audio_settings_layout->addWidget(mic_channel_row_);
 
     audio_settings_layout->addSpacing(6);
-    audio_settings_layout->addWidget(
-        makeLabel("Tracks to be recorded", "audioSettingsGroupTitle", audio_settings_panel));
+    audio_settings_layout->addWidget(makeLabel("Resulting Tracks", "audioSettingsGroupTitle", audio_settings_panel));
     track_preview_panel_ = makePanel(audio_settings_panel, "audioTrackPreviewPanel");
     track_preview_layout_ = new QVBoxLayout(track_preview_panel_);
     track_preview_layout_->setContentsMargins(0, 0, 0, 0);
@@ -714,6 +718,18 @@ void RecordPage::updateAudioTrackPreview() {
         return;
     }
 
+    const auto sourceTag = [](const std::string& source_key) {
+        if (source_key == "app")
+            return QStringLiteral("APP");
+        if (source_key == "sys")
+            return QStringLiteral("SYS");
+        if (source_key == "mic")
+            return QStringLiteral("MIC");
+        if (source_key == "system_output")
+            return QStringLiteral("OUT");
+        return QString::fromStdString(source_key).toUpper();
+    };
+
     QLayoutItem* item = nullptr;
     while ((item = track_preview_layout_->takeAt(0)) != nullptr) {
         if (QWidget* widget = item->widget()) {
@@ -740,8 +756,8 @@ void RecordPage::updateAudioTrackPreview() {
         rl->setContentsMargins(14, 8, 14, 8);
         rl->setSpacing(10);
 
-        auto* idx = makeLabel(QString::number(preview_item.track_number), "audioTrackIndex", row);
-        idx->setFixedWidth(24);
+        auto* idx = makeLabel(sourceTag(preview_item.source_key), "audioTrackPreviewTag", row);
+        idx->setFixedWidth(44);
         rl->addWidget(idx);
 
         rl->addWidget(makeLabel(QString::fromStdString(preview_item.display_label), "audioTrackName", row));

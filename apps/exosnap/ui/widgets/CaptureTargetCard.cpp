@@ -1,6 +1,7 @@
 #include "CaptureTargetCard.h"
 
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QStyle>
@@ -21,6 +22,7 @@ CaptureTargetCard::CaptureTargetCard(QWidget* parent) : QFrame(parent) {
     setObjectName("captureTargetCard");
     setProperty("selected", false);
     setCursor(Qt::PointingHandCursor);
+    setFocusPolicy(Qt::StrongFocus);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(14, 12, 14, 12);
@@ -111,6 +113,16 @@ bool CaptureTargetCard::eventFilter(QObject* watched, QEvent* event) {
         }
     }
     return QFrame::eventFilter(watched, event);
+}
+
+void CaptureTargetCard::keyPressEvent(QKeyEvent* event) {
+    if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Space) {
+        emit clicked();
+        event->accept();
+        return;
+    }
+
+    QFrame::keyPressEvent(event);
 }
 
 void CaptureTargetCard::mousePressEvent(QMouseEvent* event) {

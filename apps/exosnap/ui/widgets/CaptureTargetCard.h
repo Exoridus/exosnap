@@ -5,6 +5,7 @@
 class QLabel;
 class QObject;
 class QEvent;
+class QKeyEvent;
 
 namespace exosnap::ui::widgets {
 
@@ -30,6 +31,7 @@ class CaptureTargetCard : public QFrame {
 
   protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
 
