@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <thread>
@@ -83,6 +84,50 @@ static const char* support_level_string(exosnap::capability::SupportLevel level)
 
 static const char* yes_no(bool value) {
     return value ? "yes" : "no";
+}
+
+static recorder_core::ResolvedAudioTrack make_single_source_track(recorder_core::AudioSourceKind kind,
+                                                                  uint32_t track_index) {
+    recorder_core::ResolvedAudioTrack track;
+    track.sources.push_back(kind);
+    track.track_index = track_index;
+    return track;
+}
+
+static const char* audio_source_kind_string(recorder_core::AudioSourceKind kind) {
+    using recorder_core::AudioSourceKind;
+    switch (kind) {
+    case AudioSourceKind::App:
+        return "App";
+    case AudioSourceKind::Mic:
+        return "Mic";
+    case AudioSourceKind::Sys:
+        return "Sys";
+    default:
+        return "Unknown";
+    }
+}
+
+static std::optional<uint32_t> parse_positive_u32_decimal(const std::string& value) {
+    if (value.empty()) {
+        return std::nullopt;
+    }
+
+    uint64_t parsed = 0;
+    for (const char c : value) {
+        if (c < '0' || c > '9') {
+            return std::nullopt;
+        }
+        parsed = parsed * 10 + static_cast<uint64_t>(c - '0');
+        if (parsed > static_cast<uint64_t>((std::numeric_limits<uint32_t>::max)())) {
+            return std::nullopt;
+        }
+    }
+
+    if (parsed == 0) {
+        return std::nullopt;
+    }
+    return static_cast<uint32_t>(parsed);
 }
 
 static void print_support_line(const char* dimension, const std::string& name,
@@ -215,6 +260,11 @@ struct CliArgs {
     bool list_only = false;
     bool capabilities = false;
     bool mic_opus = false;
+    bool app_opus = false;
+    bool sys_opus = false;
+    bool app_sys_opus = false;
+    bool audio_pid_set = false;
+    uint32_t audio_pid = 0;
     bool help = false;
     bool mic_channel_set = false;
     recorder_core::MicChannelMode mic_channel_mode = recorder_core::MicChannelMode::Auto;
@@ -271,6 +321,28 @@ static CliArgs parse_args(int argc, char* argv[]) {
             args.capabilities = true;
         } else if (arg == "--mic-opus") {
             args.mic_opus = true;
+        } else if (arg == "--app-opus") {
+            args.app_opus = true;
+        } else if (arg == "--sys-opus") {
+            args.sys_opus = true;
+        } else if (arg == "--app-sys-opus") {
+            args.app_sys_opus = true;
+        } else if (arg == "--audio-pid") {
+            if (i + 1 >= argc) {
+                args.parse_ok = false;
+                args.parse_error = "--audio-pid requires a positive decimal PID";
+                return args;
+            }
+            ++i;
+            const std::string pid_value = argv[i];
+            const auto parsed_pid = parse_positive_u32_decimal(pid_value);
+            if (!parsed_pid.has_value()) {
+                args.parse_ok = false;
+                args.parse_error = "Invalid --audio-pid value '" + pid_value + "' (expected positive decimal PID)";
+                return args;
+            }
+            args.audio_pid_set = true;
+            args.audio_pid = parsed_pid.value();
         } else if (arg == "--mic-channel") {
             if (i + 1 >= argc) {
                 args.parse_ok = false;
@@ -303,12 +375,18 @@ static CliArgs parse_args(int argc, char* argv[]) {
 }
 
 static void print_usage(const char* program) {
-    std::printf("Usage: %s [--list] [--target N] [--capabilities] [--mic-opus] [--mic-channel MODE] [--help]\n\n",
+    std::printf("Usage: %s [--list] [--target N] [--capabilities] [--mic-opus] [--app-opus] [--sys-opus]"
+                " [--app-sys-opus] [--audio-pid PID] [--mic-channel MODE] [--help]\n\n",
                 program);
     std::puts("  --list           List capture targets and exit");
     std::puts("  --target N       Select target N (1-based) without prompting");
     std::puts("  --capabilities   Show hardware capability report and exit");
     std::puts("  --mic-opus       [Phase-4 validation] Mic source + Opus codec, MKV output");
+    std::puts("  --app-opus       Validate APP process-loopback audio as Opus/MKV. Requires --audio-pid.");
+    std::puts("  --sys-opus       Validate SYS process-loopback audio as Opus/MKV. Requires --audio-pid.");
+    std::puts("  --app-sys-opus   Validate APP and SYS process-loopback audio as separate Opus tracks. Requires "
+              "--audio-pid.");
+    std::puts("  --audio-pid PID  Target process id for APP/SYS process-loopback validation.");
     std::puts("  --mic-channel    [MIC only] auto | preserve | mono-mix | left | right");
     std::puts("  --help           Show this help");
     std::puts("");
@@ -379,8 +457,27 @@ int main(int argc, char* argv[]) {
         print_usage(argv[0]);
         return 0;
     }
+    const int validation_mode_count = static_cast<int>(cli.mic_opus) + static_cast<int>(cli.app_opus) +
+                                      static_cast<int>(cli.sys_opus) + static_cast<int>(cli.app_sys_opus);
+    if (validation_mode_count > 1) {
+        std::fputs("ERROR: validation modes are mutually exclusive. Choose only one of "
+                   "--mic-opus, --app-opus, --sys-opus, --app-sys-opus.\n\n",
+                   stderr);
+        print_usage(argv[0]);
+        return 1;
+    }
     if (cli.mic_channel_set && !cli.mic_opus) {
         std::fputs("ERROR: --mic-channel can only be used together with --mic-opus.\n\n", stderr);
+        print_usage(argv[0]);
+        return 1;
+    }
+    if ((cli.app_opus || cli.sys_opus || cli.app_sys_opus) && !cli.audio_pid_set) {
+        std::fputs("ERROR: --app-opus, --sys-opus, and --app-sys-opus require --audio-pid PID.\n\n", stderr);
+        print_usage(argv[0]);
+        return 1;
+    }
+    if (cli.audio_pid_set && !(cli.app_opus || cli.sys_opus || cli.app_sys_opus)) {
+        std::fputs("ERROR: --audio-pid can only be used with --app-opus, --sys-opus, or --app-sys-opus.\n\n", stderr);
         print_usage(argv[0]);
         return 1;
     }
@@ -431,8 +528,17 @@ int main(int argc, char* argv[]) {
     std::filesystem::path output_dir = (profile_len > 0 && profile_len < MAX_PATH)
                                            ? std::filesystem::path(profile_buf) / L"Videos" / L"exosnap"
                                            : std::filesystem::path(L"C:\\Users\\Public\\Videos\\exosnap");
-    const std::filesystem::path output_path =
-        output_dir / (cli.mic_opus ? "recorder_core_av1_opus_mic.mkv" : "recorder_core_av1_aac.mkv");
+    std::string output_filename = "recorder_core_av1_aac.mkv";
+    if (cli.mic_opus) {
+        output_filename = "recorder_core_av1_opus_mic.mkv";
+    } else if (cli.app_opus) {
+        output_filename = "recorder_core_av1_opus_app.mkv";
+    } else if (cli.sys_opus) {
+        output_filename = "recorder_core_av1_opus_sys.mkv";
+    } else if (cli.app_sys_opus) {
+        output_filename = "recorder_core_av1_opus_app_sys.mkv";
+    }
+    const std::filesystem::path output_path = output_dir / output_filename;
 
     std::error_code ec;
     std::filesystem::create_directories(output_dir, ec);
@@ -494,14 +600,38 @@ int main(int argc, char* argv[]) {
     if (cli.mic_opus) {
         config.audio_codec = recorder_core::AudioCodec::Opus;
         recorder_core::AudioTrackPlan plan;
-        recorder_core::ResolvedAudioTrack track;
-        track.sources.push_back(recorder_core::AudioSourceKind::Mic);
-        track.track_index = 0;
-        plan.tracks.push_back(std::move(track));
+        plan.tracks.push_back(make_single_source_track(recorder_core::AudioSourceKind::Mic, 0u));
         config.audio_track_plan = std::move(plan);
         config.mic_channel_mode = cli.mic_channel_set ? cli.mic_channel_mode : recorder_core::MicChannelMode::Auto;
         std::printf("[mic-opus] AudioCodec=Opus  AudioTrackPlan={ Mic -> track 0 }  mic_channel=%s\n",
                     mic_channel_mode_string(config.mic_channel_mode));
+    } else if (cli.app_opus) {
+        config.audio_codec = recorder_core::AudioCodec::Opus;
+        config.audio_target_process_id = cli.audio_pid;
+        recorder_core::AudioTrackPlan plan;
+        plan.tracks.push_back(make_single_source_track(recorder_core::AudioSourceKind::App, 0u));
+        config.audio_track_plan = std::move(plan);
+        std::printf("[app-opus] AudioCodec=Opus  audio_target_pid=%u  AudioTrackPlan={ %s -> track 0 }\n",
+                    cli.audio_pid, audio_source_kind_string(recorder_core::AudioSourceKind::App));
+    } else if (cli.sys_opus) {
+        config.audio_codec = recorder_core::AudioCodec::Opus;
+        config.audio_target_process_id = cli.audio_pid;
+        recorder_core::AudioTrackPlan plan;
+        plan.tracks.push_back(make_single_source_track(recorder_core::AudioSourceKind::Sys, 0u));
+        config.audio_track_plan = std::move(plan);
+        std::printf("[sys-opus] AudioCodec=Opus  audio_target_pid=%u  AudioTrackPlan={ %s -> track 0 }\n",
+                    cli.audio_pid, audio_source_kind_string(recorder_core::AudioSourceKind::Sys));
+    } else if (cli.app_sys_opus) {
+        config.audio_codec = recorder_core::AudioCodec::Opus;
+        config.audio_target_process_id = cli.audio_pid;
+        recorder_core::AudioTrackPlan plan;
+        plan.tracks.push_back(make_single_source_track(recorder_core::AudioSourceKind::App, 0u));
+        plan.tracks.push_back(make_single_source_track(recorder_core::AudioSourceKind::Sys, 1u));
+        config.audio_track_plan = std::move(plan);
+        std::printf("[app-sys-opus] AudioCodec=Opus  audio_target_pid=%u  AudioTrackPlan={ %s -> track 0, %s -> track "
+                    "1 }\n",
+                    cli.audio_pid, audio_source_kind_string(recorder_core::AudioSourceKind::App),
+                    audio_source_kind_string(recorder_core::AudioSourceKind::Sys));
     }
 
     std::printf("Output path: %s\n", output_path.string().c_str());
