@@ -225,7 +225,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     auto createAudioSource = [&](AudioSourceKind kind) -> std::unique_ptr<IAudioCaptureSource> {
         switch (kind) {
         case AudioSourceKind::Mic:
-            return std::make_unique<WasapiCaptureSrc>(config.mic_channel_mode);
+            return std::make_unique<WasapiCaptureSrc>(config.mic_channel_mode, config.mic_device_id);
         case AudioSourceKind::App:
             return std::make_unique<WasapiProcessLoopbackSrc>(
                 static_cast<DWORD>(config.audio_target_process_id.value_or(0u)),

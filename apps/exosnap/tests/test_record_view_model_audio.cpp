@@ -82,6 +82,16 @@ TEST(RecordViewModelAudioTest, RecordViewModel_TrackPreviewUpdatesOnMicToggle) {
     ASSERT_EQ(vm.audio_track_preview.size(), 2u);
 }
 
+TEST(RecordViewModelAudioTest, RecordViewModel_RebuildAudioPlan_PropagatesMicDeviceId) {
+    RecordViewModel vm;
+
+    vm.audio_ui_state.selected_mic_device_id = "device-123";
+    vm.RebuildAudioPlan();
+
+    ASSERT_TRUE(vm.audio_plan.mic_device_id.has_value());
+    EXPECT_EQ(vm.audio_plan.mic_device_id.value(), "device-123");
+}
+
 TEST(RecordViewModelAudioTest, RecordViewModel_TrackPreviewDisplayTarget_SystemOutput) {
     RecordViewModel vm;
 

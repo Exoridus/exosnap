@@ -18,6 +18,24 @@ void ExpectSingleSourceTrack(const AudioPlanResult& result, size_t track_pos, Au
     EXPECT_EQ(track.sources.front(), expected_kind);
 }
 
+TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesSelectedMicDeviceId) {
+    AudioUiState state;
+    state.record_microphone = true;
+    state.selected_mic_device_id = "test-device-id";
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    ASSERT_TRUE(result.mic_device_id.has_value());
+    EXPECT_EQ(result.mic_device_id.value(), "test-device-id");
+}
+
+TEST(AudioPlanBuilderTest, BuildAudioPlan_DefaultMicDeviceIdIsNullopt) {
+    AudioUiState state;
+    state.selected_mic_device_id = std::nullopt;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_FALSE(result.mic_device_id.has_value());
+}
+
 TEST(AudioPlanBuilderTest, WindowTarget_AppOnly) {
     AudioUiState state;
     state.target_kind = CaptureTargetKind::Window;

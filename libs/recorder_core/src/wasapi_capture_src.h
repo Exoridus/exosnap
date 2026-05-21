@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -36,7 +37,8 @@ MicChannelMode EffectiveAutoMode(const AutoModeState& state);
 
 class WasapiCaptureSrc : public IAudioCaptureSource {
   public:
-    explicit WasapiCaptureSrc(MicChannelMode channel_mode = MicChannelMode::Auto);
+    explicit WasapiCaptureSrc(MicChannelMode channel_mode = MicChannelMode::Auto,
+                              std::optional<std::string> device_id = std::nullopt);
     ~WasapiCaptureSrc() override;
 
     WasapiCaptureSrc(const WasapiCaptureSrc&) = delete;
@@ -76,6 +78,7 @@ class WasapiCaptureSrc : public IAudioCaptureSource {
     std::string pending_capture_error_msg_;
 
     MicChannelMode requested_channel_mode_ = MicChannelMode::Auto;
+    std::optional<std::string> device_id_;
     MicChannelMode auto_resolved_mode_ = MicChannelMode::PreserveStereo;
     bool auto_mode_locked_ = false;
     uint64_t auto_detect_frames_ = 0;

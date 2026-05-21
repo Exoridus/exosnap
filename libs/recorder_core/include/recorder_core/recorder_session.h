@@ -72,6 +72,10 @@ struct RecorderConfig {
     // MIC input channel mapping policy (applies to explicit MIC capture plan).
     MicChannelMode mic_channel_mode = MicChannelMode::Auto;
 
+    // Optional WASAPI capture endpoint ID for microphone capture.
+    // nullopt preserves current behavior: use GetDefaultAudioEndpoint(eCapture, eConsole).
+    std::optional<std::string> mic_device_id;
+
     // Optional target process id for process-loopback sources (App/Sys).
     // When empty, legacy loopback mode (empty audio_track_plan) remains valid.
     std::optional<uint32_t> audio_target_process_id;

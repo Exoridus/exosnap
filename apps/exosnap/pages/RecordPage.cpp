@@ -11,6 +11,7 @@
 #include <capability/capability_builder.h>
 #include <capability/resolver.h>
 #include <capability/user_config.h>
+#include <recorder_core/audio_input_device.h>
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -27,6 +28,7 @@
 
 #include <exception>
 #include <iterator>
+#include <optional>
 
 namespace exosnap {
 namespace {
@@ -333,7 +335,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     mic_device_row_layout->setSpacing(10);
     mic_device_row_layout->addWidget(makeLabel("Input Device", "audioSettingsRowLabel", mic_device_row_));
     mic_device_combo_ = new QComboBox(mic_device_row_);
-    mic_device_combo_->addItem("Default Microphone");
+    populateMicDeviceCombo();
     mic_device_row_layout->addWidget(mic_device_combo_, 1);
     audio_settings_layout->addWidget(mic_device_row_);
 
@@ -481,6 +483,8 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(sys_audio_check_, &QCheckBox::toggled, this, &RecordPage::onSysAudioToggled);
     connect(separate_tracks_check_, &QCheckBox::toggled, this, &RecordPage::onSeparateTracksToggled);
     connect(mic_check_, &QCheckBox::toggled, this, &RecordPage::onMicToggled);
+    connect(mic_device_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &RecordPage::onMicDeviceChanged);
     connect(mic_channel_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &RecordPage::onMicChannelChanged);
 
@@ -630,6 +634,50 @@ void RecordPage::onMicToggled(bool checked) {
     view_model_.audio_ui_state.record_microphone = checked;
     view_model_.RebuildAudioPlan();
     updateAudioControls();
+    updateAudioTrackPreview();
+}
+
+void RecordPage::populateMicDeviceCombo() {
+    if (!mic_device_combo_) {
+        return;
+    }
+
+    QSignalBlocker blocker(mic_device_combo_);
+
+    mic_device_combo_->clear();
+    mic_devices_.clear();
+
+    mic_device_combo_->addItem("Default Microphone");
+    mic_devices_.push_back({});
+
+    const auto devices = recorder_core::EnumerateAudioInputDevices();
+    for (const auto& dev : devices) {
+        const QString name = QString::fromStdString(dev.display_name.empty() ? dev.device_id : dev.display_name);
+
+        QString label = name;
+        if (dev.is_default) {
+            label += QStringLiteral(" (Default)");
+        }
+
+        mic_device_combo_->addItem(label);
+        mic_devices_.push_back(dev);
+    }
+
+    mic_device_combo_->setCurrentIndex(0);
+    view_model_.audio_ui_state.selected_mic_device_id = std::nullopt;
+    view_model_.RebuildAudioPlan();
+}
+
+void RecordPage::onMicDeviceChanged(int index) {
+    if (index <= 0 || index >= static_cast<int>(mic_devices_.size())) {
+        view_model_.audio_ui_state.selected_mic_device_id = std::nullopt;
+    } else {
+        const auto& dev = mic_devices_[static_cast<std::size_t>(index)];
+        view_model_.audio_ui_state.selected_mic_device_id =
+            dev.device_id.empty() ? std::nullopt : std::optional<std::string>(dev.device_id);
+    }
+
+    view_model_.RebuildAudioPlan();
     updateAudioTrackPreview();
 }
 

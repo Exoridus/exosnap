@@ -8,6 +8,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string_view>
+#include <utility>
 
 namespace recorder_core {
 
@@ -47,6 +49,26 @@ AcceptedSampleKind DetectAcceptedSampleKind(const WAVEFORMATEX* fmt) {
         return AcceptedSampleKind::Pcm16;
     }
     return AcceptedSampleKind::Unsupported;
+}
+
+std::wstring Utf8ToWide(std::string_view value) {
+    if (value.empty()) {
+        return {};
+    }
+
+    const int required = MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0);
+    if (required <= 0) {
+        return {};
+    }
+
+    std::wstring converted(static_cast<size_t>(required), L'\0');
+    const int written =
+        MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), converted.data(), required);
+    if (written != required) {
+        return {};
+    }
+
+    return converted;
 }
 
 } // namespace
@@ -205,7 +227,8 @@ MicChannelMode EffectiveAutoMode(const AutoModeState& state) {
 
 } // namespace mic_channel_detail
 
-WasapiCaptureSrc::WasapiCaptureSrc(MicChannelMode channel_mode) : requested_channel_mode_(channel_mode) {
+WasapiCaptureSrc::WasapiCaptureSrc(MicChannelMode channel_mode, std::optional<std::string> device_id)
+    : requested_channel_mode_(channel_mode), device_id_(std::move(device_id)) {
 }
 
 WasapiCaptureSrc::~WasapiCaptureSrc() {
@@ -249,11 +272,17 @@ bool WasapiCaptureSrc::Init(std::string& out_error) {
         return failHr("CoCreateInstance(MMDeviceEnumerator)", hr);
     }
 
-    hr = enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &device_);
+    if (device_id_.has_value()) {
+        const std::wstring wide_device_id = Utf8ToWide(*device_id_);
+        hr = wide_device_id.empty() ? E_INVALIDARG : enumerator->GetDevice(wide_device_id.c_str(), &device_);
+    } else {
+        hr = enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &device_);
+    }
     enumerator->Release();
     enumerator = nullptr;
     if (FAILED(hr)) {
-        return failHr("GetDefaultAudioEndpoint(eCapture,eConsole)", hr);
+        return device_id_.has_value() ? failHr("IMMDeviceEnumerator::GetDevice", hr)
+                                      : failHr("GetDefaultAudioEndpoint(eCapture,eConsole)", hr);
     }
 
     // Friendly name

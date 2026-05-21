@@ -1,6 +1,7 @@
 #pragma once
 #include <QWidget>
 #include <memory>
+#include <recorder_core/audio_input_device.h>
 #include <vector>
 
 #include "../services/RecordingCoordinator.h"
@@ -59,11 +60,14 @@ class RecordPage : public QWidget {
     void onSysAudioToggled(bool checked);
     void onSeparateTracksToggled(bool checked);
     void onMicToggled(bool checked);
+    void onMicDeviceChanged(int index);
     void onMicChannelChanged(int index);
+    void populateMicDeviceCombo();
 
     int monitor_target_index_ = -1;
     int window_target_index_ = -1;
     int region_target_index_ = -1;
+    std::vector<recorder_core::AudioInputDeviceInfo> mic_devices_;
 
     RecordViewModel view_model_;
     std::unique_ptr<RecordingCoordinator> coordinator_;

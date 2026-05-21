@@ -112,6 +112,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.audio_track_plan = plan.plan;
     config.audio_target_process_id = plan.audio_target_process_id;
     config.mic_channel_mode = plan.mic_channel_mode;
+    config.mic_device_id = plan.mic_device_id;
 
     if (plan.record_audio && PlanRequiresTargetPid(plan.plan) && !plan.audio_target_process_id.has_value()) {
         PostStateChange(UiRecordingState::Failed);

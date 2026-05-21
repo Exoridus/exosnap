@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 
 #include <recorder_core/audio_track_model.h>
 #include <recorder_core/recorder_session.h>
@@ -24,6 +25,8 @@ struct AudioUiState {
     // Common controls.
     bool record_microphone = false;
     recorder_core::MicChannelMode mic_channel_mode = recorder_core::MicChannelMode::Auto;
+    // nullopt = default microphone endpoint.
+    std::optional<std::string> selected_mic_device_id;
 
     // Set for Window target. Null for Display or unresolved Window PID.
     std::optional<uint32_t> selected_window_pid;
@@ -36,6 +39,8 @@ struct AudioPlanResult {
     recorder_core::AudioTrackPlan plan;
     std::optional<uint32_t> audio_target_process_id;
     recorder_core::MicChannelMode mic_channel_mode = recorder_core::MicChannelMode::Auto;
+    // nullopt = default microphone endpoint.
+    std::optional<std::string> mic_device_id;
 };
 
 [[nodiscard]] AudioPlanResult BuildAudioPlan(const AudioUiState& state);

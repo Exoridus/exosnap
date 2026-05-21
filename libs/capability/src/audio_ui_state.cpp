@@ -18,6 +18,7 @@ void AddSingleSourceTrack(recorder_core::AudioTrackPlan& plan, recorder_core::Au
 AudioPlanResult BuildAudioPlan(const AudioUiState& state) {
     AudioPlanResult result;
     result.mic_channel_mode = state.mic_channel_mode;
+    result.mic_device_id = state.selected_mic_device_id;
 
     if (state.target_kind == CaptureTargetKind::Window) {
         const bool app = state.record_application_audio;

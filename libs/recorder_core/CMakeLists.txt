@@ -8,6 +8,7 @@ if(NOT EXISTS "${_nvenc_header}")
     add_library(recorder_core STATIC
         src/version.cpp
         src/logging/logging.cpp
+        src/audio_input_device.cpp
         src/audio_track_model.cpp
         src/codec_private.cpp
         src/opus_audio_encoder.cpp
@@ -24,6 +25,7 @@ if(NOT EXISTS "${_nvenc_header}")
         nlohmann_json::nlohmann_json
         Opus::opus
         mfuuid.lib
+        ole32.lib
         exosnap::warnings
     )
 
@@ -71,6 +73,7 @@ add_library(recorder_core STATIC
     src/logging/logging.cpp
 
     src/recorder_session.cpp
+    src/audio_input_device.cpp
     src/codec_private.cpp
     src/wgc_capture.cpp
     src/nvenc_encoder.cpp
