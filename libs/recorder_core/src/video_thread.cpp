@@ -15,10 +15,12 @@
 
 #include <d3d11.h>
 #include <d3d11_1.h>
+#include <dwmapi.h>
 #include <dxgi.h>
 
 #include <cstdio>
 #include <cstring>
+#include <sstream>
 
 // ============================================================================
 // D3D11 threading contract
@@ -30,6 +32,33 @@
 // ============================================================================
 
 namespace recorder_core {
+
+namespace {
+
+const char* TargetKindName(CaptureTarget::Kind kind) noexcept {
+    switch (kind) {
+    case CaptureTarget::Kind::Monitor:
+        return "Monitor";
+    case CaptureTarget::Kind::Window:
+        return "Window";
+    default:
+        return "Unknown";
+    }
+}
+
+const char* BoolText(bool value) noexcept {
+    return value ? "true" : "false";
+}
+
+int RectWidth(const RECT& r) noexcept {
+    return r.right - r.left;
+}
+
+int RectHeight(const RECT& r) noexcept {
+    return r.bottom - r.top;
+}
+
+} // namespace
 
 VideoThread::VideoThread(SessionState& state) : m_state(state) {
 }
@@ -115,10 +144,52 @@ void VideoThread::Run() {
         }
     }
 
+    const CaptureTarget& target = m_state.config.target;
+    const HWND targetHwnd =
+        (target.kind == CaptureTarget::Kind::Window) ? reinterpret_cast<HWND>(target.native_id) : nullptr;
+
+    bool windowHandleValid = false;
+    bool windowVisible = false;
+    bool windowMinimized = false;
+    bool windowCloaked = false;
+    RECT windowRect{};
+    RECT clientRect{};
+    int windowWidth = 0;
+    int windowHeight = 0;
+    int clientWidth = 0;
+    int clientHeight = 0;
+
+    if (target.kind == CaptureTarget::Kind::Window) {
+        windowHandleValid = (targetHwnd != nullptr && IsWindow(targetHwnd) != FALSE);
+        if (!windowHandleValid) {
+            std::ostringstream oss;
+            oss << "Window target handle invalid before WGC init: native_id=0x" << std::hex << target.native_id
+                << std::dec;
+            m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, oss.str());
+            if (com_inited && hr != RPC_E_CHANGED_MODE)
+                CoUninitialize();
+            return;
+        }
+
+        windowVisible = IsWindowVisible(targetHwnd) != FALSE;
+        windowMinimized = IsIconic(targetHwnd) != FALSE;
+        if (GetWindowRect(targetHwnd, &windowRect)) {
+            windowWidth = RectWidth(windowRect);
+            windowHeight = RectHeight(windowRect);
+        }
+        if (GetClientRect(targetHwnd, &clientRect)) {
+            clientWidth = RectWidth(clientRect);
+            clientHeight = RectHeight(clientRect);
+        }
+        DWORD cloaked = 0;
+        if (SUCCEEDED(DwmGetWindowAttribute(targetHwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked)))) {
+            windowCloaked = (cloaked != 0);
+        }
+    }
+
     // --- WGC capture item ---
     winrt::Windows::Graphics::Capture::GraphicsCaptureItem item{nullptr};
     {
-        const CaptureTarget& target = m_state.config.target;
         try {
             auto interop = winrt::get_activation_factory<winrt::Windows::Graphics::Capture::GraphicsCaptureItem,
                                                          IGraphicsCaptureItemInterop>();
@@ -145,16 +216,51 @@ void VideoThread::Run() {
 
     // Capture dimensions
     auto sz = item.Size();
-    uint32_t sourceWidth = static_cast<uint32_t>(sz.Width);
-    uint32_t sourceHeight = static_cast<uint32_t>(sz.Height);
+    const int32_t sourceWidthSigned = sz.Width;
+    const int32_t sourceHeightSigned = sz.Height;
+
+    std::ostringstream diag;
+    diag << "target.kind=" << TargetKindName(target.kind) << ", target.description=\"" << target.description
+         << "\", target.native_id=0x" << std::hex << target.native_id << std::dec
+         << ", capture.visibleContentSize=" << sourceWidthSigned << "x" << sourceHeightSigned
+         << ", capture.dxgiFormat=DXGI_FORMAT_B8G8R8A8_UNORM"
+         << ", videoCodec=AV1_NVENC"
+         << ", chroma=4:2:0, bitDepth=8, frameRate=" << m_state.config.frame_rate_num << "/"
+         << m_state.config.frame_rate_den << ", nvencInputBufferFormat=NV_ENC_BUFFER_FORMAT_NV12";
+
+    if (target.kind == CaptureTarget::Kind::Window) {
+        diag << ", window.handleValid=" << BoolText(windowHandleValid) << ", window.visible=" << BoolText(windowVisible)
+             << ", window.minimized=" << BoolText(windowMinimized) << ", window.cloaked=" << BoolText(windowCloaked)
+             << ", window.windowRect=" << windowWidth << "x" << windowHeight << ", window.clientRect=" << clientWidth
+             << "x" << clientHeight;
+    }
+
+    if (sourceWidthSigned <= 0 || sourceHeightSigned <= 0) {
+        std::ostringstream err;
+        err << "WGC source size invalid (<=0): " << sourceWidthSigned << "x" << sourceHeightSigned << "; preInit={"
+            << diag.str() << "}";
+        m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
+        if (com_inited && hr != RPC_E_CHANGED_MODE)
+            CoUninitialize();
+        return;
+    }
+
+    uint32_t sourceWidth = static_cast<uint32_t>(sourceWidthSigned);
+    uint32_t sourceHeight = static_cast<uint32_t>(sourceHeightSigned);
     uint32_t encodeWidth = sourceWidth & ~1u;
     uint32_t encodeHeight = sourceHeight & ~1u;
 
+    const bool dimsZero = (encodeWidth == 0 || encodeHeight == 0);
+    const bool dimsEven = ((encodeWidth % 2u) == 0u) && ((encodeHeight % 2u) == 0u);
+    diag << ", encodeSize=" << encodeWidth << "x" << encodeHeight << ", encode.dimsZero=" << BoolText(dimsZero)
+         << ", encode.evenAligned=" << BoolText(dimsEven)
+         << ", firstFrameTexture=unavailable_pre_init, firstFrameTextureFormat=unavailable_pre_init";
+
     if (encodeWidth < 2 || encodeHeight < 2) {
-        char buf[96];
-        snprintf(buf, sizeof(buf), "source %ux%u rounds to %ux%u — too small for NV12", sourceWidth, sourceHeight,
-                 encodeWidth, encodeHeight);
-        m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, buf);
+        std::ostringstream err;
+        err << "source " << sourceWidth << "x" << sourceHeight << " rounds to " << encodeWidth << "x" << encodeHeight
+            << " — too small for NV12; preInit={" << diag.str() << "}";
+        m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
         if (com_inited && hr != RPC_E_CHANGED_MODE)
             CoUninitialize();
         return;
@@ -190,7 +296,8 @@ void VideoThread::Run() {
         }
         if (!nvenc.InitEncoder(encodeWidth, encodeHeight, m_state.config.frame_rate_num, m_state.config.frame_rate_den,
                                err)) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC init: " + err);
+            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
+                                  "NVENC init: " + err + "; preInit={" + diag.str() + "}");
             if (com_inited && hr != RPC_E_CHANGED_MODE)
                 CoUninitialize();
             return;

@@ -1,5 +1,6 @@
 #include "wgc_capture.h"
 
+#include <dwmapi.h>
 #include <windows.h>
 
 namespace recorder_core {
@@ -39,6 +40,26 @@ std::vector<CaptureTarget> EnumerateWgcTargets() {
                 return TRUE;
             if (GetWindow(hwnd, GW_OWNER) != nullptr)
                 return TRUE;
+            if (IsIconic(hwnd))
+                return TRUE;
+
+            DWORD cloaked = 0;
+            if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked != 0) {
+                return TRUE;
+            }
+
+            RECT clientRect{};
+            if (!GetClientRect(hwnd, &clientRect))
+                return TRUE;
+            const int clientWidth = clientRect.right - clientRect.left;
+            const int clientHeight = clientRect.bottom - clientRect.top;
+            // Conservative floor: filter only truly degenerate windows.
+            // Hardware-/codec-specific encode constraints are validated at
+            // NVENC initialization via NV_ENC_CAPS_WIDTH/HEIGHT_MIN/MAX.
+            if (clientWidth < 4 || clientHeight < 4) {
+                return TRUE;
+            }
+
             wchar_t title[256] = {};
             if (GetWindowTextW(hwnd, title, 256) == 0)
                 return TRUE;

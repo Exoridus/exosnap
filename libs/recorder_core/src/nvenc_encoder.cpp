@@ -4,8 +4,89 @@
 
 #include <cstdio>
 #include <cstring>
+#include <sstream>
 
 namespace recorder_core {
+
+namespace {
+
+std::string GuidDebugString(const GUID& guid) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "{%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+             static_cast<unsigned long>(guid.Data1), guid.Data2, guid.Data3, guid.Data4[0], guid.Data4[1],
+             guid.Data4[2], guid.Data4[3], guid.Data4[4], guid.Data4[5], guid.Data4[6], guid.Data4[7]);
+    return buf;
+}
+
+const char* TuningInfoName(NV_ENC_TUNING_INFO info) noexcept {
+    switch (info) {
+    case NV_ENC_TUNING_INFO_UNDEFINED:
+        return "NV_ENC_TUNING_INFO_UNDEFINED";
+    case NV_ENC_TUNING_INFO_HIGH_QUALITY:
+        return "NV_ENC_TUNING_INFO_HIGH_QUALITY";
+    case NV_ENC_TUNING_INFO_LOW_LATENCY:
+        return "NV_ENC_TUNING_INFO_LOW_LATENCY";
+    case NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY:
+        return "NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY";
+    case NV_ENC_TUNING_INFO_LOSSLESS:
+        return "NV_ENC_TUNING_INFO_LOSSLESS";
+    case NV_ENC_TUNING_INFO_ULTRA_HIGH_QUALITY:
+        return "NV_ENC_TUNING_INFO_ULTRA_HIGH_QUALITY";
+    default:
+        return "NV_ENC_TUNING_INFO_UNKNOWN";
+    }
+}
+
+bool QueryEncodeCap(NV_ENCODE_API_FUNCTION_LIST& funcs, void* encoder, NV_ENC_CAPS cap, int& out_value,
+                    std::string& out_error) {
+    if (funcs.nvEncGetEncodeCaps == nullptr) {
+        out_error = "nvEncGetEncodeCaps is unavailable";
+        return false;
+    }
+
+    NV_ENC_CAPS_PARAM capsParam{};
+    capsParam.version = NV_ENC_CAPS_PARAM_VER;
+    capsParam.capsToQuery = cap;
+
+    int value = 0;
+    const NVENCSTATUS st = funcs.nvEncGetEncodeCaps(encoder, NV_ENC_CODEC_AV1_GUID, &capsParam, &value);
+    if (st != NV_ENC_SUCCESS) {
+        out_error =
+            std::string("nvEncGetEncodeCaps(") + std::to_string(static_cast<int>(cap)) + "): " + NvencStatusName(st);
+        return false;
+    }
+
+    out_value = value;
+    return true;
+}
+
+std::string BuildInitDiagString(const NV_ENC_INITIALIZE_PARAMS& p, const NV_ENC_CONFIG& cfg, bool have_caps, int w_min,
+                                int w_max, int h_min, int h_max) {
+    const auto& av1 = cfg.encodeCodecConfig.av1Config;
+    std::ostringstream oss;
+    oss << "encodeGUID=" << GuidDebugString(p.encodeGUID) << ", presetGUID=" << GuidDebugString(p.presetGUID)
+        << ", tuningInfo=" << TuningInfoName(p.tuningInfo) << ", encodeWidth=" << p.encodeWidth
+        << ", encodeHeight=" << p.encodeHeight << ", darWidth=" << p.darWidth << ", darHeight=" << p.darHeight
+        << ", maxEncodeWidth=" << p.maxEncodeWidth << ", maxEncodeHeight=" << p.maxEncodeHeight
+        << ", frameRateNum=" << p.frameRateNum << ", frameRateDen=" << p.frameRateDen
+        << ", bufferFormat=NV_ENC_BUFFER_FORMAT_NV12"
+        << ", enablePTD=" << static_cast<int>(p.enablePTD)
+        << ", rateControlMode=" << static_cast<uint32_t>(cfg.rcParams.rateControlMode)
+        << ", gopLength=" << cfg.gopLength << ", frameIntervalP=" << cfg.frameIntervalP
+        << ", av1.idrPeriod=" << av1.idrPeriod << ", av1.chromaFormatIDC=" << static_cast<unsigned>(av1.chromaFormatIDC)
+        << ", av1.level=" << av1.level << ", av1.tier=" << av1.tier;
+
+    if (have_caps) {
+        oss << ", av1Caps.widthMin=" << w_min << ", av1Caps.widthMax=" << w_max << ", av1Caps.heightMin=" << h_min
+            << ", av1Caps.heightMax=" << h_max;
+    } else {
+        oss << ", av1Caps=unavailable";
+    }
+
+    return oss.str();
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // NvencStatusName
@@ -230,6 +311,19 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
     m_encodeConfig.gopLength = kGopFrames;
     m_encodeConfig.encodeCodecConfig.av1Config.idrPeriod = kGopFrames;
 
+    int av1WidthMin = -1;
+    int av1WidthMax = -1;
+    int av1HeightMin = -1;
+    int av1HeightMax = -1;
+    std::string capsError;
+
+    // Query each cap independently so diagnostic values are accurate.
+    const bool haveWidthMin = QueryEncodeCap(m_funcs, m_encoder, NV_ENC_CAPS_WIDTH_MIN, av1WidthMin, capsError);
+    const bool haveWidthMax = QueryEncodeCap(m_funcs, m_encoder, NV_ENC_CAPS_WIDTH_MAX, av1WidthMax, capsError);
+    const bool haveHeightMin = QueryEncodeCap(m_funcs, m_encoder, NV_ENC_CAPS_HEIGHT_MIN, av1HeightMin, capsError);
+    const bool haveHeightMax = QueryEncodeCap(m_funcs, m_encoder, NV_ENC_CAPS_HEIGHT_MAX, av1HeightMax, capsError);
+    const bool haveAv1Caps = haveWidthMin && haveWidthMax && haveHeightMin && haveHeightMax;
+
     NV_ENC_INITIALIZE_PARAMS p{};
     p.version = NV_ENC_INITIALIZE_PARAMS_VER;
     p.encodeGUID = NV_ENC_CODEC_AV1_GUID;
@@ -246,9 +340,35 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
     p.enablePTD = 1;
     p.encodeConfig = &m_encodeConfig;
 
+    const bool evenWidth = (width % 2u) == 0u;
+    const bool evenHeight = (height % 2u) == 0u;
+    const bool widthInRange =
+        !haveAv1Caps || (width >= static_cast<uint32_t>(av1WidthMin) && width <= static_cast<uint32_t>(av1WidthMax));
+    const bool heightInRange = !haveAv1Caps || (height >= static_cast<uint32_t>(av1HeightMin) &&
+                                                height <= static_cast<uint32_t>(av1HeightMax));
+
+    const std::string initDiag =
+        BuildInitDiagString(p, m_encodeConfig, haveAv1Caps, av1WidthMin, av1WidthMax, av1HeightMin, av1HeightMax);
+
+    if (!evenWidth || !evenHeight || !widthInRange || !heightInRange) {
+        std::ostringstream oss;
+        oss << "NVENC AV1 init dimension sanity failed: evenWidth=" << (evenWidth ? "true" : "false")
+            << ", evenHeight=" << (evenHeight ? "true" : "false")
+            << ", widthInRange=" << (widthInRange ? "true" : "false")
+            << ", heightInRange=" << (heightInRange ? "true" : "false") << "; init={" << initDiag << "}";
+        if (!haveAv1Caps && !capsError.empty()) {
+            oss << "; capsQueryError=" << capsError;
+        }
+        out_error = oss.str();
+        return false;
+    }
+
     NVENCSTATUS st = m_funcs.nvEncInitializeEncoder(m_encoder, &p);
     if (st != NV_ENC_SUCCESS) {
-        out_error = std::string("nvEncInitializeEncoder: ") + NvencStatusName(st);
+        out_error = std::string("nvEncInitializeEncoder: ") + NvencStatusName(st) + "; init={" + initDiag + "}";
+        if (!haveAv1Caps && !capsError.empty()) {
+            out_error += "; capsQueryError=" + capsError;
+        }
         return false;
     }
     return true;
