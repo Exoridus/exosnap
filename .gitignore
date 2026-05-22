@@ -1,14 +1,40 @@
 # Build output
 /build/
+/build-*/
+/cmake-build-*/
 /out/
 /dist/
+
+# CMake / Ninja generated files (for accidental in-source builds)
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+build.ninja
+.ninja_deps
+.ninja_log
+Testing/
 
 # IDE
 /.vs/
 /.vscode/
 *.user
 *.suo
+*.VC.db
+*.VC.opendb
+*.opensdf
+*.sdf
+*.ipch
 CMakeUserPresets.json
+CMakeLists.txt.user
+
+# Qt Creator
+*.pro.user
+*.pro.user.*
+*.qbs.user
+*.qbs.user.*
 
 # Qt / MSBuild artifacts
 apps/exosnap/Generated Files/
@@ -17,6 +43,14 @@ apps/exosnap/packages/
 
 # Log files
 *.log
+logs/
+
+# Temporary / crash artifacts
+*.tmp
+*.temp
+*.bak
+*.dmp
+*.stackdump
 
 # Spec pack installer metadata
 manifest.json
