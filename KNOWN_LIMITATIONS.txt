@@ -14,9 +14,9 @@ KNOWN LIMITATIONS
 - VideoPage and AudioPage are locked informational MVP pages.
 - Video quality, FPS, and resolution settings are fixed for this alpha.
 - Region capture is not available.
-- Global hotkeys are not registered in this build.
+- Global hotkeys are unavailable in this build.
 - Auto-split is not available.
 - Audio meters show live activity during recording only, not before recording.
 - Mic hot-plug is not automatic; use the Refresh button.
 - Window capture can fail for minimized, cloaked, or very small windows.
-- Settings are persisted locally in an INI file and may change in later alpha builds.
+- Settings persist locally in INI; format may change in later alpha builds.

@@ -7,12 +7,17 @@
 - VideoPage and AudioPage are read-only/locked for MVP.
 - Engine path: WGC + NVENC AV1 + MKV + WASAPI + Opus/AAC.
 - MP4, Region Capture, Video Quality Controls, Hotkeys, and Auto-Split are intentionally deferred.
+- Settings persistence is implemented for MVP-relevant configuration.
+- Alpha packaging script exists at `scripts/package-alpha.ps1`.
+- Generated `/dist/` artifacts are gitignored.
+- `KNOWN_LIMITATIONS.txt` exists and is shipped in alpha packages.
 
 ## 2. MVP-ready features
 
 - Monitor capture
 - Window capture for normal windows
 - Output folder selection
+- Output settings persistence
 - Naming pattern `{date}` / `{time}`
 - MKV output
 - AV1 video
@@ -22,6 +27,7 @@
 - Mic recording
 - Mic device selection
 - Mic channel mode
+- Audio settings persistence
 - Separate output audio tracks
 - Live audio activity meters
 - Result/error diagnostics
@@ -36,7 +42,6 @@
 - Global hotkey not registered
 - Auto split disabled/deferred
 - Video quality/FPS/resolution settings fixed
-- Settings persistence deferred
 - Disk-space preflight deferred
 - AudioPage live routing deferred
 
@@ -56,7 +61,7 @@
 
 ## 5. Known limitations
 
-- No persistent settings yet; output settings reset on app restart.
+- Settings persist locally (INI format) and may change in later alpha builds.
 - MP4 UI is visible but disabled.
 - VideoPage/AudioPage are informational for MVP.
 - Actual GPU model is not shown in sidebar; generic NVENC is shown.
@@ -70,6 +75,9 @@
 - [ ] Build `exosnap`
 - [ ] Run output/diagnostics/viewmodel/recorder_core/capability tests
 - [ ] Run manual smokes S1-S9
+- [ ] Run `powershell -ExecutionPolicy Bypass -File scripts/package-alpha.ps1`
+- [ ] Verify `dist/exosnap-alpha-YYYY-MM-DD.zip` and matching `.sha256` are generated
+- [ ] Run ZIP sanity checks (required Qt release DLLs, `platforms/qwindows.dll`, no `Qt6*d.dll`, no test executables)
 - [ ] Inspect RecordPage, OutputPage, VideoPage, AudioPage for no placeholder copy
 - [ ] Verify git status clean
 - [ ] Tag or package only after passing the above
@@ -82,5 +90,4 @@
 - Region capture
 - Recording presets
 - Global hotkeys
-- Settings persistence
 - Installer/signing

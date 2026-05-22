@@ -8,7 +8,7 @@ Keep the high-performance recording engine native and UI-agnostic while keeping 
 
 ```text
 ┌─────────────────────┐
-│ WinUI 3 UI          │
+│ Qt 6 Widgets UI     │
 │ - pages             │
 │ - bindings          │
 │ - commands          │
@@ -32,7 +32,7 @@ Keep the high-performance recording engine native and UI-agnostic while keeping 
 
 ## UI technology
 
-- **WinUI 3**
+- **Qt 6 + Qt Widgets**
 - Dark mode requested by default
 - UI does not implement media logic
 - UI renders engine state and submits user intent
