@@ -73,6 +73,8 @@ qt_add_executable(exosnap WIN32
     models/FilenameBuilder.cpp
     models/OutputPathValidator.h
     models/OutputPathValidator.cpp
+    settings/AppSettingsStore.h
+    settings/AppSettingsStore.cpp
     diagnostics/error_message.h
     diagnostics/error_message.cpp
     viewmodels/RecordViewModel.h
@@ -142,4 +144,19 @@ exosnap_add_gtest(
     recorder_core
 )
 target_include_directories(output_settings_tests
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+  NAME app_settings_store_tests
+  TEST_PREFIX settings.
+  SOURCES
+    tests/test_app_settings_store.cpp
+    settings/AppSettingsStore.cpp
+    models/OutputSettingsModel.cpp
+  LIBRARIES
+    exosnap_capability
+    recorder_core
+    Qt6::Core
+)
+target_include_directories(app_settings_store_tests
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

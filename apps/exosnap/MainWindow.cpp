@@ -506,6 +506,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         qWarning().noquote() << "MainWindow icon is set but reports no available sizes.";
     setMinimumSize(1120, 700);
 
+    persisted_settings_ = settings_store_.Load();
+    output_settings_ = persisted_settings_.output;
+
     auto* central = new QWidget(this);
     central->setObjectName("mainCentral");
     setCentralWidget(central);
@@ -635,7 +638,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     stack_ = new QStackedWidget(content);
     stack_->setObjectName("mainStack");
-    output_settings_ = OutputSettingsModel::Defaults();
     record_page_ = new RecordPage(stack_);
     output_page_ = new OutputPage(output_settings_, stack_);
     stack_->addWidget(record_page_);
@@ -647,6 +649,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     stack_->addWidget(new LogsPage(stack_));
     stack_->addWidget(new AdvancedPage(stack_));
     record_page_->setOutputSettings(output_settings_);
+    record_page_->applyPersistedAudioSettings(persisted_settings_.audio_ui_state);
     content_layout->addWidget(stack_, 1);
 
     body_layout->addWidget(content, 1);
@@ -668,9 +671,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(output_page_, &OutputPage::outputSettingsChanged, this, [this](const OutputSettingsModel& settings) {
         output_settings_ = settings;
         record_page_->setOutputSettings(settings);
+        persisted_settings_.output = settings;
+        settings_store_.Save(persisted_settings_);
         if (stack_->currentIndex() == kOutputPageIndex) {
             updatePageHeader(kOutputPageIndex);
         }
+    });
+    connect(record_page_, &RecordPage::audioSettingsChanged, this, [this](const capability::AudioUiState& state) {
+        persisted_settings_.audio_ui_state.record_application_audio = state.record_application_audio;
+        persisted_settings_.audio_ui_state.record_system_audio = state.record_system_audio;
+        persisted_settings_.audio_ui_state.separate_output_tracks = state.separate_output_tracks;
+        persisted_settings_.audio_ui_state.record_microphone = state.record_microphone;
+        persisted_settings_.audio_ui_state.mic_channel_mode = state.mic_channel_mode;
+        persisted_settings_.audio_ui_state.selected_mic_device_id = state.selected_mic_device_id;
+        settings_store_.Save(persisted_settings_);
     });
 
     nav_->setCurrentRow(0);

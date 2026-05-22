@@ -5,6 +5,7 @@
 #include <QString>
 
 #include "models/OutputSettingsModel.h"
+#include "settings/AppSettingsStore.h"
 
 class QLabel;
 class QShowEvent;
@@ -45,6 +46,8 @@ class MainWindow : public QMainWindow {
     RecordPage* record_page_ = nullptr;
     OutputPage* output_page_ = nullptr;
     OutputSettingsModel output_settings_;
+    AppSettingsStore settings_store_;
+    PersistedAppSettings persisted_settings_;
     QLabel* page_kicker_label_ = nullptr;
     QLabel* page_title_label_ = nullptr;
     QLabel* page_subtitle_label_ = nullptr;

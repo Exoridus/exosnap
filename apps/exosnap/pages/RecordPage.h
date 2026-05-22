@@ -30,10 +30,12 @@ class RecordPage : public QWidget {
   public:
     explicit RecordPage(QWidget* parent = nullptr);
     void setOutputSettings(const OutputSettingsModel& settings);
+    void applyPersistedAudioSettings(const capability::AudioUiState& state);
 
   signals:
     void chromeStateChanged(bool recording, const QString& status_label, const QString& context_text);
     void navigateToOutputPage();
+    void audioSettingsChanged(const capability::AudioUiState& state);
 
   private slots:
     void onStart();
@@ -71,6 +73,7 @@ class RecordPage : public QWidget {
     void setOutputSettingsSummary(const OutputSettingsModel& settings);
     void populateMicDeviceCombo();
     void updateMicDeviceNoteLabel();
+    void emitAudioSettingsChanged();
 
     int monitor_target_index_ = -1;
     int window_target_index_ = -1;

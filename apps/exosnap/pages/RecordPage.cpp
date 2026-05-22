@@ -560,6 +560,30 @@ void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
     updateOpenFolderButtonState();
 }
 
+void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& state) {
+    const capability::CaptureTargetKind target_kind = view_model_.audio_ui_state.target_kind;
+    const std::optional<uint32_t> selected_window_pid = view_model_.audio_ui_state.selected_window_pid;
+
+    view_model_.audio_ui_state.record_application_audio = state.record_application_audio;
+    view_model_.audio_ui_state.record_system_audio = state.record_system_audio;
+    view_model_.audio_ui_state.separate_output_tracks = state.separate_output_tracks;
+    view_model_.audio_ui_state.record_microphone = state.record_microphone;
+    view_model_.audio_ui_state.mic_channel_mode = state.mic_channel_mode;
+    view_model_.audio_ui_state.selected_mic_device_id = state.selected_mic_device_id;
+    view_model_.audio_ui_state.target_kind = target_kind;
+    view_model_.audio_ui_state.selected_window_pid = selected_window_pid;
+
+    if (!view_model_.audio_ui_state.record_application_audio || !view_model_.audio_ui_state.record_system_audio) {
+        view_model_.audio_ui_state.separate_output_tracks = false;
+    }
+
+    populateMicDeviceCombo();
+    view_model_.RebuildAudioPlan();
+    updateAudioControls();
+    updateAudioTrackPreview();
+    updateAudioMeterLevels();
+}
+
 void RecordPage::setOutputSettingsSummary(const OutputSettingsModel& settings) {
     const QString container =
         settings.container == capability::Container::Matroska
@@ -724,6 +748,7 @@ void RecordPage::onAppAudioToggled(bool checked) {
     view_model_.RebuildAudioPlan();
     updateAudioControls();
     updateAudioTrackPreview();
+    emitAudioSettingsChanged();
 }
 
 void RecordPage::onSysAudioToggled(bool checked) {
@@ -736,6 +761,7 @@ void RecordPage::onSysAudioToggled(bool checked) {
     view_model_.RebuildAudioPlan();
     updateAudioControls();
     updateAudioTrackPreview();
+    emitAudioSettingsChanged();
 }
 
 void RecordPage::onSeparateTracksToggled(bool checked) {
@@ -743,6 +769,7 @@ void RecordPage::onSeparateTracksToggled(bool checked) {
     view_model_.RebuildAudioPlan();
     updateAudioControls();
     updateAudioTrackPreview();
+    emitAudioSettingsChanged();
 }
 
 void RecordPage::onMicToggled(bool checked) {
@@ -750,6 +777,7 @@ void RecordPage::onMicToggled(bool checked) {
     view_model_.RebuildAudioPlan();
     updateAudioControls();
     updateAudioTrackPreview();
+    emitAudioSettingsChanged();
 }
 
 void RecordPage::populateMicDeviceCombo() {
@@ -809,6 +837,7 @@ void RecordPage::onMicDeviceChanged(int index) {
     view_model_.RebuildAudioPlan();
     updateMicDeviceNoteLabel();
     updateAudioTrackPreview();
+    emitAudioSettingsChanged();
 }
 
 void RecordPage::onMicChannelChanged(int index) {
@@ -824,6 +853,11 @@ void RecordPage::onMicChannelChanged(int index) {
 
     view_model_.RebuildAudioPlan();
     updateAudioTrackPreview();
+    emitAudioSettingsChanged();
+}
+
+void RecordPage::emitAudioSettingsChanged() {
+    emit audioSettingsChanged(view_model_.audio_ui_state);
 }
 
 void RecordPage::updateAudioControls() {
