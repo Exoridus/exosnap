@@ -108,6 +108,9 @@ class RecordViewModel {
     static std::wstring FormatElapsed(double elapsed_seconds);
     static std::wstring FormatBytes(uint64_t bytes);
     static std::string DisplayLabelFromTarget(const std::string& raw_description);
+    static std::string WindowLabelFromTarget(const std::string& raw_description);
+    static std::vector<int> SortWindowTargetIndices(const std::vector<recorder_core::CaptureTarget>& targets,
+                                                    const std::vector<int>& window_indices);
 };
 
 } // namespace exosnap

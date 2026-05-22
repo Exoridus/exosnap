@@ -23,7 +23,6 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
-#include <QRegularExpression>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QStyle>
@@ -119,18 +118,7 @@ QString displayLabelFromTarget(const recorder_core::CaptureTarget& target) {
 }
 
 QString windowLabelFromTarget(const recorder_core::CaptureTarget& target) {
-    const QString value = QString::fromStdString(target.description).simplified();
-    if (value.isEmpty()) {
-        return QStringLiteral("Window");
-    }
-
-    static const QRegularExpression kRawHandleOnlyRe(QStringLiteral(R"(^(?:0x)?[0-9a-f]{5,}$)"),
-                                                     QRegularExpression::CaseInsensitiveOption);
-    if (kRawHandleOnlyRe.match(value).hasMatch()) {
-        return QStringLiteral("Window");
-    }
-
-    return value;
+    return QString::fromStdString(RecordViewModel::WindowLabelFromTarget(target.description));
 }
 
 QString normalizedTargetLabel(const recorder_core::CaptureTarget& target) {
@@ -720,9 +708,6 @@ void RecordPage::enumerateTargets(bool preserve_current_selection) {
             }
         } else if (target.kind == recorder_core::CaptureTarget::Kind::Window) {
             window_target_indices_.push_back(i);
-            if (window_target_index_ < 0) {
-                window_target_index_ = i;
-            }
         }
 
         const bool monitor = target.kind == recorder_core::CaptureTarget::Kind::Monitor;
@@ -730,6 +715,11 @@ void RecordPage::enumerateTargets(bool preserve_current_selection) {
         const QString label = prefix + normalizedTargetLabel(target);
         view_model_.target_display_names.push_back(label.toStdWString());
         target_combo_->addItem(label);
+    }
+
+    window_target_indices_ = RecordViewModel::SortWindowTargetIndices(view_model_.targets, window_target_indices_);
+    if (!window_target_indices_.empty()) {
+        window_target_index_ = window_target_indices_.front();
     }
 
     int resolved_selection = -1;

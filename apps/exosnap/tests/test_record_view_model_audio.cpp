@@ -256,5 +256,42 @@ TEST(RecordViewModelAudioTest, RecordViewModel_DisplayLabelFromTarget_Normalizes
     EXPECT_EQ(RecordViewModel::DisplayLabelFromTarget("Custom Monitor"), "Custom Monitor");
 }
 
+TEST(RecordViewModelAudioTest, RecordViewModel_WindowLabelFromTarget_AppNameFirst_Brave) {
+    EXPECT_EQ(RecordViewModel::WindowLabelFromTarget("ExoSnap UI-Brand-Integration \xE2\x80\x94 Brave"),
+              "Brave \xE2\x80\x94 ExoSnap UI-Brand-Integration");
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_WindowLabelFromTarget_AppNameFirst_Explorer) {
+    EXPECT_EQ(RecordViewModel::WindowLabelFromTarget("Debug und 2 weitere Registerkarten \xE2\x80\x94 Explorer"),
+              "Explorer \xE2\x80\x94 Debug und 2 weitere Registerkarten");
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_WindowLabelFromTarget_MissingAppNameFallsBackToExistingLabel) {
+    EXPECT_EQ(RecordViewModel::WindowLabelFromTarget("Standalone Utility Window"), "Standalone Utility Window");
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_SortWindowTargetIndices_SortsByAppThenTitleCaseInsensitive) {
+    std::vector<recorder_core::CaptureTarget> targets;
+    targets.push_back({recorder_core::CaptureTarget::Kind::Window, 100, "zeta panel \xE2\x80\x94 brave"});
+    targets.push_back(
+        {recorder_core::CaptureTarget::Kind::Window, 101, "Debug und 2 weitere Registerkarten \xE2\x80\x94 Explorer"});
+    targets.push_back({recorder_core::CaptureTarget::Kind::Window, 102, "Alpha document \xE2\x80\x94 Brave"});
+
+    const std::vector<int> sorted = RecordViewModel::SortWindowTargetIndices(targets, {0, 1, 2});
+    EXPECT_EQ(sorted, (std::vector<int>{2, 0, 1}));
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_SortWindowTargetIndices_PreservesOriginalTargetIndices) {
+    std::vector<recorder_core::CaptureTarget> targets;
+    targets.push_back({recorder_core::CaptureTarget::Kind::Monitor, 1, R"(\\.\DISPLAY1)"});
+    targets.push_back({recorder_core::CaptureTarget::Kind::Window, 2, "Main \xE2\x80\x94 Zebra"});
+    targets.push_back({recorder_core::CaptureTarget::Kind::Window, 3, "Alpha \xE2\x80\x94 AlphaApp"});
+    targets.push_back({recorder_core::CaptureTarget::Kind::Window, 4, "Gamma \xE2\x80\x94 AlphaApp"});
+    targets.push_back({recorder_core::CaptureTarget::Kind::Window, 5, "Window with no app"});
+
+    const std::vector<int> sorted = RecordViewModel::SortWindowTargetIndices(targets, {4, 1, 3, 2});
+    EXPECT_EQ(sorted, (std::vector<int>{2, 3, 4, 1}));
+}
+
 } // namespace
 } // namespace exosnap
