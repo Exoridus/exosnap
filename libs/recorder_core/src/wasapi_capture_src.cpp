@@ -18,7 +18,7 @@ namespace {
 constexpr uint32_t kRequiredSampleRate = 48000;
 constexpr uint32_t kRequiredOutputChannels = 2;
 constexpr REFERENCE_TIME kFallbackDevicePeriodHns = 100000; // 10 ms
-constexpr uint64_t kAutoDetectMinFrames = 48000;            // 1 second
+constexpr uint64_t kAutoDetectMinFrames = 4800;             // 100 ms
 
 enum class AcceptedSampleKind { Float32, Pcm16, Unsupported };
 
@@ -219,10 +219,8 @@ void UpdateAutoModeStateInt16(AutoModeState& state, const int16_t* interleaved_s
 }
 
 MicChannelMode EffectiveAutoMode(const AutoModeState& state) {
-    if (state.locked) {
-        return state.resolved_mode;
-    }
-    return MicChannelMode::PreserveStereo;
+    // Always return resolved_mode: defaults to MonoMix before lock, detected mode after.
+    return state.resolved_mode;
 }
 
 } // namespace mic_channel_detail
@@ -410,7 +408,7 @@ bool WasapiCaptureSrc::Init(std::string& out_error) {
     pending_capture_error_ = false;
     pending_capture_error_msg_.clear();
     auto_mode_locked_ = false;
-    auto_resolved_mode_ = MicChannelMode::PreserveStereo;
+    auto_resolved_mode_ = MicChannelMode::MonoMix;
     auto_detect_frames_ = 0;
     auto_energy_left_ = 0.0;
     auto_energy_right_ = 0.0;
@@ -660,7 +658,7 @@ void WasapiCaptureSrc::Shutdown() {
     channels_ = 0;
     mono_to_stereo_ = false;
     auto_mode_locked_ = false;
-    auto_resolved_mode_ = MicChannelMode::PreserveStereo;
+    auto_resolved_mode_ = MicChannelMode::MonoMix;
     auto_detect_frames_ = 0;
     auto_energy_left_ = 0.0;
     auto_energy_right_ = 0.0;

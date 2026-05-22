@@ -1,6 +1,7 @@
 #include <recorder_core/recorder_session.h>
 
 #include "audio_thread.h"
+#include "mixed_audio_src.h"
 #include "mux_thread.h"
 #include "session_internal.h"
 #include "session_stats_collector.h"
@@ -124,16 +125,16 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         }
 
         for (const auto& track : config.audio_track_plan.tracks) {
-            if (track.sources.size() != 1) {
-                return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                            "Merged audio tracks are not supported. Use separate tracks for each audio source.");
+            if (track.sources.size() < 1 || track.sources.size() > 3) {
+                return fail(E_NOTIMPL, ErrorPhase::Prepare, "Audio tracks must contain between 1 and 3 sources.");
             }
 
-            const auto kind = track.sources[0];
-            if ((kind == AudioSourceKind::App || kind == AudioSourceKind::Sys) &&
-                (!config.audio_target_process_id.has_value() || config.audio_target_process_id.value() == 0)) {
-                return fail(E_INVALIDARG, ErrorPhase::Prepare,
-                            "audio_target_process_id must be a non-zero PID for App/Sys audio sources");
+            for (const auto src_kind : track.sources) {
+                if ((src_kind == AudioSourceKind::App || src_kind == AudioSourceKind::Sys) &&
+                    (!config.audio_target_process_id.has_value() || config.audio_target_process_id.value() == 0)) {
+                    return fail(E_INVALIDARG, ErrorPhase::Prepare,
+                                "audio_target_process_id must be a non-zero PID for App/Sys audio sources");
+                }
             }
         }
     }
@@ -250,24 +251,40 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     } else {
         audioWorkers.reserve(config.audio_track_plan.tracks.size());
         for (const auto& track : config.audio_track_plan.tracks) {
-            if (track.sources.size() != 1) {
-                return failPrepare(E_NOTIMPL,
-                                   "Merged audio tracks are not supported. Use separate tracks for each audio source.");
+            std::unique_ptr<IAudioCaptureSource> track_source;
+
+            if (track.sources.size() == 1) {
+                const AudioSourceKind kind = track.sources[0];
+                if ((kind == AudioSourceKind::App || kind == AudioSourceKind::Sys) &&
+                    (!config.audio_target_process_id.has_value() || config.audio_target_process_id.value() == 0)) {
+                    return failPrepare(E_INVALIDARG,
+                                       "audio_target_process_id must be a non-zero PID for App/Sys audio sources");
+                }
+                track_source = createAudioSource(kind);
+                if (!track_source) {
+                    return failPrepare(E_NOTIMPL, "Unsupported audio source kind for Phase 5A");
+                }
+            } else {
+                // Multi-source track: build inner sources and wrap in MixedAudioSrc
+                std::vector<std::unique_ptr<IAudioCaptureSource>> inner;
+                inner.reserve(track.sources.size());
+                for (const auto kind : track.sources) {
+                    if ((kind == AudioSourceKind::App || kind == AudioSourceKind::Sys) &&
+                        (!config.audio_target_process_id.has_value() || config.audio_target_process_id.value() == 0)) {
+                        return failPrepare(E_INVALIDARG,
+                                           "audio_target_process_id must be a non-zero PID for App/Sys audio sources");
+                    }
+                    auto inner_src = createAudioSource(kind);
+                    if (!inner_src) {
+                        return failPrepare(E_NOTIMPL, "Unsupported audio source kind in merged track");
+                    }
+                    inner.push_back(std::move(inner_src));
+                }
+                track_source = std::make_unique<MixedAudioSrc>(std::move(inner), config.mic_gain_linear);
             }
 
-            const AudioSourceKind kind = track.sources[0];
-            if ((kind == AudioSourceKind::App || kind == AudioSourceKind::Sys) &&
-                (!config.audio_target_process_id.has_value() || config.audio_target_process_id.value() == 0)) {
-                return failPrepare(E_INVALIDARG,
-                                   "audio_target_process_id must be a non-zero PID for App/Sys audio sources");
-            }
-
-            auto source = createAudioSource(kind);
-            if (!source) {
-                return failPrepare(E_NOTIMPL, "Unsupported audio source kind for Phase 5A");
-            }
-
-            audioWorkers.push_back(std::make_unique<AudioThread>(m_impl->state, std::move(source), track.track_index));
+            audioWorkers.push_back(
+                std::make_unique<AudioThread>(m_impl->state, std::move(track_source), track.track_index));
         }
     }
 

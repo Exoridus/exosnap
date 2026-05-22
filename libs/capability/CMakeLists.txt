@@ -59,3 +59,10 @@ exosnap_add_gtest(
   SOURCES tests/test_audio_plan_builder.cpp
   LIBRARIES exosnap_capability
 )
+
+exosnap_add_gtest(
+  NAME audio_ui_state_tests
+  TEST_PREFIX capability.
+  SOURCES tests/test_audio_ui_state.cpp
+  LIBRARIES exosnap_capability
+)

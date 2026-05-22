@@ -79,6 +79,10 @@ struct RecorderConfig {
     // Optional target process id for process-loopback sources (App/Sys).
     // When empty, legacy loopback mode (empty audio_track_plan) remains valid.
     std::optional<uint32_t> audio_target_process_id;
+
+    // Linear gain applied to the MIC source in a MixedAudioSrc.
+    // Default 1.0f (unity gain).
+    float mic_gain_linear = 1.0f;
 };
 
 // ---------------------------------------------------------------------------

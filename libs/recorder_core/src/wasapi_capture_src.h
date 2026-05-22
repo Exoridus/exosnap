@@ -21,7 +21,8 @@ struct AutoModeState {
     double energy_left = 0.0;
     double energy_right = 0.0;
     bool locked = false;
-    MicChannelMode resolved_mode = MicChannelMode::PreserveStereo;
+    // Default MonoMix so left-only mics sound on both channels before lock
+    MicChannelMode resolved_mode = MicChannelMode::MonoMix;
 };
 
 void MapStereoFrameFloat32(MicChannelMode mode, float input_l, float input_r, float& output_l, float& output_r);
@@ -79,7 +80,7 @@ class WasapiCaptureSrc : public IAudioCaptureSource {
 
     MicChannelMode requested_channel_mode_ = MicChannelMode::Auto;
     std::optional<std::string> device_id_;
-    MicChannelMode auto_resolved_mode_ = MicChannelMode::PreserveStereo;
+    MicChannelMode auto_resolved_mode_ = MicChannelMode::MonoMix;
     bool auto_mode_locked_ = false;
     uint64_t auto_detect_frames_ = 0;
     double auto_energy_left_ = 0.0;

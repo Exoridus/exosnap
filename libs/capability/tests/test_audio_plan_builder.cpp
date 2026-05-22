@@ -86,6 +86,7 @@ TEST(AudioPlanBuilderTest, WindowTarget_AppAndSys_Separate) {
 }
 
 TEST(AudioPlanBuilderTest, WindowTarget_AppAndSys_Combined) {
+    // Merge-first: {App, Sys} as one merged track with PID set.
     AudioUiState state;
     state.target_kind = CaptureTargetKind::Window;
     state.record_application_audio = true;
@@ -96,8 +97,12 @@ TEST(AudioPlanBuilderTest, WindowTarget_AppAndSys_Combined) {
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
     ASSERT_EQ(result.plan.tracks.size(), 1u);
-    ExpectSingleSourceTrack(result, 0, AudioSourceKind::SystemOutput);
-    EXPECT_FALSE(result.audio_target_process_id.has_value());
+    const auto& track = result.plan.tracks[0];
+    ASSERT_EQ(track.sources.size(), 2u);
+    EXPECT_EQ(track.sources[0], AudioSourceKind::App);
+    EXPECT_EQ(track.sources[1], AudioSourceKind::Sys);
+    ASSERT_TRUE(result.audio_target_process_id.has_value());
+    EXPECT_EQ(result.audio_target_process_id.value(), 1004u);
 }
 
 TEST(AudioPlanBuilderTest, WindowTarget_AppAndMic) {
@@ -134,7 +139,8 @@ TEST(AudioPlanBuilderTest, WindowTarget_SysAndMic) {
     EXPECT_EQ(result.audio_target_process_id.value(), 1006u);
 }
 
-TEST(AudioPlanBuilderTest, WindowTarget_SystemOutputAndMic) {
+TEST(AudioPlanBuilderTest, WindowTarget_AppSysMic_Merged) {
+    // Merge-first: {App, Sys, Mic} as one merged track, Mic last, PID set.
     AudioUiState state;
     state.target_kind = CaptureTargetKind::Window;
     state.record_application_audio = true;
@@ -145,10 +151,14 @@ TEST(AudioPlanBuilderTest, WindowTarget_SystemOutputAndMic) {
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
-    ASSERT_EQ(result.plan.tracks.size(), 2u);
-    ExpectSingleSourceTrack(result, 0, AudioSourceKind::SystemOutput);
-    ExpectSingleSourceTrack(result, 1, AudioSourceKind::Mic);
-    EXPECT_FALSE(result.audio_target_process_id.has_value());
+    ASSERT_EQ(result.plan.tracks.size(), 1u);
+    const auto& track = result.plan.tracks[0];
+    ASSERT_EQ(track.sources.size(), 3u);
+    EXPECT_EQ(track.sources[0], AudioSourceKind::App);
+    EXPECT_EQ(track.sources[1], AudioSourceKind::Sys);
+    EXPECT_EQ(track.sources[2], AudioSourceKind::Mic);
+    ASSERT_TRUE(result.audio_target_process_id.has_value());
+    EXPECT_EQ(result.audio_target_process_id.value(), 1007u);
 }
 
 TEST(AudioPlanBuilderTest, WindowTarget_MicOnly) {
@@ -237,6 +247,7 @@ TEST(AudioPlanBuilderTest, DisplayTarget_MicOnly) {
 }
 
 TEST(AudioPlanBuilderTest, DisplayTarget_SystemAndMic) {
+    // Merge-first: {SystemOutput, Mic} as one merged track.
     AudioUiState state;
     state.target_kind = CaptureTargetKind::Display;
     state.record_system_audio = true;
@@ -244,9 +255,11 @@ TEST(AudioPlanBuilderTest, DisplayTarget_SystemAndMic) {
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
-    ASSERT_EQ(result.plan.tracks.size(), 2u);
-    ExpectSingleSourceTrack(result, 0, AudioSourceKind::SystemOutput);
-    ExpectSingleSourceTrack(result, 1, AudioSourceKind::Mic);
+    ASSERT_EQ(result.plan.tracks.size(), 1u);
+    const auto& track = result.plan.tracks[0];
+    ASSERT_EQ(track.sources.size(), 2u);
+    EXPECT_EQ(track.sources[0], AudioSourceKind::SystemOutput);
+    EXPECT_EQ(track.sources[1], AudioSourceKind::Mic);
     EXPECT_FALSE(result.audio_target_process_id.has_value());
 }
 

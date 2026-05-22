@@ -33,10 +33,24 @@ ResolvedAudioTrack MakeTrack(uint32_t track_index, std::initializer_list<AudioSo
     return track;
 }
 
-TEST(AudioPlanValidateTest, Validate_RejectsMergedAudioTrack) {
+TEST(AudioPlanValidateTest, Validate_AcceptsMergedAudioTrack_TwoSources) {
+    // Merged tracks (1-3 sources) are now valid.
     RecorderSession session;
     RecorderConfig cfg = MakeValidBaseConfig();
     cfg.audio_track_plan.tracks.push_back(MakeTrack(0, {AudioSourceKind::App, AudioSourceKind::Mic}));
+    cfg.audio_target_process_id = 1234u;
+
+    RecorderResult validation{};
+    EXPECT_TRUE(session.Validate(cfg, &validation));
+    EXPECT_TRUE(validation.succeeded);
+}
+
+TEST(AudioPlanValidateTest, Validate_RejectsTrackWithFourSources) {
+    // Tracks with more than 3 sources remain invalid.
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidBaseConfig();
+    cfg.audio_track_plan.tracks.push_back(MakeTrack(
+        0, {AudioSourceKind::App, AudioSourceKind::Mic, AudioSourceKind::Sys, AudioSourceKind::SystemOutput}));
     cfg.audio_target_process_id = 1234u;
 
     RecorderResult validation{};

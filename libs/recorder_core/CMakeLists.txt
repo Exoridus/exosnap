@@ -89,6 +89,7 @@ add_library(recorder_core STATIC
     src/wgc_capture.cpp
     src/nvenc_encoder.cpp
     src/mf_aac_encoder.cpp
+    src/mixed_audio_src.cpp
     src/wasapi_capture_src.cpp
     src/wasapi_loopback.cpp
     src/wasapi_loopback_src.cpp
@@ -206,3 +207,11 @@ exosnap_add_gtest(
     SOURCES tests/test_audio_meter.cpp
     LIBRARIES recorder_core
 )
+
+exosnap_add_gtest(
+    NAME mixed_audio_src_tests
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_mixed_audio_src.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(mixed_audio_src_tests PRIVATE src)

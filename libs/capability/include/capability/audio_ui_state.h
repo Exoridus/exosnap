@@ -28,6 +28,9 @@ struct AudioUiState {
     // nullopt = default microphone endpoint.
     std::optional<std::string> selected_mic_device_id;
 
+    // Linear gain applied to the MIC source inside MixedAudioSrc.
+    float mic_gain_linear = 1.0f;
+
     // Set for Window target. Null for Display or unresolved Window PID.
     std::optional<uint32_t> selected_window_pid;
 };
@@ -41,6 +44,7 @@ struct AudioPlanResult {
     recorder_core::MicChannelMode mic_channel_mode = recorder_core::MicChannelMode::Auto;
     // nullopt = default microphone endpoint.
     std::optional<std::string> mic_device_id;
+    float mic_gain_linear = 1.0f;
 };
 
 [[nodiscard]] AudioPlanResult BuildAudioPlan(const AudioUiState& state);

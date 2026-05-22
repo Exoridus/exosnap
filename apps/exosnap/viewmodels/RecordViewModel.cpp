@@ -336,6 +336,14 @@ void RecordViewModel::UpdateStats(const recorder_core::SessionStats& stats) {
             audio_rms_sys = rms;
         } else if (preview.source_key == "mic") {
             audio_rms_mic = rms;
+        } else if (preview.source_key == "merged") {
+            // Distribute merged RMS to each active source meter.
+            if (audio_ui_state.record_application_audio)
+                audio_rms_app = rms;
+            if (audio_ui_state.record_system_audio)
+                audio_rms_sys = rms;
+            if (audio_ui_state.record_microphone)
+                audio_rms_mic = rms;
         }
     }
 }
@@ -389,7 +397,7 @@ void RecordViewModel::ApplyTargetKind(capability::CaptureTargetKind kind) {
     if (kind == capability::CaptureTargetKind::Window) {
         audio_ui_state.record_application_audio = true;
         audio_ui_state.record_system_audio = true;
-        audio_ui_state.separate_output_tracks = true;
+        audio_ui_state.separate_output_tracks = false;
         audio_ui_state.record_microphone = false;
         audio_ui_state.mic_channel_mode = recorder_core::MicChannelMode::Auto;
     } else {
@@ -427,6 +435,11 @@ void RecordViewModel::RebuildAudioPlan() {
             audio_active_sys = true;
         } else if (preview.source_key == "mic") {
             audio_active_mic = true;
+        } else if (preview.source_key == "merged") {
+            // Derive individual active flags from the UI state for merged tracks.
+            audio_active_app = audio_ui_state.record_application_audio;
+            audio_active_sys = audio_ui_state.record_system_audio;
+            audio_active_mic = audio_ui_state.record_microphone;
         }
     }
 }

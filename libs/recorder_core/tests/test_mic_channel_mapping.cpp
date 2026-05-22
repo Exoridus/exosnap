@@ -67,8 +67,22 @@ TEST(MicChannelMappingTest, AutoResolve_BalancedStaysPreserve) {
     EXPECT_EQ(ResolveAutoChannelMode(0.03, 0.028), MicChannelMode::PreserveStereo);
 }
 
+TEST(MicChannelMappingTest, EffectiveAutoMode_BeforeLock_ReturnsMonoMix) {
+    AutoModeState state{};
+    EXPECT_FALSE(state.locked);
+    EXPECT_EQ(EffectiveAutoMode(state), MicChannelMode::MonoMix);
+}
+
+TEST(MicChannelMappingTest, EffectiveAutoMode_AfterLock_ReturnsResolvedMode) {
+    AutoModeState state{};
+    state.locked = true;
+    state.resolved_mode = MicChannelMode::LeftToStereo;
+    EXPECT_EQ(EffectiveAutoMode(state), MicChannelMode::LeftToStereo);
+}
+
 TEST(MicChannelMappingTest, Auto_BufferLock_LeftOnly_MapsLeftToStereo_Float32) {
-    constexpr uint32_t kFrames = 48000;
+    // kAutoDetectMinFrames is now 4800 (100 ms); use that threshold for the 2-step test.
+    constexpr uint32_t kFrames = 4800;
     std::vector<float> frames(static_cast<size_t>(kFrames) * 2u, 0.0f);
     for (uint32_t i = 0; i < kFrames; ++i) {
         frames[(static_cast<size_t>(i) * 2u) + 0u] = 0.8f;
@@ -78,7 +92,7 @@ TEST(MicChannelMappingTest, Auto_BufferLock_LeftOnly_MapsLeftToStereo_Float32) {
     AutoModeState state{};
     UpdateAutoModeStateFloat32(state, frames.data(), kFrames - 1u, false);
     EXPECT_FALSE(state.locked);
-    EXPECT_EQ(EffectiveAutoMode(state), MicChannelMode::PreserveStereo);
+    EXPECT_EQ(EffectiveAutoMode(state), MicChannelMode::MonoMix); // default before lock
 
     UpdateAutoModeStateFloat32(state, frames.data() + (static_cast<size_t>(kFrames - 1u) * 2u), 1u, false);
     ASSERT_TRUE(state.locked);
