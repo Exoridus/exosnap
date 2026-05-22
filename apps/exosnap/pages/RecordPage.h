@@ -1,9 +1,11 @@
 #pragma once
 #include <QWidget>
+#include <filesystem>
 #include <memory>
 #include <recorder_core/audio_input_device.h>
 #include <vector>
 
+#include "../models/OutputSettingsModel.h"
 #include "../services/RecordingCoordinator.h"
 #include "../viewmodels/RecordViewModel.h"
 
@@ -27,9 +29,11 @@ class RecordPage : public QWidget {
     Q_OBJECT
   public:
     explicit RecordPage(QWidget* parent = nullptr);
+    void setOutputSettings(const OutputSettingsModel& settings);
 
   signals:
     void chromeStateChanged(bool recording, const QString& status_label, const QString& context_text);
+    void navigateToOutputPage();
 
   private slots:
     void onStart();
@@ -55,6 +59,7 @@ class RecordPage : public QWidget {
     void updateAudioControls();
     void updateAudioControlsVisibility();
     void updateAudioTrackPreview();
+    void updateOpenFolderButtonState();
     void syncTargetSelectionToCombo(int target_index);
     void onAppAudioToggled(bool checked);
     void onSysAudioToggled(bool checked);
@@ -62,6 +67,8 @@ class RecordPage : public QWidget {
     void onMicToggled(bool checked);
     void onMicDeviceChanged(int index);
     void onMicChannelChanged(int index);
+    void openOutputFolder();
+    void setOutputSettingsSummary(const OutputSettingsModel& settings);
     void populateMicDeviceCombo();
     void updateMicDeviceNoteLabel();
 
@@ -113,6 +120,8 @@ class RecordPage : public QWidget {
     ui::widgets::SectionRuleHeader* destination_header_ = nullptr;
     QLabel* output_path_label_ = nullptr;
     QLabel* output_meta_label_ = nullptr;
+    QPushButton* open_folder_btn_ = nullptr;
+    QPushButton* destination_settings_btn_ = nullptr;
     QFrame* result_panel_ = nullptr;
     QLabel* result_title_label_ = nullptr;
     QLabel* result_message_label_ = nullptr;
@@ -121,6 +130,7 @@ class RecordPage : public QWidget {
     QLabel* result_path_label_ = nullptr;
     QLabel* result_technical_label_ = nullptr;
     QFrame* result_technical_separator_ = nullptr;
+    std::filesystem::path last_output_folder_;
 };
 
 } // namespace exosnap

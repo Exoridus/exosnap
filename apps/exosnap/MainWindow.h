@@ -4,6 +4,8 @@
 #include <QStackedWidget>
 #include <QString>
 
+#include "models/OutputSettingsModel.h"
+
 class QLabel;
 class QShowEvent;
 
@@ -13,6 +15,7 @@ namespace ui::chrome {
 class OperationalTitleBar;
 }
 
+class OutputPage;
 class RecordPage;
 
 class MainWindow : public QMainWindow {
@@ -34,11 +37,14 @@ class MainWindow : public QMainWindow {
 
     void setCurrentPage(int index);
     void updatePageHeader(int index);
+    QString buildOutputPageMeta() const;
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
     QListWidget* nav_ = nullptr;
     QStackedWidget* stack_ = nullptr;
     RecordPage* record_page_ = nullptr;
+    OutputPage* output_page_ = nullptr;
+    OutputSettingsModel output_settings_;
     QLabel* page_kicker_label_ = nullptr;
     QLabel* page_title_label_ = nullptr;
     QLabel* page_subtitle_label_ = nullptr;

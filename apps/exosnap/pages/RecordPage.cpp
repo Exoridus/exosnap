@@ -16,6 +16,8 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDebug>
+#include <QDesktopServices>
+#include <QFileInfo>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -24,6 +26,7 @@
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QStyle>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
@@ -480,14 +483,14 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     auto* dest_buttons_layout = new QHBoxLayout(dest_buttons);
     dest_buttons_layout->setContentsMargins(0, 0, 0, 0);
     dest_buttons_layout->setSpacing(6);
-    auto* reveal_btn = new QPushButton("Reveal (placeholder)", dest_buttons);
-    reveal_btn->setProperty("role", "ghost");
-    reveal_btn->setEnabled(false);
-    auto* change_btn = new QPushButton("Change (placeholder)", dest_buttons);
-    change_btn->setProperty("role", "ghost");
-    change_btn->setEnabled(false);
-    dest_buttons_layout->addWidget(reveal_btn);
-    dest_buttons_layout->addWidget(change_btn);
+    open_folder_btn_ = new QPushButton("Open Folder", dest_buttons);
+    open_folder_btn_->setProperty("role", "ghost");
+    open_folder_btn_->setEnabled(false);
+    destination_settings_btn_ = new QPushButton("Settings", dest_buttons);
+    destination_settings_btn_->setProperty("role", "ghost");
+    destination_settings_btn_->setEnabled(true);
+    dest_buttons_layout->addWidget(open_folder_btn_);
+    dest_buttons_layout->addWidget(destination_settings_btn_);
 
     destination_layout->addWidget(dest_left, 1);
     destination_layout->addWidget(dest_buttons, 0, Qt::AlignRight | Qt::AlignVCenter);
@@ -544,8 +547,65 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
             &RecordPage::onMicDeviceChanged);
     connect(mic_channel_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &RecordPage::onMicChannelChanged);
+    connect(open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
+    connect(destination_settings_btn_, &QPushButton::clicked, this, [this]() { emit navigateToOutputPage(); });
 
     initCoordinator();
+}
+
+void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
+    last_output_folder_ = settings.output_folder;
+    setOutputSettingsSummary(settings);
+    if (coordinator_) {
+        coordinator_->SetOutputSettings(settings);
+    }
+    updateOpenFolderButtonState();
+}
+
+void RecordPage::setOutputSettingsSummary(const OutputSettingsModel& settings) {
+    const QString container =
+        settings.container == capability::Container::Matroska
+            ? QStringLiteral("MKV")
+            : (settings.container == capability::Container::Mp4 ? QStringLiteral("MP4") : QStringLiteral("WEBM"));
+
+    const QString audio =
+        settings.audio_codec == capability::AudioCodec::Opus
+            ? QStringLiteral("OPUS")
+            : (settings.audio_codec == capability::AudioCodec::AacMf ? QStringLiteral("AAC") : QStringLiteral("PCM"));
+
+    if (destination_header_) {
+        destination_header_->setMeta(container + QStringLiteral(" · AV1 · ") + audio);
+    }
+    if (output_meta_label_) {
+        output_meta_label_->setText(QStringLiteral("Files are saved using the configured output settings."));
+    }
+}
+
+void RecordPage::openOutputFolder() {
+    const QString result_path = QString::fromStdWString(view_model_.result_output_path).trimmed();
+    QString folder;
+
+    if (!result_path.isEmpty()) {
+        QFileInfo info(result_path);
+        folder = info.isDir() ? info.absoluteFilePath() : info.absolutePath();
+    } else if (!last_output_folder_.empty()) {
+        folder = QString::fromStdWString(last_output_folder_.wstring());
+    }
+
+    if (folder.trimmed().isEmpty()) {
+        return;
+    }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+}
+
+void RecordPage::updateOpenFolderButtonState() {
+    if (!open_folder_btn_) {
+        return;
+    }
+
+    const bool has_result_path = !QString::fromStdWString(view_model_.result_output_path).trimmed().isEmpty();
+    const bool has_output_folder = !last_output_folder_.empty();
+    open_folder_btn_->setEnabled(has_result_path || has_output_folder);
 }
 
 void RecordPage::initCoordinator() {
@@ -976,6 +1036,7 @@ void RecordPage::refresh() {
     updateStatsDisplay();
 
     updateResultDisplay();
+    updateOpenFolderButtonState();
 
     if (view_model_.selected_target_index >= 0 &&
         view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {

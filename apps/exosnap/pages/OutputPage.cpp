@@ -10,10 +10,12 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScrollArea>
-#include <QStandardPaths>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
 
+#include "../models/FilenameBuilder.h"
 #include "../ui/theme/ExoSnapMetrics.h"
+#include <ctime>
 
 namespace exosnap {
 
@@ -44,7 +46,8 @@ QFrame* makePanel(QWidget* parent) {
 
 } // namespace
 
-OutputPage::OutputPage(QWidget* parent) : QWidget(parent) {
+OutputPage::OutputPage(const OutputSettingsModel& initial_settings, QWidget* parent)
+    : QWidget(parent), settings_(initial_settings) {
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
@@ -88,14 +91,16 @@ OutputPage::OutputPage(QWidget* parent) : QWidget(parent) {
                                          ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
     container_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
 
-    auto* mkv = makeRadio("MKV", container_panel);
-    auto* mp4 = makeRadio("MP4", container_panel);
-    mkv->setChecked(true);
+    mkv_radio_ = makeRadio("MKV", container_panel);
+    mp4_radio_ = makeRadio("MP4", container_panel);
+    mkv_radio_->setChecked(true);
+    mp4_radio_->setEnabled(false);
+    mp4_radio_->setToolTip("Available in a future release");
     container_group_ = new QButtonGroup(this);
-    container_group_->addButton(mkv, 0);
-    container_group_->addButton(mp4, 1);
-    container_layout->addWidget(mkv);
-    container_layout->addWidget(mp4);
+    container_group_->addButton(mkv_radio_, 0);
+    container_group_->addButton(mp4_radio_, 1);
+    container_layout->addWidget(mkv_radio_);
+    container_layout->addWidget(mp4_radio_);
 
     // MP4 info note (hidden by default)
     mp4_info_label_ = new QLabel("MP4 is less crash-resilient than MKV. If recording is interrupted unexpectedly,"
@@ -126,17 +131,20 @@ OutputPage::OutputPage(QWidget* parent) : QWidget(parent) {
         makeSubLabel("Container and codec selections are applied when recording starts.", behavior_panel));
     layout->addWidget(behavior_panel);
 
-    // Effective output placeholder
-    layout->addWidget(makeSectionLabel("Effective Output (Placeholder)", content));
+    // Effective output preview
+    layout->addWidget(makeSectionLabel("Effective Output", content));
     auto* effective_panel = makePanel(content);
     auto* effective_layout = new QVBoxLayout(effective_panel);
     effective_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
                                          ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
     effective_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceXs);
-    auto* effective_hint =
-        new QLabel("Resolved output summary is shown here in a later integration pass.", effective_panel);
-    effective_hint->setProperty("labelRole", "subtle");
-    effective_layout->addWidget(effective_hint);
+    auto* effective_title = new QLabel("Next recording will be saved as:", effective_panel);
+    effective_title->setProperty("labelRole", "subtle");
+    effective_layout->addWidget(effective_title);
+    effective_output_path_label_ = new QLabel(effective_panel);
+    effective_output_path_label_->setProperty("labelRole", "destinationPath");
+    effective_output_path_label_->setTextFormat(Qt::PlainText);
+    effective_layout->addWidget(effective_output_path_label_);
     layout->addWidget(effective_panel);
 
     layout->addStretch();
@@ -146,33 +154,77 @@ OutputPage::OutputPage(QWidget* parent) : QWidget(parent) {
     root->setContentsMargins(0, 0, 0, 0);
     root->addWidget(scroll);
 
-    // Default destination
-    QString videos = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
-    destination_edit_->setText(videos + "/Exosnap");
-
-    // Initial codec choices
-    updateAudioCodecChoices();
+    applySettingsToUi();
+    updateEffectiveOutputPreview();
 
     connect(container_group_, &QButtonGroup::idClicked, this, &OutputPage::onContainerChanged);
     connect(browse_btn_, &QPushButton::clicked, this, &OutputPage::onBrowse);
+    connect(destination_edit_, &QLineEdit::textChanged, this, [this](const QString&) { emitCurrentSettings(); });
+    connect(destination_edit_, &QLineEdit::editingFinished, this, &OutputPage::emitCurrentSettings);
+    connect(naming_edit_, &QLineEdit::textChanged, this, [this](const QString&) { emitCurrentSettings(); });
+    connect(audio_codec_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int) { emitCurrentSettings(); });
 }
 
 void OutputPage::onContainerChanged(int id) {
+    Q_UNUSED(id);
+    if (mkv_radio_ != nullptr) {
+        mkv_radio_->setChecked(true);
+    }
+    settings_.container = capability::Container::Matroska;
     updateAudioCodecChoices();
-    mp4_info_label_->setVisible(id == 1);
+    mp4_info_label_->setVisible(false);
+    emitCurrentSettings();
 }
 
 void OutputPage::onBrowse() {
     QString dir = QFileDialog::getExistingDirectory(this, "Select Output Directory", destination_edit_->text());
-    if (!dir.isEmpty())
+    if (!dir.isEmpty()) {
         destination_edit_->setText(dir);
+    }
+}
+
+void OutputPage::applySettingsToUi() {
+    QSignalBlocker block_destination(destination_edit_);
+    QSignalBlocker block_naming(naming_edit_);
+    QSignalBlocker block_container(container_group_);
+    QSignalBlocker block_codec(audio_codec_combo_);
+
+    if (settings_.container != capability::Container::Matroska) {
+        settings_.container = capability::Container::Matroska;
+    }
+
+    destination_edit_->setText(QString::fromStdWString(settings_.output_folder.wstring()));
+    naming_edit_->setText(QString::fromStdWString(settings_.naming_pattern));
+    mkv_radio_->setChecked(true);
+    mp4_info_label_->setVisible(false);
+
+    updateAudioCodecChoices();
+    const int codec_index = settings_.audio_codec == capability::AudioCodec::AacMf
+                                ? audio_codec_combo_->findText("AAC")
+                                : audio_codec_combo_->findText("Opus");
+    audio_codec_combo_->setCurrentIndex(codec_index >= 0 ? codec_index : 0);
+}
+
+void OutputPage::emitCurrentSettings() {
+    settings_.output_folder = std::filesystem::path(destination_edit_->text().toStdWString());
+    settings_.naming_pattern = naming_edit_->text().toStdWString();
+    settings_.container = capability::Container::Matroska; // MP4 disabled in MVP
+
+    const QString codec_text = audio_codec_combo_->currentText().toLower();
+    if (codec_text.contains("aac")) {
+        settings_.audio_codec = capability::AudioCodec::AacMf;
+    } else {
+        settings_.audio_codec = capability::AudioCodec::Opus;
+    }
+
+    updateEffectiveOutputPreview();
+    emit outputSettingsChanged(settings_);
 }
 
 void OutputPage::updateAudioCodecChoices() {
-    int container = container_group_->checkedId();
-    bool is_mkv = (container == 0);
-
-    audio_codec_combo_->blockSignals(true);
+    const QString previous_codec = audio_codec_combo_->currentText().toLower();
+    const bool is_mkv = container_group_->checkedId() != 1;
     audio_codec_combo_->clear();
     if (is_mkv) {
         audio_codec_combo_->addItem("Opus");
@@ -180,7 +232,23 @@ void OutputPage::updateAudioCodecChoices() {
     } else {
         audio_codec_combo_->addItem("AAC");
     }
-    audio_codec_combo_->blockSignals(false);
+
+    int desired_index =
+        previous_codec.contains("aac") ? audio_codec_combo_->findText("AAC") : audio_codec_combo_->findText("Opus");
+    if (desired_index < 0) {
+        desired_index = 0;
+    }
+    audio_codec_combo_->setCurrentIndex(desired_index);
+}
+
+void OutputPage::updateEffectiveOutputPreview() {
+    if (effective_output_path_label_ == nullptr) {
+        return;
+    }
+
+    const auto output_path =
+        BuildOutputPath(settings_.output_folder, settings_.naming_pattern, settings_.container, std::time(nullptr));
+    effective_output_path_label_->setText(QString::fromStdWString(output_path.wstring()));
 }
 
 } // namespace exosnap

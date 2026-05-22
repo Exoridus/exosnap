@@ -122,6 +122,7 @@ constexpr std::array<PageDescriptor, 8> kPageDescriptors = {{
 
 constexpr int kNavIndexRole = Qt::UserRole + 1;
 constexpr int kNavIconRole = Qt::UserRole + 2;
+constexpr int kOutputPageIndex = 3;
 
 QColor colorFrom(const char* value) {
     return QColor(QString::fromLatin1(value));
@@ -634,15 +635,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     stack_ = new QStackedWidget(content);
     stack_->setObjectName("mainStack");
+    output_settings_ = OutputSettingsModel::Defaults();
     record_page_ = new RecordPage(stack_);
+    output_page_ = new OutputPage(output_settings_, stack_);
     stack_->addWidget(record_page_);
     stack_->addWidget(new VideoPage(stack_));
     stack_->addWidget(new AudioPage(stack_));
-    stack_->addWidget(new OutputPage(stack_));
+    stack_->addWidget(output_page_);
     stack_->addWidget(new HotkeysPage(stack_));
     stack_->addWidget(new DiagnosticsPage(stack_));
     stack_->addWidget(new LogsPage(stack_));
     stack_->addWidget(new AdvancedPage(stack_));
+    record_page_->setOutputSettings(output_settings_);
     content_layout->addWidget(stack_, 1);
 
     body_layout->addWidget(content, 1);
@@ -660,6 +664,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     });
     connect(title_bar_, &ui::chrome::OperationalTitleBar::closeRequested, this, &QWidget::close);
     connect(record_page_, &RecordPage::chromeStateChanged, this, &MainWindow::onRecordChromeStateChanged);
+    connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { nav_->setCurrentRow(kOutputPageIndex); });
+    connect(output_page_, &OutputPage::outputSettingsChanged, this, [this](const OutputSettingsModel& settings) {
+        output_settings_ = settings;
+        record_page_->setOutputSettings(settings);
+        if (stack_->currentIndex() == kOutputPageIndex) {
+            updatePageHeader(kOutputPageIndex);
+        }
+    });
 
     nav_->setCurrentRow(0);
 }
@@ -896,7 +908,8 @@ void MainWindow::updatePageHeader(int index) {
     page_kicker_label_->setText(descriptor.kicker);
     page_title_label_->setText(descriptor.nav_label);
     page_subtitle_label_->setText(descriptor.subtitle);
-    page_meta_label_->setText(descriptor.page_meta);
+    page_meta_label_->setText(index == kOutputPageIndex ? buildOutputPageMeta()
+                                                        : QString::fromUtf8(descriptor.page_meta));
 
     const QString context_text = (recording_active_ && index == 0 && !recording_context_text_.isEmpty())
                                      ? recording_context_text_
@@ -904,6 +917,18 @@ void MainWindow::updatePageHeader(int index) {
     title_bar_->setPageContext(descriptor.kicker, context_text);
     title_bar_->setRecordingActive(recording_active_);
     title_bar_->setStatusLabel(recording_active_ ? "REC" : "READY");
+}
+
+QString MainWindow::buildOutputPageMeta() const {
+    const QString container = output_settings_.container == capability::Container::Matroska
+                                  ? QStringLiteral("MKV")
+                                  : (output_settings_.container == capability::Container::Mp4 ? QStringLiteral("MP4")
+                                                                                              : QStringLiteral("WEBM"));
+    const QString audio = output_settings_.audio_codec == capability::AudioCodec::Opus
+                              ? QStringLiteral("OPUS")
+                              : (output_settings_.audio_codec == capability::AudioCodec::AacMf ? QStringLiteral("AAC")
+                                                                                               : QStringLiteral("PCM"));
+    return container + QStringLiteral(" · AV1 · ") + audio;
 }
 
 } // namespace exosnap
