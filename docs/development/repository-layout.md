@@ -11,6 +11,19 @@ This repository keeps source code and generated artifacts strictly separated.
 - `build/` contains generated CMake build trees and local compile outputs.
 - `dist/` contains generated packaging outputs (ZIPs, checksums, staging content).
 
+## Distribution target shape
+
+- Final distribution should provide `exosnap.exe` as the primary GUI entry point.
+- Final distribution may provide a separate CLI binary (`exosnap-cli.exe`) for automation and validation flows.
+- Keeping GUI and CLI as separate applications under `apps/` is intentional and fits the current repository model.
+- Repository layout work must not force a large rename or directory move just to reach this distribution shape.
+
+## PATH policy
+
+- Alpha ZIP packages must not modify user PATH automatically.
+- CLI PATH integration belongs to installer scope in a later release (optional installer checkbox or package-manager integration).
+- For local development or manual ZIP usage, PATH changes are explicit user actions.
+
 ## `build/` vs `dist/`
 
 - `build/` is for compiler/linker/test artifacts produced while configuring and building.
