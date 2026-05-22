@@ -25,7 +25,7 @@ PreviewSurface::PreviewSurface(QWidget* parent) : QWidget(parent) {
     status_pill_->setTone(StatusPill::Tone::Ready);
     status_pill_->setText("READY");
 
-    top_meta_label_ = new QLabel("DISPLAY1 · 2560×1440 · 60 fps", top_row_);
+    top_meta_label_ = new QLabel("NO TARGET", top_row_);
     top_meta_label_->setProperty("labelRole", "previewMeta");
 
     top_layout->addWidget(status_pill_, 0, Qt::AlignVCenter);
@@ -39,10 +39,10 @@ PreviewSurface::PreviewSurface(QWidget* parent) : QWidget(parent) {
     center_layout->setSpacing(6);
     center_layout->setAlignment(Qt::AlignCenter);
 
-    center_title_label_ = new QLabel("◇ PREVIEW SURFACE", center_box_);
+    center_title_label_ = new QLabel("SELECTED TARGET", center_box_);
     center_title_label_->setProperty("labelRole", "previewCenterTitle");
     center_title_label_->setAlignment(Qt::AlignCenter);
-    center_subtitle_label_ = new QLabel("IDLE · DDA TEX SHARED", center_box_);
+    center_subtitle_label_ = new QLabel("Preview not live in this alpha", center_box_);
     center_subtitle_label_->setProperty("labelRole", "previewCenterSubtitle");
     center_subtitle_label_->setAlignment(Qt::AlignCenter);
 

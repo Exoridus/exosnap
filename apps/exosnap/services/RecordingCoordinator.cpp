@@ -3,10 +3,13 @@
 #include <QCoreApplication>
 #include <QMetaObject>
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
 #include <sstream>
+#include <string_view>
 
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputPathValidator.h"
@@ -22,6 +25,149 @@ static std::wstring ToWide(const std::string& s) {
     std::wstring w(static_cast<size_t>(n), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
     return w;
+}
+
+static std::string TrimAscii(const std::string& value) {
+    std::size_t first = 0;
+    while (first < value.size() && std::isspace(static_cast<unsigned char>(value[first])) != 0) {
+        ++first;
+    }
+
+    std::size_t last = value.size();
+    while (last > first && std::isspace(static_cast<unsigned char>(value[last - 1])) != 0) {
+        --last;
+    }
+
+    return value.substr(first, last - first);
+}
+
+static bool StartsWithAsciiInsensitive(const std::string_view value, const std::string_view prefix) {
+    if (prefix.size() > value.size()) {
+        return false;
+    }
+
+    for (std::size_t i = 0; i < prefix.size(); ++i) {
+        const unsigned char a = static_cast<unsigned char>(value[i]);
+        const unsigned char b = static_cast<unsigned char>(prefix[i]);
+        if (std::tolower(a) != std::tolower(b)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static std::string DisplayLabelFromTargetDescription(const std::string& raw_description) {
+    std::string value = TrimAscii(raw_description);
+    if (value.empty()) {
+        return "Display";
+    }
+
+    if (StartsWithAsciiInsensitive(value, R"(\\.\)")) {
+        value.erase(0, 4);
+    } else if (StartsWithAsciiInsensitive(value, "//./")) {
+        value.erase(0, 4);
+    }
+
+    if (value.size() > 7 && StartsWithAsciiInsensitive(value, "DISPLAY")) {
+        const std::string suffix = value.substr(7);
+        const bool digits_only = !suffix.empty() && std::all_of(suffix.begin(), suffix.end(), [](const char ch) {
+            return std::isdigit(static_cast<unsigned char>(ch)) != 0;
+        });
+        if (digits_only) {
+            return "Display " + suffix;
+        }
+    }
+
+    return value;
+}
+
+struct WindowTargetParts {
+    std::string app_name;
+    std::string title;
+};
+
+static WindowTargetParts ParseWindowTargetParts(const std::string& raw_description) {
+    WindowTargetParts parts{};
+    const std::string value = TrimAscii(raw_description);
+    if (value.empty()) {
+        return parts;
+    }
+
+    const std::string separators[] = {" \xE2\x80\x94 ", " - "};
+    bool found_separator = false;
+    std::size_t separator_pos = 0;
+    std::size_t separator_size = 0;
+    for (const auto& separator : separators) {
+        const std::size_t candidate = value.rfind(separator);
+        if (candidate == std::string::npos) {
+            continue;
+        }
+        if (!found_separator || candidate > separator_pos) {
+            found_separator = true;
+            separator_pos = candidate;
+            separator_size = separator.size();
+        }
+    }
+
+    if (!found_separator) {
+        parts.app_name = value;
+        parts.title = value;
+        return parts;
+    }
+
+    const std::string raw_title = TrimAscii(value.substr(0, separator_pos));
+    const std::string raw_app = TrimAscii(value.substr(separator_pos + separator_size));
+
+    parts.app_name = raw_app.empty() ? value : raw_app;
+    if (!raw_title.empty() && raw_title != parts.app_name) {
+        parts.title = raw_title;
+    }
+
+    if (parts.title.empty()) {
+        parts.title = parts.app_name;
+    }
+
+    return parts;
+}
+
+static std::string BuildProcessName(const std::string& app_name) {
+    std::string process_name;
+    process_name.reserve(app_name.size());
+
+    for (const unsigned char ch : app_name) {
+        if (std::isalnum(ch) == 0) {
+            continue;
+        }
+        process_name.push_back(static_cast<char>(std::tolower(ch)));
+    }
+
+    if (process_name.empty()) {
+        return "window";
+    }
+    return process_name;
+}
+
+static FilenameTargetContext BuildFilenameContextFromTarget(const recorder_core::CaptureTarget& target) {
+    FilenameTargetContext context;
+    if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+        const std::string display = DisplayLabelFromTargetDescription(target.description);
+        context.app_name = L"Desktop";
+        context.process_name = L"desktop";
+        context.window_title = ToWide(display);
+        context.target_name = L"Desktop - " + context.window_title;
+        return context;
+    }
+
+    const WindowTargetParts parts = ParseWindowTargetParts(target.description);
+    const std::string app = parts.app_name.empty() ? std::string("Window") : parts.app_name;
+    const std::string title = parts.title.empty() ? app : parts.title;
+
+    context.app_name = ToWide(app);
+    context.window_title = ToWide(title);
+    context.process_name = ToWide(BuildProcessName(app));
+    context.target_name = context.app_name + L" - " + context.window_title;
+    return context;
 }
 
 static bool PlanRequiresTargetPid(const recorder_core::AudioTrackPlan& plan) {
@@ -104,6 +250,10 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     }
     if (!has_caps_)
         return false;
+
+    if (!has_output_target_context_) {
+        output_target_context_ = BuildFilenameContextFromTarget(target);
+    }
 
     auto output_path = GenerateOutputPath();
     current_output_path_ = output_path;
@@ -214,6 +364,10 @@ std::filesystem::path RecordingCoordinator::CurrentOutputPath() const {
 void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings) {
     output_settings_ = settings;
 }
+void RecordingCoordinator::SetOutputTargetContext(const FilenameTargetContext& context) {
+    output_target_context_ = context;
+    has_output_target_context_ = true;
+}
 
 void RecordingCoordinator::SetStateChangedCallback(StateChangedCallback cb) {
     on_state_changed_ = std::move(cb);
@@ -251,7 +405,7 @@ void RecordingCoordinator::PostStats(recorder_core::SessionStats stats) {
 
 std::filesystem::path RecordingCoordinator::GenerateOutputPath() const {
     return BuildOutputPath(output_settings_.output_folder, output_settings_.naming_pattern, output_settings_.container,
-                           std::time(nullptr));
+                           std::time(nullptr), output_target_context_);
 }
 
 std::wstring RecordingCoordinator::FormatHResult(int32_t hr) {

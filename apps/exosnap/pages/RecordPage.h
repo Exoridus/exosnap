@@ -81,6 +81,7 @@ class RecordPage : public QWidget {
     void updateMicDeviceNoteLabel();
     void emitAudioSettingsChanged();
     void emitChromeState();
+    void syncCoordinatorTargetContext();
     QString buildChromeStatusLabel() const;
     QString buildPreviewBottomLeftText(bool recording) const;
     QString buildPreviewBottomRightText(bool recording) const;

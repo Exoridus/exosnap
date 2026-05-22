@@ -8,6 +8,8 @@
 #include <capability/audio_ui_state.h>
 #include <recorder_core/recorder_session.h>
 
+#include "models/FilenameBuilder.h"
+
 namespace exosnap {
 
 // ---------------------------------------------------------------------------
@@ -109,6 +111,8 @@ class RecordViewModel {
     static std::wstring FormatBytes(uint64_t bytes);
     static std::string DisplayLabelFromTarget(const std::string& raw_description);
     static std::string WindowLabelFromTarget(const std::string& raw_description);
+    static std::string TargetLabelFromCaptureTarget(const recorder_core::CaptureTarget& target);
+    static FilenameTargetContext FilenameContextFromCaptureTarget(const recorder_core::CaptureTarget& target);
     static std::vector<int> SortWindowTargetIndices(const std::vector<recorder_core::CaptureTarget>& targets,
                                                     const std::vector<int>& window_indices);
 };

@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <ctime>
+#include <cwctype>
 #include <filesystem>
 #include <string>
 
@@ -35,28 +36,205 @@ std::filesystem::path UniqueTempPath(const std::wstring& suffix) {
            (L"exosnap_output_settings_" + std::to_wstring(now) + L"_" + suffix);
 }
 
-TEST(OutputSettingsTest, KnownTimestamp_MKV) {
-    const std::time_t ts = LocalTimestamp(2024, 1, 1, 12, 0, 0);
-    const auto filename = BuildFilename(L"exosnap_{date}_{time}", capability::Container::Matroska, ts);
-    EXPECT_EQ(filename, L"exosnap_20240101_120000.mkv");
+FilenameTargetContext WindowContext(const std::wstring& app = L"Brave", const std::wstring& title = L"Claude Design",
+                                    const std::wstring& process = L"brave") {
+    FilenameTargetContext context;
+    context.app_name = app;
+    context.window_title = title;
+    context.process_name = process;
+    context.target_name = title.empty() ? app : (app + L" - " + title);
+    return context;
+}
+
+FilenameTargetContext DisplayContext() {
+    FilenameTargetContext context;
+    context.target_name = L"Desktop - Display 1";
+    context.app_name = L"Desktop";
+    context.window_title = L"Display 1";
+    context.process_name = L"desktop";
+    return context;
+}
+
+bool EqualPathElementCaseInsensitive(const std::filesystem::path& lhs, const std::filesystem::path& rhs) {
+    const std::wstring a = lhs.native();
+    const std::wstring b = rhs.native();
+    if (a.size() != b.size()) {
+        return false;
+    }
+
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (std::towlower(a[i]) != std::towlower(b[i])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool IsPathUnderFolder(const std::filesystem::path& path, const std::filesystem::path& folder) {
+    const std::filesystem::path normalized_path = path.lexically_normal();
+    const std::filesystem::path normalized_folder = folder.lexically_normal();
+
+    auto path_it = normalized_path.begin();
+    for (auto folder_it = normalized_folder.begin(); folder_it != normalized_folder.end(); ++folder_it, ++path_it) {
+        if (path_it == normalized_path.end()) {
+            return false;
+        }
+        if (!EqualPathElementCaseInsensitive(*path_it, *folder_it)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+TEST(OutputSettingsTest, DateToken_UsesIsoDateFormat) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const auto filename = BuildFilename(L"{date}", capability::Container::Matroska, ts, WindowContext());
+    EXPECT_EQ(filename, L"2026-05-22.mkv");
+}
+
+TEST(OutputSettingsTest, TimeToken_UsesDashSeparatedTimeFormat) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const auto filename = BuildFilename(L"{time}", capability::Container::Matroska, ts, WindowContext());
+    EXPECT_EQ(filename, L"14-37-09.mkv");
+}
+
+TEST(OutputSettingsTest, DateTimeToken_UsesIsoDateTimeFormat) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const auto filename = BuildFilename(L"{datetime}", capability::Container::Matroska, ts, WindowContext());
+    EXPECT_EQ(filename, L"2026-05-22_14-37-09.mkv");
+}
+
+TEST(OutputSettingsTest, TimestampToken_UsesUnixTimestampInteger) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const auto filename = BuildFilename(L"{timestamp}", capability::Container::Matroska, ts, WindowContext());
+    EXPECT_EQ(filename, std::to_wstring(static_cast<long long>(ts)) + L".mkv");
+}
+
+TEST(OutputSettingsTest, SplitDateTimeTokens_ExpandIndividually) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const auto filename =
+        BuildFilename(L"{YYYY}_{YY}_{MM}_{DD}_{hh}_{mm}_{ss}", capability::Container::Matroska, ts, WindowContext());
+    EXPECT_EQ(filename, L"2026_26_05_22_14_37_09.mkv");
+}
+
+TEST(OutputSettingsTest, TargetToken_IsReplacedFromContext) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const auto filename = BuildFilename(L"{target}", capability::Container::Matroska, ts, WindowContext());
+    EXPECT_EQ(filename, L"Brave - Claude Design.mkv");
+}
+
+TEST(OutputSettingsTest, AppAndApplicationTokens_AreAliases) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const auto filename = BuildFilename(L"{app}_{application}", capability::Container::Matroska, ts, WindowContext());
+    EXPECT_EQ(filename, L"Brave_Brave.mkv");
+}
+
+TEST(OutputSettingsTest, ProcessToken_IsReplacedFromContext) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const auto filename = BuildFilename(L"{process}", capability::Container::Matroska, ts, WindowContext());
+    EXPECT_EQ(filename, L"brave.mkv");
+}
+
+TEST(OutputSettingsTest, TitleToken_IsReplacedFromContext) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const auto filename = BuildFilename(L"{title}", capability::Container::Matroska, ts, WindowContext());
+    EXPECT_EQ(filename, L"Claude Design.mkv");
+}
+
+TEST(OutputSettingsTest, AppAndTitleTokens_AreSanitizedBeforeInsertion) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const auto filename = BuildFilename(L"{app}_{title}_{date}", capability::Container::Matroska, ts,
+                                        WindowContext(L"Br:ave", L"Clau/de|Design", L"brave"));
+    EXPECT_EQ(filename, L"Br_ave_Clau_de_Design_2026-05-22.mkv");
+}
+
+TEST(OutputSettingsTest, LegacyOverloadWithoutContext_RemainsFunctional) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const auto filename = BuildFilename(L"rec_{datetime}", capability::Container::Matroska, ts);
+    EXPECT_EQ(filename, L"rec_2026-05-22_14-37-09.mkv");
+}
+
+TEST(OutputSettingsTest, Defaults_NamingPatternCorrect) {
+    const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
+    EXPECT_EQ(defaults.naming_pattern, L"{datetime}_{app}_{title}");
+}
+
+TEST(OutputSettingsTest, EmptyTitleToken_CleansSeparatorArtifact) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const auto filename =
+        BuildFilename(L"{app}_{title}_{datetime}", capability::Container::Matroska, ts, WindowContext(L"Brave", L""));
+    EXPECT_EQ(filename, L"Brave_2026-05-22_14-37-09.mkv");
+}
+
+TEST(OutputSettingsTest, IntentionalLiteralSeparatorRun_PreservedWhenTokensPresent) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const auto filename = BuildFilename(L"{app}__{datetime}", capability::Container::Matroska, ts, WindowContext());
+    EXPECT_EQ(filename, L"Brave__2026-05-22_14-37-09.mkv");
+}
+
+TEST(OutputSettingsTest, RelativePatternPath_CreatesSubfolder) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const std::filesystem::path folder = UniqueTempPath(L"relative_path");
+
+    const auto output =
+        BuildOutputPath(folder, L"{app}/{datetime}", capability::Container::Matroska, ts, WindowContext());
+
+    EXPECT_EQ(output.lexically_normal(), (folder / L"Brave" / L"2026-05-22_14-37-09.mkv").lexically_normal());
+}
+
+TEST(OutputSettingsTest, EmptySegmentFromToken_IsRemovedFromRelativePath) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const std::filesystem::path folder = UniqueTempPath(L"empty_segment");
+
+    const auto output = BuildOutputPath(folder, L"{app}/{title}/{datetime}", capability::Container::Matroska, ts,
+                                        WindowContext(L"Brave", L""));
+
+    EXPECT_EQ(output.lexically_normal(), (folder / L"Brave" / L"2026-05-22_14-37-09.mkv").lexically_normal());
+}
+
+TEST(OutputSettingsTest, ParentTraversalPattern_DoesNotEscapeOutputFolder) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const std::filesystem::path folder = UniqueTempPath(L"dotdot_prefix");
+
+    const auto output =
+        BuildOutputPath(folder, L"../{app}/{datetime}", capability::Container::Matroska, ts, WindowContext());
+
+    EXPECT_TRUE(IsPathUnderFolder(output, folder));
+}
+
+TEST(OutputSettingsTest, DrivePrefixPattern_DoesNotBecomeAbsoluteDrivePath) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const std::filesystem::path folder = UniqueTempPath(L"drive_prefix");
+
+    const auto output =
+        BuildOutputPath(folder, L"C:/{app}/{datetime}", capability::Container::Matroska, ts, WindowContext());
+
+    EXPECT_TRUE(IsPathUnderFolder(output, folder));
+}
+
+TEST(OutputSettingsTest, MidPathParentTraversal_DoesNotEscapeOutputFolder) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const std::filesystem::path folder = UniqueTempPath(L"dotdot_mid");
+
+    const auto output =
+        BuildOutputPath(folder, L"{app}/../{datetime}", capability::Container::Matroska, ts, WindowContext());
+
+    EXPECT_TRUE(IsPathUnderFolder(output, folder));
+}
+
+TEST(OutputSettingsTest, DisplayContext_TargetTokensRenderDesktopDefaults) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const auto filename =
+        BuildFilename(L"{target}_{app}_{title}_{process}", capability::Container::Matroska, ts, DisplayContext());
+    EXPECT_EQ(filename, L"Desktop - Display 1_Desktop_Display 1_desktop.mkv");
 }
 
 TEST(OutputSettingsTest, LiteralPattern_NoTokens) {
     const std::time_t ts = LocalTimestamp(2024, 1, 1, 12, 0, 0);
     const auto filename = BuildFilename(L"myrecord", capability::Container::Matroska, ts);
     EXPECT_EQ(filename, L"myrecord.mkv");
-}
-
-TEST(OutputSettingsTest, DateOnlyToken) {
-    const std::time_t ts = LocalTimestamp(2024, 1, 1, 12, 0, 0);
-    const auto filename = BuildFilename(L"rec_{date}", capability::Container::Matroska, ts);
-    EXPECT_EQ(filename, L"rec_20240101.mkv");
-}
-
-TEST(OutputSettingsTest, TimeOnlyToken) {
-    const std::time_t ts = LocalTimestamp(2024, 1, 1, 12, 0, 0);
-    const auto filename = BuildFilename(L"rec_{time}", capability::Container::Matroska, ts);
-    EXPECT_EQ(filename, L"rec_120000.mkv");
 }
 
 TEST(OutputSettingsTest, Mp4Extension) {
@@ -69,12 +247,6 @@ TEST(OutputSettingsTest, WebMExtension) {
     const std::time_t ts = LocalTimestamp(2024, 1, 1, 12, 0, 0);
     const auto filename = BuildFilename(L"rec", capability::Container::WebM, ts);
     EXPECT_EQ(filename, L"rec.webm");
-}
-
-TEST(OutputSettingsTest, InvalidCharsReplaced) {
-    const std::time_t ts = LocalTimestamp(2024, 1, 1, 12, 0, 0);
-    const auto filename = BuildFilename(L"rec<name>", capability::Container::Matroska, ts);
-    EXPECT_EQ(filename, L"rec_name_.mkv");
 }
 
 TEST(OutputSettingsTest, UnknownTokenPreserved) {
@@ -124,11 +296,6 @@ TEST(OutputSettingsTest, Defaults_ContainerIsMatroska) {
 TEST(OutputSettingsTest, Defaults_AudioCodecIsOpus) {
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
     EXPECT_EQ(defaults.audio_codec, capability::AudioCodec::Opus);
-}
-
-TEST(OutputSettingsTest, Defaults_NamingPatternCorrect) {
-    const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
-    EXPECT_EQ(defaults.naming_pattern, L"exosnap_{date}_{time}");
 }
 
 TEST(OutputSettingsTest, ApplyOutputAudioCodec_UsesOpusWhenSelected) {

@@ -122,13 +122,7 @@ QString windowLabelFromTarget(const recorder_core::CaptureTarget& target) {
 }
 
 QString normalizedTargetLabel(const recorder_core::CaptureTarget& target) {
-    if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
-        return displayLabelFromTarget(target);
-    }
-    if (target.kind == recorder_core::CaptureTarget::Kind::Window) {
-        return windowLabelFromTarget(target);
-    }
-    return QStringLiteral("Target");
+    return QString::fromStdString(RecordViewModel::TargetLabelFromCaptureTarget(target));
 }
 
 capability::UserRecorderConfig primaryRecorderConfig() {
@@ -554,8 +548,10 @@ void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
             output_path_label_->setText(QString::fromStdWString(view_model_.output_path_display));
     }
     setOutputSettingsSummary(settings);
-    if (coordinator_)
+    if (coordinator_) {
         coordinator_->SetOutputSettings(settings);
+        syncCoordinatorTargetContext();
+    }
     updateOpenFolderButtonState();
     diagnostics::AppLog(QStringLiteral("[output] settings applied: ") +
                         QString::fromStdWString(view_model_.output_path_display));
@@ -762,6 +758,8 @@ void RecordPage::enumerateTargets(bool preserve_current_selection) {
         rebuildTargetPicker();
     }
 
+    syncCoordinatorTargetContext();
+
     diagnostics::AppLog(QStringLiteral("[target] enumerated: total=%1 monitors=%2 windows=%3")
                             .arg(static_cast<int>(view_model_.targets.size()))
                             .arg(static_cast<int>(monitor_target_indices_.size()))
@@ -838,6 +836,7 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
     }
 
     view_model_.ApplyTargetKindPreservingAudio(new_kind);
+    syncCoordinatorTargetContext();
 
     diagnostics::AppLog(QStringLiteral("[target] selected: %1 (kind_changed=%2)")
                             .arg(normalizedTargetLabel(target))
@@ -856,6 +855,7 @@ void RecordPage::onStart() {
     diagnostics::AppLog(QStringLiteral("[record] start requested  target=%1").arg(target_label));
 
     view_model_.ResetStats();
+    syncCoordinatorTargetContext();
     coordinator_->StartRecording(view_model_.targets[static_cast<std::size_t>(idx)], view_model_.audio_ui_state);
 }
 
@@ -1213,6 +1213,26 @@ void RecordPage::updateAudioTrackPreview() {
     }
 }
 
+void RecordPage::syncCoordinatorTargetContext() {
+    if (!coordinator_) {
+        return;
+    }
+
+    FilenameTargetContext context;
+    if (view_model_.selected_target_index >= 0 &&
+        view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {
+        const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+        context = RecordViewModel::FilenameContextFromCaptureTarget(target);
+    } else {
+        context.target_name = L"Desktop - Display 1";
+        context.app_name = L"Desktop";
+        context.window_title = L"Display 1";
+        context.process_name = L"desktop";
+    }
+
+    coordinator_->SetOutputTargetContext(context);
+}
+
 QString RecordPage::buildChromeStatusLabel() const {
     switch (view_model_.state) {
     case UiRecordingState::Recording:
@@ -1325,18 +1345,26 @@ void RecordPage::refresh() {
     preview_surface_->statusPill()->setTone(
         recording ? ui::widgets::StatusPill::Tone::Recording
                   : (blocked ? ui::widgets::StatusPill::Tone::Blocked : ui::widgets::StatusPill::Tone::Ready));
-    preview_surface_->setCenterSubtitle(recording ? QStringLiteral("CAPTURING")
-                                                  : QStringLiteral("IDLE · DDA TEX SHARED"));
-
+    QString target_desc = QStringLiteral("No target selected");
+    const bool has_selected_target = view_model_.selected_target_index >= 0 &&
+                                     view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
     if (view_model_.selected_target_index >= 0 &&
         view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {
         const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
-        const QString target_desc = normalizedTargetLabel(target);
+        target_desc = normalizedTargetLabel(target);
         capture_header_->setMeta(QStringLiteral("%1 · 60 fps").arg(target_desc));
-        preview_surface_->setTopMetaText(QStringLiteral("%1 · 60 fps").arg(target_desc.toUpper()));
+        preview_surface_->setTopMetaText(QStringLiteral("%1 · 60 fps").arg(target_desc));
     } else {
         capture_header_->setMeta("NO TARGET");
         preview_surface_->setTopMetaText("NO TARGET");
+    }
+
+    if (recording) {
+        preview_surface_->setCenterTitle(QStringLiteral("RECORDING"));
+        preview_surface_->setCenterSubtitle(target_desc);
+    } else {
+        preview_surface_->setCenterTitle(has_selected_target ? target_desc : QStringLiteral("SELECTED TARGET"));
+        preview_surface_->setCenterSubtitle(QStringLiteral("Preview not live in this alpha"));
     }
 
     updateTargetCards();

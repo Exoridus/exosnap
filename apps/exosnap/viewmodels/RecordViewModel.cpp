@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <string_view>
+#include <windows.h>
 
 namespace exosnap {
 namespace {
@@ -64,6 +65,59 @@ std::string ToLowerAscii(const std::string& value) {
         result.push_back(static_cast<char>(std::tolower(ch)));
     }
     return result;
+}
+
+std::wstring ToWideUtf8(const std::string& value) {
+    if (value.empty()) {
+        return {};
+    }
+
+    const int count = MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0);
+    if (count <= 0) {
+        return {};
+    }
+
+    std::wstring result(static_cast<std::size_t>(count), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), count);
+    return result;
+}
+
+std::string ToUtf8(const std::wstring& value) {
+    if (value.empty()) {
+        return {};
+    }
+
+    const int count =
+        WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    if (count <= 0) {
+        return {};
+    }
+
+    std::string result(static_cast<std::size_t>(count), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), count, nullptr,
+                        nullptr);
+    return result;
+}
+
+std::string BuildProcessNameFromApp(const std::string& app_name) {
+    const std::string trimmed = TrimAscii(app_name);
+    if (trimmed.empty()) {
+        return "window";
+    }
+
+    std::string process_name;
+    process_name.reserve(trimmed.size());
+    for (const unsigned char ch : trimmed) {
+        if (std::isalnum(ch) == 0) {
+            continue;
+        }
+        process_name.push_back(static_cast<char>(std::tolower(ch)));
+    }
+
+    if (process_name.empty()) {
+        return "window";
+    }
+    return process_name;
 }
 
 bool IsHexHandleOnly(const std::string_view value) {
@@ -437,6 +491,51 @@ std::string RecordViewModel::DisplayLabelFromTarget(const std::string& raw_descr
 
 std::string RecordViewModel::WindowLabelFromTarget(const std::string& raw_description) {
     return BuildWindowLabelParts(raw_description).label;
+}
+
+std::string RecordViewModel::TargetLabelFromCaptureTarget(const recorder_core::CaptureTarget& target) {
+    const FilenameTargetContext context = FilenameContextFromCaptureTarget(target);
+    const std::string label = ToUtf8(context.target_name);
+
+    if (!label.empty()) {
+        return label;
+    }
+
+    if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+        return "Desktop - " + DisplayLabelFromTarget(target.description);
+    }
+
+    return WindowLabelFromTarget(target.description);
+}
+
+FilenameTargetContext RecordViewModel::FilenameContextFromCaptureTarget(const recorder_core::CaptureTarget& target) {
+    FilenameTargetContext context;
+
+    if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+        const std::string display_label = DisplayLabelFromTarget(target.description);
+        context.app_name = L"Desktop";
+        context.window_title = ToWideUtf8(display_label);
+        context.process_name = L"desktop";
+        context.target_name = L"Desktop - " + context.window_title;
+        return context;
+    }
+
+    const WindowLabelParts parts = BuildWindowLabelParts(target.description);
+    const std::string app_name = parts.has_app_name ? TrimAscii(parts.app_name) : TrimAscii(parts.label);
+    std::string title = TrimAscii(parts.window_title);
+
+    const std::string fallback_app = app_name.empty() ? std::string("Window") : app_name;
+    if (title.empty()) {
+        title = fallback_app;
+    }
+
+    const std::string process_name = BuildProcessNameFromApp(fallback_app);
+
+    context.app_name = ToWideUtf8(fallback_app);
+    context.window_title = ToWideUtf8(title);
+    context.process_name = ToWideUtf8(process_name);
+    context.target_name = context.app_name + L" - " + context.window_title;
+    return context;
 }
 
 std::vector<int> RecordViewModel::SortWindowTargetIndices(const std::vector<recorder_core::CaptureTarget>& targets,

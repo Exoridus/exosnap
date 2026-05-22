@@ -16,6 +16,7 @@
 #include <capability/user_config.h>
 #include <recorder_core/recorder_session.h>
 
+#include "../models/FilenameBuilder.h"
 #include "../models/OutputSettingsModel.h"
 #include "../viewmodels/RecordViewModel.h"
 
@@ -45,6 +46,7 @@ class RecordingCoordinator {
     const std::wstring& CapabilityStatusText() const;
     std::filesystem::path CurrentOutputPath() const;
     void SetOutputSettings(const OutputSettingsModel& settings);
+    void SetOutputTargetContext(const FilenameTargetContext& context);
 
     void SetStateChangedCallback(StateChangedCallback cb);
     void SetStatsUpdatedCallback(StatsUpdatedCallback cb);
@@ -65,6 +67,8 @@ class RecordingCoordinator {
     exosnap::capability::ResolveResult validation_result_;
     exosnap::capability::UserRecorderConfig resolved_user_config_;
     OutputSettingsModel output_settings_;
+    bool has_output_target_context_ = false;
+    FilenameTargetContext output_target_context_;
 
     recorder_core::RecorderSession session_;
     std::jthread recording_thread_;

@@ -293,5 +293,37 @@ TEST(RecordViewModelAudioTest, RecordViewModel_SortWindowTargetIndices_Preserves
     EXPECT_EQ(sorted, (std::vector<int>{2, 3, 4, 1}));
 }
 
+TEST(RecordViewModelAudioTest, RecordViewModel_FilenameContextFromCaptureTarget_MonitorTarget) {
+    const recorder_core::CaptureTarget monitor_target{recorder_core::CaptureTarget::Kind::Monitor, 10,
+                                                      R"(\\.\DISPLAY1)"};
+
+    const FilenameTargetContext context = RecordViewModel::FilenameContextFromCaptureTarget(monitor_target);
+    EXPECT_EQ(context.app_name, L"Desktop");
+    EXPECT_EQ(context.window_title, L"Display 1");
+    EXPECT_EQ(context.process_name, L"desktop");
+    EXPECT_EQ(context.target_name, L"Desktop - Display 1");
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_FilenameContextFromCaptureTarget_WindowTarget) {
+    const recorder_core::CaptureTarget window_target{recorder_core::CaptureTarget::Kind::Window, 11,
+                                                     "Claude Design - Brave"};
+
+    const FilenameTargetContext context = RecordViewModel::FilenameContextFromCaptureTarget(window_target);
+    EXPECT_EQ(context.app_name, L"Brave");
+    EXPECT_EQ(context.window_title, L"Claude Design");
+    EXPECT_EQ(context.process_name, L"brave");
+    EXPECT_EQ(context.target_name, L"Brave - Claude Design");
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_TargetLabelFromCaptureTarget_UsesSelectedTargetLabel) {
+    const recorder_core::CaptureTarget monitor_target{recorder_core::CaptureTarget::Kind::Monitor, 12,
+                                                      R"(\\.\DISPLAY2)"};
+    const recorder_core::CaptureTarget window_target{recorder_core::CaptureTarget::Kind::Window, 13,
+                                                     "Claude Design - Brave"};
+
+    EXPECT_EQ(RecordViewModel::TargetLabelFromCaptureTarget(monitor_target), "Desktop - Display 2");
+    EXPECT_EQ(RecordViewModel::TargetLabelFromCaptureTarget(window_target), "Brave - Claude Design");
+}
+
 } // namespace
 } // namespace exosnap

@@ -44,6 +44,15 @@ QFrame* makePanel(QWidget* parent) {
     return panel;
 }
 
+FilenameTargetContext ExamplePreviewContext() {
+    FilenameTargetContext context;
+    context.target_name = L"Desktop - Display 1";
+    context.app_name = L"Desktop";
+    context.window_title = L"Display 1";
+    context.process_name = L"desktop";
+    return context;
+}
+
 } // namespace
 
 OutputPage::OutputPage(const OutputSettingsModel& initial_settings, QWidget* parent)
@@ -78,9 +87,15 @@ OutputPage::OutputPage(const OutputSettingsModel& initial_settings, QWidget* par
 
     destination_layout->addWidget(makeSectionLabel("File Naming", destination_panel));
     naming_edit_ = new QLineEdit(destination_panel);
-    naming_edit_->setPlaceholderText("exosnap_{date}_{time}");
-    naming_edit_->setText("exosnap_{date}_{time}");
+    naming_edit_->setPlaceholderText("{datetime}_{app}_{title}");
+    naming_edit_->setText("{datetime}_{app}_{title}");
     destination_layout->addWidget(naming_edit_);
+    auto* tokens_help = makeSubLabel("Tokens: {datetime}, {app}, {title}, {target}, {process}", destination_panel);
+    tokens_help->setProperty("labelRole", "muted");
+    destination_layout->addWidget(tokens_help);
+    auto* tokens_example = makeSubLabel("Example: {app}/{datetime}", destination_panel);
+    tokens_example->setProperty("labelRole", "muted");
+    destination_layout->addWidget(tokens_example);
     layout->addWidget(destination_panel);
 
     // Container & compatibility
@@ -246,8 +261,8 @@ void OutputPage::updateEffectiveOutputPreview() {
         return;
     }
 
-    const auto output_path =
-        BuildOutputPath(settings_.output_folder, settings_.naming_pattern, settings_.container, std::time(nullptr));
+    const auto output_path = BuildOutputPath(settings_.output_folder, settings_.naming_pattern, settings_.container,
+                                             std::time(nullptr), ExamplePreviewContext());
     effective_output_path_label_->setText(QString::fromStdWString(output_path.wstring()));
 }
 
