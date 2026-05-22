@@ -1,0 +1,22 @@
+ExoSnap Alpha — Known Limitations
+
+PREREQUISITES
+- Windows 11 (22H2 or later recommended)
+- NVIDIA GPU with RTX-class NVENC support (RTX 20xx or later)
+- NVIDIA Display Driver 536.23 or later
+- Microsoft Visual C++ Redistributable 2022 x64
+  Download: https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+KNOWN LIMITATIONS
+- No installer; extract the ZIP and run exosnap.exe directly.
+- No code signing; Windows SmartScreen may warn on first launch.
+- MP4 output is visible but disabled; MKV is the supported alpha container.
+- VideoPage and AudioPage are locked informational MVP pages.
+- Video quality, FPS, and resolution settings are fixed for this alpha.
+- Region capture is not available.
+- Global hotkeys are not registered in this build.
+- Auto-split is not available.
+- Audio meters show live activity during recording only, not before recording.
+- Mic hot-plug is not automatic; use the Refresh button.
+- Window capture can fail for minimized, cloaked, or very small windows.
+- Settings are persisted locally in an INI file and may change in later alpha builds.
