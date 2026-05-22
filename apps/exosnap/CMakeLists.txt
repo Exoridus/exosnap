@@ -113,6 +113,7 @@ exosnap_add_gtest(
   SOURCES
     tests/test_record_view_model_audio.cpp
     viewmodels/RecordViewModel.cpp
+    diagnostics/error_message.cpp
   LIBRARIES
     exosnap_capability
     recorder_core

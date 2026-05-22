@@ -207,5 +207,54 @@ TEST(RecordViewModelAudioTest, RecordViewModel_TrackPreviewDisplayTarget_SystemO
     EXPECT_EQ(vm.audio_track_preview[0].display_label, "System Audio");
 }
 
+TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKindPreservingAudio_SameKindAndSwitchKeepUserState) {
+    RecordViewModel vm;
+
+    vm.audio_ui_state.record_application_audio = true;
+    vm.audio_ui_state.record_system_audio = false;
+    vm.audio_ui_state.separate_output_tracks = false;
+    vm.audio_ui_state.record_microphone = true;
+    vm.audio_ui_state.mic_channel_mode = recorder_core::MicChannelMode::MonoMix;
+
+    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
+
+    EXPECT_EQ(vm.audio_ui_state.target_kind, capability::CaptureTargetKind::Display);
+    EXPECT_TRUE(vm.audio_ui_state.record_application_audio);
+    EXPECT_FALSE(vm.audio_ui_state.record_system_audio);
+    EXPECT_FALSE(vm.audio_ui_state.separate_output_tracks);
+    EXPECT_TRUE(vm.audio_ui_state.record_microphone);
+    EXPECT_EQ(vm.audio_ui_state.mic_channel_mode, recorder_core::MicChannelMode::MonoMix);
+
+    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
+
+    EXPECT_EQ(vm.audio_ui_state.target_kind, capability::CaptureTargetKind::Window);
+    EXPECT_TRUE(vm.audio_ui_state.record_application_audio);
+    EXPECT_FALSE(vm.audio_ui_state.record_system_audio);
+    EXPECT_FALSE(vm.audio_ui_state.separate_output_tracks);
+    EXPECT_TRUE(vm.audio_ui_state.record_microphone);
+    EXPECT_EQ(vm.audio_ui_state.mic_channel_mode, recorder_core::MicChannelMode::MonoMix);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKindPreservingAudio_WindowModeKeepsAppAvailability) {
+    RecordViewModel vm;
+
+    vm.audio_ui_state.record_application_audio = true;
+    vm.audio_ui_state.record_system_audio = true;
+    vm.audio_ui_state.separate_output_tracks = true;
+
+    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
+
+    const bool has_app_track =
+        std::any_of(vm.audio_track_preview.begin(), vm.audio_track_preview.end(),
+                    [](const capability::AudioTrackPreview& preview) { return preview.source_key == "app"; });
+    EXPECT_TRUE(has_app_track);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_DisplayLabelFromTarget_NormalizesWin32DisplayName) {
+    EXPECT_EQ(RecordViewModel::DisplayLabelFromTarget(R"(\\.\DISPLAY1)"), "Display 1");
+    EXPECT_EQ(RecordViewModel::DisplayLabelFromTarget("DISPLAY2"), "Display 2");
+    EXPECT_EQ(RecordViewModel::DisplayLabelFromTarget("Custom Monitor"), "Custom Monitor");
+}
+
 } // namespace
 } // namespace exosnap

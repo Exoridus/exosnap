@@ -101,11 +101,13 @@ class RecordViewModel {
     void SetResult(const UiRecordingResult& result);
     void ResetStats();
     void ApplyTargetKind(capability::CaptureTargetKind kind);
+    void ApplyTargetKindPreservingAudio(capability::CaptureTargetKind kind);
     void RebuildAudioPlan();
 
     // Formatting helpers
     static std::wstring FormatElapsed(double elapsed_seconds);
     static std::wstring FormatBytes(uint64_t bytes);
+    static std::string DisplayLabelFromTarget(const std::string& raw_description);
 };
 
 } // namespace exosnap

@@ -114,29 +114,33 @@ QString checkGlyph(bool ok, bool blocked) {
     return "·";
 }
 
-// Converts raw Win32 display paths like \\.\DISPLAY1 to "Display 1".
-// Leaves other strings unchanged (except empty → "Target").
-QString normalizeTargetDisplayName(const std::string& raw) {
-    const QString s = QString::fromStdString(raw).trimmed();
-    if (s.isEmpty())
-        return QStringLiteral("Target");
-    static const QRegularExpression kDisplayRe(QStringLiteral(R"(^(?:\\\\\.\\|//\./)?(DISPLAY)(\d+)$)"),
-                                               QRegularExpression::CaseInsensitiveOption);
-    const auto m = kDisplayRe.match(s);
-    if (m.hasMatch())
-        return QStringLiteral("Display ") + m.captured(2);
-    return s;
+QString displayLabelFromTarget(const recorder_core::CaptureTarget& target) {
+    return QString::fromStdString(RecordViewModel::DisplayLabelFromTarget(target.description));
 }
 
-QString targetLabelFor(const recorder_core::CaptureTarget& target) {
-    switch (target.kind) {
-    case recorder_core::CaptureTarget::Kind::Monitor:
-        return "Monitor";
-    case recorder_core::CaptureTarget::Kind::Window:
-        return "Window";
-    default:
-        return "Target";
+QString windowLabelFromTarget(const recorder_core::CaptureTarget& target) {
+    const QString value = QString::fromStdString(target.description).simplified();
+    if (value.isEmpty()) {
+        return QStringLiteral("Window");
     }
+
+    static const QRegularExpression kRawHandleOnlyRe(QStringLiteral(R"(^(?:0x)?[0-9a-f]{5,}$)"),
+                                                     QRegularExpression::CaseInsensitiveOption);
+    if (kRawHandleOnlyRe.match(value).hasMatch()) {
+        return QStringLiteral("Window");
+    }
+
+    return value;
+}
+
+QString normalizedTargetLabel(const recorder_core::CaptureTarget& target) {
+    if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+        return displayLabelFromTarget(target);
+    }
+    if (target.kind == recorder_core::CaptureTarget::Kind::Window) {
+        return windowLabelFromTarget(target);
+    }
+    return QStringLiteral("Target");
 }
 
 capability::UserRecorderConfig primaryRecorderConfig() {
@@ -282,9 +286,35 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     QWidget::setTabOrder(window_card_, region_card_);
     layout->addWidget(cards_row);
 
+    target_picker_panel_ = makePanel(content);
+    target_picker_panel_->setObjectName("captureTargetPickerPanel");
+    auto* target_picker_layout = new QVBoxLayout(target_picker_panel_);
+    target_picker_layout->setContentsMargins(14, 12, 14, 12);
+    target_picker_layout->setSpacing(8);
+
+    auto* target_picker_row = new QWidget(target_picker_panel_);
+    auto* target_picker_row_layout = new QHBoxLayout(target_picker_row);
+    target_picker_row_layout->setContentsMargins(0, 0, 0, 0);
+    target_picker_row_layout->setSpacing(10);
+    target_picker_kind_label_ = makeLabel("Display", "captureTargetPickerLabel", target_picker_row);
+    target_picker_combo_ = new QComboBox(target_picker_row);
+    target_picker_combo_->setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
+    target_refresh_btn_ = new QPushButton("Refresh", target_picker_row);
+    target_refresh_btn_->setProperty("role", "ghost");
+    target_picker_row_layout->addWidget(target_picker_kind_label_);
+    target_picker_row_layout->addWidget(target_picker_combo_, 1);
+    target_picker_row_layout->addWidget(target_refresh_btn_);
+    target_picker_layout->addWidget(target_picker_row);
+
+    target_picker_note_label_ = makeLabel("", "captureTargetPickerNote", target_picker_panel_);
+    target_picker_note_label_->setWordWrap(true);
+    target_picker_note_label_->setVisible(false);
+    target_picker_layout->addWidget(target_picker_note_label_);
+    layout->addWidget(target_picker_panel_);
+
     target_combo_ = new QComboBox(content);
     target_combo_->setVisible(false);
-    layout->addWidget(target_combo_);
+    target_combo_->setEnabled(false);
 
     readiness_header_ = new ui::widgets::SectionRuleHeader("READINESS", content);
     readiness_header_->setMeta("ALL CLEAR");
@@ -510,6 +540,9 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(monitor_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectMonitorTarget);
     connect(window_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectWindowTarget);
     connect(region_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectRegionTarget);
+    connect(target_picker_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &RecordPage::onTargetPickerChanged);
+    connect(target_refresh_btn_, &QPushButton::clicked, this, &RecordPage::onRefreshTargets);
     connect(app_audio_check_, &ui::widgets::ExoCheckBox::toggled, this, &RecordPage::onAppAudioToggled);
     connect(sys_audio_check_, &ui::widgets::ExoCheckBox::toggled, this, &RecordPage::onSysAudioToggled);
     connect(separate_tracks_check_, &ui::widgets::ExoCheckBox::toggled, this, &RecordPage::onSeparateTracksToggled);
@@ -651,49 +684,151 @@ void RecordPage::initCoordinator() {
         refresh();
     });
 
-    view_model_.targets = coordinator_->EnumerateTargets();
-    for (const auto& target : view_model_.targets) {
-        const bool is_monitor = (target.kind == recorder_core::CaptureTarget::Kind::Monitor);
-        const std::wstring prefix = is_monitor ? L"[Monitor] " : L"[Window] ";
-        const std::wstring display = prefix + normalizeTargetDisplayName(target.description).toStdWString();
-        view_model_.target_display_names.push_back(display);
-        target_combo_->addItem(QString::fromStdWString(display));
-    }
-
-    view_model_.selected_target_index = -1;
-    monitor_target_indices_.clear();
-    for (int i = 0; i < static_cast<int>(view_model_.targets.size()); ++i) {
-        const auto& target = view_model_.targets[static_cast<std::size_t>(i)];
-        if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
-            monitor_target_indices_.push_back(i);
-            if (monitor_target_index_ < 0)
-                monitor_target_index_ = i;
-        }
-        if (target.kind == recorder_core::CaptureTarget::Kind::Window && window_target_index_ < 0)
-            window_target_index_ = i;
-    }
-    diagnostics::AppLog(QStringLiteral("[init] targets enumerated: %1 (monitors: %2)")
-                            .arg(static_cast<int>(view_model_.targets.size()))
-                            .arg(static_cast<int>(monitor_target_indices_.size())));
-
-    if (monitor_target_index_ >= 0) {
-        syncTargetSelectionToCombo(monitor_target_index_);
-    } else if (!view_model_.targets.empty()) {
-        syncTargetSelectionToCombo(0);
-    }
+    enumerateTargets(false);
 
     view_model_.SetState(coordinator_->State());
     view_model_.capability_status_text = coordinator_->CapabilityStatusText();
     refresh();
 }
 
-void RecordPage::syncTargetSelectionToCombo(int target_index) {
-    if (target_index < 0 || target_index >= static_cast<int>(view_model_.targets.size()))
-        return;
+void RecordPage::enumerateTargets(bool preserve_current_selection) {
+    const bool had_previous_selection =
+        preserve_current_selection && view_model_.selected_target_index >= 0 &&
+        view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
+    recorder_core::CaptureTarget previous_target{};
+    if (had_previous_selection) {
+        previous_target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+    }
+    const capability::CaptureTargetKind previous_kind = view_model_.audio_ui_state.target_kind;
 
-    // Same target re-selected: only refresh card states, preserve audio settings
+    view_model_.targets = coordinator_->EnumerateTargets();
+    view_model_.target_display_names.clear();
+    target_combo_->clear();
+
+    monitor_target_indices_.clear();
+    window_target_indices_.clear();
+    monitor_target_index_ = -1;
+    window_target_index_ = -1;
+    region_target_index_ = -1;
+
+    for (int i = 0; i < static_cast<int>(view_model_.targets.size()); ++i) {
+        const auto& target = view_model_.targets[static_cast<std::size_t>(i)];
+        if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+            monitor_target_indices_.push_back(i);
+            if (monitor_target_index_ < 0) {
+                monitor_target_index_ = i;
+            }
+        } else if (target.kind == recorder_core::CaptureTarget::Kind::Window) {
+            window_target_indices_.push_back(i);
+            if (window_target_index_ < 0) {
+                window_target_index_ = i;
+            }
+        }
+
+        const bool monitor = target.kind == recorder_core::CaptureTarget::Kind::Monitor;
+        const QString prefix = monitor ? QStringLiteral("[Monitor] ") : QStringLiteral("[Window] ");
+        const QString label = prefix + normalizedTargetLabel(target);
+        view_model_.target_display_names.push_back(label.toStdWString());
+        target_combo_->addItem(label);
+    }
+
+    int resolved_selection = -1;
+    if (had_previous_selection) {
+        for (int i = 0; i < static_cast<int>(view_model_.targets.size()); ++i) {
+            const auto& target = view_model_.targets[static_cast<std::size_t>(i)];
+            if (target.kind == previous_target.kind && target.native_id == previous_target.native_id) {
+                resolved_selection = i;
+                break;
+            }
+        }
+    }
+
+    if (resolved_selection < 0 && previous_kind == capability::CaptureTargetKind::Window && window_target_index_ >= 0) {
+        resolved_selection = window_target_index_;
+    }
+    if (resolved_selection < 0 && previous_kind == capability::CaptureTargetKind::Display &&
+        monitor_target_index_ >= 0) {
+        resolved_selection = monitor_target_index_;
+    }
+    const bool keep_mode_without_selection =
+        preserve_current_selection &&
+        ((previous_kind == capability::CaptureTargetKind::Window && window_target_index_ < 0) ||
+         (previous_kind == capability::CaptureTargetKind::Display && monitor_target_index_ < 0));
+    if (resolved_selection < 0 && !keep_mode_without_selection && monitor_target_index_ >= 0) {
+        resolved_selection = monitor_target_index_;
+    }
+    if (resolved_selection < 0 && !keep_mode_without_selection && window_target_index_ >= 0) {
+        resolved_selection = window_target_index_;
+    }
+
+    view_model_.selected_target_index = -1;
+    target_combo_->setCurrentIndex(-1);
+
+    if (resolved_selection >= 0) {
+        syncTargetSelectionToCombo(resolved_selection);
+    } else {
+        view_model_.ApplyTargetKindPreservingAudio(previous_kind);
+        updateTargetCards();
+        rebuildTargetPicker();
+    }
+
+    diagnostics::AppLog(QStringLiteral("[target] enumerated: total=%1 monitors=%2 windows=%3")
+                            .arg(static_cast<int>(view_model_.targets.size()))
+                            .arg(static_cast<int>(monitor_target_indices_.size()))
+                            .arg(static_cast<int>(window_target_indices_.size())));
+}
+
+void RecordPage::rebuildTargetPicker() {
+    if (!target_picker_kind_label_ || !target_picker_combo_ || !target_refresh_btn_ || !target_picker_note_label_) {
+        return;
+    }
+
+    const bool busy = view_model_.state == UiRecordingState::Preparing ||
+                      view_model_.state == UiRecordingState::Recording ||
+                      view_model_.state == UiRecordingState::Stopping;
+
+    const bool window_mode = view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window;
+    const auto& active_indices = window_mode ? window_target_indices_ : monitor_target_indices_;
+    target_picker_kind_label_->setText(window_mode ? QStringLiteral("Window") : QStringLiteral("Display"));
+
+    QSignalBlocker picker_blocker(target_picker_combo_);
+    target_picker_combo_->clear();
+    for (const int target_index : active_indices) {
+        if (target_index < 0 || target_index >= static_cast<int>(view_model_.targets.size())) {
+            continue;
+        }
+        const auto& target = view_model_.targets[static_cast<std::size_t>(target_index)];
+        const QString label = window_mode ? windowLabelFromTarget(target) : displayLabelFromTarget(target);
+        target_picker_combo_->addItem(label, target_index);
+    }
+
+    const int selected_item = target_picker_combo_->findData(view_model_.selected_target_index);
+    if (selected_item >= 0) {
+        target_picker_combo_->setCurrentIndex(selected_item);
+    } else if (target_picker_combo_->count() > 0) {
+        target_picker_combo_->setCurrentIndex(0);
+    }
+
+    QString note;
+    if (active_indices.empty()) {
+        note = window_mode ? QStringLiteral("No capturable windows found. Open a window and press Refresh.")
+                           : QStringLiteral("No displays detected. Connect a display and press Refresh.");
+    }
+
+    target_picker_combo_->setEnabled(!busy && !active_indices.empty());
+    target_refresh_btn_->setEnabled(!busy);
+    target_picker_note_label_->setText(note);
+    target_picker_note_label_->setVisible(!note.isEmpty());
+}
+
+void RecordPage::syncTargetSelectionToCombo(int target_index) {
+    if (target_index < 0 || target_index >= static_cast<int>(view_model_.targets.size())) {
+        return;
+    }
+
     if (target_index == view_model_.selected_target_index) {
         updateTargetCards();
+        rebuildTargetPicker();
         return;
     }
 
@@ -701,36 +836,33 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
     const capability::CaptureTargetKind new_kind = (target.kind == recorder_core::CaptureTarget::Kind::Window)
                                                        ? capability::CaptureTargetKind::Window
                                                        : capability::CaptureTargetKind::Display;
-
     const bool kind_changed = (new_kind != view_model_.audio_ui_state.target_kind);
 
     view_model_.selected_target_index = target_index;
     target_combo_->setCurrentIndex(target_index);
 
-    if (kind_changed) {
-        // Target kind flipped (Monitor ↔ Window): apply defaults for the new kind
-        view_model_.ApplyTargetKind(new_kind);
-    } else {
-        // Same kind, different instance (e.g., different monitor): preserve user audio settings
-        view_model_.audio_ui_state.target_kind = new_kind;
-        view_model_.RebuildAudioPlan();
+    if (target.kind == recorder_core::CaptureTarget::Kind::Window) {
+        window_target_index_ = target_index;
+    } else if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+        monitor_target_index_ = target_index;
     }
 
+    view_model_.ApplyTargetKindPreservingAudio(new_kind);
+
     diagnostics::AppLog(QStringLiteral("[target] selected: %1 (kind_changed=%2)")
-                            .arg(normalizeTargetDisplayName(target.description))
+                            .arg(normalizedTargetLabel(target))
                             .arg(kind_changed ? QStringLiteral("yes") : QStringLiteral("no")));
 
     updateTargetCards();
+    rebuildTargetPicker();
 }
 
 void RecordPage::onStart() {
-    const int idx = target_combo_->currentIndex();
-    view_model_.selected_target_index = idx;
+    const int idx = view_model_.selected_target_index;
     if (idx < 0 || idx >= static_cast<int>(view_model_.targets.size()))
         return;
 
-    const QString target_label =
-        normalizeTargetDisplayName(view_model_.targets[static_cast<std::size_t>(idx)].description);
+    const QString target_label = normalizedTargetLabel(view_model_.targets[static_cast<std::size_t>(idx)]);
     diagnostics::AppLog(QStringLiteral("[record] start requested  target=%1").arg(target_label));
 
     view_model_.ResetStats();
@@ -743,27 +875,38 @@ void RecordPage::onStop() {
 }
 
 void RecordPage::onSelectMonitorTarget() {
-    if (monitor_target_indices_.size() <= 1) {
-        syncTargetSelectionToCombo(monitor_target_index_);
-    } else {
-        // Multiple monitors: cycle to the next one
-        const int current = view_model_.selected_target_index;
-        const auto it = std::find(monitor_target_indices_.begin(), monitor_target_indices_.end(), current);
-        int next_idx;
-        if (it == monitor_target_indices_.end()) {
-            next_idx = monitor_target_indices_.front();
-        } else {
-            auto next_it = std::next(it);
-            next_idx = (next_it == monitor_target_indices_.end()) ? monitor_target_indices_.front() : *next_it;
-        }
-        monitor_target_index_ = next_idx;
-        syncTargetSelectionToCombo(next_idx);
+    if (monitor_target_indices_.empty()) {
+        view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
+        view_model_.selected_target_index = -1;
+        target_combo_->setCurrentIndex(-1);
+        diagnostics::AppLog(QStringLiteral("[target] monitor mode selected with no display targets"));
+        updateTargetCards();
+        rebuildTargetPicker();
+        refresh();
+        return;
     }
+
+    const int next_target =
+        monitor_target_index_ >= 0 ? monitor_target_index_ : monitor_target_indices_[static_cast<std::size_t>(0)];
+    syncTargetSelectionToCombo(next_target);
     refresh();
 }
 
 void RecordPage::onSelectWindowTarget() {
-    syncTargetSelectionToCombo(window_target_index_);
+    if (window_target_indices_.empty()) {
+        view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
+        view_model_.selected_target_index = -1;
+        target_combo_->setCurrentIndex(-1);
+        diagnostics::AppLog(QStringLiteral("[target] window mode selected with no window targets"));
+        updateTargetCards();
+        rebuildTargetPicker();
+        refresh();
+        return;
+    }
+
+    const int next_target =
+        window_target_index_ >= 0 ? window_target_index_ : window_target_indices_[static_cast<std::size_t>(0)];
+    syncTargetSelectionToCombo(next_target);
     refresh();
 }
 
@@ -771,7 +914,31 @@ void RecordPage::onSelectRegionTarget() {
     if (region_target_index_ >= 0) {
         syncTargetSelectionToCombo(region_target_index_);
         refresh();
+        return;
     }
+
+    diagnostics::AppLog(QStringLiteral("[target] region capture is locked in alpha"));
+}
+
+void RecordPage::onTargetPickerChanged(int index) {
+    if (index < 0 || !target_picker_combo_) {
+        return;
+    }
+
+    bool ok = false;
+    const int target_index = target_picker_combo_->itemData(index).toInt(&ok);
+    if (!ok) {
+        return;
+    }
+
+    syncTargetSelectionToCombo(target_index);
+    refresh();
+}
+
+void RecordPage::onRefreshTargets() {
+    diagnostics::AppLog(QStringLiteral("[target] refresh requested"));
+    enumerateTargets(true);
+    refresh();
 }
 
 void RecordPage::onAppAudioToggled(bool checked) {
@@ -1130,10 +1297,8 @@ void RecordPage::emitChromeState() {
     if (view_model_.selected_target_index >= 0 &&
         view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {
         const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
-        const QString display_name = normalizeTargetDisplayName(target.description);
-        emit chromeStateChanged(
-            recording, status,
-            QStringLiteral("%1 · 60 fps · AV1").arg(display_name.isEmpty() ? targetLabelFor(target) : display_name));
+        emit chromeStateChanged(recording, status,
+                                QStringLiteral("%1 · 60 fps · AV1").arg(normalizedTargetLabel(target)));
         return;
     }
 
@@ -1176,7 +1341,7 @@ void RecordPage::refresh() {
     if (view_model_.selected_target_index >= 0 &&
         view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {
         const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
-        const QString target_desc = normalizeTargetDisplayName(target.description);
+        const QString target_desc = normalizedTargetLabel(target);
         capture_header_->setMeta(QStringLiteral("%1 · 60 fps").arg(target_desc));
         preview_surface_->setTopMetaText(QStringLiteral("%1 · 60 fps").arg(target_desc.toUpper()));
     } else {
@@ -1185,6 +1350,7 @@ void RecordPage::refresh() {
     }
 
     updateTargetCards();
+    rebuildTargetPicker();
     updateReadinessRows();
     updateAudioControls();
     updateAudioTrackPreview();
@@ -1281,28 +1447,32 @@ void RecordPage::updateResultDisplay() {
 }
 
 void RecordPage::updateTargetCards() {
-    const int current = target_combo_->currentIndex();
+    const int current = view_model_.selected_target_index;
     const bool recording =
         (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Stopping ||
          view_model_.state == UiRecordingState::Preparing);
+    const bool has_selected_target = current >= 0 && current < static_cast<int>(view_model_.targets.size());
+    const bool selected_monitor = has_selected_target && view_model_.targets[static_cast<std::size_t>(current)].kind ==
+                                                             recorder_core::CaptureTarget::Kind::Monitor;
+    const bool selected_window = has_selected_target && view_model_.targets[static_cast<std::size_t>(current)].kind ==
+                                                            recorder_core::CaptureTarget::Kind::Window;
+    const bool monitor_mode = view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Display;
+    const bool window_mode = view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window;
 
-    // Don't highlight the selected card during recording – the accent border is distracting.
-    const bool any_monitor_selected =
-        !recording && std::find(monitor_target_indices_.begin(), monitor_target_indices_.end(), current) !=
-                          monitor_target_indices_.end();
-    const bool window_selected = !recording && (current == window_target_index_);
-    const bool region_selected = !recording && (current == region_target_index_ && region_target_index_ >= 0);
+    const bool any_monitor_selected = !recording && (selected_monitor || (!has_selected_target && monitor_mode));
+    const bool window_selected = !recording && (selected_window || (!has_selected_target && window_mode));
+    const bool region_selected = false;
 
     monitor_card_->setSelected(any_monitor_selected);
     window_card_->setSelected(window_selected);
     region_card_->setSelected(region_selected);
-    region_card_->setEnabled(region_target_index_ >= 0);
+    region_card_->setEnabled(false);
 
     // Subtitle for the monitor card: use the currently active monitor target
     const int active_monitor_idx = monitor_target_index_;
     if (active_monitor_idx >= 0 && active_monitor_idx < static_cast<int>(view_model_.targets.size())) {
         const QString display_name =
-            normalizeTargetDisplayName(view_model_.targets[static_cast<std::size_t>(active_monitor_idx)].description);
+            displayLabelFromTarget(view_model_.targets[static_cast<std::size_t>(active_monitor_idx)]);
         const QString suffix =
             monitor_target_indices_.size() > 1
                 ? QStringLiteral("  [%1/%2]")
@@ -1314,24 +1484,19 @@ void RecordPage::updateTargetCards() {
                 : QString{};
         monitor_card_->setSubtitle(display_name + suffix);
     } else {
-        monitor_card_->setSubtitle("No monitor detected");
+        monitor_card_->setSubtitle("No display detected");
     }
 
-    if (window_target_index_ >= 0 && window_target_index_ < static_cast<int>(view_model_.targets.size())) {
-        window_card_->setSubtitle(normalizeTargetDisplayName(
-            view_model_.targets[static_cast<std::size_t>(window_target_index_)].description));
+    const int active_window_idx = window_target_index_;
+    if (active_window_idx >= 0 && active_window_idx < static_cast<int>(view_model_.targets.size())) {
+        window_card_->setSubtitle(
+            windowLabelFromTarget(view_model_.targets[static_cast<std::size_t>(active_window_idx)]));
     } else {
-        window_card_->setSubtitle("No window target detected");
+        window_card_->setSubtitle("No capturable windows");
     }
 
-    if (region_target_index_ >= 0) {
-        region_card_->setSubtitle("Region target available");
-        if (!region_selected)
-            region_card_->setStatusText("○");
-    } else {
-        region_card_->setSubtitle("Not available in this version");
-        region_card_->setStatusText("○");
-    }
+    region_card_->setSubtitle("Not available in this alpha");
+    region_card_->setStatusText("○");
 }
 
 void RecordPage::updateReadinessRows() {
@@ -1348,8 +1513,7 @@ void RecordPage::updateReadinessRows() {
     const QString target_detail =
         (view_model_.selected_target_index >= 0 &&
          view_model_.selected_target_index < static_cast<int>(view_model_.targets.size()))
-            ? normalizeTargetDisplayName(
-                  view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)].description)
+            ? normalizedTargetLabel(view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)])
             : QString("No target selected");
 
     const QString output_detail = QString::fromStdWString(view_model_.output_path_display);

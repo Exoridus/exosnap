@@ -386,6 +386,19 @@ QLabel[labelRole="captureCardSubtitle"] {
     color: ${text2};
 }
 
+QLabel[labelRole="captureTargetPickerLabel"] {
+    font-family: ${font-mono};
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: ${text2};
+    min-width: 70px;
+}
+
+QLabel[labelRole="captureTargetPickerNote"] {
+    font-size: 11.5px;
+    color: ${text2};
+}
+
 /* Video page */
 QWidget#videoEffectiveRail {
     background: ${bg2};

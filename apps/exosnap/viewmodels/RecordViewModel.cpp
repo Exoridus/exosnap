@@ -2,10 +2,46 @@
 
 #include "../diagnostics/error_message.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdio>
+#include <string_view>
 
 namespace exosnap {
+namespace {
+
+std::string TrimAscii(const std::string& value) {
+    std::size_t first = 0;
+    while (first < value.size() && std::isspace(static_cast<unsigned char>(value[first])) != 0) {
+        ++first;
+    }
+
+    std::size_t last = value.size();
+    while (last > first && std::isspace(static_cast<unsigned char>(value[last - 1])) != 0) {
+        --last;
+    }
+
+    return value.substr(first, last - first);
+}
+
+bool StartsWithAsciiInsensitive(const std::string_view value, const std::string_view prefix) {
+    if (prefix.size() > value.size()) {
+        return false;
+    }
+
+    for (std::size_t i = 0; i < prefix.size(); ++i) {
+        const unsigned char a = static_cast<unsigned char>(value[i]);
+        const unsigned char b = static_cast<unsigned char>(prefix[i]);
+        if (std::tolower(a) != std::tolower(b)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Computed predicates
@@ -176,6 +212,15 @@ void RecordViewModel::ApplyTargetKind(capability::CaptureTargetKind kind) {
     RebuildAudioPlan();
 }
 
+void RecordViewModel::ApplyTargetKindPreservingAudio(capability::CaptureTargetKind kind) {
+    audio_ui_state.target_kind = kind;
+    if (kind != capability::CaptureTargetKind::Window) {
+        audio_ui_state.selected_window_pid.reset();
+    }
+
+    RebuildAudioPlan();
+}
+
 void RecordViewModel::RebuildAudioPlan() {
     audio_plan = capability::BuildAudioPlan(audio_ui_state);
     audio_track_preview = capability::BuildAudioTrackPreview(audio_plan);
@@ -226,6 +271,31 @@ std::wstring RecordViewModel::FormatBytes(uint64_t bytes) {
         _snwprintf_s(buf, _TRUNCATE, L"%.1f MB", mb);
     }
     return buf;
+}
+
+std::string RecordViewModel::DisplayLabelFromTarget(const std::string& raw_description) {
+    std::string value = TrimAscii(raw_description);
+    if (value.empty()) {
+        return "Display";
+    }
+
+    if (StartsWithAsciiInsensitive(value, R"(\\.\)")) {
+        value.erase(0, 4);
+    } else if (StartsWithAsciiInsensitive(value, "//./")) {
+        value.erase(0, 4);
+    }
+
+    if (value.size() > 7 && StartsWithAsciiInsensitive(value, "DISPLAY")) {
+        const std::string suffix = value.substr(7);
+        const bool digits_only = !suffix.empty() && std::all_of(suffix.begin(), suffix.end(), [](const char ch) {
+            return std::isdigit(static_cast<unsigned char>(ch)) != 0;
+        });
+        if (digits_only) {
+            return "Display " + suffix;
+        }
+    }
+
+    return value;
 }
 
 } // namespace exosnap

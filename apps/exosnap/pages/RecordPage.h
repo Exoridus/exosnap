@@ -45,6 +45,8 @@ class RecordPage : public QWidget {
     void onSelectMonitorTarget();
     void onSelectWindowTarget();
     void onSelectRegionTarget();
+    void onTargetPickerChanged(int index);
+    void onRefreshTargets();
 
   private:
     struct ReadinessRow {
@@ -65,6 +67,8 @@ class RecordPage : public QWidget {
     void updateAudioTrackPreview();
     void updateOpenFolderButtonState();
     void syncTargetSelectionToCombo(int target_index);
+    void enumerateTargets(bool preserve_current_selection);
+    void rebuildTargetPicker();
     void onAppAudioToggled(bool checked);
     void onSysAudioToggled(bool checked);
     void onSeparateTracksToggled(bool checked);
@@ -86,6 +90,7 @@ class RecordPage : public QWidget {
     int window_target_index_ = -1;
     int region_target_index_ = -1;
     std::vector<int> monitor_target_indices_;
+    std::vector<int> window_target_indices_;
     std::vector<recorder_core::AudioInputDeviceInfo> mic_devices_;
 
     RecordViewModel view_model_;
@@ -93,6 +98,11 @@ class RecordPage : public QWidget {
 
     QLabel* capability_label_ = nullptr;
     QComboBox* target_combo_ = nullptr;
+    QFrame* target_picker_panel_ = nullptr;
+    QLabel* target_picker_kind_label_ = nullptr;
+    QComboBox* target_picker_combo_ = nullptr;
+    QPushButton* target_refresh_btn_ = nullptr;
+    QLabel* target_picker_note_label_ = nullptr;
     ui::widgets::PreviewSurface* preview_surface_ = nullptr;
     QLabel* control_state_label_ = nullptr;
     QLabel* timer_label_ = nullptr;
