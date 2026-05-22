@@ -35,6 +35,19 @@ static bool PlanRequiresTargetPid(const recorder_core::AudioTrackPlan& plan) {
     return false;
 }
 
+void ApplyOutputSettingsToRecorderConfig(recorder_core::RecorderConfig& config, const OutputSettingsModel& settings) {
+    switch (settings.audio_codec) {
+    case capability::AudioCodec::Opus:
+        config.audio_codec = recorder_core::AudioCodec::Opus;
+        return;
+    case capability::AudioCodec::AacMf:
+    case capability::AudioCodec::Pcm:
+    default:
+        config.audio_codec = recorder_core::AudioCodec::AacMf;
+        return;
+    }
+}
+
 RecordingCoordinator::RecordingCoordinator() : output_settings_(OutputSettingsModel::Defaults()) {
 }
 
@@ -109,6 +122,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     PostStateChange(UiRecordingState::Preparing);
 
     auto config = exosnap::capability::ToRecorderCoreConfig(resolved_user_config_, caps_);
+    ApplyOutputSettingsToRecorderConfig(config, output_settings_);
     config.target = target;
     config.output_path = output_path;
 

@@ -5,11 +5,16 @@
 #include <filesystem>
 #include <string>
 
+#include <recorder_core/recorder_session.h>
+
 #include "models/FilenameBuilder.h"
 #include "models/OutputPathValidator.h"
 #include "models/OutputSettingsModel.h"
 
 namespace exosnap {
+
+void ApplyOutputSettingsToRecorderConfig(recorder_core::RecorderConfig& config, const OutputSettingsModel& settings);
+
 namespace {
 
 std::time_t LocalTimestamp(int year, int month, int day, int hour, int minute, int second) {
@@ -124,6 +129,28 @@ TEST(OutputSettingsTest, Defaults_AudioCodecIsOpus) {
 TEST(OutputSettingsTest, Defaults_NamingPatternCorrect) {
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
     EXPECT_EQ(defaults.naming_pattern, L"exosnap_{date}_{time}");
+}
+
+TEST(OutputSettingsTest, ApplyOutputAudioCodec_UsesOpusWhenSelected) {
+    recorder_core::RecorderConfig config{};
+    config.audio_codec = recorder_core::AudioCodec::AacMf;
+
+    OutputSettingsModel settings = OutputSettingsModel::Defaults();
+    settings.audio_codec = capability::AudioCodec::Opus;
+
+    ApplyOutputSettingsToRecorderConfig(config, settings);
+    EXPECT_EQ(config.audio_codec, recorder_core::AudioCodec::Opus);
+}
+
+TEST(OutputSettingsTest, ApplyOutputAudioCodec_UsesAacWhenSelected) {
+    recorder_core::RecorderConfig config{};
+    config.audio_codec = recorder_core::AudioCodec::Opus;
+
+    OutputSettingsModel settings = OutputSettingsModel::Defaults();
+    settings.audio_codec = capability::AudioCodec::AacMf;
+
+    ApplyOutputSettingsToRecorderConfig(config, settings);
+    EXPECT_EQ(config.audio_codec, recorder_core::AudioCodec::AacMf);
 }
 
 } // namespace

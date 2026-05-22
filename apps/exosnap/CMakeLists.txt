@@ -132,10 +132,12 @@ exosnap_add_gtest(
   TEST_PREFIX output.
   SOURCES
     tests/test_output_settings.cpp
+    services/RecordingCoordinator.cpp
     models/OutputSettingsModel.cpp
     models/FilenameBuilder.cpp
     models/OutputPathValidator.cpp
   LIBRARIES
+    Qt6::Core
     exosnap_capability
     recorder_core
 )
