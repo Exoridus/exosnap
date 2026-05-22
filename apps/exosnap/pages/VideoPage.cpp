@@ -68,6 +68,18 @@ VideoPage::VideoPage(QWidget* parent) : QWidget(parent) {
                                     ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
     left_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
 
+    auto* locked_note_panel = makePanel(left_content, "note");
+    auto* locked_note_layout = new QVBoxLayout(locked_note_panel);
+    locked_note_layout->setContentsMargins(12, 10, 12, 10);
+    locked_note_layout->setSpacing(0);
+    auto* locked_note =
+        makeLabel("Video settings are fixed for this MVP build. Recording currently uses AV1, 60 FPS, and the selected "
+                  "capture size.",
+                  "videoCompatNote", locked_note_panel);
+    locked_note->setWordWrap(true);
+    locked_note_layout->addWidget(locked_note);
+    left_layout->addWidget(locked_note_panel);
+
     auto* frame_rate_header = new ui::widgets::SectionRuleHeader("FRAME RATE", left_content);
     frame_rate_header->setMeta("CFR · LOCKED THIS RELEASE");
     left_layout->addWidget(frame_rate_header);
@@ -92,7 +104,7 @@ VideoPage::VideoPage(QWidget* parent) : QWidget(parent) {
 
     frame_rate_copy_layout->addWidget(fps_row);
     frame_rate_copy_layout->addWidget(
-        makeLabel("Constant frame rate — variable will return in 0.5.", "videoFpsNote", frame_rate_copy));
+        makeLabel("Fixed at CFR 60 for this MVP build.", "videoFpsNote", frame_rate_copy));
 
     auto* constant_badge = makeLabel("CONSTANT", "videoFramePill", frame_rate_panel);
     constant_badge->setAlignment(Qt::AlignCenter);
@@ -143,6 +155,9 @@ VideoPage::VideoPage(QWidget* parent) : QWidget(parent) {
     resolution_group_->addButton(source_radio, 0);
     resolution_group_->addButton(scale_radio, 1);
     source_radio->setChecked(true);
+    source_radio->setEnabled(false);
+    scale_radio->setEnabled(false);
+    scale_combo->setEnabled(false);
 
     left_layout->addWidget(resolution_panel);
 
@@ -161,6 +176,9 @@ VideoPage::VideoPage(QWidget* parent) : QWidget(parent) {
 
     codec_cards_ = {av1_card, hevc_card, h264_card};
     av1_card->setSelected(true);
+    av1_card->setEnabled(false);
+    hevc_card->setEnabled(false);
+    h264_card->setEnabled(false);
 
     codec_layout->addWidget(av1_card, 1);
     codec_layout->addWidget(hevc_card, 1);
@@ -208,6 +226,7 @@ VideoPage::VideoPage(QWidget* parent) : QWidget(parent) {
         row_layout->addStretch(1);
         row_layout->addWidget(detail);
         quality_layout->addWidget(row);
+        radio->setEnabled(false);
     }
     if (auto* balanced = quality_group_->button(1))
         balanced->setChecked(true);
@@ -223,6 +242,7 @@ VideoPage::VideoPage(QWidget* parent) : QWidget(parent) {
     cursor_layout->setSpacing(8);
     cursor_check_ = new QCheckBox("Capture mouse cursor", cursor_panel);
     cursor_check_->setChecked(true);
+    cursor_check_->setEnabled(false);
     cursor_layout->addWidget(cursor_check_);
     cursor_layout->addStretch(1);
     left_layout->addWidget(cursor_panel);
@@ -244,7 +264,7 @@ VideoPage::VideoPage(QWidget* parent) : QWidget(parent) {
     rail_head_layout->setSpacing(6);
     rail_head_layout->addWidget(makeLabel("EFFECTIVE OUTPUT", "videoRailHead", rail_head));
     rail_head_layout->addStretch(1);
-    rail_head_layout->addWidget(makeLabel("UNSAVED", "videoRailUnsaved", rail_head));
+    rail_head_layout->addWidget(makeLabel("LOCKED · MVP", "videoRailUnsaved", rail_head));
     rail_layout->addWidget(rail_head);
 
     auto* output_panel = makePanel(rail_widget_);

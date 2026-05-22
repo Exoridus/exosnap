@@ -104,9 +104,9 @@ struct PageDescriptor {
 constexpr std::array<PageDescriptor, 8> kPageDescriptors = {{
     {"Record", "01 · RECORD", "Operational view — target, readiness, and live runtime.",
      "CPU 8.2%  ·  GPU 14.4%  ·  RAM 612 MB", "DISPLAY1 · 2560×1440 · 60 fps · AV1", SidebarIcon::Record},
-    {"Video", "02 · VIDEO", "Codec, frame rate, and quality.", "PROFILE · Default · UNSAVED", "CFR · NVENC AV1 · CQ 24",
+    {"Video", "02 · VIDEO", "Read-only MVP profile.", "LOCKED · MVP", "CFR 60 · NVENC AV1 · LOCKED",
      SidebarIcon::Video},
-    {"Audio", "03 · AUDIO", "Sources, track layout, and encoding.", "OPUS · 48 kHz · 192 kb/s", "APP · MIC · SYS",
+    {"Audio", "03 · AUDIO", "Read-only in MVP; configure on Record page.", "LOCKED · RECORD PAGE", "APP · MIC · SYS",
      SidebarIcon::Audio},
     {"Output", "04 · OUTPUT", "Container, destination, and recording output behavior.", "MKV · AV1 · OPUS",
      "Destination + container", SidebarIcon::Output},
@@ -590,7 +590,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     footer_layout->setSpacing(4);
     footer_layout->addWidget(makeFooterRow("STATUS", "READY", footer, &sidebar_status_value_label_));
     footer_layout->addWidget(makeFooterRow("ENCODER", "NVENC", footer));
-    footer_layout->addWidget(makeFooterRow("GPU", "RTX 4070", footer));
+    footer_layout->addWidget(makeFooterRow("GPU", "NVENC", footer));
     footer_layout->addWidget(makeFooterRow("VERSION", "0.4.2", footer));
     sidebar_layout->addWidget(footer);
 

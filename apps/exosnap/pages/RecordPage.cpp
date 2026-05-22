@@ -5,7 +5,6 @@
 #include "../ui/widgets/PreviewSurface.h"
 #include "../ui/widgets/SectionRuleHeader.h"
 #include "../ui/widgets/StatusPill.h"
-#include "../ui/widgets/TogglePill.h"
 #include "../ui/widgets/VUMeterWidget.h"
 
 #include <capability/capability_builder.h>
@@ -215,7 +214,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     control_head->setContentsMargins(0, 0, 0, 0);
     control_head->setSpacing(8);
     control_state_label_ = makeLabel("READY TO RECORD", "recordControlState", control_panel);
-    auto* hotkey_label = makeLabel("ALT+F9", "recordHotkeyBadge", control_panel);
+    auto* hotkey_label = makeLabel("MVP BUILD", "recordHotkeyBadge", control_panel);
     hotkey_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     control_head->addWidget(control_state_label_);
     control_head->addStretch(1);
@@ -245,7 +244,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     size_value_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     size_grid->addWidget(size_value_label_, 0, 1);
     size_grid->addWidget(makeLabel("EST", "recordMetricKey", control_panel), 1, 0);
-    est_value_label_ = makeLabel("~-- GB/h", "recordMetricValue", control_panel);
+    est_value_label_ = makeLabel("Estimate unavailable", "recordMetricValue", control_panel);
     est_value_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     size_grid->addWidget(est_value_label_, 1, 1);
     control_layout->addLayout(size_grid);
@@ -256,14 +255,14 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     auto* toggles_layout = new QVBoxLayout(toggles_panel);
     toggles_layout->setContentsMargins(14, 12, 14, 12);
     toggles_layout->setSpacing(6);
-    toggles_layout->addWidget(makeLabel("QUICK TOGGLES", "recordQuickTogglesHead", toggles_panel));
-    const struct QuickToggleRow {
+    toggles_layout->addWidget(makeLabel("RECORDING PROFILE", "recordQuickTogglesHead", toggles_panel));
+    const struct QuickStatusRow {
         const char* label;
-        bool on_by_default;
+        const char* value;
     } quick_toggles[] = {
-        {"Capture cursor", true},
-        {"Hardware encode", true},
-        {"Auto-split @ 4 h", false},
+        {"Cursor capture", "Fixed on"},
+        {"Hardware encode", "Fixed on"},
+        {"Auto split", "Not available in this release"},
     };
     for (const auto& toggle : quick_toggles) {
         auto* row = new QWidget(toggles_panel);
@@ -271,14 +270,13 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
         row_layout->setContentsMargins(0, 1, 0, 1);
         row_layout->setSpacing(8);
         row_layout->addWidget(makeLabel(QString::fromUtf8(toggle.label), "recordToggleLabel", row), 1);
-
-        auto* pill = new ui::widgets::TogglePill(row);
-        pill->setOn(toggle.on_by_default);
-        row_layout->addWidget(pill, 0, Qt::AlignRight | Qt::AlignVCenter);
+        auto* value_label = makeLabel(QString::fromUtf8(toggle.value), "recordMetricValue", row);
+        value_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        row_layout->addWidget(value_label, 0, Qt::AlignRight | Qt::AlignVCenter);
         toggles_layout->addWidget(row);
     }
-    quick_toggle_note_label_ = makeLabel("Placeholder controls: wiring follows a later integration pass.",
-                                         "recordPlaceholderNote", toggles_panel);
+    quick_toggle_note_label_ =
+        makeLabel("Recording behavior is fixed in this MVP build.", "recordPlaceholderNote", toggles_panel);
     quick_toggle_note_label_->setWordWrap(true);
     toggles_layout->addWidget(quick_toggle_note_label_);
     rail_layout->addWidget(toggles_panel);
@@ -1055,7 +1053,7 @@ void RecordPage::refresh() {
 void RecordPage::updateStatsDisplay() {
     timer_label_->setText(toClock(view_model_.elapsed_text));
     size_value_label_->setText(QString::fromStdWString(view_model_.output_size_text));
-    est_value_label_->setText("~-- GB/h");
+    est_value_label_->setText("Estimate unavailable");
     preview_surface_->setBottomLeftText(QString("FRAMES %1 · VPKT %2 · DROP %3")
                                             .arg(view_model_.frames_captured)
                                             .arg(view_model_.video_packets)

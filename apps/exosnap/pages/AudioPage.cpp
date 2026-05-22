@@ -33,27 +33,6 @@ QFrame* makeDivider(QWidget* parent) {
     return divider;
 }
 
-QWidget* makeTrackRow(QWidget* parent, const QString& index, const QString& name, const QString& meta, bool first_row) {
-    auto* row = new QWidget(parent);
-    row->setObjectName("audioTrackRow");
-    row->setProperty("firstRow", first_row);
-
-    auto* row_layout = new QHBoxLayout(row);
-    row_layout->setContentsMargins(14, 14, 14, 14);
-    row_layout->setSpacing(12);
-
-    auto* index_label = makeLabel(index, "audioTrackIndex", row);
-    index_label->setFixedWidth(36);
-    auto* name_label = makeLabel(name, "audioTrackName", row);
-    auto* meta_label = makeLabel(meta, "audioTrackMeta", row);
-    meta_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-
-    row_layout->addWidget(index_label);
-    row_layout->addWidget(name_label, 1);
-    row_layout->addWidget(meta_label);
-    return row;
-}
-
 void addEncodingRow(QGridLayout* layout, QWidget* parent, int row, const QString& key, const QString& value,
                     const char* value_role) {
     auto* key_label = new QLabel(key, parent);
@@ -84,44 +63,58 @@ AudioPage::AudioPage(QWidget* parent) : QWidget(parent) {
                                        ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
     content_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
 
+    auto* routing_note_panel = makePanel(content);
+    routing_note_panel->setProperty("panelRole", "note");
+    auto* routing_note_layout = new QVBoxLayout(routing_note_panel);
+    routing_note_layout->setContentsMargins(12, 10, 12, 10);
+    routing_note_layout->setSpacing(0);
+    auto* routing_note = makeLabel("Audio routing is configured on the Record page for this MVP build.",
+                                   "audioEncodingNote", routing_note_panel);
+    routing_note->setWordWrap(true);
+    routing_note_layout->addWidget(routing_note);
+    content_layout->addWidget(routing_note_panel);
+
     auto* sources_header = new ui::widgets::SectionRuleHeader("SOURCES", content);
-    sources_header->setMeta("DRAG TO REORDER · MERGE COMBINES ROWS");
+    sources_header->setMeta("LOCKED · CONFIGURE ON RECORD PAGE");
     content_layout->addWidget(sources_header);
 
     ui::widgets::AudioSourceRow::Config app_config;
     app_config.tag = "APP";
     app_config.title = "Selected application audio";
     app_config.subtitle = "SOURCE · Game.exe + child processes";
-    app_config.db_value = "-19 dB";
+    app_config.db_value = "-- dB";
     app_config.has_merge_control = false;
     app_config.enabled = true;
     app_row_ = new ui::widgets::AudioSourceRow(app_config, content);
-    app_row_->setLevel(0.58F); // Placeholder level until live audio telemetry is wired.
+    app_row_->setLevel(0.0F);
     content_layout->addWidget(app_row_);
+    app_row_->setEnabled(false);
 
     ui::widgets::AudioSourceRow::Config mic_config;
     mic_config.tag = "MIC";
     mic_config.title = "Microphone";
     mic_config.subtitle = "SOURCE · Follow Windows default";
-    mic_config.db_value = "-31 dB";
+    mic_config.db_value = "-- dB";
     mic_config.has_merge_control = true;
     mic_config.enabled = true;
     mic_row_ = new ui::widgets::AudioSourceRow(mic_config, content);
-    mic_row_->setLevel(0.24F); // Placeholder level until live audio telemetry is wired.
+    mic_row_->setLevel(0.0F);
     mic_row_->setMergeChecked(false);
     content_layout->addWidget(mic_row_);
+    mic_row_->setEnabled(false);
 
     ui::widgets::AudioSourceRow::Config sys_config;
     sys_config.tag = "SYS";
     sys_config.title = "Other system audio";
     sys_config.subtitle = "SOURCE · Everything except selected app";
-    sys_config.db_value = "-30 dB";
+    sys_config.db_value = "-- dB";
     sys_config.has_merge_control = true;
     sys_config.enabled = true;
     sys_row_ = new ui::widgets::AudioSourceRow(sys_config, content);
-    sys_row_->setLevel(0.29F); // Placeholder level until live audio telemetry is wired.
+    sys_row_->setLevel(0.0F);
     sys_row_->setMergeChecked(false);
     content_layout->addWidget(sys_row_);
+    sys_row_->setEnabled(false);
 
     auto* lower_zone = new QWidget(content);
     auto* lower_layout = new QHBoxLayout(lower_zone);
@@ -134,17 +127,18 @@ AudioPage::AudioPage(QWidget* parent) : QWidget(parent) {
     tracks_col_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
 
     auto* tracks_header = new ui::widgets::SectionRuleHeader("RESULTING TRACKS", tracks_col);
-    tracks_header->setMeta("3 TRACKS");
+    tracks_header->setMeta("SEE RECORD PAGE");
     tracks_col_layout->addWidget(tracks_header);
 
     auto* tracks_panel = makePanel(tracks_col);
     tracks_panel->setObjectName("resultingTracksPanel");
     auto* tracks_panel_layout = new QVBoxLayout(tracks_panel);
-    tracks_panel_layout->setContentsMargins(0, 0, 0, 0);
+    tracks_panel_layout->setContentsMargins(14, 14, 14, 14);
     tracks_panel_layout->setSpacing(0);
-    tracks_panel_layout->addWidget(makeTrackRow(tracks_panel, "01", "APP", "STEREO · 48 kHz", true));
-    tracks_panel_layout->addWidget(makeTrackRow(tracks_panel, "02", "MIC", "STEREO · 48 kHz", false));
-    tracks_panel_layout->addWidget(makeTrackRow(tracks_panel, "03", "SYS", "STEREO · 48 kHz", false));
+    auto* tracks_note =
+        makeLabel("Resulting tracks are shown on the Record page before recording.", "audioEncodingNote", tracks_panel);
+    tracks_note->setWordWrap(true);
+    tracks_panel_layout->addWidget(tracks_note);
     tracks_col_layout->addWidget(tracks_panel);
 
     auto* encoding_col = new QWidget(lower_zone);
