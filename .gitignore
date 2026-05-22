@@ -1,6 +1,7 @@
 # Build output
 /build/
 /out/
+/dist/
 
 # IDE
 /.vs/
