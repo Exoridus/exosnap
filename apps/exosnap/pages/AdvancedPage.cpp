@@ -1,6 +1,7 @@
 #include "AdvancedPage.h"
 
-#include <QCheckBox>
+#include "../ui/widgets/ExoCheckBox.h"
+
 #include <QComboBox>
 #include <QFrame>
 #include <QLabel>
@@ -27,8 +28,8 @@ QLabel* makeSectionLabel(const QString& text, QWidget* parent) {
     return l;
 }
 
-QCheckBox* makeCheck(const QString& text, QWidget* parent) {
-    return new QCheckBox(text, parent);
+ui::widgets::ExoCheckBox* makeCheck(const QString& text, QWidget* parent) {
+    return new ui::widgets::ExoCheckBox(text, parent);
 }
 
 QFrame* makePanel(QWidget* parent) {

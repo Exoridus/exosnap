@@ -18,16 +18,16 @@ struct ToneColors {
 ToneColors ColorsFor(StatusPill::Tone tone) {
     switch (tone) {
     case StatusPill::Tone::Ready:
-        return {QColor("#74c08a"), QColor(116, 192, 138, 84), QColor(116, 192, 138, 20), QColor("#74c08a")};
+        return {QColor("#74c08a"), QColor("#74c08a"), QColor(116, 192, 138, 0), QColor("#74c08a")};
     case StatusPill::Tone::Recording:
-        return {QColor("#f1b400"), QColor(241, 180, 0, 96), QColor(241, 180, 0, 28), QColor("#f1b400")};
+        return {QColor("#f1b400"), QColor("#f1b400"), QColor(241, 180, 0, 31), QColor("#f1b400")};
     case StatusPill::Tone::Warn:
-        return {QColor("#e8a14a"), QColor(232, 161, 74, 84), QColor(232, 161, 74, 18), QColor("#e8a14a")};
+        return {QColor("#e8a14a"), QColor("#e8a14a"), QColor(232, 161, 74, 0), QColor("#e8a14a")};
     case StatusPill::Tone::Blocked:
-        return {QColor("#e26a5a"), QColor(226, 106, 90, 86), QColor(226, 106, 90, 18), QColor("#e26a5a")};
+        return {QColor("#e26a5a"), QColor("#e26a5a"), QColor(226, 106, 90, 0), QColor("#e26a5a")};
     case StatusPill::Tone::Neutral:
     default:
-        return {QColor("#c7c0b1"), QColor("#3a342c"), QColor("#1f1c17"), QColor("#8a8275")};
+        return {QColor("#c7c0b1"), QColor("#3a342c"), QColor(58, 52, 44, 0), QColor("#8a8070")};
     }
 }
 
@@ -35,6 +35,11 @@ ToneColors ColorsFor(StatusPill::Tone tone) {
 
 StatusPill::StatusPill(QWidget* parent) : QWidget(parent), text_(QStringLiteral("READY")) {
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    QFont mono_font = font();
+    mono_font.setFamilies(
+        {QStringLiteral("JetBrains Mono"), QStringLiteral("Cascadia Mono"), QStringLiteral("Consolas")});
+    mono_font.setPointSizeF(10.5);
+    setFont(mono_font);
     blink_timer_ = new QTimer(this);
     blink_timer_->setInterval(700);
     connect(blink_timer_, &QTimer::timeout, this, &StatusPill::advanceBlinkFrame);
@@ -80,11 +85,11 @@ bool StatusPill::isDotVisible() const noexcept {
 
 QSize StatusPill::sizeHint() const {
     QFont mono_font = font();
-    mono_font.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
+    mono_font.setLetterSpacing(QFont::AbsoluteSpacing, 0.8);
     QFontMetrics fm(mono_font);
     const int text_width = fm.horizontalAdvance(text_.isEmpty() ? QStringLiteral("STATE") : text_);
-    const int dot_width = dot_visible_ ? 11 : 0;
-    return {text_width + dot_width + 18, 24};
+    const int dot_width = dot_visible_ ? 7 : 0;
+    return {text_width + dot_width + 12, 18};
 }
 
 QSize StatusPill::minimumSizeHint() const {
@@ -101,26 +106,26 @@ void StatusPill::paintEvent(QPaintEvent* event) {
     const QRectF bounds = rect().adjusted(0.5, 0.5, -0.5, -0.5);
     painter.setPen(QPen(colors.border, 1.0));
     painter.setBrush(colors.background);
-    painter.drawRoundedRect(bounds, 2.0, 2.0);
+    painter.drawRoundedRect(bounds, 3.0, 3.0);
 
     QFont mono_font = font();
-    mono_font.setLetterSpacing(QFont::AbsoluteSpacing, 1.0);
+    mono_font.setLetterSpacing(QFont::AbsoluteSpacing, 0.8);
     painter.setFont(mono_font);
     painter.setPen(colors.text);
 
-    int x = 7;
+    int x = 6;
     if (dot_visible_) {
         painter.save();
         painter.setOpacity(dot_opacity_);
         painter.setPen(Qt::NoPen);
         painter.setBrush(colors.dot);
-        painter.drawEllipse(QRectF(7.0, (height() - 6.0) * 0.5, 6.0, 6.0));
+        painter.drawEllipse(QRectF(6.0, (height() - 4.0) * 0.5, 4.0, 4.0));
         painter.restore();
-        x += 11;
+        x += 7;
         painter.setPen(colors.text);
     }
 
-    painter.drawText(QRect(x, 0, width() - x - 6, height()), Qt::AlignVCenter | Qt::AlignLeft, text_);
+    painter.drawText(QRect(x, 0, width() - x - 5, height()), Qt::AlignVCenter | Qt::AlignLeft, text_);
 }
 
 void StatusPill::updateBlinkState() {

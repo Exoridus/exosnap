@@ -73,6 +73,10 @@ class RecordViewModel {
     uint64_t frames_captured = 0;
     uint64_t video_packets = 0;
     uint64_t audio_packets = 0;
+    uint64_t video_bytes = 0;
+    uint64_t audio_bytes = 0;
+    uint64_t output_file_bytes = 0;
+    double elapsed_seconds = 0.0;
     uint64_t dropped_frames = 0;
     std::wstring output_size_text = L"0 KB";
     float audio_rms_app = 0.0f;
@@ -82,6 +86,7 @@ class RecordViewModel {
     bool audio_active_app = false;
     bool audio_active_sys = false;
     bool audio_active_mic = false;
+    bool live_stats_available = false;
 
     // Computed predicates
     bool CanStart() const noexcept;

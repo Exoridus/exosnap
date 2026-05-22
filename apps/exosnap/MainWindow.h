@@ -3,12 +3,14 @@
 #include <QMainWindow>
 #include <QStackedWidget>
 #include <QString>
+#include <cstdint>
 
 #include "models/OutputSettingsModel.h"
 #include "settings/AppSettingsStore.h"
 
 class QLabel;
 class QShowEvent;
+class QTimer;
 
 namespace exosnap {
 
@@ -27,6 +29,9 @@ class MainWindow : public QMainWindow {
   private slots:
     void onNavRowChanged(int row);
     void onRecordChromeStateChanged(bool recording, const QString& status_label, const QString& context_text);
+    void onRecordChromeRuntimeMetricsChanged(const QString& elapsed_text, const QString& bitrate_text,
+                                             const QString& drop_text);
+    void pollIdleRuntimeMetrics();
 
   private:
     void showEvent(QShowEvent* event) override;
@@ -53,11 +58,17 @@ class MainWindow : public QMainWindow {
     QLabel* page_subtitle_label_ = nullptr;
     QLabel* page_meta_label_ = nullptr;
     QLabel* sidebar_status_value_label_ = nullptr;
+    QTimer* idle_metrics_timer_ = nullptr;
     bool recording_active_ = false;
     bool runtime_window_icon_bound_ = false;
     bool resizable_style_applied_ = false;
     bool win32_maximized_ = false;
     QString recording_context_text_;
+    QString record_status_label_ = QStringLiteral("READY");
+    std::uint64_t last_cpu_idle_ticks_ = 0;
+    std::uint64_t last_cpu_kernel_ticks_ = 0;
+    std::uint64_t last_cpu_user_ticks_ = 0;
+    bool cpu_baseline_ready_ = false;
 };
 
 } // namespace exosnap

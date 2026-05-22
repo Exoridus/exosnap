@@ -1,8 +1,11 @@
 #pragma once
 #include <QWidget>
 
-class QCheckBox;
 class QComboBox;
+
+namespace exosnap::ui::widgets {
+class ExoCheckBox;
+}
 
 namespace exosnap {
 
@@ -15,7 +18,7 @@ class AdvancedPage : public QWidget {
     void onReset();
 
     QComboBox* log_level_combo_ = nullptr;
-    QCheckBox* nvtx_check_ = nullptr;
+    ui::widgets::ExoCheckBox* nvtx_check_ = nullptr;
 };
 
 } // namespace exosnap

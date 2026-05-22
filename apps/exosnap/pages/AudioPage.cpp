@@ -82,7 +82,7 @@ AudioPage::AudioPage(QWidget* parent) : QWidget(parent) {
     app_config.tag = "APP";
     app_config.title = "Selected application audio";
     app_config.subtitle = "SOURCE · Game.exe + child processes";
-    app_config.db_value = "-- dB";
+    app_config.db_value = "– dB";
     app_config.has_merge_control = false;
     app_config.enabled = true;
     app_row_ = new ui::widgets::AudioSourceRow(app_config, content);
@@ -94,7 +94,7 @@ AudioPage::AudioPage(QWidget* parent) : QWidget(parent) {
     mic_config.tag = "MIC";
     mic_config.title = "Microphone";
     mic_config.subtitle = "SOURCE · Follow Windows default";
-    mic_config.db_value = "-- dB";
+    mic_config.db_value = "– dB";
     mic_config.has_merge_control = true;
     mic_config.enabled = true;
     mic_row_ = new ui::widgets::AudioSourceRow(mic_config, content);
@@ -107,7 +107,7 @@ AudioPage::AudioPage(QWidget* parent) : QWidget(parent) {
     sys_config.tag = "SYS";
     sys_config.title = "Other system audio";
     sys_config.subtitle = "SOURCE · Everything except selected app";
-    sys_config.db_value = "-- dB";
+    sys_config.db_value = "– dB";
     sys_config.has_merge_control = true;
     sys_config.enabled = true;
     sys_row_ = new ui::widgets::AudioSourceRow(sys_config, content);

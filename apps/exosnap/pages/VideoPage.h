@@ -4,11 +4,11 @@
 #include <vector>
 
 class QButtonGroup;
-class QCheckBox;
 
 namespace exosnap::ui::widgets {
 class CodecCard;
-}
+class ExoCheckBox;
+} // namespace exosnap::ui::widgets
 
 namespace exosnap {
 
@@ -22,7 +22,7 @@ class VideoPage : public QWidget {
 
     QButtonGroup* quality_group_ = nullptr;
     QButtonGroup* resolution_group_ = nullptr;
-    QCheckBox* cursor_check_ = nullptr;
+    ui::widgets::ExoCheckBox* cursor_check_ = nullptr;
     QWidget* rail_widget_ = nullptr;
     std::vector<ui::widgets::CodecCard*> codec_cards_;
 };

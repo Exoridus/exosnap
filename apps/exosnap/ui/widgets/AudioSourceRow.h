@@ -2,11 +2,11 @@
 
 #include <QWidget>
 
-class QCheckBox;
 class QLabel;
 
 namespace exosnap::ui::widgets {
-class TogglePill;
+class ExoCheckBox;
+class ExoToggle;
 class VUMeterWidget;
 
 class AudioSourceRow : public QWidget {
@@ -42,9 +42,9 @@ class AudioSourceRow : public QWidget {
 
     VUMeterWidget* meter_ = nullptr;
     QLabel* db_label_ = nullptr;
-    QCheckBox* merge_check_ = nullptr;
+    ExoCheckBox* merge_check_ = nullptr;
     QLabel* merge_label_ = nullptr;
-    TogglePill* enabled_toggle_ = nullptr;
+    ExoToggle* enabled_toggle_ = nullptr;
 };
 
 } // namespace exosnap::ui::widgets

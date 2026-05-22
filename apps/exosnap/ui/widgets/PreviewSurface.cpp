@@ -55,9 +55,10 @@ PreviewSurface::PreviewSurface(QWidget* parent) : QWidget(parent) {
     bottom_layout->setContentsMargins(0, 0, 0, 0);
     bottom_layout->setSpacing(8);
 
-    bottom_left_label_ = new QLabel("FRAME 0.00 ms · BITRATE 0.0 Mb/s · DROP 0", bottom_row_);
+    bottom_left_label_ = new QLabel(QString(), bottom_row_);
     bottom_left_label_->setProperty("labelRole", "previewBottomText");
     bottom_left_label_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    bottom_left_label_->setVisible(false);
 
     bottom_right_label_ = new QLabel("AV1 · CQ 24", bottom_row_);
     bottom_right_label_->setProperty("labelRole", "previewBottomAccent");
@@ -112,6 +113,7 @@ void PreviewSurface::setCenterSubtitle(const QString& text) {
 
 void PreviewSurface::setBottomLeftText(const QString& text) {
     bottom_left_label_->setText(text);
+    bottom_left_label_->setVisible(!text.trimmed().isEmpty());
 }
 
 void PreviewSurface::setBottomRightText(const QString& text) {

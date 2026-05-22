@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "diagnostics/AppLog.h"
 #include "pages/AdvancedPage.h"
 #include "pages/AudioPage.h"
 #include "pages/DiagnosticsPage.h"
@@ -8,7 +9,6 @@
 #include "pages/OutputPage.h"
 #include "pages/RecordPage.h"
 #include "pages/VideoPage.h"
-#include "ui/brand/BrandMarkWidget.h"
 #include "ui/chrome/OperationalTitleBar.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
@@ -34,6 +34,7 @@
 #include <QStyleOptionViewItem>
 #include <QStyledItemDelegate>
 #include <QTextStream>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWindow>
 #include <array>
@@ -42,11 +43,13 @@
 #include "exosnap_resource.h"
 
 #include <dwmapi.h>
+#include <psapi.h>
 #include <windows.h>
 #include <windowsx.h>
 
 #if defined(_MSC_VER)
 #pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "psapi.lib")
 #endif
 #endif
 
@@ -102,8 +105,8 @@ struct PageDescriptor {
 };
 
 constexpr std::array<PageDescriptor, 8> kPageDescriptors = {{
-    {"Record", "01 · RECORD", "Operational view — target, readiness, and live runtime.",
-     "CPU 8.2%  ·  GPU 14.4%  ·  RAM 612 MB", "DISPLAY1 · 2560×1440 · 60 fps · AV1", SidebarIcon::Record},
+    {"Record", "01 · RECORD", "Operational view — target, readiness, and live runtime.", "",
+     "DISPLAY1 · 2560×1440 · 60 fps · AV1", SidebarIcon::Record},
     {"Video", "02 · VIDEO", "Read-only MVP profile.", "LOCKED · MVP", "CFR 60 · NVENC AV1 · LOCKED",
      SidebarIcon::Video},
     {"Audio", "03 · AUDIO", "Read-only in MVP; configure on Record page.", "LOCKED · RECORD PAGE", "APP · MIC · SYS",
@@ -126,6 +129,13 @@ constexpr int kOutputPageIndex = 3;
 
 QColor colorFrom(const char* value) {
     return QColor(QString::fromLatin1(value));
+}
+
+std::uint64_t fileTimeToUint64(const FILETIME& file_time) {
+    ULARGE_INTEGER value;
+    value.LowPart = file_time.dwLowDateTime;
+    value.HighPart = file_time.dwHighDateTime;
+    return value.QuadPart;
 }
 
 ResizeZone resizeZoneFromLocalPoint(const QPoint& local, const QSize& size, bool maximized) {
@@ -402,7 +412,6 @@ class SidebarNavDelegate final : public QStyledItemDelegate {
         const bool is_hovered = (option.state & QStyle::State_MouseOver) != 0;
 
         if (is_selected) {
-            painter->fillRect(row_rect, colorFrom(ui::theme::ExoSnapPalette::kBg2));
             painter->fillRect(QRect(row_rect.left(), row_rect.top() + 4, 2, row_rect.height() - 8),
                               colorFrom(ui::theme::ExoSnapPalette::kAccent));
         } else if (is_hovered) {
@@ -419,7 +428,7 @@ class SidebarNavDelegate final : public QStyledItemDelegate {
         label_font.setPointSizeF(13.0);
         label_font.setWeight(QFont::Medium);
         painter->setFont(label_font);
-        painter->setPen(is_selected ? colorFrom(ui::theme::ExoSnapPalette::kText0)
+        painter->setPen(is_selected ? colorFrom(ui::theme::ExoSnapPalette::kAccent)
                                     : colorFrom(ui::theme::ExoSnapPalette::kText1));
         painter->drawText(QRect(row_rect.left() + 42, row_rect.top(), row_rect.width() - 86, row_rect.height()),
                           Qt::AlignVCenter | Qt::AlignLeft, index.data(Qt::DisplayRole).toString());
@@ -488,6 +497,9 @@ QWidget* makeFooterRow(const QString& key, const QString& value, QWidget* parent
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
+    diagnostics::AppLogInit();
+    diagnostics::AppLog(QStringLiteral("[window] MainWindow constructing"));
+
     setWindowTitle("ExoSnap");
     setWindowFlags(windowFlags() | Qt::FramelessWindowHint | Qt::WindowMinMaxButtonsHint | Qt::WindowSystemMenuHint);
 
@@ -508,6 +520,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     persisted_settings_ = settings_store_.Load();
     output_settings_ = persisted_settings_.output;
+    diagnostics::AppLog(QStringLiteral("[window] settings loaded"));
 
     auto* central = new QWidget(this);
     central->setObjectName("mainCentral");
@@ -519,6 +532,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     title_bar_ = new ui::chrome::OperationalTitleBar(central);
     main_layout->addWidget(title_bar_);
+    title_bar_->setRuntimeMeta(QStringLiteral("–"), QStringLiteral("–"), QStringLiteral("–"));
+    title_bar_->setRecordingRuntime(QStringLiteral("--:--:--"), QStringLiteral("–"), QStringLiteral("–"));
+
+    idle_metrics_timer_ = new QTimer(this);
+    idle_metrics_timer_->setInterval(2000);
+    connect(idle_metrics_timer_, &QTimer::timeout, this, &MainWindow::pollIdleRuntimeMetrics);
+    idle_metrics_timer_->start();
 
     auto* body = new QWidget(central);
     auto* body_layout = new QHBoxLayout(body);
@@ -532,27 +552,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     auto* sidebar_layout = new QVBoxLayout(sidebar);
     sidebar_layout->setContentsMargins(0, 0, 0, 0);
     sidebar_layout->setSpacing(0);
-
-    auto* brand_block = new QWidget(sidebar);
-    brand_block->setObjectName("sidebarBrandBlock");
-    auto* brand_layout = new QHBoxLayout(brand_block);
-    brand_layout->setContentsMargins(18, 16, 18, 14);
-    brand_layout->setSpacing(10);
-    auto* brand_mark = new ui::brand::BrandMarkWidget(brand_block);
-    brand_mark->setFixedSize(26, 26);
-    auto* brand_label = new QLabel("EXO·SNAP", brand_block);
-    brand_label->setProperty("labelRole", "sidebarWordmark");
-    brand_label->setTextFormat(Qt::RichText);
-    brand_label->setText("EXO<span style=\"color:#f1b400;\">&middot;</span>SNAP");
-    brand_layout->addWidget(brand_mark, 0, Qt::AlignVCenter);
-    brand_layout->addWidget(brand_label, 0, Qt::AlignVCenter);
-    brand_layout->addStretch(1);
-    sidebar_layout->addWidget(brand_block);
-
-    auto* top_rule = new QFrame(sidebar);
-    top_rule->setFrameShape(QFrame::HLine);
-    top_rule->setObjectName("sidebarRule");
-    sidebar_layout->addWidget(top_rule);
 
     nav_ = new QListWidget(sidebar);
     nav_->setObjectName("mainNav");
@@ -593,8 +592,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     footer_layout->setSpacing(4);
     footer_layout->addWidget(makeFooterRow("STATUS", "READY", footer, &sidebar_status_value_label_));
     footer_layout->addWidget(makeFooterRow("ENCODER", "NVENC", footer));
-    footer_layout->addWidget(makeFooterRow("GPU", "NVENC", footer));
-    footer_layout->addWidget(makeFooterRow("VERSION", "0.4.2", footer));
+    footer_layout->addWidget(makeFooterRow("GPU", "–", footer));
+    footer_layout->addWidget(makeFooterRow("VERSION", "–", footer));
     sidebar_layout->addWidget(footer);
 
     body_layout->addWidget(sidebar);
@@ -667,6 +666,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     });
     connect(title_bar_, &ui::chrome::OperationalTitleBar::closeRequested, this, &QWidget::close);
     connect(record_page_, &RecordPage::chromeStateChanged, this, &MainWindow::onRecordChromeStateChanged);
+    connect(record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
+            &MainWindow::onRecordChromeRuntimeMetricsChanged);
     connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { nav_->setCurrentRow(kOutputPageIndex); });
     connect(output_page_, &OutputPage::outputSettingsChanged, this, [this](const OutputSettingsModel& settings) {
         output_settings_ = settings;
@@ -687,7 +688,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         settings_store_.Save(persisted_settings_);
     });
 
+    diagnostics::AppLog(QStringLiteral("[window] MainWindow constructed"));
+
     nav_->setCurrentRow(0);
+    pollIdleRuntimeMetrics();
 }
 
 void MainWindow::showEvent(QShowEvent* event) {
@@ -782,19 +786,83 @@ void MainWindow::onNavRowChanged(int row) {
 void MainWindow::onRecordChromeStateChanged(bool recording, const QString& status_label, const QString& context_text) {
     recording_active_ = recording;
     recording_context_text_ = context_text;
+    record_status_label_ = status_label.trimmed().toUpper();
+    if (record_status_label_.isEmpty())
+        record_status_label_ = QStringLiteral("READY");
+
     title_bar_->setRecordingActive(recording);
-    title_bar_->setStatusLabel(status_label);
-    sidebar_status_value_label_->setText(recording ? QStringLiteral("● REC") : QStringLiteral("READY"));
+    title_bar_->setStatusLabel(record_status_label_);
+    if (recording) {
+        title_bar_->setRecordingRuntime(QStringLiteral("--:--:--"), QStringLiteral("–"), QStringLiteral("–"));
+    } else {
+        pollIdleRuntimeMetrics();
+    }
+
+    sidebar_status_value_label_->setText(recording ? QStringLiteral("● REC") : record_status_label_);
     sidebar_status_value_label_->setProperty("labelRole", recording ? "sidebarFooterValueLive" : "sidebarFooterValue");
     sidebar_status_value_label_->style()->unpolish(sidebar_status_value_label_);
     sidebar_status_value_label_->style()->polish(sidebar_status_value_label_);
     sidebar_status_value_label_->update();
 
-    if (!context_text.isEmpty())
+    if (!context_text.isEmpty() && stack_->currentIndex() == 0)
         title_bar_->setPageContext("01 · RECORD", context_text);
 
     if (recording && isVisible() && !isMinimized() && stack_->currentIndex() != 0)
         setCurrentPage(0);
+}
+
+void MainWindow::onRecordChromeRuntimeMetricsChanged(const QString& elapsed_text, const QString& bitrate_text,
+                                                     const QString& drop_text) {
+    if (!title_bar_)
+        return;
+    title_bar_->setRecordingRuntime(elapsed_text, bitrate_text, drop_text);
+}
+
+void MainWindow::pollIdleRuntimeMetrics() {
+    if (!title_bar_ || recording_active_)
+        return;
+
+    QString cpu_text = QStringLiteral("–");
+    QString gpu_text = QStringLiteral("–");
+    QString ram_text = QStringLiteral("–");
+
+#if defined(Q_OS_WIN)
+    FILETIME idle_time = {};
+    FILETIME kernel_time = {};
+    FILETIME user_time = {};
+    if (GetSystemTimes(&idle_time, &kernel_time, &user_time) != FALSE) {
+        const std::uint64_t idle_ticks = fileTimeToUint64(idle_time);
+        const std::uint64_t kernel_ticks = fileTimeToUint64(kernel_time);
+        const std::uint64_t user_ticks = fileTimeToUint64(user_time);
+
+        if (cpu_baseline_ready_) {
+            const std::uint64_t idle_delta = idle_ticks - last_cpu_idle_ticks_;
+            const std::uint64_t kernel_delta = kernel_ticks - last_cpu_kernel_ticks_;
+            const std::uint64_t user_delta = user_ticks - last_cpu_user_ticks_;
+            const std::uint64_t total_delta = kernel_delta + user_delta;
+            if (total_delta > 0 && total_delta >= idle_delta) {
+                const double busy_ratio =
+                    static_cast<double>(total_delta - idle_delta) / static_cast<double>(total_delta);
+                cpu_text = QStringLiteral("%1%").arg(busy_ratio * 100.0, 0, 'f', 1);
+            }
+        }
+
+        last_cpu_idle_ticks_ = idle_ticks;
+        last_cpu_kernel_ticks_ = kernel_ticks;
+        last_cpu_user_ticks_ = user_ticks;
+        cpu_baseline_ready_ = true;
+    }
+
+    PROCESS_MEMORY_COUNTERS_EX memory_counters = {};
+    memory_counters.cb = sizeof(memory_counters);
+    if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory_counters),
+                             memory_counters.cb) != FALSE) {
+        const double working_set_mb = static_cast<double>(memory_counters.WorkingSetSize) / (1024.0 * 1024.0);
+        ram_text = QStringLiteral("%1M").arg(working_set_mb, 0, 'f', 0);
+    }
+#endif
+
+    title_bar_->setRuntimeMeta(cpu_text, gpu_text, ram_text);
 }
 
 bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintptr* result) {
@@ -837,11 +905,18 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
 
                 if (title_bar_ != nullptr)
                     title_bar_->setMaximizedState(effectiveMaximizedState());
+
+                // Re-apply DWM border suppression after any size transition to prevent
+                // the OS-drawn accent border from reappearing after restore/resize.
+                applyDwmBorderSuppression(msg->hwnd, "WM_SIZE");
             }
 
             if (msg->hwnd == main_hwnd && msg->message == WM_NCCALCSIZE && msg->wParam == TRUE) {
                 auto* calc = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
-                if (calc != nullptr && effectiveMaximizedState()) {
+                // Use IsZoomed() for the real Win32 state — our tracked flag may lag during
+                // the drag-to-restore gesture and would clip the rect at the wrong moment.
+                const bool actually_maximized = (IsZoomed(msg->hwnd) != FALSE);
+                if (calc != nullptr && actually_maximized) {
                     MONITORINFO monitor_info = {};
                     monitor_info.cbSize = sizeof(monitor_info);
                     const HMONITOR monitor = MonitorFromRect(&calc->rgrc[0], MONITOR_DEFAULTTONEAREST);
@@ -906,6 +981,16 @@ void MainWindow::changeEvent(QEvent* event) {
         win32_maximized_ = isMaximized();
         if (title_bar_ != nullptr)
             title_bar_->setMaximizedState(effectiveMaximizedState());
+#if defined(Q_OS_WIN)
+        // On restore from maximized, force the NC area to be recalculated and
+        // re-apply the DWM border suppression so the accent frame cannot reappear.
+        HWND hwnd = reinterpret_cast<HWND>(winId());
+        if (hwnd != nullptr) {
+            SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            applyDwmBorderSuppression(hwnd, "changeEvent/WindowStateChange");
+        }
+#endif
     }
 }
 
@@ -922,15 +1007,17 @@ void MainWindow::updatePageHeader(int index) {
     page_kicker_label_->setText(descriptor.kicker);
     page_title_label_->setText(descriptor.nav_label);
     page_subtitle_label_->setText(descriptor.subtitle);
-    page_meta_label_->setText(index == kOutputPageIndex ? buildOutputPageMeta()
-                                                        : QString::fromUtf8(descriptor.page_meta));
+    const QString page_meta =
+        index == kOutputPageIndex ? buildOutputPageMeta() : QString::fromUtf8(descriptor.page_meta);
+    page_meta_label_->setText(page_meta);
+    page_meta_label_->setVisible(!page_meta.trimmed().isEmpty());
 
     const QString context_text = (recording_active_ && index == 0 && !recording_context_text_.isEmpty())
                                      ? recording_context_text_
                                      : QString::fromUtf8(descriptor.chrome_context);
     title_bar_->setPageContext(descriptor.kicker, context_text);
     title_bar_->setRecordingActive(recording_active_);
-    title_bar_->setStatusLabel(recording_active_ ? "REC" : "READY");
+    title_bar_->setStatusLabel(record_status_label_);
 }
 
 QString MainWindow::buildOutputPageMeta() const {

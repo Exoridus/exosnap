@@ -19,39 +19,48 @@ QWidget#operationalTitleBar {
     background: ${bg1};
 }
 
-QFrame#titlebarDivider {
+QWidget#titlebarBrandSlot,
+QWidget#titlebarPageSlot,
+QWidget#titlebarCaptureSlot,
+QWidget#titlebarMetricsSlot {
+    background: transparent;
+}
+
+QFrame#titlebarSeparator {
     background: ${line1};
     border: none;
     min-width: 1px;
     max-width: 1px;
-    margin: 9px 0;
+    min-height: 24px;
+    max-height: 24px;
+    margin: 16px 0;
 }
 
 QLabel[labelRole="titlebarWordmark"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.18em;
+    font-family: ${font-sans};
+    font-size: 13px;
+    letter-spacing: 0.04em;
     font-weight: 500;
     color: ${text0};
 }
 
 QLabel[labelRole="titlebarPageCode"] {
     font-family: ${font-mono};
-    font-size: 10px;
-    letter-spacing: 0.14em;
+    font-size: 11px;
+    letter-spacing: 0.08em;
     color: ${text2};
 }
 
 QLabel[labelRole="titlebarContext"] {
     font-family: ${font-mono};
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.04em;
-    color: ${text2};
+    color: ${text1};
 }
 
 QLabel[labelRole="titlebarRuntime"] {
     font-family: ${font-mono};
-    font-size: 10px;
+    font-size: 11px;
     color: ${text1};
 }
 
@@ -61,7 +70,7 @@ QPushButton#titlebarWindowButton {
     background: transparent;
     color: ${text2};
     font-family: ${font-mono};
-    font-size: 12px;
+    font-size: 13px;
 }
 
 QPushButton#titlebarWindowButton:hover {
@@ -78,18 +87,6 @@ QPushButton#titlebarWindowButton[windowControlRole="close"]:hover {
 QWidget#mainSidebar {
     background: ${bg1};
     border-right: 1px solid ${line1};
-}
-
-QWidget#sidebarBrandBlock {
-    background: transparent;
-}
-
-QLabel[labelRole="sidebarWordmark"] {
-    font-family: ${font-mono};
-    font-size: 13px;
-    letter-spacing: 0.16em;
-    font-weight: 500;
-    color: ${text0};
 }
 
 QFrame#sidebarRule {
@@ -249,8 +246,8 @@ QFrame#recordControlPanel {
 
 QLabel[labelRole="recordControlState"] {
     font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.14em;
+    font-size: 11px;
+    letter-spacing: 0.1em;
     color: ${text2};
 }
 
@@ -268,8 +265,8 @@ QLabel[labelRole="recordControlState"][stateRole="blocked"] {
 
 QLabel[labelRole="recordHotkeyBadge"] {
     font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.1em;
+    font-size: 11px;
+    letter-spacing: 0.08em;
     color: ${text1};
     border: 1px solid ${line2};
     border-radius: ${radius-sm}px;
@@ -281,11 +278,11 @@ QPushButton[role="primaryRecordStart"] {
     background: ${accent};
     border: 1px solid ${accent};
     border-radius: ${radius-md}px;
-    color: #1a1300;
-    font-family: ${font-mono};
-    font-size: 18px;
-    letter-spacing: 0.06em;
-    font-weight: 700;
+    color: #0e0d0b;
+    font-family: ${font-sans};
+    font-size: 13px;
+    letter-spacing: 0.02em;
+    font-weight: 600;
 }
 
 QPushButton[role="primaryRecordStart"]:hover {
@@ -300,58 +297,31 @@ QPushButton[role="primaryRecordStart"]:disabled {
 }
 
 QPushButton[role="recordStop"] {
-    background: #9e1f10;
-    border: 1px solid #9e1f10;
+    background: ${err};
+    border: 1px solid ${err};
     border-radius: ${radius-md}px;
-    color: #f7e3de;
-    font-family: ${font-mono};
-    font-size: 18px;
-    letter-spacing: 0.06em;
-    font-weight: 700;
+    color: #0e0d0b;
+    font-family: ${font-sans};
+    font-size: 13px;
+    letter-spacing: 0.02em;
+    font-weight: 600;
 }
 
 QPushButton[role="recordStop"]:hover {
-    background: #b82413;
-    border-color: #b82413;
+    background: #e87f70;
+    border-color: #e87f70;
 }
 
 QLabel[labelRole="recordTimer"] {
     font-family: ${font-mono};
-    font-size: 54px;
+    font-size: 40px;
     letter-spacing: 0.04em;
-    color: ${accent};
+    color: ${text2};
     font-weight: 500;
 }
 
-QLabel[labelRole="recordMetricKey"] {
-    font-family: ${font-mono};
-    font-size: 10.5px;
-    letter-spacing: 0.14em;
-    color: ${text2};
-}
-
-QLabel[labelRole="recordMetricValue"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.06em;
-    color: ${text0};
-}
-
-QLabel[labelRole="recordQuickTogglesHead"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.14em;
-    color: ${text2};
-}
-
-QLabel[labelRole="recordToggleLabel"] {
-    font-size: 13px;
-    color: ${text0};
-}
-
-QLabel[labelRole="recordPlaceholderNote"] {
-    font-size: 12px;
-    color: ${text3};
+QLabel[labelRole="recordTimer"][timerState="recording"] {
+    color: ${accent};
 }
 
 QLabel[labelRole="audioSettingsGroupTitle"] {
@@ -363,16 +333,17 @@ QLabel[labelRole="audioSettingsGroupTitle"] {
 
 QWidget#captureTargetCard {
     background: ${bg2};
-    border: 1px solid ${line1};
+    border: 1px solid ${line2};
     border-radius: ${radius-md}px;
 }
 
 QWidget#captureTargetCard:hover {
-    background: ${bg3};
+    background: ${bg4};
+    border-color: ${line3};
 }
 
 QWidget#captureTargetCard[selected="true"] {
-    background: rgba(241, 180, 0, 0.12);
+    background: ${bg4};
     border-color: ${accent};
 }
 
@@ -393,13 +364,19 @@ QLabel[labelRole="captureCardTitle"] {
 
 QLabel[labelRole="captureCardStatus"] {
     font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.08em;
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
     color: ${text2};
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    padding: 2px 6px;
+    background: transparent;
 }
 
 QWidget#captureTargetCard[selected="true"] QLabel[labelRole="captureCardStatus"] {
     color: ${accent};
+    border-color: ${accent};
+    background: rgba(241, 180, 0, 0.12);
 }
 
 QLabel[labelRole="captureCardSubtitle"] {
@@ -554,62 +531,30 @@ QFrame[frameRole="audioSourceDivider"] {
     max-width: 1px;
 }
 
-QCheckBox[controlRole="audioMerge"] {
-    spacing: 0;
-    color: ${text1};
-}
-
-QCheckBox[controlRole="audioMerge"]::indicator {
-    width: 14px;
-    height: 14px;
-    border: 1px solid ${line2};
-    border-radius: 2px;
-    background: ${bg3};
-}
-
-QCheckBox[controlRole="audioMerge"]::indicator:checked {
-    border-color: ${accent};
-    background: rgba(241, 180, 0, 0.18);
-}
-
-QCheckBox[controlRole="audioMerge"]::indicator:disabled {
-    border-color: ${line1};
-    background: ${bg2};
-}
-
 QLabel[labelRole="audioMergeLabel"] {
     font-size: 12.5px;
     color: ${text1};
 }
 
-QPushButton#togglePill {
-    min-width: 58px;
-    max-width: 58px;
-    min-height: 32px;
-    max-height: 32px;
+QAbstractButton#exoCheckBox {
+    border: none;
+    background: transparent;
+    font-size: 13px;
+    min-height: 18px;
+}
+
+QAbstractButton#exoCheckBox:disabled {
+    color: ${text3};
+}
+
+QAbstractButton#exoToggle {
+    border: none;
+    background: transparent;
     padding: 0;
-    border: 1px solid ${line2};
-    border-radius: 16px;
-    background: ${bg3};
-    color: transparent;
-}
-
-QPushButton#togglePill[toggleState="on"] {
-    border-color: ${accent};
-    background: rgba(241, 180, 0, 0.18);
-}
-
-QPushButton#togglePill[toggleState="off"] {
-    border-color: ${line2};
-    background: ${bg3};
-}
-
-QPushButton#togglePill:hover {
-    border-color: ${accent};
-}
-
-QPushButton#togglePill:pressed {
-    background: ${bg2};
+    min-width: 34px;
+    max-width: 34px;
+    min-height: 18px;
+    max-height: 18px;
 }
 
 QWidget#audioSourceRow[active="false"] QLabel[labelRole="audioSourceTitle"],
@@ -699,7 +644,7 @@ QLabel[labelRole="audioEncodingNote"] {
 
 QWidget#codecCard {
     background: ${bg2};
-    border: 1px solid ${line1};
+    border: 1px solid ${line2};
     border-radius: ${radius-md}px;
 }
 
@@ -709,7 +654,7 @@ QWidget#codecCard:hover {
 }
 
 QWidget#codecCard[selected="true"] {
-    background: rgba(241, 180, 0, 0.12);
+    background: ${bg4};
     border-color: ${accent};
 }
 
@@ -721,13 +666,19 @@ QLabel[labelRole="codecCardName"] {
 
 QLabel[labelRole="codecCardTag"] {
     font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.08em;
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
     color: ${text2};
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    padding: 2px 6px;
+    background: transparent;
 }
 
 QWidget#codecCard[selected="true"] QLabel[labelRole="codecCardTag"] {
     color: ${accent};
+    border-color: ${accent};
+    background: rgba(241, 180, 0, 0.12);
 }
 
 QLabel[labelRole="codecCardDesc"] {
@@ -1109,30 +1060,34 @@ QCheckBox::indicator {
     height: 14px;
     border: 1px solid ${line2};
     border-radius: 3px;
-    background: ${bg3};
+    background: ${bg4};
 }
 
 QCheckBox::indicator:checked {
     border: 1px solid ${accent};
-    background: rgba(241, 180, 0, 0.18);
+    background: ${accent};
 }
 
 QCheckBox::indicator:disabled {
     border-color: ${line2};
-    background: ${bg2};
+    background: #1a1714;
 }
 
 QRadioButton::indicator {
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 16px;
     border: 1px solid ${line2};
-    border-radius: 7px;
-    background: ${bg3};
+    border-radius: 8px;
+    background: ${bg2};
 }
 
 QRadioButton::indicator:checked {
-    border-color: ${accent};
+    border-color: ${line2};
     background: ${accent};
+}
+
+QRadioButton::indicator:hover {
+    border-color: rgba(241, 180, 0, 102);
 }
 
 QScrollBar:vertical {

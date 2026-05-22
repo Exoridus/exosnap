@@ -10,7 +10,6 @@
 #include "../viewmodels/RecordViewModel.h"
 
 class QComboBox;
-class QCheckBox;
 class QFrame;
 class QLabel;
 class QPushButton;
@@ -20,6 +19,7 @@ namespace exosnap {
 
 namespace ui::widgets {
 class CaptureTargetCard;
+class ExoCheckBox;
 class PreviewSurface;
 class SectionRuleHeader;
 class VUMeterWidget;
@@ -34,6 +34,8 @@ class RecordPage : public QWidget {
 
   signals:
     void chromeStateChanged(bool recording, const QString& status_label, const QString& context_text);
+    void chromeRuntimeMetricsChanged(const QString& elapsed_text, const QString& bitrate_text,
+                                     const QString& drop_text);
     void navigateToOutputPage();
     void audioSettingsChanged(const capability::AudioUiState& state);
 
@@ -74,10 +76,16 @@ class RecordPage : public QWidget {
     void populateMicDeviceCombo();
     void updateMicDeviceNoteLabel();
     void emitAudioSettingsChanged();
+    void emitChromeState();
+    QString buildChromeStatusLabel() const;
+    QString buildPreviewBottomLeftText(bool recording) const;
+    QString buildPreviewBottomRightText(bool recording) const;
+    QString buildTimerText(bool recording) const;
 
     int monitor_target_index_ = -1;
     int window_target_index_ = -1;
     int region_target_index_ = -1;
+    std::vector<int> monitor_target_indices_;
     std::vector<recorder_core::AudioInputDeviceInfo> mic_devices_;
 
     RecordViewModel view_model_;
@@ -88,11 +96,8 @@ class RecordPage : public QWidget {
     ui::widgets::PreviewSurface* preview_surface_ = nullptr;
     QLabel* control_state_label_ = nullptr;
     QLabel* timer_label_ = nullptr;
-    QLabel* size_value_label_ = nullptr;
-    QLabel* est_value_label_ = nullptr;
     QPushButton* start_btn_ = nullptr;
     QPushButton* stop_btn_ = nullptr;
-    QLabel* quick_toggle_note_label_ = nullptr;
     ui::widgets::SectionRuleHeader* capture_header_ = nullptr;
     ui::widgets::CaptureTargetCard* monitor_card_ = nullptr;
     ui::widgets::CaptureTargetCard* window_card_ = nullptr;
@@ -101,10 +106,10 @@ class RecordPage : public QWidget {
     QFrame* readiness_panel_ = nullptr;
     std::vector<ReadinessRow> readiness_rows_;
     ui::widgets::SectionRuleHeader* audio_settings_header_ = nullptr;
-    QCheckBox* app_audio_check_ = nullptr;
-    QCheckBox* sys_audio_check_ = nullptr;
-    QCheckBox* separate_tracks_check_ = nullptr;
-    QCheckBox* mic_check_ = nullptr;
+    ui::widgets::ExoCheckBox* app_audio_check_ = nullptr;
+    ui::widgets::ExoCheckBox* sys_audio_check_ = nullptr;
+    ui::widgets::ExoCheckBox* separate_tracks_check_ = nullptr;
+    ui::widgets::ExoCheckBox* mic_check_ = nullptr;
     QWidget* mic_device_row_ = nullptr;
     QComboBox* mic_device_combo_ = nullptr;
     QPushButton* mic_refresh_btn_ = nullptr;

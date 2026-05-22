@@ -1,12 +1,13 @@
 #pragma once
 
-#include <QPushButton>
+#include <QAbstractButton>
 
 namespace exosnap::ui::widgets {
 
-class TogglePill : public QPushButton {
+class ExoToggle : public QAbstractButton {
+    Q_OBJECT
   public:
-    explicit TogglePill(QWidget* parent = nullptr);
+    explicit ExoToggle(QWidget* parent = nullptr);
 
     void setOn(bool on);
     [[nodiscard]] bool isOn() const noexcept;
@@ -14,8 +15,8 @@ class TogglePill : public QPushButton {
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
 
-  private:
-    void syncToggleState();
+  protected:
+    void paintEvent(QPaintEvent* event) override;
 };
 
 } // namespace exosnap::ui::widgets

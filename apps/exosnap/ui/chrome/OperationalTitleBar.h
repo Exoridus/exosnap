@@ -33,6 +33,7 @@ class OperationalTitleBar : public QWidget {
 
     void setStatusLabel(const QString& status_text);
     void setRuntimeMeta(const QString& cpu_text, const QString& gpu_text, const QString& ram_text);
+    void setRecordingRuntime(const QString& elapsed_text, const QString& bitrate_text, const QString& drop_text);
 
     void setMaximizedState(bool maximized);
 
@@ -49,17 +50,24 @@ class OperationalTitleBar : public QWidget {
     void paintEvent(QPaintEvent* event) override;
 
   private:
-    QWidget* brand_block_ = nullptr;
     QLabel* page_code_label_ = nullptr;
     ui::widgets::StatusPill* status_pill_ = nullptr;
     QLabel* context_label_ = nullptr;
-    QLabel* cpu_label_ = nullptr;
-    QLabel* gpu_label_ = nullptr;
-    QLabel* ram_label_ = nullptr;
+    QLabel* metrics_label_ = nullptr;
     QPushButton* minimize_btn_ = nullptr;
     QPushButton* maximize_btn_ = nullptr;
     QPushButton* close_btn_ = nullptr;
     bool recording_active_ = false;
+    QString status_label_ = QStringLiteral("READY");
+    QString idle_cpu_text_ = QStringLiteral("–");
+    QString idle_gpu_text_ = QStringLiteral("–");
+    QString idle_ram_text_ = QStringLiteral("–");
+    QString rec_elapsed_text_ = QStringLiteral("--:--:--");
+    QString rec_bitrate_text_ = QStringLiteral("–");
+    QString rec_drop_text_ = QStringLiteral("–");
+
+    void refreshStatusChip();
+    void refreshMetricsLabel();
 };
 
 } // namespace exosnap::ui::chrome

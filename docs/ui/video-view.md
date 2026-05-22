@@ -11,12 +11,14 @@
   - AV1
   - HEVC
   - H.264
+  - Hardware encode state is represented in this section (`HARDWARE ENCODE`)
 - Quality preset
   - High quality
   - Balanced
   - Smaller files
 - Capture cursor
   - on by default
+  - control is hosted on Video view (not on Record view)
 
 ## Suggested layout
 

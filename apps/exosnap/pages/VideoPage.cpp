@@ -2,11 +2,11 @@
 
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/widgets/CodecCard.h"
+#include "../ui/widgets/ExoCheckBox.h"
 #include "../ui/widgets/SectionRuleHeader.h"
 #include "../ui/widgets/StatusPill.h"
 
 #include <QButtonGroup>
-#include <QCheckBox>
 #include <QComboBox>
 #include <QFrame>
 #include <QGridLayout>
@@ -240,7 +240,7 @@ VideoPage::VideoPage(QWidget* parent) : QWidget(parent) {
     auto* cursor_layout = new QHBoxLayout(cursor_panel);
     cursor_layout->setContentsMargins(14, 10, 14, 10);
     cursor_layout->setSpacing(8);
-    cursor_check_ = new QCheckBox("Capture mouse cursor", cursor_panel);
+    cursor_check_ = new ui::widgets::ExoCheckBox("Capture mouse cursor", cursor_panel);
     cursor_check_->setChecked(true);
     cursor_check_->setEnabled(false);
     cursor_layout->addWidget(cursor_check_);

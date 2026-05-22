@@ -43,8 +43,10 @@ qt_add_executable(exosnap WIN32
     ui/widgets/CodecCard.cpp
     ui/widgets/VUMeterWidget.h
     ui/widgets/VUMeterWidget.cpp
-    ui/widgets/TogglePill.h
-    ui/widgets/TogglePill.cpp
+    ui/widgets/ExoToggle.h
+    ui/widgets/ExoToggle.cpp
+    ui/widgets/ExoCheckBox.h
+    ui/widgets/ExoCheckBox.cpp
     ui/widgets/AudioSourceRow.h
     ui/widgets/AudioSourceRow.cpp
     MainWindow.h
@@ -77,6 +79,8 @@ qt_add_executable(exosnap WIN32
     settings/AppSettingsStore.cpp
     diagnostics/error_message.h
     diagnostics/error_message.cpp
+    diagnostics/AppLog.h
+    diagnostics/AppLog.cpp
     viewmodels/RecordViewModel.h
     viewmodels/RecordViewModel.cpp
 )

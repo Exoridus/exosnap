@@ -1,9 +1,9 @@
 #include "AudioSourceRow.h"
 
-#include "TogglePill.h"
+#include "ExoCheckBox.h"
+#include "ExoToggle.h"
 #include "VUMeterWidget.h"
 
-#include <QCheckBox>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -76,7 +76,7 @@ AudioSourceRow::AudioSourceRow(const Config& config, QWidget* parent) : QWidget(
     db_label_->setFixedWidth(64);
     db_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
-    enabled_toggle_ = new TogglePill(this);
+    enabled_toggle_ = new ExoToggle(this);
     enabled_toggle_->setOn(config.enabled);
 
     root->addWidget(grip);
@@ -92,8 +92,7 @@ AudioSourceRow::AudioSourceRow(const Config& config, QWidget* parent) : QWidget(
         merge_layout->setContentsMargins(0, 0, 0, 0);
         merge_layout->setSpacing(6);
 
-        merge_check_ = new QCheckBox(merge_widget);
-        merge_check_->setProperty("controlRole", "audioMerge");
+        merge_check_ = new ExoCheckBox(QString(), merge_widget);
         merge_label_ = makeLabel("Merge with above", "audioMergeLabel", merge_widget);
 
         merge_layout->addWidget(merge_check_);
@@ -101,12 +100,12 @@ AudioSourceRow::AudioSourceRow(const Config& config, QWidget* parent) : QWidget(
         root->addWidget(merge_widget, 0, Qt::AlignVCenter);
         root->addWidget(makeSourceDivider(this), 0, Qt::AlignVCenter);
 
-        connect(merge_check_, &QCheckBox::toggled, this, [this](bool checked) { emit mergeChanged(checked); });
+        connect(merge_check_, &ExoCheckBox::toggled, this, [this](bool checked) { emit mergeChanged(checked); });
     }
 
     root->addWidget(enabled_toggle_, 0, Qt::AlignVCenter);
 
-    connect(enabled_toggle_, &QPushButton::toggled, this, [this](bool enabled) {
+    connect(enabled_toggle_, &ExoToggle::toggled, this, [this](bool enabled) {
         applyActiveState(enabled);
         emit sourceEnabledChanged(enabled);
     });

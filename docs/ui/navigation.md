@@ -11,6 +11,21 @@
 7. Logs
 8. Advanced
 
+## Operational Chrome
+
+- Custom frameless operational titlebar, height `56px`.
+- Titlebar slots (left to right):
+  1. Brand (`EXO·SNAP`)
+  2. Page context (`01 · RECORD`)
+  3. State chip (`READY` / `BLOCKED` / `SUB-OPT` / `●● REC HH:MM:SS`)
+  4. Capture info text
+  5. Runtime metrics
+  6. Window controls
+- Titlebar bottom border:
+  - Idle: hairline
+  - Recording: amber
+- Sidebar no longer has a separate brand header block. Navigation item `01` is the first visible sidebar element.
+
 ## Theme
 
 - Default app theme: Dark

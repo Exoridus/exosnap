@@ -15,7 +15,7 @@ struct ExoSnapMetrics final {
     static constexpr int kRadiusLg = 8;
 
     static constexpr int kSidebarWidth = 200;
-    static constexpr int kTitlebarHeight = 48;
+    static constexpr int kTitlebarHeight = 56;
     static constexpr int kControlHeight = 34;
     static constexpr int kPrimaryCtaHeight = 46;
 };

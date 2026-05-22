@@ -78,3 +78,4 @@ Merge with above
 
 - Show compact bars per source
 - Surface mute/silence/clip states when applicable
+- When live audio data is unavailable, show flatline/dark meters and `– dB`

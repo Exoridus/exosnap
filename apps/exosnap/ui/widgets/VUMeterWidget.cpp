@@ -70,7 +70,7 @@ void VUMeterWidget::paintEvent(QPaintEvent* event) {
     int x = 0;
     for (int i = 0; i < segments_; ++i) {
         const bool lit = active_ && (i < lit_segments);
-        QColor color("#26221c");
+        QColor color("#1A1714");
         if (lit) {
             const float ratio = static_cast<float>(i) / static_cast<float>(std::max(1, segments_ - 1));
             if (ratio >= 0.86F) {

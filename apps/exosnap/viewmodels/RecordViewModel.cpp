@@ -75,11 +75,17 @@ void RecordViewModel::SetState(UiRecordingState new_state) {
 
 void RecordViewModel::UpdateStats(const recorder_core::SessionStats& stats) {
     elapsed_text = FormatElapsed(stats.elapsed_seconds);
+    elapsed_seconds = stats.elapsed_seconds;
     frames_captured = stats.video_frames_captured;
     video_packets = stats.encoded_video_packets;
     audio_packets = stats.audio_packets;
+    video_bytes = stats.video_bytes;
+    audio_bytes = stats.audio_bytes;
+    output_file_bytes = stats.output_file_bytes;
     dropped_frames = stats.dropped_or_skipped_video_frames;
     output_size_text = FormatBytes(stats.output_file_bytes);
+    live_stats_available = (stats.elapsed_seconds > 0.0) || (stats.output_file_bytes > 0) || (stats.video_bytes > 0) ||
+                           (stats.audio_bytes > 0) || (stats.video_frames_captured > 0);
 
     audio_rms_app = 0.0f;
     audio_rms_sys = 0.0f;
@@ -129,9 +135,13 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
 
 void RecordViewModel::ResetStats() {
     elapsed_text = L"0:00";
+    elapsed_seconds = 0.0;
     frames_captured = 0;
     video_packets = 0;
     audio_packets = 0;
+    video_bytes = 0;
+    audio_bytes = 0;
+    output_file_bytes = 0;
     dropped_frames = 0;
     output_size_text = L"0 KB";
     audio_rms_app = 0.0f;
@@ -141,6 +151,7 @@ void RecordViewModel::ResetStats() {
     result_user_message = {};
     result_action_hint = {};
     result_stats_text = {};
+    live_stats_available = false;
 }
 
 void RecordViewModel::ApplyTargetKind(capability::CaptureTargetKind kind) {
