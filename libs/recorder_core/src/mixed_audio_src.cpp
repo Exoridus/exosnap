@@ -55,13 +55,21 @@ void ConvertToFloat32Stereo(const uint8_t* src_bytes, uint32_t src_frames, uint3
 
 } // namespace
 
-MixedAudioSrc::MixedAudioSrc(std::vector<std::unique_ptr<IAudioCaptureSource>> sources, float mic_gain_linear)
-    : sources_(std::move(sources)), mic_gain_linear_(mic_gain_linear) {
+MixedAudioSrc::MixedAudioSrc(std::vector<std::unique_ptr<IAudioCaptureSource>> sources,
+                             std::vector<float> source_gain_multipliers)
+    : sources_(std::move(sources)), source_gain_multipliers_(std::move(source_gain_multipliers)) {
 }
 
 bool MixedAudioSrc::Init(std::string& out_error) {
     if (sources_.empty()) {
         out_error = "MixedAudioSrc::Init: at least one audio source is required";
+        return false;
+    }
+
+    if (source_gain_multipliers_.size() != sources_.size()) {
+        out_error =
+            "MixedAudioSrc::Init: source_gain_multipliers size mismatch (sources=" + std::to_string(sources_.size()) +
+            ", gains=" + std::to_string(source_gain_multipliers_.size()) + ")";
         return false;
     }
 
@@ -105,7 +113,7 @@ bool MixedAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_erro
     std::fill(source_acquired_.begin(), source_acquired_.end(), false);
 
     for (size_t i = 0; i < num; ++i) {
-        const float gain = (i == num - 1u) ? base_gain * mic_gain_linear_ : base_gain;
+        const float gain = base_gain * source_gain_multipliers_[i];
 
         if (sources_[i]->PendingFrameCount() == 0) {
             continue;

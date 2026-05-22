@@ -260,14 +260,26 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
                     return failPrepare(E_INVALIDARG,
                                        "audio_target_process_id must be a non-zero PID for App/Sys audio sources");
                 }
-                track_source = createAudioSource(kind);
-                if (!track_source) {
+                auto single_src = createAudioSource(kind);
+                if (!single_src) {
                     return failPrepare(E_NOTIMPL, "Unsupported audio source kind for Phase 5A");
+                }
+
+                if (kind == AudioSourceKind::Mic && config.mic_gain_linear != 1.0f) {
+                    std::vector<std::unique_ptr<IAudioCaptureSource>> inner;
+                    std::vector<float> gains;
+                    inner.push_back(std::move(single_src));
+                    gains.push_back(config.mic_gain_linear);
+                    track_source = std::make_unique<MixedAudioSrc>(std::move(inner), std::move(gains));
+                } else {
+                    track_source = std::move(single_src);
                 }
             } else {
                 // Multi-source track: build inner sources and wrap in MixedAudioSrc
                 std::vector<std::unique_ptr<IAudioCaptureSource>> inner;
+                std::vector<float> gains;
                 inner.reserve(track.sources.size());
+                gains.reserve(track.sources.size());
                 for (const auto kind : track.sources) {
                     if ((kind == AudioSourceKind::App || kind == AudioSourceKind::Sys) &&
                         (!config.audio_target_process_id.has_value() || config.audio_target_process_id.value() == 0)) {
@@ -279,8 +291,9 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
                         return failPrepare(E_NOTIMPL, "Unsupported audio source kind in merged track");
                     }
                     inner.push_back(std::move(inner_src));
+                    gains.push_back(kind == AudioSourceKind::Mic ? config.mic_gain_linear : 1.0f);
                 }
-                track_source = std::make_unique<MixedAudioSrc>(std::move(inner), config.mic_gain_linear);
+                track_source = std::make_unique<MixedAudioSrc>(std::move(inner), std::move(gains));
             }
 
             audioWorkers.push_back(

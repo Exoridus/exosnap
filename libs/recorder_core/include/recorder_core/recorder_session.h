@@ -80,7 +80,8 @@ struct RecorderConfig {
     // When empty, legacy loopback mode (empty audio_track_plan) remains valid.
     std::optional<uint32_t> audio_target_process_id;
 
-    // Linear gain applied to the MIC source in a MixedAudioSrc.
+    // Linear gain applied to microphone sources in mixed tracks.
+    // For single-source MIC tracks, this gain is applied by wrapping the source in MixedAudioSrc when needed.
     // Default 1.0f (unity gain).
     float mic_gain_linear = 1.0f;
 };
