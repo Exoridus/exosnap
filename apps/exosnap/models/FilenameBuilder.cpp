@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cwctype>
+#include <string_view>
 #include <vector>
 
 namespace exosnap {
@@ -74,6 +75,43 @@ void TrimSegment(std::wstring& value) {
     }
 
     value = value.substr(first, last - first);
+}
+
+bool IsWindowsReservedDeviceName(std::wstring_view segment) {
+    const auto dot_pos = segment.find(L'.');
+    const std::wstring_view stem = (dot_pos != std::wstring_view::npos) ? segment.substr(0, dot_pos) : segment;
+
+    if (stem.size() == 3) {
+        const wchar_t a = static_cast<wchar_t>(std::towlower(stem[0]));
+        const wchar_t b = static_cast<wchar_t>(std::towlower(stem[1]));
+        const wchar_t c = static_cast<wchar_t>(std::towlower(stem[2]));
+        if (a == L'c' && b == L'o' && c == L'n')
+            return true;
+        if (a == L'p' && b == L'r' && c == L'n')
+            return true;
+        if (a == L'a' && b == L'u' && c == L'x')
+            return true;
+        if (a == L'n' && b == L'u' && c == L'l')
+            return true;
+    }
+    if (stem.size() == 4) {
+        const wchar_t a = static_cast<wchar_t>(std::towlower(stem[0]));
+        const wchar_t b = static_cast<wchar_t>(std::towlower(stem[1]));
+        const wchar_t c = static_cast<wchar_t>(std::towlower(stem[2]));
+        const wchar_t d = stem[3];
+        if (a == L'c' && b == L'o' && c == L'm' && d >= L'1' && d <= L'9')
+            return true;
+        if (a == L'l' && b == L'p' && c == L't' && d >= L'1' && d <= L'9')
+            return true;
+    }
+    return false;
+}
+
+std::wstring SanitizeReservedDeviceName(std::wstring value) {
+    if (IsWindowsReservedDeviceName(value)) {
+        value += L"_1";
+    }
+    return value;
 }
 
 std::wstring SafeStrftime(const std::tm& tm_local, const wchar_t* format, const std::wstring& fallback) {
@@ -267,6 +305,7 @@ std::wstring RenderPatternSegment(const std::wstring& segment, const std::tm& tm
     }
 
     TrimSegment(rendered);
+    rendered = SanitizeReservedDeviceName(std::move(rendered));
     return rendered;
 }
 

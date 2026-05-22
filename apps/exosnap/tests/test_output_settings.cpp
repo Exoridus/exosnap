@@ -255,6 +255,65 @@ TEST(OutputSettingsTest, UnknownTokenPreserved) {
     EXPECT_EQ(filename.rfind(L"{unknown}_rec", 0), 0u);
 }
 
+TEST(OutputSettingsTest, ReservedDeviceName_Literal_GetsUnderscore1Suffix) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    EXPECT_EQ(BuildFilename(L"CON", capability::Container::Matroska, ts), L"CON_1.mkv");
+    EXPECT_EQ(BuildFilename(L"NUL", capability::Container::Matroska, ts), L"NUL_1.mkv");
+}
+
+TEST(OutputSettingsTest, ReservedDeviceName_CaseInsensitive_PreservesOriginalCase) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    EXPECT_EQ(BuildFilename(L"con", capability::Container::Matroska, ts), L"con_1.mkv");
+    EXPECT_EQ(BuildFilename(L"nul", capability::Container::Matroska, ts), L"nul_1.mkv");
+}
+
+TEST(OutputSettingsTest, ReservedDeviceName_ViaToken_SanitizedAfterExpansion) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const auto filename =
+        BuildFilename(L"{app}", capability::Container::Matroska, ts, WindowContext(L"CON", L"Claude Design", L"con"));
+    EXPECT_EQ(filename, L"CON_1.mkv");
+}
+
+TEST(OutputSettingsTest, ReservedDeviceName_ComAndLpt_SanitizedWithSuffix) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    EXPECT_EQ(BuildFilename(L"COM1", capability::Container::Matroska, ts), L"COM1_1.mkv");
+    EXPECT_EQ(BuildFilename(L"LPT9", capability::Container::Matroska, ts), L"LPT9_1.mkv");
+}
+
+TEST(OutputSettingsTest, EmptyOnlyToken_FallsBackToRecordingPrefix) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const auto filename = BuildFilename(L"{title}", capability::Container::Matroska, ts, WindowContext(L"Brave", L""));
+    EXPECT_EQ(filename.rfind(L"recording_", 0), 0u);
+    EXPECT_EQ(filename.substr(filename.size() - 4), L".mkv");
+}
+
+TEST(OutputSettingsTest, LeadingSlashPattern_CreatesExpectedSubfolderPath) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const std::filesystem::path folder = UniqueTempPath(L"leading_slash");
+    const auto output =
+        BuildOutputPath(folder, L"/{app}/{datetime}", capability::Container::Matroska, ts, WindowContext());
+    EXPECT_TRUE(IsPathUnderFolder(output, folder));
+    EXPECT_EQ(output.lexically_normal(), (folder / L"Brave" / L"2026-05-22_14-37-09.mkv").lexically_normal());
+}
+
+TEST(OutputSettingsTest, TrailingSlashPattern_FinalFilenameIsLastNonEmptySegment) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const std::filesystem::path folder = UniqueTempPath(L"trailing_slash");
+    const auto output =
+        BuildOutputPath(folder, L"{app}/{datetime}/", capability::Container::Matroska, ts, WindowContext());
+    EXPECT_TRUE(IsPathUnderFolder(output, folder));
+    EXPECT_EQ(output.lexically_normal(), (folder / L"Brave" / L"2026-05-22_14-37-09.mkv").lexically_normal());
+}
+
+TEST(OutputSettingsTest, DuplicatePathSeparators_Collapsed) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const std::filesystem::path folder = UniqueTempPath(L"double_slash");
+    const auto output =
+        BuildOutputPath(folder, L"{app}//{datetime}", capability::Container::Matroska, ts, WindowContext());
+    EXPECT_TRUE(IsPathUnderFolder(output, folder));
+    EXPECT_EQ(output.lexically_normal(), (folder / L"Brave" / L"2026-05-22_14-37-09.mkv").lexically_normal());
+}
+
 TEST(OutputSettingsTest, ValidTempDir) {
     const std::filesystem::path dir = UniqueTempPath(L"valid");
     std::error_code ec;
