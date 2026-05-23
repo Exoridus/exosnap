@@ -49,11 +49,11 @@ struct RecorderConfig {
     // Capture source
     CaptureTarget target;
 
-    // Format — M3.1 only supports the primary path below.
-    // Validate() rejects any other combination.
-    Container container = Container::Matroska;
+    // Format — WebM (AV1+Opus) and Matroska (AV1+AAC or AV1+Opus) are supported.
+    // Validate() rejects unsupported combinations.
+    Container container = Container::WebM;
     VideoCodec video_codec = VideoCodec::Av1Nvenc;
-    AudioCodec audio_codec = AudioCodec::AacMf;
+    AudioCodec audio_codec = AudioCodec::Opus;
     ChromaSubsampling chroma = ChromaSubsampling::Cs420;
     BitDepth bit_depth = BitDepth::Bit8;
 

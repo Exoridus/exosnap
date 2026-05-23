@@ -22,21 +22,24 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
     }
 
     const UserRecorderConfig& final_config = resolved.resolved_config;
-    const bool is_mkv_av1_aac =
-        final_config.container == Container::Matroska && final_config.video_codec == VideoCodec::Av1Nvenc &&
-        final_config.audio_codec == AudioCodec::AacMf && final_config.chroma == ChromaSubsampling::Cs420 &&
-        final_config.bit_depth == BitDepth::Bit8;
-    const bool is_mkv_av1_opus =
-        final_config.container == Container::Matroska && final_config.video_codec == VideoCodec::Av1Nvenc &&
-        final_config.audio_codec == AudioCodec::Opus && final_config.chroma == ChromaSubsampling::Cs420 &&
-        final_config.bit_depth == BitDepth::Bit8;
+    const bool valid_chroma_depth =
+        final_config.chroma == ChromaSubsampling::Cs420 && final_config.bit_depth == BitDepth::Bit8;
+    const bool is_webm_av1_opus = final_config.container == Container::WebM &&
+                                  final_config.video_codec == VideoCodec::Av1Nvenc &&
+                                  final_config.audio_codec == AudioCodec::Opus && valid_chroma_depth;
+    const bool is_mkv_av1_aac = final_config.container == Container::Matroska &&
+                                final_config.video_codec == VideoCodec::Av1Nvenc &&
+                                final_config.audio_codec == AudioCodec::AacMf && valid_chroma_depth;
+    const bool is_mkv_av1_opus = final_config.container == Container::Matroska &&
+                                 final_config.video_codec == VideoCodec::Av1Nvenc &&
+                                 final_config.audio_codec == AudioCodec::Opus && valid_chroma_depth;
 
-    if (!is_mkv_av1_aac && !is_mkv_av1_opus) {
+    if (!is_webm_av1_opus && !is_mkv_av1_aac && !is_mkv_av1_opus) {
         ResolveResult failure = resolved;
         failure.succeeded = false;
-        failure.invalidity.push_back(InvalidReason{
-            "translation",
-            "Only Matroska + AV1 NVENC + (AAC-MF or Opus) + 4:2:0 + 8-bit can be translated to recorder_core in M4."});
+        failure.invalidity.push_back(
+            InvalidReason{"translation", "Only WebM + AV1 NVENC + Opus or Matroska + AV1 NVENC + (AAC-MF or Opus) "
+                                         "+ 4:2:0 + 8-bit can be translated to recorder_core."});
         if (validation != nullptr) {
             *validation = failure;
         }
@@ -44,17 +47,22 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
     }
 
     recorder_core::RecorderConfig core_config;
-    core_config.container = recorder_core::Container::Matroska;
     core_config.video_codec = recorder_core::VideoCodec::Av1Nvenc;
-    if (final_config.audio_codec == AudioCodec::Opus) {
-        core_config.audio_codec = recorder_core::AudioCodec::Opus;
-    } else {
-        core_config.audio_codec = recorder_core::AudioCodec::AacMf;
-    }
     core_config.chroma = recorder_core::ChromaSubsampling::Cs420;
     core_config.bit_depth = recorder_core::BitDepth::Bit8;
     core_config.frame_rate_num = final_config.frame_rate_num;
     core_config.frame_rate_den = final_config.frame_rate_den;
+
+    if (is_webm_av1_opus) {
+        core_config.container = recorder_core::Container::WebM;
+        core_config.audio_codec = recorder_core::AudioCodec::Opus;
+    } else if (is_mkv_av1_opus) {
+        core_config.container = recorder_core::Container::Matroska;
+        core_config.audio_codec = recorder_core::AudioCodec::Opus;
+    } else {
+        core_config.container = recorder_core::Container::Matroska;
+        core_config.audio_codec = recorder_core::AudioCodec::AacMf;
+    }
 
     return core_config;
 }

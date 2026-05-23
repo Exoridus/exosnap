@@ -84,24 +84,27 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
                     "output directory does not exist: " + parent.string());
     }
 
-    // Container: only Matroska supported
-    if (config.container != Container::Matroska) {
-        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only Container::Matroska is supported in M3.1");
+    // Container: WebM and Matroska are supported
+    if (config.container != Container::WebM && config.container != Container::Matroska) {
+        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only Container::WebM and Container::Matroska are supported");
     }
 
     // Video codec: only Av1Nvenc supported
     if (config.video_codec != VideoCodec::Av1Nvenc) {
-        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only VideoCodec::Av1Nvenc is supported in M3.1");
+        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only VideoCodec::Av1Nvenc is supported");
     }
 
-    // Audio codec: AAC and Opus are supported; Opus is MKV-only.
+    // Audio codec: Opus is valid for WebM and Matroska; AAC is valid for Matroska only.
     if (config.audio_codec == AudioCodec::Opus) {
-        if (config.container != Container::Matroska) {
-            return fail(E_INVALIDARG, ErrorPhase::Prepare, "AudioCodec::Opus requires Container::Matroska");
+        // Opus: valid for both containers — no further check needed
+    } else if (config.audio_codec == AudioCodec::AacMf) {
+        if (config.container == Container::WebM) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare,
+                        "AudioCodec::AacMf is not valid for Container::WebM; use AudioCodec::Opus");
         }
-    } else if (config.audio_codec != AudioCodec::AacMf) {
+    } else {
         return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                    "Unsupported audio codec; supported: AudioCodec::AacMf, AudioCodec::Opus");
+                    "Unsupported audio codec; supported: AudioCodec::Opus, AudioCodec::AacMf");
     }
 
     // Chroma: only Cs420 supported

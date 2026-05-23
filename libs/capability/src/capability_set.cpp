@@ -53,7 +53,7 @@ SupportAnnotation BaseContainerVideoAudioAnnotation(Container c, VideoCodec v, A
             return {SupportLevel::Invalid, "WebM supports AV1 in ExoSnap's product matrix; H.264/HEVC are invalid."};
         }
         if (v == VideoCodec::Av1Nvenc && a == AudioCodec::Opus) {
-            return {SupportLevel::NotImplemented, "WebM + AV1 + Opus is planned but not implemented yet."};
+            return {SupportLevel::Available, "Primary validated WebM path: AV1 NVENC + Opus."};
         }
         return {SupportLevel::Invalid, "This WebM combination is not in the supported product matrix."};
     }

@@ -3,7 +3,8 @@
 namespace recorder_core {
 
 enum class Container {
-    Matroska, // .mkv — primary supported container for M3.1
+    WebM,     // .webm — libwebm/mkvmuxer; primary runtime container (DocType=webm, V_AV1+A_OPUS)
+    Matroska, // .mkv  — libwebm/mkvmuxer; future extended MKV support
 };
 
 enum class VideoCodec {
@@ -11,8 +12,8 @@ enum class VideoCodec {
 };
 
 enum class AudioCodec {
-    AacMf, // Media Foundation AAC-LC — primary supported codec for M3.1
-    Opus,  // libopus — implemented in M4 Phase 3; MKV only
+    AacMf, // Media Foundation AAC-LC — valid for Matroska
+    Opus,  // libopus — valid for WebM and Matroska
 };
 
 enum class ChromaSubsampling {

@@ -22,7 +22,10 @@ const OptionEntry* FindOptionByLabel(const std::vector<OptionEntry>& options, co
 TEST(OptionQueryTest, MatroskaAv1AudioOptionsMatchBaseline) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
     const OptionQuery query(caps);
-    const UserRecorderConfig current{};
+
+    UserRecorderConfig current{};
+    current.container = Container::Matroska;
+    current.audio_codec = AudioCodec::AacMf;
 
     const std::vector<OptionEntry> options = query.GetAudioCodecOptions(current);
     ASSERT_EQ(options.size(), AllAudioCodecs().size());
@@ -65,8 +68,8 @@ TEST(OptionQueryTest, WebMAv1AudioOptionsMatchBaseline) {
     EXPECT_FALSE(aac->selectable);
     EXPECT_EQ(aac->level, SupportLevel::Invalid);
 
-    EXPECT_FALSE(opus->selectable);
-    EXPECT_EQ(opus->level, SupportLevel::NotImplemented);
+    EXPECT_TRUE(opus->selectable);
+    EXPECT_EQ(opus->level, SupportLevel::Available);
 }
 
 TEST(OptionQueryTest, PreviewChangeMatchesResolverResult) {

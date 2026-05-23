@@ -17,8 +17,7 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
                             SupportAnnotation{SupportLevel::NotImplemented,
                                               "MP4 product surface exists but runtime path is not implemented."});
     caps.containers.emplace(Container::WebM,
-                            SupportAnnotation{SupportLevel::NotImplemented,
-                                              "WebM product surface exists but runtime path is not implemented."});
+                            SupportAnnotation{SupportLevel::Available, "Primary validated WebM container."});
 
     caps.video_codecs.emplace(VideoCodec::Av1Nvenc,
                               SupportAnnotation{SupportLevel::Available, "Validated NVENC AV1 path."});
