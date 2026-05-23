@@ -225,7 +225,7 @@ void VideoThread::Run() {
          << "\", target.native_id=0x" << std::hex << target.native_id << std::dec
          << ", capture.visibleContentSize=" << sourceWidthSigned << "x" << sourceHeightSigned
          << ", capture.dxgiFormat=DXGI_FORMAT_B8G8R8A8_UNORM"
-         << ", videoCodec=AV1_NVENC"
+         << ", videoCodec=" << (m_state.config.video_codec == VideoCodec::H264Nvenc ? "H264_NVENC" : "AV1_NVENC")
          << ", chroma=4:2:0, bitDepth=8, frameRate=" << m_state.config.frame_rate_num << "/"
          << m_state.config.frame_rate_den << ", nvencInputBufferFormat=NV_ENC_BUFFER_FORMAT_NV12";
 

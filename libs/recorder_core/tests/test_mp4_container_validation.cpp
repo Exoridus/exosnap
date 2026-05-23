@@ -3,6 +3,8 @@
 #include <recorder_core/codec_types.h>
 #include <recorder_core/recorder_session.h>
 
+#include <filesystem>
+
 namespace {
 
 using recorder_core::AudioCodec;
@@ -15,7 +17,8 @@ using recorder_core::VideoCodec;
 
 static RecorderConfig MakeMp4Config() {
     RecorderConfig cfg{};
-    cfg.output_path = "C:\\tmp\\test.mp4";
+    auto tmp = std::filesystem::temp_directory_path() / "exosnap_test.mp4";
+    cfg.output_path = tmp;
     cfg.container = Container::Mp4;
     cfg.video_codec = VideoCodec::H264Nvenc;
     cfg.audio_codec = AudioCodec::AacMf;

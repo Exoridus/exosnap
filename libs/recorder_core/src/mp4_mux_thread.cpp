@@ -51,10 +51,22 @@ static HRESULT WriteSampleBytes(IMFSinkWriter* pWriter, DWORD streamIdx, const u
         return hr;
 
     BYTE* pDst = nullptr;
-    pBuf->Lock(&pDst, nullptr, nullptr);
+    hr = pBuf->Lock(&pDst, nullptr, nullptr);
+    if (FAILED(hr)) {
+        pBuf->Release();
+        return hr;
+    }
     std::memcpy(pDst, data, size);
-    pBuf->Unlock();
-    pBuf->SetCurrentLength(static_cast<DWORD>(size));
+    hr = pBuf->Unlock();
+    if (FAILED(hr)) {
+        pBuf->Release();
+        return hr;
+    }
+    hr = pBuf->SetCurrentLength(static_cast<DWORD>(size));
+    if (FAILED(hr)) {
+        pBuf->Release();
+        return hr;
+    }
 
     IMFSample* pSample = nullptr;
     hr = MFCreateSample(&pSample);
@@ -62,13 +74,30 @@ static HRESULT WriteSampleBytes(IMFSinkWriter* pWriter, DWORD streamIdx, const u
         pBuf->Release();
         return hr;
     }
-    pSample->AddBuffer(pBuf);
+    hr = pSample->AddBuffer(pBuf);
     pBuf->Release();
+    if (FAILED(hr)) {
+        pSample->Release();
+        return hr;
+    }
 
-    pSample->SetSampleTime(sampleTime100ns);
-    pSample->SetSampleDuration(duration100ns);
-    if (isKey)
-        pSample->SetUINT32(MFSampleExtension_CleanPoint, TRUE);
+    hr = pSample->SetSampleTime(sampleTime100ns);
+    if (FAILED(hr)) {
+        pSample->Release();
+        return hr;
+    }
+    hr = pSample->SetSampleDuration(duration100ns);
+    if (FAILED(hr)) {
+        pSample->Release();
+        return hr;
+    }
+    if (isKey) {
+        hr = pSample->SetUINT32(MFSampleExtension_CleanPoint, TRUE);
+        if (FAILED(hr)) {
+            pSample->Release();
+            return hr;
+        }
+    }
 
     hr = pWriter->WriteSample(streamIdx, pSample);
     pSample->Release();
@@ -110,21 +139,22 @@ bool Mp4MuxThread::Join(unsigned timeout_ms) {
 // ---------------------------------------------------------------------------
 
 void Mp4MuxThread::Run() {
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    bool comInited = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
-    if (!comInited) {
+    auto coinit_hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    bool comOwned = SUCCEEDED(coinit_hr);
+    if (FAILED(coinit_hr) && coinit_hr != RPC_E_CHANGED_MODE) {
         char buf[80];
-        snprintf(buf, sizeof(buf), "Mp4MuxThread: CoInitializeEx failed 0x%08lX", static_cast<unsigned long>(hr));
-        m_state.RecordFailure(static_cast<int32_t>(hr), ErrorPhase::Mux, buf);
+        snprintf(buf, sizeof(buf), "Mp4MuxThread: CoInitializeEx failed 0x%08lX",
+                 static_cast<unsigned long>(coinit_hr));
+        m_state.RecordFailure(static_cast<int32_t>(coinit_hr), ErrorPhase::Mux, buf);
         return;
     }
 
-    hr = MFStartup(MF_VERSION);
+    HRESULT hr = MFStartup(MF_VERSION);
     if (FAILED(hr)) {
         char buf[80];
         snprintf(buf, sizeof(buf), "Mp4MuxThread: MFStartup failed 0x%08lX", static_cast<unsigned long>(hr));
         m_state.RecordFailure(static_cast<int32_t>(hr), ErrorPhase::Mux, buf);
-        if (comInited && hr != RPC_E_CHANGED_MODE)
+        if (comOwned)
             CoUninitialize();
         return;
     }
@@ -144,7 +174,7 @@ void Mp4MuxThread::Run() {
             lk.unlock();
             m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "H264 codec private not available at MP4 mux start");
             MFShutdown();
-            if (comInited)
+            if (comOwned)
                 CoUninitialize();
             return;
         }
@@ -154,7 +184,7 @@ void Mp4MuxThread::Run() {
     if (track_count > CodecPrivateData::kMaxAudioTracks) {
         m_state.RecordFailure(E_INVALIDARG, ErrorPhase::Mux, "Audio track count exceeds maximum");
         MFShutdown();
-        if (comInited)
+        if (comOwned)
             CoUninitialize();
         return;
     }
@@ -173,7 +203,7 @@ void Mp4MuxThread::Run() {
     if (h264SpsPps.empty()) {
         m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "H264 SPS/PPS is empty");
         MFShutdown();
-        if (comInited)
+        if (comOwned)
             CoUninitialize();
         return;
     }
@@ -326,7 +356,7 @@ void Mp4MuxThread::Run() {
 
     if (m_state.HasFailure() && allPackets.empty()) {
         MFShutdown();
-        if (comInited)
+        if (comOwned)
             CoUninitialize();
         return;
     }
@@ -351,7 +381,7 @@ void Mp4MuxThread::Run() {
         snprintf(buf, sizeof(buf), "MFCreateSinkWriterFromURL failed 0x%08lX", static_cast<unsigned long>(hr));
         m_state.RecordFailure(static_cast<int32_t>(hr), ErrorPhase::Mux, buf);
         MFShutdown();
-        if (comInited)
+        if (comOwned)
             CoUninitialize();
         return;
     }
@@ -365,7 +395,7 @@ void Mp4MuxThread::Run() {
             pWriter->Release();
             m_state.RecordFailure(static_cast<int32_t>(hr), ErrorPhase::Mux, "MFCreateMediaType(video) failed");
             MFShutdown();
-            if (comInited)
+            if (comOwned)
                 CoUninitialize();
             return;
         }
@@ -398,7 +428,7 @@ void Mp4MuxThread::Run() {
             pWriter->Release();
             m_state.RecordFailure(static_cast<int32_t>(hr), ErrorPhase::Mux, buf);
             MFShutdown();
-            if (comInited)
+            if (comOwned)
                 CoUninitialize();
             return;
         }
@@ -413,7 +443,7 @@ void Mp4MuxThread::Run() {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Mux,
                                   "AAC codec private too small for MP4 track " + std::to_string(i));
             MFShutdown();
-            if (comInited)
+            if (comOwned)
                 CoUninitialize();
             return;
         }
@@ -427,7 +457,7 @@ void Mp4MuxThread::Run() {
             pWriter->Release();
             m_state.RecordFailure(static_cast<int32_t>(hr), ErrorPhase::Mux, "MFCreateMediaType(audio) failed");
             MFShutdown();
-            if (comInited)
+            if (comOwned)
                 CoUninitialize();
             return;
         }
@@ -460,7 +490,7 @@ void Mp4MuxThread::Run() {
             pWriter->Release();
             m_state.RecordFailure(static_cast<int32_t>(hr), ErrorPhase::Mux, buf);
             MFShutdown();
-            if (comInited)
+            if (comOwned)
                 CoUninitialize();
             return;
         }
@@ -476,7 +506,7 @@ void Mp4MuxThread::Run() {
         pWriter->Release();
         m_state.RecordFailure(static_cast<int32_t>(hr), ErrorPhase::Mux, buf);
         MFShutdown();
-        if (comInited)
+        if (comOwned)
             CoUninitialize();
         return;
     }
@@ -507,7 +537,7 @@ void Mp4MuxThread::Run() {
             pWriter->Release();
             m_state.RecordFailure(static_cast<int32_t>(hr), ErrorPhase::Mux, buf);
             MFShutdown();
-            if (comInited)
+            if (comOwned)
                 CoUninitialize();
             return;
         }
@@ -523,7 +553,7 @@ void Mp4MuxThread::Run() {
         snprintf(buf, sizeof(buf), "IMFSinkWriter::Finalize failed 0x%08lX", static_cast<unsigned long>(hr));
         m_state.RecordFailure(static_cast<int32_t>(hr), ErrorPhase::Finalize, buf);
         MFShutdown();
-        if (comInited)
+        if (comOwned)
             CoUninitialize();
         return;
     }
@@ -539,7 +569,7 @@ void Mp4MuxThread::Run() {
     }
 
     MFShutdown();
-    if (comInited)
+    if (comOwned)
         CoUninitialize();
 }
 

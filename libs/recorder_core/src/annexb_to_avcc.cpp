@@ -56,6 +56,9 @@ static void EnumerateNals(const uint8_t* data, size_t size, std::vector<NalSpan>
 } // namespace
 
 bool ExtractH264SpsAndPps(const uint8_t* data, size_t size, std::vector<uint8_t>& out) {
+    if (data == nullptr && size > 0)
+        return false;
+
     std::vector<NalSpan> nals;
     EnumerateNals(data, size, nals);
 

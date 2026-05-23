@@ -55,6 +55,11 @@ TEST(AnnexBTest, ExtractFailsOnEmptyInput) {
     EXPECT_FALSE(ExtractH264SpsAndPps(nullptr, 0, out));
 }
 
+TEST(AnnexBTest, NullPointerWithNonzeroSizeReturnsFalse) {
+    std::vector<uint8_t> out;
+    EXPECT_FALSE(ExtractH264SpsAndPps(nullptr, 4, out));
+}
+
 TEST(AnnexBTest, ThreeByteStartCodeIsAlsoRecognized) {
     // 3-byte start code (00 00 01) instead of 4-byte
     std::vector<uint8_t> bs;
