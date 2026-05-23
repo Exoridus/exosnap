@@ -1,5 +1,6 @@
 #include "video_thread.h"
 
+#include "annexb_to_avcc.h"
 #include "codec_private.h"
 #include "nvenc_encoder.h"
 #include "session_internal.h"
@@ -275,6 +276,8 @@ void VideoThread::Run() {
     // --- NVENC encoder ---
     NvencEncoder nvenc;
     {
+        nvenc.SetCodec(m_state.config.video_codec);
+
         std::string err;
         if (!nvenc.Open(d3dDevice.get(), err)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "NVENC open: " + err);
@@ -282,12 +285,18 @@ void VideoThread::Run() {
                 CoUninitialize();
             return;
         }
-        if (!nvenc.QueryAv1Nv12Support(err)) {
-            m_state.RecordFailure(E_NOTIMPL, ErrorPhase::Prepare, "NVENC AV1/NV12 support: " + err);
+
+        const bool nvencQueryOk = (m_state.config.video_codec == VideoCodec::H264Nvenc)
+                                      ? nvenc.QueryH264Nv12Support(err)
+                                      : nvenc.QueryAv1Nv12Support(err);
+        if (!nvencQueryOk) {
+            const char* label = (m_state.config.video_codec == VideoCodec::H264Nvenc) ? "H264/NV12" : "AV1/NV12";
+            m_state.RecordFailure(E_NOTIMPL, ErrorPhase::Prepare, std::string("NVENC ") + label + " support: " + err);
             if (com_inited && hr != RPC_E_CHANGED_MODE)
                 CoUninitialize();
             return;
         }
+
         if (!nvenc.FetchPresetConfig(err)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "NVENC preset config: " + err);
             if (com_inited && hr != RPC_E_CHANGED_MODE)
@@ -482,6 +491,7 @@ void VideoThread::Run() {
     bool videoEpochSet = false;
     int64_t videoEpochTicks100ns = 0;
     bool av1CodecPrivateReady = false;
+    bool h264CodecPrivateReady = false;
     uint64_t lastVideoPts = 0;
     uint64_t videoFramesCaptured = 0;
     uint64_t droppedFrames = 0;
@@ -580,24 +590,36 @@ void VideoThread::Run() {
                         // If packet has data, push to premux or mux queue
                         const size_t pkt_bytes_count = pkt.bytes.size();
                         if (!pkt.bytes.empty()) {
-                            // Check for AV1 codec private
-                            if (!av1CodecPrivateReady && pkt.keyframe) {
-                                char reason[256] = {};
-                                uint8_t cp[4] = {};
-                                if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp, reason,
-                                                                         sizeof(reason))) {
-                                    std::lock_guard lk(m_state.premux_mutex);
-                                    std::memcpy(m_state.codec_private.av1_codec_private, cp, 4);
-                                    m_state.codec_private.av1_ready = true;
-                                    av1CodecPrivateReady = true;
-                                    m_state.premux_cv.notify_all();
+                            // Extract codec private on first keyframe
+                            if (pkt.keyframe) {
+                                if (m_state.config.video_codec == VideoCodec::H264Nvenc && !h264CodecPrivateReady) {
+                                    std::vector<uint8_t> spsPps;
+                                    if (annexb::ExtractH264SpsAndPps(pkt.bytes.data(), pkt.bytes.size(), spsPps)) {
+                                        std::lock_guard lk(m_state.premux_mutex);
+                                        m_state.codec_private.h264_sps_pps = std::move(spsPps);
+                                        m_state.codec_private.h264_ready = true;
+                                        h264CodecPrivateReady = true;
+                                        m_state.premux_cv.notify_all();
+                                    }
+                                } else if (m_state.config.video_codec != VideoCodec::H264Nvenc &&
+                                           !av1CodecPrivateReady) {
+                                    char reason[256] = {};
+                                    uint8_t cp[4] = {};
+                                    if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp,
+                                                                             reason, sizeof(reason))) {
+                                        std::lock_guard lk(m_state.premux_mutex);
+                                        std::memcpy(m_state.codec_private.av1_codec_private, cp, 4);
+                                        m_state.codec_private.av1_ready = true;
+                                        av1CodecPrivateReady = true;
+                                        m_state.premux_cv.notify_all();
+                                    }
                                 }
                             }
 
                             // Route to premux or mux
                             {
                                 std::unique_lock lk(m_state.premux_mutex);
-                                bool bothReady = m_state.codec_private.av1_ready &&
+                                bool bothReady = m_state.codec_private.VideoReady(m_state.config.video_codec) &&
                                                  m_state.codec_private.AudioAllReady(m_state.audio_track_count);
                                 if (!bothReady) {
                                     if (m_state.video_premux.size() >= SessionState::kVideoPremuxLimit) {
@@ -674,23 +696,34 @@ end_encode_loop:
 
             const size_t drain_bytes = pkt.bytes.size();
 
-            if (!av1CodecPrivateReady && pkt.keyframe) {
-                char reason[256] = {};
-                uint8_t cp[4] = {};
-                if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp, reason,
-                                                         sizeof(reason))) {
-                    std::lock_guard lk(m_state.premux_mutex);
-                    std::memcpy(m_state.codec_private.av1_codec_private, cp, 4);
-                    m_state.codec_private.av1_ready = true;
-                    av1CodecPrivateReady = true;
-                    m_state.premux_cv.notify_all();
+            if (pkt.keyframe) {
+                if (m_state.config.video_codec == VideoCodec::H264Nvenc && !h264CodecPrivateReady) {
+                    std::vector<uint8_t> spsPps;
+                    if (annexb::ExtractH264SpsAndPps(pkt.bytes.data(), pkt.bytes.size(), spsPps)) {
+                        std::lock_guard lk(m_state.premux_mutex);
+                        m_state.codec_private.h264_sps_pps = std::move(spsPps);
+                        m_state.codec_private.h264_ready = true;
+                        h264CodecPrivateReady = true;
+                        m_state.premux_cv.notify_all();
+                    }
+                } else if (m_state.config.video_codec != VideoCodec::H264Nvenc && !av1CodecPrivateReady) {
+                    char reason[256] = {};
+                    uint8_t cp[4] = {};
+                    if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp, reason,
+                                                             sizeof(reason))) {
+                        std::lock_guard lk(m_state.premux_mutex);
+                        std::memcpy(m_state.codec_private.av1_codec_private, cp, 4);
+                        m_state.codec_private.av1_ready = true;
+                        av1CodecPrivateReady = true;
+                        m_state.premux_cv.notify_all();
+                    }
                 }
             }
 
             {
                 std::unique_lock lk(m_state.premux_mutex);
-                bool bothReady =
-                    m_state.codec_private.av1_ready && m_state.codec_private.AudioAllReady(m_state.audio_track_count);
+                bool bothReady = m_state.codec_private.VideoReady(m_state.config.video_codec) &&
+                                 m_state.codec_private.AudioAllReady(m_state.audio_track_count);
                 if (!bothReady) {
                     if (m_state.video_premux.size() < SessionState::kVideoPremuxLimit) {
                         m_state.video_premux.push_back(std::move(pkt));

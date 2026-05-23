@@ -37,7 +37,7 @@ const char* TuningInfoName(NV_ENC_TUNING_INFO info) noexcept {
     }
 }
 
-bool QueryEncodeCap(NV_ENCODE_API_FUNCTION_LIST& funcs, void* encoder, NV_ENC_CAPS cap, int& out_value,
+bool QueryEncodeCap(NV_ENCODE_API_FUNCTION_LIST& funcs, void* encoder, GUID codecGuid, NV_ENC_CAPS cap, int& out_value,
                     std::string& out_error) {
     if (funcs.nvEncGetEncodeCaps == nullptr) {
         out_error = "nvEncGetEncodeCaps is unavailable";
@@ -49,7 +49,7 @@ bool QueryEncodeCap(NV_ENCODE_API_FUNCTION_LIST& funcs, void* encoder, NV_ENC_CA
     capsParam.capsToQuery = cap;
 
     int value = 0;
-    const NVENCSTATUS st = funcs.nvEncGetEncodeCaps(encoder, NV_ENC_CODEC_AV1_GUID, &capsParam, &value);
+    const NVENCSTATUS st = funcs.nvEncGetEncodeCaps(encoder, codecGuid, &capsParam, &value);
     if (st != NV_ENC_SUCCESS) {
         out_error =
             std::string("nvEncGetEncodeCaps(") + std::to_string(static_cast<int>(cap)) + "): " + NvencStatusName(st);
@@ -60,9 +60,8 @@ bool QueryEncodeCap(NV_ENCODE_API_FUNCTION_LIST& funcs, void* encoder, NV_ENC_CA
     return true;
 }
 
-std::string BuildInitDiagString(const NV_ENC_INITIALIZE_PARAMS& p, const NV_ENC_CONFIG& cfg, bool have_caps, int w_min,
-                                int w_max, int h_min, int h_max) {
-    const auto& av1 = cfg.encodeCodecConfig.av1Config;
+std::string BuildInitDiagString(const NV_ENC_INITIALIZE_PARAMS& p, const NV_ENC_CONFIG& cfg, bool isH264,
+                                bool have_caps, int w_min, int w_max, int h_min, int h_max) {
     std::ostringstream oss;
     oss << "encodeGUID=" << GuidDebugString(p.encodeGUID) << ", presetGUID=" << GuidDebugString(p.presetGUID)
         << ", tuningInfo=" << TuningInfoName(p.tuningInfo) << ", encodeWidth=" << p.encodeWidth
@@ -72,15 +71,25 @@ std::string BuildInitDiagString(const NV_ENC_INITIALIZE_PARAMS& p, const NV_ENC_
         << ", bufferFormat=NV_ENC_BUFFER_FORMAT_NV12"
         << ", enablePTD=" << static_cast<int>(p.enablePTD)
         << ", rateControlMode=" << static_cast<uint32_t>(cfg.rcParams.rateControlMode)
-        << ", gopLength=" << cfg.gopLength << ", frameIntervalP=" << cfg.frameIntervalP
-        << ", av1.idrPeriod=" << av1.idrPeriod << ", av1.chromaFormatIDC=" << static_cast<unsigned>(av1.chromaFormatIDC)
-        << ", av1.level=" << av1.level << ", av1.tier=" << av1.tier;
+        << ", gopLength=" << cfg.gopLength << ", frameIntervalP=" << cfg.frameIntervalP;
 
-    if (have_caps) {
-        oss << ", av1Caps.widthMin=" << w_min << ", av1Caps.widthMax=" << w_max << ", av1Caps.heightMin=" << h_min
-            << ", av1Caps.heightMax=" << h_max;
+    if (isH264) {
+        const auto& h264 = cfg.encodeCodecConfig.h264Config;
+        oss << ", h264.idrPeriod=" << h264.idrPeriod
+            << ", h264.chromaFormatIDC=" << static_cast<unsigned>(h264.chromaFormatIDC);
     } else {
-        oss << ", av1Caps=unavailable";
+        const auto& av1 = cfg.encodeCodecConfig.av1Config;
+        oss << ", av1.idrPeriod=" << av1.idrPeriod
+            << ", av1.chromaFormatIDC=" << static_cast<unsigned>(av1.chromaFormatIDC) << ", av1.level=" << av1.level
+            << ", av1.tier=" << av1.tier;
+    }
+
+    const char* capsPrefix = isH264 ? ", h264Caps." : ", av1Caps.";
+    if (have_caps) {
+        oss << capsPrefix << "widthMin=" << w_min << capsPrefix << "widthMax=" << w_max << capsPrefix
+            << "heightMin=" << h_min << capsPrefix << "heightMax=" << h_max;
+    } else {
+        oss << (isH264 ? ", h264Caps=unavailable" : ", av1Caps=unavailable");
     }
 
     return oss.str();
@@ -267,6 +276,66 @@ bool NvencEncoder::QueryAv1Nv12Support(std::string& out_error) {
 }
 
 // ---------------------------------------------------------------------------
+// QueryH264Nv12Support
+// ---------------------------------------------------------------------------
+
+bool NvencEncoder::QueryH264Nv12Support(std::string& out_error) {
+    uint32_t count = 0;
+    NVENCSTATUS st = m_funcs.nvEncGetEncodeGUIDCount(m_encoder, &count);
+    if (st != NV_ENC_SUCCESS || count == 0) {
+        out_error = std::string("nvEncGetEncodeGUIDCount: ") + NvencStatusName(st);
+        return false;
+    }
+
+    std::vector<GUID> guids(count);
+    uint32_t got = 0;
+    st = m_funcs.nvEncGetEncodeGUIDs(m_encoder, guids.data(), count, &got);
+    if (st != NV_ENC_SUCCESS) {
+        out_error = std::string("nvEncGetEncodeGUIDs: ") + NvencStatusName(st);
+        return false;
+    }
+
+    bool h264Found = false;
+    for (uint32_t i = 0; i < got; ++i) {
+        if (IsEqualGUID(guids[i], NV_ENC_CODEC_H264_GUID) != 0) {
+            h264Found = true;
+            break;
+        }
+    }
+    if (!h264Found) {
+        out_error = "NV_ENC_CODEC_H264_GUID not found";
+        return false;
+    }
+
+    count = 0;
+    st = m_funcs.nvEncGetInputFormatCount(m_encoder, NV_ENC_CODEC_H264_GUID, &count);
+    if (st != NV_ENC_SUCCESS || count == 0) {
+        out_error = std::string("nvEncGetInputFormatCount(H264): ") + NvencStatusName(st);
+        return false;
+    }
+
+    std::vector<NV_ENC_BUFFER_FORMAT> fmts(count);
+    st = m_funcs.nvEncGetInputFormats(m_encoder, NV_ENC_CODEC_H264_GUID, fmts.data(), count, &got);
+    if (st != NV_ENC_SUCCESS) {
+        out_error = std::string("nvEncGetInputFormats(H264): ") + NvencStatusName(st);
+        return false;
+    }
+
+    bool nv12Found = false;
+    for (uint32_t i = 0; i < got; ++i) {
+        if (fmts[i] == NV_ENC_BUFFER_FORMAT_NV12) {
+            nv12Found = true;
+            break;
+        }
+    }
+    if (!nv12Found) {
+        out_error = "NV_ENC_BUFFER_FORMAT_NV12 not in H264 input formats";
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // FetchPresetConfig
 // ---------------------------------------------------------------------------
 
@@ -275,8 +344,9 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
     m_presetConfig.version = NV_ENC_PRESET_CONFIG_VER;
     m_presetConfig.presetCfg.version = NV_ENC_CONFIG_VER;
 
-    NVENCSTATUS st = m_funcs.nvEncGetEncodePresetConfigEx(m_encoder, NV_ENC_CODEC_AV1_GUID, m_presetGuid, m_tuningInfo,
-                                                          &m_presetConfig);
+    const GUID codecGuid = (m_codec == VideoCodec::H264Nvenc) ? NV_ENC_CODEC_H264_GUID : NV_ENC_CODEC_AV1_GUID;
+    NVENCSTATUS st =
+        m_funcs.nvEncGetEncodePresetConfigEx(m_encoder, codecGuid, m_presetGuid, m_tuningInfo, &m_presetConfig);
     if (st != NV_ENC_SUCCESS) {
         out_error = std::string("nvEncGetEncodePresetConfigEx: ") + NvencStatusName(st);
         return false;
@@ -284,12 +354,14 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
 
     std::memcpy(&m_encodeConfig, &m_presetConfig.presetCfg, sizeof(NV_ENC_CONFIG));
     m_encodeConfig.version = NV_ENC_CONFIG_VER;
-    m_encodeConfig.encodeCodecConfig.av1Config.chromaFormatIDC = 1; // YUV420/NV12
 
-    // M3.2 committed low-latency config: zero lookahead and P-only (no B-frames).
-    // Required to prevent the 8-slot NVENC input ring from exhausting — zero encoder
-    // delay means each slot is released as soon as its output is consumed, keeping
-    // slot acquisition always available for the next captured frame.
+    if (m_codec == VideoCodec::H264Nvenc) {
+        m_encodeConfig.encodeCodecConfig.h264Config.chromaFormatIDC = 1; // YUV420/NV12
+    } else {
+        m_encodeConfig.encodeCodecConfig.av1Config.chromaFormatIDC = 1; // YUV420/NV12
+    }
+
+    // Zero lookahead and P-only: prevents 8-slot NVENC input ring from exhausting.
     m_encodeConfig.rcParams.enableLookahead = 0;
     m_encodeConfig.rcParams.lookaheadDepth = 0;
     m_encodeConfig.frameIntervalP = 1;
@@ -304,29 +376,38 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
 bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_rate_num, uint32_t frame_rate_den,
                                std::string& out_error) {
     // 2-second keyframe interval — recording-friendly default.
-    // Improves timeline seek responsiveness while keeping bitrate overhead modest.
     const uint32_t kGopFrames = (frame_rate_den > 0 && frame_rate_num > 0)
                                     ? static_cast<uint32_t>((2ull * frame_rate_num) / frame_rate_den)
-                                    : 120u; // fallback: 60 fps × 2 s
+                                    : 120u;
     m_encodeConfig.gopLength = kGopFrames;
-    m_encodeConfig.encodeCodecConfig.av1Config.idrPeriod = kGopFrames;
+    if (m_codec == VideoCodec::H264Nvenc) {
+        m_encodeConfig.encodeCodecConfig.h264Config.idrPeriod = kGopFrames;
+    } else {
+        m_encodeConfig.encodeCodecConfig.av1Config.idrPeriod = kGopFrames;
+    }
 
-    int av1WidthMin = -1;
-    int av1WidthMax = -1;
-    int av1HeightMin = -1;
-    int av1HeightMax = -1;
+    const GUID codecGuid = (m_codec == VideoCodec::H264Nvenc) ? NV_ENC_CODEC_H264_GUID : NV_ENC_CODEC_AV1_GUID;
+    const bool isH264 = (m_codec == VideoCodec::H264Nvenc);
+
+    int capWidthMin = -1;
+    int capWidthMax = -1;
+    int capHeightMin = -1;
+    int capHeightMax = -1;
     std::string capsError;
 
-    // Query each cap independently so diagnostic values are accurate.
-    const bool haveWidthMin = QueryEncodeCap(m_funcs, m_encoder, NV_ENC_CAPS_WIDTH_MIN, av1WidthMin, capsError);
-    const bool haveWidthMax = QueryEncodeCap(m_funcs, m_encoder, NV_ENC_CAPS_WIDTH_MAX, av1WidthMax, capsError);
-    const bool haveHeightMin = QueryEncodeCap(m_funcs, m_encoder, NV_ENC_CAPS_HEIGHT_MIN, av1HeightMin, capsError);
-    const bool haveHeightMax = QueryEncodeCap(m_funcs, m_encoder, NV_ENC_CAPS_HEIGHT_MAX, av1HeightMax, capsError);
-    const bool haveAv1Caps = haveWidthMin && haveWidthMax && haveHeightMin && haveHeightMax;
+    const bool haveWidthMin =
+        QueryEncodeCap(m_funcs, m_encoder, codecGuid, NV_ENC_CAPS_WIDTH_MIN, capWidthMin, capsError);
+    const bool haveWidthMax =
+        QueryEncodeCap(m_funcs, m_encoder, codecGuid, NV_ENC_CAPS_WIDTH_MAX, capWidthMax, capsError);
+    const bool haveHeightMin =
+        QueryEncodeCap(m_funcs, m_encoder, codecGuid, NV_ENC_CAPS_HEIGHT_MIN, capHeightMin, capsError);
+    const bool haveHeightMax =
+        QueryEncodeCap(m_funcs, m_encoder, codecGuid, NV_ENC_CAPS_HEIGHT_MAX, capHeightMax, capsError);
+    const bool haveCaps = haveWidthMin && haveWidthMax && haveHeightMin && haveHeightMax;
 
     NV_ENC_INITIALIZE_PARAMS p{};
     p.version = NV_ENC_INITIALIZE_PARAMS_VER;
-    p.encodeGUID = NV_ENC_CODEC_AV1_GUID;
+    p.encodeGUID = codecGuid;
     p.presetGUID = m_presetGuid;
     p.tuningInfo = m_tuningInfo;
     p.encodeWidth = width;
@@ -343,20 +424,21 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
     const bool evenWidth = (width % 2u) == 0u;
     const bool evenHeight = (height % 2u) == 0u;
     const bool widthInRange =
-        !haveAv1Caps || (width >= static_cast<uint32_t>(av1WidthMin) && width <= static_cast<uint32_t>(av1WidthMax));
-    const bool heightInRange = !haveAv1Caps || (height >= static_cast<uint32_t>(av1HeightMin) &&
-                                                height <= static_cast<uint32_t>(av1HeightMax));
+        !haveCaps || (width >= static_cast<uint32_t>(capWidthMin) && width <= static_cast<uint32_t>(capWidthMax));
+    const bool heightInRange =
+        !haveCaps || (height >= static_cast<uint32_t>(capHeightMin) && height <= static_cast<uint32_t>(capHeightMax));
 
     const std::string initDiag =
-        BuildInitDiagString(p, m_encodeConfig, haveAv1Caps, av1WidthMin, av1WidthMax, av1HeightMin, av1HeightMax);
+        BuildInitDiagString(p, m_encodeConfig, isH264, haveCaps, capWidthMin, capWidthMax, capHeightMin, capHeightMax);
 
     if (!evenWidth || !evenHeight || !widthInRange || !heightInRange) {
         std::ostringstream oss;
-        oss << "NVENC AV1 init dimension sanity failed: evenWidth=" << (evenWidth ? "true" : "false")
+        oss << "NVENC " << (isH264 ? "H264" : "AV1")
+            << " init dimension sanity failed: evenWidth=" << (evenWidth ? "true" : "false")
             << ", evenHeight=" << (evenHeight ? "true" : "false")
             << ", widthInRange=" << (widthInRange ? "true" : "false")
             << ", heightInRange=" << (heightInRange ? "true" : "false") << "; init={" << initDiag << "}";
-        if (!haveAv1Caps && !capsError.empty()) {
+        if (!haveCaps && !capsError.empty()) {
             oss << "; capsQueryError=" << capsError;
         }
         out_error = oss.str();
@@ -366,7 +448,7 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
     NVENCSTATUS st = m_funcs.nvEncInitializeEncoder(m_encoder, &p);
     if (st != NV_ENC_SUCCESS) {
         out_error = std::string("nvEncInitializeEncoder: ") + NvencStatusName(st) + "; init={" + initDiag + "}";
-        if (!haveAv1Caps && !capsError.empty()) {
+        if (!haveCaps && !capsError.empty()) {
             out_error += "; capsQueryError=" + capsError;
         }
         return false;

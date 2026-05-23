@@ -115,8 +115,8 @@ void AudioThread::Run() {
 
             {
                 std::unique_lock lk(m_state.premux_mutex);
-                bool bothReady =
-                    m_state.codec_private.av1_ready && m_state.codec_private.AudioAllReady(m_state.audio_track_count);
+                bool bothReady = m_state.codec_private.VideoReady(m_state.config.video_codec) &&
+                                 m_state.codec_private.AudioAllReady(m_state.audio_track_count);
                 if (!bothReady) {
                     if (m_state.audio_premux.size() >= SessionState::kAudioPremuxLimit) {
                         lk.unlock();

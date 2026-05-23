@@ -4,11 +4,13 @@ namespace recorder_core {
 
 enum class Container {
     WebM,     // .webm — libwebm/mkvmuxer; primary runtime container (DocType=webm, V_AV1+A_OPUS)
-    Matroska, // .mkv  — libwebm/mkvmuxer; future extended MKV support
+    Matroska, // .mkv  — libwebm/mkvmuxer; extended MKV support
+    Mp4,      // .mp4  — IMFSinkWriter (MPEG4MediaSink); H.264 + AAC path
 };
 
 enum class VideoCodec {
-    Av1Nvenc, // NVENC AV1 — primary supported codec for M3.1
+    Av1Nvenc,  // NVENC AV1 — primary validated codec
+    H264Nvenc, // NVENC H.264 — MP4 path
 };
 
 enum class AudioCodec {

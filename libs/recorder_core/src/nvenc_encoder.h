@@ -1,6 +1,6 @@
 #pragma once
 
-// NVENC AV1 encoder wrapper.
+// NVENC encoder wrapper (AV1 and H.264).
 // All D3D11 context / video context usage is EXCLUSIVE to VideoThread.
 // See D3D11 threading contract in video_thread.cpp.
 
@@ -14,6 +14,8 @@
 #include <windows.h>
 
 #include "nvEncodeAPI.h"
+
+#include <recorder_core/codec_types.h>
 
 namespace recorder_core {
 
@@ -45,12 +47,20 @@ class NvencEncoder {
     NvencEncoder(const NvencEncoder&) = delete;
     NvencEncoder& operator=(const NvencEncoder&) = delete;
 
+    // Set codec before calling Open(). Defaults to Av1Nvenc.
+    void SetCodec(VideoCodec codec) noexcept {
+        m_codec = codec;
+    }
+
     // Load nvEncodeAPI64.dll and open a D3D11 encode session.
     // device must remain valid for the lifetime of this encoder.
     bool Open(ID3D11Device* device, std::string& out_error);
 
     // Query AV1 GUID and NV12 format support.
     bool QueryAv1Nv12Support(std::string& out_error);
+
+    // Query H.264 GUID and NV12 format support.
+    bool QueryH264Nv12Support(std::string& out_error);
 
     // Fetch preset config and set chromaFormatIDC=1 (YUV420).
     bool FetchPresetConfig(std::string& out_error);
@@ -101,6 +111,8 @@ class NvencEncoder {
     // Input-slot ring: 8 independent NV12 input resources
     std::array<InputSlot, 8> m_slots;
     int32_t m_slotCursor = 0;
+
+    VideoCodec m_codec = VideoCodec::Av1Nvenc;
 
     const GUID m_presetGuid = NV_ENC_PRESET_P4_GUID;
     const NV_ENC_TUNING_INFO m_tuningInfo = NV_ENC_TUNING_INFO_HIGH_QUALITY;

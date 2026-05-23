@@ -78,12 +78,13 @@ void MuxThread::Run() {
     {
         std::unique_lock lk(m_state.premux_mutex);
         m_state.premux_cv.wait(lk, [&] {
-            return (m_state.codec_private.av1_ready &&
+            return (m_state.codec_private.VideoReady(m_state.config.video_codec) &&
                     m_state.codec_private.AudioAllReady(m_state.audio_track_count)) ||
                    m_state.stop_requested.load();
         });
 
-        if (!(m_state.codec_private.av1_ready && m_state.codec_private.AudioAllReady(m_state.audio_track_count))) {
+        if (!(m_state.codec_private.VideoReady(m_state.config.video_codec) &&
+              m_state.codec_private.AudioAllReady(m_state.audio_track_count))) {
             lk.unlock();
             m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Codec private data not available at mux start");
             return;

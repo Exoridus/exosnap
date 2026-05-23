@@ -47,13 +47,24 @@ struct AudioCodecPrivateSlot {
 };
 
 struct CodecPrivateData {
+    // AV1: 4-byte AV1CodecConfigurationRecord (for WebM/MKV)
     uint8_t av1_codec_private[4] = {};
     bool av1_ready = false;
+
+    // H264: SPS+PPS in Annex-B (for MF_MT_MPEG_SEQUENCE_HEADER in IMFSinkWriter)
+    std::vector<uint8_t> h264_sps_pps;
+    bool h264_ready = false;
 
     static constexpr uint32_t kMaxAudioTracks = 3;
 
     std::array<AudioCodecPrivateSlot, kMaxAudioTracks> audio_codec_private{};
     std::array<bool, kMaxAudioTracks> audio_track_ready{};
+
+    [[nodiscard]] bool VideoReady(VideoCodec codec) const noexcept {
+        if (codec == VideoCodec::H264Nvenc)
+            return h264_ready;
+        return av1_ready;
+    }
 
     [[nodiscard]] bool AudioAllReady(uint32_t track_count) const {
         if (track_count == 0) {

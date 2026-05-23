@@ -2,6 +2,7 @@
 
 #include "audio_thread.h"
 #include "mixed_audio_src.h"
+#include "mp4_mux_thread.h"
 #include "mux_thread.h"
 #include "session_internal.h"
 #include "session_stats_collector.h"
@@ -84,19 +85,33 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
                     "output directory does not exist: " + parent.string());
     }
 
-    // Container: WebM and Matroska are supported
-    if (config.container != Container::WebM && config.container != Container::Matroska) {
-        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only Container::WebM and Container::Matroska are supported");
+    // Container: WebM, Matroska, and Mp4 are supported
+    if (config.container != Container::WebM && config.container != Container::Matroska &&
+        config.container != Container::Mp4) {
+        return fail(E_NOTIMPL, ErrorPhase::Prepare,
+                    "Only Container::WebM, Container::Matroska, and Container::Mp4 are supported");
     }
 
-    // Video codec: only Av1Nvenc supported
-    if (config.video_codec != VideoCodec::Av1Nvenc) {
-        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only VideoCodec::Av1Nvenc is supported");
+    // Video codec
+    if (config.container == Container::Mp4) {
+        if (config.video_codec != VideoCodec::H264Nvenc) {
+            return fail(E_NOTIMPL, ErrorPhase::Prepare, "Container::Mp4 requires VideoCodec::H264Nvenc");
+        }
+    } else {
+        if (config.video_codec != VideoCodec::Av1Nvenc) {
+            return fail(E_NOTIMPL, ErrorPhase::Prepare,
+                        "Container::WebM and Container::Matroska require VideoCodec::Av1Nvenc");
+        }
     }
 
-    // Audio codec: Opus is valid for WebM and Matroska; AAC is valid for Matroska only.
-    if (config.audio_codec == AudioCodec::Opus) {
-        // Opus: valid for both containers — no further check needed
+    // Audio codec
+    if (config.container == Container::Mp4) {
+        if (config.audio_codec != AudioCodec::AacMf) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare,
+                        "Container::Mp4 requires AudioCodec::AacMf; Opus is not valid for MP4");
+        }
+    } else if (config.audio_codec == AudioCodec::Opus) {
+        // Opus: valid for WebM and Matroska
     } else if (config.audio_codec == AudioCodec::AacMf) {
         if (config.container == Container::WebM) {
             return fail(E_INVALIDARG, ErrorPhase::Prepare,
@@ -310,15 +325,21 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     SessionStatsCollector statsCollector(m_impl->state);
     statsCollector.Start();
 
-    // Start worker threads
+    // Start worker threads — dispatch mux thread by container
     VideoThread videoThread(m_impl->state);
     MuxThread muxThread(m_impl->state);
+    Mp4MuxThread mp4MuxThread(m_impl->state);
+    const bool isMp4 = (config.container == Container::Mp4);
 
     for (auto& worker : audioWorkers) {
         worker->Start();
     }
     videoThread.Start();
-    muxThread.Start();
+    if (isMp4) {
+        mp4MuxThread.Start();
+    } else {
+        muxThread.Start();
+    }
 
     // Parallel join: all workers share a single 120-second budget.
     //
@@ -330,7 +351,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     for (auto& worker : audioWorkers) {
         allHandles.push_back(worker->NativeHandle());
     }
-    allHandles.push_back(muxThread.NativeHandle());
+    allHandles.push_back(isMp4 ? mp4MuxThread.NativeHandle() : muxThread.NativeHandle());
 
     bool hasNullHandle = false;
     for (HANDLE h : allHandles) {
@@ -357,12 +378,14 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     std::vector<bool> audioJoined(audioWorkers.size(), false);
     bool muxJoined = false;
 
+    auto joinMuxThread = [&](unsigned ms) -> bool { return isMp4 ? mp4MuxThread.Join(ms) : muxThread.Join(ms); };
+
     if (joinWait == WAIT_OBJECT_0) {
         videoJoined = videoThread.Join(0);
         for (size_t i = 0; i < audioWorkers.size(); ++i) {
             audioJoined[i] = audioWorkers[i]->Join(0);
         }
-        muxJoined = muxThread.Join(0);
+        muxJoined = joinMuxThread(0);
     } else {
         videoJoined = (allHandles[0] != nullptr && WaitForSingleObject(allHandles[0], 0) == WAIT_OBJECT_0);
         if (videoJoined) {
@@ -378,7 +401,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         const HANDLE muxHandle = allHandles[1 + audioWorkers.size()];
         muxJoined = (muxHandle != nullptr && WaitForSingleObject(muxHandle, 0) == WAIT_OBJECT_0);
         if (muxJoined) {
-            muxThread.Join(0);
+            joinMuxThread(0);
         }
     }
 
