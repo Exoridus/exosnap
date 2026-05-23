@@ -67,9 +67,7 @@ SupportAnnotation BaseContainerVideoAudioAnnotation(Container c, VideoCodec v, A
         }
         if (a == AudioCodec::AacMf) {
             if (v == VideoCodec::H264Nvenc) {
-                return {SupportLevel::NotImplemented,
-                        "MP4 + H.264 + AAC is planned; the IMFSinkWriter muxer and Annex-B→AVCC "
-                        "conversion are not yet implemented."};
+                return {SupportLevel::Available, "Validated MP4 H.264+AAC path via IMFSinkWriter."};
             }
             if (v == VideoCodec::HevcNvenc) {
                 return {SupportLevel::NotImplemented, "MP4 + HEVC + AAC is not implemented; implement H.264 first."};

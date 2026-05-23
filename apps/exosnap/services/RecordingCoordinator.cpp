@@ -469,6 +469,15 @@ std::filesystem::path RecordingCoordinator::CurrentOutputPath() const {
 }
 void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings) {
     output_settings_ = settings;
+    if (settings.container == capability::Container::Mp4) {
+        resolved_user_config_.container = capability::Container::Mp4;
+        resolved_user_config_.video_codec = capability::VideoCodec::H264Nvenc;
+        resolved_user_config_.audio_codec = capability::AudioCodec::AacMf;
+    } else {
+        resolved_user_config_.container = capability::Container::WebM;
+        resolved_user_config_.video_codec = capability::VideoCodec::Av1Nvenc;
+        resolved_user_config_.audio_codec = capability::AudioCodec::Opus;
+    }
 }
 void RecordingCoordinator::SetOutputTargetContext(const FilenameTargetContext& context) {
     output_target_context_ = context;

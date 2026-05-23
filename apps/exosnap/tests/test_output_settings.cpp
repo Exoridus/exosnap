@@ -357,6 +357,36 @@ TEST(OutputSettingsTest, Defaults_AudioCodecIsOpus) {
     EXPECT_EQ(defaults.audio_codec, capability::AudioCodec::Opus);
 }
 
+TEST(OutputSettingsTest, Mp4Profile_ExtensionIsMp4) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 23, 10, 0, 0);
+    const auto filename = BuildFilename(L"rec_{datetime}", capability::Container::Mp4, ts);
+    EXPECT_EQ(filename.substr(filename.size() - 4), L".mp4");
+}
+
+TEST(OutputSettingsTest, Mp4Profile_ApplyAudioCodec_UsesAac) {
+    recorder_core::RecorderConfig config{};
+    config.audio_codec = recorder_core::AudioCodec::Opus;
+
+    OutputSettingsModel settings = OutputSettingsModel::Defaults();
+    settings.container = capability::Container::Mp4;
+    settings.audio_codec = capability::AudioCodec::AacMf;
+
+    ApplyOutputSettingsToRecorderConfig(config, settings);
+    EXPECT_EQ(config.audio_codec, recorder_core::AudioCodec::AacMf);
+}
+
+TEST(OutputSettingsTest, WebMProfile_ApplyAudioCodec_UsesOpus) {
+    recorder_core::RecorderConfig config{};
+    config.audio_codec = recorder_core::AudioCodec::AacMf;
+
+    OutputSettingsModel settings = OutputSettingsModel::Defaults();
+    settings.container = capability::Container::WebM;
+    settings.audio_codec = capability::AudioCodec::Opus;
+
+    ApplyOutputSettingsToRecorderConfig(config, settings);
+    EXPECT_EQ(config.audio_codec, recorder_core::AudioCodec::Opus);
+}
+
 TEST(OutputSettingsTest, ApplyOutputAudioCodec_UsesOpusWhenSelected) {
     recorder_core::RecorderConfig config{};
     config.audio_codec = recorder_core::AudioCodec::AacMf;

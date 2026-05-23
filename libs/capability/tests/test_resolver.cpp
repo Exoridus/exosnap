@@ -73,6 +73,23 @@ TEST(SettingsResolverTest, ContainerChangeFromMatroskaToWebMAdjustsAudioToOpus) 
     EXPECT_EQ(result.adjustments.front().field, "audio_codec");
 }
 
+TEST(SettingsResolverTest, ValidateMp4H264AacConfigSucceeds) {
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+    const SettingsResolver resolver(caps);
+
+    UserRecorderConfig config;
+    config.container = Container::Mp4;
+    config.video_codec = VideoCodec::H264Nvenc;
+    config.audio_codec = AudioCodec::AacMf;
+
+    const ResolveResult result = resolver.ValidateConfig(config);
+    EXPECT_TRUE(result.succeeded);
+    EXPECT_TRUE(result.adjustments.empty());
+    EXPECT_EQ(result.resolved_config.container, Container::Mp4);
+    EXPECT_EQ(result.resolved_config.video_codec, VideoCodec::H264Nvenc);
+    EXPECT_EQ(result.resolved_config.audio_codec, AudioCodec::AacMf);
+}
+
 TEST(SettingsResolverTest, ExplicitAudioChangeToOpusUnderMp4FailsWithoutFallback) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
     const SettingsResolver resolver(caps);
@@ -184,6 +201,23 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvAv1OpusCombo) {
     EXPECT_TRUE(validation.succeeded);
     EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
     EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Opus);
+}
+
+TEST(TranslationTest, ToRecorderCoreConfigAcceptsMp4H264AacCombo) {
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    UserRecorderConfig config;
+    config.container = Container::Mp4;
+    config.video_codec = VideoCodec::H264Nvenc;
+    config.audio_codec = AudioCodec::AacMf;
+
+    ResolveResult validation;
+    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+
+    EXPECT_TRUE(validation.succeeded);
+    EXPECT_EQ(translated.container, recorder_core::Container::Mp4);
+    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::H264Nvenc);
+    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::AacMf);
 }
 
 TEST(TranslationTest, ToRecorderCoreConfigRejectsNonImplementedComboEvenWhenSelectable) {

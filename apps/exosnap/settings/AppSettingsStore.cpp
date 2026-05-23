@@ -197,6 +197,17 @@ PersistedAppSettings AppSettingsStore::Load() const {
     persisted.audio_ui_state.mic_gain_linear = mic_gain_ok ? MicGainLinearFromDb(mic_gain_db) : 1.0f;
     settings.endGroup();
 
+    // Reconcile audio codec to match container: MP4 requires AAC, WebM requires Opus.
+    if (persisted.output.container == capability::Container::Mp4) {
+        persisted.output.audio_codec = capability::AudioCodec::AacMf;
+    } else if (persisted.output.container == capability::Container::WebM) {
+        persisted.output.audio_codec = capability::AudioCodec::Opus;
+    } else {
+        // Matroska not shown in MVP UI; fall back to WebM profile.
+        persisted.output.container = capability::Container::WebM;
+        persisted.output.audio_codec = capability::AudioCodec::Opus;
+    }
+
     // MVP policy: merged output only.
     persisted.audio_ui_state.separate_output_tracks = false;
     if (settings_version < kSettingsVersionCurrent) {

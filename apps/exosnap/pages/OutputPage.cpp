@@ -109,8 +109,6 @@ OutputPage::OutputPage(const OutputSettingsModel& initial_settings, QWidget* par
     mkv_radio_ = makeRadio("WebM", container_panel);
     mp4_radio_ = makeRadio("MP4", container_panel);
     mkv_radio_->setChecked(true);
-    mp4_radio_->setEnabled(false);
-    mp4_radio_->setToolTip("Available in a future release");
     container_group_ = new QButtonGroup(this);
     container_group_->addButton(mkv_radio_, 0);
     container_group_->addButton(mp4_radio_, 1);
@@ -182,13 +180,14 @@ OutputPage::OutputPage(const OutputSettingsModel& initial_settings, QWidget* par
 }
 
 void OutputPage::onContainerChanged(int id) {
-    Q_UNUSED(id);
-    if (mkv_radio_ != nullptr) {
-        mkv_radio_->setChecked(true);
+    if (id == 1) {
+        settings_.container = capability::Container::Mp4;
+        mp4_info_label_->setVisible(true);
+    } else {
+        settings_.container = capability::Container::WebM;
+        mp4_info_label_->setVisible(false);
     }
-    settings_.container = capability::Container::WebM;
     updateAudioCodecChoices();
-    mp4_info_label_->setVisible(false);
     emitCurrentSettings();
 }
 
@@ -205,14 +204,16 @@ void OutputPage::applySettingsToUi() {
     QSignalBlocker block_container(container_group_);
     QSignalBlocker block_codec(audio_codec_combo_);
 
-    if (settings_.container != capability::Container::WebM) {
-        settings_.container = capability::Container::WebM;
-    }
-
     destination_edit_->setText(QString::fromStdWString(settings_.output_folder.wstring()));
     naming_edit_->setText(QString::fromStdWString(settings_.naming_pattern));
-    mkv_radio_->setChecked(true);
-    mp4_info_label_->setVisible(false);
+    if (settings_.container == capability::Container::Mp4) {
+        mp4_radio_->setChecked(true);
+        mp4_info_label_->setVisible(true);
+    } else {
+        settings_.container = capability::Container::WebM;
+        mkv_radio_->setChecked(true);
+        mp4_info_label_->setVisible(false);
+    }
 
     updateAudioCodecChoices();
     const int codec_index = settings_.audio_codec == capability::AudioCodec::AacMf
@@ -224,13 +225,15 @@ void OutputPage::applySettingsToUi() {
 void OutputPage::emitCurrentSettings() {
     settings_.output_folder = std::filesystem::path(destination_edit_->text().toStdWString());
     settings_.naming_pattern = naming_edit_->text().toStdWString();
-    settings_.container = capability::Container::WebM; // MP4 disabled in MVP
+    settings_.container =
+        (container_group_->checkedId() == 1) ? capability::Container::Mp4 : capability::Container::WebM;
 
-    const QString codec_text = audio_codec_combo_->currentText().toLower();
-    if (codec_text.contains("aac")) {
+    if (settings_.container == capability::Container::Mp4) {
         settings_.audio_codec = capability::AudioCodec::AacMf;
     } else {
-        settings_.audio_codec = capability::AudioCodec::Opus;
+        const QString codec_text = audio_codec_combo_->currentText().toLower();
+        settings_.audio_codec =
+            codec_text.contains("aac") ? capability::AudioCodec::AacMf : capability::AudioCodec::Opus;
     }
 
     updateEffectiveOutputPreview();
@@ -239,21 +242,22 @@ void OutputPage::emitCurrentSettings() {
 
 void OutputPage::updateAudioCodecChoices() {
     const QString previous_codec = audio_codec_combo_->currentText().toLower();
-    const bool is_mkv = container_group_->checkedId() != 1;
+    const bool is_mp4 = container_group_->checkedId() == 1;
     audio_codec_combo_->clear();
-    if (is_mkv) {
+    if (is_mp4) {
+        audio_codec_combo_->addItem("AAC");
+        audio_codec_combo_->setEnabled(false);
+    } else {
         audio_codec_combo_->addItem("Opus");
         audio_codec_combo_->addItem("AAC");
-    } else {
-        audio_codec_combo_->addItem("AAC");
+        audio_codec_combo_->setEnabled(true);
+        int desired_index =
+            previous_codec.contains("aac") ? audio_codec_combo_->findText("AAC") : audio_codec_combo_->findText("Opus");
+        if (desired_index < 0) {
+            desired_index = 0;
+        }
+        audio_codec_combo_->setCurrentIndex(desired_index);
     }
-
-    int desired_index =
-        previous_codec.contains("aac") ? audio_codec_combo_->findText("AAC") : audio_codec_combo_->findText("Opus");
-    if (desired_index < 0) {
-        desired_index = 0;
-    }
-    audio_codec_combo_->setCurrentIndex(desired_index);
 }
 
 void OutputPage::updateEffectiveOutputPreview() {

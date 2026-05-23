@@ -14,8 +14,7 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
     caps.containers.emplace(Container::Matroska,
                             SupportAnnotation{SupportLevel::Available, "Primary validated container."});
     caps.containers.emplace(Container::Mp4,
-                            SupportAnnotation{SupportLevel::NotImplemented,
-                                              "MP4 product surface exists but runtime path is not implemented."});
+                            SupportAnnotation{SupportLevel::Available, "Validated MP4 H.264+AAC path."});
     caps.containers.emplace(Container::WebM,
                             SupportAnnotation{SupportLevel::Available, "Primary validated WebM container."});
 
@@ -25,8 +24,7 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
                               SupportAnnotation{SupportLevel::NotImplemented,
                                                 "HEVC product surface exists but runtime path is not implemented."});
     caps.video_codecs.emplace(VideoCodec::H264Nvenc,
-                              SupportAnnotation{SupportLevel::NotImplemented,
-                                                "H.264 product surface exists but runtime path is not implemented."});
+                              SupportAnnotation{SupportLevel::Available, "Validated NVENC H.264 path."});
 
     caps.audio_codecs.emplace(
         AudioCodec::Opus,
@@ -70,13 +68,18 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
                                                                       ? "DLL not present or API version not confirmed"
                                                                       : snapshot.nvidia.failure_detail);
 
-        // Lower the dimension-level annotation for AV1/NVENC.
+        // Lower the dimension-level annotation for all NVENC codecs.
         caps.video_codecs[VideoCodec::Av1Nvenc] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
+        caps.video_codecs[VideoCodec::H264Nvenc] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
 
-        // Force the primary M3.2 combo to non-selectable via combo_override.
+        // Force primary combos to non-selectable via combo_override.
         const ComboKey m32_key{Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
                                BitDepth::Bit8};
         caps.combo_overrides[m32_key] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
+
+        const ComboKey mp4_key{Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
+                               BitDepth::Bit8};
+        caps.combo_overrides[mp4_key] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
     }
 
     // --- Downgrade rule B: missing AAC blocks AAC path ---
@@ -90,22 +93,25 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
         // Lower the dimension-level annotation for AacMf.
         caps.audio_codecs[AudioCodec::AacMf] = SupportAnnotation{SupportLevel::NotImplemented, aac_reason};
 
-        // Force the primary M3.2 combo to non-selectable via combo_override.
-        // If NVENC was already lowered, this upserts with the AAC reason to cover both axes.
+        // Force primary AAC combos to non-selectable via combo_override.
         const ComboKey m32_key{Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
                                BitDepth::Bit8};
-        // Preserve a more-severe existing override; otherwise apply AAC reason.
         const auto it = caps.combo_overrides.find(m32_key);
         if (it == caps.combo_overrides.end()) {
             caps.combo_overrides[m32_key] = SupportAnnotation{SupportLevel::NotImplemented, aac_reason};
         }
-        // If an NVENC override already exists, both are NotImplemented — no change needed.
+
+        const ComboKey mp4_key{Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
+                               BitDepth::Bit8};
+        const auto mp4_it = caps.combo_overrides.find(mp4_key);
+        if (mp4_it == caps.combo_overrides.end()) {
+            caps.combo_overrides[mp4_key] = SupportAnnotation{SupportLevel::NotImplemented, aac_reason};
+        }
     }
 
-    // --- Invariant C & D: H.264 and HEVC remain NotImplemented regardless ---
-    // The static baseline already sets these to NotImplemented.
-    // We explicitly enforce by never promoting them here.
-    // (No action needed; this invariant is upheld by not touching these entries.)
+    // --- Invariant D: HEVC remains NotImplemented regardless ---
+    // The static baseline already sets HevcNvenc to NotImplemented.
+    // H.264 is Available in the baseline and is handled by downgrade rules A and B above.
 
     return caps;
 }

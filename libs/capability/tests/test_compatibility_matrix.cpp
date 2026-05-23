@@ -62,13 +62,28 @@ TEST(CapabilityMatrixTest, MatrixRequiredPairsMatchBaseline) {
                               BitDepth::Bit8)
                   .level,
               SupportLevel::Invalid);
+
+    // MP4 + H.264 + AAC: now available
+    EXPECT_EQ(caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
+                              BitDepth::Bit8)
+                  .level,
+              SupportLevel::Available);
 }
 
-TEST(CapabilityMatrixTest, Mp4CombosRemainNotImplementedUntilMuxerExists) {
+TEST(CapabilityMatrixTest, MP4_H264_AAC_IsAvailable) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
 
-    // MP4 + H.264 + AAC: planned, not implemented — IMFSinkWriter muxer missing
     EXPECT_EQ(caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
+                              BitDepth::Bit8)
+                  .level,
+              SupportLevel::Available);
+}
+
+TEST(CapabilityMatrixTest, MP4_UnsupportedCombos_AreNotImplementedOrInvalid) {
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    // MP4 + AV1 + AAC: deferred
+    EXPECT_EQ(caps.QueryCombo(Container::Mp4, VideoCodec::Av1Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
                               BitDepth::Bit8)
                   .level,
               SupportLevel::NotImplemented);
@@ -79,14 +94,14 @@ TEST(CapabilityMatrixTest, Mp4CombosRemainNotImplementedUntilMuxerExists) {
                   .level,
               SupportLevel::NotImplemented);
 
-    // MP4 + AV1 + AAC: deferred (AV1-in-MP4 not implemented)
-    EXPECT_EQ(caps.QueryCombo(Container::Mp4, VideoCodec::Av1Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
+    // MP4 + H.264 + Opus: invalid (Opus not valid for MP4)
+    EXPECT_EQ(caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::Opus, ChromaSubsampling::Cs420,
                               BitDepth::Bit8)
                   .level,
-              SupportLevel::NotImplemented);
+              SupportLevel::Invalid);
 
-    // MP4 + any codec + Opus: always Invalid (Opus not valid for MP4)
-    EXPECT_EQ(caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::Opus, ChromaSubsampling::Cs420,
+    // WebM + AAC: invalid
+    EXPECT_EQ(caps.QueryCombo(Container::WebM, VideoCodec::Av1Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
                               BitDepth::Bit8)
                   .level,
               SupportLevel::Invalid);

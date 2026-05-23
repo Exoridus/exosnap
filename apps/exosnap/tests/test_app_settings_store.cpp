@@ -92,11 +92,14 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_AudioCodec) {
 
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings = MakeSettingsSnapshot();
+    // AAC roundtrip requires MP4 container (WebM+AAC is reconciled to Opus).
+    settings.output.container = capability::Container::Mp4;
     settings.output.audio_codec = capability::AudioCodec::AacMf;
 
     store.Save(settings);
     const PersistedAppSettings loaded = store.Load();
     EXPECT_EQ(loaded.output.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(loaded.output.container, capability::Container::Mp4);
 }
 
 TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_AudioBooleans) {
@@ -288,6 +291,74 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion2) {
 
     QSettings raw_settings(settings_path, QSettings::IniFormat);
     EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 2);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_Mp4ContainerRoundtrip) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings = MakeSettingsSnapshot();
+    settings.output.container = capability::Container::Mp4;
+    settings.output.audio_codec = capability::AudioCodec::AacMf;
+
+    store.Save(settings);
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_EQ(loaded.output.container, capability::Container::Mp4);
+    EXPECT_EQ(loaded.output.audio_codec, capability::AudioCodec::AacMf);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_Mp4WithOpus_ReconcilesToAac) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    QSettings settings(settings_path, QSettings::IniFormat);
+    settings.beginGroup(QStringLiteral("output"));
+    settings.setValue(QStringLiteral("container"), QStringLiteral("mp4"));
+    settings.setValue(QStringLiteral("audio_codec"), QStringLiteral("opus"));
+    settings.endGroup();
+    settings.sync();
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_EQ(loaded.output.container, capability::Container::Mp4);
+    EXPECT_EQ(loaded.output.audio_codec, capability::AudioCodec::AacMf);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_WebMWithAac_ReconcilesToOpus) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    QSettings settings(settings_path, QSettings::IniFormat);
+    settings.beginGroup(QStringLiteral("output"));
+    settings.setValue(QStringLiteral("container"), QStringLiteral("webm"));
+    settings.setValue(QStringLiteral("audio_codec"), QStringLiteral("aac"));
+    settings.endGroup();
+    settings.sync();
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_EQ(loaded.output.container, capability::Container::WebM);
+    EXPECT_EQ(loaded.output.audio_codec, capability::AudioCodec::Opus);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_MkvContainer_FallsBackToWebM) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    QSettings settings(settings_path, QSettings::IniFormat);
+    settings.beginGroup(QStringLiteral("output"));
+    settings.setValue(QStringLiteral("container"), QStringLiteral("mkv"));
+    settings.endGroup();
+    settings.sync();
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_EQ(loaded.output.container, capability::Container::WebM);
+    EXPECT_EQ(loaded.output.audio_codec, capability::AudioCodec::Opus);
 }
 
 TEST(AppSettingsStoreTest, AppSettingsStore_SeparateTracksTrueDoesNotResurrectMvpState) {

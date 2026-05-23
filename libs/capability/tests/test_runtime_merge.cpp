@@ -153,16 +153,37 @@ TEST(RuntimeMergeTest, TC5_DirectAacClsidFallbackIsSufficient) {
 }
 
 // -------------------------------------------------------------------------
-// TC-6: H.264 remains NotImplemented regardless of favorable runtime
+// TC-6: H.264 is Available when NVENC is present (Phase 23E)
 // -------------------------------------------------------------------------
-TEST(RuntimeMergeTest, TC6_H264RemainsNotImplemented) {
+TEST(RuntimeMergeTest, TC6_H264Available_WhenNvencPresent) {
     const RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
 
     const SupportAnnotation h264 = caps.QueryVideoCodec(VideoCodec::H264Nvenc);
-    EXPECT_EQ(h264.level, SupportLevel::NotImplemented)
-        << "H.264 must remain NotImplemented regardless of favorable runtime facts.";
-    EXPECT_FALSE(IsSelectable(h264)) << "H.264 must not be selectable.";
+    EXPECT_EQ(h264.level, SupportLevel::Available)
+        << "H.264 must be Available when NVENC is present. reason: " << h264.reason;
+    EXPECT_TRUE(IsSelectable(h264)) << "H.264 must be selectable when NVENC is present.";
+
+    // MP4+H264+AAC primary combo must also be Available.
+    const SupportAnnotation mp4_combo = caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf,
+                                                        ChromaSubsampling::Cs420, BitDepth::Bit8);
+    EXPECT_EQ(mp4_combo.level, SupportLevel::Available)
+        << "MP4+H264+AAC must be Available when NVENC and AAC are present. reason: " << mp4_combo.reason;
+}
+
+TEST(RuntimeMergeTest, TC6b_H264NotImplemented_WhenNvencAbsent) {
+    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    snap.nvidia.nvenc_dll_present = false;
+
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+
+    const SupportAnnotation h264 = caps.QueryVideoCodec(VideoCodec::H264Nvenc);
+    EXPECT_EQ(h264.level, SupportLevel::NotImplemented) << "H.264 must be NotImplemented when NVENC DLL is absent.";
+    EXPECT_FALSE(IsSelectable(h264));
+
+    const SupportAnnotation mp4_combo = caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf,
+                                                        ChromaSubsampling::Cs420, BitDepth::Bit8);
+    EXPECT_FALSE(IsSelectable(mp4_combo)) << "MP4+H264+AAC must not be selectable when NVENC is absent.";
 }
 
 // -------------------------------------------------------------------------
@@ -221,9 +242,9 @@ TEST(RuntimeMergeTest, TC9_BuildFromHardwareQueryCallable) {
     // Just verifies we get a valid annotation without crashing.
     (void)combo;
 
-    // H.264 must still be NotImplemented regardless of hardware.
-    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::H264Nvenc).level, SupportLevel::NotImplemented)
-        << "H.264 must remain NotImplemented even after real hardware query.";
+    // H.264 availability depends on NVENC presence; just verify it's queryable.
+    const SupportAnnotation h264 = caps.QueryVideoCodec(VideoCodec::H264Nvenc);
+    (void)h264;
 
     // HEVC must still be NotImplemented regardless of hardware.
     EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::HevcNvenc).level, SupportLevel::NotImplemented)
