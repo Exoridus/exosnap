@@ -345,12 +345,11 @@ void RecordingCoordinator::StopRecording() {
 
 bool RecordingCoordinator::StartMicMeter(std::optional<std::string> device_id,
                                          recorder_core::MicChannelMode channel_mode) {
-    if (!mic_meter_service_ || is_recording_) {
+    if (!mic_meter_service_) {
         return false;
     }
 
-    if (state_ == UiRecordingState::Preparing || state_ == UiRecordingState::Recording ||
-        state_ == UiRecordingState::Stopping) {
+    if (state_ == UiRecordingState::Preparing || state_ == UiRecordingState::Stopping) {
         return false;
     }
 
