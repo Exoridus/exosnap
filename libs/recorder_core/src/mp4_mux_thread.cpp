@@ -263,9 +263,18 @@ void Mp4MuxThread::Run() {
         return true;
     };
 
+    auto stopDeadline = (std::chrono::steady_clock::time_point::max)();
+
     while (!(videoEos && allAudioEos())) {
         if (m_state.HasFailure())
             break;
+        if (m_state.stop_requested.load()) {
+            auto now = std::chrono::steady_clock::now();
+            if (stopDeadline == (std::chrono::steady_clock::time_point::max)())
+                stopDeadline = now + std::chrono::seconds(15);
+            else if (now >= stopDeadline)
+                break;
+        }
         {
             std::unique_lock lk(m_state.mux_mutex);
             m_state.mux_cv.wait_for(lk, std::chrono::milliseconds(5),
