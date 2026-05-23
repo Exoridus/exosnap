@@ -83,6 +83,8 @@ class RecordPage : public QWidget {
     void populateMicDeviceCombo();
     void updateMicDeviceNoteLabel();
     void syncMicMeterService();
+    void syncSysMeterService();
+    void syncAppMeterService();
     void emitAudioSettingsChanged();
     void emitChromeState();
     void syncCoordinatorTargetContext();
@@ -158,6 +160,9 @@ class RecordPage : public QWidget {
     QFrame* result_technical_separator_ = nullptr;
     std::filesystem::path last_output_folder_;
     float preflight_mic_rms_ = 0.0f;
+    float preflight_sys_rms_ = 0.0f;
+    float preflight_app_rms_ = 0.0f;
+    uint32_t preflight_app_pid_ = 0;
 };
 
 } // namespace exosnap

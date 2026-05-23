@@ -624,6 +624,8 @@ void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& sta
     updateAudioControls();
     updateAudioTrackPreview();
     syncMicMeterService();
+    syncSysMeterService();
+    syncAppMeterService();
     updateAudioMeterLevels();
 }
 
@@ -704,6 +706,14 @@ void RecordPage::initCoordinator() {
     });
     coordinator_->SetMicMeterUpdatedCallback([this](float rms_linear) {
         preflight_mic_rms_ = std::clamp(rms_linear, 0.0f, 1.0f);
+        updateAudioMeterLevels();
+    });
+    coordinator_->SetSysMeterUpdatedCallback([this](float rms_linear) {
+        preflight_sys_rms_ = std::clamp(rms_linear, 0.0f, 1.0f);
+        updateAudioMeterLevels();
+    });
+    coordinator_->SetAppMeterUpdatedCallback([this](float rms_linear) {
+        preflight_app_rms_ = std::clamp(rms_linear, 0.0f, 1.0f);
         updateAudioMeterLevels();
     });
     coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
@@ -1016,6 +1026,8 @@ void RecordPage::onMicToggled(bool checked) {
     updateAudioControls();
     updateAudioTrackPreview();
     syncMicMeterService();
+    syncSysMeterService();
+    syncAppMeterService();
     updateAudioMeterLevels();
     emitAudioSettingsChanged();
 }
@@ -1064,6 +1076,8 @@ void RecordPage::populateMicDeviceCombo() {
     view_model_.RebuildAudioPlan();
     updateMicDeviceNoteLabel();
     syncMicMeterService();
+    syncSysMeterService();
+    syncAppMeterService();
 }
 
 void RecordPage::onMicDeviceChanged(int index) {
@@ -1079,6 +1093,8 @@ void RecordPage::onMicDeviceChanged(int index) {
     updateMicDeviceNoteLabel();
     updateAudioTrackPreview();
     syncMicMeterService();
+    syncSysMeterService();
+    syncAppMeterService();
     emitAudioSettingsChanged();
 }
 
@@ -1096,6 +1112,8 @@ void RecordPage::onMicChannelChanged(int index) {
     view_model_.RebuildAudioPlan();
     updateAudioTrackPreview();
     syncMicMeterService();
+    syncSysMeterService();
+    syncAppMeterService();
     emitAudioSettingsChanged();
 }
 
@@ -1107,6 +1125,8 @@ void RecordPage::onMicGainChanged(int db_value) {
     view_model_.RebuildAudioPlan();
     updateAudioTrackPreview();
     syncMicMeterService();
+    syncSysMeterService();
+    syncAppMeterService();
     updateAudioMeterLevels();
     emitAudioSettingsChanged();
 }
@@ -1256,6 +1276,65 @@ void RecordPage::syncMicMeterService() {
     if (!coordinator_->StartMicMeter(view_model_.audio_ui_state.selected_mic_device_id,
                                      view_model_.audio_ui_state.mic_channel_mode)) {
         preflight_mic_rms_ = 0.0f;
+    }
+}
+
+void RecordPage::syncSysMeterService() {
+    if (!coordinator_) {
+        return;
+    }
+
+    const bool transition_busy =
+        view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::Stopping;
+    const bool should_run = view_model_.audio_active_sys && !transition_busy;
+
+    if (!should_run) {
+        coordinator_->StopSysMeter();
+        preflight_sys_rms_ = 0.0f;
+        return;
+    }
+
+    coordinator_->StartSysMeter();
+}
+
+void RecordPage::syncAppMeterService() {
+    if (!coordinator_) {
+        return;
+    }
+
+    const bool transition_busy =
+        view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::Stopping;
+
+    uint32_t target_pid = 0;
+    if (!transition_busy && view_model_.audio_active_app && view_model_.selected_target_index >= 0 &&
+        view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {
+        const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+        if (target.kind == recorder_core::CaptureTarget::Kind::Window && target.native_id != 0) {
+            DWORD pid = 0;
+            if (::GetWindowThreadProcessId(reinterpret_cast<HWND>(target.native_id), &pid) != 0 && pid != 0) {
+                target_pid = static_cast<uint32_t>(pid);
+            }
+        }
+    }
+
+    if (target_pid == 0) {
+        coordinator_->StopAppMeter();
+        preflight_app_rms_ = 0.0f;
+        preflight_app_pid_ = 0;
+        return;
+    }
+
+    if (target_pid != preflight_app_pid_) {
+        coordinator_->StopAppMeter();
+        preflight_app_rms_ = 0.0f;
+        preflight_app_pid_ = 0;
+    }
+
+    if (!coordinator_->StartAppMeter(target_pid)) {
+        preflight_app_rms_ = 0.0f;
+        preflight_app_pid_ = 0;
+    } else {
+        preflight_app_pid_ = target_pid;
     }
 }
 
@@ -1473,6 +1552,8 @@ void RecordPage::refresh() {
     updateAudioControls();
     updateAudioTrackPreview();
     syncMicMeterService();
+    syncSysMeterService();
+    syncAppMeterService();
     updateAudioMeterLevels();
     updateStatsDisplay();
 
@@ -1687,24 +1768,22 @@ void RecordPage::updateAudioMeterLevels() {
         }
     };
 
-    applyMeter(app_meter_, app_db_label_, view_model_.audio_rms_app, recording_live && view_model_.audio_active_app);
-    applyMeter(sys_meter_, sys_db_label_, view_model_.audio_rms_sys, recording_live && view_model_.audio_active_sys);
+    const bool sys_meter_live =
+        coordinator_ != nullptr && coordinator_->IsSysMeterRunning() && view_model_.audio_active_sys;
+    const float sys_rms = sys_meter_live ? preflight_sys_rms_ : (recording_live ? view_model_.audio_rms_sys : 0.0f);
+    applyMeter(sys_meter_, sys_db_label_, sys_rms, sys_meter_live || (recording_live && view_model_.audio_active_sys));
 
-    if (recording_live) {
-        const bool mic_meter_live = coordinator_ != nullptr && coordinator_->IsMicMeterRunning() &&
-                                    view_model_.audio_ui_state.record_microphone;
-        const float mic_rms =
-            mic_meter_live ? std::clamp(preflight_mic_rms_ * view_model_.audio_ui_state.mic_gain_linear, 0.0f, 1.0f)
-                           : view_model_.audio_rms_mic;
-        applyMeter(mic_meter_, mic_db_label_, mic_rms, view_model_.audio_active_mic);
-        return;
-    }
+    const bool app_meter_live =
+        coordinator_ != nullptr && coordinator_->IsAppMeterRunning() && view_model_.audio_active_app;
+    const float app_rms = app_meter_live ? preflight_app_rms_ : (recording_live ? view_model_.audio_rms_app : 0.0f);
+    applyMeter(app_meter_, app_db_label_, app_rms, app_meter_live || (recording_live && view_model_.audio_active_app));
 
-    const bool mic_preflight_live = view_model_.audio_ui_state.record_microphone && view_model_.audio_active_mic &&
-                                    coordinator_ != nullptr && coordinator_->IsMicMeterRunning();
-    const float preflight_rms_with_gain =
-        std::clamp(preflight_mic_rms_ * view_model_.audio_ui_state.mic_gain_linear, 0.0f, 1.0f);
-    applyMeter(mic_meter_, mic_db_label_, preflight_rms_with_gain, mic_preflight_live);
+    const bool mic_meter_live = coordinator_ != nullptr && coordinator_->IsMicMeterRunning() &&
+                                view_model_.audio_ui_state.record_microphone && view_model_.audio_active_mic;
+    const float mic_rms = mic_meter_live
+                              ? std::clamp(preflight_mic_rms_ * view_model_.audio_ui_state.mic_gain_linear, 0.0f, 1.0f)
+                              : (recording_live ? view_model_.audio_rms_mic : 0.0f);
+    applyMeter(mic_meter_, mic_db_label_, mic_rms, mic_meter_live || (recording_live && view_model_.audio_active_mic));
 }
 
 } // namespace exosnap

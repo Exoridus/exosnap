@@ -1,5 +1,6 @@
 #include "RecordingCoordinator.h"
 
+#include "../../../libs/recorder_core/src/loopback_meter_service.h"
 #include "../../../libs/recorder_core/src/mic_meter_service.h"
 
 #include <QCoreApplication>
@@ -198,10 +199,14 @@ void ApplyOutputSettingsToRecorderConfig(recorder_core::RecorderConfig& config, 
 
 RecordingCoordinator::RecordingCoordinator() : output_settings_(OutputSettingsModel::Defaults()) {
     mic_meter_service_ = std::make_unique<recorder_core::MicMeterService>();
+    sys_meter_service_ = std::make_unique<recorder_core::LoopbackMeterService>();
+    app_meter_service_ = std::make_unique<recorder_core::LoopbackMeterService>();
 }
 
 RecordingCoordinator::~RecordingCoordinator() {
     StopMicMeter();
+    StopSysMeter();
+    StopAppMeter();
     if (is_recording_) {
         session_.Stop();
     }
@@ -388,6 +393,54 @@ bool RecordingCoordinator::IsMicMeterRunning() const noexcept {
     return mic_meter_service_ && mic_meter_service_->IsRunning();
 }
 
+bool RecordingCoordinator::StartSysMeter() {
+    if (!sys_meter_service_) {
+        return false;
+    }
+    if (state_ == UiRecordingState::Preparing || state_ == UiRecordingState::Stopping) {
+        return false;
+    }
+    if (sys_meter_service_->IsRunning()) {
+        return true;
+    }
+    std::string error;
+    return sys_meter_service_->Start(0u, [this](float rms_linear) { PostSysMeter(rms_linear); }, error);
+}
+
+void RecordingCoordinator::StopSysMeter() {
+    if (sys_meter_service_) {
+        sys_meter_service_->Stop();
+    }
+}
+
+bool RecordingCoordinator::IsSysMeterRunning() const noexcept {
+    return sys_meter_service_ && sys_meter_service_->IsRunning();
+}
+
+bool RecordingCoordinator::StartAppMeter(uint32_t target_pid) {
+    if (!app_meter_service_ || target_pid == 0) {
+        return false;
+    }
+    if (state_ == UiRecordingState::Preparing || state_ == UiRecordingState::Stopping) {
+        return false;
+    }
+    if (app_meter_service_->IsRunning()) {
+        return true;
+    }
+    std::string error;
+    return app_meter_service_->Start(target_pid, [this](float rms_linear) { PostAppMeter(rms_linear); }, error);
+}
+
+void RecordingCoordinator::StopAppMeter() {
+    if (app_meter_service_) {
+        app_meter_service_->Stop();
+    }
+}
+
+bool RecordingCoordinator::IsAppMeterRunning() const noexcept {
+    return app_meter_service_ && app_meter_service_->IsRunning();
+}
+
 void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConfig& config,
                                                const std::filesystem::path& output_path) {
     auto result = session_.Record(config);
@@ -434,6 +487,12 @@ void RecordingCoordinator::SetResultReadyCallback(ResultReadyCallback cb) {
 void RecordingCoordinator::SetMicMeterUpdatedCallback(MicMeterUpdatedCallback cb) {
     on_mic_meter_updated_ = std::move(cb);
 }
+void RecordingCoordinator::SetSysMeterUpdatedCallback(SysMeterUpdatedCallback cb) {
+    on_sys_meter_updated_ = std::move(cb);
+}
+void RecordingCoordinator::SetAppMeterUpdatedCallback(AppMeterUpdatedCallback cb) {
+    on_app_meter_updated_ = std::move(cb);
+}
 
 void RecordingCoordinator::PostStateChange(UiRecordingState new_state) {
     state_ = new_state;
@@ -470,6 +529,32 @@ void RecordingCoordinator::PostMicMeter(float rms_linear) {
         return;
     }
 
+    QMetaObject::invokeMethod(
+        QCoreApplication::instance(), [cb, rms_linear]() { cb(rms_linear); }, Qt::QueuedConnection);
+}
+
+void RecordingCoordinator::PostSysMeter(float rms_linear) {
+    if (!on_sys_meter_updated_) {
+        return;
+    }
+    auto cb = on_sys_meter_updated_;
+    if (QCoreApplication::instance() == nullptr) {
+        cb(rms_linear);
+        return;
+    }
+    QMetaObject::invokeMethod(
+        QCoreApplication::instance(), [cb, rms_linear]() { cb(rms_linear); }, Qt::QueuedConnection);
+}
+
+void RecordingCoordinator::PostAppMeter(float rms_linear) {
+    if (!on_app_meter_updated_) {
+        return;
+    }
+    auto cb = on_app_meter_updated_;
+    if (QCoreApplication::instance() == nullptr) {
+        cb(rms_linear);
+        return;
+    }
     QMetaObject::invokeMethod(
         QCoreApplication::instance(), [cb, rms_linear]() { cb(rms_linear); }, Qt::QueuedConnection);
 }

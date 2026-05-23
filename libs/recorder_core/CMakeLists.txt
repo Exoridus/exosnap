@@ -15,6 +15,7 @@ if(NOT EXISTS "${_nvenc_header}")
         src/audio_meter.cpp
         src/opus_audio_encoder.cpp
         src/mic_meter_service.cpp
+        src/loopback_meter_service.cpp
     )
 
     target_include_directories(recorder_core PUBLIC include)
@@ -113,6 +114,7 @@ add_library(recorder_core STATIC
     src/mux_thread.cpp
     src/audio_track_model.cpp
     src/mic_meter_service.cpp
+    src/loopback_meter_service.cpp
 )
 
 target_include_directories(recorder_core

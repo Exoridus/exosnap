@@ -24,7 +24,8 @@
 
 namespace recorder_core {
 class MicMeterService;
-}
+class LoopbackMeterService;
+} // namespace recorder_core
 
 namespace exosnap {
 
@@ -34,6 +35,8 @@ class RecordingCoordinator {
     using StatsUpdatedCallback = std::function<void(const recorder_core::SessionStats&)>;
     using ResultReadyCallback = std::function<void(const UiRecordingResult&)>;
     using MicMeterUpdatedCallback = std::function<void(float rms_linear)>;
+    using SysMeterUpdatedCallback = std::function<void(float rms_linear)>;
+    using AppMeterUpdatedCallback = std::function<void(float rms_linear)>;
 
     RecordingCoordinator();
     ~RecordingCoordinator();
@@ -52,6 +55,14 @@ class RecordingCoordinator {
     void StopMicMeter();
     [[nodiscard]] bool IsMicMeterRunning() const noexcept;
 
+    bool StartSysMeter();
+    void StopSysMeter();
+    [[nodiscard]] bool IsSysMeterRunning() const noexcept;
+
+    bool StartAppMeter(uint32_t target_pid);
+    void StopAppMeter();
+    [[nodiscard]] bool IsAppMeterRunning() const noexcept;
+
     UiRecordingState State() const noexcept;
     const std::wstring& CapabilityStatusText() const;
     std::filesystem::path CurrentOutputPath() const;
@@ -62,6 +73,8 @@ class RecordingCoordinator {
     void SetStatsUpdatedCallback(StatsUpdatedCallback cb);
     void SetResultReadyCallback(ResultReadyCallback cb);
     void SetMicMeterUpdatedCallback(MicMeterUpdatedCallback cb);
+    void SetSysMeterUpdatedCallback(SysMeterUpdatedCallback cb);
+    void SetAppMeterUpdatedCallback(AppMeterUpdatedCallback cb);
 
   private:
     void RecordingThreadProc(const recorder_core::RecorderConfig& config, const std::filesystem::path& output_path);
@@ -69,6 +82,8 @@ class RecordingCoordinator {
     void PostResult(UiRecordingResult result);
     void PostStats(recorder_core::SessionStats stats);
     void PostMicMeter(float rms_linear);
+    void PostSysMeter(float rms_linear);
+    void PostAppMeter(float rms_linear);
 
     std::filesystem::path GenerateOutputPath() const;
     static std::wstring FormatHResult(int32_t hr);
@@ -84,6 +99,8 @@ class RecordingCoordinator {
 
     recorder_core::RecorderSession session_;
     std::unique_ptr<recorder_core::MicMeterService> mic_meter_service_;
+    std::unique_ptr<recorder_core::LoopbackMeterService> sys_meter_service_;
+    std::unique_ptr<recorder_core::LoopbackMeterService> app_meter_service_;
     std::jthread recording_thread_;
     std::atomic<bool> is_recording_{false};
 
@@ -95,6 +112,8 @@ class RecordingCoordinator {
     StatsUpdatedCallback on_stats_updated_;
     ResultReadyCallback on_result_ready_;
     MicMeterUpdatedCallback on_mic_meter_updated_;
+    SysMeterUpdatedCallback on_sys_meter_updated_;
+    AppMeterUpdatedCallback on_app_meter_updated_;
 
     std::optional<std::string> mic_meter_device_id_;
     recorder_core::MicChannelMode mic_meter_channel_mode_ = recorder_core::MicChannelMode::Auto;
