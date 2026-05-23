@@ -10,3 +10,8 @@ syntaxError:*/tests/*
 
 // Suppress noise when a suppression entry no longer matches (remove once list is stable).
 unmatchedSuppression
+
+// WASAPI audio processing routinely casts byte buffers to float* because WASAPI guarantees
+// the data is float32-aligned. These casts are correct by design; the portability warning
+// is a false positive in this domain.
+invalidPointerCast

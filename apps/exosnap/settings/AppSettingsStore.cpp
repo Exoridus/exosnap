@@ -245,7 +245,7 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.sync();
 }
 
-QString AppSettingsStore::SettingsFilePath() const {
+const QString& AppSettingsStore::SettingsFilePath() const {
     return settings_path_;
 }
 

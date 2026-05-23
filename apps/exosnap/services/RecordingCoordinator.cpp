@@ -197,10 +197,11 @@ void ApplyOutputSettingsToRecorderConfig(recorder_core::RecorderConfig& config, 
     }
 }
 
-RecordingCoordinator::RecordingCoordinator() : output_settings_(OutputSettingsModel::Defaults()) {
-    mic_meter_service_ = std::make_unique<recorder_core::MicMeterService>();
-    sys_meter_service_ = std::make_unique<recorder_core::LoopbackMeterService>();
-    app_meter_service_ = std::make_unique<recorder_core::LoopbackMeterService>();
+RecordingCoordinator::RecordingCoordinator()
+    : output_settings_(OutputSettingsModel::Defaults()),
+      mic_meter_service_(std::make_unique<recorder_core::MicMeterService>()),
+      sys_meter_service_(std::make_unique<recorder_core::LoopbackMeterService>()),
+      app_meter_service_(std::make_unique<recorder_core::LoopbackMeterService>()) {
 }
 
 RecordingCoordinator::~RecordingCoordinator() {

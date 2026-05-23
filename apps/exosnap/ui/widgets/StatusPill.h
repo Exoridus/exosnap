@@ -24,7 +24,7 @@ class StatusPill : public QWidget {
     Tone tone() const noexcept;
 
     void setText(const QString& text);
-    QString text() const;
+    const QString& text() const;
 
     void setDotVisible(bool visible);
     bool isDotVisible() const noexcept;

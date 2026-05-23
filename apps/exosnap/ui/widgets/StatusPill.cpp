@@ -66,7 +66,7 @@ void StatusPill::setText(const QString& text) {
     update();
 }
 
-QString StatusPill::text() const {
+const QString& StatusPill::text() const {
     return text_;
 }
 

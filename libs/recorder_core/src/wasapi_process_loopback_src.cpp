@@ -67,8 +67,7 @@ HRESULT EnsureActivateAudioInterfaceAsyncLoaded(PFN_ActivateAudioInterfaceAsync&
 
 class ActivationHandler final : public IActivateAudioInterfaceCompletionHandler {
   public:
-    ActivationHandler() {
-        event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    ActivationHandler() : event_(CreateEventW(nullptr, FALSE, FALSE, nullptr)) {
         const HRESULT ftm_hr =
             CoCreateFreeThreadedMarshaler(static_cast<IActivateAudioInterfaceCompletionHandler*>(this), &ftm_);
         if (FAILED(ftm_hr)) {

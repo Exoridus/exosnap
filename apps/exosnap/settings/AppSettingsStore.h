@@ -20,7 +20,7 @@ class AppSettingsStore {
     [[nodiscard]] PersistedAppSettings Load() const;
     void Save(const PersistedAppSettings& settings) const;
 
-    [[nodiscard]] QString SettingsFilePath() const;
+    [[nodiscard]] const QString& SettingsFilePath() const;
 
   private:
     QString settings_path_;
