@@ -46,7 +46,6 @@ class RecordPage : public QWidget {
     void onStop();
     void onSelectMonitorTarget();
     void onSelectWindowTarget();
-    void onSelectRegionTarget();
     void onTargetPickerChanged(int index);
     void onRefreshTargets();
 
@@ -95,7 +94,6 @@ class RecordPage : public QWidget {
 
     int monitor_target_index_ = -1;
     int window_target_index_ = -1;
-    int region_target_index_ = -1;
     std::vector<int> monitor_target_indices_;
     std::vector<int> window_target_indices_;
     std::vector<recorder_core::AudioInputDeviceInfo> mic_devices_;
@@ -118,7 +116,6 @@ class RecordPage : public QWidget {
     ui::widgets::SectionRuleHeader* capture_header_ = nullptr;
     ui::widgets::CaptureTargetCard* monitor_card_ = nullptr;
     ui::widgets::CaptureTargetCard* window_card_ = nullptr;
-    ui::widgets::CaptureTargetCard* region_card_ = nullptr;
     ui::widgets::SectionRuleHeader* readiness_header_ = nullptr;
     QFrame* readiness_panel_ = nullptr;
     std::vector<ReadinessRow> readiness_rows_;

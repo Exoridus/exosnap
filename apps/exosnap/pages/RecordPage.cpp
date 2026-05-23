@@ -66,13 +66,13 @@ void setStyledStringProperty(QWidget* widget, const char* property_name, const Q
 QString stateDisplay(UiRecordingState state) {
     switch (state) {
     case UiRecordingState::LoadingCapabilities:
-        return "SUB-OPT";
+        return "CHECKING";
     case UiRecordingState::Ready:
         return "READY";
     case UiRecordingState::Blocked:
         return "BLOCKED";
     case UiRecordingState::Preparing:
-        return "SUB-OPT";
+        return "STARTING";
     case UiRecordingState::Recording:
         return "RECORDING";
     case UiRecordingState::Stopping:
@@ -278,16 +278,11 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     monitor_card_->setTitle("Monitor");
     window_card_ = new ui::widgets::CaptureTargetCard(cards_row);
     window_card_->setTitle("Window");
-    region_card_ = new ui::widgets::CaptureTargetCard(cards_row);
-    region_card_->setTitle("Region");
     cards_layout->addWidget(monitor_card_, 1);
     cards_layout->addWidget(window_card_, 1);
-    cards_layout->addWidget(region_card_, 1);
     monitor_card_->setAccessibleName("Monitor target");
     window_card_->setAccessibleName("Window target");
-    region_card_->setAccessibleName("Region target");
     QWidget::setTabOrder(monitor_card_, window_card_);
-    QWidget::setTabOrder(window_card_, region_card_);
     layout->addWidget(cards_row);
 
     target_picker_panel_ = makePanel(content);
@@ -384,8 +379,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     mic_device_row_layout->addWidget(makeLabel("Input Device", "audioSettingsRowLabel", mic_device_row_));
     mic_device_combo_ = new QComboBox(mic_device_row_);
     mic_device_row_layout->addWidget(mic_device_combo_, 1);
-    mic_refresh_btn_ = new QPushButton("↻", mic_device_row_);
-    mic_refresh_btn_->setToolTip("Refresh device list");
+    mic_refresh_btn_ = new QPushButton("Refresh", mic_device_row_);
     mic_device_row_layout->addWidget(mic_refresh_btn_);
     populateMicDeviceCombo();
     audio_settings_layout->addWidget(mic_device_row_);
@@ -498,8 +492,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     dest_left_layout->setContentsMargins(0, 0, 0, 0);
     dest_left_layout->setSpacing(2);
     output_path_label_ = makeLabel("--", "destinationPath", dest_left);
-    output_meta_label_ =
-        makeLabel("Path is resolved by coordinator after capability checks.", "destinationMeta", dest_left);
+    output_meta_label_ = makeLabel("No file saved yet — configure in Output settings.", "destinationMeta", dest_left);
     output_meta_label_->setWordWrap(true);
     dest_left_layout->addWidget(output_path_label_);
     dest_left_layout->addWidget(output_meta_label_);
@@ -562,7 +555,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(stop_btn_, &QPushButton::clicked, this, &RecordPage::onStop);
     connect(monitor_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectMonitorTarget);
     connect(window_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectWindowTarget);
-    connect(region_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectRegionTarget);
     connect(target_picker_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &RecordPage::onTargetPickerChanged);
     connect(target_refresh_btn_, &QPushButton::clicked, this, &RecordPage::onRefreshTargets);
@@ -753,7 +745,6 @@ void RecordPage::enumerateTargets(bool preserve_current_selection) {
     window_target_indices_.clear();
     monitor_target_index_ = -1;
     window_target_index_ = -1;
-    region_target_index_ = -1;
 
     for (int i = 0; i < static_cast<int>(view_model_.targets.size()); ++i) {
         const auto& target = view_model_.targets[static_cast<std::size_t>(i)];
@@ -958,16 +949,6 @@ void RecordPage::onSelectWindowTarget() {
         window_target_index_ >= 0 ? window_target_index_ : window_target_indices_[static_cast<std::size_t>(0)];
     syncTargetSelectionToCombo(next_target);
     refresh();
-}
-
-void RecordPage::onSelectRegionTarget() {
-    if (region_target_index_ >= 0) {
-        syncTargetSelectionToCombo(region_target_index_);
-        refresh();
-        return;
-    }
-
-    diagnostics::AppLog(QStringLiteral("[target] region capture is locked in alpha"));
 }
 
 void RecordPage::onTargetPickerChanged(int index) {
@@ -1420,9 +1401,11 @@ QString RecordPage::buildChromeStatusLabel() const {
     case UiRecordingState::Failed:
         return QStringLiteral("BLOCKED");
     case UiRecordingState::LoadingCapabilities:
+        return QStringLiteral("CHECKING");
     case UiRecordingState::Preparing:
+        return QStringLiteral("STARTING");
     case UiRecordingState::Stopping:
-        return QStringLiteral("SUB-OPT");
+        return QStringLiteral("STOPPING");
     case UiRecordingState::Ready:
     case UiRecordingState::Completed:
     default:
@@ -1513,8 +1496,9 @@ void RecordPage::refresh() {
     stop_btn_->setEnabled(view_model_.CanStop());
 
     control_state_label_->setText(stateDisplay(view_model_.state));
+    const bool failed = (view_model_.state == UiRecordingState::Failed);
     setStyledStringProperty(control_state_label_, "stateRole",
-                            blocked ? "blocked" : (recording ? "recording" : "ready"));
+                            (blocked || failed) ? "blocked" : (recording ? "recording" : "ready"));
 
     output_path_label_->setText(QString::fromStdWString(view_model_.output_path_display));
 
@@ -1541,9 +1525,16 @@ void RecordPage::refresh() {
     if (recording) {
         preview_surface_->setCenterTitle(QStringLiteral("RECORDING"));
         preview_surface_->setCenterSubtitle(target_desc);
+    } else if (blocked || failed) {
+        preview_surface_->setCenterTitle(QStringLiteral("BLOCKED"));
+        const QString blocker_text = QString::fromStdWString(view_model_.capability_status_text).trimmed();
+        preview_surface_->setCenterSubtitle(blocker_text.isEmpty() ? QStringLiteral("Check diagnostics for details")
+                                                                   : blocker_text);
     } else {
-        preview_surface_->setCenterTitle(has_selected_target ? target_desc : QStringLiteral("SELECTED TARGET"));
-        preview_surface_->setCenterSubtitle(QStringLiteral("Preview not live in this alpha"));
+        preview_surface_->setCenterTitle(has_selected_target ? target_desc : QStringLiteral("NO TARGET"));
+        preview_surface_->setCenterSubtitle(has_selected_target
+                                                ? QStringLiteral("Static — preview unavailable in alpha")
+                                                : QStringLiteral("Select a capture source above"));
     }
 
     updateTargetCards();
@@ -1661,12 +1652,9 @@ void RecordPage::updateTargetCards() {
 
     const bool any_monitor_selected = !recording && (selected_monitor || (!has_selected_target && monitor_mode));
     const bool window_selected = !recording && (selected_window || (!has_selected_target && window_mode));
-    const bool region_selected = false;
 
     monitor_card_->setSelected(any_monitor_selected);
     window_card_->setSelected(window_selected);
-    region_card_->setSelected(region_selected);
-    region_card_->setEnabled(false);
 
     // Subtitle for the monitor card: use the currently active monitor target
     const int active_monitor_idx = monitor_target_index_;
@@ -1694,9 +1682,6 @@ void RecordPage::updateTargetCards() {
     } else {
         window_card_->setSubtitle("No capturable windows");
     }
-
-    region_card_->setSubtitle("Not available in this alpha");
-    region_card_->setStatusText("○");
 }
 
 void RecordPage::updateReadinessRows() {

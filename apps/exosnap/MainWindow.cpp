@@ -592,8 +592,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     footer_layout->setSpacing(4);
     footer_layout->addWidget(makeFooterRow("STATUS", "READY", footer, &sidebar_status_value_label_));
     footer_layout->addWidget(makeFooterRow("ENCODER", "NVENC", footer));
-    footer_layout->addWidget(makeFooterRow("GPU", "–", footer));
-    footer_layout->addWidget(makeFooterRow("VERSION", "–", footer));
     sidebar_layout->addWidget(footer);
 
     body_layout->addWidget(sidebar);

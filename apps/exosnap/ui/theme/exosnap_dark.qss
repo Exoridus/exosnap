@@ -607,6 +607,15 @@ QWidget#audioTrackRow[firstRow="true"] {
     border-top: none;
 }
 
+QWidget#audioTrackPreviewRow {
+    background: transparent;
+    border-top: 1px solid ${line1};
+}
+
+QWidget#audioTrackPreviewRow[firstRow="true"] {
+    border-top: none;
+}
+
 QLabel[labelRole="audioTrackIndex"] {
     font-family: ${font-mono};
     font-size: 12px;
@@ -894,7 +903,7 @@ QLabel[labelRole="previewCenterSubtitle"] {
     font-family: ${font-mono};
     font-size: 14px;
     letter-spacing: 0.14em;
-    color: ${accent};
+    color: ${text2};
 }
 
 QLabel[labelRole="previewBottomText"] {
@@ -1156,6 +1165,44 @@ QScrollBar::handle:horizontal:hover {
 QScrollBar::add-line:horizontal,
 QScrollBar::sub-line:horizontal {
     width: 0;
+}
+
+QSlider::groove:horizontal {
+    background: ${bg3};
+    border: 1px solid ${line1};
+    height: 4px;
+    border-radius: 2px;
+}
+
+QSlider::handle:horizontal {
+    background: ${accent};
+    border: none;
+    width: 14px;
+    height: 14px;
+    margin: -5px 0;
+    border-radius: 7px;
+}
+
+QSlider::handle:horizontal:hover {
+    background: ${accent-hover};
+}
+
+QSlider::handle:horizontal:disabled {
+    background: ${line2};
+}
+
+QSlider::sub-page:horizontal {
+    background: ${accent-dim};
+    height: 4px;
+    border-radius: 2px;
+}
+
+QSlider::sub-page:horizontal:disabled {
+    background: ${bg4};
+}
+
+QSlider::add-page:horizontal {
+    background: transparent;
 }
 
 QToolTip {
