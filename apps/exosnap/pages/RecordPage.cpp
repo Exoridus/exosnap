@@ -26,6 +26,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QSlider>
 #include <QStyle>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -114,50 +115,21 @@ QString checkGlyph(bool ok, bool blocked) {
     return "·";
 }
 
-constexpr float kMicGainNormal = 1.0f;
-constexpr float kMicGainPlus6Db = 2.0f;
-constexpr float kMicGainPlus12Db = 4.0f;
-
-float SanitizeMicGainLinear(float gain_linear) {
-    if (std::fabs(gain_linear - kMicGainNormal) < 0.01f) {
-        return kMicGainNormal;
-    }
-    if (std::fabs(gain_linear - kMicGainPlus6Db) < 0.01f) {
-        return kMicGainPlus6Db;
-    }
-    if (std::fabs(gain_linear - kMicGainPlus12Db) < 0.01f) {
-        return kMicGainPlus12Db;
-    }
-    return kMicGainNormal;
+int LinearToSliderDb(float gain_linear) {
+    if (gain_linear <= 0.0f)
+        return 0;
+    const int db = static_cast<int>(std::round(20.0f * std::log10f(gain_linear)));
+    return std::clamp(db, 0, 24);
 }
 
-int MicGainComboIndexFromLinear(float gain_linear) {
-    const float normalized = SanitizeMicGainLinear(gain_linear);
-    if (normalized == kMicGainPlus6Db) {
-        return 1;
-    }
-    if (normalized == kMicGainPlus12Db) {
-        return 2;
-    }
-    return 0;
-}
-
-float MicGainLinearFromComboIndex(int index) {
-    switch (index) {
-    case 1:
-        return kMicGainPlus6Db;
-    case 2:
-        return kMicGainPlus12Db;
-    case 0:
-    default:
-        return kMicGainNormal;
-    }
+float SliderDbToLinear(int db) {
+    return std::pow(10.0f, static_cast<float>(db) / 20.0f);
 }
 
 void PersistMicGainForMvp(float gain_linear) {
     AppSettingsStore store;
     PersistedAppSettings persisted = store.Load();
-    persisted.audio_ui_state.mic_gain_linear = SanitizeMicGainLinear(gain_linear);
+    persisted.audio_ui_state.mic_gain_linear = gain_linear;
     persisted.audio_ui_state.separate_output_tracks = false;
     store.Save(persisted);
 }
@@ -441,11 +413,18 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     mic_gain_row_layout->setContentsMargins(0, 0, 0, 0);
     mic_gain_row_layout->setSpacing(10);
     mic_gain_row_layout->addWidget(makeLabel("Gain", "audioSettingsRowLabel", mic_gain_row_));
-    mic_gain_combo_ = new QComboBox(mic_gain_row_);
-    mic_gain_combo_->addItem("Normal (0 dB)", QVariant::fromValue(kMicGainNormal));
-    mic_gain_combo_->addItem("+6 dB", QVariant::fromValue(kMicGainPlus6Db));
-    mic_gain_combo_->addItem("+12 dB", QVariant::fromValue(kMicGainPlus12Db));
-    mic_gain_row_layout->addWidget(mic_gain_combo_, 1);
+    mic_gain_slider_ = new QSlider(Qt::Horizontal, mic_gain_row_);
+    mic_gain_slider_->setRange(0, 24);
+    mic_gain_slider_->setSingleStep(1);
+    mic_gain_slider_->setPageStep(3);
+    mic_gain_slider_->setTickInterval(6);
+    mic_gain_slider_->setTickPosition(QSlider::TicksBelow);
+    mic_gain_slider_->setValue(0);
+    mic_gain_row_layout->addWidget(mic_gain_slider_, 1);
+    mic_gain_value_label_ = makeLabel("0 dB", "audioSettingsRowLabel", mic_gain_row_);
+    mic_gain_value_label_->setFixedWidth(54);
+    mic_gain_value_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    mic_gain_row_layout->addWidget(mic_gain_value_label_);
     audio_settings_layout->addWidget(mic_gain_row_);
 
     audio_settings_layout->addSpacing(6);
@@ -595,7 +574,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
             &RecordPage::onMicDeviceChanged);
     connect(mic_channel_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &RecordPage::onMicChannelChanged);
-    connect(mic_gain_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &RecordPage::onMicGainChanged);
+    connect(mic_gain_slider_, &QSlider::valueChanged, this, &RecordPage::onMicGainChanged);
     connect(open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
     connect(destination_settings_btn_, &QPushButton::clicked, this, [this]() { emit navigateToOutputPage(); });
 
@@ -635,7 +614,7 @@ void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& sta
     view_model_.audio_ui_state.record_microphone = state.record_microphone;
     view_model_.audio_ui_state.mic_channel_mode = state.mic_channel_mode;
     view_model_.audio_ui_state.selected_mic_device_id = state.selected_mic_device_id;
-    view_model_.audio_ui_state.mic_gain_linear = SanitizeMicGainLinear(state.mic_gain_linear);
+    view_model_.audio_ui_state.mic_gain_linear = state.mic_gain_linear;
     view_model_.audio_ui_state.target_kind = target_kind;
     view_model_.audio_ui_state.selected_window_pid = selected_window_pid;
 
@@ -1124,8 +1103,11 @@ void RecordPage::onMicChannelChanged(int index) {
     emitAudioSettingsChanged();
 }
 
-void RecordPage::onMicGainChanged(int index) {
-    view_model_.audio_ui_state.mic_gain_linear = MicGainLinearFromComboIndex(index);
+void RecordPage::onMicGainChanged(int db_value) {
+    view_model_.audio_ui_state.mic_gain_linear = SliderDbToLinear(db_value);
+    if (mic_gain_value_label_) {
+        mic_gain_value_label_->setText(db_value == 0 ? QStringLiteral("0 dB") : QStringLiteral("+%1 dB").arg(db_value));
+    }
     view_model_.RebuildAudioPlan();
     updateAudioTrackPreview();
     syncMicMeterService();
@@ -1146,19 +1128,18 @@ void RecordPage::emitAudioSettingsChanged() {
 
 void RecordPage::updateAudioControls() {
     if (!app_audio_check_ || !sys_audio_check_ || !separate_tracks_check_ || !mic_check_ || !mic_channel_combo_ ||
-        !mic_gain_combo_) {
+        !mic_gain_slider_) {
         return;
     }
 
     view_model_.audio_ui_state.separate_output_tracks = false;
-    view_model_.audio_ui_state.mic_gain_linear = SanitizeMicGainLinear(view_model_.audio_ui_state.mic_gain_linear);
 
     QSignalBlocker b1(app_audio_check_);
     QSignalBlocker b2(sys_audio_check_);
     QSignalBlocker b3(separate_tracks_check_);
     QSignalBlocker b4(mic_check_);
     QSignalBlocker b5(mic_channel_combo_);
-    QSignalBlocker b6(mic_gain_combo_);
+    QSignalBlocker b6(mic_gain_slider_);
 
     app_audio_check_->setChecked(view_model_.audio_ui_state.record_application_audio);
     sys_audio_check_->setChecked(view_model_.audio_ui_state.record_system_audio);
@@ -1185,7 +1166,13 @@ void RecordPage::updateAudioControls() {
         break;
     }
     mic_channel_combo_->setCurrentIndex(channel_index);
-    mic_gain_combo_->setCurrentIndex(MicGainComboIndexFromLinear(view_model_.audio_ui_state.mic_gain_linear));
+    {
+        const int db = LinearToSliderDb(view_model_.audio_ui_state.mic_gain_linear);
+        mic_gain_slider_->setValue(db);
+        if (mic_gain_value_label_) {
+            mic_gain_value_label_->setText(db == 0 ? QStringLiteral("0 dB") : QStringLiteral("+%1 dB").arg(db));
+        }
+    }
 
     updateAudioControlsVisibility();
 }
@@ -1217,7 +1204,7 @@ void RecordPage::updateAudioControlsVisibility() {
 
     mic_device_combo_->setEnabled(!busy);
     mic_channel_combo_->setEnabled(!busy);
-    mic_gain_combo_->setEnabled(!busy);
+    mic_gain_slider_->setEnabled(!busy);
     if (mic_refresh_btn_) {
         mic_refresh_btn_->setEnabled(!busy);
     }

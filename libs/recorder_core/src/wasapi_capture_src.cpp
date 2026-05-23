@@ -144,7 +144,7 @@ MicChannelMode ResolveAutoChannelMode(double rms_left, double rms_right) {
     constexpr double kNearSilenceFactor = 0.35; // side channel effectively silent
 
     if (rms_left < kSilenceFloor && rms_right < kSilenceFloor) {
-        return MicChannelMode::PreserveStereo;
+        return MicChannelMode::MonoMix;
     }
 
     if (rms_left >= kSilenceFloor && rms_right < (kSilenceFloor * kNearSilenceFactor)) {

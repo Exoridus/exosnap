@@ -129,16 +129,34 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_MicGainDbValues) {
     store.Save(settings);
     EXPECT_FLOAT_EQ(store.Load().audio_ui_state.mic_gain_linear, 1.0f);
 
-    settings.audio_ui_state.mic_gain_linear = 2.0f;
+    // 0/6/12 dB round-trip: stored as integer dB, small rounding error tolerated
+    settings.audio_ui_state.mic_gain_linear = 2.0f; // +6 dB
     store.Save(settings);
-    EXPECT_FLOAT_EQ(store.Load().audio_ui_state.mic_gain_linear, 2.0f);
+    EXPECT_NEAR(store.Load().audio_ui_state.mic_gain_linear, 2.0f, 0.02f);
 
-    settings.audio_ui_state.mic_gain_linear = 4.0f;
+    settings.audio_ui_state.mic_gain_linear = 4.0f; // +12 dB
     store.Save(settings);
-    EXPECT_FLOAT_EQ(store.Load().audio_ui_state.mic_gain_linear, 4.0f);
+    EXPECT_NEAR(store.Load().audio_ui_state.mic_gain_linear, 4.0f, 0.02f);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_InvalidMicGainDb_FallsBackToUnity) {
+TEST(AppSettingsStoreTest, AppSettingsStore_MicGainDb24_RoundTrips) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    QSettings settings(settings_path, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("settings_version"), 2);
+    settings.beginGroup(QStringLiteral("audio"));
+    settings.setValue(QStringLiteral("mic_gain_db"), 24);
+    settings.endGroup();
+    settings.sync();
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_NEAR(loaded.audio_ui_state.mic_gain_linear, 15.85f, 0.05f);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_MicGainDbAbove24_ClampsToMax) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
@@ -147,6 +165,23 @@ TEST(AppSettingsStoreTest, AppSettingsStore_InvalidMicGainDb_FallsBackToUnity) {
     settings.setValue(QStringLiteral("settings_version"), 2);
     settings.beginGroup(QStringLiteral("audio"));
     settings.setValue(QStringLiteral("mic_gain_db"), 99);
+    settings.endGroup();
+    settings.sync();
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_NEAR(loaded.audio_ui_state.mic_gain_linear, 15.85f, 0.05f);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_MicGainDbBelow0_ClampsToMin) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    QSettings settings(settings_path, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("settings_version"), 2);
+    settings.beginGroup(QStringLiteral("audio"));
+    settings.setValue(QStringLiteral("mic_gain_db"), -6);
     settings.endGroup();
     settings.sync();
 

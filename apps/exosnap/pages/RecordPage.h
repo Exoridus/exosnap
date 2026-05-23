@@ -13,6 +13,7 @@ class QComboBox;
 class QFrame;
 class QLabel;
 class QPushButton;
+class QSlider;
 class QVBoxLayout;
 
 namespace exosnap {
@@ -76,7 +77,7 @@ class RecordPage : public QWidget {
     void onMicToggled(bool checked);
     void onMicDeviceChanged(int index);
     void onMicChannelChanged(int index);
-    void onMicGainChanged(int index);
+    void onMicGainChanged(int db_value);
     void openOutputFolder();
     void setOutputSettingsSummary(const OutputSettingsModel& settings);
     void populateMicDeviceCombo();
@@ -131,7 +132,8 @@ class RecordPage : public QWidget {
     QWidget* mic_channel_row_ = nullptr;
     QComboBox* mic_channel_combo_ = nullptr;
     QWidget* mic_gain_row_ = nullptr;
-    QComboBox* mic_gain_combo_ = nullptr;
+    QSlider* mic_gain_slider_ = nullptr;
+    QLabel* mic_gain_value_label_ = nullptr;
     QFrame* track_preview_panel_ = nullptr;
     QVBoxLayout* track_preview_layout_ = nullptr;
     ui::widgets::SectionRuleHeader* audio_header_ = nullptr;

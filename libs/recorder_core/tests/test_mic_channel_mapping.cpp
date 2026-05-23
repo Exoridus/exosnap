@@ -145,7 +145,7 @@ TEST(MicChannelMappingTest, Auto_BufferLock_BalancedStereo_PreservesStereo_Float
     EXPECT_FLOAT_EQ(outR, -0.5f);
 }
 
-TEST(MicChannelMappingTest, Auto_BufferLock_Silence_PreservesStereo_Float32) {
+TEST(MicChannelMappingTest, Auto_BufferLock_BothQuiet_ReturnsMonoMix_Float32) {
     constexpr uint32_t kFrames = 48000;
     std::vector<float> frames(static_cast<size_t>(kFrames) * 2u, 0.0f);
     for (uint32_t i = 0; i < kFrames; ++i) {
@@ -156,13 +156,75 @@ TEST(MicChannelMappingTest, Auto_BufferLock_Silence_PreservesStereo_Float32) {
     AutoModeState state{};
     UpdateAutoModeStateFloat32(state, frames.data(), kFrames, false);
     ASSERT_TRUE(state.locked);
-    EXPECT_EQ(state.resolved_mode, MicChannelMode::PreserveStereo);
+    EXPECT_EQ(state.resolved_mode, MicChannelMode::MonoMix);
 
     float outL = 0.0f;
     float outR = 0.0f;
     MapStereoFrameFloat32(EffectiveAutoMode(state), 0.2f, -0.15f, outL, outR);
-    EXPECT_FLOAT_EQ(outL, 0.2f);
-    EXPECT_FLOAT_EQ(outR, -0.15f);
+    EXPECT_FLOAT_EQ(outL, 0.025f);
+    EXPECT_FLOAT_EQ(outR, 0.025f);
+}
+
+TEST(MicChannelMappingTest, Auto_LeftOnly_WithTinyRightNoise_ReturnsLeftToStereo) {
+    // left dominant with tiny noise on right — typical for BEHRINGER-style single-input interface
+    EXPECT_EQ(ResolveAutoChannelMode(0.05, 0.0005), MicChannelMode::LeftToStereo);
+}
+
+TEST(MicChannelMappingTest, Auto_RightOnly_WithTinyLeftNoise_ReturnsRightToStereo) {
+    EXPECT_EQ(ResolveAutoChannelMode(0.0005, 0.05), MicChannelMode::RightToStereo);
+}
+
+TEST(MicChannelMappingTest, Auto_BothChannelsSimilar_ReturnsPreserveStereo) {
+    EXPECT_EQ(ResolveAutoChannelMode(0.04, 0.038), MicChannelMode::PreserveStereo);
+}
+
+TEST(MicChannelMappingTest, Auto_BothVeryQuiet_ReturnsMonoMix) {
+    EXPECT_EQ(ResolveAutoChannelMode(0.001, 0.0008), MicChannelMode::MonoMix);
+}
+
+TEST(MicChannelMappingTest, Auto_PreLock_EffectiveModeIsMonoMix) {
+    AutoModeState state{};
+    EXPECT_FALSE(state.locked);
+    EXPECT_EQ(EffectiveAutoMode(state), MicChannelMode::MonoMix);
+}
+
+TEST(MicChannelMappingTest, Auto_LeftOnly_FinalBufferIsStereoBalanced) {
+    // Input: left channel has speech, right channel is silent
+    constexpr uint32_t kFrames = 48000;
+    std::vector<float> frames(static_cast<size_t>(kFrames) * 2u, 0.0f);
+    for (uint32_t i = 0; i < kFrames; ++i) {
+        frames[(static_cast<size_t>(i) * 2u) + 0u] = 0.6f;
+        frames[(static_cast<size_t>(i) * 2u) + 1u] = 0.0f;
+    }
+
+    AutoModeState state{};
+    UpdateAutoModeStateFloat32(state, frames.data(), kFrames, false);
+    ASSERT_TRUE(state.locked);
+    ASSERT_EQ(state.resolved_mode, MicChannelMode::LeftToStereo);
+
+    float outL = 0.0f;
+    float outR = 0.0f;
+    MapStereoFrameFloat32(EffectiveAutoMode(state), 0.6f, 0.0f, outL, outR);
+    EXPECT_FLOAT_EQ(outL, outR);
+}
+
+TEST(MicChannelMappingTest, Auto_RightOnly_FinalBufferIsStereoBalanced) {
+    constexpr uint32_t kFrames = 48000;
+    std::vector<float> frames(static_cast<size_t>(kFrames) * 2u, 0.0f);
+    for (uint32_t i = 0; i < kFrames; ++i) {
+        frames[(static_cast<size_t>(i) * 2u) + 0u] = 0.0f;
+        frames[(static_cast<size_t>(i) * 2u) + 1u] = 0.6f;
+    }
+
+    AutoModeState state{};
+    UpdateAutoModeStateFloat32(state, frames.data(), kFrames, false);
+    ASSERT_TRUE(state.locked);
+    ASSERT_EQ(state.resolved_mode, MicChannelMode::RightToStereo);
+
+    float outL = 0.0f;
+    float outR = 0.0f;
+    MapStereoFrameFloat32(EffectiveAutoMode(state), 0.0f, 0.6f, outL, outR);
+    EXPECT_FLOAT_EQ(outL, outR);
 }
 
 TEST(MicChannelMappingTest, Auto_BufferLock_LeftOnly_MapsLeftToStereo_Int16) {

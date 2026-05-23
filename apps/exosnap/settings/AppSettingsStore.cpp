@@ -15,6 +15,8 @@ namespace {
 
 constexpr int kSettingsVersionCurrent = 2;
 constexpr int kMicGainDbDefault = 0;
+constexpr int kMicGainDbMin = 0;
+constexpr int kMicGainDbMax = 24;
 
 QString ContainerToString(capability::Container container) {
     switch (container) {
@@ -100,27 +102,17 @@ std::optional<recorder_core::MicChannelMode> MicChannelModeFromString(QStringVie
     return std::nullopt;
 }
 
-std::optional<float> MicGainLinearFromDb(int mic_gain_db) {
-    switch (mic_gain_db) {
-    case 0:
-        return 1.0f;
-    case 6:
-        return 2.0f;
-    case 12:
-        return 4.0f;
-    default:
-        return std::nullopt;
-    }
+float MicGainLinearFromDb(int mic_gain_db) {
+    const int clamped = std::clamp(mic_gain_db, kMicGainDbMin, kMicGainDbMax);
+    return std::pow(10.0f, static_cast<float>(clamped) / 20.0f);
 }
 
 int MicGainDbFromLinear(float mic_gain_linear) {
-    if (std::abs(mic_gain_linear - 2.0f) < 0.01f) {
-        return 6;
+    if (mic_gain_linear <= 0.0f) {
+        return kMicGainDbMin;
     }
-    if (std::abs(mic_gain_linear - 4.0f) < 0.01f) {
-        return 12;
-    }
-    return kMicGainDbDefault;
+    const int db = static_cast<int>(std::round(20.0f * std::log10f(mic_gain_linear)));
+    return std::clamp(db, kMicGainDbMin, kMicGainDbMax);
 }
 
 } // namespace
@@ -202,11 +194,7 @@ PersistedAppSettings AppSettingsStore::Load() const {
 
     bool mic_gain_ok = false;
     const int mic_gain_db = settings.value(QStringLiteral("mic_gain_db"), kMicGainDbDefault).toInt(&mic_gain_ok);
-    if (mic_gain_ok) {
-        persisted.audio_ui_state.mic_gain_linear = MicGainLinearFromDb(mic_gain_db).value_or(1.0f);
-    } else {
-        persisted.audio_ui_state.mic_gain_linear = 1.0f;
-    }
+    persisted.audio_ui_state.mic_gain_linear = mic_gain_ok ? MicGainLinearFromDb(mic_gain_db) : 1.0f;
     settings.endGroup();
 
     // MVP policy: merged output only.
