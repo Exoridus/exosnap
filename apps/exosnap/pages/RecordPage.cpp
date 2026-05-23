@@ -1,6 +1,7 @@
 #include "RecordPage.h"
 
 #include "../diagnostics/AppLog.h"
+#include "../settings/AppSettingsStore.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/widgets/CaptureTargetCard.h"
 #include "../ui/widgets/ExoCheckBox.h"
@@ -111,6 +112,54 @@ QString checkGlyph(bool ok, bool blocked) {
     if (blocked)
         return "✕";
     return "·";
+}
+
+constexpr float kMicGainNormal = 1.0f;
+constexpr float kMicGainPlus6Db = 2.0f;
+constexpr float kMicGainPlus12Db = 4.0f;
+
+float SanitizeMicGainLinear(float gain_linear) {
+    if (std::fabs(gain_linear - kMicGainNormal) < 0.01f) {
+        return kMicGainNormal;
+    }
+    if (std::fabs(gain_linear - kMicGainPlus6Db) < 0.01f) {
+        return kMicGainPlus6Db;
+    }
+    if (std::fabs(gain_linear - kMicGainPlus12Db) < 0.01f) {
+        return kMicGainPlus12Db;
+    }
+    return kMicGainNormal;
+}
+
+int MicGainComboIndexFromLinear(float gain_linear) {
+    const float normalized = SanitizeMicGainLinear(gain_linear);
+    if (normalized == kMicGainPlus6Db) {
+        return 1;
+    }
+    if (normalized == kMicGainPlus12Db) {
+        return 2;
+    }
+    return 0;
+}
+
+float MicGainLinearFromComboIndex(int index) {
+    switch (index) {
+    case 1:
+        return kMicGainPlus6Db;
+    case 2:
+        return kMicGainPlus12Db;
+    case 0:
+    default:
+        return kMicGainNormal;
+    }
+}
+
+void PersistMicGainForMvp(float gain_linear) {
+    AppSettingsStore store;
+    PersistedAppSettings persisted = store.Load();
+    persisted.audio_ui_state.mic_gain_linear = SanitizeMicGainLinear(gain_linear);
+    persisted.audio_ui_state.separate_output_tracks = false;
+    store.Save(persisted);
 }
 
 QString displayLabelFromTarget(const recorder_core::CaptureTarget& target) {
@@ -387,6 +436,18 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     mic_channel_row_layout->addWidget(mic_channel_combo_, 1);
     audio_settings_layout->addWidget(mic_channel_row_);
 
+    mic_gain_row_ = new QWidget(audio_settings_panel);
+    auto* mic_gain_row_layout = new QHBoxLayout(mic_gain_row_);
+    mic_gain_row_layout->setContentsMargins(0, 0, 0, 0);
+    mic_gain_row_layout->setSpacing(10);
+    mic_gain_row_layout->addWidget(makeLabel("Gain", "audioSettingsRowLabel", mic_gain_row_));
+    mic_gain_combo_ = new QComboBox(mic_gain_row_);
+    mic_gain_combo_->addItem("Normal (0 dB)", QVariant::fromValue(kMicGainNormal));
+    mic_gain_combo_->addItem("+6 dB", QVariant::fromValue(kMicGainPlus6Db));
+    mic_gain_combo_->addItem("+12 dB", QVariant::fromValue(kMicGainPlus12Db));
+    mic_gain_row_layout->addWidget(mic_gain_combo_, 1);
+    audio_settings_layout->addWidget(mic_gain_row_);
+
     audio_settings_layout->addSpacing(6);
     audio_settings_layout->addWidget(makeLabel("Resulting Tracks", "audioSettingsGroupTitle", audio_settings_panel));
     track_preview_panel_ = makePanel(audio_settings_panel);
@@ -534,10 +595,17 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
             &RecordPage::onMicDeviceChanged);
     connect(mic_channel_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &RecordPage::onMicChannelChanged);
+    connect(mic_gain_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &RecordPage::onMicGainChanged);
     connect(open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
     connect(destination_settings_btn_, &QPushButton::clicked, this, [this]() { emit navigateToOutputPage(); });
 
     initCoordinator();
+}
+
+RecordPage::~RecordPage() {
+    if (coordinator_) {
+        coordinator_->StopMicMeter();
+    }
 }
 
 void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
@@ -563,21 +631,19 @@ void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& sta
 
     view_model_.audio_ui_state.record_application_audio = state.record_application_audio;
     view_model_.audio_ui_state.record_system_audio = state.record_system_audio;
-    view_model_.audio_ui_state.separate_output_tracks = state.separate_output_tracks;
+    view_model_.audio_ui_state.separate_output_tracks = false;
     view_model_.audio_ui_state.record_microphone = state.record_microphone;
     view_model_.audio_ui_state.mic_channel_mode = state.mic_channel_mode;
     view_model_.audio_ui_state.selected_mic_device_id = state.selected_mic_device_id;
+    view_model_.audio_ui_state.mic_gain_linear = SanitizeMicGainLinear(state.mic_gain_linear);
     view_model_.audio_ui_state.target_kind = target_kind;
     view_model_.audio_ui_state.selected_window_pid = selected_window_pid;
-
-    if (!view_model_.audio_ui_state.record_application_audio || !view_model_.audio_ui_state.record_system_audio) {
-        view_model_.audio_ui_state.separate_output_tracks = false;
-    }
 
     populateMicDeviceCombo();
     view_model_.RebuildAudioPlan();
     updateAudioControls();
     updateAudioTrackPreview();
+    syncMicMeterService();
     updateAudioMeterLevels();
 }
 
@@ -655,6 +721,15 @@ void RecordPage::initCoordinator() {
     coordinator_->SetStatsUpdatedCallback([this](const recorder_core::SessionStats& stats) {
         view_model_.UpdateStats(stats);
         updateStatsDisplay();
+    });
+    coordinator_->SetMicMeterUpdatedCallback([this](float rms_linear) {
+        preflight_mic_rms_ = std::clamp(rms_linear, 0.0f, 1.0f);
+
+        const bool recording_live =
+            view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Stopping;
+        if (!recording_live) {
+            updateAudioMeterLevels();
+        }
     });
     coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
         view_model_.SetResult(result);
@@ -933,10 +1008,7 @@ void RecordPage::onRefreshTargets() {
 
 void RecordPage::onAppAudioToggled(bool checked) {
     view_model_.audio_ui_state.record_application_audio = checked;
-
-    if (!view_model_.audio_ui_state.record_application_audio || !view_model_.audio_ui_state.record_system_audio) {
-        view_model_.audio_ui_state.separate_output_tracks = false;
-    }
+    view_model_.audio_ui_state.separate_output_tracks = false;
 
     view_model_.RebuildAudioPlan();
     updateAudioControls();
@@ -946,10 +1018,7 @@ void RecordPage::onAppAudioToggled(bool checked) {
 
 void RecordPage::onSysAudioToggled(bool checked) {
     view_model_.audio_ui_state.record_system_audio = checked;
-
-    if (!view_model_.audio_ui_state.record_application_audio || !view_model_.audio_ui_state.record_system_audio) {
-        view_model_.audio_ui_state.separate_output_tracks = false;
-    }
+    view_model_.audio_ui_state.separate_output_tracks = false;
 
     view_model_.RebuildAudioPlan();
     updateAudioControls();
@@ -958,7 +1027,8 @@ void RecordPage::onSysAudioToggled(bool checked) {
 }
 
 void RecordPage::onSeparateTracksToggled(bool checked) {
-    view_model_.audio_ui_state.separate_output_tracks = checked;
+    (void)checked;
+    view_model_.audio_ui_state.separate_output_tracks = false;
     view_model_.RebuildAudioPlan();
     updateAudioControls();
     updateAudioTrackPreview();
@@ -970,6 +1040,8 @@ void RecordPage::onMicToggled(bool checked) {
     view_model_.RebuildAudioPlan();
     updateAudioControls();
     updateAudioTrackPreview();
+    syncMicMeterService();
+    updateAudioMeterLevels();
     emitAudioSettingsChanged();
 }
 
@@ -1016,6 +1088,7 @@ void RecordPage::populateMicDeviceCombo() {
 
     view_model_.RebuildAudioPlan();
     updateMicDeviceNoteLabel();
+    syncMicMeterService();
 }
 
 void RecordPage::onMicDeviceChanged(int index) {
@@ -1030,6 +1103,7 @@ void RecordPage::onMicDeviceChanged(int index) {
     view_model_.RebuildAudioPlan();
     updateMicDeviceNoteLabel();
     updateAudioTrackPreview();
+    syncMicMeterService();
     emitAudioSettingsChanged();
 }
 
@@ -1046,28 +1120,45 @@ void RecordPage::onMicChannelChanged(int index) {
 
     view_model_.RebuildAudioPlan();
     updateAudioTrackPreview();
+    syncMicMeterService();
+    emitAudioSettingsChanged();
+}
+
+void RecordPage::onMicGainChanged(int index) {
+    view_model_.audio_ui_state.mic_gain_linear = MicGainLinearFromComboIndex(index);
+    view_model_.RebuildAudioPlan();
+    updateAudioTrackPreview();
+    syncMicMeterService();
+    updateAudioMeterLevels();
     emitAudioSettingsChanged();
 }
 
 void RecordPage::emitAudioSettingsChanged() {
-    diagnostics::AppLog(QStringLiteral("[audio] settings changed: app=%1 sys=%2 mic=%3 sep=%4")
+    diagnostics::AppLog(QStringLiteral("[audio] settings changed: app=%1 sys=%2 mic=%3 sep=%4 mic_gain=%5")
                             .arg(view_model_.audio_ui_state.record_application_audio ? 1 : 0)
                             .arg(view_model_.audio_ui_state.record_system_audio ? 1 : 0)
                             .arg(view_model_.audio_ui_state.record_microphone ? 1 : 0)
-                            .arg(view_model_.audio_ui_state.separate_output_tracks ? 1 : 0));
+                            .arg(view_model_.audio_ui_state.separate_output_tracks ? 1 : 0)
+                            .arg(view_model_.audio_ui_state.mic_gain_linear, 0, 'f', 2));
     emit audioSettingsChanged(view_model_.audio_ui_state);
+    PersistMicGainForMvp(view_model_.audio_ui_state.mic_gain_linear);
 }
 
 void RecordPage::updateAudioControls() {
-    if (!app_audio_check_ || !sys_audio_check_ || !separate_tracks_check_ || !mic_check_ || !mic_channel_combo_) {
+    if (!app_audio_check_ || !sys_audio_check_ || !separate_tracks_check_ || !mic_check_ || !mic_channel_combo_ ||
+        !mic_gain_combo_) {
         return;
     }
+
+    view_model_.audio_ui_state.separate_output_tracks = false;
+    view_model_.audio_ui_state.mic_gain_linear = SanitizeMicGainLinear(view_model_.audio_ui_state.mic_gain_linear);
 
     QSignalBlocker b1(app_audio_check_);
     QSignalBlocker b2(sys_audio_check_);
     QSignalBlocker b3(separate_tracks_check_);
     QSignalBlocker b4(mic_check_);
     QSignalBlocker b5(mic_channel_combo_);
+    QSignalBlocker b6(mic_gain_combo_);
 
     app_audio_check_->setChecked(view_model_.audio_ui_state.record_application_audio);
     sys_audio_check_->setChecked(view_model_.audio_ui_state.record_system_audio);
@@ -1094,6 +1185,7 @@ void RecordPage::updateAudioControls() {
         break;
     }
     mic_channel_combo_->setCurrentIndex(channel_index);
+    mic_gain_combo_->setCurrentIndex(MicGainComboIndexFromLinear(view_model_.audio_ui_state.mic_gain_linear));
 
     updateAudioControlsVisibility();
 }
@@ -1110,18 +1202,22 @@ void RecordPage::updateAudioControlsVisibility() {
                       view_model_.state == UiRecordingState::Stopping;
 
     app_audio_check_->setVisible(is_window);
-    separate_tracks_check_->setVisible(is_window && app && sys);
+    (void)app;
+    (void)sys;
+    separate_tracks_check_->setVisible(false);
 
     app_audio_check_->setEnabled(!busy);
     sys_audio_check_->setEnabled(!busy);
-    separate_tracks_check_->setEnabled(!busy);
+    separate_tracks_check_->setEnabled(false);
     mic_check_->setEnabled(!busy);
 
     mic_device_row_->setVisible(mic);
     mic_channel_row_->setVisible(mic);
+    mic_gain_row_->setVisible(mic);
 
     mic_device_combo_->setEnabled(!busy);
     mic_channel_combo_->setEnabled(!busy);
+    mic_gain_combo_->setEnabled(!busy);
     if (mic_refresh_btn_) {
         mic_refresh_btn_->setEnabled(!busy);
     }
@@ -1157,6 +1253,28 @@ void RecordPage::updateMicDeviceNoteLabel() {
         mic_device_note_label_->setText(QStringLiteral("→ Follows the Windows default input device"));
     }
     mic_device_note_label_->setVisible(true);
+}
+
+void RecordPage::syncMicMeterService() {
+    if (!coordinator_) {
+        return;
+    }
+
+    const bool busy = view_model_.state == UiRecordingState::Preparing ||
+                      view_model_.state == UiRecordingState::Recording ||
+                      view_model_.state == UiRecordingState::Stopping;
+    const bool should_run = view_model_.audio_ui_state.record_microphone && !busy;
+
+    if (!should_run) {
+        coordinator_->StopMicMeter();
+        preflight_mic_rms_ = 0.0f;
+        return;
+    }
+
+    if (!coordinator_->StartMicMeter(view_model_.audio_ui_state.selected_mic_device_id,
+                                     view_model_.audio_ui_state.mic_channel_mode)) {
+        preflight_mic_rms_ = 0.0f;
+    }
 }
 
 void RecordPage::updateAudioTrackPreview() {
@@ -1372,6 +1490,7 @@ void RecordPage::refresh() {
     updateReadinessRows();
     updateAudioControls();
     updateAudioTrackPreview();
+    syncMicMeterService();
     updateAudioMeterLevels();
     updateStatsDisplay();
 
@@ -1565,18 +1684,17 @@ void RecordPage::updateReadinessRows() {
 }
 
 void RecordPage::updateAudioMeterLevels() {
-    const bool live =
+    const bool recording_live =
         view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Stopping;
 
-    auto applyMeter = [live](ui::widgets::VUMeterWidget* meter, QLabel* db_label, float rms, bool active) {
+    auto applyMeter = [](ui::widgets::VUMeterWidget* meter, QLabel* db_label, float rms, bool show_level) {
         if (!meter || !db_label) {
             return;
         }
 
-        const bool show_live = live && active;
-        meter->setActive(show_live);
+        meter->setActive(show_level);
 
-        if (show_live) {
+        if (show_level) {
             const float db = rms > 0.0f ? (std::max)(-60.0f, 20.0f * std::log10(rms)) : -60.0f;
             const float meter01 = std::clamp((db + 60.0f) / 60.0f, 0.0f, 1.0f);
             meter->setLevel(meter01);
@@ -1587,9 +1705,19 @@ void RecordPage::updateAudioMeterLevels() {
         }
     };
 
-    applyMeter(app_meter_, app_db_label_, view_model_.audio_rms_app, view_model_.audio_active_app);
-    applyMeter(sys_meter_, sys_db_label_, view_model_.audio_rms_sys, view_model_.audio_active_sys);
-    applyMeter(mic_meter_, mic_db_label_, view_model_.audio_rms_mic, view_model_.audio_active_mic);
+    applyMeter(app_meter_, app_db_label_, view_model_.audio_rms_app, recording_live && view_model_.audio_active_app);
+    applyMeter(sys_meter_, sys_db_label_, view_model_.audio_rms_sys, recording_live && view_model_.audio_active_sys);
+
+    if (recording_live) {
+        applyMeter(mic_meter_, mic_db_label_, view_model_.audio_rms_mic, view_model_.audio_active_mic);
+        return;
+    }
+
+    const bool mic_preflight_live = view_model_.audio_ui_state.record_microphone && view_model_.audio_active_mic &&
+                                    coordinator_ != nullptr && coordinator_->IsMicMeterRunning();
+    const float preflight_rms_with_gain =
+        std::clamp(preflight_mic_rms_ * view_model_.audio_ui_state.mic_gain_linear, 0.0f, 1.0f);
+    applyMeter(mic_meter_, mic_db_label_, preflight_rms_with_gain, mic_preflight_live);
 }
 
 } // namespace exosnap

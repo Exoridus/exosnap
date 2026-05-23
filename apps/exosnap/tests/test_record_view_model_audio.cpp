@@ -23,6 +23,11 @@ TEST(RecordViewModelAudioTest, RecordViewModel_DefaultAudioStateForWindowTarget)
     EXPECT_EQ(vm.audio_track_preview[0].source_key, "merged");
 }
 
+TEST(RecordViewModelAudioTest, RecordViewModel_DefaultMicGainLinear_IsUnity) {
+    RecordViewModel vm;
+    EXPECT_FLOAT_EQ(vm.audio_ui_state.mic_gain_linear, 1.0f);
+}
+
 TEST(RecordViewModelAudioTest, RecordViewModel_DefaultAudioStateForDisplayTarget) {
     RecordViewModel vm;
 
@@ -101,6 +106,16 @@ TEST(RecordViewModelAudioTest, RecordViewModel_RebuildAudioPlan_PropagatesMicDev
 
     ASSERT_TRUE(vm.audio_plan.mic_device_id.has_value());
     EXPECT_EQ(vm.audio_plan.mic_device_id.value(), "device-123");
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_RebuildAudioPlan_PreservesMicGainLinear) {
+    RecordViewModel vm;
+
+    vm.audio_ui_state.mic_gain_linear = 4.0f;
+    vm.RebuildAudioPlan();
+
+    EXPECT_FLOAT_EQ(vm.audio_ui_state.mic_gain_linear, 4.0f);
+    EXPECT_FLOAT_EQ(vm.audio_plan.mic_gain_linear, 4.0f);
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_RebuildAudioPlan_SetsActiveFlagsForWindowTracks) {

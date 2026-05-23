@@ -6,11 +6,15 @@
 #include <QStandardPaths>
 #include <QStringView>
 
+#include <cmath>
 #include <optional>
 #include <utility>
 
 namespace exosnap {
 namespace {
+
+constexpr int kSettingsVersionCurrent = 2;
+constexpr int kMicGainDbDefault = 0;
 
 QString ContainerToString(capability::Container container) {
     switch (container) {
@@ -96,6 +100,29 @@ std::optional<recorder_core::MicChannelMode> MicChannelModeFromString(QStringVie
     return std::nullopt;
 }
 
+std::optional<float> MicGainLinearFromDb(int mic_gain_db) {
+    switch (mic_gain_db) {
+    case 0:
+        return 1.0f;
+    case 6:
+        return 2.0f;
+    case 12:
+        return 4.0f;
+    default:
+        return std::nullopt;
+    }
+}
+
+int MicGainDbFromLinear(float mic_gain_linear) {
+    if (std::abs(mic_gain_linear - 2.0f) < 0.01f) {
+        return 6;
+    }
+    if (std::abs(mic_gain_linear - 4.0f) < 0.01f) {
+        return 12;
+    }
+    return kMicGainDbDefault;
+}
+
 } // namespace
 
 AppSettingsStore::AppSettingsStore() {
@@ -121,6 +148,7 @@ PersistedAppSettings AppSettingsStore::Load() const {
     }
 
     QSettings settings(settings_path_, QSettings::IniFormat);
+    const int settings_version = settings.value(QStringLiteral("settings_version")).toInt();
 
     settings.beginGroup(QStringLiteral("output"));
     const QString folder = settings.value(QStringLiteral("folder")).toString().trimmed();
@@ -171,7 +199,21 @@ PersistedAppSettings AppSettingsStore::Load() const {
     } else {
         persisted.audio_ui_state.selected_mic_device_id = selected_mic_device_id.toStdString();
     }
+
+    bool mic_gain_ok = false;
+    const int mic_gain_db = settings.value(QStringLiteral("mic_gain_db"), kMicGainDbDefault).toInt(&mic_gain_ok);
+    if (mic_gain_ok) {
+        persisted.audio_ui_state.mic_gain_linear = MicGainLinearFromDb(mic_gain_db).value_or(1.0f);
+    } else {
+        persisted.audio_ui_state.mic_gain_linear = 1.0f;
+    }
     settings.endGroup();
+
+    // MVP policy: merged output only.
+    persisted.audio_ui_state.separate_output_tracks = false;
+    if (settings_version < kSettingsVersionCurrent) {
+        persisted.audio_ui_state.mic_gain_linear = 1.0f;
+    }
 
     return persisted;
 }
@@ -185,6 +227,7 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     QDir().mkpath(info.absolutePath());
 
     QSettings settings(settings_path_, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("settings_version"), kSettingsVersionCurrent);
 
     settings.beginGroup(QStringLiteral("output"));
     settings.setValue(QStringLiteral("folder"),
@@ -199,8 +242,7 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.setValue(QStringLiteral("record_application_audio"),
                       settings_snapshot.audio_ui_state.record_application_audio);
     settings.setValue(QStringLiteral("record_system_audio"), settings_snapshot.audio_ui_state.record_system_audio);
-    settings.setValue(QStringLiteral("separate_output_tracks"),
-                      settings_snapshot.audio_ui_state.separate_output_tracks);
+    settings.setValue(QStringLiteral("separate_output_tracks"), false);
     settings.setValue(QStringLiteral("record_microphone"), settings_snapshot.audio_ui_state.record_microphone);
     settings.setValue(QStringLiteral("mic_channel_mode"),
                       MicChannelModeToString(settings_snapshot.audio_ui_state.mic_channel_mode));
@@ -208,6 +250,8 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
                       settings_snapshot.audio_ui_state.selected_mic_device_id.has_value()
                           ? QString::fromStdString(*settings_snapshot.audio_ui_state.selected_mic_device_id)
                           : QString());
+    settings.setValue(QStringLiteral("mic_gain_db"),
+                      MicGainDbFromLinear(settings_snapshot.audio_ui_state.mic_gain_linear));
     settings.endGroup();
 
     settings.sync();

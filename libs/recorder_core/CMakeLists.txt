@@ -14,6 +14,7 @@ if(NOT EXISTS "${_nvenc_header}")
         include/recorder_core/audio_meter.h
         src/audio_meter.cpp
         src/opus_audio_encoder.cpp
+        src/mic_meter_service.cpp
     )
 
     target_include_directories(recorder_core PUBLIC include)
@@ -30,6 +31,8 @@ if(NOT EXISTS "${_nvenc_header}")
         ole32.lib
         exosnap::warnings
     )
+
+    target_compile_definitions(recorder_core PUBLIC EXOSNAP_RECORDER_CORE_HAS_WASAPI_CAPTURE_SRC=0)
 
     exosnap_add_gtest(
         NAME test_audio_track_resolver
@@ -68,6 +71,14 @@ if(NOT EXISTS "${_nvenc_header}")
         LIBRARIES recorder_core
     )
 
+    exosnap_add_gtest(
+        NAME test_mic_meter_service
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_mic_meter_service.cpp
+        LIBRARIES recorder_core
+    )
+    target_include_directories(test_mic_meter_service PRIVATE src)
+
     return()
 endif()
 
@@ -101,6 +112,7 @@ add_library(recorder_core STATIC
     src/audio_thread.cpp
     src/mux_thread.cpp
     src/audio_track_model.cpp
+    src/mic_meter_service.cpp
 )
 
 target_include_directories(recorder_core
@@ -132,6 +144,8 @@ target_link_libraries(recorder_core
         wmcodecdspuuid.lib
         exosnap::warnings
 )
+
+target_compile_definitions(recorder_core PUBLIC EXOSNAP_RECORDER_CORE_HAS_WASAPI_CAPTURE_SRC=1)
 
 exosnap_add_gtest(
     NAME test_audio_track_resolver
@@ -207,6 +221,14 @@ exosnap_add_gtest(
     SOURCES tests/test_audio_meter.cpp
     LIBRARIES recorder_core
 )
+
+exosnap_add_gtest(
+    NAME test_mic_meter_service
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_mic_meter_service.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_mic_meter_service PRIVATE src)
 
 exosnap_add_gtest(
     NAME mixed_audio_src_tests

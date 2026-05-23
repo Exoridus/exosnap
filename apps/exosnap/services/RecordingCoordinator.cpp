@@ -1,5 +1,7 @@
 #include "RecordingCoordinator.h"
 
+#include "../../../libs/recorder_core/src/mic_meter_service.h"
+
 #include <QCoreApplication>
 #include <QMetaObject>
 
@@ -195,9 +197,11 @@ void ApplyOutputSettingsToRecorderConfig(recorder_core::RecorderConfig& config, 
 }
 
 RecordingCoordinator::RecordingCoordinator() : output_settings_(OutputSettingsModel::Defaults()) {
+    mic_meter_service_ = std::make_unique<recorder_core::MicMeterService>();
 }
 
 RecordingCoordinator::~RecordingCoordinator() {
+    StopMicMeter();
     if (is_recording_) {
         session_.Stop();
     }
@@ -231,6 +235,8 @@ std::vector<recorder_core::CaptureTarget> RecordingCoordinator::EnumerateTargets
 
 bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& target,
                                           const capability::AudioUiState& audio_ui_state) {
+    StopMicMeter();
+
     if (is_recording_)
         return false;
     const auto folder_check = ValidateOutputFolder(output_settings_.output_folder);
@@ -292,6 +298,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.audio_target_process_id = plan.audio_target_process_id;
     config.mic_channel_mode = plan.mic_channel_mode;
     config.mic_device_id = plan.mic_device_id;
+    config.mic_gain_linear = plan.mic_gain_linear;
 
     if (plan.record_audio && PlanRequiresTargetPid(plan.plan) && !plan.audio_target_process_id.has_value()) {
         PostStateChange(UiRecordingState::Failed);
@@ -334,6 +341,52 @@ void RecordingCoordinator::StopRecording() {
         return;
     PostStateChange(UiRecordingState::Stopping);
     session_.Stop();
+}
+
+bool RecordingCoordinator::StartMicMeter(std::optional<std::string> device_id,
+                                         recorder_core::MicChannelMode channel_mode) {
+    if (!mic_meter_service_ || is_recording_) {
+        return false;
+    }
+
+    if (state_ == UiRecordingState::Preparing || state_ == UiRecordingState::Recording ||
+        state_ == UiRecordingState::Stopping) {
+        return false;
+    }
+
+    const bool same_device = mic_meter_device_id_ == device_id;
+    const bool same_channel = mic_meter_channel_mode_ == channel_mode;
+    if (mic_meter_service_->IsRunning() && mic_meter_config_valid_ && same_device && same_channel) {
+        return true;
+    }
+
+    StopMicMeter();
+
+    std::string error;
+    const bool started = mic_meter_service_->Start(
+        device_id, channel_mode, [this](float rms_linear) { PostMicMeter(rms_linear); }, error);
+    if (!started) {
+        mic_meter_config_valid_ = false;
+        mic_meter_device_id_.reset();
+        return false;
+    }
+
+    mic_meter_device_id_ = std::move(device_id);
+    mic_meter_channel_mode_ = channel_mode;
+    mic_meter_config_valid_ = true;
+    return true;
+}
+
+void RecordingCoordinator::StopMicMeter() {
+    if (mic_meter_service_) {
+        mic_meter_service_->Stop();
+    }
+    mic_meter_config_valid_ = false;
+    mic_meter_device_id_.reset();
+}
+
+bool RecordingCoordinator::IsMicMeterRunning() const noexcept {
+    return mic_meter_service_ && mic_meter_service_->IsRunning();
 }
 
 void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConfig& config,
@@ -379,6 +432,10 @@ void RecordingCoordinator::SetResultReadyCallback(ResultReadyCallback cb) {
     on_result_ready_ = std::move(cb);
 }
 
+void RecordingCoordinator::SetMicMeterUpdatedCallback(MicMeterUpdatedCallback cb) {
+    on_mic_meter_updated_ = std::move(cb);
+}
+
 void RecordingCoordinator::PostStateChange(UiRecordingState new_state) {
     state_ = new_state;
     if (!on_state_changed_)
@@ -401,6 +458,21 @@ void RecordingCoordinator::PostStats(recorder_core::SessionStats stats) {
     auto cb = on_stats_updated_;
     QMetaObject::invokeMethod(
         QCoreApplication::instance(), [cb, s = std::move(stats)]() { cb(s); }, Qt::QueuedConnection);
+}
+
+void RecordingCoordinator::PostMicMeter(float rms_linear) {
+    if (!on_mic_meter_updated_) {
+        return;
+    }
+
+    auto cb = on_mic_meter_updated_;
+    if (QCoreApplication::instance() == nullptr) {
+        cb(rms_linear);
+        return;
+    }
+
+    QMetaObject::invokeMethod(
+        QCoreApplication::instance(), [cb, rms_linear]() { cb(rms_linear); }, Qt::QueuedConnection);
 }
 
 std::filesystem::path RecordingCoordinator::GenerateOutputPath() const {

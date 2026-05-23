@@ -29,6 +29,7 @@ class RecordPage : public QWidget {
     Q_OBJECT
   public:
     explicit RecordPage(QWidget* parent = nullptr);
+    ~RecordPage() override;
     void setOutputSettings(const OutputSettingsModel& settings);
     void applyPersistedAudioSettings(const capability::AudioUiState& state);
 
@@ -75,10 +76,12 @@ class RecordPage : public QWidget {
     void onMicToggled(bool checked);
     void onMicDeviceChanged(int index);
     void onMicChannelChanged(int index);
+    void onMicGainChanged(int index);
     void openOutputFolder();
     void setOutputSettingsSummary(const OutputSettingsModel& settings);
     void populateMicDeviceCombo();
     void updateMicDeviceNoteLabel();
+    void syncMicMeterService();
     void emitAudioSettingsChanged();
     void emitChromeState();
     void syncCoordinatorTargetContext();
@@ -127,6 +130,8 @@ class RecordPage : public QWidget {
     QLabel* mic_device_note_label_ = nullptr;
     QWidget* mic_channel_row_ = nullptr;
     QComboBox* mic_channel_combo_ = nullptr;
+    QWidget* mic_gain_row_ = nullptr;
+    QComboBox* mic_gain_combo_ = nullptr;
     QFrame* track_preview_panel_ = nullptr;
     QVBoxLayout* track_preview_layout_ = nullptr;
     ui::widgets::SectionRuleHeader* audio_header_ = nullptr;
@@ -150,6 +155,7 @@ class RecordPage : public QWidget {
     QLabel* result_technical_label_ = nullptr;
     QFrame* result_technical_separator_ = nullptr;
     std::filesystem::path last_output_folder_;
+    float preflight_mic_rms_ = 0.0f;
 };
 
 } // namespace exosnap

@@ -40,10 +40,11 @@ TEST(AppSettingsStoreTest, AppSettingsStore_LoadMissingFile_ReturnsDefaults) {
 
     EXPECT_EQ(loaded.audio_ui_state.record_application_audio, audio_defaults.record_application_audio);
     EXPECT_EQ(loaded.audio_ui_state.record_system_audio, audio_defaults.record_system_audio);
-    EXPECT_EQ(loaded.audio_ui_state.separate_output_tracks, audio_defaults.separate_output_tracks);
+    EXPECT_FALSE(loaded.audio_ui_state.separate_output_tracks);
     EXPECT_EQ(loaded.audio_ui_state.record_microphone, audio_defaults.record_microphone);
     EXPECT_EQ(loaded.audio_ui_state.mic_channel_mode, audio_defaults.mic_channel_mode);
     EXPECT_EQ(loaded.audio_ui_state.selected_mic_device_id, audio_defaults.selected_mic_device_id);
+    EXPECT_FLOAT_EQ(loaded.audio_ui_state.mic_gain_linear, 1.0f);
 }
 
 TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_OutputFolder) {
@@ -117,6 +118,43 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_AudioBooleans) {
     EXPECT_TRUE(loaded.audio_ui_state.record_microphone);
 }
 
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_MicGainDbValues) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+
+    PersistedAppSettings settings = MakeSettingsSnapshot();
+    settings.audio_ui_state.mic_gain_linear = 1.0f;
+    store.Save(settings);
+    EXPECT_FLOAT_EQ(store.Load().audio_ui_state.mic_gain_linear, 1.0f);
+
+    settings.audio_ui_state.mic_gain_linear = 2.0f;
+    store.Save(settings);
+    EXPECT_FLOAT_EQ(store.Load().audio_ui_state.mic_gain_linear, 2.0f);
+
+    settings.audio_ui_state.mic_gain_linear = 4.0f;
+    store.Save(settings);
+    EXPECT_FLOAT_EQ(store.Load().audio_ui_state.mic_gain_linear, 4.0f);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_InvalidMicGainDb_FallsBackToUnity) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    QSettings settings(settings_path, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("settings_version"), 2);
+    settings.beginGroup(QStringLiteral("audio"));
+    settings.setValue(QStringLiteral("mic_gain_db"), 99);
+    settings.endGroup();
+    settings.sync();
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_FLOAT_EQ(loaded.audio_ui_state.mic_gain_linear, 1.0f);
+}
+
 TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_MicChannelMode) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
@@ -183,6 +221,55 @@ TEST(AppSettingsStoreTest, AppSettingsStore_InvalidEnumStrings_FallBackToDefault
     EXPECT_EQ(loaded.output.container, output_defaults.container);
     EXPECT_EQ(loaded.output.audio_codec, output_defaults.audio_codec);
     EXPECT_EQ(loaded.audio_ui_state.mic_channel_mode, audio_defaults.mic_channel_mode);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_MissingVersion_MigratesToMvpMergedDefaults) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    QSettings settings(settings_path, QSettings::IniFormat);
+    settings.beginGroup(QStringLiteral("audio"));
+    settings.setValue(QStringLiteral("separate_output_tracks"), true);
+    settings.setValue(QStringLiteral("mic_gain_db"), 12);
+    settings.endGroup();
+    settings.sync();
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_FALSE(loaded.audio_ui_state.separate_output_tracks);
+    EXPECT_FLOAT_EQ(loaded.audio_ui_state.mic_gain_linear, 1.0f);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion2) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    AppSettingsStore store(settings_path);
+    PersistedAppSettings settings = MakeSettingsSnapshot();
+    settings.audio_ui_state.mic_gain_linear = 4.0f;
+    store.Save(settings);
+
+    QSettings raw_settings(settings_path, QSettings::IniFormat);
+    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 2);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SeparateTracksTrueDoesNotResurrectMvpState) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    QSettings settings(settings_path, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("settings_version"), 2);
+    settings.beginGroup(QStringLiteral("audio"));
+    settings.setValue(QStringLiteral("separate_output_tracks"), true);
+    settings.endGroup();
+    settings.sync();
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_FALSE(loaded.audio_ui_state.separate_output_tracks);
 }
 
 } // namespace

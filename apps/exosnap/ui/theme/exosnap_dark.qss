@@ -331,6 +331,19 @@ QLabel[labelRole="audioSettingsGroupTitle"] {
     color: ${text2};
 }
 
+QLabel[labelRole="audioSettingsRowLabel"] {
+    font-family: ${font-mono};
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: ${text2};
+    min-width: 92px;
+}
+
+QLabel[labelRole="audioSettingsNote"] {
+    font-size: 11.5px;
+    color: ${text2};
+}
+
 QWidget#captureTargetCard {
     background: ${bg2};
     border: 1px solid ${line2};
