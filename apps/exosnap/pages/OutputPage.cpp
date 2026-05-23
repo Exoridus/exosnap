@@ -216,10 +216,6 @@ void OutputPage::applySettingsToUi() {
     }
 
     updateAudioCodecChoices();
-    const int codec_index = settings_.audio_codec == capability::AudioCodec::AacMf
-                                ? audio_codec_combo_->findText("AAC")
-                                : audio_codec_combo_->findText("Opus");
-    audio_codec_combo_->setCurrentIndex(codec_index >= 0 ? codec_index : 0);
 }
 
 void OutputPage::emitCurrentSettings() {
@@ -241,23 +237,14 @@ void OutputPage::emitCurrentSettings() {
 }
 
 void OutputPage::updateAudioCodecChoices() {
-    const QString previous_codec = audio_codec_combo_->currentText().toLower();
     const bool is_mp4 = container_group_->checkedId() == 1;
     audio_codec_combo_->clear();
     if (is_mp4) {
         audio_codec_combo_->addItem("AAC");
-        audio_codec_combo_->setEnabled(false);
     } else {
         audio_codec_combo_->addItem("Opus");
-        audio_codec_combo_->addItem("AAC");
-        audio_codec_combo_->setEnabled(true);
-        int desired_index =
-            previous_codec.contains("aac") ? audio_codec_combo_->findText("AAC") : audio_codec_combo_->findText("Opus");
-        if (desired_index < 0) {
-            desired_index = 0;
-        }
-        audio_codec_combo_->setCurrentIndex(desired_index);
     }
+    audio_codec_combo_->setEnabled(false);
 }
 
 void OutputPage::updateEffectiveOutputPreview() {
