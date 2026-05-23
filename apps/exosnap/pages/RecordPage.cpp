@@ -80,6 +80,7 @@ QString stateDisplay(UiRecordingState state) {
     case UiRecordingState::Completed:
         return "READY";
     case UiRecordingState::Failed:
+        return "FAILED";
     default:
         return "BLOCKED";
     }
@@ -703,12 +704,7 @@ void RecordPage::initCoordinator() {
     });
     coordinator_->SetMicMeterUpdatedCallback([this](float rms_linear) {
         preflight_mic_rms_ = std::clamp(rms_linear, 0.0f, 1.0f);
-
-        const bool recording_live =
-            view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Stopping;
-        if (!recording_live) {
-            updateAudioMeterLevels();
-        }
+        updateAudioMeterLevels();
     });
     coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
         view_model_.SetResult(result);
@@ -1247,10 +1243,9 @@ void RecordPage::syncMicMeterService() {
         return;
     }
 
-    const bool busy = view_model_.state == UiRecordingState::Preparing ||
-                      view_model_.state == UiRecordingState::Recording ||
-                      view_model_.state == UiRecordingState::Stopping;
-    const bool should_run = view_model_.audio_ui_state.record_microphone && !busy;
+    const bool transition_busy =
+        view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::Stopping;
+    const bool should_run = view_model_.audio_ui_state.record_microphone && !transition_busy;
 
     if (!should_run) {
         coordinator_->StopMicMeter();
@@ -1696,7 +1691,12 @@ void RecordPage::updateAudioMeterLevels() {
     applyMeter(sys_meter_, sys_db_label_, view_model_.audio_rms_sys, recording_live && view_model_.audio_active_sys);
 
     if (recording_live) {
-        applyMeter(mic_meter_, mic_db_label_, view_model_.audio_rms_mic, view_model_.audio_active_mic);
+        const bool mic_meter_live = coordinator_ != nullptr && coordinator_->IsMicMeterRunning() &&
+                                    view_model_.audio_ui_state.record_microphone;
+        const float mic_rms =
+            mic_meter_live ? std::clamp(preflight_mic_rms_ * view_model_.audio_ui_state.mic_gain_linear, 0.0f, 1.0f)
+                           : view_model_.audio_rms_mic;
+        applyMeter(mic_meter_, mic_db_label_, mic_rms, view_model_.audio_active_mic);
         return;
     }
 
