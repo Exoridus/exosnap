@@ -54,3 +54,6 @@ logs/
 
 # Spec pack installer metadata
 manifest.json
+
+# Local review screenshots (not tracked in repo)
+docs/screenshots/

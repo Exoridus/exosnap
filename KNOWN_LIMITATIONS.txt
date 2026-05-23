@@ -10,13 +10,13 @@ PREREQUISITES
 KNOWN LIMITATIONS
 - No installer; extract the ZIP and run exosnap.exe directly.
 - No code signing; Windows SmartScreen may warn on first launch.
-- MP4 output is visible but disabled; MKV is the supported alpha container.
+- MP4 output is visible but disabled; WebM is the supported alpha container.
 - VideoPage and AudioPage are locked informational MVP pages.
 - Video quality, FPS, and resolution settings are fixed for this alpha.
 - Region capture is not available.
 - Global hotkeys are unavailable in this build.
 - Auto-split is not available.
-- Audio meters show live activity during recording only, not before recording.
+- Mic preflight meter is active; SYS/APP audio meters activate when recording starts.
 - Mic hot-plug is not automatic; use the Refresh button.
 - Window capture can fail for minimized, cloaked, or very small windows.
 - Settings persist locally in INI; format may change in later alpha builds.

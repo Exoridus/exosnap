@@ -5,7 +5,7 @@
 - RecordPage is the primary MVP recording surface.
 - OutputPage is visibly wired for output folder, naming, and container/audio codec selection.
 - VideoPage and AudioPage are read-only/locked for MVP.
-- Engine path: WGC + NVENC AV1 + MKV + WASAPI + Opus/AAC.
+- Engine path: WGC + NVENC AV1 + WebM + WASAPI + Opus.
 - MP4, Region Capture, Video Quality Controls, Hotkeys, and Auto-Split are intentionally deferred.
 - Settings persistence is implemented for MVP-relevant configuration.
 - Alpha packaging script exists at `scripts/package-alpha.ps1`.
@@ -19,17 +19,16 @@
 - Output folder selection
 - Output settings persistence
 - Naming pattern `{date}` / `{time}`
-- MKV output
+- WebM output
 - AV1 video
-- Opus/AAC audio codec selection
+- Opus audio
 - System audio
 - App audio for Window targets
 - Mic recording
 - Mic device selection
 - Mic channel mode
 - Audio settings persistence
-- Separate output audio tracks
-- Live audio activity meters
+- Live audio activity meters (mic preflight + SYS/APP during recording)
 - Result/error diagnostics
 - Open Folder action
 
@@ -49,12 +48,12 @@
 
 | ID | Scenario | Expected |
 | -- | -------- | -------- |
-| S1 | Monitor target -> Start -> 30s -> Stop | MKV file in configured folder, AV1 video, selected audio tracks. |
+| S1 | Monitor target -> Start -> 30s -> Stop | WebM file in configured folder, AV1 video + Opus stereo track. |
 | S2 | Output folder changed on OutputPage -> Record | File lands in selected folder. |
 | S3 | Naming pattern changed -> Record | Filename follows pattern and timestamp tokens. |
 | S4 | Mic enabled + selected device -> Record | Extra Opus/AAC mic track exists; no crash. |
-| S5 | OutputPage AAC selected -> Record -> ffprobe | Audio codec is AAC, not Opus. |
-| S6 | Window target with App + System separate tracks -> Record | AV1 video + 2 audio tracks; no stale PID error. |
+| S5 | Window target -> Record -> ffprobe | AV1 video + 1 Opus stereo track (merged APP+MIC+SYS); no stale PID error. |
+| S6 | _(deferred: separate output tracks hidden in alpha)_ | — |
 | S7 | Close selected window before/while recording | User-facing "Window closed" or equivalent diagnostics, no crash. |
 | S8 | Invalid/unwritable output folder | Recording does not start and shows output-folder error. |
 | S9 | Open Folder after successful recording | Explorer opens output directory. |
@@ -65,7 +64,7 @@
 - MP4 UI is visible but disabled.
 - VideoPage/AudioPage are informational for MVP.
 - Actual GPU model is not shown in sidebar; generic NVENC is shown.
-- Audio meters are live during recording only, not pre-monitoring.
+- Mic preflight meter is live before recording; SYS/APP meters activate when recording starts.
 - Hotkey badge removed/neutralized; no global hotkey in MVP.
 - No automatic hot-plug handling for mic devices; use refresh.
 - Window capture can fail for minimized/cloaked/too-small windows; diagnostics should explain this.

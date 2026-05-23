@@ -28,7 +28,7 @@
 - Settings persistence does not require admin rights
 - Output folder can be changed
 - Short monitor recording works
-- Generated MKV appears in configured folder
+- Generated WebM appears in configured folder
 - `ffprobe` shows AV1 video + selected audio codec
 
 ## Manual MVP smoke summary
