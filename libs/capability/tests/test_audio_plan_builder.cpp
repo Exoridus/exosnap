@@ -36,6 +36,22 @@ TEST(AudioPlanBuilderTest, BuildAudioPlan_DefaultMicDeviceIdIsNullopt) {
     EXPECT_FALSE(result.mic_device_id.has_value());
 }
 
+TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesMicGainLinear) {
+    AudioUiState state;
+    state.record_microphone = true;
+    state.mic_gain_linear = 4.0f;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_FLOAT_EQ(result.mic_gain_linear, 4.0f);
+}
+
+TEST(AudioPlanBuilderTest, BuildAudioPlan_DefaultMicGainIsUnity) {
+    AudioUiState state;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_FLOAT_EQ(result.mic_gain_linear, 1.0f);
+}
+
 TEST(AudioPlanBuilderTest, WindowTarget_AppOnly) {
     AudioUiState state;
     state.target_kind = CaptureTargetKind::Window;

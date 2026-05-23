@@ -102,7 +102,18 @@ TEST(AudioSourceSemanticsTest, Validate_RejectsAppSourceWithoutPid_RecordAudioTr
     EXPECT_EQ(validation.error_phase, ErrorPhase::Prepare);
 }
 
-TEST(AudioSourceSemanticsTest, Validate_RejectsSystemOutputWithMergedTrack) {
+TEST(AudioSourceSemanticsTest, Validate_AcceptsSystemOutputMicMergedTrack) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidBaseConfig();
+    cfg.record_audio = true;
+    cfg.audio_track_plan.tracks.push_back(MakeTrack(0, {AudioSourceKind::SystemOutput, AudioSourceKind::Mic}));
+
+    RecorderResult validation{};
+    EXPECT_TRUE(session.Validate(cfg, &validation));
+    EXPECT_TRUE(validation.succeeded);
+}
+
+TEST(AudioSourceSemanticsTest, Validate_RejectsAppInMergedTrack_WithoutPid) {
     RecorderSession session;
     RecorderConfig cfg = MakeValidBaseConfig();
     cfg.record_audio = true;
@@ -110,7 +121,7 @@ TEST(AudioSourceSemanticsTest, Validate_RejectsSystemOutputWithMergedTrack) {
 
     RecorderResult validation{};
     EXPECT_FALSE(session.Validate(cfg, &validation));
-    EXPECT_EQ(validation.error_code, E_NOTIMPL);
+    EXPECT_EQ(validation.error_code, E_INVALIDARG);
     EXPECT_EQ(validation.error_phase, ErrorPhase::Prepare);
 }
 

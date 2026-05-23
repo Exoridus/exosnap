@@ -106,7 +106,7 @@ OutputPage::OutputPage(const OutputSettingsModel& initial_settings, QWidget* par
                                          ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
     container_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
 
-    mkv_radio_ = makeRadio("MKV", container_panel);
+    mkv_radio_ = makeRadio("WebM", container_panel);
     mp4_radio_ = makeRadio("MP4", container_panel);
     mkv_radio_->setChecked(true);
     mp4_radio_->setEnabled(false);
@@ -118,7 +118,7 @@ OutputPage::OutputPage(const OutputSettingsModel& initial_settings, QWidget* par
     container_layout->addWidget(mp4_radio_);
 
     // MP4 info note (hidden by default)
-    mp4_info_label_ = new QLabel("MP4 is less crash-resilient than MKV. If recording is interrupted unexpectedly,"
+    mp4_info_label_ = new QLabel("MP4 is less crash-resilient than WebM. If recording is interrupted unexpectedly,"
                                  " the file may require recovery or be unusable.",
                                  container_panel);
     mp4_info_label_->setWordWrap(true);
@@ -186,7 +186,7 @@ void OutputPage::onContainerChanged(int id) {
     if (mkv_radio_ != nullptr) {
         mkv_radio_->setChecked(true);
     }
-    settings_.container = capability::Container::Matroska;
+    settings_.container = capability::Container::WebM;
     updateAudioCodecChoices();
     mp4_info_label_->setVisible(false);
     emitCurrentSettings();
@@ -205,8 +205,8 @@ void OutputPage::applySettingsToUi() {
     QSignalBlocker block_container(container_group_);
     QSignalBlocker block_codec(audio_codec_combo_);
 
-    if (settings_.container != capability::Container::Matroska) {
-        settings_.container = capability::Container::Matroska;
+    if (settings_.container != capability::Container::WebM) {
+        settings_.container = capability::Container::WebM;
     }
 
     destination_edit_->setText(QString::fromStdWString(settings_.output_folder.wstring()));
@@ -224,7 +224,7 @@ void OutputPage::applySettingsToUi() {
 void OutputPage::emitCurrentSettings() {
     settings_.output_folder = std::filesystem::path(destination_edit_->text().toStdWString());
     settings_.naming_pattern = naming_edit_->text().toStdWString();
-    settings_.container = capability::Container::Matroska; // MP4 disabled in MVP
+    settings_.container = capability::Container::WebM; // MP4 disabled in MVP
 
     const QString codec_text = audio_codec_combo_->currentText().toLower();
     if (codec_text.contains("aac")) {

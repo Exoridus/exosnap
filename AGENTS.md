@@ -18,7 +18,7 @@ Build a Windows-native, diagnostics-first recording application MVP with a high-
   - Advanced
 - MVP excludes overlay/HUD work.
 - Primary recording profile:
-  - MKV
+  - WebM (libwebm writes DocType=webm for all V_AV1+A_OPUS output)
   - AV1
   - Opus
   - CFR 60 fps

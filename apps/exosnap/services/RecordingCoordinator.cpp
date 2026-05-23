@@ -215,7 +215,7 @@ void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::Capabi
     if (validation.succeeded) {
         resolved_user_config_ = validation.resolved_config;
         state_ = UiRecordingState::Ready;
-        capability_status_text_ = L"Ready: MKV · AV1 NVENC · OPUS · 60 fps";
+        capability_status_text_ = L"Ready: WebM · AV1 NVENC · OPUS · 60 fps";
     } else {
         state_ = UiRecordingState::Blocked;
         capability_status_text_ =

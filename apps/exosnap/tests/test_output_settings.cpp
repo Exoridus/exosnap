@@ -347,9 +347,9 @@ TEST(OutputSettingsTest, Defaults_FolderNotEmpty) {
     EXPECT_FALSE(defaults.output_folder.empty());
 }
 
-TEST(OutputSettingsTest, Defaults_ContainerIsMatroska) {
+TEST(OutputSettingsTest, Defaults_ContainerIsWebM) {
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
-    EXPECT_EQ(defaults.container, capability::Container::Matroska);
+    EXPECT_EQ(defaults.container, capability::Container::WebM);
 }
 
 TEST(OutputSettingsTest, Defaults_AudioCodecIsOpus) {
