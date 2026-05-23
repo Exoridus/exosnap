@@ -86,4 +86,82 @@ bool ExtractH264SpsAndPps(const uint8_t* data, size_t size, std::vector<uint8_t>
     return true;
 }
 
+bool BuildAvccFromAnnexBSpsAndPps(const std::vector<uint8_t>& sps_pps_annexb, std::vector<uint8_t>& out_avcc) {
+    // sps_pps_annexb layout (from ExtractH264SpsAndPps):
+    //   [00 00 00 01] [SPS NAL bytes...] [00 00 00 01] [PPS NAL bytes...]
+    //   SPS NAL first byte = 0x67 (nal_unit_type=7), followed by profile_idc, profile_compat, level_idc, ...
+    //   PPS NAL first byte = 0x68 (nal_unit_type=8), followed by PPS payload
+
+    // Minimum: SC(4) + SPS(≥4: type+profile+compat+level) + SC(4) + PPS(≥2: type+1) = 14
+    constexpr size_t kMinimumSize = 14;
+    if (sps_pps_annexb.size() < kMinimumSize) {
+        return false;
+    }
+
+    // Skip the 4-byte start code for the SPS NAL.
+    if (sps_pps_annexb[0] != 0x00 || sps_pps_annexb[1] != 0x00 || sps_pps_annexb[2] != 0x00 ||
+        sps_pps_annexb[3] != 0x01) {
+        return false;
+    }
+    const size_t sps_start = 4; // first byte of SPS NAL (0x67)
+
+    // Find the second start code (PPS).
+    constexpr size_t kNotFound = static_cast<size_t>(-1);
+    size_t pps_sc_pos = kNotFound;
+    for (size_t i = sps_start + 1; i + 3 < sps_pps_annexb.size(); ++i) {
+        if (sps_pps_annexb[i] == 0x00 && sps_pps_annexb[i + 1] == 0x00 && sps_pps_annexb[i + 2] == 0x00 &&
+            sps_pps_annexb[i + 3] == 0x01) {
+            pps_sc_pos = i;
+            break;
+        }
+    }
+
+    if (pps_sc_pos == kNotFound) {
+        return false;
+    }
+
+    const size_t sps_len = pps_sc_pos - sps_start;
+    const size_t pps_start = pps_sc_pos + 4; // first byte of PPS NAL (0x68)
+    const size_t pps_len = sps_pps_annexb.size() - pps_start;
+
+    // SPS must contain at least: type(1) + profile_idc(1) + profile_compat(1) + level_idc(1)
+    if (sps_len < 4 || pps_len < 1) {
+        return false;
+    }
+    if (sps_len > 0xFFFF || pps_len > 0xFFFF) {
+        return false;
+    }
+
+    const uint8_t* sps = sps_pps_annexb.data() + sps_start;
+    const uint8_t* pps = sps_pps_annexb.data() + pps_start;
+
+    // sps[0] = NAL type byte (0x67), sps[1]=profile_idc, sps[2]=profile_compat, sps[3]=level_idc
+    const uint8_t profile_idc = sps[1];
+    const uint8_t profile_compat = sps[2];
+    const uint8_t level_idc = sps[3];
+
+    // AVCDecoderConfigurationRecord:
+    // configurationVersion (1) | AVCProfileIndication (1) | profile_compatibility (1)
+    // | AVCLevelIndication (1) | lengthSizeMinusOne (1, =0xFF for 4-byte NALU prefix)
+    // | numSPS (1, =0xE1 for 1 SPS with 3 reserved bits set) | spsLen_hi | spsLen_lo | <SPS bytes>
+    // | numPPS (1, =0x01) | ppsLen_hi | ppsLen_lo | <PPS bytes>
+    out_avcc.clear();
+    out_avcc.reserve(6 + 2 + sps_len + 1 + 2 + pps_len);
+    out_avcc.push_back(0x01u);                                         // configurationVersion
+    out_avcc.push_back(profile_idc);                                   // AVCProfileIndication
+    out_avcc.push_back(profile_compat);                                // profile_compatibility
+    out_avcc.push_back(level_idc);                                     // AVCLevelIndication
+    out_avcc.push_back(0xFFu);                                         // lengthSizeMinusOne = 3 → 4-byte prefix
+    out_avcc.push_back(0xE1u);                                         // numSPS = 1 (3 reserved + 5-bit count)
+    out_avcc.push_back(static_cast<uint8_t>((sps_len >> 8u) & 0xFFu)); // spsLength high
+    out_avcc.push_back(static_cast<uint8_t>(sps_len & 0xFFu));         // spsLength low
+    out_avcc.insert(out_avcc.end(), sps, sps + sps_len);
+    out_avcc.push_back(0x01u);                                         // numPPS = 1
+    out_avcc.push_back(static_cast<uint8_t>((pps_len >> 8u) & 0xFFu)); // ppsLength high
+    out_avcc.push_back(static_cast<uint8_t>(pps_len & 0xFFu));         // ppsLength low
+    out_avcc.insert(out_avcc.end(), pps, pps + pps_len);
+
+    return true;
+}
+
 } // namespace recorder_core::annexb

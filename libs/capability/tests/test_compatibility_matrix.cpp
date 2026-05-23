@@ -43,6 +43,12 @@ TEST(CapabilityMatrixTest, MatrixRequiredPairsMatchBaseline) {
                   .level,
               SupportLevel::Available);
 
+    // MKV + H.264 + AAC: now available (default profile)
+    EXPECT_EQ(caps.QueryCombo(Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
+                              BitDepth::Bit8)
+                  .level,
+              SupportLevel::Available);
+
     EXPECT_EQ(caps.QueryCombo(Container::WebM, VideoCodec::Av1Nvenc, AudioCodec::Opus, ChromaSubsampling::Cs420,
                               BitDepth::Bit8)
                   .level,
@@ -63,7 +69,7 @@ TEST(CapabilityMatrixTest, MatrixRequiredPairsMatchBaseline) {
                   .level,
               SupportLevel::Invalid);
 
-    // MP4 + H.264 + AAC: now available
+    // MP4 + H.264 + AAC: available
     EXPECT_EQ(caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
                               BitDepth::Bit8)
                   .level,

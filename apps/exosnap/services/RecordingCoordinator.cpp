@@ -221,7 +221,7 @@ void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::Capabi
     if (validation.succeeded) {
         resolved_user_config_ = validation.resolved_config;
         state_ = UiRecordingState::Ready;
-        capability_status_text_ = L"Ready: WebM · AV1 NVENC · OPUS · 60 fps";
+        capability_status_text_ = L"Ready: MKV · H.264 NVENC · AAC · 60 fps";
     } else {
         state_ = UiRecordingState::Blocked;
         capability_status_text_ =
@@ -473,10 +473,15 @@ void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings
         resolved_user_config_.container = capability::Container::Mp4;
         resolved_user_config_.video_codec = capability::VideoCodec::H264Nvenc;
         resolved_user_config_.audio_codec = capability::AudioCodec::AacMf;
-    } else {
+    } else if (settings.container == capability::Container::WebM) {
         resolved_user_config_.container = capability::Container::WebM;
         resolved_user_config_.video_codec = capability::VideoCodec::Av1Nvenc;
         resolved_user_config_.audio_codec = capability::AudioCodec::Opus;
+    } else {
+        // MKV (Matroska): H.264 + AAC
+        resolved_user_config_.container = capability::Container::Matroska;
+        resolved_user_config_.video_codec = capability::VideoCodec::H264Nvenc;
+        resolved_user_config_.audio_codec = capability::AudioCodec::AacMf;
     }
 }
 void RecordingCoordinator::SetOutputTargetContext(const FilenameTargetContext& context) {

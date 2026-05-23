@@ -39,6 +39,18 @@ AudioCodec PreferredAudioCodecForContainer(Container container) {
     return AudioCodec::AacMf;
 }
 
+VideoCodec PreferredVideoCodecForContainer(Container container) {
+    switch (container) {
+    case Container::WebM:
+        return VideoCodec::Av1Nvenc;
+    case Container::Matroska:
+        return VideoCodec::H264Nvenc;
+    case Container::Mp4:
+        return VideoCodec::H264Nvenc;
+    }
+    return VideoCodec::H264Nvenc;
+}
+
 SupportAnnotation QueryResolvedCombo(const CapabilitySet& caps, const UserRecorderConfig& config) {
     return caps.QueryCombo(config.container, config.video_codec, config.audio_codec, config.chroma, config.bit_depth);
 }
@@ -156,24 +168,49 @@ ResolveResult SettingsResolver::ResolveChange(const UserRecorderConfig& current,
         SupportAnnotation combo = QueryResolvedCombo(caps_, result.resolved_config);
 
         if (!IsSelectable(combo.level)) {
-            const AudioCodec preferred = PreferredAudioCodecForContainer(*container);
-            if (result.resolved_config.audio_codec != preferred) {
+            // Try preferred audio for the new container first.
+            const AudioCodec preferred_audio = PreferredAudioCodecForContainer(*container);
+            if (result.resolved_config.audio_codec != preferred_audio) {
                 UserRecorderConfig candidate = result.resolved_config;
-                candidate.audio_codec = preferred;
-                const SupportAnnotation fallback_combo = QueryResolvedCombo(caps_, candidate);
-                if (IsSelectable(fallback_combo.level)) {
+                candidate.audio_codec = preferred_audio;
+                const SupportAnnotation audio_fallback = QueryResolvedCombo(caps_, candidate);
+                if (IsSelectable(audio_fallback.level)) {
                     result.adjustments.push_back(
-                        Adjustment{"audio_codec", Stringify(result.resolved_config.audio_codec), Stringify(preferred),
-                                   "Adjusted to preferred codec for selected container."});
+                        Adjustment{"audio_codec", Stringify(result.resolved_config.audio_codec),
+                                   Stringify(preferred_audio), "Adjusted to preferred codec for selected container."});
                     result.resolved_config = candidate;
                     FinalizeSelectableResult(caps_, result, "container");
                     return result;
                 }
-                AddInvalid(result, "audio_codec",
-                           "Container requires audio fallback, but preferred codec is not selectable: " +
-                               fallback_combo.reason);
-                return result;
             }
+
+            // Audio-only fallback did not work: also try preferred video + preferred audio.
+            const VideoCodec preferred_video = PreferredVideoCodecForContainer(*container);
+            if (result.resolved_config.video_codec != preferred_video) {
+                UserRecorderConfig candidate = result.resolved_config;
+                candidate.video_codec = preferred_video;
+                candidate.audio_codec = preferred_audio;
+                const SupportAnnotation av_fallback = QueryResolvedCombo(caps_, candidate);
+                if (IsSelectable(av_fallback.level)) {
+                    if (result.resolved_config.video_codec != preferred_video) {
+                        result.adjustments.push_back(Adjustment{
+                            "video_codec", Stringify(result.resolved_config.video_codec), Stringify(preferred_video),
+                            "Adjusted video codec to preferred for selected container."});
+                    }
+                    if (result.resolved_config.audio_codec != preferred_audio) {
+                        result.adjustments.push_back(Adjustment{
+                            "audio_codec", Stringify(result.resolved_config.audio_codec), Stringify(preferred_audio),
+                            "Adjusted audio codec to preferred for selected container."});
+                    }
+                    result.resolved_config = candidate;
+                    FinalizeSelectableResult(caps_, result, "container");
+                    return result;
+                }
+            }
+
+            AddInvalid(result, "container",
+                       "Container requires codec fallback, but no selectable combination was found.");
+            return result;
         }
 
         if (!FinalizeSelectableResult(caps_, result, "container")) {

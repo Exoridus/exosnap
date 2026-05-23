@@ -97,10 +97,15 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         if (config.video_codec != VideoCodec::H264Nvenc) {
             return fail(E_NOTIMPL, ErrorPhase::Prepare, "Container::Mp4 requires VideoCodec::H264Nvenc");
         }
-    } else {
+    } else if (config.container == Container::WebM) {
         if (config.video_codec != VideoCodec::Av1Nvenc) {
+            return fail(E_NOTIMPL, ErrorPhase::Prepare, "Container::WebM requires VideoCodec::Av1Nvenc");
+        }
+    } else {
+        // Container::Matroska: AV1 and H.264 are supported
+        if (config.video_codec != VideoCodec::Av1Nvenc && config.video_codec != VideoCodec::H264Nvenc) {
             return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                        "Container::WebM and Container::Matroska require VideoCodec::Av1Nvenc");
+                        "Container::Matroska requires VideoCodec::Av1Nvenc or VideoCodec::H264Nvenc");
         }
     }
 

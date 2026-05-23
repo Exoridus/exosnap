@@ -89,8 +89,11 @@ SupportAnnotation BaseContainerVideoAudioAnnotation(Container c, VideoCodec v, A
         if (v == VideoCodec::Av1Nvenc && a == AudioCodec::Pcm) {
             return {SupportLevel::NotImplemented, "MKV + AV1 + PCM is not implemented."};
         }
-        if ((v == VideoCodec::H264Nvenc || v == VideoCodec::HevcNvenc) && a == AudioCodec::AacMf) {
-            return {SupportLevel::NotImplemented, "MKV + NVENC H.264/HEVC + AAC is planned but not implemented yet."};
+        if (v == VideoCodec::H264Nvenc && a == AudioCodec::AacMf) {
+            return {SupportLevel::Available, "Validated MKV H.264+AAC path via libwebm Matroska muxer."};
+        }
+        if (v == VideoCodec::HevcNvenc && a == AudioCodec::AacMf) {
+            return {SupportLevel::NotImplemented, "MKV + HEVC + AAC is planned but not yet implemented."};
         }
         return {SupportLevel::Invalid, "This MKV combination is not in the supported product matrix."};
     }

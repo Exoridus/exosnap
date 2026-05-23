@@ -67,15 +67,16 @@ TEST(Mp4ValidationTest, RejectsWebMWithH264) {
     EXPECT_FALSE(result.succeeded);
 }
 
-TEST(Mp4ValidationTest, RejectsMatroskaWithH264) {
+TEST(Mp4ValidationTest, AcceptsMatroskaWithH264) {
     RecorderSession session;
     auto cfg = MakeMp4Config();
     cfg.container = Container::Matroska;
     cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.audio_codec = AudioCodec::AacMf;
 
     RecorderResult result{};
-    EXPECT_FALSE(session.Validate(cfg, &result));
-    EXPECT_FALSE(result.succeeded);
+    EXPECT_TRUE(session.Validate(cfg, &result));
+    EXPECT_TRUE(result.succeeded);
 }
 
 TEST(Mp4ValidationTest, DefaultConfigIsWebMNotMp4) {

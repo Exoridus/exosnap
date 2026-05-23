@@ -1,5 +1,6 @@
 #include "mux_thread.h"
 
+#include "annexb_to_avcc.h"
 #include "session_internal.h"
 
 #include <recorder_core/packet_types.h>
@@ -99,11 +100,19 @@ void MuxThread::Run() {
     }
 
     // Save codec private data and encode dimensions for deferred track init
-    uint8_t av1Cp[4] = {};
+    std::vector<uint8_t> video_codec_private;
     std::array<AudioCodecPrivateSlot, CodecPrivateData::kMaxAudioTracks> audioCp{};
     {
         std::lock_guard lk(m_state.premux_mutex);
-        std::memcpy(av1Cp, m_state.codec_private.av1_codec_private, 4);
+        if (m_state.config.video_codec == VideoCodec::H264Nvenc) {
+            if (!annexb::BuildAvccFromAnnexBSpsAndPps(m_state.codec_private.h264_sps_pps, video_codec_private)) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Failed to build AVCC from H.264 SPS/PPS for Matroska");
+                return;
+            }
+        } else {
+            video_codec_private.assign(m_state.codec_private.av1_codec_private,
+                                       m_state.codec_private.av1_codec_private + 4);
+        }
         for (uint32_t i = 0; i < track_count; ++i) {
             audioCp[i] = m_state.codec_private.audio_codec_private[i];
         }
@@ -324,8 +333,12 @@ void MuxThread::Run() {
     }
 
     auto* vt = static_cast<mkvmuxer::VideoTrack*>(segment.GetTrackByNumber(videoTrackNum));
-    vt->set_codec_id("V_AV1");
-    vt->SetCodecPrivate(av1Cp, 4);
+    if (m_state.config.video_codec == VideoCodec::H264Nvenc) {
+        vt->set_codec_id("V_MPEG4/ISO/AVC");
+    } else {
+        vt->set_codec_id("V_AV1");
+    }
+    vt->SetCodecPrivate(video_codec_private.data(), static_cast<uint64_t>(video_codec_private.size()));
     vt->set_frame_rate(static_cast<double>(m_state.config.frame_rate_num) /
                        static_cast<double>(m_state.config.frame_rate_den));
 

@@ -24,15 +24,22 @@ TEST(SettingsResolverTest, ValidateDefaultConfigSucceedsWithoutAdjustments) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
     const SettingsResolver resolver(caps);
 
-    const ResolveResult result = resolver.ValidateConfig(UserRecorderConfig{});
+    // Default is now MKV + H264 + AAC
+    const UserRecorderConfig defaultConfig{};
+    EXPECT_EQ(defaultConfig.container, Container::Matroska);
+    EXPECT_EQ(defaultConfig.video_codec, VideoCodec::H264Nvenc);
+    EXPECT_EQ(defaultConfig.audio_codec, AudioCodec::AacMf);
+
+    const ResolveResult result = resolver.ValidateConfig(defaultConfig);
     EXPECT_TRUE(result.succeeded);
     EXPECT_TRUE(result.adjustments.empty());
     EXPECT_TRUE(result.invalidity.empty());
 }
 
-TEST(SettingsResolverTest, ContainerChangeToWebMSucceedsWithOpus) {
+TEST(SettingsResolverTest, ContainerChangeToWebMSucceedsWithOpusAndAv1) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
     const SettingsResolver resolver(caps);
+    // Start from default (MKV + H264 + AAC); switching to WebM adjusts both codecs.
     const UserRecorderConfig current{};
 
     const ResolveResult result = resolver.ResolveChange(current, RequestedChange::ForContainer(Container::WebM));
@@ -40,14 +47,16 @@ TEST(SettingsResolverTest, ContainerChangeToWebMSucceedsWithOpus) {
     EXPECT_TRUE(result.succeeded);
     EXPECT_EQ(result.resolved_config.container, Container::WebM);
     EXPECT_EQ(result.resolved_config.audio_codec, AudioCodec::Opus);
+    EXPECT_EQ(result.resolved_config.video_codec, VideoCodec::Av1Nvenc);
 }
 
-TEST(SettingsResolverTest, ContainerChangeFromWebMToMatroskaAdjustsAudioToAac) {
+TEST(SettingsResolverTest, ContainerChangeFromWebMAv1OpusToMatroskaSucceeds) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
     const SettingsResolver resolver(caps);
 
     UserRecorderConfig current{};
     current.container = Container::WebM;
+    current.video_codec = VideoCodec::Av1Nvenc;
     current.audio_codec = AudioCodec::Opus;
 
     const ResolveResult result = resolver.ResolveChange(current, RequestedChange::ForContainer(Container::Matroska));
@@ -56,12 +65,13 @@ TEST(SettingsResolverTest, ContainerChangeFromWebMToMatroskaAdjustsAudioToAac) {
     EXPECT_EQ(result.resolved_config.container, Container::Matroska);
 }
 
-TEST(SettingsResolverTest, ContainerChangeFromMatroskaToWebMAdjustsAudioToOpus) {
+TEST(SettingsResolverTest, ContainerChangeFromMkvH264AacToWebMAdjustsCodecs) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
     const SettingsResolver resolver(caps);
 
     UserRecorderConfig current{};
     current.container = Container::Matroska;
+    current.video_codec = VideoCodec::H264Nvenc;
     current.audio_codec = AudioCodec::AacMf;
 
     const ResolveResult result = resolver.ResolveChange(current, RequestedChange::ForContainer(Container::WebM));
@@ -69,8 +79,15 @@ TEST(SettingsResolverTest, ContainerChangeFromMatroskaToWebMAdjustsAudioToOpus) 
     EXPECT_TRUE(result.succeeded);
     EXPECT_EQ(result.resolved_config.container, Container::WebM);
     EXPECT_EQ(result.resolved_config.audio_codec, AudioCodec::Opus);
-    ASSERT_EQ(result.adjustments.size(), 1u);
-    EXPECT_EQ(result.adjustments.front().field, "audio_codec");
+    EXPECT_EQ(result.resolved_config.video_codec, VideoCodec::Av1Nvenc);
+    // Two adjustments: video_codec H264→AV1 and audio_codec AAC→Opus
+    EXPECT_GE(result.adjustments.size(), 1u);
+    bool has_audio_adjustment = false;
+    for (const auto& adj : result.adjustments) {
+        if (adj.field == "audio_codec")
+            has_audio_adjustment = true;
+    }
+    EXPECT_TRUE(has_audio_adjustment);
 }
 
 TEST(SettingsResolverTest, ValidateMp4H264AacConfigSucceeds) {
@@ -143,7 +160,8 @@ TEST(SettingsResolverTest, ValidateConfigAppliesAllowedFallbacksForProfileLikeIn
 
     UserRecorderConfig profile_config;
     profile_config.container = Container::WebM;
-    profile_config.audio_codec = AudioCodec::AacMf; // invalid for WebM — should be adjusted to Opus
+    profile_config.video_codec = VideoCodec::Av1Nvenc; // explicit AV1 for WebM
+    profile_config.audio_codec = AudioCodec::AacMf;    // invalid for WebM — should be adjusted to Opus
     profile_config.chroma = ChromaSubsampling::Cs444;
     profile_config.bit_depth = BitDepth::Bit10;
 
@@ -160,17 +178,34 @@ TEST(SettingsResolverTest, ValidateConfigAppliesAllowedFallbacksForProfileLikeIn
     EXPECT_TRUE(HasAdjustmentField(result, "bit_depth"));
 }
 
-TEST(TranslationTest, ToRecorderCoreConfigAcceptsDefaultWebMCombo) {
+TEST(TranslationTest, ToRecorderCoreConfigAcceptsDefaultMkvH264AacCombo) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
     ResolveResult validation;
+    // Default UserRecorderConfig is now MKV + H264 + AAC
     const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(UserRecorderConfig{}, caps, &validation);
+
+    EXPECT_TRUE(validation.succeeded);
+    EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::H264Nvenc);
+    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::AacMf);
+    EXPECT_EQ(translated.chroma, recorder_core::ChromaSubsampling::Cs420);
+    EXPECT_EQ(translated.bit_depth, recorder_core::BitDepth::Bit8);
+}
+
+TEST(TranslationTest, ToRecorderCoreConfigAcceptsWebMAv1OpusCombo) {
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+    UserRecorderConfig config;
+    config.container = Container::WebM;
+    config.video_codec = VideoCodec::Av1Nvenc;
+    config.audio_codec = AudioCodec::Opus;
+
+    ResolveResult validation;
+    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
 
     EXPECT_TRUE(validation.succeeded);
     EXPECT_EQ(translated.container, recorder_core::Container::WebM);
     EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::Av1Nvenc);
     EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Opus);
-    EXPECT_EQ(translated.chroma, recorder_core::ChromaSubsampling::Cs420);
-    EXPECT_EQ(translated.bit_depth, recorder_core::BitDepth::Bit8);
 }
 
 TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvAv1AacCombo) {
@@ -178,6 +213,7 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvAv1AacCombo) {
 
     UserRecorderConfig config;
     config.container = Container::Matroska;
+    config.video_codec = VideoCodec::Av1Nvenc; // explicit AV1
     config.audio_codec = AudioCodec::AacMf;
 
     ResolveResult validation;
@@ -185,6 +221,7 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvAv1AacCombo) {
 
     EXPECT_TRUE(validation.succeeded);
     EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::Av1Nvenc);
     EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::AacMf);
 }
 
@@ -193,6 +230,7 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvAv1OpusCombo) {
 
     UserRecorderConfig config;
     config.container = Container::Matroska;
+    config.video_codec = VideoCodec::Av1Nvenc; // explicit AV1
     config.audio_codec = AudioCodec::Opus;
 
     ResolveResult validation;
@@ -200,6 +238,7 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvAv1OpusCombo) {
 
     EXPECT_TRUE(validation.succeeded);
     EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::Av1Nvenc);
     EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Opus);
 }
 
@@ -220,16 +259,36 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMp4H264AacCombo) {
     EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::AacMf);
 }
 
-TEST(TranslationTest, ToRecorderCoreConfigRejectsNonImplementedComboEvenWhenSelectable) {
+TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvH264AacCombo) {
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    UserRecorderConfig config;
+    config.container = Container::Matroska;
+    config.video_codec = VideoCodec::H264Nvenc;
+    config.audio_codec = AudioCodec::AacMf;
+
+    ResolveResult validation;
+    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+
+    EXPECT_TRUE(validation.succeeded);
+    EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::H264Nvenc);
+    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::AacMf);
+}
+
+TEST(TranslationTest, ToRecorderCoreConfigRejectsHevcComboAsTranslationUnknown) {
+    // MKV + HEVC + AAC is NotImplemented in capability, so ToRecorderCoreConfig must reject it.
     CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
-    caps.video_codecs[VideoCodec::H264Nvenc] = SupportAnnotation{SupportLevel::ValidUnvalidated, "Test override."};
-    caps.combo_overrides[ComboKey{Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::AacMf,
+    // Force HEVC into selectable state via overrides so ValidateConfig succeeds.
+    caps.video_codecs[VideoCodec::HevcNvenc] =
+        SupportAnnotation{SupportLevel::ValidUnvalidated, "Test override for HEVC."};
+    caps.combo_overrides[ComboKey{Container::Matroska, VideoCodec::HevcNvenc, AudioCodec::AacMf,
                                   ChromaSubsampling::Cs420, BitDepth::Bit8}] =
         SupportAnnotation{SupportLevel::ValidUnvalidated, "Test override."};
 
     UserRecorderConfig config;
     config.container = Container::Matroska;
-    config.video_codec = VideoCodec::H264Nvenc;
+    config.video_codec = VideoCodec::HevcNvenc;
     config.audio_codec = AudioCodec::AacMf;
 
     ResolveResult validation;

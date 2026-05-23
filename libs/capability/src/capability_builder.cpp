@@ -73,9 +73,13 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
         caps.video_codecs[VideoCodec::H264Nvenc] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
 
         // Force primary combos to non-selectable via combo_override.
-        const ComboKey m32_key{Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
-                               BitDepth::Bit8};
-        caps.combo_overrides[m32_key] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
+        const ComboKey mkv_av1_key{Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf,
+                                   ChromaSubsampling::Cs420, BitDepth::Bit8};
+        caps.combo_overrides[mkv_av1_key] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
+
+        const ComboKey mkv_h264_key{Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::AacMf,
+                                    ChromaSubsampling::Cs420, BitDepth::Bit8};
+        caps.combo_overrides[mkv_h264_key] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
 
         const ComboKey mp4_key{Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
                                BitDepth::Bit8};
@@ -94,17 +98,21 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
         caps.audio_codecs[AudioCodec::AacMf] = SupportAnnotation{SupportLevel::NotImplemented, aac_reason};
 
         // Force primary AAC combos to non-selectable via combo_override.
-        const ComboKey m32_key{Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
-                               BitDepth::Bit8};
-        const auto it = caps.combo_overrides.find(m32_key);
-        if (it == caps.combo_overrides.end()) {
-            caps.combo_overrides[m32_key] = SupportAnnotation{SupportLevel::NotImplemented, aac_reason};
+        const ComboKey mkv_av1_key{Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf,
+                                   ChromaSubsampling::Cs420, BitDepth::Bit8};
+        if (caps.combo_overrides.find(mkv_av1_key) == caps.combo_overrides.end()) {
+            caps.combo_overrides[mkv_av1_key] = SupportAnnotation{SupportLevel::NotImplemented, aac_reason};
+        }
+
+        const ComboKey mkv_h264_key{Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::AacMf,
+                                    ChromaSubsampling::Cs420, BitDepth::Bit8};
+        if (caps.combo_overrides.find(mkv_h264_key) == caps.combo_overrides.end()) {
+            caps.combo_overrides[mkv_h264_key] = SupportAnnotation{SupportLevel::NotImplemented, aac_reason};
         }
 
         const ComboKey mp4_key{Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
                                BitDepth::Bit8};
-        const auto mp4_it = caps.combo_overrides.find(mp4_key);
-        if (mp4_it == caps.combo_overrides.end()) {
+        if (caps.combo_overrides.find(mp4_key) == caps.combo_overrides.end()) {
             caps.combo_overrides[mp4_key] = SupportAnnotation{SupportLevel::NotImplemented, aac_reason};
         }
     }

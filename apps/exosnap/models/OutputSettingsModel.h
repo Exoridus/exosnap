@@ -10,8 +10,8 @@ namespace exosnap {
 struct OutputSettingsModel {
     std::filesystem::path output_folder;
     std::wstring naming_pattern = L"{datetime}_{app}_{title}";
-    capability::Container container = capability::Container::WebM;
-    capability::AudioCodec audio_codec = capability::AudioCodec::Opus;
+    capability::Container container = capability::Container::Matroska;
+    capability::AudioCodec audio_codec = capability::AudioCodec::AacMf;
 
     static OutputSettingsModel Defaults();
 };

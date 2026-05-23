@@ -347,14 +347,14 @@ TEST(OutputSettingsTest, Defaults_FolderNotEmpty) {
     EXPECT_FALSE(defaults.output_folder.empty());
 }
 
-TEST(OutputSettingsTest, Defaults_ContainerIsWebM) {
+TEST(OutputSettingsTest, Defaults_ContainerIsMatroska) {
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
-    EXPECT_EQ(defaults.container, capability::Container::WebM);
+    EXPECT_EQ(defaults.container, capability::Container::Matroska);
 }
 
-TEST(OutputSettingsTest, Defaults_AudioCodecIsOpus) {
+TEST(OutputSettingsTest, Defaults_AudioCodecIsAac) {
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
-    EXPECT_EQ(defaults.audio_codec, capability::AudioCodec::Opus);
+    EXPECT_EQ(defaults.audio_codec, capability::AudioCodec::AacMf);
 }
 
 TEST(OutputSettingsTest, Mp4Profile_ExtensionIsMp4) {

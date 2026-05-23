@@ -344,7 +344,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_WebMWithAac_ReconcilesToOpus) {
     EXPECT_EQ(loaded.output.audio_codec, capability::AudioCodec::Opus);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_MkvContainer_FallsBackToWebM) {
+TEST(AppSettingsStoreTest, AppSettingsStore_MkvContainer_LoadsAsMatroskaWithAac) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
@@ -357,8 +357,8 @@ TEST(AppSettingsStoreTest, AppSettingsStore_MkvContainer_FallsBackToWebM) {
 
     AppSettingsStore store(settings_path);
     const PersistedAppSettings loaded = store.Load();
-    EXPECT_EQ(loaded.output.container, capability::Container::WebM);
-    EXPECT_EQ(loaded.output.audio_codec, capability::AudioCodec::Opus);
+    EXPECT_EQ(loaded.output.container, capability::Container::Matroska);
+    EXPECT_EQ(loaded.output.audio_codec, capability::AudioCodec::AacMf);
 }
 
 TEST(AppSettingsStoreTest, AppSettingsStore_SeparateTracksTrueDoesNotResurrectMvpState) {

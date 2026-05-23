@@ -25,6 +25,7 @@ TEST(OptionQueryTest, MatroskaAv1AudioOptionsMatchBaseline) {
 
     UserRecorderConfig current{};
     current.container = Container::Matroska;
+    current.video_codec = VideoCodec::Av1Nvenc;
     current.audio_codec = AudioCodec::AacMf;
 
     const std::vector<OptionEntry> options = query.GetAudioCodecOptions(current);

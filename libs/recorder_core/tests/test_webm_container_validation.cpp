@@ -84,4 +84,34 @@ TEST(WebMContainerValidationTest, Validate_DefaultConfigIsWebMOpus) {
     EXPECT_EQ(cfg.video_codec, VideoCodec::Av1Nvenc);
 }
 
+TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaH264Aac) {
+    RecorderSession session;
+    RecorderConfig cfg{};
+    cfg.output_path = std::filesystem::current_path() / "test_mkv_h264_aac.mkv";
+    cfg.target.kind = CaptureTarget::Kind::Monitor;
+    cfg.target.native_id = 1;
+    cfg.container = Container::Matroska;
+    cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.audio_codec = AudioCodec::AacMf;
+
+    RecorderResult result{};
+    EXPECT_TRUE(session.Validate(cfg, &result));
+    EXPECT_TRUE(result.succeeded);
+}
+
+TEST(WebMContainerValidationTest, Validate_RejectsWebMH264) {
+    RecorderSession session;
+    RecorderConfig cfg{};
+    cfg.output_path = std::filesystem::current_path() / "test_webm_h264.webm";
+    cfg.target.kind = CaptureTarget::Kind::Monitor;
+    cfg.target.native_id = 1;
+    cfg.container = Container::WebM;
+    cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.audio_codec = AudioCodec::Opus;
+
+    RecorderResult result{};
+    EXPECT_FALSE(session.Validate(cfg, &result));
+    EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
+}
+
 } // namespace

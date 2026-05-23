@@ -106,18 +106,21 @@ OutputPage::OutputPage(const OutputSettingsModel& initial_settings, QWidget* par
                                          ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
     container_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
 
-    mkv_radio_ = makeRadio("WebM", container_panel);
+    mkv_radio_ = makeRadio("MKV (Matroska)", container_panel);
+    webm_radio_ = makeRadio("WebM", container_panel);
     mp4_radio_ = makeRadio("MP4", container_panel);
     mkv_radio_->setChecked(true);
     container_group_ = new QButtonGroup(this);
     container_group_->addButton(mkv_radio_, 0);
-    container_group_->addButton(mp4_radio_, 1);
+    container_group_->addButton(webm_radio_, 1);
+    container_group_->addButton(mp4_radio_, 2);
     container_layout->addWidget(mkv_radio_);
+    container_layout->addWidget(webm_radio_);
     container_layout->addWidget(mp4_radio_);
 
     // MP4 info note (hidden by default)
-    mp4_info_label_ = new QLabel("MP4 is less crash-resilient than WebM. If recording is interrupted unexpectedly,"
-                                 " the file may require recovery or be unusable.",
+    mp4_info_label_ = new QLabel("MP4 is less crash-resilient than MKV or WebM. If recording is interrupted "
+                                 "unexpectedly, the file may require recovery or be unusable.",
                                  container_panel);
     mp4_info_label_->setWordWrap(true);
     mp4_info_label_->setProperty("panelRole", "note");
@@ -180,11 +183,14 @@ OutputPage::OutputPage(const OutputSettingsModel& initial_settings, QWidget* par
 }
 
 void OutputPage::onContainerChanged(int id) {
-    if (id == 1) {
+    if (id == 2) {
         settings_.container = capability::Container::Mp4;
         mp4_info_label_->setVisible(true);
-    } else {
+    } else if (id == 1) {
         settings_.container = capability::Container::WebM;
+        mp4_info_label_->setVisible(false);
+    } else {
+        settings_.container = capability::Container::Matroska;
         mp4_info_label_->setVisible(false);
     }
     updateAudioCodecChoices();
@@ -209,8 +215,11 @@ void OutputPage::applySettingsToUi() {
     if (settings_.container == capability::Container::Mp4) {
         mp4_radio_->setChecked(true);
         mp4_info_label_->setVisible(true);
+    } else if (settings_.container == capability::Container::WebM) {
+        webm_radio_->setChecked(true);
+        mp4_info_label_->setVisible(false);
     } else {
-        settings_.container = capability::Container::WebM;
+        settings_.container = capability::Container::Matroska;
         mkv_radio_->setChecked(true);
         mp4_info_label_->setVisible(false);
     }
@@ -221,15 +230,22 @@ void OutputPage::applySettingsToUi() {
 void OutputPage::emitCurrentSettings() {
     settings_.output_folder = std::filesystem::path(destination_edit_->text().toStdWString());
     settings_.naming_pattern = naming_edit_->text().toStdWString();
-    settings_.container =
-        (container_group_->checkedId() == 1) ? capability::Container::Mp4 : capability::Container::WebM;
+    const int cid = container_group_->checkedId();
+    if (cid == 2) {
+        settings_.container = capability::Container::Mp4;
+    } else if (cid == 1) {
+        settings_.container = capability::Container::WebM;
+    } else {
+        settings_.container = capability::Container::Matroska;
+    }
 
     if (settings_.container == capability::Container::Mp4) {
         settings_.audio_codec = capability::AudioCodec::AacMf;
+    } else if (settings_.container == capability::Container::WebM) {
+        settings_.audio_codec = capability::AudioCodec::Opus;
     } else {
-        const QString codec_text = audio_codec_combo_->currentText().toLower();
-        settings_.audio_codec =
-            codec_text.contains("aac") ? capability::AudioCodec::AacMf : capability::AudioCodec::Opus;
+        // MKV: locked to AAC (H.264+AAC profile)
+        settings_.audio_codec = capability::AudioCodec::AacMf;
     }
 
     updateEffectiveOutputPreview();
@@ -237,12 +253,14 @@ void OutputPage::emitCurrentSettings() {
 }
 
 void OutputPage::updateAudioCodecChoices() {
-    const bool is_mp4 = container_group_->checkedId() == 1;
     audio_codec_combo_->clear();
-    if (is_mp4) {
-        audio_codec_combo_->addItem("AAC");
-    } else {
+    const int cid = container_group_->checkedId();
+    if (cid == 1) {
+        // WebM: Opus only
         audio_codec_combo_->addItem("Opus");
+    } else {
+        // MKV and MP4: AAC only
+        audio_codec_combo_->addItem("AAC");
     }
     audio_codec_combo_->setEnabled(false);
 }

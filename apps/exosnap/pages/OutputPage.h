@@ -31,6 +31,7 @@ class OutputPage : public QWidget {
     OutputSettingsModel settings_;
     QButtonGroup* container_group_ = nullptr;
     QRadioButton* mkv_radio_ = nullptr;
+    QRadioButton* webm_radio_ = nullptr;
     QRadioButton* mp4_radio_ = nullptr;
     QComboBox* audio_codec_combo_ = nullptr;
     QLineEdit* destination_edit_ = nullptr;

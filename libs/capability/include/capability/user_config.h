@@ -7,9 +7,9 @@
 namespace exosnap::capability {
 
 struct UserRecorderConfig {
-    Container container = Container::WebM;
-    VideoCodec video_codec = VideoCodec::Av1Nvenc;
-    AudioCodec audio_codec = AudioCodec::Opus;
+    Container container = Container::Matroska;
+    VideoCodec video_codec = VideoCodec::H264Nvenc;
+    AudioCodec audio_codec = AudioCodec::AacMf;
     ChromaSubsampling chroma = ChromaSubsampling::Cs420;
     BitDepth bit_depth = BitDepth::Bit8;
     uint32_t output_width = 0;
