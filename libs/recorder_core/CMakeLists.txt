@@ -264,3 +264,10 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(mixed_audio_src_tests PRIVATE src)
+
+exosnap_add_gtest(
+    NAME test_mp4_timestamp_normalization
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_mp4_timestamp_normalization.cpp
+    LIBRARIES recorder_core
+)

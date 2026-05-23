@@ -228,6 +228,17 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         }
         st.encode_width = 0;
         st.encode_height = 0;
+        st.video_epoch_qpc_100ns.store(0);
+        {
+            LARGE_INTEGER qpc, freq;
+            QueryPerformanceFrequency(&freq);
+            QueryPerformanceCounter(&qpc);
+            // Overflow-safe conversion: divide-first to avoid qpc*10e6 wrapping uint64_t
+            // (wraps at ~51 h on a 10 MHz QPC counter)
+            const auto q = static_cast<uint64_t>(qpc.QuadPart);
+            const auto f = static_cast<uint64_t>(freq.QuadPart);
+            st.session_start_qpc_100ns = (q / f) * 10000000ULL + (q % f) * 10000000ULL / f;
+        }
         st.stats_callback = m_impl->stats_callback;
     }
 

@@ -537,10 +537,19 @@ void VideoThread::Run() {
         }
 
         if (latestTex != nullptr) {
-            // Establish video epoch
+            // Establish video epoch (also publish for MP4 A/V alignment)
             if (!videoEpochSet) {
                 videoEpochTicks100ns = latestFrameTicks100ns;
                 videoEpochSet = true;
+                // Snapshot QPC at first-frame arrival — must be on the same scale as
+                // session_start_qpc_100ns (both are QPC-derived 100ns-since-boot values).
+                // SystemRelativeTime is NOT QPC-comparable and must not be used here.
+                LARGE_INTEGER qpc_frame, qpc_freq;
+                QueryPerformanceFrequency(&qpc_freq);
+                QueryPerformanceCounter(&qpc_frame);
+                const auto q = static_cast<uint64_t>(qpc_frame.QuadPart);
+                const auto f = static_cast<uint64_t>(qpc_freq.QuadPart);
+                m_state.video_epoch_qpc_100ns.store((q / f) * 10000000ULL + (q % f) * 10000000ULL / f);
             }
 
             int64_t deltaTicks = latestFrameTicks100ns - videoEpochTicks100ns;

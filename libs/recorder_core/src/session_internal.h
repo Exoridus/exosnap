@@ -151,6 +151,13 @@ struct SessionState {
     uint32_t encode_width = 0;
     uint32_t encode_height = 0;
 
+    // Timestamp alignment (MP4 only): session QPC baseline and video epoch.
+    // session_start_qpc_100ns: set by RecorderSession::Record before threads start.
+    // video_epoch_qpc_100ns: set by VideoThread when first WGC frame arrives (100ns units, same basis as
+    // SystemRelativeTime). Used by Mp4MuxThread to compute how far ahead audio started relative to video.
+    uint64_t session_start_qpc_100ns = 0;
+    std::atomic<uint64_t> video_epoch_qpc_100ns{0};
+
     // ---------------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------------
