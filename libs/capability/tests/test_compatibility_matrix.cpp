@@ -64,6 +64,34 @@ TEST(CapabilityMatrixTest, MatrixRequiredPairsMatchBaseline) {
               SupportLevel::Invalid);
 }
 
+TEST(CapabilityMatrixTest, Mp4CombosRemainNotImplementedUntilMuxerExists) {
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    // MP4 + H.264 + AAC: planned, not implemented — IMFSinkWriter muxer missing
+    EXPECT_EQ(caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
+                              BitDepth::Bit8)
+                  .level,
+              SupportLevel::NotImplemented);
+
+    // MP4 + HEVC + AAC: not implemented
+    EXPECT_EQ(caps.QueryCombo(Container::Mp4, VideoCodec::HevcNvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
+                              BitDepth::Bit8)
+                  .level,
+              SupportLevel::NotImplemented);
+
+    // MP4 + AV1 + AAC: deferred (AV1-in-MP4 not implemented)
+    EXPECT_EQ(caps.QueryCombo(Container::Mp4, VideoCodec::Av1Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
+                              BitDepth::Bit8)
+                  .level,
+              SupportLevel::NotImplemented);
+
+    // MP4 + any codec + Opus: always Invalid (Opus not valid for MP4)
+    EXPECT_EQ(caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::Opus, ChromaSubsampling::Cs420,
+                              BitDepth::Bit8)
+                  .level,
+              SupportLevel::Invalid);
+}
+
 TEST(CapabilityMatrixTest, ChromaAndBitDepthUnsupportedPathsAreNotImplemented) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
 

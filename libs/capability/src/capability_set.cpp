@@ -60,14 +60,22 @@ SupportAnnotation BaseContainerVideoAudioAnnotation(Container c, VideoCodec v, A
 
     if (c == Container::Mp4) {
         if (a == AudioCodec::Opus) {
-            return {SupportLevel::Invalid, "MP4 + Opus is invalid; MP4 currently requires AAC."};
+            return {SupportLevel::Invalid, "MP4 does not support Opus; select AAC for MP4 recordings."};
         }
         if (a == AudioCodec::Pcm) {
-            return {SupportLevel::Invalid, "MP4 + PCM is not supported in the current product matrix."};
+            return {SupportLevel::Invalid, "MP4 + PCM is not supported."};
         }
         if (a == AudioCodec::AacMf) {
-            if (v == VideoCodec::H264Nvenc || v == VideoCodec::HevcNvenc || v == VideoCodec::Av1Nvenc) {
-                return {SupportLevel::NotImplemented, "MP4 with AAC is planned but not implemented in M3.3A."};
+            if (v == VideoCodec::H264Nvenc) {
+                return {SupportLevel::NotImplemented,
+                        "MP4 + H.264 + AAC is planned; the IMFSinkWriter muxer and Annex-B→AVCC "
+                        "conversion are not yet implemented."};
+            }
+            if (v == VideoCodec::HevcNvenc) {
+                return {SupportLevel::NotImplemented, "MP4 + HEVC + AAC is not implemented; implement H.264 first."};
+            }
+            if (v == VideoCodec::Av1Nvenc) {
+                return {SupportLevel::NotImplemented, "AV1-in-MP4 is deferred; use WebM for AV1 recordings."};
             }
         }
         return {SupportLevel::Invalid, "This MP4 combination is not in the supported product matrix."};
