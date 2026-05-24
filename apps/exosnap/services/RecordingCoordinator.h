@@ -20,6 +20,7 @@
 
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputSettingsModel.h"
+#include "../models/VideoSettingsModel.h"
 #include "../viewmodels/RecordViewModel.h"
 
 namespace recorder_core {
@@ -67,6 +68,7 @@ class RecordingCoordinator {
     const std::wstring& CapabilityStatusText() const;
     std::filesystem::path CurrentOutputPath() const;
     void SetOutputSettings(const OutputSettingsModel& settings);
+    void SetVideoSettings(const VideoSettingsModel& settings);
     void SetOutputTargetContext(const FilenameTargetContext& context);
 
     void SetStateChangedCallback(StateChangedCallback cb);
@@ -94,6 +96,7 @@ class RecordingCoordinator {
     exosnap::capability::ResolveResult validation_result_;
     exosnap::capability::UserRecorderConfig resolved_user_config_;
     OutputSettingsModel output_settings_;
+    VideoSettingsModel video_settings_;
     bool has_output_target_context_ = false;
     FilenameTargetContext output_target_context_;
 

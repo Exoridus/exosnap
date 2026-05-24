@@ -361,6 +361,27 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
         m_encodeConfig.encodeCodecConfig.av1Config.chromaFormatIDC = 1; // YUV420/NV12
     }
 
+    // CQP mode: quality tier drives QP values; bitrate is implicit.
+    m_encodeConfig.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CONSTQP;
+    uint32_t qpI = 24, qpP = 26;
+    switch (m_qualityPreset) {
+    case NvencQualityPreset::High:
+        qpI = 19;
+        qpP = 21;
+        break;
+    case NvencQualityPreset::Balanced:
+        qpI = 24;
+        qpP = 26;
+        break;
+    case NvencQualityPreset::Small:
+        qpI = 30;
+        qpP = 32;
+        break;
+    }
+    m_encodeConfig.rcParams.constQP.qpIntra = qpI;
+    m_encodeConfig.rcParams.constQP.qpInterP = qpP;
+    m_encodeConfig.rcParams.constQP.qpInterB = qpP;
+
     // Zero lookahead and P-only: prevents 8-slot NVENC input ring from exhausting.
     m_encodeConfig.rcParams.enableLookahead = 0;
     m_encodeConfig.rcParams.lookaheadDepth = 0;
@@ -528,6 +549,22 @@ int32_t NvencEncoder::AcquireFreeSlot() {
         }
     }
     return -1;
+}
+
+// ---------------------------------------------------------------------------
+// ReleaseSlot
+// ---------------------------------------------------------------------------
+
+void NvencEncoder::ReleaseSlot(int32_t slot_idx) noexcept {
+    if (slot_idx < 0 || slot_idx >= 8)
+        return;
+    InputSlot& slot = m_slots[slot_idx];
+    if (slot.mapped && slot.mappedResource != nullptr) {
+        m_funcs.nvEncUnmapInputResource(m_encoder, slot.mappedResource);
+        slot.mappedResource = nullptr;
+    }
+    slot.mapped = false;
+    slot.in_flight = false;
 }
 
 // ---------------------------------------------------------------------------

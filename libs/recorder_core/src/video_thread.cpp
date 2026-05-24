@@ -36,6 +36,14 @@ namespace recorder_core {
 
 namespace {
 
+// Returns QPC-derived time in 100 ns units. freq must be the cached QPC frequency.
+static uint64_t Qpc100ns(uint64_t freq) noexcept {
+    LARGE_INTEGER qpc;
+    QueryPerformanceCounter(&qpc);
+    const auto q = static_cast<uint64_t>(qpc.QuadPart);
+    return (q / freq) * 10000000ULL + (q % freq) * 10000000ULL / freq;
+}
+
 const char* TargetKindName(CaptureTarget::Kind kind) noexcept {
     switch (kind) {
     case CaptureTarget::Kind::Monitor:
@@ -91,6 +99,11 @@ bool VideoThread::Join(unsigned timeout_ms) {
 // ---------------------------------------------------------------------------
 
 void VideoThread::Run() {
+    // Cache QPC frequency once — it is constant for the process lifetime.
+    LARGE_INTEGER qpcFreqRaw;
+    QueryPerformanceFrequency(&qpcFreqRaw);
+    const uint64_t qpcFreq = static_cast<uint64_t>(qpcFreqRaw.QuadPart);
+
     // --- COM init (apartment-threaded for WinRT) ---
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     bool com_inited = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
@@ -277,6 +290,7 @@ void VideoThread::Run() {
     NvencEncoder nvenc;
     {
         nvenc.SetCodec(m_state.config.video_codec);
+        nvenc.SetQualityPreset(m_state.config.nvenc_quality_preset);
 
         std::string err;
         if (!nvenc.Open(d3dDevice.get(), err)) {
@@ -488,8 +502,6 @@ void VideoThread::Run() {
     }
 
     // --- Capture + encode loop ---
-    bool videoEpochSet = false;
-    int64_t videoEpochTicks100ns = 0;
     bool av1CodecPrivateReady = false;
     bool h264CodecPrivateReady = false;
     uint64_t lastVideoPts = 0;
@@ -497,180 +509,370 @@ void VideoThread::Run() {
     uint64_t droppedFrames = 0;
     uint64_t slotStallCount = 0;
 
-    while (!m_state.stop_requested.load()) {
-        MSG msg{};
-        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
+    // CFR timing constants (computed once; valid for both paths)
+    const uint64_t frame_interval_100ns =
+        (m_state.config.frame_rate_den > 0 && m_state.config.frame_rate_num > 0)
+            ? (10000000ULL * m_state.config.frame_rate_den / m_state.config.frame_rate_num)
+            : 166667ULL; // 60 fps fallback
+    const uint64_t frame_interval_ns = frame_interval_100ns * 100ULL;
+    // Maximum catch-up frames emitted per outer-loop iteration (1 second).
+    // Prevents burst GPU workload after process suspension.
+    const uint64_t kMaxCatchUpFrames = (m_state.config.frame_rate_den > 0 && m_state.config.frame_rate_num > 0)
+                                           ? m_state.config.frame_rate_num / m_state.config.frame_rate_den
+                                           : 60u;
 
-        if (sourceLost) {
-            std::lock_guard lk(m_state.stats_mutex);
-            m_state.stats.source_loss = true;
-            m_state.stop_requested.store(true);
-            break;
-        }
+    // Helper lambda: push an encoded packet to premux or mux queue.
+    // Uses h264CodecPrivateReady and av1CodecPrivateReady by reference.
+    auto routePacket = [&](EncodedVideoPacket pkt) -> bool {
+        const size_t pkt_bytes_count = pkt.bytes.size();
+        if (pkt.bytes.empty())
+            return true;
 
-        bool anyWork = false;
-
-        // Drain WGC frames — keep latest
-        winrt::com_ptr<ID3D11Texture2D> latestTex;
-        int64_t latestFrameTicks100ns = 0;
-
-        try {
-            while (true) {
-                auto frame = framePool.TryGetNextFrame();
-                if (frame == nullptr)
-                    break;
-
-                auto surface = frame.Surface();
-                auto access = surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
-                winrt::com_ptr<ID3D11Texture2D> tex;
-                if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
-                    if (latestTex != nullptr)
-                        ++droppedFrames;
-                    latestTex = tex;
-                    latestFrameTicks100ns = frame.SystemRelativeTime().count();
+        if (pkt.keyframe) {
+            if (m_state.config.video_codec == VideoCodec::H264Nvenc && !h264CodecPrivateReady) {
+                std::vector<uint8_t> spsPps;
+                if (annexb::ExtractH264SpsAndPps(pkt.bytes.data(), pkt.bytes.size(), spsPps)) {
+                    std::lock_guard lk(m_state.premux_mutex);
+                    m_state.codec_private.h264_sps_pps = std::move(spsPps);
+                    m_state.codec_private.h264_ready = true;
+                    h264CodecPrivateReady = true;
+                    m_state.premux_cv.notify_all();
+                }
+            } else if (m_state.config.video_codec != VideoCodec::H264Nvenc && !av1CodecPrivateReady) {
+                char reason[256] = {};
+                uint8_t cp[4] = {};
+                if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp, reason,
+                                                         sizeof(reason))) {
+                    std::lock_guard lk(m_state.premux_mutex);
+                    std::memcpy(m_state.codec_private.av1_codec_private, cp, 4);
+                    m_state.codec_private.av1_ready = true;
+                    av1CodecPrivateReady = true;
+                    m_state.premux_cv.notify_all();
                 }
             }
-        } catch (...) {
         }
 
-        if (latestTex != nullptr) {
-            // Establish video epoch (also publish for MP4 A/V alignment)
-            if (!videoEpochSet) {
-                videoEpochTicks100ns = latestFrameTicks100ns;
-                videoEpochSet = true;
-                // Snapshot QPC at first-frame arrival — must be on the same scale as
-                // session_start_qpc_100ns (both are QPC-derived 100ns-since-boot values).
-                // SystemRelativeTime is NOT QPC-comparable and must not be used here.
-                LARGE_INTEGER qpc_frame, qpc_freq;
-                QueryPerformanceFrequency(&qpc_freq);
-                QueryPerformanceCounter(&qpc_frame);
-                const auto q = static_cast<uint64_t>(qpc_frame.QuadPart);
-                const auto f = static_cast<uint64_t>(qpc_freq.QuadPart);
-                m_state.video_epoch_qpc_100ns.store((q / f) * 10000000ULL + (q % f) * 10000000ULL / f);
+        {
+            std::unique_lock lk(m_state.premux_mutex);
+            bool bothReady = m_state.codec_private.VideoReady(m_state.config.video_codec) &&
+                             m_state.codec_private.AudioAllReady(m_state.audio_track_count);
+            if (!bothReady) {
+                if (m_state.video_premux.size() >= SessionState::kVideoPremuxLimit) {
+                    lk.unlock();
+                    m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
+                                          "Pre-mux video buffer limit (120 packets) exceeded "
+                                          "before codec private data was ready");
+                    return false;
+                }
+                m_state.video_premux.push_back(std::move(pkt));
+            } else {
+                lk.unlock();
+                MuxItem mux_item;
+                mux_item.payload = std::move(pkt);
+                std::lock_guard mlk(m_state.mux_mutex);
+                m_state.mux_queue.push_back(std::move(mux_item));
+                m_state.mux_cv.notify_one();
+            }
+        }
+
+        {
+            std::lock_guard slk(m_state.stats_mutex);
+            m_state.stats.video_frames_captured = videoFramesCaptured;
+            m_state.stats.encoded_video_packets++;
+            m_state.stats.video_bytes += pkt_bytes_count;
+        }
+        return true;
+    };
+
+    if (m_state.config.cfr) {
+        // ====================================================================
+        // CFR path: QPC-driven scheduler — duplicate/drop to hit constant rate
+        // ====================================================================
+
+        // Reference NV12 texture for frame duplication
+        winrt::com_ptr<ID3D11Texture2D> refNv12;
+        bool refNv12Valid = false;
+
+        {
+            D3D11_TEXTURE2D_DESC refDesc{};
+            refDesc.Width = encodeWidth;
+            refDesc.Height = encodeHeight;
+            refDesc.MipLevels = 1;
+            refDesc.ArraySize = 1;
+            refDesc.Format = DXGI_FORMAT_NV12;
+            refDesc.SampleDesc = {1, 0};
+            refDesc.Usage = D3D11_USAGE_DEFAULT;
+            refDesc.BindFlags = 0; // only used as CopyResource source/dest
+
+            HRESULT refHr = d3dDevice->CreateTexture2D(&refDesc, nullptr, refNv12.put());
+            if (FAILED(refHr)) {
+                // Non-fatal: refNv12 stays null; duplication silently drops ticks
+                // without a reference frame (until the first real frame arrives).
+                refNv12 = nullptr;
+            }
+        }
+
+        bool videoEpochSet = false;
+        uint64_t epochQpc100ns = 0;
+        uint64_t cfr_frame_idx = 0;
+        uint64_t next_tick_100ns = 0; // relative to epoch
+
+        winrt::com_ptr<ID3D11Texture2D> pendingWgcTex;
+
+        while (!m_state.stop_requested.load()) {
+            MSG msg{};
+            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
             }
 
-            int64_t deltaTicks = latestFrameTicks100ns - videoEpochTicks100ns;
-            if (deltaTicks < 0)
-                deltaTicks = 0;
-            uint64_t framePts_ns = static_cast<uint64_t>(deltaTicks) * 100ULL;
-            lastVideoPts = framePts_ns;
+            if (sourceLost) {
+                std::lock_guard lk(m_state.stats_mutex);
+                m_state.stats.source_loss = true;
+                m_state.stop_requested.store(true);
+                break;
+            }
 
-            // Acquire a free input slot
-            int32_t slot = nvenc.AcquireFreeSlot();
+            // Drain WGC frames — keep latest
+            try {
+                while (true) {
+                    auto frame = framePool.TryGetNextFrame();
+                    if (frame == nullptr)
+                        break;
+                    auto surface = frame.Surface();
+                    auto access = surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+                    winrt::com_ptr<ID3D11Texture2D> tex;
+                    if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
+                        if (pendingWgcTex != nullptr)
+                            ++droppedFrames;
+                        pendingWgcTex = tex;
+                    }
+                }
+            } catch (...) {
+            }
 
-            if (slot >= 0) {
-                // BGRA -> NV12 via VideoProcessorBlt into the selected slot's view
-                D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
-                ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
-                ivDesc.Texture2D.MipSlice = 0;
-                ivDesc.Texture2D.ArraySlice = 0;
+            // Set epoch on first WGC frame arrival
+            if (!videoEpochSet && pendingWgcTex != nullptr) {
+                epochQpc100ns = Qpc100ns(qpcFreq);
+                videoEpochSet = true;
+                next_tick_100ns = 0; // first tick at t=0 relative to epoch
+                m_state.video_epoch_qpc_100ns.store(epochQpc100ns);
+                lastVideoPts = 0;
+            }
 
-                winrt::com_ptr<ID3D11VideoProcessorInputView> inputView;
-                hr = videoDevice->CreateVideoProcessorInputView(latestTex.get(), videoEnum.get(), &ivDesc,
-                                                                inputView.put());
+            if (!videoEpochSet) {
+                Sleep(1);
+                continue;
+            }
 
-                if (SUCCEEDED(hr) && inputView != nullptr) {
-                    D3D11_VIDEO_PROCESSOR_STREAM stream{};
-                    stream.Enable = TRUE;
-                    stream.pInputSurface = inputView.get();
+            const uint64_t currentElapsed100ns = Qpc100ns(qpcFreq) - epochQpc100ns;
+            bool anyWork = false;
 
-                    hr = videoContext->VideoProcessorBlt(videoProcessor.get(), videoOutputViews[slot].get(), 0, 1,
-                                                         &stream);
+            // Emit CFR frames while we're behind, capped at 1 second to avoid
+            // burst workload after process suspension.
+            uint64_t catchUpFrames = 0;
+            while (currentElapsed100ns >= next_tick_100ns && catchUpFrames < kMaxCatchUpFrames) {
+                const uint64_t pts_ns = cfr_frame_idx * frame_interval_ns;
 
-                    inputView = nullptr;
-                    latestTex = nullptr;
+                int32_t slot = nvenc.AcquireFreeSlot();
+                if (slot < 0) {
+                    ++slotStallCount;
+                    break; // retry this tick next outer iteration once a slot is free
+                }
 
-                    if (SUCCEEDED(hr)) {
-                        // Encode frame on the acquired slot
-                        EncodedVideoPacket pkt;
-                        std::string encErr;
-                        bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, &pkt, encErr);
+                bool frameWritten = false;
 
-                        if (!encOk) {
-                            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode: " + encErr);
-                            break;
+                if (pendingWgcTex != nullptr) {
+                    // Convert new BGRA WGC frame to NV12 via VideoProcessorBlt
+                    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
+                    ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+                    ivDesc.Texture2D.MipSlice = 0;
+                    ivDesc.Texture2D.ArraySlice = 0;
+
+                    winrt::com_ptr<ID3D11VideoProcessorInputView> inputView;
+                    hr = videoDevice->CreateVideoProcessorInputView(pendingWgcTex.get(), videoEnum.get(), &ivDesc,
+                                                                    inputView.put());
+
+                    if (SUCCEEDED(hr) && inputView != nullptr) {
+                        D3D11_VIDEO_PROCESSOR_STREAM stream{};
+                        stream.Enable = TRUE;
+                        stream.pInputSurface = inputView.get();
+
+                        hr = videoContext->VideoProcessorBlt(videoProcessor.get(), videoOutputViews[slot].get(), 0, 1,
+                                                             &stream);
+                        inputView = nullptr;
+
+                        if (SUCCEEDED(hr)) {
+                            // Save NV12 as reference for future duplicate frames
+                            if (refNv12 != nullptr) {
+                                d3dContext->CopyResource(refNv12.get(), nv12Textures[slot].get());
+                                refNv12Valid = true;
+                            }
+                            frameWritten = true;
                         }
+                    }
+                    pendingWgcTex = nullptr;
+                } else if (refNv12Valid) {
+                    // Duplicate: copy reference NV12 into this slot
+                    d3dContext->CopyResource(nv12Textures[slot].get(), refNv12.get());
+                    frameWritten = true;
+                }
 
-                        ++videoFramesCaptured;
+                if (!frameWritten) {
+                    // VideoProcessorBlt failed or no reference yet — release slot and skip tick
+                    nvenc.ReleaseSlot(slot);
+                    ++droppedFrames;
+                    cfr_frame_idx++;
+                    next_tick_100ns += frame_interval_100ns;
+                    anyWork = true;
+                    continue;
+                }
 
-                        // If packet has data, push to premux or mux queue
-                        const size_t pkt_bytes_count = pkt.bytes.size();
-                        if (!pkt.bytes.empty()) {
-                            // Extract codec private on first keyframe
-                            if (pkt.keyframe) {
-                                if (m_state.config.video_codec == VideoCodec::H264Nvenc && !h264CodecPrivateReady) {
-                                    std::vector<uint8_t> spsPps;
-                                    if (annexb::ExtractH264SpsAndPps(pkt.bytes.data(), pkt.bytes.size(), spsPps)) {
-                                        std::lock_guard lk(m_state.premux_mutex);
-                                        m_state.codec_private.h264_sps_pps = std::move(spsPps);
-                                        m_state.codec_private.h264_ready = true;
-                                        h264CodecPrivateReady = true;
-                                        m_state.premux_cv.notify_all();
-                                    }
-                                } else if (m_state.config.video_codec != VideoCodec::H264Nvenc &&
-                                           !av1CodecPrivateReady) {
-                                    char reason[256] = {};
-                                    uint8_t cp[4] = {};
-                                    if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp,
-                                                                             reason, sizeof(reason))) {
-                                        std::lock_guard lk(m_state.premux_mutex);
-                                        std::memcpy(m_state.codec_private.av1_codec_private, cp, 4);
-                                        m_state.codec_private.av1_ready = true;
-                                        av1CodecPrivateReady = true;
-                                        m_state.premux_cv.notify_all();
-                                    }
-                                }
+                EncodedVideoPacket pkt;
+                std::string encErr;
+                bool encOk = nvenc.EncodeFrame(slot, pts_ns, encodeWidth, encodeHeight, &pkt, encErr);
+
+                if (!encOk) {
+                    m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode (CFR): " + encErr);
+                    goto end_encode_loop;
+                }
+
+                ++videoFramesCaptured;
+                lastVideoPts = pts_ns;
+
+                if (!routePacket(std::move(pkt)))
+                    goto end_encode_loop;
+
+                cfr_frame_idx++;
+                next_tick_100ns += frame_interval_100ns;
+                anyWork = true;
+                ++catchUpFrames;
+            }
+
+            if (!anyWork)
+                Sleep(1);
+        }
+    } else {
+        // ====================================================================
+        // VFR path: WGC timestamps passed directly as PTS (explicit passthrough)
+        // ====================================================================
+
+        bool videoEpochSet = false;
+        int64_t videoEpochTicks100ns = 0;
+
+        while (!m_state.stop_requested.load()) {
+            MSG msg{};
+            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+
+            if (sourceLost) {
+                std::lock_guard lk(m_state.stats_mutex);
+                m_state.stats.source_loss = true;
+                m_state.stop_requested.store(true);
+                break;
+            }
+
+            bool anyWork = false;
+
+            // Drain WGC frames — keep latest
+            winrt::com_ptr<ID3D11Texture2D> latestTex;
+            int64_t latestFrameTicks100ns = 0;
+
+            try {
+                while (true) {
+                    auto frame = framePool.TryGetNextFrame();
+                    if (frame == nullptr)
+                        break;
+
+                    auto surface = frame.Surface();
+                    auto access = surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+                    winrt::com_ptr<ID3D11Texture2D> tex;
+                    if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
+                        if (latestTex != nullptr)
+                            ++droppedFrames;
+                        latestTex = tex;
+                        latestFrameTicks100ns = frame.SystemRelativeTime().count();
+                    }
+                }
+            } catch (...) {
+            }
+
+            if (latestTex != nullptr) {
+                // Establish video epoch (also publish for MP4 A/V alignment)
+                if (!videoEpochSet) {
+                    videoEpochTicks100ns = latestFrameTicks100ns;
+                    videoEpochSet = true;
+                    // Snapshot QPC at first-frame arrival — must be on the same scale as
+                    // session_start_qpc_100ns (both are QPC-derived 100ns-since-boot values).
+                    // SystemRelativeTime is NOT QPC-comparable and must not be used here.
+                    m_state.video_epoch_qpc_100ns.store(Qpc100ns(qpcFreq));
+                }
+
+                int64_t deltaTicks = latestFrameTicks100ns - videoEpochTicks100ns;
+                if (deltaTicks < 0)
+                    deltaTicks = 0;
+                uint64_t framePts_ns = static_cast<uint64_t>(deltaTicks) * 100ULL;
+                lastVideoPts = framePts_ns;
+
+                // Acquire a free input slot
+                int32_t slot = nvenc.AcquireFreeSlot();
+
+                if (slot >= 0) {
+                    // BGRA -> NV12 via VideoProcessorBlt into the selected slot's view
+                    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
+                    ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+                    ivDesc.Texture2D.MipSlice = 0;
+                    ivDesc.Texture2D.ArraySlice = 0;
+
+                    winrt::com_ptr<ID3D11VideoProcessorInputView> inputView;
+                    hr = videoDevice->CreateVideoProcessorInputView(latestTex.get(), videoEnum.get(), &ivDesc,
+                                                                    inputView.put());
+
+                    if (SUCCEEDED(hr) && inputView != nullptr) {
+                        D3D11_VIDEO_PROCESSOR_STREAM stream{};
+                        stream.Enable = TRUE;
+                        stream.pInputSurface = inputView.get();
+
+                        hr = videoContext->VideoProcessorBlt(videoProcessor.get(), videoOutputViews[slot].get(), 0, 1,
+                                                             &stream);
+
+                        inputView = nullptr;
+                        latestTex = nullptr;
+
+                        if (SUCCEEDED(hr)) {
+                            EncodedVideoPacket pkt;
+                            std::string encErr;
+                            bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, &pkt, encErr);
+
+                            if (!encOk) {
+                                m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode: " + encErr);
+                                break;
                             }
 
-                            // Route to premux or mux
-                            {
-                                std::unique_lock lk(m_state.premux_mutex);
-                                bool bothReady = m_state.codec_private.VideoReady(m_state.config.video_codec) &&
-                                                 m_state.codec_private.AudioAllReady(m_state.audio_track_count);
-                                if (!bothReady) {
-                                    if (m_state.video_premux.size() >= SessionState::kVideoPremuxLimit) {
-                                        lk.unlock();
-                                        m_state.RecordFailure(E_OUTOFMEMORY, ErrorPhase::Mux,
-                                                              "Pre-mux video buffer limit (120 packets) exceeded "
-                                                              "before codec private data was ready");
-                                        goto end_encode_loop;
-                                    }
-                                    m_state.video_premux.push_back(std::move(pkt));
-                                } else {
-                                    lk.unlock();
-                                    MuxItem mux_item;
-                                    mux_item.payload = std::move(pkt);
-                                    std::lock_guard mlk(m_state.mux_mutex);
-                                    m_state.mux_queue.push_back(std::move(mux_item));
-                                    m_state.mux_cv.notify_one();
-                                }
-                            }
+                            ++videoFramesCaptured;
 
-                            std::lock_guard slk(m_state.stats_mutex);
-                            m_state.stats.video_frames_captured = videoFramesCaptured;
-                            m_state.stats.encoded_video_packets++;
-                            m_state.stats.video_bytes += pkt_bytes_count;
+                            if (!routePacket(std::move(pkt)))
+                                goto end_encode_loop;
+                        } else {
+                            latestTex = nullptr;
                         }
                     } else {
                         latestTex = nullptr;
                     }
                 } else {
+                    // No free slot — drop the frame and skip
                     latestTex = nullptr;
+                    ++slotStallCount;
                 }
-            } else {
-                // No free slot — drop the frame and skip
-                latestTex = nullptr;
-                ++slotStallCount;
+
+                anyWork = true;
             }
 
-            anyWork = true;
+            if (!anyWork)
+                Sleep(1);
         }
-
-        if (!anyWork)
-            Sleep(1);
     }
 
 end_encode_loop:

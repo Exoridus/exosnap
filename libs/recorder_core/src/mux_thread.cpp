@@ -323,6 +323,9 @@ void MuxThread::Run() {
         return;
     }
     segment.set_mode(mkvmuxer::Segment::kFile);
+    if (m_state.config.container == Container::Matroska) {
+        segment.ForceDocTypeMatroska();
+    }
 
     // --- Step 5: Add video and audio tracks ---
     uint64_t videoTrackNum = segment.AddVideoTrack(static_cast<int32_t>(encW), static_cast<int32_t>(encH), 1);

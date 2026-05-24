@@ -52,6 +52,11 @@ class NvencEncoder {
         m_codec = codec;
     }
 
+    // Set quality tier before calling FetchPresetConfig(). Defaults to Balanced.
+    void SetQualityPreset(NvencQualityPreset preset) noexcept {
+        m_qualityPreset = preset;
+    }
+
     // Load nvEncodeAPI64.dll and open a D3D11 encode session.
     // device must remain valid for the lifetime of this encoder.
     bool Open(ID3D11Device* device, std::string& out_error);
@@ -79,6 +84,10 @@ class NvencEncoder {
     // Acquire the next free input slot for writing.
     // Returns slot index (0–7) or -1 if none free.
     int32_t AcquireFreeSlot();
+
+    // Release a slot that was acquired but not submitted (error path only).
+    // Clears in_flight without calling NVENC — safe only if EncodeFrame was not called.
+    void ReleaseSlot(int32_t slot_idx) noexcept;
 
     // Submit one NV12 frame for encoding on a specific slot.
     // slot_idx must be a slot previously acquired via AcquireFreeSlot.
@@ -113,8 +122,9 @@ class NvencEncoder {
     int32_t m_slotCursor = 0;
 
     VideoCodec m_codec = VideoCodec::Av1Nvenc;
+    NvencQualityPreset m_qualityPreset = NvencQualityPreset::Balanced;
 
-    const GUID m_presetGuid = NV_ENC_PRESET_P4_GUID;
+    const GUID m_presetGuid = NV_ENC_PRESET_P6_GUID;
     const NV_ENC_TUNING_INFO m_tuningInfo = NV_ENC_TUNING_INFO_HIGH_QUALITY;
 
     // Pending PTS FIFO — one entry per submitted frame not yet returned as output

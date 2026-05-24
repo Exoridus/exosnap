@@ -57,9 +57,16 @@ struct RecorderConfig {
     ChromaSubsampling chroma = ChromaSubsampling::Cs420;
     BitDepth bit_depth = BitDepth::Bit8;
 
+    // NVENC quality tier — maps to CQP values in the encoder.
+    NvencQualityPreset nvenc_quality_preset = NvencQualityPreset::Balanced;
+
     // Frame rate (numerator/denominator)
     uint32_t frame_rate_num = 60;
     uint32_t frame_rate_den = 1;
+
+    // When true: CFR scheduler (duplicate/drop frames to hit constant rate).
+    // When false: VFR passthrough (WGC timestamps used directly as PTS).
+    bool cfr = true;
 
     // Resolved output audio tracks from the APP/MIC/SYS source model.
     // Phase 2 legacy compatibility: empty plan means single audio track.

@@ -3,8 +3,8 @@
 namespace recorder_core {
 
 enum class Container {
-    WebM,     // .webm — libwebm/mkvmuxer; primary runtime container (DocType=webm, V_AV1+A_OPUS)
-    Matroska, // .mkv  — libwebm/mkvmuxer; extended MKV support
+    WebM,     // .webm — libwebm/mkvmuxer (DocType=webm, V_AV1+A_OPUS)
+    Matroska, // .mkv  — libwebm/mkvmuxer (DocType=matroska via ForceDocTypeMatroska); primary profile: AV1+Opus
     Mp4,      // .mp4  — IMFSinkWriter (MPEG4MediaSink); H.264 + AAC path
 };
 
@@ -24,6 +24,13 @@ enum class ChromaSubsampling {
 
 enum class BitDepth {
     Bit8, // 8-bit — only supported value for M3.1
+};
+
+// CQP quality targets for NVENC. Maps to constQP.qpIntra / qpInterP pairs.
+enum class NvencQualityPreset {
+    High,     // qpIntra=19, qpInterP=21 — large files, best quality
+    Balanced, // qpIntra=24, qpInterP=26 — default
+    Small,    // qpIntra=30, qpInterP=32 — smaller files, lower quality
 };
 
 } // namespace recorder_core

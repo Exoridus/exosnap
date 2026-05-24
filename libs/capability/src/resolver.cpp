@@ -30,7 +30,7 @@ std::string Stringify(BitDepth value) {
 AudioCodec PreferredAudioCodecForContainer(Container container) {
     switch (container) {
     case Container::Matroska:
-        return AudioCodec::AacMf;
+        return AudioCodec::Opus;
     case Container::WebM:
         return AudioCodec::Opus;
     case Container::Mp4:
@@ -44,7 +44,7 @@ VideoCodec PreferredVideoCodecForContainer(Container container) {
     case Container::WebM:
         return VideoCodec::Av1Nvenc;
     case Container::Matroska:
-        return VideoCodec::H264Nvenc;
+        return VideoCodec::Av1Nvenc;
     case Container::Mp4:
         return VideoCodec::H264Nvenc;
     }

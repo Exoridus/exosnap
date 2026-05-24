@@ -221,7 +221,7 @@ void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::Capabi
     if (validation.succeeded) {
         resolved_user_config_ = validation.resolved_config;
         state_ = UiRecordingState::Ready;
-        capability_status_text_ = L"Ready: MKV · H.264 NVENC · AAC · 60 fps";
+        capability_status_text_ = L"Ready: MKV · AV1 NVENC · Opus · 60 fps";
     } else {
         state_ = UiRecordingState::Blocked;
         capability_status_text_ =
@@ -284,6 +284,8 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     PostStateChange(UiRecordingState::Preparing);
 
     auto config = exosnap::capability::ToRecorderCoreConfig(resolved_user_config_, caps_);
+    config.nvenc_quality_preset = video_settings_.quality;
+    config.cfr = video_settings_.cfr;
     ApplyOutputSettingsToRecorderConfig(config, output_settings_);
     config.target = target;
     config.output_path = output_path;
@@ -478,11 +480,13 @@ void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings
         resolved_user_config_.video_codec = capability::VideoCodec::Av1Nvenc;
         resolved_user_config_.audio_codec = capability::AudioCodec::Opus;
     } else {
-        // MKV (Matroska): H.264 + AAC
         resolved_user_config_.container = capability::Container::Matroska;
-        resolved_user_config_.video_codec = capability::VideoCodec::H264Nvenc;
-        resolved_user_config_.audio_codec = capability::AudioCodec::AacMf;
+        resolved_user_config_.video_codec = capability::VideoCodec::Av1Nvenc;
+        resolved_user_config_.audio_codec = capability::AudioCodec::Opus;
     }
+}
+void RecordingCoordinator::SetVideoSettings(const VideoSettingsModel& settings) {
+    video_settings_ = settings;
 }
 void RecordingCoordinator::SetOutputTargetContext(const FilenameTargetContext& context) {
     output_target_context_ = context;

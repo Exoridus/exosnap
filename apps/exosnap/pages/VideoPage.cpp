@@ -1,5 +1,6 @@
 #include "VideoPage.h"
 
+#include "../models/VideoSettingsModel.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/widgets/CodecCard.h"
 #include "../ui/widgets/ExoCheckBox.h"
@@ -12,6 +13,7 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPushButton>
 #include <QRadioButton>
 #include <QScrollArea>
 #include <QVBoxLayout>
@@ -38,8 +40,8 @@ QFrame* makeDivider(QWidget* parent) {
     return divider;
 }
 
-void addKvRow(QGridLayout* layout, QWidget* parent, int row, const QString& key, const QString& value,
-              const char* value_role) {
+QLabel* addKvRow(QGridLayout* layout, QWidget* parent, int row, const QString& key, const QString& value,
+                 const char* value_role) {
     auto* key_label = new QLabel(key, parent);
     key_label->setProperty("labelRole", "videoKvKey");
 
@@ -49,11 +51,12 @@ void addKvRow(QGridLayout* layout, QWidget* parent, int row, const QString& key,
 
     layout->addWidget(key_label, row, 0);
     layout->addWidget(value_label, row, 1);
+    return value_label;
 }
 
 } // namespace
 
-VideoPage::VideoPage(QWidget* parent) : QWidget(parent) {
+VideoPage::VideoPage(const VideoSettingsModel& initial_settings, QWidget* parent) : QWidget(parent) {
     auto* page_layout = new QHBoxLayout(this);
     page_layout->setContentsMargins(0, 0, 0, 0);
     page_layout->setSpacing(0);
@@ -73,15 +76,14 @@ VideoPage::VideoPage(QWidget* parent) : QWidget(parent) {
     locked_note_layout->setContentsMargins(12, 10, 12, 10);
     locked_note_layout->setSpacing(0);
     auto* locked_note =
-        makeLabel("Video settings are fixed for this MVP build. Recording currently uses AV1, 60 FPS, and the selected "
-                  "capture size.",
+        makeLabel("Codec, frame rate, and resolution are fixed for this MVP build. Quality can be adjusted below.",
                   "videoCompatNote", locked_note_panel);
     locked_note->setWordWrap(true);
     locked_note_layout->addWidget(locked_note);
     left_layout->addWidget(locked_note_panel);
 
     auto* frame_rate_header = new ui::widgets::SectionRuleHeader("FRAME RATE", left_content);
-    frame_rate_header->setMeta("CFR · LOCKED THIS RELEASE");
+    frame_rate_header->setMeta("CONFIGURABLE");
     left_layout->addWidget(frame_rate_header);
 
     auto* frame_rate_panel = makePanel(left_content);
@@ -103,15 +105,43 @@ VideoPage::VideoPage(QWidget* parent) : QWidget(parent) {
     fps_row_layout->addStretch(1);
 
     frame_rate_copy_layout->addWidget(fps_row);
-    frame_rate_copy_layout->addWidget(
-        makeLabel("Fixed at CFR 60 for this MVP build.", "videoFpsNote", frame_rate_copy));
 
-    auto* constant_badge = makeLabel("CONSTANT", "videoFramePill", frame_rate_panel);
-    constant_badge->setAlignment(Qt::AlignCenter);
-    constant_badge->setFixedHeight(36);
+    fps_note_label_ =
+        makeLabel("Duplicate frames to maintain constant 60 fps output.", "videoFpsNote", frame_rate_copy);
+    frame_rate_copy_layout->addWidget(fps_note_label_);
+
+    // CFR / VFR toggle buttons
+    auto* cfr_vfr_widget = new QWidget(frame_rate_panel);
+    auto* cfr_vfr_layout = new QVBoxLayout(cfr_vfr_widget);
+    cfr_vfr_layout->setContentsMargins(0, 0, 0, 0);
+    cfr_vfr_layout->setSpacing(4);
+
+    auto* cfr_btn = new QPushButton("CONSTANT", cfr_vfr_widget);
+    cfr_btn->setCheckable(true);
+    cfr_btn->setProperty("buttonRole", "videoFrameMode");
+
+    auto* vfr_btn = new QPushButton("VARIABLE", cfr_vfr_widget);
+    vfr_btn->setCheckable(true);
+    vfr_btn->setProperty("buttonRole", "videoFrameMode");
+
+    cfr_vfr_layout->addWidget(cfr_btn);
+    cfr_vfr_layout->addWidget(vfr_btn);
+
+    cfr_vfr_group_ = new QButtonGroup(this);
+    cfr_vfr_group_->setExclusive(true);
+    cfr_vfr_group_->addButton(cfr_btn, 0); // 0 = CFR
+    cfr_vfr_group_->addButton(vfr_btn, 1); // 1 = VFR
+
+    // Apply initial setting
+    if (initial_settings.cfr) {
+        cfr_btn->setChecked(true);
+    } else {
+        vfr_btn->setChecked(true);
+        fps_note_label_->setText("Pass source timestamps through — file size follows source framerate.");
+    }
 
     frame_rate_layout->addWidget(frame_rate_copy, 1);
-    frame_rate_layout->addWidget(constant_badge, 0, Qt::AlignRight | Qt::AlignVCenter);
+    frame_rate_layout->addWidget(cfr_vfr_widget, 0, Qt::AlignRight | Qt::AlignVCenter);
     left_layout->addWidget(frame_rate_panel);
 
     auto* resolution_header = new ui::widgets::SectionRuleHeader("RESOLUTION", left_content);
@@ -188,6 +218,9 @@ VideoPage::VideoPage(QWidget* parent) : QWidget(parent) {
     for (auto* card : codec_cards_)
         connect(card, &ui::widgets::CodecCard::clicked, this, [this, card]() { selectCodecCard(card); });
 
+    connect(quality_group_, &QButtonGroup::idClicked, this, &VideoPage::onQualityChanged);
+    connect(cfr_vfr_group_, &QButtonGroup::idClicked, this, &VideoPage::onCfrVfrChanged);
+
     auto* quality_header = new ui::widgets::SectionRuleHeader("QUALITY", left_content);
     left_layout->addWidget(quality_header);
 
@@ -226,10 +259,14 @@ VideoPage::VideoPage(QWidget* parent) : QWidget(parent) {
         row_layout->addStretch(1);
         row_layout->addWidget(detail);
         quality_layout->addWidget(row);
-        radio->setEnabled(false);
     }
-    if (auto* balanced = quality_group_->button(1))
-        balanced->setChecked(true);
+    {
+        const int initial_id = (initial_settings.quality == recorder_core::NvencQualityPreset::High)    ? 0
+                               : (initial_settings.quality == recorder_core::NvencQualityPreset::Small) ? 2
+                                                                                                        : 1;
+        if (auto* btn = quality_group_->button(initial_id))
+            btn->setChecked(true);
+    }
 
     left_layout->addWidget(quality_panel);
 
@@ -279,9 +316,9 @@ VideoPage::VideoPage(QWidget* parent) : QWidget(parent) {
     kv_layout->setColumnStretch(0, 0);
     kv_layout->setColumnStretch(1, 1);
     addKvRow(kv_layout, output_panel, 0, "ENCODER", "NVENC AV1", "videoKvValueAccent");
-    addKvRow(kv_layout, output_panel, 1, "PRESET", "P4 (balanced)", "videoKvValue");
+    addKvRow(kv_layout, output_panel, 1, "PRESET", "P6", "videoKvValue");
     addKvRow(kv_layout, output_panel, 2, "RATE CTRL", "CQP", "videoKvValue");
-    addKvRow(kv_layout, output_panel, 3, "CQ", "24", "videoKvValue");
+    rail_cq_label_ = addKvRow(kv_layout, output_panel, 3, "CQ", "24", "videoKvValue");
     addKvRow(kv_layout, output_panel, 4, "FRAME RATE", "CFR 60.00", "videoKvValue");
     addKvRow(kv_layout, output_panel, 5, "RESOLUTION", "2560×1440", "videoKvValue");
     addKvRow(kv_layout, output_panel, 6, "GOP", "60", "videoKvValue");
@@ -297,8 +334,8 @@ VideoPage::VideoPage(QWidget* parent) : QWidget(parent) {
     estimate_layout->setVerticalSpacing(5);
     estimate_layout->setColumnStretch(0, 0);
     estimate_layout->setColumnStretch(1, 1);
-    addKvRow(estimate_layout, output_panel, 0, "EST. BITRATE", "~38 Mb/s", "videoKvValueAccent");
-    addKvRow(estimate_layout, output_panel, 1, "EST. SIZE/H", "~17.1 GB", "videoKvValue");
+    rail_bitrate_label_ = addKvRow(estimate_layout, output_panel, 0, "EST. BITRATE", "~38 Mb/s", "videoKvValueAccent");
+    rail_size_label_ = addKvRow(estimate_layout, output_panel, 1, "EST. SIZE/H", "~17.1 GB", "videoKvValue");
     output_layout->addLayout(estimate_layout);
 
     rail_layout->addWidget(output_panel);
@@ -328,11 +365,74 @@ VideoPage::VideoPage(QWidget* parent) : QWidget(parent) {
     rail_layout->addWidget(compatibility_panel);
     rail_layout->addStretch(1);
     page_layout->addWidget(rail_widget_, 0);
+
+    // Sync rail with initial selection (labels now exist).
+    {
+        QSignalBlocker blocker(this);
+        onQualityChanged(quality_group_->checkedId());
+    }
 }
 
 void VideoPage::selectCodecCard(ui::widgets::CodecCard* selected_card) {
     for (auto* card : codec_cards_)
         card->setSelected(card == selected_card);
+}
+
+void VideoPage::onQualityChanged(int id) {
+    recorder_core::NvencQualityPreset preset = recorder_core::NvencQualityPreset::Balanced;
+    const char* cq_text = "24";
+    const char* bitrate_text = "~38 Mb/s";
+    const char* size_text = "~17.1 GB";
+
+    if (id == 0) {
+        preset = recorder_core::NvencQualityPreset::High;
+        cq_text = "19";
+        bitrate_text = "~62 Mb/s";
+        size_text = "~27.9 GB";
+    } else if (id == 2) {
+        preset = recorder_core::NvencQualityPreset::Small;
+        cq_text = "30";
+        bitrate_text = "~18 Mb/s";
+        size_text = "~8.1 GB";
+    }
+
+    if (rail_cq_label_)
+        rail_cq_label_->setText(QString::fromLatin1(cq_text));
+    if (rail_bitrate_label_)
+        rail_bitrate_label_->setText(QString::fromLatin1(bitrate_text));
+    if (rail_size_label_)
+        rail_size_label_->setText(QString::fromLatin1(size_text));
+
+    VideoSettingsModel m;
+    m.quality = preset;
+    m.cfr = (cfr_vfr_group_ == nullptr || cfr_vfr_group_->checkedId() == 0);
+    emit videoSettingsChanged(m);
+}
+
+void VideoPage::onCfrVfrChanged(int id) {
+    // Update the descriptive note under the fps value
+    if (fps_note_label_) {
+        if (id == 0) {
+            fps_note_label_->setText("Duplicate frames to maintain constant 60 fps output.");
+        } else {
+            fps_note_label_->setText("Pass source timestamps through — file size follows source framerate.");
+        }
+    }
+
+    recorder_core::NvencQualityPreset preset = recorder_core::NvencQualityPreset::Balanced;
+    if (quality_group_) {
+        const int qid = quality_group_->checkedId();
+        if (qid == 0) {
+            preset = recorder_core::NvencQualityPreset::High;
+        } else if (qid == 2) {
+            preset = recorder_core::NvencQualityPreset::Small;
+        }
+    }
+
+    VideoSettingsModel m;
+    m.quality = preset;
+    m.cfr = (id == 0);
+    emit videoSettingsChanged(m);
 }
 
 } // namespace exosnap
