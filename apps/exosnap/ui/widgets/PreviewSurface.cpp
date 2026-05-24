@@ -6,8 +6,11 @@
 #include <QLabel>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QResizeEvent>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 namespace exosnap::ui::widgets {
 
@@ -88,6 +91,13 @@ void PreviewSurface::setRecording(bool recording) {
     if (recording_ == recording)
         return;
     recording_ = recording;
+    center_box_->setVisible(current_frame_.isNull());
+    update();
+}
+
+void PreviewSurface::setLiveFrame(QImage frame) {
+    current_frame_ = std::move(frame);
+    center_box_->setVisible(current_frame_.isNull());
     update();
 }
 
@@ -138,12 +148,29 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
     painter.setPen(QPen(QColor("#3a342c"), 1.0));
     painter.drawRoundedRect(frame_rect, 5.0, 5.0);
 
-    painter.save();
-    painter.setClipRect(rect().adjusted(1, 1, -1, -1));
-    painter.setPen(QPen(QColor(255, 255, 255, 6), 1.0));
-    for (int x = -height(); x < width() + height(); x += 12)
-        painter.drawLine(x, height(), x + height(), 0);
-    painter.restore();
+    if (!current_frame_.isNull()) {
+        painter.save();
+        QPainterPath clipPath;
+        clipPath.addRoundedRect(frame_rect, 5.0, 5.0);
+        painter.setClipPath(clipPath);
+
+        const double sx = static_cast<double>(width()) / current_frame_.width();
+        const double sy = static_cast<double>(height()) / current_frame_.height();
+        const double s = std::max(sx, sy);
+        const int dw = static_cast<int>(current_frame_.width() * s);
+        const int dh = static_cast<int>(current_frame_.height() * s);
+        const int dx = (width() - dw) / 2;
+        const int dy = (height() - dh) / 2;
+        painter.drawImage(QRect(dx, dy, dw, dh), current_frame_);
+        painter.restore();
+    } else {
+        painter.save();
+        painter.setClipRect(rect().adjusted(1, 1, -1, -1));
+        painter.setPen(QPen(QColor(255, 255, 255, 6), 1.0));
+        for (int x = -height(); x < width() + height(); x += 12)
+            painter.drawLine(x, height(), x + height(), 0);
+        painter.restore();
+    }
 
     if (recording_) {
         painter.save();

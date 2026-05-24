@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QImage>
 #include <QWidget>
 
 class QLabel;
@@ -21,6 +22,9 @@ class PreviewSurface : public QWidget {
     void setRecording(bool recording);
     bool isRecording() const noexcept;
 
+    // Delivers a live preview frame. Pass a null QImage to clear.
+    void setLiveFrame(QImage frame);
+
     void setStatusText(const QString& text);
     void setTopMetaText(const QString& text);
     void setCenterTitle(const QString& text);
@@ -35,6 +39,7 @@ class PreviewSurface : public QWidget {
     void resizeEvent(QResizeEvent* event) override;
 
   private:
+    QImage current_frame_;
     StatusPill* status_pill_ = nullptr;
     QLabel* top_meta_label_ = nullptr;
     QLabel* center_title_label_ = nullptr;
