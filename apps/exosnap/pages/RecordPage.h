@@ -6,8 +6,12 @@
 #include <vector>
 
 #include "../models/OutputSettingsModel.h"
+#include "../models/VideoSettingsModel.h"
+#include "../services/PreviewService.h"
 #include "../services/RecordingCoordinator.h"
 #include "../viewmodels/RecordViewModel.h"
+
+#include <capability/config_types.h>
 
 class QComboBox;
 class QFrame;
@@ -32,6 +36,7 @@ class RecordPage : public QWidget {
     explicit RecordPage(QWidget* parent = nullptr);
     ~RecordPage() override;
     void setOutputSettings(const OutputSettingsModel& settings);
+    void setVideoSettings(const VideoSettingsModel& settings);
     void applyPersistedAudioSettings(const capability::AudioUiState& state);
 
   signals:
@@ -40,6 +45,9 @@ class RecordPage : public QWidget {
                                      const QString& drop_text);
     void navigateToOutputPage();
     void audioSettingsChanged(const capability::AudioUiState& state);
+
+  public slots:
+    void onHotkeyToggle();
 
   private slots:
     void onStart();
@@ -87,6 +95,7 @@ class RecordPage : public QWidget {
     void emitAudioSettingsChanged();
     void emitChromeState();
     void syncCoordinatorTargetContext();
+    void startPreviewIfIdle();
     QString buildChromeStatusLabel() const;
     QString buildPreviewBottomLeftText(bool recording) const;
     QString buildPreviewBottomRightText(bool recording) const;
@@ -100,6 +109,7 @@ class RecordPage : public QWidget {
 
     RecordViewModel view_model_;
     std::unique_ptr<RecordingCoordinator> coordinator_;
+    std::unique_ptr<PreviewService> preview_service_;
 
     QLabel* capability_label_ = nullptr;
     QComboBox* target_combo_ = nullptr;
@@ -156,6 +166,7 @@ class RecordPage : public QWidget {
     QLabel* result_technical_label_ = nullptr;
     QFrame* result_technical_separator_ = nullptr;
     std::filesystem::path last_output_folder_;
+    capability::Container current_container_ = capability::Container::Matroska;
     float preflight_mic_rms_ = 0.0f;
     float preflight_sys_rms_ = 0.0f;
     float preflight_app_rms_ = 0.0f;

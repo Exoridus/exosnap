@@ -74,6 +74,7 @@ TEST(AudioUiStateTest, BuildAudioPlan_Display_WithMic_SingleTrackSystemOutputMic
     state.target_kind = CaptureTargetKind::Display;
     state.record_system_audio = true;
     state.record_microphone = true;
+    state.separate_output_tracks = false;
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
@@ -82,6 +83,23 @@ TEST(AudioUiStateTest, BuildAudioPlan_Display_WithMic_SingleTrackSystemOutputMic
     ASSERT_EQ(track.sources.size(), 2u);
     EXPECT_EQ(track.sources[0], AudioSourceKind::SystemOutput);
     EXPECT_EQ(track.sources[1], AudioSourceKind::Mic);
+    EXPECT_FALSE(result.audio_target_process_id.has_value());
+}
+
+TEST(AudioUiStateTest, BuildAudioPlan_Display_Separate_SysAndMic_TwoTracks) {
+    AudioUiState state;
+    state.target_kind = CaptureTargetKind::Display;
+    state.record_system_audio = true;
+    state.record_microphone = true;
+    state.separate_output_tracks = true;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_TRUE(result.record_audio);
+    ASSERT_EQ(result.plan.tracks.size(), 2u);
+    ASSERT_EQ(result.plan.tracks[0].sources.size(), 1u);
+    EXPECT_EQ(result.plan.tracks[0].sources[0], AudioSourceKind::SystemOutput);
+    ASSERT_EQ(result.plan.tracks[1].sources.size(), 1u);
+    EXPECT_EQ(result.plan.tracks[1].sources[0], AudioSourceKind::Mic);
     EXPECT_FALSE(result.audio_target_process_id.has_value());
 }
 

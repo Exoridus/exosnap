@@ -23,6 +23,7 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
@@ -131,7 +132,6 @@ void PersistMicGainForMvp(float gain_linear) {
     AppSettingsStore store;
     PersistedAppSettings persisted = store.Load();
     persisted.audio_ui_state.mic_gain_linear = gain_linear;
-    persisted.audio_ui_state.separate_output_tracks = false;
     store.Save(persisted);
 }
 
@@ -575,12 +575,15 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 }
 
 RecordPage::~RecordPage() {
+    if (preview_service_)
+        preview_service_->Stop();
     if (coordinator_) {
         coordinator_->StopMicMeter();
     }
 }
 
 void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
+    current_container_ = settings.container;
     last_output_folder_ = settings.output_folder;
     if (!settings.output_folder.empty()) {
         view_model_.output_path_display = settings.output_folder.wstring();
@@ -593,6 +596,7 @@ void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
         syncCoordinatorTargetContext();
     }
     updateOpenFolderButtonState();
+    updateAudioControls();
     diagnostics::AppLog(QStringLiteral("[output] settings applied: ") +
                         QString::fromStdWString(view_model_.output_path_display));
 }
@@ -603,7 +607,7 @@ void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& sta
 
     view_model_.audio_ui_state.record_application_audio = state.record_application_audio;
     view_model_.audio_ui_state.record_system_audio = state.record_system_audio;
-    view_model_.audio_ui_state.separate_output_tracks = false;
+    view_model_.audio_ui_state.separate_output_tracks = state.separate_output_tracks;
     view_model_.audio_ui_state.record_microphone = state.record_microphone;
     view_model_.audio_ui_state.mic_channel_mode = state.mic_channel_mode;
     view_model_.audio_ui_state.selected_mic_device_id = state.selected_mic_device_id;
@@ -619,6 +623,12 @@ void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& sta
     syncSysMeterService();
     syncAppMeterService();
     updateAudioMeterLevels();
+}
+
+void RecordPage::setVideoSettings(const VideoSettingsModel& settings) {
+    if (coordinator_) {
+        coordinator_->SetVideoSettings(settings);
+    }
 }
 
 void RecordPage::setOutputSettingsSummary(const OutputSettingsModel& settings) {
@@ -667,9 +677,36 @@ void RecordPage::updateOpenFolderButtonState() {
     open_folder_btn_->setEnabled(has_result_path || has_output_folder);
 }
 
+void RecordPage::startPreviewIfIdle() {
+    if (!preview_service_)
+        return;
+
+    const bool is_idle =
+        (view_model_.state == UiRecordingState::Ready || view_model_.state == UiRecordingState::Completed);
+    const bool has_target = view_model_.selected_target_index >= 0 &&
+                            view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
+
+    preview_service_->Stop();
+    if (preview_surface_)
+        preview_surface_->setLiveFrame(QImage{});
+
+    if (!is_idle || !has_target)
+        return;
+
+    const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+    preview_service_->Start(target);
+}
+
 void RecordPage::initCoordinator() {
     coordinator_ = std::make_unique<RecordingCoordinator>();
     view_model_.ApplyTargetKind(capability::CaptureTargetKind::Display);
+
+    preview_service_ = std::make_unique<PreviewService>();
+    QPointer<ui::widgets::PreviewSurface> safeSurface = preview_surface_;
+    preview_service_->SetFrameCallback([safeSurface](QImage frame) {
+        if (safeSurface)
+            safeSurface->setLiveFrame(std::move(frame));
+    });
 
     try {
         const auto caps = capability::CapabilityBuilder::BuildFromHardwareQuery();
@@ -690,6 +727,8 @@ void RecordPage::initCoordinator() {
             diagnostics::AppLog(QStringLiteral("[record] recording started"));
         else if (state == UiRecordingState::Stopping)
             diagnostics::AppLog(QStringLiteral("[record] stopping"));
+        else if (state == UiRecordingState::Ready || state == UiRecordingState::Completed)
+            startPreviewIfIdle();
         refresh();
     });
     coordinator_->SetStatsUpdatedCallback([this](const recorder_core::SessionStats& stats) {
@@ -725,6 +764,7 @@ void RecordPage::initCoordinator() {
     view_model_.SetState(coordinator_->State());
     view_model_.capability_status_text = coordinator_->CapabilityStatusText();
     refresh();
+    startPreviewIfIdle();
 }
 
 void RecordPage::enumerateTargets(bool preserve_current_selection) {
@@ -895,6 +935,7 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
 
     updateTargetCards();
     rebuildTargetPicker();
+    startPreviewIfIdle();
 }
 
 void RecordPage::onStart() {
@@ -913,6 +954,13 @@ void RecordPage::onStart() {
 void RecordPage::onStop() {
     diagnostics::AppLog(QStringLiteral("[record] stop requested"));
     coordinator_->StopRecording();
+}
+
+void RecordPage::onHotkeyToggle() {
+    if (view_model_.CanStart())
+        onStart();
+    else if (view_model_.CanStop())
+        onStop();
 }
 
 void RecordPage::onSelectMonitorTarget() {
@@ -974,8 +1022,6 @@ void RecordPage::onRefreshTargets() {
 
 void RecordPage::onAppAudioToggled(bool checked) {
     view_model_.audio_ui_state.record_application_audio = checked;
-    view_model_.audio_ui_state.separate_output_tracks = false;
-
     view_model_.RebuildAudioPlan();
     updateAudioControls();
     updateAudioTrackPreview();
@@ -984,8 +1030,6 @@ void RecordPage::onAppAudioToggled(bool checked) {
 
 void RecordPage::onSysAudioToggled(bool checked) {
     view_model_.audio_ui_state.record_system_audio = checked;
-    view_model_.audio_ui_state.separate_output_tracks = false;
-
     view_model_.RebuildAudioPlan();
     updateAudioControls();
     updateAudioTrackPreview();
@@ -993,8 +1037,7 @@ void RecordPage::onSysAudioToggled(bool checked) {
 }
 
 void RecordPage::onSeparateTracksToggled(bool checked) {
-    (void)checked;
-    view_model_.audio_ui_state.separate_output_tracks = false;
+    view_model_.audio_ui_state.separate_output_tracks = checked;
     view_model_.RebuildAudioPlan();
     updateAudioControls();
     updateAudioTrackPreview();
@@ -1129,8 +1172,6 @@ void RecordPage::updateAudioControls() {
         return;
     }
 
-    view_model_.audio_ui_state.separate_output_tracks = false;
-
     QSignalBlocker b1(app_audio_check_);
     QSignalBlocker b2(sys_audio_check_);
     QSignalBlocker b3(separate_tracks_check_);
@@ -1188,11 +1229,19 @@ void RecordPage::updateAudioControlsVisibility() {
     app_audio_check_->setVisible(is_window);
     (void)app;
     (void)sys;
-    separate_tracks_check_->setVisible(false);
+
+    // Separate tracks: MKV only (WebM/MP4 muxers are untested for multi-track).
+    const bool container_sep_ok = (current_container_ == capability::Container::Matroska);
+    const int source_count = (is_window ? ((view_model_.audio_ui_state.record_application_audio ? 1 : 0) +
+                                           (view_model_.audio_ui_state.record_system_audio ? 1 : 0))
+                                        : (view_model_.audio_ui_state.record_system_audio ? 1 : 0)) +
+                             (mic ? 1 : 0);
+    const bool sep_applicable = container_sep_ok && (source_count >= 2);
+    separate_tracks_check_->setVisible(sep_applicable);
 
     app_audio_check_->setEnabled(!busy);
     sys_audio_check_->setEnabled(!busy);
-    separate_tracks_check_->setEnabled(false);
+    separate_tracks_check_->setEnabled(sep_applicable && !busy);
     mic_check_->setEnabled(!busy);
 
     mic_device_row_->setVisible(mic);
@@ -1438,7 +1487,12 @@ QString RecordPage::buildPreviewBottomLeftText(bool recording) const {
         drop_text = QString::number(view_model_.dropped_frames);
     }
 
-    return QStringLiteral("FRAME %1 ms · BITRATE %2 · DROP %3").arg(frame_text, bitrate_text, drop_text);
+    const QString drift_text = view_model_.live_stats_available
+                                   ? QStringLiteral("%1 ms").arg(view_model_.av_drift_ms, 0, 'f', 0)
+                                   : QStringLiteral("–");
+
+    return QStringLiteral("FRAME %1 ms · BITRATE %2 · DROP %3 · DRIFT %4")
+        .arg(frame_text, bitrate_text, drop_text, drift_text);
 }
 
 QString RecordPage::buildPreviewBottomRightText(bool recording) const {
@@ -1446,8 +1500,10 @@ QString RecordPage::buildPreviewBottomRightText(bool recording) const {
         return QStringLiteral("AV1 · CQ 24");
     }
 
-    const QString size_text =
-        view_model_.live_stats_available ? QString::fromStdWString(view_model_.output_size_text) : QStringLiteral("–");
+    const uint64_t live_bytes = view_model_.video_bytes + view_model_.audio_bytes;
+    const QString size_text = view_model_.live_stats_available
+                                  ? QString::fromStdWString(RecordViewModel::FormatBytes(live_bytes))
+                                  : QStringLiteral("–");
     return QStringLiteral("AV1 · CQ 24 · SIZE %1").arg(size_text);
 }
 
@@ -1531,10 +1587,11 @@ void RecordPage::refresh() {
         preview_surface_->setCenterSubtitle(blocker_text.isEmpty() ? QStringLiteral("Check diagnostics for details")
                                                                    : blocker_text);
     } else {
+        const bool preview_live = preview_service_ && preview_service_->IsRunning();
         preview_surface_->setCenterTitle(has_selected_target ? target_desc : QStringLiteral("NO TARGET"));
-        preview_surface_->setCenterSubtitle(has_selected_target
-                                                ? QStringLiteral("Static — preview unavailable in alpha")
-                                                : QStringLiteral("Select a capture source above"));
+        preview_surface_->setCenterSubtitle(
+            has_selected_target ? (preview_live ? QString{} : QStringLiteral("Static — preview unavailable in alpha"))
+                                : QStringLiteral("Select a capture source above"));
     }
 
     updateTargetCards();

@@ -62,20 +62,28 @@ AudioPlanResult BuildAudioPlan(const AudioUiState& state) {
             }
         }
     } else {
-        // Display target: merge system output and mic into one track when both enabled.
+        // Display target: system output + optional microphone.
         const bool sys = state.record_system_audio;
         const bool mic = state.record_microphone;
+        const bool sep = state.separate_output_tracks;
 
-        if (sys && mic) {
-            recorder_core::ResolvedAudioTrack merged;
-            merged.track_index = 0;
-            merged.sources.push_back(recorder_core::AudioSourceKind::SystemOutput);
-            merged.sources.push_back(recorder_core::AudioSourceKind::Mic);
-            result.plan.tracks.push_back(std::move(merged));
-        } else if (sys) {
-            AddSingleSourceTrack(result.plan, recorder_core::AudioSourceKind::SystemOutput);
-        } else if (mic) {
-            AddSingleSourceTrack(result.plan, recorder_core::AudioSourceKind::Mic);
+        if (sep) {
+            if (sys)
+                AddSingleSourceTrack(result.plan, recorder_core::AudioSourceKind::SystemOutput);
+            if (mic)
+                AddSingleSourceTrack(result.plan, recorder_core::AudioSourceKind::Mic);
+        } else {
+            if (sys && mic) {
+                recorder_core::ResolvedAudioTrack merged;
+                merged.track_index = 0;
+                merged.sources.push_back(recorder_core::AudioSourceKind::SystemOutput);
+                merged.sources.push_back(recorder_core::AudioSourceKind::Mic);
+                result.plan.tracks.push_back(std::move(merged));
+            } else if (sys) {
+                AddSingleSourceTrack(result.plan, recorder_core::AudioSourceKind::SystemOutput);
+            } else if (mic) {
+                AddSingleSourceTrack(result.plan, recorder_core::AudioSourceKind::Mic);
+            }
         }
     }
 

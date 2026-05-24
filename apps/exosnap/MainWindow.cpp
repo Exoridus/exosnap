@@ -520,6 +520,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     persisted_settings_ = settings_store_.Load();
     output_settings_ = persisted_settings_.output;
+    video_settings_ = persisted_settings_.video;
     diagnostics::AppLog(QStringLiteral("[window] settings loaded"));
 
     auto* central = new QWidget(this);
@@ -637,8 +638,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     stack_->setObjectName("mainStack");
     record_page_ = new RecordPage(stack_);
     output_page_ = new OutputPage(output_settings_, stack_);
+    video_page_ = new VideoPage(video_settings_, stack_);
     stack_->addWidget(record_page_);
-    stack_->addWidget(new VideoPage(stack_));
+    stack_->addWidget(video_page_);
     stack_->addWidget(new AudioPage(stack_));
     stack_->addWidget(output_page_);
     stack_->addWidget(new HotkeysPage(stack_));
@@ -646,6 +648,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     stack_->addWidget(new LogsPage(stack_));
     stack_->addWidget(new AdvancedPage(stack_));
     record_page_->setOutputSettings(output_settings_);
+    record_page_->setVideoSettings(video_settings_);
     record_page_->applyPersistedAudioSettings(persisted_settings_.audio_ui_state);
     content_layout->addWidget(stack_, 1);
 
@@ -676,6 +679,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             updatePageHeader(kOutputPageIndex);
         }
     });
+    connect(video_page_, &VideoPage::videoSettingsChanged, this, [this](const VideoSettingsModel& settings) {
+        video_settings_ = settings;
+        record_page_->setVideoSettings(settings);
+        persisted_settings_.video = settings;
+        settings_store_.Save(persisted_settings_);
+    });
+    connect(this, &MainWindow::recordToggleRequested, record_page_, &RecordPage::onHotkeyToggle);
     connect(record_page_, &RecordPage::audioSettingsChanged, this, [this](const capability::AudioUiState& state) {
         persisted_settings_.audio_ui_state.record_application_audio = state.record_application_audio;
         persisted_settings_.audio_ui_state.record_system_audio = state.record_system_audio;
@@ -701,6 +711,11 @@ void MainWindow::showEvent(QShowEvent* event) {
         ensureWin32ResizableStyle(hwnd);
         applyDwmBorderSuppression(hwnd);
         resizable_style_applied_ = true;
+    }
+    if (!hotkeys_registered_) {
+        HWND hwnd = reinterpret_cast<HWND>(winId());
+        RegisterHotKey(hwnd, kHotkeyIdStartStop, MOD_ALT | MOD_NOREPEAT, VK_F9);
+        hotkeys_registered_ = true;
     }
 #endif
 
@@ -876,6 +891,13 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
 
             if (msg->hwnd == main_hwnd)
                 traceFrameMessage(msg->hwnd, msg->message, msg->wParam, msg->lParam);
+
+            if (msg->hwnd == main_hwnd && msg->message == WM_HOTKEY) {
+                if (msg->wParam == static_cast<WPARAM>(kHotkeyIdStartStop))
+                    emit recordToggleRequested();
+                *result = 0;
+                return true;
+            }
 
             if (msg->hwnd == main_hwnd &&
                 (msg->message == WM_NCACTIVATE || msg->message == WM_ACTIVATE || msg->message == WM_SETFOCUS)) {

@@ -102,6 +102,29 @@ std::optional<recorder_core::MicChannelMode> MicChannelModeFromString(QStringVie
     return std::nullopt;
 }
 
+QString NvencQualityPresetToString(recorder_core::NvencQualityPreset preset) {
+    switch (preset) {
+    case recorder_core::NvencQualityPreset::High:
+        return QStringLiteral("high");
+    case recorder_core::NvencQualityPreset::Balanced:
+        return QStringLiteral("balanced");
+    case recorder_core::NvencQualityPreset::Small:
+        return QStringLiteral("small");
+    }
+    return QStringLiteral("balanced");
+}
+
+std::optional<recorder_core::NvencQualityPreset> NvencQualityPresetFromString(QStringView value) {
+    const QString normalized = value.trimmed().toString().toLower();
+    if (normalized == QStringLiteral("high"))
+        return recorder_core::NvencQualityPreset::High;
+    if (normalized == QStringLiteral("balanced"))
+        return recorder_core::NvencQualityPreset::Balanced;
+    if (normalized == QStringLiteral("small"))
+        return recorder_core::NvencQualityPreset::Small;
+    return std::nullopt;
+}
+
 float MicGainLinearFromDb(int mic_gain_db) {
     const int clamped = std::clamp(mic_gain_db, kMicGainDbMin, kMicGainDbMax);
     return std::pow(10.0f, static_cast<float>(clamped) / 20.0f);
@@ -133,6 +156,7 @@ AppSettingsStore::AppSettingsStore(QString settings_file_path) : settings_path_(
 PersistedAppSettings AppSettingsStore::Load() const {
     PersistedAppSettings persisted;
     persisted.output = OutputSettingsModel::Defaults();
+    persisted.video = VideoSettingsModel::Defaults();
     persisted.audio_ui_state = capability::AudioUiState{};
 
     if (settings_path_.isEmpty()) {
@@ -197,18 +221,25 @@ PersistedAppSettings AppSettingsStore::Load() const {
     persisted.audio_ui_state.mic_gain_linear = mic_gain_ok ? MicGainLinearFromDb(mic_gain_db) : 1.0f;
     settings.endGroup();
 
-    // Reconcile audio codec to match container constraints.
+    settings.beginGroup(QStringLiteral("video"));
+    if (const auto quality = NvencQualityPresetFromString(settings.value(QStringLiteral("quality")).toString());
+        quality.has_value()) {
+        persisted.video.quality = *quality;
+    }
+    if (settings.contains(QStringLiteral("cfr"))) {
+        persisted.video.cfr = settings.value(QStringLiteral("cfr"), true).toBool();
+    }
+    settings.endGroup();
+
+    // Enforce exclusive container/codec constraints.
+    // MP4 only supports AAC; WebM only supports Opus.
+    // Matroska supports both — leave the stored/default value as-is.
     if (persisted.output.container == capability::Container::Mp4) {
         persisted.output.audio_codec = capability::AudioCodec::AacMf;
     } else if (persisted.output.container == capability::Container::WebM) {
         persisted.output.audio_codec = capability::AudioCodec::Opus;
-    } else {
-        // Matroska: AAC is the required audio codec for the H.264+AAC default profile.
-        persisted.output.audio_codec = capability::AudioCodec::AacMf;
     }
 
-    // MVP policy: merged output only.
-    persisted.audio_ui_state.separate_output_tracks = false;
     if (settings_version < kSettingsVersionCurrent) {
         persisted.audio_ui_state.mic_gain_linear = 1.0f;
     }
@@ -236,11 +267,17 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.setValue(QStringLiteral("audio_codec"), AudioCodecToString(settings_snapshot.output.audio_codec));
     settings.endGroup();
 
+    settings.beginGroup(QStringLiteral("video"));
+    settings.setValue(QStringLiteral("quality"), NvencQualityPresetToString(settings_snapshot.video.quality));
+    settings.setValue(QStringLiteral("cfr"), settings_snapshot.video.cfr);
+    settings.endGroup();
+
     settings.beginGroup(QStringLiteral("audio"));
     settings.setValue(QStringLiteral("record_application_audio"),
                       settings_snapshot.audio_ui_state.record_application_audio);
     settings.setValue(QStringLiteral("record_system_audio"), settings_snapshot.audio_ui_state.record_system_audio);
-    settings.setValue(QStringLiteral("separate_output_tracks"), false);
+    settings.setValue(QStringLiteral("separate_output_tracks"),
+                      settings_snapshot.audio_ui_state.separate_output_tracks);
     settings.setValue(QStringLiteral("record_microphone"), settings_snapshot.audio_ui_state.record_microphone);
     settings.setValue(QStringLiteral("mic_channel_mode"),
                       MicChannelModeToString(settings_snapshot.audio_ui_state.mic_channel_mode));

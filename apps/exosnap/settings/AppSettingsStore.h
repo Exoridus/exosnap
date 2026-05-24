@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../models/OutputSettingsModel.h"
+#include "../models/VideoSettingsModel.h"
 #include <capability/audio_ui_state.h>
 
 #include <QString>
@@ -9,6 +10,7 @@ namespace exosnap {
 
 struct PersistedAppSettings {
     OutputSettingsModel output;
+    VideoSettingsModel video;
     capability::AudioUiState audio_ui_state;
 };
 

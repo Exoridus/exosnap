@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "models/OutputSettingsModel.h"
+#include "models/VideoSettingsModel.h"
 #include "settings/AppSettingsStore.h"
 
 class QLabel;
@@ -20,11 +21,15 @@ class OperationalTitleBar;
 
 class OutputPage;
 class RecordPage;
+class VideoPage;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
   public:
     explicit MainWindow(QWidget* parent = nullptr);
+
+  signals:
+    void recordToggleRequested();
 
   private slots:
     void onNavRowChanged(int row);
@@ -50,7 +55,9 @@ class MainWindow : public QMainWindow {
     QStackedWidget* stack_ = nullptr;
     RecordPage* record_page_ = nullptr;
     OutputPage* output_page_ = nullptr;
+    VideoPage* video_page_ = nullptr;
     OutputSettingsModel output_settings_;
+    VideoSettingsModel video_settings_;
     AppSettingsStore settings_store_;
     PersistedAppSettings persisted_settings_;
     QLabel* page_kicker_label_ = nullptr;
@@ -59,9 +66,11 @@ class MainWindow : public QMainWindow {
     QLabel* page_meta_label_ = nullptr;
     QLabel* sidebar_status_value_label_ = nullptr;
     QTimer* idle_metrics_timer_ = nullptr;
+    static constexpr int kHotkeyIdStartStop = 1;
     bool recording_active_ = false;
     bool runtime_window_icon_bound_ = false;
     bool resizable_style_applied_ = false;
+    bool hotkeys_registered_ = false;
     bool win32_maximized_ = false;
     QString recording_context_text_;
     QString record_status_label_ = QStringLiteral("READY");

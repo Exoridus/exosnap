@@ -80,6 +80,7 @@ class RecordViewModel {
     uint64_t output_file_bytes = 0;
     double elapsed_seconds = 0.0;
     uint64_t dropped_frames = 0;
+    double av_drift_ms = 0.0;
     std::wstring output_size_text = L"0 KB";
     float audio_rms_app = 0.0f;
     float audio_rms_sys = 0.0f;
