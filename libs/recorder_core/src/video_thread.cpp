@@ -466,6 +466,176 @@ void VideoThread::Run() {
         videoContext->VideoProcessorSetStreamDestRect(videoProcessor.get(), 0, TRUE, &dstRect);
     }
 
+    // --- Webcam compositing resources ---
+    // compositeTex: BGRA render target used when webcam overlay is active.
+    // VideoProcessor reads from compositeTex instead of the raw WGC texture.
+    bool webcamActive = m_state.config.webcam.enabled && (m_state.config.webcam.frame_provider != nullptr);
+
+    winrt::com_ptr<ID3D11Texture2D> compositeTex;
+    winrt::com_ptr<ID3D11Texture2D> webcamStagingTex; // for chroma key readback
+
+    if (webcamActive) {
+        {
+            D3D11_TEXTURE2D_DESC cDesc{};
+            cDesc.Width = encodeWidth;
+            cDesc.Height = encodeHeight;
+            cDesc.MipLevels = 1;
+            cDesc.ArraySize = 1;
+            cDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            cDesc.SampleDesc = {1, 0};
+            cDesc.Usage = D3D11_USAGE_DEFAULT;
+            cDesc.BindFlags = D3D11_BIND_RENDER_TARGET;
+
+            HRESULT cHr = d3dDevice->CreateTexture2D(&cDesc, nullptr, compositeTex.put());
+            if (FAILED(cHr)) {
+                webcamActive = false;
+            }
+        }
+
+        if (webcamActive && m_state.config.webcam.chroma_key_enabled) {
+            D3D11_TEXTURE2D_DESC sDesc{};
+            sDesc.Width = encodeWidth;
+            sDesc.Height = encodeHeight;
+            sDesc.MipLevels = 1;
+            sDesc.ArraySize = 1;
+            sDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            sDesc.SampleDesc = {1, 0};
+            sDesc.Usage = D3D11_USAGE_STAGING;
+            sDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+
+            HRESULT sHr = d3dDevice->CreateTexture2D(&sDesc, nullptr, webcamStagingTex.put());
+            if (FAILED(sHr)) {
+                webcamStagingTex = nullptr; // non-fatal: chroma key falls back to opaque paste
+            }
+        }
+    }
+
+    // Helper: nearest-neighbour scale of BGRA webcam frame to overlay pixel size.
+    auto scaleNN = [](const uint8_t* src, int sw, int sh, uint8_t* dst, int dw, int dh) {
+        for (int dy = 0; dy < dh; ++dy) {
+            const int sy = (dy * sh) / dh;
+            const uint8_t* srow = src + sy * sw * 4;
+            uint8_t* drow = dst + dy * dw * 4;
+            for (int dx = 0; dx < dw; ++dx) {
+                const int sx = (dx * sw) / dw;
+                const uint8_t* sp = srow + sx * 4;
+                uint8_t* dp = drow + dx * 4;
+                dp[0] = sp[0];
+                dp[1] = sp[1];
+                dp[2] = sp[2];
+                dp[3] = 255u;
+            }
+        }
+    };
+
+    // Helper: apply chroma key — sets alpha for each pixel based on distance to key color.
+    auto applyChromaKey = [&](uint8_t* pixels, int w, int h) {
+        const float cr = m_state.config.webcam.chroma_r / 255.0f;
+        const float cg = m_state.config.webcam.chroma_g / 255.0f;
+        const float cbv = m_state.config.webcam.chroma_b / 255.0f;
+        const float tol = m_state.config.webcam.chroma_tolerance;
+        const float soft = m_state.config.webcam.chroma_softness;
+        const float softTotal = tol + (soft > 0.0f ? soft : 0.001f);
+        for (int i = 0; i < w * h; ++i) {
+            const float b = pixels[i * 4 + 0] / 255.0f;
+            const float g = pixels[i * 4 + 1] / 255.0f;
+            const float r = pixels[i * 4 + 2] / 255.0f;
+            const float dr = r - cr, dg = g - cg, db = b - cbv;
+            const float dist = std::sqrt(dr * dr + dg * dg + db * db);
+            float alpha;
+            if (dist <= tol)
+                alpha = 0.0f;
+            else if (dist >= softTotal)
+                alpha = 1.0f;
+            else
+                alpha = (dist - tol) / (softTotal - tol);
+            pixels[i * 4 + 3] = static_cast<uint8_t>(alpha * 255.0f + 0.5f);
+        }
+    };
+
+    // Compositing function — called once per encoded frame when webcam is active.
+    // wgcTex: the raw WGC BGRA frame.
+    // Returns the texture to feed into VideoProcessorBlt (either compositeTex or wgcTex).
+    std::vector<uint8_t> camBgra;
+    std::vector<uint8_t> scaledCam;
+    std::vector<uint8_t> blendedPixels;
+
+    auto compositeWebcam = [&](ID3D11Texture2D* wgcTex) -> ID3D11Texture2D* {
+        if (!webcamActive || compositeTex == nullptr)
+            return wgcTex;
+
+        // Copy full WGC frame into composite buffer.
+        d3dContext->CopyResource(compositeTex.get(), wgcTex);
+
+        int cam_w = 0, cam_h = 0;
+        if (!m_state.config.webcam.frame_provider->TryGetFrame(cam_w, cam_h, camBgra))
+            return compositeTex.get(); // no webcam frame yet — show main frame only
+
+        if (cam_w <= 0 || cam_h <= 0 || camBgra.empty())
+            return compositeTex.get();
+
+        // Overlay pixel rect (clamp to encode dims).
+        const int ov_x = static_cast<int>(m_state.config.webcam.overlay_x_norm * static_cast<float>(encodeWidth));
+        const int ov_y = static_cast<int>(m_state.config.webcam.overlay_y_norm * static_cast<float>(encodeHeight));
+        int ov_w = static_cast<int>(m_state.config.webcam.overlay_w_norm * static_cast<float>(encodeWidth));
+        int ov_h = static_cast<int>(m_state.config.webcam.overlay_h_norm * static_cast<float>(encodeHeight));
+        if (ov_x < 0 || ov_y < 0)
+            return compositeTex.get();
+        ov_w = (std::max)(2, (std::min)(ov_w, static_cast<int>(encodeWidth) - ov_x));
+        ov_h = (std::max)(2, (std::min)(ov_h, static_cast<int>(encodeHeight) - ov_y));
+        if (ov_w <= 0 || ov_h <= 0)
+            return compositeTex.get();
+
+        // Scale webcam to overlay size.
+        scaledCam.resize(static_cast<size_t>(ov_w) * ov_h * 4);
+        scaleNN(camBgra.data(), cam_w, cam_h, scaledCam.data(), ov_w, ov_h);
+
+        const D3D11_BOX box = {static_cast<UINT>(ov_x),        static_cast<UINT>(ov_y),        0u,
+                               static_cast<UINT>(ov_x + ov_w), static_cast<UINT>(ov_y + ov_h), 1u};
+
+        if (m_state.config.webcam.chroma_key_enabled && webcamStagingTex != nullptr) {
+            // Chroma key: compute alpha per pixel, then alpha-blend over main frame.
+            applyChromaKey(scaledCam.data(), ov_w, ov_h);
+
+            // Read main frame pixels for overlay region from compositeTex.
+            d3dContext->CopySubresourceRegion(webcamStagingTex.get(), 0, 0, 0, 0, compositeTex.get(), 0, &box);
+            D3D11_MAPPED_SUBRESOURCE mapped{};
+            if (SUCCEEDED(d3dContext->Map(webcamStagingTex.get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+                blendedPixels.resize(static_cast<size_t>(ov_w) * ov_h * 4);
+                for (int row = 0; row < ov_h; ++row) {
+                    const uint8_t* mainRow = static_cast<const uint8_t*>(mapped.pData) + row * mapped.RowPitch;
+                    const uint8_t* camRow = scaledCam.data() + row * ov_w * 4;
+                    uint8_t* outRow = blendedPixels.data() + row * ov_w * 4;
+                    for (int col = 0; col < ov_w; ++col) {
+                        const float alpha = camRow[col * 4 + 3] / 255.0f;
+                        outRow[col * 4 + 0] = static_cast<uint8_t>(camRow[col * 4 + 0] * alpha +
+                                                                   mainRow[col * 4 + 0] * (1.0f - alpha) + 0.5f);
+                        outRow[col * 4 + 1] = static_cast<uint8_t>(camRow[col * 4 + 1] * alpha +
+                                                                   mainRow[col * 4 + 1] * (1.0f - alpha) + 0.5f);
+                        outRow[col * 4 + 2] = static_cast<uint8_t>(camRow[col * 4 + 2] * alpha +
+                                                                   mainRow[col * 4 + 2] * (1.0f - alpha) + 0.5f);
+                        outRow[col * 4 + 3] = 255u;
+                    }
+                }
+                d3dContext->Unmap(webcamStagingTex.get(), 0);
+                d3dContext->UpdateSubresource(compositeTex.get(), 0, &box, blendedPixels.data(),
+                                              static_cast<UINT>(ov_w * 4), 0);
+            } else {
+                // Map failed — paste webcam opaquely (non-fatal fallback).
+                for (int i = 0; i < ov_w * ov_h; ++i)
+                    scaledCam[i * 4 + 3] = 255u;
+                d3dContext->UpdateSubresource(compositeTex.get(), 0, &box, scaledCam.data(),
+                                              static_cast<UINT>(ov_w * 4), 0);
+            }
+        } else {
+            // No chroma key — paste webcam opaquely.
+            d3dContext->UpdateSubresource(compositeTex.get(), 0, &box, scaledCam.data(), static_cast<UINT>(ov_w * 4),
+                                          0);
+        }
+
+        return compositeTex.get();
+    };
+
     // --- WGC frame pool and session ---
     bool sourceLost = false;
     winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool framePool{nullptr};
@@ -750,15 +920,17 @@ void VideoThread::Run() {
                 bool frameWritten = false;
 
                 if (pendingWgcTex != nullptr) {
-                    // Convert new BGRA WGC frame to NV12 via VideoProcessorBlt
+                    // Composite webcam overlay (if active) onto WGC frame.
+                    ID3D11Texture2D* vpInput = compositeWebcam(pendingWgcTex.get());
+
+                    // Convert BGRA frame to NV12 via VideoProcessorBlt
                     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
                     ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
                     ivDesc.Texture2D.MipSlice = 0;
                     ivDesc.Texture2D.ArraySlice = 0;
 
                     winrt::com_ptr<ID3D11VideoProcessorInputView> inputView;
-                    hr = videoDevice->CreateVideoProcessorInputView(pendingWgcTex.get(), videoEnum.get(), &ivDesc,
-                                                                    inputView.put());
+                    hr = videoDevice->CreateVideoProcessorInputView(vpInput, videoEnum.get(), &ivDesc, inputView.put());
 
                     if (SUCCEEDED(hr) && inputView != nullptr) {
                         D3D11_VIDEO_PROCESSOR_STREAM stream{};
@@ -905,6 +1077,9 @@ void VideoThread::Run() {
                 int32_t slot = nvenc.AcquireFreeSlot();
 
                 if (slot >= 0) {
+                    // Composite webcam overlay (if active).
+                    ID3D11Texture2D* vpInput = compositeWebcam(latestTex.get());
+
                     // BGRA -> NV12 via VideoProcessorBlt into the selected slot's view
                     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
                     ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
@@ -912,8 +1087,7 @@ void VideoThread::Run() {
                     ivDesc.Texture2D.ArraySlice = 0;
 
                     winrt::com_ptr<ID3D11VideoProcessorInputView> inputView;
-                    hr = videoDevice->CreateVideoProcessorInputView(latestTex.get(), videoEnum.get(), &ivDesc,
-                                                                    inputView.put());
+                    hr = videoDevice->CreateVideoProcessorInputView(vpInput, videoEnum.get(), &ivDesc, inputView.put());
 
                     if (SUCCEEDED(hr) && inputView != nullptr) {
                         D3D11_VIDEO_PROCESSOR_STREAM stream{};
