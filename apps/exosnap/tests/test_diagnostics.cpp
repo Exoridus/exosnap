@@ -1,0 +1,448 @@
+#include <gtest/gtest.h>
+
+#include "diagnostics/CapabilitySummary.h"
+#include "diagnostics/ConfigSummary.h"
+#include "diagnostics/DiagnosticResult.h"
+#include "diagnostics/RecommendationEngine.h"
+#include "diagnostics/SelfTestRunner.h"
+
+#include "models/OutputSettingsModel.h"
+#include "models/VideoSettingsModel.h"
+
+#include <capability/capability_builder.h>
+#include <capability/capability_set.h>
+#include <capability/user_config.h>
+
+namespace exosnap::diagnostics {
+namespace {
+
+// --- DiagnosticResult tests ---
+
+TEST(DiagnosticsTest, DiagnosticChecklist_Empty_HasNoBlocker) {
+    DiagnosticChecklist checklist;
+    EXPECT_FALSE(checklist.has_blocker);
+    EXPECT_FALSE(checklist.has_notice);
+    EXPECT_EQ(checklist.worst_severity(), DiagnosticSeverity::Pass);
+}
+
+TEST(DiagnosticsTest, DiagnosticChecklist_WithBlocker) {
+    DiagnosticChecklist checklist;
+    DiagnosticResult r;
+    r.severity = DiagnosticSeverity::Blocker;
+    r.title = "Test blocker";
+    checklist.results.push_back(r);
+    checklist.has_blocker = true;
+
+    EXPECT_TRUE(checklist.has_blocker);
+    EXPECT_EQ(checklist.worst_severity(), DiagnosticSeverity::Blocker);
+}
+
+TEST(DiagnosticsTest, DiagnosticChecklist_WithNotice) {
+    DiagnosticChecklist checklist;
+    DiagnosticResult r;
+    r.severity = DiagnosticSeverity::Notice;
+    r.title = "Test notice";
+    checklist.results.push_back(r);
+    checklist.has_notice = true;
+
+    EXPECT_TRUE(checklist.has_notice);
+    EXPECT_EQ(checklist.worst_severity(), DiagnosticSeverity::Notice);
+}
+
+// --- CapabilitySummary tests ---
+
+TEST(CapabilitySummaryTest, FromCapabilitySet_HasOsInfo) {
+    capability::CapabilitySet caps;
+    caps.runtime.os.version_string = "Windows 10 Pro";
+    caps.runtime.os.build_number = 19045;
+
+    auto summary = CapabilitySummary::FromCapabilitySet(caps);
+    EXPECT_GE(summary.entries.size(), 1u);
+}
+
+TEST(CapabilitySummaryTest, FromCapabilitySet_ReportsNvenc) {
+    capability::CapabilitySet caps;
+    caps.nvenc_dll_present = true;
+    caps.runtime.nvidia.nvenc_api_version = 1200;
+
+    auto summary = CapabilitySummary::FromCapabilitySet(caps);
+    bool found_nvenc = false;
+    for (const auto& entry : summary.entries) {
+        if (entry.label == "NVENC Available") {
+            found_nvenc = true;
+            EXPECT_EQ(entry.value, "Yes");
+            EXPECT_TRUE(entry.available);
+        }
+    }
+    EXPECT_TRUE(found_nvenc);
+}
+
+TEST(CapabilitySummaryTest, FromCapabilitySet_ReportsVideoCodecs) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::HevcNvenc] = {capability::SupportLevel::NotImplemented,
+                                                            "No HEVC support"};
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Invalid, "NVENC missing"};
+
+    auto summary = CapabilitySummary::FromCapabilitySet(caps);
+    int video_count = 0;
+    for (const auto& entry : summary.entries) {
+        if (entry.label.find("H.264") != std::string::npos || entry.label.find("HEVC") != std::string::npos ||
+            entry.label.find("AV1") != std::string::npos) {
+            ++video_count;
+        }
+    }
+    EXPECT_GE(video_count, 3);
+}
+
+TEST(CapabilitySummaryTest, FromCapabilitySet_ReportsAudioCodecs) {
+    capability::CapabilitySet caps;
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::AacMf] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Pcm] = {capability::SupportLevel::NotImplemented, ""};
+
+    auto summary = CapabilitySummary::FromCapabilitySet(caps);
+    int audio_count = 0;
+    for (const auto& entry : summary.entries) {
+        if (entry.label.find("Opus") != std::string::npos || entry.label.find("AAC") != std::string::npos ||
+            entry.label.find("PCM") != std::string::npos) {
+            ++audio_count;
+        }
+    }
+    EXPECT_GE(audio_count, 3);
+}
+
+TEST(CapabilitySummaryTest, FromCapabilitySet_ReportsContainers) {
+    capability::CapabilitySet caps;
+    caps.containers[capability::Container::Matroska] = {capability::SupportLevel::Available, ""};
+    caps.containers[capability::Container::Mp4] = {capability::SupportLevel::Available, ""};
+    caps.containers[capability::Container::WebM] = {capability::SupportLevel::Available, ""};
+
+    auto summary = CapabilitySummary::FromCapabilitySet(caps);
+    int container_count = 0;
+    for (const auto& entry : summary.entries) {
+        if (entry.label.find("MKV") != std::string::npos || entry.label.find("MP4") != std::string::npos ||
+            entry.label.find("WebM") != std::string::npos) {
+            ++container_count;
+        }
+    }
+    EXPECT_GE(container_count, 3);
+}
+
+// --- ConfigSummary tests ---
+
+TEST(ConfigSummaryTest, FromCurrentSettings_HasExpectedFields) {
+    OutputSettingsModel output;
+    output.container = capability::Container::Matroska;
+    output.video_codec = capability::VideoCodec::H264Nvenc;
+    output.audio_codec = capability::AudioCodec::AacMf;
+    output.output_folder = std::filesystem::path(L"C:/Videos/ExoSnap");
+    output.naming_pattern = L"{datetime}_{app}";
+
+    VideoSettingsModel video;
+    video.cfr = true;
+    video.capture_cursor = true;
+
+    capability::AudioUiState audio;
+    audio.source_rows = {
+        {recorder_core::AudioSourceKind::SystemOutput, true, false},
+        {recorder_core::AudioSourceKind::Mic, true, true},
+    };
+
+    auto summary = ConfigSummary::FromCurrentSettings(output, video, audio, std::filesystem::path(L"C:/settings.ini"),
+                                                      "MKV H.264 AAC", "Start/Stop: Alt+F9");
+
+    // Verify key fields exist
+    bool has_container = false, has_video = false, has_audio = false, has_cfr = false, has_path = false,
+         has_profile = false;
+    for (const auto& entry : summary.entries) {
+        if (entry.label == "Container") {
+            has_container = true;
+            EXPECT_EQ(entry.value, "MKV");
+        }
+        if (entry.label == "Video Codec") {
+            has_video = true;
+        }
+        if (entry.label == "Audio Codec") {
+            has_audio = true;
+        }
+        if (entry.label == "CFR/VFR") {
+            has_cfr = true;
+            EXPECT_EQ(entry.value, "CFR");
+        }
+        if (entry.label == "Output Folder") {
+            has_path = true;
+        }
+        if (entry.label == "Recording Profile") {
+            has_profile = true;
+        }
+    }
+    EXPECT_TRUE(has_container);
+    EXPECT_TRUE(has_video);
+    EXPECT_TRUE(has_audio);
+    EXPECT_TRUE(has_cfr);
+    EXPECT_TRUE(has_path);
+    EXPECT_TRUE(has_profile);
+}
+
+TEST(ConfigSummaryTest, FromCurrentSettings_VfrReportsCorrectly) {
+    OutputSettingsModel output;
+    VideoSettingsModel video;
+    video.cfr = false;
+
+    capability::AudioUiState audio;
+    auto summary = ConfigSummary::FromCurrentSettings(output, video, audio, std::filesystem::path(), "test", "");
+
+    for (const auto& entry : summary.entries) {
+        if (entry.label == "CFR/VFR") {
+            EXPECT_EQ(entry.value, "VFR");
+            return;
+        }
+    }
+    FAIL() << "CFR/VFR entry not found";
+}
+
+TEST(ConfigSummaryTest, FromCurrentSettings_AudioRoutingWithMerge) {
+    OutputSettingsModel output;
+    VideoSettingsModel video;
+
+    capability::AudioUiState audio;
+    audio.source_rows = {
+        {recorder_core::AudioSourceKind::SystemOutput, true, false},
+        {recorder_core::AudioSourceKind::Mic, false, false},
+        {recorder_core::AudioSourceKind::Sys, true, true},
+    };
+
+    auto summary = ConfigSummary::FromCurrentSettings(output, video, audio, std::filesystem::path(), "test", "");
+
+    for (const auto& entry : summary.entries) {
+        if (entry.label == "Audio Routing") {
+            EXPECT_NE(entry.value.find("MERGED"), std::string::npos);
+            EXPECT_NE(entry.value.find("OFF"), std::string::npos);
+            return;
+        }
+    }
+    FAIL() << "Audio Routing entry not found";
+}
+
+// --- RecommendationEngine tests ---
+
+TEST(RecommendationEngineTest, Generate_EmptyNoFlag) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Matroska;
+    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    auto checklist = engine.Generate();
+    // MKV selected, no rate mismatch, no drive space warning, profile supported
+    // Should have zero results
+    EXPECT_TRUE(checklist.results.empty());
+}
+
+TEST(RecommendationEngineTest, Generate_Mp4_Warns) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::AacMf] = {capability::SupportLevel::Available, ""};
+    caps.containers[capability::Container::Mp4] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Mp4;
+    config.video_codec = capability::VideoCodec::H264Nvenc;
+    config.audio_codec = capability::AudioCodec::AacMf;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    auto checklist = engine.Generate();
+
+    bool found_mp4_warning = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.002") {
+            found_mp4_warning = true;
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Notice);
+        }
+    }
+    EXPECT_TRUE(found_mp4_warning);
+}
+
+TEST(RecommendationEngineTest, Generate_RefreshRateMismatch) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+
+    // 144 Hz monitor + 60 fps = warn
+    RecommendationEngine engine(caps, config, 144, 0, true);
+    auto checklist = engine.Generate();
+
+    bool found_mismatch = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.001") {
+            found_mismatch = true;
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Notice);
+        }
+    }
+    EXPECT_TRUE(found_mismatch);
+}
+
+TEST(RecommendationEngineTest, Generate_RefreshRateMatch_NoWarn) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+
+    // 60 Hz monitor + 60 fps = no warn
+    RecommendationEngine engine(caps, config, 60, 0, true);
+    auto checklist = engine.Generate();
+
+    bool found_mismatch = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.001")
+            found_mismatch = true;
+    }
+    EXPECT_FALSE(found_mismatch);
+}
+
+TEST(RecommendationEngineTest, Generate_CodecUnavailable_Blocker) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Invalid, "NVENC not found"};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::WebM;
+    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    auto checklist = engine.Generate();
+
+    bool found_blocker = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.003") {
+            found_blocker = true;
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Blocker);
+        }
+    }
+    EXPECT_TRUE(found_blocker);
+}
+
+TEST(RecommendationEngineTest, Generate_LowDiskSpace_Warns) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+
+    // 100 MB free = warn
+    RecommendationEngine engine(caps, config, 0, 100ULL * 1024 * 1024, true);
+    auto checklist = engine.Generate();
+
+    bool found_space = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.005") {
+            found_space = true;
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Notice);
+        }
+    }
+    EXPECT_TRUE(found_space);
+}
+
+TEST(RecommendationEngineTest, Generate_UnsupportedProfile_Blocker) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+
+    RecommendationEngine engine(caps, config, 0, 0, false);
+    auto checklist = engine.Generate();
+
+    bool found_blocker = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.006") {
+            found_blocker = true;
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Blocker);
+        }
+    }
+    EXPECT_TRUE(found_blocker);
+}
+
+TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
+    auto codes = RecommendationEngine::GetAllRecommendationCodes();
+    EXPECT_EQ(codes.size(), 6u);
+    EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.001"), codes.end());
+    EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.006"), codes.end());
+}
+
+// --- SelfTestRunner tests ---
+
+TEST(SelfTestTest, SelfTest_Run_ReturnsAllResults) {
+    SelfTestRunner runner;
+    auto checklist = runner.Run();
+    EXPECT_EQ(checklist.results.size(), 5u);
+}
+
+TEST(SelfTestTest, SelfTest_CaptureAvailable) {
+    auto result = SelfTestRunner::CheckCaptureAvailability();
+    EXPECT_TRUE(result.passed);
+    EXPECT_EQ(result.category, "Capture");
+}
+
+TEST(SelfTestTest, SelfTest_EncoderAvailable) {
+    auto result = SelfTestRunner::CheckEncoderAvailability();
+    EXPECT_TRUE(result.passed);
+    EXPECT_EQ(result.category, "Encoder");
+}
+
+TEST(SelfTestTest, SelfTest_MuxerAvailable) {
+    auto result = SelfTestRunner::CheckMuxerAvailability();
+    EXPECT_TRUE(result.passed);
+    EXPECT_EQ(result.category, "Muxer");
+}
+
+TEST(SelfTestTest, SelfTest_OutputPathWritable) {
+    auto result = SelfTestRunner::CheckOutputPathWritable("");
+    EXPECT_TRUE(result.passed);
+    EXPECT_EQ(result.category, "Output Path");
+}
+
+TEST(SelfTestTest, SelfTest_AudioDeviceAvailable) {
+    auto result = SelfTestRunner::CheckAudioDeviceAvailability();
+    EXPECT_TRUE(result.passed);
+    EXPECT_EQ(result.category, "Audio Devices");
+}
+
+// --- Display name helper tests ---
+
+TEST(DisplayNameTest, VideoCodecDisplayNames) {
+    EXPECT_EQ(VideoCodecDisplayName(capability::VideoCodec::H264Nvenc), "H.264 (NVENC)");
+    EXPECT_EQ(VideoCodecDisplayName(capability::VideoCodec::HevcNvenc), "HEVC (NVENC)");
+    EXPECT_EQ(VideoCodecDisplayName(capability::VideoCodec::Av1Nvenc), "AV1 (NVENC)");
+}
+
+TEST(DisplayNameTest, AudioCodecDisplayNames) {
+    EXPECT_EQ(AudioCodecDisplayName(capability::AudioCodec::Opus), "Opus");
+    EXPECT_EQ(AudioCodecDisplayName(capability::AudioCodec::AacMf), "AAC (Media Foundation)");
+    EXPECT_EQ(AudioCodecDisplayName(capability::AudioCodec::Pcm), "PCM");
+}
+
+TEST(DisplayNameTest, ContainerDisplayNames) {
+    EXPECT_EQ(ContainerDisplayName(capability::Container::Matroska), "MKV / Matroska");
+    EXPECT_EQ(ContainerDisplayName(capability::Container::Mp4), "MP4");
+    EXPECT_EQ(ContainerDisplayName(capability::Container::WebM), "WebM");
+}
+
+TEST(DisplayNameTest, SupportLevelStrings) {
+    EXPECT_EQ(SupportLevelString(capability::SupportLevel::Available), "Available");
+    EXPECT_EQ(SupportLevelString(capability::SupportLevel::NotImplemented), "Not implemented");
+    EXPECT_EQ(SupportLevelString(capability::SupportLevel::Invalid), "Invalid");
+}
+
+} // namespace
+} // namespace exosnap::diagnostics

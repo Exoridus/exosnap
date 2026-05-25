@@ -23,6 +23,7 @@ namespace ui::chrome {
 class OperationalTitleBar;
 }
 
+class DiagnosticsPage;
 class HotkeysPage;
 class OutputPage;
 class RecordPage;
@@ -61,6 +62,7 @@ class MainWindow : public QMainWindow {
     void refreshOutputProfileUi();
     void persistProfileState();
     void restoreHotkeyBindingsFromSettings();
+    void refreshDiagnosticsData();
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
     QListWidget* nav_ = nullptr;
@@ -68,6 +70,7 @@ class MainWindow : public QMainWindow {
     RecordPage* record_page_ = nullptr;
     OutputPage* output_page_ = nullptr;
     VideoPage* video_page_ = nullptr;
+    DiagnosticsPage* diagnostics_page_ = nullptr;
     WebcamPage* webcam_page_ = nullptr;
     HotkeysPage* hotkeys_page_ = nullptr;
     OutputSettingsModel output_settings_;

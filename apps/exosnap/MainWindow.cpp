@@ -761,7 +761,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     hotkeys_page_ = new HotkeysPage(stack_);
     hotkeys_page_->setBindings(persisted_hotkeys_);
     stack_->addWidget(hotkeys_page_);
-    stack_->addWidget(new DiagnosticsPage(stack_));
+    diagnostics_page_ = new DiagnosticsPage(stack_);
+    stack_->addWidget(diagnostics_page_);
     stack_->addWidget(new LogsPage(stack_));
     stack_->addWidget(new AdvancedPage(stack_));
     record_page_->setOutputSettings(output_settings_);
@@ -795,6 +796,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         persisted_settings_.output = settings;
         persistProfileState();
         refreshOutputProfileUi();
+        refreshDiagnosticsData();
         if (stack_->currentIndex() == kOutputPageIndex) {
             updatePageHeader(kOutputPageIndex);
         }
@@ -940,6 +942,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         profile_registry_.ApplyVideoToActive(settings);
         persisted_settings_.video = settings;
         persistProfileState();
+        refreshDiagnosticsData();
     });
     connect(webcam_page_, &WebcamPage::settingsChanged, this, [this](const WebcamSettings& settings) {
         persisted_settings_.webcam = settings;
@@ -953,6 +956,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         profile_registry_.ApplyAudioToActive(state);
         persisted_settings_.audio_ui_state = state;
         persistProfileState();
+        refreshDiagnosticsData();
     });
 
     applyActiveProfileToPages();
@@ -960,6 +964,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     diagnostics::AppLog(QStringLiteral("[window] MainWindow constructed"));
 
+    refreshDiagnosticsData();
     nav_->setCurrentRow(0);
     pollIdleRuntimeMetrics();
 }
@@ -1335,6 +1340,7 @@ void MainWindow::applyActiveProfileToPages() {
     if (stack_ && stack_->currentIndex() == kOutputPageIndex) {
         updatePageHeader(kOutputPageIndex);
     }
+    refreshDiagnosticsData();
 }
 
 void MainWindow::refreshOutputProfileUi() {
@@ -1470,6 +1476,30 @@ QString MainWindow::buildOutputPageMeta() const {
                               : (output_settings_.audio_codec == capability::AudioCodec::AacMf ? QStringLiteral("AAC")
                                                                                                : QStringLiteral("PCM"));
     return container + QStringLiteral(" · ") + video + QStringLiteral(" · ") + audio;
+}
+
+void MainWindow::refreshDiagnosticsData() {
+    if (!diagnostics_page_ || !runtime_caps_ready_)
+        return;
+
+    std::string hotkeys_summary;
+    for (size_t i = 0; i < persisted_hotkeys_.size(); ++i) {
+        if (!persisted_hotkeys_[i].isEmpty()) {
+            if (!hotkeys_summary.empty())
+                hotkeys_summary += ", ";
+            const char* names[] = {"Start/Stop", "Pause/Resume", "Split", "Mute Mic"};
+            hotkeys_summary += names[i];
+            hotkeys_summary += ": ";
+            hotkeys_summary += persisted_hotkeys_[i].toString(QKeySequence::PortableText).toStdString();
+        }
+    }
+    if (hotkeys_summary.empty())
+        hotkeys_summary = "None configured";
+
+    const RecordingProfile active = profile_registry_.ActiveProfile();
+    diagnostics_page_->setDiagnosticData(runtime_caps_, output_settings_, video_settings_, active.audio_ui_state,
+                                         active.name, hotkeys_summary, settings_store_.SettingsFilePath().toStdString(),
+                                         hotkeys_registered_);
 }
 
 } // namespace exosnap

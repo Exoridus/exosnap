@@ -96,6 +96,16 @@ qt_add_executable(exosnap WIN32
     diagnostics/error_message.cpp
     diagnostics/AppLog.h
     diagnostics/AppLog.cpp
+    diagnostics/DiagnosticResult.h
+    diagnostics/DiagnosticResult.cpp
+    diagnostics/CapabilitySummary.h
+    diagnostics/CapabilitySummary.cpp
+    diagnostics/ConfigSummary.h
+    diagnostics/ConfigSummary.cpp
+    diagnostics/RecommendationEngine.h
+    diagnostics/RecommendationEngine.cpp
+    diagnostics/SelfTestRunner.h
+    diagnostics/SelfTestRunner.cpp
     viewmodels/RecordViewModel.h
     viewmodels/RecordViewModel.cpp
 )
@@ -178,3 +188,19 @@ exosnap_add_gtest(
     LIBRARIES exosnap_capability recorder_core Qt6::Core
 )
 target_include_directories(app_settings_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+    NAME diagnostics_tests
+    TEST_PREFIX diagnostics.
+    SOURCES
+        tests/test_diagnostics.cpp
+        diagnostics/DiagnosticResult.cpp
+        diagnostics/CapabilitySummary.cpp
+        diagnostics/ConfigSummary.cpp
+        diagnostics/RecommendationEngine.cpp
+        diagnostics/SelfTestRunner.cpp
+        models/OutputSettingsModel.cpp
+        models/OutputPathPolicy.cpp
+    LIBRARIES exosnap_capability recorder_core
+)
+target_include_directories(diagnostics_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
