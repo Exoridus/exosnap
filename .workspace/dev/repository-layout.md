@@ -1,4 +1,4 @@
-# Repository Layout
+#Repository Layout
 
 This repository keeps source code and generated artifacts strictly separated.
 
@@ -7,7 +7,7 @@ This repository keeps source code and generated artifacts strictly separated.
 - `apps/` contains executable applications and app-specific UI/runtime code.
 - `libs/` contains reusable libraries shared by one or more applications.
 - `scripts/` contains developer and packaging automation scripts.
-- `docs/` contains product, architecture, implementation, and process documentation.
+- `.workspace/` contains product, architecture, UI specs, decisions, design reference, and process documentation.
 - `build/` contains generated CMake build trees and local compile outputs.
 - `dist/` contains generated packaging outputs (ZIPs, checksums, staging content).
 

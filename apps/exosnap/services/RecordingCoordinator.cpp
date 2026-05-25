@@ -239,6 +239,21 @@ std::vector<recorder_core::CaptureTarget> RecordingCoordinator::EnumerateTargets
     return recorder_core::RecorderSession::EnumerateTargets();
 }
 
+void RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
+    webcam_settings_ = settings;
+    if (settings.enabled) {
+        if (!webcam_service_.IsRunning()) {
+            webcam_service_.Start(settings.device_id, settings.width, settings.height, settings.fps);
+        }
+    } else {
+        webcam_service_.Stop();
+    }
+}
+
+void RecordingCoordinator::SetWebcamFrameCallback(WebcamService::FrameCallback cb) {
+    webcam_service_.SetFrameCallback(std::move(cb));
+}
+
 bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& target,
                                           const capability::AudioUiState& audio_ui_state,
                                           std::optional<recorder_core::CaptureRegion> crop_region) {
@@ -292,6 +307,21 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.target = target;
     config.crop_region = crop_region;
     config.output_path = output_path;
+
+    if (webcam_settings_.enabled && webcam_service_.IsRunning()) {
+        config.webcam.enabled = true;
+        config.webcam.frame_provider = &webcam_service_;
+        config.webcam.overlay_x_norm = webcam_settings_.overlay.x_norm;
+        config.webcam.overlay_y_norm = webcam_settings_.overlay.y_norm;
+        config.webcam.overlay_w_norm = webcam_settings_.overlay.w_norm;
+        config.webcam.overlay_h_norm = webcam_settings_.overlay.h_norm;
+        config.webcam.chroma_key_enabled = webcam_settings_.chroma_key.enabled;
+        config.webcam.chroma_r = webcam_settings_.chroma_key.r;
+        config.webcam.chroma_g = webcam_settings_.chroma_key.g;
+        config.webcam.chroma_b = webcam_settings_.chroma_key.b;
+        config.webcam.chroma_tolerance = webcam_settings_.chroma_key.tolerance;
+        config.webcam.chroma_softness = webcam_settings_.chroma_key.softness;
+    }
 
     capability::AudioUiState audio_state = audio_ui_state;
     if (target.kind == recorder_core::CaptureTarget::Kind::Window && target.native_id != 0) {

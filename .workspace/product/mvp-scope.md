@@ -1,22 +1,26 @@
-# MVP Scope
+#MVP Scope
 
-## Product goal
+##Product goal
 
-Create a Windows 11 desktop application that records gameplay or desktop/application content with a native, efficient, diagnostics-first pipeline.
+        Create a Windows 11 desktop application that records gameplay or
+    desktop / application content with a native,
+    efficient,
+    diagnostics -
+            first pipeline.
 
-The MVP should already feel like a serious recorder rather than a prototype:
-- robust
-- understandable
-- debuggable
-- difficult to misconfigure silently
+            The MVP should already feel like a serious recorder rather than a prototype : -robust -
+            understandable - debuggable -
+            difficult to misconfigure silently
 
-## Core user promise
+            ##Core user promise
 
-> When the app says it is ready to record, the selected pipeline is actually valid, the source is visibly arriving, the configured audio tracks are clear, and the resulting file is technically inspectable during recording.
+        > When the app says it is ready to record,
+    the selected pipeline is actually valid, the source is visibly arriving, the configured audio tracks are clear,
+    and the resulting file is technically inspectable during recording.
 
-## Primary use case
+        ##Primary use case
 
-A user records SDR game footage on Windows 11 with:
+        A user records SDR game footage on Windows 11 with:
 - an NVIDIA RTX 50-series GPU
 - AMD Ryzen-class CPU
 - variable source framerate
@@ -42,12 +46,12 @@ A user records SDR game footage on Windows 11 with:
 ### Audio
 - Three source rows:
   - `APP`
-  - `MIC`
   - `SYS`
+  - `MIC`
 - Default source order:
   1. APP
-  2. MIC
-  3. SYS
+  2. SYS
+  3. MIC
 - Default state:
   - all enabled
   - all separate tracks
@@ -83,6 +87,7 @@ A user records SDR game footage on Windows 11 with:
   - Video
   - Audio
   - Output
+  - Webcam
   - Hotkeys
   - Diagnostics
   - Logs
@@ -104,14 +109,9 @@ A user records SDR game footage on Windows 11 with:
 - Pause/Resume Recording
 - Split Active Recording
 - Mute/Unmute Microphone
-- Mute/Unmute App Audio
-- Mute/Unmute System Audio
-- Add Marker
-- Bind/unbind UI with key-capture mode
 
 ## Out of scope for MVP
 
-- Overlay/HUD
 - Instant replay / replay buffer
 - Streaming
 - HDR
@@ -128,12 +128,12 @@ A user records SDR game footage on Windows 11 with:
 
 ```text
 Container: MKV
-Video: AV1 NVENC
-Audio: Opus
+Video: H.264 NVENC
+Audio: AAC
 Output FPS: 60 CFR
 Resolution: source resolution
-Audio source order: APP, MIC, SYS
-Audio resulting tracks: APP, MIC, SYS
+Audio source order: APP, SYS, MIC
+Audio resulting tracks: APP, SYS, MIC
 Theme: Dark
 ```
 

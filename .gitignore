@@ -1,11 +1,11 @@
-# Build output
+#Build output
 /build/
 /build-*/
 /cmake-build-*/
 /out/
 /dist/
 
-# CMake / Ninja generated files (for accidental in-source builds)
+#CMake / Ninja generated files(for accidental in - source builds)
 CMakeCache.txt
 CMakeFiles/
 CTestTestfile.cmake
@@ -17,7 +17,7 @@ build.ninja
 .ninja_log
 Testing/
 
-# IDE
+#IDE
 /.vs/
 /.vscode/
 *.user
@@ -30,30 +30,30 @@ Testing/
 CMakeUserPresets.json
 CMakeLists.txt.user
 
-# Qt Creator
+#Qt Creator
 *.pro.user
 *.pro.user.*
 *.qbs.user
 *.qbs.user.*
 
-# Qt / MSBuild artifacts
+#Qt / MSBuild artifacts
 apps/exosnap/Generated Files/
 apps/exosnap/obj/
 apps/exosnap/packages/
 
-# Log files
+#Log files
 *.log
 logs/
 
-# Temporary / crash artifacts
+#Temporary / crash artifacts
 *.tmp
 *.temp
 *.bak
 *.dmp
 *.stackdump
 
-# Spec pack installer metadata
+#Spec pack installer metadata
 manifest.json
 
-# Local review screenshots (not tracked in repo)
-docs/screenshots/
+#Local review screenshots(not tracked in repo)
+.workspace/

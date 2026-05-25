@@ -9,9 +9,15 @@
 #include "pages/OutputPage.h"
 #include "pages/RecordPage.h"
 #include "pages/VideoPage.h"
+#include "pages/WebcamPage.h"
+#include "settings/ProfileExchange.h"
 #include "ui/chrome/OperationalTitleBar.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
+
+#include <capability/capability_builder.h>
+#include <capability/resolver.h>
+#include <capability/user_config.h>
 
 #include <QApplication>
 #include <QColor>
@@ -26,6 +32,7 @@
 #include <QIcon>
 #include <QLabel>
 #include <QListWidgetItem>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPalette>
@@ -37,6 +44,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWindow>
+#include <algorithm>
 #include <array>
 
 #if defined(Q_OS_WIN)
@@ -58,6 +66,68 @@ namespace {
 
 constexpr bool kTraceFrameActivation = false;
 
+#if defined(Q_OS_WIN)
+// Maps Qt keyboard modifiers to Win32 RegisterHotKey modifier flags.
+UINT QtModifiersToWin32(Qt::KeyboardModifiers mods) {
+    UINT result = MOD_NOREPEAT;
+    if (mods & Qt::AltModifier)
+        result |= MOD_ALT;
+    if (mods & Qt::ControlModifier)
+        result |= MOD_CONTROL;
+    if (mods & Qt::ShiftModifier)
+        result |= MOD_SHIFT;
+    if (mods & Qt::MetaModifier)
+        result |= MOD_WIN;
+    return result;
+}
+
+// Maps a Qt key to a Win32 virtual key code. Returns 0 for unsupported keys.
+UINT QtKeyToVk(Qt::Key key) {
+    if (key >= Qt::Key_F1 && key <= Qt::Key_F24)
+        return static_cast<UINT>(VK_F1 + (key - Qt::Key_F1));
+    if (key >= Qt::Key_A && key <= Qt::Key_Z)
+        return static_cast<UINT>('A' + (key - Qt::Key_A));
+    if (key >= Qt::Key_0 && key <= Qt::Key_9)
+        return static_cast<UINT>('0' + (key - Qt::Key_0));
+    switch (key) {
+    case Qt::Key_Space:
+        return VK_SPACE;
+    case Qt::Key_Tab:
+        return VK_TAB;
+    case Qt::Key_Return:
+        return VK_RETURN;
+    case Qt::Key_Escape:
+        return VK_ESCAPE;
+    case Qt::Key_Backspace:
+        return VK_BACK;
+    case Qt::Key_Delete:
+        return VK_DELETE;
+    case Qt::Key_Insert:
+        return VK_INSERT;
+    case Qt::Key_Home:
+        return VK_HOME;
+    case Qt::Key_End:
+        return VK_END;
+    case Qt::Key_PageUp:
+        return VK_PRIOR;
+    case Qt::Key_PageDown:
+        return VK_NEXT;
+    case Qt::Key_Left:
+        return VK_LEFT;
+    case Qt::Key_Right:
+        return VK_RIGHT;
+    case Qt::Key_Up:
+        return VK_UP;
+    case Qt::Key_Down:
+        return VK_DOWN;
+    case Qt::Key_Pause:
+        return VK_PAUSE;
+    default:
+        return 0;
+    }
+}
+#endif
+
 void appendFrameTrace(const QString& line) {
     if (!kTraceFrameActivation)
         return;
@@ -77,10 +147,11 @@ enum class SidebarIcon {
     Video = 1,
     Audio = 2,
     Output = 3,
-    Hotkeys = 4,
-    Diagnostics = 5,
-    Logs = 6,
-    Advanced = 7,
+    Webcam = 4,
+    Hotkeys = 5,
+    Diagnostics = 6,
+    Logs = 7,
+    Advanced = 8,
 };
 
 enum class ResizeZone {
@@ -104,7 +175,7 @@ struct PageDescriptor {
     SidebarIcon icon;
 };
 
-constexpr std::array<PageDescriptor, 8> kPageDescriptors = {{
+constexpr std::array<PageDescriptor, 9> kPageDescriptors = {{
     {"Record", "01 · RECORD", "Operational view — target, readiness, and live runtime.", "",
      "DISPLAY1 · 2560×1440 · 60 fps · AV1", SidebarIcon::Record},
     {"Video", "02 · VIDEO", "Read-only MVP profile.", "LOCKED · MVP", "CFR 60 · NVENC AV1 · LOCKED",
@@ -113,19 +184,42 @@ constexpr std::array<PageDescriptor, 8> kPageDescriptors = {{
      SidebarIcon::Audio},
     {"Output", "04 · OUTPUT", "Container, destination, and recording output behavior.", "MKV · AV1 · OPUS",
      "Destination + container", SidebarIcon::Output},
-    {"Hotkeys", "05 · HOTKEYS", "Global command access for recording operations.", "GLOBAL SHORTCUTS",
+    {"Webcam", "05 · WEBCAM", "Webcam device, overlay placement, and chroma key.", "OVERLAY",
+     "Camera composited into recording", SidebarIcon::Webcam},
+    {"Hotkeys", "06 · HOTKEYS", "Global command access for recording operations.", "GLOBAL SHORTCUTS",
      "Trigger and visibility rules", SidebarIcon::Hotkeys},
-    {"Diagnostics", "06 · DIAGNOSTICS", "Capability checks, blockers, and system readiness.", "BLOCKER-FIRST",
+    {"Diagnostics", "07 · DIAGNOSTICS", "Capability checks, blockers, and system readiness.", "BLOCKER-FIRST",
      "Probe matrix and drivers", SidebarIcon::Diagnostics},
-    {"Logs", "07 · LOGS", "Runtime events and recording diagnostics.", "SESSION EVENTS",
+    {"Logs", "08 · LOGS", "Runtime events and recording diagnostics.", "SESSION EVENTS",
      "Structured recorder telemetry", SidebarIcon::Logs},
-    {"Advanced", "08 · ADVANCED", "Lower-level behavior and non-default controls.", "EXPERT SETTINGS",
+    {"Advanced", "09 · ADVANCED", "Lower-level behavior and non-default controls.", "EXPERT SETTINGS",
      "Explicitly non-default", SidebarIcon::Advanced},
 }};
 
 constexpr int kNavIndexRole = Qt::UserRole + 1;
 constexpr int kNavIconRole = Qt::UserRole + 2;
 constexpr int kOutputPageIndex = 3;
+
+capability::UserRecorderConfig ProfileToUserConfig(const RecordingProfile& profile) {
+    capability::UserRecorderConfig config;
+    config.container = profile.output.container;
+    config.video_codec = profile.output.video_codec;
+    config.audio_codec = profile.output.audio_codec;
+    config.chroma = capability::ChromaSubsampling::Cs420;
+    config.bit_depth = capability::BitDepth::Bit8;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+    return config;
+}
+
+QString PersistedHotkeyString(const QKeySequence& sequence) {
+    return sequence.toString(QKeySequence::PortableText).trimmed();
+}
+
+QKeySequence ParsePersistedHotkey(const QString& value, const QKeySequence& fallback) {
+    const QKeySequence parsed(value, QKeySequence::PortableText);
+    return parsed.isEmpty() ? fallback : parsed;
+}
 
 QColor colorFrom(const char* value) {
     return QColor(QString::fromLatin1(value));
@@ -354,6 +448,16 @@ void drawIcon(QPainter& painter, SidebarIcon icon, const QRectF& rect, const QCo
         painter.drawRoundedRect(QRectF(x + 2.0, y + h - 4.0, w - 4.0, 2.0), 0.4, 0.4);
         break;
     }
+    case SidebarIcon::Webcam: {
+        // body rectangle
+        painter.drawRoundedRect(QRectF(x + 1.5, y + 3.5, w - 3.0, h - 7.0), 2.0, 2.0);
+        // lens circle
+        painter.drawEllipse(QRectF(cx - 2.5, cy - 2.5, 5.0, 5.0));
+        // stand + base
+        painter.drawLine(QPointF(cx, y + h - 3.5), QPointF(cx, y + h - 2.0));
+        painter.drawLine(QPointF(cx - 3.0, y + h - 1.5), QPointF(cx + 3.0, y + h - 1.5));
+        break;
+    }
     case SidebarIcon::Hotkeys: {
         painter.drawRoundedRect(QRectF(x + 1.5, y + 4.0, w - 3.0, h - 8.0), 1.2, 1.2);
         painter.drawLine(QPointF(x + 4.0, cy), QPointF(x + w - 4.0, cy));
@@ -519,8 +623,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setMinimumSize(1120, 700);
 
     persisted_settings_ = settings_store_.Load();
-    output_settings_ = persisted_settings_.output;
-    video_settings_ = persisted_settings_.video;
+    profile_registry_.LoadState(persisted_settings_.user_profiles, persisted_settings_.modified_builtin_profiles,
+                                persisted_settings_.active_profile);
+    const RecordingProfile active_profile = profile_registry_.ActiveProfile();
+    output_settings_ = active_profile.output;
+    video_settings_ = active_profile.video;
+    persisted_settings_.audio_ui_state = active_profile.audio_ui_state;
+
+    runtime_caps_ = capability::CapabilityBuilder::BuildFromHardwareQuery();
+    runtime_caps_ready_ = true;
+    restoreHotkeyBindingsFromSettings();
     diagnostics::AppLog(QStringLiteral("[window] settings loaded"));
 
     auto* central = new QWidget(this);
@@ -643,13 +755,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     stack_->addWidget(video_page_);
     stack_->addWidget(new AudioPage(stack_));
     stack_->addWidget(output_page_);
-    stack_->addWidget(new HotkeysPage(stack_));
+    webcam_page_ = new WebcamPage(stack_);
+    webcam_page_->applySettings(persisted_settings_.webcam);
+    stack_->addWidget(webcam_page_);
+    hotkeys_page_ = new HotkeysPage(stack_);
+    hotkeys_page_->setBindings(persisted_hotkeys_);
+    stack_->addWidget(hotkeys_page_);
     stack_->addWidget(new DiagnosticsPage(stack_));
     stack_->addWidget(new LogsPage(stack_));
     stack_->addWidget(new AdvancedPage(stack_));
     record_page_->setOutputSettings(output_settings_);
     record_page_->setVideoSettings(video_settings_);
     record_page_->applyPersistedAudioSettings(persisted_settings_.audio_ui_state);
+    output_page_->setOutputSettings(output_settings_);
     content_layout->addWidget(stack_, 1);
 
     body_layout->addWidget(content, 1);
@@ -673,28 +791,172 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(output_page_, &OutputPage::outputSettingsChanged, this, [this](const OutputSettingsModel& settings) {
         output_settings_ = settings;
         record_page_->setOutputSettings(settings);
+        profile_registry_.ApplyOutputToActive(settings);
         persisted_settings_.output = settings;
-        settings_store_.Save(persisted_settings_);
+        persistProfileState();
+        refreshOutputProfileUi();
         if (stack_->currentIndex() == kOutputPageIndex) {
             updatePageHeader(kOutputPageIndex);
         }
     });
+    connect(output_page_, &OutputPage::activeProfileChanged, this, [this](const QString& profile_id) {
+        if (syncing_profile_ui_) {
+            return;
+        }
+        profile_registry_.SetActiveProfile(profile_id.toStdString());
+        applyActiveProfileToPages();
+        refreshOutputProfileUi();
+        persistProfileState();
+    });
+    connect(output_page_, &OutputPage::newFromCurrentRequested, this, [this](const QString& name) {
+        profile_registry_.CreateUserProfileFromCurrent(name.toStdString());
+        applyActiveProfileToPages();
+        refreshOutputProfileUi();
+        persistProfileState();
+    });
+    connect(output_page_, &OutputPage::newFromSafeDefaultRequested, this, [this](const QString& name) {
+        profile_registry_.CreateUserProfileFromSafeDefault(name.toStdString());
+        applyActiveProfileToPages();
+        refreshOutputProfileUi();
+        persistProfileState();
+    });
+    connect(output_page_, &OutputPage::duplicateActiveProfileRequested, this, [this]() {
+        if (profile_registry_.DuplicateActiveProfile()) {
+            applyActiveProfileToPages();
+            refreshOutputProfileUi();
+            persistProfileState();
+        }
+    });
+    connect(output_page_, &OutputPage::renameActiveProfileRequested, this, [this](const QString& name) {
+        if (profile_registry_.RenameActiveUserProfile(name.toStdString())) {
+            refreshOutputProfileUi();
+            persistProfileState();
+        }
+    });
+    connect(output_page_, &OutputPage::deleteActiveProfileRequested, this, [this]() {
+        if (profile_registry_.DeleteActiveUserProfile()) {
+            applyActiveProfileToPages();
+            refreshOutputProfileUi();
+            persistProfileState();
+        }
+    });
+    connect(output_page_, &OutputPage::resetActiveProfileRequested, this, [this]() {
+        if (profile_registry_.ResetActiveProfile()) {
+            applyActiveProfileToPages();
+            refreshOutputProfileUi();
+            persistProfileState();
+        }
+    });
+    connect(output_page_, &OutputPage::saveModifiedBuiltInAsNewRequested, this, [this](const QString& name) {
+        if (profile_registry_.SaveModifiedBuiltInAsUserProfile(name.toStdString())) {
+            applyActiveProfileToPages();
+            refreshOutputProfileUi();
+            persistProfileState();
+        }
+    });
+    connect(output_page_, &OutputPage::importProfilesRequested, this, [this](const QString& file_path) {
+        const ProfileImportResult imported = ImportProfilesFromJsonFile(file_path);
+        if (!imported.ok) {
+            QMessageBox::warning(this, QStringLiteral("Import Profiles"),
+                                 imported.error_message.isEmpty() ? QStringLiteral("Import failed.")
+                                                                  : imported.error_message);
+            return;
+        }
+
+        const int count = profile_registry_.ImportUserProfiles(imported.profiles);
+        if (count <= 0) {
+            QMessageBox::warning(this, QStringLiteral("Import Profiles"),
+                                 QStringLiteral("No profiles were imported from the selected file."));
+            return;
+        }
+
+        refreshOutputProfileUi();
+        persistProfileState();
+        QMessageBox::information(this, QStringLiteral("Import Profiles"),
+                                 QStringLiteral("Imported %1 profile(s).").arg(count));
+    });
+    connect(output_page_, &OutputPage::exportSelectedProfileRequested, this, [this](const QString& file_path) {
+        QString error_message;
+        const RecordingProfile active_profile = profile_registry_.ActiveProfile();
+        if (!ExportProfilesToJsonFile(file_path, {active_profile}, &error_message)) {
+            QMessageBox::warning(this, QStringLiteral("Export Profiles"),
+                                 error_message.isEmpty() ? QStringLiteral("Export failed.") : error_message);
+            return;
+        }
+
+        QMessageBox::information(this, QStringLiteral("Export Profiles"), QStringLiteral("Selected profile exported."));
+    });
+    connect(output_page_, &OutputPage::exportAllUserProfilesRequested, this, [this](const QString& file_path) {
+        const auto& users = profile_registry_.UserProfiles();
+        if (users.empty()) {
+            QMessageBox::warning(this, QStringLiteral("Export Profiles"),
+                                 QStringLiteral("No user profiles available to export."));
+            return;
+        }
+
+        QString error_message;
+        if (!ExportProfilesToJsonFile(file_path, users, &error_message)) {
+            QMessageBox::warning(this, QStringLiteral("Export Profiles"),
+                                 error_message.isEmpty() ? QStringLiteral("Export failed.") : error_message);
+            return;
+        }
+
+        QMessageBox::information(this, QStringLiteral("Export Profiles"),
+                                 QStringLiteral("Exported %1 user profile(s).").arg(users.size()));
+    });
+    connect(output_page_, &OutputPage::resetAllSettingsAndProfilesRequested, this, [this]() {
+        profile_registry_ = RecordingProfileRegistry();
+        output_settings_ = OutputSettingsModel::Defaults();
+        video_settings_ = VideoSettingsModel::Defaults();
+        persisted_settings_ = PersistedAppSettings{};
+        persisted_settings_.output = output_settings_;
+        persisted_settings_.video = video_settings_;
+        persisted_settings_.audio_ui_state = capability::AudioUiState{};
+        persisted_settings_.active_profile.active_profile_id = std::string(kBuiltInProfileMkvH264AacId);
+        persisted_settings_.active_profile.active_profile_modified = false;
+
+        const std::array<QKeySequence, 4> defaults = {
+            QKeySequence(Qt::ALT | Qt::Key_F9),
+            QKeySequence(),
+            QKeySequence(),
+            QKeySequence(),
+        };
+        for (int i = 0; i < static_cast<int>(defaults.size()); ++i) {
+            onHotkeyBindingChanged(i, defaults[static_cast<std::size_t>(i)]);
+        }
+        if (hotkeys_page_) {
+            hotkeys_page_->setBindings(defaults);
+        }
+
+        applyActiveProfileToPages();
+        refreshOutputProfileUi();
+        persistProfileState();
+        QMessageBox::information(this, QStringLiteral("Reset Complete"),
+                                 QStringLiteral("Settings and profiles were reset to defaults."));
+    });
     connect(video_page_, &VideoPage::videoSettingsChanged, this, [this](const VideoSettingsModel& settings) {
         video_settings_ = settings;
         record_page_->setVideoSettings(settings);
+        profile_registry_.ApplyVideoToActive(settings);
         persisted_settings_.video = settings;
+        persistProfileState();
+    });
+    connect(webcam_page_, &WebcamPage::settingsChanged, this, [this](const WebcamSettings& settings) {
+        persisted_settings_.webcam = settings;
         settings_store_.Save(persisted_settings_);
+        record_page_->setWebcamSettings(settings);
     });
     connect(this, &MainWindow::recordToggleRequested, record_page_, &RecordPage::onHotkeyToggle);
+    connect(this, &MainWindow::pauseToggleRequested, record_page_, &RecordPage::onHotkeyPauseToggle);
+    connect(hotkeys_page_, &HotkeysPage::bindingChanged, this, &MainWindow::onHotkeyBindingChanged);
     connect(record_page_, &RecordPage::audioSettingsChanged, this, [this](const capability::AudioUiState& state) {
-        persisted_settings_.audio_ui_state.record_application_audio = state.record_application_audio;
-        persisted_settings_.audio_ui_state.record_system_audio = state.record_system_audio;
-        persisted_settings_.audio_ui_state.separate_output_tracks = state.separate_output_tracks;
-        persisted_settings_.audio_ui_state.record_microphone = state.record_microphone;
-        persisted_settings_.audio_ui_state.mic_channel_mode = state.mic_channel_mode;
-        persisted_settings_.audio_ui_state.selected_mic_device_id = state.selected_mic_device_id;
-        settings_store_.Save(persisted_settings_);
+        profile_registry_.ApplyAudioToActive(state);
+        persisted_settings_.audio_ui_state = state;
+        persistProfileState();
     });
+
+    applyActiveProfileToPages();
+    refreshOutputProfileUi();
 
     diagnostics::AppLog(QStringLiteral("[window] MainWindow constructed"));
 
@@ -713,9 +975,10 @@ void MainWindow::showEvent(QShowEvent* event) {
         resizable_style_applied_ = true;
     }
     if (!hotkeys_registered_) {
-        HWND hwnd = reinterpret_cast<HWND>(winId());
-        RegisterHotKey(hwnd, kHotkeyIdStartStop, MOD_ALT | MOD_NOREPEAT, VK_F9);
         hotkeys_registered_ = true;
+        for (int i = 0; i < static_cast<int>(persisted_hotkeys_.size()); ++i) {
+            onHotkeyBindingChanged(i, persisted_hotkeys_[static_cast<std::size_t>(i)]);
+        }
     }
 #endif
 
@@ -893,8 +1156,16 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
                 traceFrameMessage(msg->hwnd, msg->message, msg->wParam, msg->lParam);
 
             if (msg->hwnd == main_hwnd && msg->message == WM_HOTKEY) {
-                if (msg->wParam == static_cast<WPARAM>(kHotkeyIdStartStop))
+                switch (static_cast<int>(msg->wParam)) {
+                case kHotkeyIdStartStop:
                     emit recordToggleRequested();
+                    break;
+                case kHotkeyIdPauseResume:
+                    emit pauseToggleRequested();
+                    break;
+                default:
+                    break;
+                }
                 *result = 0;
                 return true;
             }
@@ -1040,16 +1311,165 @@ void MainWindow::updatePageHeader(int index) {
     title_bar_->setStatusLabel(record_status_label_);
 }
 
+void MainWindow::applyActiveProfileToPages() {
+    const RecordingProfile active_profile = profile_registry_.ActiveProfile();
+    output_settings_ = active_profile.output;
+    video_settings_ = active_profile.video;
+    persisted_settings_.audio_ui_state = active_profile.audio_ui_state;
+    persisted_settings_.output = output_settings_;
+    persisted_settings_.video = video_settings_;
+
+    if (record_page_) {
+        record_page_->setOutputSettings(output_settings_);
+        record_page_->setVideoSettings(video_settings_);
+        record_page_->setActiveProfileName(active_profile.name);
+        record_page_->applyPersistedAudioSettings(persisted_settings_.audio_ui_state);
+    }
+    if (output_page_) {
+        output_page_->setOutputSettings(output_settings_);
+        output_page_->setActiveProfileName(QString::fromStdString(active_profile.name));
+    }
+    if (video_page_) {
+        video_page_->setVideoSettings(video_settings_);
+    }
+    if (stack_ && stack_->currentIndex() == kOutputPageIndex) {
+        updatePageHeader(kOutputPageIndex);
+    }
+}
+
+void MainWindow::refreshOutputProfileUi() {
+    if (!output_page_) {
+        return;
+    }
+
+    const auto profile_available = [this](const RecordingProfile& profile, QString* reason_out) {
+        if (!runtime_caps_ready_) {
+            if (reason_out) {
+                *reason_out = QString();
+            }
+            return true;
+        }
+
+        capability::SettingsResolver resolver(runtime_caps_);
+        const capability::ResolveResult result = resolver.ValidateConfig(ProfileToUserConfig(profile));
+        if (!result.succeeded) {
+            if (reason_out) {
+                *reason_out = result.invalidity.empty() ? QStringLiteral("Unavailable")
+                                                        : QString::fromStdString(result.invalidity.front().message);
+            }
+            return false;
+        }
+        if (reason_out) {
+            *reason_out = QString();
+        }
+        return true;
+    };
+
+    std::vector<OutputPage::ProfileOption> options;
+    options.reserve(profile_registry_.BuiltInProfiles().size() + profile_registry_.UserProfiles().size());
+
+    for (const auto& profile : profile_registry_.BuiltInProfiles()) {
+        OutputPage::ProfileOption option;
+        option.id = QString::fromStdString(profile.id);
+        option.label = QString::fromStdString(profile.name);
+        option.built_in = true;
+        option.modified = std::any_of(
+            profile_registry_.ModifiedBuiltInProfiles().begin(), profile_registry_.ModifiedBuiltInProfiles().end(),
+            [&profile](const RecordingProfile& modified) { return modified.id == profile.id; });
+        option.available = profile_available(profile, &option.availability_reason);
+        options.push_back(std::move(option));
+    }
+
+    for (const auto& profile : profile_registry_.UserProfiles()) {
+        OutputPage::ProfileOption option;
+        option.id = QString::fromStdString(profile.id);
+        option.label = QString::fromStdString(profile.name);
+        option.built_in = false;
+        option.modified = false;
+        option.available = profile_available(profile, &option.availability_reason);
+        options.push_back(std::move(option));
+    }
+
+    syncing_profile_ui_ = true;
+    output_page_->setProfileOptions(options, QString::fromStdString(profile_registry_.ActiveState().active_profile_id),
+                                    profile_registry_.IsActiveBuiltInModified());
+    output_page_->setActiveProfileName(QString::fromStdString(profile_registry_.ActiveProfile().name));
+    syncing_profile_ui_ = false;
+}
+
+void MainWindow::persistProfileState() {
+    persisted_settings_.output = output_settings_;
+    persisted_settings_.video = video_settings_;
+    persisted_settings_.user_profiles = profile_registry_.UserProfiles();
+    persisted_settings_.modified_builtin_profiles = profile_registry_.ModifiedBuiltInProfiles();
+    persisted_settings_.active_profile = profile_registry_.ActiveState();
+    settings_store_.Save(persisted_settings_);
+}
+
+void MainWindow::restoreHotkeyBindingsFromSettings() {
+    const std::array<QKeySequence, 4> defaults = {
+        QKeySequence(Qt::ALT | Qt::Key_F9),
+        QKeySequence(),
+        QKeySequence(),
+        QKeySequence(),
+    };
+
+    for (int i = 0; i < static_cast<int>(persisted_hotkeys_.size()); ++i) {
+        const QString persisted = persisted_settings_.hotkey_bindings[static_cast<std::size_t>(i)];
+        if (persisted.trimmed().isEmpty()) {
+            persisted_hotkeys_[static_cast<std::size_t>(i)] = defaults[static_cast<std::size_t>(i)];
+            continue;
+        }
+        persisted_hotkeys_[static_cast<std::size_t>(i)] =
+            ParsePersistedHotkey(persisted, defaults[static_cast<std::size_t>(i)]);
+    }
+}
+
+void MainWindow::onHotkeyBindingChanged(int action_index, QKeySequence seq) {
+    if (action_index < 0 || action_index >= 4)
+        return;
+
+    persisted_hotkeys_[static_cast<std::size_t>(action_index)] = seq;
+    persisted_settings_.hotkey_bindings[static_cast<std::size_t>(action_index)] = PersistedHotkeyString(seq);
+    persistProfileState();
+
+#if defined(Q_OS_WIN)
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (hwnd == nullptr)
+        return;
+
+    const int hotkey_id = action_index + 1;
+    UnregisterHotKey(hwnd, hotkey_id);
+
+    if (seq.isEmpty())
+        return;
+
+    const QKeyCombination combo = QKeyCombination::fromCombined(seq[0]);
+    const UINT vk = QtKeyToVk(combo.key());
+    if (vk == 0)
+        return;
+
+    RegisterHotKey(hwnd, hotkey_id, QtModifiersToWin32(combo.keyboardModifiers()), vk);
+#else
+    Q_UNUSED(seq)
+#endif
+}
+
 QString MainWindow::buildOutputPageMeta() const {
     const QString container = output_settings_.container == capability::Container::Matroska
                                   ? QStringLiteral("MKV")
                                   : (output_settings_.container == capability::Container::Mp4 ? QStringLiteral("MP4")
                                                                                               : QStringLiteral("WEBM"));
+    const QString video =
+        output_settings_.video_codec == capability::VideoCodec::H264Nvenc
+            ? QStringLiteral("H.264")
+            : (output_settings_.video_codec == capability::VideoCodec::HevcNvenc ? QStringLiteral("HEVC")
+                                                                                 : QStringLiteral("AV1"));
     const QString audio = output_settings_.audio_codec == capability::AudioCodec::Opus
                               ? QStringLiteral("OPUS")
                               : (output_settings_.audio_codec == capability::AudioCodec::AacMf ? QStringLiteral("AAC")
                                                                                                : QStringLiteral("PCM"));
-    return container + QStringLiteral(" · AV1 · ") + audio;
+    return container + QStringLiteral(" · ") + video + QStringLiteral(" · ") + audio;
 }
 
 } // namespace exosnap

@@ -21,7 +21,9 @@
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputSettingsModel.h"
 #include "../models/VideoSettingsModel.h"
+#include "../models/WebcamSettings.h"
 #include "../viewmodels/RecordViewModel.h"
+#include "WebcamService.h"
 
 namespace recorder_core {
 class MicMeterService;
@@ -52,6 +54,10 @@ class RecordingCoordinator {
     std::vector<recorder_core::CaptureTarget> EnumerateTargets();
     bool StartRecording(const recorder_core::CaptureTarget& target, const capability::AudioUiState& audio_ui_state,
                         std::optional<recorder_core::CaptureRegion> crop_region = std::nullopt);
+
+    // Webcam overlay
+    void SetWebcamSettings(const WebcamSettings& settings);
+    void SetWebcamFrameCallback(WebcamService::FrameCallback cb);
     void StopRecording();
     void PauseRecording();
     void ResumeRecording();
@@ -100,6 +106,8 @@ class RecordingCoordinator {
     exosnap::capability::UserRecorderConfig resolved_user_config_;
     OutputSettingsModel output_settings_;
     VideoSettingsModel video_settings_;
+    WebcamSettings webcam_settings_;
+    WebcamService webcam_service_;
     bool has_output_target_context_ = false;
     FilenameTargetContext output_target_context_;
 

@@ -1,4 +1,4 @@
-# CLAUDE.md
+#CLAUDE.md
 
 You are working on a Windows-native recording application MVP.
 
@@ -8,24 +8,24 @@ Read:
 
 1. `README.md`
 2. `AGENTS.md`
-3. `docs/product/mvp-scope.md`
-4. `docs/architecture/system-overview.md`
+3. `.workspace/product/exosnap-1.0-end-spec.md`
+4. `.workspace/architecture/system-overview.md`
 5. Any document directly related to the task
 
-## Immutable MVP decisions unless the user explicitly changes them
+## Product decisions (authoritative source: `.workspace/product/exosnap-1.0-end-spec.md`)
 
 - Dark mode by default
-- No overlay/HUD in MVP
-- Default audio source order: `APP`, `MIC`, `SYS`
-- Default resulting tracks: `APP`, `MIC`, `SYS`
+- Default audio source order: `APP`, `SYS`, `MIC`
+- Default resulting tracks: `APP`, `SYS`, `MIC`
 - Exact label: `Merge with above`
-- Primary profile: `WebM + AV1 + Opus + CFR 60 fps`
+- Default profile: `MKV + H.264 + AAC + CFR 60 fps`
 - Recording start is blocked by diagnostic blockers
 - Main UI pages:
   - Record
   - Video
   - Audio
   - Output
+  - Webcam
   - Hotkeys
   - Diagnostics
   - Logs

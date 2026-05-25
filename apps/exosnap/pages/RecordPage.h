@@ -7,6 +7,7 @@
 
 #include "../models/OutputSettingsModel.h"
 #include "../models/VideoSettingsModel.h"
+#include "../models/WebcamSettings.h"
 #include "../services/PreviewService.h"
 #include "../services/RecordingCoordinator.h"
 #include "../ui/widgets/RegionSelectionOverlay.h"
@@ -39,6 +40,7 @@ class RecordPage : public QWidget {
     ~RecordPage() override;
     void setOutputSettings(const OutputSettingsModel& settings);
     void setVideoSettings(const VideoSettingsModel& settings);
+    void setWebcamSettings(const WebcamSettings& settings);
     void setActiveProfileName(const std::string& profile_name);
     void applyPersistedAudioSettings(const capability::AudioUiState& state);
 

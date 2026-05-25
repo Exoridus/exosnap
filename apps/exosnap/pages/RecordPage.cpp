@@ -723,6 +723,12 @@ void RecordPage::setVideoSettings(const VideoSettingsModel& settings) {
     }
 }
 
+void RecordPage::setWebcamSettings(const WebcamSettings& settings) {
+    if (coordinator_) {
+        coordinator_->SetWebcamSettings(settings);
+    }
+}
+
 void RecordPage::setOutputSettingsSummary(const OutputSettingsModel& settings) {
     const QString container =
         settings.container == capability::Container::Matroska
