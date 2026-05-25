@@ -242,6 +242,12 @@ bool RecordViewModel::CanStart() const noexcept {
     if (state != UiRecordingState::Ready && state != UiRecordingState::Completed && state != UiRecordingState::Failed) {
         return false;
     }
+    if (capture_mode == CaptureMode::Region) {
+        // Region mode: any selected monitor is needed as the base capture target.
+        // selected_target_index may point to a monitor even if the mode is Region.
+        // Allow start so the coordinator can resolve the target.
+        return HasTargets();
+    }
     if (selected_target_index < 0)
         return false;
     if (!HasTargets())
@@ -250,7 +256,15 @@ bool RecordViewModel::CanStart() const noexcept {
 }
 
 bool RecordViewModel::CanStop() const noexcept {
+    return state == UiRecordingState::Recording || state == UiRecordingState::Paused;
+}
+
+bool RecordViewModel::CanPause() const noexcept {
     return state == UiRecordingState::Recording;
+}
+
+bool RecordViewModel::CanResume() const noexcept {
+    return state == UiRecordingState::Paused;
 }
 
 bool RecordViewModel::HasTargets() const noexcept {
@@ -262,7 +276,8 @@ bool RecordViewModel::HasResult() const noexcept {
 }
 
 bool RecordViewModel::ShouldShowStats() const noexcept {
-    return state == UiRecordingState::Recording || state == UiRecordingState::Stopping;
+    return state == UiRecordingState::Recording || state == UiRecordingState::Paused ||
+           state == UiRecordingState::Stopping;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +299,9 @@ void RecordViewModel::SetState(UiRecordingState new_state) {
         break;
     case UiRecordingState::Preparing:
         state_text = L"Preparing...";
+        break;
+    case UiRecordingState::RegionSelecting:
+        state_text = L"Select Region...";
         break;
     case UiRecordingState::Recording:
         state_text = L"Recording";
@@ -338,12 +356,11 @@ void RecordViewModel::UpdateStats(const recorder_core::SessionStats& stats) {
         } else if (preview.source_key == "mic") {
             audio_rms_mic = rms;
         } else if (preview.source_key == "merged") {
-            // Distribute merged RMS to each active source meter.
-            if (audio_ui_state.record_application_audio)
+            if (audio_ui_state.IsAppEnabled())
                 audio_rms_app = rms;
-            if (audio_ui_state.record_system_audio)
+            if (audio_ui_state.IsSysEnabled())
                 audio_rms_sys = rms;
-            if (audio_ui_state.record_microphone)
+            if (audio_ui_state.IsMicEnabled())
                 audio_rms_mic = rms;
         }
     }
@@ -394,20 +411,22 @@ void RecordViewModel::ResetStats() {
 void RecordViewModel::ApplyTargetKind(capability::CaptureTargetKind kind) {
     audio_ui_state.target_kind = kind;
     audio_ui_state.selected_window_pid.reset();
-    // Privacy-first MVP default: microphone recording starts disabled.
+    audio_ui_state.mic_channel_mode = recorder_core::MicChannelMode::Auto;
 
+    using K = recorder_core::AudioSourceKind;
     if (kind == capability::CaptureTargetKind::Window) {
-        audio_ui_state.record_application_audio = true;
-        audio_ui_state.record_system_audio = true;
-        audio_ui_state.separate_output_tracks = false;
-        audio_ui_state.record_microphone = false;
-        audio_ui_state.mic_channel_mode = recorder_core::MicChannelMode::Auto;
+        // Default: APP + SYS merged into one track; MIC disabled.
+        audio_ui_state.source_rows = {
+            {K::App, true, false},
+            {K::Mic, false, true},
+            {K::Sys, true, true},
+        };
     } else {
-        audio_ui_state.record_application_audio = false;
-        audio_ui_state.record_system_audio = true;
-        audio_ui_state.separate_output_tracks = false;
-        audio_ui_state.record_microphone = false;
-        audio_ui_state.mic_channel_mode = recorder_core::MicChannelMode::Auto;
+        // Display: SystemOutput active; MIC disabled.
+        audio_ui_state.source_rows = {
+            {K::SystemOutput, true, false},
+            {K::Mic, false, true},
+        };
     }
 
     RebuildAudioPlan();
@@ -438,10 +457,12 @@ void RecordViewModel::RebuildAudioPlan() {
         } else if (preview.source_key == "mic") {
             audio_active_mic = true;
         } else if (preview.source_key == "merged") {
-            // Derive individual active flags from the UI state for merged tracks.
-            audio_active_app = audio_ui_state.record_application_audio;
-            audio_active_sys = audio_ui_state.record_system_audio;
-            audio_active_mic = audio_ui_state.record_microphone;
+            if (audio_ui_state.IsAppEnabled())
+                audio_active_app = true;
+            if (audio_ui_state.IsSysEnabled())
+                audio_active_sys = true;
+            if (audio_ui_state.IsMicEnabled())
+                audio_active_mic = true;
         }
     }
 }

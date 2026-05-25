@@ -221,7 +221,7 @@ void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::Capabi
     if (validation.succeeded) {
         resolved_user_config_ = validation.resolved_config;
         state_ = UiRecordingState::Ready;
-        capability_status_text_ = L"Ready: MKV · AV1 NVENC · Opus · 60 fps";
+        capability_status_text_ = L"Ready: MKV · H.264 NVENC · AAC · 60 fps";
     } else {
         state_ = UiRecordingState::Blocked;
         capability_status_text_ =
@@ -240,7 +240,8 @@ std::vector<recorder_core::CaptureTarget> RecordingCoordinator::EnumerateTargets
 }
 
 bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& target,
-                                          const capability::AudioUiState& audio_ui_state) {
+                                          const capability::AudioUiState& audio_ui_state,
+                                          std::optional<recorder_core::CaptureRegion> crop_region) {
     StopMicMeter();
 
     if (is_recording_)
@@ -286,8 +287,10 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     auto config = exosnap::capability::ToRecorderCoreConfig(resolved_user_config_, caps_);
     config.nvenc_quality_preset = video_settings_.quality;
     config.cfr = video_settings_.cfr;
+    config.capture_cursor = video_settings_.capture_cursor;
     ApplyOutputSettingsToRecorderConfig(config, output_settings_);
     config.target = target;
+    config.crop_region = crop_region;
     config.output_path = output_path;
 
     capability::AudioUiState audio_state = audio_ui_state;
@@ -347,8 +350,25 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
 void RecordingCoordinator::StopRecording() {
     if (!is_recording_)
         return;
+    is_paused_.store(false);
     PostStateChange(UiRecordingState::Stopping);
     session_.Stop();
+}
+
+void RecordingCoordinator::PauseRecording() {
+    if (!is_recording_ || is_paused_.load())
+        return;
+    is_paused_.store(true);
+    session_.Pause();
+    PostStateChange(UiRecordingState::Paused);
+}
+
+void RecordingCoordinator::ResumeRecording() {
+    if (!is_paused_.load())
+        return;
+    is_paused_.store(false);
+    session_.Resume();
+    PostStateChange(UiRecordingState::Recording);
 }
 
 bool RecordingCoordinator::StartMicMeter(std::optional<std::string> device_id,
@@ -448,6 +468,7 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
                                                const std::filesystem::path& output_path) {
     auto result = session_.Record(config);
     is_recording_ = false;
+    is_paused_.store(false);
 
     UiRecordingResult ui_result;
     ui_result.succeeded = result.succeeded;
@@ -471,19 +492,28 @@ std::filesystem::path RecordingCoordinator::CurrentOutputPath() const {
 }
 void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings) {
     output_settings_ = settings;
-    if (settings.container == capability::Container::Mp4) {
-        resolved_user_config_.container = capability::Container::Mp4;
-        resolved_user_config_.video_codec = capability::VideoCodec::H264Nvenc;
-        resolved_user_config_.audio_codec = capability::AudioCodec::AacMf;
-    } else if (settings.container == capability::Container::WebM) {
-        resolved_user_config_.container = capability::Container::WebM;
-        resolved_user_config_.video_codec = capability::VideoCodec::Av1Nvenc;
-        resolved_user_config_.audio_codec = capability::AudioCodec::Opus;
+    if (output_settings_.container == capability::Container::Mp4) {
+        output_settings_.video_codec = capability::VideoCodec::H264Nvenc;
+        output_settings_.audio_codec = capability::AudioCodec::AacMf;
+    } else if (output_settings_.container == capability::Container::WebM) {
+        output_settings_.video_codec = capability::VideoCodec::Av1Nvenc;
+        output_settings_.audio_codec = capability::AudioCodec::Opus;
     } else {
-        resolved_user_config_.container = capability::Container::Matroska;
-        resolved_user_config_.video_codec = capability::VideoCodec::Av1Nvenc;
-        resolved_user_config_.audio_codec = capability::AudioCodec::Opus;
+        if (output_settings_.video_codec == capability::VideoCodec::HevcNvenc) {
+            output_settings_.video_codec = capability::VideoCodec::H264Nvenc;
+        }
+        if (output_settings_.video_codec == capability::VideoCodec::H264Nvenc &&
+            output_settings_.audio_codec == capability::AudioCodec::Opus) {
+            output_settings_.audio_codec = capability::AudioCodec::AacMf;
+        }
+        if (output_settings_.audio_codec == capability::AudioCodec::Pcm) {
+            output_settings_.audio_codec = capability::AudioCodec::AacMf;
+        }
     }
+
+    resolved_user_config_.container = output_settings_.container;
+    resolved_user_config_.video_codec = output_settings_.video_codec;
+    resolved_user_config_.audio_codec = output_settings_.audio_codec;
 }
 void RecordingCoordinator::SetVideoSettings(const VideoSettingsModel& settings) {
     video_settings_ = settings;
@@ -579,8 +609,11 @@ void RecordingCoordinator::PostAppMeter(float rms_linear) {
 }
 
 std::filesystem::path RecordingCoordinator::GenerateOutputPath() const {
+    FilenameTargetContext context = output_target_context_;
+    context.video_codec = output_settings_.video_codec;
+    context.audio_codec = output_settings_.audio_codec;
     return BuildOutputPath(output_settings_.output_folder, output_settings_.naming_pattern, output_settings_.container,
-                           std::time(nullptr), output_target_context_);
+                           std::time(nullptr), context);
 }
 
 std::wstring RecordingCoordinator::FormatHResult(int32_t hr) {

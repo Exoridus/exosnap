@@ -21,19 +21,22 @@ cmake_minimum_required(VERSION 3.27)
                         widgets / CaptureTargetCard.cpp ui / widgets / CodecCard.h ui / widgets / CodecCard.cpp ui /
                         widgets / VUMeterWidget.h ui / widgets / VUMeterWidget.cpp ui / widgets / ExoToggle.h ui /
                         widgets / ExoToggle.cpp ui / widgets / ExoCheckBox.h ui / widgets / ExoCheckBox.cpp ui /
-                        widgets / AudioSourceRow.h ui / widgets / AudioSourceRow.cpp MainWindow.h MainWindow.cpp pages /
+                        widgets / RegionSelectionOverlay.h ui / widgets / RegionSelectionOverlay.cpp ui / widgets /
+                        AudioSourceRow.h ui / widgets / AudioSourceRow.cpp MainWindow.h MainWindow.cpp pages /
                         RecordPage.h pages / RecordPage.cpp pages / VideoPage.h pages / VideoPage.cpp pages /
                         AudioPage.h pages / AudioPage.cpp pages / OutputPage.h pages / OutputPage.cpp pages /
                         HotkeysPage.h pages / HotkeysPage.cpp pages / DiagnosticsPage.h pages /
                         DiagnosticsPage.cpp pages / LogsPage.h pages / LogsPage.cpp pages / AdvancedPage.h pages /
                         AdvancedPage.cpp services / PreviewService.h services / PreviewService.cpp services /
                         RecordingCoordinator.h services / RecordingCoordinator.cpp models /
-                        OutputSettingsModel.h models / OutputSettingsModel.cpp models / VideoSettingsModel.h models /
-                        FilenameBuilder.h models / FilenameBuilder.cpp models / OutputPathValidator.h models /
-                        OutputPathValidator.cpp settings / AppSettingsStore.h settings /
-                        AppSettingsStore.cpp diagnostics / error_message.h diagnostics / error_message.cpp diagnostics /
-                        AppLog.h diagnostics / AppLog.cpp viewmodels / RecordViewModel.h viewmodels /
-                        RecordViewModel.cpp)
+                        OutputSettingsModel.h models / OutputSettingsModel.cpp models / RecordingProfile.h models /
+                        RecordingProfile.cpp models / RecordingProfileRegistry.h models /
+                        RecordingProfileRegistry.cpp models / VideoSettingsModel.h models / FilenameBuilder.h models /
+                        FilenameBuilder.cpp models / OutputPathValidator.h models / OutputPathValidator.cpp models /
+                        OutputPathPolicy.h models / OutputPathPolicy.cpp settings / AppSettingsStore.h settings /
+                        AppSettingsStore.cpp settings / ProfileExchange.h settings / ProfileExchange.cpp diagnostics /
+                        error_message.h diagnostics / error_message.cpp diagnostics / AppLog.h diagnostics /
+                        AppLog.cpp viewmodels / RecordViewModel.h viewmodels / RecordViewModel.cpp)
 
                         if (WIN32) target_sources(exosnap PRIVATE exosnap.rc) endif()
 
@@ -54,30 +57,48 @@ cmake_minimum_required(VERSION 3.27)
                                                 CMAKE_CURRENT_SOURCE_DIR})
 
                                                 exosnap_add_gtest(
-                                                    NAME error_message_tests TEST_PREFIX diagnostics.SOURCES tests /
-                                                    test_error_message.cpp diagnostics /
-                                                    error_message.cpp LIBRARIES exosnap_capability recorder_core)
-                                                    target_include_directories(error_message_tests PRIVATE ${
+                                                    NAME region_model_tests TEST_PREFIX region.SOURCES tests /
+                                                    test_region_model.cpp LIBRARIES recorder_core)
+                                                    target_include_directories(region_model_tests PRIVATE ${
                                                         CMAKE_CURRENT_SOURCE_DIR})
 
-                                                        exosnap_add_gtest(NAME output_settings_tests TEST_PREFIX
-                                                                              output.SOURCES tests /
-                                                                          test_output_settings.cpp services /
-                                                                          RecordingCoordinator.cpp models /
-                                                                          OutputSettingsModel.cpp models /
-                                                                          FilenameBuilder.cpp models /
-                                                                          OutputPathValidator.cpp LIBRARIES Qt6::Core
-                                                                              exosnap_capability recorder_core)
-                                                            target_include_directories(output_settings_tests PRIVATE ${
+                                                        exosnap_add_gtest(NAME error_message_tests TEST_PREFIX
+                                                                              diagnostics.SOURCES tests /
+                                                                          test_error_message.cpp diagnostics /
+                                                                          error_message.cpp LIBRARIES exosnap_capability
+                                                                              recorder_core)
+                                                            target_include_directories(error_message_tests PRIVATE ${
                                                                 CMAKE_CURRENT_SOURCE_DIR})
 
-                                                                exosnap_add_gtest(
-                                                                    NAME app_settings_store_tests TEST_PREFIX
-                                                                        settings.SOURCES tests /
-                                                                    test_app_settings_store.cpp settings /
-                                                                    AppSettingsStore.cpp models /
-                                                                    OutputSettingsModel.cpp LIBRARIES exosnap_capability
-                                                                        recorder_core Qt6::Core)
+                                                                exosnap_add_gtest(NAME output_settings_tests TEST_PREFIX
+                                                                                      output.SOURCES tests /
+                                                                                  test_output_settings.cpp services /
+                                                                                  RecordingCoordinator.cpp models /
+                                                                                  OutputSettingsModel.cpp models /
+                                                                                  RecordingProfile.cpp models /
+                                                                                  RecordingProfileRegistry.cpp models /
+                                                                                  FilenameBuilder.cpp models /
+                                                                                  OutputPathValidator.cpp models /
+                                                                                  OutputPathPolicy.cpp LIBRARIES
+                                                                                      Qt6::Core exosnap_capability
+                                                                                          recorder_core)
                                                                     target_include_directories(
-                                                                        app_settings_store_tests PRIVATE ${
+                                                                        output_settings_tests PRIVATE ${
                                                                             CMAKE_CURRENT_SOURCE_DIR})
+
+                                                                        exosnap_add_gtest(
+                                                                            NAME app_settings_store_tests TEST_PREFIX
+                                                                                settings.SOURCES tests /
+                                                                            test_app_settings_store.cpp tests /
+                                                                            test_profile_exchange.cpp settings /
+                                                                            AppSettingsStore.cpp settings /
+                                                                            ProfileExchange.cpp models /
+                                                                            OutputSettingsModel.cpp models /
+                                                                            RecordingProfile.cpp models /
+                                                                            RecordingProfileRegistry.cpp models /
+                                                                            OutputPathPolicy.cpp LIBRARIES
+                                                                                exosnap_capability recorder_core
+                                                                                    Qt6::Core)
+                                                                            target_include_directories(
+                                                                                app_settings_store_tests PRIVATE ${
+                                                                                    CMAKE_CURRENT_SOURCE_DIR})

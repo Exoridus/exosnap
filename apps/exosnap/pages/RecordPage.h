@@ -9,6 +9,7 @@
 #include "../models/VideoSettingsModel.h"
 #include "../services/PreviewService.h"
 #include "../services/RecordingCoordinator.h"
+#include "../ui/widgets/RegionSelectionOverlay.h"
 #include "../viewmodels/RecordViewModel.h"
 
 #include <capability/config_types.h>
@@ -23,6 +24,7 @@ class QVBoxLayout;
 namespace exosnap {
 
 namespace ui::widgets {
+class AudioSourceRow;
 class CaptureTargetCard;
 class ExoCheckBox;
 class PreviewSurface;
@@ -37,6 +39,7 @@ class RecordPage : public QWidget {
     ~RecordPage() override;
     void setOutputSettings(const OutputSettingsModel& settings);
     void setVideoSettings(const VideoSettingsModel& settings);
+    void setActiveProfileName(const std::string& profile_name);
     void applyPersistedAudioSettings(const capability::AudioUiState& state);
 
   signals:
@@ -48,22 +51,34 @@ class RecordPage : public QWidget {
 
   public slots:
     void onHotkeyToggle();
+    void onHotkeyPauseToggle();
 
   private slots:
     void onStart();
     void onStop();
+    void onPause();
+    void onResume();
     void onSelectMonitorTarget();
     void onSelectWindowTarget();
+    void onSelectRegionTarget();
     void onTargetPickerChanged(int index);
     void onRefreshTargets();
+    void onRegionSelected(QRect region_virtual_screen);
+    void onRegionCancelled();
 
   private:
+    // Resolve target and start recording (after any overlay selection is complete).
+    void doStartRecording(std::optional<recorder_core::CaptureRegion> crop_region = std::nullopt);
+    // Ensure the region overlay widget exists.
+    void ensureRegionOverlay();
+
     struct ReadinessRow {
         QLabel* icon = nullptr;
         QLabel* title = nullptr;
         QLabel* detail = nullptr;
     };
 
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void initCoordinator();
     void refresh();
     void updateStatsDisplay();
@@ -78,10 +93,11 @@ class RecordPage : public QWidget {
     void syncTargetSelectionToCombo(int target_index);
     void enumerateTargets(bool preserve_current_selection);
     void rebuildTargetPicker();
-    void onAppAudioToggled(bool checked);
-    void onSysAudioToggled(bool checked);
-    void onSeparateTracksToggled(bool checked);
-    void onMicToggled(bool checked);
+    void onAudioRowEnabledChanged(int row_index, bool enabled);
+    void onAudioRowMergeChanged(int row_index, bool merge);
+    void swapAudioSourceRows(int a, int b);
+    void rebuildAudioRowWidgets();
+    void updateAudioRowMergeVisibility();
     void onMicDeviceChanged(int index);
     void onMicChannelChanged(int index);
     void onMicGainChanged(int db_value);
@@ -122,18 +138,26 @@ class RecordPage : public QWidget {
     QLabel* control_state_label_ = nullptr;
     QLabel* timer_label_ = nullptr;
     QPushButton* start_btn_ = nullptr;
+    QPushButton* pause_btn_ = nullptr;
     QPushButton* stop_btn_ = nullptr;
     ui::widgets::SectionRuleHeader* capture_header_ = nullptr;
     ui::widgets::CaptureTargetCard* monitor_card_ = nullptr;
     ui::widgets::CaptureTargetCard* window_card_ = nullptr;
+    ui::widgets::CaptureTargetCard* region_card_ = nullptr;
+    QPushButton* region_pick_btn_ = nullptr;
+    QLabel* region_summary_label_ = nullptr;
+    QWidget* region_options_panel_ = nullptr;
+    ui::widgets::RegionSelectionOverlay* region_overlay_ = nullptr;
+    ui::widgets::ExoCheckBox* select_on_record_check_ = nullptr;
     ui::widgets::SectionRuleHeader* readiness_header_ = nullptr;
     QFrame* readiness_panel_ = nullptr;
     std::vector<ReadinessRow> readiness_rows_;
     ui::widgets::SectionRuleHeader* audio_settings_header_ = nullptr;
-    ui::widgets::ExoCheckBox* app_audio_check_ = nullptr;
-    ui::widgets::ExoCheckBox* sys_audio_check_ = nullptr;
-    ui::widgets::ExoCheckBox* separate_tracks_check_ = nullptr;
-    ui::widgets::ExoCheckBox* mic_check_ = nullptr;
+    QWidget* audio_rows_container_ = nullptr;
+    QVBoxLayout* audio_rows_layout_ = nullptr;
+    std::vector<ui::widgets::AudioSourceRow*> audio_source_rows_;
+    int drag_source_index_ = -1;
+    int drag_start_y_ = 0;
     QWidget* mic_device_row_ = nullptr;
     QComboBox* mic_device_combo_ = nullptr;
     QPushButton* mic_refresh_btn_ = nullptr;
@@ -167,6 +191,9 @@ class RecordPage : public QWidget {
     QFrame* result_technical_separator_ = nullptr;
     std::filesystem::path last_output_folder_;
     capability::Container current_container_ = capability::Container::Matroska;
+    capability::VideoCodec current_video_codec_ = capability::VideoCodec::H264Nvenc;
+    capability::AudioCodec current_audio_codec_ = capability::AudioCodec::AacMf;
+    std::wstring active_profile_name_;
     float preflight_mic_rms_ = 0.0f;
     float preflight_sys_rms_ = 0.0f;
     float preflight_app_rms_ = 0.0f;

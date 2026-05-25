@@ -21,10 +21,22 @@ enum class UiRecordingState {
     Ready,
     Blocked,
     Preparing,
+    RegionSelecting, // overlay shown; user drawing selection rectangle
     Recording,
+    Paused,
     Stopping,
     Completed,
     Failed,
+};
+
+// ---------------------------------------------------------------------------
+// CaptureMode
+// ---------------------------------------------------------------------------
+
+enum class CaptureMode {
+    Monitor,
+    Window,
+    Region, // crop from monitor capture; requires a CaptureRegion
 };
 
 // ---------------------------------------------------------------------------
@@ -91,9 +103,19 @@ class RecordViewModel {
     bool audio_active_mic = false;
     bool live_stats_available = false;
 
+    // Capture mode
+    CaptureMode capture_mode = CaptureMode::Monitor;
+
+    // Region capture state (only relevant when capture_mode == CaptureMode::Region)
+    bool has_region = false;
+    recorder_core::CaptureRegion region{}; // virtual screen coordinates
+    bool select_on_record = true;          // show overlay on each record start
+
     // Computed predicates
     bool CanStart() const noexcept;
     bool CanStop() const noexcept;
+    bool CanPause() const noexcept;
+    bool CanResume() const noexcept;
     bool HasTargets() const noexcept;
     bool HasResult() const noexcept;
     bool ShouldShowStats() const noexcept;

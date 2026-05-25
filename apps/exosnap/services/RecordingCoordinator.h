@@ -50,8 +50,11 @@ class RecordingCoordinator {
     void OnCapabilityFailure(std::wstring message);
 
     std::vector<recorder_core::CaptureTarget> EnumerateTargets();
-    bool StartRecording(const recorder_core::CaptureTarget& target, const capability::AudioUiState& audio_ui_state);
+    bool StartRecording(const recorder_core::CaptureTarget& target, const capability::AudioUiState& audio_ui_state,
+                        std::optional<recorder_core::CaptureRegion> crop_region = std::nullopt);
     void StopRecording();
+    void PauseRecording();
+    void ResumeRecording();
     bool StartMicMeter(std::optional<std::string> device_id, recorder_core::MicChannelMode channel_mode);
     void StopMicMeter();
     [[nodiscard]] bool IsMicMeterRunning() const noexcept;
@@ -106,6 +109,7 @@ class RecordingCoordinator {
     std::unique_ptr<recorder_core::LoopbackMeterService> app_meter_service_;
     std::jthread recording_thread_;
     std::atomic<bool> is_recording_{false};
+    std::atomic<bool> is_paused_{false};
 
     UiRecordingState state_ = UiRecordingState::LoadingCapabilities;
     std::wstring capability_status_text_;

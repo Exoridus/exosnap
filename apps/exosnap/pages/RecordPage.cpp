@@ -3,9 +3,11 @@
 #include "../diagnostics/AppLog.h"
 #include "../settings/AppSettingsStore.h"
 #include "../ui/theme/ExoSnapMetrics.h"
+#include "../ui/widgets/AudioSourceRow.h"
 #include "../ui/widgets/CaptureTargetCard.h"
 #include "../ui/widgets/ExoCheckBox.h"
 #include "../ui/widgets/PreviewSurface.h"
+#include "../ui/widgets/RegionSelectionOverlay.h"
 #include "../ui/widgets/SectionRuleHeader.h"
 #include "../ui/widgets/StatusPill.h"
 #include "../ui/widgets/VUMeterWidget.h"
@@ -18,11 +20,13 @@
 #include <QComboBox>
 #include <QDebug>
 #include <QDesktopServices>
+#include <QEvent>
 #include <QFileInfo>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMouseEvent>
 #include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
@@ -76,6 +80,10 @@ QString stateDisplay(UiRecordingState state) {
         return "STARTING";
     case UiRecordingState::Recording:
         return "RECORDING";
+    case UiRecordingState::Paused:
+        return "PAUSED";
+    case UiRecordingState::RegionSelecting:
+        return "SELECTING";
     case UiRecordingState::Stopping:
         return "RECORDING";
     case UiRecordingState::Completed:
@@ -150,8 +158,8 @@ QString normalizedTargetLabel(const recorder_core::CaptureTarget& target) {
 capability::UserRecorderConfig primaryRecorderConfig() {
     capability::UserRecorderConfig config;
     config.container = capability::Container::Matroska;
-    config.video_codec = capability::VideoCodec::Av1Nvenc;
-    config.audio_codec = capability::AudioCodec::Opus;
+    config.video_codec = capability::VideoCodec::H264Nvenc;
+    config.audio_codec = capability::AudioCodec::AacMf;
     config.chroma = capability::ChromaSubsampling::Cs420;
     config.bit_depth = capability::BitDepth::Bit8;
     config.frame_rate_num = 60;
@@ -195,6 +203,44 @@ std::vector<std::string> BuildMicDeviceLabels(const std::vector<recorder_core::A
 }
 
 } // namespace
+
+bool RecordPage::eventFilter(QObject* watched, QEvent* event) {
+    // Grip-area drag on AudioSourceRow widgets (leftmost 36px).
+    if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseMove ||
+        event->type() == QEvent::MouseButtonRelease) {
+        auto* mouse = static_cast<QMouseEvent*>(event);
+        for (int i = 0; i < static_cast<int>(audio_source_rows_.size()); ++i) {
+            if (audio_source_rows_[static_cast<std::size_t>(i)] != watched)
+                continue;
+
+            if (event->type() == QEvent::MouseButtonPress) {
+                if (mouse->x() <= 36) {
+                    drag_source_index_ = i;
+                    drag_start_y_ = mouse->globalY();
+                    return true;
+                }
+            } else if (event->type() == QEvent::MouseMove && drag_source_index_ == i) {
+                const int delta = mouse->globalY() - drag_start_y_;
+                const int row_height = audio_source_rows_[0]->height();
+                if (row_height > 0 && (delta > row_height / 2 || delta < -(row_height / 2))) {
+                    const int direction = delta > 0 ? 1 : -1;
+                    const int target = drag_source_index_ + direction;
+                    if (target >= 0 && target < static_cast<int>(audio_source_rows_.size())) {
+                        swapAudioSourceRows(drag_source_index_, target);
+                        drag_source_index_ = target;
+                        drag_start_y_ = mouse->globalY();
+                    }
+                }
+                return true;
+            } else if (event->type() == QEvent::MouseButtonRelease && drag_source_index_ == i) {
+                drag_source_index_ = -1;
+                return true;
+            }
+            break;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
 
 RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     auto* scroll = new QScrollArea(this);
@@ -250,6 +296,12 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     start_btn_->setMinimumHeight(46);
     control_layout->addWidget(start_btn_);
 
+    pause_btn_ = new QPushButton("⏸  PAUSE", control_panel);
+    pause_btn_->setProperty("role", "recordPause");
+    pause_btn_->setMinimumHeight(46);
+    pause_btn_->hide();
+    control_layout->addWidget(pause_btn_);
+
     stop_btn_ = new QPushButton("■  STOP", control_panel);
     stop_btn_->setProperty("role", "recordStop");
     stop_btn_->setMinimumHeight(46);
@@ -278,11 +330,17 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     monitor_card_->setTitle("Monitor");
     window_card_ = new ui::widgets::CaptureTargetCard(cards_row);
     window_card_->setTitle("Window");
+    region_card_ = new ui::widgets::CaptureTargetCard(cards_row);
+    region_card_->setTitle("Region");
+    region_card_->setSubtitle("Crop area");
     cards_layout->addWidget(monitor_card_, 1);
     cards_layout->addWidget(window_card_, 1);
+    cards_layout->addWidget(region_card_, 1);
     monitor_card_->setAccessibleName("Monitor target");
     window_card_->setAccessibleName("Window target");
+    region_card_->setAccessibleName("Region target");
     QWidget::setTabOrder(monitor_card_, window_card_);
+    QWidget::setTabOrder(window_card_, region_card_);
     layout->addWidget(cards_row);
 
     target_picker_panel_ = makePanel(content);
@@ -310,6 +368,34 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     target_picker_note_label_->setVisible(false);
     target_picker_layout->addWidget(target_picker_note_label_);
     layout->addWidget(target_picker_panel_);
+
+    // Region capture options panel (visible only in Region mode)
+    region_options_panel_ = makePanel(content);
+    region_options_panel_->setObjectName("regionOptionsPanel");
+    auto* region_options_layout = new QVBoxLayout(region_options_panel_);
+    region_options_layout->setContentsMargins(14, 12, 14, 12);
+    region_options_layout->setSpacing(10);
+
+    auto* region_row1 = new QWidget(region_options_panel_);
+    auto* region_row1_layout = new QHBoxLayout(region_row1);
+    region_row1_layout->setContentsMargins(0, 0, 0, 0);
+    region_row1_layout->setSpacing(10);
+    region_summary_label_ = makeLabel("No region defined", "captureTargetPickerNote", region_row1);
+    region_summary_label_->setWordWrap(false);
+    region_pick_btn_ = new QPushButton("Pick Region", region_row1);
+    region_pick_btn_->setProperty("role", "ghost");
+    region_row1_layout->addWidget(region_summary_label_, 1);
+    region_row1_layout->addWidget(region_pick_btn_);
+    region_options_layout->addWidget(region_row1);
+
+    select_on_record_check_ =
+        new ui::widgets::ExoCheckBox("Select region when recording starts", region_options_panel_);
+    select_on_record_check_->setCheckable(true);
+    select_on_record_check_->setChecked(true);
+    region_options_layout->addWidget(select_on_record_check_);
+
+    region_options_panel_->setVisible(false);
+    layout->addWidget(region_options_panel_);
 
     target_combo_ = new QComboBox(content);
     target_combo_->setVisible(false);
@@ -359,18 +445,12 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     audio_settings_layout->setContentsMargins(14, 12, 14, 12);
     audio_settings_layout->setSpacing(10);
 
-    audio_settings_layout->addWidget(makeLabel("Audio Output", "audioSettingsGroupTitle", audio_settings_panel));
-    app_audio_check_ = new ui::widgets::ExoCheckBox("Record Application Audio", audio_settings_panel);
-    sys_audio_check_ = new ui::widgets::ExoCheckBox("Record System Audio", audio_settings_panel);
-    separate_tracks_check_ = new ui::widgets::ExoCheckBox("Separate output tracks", audio_settings_panel);
-    audio_settings_layout->addWidget(app_audio_check_);
-    audio_settings_layout->addWidget(sys_audio_check_);
-    audio_settings_layout->addWidget(separate_tracks_check_);
-
-    audio_settings_layout->addSpacing(6);
-    audio_settings_layout->addWidget(makeLabel("Audio Input", "audioSettingsGroupTitle", audio_settings_panel));
-    mic_check_ = new ui::widgets::ExoCheckBox("Record Microphone", audio_settings_panel);
-    audio_settings_layout->addWidget(mic_check_);
+    audio_settings_layout->addWidget(makeLabel("Audio Sources", "audioSettingsGroupTitle", audio_settings_panel));
+    audio_rows_container_ = new QWidget(audio_settings_panel);
+    audio_rows_layout_ = new QVBoxLayout(audio_rows_container_);
+    audio_rows_layout_->setContentsMargins(0, 0, 0, 0);
+    audio_rows_layout_->setSpacing(4);
+    audio_settings_layout->addWidget(audio_rows_container_);
 
     mic_device_row_ = new QWidget(audio_settings_panel);
     auto* mic_device_row_layout = new QHBoxLayout(mic_device_row_);
@@ -552,16 +632,20 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     root->addWidget(scroll);
 
     connect(start_btn_, &QPushButton::clicked, this, &RecordPage::onStart);
+    connect(pause_btn_, &QPushButton::clicked, this, &RecordPage::onHotkeyPauseToggle);
     connect(stop_btn_, &QPushButton::clicked, this, &RecordPage::onStop);
     connect(monitor_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectMonitorTarget);
     connect(window_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectWindowTarget);
+    connect(region_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectRegionTarget);
+    connect(region_pick_btn_, &QPushButton::clicked, this, [this]() {
+        ensureRegionOverlay();
+        region_overlay_->activateForSelection();
+    });
+    connect(select_on_record_check_, &QAbstractButton::toggled, this,
+            [this](bool checked) { view_model_.select_on_record = checked; });
     connect(target_picker_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &RecordPage::onTargetPickerChanged);
     connect(target_refresh_btn_, &QPushButton::clicked, this, &RecordPage::onRefreshTargets);
-    connect(app_audio_check_, &ui::widgets::ExoCheckBox::toggled, this, &RecordPage::onAppAudioToggled);
-    connect(sys_audio_check_, &ui::widgets::ExoCheckBox::toggled, this, &RecordPage::onSysAudioToggled);
-    connect(separate_tracks_check_, &ui::widgets::ExoCheckBox::toggled, this, &RecordPage::onSeparateTracksToggled);
-    connect(mic_check_, &ui::widgets::ExoCheckBox::toggled, this, &RecordPage::onMicToggled);
     connect(mic_refresh_btn_, &QPushButton::clicked, this, &RecordPage::populateMicDeviceCombo);
     connect(mic_device_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &RecordPage::onMicDeviceChanged);
@@ -584,6 +668,8 @@ RecordPage::~RecordPage() {
 
 void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
     current_container_ = settings.container;
+    current_video_codec_ = settings.video_codec;
+    current_audio_codec_ = settings.audio_codec;
     last_output_folder_ = settings.output_folder;
     if (!settings.output_folder.empty()) {
         view_model_.output_path_display = settings.output_folder.wstring();
@@ -601,14 +687,18 @@ void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
                         QString::fromStdWString(view_model_.output_path_display));
 }
 
+void RecordPage::setActiveProfileName(const std::string& profile_name) {
+    active_profile_name_ = std::wstring(profile_name.begin(), profile_name.end());
+    syncCoordinatorTargetContext();
+}
+
 void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& state) {
     const capability::CaptureTargetKind target_kind = view_model_.audio_ui_state.target_kind;
     const std::optional<uint32_t> selected_window_pid = view_model_.audio_ui_state.selected_window_pid;
 
-    view_model_.audio_ui_state.record_application_audio = state.record_application_audio;
-    view_model_.audio_ui_state.record_system_audio = state.record_system_audio;
-    view_model_.audio_ui_state.separate_output_tracks = state.separate_output_tracks;
-    view_model_.audio_ui_state.record_microphone = state.record_microphone;
+    // Restore persisted rows only when they match the current target kind.
+    if (!state.source_rows.empty())
+        view_model_.audio_ui_state.source_rows = state.source_rows;
     view_model_.audio_ui_state.mic_channel_mode = state.mic_channel_mode;
     view_model_.audio_ui_state.selected_mic_device_id = state.selected_mic_device_id;
     view_model_.audio_ui_state.mic_gain_linear = state.mic_gain_linear;
@@ -617,7 +707,9 @@ void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& sta
 
     populateMicDeviceCombo();
     view_model_.RebuildAudioPlan();
-    updateAudioControls();
+    rebuildAudioRowWidgets();
+    updateAudioRowMergeVisibility();
+    updateAudioControlsVisibility();
     updateAudioTrackPreview();
     syncMicMeterService();
     syncSysMeterService();
@@ -637,13 +729,18 @@ void RecordPage::setOutputSettingsSummary(const OutputSettingsModel& settings) {
             ? QStringLiteral("MKV")
             : (settings.container == capability::Container::Mp4 ? QStringLiteral("MP4") : QStringLiteral("WEBM"));
 
+    const QString video = settings.video_codec == capability::VideoCodec::H264Nvenc
+                              ? QStringLiteral("H.264")
+                              : (settings.video_codec == capability::VideoCodec::HevcNvenc ? QStringLiteral("HEVC")
+                                                                                           : QStringLiteral("AV1"));
+
     const QString audio =
         settings.audio_codec == capability::AudioCodec::Opus
             ? QStringLiteral("OPUS")
             : (settings.audio_codec == capability::AudioCodec::AacMf ? QStringLiteral("AAC") : QStringLiteral("PCM"));
 
     if (destination_header_) {
-        destination_header_->setMeta(container + QStringLiteral(" · AV1 · ") + audio);
+        destination_header_->setMeta(container + QStringLiteral(" · ") + video + QStringLiteral(" · ") + audio);
     }
     if (output_meta_label_) {
         output_meta_label_->setText(QStringLiteral("Files are saved using the configured output settings."));
@@ -700,6 +797,7 @@ void RecordPage::startPreviewIfIdle() {
 void RecordPage::initCoordinator() {
     coordinator_ = std::make_unique<RecordingCoordinator>();
     view_model_.ApplyTargetKind(capability::CaptureTargetKind::Display);
+    rebuildAudioRowWidgets();
 
     preview_service_ = std::make_unique<PreviewService>();
     QPointer<ui::widgets::PreviewSurface> safeSurface = preview_surface_;
@@ -725,6 +823,8 @@ void RecordPage::initCoordinator() {
         view_model_.SetState(state);
         if (state == UiRecordingState::Recording)
             diagnostics::AppLog(QStringLiteral("[record] recording started"));
+        else if (state == UiRecordingState::Paused)
+            diagnostics::AppLog(QStringLiteral("[record] recording paused"));
         else if (state == UiRecordingState::Stopping)
             diagnostics::AppLog(QStringLiteral("[record] stopping"));
         else if (state == UiRecordingState::Ready || state == UiRecordingState::Completed)
@@ -863,12 +963,16 @@ void RecordPage::rebuildTargetPicker() {
     }
 
     const bool busy = view_model_.state == UiRecordingState::Preparing ||
+                      view_model_.state == UiRecordingState::RegionSelecting ||
                       view_model_.state == UiRecordingState::Recording ||
-                      view_model_.state == UiRecordingState::Stopping;
+                      view_model_.state == UiRecordingState::Paused || view_model_.state == UiRecordingState::Stopping;
 
     const bool window_mode = view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window;
     const auto& active_indices = window_mode ? window_target_indices_ : monitor_target_indices_;
-    target_picker_kind_label_->setText(window_mode ? QStringLiteral("Window") : QStringLiteral("Display"));
+    const bool region_mode = (view_model_.capture_mode == CaptureMode::Region);
+    target_picker_kind_label_->setText(
+        window_mode ? QStringLiteral("Window")
+                    : (region_mode ? QStringLiteral("Source Display") : QStringLiteral("Display")));
 
     QSignalBlocker picker_blocker(target_picker_combo_);
     target_picker_combo_->clear();
@@ -927,6 +1031,8 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
     }
 
     view_model_.ApplyTargetKindPreservingAudio(new_kind);
+    if (kind_changed)
+        rebuildAudioRowWidgets();
     syncCoordinatorTargetContext();
 
     diagnostics::AppLog(QStringLiteral("[target] selected: %1 (kind_changed=%2)")
@@ -939,6 +1045,37 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
 }
 
 void RecordPage::onStart() {
+    // Region mode with select-on-record: show overlay before starting.
+    if (view_model_.capture_mode == CaptureMode::Region && view_model_.select_on_record) {
+        diagnostics::AppLog(QStringLiteral("[record] region select-on-record: opening overlay"));
+        view_model_.SetState(UiRecordingState::RegionSelecting);
+        refresh();
+        ensureRegionOverlay();
+        region_overlay_->activateForSelection();
+        return;
+    }
+
+    // Region mode with a pre-defined region: start recording with crop.
+    if (view_model_.capture_mode == CaptureMode::Region) {
+        if (!view_model_.has_region || !view_model_.region.IsValid()) {
+            // No valid region yet — fall back to overlay selection.
+            diagnostics::AppLog(QStringLiteral("[record] region mode: no pre-defined region, opening overlay"));
+            view_model_.SetState(UiRecordingState::RegionSelecting);
+            refresh();
+            ensureRegionOverlay();
+            region_overlay_->activateForSelection();
+            return;
+        }
+        const int idx = view_model_.selected_target_index;
+        if (idx < 0 || idx >= static_cast<int>(view_model_.targets.size()))
+            return;
+        diagnostics::AppLog(QStringLiteral("[record] start requested (region crop)  target=%1")
+                                .arg(normalizedTargetLabel(view_model_.targets[static_cast<std::size_t>(idx)])));
+        doStartRecording(view_model_.region);
+        return;
+    }
+
+    // Standard Monitor / Window start.
     const int idx = view_model_.selected_target_index;
     if (idx < 0 || idx >= static_cast<int>(view_model_.targets.size()))
         return;
@@ -946,9 +1083,7 @@ void RecordPage::onStart() {
     const QString target_label = normalizedTargetLabel(view_model_.targets[static_cast<std::size_t>(idx)]);
     diagnostics::AppLog(QStringLiteral("[record] start requested  target=%1").arg(target_label));
 
-    view_model_.ResetStats();
-    syncCoordinatorTargetContext();
-    coordinator_->StartRecording(view_model_.targets[static_cast<std::size_t>(idx)], view_model_.audio_ui_state);
+    doStartRecording();
 }
 
 void RecordPage::onStop() {
@@ -961,6 +1096,23 @@ void RecordPage::onHotkeyToggle() {
         onStart();
     else if (view_model_.CanStop())
         onStop();
+}
+
+void RecordPage::onPause() {
+    diagnostics::AppLog(QStringLiteral("[record] pause requested"));
+    coordinator_->PauseRecording();
+}
+
+void RecordPage::onResume() {
+    diagnostics::AppLog(QStringLiteral("[record] resume requested"));
+    coordinator_->ResumeRecording();
+}
+
+void RecordPage::onHotkeyPauseToggle() {
+    if (view_model_.CanPause())
+        onPause();
+    else if (view_model_.CanResume())
+        onResume();
 }
 
 void RecordPage::onSelectMonitorTarget() {
@@ -999,6 +1151,77 @@ void RecordPage::onSelectWindowTarget() {
     refresh();
 }
 
+void RecordPage::onSelectRegionTarget() {
+    view_model_.capture_mode = CaptureMode::Region;
+    // Preserve the current monitor selection as the base capture source.
+    // If no monitor is selected yet, pick the first available one.
+    if (view_model_.audio_ui_state.target_kind != capability::CaptureTargetKind::Display ||
+        view_model_.selected_target_index < 0) {
+        if (monitor_target_index_ >= 0) {
+            syncTargetSelectionToCombo(monitor_target_index_);
+        }
+    }
+    view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
+    view_model_.select_on_record = select_on_record_check_ ? select_on_record_check_->isChecked() : true;
+    diagnostics::AppLog(QStringLiteral("[target] region mode selected"));
+    updateTargetCards();
+    rebuildTargetPicker();
+    refresh();
+}
+
+void RecordPage::ensureRegionOverlay() {
+    if (region_overlay_)
+        return;
+    region_overlay_ = new ui::widgets::RegionSelectionOverlay(nullptr);
+    connect(region_overlay_, &ui::widgets::RegionSelectionOverlay::regionSelected, this, &RecordPage::onRegionSelected);
+    connect(region_overlay_, &ui::widgets::RegionSelectionOverlay::regionCancelled, this,
+            &RecordPage::onRegionCancelled);
+}
+
+void RecordPage::onRegionSelected(QRect region_virtual_screen) {
+    recorder_core::CaptureRegion region;
+    region.x = region_virtual_screen.x();
+    region.y = region_virtual_screen.y();
+    region.width = region_virtual_screen.width();
+    region.height = region_virtual_screen.height();
+
+    view_model_.has_region = true;
+    view_model_.region = region;
+
+    if (region_summary_label_) {
+        region_summary_label_->setText(
+            QString("%1, %2  —  %3 × %4").arg(region.x).arg(region.y).arg(region.width).arg(region.height));
+    }
+
+    // If we were in RegionSelecting (triggered from onStart), proceed to record.
+    if (view_model_.state == UiRecordingState::RegionSelecting) {
+        doStartRecording(region);
+    }
+    // Otherwise, the region was picked manually via the Pick Region button — just update the UI.
+    else {
+        refresh();
+    }
+}
+
+void RecordPage::onRegionCancelled() {
+    // If we were in the select-on-record flow, return to Ready.
+    if (view_model_.state == UiRecordingState::RegionSelecting) {
+        view_model_.SetState(UiRecordingState::Ready);
+        refresh();
+    }
+}
+
+void RecordPage::doStartRecording(std::optional<recorder_core::CaptureRegion> crop_region) {
+    const int idx = view_model_.selected_target_index;
+    if (idx < 0 || idx >= static_cast<int>(view_model_.targets.size()))
+        return;
+
+    view_model_.ResetStats();
+    syncCoordinatorTargetContext();
+    coordinator_->StartRecording(view_model_.targets[static_cast<std::size_t>(idx)], view_model_.audio_ui_state,
+                                 crop_region);
+}
+
 void RecordPage::onTargetPickerChanged(int index) {
     if (index < 0 || !target_picker_combo_) {
         return;
@@ -1020,40 +1243,140 @@ void RecordPage::onRefreshTargets() {
     refresh();
 }
 
-void RecordPage::onAppAudioToggled(bool checked) {
-    view_model_.audio_ui_state.record_application_audio = checked;
+void RecordPage::onAudioRowEnabledChanged(int row_index, bool enabled) {
+    if (row_index < 0 || row_index >= static_cast<int>(view_model_.audio_ui_state.source_rows.size()))
+        return;
+    view_model_.audio_ui_state.source_rows[static_cast<std::size_t>(row_index)].enabled = enabled;
     view_model_.RebuildAudioPlan();
-    updateAudioControls();
-    updateAudioTrackPreview();
-    emitAudioSettingsChanged();
-}
-
-void RecordPage::onSysAudioToggled(bool checked) {
-    view_model_.audio_ui_state.record_system_audio = checked;
-    view_model_.RebuildAudioPlan();
-    updateAudioControls();
-    updateAudioTrackPreview();
-    emitAudioSettingsChanged();
-}
-
-void RecordPage::onSeparateTracksToggled(bool checked) {
-    view_model_.audio_ui_state.separate_output_tracks = checked;
-    view_model_.RebuildAudioPlan();
-    updateAudioControls();
-    updateAudioTrackPreview();
-    emitAudioSettingsChanged();
-}
-
-void RecordPage::onMicToggled(bool checked) {
-    view_model_.audio_ui_state.record_microphone = checked;
-    view_model_.RebuildAudioPlan();
-    updateAudioControls();
+    updateAudioControlsVisibility();
     updateAudioTrackPreview();
     syncMicMeterService();
     syncSysMeterService();
     syncAppMeterService();
     updateAudioMeterLevels();
     emitAudioSettingsChanged();
+}
+
+void RecordPage::onAudioRowMergeChanged(int row_index, bool merge) {
+    if (row_index < 0 || row_index >= static_cast<int>(view_model_.audio_ui_state.source_rows.size()))
+        return;
+    view_model_.audio_ui_state.source_rows[static_cast<std::size_t>(row_index)].merge_with_above = merge;
+    view_model_.RebuildAudioPlan();
+    updateAudioTrackPreview();
+    emitAudioSettingsChanged();
+}
+
+void RecordPage::swapAudioSourceRows(int a, int b) {
+    const int n = static_cast<int>(view_model_.audio_ui_state.source_rows.size());
+    if (a < 0 || b < 0 || a >= n || b >= n || a == b)
+        return;
+
+    std::swap(view_model_.audio_ui_state.source_rows[static_cast<std::size_t>(a)],
+              view_model_.audio_ui_state.source_rows[static_cast<std::size_t>(b)]);
+
+    rebuildAudioRowWidgets();
+    view_model_.RebuildAudioPlan();
+    updateAudioRowMergeVisibility();
+    updateAudioControlsVisibility();
+    updateAudioTrackPreview();
+    emitAudioSettingsChanged();
+}
+
+void RecordPage::rebuildAudioRowWidgets() {
+    // Remove all existing row widgets from the layout.
+    while (audio_rows_layout_->count() > 0) {
+        QLayoutItem* item = audio_rows_layout_->takeAt(0);
+        delete item;
+    }
+    for (auto* row : audio_source_rows_)
+        row->deleteLater();
+    audio_source_rows_.clear();
+
+    const auto& rows = view_model_.audio_ui_state.source_rows;
+
+    auto tagForKind = [](recorder_core::AudioSourceKind k) -> QString {
+        switch (k) {
+        case recorder_core::AudioSourceKind::App:
+            return QStringLiteral("APP");
+        case recorder_core::AudioSourceKind::Mic:
+            return QStringLiteral("MIC");
+        case recorder_core::AudioSourceKind::Sys:
+            return QStringLiteral("SYS");
+        case recorder_core::AudioSourceKind::SystemOutput:
+            return QStringLiteral("OUT");
+        }
+        return QStringLiteral("?");
+    };
+
+    auto titleForKind = [](recorder_core::AudioSourceKind k) -> QString {
+        switch (k) {
+        case recorder_core::AudioSourceKind::App:
+            return QStringLiteral("Application Audio");
+        case recorder_core::AudioSourceKind::Mic:
+            return QStringLiteral("Microphone");
+        case recorder_core::AudioSourceKind::Sys:
+            return QStringLiteral("Other System Audio");
+        case recorder_core::AudioSourceKind::SystemOutput:
+            return QStringLiteral("System Output");
+        }
+        return QStringLiteral("Unknown");
+    };
+
+    auto subtitleForKind = [](recorder_core::AudioSourceKind k) -> QString {
+        switch (k) {
+        case recorder_core::AudioSourceKind::App:
+            return QStringLiteral("Selected window audio");
+        case recorder_core::AudioSourceKind::Mic:
+            return QStringLiteral("Microphone input");
+        case recorder_core::AudioSourceKind::Sys:
+            return QStringLiteral("Other system sources");
+        case recorder_core::AudioSourceKind::SystemOutput:
+            return QStringLiteral("Full system loopback");
+        }
+        return {};
+    };
+
+    for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
+        const auto& model_row = rows[static_cast<std::size_t>(i)];
+        const bool is_first = (i == 0);
+
+        ui::widgets::AudioSourceRow::Config cfg;
+        cfg.tag = tagForKind(model_row.kind);
+        cfg.title = titleForKind(model_row.kind);
+        cfg.subtitle = subtitleForKind(model_row.kind);
+        cfg.db_value = QStringLiteral("– dB");
+        cfg.has_merge_control = !is_first;
+        cfg.enabled = model_row.enabled;
+
+        auto* row_widget = new ui::widgets::AudioSourceRow(cfg, audio_rows_container_);
+        if (!is_first) {
+            row_widget->setMergeChecked(model_row.merge_with_above);
+        }
+        row_widget->installEventFilter(this);
+
+        audio_rows_layout_->addWidget(row_widget);
+        audio_source_rows_.push_back(row_widget);
+
+        const int idx = i;
+        connect(row_widget, &ui::widgets::AudioSourceRow::sourceEnabledChanged, this,
+                [this, idx](bool enabled) { onAudioRowEnabledChanged(idx, enabled); });
+        if (!is_first) {
+            connect(row_widget, &ui::widgets::AudioSourceRow::mergeChanged, this,
+                    [this, idx](bool merge) { onAudioRowMergeChanged(idx, merge); });
+        }
+    }
+}
+
+void RecordPage::updateAudioRowMergeVisibility() {
+    const bool mkv = (current_container_ == capability::Container::Matroska);
+    const bool busy = view_model_.state == UiRecordingState::Preparing ||
+                      view_model_.state == UiRecordingState::Recording ||
+                      view_model_.state == UiRecordingState::Paused || view_model_.state == UiRecordingState::Stopping;
+
+    for (int i = 1; i < static_cast<int>(audio_source_rows_.size()); ++i) {
+        auto* w = audio_source_rows_[static_cast<std::size_t>(i)];
+        w->setMergeControlVisible(mkv && !busy);
+    }
 }
 
 void RecordPage::populateMicDeviceCombo() {
@@ -1156,40 +1479,27 @@ void RecordPage::onMicGainChanged(int db_value) {
 }
 
 void RecordPage::emitAudioSettingsChanged() {
-    diagnostics::AppLog(QStringLiteral("[audio] settings changed: app=%1 sys=%2 mic=%3 sep=%4 mic_gain=%5")
-                            .arg(view_model_.audio_ui_state.record_application_audio ? 1 : 0)
-                            .arg(view_model_.audio_ui_state.record_system_audio ? 1 : 0)
-                            .arg(view_model_.audio_ui_state.record_microphone ? 1 : 0)
-                            .arg(view_model_.audio_ui_state.separate_output_tracks ? 1 : 0)
+    diagnostics::AppLog(QStringLiteral("[audio] settings changed: app=%1 sys=%2 mic=%3 rows=%4 mic_gain=%5")
+                            .arg(view_model_.audio_ui_state.IsAppEnabled() ? 1 : 0)
+                            .arg(view_model_.audio_ui_state.IsSysEnabled() ? 1 : 0)
+                            .arg(view_model_.audio_ui_state.IsMicEnabled() ? 1 : 0)
+                            .arg(static_cast<int>(view_model_.audio_ui_state.source_rows.size()))
                             .arg(view_model_.audio_ui_state.mic_gain_linear, 0, 'f', 2));
     emit audioSettingsChanged(view_model_.audio_ui_state);
     PersistMicGainForMvp(view_model_.audio_ui_state.mic_gain_linear);
 }
 
 void RecordPage::updateAudioControls() {
-    if (!app_audio_check_ || !sys_audio_check_ || !separate_tracks_check_ || !mic_check_ || !mic_channel_combo_ ||
-        !mic_gain_slider_) {
+    if (!mic_channel_combo_ || !mic_gain_slider_) {
         return;
     }
 
-    QSignalBlocker b1(app_audio_check_);
-    QSignalBlocker b2(sys_audio_check_);
-    QSignalBlocker b3(separate_tracks_check_);
-    QSignalBlocker b4(mic_check_);
-    QSignalBlocker b5(mic_channel_combo_);
-    QSignalBlocker b6(mic_gain_slider_);
-
-    app_audio_check_->setChecked(view_model_.audio_ui_state.record_application_audio);
-    sys_audio_check_->setChecked(view_model_.audio_ui_state.record_system_audio);
-    separate_tracks_check_->setChecked(view_model_.audio_ui_state.separate_output_tracks);
-    mic_check_->setChecked(view_model_.audio_ui_state.record_microphone);
+    QSignalBlocker b1(mic_channel_combo_);
+    QSignalBlocker b2(mic_gain_slider_);
 
     const auto mode = view_model_.audio_ui_state.mic_channel_mode;
     int channel_index = 0;
     switch (mode) {
-    case recorder_core::MicChannelMode::Auto:
-        channel_index = 0;
-        break;
     case recorder_core::MicChannelMode::PreserveStereo:
         channel_index = 1;
         break;
@@ -1202,47 +1512,32 @@ void RecordPage::updateAudioControls() {
     case recorder_core::MicChannelMode::RightToStereo:
         channel_index = 4;
         break;
+    default:
+        channel_index = 0;
+        break;
     }
     mic_channel_combo_->setCurrentIndex(channel_index);
-    {
-        const int db = LinearToSliderDb(view_model_.audio_ui_state.mic_gain_linear);
-        mic_gain_slider_->setValue(db);
-        if (mic_gain_value_label_) {
-            mic_gain_value_label_->setText(db == 0 ? QStringLiteral("0 dB") : QStringLiteral("+%1 dB").arg(db));
-        }
+
+    const int db = LinearToSliderDb(view_model_.audio_ui_state.mic_gain_linear);
+    mic_gain_slider_->setValue(db);
+    if (mic_gain_value_label_) {
+        mic_gain_value_label_->setText(db == 0 ? QStringLiteral("0 dB") : QStringLiteral("+%1 dB").arg(db));
     }
 
     updateAudioControlsVisibility();
 }
 
 void RecordPage::updateAudioControlsVisibility() {
-    const bool is_window = view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window;
-
-    const bool app = view_model_.audio_ui_state.record_application_audio;
-    const bool sys = view_model_.audio_ui_state.record_system_audio;
-    const bool mic = view_model_.audio_ui_state.record_microphone;
-
+    const bool mic = view_model_.audio_ui_state.IsMicEnabled();
     const bool busy = view_model_.state == UiRecordingState::Preparing ||
                       view_model_.state == UiRecordingState::Recording ||
-                      view_model_.state == UiRecordingState::Stopping;
+                      view_model_.state == UiRecordingState::Paused || view_model_.state == UiRecordingState::Stopping;
 
-    app_audio_check_->setVisible(is_window);
-    (void)app;
-    (void)sys;
+    // Disable row widgets while recording.
+    for (auto* row : audio_source_rows_)
+        row->setEnabled(!busy);
 
-    // Separate tracks: MKV only (WebM/MP4 muxers are untested for multi-track).
-    const bool container_sep_ok = (current_container_ == capability::Container::Matroska);
-    const int source_count = (is_window ? ((view_model_.audio_ui_state.record_application_audio ? 1 : 0) +
-                                           (view_model_.audio_ui_state.record_system_audio ? 1 : 0))
-                                        : (view_model_.audio_ui_state.record_system_audio ? 1 : 0)) +
-                             (mic ? 1 : 0);
-    const bool sep_applicable = container_sep_ok && (source_count >= 2);
-    separate_tracks_check_->setVisible(sep_applicable);
-
-    app_audio_check_->setEnabled(!busy);
-    sys_audio_check_->setEnabled(!busy);
-    separate_tracks_check_->setEnabled(sep_applicable && !busy);
-    mic_check_->setEnabled(!busy);
+    updateAudioRowMergeVisibility();
 
     mic_device_row_->setVisible(mic);
     mic_channel_row_->setVisible(mic);
@@ -1262,7 +1557,7 @@ void RecordPage::updateMicDeviceNoteLabel() {
         return;
     }
 
-    const bool mic_on = view_model_.audio_ui_state.record_microphone;
+    const bool mic_on = view_model_.audio_ui_state.IsMicEnabled();
     const bool show_note = mic_on && mic_device_row_->isVisible() && mic_device_combo_->currentIndex() == 0;
     if (!show_note) {
         mic_device_note_label_->setVisible(false);
@@ -1295,7 +1590,7 @@ void RecordPage::syncMicMeterService() {
 
     const bool transition_busy =
         view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::Stopping;
-    const bool should_run = view_model_.audio_ui_state.record_microphone && !transition_busy;
+    const bool should_run = view_model_.audio_ui_state.IsMicEnabled() && !transition_busy;
 
     if (!should_run) {
         coordinator_->StopMicMeter();
@@ -1438,6 +1733,9 @@ void RecordPage::syncCoordinatorTargetContext() {
         context.window_title = L"Display 1";
         context.process_name = L"desktop";
     }
+    context.profile_name = active_profile_name_;
+    context.video_codec = current_video_codec_;
+    context.audio_codec = current_audio_codec_;
 
     coordinator_->SetOutputTargetContext(context);
 }
@@ -1518,8 +1816,9 @@ QString RecordPage::buildTimerText(bool recording) const {
 }
 
 void RecordPage::emitChromeState() {
-    const bool recording =
-        view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Stopping;
+    const bool recording = view_model_.state == UiRecordingState::Recording ||
+                           view_model_.state == UiRecordingState::Paused ||
+                           view_model_.state == UiRecordingState::Stopping;
     const QString status = buildChromeStatusLabel();
 
     if (view_model_.selected_target_index >= 0 &&
@@ -1538,7 +1837,8 @@ void RecordPage::refresh() {
     const bool blocked = (view_model_.state == UiRecordingState::Blocked);
     const bool checking = (view_model_.state == UiRecordingState::LoadingCapabilities);
     const bool recording =
-        (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Stopping);
+        (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
+         view_model_.state == UiRecordingState::Stopping);
 
     capability_label_->setText(capability_text);
     capability_label_->setVisible((blocked || checking) && !capability_text.isEmpty());
@@ -1547,8 +1847,11 @@ void RecordPage::refresh() {
     }
 
     start_btn_->setVisible(!recording);
+    pause_btn_->setVisible(view_model_.CanPause() || view_model_.CanResume());
+    pause_btn_->setText(view_model_.CanResume() ? QStringLiteral("▶  RESUME") : QStringLiteral("⏸  PAUSE"));
     stop_btn_->setVisible(recording);
     start_btn_->setEnabled(view_model_.CanStart());
+    pause_btn_->setEnabled(view_model_.CanPause() || view_model_.CanResume());
     stop_btn_->setEnabled(view_model_.CanStop());
 
     control_state_label_->setText(stateDisplay(view_model_.state));
@@ -1558,12 +1861,15 @@ void RecordPage::refresh() {
 
     output_path_label_->setText(QString::fromStdWString(view_model_.output_path_display));
 
+    const bool paused = (view_model_.state == UiRecordingState::Paused);
     preview_surface_->setRecording(recording);
-    preview_surface_->setStatusText(recording ? QStringLiteral("REC")
-                                              : (blocked ? QStringLiteral("BLOCKED") : QStringLiteral("READY")));
-    preview_surface_->statusPill()->setTone(
-        recording ? ui::widgets::StatusPill::Tone::Recording
-                  : (blocked ? ui::widgets::StatusPill::Tone::Blocked : ui::widgets::StatusPill::Tone::Ready));
+    preview_surface_->setStatusText(
+        paused ? QStringLiteral("PAUSED")
+               : (recording ? QStringLiteral("REC") : (blocked ? QStringLiteral("BLOCKED") : QStringLiteral("READY"))));
+    preview_surface_->statusPill()->setTone(paused ? ui::widgets::StatusPill::Tone::Ready
+                                                   : (recording ? ui::widgets::StatusPill::Tone::Recording
+                                                                : (blocked ? ui::widgets::StatusPill::Tone::Blocked
+                                                                           : ui::widgets::StatusPill::Tone::Ready)));
     QString target_desc = QStringLiteral("No target selected");
     const bool has_selected_target = view_model_.selected_target_index >= 0 &&
                                      view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
@@ -1612,8 +1918,9 @@ void RecordPage::refresh() {
 }
 
 void RecordPage::updateStatsDisplay() {
-    const bool recording =
-        view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Stopping;
+    const bool recording = view_model_.state == UiRecordingState::Recording ||
+                           view_model_.state == UiRecordingState::Paused ||
+                           view_model_.state == UiRecordingState::Stopping;
 
     const QString timer_text = buildTimerText(recording);
     timer_label_->setText(timer_text);
@@ -1697,8 +2004,8 @@ void RecordPage::updateResultDisplay() {
 void RecordPage::updateTargetCards() {
     const int current = view_model_.selected_target_index;
     const bool recording =
-        (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Stopping ||
-         view_model_.state == UiRecordingState::Preparing);
+        (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
+         view_model_.state == UiRecordingState::Stopping || view_model_.state == UiRecordingState::Preparing);
     const bool has_selected_target = current >= 0 && current < static_cast<int>(view_model_.targets.size());
     const bool selected_monitor = has_selected_target && view_model_.targets[static_cast<std::size_t>(current)].kind ==
                                                              recorder_core::CaptureTarget::Kind::Monitor;
@@ -1707,11 +2014,20 @@ void RecordPage::updateTargetCards() {
     const bool monitor_mode = view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Display;
     const bool window_mode = view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window;
 
-    const bool any_monitor_selected = !recording && (selected_monitor || (!has_selected_target && monitor_mode));
-    const bool window_selected = !recording && (selected_window || (!has_selected_target && window_mode));
+    const bool region_mode = (view_model_.capture_mode == CaptureMode::Region);
+    const bool any_monitor_selected =
+        !recording && !region_mode && (selected_monitor || (!has_selected_target && monitor_mode));
+    const bool window_selected =
+        !recording && !region_mode && (selected_window || (!has_selected_target && window_mode));
 
     monitor_card_->setSelected(any_monitor_selected);
     window_card_->setSelected(window_selected);
+    if (region_card_)
+        region_card_->setSelected(!recording && region_mode);
+
+    // Show region options panel only in region mode and not while recording
+    if (region_options_panel_)
+        region_options_panel_->setVisible(region_mode && !recording);
 
     // Subtitle for the monitor card: use the currently active monitor target
     const int active_monitor_idx = monitor_target_index_;
@@ -1789,8 +2105,9 @@ void RecordPage::updateReadinessRows() {
 }
 
 void RecordPage::updateAudioMeterLevels() {
-    const bool recording_live =
-        view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Stopping;
+    const bool recording_live = view_model_.state == UiRecordingState::Recording ||
+                                view_model_.state == UiRecordingState::Paused ||
+                                view_model_.state == UiRecordingState::Stopping;
 
     auto applyMeter = [](ui::widgets::VUMeterWidget* meter, QLabel* db_label, float rms, bool show_level) {
         if (!meter || !db_label) {
@@ -1821,7 +2138,7 @@ void RecordPage::updateAudioMeterLevels() {
     applyMeter(app_meter_, app_db_label_, app_rms, app_meter_live || (recording_live && view_model_.audio_active_app));
 
     const bool mic_meter_live = coordinator_ != nullptr && coordinator_->IsMicMeterRunning() &&
-                                view_model_.audio_ui_state.record_microphone && view_model_.audio_active_mic;
+                                view_model_.audio_ui_state.IsMicEnabled() && view_model_.audio_active_mic;
     const float mic_rms = mic_meter_live
                               ? std::clamp(preflight_mic_rms_ * view_model_.audio_ui_state.mic_gain_linear, 0.0f, 1.0f)
                               : (recording_live ? view_model_.audio_rms_mic : 0.0f);
