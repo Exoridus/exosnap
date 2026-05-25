@@ -9,18 +9,33 @@
 namespace exosnap::capability {
 namespace {
 
-using recorder_core::AudioSourceKind;
+using K = recorder_core::AudioSourceKind;
 
-void ExpectSingleSourceTrack(const AudioPlanResult& result, size_t track_pos, AudioSourceKind expected_kind) {
+void ExpectSingleSourceTrack(const AudioPlanResult& result, size_t track_pos, K expected_kind) {
     ASSERT_LT(track_pos, result.plan.tracks.size());
     const auto& track = result.plan.tracks[track_pos];
     ASSERT_EQ(track.sources.size(), 1u);
     EXPECT_EQ(track.sources.front(), expected_kind);
 }
 
+// Helper: Window state with all-separate rows.
+AudioUiState WindowSep(std::optional<uint32_t> pid = std::nullopt) {
+    AudioUiState s;
+    s.target_kind = CaptureTargetKind::Window;
+    s.selected_window_pid = pid;
+    return s;
+}
+
+// Helper: Display state with all-separate rows.
+AudioUiState DisplaySep() {
+    AudioUiState s;
+    s.target_kind = CaptureTargetKind::Display;
+    return s;
+}
+
 TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesSelectedMicDeviceId) {
     AudioUiState state;
-    state.record_microphone = true;
+    state.source_rows = {{K::Mic, true, false}};
     state.selected_mic_device_id = "test-device-id";
 
     const AudioPlanResult result = BuildAudioPlan(state);
@@ -38,7 +53,7 @@ TEST(AudioPlanBuilderTest, BuildAudioPlan_DefaultMicDeviceIdIsNullopt) {
 
 TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesMicGainLinear) {
     AudioUiState state;
-    state.record_microphone = true;
+    state.source_rows = {{K::Mic, true, false}};
     state.mic_gain_linear = 4.0f;
 
     const AudioPlanResult result = BuildAudioPlan(state);
@@ -53,150 +68,128 @@ TEST(AudioPlanBuilderTest, BuildAudioPlan_DefaultMicGainIsUnity) {
 }
 
 TEST(AudioPlanBuilderTest, WindowTarget_AppOnly) {
-    AudioUiState state;
-    state.target_kind = CaptureTargetKind::Window;
-    state.record_application_audio = true;
-    state.record_system_audio = false;
-    state.record_microphone = false;
-    state.selected_window_pid = 1001u;
+    AudioUiState state = WindowSep(1001u);
+    state.source_rows = {{K::App, true, false}};
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
     ASSERT_EQ(result.plan.tracks.size(), 1u);
-    ExpectSingleSourceTrack(result, 0, AudioSourceKind::App);
+    ExpectSingleSourceTrack(result, 0, K::App);
     ASSERT_TRUE(result.audio_target_process_id.has_value());
     EXPECT_EQ(result.audio_target_process_id.value(), 1001u);
 }
 
 TEST(AudioPlanBuilderTest, WindowTarget_SysOnly) {
-    AudioUiState state;
-    state.target_kind = CaptureTargetKind::Window;
-    state.record_application_audio = false;
-    state.record_system_audio = true;
-    state.record_microphone = false;
-    state.selected_window_pid = 1002u;
+    AudioUiState state = WindowSep(1002u);
+    state.source_rows = {{K::Sys, true, false}};
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
     ASSERT_EQ(result.plan.tracks.size(), 1u);
-    ExpectSingleSourceTrack(result, 0, AudioSourceKind::Sys);
-    ASSERT_TRUE(result.audio_target_process_id.has_value());
-    EXPECT_EQ(result.audio_target_process_id.value(), 1002u);
+    ExpectSingleSourceTrack(result, 0, K::Sys);
+    // Sys alone without App → no PID needed.
+    EXPECT_FALSE(result.audio_target_process_id.has_value());
 }
 
 TEST(AudioPlanBuilderTest, WindowTarget_AppAndSys_Separate) {
-    AudioUiState state;
-    state.target_kind = CaptureTargetKind::Window;
-    state.record_application_audio = true;
-    state.record_system_audio = true;
-    state.separate_output_tracks = true;
-    state.selected_window_pid = 1003u;
+    AudioUiState state = WindowSep(1003u);
+    state.source_rows = {
+        {K::App, true, false},
+        {K::Sys, true, false},
+    };
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
     ASSERT_EQ(result.plan.tracks.size(), 2u);
-    ExpectSingleSourceTrack(result, 0, AudioSourceKind::App);
-    ExpectSingleSourceTrack(result, 1, AudioSourceKind::Sys);
+    ExpectSingleSourceTrack(result, 0, K::App);
+    ExpectSingleSourceTrack(result, 1, K::Sys);
     ASSERT_TRUE(result.audio_target_process_id.has_value());
     EXPECT_EQ(result.audio_target_process_id.value(), 1003u);
 }
 
-TEST(AudioPlanBuilderTest, WindowTarget_AppAndSys_Combined) {
-    // Merge-first: {App, Sys} as one merged track with PID set.
-    AudioUiState state;
-    state.target_kind = CaptureTargetKind::Window;
-    state.record_application_audio = true;
-    state.record_system_audio = true;
-    state.separate_output_tracks = false;
-    state.selected_window_pid = 1004u;
+TEST(AudioPlanBuilderTest, WindowTarget_AppAndSys_Merged) {
+    AudioUiState state = WindowSep(1004u);
+    state.source_rows = {
+        {K::App, true, false},
+        {K::Sys, true, true},
+    };
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
     ASSERT_EQ(result.plan.tracks.size(), 1u);
     const auto& track = result.plan.tracks[0];
     ASSERT_EQ(track.sources.size(), 2u);
-    EXPECT_EQ(track.sources[0], AudioSourceKind::App);
-    EXPECT_EQ(track.sources[1], AudioSourceKind::Sys);
+    EXPECT_EQ(track.sources[0], K::App);
+    EXPECT_EQ(track.sources[1], K::Sys);
     ASSERT_TRUE(result.audio_target_process_id.has_value());
     EXPECT_EQ(result.audio_target_process_id.value(), 1004u);
 }
 
-TEST(AudioPlanBuilderTest, WindowTarget_AppAndMic) {
-    AudioUiState state;
-    state.target_kind = CaptureTargetKind::Window;
-    state.record_application_audio = true;
-    state.record_system_audio = false;
-    state.record_microphone = true;
-    state.selected_window_pid = 1005u;
+TEST(AudioPlanBuilderTest, WindowTarget_AppAndMic_Separate) {
+    AudioUiState state = WindowSep(1005u);
+    state.source_rows = {
+        {K::App, true, false},
+        {K::Mic, true, false},
+    };
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
     ASSERT_EQ(result.plan.tracks.size(), 2u);
-    ExpectSingleSourceTrack(result, 0, AudioSourceKind::App);
-    ExpectSingleSourceTrack(result, 1, AudioSourceKind::Mic);
+    ExpectSingleSourceTrack(result, 0, K::App);
+    ExpectSingleSourceTrack(result, 1, K::Mic);
     ASSERT_TRUE(result.audio_target_process_id.has_value());
     EXPECT_EQ(result.audio_target_process_id.value(), 1005u);
 }
 
-TEST(AudioPlanBuilderTest, WindowTarget_SysAndMic) {
-    AudioUiState state;
-    state.target_kind = CaptureTargetKind::Window;
-    state.record_application_audio = false;
-    state.record_system_audio = true;
-    state.record_microphone = true;
-    state.selected_window_pid = 1006u;
+TEST(AudioPlanBuilderTest, WindowTarget_SysAndMic_Separate) {
+    AudioUiState state = WindowSep(1006u);
+    state.source_rows = {
+        {K::Sys, true, false},
+        {K::Mic, true, false},
+    };
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
     ASSERT_EQ(result.plan.tracks.size(), 2u);
-    ExpectSingleSourceTrack(result, 0, AudioSourceKind::Sys);
-    ExpectSingleSourceTrack(result, 1, AudioSourceKind::Mic);
-    ASSERT_TRUE(result.audio_target_process_id.has_value());
-    EXPECT_EQ(result.audio_target_process_id.value(), 1006u);
+    ExpectSingleSourceTrack(result, 0, K::Sys);
+    ExpectSingleSourceTrack(result, 1, K::Mic);
+    EXPECT_FALSE(result.audio_target_process_id.has_value());
 }
 
-TEST(AudioPlanBuilderTest, WindowTarget_AppSysMic_Merged) {
-    // Merge-first: {App, Sys, Mic} as one merged track, Mic last, PID set.
-    AudioUiState state;
-    state.target_kind = CaptureTargetKind::Window;
-    state.record_application_audio = true;
-    state.record_system_audio = true;
-    state.separate_output_tracks = false;
-    state.record_microphone = true;
-    state.selected_window_pid = 1007u;
+TEST(AudioPlanBuilderTest, WindowTarget_AppSysMic_AllMerged) {
+    AudioUiState state = WindowSep(1007u);
+    state.source_rows = {
+        {K::App, true, false},
+        {K::Mic, true, true},
+        {K::Sys, true, true},
+    };
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
     ASSERT_EQ(result.plan.tracks.size(), 1u);
-    const auto& track = result.plan.tracks[0];
-    ASSERT_EQ(track.sources.size(), 3u);
-    EXPECT_EQ(track.sources[0], AudioSourceKind::App);
-    EXPECT_EQ(track.sources[1], AudioSourceKind::Sys);
-    EXPECT_EQ(track.sources[2], AudioSourceKind::Mic);
+    ASSERT_EQ(result.plan.tracks[0].sources.size(), 3u);
     ASSERT_TRUE(result.audio_target_process_id.has_value());
     EXPECT_EQ(result.audio_target_process_id.value(), 1007u);
 }
 
 TEST(AudioPlanBuilderTest, WindowTarget_MicOnly) {
-    AudioUiState state;
-    state.target_kind = CaptureTargetKind::Window;
-    state.record_application_audio = false;
-    state.record_system_audio = false;
-    state.record_microphone = true;
+    AudioUiState state = WindowSep();
+    state.source_rows = {{K::Mic, true, false}};
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
     ASSERT_EQ(result.plan.tracks.size(), 1u);
-    ExpectSingleSourceTrack(result, 0, AudioSourceKind::Mic);
+    ExpectSingleSourceTrack(result, 0, K::Mic);
     EXPECT_FALSE(result.audio_target_process_id.has_value());
 }
 
 TEST(AudioPlanBuilderTest, WindowTarget_AllOff) {
-    AudioUiState state;
-    state.target_kind = CaptureTargetKind::Window;
-    state.record_application_audio = false;
-    state.record_system_audio = false;
-    state.record_microphone = false;
+    AudioUiState state = WindowSep();
+    state.source_rows = {
+        {K::App, false, false},
+        {K::Mic, false, false},
+        {K::Sys, false, false},
+    };
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_FALSE(result.record_audio);
@@ -204,102 +197,92 @@ TEST(AudioPlanBuilderTest, WindowTarget_AllOff) {
     EXPECT_FALSE(result.audio_target_process_id.has_value());
 }
 
-TEST(AudioPlanBuilderTest, WindowTarget_AppRequestedMissingPid_KeepsAppTrackWithoutPid) {
-    AudioUiState state;
-    state.target_kind = CaptureTargetKind::Window;
-    state.record_application_audio = true;
-    state.record_system_audio = false;
-    state.record_microphone = false;
-    state.selected_window_pid.reset();
+TEST(AudioPlanBuilderTest, WindowTarget_AppOnly_NoPid_NoTargetProcessId) {
+    AudioUiState state = WindowSep(); // no PID
+    state.source_rows = {{K::App, true, false}};
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
     ASSERT_EQ(result.plan.tracks.size(), 1u);
-    ExpectSingleSourceTrack(result, 0, AudioSourceKind::App);
+    ExpectSingleSourceTrack(result, 0, K::App);
     EXPECT_FALSE(result.audio_target_process_id.has_value());
 }
 
-TEST(AudioPlanBuilderTest, WindowTarget_AppSysRequestedMissingPid_KeepsAppSysTracksWithoutPid) {
-    AudioUiState state;
-    state.target_kind = CaptureTargetKind::Window;
-    state.record_application_audio = true;
-    state.record_system_audio = true;
-    state.separate_output_tracks = true;
-    state.record_microphone = false;
-    state.selected_window_pid.reset();
+TEST(AudioPlanBuilderTest, WindowTarget_AppSys_Separate_NoPid) {
+    AudioUiState state = WindowSep(); // no PID
+    state.source_rows = {
+        {K::App, true, false},
+        {K::Sys, true, false},
+    };
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
     ASSERT_EQ(result.plan.tracks.size(), 2u);
-    ExpectSingleSourceTrack(result, 0, AudioSourceKind::App);
-    ExpectSingleSourceTrack(result, 1, AudioSourceKind::Sys);
+    ExpectSingleSourceTrack(result, 0, K::App);
+    ExpectSingleSourceTrack(result, 1, K::Sys);
     EXPECT_FALSE(result.audio_target_process_id.has_value());
 }
 
 TEST(AudioPlanBuilderTest, DisplayTarget_SystemOnly) {
-    AudioUiState state;
-    state.target_kind = CaptureTargetKind::Display;
-    state.record_system_audio = true;
-    state.record_microphone = false;
+    AudioUiState state = DisplaySep();
+    state.source_rows = {{K::SystemOutput, true, false}};
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
     ASSERT_EQ(result.plan.tracks.size(), 1u);
-    ExpectSingleSourceTrack(result, 0, AudioSourceKind::SystemOutput);
+    ExpectSingleSourceTrack(result, 0, K::SystemOutput);
     EXPECT_FALSE(result.audio_target_process_id.has_value());
 }
 
 TEST(AudioPlanBuilderTest, DisplayTarget_MicOnly) {
-    AudioUiState state;
-    state.target_kind = CaptureTargetKind::Display;
-    state.record_system_audio = false;
-    state.record_microphone = true;
+    AudioUiState state = DisplaySep();
+    state.source_rows = {{K::Mic, true, false}};
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
     ASSERT_EQ(result.plan.tracks.size(), 1u);
-    ExpectSingleSourceTrack(result, 0, AudioSourceKind::Mic);
+    ExpectSingleSourceTrack(result, 0, K::Mic);
     EXPECT_FALSE(result.audio_target_process_id.has_value());
 }
 
-TEST(AudioPlanBuilderTest, DisplayTarget_SystemAndMic) {
-    // Merge-first: {SystemOutput, Mic} as one merged track.
-    AudioUiState state;
-    state.target_kind = CaptureTargetKind::Display;
-    state.record_system_audio = true;
-    state.record_microphone = true;
-    state.separate_output_tracks = false;
+TEST(AudioPlanBuilderTest, DisplayTarget_SystemAndMic_Merged) {
+    AudioUiState state = DisplaySep();
+    state.source_rows = {
+        {K::SystemOutput, true, false},
+        {K::Mic, true, true},
+    };
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
     ASSERT_EQ(result.plan.tracks.size(), 1u);
     const auto& track = result.plan.tracks[0];
     ASSERT_EQ(track.sources.size(), 2u);
-    EXPECT_EQ(track.sources[0], AudioSourceKind::SystemOutput);
-    EXPECT_EQ(track.sources[1], AudioSourceKind::Mic);
+    EXPECT_EQ(track.sources[0], K::SystemOutput);
+    EXPECT_EQ(track.sources[1], K::Mic);
     EXPECT_FALSE(result.audio_target_process_id.has_value());
 }
 
 TEST(AudioPlanBuilderTest, DisplayTarget_SystemAndMic_Separate) {
-    AudioUiState state;
-    state.target_kind = CaptureTargetKind::Display;
-    state.record_system_audio = true;
-    state.record_microphone = true;
-    state.separate_output_tracks = true;
+    AudioUiState state = DisplaySep();
+    state.source_rows = {
+        {K::SystemOutput, true, false},
+        {K::Mic, true, false},
+    };
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_TRUE(result.record_audio);
     ASSERT_EQ(result.plan.tracks.size(), 2u);
-    ExpectSingleSourceTrack(result, 0, AudioSourceKind::SystemOutput);
-    ExpectSingleSourceTrack(result, 1, AudioSourceKind::Mic);
+    ExpectSingleSourceTrack(result, 0, K::SystemOutput);
+    ExpectSingleSourceTrack(result, 1, K::Mic);
     EXPECT_FALSE(result.audio_target_process_id.has_value());
 }
 
 TEST(AudioPlanBuilderTest, DisplayTarget_AllOff) {
-    AudioUiState state;
-    state.target_kind = CaptureTargetKind::Display;
-    state.record_system_audio = false;
-    state.record_microphone = false;
+    AudioUiState state = DisplaySep();
+    state.source_rows = {
+        {K::SystemOutput, false, false},
+        {K::Mic, false, false},
+    };
 
     const AudioPlanResult result = BuildAudioPlan(state);
     EXPECT_FALSE(result.record_audio);
@@ -313,22 +296,22 @@ TEST(AudioPlanBuilderTest, Preview_LabelsAreCorrect) {
 
     recorder_core::ResolvedAudioTrack t0;
     t0.track_index = 0;
-    t0.sources = {AudioSourceKind::App};
+    t0.sources = {K::App};
     result.plan.tracks.push_back(t0);
 
     recorder_core::ResolvedAudioTrack t1;
     t1.track_index = 1;
-    t1.sources = {AudioSourceKind::Sys};
+    t1.sources = {K::Sys};
     result.plan.tracks.push_back(t1);
 
     recorder_core::ResolvedAudioTrack t2;
     t2.track_index = 2;
-    t2.sources = {AudioSourceKind::SystemOutput};
+    t2.sources = {K::SystemOutput};
     result.plan.tracks.push_back(t2);
 
     recorder_core::ResolvedAudioTrack t3;
     t3.track_index = 3;
-    t3.sources = {AudioSourceKind::Mic};
+    t3.sources = {K::Mic};
     result.plan.tracks.push_back(t3);
 
     const std::vector<AudioTrackPreview> preview = BuildAudioTrackPreview(result);
@@ -356,7 +339,7 @@ TEST(AudioPlanBuilderTest, Preview_NoAudio_ReturnsEmpty) {
     result.record_audio = false;
     recorder_core::ResolvedAudioTrack track;
     track.track_index = 0;
-    track.sources = {AudioSourceKind::App};
+    track.sources = {K::App};
     result.plan.tracks.push_back(track);
 
     const std::vector<AudioTrackPreview> preview = BuildAudioTrackPreview(result);
@@ -364,13 +347,12 @@ TEST(AudioPlanBuilderTest, Preview_NoAudio_ReturnsEmpty) {
 }
 
 TEST(AudioPlanBuilderTest, TrackIndices_AreSequential) {
-    AudioUiState state;
-    state.target_kind = CaptureTargetKind::Window;
-    state.record_application_audio = true;
-    state.record_system_audio = true;
-    state.separate_output_tracks = true;
-    state.record_microphone = true;
-    state.selected_window_pid = 1010u;
+    AudioUiState state = WindowSep(1010u);
+    state.source_rows = {
+        {K::App, true, false},
+        {K::Mic, true, false},
+        {K::Sys, true, false},
+    };
 
     const AudioPlanResult result = BuildAudioPlan(state);
     ASSERT_EQ(result.plan.tracks.size(), 3u);

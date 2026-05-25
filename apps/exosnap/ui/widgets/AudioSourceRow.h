@@ -33,6 +33,8 @@ class AudioSourceRow : public QWidget {
     [[nodiscard]] bool mergeChecked() const noexcept;
     [[nodiscard]] bool hasMergeControl() const noexcept;
 
+    void setMergeControlVisible(bool visible);
+
   signals:
     void sourceEnabledChanged(bool enabled);
     void mergeChanged(bool checked);
@@ -42,6 +44,7 @@ class AudioSourceRow : public QWidget {
 
     VUMeterWidget* meter_ = nullptr;
     QLabel* db_label_ = nullptr;
+    QWidget* merge_container_ = nullptr;
     ExoCheckBox* merge_check_ = nullptr;
     QLabel* merge_label_ = nullptr;
     ExoToggle* enabled_toggle_ = nullptr;

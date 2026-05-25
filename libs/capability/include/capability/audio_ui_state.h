@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <recorder_core/audio_track_model.h>
 #include <recorder_core/recorder_session.h>
@@ -17,32 +18,29 @@ enum class CaptureTargetKind {
 struct AudioUiState {
     CaptureTargetKind target_kind = CaptureTargetKind::Display;
 
-    // App/Window target controls. Ignored for Display target.
-    bool record_application_audio = true;
-    bool record_system_audio = true;
-    bool separate_output_tracks = true;
+    // Ordered list of audio sources. The first enabled row always starts a new
+    // track; subsequent rows merge into the previous track when merge_with_above=true.
+    std::vector<recorder_core::AudioSourceRow> source_rows;
 
-    // Common controls.
-    bool record_microphone = false;
+    // Mic-specific settings (not part of the row model).
     recorder_core::MicChannelMode mic_channel_mode = recorder_core::MicChannelMode::Auto;
-    // nullopt = default microphone endpoint.
     std::optional<std::string> selected_mic_device_id;
-
-    // Linear gain applied to the MIC source inside MixedAudioSrc.
     float mic_gain_linear = 1.0f;
 
     // Set for Window target. Null for Display or unresolved Window PID.
     std::optional<uint32_t> selected_window_pid;
+
+    // Convenience predicates.
+    [[nodiscard]] bool IsAppEnabled() const noexcept;
+    [[nodiscard]] bool IsSysEnabled() const noexcept;
+    [[nodiscard]] bool IsMicEnabled() const noexcept;
 };
 
 struct AudioPlanResult {
-    // Derived result: true if at least one audio track should be recorded.
     bool record_audio = false;
-
     recorder_core::AudioTrackPlan plan;
     std::optional<uint32_t> audio_target_process_id;
     recorder_core::MicChannelMode mic_channel_mode = recorder_core::MicChannelMode::Auto;
-    // nullopt = default microphone endpoint.
     std::optional<std::string> mic_device_id;
     float mic_gain_linear = 1.0f;
 };

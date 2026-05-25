@@ -1,19 +1,29 @@
 #include <capability/audio_track_preview.h>
 #include <capability/audio_ui_state.h>
 
-#include <utility>
+#include <algorithm>
 
 namespace exosnap::capability {
-namespace {
 
-void AddSingleSourceTrack(recorder_core::AudioTrackPlan& plan, recorder_core::AudioSourceKind kind) {
-    recorder_core::ResolvedAudioTrack track;
-    track.track_index = static_cast<uint32_t>(plan.tracks.size());
-    track.sources.push_back(kind);
-    plan.tracks.push_back(std::move(track));
+bool AudioUiState::IsAppEnabled() const noexcept {
+    return std::any_of(source_rows.begin(), source_rows.end(), [](const recorder_core::AudioSourceRow& r) {
+        return r.kind == recorder_core::AudioSourceKind::App && r.enabled;
+    });
 }
 
-} // namespace
+bool AudioUiState::IsSysEnabled() const noexcept {
+    return std::any_of(source_rows.begin(), source_rows.end(), [](const recorder_core::AudioSourceRow& r) {
+        return (r.kind == recorder_core::AudioSourceKind::Sys ||
+                r.kind == recorder_core::AudioSourceKind::SystemOutput) &&
+               r.enabled;
+    });
+}
+
+bool AudioUiState::IsMicEnabled() const noexcept {
+    return std::any_of(source_rows.begin(), source_rows.end(), [](const recorder_core::AudioSourceRow& r) {
+        return r.kind == recorder_core::AudioSourceKind::Mic && r.enabled;
+    });
+}
 
 AudioPlanResult BuildAudioPlan(const AudioUiState& state) {
     AudioPlanResult result;
@@ -21,70 +31,11 @@ AudioPlanResult BuildAudioPlan(const AudioUiState& state) {
     result.mic_device_id = state.selected_mic_device_id;
     result.mic_gain_linear = state.mic_gain_linear;
 
-    if (state.target_kind == CaptureTargetKind::Window) {
-        const bool app = state.record_application_audio;
-        const bool sys = state.record_system_audio;
-        const bool sep = state.separate_output_tracks;
-        const bool mic = state.record_microphone;
+    result.plan = recorder_core::ResolveAudioTracks(state.source_rows);
 
-        if (sep) {
-            // Separate tracks: each enabled source gets its own track.
-            if (app && sys) {
-                AddSingleSourceTrack(result.plan, recorder_core::AudioSourceKind::App);
-                AddSingleSourceTrack(result.plan, recorder_core::AudioSourceKind::Sys);
-                result.audio_target_process_id = state.selected_window_pid;
-            } else if (app) {
-                AddSingleSourceTrack(result.plan, recorder_core::AudioSourceKind::App);
-                result.audio_target_process_id = state.selected_window_pid;
-            } else if (sys) {
-                AddSingleSourceTrack(result.plan, recorder_core::AudioSourceKind::Sys);
-                result.audio_target_process_id = state.selected_window_pid;
-            }
-            if (mic) {
-                AddSingleSourceTrack(result.plan, recorder_core::AudioSourceKind::Mic);
-            }
-        } else {
-            // Merge-first: one track with all enabled sources; MIC always last.
-            recorder_core::ResolvedAudioTrack merged;
-            merged.track_index = 0;
-            if (app)
-                merged.sources.push_back(recorder_core::AudioSourceKind::App);
-            if (sys)
-                merged.sources.push_back(recorder_core::AudioSourceKind::Sys);
-            if (mic)
-                merged.sources.push_back(recorder_core::AudioSourceKind::Mic);
-
-            if (!merged.sources.empty()) {
-                result.plan.tracks.push_back(std::move(merged));
-            }
-            if (app || sys) {
-                result.audio_target_process_id = state.selected_window_pid;
-            }
-        }
-    } else {
-        // Display target: system output + optional microphone.
-        const bool sys = state.record_system_audio;
-        const bool mic = state.record_microphone;
-        const bool sep = state.separate_output_tracks;
-
-        if (sep) {
-            if (sys)
-                AddSingleSourceTrack(result.plan, recorder_core::AudioSourceKind::SystemOutput);
-            if (mic)
-                AddSingleSourceTrack(result.plan, recorder_core::AudioSourceKind::Mic);
-        } else {
-            if (sys && mic) {
-                recorder_core::ResolvedAudioTrack merged;
-                merged.track_index = 0;
-                merged.sources.push_back(recorder_core::AudioSourceKind::SystemOutput);
-                merged.sources.push_back(recorder_core::AudioSourceKind::Mic);
-                result.plan.tracks.push_back(std::move(merged));
-            } else if (sys) {
-                AddSingleSourceTrack(result.plan, recorder_core::AudioSourceKind::SystemOutput);
-            } else if (mic) {
-                AddSingleSourceTrack(result.plan, recorder_core::AudioSourceKind::Mic);
-            }
-        }
+    const bool app_active = state.IsAppEnabled();
+    if (app_active && state.target_kind == CaptureTargetKind::Window) {
+        result.audio_target_process_id = state.selected_window_pid;
     }
 
     result.record_audio = !result.plan.tracks.empty();
@@ -98,7 +49,7 @@ std::vector<AudioTrackPreview> BuildAudioTrackPreview(const AudioPlanResult& res
     }
 
     preview.reserve(result.plan.tracks.size());
-    for (size_t i = 0; i < result.plan.tracks.size(); ++i) {
+    for (std::size_t i = 0; i < result.plan.tracks.size(); ++i) {
         const auto& track = result.plan.tracks[i];
         if (track.sources.empty()) {
             continue;
@@ -108,7 +59,6 @@ std::vector<AudioTrackPreview> BuildAudioTrackPreview(const AudioPlanResult& res
         item.track_number = static_cast<uint32_t>(i + 1);
 
         if (track.sources.size() > 1) {
-            // Multi-source (merged) track: one preview row for the mix.
             item.source_key = "merged";
             item.display_label = "Mixed Audio";
         } else {

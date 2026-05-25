@@ -87,7 +87,8 @@ AudioSourceRow::AudioSourceRow(const Config& config, QWidget* parent) : QWidget(
     root->addWidget(makeSourceDivider(this), 0, Qt::AlignVCenter);
 
     if (config.has_merge_control) {
-        auto* merge_widget = new QWidget(this);
+        merge_container_ = new QWidget(this);
+        auto* merge_widget = merge_container_;
         auto* merge_layout = new QHBoxLayout(merge_widget);
         merge_layout->setContentsMargins(0, 0, 0, 0);
         merge_layout->setSpacing(6);
@@ -97,7 +98,7 @@ AudioSourceRow::AudioSourceRow(const Config& config, QWidget* parent) : QWidget(
 
         merge_layout->addWidget(merge_check_);
         merge_layout->addWidget(merge_label_);
-        root->addWidget(merge_widget, 0, Qt::AlignVCenter);
+        root->addWidget(merge_container_, 0, Qt::AlignVCenter);
         root->addWidget(makeSourceDivider(this), 0, Qt::AlignVCenter);
 
         connect(merge_check_, &ExoCheckBox::toggled, this, [this](bool checked) { emit mergeChanged(checked); });
@@ -141,6 +142,11 @@ bool AudioSourceRow::mergeChecked() const noexcept {
 
 bool AudioSourceRow::hasMergeControl() const noexcept {
     return merge_check_ != nullptr;
+}
+
+void AudioSourceRow::setMergeControlVisible(bool visible) {
+    if (merge_container_ != nullptr)
+        merge_container_->setVisible(visible);
 }
 
 void AudioSourceRow::applyActiveState(bool active) {

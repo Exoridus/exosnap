@@ -7,18 +7,25 @@
 namespace exosnap {
 namespace {
 
+// Helper: find a source row by kind.
+const recorder_core::AudioSourceRow* FindRow(const capability::AudioUiState& s, recorder_core::AudioSourceKind k) {
+    for (const auto& r : s.source_rows)
+        if (r.kind == k)
+            return &r;
+    return nullptr;
+}
+
 TEST(RecordViewModelAudioTest, RecordViewModel_DefaultAudioStateForWindowTarget) {
     RecordViewModel vm;
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
 
     EXPECT_EQ(vm.audio_ui_state.target_kind, capability::CaptureTargetKind::Window);
-    EXPECT_TRUE(vm.audio_ui_state.record_application_audio);
-    EXPECT_TRUE(vm.audio_ui_state.record_system_audio);
-    EXPECT_FALSE(vm.audio_ui_state.separate_output_tracks); // merge-first default
-    EXPECT_FALSE(vm.audio_ui_state.record_microphone);
+    EXPECT_TRUE(vm.audio_ui_state.IsAppEnabled());
+    EXPECT_TRUE(vm.audio_ui_state.IsSysEnabled());
+    EXPECT_FALSE(vm.audio_ui_state.IsMicEnabled());
 
-    // Merge-first: one merged track {App, Sys}
+    // Default: APP + SYS merged into one track.
     ASSERT_EQ(vm.audio_track_preview.size(), 1u);
     EXPECT_EQ(vm.audio_track_preview[0].source_key, "merged");
 }
@@ -34,45 +41,49 @@ TEST(RecordViewModelAudioTest, RecordViewModel_DefaultAudioStateForDisplayTarget
     vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
 
     EXPECT_EQ(vm.audio_ui_state.target_kind, capability::CaptureTargetKind::Display);
-    EXPECT_FALSE(vm.audio_ui_state.record_application_audio);
-    EXPECT_TRUE(vm.audio_ui_state.record_system_audio);
-    EXPECT_FALSE(vm.audio_ui_state.separate_output_tracks);
-    EXPECT_FALSE(vm.audio_ui_state.record_microphone);
+    EXPECT_FALSE(vm.audio_ui_state.IsAppEnabled());
+    EXPECT_TRUE(vm.audio_ui_state.IsSysEnabled());
+    EXPECT_FALSE(vm.audio_ui_state.IsMicEnabled());
 
     ASSERT_EQ(vm.audio_track_preview.size(), 1u);
     EXPECT_EQ(vm.audio_track_preview[0].source_key, "system_output");
 }
 
-TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKind_DisplayClearsAppState) {
+TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKind_DisplayResetsToDisplayDefaults) {
     RecordViewModel vm;
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
-    vm.audio_ui_state.record_application_audio = true;
-    vm.audio_ui_state.separate_output_tracks = true;
+    // Manually set all rows to separate (no merge).
+    for (auto& r : vm.audio_ui_state.source_rows)
+        r.merge_with_above = false;
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
 
-    EXPECT_FALSE(vm.audio_ui_state.record_application_audio);
-    EXPECT_FALSE(vm.audio_ui_state.separate_output_tracks);
-    EXPECT_TRUE(vm.audio_ui_state.record_system_audio);
+    EXPECT_FALSE(vm.audio_ui_state.IsAppEnabled());
+    EXPECT_TRUE(vm.audio_ui_state.IsSysEnabled());
+    EXPECT_FALSE(vm.audio_ui_state.IsMicEnabled());
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_TrackPreviewUpdatesOnOutputToggles) {
     RecordViewModel vm;
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
-    // Merge-first: 1 merged track {App, Sys}
+    // Default: merged {App, Sys}.
     ASSERT_EQ(vm.audio_track_preview.size(), 1u);
     EXPECT_EQ(vm.audio_track_preview[0].source_key, "merged");
 
-    // Disable sys: 1 track {App} -> single-source -> "app" key
-    vm.audio_ui_state.record_system_audio = false;
+    // Disable Sys.
+    for (auto& r : vm.audio_ui_state.source_rows)
+        if (r.kind == recorder_core::AudioSourceKind::Sys)
+            r.enabled = false;
     vm.RebuildAudioPlan();
     ASSERT_EQ(vm.audio_track_preview.size(), 1u);
     EXPECT_EQ(vm.audio_track_preview[0].source_key, "app");
 
-    // Disable app too: 0 tracks
-    vm.audio_ui_state.record_application_audio = false;
+    // Disable App too.
+    for (auto& r : vm.audio_ui_state.source_rows)
+        if (r.kind == recorder_core::AudioSourceKind::App)
+            r.enabled = false;
     vm.RebuildAudioPlan();
     EXPECT_TRUE(vm.audio_track_preview.empty());
 }
@@ -81,18 +92,22 @@ TEST(RecordViewModelAudioTest, RecordViewModel_TrackPreviewUpdatesOnMicToggle) {
     RecordViewModel vm;
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
-    // Merge-first: 1 merged track {App, Sys}
     ASSERT_EQ(vm.audio_track_preview.size(), 1u);
     EXPECT_EQ(vm.audio_track_preview[0].source_key, "merged");
 
-    // Enable mic: merged track becomes {App, Sys, Mic} -> still 1 merged preview row
-    vm.audio_ui_state.record_microphone = true;
+    // Enable Mic.
+    for (auto& r : vm.audio_ui_state.source_rows)
+        if (r.kind == recorder_core::AudioSourceKind::Mic)
+            r.enabled = true;
     vm.RebuildAudioPlan();
+    // Mic merges with above: still 1 merged track {App, Mic, Sys}.
     ASSERT_EQ(vm.audio_track_preview.size(), 1u);
     EXPECT_EQ(vm.audio_track_preview.back().source_key, "merged");
 
-    // Disable mic: back to {App, Sys} -> 1 merged preview row
-    vm.audio_ui_state.record_microphone = false;
+    // Disable Mic again.
+    for (auto& r : vm.audio_ui_state.source_rows)
+        if (r.kind == recorder_core::AudioSourceKind::Mic)
+            r.enabled = false;
     vm.RebuildAudioPlan();
     ASSERT_EQ(vm.audio_track_preview.size(), 1u);
     EXPECT_EQ(vm.audio_track_preview[0].source_key, "merged");
@@ -122,12 +137,14 @@ TEST(RecordViewModelAudioTest, RecordViewModel_RebuildAudioPlan_SetsActiveFlagsF
     RecordViewModel vm;
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
-    // Merge-first: merged track -> active flags derived from ui state
+    // Default: merged {App, Sys}.
     EXPECT_TRUE(vm.audio_active_app);
     EXPECT_TRUE(vm.audio_active_sys);
     EXPECT_FALSE(vm.audio_active_mic);
 
-    vm.audio_ui_state.record_microphone = true;
+    for (auto& r : vm.audio_ui_state.source_rows)
+        if (r.kind == recorder_core::AudioSourceKind::Mic)
+            r.enabled = true;
     vm.RebuildAudioPlan();
     EXPECT_TRUE(vm.audio_active_mic);
 }
@@ -136,8 +153,6 @@ TEST(RecordViewModelAudioTest, RecordViewModel_RebuildAudioPlan_MergedWindowActi
     RecordViewModel vm;
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
-    // Default: sep=false, app=true, sys=true -> merged track {App, Sys}
-    // Both app and sys meters are active via merged track.
     EXPECT_TRUE(vm.audio_active_sys);
     EXPECT_TRUE(vm.audio_active_app);
     EXPECT_FALSE(vm.audio_active_mic);
@@ -152,7 +167,6 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MapsPerTrackRmsToSour
     RecordViewModel vm;
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
-    // Merge-first: 1 merged track {App, Sys}. Single RMS value distributed to both meters.
 
     recorder_core::SessionStats stats;
     stats.per_track_rms[0] = 0.25f;
@@ -168,9 +182,10 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MapsMicRms) {
     RecordViewModel vm;
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
-    vm.audio_ui_state.record_microphone = true;
+    for (auto& r : vm.audio_ui_state.source_rows)
+        if (r.kind == recorder_core::AudioSourceKind::Mic)
+            r.enabled = true;
     vm.RebuildAudioPlan();
-    // Merge-first: 1 merged track {App, Sys, Mic}. RMS at index 0 goes to all active meters.
 
     recorder_core::SessionStats stats;
     stats.per_track_rms[0] = 0.75f;
@@ -186,7 +201,6 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MergedWindowRmsGoesTo
     RecordViewModel vm;
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
-    // Default: sep=false, app=true, sys=true -> merged {App, Sys}
 
     recorder_core::SessionStats stats;
     stats.per_track_rms[0] = 0.4f;
@@ -194,7 +208,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MergedWindowRmsGoesTo
     vm.UpdateStats(stats);
 
     EXPECT_FLOAT_EQ(vm.audio_rms_sys, 0.4f);
-    EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.4f); // both meters get the merged RMS
+    EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.4f);
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_IgnoresInvalidTrackNumbers) {
@@ -227,40 +241,43 @@ TEST(RecordViewModelAudioTest, RecordViewModel_TrackPreviewDisplayTarget_SystemO
     EXPECT_EQ(vm.audio_track_preview[0].display_label, "System Audio");
 }
 
-TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKindPreservingAudio_SameKindAndSwitchKeepUserState) {
+TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKindPreservingAudio_KeepsSourceRows) {
     RecordViewModel vm;
 
-    vm.audio_ui_state.record_application_audio = true;
-    vm.audio_ui_state.record_system_audio = false;
-    vm.audio_ui_state.separate_output_tracks = false;
-    vm.audio_ui_state.record_microphone = true;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+    // Disable Sys and enable Mic.
+    for (auto& r : vm.audio_ui_state.source_rows) {
+        if (r.kind == recorder_core::AudioSourceKind::Sys)
+            r.enabled = false;
+        if (r.kind == recorder_core::AudioSourceKind::Mic)
+            r.enabled = true;
+    }
     vm.audio_ui_state.mic_channel_mode = recorder_core::MicChannelMode::MonoMix;
+    const auto saved_rows = vm.audio_ui_state.source_rows;
 
     vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
 
     EXPECT_EQ(vm.audio_ui_state.target_kind, capability::CaptureTargetKind::Display);
-    EXPECT_TRUE(vm.audio_ui_state.record_application_audio);
-    EXPECT_FALSE(vm.audio_ui_state.record_system_audio);
-    EXPECT_FALSE(vm.audio_ui_state.separate_output_tracks);
-    EXPECT_TRUE(vm.audio_ui_state.record_microphone);
-    EXPECT_EQ(vm.audio_ui_state.mic_channel_mode, recorder_core::MicChannelMode::MonoMix);
-
-    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
-
-    EXPECT_EQ(vm.audio_ui_state.target_kind, capability::CaptureTargetKind::Window);
-    EXPECT_TRUE(vm.audio_ui_state.record_application_audio);
-    EXPECT_FALSE(vm.audio_ui_state.record_system_audio);
-    EXPECT_FALSE(vm.audio_ui_state.separate_output_tracks);
-    EXPECT_TRUE(vm.audio_ui_state.record_microphone);
+    ASSERT_EQ(vm.audio_ui_state.source_rows.size(), saved_rows.size());
+    for (std::size_t i = 0; i < saved_rows.size(); ++i) {
+        EXPECT_EQ(vm.audio_ui_state.source_rows[i].kind, saved_rows[i].kind);
+        EXPECT_EQ(vm.audio_ui_state.source_rows[i].enabled, saved_rows[i].enabled);
+        EXPECT_EQ(vm.audio_ui_state.source_rows[i].merge_with_above, saved_rows[i].merge_with_above);
+    }
     EXPECT_EQ(vm.audio_ui_state.mic_channel_mode, recorder_core::MicChannelMode::MonoMix);
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKindPreservingAudio_WindowModeKeepsAppAvailability) {
     RecordViewModel vm;
 
-    vm.audio_ui_state.record_application_audio = true;
-    vm.audio_ui_state.record_system_audio = true;
-    vm.audio_ui_state.separate_output_tracks = true;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+    // Set all rows to separate (no merging).
+    for (auto& r : vm.audio_ui_state.source_rows)
+        r.merge_with_above = false;
+    for (auto& r : vm.audio_ui_state.source_rows) {
+        if (r.kind == recorder_core::AudioSourceKind::App || r.kind == recorder_core::AudioSourceKind::Sys)
+            r.enabled = true;
+    }
 
     vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
 
