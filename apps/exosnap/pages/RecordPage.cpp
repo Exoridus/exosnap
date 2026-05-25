@@ -50,6 +50,10 @@
 namespace exosnap {
 namespace {
 
+// UI-R1D prep: keep local Record page transport controls visible by default.
+// This allows a safe future flip to de-emphasize/hide them once global bar ownership is finalized.
+constexpr bool kShowLocalRecordTransportControls = true;
+
 QFrame* makePanel(QWidget* parent, const char* role = "panel") {
     auto* panel = new QFrame(parent);
     panel->setProperty("panelRole", role);
@@ -1890,6 +1894,7 @@ void RecordPage::refresh() {
     const bool recording =
         (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
          view_model_.state == UiRecordingState::Stopping);
+    const bool show_local_transport = kShowLocalRecordTransportControls;
 
     capability_label_->setText(capability_text);
     capability_label_->setVisible((blocked || checking) && !capability_text.isEmpty());
@@ -1897,13 +1902,13 @@ void RecordPage::refresh() {
         setStyledStringProperty(capability_label_, "panelRole", blocked ? "blocker" : "note");
     }
 
-    start_btn_->setVisible(!recording);
-    pause_btn_->setVisible(view_model_.CanPause() || view_model_.CanResume());
+    start_btn_->setVisible(show_local_transport && !recording);
+    pause_btn_->setVisible(show_local_transport && (view_model_.CanPause() || view_model_.CanResume()));
     pause_btn_->setText(view_model_.CanResume() ? QStringLiteral("▶  RESUME") : QStringLiteral("⏸  PAUSE"));
-    stop_btn_->setVisible(recording);
-    start_btn_->setEnabled(view_model_.CanStart());
-    pause_btn_->setEnabled(view_model_.CanPause() || view_model_.CanResume());
-    stop_btn_->setEnabled(view_model_.CanStop());
+    stop_btn_->setVisible(show_local_transport && recording);
+    start_btn_->setEnabled(show_local_transport && view_model_.CanStart());
+    pause_btn_->setEnabled(show_local_transport && (view_model_.CanPause() || view_model_.CanResume()));
+    stop_btn_->setEnabled(show_local_transport && view_model_.CanStop());
 
     const QString status_text = stateDisplay(view_model_.state);
     control_state_label_->setText(status_text);
