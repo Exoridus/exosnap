@@ -51,14 +51,11 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
     layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
 
     // clang-format off
-    const struct { const char* action; QKeySequence binding; } kActions[7] = {
-        {"Start/Stop Recording",     QKeySequence("Alt+F9")},
-        {"Pause/Resume Recording",   QKeySequence()},
-        {"Split Active Recording",   QKeySequence()},
-        {"Mute/Unmute Microphone",   QKeySequence()},
-        {"Mute/Unmute App Audio",    QKeySequence()},
-        {"Mute/Unmute System Audio", QKeySequence()},
-        {"Add Marker",               QKeySequence()},
+    const struct { const char* action; QKeySequence binding; } kActions[4] = {
+        {"Start/Stop Recording",   QKeySequence("Alt+F9")},
+        {"Pause/Resume Recording", QKeySequence()},
+        {"Split Active Recording", QKeySequence()},
+        {"Mute/Unmute Microphone", QKeySequence()},
     };
     // clang-format on
 
@@ -71,7 +68,7 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
     commands_layout->addWidget(
         makeSubLabel("Global commands are staged here and applied through a later integration pass.", commands_panel));
 
-    for (int i = 0; i < 7; ++i)
+    for (int i = 0; i < 4; ++i)
         buildRow(i, kActions[i].action, kActions[i].binding, commands_layout, commands_panel);
 
     layout->addWidget(commands_panel);
@@ -105,6 +102,18 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->addWidget(scroll);
+}
+
+void HotkeysPage::setBindings(const std::array<QKeySequence, 4>& bindings) {
+    for (int i = 0; i < 4; ++i) {
+        rows_[i].current_binding = bindings[static_cast<std::size_t>(i)];
+        if (rows_[i].binding_label) {
+            rows_[i].binding_label->setText(bindingText(rows_[i].current_binding));
+        }
+        if (rows_[i].unset_btn) {
+            rows_[i].unset_btn->setEnabled(!rows_[i].current_binding.isEmpty());
+        }
+    }
 }
 
 void HotkeysPage::buildRow(int index, const QString& action, const QKeySequence& default_binding,
@@ -200,6 +209,7 @@ void HotkeysPage::commitCapture(int index, const QKeySequence& seq) {
     row.current_binding = seq;
     row.binding_label->setText(bindingText(seq));
     row.unset_btn->setEnabled(!seq.isEmpty());
+    emit bindingChanged(index, seq);
 
     if (capturing_row_ == index) {
         row.capture_container->hide();

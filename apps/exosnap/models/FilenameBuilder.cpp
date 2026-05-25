@@ -1,5 +1,8 @@
 #include "FilenameBuilder.h"
 
+#include "OutputPathPolicy.h"
+#include "RecordingProfile.h"
+
 #include <algorithm>
 #include <array>
 #include <cwctype>
@@ -145,7 +148,8 @@ std::wstring SanitizeTokenValue(const std::wstring& value) {
 }
 
 std::wstring ResolveKnownToken(const std::wstring& token_name, const std::tm& tm_local, std::time_t timestamp,
-                               const FilenameTargetContext& context, bool* recognized) {
+                               capability::Container container, const FilenameTargetContext& context,
+                               bool* recognized) {
     *recognized = true;
 
     if (token_name == L"date") {
@@ -192,6 +196,18 @@ std::wstring ResolveKnownToken(const std::wstring& token_name, const std::tm& tm
     }
     if (token_name == L"target") {
         return context.target_name;
+    }
+    if (token_name == L"profile") {
+        return context.profile_name;
+    }
+    if (token_name == L"container") {
+        return ContainerToken(container);
+    }
+    if (token_name == L"video") {
+        return CodecToken(context.video_codec);
+    }
+    if (token_name == L"audio") {
+        return CodecToken(context.audio_codec);
     }
 
     *recognized = false;
@@ -257,7 +273,7 @@ std::wstring CollapseMissingTokenSeparators(const std::wstring& value) {
 }
 
 std::wstring RenderPatternSegment(const std::wstring& segment, const std::tm& tm_local, std::time_t timestamp,
-                                  const FilenameTargetContext& context) {
+                                  capability::Container container, const FilenameTargetContext& context) {
     std::wstring rendered;
     rendered.reserve(segment.size() + 32);
 
@@ -278,7 +294,8 @@ std::wstring RenderPatternSegment(const std::wstring& segment, const std::tm& tm
 
         const std::wstring token_name = segment.substr(i + 1, closing - i - 1);
         bool recognized = false;
-        const std::wstring token_value = ResolveKnownToken(token_name, tm_local, timestamp, context, &recognized);
+        const std::wstring token_value =
+            ResolveKnownToken(token_name, tm_local, timestamp, container, context, &recognized);
         if (!recognized) {
             rendered.append(segment, i, closing - i + 1);
             i = closing + 1;
@@ -310,12 +327,18 @@ std::wstring RenderPatternSegment(const std::wstring& segment, const std::tm& tm
 }
 
 std::vector<std::wstring> BuildRelativeSegments(const std::wstring& pattern, const std::tm& tm_local,
-                                                std::time_t timestamp, const FilenameTargetContext& context) {
+                                                std::time_t timestamp, capability::Container container,
+                                                const FilenameTargetContext& context) {
+    const auto normalized_pattern = NormalizeFilenamePatternInput(pattern);
+    const std::wstring effective_pattern = (normalized_pattern.result == FilenamePatternPolicyResult::Ok)
+                                               ? normalized_pattern.normalized_pattern
+                                               : L"recording_{datetime}";
+
     std::vector<std::wstring> segments;
     std::wstring raw_segment;
 
     const auto flush_segment = [&]() {
-        std::wstring rendered = RenderPatternSegment(raw_segment, tm_local, timestamp, context);
+        std::wstring rendered = RenderPatternSegment(raw_segment, tm_local, timestamp, container, context);
         raw_segment.clear();
         if (rendered.empty()) {
             return;
@@ -326,7 +349,7 @@ std::vector<std::wstring> BuildRelativeSegments(const std::wstring& pattern, con
         segments.push_back(std::move(rendered));
     };
 
-    for (const wchar_t c : pattern) {
+    for (const wchar_t c : effective_pattern) {
         if (IsPatternPathSeparator(c)) {
             flush_segment();
             continue;
@@ -347,7 +370,7 @@ std::filesystem::path BuildRelativePath(const std::wstring& pattern, capability:
                                         std::time_t timestamp, const FilenameTargetContext& context) {
     std::tm tm_local{};
     localtime_s(&tm_local, &timestamp);
-    std::vector<std::wstring> segments = BuildRelativeSegments(pattern, tm_local, timestamp, context);
+    std::vector<std::wstring> segments = BuildRelativeSegments(pattern, tm_local, timestamp, container, context);
 
     if (segments.empty()) {
         segments.push_back(BuildFallbackBaseName(timestamp));

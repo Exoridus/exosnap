@@ -9,6 +9,7 @@
 #include <recorder_core/recorder_session.h>
 
 #include "models/FilenameBuilder.h"
+#include "models/OutputPathPolicy.h"
 #include "models/OutputPathValidator.h"
 #include "models/OutputSettingsModel.h"
 
@@ -345,6 +346,7 @@ TEST(OutputSettingsTest, EmptyPath) {
 TEST(OutputSettingsTest, Defaults_FolderNotEmpty) {
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
     EXPECT_FALSE(defaults.output_folder.empty());
+    EXPECT_TRUE(defaults.output_folder.is_absolute());
 }
 
 TEST(OutputSettingsTest, Defaults_ContainerIsMatroska) {
@@ -355,6 +357,11 @@ TEST(OutputSettingsTest, Defaults_ContainerIsMatroska) {
 TEST(OutputSettingsTest, Defaults_AudioCodecIsAac) {
     const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
     EXPECT_EQ(defaults.audio_codec, capability::AudioCodec::AacMf);
+}
+
+TEST(OutputSettingsTest, Defaults_VideoCodecIsH264) {
+    const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
+    EXPECT_EQ(defaults.video_codec, capability::VideoCodec::H264Nvenc);
 }
 
 TEST(OutputSettingsTest, Mp4Profile_ExtensionIsMp4) {
@@ -407,6 +414,105 @@ TEST(OutputSettingsTest, ApplyOutputAudioCodec_UsesAacWhenSelected) {
 
     ApplyOutputSettingsToRecorderConfig(config, settings);
     EXPECT_EQ(config.audio_codec, recorder_core::AudioCodec::AacMf);
+}
+
+TEST(OutputSettingsTest, OutputFolderPolicy_HomeAliasResolvesToAbsolutePath) {
+    const auto normalized = NormalizeOutputFolderInput(L"~/Videos/ExoSnap");
+    EXPECT_EQ(normalized.result, OutputFolderPolicyResult::Ok);
+    EXPECT_TRUE(normalized.resolved_path.is_absolute());
+}
+
+TEST(OutputSettingsTest, OutputFolderPolicy_UserProfileEnvResolvesToAbsolutePath) {
+    const auto normalized = NormalizeOutputFolderInput(L"%USERPROFILE%\\Videos\\ExoSnap");
+    EXPECT_EQ(normalized.result, OutputFolderPolicyResult::Ok);
+    EXPECT_TRUE(normalized.resolved_path.is_absolute());
+}
+
+TEST(OutputSettingsTest, OutputFolderPolicy_UnknownEnvironmentVariableRejected) {
+    const auto normalized = NormalizeOutputFolderInput(L"%UNKNOWN%\\Captures");
+    EXPECT_EQ(normalized.result, OutputFolderPolicyResult::UnsupportedEnvironmentVariable);
+}
+
+TEST(OutputSettingsTest, OutputFolderPolicy_TrailingSlashesAreStrippedForNonRoot) {
+    const auto normalized = NormalizeOutputFolderInput(L"C:\\Recordings\\\\");
+    EXPECT_EQ(normalized.result, OutputFolderPolicyResult::Ok);
+    EXPECT_EQ(normalized.normalized_input, L"C:\\Recordings");
+}
+
+TEST(OutputSettingsTest, OutputFolderPolicy_RootPathPreserved) {
+    const auto normalized = NormalizeOutputFolderInput(L"C:\\");
+    EXPECT_EQ(normalized.result, OutputFolderPolicyResult::Ok);
+    EXPECT_EQ(normalized.normalized_input, L"C:\\");
+}
+
+TEST(OutputSettingsTest, FilenamePatternPolicy_StripsLeadingPrefixes) {
+    const auto normalized_a = NormalizeFilenamePatternInput(L"/{app}/{datetime}");
+    const auto normalized_b = NormalizeFilenamePatternInput(L"\\{app}\\{datetime}");
+    const auto normalized_c = NormalizeFilenamePatternInput(L"./{app}/{datetime}");
+    const auto normalized_d = NormalizeFilenamePatternInput(L".\\{app}\\{datetime}");
+    EXPECT_EQ(normalized_a.result, FilenamePatternPolicyResult::Ok);
+    EXPECT_EQ(normalized_b.result, FilenamePatternPolicyResult::Ok);
+    EXPECT_EQ(normalized_c.result, FilenamePatternPolicyResult::Ok);
+    EXPECT_EQ(normalized_d.result, FilenamePatternPolicyResult::Ok);
+    EXPECT_EQ(normalized_a.normalized_pattern, L"{app}/{datetime}");
+    EXPECT_EQ(normalized_b.normalized_pattern, L"{app}/{datetime}");
+    EXPECT_EQ(normalized_c.normalized_pattern, L"{app}/{datetime}");
+    EXPECT_EQ(normalized_d.normalized_pattern, L"{app}/{datetime}");
+}
+
+TEST(OutputSettingsTest, FilenamePatternPolicy_AllowsSubfolders) {
+    const auto normalized = NormalizeFilenamePatternInput(L"{profile}/{app}/{datetime}");
+    EXPECT_EQ(normalized.result, FilenamePatternPolicyResult::Ok);
+    EXPECT_EQ(normalized.normalized_pattern, L"{profile}/{app}/{datetime}");
+}
+
+TEST(OutputSettingsTest, FilenamePatternPolicy_RejectsParentTraversal) {
+    const auto normalized = NormalizeFilenamePatternInput(L"{app}/../{datetime}");
+    EXPECT_EQ(normalized.result, FilenamePatternPolicyResult::ParentTraversalSegment);
+}
+
+TEST(OutputSettingsTest, FilenamePatternPolicy_RejectsAbsoluteDrivePath) {
+    const auto normalized = NormalizeFilenamePatternInput(L"C:\\captures\\{datetime}");
+    EXPECT_EQ(normalized.result, FilenamePatternPolicyResult::AbsolutePath);
+}
+
+TEST(OutputSettingsTest, FilenamePatternPolicy_RejectsEnvironmentVariables) {
+    const auto normalized = NormalizeFilenamePatternInput(L"%USERPROFILE%/{datetime}");
+    EXPECT_EQ(normalized.result, FilenamePatternPolicyResult::UnsupportedEnvironmentVariable);
+}
+
+TEST(OutputSettingsTest, FilenamePatternPolicy_RejectsHomeAlias) {
+    const auto normalized = NormalizeFilenamePatternInput(L"~/captures/{datetime}");
+    EXPECT_EQ(normalized.result, FilenamePatternPolicyResult::UnsupportedHomeAlias);
+}
+
+TEST(OutputSettingsTest, FilenameTokens_ProfileContainerVideoAudioRender) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    FilenameTargetContext context = WindowContext();
+    context.profile_name = L"MKV H264 AAC";
+    context.video_codec = capability::VideoCodec::H264Nvenc;
+    context.audio_codec = capability::AudioCodec::AacMf;
+    const auto filename =
+        BuildFilename(L"{profile}_{container}_{video}_{audio}", capability::Container::Matroska, ts, context);
+    EXPECT_EQ(filename, L"MKV H264 AAC_mkv_h264_aac.mkv");
+}
+
+TEST(OutputSettingsTest, PasteSplit_TokenPathAutoSplits) {
+    const auto decision = AnalyzeOutputPasteInput(L"D:\\Captures\\{app}\\{datetime}");
+    EXPECT_EQ(decision.kind, OutputPasteSplitKind::AutoSplitTokenPath);
+    EXPECT_EQ(decision.folder_input, L"D:/Captures");
+    EXPECT_EQ(decision.pattern_input, L"{app}/{datetime}");
+}
+
+TEST(OutputSettingsTest, PasteSplit_FullFilePathIsSplitOffer) {
+    const auto decision = AnalyzeOutputPasteInput(L"D:\\Captures\\recording.mp4");
+    EXPECT_EQ(decision.kind, OutputPasteSplitKind::OfferSplitFullFilePath);
+}
+
+TEST(OutputSettingsTest, PasteSplit_AbsolutePathWithoutTokenOrExtensionIsFolder) {
+    const auto decision = AnalyzeOutputPasteInput(L"D:\\Captures\\Sessions");
+    EXPECT_EQ(decision.kind, OutputPasteSplitKind::TreatAsFolder);
+    EXPECT_EQ(decision.folder_input, L"D:\\Captures\\Sessions");
 }
 
 } // namespace

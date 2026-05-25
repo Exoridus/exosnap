@@ -218,9 +218,6 @@ VideoPage::VideoPage(const VideoSettingsModel& initial_settings, QWidget* parent
     for (auto* card : codec_cards_)
         connect(card, &ui::widgets::CodecCard::clicked, this, [this, card]() { selectCodecCard(card); });
 
-    connect(quality_group_, &QButtonGroup::idClicked, this, &VideoPage::onQualityChanged);
-    connect(cfr_vfr_group_, &QButtonGroup::idClicked, this, &VideoPage::onCfrVfrChanged);
-
     auto* quality_header = new ui::widgets::SectionRuleHeader("QUALITY", left_content);
     left_layout->addWidget(quality_header);
 
@@ -278,8 +275,7 @@ VideoPage::VideoPage(const VideoSettingsModel& initial_settings, QWidget* parent
     cursor_layout->setContentsMargins(14, 10, 14, 10);
     cursor_layout->setSpacing(8);
     cursor_check_ = new ui::widgets::ExoCheckBox("Capture mouse cursor", cursor_panel);
-    cursor_check_->setChecked(true);
-    cursor_check_->setEnabled(false);
+    cursor_check_->setChecked(initial_settings.capture_cursor);
     cursor_layout->addWidget(cursor_check_);
     cursor_layout->addStretch(1);
     left_layout->addWidget(cursor_panel);
@@ -323,7 +319,7 @@ VideoPage::VideoPage(const VideoSettingsModel& initial_settings, QWidget* parent
     addKvRow(kv_layout, output_panel, 5, "RESOLUTION", "2560×1440", "videoKvValue");
     addKvRow(kv_layout, output_panel, 6, "GOP", "60", "videoKvValue");
     addKvRow(kv_layout, output_panel, 7, "B-FRAMES", "0", "videoKvValue");
-    addKvRow(kv_layout, output_panel, 8, "CURSOR", "Captured", "videoKvValue");
+    rail_cursor_label_ = addKvRow(kv_layout, output_panel, 8, "CURSOR", "Captured", "videoKvValue");
     output_layout->addLayout(kv_layout);
 
     output_layout->addWidget(makeDivider(output_panel));
@@ -366,10 +362,72 @@ VideoPage::VideoPage(const VideoSettingsModel& initial_settings, QWidget* parent
     rail_layout->addStretch(1);
     page_layout->addWidget(rail_widget_, 0);
 
+    connect(quality_group_, &QButtonGroup::idClicked, this, &VideoPage::onQualityChanged);
+    connect(cfr_vfr_group_, &QButtonGroup::idClicked, this, &VideoPage::onCfrVfrChanged);
+    connect(cursor_check_, &QAbstractButton::toggled, this, &VideoPage::onCursorToggled);
+
     // Sync rail with initial selection (labels now exist).
     {
         QSignalBlocker blocker(this);
         onQualityChanged(quality_group_->checkedId());
+    }
+}
+
+void VideoPage::setVideoSettings(const VideoSettingsModel& settings) {
+    if (!quality_group_ || !cfr_vfr_group_ || !cursor_check_) {
+        return;
+    }
+
+    const int quality_id = (settings.quality == recorder_core::NvencQualityPreset::High)    ? 0
+                           : (settings.quality == recorder_core::NvencQualityPreset::Small) ? 2
+                                                                                            : 1;
+
+    {
+        QSignalBlocker quality_blocker(quality_group_);
+        if (auto* quality_btn = quality_group_->button(quality_id)) {
+            quality_btn->setChecked(true);
+        }
+    }
+    {
+        QSignalBlocker frame_mode_blocker(cfr_vfr_group_);
+        if (auto* frame_mode_btn = cfr_vfr_group_->button(settings.cfr ? 0 : 1)) {
+            frame_mode_btn->setChecked(true);
+        }
+    }
+    {
+        QSignalBlocker cursor_blocker(cursor_check_);
+        cursor_check_->setChecked(settings.capture_cursor);
+    }
+
+    if (fps_note_label_) {
+        fps_note_label_->setText(settings.cfr ? "Duplicate frames to maintain constant 60 fps output."
+                                              : "Pass source timestamps through — file size follows source framerate.");
+    }
+    if (rail_cursor_label_) {
+        rail_cursor_label_->setText(settings.capture_cursor ? "Captured" : "Hidden");
+    }
+
+    if (quality_id == 0) {
+        if (rail_cq_label_)
+            rail_cq_label_->setText("19");
+        if (rail_bitrate_label_)
+            rail_bitrate_label_->setText("~62 Mb/s");
+        if (rail_size_label_)
+            rail_size_label_->setText("~27.9 GB");
+    } else if (quality_id == 2) {
+        if (rail_cq_label_)
+            rail_cq_label_->setText("30");
+        if (rail_bitrate_label_)
+            rail_bitrate_label_->setText("~18 Mb/s");
+        if (rail_size_label_)
+            rail_size_label_->setText("~8.1 GB");
+    } else {
+        if (rail_cq_label_)
+            rail_cq_label_->setText("24");
+        if (rail_bitrate_label_)
+            rail_bitrate_label_->setText("~38 Mb/s");
+        if (rail_size_label_)
+            rail_size_label_->setText("~17.1 GB");
     }
 }
 
@@ -406,6 +464,7 @@ void VideoPage::onQualityChanged(int id) {
     VideoSettingsModel m;
     m.quality = preset;
     m.cfr = (cfr_vfr_group_ == nullptr || cfr_vfr_group_->checkedId() == 0);
+    m.capture_cursor = (cursor_check_ == nullptr || cursor_check_->isChecked());
     emit videoSettingsChanged(m);
 }
 
@@ -432,6 +491,27 @@ void VideoPage::onCfrVfrChanged(int id) {
     VideoSettingsModel m;
     m.quality = preset;
     m.cfr = (id == 0);
+    m.capture_cursor = (cursor_check_ == nullptr || cursor_check_->isChecked());
+    emit videoSettingsChanged(m);
+}
+
+void VideoPage::onCursorToggled(bool checked) {
+    if (rail_cursor_label_)
+        rail_cursor_label_->setText(checked ? "Captured" : "Hidden");
+
+    recorder_core::NvencQualityPreset preset = recorder_core::NvencQualityPreset::Balanced;
+    if (quality_group_) {
+        const int qid = quality_group_->checkedId();
+        if (qid == 0)
+            preset = recorder_core::NvencQualityPreset::High;
+        else if (qid == 2)
+            preset = recorder_core::NvencQualityPreset::Small;
+    }
+
+    VideoSettingsModel m;
+    m.quality = preset;
+    m.cfr = (cfr_vfr_group_ == nullptr || cfr_vfr_group_->checkedId() == 0);
+    m.capture_cursor = checked;
     emit videoSettingsChanged(m);
 }
 

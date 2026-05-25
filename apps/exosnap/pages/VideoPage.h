@@ -19,6 +19,7 @@ class VideoPage : public QWidget {
     Q_OBJECT
   public:
     explicit VideoPage(const VideoSettingsModel& initial_settings, QWidget* parent = nullptr);
+    void setVideoSettings(const VideoSettingsModel& settings);
 
   signals:
     void videoSettingsChanged(VideoSettingsModel settings);
@@ -27,6 +28,7 @@ class VideoPage : public QWidget {
     void selectCodecCard(ui::widgets::CodecCard* selected_card);
     void onQualityChanged(int id);
     void onCfrVfrChanged(int id);
+    void onCursorToggled(bool checked);
 
     QButtonGroup* quality_group_ = nullptr;
     QButtonGroup* resolution_group_ = nullptr;
@@ -39,6 +41,7 @@ class VideoPage : public QWidget {
     QLabel* rail_cq_label_ = nullptr;
     QLabel* rail_bitrate_label_ = nullptr;
     QLabel* rail_size_label_ = nullptr;
+    QLabel* rail_cursor_label_ = nullptr;
 };
 
 } // namespace exosnap

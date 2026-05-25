@@ -14,6 +14,10 @@ class HotkeysPage : public QWidget {
     Q_OBJECT
   public:
     explicit HotkeysPage(QWidget* parent = nullptr);
+    void setBindings(const std::array<QKeySequence, 4>& bindings);
+
+  signals:
+    void bindingChanged(int action_index, QKeySequence seq);
 
   private:
     void buildRow(int index, const QString& action, const QKeySequence& default_binding, QVBoxLayout* parent_layout,
