@@ -7,6 +7,7 @@
 #include "../models/VideoSettingsModel.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
+#include "../ui/widgets/ComboBoxWheelFilter.h"
 
 #include <capability/audio_ui_state.h>
 #include <capability/user_config.h>
@@ -638,7 +639,10 @@ void DiagnosticsPage::buildLogsTab(QWidget* container) {
     log_level_combo_->addItem(QStringLiteral("Trace"));
     log_level_combo_->setCurrentIndex(kLogLevelBasic);
     log_level_combo_->setMinimumWidth(200);
+    log_level_combo_->setMaximumWidth(280);
     level_layout->addWidget(log_level_combo_);
+    auto* combo_wheel_filter = new ui::widgets::ComboBoxWheelFilter(level_panel);
+    combo_wheel_filter->installOn(log_level_combo_);
     layout->addWidget(level_panel);
 
     // Rotation settings

@@ -11,6 +11,8 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QRadioButton;
+class QAction;
+class QToolButton;
 
 namespace exosnap {
 
@@ -61,6 +63,7 @@ class OutputPage : public QWidget {
     void onExportSelectedProfile();
     void onExportAllUserProfiles();
     void onResetAllSettingsAndProfiles();
+    void onDeleteActiveProfile();
     void applySettingsToUi();
     void emitCurrentSettings();
     void reconcileContainerCodecRules();
@@ -80,20 +83,22 @@ class OutputPage : public QWidget {
     QString active_profile_name_;
     bool active_profile_is_built_in_ = true;
     bool active_profile_is_modified_ = false;
+    bool active_profile_is_available_ = true;
     std::vector<ProfileOption> profile_options_;
     QComboBox* profile_combo_ = nullptr;
     QLabel* profile_status_label_ = nullptr;
-    QPushButton* new_from_current_btn_ = nullptr;
-    QPushButton* new_from_safe_default_btn_ = nullptr;
-    QPushButton* duplicate_profile_btn_ = nullptr;
-    QPushButton* rename_profile_btn_ = nullptr;
-    QPushButton* delete_profile_btn_ = nullptr;
     QPushButton* reset_profile_btn_ = nullptr;
     QPushButton* save_as_new_btn_ = nullptr;
-    QPushButton* import_profiles_btn_ = nullptr;
-    QPushButton* export_selected_btn_ = nullptr;
-    QPushButton* export_all_users_btn_ = nullptr;
-    QPushButton* reset_all_btn_ = nullptr;
+    QToolButton* profile_overflow_btn_ = nullptr;
+    QAction* new_from_current_action_ = nullptr;
+    QAction* new_from_safe_default_action_ = nullptr;
+    QAction* duplicate_profile_action_ = nullptr;
+    QAction* rename_profile_action_ = nullptr;
+    QAction* delete_profile_action_ = nullptr;
+    QAction* import_profiles_action_ = nullptr;
+    QAction* export_selected_action_ = nullptr;
+    QAction* export_all_users_action_ = nullptr;
+    QAction* reset_all_action_ = nullptr;
     QButtonGroup* container_group_ = nullptr;
     QRadioButton* mkv_radio_ = nullptr;
     QRadioButton* webm_radio_ = nullptr;

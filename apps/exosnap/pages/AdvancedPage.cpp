@@ -1,5 +1,6 @@
 #include "AdvancedPage.h"
 
+#include "../ui/widgets/ComboBoxWheelFilter.h"
 #include "../ui/widgets/ExoCheckBox.h"
 
 #include <QComboBox>
@@ -93,6 +94,7 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
     controls_layout->addWidget(makeSectionLabel("Developer Logging Level", controls_panel));
     log_level_combo_ = new QComboBox(controls_panel);
     log_level_combo_->setMinimumWidth(200);
+    log_level_combo_->setMaximumWidth(280);
     log_level_combo_->addItems({"Off", "Error", "Warning", "Info", "Debug", "Trace"});
     log_level_combo_->setCurrentIndex(3); // Info default
     controls_layout->addWidget(log_level_combo_);
@@ -114,6 +116,9 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->addWidget(scroll);
+
+    auto* combo_wheel_filter = new ui::widgets::ComboBoxWheelFilter(this);
+    combo_wheel_filter->installOn(log_level_combo_);
 
     connect(reset_btn, &QPushButton::clicked, this, &AdvancedPage::onReset);
 }

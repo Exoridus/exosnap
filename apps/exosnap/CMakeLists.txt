@@ -44,6 +44,8 @@ qt_add_executable(exosnap WIN32
     ui/widgets/ExoToggle.cpp
     ui/widgets/ExoCheckBox.h
     ui/widgets/ExoCheckBox.cpp
+    ui/widgets/ComboBoxWheelFilter.h
+    ui/widgets/ComboBoxWheelFilter.cpp
     ui/widgets/RegionSelectionOverlay.h
     ui/widgets/RegionSelectionOverlay.cpp
     ui/widgets/AudioSourceRow.h

@@ -19,6 +19,7 @@ class QComboBox;
 class QFrame;
 class QLabel;
 class QPushButton;
+class QResizeEvent;
 class QSlider;
 class QVBoxLayout;
 
@@ -81,6 +82,7 @@ class RecordPage : public QWidget {
     };
 
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
     void initCoordinator();
     void refresh();
     void updateStatsDisplay();
@@ -114,6 +116,7 @@ class RecordPage : public QWidget {
     void emitChromeState();
     void syncCoordinatorTargetContext();
     void startPreviewIfIdle();
+    void updatePreviewHeightClamp();
     QString buildChromeStatusLabel() const;
     QString buildPreviewBottomLeftText(bool recording) const;
     QString buildPreviewBottomRightText(bool recording) const;

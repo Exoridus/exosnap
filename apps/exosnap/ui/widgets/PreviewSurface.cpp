@@ -679,7 +679,7 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
     bg_grad.setColorAt(0.0, QColor("#181612"));
     bg_grad.setColorAt(1.0, QColor("#0e0d0b"));
     painter.setBrush(bg_grad);
-    painter.setPen(QPen(QColor("#3a342c"), 1.0));
+    painter.setPen(QPen(QColor("#353330"), 1.0));
     painter.drawRoundedRect(frame_rect, 5.0, 5.0);
 
     if (!current_frame_.isNull()) {
@@ -710,7 +710,7 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
     if (recording_) {
         painter.save();
         painter.setClipRect(rect().adjusted(1, 1, -1, -1));
-        painter.setPen(QPen(QColor(241, 180, 0, 10), 1.0));
+        painter.setPen(QPen(QColor(215, 167, 68, 10), 1.0));
         for (int y = 0; y < height(); y += 4)
             painter.drawLine(1, y, width() - 1, y);
         painter.restore();
@@ -751,11 +751,11 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
 
         // Overlay border + resize handles
         painter.save();
-        painter.setPen(QPen(QColor("#f1b400"), 1.5, Qt::DashLine));
+        painter.setPen(QPen(QColor("#d7a744"), 1.5, Qt::DashLine));
         painter.setBrush(Qt::NoBrush);
         painter.drawRect(cam_rect);
         painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor("#f1b400"));
+        painter.setBrush(QColor("#d7a744"));
         constexpr double hs = 6.0;
         for (const QPointF& corner :
              {cam_rect.topLeft(), cam_rect.topRight(), cam_rect.bottomLeft(), cam_rect.bottomRight()}) {
@@ -764,7 +764,8 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
         painter.restore();
     }
 
-    painter.setPen(QPen(QColor("#f1b400"), 2.0));
+    const QColor corner_color = recording_ ? QColor("#d7a744") : QColor("#45423d");
+    painter.setPen(QPen(corner_color, recording_ ? 1.8 : 1.2));
     const int inset = 15;
     const int len = 20;
     painter.drawLine(inset, inset, inset + len, inset);

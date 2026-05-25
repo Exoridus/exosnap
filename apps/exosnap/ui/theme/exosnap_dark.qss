@@ -389,7 +389,7 @@ QLabel[labelRole="captureCardStatus"] {
 QWidget#captureTargetCard[selected="true"] QLabel[labelRole="captureCardStatus"] {
     color: ${accent};
     border-color: ${accent};
-    background: rgba(241, 180, 0, 0.12);
+    background: rgba(215, 167, 68, 0.10);
 }
 
 QLabel[labelRole="captureCardSubtitle"] {
@@ -491,7 +491,7 @@ QLabel[labelRole="videoKvValue"] {
 QLabel[labelRole="videoKvValueAccent"] {
     font-family: ${font-mono};
     font-size: 11px;
-    color: ${accent};
+    color: ${text1};
     font-weight: 500;
 }
 
@@ -524,10 +524,10 @@ QLabel[labelRole="audioSourceTag"] {
     font-size: 13px;
     letter-spacing: 0.2em;
     font-weight: 600;
-    color: ${accent};
-    border: 1px solid ${accent-line};
+    color: ${text1};
+    border: 1px solid ${line2};
     border-radius: ${radius-sm}px;
-    background: rgba(241, 180, 0, 0.12);
+    background: transparent;
 }
 
 QLabel[labelRole="audioSourceTitle"] {
@@ -628,7 +628,7 @@ QLabel[labelRole="audioTrackName"] {
     font-size: 12px;
     letter-spacing: 0.08em;
     font-weight: 600;
-    color: ${accent};
+    color: ${text1};
 }
 
 QLabel[labelRole="audioTrackPreviewTag"] {
@@ -636,10 +636,10 @@ QLabel[labelRole="audioTrackPreviewTag"] {
     font-size: 11.5px;
     letter-spacing: 0.14em;
     font-weight: 600;
-    color: ${accent};
-    border: 1px solid ${accent-line};
+    color: ${text1};
+    border: 1px solid ${line2};
     border-radius: ${radius-sm}px;
-    background: rgba(241, 180, 0, 0.12);
+    background: transparent;
     padding: 3px 7px;
 }
 
@@ -668,7 +668,7 @@ QLabel[labelRole="audioKvValueAccent"] {
     font-family: ${font-mono};
     font-size: 12px;
     letter-spacing: 0.02em;
-    color: ${accent};
+    color: ${text1};
     font-weight: 600;
 }
 
@@ -713,7 +713,7 @@ QLabel[labelRole="codecCardTag"] {
 QWidget#codecCard[selected="true"] QLabel[labelRole="codecCardTag"] {
     color: ${accent};
     border-color: ${accent};
-    background: rgba(241, 180, 0, 0.12);
+    background: rgba(215, 167, 68, 0.10);
 }
 
 QLabel[labelRole="codecCardDesc"] {
@@ -769,10 +769,10 @@ QLabel[labelRole="audioTag"] {
     font-family: ${font-mono};
     font-size: 12px;
     letter-spacing: 0.14em;
-    color: ${accent};
-    border: 1px solid ${accent-line};
+    color: ${text1};
+    border: 1px solid ${line2};
     border-radius: ${radius-sm}px;
-    background: rgba(241, 180, 0, 0.12);
+    background: transparent;
     padding: 4px 8px;
 }
 
@@ -917,7 +917,7 @@ QLabel[labelRole="previewBottomAccent"] {
     font-family: ${font-mono};
     font-size: 11px;
     letter-spacing: 0.1em;
-    color: ${accent};
+    color: ${text2};
 }
 
 /* Reusable generic roles used by existing pages */
@@ -946,6 +946,27 @@ QLabel[labelRole="body"] {
 QLabel[labelRole="muted"] {
     font-size: 12px;
     color: ${text2};
+}
+
+QLabel[labelRole="profileStatusBadge"] {
+    font-family: ${font-mono};
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: ${text1};
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    padding: 4px 8px;
+    background: ${bg3};
+}
+
+QLabel[labelRole="profileStatusBadge"][stateRole="recording"] {
+    color: ${warn};
+    border-color: ${warn};
+}
+
+QLabel[labelRole="profileStatusBadge"][stateRole="blocked"] {
+    color: ${err};
+    border-color: ${err};
 }
 
 QLabel[labelRole="subtle"] {
@@ -1069,6 +1090,33 @@ QPushButton[role="ghost"]:hover {
     background: ${bg2};
 }
 
+QToolButton {
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-radius: ${radius-md}px;
+    padding: 6px ${space-lg}px;
+    color: ${text1};
+    min-height: ${control-height}px;
+}
+
+QToolButton:hover {
+    background: ${bg4};
+    border-color: ${line3};
+    color: ${text0};
+}
+
+QToolButton:disabled {
+    color: ${text3};
+    background: ${bg2};
+    border-color: ${line1};
+}
+
+QToolButton::menu-indicator {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    right: 6px;
+}
+
 QPushButton[role="link"] {
     background: transparent;
     border: none;
@@ -1122,7 +1170,7 @@ QRadioButton::indicator:checked {
 }
 
 QRadioButton::indicator:hover {
-    border-color: rgba(241, 180, 0, 102);
+    border-color: rgba(215, 167, 68, 102);
 }
 
 QScrollBar:vertical {

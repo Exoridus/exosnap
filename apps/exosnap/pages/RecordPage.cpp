@@ -5,6 +5,7 @@
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/widgets/AudioSourceRow.h"
 #include "../ui/widgets/CaptureTargetCard.h"
+#include "../ui/widgets/ComboBoxWheelFilter.h"
 #include "../ui/widgets/ExoCheckBox.h"
 #include "../ui/widgets/PreviewSurface.h"
 #include "../ui/widgets/RegionSelectionOverlay.h"
@@ -30,6 +31,7 @@
 #include <QMouseEvent>
 #include <QPointer>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSlider>
@@ -80,19 +82,19 @@ QString stateDisplay(UiRecordingState state) {
     case UiRecordingState::Preparing:
         return "STARTING";
     case UiRecordingState::Recording:
-        return "RECORDING";
+        return "REC";
     case UiRecordingState::Paused:
         return "PAUSED";
     case UiRecordingState::RegionSelecting:
-        return "SELECTING";
+        return "STARTING";
     case UiRecordingState::Stopping:
-        return "RECORDING";
+        return "STOPPING";
     case UiRecordingState::Completed:
         return "READY";
     case UiRecordingState::Failed:
-        return "FAILED";
+        return "ERROR";
     default:
-        return "BLOCKED";
+        return "ERROR";
     }
 }
 
@@ -254,6 +256,20 @@ bool RecordPage::eventFilter(QObject* watched, QEvent* event) {
     return QWidget::eventFilter(watched, event);
 }
 
+void RecordPage::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    updatePreviewHeightClamp();
+}
+
+void RecordPage::updatePreviewHeightClamp() {
+    if (!preview_surface_) {
+        return;
+    }
+    const int clamped_max = std::clamp(static_cast<int>(height() * 0.42), 260, 460);
+    preview_surface_->setMinimumHeight(220);
+    preview_surface_->setMaximumHeight(clamped_max);
+}
+
 RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
@@ -368,6 +384,8 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     target_picker_kind_label_ = makeLabel("Display", "captureTargetPickerLabel", target_picker_row);
     target_picker_combo_ = new QComboBox(target_picker_row);
     target_picker_combo_->setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
+    target_picker_combo_->setMinimumWidth(260);
+    target_picker_combo_->setMaximumWidth(620);
     target_picker_combo_->view()->installEventFilter(this);
     target_refresh_btn_ = new QPushButton("Refresh", target_picker_row);
     target_refresh_btn_->setProperty("role", "ghost");
@@ -471,8 +489,10 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     mic_device_row_layout->setSpacing(10);
     mic_device_row_layout->addWidget(makeLabel("Input Device", "audioSettingsRowLabel", mic_device_row_));
     mic_device_combo_ = new QComboBox(mic_device_row_);
+    mic_device_combo_->setMaximumWidth(520);
     mic_device_row_layout->addWidget(mic_device_combo_, 1);
     mic_refresh_btn_ = new QPushButton("Refresh", mic_device_row_);
+    mic_refresh_btn_->setProperty("role", "ghost");
     mic_device_row_layout->addWidget(mic_refresh_btn_);
     populateMicDeviceCombo();
     audio_settings_layout->addWidget(mic_device_row_);
@@ -488,6 +508,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     mic_channel_row_layout->setSpacing(10);
     mic_channel_row_layout->addWidget(makeLabel("Channel", "audioSettingsRowLabel", mic_channel_row_));
     mic_channel_combo_ = new QComboBox(mic_channel_row_);
+    mic_channel_combo_->setMaximumWidth(320);
     mic_channel_combo_->addItem("Auto");
     mic_channel_combo_->addItem("Preserve Stereo");
     mic_channel_combo_->addItem("Mono Mix");
@@ -643,6 +664,13 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->addWidget(scroll);
+
+    auto* combo_wheel_filter = new ui::widgets::ComboBoxWheelFilter(this);
+    combo_wheel_filter->installOn(target_picker_combo_);
+    combo_wheel_filter->installOn(mic_device_combo_);
+    combo_wheel_filter->installOn(mic_channel_combo_);
+
+    updatePreviewHeightClamp();
 
     connect(start_btn_, &QPushButton::clicked, this, &RecordPage::onStart);
     connect(pause_btn_, &QPushButton::clicked, this, &RecordPage::onHotkeyPauseToggle);
@@ -1763,11 +1791,15 @@ QString RecordPage::buildChromeStatusLabel() const {
     switch (view_model_.state) {
     case UiRecordingState::Recording:
         return QStringLiteral("REC");
+    case UiRecordingState::Paused:
+        return QStringLiteral("PAUSED");
     case UiRecordingState::Blocked:
-    case UiRecordingState::Failed:
         return QStringLiteral("BLOCKED");
+    case UiRecordingState::Failed:
+        return QStringLiteral("ERROR");
     case UiRecordingState::LoadingCapabilities:
         return QStringLiteral("CHECKING");
+    case UiRecordingState::RegionSelecting:
     case UiRecordingState::Preparing:
         return QStringLiteral("STARTING");
     case UiRecordingState::Stopping:
@@ -1873,22 +1905,29 @@ void RecordPage::refresh() {
     pause_btn_->setEnabled(view_model_.CanPause() || view_model_.CanResume());
     stop_btn_->setEnabled(view_model_.CanStop());
 
-    control_state_label_->setText(stateDisplay(view_model_.state));
+    const QString status_text = stateDisplay(view_model_.state);
+    control_state_label_->setText(status_text);
     const bool failed = (view_model_.state == UiRecordingState::Failed);
+    const bool active_recording = (view_model_.state == UiRecordingState::Recording);
     setStyledStringProperty(control_state_label_, "stateRole",
-                            (blocked || failed) ? "blocked" : (recording ? "recording" : "ready"));
+                            (blocked || failed) ? "blocked"
+                            : active_recording  ? "recording"
+                                                : (status_text == QStringLiteral("READY") ? "ready" : "muted"));
 
     output_path_label_->setText(QString::fromStdWString(view_model_.output_path_display));
 
     const bool paused = (view_model_.state == UiRecordingState::Paused);
+    const bool starting =
+        (view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::RegionSelecting);
+    const bool stopping = (view_model_.state == UiRecordingState::Stopping);
     preview_surface_->setRecording(recording);
-    preview_surface_->setStatusText(
-        paused ? QStringLiteral("PAUSED")
-               : (recording ? QStringLiteral("REC") : (blocked ? QStringLiteral("BLOCKED") : QStringLiteral("READY"))));
-    preview_surface_->statusPill()->setTone(paused ? ui::widgets::StatusPill::Tone::Ready
-                                                   : (recording ? ui::widgets::StatusPill::Tone::Recording
-                                                                : (blocked ? ui::widgets::StatusPill::Tone::Blocked
-                                                                           : ui::widgets::StatusPill::Tone::Ready)));
+    preview_surface_->setStatusText(status_text);
+    preview_surface_->statusPill()->setDotVisible(recording || checking || starting);
+    preview_surface_->statusPill()->setTone((blocked || failed) ? ui::widgets::StatusPill::Tone::Blocked
+                                            : active_recording  ? ui::widgets::StatusPill::Tone::Recording
+                                            : (paused || checking || starting || stopping)
+                                                ? ui::widgets::StatusPill::Tone::Warn
+                                                : ui::widgets::StatusPill::Tone::Ready);
     QString target_desc = QStringLiteral("No target selected");
     const bool has_selected_target = view_model_.selected_target_index >= 0 &&
                                      view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
@@ -1904,10 +1943,16 @@ void RecordPage::refresh() {
     }
 
     if (recording) {
-        preview_surface_->setCenterTitle(QStringLiteral("RECORDING"));
+        if (paused) {
+            preview_surface_->setCenterTitle(QStringLiteral("PAUSED"));
+        } else if (stopping) {
+            preview_surface_->setCenterTitle(QStringLiteral("STOPPING"));
+        } else {
+            preview_surface_->setCenterTitle(QStringLiteral("REC"));
+        }
         preview_surface_->setCenterSubtitle(target_desc);
     } else if (blocked || failed) {
-        preview_surface_->setCenterTitle(QStringLiteral("BLOCKED"));
+        preview_surface_->setCenterTitle(failed ? QStringLiteral("ERROR") : QStringLiteral("BLOCKED"));
         const QString blocker_text = QString::fromStdWString(view_model_.capability_status_text).trimmed();
         preview_surface_->setCenterSubtitle(blocker_text.isEmpty() ? QStringLiteral("Check diagnostics for details")
                                                                    : blocker_text);

@@ -208,27 +208,43 @@ void OperationalTitleBar::paintEvent(QPaintEvent* event) {
 
     QPainter painter(this);
     painter.fillRect(rect(), QColor("#14130f"));
-    painter.setPen(QPen(recording_active_ ? QColor("#F1B400") : QColor("#2A2620"), 1.0));
+    painter.setPen(QPen(recording_active_ ? QColor("#d7a744") : QColor("#292826"), 1.0));
     painter.drawLine(0, height() - 1, width(), height() - 1);
 }
 
 void OperationalTitleBar::refreshStatusChip() {
-    if (recording_active_) {
+    const QString status = status_label_.trimmed().toUpper();
+    if (status.contains(QStringLiteral("REC"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Recording);
-        status_pill_->setDotVisible(false);
-        status_pill_->setText(QStringLiteral("●● REC %1").arg(rec_elapsed_text_));
-        return;
-    }
-
-    status_pill_->setDotVisible(true);
-    if (status_label_.contains(QStringLiteral("BLOCK"))) {
-        status_pill_->setTone(ui::widgets::StatusPill::Tone::Blocked);
-        status_pill_->setText(QStringLiteral("BLOCKED"));
-    } else if (status_label_.contains(QStringLiteral("SUB-OPT")) || status_label_.contains(QStringLiteral("CHECK"))) {
+        status_pill_->setDotVisible(true);
+        status_pill_->setText(QStringLiteral("REC"));
+    } else if (status.contains(QStringLiteral("PAUSED"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
-        status_pill_->setText(QStringLiteral("SUB-OPT"));
+        status_pill_->setDotVisible(true);
+        status_pill_->setText(QStringLiteral("PAUSED"));
+    } else if (status.contains(QStringLiteral("STOPPING"))) {
+        status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
+        status_pill_->setDotVisible(true);
+        status_pill_->setText(QStringLiteral("STOPPING"));
+    } else if (status.contains(QStringLiteral("STARTING"))) {
+        status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
+        status_pill_->setDotVisible(true);
+        status_pill_->setText(QStringLiteral("STARTING"));
+    } else if (status.contains(QStringLiteral("CHECK"))) {
+        status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
+        status_pill_->setDotVisible(true);
+        status_pill_->setText(QStringLiteral("CHECKING"));
+    } else if (status.contains(QStringLiteral("ERROR"))) {
+        status_pill_->setTone(ui::widgets::StatusPill::Tone::Blocked);
+        status_pill_->setDotVisible(true);
+        status_pill_->setText(QStringLiteral("ERROR"));
+    } else if (status.contains(QStringLiteral("BLOCK"))) {
+        status_pill_->setTone(ui::widgets::StatusPill::Tone::Blocked);
+        status_pill_->setDotVisible(true);
+        status_pill_->setText(QStringLiteral("BLOCKED"));
     } else {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Ready);
+        status_pill_->setDotVisible(false);
         status_pill_->setText(QStringLiteral("READY"));
     }
 }

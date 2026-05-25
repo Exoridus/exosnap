@@ -20,14 +20,14 @@ ToneColors ColorsFor(StatusPill::Tone tone) {
     case StatusPill::Tone::Ready:
         return {QColor("#74c08a"), QColor("#74c08a"), QColor(116, 192, 138, 0), QColor("#74c08a")};
     case StatusPill::Tone::Recording:
-        return {QColor("#f1b400"), QColor("#f1b400"), QColor(241, 180, 0, 31), QColor("#f1b400")};
+        return {QColor("#d7a744"), QColor("#d7a744"), QColor(215, 167, 68, 26), QColor("#d7a744")};
     case StatusPill::Tone::Warn:
-        return {QColor("#e8a14a"), QColor("#e8a14a"), QColor(232, 161, 74, 0), QColor("#e8a14a")};
+        return {QColor("#c99550"), QColor("#c99550"), QColor(201, 149, 80, 0), QColor("#c99550")};
     case StatusPill::Tone::Blocked:
         return {QColor("#e26a5a"), QColor("#e26a5a"), QColor(226, 106, 90, 0), QColor("#e26a5a")};
     case StatusPill::Tone::Neutral:
     default:
-        return {QColor("#c7c0b1"), QColor("#3a342c"), QColor(58, 52, 44, 0), QColor("#8a8070")};
+        return {QColor("#c7c0b1"), QColor("#353330"), QColor(53, 51, 48, 0), QColor("#8d8880")};
     }
 }
 

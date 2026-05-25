@@ -1080,8 +1080,10 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
         pollIdleRuntimeMetrics();
     }
 
-    sidebar_status_value_label_->setText(recording ? QStringLiteral("● REC") : record_status_label_);
-    sidebar_status_value_label_->setProperty("labelRole", recording ? "sidebarFooterValueLive" : "sidebarFooterValue");
+    const bool live_recording_label = recording && record_status_label_ == QStringLiteral("REC");
+    sidebar_status_value_label_->setText(record_status_label_);
+    sidebar_status_value_label_->setProperty("labelRole",
+                                             live_recording_label ? "sidebarFooterValueLive" : "sidebarFooterValue");
     sidebar_status_value_label_->style()->unpolish(sidebar_status_value_label_);
     sidebar_status_value_label_->style()->polish(sidebar_status_value_label_);
     sidebar_status_value_label_->update();

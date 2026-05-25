@@ -1,6 +1,7 @@
 #include "WebcamPage.h"
 
 #include "../ui/theme/ExoSnapMetrics.h"
+#include "../ui/widgets/ComboBoxWheelFilter.h"
 #include "../ui/widgets/ExoToggle.h"
 #include "../ui/widgets/PreviewSurface.h"
 #include "../ui/widgets/SectionRuleHeader.h"
@@ -78,7 +79,9 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
         dr->setContentsMargins(0, 0, 0, 0);
         dr->setSpacing(8);
         device_combo_ = new QComboBox(content);
-        device_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        device_combo_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        device_combo_->setMinimumWidth(280);
+        device_combo_->setMaximumWidth(560);
         refresh_btn_ = new QPushButton("↺", content);
         refresh_btn_->setFixedWidth(32);
         refresh_btn_->setToolTip("Refresh device list");
@@ -88,6 +91,8 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
 
         layout->addWidget(makeLabel("Resolution / FPS", "videoKvKey", content));
         resolution_combo_ = new QComboBox(content);
+        resolution_combo_->setMinimumWidth(280);
+        resolution_combo_->setMaximumWidth(420);
         layout->addWidget(resolution_combo_);
     }
     layout->addWidget(makeDivider(content));
@@ -187,6 +192,10 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
     layout->addStretch(1);
     scroll->setWidget(content);
     page_layout->addWidget(scroll, 1);
+
+    auto* combo_wheel_filter = new ui::widgets::ComboBoxWheelFilter(this);
+    combo_wheel_filter->installOn(device_combo_);
+    combo_wheel_filter->installOn(resolution_combo_);
 
     // ---- Wire signals ----
     connect(enable_toggle_, &ui::widgets::ExoToggle::toggled, this, &WebcamPage::onEnableToggled);

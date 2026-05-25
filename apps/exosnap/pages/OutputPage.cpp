@@ -1,5 +1,6 @@
 #include "OutputPage.h"
 
+#include <QAction>
 #include <QButtonGroup>
 #include <QComboBox>
 #include <QFileDialog>
@@ -8,16 +9,20 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QStyle>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputPathPolicy.h"
 #include "../ui/theme/ExoSnapMetrics.h"
+#include "../ui/widgets/ComboBoxWheelFilter.h"
 #include <ctime>
 
 namespace exosnap {
@@ -132,51 +137,51 @@ OutputPage::OutputPage(const OutputSettingsModel& initial_settings, QWidget* par
     auto* profile_layout = new QVBoxLayout(profile_panel);
     profile_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
                                        ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
-    profile_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
+    profile_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
 
+    auto* profile_header_row = new QHBoxLayout();
+    profile_header_row->setContentsMargins(0, 0, 0, 0);
+    profile_header_row->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
     profile_combo_ = new QComboBox(profile_panel);
-    profile_combo_->setMinimumWidth(340);
-    profile_status_label_ = makeSubLabel("Built-in", profile_panel);
-    profile_status_label_->setProperty("labelRole", "muted");
-    profile_layout->addWidget(profile_combo_);
-    profile_layout->addWidget(profile_status_label_);
-
-    auto* profile_actions_row_a = new QHBoxLayout();
-    profile_actions_row_a->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
-    new_from_current_btn_ = new QPushButton("New from current", profile_panel);
-    new_from_safe_default_btn_ = new QPushButton("New from default", profile_panel);
-    duplicate_profile_btn_ = new QPushButton("Duplicate", profile_panel);
-    profile_actions_row_a->addWidget(new_from_current_btn_);
-    profile_actions_row_a->addWidget(new_from_safe_default_btn_);
-    profile_actions_row_a->addWidget(duplicate_profile_btn_);
-    profile_actions_row_a->addStretch(1);
-    profile_layout->addLayout(profile_actions_row_a);
-
-    auto* profile_actions_row_b = new QHBoxLayout();
-    profile_actions_row_b->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
-    rename_profile_btn_ = new QPushButton("Rename", profile_panel);
-    delete_profile_btn_ = new QPushButton("Delete", profile_panel);
-    reset_profile_btn_ = new QPushButton("Reset", profile_panel);
+    profile_combo_->setMinimumWidth(300);
+    profile_combo_->setMaximumWidth(540);
+    profile_combo_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    profile_status_label_ = new QLabel("Built-in", profile_panel);
+    profile_status_label_->setProperty("labelRole", "profileStatusBadge");
+    profile_status_label_->setAlignment(Qt::AlignCenter);
     save_as_new_btn_ = new QPushButton("Save as new profile", profile_panel);
-    profile_actions_row_b->addWidget(rename_profile_btn_);
-    profile_actions_row_b->addWidget(delete_profile_btn_);
-    profile_actions_row_b->addWidget(reset_profile_btn_);
-    profile_actions_row_b->addWidget(save_as_new_btn_);
-    profile_actions_row_b->addStretch(1);
-    profile_layout->addLayout(profile_actions_row_b);
+    reset_profile_btn_ = new QPushButton("Reset", profile_panel);
+    profile_overflow_btn_ = new QToolButton(profile_panel);
+    profile_overflow_btn_->setText("Actions");
+    profile_overflow_btn_->setPopupMode(QToolButton::InstantPopup);
+    profile_overflow_btn_->setToolButtonStyle(Qt::ToolButtonTextOnly);
 
-    auto* profile_actions_row_c = new QHBoxLayout();
-    profile_actions_row_c->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
-    import_profiles_btn_ = new QPushButton("Import…", profile_panel);
-    export_selected_btn_ = new QPushButton("Export selected…", profile_panel);
-    export_all_users_btn_ = new QPushButton("Export all users…", profile_panel);
-    reset_all_btn_ = new QPushButton("Reset all settings + profiles", profile_panel);
-    profile_actions_row_c->addWidget(import_profiles_btn_);
-    profile_actions_row_c->addWidget(export_selected_btn_);
-    profile_actions_row_c->addWidget(export_all_users_btn_);
-    profile_actions_row_c->addWidget(reset_all_btn_);
-    profile_actions_row_c->addStretch(1);
-    profile_layout->addLayout(profile_actions_row_c);
+    auto* profile_menu = new QMenu(profile_overflow_btn_);
+    new_from_current_action_ = profile_menu->addAction("New from current");
+    new_from_safe_default_action_ = profile_menu->addAction("New from default");
+    profile_menu->addSeparator();
+    duplicate_profile_action_ = profile_menu->addAction("Duplicate");
+    rename_profile_action_ = profile_menu->addAction("Rename");
+    delete_profile_action_ = profile_menu->addAction("Delete");
+    profile_menu->addSeparator();
+    import_profiles_action_ = profile_menu->addAction("Import…");
+    export_selected_action_ = profile_menu->addAction("Export selected…");
+    export_all_users_action_ = profile_menu->addAction("Export all users…");
+    profile_menu->addSeparator();
+    reset_all_action_ = profile_menu->addAction("Reset all settings + profiles");
+    profile_overflow_btn_->setMenu(profile_menu);
+
+    profile_header_row->addWidget(profile_combo_);
+    profile_header_row->addWidget(profile_status_label_);
+    profile_header_row->addStretch(1);
+    profile_header_row->addWidget(save_as_new_btn_);
+    profile_header_row->addWidget(reset_profile_btn_);
+    profile_header_row->addWidget(profile_overflow_btn_);
+    profile_layout->addLayout(profile_header_row);
+
+    auto* profile_note = makeSubLabel("Profile actions adapt to the selected profile type.", profile_panel);
+    profile_note->setProperty("labelRole", "muted");
+    profile_layout->addWidget(profile_note);
     layout->addWidget(profile_panel);
 
     // Destination
@@ -255,11 +260,15 @@ OutputPage::OutputPage(const OutputSettingsModel& initial_settings, QWidget* par
     container_layout->addWidget(makeSectionLabel("Video Codec", container_panel));
     video_codec_combo_ = new QComboBox(container_panel);
     video_codec_combo_->setMinimumWidth(200);
+    video_codec_combo_->setMaximumWidth(320);
+    video_codec_combo_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     container_layout->addWidget(video_codec_combo_);
 
     container_layout->addWidget(makeSectionLabel("Audio Codec", container_panel));
     audio_codec_combo_ = new QComboBox(container_panel);
     audio_codec_combo_->setMinimumWidth(200);
+    audio_codec_combo_->setMaximumWidth(320);
+    audio_codec_combo_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     container_layout->addWidget(audio_codec_combo_);
     layout->addWidget(container_panel);
 
@@ -286,6 +295,11 @@ OutputPage::OutputPage(const OutputSettingsModel& initial_settings, QWidget* par
     root->setContentsMargins(0, 0, 0, 0);
     root->addWidget(scroll);
 
+    auto* combo_wheel_filter = new ui::widgets::ComboBoxWheelFilter(this);
+    combo_wheel_filter->installOn(profile_combo_);
+    combo_wheel_filter->installOn(video_codec_combo_);
+    combo_wheel_filter->installOn(audio_codec_combo_);
+
     applySettingsToUi();
     updateProfileActionState();
     updateValidationState();
@@ -304,17 +318,17 @@ OutputPage::OutputPage(const OutputSettingsModel& initial_settings, QWidget* par
     connect(naming_edit_, &QLineEdit::textChanged, this, [this](const QString&) { updateValidationState(); });
     connect(naming_edit_, &QLineEdit::editingFinished, this, &OutputPage::onPatternEditingFinished);
 
-    connect(new_from_current_btn_, &QPushButton::clicked, this, &OutputPage::promptCreateProfileFromCurrent);
-    connect(new_from_safe_default_btn_, &QPushButton::clicked, this, &OutputPage::promptCreateProfileFromSafeDefault);
-    connect(duplicate_profile_btn_, &QPushButton::clicked, this, &OutputPage::duplicateActiveProfileRequested);
-    connect(rename_profile_btn_, &QPushButton::clicked, this, &OutputPage::promptRenameActiveProfile);
-    connect(delete_profile_btn_, &QPushButton::clicked, this, &OutputPage::deleteActiveProfileRequested);
+    connect(new_from_current_action_, &QAction::triggered, this, &OutputPage::promptCreateProfileFromCurrent);
+    connect(new_from_safe_default_action_, &QAction::triggered, this, &OutputPage::promptCreateProfileFromSafeDefault);
+    connect(duplicate_profile_action_, &QAction::triggered, this, &OutputPage::duplicateActiveProfileRequested);
+    connect(rename_profile_action_, &QAction::triggered, this, &OutputPage::promptRenameActiveProfile);
+    connect(delete_profile_action_, &QAction::triggered, this, &OutputPage::onDeleteActiveProfile);
     connect(reset_profile_btn_, &QPushButton::clicked, this, &OutputPage::resetActiveProfileRequested);
     connect(save_as_new_btn_, &QPushButton::clicked, this, &OutputPage::promptSaveModifiedBuiltInAsNew);
-    connect(import_profiles_btn_, &QPushButton::clicked, this, &OutputPage::onImportProfiles);
-    connect(export_selected_btn_, &QPushButton::clicked, this, &OutputPage::onExportSelectedProfile);
-    connect(export_all_users_btn_, &QPushButton::clicked, this, &OutputPage::onExportAllUserProfiles);
-    connect(reset_all_btn_, &QPushButton::clicked, this, &OutputPage::onResetAllSettingsAndProfiles);
+    connect(import_profiles_action_, &QAction::triggered, this, &OutputPage::onImportProfiles);
+    connect(export_selected_action_, &QAction::triggered, this, &OutputPage::onExportSelectedProfile);
+    connect(export_all_users_action_, &QAction::triggered, this, &OutputPage::onExportAllUserProfiles);
+    connect(reset_all_action_, &QAction::triggered, this, &OutputPage::onResetAllSettingsAndProfiles);
 }
 
 void OutputPage::setOutputSettings(const OutputSettingsModel& settings) {
@@ -334,16 +348,7 @@ void OutputPage::setProfileOptions(const std::vector<ProfileOption>& options, co
     QSignalBlocker blocker(profile_combo_);
     profile_combo_->clear();
     for (const auto& option : profile_options_) {
-        QString label = option.label;
-        if (option.built_in) {
-            label += option.modified ? QStringLiteral("  (Built-in · Modified)") : QStringLiteral("  (Built-in)");
-        } else {
-            label += QStringLiteral("  (User)");
-        }
-        if (!option.available) {
-            label += QStringLiteral("  (Unavailable)");
-        }
-        profile_combo_->addItem(label, option.id);
+        profile_combo_->addItem(option.label, option.id);
     }
 
     const int index = profile_combo_->findData(active_profile_id);
@@ -449,19 +454,21 @@ void OutputPage::onProfileSelectionChanged(int index) {
     const ProfileOption& selected = profile_options_[static_cast<std::size_t>(index)];
     active_profile_is_built_in_ = selected.built_in;
     active_profile_is_modified_ = selected.modified;
+    active_profile_is_available_ = selected.available;
     active_profile_name_ = selected.label;
 
-    QString status = selected.built_in ? QStringLiteral("Built-in") : QStringLiteral("User");
-    if (selected.modified) {
-        status += QStringLiteral(" · Modified");
-    }
+    QString status;
     if (!selected.available) {
-        status += QStringLiteral(" · Unavailable");
-    }
-    if (!selected.availability_reason.isEmpty()) {
-        status += QStringLiteral(" · ") + selected.availability_reason;
+        status = QStringLiteral("Unavailable");
+    } else if (selected.built_in && selected.modified) {
+        status = QStringLiteral("Built-in · Modified");
+    } else if (selected.built_in) {
+        status = QStringLiteral("Built-in");
+    } else {
+        status = QStringLiteral("User");
     }
     profile_status_label_->setText(status);
+    profile_status_label_->setToolTip(selected.availability_reason.trimmed());
     updateProfileActionState();
     updateEffectiveOutputPreview();
     emit activeProfileChanged(selected.id);
@@ -650,17 +657,37 @@ void OutputPage::updateValidationState() {
 
 void OutputPage::updateProfileActionState() {
     const bool has_profile = profile_combo_ && profile_combo_->currentIndex() >= 0;
-    duplicate_profile_btn_->setEnabled(has_profile);
-    new_from_current_btn_->setEnabled(true);
-    new_from_safe_default_btn_->setEnabled(true);
-    rename_profile_btn_->setEnabled(has_profile && !active_profile_is_built_in_);
-    delete_profile_btn_->setEnabled(has_profile && !active_profile_is_built_in_);
-    reset_profile_btn_->setEnabled(has_profile && (!active_profile_is_built_in_ || active_profile_is_modified_));
-    save_as_new_btn_->setEnabled(has_profile && active_profile_is_built_in_ && active_profile_is_modified_);
-    export_selected_btn_->setEnabled(has_profile);
-    export_all_users_btn_->setEnabled(true);
-    import_profiles_btn_->setEnabled(true);
-    reset_all_btn_->setEnabled(true);
+    const bool can_reset = has_profile && (!active_profile_is_built_in_ || active_profile_is_modified_);
+    const bool can_save_as_new = has_profile && active_profile_is_built_in_ && active_profile_is_modified_;
+    const bool user_profile_actions = has_profile && !active_profile_is_built_in_;
+
+    save_as_new_btn_->setVisible(can_save_as_new);
+    save_as_new_btn_->setEnabled(can_save_as_new);
+    reset_profile_btn_->setVisible(can_reset);
+    reset_profile_btn_->setEnabled(can_reset);
+
+    duplicate_profile_action_->setEnabled(has_profile);
+    rename_profile_action_->setEnabled(user_profile_actions);
+    rename_profile_action_->setVisible(user_profile_actions);
+    delete_profile_action_->setEnabled(user_profile_actions);
+    delete_profile_action_->setVisible(user_profile_actions);
+    new_from_current_action_->setEnabled(true);
+    new_from_safe_default_action_->setEnabled(true);
+    import_profiles_action_->setEnabled(true);
+    export_selected_action_->setEnabled(has_profile);
+    export_all_users_action_->setEnabled(true);
+    reset_all_action_->setEnabled(true);
+
+    const QString status_role = !has_profile                    ? QStringLiteral("muted")
+                                : !active_profile_is_available_ ? QStringLiteral("blocked")
+                                : active_profile_is_modified_   ? QStringLiteral("recording")
+                                                                : QStringLiteral("ready");
+    if (profile_status_label_->property("stateRole").toString() != status_role) {
+        profile_status_label_->setProperty("stateRole", status_role);
+        profile_status_label_->style()->unpolish(profile_status_label_);
+        profile_status_label_->style()->polish(profile_status_label_);
+        profile_status_label_->update();
+    }
 }
 
 void OutputPage::onImportProfiles() {
@@ -688,6 +715,23 @@ void OutputPage::onExportAllUserProfiles() {
         return;
     }
     emit exportAllUserProfilesRequested(path);
+}
+
+void OutputPage::onDeleteActiveProfile() {
+    if (active_profile_is_built_in_) {
+        return;
+    }
+
+    const QString profile_name = profile_combo_ ? profile_combo_->currentText().trimmed() : QString();
+    const QString prompt = profile_name.isEmpty()
+                               ? QStringLiteral("Delete the selected user profile? This cannot be undone.")
+                               : QStringLiteral("Delete profile \"%1\"? This cannot be undone.").arg(profile_name);
+    const int choice = QMessageBox::warning(this, QStringLiteral("Delete Profile"), prompt,
+                                            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (choice != QMessageBox::Yes) {
+        return;
+    }
+    emit deleteActiveProfileRequested();
 }
 
 void OutputPage::onResetAllSettingsAndProfiles() {
