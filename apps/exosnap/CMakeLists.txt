@@ -28,6 +28,8 @@ qt_add_executable(exosnap WIN32
     ui/brand/BrandMarkWidget.cpp
     ui/chrome/OperationalTitleBar.h
     ui/chrome/OperationalTitleBar.cpp
+    ui/chrome/GlobalRecordingBar.h
+    ui/chrome/GlobalRecordingBar.cpp
     ui/widgets/SectionRuleHeader.h
     ui/widgets/SectionRuleHeader.cpp
     ui/widgets/StatusPill.h

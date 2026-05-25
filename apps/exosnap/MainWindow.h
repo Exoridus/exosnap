@@ -21,7 +21,8 @@ namespace exosnap {
 
 namespace ui::chrome {
 class OperationalTitleBar;
-}
+class GlobalRecordingBar;
+} // namespace ui::chrome
 
 class DiagnosticsPage;
 class HotkeysPage;
@@ -58,6 +59,8 @@ class MainWindow : public QMainWindow {
     void setCurrentPage(int index);
     void updatePageHeader(int index);
     QString buildOutputPageMeta() const;
+    QString buildOutputSummary() const;
+    void refreshGlobalRecordingBarContext();
     void applyActiveProfileToPages();
     void refreshOutputProfileUi();
     void persistProfileState();
@@ -65,6 +68,7 @@ class MainWindow : public QMainWindow {
     void refreshDiagnosticsData();
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
+    ui::chrome::GlobalRecordingBar* global_recording_bar_ = nullptr;
     QListWidget* nav_ = nullptr;
     QStackedWidget* stack_ = nullptr;
     RecordPage* record_page_ = nullptr;

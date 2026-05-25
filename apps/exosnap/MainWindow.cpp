@@ -11,6 +11,7 @@
 #include "pages/VideoPage.h"
 #include "pages/WebcamPage.h"
 #include "settings/ProfileExchange.h"
+#include "ui/chrome/GlobalRecordingBar.h"
 #include "ui/chrome/OperationalTitleBar.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
@@ -220,6 +221,29 @@ QString PersistedHotkeyString(const QKeySequence& sequence) {
 QKeySequence ParsePersistedHotkey(const QString& value, const QKeySequence& fallback) {
     const QKeySequence parsed(value, QKeySequence::PortableText);
     return parsed.isEmpty() ? fallback : parsed;
+}
+
+QString targetSummaryFromContext(const QString& context_text) {
+    const QString simplified = context_text.simplified();
+    if (simplified.isEmpty())
+        return QStringLiteral("-");
+
+    const int dot_index = simplified.indexOf(QChar(0x00B7));
+    const QString target = (dot_index > 0 ? simplified.left(dot_index) : simplified).trimmed();
+    return target.isEmpty() ? QStringLiteral("-") : target;
+}
+
+QString outputSummaryFromSettings(const OutputSettingsModel& settings) {
+    if (settings.output_folder.empty())
+        return QStringLiteral("-");
+
+    const std::filesystem::path& folder = settings.output_folder;
+    const QString leaf = QString::fromStdWString(folder.filename().wstring()).trimmed();
+    if (!leaf.isEmpty())
+        return leaf;
+
+    const QString full_path = QString::fromStdWString(folder.wstring()).trimmed();
+    return full_path.isEmpty() ? QStringLiteral("-") : full_path;
 }
 
 QColor colorFrom(const char* value) {
@@ -649,6 +673,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     title_bar_->setRuntimeMeta(QStringLiteral("–"), QStringLiteral("–"), QStringLiteral("–"));
     title_bar_->setRecordingRuntime(QStringLiteral("--:--:--"), QStringLiteral("–"), QStringLiteral("–"));
 
+    global_recording_bar_ = new ui::chrome::GlobalRecordingBar(central);
+    main_layout->addWidget(global_recording_bar_);
+    global_recording_bar_->setStatusLabel(record_status_label_);
+    global_recording_bar_->setProfileSummary(buildOutputPageMeta());
+    global_recording_bar_->setTargetSummary(
+        targetSummaryFromContext(QString::fromUtf8(kPageDescriptors[0].chrome_context)));
+    global_recording_bar_->setOutputSummary(buildOutputSummary());
+    global_recording_bar_->setRuntimeSummary(QStringLiteral("DUR --:--:-- · SIZE -"));
+
     idle_metrics_timer_ = new QTimer(this);
     idle_metrics_timer_->setInterval(2000);
     connect(idle_metrics_timer_, &QTimer::timeout, this, &MainWindow::pollIdleRuntimeMetrics);
@@ -793,6 +826,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(output_page_, &OutputPage::outputSettingsChanged, this, [this](const OutputSettingsModel& settings) {
         output_settings_ = settings;
         record_page_->setOutputSettings(settings);
+        if (global_recording_bar_) {
+            global_recording_bar_->setProfileSummary(buildOutputPageMeta());
+            global_recording_bar_->setOutputSummary(buildOutputSummary());
+        }
         profile_registry_.ApplyOutputToActive(settings);
         persisted_settings_.output = settings;
         persistProfileState();
@@ -1074,10 +1111,17 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
 
     title_bar_->setRecordingActive(recording);
     title_bar_->setStatusLabel(record_status_label_);
+    if (global_recording_bar_) {
+        global_recording_bar_->setStatusLabel(record_status_label_);
+        if (!recording_context_text_.trimmed().isEmpty())
+            global_recording_bar_->setTargetSummary(targetSummaryFromContext(recording_context_text_));
+    }
     if (recording) {
         title_bar_->setRecordingRuntime(QStringLiteral("--:--:--"), QStringLiteral("–"), QStringLiteral("–"));
     } else {
         pollIdleRuntimeMetrics();
+        if (global_recording_bar_)
+            global_recording_bar_->setRuntimeSummary(QStringLiteral("DUR --:--:-- · SIZE -"));
     }
 
     const bool live_recording_label = recording && record_status_label_ == QStringLiteral("REC");
@@ -1100,6 +1144,10 @@ void MainWindow::onRecordChromeRuntimeMetricsChanged(const QString& elapsed_text
     if (!title_bar_)
         return;
     title_bar_->setRecordingRuntime(elapsed_text, bitrate_text, drop_text);
+    if (global_recording_bar_) {
+        const QString elapsed = elapsed_text.trimmed().isEmpty() ? QStringLiteral("--:--:--") : elapsed_text.trimmed();
+        global_recording_bar_->setRuntimeSummary(QStringLiteral("DUR %1 · SIZE -").arg(elapsed));
+    }
 }
 
 void MainWindow::pollIdleRuntimeMetrics() {
@@ -1365,6 +1413,7 @@ void MainWindow::applyActiveProfileToPages() {
     if (stack_ && stack_->currentIndex() == kOutputPageIndex) {
         updatePageHeader(kOutputPageIndex);
     }
+    refreshGlobalRecordingBarContext();
     refreshDiagnosticsData();
 }
 
@@ -1501,6 +1550,22 @@ QString MainWindow::buildOutputPageMeta() const {
                               : (output_settings_.audio_codec == capability::AudioCodec::AacMf ? QStringLiteral("AAC")
                                                                                                : QStringLiteral("PCM"));
     return container + QStringLiteral(" · ") + video + QStringLiteral(" · ") + audio;
+}
+
+QString MainWindow::buildOutputSummary() const {
+    return outputSummaryFromSettings(output_settings_);
+}
+
+void MainWindow::refreshGlobalRecordingBarContext() {
+    if (!global_recording_bar_)
+        return;
+
+    global_recording_bar_->setProfileSummary(buildOutputPageMeta());
+    const QString context = recording_context_text_.trimmed().isEmpty()
+                                ? QString::fromUtf8(kPageDescriptors[0].chrome_context)
+                                : recording_context_text_;
+    global_recording_bar_->setTargetSummary(targetSummaryFromContext(context));
+    global_recording_bar_->setOutputSummary(buildOutputSummary());
 }
 
 void MainWindow::refreshDiagnosticsData() {
