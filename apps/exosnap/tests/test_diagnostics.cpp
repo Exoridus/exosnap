@@ -386,23 +386,24 @@ TEST(SelfTestTest, SelfTest_Run_ReturnsAllResults) {
     SelfTestRunner runner;
     auto checklist = runner.Run();
     EXPECT_EQ(checklist.results.size(), 5u);
+    EXPECT_TRUE(checklist.has_notice);
 }
 
 TEST(SelfTestTest, SelfTest_CaptureAvailable) {
     auto result = SelfTestRunner::CheckCaptureAvailability();
-    EXPECT_TRUE(result.passed);
+    EXPECT_FALSE(result.passed);
     EXPECT_EQ(result.category, "Capture");
 }
 
 TEST(SelfTestTest, SelfTest_EncoderAvailable) {
     auto result = SelfTestRunner::CheckEncoderAvailability();
-    EXPECT_TRUE(result.passed);
+    EXPECT_FALSE(result.passed);
     EXPECT_EQ(result.category, "Encoder");
 }
 
 TEST(SelfTestTest, SelfTest_MuxerAvailable) {
     auto result = SelfTestRunner::CheckMuxerAvailability();
-    EXPECT_TRUE(result.passed);
+    EXPECT_FALSE(result.passed);
     EXPECT_EQ(result.category, "Muxer");
 }
 
@@ -414,7 +415,7 @@ TEST(SelfTestTest, SelfTest_OutputPathWritable) {
 
 TEST(SelfTestTest, SelfTest_AudioDeviceAvailable) {
     auto result = SelfTestRunner::CheckAudioDeviceAvailability();
-    EXPECT_TRUE(result.passed);
+    EXPECT_FALSE(result.passed);
     EXPECT_EQ(result.category, "Audio Devices");
 }
 

@@ -23,11 +23,12 @@ TEST(RecordViewModelAudioTest, RecordViewModel_DefaultAudioStateForWindowTarget)
     EXPECT_EQ(vm.audio_ui_state.target_kind, capability::CaptureTargetKind::Window);
     EXPECT_TRUE(vm.audio_ui_state.IsAppEnabled());
     EXPECT_TRUE(vm.audio_ui_state.IsSysEnabled());
-    EXPECT_FALSE(vm.audio_ui_state.IsMicEnabled());
+    EXPECT_TRUE(vm.audio_ui_state.IsMicEnabled());
 
-    // Default: APP + SYS merged into one track.
-    ASSERT_EQ(vm.audio_track_preview.size(), 1u);
-    EXPECT_EQ(vm.audio_track_preview[0].source_key, "merged");
+    ASSERT_EQ(vm.audio_track_preview.size(), 3u);
+    EXPECT_EQ(vm.audio_track_preview[0].source_key, "app");
+    EXPECT_EQ(vm.audio_track_preview[1].source_key, "mic");
+    EXPECT_EQ(vm.audio_track_preview[2].source_key, "sys");
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_DefaultMicGainLinear_IsUnity) {
@@ -43,10 +44,11 @@ TEST(RecordViewModelAudioTest, RecordViewModel_DefaultAudioStateForDisplayTarget
     EXPECT_EQ(vm.audio_ui_state.target_kind, capability::CaptureTargetKind::Display);
     EXPECT_FALSE(vm.audio_ui_state.IsAppEnabled());
     EXPECT_TRUE(vm.audio_ui_state.IsSysEnabled());
-    EXPECT_FALSE(vm.audio_ui_state.IsMicEnabled());
+    EXPECT_TRUE(vm.audio_ui_state.IsMicEnabled());
 
-    ASSERT_EQ(vm.audio_track_preview.size(), 1u);
+    ASSERT_EQ(vm.audio_track_preview.size(), 2u);
     EXPECT_EQ(vm.audio_track_preview[0].source_key, "system_output");
+    EXPECT_EQ(vm.audio_track_preview[1].source_key, "mic");
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKind_DisplayResetsToDisplayDefaults) {
@@ -61,28 +63,33 @@ TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKind_DisplayResetsToDi
 
     EXPECT_FALSE(vm.audio_ui_state.IsAppEnabled());
     EXPECT_TRUE(vm.audio_ui_state.IsSysEnabled());
-    EXPECT_FALSE(vm.audio_ui_state.IsMicEnabled());
+    EXPECT_TRUE(vm.audio_ui_state.IsMicEnabled());
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_TrackPreviewUpdatesOnOutputToggles) {
     RecordViewModel vm;
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
-    // Default: merged {App, Sys}.
-    ASSERT_EQ(vm.audio_track_preview.size(), 1u);
-    EXPECT_EQ(vm.audio_track_preview[0].source_key, "merged");
+    ASSERT_EQ(vm.audio_track_preview.size(), 3u);
 
     // Disable Sys.
     for (auto& r : vm.audio_ui_state.source_rows)
         if (r.kind == recorder_core::AudioSourceKind::Sys)
             r.enabled = false;
     vm.RebuildAudioPlan();
-    ASSERT_EQ(vm.audio_track_preview.size(), 1u);
-    EXPECT_EQ(vm.audio_track_preview[0].source_key, "app");
+    ASSERT_EQ(vm.audio_track_preview.size(), 2u);
 
     // Disable App too.
     for (auto& r : vm.audio_ui_state.source_rows)
         if (r.kind == recorder_core::AudioSourceKind::App)
+            r.enabled = false;
+    vm.RebuildAudioPlan();
+    ASSERT_EQ(vm.audio_track_preview.size(), 1u);
+    EXPECT_EQ(vm.audio_track_preview[0].source_key, "mic");
+
+    // Disable Mic too.
+    for (auto& r : vm.audio_ui_state.source_rows)
+        if (r.kind == recorder_core::AudioSourceKind::Mic)
             r.enabled = false;
     vm.RebuildAudioPlan();
     EXPECT_TRUE(vm.audio_track_preview.empty());
@@ -92,25 +99,21 @@ TEST(RecordViewModelAudioTest, RecordViewModel_TrackPreviewUpdatesOnMicToggle) {
     RecordViewModel vm;
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
-    ASSERT_EQ(vm.audio_track_preview.size(), 1u);
-    EXPECT_EQ(vm.audio_track_preview[0].source_key, "merged");
+    ASSERT_EQ(vm.audio_track_preview.size(), 3u);
 
-    // Enable Mic.
-    for (auto& r : vm.audio_ui_state.source_rows)
-        if (r.kind == recorder_core::AudioSourceKind::Mic)
-            r.enabled = true;
-    vm.RebuildAudioPlan();
-    // Mic merges with above: still 1 merged track {App, Mic, Sys}.
-    ASSERT_EQ(vm.audio_track_preview.size(), 1u);
-    EXPECT_EQ(vm.audio_track_preview.back().source_key, "merged");
-
-    // Disable Mic again.
+    // Disable Mic.
     for (auto& r : vm.audio_ui_state.source_rows)
         if (r.kind == recorder_core::AudioSourceKind::Mic)
             r.enabled = false;
     vm.RebuildAudioPlan();
-    ASSERT_EQ(vm.audio_track_preview.size(), 1u);
-    EXPECT_EQ(vm.audio_track_preview[0].source_key, "merged");
+    ASSERT_EQ(vm.audio_track_preview.size(), 2u);
+
+    // Enable Mic again.
+    for (auto& r : vm.audio_ui_state.source_rows)
+        if (r.kind == recorder_core::AudioSourceKind::Mic)
+            r.enabled = true;
+    vm.RebuildAudioPlan();
+    ASSERT_EQ(vm.audio_track_preview.size(), 3u);
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_RebuildAudioPlan_PropagatesMicDeviceId) {
@@ -137,30 +140,18 @@ TEST(RecordViewModelAudioTest, RecordViewModel_RebuildAudioPlan_SetsActiveFlagsF
     RecordViewModel vm;
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
-    // Default: merged {App, Sys}.
     EXPECT_TRUE(vm.audio_active_app);
     EXPECT_TRUE(vm.audio_active_sys);
-    EXPECT_FALSE(vm.audio_active_mic);
-
-    for (auto& r : vm.audio_ui_state.source_rows)
-        if (r.kind == recorder_core::AudioSourceKind::Mic)
-            r.enabled = true;
-    vm.RebuildAudioPlan();
     EXPECT_TRUE(vm.audio_active_mic);
 }
 
-TEST(RecordViewModelAudioTest, RecordViewModel_RebuildAudioPlan_MergedWindowActivatesBothMeters) {
+TEST(RecordViewModelAudioTest, RecordViewModel_RebuildAudioPlan_WindowDefaultsActivateAllMeters) {
     RecordViewModel vm;
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
     EXPECT_TRUE(vm.audio_active_sys);
     EXPECT_TRUE(vm.audio_active_app);
-    EXPECT_FALSE(vm.audio_active_mic);
-
-    const bool has_merged =
-        std::any_of(vm.audio_track_preview.begin(), vm.audio_track_preview.end(),
-                    [](const capability::AudioTrackPreview& preview) { return preview.source_key == "merged"; });
-    EXPECT_TRUE(has_merged);
+    EXPECT_TRUE(vm.audio_active_mic);
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MapsPerTrackRmsToSources) {
@@ -174,7 +165,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MapsPerTrackRmsToSour
     vm.UpdateStats(stats);
 
     EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.25f);
-    EXPECT_FLOAT_EQ(vm.audio_rms_sys, 0.25f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_sys, 0.0f);
     EXPECT_FLOAT_EQ(vm.audio_rms_mic, 0.0f);
 }
 
@@ -182,18 +173,14 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MapsMicRms) {
     RecordViewModel vm;
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
-    for (auto& r : vm.audio_ui_state.source_rows)
-        if (r.kind == recorder_core::AudioSourceKind::Mic)
-            r.enabled = true;
-    vm.RebuildAudioPlan();
 
     recorder_core::SessionStats stats;
-    stats.per_track_rms[0] = 0.75f;
+    stats.per_track_rms[1] = 0.75f;
 
     vm.UpdateStats(stats);
 
-    EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.75f);
-    EXPECT_FLOAT_EQ(vm.audio_rms_sys, 0.75f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.0f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_sys, 0.0f);
     EXPECT_FLOAT_EQ(vm.audio_rms_mic, 0.75f);
 }
 
@@ -201,6 +188,12 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MergedWindowRmsGoesTo
     RecordViewModel vm;
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+    for (auto& r : vm.audio_ui_state.source_rows) {
+        if (r.kind == recorder_core::AudioSourceKind::Mic || r.kind == recorder_core::AudioSourceKind::Sys) {
+            r.merge_with_above = true;
+        }
+    }
+    vm.RebuildAudioPlan();
 
     recorder_core::SessionStats stats;
     stats.per_track_rms[0] = 0.4f;
@@ -209,6 +202,7 @@ TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_MergedWindowRmsGoesTo
 
     EXPECT_FLOAT_EQ(vm.audio_rms_sys, 0.4f);
     EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.4f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_mic, 0.4f);
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_IgnoresInvalidTrackNumbers) {
@@ -236,9 +230,10 @@ TEST(RecordViewModelAudioTest, RecordViewModel_TrackPreviewDisplayTarget_SystemO
 
     vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
 
-    ASSERT_EQ(vm.audio_track_preview.size(), 1u);
+    ASSERT_EQ(vm.audio_track_preview.size(), 2u);
     EXPECT_EQ(vm.audio_track_preview[0].source_key, "system_output");
     EXPECT_EQ(vm.audio_track_preview[0].display_label, "System Audio");
+    EXPECT_EQ(vm.audio_track_preview[1].source_key, "mic");
 }
 
 TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKindPreservingAudio_KeepsSourceRows) {

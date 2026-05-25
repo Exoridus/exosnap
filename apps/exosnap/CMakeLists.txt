@@ -168,7 +168,7 @@ exosnap_add_gtest(
         models/FilenameBuilder.cpp
         models/OutputPathValidator.cpp
         models/OutputPathPolicy.cpp
-    LIBRARIES Qt6::Core exosnap_capability recorder_core
+    LIBRARIES Qt6::Core Qt6::Gui exosnap_capability recorder_core
 )
 target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(output_settings_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
@@ -204,3 +204,17 @@ exosnap_add_gtest(
     LIBRARIES exosnap_capability recorder_core
 )
 target_include_directories(diagnostics_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+    NAME webcam_settings_tests
+    TEST_PREFIX webcam.
+    SOURCES
+        tests/test_webcam_settings.cpp
+        settings/AppSettingsStore.cpp
+        models/OutputSettingsModel.cpp
+        models/RecordingProfile.cpp
+        models/RecordingProfileRegistry.cpp
+        models/OutputPathPolicy.cpp
+    LIBRARIES exosnap_capability recorder_core Qt6::Core
+)
+target_include_directories(webcam_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

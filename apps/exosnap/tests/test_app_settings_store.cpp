@@ -4,6 +4,7 @@
 #include <QSettings>
 #include <QTemporaryDir>
 
+#include <algorithm>
 #include <filesystem>
 #include <string>
 
@@ -545,6 +546,56 @@ TEST(ProfileRegistryTest, DuplicateCreatesUserProfile) {
     ASSERT_TRUE(registry.DuplicateActiveProfile());
     EXPECT_EQ(registry.UserProfiles().size(), 1u);
     EXPECT_TRUE(registry.IsActiveProfileUser());
+}
+
+TEST(ProfileRegistryTest, CreateUserProfileFromCurrent_UsesUniqueNames) {
+    RecordingProfileRegistry registry;
+    ActiveRecordingProfileState active;
+    active.active_profile_id = std::string(kBuiltInProfileMkvH264AacId);
+    registry.LoadState({}, {}, active);
+
+    registry.CreateUserProfileFromCurrent("Alpha");
+    registry.CreateUserProfileFromCurrent("Alpha");
+
+    ASSERT_EQ(registry.UserProfiles().size(), 2u);
+    EXPECT_EQ(registry.UserProfiles()[0].name, "Alpha");
+    EXPECT_EQ(registry.UserProfiles()[1].name, "Alpha (2)");
+}
+
+TEST(ProfileRegistryTest, DuplicateActiveProfileTwice_UsesUniqueNames) {
+    RecordingProfileRegistry registry;
+    ActiveRecordingProfileState active;
+    active.active_profile_id = std::string(kBuiltInProfileMkvH264AacId);
+    registry.LoadState({}, {}, active);
+
+    ASSERT_TRUE(registry.DuplicateActiveProfile());
+    ASSERT_EQ(registry.UserProfiles().size(), 1u);
+    const std::string first_duplicate_name = registry.UserProfiles()[0].name;
+
+    registry.SetActiveProfile(std::string(kBuiltInProfileMkvH264AacId));
+    ASSERT_TRUE(registry.DuplicateActiveProfile());
+    ASSERT_EQ(registry.UserProfiles().size(), 2u);
+    EXPECT_EQ(registry.UserProfiles()[1].name, first_duplicate_name + " (2)");
+}
+
+TEST(ProfileRegistryTest, RenameActiveUserProfile_RejectsDuplicateNames) {
+    RecordingProfileRegistry registry;
+    ActiveRecordingProfileState active;
+    active.active_profile_id = std::string(kBuiltInProfileMkvH264AacId);
+    registry.LoadState({}, {}, active);
+
+    registry.CreateUserProfileFromCurrent("Alpha");
+    const std::string alpha_id = registry.ActiveState().active_profile_id;
+    registry.CreateUserProfileFromCurrent("Beta");
+
+    registry.SetActiveProfile(alpha_id);
+    EXPECT_FALSE(registry.RenameActiveUserProfile("Beta"));
+    EXPECT_FALSE(registry.RenameActiveUserProfile(registry.BuiltInProfiles().front().name));
+
+    const auto it = std::find_if(registry.UserProfiles().begin(), registry.UserProfiles().end(),
+                                 [&alpha_id](const RecordingProfile& profile) { return profile.id == alpha_id; });
+    ASSERT_NE(it, registry.UserProfiles().end());
+    EXPECT_EQ(it->name, "Alpha");
 }
 
 TEST(ProfileRegistryTest, DeleteOnlyUserProfileSwitchesBackToDefaultBuiltIn) {

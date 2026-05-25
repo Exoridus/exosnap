@@ -98,7 +98,7 @@ bool RecordingProfileRegistry::DuplicateActiveProfile() {
     RecordingProfile source = ActiveProfile();
     source.source = RecordingProfileSource::User;
     source.id = GenerateUserProfileId();
-    source.name = source.name + " Copy";
+    source.name = MakeUniqueUserProfileName(NormalizeName(source.name + " Copy"));
     if (IsBuiltInProfileId(active_state_.active_profile_id)) {
         source.base_builtin_id = active_state_.active_profile_id;
     }
@@ -109,14 +109,21 @@ bool RecordingProfileRegistry::DuplicateActiveProfile() {
 }
 
 bool RecordingProfileRegistry::RenameActiveUserProfile(const std::string& new_name) {
-    if (new_name.empty()) {
+    const std::string normalized_name = NormalizeName(new_name);
+    if (normalized_name.empty()) {
         return false;
     }
     RecordingProfile* profile = FindMutableUserById(active_state_.active_profile_id);
     if (!profile) {
         return false;
     }
-    profile->name = new_name;
+    if (profile->name == normalized_name) {
+        return true;
+    }
+    if (IsProfileNameTaken(normalized_name)) {
+        return false;
+    }
+    profile->name = normalized_name;
     return true;
 }
 
@@ -182,7 +189,8 @@ void RecordingProfileRegistry::CreateUserProfileFromCurrent(const std::string& n
     RecordingProfile copy = ActiveProfile();
     copy.source = RecordingProfileSource::User;
     copy.id = GenerateUserProfileId();
-    copy.name = name.empty() ? std::string("New Profile") : name;
+    const std::string normalized_name = NormalizeName(name);
+    copy.name = MakeUniqueUserProfileName(normalized_name.empty() ? std::string("New Profile") : normalized_name);
     if (IsBuiltInProfileId(active_state_.active_profile_id)) {
         copy.base_builtin_id = active_state_.active_profile_id;
     }

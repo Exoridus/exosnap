@@ -126,10 +126,16 @@ TEST(OutputSettingsTest, TargetToken_IsReplacedFromContext) {
     EXPECT_EQ(filename, L"Brave - Claude Design.mkv");
 }
 
-TEST(OutputSettingsTest, AppAndApplicationTokens_AreAliases) {
+TEST(OutputSettingsTest, AppToken_IsReplacedFromContext) {
     const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
-    const auto filename = BuildFilename(L"{app}_{application}", capability::Container::Matroska, ts, WindowContext());
-    EXPECT_EQ(filename, L"Brave_Brave.mkv");
+    const auto filename = BuildFilename(L"{app}", capability::Container::Matroska, ts, WindowContext());
+    EXPECT_EQ(filename, L"Brave.mkv");
+}
+
+TEST(OutputSettingsTest, ApplicationToken_IsNotRecognized) {
+    const std::time_t ts = LocalTimestamp(2026, 5, 22, 14, 37, 9);
+    const auto filename = BuildFilename(L"{application}", capability::Container::Matroska, ts, WindowContext());
+    EXPECT_EQ(filename.rfind(L"{application}", 0), 0u);
 }
 
 TEST(OutputSettingsTest, ProcessToken_IsReplacedFromContext) {

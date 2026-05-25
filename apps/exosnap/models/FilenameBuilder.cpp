@@ -185,7 +185,7 @@ std::wstring ResolveKnownToken(const std::wstring& token_name, const std::tm& tm
     if (token_name == L"ss") {
         return SafeStrftime(tm_local, L"%S", L"00");
     }
-    if (token_name == L"app" || token_name == L"application") {
+    if (token_name == L"app") {
         return context.app_name;
     }
     if (token_name == L"title") {

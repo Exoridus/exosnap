@@ -415,17 +415,17 @@ void RecordViewModel::ApplyTargetKind(capability::CaptureTargetKind kind) {
 
     using K = recorder_core::AudioSourceKind;
     if (kind == capability::CaptureTargetKind::Window) {
-        // Default: APP + SYS merged into one track; MIC disabled.
+        // Default: APP + MIC + SYS enabled as separate tracks.
         audio_ui_state.source_rows = {
             {K::App, true, false},
-            {K::Mic, false, true},
-            {K::Sys, true, true},
+            {K::Mic, true, false},
+            {K::Sys, true, false},
         };
     } else {
-        // Display: SystemOutput active; MIC disabled.
+        // Display defaults keep both available sources enabled and separate.
         audio_ui_state.source_rows = {
             {K::SystemOutput, true, false},
-            {K::Mic, false, true},
+            {K::Mic, true, false},
         };
     }
 

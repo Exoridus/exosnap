@@ -10,7 +10,7 @@ capability::AudioUiState DefaultAudioUiState() {
     state.target_kind = capability::CaptureTargetKind::Display;
     state.source_rows = {
         {recorder_core::AudioSourceKind::SystemOutput, true, false},
-        {recorder_core::AudioSourceKind::Mic, false, true},
+        {recorder_core::AudioSourceKind::Mic, true, false},
     };
     return state;
 }

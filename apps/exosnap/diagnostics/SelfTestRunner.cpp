@@ -61,27 +61,27 @@ DiagnosticChecklist SelfTestRunner::Run() const {
 SelfTestResult SelfTestRunner::CheckCaptureAvailability() {
     SelfTestResult result;
     result.category = "Capture";
-    // Scaffold: always report pass in MVP. Real WGC probe deferred.
-    result.passed = true;
-    result.detail = "Windows Graphics Capture (WGC) is available on Windows 10 1903+.";
+    // Scaffold only: no runtime probe executed yet.
+    result.passed = false;
+    result.detail = "Capture self-test probe not executed in this build.";
     return result;
 }
 
 SelfTestResult SelfTestRunner::CheckEncoderAvailability() {
     SelfTestResult result;
     result.category = "Encoder";
-    // Scaffold: generic pass. Real NVENC probe deferred.
-    result.passed = true;
-    result.detail = "NVENC hardware encoder abstraction reports ready (static check only).";
+    // Scaffold only: no runtime probe executed yet.
+    result.passed = false;
+    result.detail = "Encoder self-test probe not executed in this build.";
     return result;
 }
 
 SelfTestResult SelfTestRunner::CheckMuxerAvailability() {
     SelfTestResult result;
     result.category = "Muxer";
-    // Scaffold: libwebm and MF sink writer availability deferred.
-    result.passed = true;
-    result.detail = "libwebm (MKV/WebM) and Media Foundation (MP4) muxers linked.";
+    // Scaffold only: no runtime probe executed yet.
+    result.passed = false;
+    result.detail = "Muxer self-test probe not executed in this build.";
     return result;
 }
 
@@ -114,9 +114,9 @@ SelfTestResult SelfTestRunner::CheckOutputPathWritable(const std::string& /*path
 SelfTestResult SelfTestRunner::CheckAudioDeviceAvailability() {
     SelfTestResult result;
     result.category = "Audio Devices";
-    // Scaffold: WASAPI enumeration deferred. Report pass in MVP.
-    result.passed = true;
-    result.detail = "WASAPI audio device enumeration not yet probed in self-test. Manual check recommended.";
+    // Scaffold only: no runtime probe executed yet.
+    result.passed = false;
+    result.detail = "Audio device self-test probe not executed in this build.";
     return result;
 }
 
