@@ -201,6 +201,7 @@ constexpr std::array<PageDescriptor, 9> kPageDescriptors = {{
 constexpr int kNavIndexRole = Qt::UserRole + 1;
 constexpr int kNavIconRole = Qt::UserRole + 2;
 constexpr int kOutputPageIndex = 3;
+constexpr int kDiagnosticsPageIndex = 6;
 
 capability::UserRecorderConfig ProfileToUserConfig(const RecordingProfile& profile) {
     capability::UserRecorderConfig config;
@@ -822,6 +823,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(record_page_, &RecordPage::chromeStateChanged, this, &MainWindow::onRecordChromeStateChanged);
     connect(record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
             &MainWindow::onRecordChromeRuntimeMetricsChanged);
+    connect(global_recording_bar_, &ui::chrome::GlobalRecordingBar::primaryActionRequested, this,
+            &MainWindow::onGlobalRecordingBarPrimaryActionRequested);
+    connect(global_recording_bar_, &ui::chrome::GlobalRecordingBar::pauseActionRequested, this,
+            &MainWindow::onGlobalRecordingBarPauseActionRequested);
     connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { nav_->setCurrentRow(kOutputPageIndex); });
     connect(output_page_, &OutputPage::outputSettingsChanged, this, [this](const OutputSettingsModel& settings) {
         output_settings_ = settings;
@@ -1137,6 +1142,29 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
 
     if (recording && isVisible() && !isMinimized() && stack_->currentIndex() != 0)
         setCurrentPage(0);
+}
+
+void MainWindow::onGlobalRecordingBarPrimaryActionRequested() {
+    if (record_status_label_ == QStringLiteral("READY") || record_status_label_ == QStringLiteral("REC")) {
+        emit recordToggleRequested();
+        return;
+    }
+
+    if (record_status_label_ == QStringLiteral("PAUSED")) {
+        emit pauseToggleRequested();
+        return;
+    }
+
+    if ((record_status_label_ == QStringLiteral("BLOCKED") || record_status_label_ == QStringLiteral("ERROR")) &&
+        nav_) {
+        nav_->setCurrentRow(kDiagnosticsPageIndex);
+    }
+}
+
+void MainWindow::onGlobalRecordingBarPauseActionRequested() {
+    if (record_status_label_ == QStringLiteral("REC") || record_status_label_ == QStringLiteral("PAUSED")) {
+        emit pauseToggleRequested();
+    }
 }
 
 void MainWindow::onRecordChromeRuntimeMetricsChanged(const QString& elapsed_text, const QString& bitrate_text,

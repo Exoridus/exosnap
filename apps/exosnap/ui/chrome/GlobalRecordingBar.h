@@ -30,10 +30,18 @@ class GlobalRecordingBar : public QWidget {
     void setOutputSummary(const QString& summary_text);
     void setRuntimeSummary(const QString& summary_text);
 
+  signals:
+    void primaryActionRequested();
+    void pauseActionRequested();
+    void micActionRequested();
+    void markerActionRequested();
+    void overlayActionRequested();
+
   protected:
     void resizeEvent(QResizeEvent* event) override;
 
   private:
+    void refreshVisualState();
     void refreshStatusChip();
     void refreshActionLabels();
     void applyCompactLayout();

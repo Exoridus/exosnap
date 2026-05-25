@@ -45,7 +45,7 @@ QWidget* makeSummarySlot(const QString& key, QLabel** out_value_label, QWidget* 
     layout->addWidget(key_label, 0, Qt::AlignVCenter);
     layout->addWidget(value_label, 0, Qt::AlignVCenter);
 
-    if (out_value_label != nullptr)
+    if (out_value_label)
         *out_value_label = value_label;
 
     return slot;
@@ -101,6 +101,12 @@ GlobalRecordingBar::GlobalRecordingBar(QWidget* parent) : QWidget(parent) {
     actions_layout->addWidget(marker_action_button_);
     actions_layout->addWidget(overlay_action_button_);
 
+    connect(primary_action_button_, &QPushButton::clicked, this, &GlobalRecordingBar::primaryActionRequested);
+    connect(pause_action_button_, &QPushButton::clicked, this, &GlobalRecordingBar::pauseActionRequested);
+    connect(mic_action_button_, &QPushButton::clicked, this, &GlobalRecordingBar::micActionRequested);
+    connect(marker_action_button_, &QPushButton::clicked, this, &GlobalRecordingBar::markerActionRequested);
+    connect(overlay_action_button_, &QPushButton::clicked, this, &GlobalRecordingBar::overlayActionRequested);
+
     auto* context_slot = new QWidget(this);
     context_slot->setObjectName("globalBarContextSlot");
     context_slot->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -136,7 +142,7 @@ GlobalRecordingBar::GlobalRecordingBar(QWidget* parent) : QWidget(parent) {
     setTargetSummary(QStringLiteral("DISPLAY 1"));
     setOutputSummary(QStringLiteral("-"));
     setRuntimeSummary(QStringLiteral("DUR --:--:-- · SIZE -"));
-    setStatusLabel(QStringLiteral("READY"));
+    refreshVisualState();
     applyCompactLayout();
 }
 
@@ -146,6 +152,10 @@ void GlobalRecordingBar::setStatusLabel(const QString& status_text) {
         return;
 
     status_label_ = normalized;
+    refreshVisualState();
+}
+
+void GlobalRecordingBar::refreshVisualState() {
     refreshStatusChip();
     refreshActionLabels();
 }
@@ -194,21 +204,40 @@ void GlobalRecordingBar::refreshStatusChip() {
 }
 
 void GlobalRecordingBar::refreshActionLabels() {
-    if (status_label_ == QStringLiteral("REC")) {
+    const bool is_recording = (status_label_ == QStringLiteral("REC"));
+    const bool is_paused = (status_label_ == QStringLiteral("PAUSED"));
+    const bool has_details = (status_label_ == QStringLiteral("BLOCKED") || status_label_ == QStringLiteral("ERROR"));
+    const bool is_working =
+        (status_label_ == QStringLiteral("CHECKING") || status_label_ == QStringLiteral("STARTING") ||
+         status_label_ == QStringLiteral("STOPPING"));
+    const bool is_ready = (status_label_ == QStringLiteral("READY"));
+
+    if (is_recording) {
         primary_action_button_->setText(QStringLiteral("Stop"));
-    } else if (status_label_ == QStringLiteral("PAUSED")) {
-        primary_action_button_->setText(QStringLiteral("Resume / Stop"));
-    } else if (status_label_ == QStringLiteral("BLOCKED") || status_label_ == QStringLiteral("ERROR")) {
+        primary_action_button_->setToolTip(QStringLiteral("Stop recording."));
+    } else if (is_paused) {
+        primary_action_button_->setText(QStringLiteral("Resume"));
+        primary_action_button_->setToolTip(QStringLiteral("Resume recording."));
+    } else if (has_details) {
         primary_action_button_->setText(QStringLiteral("Details"));
-    } else if (status_label_ == QStringLiteral("CHECKING") || status_label_ == QStringLiteral("STARTING") ||
-               status_label_ == QStringLiteral("STOPPING")) {
+        primary_action_button_->setToolTip(QStringLiteral("Open diagnostics details."));
+    } else if (is_working) {
         primary_action_button_->setText(QStringLiteral("Working..."));
+        primary_action_button_->setToolTip(QStringLiteral("Action unavailable while state transition is in progress."));
     } else {
         primary_action_button_->setText(QStringLiteral("Start"));
+        primary_action_button_->setToolTip(QStringLiteral("Start recording."));
     }
+    primary_action_button_->setEnabled(is_ready || is_recording || is_paused || has_details);
 
-    pause_action_button_->setText(status_label_ == QStringLiteral("PAUSED") ? QStringLiteral("Resume")
-                                                                            : QStringLiteral("Pause"));
+    pause_action_button_->setText(is_paused ? QStringLiteral("Resume") : QStringLiteral("Pause"));
+    pause_action_button_->setToolTip(is_paused ? QStringLiteral("Resume recording.")
+                                               : QStringLiteral("Pause recording."));
+    pause_action_button_->setEnabled(is_recording || is_paused);
+
+    mic_action_button_->setEnabled(false);
+    marker_action_button_->setEnabled(false);
+    overlay_action_button_->setEnabled(false);
 }
 
 void GlobalRecordingBar::applyCompactLayout() {
