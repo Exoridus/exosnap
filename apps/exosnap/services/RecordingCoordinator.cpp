@@ -240,13 +240,23 @@ std::vector<recorder_core::CaptureTarget> RecordingCoordinator::EnumerateTargets
 }
 
 void RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
+    const bool device_changed = settings.device_id != webcam_settings_.device_id;
+    const bool res_changed = settings.width != webcam_settings_.width || settings.height != webcam_settings_.height;
+    const bool fps_changed = settings.fps != webcam_settings_.fps;
+
     webcam_settings_ = settings;
-    if (settings.enabled) {
-        if (!webcam_service_.IsRunning()) {
-            webcam_service_.Start(settings.device_id, settings.width, settings.height, settings.fps);
-        }
-    } else {
+
+    if (!settings.enabled) {
         webcam_service_.Stop();
+        return;
+    }
+
+    // Only restart capture for device, resolution, or FPS changes.
+    // Overlay position and chroma key changes require no capture restart.
+    const bool needs_restart = !webcam_service_.IsRunning() || device_changed || res_changed || fps_changed;
+    if (needs_restart) {
+        webcam_service_.Stop();
+        webcam_service_.Start(settings.device_id, settings.width, settings.height, settings.fps);
     }
 }
 

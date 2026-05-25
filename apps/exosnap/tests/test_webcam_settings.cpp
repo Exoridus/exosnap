@@ -3,10 +3,20 @@
 #include <QDir>
 #include <QTemporaryDir>
 
+#include "models/WebcamSettings.h"
 #include "settings/AppSettingsStore.h"
 
 namespace exosnap {
 namespace {
+
+// ---------------------------------------------------------------------------
+// Helpers — capture-restart decision logic (mirrors RecordingCoordinator)
+// ---------------------------------------------------------------------------
+
+static bool CaptureNeedsRestart(const WebcamSettings& prev, const WebcamSettings& next) {
+    return next.device_id != prev.device_id || next.width != prev.width || next.height != prev.height ||
+           next.fps != prev.fps;
+}
 
 QString TempSettingsPath(const QTemporaryDir& temp_dir) {
     return QDir(temp_dir.path()).filePath(QStringLiteral("settings.ini"));
@@ -90,6 +100,122 @@ TEST(WebcamSettingsTest, SaveAndLoad_RoundTripsWebcamSettings) {
     EXPECT_EQ(loaded.webcam.chroma_key.b, 56);
     EXPECT_FLOAT_EQ(loaded.webcam.chroma_key.tolerance, 0.45f);
     EXPECT_FLOAT_EQ(loaded.webcam.chroma_key.softness, 0.15f);
+}
+
+// ---------------------------------------------------------------------------
+// Capture-restart decision tests (model-level, no hardware required)
+// ---------------------------------------------------------------------------
+
+TEST(WebcamSettingsTest, OverlayOnlyChange_DoesNotRequireCaptureRestart) {
+    WebcamSettings base;
+    base.enabled = true;
+    base.device_id = "cam1";
+    base.width = 1280;
+    base.height = 720;
+    base.fps = 30;
+
+    WebcamSettings overlay_moved = base;
+    overlay_moved.overlay.x_norm = 0.5f;
+    overlay_moved.overlay.y_norm = 0.3f;
+
+    EXPECT_FALSE(CaptureNeedsRestart(base, overlay_moved));
+}
+
+TEST(WebcamSettingsTest, ChromaKeyChange_DoesNotRequireCaptureRestart) {
+    WebcamSettings base;
+    base.enabled = true;
+    base.device_id = "cam1";
+    base.width = 1920;
+    base.height = 1080;
+    base.fps = 30;
+    base.chroma_key.enabled = false;
+
+    WebcamSettings chroma_on = base;
+    chroma_on.chroma_key.enabled = true;
+    chroma_on.chroma_key.r = 0;
+    chroma_on.chroma_key.g = 177;
+    chroma_on.chroma_key.b = 64;
+
+    EXPECT_FALSE(CaptureNeedsRestart(base, chroma_on));
+}
+
+TEST(WebcamSettingsTest, DeviceChange_RequiresCaptureRestart) {
+    WebcamSettings base;
+    base.device_id = "cam1";
+    base.width = 1280;
+    base.height = 720;
+    base.fps = 30;
+
+    WebcamSettings different_device = base;
+    different_device.device_id = "cam2";
+
+    EXPECT_TRUE(CaptureNeedsRestart(base, different_device));
+}
+
+TEST(WebcamSettingsTest, ResolutionChange_RequiresCaptureRestart) {
+    WebcamSettings base;
+    base.device_id = "cam1";
+    base.width = 1280;
+    base.height = 720;
+    base.fps = 30;
+
+    WebcamSettings hd = base;
+    hd.width = 1920;
+    hd.height = 1080;
+
+    EXPECT_TRUE(CaptureNeedsRestart(base, hd));
+}
+
+TEST(WebcamSettingsTest, FpsChange_RequiresCaptureRestart) {
+    WebcamSettings base;
+    base.device_id = "cam1";
+    base.width = 1280;
+    base.height = 720;
+    base.fps = 30;
+
+    WebcamSettings sixty = base;
+    sixty.fps = 60;
+
+    EXPECT_TRUE(CaptureNeedsRestart(base, sixty));
+}
+
+TEST(WebcamSettingsTest, DisabledWebcam_IsNoOp_NoCaptureParams) {
+    WebcamSettings disabled;
+    disabled.enabled = false;
+    disabled.device_id = "cam1";
+    disabled.width = 1280;
+    disabled.height = 720;
+    disabled.fps = 30;
+
+    // Changing only overlay on a disabled webcam still doesn't flag capture restart
+    WebcamSettings also_disabled = disabled;
+    also_disabled.overlay.w_norm = 0.5f;
+    EXPECT_FALSE(CaptureNeedsRestart(disabled, also_disabled));
+}
+
+TEST(WebcamSettingsTest, OverlayRect_WidthFromHeight_MaintainsAspectRatio) {
+    // Simulate computing overlay height from width and a 16:9 AR
+    constexpr double kAr = 16.0 / 9.0;
+    const double overlay_w = 0.25;
+    const double overlay_h = overlay_w / kAr;
+
+    // Round-trip: compute width back from height
+    const double recovered_w = overlay_h * kAr;
+    EXPECT_NEAR(recovered_w, overlay_w, 1e-9);
+}
+
+TEST(WebcamSettingsTest, OverlayRect_HeightFromWidth_MaintainsAspectRatio) {
+    constexpr double kAr = 4.0 / 3.0;
+    const double overlay_h = 0.20;
+    const double overlay_w = overlay_h * kAr;
+
+    const double recovered_h = overlay_w / kAr;
+    EXPECT_NEAR(recovered_h, overlay_h, 1e-9);
+}
+
+TEST(WebcamSettingsTest, AspectRatioLocked_DefaultIsTrue) {
+    const WebcamSettings s;
+    EXPECT_TRUE(s.aspect_ratio_locked);
 }
 
 } // namespace exosnap

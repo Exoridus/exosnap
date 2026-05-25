@@ -44,6 +44,11 @@ class PreviewSurface : public QWidget {
     QRectF webcamOverlayRect() const noexcept {
         return webcam_rect_norm_;
     }
+    // When true, corner-drag resize preserves the current webcam frame aspect ratio.
+    // Holding Shift while dragging temporarily unlocks.
+    void setAspectRatioLocked(bool locked) {
+        aspect_ratio_locked_ = locked;
+    }
 
   signals:
     // Emitted when user finishes dragging/resizing the overlay (normalized coords).
@@ -65,6 +70,8 @@ class PreviewSurface : public QWidget {
     QImage current_frame_;
     QImage webcam_frame_;
     bool webcam_enabled_ = false;
+    bool aspect_ratio_locked_ = true;
+    double webcam_aspect_ratio_ = 16.0 / 9.0; // updated from incoming frames
     QRectF webcam_rect_norm_{0.0, 0.0, 0.25, 0.25};
 
     DragMode drag_mode_ = DragMode::None;

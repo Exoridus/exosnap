@@ -2,6 +2,7 @@
 
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/widgets/ExoToggle.h"
+#include "../ui/widgets/PreviewSurface.h"
 #include "../ui/widgets/SectionRuleHeader.h"
 
 #include <QCheckBox>
@@ -10,7 +11,6 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QPixmap>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSlider>
@@ -92,16 +92,15 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
     }
     layout->addWidget(makeDivider(content));
 
-    // ---- Live Preview ----
+    // ---- Live Preview (composition view) ----
     {
         layout->addWidget(makeLabel("Preview", "videoKvKey", content));
-        preview_label_ = new QLabel(content);
-        preview_label_->setFixedHeight(180);
-        preview_label_->setAlignment(Qt::AlignCenter);
-        preview_label_->setText("Camera preview — enable webcam to start");
-        preview_label_->setProperty("labelRole", "previewMeta");
-        preview_label_->setStyleSheet("background:#181612; border-radius:4px;");
-        layout->addWidget(preview_label_);
+        preview_surface_ = new ui::widgets::PreviewSurface(content);
+        preview_surface_->setFixedHeight(180);
+        preview_surface_->setCenterTitle("WEBCAM OFF");
+        preview_surface_->setCenterSubtitle("Enable webcam to preview");
+        preview_surface_->setWebcamOverlayEnabled(false);
+        layout->addWidget(preview_surface_);
     }
     layout->addWidget(makeDivider(content));
 
@@ -212,6 +211,17 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
             emit settingsChanged(collectSettings());
     });
 
+    // Slider rows are hidden — mouse interaction in the preview is primary.
+    // The sliders remain wired so that programmatic updates stay in sync.
+    if (pos_x_slider_)
+        pos_x_slider_->parentWidget()->setVisible(false);
+    if (pos_y_slider_)
+        pos_y_slider_->parentWidget()->setVisible(false);
+    if (size_w_slider_)
+        size_w_slider_->parentWidget()->setVisible(false);
+    if (size_h_slider_)
+        size_h_slider_->parentWidget()->setVisible(false);
+
     auto wireSlider = [this](QSlider* slider, QLabel* lbl) {
         connect(slider, &QSlider::valueChanged, this, [this, slider, lbl](int v) {
             lbl->setText(pct(v));
@@ -226,11 +236,28 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
     wireSlider(pos_y_slider_, pos_y_label_);
     wireSlider(size_w_slider_, size_w_label_);
     wireSlider(size_h_slider_, size_h_label_);
-    connect(aspect_lock_check_, &QCheckBox::toggled, this, [this]() {
+    connect(aspect_lock_check_, &QCheckBox::toggled, this, [this](bool locked) {
+        if (preview_surface_)
+            preview_surface_->setAspectRatioLocked(locked);
         if (!suppress_signals_) {
             current_settings_ = collectSettings();
             emit settingsChanged(current_settings_);
         }
+    });
+
+    // When the user drags/resizes the overlay in the preview, sync back to sliders + emit.
+    connect(preview_surface_, &ui::widgets::PreviewSurface::webcamOverlayMoved, this, [this](QRectF rect) {
+        suppress_signals_ = true;
+        pos_x_slider_->setValue(static_cast<int>(rect.x() * 100.0));
+        pos_y_slider_->setValue(static_cast<int>(rect.y() * 100.0));
+        size_w_slider_->setValue(static_cast<int>(rect.width() * 100.0));
+        size_h_slider_->setValue(static_cast<int>(rect.height() * 100.0));
+        suppress_signals_ = false;
+        current_settings_.overlay.x_norm = static_cast<float>(rect.x());
+        current_settings_.overlay.y_norm = static_cast<float>(rect.y());
+        current_settings_.overlay.w_norm = static_cast<float>(rect.width());
+        current_settings_.overlay.h_norm = static_cast<float>(rect.height());
+        emit settingsChanged(current_settings_);
     });
 
     preview_service_.SetFrameCallback([this](QImage img) { onPreviewFrame(std::move(img)); });
@@ -282,10 +309,18 @@ void WebcamPage::applySettings(const WebcamSettings& settings) {
                                          .arg(settings.chroma_key.g)
                                          .arg(settings.chroma_key.b));
 
+    if (preview_surface_) {
+        preview_surface_->setAspectRatioLocked(settings.aspect_ratio_locked);
+        preview_surface_->setWebcamOverlayRect(
+            QRectF(settings.overlay.x_norm, settings.overlay.y_norm, settings.overlay.w_norm, settings.overlay.h_norm));
+    }
+
     suppress_signals_ = false;
 
     if (settings.enabled)
         startPreview();
+    else
+        stopPreview();
 }
 
 void WebcamPage::onEnableToggled(bool enabled) {
@@ -332,11 +367,9 @@ void WebcamPage::onSoftnessChanged(int value) {
 }
 
 void WebcamPage::onPreviewFrame(QImage frame) {
-    if (frame.isNull())
+    if (!preview_surface_)
         return;
-    QPixmap pm =
-        QPixmap::fromImage(frame.scaled(preview_label_->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    preview_label_->setPixmap(pm);
+    preview_surface_->setWebcamFrame(std::move(frame));
 }
 
 void WebcamPage::refreshDevices() {
@@ -367,11 +400,15 @@ void WebcamPage::refreshFormats() {
 }
 
 void WebcamPage::applyCurrentSettings() {
-    if (!suppress_signals_) {
-        current_settings_ = collectSettings();
-        emit settingsChanged(current_settings_);
-    }
-    if (current_settings_.enabled)
+    if (suppress_signals_)
+        return;
+    const WebcamSettings new_settings = collectSettings();
+    const bool capture_changed =
+        new_settings.device_id != current_settings_.device_id || new_settings.width != current_settings_.width ||
+        new_settings.height != current_settings_.height || new_settings.fps != current_settings_.fps;
+    current_settings_ = new_settings;
+    emit settingsChanged(current_settings_);
+    if (current_settings_.enabled && capture_changed)
         startPreview();
 }
 
@@ -381,8 +418,19 @@ void WebcamPage::startPreview() {
     const int w = (combo_data.size() >= 2) ? combo_data[0].toInt() : current_settings_.width;
     const int h = (combo_data.size() >= 2) ? combo_data[1].toInt() : current_settings_.height;
 
+    if (preview_surface_) {
+        preview_surface_->setWebcamOverlayEnabled(true);
+        preview_surface_->setAspectRatioLocked(current_settings_.aspect_ratio_locked);
+        preview_surface_->setWebcamOverlayRect(
+            QRectF(current_settings_.overlay.x_norm, current_settings_.overlay.y_norm, current_settings_.overlay.w_norm,
+                   current_settings_.overlay.h_norm));
+        preview_surface_->setCenterTitle({});
+        preview_surface_->setCenterSubtitle({});
+    }
+
     if (dev_id.isEmpty() && devices_.empty()) {
-        preview_label_->setText("No webcam detected");
+        if (preview_surface_)
+            preview_surface_->setCenterTitle("No webcam detected");
         return;
     }
 
@@ -392,8 +440,12 @@ void WebcamPage::startPreview() {
 
 void WebcamPage::stopPreview() {
     preview_service_.Stop();
-    preview_label_->clear();
-    preview_label_->setText("Camera preview — enable webcam to start");
+    if (preview_surface_) {
+        preview_surface_->setWebcamFrame(QImage{});
+        preview_surface_->setWebcamOverlayEnabled(false);
+        preview_surface_->setCenterTitle("WEBCAM OFF");
+        preview_surface_->setCenterSubtitle("Enable webcam to preview");
+    }
 }
 
 WebcamSettings WebcamPage::collectSettings() const {

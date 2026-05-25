@@ -22,4 +22,11 @@ bool ExtractH264SpsAndPps(const uint8_t* data, size_t size, std::vector<uint8_t>
 // Returns false if input is too short or malformed.
 bool BuildAvccFromAnnexBSpsAndPps(const std::vector<uint8_t>& sps_pps_annexb, std::vector<uint8_t>& out_avcc);
 
+// Convert a complete Annex-B H.264 bitstream packet to an AVCC sample payload.
+// Each NAL unit is written as a 4-byte big-endian length prefix followed by the
+// NAL payload (start codes removed). AUD NALs (type 9) are skipped.
+// Required for Matroska V_MPEG4/ISO/AVC sample data.
+// Returns false if data is null/empty or contains no convertible NAL units.
+bool ConvertAnnexBToAvcc(const uint8_t* data, size_t size, std::vector<uint8_t>& out);
+
 } // namespace recorder_core::annexb

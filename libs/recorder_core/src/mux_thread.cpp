@@ -305,6 +305,19 @@ void MuxThread::Run() {
         return;
     }
 
+    // --- Step 3.5: Convert H.264 video packets from Annex-B to AVCC ---
+    // Matroska V_MPEG4/ISO/AVC requires 4-byte length-prefixed AVCC sample payloads;
+    // NVENC produces Annex-B (start-code prefixed). Convert each video packet in-place.
+    if (m_state.config.video_codec == VideoCodec::H264Nvenc) {
+        for (auto& ip : allPackets) {
+            if (ip.track_num != 1)
+                continue;
+            std::vector<uint8_t> avcc;
+            if (annexb::ConvertAnnexBToAvcc(ip.bytes.data(), ip.bytes.size(), avcc))
+                ip.bytes = std::move(avcc);
+        }
+    }
+
     // --- Step 4: Open output file ---
     mkvmuxer::MkvWriter mkvWriter;
     {

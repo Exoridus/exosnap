@@ -15,6 +15,7 @@ namespace exosnap {
 
 namespace ui::widgets {
 class ExoToggle;
+class PreviewSurface;
 class SectionRuleHeader;
 } // namespace ui::widgets
 
@@ -58,8 +59,8 @@ class WebcamPage : public QWidget {
     QComboBox* resolution_combo_ = nullptr;
     QPushButton* refresh_btn_ = nullptr;
 
-    // Preview
-    QLabel* preview_label_ = nullptr;
+    // Preview (composition view)
+    ui::widgets::PreviewSurface* preview_surface_ = nullptr;
 
     // Overlay position (simple sliders 0–100% for MVP)
     QSlider* pos_x_slider_ = nullptr;

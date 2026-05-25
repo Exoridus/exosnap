@@ -137,6 +137,7 @@ void PreviewService::ThreadMain(recorder_core::CaptureTarget target, std::stop_t
             d3dWinRTDev, winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, capSz);
 
         captureSession = framePool.CreateCaptureSession(item);
+        captureSession.IsBorderRequired(false);
         captureSession.StartCapture();
 
         item.Closed([&sourceLost](const auto&, const auto&) { sourceLost = true; });

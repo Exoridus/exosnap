@@ -17,6 +17,7 @@
 #include <capability/user_config.h>
 #include <recorder_core/audio_input_device.h>
 
+#include <QAbstractItemView>
 #include <QComboBox>
 #include <QDebug>
 #include <QDesktopServices>
@@ -205,6 +206,17 @@ std::vector<std::string> BuildMicDeviceLabels(const std::vector<recorder_core::A
 } // namespace
 
 bool RecordPage::eventFilter(QObject* watched, QEvent* event) {
+    // Refresh target list when the target picker combo popup opens.
+    if (target_picker_combo_ && watched == target_picker_combo_->view() && event->type() == QEvent::Show) {
+        const bool busy =
+            view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::Recording ||
+            view_model_.state == UiRecordingState::Paused || view_model_.state == UiRecordingState::Stopping;
+        if (!busy) {
+            enumerateTargets(true);
+        }
+        return false;
+    }
+
     // Grip-area drag on AudioSourceRow widgets (leftmost 36px).
     if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseMove ||
         event->type() == QEvent::MouseButtonRelease) {
@@ -356,6 +368,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     target_picker_kind_label_ = makeLabel("Display", "captureTargetPickerLabel", target_picker_row);
     target_picker_combo_ = new QComboBox(target_picker_row);
     target_picker_combo_->setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
+    target_picker_combo_->view()->installEventFilter(this);
     target_refresh_btn_ = new QPushButton("Refresh", target_picker_row);
     target_refresh_btn_->setProperty("role", "ghost");
     target_picker_row_layout->addWidget(target_picker_kind_label_);

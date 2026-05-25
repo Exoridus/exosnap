@@ -164,4 +164,28 @@ bool BuildAvccFromAnnexBSpsAndPps(const std::vector<uint8_t>& sps_pps_annexb, st
     return true;
 }
 
+bool ConvertAnnexBToAvcc(const uint8_t* data, size_t size, std::vector<uint8_t>& out) {
+    if (data == nullptr || size == 0)
+        return false;
+
+    std::vector<NalSpan> nals;
+    EnumerateNals(data, size, nals);
+
+    out.clear();
+    for (const auto& nal : nals) {
+        if (nal.nal_type == 9u) // AUD — excluded from sample payload
+            continue;
+        if (nal.payload_size == 0)
+            continue;
+        const uint32_t len = static_cast<uint32_t>(nal.payload_size);
+        out.push_back(static_cast<uint8_t>((len >> 24u) & 0xFFu));
+        out.push_back(static_cast<uint8_t>((len >> 16u) & 0xFFu));
+        out.push_back(static_cast<uint8_t>((len >> 8u) & 0xFFu));
+        out.push_back(static_cast<uint8_t>(len & 0xFFu));
+        out.insert(out.end(), data + nal.payload_offset, data + nal.payload_offset + nal.payload_size);
+    }
+
+    return !out.empty();
+}
+
 } // namespace recorder_core::annexb
