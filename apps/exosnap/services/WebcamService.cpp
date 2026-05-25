@@ -29,6 +29,9 @@ static constexpr DWORD kFirstVideoStream = static_cast<DWORD>(MF_SOURCE_READER_F
 // Tiny RAII wrapper for CoTaskMem strings from MF attributes.
 struct CoStringGuard {
     WCHAR* p = nullptr;
+    CoStringGuard() = default;
+    CoStringGuard(const CoStringGuard&) = delete;
+    CoStringGuard& operator=(const CoStringGuard&) = delete;
     ~CoStringGuard() {
         CoTaskMemFree(p);
     }
@@ -380,7 +383,7 @@ bool WebcamService::TryGetFrame(int& out_width, int& out_height, std::vector<uin
     return true;
 }
 
-void WebcamService::ThreadMain(std::string device_id, int width, int height, int fps, std::stop_token stop) {
+void WebcamService::ThreadMain(const std::string& device_id, int width, int height, int fps, std::stop_token stop) {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
 

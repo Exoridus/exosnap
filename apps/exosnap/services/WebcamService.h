@@ -58,7 +58,7 @@ class WebcamService : public recorder_core::WebcamFrameProvider {
     bool TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra) override;
 
   private:
-    void ThreadMain(std::string device_id, int width, int height, int fps, std::stop_token stop);
+    void ThreadMain(const std::string& device_id, int width, int height, int fps, std::stop_token stop);
     void StoreFrame(int width, int height, std::vector<uint8_t> bgra);
     void PostFrame(QImage img);
 
