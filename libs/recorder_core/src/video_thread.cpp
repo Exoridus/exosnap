@@ -261,8 +261,43 @@ void VideoThread::Run() {
 
     uint32_t sourceWidth = static_cast<uint32_t>(sourceWidthSigned);
     uint32_t sourceHeight = static_cast<uint32_t>(sourceHeightSigned);
-    uint32_t encodeWidth = sourceWidth & ~1u;
-    uint32_t encodeHeight = sourceHeight & ~1u;
+
+    // Determine crop region in monitor-local pixel coordinates.
+    // CaptureRegion uses virtual-screen coordinates; subtract the monitor origin.
+    bool hasCrop = false;
+    int32_t cropX = 0, cropY = 0;
+    int32_t cropW = static_cast<int32_t>(sourceWidth);
+    int32_t cropH = static_cast<int32_t>(sourceHeight);
+
+    if (m_state.config.crop_region.has_value() && target.kind == CaptureTarget::Kind::Monitor) {
+        const auto& region = *m_state.config.crop_region;
+        HMONITOR hmon = reinterpret_cast<HMONITOR>(target.native_id);
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        if (GetMonitorInfo(hmon, &mi)) {
+            cropX = region.x - static_cast<int32_t>(mi.rcMonitor.left);
+            cropY = region.y - static_cast<int32_t>(mi.rcMonitor.top);
+            cropW = region.width;
+            cropH = region.height;
+            // Clamp to monitor-local bounds (avoid std::min/max — Windows macros interfere).
+            if (cropX < 0)
+                cropX = 0;
+            if (cropY < 0)
+                cropY = 0;
+            const int32_t maxW = static_cast<int32_t>(sourceWidth) - cropX;
+            const int32_t maxH = static_cast<int32_t>(sourceHeight) - cropY;
+            if (cropW > maxW)
+                cropW = maxW;
+            if (cropH > maxH)
+                cropH = maxH;
+            if (cropW >= CaptureRegion::kMinDimension && cropH >= CaptureRegion::kMinDimension) {
+                hasCrop = true;
+            }
+        }
+    }
+
+    uint32_t encodeWidth = hasCrop ? (static_cast<uint32_t>(cropW) & ~1u) : (sourceWidth & ~1u);
+    uint32_t encodeHeight = hasCrop ? (static_cast<uint32_t>(cropH) & ~1u) : (sourceHeight & ~1u);
 
     const bool dimsZero = (encodeWidth == 0 || encodeHeight == 0);
     const bool dimsEven = ((encodeWidth % 2u) == 0u) && ((encodeHeight % 2u) == 0u);
@@ -344,8 +379,9 @@ void VideoThread::Run() {
         // Video processor enumerator (shared across all slots)
         D3D11_VIDEO_PROCESSOR_CONTENT_DESC contentDesc{};
         contentDesc.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
-        contentDesc.InputWidth = encodeWidth;
-        contentDesc.InputHeight = encodeHeight;
+        // For crop: InputWidth/Height = full monitor source so the source rect is valid.
+        contentDesc.InputWidth = hasCrop ? sourceWidth : encodeWidth;
+        contentDesc.InputHeight = hasCrop ? sourceHeight : encodeHeight;
         contentDesc.OutputWidth = encodeWidth;
         contentDesc.OutputHeight = encodeHeight;
         contentDesc.Usage = D3D11_VIDEO_USAGE_OPTIMAL_SPEED;
@@ -419,6 +455,17 @@ void VideoThread::Run() {
         }
     }
 
+    // Apply crop source/destination rects on the video processor.
+    // These are stream state that persists until changed, so set once before the loop.
+    if (hasCrop) {
+        const RECT srcRect = {static_cast<LONG>(cropX), static_cast<LONG>(cropY),
+                              static_cast<LONG>(cropX + static_cast<int32_t>(encodeWidth)),
+                              static_cast<LONG>(cropY + static_cast<int32_t>(encodeHeight))};
+        videoContext->VideoProcessorSetStreamSourceRect(videoProcessor.get(), 0, TRUE, &srcRect);
+        const RECT dstRect = {0, 0, static_cast<LONG>(encodeWidth), static_cast<LONG>(encodeHeight)};
+        videoContext->VideoProcessorSetStreamDestRect(videoProcessor.get(), 0, TRUE, &dstRect);
+    }
+
     // --- WGC frame pool and session ---
     bool sourceLost = false;
     winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool framePool{nullptr};
@@ -436,6 +483,7 @@ void VideoThread::Run() {
             d3dWinRTDev, winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, capSz);
 
         captureSession = framePool.CreateCaptureSession(item);
+        captureSession.IsCursorCaptureEnabled(m_state.config.capture_cursor);
         captureSession.StartCapture();
 
         closedToken = item.Closed([&sourceLost](const auto&, const auto&) { sourceLost = true; });
@@ -617,6 +665,9 @@ void VideoThread::Run() {
         uint64_t cfr_frame_idx = 0;
         uint64_t next_tick_100ns = 0; // relative to epoch
 
+        bool cfr_was_paused = false;
+        uint64_t cfr_pause_start_100ns = 0;
+
         winrt::com_ptr<ID3D11Texture2D> pendingWgcTex;
 
         while (!m_state.stop_requested.load()) {
@@ -633,7 +684,7 @@ void VideoThread::Run() {
                 break;
             }
 
-            // Drain WGC frames — keep latest
+            // Drain WGC frames — keep latest (always drain, even when paused)
             try {
                 while (true) {
                     auto frame = framePool.TryGetNextFrame();
@@ -649,6 +700,22 @@ void VideoThread::Run() {
                     }
                 }
             } catch (...) {
+            }
+
+            // Pause: discard frames and track paused duration for epoch adjustment on resume
+            const bool cfr_paused = m_state.pause_requested.load();
+            if (cfr_paused) {
+                if (!cfr_was_paused) {
+                    cfr_was_paused = true;
+                    cfr_pause_start_100ns = Qpc100ns(qpcFreq);
+                }
+                pendingWgcTex = nullptr;
+                Sleep(1);
+                continue;
+            }
+            if (cfr_was_paused) {
+                epochQpc100ns += Qpc100ns(qpcFreq) - cfr_pause_start_100ns;
+                cfr_was_paused = false;
             }
 
             // Set epoch on first WGC frame arrival
@@ -760,6 +827,9 @@ void VideoThread::Run() {
         bool videoEpochSet = false;
         int64_t videoEpochTicks100ns = 0;
 
+        bool vfr_was_paused = false;
+        uint64_t vfr_pause_start_100ns = 0;
+
         while (!m_state.stop_requested.load()) {
             MSG msg{};
             while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -776,7 +846,7 @@ void VideoThread::Run() {
 
             bool anyWork = false;
 
-            // Drain WGC frames — keep latest
+            // Drain WGC frames — keep latest (always drain, even when paused)
             winrt::com_ptr<ID3D11Texture2D> latestTex;
             int64_t latestFrameTicks100ns = 0;
 
@@ -797,6 +867,21 @@ void VideoThread::Run() {
                     }
                 }
             } catch (...) {
+            }
+
+            // Pause: discard frames and track paused duration for epoch adjustment on resume
+            const bool vfr_paused = m_state.pause_requested.load();
+            if (vfr_paused) {
+                if (!vfr_was_paused) {
+                    vfr_was_paused = true;
+                    vfr_pause_start_100ns = Qpc100ns(qpcFreq);
+                }
+                Sleep(1);
+                continue;
+            }
+            if (vfr_was_paused) {
+                videoEpochTicks100ns += static_cast<int64_t>(Qpc100ns(qpcFreq) - vfr_pause_start_100ns);
+                vfr_was_paused = false;
             }
 
             if (latestTex != nullptr) {

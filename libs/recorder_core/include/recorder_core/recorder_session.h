@@ -29,6 +29,28 @@ struct CaptureTarget {
     std::string description;
 };
 
+// ---------------------------------------------------------------------------
+// CaptureRegion
+// ---------------------------------------------------------------------------
+
+// Axis-aligned rectangle in virtual screen coordinates (same as RECT / GetMonitorInfo.rcMonitor).
+// When set in RecorderConfig.crop_region, the engine crops the monitor capture to this rectangle.
+// Target must be CaptureTarget::Kind::Monitor.
+struct CaptureRegion {
+    int32_t x = 0;
+    int32_t y = 0;
+    int32_t width = 0;
+    int32_t height = 0;
+
+    // Minimum dimension accepted for region capture.
+    // 64 px provides safe headroom above NVENC hard minimums.
+    static constexpr int32_t kMinDimension = 64;
+
+    [[nodiscard]] bool IsValid() const noexcept {
+        return width >= kMinDimension && height >= kMinDimension;
+    }
+};
+
 // Microphone channel mapping policy for MIC capture in M4 Phase 4.2.
 enum class MicChannelMode {
     Auto,
@@ -91,6 +113,15 @@ struct RecorderConfig {
     // For single-source MIC tracks, this gain is applied by wrapping the source in MixedAudioSrc when needed.
     // Default 1.0f (unity gain).
     float mic_gain_linear = 1.0f;
+
+    // Whether the mouse cursor is composited into the captured frames.
+    // Maps to GraphicsCaptureSession.IsCursorCaptureEnabled. Default true = WGC default.
+    bool capture_cursor = true;
+
+    // Optional region crop applied to Monitor captures.
+    // When set, the engine crops the captured monitor frame to this rectangle
+    // (coordinates in virtual screen space). Target.kind must be Kind::Monitor.
+    std::optional<CaptureRegion> crop_region;
 };
 
 // ---------------------------------------------------------------------------
@@ -133,6 +164,11 @@ class RecorderSession {
     // Thread-safe cooperative stop.  Safe to call from any thread while
     // Record() is running.  No-op if not recording.
     void Stop();
+
+    // Thread-safe pause/resume.  Safe to call from any thread while Record()
+    // is running.  Workers drain their source during pause so buffers do not stall.
+    void Pause();
+    void Resume();
 
     // Register a stats callback invoked approximately every 250 ms from an
     // internal worker thread.  Must be set before calling Record().

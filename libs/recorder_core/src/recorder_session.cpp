@@ -170,6 +170,20 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         return fail(E_INVALIDARG, ErrorPhase::Prepare, "CaptureTarget::Kind::Window requires a non-zero native_id");
     }
 
+    // Crop region: requires Monitor target and valid dimensions
+    if (config.crop_region.has_value()) {
+        if (config.target.kind != CaptureTarget::Kind::Monitor) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare, "crop_region requires CaptureTarget::Kind::Monitor");
+        }
+        if (!config.crop_region->IsValid()) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare,
+                        "crop_region dimensions too small: " + std::to_string(config.crop_region->width) + "x" +
+                            std::to_string(config.crop_region->height) + " (minimum " +
+                            std::to_string(CaptureRegion::kMinDimension) + "x" +
+                            std::to_string(CaptureRegion::kMinDimension) + ")");
+        }
+    }
+
     if (out_result) {
         out_result->succeeded = true;
         out_result->error_code = S_OK;
@@ -184,9 +198,18 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
 // ---------------------------------------------------------------------------
 
 void RecorderSession::Stop() {
+    m_impl->state.pause_requested.store(false);
     m_impl->state.stop_requested.store(true);
     m_impl->state.premux_cv.notify_all();
     m_impl->state.mux_cv.notify_all();
+}
+
+void RecorderSession::Pause() {
+    m_impl->state.pause_requested.store(true);
+}
+
+void RecorderSession::Resume() {
+    m_impl->state.pause_requested.store(false);
 }
 
 // ---------------------------------------------------------------------------
