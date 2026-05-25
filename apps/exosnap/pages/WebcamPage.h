@@ -3,6 +3,8 @@
 #include "../models/WebcamSettings.h"
 #include "../services/WebcamService.h"
 
+#include <QHideEvent>
+#include <QShowEvent>
 #include <QWidget>
 
 class QCheckBox;
@@ -41,6 +43,9 @@ class WebcamPage : public QWidget {
     void onPreviewFrame(QImage frame);
 
   private:
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+
     void refreshDevices();
     void refreshFormats();
     void applyCurrentSettings();
@@ -83,6 +88,7 @@ class WebcamPage : public QWidget {
 
     WebcamSettings current_settings_;
     bool suppress_signals_ = false;
+    bool startup_overlay_pending_ = false;
 };
 
 } // namespace exosnap

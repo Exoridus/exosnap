@@ -302,6 +302,7 @@ void LoadWebcamSettingsFromCurrentGroup(QSettings& settings, WebcamSettings* out
     out->overlay.y_norm = settings.value(QStringLiteral("overlay_y"), 0.0f).toFloat();
     out->overlay.w_norm = settings.value(QStringLiteral("overlay_w"), 0.25f).toFloat();
     out->overlay.h_norm = settings.value(QStringLiteral("overlay_h"), 0.25f).toFloat();
+    out->overlay_user_placed = settings.value(QStringLiteral("overlay_user_placed"), false).toBool();
     out->aspect_ratio_locked = settings.value(QStringLiteral("aspect_ratio_locked"), true).toBool();
     out->chroma_key.enabled = settings.value(QStringLiteral("chroma_enabled"), false).toBool();
     out->chroma_key.r = static_cast<uint8_t>(settings.value(QStringLiteral("chroma_r"), 0).toInt());
@@ -309,25 +310,28 @@ void LoadWebcamSettingsFromCurrentGroup(QSettings& settings, WebcamSettings* out
     out->chroma_key.b = static_cast<uint8_t>(settings.value(QStringLiteral("chroma_b"), 64).toInt());
     out->chroma_key.tolerance = settings.value(QStringLiteral("chroma_tolerance"), 0.30f).toFloat();
     out->chroma_key.softness = settings.value(QStringLiteral("chroma_softness"), 0.05f).toFloat();
+    *out = SanitizeWebcamSettings(*out);
 }
 
 void SaveWebcamSettingsToCurrentGroup(QSettings& settings, const WebcamSettings& webcam) {
-    settings.setValue(QStringLiteral("enabled"), webcam.enabled);
-    settings.setValue(QStringLiteral("device_id"), QString::fromStdString(webcam.device_id));
-    settings.setValue(QStringLiteral("width"), webcam.width);
-    settings.setValue(QStringLiteral("height"), webcam.height);
-    settings.setValue(QStringLiteral("fps"), webcam.fps);
-    settings.setValue(QStringLiteral("overlay_x"), webcam.overlay.x_norm);
-    settings.setValue(QStringLiteral("overlay_y"), webcam.overlay.y_norm);
-    settings.setValue(QStringLiteral("overlay_w"), webcam.overlay.w_norm);
-    settings.setValue(QStringLiteral("overlay_h"), webcam.overlay.h_norm);
-    settings.setValue(QStringLiteral("aspect_ratio_locked"), webcam.aspect_ratio_locked);
-    settings.setValue(QStringLiteral("chroma_enabled"), webcam.chroma_key.enabled);
-    settings.setValue(QStringLiteral("chroma_r"), static_cast<int>(webcam.chroma_key.r));
-    settings.setValue(QStringLiteral("chroma_g"), static_cast<int>(webcam.chroma_key.g));
-    settings.setValue(QStringLiteral("chroma_b"), static_cast<int>(webcam.chroma_key.b));
-    settings.setValue(QStringLiteral("chroma_tolerance"), webcam.chroma_key.tolerance);
-    settings.setValue(QStringLiteral("chroma_softness"), webcam.chroma_key.softness);
+    const WebcamSettings sanitized = SanitizeWebcamSettings(webcam);
+    settings.setValue(QStringLiteral("enabled"), sanitized.enabled);
+    settings.setValue(QStringLiteral("device_id"), QString::fromStdString(sanitized.device_id));
+    settings.setValue(QStringLiteral("width"), sanitized.width);
+    settings.setValue(QStringLiteral("height"), sanitized.height);
+    settings.setValue(QStringLiteral("fps"), sanitized.fps);
+    settings.setValue(QStringLiteral("overlay_x"), sanitized.overlay.x_norm);
+    settings.setValue(QStringLiteral("overlay_y"), sanitized.overlay.y_norm);
+    settings.setValue(QStringLiteral("overlay_w"), sanitized.overlay.w_norm);
+    settings.setValue(QStringLiteral("overlay_h"), sanitized.overlay.h_norm);
+    settings.setValue(QStringLiteral("overlay_user_placed"), sanitized.overlay_user_placed);
+    settings.setValue(QStringLiteral("aspect_ratio_locked"), sanitized.aspect_ratio_locked);
+    settings.setValue(QStringLiteral("chroma_enabled"), sanitized.chroma_key.enabled);
+    settings.setValue(QStringLiteral("chroma_r"), static_cast<int>(sanitized.chroma_key.r));
+    settings.setValue(QStringLiteral("chroma_g"), static_cast<int>(sanitized.chroma_key.g));
+    settings.setValue(QStringLiteral("chroma_b"), static_cast<int>(sanitized.chroma_key.b));
+    settings.setValue(QStringLiteral("chroma_tolerance"), sanitized.chroma_key.tolerance);
+    settings.setValue(QStringLiteral("chroma_softness"), sanitized.chroma_key.softness);
 }
 
 void LoadAudioStateFromCurrentGroup(QSettings& settings, capability::AudioUiState* out_audio) {

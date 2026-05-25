@@ -1,7 +1,10 @@
 #include <gtest/gtest.h>
 
 #include <QDir>
+#include <QSettings>
 #include <QTemporaryDir>
+
+#include <limits>
 
 #include "models/WebcamSettings.h"
 #include "settings/AppSettingsStore.h"
@@ -31,6 +34,15 @@ PersistedAppSettings MakeSettingsSnapshot() {
     return settings;
 }
 
+void ExpectOverlayInBounds(const WebcamOverlayRect& overlay) {
+    EXPECT_GE(overlay.x_norm, 0.0f);
+    EXPECT_GE(overlay.y_norm, 0.0f);
+    EXPECT_GE(overlay.w_norm, WebcamOverlayRect::kMinSizeNorm);
+    EXPECT_GE(overlay.h_norm, WebcamOverlayRect::kMinSizeNorm);
+    EXPECT_LE(overlay.x_norm + overlay.w_norm, 1.0f);
+    EXPECT_LE(overlay.y_norm + overlay.h_norm, 1.0f);
+}
+
 } // namespace
 
 TEST(WebcamSettingsTest, LoadMissingFile_UsesDefaults) {
@@ -49,6 +61,7 @@ TEST(WebcamSettingsTest, LoadMissingFile_UsesDefaults) {
     EXPECT_FLOAT_EQ(loaded.webcam.overlay.y_norm, 0.0f);
     EXPECT_FLOAT_EQ(loaded.webcam.overlay.w_norm, 0.25f);
     EXPECT_FLOAT_EQ(loaded.webcam.overlay.h_norm, 0.25f);
+    EXPECT_FALSE(loaded.webcam.overlay_user_placed);
     EXPECT_TRUE(loaded.webcam.aspect_ratio_locked);
     EXPECT_FALSE(loaded.webcam.chroma_key.enabled);
     EXPECT_EQ(loaded.webcam.chroma_key.r, 0);
@@ -73,6 +86,7 @@ TEST(WebcamSettingsTest, SaveAndLoad_RoundTripsWebcamSettings) {
     settings.webcam.overlay.y_norm = 0.1f;
     settings.webcam.overlay.w_norm = 0.35f;
     settings.webcam.overlay.h_norm = 0.4f;
+    settings.webcam.overlay_user_placed = true;
     settings.webcam.aspect_ratio_locked = false;
     settings.webcam.chroma_key.enabled = true;
     settings.webcam.chroma_key.r = 12;
@@ -93,6 +107,7 @@ TEST(WebcamSettingsTest, SaveAndLoad_RoundTripsWebcamSettings) {
     EXPECT_FLOAT_EQ(loaded.webcam.overlay.y_norm, 0.1f);
     EXPECT_FLOAT_EQ(loaded.webcam.overlay.w_norm, 0.35f);
     EXPECT_FLOAT_EQ(loaded.webcam.overlay.h_norm, 0.4f);
+    EXPECT_TRUE(loaded.webcam.overlay_user_placed);
     EXPECT_FALSE(loaded.webcam.aspect_ratio_locked);
     EXPECT_TRUE(loaded.webcam.chroma_key.enabled);
     EXPECT_EQ(loaded.webcam.chroma_key.r, 12);
@@ -216,6 +231,79 @@ TEST(WebcamSettingsTest, OverlayRect_HeightFromWidth_MaintainsAspectRatio) {
 TEST(WebcamSettingsTest, AspectRatioLocked_DefaultIsTrue) {
     const WebcamSettings s;
     EXPECT_TRUE(s.aspect_ratio_locked);
+}
+
+TEST(WebcamSettingsTest, SanitizeOverlayRect_ClampsInsideUnitRect) {
+    WebcamOverlayRect overlay;
+    overlay.x_norm = 0.92f;
+    overlay.y_norm = 0.95f;
+    overlay.w_norm = 0.80f;
+    overlay.h_norm = 0.70f;
+
+    const WebcamOverlayRect sanitized = SanitizeWebcamOverlayRect(overlay);
+    ExpectOverlayInBounds(sanitized);
+}
+
+TEST(WebcamSettingsTest, SanitizeOverlayRect_RepairsNonFiniteValues) {
+    WebcamOverlayRect overlay;
+    overlay.x_norm = std::numeric_limits<float>::infinity();
+    overlay.y_norm = -std::numeric_limits<float>::infinity();
+    overlay.w_norm = std::numeric_limits<float>::quiet_NaN();
+    overlay.h_norm = std::numeric_limits<float>::quiet_NaN();
+
+    const WebcamOverlayRect sanitized = SanitizeWebcamOverlayRect(overlay);
+    ExpectOverlayInBounds(sanitized);
+    EXPECT_FLOAT_EQ(sanitized.w_norm, 0.25f);
+    EXPECT_FLOAT_EQ(sanitized.h_norm, 0.25f);
+}
+
+TEST(WebcamSettingsTest, LoadInvalidPersistedOverlay_ClampsToSafeBounds) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString ini_path = TempSettingsPath(temp_dir);
+    {
+        QSettings raw(ini_path, QSettings::IniFormat);
+        raw.beginGroup(QStringLiteral("webcam"));
+        raw.setValue(QStringLiteral("overlay_x"), 1.75);
+        raw.setValue(QStringLiteral("overlay_y"), -2.5);
+        raw.setValue(QStringLiteral("overlay_w"), 4.0);
+        raw.setValue(QStringLiteral("overlay_h"), 0.001);
+        raw.endGroup();
+        raw.sync();
+    }
+
+    AppSettingsStore store(ini_path);
+    const PersistedAppSettings loaded = store.Load();
+    ExpectOverlayInBounds(loaded.webcam.overlay);
+}
+
+TEST(WebcamSettingsTest, SaveInvalidWebcamSettings_WritesSanitizedValues) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings = MakeSettingsSnapshot();
+    settings.webcam.width = 0;
+    settings.webcam.height = -4;
+    settings.webcam.fps = 0;
+    settings.webcam.overlay.x_norm = 0.8f;
+    settings.webcam.overlay.y_norm = 0.9f;
+    settings.webcam.overlay.w_norm = 0.6f;
+    settings.webcam.overlay.h_norm = 0.7f;
+    settings.webcam.chroma_key.tolerance = 9.0f;
+    settings.webcam.chroma_key.softness = -5.0f;
+
+    store.Save(settings);
+    const PersistedAppSettings loaded = store.Load();
+
+    EXPECT_GE(loaded.webcam.width, 1);
+    EXPECT_GE(loaded.webcam.height, 1);
+    EXPECT_GE(loaded.webcam.fps, 1);
+    EXPECT_LE(loaded.webcam.chroma_key.tolerance, 1.0f);
+    EXPECT_GE(loaded.webcam.chroma_key.tolerance, 0.0f);
+    EXPECT_LE(loaded.webcam.chroma_key.softness, 1.0f);
+    EXPECT_GE(loaded.webcam.chroma_key.softness, 0.0f);
+    ExpectOverlayInBounds(loaded.webcam.overlay);
 }
 
 } // namespace exosnap

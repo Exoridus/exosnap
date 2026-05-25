@@ -574,15 +574,27 @@ void VideoThread::Run() {
         if (cam_w <= 0 || cam_h <= 0 || camBgra.empty())
             return compositeTex.get();
 
-        // Overlay pixel rect (clamp to encode dims).
-        const int ov_x = static_cast<int>(m_state.config.webcam.overlay_x_norm * static_cast<float>(encodeWidth));
-        const int ov_y = static_cast<int>(m_state.config.webcam.overlay_y_norm * static_cast<float>(encodeHeight));
-        int ov_w = static_cast<int>(m_state.config.webcam.overlay_w_norm * static_cast<float>(encodeWidth));
-        int ov_h = static_cast<int>(m_state.config.webcam.overlay_h_norm * static_cast<float>(encodeHeight));
-        if (ov_x < 0 || ov_y < 0)
+        // Overlay pixel rect (clamped to encode dims).
+        // Future extension: if webcam is recorded as an independent output/track,
+        // bypass this compositor path and keep native webcam dimensions untouched.
+        const float x_norm = (std::max)(0.0f, (std::min)(m_state.config.webcam.overlay_x_norm, 1.0f));
+        const float y_norm = (std::max)(0.0f, (std::min)(m_state.config.webcam.overlay_y_norm, 1.0f));
+        const float w_norm = (std::max)(0.0f, (std::min)(m_state.config.webcam.overlay_w_norm, 1.0f));
+        const float h_norm = (std::max)(0.0f, (std::min)(m_state.config.webcam.overlay_h_norm, 1.0f));
+
+        const int ov_x = static_cast<int>(x_norm * static_cast<float>(encodeWidth));
+        const int ov_y = static_cast<int>(y_norm * static_cast<float>(encodeHeight));
+        int ov_w = static_cast<int>(w_norm * static_cast<float>(encodeWidth));
+        int ov_h = static_cast<int>(h_norm * static_cast<float>(encodeHeight));
+        if (ov_x < 0 || ov_y < 0 || ov_x >= static_cast<int>(encodeWidth) || ov_y >= static_cast<int>(encodeHeight))
             return compositeTex.get();
-        ov_w = (std::max)(2, (std::min)(ov_w, static_cast<int>(encodeWidth) - ov_x));
-        ov_h = (std::max)(2, (std::min)(ov_h, static_cast<int>(encodeHeight) - ov_y));
+
+        const int max_ov_w = static_cast<int>(encodeWidth) - ov_x;
+        const int max_ov_h = static_cast<int>(encodeHeight) - ov_y;
+        if (max_ov_w < 2 || max_ov_h < 2)
+            return compositeTex.get();
+        ov_w = (std::max)(2, (std::min)(ov_w, max_ov_w));
+        ov_h = (std::max)(2, (std::min)(ov_h, max_ov_h));
         if (ov_w <= 0 || ov_h <= 0)
             return compositeTex.get();
 

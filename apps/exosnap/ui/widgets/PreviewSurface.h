@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QImage>
+#include <QKeyEvent>
 #include <QPointF>
 #include <QRectF>
 #include <QWidget>
@@ -44,11 +45,10 @@ class PreviewSurface : public QWidget {
     QRectF webcamOverlayRect() const noexcept {
         return webcam_rect_norm_;
     }
+    QRectF defaultWebcamOverlayRect(double camera_aspect_w_over_h = 0.0) const;
     // When true, corner-drag resize preserves the current webcam frame aspect ratio.
-    // Holding Shift while dragging temporarily unlocks.
-    void setAspectRatioLocked(bool locked) {
-        aspect_ratio_locked_ = locked;
-    }
+    // Holding Shift/Ctrl during a corner drag temporarily toggles the lock.
+    void setAspectRatioLocked(bool locked);
 
   signals:
     // Emitted when user finishes dragging/resizing the overlay (normalized coords).
@@ -60,12 +60,17 @@ class PreviewSurface : public QWidget {
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
+    void keyReleaseEvent(QKeyEvent* event) override;
 
   private:
     enum class DragMode { None, Move, ResizeTL, ResizeTR, ResizeBL, ResizeBR };
 
     QRectF webcamPixelRect() const; // webcam rect in widget pixel coords
+    QRectF displayedFrameRect() const;
     DragMode hitTestWebcam(QPointF pos) const;
+    void applyDragFromPointer(QPointF pos, Qt::KeyboardModifiers modifiers);
+    void snapOverlayRectToCurrentAspect();
 
     QImage current_frame_;
     QImage webcam_frame_;
@@ -77,6 +82,7 @@ class PreviewSurface : public QWidget {
     DragMode drag_mode_ = DragMode::None;
     QPointF drag_origin_;
     QRectF drag_start_rect_;
+    bool drag_modifier_toggle_held_ = false;
 
     StatusPill* status_pill_ = nullptr;
     QLabel* top_meta_label_ = nullptr;

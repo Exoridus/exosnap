@@ -240,23 +240,27 @@ std::vector<recorder_core::CaptureTarget> RecordingCoordinator::EnumerateTargets
 }
 
 void RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
-    const bool device_changed = settings.device_id != webcam_settings_.device_id;
-    const bool res_changed = settings.width != webcam_settings_.width || settings.height != webcam_settings_.height;
-    const bool fps_changed = settings.fps != webcam_settings_.fps;
+    const WebcamSettings sanitized = SanitizeWebcamSettings(settings);
+    const bool device_changed = sanitized.device_id != webcam_settings_.device_id;
+    const bool res_changed = sanitized.width != webcam_settings_.width || sanitized.height != webcam_settings_.height;
+    const bool fps_changed = sanitized.fps != webcam_settings_.fps;
+    webcam_settings_ = sanitized;
 
-    webcam_settings_ = settings;
-
-    if (!settings.enabled) {
+    // Keep the capture device free while idle so WebcamPage preview can own it.
+    if (!is_recording_) {
         webcam_service_.Stop();
         return;
     }
 
-    // Only restart capture for device, resolution, or FPS changes.
-    // Overlay position and chroma key changes require no capture restart.
+    if (!sanitized.enabled) {
+        webcam_service_.Stop();
+        return;
+    }
+
     const bool needs_restart = !webcam_service_.IsRunning() || device_changed || res_changed || fps_changed;
     if (needs_restart) {
         webcam_service_.Stop();
-        webcam_service_.Start(settings.device_id, settings.width, settings.height, settings.fps);
+        webcam_service_.Start(sanitized.device_id, sanitized.width, sanitized.height, sanitized.fps);
     }
 }
 
@@ -318,7 +322,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.crop_region = crop_region;
     config.output_path = output_path;
 
-    if (webcam_settings_.enabled && webcam_service_.IsRunning()) {
+    if (webcam_settings_.enabled) {
         config.webcam.enabled = true;
         config.webcam.frame_provider = &webcam_service_;
         config.webcam.overlay_x_norm = webcam_settings_.overlay.x_norm;
@@ -376,6 +380,14 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     }
 
     session_.SetStatsCallback([this](const recorder_core::SessionStats& stats) { PostStats(stats); });
+
+    if (webcam_settings_.enabled) {
+        webcam_service_.Stop();
+        webcam_service_.Start(webcam_settings_.device_id, webcam_settings_.width, webcam_settings_.height,
+                              webcam_settings_.fps);
+    } else {
+        webcam_service_.Stop();
+    }
 
     is_recording_ = true;
     PostStateChange(UiRecordingState::Recording);
@@ -519,6 +531,7 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
 
     PostResult(std::move(ui_result));
     PostStateChange(result.succeeded ? UiRecordingState::Completed : UiRecordingState::Failed);
+    webcam_service_.Stop();
 }
 
 UiRecordingState RecordingCoordinator::State() const noexcept {

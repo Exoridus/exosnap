@@ -96,7 +96,7 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
     {
         layout->addWidget(makeLabel("Preview", "videoKvKey", content));
         preview_surface_ = new ui::widgets::PreviewSurface(content);
-        preview_surface_->setFixedHeight(180);
+        preview_surface_->setMinimumHeight(240);
         preview_surface_->setCenterTitle("WEBCAM OFF");
         preview_surface_->setCenterSubtitle("Enable webcam to preview");
         preview_surface_->setWebcamOverlayEnabled(false);
@@ -237,9 +237,24 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
     wireSlider(size_w_slider_, size_w_label_);
     wireSlider(size_h_slider_, size_h_label_);
     connect(aspect_lock_check_, &QCheckBox::toggled, this, [this](bool locked) {
-        if (preview_surface_)
+        const bool was_suppressed = suppress_signals_;
+        if (preview_surface_) {
             preview_surface_->setAspectRatioLocked(locked);
-        if (!suppress_signals_) {
+            if (!was_suppressed) {
+                const QRectF rect = preview_surface_->webcamOverlayRect();
+                suppress_signals_ = true;
+                pos_x_slider_->setValue(static_cast<int>(rect.x() * 100.0));
+                pos_y_slider_->setValue(static_cast<int>(rect.y() * 100.0));
+                size_w_slider_->setValue(static_cast<int>(rect.width() * 100.0));
+                size_h_slider_->setValue(static_cast<int>(rect.height() * 100.0));
+                suppress_signals_ = false;
+                current_settings_.overlay = SanitizeWebcamOverlayRect(
+                    WebcamOverlayRect{static_cast<float>(rect.x()), static_cast<float>(rect.y()),
+                                      static_cast<float>(rect.width()), static_cast<float>(rect.height())});
+                current_settings_.overlay_user_placed = true;
+            }
+        }
+        if (!was_suppressed) {
             current_settings_ = collectSettings();
             emit settingsChanged(current_settings_);
         }
@@ -247,16 +262,18 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
 
     // When the user drags/resizes the overlay in the preview, sync back to sliders + emit.
     connect(preview_surface_, &ui::widgets::PreviewSurface::webcamOverlayMoved, this, [this](QRectF rect) {
+        startup_overlay_pending_ = false;
+        const WebcamOverlayRect sanitized = SanitizeWebcamOverlayRect(
+            WebcamOverlayRect{static_cast<float>(rect.x()), static_cast<float>(rect.y()),
+                              static_cast<float>(rect.width()), static_cast<float>(rect.height())});
         suppress_signals_ = true;
-        pos_x_slider_->setValue(static_cast<int>(rect.x() * 100.0));
-        pos_y_slider_->setValue(static_cast<int>(rect.y() * 100.0));
-        size_w_slider_->setValue(static_cast<int>(rect.width() * 100.0));
-        size_h_slider_->setValue(static_cast<int>(rect.height() * 100.0));
+        pos_x_slider_->setValue(static_cast<int>(sanitized.x_norm * 100.0f));
+        pos_y_slider_->setValue(static_cast<int>(sanitized.y_norm * 100.0f));
+        size_w_slider_->setValue(static_cast<int>(sanitized.w_norm * 100.0f));
+        size_h_slider_->setValue(static_cast<int>(sanitized.h_norm * 100.0f));
         suppress_signals_ = false;
-        current_settings_.overlay.x_norm = static_cast<float>(rect.x());
-        current_settings_.overlay.y_norm = static_cast<float>(rect.y());
-        current_settings_.overlay.w_norm = static_cast<float>(rect.width());
-        current_settings_.overlay.h_norm = static_cast<float>(rect.height());
+        current_settings_.overlay = sanitized;
+        current_settings_.overlay_user_placed = true;
         emit settingsChanged(current_settings_);
     });
 
@@ -270,15 +287,30 @@ WebcamPage::~WebcamPage() {
     stopPreview();
 }
 
-void WebcamPage::applySettings(const WebcamSettings& settings) {
-    suppress_signals_ = true;
-    current_settings_ = settings;
+void WebcamPage::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    if (current_settings_.enabled && !preview_service_.IsRunning()) {
+        startPreview();
+    }
+}
 
-    enable_toggle_->setChecked(settings.enabled);
+void WebcamPage::hideEvent(QHideEvent* event) {
+    QWidget::hideEvent(event);
+    // Release the camera while the page is hidden to avoid stale/frozen device state.
+    stopPreview();
+}
+
+void WebcamPage::applySettings(const WebcamSettings& settings) {
+    const WebcamSettings sanitized_settings = SanitizeWebcamSettings(settings);
+    startup_overlay_pending_ = sanitized_settings.enabled && !sanitized_settings.overlay_user_placed;
+    suppress_signals_ = true;
+    current_settings_ = sanitized_settings;
+
+    enable_toggle_->setChecked(sanitized_settings.enabled);
 
     // Find matching device.
     for (int i = 0; i < device_combo_->count(); ++i) {
-        if (device_combo_->itemData(i).toString().toStdString() == settings.device_id) {
+        if (device_combo_->itemData(i).toString().toStdString() == sanitized_settings.device_id) {
             device_combo_->setCurrentIndex(i);
             break;
         }
@@ -289,35 +321,36 @@ void WebcamPage::applySettings(const WebcamSettings& settings) {
     // Find matching resolution.
     for (int i = 0; i < resolution_combo_->count(); ++i) {
         const auto d = resolution_combo_->itemData(i).toList();
-        if (d.size() == 2 && d[0].toInt() == settings.width && d[1].toInt() == settings.height) {
+        if (d.size() == 2 && d[0].toInt() == sanitized_settings.width && d[1].toInt() == sanitized_settings.height) {
             resolution_combo_->setCurrentIndex(i);
             break;
         }
     }
 
-    pos_x_slider_->setValue(static_cast<int>(settings.overlay.x_norm * 100));
-    pos_y_slider_->setValue(static_cast<int>(settings.overlay.y_norm * 100));
-    size_w_slider_->setValue(static_cast<int>(settings.overlay.w_norm * 100));
-    size_h_slider_->setValue(static_cast<int>(settings.overlay.h_norm * 100));
-    aspect_lock_check_->setChecked(settings.aspect_ratio_locked);
+    pos_x_slider_->setValue(static_cast<int>(sanitized_settings.overlay.x_norm * 100));
+    pos_y_slider_->setValue(static_cast<int>(sanitized_settings.overlay.y_norm * 100));
+    size_w_slider_->setValue(static_cast<int>(sanitized_settings.overlay.w_norm * 100));
+    size_h_slider_->setValue(static_cast<int>(sanitized_settings.overlay.h_norm * 100));
+    aspect_lock_check_->setChecked(sanitized_settings.aspect_ratio_locked);
 
-    chroma_toggle_->setChecked(settings.chroma_key.enabled);
-    tolerance_slider_->setValue(static_cast<int>(settings.chroma_key.tolerance * 100));
-    softness_slider_->setValue(static_cast<int>(settings.chroma_key.softness * 100));
+    chroma_toggle_->setChecked(sanitized_settings.chroma_key.enabled);
+    tolerance_slider_->setValue(static_cast<int>(sanitized_settings.chroma_key.tolerance * 100));
+    softness_slider_->setValue(static_cast<int>(sanitized_settings.chroma_key.softness * 100));
     chroma_color_btn_->setStyleSheet(QString("background:rgb(%1,%2,%3); border-radius:3px;")
-                                         .arg(settings.chroma_key.r)
-                                         .arg(settings.chroma_key.g)
-                                         .arg(settings.chroma_key.b));
+                                         .arg(sanitized_settings.chroma_key.r)
+                                         .arg(sanitized_settings.chroma_key.g)
+                                         .arg(sanitized_settings.chroma_key.b));
 
     if (preview_surface_) {
-        preview_surface_->setAspectRatioLocked(settings.aspect_ratio_locked);
+        preview_surface_->setAspectRatioLocked(sanitized_settings.aspect_ratio_locked);
         preview_surface_->setWebcamOverlayRect(
-            QRectF(settings.overlay.x_norm, settings.overlay.y_norm, settings.overlay.w_norm, settings.overlay.h_norm));
+            QRectF(sanitized_settings.overlay.x_norm, sanitized_settings.overlay.y_norm,
+                   sanitized_settings.overlay.w_norm, sanitized_settings.overlay.h_norm));
     }
 
     suppress_signals_ = false;
 
-    if (settings.enabled)
+    if (sanitized_settings.enabled)
         startPreview();
     else
         stopPreview();
@@ -370,6 +403,24 @@ void WebcamPage::onPreviewFrame(QImage frame) {
     if (!preview_surface_)
         return;
     preview_surface_->setWebcamFrame(std::move(frame));
+    if (startup_overlay_pending_) {
+        const QRectF startup_rect = preview_surface_->defaultWebcamOverlayRect();
+        preview_surface_->setWebcamOverlayRect(startup_rect);
+
+        suppress_signals_ = true;
+        pos_x_slider_->setValue(static_cast<int>(startup_rect.x() * 100.0));
+        pos_y_slider_->setValue(static_cast<int>(startup_rect.y() * 100.0));
+        size_w_slider_->setValue(static_cast<int>(startup_rect.width() * 100.0));
+        size_h_slider_->setValue(static_cast<int>(startup_rect.height() * 100.0));
+        suppress_signals_ = false;
+
+        current_settings_.overlay = SanitizeWebcamOverlayRect(
+            WebcamOverlayRect{static_cast<float>(startup_rect.x()), static_cast<float>(startup_rect.y()),
+                              static_cast<float>(startup_rect.width()), static_cast<float>(startup_rect.height())});
+        current_settings_.overlay_user_placed = false;
+        startup_overlay_pending_ = false;
+        emit settingsChanged(current_settings_);
+    }
 }
 
 void WebcamPage::refreshDevices() {
@@ -402,7 +453,7 @@ void WebcamPage::refreshFormats() {
 void WebcamPage::applyCurrentSettings() {
     if (suppress_signals_)
         return;
-    const WebcamSettings new_settings = collectSettings();
+    const WebcamSettings new_settings = SanitizeWebcamSettings(collectSettings());
     const bool capture_changed =
         new_settings.device_id != current_settings_.device_id || new_settings.width != current_settings_.width ||
         new_settings.height != current_settings_.height || new_settings.fps != current_settings_.fps;
@@ -413,6 +464,10 @@ void WebcamPage::applyCurrentSettings() {
 }
 
 void WebcamPage::startPreview() {
+    current_settings_ = SanitizeWebcamSettings(current_settings_);
+    if (!current_settings_.overlay_user_placed) {
+        startup_overlay_pending_ = true;
+    }
     const QString dev_id = device_combo_->currentData().toString();
     const auto combo_data = resolution_combo_->currentData().toList();
     const int w = (combo_data.size() >= 2) ? combo_data[0].toInt() : current_settings_.width;
@@ -421,9 +476,27 @@ void WebcamPage::startPreview() {
     if (preview_surface_) {
         preview_surface_->setWebcamOverlayEnabled(true);
         preview_surface_->setAspectRatioLocked(current_settings_.aspect_ratio_locked);
-        preview_surface_->setWebcamOverlayRect(
-            QRectF(current_settings_.overlay.x_norm, current_settings_.overlay.y_norm, current_settings_.overlay.w_norm,
-                   current_settings_.overlay.h_norm));
+        QRectF overlay_rect(current_settings_.overlay.x_norm, current_settings_.overlay.y_norm,
+                            current_settings_.overlay.w_norm, current_settings_.overlay.h_norm);
+        if (startup_overlay_pending_) {
+            const double startup_ar = (w > 0 && h > 0) ? (static_cast<double>(w) / static_cast<double>(h)) : 0.0;
+            const QRectF startup_rect = preview_surface_->defaultWebcamOverlayRect(startup_ar);
+            overlay_rect = startup_rect;
+
+            suppress_signals_ = true;
+            pos_x_slider_->setValue(static_cast<int>(startup_rect.x() * 100.0));
+            pos_y_slider_->setValue(static_cast<int>(startup_rect.y() * 100.0));
+            size_w_slider_->setValue(static_cast<int>(startup_rect.width() * 100.0));
+            size_h_slider_->setValue(static_cast<int>(startup_rect.height() * 100.0));
+            suppress_signals_ = false;
+
+            current_settings_.overlay = SanitizeWebcamOverlayRect(
+                WebcamOverlayRect{static_cast<float>(startup_rect.x()), static_cast<float>(startup_rect.y()),
+                                  static_cast<float>(startup_rect.width()), static_cast<float>(startup_rect.height())});
+            current_settings_.overlay_user_placed = false;
+            emit settingsChanged(current_settings_);
+        }
+        preview_surface_->setWebcamOverlayRect(overlay_rect);
         preview_surface_->setCenterTitle({});
         preview_surface_->setCenterSubtitle({});
     }
@@ -462,6 +535,7 @@ WebcamSettings WebcamPage::collectSettings() const {
     s.overlay.y_norm = pos_y_slider_->value() / 100.0f;
     s.overlay.w_norm = size_w_slider_->value() / 100.0f;
     s.overlay.h_norm = size_h_slider_->value() / 100.0f;
+    s.overlay_user_placed = current_settings_.overlay_user_placed;
     s.aspect_ratio_locked = aspect_lock_check_->isChecked();
 
     s.chroma_key.enabled = chroma_toggle_->isChecked();
@@ -470,7 +544,7 @@ WebcamSettings WebcamPage::collectSettings() const {
     s.chroma_key.b = current_settings_.chroma_key.b;
     s.chroma_key.tolerance = tolerance_slider_->value() / 100.0f;
     s.chroma_key.softness = softness_slider_->value() / 100.0f;
-    return s;
+    return SanitizeWebcamSettings(s);
 }
 
 } // namespace exosnap

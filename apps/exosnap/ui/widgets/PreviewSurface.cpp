@@ -2,6 +2,8 @@
 
 #include "StatusPill.h"
 
+#include <QApplication>
+#include <QCursor>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
@@ -14,12 +16,141 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace exosnap::ui::widgets {
+namespace {
+
+constexpr double kMinOverlayNorm = 0.05;
+
+double clampOrdered(double value, double low, double high) {
+    if (low > high)
+        std::swap(low, high);
+    return std::clamp(value, low, high);
+}
+
+double finiteOrDefault(double value, double fallback) {
+    return std::isfinite(value) ? value : fallback;
+}
+
+QRectF sanitizeOverlayRect(QRectF rect_norm) {
+    double x = finiteOrDefault(rect_norm.x(), 0.0);
+    double y = finiteOrDefault(rect_norm.y(), 0.0);
+    double w = finiteOrDefault(rect_norm.width(), 0.25);
+    double h = finiteOrDefault(rect_norm.height(), 0.25);
+
+    w = clampOrdered(w, kMinOverlayNorm, 1.0);
+    h = clampOrdered(h, kMinOverlayNorm, 1.0);
+    x = clampOrdered(x, 0.0, 1.0 - kMinOverlayNorm);
+    y = clampOrdered(y, 0.0, 1.0 - kMinOverlayNorm);
+
+    if (x + w > 1.0)
+        w = std::max(kMinOverlayNorm, 1.0 - x);
+    if (y + h > 1.0)
+        h = std::max(kMinOverlayNorm, 1.0 - y);
+    if (x + w > 1.0)
+        x = std::max(0.0, 1.0 - w);
+    if (y + h > 1.0)
+        y = std::max(0.0, 1.0 - h);
+
+    return {x, y, w, h};
+}
+
+QRectF snapRectToAspectInside(QRectF rect_norm, double aspect_w_over_h) {
+    rect_norm = sanitizeOverlayRect(rect_norm);
+    if (aspect_w_over_h <= 0.0)
+        return rect_norm;
+
+    const double cx = rect_norm.center().x();
+    const double cy = rect_norm.center().y();
+    double w = rect_norm.width();
+    double h = rect_norm.height();
+    const double current_ar = h > 0.0 ? (w / h) : aspect_w_over_h;
+    if (current_ar > aspect_w_over_h) {
+        w = h * aspect_w_over_h;
+    } else {
+        h = w / aspect_w_over_h;
+    }
+
+    QRectF snapped(cx - (w * 0.5), cy - (h * 0.5), w, h);
+    if (snapped.left() < 0.0)
+        snapped.moveLeft(0.0);
+    if (snapped.top() < 0.0)
+        snapped.moveTop(0.0);
+    if (snapped.right() > 1.0)
+        snapped.moveRight(1.0);
+    if (snapped.bottom() > 1.0)
+        snapped.moveBottom(1.0);
+
+    return sanitizeOverlayRect(snapped);
+}
+
+QRectF fitAspectIntoRect(const QRectF& bounds, double aspect_w_over_h) {
+    if (bounds.width() <= 0.0 || bounds.height() <= 0.0 || aspect_w_over_h <= 0.0)
+        return bounds;
+
+    double w = bounds.width();
+    double h = w / aspect_w_over_h;
+    if (h > bounds.height()) {
+        h = bounds.height();
+        w = h * aspect_w_over_h;
+    }
+
+    const double x = bounds.left() + (bounds.width() - w) * 0.5;
+    const double y = bounds.top() + (bounds.height() - h) * 0.5;
+    return {x, y, w, h};
+}
+
+std::pair<double, double> fitAspectSize(double desired_w, double desired_h, double max_w, double max_h, double min_w,
+                                        double min_h, double aspect_w_over_h) {
+    max_w = std::max(max_w, min_w);
+    max_h = std::max(max_h, min_h);
+    desired_w = std::clamp(desired_w, min_w, max_w);
+    desired_h = std::clamp(desired_h, min_h, max_h);
+
+    double w_from_h = desired_h * aspect_w_over_h;
+    double h_from_w = desired_w / aspect_w_over_h;
+    double w = desired_w;
+    double h = desired_h;
+    if (std::abs(desired_w - w_from_h) < std::abs(desired_h - h_from_w)) {
+        w = w_from_h;
+    } else {
+        h = h_from_w;
+    }
+
+    if (w > max_w) {
+        w = max_w;
+        h = w / aspect_w_over_h;
+    }
+    if (h > max_h) {
+        h = max_h;
+        w = h * aspect_w_over_h;
+    }
+    if (w < min_w) {
+        w = min_w;
+        h = w / aspect_w_over_h;
+    }
+    if (h < min_h) {
+        h = min_h;
+        w = h * aspect_w_over_h;
+    }
+    if (w > max_w) {
+        w = max_w;
+        h = w / aspect_w_over_h;
+    }
+    if (h > max_h) {
+        h = max_h;
+        w = h * aspect_w_over_h;
+    }
+    return {w, h};
+}
+
+} // namespace
 
 PreviewSurface::PreviewSurface(QWidget* parent) : QWidget(parent) {
     setObjectName("previewSurface");
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    setFocusPolicy(Qt::StrongFocus);
 
     top_row_ = new QWidget(this);
     top_row_->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -151,20 +282,91 @@ void PreviewSurface::setWebcamFrame(QImage frame) {
 
 void PreviewSurface::setWebcamOverlayEnabled(bool enabled) {
     webcam_enabled_ = enabled;
+    if (!enabled && drag_mode_ != DragMode::None) {
+        drag_mode_ = DragMode::None;
+        if (drag_modifier_toggle_held_) {
+            drag_modifier_toggle_held_ = false;
+        }
+        if (QWidget::keyboardGrabber() == this) {
+            releaseKeyboard();
+        }
+    }
     setMouseTracking(enabled);
     update();
 }
 
 void PreviewSurface::setWebcamOverlayRect(QRectF rect_norm) {
-    webcam_rect_norm_ = rect_norm;
+    webcam_rect_norm_ = sanitizeOverlayRect(rect_norm);
     update();
+}
+
+void PreviewSurface::setAspectRatioLocked(bool locked) {
+    if (aspect_ratio_locked_ == locked)
+        return;
+    aspect_ratio_locked_ = locked;
+    if (aspect_ratio_locked_)
+        snapOverlayRectToCurrentAspect();
+    update();
+}
+
+QRectF PreviewSurface::defaultWebcamOverlayRect(double camera_aspect_w_over_h) const {
+    const QRectF frame_rect = displayedFrameRect();
+    if (frame_rect.width() < 1.0 || frame_rect.height() < 1.0) {
+        return sanitizeOverlayRect(QRectF(0.75, 0.75, 0.25, 0.25));
+    }
+
+    const double W = frame_rect.width();
+    const double H = frame_rect.height();
+    const double requested_ar = camera_aspect_w_over_h > 0.0 ? camera_aspect_w_over_h : webcam_aspect_ratio_;
+    const double cam_ar = requested_ar > 0.0 ? requested_ar : (16.0 / 9.0);
+    constexpr double kMaxSide = 0.25;
+
+    double w_px = 0.0;
+    double h_px = 0.0;
+    // Startup rule: landscape webcams are width-limited to 25%, square/portrait are height-limited to 25%.
+    if (cam_ar > 1.0) {
+        w_px = kMaxSide * W;
+        h_px = w_px / cam_ar;
+    } else {
+        h_px = kMaxSide * H;
+        w_px = h_px * cam_ar;
+    }
+
+    w_px = std::clamp(w_px, kMinOverlayNorm * W, W);
+    h_px = std::clamp(h_px, kMinOverlayNorm * H, H);
+    const double w_norm = std::clamp(w_px / W, kMinOverlayNorm, 1.0);
+    const double h_norm = std::clamp(h_px / H, kMinOverlayNorm, 1.0);
+    const double x_norm = std::max(0.0, 1.0 - w_norm);
+    const double y_norm = std::max(0.0, 1.0 - h_norm);
+    return sanitizeOverlayRect(QRectF(x_norm, y_norm, w_norm, h_norm));
 }
 
 // Returns the webcam overlay rect in widget pixel coordinates.
 QRectF PreviewSurface::webcamPixelRect() const {
-    const QRectF fr = rect();
+    const QRectF fr = displayedFrameRect();
+    if (fr.width() <= 0.0 || fr.height() <= 0.0)
+        return {};
+
     return QRectF(fr.x() + webcam_rect_norm_.x() * fr.width(), fr.y() + webcam_rect_norm_.y() * fr.height(),
                   webcam_rect_norm_.width() * fr.width(), webcam_rect_norm_.height() * fr.height());
+}
+
+QRectF PreviewSurface::displayedFrameRect() const {
+    if (width() <= 0 || height() <= 0)
+        return {};
+
+    const QRectF widget_rect = rect();
+    if (current_frame_.isNull() || current_frame_.width() <= 0 || current_frame_.height() <= 0)
+        return widget_rect;
+
+    const double sx = static_cast<double>(width()) / static_cast<double>(current_frame_.width());
+    const double sy = static_cast<double>(height()) / static_cast<double>(current_frame_.height());
+    const double s = std::max(sx, sy);
+    const double dw = static_cast<double>(current_frame_.width()) * s;
+    const double dh = static_cast<double>(current_frame_.height()) * s;
+    const double dx = (static_cast<double>(width()) - dw) * 0.5;
+    const double dy = (static_cast<double>(height()) - dh) * 0.5;
+    return {dx, dy, dw, dh};
 }
 
 PreviewSurface::DragMode PreviewSurface::hitTestWebcam(QPointF pos) const {
@@ -187,6 +389,170 @@ PreviewSurface::DragMode PreviewSurface::hitTestWebcam(QPointF pos) const {
     return DragMode::None;
 }
 
+void PreviewSurface::snapOverlayRectToCurrentAspect() {
+    const QRectF frame_rect = displayedFrameRect();
+    const double W = frame_rect.width();
+    const double H = frame_rect.height();
+    if (W < 1.0 || H < 1.0)
+        return;
+    const double normalized_ar = webcam_aspect_ratio_ > 0.0 ? (webcam_aspect_ratio_ * H / W) : 0.0;
+    if (normalized_ar <= 0.0)
+        return;
+    webcam_rect_norm_ = snapRectToAspectInside(webcam_rect_norm_, normalized_ar);
+}
+
+void PreviewSurface::applyDragFromPointer(QPointF pos, Qt::KeyboardModifiers modifiers) {
+    if (drag_mode_ == DragMode::None)
+        return;
+
+    const QRectF frame_rect = displayedFrameRect();
+    const double W = frame_rect.width();
+    const double H = frame_rect.height();
+    if (W < 1.0 || H < 1.0)
+        return;
+
+    const double dx = (pos.x() - drag_origin_.x()) / W;
+    const double dy = (pos.y() - drag_origin_.y()) / H;
+    QRectF r = sanitizeOverlayRect(drag_start_rect_);
+
+    constexpr double kMinNorm = kMinOverlayNorm;
+    const bool modifier_toggle_held = (modifiers & (Qt::ShiftModifier | Qt::ControlModifier)) != 0;
+    drag_modifier_toggle_held_ = modifier_toggle_held;
+    const bool effective_aspect_lock = aspect_ratio_locked_ != modifier_toggle_held;
+    const double normalized_ar = webcam_aspect_ratio_ > 0.0 ? (webcam_aspect_ratio_ * H / W) : 0.0;
+    const bool use_ar = effective_aspect_lock && normalized_ar > 0.0;
+
+    if (use_ar && drag_mode_ != DragMode::Move) {
+        const double min_w = kMinNorm;
+        const double min_h = kMinNorm;
+        switch (drag_mode_) {
+        case DragMode::ResizeBR: {
+            const double max_w = std::max(min_w, 1.0 - r.left());
+            const double max_h = std::max(min_h, 1.0 - r.top());
+            const double desired_w = drag_start_rect_.width() + dx;
+            const double desired_h = drag_start_rect_.height() + dy;
+            const auto [new_w, new_h] = fitAspectSize(desired_w, desired_h, max_w, max_h, min_w, min_h, normalized_ar);
+            r.setRight(r.left() + new_w);
+            r.setBottom(r.top() + new_h);
+            webcam_rect_norm_ = sanitizeOverlayRect(r);
+            update();
+            return;
+        }
+        case DragMode::ResizeTL: {
+            const double max_w = std::max(min_w, r.right());
+            const double max_h = std::max(min_h, r.bottom());
+            const double desired_w = r.right() - (drag_start_rect_.left() + dx);
+            const double desired_h = r.bottom() - (drag_start_rect_.top() + dy);
+            const auto [new_w, new_h] = fitAspectSize(desired_w, desired_h, max_w, max_h, min_w, min_h, normalized_ar);
+            r.setLeft(r.right() - new_w);
+            r.setTop(r.bottom() - new_h);
+            webcam_rect_norm_ = sanitizeOverlayRect(r);
+            update();
+            return;
+        }
+        case DragMode::ResizeTR: {
+            const double max_w = std::max(min_w, 1.0 - r.left());
+            const double max_h = std::max(min_h, r.bottom());
+            const double desired_w = (drag_start_rect_.right() + dx) - r.left();
+            const double desired_h = r.bottom() - (drag_start_rect_.top() + dy);
+            const auto [new_w, new_h] = fitAspectSize(desired_w, desired_h, max_w, max_h, min_w, min_h, normalized_ar);
+            r.setRight(r.left() + new_w);
+            r.setTop(r.bottom() - new_h);
+            webcam_rect_norm_ = sanitizeOverlayRect(r);
+            update();
+            return;
+        }
+        case DragMode::ResizeBL: {
+            const double max_w = std::max(min_w, r.right());
+            const double max_h = std::max(min_h, 1.0 - r.top());
+            const double desired_w = r.right() - (drag_start_rect_.left() + dx);
+            const double desired_h = (drag_start_rect_.bottom() + dy) - r.top();
+            const auto [new_w, new_h] = fitAspectSize(desired_w, desired_h, max_w, max_h, min_w, min_h, normalized_ar);
+            r.setLeft(r.right() - new_w);
+            r.setBottom(r.top() + new_h);
+            webcam_rect_norm_ = sanitizeOverlayRect(r);
+            update();
+            return;
+        }
+        default:
+            break;
+        }
+    }
+
+    switch (drag_mode_) {
+    case DragMode::Move:
+        r.translate(dx, dy);
+        r.moveLeft(clampOrdered(r.left(), 0.0, 1.0 - r.width()));
+        r.moveTop(clampOrdered(r.top(), 0.0, 1.0 - r.height()));
+        break;
+    case DragMode::ResizeBR: {
+        const double max_w = std::max(kMinNorm, 1.0 - r.left());
+        const double max_h = std::max(kMinNorm, 1.0 - r.top());
+        double new_w = std::clamp(drag_start_rect_.width() + dx, kMinNorm, max_w);
+        double new_h = std::clamp(drag_start_rect_.height() + dy, kMinNorm, max_h);
+        if (use_ar) {
+            if (std::abs(dx) >= std::abs(dy))
+                new_h = std::clamp(new_w / normalized_ar, kMinNorm, max_h);
+            else
+                new_w = std::clamp(new_h * normalized_ar, kMinNorm, max_w);
+        }
+        r.setRight(r.left() + new_w);
+        r.setBottom(r.top() + new_h);
+        break;
+    }
+    case DragMode::ResizeTL: {
+        const double max_left = std::max(0.0, r.right() - kMinNorm);
+        const double max_top = std::max(0.0, r.bottom() - kMinNorm);
+        double new_left = std::clamp(drag_start_rect_.left() + dx, 0.0, max_left);
+        double new_top = std::clamp(drag_start_rect_.top() + dy, 0.0, max_top);
+        if (use_ar) {
+            if (std::abs(dx) >= std::abs(dy))
+                new_top = std::clamp(r.bottom() - (r.right() - new_left) / normalized_ar, 0.0, max_top);
+            else
+                new_left = std::clamp(r.right() - (r.bottom() - new_top) * normalized_ar, 0.0, max_left);
+        }
+        r.setLeft(new_left);
+        r.setTop(new_top);
+        break;
+    }
+    case DragMode::ResizeTR: {
+        const double min_right = std::min(1.0, r.left() + kMinNorm);
+        const double max_top = std::max(0.0, r.bottom() - kMinNorm);
+        double new_right = std::clamp(drag_start_rect_.right() + dx, min_right, 1.0);
+        double new_top = std::clamp(drag_start_rect_.top() + dy, 0.0, max_top);
+        if (use_ar) {
+            if (std::abs(dx) >= std::abs(dy))
+                new_top = std::clamp(r.bottom() - (new_right - r.left()) / normalized_ar, 0.0, max_top);
+            else
+                new_right = std::clamp(r.left() + (r.bottom() - new_top) * normalized_ar, min_right, 1.0);
+        }
+        r.setTop(new_top);
+        r.setRight(new_right);
+        break;
+    }
+    case DragMode::ResizeBL: {
+        const double max_left = std::max(0.0, r.right() - kMinNorm);
+        const double min_bottom = std::min(1.0, r.top() + kMinNorm);
+        double new_left = std::clamp(drag_start_rect_.left() + dx, 0.0, max_left);
+        double new_bottom = std::clamp(drag_start_rect_.bottom() + dy, min_bottom, 1.0);
+        if (use_ar) {
+            if (std::abs(dx) >= std::abs(dy))
+                new_bottom = std::clamp(r.top() + (r.right() - new_left) / normalized_ar, min_bottom, 1.0);
+            else
+                new_left = std::clamp(r.right() - (new_bottom - r.top()) * normalized_ar, 0.0, max_left);
+        }
+        r.setLeft(new_left);
+        r.setBottom(new_bottom);
+        break;
+    }
+    default:
+        break;
+    }
+
+    webcam_rect_norm_ = sanitizeOverlayRect(r);
+    update();
+}
+
 void PreviewSurface::mousePressEvent(QMouseEvent* event) {
     if (!webcam_enabled_) {
         QWidget::mousePressEvent(event);
@@ -196,7 +562,10 @@ void PreviewSurface::mousePressEvent(QMouseEvent* event) {
     drag_mode_ = hitTestWebcam(pos);
     if (drag_mode_ != DragMode::None) {
         drag_origin_ = pos;
-        drag_start_rect_ = webcam_rect_norm_;
+        drag_start_rect_ = sanitizeOverlayRect(webcam_rect_norm_);
+        drag_modifier_toggle_held_ = false;
+        setFocus(Qt::MouseFocusReason);
+        grabKeyboard();
         event->accept();
     } else {
         QWidget::mousePressEvent(event);
@@ -211,6 +580,10 @@ void PreviewSurface::mouseMoveEvent(QMouseEvent* event) {
     const QPointF pos = event->position();
 
     if (drag_mode_ == DragMode::None) {
+        if (drag_modifier_toggle_held_) {
+            drag_modifier_toggle_held_ = false;
+            update();
+        }
         const DragMode hit = hitTestWebcam(pos);
         switch (hit) {
         case DragMode::ResizeTL:
@@ -232,100 +605,63 @@ void PreviewSurface::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
 
-    const double W = static_cast<double>(width());
-    const double H = static_cast<double>(height());
-    if (W < 1.0 || H < 1.0)
-        return;
-
-    const double dx = (pos.x() - drag_origin_.x()) / W;
-    const double dy = (pos.y() - drag_origin_.y()) / H;
-    QRectF r = drag_start_rect_;
-
-    constexpr double kMinNorm = 0.05;
-    const bool shift_held = (event->modifiers() & Qt::ShiftModifier) != 0;
-    const bool use_ar = aspect_ratio_locked_ && !shift_held && webcam_aspect_ratio_ > 0.0;
-
-    switch (drag_mode_) {
-    case DragMode::Move:
-        r.translate(dx, dy);
-        r.setLeft(std::clamp(r.left(), 0.0, 1.0 - r.width()));
-        r.setTop(std::clamp(r.top(), 0.0, 1.0 - r.height()));
-        break;
-    case DragMode::ResizeBR: {
-        double new_w = std::clamp(drag_start_rect_.width() + dx, kMinNorm, 1.0 - r.left());
-        double new_h = std::clamp(drag_start_rect_.height() + dy, kMinNorm, 1.0 - r.top());
-        if (use_ar) {
-            if (std::abs(dx) >= std::abs(dy))
-                new_h = std::clamp(new_w / webcam_aspect_ratio_, kMinNorm, 1.0 - r.top());
-            else
-                new_w = std::clamp(new_h * webcam_aspect_ratio_, kMinNorm, 1.0 - r.left());
-        }
-        r.setRight(r.left() + new_w);
-        r.setBottom(r.top() + new_h);
-        break;
-    }
-    case DragMode::ResizeTL: {
-        double new_left = std::clamp(drag_start_rect_.left() + dx, 0.0, r.right() - kMinNorm);
-        double new_top = std::clamp(drag_start_rect_.top() + dy, 0.0, r.bottom() - kMinNorm);
-        if (use_ar) {
-            if (std::abs(dx) >= std::abs(dy))
-                new_top =
-                    std::clamp(r.bottom() - (r.right() - new_left) / webcam_aspect_ratio_, 0.0, r.bottom() - kMinNorm);
-            else
-                new_left =
-                    std::clamp(r.right() - (r.bottom() - new_top) * webcam_aspect_ratio_, 0.0, r.right() - kMinNorm);
-        }
-        r.setLeft(new_left);
-        r.setTop(new_top);
-        break;
-    }
-    case DragMode::ResizeTR: {
-        double new_right = std::clamp(drag_start_rect_.right() + dx, r.left() + kMinNorm, 1.0);
-        double new_top = std::clamp(drag_start_rect_.top() + dy, 0.0, r.bottom() - kMinNorm);
-        if (use_ar) {
-            if (std::abs(dx) >= std::abs(dy))
-                new_top =
-                    std::clamp(r.bottom() - (new_right - r.left()) / webcam_aspect_ratio_, 0.0, r.bottom() - kMinNorm);
-            else
-                new_right =
-                    std::clamp(r.left() + (r.bottom() - new_top) * webcam_aspect_ratio_, r.left() + kMinNorm, 1.0);
-        }
-        r.setTop(new_top);
-        r.setRight(new_right);
-        break;
-    }
-    case DragMode::ResizeBL: {
-        double new_left = std::clamp(drag_start_rect_.left() + dx, 0.0, r.right() - kMinNorm);
-        double new_bottom = std::clamp(drag_start_rect_.bottom() + dy, r.top() + kMinNorm, 1.0);
-        if (use_ar) {
-            if (std::abs(dx) >= std::abs(dy))
-                new_bottom =
-                    std::clamp(r.top() + (r.right() - new_left) / webcam_aspect_ratio_, r.top() + kMinNorm, 1.0);
-            else
-                new_left =
-                    std::clamp(r.right() - (new_bottom - r.top()) * webcam_aspect_ratio_, 0.0, r.right() - kMinNorm);
-        }
-        r.setLeft(new_left);
-        r.setBottom(new_bottom);
-        break;
-    }
-    default:
-        break;
-    }
-
-    webcam_rect_norm_ = r;
-    update();
+    applyDragFromPointer(pos, event->modifiers());
     event->accept();
 }
 
 void PreviewSurface::mouseReleaseEvent(QMouseEvent* event) {
     if (drag_mode_ != DragMode::None) {
         drag_mode_ = DragMode::None;
+        if (drag_modifier_toggle_held_) {
+            drag_modifier_toggle_held_ = false;
+            update();
+        }
+        if (QWidget::keyboardGrabber() == this) {
+            releaseKeyboard();
+        }
         emit webcamOverlayMoved(webcam_rect_norm_);
         event->accept();
     } else {
         QWidget::mouseReleaseEvent(event);
     }
+}
+
+void PreviewSurface::keyPressEvent(QKeyEvent* event) {
+    if (webcam_enabled_ && drag_mode_ != DragMode::None &&
+        (event->key() == Qt::Key_Shift || event->key() == Qt::Key_Control)) {
+        if (event->isAutoRepeat()) {
+            event->accept();
+            return;
+        }
+        Qt::KeyboardModifiers mods = QApplication::keyboardModifiers();
+        if (event->key() == Qt::Key_Shift)
+            mods |= Qt::ShiftModifier;
+        if (event->key() == Qt::Key_Control)
+            mods |= Qt::ControlModifier;
+        applyDragFromPointer(mapFromGlobal(QCursor::pos()), mods);
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
+void PreviewSurface::keyReleaseEvent(QKeyEvent* event) {
+    if (webcam_enabled_ && drag_mode_ != DragMode::None &&
+        (event->key() == Qt::Key_Shift || event->key() == Qt::Key_Control)) {
+        if (event->isAutoRepeat()) {
+            event->accept();
+            return;
+        }
+        Qt::KeyboardModifiers mods = QApplication::keyboardModifiers();
+        if (event->key() == Qt::Key_Shift)
+            mods &= ~Qt::ShiftModifier;
+        if (event->key() == Qt::Key_Control)
+            mods &= ~Qt::ControlModifier;
+        applyDragFromPointer(mapFromGlobal(QCursor::pos()), mods);
+        event->accept();
+        return;
+    }
+    QWidget::keyReleaseEvent(event);
 }
 
 // ---------------------------------------------------------------------------
@@ -386,7 +722,21 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
         if (!webcam_frame_.isNull()) {
             painter.save();
             painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-            painter.drawImage(cam_rect, webcam_frame_);
+            const bool effective_aspect_lock = aspect_ratio_locked_ != drag_modifier_toggle_held_;
+            if (effective_aspect_lock) {
+                const double frame_ar = webcam_frame_.height() > 0
+                                            ? static_cast<double>(webcam_frame_.width()) / webcam_frame_.height()
+                                            : 0.0;
+                const QRectF draw_rect = fitAspectIntoRect(cam_rect, frame_ar);
+                if (draw_rect != cam_rect) {
+                    painter.setPen(Qt::NoPen);
+                    painter.setBrush(QColor(0, 0, 0, 140));
+                    painter.drawRect(cam_rect);
+                }
+                painter.drawImage(draw_rect, webcam_frame_);
+            } else {
+                painter.drawImage(cam_rect, webcam_frame_);
+            }
             painter.restore();
         } else {
             painter.save();

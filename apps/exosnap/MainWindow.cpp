@@ -44,6 +44,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWindow>
+#include <QWindowStateChangeEvent>
 #include <algorithm>
 #include <array>
 
@@ -1152,10 +1153,6 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
         auto* msg = static_cast<MSG*>(message);
         if (msg != nullptr && msg->hwnd != nullptr) {
             const HWND main_hwnd = reinterpret_cast<HWND>(effectiveWinId());
-            HWND root_hwnd = GetAncestor(msg->hwnd, GA_ROOT);
-            if (root_hwnd == nullptr)
-                root_hwnd = msg->hwnd;
-            const bool targets_main_window = (msg->hwnd == main_hwnd) || (root_hwnd == main_hwnd);
 
             if (msg->hwnd == main_hwnd)
                 traceFrameMessage(msg->hwnd, msg->message, msg->wParam, msg->lParam);
@@ -1207,6 +1204,26 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
                 applyDwmBorderSuppression(msg->hwnd, "WM_SIZE");
             }
 
+            if (msg->hwnd == main_hwnd && msg->message == WM_GETMINMAXINFO) {
+                auto* minmax_info = reinterpret_cast<MINMAXINFO*>(msg->lParam);
+                if (minmax_info != nullptr) {
+                    MONITORINFO monitor_info = {};
+                    monitor_info.cbSize = sizeof(monitor_info);
+                    const HMONITOR monitor = MonitorFromWindow(msg->hwnd, MONITOR_DEFAULTTONEAREST);
+                    if (monitor != nullptr && GetMonitorInfoW(monitor, &monitor_info) != FALSE) {
+                        const RECT& monitor_rect = monitor_info.rcMonitor;
+                        const RECT& work_rect = monitor_info.rcWork;
+                        minmax_info->ptMaxPosition.x = work_rect.left - monitor_rect.left;
+                        minmax_info->ptMaxPosition.y = work_rect.top - monitor_rect.top;
+                        minmax_info->ptMaxSize.x = work_rect.right - work_rect.left;
+                        minmax_info->ptMaxSize.y = work_rect.bottom - work_rect.top;
+                        minmax_info->ptMaxTrackSize = minmax_info->ptMaxSize;
+                    }
+                }
+                *result = 0;
+                return true;
+            }
+
             if (msg->hwnd == main_hwnd && msg->message == WM_NCCALCSIZE && msg->wParam == TRUE) {
                 auto* calc = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
                 // Use IsZoomed() for the real Win32 state — our tracked flag may lag during
@@ -1224,7 +1241,7 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
                 return true;
             }
 
-            if (targets_main_window && msg->message == WM_NCHITTEST) {
+            if (msg->hwnd == main_hwnd && msg->message == WM_NCHITTEST) {
                 const QPoint global(GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
                 const QPoint local = mapFromGlobal(global);
                 const bool maximized = effectiveMaximizedState();
@@ -1236,7 +1253,7 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
                 }
 
                 if (title_bar_ != nullptr) {
-                    const QPoint in_title = title_bar_->mapFrom(this, local);
+                    const QPoint in_title = title_bar_->mapFromGlobal(global);
                     if (title_bar_->rect().contains(in_title)) {
                         const auto button_hit = title_bar_->hitTestWindowButton(in_title);
                         if (button_hit != ui::chrome::OperationalTitleBar::WindowButtonHit::None) {
@@ -1252,7 +1269,7 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
                 }
             }
 
-            if (targets_main_window && msg->message == WM_SETCURSOR && !effectiveMaximizedState()) {
+            if (msg->hwnd == main_hwnd && msg->message == WM_SETCURSOR && !effectiveMaximizedState()) {
                 const LRESULT hit_test = static_cast<LRESULT>(LOWORD(msg->lParam));
                 HCURSOR cursor = cursorFromHitTestCode(hit_test);
                 if (cursor != nullptr) {
@@ -1278,12 +1295,18 @@ void MainWindow::changeEvent(QEvent* event) {
         if (title_bar_ != nullptr)
             title_bar_->setMaximizedState(effectiveMaximizedState());
 #if defined(Q_OS_WIN)
+        const auto* state_event = static_cast<QWindowStateChangeEvent*>(event);
+        const bool was_maximized = (state_event->oldState() & Qt::WindowMaximized) != 0;
+        const bool restored_from_maximized = was_maximized && !isMaximized();
+
         // On restore from maximized, force the NC area to be recalculated and
         // re-apply the DWM border suppression so the accent frame cannot reappear.
         HWND hwnd = reinterpret_cast<HWND>(winId());
         if (hwnd != nullptr) {
-            SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
-                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            if (restored_from_maximized) {
+                SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            }
             applyDwmBorderSuppression(hwnd, "changeEvent/WindowStateChange");
         }
 #endif
