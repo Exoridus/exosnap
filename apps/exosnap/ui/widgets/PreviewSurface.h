@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QImage>
+#include <QPointF>
+#include <QRectF>
 #include <QWidget>
 
 class QLabel;
@@ -34,12 +36,41 @@ class PreviewSurface : public QWidget {
 
     StatusPill* statusPill() const noexcept;
 
+    // Webcam overlay — W3
+    void setWebcamFrame(QImage frame);
+    void setWebcamOverlayEnabled(bool enabled);
+    // rect in [0,1] normalized to the live-frame display area
+    void setWebcamOverlayRect(QRectF rect_norm);
+    QRectF webcamOverlayRect() const noexcept {
+        return webcam_rect_norm_;
+    }
+
+  signals:
+    // Emitted when user finishes dragging/resizing the overlay (normalized coords).
+    void webcamOverlayMoved(QRectF rect_norm);
+
   protected:
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
 
   private:
+    enum class DragMode { None, Move, ResizeTL, ResizeTR, ResizeBL, ResizeBR };
+
+    QRectF webcamPixelRect() const; // webcam rect in widget pixel coords
+    DragMode hitTestWebcam(QPointF pos) const;
+
     QImage current_frame_;
+    QImage webcam_frame_;
+    bool webcam_enabled_ = false;
+    QRectF webcam_rect_norm_{0.0, 0.0, 0.25, 0.25};
+
+    DragMode drag_mode_ = DragMode::None;
+    QPointF drag_origin_;
+    QRectF drag_start_rect_;
+
     StatusPill* status_pill_ = nullptr;
     QLabel* top_meta_label_ = nullptr;
     QLabel* center_title_label_ = nullptr;
