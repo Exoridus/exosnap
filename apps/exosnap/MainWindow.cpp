@@ -200,8 +200,17 @@ constexpr std::array<PageDescriptor, 9> kPageDescriptors = {{
 
 constexpr int kNavIndexRole = Qt::UserRole + 1;
 constexpr int kNavIconRole = Qt::UserRole + 2;
-constexpr int kOutputPageIndex = 3;
-constexpr int kDiagnosticsPageIndex = 6;
+constexpr int pageIndexForIcon(SidebarIcon icon) {
+    for (std::size_t i = 0; i < kPageDescriptors.size(); ++i) {
+        if (kPageDescriptors[i].icon == icon)
+            return static_cast<int>(i);
+    }
+    return -1;
+}
+constexpr int kOutputPageIndex = pageIndexForIcon(SidebarIcon::Output);
+constexpr int kDiagnosticsPageIndex = pageIndexForIcon(SidebarIcon::Diagnostics);
+static_assert(kOutputPageIndex >= 0, "Output page must exist in kPageDescriptors.");
+static_assert(kDiagnosticsPageIndex >= 0, "Diagnostics page must exist in kPageDescriptors.");
 
 capability::UserRecorderConfig ProfileToUserConfig(const RecordingProfile& profile) {
     capability::UserRecorderConfig config;
