@@ -101,6 +101,10 @@ struct SessionState {
     // Cooperative stop token set by Stop() or any fatal worker failure
     std::atomic<bool> stop_requested{false};
 
+    // Cooperative pause token — threads drain their source but discard output.
+    // Video threads adjust their epoch on resume so PTS continues seamlessly.
+    std::atomic<bool> pause_requested{false};
+
     // First-error-wins: only the first failing thread records here
     mutable std::mutex failure_mutex;
     bool failure_recorded = false;

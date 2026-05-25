@@ -166,6 +166,19 @@ void AudioThread::Run() {
 
         // --- Capture / encode loop ---
         while (!m_state.stop_requested.load()) {
+            if (m_state.pause_requested.load()) {
+                while (source_->PendingFrameCount() > 0) {
+                    RawAudioBuffer raw{};
+                    std::string err;
+                    if (source_->AcquireBuffer(raw, err))
+                        source_->ReleaseBuffer();
+                    else
+                        break;
+                }
+                Sleep(1);
+                continue;
+            }
+
             uint32_t pendingFrames = source_->PendingFrameCount();
             if (pendingFrames == 0) {
                 Sleep(1);
@@ -313,6 +326,19 @@ void AudioThread::Run() {
 
     // --- Capture / encode loop ---
     while (!m_state.stop_requested.load()) {
+        if (m_state.pause_requested.load()) {
+            while (source_->PendingFrameCount() > 0) {
+                RawAudioBuffer raw{};
+                std::string err;
+                if (source_->AcquireBuffer(raw, err))
+                    source_->ReleaseBuffer();
+                else
+                    break;
+            }
+            Sleep(1);
+            continue;
+        }
+
         uint32_t pendingFrames = source_->PendingFrameCount();
         if (pendingFrames == 0) {
             Sleep(1);

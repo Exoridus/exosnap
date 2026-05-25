@@ -16,6 +16,50 @@
 namespace recorder_core {
 
 // ---------------------------------------------------------------------------
+// WebcamFrameProvider — injected into RecorderConfig for compositing
+// ---------------------------------------------------------------------------
+
+// Called by VideoThread to pull the latest webcam BGRA frame.
+// Implementations must be thread-safe: TryGetFrame is called from VideoThread.
+// The provider must remain alive for the duration of Record().
+struct WebcamFrameProvider {
+    // Returns true and fills out_width/out_height/out_bgra when a new (or latest)
+    // frame is available.  out_bgra is BGRA (B8G8R8A8 byte order), row-major.
+    // Returns false when no frame has been captured yet or webcam failed.
+    virtual bool TryGetFrame(int& out_width, int& out_height, std::vector<uint8_t>& out_bgra) = 0;
+    virtual ~WebcamFrameProvider() = default;
+};
+
+// ---------------------------------------------------------------------------
+// WebcamConfig
+// ---------------------------------------------------------------------------
+
+struct WebcamConfig {
+    bool enabled = false;
+
+    // Not owned — must outlive the recording session.  nullptr = disabled.
+    WebcamFrameProvider* frame_provider = nullptr;
+
+    // Overlay placement as fraction [0,1] of encode frame dimensions.
+    float overlay_x_norm = 0.0f;
+    float overlay_y_norm = 0.0f;
+    float overlay_w_norm = 0.25f;
+    float overlay_h_norm = 0.25f;
+
+    // Chroma key
+    bool chroma_key_enabled = false;
+    uint8_t chroma_r = 0;
+    uint8_t chroma_g = 177;
+    uint8_t chroma_b = 64;
+    float chroma_tolerance = 0.30f;
+    float chroma_softness = 0.05f;
+};
+
+} // namespace recorder_core
+
+namespace recorder_core {
+
+// ---------------------------------------------------------------------------
 // CaptureTarget
 // ---------------------------------------------------------------------------
 
@@ -122,6 +166,9 @@ struct RecorderConfig {
     // When set, the engine crops the captured monitor frame to this rectangle
     // (coordinates in virtual screen space). Target.kind must be Kind::Monitor.
     std::optional<CaptureRegion> crop_region;
+
+    // Optional webcam overlay composited into the recorded video.
+    WebcamConfig webcam;
 };
 
 // ---------------------------------------------------------------------------
