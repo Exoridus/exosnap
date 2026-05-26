@@ -1165,8 +1165,7 @@ void MainWindow::onGlobalRecordingBarPrimaryActionRequested() {
         return;
     }
 
-    if ((record_status_label_ == QStringLiteral("BLOCKED") || record_status_label_ == QStringLiteral("ERROR")) &&
-        nav_) {
+    if (ui::chrome::ShouldOpenRecordingDiagnosticsForStatus(record_status_label_) && nav_) {
         refreshDiagnosticsData();
         nav_->setCurrentRow(kDiagnosticsPageIndex);
     }

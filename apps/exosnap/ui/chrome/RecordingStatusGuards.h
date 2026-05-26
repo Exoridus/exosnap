@@ -11,4 +11,9 @@ inline bool ShouldShowRecordingRuntimeForStatus(QStringView status_label) {
            normalized == QStringLiteral("STOPPING");
 }
 
+inline bool ShouldOpenRecordingDiagnosticsForStatus(QStringView status_label) {
+    const QString normalized = status_label.trimmed().toString().toUpper();
+    return normalized == QStringLiteral("BLOCKED") || normalized == QStringLiteral("ERROR");
+}
+
 } // namespace exosnap::ui::chrome

@@ -232,6 +232,32 @@ TEST(GlobalRecordingBarStatusGuardTest, RuntimeVisibility_OnlyForRecPausedStoppi
     }
 }
 
+TEST(GlobalRecordingBarStatusGuardTest, DiagnosticsNavigation_OnlyForBlockedOrError) {
+    struct Scenario {
+        QString status;
+        bool should_open_diagnostics;
+    };
+
+    const std::array<Scenario, 10> scenarios = {{
+        {QStringLiteral("BLOCKED"), true},
+        {QStringLiteral("ERROR"), true},
+        {QStringLiteral("blocked"), true},
+        {QStringLiteral("error"), true},
+        {QStringLiteral(" BLOCKED "), true},
+        {QStringLiteral("READY"), false},
+        {QStringLiteral("REC"), false},
+        {QStringLiteral("PAUSED"), false},
+        {QStringLiteral("CHECKING"), false},
+        {QStringLiteral("STARTING"), false},
+    }};
+
+    for (const Scenario& scenario : scenarios) {
+        EXPECT_EQ(ui::chrome::ShouldOpenRecordingDiagnosticsForStatus(scenario.status),
+                  scenario.should_open_diagnostics)
+            << "status=" << scenario.status.toStdString();
+    }
+}
+
 TEST_F(GlobalRecordingBarTest, LongSummaryValues_ElideDisplayedTextAndKeepFullTooltips) {
     ui::chrome::GlobalRecordingBar bar;
     bar.resize(980, ui::chrome::GlobalRecordingBar::kHeight);
