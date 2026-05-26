@@ -502,6 +502,109 @@ TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.006"), codes.end());
 }
 
+// ─── REC-R10: Active output config → ValidateConfig wiring ───────────────────
+//
+// Verifies the data path used by RevalidateCapabilities(): UserConfigFromSettings()
+// produces a config that, when fed to ValidateConfig(), yields the correct Ready/Blocked
+// result for the active profile.
+
+TEST(ConfigSummaryTest, UserConfigFromSettings_DefaultMkvH264Aac_MatchesPrimaryConfig) {
+    // The default profile (MKV + H264Nvenc + AAC) must produce a UserRecorderConfig that
+    // matches the hardcoded primaryRecorderConfig() used at startup, so startup validation
+    // and post-setOutputSettings revalidation produce consistent results.
+    OutputSettingsModel output;
+    output.container = capability::Container::Matroska;
+    output.video_codec = capability::VideoCodec::H264Nvenc;
+    output.audio_codec = capability::AudioCodec::AacMf;
+    VideoSettingsModel video;
+
+    const capability::UserRecorderConfig config = UserConfigFromSettings(output, video);
+    EXPECT_EQ(config.container, capability::Container::Matroska);
+    EXPECT_EQ(config.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(config.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(config.chroma, capability::ChromaSubsampling::Cs420);
+    EXPECT_EQ(config.bit_depth, capability::BitDepth::Bit8);
+    EXPECT_EQ(config.frame_rate_num, 60u);
+    EXPECT_EQ(config.frame_rate_den, 1u);
+}
+
+TEST(BlockedScenarioTest, FailedStartupValidation_ResolvedConfig_HasSafeDimensionsForRevalidation) {
+    // When startup validation fails (NVENC unavailable), validation.resolved_config must not carry
+    // problematic output_width/output_height values that would mask the real codec blocker in
+    // subsequent RevalidateCapabilities() calls (REC-R10 follow-up fix).
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    const std::string nvenc_reason = "NVENC unavailable: simulated";
+    caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::NotImplemented, nvenc_reason};
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::NotImplemented, nvenc_reason};
+    const capability::ComboKey mkv_h264{capability::Container::Matroska, capability::VideoCodec::H264Nvenc,
+                                        capability::AudioCodec::AacMf, capability::ChromaSubsampling::Cs420,
+                                        capability::BitDepth::Bit8};
+    caps.combo_overrides[mkv_h264] = {capability::SupportLevel::NotImplemented, nvenc_reason};
+
+    capability::SettingsResolver resolver(caps);
+    capability::UserRecorderConfig primary;
+    primary.container = capability::Container::Matroska;
+    primary.video_codec = capability::VideoCodec::H264Nvenc;
+    primary.audio_codec = capability::AudioCodec::AacMf;
+    primary.chroma = capability::ChromaSubsampling::Cs420;
+    primary.bit_depth = capability::BitDepth::Bit8;
+    primary.frame_rate_num = 60;
+    primary.frame_rate_den = 1;
+
+    const capability::ResolveResult result = resolver.ValidateConfig(primary);
+    ASSERT_FALSE(result.succeeded);
+
+    // resolved_config dimensions must remain safe (native-resolution 0/0) so that
+    // OnCapabilitiesReady's resolved_user_config_ assignment does not introduce dimension
+    // blockers that would shadow the video_codec root-cause in later revalidation.
+    EXPECT_EQ(result.resolved_config.output_width, 0u);
+    EXPECT_EQ(result.resolved_config.output_height, 0u);
+    EXPECT_EQ(result.resolved_config.frame_rate_num, 60u);
+    EXPECT_EQ(result.resolved_config.frame_rate_den, 1u);
+}
+
+TEST(BlockedScenarioTest, ActiveOutputConfig_WebmAv1Opus_ValidatesSuccessfullyOnCapableHardware) {
+    // When the user selects WebM + AV1 + Opus and NVENC is available,
+    // UserConfigFromSettings + ValidateConfig must succeed — mirrors RevalidateCapabilities().
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    OutputSettingsModel output;
+    output.container = capability::Container::WebM;
+    output.video_codec = capability::VideoCodec::Av1Nvenc;
+    output.audio_codec = capability::AudioCodec::Opus;
+    VideoSettingsModel video;
+
+    const capability::UserRecorderConfig config = UserConfigFromSettings(output, video);
+    capability::SettingsResolver resolver(caps);
+    const capability::ResolveResult result = resolver.ValidateConfig(config);
+
+    EXPECT_TRUE(result.succeeded);
+    EXPECT_TRUE(result.invalidity.empty());
+}
+
+TEST(BlockedScenarioTest, ActiveOutputConfig_Av1NvencUnavailable_ValidateFails_VideoCodecBlocker) {
+    // When AV1 (NVENC) is selected but NVENC is unavailable, UserConfigFromSettings +
+    // ValidateConfig must fail and report video_codec as the blocker.
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    const std::string nvenc_reason = "NVENC unavailable: simulated";
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::NotImplemented, nvenc_reason};
+
+    OutputSettingsModel output;
+    output.container = capability::Container::WebM;
+    output.video_codec = capability::VideoCodec::Av1Nvenc;
+    output.audio_codec = capability::AudioCodec::Opus;
+    VideoSettingsModel video;
+
+    const capability::UserRecorderConfig config = UserConfigFromSettings(output, video);
+    capability::SettingsResolver resolver(caps);
+    const capability::ResolveResult result = resolver.ValidateConfig(config);
+
+    EXPECT_FALSE(result.succeeded);
+    ASSERT_FALSE(result.invalidity.empty());
+    EXPECT_EQ(result.invalidity.front().field, "video_codec");
+    EXPECT_EQ(result.invalidity.front().message, nvenc_reason);
+}
+
 // --- SelfTestRunner tests ---
 
 TEST(SelfTestTest, SelfTest_Run_ReturnsAllResults) {
@@ -569,15 +672,15 @@ TEST(DisplayNameTest, SupportLevelStrings) {
 
 // ─── Blocked Scenario Tests ───────────────────────────────────────────────────
 //
-// BLOCKED state source: RecordingCoordinator::OnCapabilitiesReady() sets Blocked
-// when ValidateConfig(primaryRecorderConfig()) fails. primaryRecorderConfig() is
-// hardcoded in RecordPage::initCoordinator() as MKV + H264Nvenc + AAC + Cs420 +
-// Bit8 + 60 fps. Validation fails when NVENC is unavailable — BuildEffectiveCapabilities
-// downgrade rule A marks H264Nvenc and Av1Nvenc NotImplemented and adds combo_overrides.
+// BLOCKED state sources:
+//   1. Startup: RecordingCoordinator::OnCapabilitiesReady() validates primaryRecorderConfig()
+//      (MKV + H264Nvenc + AAC + Cs420 + Bit8 + 60 fps) — fails when NVENC is unavailable.
+//   2. Post-profile-change (REC-R10): RecordingCoordinator::RevalidateCapabilities() is called
+//      from RecordPage::setOutputSettings() whenever the active profile or output settings
+//      change. It validates the current resolved_user_config_ (fed by SetOutputSettings).
 //
-// BLOCKED cannot be reproduced through user-visible configuration on NVENC-capable
-// hardware. It is hardware-capability driven, evaluated once at startup. These tests
-// prove the data path via a synthetic CapabilitySet that mirrors the downgrade.
+// Both paths use the same ValidateConfig() call. These tests prove the data path via
+// synthetic CapabilitySets that mirror NVENC absence or codec unavailability.
 
 TEST(BlockedScenarioTest, StartupConfig_NvencUnavailable_ValidateFails) {
     capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();

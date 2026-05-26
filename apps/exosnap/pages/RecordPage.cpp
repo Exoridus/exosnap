@@ -700,10 +700,13 @@ void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
     setOutputSettingsSummary(settings);
     if (coordinator_) {
         coordinator_->SetOutputSettings(settings);
+        coordinator_->RevalidateCapabilities();
+        view_model_.capability_status_text = coordinator_->CapabilityStatusText();
         syncCoordinatorTargetContext();
     }
     updateOpenFolderButtonState();
     updateAudioControls();
+    updateReadinessRows();
     diagnostics::AppLog(QStringLiteral("[output] settings applied: ") +
                         QString::fromStdWString(view_model_.output_path_display));
 }
@@ -853,6 +856,7 @@ void RecordPage::initCoordinator() {
 
     coordinator_->SetStateChangedCallback([this](UiRecordingState state) {
         view_model_.SetState(state);
+        view_model_.capability_status_text = coordinator_->CapabilityStatusText();
         if (state == UiRecordingState::Recording)
             diagnostics::AppLog(QStringLiteral("[record] recording started"));
         else if (state == UiRecordingState::Paused)

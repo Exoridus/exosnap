@@ -50,6 +50,7 @@ class RecordingCoordinator {
     void OnCapabilitiesReady(const exosnap::capability::CapabilitySet& caps,
                              const exosnap::capability::ResolveResult& validation);
     void OnCapabilityFailure(std::wstring message);
+    void RevalidateCapabilities();
 
     std::vector<recorder_core::CaptureTarget> EnumerateTargets();
     bool StartRecording(const recorder_core::CaptureTarget& target, const capability::AudioUiState& audio_ui_state,

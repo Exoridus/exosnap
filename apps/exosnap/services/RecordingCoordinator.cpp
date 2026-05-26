@@ -218,8 +218,8 @@ void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::Capabi
     caps_ = caps;
     has_caps_ = true;
     validation_result_ = validation;
+    resolved_user_config_ = validation.resolved_config;
     if (validation.succeeded) {
-        resolved_user_config_ = validation.resolved_config;
         state_ = UiRecordingState::Ready;
         capability_status_text_ = L"Ready: MKV · H.264 NVENC · AAC · 60 fps";
     } else {
@@ -233,6 +233,28 @@ void RecordingCoordinator::OnCapabilityFailure(std::wstring message) {
     has_caps_ = false;
     state_ = UiRecordingState::Blocked;
     capability_status_text_ = std::move(message);
+}
+
+void RecordingCoordinator::RevalidateCapabilities() {
+    if (!has_caps_)
+        return;
+    const bool busy = state_ == UiRecordingState::Preparing || state_ == UiRecordingState::Recording ||
+                      state_ == UiRecordingState::Paused || state_ == UiRecordingState::Stopping;
+    if (busy)
+        return;
+
+    capability::SettingsResolver resolver(caps_);
+    const capability::ResolveResult result = resolver.ValidateConfig(resolved_user_config_);
+    validation_result_ = result;
+
+    const UiRecordingState new_state = result.succeeded ? UiRecordingState::Ready : UiRecordingState::Blocked;
+    capability_status_text_ =
+        result.succeeded
+            ? L"Ready"
+            : (result.invalidity.empty() ? L"Recording unavailable" : ToWide(result.invalidity.front().message));
+
+    if (new_state != state_)
+        PostStateChange(new_state);
 }
 
 std::vector<recorder_core::CaptureTarget> RecordingCoordinator::EnumerateTargets() {
