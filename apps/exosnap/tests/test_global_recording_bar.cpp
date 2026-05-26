@@ -156,5 +156,45 @@ TEST_F(GlobalRecordingBarTest, LongSummaryValues_ElideDisplayedTextAndKeepFullTo
     EXPECT_EQ(runtime->text(), runtime->toolTip());
 }
 
+TEST_F(GlobalRecordingBarTest, CompactLayout_HidesPlannedDisabledActionsButKeepsTransportUsable) {
+    ui::chrome::GlobalRecordingBar bar;
+    bar.show();
+    QApplication::processEvents();
+
+    auto* primary = FindRequiredButton(bar, "globalBarPrimaryActionButton");
+    auto* pause = FindRequiredButton(bar, "globalBarPauseActionButton");
+    auto* mic = FindRequiredButton(bar, "globalBarMicActionButton");
+    auto* marker = FindRequiredButton(bar, "globalBarMarkerActionButton");
+    auto* overlay = FindRequiredButton(bar, "globalBarOverlayActionButton");
+
+    bar.resize(1500, ui::chrome::GlobalRecordingBar::kHeight);
+    QApplication::processEvents();
+    EXPECT_TRUE(primary->isVisible());
+    EXPECT_TRUE(pause->isVisible());
+    EXPECT_TRUE(mic->isVisible());
+    EXPECT_TRUE(marker->isVisible());
+    EXPECT_TRUE(overlay->isVisible());
+    EXPECT_FALSE(mic->isEnabled());
+    EXPECT_FALSE(marker->isEnabled());
+    EXPECT_FALSE(overlay->isEnabled());
+
+    bar.setStatusLabel(QStringLiteral("REC"));
+    EXPECT_TRUE(primary->isEnabled());
+    EXPECT_TRUE(pause->isEnabled());
+
+    bar.resize(1200, ui::chrome::GlobalRecordingBar::kHeight);
+    QApplication::processEvents();
+    EXPECT_TRUE(primary->isVisible());
+    EXPECT_TRUE(pause->isVisible());
+    EXPECT_FALSE(mic->isVisible());
+    EXPECT_FALSE(marker->isVisible());
+    EXPECT_FALSE(overlay->isVisible());
+    EXPECT_TRUE(primary->isEnabled());
+    EXPECT_TRUE(pause->isEnabled());
+    EXPECT_FALSE(mic->isEnabled());
+    EXPECT_FALSE(marker->isEnabled());
+    EXPECT_FALSE(overlay->isEnabled());
+}
+
 } // namespace
 } // namespace exosnap

@@ -281,6 +281,7 @@ void GlobalRecordingBar::applyCompactLayout() {
     const bool compact_actions = width_px < 1340;
     const bool compact_context = width_px < 1230;
 
+    mic_action_button_->setVisible(!compact_actions);
     marker_action_button_->setVisible(!compact_actions);
     overlay_action_button_->setVisible(!compact_actions);
 
