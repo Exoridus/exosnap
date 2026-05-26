@@ -1177,13 +1177,14 @@ void MainWindow::onGlobalRecordingBarPauseActionRequested() {
 }
 
 void MainWindow::onRecordChromeRuntimeMetricsChanged(const QString& elapsed_text, const QString& bitrate_text,
-                                                     const QString& drop_text) {
+                                                     const QString& drop_text, const QString& size_text) {
     if (!title_bar_)
         return;
     title_bar_->setRecordingRuntime(elapsed_text, bitrate_text, drop_text);
     if (global_recording_bar_) {
         const QString elapsed = elapsed_text.trimmed().isEmpty() ? QStringLiteral("--:--:--") : elapsed_text.trimmed();
-        global_recording_bar_->setRuntimeSummary(QStringLiteral("DUR %1 · SIZE -").arg(elapsed));
+        const QString size = size_text.trimmed().isEmpty() ? QStringLiteral("-") : size_text.trimmed();
+        global_recording_bar_->setRuntimeSummary(QStringLiteral("DUR %1 · SIZE %2").arg(elapsed, size));
     }
 }
 

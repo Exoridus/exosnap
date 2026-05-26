@@ -44,7 +44,7 @@ class MainWindow : public QMainWindow {
     void onNavRowChanged(int row);
     void onRecordChromeStateChanged(bool recording, const QString& status_label, const QString& context_text);
     void onRecordChromeRuntimeMetricsChanged(const QString& elapsed_text, const QString& bitrate_text,
-                                             const QString& drop_text);
+                                             const QString& drop_text, const QString& size_text);
     void onGlobalRecordingBarPrimaryActionRequested();
     void onGlobalRecordingBarPauseActionRequested();
     void pollIdleRuntimeMetrics();

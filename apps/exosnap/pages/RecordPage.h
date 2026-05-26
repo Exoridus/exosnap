@@ -47,8 +47,8 @@ class RecordPage : public QWidget {
 
   signals:
     void chromeStateChanged(bool recording, const QString& status_label, const QString& context_text);
-    void chromeRuntimeMetricsChanged(const QString& elapsed_text, const QString& bitrate_text,
-                                     const QString& drop_text);
+    void chromeRuntimeMetricsChanged(const QString& elapsed_text, const QString& bitrate_text, const QString& drop_text,
+                                     const QString& size_text);
     void navigateToOutputPage();
     void audioSettingsChanged(const capability::AudioUiState& state);
 

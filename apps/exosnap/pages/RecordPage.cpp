@@ -2007,7 +2007,11 @@ void RecordPage::updateStatsDisplay() {
     const QString drop_text = recording && view_model_.live_stats_available
                                   ? QString::number(view_model_.dropped_frames)
                                   : QStringLiteral("–");
-    emit chromeRuntimeMetricsChanged(timer_text, bitrate_text, drop_text);
+    const QString size_text =
+        recording && view_model_.live_stats_available
+            ? QString::fromStdWString(RecordViewModel::FormatBytes(view_model_.video_bytes + view_model_.audio_bytes))
+            : QStringLiteral("-");
+    emit chromeRuntimeMetricsChanged(timer_text, bitrate_text, drop_text, size_text);
 
     updateAudioMeterLevels();
 }
