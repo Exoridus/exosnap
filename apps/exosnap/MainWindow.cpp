@@ -841,7 +841,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(output_page_, &OutputPage::outputSettingsChanged, this, [this](const OutputSettingsModel& settings) {
         output_settings_ = settings;
         record_page_->setOutputSettings(settings);
-        refreshGlobalRecordingBarContext();
         profile_registry_.ApplyOutputToActive(settings);
         persisted_settings_.output = settings;
         persistProfileState();
@@ -1115,6 +1114,7 @@ void MainWindow::onNavRowChanged(int row) {
 }
 
 void MainWindow::onRecordChromeStateChanged(bool recording, const QString& status_label, const QString& context_text) {
+    const bool recording_started = recording && !recording_active_;
     recording_active_ = recording;
     recording_context_text_ = context_text;
     record_status_label_ = status_label.trimmed().toUpper();
@@ -1129,6 +1129,8 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
     }
     if (recording) {
         title_bar_->setRecordingRuntime(QStringLiteral("--:--:--"), QStringLiteral("–"), QStringLiteral("–"));
+        if (recording_started && global_recording_bar_)
+            global_recording_bar_->setRuntimeSummary(globalBarRuntimePlaceholder());
     } else {
         pollIdleRuntimeMetrics();
         if (global_recording_bar_)
