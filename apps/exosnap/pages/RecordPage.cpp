@@ -750,6 +750,11 @@ void RecordPage::setWebcamSettings(const WebcamSettings& settings) {
     }
 }
 
+void RecordPage::rebroadcastChromeState() {
+    updateStatsDisplay();
+    emitChromeState();
+}
+
 void RecordPage::setOutputSettingsSummary(const OutputSettingsModel& settings) {
     const QString container =
         settings.container == capability::Container::Matroska

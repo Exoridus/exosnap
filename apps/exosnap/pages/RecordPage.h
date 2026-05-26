@@ -44,6 +44,7 @@ class RecordPage : public QWidget {
     void setWebcamSettings(const WebcamSettings& settings);
     void setActiveProfileName(const std::string& profile_name);
     void applyPersistedAudioSettings(const capability::AudioUiState& state);
+    void rebroadcastChromeState();
 
   signals:
     void chromeStateChanged(bool recording, const QString& status_label, const QString& context_text);

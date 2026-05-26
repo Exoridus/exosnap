@@ -1008,6 +1008,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         refreshDiagnosticsData();
     });
 
+    record_page_->rebroadcastChromeState();
     applyActiveProfileToPages();
     refreshOutputProfileUi();
 
@@ -1165,6 +1166,7 @@ void MainWindow::onGlobalRecordingBarPrimaryActionRequested() {
 
     if ((record_status_label_ == QStringLiteral("BLOCKED") || record_status_label_ == QStringLiteral("ERROR")) &&
         nav_) {
+        refreshDiagnosticsData();
         nav_->setCurrentRow(kDiagnosticsPageIndex);
     }
 }
@@ -1179,6 +1181,17 @@ void MainWindow::onRecordChromeRuntimeMetricsChanged(const QString& elapsed_text
                                                      const QString& drop_text, const QString& size_text) {
     if (!title_bar_)
         return;
+
+    const bool should_show_recording_runtime =
+        (record_status_label_ == QStringLiteral("REC") || record_status_label_ == QStringLiteral("PAUSED") ||
+         record_status_label_ == QStringLiteral("STOPPING"));
+    if (!should_show_recording_runtime) {
+        pollIdleRuntimeMetrics();
+        if (global_recording_bar_)
+            global_recording_bar_->setRuntimeSummary(globalBarRuntimePlaceholder());
+        return;
+    }
+
     title_bar_->setRecordingRuntime(elapsed_text, bitrate_text, drop_text);
     if (global_recording_bar_) {
         const QString elapsed = elapsed_text.trimmed().isEmpty() ? QStringLiteral("--:--:--") : elapsed_text.trimmed();

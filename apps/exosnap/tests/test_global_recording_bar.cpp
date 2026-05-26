@@ -171,6 +171,41 @@ TEST_F(GlobalRecordingBarTest, StatusLabelMapping_ControlsPrimaryPauseAndDetails
     }
 }
 
+TEST_F(GlobalRecordingBarTest, PrimaryAction_OnlyEmitsWhenCurrentStatusAllowsAction) {
+    ui::chrome::GlobalRecordingBar bar;
+
+    QPushButton* primary = nullptr;
+    FindRequiredButton(bar, "globalBarPrimaryActionButton", primary);
+
+    int emit_count = 0;
+    QObject::connect(&bar, &ui::chrome::GlobalRecordingBar::primaryActionRequested, [&emit_count]() { ++emit_count; });
+
+    struct Scenario {
+        QString status_input;
+        bool expect_emit;
+    };
+
+    const std::array<Scenario, 8> scenarios = {{
+        {QStringLiteral("READY"), true},
+        {QStringLiteral("REC"), true},
+        {QStringLiteral("PAUSED"), true},
+        {QStringLiteral("BLOCKED"), true},
+        {QStringLiteral("ERROR"), true},
+        {QStringLiteral("CHECKING"), false},
+        {QStringLiteral("STARTING"), false},
+        {QStringLiteral("STOPPING"), false},
+    }};
+
+    for (const Scenario& scenario : scenarios) {
+        bar.setStatusLabel(scenario.status_input);
+        const int before = emit_count;
+        primary->click();
+        QApplication::processEvents();
+        const int after = emit_count;
+        EXPECT_EQ(after > before, scenario.expect_emit) << "status=" << scenario.status_input.toStdString();
+    }
+}
+
 TEST_F(GlobalRecordingBarTest, LongSummaryValues_ElideDisplayedTextAndKeepFullTooltips) {
     ui::chrome::GlobalRecordingBar bar;
     bar.resize(980, ui::chrome::GlobalRecordingBar::kHeight);
