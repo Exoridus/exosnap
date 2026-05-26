@@ -11,6 +11,11 @@
 namespace exosnap::ui::chrome {
 namespace {
 
+constexpr int kProfileSummaryMaxChars = 32;
+constexpr int kTargetSummaryMaxChars = 40;
+constexpr int kOutputSummaryMaxChars = 32;
+constexpr int kRuntimeSummaryMaxChars = 36;
+
 QFrame* makeSeparator(QWidget* parent) {
     auto* separator = new QFrame(parent);
     separator->setObjectName("globalBarSeparator");
@@ -33,14 +38,19 @@ QPushButton* makeActionButton(const QString& text, const QString& role, const QS
 QWidget* makeSummarySlot(const QString& key, QLabel** out_value_label, QWidget* parent) {
     auto* slot = new QWidget(parent);
     slot->setObjectName("globalBarSummarySlot");
+    slot->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    slot->setMinimumWidth(0);
     auto* layout = new QHBoxLayout(slot);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(6);
 
     auto* key_label = new QLabel(key, slot);
     key_label->setProperty("labelRole", "globalBarContextKey");
+    key_label->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
     auto* value_label = new QLabel(QStringLiteral("-"), slot);
     value_label->setProperty("labelRole", "globalBarContextValue");
+    value_label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    value_label->setMinimumWidth(0);
     if (key == QStringLiteral("PROFILE"))
         value_label->setObjectName(QStringLiteral("globalBarProfileSummaryValue"));
     else if (key == QStringLiteral("TARGET"))
@@ -51,7 +61,7 @@ QWidget* makeSummarySlot(const QString& key, QLabel** out_value_label, QWidget* 
         value_label->setObjectName(QStringLiteral("globalBarRuntimeSummaryValue"));
 
     layout->addWidget(key_label, 0, Qt::AlignVCenter);
-    layout->addWidget(value_label, 0, Qt::AlignVCenter);
+    layout->addWidget(value_label, 1, Qt::AlignVCenter);
 
     if (out_value_label)
         *out_value_label = value_label;
@@ -136,14 +146,13 @@ GlobalRecordingBar::GlobalRecordingBar(QWidget* parent) : QWidget(parent) {
     output_separator_ = makeSeparator(context_slot);
     runtime_separator_ = makeSeparator(context_slot);
 
-    context_layout->addWidget(profile_summary_slot, 0, Qt::AlignVCenter);
+    context_layout->addWidget(profile_summary_slot, 2, Qt::AlignVCenter);
     context_layout->addWidget(profile_separator, 0, Qt::AlignVCenter);
-    context_layout->addWidget(target_summary_slot, 0, Qt::AlignVCenter);
+    context_layout->addWidget(target_summary_slot, 3, Qt::AlignVCenter);
     context_layout->addWidget(output_separator_, 0, Qt::AlignVCenter);
-    context_layout->addWidget(output_summary_slot_, 0, Qt::AlignVCenter);
+    context_layout->addWidget(output_summary_slot_, 2, Qt::AlignVCenter);
     context_layout->addWidget(runtime_separator_, 0, Qt::AlignVCenter);
-    context_layout->addWidget(runtime_summary_slot_, 0, Qt::AlignVCenter);
-    context_layout->addStretch(1);
+    context_layout->addWidget(runtime_summary_slot_, 2, Qt::AlignVCenter);
 
     root->addWidget(status_slot, 0, Qt::AlignVCenter);
     root->addWidget(makeSeparator(this), 0, Qt::AlignVCenter);
@@ -178,24 +187,29 @@ QString GlobalRecordingBar::statusLabel() const {
 }
 
 void GlobalRecordingBar::setProfileSummary(const QString& summary_text) {
-    setSummaryLabel(profile_summary_value_, summary_text, 28);
+    profile_summary_text_ = normalizeSummaryText(summary_text);
+    setSummaryLabel(profile_summary_value_, profile_summary_text_, kProfileSummaryMaxChars);
 }
 
 void GlobalRecordingBar::setTargetSummary(const QString& summary_text) {
-    setSummaryLabel(target_summary_value_, summary_text, 34);
+    target_summary_text_ = normalizeSummaryText(summary_text);
+    setSummaryLabel(target_summary_value_, target_summary_text_, kTargetSummaryMaxChars);
 }
 
 void GlobalRecordingBar::setOutputSummary(const QString& summary_text) {
-    setSummaryLabel(output_summary_value_, summary_text, 24);
+    output_summary_text_ = normalizeSummaryText(summary_text);
+    setSummaryLabel(output_summary_value_, output_summary_text_, kOutputSummaryMaxChars);
 }
 
 void GlobalRecordingBar::setRuntimeSummary(const QString& summary_text) {
-    setSummaryLabel(runtime_summary_value_, summary_text, 28);
+    runtime_summary_text_ = normalizeSummaryText(summary_text);
+    setSummaryLabel(runtime_summary_value_, runtime_summary_text_, kRuntimeSummaryMaxChars);
 }
 
 void GlobalRecordingBar::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     applyCompactLayout();
+    refreshSummaryLabels();
 }
 
 void GlobalRecordingBar::refreshStatusChip() {
@@ -276,12 +290,26 @@ void GlobalRecordingBar::applyCompactLayout() {
     runtime_separator_->setVisible(!compact_context);
 }
 
+void GlobalRecordingBar::refreshSummaryLabels() {
+    setSummaryLabel(profile_summary_value_, profile_summary_text_, kProfileSummaryMaxChars);
+    setSummaryLabel(target_summary_value_, target_summary_text_, kTargetSummaryMaxChars);
+    setSummaryLabel(output_summary_value_, output_summary_text_, kOutputSummaryMaxChars);
+    setSummaryLabel(runtime_summary_value_, runtime_summary_text_, kRuntimeSummaryMaxChars);
+}
+
 void GlobalRecordingBar::setSummaryLabel(QLabel* label, const QString& summary_text, int max_chars) {
     if (!label)
         return;
 
     const QString normalized = normalizeSummaryText(summary_text);
-    label->setText(clipSummaryText(normalized, max_chars));
+    const QString clipped = clipSummaryText(normalized, max_chars);
+    QString visible_text = clipped;
+    const int available_width =
+        label->contentsRect().width() > label->width() ? label->contentsRect().width() : label->width();
+    if (isVisible() && label->isVisibleTo(this) && available_width > 0) {
+        visible_text = label->fontMetrics().elidedText(clipped, Qt::ElideRight, available_width);
+    }
+    label->setText(visible_text);
     label->setToolTip(normalized);
 }
 

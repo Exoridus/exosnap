@@ -44,6 +44,7 @@ class GlobalRecordingBar : public QWidget {
     void refreshVisualState();
     void refreshStatusChip();
     void refreshActionLabels();
+    void refreshSummaryLabels();
     void applyCompactLayout();
 
     void setSummaryLabel(QLabel* label, const QString& summary_text, int max_chars);
@@ -70,6 +71,10 @@ class GlobalRecordingBar : public QWidget {
     QLabel* runtime_summary_value_ = nullptr;
 
     QString status_label_ = QStringLiteral("READY");
+    QString profile_summary_text_ = QStringLiteral("-");
+    QString target_summary_text_ = QStringLiteral("-");
+    QString output_summary_text_ = QStringLiteral("-");
+    QString runtime_summary_text_ = QStringLiteral("DUR --:--:-- · SIZE -");
 };
 
 } // namespace exosnap::ui::chrome

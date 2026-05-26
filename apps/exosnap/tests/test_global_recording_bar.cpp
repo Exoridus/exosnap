@@ -120,5 +120,41 @@ TEST_F(GlobalRecordingBarTest, StatusLabelMapping_ControlsPrimaryAndPauseButtons
     EXPECT_FALSE(pause->isEnabled());
 }
 
+TEST_F(GlobalRecordingBarTest, LongSummaryValues_ElideDisplayedTextAndKeepFullTooltips) {
+    ui::chrome::GlobalRecordingBar bar;
+    bar.resize(980, ui::chrome::GlobalRecordingBar::kHeight);
+    bar.show();
+    QApplication::processEvents();
+
+    const QString profile_long =
+        QStringLiteral("  Custom AV1 Baseline Profile Name For Team Capture Validation Run   ");
+    const QString target_long = QStringLiteral("Microsoft Edge - Deep Operational Dashboard "
+                                               "| Service Desk - Incident Acknowledgement Queue");
+    const QString output_long =
+        QStringLiteral("C:/Users/User/Videos/ExoSnap/Very/Long/Project/Folder/Name/For/Capture/Sessions");
+    const QString runtime_long = QStringLiteral("DUR 12:34:56 ") + QChar(0x00B7) + QStringLiteral(" SIZE 123.4 GB");
+
+    bar.setProfileSummary(profile_long);
+    bar.setTargetSummary(target_long);
+    bar.setOutputSummary(output_long);
+    bar.setRuntimeSummary(runtime_long);
+    QApplication::processEvents();
+
+    const auto* profile = FindRequiredLabel(bar, "globalBarProfileSummaryValue");
+    const auto* target = FindRequiredLabel(bar, "globalBarTargetSummaryValue");
+    const auto* output = FindRequiredLabel(bar, "globalBarOutputSummaryValue");
+    const auto* runtime = FindRequiredLabel(bar, "globalBarRuntimeSummaryValue");
+
+    EXPECT_EQ(profile->toolTip(), QStringLiteral("Custom AV1 Baseline Profile Name For Team Capture Validation Run"));
+    EXPECT_EQ(target->toolTip(), target_long);
+    EXPECT_EQ(output->toolTip(), output_long);
+    EXPECT_EQ(runtime->toolTip(), runtime_long);
+
+    EXPECT_NE(profile->text(), profile->toolTip());
+    EXPECT_NE(target->text(), target->toolTip());
+    EXPECT_NE(output->text(), output->toolTip());
+    EXPECT_EQ(runtime->text(), runtime->toolTip());
+}
+
 } // namespace
 } // namespace exosnap
