@@ -50,9 +50,10 @@
 namespace exosnap {
 namespace {
 
-// UI-R1D prep: keep local Record page transport controls visible by default.
-// This allows a safe future flip to de-emphasize/hide them once global bar ownership is finalized.
-constexpr bool kShowLocalRecordTransportControls = true;
+// UI-R4A: hide legacy local transport controls by default so the global
+// recording bar is the primary visible transport surface. Keep controls/slots
+// wired for an easy rollback and for existing action/hotkey paths.
+constexpr bool kShowLocalRecordTransportControls = false;
 
 QFrame* makePanel(QWidget* parent, const char* role = "panel") {
     auto* panel = new QFrame(parent);
