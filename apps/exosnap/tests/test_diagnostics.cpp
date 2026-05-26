@@ -225,6 +225,25 @@ TEST(ConfigSummaryTest, FromCurrentSettings_AudioRoutingWithMerge) {
     FAIL() << "Audio Routing entry not found";
 }
 
+TEST(ConfigSummaryTest, UserConfigFromSettings_UsesActiveOutputSelection) {
+    OutputSettingsModel output;
+    output.container = capability::Container::WebM;
+    output.video_codec = capability::VideoCodec::Av1Nvenc;
+    output.audio_codec = capability::AudioCodec::Opus;
+
+    VideoSettingsModel video;
+    video.cfr = false;
+
+    const capability::UserRecorderConfig config = UserConfigFromSettings(output, video);
+    EXPECT_EQ(config.container, capability::Container::WebM);
+    EXPECT_EQ(config.video_codec, capability::VideoCodec::Av1Nvenc);
+    EXPECT_EQ(config.audio_codec, capability::AudioCodec::Opus);
+    EXPECT_EQ(config.chroma, capability::ChromaSubsampling::Cs420);
+    EXPECT_EQ(config.bit_depth, capability::BitDepth::Bit8);
+    EXPECT_EQ(config.frame_rate_num, 60u);
+    EXPECT_EQ(config.frame_rate_den, 1u);
+}
+
 // --- RecommendationEngine tests ---
 
 TEST(RecommendationEngineTest, Generate_EmptyNoFlag) {

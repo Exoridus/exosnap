@@ -2,6 +2,7 @@
 #include <QWidget>
 
 #include <capability/capability_set.h>
+#include <capability/resolver.h>
 
 #include "../diagnostics/CapabilitySummary.h"
 #include "../diagnostics/ConfigSummary.h"
@@ -51,6 +52,9 @@ class DiagnosticsPage : public QWidget {
     void refreshOverview();
     void refreshRecommendations();
     void refreshSelfTest();
+    void refreshCapabilities();
+    void refreshConfiguration();
+    void refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations);
 
     QLabel* makeSubLabel(const QString& text, QWidget* parent);
     QLabel* makeSectionLabel(const QString& text, QWidget* parent);
@@ -68,6 +72,7 @@ class DiagnosticsPage : public QWidget {
     QLabel* blocker_count_ = nullptr;
     QLabel* notice_count_ = nullptr;
     QLabel* pass_count_ = nullptr;
+    QVBoxLayout* overview_issues_layout_ = nullptr;
 
     // Capabilities
     QVBoxLayout* capabilities_layout_ = nullptr;
@@ -103,6 +108,8 @@ class DiagnosticsPage : public QWidget {
     std::string settings_path_;
     bool hotkeys_ok_ = false;
     bool data_ready_ = false;
+    capability::UserRecorderConfig active_user_config_{};
+    capability::ResolveResult profile_validation_;
 };
 
 } // namespace exosnap

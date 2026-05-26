@@ -10,6 +10,7 @@
 #include "../ui/widgets/ComboBoxWheelFilter.h"
 
 #include <capability/audio_ui_state.h>
+#include <capability/resolver.h>
 #include <capability/user_config.h>
 
 #include <QComboBox>
@@ -28,6 +29,8 @@
 #include <QTabWidget>
 #include <QUrl>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 namespace exosnap {
 
@@ -66,6 +69,35 @@ QFrame* makeHorizontalRule(QWidget* parent) {
     f->setFrameShape(QFrame::HLine);
     f->setObjectName(QStringLiteral("diagnosticRule"));
     return f;
+}
+
+QString InvalidFieldDisplayName(const std::string& field) {
+    if (field == "container")
+        return QStringLiteral("Container");
+    if (field == "video_codec")
+        return QStringLiteral("Video codec");
+    if (field == "audio_codec")
+        return QStringLiteral("Audio codec");
+    if (field == "chroma")
+        return QStringLiteral("Chroma mode");
+    if (field == "bit_depth")
+        return QStringLiteral("Bit depth");
+    if (field == "output_width")
+        return QStringLiteral("Output width");
+    if (field == "output_height")
+        return QStringLiteral("Output height");
+    if (field == "frame_rate")
+        return QStringLiteral("Frame rate");
+    if (field == "config")
+        return QStringLiteral("Setting combination");
+    return QStringLiteral("Configuration");
+}
+
+QString InvalidFieldActionHint(const std::string& field) {
+    if (field == "output_width" || field == "output_height" || field == "frame_rate") {
+        return QStringLiteral("Adjust this value in Video settings.");
+    }
+    return QStringLiteral("Adjust the selected profile in Output or Video settings.");
 }
 
 } // namespace
@@ -118,41 +150,16 @@ void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, c
     cap_summary_ = diagnostics::CapabilitySummary::FromCapabilitySet(caps_);
     config_summary_ = diagnostics::ConfigSummary::FromCurrentSettings(
         output, video, audio, std::filesystem::path(settings_path_), profile_name_, hotkeys_summary_);
+    active_user_config_ = diagnostics::UserConfigFromSettings(output, video);
+    capability::SettingsResolver resolver(caps_);
+    profile_validation_ = resolver.ValidateConfig(active_user_config_);
     data_ready_ = true;
 
     refreshOverview();
     refreshRecommendations();
     refreshSelfTest();
-
-    // Populate capabilities table
-    if (capabilities_layout_ && capabilities_content_) {
-        // Clear existing
-        QLayoutItem* child;
-        while ((child = capabilities_layout_->takeAt(0)) != nullptr) {
-            delete child->widget();
-            delete child;
-        }
-        for (const auto& entry : cap_summary_.entries) {
-            capabilities_layout_->addWidget(makeInfoRow(QString::fromStdString(entry.label),
-                                                        QString::fromStdString(entry.value),
-                                                        QString::fromStdString(entry.status), capabilities_content_));
-        }
-        capabilities_layout_->addStretch();
-    }
-
-    // Populate configuration table
-    if (config_layout_ && config_content_) {
-        QLayoutItem* child;
-        while ((child = config_layout_->takeAt(0)) != nullptr) {
-            delete child->widget();
-            delete child;
-        }
-        for (const auto& entry : config_summary_.entries) {
-            config_layout_->addWidget(makeInfoRow(QString::fromStdString(entry.label),
-                                                  QString::fromStdString(entry.value), QString(), config_content_));
-        }
-        config_layout_->addStretch();
-    }
+    refreshCapabilities();
+    refreshConfiguration();
 
     // Update log path
     if (log_path_label_) {
@@ -313,6 +320,18 @@ void DiagnosticsPage::buildOverviewTab(QWidget* container) {
     counts_row->addStretch();
     overview_layout->addLayout(counts_row);
 
+    overview_layout->addWidget(makeHorizontalRule(overview_panel));
+    overview_layout->addWidget(makeSectionLabel(QStringLiteral("Top Issues"), overview_panel));
+    overview_layout->addWidget(
+        makeSubLabel(QStringLiteral("Highest-priority blockers and notices for the current recording configuration."),
+                     overview_panel));
+
+    overview_issues_layout_ = new QVBoxLayout();
+    overview_issues_layout_->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
+    overview_layout->addLayout(overview_issues_layout_);
+    overview_issues_layout_->addWidget(
+        makeSubLabel(QStringLiteral("Run a system check to populate issue details."), overview_panel));
+
     layout->addWidget(overview_panel);
     layout->addStretch();
     scroll->setWidget(content);
@@ -437,6 +456,82 @@ void DiagnosticsPage::buildConfigurationTab(QWidget* container) {
     root->addWidget(scroll);
 }
 
+void DiagnosticsPage::refreshCapabilities() {
+    if (!capabilities_layout_ || !capabilities_content_ || !data_ready_)
+        return;
+
+    QLayoutItem* child = nullptr;
+    while ((child = capabilities_layout_->takeAt(0)) != nullptr) {
+        delete child->widget();
+        delete child;
+    }
+
+    capabilities_layout_->addWidget(
+        makeSectionLabel(QStringLiteral("Hardware & Software Capabilities"), capabilities_content_));
+    capabilities_layout_->addWidget(makeSubLabel(
+        QStringLiteral("Detected capabilities from the current system. Values marked unavailable are not selectable."),
+        capabilities_content_));
+    capabilities_layout_->addSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
+
+    auto* header_row = new QWidget(capabilities_content_);
+    auto* header_layout = new QHBoxLayout(header_row);
+    header_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceSm, 0, ui::theme::ExoSnapMetrics::kSpaceSm, 0);
+    auto* h1 = new QLabel(QStringLiteral("Feature"), header_row);
+    h1->setProperty("labelRole", "section");
+    h1->setMinimumWidth(180);
+    auto* h2 = new QLabel(QStringLiteral("Detected Value"), header_row);
+    h2->setProperty("labelRole", "section");
+    auto* h3 = new QLabel(QStringLiteral("Status"), header_row);
+    h3->setProperty("labelRole", "section");
+    header_layout->addWidget(h1);
+    header_layout->addWidget(h2, 1);
+    header_layout->addWidget(h3);
+    capabilities_layout_->addWidget(header_row);
+    capabilities_layout_->addWidget(makeHorizontalRule(capabilities_content_));
+
+    for (const auto& entry : cap_summary_.entries) {
+        capabilities_layout_->addWidget(makeInfoRow(QString::fromStdString(entry.label),
+                                                    QString::fromStdString(entry.value),
+                                                    QString::fromStdString(entry.status), capabilities_content_));
+    }
+    capabilities_layout_->addStretch();
+}
+
+void DiagnosticsPage::refreshConfiguration() {
+    if (!config_layout_ || !config_content_ || !data_ready_)
+        return;
+
+    QLayoutItem* child = nullptr;
+    while ((child = config_layout_->takeAt(0)) != nullptr) {
+        delete child->widget();
+        delete child;
+    }
+
+    config_layout_->addWidget(makeSectionLabel(QStringLiteral("Current Configuration"), config_content_));
+    config_layout_->addWidget(
+        makeSubLabel(QStringLiteral("Active recording settings as currently configured in the app."), config_content_));
+    config_layout_->addSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
+
+    auto* header_row = new QWidget(config_content_);
+    auto* header_layout = new QHBoxLayout(header_row);
+    header_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceSm, 0, ui::theme::ExoSnapMetrics::kSpaceSm, 0);
+    auto* h1 = new QLabel(QStringLiteral("Setting"), header_row);
+    h1->setProperty("labelRole", "section");
+    h1->setMinimumWidth(180);
+    auto* h2 = new QLabel(QStringLiteral("Value"), header_row);
+    h2->setProperty("labelRole", "section");
+    header_layout->addWidget(h1);
+    header_layout->addWidget(h2, 1);
+    config_layout_->addWidget(header_row);
+    config_layout_->addWidget(makeHorizontalRule(config_content_));
+
+    for (const auto& entry : config_summary_.entries) {
+        config_layout_->addWidget(makeInfoRow(QString::fromStdString(entry.label), QString::fromStdString(entry.value),
+                                              QString(), config_content_));
+    }
+    config_layout_->addStretch();
+}
+
 // --- Recommendations Tab ---
 
 void DiagnosticsPage::buildRecommendationsTab(QWidget* container) {
@@ -483,27 +578,18 @@ void DiagnosticsPage::refreshRecommendations() {
         QStringLiteral("Rule-based warnings about your current configuration."), recommendations_content_));
     recommendations_layout_->addWidget(makeHorizontalRule(recommendations_content_));
 
-    capability::UserRecorderConfig user_config;
-    user_config.container = config_summary_.entries.size() > 2 ? [&]() {
-        auto c = config_summary_.entries[2].value;
-        if (c == "MKV")
-            return capability::Container::Matroska;
-        if (c == "MP4")
-            return capability::Container::Mp4;
-        return capability::Container::WebM;
-    }()
-                                                               : capability::Container::Matroska;
-    user_config.frame_rate_num = 60;
-    user_config.frame_rate_den = 1;
-
-    // Parse codec from config summary if available
-    diagnostics::RecommendationEngine engine(caps_, user_config, /*refresh=*/0, /*drive free=*/0, true);
+    diagnostics::RecommendationEngine engine(caps_, active_user_config_, /*refresh=*/0, /*drive free=*/0,
+                                             profile_validation_.succeeded);
     auto checklist = engine.Generate();
 
     if (checklist.results.empty()) {
         recommendations_layout_->addWidget(makeSubLabel(
             QStringLiteral("No recommendations. Your configuration looks good."), recommendations_content_));
     } else {
+        std::stable_sort(checklist.results.begin(), checklist.results.end(),
+                         [](const diagnostics::DiagnosticResult& a, const diagnostics::DiagnosticResult& b) {
+                             return static_cast<int>(a.severity) > static_cast<int>(b.severity);
+                         });
         for (const auto& result : checklist.results) {
             auto* card = makePanel(recommendations_content_);
             auto* card_layout = new QVBoxLayout(card);
@@ -783,18 +869,118 @@ void DiagnosticsPage::refreshSelfTest() {
     selftest_layout_->addStretch();
 }
 
+void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations) {
+    if (!overview_issues_layout_)
+        return;
+
+    QLayoutItem* child = nullptr;
+    while ((child = overview_issues_layout_->takeAt(0)) != nullptr) {
+        delete child->widget();
+        delete child;
+    }
+
+    int issue_count = 0;
+    constexpr int kMaxIssues = 6;
+
+    const auto add_issue_card = [&](diagnostics::DiagnosticSeverity severity, const QString& title,
+                                    const QString& summary, const QString& action, const QString& detail) {
+        if (issue_count >= kMaxIssues)
+            return;
+
+        auto* card = makePanel(this);
+        auto* card_layout = new QVBoxLayout(card);
+        card_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
+                                        ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
+        card_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceXs);
+
+        auto* title_row = new QHBoxLayout();
+        auto* icon_label = new QLabel(severityIcon(severity), card);
+        icon_label->setProperty("labelRole", severityClass(severity));
+        auto* title_label = new QLabel(title, card);
+        title_label->setProperty("labelRole", "body");
+        title_label->setStyleSheet(QStringLiteral("font-weight: bold;"));
+        title_row->addWidget(icon_label);
+        title_row->addWidget(title_label, 1);
+        card_layout->addLayout(title_row);
+
+        auto* summary_label = new QLabel(summary, card);
+        summary_label->setProperty("labelRole", "subtle");
+        summary_label->setWordWrap(true);
+        card_layout->addWidget(summary_label);
+
+        if (!detail.trimmed().isEmpty()) {
+            auto* detail_label = new QLabel(detail, card);
+            detail_label->setProperty("labelRole", "subtle");
+            detail_label->setWordWrap(true);
+            card_layout->addWidget(detail_label);
+        }
+
+        if (!action.trimmed().isEmpty()) {
+            auto* action_label = new QLabel(QStringLiteral("Action: ") + action, card);
+            action_label->setProperty("labelRole", "muted");
+            action_label->setWordWrap(true);
+            card_layout->addWidget(action_label);
+        }
+
+        overview_issues_layout_->addWidget(card);
+        ++issue_count;
+    };
+
+    if (!profile_validation_.succeeded) {
+        for (const auto& invalid : profile_validation_.invalidity) {
+            add_issue_card(diagnostics::DiagnosticSeverity::Blocker,
+                           InvalidFieldDisplayName(invalid.field) + QStringLiteral(" is not supported"),
+                           QString::fromStdString(invalid.message), InvalidFieldActionHint(invalid.field), QString{});
+        }
+    }
+
+    for (const auto& warning : profile_validation_.warnings) {
+        add_issue_card(diagnostics::DiagnosticSeverity::Notice, QStringLiteral("Configuration needs validation"),
+                       QString::fromStdString(warning.message),
+                       QStringLiteral("Run a short recording to validate quality on this machine."),
+                       QStringLiteral("Code: %1").arg(QString::fromStdString(warning.code)));
+    }
+
+    if (!hotkeys_ok_ && hotkeys_summary_ != "None configured") {
+        add_issue_card(diagnostics::DiagnosticSeverity::Notice, QStringLiteral("Global hotkeys are not active"),
+                       QStringLiteral("Hotkeys are configured but not currently registered."),
+                       QStringLiteral("Open the Hotkeys page and reapply the binding if shortcuts do not trigger."),
+                       QStringLiteral("If the app just launched, this can clear once startup completes."));
+    }
+
+    const bool has_profile_invalidity = !profile_validation_.invalidity.empty();
+    for (const auto& result : recommendations.results) {
+        if (result.severity == diagnostics::DiagnosticSeverity::Pass)
+            continue;
+        if (has_profile_invalidity && result.id == "rec.006")
+            continue;
+        add_issue_card(result.severity, QString::fromStdString(result.title), QString::fromStdString(result.summary),
+                       QString::fromStdString(result.recommendation), QString::fromStdString(result.detail));
+    }
+
+    if (issue_count == 0) {
+        overview_issues_layout_->addWidget(
+            makeSubLabel(QStringLiteral("No blockers or notices in the active recording configuration."), this));
+        return;
+    }
+
+    if (static_cast<int>(recommendations.results.size()) > issue_count) {
+        overview_issues_layout_->addWidget(
+            makeSubLabel(QStringLiteral("Additional details are available in the Recommendations tab."), this));
+    }
+}
+
 // --- Overview refresh ---
 
 void DiagnosticsPage::refreshOverview() {
     if (!data_ready_)
         return;
 
-    diagnostics::CapabilitySummary caps = diagnostics::CapabilitySummary::FromCapabilitySet(caps_);
-    diagnostics::RecommendationEngine engine(caps_, capability::UserRecorderConfig{}, 0, 0, true);
+    diagnostics::RecommendationEngine engine(caps_, active_user_config_, 0, 0, profile_validation_.succeeded);
     auto recs = engine.Generate();
 
     diagnostics::DiagnosticChecklist combined;
-    for (auto& r : caps.entries) {
+    for (const auto& r : cap_summary_.entries) {
         diagnostics::DiagnosticResult dr;
         dr.id = "cap." + r.label;
         dr.group = diagnostics::DiagnosticGroup::CapabilityProbe;
@@ -836,13 +1022,18 @@ void DiagnosticsPage::refreshOverview() {
     last_check_label_->setText(QStringLiteral("Last check: %1")
                                    .arg(QDateTime::currentDateTime().toString(QStringLiteral("dd MMM yyyy, hh:mm"))));
 
-    summary_label_->setText(QStringLiteral("Capabilities: %1 entries checked, %2 recommendations.")
-                                .arg(caps.entries.size())
-                                .arg(recs.results.size()));
+    QString summary = QStringLiteral("Capabilities: %1 entries checked, %2 recommendation(s).")
+                          .arg(cap_summary_.entries.size())
+                          .arg(recs.results.size());
+    if (!profile_validation_.succeeded && !profile_validation_.invalidity.empty()) {
+        summary += QStringLiteral(" Configuration compatibility blockers found.");
+    }
+    summary_label_->setText(summary);
 
     blocker_count_->setText(QString::number(blockers));
     notice_count_->setText(QString::number(notices));
     pass_count_->setText(QString::number(passes));
+    refreshTopIssues(recs);
 
     export_report_btn_->setEnabled(true);
 }

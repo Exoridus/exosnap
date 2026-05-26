@@ -86,6 +86,20 @@ std::string NvencQualityName(recorder_core::NvencQualityPreset q) {
 
 } // namespace
 
+capability::UserRecorderConfig UserConfigFromSettings(const OutputSettingsModel& output,
+                                                      const VideoSettingsModel& video) {
+    (void)video;
+    capability::UserRecorderConfig config;
+    config.container = output.container;
+    config.video_codec = output.video_codec;
+    config.audio_codec = output.audio_codec;
+    config.chroma = capability::ChromaSubsampling::Cs420;
+    config.bit_depth = capability::BitDepth::Bit8;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+    return config;
+}
+
 ConfigSummary ConfigSummary::FromCurrentSettings(const OutputSettingsModel& output, const VideoSettingsModel& video,
                                                  const capability::AudioUiState& audio,
                                                  const std::filesystem::path& settings_path,

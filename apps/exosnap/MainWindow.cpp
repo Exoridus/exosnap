@@ -1563,6 +1563,7 @@ void MainWindow::onHotkeyBindingChanged(int action_index, QKeySequence seq) {
     persisted_hotkeys_[static_cast<std::size_t>(action_index)] = seq;
     persisted_settings_.hotkey_bindings[static_cast<std::size_t>(action_index)] = PersistedHotkeyString(seq);
     persistProfileState();
+    refreshDiagnosticsData();
 
 #if defined(Q_OS_WIN)
     HWND hwnd = reinterpret_cast<HWND>(winId());

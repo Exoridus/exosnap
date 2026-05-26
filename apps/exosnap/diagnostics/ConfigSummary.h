@@ -7,6 +7,7 @@
 #include "../models/OutputSettingsModel.h"
 #include "../models/VideoSettingsModel.h"
 #include <capability/audio_ui_state.h>
+#include <capability/user_config.h>
 
 namespace exosnap::diagnostics {
 
@@ -25,5 +26,8 @@ struct ConfigSummary {
                                              const std::filesystem::path& settings_path,
                                              const std::string& profile_name, const std::string& hotkeys_summary);
 };
+
+capability::UserRecorderConfig UserConfigFromSettings(const OutputSettingsModel& output,
+                                                      const VideoSettingsModel& video);
 
 } // namespace exosnap::diagnostics
