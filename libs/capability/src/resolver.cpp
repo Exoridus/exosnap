@@ -313,6 +313,15 @@ ResolveResult SettingsResolver::ValidateConfig(const UserRecorderConfig& config)
     SupportAnnotation combo = QueryResolvedCombo(caps_, result.resolved_config);
 
     if (!IsSelectable(combo.level)) {
+        // If the video codec dimension is not selectable it is the root cause — report it
+        // directly rather than proceeding through audio fallbacks that will also fail.
+        const SupportAnnotation& v_ann = caps_.QueryVideoCodec(result.resolved_config.video_codec);
+        if (!IsSelectable(v_ann.level)) {
+            AddInvalid(result, "video_codec",
+                       v_ann.reason.empty() ? "Selected video codec is not available on this system." : v_ann.reason);
+            return result;
+        }
+
         const AudioCodec preferred = PreferredAudioCodecForContainer(result.resolved_config.container);
         if (result.resolved_config.audio_codec != preferred) {
             UserRecorderConfig candidate = result.resolved_config;

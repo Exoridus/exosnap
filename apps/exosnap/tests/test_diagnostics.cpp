@@ -567,5 +567,132 @@ TEST(DisplayNameTest, SupportLevelStrings) {
     EXPECT_EQ(SupportLevelString(capability::SupportLevel::Invalid), "Invalid");
 }
 
+// ─── Blocked Scenario Tests ───────────────────────────────────────────────────
+//
+// BLOCKED state source: RecordingCoordinator::OnCapabilitiesReady() sets Blocked
+// when ValidateConfig(primaryRecorderConfig()) fails. primaryRecorderConfig() is
+// hardcoded in RecordPage::initCoordinator() as MKV + H264Nvenc + AAC + Cs420 +
+// Bit8 + 60 fps. Validation fails when NVENC is unavailable — BuildEffectiveCapabilities
+// downgrade rule A marks H264Nvenc and Av1Nvenc NotImplemented and adds combo_overrides.
+//
+// BLOCKED cannot be reproduced through user-visible configuration on NVENC-capable
+// hardware. It is hardware-capability driven, evaluated once at startup. These tests
+// prove the data path via a synthetic CapabilitySet that mirrors the downgrade.
+
+TEST(BlockedScenarioTest, StartupConfig_NvencUnavailable_ValidateFails) {
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    const std::string nvenc_reason = "NVENC unavailable: simulated";
+    caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::NotImplemented, nvenc_reason};
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::NotImplemented, nvenc_reason};
+    const capability::ComboKey mkv_h264{capability::Container::Matroska, capability::VideoCodec::H264Nvenc,
+                                        capability::AudioCodec::AacMf, capability::ChromaSubsampling::Cs420,
+                                        capability::BitDepth::Bit8};
+    caps.combo_overrides[mkv_h264] = {capability::SupportLevel::NotImplemented, nvenc_reason};
+
+    capability::SettingsResolver resolver(caps);
+
+    // Matches the hardcoded primaryRecorderConfig() used by RecordPage::initCoordinator().
+    capability::UserRecorderConfig primary;
+    primary.container = capability::Container::Matroska;
+    primary.video_codec = capability::VideoCodec::H264Nvenc;
+    primary.audio_codec = capability::AudioCodec::AacMf;
+    primary.chroma = capability::ChromaSubsampling::Cs420;
+    primary.bit_depth = capability::BitDepth::Bit8;
+    primary.frame_rate_num = 60;
+    primary.frame_rate_den = 1;
+
+    const capability::ResolveResult result = resolver.ValidateConfig(primary);
+    // Validation failure drives state_ = Blocked in RecordingCoordinator::OnCapabilitiesReady().
+    EXPECT_FALSE(result.succeeded);
+    ASSERT_FALSE(result.invalidity.empty());
+    // Must report video_codec as the root cause — not audio_codec via fallback path.
+    EXPECT_EQ(result.invalidity.front().field, "video_codec");
+}
+
+TEST(BlockedScenarioTest, StartupConfig_NvencAvailable_ValidateSucceeds) {
+    // Regression canary: NVENC-capable hardware must stay READY, not BLOCKED.
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    capability::SettingsResolver resolver(caps);
+
+    capability::UserRecorderConfig primary;
+    primary.container = capability::Container::Matroska;
+    primary.video_codec = capability::VideoCodec::H264Nvenc;
+    primary.audio_codec = capability::AudioCodec::AacMf;
+    primary.chroma = capability::ChromaSubsampling::Cs420;
+    primary.bit_depth = capability::BitDepth::Bit8;
+    primary.frame_rate_num = 60;
+    primary.frame_rate_den = 1;
+
+    const capability::ResolveResult result = resolver.ValidateConfig(primary);
+    EXPECT_TRUE(result.succeeded);
+    EXPECT_TRUE(result.invalidity.empty());
+}
+
+TEST(BlockedScenarioTest, StartupConfig_NvencUnavailable_InvalidityDisplayMapsToVideoCodec) {
+    // End-to-end check: the invalidity field reported when NVENC is missing must map to
+    // the "Video codec" display name and the Output/Video settings action hint — not
+    // "Audio codec", which was the previous misleading message (REC-R7 fix).
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    const std::string nvenc_reason = "NVENC unavailable: simulated";
+    caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::NotImplemented, nvenc_reason};
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::NotImplemented, nvenc_reason};
+    const capability::ComboKey mkv_h264{capability::Container::Matroska, capability::VideoCodec::H264Nvenc,
+                                        capability::AudioCodec::AacMf, capability::ChromaSubsampling::Cs420,
+                                        capability::BitDepth::Bit8};
+    caps.combo_overrides[mkv_h264] = {capability::SupportLevel::NotImplemented, nvenc_reason};
+
+    capability::SettingsResolver resolver(caps);
+    capability::UserRecorderConfig primary;
+    primary.container = capability::Container::Matroska;
+    primary.video_codec = capability::VideoCodec::H264Nvenc;
+    primary.audio_codec = capability::AudioCodec::AacMf;
+    primary.chroma = capability::ChromaSubsampling::Cs420;
+    primary.bit_depth = capability::BitDepth::Bit8;
+    primary.frame_rate_num = 60;
+    primary.frame_rate_den = 1;
+
+    const capability::ResolveResult result = resolver.ValidateConfig(primary);
+    ASSERT_FALSE(result.succeeded);
+    ASSERT_FALSE(result.invalidity.empty());
+
+    const std::string& field = result.invalidity.front().field;
+    EXPECT_EQ(field, "video_codec");
+    // Diagnostics card title: "Video codec is not supported" (not "Audio codec is not supported").
+    EXPECT_EQ(InvalidFieldDisplayName(field), "Video codec");
+    // Action hint must point to Output/Video settings.
+    const std::string hint = InvalidFieldActionHint(field);
+    EXPECT_NE(hint.find("settings"), std::string::npos);
+    // The message should carry the NVENC reason.
+    EXPECT_EQ(result.invalidity.front().message, nvenc_reason);
+}
+
+TEST(BlockedScenarioTest, RecommendationEngine_H264NvencUnavailable_ProducesVideoCodecBlocker) {
+    // When H264Nvenc is not selectable, DiagnosticsPage's RecommendationEngine should
+    // produce a rec.003 (video codec unavailable) Blocker that appears in Top Issues.
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::NotImplemented,
+                                                            "NVENC unavailable"};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Matroska;
+    config.video_codec = capability::VideoCodec::H264Nvenc;
+    config.audio_codec = capability::AudioCodec::AacMf;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+
+    RecommendationEngine engine(caps, config, 0, 0, /*is_profile_supported=*/true);
+    const DiagnosticChecklist checklist = engine.Generate();
+
+    bool found_rec003 = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.003") {
+            found_rec003 = true;
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Blocker);
+        }
+    }
+    EXPECT_TRUE(found_rec003);
+    EXPECT_TRUE(checklist.has_blocker);
+}
+
 } // namespace
 } // namespace exosnap::diagnostics
