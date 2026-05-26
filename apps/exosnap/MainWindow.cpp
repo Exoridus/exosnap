@@ -13,6 +13,7 @@
 #include "settings/ProfileExchange.h"
 #include "ui/chrome/GlobalRecordingBar.h"
 #include "ui/chrome/OperationalTitleBar.h"
+#include "ui/chrome/RecordingStatusGuards.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
 
@@ -1182,9 +1183,7 @@ void MainWindow::onRecordChromeRuntimeMetricsChanged(const QString& elapsed_text
     if (!title_bar_)
         return;
 
-    const bool should_show_recording_runtime =
-        (record_status_label_ == QStringLiteral("REC") || record_status_label_ == QStringLiteral("PAUSED") ||
-         record_status_label_ == QStringLiteral("STOPPING"));
+    const bool should_show_recording_runtime = ui::chrome::ShouldShowRecordingRuntimeForStatus(record_status_label_);
     if (!should_show_recording_runtime) {
         pollIdleRuntimeMetrics();
         if (global_recording_bar_)

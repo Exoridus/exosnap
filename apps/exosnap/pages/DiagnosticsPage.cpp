@@ -1,6 +1,7 @@
 #include "DiagnosticsPage.h"
 
 #include "../diagnostics/ConfigSummary.h"
+#include "../diagnostics/DiagnosticsPresentation.h"
 #include "../diagnostics/RecommendationEngine.h"
 #include "../diagnostics/SelfTestRunner.h"
 #include "../models/OutputSettingsModel.h"
@@ -69,35 +70,6 @@ QFrame* makeHorizontalRule(QWidget* parent) {
     f->setFrameShape(QFrame::HLine);
     f->setObjectName(QStringLiteral("diagnosticRule"));
     return f;
-}
-
-QString InvalidFieldDisplayName(const std::string& field) {
-    if (field == "container")
-        return QStringLiteral("Container");
-    if (field == "video_codec")
-        return QStringLiteral("Video codec");
-    if (field == "audio_codec")
-        return QStringLiteral("Audio codec");
-    if (field == "chroma")
-        return QStringLiteral("Chroma mode");
-    if (field == "bit_depth")
-        return QStringLiteral("Bit depth");
-    if (field == "output_width")
-        return QStringLiteral("Output width");
-    if (field == "output_height")
-        return QStringLiteral("Output height");
-    if (field == "frame_rate")
-        return QStringLiteral("Frame rate");
-    if (field == "config")
-        return QStringLiteral("Setting combination");
-    return QStringLiteral("Configuration");
-}
-
-QString InvalidFieldActionHint(const std::string& field) {
-    if (field == "output_width" || field == "output_height" || field == "frame_rate") {
-        return QStringLiteral("Adjust this value in Video settings.");
-    }
-    return QStringLiteral("Adjust the selected profile in Output or Video settings.");
 }
 
 } // namespace
@@ -586,11 +558,9 @@ void DiagnosticsPage::refreshRecommendations() {
         recommendations_layout_->addWidget(makeSubLabel(
             QStringLiteral("No recommendations. Your configuration looks good."), recommendations_content_));
     } else {
-        std::stable_sort(checklist.results.begin(), checklist.results.end(),
-                         [](const diagnostics::DiagnosticResult& a, const diagnostics::DiagnosticResult& b) {
-                             return static_cast<int>(a.severity) > static_cast<int>(b.severity);
-                         });
-        for (const auto& result : checklist.results) {
+        std::vector<diagnostics::DiagnosticResult> ordered = checklist.results;
+        diagnostics::StableSortBySeverityDesc(ordered);
+        for (const auto& result : ordered) {
             auto* card = makePanel(recommendations_content_);
             auto* card_layout = new QVBoxLayout(card);
             card_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
@@ -928,10 +898,23 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
 
     if (!profile_validation_.succeeded) {
         for (const auto& invalid : profile_validation_.invalidity) {
+            const QString field_display = QString::fromStdString(diagnostics::InvalidFieldDisplayName(invalid.field));
+            const QString action_hint = QString::fromStdString(diagnostics::InvalidFieldActionHint(invalid.field));
             add_issue_card(diagnostics::DiagnosticSeverity::Blocker,
-                           InvalidFieldDisplayName(invalid.field) + QStringLiteral(" is not supported"),
-                           QString::fromStdString(invalid.message), InvalidFieldActionHint(invalid.field), QString{});
+                           field_display + QStringLiteral(" is not supported"), QString::fromStdString(invalid.message),
+                           action_hint, QString{});
         }
+    }
+
+    const bool has_profile_invalidity = !profile_validation_.invalidity.empty();
+    const std::vector<diagnostics::DiagnosticResult> ordered_recommendations =
+        diagnostics::BuildTopIssueRecommendations(recommendations, has_profile_invalidity);
+
+    for (const auto& result : ordered_recommendations) {
+        if (result.severity != diagnostics::DiagnosticSeverity::Blocker)
+            continue;
+        add_issue_card(result.severity, QString::fromStdString(result.title), QString::fromStdString(result.summary),
+                       QString::fromStdString(result.recommendation), QString::fromStdString(result.detail));
     }
 
     for (const auto& warning : profile_validation_.warnings) {
@@ -948,11 +931,8 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
                        QStringLiteral("If the app just launched, this can clear once startup completes."));
     }
 
-    const bool has_profile_invalidity = !profile_validation_.invalidity.empty();
-    for (const auto& result : recommendations.results) {
-        if (result.severity == diagnostics::DiagnosticSeverity::Pass)
-            continue;
-        if (has_profile_invalidity && result.id == "rec.006")
+    for (const auto& result : ordered_recommendations) {
+        if (result.severity == diagnostics::DiagnosticSeverity::Blocker)
             continue;
         add_issue_card(result.severity, QString::fromStdString(result.title), QString::fromStdString(result.summary),
                        QString::fromStdString(result.recommendation), QString::fromStdString(result.detail));

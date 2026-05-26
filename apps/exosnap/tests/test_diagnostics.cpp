@@ -3,6 +3,7 @@
 #include "diagnostics/CapabilitySummary.h"
 #include "diagnostics/ConfigSummary.h"
 #include "diagnostics/DiagnosticResult.h"
+#include "diagnostics/DiagnosticsPresentation.h"
 #include "diagnostics/RecommendationEngine.h"
 #include "diagnostics/SelfTestRunner.h"
 
@@ -11,6 +12,7 @@
 
 #include <capability/capability_builder.h>
 #include <capability/capability_set.h>
+#include <capability/resolver.h>
 #include <capability/user_config.h>
 
 namespace exosnap::diagnostics {
@@ -242,6 +244,107 @@ TEST(ConfigSummaryTest, UserConfigFromSettings_UsesActiveOutputSelection) {
     EXPECT_EQ(config.bit_depth, capability::BitDepth::Bit8);
     EXPECT_EQ(config.frame_rate_num, 60u);
     EXPECT_EQ(config.frame_rate_den, 1u);
+}
+
+TEST(ConfigSummaryTest, UserConfigFromSettings_MapsMp4H264AacProfileSelection) {
+    OutputSettingsModel output;
+    output.container = capability::Container::Mp4;
+    output.video_codec = capability::VideoCodec::H264Nvenc;
+    output.audio_codec = capability::AudioCodec::AacMf;
+
+    VideoSettingsModel video;
+    video.cfr = true;
+
+    const capability::UserRecorderConfig config = UserConfigFromSettings(output, video);
+    EXPECT_EQ(config.container, capability::Container::Mp4);
+    EXPECT_EQ(config.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(config.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(config.frame_rate_num, 60u);
+    EXPECT_EQ(config.frame_rate_den, 1u);
+}
+
+// --- DiagnosticsPresentation tests ---
+
+TEST(DiagnosticsPresentationTest, InvalidFieldMappings_ReturnExpectedDisplayNamesAndActionHints) {
+    EXPECT_EQ(InvalidFieldDisplayName("container"), "Container");
+    EXPECT_EQ(InvalidFieldDisplayName("video_codec"), "Video codec");
+    EXPECT_EQ(InvalidFieldDisplayName("audio_codec"), "Audio codec");
+    EXPECT_EQ(InvalidFieldDisplayName("frame_rate"), "Frame rate");
+    EXPECT_EQ(InvalidFieldDisplayName("output_width"), "Output width");
+    EXPECT_EQ(InvalidFieldDisplayName("output_height"), "Output height");
+    EXPECT_EQ(InvalidFieldDisplayName("config"), "Setting combination");
+    EXPECT_EQ(InvalidFieldDisplayName("unknown_field"), "Configuration");
+
+    EXPECT_EQ(InvalidFieldActionHint("frame_rate"), "Adjust this value in Video settings.");
+    EXPECT_EQ(InvalidFieldActionHint("output_width"), "Adjust this value in Video settings.");
+    EXPECT_EQ(InvalidFieldActionHint("output_height"), "Adjust this value in Video settings.");
+    EXPECT_EQ(InvalidFieldActionHint("video_codec"), "Adjust the selected profile in Output or Video settings.");
+}
+
+TEST(DiagnosticsPresentationTest, ResolverInvalidityField_MapsToSpecificFrameRateGuidance) {
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    capability::SettingsResolver resolver(caps);
+
+    capability::UserRecorderConfig invalid_config;
+    invalid_config.frame_rate_num = 0;
+    invalid_config.frame_rate_den = 1;
+
+    const capability::ResolveResult result = resolver.ValidateConfig(invalid_config);
+    ASSERT_FALSE(result.succeeded);
+    ASSERT_FALSE(result.invalidity.empty());
+    EXPECT_EQ(result.invalidity.front().field, "frame_rate");
+    EXPECT_EQ(InvalidFieldDisplayName(result.invalidity.front().field), "Frame rate");
+    EXPECT_EQ(InvalidFieldActionHint(result.invalidity.front().field), "Adjust this value in Video settings.");
+}
+
+TEST(DiagnosticsPresentationTest, BuildTopIssueRecommendations_BlockerFirstAndRec006SuppressedWhenInvalidityExists) {
+    DiagnosticChecklist recommendations;
+
+    DiagnosticResult notice_one;
+    notice_one.id = "rec.001";
+    notice_one.severity = DiagnosticSeverity::Notice;
+    recommendations.results.push_back(notice_one);
+
+    DiagnosticResult blocker_video;
+    blocker_video.id = "rec.003";
+    blocker_video.severity = DiagnosticSeverity::Blocker;
+    recommendations.results.push_back(blocker_video);
+
+    DiagnosticResult blocker_audio;
+    blocker_audio.id = "rec.004";
+    blocker_audio.severity = DiagnosticSeverity::Blocker;
+    recommendations.results.push_back(blocker_audio);
+
+    DiagnosticResult blocker_profile;
+    blocker_profile.id = "rec.006";
+    blocker_profile.severity = DiagnosticSeverity::Blocker;
+    recommendations.results.push_back(blocker_profile);
+
+    DiagnosticResult notice_two;
+    notice_two.id = "rec.005";
+    notice_two.severity = DiagnosticSeverity::Notice;
+    recommendations.results.push_back(notice_two);
+
+    DiagnosticResult pass_item;
+    pass_item.id = "rec.pass";
+    pass_item.severity = DiagnosticSeverity::Pass;
+    recommendations.results.push_back(pass_item);
+
+    const std::vector<DiagnosticResult> ordered_without_suppression =
+        BuildTopIssueRecommendations(recommendations, false);
+    ASSERT_EQ(ordered_without_suppression.size(), 5u);
+    EXPECT_EQ(ordered_without_suppression[0].id, "rec.003");
+    EXPECT_EQ(ordered_without_suppression[1].id, "rec.004");
+    EXPECT_EQ(ordered_without_suppression[2].id, "rec.006");
+    EXPECT_EQ(ordered_without_suppression[3].id, "rec.001");
+    EXPECT_EQ(ordered_without_suppression[4].id, "rec.005");
+
+    const std::vector<DiagnosticResult> ordered_with_suppression = BuildTopIssueRecommendations(recommendations, true);
+    ASSERT_EQ(ordered_with_suppression.size(), 4u);
+    EXPECT_EQ(ordered_with_suppression[0].id, "rec.003");
+    EXPECT_EQ(ordered_with_suppression[1].id, "rec.004");
+    EXPECT_EQ(ordered_with_suppression[2].id, "rec.001");
+    EXPECT_EQ(ordered_with_suppression[3].id, "rec.005");
 }
 
 // --- RecommendationEngine tests ---

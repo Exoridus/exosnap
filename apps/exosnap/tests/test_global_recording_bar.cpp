@@ -8,6 +8,7 @@
 #include <QPushButton>
 
 #include "ui/chrome/GlobalRecordingBar.h"
+#include "ui/chrome/RecordingStatusGuards.h"
 
 namespace exosnap {
 namespace {
@@ -203,6 +204,31 @@ TEST_F(GlobalRecordingBarTest, PrimaryAction_OnlyEmitsWhenCurrentStatusAllowsAct
         QApplication::processEvents();
         const int after = emit_count;
         EXPECT_EQ(after > before, scenario.expect_emit) << "status=" << scenario.status_input.toStdString();
+    }
+}
+
+TEST(GlobalRecordingBarStatusGuardTest, RuntimeVisibility_OnlyForRecPausedStopping) {
+    struct Scenario {
+        QString status;
+        bool should_show_runtime;
+    };
+
+    const std::array<Scenario, 10> scenarios = {{
+        {QStringLiteral("READY"), false},
+        {QStringLiteral("REC"), true},
+        {QStringLiteral("PAUSED"), true},
+        {QStringLiteral("STOPPING"), true},
+        {QStringLiteral("BLOCKED"), false},
+        {QStringLiteral("ERROR"), false},
+        {QStringLiteral("CHECKING"), false},
+        {QStringLiteral("STARTING"), false},
+        {QStringLiteral(" stopping "), true},
+        {QStringLiteral("rec"), true},
+    }};
+
+    for (const Scenario& scenario : scenarios) {
+        EXPECT_EQ(ui::chrome::ShouldShowRecordingRuntimeForStatus(scenario.status), scenario.should_show_runtime)
+            << "status=" << scenario.status.toStdString();
     }
 }
 
