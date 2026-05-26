@@ -142,9 +142,6 @@ class RecordPage : public QWidget {
     ui::widgets::PreviewSurface* preview_surface_ = nullptr;
     QLabel* control_state_label_ = nullptr;
     QLabel* timer_label_ = nullptr;
-    QPushButton* start_btn_ = nullptr;
-    QPushButton* pause_btn_ = nullptr;
-    QPushButton* stop_btn_ = nullptr;
     ui::widgets::SectionRuleHeader* capture_header_ = nullptr;
     ui::widgets::CaptureTargetCard* monitor_card_ = nullptr;
     ui::widgets::CaptureTargetCard* window_card_ = nullptr;

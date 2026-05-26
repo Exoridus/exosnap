@@ -345,44 +345,6 @@ QLabel[labelRole="recordHotkeyBadge"] {
     background: ${bg1};
 }
 
-QPushButton[role="primaryRecordStart"] {
-    background: ${accent};
-    border: 1px solid ${accent};
-    border-radius: ${radius-md}px;
-    color: #0e0d0b;
-    font-family: ${font-sans};
-    font-size: 13px;
-    letter-spacing: 0.02em;
-    font-weight: 600;
-}
-
-QPushButton[role="primaryRecordStart"]:hover {
-    background: ${accent-hover};
-    border-color: ${accent-hover};
-}
-
-QPushButton[role="primaryRecordStart"]:disabled {
-    background: ${bg3};
-    border-color: ${line1};
-    color: ${text3};
-}
-
-QPushButton[role="recordStop"] {
-    background: ${err};
-    border: 1px solid ${err};
-    border-radius: ${radius-md}px;
-    color: #0e0d0b;
-    font-family: ${font-sans};
-    font-size: 13px;
-    letter-spacing: 0.02em;
-    font-weight: 600;
-}
-
-QPushButton[role="recordStop"]:hover {
-    background: #e87f70;
-    border-color: #e87f70;
-}
-
 QLabel[labelRole="recordTimer"] {
     font-family: ${font-mono};
     font-size: 40px;

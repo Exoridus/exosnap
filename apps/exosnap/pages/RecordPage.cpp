@@ -50,11 +50,6 @@
 namespace exosnap {
 namespace {
 
-// UI-R4A: hide legacy local transport controls by default so the global
-// recording bar is the primary visible transport surface. Keep controls/slots
-// wired for an easy rollback and for existing action/hotkey paths.
-constexpr bool kShowLocalRecordTransportControls = false;
-
 QFrame* makePanel(QWidget* parent, const char* role = "panel") {
     auto* panel = new QFrame(parent);
     panel->setProperty("panelRole", role);
@@ -323,23 +318,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     control_head->addStretch(1);
     control_head->addWidget(hotkey_label);
     control_layout->addLayout(control_head);
-
-    start_btn_ = new QPushButton("▶  START", control_panel);
-    start_btn_->setProperty("role", "primaryRecordStart");
-    start_btn_->setMinimumHeight(46);
-    control_layout->addWidget(start_btn_);
-
-    pause_btn_ = new QPushButton("⏸  PAUSE", control_panel);
-    pause_btn_->setProperty("role", "recordPause");
-    pause_btn_->setMinimumHeight(46);
-    pause_btn_->hide();
-    control_layout->addWidget(pause_btn_);
-
-    stop_btn_ = new QPushButton("■  STOP", control_panel);
-    stop_btn_->setProperty("role", "recordStop");
-    stop_btn_->setMinimumHeight(46);
-    stop_btn_->hide();
-    control_layout->addWidget(stop_btn_);
 
     timer_label_ = makeLabel("00:00:00", "recordTimer", control_panel);
     timer_label_->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
@@ -677,9 +655,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 
     updatePreviewHeightClamp();
 
-    connect(start_btn_, &QPushButton::clicked, this, &RecordPage::onStart);
-    connect(pause_btn_, &QPushButton::clicked, this, &RecordPage::onHotkeyPauseToggle);
-    connect(stop_btn_, &QPushButton::clicked, this, &RecordPage::onStop);
     connect(monitor_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectMonitorTarget);
     connect(window_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectWindowTarget);
     connect(region_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectRegionTarget);
@@ -1895,21 +1870,12 @@ void RecordPage::refresh() {
     const bool recording =
         (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
          view_model_.state == UiRecordingState::Stopping);
-    const bool show_local_transport = kShowLocalRecordTransportControls;
 
     capability_label_->setText(capability_text);
     capability_label_->setVisible((blocked || checking) && !capability_text.isEmpty());
     if (capability_label_->isVisible()) {
         setStyledStringProperty(capability_label_, "panelRole", blocked ? "blocker" : "note");
     }
-
-    start_btn_->setVisible(show_local_transport && !recording);
-    pause_btn_->setVisible(show_local_transport && (view_model_.CanPause() || view_model_.CanResume()));
-    pause_btn_->setText(view_model_.CanResume() ? QStringLiteral("▶  RESUME") : QStringLiteral("⏸  PAUSE"));
-    stop_btn_->setVisible(show_local_transport && recording);
-    start_btn_->setEnabled(show_local_transport && view_model_.CanStart());
-    pause_btn_->setEnabled(show_local_transport && (view_model_.CanPause() || view_model_.CanResume()));
-    stop_btn_->setEnabled(show_local_transport && view_model_.CanStop());
 
     const QString status_text = stateDisplay(view_model_.state);
     control_state_label_->setText(status_text);
