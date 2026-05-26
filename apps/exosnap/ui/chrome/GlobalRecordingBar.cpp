@@ -15,6 +15,12 @@ constexpr int kProfileSummaryMaxChars = 32;
 constexpr int kTargetSummaryMaxChars = 40;
 constexpr int kOutputSummaryMaxChars = 32;
 constexpr int kRuntimeSummaryMaxChars = 36;
+// Hide planned, disabled action buttons (Mic/Marker/Overlay) below this width
+// to preserve transport control usability in compact layouts.
+constexpr int kHidePlannedActionsBelowWidth = 1340;
+// Hide secondary context slots (Output/Runtime) below this width so summaries
+// degrade before transport controls at narrow widths.
+constexpr int kHideSecondarySummaryBelowWidth = 1230;
 
 QFrame* makeSeparator(QWidget* parent) {
     auto* separator = new QFrame(parent);
@@ -278,8 +284,8 @@ void GlobalRecordingBar::refreshActionLabels() {
 void GlobalRecordingBar::applyCompactLayout() {
     const int width_px = width();
 
-    const bool compact_actions = width_px < 1340;
-    const bool compact_context = width_px < 1230;
+    const bool compact_actions = width_px < kHidePlannedActionsBelowWidth;
+    const bool compact_context = width_px < kHideSecondarySummaryBelowWidth;
 
     mic_action_button_->setVisible(!compact_actions);
     marker_action_button_->setVisible(!compact_actions);

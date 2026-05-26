@@ -21,16 +21,14 @@ QApplication* EnsureApplication() {
     return &app;
 }
 
-QLabel* FindRequiredLabel(ui::chrome::GlobalRecordingBar& bar, const char* object_name) {
-    auto* label = bar.findChild<QLabel*>(object_name);
-    EXPECT_NE(label, nullptr);
-    return label;
+void FindRequiredLabel(ui::chrome::GlobalRecordingBar& bar, const char* object_name, QLabel*& label) {
+    label = bar.findChild<QLabel*>(object_name);
+    ASSERT_NE(label, nullptr);
 }
 
-QPushButton* FindRequiredButton(ui::chrome::GlobalRecordingBar& bar, const char* object_name) {
-    auto* button = bar.findChild<QPushButton*>(object_name);
-    EXPECT_NE(button, nullptr);
-    return button;
+void FindRequiredButton(ui::chrome::GlobalRecordingBar& bar, const char* object_name, QPushButton*& button) {
+    button = bar.findChild<QPushButton*>(object_name);
+    ASSERT_NE(button, nullptr);
 }
 
 QString RuntimePlaceholder() {
@@ -51,10 +49,14 @@ class GlobalRecordingBarTest : public ::testing::Test {
 TEST_F(GlobalRecordingBarTest, ConstructorAndRuntimeSummaryTransitions_StayCanonical) {
     ui::chrome::GlobalRecordingBar bar;
 
-    const auto* profile = FindRequiredLabel(bar, "globalBarProfileSummaryValue");
-    const auto* target = FindRequiredLabel(bar, "globalBarTargetSummaryValue");
-    const auto* output = FindRequiredLabel(bar, "globalBarOutputSummaryValue");
-    const auto* runtime = FindRequiredLabel(bar, "globalBarRuntimeSummaryValue");
+    QLabel* profile = nullptr;
+    QLabel* target = nullptr;
+    QLabel* output = nullptr;
+    QLabel* runtime = nullptr;
+    FindRequiredLabel(bar, "globalBarProfileSummaryValue", profile);
+    FindRequiredLabel(bar, "globalBarTargetSummaryValue", target);
+    FindRequiredLabel(bar, "globalBarOutputSummaryValue", output);
+    FindRequiredLabel(bar, "globalBarRuntimeSummaryValue", runtime);
 
     EXPECT_EQ(profile->text(), QStringLiteral("-"));
     EXPECT_EQ(target->text(), QStringLiteral("-"));
@@ -74,9 +76,12 @@ TEST_F(GlobalRecordingBarTest, ConstructorAndRuntimeSummaryTransitions_StayCanon
 TEST_F(GlobalRecordingBarTest, ContextSummarySetters_RefreshValuesAfterProfileOrOutputChanges) {
     ui::chrome::GlobalRecordingBar bar;
 
-    auto* profile = FindRequiredLabel(bar, "globalBarProfileSummaryValue");
-    auto* target = FindRequiredLabel(bar, "globalBarTargetSummaryValue");
-    auto* output = FindRequiredLabel(bar, "globalBarOutputSummaryValue");
+    QLabel* profile = nullptr;
+    QLabel* target = nullptr;
+    QLabel* output = nullptr;
+    FindRequiredLabel(bar, "globalBarProfileSummaryValue", profile);
+    FindRequiredLabel(bar, "globalBarTargetSummaryValue", target);
+    FindRequiredLabel(bar, "globalBarOutputSummaryValue", output);
 
     bar.setProfileSummary(QStringLiteral("Window AV1 1080p60"));
     bar.setTargetSummary(QStringLiteral("Brave - Dashboard"));
@@ -98,8 +103,10 @@ TEST_F(GlobalRecordingBarTest, ContextSummarySetters_RefreshValuesAfterProfileOr
 TEST_F(GlobalRecordingBarTest, StatusLabelMapping_ControlsPrimaryAndPauseButtons) {
     ui::chrome::GlobalRecordingBar bar;
 
-    auto* primary = FindRequiredButton(bar, "globalBarPrimaryActionButton");
-    auto* pause = FindRequiredButton(bar, "globalBarPauseActionButton");
+    QPushButton* primary = nullptr;
+    QPushButton* pause = nullptr;
+    FindRequiredButton(bar, "globalBarPrimaryActionButton", primary);
+    FindRequiredButton(bar, "globalBarPauseActionButton", pause);
 
     bar.setStatusLabel(QStringLiteral("PAUSED"));
     EXPECT_EQ(primary->text(), QStringLiteral("Resume"));
@@ -140,10 +147,14 @@ TEST_F(GlobalRecordingBarTest, LongSummaryValues_ElideDisplayedTextAndKeepFullTo
     bar.setRuntimeSummary(runtime_long);
     QApplication::processEvents();
 
-    const auto* profile = FindRequiredLabel(bar, "globalBarProfileSummaryValue");
-    const auto* target = FindRequiredLabel(bar, "globalBarTargetSummaryValue");
-    const auto* output = FindRequiredLabel(bar, "globalBarOutputSummaryValue");
-    const auto* runtime = FindRequiredLabel(bar, "globalBarRuntimeSummaryValue");
+    QLabel* profile = nullptr;
+    QLabel* target = nullptr;
+    QLabel* output = nullptr;
+    QLabel* runtime = nullptr;
+    FindRequiredLabel(bar, "globalBarProfileSummaryValue", profile);
+    FindRequiredLabel(bar, "globalBarTargetSummaryValue", target);
+    FindRequiredLabel(bar, "globalBarOutputSummaryValue", output);
+    FindRequiredLabel(bar, "globalBarRuntimeSummaryValue", runtime);
 
     EXPECT_EQ(profile->toolTip(), QStringLiteral("Custom AV1 Baseline Profile Name For Team Capture Validation Run"));
     EXPECT_EQ(target->toolTip(), target_long);
@@ -157,17 +168,26 @@ TEST_F(GlobalRecordingBarTest, LongSummaryValues_ElideDisplayedTextAndKeepFullTo
 }
 
 TEST_F(GlobalRecordingBarTest, CompactLayout_HidesPlannedDisabledActionsButKeepsTransportUsable) {
+    constexpr int kHidePlannedActionsBelowWidth = 1340;
+    constexpr int kWideWidth = kHidePlannedActionsBelowWidth + 20;
+    constexpr int kCompactWidth = kHidePlannedActionsBelowWidth - 20;
+
     ui::chrome::GlobalRecordingBar bar;
     bar.show();
     QApplication::processEvents();
 
-    auto* primary = FindRequiredButton(bar, "globalBarPrimaryActionButton");
-    auto* pause = FindRequiredButton(bar, "globalBarPauseActionButton");
-    auto* mic = FindRequiredButton(bar, "globalBarMicActionButton");
-    auto* marker = FindRequiredButton(bar, "globalBarMarkerActionButton");
-    auto* overlay = FindRequiredButton(bar, "globalBarOverlayActionButton");
+    QPushButton* primary = nullptr;
+    QPushButton* pause = nullptr;
+    QPushButton* mic = nullptr;
+    QPushButton* marker = nullptr;
+    QPushButton* overlay = nullptr;
+    FindRequiredButton(bar, "globalBarPrimaryActionButton", primary);
+    FindRequiredButton(bar, "globalBarPauseActionButton", pause);
+    FindRequiredButton(bar, "globalBarMicActionButton", mic);
+    FindRequiredButton(bar, "globalBarMarkerActionButton", marker);
+    FindRequiredButton(bar, "globalBarOverlayActionButton", overlay);
 
-    bar.resize(1500, ui::chrome::GlobalRecordingBar::kHeight);
+    bar.resize(kWideWidth, ui::chrome::GlobalRecordingBar::kHeight);
     QApplication::processEvents();
     EXPECT_TRUE(primary->isVisible());
     EXPECT_TRUE(pause->isVisible());
@@ -182,7 +202,7 @@ TEST_F(GlobalRecordingBarTest, CompactLayout_HidesPlannedDisabledActionsButKeeps
     EXPECT_TRUE(primary->isEnabled());
     EXPECT_TRUE(pause->isEnabled());
 
-    bar.resize(1200, ui::chrome::GlobalRecordingBar::kHeight);
+    bar.resize(kCompactWidth, ui::chrome::GlobalRecordingBar::kHeight);
     QApplication::processEvents();
     EXPECT_TRUE(primary->isVisible());
     EXPECT_TRUE(pause->isVisible());
