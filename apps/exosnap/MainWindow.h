@@ -60,6 +60,8 @@ class MainWindow : public QMainWindow {
 
     void setCurrentPage(int index);
     void updatePageHeader(int index);
+    QString buildGlobalRecordingBarProfileSummary() const;
+    QString buildGlobalRecordingBarTargetSummary() const;
     QString buildOutputPageMeta() const;
     QString buildOutputSummary() const;
     void refreshGlobalRecordingBarContext();

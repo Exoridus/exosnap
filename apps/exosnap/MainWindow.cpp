@@ -256,6 +256,10 @@ QString outputSummaryFromSettings(const OutputSettingsModel& settings) {
     return full_path.isEmpty() ? QStringLiteral("-") : full_path;
 }
 
+QString globalBarRuntimePlaceholder() {
+    return QStringLiteral("DUR --:--:-- · SIZE -");
+}
+
 QColor colorFrom(const char* value) {
     return QColor(QString::fromLatin1(value));
 }
@@ -686,11 +690,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     global_recording_bar_ = new ui::chrome::GlobalRecordingBar(central);
     main_layout->addWidget(global_recording_bar_);
     global_recording_bar_->setStatusLabel(record_status_label_);
-    global_recording_bar_->setProfileSummary(buildOutputPageMeta());
-    global_recording_bar_->setTargetSummary(
-        targetSummaryFromContext(QString::fromUtf8(kPageDescriptors[0].chrome_context)));
-    global_recording_bar_->setOutputSummary(buildOutputSummary());
-    global_recording_bar_->setRuntimeSummary(QStringLiteral("DUR --:--:-- · SIZE -"));
+    refreshGlobalRecordingBarContext();
+    global_recording_bar_->setRuntimeSummary(globalBarRuntimePlaceholder());
 
     idle_metrics_timer_ = new QTimer(this);
     idle_metrics_timer_->setInterval(2000);
@@ -840,10 +841,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(output_page_, &OutputPage::outputSettingsChanged, this, [this](const OutputSettingsModel& settings) {
         output_settings_ = settings;
         record_page_->setOutputSettings(settings);
-        if (global_recording_bar_) {
-            global_recording_bar_->setProfileSummary(buildOutputPageMeta());
-            global_recording_bar_->setOutputSummary(buildOutputSummary());
-        }
+        refreshGlobalRecordingBarContext();
         profile_registry_.ApplyOutputToActive(settings);
         persisted_settings_.output = settings;
         persistProfileState();
@@ -1127,15 +1125,14 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
     title_bar_->setStatusLabel(record_status_label_);
     if (global_recording_bar_) {
         global_recording_bar_->setStatusLabel(record_status_label_);
-        if (!recording_context_text_.trimmed().isEmpty())
-            global_recording_bar_->setTargetSummary(targetSummaryFromContext(recording_context_text_));
+        refreshGlobalRecordingBarContext();
     }
     if (recording) {
         title_bar_->setRecordingRuntime(QStringLiteral("--:--:--"), QStringLiteral("–"), QStringLiteral("–"));
     } else {
         pollIdleRuntimeMetrics();
         if (global_recording_bar_)
-            global_recording_bar_->setRuntimeSummary(QStringLiteral("DUR --:--:-- · SIZE -"));
+            global_recording_bar_->setRuntimeSummary(globalBarRuntimePlaceholder());
     }
 
     const bool live_recording_label = recording && record_status_label_ == QStringLiteral("REC");
@@ -1513,6 +1510,7 @@ void MainWindow::refreshOutputProfileUi() {
                                     profile_registry_.IsActiveBuiltInModified());
     output_page_->setActiveProfileName(QString::fromStdString(profile_registry_.ActiveProfile().name));
     syncing_profile_ui_ = false;
+    refreshGlobalRecordingBarContext();
 }
 
 void MainWindow::persistProfileState() {
@@ -1573,6 +1571,20 @@ void MainWindow::onHotkeyBindingChanged(int action_index, QKeySequence seq) {
 #endif
 }
 
+QString MainWindow::buildGlobalRecordingBarProfileSummary() const {
+    const QString profile_name = QString::fromStdString(profile_registry_.ActiveProfile().name).trimmed();
+    if (!profile_name.isEmpty())
+        return profile_name;
+    return buildOutputPageMeta();
+}
+
+QString MainWindow::buildGlobalRecordingBarTargetSummary() const {
+    const QString context = recording_context_text_.trimmed().isEmpty()
+                                ? QString::fromUtf8(kPageDescriptors[0].chrome_context)
+                                : recording_context_text_;
+    return targetSummaryFromContext(context);
+}
+
 QString MainWindow::buildOutputPageMeta() const {
     const QString container = output_settings_.container == capability::Container::Matroska
                                   ? QStringLiteral("MKV")
@@ -1598,11 +1610,8 @@ void MainWindow::refreshGlobalRecordingBarContext() {
     if (!global_recording_bar_)
         return;
 
-    global_recording_bar_->setProfileSummary(buildOutputPageMeta());
-    const QString context = recording_context_text_.trimmed().isEmpty()
-                                ? QString::fromUtf8(kPageDescriptors[0].chrome_context)
-                                : recording_context_text_;
-    global_recording_bar_->setTargetSummary(targetSummaryFromContext(context));
+    global_recording_bar_->setProfileSummary(buildGlobalRecordingBarProfileSummary());
+    global_recording_bar_->setTargetSummary(buildGlobalRecordingBarTargetSummary());
     global_recording_bar_->setOutputSummary(buildOutputSummary());
 }
 

@@ -138,8 +138,8 @@ GlobalRecordingBar::GlobalRecordingBar(QWidget* parent) : QWidget(parent) {
     root->addWidget(makeSeparator(this), 0, Qt::AlignVCenter);
     root->addWidget(context_slot, 1, Qt::AlignVCenter);
 
-    setProfileSummary(QStringLiteral("MKV · H.264 · AAC"));
-    setTargetSummary(QStringLiteral("DISPLAY 1"));
+    setProfileSummary(QStringLiteral("-"));
+    setTargetSummary(QStringLiteral("-"));
     setOutputSummary(QStringLiteral("-"));
     setRuntimeSummary(QStringLiteral("DUR --:--:-- · SIZE -"));
     refreshVisualState();
