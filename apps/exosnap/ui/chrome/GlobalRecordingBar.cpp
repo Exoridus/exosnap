@@ -37,6 +37,8 @@ QPushButton* makeActionButton(const QString& text, const QString& role, const QS
     button->setMaximumWidth(118);
     button->setFocusPolicy(Qt::NoFocus);
     button->setToolTip(tooltip);
+    button->setAccessibleName(text);
+    button->setAccessibleDescription(tooltip);
     button->setEnabled(false);
     return button;
 }
@@ -57,6 +59,16 @@ QWidget* makeSummarySlot(const QString& key, QLabel** out_value_label, QWidget* 
     value_label->setProperty("labelRole", "globalBarContextValue");
     value_label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     value_label->setMinimumWidth(0);
+    QString summary_label = key;
+    if (key == QStringLiteral("PROFILE"))
+        summary_label = QStringLiteral("Profile");
+    else if (key == QStringLiteral("TARGET"))
+        summary_label = QStringLiteral("Target");
+    else if (key == QStringLiteral("OUTPUT"))
+        summary_label = QStringLiteral("Output");
+    else if (key == QStringLiteral("RUNTIME"))
+        summary_label = QStringLiteral("Runtime");
+
     if (key == QStringLiteral("PROFILE"))
         value_label->setObjectName(QStringLiteral("globalBarProfileSummaryValue"));
     else if (key == QStringLiteral("TARGET"))
@@ -65,6 +77,10 @@ QWidget* makeSummarySlot(const QString& key, QLabel** out_value_label, QWidget* 
         value_label->setObjectName(QStringLiteral("globalBarOutputSummaryValue"));
     else if (key == QStringLiteral("RUNTIME"))
         value_label->setObjectName(QStringLiteral("globalBarRuntimeSummaryValue"));
+
+    key_label->setAccessibleName(QStringLiteral("%1 summary label").arg(summary_label));
+    value_label->setAccessibleName(QStringLiteral("%1 summary value").arg(summary_label));
+    value_label->setAccessibleDescription(summary_label + QStringLiteral(" summary value"));
 
     layout->addWidget(key_label, 0, Qt::AlignVCenter);
     layout->addWidget(value_label, 1, Qt::AlignVCenter);
@@ -93,6 +109,7 @@ GlobalRecordingBar::GlobalRecordingBar(QWidget* parent) : QWidget(parent) {
     status_layout->setSpacing(0);
 
     status_pill_ = new ui::widgets::StatusPill(status_slot);
+    status_pill_->setObjectName(QStringLiteral("globalBarStatusChip"));
     status_pill_->setText(QStringLiteral("READY"));
     status_pill_->setTone(ui::widgets::StatusPill::Tone::Ready);
     status_pill_->setDotVisible(false);
@@ -105,23 +122,24 @@ GlobalRecordingBar::GlobalRecordingBar(QWidget* parent) : QWidget(parent) {
     actions_layout->setContentsMargins(0, 0, 0, 0);
     actions_layout->setSpacing(6);
 
-    primary_action_button_ =
-        makeActionButton(QStringLiteral("Start"), QStringLiteral("globalBarPrimaryAction"),
-                         QStringLiteral("Global start/stop action (wiring in next commit)."), actions_slot);
+    primary_action_button_ = makeActionButton(QStringLiteral("Start"), QStringLiteral("globalBarPrimaryAction"),
+                                              QStringLiteral("Start recording."), actions_slot);
     primary_action_button_->setObjectName(QStringLiteral("globalBarPrimaryActionButton"));
-    pause_action_button_ =
-        makeActionButton(QStringLiteral("Pause"), QStringLiteral("globalBarSecondaryAction"),
-                         QStringLiteral("Pause or resume recording globally (coming soon)."), actions_slot);
+    pause_action_button_ = makeActionButton(QStringLiteral("Pause"), QStringLiteral("globalBarSecondaryAction"),
+                                            QStringLiteral("Pause is available while recording."), actions_slot);
     pause_action_button_->setObjectName(QStringLiteral("globalBarPauseActionButton"));
     mic_action_button_ = makeActionButton(QStringLiteral("Mic"), QStringLiteral("globalBarSecondaryAction"),
-                                          QStringLiteral("Global microphone control (coming soon)."), actions_slot);
+                                          QStringLiteral("Global mic toggle is not available in this MVP build. "
+                                                         "Use Audio settings to change microphone state."),
+                                          actions_slot);
     mic_action_button_->setObjectName(QStringLiteral("globalBarMicActionButton"));
-    marker_action_button_ = makeActionButton(QStringLiteral("Marker"), QStringLiteral("globalBarSecondaryAction"),
-                                             QStringLiteral("Add recording marker (coming soon)."), actions_slot);
+    marker_action_button_ =
+        makeActionButton(QStringLiteral("Marker"), QStringLiteral("globalBarSecondaryAction"),
+                         QStringLiteral("Markers are not available in this MVP build."), actions_slot);
     marker_action_button_->setObjectName(QStringLiteral("globalBarMarkerActionButton"));
     overlay_action_button_ =
         makeActionButton(QStringLiteral("Overlay"), QStringLiteral("globalBarSecondaryAction"),
-                         QStringLiteral("Toggle overlay/HUD visibility (coming soon)."), actions_slot);
+                         QStringLiteral("Overlay/HUD controls are not available in this MVP build."), actions_slot);
     overlay_action_button_->setObjectName(QStringLiteral("globalBarOverlayActionButton"));
 
     actions_layout->addWidget(primary_action_button_);
@@ -234,6 +252,10 @@ void GlobalRecordingBar::refreshStatusChip() {
     }
 
     status_pill_->setText(status_label_);
+    const QString tooltip = QStringLiteral("Current recording status: %1.").arg(status_label_);
+    status_pill_->setToolTip(tooltip);
+    status_pill_->setAccessibleName(QStringLiteral("Recording status: %1").arg(status_label_));
+    status_pill_->setAccessibleDescription(tooltip);
 }
 
 void GlobalRecordingBar::refreshActionLabels() {
@@ -248,37 +270,58 @@ void GlobalRecordingBar::refreshActionLabels() {
     if (is_recording) {
         primary_action_button_->setText(QStringLiteral("Stop"));
         primary_action_button_->setToolTip(QStringLiteral("Stop recording."));
+        primary_action_button_->setAccessibleName(QStringLiteral("Stop recording"));
     } else if (is_paused) {
         primary_action_button_->setText(QStringLiteral("Resume"));
         primary_action_button_->setToolTip(QStringLiteral("Resume recording."));
+        primary_action_button_->setAccessibleName(QStringLiteral("Resume recording"));
     } else if (has_details) {
         primary_action_button_->setText(QStringLiteral("Details"));
-        primary_action_button_->setToolTip(QStringLiteral("Open diagnostics details."));
+        primary_action_button_->setToolTip(QStringLiteral("Open Diagnostics to review blockers and failures."));
+        primary_action_button_->setAccessibleName(QStringLiteral("Open diagnostics details"));
     } else if (is_working) {
         primary_action_button_->setText(QStringLiteral("Working..."));
-        primary_action_button_->setToolTip(QStringLiteral("Action unavailable while state transition is in progress."));
+        primary_action_button_->setToolTip(
+            QStringLiteral("State transition in progress. Action is temporarily unavailable."));
+        primary_action_button_->setAccessibleName(QStringLiteral("Working state transition"));
     } else {
         primary_action_button_->setText(QStringLiteral("Start"));
         primary_action_button_->setToolTip(QStringLiteral("Start recording."));
+        primary_action_button_->setAccessibleName(QStringLiteral("Start recording"));
     }
     primary_action_button_->setEnabled(is_ready || is_recording || is_paused || has_details);
+    primary_action_button_->setAccessibleDescription(primary_action_button_->toolTip());
 
     if (is_paused) {
         pause_action_button_->setText(QStringLiteral("Paused"));
         pause_action_button_->setToolTip(QStringLiteral("Recording is paused. Use Resume to continue."));
+        pause_action_button_->setAccessibleName(QStringLiteral("Recording paused"));
         pause_action_button_->setEnabled(false);
     } else {
         pause_action_button_->setText(QStringLiteral("Pause"));
-        pause_action_button_->setToolTip(QStringLiteral("Pause recording."));
+        pause_action_button_->setToolTip(is_recording ? QStringLiteral("Pause recording.")
+                                                      : QStringLiteral("Pause is available while recording."));
+        pause_action_button_->setAccessibleName(is_recording ? QStringLiteral("Pause recording")
+                                                             : QStringLiteral("Pause recording unavailable"));
         pause_action_button_->setEnabled(is_recording);
     }
+    pause_action_button_->setAccessibleDescription(pause_action_button_->toolTip());
 
-    mic_action_button_->setToolTip(QStringLiteral("Global mic toggle is not exposed in MVP."));
+    mic_action_button_->setToolTip(QStringLiteral("Global mic toggle is not available in this MVP build. "
+                                                  "Use Audio settings to change microphone state."));
     mic_action_button_->setEnabled(false);
-    marker_action_button_->setToolTip(QStringLiteral("Global marker action is planned for a future milestone."));
+    mic_action_button_->setAccessibleName(QStringLiteral("Microphone control unavailable"));
+    mic_action_button_->setAccessibleDescription(mic_action_button_->toolTip());
+
+    marker_action_button_->setToolTip(QStringLiteral("Markers are not available in this MVP build."));
     marker_action_button_->setEnabled(false);
-    overlay_action_button_->setToolTip(QStringLiteral("Overlay/HUD controls are not available in MVP."));
+    marker_action_button_->setAccessibleName(QStringLiteral("Marker control unavailable"));
+    marker_action_button_->setAccessibleDescription(marker_action_button_->toolTip());
+
+    overlay_action_button_->setToolTip(QStringLiteral("Overlay/HUD controls are not available in this MVP build."));
     overlay_action_button_->setEnabled(false);
+    overlay_action_button_->setAccessibleName(QStringLiteral("Overlay control unavailable"));
+    overlay_action_button_->setAccessibleDescription(overlay_action_button_->toolTip());
 }
 
 void GlobalRecordingBar::applyCompactLayout() {
@@ -318,6 +361,7 @@ void GlobalRecordingBar::setSummaryLabel(QLabel* label, const QString& summary_t
     }
     label->setText(visible_text);
     label->setToolTip(normalized);
+    label->setAccessibleDescription(normalized);
 }
 
 QString GlobalRecordingBar::normalizeStatusLabel(const QString& status_text) {
