@@ -222,3 +222,15 @@ exosnap_add_gtest(
     LIBRARIES exosnap_capability recorder_core Qt6::Core
 )
 target_include_directories(webcam_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+    NAME global_recording_bar_tests
+    TEST_PREFIX chrome.
+    SOURCES
+        tests/test_global_recording_bar.cpp
+        ui/chrome/GlobalRecordingBar.cpp
+        ui/widgets/StatusPill.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(global_recording_bar_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(global_recording_bar_tests PROPERTIES AUTOMOC ON)

@@ -41,6 +41,14 @@ QWidget* makeSummarySlot(const QString& key, QLabel** out_value_label, QWidget* 
     key_label->setProperty("labelRole", "globalBarContextKey");
     auto* value_label = new QLabel(QStringLiteral("-"), slot);
     value_label->setProperty("labelRole", "globalBarContextValue");
+    if (key == QStringLiteral("PROFILE"))
+        value_label->setObjectName(QStringLiteral("globalBarProfileSummaryValue"));
+    else if (key == QStringLiteral("TARGET"))
+        value_label->setObjectName(QStringLiteral("globalBarTargetSummaryValue"));
+    else if (key == QStringLiteral("OUTPUT"))
+        value_label->setObjectName(QStringLiteral("globalBarOutputSummaryValue"));
+    else if (key == QStringLiteral("RUNTIME"))
+        value_label->setObjectName(QStringLiteral("globalBarRuntimeSummaryValue"));
 
     layout->addWidget(key_label, 0, Qt::AlignVCenter);
     layout->addWidget(value_label, 0, Qt::AlignVCenter);
@@ -84,16 +92,21 @@ GlobalRecordingBar::GlobalRecordingBar(QWidget* parent) : QWidget(parent) {
     primary_action_button_ =
         makeActionButton(QStringLiteral("Start"), QStringLiteral("globalBarPrimaryAction"),
                          QStringLiteral("Global start/stop action (wiring in next commit)."), actions_slot);
+    primary_action_button_->setObjectName(QStringLiteral("globalBarPrimaryActionButton"));
     pause_action_button_ =
         makeActionButton(QStringLiteral("Pause"), QStringLiteral("globalBarSecondaryAction"),
                          QStringLiteral("Pause or resume recording globally (coming soon)."), actions_slot);
+    pause_action_button_->setObjectName(QStringLiteral("globalBarPauseActionButton"));
     mic_action_button_ = makeActionButton(QStringLiteral("Mic"), QStringLiteral("globalBarSecondaryAction"),
                                           QStringLiteral("Global microphone control (coming soon)."), actions_slot);
+    mic_action_button_->setObjectName(QStringLiteral("globalBarMicActionButton"));
     marker_action_button_ = makeActionButton(QStringLiteral("Marker"), QStringLiteral("globalBarSecondaryAction"),
                                              QStringLiteral("Add recording marker (coming soon)."), actions_slot);
+    marker_action_button_->setObjectName(QStringLiteral("globalBarMarkerActionButton"));
     overlay_action_button_ =
         makeActionButton(QStringLiteral("Overlay"), QStringLiteral("globalBarSecondaryAction"),
                          QStringLiteral("Toggle overlay/HUD visibility (coming soon)."), actions_slot);
+    overlay_action_button_->setObjectName(QStringLiteral("globalBarOverlayActionButton"));
 
     actions_layout->addWidget(primary_action_button_);
     actions_layout->addWidget(pause_action_button_);
