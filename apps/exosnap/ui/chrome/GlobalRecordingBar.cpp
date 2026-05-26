@@ -230,13 +230,21 @@ void GlobalRecordingBar::refreshActionLabels() {
     }
     primary_action_button_->setEnabled(is_ready || is_recording || is_paused || has_details);
 
-    pause_action_button_->setText(is_paused ? QStringLiteral("Resume") : QStringLiteral("Pause"));
-    pause_action_button_->setToolTip(is_paused ? QStringLiteral("Resume recording.")
-                                               : QStringLiteral("Pause recording."));
-    pause_action_button_->setEnabled(is_recording || is_paused);
+    if (is_paused) {
+        pause_action_button_->setText(QStringLiteral("Paused"));
+        pause_action_button_->setToolTip(QStringLiteral("Recording is paused. Use Resume to continue."));
+        pause_action_button_->setEnabled(false);
+    } else {
+        pause_action_button_->setText(QStringLiteral("Pause"));
+        pause_action_button_->setToolTip(QStringLiteral("Pause recording."));
+        pause_action_button_->setEnabled(is_recording);
+    }
 
+    mic_action_button_->setToolTip(QStringLiteral("Global mic toggle is not exposed in MVP."));
     mic_action_button_->setEnabled(false);
+    marker_action_button_->setToolTip(QStringLiteral("Global marker action is planned for a future milestone."));
     marker_action_button_->setEnabled(false);
+    overlay_action_button_->setToolTip(QStringLiteral("Overlay/HUD controls are not available in MVP."));
     overlay_action_button_->setEnabled(false);
 }
 
