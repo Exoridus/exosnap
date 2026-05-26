@@ -251,5 +251,47 @@ TEST(RuntimeMergeTest, TC9_BuildFromHardwareQueryCallable) {
         << "HEVC must remain NotImplemented even after real hardware query.";
 }
 
+// -------------------------------------------------------------------------
+// TC-10: NVENC downgrade reason is user-facing — no raw Win32 API symbols
+// -------------------------------------------------------------------------
+TEST(RuntimeMergeTest, TC10_NvencDowngradeReason_IsUserFacing) {
+    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    snap.nvidia.nvenc_dll_present = false;
+    snap.nvidia.nvenc_api_version_valid = false;
+    snap.nvidia.failure_detail = "LoadLibraryW(nvEncodeAPI64.dll) failed, GetLastError=2";
+
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+    const SupportAnnotation av1 = caps.QueryVideoCodec(VideoCodec::Av1Nvenc);
+    const SupportAnnotation h264 = caps.QueryVideoCodec(VideoCodec::H264Nvenc);
+
+    for (const SupportAnnotation* ann : {&av1, &h264}) {
+        // Must not expose raw Win32 API names.
+        EXPECT_EQ(ann->reason.find("LoadLibraryW"), std::string::npos) << "reason: " << ann->reason;
+        EXPECT_EQ(ann->reason.find("GetLastError"), std::string::npos) << "reason: " << ann->reason;
+        EXPECT_EQ(ann->reason.find("GetProcAddress"), std::string::npos) << "reason: " << ann->reason;
+        // Must remain actionable and mention NVENC.
+        EXPECT_NE(ann->reason.find("NVENC"), std::string::npos) << "reason: " << ann->reason;
+        EXPECT_NE(ann->reason.find("driver"), std::string::npos) << "reason: " << ann->reason;
+    }
+}
+
+// -------------------------------------------------------------------------
+// TC-11: AAC downgrade reason is user-facing — no internal COM/MF symbols
+// -------------------------------------------------------------------------
+TEST(RuntimeMergeTest, TC11_AacDowngradeReason_IsUserFacing) {
+    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    snap.mf_aac.mftenum_found = false;
+    snap.mf_aac.clsid_instantiable = false;
+
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+    const SupportAnnotation aac = caps.QueryAudioCodec(AudioCodec::AacMf);
+
+    // Must not expose internal COM/MF API identifiers.
+    EXPECT_EQ(aac.reason.find("MFTEnumEx"), std::string::npos) << "reason: " << aac.reason;
+    EXPECT_EQ(aac.reason.find("CLSID_AACMFTEncoder"), std::string::npos) << "reason: " << aac.reason;
+    // Must be actionable and mention AAC.
+    EXPECT_NE(aac.reason.find("AAC"), std::string::npos) << "reason: " << aac.reason;
+}
+
 } // namespace
 } // namespace exosnap::capability

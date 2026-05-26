@@ -64,9 +64,9 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
     // --- Downgrade rule A: missing NVENC blocks AV1 path ---
     // NVENC is required when the DLL is not present or API version is not valid.
     if (!snapshot.nvidia.nvenc_dll_present || !snapshot.nvidia.nvenc_api_version_valid) {
-        const std::string nvenc_reason = "NVENC unavailable: " + (snapshot.nvidia.failure_detail.empty()
-                                                                      ? "DLL not present or API version not confirmed"
-                                                                      : snapshot.nvidia.failure_detail);
+        const std::string nvenc_reason =
+            "NVIDIA NVENC is not available on this system. "
+            "Install a supported NVIDIA driver or switch to a non-NVENC recording profile.";
 
         // Lower the dimension-level annotation for all NVENC codecs.
         caps.video_codecs[VideoCodec::Av1Nvenc] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
@@ -89,10 +89,8 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
     // --- Downgrade rule B: missing AAC blocks AAC path ---
     if (!snapshot.mf_aac.available()) {
         const std::string aac_reason =
-            "Media Foundation AAC unavailable: " +
-            (snapshot.mf_aac.failure_detail.empty()
-                 ? "MFTEnumEx found no encoders and direct CLSID_AACMFTEncoder instantiation failed"
-                 : snapshot.mf_aac.failure_detail);
+            "AAC audio encoding (Media Foundation) is not available on this system. "
+            "Switch to an Opus recording profile or ensure Media Foundation components are installed.";
 
         // Lower the dimension-level annotation for AacMf.
         caps.audio_codecs[AudioCodec::AacMf] = SupportAnnotation{SupportLevel::NotImplemented, aac_reason};
