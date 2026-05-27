@@ -701,12 +701,13 @@ void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
     if (coordinator_) {
         coordinator_->SetOutputSettings(settings);
         coordinator_->RevalidateCapabilities();
+        // Sync view model state immediately so refresh() below uses the correct state,
+        // including the BLOCKED→BLOCKED case where PostStateChange is not called.
+        view_model_.SetState(coordinator_->State());
         view_model_.capability_status_text = coordinator_->CapabilityStatusText();
         syncCoordinatorTargetContext();
     }
-    updateOpenFolderButtonState();
-    updateAudioControls();
-    updateReadinessRows();
+    refresh();
     diagnostics::AppLog(QStringLiteral("[output] settings applied: ") +
                         QString::fromStdWString(view_model_.output_path_display));
 }
