@@ -23,7 +23,7 @@ class GlobalRecordingBar : public QWidget {
     static constexpr int kHeight = 50;
 
     void setStatusLabel(const QString& status_text);
-    QString statusLabel() const;
+    const QString& statusLabel() const;
 
     void setProfileSummary(const QString& summary_text);
     void setTargetSummary(const QString& summary_text);

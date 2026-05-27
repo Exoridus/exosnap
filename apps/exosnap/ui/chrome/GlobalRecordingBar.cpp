@@ -206,7 +206,7 @@ void GlobalRecordingBar::refreshVisualState() {
     refreshActionLabels();
 }
 
-QString GlobalRecordingBar::statusLabel() const {
+const QString& GlobalRecordingBar::statusLabel() const {
     return status_label_;
 }
 
