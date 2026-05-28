@@ -750,7 +750,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     footer_layout->setContentsMargins(18, 12, 18, 14);
     footer_layout->setSpacing(4);
     footer_layout->addWidget(makeFooterRow("STATUS", "READY", footer, &sidebar_status_value_label_));
-    footer_layout->addWidget(makeFooterRow("ENCODER", "NVENC", footer));
+    footer_layout->addWidget(makeFooterRow("BACKEND", "NVENC", footer));
     sidebar_layout->addWidget(footer);
 
     body_layout->addWidget(sidebar);
@@ -1605,14 +1605,14 @@ QString MainWindow::buildOutputPageMeta() const {
     const QString container = output_settings_.container == capability::Container::Matroska
                                   ? QStringLiteral("MKV")
                                   : (output_settings_.container == capability::Container::Mp4 ? QStringLiteral("MP4")
-                                                                                              : QStringLiteral("WEBM"));
+                                                                                              : QStringLiteral("WebM"));
     const QString video =
         output_settings_.video_codec == capability::VideoCodec::H264Nvenc
             ? QStringLiteral("H.264")
             : (output_settings_.video_codec == capability::VideoCodec::HevcNvenc ? QStringLiteral("HEVC")
                                                                                  : QStringLiteral("AV1"));
     const QString audio = output_settings_.audio_codec == capability::AudioCodec::Opus
-                              ? QStringLiteral("OPUS")
+                              ? QStringLiteral("Opus")
                               : (output_settings_.audio_codec == capability::AudioCodec::AacMf ? QStringLiteral("AAC")
                                                                                                : QStringLiteral("PCM"));
     return container + QStringLiteral(" · ") + video + QStringLiteral(" · ") + audio;

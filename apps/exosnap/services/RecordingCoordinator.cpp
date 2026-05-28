@@ -197,6 +197,55 @@ void ApplyOutputSettingsToRecorderConfig(recorder_core::RecorderConfig& config, 
     }
 }
 
+static std::wstring BuildCapabilityStatusText(const capability::UserRecorderConfig& config) {
+    const wchar_t* container_name = L"MKV";
+    switch (config.container) {
+    case capability::Container::WebM:
+        container_name = L"WebM";
+        break;
+    case capability::Container::Mp4:
+        container_name = L"MP4";
+        break;
+    default:
+        break;
+    }
+
+    const wchar_t* video_name = L"AV1 NVENC";
+    switch (config.video_codec) {
+    case capability::VideoCodec::H264Nvenc:
+        video_name = L"H.264 NVENC";
+        break;
+    case capability::VideoCodec::HevcNvenc:
+        video_name = L"HEVC NVENC";
+        break;
+    default:
+        break;
+    }
+
+    const wchar_t* audio_name = L"Opus";
+    switch (config.audio_codec) {
+    case capability::AudioCodec::AacMf:
+        audio_name = L"AAC";
+        break;
+    case capability::AudioCodec::Pcm:
+        audio_name = L"PCM";
+        break;
+    default:
+        break;
+    }
+
+    std::wstring result = L"Ready: ";
+    result += container_name;
+    result += L" \u00B7 ";
+    result += video_name;
+    result += L" \u00B7 ";
+    result += audio_name;
+    result += L" \u00B7 ";
+    result += std::to_wstring(config.frame_rate_num);
+    result += L" fps";
+    return result;
+}
+
 RecordingCoordinator::RecordingCoordinator()
     : output_settings_(OutputSettingsModel::Defaults()),
       mic_meter_service_(std::make_unique<recorder_core::MicMeterService>()),
@@ -221,7 +270,7 @@ void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::Capabi
     resolved_user_config_ = validation.resolved_config;
     if (validation.succeeded) {
         state_ = UiRecordingState::Ready;
-        capability_status_text_ = L"Ready: MKV · H.264 NVENC · AAC · 60 fps";
+        capability_status_text_ = BuildCapabilityStatusText(validation.resolved_config);
     } else {
         state_ = UiRecordingState::Blocked;
         capability_status_text_ =
@@ -250,7 +299,7 @@ void RecordingCoordinator::RevalidateCapabilities() {
     const UiRecordingState new_state = result.succeeded ? UiRecordingState::Ready : UiRecordingState::Blocked;
     capability_status_text_ =
         result.succeeded
-            ? L"Ready"
+            ? BuildCapabilityStatusText(result.resolved_config)
             : (result.invalidity.empty() ? L"Recording unavailable" : ToWide(result.invalidity.front().message));
 
     if (new_state != state_)
