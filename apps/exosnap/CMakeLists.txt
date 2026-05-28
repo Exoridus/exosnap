@@ -170,6 +170,7 @@ exosnap_add_gtest(
         models/FilenameBuilder.cpp
         models/OutputPathValidator.cpp
         models/OutputPathPolicy.cpp
+        diagnostics/AppLog.cpp
     LIBRARIES Qt6::Core Qt6::Gui exosnap_capability recorder_core
 )
 target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

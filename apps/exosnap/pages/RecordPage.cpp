@@ -893,9 +893,13 @@ void RecordPage::initCoordinator() {
         }
     } catch (const std::exception& ex) {
         coordinator_->OnCapabilityFailure(L"Capability check failed.");
+        diagnostics::AppLog(QStringLiteral("[record.failure] phase=Init category=CapabilityCheck detail=\"%1\"")
+                                .arg(QString::fromUtf8(ex.what())));
         qWarning() << "Capability check failed:" << ex.what();
     } catch (...) {
         coordinator_->OnCapabilityFailure(L"Capability check failed.");
+        diagnostics::AppLog(
+            QStringLiteral("[record.failure] phase=Init category=CapabilityCheck detail=\"Unknown error\""));
         qWarning() << "Capability check failed with unknown error.";
     }
 
