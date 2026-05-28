@@ -17,6 +17,8 @@
 
 namespace {
 
+constexpr const wchar_t* kSingleInstanceMutexName = L"ExoSnap_SingleInstance_Mutex";
+
 QString FormatIconSizes(const QList<QSize>& sizes) {
     QStringList out;
     out.reserve(sizes.size());
@@ -94,6 +96,21 @@ int main(int argc, char* argv[]) {
     if (!app_icon.isNull())
         QApplication::setWindowIcon(app_icon);
     exosnap::ui::theme::ApplyExoSnapTheme(app);
+
+#if defined(Q_OS_WIN)
+    HANDLE hMutex = CreateMutexW(nullptr, TRUE, kSingleInstanceMutexName);
+    if (hMutex != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(hMutex);
+
+        HWND existingHwnd = FindWindowW(nullptr, L"ExoSnap");
+        if (existingHwnd != nullptr) {
+            if (IsIconic(existingHwnd))
+                ShowWindow(existingHwnd, SW_RESTORE);
+            SetForegroundWindow(existingHwnd);
+        }
+        return 0;
+    }
+#endif
 
     exosnap::MainWindow win;
     if (!app_icon.isNull()) {

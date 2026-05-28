@@ -54,6 +54,7 @@ class MainWindow : public QMainWindow {
     void showEvent(QShowEvent* event) override;
     bool nativeEvent(const QByteArray& event_type, void* message, qintptr* result) override;
     void changeEvent(QEvent* event) override;
+    void closeEvent(QCloseEvent* event) override;
 
     void applyRuntimeWindowIcon();
     bool effectiveMaximizedState() const;

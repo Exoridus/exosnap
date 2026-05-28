@@ -21,6 +21,7 @@
 #include <capability/user_config.h>
 
 #include <QApplication>
+#include <QCloseEvent>
 #include <QColor>
 #include <QCoreApplication>
 #include <QCursor>
@@ -1488,6 +1489,31 @@ void MainWindow::changeEvent(QEvent* event) {
         }
 #endif
     }
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    if (recording_active_) {
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle(QStringLiteral("Recording in progress"));
+        msgBox.setText(QStringLiteral("ExoSnap is still recording. Closing now will stop the current recording."));
+        msgBox.setIcon(QMessageBox::Warning);
+
+        auto* stopBtn = msgBox.addButton(QStringLiteral("Stop recording and close"), QMessageBox::AcceptRole);
+        msgBox.addButton(QStringLiteral("Cancel"), QMessageBox::RejectRole);
+        msgBox.setDefaultButton(qobject_cast<QPushButton*>(msgBox.buttons().last()));
+
+        msgBox.exec();
+
+        if (msgBox.clickedButton() == stopBtn) {
+            emit recordToggleRequested();
+            recording_active_ = false;
+            event->accept();
+        } else {
+            event->ignore();
+        }
+        return;
+    }
+    QMainWindow::closeEvent(event);
 }
 
 void MainWindow::setCurrentPage(int index) {
