@@ -490,6 +490,7 @@ bool WasapiCaptureSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_e
     }
 
     const bool silent = (captureFlags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
+    const bool discontinuity = (captureFlags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0;
 
     buffer_acquired_ = true;
     acquired_frames_ = numFrames;
@@ -504,6 +505,7 @@ bool WasapiCaptureSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_e
         out_buf.bytes = reinterpret_cast<const uint8_t*>(data);
         out_buf.num_frames = numFrames;
         out_buf.silent = silent;
+        out_buf.data_discontinuity = discontinuity;
         return true;
     }
 
@@ -563,6 +565,7 @@ bool WasapiCaptureSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_e
     out_buf.bytes = mapped_buffer_.data();
     out_buf.num_frames = numFrames;
     out_buf.silent = silent;
+    out_buf.data_discontinuity = discontinuity;
     return true;
 }
 

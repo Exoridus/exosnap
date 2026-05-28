@@ -296,6 +296,32 @@ void MuxThread::Run() {
         }
     }
 
+    // --- Step 2.5: A/V timestamp alignment ---
+    // Audio PTS tracks wall-clock time (QPC-based). Video PTS starts at first WGC frame.
+    // Shift audio PTS down by the WGC init delay so both start at 0 together.
+    // Audio packets with PTS < head_start_ns (captured before video epoch) are dropped.
+    {
+        const uint64_t video_epoch = m_state.video_epoch_qpc_100ns.load();
+        const uint64_t session_start = m_state.session_start_qpc_100ns;
+        uint64_t head_start_ns = 0;
+        if (video_epoch > session_start) {
+            head_start_ns = (video_epoch - session_start) * 100ULL;
+        }
+
+        if (head_start_ns > 0) {
+            allPackets.erase(std::remove_if(allPackets.begin(), allPackets.end(),
+                                            [head_start_ns](const InterleavePacket& ip) {
+                                                return ip.track_num != 1 && ip.pts_ns < head_start_ns;
+                                            }),
+                             allPackets.end());
+            for (auto& ip : allPackets) {
+                if (ip.track_num != 1) {
+                    ip.pts_ns -= head_start_ns;
+                }
+            }
+        }
+    }
+
     // --- Step 3: Stable-sort by PTS ---
     std::stable_sort(allPackets.begin(), allPackets.end(),
                      [](const InterleavePacket& a, const InterleavePacket& b) { return a.pts_ns < b.pts_ns; });
@@ -355,8 +381,11 @@ void MuxThread::Run() {
         vt->set_codec_id("V_AV1");
     }
     vt->SetCodecPrivate(video_codec_private.data(), static_cast<uint64_t>(video_codec_private.size()));
-    vt->set_frame_rate(static_cast<double>(m_state.config.frame_rate_num) /
-                       static_cast<double>(m_state.config.frame_rate_den));
+    if (m_state.config.frame_rate_num > 0 && m_state.config.frame_rate_den > 0) {
+        const uint64_t frame_duration_ns = static_cast<uint64_t>(m_state.config.frame_rate_den) * 1000000000ULL /
+                                           static_cast<uint64_t>(m_state.config.frame_rate_num);
+        vt->set_default_duration(frame_duration_ns);
+    }
 
     segment.OutputCues(true);
     if (!segment.CuesTrack(videoTrackNum)) {
@@ -393,10 +422,12 @@ void MuxThread::Run() {
             const uint64_t codec_delay_ns = static_cast<uint64_t>(pre_skip) * 1000000000ULL / 48000u;
             at->set_codec_delay(codec_delay_ns);
             at->set_seek_pre_roll(80000000ULL);
+            at->set_default_duration(20000000ULL); // Opus: 960 samples @ 48kHz = 20ms
         } else {
             at->set_codec_id("A_AAC");
             at->SetCodecPrivate(slot.bytes.empty() ? nullptr : slot.bytes.data(),
                                 static_cast<uint64_t>(slot.bytes.size()));
+            at->set_default_duration(21333333ULL); // AAC: 1024 samples @ 48kHz ≈ 21.333ms
         }
 
         audioTrackNums[i] = trackNum;

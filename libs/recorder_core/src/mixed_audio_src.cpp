@@ -112,6 +112,8 @@ bool MixedAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_erro
     std::fill(mix_buffer_.begin(), mix_buffer_.end(), 0.0f);
     std::fill(source_acquired_.begin(), source_acquired_.end(), false);
 
+    bool any_discontinuity = false;
+
     for (size_t i = 0; i < num; ++i) {
         const float gain = base_gain * source_gain_multipliers_[i];
 
@@ -126,6 +128,10 @@ bool MixedAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_erro
         }
 
         source_acquired_[i] = true;
+
+        if (src_buf.data_discontinuity) {
+            any_discontinuity = true;
+        }
 
         if (src_buf.silent || src_buf.bytes == nullptr || src_buf.num_frames == 0) {
             continue;
@@ -152,6 +158,7 @@ bool MixedAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_erro
     out_buf.bytes = reinterpret_cast<const uint8_t*>(mix_buffer_.data());
     out_buf.num_frames = kMixFrameCount;
     out_buf.silent = false;
+    out_buf.data_discontinuity = any_discontinuity;
     return true;
 }
 

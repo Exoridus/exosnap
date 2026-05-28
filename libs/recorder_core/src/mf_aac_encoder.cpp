@@ -410,6 +410,17 @@ void MfAacEncoder::Flush(std::vector<EncodedAudioPacket>& out_packets) {
 }
 
 // ---------------------------------------------------------------------------
+// ResetDiscontinuity — mid-stream discontinuity handler
+// ---------------------------------------------------------------------------
+
+void MfAacEncoder::ResetDiscontinuity(std::vector<EncodedAudioPacket>& out_packets) {
+    if (!m_pMFT)
+        return;
+    DrainOutput(out_packets);
+    m_pMFT->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
+}
+
+// ---------------------------------------------------------------------------
 // Shutdown
 // ---------------------------------------------------------------------------
 

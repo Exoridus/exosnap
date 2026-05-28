@@ -845,6 +845,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         profile_registry_.ApplyOutputToActive(settings);
         persisted_settings_.output = settings;
         persistProfileState();
+        refreshGlobalRecordingBarContext();
         refreshOutputProfileUi();
         refreshDiagnosticsData();
         if (stack_->currentIndex() == kOutputPageIndex) {
@@ -1586,8 +1587,9 @@ void MainWindow::onHotkeyBindingChanged(int action_index, QKeySequence seq) {
 }
 
 QString MainWindow::buildGlobalRecordingBarProfileSummary() const {
+    const bool builtin_modified = profile_registry_.IsActiveBuiltInModified();
     const QString profile_name = QString::fromStdString(profile_registry_.ActiveProfile().name).trimmed();
-    if (!profile_name.isEmpty())
+    if (!builtin_modified && !profile_name.isEmpty())
         return profile_name;
     return buildOutputPageMeta();
 }

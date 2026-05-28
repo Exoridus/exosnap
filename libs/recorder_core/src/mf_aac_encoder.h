@@ -56,6 +56,10 @@ class MfAacEncoder {
     // Send END_OF_STREAM + DRAIN, collect remaining packets.
     void Flush(std::vector<EncodedAudioPacket>& out_packets);
 
+    // Mid-stream discontinuity reset: drain pending output and flush the MFT's
+    // internal buffers so old partial input does not contaminate post-gap data.
+    void ResetDiscontinuity(std::vector<EncodedAudioPacket>& out_packets);
+
     // Shut down and release all MF resources.
     void Shutdown();
 

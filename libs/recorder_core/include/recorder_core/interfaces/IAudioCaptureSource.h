@@ -12,7 +12,8 @@ enum class AudioSampleFormat { Float32, Int16 };
 struct RawAudioBuffer {
     const uint8_t* bytes = nullptr; // non-owning, valid until ReleaseBuffer()
     uint32_t num_frames = 0;
-    bool silent = false; // backend signals digitally silent buffer
+    bool silent = false;             // backend signals digitally silent buffer
+    bool data_discontinuity = false; // WASAPI reported AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY
 };
 
 class IAudioCaptureSource {

@@ -21,7 +21,15 @@ class OpusAudioEncoder : public IAudioEncoder {
 
     void Flush(std::vector<EncodedAudioPacket>& out_packets) override;
 
+    // Mid-stream discontinuity: reset encoder state and discard partial frame buffer.
+    // Returns the number of audio frames that were discarded (to advance PTS).
+    uint64_t ResetState();
+
     std::vector<uint8_t> CodecPrivateBytes() const override;
+
+    uint64_t EmittedFrames() const {
+        return m_emitted_frames;
+    }
 
     void Shutdown() override;
 

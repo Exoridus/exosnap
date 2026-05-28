@@ -35,6 +35,7 @@ bool WasapiLoopbackSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_
     out_buf.bytes = reinterpret_cast<const uint8_t*>(data);
     out_buf.num_frames = numFrames;
     out_buf.silent = silent;
+    out_buf.data_discontinuity = (captureFlags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0;
     return true;
 }
 

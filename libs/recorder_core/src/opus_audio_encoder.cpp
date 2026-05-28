@@ -103,6 +103,16 @@ void OpusAudioEncoder::Flush(std::vector<EncodedAudioPacket>& out_packets) {
     m_frame_buffer.clear();
 }
 
+uint64_t OpusAudioEncoder::ResetState() {
+    const uint64_t discarded = static_cast<uint64_t>(m_frame_buffer.size()) / static_cast<uint64_t>(m_channels);
+    m_frame_buffer.clear();
+    if (m_encoder) {
+        opus_encoder_ctl(m_encoder, OPUS_RESET_STATE);
+    }
+    m_emitted_frames += discarded;
+    return discarded;
+}
+
 std::vector<uint8_t> OpusAudioEncoder::CodecPrivateBytes() const {
     return m_codec_private;
 }
