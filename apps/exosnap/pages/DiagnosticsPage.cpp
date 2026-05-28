@@ -8,27 +8,17 @@
 #include "../models/VideoSettingsModel.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
-#include "../ui/widgets/ComboBoxWheelFilter.h"
-
 #include <capability/audio_ui_state.h>
 #include <capability/resolver.h>
 #include <capability/user_config.h>
 
-#include <QComboBox>
 #include <QDateTime>
-#include <QDesktopServices>
-#include <QFileDialog>
-#include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
-#include <QSpinBox>
-#include <QStandardPaths>
 #include <QTabWidget>
-#include <QUrl>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -36,10 +26,6 @@
 namespace exosnap {
 
 namespace {
-
-constexpr int kLogLevelBasic = 0;
-constexpr int kLogLevelVerbose = 1;
-constexpr int kLogLevelTrace = 2;
 
 QString severityClass(diagnostics::DiagnosticSeverity sev) {
     switch (sev) {
@@ -132,12 +118,6 @@ void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, c
     refreshSelfTest();
     refreshCapabilities();
     refreshConfiguration();
-
-    // Update log path
-    if (log_path_label_) {
-        QString data_dir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
-        log_path_label_->setText(data_dir + QStringLiteral("/logs/exosnap.log"));
-    }
 }
 
 // --- Helpers ---
@@ -649,90 +629,22 @@ void DiagnosticsPage::buildLogsTab(QWidget* container) {
                                ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
     layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
 
-    // Log path
-    layout->addWidget(makeSectionLabel(QStringLiteral("Log File Location"), content));
-    auto* path_panel = makePanel(content);
-    auto* path_layout = new QVBoxLayout(path_panel);
-    path_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
+    layout->addWidget(makeSectionLabel(QStringLiteral("Application Logs"), content));
+
+    auto* card = makePanel(content);
+    auto* card_layout = new QVBoxLayout(card);
+    card_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
                                     ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
-    path_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
+    card_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
 
-    log_path_label_ = new QLabel(QStringLiteral("Not initialized"), path_panel);
-    log_path_label_->setProperty("labelRole", "mono");
-    log_path_label_->setWordWrap(true);
-    log_path_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    path_layout->addWidget(log_path_label_);
+    card_layout->addWidget(makeSubLabel(QStringLiteral("Raw application logs are available on the Logs page."), card));
 
-    auto* btn_row = new QHBoxLayout();
-    btn_row->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
+    auto* go_btn = new QPushButton(QStringLiteral("Open Logs Page"), card);
+    go_btn->setProperty("role", "ghost");
+    go_btn->setMaximumWidth(200);
+    card_layout->addWidget(go_btn);
 
-    auto* open_btn = new QPushButton(QStringLiteral("Open Log Folder"), path_panel);
-    open_btn->setProperty("role", "ghost");
-    auto* copy_btn = new QPushButton(QStringLiteral("Copy Latest Logs"), path_panel);
-    copy_btn->setProperty("role", "ghost");
-    auto* bundle_btn = new QPushButton(QStringLiteral("Export Diagnostics Bundle"), path_panel);
-    bundle_btn->setProperty("role", "ghost");
-
-    btn_row->addWidget(open_btn);
-    btn_row->addWidget(copy_btn);
-    btn_row->addWidget(bundle_btn);
-    btn_row->addStretch();
-    path_layout->addLayout(btn_row);
-
-    layout->addWidget(path_panel);
-
-    // Log level
-    layout->addWidget(makeSectionLabel(QStringLiteral("Log Level"), content));
-    auto* level_panel = makePanel(content);
-    auto* level_layout = new QVBoxLayout(level_panel);
-    level_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
-                                     ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
-    level_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
-
-    log_level_combo_ = new QComboBox(level_panel);
-    log_level_combo_->addItem(QStringLiteral("Basic"));
-    log_level_combo_->addItem(QStringLiteral("Verbose"));
-    log_level_combo_->addItem(QStringLiteral("Trace"));
-    log_level_combo_->setCurrentIndex(kLogLevelBasic);
-    log_level_combo_->setMinimumWidth(200);
-    log_level_combo_->setMaximumWidth(280);
-    level_layout->addWidget(log_level_combo_);
-    auto* combo_wheel_filter = new ui::widgets::ComboBoxWheelFilter(level_panel);
-    combo_wheel_filter->installOn(log_level_combo_);
-    layout->addWidget(level_panel);
-
-    // Rotation settings
-    layout->addWidget(makeSectionLabel(QStringLiteral("Log Rotation"), content));
-    auto* rot_panel = makePanel(content);
-    auto* rot_layout = new QVBoxLayout(rot_panel);
-    rot_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
-                                   ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
-    rot_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
-
-    auto* size_row = new QHBoxLayout();
-    auto* size_label = new QLabel(QStringLiteral("Max file size (MB):"), rot_panel);
-    size_label->setProperty("labelRole", "body");
-    max_file_size_spin_ = new QSpinBox(rot_panel);
-    max_file_size_spin_->setRange(1, 1000);
-    max_file_size_spin_->setValue(10);
-    max_file_size_spin_->setSuffix(QStringLiteral(" MB"));
-    size_row->addWidget(size_label);
-    size_row->addWidget(max_file_size_spin_);
-    size_row->addStretch();
-    rot_layout->addLayout(size_row);
-
-    auto* count_row = new QHBoxLayout();
-    auto* count_label = new QLabel(QStringLiteral("Max file count:"), rot_panel);
-    count_label->setProperty("labelRole", "body");
-    max_file_count_spin_ = new QSpinBox(rot_panel);
-    max_file_count_spin_->setRange(1, 100);
-    max_file_count_spin_->setValue(5);
-    count_row->addWidget(count_label);
-    count_row->addWidget(max_file_count_spin_);
-    count_row->addStretch();
-    rot_layout->addLayout(count_row);
-
-    layout->addWidget(rot_panel);
+    layout->addWidget(card);
     layout->addStretch();
     scroll->setWidget(content);
 
@@ -740,11 +652,7 @@ void DiagnosticsPage::buildLogsTab(QWidget* container) {
     root->setContentsMargins(0, 0, 0, 0);
     root->addWidget(scroll);
 
-    connect(open_btn, &QPushButton::clicked, this, &DiagnosticsPage::onOpenLogFolder);
-    connect(copy_btn, &QPushButton::clicked, this, &DiagnosticsPage::onCopyLatestLogs);
-    connect(bundle_btn, &QPushButton::clicked, this, &DiagnosticsPage::onExportDiagnosticsBundle);
-    connect(log_level_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &DiagnosticsPage::onLogLevelChanged);
+    connect(go_btn, &QPushButton::clicked, this, &DiagnosticsPage::navigateToLogsRequested);
 }
 
 // --- Self-Test Tab ---
@@ -1016,45 +924,6 @@ void DiagnosticsPage::refreshOverview() {
     refreshTopIssues(recs);
 
     export_report_btn_->setEnabled(true);
-}
-
-// --- Log slots ---
-
-void DiagnosticsPage::onOpenLogFolder() {
-    QString data_dir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
-    QDesktopServices::openUrl(QUrl::fromLocalFile(data_dir + QStringLiteral("/logs")));
-}
-
-void DiagnosticsPage::onCopyLatestLogs() {
-    QString data_dir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
-    QString log_path = data_dir + QStringLiteral("/logs/exosnap.log");
-    QFileInfo fi(log_path);
-    if (!fi.exists()) {
-        QMessageBox::information(this, QStringLiteral("Copy Logs"),
-                                 QStringLiteral("No log file found at:\n") + log_path);
-        return;
-    }
-    QString dest = QFileDialog::getSaveFileName(this, QStringLiteral("Copy Log File"),
-                                                QStandardPaths::writableLocation(QStandardPaths::DesktopLocation) +
-                                                    QStringLiteral("/exosnap.log"),
-                                                QStringLiteral("Log files (*.log);;All files (*)"));
-    if (dest.isEmpty())
-        return;
-    if (!QFile::copy(log_path, dest)) {
-        QMessageBox::warning(this, QStringLiteral("Copy Logs"), QStringLiteral("Failed to copy log file to:\n") + dest);
-    } else {
-        QMessageBox::information(this, QStringLiteral("Copy Logs"), QStringLiteral("Log file copied to:\n") + dest);
-    }
-}
-
-void DiagnosticsPage::onExportDiagnosticsBundle() {
-    QMessageBox::information(this, QStringLiteral("Diagnostics Bundle"),
-                             QStringLiteral("Diagnostics bundle export is not yet available in this build."));
-}
-
-void DiagnosticsPage::onLogLevelChanged(int index) {
-    Q_UNUSED(index);
-    // Scaffold: log level persistence will be wired when AppSettingsStore supports it.
 }
 
 // --- MainWindow wiring ---

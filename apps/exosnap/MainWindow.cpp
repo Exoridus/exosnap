@@ -212,9 +212,11 @@ constexpr int pageIndexForIcon(SidebarIcon icon) {
 constexpr int kOutputPageIndex = pageIndexForIcon(SidebarIcon::Output);
 constexpr int kDiagnosticsPageIndex = pageIndexForIcon(SidebarIcon::Diagnostics);
 constexpr int kWebcamPageIndex = pageIndexForIcon(SidebarIcon::Webcam);
+constexpr int kLogsPageIndex = pageIndexForIcon(SidebarIcon::Logs);
 static_assert(kOutputPageIndex >= 0, "Output page must exist in kPageDescriptors.");
 static_assert(kDiagnosticsPageIndex >= 0, "Diagnostics page must exist in kPageDescriptors.");
 static_assert(kWebcamPageIndex >= 0, "Webcam page must exist in kPageDescriptors.");
+static_assert(kLogsPageIndex >= 0, "Logs page must exist in kPageDescriptors.");
 
 capability::UserRecorderConfig ProfileToUserConfig(const RecordingProfile& profile) {
     capability::UserRecorderConfig config;
@@ -780,7 +782,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     auto* page_head = new QWidget(content);
     page_head->setObjectName("mainPageHead");
     auto* page_head_layout = new QHBoxLayout(page_head);
-    page_head_layout->setContentsMargins(24, 16, 24, 14);
+    page_head_layout->setContentsMargins(24, 10, 24, 10);
     page_head_layout->setSpacing(12);
 
     auto* page_head_left = new QWidget(page_head);
@@ -788,6 +790,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     page_head_left_layout->setContentsMargins(0, 0, 0, 0);
     page_head_left_layout->setSpacing(2);
 
+    // Kicker label kept as a member for title-bar context updates; not added to layout
+    // since the page title already identifies the page (removes "01 · RECORD" / "Record" duplication).
     page_kicker_label_ = new QLabel(page_head_left);
     page_kicker_label_->setProperty("labelRole", "pageKicker");
     page_title_label_ = new QLabel(page_head_left);
@@ -796,7 +800,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     page_subtitle_label_->setProperty("labelRole", "pageSubtitle");
     page_subtitle_label_->setWordWrap(true);
 
-    page_head_left_layout->addWidget(page_kicker_label_);
     page_head_left_layout->addWidget(page_title_label_);
     page_head_left_layout->addWidget(page_subtitle_label_);
 
@@ -1075,6 +1078,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         refreshDiagnosticsData();
         nav_->setCurrentRow(kDiagnosticsPageIndex);
     });
+    connect(diagnostics_page_, &DiagnosticsPage::navigateToLogsRequested, this,
+            [this]() { nav_->setCurrentRow(kLogsPageIndex); });
     connect(config_page_, &ConfigPage::manageProfilesRequested, this,
             [this]() { nav_->setCurrentRow(kOutputPageIndex); });
     connect(config_page_, &ConfigPage::webcamDetailsRequested, this,

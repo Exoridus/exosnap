@@ -13,8 +13,6 @@ class QPushButton;
 class QTabWidget;
 class QVBoxLayout;
 class QScrollArea;
-class QComboBox;
-class QSpinBox;
 class QFrame;
 
 namespace exosnap {
@@ -32,13 +30,12 @@ class DiagnosticsPage : public QWidget {
                            const std::string& profile_name, const std::string& hotkeys_summary,
                            const std::string& settings_path, bool hotkeys_ok);
 
+  signals:
+    void navigateToLogsRequested();
+
   private slots:
     void onRunCheck();
     void onExportReport();
-    void onOpenLogFolder();
-    void onCopyLatestLogs();
-    void onExportDiagnosticsBundle();
-    void onLogLevelChanged(int index);
 
   private:
     void buildOverviewTab(QWidget* container);
@@ -85,12 +82,6 @@ class DiagnosticsPage : public QWidget {
     // Recommendations
     QVBoxLayout* recommendations_layout_ = nullptr;
     QWidget* recommendations_content_ = nullptr;
-
-    // Logs
-    QLabel* log_path_label_ = nullptr;
-    QComboBox* log_level_combo_ = nullptr;
-    QSpinBox* max_file_size_spin_ = nullptr;
-    QSpinBox* max_file_count_spin_ = nullptr;
 
     // Self-test
     QVBoxLayout* selftest_layout_ = nullptr;
