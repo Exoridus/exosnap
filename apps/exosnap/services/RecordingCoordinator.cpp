@@ -352,6 +352,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
 
         UiRecordingResult result;
         result.succeeded = false;
+        result.error_phase = FormatErrorPhase(recorder_core::ErrorPhase::Prepare);
         result.error_detail = FolderValidationMessage(folder_check);
         PostResult(std::move(result));
 
