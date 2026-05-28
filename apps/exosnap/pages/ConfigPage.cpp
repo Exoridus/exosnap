@@ -272,7 +272,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* audio_panel = makePanel(content);
     auto* audio_panel_layout = new QVBoxLayout(audio_panel);
     audio_panel_layout->setContentsMargins(14, 12, 14, 12);
-    audio_panel_layout->setSpacing(4);
+    audio_panel_layout->setSpacing(6);
 
     auto makeSourceRow = [&](const QString& title, QCheckBox*& enabled_check, QCheckBox*& separate_check,
                              QLabel*& source_label) {
@@ -814,7 +814,7 @@ void ConfigPage::updateAudioSourceAvailability() {
     }
     if (mic_source_label_) {
         const bool available = mic_enabled_check_ && mic_enabled_check_->isEnabled();
-        mic_source_label_->setText(available ? QStringLiteral("Select device on Record page")
+        mic_source_label_->setText(available ? QStringLiteral("Choose the microphone used for recording.")
                                              : QStringLiteral("Not available"));
     }
     if (mic_device_combo_) {
@@ -937,29 +937,12 @@ void ConfigPage::setWebcamSettings(const WebcamSettings& settings) {
             webcam_device_combo_->setCurrentIndex(0);
     }
 
-    if (webcam_info_label_) {
-        QString info;
-        if (!settings.enabled) {
-            info = QStringLiteral("Webcam recording is disabled");
-        } else if (settings.device_id.empty()) {
-            info = QStringLiteral("No webcam device selected. Configure on Webcam Details page.");
-        } else {
-            const QString dev_name = settings.device_id.find("Default") != std::string::npos
-                                         ? QStringLiteral("Default webcam")
-                                         : QString::fromStdString(settings.device_id);
-            info =
-                QStringLiteral("Device: %1 · %2×%3 @ %4 fps · Configure overlay and chroma key on Webcam Details page.")
-                    .arg(dev_name)
-                    .arg(settings.width)
-                    .arg(settings.height)
-                    .arg(settings.fps);
-        }
-        webcam_info_label_->setText(info);
-    }
+    updateWebcamInfoLabel();
 }
 
 void ConfigPage::onWebcamEnabledToggled() {
     webcam_settings_.enabled = webcam_enabled_check_->isChecked();
+    updateWebcamInfoLabel();
     emit webcamSettingsChanged(webcam_settings_);
 }
 
@@ -993,6 +976,18 @@ void ConfigPage::refreshWebcamDevices() {
                 webcam_device_combo_->setCurrentIndex(sidx);
         }
     }
+
+    // Propagate auto-selected device so Setup and WebcamPage stay in sync.
+    // Only applies when settings had no prior device and a real device was found.
+    if (webcam_settings_.device_id.empty() && webcam_device_combo_->isEnabled()) {
+        const QString auto_id = webcam_device_combo_->currentData().toString();
+        if (!auto_id.isEmpty()) {
+            webcam_settings_.device_id = auto_id.toStdString();
+            emit webcamSettingsChanged(webcam_settings_);
+        }
+    }
+
+    updateWebcamInfoLabel();
 }
 
 void ConfigPage::onWebcamDeviceChanged(int index) {
@@ -1002,6 +997,7 @@ void ConfigPage::onWebcamDeviceChanged(int index) {
     if (device_id.isEmpty())
         return;
     webcam_settings_.device_id = device_id.toStdString();
+    updateWebcamInfoLabel();
     emit webcamSettingsChanged(webcam_settings_);
 }
 
@@ -1029,6 +1025,28 @@ void ConfigPage::setReadinessStatus(const QString& status_label) {
     if (view_details_btn_) {
         view_details_btn_->setVisible(blocked);
     }
+}
+
+void ConfigPage::updateWebcamInfoLabel() {
+    if (!webcam_info_label_ || !webcam_device_combo_)
+        return;
+
+    const bool enabled = webcam_settings_.enabled;
+    const bool has_devices = webcam_device_combo_->isEnabled();
+    const QString selected_id = webcam_device_combo_->currentData().toString();
+    const QString selected_name = webcam_device_combo_->currentText();
+
+    QString info;
+    if (!enabled) {
+        info = QStringLiteral("Webcam recording is disabled.");
+    } else if (!has_devices) {
+        info = QStringLiteral("No camera found.");
+    } else if (selected_id.isEmpty()) {
+        info = QStringLiteral("No camera selected.");
+    } else {
+        info = QStringLiteral("Selected camera: %1.").arg(selected_name);
+    }
+    webcam_info_label_->setText(info);
 }
 
 void ConfigPage::setRecordingControlsLocked(bool locked) {

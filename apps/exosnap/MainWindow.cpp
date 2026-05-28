@@ -20,6 +20,7 @@
 #include <capability/resolver.h>
 #include <capability/user_config.h>
 
+#include <QAbstractButton>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QColor>
@@ -38,6 +39,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPalette>
+#include <QPushButton>
 #include <QShowEvent>
 #include <QStyle>
 #include <QStyleOptionViewItem>
@@ -1507,12 +1509,12 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         msgBox.setIcon(QMessageBox::Warning);
 
         auto* stopBtn = msgBox.addButton(QStringLiteral("Stop recording and close"), QMessageBox::AcceptRole);
-        msgBox.addButton(QStringLiteral("Cancel"), QMessageBox::RejectRole);
-        msgBox.setDefaultButton(qobject_cast<QPushButton*>(msgBox.buttons().last()));
+        auto* cancelBtn = msgBox.addButton(QStringLiteral("Cancel"), QMessageBox::RejectRole);
+        msgBox.setDefaultButton(cancelBtn);
 
         msgBox.exec();
 
-        if (msgBox.clickedButton() == stopBtn) {
+        if (msgBox.clickedButton() == static_cast<QAbstractButton*>(stopBtn)) {
             emit recordToggleRequested();
             recording_active_ = false;
             event->accept();

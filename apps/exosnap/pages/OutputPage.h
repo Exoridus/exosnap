@@ -5,13 +5,10 @@
 
 #include <vector>
 
-class QButtonGroup;
+class QAction;
 class QComboBox;
 class QLabel;
-class QLineEdit;
 class QPushButton;
-class QRadioButton;
-class QAction;
 class QToolButton;
 
 namespace exosnap {
@@ -52,35 +49,18 @@ class OutputPage : public QWidget {
     void resetAllSettingsAndProfilesRequested();
 
   private:
-    void onContainerChanged(int id);
-    void onVideoCodecChanged(int index);
-    void onAudioCodecChanged(int index);
-    void onBrowse();
-    void onDestinationEditingFinished();
-    void onPatternEditingFinished();
     void onProfileSelectionChanged(int index);
     void onImportProfiles();
     void onExportSelectedProfile();
     void onExportAllUserProfiles();
     void onResetAllSettingsAndProfiles();
     void onDeleteActiveProfile();
-    void applySettingsToUi();
-    void emitCurrentSettings();
-    void reconcileContainerCodecRules();
-    void updateAudioCodecChoices();
-    void updateVideoCodecChoices();
-    void updateEffectiveOutputPreview();
-    void updateValidationState();
     void updateProfileActionState();
     void promptCreateProfileFromCurrent();
     void promptCreateProfileFromSafeDefault();
     void promptRenameActiveProfile();
     void promptSaveModifiedBuiltInAsNew();
 
-    OutputSettingsModel settings_;
-    std::filesystem::path last_valid_output_folder_;
-    std::wstring last_valid_naming_pattern_;
-    QString active_profile_name_;
     bool active_profile_is_built_in_ = true;
     bool active_profile_is_modified_ = false;
     bool active_profile_is_available_ = true;
@@ -99,19 +79,6 @@ class OutputPage : public QWidget {
     QAction* export_selected_action_ = nullptr;
     QAction* export_all_users_action_ = nullptr;
     QAction* reset_all_action_ = nullptr;
-    QButtonGroup* container_group_ = nullptr;
-    QRadioButton* mkv_radio_ = nullptr;
-    QRadioButton* webm_radio_ = nullptr;
-    QRadioButton* mp4_radio_ = nullptr;
-    QComboBox* video_codec_combo_ = nullptr;
-    QComboBox* audio_codec_combo_ = nullptr;
-    QLineEdit* destination_edit_ = nullptr;
-    QLineEdit* naming_edit_ = nullptr;
-    QLabel* folder_validation_label_ = nullptr;
-    QLabel* pattern_validation_label_ = nullptr;
-    QLabel* mp4_info_label_ = nullptr;
-    QLabel* effective_output_path_label_ = nullptr;
-    QPushButton* browse_btn_ = nullptr;
 };
 
 } // namespace exosnap

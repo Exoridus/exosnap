@@ -92,6 +92,7 @@ class ConfigPage : public QWidget {
     void onWebcamDeviceChanged(int index);
     void refreshWebcamDevices();
     void emitCurrentWebcamSettings();
+    void updateWebcamInfoLabel();
 
     capability::AudioUiState audio_ui_state_;
     WebcamSettings webcam_settings_;

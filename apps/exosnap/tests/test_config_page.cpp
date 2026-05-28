@@ -12,6 +12,7 @@
 
 #include "models/OutputSettingsModel.h"
 #include "models/VideoSettingsModel.h"
+#include "models/WebcamSettings.h"
 #include "pages/ConfigPage.h"
 
 namespace exosnap {
@@ -244,6 +245,50 @@ TEST_F(ConfigPageTest, DefaultControlsAreEnabled) {
     auto* lock_note = page.findChild<QLabel*>(QStringLiteral("lockNoteLabel"));
     ASSERT_NE(lock_note, nullptr);
     EXPECT_TRUE(lock_note->isHidden());
+}
+
+TEST_F(ConfigPageTest, WebcamInfoLabel_DisabledState_ShowsDisabledText) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    WebcamSettings ws;
+    ws.enabled = false;
+    ws.device_id = "";
+    page.setWebcamSettings(ws);
+
+    const auto labels = page.findChildren<QLabel*>();
+    bool found_disabled = false;
+    for (const auto* l : labels) {
+        if (l->text() == QStringLiteral("Webcam recording is disabled.")) {
+            found_disabled = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found_disabled);
+}
+
+TEST_F(ConfigPageTest, WebcamInfoLabel_EnabledNoDevice_DoesNotShowStaleMessage) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    WebcamSettings ws;
+    ws.enabled = true;
+    ws.device_id = "";
+    page.setWebcamSettings(ws);
+
+    const auto labels = page.findChildren<QLabel*>();
+    for (const auto* l : labels) {
+        EXPECT_FALSE(l->text().contains(QStringLiteral("Configure on Webcam Details page")))
+            << "Stale copy found: " << l->text().toStdString();
+    }
+}
+
+TEST_F(ConfigPageTest, MicSourceLabel_DoesNotSaySelectDeviceOnRecordPage) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    const auto labels = page.findChildren<QLabel*>();
+    for (const auto* l : labels) {
+        EXPECT_FALSE(l->text().contains(QStringLiteral("Select device on Record page")))
+            << "Stale mic copy found: " << l->text().toStdString();
+    }
 }
 
 } // namespace
