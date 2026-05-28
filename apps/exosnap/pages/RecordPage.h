@@ -95,6 +95,7 @@ class RecordPage : public QWidget {
     void updateAudioControlsVisibility();
     void updateAudioTrackPreview();
     void updateOpenFolderButtonState();
+    void updateDestinationMeta();
     void syncTargetSelectionToCombo(int target_index);
     void enumerateTargets(bool preserve_current_selection);
     void rebuildTargetPicker();

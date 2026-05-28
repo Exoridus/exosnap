@@ -49,6 +49,8 @@ struct UiRecordingResult {
     std::wstring error_phase;
     std::wstring hresult_text;
     std::wstring error_detail;
+    uint64_t output_file_bytes = 0;
+    double elapsed_seconds = 0.0;
 };
 
 // ---------------------------------------------------------------------------
@@ -81,6 +83,9 @@ class RecordViewModel {
     std::wstring result_user_message;
     std::wstring result_action_hint;
     std::wstring result_stats_text;
+    uint64_t result_output_file_bytes = 0;
+    double result_elapsed_seconds = 0.0;
+    std::wstring result_destination_text;
 
     // Live stats fields
     std::wstring elapsed_text = L"0:00";

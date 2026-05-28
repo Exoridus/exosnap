@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdio>
+#include <filesystem>
 #include <string_view>
 #include <windows.h>
 
@@ -373,6 +374,8 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
     result_error_phase = result.error_phase;
     result_hresult_text = result.hresult_text;
     result_error_detail = result.error_detail;
+    result_output_file_bytes = result.output_file_bytes;
+    result_elapsed_seconds = result.elapsed_seconds;
 
     const auto msg = exosnap::diagnostics::MapErrorToUserMessage(result);
     result_user_title = msg.title;
@@ -381,8 +384,18 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
 
     if (result.succeeded) {
         result_stats_text = elapsed_text + L"  ·  " + output_size_text;
+        std::filesystem::path p(result.output_path);
+        std::wstring filename = p.filename().wstring();
+        result_destination_text = filename;
+        if (result.output_file_bytes > 0 || result.elapsed_seconds > 0.0) {
+            result_destination_text += L"  ·  ";
+            result_destination_text += FormatBytes(result.output_file_bytes);
+            result_destination_text += L"  ·  ";
+            result_destination_text += FormatElapsed(result.elapsed_seconds);
+        }
     } else {
         result_stats_text = {};
+        result_destination_text = {};
     }
 }
 

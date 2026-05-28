@@ -808,6 +808,25 @@ void RecordPage::updateOpenFolderButtonState() {
     const bool has_result_path = !QString::fromStdWString(view_model_.result_output_path).trimmed().isEmpty();
     const bool has_output_folder = !last_output_folder_.empty();
     open_folder_btn_->setEnabled(has_result_path || has_output_folder);
+
+    if (has_result_path) {
+        open_folder_btn_->setToolTip(QStringLiteral("Open folder: ") +
+                                     QString::fromStdWString(view_model_.result_output_path));
+    } else if (has_output_folder) {
+        open_folder_btn_->setToolTip(QStringLiteral("Open folder: ") +
+                                     QString::fromStdWString(last_output_folder_.wstring()));
+    } else {
+        open_folder_btn_->setToolTip({});
+    }
+}
+
+void RecordPage::updateDestinationMeta() {
+    if (!output_meta_label_)
+        return;
+
+    if (view_model_.HasResult() && view_model_.last_succeeded && !view_model_.result_destination_text.empty()) {
+        output_meta_label_->setText(QString::fromStdWString(view_model_.result_destination_text));
+    }
 }
 
 void RecordPage::startPreviewIfIdle() {
@@ -1958,6 +1977,7 @@ void RecordPage::refresh() {
     updateStatsDisplay();
 
     updateResultDisplay();
+    updateDestinationMeta();
     updateOpenFolderButtonState();
 
     emitChromeState();

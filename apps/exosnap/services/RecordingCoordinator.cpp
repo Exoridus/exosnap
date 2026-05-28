@@ -599,6 +599,8 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
     ui_result.error_phase = FormatErrorPhase(result.error_phase);
     ui_result.hresult_text = FormatHResult(result.error_code);
     ui_result.error_detail = ToWide(result.error_detail);
+    ui_result.output_file_bytes = result.stats.output_file_bytes;
+    ui_result.elapsed_seconds = result.stats.elapsed_seconds;
 
     PostResult(std::move(ui_result));
     PostStateChange(result.succeeded ? UiRecordingState::Completed : UiRecordingState::Failed);
