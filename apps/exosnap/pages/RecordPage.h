@@ -13,6 +13,7 @@
 #include "../ui/widgets/RegionSelectionOverlay.h"
 #include "../viewmodels/RecordViewModel.h"
 
+#include <capability/capability_set.h>
 #include <capability/config_types.h>
 
 class QComboBox;
@@ -44,6 +45,7 @@ class RecordPage : public QWidget {
     void setWebcamSettings(const WebcamSettings& settings);
     void setActiveProfileName(const std::string& profile_name);
     void applyPersistedAudioSettings(const capability::AudioUiState& state);
+    void setRuntimeCapabilities(const capability::CapabilitySet& caps);
     void rebroadcastChromeState();
 
   signals:
@@ -205,6 +207,8 @@ class RecordPage : public QWidget {
     float preflight_app_rms_ = 0.0f;
     uint32_t preflight_app_pid_ = 0;
     bool coordinator_needs_init_ = true;
+    capability::CapabilitySet shared_runtime_caps_{};
+    bool shared_runtime_caps_received_ = false;
 };
 
 } // namespace exosnap

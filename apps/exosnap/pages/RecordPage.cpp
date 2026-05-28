@@ -37,6 +37,7 @@
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QStyle>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -264,7 +265,7 @@ void RecordPage::resizeEvent(QResizeEvent* event) {
 
 void RecordPage::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
-    ensureCoordinatorInit();
+    QTimer::singleShot(0, this, [this]() { ensureCoordinatorInit(); });
 }
 
 void RecordPage::updatePreviewHeightClamp() {
@@ -723,6 +724,11 @@ void RecordPage::setActiveProfileName(const std::string& profile_name) {
     syncCoordinatorTargetContext();
 }
 
+void RecordPage::setRuntimeCapabilities(const capability::CapabilitySet& caps) {
+    shared_runtime_caps_ = caps;
+    shared_runtime_caps_received_ = true;
+}
+
 void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& state) {
     const capability::CaptureTargetKind target_kind = view_model_.audio_ui_state.target_kind;
     const std::optional<uint32_t> selected_window_pid = view_model_.audio_ui_state.selected_window_pid;
@@ -875,10 +881,16 @@ void RecordPage::initCoordinator() {
     });
 
     try {
-        const auto caps = capability::CapabilityBuilder::BuildFromHardwareQuery();
-        capability::SettingsResolver resolver(caps);
-        const auto validation = resolver.ValidateConfig(primaryRecorderConfig());
-        coordinator_->OnCapabilitiesReady(caps, validation);
+        if (shared_runtime_caps_received_) {
+            capability::SettingsResolver resolver(shared_runtime_caps_);
+            const auto validation = resolver.ValidateConfig(primaryRecorderConfig());
+            coordinator_->OnCapabilitiesReady(shared_runtime_caps_, validation);
+        } else {
+            const auto caps = capability::CapabilityBuilder::BuildFromHardwareQuery();
+            capability::SettingsResolver resolver(caps);
+            const auto validation = resolver.ValidateConfig(primaryRecorderConfig());
+            coordinator_->OnCapabilitiesReady(caps, validation);
+        }
     } catch (const std::exception& ex) {
         coordinator_->OnCapabilityFailure(L"Capability check failed.");
         qWarning() << "Capability check failed:" << ex.what();
@@ -1163,6 +1175,7 @@ void RecordPage::onStop() {
 }
 
 void RecordPage::onHotkeyToggle() {
+    ensureCoordinatorInit();
     if (view_model_.CanStart())
         onStart();
     else if (view_model_.CanStop())

@@ -1089,6 +1089,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         runtime_caps_ = capability::CapabilityBuilder::BuildFromHardwareQuery();
         runtime_caps_ready_ = true;
         diagnostics::AppLog(QStringLiteral("[window] capabilities probed"));
+        if (record_page_)
+            record_page_->setRuntimeCapabilities(runtime_caps_);
         refreshOutputProfileUi();
         refreshDiagnosticsData();
     });
