@@ -165,6 +165,14 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     layout->addWidget(status_card);
 
+    lock_note_label_ = new QLabel(status_card);
+    lock_note_label_->setObjectName(QStringLiteral("lockNoteLabel"));
+    lock_note_label_->setProperty("labelRole", "muted");
+    lock_note_label_->setWordWrap(true);
+    lock_note_label_->setText(QStringLiteral("Recording settings are locked while recording."));
+    lock_note_label_->setVisible(false);
+    status_layout->addWidget(lock_note_label_);
+
     // ---- FORMAT SECTION (interactive) ----
     layout->addWidget(makeSectionLabel(QStringLiteral("Format"), content));
 
@@ -177,6 +185,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* profile_lbl = new QLabel(QStringLiteral("Profile"), fmt_panel);
     profile_lbl->setProperty("labelRole", "section");
     profile_combo_ = new QComboBox(fmt_panel);
+    profile_combo_->setObjectName(QStringLiteral("profileCombo"));
     profile_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     profile_header->addWidget(profile_lbl);
     profile_header->addWidget(profile_combo_, 1);
@@ -291,6 +300,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* mic_device_row = new QHBoxLayout();
     mic_device_row->setContentsMargins(20, 0, 0, 4);
     mic_device_combo_ = new QComboBox(audio_panel);
+    mic_device_combo_->setObjectName(QStringLiteral("micDeviceCombo"));
     mic_device_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     mic_device_combo_->setMinimumWidth(200);
     mic_device_row->addWidget(mic_device_combo_, 1);
@@ -333,6 +343,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     webcam_panel_layout->addWidget(webcam_info_label_);
 
     webcam_details_btn_ = new QPushButton(QStringLiteral("Webcam details..."), webcam_panel);
+    webcam_details_btn_->setObjectName(QStringLiteral("webcamDetailsBtn"));
     webcam_details_btn_->setProperty("role", "ghost");
     webcam_details_btn_->setContentsMargins(20, 0, 0, 0);
     webcam_panel_layout->addWidget(webcam_details_btn_);
@@ -352,6 +363,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* dest_row = new QHBoxLayout();
     dest_row->setSpacing(8);
     destination_edit_ = new QLineEdit(out_panel);
+    destination_edit_->setObjectName(QStringLiteral("destinationEdit"));
     destination_edit_->setPlaceholderText(QString::fromStdWString(format_settings_.output_folder.wstring()));
     browse_btn_ = new QPushButton(QStringLiteral("Browse..."), out_panel);
     browse_btn_->setProperty("role", "ghost");
@@ -367,6 +379,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* naming_lbl = makeSectionLabel(QStringLiteral("Filename pattern"), out_panel);
     out_panel_layout->addWidget(naming_lbl);
     naming_edit_ = new QLineEdit(out_panel);
+    naming_edit_->setObjectName(QStringLiteral("namingEdit"));
     naming_edit_->setPlaceholderText(QStringLiteral("{datetime}_{app}_{title}"));
     out_panel_layout->addWidget(naming_edit_);
 
@@ -1016,6 +1029,45 @@ void ConfigPage::setReadinessStatus(const QString& status_label) {
     if (view_details_btn_) {
         view_details_btn_->setVisible(blocked);
     }
+}
+
+void ConfigPage::setRecordingControlsLocked(bool locked) {
+    if (controls_locked_ == locked)
+        return;
+    controls_locked_ = locked;
+
+    const bool enabled = !locked;
+
+    profile_combo_->setEnabled(enabled);
+    manage_profiles_btn_->setEnabled(enabled);
+    mkv_radio_->setEnabled(enabled);
+    webm_radio_->setEnabled(enabled);
+    mp4_radio_->setEnabled(enabled);
+    video_codec_combo_->setEnabled(enabled);
+    audio_codec_combo_->setEnabled(enabled);
+
+    quality_combo_->setEnabled(enabled);
+    cfr_check_->setEnabled(enabled);
+    cursor_check_->setEnabled(enabled);
+
+    app_enabled_check_->setEnabled(enabled);
+    app_separate_check_->setEnabled(enabled);
+    mic_enabled_check_->setEnabled(enabled);
+    mic_separate_check_->setEnabled(enabled);
+    mic_device_combo_->setEnabled(enabled);
+    sys_enabled_check_->setEnabled(enabled);
+    sys_separate_check_->setEnabled(enabled);
+
+    webcam_enabled_check_->setEnabled(enabled);
+    webcam_device_combo_->setEnabled(enabled);
+    webcam_details_btn_->setEnabled(enabled);
+
+    destination_edit_->setEnabled(enabled);
+    browse_btn_->setEnabled(enabled);
+    naming_edit_->setEnabled(enabled);
+
+    if (lock_note_label_)
+        lock_note_label_->setVisible(locked);
 }
 
 } // namespace exosnap

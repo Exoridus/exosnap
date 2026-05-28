@@ -196,5 +196,55 @@ TEST_F(ConfigPageTest, VideoQualityChange_EmitsVideoSettingsChanged) {
     EXPECT_TRUE(emitted);
 }
 
+TEST_F(ConfigPageTest, SetRecordingControlsLocked_DisablesKeyControls) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setRecordingControlsLocked(true);
+
+    auto* profile_combo = page.findChild<QComboBox*>(QStringLiteral("profileCombo"));
+    ASSERT_NE(profile_combo, nullptr);
+    EXPECT_FALSE(profile_combo->isEnabled());
+
+    auto* quality_combo = page.findChild<QComboBox*>(QStringLiteral("videoQualityCombo"));
+    ASSERT_NE(quality_combo, nullptr);
+    EXPECT_FALSE(quality_combo->isEnabled());
+
+    auto* dest_edit = page.findChild<QLineEdit*>(QStringLiteral("destinationEdit"));
+    ASSERT_NE(dest_edit, nullptr);
+    EXPECT_FALSE(dest_edit->isEnabled());
+
+    auto* naming_edit = page.findChild<QLineEdit*>(QStringLiteral("namingEdit"));
+    ASSERT_NE(naming_edit, nullptr);
+    EXPECT_FALSE(naming_edit->isEnabled());
+
+    auto* mic_combo = page.findChild<QComboBox*>(QStringLiteral("micDeviceCombo"));
+    ASSERT_NE(mic_combo, nullptr);
+    EXPECT_FALSE(mic_combo->isEnabled());
+
+    auto* webcam_btn = page.findChild<QPushButton*>(QStringLiteral("webcamDetailsBtn"));
+    ASSERT_NE(webcam_btn, nullptr);
+    EXPECT_FALSE(webcam_btn->isEnabled());
+
+    auto* lock_note = page.findChild<QLabel*>(QStringLiteral("lockNoteLabel"));
+    ASSERT_NE(lock_note, nullptr);
+    EXPECT_FALSE(lock_note->isHidden());
+}
+
+TEST_F(ConfigPageTest, DefaultControlsAreEnabled) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* quality_combo = page.findChild<QComboBox*>(QStringLiteral("videoQualityCombo"));
+    ASSERT_NE(quality_combo, nullptr);
+    EXPECT_TRUE(quality_combo->isEnabled());
+
+    auto* mic_combo = page.findChild<QComboBox*>(QStringLiteral("micDeviceCombo"));
+    ASSERT_NE(mic_combo, nullptr);
+    EXPECT_TRUE(mic_combo->isEnabled());
+
+    auto* lock_note = page.findChild<QLabel*>(QStringLiteral("lockNoteLabel"));
+    ASSERT_NE(lock_note, nullptr);
+    EXPECT_TRUE(lock_note->isHidden());
+}
+
 } // namespace
 } // namespace exosnap

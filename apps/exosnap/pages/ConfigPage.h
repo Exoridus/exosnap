@@ -45,6 +45,7 @@ class ConfigPage : public QWidget {
     void setProfileOptions(const std::vector<ProfileOption>& options, const QString& active_profile_id,
                            bool active_profile_modified);
     void setActiveProfileName(const QString& profile_name);
+    void setRecordingControlsLocked(bool locked);
 
   signals:
     void formatSettingsChanged(const OutputSettingsModel& settings);
@@ -147,6 +148,9 @@ class ConfigPage : public QWidget {
     QComboBox* webcam_device_combo_ = nullptr;
     QLabel* webcam_info_label_ = nullptr;
     QPushButton* webcam_details_btn_ = nullptr;
+
+    QLabel* lock_note_label_ = nullptr;
+    bool controls_locked_ = false;
 };
 
 } // namespace exosnap

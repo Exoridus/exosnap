@@ -1203,6 +1203,14 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
     if (config_page_)
         config_page_->setReadinessStatus(record_status_label_);
 
+    if (config_page_) {
+        const QString upper = record_status_label_;
+        const bool locked = (upper == QStringLiteral("REC") || upper == QStringLiteral("PAUSED") ||
+                             upper == QStringLiteral("STOPPING") || upper == QStringLiteral("CHECKING") ||
+                             upper == QStringLiteral("STARTING"));
+        config_page_->setRecordingControlsLocked(locked);
+    }
+
     title_bar_->setRecordingActive(recording);
     title_bar_->setStatusLabel(record_status_label_);
     if (global_recording_bar_) {
