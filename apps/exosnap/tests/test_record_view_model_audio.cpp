@@ -357,5 +357,122 @@ TEST(RecordViewModelAudioTest, RecordViewModel_TargetLabelFromCaptureTarget_Uses
     EXPECT_EQ(RecordViewModel::TargetLabelFromCaptureTarget(window_target), "Brave - Claude Design");
 }
 
+TEST(RecordViewModelStateGuardTest, CanStart_Ready_WithTargets_ReturnsTrue) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Ready);
+    vm.targets = {recorder_core::CaptureTarget{}};
+    vm.selected_target_index = 0;
+    EXPECT_TRUE(vm.CanStart());
+}
+
+TEST(RecordViewModelStateGuardTest, CanStart_LoadingCapabilities_ReturnsFalse) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::LoadingCapabilities);
+    EXPECT_FALSE(vm.CanStart());
+}
+
+TEST(RecordViewModelStateGuardTest, CanStart_Recording_ReturnsFalse) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Recording);
+    EXPECT_FALSE(vm.CanStart());
+}
+
+TEST(RecordViewModelStateGuardTest, CanStart_Blocked_ReturnsFalse) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Blocked);
+    vm.targets = {recorder_core::CaptureTarget{}};
+    vm.selected_target_index = 0;
+    EXPECT_FALSE(vm.CanStart());
+}
+
+TEST(RecordViewModelStateGuardTest, CanStart_NoTargets_ReturnsFalse) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Ready);
+    vm.selected_target_index = 0;
+    EXPECT_FALSE(vm.CanStart());
+}
+
+TEST(RecordViewModelStateGuardTest, CanStart_Completed_ReturnsTrue) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Completed);
+    vm.targets = {recorder_core::CaptureTarget{}};
+    vm.selected_target_index = 0;
+    EXPECT_TRUE(vm.CanStart());
+}
+
+TEST(RecordViewModelStateGuardTest, CanStart_Failed_ReturnsTrue) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Failed);
+    vm.targets = {recorder_core::CaptureTarget{}};
+    vm.selected_target_index = 0;
+    EXPECT_TRUE(vm.CanStart());
+}
+
+TEST(RecordViewModelStateGuardTest, CanStop_Recording_ReturnsTrue) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Recording);
+    EXPECT_TRUE(vm.CanStop());
+}
+
+TEST(RecordViewModelStateGuardTest, CanStop_Paused_ReturnsTrue) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Paused);
+    EXPECT_TRUE(vm.CanStop());
+}
+
+TEST(RecordViewModelStateGuardTest, CanStop_Ready_ReturnsFalse) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Ready);
+    EXPECT_FALSE(vm.CanStop());
+}
+
+TEST(RecordViewModelStateGuardTest, CanStop_Starting_ReturnsFalse) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Preparing);
+    EXPECT_FALSE(vm.CanStop());
+}
+
+TEST(RecordViewModelStateGuardTest, CanStop_Stopping_ReturnsFalse) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Stopping);
+    EXPECT_FALSE(vm.CanStop());
+}
+
+TEST(RecordViewModelStateGuardTest, CanPause_Recording_ReturnsTrue) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Recording);
+    EXPECT_TRUE(vm.CanPause());
+}
+
+TEST(RecordViewModelStateGuardTest, CanPause_Paused_ReturnsFalse) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Paused);
+    EXPECT_FALSE(vm.CanPause());
+}
+
+TEST(RecordViewModelStateGuardTest, CanPause_Starting_ReturnsFalse) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Preparing);
+    EXPECT_FALSE(vm.CanPause());
+}
+
+TEST(RecordViewModelStateGuardTest, CanResume_Paused_ReturnsTrue) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Paused);
+    EXPECT_TRUE(vm.CanResume());
+}
+
+TEST(RecordViewModelStateGuardTest, CanResume_Recording_ReturnsFalse) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Recording);
+    EXPECT_FALSE(vm.CanResume());
+}
+
+TEST(RecordViewModelStateGuardTest, CanResume_Ready_ReturnsFalse) {
+    RecordViewModel vm;
+    vm.SetState(UiRecordingState::Ready);
+    EXPECT_FALSE(vm.CanResume());
+}
+
 } // namespace
 } // namespace exosnap
