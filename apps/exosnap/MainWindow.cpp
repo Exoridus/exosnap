@@ -183,24 +183,24 @@ struct PageDescriptor {
 constexpr std::array<PageDescriptor, 10> kPageDescriptors = {{
     {"Record", "01 · RECORD", "Operational view — target, readiness, and live runtime.", "",
      "DISPLAY1 · 2560×1440 · 60 fps · AV1", SidebarIcon::Record},
-    {"Video", "02 · VIDEO", "Read-only MVP profile.", "LOCKED · MVP", "CFR 60 · NVENC AV1 · LOCKED",
-     SidebarIcon::Video},
-    {"Audio", "03 · AUDIO", "Read-only in MVP; configure on Record page.", "LOCKED · RECORD PAGE", "APP · MIC · SYS",
-     SidebarIcon::Audio},
-    {"Output", "04 · OUTPUT", "Container, destination, and recording output behavior.", "MKV · AV1 · OPUS",
-     "Destination + container", SidebarIcon::Output},
-    {"Webcam", "05 · WEBCAM", "Webcam device, overlay placement, and chroma key.", "OVERLAY",
-     "Camera composited into recording", SidebarIcon::Webcam},
-    {"Hotkeys", "06 · HOTKEYS", "Global command access for recording operations.", "GLOBAL SHORTCUTS",
-     "Trigger and visibility rules", SidebarIcon::Hotkeys},
-    {"Diagnostics", "07 · DIAGNOSTICS", "Capability checks, blockers, and system readiness.", "BLOCKER-FIRST",
-     "Probe matrix and drivers", SidebarIcon::Diagnostics},
-    {"Logs", "08 · LOGS", "Runtime events and recording diagnostics.", "SESSION EVENTS",
-     "Structured recorder telemetry", SidebarIcon::Logs},
-    {"Advanced", "09 · ADVANCED", "Lower-level behavior and non-default controls.", "EXPERT SETTINGS",
-     "Explicitly non-default", SidebarIcon::Advanced},
-    {"Setup", "10 · SETUP", "Unified recording configuration — format, sources, and output.", "",
+    {"Setup", "02 · SETUP", "Unified recording configuration — format, sources, and output.", "",
      "Profile · Sources · Output", SidebarIcon::Setup},
+    {"Video", "03 · VIDEO", "Read-only MVP profile.", "LOCKED · MVP", "CFR 60 · NVENC AV1 · LOCKED",
+     SidebarIcon::Video},
+    {"Audio", "04 · AUDIO", "Read-only in MVP; configure on Record page.", "LOCKED · RECORD PAGE", "APP · MIC · SYS",
+     SidebarIcon::Audio},
+    {"Output", "05 · OUTPUT", "Container, destination, and recording output behavior.", "MKV · AV1 · OPUS",
+     "Destination + container", SidebarIcon::Output},
+    {"Webcam", "06 · WEBCAM", "Webcam device, overlay placement, and chroma key.", "OVERLAY",
+     "Camera composited into recording", SidebarIcon::Webcam},
+    {"Hotkeys", "07 · HOTKEYS", "Global command access for recording operations.", "GLOBAL SHORTCUTS",
+     "Trigger and visibility rules", SidebarIcon::Hotkeys},
+    {"Diagnostics", "08 · DIAGNOSTICS", "Capability checks, blockers, and system readiness.", "BLOCKER-FIRST",
+     "Probe matrix and drivers", SidebarIcon::Diagnostics},
+    {"Logs", "09 · LOGS", "Runtime events and recording diagnostics.", "SESSION EVENTS",
+     "Structured recorder telemetry", SidebarIcon::Logs},
+    {"Advanced", "10 · ADVANCED", "Lower-level behavior and non-default controls.", "EXPERT SETTINGS",
+     "Explicitly non-default", SidebarIcon::Advanced},
 }};
 
 constexpr int kNavIndexRole = Qt::UserRole + 1;
@@ -814,9 +814,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     stack_ = new QStackedWidget(content);
     stack_->setObjectName("mainStack");
     record_page_ = new RecordPage(stack_);
+    config_page_ = new ConfigPage(output_settings_, video_settings_, stack_);
     output_page_ = new OutputPage(output_settings_, stack_);
     video_page_ = new VideoPage(video_settings_, stack_);
     stack_->addWidget(record_page_);
+    stack_->addWidget(config_page_);
     stack_->addWidget(video_page_);
     stack_->addWidget(new AudioPage(stack_));
     stack_->addWidget(output_page_);
@@ -830,8 +832,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     stack_->addWidget(diagnostics_page_);
     stack_->addWidget(new LogsPage(stack_));
     stack_->addWidget(new AdvancedPage(stack_));
-    config_page_ = new ConfigPage(output_settings_, video_settings_, stack_);
-    stack_->addWidget(config_page_);
     record_page_->setOutputSettings(output_settings_);
     record_page_->setVideoSettings(video_settings_);
     record_page_->applyPersistedAudioSettings(persisted_settings_.audio_ui_state);
@@ -1037,6 +1037,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         record_page_->setVideoSettings(settings);
         if (config_page_)
             config_page_->setVideoSettings(settings);
+        profile_registry_.ApplyVideoToActive(settings);
+        persisted_settings_.video = settings;
+        persistProfileState();
+        refreshDiagnosticsData();
+    });
+    connect(config_page_, &ConfigPage::videoSettingsChanged, this, [this](const VideoSettingsModel& settings) {
+        video_settings_ = settings;
+        record_page_->setVideoSettings(settings);
+        if (video_page_)
+            video_page_->setVideoSettings(settings);
         profile_registry_.ApplyVideoToActive(settings);
         persisted_settings_.video = settings;
         persistProfileState();

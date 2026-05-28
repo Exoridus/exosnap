@@ -1,6 +1,7 @@
 #include "ConfigPage.h"
 
 #include <QButtonGroup>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -180,20 +181,31 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     fmt_layout->addLayout(codec_row);
     layout->addWidget(fmt_panel);
 
-    // ---- VIDEO SECTION (read-only) ----
+    // ---- VIDEO SECTION (interactive) ----
     layout->addWidget(makeSectionLabel(QStringLiteral("Video"), content));
     auto* video_panel = makePanel(content);
     auto* video_panel_layout = new QVBoxLayout(video_panel);
     video_panel_layout->setContentsMargins(14, 12, 14, 12);
-    video_panel_layout->setSpacing(6);
-    video_summary_label_ = new QLabel(video_panel);
-    video_summary_label_->setProperty("labelRole", "muted");
-    video_summary_label_->setWordWrap(true);
-    video_panel_layout->addWidget(video_summary_label_);
-    auto* video_note = makeSubLabel(
-        QStringLiteral("Video settings are configured on the Video page (CFR, quality, cursor capture)."), video_panel);
-    video_note->setProperty("labelRole", "muted");
-    video_panel_layout->addWidget(video_note);
+    video_panel_layout->setSpacing(10);
+
+    auto* qual_row = new QHBoxLayout();
+    auto* qual_lbl = new QLabel(QStringLiteral("Quality preset"), video_panel);
+    qual_lbl->setProperty("labelRole", "section");
+    quality_combo_ = new QComboBox(video_panel);
+    quality_combo_->addItem(QStringLiteral("High"), static_cast<int>(recorder_core::NvencQualityPreset::High));
+    quality_combo_->addItem(QStringLiteral("Balanced"), static_cast<int>(recorder_core::NvencQualityPreset::Balanced));
+    quality_combo_->addItem(QStringLiteral("Small"), static_cast<int>(recorder_core::NvencQualityPreset::Small));
+    qual_row->addWidget(qual_lbl);
+    qual_row->addWidget(quality_combo_, 1);
+    video_panel_layout->addLayout(qual_row);
+
+    cfr_check_ = new QCheckBox(QStringLiteral("CFR 60 fps (constant frame rate)"), video_panel);
+    cfr_check_->setChecked(video_settings_.cfr);
+    video_panel_layout->addWidget(cfr_check_);
+
+    cursor_check_ = new QCheckBox(QStringLiteral("Capture cursor"), video_panel);
+    cursor_check_->setChecked(video_settings_.capture_cursor);
+    video_panel_layout->addWidget(cursor_check_);
     layout->addWidget(video_panel);
 
     // ---- AUDIO SECTION (read-only) ----
@@ -239,6 +251,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             &ConfigPage::onAudioCodecChanged);
     connect(profile_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onProfileSelectionChanged);
+    connect(quality_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ConfigPage::onQualityChanged);
+    connect(cfr_check_, &QCheckBox::toggled, this, &ConfigPage::onCfrChanged);
+    connect(cursor_check_, &QCheckBox::toggled, this, &ConfigPage::onCursorChanged);
 
     updateFormatDisplay();
 }
@@ -247,6 +262,27 @@ void ConfigPage::emitCurrentFormatSettings() {
     reconcileContainerCodecRules();
     updateFormatDisplay();
     emit formatSettingsChanged(format_settings_);
+}
+
+void ConfigPage::emitCurrentVideoSettings() {
+    emit videoSettingsChanged(video_settings_);
+}
+
+void ConfigPage::onQualityChanged(int index) {
+    if (index < 0)
+        return;
+    video_settings_.quality = static_cast<recorder_core::NvencQualityPreset>(quality_combo_->itemData(index).toInt());
+    emitCurrentVideoSettings();
+}
+
+void ConfigPage::onCfrChanged() {
+    video_settings_.cfr = cfr_check_->isChecked();
+    emitCurrentVideoSettings();
+}
+
+void ConfigPage::onCursorChanged() {
+    video_settings_.capture_cursor = cursor_check_->isChecked();
+    emitCurrentVideoSettings();
 }
 
 void ConfigPage::reconcileContainerCodecRules() {
@@ -366,20 +402,17 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
 
 void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
     video_settings_ = settings;
-    const QString quality_name = [&]() {
-        switch (settings.quality) {
-        case recorder_core::NvencQualityPreset::High:
-            return QStringLiteral("High");
-        case recorder_core::NvencQualityPreset::Small:
-            return QStringLiteral("Small");
-        default:
-            return QStringLiteral("Balanced");
-        }
-    }();
-    video_summary_label_->setText(QStringLiteral("Quality: ") + quality_name + QStringLiteral("  ·  CFR: ") +
-                                  (settings.cfr ? QStringLiteral("On") : QStringLiteral("Off")) +
-                                  QStringLiteral("  ·  Cursor: ") +
-                                  (settings.capture_cursor ? QStringLiteral("On") : QStringLiteral("Off")));
+
+    const QSignalBlocker qb(quality_combo_);
+    const int qidx = quality_combo_->findData(static_cast<int>(settings.quality));
+    if (qidx >= 0)
+        quality_combo_->setCurrentIndex(qidx);
+
+    const QSignalBlocker cb(cfr_check_);
+    cfr_check_->setChecked(settings.cfr);
+
+    const QSignalBlocker crb(cursor_check_);
+    cursor_check_->setChecked(settings.capture_cursor);
 }
 
 void ConfigPage::setOutputFolder(const std::filesystem::path& folder) {

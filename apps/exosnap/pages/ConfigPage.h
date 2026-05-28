@@ -9,6 +9,7 @@
 #include <vector>
 
 class QButtonGroup;
+class QCheckBox;
 class QComboBox;
 class QLabel;
 class QPushButton;
@@ -41,13 +42,18 @@ class ConfigPage : public QWidget {
   signals:
     void formatSettingsChanged(const OutputSettingsModel& settings);
     void activeProfileChanged(const QString& profile_id);
+    void videoSettingsChanged(const VideoSettingsModel& settings);
 
   private:
     void onContainerChanged(int id);
     void onVideoCodecChanged(int index);
     void onAudioCodecChanged(int index);
     void onProfileSelectionChanged(int index);
+    void onQualityChanged(int index);
+    void onCfrChanged();
+    void onCursorChanged();
     void emitCurrentFormatSettings();
+    void emitCurrentVideoSettings();
     void reconcileContainerCodecRules();
     void updateVideoCodecChoices();
     void updateAudioCodecChoices();
@@ -67,7 +73,10 @@ class ConfigPage : public QWidget {
     QComboBox* profile_combo_ = nullptr;
     QLabel* format_display_label_ = nullptr;
 
-    QLabel* video_summary_label_ = nullptr;
+    QComboBox* quality_combo_ = nullptr;
+    QCheckBox* cfr_check_ = nullptr;
+    QCheckBox* cursor_check_ = nullptr;
+
     QLabel* audio_summary_label_ = nullptr;
     QLabel* output_folder_label_ = nullptr;
 };
