@@ -3,6 +3,7 @@
 #include "diagnostics/AppLog.h"
 #include "pages/AdvancedPage.h"
 #include "pages/AudioPage.h"
+#include "pages/ConfigPage.h"
 #include "pages/DiagnosticsPage.h"
 #include "pages/HotkeysPage.h"
 #include "pages/LogsPage.h"
@@ -155,6 +156,7 @@ enum class SidebarIcon {
     Diagnostics = 6,
     Logs = 7,
     Advanced = 8,
+    Setup = 9,
 };
 
 enum class ResizeZone {
@@ -178,7 +180,7 @@ struct PageDescriptor {
     SidebarIcon icon;
 };
 
-constexpr std::array<PageDescriptor, 9> kPageDescriptors = {{
+constexpr std::array<PageDescriptor, 10> kPageDescriptors = {{
     {"Record", "01 · RECORD", "Operational view — target, readiness, and live runtime.", "",
      "DISPLAY1 · 2560×1440 · 60 fps · AV1", SidebarIcon::Record},
     {"Video", "02 · VIDEO", "Read-only MVP profile.", "LOCKED · MVP", "CFR 60 · NVENC AV1 · LOCKED",
@@ -197,6 +199,8 @@ constexpr std::array<PageDescriptor, 9> kPageDescriptors = {{
      "Structured recorder telemetry", SidebarIcon::Logs},
     {"Advanced", "09 · ADVANCED", "Lower-level behavior and non-default controls.", "EXPERT SETTINGS",
      "Explicitly non-default", SidebarIcon::Advanced},
+    {"Setup", "10 · SETUP", "Unified recording configuration — format, sources, and output.", "",
+     "Profile · Sources · Output", SidebarIcon::Setup},
 }};
 
 constexpr int kNavIndexRole = Qt::UserRole + 1;
@@ -532,6 +536,21 @@ void drawIcon(QPainter& painter, SidebarIcon icon, const QRectF& rect, const QCo
         painter.drawLine(QPointF(x + 3.0, y + h - 3.0), QPointF(x + 4.5, y + h - 4.5));
         break;
     }
+    case SidebarIcon::Setup: {
+        const qreal gx = cx - 5.5;
+        const qreal gy = cy - 5.5;
+        const qreal gs = 11.0;
+        painter.drawEllipse(QRectF(gx + 2.0, gy + 2.0, gs - 4.0, gs - 4.0));
+        painter.drawLine(QPointF(cx, y + 1.5), QPointF(cx, gy + 2.5));
+        painter.drawLine(QPointF(cx, gy + gs - 2.5), QPointF(cx, y + h - 1.5));
+        painter.drawLine(QPointF(x + 1.5, cy), QPointF(gx + 2.5, cy));
+        painter.drawLine(QPointF(gx + gs - 2.5, cy), QPointF(x + w - 1.5, cy));
+        painter.drawLine(QPointF(x + 2.5, y + 2.5), QPointF(gx + 4.0, gy + 4.0));
+        painter.drawLine(QPointF(gx + gs - 4.0, gy + gs - 4.0), QPointF(x + w - 2.5, y + h - 2.5));
+        painter.drawLine(QPointF(x + w - 2.5, y + 2.5), QPointF(gx + gs - 4.0, gy + 4.0));
+        painter.drawLine(QPointF(gx + 4.0, gy + gs - 4.0), QPointF(x + 2.5, y + h - 2.5));
+        break;
+    }
     }
 
     painter.restore();
@@ -811,6 +830,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     stack_->addWidget(diagnostics_page_);
     stack_->addWidget(new LogsPage(stack_));
     stack_->addWidget(new AdvancedPage(stack_));
+    config_page_ = new ConfigPage(output_settings_, video_settings_, stack_);
+    stack_->addWidget(config_page_);
     record_page_->setOutputSettings(output_settings_);
     record_page_->setVideoSettings(video_settings_);
     record_page_->applyPersistedAudioSettings(persisted_settings_.audio_ui_state);
@@ -839,9 +860,33 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(global_recording_bar_, &ui::chrome::GlobalRecordingBar::pauseActionRequested, this,
             &MainWindow::onGlobalRecordingBarPauseActionRequested);
     connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { nav_->setCurrentRow(kOutputPageIndex); });
+    connect(config_page_, &ConfigPage::formatSettingsChanged, this, [this](const OutputSettingsModel& settings) {
+        output_settings_.container = settings.container;
+        output_settings_.video_codec = settings.video_codec;
+        output_settings_.audio_codec = settings.audio_codec;
+        record_page_->setOutputSettings(output_settings_);
+        output_page_->setOutputSettings(output_settings_);
+        profile_registry_.ApplyOutputToActive(output_settings_);
+        persisted_settings_.output = output_settings_;
+        persistProfileState();
+        refreshGlobalRecordingBarContext();
+        refreshOutputProfileUi();
+        refreshDiagnosticsData();
+    });
+    connect(config_page_, &ConfigPage::activeProfileChanged, this, [this](const QString& profile_id) {
+        if (syncing_profile_ui_) {
+            return;
+        }
+        profile_registry_.SetActiveProfile(profile_id.toStdString());
+        applyActiveProfileToPages();
+        refreshOutputProfileUi();
+        persistProfileState();
+    });
     connect(output_page_, &OutputPage::outputSettingsChanged, this, [this](const OutputSettingsModel& settings) {
         output_settings_ = settings;
         record_page_->setOutputSettings(settings);
+        if (config_page_)
+            config_page_->setOutputSettings(settings);
         profile_registry_.ApplyOutputToActive(settings);
         persisted_settings_.output = settings;
         persistProfileState();
@@ -990,6 +1035,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(video_page_, &VideoPage::videoSettingsChanged, this, [this](const VideoSettingsModel& settings) {
         video_settings_ = settings;
         record_page_->setVideoSettings(settings);
+        if (config_page_)
+            config_page_->setVideoSettings(settings);
         profile_registry_.ApplyVideoToActive(settings);
         persisted_settings_.video = settings;
         persistProfileState();
@@ -1459,6 +1506,12 @@ void MainWindow::applyActiveProfileToPages() {
     if (video_page_) {
         video_page_->setVideoSettings(video_settings_);
     }
+    if (config_page_) {
+        config_page_->setOutputSettings(output_settings_);
+        config_page_->setVideoSettings(video_settings_);
+        config_page_->setActiveProfileName(QString::fromStdString(active_profile.name));
+        config_page_->setOutputFolder(output_settings_.output_folder);
+    }
     if (stack_ && stack_->currentIndex() == kOutputPageIndex) {
         updatePageHeader(kOutputPageIndex);
     }
@@ -1523,6 +1576,24 @@ void MainWindow::refreshOutputProfileUi() {
     output_page_->setProfileOptions(options, QString::fromStdString(profile_registry_.ActiveState().active_profile_id),
                                     profile_registry_.IsActiveBuiltInModified());
     output_page_->setActiveProfileName(QString::fromStdString(profile_registry_.ActiveProfile().name));
+    if (config_page_) {
+        std::vector<ConfigPage::ProfileOption> config_options;
+        config_options.reserve(options.size());
+        for (const auto& o : options) {
+            ConfigPage::ProfileOption co;
+            co.id = o.id;
+            co.label = o.label;
+            co.built_in = o.built_in;
+            co.modified = o.modified;
+            co.available = o.available;
+            co.availability_reason = o.availability_reason;
+            config_options.push_back(std::move(co));
+        }
+        config_page_->setProfileOptions(config_options,
+                                        QString::fromStdString(profile_registry_.ActiveState().active_profile_id),
+                                        profile_registry_.IsActiveBuiltInModified());
+        config_page_->setActiveProfileName(QString::fromStdString(profile_registry_.ActiveProfile().name));
+    }
     syncing_profile_ui_ = false;
     refreshGlobalRecordingBarContext();
 }

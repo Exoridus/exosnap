@@ -24,6 +24,7 @@ class OperationalTitleBar;
 class GlobalRecordingBar;
 } // namespace ui::chrome
 
+class ConfigPage;
 class DiagnosticsPage;
 class HotkeysPage;
 class OutputPage;
@@ -78,6 +79,7 @@ class MainWindow : public QMainWindow {
     RecordPage* record_page_ = nullptr;
     OutputPage* output_page_ = nullptr;
     VideoPage* video_page_ = nullptr;
+    ConfigPage* config_page_ = nullptr;
     DiagnosticsPage* diagnostics_page_ = nullptr;
     WebcamPage* webcam_page_ = nullptr;
     HotkeysPage* hotkeys_page_ = nullptr;
