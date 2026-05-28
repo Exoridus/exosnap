@@ -60,4 +60,9 @@ void AppLog(const QString& message) {
     writeLineUnlocked(message);
 }
 
+QString LogFilePath() {
+    QMutexLocker lock(&g_log_mutex);
+    return g_log_path;
+}
+
 } // namespace exosnap::diagnostics
