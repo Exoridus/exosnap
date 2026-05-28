@@ -2,7 +2,6 @@
 
 #include "diagnostics/AppLog.h"
 #include "pages/AdvancedPage.h"
-#include "pages/AudioPage.h"
 #include "pages/ConfigPage.h"
 #include "pages/DiagnosticsPage.h"
 #include "pages/HotkeysPage.h"
@@ -180,27 +179,23 @@ struct PageDescriptor {
     SidebarIcon icon;
 };
 
-constexpr std::array<PageDescriptor, 10> kPageDescriptors = {{
+constexpr std::array<PageDescriptor, 8> kPageDescriptors = {{
     {"Record", "01 · RECORD", "Operational view — target, readiness, and live runtime.", "",
      "DISPLAY1 · 2560×1440 · 60 fps · AV1", SidebarIcon::Record},
     {"Setup", "02 · SETUP", "Unified recording configuration — format, sources, and output.", "",
      "Profile · Sources · Output", SidebarIcon::Setup},
-    {"Video", "03 · VIDEO", "Read-only MVP profile.", "LOCKED · MVP", "CFR 60 · NVENC AV1 · LOCKED",
-     SidebarIcon::Video},
-    {"Audio", "04 · AUDIO", "Read-only in MVP; configure on Record page.", "LOCKED · RECORD PAGE", "APP · MIC · SYS",
-     SidebarIcon::Audio},
-    {"Output", "05 · OUTPUT", "Container, destination, and recording output behavior.", "MKV · AV1 · OPUS",
-     "Destination + container", SidebarIcon::Output},
-    {"Webcam", "06 · WEBCAM", "Webcam device, overlay placement, and chroma key.", "OVERLAY",
-     "Camera composited into recording", SidebarIcon::Webcam},
-    {"Hotkeys", "07 · HOTKEYS", "Global command access for recording operations.", "GLOBAL SHORTCUTS",
+    {"Hotkeys", "03 · HOTKEYS", "Global command access for recording operations.", "GLOBAL SHORTCUTS",
      "Trigger and visibility rules", SidebarIcon::Hotkeys},
-    {"Diagnostics", "08 · DIAGNOSTICS", "Capability checks, blockers, and system readiness.", "BLOCKER-FIRST",
+    {"Diagnostics", "04 · DIAGNOSTICS", "Capability checks, blockers, and system readiness.", "BLOCKER-FIRST",
      "Probe matrix and drivers", SidebarIcon::Diagnostics},
-    {"Logs", "09 · LOGS", "Runtime events and recording diagnostics.", "SESSION EVENTS",
+    {"Logs", "05 · LOGS", "Runtime events and recording diagnostics.", "SESSION EVENTS",
      "Structured recorder telemetry", SidebarIcon::Logs},
-    {"Advanced", "10 · ADVANCED", "Lower-level behavior and non-default controls.", "EXPERT SETTINGS",
+    {"Advanced", "06 · ADVANCED", "Lower-level behavior and non-default controls.", "EXPERT SETTINGS",
      "Explicitly non-default", SidebarIcon::Advanced},
+    {"Output", "07 · PROFILES", "Recording profile management — create, edit, import, and export.", "PROFILES",
+     "Save, duplicate, rename, delete", SidebarIcon::Output},
+    {"Webcam", "08 · WEBCAM", "Webcam device, overlay placement, and chroma key.", "OVERLAY",
+     "Camera composited into recording", SidebarIcon::Webcam},
 }};
 
 constexpr int kNavIndexRole = Qt::UserRole + 1;
@@ -815,27 +810,27 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     stack_->setObjectName("mainStack");
     record_page_ = new RecordPage(stack_);
     config_page_ = new ConfigPage(output_settings_, video_settings_, stack_);
-    output_page_ = new OutputPage(output_settings_, stack_);
-    video_page_ = new VideoPage(video_settings_, stack_);
-    stack_->addWidget(record_page_);
-    stack_->addWidget(config_page_);
-    stack_->addWidget(video_page_);
-    stack_->addWidget(new AudioPage(stack_));
-    stack_->addWidget(output_page_);
-    webcam_page_ = new WebcamPage(stack_);
-    webcam_page_->applySettings(persisted_settings_.webcam);
-    stack_->addWidget(webcam_page_);
     hotkeys_page_ = new HotkeysPage(stack_);
     hotkeys_page_->setBindings(persisted_hotkeys_);
-    stack_->addWidget(hotkeys_page_);
     diagnostics_page_ = new DiagnosticsPage(stack_);
+    output_page_ = new OutputPage(output_settings_, stack_);
+    video_page_ = new VideoPage(video_settings_, stack_);
+    webcam_page_ = new WebcamPage(stack_);
+    webcam_page_->applySettings(persisted_settings_.webcam);
+    stack_->addWidget(record_page_);
+    stack_->addWidget(config_page_);
+    stack_->addWidget(hotkeys_page_);
     stack_->addWidget(diagnostics_page_);
     stack_->addWidget(new LogsPage(stack_));
     stack_->addWidget(new AdvancedPage(stack_));
+    stack_->addWidget(output_page_);
+    stack_->addWidget(webcam_page_);
     record_page_->setOutputSettings(output_settings_);
     record_page_->setVideoSettings(video_settings_);
     record_page_->applyPersistedAudioSettings(persisted_settings_.audio_ui_state);
     output_page_->setOutputSettings(output_settings_);
+    config_page_->setAudioUiState(persisted_settings_.audio_ui_state);
+    config_page_->setWebcamSettings(persisted_settings_.webcam);
     content_layout->addWidget(stack_, 1);
 
     body_layout->addWidget(content, 1);
@@ -864,6 +859,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         output_settings_.container = settings.container;
         output_settings_.video_codec = settings.video_codec;
         output_settings_.audio_codec = settings.audio_codec;
+        output_settings_.output_folder = settings.output_folder;
+        output_settings_.naming_pattern = settings.naming_pattern;
         record_page_->setOutputSettings(output_settings_);
         output_page_->setOutputSettings(output_settings_);
         profile_registry_.ApplyOutputToActive(output_settings_);
@@ -881,6 +878,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         applyActiveProfileToPages();
         refreshOutputProfileUi();
         persistProfileState();
+    });
+    connect(config_page_, &ConfigPage::audioSettingsChanged, this, [this](const capability::AudioUiState& state) {
+        if (record_page_)
+            record_page_->applyPersistedAudioSettings(state);
+        profile_registry_.ApplyAudioToActive(state);
+        persisted_settings_.audio_ui_state = state;
+        persistProfileState();
+        refreshDiagnosticsData();
     });
     connect(output_page_, &OutputPage::outputSettingsChanged, this, [this](const OutputSettingsModel& settings) {
         output_settings_ = settings;
@@ -1056,6 +1061,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         persisted_settings_.webcam = settings;
         settings_store_.Save(persisted_settings_);
         record_page_->setWebcamSettings(settings);
+        if (config_page_)
+            config_page_->setWebcamSettings(settings);
+    });
+    connect(config_page_, &ConfigPage::webcamSettingsChanged, this, [this](const WebcamSettings& settings) {
+        persisted_settings_.webcam = settings;
+        settings_store_.Save(persisted_settings_);
+        record_page_->setWebcamSettings(settings);
+        if (webcam_page_)
+            webcam_page_->applySettings(settings);
     });
     connect(this, &MainWindow::recordToggleRequested, record_page_, &RecordPage::onHotkeyToggle);
     connect(this, &MainWindow::pauseToggleRequested, record_page_, &RecordPage::onHotkeyPauseToggle);
@@ -1063,6 +1077,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(record_page_, &RecordPage::audioSettingsChanged, this, [this](const capability::AudioUiState& state) {
         profile_registry_.ApplyAudioToActive(state);
         persisted_settings_.audio_ui_state = state;
+        if (config_page_)
+            config_page_->setAudioUiState(state);
         persistProfileState();
         refreshDiagnosticsData();
     });
@@ -1180,6 +1196,9 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
     record_status_label_ = status_label.trimmed().toUpper();
     if (record_status_label_.isEmpty())
         record_status_label_ = QStringLiteral("READY");
+
+    if (config_page_)
+        config_page_->setReadinessStatus(record_status_label_);
 
     title_bar_->setRecordingActive(recording);
     title_bar_->setStatusLabel(record_status_label_);
@@ -1521,6 +1540,7 @@ void MainWindow::applyActiveProfileToPages() {
         config_page_->setVideoSettings(video_settings_);
         config_page_->setActiveProfileName(QString::fromStdString(active_profile.name));
         config_page_->setOutputFolder(output_settings_.output_folder);
+        config_page_->setAudioUiState(persisted_settings_.audio_ui_state);
     }
     if (stack_ && stack_->currentIndex() == kOutputPageIndex) {
         updatePageHeader(kOutputPageIndex);

@@ -3,14 +3,24 @@
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QFileDialog>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QToolTip>
 #include <QVBoxLayout>
+
+#include "../../../libs/recorder_core/include/recorder_core/audio_track_model.h"
+#include "../models/FilenameBuilder.h"
+#include "../models/OutputPathPolicy.h"
+#include "../services/WebcamService.h"
+
+#include <ctime>
 
 namespace exosnap {
 
@@ -95,6 +105,18 @@ capability::AudioCodec IntToAudioCodec(int value) {
     return capability::AudioCodec::AacMf;
 }
 
+FilenameTargetContext ExamplePreviewContext(const QString& profile_name, const OutputSettingsModel& settings) {
+    FilenameTargetContext context;
+    context.target_name = L"Desktop - Display 1";
+    context.app_name = L"Desktop";
+    context.window_title = L"Display 1";
+    context.process_name = L"desktop";
+    context.profile_name = profile_name.toStdWString();
+    context.video_codec = settings.video_codec;
+    context.audio_codec = settings.audio_codec;
+    return context;
+}
+
 } // namespace
 
 ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoSettingsModel& initial_video,
@@ -118,6 +140,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         QStringLiteral("Choose what to capture, which sources to include, and where the recording is saved."), content);
     header->setProperty("labelRole", "subtitle");
     layout->addWidget(header);
+
+    readiness_badge_label_ = new QLabel(content);
+    readiness_badge_label_->setProperty("labelRole", "muted");
+    readiness_badge_label_->setVisible(false);
+    layout->addWidget(readiness_badge_label_);
 
     // ---- FORMAT SECTION (interactive) ----
     layout->addWidget(makeSectionLabel(QStringLiteral("Format"), content));
@@ -208,36 +235,118 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     video_panel_layout->addWidget(cursor_check_);
     layout->addWidget(video_panel);
 
-    // ---- AUDIO SECTION (read-only) ----
-    layout->addWidget(makeSectionLabel(QStringLiteral("Audio"), content));
+    // ---- AUDIO SECTION (interactive) ----
+    layout->addWidget(makeSectionLabel(QStringLiteral("Audio Sources"), content));
     auto* audio_panel = makePanel(content);
     auto* audio_panel_layout = new QVBoxLayout(audio_panel);
     audio_panel_layout->setContentsMargins(14, 12, 14, 12);
-    audio_panel_layout->setSpacing(6);
+    audio_panel_layout->setSpacing(4);
+
+    auto makeSourceRow = [&](const QString& title, QCheckBox*& enabled_check, QCheckBox*& separate_check,
+                             QLabel*& source_label) {
+        auto* row = new QHBoxLayout();
+        row->setSpacing(8);
+
+        enabled_check = new QCheckBox(title, audio_panel);
+        separate_check = new QCheckBox(QStringLiteral("Separate track"), audio_panel);
+
+        row->addWidget(enabled_check);
+        row->addWidget(separate_check);
+        row->addStretch();
+        audio_panel_layout->addLayout(row);
+
+        source_label = new QLabel(audio_panel);
+        source_label->setProperty("labelRole", "muted");
+        source_label->setWordWrap(true);
+        source_label->setContentsMargins(20, 0, 0, 4);
+        audio_panel_layout->addWidget(source_label);
+    };
+
+    makeSourceRow(QStringLiteral("Application audio"), app_enabled_check_, app_separate_check_, app_source_label_);
+    makeSourceRow(QStringLiteral("Microphone"), mic_enabled_check_, mic_separate_check_, mic_source_label_);
+    makeSourceRow(QStringLiteral("System audio"), sys_enabled_check_, sys_separate_check_, sys_source_label_);
+
     audio_summary_label_ = new QLabel(audio_panel);
     audio_summary_label_->setProperty("labelRole", "muted");
     audio_summary_label_->setWordWrap(true);
+    audio_summary_label_->setVisible(false);
     audio_panel_layout->addWidget(audio_summary_label_);
-    auto* audio_note = makeSubLabel(
-        QStringLiteral("Audio sources and routing are configured on the Record page before recording."), audio_panel);
-    audio_note->setProperty("labelRole", "muted");
-    audio_panel_layout->addWidget(audio_note);
     layout->addWidget(audio_panel);
 
-    // ---- OUTPUT SECTION (read-only) ----
+    // ---- WEBCAM SECTION (interactive) ----
+    layout->addWidget(makeSectionLabel(QStringLiteral("Webcam"), content));
+    auto* webcam_panel = makePanel(content);
+    auto* webcam_panel_layout = new QVBoxLayout(webcam_panel);
+    webcam_panel_layout->setContentsMargins(14, 12, 14, 12);
+    webcam_panel_layout->setSpacing(4);
+
+    webcam_enabled_check_ = new QCheckBox(QStringLiteral("Record webcam"), webcam_panel);
+    webcam_panel_layout->addWidget(webcam_enabled_check_);
+
+    auto* cam_row = new QHBoxLayout();
+    cam_row->setSpacing(8);
+    cam_row->setContentsMargins(20, 0, 0, 0);
+    auto* cam_lbl = new QLabel(QStringLiteral("Camera:"), webcam_panel);
+    webcam_device_combo_ = new QComboBox(webcam_panel);
+    webcam_device_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    webcam_device_combo_->setMinimumWidth(200);
+    cam_row->addWidget(cam_lbl);
+    cam_row->addWidget(webcam_device_combo_, 1);
+    webcam_panel_layout->addLayout(cam_row);
+
+    webcam_info_label_ = new QLabel(webcam_panel);
+    webcam_info_label_->setProperty("labelRole", "muted");
+    webcam_info_label_->setWordWrap(true);
+    webcam_info_label_->setContentsMargins(20, 0, 0, 4);
+    webcam_panel_layout->addWidget(webcam_info_label_);
+    layout->addWidget(webcam_panel);
+
+    // ---- OUTPUT SECTION (interactive) ----
     layout->addWidget(makeSectionLabel(QStringLiteral("Output"), content));
     auto* out_panel = makePanel(content);
     auto* out_panel_layout = new QVBoxLayout(out_panel);
     out_panel_layout->setContentsMargins(14, 12, 14, 12);
     out_panel_layout->setSpacing(6);
-    output_folder_label_ = new QLabel(out_panel);
-    output_folder_label_->setProperty("labelRole", "muted");
-    output_folder_label_->setWordWrap(true);
-    out_panel_layout->addWidget(output_folder_label_);
-    auto* out_note = makeSubLabel(
-        QStringLiteral("Output folder and filename pattern are configured on the Output page."), out_panel);
-    out_note->setProperty("labelRole", "muted");
-    out_panel_layout->addWidget(out_note);
+
+    auto* out_sub = makeSubLabel(QStringLiteral("Define output path and file naming behavior."), out_panel);
+    out_panel_layout->addWidget(out_sub);
+
+    auto* dest_row = new QHBoxLayout();
+    dest_row->setSpacing(8);
+    destination_edit_ = new QLineEdit(out_panel);
+    destination_edit_->setPlaceholderText(QString::fromStdWString(format_settings_.output_folder.wstring()));
+    browse_btn_ = new QPushButton(QStringLiteral("Browse..."), out_panel);
+    browse_btn_->setProperty("role", "ghost");
+    dest_row->addWidget(destination_edit_, 1);
+    dest_row->addWidget(browse_btn_);
+    out_panel_layout->addLayout(dest_row);
+
+    folder_validation_label_ = makeSubLabel(QString(), out_panel);
+    folder_validation_label_->setProperty("labelRole", "muted");
+    folder_validation_label_->setVisible(false);
+    out_panel_layout->addWidget(folder_validation_label_);
+
+    auto* naming_lbl = makeSectionLabel(QStringLiteral("Filename pattern"), out_panel);
+    out_panel_layout->addWidget(naming_lbl);
+    naming_edit_ = new QLineEdit(out_panel);
+    naming_edit_->setPlaceholderText(QStringLiteral("{datetime}_{app}_{title}"));
+    out_panel_layout->addWidget(naming_edit_);
+
+    pattern_validation_label_ = makeSubLabel(QString(), out_panel);
+    pattern_validation_label_->setProperty("labelRole", "muted");
+    pattern_validation_label_->setVisible(false);
+    out_panel_layout->addWidget(pattern_validation_label_);
+
+    auto* tokens_help = makeSubLabel(
+        QStringLiteral("Tokens: {datetime}, {date}, {time}, {timestamp}, {YYYY}, {YY}, {MM}, {DD}, {hh}, {mm}, {ss}, "
+                       "{app}, {title}, {process}, {target}, {profile}, {container}, {video}, {audio}"),
+        out_panel);
+    tokens_help->setProperty("labelRole", "muted");
+    out_panel_layout->addWidget(tokens_help);
+
+    example_filename_label_ = makeSubLabel(QString(), out_panel);
+    example_filename_label_->setProperty("labelRole", "muted");
+    out_panel_layout->addWidget(example_filename_label_);
     layout->addWidget(out_panel);
 
     layout->addStretch();
@@ -254,13 +363,50 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(quality_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ConfigPage::onQualityChanged);
     connect(cfr_check_, &QCheckBox::toggled, this, &ConfigPage::onCfrChanged);
     connect(cursor_check_, &QCheckBox::toggled, this, &ConfigPage::onCursorChanged);
+    connect(browse_btn_, &QPushButton::clicked, this, &ConfigPage::onBrowse);
+    connect(destination_edit_, &QLineEdit::editingFinished, this, &ConfigPage::onDestinationEditingFinished);
+    connect(naming_edit_, &QLineEdit::editingFinished, this, &ConfigPage::onPatternEditingFinished);
+    connect(app_enabled_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioAppToggled);
+    connect(mic_enabled_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioMicToggled);
+    connect(sys_enabled_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioSysToggled);
+    connect(app_separate_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioAppSeparateToggled);
+    connect(mic_separate_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioMicSeparateToggled);
+    connect(sys_separate_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioSysSeparateToggled);
+    connect(webcam_enabled_check_, &QCheckBox::toggled, this, &ConfigPage::onWebcamEnabledToggled);
+    connect(webcam_device_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConfigPage::onWebcamDeviceChanged);
 
+    {
+        const QSignalBlocker dd(destination_edit_);
+        destination_edit_->setText(QString::fromStdWString(format_settings_.output_folder.wstring()));
+    }
+    {
+        const QSignalBlocker np(naming_edit_);
+        naming_edit_->setText(QString::fromStdWString(format_settings_.naming_pattern));
+    }
+    updateAudioSourceAvailability();
     updateFormatDisplay();
+    updateExampleFilename();
+    refreshWebcamDevices();
 }
 
 void ConfigPage::emitCurrentFormatSettings() {
+    if (destination_edit_) {
+        const auto folder_normalized = NormalizeOutputFolderInput(destination_edit_->text().toStdWString());
+        if (folder_normalized.result == OutputFolderPolicyResult::Ok) {
+            format_settings_.output_folder = folder_normalized.resolved_path;
+        }
+    }
+    if (naming_edit_) {
+        const auto pattern_normalized = NormalizeFilenamePatternInput(naming_edit_->text().toStdWString());
+        if (pattern_normalized.result == FilenamePatternPolicyResult::Ok) {
+            format_settings_.naming_pattern = pattern_normalized.normalized_pattern;
+        }
+    }
     reconcileContainerCodecRules();
     updateFormatDisplay();
+    updateOutputValidationState();
+    updateExampleFilename();
     emit formatSettingsChanged(format_settings_);
 }
 
@@ -398,6 +544,17 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
     updateVideoCodecChoices();
     updateAudioCodecChoices();
     updateFormatDisplay();
+
+    if (destination_edit_) {
+        const QSignalBlocker db(destination_edit_);
+        destination_edit_->setText(QString::fromStdWString(settings.output_folder.wstring()));
+    }
+    if (naming_edit_) {
+        const QSignalBlocker nb(naming_edit_);
+        naming_edit_->setText(QString::fromStdWString(settings.naming_pattern));
+    }
+    updateOutputValidationState();
+    updateExampleFilename();
 }
 
 void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
@@ -416,7 +573,13 @@ void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
 }
 
 void ConfigPage::setOutputFolder(const std::filesystem::path& folder) {
-    output_folder_label_->setText(QString::fromStdWString(folder.wstring()));
+    format_settings_.output_folder = folder;
+    if (destination_edit_) {
+        const QSignalBlocker blocker(destination_edit_);
+        destination_edit_->setText(QString::fromStdWString(folder.wstring()));
+    }
+    updateOutputValidationState();
+    updateExampleFilename();
 }
 
 void ConfigPage::setProfileOptions(const std::vector<ProfileOption>& options, const QString& active_profile_id,
@@ -444,6 +607,299 @@ void ConfigPage::setProfileOptions(const std::vector<ProfileOption>& options, co
 
 void ConfigPage::setActiveProfileName(const QString& profile_name) {
     active_profile_name_ = profile_name;
+    updateExampleFilename();
+}
+
+void ConfigPage::onBrowse() {
+    const QString dir =
+        QFileDialog::getExistingDirectory(this, QStringLiteral("Select Output Directory"), destination_edit_->text());
+    if (!dir.isEmpty()) {
+        destination_edit_->setText(dir);
+        onDestinationEditingFinished();
+    }
+}
+
+void ConfigPage::onDestinationEditingFinished() {
+    const auto normalized = NormalizeOutputFolderInput(destination_edit_->text().toStdWString());
+    if (normalized.result == OutputFolderPolicyResult::Ok) {
+        destination_edit_->setText(QString::fromStdWString(normalized.normalized_input));
+        format_settings_.output_folder = normalized.resolved_path;
+    }
+    emitCurrentFormatSettings();
+}
+
+void ConfigPage::onPatternEditingFinished() {
+    const auto normalized = NormalizeFilenamePatternInput(naming_edit_->text().toStdWString());
+    if (normalized.result == FilenamePatternPolicyResult::Ok) {
+        naming_edit_->setText(QString::fromStdWString(normalized.normalized_pattern));
+        format_settings_.naming_pattern = normalized.normalized_pattern;
+    }
+    emitCurrentFormatSettings();
+}
+
+void ConfigPage::updateOutputValidationState() {
+    if (!destination_edit_ || !naming_edit_)
+        return;
+
+    if (folder_validation_label_) {
+        const auto folder_normalized = NormalizeOutputFolderInput(destination_edit_->text().toStdWString());
+        if (folder_normalized.result == OutputFolderPolicyResult::Ok) {
+            folder_validation_label_->clear();
+            folder_validation_label_->setVisible(false);
+        } else {
+            folder_validation_label_->setText(
+                QString::fromStdWString(OutputFolderPolicyMessage(folder_normalized.result)));
+            folder_validation_label_->setVisible(true);
+        }
+    }
+
+    if (pattern_validation_label_) {
+        const auto pattern_normalized = NormalizeFilenamePatternInput(naming_edit_->text().toStdWString());
+        if (pattern_normalized.result == FilenamePatternPolicyResult::Ok) {
+            pattern_validation_label_->clear();
+            pattern_validation_label_->setVisible(false);
+        } else {
+            pattern_validation_label_->setText(
+                QString::fromStdWString(FilenamePatternPolicyMessage(pattern_normalized.result)));
+            pattern_validation_label_->setVisible(true);
+        }
+    }
+}
+
+void ConfigPage::updateExampleFilename() {
+    if (!example_filename_label_)
+        return;
+
+    const auto output_path =
+        BuildOutputPath(format_settings_.output_folder, format_settings_.naming_pattern, format_settings_.container,
+                        std::time(nullptr), ExamplePreviewContext(active_profile_name_, format_settings_));
+    example_filename_label_->setText(QStringLiteral("Example: ") +
+                                     QString::fromStdWString(output_path.filename().wstring()));
+}
+
+void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
+    audio_ui_state_ = state;
+
+    const auto findRow = [&](recorder_core::AudioSourceKind kind) -> const recorder_core::AudioSourceRow* {
+        for (const auto& row : state.source_rows) {
+            if (row.kind == kind)
+                return &row;
+        }
+        if (kind == recorder_core::AudioSourceKind::Sys) {
+            for (const auto& row : state.source_rows) {
+                if (row.kind == recorder_core::AudioSourceKind::SystemOutput)
+                    return &row;
+            }
+        }
+        return nullptr;
+    };
+
+    const auto* app_row = findRow(recorder_core::AudioSourceKind::App);
+    const auto* mic_row = findRow(recorder_core::AudioSourceKind::Mic);
+    const auto* sys_row = findRow(recorder_core::AudioSourceKind::Sys);
+
+    const QSignalBlocker ab(app_enabled_check_);
+    const QSignalBlocker as(app_separate_check_);
+    const QSignalBlocker mb(mic_enabled_check_);
+    const QSignalBlocker ms(mic_separate_check_);
+    const QSignalBlocker sb(sys_enabled_check_);
+    const QSignalBlocker ss(sys_separate_check_);
+
+    app_enabled_check_->setEnabled(app_row != nullptr);
+    app_separate_check_->setEnabled(app_row != nullptr);
+    app_enabled_check_->setChecked(app_row ? app_row->enabled : false);
+    app_separate_check_->setChecked(app_row ? !app_row->merge_with_above : false);
+
+    mic_enabled_check_->setEnabled(mic_row != nullptr);
+    mic_separate_check_->setEnabled(mic_row != nullptr);
+    mic_enabled_check_->setChecked(mic_row ? mic_row->enabled : false);
+    mic_separate_check_->setChecked(mic_row ? !mic_row->merge_with_above : false);
+
+    sys_enabled_check_->setEnabled(sys_row != nullptr);
+    sys_separate_check_->setEnabled(sys_row != nullptr);
+    sys_enabled_check_->setChecked(sys_row ? sys_row->enabled : false);
+    sys_separate_check_->setChecked(sys_row ? !sys_row->merge_with_above : false);
+
+    updateAudioSourceAvailability();
+}
+
+void ConfigPage::updateAudioSourceAvailability() {
+    const bool no_rows = audio_ui_state_.source_rows.empty();
+    if (app_source_label_) {
+        const bool available = app_enabled_check_ && app_enabled_check_->isEnabled();
+        app_source_label_->setText(available ? QStringLiteral("Per-target, configured on Record page")
+                                             : QStringLiteral("Not available for current capture target"));
+    }
+    if (mic_source_label_) {
+        const bool available = mic_enabled_check_ && mic_enabled_check_->isEnabled();
+        mic_source_label_->setText(available ? QStringLiteral("Follows Windows default device")
+                                             : QStringLiteral("Not available"));
+    }
+    if (sys_source_label_) {
+        const bool available = sys_enabled_check_ && sys_enabled_check_->isEnabled();
+        sys_source_label_->setText(available ? QStringLiteral("All system audio except selected app")
+                                             : QStringLiteral("Not available for current capture target"));
+    }
+    if (audio_summary_label_) {
+        audio_summary_label_->setVisible(no_rows);
+        if (no_rows)
+            audio_summary_label_->setText(
+                QStringLiteral("Audio sources are configured on the Record page. Open Record to set up sources."));
+    }
+}
+
+void ConfigPage::emitCurrentAudioSettings() {
+    emit audioSettingsChanged(audio_ui_state_);
+}
+
+void ConfigPage::onAudioAppToggled() {
+    for (auto& row : audio_ui_state_.source_rows) {
+        if (row.kind == recorder_core::AudioSourceKind::App)
+            row.enabled = app_enabled_check_->isChecked();
+    }
+    emitCurrentAudioSettings();
+}
+
+void ConfigPage::onAudioMicToggled() {
+    for (auto& row : audio_ui_state_.source_rows) {
+        if (row.kind == recorder_core::AudioSourceKind::Mic)
+            row.enabled = mic_enabled_check_->isChecked();
+    }
+    emitCurrentAudioSettings();
+}
+
+void ConfigPage::onAudioSysToggled() {
+    for (auto& row : audio_ui_state_.source_rows) {
+        if (row.kind == recorder_core::AudioSourceKind::Sys || row.kind == recorder_core::AudioSourceKind::SystemOutput)
+            row.enabled = sys_enabled_check_->isChecked();
+    }
+    emitCurrentAudioSettings();
+}
+
+void ConfigPage::onAudioAppSeparateToggled() {
+    for (auto& row : audio_ui_state_.source_rows) {
+        if (row.kind == recorder_core::AudioSourceKind::App)
+            row.merge_with_above = !app_separate_check_->isChecked();
+    }
+    emitCurrentAudioSettings();
+}
+
+void ConfigPage::onAudioMicSeparateToggled() {
+    for (auto& row : audio_ui_state_.source_rows) {
+        if (row.kind == recorder_core::AudioSourceKind::Mic)
+            row.merge_with_above = !mic_separate_check_->isChecked();
+    }
+    emitCurrentAudioSettings();
+}
+
+void ConfigPage::onAudioSysSeparateToggled() {
+    for (auto& row : audio_ui_state_.source_rows) {
+        if (row.kind == recorder_core::AudioSourceKind::Sys || row.kind == recorder_core::AudioSourceKind::SystemOutput)
+            row.merge_with_above = !sys_separate_check_->isChecked();
+    }
+    emitCurrentAudioSettings();
+}
+
+void ConfigPage::setWebcamSettings(const WebcamSettings& settings) {
+    webcam_settings_ = settings;
+
+    const QSignalBlocker wb(webcam_enabled_check_);
+    webcam_enabled_check_->setChecked(settings.enabled);
+
+    if (webcam_device_combo_) {
+        const QSignalBlocker dc(webcam_device_combo_);
+        const QString device_id = QString::fromStdString(settings.device_id);
+        const int didx = webcam_device_combo_->findData(device_id);
+        if (didx >= 0)
+            webcam_device_combo_->setCurrentIndex(didx);
+        else if (webcam_device_combo_->count() > 0)
+            webcam_device_combo_->setCurrentIndex(0);
+    }
+
+    if (webcam_info_label_) {
+        QString info;
+        if (!settings.enabled) {
+            info = QStringLiteral("Webcam recording is disabled");
+        } else if (settings.device_id.empty()) {
+            info = QStringLiteral("No webcam device selected. Configure on Webcam Details page.");
+        } else {
+            const QString dev_name = settings.device_id.find("Default") != std::string::npos
+                                         ? QStringLiteral("Default webcam")
+                                         : QString::fromStdString(settings.device_id);
+            info =
+                QStringLiteral("Device: %1 · %2×%3 @ %4 fps · Configure overlay and chroma key on Webcam Details page.")
+                    .arg(dev_name)
+                    .arg(settings.width)
+                    .arg(settings.height)
+                    .arg(settings.fps);
+        }
+        webcam_info_label_->setText(info);
+    }
+}
+
+void ConfigPage::onWebcamEnabledToggled() {
+    webcam_settings_.enabled = webcam_enabled_check_->isChecked();
+    emit webcamSettingsChanged(webcam_settings_);
+}
+
+void ConfigPage::emitCurrentWebcamSettings() {
+    emit webcamSettingsChanged(webcam_settings_);
+}
+
+void ConfigPage::refreshWebcamDevices() {
+    if (!webcam_device_combo_)
+        return;
+
+    const QSignalBlocker dc(webcam_device_combo_);
+    const QString previous_id = webcam_device_combo_->currentData().toString();
+    webcam_device_combo_->clear();
+
+    const auto devices = WebcamService::EnumerateDevices();
+    for (const auto& device : devices) {
+        webcam_device_combo_->addItem(QString::fromStdString(device.name), QString::fromStdString(device.id));
+    }
+
+    if (devices.empty()) {
+        webcam_device_combo_->addItem(QStringLiteral("No camera found"), QString());
+        webcam_device_combo_->setEnabled(false);
+    } else {
+        webcam_device_combo_->setEnabled(true);
+        const int idx = webcam_device_combo_->findData(previous_id);
+        webcam_device_combo_->setCurrentIndex(idx >= 0 ? idx : 0);
+        if (!webcam_settings_.device_id.empty()) {
+            const int sidx = webcam_device_combo_->findData(QString::fromStdString(webcam_settings_.device_id));
+            if (sidx >= 0)
+                webcam_device_combo_->setCurrentIndex(sidx);
+        }
+    }
+}
+
+void ConfigPage::onWebcamDeviceChanged(int index) {
+    if (index < 0)
+        return;
+    const QString device_id = webcam_device_combo_->itemData(index).toString();
+    if (device_id.isEmpty())
+        return;
+    webcam_settings_.device_id = device_id.toStdString();
+    emit webcamSettingsChanged(webcam_settings_);
+}
+
+void ConfigPage::setReadinessStatus(const QString& status_label) {
+    if (!readiness_badge_label_)
+        return;
+
+    const QString upper = status_label.trimmed().toUpper();
+    if (upper.isEmpty() || upper == QStringLiteral("READY") || upper == QStringLiteral("CHECKING")) {
+        readiness_badge_label_->setVisible(false);
+        return;
+    }
+
+    const bool blocked = upper == QStringLiteral("BLOCKED") || upper == QStringLiteral("ERROR");
+    readiness_badge_label_->setText(blocked
+                                        ? QStringLiteral("STATUS: %1 — Open Diagnostics to review blockers.").arg(upper)
+                                        : QStringLiteral("STATUS: %1").arg(upper));
+    readiness_badge_label_->setProperty("labelRole", blocked ? "mutedWarning" : "muted");
+    readiness_badge_label_->setVisible(true);
 }
 
 } // namespace exosnap
