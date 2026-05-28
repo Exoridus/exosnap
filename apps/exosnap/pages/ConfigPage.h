@@ -2,6 +2,7 @@
 #include <QWidget>
 
 #include "../../../libs/capability/include/capability/audio_ui_state.h"
+#include "../../../libs/recorder_core/include/recorder_core/audio_input_device.h"
 #include "../models/OutputSettingsModel.h"
 #include "../models/VideoSettingsModel.h"
 #include "../models/WebcamSettings.h"
@@ -80,6 +81,8 @@ class ConfigPage : public QWidget {
     void onAudioAppSeparateToggled();
     void onAudioMicSeparateToggled();
     void onAudioSysSeparateToggled();
+    void onMicDeviceChanged(int index);
+    void refreshMicDevices();
     void emitCurrentAudioSettings();
     void updateAudioSourceAvailability();
 
@@ -117,7 +120,10 @@ class ConfigPage : public QWidget {
 
     QCheckBox* mic_enabled_check_ = nullptr;
     QCheckBox* mic_separate_check_ = nullptr;
+    QComboBox* mic_device_combo_ = nullptr;
     QLabel* mic_source_label_ = nullptr;
+
+    std::vector<recorder_core::AudioInputDeviceInfo> mic_devices_;
 
     QCheckBox* sys_enabled_check_ = nullptr;
     QCheckBox* sys_separate_check_ = nullptr;

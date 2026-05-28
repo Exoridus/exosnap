@@ -284,6 +284,15 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     makeSourceRow(QStringLiteral("Application audio"), app_enabled_check_, app_separate_check_, app_source_label_);
     makeSourceRow(QStringLiteral("Microphone"), mic_enabled_check_, mic_separate_check_, mic_source_label_);
+
+    auto* mic_device_row = new QHBoxLayout();
+    mic_device_row->setContentsMargins(20, 0, 0, 4);
+    mic_device_combo_ = new QComboBox(audio_panel);
+    mic_device_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    mic_device_combo_->setMinimumWidth(200);
+    mic_device_row->addWidget(mic_device_combo_, 1);
+    audio_panel_layout->addLayout(mic_device_row);
+
     makeSourceRow(QStringLiteral("System audio"), sys_enabled_check_, sys_separate_check_, sys_source_label_);
 
     audio_summary_label_ = new QLabel(audio_panel);
@@ -392,6 +401,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(app_separate_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioAppSeparateToggled);
     connect(mic_separate_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioMicSeparateToggled);
     connect(sys_separate_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioSysSeparateToggled);
+    connect(mic_device_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConfigPage::onMicDeviceChanged);
     connect(webcam_enabled_check_, &QCheckBox::toggled, this, &ConfigPage::onWebcamEnabledToggled);
     connect(webcam_device_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onWebcamDeviceChanged);
@@ -408,6 +419,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         const QSignalBlocker np(naming_edit_);
         naming_edit_->setText(QString::fromStdWString(format_settings_.naming_pattern));
     }
+    refreshMicDevices();
     updateAudioSourceAvailability();
     updateFormatDisplay();
     updateExampleFilename();
@@ -744,6 +756,23 @@ void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
     sys_enabled_check_->setChecked(sys_row ? sys_row->enabled : false);
     sys_separate_check_->setChecked(sys_row ? !sys_row->merge_with_above : false);
 
+    if (mic_device_combo_) {
+        const QSignalBlocker mc(mic_device_combo_);
+        const auto& device_id = state.selected_mic_device_id;
+        if (!device_id.has_value()) {
+            mic_device_combo_->setCurrentIndex(0);
+        } else {
+            int idx = 0;
+            for (int i = 1; i < static_cast<int>(mic_devices_.size()); ++i) {
+                if (mic_devices_[static_cast<std::size_t>(i)].device_id == *device_id) {
+                    idx = i;
+                    break;
+                }
+            }
+            mic_device_combo_->setCurrentIndex(idx);
+        }
+    }
+
     updateAudioSourceAvailability();
 }
 
@@ -756,8 +785,13 @@ void ConfigPage::updateAudioSourceAvailability() {
     }
     if (mic_source_label_) {
         const bool available = mic_enabled_check_ && mic_enabled_check_->isEnabled();
-        mic_source_label_->setText(available ? QStringLiteral("Follows Windows default device")
+        mic_source_label_->setText(available ? QStringLiteral("Select device on Record page")
                                              : QStringLiteral("Not available"));
+    }
+    if (mic_device_combo_) {
+        const bool available = mic_enabled_check_ && mic_enabled_check_->isEnabled();
+        mic_device_combo_->setVisible(available);
+        mic_device_combo_->setEnabled(available);
     }
     if (sys_source_label_) {
         const bool available = sys_enabled_check_ && sys_enabled_check_->isEnabled();
@@ -820,6 +854,40 @@ void ConfigPage::onAudioSysSeparateToggled() {
     for (auto& row : audio_ui_state_.source_rows) {
         if (row.kind == recorder_core::AudioSourceKind::Sys || row.kind == recorder_core::AudioSourceKind::SystemOutput)
             row.merge_with_above = !sys_separate_check_->isChecked();
+    }
+    emitCurrentAudioSettings();
+}
+
+void ConfigPage::refreshMicDevices() {
+    if (!mic_device_combo_)
+        return;
+
+    const QSignalBlocker mc(mic_device_combo_);
+    mic_device_combo_->clear();
+    mic_devices_.clear();
+
+    mic_device_combo_->addItem(QStringLiteral("System Default Microphone"));
+    mic_devices_.push_back({});
+
+    const auto devices = recorder_core::EnumerateAudioInputDevices();
+    for (const auto& dev : devices) {
+        QString label = QString::fromStdString(dev.display_name);
+        if (dev.is_default)
+            label += QStringLiteral(" (Default)");
+        mic_device_combo_->addItem(label);
+        mic_devices_.push_back(dev);
+    }
+
+    mic_device_combo_->setCurrentIndex(0);
+}
+
+void ConfigPage::onMicDeviceChanged(int index) {
+    if (index <= 0 || index >= static_cast<int>(mic_devices_.size())) {
+        audio_ui_state_.selected_mic_device_id = std::nullopt;
+    } else {
+        const auto& dev = mic_devices_[static_cast<std::size_t>(index)];
+        audio_ui_state_.selected_mic_device_id =
+            dev.device_id.empty() ? std::nullopt : std::optional<std::string>(dev.device_id);
     }
     emitCurrentAudioSettings();
 }
