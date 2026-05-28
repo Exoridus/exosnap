@@ -51,6 +51,8 @@ class ConfigPage : public QWidget {
     void videoSettingsChanged(const VideoSettingsModel& settings);
     void audioSettingsChanged(const capability::AudioUiState& state);
     void webcamSettingsChanged(const WebcamSettings& settings);
+    void diagnosticsRequested();
+    void manageProfilesRequested();
 
   private:
     void onContainerChanged(int id);
@@ -129,6 +131,10 @@ class ConfigPage : public QWidget {
     QLabel* example_filename_label_ = nullptr;
 
     QLabel* readiness_badge_label_ = nullptr;
+    QLabel* readiness_detail_label_ = nullptr;
+    QPushButton* view_details_btn_ = nullptr;
+
+    QPushButton* manage_profiles_btn_ = nullptr;
 
     QCheckBox* webcam_enabled_check_ = nullptr;
     QComboBox* webcam_device_combo_ = nullptr;

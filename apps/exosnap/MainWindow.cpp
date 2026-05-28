@@ -1082,6 +1082,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         persistProfileState();
         refreshDiagnosticsData();
     });
+    connect(config_page_, &ConfigPage::diagnosticsRequested, this, [this]() {
+        refreshDiagnosticsData();
+        nav_->setCurrentRow(kDiagnosticsPageIndex);
+    });
+    connect(config_page_, &ConfigPage::manageProfilesRequested, this,
+            [this]() { nav_->setCurrentRow(kOutputPageIndex); });
 
     record_page_->rebroadcastChromeState();
     applyActiveProfileToPages();

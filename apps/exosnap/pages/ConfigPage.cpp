@@ -141,10 +141,27 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     header->setProperty("labelRole", "subtitle");
     layout->addWidget(header);
 
-    readiness_badge_label_ = new QLabel(content);
-    readiness_badge_label_->setProperty("labelRole", "muted");
-    readiness_badge_label_->setVisible(false);
-    layout->addWidget(readiness_badge_label_);
+    auto* status_card = makePanel(content);
+    status_card->setProperty("panelRole", "note");
+    auto* status_layout = new QVBoxLayout(status_card);
+    status_layout->setContentsMargins(14, 10, 14, 10);
+    status_layout->setSpacing(4);
+
+    readiness_badge_label_ = new QLabel(status_card);
+    readiness_badge_label_->setProperty("labelRole", "section");
+    status_layout->addWidget(readiness_badge_label_);
+
+    readiness_detail_label_ = new QLabel(status_card);
+    readiness_detail_label_->setProperty("labelRole", "muted");
+    readiness_detail_label_->setWordWrap(true);
+    status_layout->addWidget(readiness_detail_label_);
+
+    view_details_btn_ = new QPushButton(QStringLiteral("Open Diagnostics..."), status_card);
+    view_details_btn_->setProperty("role", "ghost");
+    view_details_btn_->setVisible(false);
+    status_layout->addWidget(view_details_btn_);
+
+    layout->addWidget(status_card);
 
     // ---- FORMAT SECTION (interactive) ----
     layout->addWidget(makeSectionLabel(QStringLiteral("Format"), content));
@@ -161,6 +178,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     profile_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     profile_header->addWidget(profile_lbl);
     profile_header->addWidget(profile_combo_, 1);
+    manage_profiles_btn_ = new QPushButton(QStringLiteral("Manage..."), fmt_panel);
+    manage_profiles_btn_->setProperty("role", "ghost");
+    profile_header->addWidget(manage_profiles_btn_);
     fmt_layout->addLayout(profile_header);
 
     format_display_label_ = new QLabel(fmt_panel);
@@ -375,6 +395,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(webcam_enabled_check_, &QCheckBox::toggled, this, &ConfigPage::onWebcamEnabledToggled);
     connect(webcam_device_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onWebcamDeviceChanged);
+    connect(manage_profiles_btn_, &QPushButton::clicked, this, &ConfigPage::manageProfilesRequested);
+    connect(view_details_btn_, &QPushButton::clicked, this, &ConfigPage::diagnosticsRequested);
+
+    setReadinessStatus(QStringLiteral("CHECKING"));
 
     {
         const QSignalBlocker dd(destination_edit_);
@@ -889,17 +913,25 @@ void ConfigPage::setReadinessStatus(const QString& status_label) {
         return;
 
     const QString upper = status_label.trimmed().toUpper();
-    if (upper.isEmpty() || upper == QStringLiteral("READY") || upper == QStringLiteral("CHECKING")) {
-        readiness_badge_label_->setVisible(false);
-        return;
+    const bool blocked = upper == QStringLiteral("BLOCKED") || upper == QStringLiteral("ERROR");
+    const bool ready = upper == QStringLiteral("READY");
+    const bool checking = upper == QStringLiteral("CHECKING");
+
+    readiness_badge_label_->setText(ready      ? QStringLiteral("Ready to record")
+                                    : blocked  ? QStringLiteral("Recording blocked")
+                                    : checking ? QStringLiteral("Checking setup...")
+                                               : QStringLiteral("Status: %1").arg(upper));
+
+    if (readiness_detail_label_) {
+        readiness_detail_label_->setText(ready      ? QStringLiteral("Current setup is compatible with this system.")
+                                         : blocked  ? QStringLiteral("Open Diagnostics to review the top issue.")
+                                         : checking ? QStringLiteral("Verifying system capabilities...")
+                                                    : QString());
     }
 
-    const bool blocked = upper == QStringLiteral("BLOCKED") || upper == QStringLiteral("ERROR");
-    readiness_badge_label_->setText(blocked
-                                        ? QStringLiteral("STATUS: %1 — Open Diagnostics to review blockers.").arg(upper)
-                                        : QStringLiteral("STATUS: %1").arg(upper));
-    readiness_badge_label_->setProperty("labelRole", blocked ? "mutedWarning" : "muted");
-    readiness_badge_label_->setVisible(true);
+    if (view_details_btn_) {
+        view_details_btn_->setVisible(blocked);
+    }
 }
 
 } // namespace exosnap
