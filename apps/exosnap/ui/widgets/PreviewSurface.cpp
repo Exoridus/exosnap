@@ -361,7 +361,7 @@ QRectF PreviewSurface::displayedFrameRect() const {
 
     const double sx = static_cast<double>(width()) / static_cast<double>(current_frame_.width());
     const double sy = static_cast<double>(height()) / static_cast<double>(current_frame_.height());
-    const double s = std::max(sx, sy);
+    const double s = std::min(sx, sy);
     const double dw = static_cast<double>(current_frame_.width()) * s;
     const double dh = static_cast<double>(current_frame_.height()) * s;
     const double dx = (static_cast<double>(width()) - dw) * 0.5;
@@ -690,7 +690,7 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
 
         const double sx = static_cast<double>(width()) / current_frame_.width();
         const double sy = static_cast<double>(height()) / current_frame_.height();
-        const double s = std::max(sx, sy);
+        const double s = std::min(sx, sy);
         const int dw = static_cast<int>(current_frame_.width() * s);
         const int dh = static_cast<int>(current_frame_.height() * s);
         const int dx = (width() - dw) / 2;

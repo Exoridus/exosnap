@@ -29,7 +29,6 @@ class DiagnosticsPage;
 class HotkeysPage;
 class OutputPage;
 class RecordPage;
-class VideoPage;
 class WebcamPage;
 
 class MainWindow : public QMainWindow {
@@ -78,7 +77,6 @@ class MainWindow : public QMainWindow {
     QStackedWidget* stack_ = nullptr;
     RecordPage* record_page_ = nullptr;
     OutputPage* output_page_ = nullptr;
-    VideoPage* video_page_ = nullptr;
     ConfigPage* config_page_ = nullptr;
     DiagnosticsPage* diagnostics_page_ = nullptr;
     WebcamPage* webcam_page_ = nullptr;

@@ -8,7 +8,6 @@
 #include "pages/LogsPage.h"
 #include "pages/OutputPage.h"
 #include "pages/RecordPage.h"
-#include "pages/VideoPage.h"
 #include "pages/WebcamPage.h"
 #include "settings/ProfileExchange.h"
 #include "ui/chrome/GlobalRecordingBar.h"
@@ -192,7 +191,7 @@ constexpr std::array<PageDescriptor, 8> kPageDescriptors = {{
      "Structured recorder telemetry", SidebarIcon::Logs},
     {"Advanced", "06 · ADVANCED", "Lower-level behavior and non-default controls.", "EXPERT SETTINGS",
      "Explicitly non-default", SidebarIcon::Advanced},
-    {"Output", "07 · PROFILES", "Recording profile management — create, edit, import, and export.", "PROFILES",
+    {"Profiles", "07 · PROFILES", "Recording profile management — create, edit, import, and export.", "PROFILES",
      "Save, duplicate, rename, delete", SidebarIcon::Output},
     {"Webcam", "08 · WEBCAM", "Webcam device, overlay placement, and chroma key.", "OVERLAY",
      "Camera composited into recording", SidebarIcon::Webcam},
@@ -686,8 +685,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     video_settings_ = active_profile.video;
     persisted_settings_.audio_ui_state = active_profile.audio_ui_state;
 
-    runtime_caps_ = capability::CapabilityBuilder::BuildFromHardwareQuery();
-    runtime_caps_ready_ = true;
     restoreHotkeyBindingsFromSettings();
     diagnostics::AppLog(QStringLiteral("[window] settings loaded"));
 
@@ -816,7 +813,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     hotkeys_page_->setBindings(persisted_hotkeys_);
     diagnostics_page_ = new DiagnosticsPage(stack_);
     output_page_ = new OutputPage(output_settings_, stack_);
-    video_page_ = new VideoPage(video_settings_, stack_);
     webcam_page_ = new WebcamPage(stack_);
     webcam_page_->applySettings(persisted_settings_.webcam);
     stack_->addWidget(record_page_);
@@ -1039,21 +1035,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         QMessageBox::information(this, QStringLiteral("Reset Complete"),
                                  QStringLiteral("Settings and profiles were reset to defaults."));
     });
-    connect(video_page_, &VideoPage::videoSettingsChanged, this, [this](const VideoSettingsModel& settings) {
-        video_settings_ = settings;
-        record_page_->setVideoSettings(settings);
-        if (config_page_)
-            config_page_->setVideoSettings(settings);
-        profile_registry_.ApplyVideoToActive(settings);
-        persisted_settings_.video = settings;
-        persistProfileState();
-        refreshDiagnosticsData();
-    });
     connect(config_page_, &ConfigPage::videoSettingsChanged, this, [this](const VideoSettingsModel& settings) {
         video_settings_ = settings;
         record_page_->setVideoSettings(settings);
-        if (video_page_)
-            video_page_->setVideoSettings(settings);
         profile_registry_.ApplyVideoToActive(settings);
         persisted_settings_.video = settings;
         persistProfileState();
@@ -1095,13 +1079,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     record_page_->rebroadcastChromeState();
     applyActiveProfileToPages();
-    refreshOutputProfileUi();
 
     diagnostics::AppLog(QStringLiteral("[window] MainWindow constructed"));
 
-    refreshDiagnosticsData();
     nav_->setCurrentRow(0);
     pollIdleRuntimeMetrics();
+
+    QTimer::singleShot(0, this, [this]() {
+        runtime_caps_ = capability::CapabilityBuilder::BuildFromHardwareQuery();
+        runtime_caps_ready_ = true;
+        diagnostics::AppLog(QStringLiteral("[window] capabilities probed"));
+        refreshOutputProfileUi();
+        refreshDiagnosticsData();
+    });
 }
 
 void MainWindow::showEvent(QShowEvent* event) {
@@ -1541,9 +1531,6 @@ void MainWindow::applyActiveProfileToPages() {
     if (output_page_) {
         output_page_->setOutputSettings(output_settings_);
         output_page_->setActiveProfileName(QString::fromStdString(active_profile.name));
-    }
-    if (video_page_) {
-        video_page_->setVideoSettings(video_settings_);
     }
     if (config_page_) {
         config_page_->setOutputSettings(output_settings_);

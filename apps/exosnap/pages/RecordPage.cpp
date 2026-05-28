@@ -33,6 +33,7 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollArea>
+#include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QStyle>
@@ -259,6 +260,11 @@ bool RecordPage::eventFilter(QObject* watched, QEvent* event) {
 void RecordPage::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     updatePreviewHeightClamp();
+}
+
+void RecordPage::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    ensureCoordinatorInit();
 }
 
 void RecordPage::updatePreviewHeightClamp() {
@@ -676,7 +682,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
     connect(destination_settings_btn_, &QPushButton::clicked, this, [this]() { emit navigateToOutputPage(); });
 
-    initCoordinator();
+    coordinator_needs_init_ = true;
 }
 
 RecordPage::~RecordPage() {
@@ -847,6 +853,13 @@ void RecordPage::startPreviewIfIdle() {
 
     const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
     preview_service_->Start(target);
+}
+
+void RecordPage::ensureCoordinatorInit() {
+    if (coordinator_needs_init_) {
+        coordinator_needs_init_ = false;
+        initCoordinator();
+    }
 }
 
 void RecordPage::initCoordinator() {
@@ -1101,6 +1114,8 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
 }
 
 void RecordPage::onStart() {
+    ensureCoordinatorInit();
+
     // Region mode with select-on-record: show overlay before starting.
     if (view_model_.capture_mode == CaptureMode::Region && view_model_.select_on_record) {
         diagnostics::AppLog(QStringLiteral("[record] region select-on-record: opening overlay"));
@@ -1893,6 +1908,8 @@ void RecordPage::emitChromeState() {
 }
 
 void RecordPage::refresh() {
+    ensureCoordinatorInit();
+
     const QString capability_text = QString::fromStdWString(view_model_.capability_status_text).trimmed();
     const bool blocked = (view_model_.state == UiRecordingState::Blocked);
     const bool checking = (view_model_.state == UiRecordingState::LoadingCapabilities);

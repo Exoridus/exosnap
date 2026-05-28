@@ -8,10 +8,12 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QTimer>
 #include <QToolTip>
 #include <QVBoxLayout>
 
@@ -239,6 +241,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* qual_lbl = new QLabel(QStringLiteral("Quality preset"), video_panel);
     qual_lbl->setProperty("labelRole", "section");
     quality_combo_ = new QComboBox(video_panel);
+    quality_combo_->setObjectName(QStringLiteral("videoQualityCombo"));
     quality_combo_->addItem(QStringLiteral("High"), static_cast<int>(recorder_core::NvencQualityPreset::High));
     quality_combo_->addItem(QStringLiteral("Balanced"), static_cast<int>(recorder_core::NvencQualityPreset::Balanced));
     quality_combo_->addItem(QStringLiteral("Small"), static_cast<int>(recorder_core::NvencQualityPreset::Small));
@@ -426,11 +429,17 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         const QSignalBlocker np(naming_edit_);
         naming_edit_->setText(QString::fromStdWString(format_settings_.naming_pattern));
     }
-    refreshMicDevices();
     updateAudioSourceAvailability();
     updateFormatDisplay();
     updateExampleFilename();
-    refreshWebcamDevices();
+
+    QPointer<ConfigPage> safe = this;
+    QTimer::singleShot(0, this, [safe]() {
+        if (safe) {
+            safe->refreshMicDevices();
+            safe->refreshWebcamDevices();
+        }
+    });
 }
 
 void ConfigPage::emitCurrentFormatSettings() {

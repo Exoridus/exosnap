@@ -84,6 +84,8 @@ class RecordPage : public QWidget {
 
     bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void ensureCoordinatorInit();
     void initCoordinator();
     void refresh();
     void updateStatsDisplay();
@@ -202,6 +204,7 @@ class RecordPage : public QWidget {
     float preflight_sys_rms_ = 0.0f;
     float preflight_app_rms_ = 0.0f;
     uint32_t preflight_app_pid_ = 0;
+    bool coordinator_needs_init_ = true;
 };
 
 } // namespace exosnap

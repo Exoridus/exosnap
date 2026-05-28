@@ -6,6 +6,7 @@
 #include <QCoreApplication>
 #include <QLabel>
 #include <QLineEdit>
+#include <QObject>
 #include <QPushButton>
 #include <QRadioButton>
 
@@ -176,6 +177,23 @@ TEST_F(ConfigPageTest, ProfileOptions_PopulateCombo) {
         }
     }
     EXPECT_TRUE(found);
+}
+
+TEST_F(ConfigPageTest, VideoQualityChange_EmitsVideoSettingsChanged) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    bool emitted = false;
+    QObject::connect(&page, &ConfigPage::videoSettingsChanged,
+                     [&emitted](const VideoSettingsModel&) { emitted = true; });
+
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("videoQualityCombo"));
+    ASSERT_NE(combo, nullptr);
+
+    combo->setCurrentIndex(0); // High — same as default, won't emit
+    EXPECT_FALSE(emitted);
+
+    combo->setCurrentIndex(2); // Small
+    EXPECT_TRUE(emitted);
 }
 
 } // namespace

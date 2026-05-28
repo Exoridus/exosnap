@@ -56,8 +56,6 @@ qt_add_executable(exosnap WIN32
     MainWindow.cpp
     pages/RecordPage.h
     pages/RecordPage.cpp
-    pages/VideoPage.h
-    pages/VideoPage.cpp
     pages/ConfigPage.h
     pages/ConfigPage.cpp
     pages/OutputPage.h

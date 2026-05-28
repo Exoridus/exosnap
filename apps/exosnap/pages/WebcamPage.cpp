@@ -106,6 +106,12 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
         preview_surface_->setCenterSubtitle("Enable webcam to preview");
         preview_surface_->setWebcamOverlayEnabled(false);
         layout->addWidget(preview_surface_);
+
+        auto* preview_note = makeLabel(
+            QStringLiteral("Recording target preview is shown on the Record page. This preview shows webcam only."),
+            "muted", content);
+        preview_note->setWordWrap(true);
+        layout->addWidget(preview_note);
     }
     layout->addWidget(makeDivider(content));
 
@@ -507,7 +513,7 @@ void WebcamPage::startPreview() {
         }
         preview_surface_->setWebcamOverlayRect(overlay_rect);
         preview_surface_->setCenterTitle({});
-        preview_surface_->setCenterSubtitle({});
+        preview_surface_->setCenterSubtitle(QStringLiteral("Target preview is on Record page"));
     }
 
     if (dev_id.isEmpty() && devices_.empty()) {
@@ -526,7 +532,7 @@ void WebcamPage::stopPreview() {
         preview_surface_->setWebcamFrame(QImage{});
         preview_surface_->setWebcamOverlayEnabled(false);
         preview_surface_->setCenterTitle("WEBCAM OFF");
-        preview_surface_->setCenterSubtitle("Enable webcam to preview");
+        preview_surface_->setCenterSubtitle("Enable webcam to preview overlay placement");
     }
 }
 
