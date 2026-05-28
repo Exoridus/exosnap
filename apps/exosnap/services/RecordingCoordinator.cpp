@@ -369,6 +369,18 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     }
 
     auto output_path = GenerateOutputPath();
+    const auto resolved_path = ResolveAvailableOutputPath(output_path);
+    if (!resolved_path.has_value()) {
+        PostStateChange(UiRecordingState::Failed);
+        UiRecordingResult result;
+        result.succeeded = false;
+        result.output_path = output_path.wstring();
+        result.error_detail =
+            L"Could not create a unique output filename. Change the filename pattern or output folder.";
+        PostResult(std::move(result));
+        return false;
+    }
+    output_path = *resolved_path;
     current_output_path_ = output_path;
 
     std::error_code ec;

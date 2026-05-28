@@ -62,4 +62,30 @@ std::wstring FolderValidationMessage(FolderValidationResult result) {
     }
 }
 
+std::optional<std::filesystem::path> ResolveAvailableOutputPath(const std::filesystem::path& base_path) {
+    std::error_code ec;
+    if (!std::filesystem::exists(base_path, ec)) {
+        return base_path;
+    }
+    if (ec) {
+        return base_path;
+    }
+
+    const auto stem = base_path.stem().wstring();
+    const auto ext = base_path.extension().wstring();
+    const auto parent = base_path.parent_path();
+
+    for (int suffix = 1; suffix < 1000; ++suffix) {
+        const auto candidate = parent / (std::wstring(stem) + L" (" + std::to_wstring(suffix) + L")" + ext);
+        if (!std::filesystem::exists(candidate, ec) && !ec) {
+            return candidate;
+        }
+        if (ec) {
+            break;
+        }
+    }
+
+    return std::nullopt;
+}
+
 } // namespace exosnap

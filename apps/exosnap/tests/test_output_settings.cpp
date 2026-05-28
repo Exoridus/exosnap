@@ -4,6 +4,7 @@
 #include <ctime>
 #include <cwctype>
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 #include <recorder_core/recorder_session.h>
@@ -347,6 +348,132 @@ TEST(OutputSettingsTest, NonExistentNestedDir) {
 
 TEST(OutputSettingsTest, EmptyPath) {
     EXPECT_EQ(ValidateOutputFolder(std::filesystem::path{}), FolderValidationResult::InvalidPath);
+}
+
+TEST(OutputSettingsTest, ResolveAvailableOutputPath_NoCollision_ReturnsBasePath) {
+    const std::filesystem::path dir = UniqueTempPath(L"collision_no");
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    ASSERT_FALSE(ec);
+
+    const auto base = dir / L"recording.mkv";
+    const auto resolved = ResolveAvailableOutputPath(base);
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(*resolved, base);
+
+    std::filesystem::remove_all(dir, ec);
+}
+
+TEST(OutputSettingsTest, ResolveAvailableOutputPath_ExistingFile_AppendsSuffix) {
+    const std::filesystem::path dir = UniqueTempPath(L"collision_suffix");
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    ASSERT_FALSE(ec);
+
+    const auto base = dir / L"recording.mkv";
+    {
+        std::ofstream touch(base, std::ios::binary);
+    }
+    ASSERT_TRUE(std::filesystem::exists(base));
+
+    const auto resolved = ResolveAvailableOutputPath(base);
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_NE(*resolved, base);
+    EXPECT_EQ(resolved->parent_path(), dir);
+    EXPECT_EQ(resolved->extension(), L".mkv");
+    const auto stem_str = resolved->stem().wstring();
+    EXPECT_TRUE(stem_str.starts_with(L"recording ("));
+
+    std::filesystem::remove_all(dir, ec);
+}
+
+TEST(OutputSettingsTest, ResolveAvailableOutputPath_MultipleCollisions_IncrementsSuffix) {
+    const std::filesystem::path dir = UniqueTempPath(L"collision_multi");
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    ASSERT_FALSE(ec);
+
+    const auto base = dir / L"recording.mkv";
+    {
+        std::ofstream touch(base, std::ios::binary);
+    }
+    {
+        std::ofstream touch(dir / L"recording (1).mkv", std::ios::binary);
+    }
+    EXPECT_TRUE(std::filesystem::exists(base));
+    EXPECT_TRUE(std::filesystem::exists(dir / L"recording (1).mkv"));
+
+    const auto resolved = ResolveAvailableOutputPath(base);
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(resolved->parent_path(), dir);
+    EXPECT_EQ(resolved->extension(), L".mkv");
+    EXPECT_EQ(resolved->stem(), L"recording (2)");
+
+    std::filesystem::remove_all(dir, ec);
+}
+
+TEST(OutputSettingsTest, ResolveAvailableOutputPath_AlreadyUsedSuffix_SkipsToNext) {
+    const std::filesystem::path dir = UniqueTempPath(L"collision_skip");
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    ASSERT_FALSE(ec);
+
+    const auto base = dir / L"recording.mkv";
+    const auto with_suffix = dir / L"recording (1).mkv";
+    {
+        std::ofstream touch(with_suffix, std::ios::binary);
+    }
+    EXPECT_FALSE(std::filesystem::exists(base));
+    EXPECT_TRUE(std::filesystem::exists(with_suffix));
+
+    const auto resolved = ResolveAvailableOutputPath(base);
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(*resolved, base);
+
+    std::filesystem::remove_all(dir, ec);
+}
+
+TEST(OutputSettingsTest, ResolveAvailableOutputPath_PreservesExtension_Case) {
+    const std::filesystem::path dir = UniqueTempPath(L"collision_ext");
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    ASSERT_FALSE(ec);
+
+    const auto base = dir / L"my clip.MP4";
+    {
+        std::ofstream touch(base, std::ios::binary);
+    }
+    ASSERT_TRUE(std::filesystem::exists(base));
+
+    const auto resolved = ResolveAvailableOutputPath(base);
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(resolved->extension(), L".MP4");
+
+    std::filesystem::remove_all(dir, ec);
+}
+
+TEST(OutputSettingsTest, ResolveAvailableOutputPath_Exhausted_ReturnsNullopt) {
+    const std::filesystem::path dir = UniqueTempPath(L"collision_exhausted");
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    ASSERT_FALSE(ec);
+
+    const auto base = dir / L"recording.mkv";
+    {
+        std::ofstream touch(base, std::ios::binary);
+    }
+    ASSERT_TRUE(std::filesystem::exists(base));
+
+    for (int i = 1; i < 1000; ++i) {
+        const auto candidate = dir / (std::wstring(L"recording (") + std::to_wstring(i) + L").mkv");
+        std::ofstream touch(candidate, std::ios::binary);
+        ASSERT_TRUE(std::filesystem::exists(candidate, ec)) << "Failed to create suffix " << i;
+    }
+
+    const auto resolved = ResolveAvailableOutputPath(base);
+    EXPECT_FALSE(resolved.has_value()) << "Should return nullopt when all suffixes are exhausted";
+
+    std::filesystem::remove_all(dir, ec);
 }
 
 TEST(OutputSettingsTest, Defaults_FolderNotEmpty) {
