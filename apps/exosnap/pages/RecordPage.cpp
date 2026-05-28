@@ -850,6 +850,8 @@ void RecordPage::startPreviewIfIdle() {
     const bool has_target = view_model_.selected_target_index >= 0 &&
                             view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
 
+    if (preview_surface_)
+        preview_surface_->stopDxgiPreview();
     preview_service_->Stop();
     if (preview_surface_)
         preview_surface_->setLiveFrame(QImage{});
@@ -858,6 +860,14 @@ void RecordPage::startPreviewIfIdle() {
         return;
 
     const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+    const auto cfg = primaryRecorderConfig();
+
+    if (preview_surface_ && preview_surface_->tryStartDxgiPreview(target, cfg.frame_rate_num, cfg.frame_rate_den)) {
+        diagnostics::AppLog(QStringLiteral("[record] DXGI preview started for target"));
+        return;
+    }
+
+    diagnostics::AppLog(QStringLiteral("[record] falling back to QImage preview"));
     preview_service_->Start(target);
 }
 
@@ -876,7 +886,7 @@ void RecordPage::initCoordinator() {
     preview_service_ = std::make_unique<PreviewService>();
     QPointer<ui::widgets::PreviewSurface> safeSurface = preview_surface_;
     preview_service_->SetFrameCallback([safeSurface](QImage frame) {
-        if (safeSurface)
+        if (safeSurface && !safeSurface->isDxgiPreviewActive())
             safeSurface->setLiveFrame(std::move(frame));
     });
 

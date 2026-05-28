@@ -72,6 +72,9 @@ qt_add_executable(exosnap WIN32
     pages/AdvancedPage.cpp
     services/PreviewService.h
     services/PreviewService.cpp
+    services/PreviewHelpers.h
+    services/DxgiPreviewRenderer.h
+    services/DxgiPreviewRenderer.cpp
     services/WebcamService.h
     services/WebcamService.cpp
     services/RecordingCoordinator.h
@@ -117,11 +120,12 @@ if(WIN32)
 endif()
 
 set_target_properties(exosnap PROPERTIES AUTOMOC ON AUTORCC ON OUTPUT_NAME "exosnap")
+target_compile_definitions(exosnap PRIVATE NOMINMAX)
 
 target_link_libraries(exosnap PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
     recorder_core exosnap::capability exosnap::warnings
-    d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
+    d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
     mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib
 )
 
@@ -251,3 +255,12 @@ exosnap_add_gtest(
 target_include_directories(config_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(config_page_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(config_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
+
+exosnap_add_gtest(
+    NAME preview_helpers_tests
+    TEST_PREFIX preview.
+    SOURCES
+        tests/test_preview_helpers.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(preview_helpers_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

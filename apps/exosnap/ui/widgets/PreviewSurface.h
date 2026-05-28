@@ -6,7 +6,15 @@
 #include <QRectF>
 #include <QWidget>
 
+#include <memory>
+
+#include <recorder_core/recorder_session.h>
+
 class QLabel;
+
+namespace exosnap {
+class DxgiPreviewRenderer;
+}
 
 namespace exosnap::ui::widgets {
 
@@ -16,6 +24,7 @@ class PreviewSurface : public QWidget {
     Q_OBJECT
   public:
     explicit PreviewSurface(QWidget* parent = nullptr);
+    ~PreviewSurface() override;
 
     bool hasHeightForWidth() const override;
     int heightForWidth(int width) const override;
@@ -25,8 +34,13 @@ class PreviewSurface : public QWidget {
     void setRecording(bool recording);
     bool isRecording() const noexcept;
 
-    // Delivers a live preview frame. Pass a null QImage to clear.
     void setLiveFrame(QImage frame);
+
+    bool tryStartDxgiPreview(const recorder_core::CaptureTarget& target, uint32_t frame_rate_num,
+                             uint32_t frame_rate_den);
+    void stopDxgiPreview();
+    [[nodiscard]] bool isDxgiPreviewActive() const noexcept;
+    void repositionDxgiPreview();
 
     void setStatusText(const QString& text);
     void setTopMetaText(const QString& text);
@@ -37,21 +51,16 @@ class PreviewSurface : public QWidget {
 
     StatusPill* statusPill() const noexcept;
 
-    // Webcam overlay — W3
     void setWebcamFrame(QImage frame);
     void setWebcamOverlayEnabled(bool enabled);
-    // rect in [0,1] normalized to the live-frame display area
     void setWebcamOverlayRect(QRectF rect_norm);
     QRectF webcamOverlayRect() const noexcept {
         return webcam_rect_norm_;
     }
     QRectF defaultWebcamOverlayRect(double camera_aspect_w_over_h = 0.0) const;
-    // When true, corner-drag resize preserves the current webcam frame aspect ratio.
-    // Holding Shift/Ctrl during a corner drag temporarily toggles the lock.
     void setAspectRatioLocked(bool locked);
 
   signals:
-    // Emitted when user finishes dragging/resizing the overlay (normalized coords).
     void webcamOverlayMoved(QRectF rect_norm);
 
   protected:
@@ -66,17 +75,19 @@ class PreviewSurface : public QWidget {
   private:
     enum class DragMode { None, Move, ResizeTL, ResizeTR, ResizeBL, ResizeBR };
 
-    QRectF webcamPixelRect() const; // webcam rect in widget pixel coords
+    QRectF webcamPixelRect() const;
     QRectF displayedFrameRect() const;
+    QRectF displayedFrameRectForSource(int srcW, int srcH) const;
     DragMode hitTestWebcam(QPointF pos) const;
     void applyDragFromPointer(QPointF pos, Qt::KeyboardModifiers modifiers);
     void snapOverlayRectToCurrentAspect();
+    void applyDxgiPreviewResize();
 
     QImage current_frame_;
     QImage webcam_frame_;
     bool webcam_enabled_ = false;
     bool aspect_ratio_locked_ = true;
-    double webcam_aspect_ratio_ = 16.0 / 9.0; // updated from incoming frames
+    double webcam_aspect_ratio_ = 16.0 / 9.0;
     QRectF webcam_rect_norm_{0.0, 0.0, 0.25, 0.25};
 
     DragMode drag_mode_ = DragMode::None;
@@ -94,6 +105,9 @@ class PreviewSurface : public QWidget {
     QWidget* center_box_ = nullptr;
     QWidget* bottom_row_ = nullptr;
     bool recording_ = false;
+
+    std::unique_ptr<exosnap::DxgiPreviewRenderer> dxgi_renderer_;
+    bool dxgi_active_ = false;
 };
 
 } // namespace exosnap::ui::widgets
