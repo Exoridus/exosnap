@@ -54,6 +54,7 @@ class ConfigPage : public QWidget {
     void webcamSettingsChanged(const WebcamSettings& settings);
     void diagnosticsRequested();
     void manageProfilesRequested();
+    void webcamDetailsRequested();
 
   private:
     void onContainerChanged(int id);
@@ -145,6 +146,7 @@ class ConfigPage : public QWidget {
     QCheckBox* webcam_enabled_check_ = nullptr;
     QComboBox* webcam_device_combo_ = nullptr;
     QLabel* webcam_info_label_ = nullptr;
+    QPushButton* webcam_details_btn_ = nullptr;
 };
 
 } // namespace exosnap

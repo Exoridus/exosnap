@@ -209,8 +209,10 @@ constexpr int pageIndexForIcon(SidebarIcon icon) {
 }
 constexpr int kOutputPageIndex = pageIndexForIcon(SidebarIcon::Output);
 constexpr int kDiagnosticsPageIndex = pageIndexForIcon(SidebarIcon::Diagnostics);
+constexpr int kWebcamPageIndex = pageIndexForIcon(SidebarIcon::Webcam);
 static_assert(kOutputPageIndex >= 0, "Output page must exist in kPageDescriptors.");
 static_assert(kDiagnosticsPageIndex >= 0, "Diagnostics page must exist in kPageDescriptors.");
+static_assert(kWebcamPageIndex >= 0, "Webcam page must exist in kPageDescriptors.");
 
 capability::UserRecorderConfig ProfileToUserConfig(const RecordingProfile& profile) {
     capability::UserRecorderConfig config;
@@ -1088,6 +1090,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     });
     connect(config_page_, &ConfigPage::manageProfilesRequested, this,
             [this]() { nav_->setCurrentRow(kOutputPageIndex); });
+    connect(config_page_, &ConfigPage::webcamDetailsRequested, this,
+            [this]() { nav_->setCurrentRow(kWebcamPageIndex); });
 
     record_page_->rebroadcastChromeState();
     applyActiveProfileToPages();

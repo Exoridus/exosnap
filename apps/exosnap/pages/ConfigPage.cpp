@@ -328,6 +328,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     webcam_info_label_->setWordWrap(true);
     webcam_info_label_->setContentsMargins(20, 0, 0, 4);
     webcam_panel_layout->addWidget(webcam_info_label_);
+
+    webcam_details_btn_ = new QPushButton(QStringLiteral("Webcam details..."), webcam_panel);
+    webcam_details_btn_->setProperty("role", "ghost");
+    webcam_details_btn_->setContentsMargins(20, 0, 0, 0);
+    webcam_panel_layout->addWidget(webcam_details_btn_);
+
     layout->addWidget(webcam_panel);
 
     // ---- OUTPUT SECTION (interactive) ----
@@ -408,6 +414,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             &ConfigPage::onWebcamDeviceChanged);
     connect(manage_profiles_btn_, &QPushButton::clicked, this, &ConfigPage::manageProfilesRequested);
     connect(view_details_btn_, &QPushButton::clicked, this, &ConfigPage::diagnosticsRequested);
+    connect(webcam_details_btn_, &QPushButton::clicked, this, &ConfigPage::webcamDetailsRequested);
 
     setReadinessStatus(QStringLiteral("CHECKING"));
 
