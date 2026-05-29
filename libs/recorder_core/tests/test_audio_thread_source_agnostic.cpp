@@ -221,4 +221,103 @@ TEST(AudioThreadSourceAgnosticTest, AudioThread_SourceInitFailureRecordsFailure)
     EXPECT_FALSE(foundEos);
 }
 
+// Mock source that delivers kFramesPerPacket-sample chunks and signals stop after all packets.
+// Used to verify PTS step size with sub-Opus-frame delivery (like a 10 ms WASAPI period).
+class SmallChunkMockSource : public IAudioCaptureSource {
+  public:
+    SmallChunkMockSource(std::atomic<bool>* stop_flag, uint32_t frames_per_chunk, size_t chunk_count)
+        : stop_flag_(stop_flag), frames_per_chunk_(frames_per_chunk) {
+        chunks_.resize(chunk_count);
+        for (auto& c : chunks_) {
+            c.resize(frames_per_chunk * kChannels, 0.05f);
+        }
+    }
+
+    bool Init(std::string&) override {
+        initialized_ = true;
+        return true;
+    }
+
+    uint32_t PendingFrameCount() override {
+        if (!initialized_ || acquired_)
+            return 0;
+        if (next_ < chunks_.size())
+            return frames_per_chunk_;
+        if (stop_flag_)
+            stop_flag_->store(true);
+        return 0;
+    }
+
+    bool AcquireBuffer(RawAudioBuffer& out, std::string&) override {
+        if (!initialized_ || acquired_ || next_ >= chunks_.size())
+            return false;
+        acquired_ = true;
+        out.bytes = reinterpret_cast<const uint8_t*>(chunks_[next_].data());
+        out.num_frames = frames_per_chunk_;
+        out.silent = false;
+        return true;
+    }
+
+    void ReleaseBuffer() override {
+        if (!acquired_)
+            return;
+        acquired_ = false;
+        ++next_;
+        if (next_ >= chunks_.size() && stop_flag_)
+            stop_flag_->store(true);
+    }
+
+    uint32_t SampleRate() const override {
+        return kSampleRate;
+    }
+    uint32_t Channels() const override {
+        return kChannels;
+    }
+    AudioSampleFormat SampleFormat() const override {
+        return AudioSampleFormat::Float32;
+    }
+    const std::string& EndpointName() const override {
+        return name_;
+    }
+    void Shutdown() override {
+    }
+
+  private:
+    static constexpr uint32_t kSampleRate = 48000;
+    static constexpr uint32_t kChannels = 2;
+
+    std::atomic<bool>* stop_flag_ = nullptr;
+    uint32_t frames_per_chunk_ = 480;
+    bool initialized_ = false;
+    bool acquired_ = false;
+    size_t next_ = 0;
+    std::vector<std::vector<float>> chunks_;
+    std::string name_ = "SmallChunkMock";
+};
+
+TEST(AudioThreadSourceAgnosticTest, AudioThread_OpusPtsStepIs20ms_SmallChunks) {
+    // Deliver audio in 480-sample chunks (10 ms WASAPI pattern).
+    // 10 chunks × 480 samples = 4800 samples → 5 Opus packets.
+    // Each Opus packet must have a PTS exactly 20 ms after the previous one.
+    SessionState state{};
+    state.config.audio_codec = AudioCodec::Opus;
+    state.audio_track_count = 1;
+
+    auto source = std::make_unique<SmallChunkMockSource>(&state.stop_requested, 480, 10);
+    AudioThread thread(state, std::move(source), 0);
+    thread.Start();
+    ASSERT_TRUE(thread.Join(5000));
+
+    EXPECT_FALSE(state.HasFailure());
+
+    const auto packets = GatherQueuedAudioPackets(state);
+    ASSERT_GE(packets.size(), 5u);
+
+    constexpr uint64_t kStepNs = 20000000ULL; // 20 ms
+    for (size_t i = 1; i < packets.size(); ++i) {
+        const uint64_t step = packets[i].pts_ns - packets[i - 1].pts_ns;
+        EXPECT_EQ(step, kStepNs) << "PTS step between packet " << (i - 1) << " and " << i << " should be 20 ms";
+    }
+}
+
 } // namespace
