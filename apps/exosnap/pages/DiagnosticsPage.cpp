@@ -18,12 +18,13 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
-#include <QTabWidget>
 #include <QVBoxLayout>
 
 #include <algorithm>
 
 namespace exosnap {
+
+namespace M = ui::theme::ExoSnapMetrics;
 
 namespace {
 
@@ -61,38 +62,191 @@ QFrame* makeHorizontalRule(QWidget* parent) {
 } // namespace
 
 DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
+
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
-    tabs_ = new QTabWidget(this);
-    tabs_->setDocumentMode(true);
+    auto* scroll = new QScrollArea(this);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
 
-    auto* overview = new QWidget();
-    auto* capabilities = new QWidget();
-    auto* configuration = new QWidget();
-    auto* recommendations = new QWidget();
-    auto* performance = new QWidget();
-    auto* logs = new QWidget();
-    auto* selftest = new QWidget();
+    auto* content = new QWidget();
+    auto* layout = new QVBoxLayout(content);
+    layout->setContentsMargins(M::kSpaceXl, M::kSpaceXl, M::kSpaceXl, M::kSpaceXl);
+    layout->setSpacing(M::kSpaceLg);
 
-    buildOverviewTab(overview);
-    buildCapabilitiesTab(capabilities);
-    buildConfigurationTab(configuration);
-    buildRecommendationsTab(recommendations);
-    buildPerformanceTab(performance);
-    buildLogsTab(logs);
-    buildSelfTestTab(selftest);
+    // ── A: Readiness panel ────────────────────────────────────────────────────
+    auto* readiness_panel = makePanel(content);
+    auto* rl = new QVBoxLayout(readiness_panel);
+    rl->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
+    rl->setSpacing(M::kSpaceSm);
 
-    tabs_->addTab(overview, QStringLiteral("Overview"));
-    tabs_->addTab(capabilities, QStringLiteral("Capabilities"));
-    tabs_->addTab(configuration, QStringLiteral("Configuration"));
-    tabs_->addTab(recommendations, QStringLiteral("Recommendations"));
-    tabs_->addTab(performance, QStringLiteral("Performance"));
-    tabs_->addTab(logs, QStringLiteral("Logs"));
-    tabs_->addTab(selftest, QStringLiteral("Self-Test"));
+    rl->addWidget(makeSubLabel(QStringLiteral("Diagnostics are designed to block invalid recording states early."),
+                               readiness_panel));
 
-    root->addWidget(tabs_);
+    status_label_ = new QLabel(QStringLiteral("Overall status: Not checked"), readiness_panel);
+    status_label_->setProperty("labelRole", "body");
+    rl->addWidget(status_label_);
+
+    last_check_label_ = new QLabel(QStringLiteral("Last check: —"), readiness_panel);
+    last_check_label_->setProperty("labelRole", "subtle");
+    rl->addWidget(last_check_label_);
+
+    auto* btn_row = new QHBoxLayout();
+    btn_row->setSpacing(M::kSpaceSm);
+    run_check_btn_ = new QPushButton(QStringLiteral("Run System & Pipeline Check"), readiness_panel);
+    run_check_btn_->setProperty("role", "primary");
+    export_report_btn_ = new QPushButton(QStringLiteral("Export Diagnostic Report"), readiness_panel);
+    export_report_btn_->setProperty("role", "ghost");
+    export_report_btn_->setEnabled(false);
+    btn_row->addWidget(run_check_btn_);
+    btn_row->addWidget(export_report_btn_);
+    btn_row->addStretch();
+    rl->addLayout(btn_row);
+
+    summary_label_ = new QLabel(QStringLiteral("Run a check to see results."), readiness_panel);
+    summary_label_->setProperty("labelRole", "muted");
+    rl->addWidget(summary_label_);
+
+    // Counts row
+    auto* counts_row = new QHBoxLayout();
+    counts_row->setSpacing(M::kSpaceXl);
+
+    auto* blocker_panel = new QFrame(readiness_panel);
+    blocker_panel->setProperty("panelRole", "compactRow");
+    auto* bl = new QHBoxLayout(blocker_panel);
+    bl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+    blocker_count_ = new QLabel(QStringLiteral("0"), blocker_panel);
+    blocker_count_->setProperty("labelRole", "countBlocker");
+    auto* blocker_lbl = new QLabel(QStringLiteral("Blockers"), blocker_panel);
+    blocker_lbl->setProperty("labelRole", "body");
+    bl->addWidget(blocker_count_);
+    bl->addWidget(blocker_lbl);
+    counts_row->addWidget(blocker_panel);
+
+    auto* notice_panel = new QFrame(readiness_panel);
+    notice_panel->setProperty("panelRole", "compactRow");
+    auto* nl = new QHBoxLayout(notice_panel);
+    nl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+    notice_count_ = new QLabel(QStringLiteral("0"), notice_panel);
+    notice_count_->setProperty("labelRole", "countNotice");
+    auto* notice_lbl = new QLabel(QStringLiteral("Notices"), notice_panel);
+    notice_lbl->setProperty("labelRole", "body");
+    nl->addWidget(notice_count_);
+    nl->addWidget(notice_lbl);
+    counts_row->addWidget(notice_panel);
+
+    auto* pass_panel = new QFrame(readiness_panel);
+    pass_panel->setProperty("panelRole", "compactRow");
+    auto* pl = new QHBoxLayout(pass_panel);
+    pl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+    pass_count_ = new QLabel(QStringLiteral("0"), pass_panel);
+    pass_count_->setProperty("labelRole", "countPass");
+    auto* pass_lbl = new QLabel(QStringLiteral("Passes"), pass_panel);
+    pass_lbl->setProperty("labelRole", "body");
+    pl->addWidget(pass_count_);
+    pl->addWidget(pass_lbl);
+    counts_row->addWidget(pass_panel);
+
+    counts_row->addStretch();
+    rl->addLayout(counts_row);
+    layout->addWidget(readiness_panel);
+
+    // ── B: Top Issues ─────────────────────────────────────────────────────────
+    layout->addWidget(makeHorizontalRule(content));
+    layout->addWidget(makeSectionLabel(QStringLiteral("Top Issues"), content));
+    layout->addWidget(makeSubLabel(
+        QStringLiteral("Highest-priority blockers and notices for the current recording configuration."), content));
+
+    issues_parent_ = new QWidget(content);
+    overview_issues_layout_ = new QVBoxLayout(issues_parent_);
+    overview_issues_layout_->setContentsMargins(0, 0, 0, 0);
+    overview_issues_layout_->setSpacing(M::kSpaceSm);
+    overview_issues_layout_->addWidget(
+        makeSubLabel(QStringLiteral("Run a system check to populate issue details."), issues_parent_));
+    layout->addWidget(issues_parent_);
+
+    // ── C: Technical Details ──────────────────────────────────────────────────
+    layout->addWidget(makeHorizontalRule(content));
+    layout->addWidget(makeSectionLabel(QStringLiteral("Technical Details"), content));
+
+    // C1: Capabilities
+    capabilities_content_ = new QWidget(content);
+    capabilities_layout_ = new QVBoxLayout(capabilities_content_);
+    capabilities_layout_->setContentsMargins(0, 0, 0, 0);
+    capabilities_layout_->setSpacing(M::kSpaceXs);
+    capabilities_layout_->addWidget(
+        makeSectionLabel(QStringLiteral("Hardware & Software Capabilities"), capabilities_content_));
+    capabilities_layout_->addWidget(makeSubLabel(
+        QStringLiteral("Detected capabilities from the current system. Values marked unavailable are not selectable."),
+        capabilities_content_));
+    capabilities_layout_->addWidget(
+        makeSubLabel(QStringLiteral("Run a system check to populate this list."), capabilities_content_));
+    layout->addWidget(capabilities_content_);
+    layout->addSpacing(M::kSpaceMd);
+
+    // C2: Configuration
+    config_content_ = new QWidget(content);
+    config_layout_ = new QVBoxLayout(config_content_);
+    config_layout_->setContentsMargins(0, 0, 0, 0);
+    config_layout_->setSpacing(M::kSpaceXs);
+    config_layout_->addWidget(makeSectionLabel(QStringLiteral("Active Configuration"), config_content_));
+    config_layout_->addWidget(
+        makeSubLabel(QStringLiteral("Active recording settings as currently configured in the app."), config_content_));
+    config_layout_->addWidget(
+        makeSubLabel(QStringLiteral("Run a system check to populate this list."), config_content_));
+    layout->addWidget(config_content_);
+
+    // ── D: Self-Test ──────────────────────────────────────────────────────────
+    layout->addWidget(makeHorizontalRule(content));
+    layout->addWidget(makeSectionLabel(QStringLiteral("Self-Test"), content));
+    layout->addWidget(makeSubLabel(
+        QStringLiteral("Validates core recording pipeline components without starting a full recording."), content));
+
+    selftest_content_ = new QWidget(content);
+    selftest_layout_ = new QVBoxLayout(selftest_content_);
+    selftest_layout_->setContentsMargins(0, 0, 0, 0);
+    selftest_layout_->setSpacing(M::kSpaceLg);
+
+    selftest_status_label_ = new QLabel(QStringLiteral("Status: Not run"), selftest_content_);
+    selftest_status_label_->setProperty("labelRole", "body");
+    selftest_layout_->addWidget(selftest_status_label_); // item 0
+
+    selftest_run_btn_ = new QPushButton(QStringLiteral("Run Self-Test"), selftest_content_);
+    selftest_run_btn_->setProperty("role", "primary");
+    selftest_run_btn_->setMaximumWidth(200);
+    selftest_layout_->addWidget(selftest_run_btn_); // item 1
+
+    selftest_layout_->addWidget(makeHorizontalRule(selftest_content_)); // item 2
+    selftest_layout_->addWidget(makeSubLabel(                           // item 3
+        QStringLiteral("Run a system check or click Run Self-Test."), selftest_content_));
+
+    layout->addWidget(selftest_content_);
+
+    // ── E: Logs redirect ──────────────────────────────────────────────────────
+    layout->addWidget(makeHorizontalRule(content));
+
+    auto* logs_card = makePanel(content);
+    auto* ll = new QVBoxLayout(logs_card);
+    ll->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
+    ll->setSpacing(M::kSpaceMd);
+    ll->addWidget(makeSectionLabel(QStringLiteral("Application Logs"), logs_card));
+    ll->addWidget(makeSubLabel(QStringLiteral("Raw application logs are available on the Logs page."), logs_card));
+    auto* go_logs_btn = new QPushButton(QStringLiteral("Open Logs Page"), logs_card);
+    go_logs_btn->setProperty("role", "ghost");
+    go_logs_btn->setMaximumWidth(200);
+    ll->addWidget(go_logs_btn);
+    layout->addWidget(logs_card);
+
+    layout->addStretch();
+    scroll->setWidget(content);
+    root->addWidget(scroll);
+
+    connect(run_check_btn_, &QPushButton::clicked, this, &DiagnosticsPage::onRunCheck);
+    connect(export_report_btn_, &QPushButton::clicked, this, &DiagnosticsPage::onExportReport);
+    connect(selftest_run_btn_, &QPushButton::clicked, this, &DiagnosticsPage::onRunCheck);
+    connect(go_logs_btn, &QPushButton::clicked, this, &DiagnosticsPage::navigateToLogsRequested);
 }
 
 void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, const OutputSettingsModel& output,
@@ -114,7 +268,6 @@ void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, c
     data_ready_ = true;
 
     refreshOverview();
-    refreshRecommendations();
     refreshSelfTest();
     refreshCapabilities();
     refreshConfiguration();
@@ -145,9 +298,8 @@ QWidget* DiagnosticsPage::makeInfoRow(const QString& label, const QString& value
                                       QWidget* parent) {
     auto* row = new QWidget(parent);
     auto* row_layout = new QHBoxLayout(row);
-    row_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceSm, ui::theme::ExoSnapMetrics::kSpaceXs,
-                                   ui::theme::ExoSnapMetrics::kSpaceSm, ui::theme::ExoSnapMetrics::kSpaceXs);
-    row_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
+    row_layout->setContentsMargins(M::kSpaceSm, M::kSpaceXs, M::kSpaceSm, M::kSpaceXs);
+    row_layout->setSpacing(M::kSpaceMd);
 
     auto* name_label = new QLabel(label, row);
     name_label->setProperty("labelRole", "body");
@@ -176,126 +328,6 @@ QWidget* DiagnosticsPage::makeInfoRow(const QString& label, const QString& value
     return row;
 }
 
-// --- Overview Tab ---
-
-void DiagnosticsPage::buildOverviewTab(QWidget* container) {
-    auto* scroll = new QScrollArea(container);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-
-    auto* content = new QWidget();
-    auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
-                               ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
-    layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
-
-    layout->addWidget(makeSectionLabel(QStringLiteral("Readiness / Capability Overview"), content));
-
-    auto* overview_panel = makePanel(content);
-    auto* overview_layout = new QVBoxLayout(overview_panel);
-    overview_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
-                                        ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
-    overview_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
-
-    overview_layout->addWidget(makeSubLabel(
-        QStringLiteral("Diagnostics are designed to block invalid recording states early."), overview_panel));
-
-    status_label_ = new QLabel(QStringLiteral("Overall status: Not checked"), overview_panel);
-    status_label_->setProperty("labelRole", "body");
-    overview_layout->addWidget(status_label_);
-
-    last_check_label_ = new QLabel(QStringLiteral("Last check: —"), overview_panel);
-    last_check_label_->setProperty("labelRole", "subtle");
-    overview_layout->addWidget(last_check_label_);
-
-    auto* btn_row = new QHBoxLayout();
-    btn_row->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
-
-    run_check_btn_ = new QPushButton(QStringLiteral("Run System & Pipeline Check"), overview_panel);
-    run_check_btn_->setProperty("role", "primary");
-    export_report_btn_ = new QPushButton(QStringLiteral("Export Diagnostic Report"), overview_panel);
-    export_report_btn_->setProperty("role", "ghost");
-    export_report_btn_->setEnabled(false);
-
-    btn_row->addWidget(run_check_btn_);
-    btn_row->addWidget(export_report_btn_);
-    btn_row->addStretch();
-    overview_layout->addLayout(btn_row);
-
-    summary_label_ = new QLabel(QStringLiteral("Run a check to see results."), overview_panel);
-    summary_label_->setProperty("labelRole", "muted");
-    overview_layout->addWidget(summary_label_);
-
-    // Counts row
-    auto* counts_row = new QHBoxLayout();
-    counts_row->setSpacing(ui::theme::ExoSnapMetrics::kSpaceXl);
-
-    auto* blocker_panel = new QFrame(overview_panel);
-    blocker_panel->setProperty("panelRole", "compactRow");
-    auto* blocker_layout = new QHBoxLayout(blocker_panel);
-    blocker_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceSm,
-                                       ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceSm);
-    blocker_count_ = new QLabel(QStringLiteral("0"), blocker_panel);
-    blocker_count_->setProperty("labelRole", "countBlocker");
-    auto* blocker_label = new QLabel(QStringLiteral("Blockers"), blocker_panel);
-    blocker_label->setProperty("labelRole", "body");
-    blocker_layout->addWidget(blocker_count_);
-    blocker_layout->addWidget(blocker_label);
-    counts_row->addWidget(blocker_panel);
-
-    auto* notice_panel = new QFrame(overview_panel);
-    notice_panel->setProperty("panelRole", "compactRow");
-    auto* notice_inner = new QHBoxLayout(notice_panel);
-    notice_inner->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceSm,
-                                     ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceSm);
-    notice_count_ = new QLabel(QStringLiteral("0"), notice_panel);
-    notice_count_->setProperty("labelRole", "countNotice");
-    auto* notice_label = new QLabel(QStringLiteral("Notices"), notice_panel);
-    notice_label->setProperty("labelRole", "body");
-    notice_inner->addWidget(notice_count_);
-    notice_inner->addWidget(notice_label);
-    counts_row->addWidget(notice_panel);
-
-    auto* pass_panel = new QFrame(overview_panel);
-    pass_panel->setProperty("panelRole", "compactRow");
-    auto* pass_inner = new QHBoxLayout(pass_panel);
-    pass_inner->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceSm,
-                                   ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceSm);
-    pass_count_ = new QLabel(QStringLiteral("0"), pass_panel);
-    pass_count_->setProperty("labelRole", "countPass");
-    auto* pass_label = new QLabel(QStringLiteral("Passes"), pass_panel);
-    pass_label->setProperty("labelRole", "body");
-    pass_inner->addWidget(pass_count_);
-    pass_inner->addWidget(pass_label);
-    counts_row->addWidget(pass_panel);
-
-    counts_row->addStretch();
-    overview_layout->addLayout(counts_row);
-
-    overview_layout->addWidget(makeHorizontalRule(overview_panel));
-    overview_layout->addWidget(makeSectionLabel(QStringLiteral("Top Issues"), overview_panel));
-    overview_layout->addWidget(
-        makeSubLabel(QStringLiteral("Highest-priority blockers and notices for the current recording configuration."),
-                     overview_panel));
-
-    overview_issues_layout_ = new QVBoxLayout();
-    overview_issues_layout_->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
-    overview_layout->addLayout(overview_issues_layout_);
-    overview_issues_layout_->addWidget(
-        makeSubLabel(QStringLiteral("Run a system check to populate issue details."), overview_panel));
-
-    layout->addWidget(overview_panel);
-    layout->addStretch();
-    scroll->setWidget(content);
-
-    auto* root = new QVBoxLayout(container);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->addWidget(scroll);
-
-    connect(run_check_btn_, &QPushButton::clicked, this, &DiagnosticsPage::onRunCheck);
-    connect(export_report_btn_, &QPushButton::clicked, this, &DiagnosticsPage::onExportReport);
-}
-
 void DiagnosticsPage::onRunCheck() {
     status_label_->setText(QStringLiteral("Overall status: Checking..."));
     last_check_label_->setText(QStringLiteral("Last check: running..."));
@@ -309,7 +341,6 @@ void DiagnosticsPage::onRunCheck() {
     }
 
     refreshOverview();
-    refreshRecommendations();
     refreshSelfTest();
 }
 
@@ -317,96 +348,7 @@ void DiagnosticsPage::onExportReport() {
     // Disabled until full report export is wired.
 }
 
-// --- Capabilities Tab ---
-
-void DiagnosticsPage::buildCapabilitiesTab(QWidget* container) {
-    auto* scroll = new QScrollArea(container);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-
-    capabilities_content_ = new QWidget();
-    capabilities_layout_ = new QVBoxLayout(capabilities_content_);
-    capabilities_layout_->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
-                                             ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
-    capabilities_layout_->setSpacing(ui::theme::ExoSnapMetrics::kSpaceXs);
-
-    capabilities_layout_->addWidget(
-        makeSectionLabel(QStringLiteral("Hardware & Software Capabilities"), capabilities_content_));
-    capabilities_layout_->addWidget(makeSubLabel(
-        QStringLiteral("Detected capabilities from the current system. Values in red/grey are not available."),
-        capabilities_content_));
-    capabilities_layout_->addSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
-
-    // Header row
-    auto* header_row = new QWidget(capabilities_content_);
-    auto* header_layout = new QHBoxLayout(header_row);
-    header_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceSm, 0, ui::theme::ExoSnapMetrics::kSpaceSm, 0);
-    auto* h1 = new QLabel(QStringLiteral("Feature"), header_row);
-    h1->setProperty("labelRole", "section");
-    h1->setMinimumWidth(180);
-    auto* h2 = new QLabel(QStringLiteral("Detected Value"), header_row);
-    h2->setProperty("labelRole", "section");
-    auto* h3 = new QLabel(QStringLiteral("Status"), header_row);
-    h3->setProperty("labelRole", "section");
-    header_layout->addWidget(h1);
-    header_layout->addWidget(h2, 1);
-    header_layout->addWidget(h3);
-    capabilities_layout_->addWidget(header_row);
-    capabilities_layout_->addWidget(makeHorizontalRule(capabilities_content_));
-
-    capabilities_layout_->addWidget(makeSubLabel(
-        QStringLiteral("Run a system check from the Overview tab to populate this list."), capabilities_content_));
-    capabilities_layout_->addStretch();
-
-    scroll->setWidget(capabilities_content_);
-
-    auto* root = new QVBoxLayout(container);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->addWidget(scroll);
-}
-
-// --- Configuration Tab ---
-
-void DiagnosticsPage::buildConfigurationTab(QWidget* container) {
-    auto* scroll = new QScrollArea(container);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-
-    config_content_ = new QWidget();
-    config_layout_ = new QVBoxLayout(config_content_);
-    config_layout_->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
-                                       ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
-    config_layout_->setSpacing(ui::theme::ExoSnapMetrics::kSpaceXs);
-
-    config_layout_->addWidget(makeSectionLabel(QStringLiteral("Current Configuration"), config_content_));
-    config_layout_->addWidget(
-        makeSubLabel(QStringLiteral("Active recording settings as currently configured in the app."), config_content_));
-    config_layout_->addSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
-
-    // Header
-    auto* header_row = new QWidget(config_content_);
-    auto* header_layout = new QHBoxLayout(header_row);
-    header_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceSm, 0, ui::theme::ExoSnapMetrics::kSpaceSm, 0);
-    auto* h1 = new QLabel(QStringLiteral("Setting"), header_row);
-    h1->setProperty("labelRole", "section");
-    h1->setMinimumWidth(180);
-    auto* h2 = new QLabel(QStringLiteral("Value"), header_row);
-    h2->setProperty("labelRole", "section");
-    header_layout->addWidget(h1);
-    header_layout->addWidget(h2, 1);
-    config_layout_->addWidget(header_row);
-    config_layout_->addWidget(makeHorizontalRule(config_content_));
-
-    config_layout_->addWidget(makeSubLabel(
-        QStringLiteral("Run a system check from the Overview tab to populate this list."), config_content_));
-    config_layout_->addStretch();
-
-    scroll->setWidget(config_content_);
-
-    auto* root = new QVBoxLayout(container);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->addWidget(scroll);
-}
+// --- Capabilities refresh ---
 
 void DiagnosticsPage::refreshCapabilities() {
     if (!capabilities_layout_ || !capabilities_content_ || !data_ready_)
@@ -423,11 +365,11 @@ void DiagnosticsPage::refreshCapabilities() {
     capabilities_layout_->addWidget(makeSubLabel(
         QStringLiteral("Detected capabilities from the current system. Values marked unavailable are not selectable."),
         capabilities_content_));
-    capabilities_layout_->addSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
+    capabilities_layout_->addSpacing(M::kSpaceMd);
 
     auto* header_row = new QWidget(capabilities_content_);
     auto* header_layout = new QHBoxLayout(header_row);
-    header_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceSm, 0, ui::theme::ExoSnapMetrics::kSpaceSm, 0);
+    header_layout->setContentsMargins(M::kSpaceSm, 0, M::kSpaceSm, 0);
     auto* h1 = new QLabel(QStringLiteral("Feature"), header_row);
     h1->setProperty("labelRole", "section");
     h1->setMinimumWidth(180);
@@ -446,8 +388,9 @@ void DiagnosticsPage::refreshCapabilities() {
                                                     QString::fromStdString(entry.value),
                                                     QString::fromStdString(entry.status), capabilities_content_));
     }
-    capabilities_layout_->addStretch();
 }
+
+// --- Configuration refresh ---
 
 void DiagnosticsPage::refreshConfiguration() {
     if (!config_layout_ || !config_content_ || !data_ready_)
@@ -459,14 +402,14 @@ void DiagnosticsPage::refreshConfiguration() {
         delete child;
     }
 
-    config_layout_->addWidget(makeSectionLabel(QStringLiteral("Current Configuration"), config_content_));
+    config_layout_->addWidget(makeSectionLabel(QStringLiteral("Active Configuration"), config_content_));
     config_layout_->addWidget(
         makeSubLabel(QStringLiteral("Active recording settings as currently configured in the app."), config_content_));
-    config_layout_->addSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
+    config_layout_->addSpacing(M::kSpaceMd);
 
     auto* header_row = new QWidget(config_content_);
     auto* header_layout = new QHBoxLayout(header_row);
-    header_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceSm, 0, ui::theme::ExoSnapMetrics::kSpaceSm, 0);
+    header_layout->setContentsMargins(M::kSpaceSm, 0, M::kSpaceSm, 0);
     auto* h1 = new QLabel(QStringLiteral("Setting"), header_row);
     h1->setProperty("labelRole", "section");
     h1->setMinimumWidth(180);
@@ -481,227 +424,16 @@ void DiagnosticsPage::refreshConfiguration() {
         config_layout_->addWidget(makeInfoRow(QString::fromStdString(entry.label), QString::fromStdString(entry.value),
                                               QString(), config_content_));
     }
-    config_layout_->addStretch();
 }
 
-// --- Recommendations Tab ---
-
-void DiagnosticsPage::buildRecommendationsTab(QWidget* container) {
-    auto* scroll = new QScrollArea(container);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-
-    recommendations_content_ = new QWidget();
-    recommendations_layout_ = new QVBoxLayout(recommendations_content_);
-    recommendations_layout_->setContentsMargins(
-        ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
-        ui::theme::ExoSnapMetrics::kSpaceXl);
-    recommendations_layout_->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
-
-    recommendations_layout_->addWidget(makeSectionLabel(QStringLiteral("Recommendations"), recommendations_content_));
-    recommendations_layout_->addWidget(makeSubLabel(
-        QStringLiteral("Rule-based warnings about your current configuration."), recommendations_content_));
-
-    recommendations_layout_->addWidget(
-        makeSubLabel(QStringLiteral("Run a system check from the Overview tab to generate recommendations."),
-                     recommendations_content_));
-    recommendations_layout_->addStretch();
-
-    scroll->setWidget(recommendations_content_);
-
-    auto* root = new QVBoxLayout(container);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->addWidget(scroll);
-}
-
-void DiagnosticsPage::refreshRecommendations() {
-    if (!recommendations_layout_ || !recommendations_content_ || !data_ready_)
-        return;
-
-    // Clear existing
-    QLayoutItem* child;
-    while ((child = recommendations_layout_->takeAt(0)) != nullptr) {
-        delete child->widget();
-        delete child;
-    }
-
-    recommendations_layout_->addWidget(makeSectionLabel(QStringLiteral("Recommendations"), recommendations_content_));
-    recommendations_layout_->addWidget(makeSubLabel(
-        QStringLiteral("Rule-based warnings about your current configuration."), recommendations_content_));
-    recommendations_layout_->addWidget(makeHorizontalRule(recommendations_content_));
-
-    diagnostics::RecommendationEngine engine(caps_, active_user_config_, /*refresh=*/0, /*drive free=*/0,
-                                             profile_validation_.succeeded);
-    auto checklist = engine.Generate();
-
-    if (checklist.results.empty()) {
-        recommendations_layout_->addWidget(makeSubLabel(
-            QStringLiteral("No recommendations. Your configuration looks good."), recommendations_content_));
-    } else {
-        std::vector<diagnostics::DiagnosticResult> ordered = checklist.results;
-        diagnostics::StableSortBySeverityDesc(ordered);
-        for (const auto& result : ordered) {
-            auto* card = makePanel(recommendations_content_);
-            auto* card_layout = new QVBoxLayout(card);
-            card_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
-                                            ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
-            card_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceXs);
-
-            auto* title_row = new QHBoxLayout();
-            auto* sev_icon = new QLabel(severityIcon(result.severity), card);
-            sev_icon->setProperty("labelRole", severityClass(result.severity));
-            auto* title_label = new QLabel(QString::fromStdString(result.title), card);
-            title_label->setProperty("labelRole", "body");
-            title_label->setStyleSheet(QStringLiteral("font-weight: bold;"));
-            title_row->addWidget(sev_icon);
-            title_row->addWidget(title_label, 1);
-            card_layout->addLayout(title_row);
-
-            auto* summary_lbl = new QLabel(QString::fromStdString(result.summary), card);
-            summary_lbl->setProperty("labelRole", "subtle");
-            summary_lbl->setWordWrap(true);
-            card_layout->addWidget(summary_lbl);
-
-            if (!result.recommendation.empty()) {
-                auto* rec_lbl = new QLabel(QString::fromStdString("Recommendation: " + result.recommendation), card);
-                rec_lbl->setProperty("labelRole", "muted");
-                rec_lbl->setWordWrap(true);
-                card_layout->addWidget(rec_lbl);
-            }
-
-            recommendations_layout_->addWidget(card);
-        }
-    }
-
-    recommendations_layout_->addStretch();
-}
-
-// --- Performance Tab ---
-
-void DiagnosticsPage::buildPerformanceTab(QWidget* container) {
-    auto* scroll = new QScrollArea(container);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-
-    auto* content = new QWidget();
-    auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
-                               ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
-    layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
-
-    layout->addWidget(makeSectionLabel(QStringLiteral("Performance / Trace"), content));
-    auto* panel = makePanel(content);
-    auto* panel_layout = new QVBoxLayout(panel);
-    panel_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
-                                     ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
-    panel_layout->addWidget(
-        makeSubLabel(QStringLiteral("Performance waterfall and tracing is not yet available in this build."), panel));
-
-    auto* placeholder =
-        new QLabel(QStringLiteral("[waterfall] Frame timing waterfall\n"
-                                  "[timeline] Encoder timeline\n"
-                                  "[metrics] Real-time performance counters\n\n"
-                                  "These views will be populated when the full trace infrastructure is integrated."),
-                   panel);
-    placeholder->setProperty("labelRole", "mono");
-    placeholder->setProperty("panelRole", "placeholder");
-    panel_layout->addWidget(placeholder);
-
-    layout->addWidget(panel);
-    layout->addStretch();
-    scroll->setWidget(content);
-
-    auto* root = new QVBoxLayout(container);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->addWidget(scroll);
-}
-
-// --- Logs Tab ---
-
-void DiagnosticsPage::buildLogsTab(QWidget* container) {
-    auto* scroll = new QScrollArea(container);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-
-    auto* content = new QWidget();
-    auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
-                               ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
-    layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
-
-    layout->addWidget(makeSectionLabel(QStringLiteral("Application Logs"), content));
-
-    auto* card = makePanel(content);
-    auto* card_layout = new QVBoxLayout(card);
-    card_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
-                                    ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
-    card_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
-
-    card_layout->addWidget(makeSubLabel(QStringLiteral("Raw application logs are available on the Logs page."), card));
-
-    auto* go_btn = new QPushButton(QStringLiteral("Open Logs Page"), card);
-    go_btn->setProperty("role", "ghost");
-    go_btn->setMaximumWidth(200);
-    card_layout->addWidget(go_btn);
-
-    layout->addWidget(card);
-    layout->addStretch();
-    scroll->setWidget(content);
-
-    auto* root = new QVBoxLayout(container);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->addWidget(scroll);
-
-    connect(go_btn, &QPushButton::clicked, this, &DiagnosticsPage::navigateToLogsRequested);
-}
-
-// --- Self-Test Tab ---
-
-void DiagnosticsPage::buildSelfTestTab(QWidget* container) {
-    auto* scroll = new QScrollArea(container);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-
-    selftest_content_ = new QWidget();
-    selftest_layout_ = new QVBoxLayout(selftest_content_);
-    selftest_layout_->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
-                                         ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
-    selftest_layout_->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
-
-    selftest_layout_->addWidget(makeSectionLabel(QStringLiteral("Self-Test"), selftest_content_));
-    selftest_layout_->addWidget(
-        makeSubLabel(QStringLiteral("Validates core recording pipeline components without starting a full recording."),
-                     selftest_content_));
-
-    selftest_status_label_ = new QLabel(QStringLiteral("Status: Not run"), selftest_content_);
-    selftest_status_label_->setProperty("labelRole", "body");
-    selftest_layout_->addWidget(selftest_status_label_);
-
-    selftest_run_btn_ = new QPushButton(QStringLiteral("Run Self-Test"), selftest_content_);
-    selftest_run_btn_->setProperty("role", "primary");
-    selftest_run_btn_->setMaximumWidth(200);
-    selftest_layout_->addWidget(selftest_run_btn_);
-
-    selftest_layout_->addWidget(makeHorizontalRule(selftest_content_));
-    selftest_layout_->addWidget(makeSubLabel(
-        QStringLiteral("Run a system check from the Overview tab or click Run Self-Test."), selftest_content_));
-    selftest_layout_->addStretch();
-
-    scroll->setWidget(selftest_content_);
-
-    auto* root = new QVBoxLayout(container);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->addWidget(scroll);
-
-    connect(selftest_run_btn_, &QPushButton::clicked, this, &DiagnosticsPage::onRunCheck);
-}
+// --- Self-Test refresh ---
 
 void DiagnosticsPage::refreshSelfTest() {
     if (!selftest_layout_ || !selftest_content_)
         return;
 
-    // Clear existing content below the run button and rule
-    while (selftest_layout_->count() > 6) {
+    // Preserve first 4 items (status label, run button, rule, hint); remove dynamic results.
+    while (selftest_layout_->count() > 4) {
         QLayoutItem* child = selftest_layout_->takeAt(selftest_layout_->count() - 1);
         if (child->widget())
             delete child->widget();
@@ -720,8 +452,7 @@ void DiagnosticsPage::refreshSelfTest() {
     for (const auto& result : checklist.results) {
         auto* row = makePanel(selftest_content_);
         auto* row_layout = new QHBoxLayout(row);
-        row_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceSm,
-                                       ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceSm);
+        row_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
 
         auto* icon_lbl = new QLabel(severityIcon(result.severity), row);
         icon_lbl->setProperty("labelRole", severityClass(result.severity));
@@ -744,8 +475,9 @@ void DiagnosticsPage::refreshSelfTest() {
 
         selftest_layout_->addWidget(row);
     }
-    selftest_layout_->addStretch();
 }
+
+// --- Top Issues ---
 
 void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations) {
     if (!overview_issues_layout_)
@@ -765,11 +497,10 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
         if (issue_count >= kMaxIssues)
             return;
 
-        auto* card = makePanel(this);
+        auto* card = makePanel(issues_parent_);
         auto* card_layout = new QVBoxLayout(card);
-        card_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
-                                        ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
-        card_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceXs);
+        card_layout->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
+        card_layout->setSpacing(M::kSpaceXs);
 
         auto* title_row = new QHBoxLayout();
         auto* icon_label = new QLabel(severityIcon(severity), card);
@@ -847,14 +578,8 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
     }
 
     if (issue_count == 0) {
-        overview_issues_layout_->addWidget(
-            makeSubLabel(QStringLiteral("No blockers or notices in the active recording configuration."), this));
-        return;
-    }
-
-    if (static_cast<int>(recommendations.results.size()) > issue_count) {
-        overview_issues_layout_->addWidget(
-            makeSubLabel(QStringLiteral("Additional details are available in the Recommendations tab."), this));
+        overview_issues_layout_->addWidget(makeSubLabel(
+            QStringLiteral("No blockers or notices in the active recording configuration."), issues_parent_));
     }
 }
 
@@ -883,7 +608,6 @@ void DiagnosticsPage::refreshOverview() {
         combined.results.push_back(r);
     }
 
-    // Count
     int blockers = 0, notices = 0, passes = 0;
     for (const auto& r : combined.results) {
         switch (r.severity) {
@@ -925,7 +649,5 @@ void DiagnosticsPage::refreshOverview() {
 
     export_report_btn_->setEnabled(true);
 }
-
-// --- MainWindow wiring ---
 
 } // namespace exosnap

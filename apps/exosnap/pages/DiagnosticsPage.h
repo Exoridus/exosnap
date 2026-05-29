@@ -10,7 +10,6 @@
 
 class QLabel;
 class QPushButton;
-class QTabWidget;
 class QVBoxLayout;
 class QScrollArea;
 class QFrame;
@@ -38,16 +37,7 @@ class DiagnosticsPage : public QWidget {
     void onExportReport();
 
   private:
-    void buildOverviewTab(QWidget* container);
-    void buildCapabilitiesTab(QWidget* container);
-    void buildConfigurationTab(QWidget* container);
-    void buildRecommendationsTab(QWidget* container);
-    void buildPerformanceTab(QWidget* container);
-    void buildLogsTab(QWidget* container);
-    void buildSelfTestTab(QWidget* container);
-
     void refreshOverview();
-    void refreshRecommendations();
     void refreshSelfTest();
     void refreshCapabilities();
     void refreshConfiguration();
@@ -58,9 +48,7 @@ class DiagnosticsPage : public QWidget {
     QFrame* makePanel(QWidget* parent);
     QWidget* makeInfoRow(const QString& label, const QString& value, const QString& status, QWidget* parent);
 
-    QTabWidget* tabs_ = nullptr;
-
-    // Overview
+    // Readiness / status
     QLabel* status_label_ = nullptr;
     QLabel* last_check_label_ = nullptr;
     QLabel* summary_label_ = nullptr;
@@ -69,7 +57,10 @@ class DiagnosticsPage : public QWidget {
     QLabel* blocker_count_ = nullptr;
     QLabel* notice_count_ = nullptr;
     QLabel* pass_count_ = nullptr;
+
+    // Top Issues
     QVBoxLayout* overview_issues_layout_ = nullptr;
+    QWidget* issues_parent_ = nullptr;
 
     // Capabilities
     QVBoxLayout* capabilities_layout_ = nullptr;
@@ -78,10 +69,6 @@ class DiagnosticsPage : public QWidget {
     // Configuration
     QVBoxLayout* config_layout_ = nullptr;
     QWidget* config_content_ = nullptr;
-
-    // Recommendations
-    QVBoxLayout* recommendations_layout_ = nullptr;
-    QWidget* recommendations_content_ = nullptr;
 
     // Self-test
     QVBoxLayout* selftest_layout_ = nullptr;
