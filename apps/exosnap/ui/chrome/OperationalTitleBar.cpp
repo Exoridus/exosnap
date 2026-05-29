@@ -3,12 +3,15 @@
 #include "../brand/BrandMarkWidget.h"
 #include "../widgets/StatusPill.h"
 
+#include <QApplication>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
 #include <QStyle>
+#include <QWindow>
 
 namespace exosnap::ui::chrome {
 namespace {
@@ -178,7 +181,92 @@ void OperationalTitleBar::setRecordingRuntime(const QString& elapsed_text, const
 }
 
 void OperationalTitleBar::setMaximizedState(bool maximized) {
-    maximize_btn_->setText(maximized ? "❐" : "□");
+    maximize_btn_->setText(maximized ? "⧉" : "□"); // ⧉ TWO JOINED SQUARES — same visual weight as □
+}
+
+void OperationalTitleBar::mousePressEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        const QPoint local = mapFromGlobal(event->globalPosition().toPoint());
+        if (hitTestWindowButton(local) == WindowButtonHit::None) {
+            // Show the move cursor immediately on press.
+            QApplication::setOverrideCursor(Qt::SizeAllCursor);
+            move_cursor_active_ = true;
+
+            if (window()->isMaximized()) {
+                // Defer move until the user actually drags — a bare click on a
+                // maximized titlebar must not restore the window.
+                drag_press_global_pos_ = event->globalPosition().toPoint();
+                tracking_drag_from_max_ = true;
+                event->accept();
+                return;
+            }
+            if (QWindow* win = window()->windowHandle()) {
+                win->startSystemMove();
+                event->accept();
+                return;
+            }
+        }
+    }
+    tracking_drag_from_max_ = false;
+    QWidget::mousePressEvent(event);
+}
+
+void OperationalTitleBar::mouseMoveEvent(QMouseEvent* event) {
+    if (tracking_drag_from_max_ && window()->isMaximized() && (event->buttons() & Qt::LeftButton)) {
+        const QPoint current = event->globalPosition().toPoint();
+        if ((current - drag_press_global_pos_).manhattanLength() > 5) {
+            tracking_drag_from_max_ = false;
+
+            QWidget* win = window();
+            const QRect max_rect = win->geometry();
+            const QRect normal_rect = win->normalGeometry();
+
+            win->showNormal();
+
+            // Reposition so the cursor stays at roughly the same relative x in
+            // the titlebar, matching the native Windows restore-on-drag behavior.
+            if (normal_rect.isValid() && max_rect.width() > 0) {
+                const qreal rel_x = static_cast<qreal>(current.x() - max_rect.left()) / max_rect.width();
+                const int target_x = current.x() - qRound(win->width() * rel_x);
+                win->move(qMax(0, target_x), qMax(0, current.y() - kHeight / 2));
+            }
+
+            if (QWindow* handle = win->windowHandle()) {
+                handle->startSystemMove();
+                event->accept();
+                return;
+            }
+        }
+    }
+    QWidget::mouseMoveEvent(event);
+}
+
+void OperationalTitleBar::mouseReleaseEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        tracking_drag_from_max_ = false;
+        resetDragCursor(); // handles plain click (no drag) — WM_EXITSIZEMOVE handles drag end
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
+void OperationalTitleBar::resetDragCursor() {
+    if (move_cursor_active_) {
+        QApplication::restoreOverrideCursor();
+        move_cursor_active_ = false;
+    }
+}
+
+void OperationalTitleBar::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        const QPoint local = mapFromGlobal(event->globalPosition().toPoint());
+        if (hitTestWindowButton(local) == WindowButtonHit::None) {
+            QWidget* win = window();
+            win->isMaximized() ? win->showNormal() : win->showMaximized();
+            event->accept();
+            return;
+        }
+    }
+    QWidget::mouseDoubleClickEvent(event);
 }
 
 bool OperationalTitleBar::isInDragArea(const QPoint& local_pos) const {

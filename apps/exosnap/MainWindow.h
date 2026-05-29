@@ -49,15 +49,19 @@ class MainWindow : public QMainWindow {
     void onGlobalRecordingBarPauseActionRequested();
     void pollIdleRuntimeMetrics();
     void onHotkeyBindingChanged(int action_index, QKeySequence seq);
+    void toggleFullScreen();
 
   private:
     void showEvent(QShowEvent* event) override;
     bool nativeEvent(const QByteArray& event_type, void* message, qintptr* result) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void changeEvent(QEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
 
     void applyRuntimeWindowIcon();
     bool effectiveMaximizedState() const;
+    void applyRestoredGeometry();
+    void saveWindowGeometry();
 
     void setCurrentPage(int index);
     void updatePageHeader(int index);
@@ -102,7 +106,10 @@ class MainWindow : public QMainWindow {
     bool resizable_style_applied_ = false;
     bool hotkeys_registered_ = false;
     bool win32_maximized_ = false;
+    bool resize_cursor_shown_ = false;
     bool syncing_profile_ui_ = false;
+    bool geometry_restored_ = false;
+    bool pre_fullscreen_maximized_ = false;
     std::array<QKeySequence, 4> persisted_hotkeys_ = {
         QKeySequence(Qt::ALT | Qt::Key_F9),
         QKeySequence(),

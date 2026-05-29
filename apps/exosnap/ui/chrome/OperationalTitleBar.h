@@ -39,6 +39,7 @@ class OperationalTitleBar : public QWidget {
 
     bool isInDragArea(const QPoint& local_pos) const;
     WindowButtonHit hitTestWindowButton(const QPoint& local_pos) const;
+    void resetDragCursor();
     QRect maximizeButtonRectInWindow() const;
 
   signals:
@@ -47,6 +48,10 @@ class OperationalTitleBar : public QWidget {
     void closeRequested();
 
   protected:
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
 
   private:
@@ -57,6 +62,10 @@ class OperationalTitleBar : public QWidget {
     QPushButton* minimize_btn_ = nullptr;
     QPushButton* maximize_btn_ = nullptr;
     QPushButton* close_btn_ = nullptr;
+    QPoint drag_press_global_pos_;
+    bool tracking_drag_from_max_ = false;
+    bool move_cursor_active_ = false;
+
     bool recording_active_ = false;
     QString status_label_ = QStringLiteral("READY");
     QString idle_cpu_text_ = QStringLiteral("–");

@@ -31,6 +31,7 @@
 #include <QEvent>
 #include <QFile>
 #include <QFrame>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
@@ -40,6 +41,8 @@
 #include <QPainterPath>
 #include <QPalette>
 #include <QPushButton>
+#include <QScreen>
+#include <QShortcut>
 #include <QShowEvent>
 #include <QStyle>
 #include <QStyleOptionViewItem>
@@ -842,6 +845,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(nav_, &QListWidget::currentRowChanged, this, &MainWindow::onNavRowChanged);
     connect(title_bar_, &ui::chrome::OperationalTitleBar::minimizeRequested, this, &QWidget::showMinimized);
     connect(title_bar_, &ui::chrome::OperationalTitleBar::maximizeRestoreRequested, this, [this]() {
+        if (isFullScreen()) {
+            pre_fullscreen_maximized_ ? showMaximized() : showNormal();
+            return;
+        }
 #if defined(Q_OS_WIN)
         HWND hwnd = reinterpret_cast<HWND>(effectiveWinId());
         const bool zoomed = (hwnd != nullptr) && (IsZoomed(hwnd) != FALSE);
@@ -1093,6 +1100,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     nav_->setCurrentRow(0);
     pollIdleRuntimeMetrics();
 
+    auto* fullscreen_shortcut = new QShortcut(QKeySequence(Qt::Key_F11), this);
+    fullscreen_shortcut->setContext(Qt::ApplicationShortcut);
+    connect(fullscreen_shortcut, &QShortcut::activated, this, &MainWindow::toggleFullScreen);
+
+    // Application-level filter to catch mouse-press events in the resize border
+    // regardless of which child widget lies under the cursor.  Resize zones are
+    // HTCLIENT, so WM_NCLBUTTONDOWN never fires for them; we handle them here.
+    qApp->installEventFilter(this);
+
     QTimer::singleShot(0, this, [this]() {
         runtime_caps_ = capability::CapabilityBuilder::BuildFromHardwareQuery();
         runtime_caps_ready_ = true;
@@ -1106,6 +1122,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
 void MainWindow::showEvent(QShowEvent* event) {
     QMainWindow::showEvent(event);
+
+    if (!geometry_restored_) {
+        geometry_restored_ = true;
+        applyRestoredGeometry();
+    }
 
 #if defined(Q_OS_WIN)
     if (!resizable_style_applied_) {
@@ -1192,7 +1213,7 @@ void MainWindow::applyRuntimeWindowIcon() {
 }
 
 bool MainWindow::effectiveMaximizedState() const {
-    return isMaximized() || win32_maximized_;
+    return isMaximized() || win32_maximized_ || isFullScreen();
 }
 
 void MainWindow::onNavRowChanged(int row) {
@@ -1400,6 +1421,11 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
             if (msg->hwnd == main_hwnd && msg->message == WM_GETMINMAXINFO) {
                 auto* minmax_info = reinterpret_cast<MINMAXINFO*>(msg->lParam);
                 if (minmax_info != nullptr) {
+                    // Enforce minimum window size during native resize drag (device pixels).
+                    const double dpr = devicePixelRatioF();
+                    minmax_info->ptMinTrackSize.x = static_cast<LONG>(minimumWidth() * dpr);
+                    minmax_info->ptMinTrackSize.y = static_cast<LONG>(minimumHeight() * dpr);
+
                     MONITORINFO monitor_info = {};
                     monitor_info.cbSize = sizeof(monitor_info);
                     const HMONITOR monitor = MonitorFromWindow(msg->hwnd, MONITOR_DEFAULTTONEAREST);
@@ -1434,42 +1460,45 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
                 return true;
             }
 
-            if (msg->hwnd == main_hwnd && msg->message == WM_NCHITTEST) {
-                const QPoint global(GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
-                const QPoint local = mapFromGlobal(global);
-                const bool maximized = effectiveMaximizedState();
-
-                const ResizeZone zone = resizeZoneFromLocalPoint(local, size(), maximized);
-                if (zone != ResizeZone::None) {
-                    *result = hitTestFromResizeZone(zone);
-                    return true;
-                }
-
-                if (title_bar_ != nullptr) {
-                    const QPoint in_title = title_bar_->mapFromGlobal(global);
-                    if (title_bar_->rect().contains(in_title)) {
-                        const auto button_hit = title_bar_->hitTestWindowButton(in_title);
-                        if (button_hit != ui::chrome::OperationalTitleBar::WindowButtonHit::None) {
-                            // Keep client-side titlebar buttons clickable.
-                            *result = HTCLIENT;
-                            return true;
-                        }
-                        if (title_bar_->isInDragArea(in_title)) {
-                            *result = HTCAPTION;
+            // Resize cursor feedback: all zones are HTCLIENT, so WM_SETCURSOR's lParam
+            // always carries HTCLIENT.  Read the live cursor position via Qt (logical
+            // pixels) to derive the zone independently of NCHITTEST.
+            // When leaving the resize zone we explicitly reset to IDC_ARROW — without
+            // this the resize cursor sticks as Qt does not unconditionally call
+            // SetCursor on every WM_SETCURSOR for client-area messages.
+            if (msg->hwnd == main_hwnd && msg->message == WM_SETCURSOR) {
+                if (!effectiveMaximizedState()) {
+                    const QPoint local = mapFromGlobal(QCursor::pos());
+                    const ResizeZone zone = resizeZoneFromLocalPoint(local, size(), false);
+                    if (zone != ResizeZone::None) {
+                        HCURSOR cursor = cursorFromHitTestCode(hitTestFromResizeZone(zone));
+                        if (cursor != nullptr) {
+                            SetCursor(cursor);
+                            resize_cursor_shown_ = true;
+                            *result = TRUE;
                             return true;
                         }
                     }
+                    if (resize_cursor_shown_) {
+                        // Just left the resize zone — force-reset so the resize cursor
+                        // does not linger over the titlebar or content area.
+                        SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+                        resize_cursor_shown_ = false;
+                        // Return false so Qt can still set the correct cursor for the
+                        // widget under the cursor (e.g. pointing-hand for nav items).
+                    }
+                } else {
+                    resize_cursor_shown_ = false;
                 }
             }
 
-            if (msg->hwnd == main_hwnd && msg->message == WM_SETCURSOR && !effectiveMaximizedState()) {
-                const LRESULT hit_test = static_cast<LRESULT>(LOWORD(msg->lParam));
-                HCURSOR cursor = cursorFromHitTestCode(hit_test);
-                if (cursor != nullptr) {
-                    SetCursor(cursor);
-                    *result = TRUE;
-                    return true;
-                }
+            // Reset the drag/move override cursor when the window-move or resize
+            // operation ends.  WM_CAPTURECHANGED fires too early (ReleaseCapture is
+            // called inside startSystemMove before the loop starts), so WM_EXITSIZEMOVE
+            // is the reliable signal that the modal loop has actually finished.
+            if (msg->hwnd == main_hwnd && msg->message == WM_EXITSIZEMOVE) {
+                if (title_bar_ != nullptr)
+                    title_bar_->resetDragCursor();
             }
         }
     }
@@ -1479,6 +1508,56 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
     Q_UNUSED(result);
 #endif
     return QMainWindow::nativeEvent(event_type, message, result);
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    // Intercept mouse presses for the resize border zones.  All zones are
+    // HTCLIENT so Qt generates regular QMouseEvents — handle resize here.
+    if (event->type() == QEvent::MouseButtonPress && isVisible() && !isMaximized()) {
+        auto* me = static_cast<QMouseEvent*>(event);
+        if (me->button() == Qt::LeftButton) {
+            const QPoint local = mapFromGlobal(me->globalPosition().toPoint());
+            const ResizeZone zone = resizeZoneFromLocalPoint(local, size(), false);
+            if (zone != ResizeZone::None) {
+                Qt::Edges edges;
+                switch (zone) {
+                case ResizeZone::Left:
+                    edges = Qt::LeftEdge;
+                    break;
+                case ResizeZone::Right:
+                    edges = Qt::RightEdge;
+                    break;
+                case ResizeZone::Top:
+                    edges = Qt::TopEdge;
+                    break;
+                case ResizeZone::Bottom:
+                    edges = Qt::BottomEdge;
+                    break;
+                case ResizeZone::TopLeft:
+                    edges = Qt::LeftEdge | Qt::TopEdge;
+                    break;
+                case ResizeZone::TopRight:
+                    edges = Qt::RightEdge | Qt::TopEdge;
+                    break;
+                case ResizeZone::BottomLeft:
+                    edges = Qt::LeftEdge | Qt::BottomEdge;
+                    break;
+                case ResizeZone::BottomRight:
+                    edges = Qt::RightEdge | Qt::BottomEdge;
+                    break;
+                default:
+                    break;
+                }
+                if (edges) {
+                    if (QWindow* win = windowHandle()) {
+                        win->startSystemResize(edges);
+                        return true; // consume — do not forward to child widgets
+                    }
+                }
+            }
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
 
 void MainWindow::changeEvent(QEvent* event) {
@@ -1507,6 +1586,8 @@ void MainWindow::changeEvent(QEvent* event) {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    saveWindowGeometry();
+
     if (recording_active_) {
         QMessageBox msgBox(this);
         msgBox.setWindowTitle(QStringLiteral("Recording in progress"));
@@ -1529,6 +1610,66 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         return;
     }
     QMainWindow::closeEvent(event);
+}
+
+void MainWindow::toggleFullScreen() {
+    if (isFullScreen()) {
+        pre_fullscreen_maximized_ ? showMaximized() : showNormal();
+    } else {
+        pre_fullscreen_maximized_ = isMaximized() || win32_maximized_;
+        showFullScreen();
+    }
+}
+
+void MainWindow::saveWindowGeometry() {
+    auto& geo = persisted_settings_.window_geometry;
+    geo.maximized = isMaximized() || win32_maximized_;
+    // normalGeometry() returns the restore rect even when currently maximized or fullscreen.
+    const QRect restore_rect = (isMaximized() || isFullScreen()) ? normalGeometry() : geometry();
+    geo.x = restore_rect.x();
+    geo.y = restore_rect.y();
+    geo.width = restore_rect.width();
+    geo.height = restore_rect.height();
+    settings_store_.Save(persisted_settings_);
+}
+
+void MainWindow::applyRestoredGeometry() {
+    const auto& geo = persisted_settings_.window_geometry;
+    if (geo.width <= 0 || geo.height <= 0)
+        return;
+
+    // The title bar region that must remain accessible so the user can move the window.
+    const QRect title_strip(geo.x, geo.y, std::min(geo.width, 200), 40);
+
+    QScreen* screen = nullptr;
+    for (QScreen* s : QGuiApplication::screens()) {
+        if (s->availableGeometry().intersects(title_strip)) {
+            screen = s;
+            break;
+        }
+    }
+
+    if (screen == nullptr) {
+        // Saved position lands on no connected monitor: center on primary.
+        screen = QGuiApplication::primaryScreen();
+        if (screen == nullptr)
+            return;
+        const QRect avail = screen->availableGeometry();
+        const int w = std::clamp(geo.width, minimumWidth(), avail.width());
+        const int h = std::clamp(geo.height, minimumHeight(), avail.height());
+        setGeometry(avail.left() + (avail.width() - w) / 2, avail.top() + (avail.height() - h) / 2, w, h);
+    } else {
+        const QRect avail = screen->availableGeometry();
+        const int w = std::clamp(geo.width, minimumWidth(), avail.width());
+        const int h = std::clamp(geo.height, minimumHeight(), avail.height());
+        // Keep at least a 100×40px strip of the window inside the available area.
+        const int x = std::clamp(geo.x, avail.left(), avail.right() - std::min(w, 100));
+        const int y = std::clamp(geo.y, avail.top(), avail.bottom() - 40);
+        setGeometry(x, y, w, h);
+    }
+
+    if (geo.maximized)
+        QTimer::singleShot(0, this, &MainWindow::showMaximized);
 }
 
 void MainWindow::setCurrentPage(int index) {
