@@ -30,13 +30,13 @@ class DxgiPreviewRenderer {
     DxgiPreviewRenderer(const DxgiPreviewRenderer&) = delete;
     DxgiPreviewRenderer& operator=(const DxgiPreviewRenderer&) = delete;
 
-    bool Initialize(HWND parentHwnd, uint32_t initialWidth, uint32_t initialHeight);
+    bool Initialize(HWND parentHwnd, uint32_t hwndWidth, uint32_t hwndHeight, uint32_t swapWidth, uint32_t swapHeight);
 
     bool StartCapture(const recorder_core::CaptureTarget& target, uint32_t frame_rate_num, uint32_t frame_rate_den);
 
     void StopCapture();
 
-    void Resize(uint32_t width, uint32_t height);
+    void Resize(uint32_t hwndWidth, uint32_t hwndHeight, uint32_t swapWidth, uint32_t swapHeight);
 
     [[nodiscard]] bool IsActive() const noexcept;
     void GetSourceSize(uint32_t& outWidth, uint32_t& outHeight) const noexcept;

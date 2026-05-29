@@ -157,7 +157,6 @@ PreviewSurface::PreviewSurface(QWidget* parent) : QWidget(parent) {
 
     top_row_ = new QWidget(this);
     top_row_->setAttribute(Qt::WA_TransparentForMouseEvents);
-    top_row_->setAttribute(Qt::WA_NativeWindow);
     auto* top_layout = new QHBoxLayout(top_row_);
     top_layout->setContentsMargins(0, 0, 0, 0);
     top_layout->setSpacing(8);
@@ -175,7 +174,6 @@ PreviewSurface::PreviewSurface(QWidget* parent) : QWidget(parent) {
 
     center_box_ = new QWidget(this);
     center_box_->setAttribute(Qt::WA_TransparentForMouseEvents);
-    center_box_->setAttribute(Qt::WA_NativeWindow);
     auto* center_layout = new QVBoxLayout(center_box_);
     center_layout->setContentsMargins(0, 0, 0, 0);
     center_layout->setSpacing(6);
@@ -193,7 +191,6 @@ PreviewSurface::PreviewSurface(QWidget* parent) : QWidget(parent) {
 
     bottom_row_ = new QWidget(this);
     bottom_row_->setAttribute(Qt::WA_TransparentForMouseEvents);
-    bottom_row_->setAttribute(Qt::WA_NativeWindow);
     auto* bottom_layout = new QHBoxLayout(bottom_row_);
     bottom_layout->setContentsMargins(0, 0, 0, 0);
     bottom_layout->setSpacing(8);
@@ -265,10 +262,12 @@ bool PreviewSurface::tryStartDxgiPreview(const recorder_core::CaptureTarget& tar
 
     dxgi_renderer_ = std::make_unique<exosnap::DxgiPreviewRenderer>();
 
+    const uint32_t hwndW = static_cast<uint32_t>(std::max(1, width()));
+    const uint32_t hwndH = static_cast<uint32_t>(std::max(1, height()));
     const qreal dpr = devicePixelRatioF();
-    const uint32_t initW = static_cast<uint32_t>(std::max(1.0, width() * dpr));
-    const uint32_t initH = static_cast<uint32_t>(std::max(1.0, height() * dpr));
-    if (!dxgi_renderer_->Initialize(hwnd, initW, initH)) {
+    const uint32_t swapW = static_cast<uint32_t>(std::max(1.0, width() * dpr));
+    const uint32_t swapH = static_cast<uint32_t>(std::max(1.0, height() * dpr));
+    if (!dxgi_renderer_->Initialize(hwnd, hwndW, hwndH, swapW, swapH)) {
         diagnostics::AppLog(QStringLiteral("[dxgi-preview] DxgiPreviewRenderer init failed, falling back to QImage"));
         dxgi_renderer_.reset();
         return false;
@@ -311,10 +310,12 @@ void PreviewSurface::applyDxgiPreviewResize() {
     if (!dxgi_renderer_ || !dxgi_active_)
         return;
 
+    const uint32_t hwndW = static_cast<uint32_t>(std::max(1, width()));
+    const uint32_t hwndH = static_cast<uint32_t>(std::max(1, height()));
     const qreal dpr = devicePixelRatioF();
-    const int pw = static_cast<int>(std::max(1.0, width() * dpr));
-    const int ph = static_cast<int>(std::max(1.0, height() * dpr));
-    dxgi_renderer_->Resize(static_cast<uint32_t>(pw), static_cast<uint32_t>(ph));
+    const uint32_t swapW = static_cast<uint32_t>(std::max(1.0, width() * dpr));
+    const uint32_t swapH = static_cast<uint32_t>(std::max(1.0, height() * dpr));
+    dxgi_renderer_->Resize(hwndW, hwndH, swapW, swapH);
 }
 
 QRectF PreviewSurface::displayedFrameRectForSource(int srcW, int srcH) const {

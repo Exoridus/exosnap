@@ -50,13 +50,14 @@ DxgiPreviewRenderer::~DxgiPreviewRenderer() {
     Shutdown();
 }
 
-bool DxgiPreviewRenderer::Initialize(HWND parentHwnd, uint32_t initialWidth, uint32_t initialHeight) {
+bool DxgiPreviewRenderer::Initialize(HWND parentHwnd, uint32_t hwndWidth, uint32_t hwndHeight, uint32_t swapWidth,
+                                     uint32_t swapHeight) {
     if (initialized_.load())
         return true;
 
     parentHwnd_ = parentHwnd;
-    initialWidth_ = initialWidth;
-    initialHeight_ = initialHeight;
+    initialWidth_ = swapWidth;
+    initialHeight_ = swapHeight;
 
     if (!parentHwnd_) {
         diagnostics::AppLog(QStringLiteral("[dxgi-preview] initialize failed: null parent HWND"));
@@ -82,7 +83,7 @@ bool DxgiPreviewRenderer::Initialize(HWND parentHwnd, uint32_t initialWidth, uin
     }
 
     childHwnd_ = CreateWindowExW(0, kChildWindowClass, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0,
-                                 static_cast<int>(initialWidth), static_cast<int>(initialHeight), parentHwnd_, nullptr,
+                                 static_cast<int>(hwndWidth), static_cast<int>(hwndHeight), parentHwnd_, nullptr,
                                  GetModuleHandleW(nullptr), nullptr);
 
     if (!childHwnd_) {
@@ -94,11 +95,13 @@ bool DxgiPreviewRenderer::Initialize(HWND parentHwnd, uint32_t initialWidth, uin
     SetWindowPos(childHwnd_, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
     initialized_.store(true);
-    diagnostics::AppLog(QStringLiteral("[dxgi-preview] initialized OK parent=0x%1 child=0x%2 %3x%4")
+    diagnostics::AppLog(QStringLiteral("[dxgi-preview] initialized OK parent=0x%1 child=0x%2 hwnd=%3x%4 swap=%5x%6")
                             .arg(reinterpret_cast<quintptr>(parentHwnd_), 0, 16)
                             .arg(reinterpret_cast<quintptr>(childHwnd_), 0, 16)
-                            .arg(initialWidth)
-                            .arg(initialHeight));
+                            .arg(hwndWidth)
+                            .arg(hwndHeight)
+                            .arg(swapWidth)
+                            .arg(swapHeight));
     return true;
 }
 
@@ -128,15 +131,15 @@ void DxgiPreviewRenderer::StopCapture() {
     }
 }
 
-void DxgiPreviewRenderer::Resize(uint32_t width, uint32_t height) {
+void DxgiPreviewRenderer::Resize(uint32_t hwndWidth, uint32_t hwndHeight, uint32_t swapWidth, uint32_t swapHeight) {
     if (!childHwnd_)
         return;
 
-    SetWindowPos(childHwnd_, nullptr, 0, 0, static_cast<int>(width), static_cast<int>(height),
+    SetWindowPos(childHwnd_, nullptr, 0, 0, static_cast<int>(hwndWidth), static_cast<int>(hwndHeight),
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
 
-    requestedWidth_.store(width);
-    requestedHeight_.store(height);
+    requestedWidth_.store(swapWidth);
+    requestedHeight_.store(swapHeight);
     resizeRequested_.store(true);
 }
 
@@ -164,6 +167,8 @@ void DxgiPreviewRenderer::Shutdown() {
 LRESULT CALLBACK DxgiPreviewRenderer::ChildWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == WM_ERASEBKGND)
         return 1;
+    if (msg == WM_NCHITTEST)
+        return HTTRANSPARENT;
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
