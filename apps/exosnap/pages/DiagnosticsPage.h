@@ -41,7 +41,8 @@ class DiagnosticsPage : public QWidget {
     void refreshSelfTest();
     void refreshCapabilities();
     void refreshConfiguration();
-    void refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations);
+    void refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations, int total_notices,
+                          int total_blockers);
 
     QLabel* makeSubLabel(const QString& text, QWidget* parent);
     QLabel* makeSectionLabel(const QString& text, QWidget* parent);

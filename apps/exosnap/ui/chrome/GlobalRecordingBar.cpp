@@ -146,7 +146,7 @@ GlobalRecordingBar::GlobalRecordingBar(QWidget* parent) : QWidget(parent) {
     actions_layout->addWidget(pause_action_button_);
     actions_layout->addWidget(mic_action_button_);
     actions_layout->addWidget(marker_action_button_);
-    actions_layout->addWidget(overlay_action_button_);
+    // overlay_action_button_ is created but not added to the transport — Overlay/HUD is out of MVP scope.
 
     connect(primary_action_button_, &QPushButton::clicked, this, &GlobalRecordingBar::primaryActionRequested);
     connect(pause_action_button_, &QPushButton::clicked, this, &GlobalRecordingBar::pauseActionRequested);
@@ -332,7 +332,7 @@ void GlobalRecordingBar::applyCompactLayout() {
 
     mic_action_button_->setVisible(!compact_actions);
     marker_action_button_->setVisible(!compact_actions);
-    overlay_action_button_->setVisible(!compact_actions);
+    // overlay_action_button_ is not in the transport layout — no visibility update needed.
 
     output_summary_slot_->setVisible(!compact_context);
     output_separator_->setVisible(!compact_context);

@@ -240,7 +240,17 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     layout->addWidget(logs_card);
 
     layout->addStretch();
-    scroll->setWidget(content);
+
+    constexpr int kMaxContentWidth = 1080;
+    content->setMaximumWidth(kMaxContentWidth);
+    auto* content_holder = new QWidget();
+    auto* holder_layout = new QHBoxLayout(content_holder);
+    holder_layout->setContentsMargins(0, 0, 0, 0);
+    holder_layout->setSpacing(0);
+    holder_layout->addStretch(1);
+    holder_layout->addWidget(content);
+    holder_layout->addStretch(1);
+    scroll->setWidget(content_holder);
     root->addWidget(scroll);
 
     connect(run_check_btn_, &QPushButton::clicked, this, &DiagnosticsPage::onRunCheck);
@@ -443,19 +453,35 @@ void DiagnosticsPage::refreshSelfTest() {
     diagnostics::SelfTestRunner runner;
     auto checklist = runner.Run();
 
+    // Detect whether all non-passing results are scaffold probes not yet implemented.
+    bool all_not_executed = true;
+    for (const auto& r : checklist.results) {
+        if (r.severity != diagnostics::DiagnosticSeverity::Pass &&
+            r.detail.find("not executed in this build") == std::string::npos) {
+            all_not_executed = false;
+            break;
+        }
+    }
+
     if (checklist.worst_severity() == diagnostics::DiagnosticSeverity::Pass) {
         selftest_status_label_->setText(QStringLiteral("Status: PASS"));
+    } else if (all_not_executed) {
+        selftest_status_label_->setText(QStringLiteral("Status: Not run"));
     } else if (checklist.has_notice) {
         selftest_status_label_->setText(QStringLiteral("Status: WARN"));
     }
 
     for (const auto& result : checklist.results) {
+        const bool is_not_executed = result.severity != diagnostics::DiagnosticSeverity::Pass &&
+                                     result.detail.find("not executed in this build") != std::string::npos;
+
         auto* row = makePanel(selftest_content_);
         auto* row_layout = new QHBoxLayout(row);
         row_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
 
-        auto* icon_lbl = new QLabel(severityIcon(result.severity), row);
-        icon_lbl->setProperty("labelRole", severityClass(result.severity));
+        auto* icon_lbl =
+            new QLabel(is_not_executed ? QStringLiteral("\xe2\x80\x94") : severityIcon(result.severity), row);
+        icon_lbl->setProperty("labelRole", is_not_executed ? "subtle" : severityClass(result.severity));
         row_layout->addWidget(icon_lbl);
 
         auto* name_lbl = new QLabel(QString::fromStdString(result.title), row);
@@ -463,9 +489,11 @@ void DiagnosticsPage::refreshSelfTest() {
         name_lbl->setMinimumWidth(200);
         row_layout->addWidget(name_lbl);
 
-        auto* status_lbl = new QLabel(QString::fromStdString(result.summary), row);
-        status_lbl->setProperty("labelRole",
-                                result.severity == diagnostics::DiagnosticSeverity::Pass ? "statusGood" : "statusBad");
+        auto* status_lbl =
+            new QLabel(is_not_executed ? QStringLiteral("Not run") : QString::fromStdString(result.summary), row);
+        status_lbl->setProperty("labelRole", result.severity == diagnostics::DiagnosticSeverity::Pass ? "statusGood"
+                                             : is_not_executed                                        ? "subtle"
+                                                                                                      : "statusBad");
         row_layout->addWidget(status_lbl);
 
         auto* detail_lbl = new QLabel(QString::fromStdString(result.detail), row);
@@ -479,7 +507,8 @@ void DiagnosticsPage::refreshSelfTest() {
 
 // --- Top Issues ---
 
-void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations) {
+void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations, int total_notices,
+                                       int total_blockers) {
     if (!overview_issues_layout_)
         return;
 
@@ -578,8 +607,17 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
     }
 
     if (issue_count == 0) {
-        overview_issues_layout_->addWidget(makeSubLabel(
-            QStringLiteral("No blockers or notices in the active recording configuration."), issues_parent_));
+        if (total_blockers == 0 && total_notices > 0) {
+            overview_issues_layout_->addWidget(makeSubLabel(
+                QStringLiteral("No blockers. %1 informational notice(s) are listed in Technical Details below "
+                               "and do not block the active recording configuration.")
+                    .arg(total_notices),
+                issues_parent_));
+        } else {
+            overview_issues_layout_->addWidget(
+                makeSubLabel(QStringLiteral("No blockers or notices detected in the active recording configuration."),
+                             issues_parent_));
+        }
     }
 }
 
@@ -645,7 +683,7 @@ void DiagnosticsPage::refreshOverview() {
     blocker_count_->setText(QString::number(blockers));
     notice_count_->setText(QString::number(notices));
     pass_count_->setText(QString::number(passes));
-    refreshTopIssues(recs);
+    refreshTopIssues(recs, notices, blockers);
 
     export_report_btn_->setEnabled(true);
 }

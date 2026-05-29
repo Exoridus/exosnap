@@ -109,15 +109,15 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
     note->setProperty("panelRole", "note");
     layout->addWidget(note);
 
-    // Non-default behavior
-    layout->addWidget(makeSectionLabel("Non-default Behavior", content));
+    // Current profile settings
+    layout->addWidget(makeSectionLabel("Current Profile Settings", content));
     auto* behavior_panel = makePanel(content);
     auto* behavior_layout = new QVBoxLayout(behavior_panel);
     behavior_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
                                         ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
     behavior_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceXs);
-    behavior_layout->addWidget(
-        makeSubLabel("These values reflect the active profile and its resolved capture settings.", behavior_panel));
+    behavior_layout->addWidget(makeSubLabel(
+        "These values show the active profile and the format that will be used for recordings.", behavior_panel));
 
     auto* baseline_grid = new QFormLayout();
     baseline_grid->setContentsMargins(0, 0, 0, 0);
@@ -170,7 +170,17 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
     layout->addWidget(controls_panel);
 
     layout->addStretch();
-    scroll->setWidget(content);
+
+    constexpr int kMaxContentWidth = 1080;
+    content->setMaximumWidth(kMaxContentWidth);
+    auto* content_holder = new QWidget();
+    auto* holder_layout = new QHBoxLayout(content_holder);
+    holder_layout->setContentsMargins(0, 0, 0, 0);
+    holder_layout->setSpacing(0);
+    holder_layout->addStretch(1);
+    holder_layout->addWidget(content);
+    holder_layout->addStretch(1);
+    scroll->setWidget(content_holder);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);

@@ -66,12 +66,23 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
                                         ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceMd);
     commands_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
     commands_layout->addWidget(makeSubLabel(
-        "Bindings apply immediately and work globally while ExoSnap is running. Start/Stop and Pause/Resume "
-        "are active now; Split and Mute capture a binding but are not yet wired to an action.",
+        "Start/Stop and Pause/Resume are active. Split and Mute bindings are not available in this MVP build.",
         commands_panel));
 
     for (int i = 0; i < 4; ++i)
         buildRow(i, kActions[i].action, kActions[i].binding, commands_layout, commands_panel);
+
+    // Disable Set/Unset for actions that are not wired in this MVP build.
+    for (int i : {2, 3}) {
+        if (rows_[i].set_btn) {
+            rows_[i].set_btn->setEnabled(false);
+            rows_[i].set_btn->setToolTip(QStringLiteral("Not available in MVP"));
+        }
+        if (rows_[i].unset_btn) {
+            rows_[i].unset_btn->setEnabled(false);
+            rows_[i].unset_btn->setToolTip(QStringLiteral("Not available in MVP"));
+        }
+    }
 
     layout->addWidget(commands_panel);
 
@@ -90,7 +101,17 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
     layout->addWidget(policy_panel);
 
     layout->addStretch();
-    scroll->setWidget(content);
+
+    constexpr int kMaxContentWidth = 1080;
+    content->setMaximumWidth(kMaxContentWidth);
+    auto* content_holder = new QWidget();
+    auto* holder_layout = new QHBoxLayout(content_holder);
+    holder_layout->setContentsMargins(0, 0, 0, 0);
+    holder_layout->setSpacing(0);
+    holder_layout->addStretch(1);
+    holder_layout->addWidget(content);
+    holder_layout->addStretch(1);
+    scroll->setWidget(content_holder);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);

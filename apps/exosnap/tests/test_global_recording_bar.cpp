@@ -311,12 +311,10 @@ TEST_F(GlobalRecordingBarTest, CompactLayout_HidesPlannedDisabledActionsButKeeps
     QPushButton* pause = nullptr;
     QPushButton* mic = nullptr;
     QPushButton* marker = nullptr;
-    QPushButton* overlay = nullptr;
     FindRequiredButton(bar, "globalBarPrimaryActionButton", primary);
     FindRequiredButton(bar, "globalBarPauseActionButton", pause);
     FindRequiredButton(bar, "globalBarMicActionButton", mic);
     FindRequiredButton(bar, "globalBarMarkerActionButton", marker);
-    FindRequiredButton(bar, "globalBarOverlayActionButton", overlay);
 
     bar.resize(kWideWidth, ui::chrome::GlobalRecordingBar::kHeight);
     QApplication::processEvents();
@@ -324,10 +322,8 @@ TEST_F(GlobalRecordingBarTest, CompactLayout_HidesPlannedDisabledActionsButKeeps
     EXPECT_TRUE(pause->isVisible());
     EXPECT_TRUE(mic->isVisible());
     EXPECT_TRUE(marker->isVisible());
-    EXPECT_TRUE(overlay->isVisible());
     EXPECT_FALSE(mic->isEnabled());
     EXPECT_FALSE(marker->isEnabled());
-    EXPECT_FALSE(overlay->isEnabled());
 
     bar.setStatusLabel(QStringLiteral("REC"));
     EXPECT_TRUE(primary->isEnabled());
@@ -339,12 +335,10 @@ TEST_F(GlobalRecordingBarTest, CompactLayout_HidesPlannedDisabledActionsButKeeps
     EXPECT_TRUE(pause->isVisible());
     EXPECT_FALSE(mic->isVisible());
     EXPECT_FALSE(marker->isVisible());
-    EXPECT_FALSE(overlay->isVisible());
     EXPECT_TRUE(primary->isEnabled());
     EXPECT_TRUE(pause->isEnabled());
     EXPECT_FALSE(mic->isEnabled());
     EXPECT_FALSE(marker->isEnabled());
-    EXPECT_FALSE(overlay->isEnabled());
 }
 
 TEST_F(GlobalRecordingBarTest, PlannedActions_RemainDisabledWithExplicitMvpTooltips) {
@@ -352,23 +346,24 @@ TEST_F(GlobalRecordingBarTest, PlannedActions_RemainDisabledWithExplicitMvpToolt
 
     QPushButton* mic = nullptr;
     QPushButton* marker = nullptr;
-    QPushButton* overlay = nullptr;
     FindRequiredButton(bar, "globalBarMicActionButton", mic);
     FindRequiredButton(bar, "globalBarMarkerActionButton", marker);
-    FindRequiredButton(bar, "globalBarOverlayActionButton", overlay);
 
     EXPECT_FALSE(mic->isEnabled());
     EXPECT_FALSE(marker->isEnabled());
-    EXPECT_FALSE(overlay->isEnabled());
 
     EXPECT_EQ(mic->toolTip(), QStringLiteral("Global mic toggle is not available in this MVP build. "
                                              "Use Audio settings to change microphone state."));
     EXPECT_EQ(marker->toolTip(), QStringLiteral("Markers are not available in this MVP build."));
-    EXPECT_EQ(overlay->toolTip(), QStringLiteral("Overlay/HUD controls are not available in this MVP build."));
 
     EXPECT_EQ(mic->accessibleName(), QStringLiteral("Microphone control unavailable"));
     EXPECT_EQ(marker->accessibleName(), QStringLiteral("Marker control unavailable"));
-    EXPECT_EQ(overlay->accessibleName(), QStringLiteral("Overlay control unavailable"));
+
+    // Overlay button exists but is not in the transport layout (out of MVP scope).
+    const auto* overlay = bar.findChild<QPushButton*>(QStringLiteral("globalBarOverlayActionButton"));
+    ASSERT_NE(overlay, nullptr);
+    EXPECT_FALSE(overlay->isEnabled());
+    EXPECT_EQ(overlay->toolTip(), QStringLiteral("Overlay/HUD controls are not available in this MVP build."));
 }
 
 } // namespace

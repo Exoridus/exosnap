@@ -650,7 +650,7 @@ void ConfigPage::updateFormatDisplay() {
     const QString summary = ContainerLabel(format_settings_.container) + QStringLiteral(" · ") +
                             VideoCodecLabel(format_settings_.video_codec) + QStringLiteral(" · ") +
                             AudioCodecLabel(format_settings_.audio_codec);
-    format_display_label_->setText(summary);
+    format_display_label_->setText(QStringLiteral("Current format: ") + summary);
 }
 
 void ConfigPage::onContainerChanged(int id) {
@@ -1211,7 +1211,7 @@ void ConfigPage::updateProfileActionState() {
         badge = QStringLiteral("Unavailable");
         profile_status_label_->setProperty("stateRole", "blocked");
     } else if (active_profile_is_built_in_ && active_profile_is_modified_) {
-        badge = QStringLiteral("Built-in \302\267 Modified");
+        badge = QStringLiteral("Modified from built-in");
         profile_status_label_->setProperty("stateRole", "recording");
     } else if (active_profile_is_built_in_) {
         badge = is_builtin ? QStringLiteral("Built-in") : QString();
