@@ -95,7 +95,7 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
 
     auto* btn_row = new QHBoxLayout();
     btn_row->setSpacing(M::kSpaceSm);
-    run_check_btn_ = new QPushButton(QStringLiteral("Run System & Pipeline Check"), readiness_panel);
+    run_check_btn_ = new QPushButton(QStringLiteral("Run System && Pipeline Check"), readiness_panel);
     run_check_btn_->setProperty("role", "primary");
     export_report_btn_ = new QPushButton(QStringLiteral("Export Diagnostic Report"), readiness_panel);
     export_report_btn_->setProperty("role", "ghost");

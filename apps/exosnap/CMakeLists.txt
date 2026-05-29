@@ -242,6 +242,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_config_page.cpp
         pages/ConfigPage.cpp
+        ui/widgets/ComboBoxWheelFilter.cpp
         models/FilenameBuilder.cpp
         models/OutputPathPolicy.cpp
         models/OutputPathValidator.cpp

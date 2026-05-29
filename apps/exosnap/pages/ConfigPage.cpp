@@ -25,6 +25,7 @@
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputPathPolicy.h"
 #include "../services/WebcamService.h"
+#include "../ui/widgets/ComboBoxWheelFilter.h"
 
 #include <ctime>
 
@@ -487,6 +488,17 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         token_help_toggle_btn_->setText(now_visible ? QStringLiteral("Hide token reference")
                                                     : QStringLiteral("Show token reference"));
     });
+
+    // Prevent accidental value changes when the mouse wheel scrolls the (long) Config
+    // page while the cursor happens to be over a combo box. The filter forwards the
+    // wheel event to the scroll area instead of changing the combo selection.
+    auto* combo_wheel_filter = new ui::widgets::ComboBoxWheelFilter(this);
+    combo_wheel_filter->installOn(profile_combo_);
+    combo_wheel_filter->installOn(video_codec_combo_);
+    combo_wheel_filter->installOn(audio_codec_combo_);
+    combo_wheel_filter->installOn(quality_combo_);
+    combo_wheel_filter->installOn(mic_device_combo_);
+    combo_wheel_filter->installOn(webcam_device_combo_);
 
     setReadinessStatus(QStringLiteral("CHECKING"));
 

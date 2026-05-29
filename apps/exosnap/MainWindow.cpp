@@ -792,6 +792,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // since the page title already identifies the page (removes "01 · RECORD" / "Record" duplication).
     page_kicker_label_ = new QLabel(page_head_left);
     page_kicker_label_->setProperty("labelRole", "pageKicker");
+    // Not added to any layout (the page title already identifies the page); hide it so it
+    // does not paint at its default (0,0) position and ghost behind the page title.
+    page_kicker_label_->hide();
     page_title_label_ = new QLabel(page_head_left);
     page_title_label_->setProperty("labelRole", "pageTitle");
     page_subtitle_label_ = new QLabel(page_head_left);
