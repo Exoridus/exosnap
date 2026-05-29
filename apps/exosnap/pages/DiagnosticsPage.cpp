@@ -24,7 +24,7 @@
 
 namespace exosnap {
 
-namespace M = ui::theme::ExoSnapMetrics;
+using M = ui::theme::ExoSnapMetrics;
 
 namespace {
 

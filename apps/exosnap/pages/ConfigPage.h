@@ -192,6 +192,9 @@ class ConfigPage : public QWidget {
 
     QLabel* lock_note_label_ = nullptr;
     bool controls_locked_ = false;
+
+    QLabel* token_help_label_ = nullptr;
+    QPushButton* token_help_toggle_btn_ = nullptr;
 };
 
 } // namespace exosnap

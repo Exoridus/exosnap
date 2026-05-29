@@ -177,26 +177,22 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     lock_note_label_->setVisible(false);
     status_layout->addWidget(lock_note_label_);
 
-    // ---- FORMAT SECTION (interactive) ----
-    layout->addWidget(makeSectionLabel(QStringLiteral("Format"), content));
-
+    // ---- PROFILE & FORMAT CARD ----
     auto* fmt_panel = makePanel(content);
     auto* fmt_layout = new QVBoxLayout(fmt_panel);
     fmt_layout->setContentsMargins(14, 12, 14, 12);
     fmt_layout->setSpacing(10);
+    fmt_layout->addWidget(makeSectionLabel(QStringLiteral("Profile & Format"), fmt_panel));
 
-    auto* profile_header = new QHBoxLayout();
-    auto* profile_lbl = new QLabel(QStringLiteral("Profile"), fmt_panel);
-    profile_lbl->setProperty("labelRole", "section");
+    auto* profile_row = new QHBoxLayout();
+    profile_row->setSpacing(8);
     profile_combo_ = new QComboBox(fmt_panel);
     profile_combo_->setObjectName(QStringLiteral("profileCombo"));
-    profile_combo_->setMinimumWidth(240);
+    profile_combo_->setMinimumWidth(200);
     profile_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     profile_status_label_ = new QLabel(fmt_panel);
     profile_status_label_->setProperty("labelRole", "profileStatusBadge");
     profile_status_label_->setAlignment(Qt::AlignCenter);
-    save_as_new_btn_ = new QPushButton(QStringLiteral("Save as new"), fmt_panel);
-    reset_profile_btn_ = new QPushButton(QStringLiteral("Reset"), fmt_panel);
     profile_overflow_btn_ = new QToolButton(fmt_panel);
     profile_overflow_btn_->setText(QStringLiteral("Actions"));
     profile_overflow_btn_->setPopupMode(QToolButton::InstantPopup);
@@ -217,13 +213,23 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     reset_all_action_ = profile_menu->addAction(QStringLiteral("Reset all settings + profiles"));
     profile_overflow_btn_->setMenu(profile_menu);
 
-    profile_header->addWidget(profile_lbl);
-    profile_header->addWidget(profile_combo_, 1);
-    profile_header->addWidget(profile_status_label_);
-    profile_header->addWidget(save_as_new_btn_);
-    profile_header->addWidget(reset_profile_btn_);
-    profile_header->addWidget(profile_overflow_btn_);
-    fmt_layout->addLayout(profile_header);
+    profile_row->addWidget(profile_combo_, 1);
+    profile_row->addWidget(profile_status_label_);
+    profile_row->addWidget(profile_overflow_btn_);
+    fmt_layout->addLayout(profile_row);
+
+    // Contextual profile action buttons — hidden for default built-in profile
+    auto* profile_actions_row = new QHBoxLayout();
+    profile_actions_row->setSpacing(6);
+    profile_actions_row->setContentsMargins(0, 0, 0, 0);
+    save_as_new_btn_ = new QPushButton(QStringLiteral("Save as new"), fmt_panel);
+    save_as_new_btn_->setProperty("role", "ghost");
+    reset_profile_btn_ = new QPushButton(QStringLiteral("Reset"), fmt_panel);
+    reset_profile_btn_->setProperty("role", "ghost");
+    profile_actions_row->addStretch();
+    profile_actions_row->addWidget(save_as_new_btn_);
+    profile_actions_row->addWidget(reset_profile_btn_);
+    fmt_layout->addLayout(profile_actions_row);
 
     format_display_label_ = new QLabel(fmt_panel);
     format_display_label_->setProperty("labelRole", "muted");
@@ -270,12 +276,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     fmt_layout->addLayout(codec_row);
     layout->addWidget(fmt_panel);
 
-    // ---- VIDEO SECTION (interactive) ----
-    layout->addWidget(makeSectionLabel(QStringLiteral("Video"), content));
+    // ---- CAPTURE QUALITY CARD ----
     auto* video_panel = makePanel(content);
     auto* video_panel_layout = new QVBoxLayout(video_panel);
     video_panel_layout->setContentsMargins(14, 12, 14, 12);
     video_panel_layout->setSpacing(10);
+    video_panel_layout->addWidget(makeSectionLabel(QStringLiteral("Capture Quality"), video_panel));
 
     auto* qual_row = new QHBoxLayout();
     auto* qual_lbl = new QLabel(QStringLiteral("Quality preset"), video_panel);
@@ -298,12 +304,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     video_panel_layout->addWidget(cursor_check_);
     layout->addWidget(video_panel);
 
-    // ---- AUDIO SECTION (interactive) ----
-    layout->addWidget(makeSectionLabel(QStringLiteral("Audio Sources"), content));
+    // ---- AUDIO SOURCES CARD ----
     auto* audio_panel = makePanel(content);
     auto* audio_panel_layout = new QVBoxLayout(audio_panel);
     audio_panel_layout->setContentsMargins(14, 12, 14, 12);
     audio_panel_layout->setSpacing(6);
+    audio_panel_layout->addWidget(makeSectionLabel(QStringLiteral("Audio Sources"), audio_panel));
 
     auto makeSourceRow = [&](const QString& title, QCheckBox*& enabled_check, QCheckBox*& separate_check,
                              QLabel*& source_label) {
@@ -346,12 +352,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     audio_panel_layout->addWidget(audio_summary_label_);
     layout->addWidget(audio_panel);
 
-    // ---- WEBCAM SECTION (interactive) ----
-    layout->addWidget(makeSectionLabel(QStringLiteral("Webcam"), content));
+    // ---- WEBCAM CARD ----
     auto* webcam_panel = makePanel(content);
     auto* webcam_panel_layout = new QVBoxLayout(webcam_panel);
     webcam_panel_layout->setContentsMargins(14, 12, 14, 12);
-    webcam_panel_layout->setSpacing(4);
+    webcam_panel_layout->setSpacing(6);
+    webcam_panel_layout->addWidget(makeSectionLabel(QStringLiteral("Webcam"), webcam_panel));
 
     webcam_enabled_check_ = new QCheckBox(QStringLiteral("Record webcam"), webcam_panel);
     webcam_panel_layout->addWidget(webcam_enabled_check_);
@@ -381,15 +387,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     layout->addWidget(webcam_panel);
 
-    // ---- OUTPUT SECTION (interactive) ----
-    layout->addWidget(makeSectionLabel(QStringLiteral("Output"), content));
+    // ---- OUTPUT CARD ----
     auto* out_panel = makePanel(content);
     auto* out_panel_layout = new QVBoxLayout(out_panel);
     out_panel_layout->setContentsMargins(14, 12, 14, 12);
     out_panel_layout->setSpacing(6);
-
-    auto* out_sub = makeSubLabel(QStringLiteral("Define output path and file naming behavior."), out_panel);
-    out_panel_layout->addWidget(out_sub);
+    out_panel_layout->addWidget(makeSectionLabel(QStringLiteral("Output"), out_panel));
 
     auto* dest_row = new QHBoxLayout();
     dest_row->setSpacing(8);
@@ -419,12 +422,18 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     pattern_validation_label_->setVisible(false);
     out_panel_layout->addWidget(pattern_validation_label_);
 
-    auto* tokens_help = makeSubLabel(
+    token_help_toggle_btn_ = new QPushButton(QStringLiteral("Show token reference"), out_panel);
+    token_help_toggle_btn_->setObjectName(QStringLiteral("tokenHelpToggle"));
+    token_help_toggle_btn_->setProperty("role", "ghost");
+    out_panel_layout->addWidget(token_help_toggle_btn_);
+
+    token_help_label_ = makeSubLabel(
         QStringLiteral("Tokens: {datetime}, {date}, {time}, {timestamp}, {YYYY}, {YY}, {MM}, {DD}, {hh}, {mm}, {ss}, "
                        "{app}, {title}, {process}, {target}, {profile}, {container}, {video}, {audio}"),
         out_panel);
-    tokens_help->setProperty("labelRole", "muted");
-    out_panel_layout->addWidget(tokens_help);
+    token_help_label_->setProperty("labelRole", "muted");
+    token_help_label_->setVisible(false);
+    out_panel_layout->addWidget(token_help_label_);
 
     example_filename_label_ = makeSubLabel(QString(), out_panel);
     example_filename_label_->setProperty("labelRole", "muted");
@@ -472,6 +481,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(reset_all_action_, &QAction::triggered, this, &ConfigPage::onResetAllSettingsAndProfiles);
     connect(view_details_btn_, &QPushButton::clicked, this, &ConfigPage::diagnosticsRequested);
     connect(webcam_details_btn_, &QPushButton::clicked, this, &ConfigPage::webcamDetailsRequested);
+    connect(token_help_toggle_btn_, &QPushButton::clicked, this, [this]() {
+        const bool now_visible = !token_help_label_->isVisible();
+        token_help_label_->setVisible(now_visible);
+        token_help_toggle_btn_->setText(now_visible ? QStringLiteral("Hide token reference")
+                                                    : QStringLiteral("Show token reference"));
+    });
 
     setReadinessStatus(QStringLiteral("CHECKING"));
 

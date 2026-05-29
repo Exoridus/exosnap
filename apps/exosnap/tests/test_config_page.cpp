@@ -292,5 +292,13 @@ TEST_F(ConfigPageTest, MicSourceLabel_DoesNotSaySelectDeviceOnRecordPage) {
     }
 }
 
+TEST_F(ConfigPageTest, TokenHelpToggle_HiddenByDefault) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* toggle = page.findChild<QPushButton*>(QStringLiteral("tokenHelpToggle"));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_EQ(toggle->text(), QStringLiteral("Show token reference"));
+}
+
 } // namespace
 } // namespace exosnap
