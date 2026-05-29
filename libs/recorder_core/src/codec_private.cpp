@@ -100,6 +100,7 @@ bool ParseSequenceHeaderObu(const uint8_t* obu_payload, size_t obu_size, uint32_
     uint32_t timing_info_present_flag = br.f(1);
     CHECK_OVERFLOW("timing_info_present_flag");
     uint32_t decoder_model_info_present_flag = 0;
+    uint32_t buffer_delay_length_minus_1 = 0;
 
     if (timing_info_present_flag) {
         br.f(32);
@@ -116,8 +117,17 @@ bool ParseSequenceHeaderObu(const uint8_t* obu_payload, size_t obu_size, uint32_
         decoder_model_info_present_flag = br.f(1);
         CHECK_OVERFLOW("decoder_model_info_present_flag");
         if (decoder_model_info_present_flag) {
-            snprintf(reason, reason_size, "decoder_model_info_present_flag=1 — too complex to skip");
-            return false;
+            // AV1 spec 5.5.3 decoder_model_info():
+            // buffer_delay_length_minus_1 f(5), num_units_in_decoding_tick f(32),
+            // buffer_removal_time_length_minus_1 f(5), frame_presentation_time_length_minus_1 f(5)
+            buffer_delay_length_minus_1 = br.f(5);
+            CHECK_OVERFLOW("buffer_delay_length_minus_1");
+            br.f(32);
+            CHECK_OVERFLOW("num_units_in_decoding_tick");
+            br.f(5);
+            CHECK_OVERFLOW("buffer_removal_time_length_minus_1");
+            br.f(5);
+            CHECK_OVERFLOW("frame_presentation_time_length_minus_1");
         }
     }
 
@@ -141,8 +151,14 @@ bool ParseSequenceHeaderObu(const uint8_t* obu_payload, size_t obu_size, uint32_
             seq_tier[i] = 0;
         }
         if (decoder_model_info_present_flag) {
-            snprintf(reason, reason_size, "operating_parameters_info path not supported");
-            return false;
+            // AV1 spec operating_parameters_info(): skip per-op delay fields
+            const uint32_t bdl = buffer_delay_length_minus_1 + 1;
+            br.f(bdl); // decoder_buffer_delay
+            CHECK_OVERFLOW("decoder_buffer_delay");
+            br.f(bdl); // encoder_buffer_delay
+            CHECK_OVERFLOW("encoder_buffer_delay");
+            br.f(1); // low_delay_mode_flag
+            CHECK_OVERFLOW("low_delay_mode_flag");
         }
         if (initial_display_delay_present_flag) {
             uint32_t delay_present = br.f(1);

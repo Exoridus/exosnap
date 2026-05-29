@@ -344,7 +344,12 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
     m_presetConfig.version = NV_ENC_PRESET_CONFIG_VER;
     m_presetConfig.presetCfg.version = NV_ENC_CONFIG_VER;
 
+    // AV1 with P6 preset has internal pipeline depth causing NEED_MORE_INPUT on every frame
+    // even when lookahead is disabled. P4 avoids this and produces frames synchronously.
     const GUID codecGuid = (m_codec == VideoCodec::H264Nvenc) ? NV_ENC_CODEC_H264_GUID : NV_ENC_CODEC_AV1_GUID;
+    if (m_codec != VideoCodec::H264Nvenc) {
+        m_presetGuid = NV_ENC_PRESET_P4_GUID;
+    }
     NVENCSTATUS st =
         m_funcs.nvEncGetEncodePresetConfigEx(m_encoder, codecGuid, m_presetGuid, m_tuningInfo, &m_presetConfig);
     if (st != NV_ENC_SUCCESS) {

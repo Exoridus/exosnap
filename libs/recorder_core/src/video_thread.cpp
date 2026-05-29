@@ -6,6 +6,7 @@
 #include "nvenc_encoder.h"
 #include "session_internal.h"
 
+#include <recorder_core/logging/logging.h>
 #include <recorder_core/packet_types.h>
 
 #include <windows.graphics.capture.interop.h>
@@ -119,6 +120,14 @@ void VideoThread::Run() {
     const HWND targetHwnd =
         (target.kind == CaptureTarget::Kind::Window) ? reinterpret_cast<HWND>(target.native_id) : nullptr;
     const bool useOdCapture = (target.kind == CaptureTarget::Kind::Monitor);
+
+    {
+        const char* backend = useOdCapture ? "dxgi_od" : "wgc";
+        logging::LogField fields[] = {
+            {"backend", backend}, {"target_kind", TargetKindName(target.kind)}, {"target_desc", target.description}};
+        logging::log(logging::LogLevel::Info, "video_thread", "capture session starting",
+                     std::span<const logging::LogField>(fields, std::size(fields)));
+    }
 
     // For Monitor targets, find the adapter owning the HMONITOR so DXGI OD works
     // on multi-GPU systems. Fall back to default adapter on failure.
@@ -968,6 +977,11 @@ void VideoThread::Run() {
                     m_state.codec_private.av1_ready = true;
                     av1CodecPrivateReady = true;
                     m_state.premux_cv.notify_all();
+                } else {
+                    logging::LogField fields[] = {{"reason", reason}};
+                    logging::log(logging::LogLevel::Warn, "video_thread",
+                                 "AV1 codec private derivation failed on keyframe",
+                                 std::span<const logging::LogField>(fields, std::size(fields)));
                 }
             }
         }

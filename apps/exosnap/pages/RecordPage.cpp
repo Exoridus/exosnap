@@ -991,10 +991,13 @@ void RecordPage::initCoordinator() {
         if (result.succeeded)
             diagnostics::AppLog(
                 QStringLiteral("[record] result: success  path=%1").arg(QString::fromStdWString(result.output_path)));
-        else
-            diagnostics::AppLog(QStringLiteral("[record] result: failed  phase=%1  hr=%2")
-                                    .arg(QString::fromStdWString(result.error_phase))
-                                    .arg(QString::fromStdWString(result.hresult_text)));
+        else {
+            QString failed_msg =
+                QStringLiteral("[record] result: failed  phase=%1").arg(QString::fromStdWString(result.error_phase));
+            if (!result.hresult_text.empty())
+                failed_msg += QStringLiteral("  hr=%1").arg(QString::fromStdWString(result.hresult_text));
+            diagnostics::AppLog(failed_msg);
+        }
         refresh();
     });
 
@@ -2242,6 +2245,7 @@ void RecordPage::updateReadinessRows() {
 
     const bool is_window_target = view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window;
     readiness_rows_[2].title->setText(is_window_target ? "Audio loopback (APP)" : "Audio loopback (SYS)");
+    readiness_rows_[0].title->setText(QString::fromStdWString(coordinator_->ResolvedVideoCodecLabel()));
 
     const bool blocked = (view_model_.state == UiRecordingState::Blocked);
     const bool checking = (view_model_.state == UiRecordingState::LoadingCapabilities);

@@ -76,6 +76,7 @@ class RecordingCoordinator {
 
     UiRecordingState State() const noexcept;
     const std::wstring& CapabilityStatusText() const;
+    std::wstring ResolvedVideoCodecLabel() const;
     std::filesystem::path CurrentOutputPath() const;
     void SetOutputSettings(const OutputSettingsModel& settings);
     void SetVideoSettings(const VideoSettingsModel& settings);

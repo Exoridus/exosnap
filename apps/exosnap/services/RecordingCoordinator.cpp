@@ -502,6 +502,13 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     is_recording_ = true;
     PostStateChange(UiRecordingState::Recording);
 
+    {
+        const bool is_monitor = (target.kind == recorder_core::CaptureTarget::Kind::Monitor);
+        const QString backend = is_monitor ? QStringLiteral("dxgi_od") : QStringLiteral("wgc");
+        const QString target_desc = QString::fromStdString(target.description);
+        diagnostics::AppLog(QStringLiteral("[record] start  backend=%1  target=\"%2\"").arg(backend, target_desc));
+    }
+
     recording_thread_ = std::jthread([this, cfg = std::move(config), op = std::move(output_path)](std::stop_token) {
         RecordingThreadProc(cfg, op);
     });
@@ -659,6 +666,17 @@ UiRecordingState RecordingCoordinator::State() const noexcept {
 }
 const std::wstring& RecordingCoordinator::CapabilityStatusText() const {
     return capability_status_text_;
+}
+
+std::wstring RecordingCoordinator::ResolvedVideoCodecLabel() const {
+    switch (resolved_user_config_.video_codec) {
+    case capability::VideoCodec::H264Nvenc:
+        return L"H.264 NVENC encoder";
+    case capability::VideoCodec::HevcNvenc:
+        return L"HEVC NVENC encoder";
+    default:
+        return L"AV1 NVENC encoder";
+    }
 }
 std::filesystem::path RecordingCoordinator::CurrentOutputPath() const {
     return current_output_path_;

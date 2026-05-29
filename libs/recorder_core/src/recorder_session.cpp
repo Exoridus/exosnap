@@ -12,6 +12,7 @@
 #include "wasapi_process_loopback_src.h"
 #include "wgc_capture.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -361,6 +362,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     m_impl->recording.store(true);
 
     // Start stats collector
+    const auto recording_wall_start = std::chrono::steady_clock::now();
     SessionStatsCollector statsCollector(m_impl->state);
     statsCollector.Start();
 
@@ -493,6 +495,13 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     {
         std::lock_guard slk(m_impl->state.stats_mutex);
         result.stats = m_impl->state.stats;
+    }
+
+    // Fill in elapsed_seconds from wall-clock time (stats_callback snapshots compute this per-tick
+    // but never write it back to m_state.stats, so the final stats always shows 0 without this).
+    {
+        const auto recording_wall_end = std::chrono::steady_clock::now();
+        result.stats.elapsed_seconds = std::chrono::duration<double>(recording_wall_end - recording_wall_start).count();
     }
 
     // Defensive: if nominally succeeded but no output file was produced
