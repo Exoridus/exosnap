@@ -665,6 +665,7 @@ void VideoThread::Run() {
             d3dWinRTDev, winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, capSz);
 
         captureSession = framePool.CreateCaptureSession(item);
+        captureSession.IsBorderRequired(false);
         captureSession.IsCursorCaptureEnabled(m_state.config.capture_cursor);
         captureSession.StartCapture();
 
