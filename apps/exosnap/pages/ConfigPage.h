@@ -79,6 +79,7 @@ class ConfigPage : public QWidget {
     void onQualityChanged(int index);
     void onCfrChanged();
     void onCursorChanged();
+    void updateQualitySummary();
     void onBrowse();
     void onDestinationEditingFinished();
     void onPatternEditingFinished();
@@ -137,6 +138,8 @@ class ConfigPage : public QWidget {
     QLabel* format_display_label_ = nullptr;
 
     QComboBox* quality_combo_ = nullptr;
+    QLabel* quality_badge_label_ = nullptr;
+    QLabel* quality_settings_label_ = nullptr;
     QCheckBox* cfr_check_ = nullptr;
     QCheckBox* cursor_check_ = nullptr;
 

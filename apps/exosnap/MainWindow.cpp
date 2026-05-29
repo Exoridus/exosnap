@@ -186,7 +186,7 @@ struct PageDescriptor {
 constexpr std::array<PageDescriptor, 7> kPageDescriptors = {{
     {"Record", "01 · RECORD", "Operational view — target, readiness, and live runtime.", "",
      "DISPLAY1 · 2560×1440 · 60 fps · AV1", SidebarIcon::Record},
-    {"Config", "02 · CONFIG", "Unified recording configuration — format, sources, and output.", "",
+    {"Settings", "02 · SETTINGS", "Unified recording configuration — format, sources, and output.", "",
      "Profile · Sources · Output", SidebarIcon::Setup},
     {"Hotkeys", "03 · HOTKEYS", "Global command access for recording operations.", "GLOBAL SHORTCUTS",
      "Trigger and visibility rules", SidebarIcon::Hotkeys},

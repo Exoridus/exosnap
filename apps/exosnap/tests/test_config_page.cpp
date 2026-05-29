@@ -300,5 +300,40 @@ TEST_F(ConfigPageTest, TokenHelpToggle_HiddenByDefault) {
     EXPECT_EQ(toggle->text(), QStringLiteral("Show token reference"));
 }
 
+TEST_F(ConfigPageTest, QualityBadgeLabel_ExistsAndNotEmpty) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* label = page.findChild<QLabel*>(QStringLiteral("qualityBadgeLabel"));
+    ASSERT_NE(label, nullptr);
+    EXPECT_FALSE(label->text().isEmpty());
+}
+
+TEST_F(ConfigPageTest, QualitySettingsLabel_ExistsAndNotEmpty) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* label = page.findChild<QLabel*>(QStringLiteral("qualitySettingsLabel"));
+    ASSERT_NE(label, nullptr);
+    EXPECT_FALSE(label->text().isEmpty());
+}
+
+TEST_F(ConfigPageTest, QualitySettingsLabel_UpdatesOnSetVideoSettings) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    VideoSettingsModel high;
+    high.quality = recorder_core::NvencQualityPreset::High;
+    high.cfr = true;
+    high.capture_cursor = false;
+    page.setVideoSettings(high);
+
+    auto* settings_label = page.findChild<QLabel*>(QStringLiteral("qualitySettingsLabel"));
+    ASSERT_NE(settings_label, nullptr);
+    EXPECT_TRUE(settings_label->text().contains(QStringLiteral("CQ 19")));
+    EXPECT_TRUE(settings_label->text().contains(QStringLiteral("Cursor off")));
+
+    auto* badge_label = page.findChild<QLabel*>(QStringLiteral("qualityBadgeLabel"));
+    ASSERT_NE(badge_label, nullptr);
+    EXPECT_EQ(badge_label->text(), QStringLiteral("Sharper · larger files"));
+}
+
 } // namespace
 } // namespace exosnap
