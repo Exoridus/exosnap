@@ -265,8 +265,9 @@ bool PreviewSurface::tryStartDxgiPreview(const recorder_core::CaptureTarget& tar
 
     dxgi_renderer_ = std::make_unique<exosnap::DxgiPreviewRenderer>();
 
-    const uint32_t initW = static_cast<uint32_t>(std::max(1, width()));
-    const uint32_t initH = static_cast<uint32_t>(std::max(1, height()));
+    const qreal dpr = devicePixelRatioF();
+    const uint32_t initW = static_cast<uint32_t>(std::max(1.0, width() * dpr));
+    const uint32_t initH = static_cast<uint32_t>(std::max(1.0, height() * dpr));
     if (!dxgi_renderer_->Initialize(hwnd, initW, initH)) {
         diagnostics::AppLog(QStringLiteral("[dxgi-preview] DxgiPreviewRenderer init failed, falling back to QImage"));
         dxgi_renderer_.reset();
@@ -310,8 +311,9 @@ void PreviewSurface::applyDxgiPreviewResize() {
     if (!dxgi_renderer_ || !dxgi_active_)
         return;
 
-    const int pw = std::max(1, width());
-    const int ph = std::max(1, height());
+    const qreal dpr = devicePixelRatioF();
+    const int pw = static_cast<int>(std::max(1.0, width() * dpr));
+    const int ph = static_cast<int>(std::max(1.0, height() * dpr));
     dxgi_renderer_->Resize(static_cast<uint32_t>(pw), static_cast<uint32_t>(ph));
 }
 

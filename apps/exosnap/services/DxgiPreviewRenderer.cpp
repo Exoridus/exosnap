@@ -145,7 +145,7 @@ bool DxgiPreviewRenderer::IsActive() const noexcept {
 }
 
 void DxgiPreviewRenderer::GetSourceSize(uint32_t& outWidth, uint32_t& outHeight) const noexcept {
-    std::lock_guard lock(const_cast<std::mutex&>(frameMutex_));
+    std::lock_guard lock(frameMutex_);
     outWidth = srcWidth_;
     outHeight = srcHeight_;
 }
@@ -513,7 +513,7 @@ void DxgiPreviewRenderer::RenderThreadProc(recorder_core::CaptureTarget target, 
 
     diagnostics::AppLog(QStringLiteral("[dxgi-preview] render thread running interval=%1ms").arg(frame_interval_ms));
 
-    DWORD lastFrameMs = 0;
+    ULONGLONG lastFrameMs = 0;
 
     while (!stop_token.stop_requested() && !sourceLost_.load()) {
         if (resizeRequested_.load()) {
@@ -523,7 +523,7 @@ void DxgiPreviewRenderer::RenderThreadProc(recorder_core::CaptureTarget target, 
             resizeRequested_.store(false);
         }
 
-        const DWORD now = GetTickCount();
+        const ULONGLONG now = GetTickCount64();
         if (now - lastFrameMs < frame_interval_ms) {
             Sleep(1);
             continue;

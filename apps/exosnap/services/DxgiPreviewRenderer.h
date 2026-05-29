@@ -77,7 +77,7 @@ class DxgiPreviewRenderer {
     Microsoft::WRL::ComPtr<ID3D11PixelShader> pixelShader_;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> samplerState_;
 
-    std::mutex frameMutex_;
+    mutable std::mutex frameMutex_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> latestFrame_;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> latestFrameSRV_;
     uint32_t srcWidth_{0};
