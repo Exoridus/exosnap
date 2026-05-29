@@ -1063,11 +1063,11 @@ void ConfigPage::setReadinessStatus(const QString& status_label) {
 
     readiness_badge_label_->setText(ready      ? QStringLiteral("Ready to record")
                                     : blocked  ? QStringLiteral("Recording blocked")
-                                    : checking ? QStringLiteral("Checking setup...")
+                                    : checking ? QStringLiteral("Checking configuration...")
                                                : QStringLiteral("Status: %1").arg(upper));
 
     if (readiness_detail_label_) {
-        readiness_detail_label_->setText(ready      ? QStringLiteral("Current setup is compatible with this system.")
+        readiness_detail_label_->setText(ready ? QStringLiteral("Current configuration is compatible with this system.")
                                          : blocked  ? QStringLiteral("Open Diagnostics to review the top issue.")
                                          : checking ? QStringLiteral("Verifying system capabilities...")
                                                     : QString());
