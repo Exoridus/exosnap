@@ -11,13 +11,16 @@
 #include <string>
 #include <vector>
 
+class QAction;
 class QButtonGroup;
 class QCheckBox;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QMenu;
 class QPushButton;
 class QRadioButton;
+class QToolButton;
 
 namespace exosnap {
 
@@ -54,8 +57,19 @@ class ConfigPage : public QWidget {
     void audioSettingsChanged(const capability::AudioUiState& state);
     void webcamSettingsChanged(const WebcamSettings& settings);
     void diagnosticsRequested();
-    void manageProfilesRequested();
     void webcamDetailsRequested();
+
+    void newFromCurrentRequested(const QString& name);
+    void newFromSafeDefaultRequested(const QString& name);
+    void duplicateActiveProfileRequested();
+    void renameActiveProfileRequested(const QString& name);
+    void deleteActiveProfileRequested();
+    void resetActiveProfileRequested();
+    void saveModifiedBuiltInAsNewRequested(const QString& name);
+    void importProfilesRequested(const QString& file_path);
+    void exportSelectedProfileRequested(const QString& file_path);
+    void exportAllUserProfilesRequested(const QString& file_path);
+    void resetAllSettingsAndProfilesRequested();
 
   private:
     void onContainerChanged(int id);
@@ -93,6 +107,17 @@ class ConfigPage : public QWidget {
     void refreshWebcamDevices();
     void emitCurrentWebcamSettings();
     void updateWebcamInfoLabel();
+
+    void onImportProfiles();
+    void onExportSelectedProfile();
+    void onExportAllUserProfiles();
+    void onDeleteActiveProfile();
+    void onResetAllSettingsAndProfiles();
+    void updateProfileActionState();
+    void promptCreateProfileFromCurrent();
+    void promptCreateProfileFromSafeDefault();
+    void promptRenameActiveProfile();
+    void promptSaveModifiedBuiltInAsNew();
 
     capability::AudioUiState audio_ui_state_;
     WebcamSettings webcam_settings_;
@@ -143,7 +168,22 @@ class ConfigPage : public QWidget {
     QLabel* readiness_detail_label_ = nullptr;
     QPushButton* view_details_btn_ = nullptr;
 
-    QPushButton* manage_profiles_btn_ = nullptr;
+    QLabel* profile_status_label_ = nullptr;
+    QPushButton* save_as_new_btn_ = nullptr;
+    QPushButton* reset_profile_btn_ = nullptr;
+    QToolButton* profile_overflow_btn_ = nullptr;
+    QAction* new_from_current_action_ = nullptr;
+    QAction* new_from_safe_default_action_ = nullptr;
+    QAction* duplicate_profile_action_ = nullptr;
+    QAction* rename_profile_action_ = nullptr;
+    QAction* delete_profile_action_ = nullptr;
+    QAction* import_profiles_action_ = nullptr;
+    QAction* export_selected_action_ = nullptr;
+    QAction* export_all_users_action_ = nullptr;
+    QAction* reset_all_action_ = nullptr;
+    bool active_profile_is_built_in_ = true;
+    bool active_profile_is_modified_ = false;
+    bool active_profile_is_available_ = true;
 
     QCheckBox* webcam_enabled_check_ = nullptr;
     QComboBox* webcam_device_combo_ = nullptr;

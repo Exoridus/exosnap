@@ -27,7 +27,6 @@ class GlobalRecordingBar;
 class ConfigPage;
 class DiagnosticsPage;
 class HotkeysPage;
-class OutputPage;
 class RecordPage;
 class WebcamPage;
 
@@ -81,7 +80,6 @@ class MainWindow : public QMainWindow {
     QListWidget* nav_ = nullptr;
     QStackedWidget* stack_ = nullptr;
     RecordPage* record_page_ = nullptr;
-    OutputPage* output_page_ = nullptr;
     ConfigPage* config_page_ = nullptr;
     DiagnosticsPage* diagnostics_page_ = nullptr;
     WebcamPage* webcam_page_ = nullptr;

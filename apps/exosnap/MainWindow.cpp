@@ -6,7 +6,6 @@
 #include "pages/DiagnosticsPage.h"
 #include "pages/HotkeysPage.h"
 #include "pages/LogsPage.h"
-#include "pages/OutputPage.h"
 #include "pages/RecordPage.h"
 #include "pages/WebcamPage.h"
 #include "settings/ProfileExchange.h"
@@ -184,7 +183,7 @@ struct PageDescriptor {
     SidebarIcon icon;
 };
 
-constexpr std::array<PageDescriptor, 8> kPageDescriptors = {{
+constexpr std::array<PageDescriptor, 7> kPageDescriptors = {{
     {"Record", "01 · RECORD", "Operational view — target, readiness, and live runtime.", "",
      "DISPLAY1 · 2560×1440 · 60 fps · AV1", SidebarIcon::Record},
     {"Setup", "02 · SETUP", "Unified recording configuration — format, sources, and output.", "",
@@ -197,9 +196,7 @@ constexpr std::array<PageDescriptor, 8> kPageDescriptors = {{
      "Structured recorder telemetry", SidebarIcon::Logs},
     {"Advanced", "06 · ADVANCED", "Lower-level behavior and non-default controls.", "EXPERT SETTINGS",
      "Explicitly non-default", SidebarIcon::Advanced},
-    {"Profiles", "07 · PROFILES", "Recording profile management — create, edit, import, and export.", "PROFILES",
-     "Save, duplicate, rename, delete", SidebarIcon::Output},
-    {"Webcam", "08 · WEBCAM", "Webcam device, overlay placement, and chroma key.", "OVERLAY",
+    {"Webcam", "07 · WEBCAM", "Webcam device, overlay placement, and chroma key.", "OVERLAY",
      "Camera composited into recording", SidebarIcon::Webcam},
 }};
 
@@ -212,11 +209,9 @@ constexpr int pageIndexForIcon(SidebarIcon icon) {
     }
     return -1;
 }
-constexpr int kOutputPageIndex = pageIndexForIcon(SidebarIcon::Output);
 constexpr int kDiagnosticsPageIndex = pageIndexForIcon(SidebarIcon::Diagnostics);
 constexpr int kWebcamPageIndex = pageIndexForIcon(SidebarIcon::Webcam);
 constexpr int kLogsPageIndex = pageIndexForIcon(SidebarIcon::Logs);
-static_assert(kOutputPageIndex >= 0, "Output page must exist in kPageDescriptors.");
 static_assert(kDiagnosticsPageIndex >= 0, "Diagnostics page must exist in kPageDescriptors.");
 static_assert(kWebcamPageIndex >= 0, "Webcam page must exist in kPageDescriptors.");
 static_assert(kLogsPageIndex >= 0, "Logs page must exist in kPageDescriptors.");
@@ -821,7 +816,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     hotkeys_page_ = new HotkeysPage(stack_);
     hotkeys_page_->setBindings(persisted_hotkeys_);
     diagnostics_page_ = new DiagnosticsPage(stack_);
-    output_page_ = new OutputPage(output_settings_, stack_);
     webcam_page_ = new WebcamPage(stack_);
     webcam_page_->applySettings(persisted_settings_.webcam);
     stack_->addWidget(record_page_);
@@ -830,12 +824,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     stack_->addWidget(diagnostics_page_);
     stack_->addWidget(new LogsPage(stack_));
     stack_->addWidget(new AdvancedPage(stack_));
-    stack_->addWidget(output_page_);
     stack_->addWidget(webcam_page_);
     record_page_->setOutputSettings(output_settings_);
     record_page_->setVideoSettings(video_settings_);
     record_page_->applyPersistedAudioSettings(persisted_settings_.audio_ui_state);
-    output_page_->setOutputSettings(output_settings_);
     config_page_->setAudioUiState(persisted_settings_.audio_ui_state);
     config_page_->setWebcamSettings(persisted_settings_.webcam);
     content_layout->addWidget(stack_, 1);
@@ -865,7 +857,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             &MainWindow::onGlobalRecordingBarPrimaryActionRequested);
     connect(global_recording_bar_, &ui::chrome::GlobalRecordingBar::pauseActionRequested, this,
             &MainWindow::onGlobalRecordingBarPauseActionRequested);
-    connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { nav_->setCurrentRow(kOutputPageIndex); });
+    connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { nav_->setCurrentRow(1); });
     connect(config_page_, &ConfigPage::formatSettingsChanged, this, [this](const OutputSettingsModel& settings) {
         output_settings_.container = settings.container;
         output_settings_.video_codec = settings.video_codec;
@@ -873,7 +865,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         output_settings_.output_folder = settings.output_folder;
         output_settings_.naming_pattern = settings.naming_pattern;
         record_page_->setOutputSettings(output_settings_);
-        output_page_->setOutputSettings(output_settings_);
         profile_registry_.ApplyOutputToActive(output_settings_);
         persisted_settings_.output = output_settings_;
         persistProfileState();
@@ -898,77 +889,53 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         persistProfileState();
         refreshDiagnosticsData();
     });
-    connect(output_page_, &OutputPage::outputSettingsChanged, this, [this](const OutputSettingsModel& settings) {
-        output_settings_ = settings;
-        record_page_->setOutputSettings(settings);
-        if (config_page_)
-            config_page_->setOutputSettings(settings);
-        profile_registry_.ApplyOutputToActive(settings);
-        persisted_settings_.output = settings;
-        persistProfileState();
-        refreshGlobalRecordingBarContext();
-        refreshOutputProfileUi();
-        refreshDiagnosticsData();
-        if (stack_->currentIndex() == kOutputPageIndex) {
-            updatePageHeader(kOutputPageIndex);
-        }
-    });
-    connect(output_page_, &OutputPage::activeProfileChanged, this, [this](const QString& profile_id) {
-        if (syncing_profile_ui_) {
-            return;
-        }
-        profile_registry_.SetActiveProfile(profile_id.toStdString());
-        applyActiveProfileToPages();
-        refreshOutputProfileUi();
-        persistProfileState();
-    });
-    connect(output_page_, &OutputPage::newFromCurrentRequested, this, [this](const QString& name) {
+    connect(config_page_, &ConfigPage::newFromCurrentRequested, this, [this](const QString& name) {
         profile_registry_.CreateUserProfileFromCurrent(name.toStdString());
         applyActiveProfileToPages();
         refreshOutputProfileUi();
         persistProfileState();
     });
-    connect(output_page_, &OutputPage::newFromSafeDefaultRequested, this, [this](const QString& name) {
+    connect(config_page_, &ConfigPage::newFromSafeDefaultRequested, this, [this](const QString& name) {
         profile_registry_.CreateUserProfileFromSafeDefault(name.toStdString());
         applyActiveProfileToPages();
         refreshOutputProfileUi();
         persistProfileState();
     });
-    connect(output_page_, &OutputPage::duplicateActiveProfileRequested, this, [this]() {
+    connect(config_page_, &ConfigPage::duplicateActiveProfileRequested, this, [this]() {
         if (profile_registry_.DuplicateActiveProfile()) {
             applyActiveProfileToPages();
             refreshOutputProfileUi();
             persistProfileState();
         }
     });
-    connect(output_page_, &OutputPage::renameActiveProfileRequested, this, [this](const QString& name) {
+    connect(config_page_, &ConfigPage::renameActiveProfileRequested, this, [this](const QString& name) {
         if (profile_registry_.RenameActiveUserProfile(name.toStdString())) {
             refreshOutputProfileUi();
             persistProfileState();
         }
     });
-    connect(output_page_, &OutputPage::deleteActiveProfileRequested, this, [this]() {
+    connect(config_page_, &ConfigPage::deleteActiveProfileRequested, this, [this]() {
         if (profile_registry_.DeleteActiveUserProfile()) {
             applyActiveProfileToPages();
             refreshOutputProfileUi();
             persistProfileState();
         }
     });
-    connect(output_page_, &OutputPage::resetActiveProfileRequested, this, [this]() {
+    connect(config_page_, &ConfigPage::resetActiveProfileRequested, this, [this]() {
         if (profile_registry_.ResetActiveProfile()) {
             applyActiveProfileToPages();
             refreshOutputProfileUi();
             persistProfileState();
         }
     });
-    connect(output_page_, &OutputPage::saveModifiedBuiltInAsNewRequested, this, [this](const QString& name) {
+    connect(config_page_, &ConfigPage::saveModifiedBuiltInAsNewRequested, this, [this](const QString& name) {
         if (profile_registry_.SaveModifiedBuiltInAsUserProfile(name.toStdString())) {
             applyActiveProfileToPages();
             refreshOutputProfileUi();
             persistProfileState();
         }
     });
-    connect(output_page_, &OutputPage::importProfilesRequested, this, [this](const QString& file_path) {
+    connect(config_page_, &ConfigPage::importProfilesRequested, this, [this](const QString& file_path) {
         const ProfileImportResult imported = ImportProfilesFromJsonFile(file_path);
         if (!imported.ok) {
             QMessageBox::warning(this, QStringLiteral("Import Profiles"),
@@ -989,7 +956,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         QMessageBox::information(this, QStringLiteral("Import Profiles"),
                                  QStringLiteral("Imported %1 profile(s).").arg(count));
     });
-    connect(output_page_, &OutputPage::exportSelectedProfileRequested, this, [this](const QString& file_path) {
+    connect(config_page_, &ConfigPage::exportSelectedProfileRequested, this, [this](const QString& file_path) {
         QString error_message;
         const RecordingProfile active_profile = profile_registry_.ActiveProfile();
         if (!ExportProfilesToJsonFile(file_path, {active_profile}, &error_message)) {
@@ -1000,7 +967,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
         QMessageBox::information(this, QStringLiteral("Export Profiles"), QStringLiteral("Selected profile exported."));
     });
-    connect(output_page_, &OutputPage::exportAllUserProfilesRequested, this, [this](const QString& file_path) {
+    connect(config_page_, &ConfigPage::exportAllUserProfilesRequested, this, [this](const QString& file_path) {
         const auto& users = profile_registry_.UserProfiles();
         if (users.empty()) {
             QMessageBox::warning(this, QStringLiteral("Export Profiles"),
@@ -1018,7 +985,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         QMessageBox::information(this, QStringLiteral("Export Profiles"),
                                  QStringLiteral("Exported %1 user profile(s).").arg(users.size()));
     });
-    connect(output_page_, &OutputPage::resetAllSettingsAndProfilesRequested, this, [this]() {
+    connect(config_page_, &ConfigPage::resetAllSettingsAndProfilesRequested, this, [this]() {
         profile_registry_ = RecordingProfileRegistry();
         output_settings_ = OutputSettingsModel::Defaults();
         video_settings_ = VideoSettingsModel::Defaults();
@@ -1087,8 +1054,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     });
     connect(diagnostics_page_, &DiagnosticsPage::navigateToLogsRequested, this,
             [this]() { nav_->setCurrentRow(kLogsPageIndex); });
-    connect(config_page_, &ConfigPage::manageProfilesRequested, this,
-            [this]() { nav_->setCurrentRow(kOutputPageIndex); });
     connect(config_page_, &ConfigPage::webcamDetailsRequested, this,
             [this]() { nav_->setCurrentRow(kWebcamPageIndex); });
 
@@ -1685,8 +1650,7 @@ void MainWindow::updatePageHeader(int index) {
     page_kicker_label_->setText(descriptor.kicker);
     page_title_label_->setText(descriptor.nav_label);
     page_subtitle_label_->setText(descriptor.subtitle);
-    const QString page_meta =
-        index == kOutputPageIndex ? buildOutputPageMeta() : QString::fromUtf8(descriptor.page_meta);
+    const QString page_meta = QString::fromUtf8(descriptor.page_meta);
     page_meta_label_->setText(page_meta);
     page_meta_label_->setVisible(!page_meta.trimmed().isEmpty());
 
@@ -1712,10 +1676,6 @@ void MainWindow::applyActiveProfileToPages() {
         record_page_->setActiveProfileName(active_profile.name);
         record_page_->applyPersistedAudioSettings(persisted_settings_.audio_ui_state);
     }
-    if (output_page_) {
-        output_page_->setOutputSettings(output_settings_);
-        output_page_->setActiveProfileName(QString::fromStdString(active_profile.name));
-    }
     if (config_page_) {
         config_page_->setOutputSettings(output_settings_);
         config_page_->setVideoSettings(video_settings_);
@@ -1723,18 +1683,11 @@ void MainWindow::applyActiveProfileToPages() {
         config_page_->setOutputFolder(output_settings_.output_folder);
         config_page_->setAudioUiState(persisted_settings_.audio_ui_state);
     }
-    if (stack_ && stack_->currentIndex() == kOutputPageIndex) {
-        updatePageHeader(kOutputPageIndex);
-    }
     refreshGlobalRecordingBarContext();
     refreshDiagnosticsData();
 }
 
 void MainWindow::refreshOutputProfileUi() {
-    if (!output_page_) {
-        return;
-    }
-
     const auto profile_available = [this](const RecordingProfile& profile, QString* reason_out) {
         if (!runtime_caps_ready_) {
             if (reason_out) {
@@ -1758,11 +1711,11 @@ void MainWindow::refreshOutputProfileUi() {
         return true;
     };
 
-    std::vector<OutputPage::ProfileOption> options;
+    std::vector<ConfigPage::ProfileOption> options;
     options.reserve(profile_registry_.BuiltInProfiles().size() + profile_registry_.UserProfiles().size());
 
     for (const auto& profile : profile_registry_.BuiltInProfiles()) {
-        OutputPage::ProfileOption option;
+        ConfigPage::ProfileOption option;
         option.id = QString::fromStdString(profile.id);
         option.label = QString::fromStdString(profile.name);
         option.built_in = true;
@@ -1774,7 +1727,7 @@ void MainWindow::refreshOutputProfileUi() {
     }
 
     for (const auto& profile : profile_registry_.UserProfiles()) {
-        OutputPage::ProfileOption option;
+        ConfigPage::ProfileOption option;
         option.id = QString::fromStdString(profile.id);
         option.label = QString::fromStdString(profile.name);
         option.built_in = false;
@@ -1784,23 +1737,8 @@ void MainWindow::refreshOutputProfileUi() {
     }
 
     syncing_profile_ui_ = true;
-    output_page_->setProfileOptions(options, QString::fromStdString(profile_registry_.ActiveState().active_profile_id),
-                                    profile_registry_.IsActiveBuiltInModified());
-    output_page_->setActiveProfileName(QString::fromStdString(profile_registry_.ActiveProfile().name));
     if (config_page_) {
-        std::vector<ConfigPage::ProfileOption> config_options;
-        config_options.reserve(options.size());
-        for (const auto& o : options) {
-            ConfigPage::ProfileOption co;
-            co.id = o.id;
-            co.label = o.label;
-            co.built_in = o.built_in;
-            co.modified = o.modified;
-            co.available = o.available;
-            co.availability_reason = o.availability_reason;
-            config_options.push_back(std::move(co));
-        }
-        config_page_->setProfileOptions(config_options,
+        config_page_->setProfileOptions(options,
                                         QString::fromStdString(profile_registry_.ActiveState().active_profile_id),
                                         profile_registry_.IsActiveBuiltInModified());
         config_page_->setActiveProfileName(QString::fromStdString(profile_registry_.ActiveProfile().name));

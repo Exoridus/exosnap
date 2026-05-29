@@ -6,14 +6,18 @@
 #include <QFileDialog>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
+#include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QTimer>
+#include <QToolButton>
 #include <QToolTip>
 #include <QVBoxLayout>
 
@@ -186,12 +190,39 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     profile_lbl->setProperty("labelRole", "section");
     profile_combo_ = new QComboBox(fmt_panel);
     profile_combo_->setObjectName(QStringLiteral("profileCombo"));
-    profile_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    profile_combo_->setMinimumWidth(240);
+    profile_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    profile_status_label_ = new QLabel(fmt_panel);
+    profile_status_label_->setProperty("labelRole", "profileStatusBadge");
+    profile_status_label_->setAlignment(Qt::AlignCenter);
+    save_as_new_btn_ = new QPushButton(QStringLiteral("Save as new"), fmt_panel);
+    reset_profile_btn_ = new QPushButton(QStringLiteral("Reset"), fmt_panel);
+    profile_overflow_btn_ = new QToolButton(fmt_panel);
+    profile_overflow_btn_->setText(QStringLiteral("Actions"));
+    profile_overflow_btn_->setPopupMode(QToolButton::InstantPopup);
+    profile_overflow_btn_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+
+    auto* profile_menu = new QMenu(profile_overflow_btn_);
+    new_from_current_action_ = profile_menu->addAction(QStringLiteral("New from current"));
+    new_from_safe_default_action_ = profile_menu->addAction(QStringLiteral("New from default"));
+    profile_menu->addSeparator();
+    duplicate_profile_action_ = profile_menu->addAction(QStringLiteral("Duplicate"));
+    rename_profile_action_ = profile_menu->addAction(QStringLiteral("Rename"));
+    delete_profile_action_ = profile_menu->addAction(QStringLiteral("Delete"));
+    profile_menu->addSeparator();
+    import_profiles_action_ = profile_menu->addAction(QStringLiteral("Import..."));
+    export_selected_action_ = profile_menu->addAction(QStringLiteral("Export selected..."));
+    export_all_users_action_ = profile_menu->addAction(QStringLiteral("Export all users..."));
+    profile_menu->addSeparator();
+    reset_all_action_ = profile_menu->addAction(QStringLiteral("Reset all settings + profiles"));
+    profile_overflow_btn_->setMenu(profile_menu);
+
     profile_header->addWidget(profile_lbl);
     profile_header->addWidget(profile_combo_, 1);
-    manage_profiles_btn_ = new QPushButton(QStringLiteral("Manage..."), fmt_panel);
-    manage_profiles_btn_->setProperty("role", "ghost");
-    profile_header->addWidget(manage_profiles_btn_);
+    profile_header->addWidget(profile_status_label_);
+    profile_header->addWidget(save_as_new_btn_);
+    profile_header->addWidget(reset_profile_btn_);
+    profile_header->addWidget(profile_overflow_btn_);
     fmt_layout->addLayout(profile_header);
 
     format_display_label_ = new QLabel(fmt_panel);
@@ -428,7 +459,17 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(webcam_enabled_check_, &QCheckBox::toggled, this, &ConfigPage::onWebcamEnabledToggled);
     connect(webcam_device_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onWebcamDeviceChanged);
-    connect(manage_profiles_btn_, &QPushButton::clicked, this, &ConfigPage::manageProfilesRequested);
+    connect(new_from_current_action_, &QAction::triggered, this, &ConfigPage::promptCreateProfileFromCurrent);
+    connect(new_from_safe_default_action_, &QAction::triggered, this, &ConfigPage::promptCreateProfileFromSafeDefault);
+    connect(duplicate_profile_action_, &QAction::triggered, this, &ConfigPage::duplicateActiveProfileRequested);
+    connect(rename_profile_action_, &QAction::triggered, this, &ConfigPage::promptRenameActiveProfile);
+    connect(delete_profile_action_, &QAction::triggered, this, &ConfigPage::onDeleteActiveProfile);
+    connect(reset_profile_btn_, &QPushButton::clicked, this, &ConfigPage::resetActiveProfileRequested);
+    connect(save_as_new_btn_, &QPushButton::clicked, this, &ConfigPage::promptSaveModifiedBuiltInAsNew);
+    connect(import_profiles_action_, &QAction::triggered, this, &ConfigPage::onImportProfiles);
+    connect(export_selected_action_, &QAction::triggered, this, &ConfigPage::onExportSelectedProfile);
+    connect(export_all_users_action_, &QAction::triggered, this, &ConfigPage::onExportAllUserProfiles);
+    connect(reset_all_action_, &QAction::triggered, this, &ConfigPage::onResetAllSettingsAndProfiles);
     connect(view_details_btn_, &QPushButton::clicked, this, &ConfigPage::diagnosticsRequested);
     connect(webcam_details_btn_, &QPushButton::clicked, this, &ConfigPage::webcamDetailsRequested);
 
@@ -588,7 +629,12 @@ void ConfigPage::onAudioCodecChanged(int index) {
 void ConfigPage::onProfileSelectionChanged(int index) {
     if (index < 0 || index >= static_cast<int>(profile_options_.size()))
         return;
-    emit activeProfileChanged(profile_options_[static_cast<std::size_t>(index)].id);
+    const auto& opt = profile_options_[static_cast<std::size_t>(index)];
+    active_profile_is_built_in_ = opt.built_in;
+    active_profile_is_modified_ = opt.modified;
+    active_profile_is_available_ = opt.available;
+    updateProfileActionState();
+    emit activeProfileChanged(opt.id);
 }
 
 void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
@@ -663,11 +709,16 @@ void ConfigPage::setProfileOptions(const std::vector<ProfileOption>& options, co
         if (!opt.available)
             label += QStringLiteral(" (unavailable)");
         profile_combo_->addItem(label, opt.id);
-        if (opt.id == active_profile_id)
+        if (opt.id == active_profile_id) {
             active_index = static_cast<int>(i);
+            active_profile_is_built_in_ = opt.built_in;
+            active_profile_is_modified_ = opt.modified;
+            active_profile_is_available_ = opt.available;
+        }
     }
     if (active_index >= 0)
         profile_combo_->setCurrentIndex(active_index);
+    updateProfileActionState();
 }
 
 void ConfigPage::setActiveProfileName(const QString& profile_name) {
@@ -1057,7 +1108,9 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     const bool enabled = !locked;
 
     profile_combo_->setEnabled(enabled);
-    manage_profiles_btn_->setEnabled(enabled);
+    save_as_new_btn_->setEnabled(enabled);
+    reset_profile_btn_->setEnabled(enabled);
+    profile_overflow_btn_->setEnabled(enabled);
     mkv_radio_->setEnabled(enabled);
     webm_radio_->setEnabled(enabled);
     mp4_radio_->setEnabled(enabled);
@@ -1086,6 +1139,134 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
 
     if (lock_note_label_)
         lock_note_label_->setVisible(locked);
+}
+
+void ConfigPage::updateProfileActionState() {
+    const bool has_profile = profile_combo_->currentIndex() >= 0;
+
+    const bool is_builtin = active_profile_is_built_in_ && !active_profile_is_modified_;
+    const bool show_save_as = active_profile_is_built_in_ && active_profile_is_modified_;
+    const bool show_reset = !active_profile_is_built_in_ || active_profile_is_modified_;
+
+    save_as_new_btn_->setVisible(show_save_as);
+    save_as_new_btn_->setEnabled(show_save_as);
+    reset_profile_btn_->setVisible(show_reset);
+    reset_profile_btn_->setEnabled(show_reset);
+
+    duplicate_profile_action_->setEnabled(has_profile);
+    rename_profile_action_->setVisible(!active_profile_is_built_in_);
+    rename_profile_action_->setEnabled(!active_profile_is_built_in_);
+    delete_profile_action_->setVisible(!active_profile_is_built_in_);
+    delete_profile_action_->setEnabled(!active_profile_is_built_in_);
+    export_selected_action_->setEnabled(has_profile);
+
+    QString badge;
+    if (!active_profile_is_available_) {
+        badge = QStringLiteral("Unavailable");
+        profile_status_label_->setProperty("stateRole", "blocked");
+    } else if (active_profile_is_built_in_ && active_profile_is_modified_) {
+        badge = QStringLiteral("Built-in \302\267 Modified");
+        profile_status_label_->setProperty("stateRole", "recording");
+    } else if (active_profile_is_built_in_) {
+        badge = is_builtin ? QStringLiteral("Built-in") : QString();
+        profile_status_label_->setProperty("stateRole", "ready");
+    } else {
+        badge = QStringLiteral("User");
+        profile_status_label_->setProperty("stateRole", "ready");
+    }
+    profile_status_label_->setText(badge);
+    profile_status_label_->setVisible(!badge.isEmpty());
+    profile_status_label_->style()->unpolish(profile_status_label_);
+    profile_status_label_->style()->polish(profile_status_label_);
+}
+
+void ConfigPage::onImportProfiles() {
+    const QString file_path = QFileDialog::getOpenFileName(this, QStringLiteral("Import Profiles"), QString(),
+                                                           QStringLiteral("Profile files (*.json);;All files (*)"));
+    if (file_path.isEmpty())
+        return;
+    emit importProfilesRequested(file_path);
+}
+
+void ConfigPage::onExportSelectedProfile() {
+    const QString file_path =
+        QFileDialog::getSaveFileName(this, QStringLiteral("Export Selected Profile"), QStringLiteral("profile.json"),
+                                     QStringLiteral("Profile files (*.json);;All files (*)"));
+    if (file_path.isEmpty())
+        return;
+    emit exportSelectedProfileRequested(file_path);
+}
+
+void ConfigPage::onExportAllUserProfiles() {
+    const QString file_path =
+        QFileDialog::getSaveFileName(this, QStringLiteral("Export All User Profiles"), QStringLiteral("profiles.json"),
+                                     QStringLiteral("Profile files (*.json);;All files (*)"));
+    if (file_path.isEmpty())
+        return;
+    emit exportAllUserProfilesRequested(file_path);
+}
+
+void ConfigPage::onDeleteActiveProfile() {
+    if (active_profile_is_built_in_)
+        return;
+
+    const auto answer =
+        QMessageBox::warning(this, QStringLiteral("Delete Profile"),
+                             QStringLiteral("Permanently delete this user profile? This action cannot be undone."),
+                             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes)
+        return;
+    emit deleteActiveProfileRequested();
+}
+
+void ConfigPage::onResetAllSettingsAndProfiles() {
+    const auto answer = QMessageBox::warning(
+        this, QStringLiteral("Reset All Settings"),
+        QStringLiteral("Reset all application settings, profiles, and hotkeys to factory defaults? "
+                       "This action cannot be undone."),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes)
+        return;
+    emit resetAllSettingsAndProfilesRequested();
+}
+
+void ConfigPage::promptCreateProfileFromCurrent() {
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, QStringLiteral("New Profile from Current"),
+                                               QStringLiteral("Profile name:"), QLineEdit::Normal, QString(), &ok);
+    if (ok && !name.trimmed().isEmpty())
+        emit newFromCurrentRequested(name.trimmed());
+}
+
+void ConfigPage::promptCreateProfileFromSafeDefault() {
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, QStringLiteral("New Profile from Default"),
+                                               QStringLiteral("Profile name:"), QLineEdit::Normal, QString(), &ok);
+    if (ok && !name.trimmed().isEmpty())
+        emit newFromSafeDefaultRequested(name.trimmed());
+}
+
+void ConfigPage::promptRenameActiveProfile() {
+    if (active_profile_is_built_in_)
+        return;
+    const int idx = profile_combo_->currentIndex();
+    const QString current_name =
+        (idx >= 0) ? profile_combo_->currentText().section(QStringLiteral(" ("), 0, 0) : QString();
+    bool ok = false;
+    const QString name =
+        QInputDialog::getText(this, QStringLiteral("Rename Profile"), QStringLiteral("New profile name:"),
+                              QLineEdit::Normal, current_name, &ok);
+    if (ok && !name.trimmed().isEmpty())
+        emit renameActiveProfileRequested(name.trimmed());
+}
+
+void ConfigPage::promptSaveModifiedBuiltInAsNew() {
+    bool ok = false;
+    const QString name =
+        QInputDialog::getText(this, QStringLiteral("Save Modified Built-in as New"),
+                              QStringLiteral("Save as new profile:"), QLineEdit::Normal, QString(), &ok);
+    if (ok && !name.trimmed().isEmpty())
+        emit saveModifiedBuiltInAsNewRequested(name.trimmed());
 }
 
 } // namespace exosnap

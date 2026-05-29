@@ -9,6 +9,7 @@
 #include <QObject>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QToolButton>
 
 #include "models/OutputSettingsModel.h"
 #include "models/VideoSettingsModel.h"
@@ -102,18 +103,18 @@ TEST_F(ConfigPageTest, ReadinessDefaults_HidesDiagnosticsAction) {
     FAIL() << "Open Diagnostics... button not found";
 }
 
-TEST_F(ConfigPageTest, ManageProfilesButtonExists) {
+TEST_F(ConfigPageTest, ProfileActionsButtonExists) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    const auto buttons = page.findChildren<QPushButton*>();
+    const auto buttons = page.findChildren<QToolButton*>();
     bool found = false;
     for (const auto* b : buttons) {
-        if (b->text() == QStringLiteral("Manage...")) {
+        if (b->text() == QStringLiteral("Actions")) {
             found = true;
             break;
         }
     }
-    EXPECT_TRUE(found);
+    EXPECT_TRUE(found) << "Profile Actions overflow button not found";
 }
 
 TEST_F(ConfigPageTest, WebcamDetailsButtonExists) {
