@@ -335,6 +335,10 @@ void OperationalTitleBar::refreshStatusChip() {
         status_pill_->setDotVisible(false);
         status_pill_->setText(QStringLiteral("READY"));
     }
+    // Hide the titlebar pill in READY state — the GlobalBar already shows the status chip there.
+    // Show it for all active states (REC, PAUSED, STARTING, STOPPING, ERROR, BLOCKED) where
+    // the titlebar badge is the fastest visible signal regardless of which page is open.
+    status_pill_->setVisible(status != QStringLiteral("READY"));
 }
 
 void OperationalTitleBar::refreshMetricsLabel() {

@@ -141,12 +141,13 @@ GlobalRecordingBar::GlobalRecordingBar(QWidget* parent) : QWidget(parent) {
         makeActionButton(QStringLiteral("Overlay"), QStringLiteral("globalBarSecondaryAction"),
                          QStringLiteral("Overlay/HUD controls are not available in this MVP build."), actions_slot);
     overlay_action_button_->setObjectName(QStringLiteral("globalBarOverlayActionButton"));
+    overlay_action_button_->hide();
 
     actions_layout->addWidget(primary_action_button_);
     actions_layout->addWidget(pause_action_button_);
     actions_layout->addWidget(mic_action_button_);
     actions_layout->addWidget(marker_action_button_);
-    // overlay_action_button_ is created but not added to the transport — Overlay/HUD is out of MVP scope.
+    // overlay_action_button_ is intentionally excluded from transport — Overlay/HUD is deferred.
 
     connect(primary_action_button_, &QPushButton::clicked, this, &GlobalRecordingBar::primaryActionRequested);
     connect(pause_action_button_, &QPushButton::clicked, this, &GlobalRecordingBar::pauseActionRequested);
@@ -305,6 +306,7 @@ void GlobalRecordingBar::refreshActionLabels() {
                                                              : QStringLiteral("Pause recording unavailable"));
         pause_action_button_->setEnabled(is_recording);
     }
+    pause_action_button_->setVisible(is_recording || is_paused);
     pause_action_button_->setAccessibleDescription(pause_action_button_->toolTip());
 
     mic_action_button_->setToolTip(QStringLiteral("Global mic toggle is not available in this MVP build. "
