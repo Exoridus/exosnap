@@ -826,7 +826,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     stack_->addWidget(hotkeys_page_);
     stack_->addWidget(diagnostics_page_);
     stack_->addWidget(new LogsPage(stack_));
-    stack_->addWidget(new AdvancedPage(stack_));
+    advanced_page_ = new AdvancedPage(stack_);
+    advanced_page_->setBaseline(output_settings_, video_settings_,
+                                QString::fromStdString(profile_registry_.ActiveProfile().name));
+    stack_->addWidget(advanced_page_);
     stack_->addWidget(webcam_page_);
     record_page_->setOutputSettings(output_settings_);
     record_page_->setVideoSettings(video_settings_);
@@ -870,6 +873,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         record_page_->setOutputSettings(output_settings_);
         profile_registry_.ApplyOutputToActive(output_settings_);
         persisted_settings_.output = output_settings_;
+        if (advanced_page_) {
+            advanced_page_->setBaseline(output_settings_, video_settings_,
+                                        QString::fromStdString(profile_registry_.ActiveProfile().name));
+        }
         persistProfileState();
         refreshGlobalRecordingBarContext();
         refreshOutputProfileUi();
@@ -1023,6 +1030,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         record_page_->setVideoSettings(settings);
         profile_registry_.ApplyVideoToActive(settings);
         persisted_settings_.video = settings;
+        if (advanced_page_) {
+            advanced_page_->setBaseline(output_settings_, video_settings_,
+                                        QString::fromStdString(profile_registry_.ActiveProfile().name));
+        }
         persistProfileState();
         refreshDiagnosticsData();
     });
@@ -1685,6 +1696,9 @@ void MainWindow::applyActiveProfileToPages() {
         config_page_->setActiveProfileName(QString::fromStdString(active_profile.name));
         config_page_->setOutputFolder(output_settings_.output_folder);
         config_page_->setAudioUiState(persisted_settings_.audio_ui_state);
+    }
+    if (advanced_page_) {
+        advanced_page_->setBaseline(output_settings_, video_settings_, QString::fromStdString(active_profile.name));
     }
     refreshGlobalRecordingBarContext();
     refreshDiagnosticsData();

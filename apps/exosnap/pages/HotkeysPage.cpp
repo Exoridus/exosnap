@@ -65,8 +65,10 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
     commands_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceMd,
                                         ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceMd);
     commands_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
-    commands_layout->addWidget(
-        makeSubLabel("Global commands are staged here and applied through a later integration pass.", commands_panel));
+    commands_layout->addWidget(makeSubLabel(
+        "Bindings apply immediately and work globally while ExoSnap is running. Start/Stop and Pause/Resume "
+        "are active now; Split and Mute capture a binding but are not yet wired to an action.",
+        commands_panel));
 
     for (int i = 0; i < 4; ++i)
         buildRow(i, kActions[i].action, kActions[i].binding, commands_layout, commands_panel);
@@ -79,22 +81,13 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
     policy_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
                                       ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
     policy_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceXs);
-    policy_layout->addWidget(
-        makeSubLabel("Hotkeys are expected to work globally while ExoSnap is running.", policy_panel));
-    auto* policy_note = new QLabel("If a shortcut is unavailable, binding remains unchanged.", policy_panel);
+    policy_layout->addWidget(makeSubLabel(
+        "Hotkeys are registered system-wide so they work even when ExoSnap is in the background.", policy_panel));
+    auto* policy_note =
+        new QLabel("If another application already owns a shortcut, the previous binding is kept.", policy_panel);
     policy_note->setProperty("labelRole", "subtle");
     policy_layout->addWidget(policy_note);
     layout->addWidget(policy_panel);
-
-    layout->addWidget(makeSectionLabel("Conflict / Availability Placeholder", content));
-    auto* conflict_panel = makePanel(content);
-    auto* conflict_layout = new QVBoxLayout(conflict_panel);
-    conflict_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
-                                        ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
-    auto* conflict_hint = new QLabel("Conflict detection summary is shown here in a later pass.", conflict_panel);
-    conflict_hint->setProperty("labelRole", "subtle");
-    conflict_layout->addWidget(conflict_hint);
-    layout->addWidget(conflict_panel);
 
     layout->addStretch();
     scroll->setWidget(content);

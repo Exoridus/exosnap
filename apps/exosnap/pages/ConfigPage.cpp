@@ -33,6 +33,11 @@ namespace exosnap {
 
 namespace {
 
+// Upper bound for the Config form width. Chosen above the content area at the
+// default/minimum window size so the standard layout is never narrowed, while
+// preventing fields from stretching across an entire ultra-wide maximized window.
+constexpr int kMaxContentWidth = 1080;
+
 QLabel* makeSubLabel(const QString& text, QWidget* parent) {
     auto* l = new QLabel(text, parent);
     l->setProperty("labelRole", "subtitle");
@@ -442,7 +447,21 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     layout->addWidget(out_panel);
 
     layout->addStretch();
-    scroll->setWidget(content);
+
+    // Constrain the form width so cards do not stretch to absurd widths when the
+    // window is maximized on a wide display. The cap is wider than the default
+    // 1280x800 content area, so the default layout is unaffected; the surrounding
+    // stretches keep the content centered when the viewport is wider than the cap.
+    content->setMaximumWidth(kMaxContentWidth);
+    auto* content_holder = new QWidget(scroll);
+    auto* holder_layout = new QHBoxLayout(content_holder);
+    holder_layout->setContentsMargins(0, 0, 0, 0);
+    holder_layout->setSpacing(0);
+    holder_layout->addStretch(1);
+    holder_layout->addWidget(content);
+    holder_layout->addStretch(1);
+
+    scroll->setWidget(content_holder);
     outer->addWidget(scroll);
 
     connect(container_group_, &QButtonGroup::idClicked, this, &ConfigPage::onContainerChanged);

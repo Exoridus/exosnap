@@ -82,9 +82,9 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
         device_combo_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         device_combo_->setMinimumWidth(280);
         device_combo_->setMaximumWidth(560);
-        refresh_btn_ = new QPushButton("↺", content);
-        refresh_btn_->setFixedWidth(32);
-        refresh_btn_->setToolTip("Refresh device list");
+        refresh_btn_ = new QPushButton("Rescan", content);
+        refresh_btn_->setProperty("role", "utility");
+        refresh_btn_->setToolTip("Rescan for connected cameras");
         dr->addWidget(device_combo_, 1);
         dr->addWidget(refresh_btn_);
         layout->addWidget(dev_row);

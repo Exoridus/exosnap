@@ -4,6 +4,7 @@
 #include "../ui/widgets/ExoCheckBox.h"
 
 #include <QComboBox>
+#include <QFormLayout>
 #include <QFrame>
 #include <QLabel>
 #include <QPushButton>
@@ -15,6 +16,54 @@
 namespace exosnap {
 
 namespace {
+
+QString ContainerLabel(capability::Container container) {
+    switch (container) {
+    case capability::Container::Matroska:
+        return QStringLiteral("MKV");
+    case capability::Container::Mp4:
+        return QStringLiteral("MP4");
+    case capability::Container::WebM:
+        return QStringLiteral("WebM");
+    }
+    return QStringLiteral("MKV");
+}
+
+QString VideoCodecLabel(capability::VideoCodec codec) {
+    switch (codec) {
+    case capability::VideoCodec::H264Nvenc:
+        return QStringLiteral("H.264 (NVENC)");
+    case capability::VideoCodec::HevcNvenc:
+        return QStringLiteral("HEVC (NVENC)");
+    case capability::VideoCodec::Av1Nvenc:
+        return QStringLiteral("AV1 (NVENC)");
+    }
+    return QStringLiteral("H.264 (NVENC)");
+}
+
+QString AudioCodecLabel(capability::AudioCodec codec) {
+    switch (codec) {
+    case capability::AudioCodec::AacMf:
+        return QStringLiteral("AAC");
+    case capability::AudioCodec::Opus:
+        return QStringLiteral("Opus");
+    case capability::AudioCodec::Pcm:
+        return QStringLiteral("PCM");
+    }
+    return QStringLiteral("AAC");
+}
+
+QString QualityLabel(recorder_core::NvencQualityPreset quality) {
+    switch (quality) {
+    case recorder_core::NvencQualityPreset::High:
+        return QStringLiteral("High  ·  CQ 19");
+    case recorder_core::NvencQualityPreset::Balanced:
+        return QStringLiteral("Balanced  ·  CQ 24");
+    case recorder_core::NvencQualityPreset::Small:
+        return QStringLiteral("Small  ·  CQ 30");
+    }
+    return QStringLiteral("Balanced  ·  CQ 24");
+}
 
 QLabel* makeSubLabel(const QString& text, QWidget* parent) {
     auto* l = new QLabel(text, parent);
@@ -68,20 +117,30 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
                                         ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
     behavior_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceXs);
     behavior_layout->addWidget(
-        makeSubLabel("These values reflect the current resolved baseline profile.", behavior_panel));
-    for (const char* line : {
-             "Container: MKV",
-             "Video codec: AV1 (NVENC)",
-             "Quality: Balanced  ·  CQ 24",
-             "Frame rate: CFR 60 fps",
-             "Resolution: Source",
-             "Audio codec: Opus",
-             "Cursor: Captured",
-         }) {
-        auto* lbl = new QLabel(line, behavior_panel);
-        lbl->setProperty("labelRole", "mono");
-        behavior_layout->addWidget(lbl);
-    }
+        makeSubLabel("These values reflect the active profile and its resolved capture settings.", behavior_panel));
+
+    auto* baseline_grid = new QFormLayout();
+    baseline_grid->setContentsMargins(0, 0, 0, 0);
+    baseline_grid->setHorizontalSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
+    baseline_grid->setVerticalSpacing(ui::theme::ExoSnapMetrics::kSpaceXs);
+
+    auto addBaselineRow = [&](const QString& key, QLabel*& value_label) {
+        auto* key_label = new QLabel(key, behavior_panel);
+        key_label->setProperty("labelRole", "subtle");
+        value_label = new QLabel(QStringLiteral("—"), behavior_panel);
+        value_label->setProperty("labelRole", "mono");
+        baseline_grid->addRow(key_label, value_label);
+    };
+
+    addBaselineRow(QStringLiteral("Profile"), baseline_profile_label_);
+    addBaselineRow(QStringLiteral("Container"), baseline_container_label_);
+    addBaselineRow(QStringLiteral("Video codec"), baseline_video_label_);
+    addBaselineRow(QStringLiteral("Quality"), baseline_quality_label_);
+    addBaselineRow(QStringLiteral("Frame rate"), baseline_framerate_label_);
+    addBaselineRow(QStringLiteral("Audio codec"), baseline_audio_label_);
+    addBaselineRow(QStringLiteral("Cursor"), baseline_cursor_label_);
+    behavior_layout->addLayout(baseline_grid);
+
     layout->addWidget(behavior_panel);
 
     // Developer / experimental controls
@@ -121,6 +180,26 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
     combo_wheel_filter->installOn(log_level_combo_);
 
     connect(reset_btn, &QPushButton::clicked, this, &AdvancedPage::onReset);
+}
+
+void AdvancedPage::setBaseline(const OutputSettingsModel& output, const VideoSettingsModel& video,
+                               const QString& profile_name) {
+    if (baseline_profile_label_)
+        baseline_profile_label_->setText(profile_name.isEmpty() ? QStringLiteral("—") : profile_name);
+    if (baseline_container_label_)
+        baseline_container_label_->setText(ContainerLabel(output.container));
+    if (baseline_video_label_)
+        baseline_video_label_->setText(VideoCodecLabel(output.video_codec));
+    if (baseline_quality_label_)
+        baseline_quality_label_->setText(QualityLabel(video.quality));
+    if (baseline_framerate_label_) {
+        const QString mode = video.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR");
+        baseline_framerate_label_->setText(QStringLiteral("%1 %2 fps").arg(mode).arg(video.frame_rate_num));
+    }
+    if (baseline_audio_label_)
+        baseline_audio_label_->setText(AudioCodecLabel(output.audio_codec));
+    if (baseline_cursor_label_)
+        baseline_cursor_label_->setText(video.capture_cursor ? QStringLiteral("Captured") : QStringLiteral("Hidden"));
 }
 
 void AdvancedPage::onReset() {

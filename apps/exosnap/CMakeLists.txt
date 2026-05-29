@@ -256,6 +256,21 @@ set_target_properties(config_page_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(config_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
 
 exosnap_add_gtest(
+    NAME advanced_page_tests
+    TEST_PREFIX advanced.
+    SOURCES
+        tests/test_advanced_page.cpp
+        pages/AdvancedPage.cpp
+        ui/widgets/ComboBoxWheelFilter.cpp
+        ui/widgets/ExoCheckBox.cpp
+        models/OutputSettingsModel.cpp
+        models/OutputPathPolicy.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(advanced_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(advanced_page_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
     NAME preview_helpers_tests
     TEST_PREFIX preview.
     SOURCES
