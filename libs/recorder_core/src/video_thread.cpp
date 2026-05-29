@@ -2,6 +2,7 @@
 
 #include "annexb_to_avcc.h"
 #include "codec_private.h"
+#include "dxgi_od_capture_src.h"
 #include "nvenc_encoder.h"
 #include "session_internal.h"
 
@@ -114,6 +115,19 @@ void VideoThread::Run() {
         return;
     }
 
+    const CaptureTarget& target = m_state.config.target;
+    const HWND targetHwnd =
+        (target.kind == CaptureTarget::Kind::Window) ? reinterpret_cast<HWND>(target.native_id) : nullptr;
+    const bool useOdCapture = (target.kind == CaptureTarget::Kind::Monitor);
+
+    // For Monitor targets, find the adapter owning the HMONITOR so DXGI OD works
+    // on multi-GPU systems. Fall back to default adapter on failure.
+    winrt::com_ptr<IDXGIAdapter1> monitorAdapter;
+    if (useOdCapture) {
+        std::string adapterErr;
+        FindAdapterForMonitor(reinterpret_cast<HMONITOR>(target.native_id), monitorAdapter.put(), adapterErr);
+    }
+
     // --- D3D11 video-capable device (exclusive to this thread's context) ---
     winrt::com_ptr<ID3D11Device> d3dDevice;
     winrt::com_ptr<ID3D11DeviceContext> d3dContext;
@@ -124,9 +138,16 @@ void VideoThread::Run() {
         D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
         UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
 
-        hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, levels,
-                               static_cast<UINT>(std::size(levels)), D3D11_SDK_VERSION, d3dDevice.put(), nullptr,
-                               d3dContext.put());
+        if (monitorAdapter) {
+            // Adapter-matched device: required for DuplicateOutput on multi-GPU systems.
+            hr = D3D11CreateDevice(monitorAdapter.get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, flags, levels,
+                                   static_cast<UINT>(std::size(levels)), D3D11_SDK_VERSION, d3dDevice.put(), nullptr,
+                                   d3dContext.put());
+        } else {
+            hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, levels,
+                                   static_cast<UINT>(std::size(levels)), D3D11_SDK_VERSION, d3dDevice.put(), nullptr,
+                                   d3dContext.put());
+        }
 
         if (FAILED(hr) || !d3dDevice) {
             char buf[80];
@@ -157,10 +178,6 @@ void VideoThread::Run() {
             return;
         }
     }
-
-    const CaptureTarget& target = m_state.config.target;
-    const HWND targetHwnd =
-        (target.kind == CaptureTarget::Kind::Window) ? reinterpret_cast<HWND>(target.native_id) : nullptr;
 
     bool windowHandleValid = false;
     bool windowVisible = false;
@@ -201,26 +218,31 @@ void VideoThread::Run() {
         }
     }
 
-    // --- WGC capture item ---
+    // --- Capture backend init ---
+    // Monitor  → DXGI Output Duplication (no VRR interference, no capture indicator)
+    // Window   → WGC GraphicsCaptureSession (only option for window/app capture)
+
+    DxgiOdCaptureSrc odSrc;
     winrt::Windows::Graphics::Capture::GraphicsCaptureItem item{nullptr};
-    {
+
+    if (useOdCapture) {
+        std::string odErr;
+        if (!odSrc.Open(d3dDevice.get(), reinterpret_cast<HMONITOR>(target.native_id), odErr)) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "DXGI OD open: " + odErr);
+            if (com_inited && hr != RPC_E_CHANGED_MODE)
+                CoUninitialize();
+            return;
+        }
+    } else {
         try {
             auto interop = winrt::get_activation_factory<winrt::Windows::Graphics::Capture::GraphicsCaptureItem,
                                                          IGraphicsCaptureItemInterop>();
-
-            if (target.kind == CaptureTarget::Kind::Monitor) {
-                winrt::check_hresult(interop->CreateForMonitor(
-                    reinterpret_cast<HMONITOR>(target.native_id),
-                    winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(), winrt::put_abi(item)));
-            } else {
-                winrt::check_hresult(interop->CreateForWindow(
-                    reinterpret_cast<HWND>(target.native_id),
-                    winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(), winrt::put_abi(item)));
-            }
+            winrt::check_hresult(interop->CreateForWindow(
+                reinterpret_cast<HWND>(target.native_id),
+                winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(), winrt::put_abi(item)));
         } catch (const winrt::hresult_error& e) {
             char buf[96];
-            snprintf(buf, sizeof(buf), "CreateForMonitor/Window failed 0x%08X",
-                     static_cast<unsigned int>(e.code().value));
+            snprintf(buf, sizeof(buf), "WGC CreateForWindow failed 0x%08X", static_cast<unsigned int>(e.code().value));
             m_state.RecordFailure(static_cast<HRESULT>(e.code().value), ErrorPhase::VideoCapture, buf);
             if (com_inited && hr != RPC_E_CHANGED_MODE)
                 CoUninitialize();
@@ -229,9 +251,10 @@ void VideoThread::Run() {
     }
 
     // Capture dimensions
-    auto sz = item.Size();
-    const int32_t sourceWidthSigned = sz.Width;
-    const int32_t sourceHeightSigned = sz.Height;
+    const int32_t sourceWidthSigned =
+        useOdCapture ? static_cast<int32_t>(odSrc.Width()) : static_cast<int32_t>(item.Size().Width);
+    const int32_t sourceHeightSigned =
+        useOdCapture ? static_cast<int32_t>(odSrc.Height()) : static_cast<int32_t>(item.Size().Height);
 
     std::ostringstream diag;
     diag << "target.kind=" << TargetKindName(target.kind) << ", target.description=\"" << target.description
@@ -251,7 +274,7 @@ void VideoThread::Run() {
 
     if (sourceWidthSigned <= 0 || sourceHeightSigned <= 0) {
         std::ostringstream err;
-        err << "WGC source size invalid (<=0): " << sourceWidthSigned << "x" << sourceHeightSigned << "; preInit={"
+        err << "capture source size invalid (<=0): " << sourceWidthSigned << "x" << sourceHeightSigned << "; preInit={"
             << diag.str() << "}";
         m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
         if (com_inited && hr != RPC_E_CHANGED_MODE)
@@ -466,15 +489,68 @@ void VideoThread::Run() {
         videoContext->VideoProcessorSetStreamDestRect(videoProcessor.get(), 0, TRUE, &dstRect);
     }
 
+    // --- DXGI OD captured frame texture + cursor resources ---
+    // odCapturedTex: persistent BGRA texture we CopyResource into after each DXGI OD acquire.
+    // DXGI OD textures are owned by the duplication interface and must be released before the
+    // next AcquireNextFrame, so we always copy to this texture first.
+    winrt::com_ptr<ID3D11Texture2D> odCapturedTex;
+    winrt::com_ptr<ID3D11Texture2D> odCursorStagingTex; // 256x256 staging for cursor alpha-blend readback
+    bool odCapturedTexValid = false;
+    bool odCursorShapeValid = false;
+    bool odCursorVisible = false;
+    int32_t odCursorPosX = 0;
+    int32_t odCursorPosY = 0;
+    DXGI_OUTDUPL_POINTER_SHAPE_INFO odCursorShapeInfo{};
+    std::vector<uint8_t> odCursorBitmap;
+    std::vector<uint8_t> odCursorBlendBuf;
+
+    if (useOdCapture) {
+        {
+            D3D11_TEXTURE2D_DESC desc{};
+            desc.Width = sourceWidth;
+            desc.Height = sourceHeight;
+            desc.MipLevels = 1;
+            desc.ArraySize = 1;
+            desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            desc.SampleDesc = {1, 0};
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+
+            HRESULT odHr = d3dDevice->CreateTexture2D(&desc, nullptr, odCapturedTex.put());
+            if (FAILED(odHr)) {
+                char buf[80];
+                snprintf(buf, sizeof(buf), "CreateTexture2D(odCapturedTex) failed 0x%08lX",
+                         static_cast<unsigned long>(odHr));
+                m_state.RecordFailure(odHr, ErrorPhase::Prepare, buf);
+                if (com_inited)
+                    CoUninitialize();
+                return;
+            }
+        }
+
+        if (m_state.config.capture_cursor) {
+            D3D11_TEXTURE2D_DESC sDesc{};
+            sDesc.Width = 256;
+            sDesc.Height = 256;
+            sDesc.MipLevels = 1;
+            sDesc.ArraySize = 1;
+            sDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            sDesc.SampleDesc = {1, 0};
+            sDesc.Usage = D3D11_USAGE_STAGING;
+            sDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            d3dDevice->CreateTexture2D(&sDesc, nullptr, odCursorStagingTex.put()); // non-fatal
+        }
+    }
+
     // --- Webcam compositing resources ---
-    // compositeTex: BGRA render target used when webcam overlay is active.
-    // VideoProcessor reads from compositeTex instead of the raw WGC texture.
+    // compositeTex: BGRA render target used when webcam overlay or OD cursor compositing is active.
     bool webcamActive = m_state.config.webcam.enabled && (m_state.config.webcam.frame_provider != nullptr);
+    const bool needsCompositeTex = webcamActive || (useOdCapture && m_state.config.capture_cursor);
 
     winrt::com_ptr<ID3D11Texture2D> compositeTex;
     winrt::com_ptr<ID3D11Texture2D> webcamStagingTex; // for chroma key readback
 
-    if (webcamActive) {
+    if (needsCompositeTex) {
         {
             D3D11_TEXTURE2D_DESC cDesc{};
             cDesc.Width = encodeWidth;
@@ -489,6 +565,7 @@ void VideoThread::Run() {
             HRESULT cHr = d3dDevice->CreateTexture2D(&cDesc, nullptr, compositeTex.put());
             if (FAILED(cHr)) {
                 webcamActive = false;
+                // For OD cursor, non-fatal: cursor won't be composited
             }
         }
 
@@ -648,36 +725,113 @@ void VideoThread::Run() {
         return compositeTex.get();
     };
 
-    // --- WGC frame pool and session ---
+    // Helper: composite DXGI OD cursor onto compositeTex (must already contain the main frame).
+    // Handles COLOR and MASKED_COLOR cursor types via CPU alpha-blend + UpdateSubresource.
+    // Cursor position is in monitor-local pixels; adjusted for crop if active.
+    auto compositeOdCursor = [&]() {
+        if (!m_state.config.capture_cursor || !odCursorVisible || !odCursorShapeValid || !compositeTex ||
+            !odCursorStagingTex)
+            return;
+        if (odCursorShapeInfo.Type != DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR &&
+            odCursorShapeInfo.Type != DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MASKED_COLOR)
+            return;
+
+        int32_t cx = odCursorPosX;
+        int32_t cy = odCursorPosY;
+        if (hasCrop) {
+            cx -= cropX;
+            cy -= cropY;
+        }
+
+        int32_t cw = static_cast<int32_t>(odCursorShapeInfo.Width);
+        int32_t ch = static_cast<int32_t>(odCursorShapeInfo.Height);
+
+        int32_t bitmapOffX = 0;
+        int32_t bitmapOffY = 0;
+        if (cx < 0) {
+            bitmapOffX = -cx;
+            cw += cx;
+            cx = 0;
+        }
+        if (cy < 0) {
+            bitmapOffY = -cy;
+            ch += cy;
+            cy = 0;
+        }
+
+        const int32_t maxW = static_cast<int32_t>(encodeWidth) - cx;
+        const int32_t maxH = static_cast<int32_t>(encodeHeight) - cy;
+        if (cw > maxW)
+            cw = maxW;
+        if (ch > maxH)
+            ch = maxH;
+        if (cw <= 0 || ch <= 0 || cw > 256 || ch > 256)
+            return;
+
+        const D3D11_BOX box = {static_cast<UINT>(cx),      static_cast<UINT>(cy),      0u,
+                               static_cast<UINT>(cx + cw), static_cast<UINT>(cy + ch), 1u};
+        d3dContext->CopySubresourceRegion(odCursorStagingTex.get(), 0, 0, 0, 0, compositeTex.get(), 0, &box);
+
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        if (FAILED(d3dContext->Map(odCursorStagingTex.get(), 0, D3D11_MAP_READ, 0, &mapped)))
+            return;
+
+        odCursorBlendBuf.resize(static_cast<size_t>(cw) * ch * 4);
+        const uint32_t pitch = odCursorShapeInfo.Pitch;
+
+        for (int32_t row = 0; row < ch; ++row) {
+            const uint8_t* dstRow = static_cast<const uint8_t*>(mapped.pData) + row * mapped.RowPitch;
+            const uint8_t* srcRow = odCursorBitmap.data() + static_cast<size_t>(bitmapOffY + row) * pitch +
+                                    static_cast<size_t>(bitmapOffX) * 4;
+            uint8_t* outRow = odCursorBlendBuf.data() + static_cast<size_t>(row) * cw * 4;
+            for (int32_t col = 0; col < cw; ++col) {
+                const float a = srcRow[col * 4 + 3] / 255.0f;
+                outRow[col * 4 + 0] =
+                    static_cast<uint8_t>(srcRow[col * 4 + 0] * a + dstRow[col * 4 + 0] * (1.0f - a) + 0.5f);
+                outRow[col * 4 + 1] =
+                    static_cast<uint8_t>(srcRow[col * 4 + 1] * a + dstRow[col * 4 + 1] * (1.0f - a) + 0.5f);
+                outRow[col * 4 + 2] =
+                    static_cast<uint8_t>(srcRow[col * 4 + 2] * a + dstRow[col * 4 + 2] * (1.0f - a) + 0.5f);
+                outRow[col * 4 + 3] = 255u;
+            }
+        }
+        d3dContext->Unmap(odCursorStagingTex.get(), 0);
+        d3dContext->UpdateSubresource(compositeTex.get(), 0, &box, odCursorBlendBuf.data(), static_cast<UINT>(cw * 4),
+                                      0);
+    };
+
+    // --- WGC frame pool and session (Window-only path) ---
     bool sourceLost = false;
     winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool framePool{nullptr};
     winrt::Windows::Graphics::Capture::GraphicsCaptureSession captureSession{nullptr};
     winrt::event_token closedToken{};
 
-    try {
-        winrt::com_ptr<IDXGIDevice> dxgiDev = d3dDevice.as<IDXGIDevice>();
-        winrt::com_ptr<IInspectable> insp;
-        winrt::check_hresult(CreateDirect3D11DeviceFromDXGIDevice(dxgiDev.get(), insp.put()));
-        auto d3dWinRTDev = insp.as<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
+    if (!useOdCapture) {
+        try {
+            winrt::com_ptr<IDXGIDevice> dxgiDev = d3dDevice.as<IDXGIDevice>();
+            winrt::com_ptr<IInspectable> insp;
+            winrt::check_hresult(CreateDirect3D11DeviceFromDXGIDevice(dxgiDev.get(), insp.put()));
+            auto d3dWinRTDev = insp.as<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
 
-        auto capSz = item.Size();
-        framePool = winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool::Create(
-            d3dWinRTDev, winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, capSz);
+            auto capSz = item.Size();
+            framePool = winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool::Create(
+                d3dWinRTDev, winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized, 3, capSz);
 
-        captureSession = framePool.CreateCaptureSession(item);
-        captureSession.IsBorderRequired(false);
-        captureSession.IsCursorCaptureEnabled(m_state.config.capture_cursor);
-        captureSession.StartCapture();
+            captureSession = framePool.CreateCaptureSession(item);
+            captureSession.IsBorderRequired(false);
+            captureSession.IsCursorCaptureEnabled(m_state.config.capture_cursor);
+            captureSession.StartCapture();
 
-        closedToken = item.Closed([&sourceLost](const auto&, const auto&) { sourceLost = true; });
-    } catch (const winrt::hresult_error& e) {
-        char buf[96];
-        snprintf(buf, sizeof(buf), "WGC frame pool init failed 0x%08X", static_cast<unsigned int>(e.code().value));
-        m_state.RecordFailure(static_cast<HRESULT>(e.code().value), ErrorPhase::VideoCapture, buf);
-        if (com_inited)
-            CoUninitialize();
-        return;
-    }
+            closedToken = item.Closed([&sourceLost](const auto&, const auto&) { sourceLost = true; });
+        } catch (const winrt::hresult_error& e) {
+            char buf[96];
+            snprintf(buf, sizeof(buf), "WGC frame pool init failed 0x%08X", static_cast<unsigned int>(e.code().value));
+            m_state.RecordFailure(static_cast<HRESULT>(e.code().value), ErrorPhase::VideoCapture, buf);
+            if (com_inited)
+                CoUninitialize();
+            return;
+        }
+    } // end if (!useOdCapture) — WGC session init
 
     // --- Wait for first frame (5 s timeout) ---
     {
@@ -688,27 +842,33 @@ void VideoThread::Run() {
         bool gotFirst = false;
 
         while (!gotFirst && !m_state.stop_requested.load()) {
-            MSG msg{};
-            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+            if (!useOdCapture) {
+                MSG msg{};
+                while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
             }
 
             QueryPerformanceCounter(&tNow);
             double elapsed = static_cast<double>(tNow.QuadPart - tStart.QuadPart) / static_cast<double>(freq.QuadPart);
             if (elapsed > kTimeoutSec) {
-                m_state.RecordFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT), ErrorPhase::VideoCapture,
-                                      "WGC: timeout waiting for first frame (5 s)");
-                if (captureSession != nullptr)
-                    captureSession.Close();
-                if (framePool != nullptr)
-                    framePool.Close();
+                const char* which = useOdCapture ? "DXGI OD" : "WGC";
+                char buf[80];
+                snprintf(buf, sizeof(buf), "%s: timeout waiting for first frame (5 s)", which);
+                m_state.RecordFailure(HRESULT_FROM_WIN32(ERROR_TIMEOUT), ErrorPhase::VideoCapture, buf);
+                if (!useOdCapture) {
+                    if (captureSession != nullptr)
+                        captureSession.Close();
+                    if (framePool != nullptr)
+                        framePool.Close();
+                }
                 if (com_inited)
                     CoUninitialize();
                 return;
             }
 
-            if (sourceLost) {
+            if (!useOdCapture && sourceLost) {
                 m_state.RecordFailure(E_ABORT, ErrorPhase::VideoCapture, "WGC: source lost before first frame");
                 if (captureSession != nullptr)
                     captureSession.Close();
@@ -719,15 +879,44 @@ void VideoThread::Run() {
                 return;
             }
 
-            try {
-                auto frame = framePool.TryGetNextFrame();
-                if (frame != nullptr) {
+            if (useOdCapture) {
+                // DXGI OD: try a 16ms blocking acquire (one-frame wait interval)
+                ID3D11Texture2D* rawTex = nullptr;
+                DXGI_OUTDUPL_FRAME_INFO info{};
+                HRESULT odHr = S_OK;
+                if (odSrc.TryAcquireFrame(16, &rawTex, &info, &odHr)) {
+                    d3dContext->CopyResource(odCapturedTex.get(), rawTex);
+                    rawTex->Release();
+                    if (info.PointerShapeBufferSize > 0 && m_state.config.capture_cursor) {
+                        if (odSrc.GetFramePointerShape(&odCursorShapeInfo, odCursorBitmap))
+                            odCursorShapeValid = true;
+                    }
+                    if (info.LastMouseUpdateTime.QuadPart != 0) {
+                        odCursorVisible = info.PointerPosition.Visible != FALSE;
+                        odCursorPosX = info.PointerPosition.Position.x;
+                        odCursorPosY = info.PointerPosition.Position.y;
+                    }
+                    odSrc.ReleaseFrame();
+                    odCapturedTexValid = true;
                     gotFirst = true;
-                } else {
+                } else if (odHr == DXGI_ERROR_ACCESS_LOST) {
+                    m_state.RecordFailure(odHr, ErrorPhase::VideoCapture, "DXGI OD: access lost before first frame");
+                    if (com_inited)
+                        CoUninitialize();
+                    return;
+                }
+                // DXGI_ERROR_WAIT_TIMEOUT: no frame yet, loop again
+            } else {
+                try {
+                    auto frame = framePool.TryGetNextFrame();
+                    if (frame != nullptr) {
+                        gotFirst = true;
+                    } else {
+                        Sleep(1);
+                    }
+                } catch (...) {
                     Sleep(1);
                 }
-            } catch (...) {
-                Sleep(1);
             }
         }
     }
@@ -854,10 +1043,12 @@ void VideoThread::Run() {
         winrt::com_ptr<ID3D11Texture2D> pendingWgcTex;
 
         while (!m_state.stop_requested.load()) {
-            MSG msg{};
-            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+            if (!useOdCapture) {
+                MSG msg{};
+                while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
             }
 
             if (sourceLost) {
@@ -867,22 +1058,52 @@ void VideoThread::Run() {
                 break;
             }
 
-            // Drain WGC frames — keep latest (always drain, even when paused)
-            try {
+            if (useOdCapture) {
+                // DXGI OD: drain all available frames, copy each to odCapturedTex, keep newest.
                 while (true) {
-                    auto frame = framePool.TryGetNextFrame();
-                    if (frame == nullptr)
+                    ID3D11Texture2D* rawTex = nullptr;
+                    DXGI_OUTDUPL_FRAME_INFO info{};
+                    HRESULT odHr = S_OK;
+                    if (!odSrc.TryAcquireFrame(0, &rawTex, &info, &odHr)) {
+                        if (odHr == DXGI_ERROR_ACCESS_LOST)
+                            sourceLost = true;
                         break;
-                    auto surface = frame.Surface();
-                    auto access = surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
-                    winrt::com_ptr<ID3D11Texture2D> tex;
-                    if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
-                        if (pendingWgcTex != nullptr)
-                            ++droppedFrames;
-                        pendingWgcTex = tex;
                     }
+                    d3dContext->CopyResource(odCapturedTex.get(), rawTex);
+                    rawTex->Release();
+                    if (info.PointerShapeBufferSize > 0 && m_state.config.capture_cursor) {
+                        if (odSrc.GetFramePointerShape(&odCursorShapeInfo, odCursorBitmap))
+                            odCursorShapeValid = true;
+                    }
+                    if (info.LastMouseUpdateTime.QuadPart != 0) {
+                        odCursorVisible = info.PointerPosition.Visible != FALSE;
+                        odCursorPosX = info.PointerPosition.Position.x;
+                        odCursorPosY = info.PointerPosition.Position.y;
+                    }
+                    odSrc.ReleaseFrame();
+                    if (odCapturedTexValid)
+                        ++droppedFrames;
+                    odCapturedTexValid = true;
                 }
-            } catch (...) {
+            } else {
+                // WGC: drain frame pool — keep latest (always drain, even when paused)
+                try {
+                    while (true) {
+                        auto frame = framePool.TryGetNextFrame();
+                        if (frame == nullptr)
+                            break;
+                        auto surface = frame.Surface();
+                        auto access =
+                            surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+                        winrt::com_ptr<ID3D11Texture2D> tex;
+                        if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
+                            if (pendingWgcTex != nullptr)
+                                ++droppedFrames;
+                            pendingWgcTex = tex;
+                        }
+                    }
+                } catch (...) {
+                }
             }
 
             // Pause: discard frames and track paused duration for epoch adjustment on resume
@@ -893,6 +1114,7 @@ void VideoThread::Run() {
                     cfr_pause_start_100ns = Qpc100ns(qpcFreq);
                 }
                 pendingWgcTex = nullptr;
+                odCapturedTexValid = false;
                 Sleep(1);
                 continue;
             }
@@ -901,8 +1123,9 @@ void VideoThread::Run() {
                 cfr_was_paused = false;
             }
 
-            // Set epoch on first WGC frame arrival
-            if (!videoEpochSet && pendingWgcTex != nullptr) {
+            // Set epoch on first frame arrival (OD or WGC)
+            const bool hasNewFrame = useOdCapture ? odCapturedTexValid : (pendingWgcTex != nullptr);
+            if (!videoEpochSet && hasNewFrame) {
                 epochQpc100ns = Qpc100ns(qpcFreq);
                 videoEpochSet = true;
                 next_tick_100ns = 0; // first tick at t=0 relative to epoch
@@ -932,9 +1155,40 @@ void VideoThread::Run() {
 
                 bool frameWritten = false;
 
-                if (pendingWgcTex != nullptr) {
-                    // Composite webcam overlay (if active) onto WGC frame.
-                    ID3D11Texture2D* vpInput = compositeWebcam(pendingWgcTex.get());
+                // Determine source texture for this tick
+                ID3D11Texture2D* rawSourceTex =
+                    useOdCapture ? (odCapturedTexValid ? odCapturedTex.get() : nullptr) : pendingWgcTex.get();
+
+                if (rawSourceTex != nullptr) {
+                    // Compositing: webcam (both paths) + cursor (OD only)
+                    ID3D11Texture2D* vpInput = nullptr;
+                    if (useOdCapture) {
+                        // OD path: cursor composite first, then webcam
+                        if (compositeTex && (odCursorShapeValid || webcamActive)) {
+                            d3dContext->CopyResource(compositeTex.get(), rawSourceTex);
+                            compositeOdCursor();
+                            if (webcamActive) {
+                                // compositeWebcam would re-copy — instead apply webcam directly on compositeTex
+                                // by calling it with compositeTex as source (CopyResource of same tex is
+                                // undefined; use webcam compositing logic inline via compositeWebcam on itself).
+                                // Simpler: call compositeWebcam with rawSourceTex, then re-composite cursor.
+                                // Actually compositeWebcam always CopyResource from its argument; use compositeTex
+                                // as argument only if it is different from compositeTex — which it is not.
+                                // Resolution: inline the webcam step here by calling compositeWebcam(rawSourceTex)
+                                // which overwrites compositeTex, then re-run cursor on top.
+                                compositeWebcam(rawSourceTex); // re-copies + webcam
+                                compositeOdCursor();           // cursor on top of webcam
+                            }
+                            vpInput = compositeTex.get();
+                        } else {
+                            vpInput = rawSourceTex;
+                        }
+                        odCapturedTexValid = false;
+                    } else {
+                        // WGC path: webcam composite only
+                        vpInput = compositeWebcam(pendingWgcTex.get());
+                        pendingWgcTex = nullptr;
+                    }
 
                     // Convert BGRA frame to NV12 via VideoProcessorBlt
                     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
@@ -963,7 +1217,6 @@ void VideoThread::Run() {
                             frameWritten = true;
                         }
                     }
-                    pendingWgcTex = nullptr;
                 } else if (refNv12Valid) {
                     // Duplicate: copy reference NV12 into this slot
                     d3dContext->CopyResource(nv12Textures[slot].get(), refNv12.get());
@@ -1016,10 +1269,12 @@ void VideoThread::Run() {
         uint64_t vfr_pause_start_100ns = 0;
 
         while (!m_state.stop_requested.load()) {
-            MSG msg{};
-            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+            if (!useOdCapture) {
+                MSG msg{};
+                while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
             }
 
             if (sourceLost) {
@@ -1031,27 +1286,68 @@ void VideoThread::Run() {
 
             bool anyWork = false;
 
-            // Drain WGC frames — keep latest (always drain, even when paused)
             winrt::com_ptr<ID3D11Texture2D> latestTex;
             int64_t latestFrameTicks100ns = 0;
 
-            try {
+            if (useOdCapture) {
+                // DXGI OD: drain available frames, copy to odCapturedTex, keep newest
                 while (true) {
-                    auto frame = framePool.TryGetNextFrame();
-                    if (frame == nullptr)
+                    ID3D11Texture2D* rawTex = nullptr;
+                    DXGI_OUTDUPL_FRAME_INFO info{};
+                    HRESULT odHr = S_OK;
+                    if (!odSrc.TryAcquireFrame(0, &rawTex, &info, &odHr)) {
+                        if (odHr == DXGI_ERROR_ACCESS_LOST)
+                            sourceLost = true;
                         break;
-
-                    auto surface = frame.Surface();
-                    auto access = surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
-                    winrt::com_ptr<ID3D11Texture2D> tex;
-                    if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
-                        if (latestTex != nullptr)
-                            ++droppedFrames;
-                        latestTex = tex;
-                        latestFrameTicks100ns = frame.SystemRelativeTime().count();
                     }
+                    d3dContext->CopyResource(odCapturedTex.get(), rawTex);
+                    rawTex->Release();
+                    if (info.PointerShapeBufferSize > 0 && m_state.config.capture_cursor) {
+                        if (odSrc.GetFramePointerShape(&odCursorShapeInfo, odCursorBitmap))
+                            odCursorShapeValid = true;
+                    }
+                    if (info.LastMouseUpdateTime.QuadPart != 0) {
+                        odCursorVisible = info.PointerPosition.Visible != FALSE;
+                        odCursorPosX = info.PointerPosition.Position.x;
+                        odCursorPosY = info.PointerPosition.Position.y;
+                    }
+                    // Convert DXGI LastPresentTime (QPC ticks) to 100ns units
+                    if (info.LastPresentTime.QuadPart != 0) {
+                        const auto lpt = static_cast<uint64_t>(info.LastPresentTime.QuadPart);
+                        latestFrameTicks100ns =
+                            static_cast<int64_t>(lpt / qpcFreq * 10000000ULL + lpt % qpcFreq * 10000000ULL / qpcFreq);
+                    }
+                    odSrc.ReleaseFrame();
+                    if (odCapturedTexValid)
+                        ++droppedFrames;
+                    odCapturedTexValid = true;
                 }
-            } catch (...) {
+                if (odCapturedTexValid) {
+                    latestTex = odCapturedTex; // borrow — not released in loop
+                    if (latestFrameTicks100ns == 0)
+                        latestFrameTicks100ns = static_cast<int64_t>(Qpc100ns(qpcFreq));
+                }
+            } else {
+                // WGC: drain frame pool — keep latest (always drain, even when paused)
+                try {
+                    while (true) {
+                        auto frame = framePool.TryGetNextFrame();
+                        if (frame == nullptr)
+                            break;
+
+                        auto surface = frame.Surface();
+                        auto access =
+                            surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+                        winrt::com_ptr<ID3D11Texture2D> tex;
+                        if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
+                            if (latestTex != nullptr)
+                                ++droppedFrames;
+                            latestTex = tex;
+                            latestFrameTicks100ns = frame.SystemRelativeTime().count();
+                        }
+                    }
+                } catch (...) {
+                }
             }
 
             // Pause: discard frames and track paused duration for epoch adjustment on resume
@@ -1061,6 +1357,7 @@ void VideoThread::Run() {
                     vfr_was_paused = true;
                     vfr_pause_start_100ns = Qpc100ns(qpcFreq);
                 }
+                odCapturedTexValid = false;
                 Sleep(1);
                 continue;
             }
@@ -1074,9 +1371,6 @@ void VideoThread::Run() {
                 if (!videoEpochSet) {
                     videoEpochTicks100ns = latestFrameTicks100ns;
                     videoEpochSet = true;
-                    // Snapshot QPC at first-frame arrival — must be on the same scale as
-                    // session_start_qpc_100ns (both are QPC-derived 100ns-since-boot values).
-                    // SystemRelativeTime is NOT QPC-comparable and must not be used here.
                     m_state.video_epoch_qpc_100ns.store(Qpc100ns(qpcFreq));
                 }
 
@@ -1090,8 +1384,24 @@ void VideoThread::Run() {
                 int32_t slot = nvenc.AcquireFreeSlot();
 
                 if (slot >= 0) {
-                    // Composite webcam overlay (if active).
-                    ID3D11Texture2D* vpInput = compositeWebcam(latestTex.get());
+                    // Compositing: cursor (OD) and/or webcam
+                    ID3D11Texture2D* vpInput = nullptr;
+                    if (useOdCapture) {
+                        if (compositeTex && (odCursorShapeValid || webcamActive)) {
+                            d3dContext->CopyResource(compositeTex.get(), latestTex.get());
+                            compositeOdCursor();
+                            if (webcamActive) {
+                                compositeWebcam(latestTex.get());
+                                compositeOdCursor();
+                            }
+                            vpInput = compositeTex.get();
+                        } else {
+                            vpInput = latestTex.get();
+                        }
+                        odCapturedTexValid = false;
+                    } else {
+                        vpInput = compositeWebcam(latestTex.get());
+                    }
 
                     // BGRA -> NV12 via VideoProcessorBlt into the selected slot's view
                     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
@@ -1149,20 +1459,24 @@ void VideoThread::Run() {
 
 end_encode_loop:
     // --- Stop capture ---
-    try {
-        if (captureSession != nullptr) {
-            captureSession.Close();
-            captureSession = nullptr;
-        }
-        if (framePool != nullptr) {
-            framePool.Close();
-            framePool = nullptr;
-        }
+    if (useOdCapture) {
+        odSrc.Close();
+    } else {
         try {
-            item.Closed(closedToken);
+            if (captureSession != nullptr) {
+                captureSession.Close();
+                captureSession = nullptr;
+            }
+            if (framePool != nullptr) {
+                framePool.Close();
+                framePool = nullptr;
+            }
+            try {
+                item.Closed(closedToken);
+            } catch (...) {
+            }
         } catch (...) {
         }
-    } catch (...) {
     }
 
     // --- Flush NVENC EOS ---

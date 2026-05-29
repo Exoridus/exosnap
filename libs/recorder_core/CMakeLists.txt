@@ -99,6 +99,7 @@ add_library(recorder_core STATIC
     include/recorder_core/audio_meter.h
     src/audio_meter.cpp
     src/wgc_capture.cpp
+    src/dxgi_od_capture_src.cpp
     src/nvenc_encoder.cpp
     src/mf_aac_encoder.cpp
     src/mixed_audio_src.cpp

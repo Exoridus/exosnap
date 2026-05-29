@@ -27,7 +27,8 @@ Keep the high-performance recording engine native and UI-agnostic while keeping 
           ├───────────────┬───────────────┬───────────────┐
           ▼               ▼               ▼               ▼
    Video Capture     Audio Capture     Encoders        Muxers
-   WGC + D3D11       WASAPI            NVENC/Opus      MKV/MP4
+   DXGI OD/WGC       WASAPI            NVENC/Opus      MKV/MP4
+   + D3D11
 ```
 
 ## UI technology

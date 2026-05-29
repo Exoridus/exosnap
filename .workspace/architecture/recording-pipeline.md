@@ -27,12 +27,18 @@ Muxer
 ## Video path
 
 ### Capture
-- Primary API: Windows Graphics Capture
-- GPU path: D3D11 textures
-- Source types:
-  - app/window
-  - monitor
-  - desktop
+Two backends; both deliver `ID3D11Texture2D` (BGRA) to the shared VideoProcessorBlt → NVENC pipeline.
+
+**Monitor targets** → `IDXGIOutputDuplication` (DXGI OD)
+- Passive GPU-buffer read; no VRR/G-Sync interference; no OS capture indicator
+- Cursor composited manually when `capture_cursor = true`
+- `DXGI_ERROR_ACCESS_LOST` (desktop lock/session switch) terminates session
+
+**Window / App targets** → Windows Graphics Capture (`GraphicsCaptureSession`)
+- Only supported API for window-level capture
+- Cursor composited by OS via `IsCursorCaptureEnabled`
+
+See ADR-0011 for the decision rationale.
 
 ### Output timing
 - Default output: 60 fps CFR
