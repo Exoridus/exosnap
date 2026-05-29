@@ -1,6 +1,7 @@
 #include "GlobalRecordingBar.h"
 
 #include "../widgets/StatusPill.h"
+#include "RecordingStatusGuards.h"
 
 #include <QFrame>
 #include <QHBoxLayout>
@@ -205,6 +206,7 @@ void GlobalRecordingBar::setStatusLabel(const QString& status_text) {
 void GlobalRecordingBar::refreshVisualState() {
     refreshStatusChip();
     refreshActionLabels();
+    applyCompactLayout();
 }
 
 const QString& GlobalRecordingBar::statusLabel() const {
@@ -306,7 +308,6 @@ void GlobalRecordingBar::refreshActionLabels() {
                                                              : QStringLiteral("Pause recording unavailable"));
         pause_action_button_->setEnabled(is_recording);
     }
-    pause_action_button_->setVisible(is_recording || is_paused);
     pause_action_button_->setAccessibleDescription(pause_action_button_->toolTip());
 
     mic_action_button_->setToolTip(QStringLiteral("Global mic toggle is not available in this MVP build. "
@@ -331,6 +332,7 @@ void GlobalRecordingBar::applyCompactLayout() {
 
     const bool compact_actions = width_px < kHidePlannedActionsBelowWidth;
     const bool compact_context = width_px < kHideSecondarySummaryBelowWidth;
+    const bool show_runtime = ShouldShowRecordingRuntimeForStatus(status_label_);
 
     mic_action_button_->setVisible(!compact_actions);
     marker_action_button_->setVisible(!compact_actions);
@@ -338,8 +340,8 @@ void GlobalRecordingBar::applyCompactLayout() {
 
     output_summary_slot_->setVisible(!compact_context);
     output_separator_->setVisible(!compact_context);
-    runtime_summary_slot_->setVisible(!compact_context);
-    runtime_separator_->setVisible(!compact_context);
+    runtime_summary_slot_->setVisible(!compact_context && show_runtime);
+    runtime_separator_->setVisible(!compact_context && show_runtime);
 }
 
 void GlobalRecordingBar::refreshSummaryLabels() {

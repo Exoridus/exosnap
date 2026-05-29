@@ -129,7 +129,8 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
             valueLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
             rl->addWidget(slider);
             rl->addWidget(valueLabel);
-            // row is not added to layout — overlay placement not available in MVP
+            // not added to layout — overlay placement not available in MVP
+            row->hide();
         };
 
         addSliderRow("X Position", pos_x_slider_, pos_x_label_, 0);
@@ -139,6 +140,7 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
 
         aspect_lock_check_ = new QCheckBox("Lock aspect ratio", content);
         aspect_lock_check_->setChecked(true);
+        aspect_lock_check_->hide();
         // not added to layout
     }
 

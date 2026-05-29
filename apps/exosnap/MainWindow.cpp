@@ -196,8 +196,8 @@ constexpr std::array<PageDescriptor, 7> kPageDescriptors = {{
      "Structured recorder telemetry", SidebarIcon::Logs},
     {"Advanced", "06 · ADVANCED", "Lower-level behavior and non-default controls.", "EXPERT SETTINGS",
      "Explicitly non-default", SidebarIcon::Advanced},
-    {"Webcam", "07 · WEBCAM", "Webcam device, overlay placement, and chroma key.", "OVERLAY",
-     "Camera composited into recording", SidebarIcon::Webcam},
+    {"Webcam", "07 · WEBCAM", "Webcam device and capture settings.", "", "Camera composited into recording",
+     SidebarIcon::Webcam},
 }};
 
 constexpr int kNavIndexRole = Qt::UserRole + 1;
