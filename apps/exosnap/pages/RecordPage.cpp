@@ -331,6 +331,33 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     timer_label_->setProperty("timerState", "idle");
     control_layout->addWidget(timer_label_);
 
+    auto* rail_sep = new QFrame(control_panel);
+    rail_sep->setFrameShape(QFrame::NoFrame);
+    rail_sep->setFixedHeight(1);
+    rail_sep->setProperty("frameRole", "sectionRuleLine");
+    control_layout->addWidget(rail_sep);
+
+    hero_action_btn_ = new QPushButton(QStringLiteral("Start Recording"), control_panel);
+    hero_action_btn_->setObjectName("recordHeroBtn");
+    hero_action_btn_->setMinimumHeight(ui::theme::ExoSnapMetrics::kPrimaryCtaHeight);
+    hero_action_btn_->setEnabled(false);
+    setStyledStringProperty(hero_action_btn_, "heroRole", "muted");
+    control_layout->addWidget(hero_action_btn_);
+
+    secondary_action_btn_ = new QPushButton(QStringLiteral("Pause"), control_panel);
+    secondary_action_btn_->setProperty("role", "ghost");
+    secondary_action_btn_->setVisible(false);
+    control_layout->addWidget(secondary_action_btn_);
+
+    rail_readiness_label_ = makeLabel(QStringLiteral("Checking capabilities..."), "railReadiness", control_panel);
+    rail_readiness_label_->setWordWrap(true);
+    control_layout->addWidget(rail_readiness_label_);
+
+    rail_stats_label_ = makeLabel(QStringLiteral(""), "railStats", control_panel);
+    rail_stats_label_->setWordWrap(true);
+    rail_stats_label_->setVisible(false);
+    control_layout->addWidget(rail_stats_label_);
+
     rail_layout->addWidget(control_panel);
     rail_layout->addStretch(1);
 
@@ -461,7 +488,8 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     audio_settings_header_->setMeta("OUTPUT · INPUT · TRACK PREVIEW");
     layout->addWidget(audio_settings_header_);
 
-    auto* audio_settings_panel = makePanel(content);
+    audio_settings_panel_ = makePanel(content);
+    auto* audio_settings_panel = audio_settings_panel_;
     auto* audio_settings_layout = new QVBoxLayout(audio_settings_panel);
     audio_settings_layout->setContentsMargins(14, 12, 14, 12);
     audio_settings_layout->setSpacing(10);
@@ -586,7 +614,8 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     destination_header_->setMeta("MKV · AV1 · OPUS");
     layout->addWidget(destination_header_);
 
-    auto* destination_panel = makePanel(content);
+    destination_panel_ = makePanel(content);
+    auto* destination_panel = destination_panel_;
     auto* destination_layout = new QHBoxLayout(destination_panel);
     destination_layout->setContentsMargins(14, 12, 14, 12);
     destination_layout->setSpacing(10);
@@ -682,6 +711,21 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(mic_gain_slider_, &QSlider::valueChanged, this, &RecordPage::onMicGainChanged);
     connect(open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
     connect(destination_settings_btn_, &QPushButton::clicked, this, [this]() { emit navigateToOutputPage(); });
+
+    connect(hero_action_btn_, &QPushButton::clicked, this, [this]() {
+        if (view_model_.CanStart())
+            onStart();
+        else if (view_model_.CanResume())
+            onResume();
+        else if (view_model_.CanStop())
+            onStop();
+    });
+    connect(secondary_action_btn_, &QPushButton::clicked, this, [this]() {
+        if (view_model_.CanPause())
+            onPause();
+        else if (view_model_.CanStop())
+            onStop();
+    });
 
     coordinator_needs_init_ = true;
 }
@@ -2023,6 +2067,7 @@ void RecordPage::refresh() {
     updateResultDisplay();
     updateDestinationMeta();
     updateOpenFolderButtonState();
+    updateHeroButton();
 
     emitChromeState();
 }
@@ -2053,6 +2098,26 @@ void RecordPage::updateStatsDisplay() {
             ? QString::fromStdWString(RecordViewModel::FormatBytes(view_model_.video_bytes + view_model_.audio_bytes))
             : QStringLiteral("-");
     emit chromeRuntimeMetricsChanged(timer_text, bitrate_text, drop_text, size_text);
+
+    if (rail_stats_label_) {
+        const bool show_stats =
+            (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused) &&
+            view_model_.live_stats_available;
+        if (show_stats) {
+            const uint64_t total_bytes = view_model_.video_bytes + view_model_.audio_bytes;
+            QString stats = QString::fromStdWString(RecordViewModel::FormatBytes(total_bytes));
+            if (view_model_.elapsed_seconds > 0.0) {
+                const double mbps = (static_cast<double>(total_bytes) * 8.0) / (view_model_.elapsed_seconds * 1e6);
+                stats += QStringLiteral("  ·  %1 Mb/s").arg(mbps, 0, 'f', 1);
+            }
+            if (view_model_.dropped_frames > 0)
+                stats += QStringLiteral("\n%1 dropped").arg(view_model_.dropped_frames);
+            rail_stats_label_->setText(stats);
+            rail_stats_label_->setVisible(true);
+        } else {
+            rail_stats_label_->setVisible(false);
+        }
+    }
 
     updateAudioMeterLevels();
 }
@@ -2216,6 +2281,107 @@ void RecordPage::updateReadinessRows() {
                                 rows[i].hard_blocked ? "blocked" : (rows[i].ok ? "ready" : "muted"));
         row_widgets.detail->setText(rows[i].detail);
     }
+}
+
+void RecordPage::updateHeroButton() {
+    if (!hero_action_btn_)
+        return;
+
+    const bool can_start = view_model_.CanStart();
+    const bool can_stop = view_model_.CanStop();
+    const bool can_pause = view_model_.CanPause();
+    const bool can_resume = view_model_.CanResume();
+    const bool blocked = (view_model_.state == UiRecordingState::Blocked);
+    const bool stopping = (view_model_.state == UiRecordingState::Stopping);
+    const bool preparing =
+        (view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::RegionSelecting);
+    const bool is_recording =
+        (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
+         view_model_.state == UiRecordingState::Stopping);
+
+    if (can_start) {
+        hero_action_btn_->setText(QStringLiteral("Start Recording"));
+        hero_action_btn_->setEnabled(true);
+        setStyledStringProperty(hero_action_btn_, "heroRole", "start");
+    } else if (can_resume) {
+        hero_action_btn_->setText(QStringLiteral("Resume"));
+        hero_action_btn_->setEnabled(true);
+        setStyledStringProperty(hero_action_btn_, "heroRole", "resume");
+    } else if (can_stop) {
+        hero_action_btn_->setText(QStringLiteral("Stop Recording"));
+        hero_action_btn_->setEnabled(true);
+        setStyledStringProperty(hero_action_btn_, "heroRole", "stop");
+    } else if (preparing) {
+        hero_action_btn_->setText(QStringLiteral("Starting..."));
+        hero_action_btn_->setEnabled(false);
+        setStyledStringProperty(hero_action_btn_, "heroRole", "muted");
+    } else if (stopping) {
+        hero_action_btn_->setText(QStringLiteral("Stopping..."));
+        hero_action_btn_->setEnabled(false);
+        setStyledStringProperty(hero_action_btn_, "heroRole", "muted");
+    } else if (blocked) {
+        hero_action_btn_->setText(QStringLiteral("Blocked"));
+        hero_action_btn_->setEnabled(false);
+        setStyledStringProperty(hero_action_btn_, "heroRole", "blocked");
+    } else {
+        hero_action_btn_->setText(QStringLiteral("Start Recording"));
+        hero_action_btn_->setEnabled(false);
+        setStyledStringProperty(hero_action_btn_, "heroRole", "muted");
+    }
+
+    if (secondary_action_btn_) {
+        if (can_pause) {
+            secondary_action_btn_->setText(QStringLiteral("Pause"));
+            secondary_action_btn_->setEnabled(true);
+            secondary_action_btn_->setVisible(true);
+        } else if (can_resume && can_stop) {
+            secondary_action_btn_->setText(QStringLiteral("Stop"));
+            secondary_action_btn_->setEnabled(true);
+            secondary_action_btn_->setVisible(true);
+        } else {
+            secondary_action_btn_->setVisible(false);
+        }
+    }
+
+    if (rail_readiness_label_) {
+        if (is_recording && view_model_.selected_target_index >= 0 &&
+            view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {
+            rail_readiness_label_->setText(normalizedTargetLabel(
+                view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)]));
+        } else if (blocked) {
+            const QString blocker = QString::fromStdWString(view_model_.capability_status_text).trimmed();
+            rail_readiness_label_->setText(blocker.isEmpty() ? QStringLiteral("Blocked — check diagnostics") : blocker);
+        } else if (view_model_.state == UiRecordingState::LoadingCapabilities) {
+            rail_readiness_label_->setText(QStringLiteral("Checking capabilities..."));
+        } else {
+            rail_readiness_label_->setText(QStringLiteral("Ready to record"));
+        }
+    }
+
+    if (rail_stats_label_) {
+        const bool show_stats =
+            (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused) &&
+            view_model_.live_stats_available;
+        if (show_stats) {
+            const uint64_t total_bytes = view_model_.video_bytes + view_model_.audio_bytes;
+            QString stats = QString::fromStdWString(RecordViewModel::FormatBytes(total_bytes));
+            if (view_model_.elapsed_seconds > 0.0) {
+                const double mbps = (static_cast<double>(total_bytes) * 8.0) / (view_model_.elapsed_seconds * 1e6);
+                stats += QStringLiteral("  ·  %1 Mb/s").arg(mbps, 0, 'f', 1);
+            }
+            if (view_model_.dropped_frames > 0)
+                stats += QStringLiteral("\n%1 dropped").arg(view_model_.dropped_frames);
+            rail_stats_label_->setText(stats);
+            rail_stats_label_->setVisible(true);
+        } else {
+            rail_stats_label_->setVisible(false);
+        }
+    }
+
+    if (audio_settings_header_)
+        audio_settings_header_->setVisible(!is_recording);
+    if (audio_settings_panel_)
+        audio_settings_panel_->setVisible(!is_recording);
 }
 
 void RecordPage::updateAudioMeterLevels() {

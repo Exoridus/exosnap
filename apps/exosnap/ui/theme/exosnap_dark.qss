@@ -357,6 +357,61 @@ QLabel[labelRole="recordTimer"][timerState="recording"] {
     color: ${accent};
 }
 
+QPushButton#recordHeroBtn {
+    min-height: ${primary-cta-height}px;
+    font-size: 13px;
+    font-weight: 600;
+    color: ${text1};
+    border-color: ${line3};
+}
+
+QPushButton#recordHeroBtn[heroRole="start"] {
+    color: ${text0};
+    border-color: ${line3};
+}
+
+QPushButton#recordHeroBtn[heroRole="stop"] {
+    color: ${err};
+    border-color: ${err};
+    background: ${bg3};
+}
+
+QPushButton#recordHeroBtn[heroRole="stop"]:hover {
+    background: ${bg4};
+    border-color: ${err};
+}
+
+QPushButton#recordHeroBtn[heroRole="resume"] {
+    color: ${accent};
+    border-color: ${accent};
+}
+
+QPushButton#recordHeroBtn[heroRole="resume"]:hover {
+    background: ${bg4};
+    border-color: ${accent-hover};
+}
+
+QPushButton#recordHeroBtn[heroRole="blocked"],
+QPushButton#recordHeroBtn[heroRole="muted"] {
+    color: ${text3};
+    border-color: ${line1};
+    background: ${bg2};
+}
+
+QLabel[labelRole="railReadiness"] {
+    font-family: ${font-mono};
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: ${text2};
+}
+
+QLabel[labelRole="railStats"] {
+    font-family: ${font-mono};
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: ${text2};
+}
+
 QLabel[labelRole="audioSettingsGroupTitle"] {
     font-family: ${font-mono};
     font-size: 11px;

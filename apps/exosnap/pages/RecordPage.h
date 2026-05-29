@@ -98,6 +98,7 @@ class RecordPage : public QWidget {
     void updateAudioControls();
     void updateAudioControlsVisibility();
     void updateAudioTrackPreview();
+    void updateHeroButton();
     void updateOpenFolderButtonState();
     void updateDestinationMeta();
     void syncTargetSelectionToCombo(int target_index);
@@ -209,6 +210,14 @@ class RecordPage : public QWidget {
     bool coordinator_needs_init_ = true;
     capability::CapabilitySet shared_runtime_caps_{};
     bool shared_runtime_caps_received_ = false;
+
+    // Rail dashboard controls
+    QWidget* audio_settings_panel_ = nullptr;
+    QFrame* destination_panel_ = nullptr;
+    QPushButton* hero_action_btn_ = nullptr;
+    QPushButton* secondary_action_btn_ = nullptr;
+    QLabel* rail_readiness_label_ = nullptr;
+    QLabel* rail_stats_label_ = nullptr;
 };
 
 } // namespace exosnap
