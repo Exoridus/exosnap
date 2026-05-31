@@ -51,6 +51,11 @@
 #include <string>
 #include <unordered_map>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 namespace exosnap {
 namespace {
 
@@ -207,6 +212,138 @@ std::vector<std::string> BuildMicDeviceLabels(const std::vector<recorder_core::A
     }
 
     return labels;
+}
+
+struct MinimumCaptureSize {
+    int width = 0;
+    int height = 0;
+};
+
+struct ScreenPresentation {
+    bool available = false;
+    bool primary = false;
+    int width = 0;
+    int height = 0;
+};
+
+struct WindowPresentation {
+    bool has_client_size = false;
+    int client_width = 0;
+    int client_height = 0;
+    QString process_label;
+};
+
+MinimumCaptureSize WindowMinimumForCodec(capability::VideoCodec codec) {
+    switch (codec) {
+    case capability::VideoCodec::Av1Nvenc:
+    case capability::VideoCodec::HevcNvenc:
+    case capability::VideoCodec::H264Nvenc:
+    default:
+        // Conservative minimum that avoids known WGC + NVENC tiny-window failures.
+        return {192, 128};
+    }
+}
+
+QString FormatSizeText(int width, int height) {
+    if (width <= 0 || height <= 0) {
+        return {};
+    }
+    return QStringLiteral("%1 × %2").arg(width).arg(height);
+}
+
+QString MinimumSizeText(const MinimumCaptureSize& min_size) {
+    return QStringLiteral("Minimum %1×%2").arg(min_size.width).arg(min_size.height);
+}
+
+ScreenPresentation QueryScreenPresentation(uintptr_t native_id) {
+    ScreenPresentation meta;
+    const auto monitor = reinterpret_cast<HMONITOR>(native_id);
+    if (monitor == nullptr) {
+        return meta;
+    }
+
+    MONITORINFOEXW info{};
+    info.cbSize = sizeof(info);
+    if (!GetMonitorInfoW(monitor, &info)) {
+        return meta;
+    }
+
+    meta.available = true;
+    meta.primary = (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
+    meta.width = info.rcMonitor.right - info.rcMonitor.left;
+    meta.height = info.rcMonitor.bottom - info.rcMonitor.top;
+    return meta;
+}
+
+QString QueryWindowProcessLabel(HWND hwnd) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == 0) {
+        return {};
+    }
+
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (process == nullptr) {
+        return {};
+    }
+
+    std::wstring path_buffer(static_cast<std::size_t>(MAX_PATH), L'\0');
+    DWORD path_size = static_cast<DWORD>(path_buffer.size());
+    QString process_name;
+
+    if (QueryFullProcessImageNameW(process, 0, path_buffer.data(), &path_size) != FALSE && path_size > 0) {
+        const QString process_path = QString::fromWCharArray(path_buffer.data(), static_cast<int>(path_size));
+        process_name = QFileInfo(process_path).fileName();
+    }
+
+    CloseHandle(process);
+    return process_name;
+}
+
+WindowPresentation QueryWindowPresentation(uintptr_t native_id) {
+    WindowPresentation meta;
+    const auto hwnd = reinterpret_cast<HWND>(native_id);
+    if (hwnd == nullptr || IsWindow(hwnd) == FALSE) {
+        return meta;
+    }
+
+    RECT client_rect{};
+    if (GetClientRect(hwnd, &client_rect) != FALSE) {
+        meta.client_width = client_rect.right - client_rect.left;
+        meta.client_height = client_rect.bottom - client_rect.top;
+        meta.has_client_size = meta.client_width > 0 && meta.client_height > 0;
+    }
+
+    meta.process_label = QueryWindowProcessLabel(hwnd);
+    return meta;
+}
+
+QString BuildScreenOptionDetail(const ScreenPresentation& meta) {
+    const QString resolution = FormatSizeText(meta.width, meta.height);
+    const QString role = meta.primary ? QStringLiteral("Primary display") : QStringLiteral("Non-primary display");
+    if (resolution.isEmpty()) {
+        return QStringLiteral("%1 · DXGI OD monitor capture").arg(role);
+    }
+    return QStringLiteral("%1 · %2 · DXGI OD monitor capture").arg(resolution, role);
+}
+
+QString BuildWindowOptionDetail(const WindowPresentation& meta) {
+    QString detail;
+    const QString size_text = FormatSizeText(meta.client_width, meta.client_height);
+    if (!size_text.isEmpty()) {
+        detail = size_text;
+    }
+    if (!meta.process_label.trimmed().isEmpty()) {
+        detail = detail.isEmpty() ? meta.process_label : (detail + QStringLiteral(" · ") + meta.process_label);
+    }
+    if (detail.isEmpty()) {
+        detail = QStringLiteral("Window capture");
+    }
+    return detail;
+}
+
+bool IsWindowBelowMinimum(const WindowPresentation& meta, const MinimumCaptureSize& min_size) {
+    return meta.has_client_size && (meta.client_width < min_size.width || meta.client_height < min_size.height);
 }
 
 } // namespace
@@ -384,6 +521,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 
     source_kind_label_ = makeLabel("SCREEN", "recordSourceKind", source_chip_panel_);
     source_name_label_ = makeLabel("No source selected", "recordSourceName", source_chip_panel_);
+    source_name_label_->setWordWrap(true);
     source_meta_label_ = makeLabel("Choose a source to preview and record.", "recordSourceMeta", source_chip_panel_);
     source_meta_label_->setWordWrap(true);
 
@@ -1367,6 +1505,8 @@ void RecordPage::onOpenSourcePicker() {
     ui::dialogs::SourcePickerDialog dialog(this);
     std::vector<ui::dialogs::SourcePickerDialog::SourceOption> screen_options;
     std::vector<ui::dialogs::SourcePickerDialog::SourceOption> window_options;
+    const MinimumCaptureSize window_minimum = WindowMinimumForCodec(current_video_codec_);
+    const QString minimum_detail = MinimumSizeText(window_minimum);
 
     for (std::size_t i = 0; i < monitor_target_indices_.size(); ++i) {
         const int target_index = monitor_target_indices_[i];
@@ -1374,11 +1514,17 @@ void RecordPage::onOpenSourcePicker() {
             continue;
         }
         const auto& target = view_model_.targets[static_cast<std::size_t>(target_index)];
+        const ScreenPresentation screen_meta = QueryScreenPresentation(target.native_id);
         ui::dialogs::SourcePickerDialog::SourceOption option;
         option.target_index = target_index;
         option.title = displayLabelFromTarget(target);
-        option.detail = normalizedTargetLabel(target);
-        option.primary = (i == 0);
+        option.detail = BuildScreenOptionDetail(screen_meta);
+        option.primary = screen_meta.available ? screen_meta.primary : (i == 0);
+        if (!screen_meta.available) {
+            option.detail = option.primary ? QStringLiteral("Primary display · DXGI OD monitor capture")
+                                           : QStringLiteral("Display capture · DXGI OD monitor capture");
+        }
+        option.status_badge = option.primary ? QStringLiteral("Primary") : QStringLiteral("Screen");
         screen_options.push_back(option);
     }
 
@@ -1387,10 +1533,19 @@ void RecordPage::onOpenSourcePicker() {
             continue;
         }
         const auto& target = view_model_.targets[static_cast<std::size_t>(target_index)];
+        const WindowPresentation window_meta = QueryWindowPresentation(target.native_id);
         ui::dialogs::SourcePickerDialog::SourceOption option;
         option.target_index = target_index;
         option.title = windowLabelFromTarget(target);
-        option.detail = normalizedTargetLabel(target);
+        option.detail = BuildWindowOptionDetail(window_meta);
+        option.status_badge = QStringLiteral("Window");
+        if (IsWindowBelowMinimum(window_meta, window_minimum)) {
+            option.selectable = false;
+            option.status_badge = QStringLiteral("Too small");
+            option.validation_summary = QStringLiteral(
+                "Selected window is too small for the active encoder. Choose a larger window or use Display capture.");
+            option.minimum_detail = minimum_detail;
+        }
         window_options.push_back(option);
     }
 
@@ -2468,7 +2623,9 @@ void RecordPage::updateSourceChip() {
 
     source_kind_label_->setText(source_kind);
     source_name_label_->setText(source_name);
+    source_name_label_->setToolTip(source_name);
     source_meta_label_->setText(source_meta);
+    source_meta_label_->setToolTip(source_meta);
     source_lock_label_->setVisible(locked);
     source_lock_label_->setText(locked ? QStringLiteral("Source locked while recording") : QString{});
     setStyledStringProperty(source_chip_panel_, "sourceLocked", locked ? "true" : "false");

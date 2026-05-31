@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QFrame>
+#include <QString>
 
 class QLabel;
 class QObject;
@@ -36,9 +37,12 @@ class CaptureTargetCard : public QFrame {
     void mouseReleaseEvent(QMouseEvent* event) override;
 
   private:
+    void updateStatusLabel();
+
     QLabel* title_label_ = nullptr;
     QLabel* status_label_ = nullptr;
     QLabel* subtitle_label_ = nullptr;
+    QString status_text_;
     bool selected_ = false;
     bool click_armed_ = false;
 };

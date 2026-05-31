@@ -30,6 +30,10 @@ class SourcePickerDialog : public QDialog {
         QString title;
         QString detail;
         bool primary = false;
+        QString status_badge;
+        bool selectable = true;
+        QString validation_summary;
+        QString minimum_detail;
     };
 
     struct SelectionResult {

@@ -11,6 +11,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QStackedWidget>
+#include <QStyle>
 #include <QVBoxLayout>
 
 namespace exosnap::ui::dialogs {
@@ -39,6 +40,22 @@ QPushButton* makeSectionButton(const QString& object_name, const QString& text, 
     button->setCheckable(true);
     button->setProperty("sourcePickerSection", true);
     return button;
+}
+
+QString ElideCardTitle(const QString& title) {
+    constexpr int kMaxChars = 68;
+    const QString compact = title.simplified();
+    if (compact.size() <= kMaxChars) {
+        return compact;
+    }
+    return compact.left(kMaxChars - 1) + QStringLiteral("…");
+}
+
+void RestyleCard(QWidget* card, const char* tone) {
+    card->setProperty("captureCardTone", tone);
+    card->style()->unpolish(card);
+    card->style()->polish(card);
+    card->update();
 }
 
 } // namespace
@@ -88,14 +105,19 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
 
     auto* region_title = new QLabel(QStringLiteral("Region capture"), region_note);
     region_title->setProperty("labelRole", "captureCardTitle");
-    auto* region_copy = new QLabel(
-        QStringLiteral(
-            "Uses the existing region overlay flow. This slice does not add a new draw surface in the picker."),
-        region_note);
+    auto* region_copy =
+        new QLabel(QStringLiteral("Region selection runs in the existing overlay outside this dialog. "
+                                  "Use Pick region now... to launch it, or leave select-on-record enabled."),
+                   region_note);
     region_copy->setWordWrap(true);
     region_copy->setProperty("labelRole", "captureTargetPickerNote");
+    auto* region_cancel_copy =
+        new QLabel(QStringLiteral("Press Esc in the overlay to cancel and return."), region_note);
+    region_cancel_copy->setWordWrap(true);
+    region_cancel_copy->setProperty("labelRole", "captureTargetPickerNote");
     region_note_layout->addWidget(region_title);
     region_note_layout->addWidget(region_copy);
+    region_note_layout->addWidget(region_cancel_copy);
     region_layout->addWidget(region_note);
 
     auto* region_summary_panel = new QFrame(region_page);
@@ -105,7 +127,7 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     region_summary_layout->setSpacing(4);
     auto* region_summary_key = new QLabel(QStringLiteral("Current region"), region_summary_panel);
     region_summary_key->setProperty("labelRole", "captureTargetPickerLabel");
-    region_summary_value_label_ = new QLabel(QStringLiteral("No region defined"), region_summary_panel);
+    region_summary_value_label_ = new QLabel(QStringLiteral("No region saved yet."), region_summary_panel);
     region_summary_value_label_->setObjectName("sourcePickerRegionSummary");
     region_summary_value_label_->setWordWrap(true);
     region_summary_value_label_->setProperty("labelRole", "captureTargetPickerNote");
@@ -196,7 +218,7 @@ void SourcePickerDialog::setRegionState(const QString& summary, bool has_region,
     region_summary_ = summary;
     region_select_on_record_check_->setChecked(select_on_record);
     if (region_summary_.trimmed().isEmpty()) {
-        region_summary_value_label_->setText(QStringLiteral("No region defined"));
+        region_summary_value_label_->setText(QStringLiteral("No region saved yet."));
     } else {
         region_summary_value_label_->setText(region_summary_);
     }
@@ -210,7 +232,16 @@ void SourcePickerDialog::setCurrentSelection(Section section, int target_index) 
 
     if (section != Section::Region && !hasTargetInSection(section, target_index)) {
         const auto& fallback = (section == Section::Windows) ? window_options_ : screen_options_;
-        selected_target_index_ = fallback.empty() ? -1 : fallback.front().target_index;
+        selected_target_index_ = -1;
+        for (const auto& option : fallback) {
+            if (option.selectable) {
+                selected_target_index_ = option.target_index;
+                break;
+            }
+        }
+        if (selected_target_index_ < 0 && !fallback.empty()) {
+            selected_target_index_ = fallback.front().target_index;
+        }
     }
 
     setActiveSection(section);
@@ -223,7 +254,8 @@ bool SourcePickerDialog::selectSource(Section section, int target_index) {
         setCurrentSelection(Section::Region, -1);
         return true;
     }
-    if (!hasTargetInSection(section, target_index)) {
+    SourceOption option;
+    if (!findOption(section, target_index, &option) || !option.selectable) {
         return false;
     }
     setCurrentSelection(section, target_index);
@@ -288,18 +320,26 @@ void SourcePickerDialog::rebuildOptionCardsForSection(Section section) {
 
     for (const auto& option : options) {
         auto* card = new ui::widgets::CaptureTargetCard(pages_);
-        card->setTitle(option.title);
+        card->setTitle(ElideCardTitle(option.title));
+        card->setToolTip(option.title);
         QString subtitle = option.detail;
         if (option.primary && section == Section::Screens) {
             subtitle =
                 subtitle.isEmpty() ? QStringLiteral("Primary display") : (subtitle + QStringLiteral(" · Primary"));
+        }
+        if (!option.minimum_detail.trimmed().isEmpty()) {
+            subtitle =
+                subtitle.isEmpty() ? option.minimum_detail : (subtitle + QStringLiteral("\n") + option.minimum_detail);
         }
         if (subtitle.isEmpty()) {
             subtitle =
                 section == Section::Screens ? QStringLiteral("Display capture") : QStringLiteral("Window capture");
         }
         card->setSubtitle(subtitle);
-        card->setStatusText(section == Section::Screens ? QStringLiteral("SCREEN") : QStringLiteral("WINDOW"));
+        card->setStatusText(option.status_badge.isEmpty()
+                                ? (section == Section::Screens ? QStringLiteral("SCREEN") : QStringLiteral("WINDOW"))
+                                : option.status_badge);
+        RestyleCard(card, option.selectable ? "default" : "warning");
         card->setAccessibleName(
             (section == Section::Screens ? QStringLiteral("Screen source: ") : QStringLiteral("Window source: ")) +
             option.title);
@@ -374,10 +414,10 @@ void SourcePickerDialog::updateSummaryLabel() {
     if (selected_section_ == Section::Region) {
         const QString region_text = (has_region_ && !region_summary_.trimmed().isEmpty())
                                         ? QStringLiteral("Region · %1").arg(region_summary_)
-                                        : QStringLiteral("Region · selection overlay will open when recording starts");
+                                        : QStringLiteral("Region · no saved region");
         const QString select_mode = region_select_on_record_check_ && region_select_on_record_check_->isChecked()
-                                        ? QStringLiteral(" · select-on-record")
-                                        : QStringLiteral(" · use current region");
+                                        ? QStringLiteral(" · overlay opens when recording starts")
+                                        : QStringLiteral(" · use Pick region now... to set one");
         summary_label_->setText(region_text + select_mode);
         return;
     }
@@ -386,6 +426,17 @@ void SourcePickerDialog::updateSummaryLabel() {
     if (!findOption(selected_section_, selected_target_index_, &option)) {
         summary_label_->setText(selected_section_ == Section::Windows ? QStringLiteral("Choose a window source")
                                                                       : QStringLiteral("Choose a screen source"));
+        return;
+    }
+    if (!option.selectable) {
+        QString summary = option.validation_summary.trimmed();
+        if (summary.isEmpty()) {
+            summary = QStringLiteral("Selected source is not valid for the active encoder.");
+        }
+        if (!option.minimum_detail.trimmed().isEmpty()) {
+            summary += QStringLiteral(" ") + option.minimum_detail;
+        }
+        summary_label_->setText(summary);
         return;
     }
 
@@ -400,7 +451,8 @@ bool SourcePickerDialog::hasValidSelection() const {
     if (selected_section_ == Section::Region) {
         return true;
     }
-    return hasTargetInSection(selected_section_, selected_target_index_);
+    SourceOption option;
+    return findOption(selected_section_, selected_target_index_, &option) && option.selectable;
 }
 
 bool SourcePickerDialog::hasTargetInSection(Section section, int target_index) const {

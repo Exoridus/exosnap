@@ -2,9 +2,11 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QLabel>
 #include <QPushButton>
 
 #include "ui/dialogs/SourcePickerDialog.h"
+#include "ui/widgets/CaptureTargetCard.h"
 
 namespace exosnap {
 namespace {
@@ -85,6 +87,41 @@ TEST_F(SourcePickerDialogTest, PickRegionNow_AcceptsDialogWithRegionSelection) {
     EXPECT_TRUE(selection.valid);
     EXPECT_EQ(selection.section, ui::dialogs::SourcePickerDialog::Section::Region);
     EXPECT_TRUE(selection.pick_region_now);
+}
+
+TEST_F(SourcePickerDialogTest, TinyWindowSelection_IsMarkedInvalidAndCannotBeApplied) {
+    ui::dialogs::SourcePickerDialog dialog;
+
+    ui::dialogs::SourcePickerDialog::SourceOption window;
+    window.target_index = 17;
+    window.title = QStringLiteral("Brave — Tiny popup");
+    window.detail = QStringLiteral("146 × 20 · brave.exe");
+    window.status_badge = QStringLiteral("Too small");
+    window.selectable = false;
+    window.validation_summary = QStringLiteral(
+        "Selected window is too small for the active encoder. Choose a larger window or use Display capture.");
+    window.minimum_detail = QStringLiteral("Minimum 192×128");
+
+    dialog.setWindowOptions({window});
+    dialog.setCurrentSelection(ui::dialogs::SourcePickerDialog::Section::Windows, 17);
+
+    const auto selection = dialog.selectionResult();
+    EXPECT_FALSE(selection.valid);
+    EXPECT_FALSE(dialog.selectSource(ui::dialogs::SourcePickerDialog::Section::Windows, 17));
+
+    auto* use_button = dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerUseButton"));
+    ASSERT_NE(use_button, nullptr);
+    EXPECT_FALSE(use_button->isEnabled());
+
+    auto* summary = dialog.findChild<QLabel*>(QStringLiteral("sourcePickerSummary"));
+    ASSERT_NE(summary, nullptr);
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("too small"), Qt::CaseInsensitive));
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("Minimum 192×128")));
+
+    const auto cards = dialog.findChildren<ui::widgets::CaptureTargetCard*>();
+    ASSERT_FALSE(cards.empty());
+    EXPECT_EQ(cards.front()->statusText(), QStringLiteral("Too small"));
+    EXPECT_EQ(cards.front()->property("captureCardTone").toString(), QStringLiteral("warning"));
 }
 
 } // namespace

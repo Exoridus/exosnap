@@ -58,6 +58,7 @@ CaptureTargetCard::CaptureTargetCard(QWidget* parent) : QFrame(parent) {
 
     root->addLayout(top_row);
     root->addWidget(subtitle_label_);
+    updateStatusLabel();
 }
 
 void CaptureTargetCard::setTitle(const QString& title) {
@@ -77,11 +78,12 @@ QString CaptureTargetCard::subtitle() const {
 }
 
 void CaptureTargetCard::setStatusText(const QString& status) {
-    status_label_->setText(status);
+    status_text_ = status;
+    updateStatusLabel();
 }
 
 QString CaptureTargetCard::statusText() const {
-    return status_label_->text();
+    return status_text_;
 }
 
 void CaptureTargetCard::setSelected(bool selected) {
@@ -90,12 +92,24 @@ void CaptureTargetCard::setSelected(bool selected) {
 
     selected_ = selected;
     setProperty("selected", selected_);
-    status_label_->setText(selected_ ? QStringLiteral("● ACTIVE") : QStringLiteral("○"));
+    updateStatusLabel();
     restyle(this);
 }
 
 bool CaptureTargetCard::isSelected() const noexcept {
     return selected_;
+}
+
+void CaptureTargetCard::updateStatusLabel() {
+    if (!status_label_) {
+        return;
+    }
+    const QString badge = status_text_.trimmed();
+    if (selected_) {
+        status_label_->setText(badge.isEmpty() ? QStringLiteral("● ACTIVE") : QStringLiteral("● %1").arg(badge));
+    } else {
+        status_label_->setText(badge.isEmpty() ? QStringLiteral("○") : badge);
+    }
 }
 
 bool CaptureTargetCard::eventFilter(QObject* watched, QEvent* event) {
