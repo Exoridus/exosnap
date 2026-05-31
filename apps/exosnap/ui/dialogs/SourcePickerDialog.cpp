@@ -2,39 +2,76 @@
 
 #include "../../services/ThumbnailCapture.h"
 #include "../widgets/CaptureTargetCard.h"
-#include "../widgets/SectionRuleHeader.h"
 
 #include <QCheckBox>
-#include <QDialogButtonBox>
+#include <QEvent>
 #include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
+#include <QHideEvent>
 #include <QImage>
 #include <QLabel>
+#include <QLayout>
 #include <QPixmap>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QShowEvent>
 #include <QStackedWidget>
 #include <QStyle>
+#include <QTimer>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 namespace exosnap::ui::dialogs {
 namespace {
 
-QWidget* makeScrollableCardColumn(QWidget* parent, QVBoxLayout** out_layout) {
+struct GridPageWidgets {
+    QScrollArea* scroll = nullptr;
+    QWidget* host = nullptr;
+    QGridLayout* grid = nullptr;
+    QLabel* empty_label = nullptr;
+};
+
+GridPageWidgets makeScrollableCardGrid(QWidget* parent, const QString& hint_text, const QString& empty_text) {
+    GridPageWidgets result;
+
     auto* scroll = new QScrollArea(parent);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
     auto* content = new QWidget(scroll);
-    auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(8);
-    layout->addStretch(1);
+    auto* content_layout = new QVBoxLayout(content);
+    content_layout->setContentsMargins(0, 0, 0, 0);
+    content_layout->setSpacing(10);
+
+    auto* hint_label = new QLabel(hint_text, content);
+    hint_label->setWordWrap(true);
+    hint_label->setProperty("labelRole", "captureTargetPickerNote");
+    content_layout->addWidget(hint_label);
+
+    auto* empty_label = new QLabel(empty_text, content);
+    empty_label->setWordWrap(true);
+    empty_label->setProperty("labelRole", "captureTargetPickerNote");
+    empty_label->setVisible(false);
+    content_layout->addWidget(empty_label);
+
+    auto* host = new QWidget(content);
+    auto* grid = new QGridLayout(host);
+    grid->setContentsMargins(0, 0, 0, 0);
+    grid->setHorizontalSpacing(12);
+    grid->setVerticalSpacing(12);
+    grid->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    content_layout->addWidget(host, 1);
 
     scroll->setWidget(content);
-    *out_layout = layout;
-    return scroll;
+
+    result.scroll = scroll;
+    result.host = host;
+    result.grid = grid;
+    result.empty_label = empty_label;
+    return result;
 }
 
 QPushButton* makeSectionButton(const QString& object_name, const QString& text, QWidget* parent) {
@@ -43,15 +80,6 @@ QPushButton* makeSectionButton(const QString& object_name, const QString& text, 
     button->setCheckable(true);
     button->setProperty("sourcePickerSection", true);
     return button;
-}
-
-QString ElideCardTitle(const QString& title) {
-    constexpr int kMaxChars = 68;
-    const QString compact = title.simplified();
-    if (compact.size() <= kMaxChars) {
-        return compact;
-    }
-    return compact.left(kMaxChars - 1) + QStringLiteral("\xE2\x80\xA6");
 }
 
 void RestyleCard(QWidget* card, const char* tone) {
@@ -67,20 +95,38 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     setObjectName("sourcePickerDialog");
     setWindowTitle(QStringLiteral("Choose capture source"));
     setModal(true);
-    resize(920, 640);
+    resize(980, 700);
 
     thumbnail_capture_ = new ThumbnailCapture(this);
     connect(thumbnail_capture_, &ThumbnailCapture::thumbnailReady, this, &SourcePickerDialog::onThumbnailReady);
     connect(thumbnail_capture_, &ThumbnailCapture::thumbnailFailed, this, &SourcePickerDialog::onThumbnailFailed);
 
+    thumbnail_refresh_timer_ = new QTimer(this);
+    thumbnail_refresh_timer_->setInterval(6000);
+    connect(thumbnail_refresh_timer_, &QTimer::timeout, this, &SourcePickerDialog::onPeriodicThumbnailRefresh);
+
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(14, 14, 14, 14);
     root->setSpacing(12);
 
-    auto* title_label = new QLabel(QStringLiteral("Choose capture source"), this);
+    auto* header_panel = new QFrame(this);
+    header_panel->setProperty("panelRole", "panel");
+    auto* header_layout = new QVBoxLayout(header_panel);
+    header_layout->setContentsMargins(12, 10, 12, 10);
+    header_layout->setSpacing(4);
+
+    auto* title_label = new QLabel(QStringLiteral("Choose capture source"), header_panel);
     title_label->setObjectName("sourcePickerTitle");
     title_label->setProperty("labelRole", "captureCardTitle");
-    root->addWidget(title_label);
+    header_layout->addWidget(title_label);
+
+    const QString subtitle_text = QStringLiteral(
+        "Pick what to record using visual previews. Thumbnails refresh when opening tabs or rescanning.");
+    auto* subtitle_label = new QLabel(subtitle_text, header_panel);
+    subtitle_label->setWordWrap(true);
+    subtitle_label->setProperty("labelRole", "captureTargetPickerNote");
+    header_layout->addWidget(subtitle_label);
+    root->addWidget(header_panel);
 
     auto* section_row = new QHBoxLayout();
     section_row->setContentsMargins(0, 0, 0, 0);
@@ -91,13 +137,41 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     section_row->addWidget(screens_button_);
     section_row->addWidget(windows_button_);
     section_row->addWidget(region_button_);
+    section_row->addSpacing(8);
+    refresh_button_ = new QPushButton(QStringLiteral("Refresh previews"), this);
+    refresh_button_->setObjectName("sourcePickerRefreshButton");
+    refresh_button_->setProperty("role", "ghost");
+    section_row->addWidget(refresh_button_);
     section_row->addStretch(1);
     root->addLayout(section_row);
 
     pages_ = new QStackedWidget(this);
     pages_->setObjectName("sourcePickerPages");
-    pages_->addWidget(makeScrollableCardColumn(pages_, &screens_layout_));
-    pages_->addWidget(makeScrollableCardColumn(pages_, &windows_layout_));
+
+    const auto screens_page =
+        makeScrollableCardGrid(pages_, QStringLiteral("Choose a display visually. Primary displays are marked."),
+                               QStringLiteral("No displays detected."));
+    screens_grid_.scroll = screens_page.scroll;
+    screens_grid_.host = screens_page.host;
+    screens_grid_.grid = screens_page.grid;
+    screens_grid_.empty_label = screens_page.empty_label;
+    pages_->addWidget(screens_grid_.scroll);
+
+    const auto windows_page =
+        makeScrollableCardGrid(pages_, QStringLiteral("Find the right app/window quickly from preview cards."),
+                               QStringLiteral("No capturable windows found."));
+    windows_grid_.scroll = windows_page.scroll;
+    windows_grid_.host = windows_page.host;
+    windows_grid_.grid = windows_page.grid;
+    windows_grid_.empty_label = windows_page.empty_label;
+    pages_->addWidget(windows_grid_.scroll);
+
+    if (screens_grid_.scroll && screens_grid_.scroll->viewport()) {
+        screens_grid_.scroll->viewport()->installEventFilter(this);
+    }
+    if (windows_grid_.scroll && windows_grid_.scroll->viewport()) {
+        windows_grid_.scroll->viewport()->installEventFilter(this);
+    }
 
     auto* region_page = new QWidget(pages_);
     auto* region_layout = new QVBoxLayout(region_page);
@@ -113,8 +187,8 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     auto* region_title = new QLabel(QStringLiteral("Region capture"), region_note);
     region_title->setProperty("labelRole", "captureCardTitle");
     auto* region_copy =
-        new QLabel(QStringLiteral("Region selection runs in the existing overlay outside this dialog. "
-                                  "Use Pick region now... to launch it, or leave select-on-record enabled."),
+        new QLabel(QStringLiteral("Use this when you need only part of a screen. The region overlay appears outside "
+                                  "this dialog and can be triggered now or when recording starts."),
                    region_note);
     region_copy->setWordWrap(true);
     region_copy->setProperty("labelRole", "captureTargetPickerNote");
@@ -201,6 +275,7 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
         updateSummaryLabel();
     });
     connect(region_select_on_record_check_, &QAbstractButton::toggled, this, [this]() { updateSummaryLabel(); });
+    connect(refresh_button_, &QPushButton::clicked, this, &SourcePickerDialog::onRefreshRequested);
     connect(pick_region_now_button_, &QPushButton::clicked, this, &SourcePickerDialog::onPickRegionNow);
     connect(cancel_button, &QPushButton::clicked, this, &QDialog::reject);
     connect(use_button_, &QPushButton::clicked, this, &SourcePickerDialog::onUseSelected);
@@ -213,13 +288,17 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
 void SourcePickerDialog::setScreenOptions(const std::vector<SourceOption>& options) {
     screen_options_ = options;
     rebuildOptionCards();
-    requestThumbnailsForSection(Section::Screens);
+    if (isVisible() && selected_section_ == Section::Screens) {
+        requestThumbnailsForSection(Section::Screens);
+    }
 }
 
 void SourcePickerDialog::setWindowOptions(const std::vector<SourceOption>& options) {
     window_options_ = options;
     rebuildOptionCards();
-    requestThumbnailsForSection(Section::Windows);
+    if (isVisible() && selected_section_ == Section::Windows) {
+        requestThumbnailsForSection(Section::Windows);
+    }
 }
 
 void SourcePickerDialog::setRegionState(const QString& summary, bool has_region, bool select_on_record) {
@@ -317,14 +396,32 @@ void SourcePickerDialog::onThumbnailFailed(int target_index) {
     if (!card) {
         card = findOptionCard(Section::Windows, target_index);
     }
-    if (card && card->card) {
-        card->card->setThumbnailPlaceholder();
+    if (!card || !card->card) {
+        return;
     }
+    if (card->card->isUnavailable()) {
+        return;
+    }
+    card->card->setThumbnailFailureText(QStringLiteral("Preview unavailable"));
+}
+
+void SourcePickerDialog::onRefreshRequested() {
+    if (selected_section_ == Section::Region) {
+        return;
+    }
+    requestThumbnailsForSection(selected_section_);
+}
+
+void SourcePickerDialog::onPeriodicThumbnailRefresh() {
+    if (!isVisible() || selected_section_ == Section::Region) {
+        return;
+    }
+    requestThumbnailsForSection(selected_section_);
 }
 
 void SourcePickerDialog::rebuildOptionCards() {
-    clearLayout(screens_layout_);
-    clearLayout(windows_layout_);
+    clearLayout(screens_grid_.grid);
+    clearLayout(windows_grid_.grid);
     option_cards_.clear();
 
     rebuildOptionCardsForSection(Section::Screens);
@@ -334,31 +431,35 @@ void SourcePickerDialog::rebuildOptionCards() {
 }
 
 void SourcePickerDialog::rebuildOptionCardsForSection(Section section) {
-    auto* layout = section == Section::Screens ? screens_layout_ : windows_layout_;
-    if (!layout) {
+    auto* grid_info = sectionGrid(section);
+    if (!grid_info || !grid_info->grid) {
         return;
     }
 
     const auto& options = section == Section::Screens ? screen_options_ : window_options_;
+    if (grid_info->empty_label) {
+        grid_info->empty_label->setVisible(options.empty());
+    }
+    if (grid_info->host) {
+        grid_info->host->setVisible(!options.empty());
+    }
     if (options.empty()) {
-        auto* empty_label = new QLabel(section == Section::Screens ? QStringLiteral("No displays detected.")
-                                                                   : QStringLiteral("No capturable windows found."),
-                                       pages_);
-        empty_label->setProperty("labelRole", "captureTargetPickerNote");
-        layout->addWidget(empty_label);
-        layout->addStretch(1);
+        relayoutSection(section);
         return;
     }
 
     for (const auto& option : options) {
         auto* card = new ui::widgets::CaptureTargetCard(pages_);
-        card->setTitle(ElideCardTitle(option.title));
+        card->setTitle(option.title);
         card->setToolTip(option.title);
 
         QString subtitle = option.detail;
         if (option.primary && section == Section::Screens) {
-            subtitle = subtitle.isEmpty() ? QStringLiteral("Primary display")
-                                          : (subtitle + QStringLiteral(" \xC2\xB7 Primary"));
+            if (subtitle.isEmpty()) {
+                subtitle = QStringLiteral("Primary display");
+            } else {
+                subtitle += QStringLiteral(" · Primary");
+            }
         }
         if (!option.minimum_detail.trimmed().isEmpty()) {
             subtitle =
@@ -371,24 +472,28 @@ void SourcePickerDialog::rebuildOptionCardsForSection(Section section) {
         card->setSubtitle(subtitle);
 
         card->setStatusText(option.status_badge.isEmpty()
-                                ? (section == Section::Screens ? QStringLiteral("SCREEN") : QStringLiteral("WINDOW"))
+                                ? (section == Section::Screens ? QStringLiteral("Screen") : QStringLiteral("Window"))
                                 : option.status_badge);
 
         if (option.unavailable) {
             RestyleCard(card, "warning");
             card->setUnavailable(true);
             card->setHelpText(option.help_text);
+            card->setThumbnailUnavailableText(option.status_badge.isEmpty() ? QStringLiteral("Unavailable")
+                                                                            : option.status_badge);
         } else {
             RestyleCard(card, option.selectable ? "default" : "warning");
-            if (!option.help_text.isEmpty()) {
-                card->setHelpText(option.help_text);
+            QString help_text = option.help_text;
+            if (!option.selectable && help_text.isEmpty() && !option.validation_summary.trimmed().isEmpty()) {
+                help_text = option.validation_summary;
             }
+            card->setHelpText(help_text);
+            card->setThumbnailLoadingText(QStringLiteral("Loading preview..."));
         }
 
         card->setAccessibleName(
             (section == Section::Screens ? QStringLiteral("Screen source: ") : QStringLiteral("Window source: ")) +
             option.title);
-        layout->addWidget(card);
         option_cards_.push_back({section, option.target_index, card});
 
         connect(card, &ui::widgets::CaptureTargetCard::clicked, this,
@@ -402,10 +507,60 @@ void SourcePickerDialog::rebuildOptionCardsForSection(Section section) {
                 });
     }
 
-    layout->addStretch(1);
+    relayoutSection(section);
 }
 
-void SourcePickerDialog::clearLayout(QVBoxLayout* layout) {
+void SourcePickerDialog::relayoutSection(Section section) {
+    auto* grid_info = sectionGrid(section);
+    if (!grid_info || !grid_info->grid) {
+        return;
+    }
+
+    QLayoutItem* item = nullptr;
+    while ((item = grid_info->grid->takeAt(0)) != nullptr) {
+        delete item;
+    }
+
+    auto cards = cardsForSection(section);
+    if (cards.empty()) {
+        return;
+    }
+
+    const int spacing = std::max(8, grid_info->grid->horizontalSpacing());
+    const int viewport_width =
+        (grid_info->scroll && grid_info->scroll->viewport()) ? grid_info->scroll->viewport()->width() : width();
+    const int min_card_width = section == Section::Screens ? 332 : 300;
+    const int max_card_width = section == Section::Screens ? 460 : 380;
+    const int max_columns = section == Section::Screens ? 3 : 4;
+    const int usable_width = std::max(220, viewport_width - 4);
+
+    int columns = std::max(1, (usable_width + spacing) / (min_card_width + spacing));
+    columns = std::clamp(columns, 1, max_columns);
+
+    int card_width = (usable_width - ((columns - 1) * spacing)) / columns;
+    card_width = std::clamp(card_width, min_card_width, max_card_width);
+    if (columns == 1) {
+        card_width = std::min(max_card_width, usable_width);
+    }
+
+    for (int i = 0; i <= max_columns; ++i) {
+        grid_info->grid->setColumnStretch(i, 0);
+    }
+    grid_info->grid->setColumnStretch(columns, 1);
+
+    for (std::size_t i = 0; i < cards.size(); ++i) {
+        auto* option_card = cards[i];
+        if (!option_card || !option_card->card) {
+            continue;
+        }
+        option_card->card->setFixedWidth(card_width);
+        const int row = static_cast<int>(i) / columns;
+        const int col = static_cast<int>(i) % columns;
+        grid_info->grid->addWidget(option_card->card, row, col);
+    }
+}
+
+void SourcePickerDialog::clearLayout(QLayout* layout) {
     if (!layout) {
         return;
     }
@@ -429,13 +584,22 @@ void SourcePickerDialog::setActiveSection(Section section) {
     switch (section) {
     case Section::Screens:
         pages_->setCurrentIndex(0);
+        relayoutSection(Section::Screens);
         break;
     case Section::Windows:
         pages_->setCurrentIndex(1);
+        relayoutSection(Section::Windows);
         break;
     case Section::Region:
         pages_->setCurrentIndex(2);
         break;
+    }
+
+    if (refresh_button_) {
+        refresh_button_->setEnabled(section != Section::Region);
+    }
+    if (section != Section::Region && isVisible()) {
+        requestThumbnailsForSection(section);
     }
 }
 
@@ -458,11 +622,11 @@ void SourcePickerDialog::updateSummaryLabel() {
 
     if (selected_section_ == Section::Region) {
         const QString region_text = (has_region_ && !region_summary_.trimmed().isEmpty())
-                                        ? QStringLiteral("Region \xC2\xB7 %1").arg(region_summary_)
-                                        : QStringLiteral("Region \xC2\xB7 no saved region");
+                                        ? QStringLiteral("Region · %1").arg(region_summary_)
+                                        : QStringLiteral("Region · no saved region");
         const QString select_mode = region_select_on_record_check_ && region_select_on_record_check_->isChecked()
-                                        ? QStringLiteral(" \xC2\xB7 overlay opens when recording starts")
-                                        : QStringLiteral(" \xC2\xB7 use Pick region now... to set one");
+                                        ? QStringLiteral(" · overlay opens when recording starts")
+                                        : QStringLiteral(" · use Pick region now... to set one");
         summary_label_->setText(region_text + select_mode);
         return;
     }
@@ -490,7 +654,7 @@ void SourcePickerDialog::updateSummaryLabel() {
 
     QString summary = option.title;
     if (!option.detail.trimmed().isEmpty()) {
-        summary += QStringLiteral(" \xC2\xB7 ") + option.detail;
+        summary += QStringLiteral(" · ") + option.detail;
     }
     summary_label_->setText(summary);
 }
@@ -536,21 +700,97 @@ SourcePickerDialog::OptionCard* SourcePickerDialog::findOptionCard(Section secti
 }
 
 void SourcePickerDialog::requestThumbnailsForSection(Section section) {
-    if (!thumbnail_capture_) {
+    if (!thumbnail_capture_ || section == Section::Region) {
         return;
     }
+
+    thumbnail_capture_->cancelAll();
 
     const auto& options = section == Section::Screens ? screen_options_ : window_options_;
     for (const auto& option : options) {
         if (option.native_id == 0) {
             continue;
         }
+        if (section == Section::Windows && option.unavailable) {
+            continue;
+        }
+
+        if (auto* oc = findOptionCard(section, option.target_index); oc && oc->card && !oc->card->hasThumbnail()) {
+            oc->card->setThumbnailLoadingText(QStringLiteral("Loading preview..."));
+        }
+
         if (section == Section::Screens) {
             thumbnail_capture_->requestMonitorThumbnail(option.target_index, option.native_id, kThumbnailSize);
-        } else if (option.selectable) {
+        } else {
             thumbnail_capture_->requestWindowThumbnail(option.target_index, option.native_id, kThumbnailSize);
         }
     }
+}
+
+SourcePickerDialog::SectionGrid* SourcePickerDialog::sectionGrid(Section section) {
+    switch (section) {
+    case Section::Screens:
+        return &screens_grid_;
+    case Section::Windows:
+        return &windows_grid_;
+    case Section::Region:
+        return nullptr;
+    }
+    return nullptr;
+}
+
+const SourcePickerDialog::SectionGrid* SourcePickerDialog::sectionGrid(Section section) const {
+    switch (section) {
+    case Section::Screens:
+        return &screens_grid_;
+    case Section::Windows:
+        return &windows_grid_;
+    case Section::Region:
+        return nullptr;
+    }
+    return nullptr;
+}
+
+std::vector<SourcePickerDialog::OptionCard*> SourcePickerDialog::cardsForSection(Section section) {
+    std::vector<OptionCard*> cards;
+    cards.reserve(option_cards_.size());
+    for (auto& card : option_cards_) {
+        if (card.section == section) {
+            cards.push_back(&card);
+        }
+    }
+    return cards;
+}
+
+bool SourcePickerDialog::eventFilter(QObject* watched, QEvent* event) {
+    if (event && event->type() == QEvent::Resize) {
+        if (screens_grid_.scroll && watched == screens_grid_.scroll->viewport()) {
+            relayoutSection(Section::Screens);
+        } else if (windows_grid_.scroll && watched == windows_grid_.scroll->viewport()) {
+            relayoutSection(Section::Windows);
+        }
+    }
+    return QDialog::eventFilter(watched, event);
+}
+
+void SourcePickerDialog::showEvent(QShowEvent* event) {
+    QDialog::showEvent(event);
+    if (thumbnail_refresh_timer_) {
+        thumbnail_refresh_timer_->start();
+    }
+    if (selected_section_ != Section::Region) {
+        requestThumbnailsForSection(selected_section_);
+    }
+}
+
+void SourcePickerDialog::hideEvent(QHideEvent* event) {
+    if (thumbnail_refresh_timer_) {
+        thumbnail_refresh_timer_->stop();
+    }
+    if (thumbnail_capture_) {
+        thumbnail_capture_->cancelAll();
+    }
+    QDialog::hideEvent(event);
 }
 
 } // namespace exosnap::ui::dialogs

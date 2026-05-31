@@ -475,74 +475,111 @@ QLabel[labelRole="audioSettingsNote"] {
 }
 
 QWidget#captureTargetCard {
-    background: ${bg2};
+    background: rgba(34, 34, 34, 0.92);
     border: 1px solid ${line2};
     border-radius: ${radius-md}px;
 }
 
 QWidget#captureTargetCard:hover {
-    background: ${bg4};
+    background: rgba(45, 44, 43, 0.96);
     border-color: ${line3};
 }
 
 QWidget#captureTargetCard[selected="true"] {
-    background: ${bg4};
+    background: rgba(52, 47, 39, 0.96);
     border-color: ${accent};
 }
 
 QWidget#captureTargetCard[captureCardTone="warning"] {
-    border-color: ${warn};
-    background: rgba(164, 128, 70, 0.16);
+    border-color: rgba(164, 128, 70, 0.75);
+    background: rgba(76, 60, 33, 0.42);
 }
 
 QWidget#captureTargetCard[captureCardTone="warning"]:hover {
     border-color: ${warn};
-    background: rgba(164, 128, 70, 0.22);
+    background: rgba(90, 68, 34, 0.54);
 }
 
 QWidget#captureTargetCard[captureCardTone="warning"][selected="true"] {
     border-color: ${warn};
+    background: rgba(98, 72, 34, 0.62);
 }
 
 QWidget#captureTargetCard:disabled {
-    background: ${bg2};
+    background: rgba(32, 32, 32, 0.78);
     border-color: ${line1};
-    opacity: 0.6;
 }
 
 QWidget#captureTargetCard[unavailable="true"] {
-    background: ${bg2};
-    border-color: ${line1};
-    opacity: 0.7;
+    background: rgba(40, 38, 36, 0.76);
+    border-color: rgba(164, 128, 70, 0.52);
 }
 
 QWidget#captureTargetCard:focus {
     border-color: ${accent};
 }
 
-QLabel[labelRole="captureCardThumbnail"] {
+QFrame#captureCardThumbnailSurface {
     background: ${bg3};
     border: 1px solid ${line2};
     border-radius: ${radius-sm}px;
 }
 
-QLabel[labelRole="captureCardThumbnailPlaceholder"] {
-    background: ${bg3};
-    border: 1px solid ${line2};
-    border-radius: ${radius-sm}px;
-    font-size: 32px;
-    color: ${text3};
+QFrame#captureCardThumbnailSurface[thumbnailState="ready"] {
+    border-color: ${line2};
+}
+
+QFrame#captureCardThumbnailSurface[thumbnailState="loading"] {
+    background: rgba(48, 48, 48, 0.82);
+}
+
+QFrame#captureCardThumbnailSurface[thumbnailState="failed"] {
+    border-color: ${warn};
+    background: rgba(92, 71, 36, 0.42);
+}
+
+QFrame#captureCardThumbnailSurface[thumbnailState="unavailable"] {
+    border-color: ${warn};
+    background: rgba(80, 63, 34, 0.5);
+}
+
+QLabel[labelRole="captureCardThumbnail"] {
+    background: transparent;
+    border: none;
+}
+
+QLabel[labelRole="captureCardThumbnailState"] {
+    font-family: ${font-mono};
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    color: ${text2};
+}
+
+QFrame#captureCardThumbnailSurface[thumbnailState="failed"] QLabel[labelRole="captureCardThumbnailState"],
+QFrame#captureCardThumbnailSurface[thumbnailState="unavailable"] QLabel[labelRole="captureCardThumbnailState"] {
+    color: ${warn};
 }
 
 QLabel[labelRole="captureCardHelp"] {
     font-size: 11px;
-    color: ${warn};
+    color: ${text2};
 }
 
 QLabel[labelRole="captureCardTitle"] {
-    font-size: 16px;
+    font-size: 14px;
     font-weight: 600;
     color: ${text0};
+}
+
+QLabel[labelRole="captureCardSelectedChip"] {
+    font-family: ${font-mono};
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    color: ${accent};
+    border: 1px solid ${accent};
+    border-radius: ${radius-sm}px;
+    padding: 1px 6px;
+    background: rgba(215, 167, 68, 0.12);
 }
 
 QLabel[labelRole="captureCardStatus"] {
@@ -557,9 +594,9 @@ QLabel[labelRole="captureCardStatus"] {
 }
 
 QWidget#captureTargetCard[selected="true"] QLabel[labelRole="captureCardStatus"] {
-    color: ${accent};
-    border-color: ${accent};
-    background: rgba(215, 167, 68, 0.10);
+    color: ${text0};
+    border-color: rgba(215, 167, 68, 0.72);
+    background: rgba(215, 167, 68, 0.16);
 }
 
 QWidget#captureTargetCard[captureCardTone="warning"] QLabel[labelRole="captureCardStatus"] {
@@ -571,7 +608,7 @@ QWidget#captureTargetCard[captureCardTone="warning"] QLabel[labelRole="captureCa
 QLabel[labelRole="captureCardSubtitle"] {
     font-family: ${font-mono};
     font-size: 11.5px;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.02em;
     color: ${text2};
 }
 
@@ -1065,19 +1102,39 @@ QDialog#sourcePickerDialog {
     border: 1px solid ${line2};
 }
 
-QPushButton[sourcePickerSection="true"] {
-    background: ${bg3};
+QStackedWidget#sourcePickerPages {
+    background: ${bg2};
     border: 1px solid ${line2};
     border-radius: ${radius-md}px;
-    min-height: 30px;
-    padding: 4px 12px;
+}
+
+QPushButton[sourcePickerSection="true"] {
+    background: rgba(35, 35, 35, 0.95);
+    border: 1px solid ${line2};
+    border-radius: ${radius-md}px;
+    min-height: 34px;
+    padding: 5px 14px;
     color: ${text1};
+}
+
+QPushButton[sourcePickerSection="true"]:hover {
+    border-color: ${line3};
+    background: rgba(45, 45, 45, 0.95);
 }
 
 QPushButton[sourcePickerSection="true"]:checked {
     border-color: ${accent};
-    color: ${accent};
-    background: ${bg4};
+    color: ${text0};
+    background: rgba(70, 58, 35, 0.85);
+}
+
+QPushButton#sourcePickerRefreshButton {
+    min-height: 30px;
+    padding: 3px 10px;
+}
+
+QLabel#sourcePickerSummary {
+    color: ${text1};
 }
 
 /* Preview surface text roles */

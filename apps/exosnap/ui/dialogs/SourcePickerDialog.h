@@ -7,10 +7,17 @@
 #include <vector>
 
 class QCheckBox;
+class QGridLayout;
 class QLabel;
 class QPushButton;
+class QScrollArea;
 class QStackedWidget;
+class QTimer;
 class QVBoxLayout;
+class QEvent;
+class QHideEvent;
+class QShowEvent;
+class QLayout;
 
 namespace exosnap {
 class ThumbnailCapture;
@@ -68,8 +75,17 @@ class SourcePickerDialog : public QDialog {
     void onPickRegionNow();
     void onThumbnailReady(int target_index, QImage thumbnail);
     void onThumbnailFailed(int target_index);
+    void onRefreshRequested();
+    void onPeriodicThumbnailRefresh();
 
   private:
+    struct SectionGrid {
+        QScrollArea* scroll = nullptr;
+        QWidget* host = nullptr;
+        QGridLayout* grid = nullptr;
+        QLabel* empty_label = nullptr;
+    };
+
     struct OptionCard {
         Section section = Section::Screens;
         int target_index = -1;
@@ -78,7 +94,8 @@ class SourcePickerDialog : public QDialog {
 
     void rebuildOptionCards();
     void rebuildOptionCardsForSection(Section section);
-    void clearLayout(QVBoxLayout* layout);
+    void relayoutSection(Section section);
+    void clearLayout(QLayout* layout);
     void setActiveSection(Section section);
     void refreshSelectionVisuals();
     void updateSummaryLabel();
@@ -87,20 +104,28 @@ class SourcePickerDialog : public QDialog {
     bool findOption(Section section, int target_index, SourceOption* out) const;
     OptionCard* findOptionCard(Section section, int target_index);
     void requestThumbnailsForSection(Section section);
+    SectionGrid* sectionGrid(Section section);
+    const SectionGrid* sectionGrid(Section section) const;
+    std::vector<OptionCard*> cardsForSection(Section section);
+    bool eventFilter(QObject* watched, QEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
     static constexpr QSize kThumbnailSize{320, 180};
 
     QPushButton* screens_button_ = nullptr;
     QPushButton* windows_button_ = nullptr;
     QPushButton* region_button_ = nullptr;
+    QPushButton* refresh_button_ = nullptr;
     QStackedWidget* pages_ = nullptr;
-    QVBoxLayout* screens_layout_ = nullptr;
-    QVBoxLayout* windows_layout_ = nullptr;
+    SectionGrid screens_grid_;
+    SectionGrid windows_grid_;
     QLabel* region_summary_value_label_ = nullptr;
     QCheckBox* region_select_on_record_check_ = nullptr;
     QLabel* summary_label_ = nullptr;
     QPushButton* use_button_ = nullptr;
     QPushButton* pick_region_now_button_ = nullptr;
+    QTimer* thumbnail_refresh_timer_ = nullptr;
 
     std::vector<SourceOption> screen_options_;
     std::vector<SourceOption> window_options_;

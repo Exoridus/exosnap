@@ -37,8 +37,26 @@ TEST_F(SourcePickerDialogTest, Constructs_WithExpectedSectionsAndActions) {
     EXPECT_NE(dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerScreensButton")), nullptr);
     EXPECT_NE(dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerWindowsButton")), nullptr);
     EXPECT_NE(dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerRegionButton")), nullptr);
+    EXPECT_NE(dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerRefreshButton")), nullptr);
     EXPECT_NE(dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerCancelButton")), nullptr);
     EXPECT_NE(dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerUseButton")), nullptr);
+}
+
+TEST_F(SourcePickerDialogTest, RefreshButton_DisabledForRegionAndEnabledForVisualSections) {
+    ui::dialogs::SourcePickerDialog dialog;
+
+    auto* refresh = dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerRefreshButton"));
+    auto* screens = dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerScreensButton"));
+    auto* region = dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerRegionButton"));
+    ASSERT_NE(refresh, nullptr);
+    ASSERT_NE(screens, nullptr);
+    ASSERT_NE(region, nullptr);
+
+    region->click();
+    EXPECT_FALSE(refresh->isEnabled());
+
+    screens->click();
+    EXPECT_TRUE(refresh->isEnabled());
 }
 
 TEST_F(SourcePickerDialogTest, SelectSource_UpdatesSelectionResult) {
@@ -194,6 +212,19 @@ TEST_F(SourcePickerDialogTest, CaptureTargetCard_HelpText) {
     card.setHelpText({});
     card.setUnavailable(false);
     EXPECT_FALSE(card.isUnavailable());
+}
+
+TEST_F(SourcePickerDialogTest, CaptureTargetCard_ThumbnailStateTransitions) {
+    ui::widgets::CaptureTargetCard card;
+
+    card.setThumbnailLoadingText(QStringLiteral("Loading preview..."));
+    EXPECT_FALSE(card.hasThumbnail());
+
+    card.setThumbnailFailureText(QStringLiteral("Preview unavailable"));
+    EXPECT_FALSE(card.hasThumbnail());
+
+    card.setThumbnailUnavailableText(QStringLiteral("Minimized"));
+    EXPECT_FALSE(card.hasThumbnail());
 }
 
 TEST_F(SourcePickerDialogTest, CardsReceiveThumbnailPlaceholderByDefault) {
