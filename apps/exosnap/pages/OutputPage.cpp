@@ -57,14 +57,14 @@ OutputPage::OutputPage(const OutputSettingsModel& /*initial_settings*/, QWidget*
     layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
 
     auto* page_desc = makeSubLabel(
-        QStringLiteral("Manage recording profiles — create, import, export, and reset presets. "
-                       "Output folder, filename pattern, and codec settings are configured on the Setup page."),
+        QStringLiteral("Manage recording presets - create, import, export, and reset presets. "
+                       "Output folder, filename pattern, and codec settings are configured on the Settings page."),
         content);
     page_desc->setProperty("labelRole", "muted");
     layout->addWidget(page_desc);
 
-    // ---- Recording Profile ----
-    layout->addWidget(makeSectionLabel("Recording Profile", content));
+    // ---- Recording Presets ----
+    layout->addWidget(makeSectionLabel("Recording Presets", content));
     auto* profile_panel = makePanel(content);
     auto* profile_layout = new QVBoxLayout(profile_panel);
     profile_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
@@ -78,29 +78,29 @@ OutputPage::OutputPage(const OutputSettingsModel& /*initial_settings*/, QWidget*
     profile_combo_->setMinimumWidth(300);
     profile_combo_->setMaximumWidth(540);
     profile_combo_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-    profile_status_label_ = new QLabel("Built-in", profile_panel);
+    profile_status_label_ = new QLabel("Built-in preset", profile_panel);
     profile_status_label_->setProperty("labelRole", "profileStatusBadge");
     profile_status_label_->setAlignment(Qt::AlignCenter);
-    save_as_new_btn_ = new QPushButton("Save as new profile", profile_panel);
-    reset_profile_btn_ = new QPushButton("Reset", profile_panel);
+    save_as_new_btn_ = new QPushButton("Save current as preset...", profile_panel);
+    reset_profile_btn_ = new QPushButton("Reset to preset", profile_panel);
     profile_overflow_btn_ = new QToolButton(profile_panel);
-    profile_overflow_btn_->setText("Actions");
+    profile_overflow_btn_->setText("Manage presets");
     profile_overflow_btn_->setPopupMode(QToolButton::InstantPopup);
     profile_overflow_btn_->setToolButtonStyle(Qt::ToolButtonTextOnly);
 
     auto* profile_menu = new QMenu(profile_overflow_btn_);
-    new_from_current_action_ = profile_menu->addAction("New from current");
-    new_from_safe_default_action_ = profile_menu->addAction("New from default");
+    new_from_current_action_ = profile_menu->addAction("Save current as preset...");
+    new_from_safe_default_action_ = profile_menu->addAction("New preset from default...");
     profile_menu->addSeparator();
-    duplicate_profile_action_ = profile_menu->addAction("Duplicate");
-    rename_profile_action_ = profile_menu->addAction("Rename");
-    delete_profile_action_ = profile_menu->addAction("Delete");
+    duplicate_profile_action_ = profile_menu->addAction("Duplicate preset");
+    rename_profile_action_ = profile_menu->addAction("Rename preset");
+    delete_profile_action_ = profile_menu->addAction("Delete preset");
     profile_menu->addSeparator();
-    import_profiles_action_ = profile_menu->addAction("Import…");
-    export_selected_action_ = profile_menu->addAction("Export selected…");
-    export_all_users_action_ = profile_menu->addAction("Export all users…");
+    import_profiles_action_ = profile_menu->addAction("Import presets...");
+    export_selected_action_ = profile_menu->addAction("Export selected preset...");
+    export_all_users_action_ = profile_menu->addAction("Export user presets...");
     profile_menu->addSeparator();
-    reset_all_action_ = profile_menu->addAction("Reset all settings + profiles");
+    reset_all_action_ = profile_menu->addAction("Reset all settings + presets");
     profile_overflow_btn_->setMenu(profile_menu);
 
     profile_header_row->addWidget(profile_combo_);
@@ -111,7 +111,7 @@ OutputPage::OutputPage(const OutputSettingsModel& /*initial_settings*/, QWidget*
     profile_header_row->addWidget(profile_overflow_btn_);
     profile_layout->addLayout(profile_header_row);
 
-    auto* profile_note = makeSubLabel("Profile actions adapt to the selected profile type.", profile_panel);
+    auto* profile_note = makeSubLabel("Preset actions adapt to the selected preset state.", profile_panel);
     profile_note->setProperty("labelRole", "muted");
     profile_layout->addWidget(profile_note);
     layout->addWidget(profile_panel);
@@ -144,7 +144,7 @@ OutputPage::OutputPage(const OutputSettingsModel& /*initial_settings*/, QWidget*
 }
 
 void OutputPage::setOutputSettings(const OutputSettingsModel& /*settings*/) {
-    // Output config is owned by Setup (ConfigPage); this page manages profile presets only.
+    // Output config is owned by Setup (ConfigPage); this page manages recording presets only.
 }
 
 void OutputPage::setProfileOptions(const std::vector<ProfileOption>& options, const QString& active_profile_id,
@@ -187,11 +187,11 @@ void OutputPage::onProfileSelectionChanged(int index) {
     if (!selected.available) {
         status = QStringLiteral("Unavailable");
     } else if (selected.built_in && selected.modified) {
-        status = QStringLiteral("Built-in · Modified");
+        status = QStringLiteral("Modified from preset");
     } else if (selected.built_in) {
-        status = QStringLiteral("Built-in");
+        status = QStringLiteral("Built-in preset");
     } else {
-        status = QStringLiteral("User");
+        status = QStringLiteral("User preset");
     }
     profile_status_label_->setText(status);
     profile_status_label_->setToolTip(selected.availability_reason.trimmed());
@@ -235,8 +235,8 @@ void OutputPage::updateProfileActionState() {
 }
 
 void OutputPage::onImportProfiles() {
-    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Import Profiles"), QString(),
-                                                      QStringLiteral("ExoSnap Profiles (*.json);;All Files (*.*)"));
+    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Import Presets"), QString(),
+                                                      QStringLiteral("ExoSnap Presets (*.json);;All Files (*.*)"));
     if (path.isEmpty()) {
         return;
     }
@@ -244,8 +244,8 @@ void OutputPage::onImportProfiles() {
 }
 
 void OutputPage::onExportSelectedProfile() {
-    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export Selected Profile"), QString(),
-                                                      QStringLiteral("ExoSnap Profiles (*.json);;All Files (*.*)"));
+    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export Selected Preset"), QString(),
+                                                      QStringLiteral("ExoSnap Presets (*.json);;All Files (*.*)"));
     if (path.isEmpty()) {
         return;
     }
@@ -253,8 +253,8 @@ void OutputPage::onExportSelectedProfile() {
 }
 
 void OutputPage::onExportAllUserProfiles() {
-    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export All User Profiles"), QString(),
-                                                      QStringLiteral("ExoSnap Profiles (*.json);;All Files (*.*)"));
+    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export All User Presets"), QString(),
+                                                      QStringLiteral("ExoSnap Presets (*.json);;All Files (*.*)"));
     if (path.isEmpty()) {
         return;
     }
@@ -268,9 +268,9 @@ void OutputPage::onDeleteActiveProfile() {
 
     const QString profile_name = profile_combo_ ? profile_combo_->currentText().trimmed() : QString();
     const QString prompt = profile_name.isEmpty()
-                               ? QStringLiteral("Delete the selected user profile? This cannot be undone.")
-                               : QStringLiteral("Delete profile \"%1\"? This cannot be undone.").arg(profile_name);
-    const int choice = QMessageBox::warning(this, QStringLiteral("Delete Profile"), prompt,
+                               ? QStringLiteral("Delete the selected user preset? This cannot be undone.")
+                               : QStringLiteral("Delete preset \"%1\"? This cannot be undone.").arg(profile_name);
+    const int choice = QMessageBox::warning(this, QStringLiteral("Delete Preset"), prompt,
                                             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (choice != QMessageBox::Yes) {
         return;
@@ -279,8 +279,8 @@ void OutputPage::onDeleteActiveProfile() {
 }
 
 void OutputPage::onResetAllSettingsAndProfiles() {
-    const int choice = QMessageBox::warning(this, QStringLiteral("Reset All Settings + Profiles"),
-                                            QStringLiteral("Reset all settings and user profiles to defaults?"),
+    const int choice = QMessageBox::warning(this, QStringLiteral("Reset All Settings + Presets"),
+                                            QStringLiteral("Reset all settings and user presets to defaults?"),
                                             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (choice != QMessageBox::Yes) {
         return;
@@ -290,8 +290,9 @@ void OutputPage::onResetAllSettingsAndProfiles() {
 
 void OutputPage::promptCreateProfileFromCurrent() {
     bool ok = false;
-    const QString name = QInputDialog::getText(this, QStringLiteral("New Profile"), QStringLiteral("Profile name:"),
-                                               QLineEdit::Normal, QStringLiteral("New Profile"), &ok);
+    const QString name =
+        QInputDialog::getText(this, QStringLiteral("Save Current as Preset"), QStringLiteral("Preset name:"),
+                              QLineEdit::Normal, QStringLiteral("New Preset"), &ok);
     if (!ok) {
         return;
     }
@@ -301,8 +302,8 @@ void OutputPage::promptCreateProfileFromCurrent() {
 void OutputPage::promptCreateProfileFromSafeDefault() {
     bool ok = false;
     const QString name =
-        QInputDialog::getText(this, QStringLiteral("New Default-Based Profile"), QStringLiteral("Profile name:"),
-                              QLineEdit::Normal, QStringLiteral("New Profile"), &ok);
+        QInputDialog::getText(this, QStringLiteral("New Preset from Default"), QStringLiteral("Preset name:"),
+                              QLineEdit::Normal, QStringLiteral("New Preset"), &ok);
     if (!ok) {
         return;
     }
@@ -312,7 +313,7 @@ void OutputPage::promptCreateProfileFromSafeDefault() {
 void OutputPage::promptRenameActiveProfile() {
     bool ok = false;
     const QString current_label = profile_combo_->currentText();
-    const QString name = QInputDialog::getText(this, QStringLiteral("Rename Profile"), QStringLiteral("Profile name:"),
+    const QString name = QInputDialog::getText(this, QStringLiteral("Rename Preset"), QStringLiteral("Preset name:"),
                                                QLineEdit::Normal, current_label, &ok);
     if (!ok) {
         return;
@@ -323,8 +324,8 @@ void OutputPage::promptRenameActiveProfile() {
 void OutputPage::promptSaveModifiedBuiltInAsNew() {
     bool ok = false;
     const QString name =
-        QInputDialog::getText(this, QStringLiteral("Save Modified Built-in"), QStringLiteral("New profile name:"),
-                              QLineEdit::Normal, QStringLiteral("Custom Profile"), &ok);
+        QInputDialog::getText(this, QStringLiteral("Save Modified Preset"), QStringLiteral("New preset name:"),
+                              QLineEdit::Normal, QStringLiteral("Custom Preset"), &ok);
     if (!ok) {
         return;
     }

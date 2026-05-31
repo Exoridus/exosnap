@@ -34,6 +34,15 @@ void FindRequiredButton(ui::chrome::GlobalRecordingBar& bar, const char* object_
     ASSERT_NE(button, nullptr);
 }
 
+bool HasLabelText(ui::chrome::GlobalRecordingBar& bar, const QString& text) {
+    const auto labels = bar.findChildren<QLabel*>();
+    for (const auto* label : labels) {
+        if (label->text() == text)
+            return true;
+    }
+    return false;
+}
+
 QString RuntimePlaceholder() {
     return QStringLiteral("DUR --:--:-- ") + QChar(0x00B7) + QStringLiteral(" SIZE -");
 }
@@ -106,6 +115,13 @@ TEST_F(GlobalRecordingBarTest, ContextSummarySetters_RefreshValuesAfterProfileOr
     EXPECT_EQ(profile->text(), QStringLiteral("-"));
     EXPECT_EQ(target->text(), QStringLiteral("-"));
     EXPECT_EQ(output->text(), QStringLiteral("-"));
+}
+
+TEST_F(GlobalRecordingBarTest, PresetSummaryKey_IsUsedInChromeContext) {
+    ui::chrome::GlobalRecordingBar bar;
+
+    EXPECT_TRUE(HasLabelText(bar, QStringLiteral("PRESET")));
+    EXPECT_FALSE(HasLabelText(bar, QStringLiteral("PROFILE")));
 }
 
 TEST_F(GlobalRecordingBarTest, StatusLabelMapping_ControlsPrimaryPauseAndDetailsTooltips) {

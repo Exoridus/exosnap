@@ -12,7 +12,7 @@
 namespace exosnap::ui::chrome {
 namespace {
 
-constexpr int kProfileSummaryMaxChars = 32;
+constexpr int kPresetSummaryMaxChars = 32;
 constexpr int kTargetSummaryMaxChars = 40;
 constexpr int kOutputSummaryMaxChars = 32;
 constexpr int kRuntimeSummaryMaxChars = 36;
@@ -61,8 +61,8 @@ QWidget* makeSummarySlot(const QString& key, QLabel** out_value_label, QWidget* 
     value_label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     value_label->setMinimumWidth(0);
     QString summary_label = key;
-    if (key == QStringLiteral("PROFILE"))
-        summary_label = QStringLiteral("Profile");
+    if (key == QStringLiteral("PRESET"))
+        summary_label = QStringLiteral("Preset");
     else if (key == QStringLiteral("TARGET"))
         summary_label = QStringLiteral("Target");
     else if (key == QStringLiteral("OUTPUT"))
@@ -70,7 +70,7 @@ QWidget* makeSummarySlot(const QString& key, QLabel** out_value_label, QWidget* 
     else if (key == QStringLiteral("RUNTIME"))
         summary_label = QStringLiteral("Runtime");
 
-    if (key == QStringLiteral("PROFILE"))
+    if (key == QStringLiteral("PRESET"))
         value_label->setObjectName(QStringLiteral("globalBarProfileSummaryValue"));
     else if (key == QStringLiteral("TARGET"))
         value_label->setObjectName(QStringLiteral("globalBarTargetSummaryValue"));
@@ -163,7 +163,7 @@ GlobalRecordingBar::GlobalRecordingBar(QWidget* parent) : QWidget(parent) {
     context_layout->setContentsMargins(0, 0, 0, 0);
     context_layout->setSpacing(10);
 
-    auto* profile_summary_slot = makeSummarySlot(QStringLiteral("PROFILE"), &profile_summary_value_, context_slot);
+    auto* profile_summary_slot = makeSummarySlot(QStringLiteral("PRESET"), &profile_summary_value_, context_slot);
     auto* target_summary_slot = makeSummarySlot(QStringLiteral("TARGET"), &target_summary_value_, context_slot);
     output_summary_slot_ = makeSummarySlot(QStringLiteral("OUTPUT"), &output_summary_value_, context_slot);
     runtime_summary_slot_ = makeSummarySlot(QStringLiteral("RUNTIME"), &runtime_summary_value_, context_slot);
@@ -215,7 +215,7 @@ const QString& GlobalRecordingBar::statusLabel() const {
 
 void GlobalRecordingBar::setProfileSummary(const QString& summary_text) {
     profile_summary_text_ = normalizeSummaryText(summary_text);
-    setSummaryLabel(profile_summary_value_, profile_summary_text_, kProfileSummaryMaxChars);
+    setSummaryLabel(profile_summary_value_, profile_summary_text_, kPresetSummaryMaxChars);
 }
 
 void GlobalRecordingBar::setTargetSummary(const QString& summary_text) {
@@ -345,7 +345,7 @@ void GlobalRecordingBar::applyCompactLayout() {
 }
 
 void GlobalRecordingBar::refreshSummaryLabels() {
-    setSummaryLabel(profile_summary_value_, profile_summary_text_, kProfileSummaryMaxChars);
+    setSummaryLabel(profile_summary_value_, profile_summary_text_, kPresetSummaryMaxChars);
     setSummaryLabel(target_summary_value_, target_summary_text_, kTargetSummaryMaxChars);
     setSummaryLabel(output_summary_value_, output_summary_text_, kOutputSummaryMaxChars);
     setSummaryLabel(runtime_summary_value_, runtime_summary_text_, kRuntimeSummaryMaxChars);

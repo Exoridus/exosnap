@@ -36,6 +36,15 @@ class ConfigPageTest : public ::testing::Test {
         EnsureApplication();
     }
 
+    static bool HasLabelText(const ConfigPage& page, const QString& text) {
+        const auto labels = page.findChildren<QLabel*>();
+        for (const auto* label : labels) {
+            if (label->text() == text)
+                return true;
+        }
+        return false;
+    }
+
     OutputSettingsModel output_defaults_;
     VideoSettingsModel video_defaults_;
 };
@@ -103,18 +112,44 @@ TEST_F(ConfigPageTest, ReadinessDefaults_HidesDiagnosticsAction) {
     FAIL() << "Open Diagnostics... button not found";
 }
 
-TEST_F(ConfigPageTest, ProfileActionsButtonExists) {
+TEST_F(ConfigPageTest, PresetManagementButtonExists) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     const auto buttons = page.findChildren<QToolButton*>();
     bool found = false;
     for (const auto* b : buttons) {
-        if (b->text() == QStringLiteral("Actions")) {
+        if (b->text() == QStringLiteral("Manage presets")) {
             found = true;
             break;
         }
     }
-    EXPECT_TRUE(found) << "Profile Actions overflow button not found";
+    EXPECT_TRUE(found) << "Preset management overflow button not found";
+}
+
+TEST_F(ConfigPageTest, PresetAndFormatSectionTitle_IsVisible) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Preset & Format")));
+    EXPECT_FALSE(HasLabelText(page, QStringLiteral("Profile & Format")));
+}
+
+TEST_F(ConfigPageTest, BuiltInAndModifiedStates_UsePresetCopy) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    ConfigPage::ProfileOption builtin;
+    builtin.id = QStringLiteral("builtin");
+    builtin.label = QStringLiteral("High Quality AV1");
+    builtin.built_in = true;
+    builtin.modified = false;
+
+    std::vector<ConfigPage::ProfileOption> options{builtin};
+    page.setProfileOptions(options, builtin.id, false);
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Built-in preset")));
+
+    options[0].modified = true;
+    page.setProfileOptions(options, builtin.id, true);
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Modified from preset")));
+    EXPECT_FALSE(HasLabelText(page, QStringLiteral("Modified from built-in")));
 }
 
 TEST_F(ConfigPageTest, WebcamDetailsButtonExists) {

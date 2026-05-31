@@ -187,7 +187,7 @@ constexpr std::array<PageDescriptor, 7> kPageDescriptors = {{
     {"Record", "01 · RECORD", "Operational view — target, readiness, and live runtime.", "",
      "DISPLAY1 · 2560×1440 · 60 fps · AV1", SidebarIcon::Record},
     {"Settings", "02 · SETTINGS", "Unified recording configuration — format, sources, and output.", "",
-     "Profile · Sources · Output", SidebarIcon::Setup},
+     "Preset · Sources · Output", SidebarIcon::Setup},
     {"Hotkeys", "03 · HOTKEYS", "Global command access for recording operations.", "GLOBAL SHORTCUTS",
      "Trigger and visibility rules", SidebarIcon::Hotkeys},
     {"Diagnostics", "04 · DIAGNOSTICS", "Capability checks, blockers, and system readiness.", "BLOCKER-FIRST",
@@ -948,7 +948,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(config_page_, &ConfigPage::importProfilesRequested, this, [this](const QString& file_path) {
         const ProfileImportResult imported = ImportProfilesFromJsonFile(file_path);
         if (!imported.ok) {
-            QMessageBox::warning(this, QStringLiteral("Import Profiles"),
+            QMessageBox::warning(this, QStringLiteral("Import Presets"),
                                  imported.error_message.isEmpty() ? QStringLiteral("Import failed.")
                                                                   : imported.error_message);
             return;
@@ -956,44 +956,44 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
         const int count = profile_registry_.ImportUserProfiles(imported.profiles);
         if (count <= 0) {
-            QMessageBox::warning(this, QStringLiteral("Import Profiles"),
-                                 QStringLiteral("No profiles were imported from the selected file."));
+            QMessageBox::warning(this, QStringLiteral("Import Presets"),
+                                 QStringLiteral("No presets were imported from the selected file."));
             return;
         }
 
         refreshOutputProfileUi();
         persistProfileState();
-        QMessageBox::information(this, QStringLiteral("Import Profiles"),
-                                 QStringLiteral("Imported %1 profile(s).").arg(count));
+        QMessageBox::information(this, QStringLiteral("Import Presets"),
+                                 QStringLiteral("Imported %1 preset(s).").arg(count));
     });
     connect(config_page_, &ConfigPage::exportSelectedProfileRequested, this, [this](const QString& file_path) {
         QString error_message;
         const RecordingProfile active_profile = profile_registry_.ActiveProfile();
         if (!ExportProfilesToJsonFile(file_path, {active_profile}, &error_message)) {
-            QMessageBox::warning(this, QStringLiteral("Export Profiles"),
+            QMessageBox::warning(this, QStringLiteral("Export Presets"),
                                  error_message.isEmpty() ? QStringLiteral("Export failed.") : error_message);
             return;
         }
 
-        QMessageBox::information(this, QStringLiteral("Export Profiles"), QStringLiteral("Selected profile exported."));
+        QMessageBox::information(this, QStringLiteral("Export Presets"), QStringLiteral("Selected preset exported."));
     });
     connect(config_page_, &ConfigPage::exportAllUserProfilesRequested, this, [this](const QString& file_path) {
         const auto& users = profile_registry_.UserProfiles();
         if (users.empty()) {
-            QMessageBox::warning(this, QStringLiteral("Export Profiles"),
-                                 QStringLiteral("No user profiles available to export."));
+            QMessageBox::warning(this, QStringLiteral("Export Presets"),
+                                 QStringLiteral("No user presets available to export."));
             return;
         }
 
         QString error_message;
         if (!ExportProfilesToJsonFile(file_path, users, &error_message)) {
-            QMessageBox::warning(this, QStringLiteral("Export Profiles"),
+            QMessageBox::warning(this, QStringLiteral("Export Presets"),
                                  error_message.isEmpty() ? QStringLiteral("Export failed.") : error_message);
             return;
         }
 
-        QMessageBox::information(this, QStringLiteral("Export Profiles"),
-                                 QStringLiteral("Exported %1 user profile(s).").arg(users.size()));
+        QMessageBox::information(this, QStringLiteral("Export Presets"),
+                                 QStringLiteral("Exported %1 user preset(s).").arg(users.size()));
     });
     connect(config_page_, &ConfigPage::resetAllSettingsAndProfilesRequested, this, [this]() {
         profile_registry_ = RecordingProfileRegistry();
@@ -1023,7 +1023,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         refreshOutputProfileUi();
         persistProfileState();
         QMessageBox::information(this, QStringLiteral("Reset Complete"),
-                                 QStringLiteral("Settings and profiles were reset to defaults."));
+                                 QStringLiteral("Settings and presets were reset to defaults."));
     });
     connect(config_page_, &ConfigPage::videoSettingsChanged, this, [this](const VideoSettingsModel& settings) {
         video_settings_ = settings;
@@ -1826,8 +1826,12 @@ void MainWindow::onHotkeyBindingChanged(int action_index, QKeySequence seq) {
 QString MainWindow::buildGlobalRecordingBarProfileSummary() const {
     const bool builtin_modified = profile_registry_.IsActiveBuiltInModified();
     const QString profile_name = QString::fromStdString(profile_registry_.ActiveProfile().name).trimmed();
-    if (!builtin_modified && !profile_name.isEmpty())
+    if (!builtin_modified && !profile_name.isEmpty()) {
         return profile_name;
+    }
+    if (builtin_modified) {
+        return QStringLiteral("Custom · %1").arg(buildOutputPageMeta());
+    }
     return buildOutputPageMeta();
 }
 
