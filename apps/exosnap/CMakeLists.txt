@@ -30,6 +30,8 @@ qt_add_executable(exosnap WIN32
     ui/chrome/OperationalTitleBar.cpp
     ui/chrome/GlobalRecordingBar.h
     ui/chrome/GlobalRecordingBar.cpp
+    ui/dialogs/SourcePickerDialog.h
+    ui/dialogs/SourcePickerDialog.cpp
     ui/widgets/SectionRuleHeader.h
     ui/widgets/SectionRuleHeader.cpp
     ui/widgets/StatusPill.h
@@ -256,6 +258,18 @@ exosnap_add_gtest(
 target_include_directories(config_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(config_page_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(config_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
+
+exosnap_add_gtest(
+    NAME source_picker_dialog_tests
+    TEST_PREFIX source.
+    SOURCES
+        tests/test_source_picker_dialog.cpp
+        ui/dialogs/SourcePickerDialog.cpp
+        ui/widgets/CaptureTargetCard.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(source_picker_dialog_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(source_picker_dialog_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME webcam_page_tests

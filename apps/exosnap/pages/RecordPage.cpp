@@ -2,6 +2,7 @@
 
 #include "../diagnostics/AppLog.h"
 #include "../settings/AppSettingsStore.h"
+#include "../ui/dialogs/SourcePickerDialog.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/widgets/AudioSourceRow.h"
 #include "../ui/widgets/CaptureTargetCard.h"
@@ -22,6 +23,7 @@
 #include <QComboBox>
 #include <QDebug>
 #include <QDesktopServices>
+#include <QDialog>
 #include <QEvent>
 #include <QFileInfo>
 #include <QFrame>
@@ -367,6 +369,41 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     capture_header_->setMeta("DISPLAY1 · 2560×1440 · 60 fps");
     layout->addWidget(capture_header_);
 
+    source_row_ = new QWidget(content);
+    source_row_->setObjectName("recordSourceRow");
+    auto* source_row_layout = new QHBoxLayout(source_row_);
+    source_row_layout->setContentsMargins(0, 0, 0, 0);
+    source_row_layout->setSpacing(10);
+
+    source_chip_panel_ = makePanel(source_row_);
+    source_chip_panel_->setObjectName("recordSourceChip");
+    source_chip_panel_->setProperty("sourceLocked", false);
+    auto* source_chip_layout = new QVBoxLayout(source_chip_panel_);
+    source_chip_layout->setContentsMargins(10, 8, 10, 8);
+    source_chip_layout->setSpacing(2);
+
+    source_kind_label_ = makeLabel("SCREEN", "recordSourceKind", source_chip_panel_);
+    source_name_label_ = makeLabel("No source selected", "recordSourceName", source_chip_panel_);
+    source_meta_label_ = makeLabel("Choose a source to preview and record.", "recordSourceMeta", source_chip_panel_);
+    source_meta_label_->setWordWrap(true);
+
+    source_chip_layout->addWidget(source_kind_label_);
+    source_chip_layout->addWidget(source_name_label_);
+    source_chip_layout->addWidget(source_meta_label_);
+
+    source_lock_label_ = makeLabel("Source locked while recording", "recordSourceLock", source_row_);
+    source_lock_label_->setVisible(false);
+
+    change_source_btn_ = new QPushButton("Change source", source_row_);
+    change_source_btn_->setObjectName("recordChangeSourceButton");
+    change_source_btn_->setProperty("role", "ghost");
+    change_source_btn_->setEnabled(false);
+
+    source_row_layout->addWidget(source_chip_panel_, 1);
+    source_row_layout->addWidget(source_lock_label_);
+    source_row_layout->addWidget(change_source_btn_, 0, Qt::AlignVCenter);
+    layout->addWidget(source_row_);
+
     auto* cards_row = new QWidget(content);
     auto* cards_layout = new QHBoxLayout(cards_row);
     cards_layout->setContentsMargins(0, 0, 0, 0);
@@ -386,6 +423,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     region_card_->setAccessibleName("Region target");
     QWidget::setTabOrder(monitor_card_, window_card_);
     QWidget::setTabOrder(window_card_, region_card_);
+    cards_row->setVisible(false);
     layout->addWidget(cards_row);
 
     target_picker_panel_ = makePanel(content);
@@ -415,6 +453,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     target_picker_note_label_->setWordWrap(true);
     target_picker_note_label_->setVisible(false);
     target_picker_layout->addWidget(target_picker_note_label_);
+    target_picker_panel_->setVisible(false);
     layout->addWidget(target_picker_panel_);
 
     // Region capture options panel (visible only in Region mode)
@@ -694,6 +733,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(monitor_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectMonitorTarget);
     connect(window_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectWindowTarget);
     connect(region_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectRegionTarget);
+    connect(change_source_btn_, &QPushButton::clicked, this, &RecordPage::onOpenSourcePicker);
     connect(region_pick_btn_, &QPushButton::clicked, this, [this]() {
         ensureRegionOverlay();
         region_overlay_->activateForSelection();
@@ -1261,6 +1301,7 @@ void RecordPage::onHotkeyPauseToggle() {
 }
 
 void RecordPage::onSelectMonitorTarget() {
+    view_model_.capture_mode = CaptureMode::Monitor;
     if (monitor_target_indices_.empty()) {
         view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
         view_model_.selected_target_index = -1;
@@ -1279,6 +1320,7 @@ void RecordPage::onSelectMonitorTarget() {
 }
 
 void RecordPage::onSelectWindowTarget() {
+    view_model_.capture_mode = CaptureMode::Window;
     if (window_target_indices_.empty()) {
         view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
         view_model_.selected_target_index = -1;
@@ -1311,6 +1353,94 @@ void RecordPage::onSelectRegionTarget() {
     diagnostics::AppLog(QStringLiteral("[target] region mode selected"));
     updateTargetCards();
     rebuildTargetPicker();
+    refresh();
+}
+
+void RecordPage::onOpenSourcePicker() {
+    ensureCoordinatorInit();
+    if (isSourceSelectionLocked()) {
+        return;
+    }
+
+    enumerateTargets(true);
+
+    ui::dialogs::SourcePickerDialog dialog(this);
+    std::vector<ui::dialogs::SourcePickerDialog::SourceOption> screen_options;
+    std::vector<ui::dialogs::SourcePickerDialog::SourceOption> window_options;
+
+    for (std::size_t i = 0; i < monitor_target_indices_.size(); ++i) {
+        const int target_index = monitor_target_indices_[i];
+        if (target_index < 0 || target_index >= static_cast<int>(view_model_.targets.size())) {
+            continue;
+        }
+        const auto& target = view_model_.targets[static_cast<std::size_t>(target_index)];
+        ui::dialogs::SourcePickerDialog::SourceOption option;
+        option.target_index = target_index;
+        option.title = displayLabelFromTarget(target);
+        option.detail = normalizedTargetLabel(target);
+        option.primary = (i == 0);
+        screen_options.push_back(option);
+    }
+
+    for (const int target_index : window_target_indices_) {
+        if (target_index < 0 || target_index >= static_cast<int>(view_model_.targets.size())) {
+            continue;
+        }
+        const auto& target = view_model_.targets[static_cast<std::size_t>(target_index)];
+        ui::dialogs::SourcePickerDialog::SourceOption option;
+        option.target_index = target_index;
+        option.title = windowLabelFromTarget(target);
+        option.detail = normalizedTargetLabel(target);
+        window_options.push_back(option);
+    }
+
+    QString region_summary;
+    const bool has_region = view_model_.has_region && view_model_.region.IsValid();
+    if (has_region) {
+        const auto& region = view_model_.region;
+        region_summary = QString("%1, %2  —  %3 × %4").arg(region.x).arg(region.y).arg(region.width).arg(region.height);
+    }
+
+    dialog.setScreenOptions(screen_options);
+    dialog.setWindowOptions(window_options);
+    dialog.setRegionState(region_summary, has_region, view_model_.select_on_record);
+
+    ui::dialogs::SourcePickerDialog::Section section = ui::dialogs::SourcePickerDialog::Section::Screens;
+    if (view_model_.capture_mode == CaptureMode::Region) {
+        section = ui::dialogs::SourcePickerDialog::Section::Region;
+    } else if (view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window) {
+        section = ui::dialogs::SourcePickerDialog::Section::Windows;
+    }
+    dialog.setCurrentSelection(section, view_model_.selected_target_index);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        refresh();
+        return;
+    }
+
+    const auto selection = dialog.selectionResult();
+    if (!selection.valid) {
+        refresh();
+        return;
+    }
+
+    if (selection.section == ui::dialogs::SourcePickerDialog::Section::Region) {
+        if (select_on_record_check_) {
+            select_on_record_check_->setChecked(selection.select_on_record);
+        }
+        view_model_.select_on_record = selection.select_on_record;
+        onSelectRegionTarget();
+        if (selection.pick_region_now) {
+            ensureRegionOverlay();
+            region_overlay_->activateForSelection();
+        }
+        return;
+    }
+
+    view_model_.capture_mode = selection.section == ui::dialogs::SourcePickerDialog::Section::Windows
+                                   ? CaptureMode::Window
+                                   : CaptureMode::Monitor;
+    syncTargetSelectionToCombo(selection.target_index);
     refresh();
 }
 
@@ -2058,6 +2188,7 @@ void RecordPage::refresh() {
 
     updateTargetCards();
     rebuildTargetPicker();
+    updateSourceChip();
     updateReadinessRows();
     updateAudioControls();
     updateAudioTrackPreview();
@@ -2207,9 +2338,9 @@ void RecordPage::updateTargetCards() {
     if (region_card_)
         region_card_->setSelected(!recording && region_mode);
 
-    // Show region options panel only in region mode and not while recording
+    // Region controls are surfaced in the source picker dialog in this slice.
     if (region_options_panel_)
-        region_options_panel_->setVisible(region_mode && !recording);
+        region_options_panel_->setVisible(false);
 
     // Subtitle for the monitor card: use the currently active monitor target
     const int active_monitor_idx = monitor_target_index_;
@@ -2285,6 +2416,77 @@ void RecordPage::updateReadinessRows() {
                                 rows[i].hard_blocked ? "blocked" : (rows[i].ok ? "ready" : "muted"));
         row_widgets.detail->setText(rows[i].detail);
     }
+}
+
+void RecordPage::updateSourceChip() {
+    if (!source_kind_label_ || !source_name_label_ || !source_meta_label_ || !change_source_btn_) {
+        return;
+    }
+
+    const bool has_selection = view_model_.selected_target_index >= 0 &&
+                               view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
+    const bool region_mode = view_model_.capture_mode == CaptureMode::Region;
+
+    QString source_kind = QStringLiteral("SCREEN");
+    QString source_name = QStringLiteral("No source selected");
+    QString source_meta = QStringLiteral("Choose a source to preview and record.");
+
+    if (region_mode) {
+        source_kind = QStringLiteral("REGION");
+        if (has_selection) {
+            const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+            source_name = displayLabelFromTarget(target);
+        } else {
+            source_name = QStringLiteral("Region");
+        }
+
+        if (view_model_.has_region && view_model_.region.IsValid()) {
+            const auto& region = view_model_.region;
+            source_meta =
+                QString("%1, %2  —  %3 × %4").arg(region.x).arg(region.y).arg(region.width).arg(region.height);
+        } else if (view_model_.select_on_record) {
+            source_meta = QStringLiteral("Area is selected when recording starts.");
+        } else {
+            source_meta = QStringLiteral("No region selected yet.");
+        }
+    } else if (has_selection) {
+        const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+        if (target.kind == recorder_core::CaptureTarget::Kind::Window) {
+            source_kind = QStringLiteral("WINDOW");
+            source_name = windowLabelFromTarget(target);
+        } else {
+            source_kind = QStringLiteral("SCREEN");
+            source_name = displayLabelFromTarget(target);
+        }
+        source_meta = normalizedTargetLabel(target);
+    } else if (view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window) {
+        source_kind = QStringLiteral("WINDOW");
+    }
+
+    const bool locked = isSourceSelectionLocked();
+    const bool has_any_source = !monitor_target_indices_.empty() || !window_target_indices_.empty();
+
+    source_kind_label_->setText(source_kind);
+    source_name_label_->setText(source_name);
+    source_meta_label_->setText(source_meta);
+    source_lock_label_->setVisible(locked);
+    source_lock_label_->setText(locked ? QStringLiteral("Source locked while recording") : QString{});
+    setStyledStringProperty(source_chip_panel_, "sourceLocked", locked ? "true" : "false");
+
+    change_source_btn_->setEnabled(!locked && has_any_source);
+    if (!has_any_source) {
+        change_source_btn_->setToolTip(QStringLiteral("No capture sources are currently available."));
+    } else if (locked) {
+        change_source_btn_->setToolTip(QStringLiteral("Source changes are disabled while recording."));
+    } else {
+        change_source_btn_->setToolTip(QStringLiteral("Choose a screen, window, or region source."));
+    }
+}
+
+bool RecordPage::isSourceSelectionLocked() const {
+    return view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::RegionSelecting ||
+           view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
+           view_model_.state == UiRecordingState::Stopping;
 }
 
 void RecordPage::updateHeroButton() {

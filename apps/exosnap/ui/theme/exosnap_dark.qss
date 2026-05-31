@@ -412,6 +412,48 @@ QLabel[labelRole="railStats"] {
     color: ${text2};
 }
 
+QWidget#recordSourceRow {
+    background: transparent;
+}
+
+QFrame#recordSourceChip {
+    background: ${bg2};
+    border: 1px solid ${line2};
+    border-radius: ${radius-md}px;
+}
+
+QFrame#recordSourceChip[sourceLocked="true"] {
+    border-color: ${line3};
+    border-style: dashed;
+}
+
+QLabel[labelRole="recordSourceKind"] {
+    font-family: ${font-mono};
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    color: ${text3};
+}
+
+QLabel[labelRole="recordSourceName"] {
+    font-size: 14px;
+    font-weight: 600;
+    color: ${text0};
+}
+
+QLabel[labelRole="recordSourceMeta"] {
+    font-family: ${font-mono};
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: ${text2};
+}
+
+QLabel[labelRole="recordSourceLock"] {
+    font-family: ${font-mono};
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: ${warn};
+}
+
 QLabel[labelRole="audioSettingsGroupTitle"] {
     font-family: ${font-mono};
     font-size: 11px;
@@ -970,6 +1012,26 @@ QLabel[labelRole="resultTechnical"] {
     font-family: ${font-mono};
     font-size: 10px;
     color: ${text3};
+}
+
+QDialog#sourcePickerDialog {
+    background: ${bg1};
+    border: 1px solid ${line2};
+}
+
+QPushButton[sourcePickerSection="true"] {
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-radius: ${radius-md}px;
+    min-height: 30px;
+    padding: 4px 12px;
+    color: ${text1};
+}
+
+QPushButton[sourcePickerSection="true"]:checked {
+    border-color: ${accent};
+    color: ${accent};
+    background: ${bg4};
 }
 
 /* Preview surface text roles */

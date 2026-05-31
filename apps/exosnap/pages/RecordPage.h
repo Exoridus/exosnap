@@ -35,6 +35,10 @@ class SectionRuleHeader;
 class VUMeterWidget;
 } // namespace ui::widgets
 
+namespace ui::dialogs {
+class SourcePickerDialog;
+}
+
 class RecordPage : public QWidget {
     Q_OBJECT
   public:
@@ -67,6 +71,7 @@ class RecordPage : public QWidget {
     void onSelectMonitorTarget();
     void onSelectWindowTarget();
     void onSelectRegionTarget();
+    void onOpenSourcePicker();
     void onTargetPickerChanged(int index);
     void onRefreshTargets();
     void onRegionSelected(QRect region_virtual_screen);
@@ -99,6 +104,7 @@ class RecordPage : public QWidget {
     void updateAudioControlsVisibility();
     void updateAudioTrackPreview();
     void updateHeroButton();
+    void updateSourceChip();
     void updateOpenFolderButtonState();
     void updateDestinationMeta();
     void syncTargetSelectionToCombo(int target_index);
@@ -128,6 +134,7 @@ class RecordPage : public QWidget {
     QString buildPreviewBottomLeftText(bool recording) const;
     QString buildPreviewBottomRightText(bool recording) const;
     QString buildTimerText(bool recording) const;
+    bool isSourceSelectionLocked() const;
 
     int monitor_target_index_ = -1;
     int window_target_index_ = -1;
@@ -150,6 +157,13 @@ class RecordPage : public QWidget {
     QLabel* control_state_label_ = nullptr;
     QLabel* timer_label_ = nullptr;
     ui::widgets::SectionRuleHeader* capture_header_ = nullptr;
+    QWidget* source_row_ = nullptr;
+    QFrame* source_chip_panel_ = nullptr;
+    QLabel* source_kind_label_ = nullptr;
+    QLabel* source_name_label_ = nullptr;
+    QLabel* source_meta_label_ = nullptr;
+    QLabel* source_lock_label_ = nullptr;
+    QPushButton* change_source_btn_ = nullptr;
     ui::widgets::CaptureTargetCard* monitor_card_ = nullptr;
     ui::widgets::CaptureTargetCard* window_card_ = nullptr;
     ui::widgets::CaptureTargetCard* region_card_ = nullptr;
