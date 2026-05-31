@@ -1,9 +1,9 @@
 #include "WebcamPage.h"
 
 #include "../ui/theme/ExoSnapMetrics.h"
+#include "../ui/widgets/CameraPreview.h"
 #include "../ui/widgets/ComboBoxWheelFilter.h"
 #include "../ui/widgets/ExoToggle.h"
-#include "../ui/widgets/PreviewSurface.h"
 #include "../ui/widgets/SectionRuleHeader.h"
 
 #include <QCheckBox>
@@ -12,9 +12,11 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSlider>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace exosnap {
@@ -55,6 +57,26 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
     layout->setContentsMargins(pad, pad, pad, pad);
     layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
 
+    // ---- Camera preview (setup only) ----
+    {
+        layout->addWidget(makeLabel("Camera preview", "videoKvKey", content));
+
+        camera_preview_ = new ui::widgets::CameraPreview(content);
+        layout->addWidget(camera_preview_);
+
+        auto* setup_note = makeLabel(QStringLiteral("Preview is for setup only. Enable “Include webcam in recording” "
+                                                    "to include it in recordings."),
+                                     "subtitle", content);
+        setup_note->setWordWrap(true);
+        layout->addWidget(setup_note);
+
+        auto* privacy_note = makeLabel(QStringLiteral("Preview activates the selected camera while this page is open."),
+                                       "muted", content);
+        privacy_note->setWordWrap(true);
+        layout->addWidget(privacy_note);
+    }
+    layout->addWidget(makeDivider(content));
+
     // ---- Enable toggle ----
     {
         auto* row = new QWidget(content);
@@ -94,22 +116,6 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
         resolution_combo_->setMinimumWidth(280);
         resolution_combo_->setMaximumWidth(420);
         layout->addWidget(resolution_combo_);
-    }
-    layout->addWidget(makeDivider(content));
-
-    // ---- MVP notice (live preview not available) ----
-    {
-        auto* mvp_note =
-            makeLabel(QStringLiteral("Live webcam preview is not available in this MVP build."), "subtitle", content);
-        mvp_note->setWordWrap(true);
-        layout->addWidget(mvp_note);
-
-        auto* rec_note =
-            makeLabel(QStringLiteral("The selected camera is included in recordings when webcam capture is enabled. "
-                                     "Recording target preview is shown on the Record page."),
-                      "muted", content);
-        rec_note->setWordWrap(true);
-        layout->addWidget(rec_note);
     }
 
     // ---- Overlay Placement (not in MVP — widgets created for data binding, not added to layout) ----
@@ -247,6 +253,27 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
         }
     });
 
+    // Live frames arrive on the main thread (WebcamService marshals via the
+    // event loop). Guard with a QPointer so a frame in flight after the page is
+    // destroyed is safely dropped.
+    preview_service_.SetFrameCallback([guard = QPointer<WebcamPage>(this)](QImage img) {
+        if (guard)
+            guard->onPreviewFrame(std::move(img));
+    });
+
+    // If no frame arrives shortly after starting, surface a non-technical hint.
+    preview_watchdog_ = new QTimer(this);
+    preview_watchdog_->setSingleShot(true);
+    preview_watchdog_->setInterval(3000);
+    connect(preview_watchdog_, &QTimer::timeout, this, [this]() {
+        if (preview_frame_seen_ || !camera_preview_)
+            return;
+        camera_preview_->clearFrame();
+        camera_preview_->setPlaceholderText(
+            QStringLiteral("Camera preview unavailable.\nClose other apps that may be using the camera, "
+                           "then click Rescan."));
+    });
+
     // Initial device list.
     refreshDevices();
 }
@@ -257,9 +284,9 @@ WebcamPage::~WebcamPage() {
 
 void WebcamPage::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
-    if (current_settings_.enabled && !preview_service_.IsRunning()) {
-        startPreview();
-    }
+    // Setup preview runs whenever the page is open and a camera is available —
+    // independent of the "Include webcam in recording" toggle.
+    startPreview();
 }
 
 void WebcamPage::hideEvent(QHideEvent* event) {
@@ -270,7 +297,6 @@ void WebcamPage::hideEvent(QHideEvent* event) {
 
 void WebcamPage::applySettings(const WebcamSettings& settings) {
     const WebcamSettings sanitized_settings = SanitizeWebcamSettings(settings);
-    startup_overlay_pending_ = sanitized_settings.enabled && !sanitized_settings.overlay_user_placed;
     suppress_signals_ = true;
     current_settings_ = sanitized_settings;
 
@@ -318,27 +344,18 @@ void WebcamPage::applySettings(const WebcamSettings& settings) {
                                              .arg(sanitized_settings.chroma_key.g)
                                              .arg(sanitized_settings.chroma_key.b));
 
-    if (preview_surface_) {
-        preview_surface_->setAspectRatioLocked(sanitized_settings.aspect_ratio_locked);
-        preview_surface_->setWebcamOverlayRect(
-            QRectF(sanitized_settings.overlay.x_norm, sanitized_settings.overlay.y_norm,
-                   sanitized_settings.overlay.w_norm, sanitized_settings.overlay.h_norm));
-    }
-
     suppress_signals_ = false;
 
-    if (sanitized_settings.enabled)
+    // Refresh the setup preview only while the page is actually shown; otherwise
+    // showEvent() will start it when the page becomes visible.
+    if (isVisible())
         startPreview();
-    else
-        stopPreview();
 }
 
 void WebcamPage::onEnableToggled(bool enabled) {
+    // This toggle only controls whether the webcam is included in recordings.
+    // The setup preview is independent and keeps running while the page is open.
     current_settings_.enabled = enabled;
-    if (enabled)
-        startPreview();
-    else
-        stopPreview();
     if (!suppress_signals_)
         emit settingsChanged(collectSettings());
 }
@@ -354,6 +371,8 @@ void WebcamPage::onResolutionChanged(int) {
 
 void WebcamPage::onRefreshDevices() {
     refreshDevices();
+    if (isVisible())
+        startPreview();
 }
 
 void WebcamPage::onChromaEnableToggled(bool enabled) {
@@ -377,27 +396,11 @@ void WebcamPage::onSoftnessChanged(int value) {
 }
 
 void WebcamPage::onPreviewFrame(QImage frame) {
-    if (!preview_surface_)
-        return;
-    preview_surface_->setWebcamFrame(std::move(frame));
-    if (startup_overlay_pending_) {
-        const QRectF startup_rect = preview_surface_->defaultWebcamOverlayRect();
-        preview_surface_->setWebcamOverlayRect(startup_rect);
-
-        suppress_signals_ = true;
-        pos_x_slider_->setValue(static_cast<int>(startup_rect.x() * 100.0));
-        pos_y_slider_->setValue(static_cast<int>(startup_rect.y() * 100.0));
-        size_w_slider_->setValue(static_cast<int>(startup_rect.width() * 100.0));
-        size_h_slider_->setValue(static_cast<int>(startup_rect.height() * 100.0));
-        suppress_signals_ = false;
-
-        current_settings_.overlay = SanitizeWebcamOverlayRect(
-            WebcamOverlayRect{static_cast<float>(startup_rect.x()), static_cast<float>(startup_rect.y()),
-                              static_cast<float>(startup_rect.width()), static_cast<float>(startup_rect.height())});
-        current_settings_.overlay_user_placed = false;
-        startup_overlay_pending_ = false;
-        emit settingsChanged(current_settings_);
-    }
+    preview_frame_seen_ = true;
+    if (preview_watchdog_)
+        preview_watchdog_->stop();
+    if (camera_preview_)
+        camera_preview_->setFrame(std::move(frame));
 }
 
 void WebcamPage::refreshDevices() {
@@ -436,18 +439,51 @@ void WebcamPage::applyCurrentSettings() {
         new_settings.height != current_settings_.height || new_settings.fps != current_settings_.fps;
     current_settings_ = new_settings;
     emit settingsChanged(current_settings_);
-    if (current_settings_.enabled && capture_changed)
+    // Restart the setup preview when the capture device/format changes while the
+    // page is visible — independent of the recording-inclusion toggle.
+    if (isVisible() && capture_changed)
         startPreview();
 }
 
 void WebcamPage::startPreview() {
     current_settings_ = SanitizeWebcamSettings(current_settings_);
-    // Live preview is not available in this MVP build. Stop any stale service only.
+    if (preview_watchdog_)
+        preview_watchdog_->stop();
+    preview_frame_seen_ = false;
+
+    const QString dev_id = device_combo_->currentData().toString();
+    const bool has_device = !dev_id.isEmpty() || !devices_.empty();
+    if (!has_device) {
+        preview_service_.Stop();
+        if (camera_preview_) {
+            camera_preview_->clearFrame();
+            camera_preview_->setPlaceholderText(QStringLiteral("No camera found. Connect a camera and click Rescan."));
+        }
+        return;
+    }
+
+    const auto combo_data = resolution_combo_->currentData().toList();
+    const int w = (combo_data.size() >= 2) ? combo_data[0].toInt() : current_settings_.width;
+    const int h = (combo_data.size() >= 2) ? combo_data[1].toInt() : current_settings_.height;
+
+    if (camera_preview_) {
+        camera_preview_->clearFrame();
+        camera_preview_->setPlaceholderText(QStringLiteral("Camera preview"));
+    }
+
     preview_service_.Stop();
+    preview_service_.Start(dev_id.toStdString(), w > 0 ? w : 1280, h > 0 ? h : 720, 30);
+    if (preview_watchdog_)
+        preview_watchdog_->start();
 }
 
 void WebcamPage::stopPreview() {
+    if (preview_watchdog_)
+        preview_watchdog_->stop();
     preview_service_.Stop();
+    preview_frame_seen_ = false;
+    if (camera_preview_)
+        camera_preview_->clearFrame();
 }
 
 WebcamSettings WebcamPage::collectSettings() const {

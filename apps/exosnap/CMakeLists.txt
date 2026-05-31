@@ -36,6 +36,8 @@ qt_add_executable(exosnap WIN32
     ui/widgets/StatusPill.cpp
     ui/widgets/PreviewSurface.h
     ui/widgets/PreviewSurface.cpp
+    ui/widgets/CameraPreview.h
+    ui/widgets/CameraPreview.cpp
     ui/widgets/CaptureTargetCard.h
     ui/widgets/CaptureTargetCard.cpp
     ui/widgets/CodecCard.h
@@ -254,6 +256,22 @@ exosnap_add_gtest(
 target_include_directories(config_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(config_page_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(config_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
+
+exosnap_add_gtest(
+    NAME webcam_page_tests
+    TEST_PREFIX webcam.
+    SOURCES
+        tests/test_webcam_page.cpp
+        pages/WebcamPage.cpp
+        ui/widgets/CameraPreview.cpp
+        ui/widgets/ExoToggle.cpp
+        ui/widgets/ComboBoxWheelFilter.cpp
+        services/WebcamService.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(webcam_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(webcam_page_tests PROPERTIES AUTOMOC ON)
+target_link_libraries(webcam_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
 
 exosnap_add_gtest(
     NAME advanced_page_tests
