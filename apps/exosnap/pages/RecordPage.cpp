@@ -50,10 +50,12 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include <dwmapi.h>
 #include <windows.h>
 
 namespace exosnap {
@@ -1508,6 +1510,9 @@ void RecordPage::onOpenSourcePicker() {
     const MinimumCaptureSize window_minimum = WindowMinimumForCodec(current_video_codec_);
     const QString minimum_detail = MinimumSizeText(window_minimum);
 
+    const HWND self_hwnd = reinterpret_cast<HWND>(window()->effectiveWinId());
+    const HWND dialog_hwnd = reinterpret_cast<HWND>(dialog.winId());
+
     for (std::size_t i = 0; i < monitor_target_indices_.size(); ++i) {
         const int target_index = monitor_target_indices_[i];
         if (target_index < 0 || target_index >= static_cast<int>(view_model_.targets.size())) {
@@ -1517,6 +1522,7 @@ void RecordPage::onOpenSourcePicker() {
         const ScreenPresentation screen_meta = QueryScreenPresentation(target.native_id);
         ui::dialogs::SourcePickerDialog::SourceOption option;
         option.target_index = target_index;
+        option.native_id = target.native_id;
         option.title = displayLabelFromTarget(target);
         option.detail = BuildScreenOptionDetail(screen_meta);
         option.primary = screen_meta.available ? screen_meta.primary : (i == 0);
@@ -1533,9 +1539,14 @@ void RecordPage::onOpenSourcePicker() {
             continue;
         }
         const auto& target = view_model_.targets[static_cast<std::size_t>(target_index)];
+        const auto hwnd = reinterpret_cast<HWND>(target.native_id);
+        if (hwnd == self_hwnd || hwnd == dialog_hwnd || GetAncestor(hwnd, GA_ROOT) == self_hwnd) {
+            continue;
+        }
         const WindowPresentation window_meta = QueryWindowPresentation(target.native_id);
         ui::dialogs::SourcePickerDialog::SourceOption option;
         option.target_index = target_index;
+        option.native_id = target.native_id;
         option.title = windowLabelFromTarget(target);
         option.detail = BuildWindowOptionDetail(window_meta);
         option.status_badge = QStringLiteral("Window");
@@ -1547,6 +1558,100 @@ void RecordPage::onOpenSourcePicker() {
             option.minimum_detail = minimum_detail;
         }
         window_options.push_back(option);
+    }
+
+    {
+        struct UnavailableWindow {
+            uintptr_t native_id = 0;
+            QString title;
+            QString detail;
+            QString status_badge;
+            QString help_text;
+        };
+
+        struct UnavailableEnumContext {
+            std::vector<UnavailableWindow>* windows = nullptr;
+            const std::unordered_set<uintptr_t>* captured_set = nullptr;
+        };
+
+        std::vector<UnavailableWindow> unavailable;
+        std::unordered_set<uintptr_t> captured_hwnds;
+        for (const auto& target : view_model_.targets) {
+            if (target.kind == recorder_core::CaptureTarget::Kind::Window) {
+                captured_hwnds.insert(target.native_id);
+            }
+        }
+
+        UnavailableEnumContext ctx;
+        ctx.windows = &unavailable;
+        ctx.captured_set = &captured_hwnds;
+
+        EnumWindows(
+            [](HWND hwnd, LPARAM lParam) -> BOOL {
+                auto* ctx = reinterpret_cast<UnavailableEnumContext*>(lParam);
+
+                if (!IsWindowVisible(hwnd))
+                    return TRUE;
+                if ((GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CHILD) != 0)
+                    return TRUE;
+                if (GetWindow(hwnd, GW_OWNER) != nullptr)
+                    return TRUE;
+
+                const uintptr_t native = reinterpret_cast<uintptr_t>(hwnd);
+                if (ctx->captured_set->count(native) > 0)
+                    return TRUE;
+
+                bool is_minimized = (IsIconic(hwnd) != FALSE);
+                DWORD cloaked = 0;
+                const bool is_cloaked =
+                    SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked != 0;
+
+                if (!is_minimized && !is_cloaked)
+                    return TRUE;
+
+                RECT client_rect{};
+                GetClientRect(hwnd, &client_rect);
+                const int client_w = client_rect.right - client_rect.left;
+                const int client_h = client_rect.bottom - client_rect.top;
+                if (client_w < 4 || client_h < 4)
+                    return TRUE;
+
+                wchar_t title[256] = {};
+                if (GetWindowTextW(hwnd, title, 256) == 0)
+                    return TRUE;
+
+                UnavailableWindow uw;
+                uw.native_id = native;
+                uw.title = QStringLiteral("[Window] ") + QString::fromWCharArray(title);
+                if (is_minimized) {
+                    uw.status_badge = QStringLiteral("Minimized");
+                    uw.help_text = QStringLiteral("Restore the window to capture it.");
+                } else {
+                    uw.status_badge = QStringLiteral("Unavailable");
+                    uw.help_text = QStringLiteral("This window cannot be captured right now.");
+                }
+                uw.detail =
+                    QStringLiteral("%1 \xC3\x97 %2").arg(client_w > 0 ? client_w : 0).arg(client_h > 0 ? client_h : 0);
+
+                ctx->windows->push_back(uw);
+                return TRUE;
+            },
+            reinterpret_cast<LPARAM>(&ctx));
+
+        int unavailable_index = -1;
+        for (const auto& uw : unavailable) {
+            ui::dialogs::SourcePickerDialog::SourceOption option;
+            option.target_index = unavailable_index;
+            --unavailable_index;
+            option.native_id = uw.native_id;
+            option.title = uw.title;
+            option.detail = uw.detail;
+            option.status_badge = uw.status_badge;
+            option.selectable = false;
+            option.unavailable = true;
+            option.help_text = uw.help_text;
+            window_options.push_back(option);
+        }
     }
 
     QString region_summary;

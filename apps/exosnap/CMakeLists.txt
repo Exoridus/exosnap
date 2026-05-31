@@ -75,6 +75,8 @@ qt_add_executable(exosnap WIN32
     services/PreviewService.h
     services/PreviewService.cpp
     services/PreviewHelpers.h
+    services/ThumbnailCapture.h
+    services/ThumbnailCapture.cpp
     services/DxgiPreviewRenderer.h
     services/DxgiPreviewRenderer.cpp
     services/WebcamService.h
@@ -266,9 +268,11 @@ exosnap_add_gtest(
         tests/test_source_picker_dialog.cpp
         ui/dialogs/SourcePickerDialog.cpp
         ui/widgets/CaptureTargetCard.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+        services/ThumbnailCapture.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
 )
 target_include_directories(source_picker_dialog_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(source_picker_dialog_tests PRIVATE NOMINMAX)
 set_target_properties(source_picker_dialog_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(

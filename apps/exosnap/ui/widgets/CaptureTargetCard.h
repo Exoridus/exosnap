@@ -27,6 +27,15 @@ class CaptureTargetCard : public QFrame {
     void setSelected(bool selected);
     bool isSelected() const noexcept;
 
+    void setThumbnail(const QPixmap& pixmap);
+    void setThumbnailPlaceholder();
+    bool hasThumbnail() const noexcept;
+
+    void setUnavailable(bool unavailable);
+    bool isUnavailable() const noexcept;
+
+    void setHelpText(const QString& text);
+
   signals:
     void clicked();
 
@@ -39,12 +48,16 @@ class CaptureTargetCard : public QFrame {
   private:
     void updateStatusLabel();
 
+    QLabel* thumbnail_label_ = nullptr;
     QLabel* title_label_ = nullptr;
     QLabel* status_label_ = nullptr;
     QLabel* subtitle_label_ = nullptr;
+    QLabel* help_label_ = nullptr;
     QString status_text_;
     bool selected_ = false;
     bool click_armed_ = false;
+    bool has_thumbnail_ = false;
+    bool unavailable_ = false;
 };
 
 } // namespace exosnap::ui::widgets

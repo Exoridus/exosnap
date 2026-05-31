@@ -507,10 +507,36 @@ QWidget#captureTargetCard[captureCardTone="warning"][selected="true"] {
 QWidget#captureTargetCard:disabled {
     background: ${bg2};
     border-color: ${line1};
+    opacity: 0.6;
+}
+
+QWidget#captureTargetCard[unavailable="true"] {
+    background: ${bg2};
+    border-color: ${line1};
+    opacity: 0.7;
 }
 
 QWidget#captureTargetCard:focus {
     border-color: ${accent};
+}
+
+QLabel[labelRole="captureCardThumbnail"] {
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+}
+
+QLabel[labelRole="captureCardThumbnailPlaceholder"] {
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    font-size: 32px;
+    color: ${text3};
+}
+
+QLabel[labelRole="captureCardHelp"] {
+    font-size: 11px;
+    color: ${warn};
 }
 
 QLabel[labelRole="captureCardTitle"] {

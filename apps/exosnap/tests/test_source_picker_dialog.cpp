@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QLabel>
+#include <QPixmap>
 #include <QPushButton>
 
 #include "ui/dialogs/SourcePickerDialog.h"
@@ -122,6 +123,90 @@ TEST_F(SourcePickerDialogTest, TinyWindowSelection_IsMarkedInvalidAndCannotBeApp
     ASSERT_FALSE(cards.empty());
     EXPECT_EQ(cards.front()->statusText(), QStringLiteral("Too small"));
     EXPECT_EQ(cards.front()->property("captureCardTone").toString(), QStringLiteral("warning"));
+}
+
+TEST_F(SourcePickerDialogTest, UnavailableWindow_IsMarkedInvalidAndCannotBeApplied) {
+    ui::dialogs::SourcePickerDialog dialog;
+
+    ui::dialogs::SourcePickerDialog::SourceOption window;
+    window.target_index = -5;
+    window.title = QStringLiteral("[Window] Minimized App");
+    window.detail = QStringLiteral("640 × 480");
+    window.status_badge = QStringLiteral("Minimized");
+    window.selectable = false;
+    window.unavailable = true;
+    window.help_text = QStringLiteral("Restore the window to capture it.");
+
+    dialog.setWindowOptions({window});
+
+    const auto selection = dialog.selectionResult();
+    EXPECT_FALSE(selection.valid);
+    EXPECT_FALSE(dialog.selectSource(ui::dialogs::SourcePickerDialog::Section::Windows, -5));
+
+    auto* use_button = dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerUseButton"));
+    ASSERT_NE(use_button, nullptr);
+    EXPECT_FALSE(use_button->isEnabled());
+
+    const auto cards = dialog.findChildren<ui::widgets::CaptureTargetCard*>();
+    ASSERT_FALSE(cards.empty());
+    EXPECT_EQ(cards.front()->statusText(), QStringLiteral("Minimized"));
+    EXPECT_TRUE(cards.front()->isUnavailable());
+}
+
+TEST_F(SourcePickerDialogTest, CaptureTargetCard_ThumbnailSupport) {
+    ui::widgets::CaptureTargetCard card;
+
+    EXPECT_FALSE(card.hasThumbnail());
+    card.setThumbnailPlaceholder();
+    EXPECT_FALSE(card.hasThumbnail());
+
+    QImage img(40, 30, QImage::Format_ARGB32);
+    img.fill(Qt::blue);
+    card.setThumbnail(QPixmap::fromImage(img));
+    EXPECT_TRUE(card.hasThumbnail());
+
+    card.setThumbnail(QPixmap{});
+    EXPECT_FALSE(card.hasThumbnail());
+}
+
+TEST_F(SourcePickerDialogTest, CaptureTargetCard_UnavailableState) {
+    ui::widgets::CaptureTargetCard card;
+
+    EXPECT_FALSE(card.isUnavailable());
+    EXPECT_TRUE(card.isEnabled());
+
+    card.setUnavailable(true);
+    EXPECT_TRUE(card.isUnavailable());
+    EXPECT_FALSE(card.isEnabled());
+
+    card.setUnavailable(false);
+    EXPECT_FALSE(card.isUnavailable());
+    EXPECT_TRUE(card.isEnabled());
+}
+
+TEST_F(SourcePickerDialogTest, CaptureTargetCard_HelpText) {
+    ui::widgets::CaptureTargetCard card;
+
+    card.setHelpText(QStringLiteral("Restore the window to capture it."));
+    card.setUnavailable(true);
+    EXPECT_TRUE(card.isUnavailable());
+
+    card.setHelpText({});
+    card.setUnavailable(false);
+    EXPECT_FALSE(card.isUnavailable());
+}
+
+TEST_F(SourcePickerDialogTest, CardsReceiveThumbnailPlaceholderByDefault) {
+    ui::dialogs::SourcePickerDialog dialog;
+
+    ui::dialogs::SourcePickerDialog::SourceOption screen;
+    screen.target_index = 0;
+    screen.title = QStringLiteral("Display 1");
+    dialog.setScreenOptions({screen});
+
+    const auto cards = dialog.findChildren<ui::widgets::CaptureTargetCard*>();
+    ASSERT_EQ(cards.size(), 1);
+    EXPECT_FALSE(cards.front()->hasThumbnail());
 }
 
 } // namespace

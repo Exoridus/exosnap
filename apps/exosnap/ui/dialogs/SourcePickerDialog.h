@@ -1,7 +1,9 @@
 #pragma once
 
 #include <QDialog>
+#include <QSize>
 
+#include <memory>
 #include <vector>
 
 class QCheckBox;
@@ -9,6 +11,10 @@ class QLabel;
 class QPushButton;
 class QStackedWidget;
 class QVBoxLayout;
+
+namespace exosnap {
+class ThumbnailCapture;
+}
 
 namespace exosnap::ui::widgets {
 class CaptureTargetCard;
@@ -27,13 +33,16 @@ class SourcePickerDialog : public QDialog {
 
     struct SourceOption {
         int target_index = -1;
+        uintptr_t native_id = 0;
         QString title;
         QString detail;
         bool primary = false;
         QString status_badge;
         bool selectable = true;
+        bool unavailable = false;
         QString validation_summary;
         QString minimum_detail;
+        QString help_text;
     };
 
     struct SelectionResult {
@@ -51,13 +60,14 @@ class SourcePickerDialog : public QDialog {
     void setRegionState(const QString& summary, bool has_region, bool select_on_record);
     void setCurrentSelection(Section section, int target_index);
 
-    // Public for RecordPage wiring and stable tests.
     bool selectSource(Section section, int target_index);
     SelectionResult selectionResult() const;
 
   private slots:
     void onUseSelected();
     void onPickRegionNow();
+    void onThumbnailReady(int target_index, QImage thumbnail);
+    void onThumbnailFailed(int target_index);
 
   private:
     struct OptionCard {
@@ -75,6 +85,10 @@ class SourcePickerDialog : public QDialog {
     bool hasValidSelection() const;
     bool hasTargetInSection(Section section, int target_index) const;
     bool findOption(Section section, int target_index, SourceOption* out) const;
+    OptionCard* findOptionCard(Section section, int target_index);
+    void requestThumbnailsForSection(Section section);
+
+    static constexpr QSize kThumbnailSize{320, 180};
 
     QPushButton* screens_button_ = nullptr;
     QPushButton* windows_button_ = nullptr;
@@ -97,6 +111,8 @@ class SourcePickerDialog : public QDialog {
     bool has_region_ = false;
     QString region_summary_;
     bool pick_region_now_ = false;
+
+    ThumbnailCapture* thumbnail_capture_ = nullptr;
 };
 
 } // namespace exosnap::ui::dialogs

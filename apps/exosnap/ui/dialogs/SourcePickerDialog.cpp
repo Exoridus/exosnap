@@ -1,5 +1,6 @@
 #include "SourcePickerDialog.h"
 
+#include "../../services/ThumbnailCapture.h"
 #include "../widgets/CaptureTargetCard.h"
 #include "../widgets/SectionRuleHeader.h"
 
@@ -7,7 +8,9 @@
 #include <QDialogButtonBox>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QImage>
 #include <QLabel>
+#include <QPixmap>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QStackedWidget>
@@ -48,7 +51,7 @@ QString ElideCardTitle(const QString& title) {
     if (compact.size() <= kMaxChars) {
         return compact;
     }
-    return compact.left(kMaxChars - 1) + QStringLiteral("…");
+    return compact.left(kMaxChars - 1) + QStringLiteral("\xE2\x80\xA6");
 }
 
 void RestyleCard(QWidget* card, const char* tone) {
@@ -65,6 +68,10 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     setWindowTitle(QStringLiteral("Choose capture source"));
     setModal(true);
     resize(920, 640);
+
+    thumbnail_capture_ = new ThumbnailCapture(this);
+    connect(thumbnail_capture_, &ThumbnailCapture::thumbnailReady, this, &SourcePickerDialog::onThumbnailReady);
+    connect(thumbnail_capture_, &ThumbnailCapture::thumbnailFailed, this, &SourcePickerDialog::onThumbnailFailed);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(14, 14, 14, 14);
@@ -206,11 +213,13 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
 void SourcePickerDialog::setScreenOptions(const std::vector<SourceOption>& options) {
     screen_options_ = options;
     rebuildOptionCards();
+    requestThumbnailsForSection(Section::Screens);
 }
 
 void SourcePickerDialog::setWindowOptions(const std::vector<SourceOption>& options) {
     window_options_ = options;
     rebuildOptionCards();
+    requestThumbnailsForSection(Section::Windows);
 }
 
 void SourcePickerDialog::setRegionState(const QString& summary, bool has_region, bool select_on_record) {
@@ -290,6 +299,29 @@ void SourcePickerDialog::onPickRegionNow() {
     accept();
 }
 
+void SourcePickerDialog::onThumbnailReady(int target_index, const QImage thumbnail) {
+    auto* card = findOptionCard(Section::Screens, target_index);
+    if (!card) {
+        card = findOptionCard(Section::Windows, target_index);
+    }
+    if (!card || !card->card) {
+        return;
+    }
+
+    QPixmap pixmap = QPixmap::fromImage(thumbnail);
+    card->card->setThumbnail(pixmap);
+}
+
+void SourcePickerDialog::onThumbnailFailed(int target_index) {
+    auto* card = findOptionCard(Section::Screens, target_index);
+    if (!card) {
+        card = findOptionCard(Section::Windows, target_index);
+    }
+    if (card && card->card) {
+        card->card->setThumbnailPlaceholder();
+    }
+}
+
 void SourcePickerDialog::rebuildOptionCards() {
     clearLayout(screens_layout_);
     clearLayout(windows_layout_);
@@ -322,10 +354,11 @@ void SourcePickerDialog::rebuildOptionCardsForSection(Section section) {
         auto* card = new ui::widgets::CaptureTargetCard(pages_);
         card->setTitle(ElideCardTitle(option.title));
         card->setToolTip(option.title);
+
         QString subtitle = option.detail;
         if (option.primary && section == Section::Screens) {
-            subtitle =
-                subtitle.isEmpty() ? QStringLiteral("Primary display") : (subtitle + QStringLiteral(" · Primary"));
+            subtitle = subtitle.isEmpty() ? QStringLiteral("Primary display")
+                                          : (subtitle + QStringLiteral(" \xC2\xB7 Primary"));
         }
         if (!option.minimum_detail.trimmed().isEmpty()) {
             subtitle =
@@ -336,10 +369,22 @@ void SourcePickerDialog::rebuildOptionCardsForSection(Section section) {
                 section == Section::Screens ? QStringLiteral("Display capture") : QStringLiteral("Window capture");
         }
         card->setSubtitle(subtitle);
+
         card->setStatusText(option.status_badge.isEmpty()
                                 ? (section == Section::Screens ? QStringLiteral("SCREEN") : QStringLiteral("WINDOW"))
                                 : option.status_badge);
-        RestyleCard(card, option.selectable ? "default" : "warning");
+
+        if (option.unavailable) {
+            RestyleCard(card, "warning");
+            card->setUnavailable(true);
+            card->setHelpText(option.help_text);
+        } else {
+            RestyleCard(card, option.selectable ? "default" : "warning");
+            if (!option.help_text.isEmpty()) {
+                card->setHelpText(option.help_text);
+            }
+        }
+
         card->setAccessibleName(
             (section == Section::Screens ? QStringLiteral("Screen source: ") : QStringLiteral("Window source: ")) +
             option.title);
@@ -413,11 +458,11 @@ void SourcePickerDialog::updateSummaryLabel() {
 
     if (selected_section_ == Section::Region) {
         const QString region_text = (has_region_ && !region_summary_.trimmed().isEmpty())
-                                        ? QStringLiteral("Region · %1").arg(region_summary_)
-                                        : QStringLiteral("Region · no saved region");
+                                        ? QStringLiteral("Region \xC2\xB7 %1").arg(region_summary_)
+                                        : QStringLiteral("Region \xC2\xB7 no saved region");
         const QString select_mode = region_select_on_record_check_ && region_select_on_record_check_->isChecked()
-                                        ? QStringLiteral(" · overlay opens when recording starts")
-                                        : QStringLiteral(" · use Pick region now... to set one");
+                                        ? QStringLiteral(" \xC2\xB7 overlay opens when recording starts")
+                                        : QStringLiteral(" \xC2\xB7 use Pick region now... to set one");
         summary_label_->setText(region_text + select_mode);
         return;
     }
@@ -436,13 +481,16 @@ void SourcePickerDialog::updateSummaryLabel() {
         if (!option.minimum_detail.trimmed().isEmpty()) {
             summary += QStringLiteral(" ") + option.minimum_detail;
         }
+        if (!option.help_text.isEmpty()) {
+            summary += QStringLiteral(" ") + option.help_text;
+        }
         summary_label_->setText(summary);
         return;
     }
 
     QString summary = option.title;
     if (!option.detail.trimmed().isEmpty()) {
-        summary += QStringLiteral(" · ") + option.detail;
+        summary += QStringLiteral(" \xC2\xB7 ") + option.detail;
     }
     summary_label_->setText(summary);
 }
@@ -476,6 +524,33 @@ bool SourcePickerDialog::findOption(Section section, int target_index, SourceOpt
         }
     }
     return false;
+}
+
+SourcePickerDialog::OptionCard* SourcePickerDialog::findOptionCard(Section section, int target_index) {
+    for (auto& oc : option_cards_) {
+        if (oc.section == section && oc.target_index == target_index) {
+            return &oc;
+        }
+    }
+    return nullptr;
+}
+
+void SourcePickerDialog::requestThumbnailsForSection(Section section) {
+    if (!thumbnail_capture_) {
+        return;
+    }
+
+    const auto& options = section == Section::Screens ? screen_options_ : window_options_;
+    for (const auto& option : options) {
+        if (option.native_id == 0) {
+            continue;
+        }
+        if (section == Section::Screens) {
+            thumbnail_capture_->requestMonitorThumbnail(option.target_index, option.native_id, kThumbnailSize);
+        } else if (option.selectable) {
+            thumbnail_capture_->requestWindowThumbnail(option.target_index, option.native_id, kThumbnailSize);
+        }
+    }
 }
 
 } // namespace exosnap::ui::dialogs
