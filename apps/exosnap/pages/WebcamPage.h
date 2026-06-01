@@ -8,13 +8,11 @@
 #include <QWidget>
 
 class QCheckBox;
-class QBoxLayout;
 class QComboBox;
 class QLabel;
 class QPushButton;
 class QSlider;
 class QTimer;
-class QResizeEvent;
 
 namespace exosnap {
 
@@ -46,7 +44,6 @@ class WebcamPage : public QWidget {
     void onPreviewFrame(QImage frame);
 
   private:
-    void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
 
@@ -67,7 +64,6 @@ class WebcamPage : public QWidget {
     QComboBox* device_combo_ = nullptr;
     QComboBox* resolution_combo_ = nullptr;
     QPushButton* refresh_btn_ = nullptr;
-    QBoxLayout* device_row_layout_ = nullptr;
 
     // Camera-only setup preview (no overlay / target compositing)
     ui::widgets::CameraPreview* camera_preview_ = nullptr;

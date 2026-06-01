@@ -25,12 +25,6 @@ void restyle(QWidget* widget) {
 constexpr int kThumbnailWidth = 304;
 constexpr int kThumbnailHeight = 171;
 
-bool IsRedundantStatusBadge(const QString& badge) {
-    const QString normalized = badge.trimmed().toLower();
-    return normalized == QStringLiteral("window") || normalized == QStringLiteral("screen") ||
-           normalized == QStringLiteral("selected") || normalized == QStringLiteral("current");
-}
-
 } // namespace
 
 CaptureTargetCard::CaptureTargetCard(QWidget* parent) : QFrame(parent) {
@@ -89,6 +83,13 @@ CaptureTargetCard::CaptureTargetCard(QWidget* parent) : QFrame(parent) {
     title_label_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     title_label_->installEventFilter(this);
 
+    selected_chip_label_ = new QLabel(this);
+    selected_chip_label_->setProperty("labelRole", "captureCardSelectedChip");
+    selected_chip_label_->setText(QStringLiteral("Selected"));
+    selected_chip_label_->setVisible(false);
+    selected_chip_label_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    selected_chip_label_->installEventFilter(this);
+
     status_label_ = new QLabel(this);
     status_label_->setProperty("labelRole", "captureCardStatus");
     status_label_->setText(QStringLiteral("Screen"));
@@ -98,6 +99,7 @@ CaptureTargetCard::CaptureTargetCard(QWidget* parent) : QFrame(parent) {
 
     top_row->addWidget(title_label_);
     top_row->addStretch(1);
+    top_row->addWidget(selected_chip_label_);
     top_row->addWidget(status_label_);
 
     subtitle_label_ = new QLabel(this);
@@ -158,6 +160,9 @@ void CaptureTargetCard::setSelected(bool selected) {
 
     selected_ = selected;
     setProperty("selected", selected_);
+    if (selected_chip_label_) {
+        selected_chip_label_->setVisible(selected_);
+    }
     updateStatusLabel();
     restyle(this);
 }
@@ -326,7 +331,7 @@ void CaptureTargetCard::updateStatusLabel() {
         return;
     }
     const QString badge = status_text_.trimmed();
-    const bool has_badge = !badge.isEmpty() && !IsRedundantStatusBadge(badge);
+    const bool has_badge = !badge.isEmpty();
     status_label_->setVisible(has_badge);
     if (has_badge) {
         status_label_->setText(badge);
@@ -335,7 +340,8 @@ void CaptureTargetCard::updateStatusLabel() {
 
 bool CaptureTargetCard::eventFilter(QObject* watched, QEvent* event) {
     const bool is_child = watched == title_label_ || watched == status_label_ || watched == subtitle_label_ ||
-                          watched == thumbnail_label_ || watched == help_label_ || watched == thumbnail_state_label_;
+                          watched == thumbnail_label_ || watched == help_label_ || watched == thumbnail_state_label_ ||
+                          watched == selected_chip_label_;
     if (is_child) {
         if (event->type() == QEvent::MouseButtonPress) {
             const auto* mouse = static_cast<QMouseEvent*>(event);

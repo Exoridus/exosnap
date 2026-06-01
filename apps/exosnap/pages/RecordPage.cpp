@@ -627,7 +627,7 @@ void RecordPage::updatePreviewHeightClamp() {
     if (!preview_surface_) {
         return;
     }
-    const int clamped_max = std::clamp(static_cast<int>(height() * 0.70), 360, 860);
+    const int clamped_max = std::clamp(static_cast<int>(height() * 0.62), 340, 680);
     preview_surface_->setMinimumHeight(280);
     preview_surface_->setMaximumHeight(clamped_max);
 }
@@ -666,14 +666,6 @@ void RecordPage::updateResponsiveLayout() {
     } else {
         cockpit_split_layout_->setStretch(0, 7);
         cockpit_split_layout_->setStretch(1, 3);
-    }
-
-    if (source_row_layout_) {
-        const bool source_narrow = width() < 1180;
-        const QBoxLayout::Direction source_dir = source_narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight;
-        if (source_row_layout_->direction() != source_dir) {
-            source_row_layout_->setDirection(source_dir);
-        }
     }
 }
 
@@ -809,9 +801,9 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 
     source_row_ = new QWidget(content);
     source_row_->setObjectName("recordSourceRow");
-    source_row_layout_ = new QBoxLayout(QBoxLayout::LeftToRight, source_row_);
-    source_row_layout_->setContentsMargins(0, 0, 0, 0);
-    source_row_layout_->setSpacing(10);
+    auto* source_row_layout = new QHBoxLayout(source_row_);
+    source_row_layout->setContentsMargins(0, 0, 0, 0);
+    source_row_layout->setSpacing(10);
 
     source_chip_panel_ = makePanel(source_row_);
     source_chip_panel_->setObjectName("recordSourceChip");
@@ -822,9 +814,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 
     source_kind_label_ = makeLabel("SCREEN", "recordSourceKind", source_chip_panel_);
     source_name_label_ = makeLabel("No source selected", "recordSourceName", source_chip_panel_);
-    source_name_label_->setWordWrap(true);
-    source_name_label_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    source_name_label_->setMaximumHeight(source_name_label_->fontMetrics().lineSpacing() * 2);
+    source_name_label_->setWordWrap(false);
     source_meta_label_ = makeLabel("Choose a source to preview and record.", "recordSourceMeta", source_chip_panel_);
     source_meta_label_->setWordWrap(false);
 
@@ -842,13 +832,13 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 
     source_preset_label_ = makeLabel("PRESET · AV1 · OPUS · MKV", "recordPresetSummary", source_row_);
     source_preset_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    source_preset_label_->setWordWrap(true);
-    source_preset_label_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    source_preset_label_->setWordWrap(false);
+    source_preset_label_->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
 
-    source_row_layout_->addWidget(source_chip_panel_, 1);
-    source_row_layout_->addWidget(source_lock_label_);
-    source_row_layout_->addWidget(change_source_btn_, 0, Qt::AlignVCenter);
-    source_row_layout_->addWidget(source_preset_label_, 0, Qt::AlignRight | Qt::AlignVCenter);
+    source_row_layout->addWidget(source_chip_panel_, 1);
+    source_row_layout->addWidget(source_lock_label_);
+    source_row_layout->addWidget(change_source_btn_, 0, Qt::AlignVCenter);
+    source_row_layout->addWidget(source_preset_label_, 0, Qt::AlignRight | Qt::AlignVCenter);
     layout->insertWidget(1, source_row_);
 
     auto* cards_row = new QWidget(content);
@@ -915,7 +905,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     region_row1_layout->setContentsMargins(0, 0, 0, 0);
     region_row1_layout->setSpacing(10);
     region_summary_label_ = makeLabel("No region defined", "captureTargetPickerNote", region_row1);
-    region_summary_label_->setWordWrap(true);
+    region_summary_label_->setWordWrap(false);
     region_pick_btn_ = new QPushButton("Pick Region", region_row1);
     region_pick_btn_->setProperty("role", "ghost");
     region_row1_layout->addWidget(region_summary_label_, 1);
@@ -1926,7 +1916,7 @@ void RecordPage::onOpenSourcePicker() {
             option.detail = option.primary ? QStringLiteral("Primary display · DXGI OD monitor capture")
                                            : QStringLiteral("Display capture · DXGI OD monitor capture");
         }
-        option.status_badge = option.primary ? QStringLiteral("Primary") : QString();
+        option.status_badge = option.primary ? QStringLiteral("Primary") : QStringLiteral("Screen");
         screen_options.push_back(option);
     }
 
@@ -3385,13 +3375,17 @@ void RecordPage::updateSourceChip() {
 
     const bool locked = isSourceSelectionLocked();
     const bool has_any_source = !monitor_target_indices_.empty() || !window_target_indices_.empty();
+    const int name_width_hint =
+        (source_name_label_->width() > 0) ? source_name_label_->width() : (source_chip_panel_->width() - 26);
     const int meta_width_hint =
         (source_meta_label_->width() > 0) ? source_meta_label_->width() : (source_chip_panel_->width() - 26);
+    const QString source_name_elided =
+        source_name_label_->fontMetrics().elidedText(source_name, Qt::ElideRight, (std::max)(120, name_width_hint));
     const QString source_meta_elided =
         source_meta_label_->fontMetrics().elidedText(source_meta, Qt::ElideRight, (std::max)(120, meta_width_hint));
 
     source_kind_label_->setText(source_kind);
-    source_name_label_->setText(source_name);
+    source_name_label_->setText(source_name_elided);
     source_name_label_->setToolTip(source_name);
     source_meta_label_->setText(source_meta_elided);
     source_meta_label_->setToolTip(source_meta);

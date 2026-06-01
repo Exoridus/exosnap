@@ -3,7 +3,6 @@
 #include "../../services/ThumbnailCapture.h"
 #include "../widgets/CaptureTargetCard.h"
 
-#include <QBoxLayout>
 #include <QCheckBox>
 #include <QEvent>
 #include <QFrame>
@@ -15,7 +14,6 @@
 #include <QLayout>
 #include <QPixmap>
 #include <QPushButton>
-#include <QResizeEvent>
 #include <QScrollArea>
 #include <QShowEvent>
 #include <QStackedWidget>
@@ -135,22 +133,21 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
 
     auto* section_tabs = new QWidget(this);
     section_tabs->setObjectName("sourcePickerSectionTabs");
-    section_row_layout_ = new QBoxLayout(QBoxLayout::LeftToRight, section_tabs);
-    section_row_layout_->setContentsMargins(0, 0, 0, 0);
-    section_row_layout_->setSpacing(8);
+    auto* section_row = new QHBoxLayout(section_tabs);
+    section_row->setContentsMargins(0, 0, 0, 0);
+    section_row->setSpacing(8);
     screens_button_ = makeSectionButton("sourcePickerScreensButton", QStringLiteral("Screens"), section_tabs);
     windows_button_ = makeSectionButton("sourcePickerWindowsButton", QStringLiteral("Windows"), section_tabs);
     region_button_ = makeSectionButton("sourcePickerRegionButton", QStringLiteral("Region"), section_tabs);
-    section_row_layout_->addWidget(screens_button_);
-    section_row_layout_->addWidget(windows_button_);
-    section_row_layout_->addWidget(region_button_);
-    section_row_layout_->addSpacing(8);
+    section_row->addWidget(screens_button_);
+    section_row->addWidget(windows_button_);
+    section_row->addWidget(region_button_);
+    section_row->addSpacing(8);
     refresh_button_ = new QPushButton(QStringLiteral("Refresh previews"), section_tabs);
     refresh_button_->setObjectName("sourcePickerRefreshButton");
-    refresh_button_->setProperty("role", "fieldAction");
-    refresh_button_->setMinimumWidth(146);
-    section_row_layout_->addWidget(refresh_button_);
-    section_row_layout_->addStretch(1);
+    refresh_button_->setProperty("role", "utility");
+    section_row->addWidget(refresh_button_);
+    section_row->addStretch(1);
     root->addWidget(section_tabs);
 
     pages_ = new QStackedWidget(this);
@@ -176,7 +173,7 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     windows_grid_.empty_label = windows_page.empty_label;
     windows_unavailable_toggle_ = new QPushButton(QStringLiteral("Show unavailable (0)"), pages_);
     windows_unavailable_toggle_->setObjectName("sourcePickerShowUnavailableButton");
-    windows_unavailable_toggle_->setProperty("role", "fieldAction");
+    windows_unavailable_toggle_->setProperty("role", "utility");
     windows_unavailable_toggle_->setCheckable(true);
     windows_unavailable_toggle_->setVisible(false);
     if (windows_grid_.content_layout) {
@@ -248,33 +245,24 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     pages_->addWidget(region_page);
     root->addWidget(pages_, 1);
 
-    footer_layout_ = new QBoxLayout(QBoxLayout::LeftToRight);
-    footer_layout_->setContentsMargins(0, 0, 0, 0);
-    footer_layout_->setSpacing(8);
+    auto* footer = new QHBoxLayout();
+    footer->setContentsMargins(0, 0, 0, 0);
+    footer->setSpacing(8);
     summary_label_ = new QLabel(this);
     summary_label_->setObjectName("sourcePickerSummary");
     summary_label_->setProperty("labelRole", "captureTargetPickerNote");
     summary_label_->setWordWrap(true);
-    footer_layout_->addWidget(summary_label_, 1);
+    footer->addWidget(summary_label_, 1);
 
     auto* cancel_button = new QPushButton(QStringLiteral("Cancel"), this);
     cancel_button->setObjectName("sourcePickerCancelButton");
-    cancel_button->setProperty("role", "fieldAction");
-    cancel_button->setMinimumWidth(110);
     use_button_ = new QPushButton(QStringLiteral("Use selected source"), this);
     use_button_->setObjectName("sourcePickerUseButton");
     use_button_->setProperty("heroRole", "start");
     use_button_->setProperty("role", "primary");
-    use_button_->setMinimumWidth(168);
-
-    footer_actions_ = new QWidget(this);
-    auto* footer_actions_layout = new QHBoxLayout(footer_actions_);
-    footer_actions_layout->setContentsMargins(0, 0, 0, 0);
-    footer_actions_layout->setSpacing(8);
-    footer_actions_layout->addWidget(cancel_button);
-    footer_actions_layout->addWidget(use_button_);
-    footer_layout_->addWidget(footer_actions_, 0, Qt::AlignRight);
-    root->addLayout(footer_layout_);
+    footer->addWidget(cancel_button);
+    footer->addWidget(use_button_);
+    root->addLayout(footer);
 
     connect(screens_button_, &QPushButton::clicked, this, [this]() {
         setActiveSection(Section::Screens);
@@ -320,7 +308,6 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     screens_button_->setChecked(true);
     setActiveSection(Section::Screens);
     updateSummaryLabel();
-    updateResponsiveLayout();
 }
 
 void SourcePickerDialog::setScreenOptions(const std::vector<SourceOption>& options) {
@@ -902,11 +889,6 @@ bool SourcePickerDialog::eventFilter(QObject* watched, QEvent* event) {
     return QDialog::eventFilter(watched, event);
 }
 
-void SourcePickerDialog::resizeEvent(QResizeEvent* event) {
-    QDialog::resizeEvent(event);
-    updateResponsiveLayout();
-}
-
 void SourcePickerDialog::showEvent(QShowEvent* event) {
     QDialog::showEvent(event);
     if (thumbnail_refresh_timer_) {
@@ -925,24 +907,6 @@ void SourcePickerDialog::hideEvent(QHideEvent* event) {
         thumbnail_capture_->cancelAll();
     }
     QDialog::hideEvent(event);
-}
-
-void SourcePickerDialog::updateResponsiveLayout() {
-    const bool narrow = width() < 900;
-
-    if (section_row_layout_) {
-        const QBoxLayout::Direction desired = narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight;
-        if (section_row_layout_->direction() != desired) {
-            section_row_layout_->setDirection(desired);
-        }
-    }
-
-    if (footer_layout_) {
-        const QBoxLayout::Direction desired = narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight;
-        if (footer_layout_->direction() != desired) {
-            footer_layout_->setDirection(desired);
-        }
-    }
 }
 
 } // namespace exosnap::ui::dialogs

@@ -562,7 +562,6 @@ QLabel[labelRole="recordSourceName"] {
     font-size: 15px;
     font-weight: 600;
     color: ${text0};
-    qproperty-alignment: AlignLeft|AlignTop;
 }
 
 QLabel[labelRole="recordSourceMeta"] {
@@ -741,11 +740,6 @@ QLabel[labelRole="captureCardSelectedChip"] {
     border-radius: ${radius-sm}px;
     padding: 1px 6px;
     background: ${accent};
-}
-
-QWidget#captureTargetCard[selected="true"] {
-    border-color: ${accent};
-    background: rgba(233, 179, 97, 0.14);
 }
 
 QLabel[labelRole="captureCardStatus"] {
@@ -1756,26 +1750,20 @@ QLabel[labelRole="plannedTag"] {
 
 /* Logs — raw viewer surface */
 QPlainTextEdit#logViewer {
-    background: #0b0a09;
+    background: ${bg0};
     color: ${text1};
-    border: 1px solid ${line1};
+    border: 1px solid ${line2};
     border-radius: ${radius-md}px;
     padding: 12px 14px;
-    font-family: ${font-mono};
-    font-size: 11px;
-    selection-background-color: rgba(233, 179, 97, 0.28);
+    selection-background-color: ${accent-dim};
     selection-color: ${text0};
-}
-
-QPlainTextEdit#logViewer:focus {
-    border-color: ${line3};
 }
 
 QLabel[labelRole="logStatus"] {
     font-family: ${font-mono};
     font-size: 11px;
-    letter-spacing: 0.04em;
-    color: ${text1};
+    letter-spacing: 0.02em;
+    color: ${text2};
 }
 
 QLineEdit,
@@ -1954,52 +1942,6 @@ QPushButton[role="utility"]:hover {
     color: ${text0};
 }
 
-QPushButton[role="fieldAction"] {
-    background: ${bg3};
-    border: 1px solid ${line2};
-    border-radius: ${radius-md}px;
-    color: ${text0};
-    min-height: ${control-height}px;
-    min-width: 124px;
-    padding: 0 12px;
-    font-size: 12.5px;
-    font-weight: 600;
-}
-
-QPushButton[role="fieldAction"]:hover {
-    background: ${bg4};
-    border-color: ${line3};
-}
-
-QPushButton[role="fieldAction"]:disabled {
-    color: ${text3};
-    background: ${bg2};
-    border-color: ${line1};
-}
-
-QToolButton[role="fieldAction"] {
-    background: ${bg3};
-    border: 1px solid ${line2};
-    border-radius: ${radius-md}px;
-    color: ${text0};
-    min-height: ${control-height}px;
-    min-width: 124px;
-    padding: 0 12px;
-    font-size: 12px;
-    font-weight: 600;
-}
-
-QToolButton[role="fieldAction"]:hover {
-    background: ${bg4};
-    border-color: ${line3};
-}
-
-QToolButton[role="fieldAction"]:disabled {
-    color: ${text3};
-    background: ${bg2};
-    border-color: ${line1};
-}
-
 QToolButton {
     background: ${bg3};
     border: 1px solid ${line2};
@@ -2099,11 +2041,6 @@ QRadioButton {
     color: ${text1};
     spacing: 8px;
     font-size: 13px;
-}
-
-QCheckBox:disabled,
-QRadioButton:disabled {
-    color: ${text3};
 }
 
 QCheckBox::indicator {

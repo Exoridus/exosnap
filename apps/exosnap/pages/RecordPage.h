@@ -162,7 +162,6 @@ class RecordPage : public QWidget {
     QLabel* timer_label_ = nullptr;
     ui::widgets::SectionRuleHeader* capture_header_ = nullptr;
     QWidget* source_row_ = nullptr;
-    QBoxLayout* source_row_layout_ = nullptr;
     QFrame* source_chip_panel_ = nullptr;
     QLabel* source_kind_label_ = nullptr;
     QLabel* source_name_label_ = nullptr;

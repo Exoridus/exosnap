@@ -138,9 +138,6 @@ class ConfigPage : public QWidget {
 
     QBoxLayout* columns_layout_ = nullptr;
     QBoxLayout* output_split_layout_ = nullptr;
-    QBoxLayout* profile_row_layout_ = nullptr;
-    QBoxLayout* destination_row_layout_ = nullptr;
-    QBoxLayout* advanced_head_layout_ = nullptr;
 
     QButtonGroup* container_group_ = nullptr;
     QRadioButton* mkv_radio_ = nullptr;

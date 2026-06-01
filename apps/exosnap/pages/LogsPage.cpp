@@ -1,6 +1,5 @@
 #include "LogsPage.h"
 
-#include <QBoxLayout>
 #include <QDesktopServices>
 #include <QFile>
 #include <QFileInfo>
@@ -9,7 +8,6 @@
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
-#include <QResizeEvent>
 #include <QTextStream>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -51,35 +49,28 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     auto* toolbar = new ui::widgets::SectionRuleHeader(QStringLiteral("APPLICATION LOG"), this);
     layout->addWidget(toolbar);
 
-    action_row_layout_ = new QBoxLayout(QBoxLayout::LeftToRight);
-    action_row_layout_->setSpacing(M::kSpaceSm);
+    auto* action_row = new QHBoxLayout();
+    action_row->setSpacing(M::kSpaceSm);
 
     status_label_ = new QLabel(this);
     status_label_->setProperty("labelRole", "logStatus");
     status_label_->setWordWrap(true);
     status_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    action_row_layout_->addWidget(status_label_, 1);
+    action_row->addWidget(status_label_, 1);
 
     refresh_btn_ = new QPushButton(QStringLiteral("Refresh"), this);
-    refresh_btn_->setProperty("role", "fieldAction");
+    refresh_btn_->setProperty("role", "ghost");
     open_folder_btn_ = new QPushButton(QStringLiteral("Open Log Folder"), this);
-    open_folder_btn_->setProperty("role", "fieldAction");
-    action_row_layout_->addWidget(refresh_btn_, 0);
-    action_row_layout_->addWidget(open_folder_btn_, 0);
-    layout->addLayout(action_row_layout_);
+    open_folder_btn_->setProperty("role", "ghost");
+    action_row->addWidget(refresh_btn_, 0);
+    action_row->addWidget(open_folder_btn_, 0);
+    layout->addLayout(action_row);
 
     log_viewer_ = new QPlainTextEdit(this);
     log_viewer_->setObjectName(QStringLiteral("logViewer"));
     log_viewer_->setReadOnly(true);
     log_viewer_->setLineWrapMode(QPlainTextEdit::NoWrap);
-    QFont mono;
-    mono.setFamilies({QStringLiteral("JetBrains Mono"), QStringLiteral("Cascadia Mono"), QStringLiteral("Consolas"),
-                      QStringLiteral("Lucida Console")});
-    mono.setStyleHint(QFont::TypeWriter);
-    mono.setFixedPitch(true);
-    mono.setPointSize(10);
-    log_viewer_->setFont(mono);
-    log_viewer_->setTabStopDistance(log_viewer_->fontMetrics().horizontalAdvance(QLatin1Char(' ')) * 4);
+    log_viewer_->setFont(QFont(QStringLiteral("JetBrains Mono, Cascadia Mono, Consolas"), 10));
     log_viewer_->setMinimumHeight(300);
     layout->addWidget(log_viewer_, 1);
 
@@ -87,17 +78,6 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     connect(open_folder_btn_, &QPushButton::clicked, this, &LogsPage::onOpenFolder);
 
     reloadLogContent();
-}
-
-void LogsPage::resizeEvent(QResizeEvent* event) {
-    QWidget::resizeEvent(event);
-    if (!action_row_layout_) {
-        return;
-    }
-    const QBoxLayout::Direction desired = width() < 980 ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight;
-    if (action_row_layout_->direction() != desired) {
-        action_row_layout_->setDirection(desired);
-    }
 }
 
 void LogsPage::reloadLogContent() {

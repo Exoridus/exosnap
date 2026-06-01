@@ -10,7 +10,6 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
-#include <QSizePolicy>
 #include <QVBoxLayout>
 
 #include "../ui/theme/ExoSnapMetrics.h"
@@ -209,7 +208,7 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
     logging_layout->addWidget(makeFieldLabel(QStringLiteral("Developer logging level"), logging_row));
     log_level_combo_ = new QComboBox(logging_row);
     log_level_combo_->setMinimumWidth(220);
-    log_level_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    log_level_combo_->setMaximumWidth(320);
     log_level_combo_->addItems({"Off", "Error", "Warning", "Info", "Debug", "Trace"});
     log_level_combo_->setCurrentIndex(3);
     logging_layout->addWidget(log_level_combo_);
