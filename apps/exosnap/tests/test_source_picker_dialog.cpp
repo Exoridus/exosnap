@@ -294,6 +294,12 @@ TEST(SourcePickerWindowRulesTest, FiltersOverlayWindows) {
     EXPECT_TRUE(ui::dialogs::ShouldExcludeByIdentity(identity));
 }
 
+TEST(SourcePickerWindowRulesTest, FiltersDeveloperToolsWindows) {
+    const ui::dialogs::SourcePickerWindowIdentity identity{
+        QStringLiteral("claude.ai — DevTools"), QStringLiteral("brave.exe"), QStringLiteral("Chrome_WidgetWin_1")};
+    EXPECT_TRUE(ui::dialogs::ShouldExcludeByIdentity(identity));
+}
+
 TEST(SourcePickerWindowRulesTest, FiltersPhantomWinStubTitle) {
     const ui::dialogs::SourcePickerWindowIdentity identity{QStringLiteral("[Win...]"),
                                                            QStringLiteral("applicationframehost.exe"),

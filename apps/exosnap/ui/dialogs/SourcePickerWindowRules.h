@@ -82,6 +82,22 @@ inline bool IsOverlayUtilityWindow(const SourcePickerWindowIdentity& identity) {
     return false;
 }
 
+inline bool IsDeveloperUtilityWindow(const SourcePickerWindowIdentity& identity) {
+    const QString title = NormalizeWindowRuleToken(identity.title);
+    const QString process = NormalizeWindowRuleToken(identity.process_name);
+    const QString class_name = NormalizeWindowRuleToken(identity.class_name);
+
+    // Exclude browser/app developer-tools windows from the default capture list.
+    if (TokenContainsAny(title, {"devtools", "developer tools"})) {
+        if (TokenContainsAny(process, {"brave.exe", "chrome.exe", "msedge.exe", "firefox.exe", "code.exe"}) ||
+            TokenContainsAny(class_name, {"chrome_widgetwin"})) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 inline bool ShouldExcludeByIdentity(const SourcePickerWindowIdentity& identity) {
     if (identity.title.trimmed().isEmpty()) {
         return true;
@@ -93,6 +109,9 @@ inline bool ShouldExcludeByIdentity(const SourcePickerWindowIdentity& identity) 
         return true;
     }
     if (IsOverlayUtilityWindow(identity)) {
+        return true;
+    }
+    if (IsDeveloperUtilityWindow(identity)) {
         return true;
     }
     return false;
