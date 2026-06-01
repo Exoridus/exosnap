@@ -1071,6 +1071,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             [this]() { nav_->setCurrentRow(kLogsPageIndex); });
     connect(config_page_, &ConfigPage::webcamDetailsRequested, this,
             [this]() { nav_->setCurrentRow(kWebcamPageIndex); });
+    connect(config_page_, &ConfigPage::advancedRequested, this,
+            [this]() { nav_->setCurrentRow(pageIndexForIcon(SidebarIcon::Advanced)); });
 
     record_page_->rebroadcastChromeState();
     applyActiveProfileToPages();

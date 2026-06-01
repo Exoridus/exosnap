@@ -12,14 +12,17 @@
 #include <vector>
 
 class QAction;
+class QBoxLayout;
 class QButtonGroup;
 class QCheckBox;
 class QComboBox;
+class QFrame;
 class QLabel;
 class QLineEdit;
 class QMenu;
 class QPushButton;
 class QRadioButton;
+class QResizeEvent;
 class QToolButton;
 
 namespace exosnap {
@@ -58,6 +61,7 @@ class ConfigPage : public QWidget {
     void webcamSettingsChanged(const WebcamSettings& settings);
     void diagnosticsRequested();
     void webcamDetailsRequested();
+    void advancedRequested();
 
     void newFromCurrentRequested(const QString& name);
     void newFromSafeDefaultRequested(const QString& name);
@@ -71,7 +75,11 @@ class ConfigPage : public QWidget {
     void exportAllUserProfilesRequested(const QString& file_path);
     void resetAllSettingsAndProfilesRequested();
 
+  protected:
+    void resizeEvent(QResizeEvent* event) override;
+
   private:
+    void updateResponsiveLayout();
     void onContainerChanged(int id);
     void onVideoCodecChanged(int index);
     void onAudioCodecChanged(int index);
@@ -128,6 +136,9 @@ class ConfigPage : public QWidget {
     QString active_profile_name_;
     std::vector<ProfileOption> profile_options_;
 
+    QBoxLayout* columns_layout_ = nullptr;
+    QBoxLayout* output_split_layout_ = nullptr;
+
     QButtonGroup* container_group_ = nullptr;
     QRadioButton* mkv_radio_ = nullptr;
     QRadioButton* webm_radio_ = nullptr;
@@ -167,6 +178,7 @@ class ConfigPage : public QWidget {
     QLabel* pattern_validation_label_ = nullptr;
     QLabel* example_filename_label_ = nullptr;
 
+    QFrame* readiness_panel_ = nullptr;
     QLabel* readiness_badge_label_ = nullptr;
     QLabel* readiness_detail_label_ = nullptr;
     QPushButton* view_details_btn_ = nullptr;

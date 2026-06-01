@@ -14,8 +14,10 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QResizeEvent>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QStyle>
 #include <QTimer>
 #include <QToolButton>
 #include <QToolTip>
@@ -38,23 +40,39 @@ namespace {
 // preventing fields from stretching across an entire ultra-wide maximized window.
 constexpr int kMaxContentWidth = 1080;
 
-QLabel* makeSubLabel(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setProperty("labelRole", "subtitle");
-    l->setWordWrap(true);
-    return l;
-}
-
-QLabel* makeSectionLabel(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setProperty("labelRole", "section");
-    return l;
-}
-
 QFrame* makePanel(QWidget* parent) {
     auto* panel = new QFrame(parent);
     panel->setProperty("panelRole", "panel");
     return panel;
+}
+
+// Card title: 15/600 per the design system "Section/card title" role.
+QLabel* makeCardTitle(const QString& text, QWidget* parent) {
+    auto* l = new QLabel(text, parent);
+    l->setProperty("labelRole", "cardTitle");
+    return l;
+}
+
+// Mono uppercase "eyebrow" label that sits directly above a form control.
+QLabel* makeFieldLabel(const QString& text, QWidget* parent) {
+    auto* l = new QLabel(text.toUpper(), parent);
+    l->setProperty("labelRole", "fieldLabel");
+    return l;
+}
+
+// Thin in-card divider, matching the prototype `.hr` rule.
+QFrame* makeHRule(QWidget* parent) {
+    auto* rule = new QFrame(parent);
+    rule->setFrameShape(QFrame::HLine);
+    rule->setProperty("frameRole", "sectionRuleLine");
+    return rule;
+}
+
+QLabel* makeHint(const QString& text, QWidget* parent) {
+    auto* l = new QLabel(text, parent);
+    l->setProperty("labelRole", "muted");
+    l->setWordWrap(true);
+    return l;
 }
 
 QString VideoCodecLabel(capability::VideoCodec codec) {
@@ -145,37 +163,39 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     auto* content = new QWidget(scroll);
     auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(24, 20, 24, 32);
-    layout->setSpacing(20);
+    layout->setContentsMargins(28, 24, 28, 36);
+    layout->setSpacing(18);
 
-    auto* header = makeSubLabel(
-        QStringLiteral("Choose what to capture, which sources to include, and where the recording is saved."), content);
-    header->setProperty("labelRole", "subtitle");
-    layout->addWidget(header);
+    // ---- READINESS BANNER (full width) ----
+    readiness_panel_ = makePanel(content);
+    readiness_panel_->setProperty("panelRole", "readinessBanner");
+    auto* status_layout = new QVBoxLayout(readiness_panel_);
+    status_layout->setContentsMargins(18, 14, 18, 14);
+    status_layout->setSpacing(6);
 
-    auto* status_card = makePanel(content);
-    status_card->setProperty("panelRole", "note");
-    auto* status_layout = new QVBoxLayout(status_card);
-    status_layout->setContentsMargins(14, 10, 14, 10);
-    status_layout->setSpacing(4);
+    auto* status_head = new QHBoxLayout();
+    status_head->setSpacing(12);
+    auto* status_text = new QVBoxLayout();
+    status_text->setSpacing(2);
 
-    readiness_badge_label_ = new QLabel(status_card);
-    readiness_badge_label_->setProperty("labelRole", "section");
-    status_layout->addWidget(readiness_badge_label_);
+    readiness_badge_label_ = new QLabel(readiness_panel_);
+    readiness_badge_label_->setProperty("labelRole", "cardTitle");
+    status_text->addWidget(readiness_badge_label_);
 
-    readiness_detail_label_ = new QLabel(status_card);
+    readiness_detail_label_ = new QLabel(readiness_panel_);
     readiness_detail_label_->setProperty("labelRole", "muted");
     readiness_detail_label_->setWordWrap(true);
-    status_layout->addWidget(readiness_detail_label_);
+    status_text->addWidget(readiness_detail_label_);
 
-    view_details_btn_ = new QPushButton(QStringLiteral("Open Diagnostics..."), status_card);
+    status_head->addLayout(status_text, 1);
+
+    view_details_btn_ = new QPushButton(QStringLiteral("Open Diagnostics..."), readiness_panel_);
     view_details_btn_->setProperty("role", "ghost");
     view_details_btn_->setVisible(false);
-    status_layout->addWidget(view_details_btn_);
+    status_head->addWidget(view_details_btn_, 0, Qt::AlignTop);
+    status_layout->addLayout(status_head);
 
-    layout->addWidget(status_card);
-
-    lock_note_label_ = new QLabel(status_card);
+    lock_note_label_ = new QLabel(readiness_panel_);
     lock_note_label_->setObjectName(QStringLiteral("lockNoteLabel"));
     lock_note_label_->setProperty("labelRole", "muted");
     lock_note_label_->setWordWrap(true);
@@ -183,26 +203,58 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     lock_note_label_->setVisible(false);
     status_layout->addWidget(lock_note_label_);
 
-    // ---- PRESET & FORMAT CARD ----
-    auto* fmt_panel = makePanel(content);
-    auto* fmt_layout = new QVBoxLayout(fmt_panel);
-    fmt_layout->setContentsMargins(14, 12, 14, 12);
-    fmt_layout->setSpacing(10);
-    fmt_layout->addWidget(makeSectionLabel(QStringLiteral("Preset & Format"), fmt_panel));
-    auto* preset_note = makeSubLabel(
-        QStringLiteral("Presets are optional saved bundles. Edit settings freely, then save when needed."), fmt_panel);
-    preset_note->setProperty("labelRole", "muted");
-    fmt_layout->addWidget(preset_note);
+    layout->addWidget(readiness_panel_);
 
+    // ---- TWO-COLUMN REGION ----
+    // The left column holds the output format/quality/behavior cards; the right
+    // column holds the input-source cards (audio + webcam). On narrow viewports the
+    // columns flip from side-by-side to a single stacked column (updateResponsiveLayout()).
+    auto* columns = new QWidget(content);
+    columns_layout_ = new QHBoxLayout(columns);
+    columns_layout_->setContentsMargins(0, 0, 0, 0);
+    columns_layout_->setSpacing(18);
+
+    auto* left_col = new QWidget(columns);
+    auto* left_layout = new QVBoxLayout(left_col);
+    left_layout->setContentsMargins(0, 0, 0, 0);
+    left_layout->setSpacing(18);
+
+    auto* right_col = new QWidget(columns);
+    auto* right_layout = new QVBoxLayout(right_col);
+    right_layout->setContentsMargins(0, 0, 0, 0);
+    right_layout->setSpacing(18);
+
+    columns_layout_->addWidget(left_col, 1);
+    columns_layout_->addWidget(right_col, 1);
+    layout->addWidget(columns);
+
+    // ---- PRESET & FORMAT CARD (left) ----
+    auto* fmt_panel = makePanel(left_col);
+    auto* fmt_layout = new QVBoxLayout(fmt_panel);
+    fmt_layout->setContentsMargins(18, 16, 18, 18);
+    fmt_layout->setSpacing(12);
+
+    auto* fmt_head = new QHBoxLayout();
+    fmt_head->setSpacing(10);
+    fmt_head->addWidget(makeCardTitle(QStringLiteral("Preset & Format"), fmt_panel));
+    fmt_head->addStretch();
+    profile_status_label_ = new QLabel(fmt_panel);
+    profile_status_label_->setProperty("labelRole", "profileStatusBadge");
+    profile_status_label_->setAlignment(Qt::AlignCenter);
+    fmt_head->addWidget(profile_status_label_);
+    fmt_layout->addLayout(fmt_head);
+
+    fmt_layout->addWidget(makeHint(
+        QStringLiteral("A preset is a saved bundle of the fields below. Edit them freely, then save to keep them."),
+        fmt_panel));
+
+    fmt_layout->addWidget(makeFieldLabel(QStringLiteral("Active preset"), fmt_panel));
     auto* profile_row = new QHBoxLayout();
     profile_row->setSpacing(8);
     profile_combo_ = new QComboBox(fmt_panel);
     profile_combo_->setObjectName(QStringLiteral("profileCombo"));
-    profile_combo_->setMinimumWidth(200);
+    profile_combo_->setMinimumWidth(180);
     profile_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    profile_status_label_ = new QLabel(fmt_panel);
-    profile_status_label_->setProperty("labelRole", "profileStatusBadge");
-    profile_status_label_->setAlignment(Qt::AlignCenter);
     profile_overflow_btn_ = new QToolButton(fmt_panel);
     profile_overflow_btn_->setText(QStringLiteral("Manage presets"));
     profile_overflow_btn_->setPopupMode(QToolButton::InstantPopup);
@@ -224,11 +276,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     profile_overflow_btn_->setMenu(profile_menu);
 
     profile_row->addWidget(profile_combo_, 1);
-    profile_row->addWidget(profile_status_label_);
     profile_row->addWidget(profile_overflow_btn_);
     fmt_layout->addLayout(profile_row);
 
-    // Contextual preset actions - hidden for default built-in preset
+    // Contextual preset actions - hidden for the default built-in preset.
     auto* profile_actions_row = new QHBoxLayout();
     profile_actions_row->setSpacing(6);
     profile_actions_row->setContentsMargins(0, 0, 0, 0);
@@ -241,17 +292,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     profile_actions_row->addWidget(reset_profile_btn_);
     fmt_layout->addLayout(profile_actions_row);
 
+    fmt_layout->addWidget(makeHRule(fmt_panel));
+
     format_display_label_ = new QLabel(fmt_panel);
     format_display_label_->setProperty("labelRole", "muted");
     fmt_layout->addWidget(format_display_label_);
 
-    auto* container_lbl = new QLabel(QStringLiteral("Container"), fmt_panel);
-    container_lbl->setProperty("labelRole", "section");
-    fmt_layout->addWidget(container_lbl);
-
+    fmt_layout->addWidget(makeFieldLabel(QStringLiteral("Container"), fmt_panel));
     container_group_ = new QButtonGroup(this);
     auto* container_row = new QHBoxLayout();
-    container_row->setSpacing(12);
+    container_row->setSpacing(18);
     mkv_radio_ = new QRadioButton(QStringLiteral("MKV"), fmt_panel);
     webm_radio_ = new QRadioButton(QStringLiteral("WebM"), fmt_panel);
     mp4_radio_ = new QRadioButton(QStringLiteral("MP4"), fmt_panel);
@@ -265,46 +315,39 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     fmt_layout->addLayout(container_row);
 
     auto* codec_row = new QHBoxLayout();
-    codec_row->setSpacing(12);
+    codec_row->setSpacing(14);
 
     auto* vcol = new QVBoxLayout();
-    auto* vcodec_lbl = new QLabel(QStringLiteral("Video codec"), fmt_panel);
-    vcodec_lbl->setProperty("labelRole", "section");
+    vcol->setSpacing(6);
     video_codec_combo_ = new QComboBox(fmt_panel);
-    vcol->addWidget(vcodec_lbl);
+    vcol->addWidget(makeFieldLabel(QStringLiteral("Video codec"), fmt_panel));
     vcol->addWidget(video_codec_combo_);
     codec_row->addLayout(vcol, 1);
 
     auto* acol = new QVBoxLayout();
-    auto* acodec_lbl = new QLabel(QStringLiteral("Audio codec"), fmt_panel);
-    acodec_lbl->setProperty("labelRole", "section");
+    acol->setSpacing(6);
     audio_codec_combo_ = new QComboBox(fmt_panel);
-    acol->addWidget(acodec_lbl);
+    acol->addWidget(makeFieldLabel(QStringLiteral("Audio codec"), fmt_panel));
     acol->addWidget(audio_codec_combo_);
     codec_row->addLayout(acol, 1);
 
     fmt_layout->addLayout(codec_row);
-    layout->addWidget(fmt_panel);
+    left_layout->addWidget(fmt_panel);
 
-    // ---- CAPTURE QUALITY CARD ----
-    auto* video_panel = makePanel(content);
+    // ---- CAPTURE QUALITY CARD (left) ----
+    auto* video_panel = makePanel(left_col);
     auto* video_panel_layout = new QVBoxLayout(video_panel);
-    video_panel_layout->setContentsMargins(14, 12, 14, 12);
+    video_panel_layout->setContentsMargins(18, 16, 18, 18);
     video_panel_layout->setSpacing(8);
-    video_panel_layout->addWidget(makeSectionLabel(QStringLiteral("Capture Quality"), video_panel));
+    video_panel_layout->addWidget(makeCardTitle(QStringLiteral("Capture Quality"), video_panel));
 
-    auto* qual_row = new QHBoxLayout();
-    qual_row->setSpacing(8);
-    auto* qual_lbl = new QLabel(QStringLiteral("Quality preset"), video_panel);
-    qual_lbl->setProperty("labelRole", "muted");
+    video_panel_layout->addWidget(makeFieldLabel(QStringLiteral("Quality preset"), video_panel));
     quality_combo_ = new QComboBox(video_panel);
     quality_combo_->setObjectName(QStringLiteral("videoQualityCombo"));
     quality_combo_->addItem(QStringLiteral("High Quality"), static_cast<int>(recorder_core::NvencQualityPreset::High));
     quality_combo_->addItem(QStringLiteral("Balanced"), static_cast<int>(recorder_core::NvencQualityPreset::Balanced));
     quality_combo_->addItem(QStringLiteral("Small"), static_cast<int>(recorder_core::NvencQualityPreset::Small));
-    qual_row->addWidget(qual_lbl);
-    qual_row->addWidget(quality_combo_, 1);
-    video_panel_layout->addLayout(qual_row);
+    video_panel_layout->addWidget(quality_combo_);
 
     quality_badge_label_ = new QLabel(video_panel);
     quality_badge_label_->setObjectName(QStringLiteral("qualityBadgeLabel"));
@@ -316,28 +359,38 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     quality_settings_label_->setProperty("labelRole", "muted");
     video_panel_layout->addWidget(quality_settings_label_);
 
-    auto* quality_rule = new QFrame(video_panel);
-    quality_rule->setFrameShape(QFrame::HLine);
-    quality_rule->setProperty("frameRole", "sectionRuleLine");
-    video_panel_layout->addWidget(quality_rule);
+    video_panel_layout->addWidget(
+        makeHint(QStringLiteral("Higher quality looks sharper but produces larger files."), video_panel));
+    left_layout->addWidget(video_panel);
 
-    video_panel_layout->addWidget(makeSubLabel(QStringLiteral("Capture behavior"), video_panel));
+    // ---- CAPTURE BEHAVIOR CARD (left) ----
+    auto* behavior_panel = makePanel(left_col);
+    auto* behavior_panel_layout = new QVBoxLayout(behavior_panel);
+    behavior_panel_layout->setContentsMargins(18, 16, 18, 18);
+    behavior_panel_layout->setSpacing(10);
+    behavior_panel_layout->addWidget(makeCardTitle(QStringLiteral("Capture Behavior"), behavior_panel));
 
-    cfr_check_ = new QCheckBox(QStringLiteral("CFR 60 fps"), video_panel);
+    cfr_check_ = new QCheckBox(QStringLiteral("Constant frame rate (CFR 60 fps)"), behavior_panel);
     cfr_check_->setChecked(video_settings_.cfr);
-    video_panel_layout->addWidget(cfr_check_);
+    behavior_panel_layout->addWidget(cfr_check_);
 
-    cursor_check_ = new QCheckBox(QStringLiteral("Capture cursor"), video_panel);
+    cursor_check_ = new QCheckBox(QStringLiteral("Capture cursor"), behavior_panel);
     cursor_check_->setChecked(video_settings_.capture_cursor);
-    video_panel_layout->addWidget(cursor_check_);
-    layout->addWidget(video_panel);
+    behavior_panel_layout->addWidget(cursor_check_);
 
-    // ---- AUDIO SOURCES CARD ----
-    auto* audio_panel = makePanel(content);
+    behavior_panel_layout->addWidget(makeHint(
+        QStringLiteral("VFR can desync audio in some editors — keep CFR on unless you know you need otherwise."),
+        behavior_panel));
+    left_layout->addWidget(behavior_panel);
+
+    left_layout->addStretch();
+
+    // ---- AUDIO SOURCES CARD (right) ----
+    auto* audio_panel = makePanel(right_col);
     auto* audio_panel_layout = new QVBoxLayout(audio_panel);
-    audio_panel_layout->setContentsMargins(14, 12, 14, 12);
-    audio_panel_layout->setSpacing(8);
-    audio_panel_layout->addWidget(makeSectionLabel(QStringLiteral("Audio Sources"), audio_panel));
+    audio_panel_layout->setContentsMargins(18, 16, 18, 18);
+    audio_panel_layout->setSpacing(10);
+    audio_panel_layout->addWidget(makeCardTitle(QStringLiteral("Audio Sources"), audio_panel));
 
     auto makeSourceRow = [&](const QString& title, QCheckBox*& enabled_check, QCheckBox*& separate_check,
                              QLabel*& source_label) {
@@ -348,143 +401,188 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         separate_check = new QCheckBox(QStringLiteral("Separate track"), audio_panel);
 
         row->addWidget(enabled_check);
-        row->addWidget(separate_check);
         row->addStretch();
+        row->addWidget(separate_check);
         audio_panel_layout->addLayout(row);
 
         source_label = new QLabel(audio_panel);
         source_label->setProperty("labelRole", "muted");
         source_label->setWordWrap(true);
-        source_label->setContentsMargins(20, 0, 0, 4);
         audio_panel_layout->addWidget(source_label);
     };
 
     makeSourceRow(QStringLiteral("Application audio"), app_enabled_check_, app_separate_check_, app_source_label_);
+    audio_panel_layout->addWidget(makeHRule(audio_panel));
     makeSourceRow(QStringLiteral("Microphone"), mic_enabled_check_, mic_separate_check_, mic_source_label_);
 
-    auto* mic_device_row = new QHBoxLayout();
-    mic_device_row->setContentsMargins(20, 0, 0, 4);
     mic_device_combo_ = new QComboBox(audio_panel);
     mic_device_combo_->setObjectName(QStringLiteral("micDeviceCombo"));
     mic_device_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    mic_device_combo_->setMinimumWidth(200);
-    mic_device_row->addWidget(mic_device_combo_, 1);
-    audio_panel_layout->addLayout(mic_device_row);
+    mic_device_combo_->setMinimumWidth(180);
+    audio_panel_layout->addWidget(mic_device_combo_);
 
+    audio_panel_layout->addWidget(makeHRule(audio_panel));
     makeSourceRow(QStringLiteral("System audio"), sys_enabled_check_, sys_separate_check_, sys_source_label_);
+
+    audio_panel_layout->addWidget(
+        makeHint(QStringLiteral("Separate tracks keep each source on its own channel for editing."), audio_panel));
 
     audio_summary_label_ = new QLabel(audio_panel);
     audio_summary_label_->setProperty("labelRole", "muted");
     audio_summary_label_->setWordWrap(true);
     audio_summary_label_->setVisible(false);
     audio_panel_layout->addWidget(audio_summary_label_);
-    layout->addWidget(audio_panel);
+    right_layout->addWidget(audio_panel);
 
-    // ---- WEBCAM CARD ----
-    auto* webcam_panel = makePanel(content);
+    // ---- WEBCAM CARD (right) ----
+    auto* webcam_panel = makePanel(right_col);
     auto* webcam_panel_layout = new QVBoxLayout(webcam_panel);
-    webcam_panel_layout->setContentsMargins(14, 12, 14, 12);
-    webcam_panel_layout->setSpacing(6);
-    webcam_panel_layout->addWidget(makeSectionLabel(QStringLiteral("Webcam"), webcam_panel));
+    webcam_panel_layout->setContentsMargins(18, 16, 18, 18);
+    webcam_panel_layout->setSpacing(8);
+    webcam_panel_layout->addWidget(makeCardTitle(QStringLiteral("Webcam"), webcam_panel));
 
     webcam_enabled_check_ = new QCheckBox(QStringLiteral("Record webcam"), webcam_panel);
     webcam_panel_layout->addWidget(webcam_enabled_check_);
 
-    auto* cam_row = new QHBoxLayout();
-    cam_row->setSpacing(8);
-    cam_row->setContentsMargins(20, 0, 0, 0);
-    auto* cam_lbl = new QLabel(QStringLiteral("Camera:"), webcam_panel);
+    webcam_panel_layout->addWidget(makeFieldLabel(QStringLiteral("Camera"), webcam_panel));
     webcam_device_combo_ = new QComboBox(webcam_panel);
     webcam_device_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    webcam_device_combo_->setMinimumWidth(200);
-    cam_row->addWidget(cam_lbl);
-    cam_row->addWidget(webcam_device_combo_, 1);
-    webcam_panel_layout->addLayout(cam_row);
+    webcam_device_combo_->setMinimumWidth(180);
+    webcam_panel_layout->addWidget(webcam_device_combo_);
 
     webcam_info_label_ = new QLabel(webcam_panel);
     webcam_info_label_->setProperty("labelRole", "muted");
     webcam_info_label_->setWordWrap(true);
-    webcam_info_label_->setContentsMargins(20, 0, 0, 4);
     webcam_panel_layout->addWidget(webcam_info_label_);
+
+    webcam_panel_layout->addWidget(
+        makeHint(QStringLiteral("Live preview, sizing, and placement are on the Webcam page."), webcam_panel));
 
     webcam_details_btn_ = new QPushButton(QStringLiteral("Webcam details..."), webcam_panel);
     webcam_details_btn_->setObjectName(QStringLiteral("webcamDetailsBtn"));
     webcam_details_btn_->setProperty("role", "ghost");
-    webcam_details_btn_->setContentsMargins(20, 0, 0, 0);
-    webcam_panel_layout->addWidget(webcam_details_btn_);
+    webcam_panel_layout->addWidget(webcam_details_btn_, 0, Qt::AlignLeft);
 
-    layout->addWidget(webcam_panel);
+    right_layout->addWidget(webcam_panel);
+    right_layout->addStretch();
 
-    // ---- OUTPUT CARD ----
+    // ---- OUTPUT CARD (full width) ----
     auto* out_panel = makePanel(content);
     auto* out_panel_layout = new QVBoxLayout(out_panel);
-    out_panel_layout->setContentsMargins(14, 12, 14, 12);
-    out_panel_layout->setSpacing(6);
-    out_panel_layout->addWidget(makeSectionLabel(QStringLiteral("Output"), out_panel));
+    out_panel_layout->setContentsMargins(18, 16, 18, 18);
+    out_panel_layout->setSpacing(12);
+    out_panel_layout->addWidget(makeCardTitle(QStringLiteral("Output"), out_panel));
 
+    auto* output_split = new QWidget(out_panel);
+    output_split_layout_ = new QHBoxLayout(output_split);
+    output_split_layout_->setContentsMargins(0, 0, 0, 0);
+    output_split_layout_->setSpacing(24);
+
+    auto* output_fields = new QWidget(output_split);
+    auto* output_fields_layout = new QVBoxLayout(output_fields);
+    output_fields_layout->setContentsMargins(0, 0, 0, 0);
+    output_fields_layout->setSpacing(8);
+
+    output_fields_layout->addWidget(makeFieldLabel(QStringLiteral("Destination folder"), output_fields));
     auto* dest_row = new QHBoxLayout();
     dest_row->setSpacing(8);
-    destination_edit_ = new QLineEdit(out_panel);
+    destination_edit_ = new QLineEdit(output_fields);
     destination_edit_->setObjectName(QStringLiteral("destinationEdit"));
     destination_edit_->setPlaceholderText(QString::fromStdWString(format_settings_.output_folder.wstring()));
-    browse_btn_ = new QPushButton(QStringLiteral("Browse..."), out_panel);
+    browse_btn_ = new QPushButton(QStringLiteral("Browse..."), output_fields);
     browse_btn_->setProperty("role", "ghost");
     dest_row->addWidget(destination_edit_, 1);
     dest_row->addWidget(browse_btn_);
-    out_panel_layout->addLayout(dest_row);
+    output_fields_layout->addLayout(dest_row);
 
-    folder_validation_label_ = makeSubLabel(QString(), out_panel);
-    folder_validation_label_->setProperty("labelRole", "muted");
+    folder_validation_label_ = makeHint(QString(), output_fields);
     folder_validation_label_->setVisible(false);
-    out_panel_layout->addWidget(folder_validation_label_);
+    output_fields_layout->addWidget(folder_validation_label_);
 
-    auto* naming_lbl = makeSectionLabel(QStringLiteral("Filename pattern"), out_panel);
-    out_panel_layout->addWidget(naming_lbl);
-    naming_edit_ = new QLineEdit(out_panel);
+    output_fields_layout->addWidget(makeFieldLabel(QStringLiteral("Filename pattern"), output_fields));
+    naming_edit_ = new QLineEdit(output_fields);
     naming_edit_->setObjectName(QStringLiteral("namingEdit"));
     naming_edit_->setPlaceholderText(QStringLiteral("{datetime}_{app}_{title}"));
-    out_panel_layout->addWidget(naming_edit_);
+    output_fields_layout->addWidget(naming_edit_);
 
-    pattern_validation_label_ = makeSubLabel(QString(), out_panel);
-    pattern_validation_label_->setProperty("labelRole", "muted");
+    pattern_validation_label_ = makeHint(QString(), output_fields);
     pattern_validation_label_->setVisible(false);
-    out_panel_layout->addWidget(pattern_validation_label_);
+    output_fields_layout->addWidget(pattern_validation_label_);
 
-    token_help_toggle_btn_ = new QPushButton(QStringLiteral("Show token reference"), out_panel);
+    example_filename_label_ = makeHint(QString(), output_fields);
+    output_fields_layout->addWidget(example_filename_label_);
+    output_fields_layout->addStretch();
+
+    auto* output_help = new QWidget(output_split);
+    auto* output_help_layout = new QVBoxLayout(output_help);
+    output_help_layout->setContentsMargins(0, 0, 0, 0);
+    output_help_layout->setSpacing(8);
+
+    output_help_layout->addWidget(makeFieldLabel(QStringLiteral("Filename tokens"), output_help));
+    token_help_toggle_btn_ = new QPushButton(QStringLiteral("Show token reference"), output_help);
     token_help_toggle_btn_->setObjectName(QStringLiteral("tokenHelpToggle"));
     token_help_toggle_btn_->setProperty("role", "ghost");
-    out_panel_layout->addWidget(token_help_toggle_btn_);
+    output_help_layout->addWidget(token_help_toggle_btn_, 0, Qt::AlignLeft);
 
-    token_help_label_ = makeSubLabel(
+    token_help_label_ = makeHint(
         QStringLiteral("Tokens: {datetime}, {date}, {time}, {timestamp}, {YYYY}, {YY}, {MM}, {DD}, {hh}, {mm}, {ss}, "
                        "{app}, {title}, {process}, {target}, {profile}, {container}, {video}, {audio}"),
-        out_panel);
-    token_help_label_->setProperty("labelRole", "muted");
+        output_help);
     token_help_label_->setVisible(false);
-    out_panel_layout->addWidget(token_help_label_);
+    output_help_layout->addWidget(token_help_label_);
 
-    example_filename_label_ = makeSubLabel(QString(), out_panel);
-    example_filename_label_->setProperty("labelRole", "muted");
-    out_panel_layout->addWidget(example_filename_label_);
+    output_help_layout->addWidget(
+        makeHint(QStringLiteral("Tokens auto-fill names from the date, app, and capture target."), output_help));
+    output_help_layout->addStretch();
+
+    output_split_layout_->addWidget(output_fields, 3);
+    output_split_layout_->addWidget(output_help, 2);
+    out_panel_layout->addWidget(output_split);
     layout->addWidget(out_panel);
+
+    // ---- ADVANCED SUMMARY (full width) ----
+    auto* advanced_panel = makePanel(content);
+    advanced_panel->setProperty("panelRole", "note");
+    auto* advanced_layout = new QVBoxLayout(advanced_panel);
+    advanced_layout->setContentsMargins(18, 14, 18, 14);
+    advanced_layout->setSpacing(8);
+
+    auto* advanced_head = new QHBoxLayout();
+    advanced_head->setSpacing(12);
+    auto* advanced_text = new QVBoxLayout();
+    advanced_text->setSpacing(2);
+    advanced_text->addWidget(makeCardTitle(QStringLiteral("Advanced"), advanced_panel));
+    advanced_text->addWidget(makeHint(
+        QStringLiteral("Backend override, encoder preset, developer logging, and filename rules — expert only."),
+        advanced_panel));
+    advanced_head->addLayout(advanced_text, 1);
+
+    auto* advanced_open_btn = new QPushButton(QStringLiteral("Open Advanced page"), advanced_panel);
+    advanced_open_btn->setProperty("role", "ghost");
+    advanced_head->addWidget(advanced_open_btn, 0, Qt::AlignVCenter);
+    advanced_layout->addLayout(advanced_head);
+    layout->addWidget(advanced_panel);
 
     layout->addStretch();
 
     // Constrain the form width so cards do not stretch to absurd widths when the
     // window is maximized on a wide display. The cap is wider than the default
-    // 1280x800 content area, so the default layout is unaffected; the surrounding
-    // stretches keep the content centered when the viewport is wider than the cap.
+    // 1280x800 content area, so the default layout is unaffected. Content takes the
+    // dominant stretch so it fills the viewport up to the cap, after which the two
+    // flanking stretches share the overflow and keep the form centered.
     content->setMaximumWidth(kMaxContentWidth);
     auto* content_holder = new QWidget(scroll);
     auto* holder_layout = new QHBoxLayout(content_holder);
     holder_layout->setContentsMargins(0, 0, 0, 0);
     holder_layout->setSpacing(0);
     holder_layout->addStretch(1);
-    holder_layout->addWidget(content);
+    holder_layout->addWidget(content, 1000);
     holder_layout->addStretch(1);
 
     scroll->setWidget(content_holder);
     outer->addWidget(scroll);
+
+    connect(advanced_open_btn, &QPushButton::clicked, this, &ConfigPage::advancedRequested);
 
     connect(container_group_, &QButtonGroup::idClicked, this, &ConfigPage::onContainerChanged);
     connect(video_codec_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -555,6 +653,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     updateFormatDisplay();
     updateExampleFilename();
     updateQualitySummary();
+    updateResponsiveLayout();
 
     QPointer<ConfigPage> safe = this;
     QTimer::singleShot(0, this, [safe]() {
@@ -563,6 +662,25 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             safe->refreshWebcamDevices();
         }
     });
+}
+
+void ConfigPage::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    updateResponsiveLayout();
+}
+
+void ConfigPage::updateResponsiveLayout() {
+    // Below this width the two-column form (and the Output card's field/help split)
+    // becomes too cramped, so flip both to a single stacked column. The content area
+    // is centered and capped at kMaxContentWidth, so the page width is a faithful
+    // proxy for the available form width.
+    const bool narrow = width() < 880;
+    const QBoxLayout::Direction desired = narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight;
+
+    if (columns_layout_ && columns_layout_->direction() != desired)
+        columns_layout_->setDirection(desired);
+    if (output_split_layout_ && output_split_layout_->direction() != desired)
+        output_split_layout_->setDirection(desired);
 }
 
 void ConfigPage::emitCurrentFormatSettings() {
@@ -1184,6 +1302,23 @@ void ConfigPage::setReadinessStatus(const QString& status_label) {
     if (view_details_btn_) {
         view_details_btn_->setVisible(blocked);
     }
+
+    // Tint the banner and colour the title to read like the prototype readiness strip
+    // (green = ready, red = blocked, neutral while checking).
+    const char* state = ready ? "ready" : blocked ? "blocked" : "checking";
+    const char* title_state = ready ? "ready" : blocked ? "blocked" : "muted";
+    const auto repolish = [](QWidget* w) {
+        if (!w)
+            return;
+        w->style()->unpolish(w);
+        w->style()->polish(w);
+    };
+    if (readiness_panel_) {
+        readiness_panel_->setProperty("stateRole", state);
+        repolish(readiness_panel_);
+    }
+    readiness_badge_label_->setProperty("stateRole", title_state);
+    repolish(readiness_badge_label_);
 }
 
 void ConfigPage::updateWebcamInfoLabel() {

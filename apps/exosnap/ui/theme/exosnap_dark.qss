@@ -313,6 +313,24 @@ QWidget[panelRole="compactRow"] {
     padding: ${space-sm}px ${space-md}px;
 }
 
+/* Settings readiness banner: neutral while checking, tinted when ready/blocked. */
+QFrame[panelRole="readinessBanner"],
+QWidget[panelRole="readinessBanner"] {
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-radius: ${radius-lg}px;
+}
+
+QFrame[panelRole="readinessBanner"][stateRole="ready"] {
+    background: rgba(120, 218, 149, 0.13);
+    border-color: rgba(120, 218, 149, 0.42);
+}
+
+QFrame[panelRole="readinessBanner"][stateRole="blocked"] {
+    background: rgba(240, 91, 84, 0.12);
+    border-color: rgba(240, 91, 84, 0.48);
+}
+
 /* Record page */
 QLabel[labelRole="recordCapabilityBanner"] {
     font-size: 13px;
@@ -1400,6 +1418,19 @@ QLabel[labelRole="section"] {
     font-size: 13px;
     font-weight: 600;
     color: ${text0};
+}
+
+QLabel[labelRole="cardTitle"] {
+    font-size: 15px;
+    font-weight: 600;
+    color: ${text0};
+}
+
+QLabel[labelRole="fieldLabel"] {
+    font-family: ${font-mono};
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: ${text2};
 }
 
 QLabel[labelRole="body"] {
