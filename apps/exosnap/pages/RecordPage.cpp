@@ -3615,6 +3615,7 @@ void RecordPage::updatePreviewContextChips() {
                             : locked          ? QStringLiteral("warn")
                             : has_selection   ? QStringLiteral("ready")
                                               : QStringLiteral("muted"));
+    preview_source_chip_label_->setVisible(false);
 
     QString aspect_text = QStringLiteral("16:9");
     QString aspect_role = QStringLiteral("ready");
