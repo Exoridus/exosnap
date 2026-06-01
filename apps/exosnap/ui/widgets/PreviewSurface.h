@@ -23,6 +23,8 @@ class StatusPill;
 class PreviewSurface : public QWidget {
     Q_OBJECT
   public:
+    enum class FrameTone { Ready, Recording, Warn, Blocked };
+
     explicit PreviewSurface(QWidget* parent = nullptr);
     ~PreviewSurface() override;
 
@@ -48,6 +50,7 @@ class PreviewSurface : public QWidget {
     void setCenterSubtitle(const QString& text);
     void setBottomLeftText(const QString& text);
     void setBottomRightText(const QString& text);
+    void setFrameTone(FrameTone tone);
 
     StatusPill* statusPill() const noexcept;
 
@@ -105,6 +108,7 @@ class PreviewSurface : public QWidget {
     QWidget* center_box_ = nullptr;
     QWidget* bottom_row_ = nullptr;
     bool recording_ = false;
+    FrameTone frame_tone_ = FrameTone::Ready;
 
     std::unique_ptr<exosnap::DxgiPreviewRenderer> dxgi_renderer_;
     bool dxgi_active_ = false;

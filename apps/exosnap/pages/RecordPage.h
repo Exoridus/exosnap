@@ -58,6 +58,7 @@ class RecordPage : public QWidget {
     void chromeRuntimeMetricsChanged(const QString& elapsed_text, const QString& bitrate_text, const QString& drop_text,
                                      const QString& size_text);
     void navigateToOutputPage();
+    void navigateToDiagnosticsPage();
     void audioSettingsChanged(const capability::AudioUiState& state);
 
   public slots:
@@ -178,6 +179,9 @@ class RecordPage : public QWidget {
     ui::widgets::ExoCheckBox* select_on_record_check_ = nullptr;
     ui::widgets::SectionRuleHeader* readiness_header_ = nullptr;
     QFrame* readiness_panel_ = nullptr;
+    QFrame* readiness_rule_ = nullptr;
+    QWidget* readiness_rows_container_ = nullptr;
+    QPushButton* readiness_diagnostics_btn_ = nullptr;
     std::vector<ReadinessRow> readiness_rows_;
     ui::widgets::SectionRuleHeader* audio_settings_header_ = nullptr;
     QWidget* audio_rows_container_ = nullptr;
@@ -235,6 +239,13 @@ class RecordPage : public QWidget {
     QFrame* destination_panel_ = nullptr;
     QPushButton* hero_action_btn_ = nullptr;
     QPushButton* secondary_action_btn_ = nullptr;
+    QPushButton* rail_diagnostics_btn_ = nullptr;
+    QFrame* rail_control_panel_ = nullptr;
+    QFrame* rail_stats_grid_ = nullptr;
+    QLabel* rail_size_value_label_ = nullptr;
+    QLabel* rail_drop_value_label_ = nullptr;
+    QLabel* rail_encoder_value_label_ = nullptr;
+    QLabel* rail_fps_value_label_ = nullptr;
     QLabel* rail_readiness_label_ = nullptr;
     QLabel* rail_summary_label_ = nullptr;
     QLabel* rail_stats_label_ = nullptr;

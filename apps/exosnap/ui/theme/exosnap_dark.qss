@@ -324,6 +324,26 @@ QFrame#recordControlPanel {
     border-color: ${line3};
 }
 
+QFrame#recordControlPanel[stateRole="recording"] {
+    background: rgba(240, 91, 84, 0.08);
+    border-color: rgba(240, 91, 84, 0.42);
+}
+
+QFrame#recordControlPanel[stateRole="paused"] {
+    background: rgba(215, 167, 68, 0.08);
+    border-color: rgba(215, 167, 68, 0.42);
+}
+
+QFrame#recordControlPanel[stateRole="done"] {
+    background: rgba(120, 218, 149, 0.08);
+    border-color: rgba(120, 218, 149, 0.42);
+}
+
+QFrame#recordControlPanel[stateRole="blocked"] {
+    background: rgba(240, 91, 84, 0.08);
+    border-color: rgba(240, 91, 84, 0.42);
+}
+
 QLabel[labelRole="recordControlState"] {
     font-family: ${font-mono};
     font-size: 12px;
@@ -338,6 +358,14 @@ QLabel[labelRole="recordControlState"][stateRole="ready"] {
 
 QLabel[labelRole="recordControlState"][stateRole="recording"] {
     color: ${err};
+}
+
+QLabel[labelRole="recordControlState"][stateRole="warn"] {
+    color: ${warn};
+}
+
+QLabel[labelRole="recordControlState"][stateRole="done"] {
+    color: ${ok};
 }
 
 QLabel[labelRole="recordControlState"][stateRole="blocked"] {
@@ -357,13 +385,25 @@ QLabel[labelRole="recordHotkeyBadge"] {
 
 QLabel[labelRole="recordTimer"] {
     font-family: ${font-mono};
-    font-size: 44px;
+    font-size: 42px;
     letter-spacing: 0.04em;
     color: ${text2};
     font-weight: 600;
 }
 
 QLabel[labelRole="recordTimer"][timerState="recording"] {
+    color: ${err};
+}
+
+QLabel[labelRole="recordTimer"][timerState="paused"] {
+    color: ${warn};
+}
+
+QLabel[labelRole="recordTimer"][timerState="done"] {
+    color: ${ok};
+}
+
+QLabel[labelRole="recordTimer"][timerState="blocked"] {
     color: ${err};
 }
 
@@ -441,9 +481,35 @@ QLabel[labelRole="railReadiness"][stateRole="blocked"] {
 
 QLabel[labelRole="railStats"] {
     font-family: ${font-mono};
-    font-size: 11px;
+    font-size: 10.5px;
     letter-spacing: 0.04em;
     color: ${text2};
+}
+
+QFrame#recordRailStatsGrid {
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    background: ${bg1};
+}
+
+QFrame[panelRole="recordRailStatCell"] {
+    border: none;
+    border-top: 1px solid ${line1};
+    border-left: 1px solid ${line1};
+}
+
+QLabel[labelRole="railStatKey"] {
+    font-family: ${font-mono};
+    font-size: 9.5px;
+    letter-spacing: 0.12em;
+    color: ${text3};
+}
+
+QLabel[labelRole="railStatValue"] {
+    font-family: ${font-mono};
+    font-size: 26px;
+    font-weight: 600;
+    color: ${text0};
 }
 
 QWidget#recordSourceRow {
@@ -459,6 +525,7 @@ QFrame#recordSourceChip {
 QFrame#recordSourceChip[sourceLocked="true"] {
     border-color: ${line3};
     border-style: dashed;
+    background: rgba(50, 46, 43, 0.72);
 }
 
 QLabel[labelRole="recordSourceKind"] {
@@ -469,7 +536,7 @@ QLabel[labelRole="recordSourceKind"] {
 }
 
 QLabel[labelRole="recordSourceName"] {
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 600;
     color: ${text0};
 }
@@ -483,16 +550,29 @@ QLabel[labelRole="recordSourceMeta"] {
 
 QLabel[labelRole="recordPresetSummary"] {
     font-family: ${font-mono};
-    font-size: 10.5px;
+    font-size: 10px;
     letter-spacing: 0.08em;
-    color: ${text2};
+    color: ${text3};
 }
 
 QLabel[labelRole="recordSourceLock"] {
     font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.04em;
+    font-size: 10px;
+    letter-spacing: 0.12em;
     color: ${warn};
+    border: 1px solid rgba(215, 167, 68, 0.48);
+    border-radius: ${radius-sm}px;
+    background: rgba(215, 167, 68, 0.12);
+    padding: 4px 8px;
+}
+
+QPushButton#recordChangeSourceButton {
+    min-height: 32px;
+    min-width: 126px;
+}
+
+QPushButton#recordOpenDiagnosticsButton {
+    min-height: 34px;
 }
 
 QLabel[labelRole="audioSettingsGroupTitle"] {
@@ -1043,8 +1123,21 @@ QLabel[labelRole="readinessSummary"][stateRole="ready"] {
     color: ${ok};
 }
 
+QLabel[labelRole="readinessSummary"][stateRole="warn"] {
+    color: ${warn};
+}
+
 QLabel[labelRole="readinessSummary"][stateRole="blocked"] {
     color: ${err};
+}
+
+QWidget#readinessCompactActions {
+    background: transparent;
+}
+
+QPushButton#readinessDiagnosticsBtn {
+    min-height: 28px;
+    padding: 0 10px;
 }
 
 QWidget#audioActivityRow {
@@ -1158,7 +1251,7 @@ QLabel[labelRole="resultFile"] {
 
 QLabel[labelRole="resultStats"] {
     font-family: ${font-mono};
-    font-size: 12px;
+    font-size: 11px;
     color: ${text1};
 }
 

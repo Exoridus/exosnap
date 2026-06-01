@@ -357,6 +357,14 @@ void PreviewSurface::setBottomRightText(const QString& text) {
     bottom_right_label_->setText(text);
 }
 
+void PreviewSurface::setFrameTone(FrameTone tone) {
+    if (frame_tone_ == tone) {
+        return;
+    }
+    frame_tone_ = tone;
+    update();
+}
+
 StatusPill* PreviewSurface::statusPill() const noexcept {
     return status_pill_;
 }
@@ -807,10 +815,33 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
         }
     }
 
-    if (recording_) {
+    const bool tone_recording = (frame_tone_ == FrameTone::Recording);
+    const bool tone_warn = (frame_tone_ == FrameTone::Warn);
+    const bool tone_blocked = (frame_tone_ == FrameTone::Blocked);
+
+    QColor tone_color("#45423d");
+    if (tone_recording) {
+        tone_color = QColor("#f05b54");
+    } else if (tone_warn) {
+        tone_color = QColor("#d7a744");
+    } else if (tone_blocked) {
+        tone_color = QColor("#f05b54");
+    }
+
+    if (tone_recording || tone_warn || tone_blocked) {
+        painter.save();
+        QColor glow = tone_color;
+        glow.setAlpha(tone_recording ? 68 : 44);
+        painter.setPen(QPen(glow, tone_recording ? 2.0 : 1.5));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(frame_rect.adjusted(0.8, 0.8, -0.8, -0.8), 5.0, 5.0);
+        painter.restore();
+    }
+
+    if (tone_recording) {
         painter.save();
         painter.setClipRect(rect().adjusted(1, 1, -1, -1));
-        painter.setPen(QPen(QColor(215, 167, 68, 10), 1.0));
+        painter.setPen(QPen(QColor(240, 91, 84, 14), 1.0));
         for (int y = 0; y < height(); y += 4)
             painter.drawLine(1, y, width() - 1, y);
         painter.restore();
@@ -864,8 +895,7 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
         painter.restore();
     }
 
-    const QColor corner_color = recording_ ? QColor("#d7a744") : QColor("#45423d");
-    painter.setPen(QPen(corner_color, recording_ ? 1.8 : 1.2));
+    painter.setPen(QPen(tone_color, (tone_recording || tone_warn || tone_blocked) ? 1.8 : 1.2));
     const int inset = 15;
     const int len = 20;
     painter.drawLine(inset, inset, inset + len, inset);

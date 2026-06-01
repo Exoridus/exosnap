@@ -864,6 +864,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(global_recording_bar_, &ui::chrome::GlobalRecordingBar::pauseActionRequested, this,
             &MainWindow::onGlobalRecordingBarPauseActionRequested);
     connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { nav_->setCurrentRow(1); });
+    connect(record_page_, &RecordPage::navigateToDiagnosticsPage, this, [this]() { nav_->setCurrentRow(3); });
     connect(config_page_, &ConfigPage::formatSettingsChanged, this, [this](const OutputSettingsModel& settings) {
         output_settings_.container = settings.container;
         output_settings_.video_codec = settings.video_codec;

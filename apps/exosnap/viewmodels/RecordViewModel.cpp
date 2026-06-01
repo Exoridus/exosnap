@@ -383,15 +383,19 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
     result_action_hint = msg.action_hint;
 
     if (result.succeeded) {
-        result_stats_text = elapsed_text + L"  ·  " + output_size_text;
+        const std::wstring elapsed_display =
+            result.elapsed_seconds > 0.0 ? FormatElapsed(result.elapsed_seconds) : elapsed_text;
+        const std::wstring size_display =
+            result.output_file_bytes > 0 ? FormatBytes(result.output_file_bytes) : output_size_text;
+        result_stats_text = elapsed_display + L"  ·  " + size_display;
         std::filesystem::path p(result.output_path);
         std::wstring filename = p.filename().wstring();
         result_destination_text = filename;
-        if (result.output_file_bytes > 0 || result.elapsed_seconds > 0.0) {
+        if (!size_display.empty() || !elapsed_display.empty()) {
             result_destination_text += L"  ·  ";
-            result_destination_text += FormatBytes(result.output_file_bytes);
+            result_destination_text += size_display;
             result_destination_text += L"  ·  ";
-            result_destination_text += FormatElapsed(result.elapsed_seconds);
+            result_destination_text += elapsed_display;
         }
     } else {
         result_stats_text = {};
