@@ -17,6 +17,7 @@
 #include <QScrollArea>
 #include <QShowEvent>
 #include <QStackedWidget>
+#include <QStringList>
 #include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -130,22 +131,24 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     header_layout->addWidget(subtitle_label);
     root->addWidget(header_panel);
 
-    auto* section_row = new QHBoxLayout();
+    auto* section_tabs = new QWidget(this);
+    section_tabs->setObjectName("sourcePickerSectionTabs");
+    auto* section_row = new QHBoxLayout(section_tabs);
     section_row->setContentsMargins(0, 0, 0, 0);
     section_row->setSpacing(8);
-    screens_button_ = makeSectionButton("sourcePickerScreensButton", QStringLiteral("Screens"), this);
-    windows_button_ = makeSectionButton("sourcePickerWindowsButton", QStringLiteral("Windows"), this);
-    region_button_ = makeSectionButton("sourcePickerRegionButton", QStringLiteral("Region"), this);
+    screens_button_ = makeSectionButton("sourcePickerScreensButton", QStringLiteral("Screens"), section_tabs);
+    windows_button_ = makeSectionButton("sourcePickerWindowsButton", QStringLiteral("Windows"), section_tabs);
+    region_button_ = makeSectionButton("sourcePickerRegionButton", QStringLiteral("Region"), section_tabs);
     section_row->addWidget(screens_button_);
     section_row->addWidget(windows_button_);
     section_row->addWidget(region_button_);
     section_row->addSpacing(8);
-    refresh_button_ = new QPushButton(QStringLiteral("Refresh previews"), this);
+    refresh_button_ = new QPushButton(QStringLiteral("Refresh previews"), section_tabs);
     refresh_button_->setObjectName("sourcePickerRefreshButton");
-    refresh_button_->setProperty("role", "ghost");
+    refresh_button_->setProperty("role", "utility");
     section_row->addWidget(refresh_button_);
     section_row->addStretch(1);
-    root->addLayout(section_row);
+    root->addWidget(section_tabs);
 
     pages_ = new QStackedWidget(this);
     pages_->setObjectName("sourcePickerPages");
@@ -170,7 +173,7 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     windows_grid_.empty_label = windows_page.empty_label;
     windows_unavailable_toggle_ = new QPushButton(QStringLiteral("Show unavailable (0)"), pages_);
     windows_unavailable_toggle_->setObjectName("sourcePickerShowUnavailableButton");
-    windows_unavailable_toggle_->setProperty("role", "ghost");
+    windows_unavailable_toggle_->setProperty("role", "utility");
     windows_unavailable_toggle_->setCheckable(true);
     windows_unavailable_toggle_->setVisible(false);
     if (windows_grid_.content_layout) {
@@ -256,6 +259,7 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     use_button_ = new QPushButton(QStringLiteral("Use selected source"), this);
     use_button_->setObjectName("sourcePickerUseButton");
     use_button_->setProperty("heroRole", "start");
+    use_button_->setProperty("role", "primary");
     footer->addWidget(cancel_button);
     footer->addWidget(use_button_);
     root->addLayout(footer);
@@ -528,13 +532,30 @@ void SourcePickerDialog::rebuildOptionCardsForSection(Section section) {
 
         card->setStatusText(option.status_badge.trimmed());
 
+        QString state = QStringLiteral("normal");
+        const QString status_detail =
+            QStringList({option.status_badge, option.validation_summary, option.minimum_detail, option.help_text})
+                .join(QStringLiteral(" "))
+                .toLower();
+
         if (option.unavailable) {
+            if (status_detail.contains(QStringLiteral("minim"))) {
+                state = QStringLiteral("minimized");
+            } else {
+                state = QStringLiteral("unavailable");
+            }
+            card->setProperty("captureCardState", state);
             RestyleCard(card, "warning");
             card->setUnavailable(true);
             card->setHelpText(option.help_text);
             card->setThumbnailUnavailableText(option.status_badge.isEmpty() ? QStringLiteral("Unavailable")
                                                                             : option.status_badge);
         } else {
+            if (!option.selectable) {
+                state = status_detail.contains(QStringLiteral("small")) ? QStringLiteral("too-small")
+                                                                        : QStringLiteral("warning");
+            }
+            card->setProperty("captureCardState", state);
             RestyleCard(card, option.selectable ? "default" : "warning");
             QString help_text = option.help_text;
             if (!option.selectable && help_text.isEmpty() && !option.validation_summary.trimmed().isEmpty()) {

@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QStyle>
 
 namespace exosnap::ui::chrome {
 namespace {
@@ -270,27 +271,45 @@ void GlobalRecordingBar::refreshActionLabels() {
          status_label_ == QStringLiteral("STOPPING"));
     const bool is_ready = (status_label_ == QStringLiteral("READY"));
 
+    auto applySemantic = [](QPushButton* button, const char* semantic_role) {
+        if (!button)
+            return;
+        const QString role = QString::fromUtf8(semantic_role);
+        if (button->property("semanticRole").toString() == role) {
+            return;
+        }
+        button->setProperty("semanticRole", role);
+        button->style()->unpolish(button);
+        button->style()->polish(button);
+        button->update();
+    };
+
     if (is_recording) {
         primary_action_button_->setText(QStringLiteral("Stop"));
         primary_action_button_->setToolTip(QStringLiteral("Stop recording."));
         primary_action_button_->setAccessibleName(QStringLiteral("Stop recording"));
+        applySemantic(primary_action_button_, "danger");
     } else if (is_paused) {
         primary_action_button_->setText(QStringLiteral("Resume"));
         primary_action_button_->setToolTip(QStringLiteral("Resume recording."));
         primary_action_button_->setAccessibleName(QStringLiteral("Resume recording"));
+        applySemantic(primary_action_button_, "accent");
     } else if (has_details) {
         primary_action_button_->setText(QStringLiteral("Details"));
         primary_action_button_->setToolTip(QStringLiteral("Open Diagnostics to review blockers and failures."));
         primary_action_button_->setAccessibleName(QStringLiteral("Open diagnostics details"));
+        applySemantic(primary_action_button_, "danger");
     } else if (is_working) {
         primary_action_button_->setText(QStringLiteral("Working..."));
         primary_action_button_->setToolTip(
             QStringLiteral("State transition in progress. Action is temporarily unavailable."));
         primary_action_button_->setAccessibleName(QStringLiteral("Working state transition"));
+        applySemantic(primary_action_button_, "muted");
     } else {
         primary_action_button_->setText(QStringLiteral("Start"));
         primary_action_button_->setToolTip(QStringLiteral("Start recording."));
         primary_action_button_->setAccessibleName(QStringLiteral("Start recording"));
+        applySemantic(primary_action_button_, "primary");
     }
     primary_action_button_->setEnabled(is_ready || is_recording || is_paused || has_details);
     primary_action_button_->setAccessibleDescription(primary_action_button_->toolTip());
@@ -300,6 +319,7 @@ void GlobalRecordingBar::refreshActionLabels() {
         pause_action_button_->setToolTip(QStringLiteral("Recording is paused. Use Resume to continue."));
         pause_action_button_->setAccessibleName(QStringLiteral("Recording paused"));
         pause_action_button_->setEnabled(false);
+        applySemantic(pause_action_button_, "muted");
     } else {
         pause_action_button_->setText(QStringLiteral("Pause"));
         pause_action_button_->setToolTip(is_recording ? QStringLiteral("Pause recording.")
@@ -307,6 +327,7 @@ void GlobalRecordingBar::refreshActionLabels() {
         pause_action_button_->setAccessibleName(is_recording ? QStringLiteral("Pause recording")
                                                              : QStringLiteral("Pause recording unavailable"));
         pause_action_button_->setEnabled(is_recording);
+        applySemantic(pause_action_button_, "secondary");
     }
     pause_action_button_->setAccessibleDescription(pause_action_button_->toolTip());
 
@@ -315,16 +336,19 @@ void GlobalRecordingBar::refreshActionLabels() {
     mic_action_button_->setEnabled(false);
     mic_action_button_->setAccessibleName(QStringLiteral("Microphone control unavailable"));
     mic_action_button_->setAccessibleDescription(mic_action_button_->toolTip());
+    applySemantic(mic_action_button_, "utility");
 
     marker_action_button_->setToolTip(QStringLiteral("Markers are not available in this MVP build."));
     marker_action_button_->setEnabled(false);
     marker_action_button_->setAccessibleName(QStringLiteral("Marker control unavailable"));
     marker_action_button_->setAccessibleDescription(marker_action_button_->toolTip());
+    applySemantic(marker_action_button_, "utility");
 
     overlay_action_button_->setToolTip(QStringLiteral("Overlay/HUD controls are not available in this MVP build."));
     overlay_action_button_->setEnabled(false);
     overlay_action_button_->setAccessibleName(QStringLiteral("Overlay control unavailable"));
     overlay_action_button_->setAccessibleDescription(overlay_action_button_->toolTip());
+    applySemantic(overlay_action_button_, "utility");
 }
 
 void GlobalRecordingBar::applyCompactLayout() {

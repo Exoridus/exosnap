@@ -31,6 +31,7 @@ CaptureTargetCard::CaptureTargetCard(QWidget* parent) : QFrame(parent) {
     setObjectName("captureTargetCard");
     setProperty("selected", false);
     setProperty("captureCardUnavailable", false);
+    setProperty("captureCardState", "normal");
     setCursor(Qt::PointingHandCursor);
     setFocusPolicy(Qt::StrongFocus);
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
