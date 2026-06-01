@@ -155,15 +155,41 @@ TEST_F(ConfigPageTest, BuiltInAndModifiedStates_UsePresetCopy) {
 TEST_F(ConfigPageTest, WebcamDetailsButtonExists) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    const auto buttons = page.findChildren<QPushButton*>();
-    bool found = false;
-    for (const auto* b : buttons) {
-        if (b->text() == QStringLiteral("Webcam details...")) {
-            found = true;
-            break;
-        }
-    }
-    EXPECT_TRUE(found);
+    auto* webcam_btn = page.findChild<QPushButton*>(QStringLiteral("webcamDetailsBtn"));
+    ASSERT_NE(webcam_btn, nullptr);
+    EXPECT_EQ(webcam_btn->text(), QStringLiteral("Open Webcam Setup"));
+}
+
+TEST_F(ConfigPageTest, AdvancedDetailsButtonExists) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* advanced_btn = page.findChild<QPushButton*>(QStringLiteral("advancedDetailsBtn"));
+    ASSERT_NE(advanced_btn, nullptr);
+    EXPECT_EQ(advanced_btn->text(), QStringLiteral("Open Advanced"));
+}
+
+TEST_F(ConfigPageTest, WebcamDetailsButtonClick_EmitsSignal) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    bool emitted = false;
+    QObject::connect(&page, &ConfigPage::webcamDetailsRequested, [&emitted]() { emitted = true; });
+
+    auto* webcam_btn = page.findChild<QPushButton*>(QStringLiteral("webcamDetailsBtn"));
+    ASSERT_NE(webcam_btn, nullptr);
+    webcam_btn->click();
+    EXPECT_TRUE(emitted);
+}
+
+TEST_F(ConfigPageTest, AdvancedDetailsButtonClick_EmitsSignal) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    bool emitted = false;
+    QObject::connect(&page, &ConfigPage::advancedRequested, [&emitted]() { emitted = true; });
+
+    auto* advanced_btn = page.findChild<QPushButton*>(QStringLiteral("advancedDetailsBtn"));
+    ASSERT_NE(advanced_btn, nullptr);
+    advanced_btn->click();
+    EXPECT_TRUE(emitted);
 }
 
 TEST_F(ConfigPageTest, ReadinessBlocked_ShowsDiagnosticsAction) {

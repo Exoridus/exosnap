@@ -439,7 +439,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* webcam_panel_layout = new QVBoxLayout(webcam_panel);
     webcam_panel_layout->setContentsMargins(18, 16, 18, 18);
     webcam_panel_layout->setSpacing(8);
-    webcam_panel_layout->addWidget(makeCardTitle(QStringLiteral("Webcam"), webcam_panel));
+    webcam_panel_layout->addWidget(makeCardTitle(QStringLiteral("Webcam Setup"), webcam_panel));
 
     webcam_enabled_check_ = new QCheckBox(QStringLiteral("Record webcam"), webcam_panel);
     webcam_panel_layout->addWidget(webcam_enabled_check_);
@@ -455,10 +455,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     webcam_info_label_->setWordWrap(true);
     webcam_panel_layout->addWidget(webcam_info_label_);
 
-    webcam_panel_layout->addWidget(
-        makeHint(QStringLiteral("Live preview, sizing, and placement are on the Webcam page."), webcam_panel));
+    webcam_panel_layout->addWidget(makeHint(
+        QStringLiteral("Open Webcam Setup for live preview and camera tuning. Placement and PiP controls are not "
+                       "available in this build."),
+        webcam_panel));
 
-    webcam_details_btn_ = new QPushButton(QStringLiteral("Webcam details..."), webcam_panel);
+    webcam_details_btn_ = new QPushButton(QStringLiteral("Open Webcam Setup"), webcam_panel);
     webcam_details_btn_->setObjectName(QStringLiteral("webcamDetailsBtn"));
     webcam_details_btn_->setProperty("role", "ghost");
     webcam_panel_layout->addWidget(webcam_details_btn_, 0, Qt::AlignLeft);
@@ -551,13 +553,15 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     advanced_head->setSpacing(12);
     auto* advanced_text = new QVBoxLayout();
     advanced_text->setSpacing(2);
-    advanced_text->addWidget(makeCardTitle(QStringLiteral("Advanced"), advanced_panel));
+    advanced_text->addWidget(makeCardTitle(QStringLiteral("Advanced / Expert Settings"), advanced_panel));
     advanced_text->addWidget(makeHint(
-        QStringLiteral("Backend override, encoder preset, developer logging, and filename rules — expert only."),
+        QStringLiteral("Normal recording configuration lives in Settings. Use Advanced for diagnostics, developer, "
+                       "and expert-only options."),
         advanced_panel));
     advanced_head->addLayout(advanced_text, 1);
 
-    auto* advanced_open_btn = new QPushButton(QStringLiteral("Open Advanced page"), advanced_panel);
+    auto* advanced_open_btn = new QPushButton(QStringLiteral("Open Advanced"), advanced_panel);
+    advanced_open_btn->setObjectName(QStringLiteral("advancedDetailsBtn"));
     advanced_open_btn->setProperty("role", "ghost");
     advanced_head->addWidget(advanced_open_btn, 0, Qt::AlignVCenter);
     advanced_layout->addLayout(advanced_head);

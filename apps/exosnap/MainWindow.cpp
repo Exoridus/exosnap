@@ -180,28 +180,30 @@ struct PageDescriptor {
     const char* subtitle;
     const char* page_meta;
     const char* chrome_context;
+    bool primary_nav;
     SidebarIcon icon;
 };
 
 constexpr std::array<PageDescriptor, 7> kPageDescriptors = {{
     {"Record", "01 · RECORD", "Operational view — target, readiness, and live runtime.", "",
-     "DISPLAY1 · 2560×1440 · 60 fps · AV1", SidebarIcon::Record},
+     "DISPLAY1 · 2560×1440 · 60 fps · AV1", true, SidebarIcon::Record},
     {"Settings", "02 · SETTINGS", "Unified recording configuration — format, sources, and output.", "",
-     "Preset · Sources · Output", SidebarIcon::Setup},
+     "Preset · Sources · Output", true, SidebarIcon::Setup},
     {"Hotkeys", "03 · HOTKEYS", "Global command access for recording operations.", "GLOBAL SHORTCUTS",
-     "Trigger and visibility rules", SidebarIcon::Hotkeys},
+     "Trigger and visibility rules", true, SidebarIcon::Hotkeys},
     {"Diagnostics", "04 · DIAGNOSTICS", "Capability checks, blockers, and system readiness.", "BLOCKER-FIRST",
-     "Probe matrix and drivers", SidebarIcon::Diagnostics},
+     "Probe matrix and drivers", true, SidebarIcon::Diagnostics},
     {"Logs", "05 · LOGS", "Runtime events and recording diagnostics.", "SESSION EVENTS",
-     "Structured recorder telemetry", SidebarIcon::Logs},
-    {"Advanced", "06 · ADVANCED", "Lower-level behavior and non-default controls.", "EXPERT SETTINGS",
-     "Explicitly non-default", SidebarIcon::Advanced},
-    {"Webcam", "07 · WEBCAM", "Webcam device and capture settings.", "", "Camera composited into recording",
+     "Structured recorder telemetry", true, SidebarIcon::Logs},
+    {"Advanced", "ADVANCED", "Lower-level behavior and non-default controls.", "EXPERT SETTINGS",
+     "Explicitly non-default", false, SidebarIcon::Advanced},
+    {"Webcam", "WEBCAM SETUP", "Webcam device and capture settings.", "", "Camera composited into recording", false,
      SidebarIcon::Webcam},
 }};
 
 constexpr int kNavIndexRole = Qt::UserRole + 1;
 constexpr int kNavIconRole = Qt::UserRole + 2;
+constexpr int kNavPageIndexRole = Qt::UserRole + 3;
 constexpr int pageIndexForIcon(SidebarIcon icon) {
     for (std::size_t i = 0; i < kPageDescriptors.size(); ++i) {
         if (kPageDescriptors[i].icon == icon)
@@ -209,9 +211,15 @@ constexpr int pageIndexForIcon(SidebarIcon icon) {
     }
     return -1;
 }
+constexpr int kRecordPageIndex = pageIndexForIcon(SidebarIcon::Record);
+constexpr int kSettingsPageIndex = pageIndexForIcon(SidebarIcon::Setup);
+constexpr int kAdvancedPageIndex = pageIndexForIcon(SidebarIcon::Advanced);
 constexpr int kDiagnosticsPageIndex = pageIndexForIcon(SidebarIcon::Diagnostics);
 constexpr int kWebcamPageIndex = pageIndexForIcon(SidebarIcon::Webcam);
 constexpr int kLogsPageIndex = pageIndexForIcon(SidebarIcon::Logs);
+static_assert(kRecordPageIndex >= 0, "Record page must exist in kPageDescriptors.");
+static_assert(kSettingsPageIndex >= 0, "Settings page must exist in kPageDescriptors.");
+static_assert(kAdvancedPageIndex >= 0, "Advanced page must exist in kPageDescriptors.");
 static_assert(kDiagnosticsPageIndex >= 0, "Diagnostics page must exist in kPageDescriptors.");
 static_assert(kWebcamPageIndex >= 0, "Webcam page must exist in kPageDescriptors.");
 static_assert(kLogsPageIndex >= 0, "Logs page must exist in kPageDescriptors.");
@@ -746,11 +754,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     nav_palette.setColor(QPalette::HighlightedText, QColor(ui::theme::ExoSnapPalette::kText0));
     nav_->setPalette(nav_palette);
 
+    int primary_nav_order = 0;
     for (std::size_t i = 0; i < kPageDescriptors.size(); ++i) {
         const auto& page = kPageDescriptors[i];
+        if (!page.primary_nav)
+            continue;
         auto* item = new QListWidgetItem(QString::fromUtf8(page.nav_label), nav_);
-        item->setData(kNavIndexRole, QString("%1").arg(i + 1, 2, 10, QChar('0')));
+        ++primary_nav_order;
+        item->setData(kNavIndexRole, QString("%1").arg(primary_nav_order, 2, 10, QChar('0')));
         item->setData(kNavIconRole, static_cast<int>(page.icon));
+        item->setData(kNavPageIndexRole, static_cast<int>(i));
         item->setSizeHint({180, 54});
     }
     sidebar_layout->addWidget(nav_, 1);
@@ -863,8 +876,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             &MainWindow::onGlobalRecordingBarPrimaryActionRequested);
     connect(global_recording_bar_, &ui::chrome::GlobalRecordingBar::pauseActionRequested, this,
             &MainWindow::onGlobalRecordingBarPauseActionRequested);
-    connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { nav_->setCurrentRow(1); });
-    connect(record_page_, &RecordPage::navigateToDiagnosticsPage, this, [this]() { nav_->setCurrentRow(3); });
+    connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { navigateToPage(kSettingsPageIndex); });
+    connect(record_page_, &RecordPage::navigateToDiagnosticsPage, this,
+            [this]() { navigateToPage(kDiagnosticsPageIndex); });
     connect(config_page_, &ConfigPage::formatSettingsChanged, this, [this](const OutputSettingsModel& settings) {
         output_settings_.container = settings.container;
         output_settings_.video_codec = settings.video_codec;
@@ -1065,21 +1079,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     });
     connect(config_page_, &ConfigPage::diagnosticsRequested, this, [this]() {
         refreshDiagnosticsData();
-        nav_->setCurrentRow(kDiagnosticsPageIndex);
+        navigateToPage(kDiagnosticsPageIndex);
     });
     connect(diagnostics_page_, &DiagnosticsPage::navigateToLogsRequested, this,
-            [this]() { nav_->setCurrentRow(kLogsPageIndex); });
-    connect(config_page_, &ConfigPage::webcamDetailsRequested, this,
-            [this]() { nav_->setCurrentRow(kWebcamPageIndex); });
-    connect(config_page_, &ConfigPage::advancedRequested, this,
-            [this]() { nav_->setCurrentRow(pageIndexForIcon(SidebarIcon::Advanced)); });
+            [this]() { navigateToPage(kLogsPageIndex); });
+    connect(config_page_, &ConfigPage::webcamDetailsRequested, this, [this]() { navigateToPage(kWebcamPageIndex); });
+    connect(config_page_, &ConfigPage::advancedRequested, this, [this]() { navigateToPage(kAdvancedPageIndex); });
 
     record_page_->rebroadcastChromeState();
     applyActiveProfileToPages();
 
     diagnostics::AppLog(QStringLiteral("[window] MainWindow constructed"));
 
-    nav_->setCurrentRow(0);
+    navigateToPage(kRecordPageIndex);
     pollIdleRuntimeMetrics();
 
     auto* fullscreen_shortcut = new QShortcut(QKeySequence(Qt::Key_F11), this);
@@ -1199,7 +1211,7 @@ bool MainWindow::effectiveMaximizedState() const {
 }
 
 void MainWindow::onNavRowChanged(int row) {
-    setCurrentPage(row);
+    setCurrentPage(pageIndexForNavRow(row));
 }
 
 void MainWindow::onRecordChromeStateChanged(bool recording, const QString& status_label, const QString& context_text) {
@@ -1249,7 +1261,7 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
         title_bar_->setPageContext("01 · RECORD", context_text);
 
     if (recording && isVisible() && !isMinimized() && stack_->currentIndex() != 0)
-        setCurrentPage(0);
+        navigateToPage(kRecordPageIndex);
 }
 
 void MainWindow::onGlobalRecordingBarPrimaryActionRequested() {
@@ -1265,7 +1277,7 @@ void MainWindow::onGlobalRecordingBarPrimaryActionRequested() {
 
     if (ui::chrome::ShouldOpenRecordingDiagnosticsForStatus(record_status_label_) && nav_) {
         refreshDiagnosticsData();
-        nav_->setCurrentRow(kDiagnosticsPageIndex);
+        navigateToPage(kDiagnosticsPageIndex);
     }
 }
 
@@ -1652,6 +1664,47 @@ void MainWindow::applyRestoredGeometry() {
 
     if (geo.maximized)
         QTimer::singleShot(0, this, &MainWindow::showMaximized);
+}
+
+int MainWindow::pageIndexForNavRow(int row) const {
+    if (!nav_ || row < 0 || row >= nav_->count())
+        return -1;
+
+    const QListWidgetItem* item = nav_->item(row);
+    if (!item)
+        return -1;
+
+    bool ok = false;
+    const int page_index = item->data(kNavPageIndexRole).toInt(&ok);
+    return ok ? page_index : -1;
+}
+
+int MainWindow::navRowForPageIndex(int index) const {
+    if (!nav_)
+        return -1;
+
+    for (int row = 0; row < nav_->count(); ++row) {
+        bool ok = false;
+        const int page_index = nav_->item(row)->data(kNavPageIndexRole).toInt(&ok);
+        if (ok && page_index == index)
+            return row;
+    }
+    return -1;
+}
+
+void MainWindow::navigateToPage(int index) {
+    if (index < 0 || index >= static_cast<int>(kPageDescriptors.size()))
+        return;
+
+    const int nav_row = navRowForPageIndex(index);
+    if (nav_row >= 0 && nav_) {
+        if (nav_->currentRow() != nav_row) {
+            nav_->setCurrentRow(nav_row);
+            return;
+        }
+    }
+
+    setCurrentPage(index);
 }
 
 void MainWindow::setCurrentPage(int index) {

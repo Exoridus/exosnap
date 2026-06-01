@@ -63,6 +63,9 @@ class MainWindow : public QMainWindow {
     void applyRestoredGeometry();
     void saveWindowGeometry();
 
+    int pageIndexForNavRow(int row) const;
+    int navRowForPageIndex(int index) const;
+    void navigateToPage(int index);
     void setCurrentPage(int index);
     void updatePageHeader(int index);
     QString buildGlobalRecordingBarProfileSummary() const;
