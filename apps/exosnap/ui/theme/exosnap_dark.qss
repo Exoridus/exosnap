@@ -436,6 +436,11 @@ QFrame#recordControlPanel {
     border-color: ${line3};
 }
 
+QFrame#recordControlPanel[stateRole="ready"] {
+    background: rgba(120, 218, 149, 0.06);
+    border-color: rgba(120, 218, 149, 0.34);
+}
+
 QFrame#recordControlPanel[stateRole="recording"] {
     background: rgba(240, 91, 84, 0.08);
     border-color: rgba(240, 91, 84, 0.42);
@@ -527,14 +532,14 @@ QPushButton#recordHeroBtn {
 }
 
 QPushButton#recordHeroBtn[heroRole="start"] {
-    color: ${bg0};
-    background: ${accent};
-    border-color: ${accent};
+    color: #0d150f;
+    background: ${ok};
+    border-color: ${ok};
 }
 
 QPushButton#recordHeroBtn[heroRole="start"]:hover {
-    background: ${accent-hover};
-    border-color: ${accent-hover};
+    background: #86e1a0;
+    border-color: #86e1a0;
 }
 
 QPushButton#recordHeroBtn[heroRole="stop"] {
@@ -568,10 +573,51 @@ QPushButton#recordHeroBtn[heroRole="muted"] {
 
 QLabel[labelRole="railSummary"] {
     font-family: ${font-mono};
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: ${text1};
+}
+
+QWidget#recordRailSourceStatusPanel {
+    border: 1px solid ${line1};
+    border-radius: ${radius-sm}px;
+    background: rgba(33, 30, 27, 0.78);
+    padding: 6px;
+}
+
+QWidget#recordRailSourceStatusPanel[sourceLocked="true"] {
+    border-color: rgba(215, 167, 68, 0.44);
+    background: rgba(33, 30, 27, 0.86);
+}
+
+QLabel[labelRole="railSourceSummary"] {
+    font-family: ${font-mono};
     font-size: 10.5px;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.04em;
     color: ${text2};
-    text-transform: uppercase;
+}
+
+QLabel[labelRole="recordRailSourceChip"] {
+    font-family: ${font-mono};
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    color: ${text2};
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    background: ${bg3};
+    padding: 3px 7px;
+}
+
+QLabel[labelRole="recordRailSourceChip"][stateRole="ready"] {
+    color: ${ok};
+    border-color: rgba(120, 218, 149, 0.46);
+    background: rgba(120, 218, 149, 0.14);
+}
+
+QLabel[labelRole="recordRailSourceChip"][stateRole="muted"] {
+    color: ${text3};
+    border-color: ${line1};
+    background: ${bg2};
 }
 
 QLabel[labelRole="railReadiness"] {
@@ -589,6 +635,10 @@ QLabel[labelRole="railReadiness"][stateRole="warn"] {
 
 QLabel[labelRole="railReadiness"][stateRole="blocked"] {
     color: ${err};
+}
+
+QLabel[labelRole="railReadiness"][stateRole="muted"] {
+    color: ${text2};
 }
 
 QLabel[labelRole="railStats"] {
@@ -628,34 +678,120 @@ QWidget#recordSourceRow {
     background: transparent;
 }
 
-QFrame#recordSourceChip {
-    background: ${bg2};
+QWidget#recordSourceRow[sourceLocked="true"] {
+    background: transparent;
+}
+
+QWidget#recordPreviewContextRow {
+    background: transparent;
+}
+
+QWidget#recordPreviewSurfaceHost {
+    background: #0a0908;
     border: 1px solid ${line2};
     border-radius: ${radius-md}px;
 }
 
+QWidget#recordPreviewSurfaceHost[recordState="ready"] {
+    border-color: ${line2};
+}
+
+QWidget#recordPreviewSurfaceHost[recordState="recording"] {
+    border-color: rgba(240, 91, 84, 0.66);
+}
+
+QWidget#recordPreviewSurfaceHost[recordState="paused"] {
+    border-color: rgba(215, 167, 68, 0.64);
+}
+
+QWidget#recordPreviewSurfaceHost[recordState="warn"] {
+    border-color: rgba(215, 167, 68, 0.52);
+}
+
+QWidget#recordPreviewSurfaceHost[recordState="blocked"] {
+    border-color: rgba(240, 91, 84, 0.7);
+}
+
+QWidget#recordPreviewSurfaceHost[recordState="done"] {
+    border-color: rgba(120, 218, 149, 0.44);
+}
+
+QLabel[labelRole="recordPreviewSourceChip"],
+QLabel[labelRole="recordPreviewAspectChip"] {
+    font-family: ${font-mono};
+    font-size: 10.5px;
+    letter-spacing: 0.05em;
+    color: ${text2};
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    background: rgba(25, 23, 20, 0.92);
+    padding: 4px 8px;
+}
+
+QLabel[labelRole="recordPreviewSourceChip"][stateRole="ready"],
+QLabel[labelRole="recordPreviewAspectChip"][stateRole="ready"] {
+    color: ${ok};
+    border-color: rgba(120, 218, 149, 0.44);
+    background: rgba(120, 218, 149, 0.12);
+}
+
+QLabel[labelRole="recordPreviewSourceChip"][stateRole="recording"],
+QLabel[labelRole="recordPreviewAspectChip"][stateRole="recording"] {
+    color: ${err};
+    border-color: rgba(240, 91, 84, 0.58);
+    background: rgba(240, 91, 84, 0.16);
+}
+
+QLabel[labelRole="recordPreviewSourceChip"][stateRole="warn"],
+QLabel[labelRole="recordPreviewAspectChip"][stateRole="warn"] {
+    color: ${warn};
+    border-color: rgba(215, 167, 68, 0.5);
+    background: rgba(215, 167, 68, 0.15);
+}
+
+QLabel[labelRole="recordPreviewSourceChip"][stateRole="blocked"],
+QLabel[labelRole="recordPreviewAspectChip"][stateRole="blocked"] {
+    color: ${err};
+    border-color: rgba(240, 91, 84, 0.6);
+    background: rgba(240, 91, 84, 0.18);
+}
+
+QLabel[labelRole="recordPreviewSourceChip"][stateRole="muted"],
+QLabel[labelRole="recordPreviewAspectChip"][stateRole="muted"] {
+    color: ${text3};
+    border-color: ${line1};
+    background: ${bg2};
+}
+
+QFrame#recordSourceChip {
+    background: rgba(25, 23, 20, 0.92);
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+}
+
 QFrame#recordSourceChip[sourceLocked="true"] {
-    border-color: ${line3};
+    border-color: rgba(215, 167, 68, 0.48);
     border-style: dashed;
-    background: rgba(50, 46, 43, 0.72);
+    background: rgba(50, 46, 43, 0.84);
 }
 
 QLabel[labelRole="recordSourceKind"] {
     font-family: ${font-mono};
-    font-size: 10px;
-    letter-spacing: 0.14em;
+    font-size: 9px;
+    letter-spacing: 0.1em;
     color: ${text3};
 }
 
 QLabel[labelRole="recordSourceName"] {
-    font-size: 15px;
-    font-weight: 600;
-    color: ${text0};
+    font-family: ${font-mono};
+    font-size: 10.5px;
+    letter-spacing: 0.05em;
+    color: ${text1};
 }
 
 QLabel[labelRole="recordSourceMeta"] {
     font-family: ${font-mono};
-    font-size: 11px;
+    font-size: 10px;
     letter-spacing: 0.04em;
     color: ${text2};
 }
@@ -670,17 +806,18 @@ QLabel[labelRole="recordPresetSummary"] {
 QLabel[labelRole="recordSourceLock"] {
     font-family: ${font-mono};
     font-size: 10px;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.08em;
     color: ${warn};
     border: 1px solid rgba(215, 167, 68, 0.48);
     border-radius: ${radius-sm}px;
     background: rgba(215, 167, 68, 0.12);
-    padding: 4px 8px;
+    padding: 3px 8px;
 }
 
 QPushButton#recordChangeSourceButton {
-    min-height: 32px;
-    min-width: 126px;
+    min-height: 30px;
+    min-width: 118px;
+    padding: 0 12px;
 }
 
 QPushButton#recordOpenDiagnosticsButton {

@@ -614,8 +614,9 @@ bool RecordPage::eventFilter(QObject* watched, QEvent* event) {
 
 void RecordPage::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
-    updatePreviewHeightClamp();
     updateResponsiveLayout();
+    updatePreviewHeightClamp();
+    updatePreviewContextChips();
 }
 
 void RecordPage::showEvent(QShowEvent* event) {
@@ -627,9 +628,40 @@ void RecordPage::updatePreviewHeightClamp() {
     if (!preview_surface_) {
         return;
     }
-    const int clamped_max = std::clamp(static_cast<int>(height() * 0.62), 340, 680);
-    preview_surface_->setMinimumHeight(280);
-    preview_surface_->setMaximumHeight(clamped_max);
+
+    const bool narrow = cockpit_split_layout_ && cockpit_split_layout_->direction() == QBoxLayout::TopToBottom;
+    const int host_width = (preview_surface_host_ && preview_surface_host_->width() > 0)
+                               ? preview_surface_host_->width()
+                               : (preview_column_ ? preview_column_->width() : width());
+    const int safe_host_width = (std::max)(200, host_width);
+    const int page_height = (std::max)(0, height());
+
+    const int min_height = narrow ? 260 : 300;
+    const int max_height = narrow ? std::clamp(static_cast<int>(page_height * 0.56), 320, 760)
+                                  : std::clamp(static_cast<int>(page_height * 0.76), 360, 980);
+
+    int frame_height = static_cast<int>((static_cast<double>(safe_host_width) * 9.0) / 16.0);
+    frame_height = std::clamp(frame_height, min_height, max_height);
+
+    int frame_width = static_cast<int>((static_cast<double>(frame_height) * 16.0) / 9.0);
+    if (frame_width > safe_host_width) {
+        frame_width = safe_host_width;
+        frame_height = static_cast<int>((static_cast<double>(frame_width) * 9.0) / 16.0);
+    }
+
+    frame_width = (std::max)(200, frame_width);
+    frame_height = (std::max)(120, frame_height);
+
+    const QSize target_size(frame_width, frame_height);
+    if (preview_surface_->minimumSize() != target_size || preview_surface_->maximumSize() != target_size) {
+        preview_surface_->setMinimumSize(target_size);
+        preview_surface_->setMaximumSize(target_size);
+        preview_surface_->updateGeometry();
+    }
+
+    if (preview_surface_->isDxgiPreviewActive()) {
+        preview_surface_->repositionDxgiPreview();
+    }
 }
 
 void RecordPage::updateResponsiveLayout() {
@@ -637,8 +669,8 @@ void RecordPage::updateResponsiveLayout() {
         return;
     }
 
-    const bool narrow = width() < 1180;
-    const bool medium = width() < 1480;
+    const bool narrow = width() < 1200;
+    const bool medium = width() < 1540;
     const QBoxLayout::Direction desired = narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight;
     if (cockpit_split_layout_->direction() != desired) {
         cockpit_split_layout_->setDirection(desired);
@@ -652,21 +684,23 @@ void RecordPage::updateResponsiveLayout() {
             rail_column->setMinimumWidth(0);
             rail_column->setMaximumWidth(QWIDGETSIZE_MAX);
         } else if (medium) {
-            rail_column->setMinimumWidth(304);
-            rail_column->setMaximumWidth(344);
+            rail_column->setMinimumWidth(336);
+            rail_column->setMaximumWidth(364);
         } else {
-            rail_column->setMinimumWidth(324);
-            rail_column->setMaximumWidth(376);
+            rail_column->setMinimumWidth(340);
+            rail_column->setMaximumWidth(380);
         }
     }
 
     if (narrow) {
-        cockpit_split_layout_->setStretch(0, 0);
+        cockpit_split_layout_->setStretch(0, 1);
         cockpit_split_layout_->setStretch(1, 0);
     } else {
         cockpit_split_layout_->setStretch(0, 7);
         cockpit_split_layout_->setStretch(1, 3);
     }
+
+    updatePreviewHeightClamp();
 }
 
 RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
@@ -692,16 +726,92 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     cockpit_split_layout_->setSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
     layout->addWidget(cockpit_row);
 
-    preview_surface_ = new ui::widgets::PreviewSurface(cockpit_row);
-    cockpit_split_layout_->addWidget(preview_surface_, 7);
+    preview_column_ = new QWidget(cockpit_row);
+    preview_column_->setObjectName("recordPreviewColumn");
+    auto* preview_column_layout = new QVBoxLayout(preview_column_);
+    preview_column_layout->setContentsMargins(0, 0, 0, 0);
+    preview_column_layout->setSpacing(8);
+
+    source_row_ = new QWidget(preview_column_);
+    source_row_->setObjectName("recordSourceRow");
+    auto* source_row_layout = new QHBoxLayout(source_row_);
+    source_row_layout->setContentsMargins(0, 0, 0, 0);
+    source_row_layout->setSpacing(8);
+
+    source_chip_panel_ = new QFrame(source_row_);
+    source_chip_panel_->setObjectName("recordSourceChip");
+    source_chip_panel_->setProperty("sourceLocked", false);
+    auto* source_chip_layout = new QHBoxLayout(source_chip_panel_);
+    source_chip_layout->setContentsMargins(8, 6, 8, 6);
+    source_chip_layout->setSpacing(6);
+
+    source_kind_label_ = makeLabel("SCREEN", "recordSourceKind", source_chip_panel_);
+    source_name_label_ = makeLabel("No source selected", "recordSourceName", source_chip_panel_);
+    source_name_label_->setWordWrap(false);
+    source_name_label_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    source_meta_label_ = makeLabel("Choose a source to preview and record.", "recordSourceMeta", source_chip_panel_);
+    source_meta_label_->setWordWrap(false);
+    source_kind_label_->setVisible(false);
+    source_meta_label_->setVisible(false);
+
+    source_chip_layout->addWidget(source_kind_label_);
+    source_chip_layout->addWidget(source_name_label_, 1);
+    source_chip_layout->addWidget(source_meta_label_);
+    source_chip_panel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+
+    source_lock_label_ = makeLabel("Source locked", "recordSourceLock", source_row_);
+    source_lock_label_->setVisible(false);
+
+    change_source_btn_ = new QPushButton("Change source", source_row_);
+    change_source_btn_->setObjectName("recordChangeSourceButton");
+    change_source_btn_->setProperty("role", "ghost");
+    change_source_btn_->setEnabled(false);
+
+    source_preset_label_ = makeLabel("PRESET · AV1 · OPUS · MKV", "recordPresetSummary", source_row_);
+    source_preset_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    source_preset_label_->setWordWrap(false);
+    source_preset_label_->setVisible(false);
+
+    source_row_layout->addWidget(source_chip_panel_, 1);
+    source_row_layout->addWidget(source_lock_label_, 0, Qt::AlignVCenter);
+    source_row_layout->addWidget(change_source_btn_, 0, Qt::AlignVCenter);
+    preview_column_layout->addWidget(source_row_);
+
+    preview_context_row_ = new QWidget(preview_column_);
+    preview_context_row_->setObjectName("recordPreviewContextRow");
+    auto* preview_context_layout = new QHBoxLayout(preview_context_row_);
+    preview_context_layout->setContentsMargins(0, 0, 0, 0);
+    preview_context_layout->setSpacing(8);
+    preview_source_chip_label_ = makeLabel("No source selected", "recordPreviewSourceChip", preview_context_row_);
+    preview_aspect_chip_label_ = makeLabel("16:9", "recordPreviewAspectChip", preview_context_row_);
+    setStyledStringProperty(preview_source_chip_label_, "stateRole", "muted");
+    setStyledStringProperty(preview_aspect_chip_label_, "stateRole", "ready");
+    preview_context_layout->addWidget(preview_source_chip_label_, 0, Qt::AlignLeft | Qt::AlignVCenter);
+    preview_context_layout->addStretch(1);
+    preview_context_layout->addWidget(preview_aspect_chip_label_, 0, Qt::AlignRight | Qt::AlignVCenter);
+    preview_column_layout->addWidget(preview_context_row_);
+
+    preview_surface_host_ = new QWidget(preview_column_);
+    preview_surface_host_->setObjectName("recordPreviewSurfaceHost");
+    setStyledStringProperty(preview_surface_host_, "recordState", "ready");
+    auto* preview_surface_host_layout = new QHBoxLayout(preview_surface_host_);
+    preview_surface_host_layout->setContentsMargins(1, 1, 1, 1);
+    preview_surface_host_layout->setSpacing(0);
+    preview_surface_host_layout->addStretch(1);
+    preview_surface_ = new ui::widgets::PreviewSurface(preview_surface_host_);
+    preview_surface_host_layout->addWidget(preview_surface_, 0, Qt::AlignHCenter | Qt::AlignTop);
+    preview_surface_host_layout->addStretch(1);
+    preview_column_layout->addWidget(preview_surface_host_, 1);
+
+    cockpit_split_layout_->addWidget(preview_column_, 7);
 
     auto* rail_column = new QWidget(cockpit_row);
     rail_column->setObjectName("recordRailColumn");
     auto* rail_layout = new QVBoxLayout(rail_column);
     rail_layout->setContentsMargins(0, 0, 0, 0);
     rail_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
-    rail_column->setMinimumWidth(324);
-    rail_column->setMaximumWidth(376);
+    rail_column->setMinimumWidth(340);
+    rail_column->setMaximumWidth(380);
 
     rail_control_panel_ = makePanel(rail_column);
     rail_control_panel_->setObjectName("recordControlPanel");
@@ -743,6 +853,37 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     rail_summary_label_->setWordWrap(true);
     control_layout->addWidget(rail_summary_label_);
 
+    rail_source_status_panel_ = new QWidget(rail_control_panel_);
+    rail_source_status_panel_->setObjectName("recordRailSourceStatusPanel");
+    auto* rail_source_layout = new QGridLayout(rail_source_status_panel_);
+    rail_source_layout->setContentsMargins(0, 0, 0, 0);
+    rail_source_layout->setHorizontalSpacing(6);
+    rail_source_layout->setVerticalSpacing(6);
+    rail_source_layout->setColumnStretch(0, 1);
+    rail_source_layout->setColumnStretch(1, 1);
+
+    auto makeRailSourceChip = [&](const QString& text) {
+        auto* label = makeLabel(text, "recordRailSourceChip", rail_source_status_panel_);
+        setStyledStringProperty(label, "stateRole", "muted");
+        return label;
+    };
+
+    rail_sys_audio_chip_ = makeRailSourceChip(QStringLiteral("System audio"));
+    rail_app_audio_chip_ = makeRailSourceChip(QStringLiteral("App audio"));
+    rail_mic_chip_ = makeRailSourceChip(QStringLiteral("Mic off"));
+    rail_webcam_chip_ = makeRailSourceChip(QStringLiteral("Webcam off"));
+    rail_source_layout->addWidget(rail_sys_audio_chip_, 0, 0);
+    rail_source_layout->addWidget(rail_app_audio_chip_, 0, 1);
+    rail_source_layout->addWidget(rail_mic_chip_, 1, 0);
+    rail_source_layout->addWidget(rail_webcam_chip_, 1, 1);
+    control_layout->addWidget(rail_source_status_panel_);
+
+    rail_source_status_summary_label_ = makeLabel(QStringLiteral("System off · App off · Mic off · Webcam off"),
+                                                  "railSourceSummary", rail_control_panel_);
+    rail_source_status_summary_label_->setWordWrap(true);
+    rail_source_status_summary_label_->setVisible(false);
+    control_layout->addWidget(rail_source_status_summary_label_);
+
     rail_readiness_label_ = makeLabel(QStringLiteral("Checking capabilities..."), "railReadiness", rail_control_panel_);
     rail_readiness_label_->setWordWrap(true);
     control_layout->addWidget(rail_readiness_label_);
@@ -771,9 +912,9 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     };
 
     rail_stats_layout->addWidget(makeRailStat(QStringLiteral("FILE SIZE"), &rail_size_value_label_), 0, 0);
-    rail_stats_layout->addWidget(makeRailStat(QStringLiteral("DROPPED"), &rail_drop_value_label_), 0, 1);
-    rail_stats_layout->addWidget(makeRailStat(QStringLiteral("ENCODER LOAD"), &rail_encoder_value_label_), 1, 0);
-    rail_stats_layout->addWidget(makeRailStat(QStringLiteral("OUTPUT FPS"), &rail_fps_value_label_), 1, 1);
+    rail_stats_layout->addWidget(makeRailStat(QStringLiteral("DROPPED FRAMES"), &rail_drop_value_label_), 0, 1);
+    rail_fps_stat_cell_ = makeRailStat(QStringLiteral("OUTPUT FPS"), &rail_fps_value_label_);
+    rail_stats_layout->addWidget(rail_fps_stat_cell_, 1, 0, 1, 2);
     rail_stats_grid_->setVisible(false);
     control_layout->addWidget(rail_stats_grid_);
 
@@ -798,48 +939,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     capture_header_ = new ui::widgets::SectionRuleHeader("CAPTURE TARGET", content);
     capture_header_->setMeta("DISPLAY1 · 2560×1440 · 60 fps");
     capture_header_->setVisible(false);
-
-    source_row_ = new QWidget(content);
-    source_row_->setObjectName("recordSourceRow");
-    auto* source_row_layout = new QHBoxLayout(source_row_);
-    source_row_layout->setContentsMargins(0, 0, 0, 0);
-    source_row_layout->setSpacing(10);
-
-    source_chip_panel_ = makePanel(source_row_);
-    source_chip_panel_->setObjectName("recordSourceChip");
-    source_chip_panel_->setProperty("sourceLocked", false);
-    auto* source_chip_layout = new QVBoxLayout(source_chip_panel_);
-    source_chip_layout->setContentsMargins(11, 8, 11, 8);
-    source_chip_layout->setSpacing(2);
-
-    source_kind_label_ = makeLabel("SCREEN", "recordSourceKind", source_chip_panel_);
-    source_name_label_ = makeLabel("No source selected", "recordSourceName", source_chip_panel_);
-    source_name_label_->setWordWrap(false);
-    source_meta_label_ = makeLabel("Choose a source to preview and record.", "recordSourceMeta", source_chip_panel_);
-    source_meta_label_->setWordWrap(false);
-
-    source_chip_layout->addWidget(source_kind_label_);
-    source_chip_layout->addWidget(source_name_label_);
-    source_chip_layout->addWidget(source_meta_label_);
-
-    source_lock_label_ = makeLabel("SOURCE LOCKED", "recordSourceLock", source_row_);
-    source_lock_label_->setVisible(false);
-
-    change_source_btn_ = new QPushButton("Change source", source_row_);
-    change_source_btn_->setObjectName("recordChangeSourceButton");
-    change_source_btn_->setProperty("role", "ghost");
-    change_source_btn_->setEnabled(false);
-
-    source_preset_label_ = makeLabel("PRESET · AV1 · OPUS · MKV", "recordPresetSummary", source_row_);
-    source_preset_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    source_preset_label_->setWordWrap(false);
-    source_preset_label_->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
-
-    source_row_layout->addWidget(source_chip_panel_, 1);
-    source_row_layout->addWidget(source_lock_label_);
-    source_row_layout->addWidget(change_source_btn_, 0, Qt::AlignVCenter);
-    source_row_layout->addWidget(source_preset_label_, 0, Qt::AlignRight | Qt::AlignVCenter);
-    layout->insertWidget(1, source_row_);
 
     auto* cards_row = new QWidget(content);
     auto* cards_layout = new QHBoxLayout(cards_row);
@@ -1309,9 +1408,19 @@ void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
 void RecordPage::setActiveProfileName(const std::string& profile_name) {
     active_profile_name_ = std::wstring(profile_name.begin(), profile_name.end());
     const QString profile = profileLabelFromName(active_profile_name_);
-    const QString summary = QStringLiteral("%1 · %2 · %3 · 60 fps · %4")
-                                .arg(videoCodecLabel(current_video_codec_), audioCodecLabel(current_audio_codec_),
-                                     containerLabel(current_container_), profile);
+    const bool has_selected_target = view_model_.selected_target_index >= 0 &&
+                                     view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
+    const QString target =
+        has_selected_target
+            ? normalizedTargetLabel(view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)])
+            : QStringLiteral("No source");
+    QString profile_summary = QString::fromStdWString(active_profile_name_).trimmed();
+    if (profile_summary.isEmpty()) {
+        profile_summary = QStringLiteral("Preset");
+    }
+    profile_summary.replace(QLatin1Char('_'), QLatin1Char(' '));
+    const QString summary =
+        QStringLiteral("%1 · %2 · 60 fps · %3").arg(target, videoCodecLabel(current_video_codec_), profile_summary);
     if (source_preset_label_) {
         source_preset_label_->setText(profile);
         source_preset_label_->setToolTip(profile);
@@ -1351,6 +1460,7 @@ void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& sta
     syncSysMeterService();
     syncAppMeterService();
     updateAudioMeterLevels();
+    updateRailSourceStatusChips();
 }
 
 void RecordPage::setVideoSettings(const VideoSettingsModel& settings) {
@@ -1360,9 +1470,11 @@ void RecordPage::setVideoSettings(const VideoSettingsModel& settings) {
 }
 
 void RecordPage::setWebcamSettings(const WebcamSettings& settings) {
+    current_webcam_settings_ = settings;
     if (coordinator_) {
         coordinator_->SetWebcamSettings(settings);
     }
+    updateRailSourceStatusChips();
 }
 
 void RecordPage::rebroadcastChromeState() {
@@ -1375,7 +1487,18 @@ void RecordPage::setOutputSettingsSummary(const OutputSettingsModel& settings) {
     const QString video = videoCodecLabel(settings.video_codec);
     const QString audio = audioCodecLabel(settings.audio_codec);
     const QString profile = profileLabelFromName(active_profile_name_);
-    const QString preset_summary = QStringLiteral("%1 · %2 · %3 · %4").arg(profile, video, audio, container);
+    const bool has_selected_target = view_model_.selected_target_index >= 0 &&
+                                     view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
+    const QString target =
+        has_selected_target
+            ? normalizedTargetLabel(view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)])
+            : QStringLiteral("No source");
+    QString profile_summary = QString::fromStdWString(active_profile_name_).trimmed();
+    if (profile_summary.isEmpty()) {
+        profile_summary = QStringLiteral("Preset");
+    }
+    profile_summary.replace(QLatin1Char('_'), QLatin1Char(' '));
+    const QString preset_summary = QStringLiteral("%1 · %2 · 60 fps · %3").arg(target, video, profile_summary);
 
     if (destination_header_) {
         destination_header_->setMeta(container + QStringLiteral(" · ") + video + QStringLiteral(" · ") + audio);
@@ -2497,6 +2620,7 @@ void RecordPage::emitAudioSettingsChanged() {
                             .arg(view_model_.audio_ui_state.IsMicEnabled() ? 1 : 0)
                             .arg(static_cast<int>(view_model_.audio_ui_state.source_rows.size()))
                             .arg(view_model_.audio_ui_state.mic_gain_linear, 0, 'f', 2));
+    updateRailSourceStatusChips();
     emit audioSettingsChanged(view_model_.audio_ui_state);
     PersistMicGainForMvp(view_model_.audio_ui_state.mic_gain_linear);
 }
@@ -2913,6 +3037,15 @@ void RecordPage::refresh() {
                                 : (checking || starting || stopping)              ? QStringLiteral("warn")
                                                                                   : QStringLiteral("ready"));
     }
+    if (preview_surface_host_) {
+        setStyledStringProperty(preview_surface_host_, "recordState",
+                                (blocked || failed)                               ? QStringLiteral("blocked")
+                                : active_recording                                ? QStringLiteral("recording")
+                                : (view_model_.state == UiRecordingState::Paused) ? QStringLiteral("paused")
+                                : completed_success                               ? QStringLiteral("done")
+                                : (checking || starting || stopping)              ? QStringLiteral("warn")
+                                                                                  : QStringLiteral("ready"));
+    }
 
     output_path_label_->setText(QString::fromStdWString(view_model_.output_path_display));
 
@@ -2937,10 +3070,10 @@ void RecordPage::refresh() {
         const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
         target_desc = normalizedTargetLabel(target);
         capture_header_->setMeta(QStringLiteral("%1 · 60 fps").arg(target_desc));
-        preview_surface_->setTopMetaText(QStringLiteral("%1 · 60 fps").arg(target_desc));
+        preview_surface_->setTopMetaText(QStringLiteral(""));
     } else {
         capture_header_->setMeta("NO TARGET");
-        preview_surface_->setTopMetaText("NO TARGET");
+        preview_surface_->setTopMetaText(QStringLiteral(""));
     }
 
     if (recording) {
@@ -2968,6 +3101,7 @@ void RecordPage::refresh() {
     updateTargetCards();
     rebuildTargetPicker();
     updateSourceChip();
+    updatePreviewContextChips();
     updateReadinessRows();
     updateAudioControls();
     updateAudioTrackPreview();
@@ -3025,20 +3159,22 @@ void RecordPage::updateStatsDisplay() {
     if (rail_stats_grid_) {
         rail_stats_grid_->setVisible(show_live_grid);
     }
-    if (show_live_grid && rail_size_value_label_ && rail_drop_value_label_ && rail_encoder_value_label_ &&
-        rail_fps_value_label_) {
+    if (show_live_grid && rail_size_value_label_ && rail_drop_value_label_ && rail_fps_value_label_) {
         const uint64_t total_bytes = view_model_.video_bytes + view_model_.audio_bytes;
         const QString total_size = QString::fromStdWString(RecordViewModel::FormatBytes(total_bytes));
         const QString dropped = QString::number(view_model_.dropped_frames);
         QString output_fps = QStringLiteral("—");
+        const bool fps_live = active_recording && view_model_.elapsed_seconds > 0.0 && view_model_.frames_captured > 0;
         if (view_model_.elapsed_seconds > 0.0 && view_model_.frames_captured > 0) {
             const double fps = static_cast<double>(view_model_.frames_captured) / view_model_.elapsed_seconds;
             output_fps = QStringLiteral("%1").arg(fps, 0, 'f', 1);
         }
         rail_size_value_label_->setText(total_size);
         rail_drop_value_label_->setText(dropped);
-        rail_encoder_value_label_->setText(QStringLiteral("—"));
         rail_fps_value_label_->setText(output_fps);
+        if (rail_fps_stat_cell_) {
+            rail_fps_stat_cell_->setVisible(fps_live);
+        }
     }
 
     if (rail_stats_label_) {
@@ -3092,40 +3228,38 @@ void RecordPage::updateResultDisplay() {
     setStyledStringProperty(result_title_label_, "labelRole",
                             view_model_.last_succeeded ? "resultTitleOk" : "resultTitleErr");
 
-    result_title_label_->setText(QString::fromStdWString(view_model_.result_user_title));
-    result_title_label_->setVisible(!view_model_.result_user_title.empty());
-
-    result_message_label_->setText(QString::fromStdWString(view_model_.result_user_message));
-    result_message_label_->setVisible(!view_model_.last_succeeded && !view_model_.result_user_message.empty());
-
-    result_action_label_->setText(QString::fromStdWString(view_model_.result_action_hint));
-    result_action_label_->setVisible(!view_model_.last_succeeded && !view_model_.result_action_hint.empty());
-
-    if (view_model_.last_succeeded) {
-        QString stats_text = QString::fromStdWString(view_model_.result_stats_text).trimmed();
-        const QString format_line = QStringLiteral("%1 · %2 · %3")
-                                        .arg(containerLabel(current_container_), videoCodecLabel(current_video_codec_),
-                                             audioCodecLabel(current_audio_codec_));
-        if (!format_line.isEmpty()) {
-            stats_text += stats_text.isEmpty() ? format_line : QStringLiteral("\n") + format_line;
-        }
-        result_stats_label_->setText(stats_text);
-        result_stats_label_->setVisible(!stats_text.isEmpty());
-    } else {
-        result_stats_label_->setVisible(false);
-    }
-
     const QString path = QString::fromStdWString(view_model_.result_output_path).trimmed();
-    result_path_label_->setText(path.isEmpty() ? QString{} : QStringLiteral("Path: ") + path);
-    result_path_label_->setVisible(!path.isEmpty());
-    if (result_file_label_) {
-        QString file_text;
-        if (!path.isEmpty()) {
-            const QFileInfo out_info(path);
-            file_text = out_info.fileName();
+    if (view_model_.last_succeeded) {
+        const QString file_name = path.isEmpty() ? QString{} : QFileInfo(path).fileName();
+        const QString file_size =
+            view_model_.result_output_file_bytes > 0
+                ? QString::fromStdWString(RecordViewModel::FormatBytes(view_model_.result_output_file_bytes))
+                : QStringLiteral("—");
+        const QString duration = clockFromSeconds(view_model_.result_elapsed_seconds);
+        QString summary_line = QStringLiteral("Recording complete · %1 · %2").arg(duration, file_size);
+        if (!file_name.isEmpty()) {
+            summary_line += QStringLiteral(" · %1").arg(file_name);
         }
-        result_file_label_->setText(file_text.isEmpty() ? QString{} : QStringLiteral("Saved file  ") + file_text);
-        result_file_label_->setVisible(view_model_.last_succeeded && !file_text.isEmpty());
+        result_title_label_->setText(summary_line);
+        result_title_label_->setVisible(true);
+        result_message_label_->setVisible(false);
+        result_action_label_->setVisible(false);
+        result_file_label_->setVisible(false);
+        result_stats_label_->setVisible(false);
+        result_path_label_->setVisible(false);
+    } else {
+        result_title_label_->setText(QString::fromStdWString(view_model_.result_user_title));
+        result_title_label_->setVisible(!view_model_.result_user_title.empty());
+        result_message_label_->setText(QString::fromStdWString(view_model_.result_user_message));
+        result_message_label_->setVisible(!view_model_.result_user_message.empty());
+        result_action_label_->setText(QString::fromStdWString(view_model_.result_action_hint));
+        result_action_label_->setVisible(!view_model_.result_action_hint.empty());
+        result_stats_label_->setVisible(false);
+        result_path_label_->setText(path.isEmpty() ? QString{} : QStringLiteral("Path: ") + path);
+        result_path_label_->setVisible(!path.isEmpty());
+        if (result_file_label_) {
+            result_file_label_->setVisible(false);
+        }
     }
 
     const QString phase = QString::fromStdWString(view_model_.result_error_phase).trimmed();
@@ -3153,13 +3287,13 @@ void RecordPage::updateResultDisplay() {
     }
 
     if (result_open_folder_btn_) {
-        const bool enable_open = !path.isEmpty() || !last_output_folder_.empty();
-        result_open_folder_btn_->setVisible(view_model_.last_succeeded);
-        result_open_folder_btn_->setEnabled(enable_open);
+        result_open_folder_btn_->setVisible(false);
     }
     if (result_record_again_btn_) {
-        result_record_again_btn_->setVisible(view_model_.last_succeeded && view_model_.CanStart());
-        result_record_again_btn_->setEnabled(view_model_.CanStart());
+        result_record_again_btn_->setVisible(false);
+    }
+    if (result_open_folder_btn_ && result_open_folder_btn_->parentWidget()) {
+        result_open_folder_btn_->parentWidget()->setVisible(false);
     }
 
     result_panel_->style()->unpolish(result_panel_);
@@ -3329,7 +3463,7 @@ void RecordPage::updateReadinessRows() {
 }
 
 void RecordPage::updateSourceChip() {
-    if (!source_kind_label_ || !source_name_label_ || !source_meta_label_ || !change_source_btn_) {
+    if (!source_name_label_ || !change_source_btn_) {
         return;
     }
 
@@ -3373,27 +3507,52 @@ void RecordPage::updateSourceChip() {
         source_kind = QStringLiteral("WINDOW");
     }
 
+    QString compact_source = QStringLiteral("%1 · %2").arg(source_kind, source_name);
+    QString source_detail;
+    if (region_mode && view_model_.has_region && view_model_.region.IsValid()) {
+        source_detail = QStringLiteral("%1×%2").arg(view_model_.region.width).arg(view_model_.region.height);
+    } else {
+        const QRegularExpression resolution_expr(QStringLiteral("(\\d{3,5})\\s*[x×]\\s*(\\d{3,5})"));
+        const QRegularExpressionMatch match = resolution_expr.match(source_meta);
+        if (match.hasMatch()) {
+            source_detail = QStringLiteral("%1×%2").arg(match.captured(1), match.captured(2));
+        } else if (region_mode && view_model_.select_on_record) {
+            source_detail = QStringLiteral("Select on start");
+        }
+    }
+    if (!source_detail.isEmpty()) {
+        compact_source += QStringLiteral(" · ") + source_detail;
+    }
+
     const bool locked = isSourceSelectionLocked();
     const bool has_any_source = !monitor_target_indices_.empty() || !window_target_indices_.empty();
-    const int name_width_hint =
-        (source_name_label_->width() > 0) ? source_name_label_->width() : (source_chip_panel_->width() - 26);
-    const int meta_width_hint =
-        (source_meta_label_->width() > 0) ? source_meta_label_->width() : (source_chip_panel_->width() - 26);
-    const QString source_name_elided =
-        source_name_label_->fontMetrics().elidedText(source_name, Qt::ElideRight, (std::max)(120, name_width_hint));
-    const QString source_meta_elided =
-        source_meta_label_->fontMetrics().elidedText(source_meta, Qt::ElideRight, (std::max)(120, meta_width_hint));
+    const int width_hint =
+        source_chip_panel_ ? ((source_chip_panel_->width() > 0) ? source_chip_panel_->width() - 20 : 520) : 520;
+    const QString compact_elided =
+        source_name_label_->fontMetrics().elidedText(compact_source, Qt::ElideRight, (std::max)(180, width_hint));
 
-    source_kind_label_->setText(source_kind);
-    source_name_label_->setText(source_name_elided);
-    source_name_label_->setToolTip(source_name);
-    source_meta_label_->setText(source_meta_elided);
-    source_meta_label_->setToolTip(source_meta);
+    source_name_label_->setText(compact_elided);
+    source_name_label_->setToolTip(compact_source);
+    if (source_kind_label_) {
+        source_kind_label_->setText(source_kind);
+        source_kind_label_->setVisible(false);
+    }
+    if (source_meta_label_) {
+        source_meta_label_->setText(source_meta);
+        source_meta_label_->setToolTip(source_meta);
+        source_meta_label_->setVisible(false);
+    }
+
     source_lock_label_->setVisible(locked);
-    source_lock_label_->setText(locked ? QStringLiteral("SOURCE LOCKED") : QString{});
+    source_lock_label_->setText(locked ? QStringLiteral("Source locked") : QString{});
     source_lock_label_->setToolTip(locked ? QStringLiteral("Source remains locked while recording or paused.")
                                           : QString{});
-    setStyledStringProperty(source_chip_panel_, "sourceLocked", locked ? "true" : "false");
+    if (source_chip_panel_) {
+        setStyledStringProperty(source_chip_panel_, "sourceLocked", locked ? "true" : "false");
+    }
+    if (source_row_) {
+        setStyledStringProperty(source_row_, "sourceLocked", locked ? "true" : "false");
+    }
 
     change_source_btn_->setEnabled(!locked && has_any_source);
     change_source_btn_->setVisible(!locked);
@@ -3403,6 +3562,122 @@ void RecordPage::updateSourceChip() {
         change_source_btn_->setToolTip(QStringLiteral("Source changes are disabled while recording."));
     } else {
         change_source_btn_->setToolTip(QStringLiteral("Choose a screen, window, or region source."));
+    }
+}
+
+void RecordPage::updatePreviewContextChips() {
+    if (!preview_source_chip_label_ || !preview_aspect_chip_label_) {
+        return;
+    }
+
+    const bool has_selection = view_model_.selected_target_index >= 0 &&
+                               view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
+    const bool locked = isSourceSelectionLocked();
+    const bool blocked = (view_model_.state == UiRecordingState::Blocked);
+    const bool failed = (view_model_.state == UiRecordingState::Failed);
+    const bool active_recording = (view_model_.state == UiRecordingState::Recording);
+    const bool paused = (view_model_.state == UiRecordingState::Paused);
+    const bool transition =
+        (view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::RegionSelecting ||
+         view_model_.state == UiRecordingState::Stopping || view_model_.state == UiRecordingState::LoadingCapabilities);
+
+    QString source_text = QStringLiteral("No source selected");
+    if (view_model_.capture_mode == CaptureMode::Region) {
+        if (view_model_.has_region && view_model_.region.IsValid()) {
+            source_text = QStringLiteral("Region · %1×%2").arg(view_model_.region.width).arg(view_model_.region.height);
+        } else if (view_model_.select_on_record) {
+            source_text = QStringLiteral("Region · select on start");
+        } else {
+            source_text = QStringLiteral("Region");
+        }
+    } else if (has_selection) {
+        const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+        if (target.kind == recorder_core::CaptureTarget::Kind::Window) {
+            source_text = windowLabelFromTarget(target);
+        } else {
+            source_text = displayLabelFromTarget(target);
+            const QRegularExpression resolution_expr(QStringLiteral("(\\d{3,5})\\s*[x×]\\s*(\\d{3,5})"));
+            const QRegularExpressionMatch match = resolution_expr.match(QString::fromStdString(target.description));
+            if (match.hasMatch()) {
+                source_text += QStringLiteral(" · %1×%2").arg(match.captured(1), match.captured(2));
+            }
+        }
+    }
+
+    const int chip_width =
+        (preview_context_row_ && preview_context_row_->width() > 0) ? preview_context_row_->width() - 124 : 520;
+    const QString source_elided =
+        preview_source_chip_label_->fontMetrics().elidedText(source_text, Qt::ElideRight, (std::max)(180, chip_width));
+    preview_source_chip_label_->setText(source_elided);
+    preview_source_chip_label_->setToolTip(source_text);
+    setStyledStringProperty(preview_source_chip_label_, "stateRole",
+                            blocked || failed ? QStringLiteral("blocked")
+                            : locked          ? QStringLiteral("warn")
+                            : has_selection   ? QStringLiteral("ready")
+                                              : QStringLiteral("muted"));
+
+    QString aspect_text = QStringLiteral("16:9");
+    QString aspect_role = QStringLiteral("ready");
+    if (failed) {
+        aspect_text = QStringLiteral("ERROR");
+        aspect_role = QStringLiteral("blocked");
+    } else if (blocked) {
+        aspect_text = QStringLiteral("BLOCKED");
+        aspect_role = QStringLiteral("blocked");
+    } else if (active_recording) {
+        aspect_text = QStringLiteral("REC · 16:9");
+        aspect_role = QStringLiteral("recording");
+    } else if (paused) {
+        aspect_text = QStringLiteral("PAUSED · 16:9");
+        aspect_role = QStringLiteral("warn");
+    } else if (transition) {
+        aspect_text = QStringLiteral("%1 · 16:9").arg(stateDisplay(view_model_.state));
+        aspect_role = QStringLiteral("warn");
+    }
+
+    preview_aspect_chip_label_->setText(aspect_text);
+    preview_aspect_chip_label_->setToolTip(aspect_text);
+    setStyledStringProperty(preview_aspect_chip_label_, "stateRole", aspect_role);
+}
+
+void RecordPage::updateRailSourceStatusChips() {
+    if (!rail_sys_audio_chip_ || !rail_app_audio_chip_ || !rail_mic_chip_ || !rail_webcam_chip_) {
+        return;
+    }
+
+    auto setChipState = [](QLabel* chip, const QString& enabled_text, const QString& disabled_text, bool enabled) {
+        if (!chip) {
+            return;
+        }
+        const QString text = enabled ? enabled_text : disabled_text;
+        chip->setText(text);
+        chip->setToolTip(text);
+        setStyledStringProperty(chip, "stateRole", enabled ? QStringLiteral("ready") : QStringLiteral("muted"));
+    };
+
+    const bool sys_enabled = view_model_.audio_ui_state.IsSysEnabled();
+    const bool app_enabled = view_model_.audio_ui_state.IsAppEnabled();
+    const bool mic_enabled = view_model_.audio_ui_state.IsMicEnabled();
+    const bool webcam_enabled = current_webcam_settings_.enabled;
+
+    const QString sys_text = sys_enabled ? QStringLiteral("System audio") : QStringLiteral("System off");
+    const QString app_text = app_enabled ? QStringLiteral("App audio") : QStringLiteral("App off");
+    const QString mic_text = mic_enabled ? QStringLiteral("Mic") : QStringLiteral("Mic off");
+    const QString webcam_text = webcam_enabled ? QStringLiteral("Webcam") : QStringLiteral("Webcam off");
+
+    setChipState(rail_sys_audio_chip_, QStringLiteral("System audio"), QStringLiteral("System off"), sys_enabled);
+    setChipState(rail_app_audio_chip_, QStringLiteral("App audio"), QStringLiteral("App off"), app_enabled);
+    setChipState(rail_mic_chip_, QStringLiteral("Mic"), QStringLiteral("Mic off"), mic_enabled);
+    setChipState(rail_webcam_chip_, QStringLiteral("Webcam"), QStringLiteral("Webcam off"), webcam_enabled);
+
+    if (rail_source_status_panel_) {
+        setStyledStringProperty(rail_source_status_panel_, "sourceLocked",
+                                isSourceSelectionLocked() ? QStringLiteral("true") : QStringLiteral("false"));
+    }
+    if (rail_source_status_summary_label_) {
+        const QString summary = QStringLiteral("%1 · %2 · %3 · %4").arg(sys_text, app_text, mic_text, webcam_text);
+        rail_source_status_summary_label_->setText(summary);
+        rail_source_status_summary_label_->setToolTip(summary);
     }
 }
 
@@ -3488,17 +3763,24 @@ void RecordPage::updateHeroButton() {
 
     const bool has_selected_target = view_model_.selected_target_index >= 0 &&
                                      view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
-    const QString target_summary =
-        has_selected_target
-            ? normalizedTargetLabel(view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)])
-            : QStringLiteral("No source selected");
-    const QString profile_summary = profileLabelFromName(active_profile_name_);
+    QString target_summary = QStringLiteral("No source");
+    if (view_model_.capture_mode == CaptureMode::Region) {
+        target_summary = QStringLiteral("Region");
+    } else if (has_selected_target) {
+        const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+        target_summary = (target.kind == recorder_core::CaptureTarget::Kind::Window) ? windowLabelFromTarget(target)
+                                                                                     : displayLabelFromTarget(target);
+    }
+
+    QString profile_summary = QString::fromStdWString(active_profile_name_).trimmed();
+    if (profile_summary.isEmpty()) {
+        profile_summary = QStringLiteral("Preset");
+    }
+    profile_summary.replace(QLatin1Char('_'), QLatin1Char(' '));
 
     if (rail_summary_label_) {
-        const QString summary =
-            QStringLiteral("%1  ·  %2 · %3 · %4 · %5")
-                .arg(target_summary, videoCodecLabel(current_video_codec_), audioCodecLabel(current_audio_codec_),
-                     containerLabel(current_container_), QStringLiteral("60 fps · ") + profile_summary);
+        const QString summary = QStringLiteral("%1 · %2 · 60 fps · %3")
+                                    .arg(target_summary, videoCodecLabel(current_video_codec_), profile_summary);
         rail_summary_label_->setText(summary);
         rail_summary_label_->setToolTip(summary);
     }
@@ -3533,6 +3815,16 @@ void RecordPage::updateHeroButton() {
 
     if (rail_diagnostics_btn_) {
         rail_diagnostics_btn_->setVisible(blocked || failed);
+    }
+
+    updateRailSourceStatusChips();
+    const bool show_source_chips = !(blocked || failed || completed_success) && !is_recording;
+    const bool show_source_summary = !(blocked || failed || completed_success) && is_recording;
+    if (rail_source_status_panel_) {
+        rail_source_status_panel_->setVisible(show_source_chips);
+    }
+    if (rail_source_status_summary_label_) {
+        rail_source_status_summary_label_->setVisible(show_source_summary);
     }
 
     if (audio_settings_header_)
