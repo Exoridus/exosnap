@@ -1,193 +1,195 @@
-# ExoSnap UX Final Direction (Refreshed from Claude v2 Prototype)
+# ExoSnap UX Final Direction (R3 Refresh from Latest v2 Prototype)
+
+Last refreshed: 2026-06-01
 
 ## Scope and source of truth
-This document is regenerated from:
+This UX contract is refreshed from the current local prototype and style sources:
 
 - `.workspace/design/exosnap-v2-prototype/ExoSnap.html`
 - `.workspace/design/exosnap-v2-prototype/ExoSnap Handoff.html`
-- `.workspace/design/exosnap-v2-prototype/record.jsx`
-- `.workspace/design/exosnap-v2-prototype/modal.jsx`
-- `.workspace/design/exosnap-v2-prototype/settings.jsx`
-- `.workspace/design/exosnap-v2-prototype/ui.jsx`
+- `.workspace/design/exosnap-v2-prototype/ExoSnap Design System.html`
 - `.workspace/design/exosnap-v2-prototype/styles.css`
 - `.workspace/design/exosnap-v2-prototype/v2.css`
 - `.workspace/design/exosnap-v2-prototype/ds-system.css`
-- `.workspace/screenshots/exosnap-v2-prototype/record_ready.png`
-- `.workspace/screenshots/exosnap-v2-prototype/record_recording.png`
-- `.workspace/screenshots/exosnap-v2-prototype/record_paused.png`
-- `.workspace/screenshots/exosnap-v2-prototype/record_done.png`
-- `.workspace/screenshots/exosnap-v2-prototype/record_blocked.png`
+- `.workspace/design/exosnap-v2-prototype/app.jsx`
+- `.workspace/design/exosnap-v2-prototype/record.jsx`
+- `.workspace/design/exosnap-v2-prototype/modal.jsx`
+- `.workspace/design/exosnap-v2-prototype/settings.jsx`
+- `.workspace/design/exosnap-v2-prototype/pages.jsx`
+- `.workspace/design/exosnap-v2-prototype/ui.jsx`
+- `.workspace/design/exosnap-v2-prototype/icons.jsx`
 
-Current implementation snapshot used for obvious gap summary:
+This is a product and UX contract for Qt implementation slices. It does not change backend capabilities.
 
-- `.workspace/screenshots/claude-design-current/`
+## 1. Current target IA
+Primary navigation target:
 
-## 1. Product thesis
-ExoSnap should feel like a confident recording flow in two clicks:
+- Record
+- Settings
+- Hotkeys
+- Diagnostics
+- Logs
 
-1. pick/confirm source
-2. start recording
+Advanced and Webcam are secondary/detail surfaces reachable from Settings, not primary sidebar destinations.
 
-Record is the operational cockpit. Configuration moves to Settings. Troubleshooting moves to Diagnostics. Logs remain raw.
+Clarifications:
 
-## 2. Target IA (v2)
+- Advanced remains available internally as expert controls.
+- Webcam setup remains available internally.
+- Real webcam setup preview must not be removed.
+- No fake PiP or fake overlay controls.
+- No new top-level destinations are added in this contract.
 
-| Order | Destination | Role |
-|---|---|---|
-| 01 | Record | Operate capture live |
-| 02 | Settings | Configure format/quality/inputs/output |
-| 03 | Hotkeys | Shortcut management |
-| 04 | Diagnostics | Troubleshooting and health |
-| 05 | Logs | Raw event stream |
+## 2. Record cockpit contract
+Record is the operational cockpit. Target composition:
 
-Removed as top-level pages in target IA:
+- Preview-dominant layout.
+- Source chip above/near preview.
+- `Change source` is available when editable.
+- `Source locked` appears while recording or paused.
+- Preview keeps `16:9` and fills available frame as much as technically possible.
+- Right rail is fixed around `360px` on wide screens.
+- Right rail is state-specific.
+- Readiness/result/status strip is below the main cockpit body.
+- No fake runtime controls.
 
-- Webcam page (setup folds into Settings; placement is in Record preview)
-- Advanced page (collapsed section in Settings)
+State contract:
 
-## 3. Page responsibility model
+| State | Primary action | Secondary action | Timer behavior | Source behavior | Readiness/status behavior | Result/output behavior | Runtime-control honesty |
+|---|---|---|---|---|---|---|---|
+| READY | `Start Recording` | `Change source`, optional `Diagnostics` route | Idle `00:00:00` | Editable | Clear ready strip (`go/no-go` visible) | Preset/source/output context visible, no result card | Show only controls that are really wired; planned controls must be disabled/labeled planned |
+| RECORDING | `Stop` | `Pause` | Running, prominent mono timer | Locked | Readiness collapses to concise live summary (`target locked`) | Live stats shown (size, dropped, encoder load, output fps) | Live toggles may claim instant apply only when true end-to-end |
+| PAUSED | `Resume` | `Stop` | Frozen timer | Locked | Paused status is explicit and concise | Output file is held open; no fake progression | If a control is inert in pause, render it inert/disabled clearly |
+| DONE / RESULT | `Record again` | `Open folder`, `Play` | Timer replaced by result summary | Unlocked/editable | Ready strip is replaced by result state | Saved file card shows filename, duration, size, format | No fake post-processing controls |
+| BLOCKED / ERROR | Start remains disabled (or routes via blocker path) | `Open Diagnostics` | Timer hidden/demoted | Editable | Red blocker summary with concrete causes | No success/result claims | Do not show active controls for blocked features |
 
-### Record
-- Source chip + explicit `Change source`.
-- Dominant live preview.
-- Right rail with stateful transport/timer/status.
-- Runtime input controls near preview (not buried in settings cards).
-- Readiness and blocker messaging in-context.
+## 3. Settings contract
+Settings is a wide, product-like composition, not a timid centered form column.
 
-### Settings
-- Unified scroll of cards:
-  - Preset & Format
-  - Capture Quality
-  - Capture Behavior
-  - Audio Sources
-  - Webcam Setup
-  - Output
-  - Advanced (collapsed)
+Layout contract:
 
-### Hotkeys
-- Active bindings plus clearly marked planned items (no fake-active controls).
+- Two-column card rhythm on desktop.
+- One-column only when width requires it.
+- Preserve meaningful page width so cards breathe and labels do not clip.
 
-### Diagnostics
-- Actionable recommendations first.
-- Pipeline/budget analysis as near-term extension.
+Content contract:
 
-### Logs
-- Structured raw logs with filtering.
+- Preset and Format card.
+- Capture Quality as product-card direction (named quality options), not merely a dropdown target.
+- Capture Behavior is separate from Quality.
+- Audio Sources remain readable and source-specific.
+- Webcam Setup module remains in Settings.
+- Output module remains in Settings.
+- Advanced/Expert Settings access remains in Settings (collapsed expert section is acceptable).
 
-## 4. Record cockpit contract
+Implementation note:
 
-### Layout stack (top -> bottom)
-1. Source bar (`source chip`, `Change source`, preset summary)
-2. Main row (`preview` + fixed-width right rail)
-3. Runtime control bar (wrapping row)
-4. Readiness/live summary strip
+- Capture Quality card UI is the visual target.
+- Internal/objectName and test seams may continue to use existing controls (for example `videoQualityCombo`) until a dedicated implementation slice lands.
 
-### Key placement rules
-- Preview remains the dominant visual element.
-- Source controls stay close to preview, not in global chrome only.
-- Right rail is state-driven and concise (status, timer, actions, summary/stats).
-- Readiness is compact and visible; not buried under unrelated setup content.
+## 4. Source Picker contract
+Source Picker remains modal-first with tabs:
 
-## 5. Record state behavior contract
+- Screens
+- Windows
+- Region
 
-| State | Primary action | Secondary action | Source edit | Runtime controls | Rail content |
-|---|---|---|---|---|---|
-| READY | `Start Recording` | none required | Enabled | Visible as setup controls | Ready pill, idle timer, start CTA, format/source summary |
-| RECORDING | `Stop` | `Pause` | Locked | Visible live | REC status, prominent timer, live file/drop/encoder/fps stats |
-| PAUSED | `Resume` | `Stop` | Locked | Visible | Paused status, frozen timer, resume/stop |
-| DONE / RESULT | `Record Again` | `Open folder` / `Play` | Enabled | Hidden | Saved-result card with filename, duration, size, format |
-| BLOCKED / ERROR | Disabled start (or routed) | `Open Diagnostics` | Enabled | Hidden until resolved | Blocker list with concrete causes |
+Rules:
 
-State-specific details from prototype files:
+- Visual grid cards are the primary selection surface.
+- Thumbnails are the primary recognition aid.
+- Thumbnail states must be explicit: normal, loading, failed fallback.
+- Selected state should be ring/check, not a redundant `Selected` badge when already obvious.
+- Default Windows grid shows only useful, capturable user windows.
+- System/helper/tool/overlay/noise windows are hidden from the default view.
+- Minimized/protected/too-small windows are hidden behind `Show unavailable` disclosure.
+- `Show unavailable` reveals non-selectable unavailable cards with reason.
+- Too-small behavior is explicit and non-selectable.
+- No noisy EnumWindows dump.
+- No redundant `Window` badges on normal cards.
+- No horizontal overflow in modal body, tabs, or footer actions.
 
-- Source lock is explicit in recording/paused (`locked` chip treatment).
-- Ready state shows a green readiness strip.
-- Live states collapse readiness to a concise capture summary (`target locked`).
-- Blocked rail includes concrete blockers and diagnostics route.
+## 5. Diagnostics contract
+Diagnostics is a single-scroll troubleshooting page.
 
-## 6. Source picker contract (modal)
-Source selection is modal-first (from Record `Change source`), not inline card clutter on Record.
+Contract:
 
-### Tabs
-- `Screens`
-- `Windows`
-- `Region`
+- Action-first readiness header (clear status and next actions).
+- Stat tiles for blockers, notices/recommendations, passes.
+- Issue/recommendation cards are primary reading order.
+- Capabilities/details are demoted (collapsed or secondary).
+- Self-test actions are clear and explicit.
+- Logs redirect remains obvious.
+- Pipeline timing appears only when based on real instrumentation.
+- If pipeline timing is not real in current slice, keep it planned/demoted and never fake precision.
 
-### Screens
-- Visual monitor cards with primary marker and monitor metadata.
-- Click select, double-click confirm.
+## 6. Logs contract
+Logs stays a raw log viewer, but in a contained product surface.
 
-### Windows
-- Default grid is capturable windows first.
-- Search filter in toolbar plus refresh action.
-- Thumbnail states: normal, loading shimmer, failed icon fallback.
-- Non-capturable windows are collapsed behind `Show unavailable (N)`.
-- Unavailable/minimized/too-small cards are visible when expanded but not selectable.
+Contract:
 
-### Region
-- Region pane with selection canvas.
-- `W/H/X/Y` readout blocks.
-- `Snap to 16:9`.
-- Recent region chips.
+- Raw log lines remain available.
+- Log body is contained in a dedicated log surface.
+- Strong monospace body.
+- Readable line-height.
+- Refresh and Open folder actions remain present.
+- Optional filters are acceptable only if implemented.
+- No raw text dump directly on page background.
 
-### Footer and exit behavior
-- Footer always shows selected summary.
-- `Cancel` and `Use this source` actions.
-- `Esc` and backdrop-click close.
+## 7. Hotkeys contract
+Hotkeys is split by capability truth:
 
-## 7. Runtime-control honesty rules
-Do not present controls as active unless behavior exists end-to-end.
+- Active section and Planned/Unavailable section.
+- `Start/Stop` and `Pause/Resume` are active.
+- `Split` and `Mute`-like actions stay unavailable unless wired.
+- No fake `Set/Unset` controls for unavailable actions.
+- Keycap styling remains monospace and distinct from body text.
 
-- If a runtime toggle is not wired, render it disabled with explicit explanatory copy.
-- Planned features must be visually differentiated (`near-term`/`post-MVP`) and not styled as live controls.
-- Keep source picker “availability truth” honest:
-  - capturable now in default grid
-  - unavailable states behind disclosure with reasons
+## 8. Advanced contract
+Advanced is an expert/detail surface reachable from Settings.
 
-## 8. Presets and Settings model
+Contract:
 
-### Presets
-- Preset is a saved configuration bundle, not a capability mode.
-- Built-ins are read-only defaults (e.g. `AV1 Opus MKV`, `H.264 AAC MP4`, `VP9 Opus WebM`).
-- Editing fields diverges into `Custom (unsaved)`.
-- Save and reset actions are explicit and local to Preset & Format.
+- Not a primary nav target.
+- Read-only current/baseline summaries are acceptable.
+- Experimental or developer controls are separated from regular configuration.
+- Dangerous reset remains visually separated.
 
-### Capture Quality
-- Named tiers are first-class (`Small`, `Balanced`, `High Quality`, `Visually Lossless`).
-- `Custom` exists as near-term panel shell; not falsely editable before wiring.
-- FPS/CFR/cursor remain under Capture Behavior, not quality.
+## 9. Webcam contract
+Webcam setup remains reachable from Settings.
 
-### Advanced
-- Collapsed expert section in Settings (backend override/logging/etc).
-- Avoid returning to separate Advanced page in target direction.
+Contract:
 
-## 9. Responsive rules
+- Real setup preview is preserved.
+- Device/missing-feed states are honest and explicit.
+- No fake overlay/PiP/chroma claims.
+- Record PiP placement integration is a later slice unless fully implemented.
+- If placement is not fully wired, copy must not overclaim runtime behavior.
 
-| Window width | Target behavior |
-|---|---|
-| >= 1920 | Full cockpit: preview + fixed right rail |
-| <= 1180 | Region pane stacks; cockpit can stack for readability |
-| <= 1000 | Runtime bar wraps; source grid min width shrinks; compact sidebar behavior |
+## 10. Runtime-control honesty
+Truthfulness requirements across the app:
 
-Additional constraints:
+- Do not show controls as active if they are not wired.
+- Do not claim `changes apply instantly` unless true for the current path.
+- Status chips are acceptable for planned vs active signaling.
+- Disabled/planned states must be visually and textually honest.
+- Blocked/error states must route to action, not cosmetic status only.
 
-- Source picker remains bounded (`min(880px, 100%)` and `min(660px, 90vh)`) with internal scroll.
-- Preview keeps `16:9` and remains visually prioritized.
+## 11. Redline and current repair priorities
+Highest-priority repair order for current UI polish and follow-up slices:
 
-## 10. Current Qt implementation gaps (obvious from screenshot set)
-From `.workspace/screenshots/claude-design-current/`:
+1. Undo timid app-wide center/narrow layout.
+2. Restore page-specific width and grid behavior.
+3. Restore Settings/Advanced meaningful width.
+4. Make Record preview fill and dominate.
+5. Keep Logs as contained viewer.
+6. Reinforce Diagnostics stat tiles and action-first hierarchy.
+7. Push Capture Quality toward card direction.
+8. Reduce redundant badges and labels.
 
-1. IA still includes `Advanced` and `Webcam` as top-level destinations; target IA is 5 destinations.
-2. Record source treatment is still broad row-style, not the tighter chip-first cockpit treatment shown in v2 prototype states.
-3. Readiness in Record remains a detailed multi-row panel in steady view; target state model uses a compact readiness strip and live-state collapse.
-4. Runtime controls are not yet expressed as the single v2 runtime chip bar directly under preview across ready/recording/paused.
-5. Top-right chrome still shows generic CPU/GPU/RAM telemetry in current captures; target chrome prioritizes recording-context metrics in live states.
-6. Separate Webcam page remains present in current IA; target folds setup into Settings and uses Record preview for placement behavior.
+Clarifications for this phase:
 
-These gaps are directional and visual; they do not imply backend regressions.
-
-## 11. Implementation guardrails for next slices
-- Do not regress current capture/encode/mux/audio behavior while porting UX contracts.
-- Keep source picker and runtime controls behaviorally honest at every step.
-- Prefer state-driven Record composition over ad-hoc conditional widgets.
-- Keep Diagnostics routing explicit for blocked/error states.
+- Do not add collapsed sidebar yet.
+- Do not move ExoSnap branding to footer yet.
+- About popup is optional/later.
+- Shell/sidebar rework remains separate from immediate layout repair.

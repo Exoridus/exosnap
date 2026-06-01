@@ -1,212 +1,178 @@
-# ExoSnap Design System (Prototype v2 -> Qt/QSS Contract)
+# ExoSnap Design System (R3 Refresh from Latest v2 Prototype)
+
+Last refreshed: 2026-06-01
 
 ## Scope and source of truth
-This document is regenerated from:
+This design-system contract is refreshed from:
 
 - `.workspace/design/exosnap-v2-prototype/ExoSnap Design System.html`
-- `.workspace/design/exosnap-v2-prototype/ds-system.css`
+- `.workspace/design/exosnap-v2-prototype/ExoSnap Handoff.html`
 - `.workspace/design/exosnap-v2-prototype/styles.css`
 - `.workspace/design/exosnap-v2-prototype/v2.css`
+- `.workspace/design/exosnap-v2-prototype/ds-system.css`
+- `.workspace/design/exosnap-v2-prototype/ui.jsx`
+- `.workspace/design/exosnap-v2-prototype/modal.jsx`
+- `.workspace/design/exosnap-v2-prototype/record.jsx`
+- `.workspace/design/exosnap-v2-prototype/settings.jsx`
+- `.workspace/design/exosnap-v2-prototype/pages.jsx`
 
-It defines visual primitives and component contracts for Qt Widgets. It is intentionally implementation-oriented and does not redefine backend behavior.
+This document is implementation-facing for Qt Widgets and QSS.
 
-## 1. Color tokens (resolved values for QSS)
-QSS must use resolved hex/rgba values (not `oklch()` or `color-mix()`).
+## 1. Color tokens
+Use resolved hex and rgba tokens in QSS.
 
-| Token | Value | Use |
+| Token | Value | Intended use |
 |---|---|---|
-| `--bg` | `#0E0C0A` | App canvas |
-| `--bg-elev` | `#141210` | Sidebar, top bar, transport, modal shell |
-| `--surface` | `#191714` | Default cards and panels |
-| `--surface-2` | `#211E1B` | Inputs and secondary wells |
-| `--surface-hover` | `#272420` | Interactive hover/active fill |
-| `--border-soft` | `#272421` | Default separators and outlines |
-| `--border` | `#322E2B` | Control outlines |
-| `--border-strong` | `#4B4741` | Hover border lift |
-| `--text` | `#EDE9E2` | Primary text |
-| `--text-dim` | `#AEA8A0` | Secondary copy |
-| `--text-faint` | `#7A756E` | Metadata/hints |
-| `--text-ghost` | `#54504B` | Eyebrow/disabled labels |
-| `--amber` | `#E9B361` | Selection/primary accent |
-| `--green` | `#78DA95` | Ready/saved/healthy |
-| `--red` | `#F05B54` | Recording/stop/error |
-| on-accent ink | `#1B1407` | Text/icon on amber and green fills |
+| `app-bg` | `#0E0C0A` | Main app background |
+| `sidebar-bg` | `#141210` | Sidebar and top/elevated shells |
+| `panel-card-bg` | `#191714` | Standard card/panel surfaces |
+| `elevated-surface` | `#211E1B` | Inputs and inner wells |
+| `surface-hover` | `#272420` | Hover and active neutral fills |
+| `border-soft` | `#272421` | Subtle separators and card outlines |
+| `border` | `#322E2B` | Control borders |
+| `border-strong` | `#4B4741` | Hover-border lift and stronger rails |
+| `text-primary` | `#EDE9E2` | Primary text and key values |
+| `text-dim` | `#AEA8A0` | Body and secondary labels |
+| `text-faint` | `#7A756E` | Metadata and helper text |
+| `text-ghost` | `#54504B` | Quiet technical labels/disabled text |
+| `amber` | `#E9B361` | Primary accent and selection |
+| `green` | `#78DA95` | Ready/success/healthy state |
+| `red` | `#F05B54` | Recording/stop/error state |
+| `warning` | `#E9B361` | Warning tone (same hue family as amber) |
+| `on-accent-ink` | `#1B1407` | Text/icon on amber or green fills |
+| `amber-tint` | `rgba(233,179,97,0.14)` | Selected fills and focus-tint backgrounds |
+| `amber-line` | `rgba(233,179,97,0.42)` | Selected borders/focus lines |
+| `green-tint` | `rgba(120,218,149,0.13)` | Ready/success surface tint |
+| `green-line` | `rgba(120,218,149,0.42)` | Ready/success border line |
+| `red-tint` | `rgba(240,91,84,0.15)` | Recording/error surface tint |
+| `red-line` | `rgba(240,91,84,0.48)` | Recording/error border line |
+| `selected-line` | `#E9B361` (+ amber line/tint) | Selected-card ring and line |
+| `selected-tint` | `rgba(233,179,97,0.14)` | Selected-card background tint |
+| `focus-ring` | `0 0 0 3px rgba(233,179,97,0.14)` | Focus halo for combo/select-like controls |
+| `disabled-alpha-button` | `0.40` | Disabled button opacity contract |
+| `disabled-alpha-input` | `0.45` | Disabled combo/input opacity contract |
 
-### Tint and line tokens (use rgba directly)
+## 2. Typography roles
+| Role | Family | Target size/weight | Notes |
+|---|---|---|---|
+| Page title | Hanken Grotesk | `27px / 600` | `-0.01em` tracking |
+| Section title | Hanken Grotesk | `15px / 600` | Used in card headers and section labels |
+| Card title | Hanken Grotesk | `13-15px / 600` | Short, dense titles |
+| Body | Hanken Grotesk | `14px / 400` | Normal copy and descriptions |
+| Metadata | JetBrains Mono | `10.5-12px` | Dim/faint technical metadata |
+| Mono labels | JetBrains Mono | `9.5-11px` uppercase | Technical headings and tags |
+| Keycaps | JetBrains Mono | `11px` | Key binding chips and shortcuts |
+| Timer | JetBrains Mono | `46px / 500` | Record rail timer digits |
+| Log body | JetBrains Mono | `12px / 1.7` | Dense but readable logs |
+| Warning/help copy | Hanken Grotesk | `12.5px / 1.5` | Guidance and caution lines |
 
-| Token | Value |
-|---|---|
-| `--amber-tint` | `rgba(233,179,97,0.14)` |
-| `--amber-line` | `rgba(233,179,97,0.42)` |
-| `--green-tint` | `rgba(120,218,149,0.13)` |
-| `--green-line` | `rgba(120,218,149,0.42)` |
-| `--red-tint` | `rgba(240,91,84,0.15)` |
-| `--red-line` | `rgba(240,91,84,0.48)` |
+## 3. Spacing, sizing, and radii
+### Base spacing scale
+`4, 7, 8, 12, 14, 16, 20, 24, 36`
 
-## 2. Typography contract
+### Layout sizing
+- Page padding (desktop): `28px 36px`
+- Page padding (compact): `22px 22px`
+- Default page max-width: `1200px`
+- Narrow page max-width: `820px`
+- Wide page max-width: `1320px`
+- Sidebar width: `244px` (compact icon rail at narrow breakpoint)
 
-| Role | Family | Size/weight | Tracking | Color |
-|---|---|---|---|---|
-| Page title | Hanken Grotesk | `27 / 600` | `-0.01em` | `--text` |
-| Section/card title | Hanken Grotesk | `15 / 600` | `-0.005em` | `--text` |
-| Body | Hanken Grotesk | `14 / 400` | `0` | `--text-dim` |
-| Mono eyebrow label | JetBrains Mono | `10–11 / 500` | `0.12–0.18em`, uppercase | `--text-faint` / `--text-ghost` |
-| Mono value | JetBrains Mono | `11–15 / 400` | `0.03em` | `--text` / `--text-dim` |
-| Timer digits | JetBrains Mono | `46 / 500` | `0.01em` | State color |
-
-Qt notes:
-
-- Bundle fonts in app resources and load with `QFontDatabase::addApplicationFont`.
-- Set global app font in code; do not rely on system install.
-- Uppercase mono tracking must be set in code per-widget (`QFont::setLetterSpacing`).
-
-## 3. Spacing, sizing, radii
-Base spacing unit is `4px`.
-
-### Spacing scale
-`4`, `7`, `8`, `12`, `14`, `16`, `20`, `24`, `36`.
-
-### Layout and control sizes
-
-| Item | Target |
-|---|---|
-| Sidebar width | `244px` |
-| Top bar / transport | `50px / 52px` |
-| Page inner padding | `28px 36px` |
-| Card padding | `20px` |
-| Modal region padding | `16–18px` |
-| Medium button height | `38px` |
-| Small / large button heights | `32px / 46px` |
-| Pill height | `24px` |
-| Input / combobox height | `38px` |
-| Source picker card min width | `180px` |
-| Source picker thumbnail ratio | `16:10` |
-| Record rail width | `360px` |
-| Preview and webcam surface ratio | `16:9` (min height `300px`) |
+### Component sizing
+- Card padding: `20px`
+- Card gaps (grid rhythm): `16-20px`
+- Control row target height: `38-40px`
+- Chip/pill height: `~24px`
+- Source card grid min width: `180px` (drops to `150px` at narrow)
+- Source thumbnail ratio: `16:10`
+- Record rail width: `360px`
+- Preview ratio: `16:9`, min-height `300px`
+- Modal width/height envelope: `min(880px, 100%)`, `max-height min(660px, 90vh)`
+- Modal paddings: `16-18px` regions (head/body/footer)
 
 ### Radii
+- Card radius: `12px`
+- Control radius: `9px`
+- Pill radius: `7px`
+- Modal outer radius: `14px`
 
-| Token | Value | Use |
-|---|---|---|
-| `--r-card` | `12px` | Cards, modals, preview surfaces |
-| `--r-ctrl` | `9px` | Buttons, inputs, combobox |
-| `--r-pill` | `7px` | Pills, chips, keycaps |
+## 4. Component rules
+- Primary button: amber fill, amber border, `#1B1407` text, one primary intent per view.
+- Secondary button: neutral surface fill (`surface-2`) with border hover lift.
+- Danger/stop button: red fill/border, white foreground.
+- Disabled button: non-interactive and visibly disabled via reduced opacity.
+- Utility/icon button: neutral ghost/secondary style, no accidental primary emphasis.
+- Status chip: mono uppercase, tone by state (`green`, `amber`, `red`, `ghost`).
+- Metadata chip: subdued mono styling for technical tags.
+- Keycap chip: monospace keycap style with strong border contrast.
+- Source chip: compact source identity with icon, title, metadata; lock style when not editable.
+- Card: warm neutral surface, soft border, consistent padding.
+- Selected card: amber border plus visible selected ring/check.
+- Unavailable card: non-selectable, dimmed, explicit overlay reason.
+- Warning card: amber-tinted surface with warning line/border.
+- Result card: green-tinted success surface with output metadata.
+- Readiness/status strip: single concise strip below cockpit body, clear go/no-go semantics.
+- Log viewer surface: dedicated dark contained surface, monospace lines, fixed scroll region.
+- Segmented tabs/picker tabs: use segmented/tab semantics, not top-level navigation tabs.
+- Combobox/select: custom dark popup and caret behavior; avoid native OS mismatch.
 
-## 4. Global component state rules
+## 5. Combobox and select spec
+Contract for select-like controls:
 
-- Selected state is always amber border plus amber ring (`box-shadow: 0 0 0 1px --amber`) and check badge where space exists.
-- Hover is a border lift to `--border-strong`; hover must not look like selected.
-- One primary accent action per view (amber or green according to semantic intent).
-- Status semantics:
-  - amber = chosen/primary
-  - green = safe/ready/saved
-  - red = recording/stop/error
+- Caret is visible and right-aligned.
+- Closed control uses dark surface and strong border contrast.
+- Popup menu is dark (`bg-elev`) with rounded corners and internal padding.
+- No default Windows blue selection styling.
+- Item spacing supports readability (`~34px` row rhythm with internal padding).
+- Hover and selected states are explicit and palette-consistent.
+- Focus uses amber line plus tint ring.
+- Disabled state is visibly muted and non-interactive.
 
-## 5. Combobox spec (`QComboBox`)
+Guidance:
 
-| Property | Target |
-|---|---|
-| Closed height | `38px` |
-| Closed padding | `0 38px 0 13px` |
-| Closed bg/border | `#211E1B`, `1px #322E2B`, radius `9px` |
-| Hover | border `#4B4741`, bg `#272420` |
-| Focus/open | border `rgba(233,179,97,0.42)` plus amber tint ring |
-| Disabled | `opacity: 0.45` |
-| Caret | 12px chevron asset, right-aligned |
-| Popup | `#141210` bg, `1px #322E2B`, radius `9px`, `5px` padding |
-| Popup item | `34px` min-height, `0 11px` padding, radius `7px` |
-| Selected popup item | amber tint bg, amber text, trailing check |
+- Use combobox/select when the choice is dense or technical.
+- Use card groups when visual differentiation matters (for example Capture Quality direction).
 
-Qt/QSS implementation notes:
+## 6. Card group vs dropdown guidance
+- Capture Quality should visually move toward selectable quality cards.
+- Dropdown can remain as an internal/test seam temporarily.
+- Cards must not fake unsupported custom controls.
+- Selected card state uses amber ring/check, not only text color.
+- `Custom` quality can appear as a direction card, but should be clearly marked if not live.
 
-- Style `QComboBox QAbstractItemView` (not native popup only).
-- Set custom list view (`QListView`) for predictable item styling.
-- Ship caret icon as a resource; do not rely on native arrow.
-- Soft focus glow may need a small helper effect in code.
+## 7. Layout width guidance
+Do not apply one global centered max-width everywhere.
 
-## 6. Segmented controls vs picker tabs
+Page-specific behavior is required:
 
-### Picker mode tabs (`Screens / Windows / Region`)
-- Underline-tab pattern, not pill segmentation.
-- Active tab uses amber text/icon and amber bottom border.
-- Count badges are mono and subdued.
-- Tabs remain visible even when empty; empty state belongs in body.
+- Record should use meaningful width and preserve preview dominance.
+- Logs should use wider content and a contained log panel.
+- Settings may be capped but must keep two-column desktop rhythm where space allows.
+- Diagnostics must keep enough width for stat tiles and readable details.
+- Hotkeys can be narrower but should not feel like an awkward floating strip.
 
-### Form segmented controls (`2–3 choices`)
-- Shared rounded frame (`9px`) with checkable button children.
-- Checked segment uses raised/hover surface fill and brighter text.
+## 8. QSS vs C++ boundaries
+QSS responsibilities:
 
-## 7. Source picker card-state spec
-From `modal.jsx` and v2/ds-system CSS:
+- Tokens and palette usage.
+- Borders, radii, typography presets, and static state colors.
+- Basic control/chip/button visuals.
 
-### Screens tab
-- Visual monitor cards with primary badge.
-- Click selects, double-click confirms.
+C++ responsibilities:
 
-### Windows tab
-- Default grid contains capturable windows only.
-- Search filter applies live.
-- Refresh action present in toolbar.
-- Window cards include thumbnail, app glyph, title, and metadata.
+- Responsive layout switching by window width.
+- Grid reflow and column changes.
+- Source thumbnail lifecycle states and fallback transitions.
+- Filtering and disclosure behavior in Source Picker.
+- Dynamic record-state composition and rail/page state changes.
 
-### Region tab
-- Region canvas + draggable rectangle semantics.
-- Readout fields (`W/H/X/Y`), snap-to-16:9, recent region chips.
+Boundary rule:
 
-### Thumbnail and availability states
+- Do not try to solve all layout dynamics in QSS alone.
 
-| State | Visual contract | Selectable |
-|---|---|---|
-| `ok` | Real thumbnail area | Yes |
-| `loading` | Shimmer placeholder (`.sc-preview.is-loading`) | Yes |
-| `failed` | Icon fallback (`.sc-preview.is-failed` + `.sc-fallback`) | Yes |
-| `unavailable` | Dimmed card + overlay + badge | No |
-| `minimized` | Overlay + amber minimized badge | No |
-| `too-small` | Overlay + too-small badge | No |
-
-### Disclosure and empty-state rules
-- Unavailable windows are collapsed behind a `Show unavailable (N)` disclosure row.
-- Expanded unavailable section is explicit and non-selectable.
-- Filter misses show an explicit empty-state block with guidance text.
-- Filtering/sorting/dedupe/noise suppression is a C++ model responsibility, not QSS logic.
-
-## 8. Readiness, status, and result components
-
-### Record readiness
-- Full-width readiness strip under runtime controls in ready state.
-- Green “go/no-go” summary in ready.
-- Red blocker summary in blocked/error.
-- Live recording states demote readiness into concise “target locked / live summary” messaging.
-
-### Rail status cards by recording state
-- READY: ready pill, zero timer, primary start action.
-- RECORDING: red timer, stop/pause actions, live stats.
-- PAUSED: amber timer, resume/stop actions.
-- DONE: saved-file card with filename/metadata + `Open folder` and `Record again`.
-- BLOCKED: blocker list, disabled start, explicit `Open diagnostics` path.
-
-### Status chip style
-- Pill pattern with mono uppercase labels.
-- Optional live pulsing indicator for recording.
-
-## 9. Qt implementation boundaries
-
-### QSS-only
-- Palette colors, borders, radii, spacing, static hover/pressed/disabled states.
-- Button/pill/input/checkbox/radio/toggle visual primitives.
-
-### QSS + object name/property wiring
-- Picker tabs and segmented controls by role/state properties.
-- Record rail tinting by dynamic `recState` property.
-- Source-card states by dynamic availability properties.
-
-### Requires C++/custom widgets
-- Runtime audio meter animation.
-- Source picker thumbnail pipeline and fallback transitions.
-- Flow/wrap runtime bar behavior.
-- Combobox popup view setup and optional focus glow helper.
-
-### Explicitly unsupported in QSS
-- CSS variables, `oklch()`, `color-mix()`.
-- Full CSS box-shadow behavior on generic widgets.
-- Native popup restyling without custom item view configuration.
+## 9. Implementation priority checklist
+1. Repair width and grid regressions first.
+2. Repair Record preview dominance and right-rail state honesty.
+3. Re-card downgraded components where direction already exists.
+4. Then consider shell/sidebar/about polish changes.
+5. Then continue feature work.
