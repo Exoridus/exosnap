@@ -8,6 +8,7 @@
 #include "../models/VideoSettingsModel.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
+#include "../ui/widgets/SectionRuleHeader.h"
 #include <capability/audio_ui_state.h>
 #include <capability/resolver.h>
 #include <capability/user_config.h>
@@ -18,6 +19,8 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QStyle>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -52,11 +55,35 @@ QString severityIcon(diagnostics::DiagnosticSeverity sev) {
     return QStringLiteral("?");
 }
 
+// Issue-card tone maps onto the QSS issueTone / statTone tints.
+QString severityTone(diagnostics::DiagnosticSeverity sev) {
+    switch (sev) {
+    case diagnostics::DiagnosticSeverity::Pass:
+        return QStringLiteral("pass");
+    case diagnostics::DiagnosticSeverity::Notice:
+        return QStringLiteral("notice");
+    case diagnostics::DiagnosticSeverity::Blocker:
+        return QStringLiteral("blocker");
+    }
+    return QStringLiteral("pass");
+}
+
+QString collapseGlyph(bool open) {
+    return open ? QString::fromUtf8("\xe2\x96\xbe  ")  // ▾
+                : QString::fromUtf8("\xe2\x96\xb8  "); // ▸
+}
+
 QFrame* makeHorizontalRule(QWidget* parent) {
     auto* f = new QFrame(parent);
     f->setFrameShape(QFrame::HLine);
-    f->setObjectName(QStringLiteral("diagnosticRule"));
+    f->setProperty("frameRole", "sectionRuleLine");
     return f;
+}
+
+QLabel* makeTableHeader(const QString& text, QWidget* parent) {
+    auto* l = new QLabel(text.toUpper(), parent);
+    l->setProperty("labelRole", "tableHeader");
+    return l;
 }
 
 } // namespace
@@ -76,86 +103,83 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     layout->setContentsMargins(M::kSpaceXl, M::kSpaceXl, M::kSpaceXl, M::kSpaceXl);
     layout->setSpacing(M::kSpaceLg);
 
-    // ── A: Readiness panel ────────────────────────────────────────────────────
-    auto* readiness_panel = makePanel(content);
-    auto* rl = new QVBoxLayout(readiness_panel);
+    // ── A: Readiness / action header ──────────────────────────────────────────
+    // A troubleshooting summary: a plain-language verdict plus the primary actions,
+    // tinted by overall state, with three count tiles below.
+    readiness_panel_ = makePanel(content);
+    readiness_panel_->setProperty("panelRole", "readinessBanner");
+    auto* rl = new QVBoxLayout(readiness_panel_);
     rl->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
     rl->setSpacing(M::kSpaceSm);
 
-    rl->addWidget(makeSubLabel(QStringLiteral("Diagnostics are designed to block invalid recording states early."),
-                               readiness_panel));
+    auto* head_row = new QHBoxLayout();
+    head_row->setSpacing(M::kSpaceMd);
 
-    status_label_ = new QLabel(QStringLiteral("Overall status: Not checked"), readiness_panel);
-    status_label_->setProperty("labelRole", "body");
-    rl->addWidget(status_label_);
+    auto* head_text = new QVBoxLayout();
+    head_text->setSpacing(M::kSpaceXs);
+    status_pill_ = new QLabel(QStringLiteral("NOT CHECKED"), readiness_panel_);
+    status_pill_->setProperty("labelRole", "profileStatusBadge");
+    status_pill_->setAlignment(Qt::AlignCenter);
+    auto* pill_row = new QHBoxLayout();
+    pill_row->setContentsMargins(0, 0, 0, 0);
+    pill_row->addWidget(status_pill_);
+    pill_row->addStretch();
+    head_text->addLayout(pill_row);
 
-    last_check_label_ = new QLabel(QStringLiteral("Last check: —"), readiness_panel);
+    last_check_label_ = new QLabel(QStringLiteral("Last check: \xe2\x80\x94"), readiness_panel_);
     last_check_label_->setProperty("labelRole", "subtle");
-    rl->addWidget(last_check_label_);
+    head_text->addWidget(last_check_label_);
+    head_row->addLayout(head_text, 1);
 
     auto* btn_row = new QHBoxLayout();
     btn_row->setSpacing(M::kSpaceSm);
-    run_check_btn_ = new QPushButton(QStringLiteral("Run System && Pipeline Check"), readiness_panel);
+    run_check_btn_ = new QPushButton(QStringLiteral("Run Check"), readiness_panel_);
     run_check_btn_->setProperty("role", "primary");
-    export_report_btn_ = new QPushButton(QStringLiteral("Export Diagnostic Report"), readiness_panel);
+    export_report_btn_ = new QPushButton(QStringLiteral("Export Report"), readiness_panel_);
     export_report_btn_->setProperty("role", "ghost");
     export_report_btn_->setEnabled(false);
     btn_row->addWidget(run_check_btn_);
     btn_row->addWidget(export_report_btn_);
-    btn_row->addStretch();
-    rl->addLayout(btn_row);
+    head_row->addLayout(btn_row, 0);
+    rl->addLayout(head_row);
 
-    summary_label_ = new QLabel(QStringLiteral("Run a check to see results."), readiness_panel);
-    summary_label_->setProperty("labelRole", "muted");
+    summary_label_ = new QLabel(QStringLiteral("Run a check to see whether this machine is set up to record well."),
+                                readiness_panel_);
+    summary_label_->setProperty("labelRole", "body");
+    summary_label_->setWordWrap(true);
     rl->addWidget(summary_label_);
 
-    // Counts row
-    auto* counts_row = new QHBoxLayout();
-    counts_row->setSpacing(M::kSpaceXl);
+    // Count tiles
+    auto* tiles_row = new QHBoxLayout();
+    tiles_row->setSpacing(M::kSpaceMd);
 
-    auto* blocker_panel = new QFrame(readiness_panel);
-    blocker_panel->setProperty("panelRole", "compactRow");
-    auto* bl = new QHBoxLayout(blocker_panel);
-    bl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-    blocker_count_ = new QLabel(QStringLiteral("0"), blocker_panel);
-    blocker_count_->setProperty("labelRole", "countBlocker");
-    auto* blocker_lbl = new QLabel(QStringLiteral("Blockers"), blocker_panel);
-    blocker_lbl->setProperty("labelRole", "body");
-    bl->addWidget(blocker_count_);
-    bl->addWidget(blocker_lbl);
-    counts_row->addWidget(blocker_panel);
+    const auto makeStatTile = [&](const char* tone, const QString& tile_label, QFrame*& out_tile, QLabel*& out_num) {
+        out_tile = new QFrame(readiness_panel_);
+        out_tile->setProperty("panelRole", "statTile");
+        out_tile->setProperty("statTone", tone);
+        auto* tl = new QVBoxLayout(out_tile);
+        tl->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
+        tl->setSpacing(2);
+        out_num = new QLabel(QStringLiteral("0"), out_tile);
+        out_num->setProperty("labelRole", "statTileNum");
+        out_num->setProperty("statTone", tone);
+        auto* lbl = new QLabel(tile_label, out_tile);
+        lbl->setProperty("labelRole", "statTileLabel");
+        tl->addWidget(out_num);
+        tl->addWidget(lbl);
+        tiles_row->addWidget(out_tile, 1);
+    };
 
-    auto* notice_panel = new QFrame(readiness_panel);
-    notice_panel->setProperty("panelRole", "compactRow");
-    auto* nl = new QHBoxLayout(notice_panel);
-    nl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-    notice_count_ = new QLabel(QStringLiteral("0"), notice_panel);
-    notice_count_->setProperty("labelRole", "countNotice");
-    auto* notice_lbl = new QLabel(QStringLiteral("Notices"), notice_panel);
-    notice_lbl->setProperty("labelRole", "body");
-    nl->addWidget(notice_count_);
-    nl->addWidget(notice_lbl);
-    counts_row->addWidget(notice_panel);
-
-    auto* pass_panel = new QFrame(readiness_panel);
-    pass_panel->setProperty("panelRole", "compactRow");
-    auto* pl = new QHBoxLayout(pass_panel);
-    pl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-    pass_count_ = new QLabel(QStringLiteral("0"), pass_panel);
-    pass_count_->setProperty("labelRole", "countPass");
-    auto* pass_lbl = new QLabel(QStringLiteral("Passes"), pass_panel);
-    pass_lbl->setProperty("labelRole", "body");
-    pl->addWidget(pass_count_);
-    pl->addWidget(pass_lbl);
-    counts_row->addWidget(pass_panel);
-
-    counts_row->addStretch();
-    rl->addLayout(counts_row);
-    layout->addWidget(readiness_panel);
+    makeStatTile("blocker", QStringLiteral("Blockers"), blocker_tile_, blocker_count_);
+    makeStatTile("notice", QStringLiteral("Notices"), notice_tile_, notice_count_);
+    makeStatTile("pass", QStringLiteral("Passes"), pass_tile_, pass_count_);
+    rl->addSpacing(M::kSpaceXs);
+    rl->addLayout(tiles_row);
+    layout->addWidget(readiness_panel_);
 
     // ── B: Top Issues ─────────────────────────────────────────────────────────
-    layout->addWidget(makeHorizontalRule(content));
-    layout->addWidget(makeSectionLabel(QStringLiteral("Top Issues"), content));
+    auto* issues_header = new ui::widgets::SectionRuleHeader(QStringLiteral("TOP ISSUES"), content);
+    layout->addWidget(issues_header);
     layout->addWidget(makeSubLabel(
         QStringLiteral("Highest-priority blockers and notices for the current recording configuration."), content));
 
@@ -167,76 +191,102 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
         makeSubLabel(QStringLiteral("Run a system check to populate issue details."), issues_parent_));
     layout->addWidget(issues_parent_);
 
-    // ── C: Technical Details ──────────────────────────────────────────────────
-    layout->addWidget(makeHorizontalRule(content));
-    layout->addWidget(makeSectionLabel(QStringLiteral("Technical Details"), content));
+    // ── C: Technical Details (demoted, collapsed by default) ───────────────────
+    auto* details_header = new ui::widgets::SectionRuleHeader(QStringLiteral("TECHNICAL DETAILS"), content);
+    details_header->setMeta(QStringLiteral("Reference"));
+    layout->addWidget(details_header);
+    layout->addWidget(makeSubLabel(
+        QStringLiteral("Raw probe results and the active recording configuration. Available for reference — not the "
+                       "primary troubleshooting view."),
+        content));
 
-    // C1: Capabilities
-    capabilities_content_ = new QWidget(content);
-    capabilities_layout_ = new QVBoxLayout(capabilities_content_);
-    capabilities_layout_->setContentsMargins(0, 0, 0, 0);
-    capabilities_layout_->setSpacing(M::kSpaceXs);
-    capabilities_layout_->addWidget(
-        makeSectionLabel(QStringLiteral("Hardware & Software Capabilities"), capabilities_content_));
-    capabilities_layout_->addWidget(makeSubLabel(
-        QStringLiteral("Detected capabilities from the current system. Values marked unavailable are not selectable."),
-        capabilities_content_));
+    // C1: Capabilities (collapsible)
+    capabilities_content_ = makeCollapsibleSection(
+        QStringLiteral("Detected capabilities"),
+        QStringLiteral("Encoders, muxers and audio paths probed on this machine. Unavailable items are simply not "
+                       "selectable — they never block a recording."),
+        content, capabilities_toggle_);
+    capabilities_layout_ = static_cast<QVBoxLayout*>(capabilities_content_->layout());
     capabilities_layout_->addWidget(
         makeSubLabel(QStringLiteral("Run a system check to populate this list."), capabilities_content_));
-    layout->addWidget(capabilities_content_);
-    layout->addSpacing(M::kSpaceMd);
+    layout->addWidget(capabilities_toggle_->parentWidget());
 
-    // C2: Configuration
-    config_content_ = new QWidget(content);
-    config_layout_ = new QVBoxLayout(config_content_);
-    config_layout_->setContentsMargins(0, 0, 0, 0);
-    config_layout_->setSpacing(M::kSpaceXs);
-    config_layout_->addWidget(makeSectionLabel(QStringLiteral("Active Configuration"), config_content_));
-    config_layout_->addWidget(
-        makeSubLabel(QStringLiteral("Active recording settings as currently configured in the app."), config_content_));
+    // C2: Active configuration (collapsible)
+    config_content_ = makeCollapsibleSection(QStringLiteral("Active configuration"),
+                                             QStringLiteral("Recording settings as currently configured in the app."),
+                                             content, config_toggle_);
+    config_layout_ = static_cast<QVBoxLayout*>(config_content_->layout());
     config_layout_->addWidget(
         makeSubLabel(QStringLiteral("Run a system check to populate this list."), config_content_));
-    layout->addWidget(config_content_);
+    layout->addWidget(config_toggle_->parentWidget());
 
     // ── D: Self-Test ──────────────────────────────────────────────────────────
-    layout->addWidget(makeHorizontalRule(content));
-    layout->addWidget(makeSectionLabel(QStringLiteral("Self-Test"), content));
+    auto* selftest_header = new ui::widgets::SectionRuleHeader(QStringLiteral("SELF-TEST"), content);
+    layout->addWidget(selftest_header);
     layout->addWidget(makeSubLabel(
         QStringLiteral("Validates core recording pipeline components without starting a full recording."), content));
 
     selftest_content_ = new QWidget(content);
     selftest_layout_ = new QVBoxLayout(selftest_content_);
     selftest_layout_->setContentsMargins(0, 0, 0, 0);
-    selftest_layout_->setSpacing(M::kSpaceLg);
+    selftest_layout_->setSpacing(M::kSpaceSm);
 
+    auto* selftest_action_row = new QHBoxLayout();
+    selftest_action_row->setSpacing(M::kSpaceMd);
     selftest_status_label_ = new QLabel(QStringLiteral("Status: Not run"), selftest_content_);
     selftest_status_label_->setProperty("labelRole", "body");
-    selftest_layout_->addWidget(selftest_status_label_); // item 0
-
     selftest_run_btn_ = new QPushButton(QStringLiteral("Run Self-Test"), selftest_content_);
-    selftest_run_btn_->setProperty("role", "primary");
+    selftest_run_btn_->setProperty("role", "ghost");
     selftest_run_btn_->setMaximumWidth(200);
-    selftest_layout_->addWidget(selftest_run_btn_); // item 1
+    selftest_action_row->addWidget(selftest_status_label_, 1);
+    selftest_action_row->addWidget(selftest_run_btn_, 0);
+    selftest_layout_->addLayout(selftest_action_row); // item 0
 
-    selftest_layout_->addWidget(makeHorizontalRule(selftest_content_)); // item 2
-    selftest_layout_->addWidget(makeSubLabel(                           // item 3
-        QStringLiteral("Run a system check or click Run Self-Test."), selftest_content_));
+    selftest_layout_->addWidget( // item 1
+        makeSubLabel(QStringLiteral("Run a system check or click Run Self-Test."), selftest_content_));
 
     layout->addWidget(selftest_content_);
 
-    // ── E: Logs redirect ──────────────────────────────────────────────────────
-    layout->addWidget(makeHorizontalRule(content));
+    // ── E: Pipeline (planned, no live timing yet) ──────────────────────────────
+    auto* pipeline_header = new ui::widgets::SectionRuleHeader(QStringLiteral("PIPELINE"), content);
+    pipeline_header->setMeta(QStringLiteral("Planned"));
+    layout->addWidget(pipeline_header);
 
+    auto* pipeline_note = makePanel(content);
+    pipeline_note->setProperty("panelRole", "plannedNote");
+    auto* pnl = new QHBoxLayout(pipeline_note);
+    pnl->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
+    pnl->setSpacing(M::kSpaceMd);
+    auto* planned_tag = new QLabel(QStringLiteral("PLANNED"), pipeline_note);
+    planned_tag->setProperty("labelRole", "plannedTag");
+    planned_tag->setAlignment(Qt::AlignCenter);
+    pnl->addWidget(planned_tag, 0, Qt::AlignTop);
+    auto* planned_text = new QLabel(
+        QStringLiteral("Per-frame pipeline timing and frame-budget analysis (capture, convert, encode, mux) will "
+                       "appear here in a future build. No live timing is collected yet."),
+        pipeline_note);
+    planned_text->setProperty("labelRole", "muted");
+    planned_text->setWordWrap(true);
+    pnl->addWidget(planned_text, 1);
+    layout->addWidget(pipeline_note);
+
+    // ── F: Logs redirect ───────────────────────────────────────────────────────
     auto* logs_card = makePanel(content);
-    auto* ll = new QVBoxLayout(logs_card);
+    logs_card->setProperty("panelRole", "note");
+    auto* ll = new QHBoxLayout(logs_card);
     ll->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
     ll->setSpacing(M::kSpaceMd);
-    ll->addWidget(makeSectionLabel(QStringLiteral("Application Logs"), logs_card));
-    ll->addWidget(makeSubLabel(QStringLiteral("Raw application logs are available on the Logs page."), logs_card));
+    auto* logs_text = new QVBoxLayout();
+    logs_text->setSpacing(2);
+    auto* logs_title = new QLabel(QStringLiteral("Application Logs"), logs_card);
+    logs_title->setProperty("labelRole", "cardTitle");
+    logs_text->addWidget(logs_title);
+    logs_text->addWidget(
+        makeSubLabel(QStringLiteral("Need the raw event stream behind these checks? Open the Logs page."), logs_card));
+    ll->addLayout(logs_text, 1);
     auto* go_logs_btn = new QPushButton(QStringLiteral("Open Logs Page"), logs_card);
     go_logs_btn->setProperty("role", "ghost");
-    go_logs_btn->setMaximumWidth(200);
-    ll->addWidget(go_logs_btn);
+    ll->addWidget(go_logs_btn, 0, Qt::AlignVCenter);
     layout->addWidget(logs_card);
 
     layout->addStretch();
@@ -248,7 +298,7 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     holder_layout->setContentsMargins(0, 0, 0, 0);
     holder_layout->setSpacing(0);
     holder_layout->addStretch(1);
-    holder_layout->addWidget(content);
+    holder_layout->addWidget(content, 1000);
     holder_layout->addStretch(1);
     scroll->setWidget(content_holder);
     root->addWidget(scroll);
@@ -292,23 +342,60 @@ QLabel* DiagnosticsPage::makeSubLabel(const QString& text, QWidget* parent) {
     return l;
 }
 
-QLabel* DiagnosticsPage::makeSectionLabel(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setProperty("labelRole", "section");
-    return l;
-}
-
 QFrame* DiagnosticsPage::makePanel(QWidget* parent) {
     auto* panel = new QFrame(parent);
     panel->setProperty("panelRole", "panel");
     return panel;
 }
 
+QWidget* DiagnosticsPage::makeCollapsibleSection(const QString& title, const QString& subtitle, QWidget* parent,
+                                                 QToolButton*& out_toggle) {
+    auto* wrap = new QWidget(parent);
+    auto* wl = new QVBoxLayout(wrap);
+    wl->setContentsMargins(0, 0, 0, 0);
+    wl->setSpacing(M::kSpaceXs);
+
+    auto* toggle = new QToolButton(wrap);
+    toggle->setProperty("role", "collapseHead");
+    toggle->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    toggle->setCheckable(true);
+    toggle->setChecked(false);
+    toggle->setCursor(Qt::PointingHandCursor);
+    toggle->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    toggle->setText(collapseGlyph(false) + title);
+    wl->addWidget(toggle);
+
+    if (!subtitle.trimmed().isEmpty()) {
+        auto* sub = new QLabel(subtitle, wrap);
+        sub->setProperty("labelRole", "collapseSub");
+        sub->setWordWrap(true);
+        wl->addWidget(sub);
+    }
+
+    auto* body = new QWidget(wrap);
+    body->setVisible(false);
+    auto* body_layout = new QVBoxLayout(body);
+    body_layout->setContentsMargins(M::kSpaceXs, M::kSpaceSm, M::kSpaceXs, M::kSpaceSm);
+    body_layout->setSpacing(M::kSpaceXs);
+    wl->addWidget(body);
+
+    connect(toggle, &QToolButton::toggled, this, [toggle, body](bool on) {
+        body->setVisible(on);
+        // Preserve the label (incl. any count suffix); only flip the 3-char glyph prefix.
+        toggle->setText(collapseGlyph(on) + toggle->text().mid(3));
+    });
+
+    out_toggle = toggle;
+    return body;
+}
+
 QWidget* DiagnosticsPage::makeInfoRow(const QString& label, const QString& value, const QString& status,
-                                      QWidget* parent) {
+                                      QWidget* parent, bool first_row) {
     auto* row = new QWidget(parent);
+    row->setObjectName(QStringLiteral("diagTableRow"));
+    row->setProperty("firstRow", first_row);
     auto* row_layout = new QHBoxLayout(row);
-    row_layout->setContentsMargins(M::kSpaceSm, M::kSpaceXs, M::kSpaceSm, M::kSpaceXs);
+    row_layout->setContentsMargins(M::kSpaceSm, M::kSpaceSm, M::kSpaceSm, M::kSpaceSm);
     row_layout->setSpacing(M::kSpaceMd);
 
     auto* name_label = new QLabel(label, row);
@@ -338,14 +425,35 @@ QWidget* DiagnosticsPage::makeInfoRow(const QString& label, const QString& value
     return row;
 }
 
+void DiagnosticsPage::setReadinessState(const QString& state) {
+    const auto repolish = [](QWidget* w) {
+        if (!w)
+            return;
+        w->style()->unpolish(w);
+        w->style()->polish(w);
+    };
+    const bool tinted =
+        state == QStringLiteral("ready") || state == QStringLiteral("warn") || state == QStringLiteral("blocked");
+    if (readiness_panel_) {
+        readiness_panel_->setProperty("stateRole", tinted ? QVariant(state) : QVariant());
+        repolish(readiness_panel_);
+    }
+    if (status_pill_) {
+        status_pill_->setProperty("stateRole", tinted ? QVariant(state) : QVariant());
+        repolish(status_pill_);
+    }
+}
+
 void DiagnosticsPage::onRunCheck() {
-    status_label_->setText(QStringLiteral("Overall status: Checking..."));
+    status_pill_->setText(QStringLiteral("CHECKING"));
+    setReadinessState(QStringLiteral("checking"));
     last_check_label_->setText(QStringLiteral("Last check: running..."));
     summary_label_->setText(QStringLiteral("Check in progress."));
 
     if (!data_ready_) {
-        status_label_->setText(QStringLiteral("Overall status: No data available"));
-        last_check_label_->setText(QStringLiteral("Last check: —"));
+        status_pill_->setText(QStringLiteral("NO DATA"));
+        setReadinessState(QStringLiteral("neutral"));
+        last_check_label_->setText(QStringLiteral("Last check: \xe2\x80\x94"));
         summary_label_->setText(QStringLiteral("Diagnostic data has not been loaded. Open the Record page first."));
         return;
     }
@@ -370,34 +478,31 @@ void DiagnosticsPage::refreshCapabilities() {
         delete child;
     }
 
-    capabilities_layout_->addWidget(
-        makeSectionLabel(QStringLiteral("Hardware & Software Capabilities"), capabilities_content_));
-    capabilities_layout_->addWidget(makeSubLabel(
-        QStringLiteral("Detected capabilities from the current system. Values marked unavailable are not selectable."),
-        capabilities_content_));
-    capabilities_layout_->addSpacing(M::kSpaceMd);
-
     auto* header_row = new QWidget(capabilities_content_);
     auto* header_layout = new QHBoxLayout(header_row);
     header_layout->setContentsMargins(M::kSpaceSm, 0, M::kSpaceSm, 0);
-    auto* h1 = new QLabel(QStringLiteral("Feature"), header_row);
-    h1->setProperty("labelRole", "section");
+    header_layout->setSpacing(M::kSpaceMd);
+    auto* h1 = makeTableHeader(QStringLiteral("Feature"), header_row);
     h1->setMinimumWidth(180);
-    auto* h2 = new QLabel(QStringLiteral("Detected Value"), header_row);
-    h2->setProperty("labelRole", "section");
-    auto* h3 = new QLabel(QStringLiteral("Status"), header_row);
-    h3->setProperty("labelRole", "section");
+    auto* h2 = makeTableHeader(QStringLiteral("Detected Value"), header_row);
+    auto* h3 = makeTableHeader(QStringLiteral("Status"), header_row);
     header_layout->addWidget(h1);
     header_layout->addWidget(h2, 1);
     header_layout->addWidget(h3);
     capabilities_layout_->addWidget(header_row);
     capabilities_layout_->addWidget(makeHorizontalRule(capabilities_content_));
 
+    bool first = true;
     for (const auto& entry : cap_summary_.entries) {
-        capabilities_layout_->addWidget(makeInfoRow(QString::fromStdString(entry.label),
-                                                    QString::fromStdString(entry.value),
-                                                    QString::fromStdString(entry.status), capabilities_content_));
+        capabilities_layout_->addWidget(
+            makeInfoRow(QString::fromStdString(entry.label), QString::fromStdString(entry.value),
+                        QString::fromStdString(entry.status), capabilities_content_, first));
+        first = false;
     }
+
+    if (capabilities_toggle_)
+        capabilities_toggle_->setText(collapseGlyph(capabilities_toggle_->isChecked()) +
+                                      QStringLiteral("Detected capabilities  (%1)").arg(cap_summary_.entries.size()));
 }
 
 // --- Configuration refresh ---
@@ -412,28 +517,27 @@ void DiagnosticsPage::refreshConfiguration() {
         delete child;
     }
 
-    config_layout_->addWidget(makeSectionLabel(QStringLiteral("Active Configuration"), config_content_));
-    config_layout_->addWidget(
-        makeSubLabel(QStringLiteral("Active recording settings as currently configured in the app."), config_content_));
-    config_layout_->addSpacing(M::kSpaceMd);
-
     auto* header_row = new QWidget(config_content_);
     auto* header_layout = new QHBoxLayout(header_row);
     header_layout->setContentsMargins(M::kSpaceSm, 0, M::kSpaceSm, 0);
-    auto* h1 = new QLabel(QStringLiteral("Setting"), header_row);
-    h1->setProperty("labelRole", "section");
+    header_layout->setSpacing(M::kSpaceMd);
+    auto* h1 = makeTableHeader(QStringLiteral("Setting"), header_row);
     h1->setMinimumWidth(180);
-    auto* h2 = new QLabel(QStringLiteral("Value"), header_row);
-    h2->setProperty("labelRole", "section");
+    auto* h2 = makeTableHeader(QStringLiteral("Value"), header_row);
     header_layout->addWidget(h1);
     header_layout->addWidget(h2, 1);
     config_layout_->addWidget(header_row);
     config_layout_->addWidget(makeHorizontalRule(config_content_));
 
+    bool first = true;
     for (const auto& entry : config_summary_.entries) {
         config_layout_->addWidget(makeInfoRow(QString::fromStdString(entry.label), QString::fromStdString(entry.value),
-                                              QString(), config_content_));
+                                              QString(), config_content_, first));
+        first = false;
     }
+
+    if (config_toggle_)
+        config_toggle_->setText(collapseGlyph(config_toggle_->isChecked()) + QStringLiteral("Active configuration"));
 }
 
 // --- Self-Test refresh ---
@@ -442,8 +546,8 @@ void DiagnosticsPage::refreshSelfTest() {
     if (!selftest_layout_ || !selftest_content_)
         return;
 
-    // Preserve first 4 items (status label, run button, rule, hint); remove dynamic results.
-    while (selftest_layout_->count() > 4) {
+    // Preserve the first two items (action row, hint); remove dynamic result rows.
+    while (selftest_layout_->count() > 2) {
         QLayoutItem* child = selftest_layout_->takeAt(selftest_layout_->count() - 1);
         if (child->widget())
             delete child->widget();
@@ -475,9 +579,11 @@ void DiagnosticsPage::refreshSelfTest() {
         const bool is_not_executed = result.severity != diagnostics::DiagnosticSeverity::Pass &&
                                      result.detail.find("not executed in this build") != std::string::npos;
 
-        auto* row = makePanel(selftest_content_);
+        auto* row = new QFrame(selftest_content_);
+        row->setProperty("panelRole", "selfTestRow");
         auto* row_layout = new QHBoxLayout(row);
         row_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+        row_layout->setSpacing(M::kSpaceMd);
 
         auto* icon_lbl =
             new QLabel(is_not_executed ? QStringLiteral("\xe2\x80\x94") : severityIcon(result.severity), row);
@@ -485,8 +591,8 @@ void DiagnosticsPage::refreshSelfTest() {
         row_layout->addWidget(icon_lbl);
 
         auto* name_lbl = new QLabel(QString::fromStdString(result.title), row);
-        name_lbl->setProperty("labelRole", "body");
-        name_lbl->setMinimumWidth(200);
+        name_lbl->setProperty("labelRole", "selfTestTitle");
+        name_lbl->setMinimumWidth(180);
         row_layout->addWidget(name_lbl);
 
         auto* status_lbl =
@@ -497,7 +603,7 @@ void DiagnosticsPage::refreshSelfTest() {
         row_layout->addWidget(status_lbl);
 
         auto* detail_lbl = new QLabel(QString::fromStdString(result.detail), row);
-        detail_lbl->setProperty("labelRole", "subtle");
+        detail_lbl->setProperty("labelRole", "selfTestDetail");
         detail_lbl->setWordWrap(true);
         row_layout->addWidget(detail_lbl, 1);
 
@@ -527,35 +633,38 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
             return;
 
         auto* card = makePanel(issues_parent_);
+        card->setProperty("panelRole", "issueCard");
+        card->setProperty("issueTone", severityTone(severity));
         auto* card_layout = new QVBoxLayout(card);
         card_layout->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
         card_layout->setSpacing(M::kSpaceXs);
 
         auto* title_row = new QHBoxLayout();
+        title_row->setSpacing(M::kSpaceSm);
         auto* icon_label = new QLabel(severityIcon(severity), card);
         icon_label->setProperty("labelRole", severityClass(severity));
         auto* title_label = new QLabel(title, card);
-        title_label->setProperty("labelRole", "body");
-        title_label->setStyleSheet(QStringLiteral("font-weight: bold;"));
-        title_row->addWidget(icon_label);
+        title_label->setProperty("labelRole", "issueTitle");
+        title_label->setWordWrap(true);
+        title_row->addWidget(icon_label, 0, Qt::AlignTop);
         title_row->addWidget(title_label, 1);
         card_layout->addLayout(title_row);
 
         auto* summary_label = new QLabel(summary, card);
-        summary_label->setProperty("labelRole", "subtle");
+        summary_label->setProperty("labelRole", "issueDesc");
         summary_label->setWordWrap(true);
         card_layout->addWidget(summary_label);
 
         if (!detail.trimmed().isEmpty()) {
             auto* detail_label = new QLabel(detail, card);
-            detail_label->setProperty("labelRole", "subtle");
+            detail_label->setProperty("labelRole", "issueMeta");
             detail_label->setWordWrap(true);
             card_layout->addWidget(detail_label);
         }
 
         if (!action.trimmed().isEmpty()) {
             auto* action_label = new QLabel(QStringLiteral("Action: ") + action, card);
-            action_label->setProperty("labelRole", "muted");
+            action_label->setProperty("labelRole", "issueMeta");
             action_label->setWordWrap(true);
             card_layout->addWidget(action_label);
         }
@@ -662,23 +771,23 @@ void DiagnosticsPage::refreshOverview() {
     }
 
     if (blockers > 0) {
-        status_label_->setText(QStringLiteral("Overall status: BLOCKED — %1 blocker(s) found").arg(blockers));
+        status_pill_->setText(QStringLiteral("BLOCKED \xc2\xb7 %1").arg(blockers));
+        setReadinessState(QStringLiteral("blocked"));
+        summary_label_->setText(
+            QStringLiteral("%1 blocker(s) must be resolved before recording. See Top Issues below.").arg(blockers));
     } else if (notices > 0) {
-        status_label_->setText(QStringLiteral("Overall status: Ready with %1 notice(s)").arg(notices));
+        status_pill_->setText(QStringLiteral("READY \xc2\xb7 %1 NOTICE(S)").arg(notices));
+        setReadinessState(QStringLiteral("warn"));
+        summary_label_->setText(
+            QStringLiteral("No blockers — you can record now. %1 item(s) could be better.").arg(notices));
     } else {
-        status_label_->setText(QStringLiteral("Overall status: Ready"));
+        status_pill_->setText(QStringLiteral("READY"));
+        setReadinessState(QStringLiteral("ready"));
+        summary_label_->setText(QStringLiteral("All checks passed. This machine is set up to record well."));
     }
 
     last_check_label_->setText(QStringLiteral("Last check: %1")
                                    .arg(QDateTime::currentDateTime().toString(QStringLiteral("dd MMM yyyy, hh:mm"))));
-
-    QString summary = QStringLiteral("Capabilities: %1 entries checked, %2 recommendation(s).")
-                          .arg(cap_summary_.entries.size())
-                          .arg(recs.results.size());
-    if (!profile_validation_.succeeded && !profile_validation_.invalidity.empty()) {
-        summary += QStringLiteral(" Configuration compatibility blockers found.");
-    }
-    summary_label_->setText(summary);
 
     blocker_count_->setText(QString::number(blockers));
     notice_count_->setText(QString::number(notices));

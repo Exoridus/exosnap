@@ -326,6 +326,11 @@ QFrame[panelRole="readinessBanner"][stateRole="ready"] {
     border-color: rgba(120, 218, 149, 0.42);
 }
 
+QFrame[panelRole="readinessBanner"][stateRole="warn"] {
+    background: rgba(194, 150, 83, 0.12);
+    border-color: rgba(194, 150, 83, 0.48);
+}
+
 QFrame[panelRole="readinessBanner"][stateRole="blocked"] {
     background: rgba(240, 91, 84, 0.12);
     border-color: rgba(240, 91, 84, 0.48);
@@ -1460,6 +1465,12 @@ QLabel[labelRole="profileStatusBadge"][stateRole="ready"] {
     background: rgba(120, 218, 149, 0.14);
 }
 
+QLabel[labelRole="profileStatusBadge"][stateRole="warn"] {
+    color: ${warn};
+    border-color: rgba(194, 150, 83, 0.52);
+    background: rgba(194, 150, 83, 0.16);
+}
+
 QLabel[labelRole="profileStatusBadge"][stateRole="recording"] {
     color: ${err};
     border-color: rgba(240, 91, 84, 0.58);
@@ -1546,6 +1557,213 @@ QLabel[stateRole="recording"] {
 
 QLabel[stateRole="blocked"] {
     color: ${err};
+}
+
+/* Diagnostics — readiness stat tiles */
+QFrame[panelRole="statTile"],
+QWidget[panelRole="statTile"] {
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-radius: ${radius-md}px;
+}
+
+QFrame[panelRole="statTile"][statTone="blocker"] {
+    border-color: rgba(240, 91, 84, 0.42);
+    background: rgba(240, 91, 84, 0.10);
+}
+
+QFrame[panelRole="statTile"][statTone="notice"] {
+    border-color: rgba(194, 150, 83, 0.42);
+    background: rgba(194, 150, 83, 0.10);
+}
+
+QFrame[panelRole="statTile"][statTone="pass"] {
+    border-color: rgba(120, 218, 149, 0.40);
+    background: rgba(120, 218, 149, 0.08);
+}
+
+QLabel[labelRole="statTileNum"] {
+    font-family: ${font-mono};
+    font-size: 26px;
+    font-weight: 600;
+    color: ${text0};
+}
+
+QLabel[labelRole="statTileNum"][statTone="blocker"] {
+    color: ${err};
+}
+
+QLabel[labelRole="statTileNum"][statTone="notice"] {
+    color: ${warn};
+}
+
+QLabel[labelRole="statTileNum"][statTone="pass"] {
+    color: ${ok};
+}
+
+QLabel[labelRole="statTileLabel"] {
+    font-size: 12.5px;
+    color: ${text2};
+}
+
+/* Diagnostics — issue / recommendation cards */
+QFrame[panelRole="issueCard"],
+QWidget[panelRole="issueCard"] {
+    background: ${bg2};
+    border: 1px solid ${line2};
+    border-radius: ${radius-lg}px;
+}
+
+QFrame[panelRole="issueCard"][issueTone="blocker"] {
+    border-color: rgba(240, 91, 84, 0.48);
+    background: rgba(240, 91, 84, 0.10);
+}
+
+QFrame[panelRole="issueCard"][issueTone="notice"] {
+    border-color: rgba(194, 150, 83, 0.48);
+    background: rgba(194, 150, 83, 0.10);
+}
+
+QFrame[panelRole="issueCard"][issueTone="pass"] {
+    border-color: rgba(120, 218, 149, 0.36);
+    background: rgba(120, 218, 149, 0.07);
+}
+
+QLabel[labelRole="issueTitle"] {
+    font-size: 14px;
+    font-weight: 600;
+    color: ${text0};
+}
+
+QLabel[labelRole="issueDesc"] {
+    font-size: 12.5px;
+    color: ${text1};
+}
+
+QLabel[labelRole="issueMeta"] {
+    font-family: ${font-mono};
+    font-size: 10.5px;
+    letter-spacing: 0.03em;
+    color: ${text2};
+}
+
+/* Diagnostics — severity glyphs reused for tiles, issues and self-test rows */
+QLabel[labelRole="pass"] {
+    color: ${ok};
+    font-weight: 600;
+}
+
+QLabel[labelRole="notice"] {
+    color: ${warn};
+    font-weight: 600;
+}
+
+QLabel[labelRole="blocker"] {
+    color: ${err};
+    font-weight: 600;
+}
+
+/* Diagnostics — collapsible "Technical details" disclosure heads */
+QToolButton[role="collapseHead"] {
+    background: ${bg2};
+    border: 1px solid ${line2};
+    border-radius: ${radius-lg}px;
+    padding: 12px 16px;
+    color: ${text0};
+    font-family: ${font-sans};
+    font-size: 14px;
+    font-weight: 600;
+    text-align: left;
+}
+
+QToolButton[role="collapseHead"]:hover {
+    background: ${bg3};
+    border-color: ${line3};
+    color: ${text0};
+}
+
+QToolButton[role="collapseHead"]:checked {
+    border-color: ${line3};
+}
+
+QToolButton[role="collapseHead"]:focus {
+    border-color: ${accent};
+}
+
+QLabel[labelRole="collapseSub"] {
+    font-size: 12px;
+    color: ${text2};
+}
+
+/* Diagnostics — capability / configuration table */
+QLabel[labelRole="tableHeader"] {
+    font-family: ${font-mono};
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    color: ${text3};
+}
+
+QWidget#diagTableRow {
+    background: transparent;
+    border-top: 1px solid ${line1};
+}
+
+QWidget#diagTableRow[firstRow="true"] {
+    border-top: none;
+}
+
+/* Diagnostics — self-test rows */
+QFrame[panelRole="selfTestRow"],
+QWidget[panelRole="selfTestRow"] {
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-radius: ${radius-md}px;
+}
+
+QLabel[labelRole="selfTestTitle"] {
+    font-size: 13.5px;
+    color: ${text0};
+}
+
+QLabel[labelRole="selfTestDetail"] {
+    font-size: 12px;
+    color: ${text2};
+}
+
+/* Diagnostics — planned / post-MVP note strip */
+QFrame[panelRole="plannedNote"],
+QWidget[panelRole="plannedNote"] {
+    background: ${bg2};
+    border: 1px dashed ${line3};
+    border-radius: ${radius-md}px;
+}
+
+QLabel[labelRole="plannedTag"] {
+    font-family: ${font-mono};
+    font-size: 9px;
+    letter-spacing: 0.14em;
+    color: ${text3};
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    padding: 2px 7px;
+}
+
+/* Logs — raw viewer surface */
+QPlainTextEdit#logViewer {
+    background: ${bg0};
+    color: ${text1};
+    border: 1px solid ${line2};
+    border-radius: ${radius-md}px;
+    padding: 12px 14px;
+    selection-background-color: ${accent-dim};
+    selection-color: ${text0};
+}
+
+QLabel[labelRole="logStatus"] {
+    font-family: ${font-mono};
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    color: ${text2};
 }
 
 QLineEdit,

@@ -3,28 +3,25 @@
 #include <QDesktopServices>
 #include <QFile>
 #include <QFileInfo>
+#include <QFont>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
-#include <QScrollArea>
 #include <QTextStream>
 #include <QUrl>
 #include <QVBoxLayout>
 
 #include "../diagnostics/AppLog.h"
 #include "../ui/theme/ExoSnapMetrics.h"
+#include "../ui/widgets/SectionRuleHeader.h"
 
 namespace exosnap {
 namespace {
 
-constexpr int kMaxLogLines = 500;
+using M = ui::theme::ExoSnapMetrics;
 
-QLabel* makeSectionLabel(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setProperty("labelRole", "section");
-    return l;
-}
+constexpr int kMaxLogLines = 500;
 
 QString readLogTail(const QString& path, int max_lines) {
     QFile file(path);
@@ -44,51 +41,38 @@ QString readLogTail(const QString& path, int max_lines) {
 } // namespace
 
 LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
-    auto* scroll = new QScrollArea(this);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(M::kSpaceXl, M::kSpaceXl, M::kSpaceXl, M::kSpaceXl);
+    layout->setSpacing(M::kSpaceMd);
 
-    auto* content = new QWidget();
-    auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
-                               ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
-    layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
+    // Toolbar: log-file path / status on the left, raw-viewer actions on the right.
+    auto* toolbar = new ui::widgets::SectionRuleHeader(QStringLiteral("APPLICATION LOG"), this);
+    layout->addWidget(toolbar);
 
-    auto* header_row = new QHBoxLayout();
-    header_row->addWidget(makeSectionLabel("Application Log", content));
-    header_row->addStretch();
+    auto* action_row = new QHBoxLayout();
+    action_row->setSpacing(M::kSpaceSm);
 
-    refresh_btn_ = new QPushButton("Refresh", content);
-    refresh_btn_->setProperty("role", "ghost");
-
-    open_folder_btn_ = new QPushButton("Open Log Folder", content);
-    open_folder_btn_->setProperty("role", "ghost");
-
-    header_row->addWidget(refresh_btn_);
-    header_row->addWidget(open_folder_btn_);
-    layout->addLayout(header_row);
-
-    status_label_ = new QLabel(content);
-    status_label_->setProperty("labelRole", "muted");
+    status_label_ = new QLabel(this);
+    status_label_->setProperty("labelRole", "logStatus");
     status_label_->setWordWrap(true);
-    layout->addWidget(status_label_);
+    status_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    action_row->addWidget(status_label_, 1);
 
-    log_viewer_ = new QPlainTextEdit(content);
+    refresh_btn_ = new QPushButton(QStringLiteral("Refresh"), this);
+    refresh_btn_->setProperty("role", "ghost");
+    open_folder_btn_ = new QPushButton(QStringLiteral("Open Log Folder"), this);
+    open_folder_btn_->setProperty("role", "ghost");
+    action_row->addWidget(refresh_btn_, 0);
+    action_row->addWidget(open_folder_btn_, 0);
+    layout->addLayout(action_row);
+
+    log_viewer_ = new QPlainTextEdit(this);
+    log_viewer_->setObjectName(QStringLiteral("logViewer"));
     log_viewer_->setReadOnly(true);
     log_viewer_->setLineWrapMode(QPlainTextEdit::NoWrap);
     log_viewer_->setFont(QFont(QStringLiteral("JetBrains Mono, Cascadia Mono, Consolas"), 10));
-    log_viewer_->setStyleSheet(
-        QStringLiteral("QPlainTextEdit { background-color: #0d0d0d; color: #c0c0c0; border: 1px solid #2a2a2a; "
-                       "border-radius: 4px; padding: 8px; }"));
     log_viewer_->setMinimumHeight(300);
     layout->addWidget(log_viewer_, 1);
-
-    layout->addStretch();
-    scroll->setWidget(content);
-
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->addWidget(scroll);
 
     connect(refresh_btn_, &QPushButton::clicked, this, &LogsPage::onRefresh);
     connect(open_folder_btn_, &QPushButton::clicked, this, &LogsPage::onOpenFolder);
@@ -99,21 +83,22 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
 void LogsPage::reloadLogContent() {
     const QString path = diagnostics::LogFilePath();
     if (path.isEmpty()) {
-        status_label_->setText("No log file found yet.");
+        status_label_->setText(QStringLiteral("No log file found yet."));
         log_viewer_->setPlainText({});
         return;
     }
 
     QFileInfo info(path);
     if (!info.exists()) {
-        status_label_->setText("Log file not yet created. Log entries appear once recording or probing starts.");
+        status_label_->setText(
+            QStringLiteral("Log file not yet created. Log entries appear once recording or probing starts."));
         log_viewer_->setPlainText({});
         return;
     }
 
     const QString content = readLogTail(path, kMaxLogLines);
     log_viewer_->setPlainText(content);
-    status_label_->setText(QStringLiteral("Showing last %1 lines from %2").arg(kMaxLogLines).arg(path));
+    status_label_->setText(QStringLiteral("Showing last %1 lines  \xc2\xb7  %2").arg(kMaxLogLines).arg(path));
 }
 
 void LogsPage::onRefresh() {

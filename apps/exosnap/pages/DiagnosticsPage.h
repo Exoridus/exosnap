@@ -10,6 +10,7 @@
 
 class QLabel;
 class QPushButton;
+class QToolButton;
 class QVBoxLayout;
 class QScrollArea;
 class QFrame;
@@ -43,18 +44,28 @@ class DiagnosticsPage : public QWidget {
     void refreshConfiguration();
     void refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations, int total_notices,
                           int total_blockers);
+    void setReadinessState(const QString& state);
 
     QLabel* makeSubLabel(const QString& text, QWidget* parent);
-    QLabel* makeSectionLabel(const QString& text, QWidget* parent);
     QFrame* makePanel(QWidget* parent);
-    QWidget* makeInfoRow(const QString& label, const QString& value, const QString& status, QWidget* parent);
+    QWidget* makeInfoRow(const QString& label, const QString& value, const QString& status, QWidget* parent,
+                         bool first_row);
+
+    // Builds a collapsible "Technical details" section (disclosure head + hidden body).
+    // Returns the body widget the caller fills; the body starts collapsed.
+    QWidget* makeCollapsibleSection(const QString& title, const QString& subtitle, QWidget* parent,
+                                    QToolButton*& out_toggle);
 
     // Readiness / status
-    QLabel* status_label_ = nullptr;
+    QFrame* readiness_panel_ = nullptr;
+    QLabel* status_pill_ = nullptr;
     QLabel* last_check_label_ = nullptr;
     QLabel* summary_label_ = nullptr;
     QPushButton* run_check_btn_ = nullptr;
     QPushButton* export_report_btn_ = nullptr;
+    QFrame* blocker_tile_ = nullptr;
+    QFrame* notice_tile_ = nullptr;
+    QFrame* pass_tile_ = nullptr;
     QLabel* blocker_count_ = nullptr;
     QLabel* notice_count_ = nullptr;
     QLabel* pass_count_ = nullptr;
@@ -63,13 +74,15 @@ class DiagnosticsPage : public QWidget {
     QVBoxLayout* overview_issues_layout_ = nullptr;
     QWidget* issues_parent_ = nullptr;
 
-    // Capabilities
+    // Capabilities (collapsible body)
     QVBoxLayout* capabilities_layout_ = nullptr;
     QWidget* capabilities_content_ = nullptr;
+    QToolButton* capabilities_toggle_ = nullptr;
 
-    // Configuration
+    // Configuration (collapsible body)
     QVBoxLayout* config_layout_ = nullptr;
     QWidget* config_content_ = nullptr;
+    QToolButton* config_toggle_ = nullptr;
 
     // Self-test
     QVBoxLayout* selftest_layout_ = nullptr;
