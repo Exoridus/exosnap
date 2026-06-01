@@ -160,9 +160,6 @@ void CaptureTargetCard::setSelected(bool selected) {
 
     selected_ = selected;
     setProperty("selected", selected_);
-    if (selected_chip_label_) {
-        selected_chip_label_->setVisible(selected_);
-    }
     updateStatusLabel();
     restyle(this);
 }

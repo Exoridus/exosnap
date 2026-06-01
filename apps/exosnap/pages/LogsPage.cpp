@@ -3,7 +3,6 @@
 #include <QDesktopServices>
 #include <QFile>
 #include <QFileInfo>
-#include <QFont>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPlainTextEdit>
@@ -70,7 +69,6 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     log_viewer_->setObjectName(QStringLiteral("logViewer"));
     log_viewer_->setReadOnly(true);
     log_viewer_->setLineWrapMode(QPlainTextEdit::NoWrap);
-    log_viewer_->setFont(QFont(QStringLiteral("JetBrains Mono, Cascadia Mono, Consolas"), 10));
     log_viewer_->setMinimumHeight(300);
     layout->addWidget(log_viewer_, 1);
 

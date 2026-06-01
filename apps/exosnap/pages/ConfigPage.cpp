@@ -35,10 +35,10 @@ namespace exosnap {
 
 namespace {
 
-// Upper bound for the Config form width. Chosen above the content area at the
-// default/minimum window size so the standard layout is never narrowed, while
-// preventing fields from stretching across an entire ultra-wide maximized window.
-constexpr int kMaxContentWidth = 1080;
+// Upper bound for the Config form width. Settings is a wide product surface;
+// the cap prevents absurd stretching on ultra-wide displays while preserving
+// the full two-column desktop rhythm at typical window sizes.
+constexpr int kMaxContentWidth = 1440;
 
 QFrame* makePanel(QWidget* parent) {
     auto* panel = new QFrame(parent);
@@ -569,21 +569,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     layout->addStretch();
 
-    // Constrain the form width so cards do not stretch to absurd widths when the
-    // window is maximized on a wide display. The cap is wider than the default
-    // 1280x800 content area, so the default layout is unaffected. Content takes the
-    // dominant stretch so it fills the viewport up to the cap, after which the two
-    // flanking stretches share the overflow and keep the form centered.
     content->setMaximumWidth(kMaxContentWidth);
-    auto* content_holder = new QWidget(scroll);
-    auto* holder_layout = new QHBoxLayout(content_holder);
-    holder_layout->setContentsMargins(0, 0, 0, 0);
-    holder_layout->setSpacing(0);
-    holder_layout->addStretch(1);
-    holder_layout->addWidget(content, 1000);
-    holder_layout->addStretch(1);
-
-    scroll->setWidget(content_holder);
+    scroll->setWidget(content);
     outer->addWidget(scroll);
 
     connect(advanced_open_btn, &QPushButton::clicked, this, &ConfigPage::advancedRequested);
@@ -675,9 +662,7 @@ void ConfigPage::resizeEvent(QResizeEvent* event) {
 
 void ConfigPage::updateResponsiveLayout() {
     // Below this width the two-column form (and the Output card's field/help split)
-    // becomes too cramped, so flip both to a single stacked column. The content area
-    // is centered and capped at kMaxContentWidth, so the page width is a faithful
-    // proxy for the available form width.
+    // becomes too cramped, so flip both to a single stacked column.
     const bool narrow = width() < 880;
     const QBoxLayout::Direction desired = narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight;
 

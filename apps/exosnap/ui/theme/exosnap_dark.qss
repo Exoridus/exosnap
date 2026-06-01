@@ -1755,8 +1755,14 @@ QPlainTextEdit#logViewer {
     border: 1px solid ${line2};
     border-radius: ${radius-md}px;
     padding: 12px 14px;
+    font-family: ${font-mono};
+    font-size: 12px;
     selection-background-color: ${accent-dim};
     selection-color: ${text0};
+}
+
+QPlainTextEdit#logViewer:focus {
+    border-color: ${line3};
 }
 
 QLabel[labelRole="logStatus"] {
