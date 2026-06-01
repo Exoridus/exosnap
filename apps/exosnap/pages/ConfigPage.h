@@ -85,9 +85,11 @@ class ConfigPage : public QWidget {
     void onAudioCodecChanged(int index);
     void onProfileSelectionChanged(int index);
     void onQualityChanged(int index);
+    void onQualityCardSelected(int preset_id);
     void onCfrChanged();
     void onCursorChanged();
     void updateQualitySummary();
+    void updateQualityCardSelection();
     void onBrowse();
     void onDestinationEditingFinished();
     void onPatternEditingFinished();
@@ -149,6 +151,11 @@ class ConfigPage : public QWidget {
     QLabel* format_display_label_ = nullptr;
 
     QComboBox* quality_combo_ = nullptr;
+    QButtonGroup* quality_card_group_ = nullptr;
+    QPushButton* quality_card_high_ = nullptr;
+    QPushButton* quality_card_balanced_ = nullptr;
+    QPushButton* quality_card_small_ = nullptr;
+    QPushButton* quality_card_custom_ = nullptr;
     QLabel* quality_badge_label_ = nullptr;
     QLabel* quality_settings_label_ = nullptr;
     QCheckBox* cfr_check_ = nullptr;

@@ -5,6 +5,7 @@
 #include <QComboBox>
 #include <QFileDialog>
 #include <QFrame>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
@@ -30,6 +31,7 @@
 #include "../ui/widgets/ComboBoxWheelFilter.h"
 
 #include <ctime>
+#include <optional>
 
 namespace exosnap {
 
@@ -347,7 +349,93 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     quality_combo_->addItem(QStringLiteral("High Quality"), static_cast<int>(recorder_core::NvencQualityPreset::High));
     quality_combo_->addItem(QStringLiteral("Balanced"), static_cast<int>(recorder_core::NvencQualityPreset::Balanced));
     quality_combo_->addItem(QStringLiteral("Small"), static_cast<int>(recorder_core::NvencQualityPreset::Small));
+    quality_combo_->setVisible(false);
+    quality_combo_->setFocusPolicy(Qt::NoFocus);
     video_panel_layout->addWidget(quality_combo_);
+
+    auto* quality_cards = new QWidget(video_panel);
+    quality_cards->setObjectName(QStringLiteral("qualityCardsGrid"));
+    auto* quality_cards_layout = new QGridLayout(quality_cards);
+    quality_cards_layout->setContentsMargins(0, 0, 0, 0);
+    quality_cards_layout->setHorizontalSpacing(10);
+    quality_cards_layout->setVerticalSpacing(10);
+
+    quality_card_group_ = new QButtonGroup(this);
+    quality_card_group_->setExclusive(true);
+
+    auto makeQualityCard = [&](const QString& object_name, const QString& title, const QString& descriptor,
+                               const QString& detail,
+                               std::optional<recorder_core::NvencQualityPreset> preset) -> QPushButton* {
+        auto* card = new QPushButton(quality_cards);
+        card->setObjectName(object_name);
+        card->setCheckable(true);
+        card->setAutoDefault(false);
+        card->setDefault(false);
+        card->setCursor(Qt::PointingHandCursor);
+        card->setProperty("qualityCard", true);
+        card->setProperty("qualityCardSelected", false);
+        card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        card->setMinimumHeight(102);
+
+        auto* card_layout = new QVBoxLayout(card);
+        card_layout->setContentsMargins(12, 10, 12, 10);
+        card_layout->setSpacing(4);
+
+        auto* title_row = new QHBoxLayout();
+        title_row->setContentsMargins(0, 0, 0, 0);
+        title_row->setSpacing(6);
+
+        auto* title_label = new QLabel(title, card);
+        title_label->setProperty("labelRole", "qualityCardTitle");
+        title_label->setWordWrap(true);
+        title_row->addWidget(title_label, 1);
+
+        auto* check_label = new QLabel(QStringLiteral("✓"), card);
+        check_label->setObjectName(QStringLiteral("qualityCardCheck"));
+        check_label->setProperty("labelRole", "qualityCardCheck");
+        check_label->setVisible(false);
+        title_row->addWidget(check_label, 0, Qt::AlignTop | Qt::AlignRight);
+
+        card_layout->addLayout(title_row);
+
+        auto* descriptor_label = new QLabel(descriptor, card);
+        descriptor_label->setProperty("labelRole", "qualityCardDescriptor");
+        descriptor_label->setWordWrap(true);
+        card_layout->addWidget(descriptor_label);
+
+        auto* detail_label = new QLabel(detail, card);
+        detail_label->setProperty("labelRole", "qualityCardDetail");
+        detail_label->setWordWrap(true);
+        card_layout->addWidget(detail_label);
+
+        if (preset.has_value()) {
+            quality_card_group_->addButton(card, static_cast<int>(*preset));
+        } else {
+            card->setEnabled(false);
+            card->setProperty("qualityCardFuture", true);
+        }
+
+        return card;
+    };
+
+    quality_card_high_ = makeQualityCard(QStringLiteral("qualityCardHigh"), QStringLiteral("High Quality"),
+                                         QStringLiteral("Sharper · larger files"), QStringLiteral("CQ 19"),
+                                         recorder_core::NvencQualityPreset::High);
+    quality_card_balanced_ = makeQualityCard(QStringLiteral("qualityCardBalanced"), QStringLiteral("Balanced"),
+                                             QStringLiteral("General purpose"), QStringLiteral("CQ 24"),
+                                             recorder_core::NvencQualityPreset::Balanced);
+    quality_card_small_ =
+        makeQualityCard(QStringLiteral("qualityCardSmall"), QStringLiteral("Small"), QStringLiteral("Smaller files"),
+                        QStringLiteral("CQ 30"), recorder_core::NvencQualityPreset::Small);
+    quality_card_custom_ = makeQualityCard(
+        QStringLiteral("qualityCardCustom"), QStringLiteral("Custom · not available in this build"),
+        QStringLiteral("Dial in rate control, CQ, and encoder presets"), QStringLiteral("Not available"), std::nullopt);
+
+    quality_cards_layout->addWidget(quality_card_high_, 0, 0);
+    quality_cards_layout->addWidget(quality_card_balanced_, 0, 1);
+    quality_cards_layout->addWidget(quality_card_small_, 1, 0);
+    quality_cards_layout->addWidget(quality_card_custom_, 1, 1);
+    video_panel_layout->addWidget(quality_cards);
 
     quality_badge_label_ = new QLabel(video_panel);
     quality_badge_label_->setObjectName(QStringLiteral("qualityBadgeLabel"));
@@ -583,6 +671,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(profile_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onProfileSelectionChanged);
     connect(quality_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ConfigPage::onQualityChanged);
+    connect(quality_card_group_, &QButtonGroup::idClicked, this, &ConfigPage::onQualityCardSelected);
     connect(cfr_check_, &QCheckBox::toggled, this, &ConfigPage::onCfrChanged);
     connect(cursor_check_, &QCheckBox::toggled, this, &ConfigPage::onCursorChanged);
     connect(browse_btn_, &QPushButton::clicked, this, &ConfigPage::onBrowse);
@@ -702,6 +791,20 @@ void ConfigPage::onQualityChanged(int index) {
     video_settings_.quality = static_cast<recorder_core::NvencQualityPreset>(quality_combo_->itemData(index).toInt());
     updateQualitySummary();
     emitCurrentVideoSettings();
+}
+
+void ConfigPage::onQualityCardSelected(int preset_id) {
+    if (!quality_combo_)
+        return;
+
+    const int idx = quality_combo_->findData(preset_id);
+    if (idx < 0)
+        return;
+    if (quality_combo_->currentIndex() == idx) {
+        updateQualityCardSelection();
+        return;
+    }
+    quality_combo_->setCurrentIndex(idx);
 }
 
 void ConfigPage::onCfrChanged() {
@@ -896,6 +999,32 @@ void ConfigPage::updateQualitySummary() {
     const QString cursor_text =
         video_settings_.capture_cursor ? QStringLiteral("Cursor on") : QStringLiteral("Cursor off");
     quality_settings_label_->setText(cq + QStringLiteral(" · ") + cfr_text + QStringLiteral(" · ") + cursor_text);
+
+    updateQualityCardSelection();
+}
+
+void ConfigPage::updateQualityCardSelection() {
+    if (!quality_card_group_)
+        return;
+
+    const auto sync_card = [this](QPushButton* card, recorder_core::NvencQualityPreset preset) {
+        if (!card)
+            return;
+
+        const bool selected = video_settings_.quality == preset;
+        card->setChecked(selected);
+        card->setProperty("qualityCardSelected", selected);
+        if (auto* check_label = card->findChild<QLabel*>(QStringLiteral("qualityCardCheck"))) {
+            check_label->setVisible(selected);
+        }
+        card->style()->unpolish(card);
+        card->style()->polish(card);
+    };
+
+    const QSignalBlocker blocker(quality_card_group_);
+    sync_card(quality_card_high_, recorder_core::NvencQualityPreset::High);
+    sync_card(quality_card_balanced_, recorder_core::NvencQualityPreset::Balanced);
+    sync_card(quality_card_small_, recorder_core::NvencQualityPreset::Small);
 }
 
 void ConfigPage::setOutputFolder(const std::filesystem::path& folder) {
@@ -1350,6 +1479,10 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     audio_codec_combo_->setEnabled(enabled);
 
     quality_combo_->setEnabled(enabled);
+    quality_card_high_->setEnabled(enabled);
+    quality_card_balanced_->setEnabled(enabled);
+    quality_card_small_->setEnabled(enabled);
+    quality_card_custom_->setEnabled(false);
     cfr_check_->setEnabled(enabled);
     cursor_check_->setEnabled(enabled);
 
