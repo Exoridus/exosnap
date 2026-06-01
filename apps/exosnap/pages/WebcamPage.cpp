@@ -6,6 +6,7 @@
 #include "../ui/widgets/ExoToggle.h"
 #include "../ui/widgets/SectionRuleHeader.h"
 
+#include <QBoxLayout>
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
@@ -14,6 +15,7 @@
 #include <QLabel>
 #include <QPointer>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QScrollArea>
 #include <QSlider>
 #include <QTimer>
@@ -62,6 +64,7 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
         layout->addWidget(makeLabel("Camera preview", "videoKvKey", content));
 
         camera_preview_ = new ui::widgets::CameraPreview(content);
+        camera_preview_->setMinimumHeight(300);
         layout->addWidget(camera_preview_);
 
         auto* setup_note = makeLabel(QStringLiteral("Preview is for setup only. Enable “Include webcam in recording” "
@@ -97,24 +100,23 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
     {
         layout->addWidget(makeLabel("Device", "videoKvKey", content));
         auto* dev_row = new QWidget(content);
-        auto* dr = new QHBoxLayout(dev_row);
-        dr->setContentsMargins(0, 0, 0, 0);
-        dr->setSpacing(8);
+        device_row_layout_ = new QBoxLayout(QBoxLayout::LeftToRight, dev_row);
+        device_row_layout_->setContentsMargins(0, 0, 0, 0);
+        device_row_layout_->setSpacing(8);
         device_combo_ = new QComboBox(content);
-        device_combo_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-        device_combo_->setMinimumWidth(280);
-        device_combo_->setMaximumWidth(560);
+        device_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        device_combo_->setMinimumWidth(220);
         refresh_btn_ = new QPushButton("Rescan", content);
-        refresh_btn_->setProperty("role", "utility");
+        refresh_btn_->setProperty("role", "fieldAction");
         refresh_btn_->setToolTip("Rescan for connected cameras");
-        dr->addWidget(device_combo_, 1);
-        dr->addWidget(refresh_btn_);
+        device_row_layout_->addWidget(device_combo_, 1);
+        device_row_layout_->addWidget(refresh_btn_);
         layout->addWidget(dev_row);
 
         layout->addWidget(makeLabel("Resolution / FPS", "videoKvKey", content));
         resolution_combo_ = new QComboBox(content);
-        resolution_combo_->setMinimumWidth(280);
-        resolution_combo_->setMaximumWidth(420);
+        resolution_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        resolution_combo_->setMinimumWidth(220);
         layout->addWidget(resolution_combo_);
     }
 
@@ -199,7 +201,18 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
     }
 
     layout->addStretch(1);
-    scroll->setWidget(content);
+
+    constexpr int kMaxContentWidth = 1200;
+    content->setMaximumWidth(kMaxContentWidth);
+    auto* content_holder = new QWidget(scroll);
+    auto* holder_layout = new QHBoxLayout(content_holder);
+    holder_layout->setContentsMargins(0, 0, 0, 0);
+    holder_layout->setSpacing(0);
+    holder_layout->addStretch(1);
+    holder_layout->addWidget(content, 1000);
+    holder_layout->addStretch(1);
+
+    scroll->setWidget(content_holder);
     page_layout->addWidget(scroll, 1);
 
     auto* combo_wheel_filter = new ui::widgets::ComboBoxWheelFilter(this);
@@ -280,6 +293,17 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
 
 WebcamPage::~WebcamPage() {
     stopPreview();
+}
+
+void WebcamPage::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    if (!device_row_layout_) {
+        return;
+    }
+    const QBoxLayout::Direction desired = width() < 920 ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight;
+    if (device_row_layout_->direction() != desired) {
+        device_row_layout_->setDirection(desired);
+    }
 }
 
 void WebcamPage::showEvent(QShowEvent* event) {

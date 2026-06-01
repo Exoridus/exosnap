@@ -19,6 +19,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSizePolicy>
 #include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -236,8 +237,7 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     selftest_status_label_ = new QLabel(QStringLiteral("Status: Not run"), selftest_content_);
     selftest_status_label_->setProperty("labelRole", "body");
     selftest_run_btn_ = new QPushButton(QStringLiteral("Run Self-Test"), selftest_content_);
-    selftest_run_btn_->setProperty("role", "ghost");
-    selftest_run_btn_->setMaximumWidth(200);
+    selftest_run_btn_->setProperty("role", "fieldAction");
     selftest_action_row->addWidget(selftest_status_label_, 1);
     selftest_action_row->addWidget(selftest_run_btn_, 0);
     selftest_layout_->addLayout(selftest_action_row); // item 0
@@ -285,7 +285,7 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
         makeSubLabel(QStringLiteral("Need the raw event stream behind these checks? Open the Logs page."), logs_card));
     ll->addLayout(logs_text, 1);
     auto* go_logs_btn = new QPushButton(QStringLiteral("Open Logs Page"), logs_card);
-    go_logs_btn->setProperty("role", "ghost");
+    go_logs_btn->setProperty("role", "fieldAction");
     ll->addWidget(go_logs_btn, 0, Qt::AlignVCenter);
     layout->addWidget(logs_card);
 
@@ -400,7 +400,8 @@ QWidget* DiagnosticsPage::makeInfoRow(const QString& label, const QString& value
 
     auto* name_label = new QLabel(label, row);
     name_label->setProperty("labelRole", "body");
-    name_label->setMinimumWidth(180);
+    name_label->setMinimumWidth(150);
+    name_label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     row_layout->addWidget(name_label);
 
     auto* value_label = new QLabel(value, row);
@@ -483,7 +484,7 @@ void DiagnosticsPage::refreshCapabilities() {
     header_layout->setContentsMargins(M::kSpaceSm, 0, M::kSpaceSm, 0);
     header_layout->setSpacing(M::kSpaceMd);
     auto* h1 = makeTableHeader(QStringLiteral("Feature"), header_row);
-    h1->setMinimumWidth(180);
+    h1->setMinimumWidth(150);
     auto* h2 = makeTableHeader(QStringLiteral("Detected Value"), header_row);
     auto* h3 = makeTableHeader(QStringLiteral("Status"), header_row);
     header_layout->addWidget(h1);
@@ -522,7 +523,7 @@ void DiagnosticsPage::refreshConfiguration() {
     header_layout->setContentsMargins(M::kSpaceSm, 0, M::kSpaceSm, 0);
     header_layout->setSpacing(M::kSpaceMd);
     auto* h1 = makeTableHeader(QStringLiteral("Setting"), header_row);
-    h1->setMinimumWidth(180);
+    h1->setMinimumWidth(150);
     auto* h2 = makeTableHeader(QStringLiteral("Value"), header_row);
     header_layout->addWidget(h1);
     header_layout->addWidget(h2, 1);
@@ -592,7 +593,7 @@ void DiagnosticsPage::refreshSelfTest() {
 
         auto* name_lbl = new QLabel(QString::fromStdString(result.title), row);
         name_lbl->setProperty("labelRole", "selfTestTitle");
-        name_lbl->setMinimumWidth(180);
+        name_lbl->setMinimumWidth(150);
         row_layout->addWidget(name_lbl);
 
         auto* status_lbl =

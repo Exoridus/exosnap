@@ -1,5 +1,6 @@
 #include "ConfigPage.h"
 
+#include <QBoxLayout>
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QComboBox>
@@ -249,14 +250,15 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         fmt_panel));
 
     fmt_layout->addWidget(makeFieldLabel(QStringLiteral("Active preset"), fmt_panel));
-    auto* profile_row = new QHBoxLayout();
-    profile_row->setSpacing(8);
+    profile_row_layout_ = new QBoxLayout(QBoxLayout::LeftToRight);
+    profile_row_layout_->setSpacing(8);
     profile_combo_ = new QComboBox(fmt_panel);
     profile_combo_->setObjectName(QStringLiteral("profileCombo"));
     profile_combo_->setMinimumWidth(180);
     profile_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     profile_overflow_btn_ = new QToolButton(fmt_panel);
     profile_overflow_btn_->setText(QStringLiteral("Manage presets"));
+    profile_overflow_btn_->setProperty("role", "fieldAction");
     profile_overflow_btn_->setPopupMode(QToolButton::InstantPopup);
     profile_overflow_btn_->setToolButtonStyle(Qt::ToolButtonTextOnly);
 
@@ -275,9 +277,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     reset_all_action_ = profile_menu->addAction(QStringLiteral("Reset all settings + presets"));
     profile_overflow_btn_->setMenu(profile_menu);
 
-    profile_row->addWidget(profile_combo_, 1);
-    profile_row->addWidget(profile_overflow_btn_);
-    fmt_layout->addLayout(profile_row);
+    profile_row_layout_->addWidget(profile_combo_, 1);
+    profile_row_layout_->addWidget(profile_overflow_btn_);
+    fmt_layout->addLayout(profile_row_layout_);
 
     // Contextual preset actions - hidden for the default built-in preset.
     auto* profile_actions_row = new QHBoxLayout();
@@ -296,6 +298,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     format_display_label_ = new QLabel(fmt_panel);
     format_display_label_->setProperty("labelRole", "muted");
+    format_display_label_->setWordWrap(true);
     fmt_layout->addWidget(format_display_label_);
 
     fmt_layout->addWidget(makeFieldLabel(QStringLiteral("Container"), fmt_panel));
@@ -462,7 +465,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     webcam_details_btn_ = new QPushButton(QStringLiteral("Open Webcam Setup"), webcam_panel);
     webcam_details_btn_->setObjectName(QStringLiteral("webcamDetailsBtn"));
-    webcam_details_btn_->setProperty("role", "ghost");
+    webcam_details_btn_->setProperty("role", "fieldAction");
     webcam_panel_layout->addWidget(webcam_details_btn_, 0, Qt::AlignLeft);
 
     right_layout->addWidget(webcam_panel);
@@ -486,16 +489,17 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_fields_layout->setSpacing(8);
 
     output_fields_layout->addWidget(makeFieldLabel(QStringLiteral("Destination folder"), output_fields));
-    auto* dest_row = new QHBoxLayout();
-    dest_row->setSpacing(8);
+    destination_row_layout_ = new QBoxLayout(QBoxLayout::LeftToRight);
+    destination_row_layout_->setSpacing(8);
     destination_edit_ = new QLineEdit(output_fields);
     destination_edit_->setObjectName(QStringLiteral("destinationEdit"));
+    destination_edit_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     destination_edit_->setPlaceholderText(QString::fromStdWString(format_settings_.output_folder.wstring()));
     browse_btn_ = new QPushButton(QStringLiteral("Browse..."), output_fields);
-    browse_btn_->setProperty("role", "ghost");
-    dest_row->addWidget(destination_edit_, 1);
-    dest_row->addWidget(browse_btn_);
-    output_fields_layout->addLayout(dest_row);
+    browse_btn_->setProperty("role", "fieldAction");
+    destination_row_layout_->addWidget(destination_edit_, 1);
+    destination_row_layout_->addWidget(browse_btn_);
+    output_fields_layout->addLayout(destination_row_layout_);
 
     folder_validation_label_ = makeHint(QString(), output_fields);
     folder_validation_label_->setVisible(false);
@@ -523,7 +527,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_help_layout->addWidget(makeFieldLabel(QStringLiteral("Filename tokens"), output_help));
     token_help_toggle_btn_ = new QPushButton(QStringLiteral("Show token reference"), output_help);
     token_help_toggle_btn_->setObjectName(QStringLiteral("tokenHelpToggle"));
-    token_help_toggle_btn_->setProperty("role", "ghost");
+    token_help_toggle_btn_->setProperty("role", "fieldAction");
     output_help_layout->addWidget(token_help_toggle_btn_, 0, Qt::AlignLeft);
 
     token_help_label_ = makeHint(
@@ -549,8 +553,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     advanced_layout->setContentsMargins(18, 14, 18, 14);
     advanced_layout->setSpacing(8);
 
-    auto* advanced_head = new QHBoxLayout();
-    advanced_head->setSpacing(12);
+    advanced_head_layout_ = new QBoxLayout(QBoxLayout::LeftToRight);
+    advanced_head_layout_->setSpacing(12);
     auto* advanced_text = new QVBoxLayout();
     advanced_text->setSpacing(2);
     advanced_text->addWidget(makeCardTitle(QStringLiteral("Advanced / Expert Settings"), advanced_panel));
@@ -558,13 +562,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         QStringLiteral("Normal recording configuration lives in Settings. Use Advanced for diagnostics, developer, "
                        "and expert-only options."),
         advanced_panel));
-    advanced_head->addLayout(advanced_text, 1);
+    advanced_head_layout_->addLayout(advanced_text, 1);
 
     auto* advanced_open_btn = new QPushButton(QStringLiteral("Open Advanced"), advanced_panel);
     advanced_open_btn->setObjectName(QStringLiteral("advancedDetailsBtn"));
-    advanced_open_btn->setProperty("role", "ghost");
-    advanced_head->addWidget(advanced_open_btn, 0, Qt::AlignVCenter);
-    advanced_layout->addLayout(advanced_head);
+    advanced_open_btn->setProperty("role", "fieldAction");
+    advanced_head_layout_->addWidget(advanced_open_btn, 0, Qt::AlignVCenter);
+    advanced_layout->addLayout(advanced_head_layout_);
     layout->addWidget(advanced_panel);
 
     layout->addStretch();
@@ -685,6 +689,16 @@ void ConfigPage::updateResponsiveLayout() {
         columns_layout_->setDirection(desired);
     if (output_split_layout_ && output_split_layout_->direction() != desired)
         output_split_layout_->setDirection(desired);
+
+    const bool action_narrow = width() < 980;
+    const QBoxLayout::Direction action_direction = action_narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight;
+
+    if (profile_row_layout_ && profile_row_layout_->direction() != action_direction)
+        profile_row_layout_->setDirection(action_direction);
+    if (destination_row_layout_ && destination_row_layout_->direction() != action_direction)
+        destination_row_layout_->setDirection(action_direction);
+    if (advanced_head_layout_ && advanced_head_layout_->direction() != action_direction)
+        advanced_head_layout_->setDirection(action_direction);
 }
 
 void ConfigPage::emitCurrentFormatSettings() {

@@ -7,6 +7,7 @@
 #include <vector>
 
 class QCheckBox;
+class QBoxLayout;
 class QGridLayout;
 class QLabel;
 class QPushButton;
@@ -14,6 +15,7 @@ class QScrollArea;
 class QStackedWidget;
 class QTimer;
 class QVBoxLayout;
+class QResizeEvent;
 class QEvent;
 class QHideEvent;
 class QShowEvent;
@@ -112,8 +114,10 @@ class SourcePickerDialog : public QDialog {
     const SectionGrid* sectionGrid(Section section) const;
     std::vector<OptionCard*> cardsForSection(Section section);
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
+    void updateResponsiveLayout();
 
     static constexpr QSize kThumbnailSize{320, 180};
 
@@ -122,6 +126,9 @@ class SourcePickerDialog : public QDialog {
     QPushButton* region_button_ = nullptr;
     QPushButton* refresh_button_ = nullptr;
     QPushButton* windows_unavailable_toggle_ = nullptr;
+    QBoxLayout* section_row_layout_ = nullptr;
+    QBoxLayout* footer_layout_ = nullptr;
+    QWidget* footer_actions_ = nullptr;
     QStackedWidget* pages_ = nullptr;
     SectionGrid screens_grid_;
     SectionGrid windows_grid_;

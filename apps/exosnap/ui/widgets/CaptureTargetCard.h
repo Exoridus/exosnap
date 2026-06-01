@@ -69,7 +69,6 @@ class CaptureTargetCard : public QFrame {
     QLabel* thumbnail_label_ = nullptr;
     QLabel* thumbnail_state_label_ = nullptr;
     QLabel* title_label_ = nullptr;
-    QLabel* selected_chip_label_ = nullptr;
     QLabel* status_label_ = nullptr;
     QLabel* subtitle_label_ = nullptr;
     QLabel* help_label_ = nullptr;
