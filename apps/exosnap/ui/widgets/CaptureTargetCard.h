@@ -62,6 +62,7 @@ class CaptureTargetCard : public QFrame {
 
     void setThumbnailState(ThumbnailState state, const QString& text);
     void updateTitleLabel();
+    QString twoLineElidedTitle(int available_width) const;
     void updateStatusLabel();
 
     QFrame* thumbnail_surface_ = nullptr;

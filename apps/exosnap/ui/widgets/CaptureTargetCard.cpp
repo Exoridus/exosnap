@@ -7,6 +7,7 @@
 #include <QLabel>
 #include <QMouseEvent>
 #include <QResizeEvent>
+#include <QStringList>
 #include <QStyle>
 #include <QVBoxLayout>
 
@@ -76,7 +77,8 @@ CaptureTargetCard::CaptureTargetCard(QWidget* parent) : QFrame(parent) {
     title_label_->setProperty("labelRole", "captureCardTitle");
     title_text_ = QStringLiteral("Monitor");
     title_label_->setText(title_text_);
-    title_label_->setWordWrap(false);
+    title_label_->setWordWrap(true);
+    title_label_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     title_label_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     title_label_->installEventFilter(this);
 
@@ -265,8 +267,62 @@ void CaptureTargetCard::updateTitleLabel() {
         return;
     }
     const int available_width = std::max(48, title_label_->width());
-    const QString elided = title_label_->fontMetrics().elidedText(title_text_, Qt::ElideRight, available_width);
-    title_label_->setText(elided);
+    const int title_height = title_label_->fontMetrics().lineSpacing() * 2;
+    title_label_->setMinimumHeight(title_height);
+    title_label_->setMaximumHeight(title_height);
+    title_label_->setText(twoLineElidedTitle(available_width));
+}
+
+QString CaptureTargetCard::twoLineElidedTitle(int available_width) const {
+    if (!title_label_) {
+        return title_text_;
+    }
+    const QString normalized = title_text_.simplified();
+    if (normalized.isEmpty()) {
+        return {};
+    }
+
+    const QFontMetrics metrics = title_label_->fontMetrics();
+    if (metrics.horizontalAdvance(normalized) <= available_width) {
+        return normalized;
+    }
+
+    const QStringList words = normalized.split(' ', Qt::SkipEmptyParts);
+    if (words.size() <= 1) {
+        return metrics.elidedText(normalized, Qt::ElideRight, available_width);
+    }
+
+    QString line_one;
+    int remainder_index = 0;
+    for (int i = 0; i < words.size(); ++i) {
+        const QString candidate = line_one.isEmpty() ? words[i] : (line_one + QStringLiteral(" ") + words[i]);
+        const bool is_last_word = (i == words.size() - 1);
+        if (!is_last_word && metrics.horizontalAdvance(candidate) <= available_width) {
+            line_one = candidate;
+            continue;
+        }
+
+        if (line_one.isEmpty()) {
+            line_one = metrics.elidedText(words[i], Qt::ElideRight, available_width);
+            remainder_index = i + 1;
+        } else {
+            remainder_index = i;
+        }
+        break;
+    }
+
+    if (line_one.isEmpty()) {
+        line_one = metrics.elidedText(normalized, Qt::ElideRight, available_width);
+        remainder_index = words.size();
+    }
+
+    if (remainder_index >= words.size()) {
+        return line_one;
+    }
+
+    const QString line_two_raw = words.mid(remainder_index).join(QStringLiteral(" "));
+    const QString line_two = metrics.elidedText(line_two_raw, Qt::ElideRight, available_width);
+    return line_one + QStringLiteral("\n") + line_two;
 }
 
 void CaptureTargetCard::updateStatusLabel() {
@@ -274,10 +330,10 @@ void CaptureTargetCard::updateStatusLabel() {
         return;
     }
     const QString badge = status_text_.trimmed();
-    if (selected_) {
-        status_label_->setText(badge.isEmpty() ? QStringLiteral("ACTIVE") : badge);
-    } else {
-        status_label_->setText(badge.isEmpty() ? QStringLiteral("Source") : badge);
+    const bool has_badge = !badge.isEmpty();
+    status_label_->setVisible(has_badge);
+    if (has_badge) {
+        status_label_->setText(badge);
     }
 }
 

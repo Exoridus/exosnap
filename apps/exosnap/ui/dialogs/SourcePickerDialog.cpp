@@ -28,6 +28,7 @@ namespace {
 
 struct GridPageWidgets {
     QScrollArea* scroll = nullptr;
+    QVBoxLayout* content_layout = nullptr;
     QWidget* host = nullptr;
     QGridLayout* grid = nullptr;
     QLabel* empty_label = nullptr;
@@ -68,6 +69,7 @@ GridPageWidgets makeScrollableCardGrid(QWidget* parent, const QString& hint_text
     scroll->setWidget(content);
 
     result.scroll = scroll;
+    result.content_layout = content_layout;
     result.host = host;
     result.grid = grid;
     result.empty_label = empty_label;
@@ -152,6 +154,7 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
         makeScrollableCardGrid(pages_, QStringLiteral("Choose a display visually. Primary displays are marked."),
                                QStringLiteral("No displays detected."));
     screens_grid_.scroll = screens_page.scroll;
+    screens_grid_.content_layout = screens_page.content_layout;
     screens_grid_.host = screens_page.host;
     screens_grid_.grid = screens_page.grid;
     screens_grid_.empty_label = screens_page.empty_label;
@@ -161,9 +164,18 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
         makeScrollableCardGrid(pages_, QStringLiteral("Find the right app/window quickly from preview cards."),
                                QStringLiteral("No capturable windows found."));
     windows_grid_.scroll = windows_page.scroll;
+    windows_grid_.content_layout = windows_page.content_layout;
     windows_grid_.host = windows_page.host;
     windows_grid_.grid = windows_page.grid;
     windows_grid_.empty_label = windows_page.empty_label;
+    windows_unavailable_toggle_ = new QPushButton(QStringLiteral("Show unavailable (0)"), pages_);
+    windows_unavailable_toggle_->setObjectName("sourcePickerShowUnavailableButton");
+    windows_unavailable_toggle_->setProperty("role", "ghost");
+    windows_unavailable_toggle_->setCheckable(true);
+    windows_unavailable_toggle_->setVisible(false);
+    if (windows_grid_.content_layout) {
+        windows_grid_.content_layout->addWidget(windows_unavailable_toggle_, 0, Qt::AlignLeft);
+    }
     pages_->addWidget(windows_grid_.scroll);
 
     if (screens_grid_.scroll && screens_grid_.scroll->viewport()) {
@@ -276,6 +288,15 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     });
     connect(region_select_on_record_check_, &QAbstractButton::toggled, this, [this]() { updateSummaryLabel(); });
     connect(refresh_button_, &QPushButton::clicked, this, &SourcePickerDialog::onRefreshRequested);
+    connect(windows_unavailable_toggle_, &QPushButton::clicked, this, [this]() {
+        show_unavailable_windows_ = windows_unavailable_toggle_ && windows_unavailable_toggle_->isChecked();
+        rebuildOptionCardsForSection(Section::Windows);
+        updateWindowsUnavailableToggle();
+        refreshSelectionVisuals();
+        if (isVisible() && selected_section_ == Section::Windows) {
+            requestThumbnailsForSection(Section::Windows);
+        }
+    });
     connect(pick_region_now_button_, &QPushButton::clicked, this, &SourcePickerDialog::onPickRegionNow);
     connect(cancel_button, &QPushButton::clicked, this, &QDialog::reject);
     connect(use_button_, &QPushButton::clicked, this, &SourcePickerDialog::onUseSelected);
@@ -295,6 +316,14 @@ void SourcePickerDialog::setScreenOptions(const std::vector<SourceOption>& optio
 
 void SourcePickerDialog::setWindowOptions(const std::vector<SourceOption>& options) {
     window_options_ = options;
+    const bool has_hidden = std::any_of(window_options_.begin(), window_options_.end(),
+                                        [](const SourceOption& option) { return option.hidden_by_default; });
+    if (!has_hidden) {
+        show_unavailable_windows_ = false;
+    }
+    if (windows_unavailable_toggle_) {
+        windows_unavailable_toggle_->setChecked(show_unavailable_windows_);
+    }
     rebuildOptionCards();
     if (isVisible() && selected_section_ == Section::Windows) {
         requestThumbnailsForSection(Section::Windows);
@@ -426,6 +455,7 @@ void SourcePickerDialog::rebuildOptionCards() {
 
     rebuildOptionCardsForSection(Section::Screens);
     rebuildOptionCardsForSection(Section::Windows);
+    updateWindowsUnavailableToggle();
     refreshSelectionVisuals();
     updateSummaryLabel();
 }
@@ -436,19 +466,44 @@ void SourcePickerDialog::rebuildOptionCardsForSection(Section section) {
         return;
     }
 
-    const auto& options = section == Section::Screens ? screen_options_ : window_options_;
+    option_cards_.erase(std::remove_if(option_cards_.begin(), option_cards_.end(),
+                                       [section](const OptionCard& option_card) {
+                                           if (option_card.section != section) {
+                                               return false;
+                                           }
+                                           if (option_card.card) {
+                                               delete option_card.card;
+                                           }
+                                           return true;
+                                       }),
+                        option_cards_.end());
+
+    const auto& all_options = section == Section::Screens ? screen_options_ : window_options_;
+
+    std::vector<const SourceOption*> visible_options;
+    visible_options.reserve(all_options.size());
+    for (const auto& option : all_options) {
+        if (shouldShowOption(option, section)) {
+            visible_options.push_back(&option);
+        }
+    }
+
     if (grid_info->empty_label) {
-        grid_info->empty_label->setVisible(options.empty());
+        grid_info->empty_label->setVisible(visible_options.empty());
     }
     if (grid_info->host) {
-        grid_info->host->setVisible(!options.empty());
+        grid_info->host->setVisible(!visible_options.empty());
     }
-    if (options.empty()) {
+    if (visible_options.empty()) {
         relayoutSection(section);
         return;
     }
 
-    for (const auto& option : options) {
+    for (const SourceOption* option_ptr : visible_options) {
+        if (!option_ptr) {
+            continue;
+        }
+        const SourceOption& option = *option_ptr;
         auto* card = new ui::widgets::CaptureTargetCard(pages_);
         card->setTitle(option.title);
         card->setToolTip(option.title);
@@ -471,9 +526,7 @@ void SourcePickerDialog::rebuildOptionCardsForSection(Section section) {
         }
         card->setSubtitle(subtitle);
 
-        card->setStatusText(option.status_badge.isEmpty()
-                                ? (section == Section::Screens ? QStringLiteral("Screen") : QStringLiteral("Window"))
-                                : option.status_badge);
+        card->setStatusText(option.status_badge.trimmed());
 
         if (option.unavailable) {
             RestyleCard(card, "warning");
@@ -645,7 +698,10 @@ void SourcePickerDialog::updateSummaryLabel() {
         if (!option.minimum_detail.trimmed().isEmpty()) {
             summary += QStringLiteral(" ") + option.minimum_detail;
         }
-        if (!option.help_text.isEmpty()) {
+        const bool help_duplicates_minimum =
+            !option.minimum_detail.trimmed().isEmpty() &&
+            option.help_text.trimmed().compare(option.minimum_detail.trimmed(), Qt::CaseInsensitive) == 0;
+        if (!option.help_text.isEmpty() && !help_duplicates_minimum) {
             summary += QStringLiteral(" ") + option.help_text;
         }
         summary_label_->setText(summary);
@@ -699,6 +755,42 @@ SourcePickerDialog::OptionCard* SourcePickerDialog::findOptionCard(Section secti
     return nullptr;
 }
 
+bool SourcePickerDialog::shouldShowOption(const SourceOption& option, Section section) const {
+    if (section != Section::Windows) {
+        return true;
+    }
+    if (!option.hidden_by_default) {
+        return true;
+    }
+    if (show_unavailable_windows_) {
+        return true;
+    }
+    return selected_section_ == Section::Windows && selected_target_index_ == option.target_index;
+}
+
+void SourcePickerDialog::updateWindowsUnavailableToggle() {
+    if (!windows_unavailable_toggle_) {
+        return;
+    }
+
+    const int hidden_count =
+        static_cast<int>(std::count_if(window_options_.begin(), window_options_.end(),
+                                       [](const SourceOption& option) { return option.hidden_by_default; }));
+
+    if (hidden_count <= 0) {
+        show_unavailable_windows_ = false;
+        windows_unavailable_toggle_->setChecked(false);
+        windows_unavailable_toggle_->setVisible(false);
+        return;
+    }
+
+    windows_unavailable_toggle_->setVisible(true);
+    windows_unavailable_toggle_->setChecked(show_unavailable_windows_);
+    windows_unavailable_toggle_->setText(show_unavailable_windows_
+                                             ? QStringLiteral("Hide unavailable (%1)").arg(hidden_count)
+                                             : QStringLiteral("Show unavailable (%1)").arg(hidden_count));
+}
+
 void SourcePickerDialog::requestThumbnailsForSection(Section section) {
     if (!thumbnail_capture_ || section == Section::Region) {
         return;
@@ -708,6 +800,9 @@ void SourcePickerDialog::requestThumbnailsForSection(Section section) {
 
     const auto& options = section == Section::Screens ? screen_options_ : window_options_;
     for (const auto& option : options) {
+        if (!shouldShowOption(option, section)) {
+            continue;
+        }
         if (option.native_id == 0) {
             continue;
         }

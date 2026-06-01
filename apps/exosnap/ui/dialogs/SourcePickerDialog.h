@@ -47,6 +47,7 @@ class SourcePickerDialog : public QDialog {
         QString status_badge;
         bool selectable = true;
         bool unavailable = false;
+        bool hidden_by_default = false;
         QString validation_summary;
         QString minimum_detail;
         QString help_text;
@@ -81,6 +82,7 @@ class SourcePickerDialog : public QDialog {
   private:
     struct SectionGrid {
         QScrollArea* scroll = nullptr;
+        QVBoxLayout* content_layout = nullptr;
         QWidget* host = nullptr;
         QGridLayout* grid = nullptr;
         QLabel* empty_label = nullptr;
@@ -104,6 +106,8 @@ class SourcePickerDialog : public QDialog {
     bool findOption(Section section, int target_index, SourceOption* out) const;
     OptionCard* findOptionCard(Section section, int target_index);
     void requestThumbnailsForSection(Section section);
+    bool shouldShowOption(const SourceOption& option, Section section) const;
+    void updateWindowsUnavailableToggle();
     SectionGrid* sectionGrid(Section section);
     const SectionGrid* sectionGrid(Section section) const;
     std::vector<OptionCard*> cardsForSection(Section section);
@@ -117,6 +121,7 @@ class SourcePickerDialog : public QDialog {
     QPushButton* windows_button_ = nullptr;
     QPushButton* region_button_ = nullptr;
     QPushButton* refresh_button_ = nullptr;
+    QPushButton* windows_unavailable_toggle_ = nullptr;
     QStackedWidget* pages_ = nullptr;
     SectionGrid screens_grid_;
     SectionGrid windows_grid_;
@@ -136,6 +141,7 @@ class SourcePickerDialog : public QDialog {
     bool has_region_ = false;
     QString region_summary_;
     bool pick_region_now_ = false;
+    bool show_unavailable_windows_ = false;
 
     ThumbnailCapture* thumbnail_capture_ = nullptr;
 };

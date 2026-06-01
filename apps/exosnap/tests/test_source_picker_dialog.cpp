@@ -7,6 +7,7 @@
 #include <QPushButton>
 
 #include "ui/dialogs/SourcePickerDialog.h"
+#include "ui/dialogs/SourcePickerWindowRules.h"
 #include "ui/widgets/CaptureTargetCard.h"
 
 namespace exosnap {
@@ -92,6 +93,22 @@ TEST_F(SourcePickerDialogTest, SelectSource_UpdatesSelectionResult) {
     EXPECT_EQ(selection.target_index, 9);
 }
 
+TEST_F(SourcePickerDialogTest, NormalWindowCard_DoesNotRequireWindowBadge) {
+    ui::dialogs::SourcePickerDialog dialog;
+
+    ui::dialogs::SourcePickerDialog::SourceOption window;
+    window.target_index = 23;
+    window.title = QStringLiteral("Editor - README");
+    window.detail = QStringLiteral("1280 × 720 · code.exe");
+
+    dialog.setWindowOptions({window});
+    dialog.setCurrentSelection(ui::dialogs::SourcePickerDialog::Section::Windows, 23);
+
+    const auto cards = dialog.findChildren<ui::widgets::CaptureTargetCard*>();
+    ASSERT_EQ(cards.size(), 1);
+    EXPECT_TRUE(cards.front()->statusText().isEmpty());
+}
+
 TEST_F(SourcePickerDialogTest, PickRegionNow_AcceptsDialogWithRegionSelection) {
     ui::dialogs::SourcePickerDialog dialog;
     dialog.setRegionState(QStringLiteral("320, 180  —  1280 × 720"), true, true);
@@ -148,27 +165,45 @@ TEST_F(SourcePickerDialogTest, UnavailableWindow_IsMarkedInvalidAndCannotBeAppli
 
     ui::dialogs::SourcePickerDialog::SourceOption window;
     window.target_index = -5;
-    window.title = QStringLiteral("[Window] Minimized App");
+    window.title = QStringLiteral("Minimized App");
     window.detail = QStringLiteral("640 × 480");
     window.status_badge = QStringLiteral("Minimized");
     window.selectable = false;
     window.unavailable = true;
+    window.hidden_by_default = true;
     window.help_text = QStringLiteral("Restore the window to capture it.");
 
-    dialog.setWindowOptions({window});
+    ui::dialogs::SourcePickerDialog::SourceOption valid_window;
+    valid_window.target_index = 7;
+    valid_window.title = QStringLiteral("Editor - README");
+    valid_window.detail = QStringLiteral("1920 × 1080");
+
+    dialog.setWindowOptions({valid_window, window});
+    dialog.setCurrentSelection(ui::dialogs::SourcePickerDialog::Section::Windows, 7);
 
     const auto selection = dialog.selectionResult();
-    EXPECT_FALSE(selection.valid);
+    EXPECT_TRUE(selection.valid);
     EXPECT_FALSE(dialog.selectSource(ui::dialogs::SourcePickerDialog::Section::Windows, -5));
 
     auto* use_button = dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerUseButton"));
     ASSERT_NE(use_button, nullptr);
-    EXPECT_FALSE(use_button->isEnabled());
+    EXPECT_TRUE(use_button->isEnabled());
+
+    auto* toggle = dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerShowUnavailableButton"));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_FALSE(toggle->isHidden());
+    EXPECT_EQ(toggle->text(), QStringLiteral("Show unavailable (1)"));
 
     const auto cards = dialog.findChildren<ui::widgets::CaptureTargetCard*>();
-    ASSERT_FALSE(cards.empty());
-    EXPECT_EQ(cards.front()->statusText(), QStringLiteral("Minimized"));
-    EXPECT_TRUE(cards.front()->isUnavailable());
+    ASSERT_EQ(cards.size(), 1);
+    EXPECT_FALSE(cards.front()->isUnavailable());
+
+    toggle->click();
+    EXPECT_EQ(toggle->text(), QStringLiteral("Hide unavailable (1)"));
+    const auto expanded_cards = dialog.findChildren<ui::widgets::CaptureTargetCard*>();
+    ASSERT_EQ(expanded_cards.size(), 2);
+    EXPECT_TRUE(expanded_cards.back()->isUnavailable());
+    EXPECT_EQ(expanded_cards.back()->statusText(), QStringLiteral("Minimized"));
 }
 
 TEST_F(SourcePickerDialogTest, CaptureTargetCard_ThumbnailSupport) {
@@ -238,6 +273,39 @@ TEST_F(SourcePickerDialogTest, CardsReceiveThumbnailPlaceholderByDefault) {
     const auto cards = dialog.findChildren<ui::widgets::CaptureTargetCard*>();
     ASSERT_EQ(cards.size(), 1);
     EXPECT_FALSE(cards.front()->hasThumbnail());
+}
+
+TEST(SourcePickerWindowRulesTest, FiltersKnownSystemHelperWindows) {
+    const ui::dialogs::SourcePickerWindowIdentity identity{QStringLiteral("Windows Input Experience"),
+                                                           QStringLiteral("TextInputHost.exe"),
+                                                           QStringLiteral("Windows.UI.Core.CoreWindow")};
+    EXPECT_TRUE(ui::dialogs::ShouldExcludeByIdentity(identity));
+}
+
+TEST(SourcePickerWindowRulesTest, FiltersProgramManagerShellWindow) {
+    const ui::dialogs::SourcePickerWindowIdentity identity{QStringLiteral("Program Manager"),
+                                                           QStringLiteral("explorer.exe"), QStringLiteral("Progman")};
+    EXPECT_TRUE(ui::dialogs::ShouldExcludeByIdentity(identity));
+}
+
+TEST(SourcePickerWindowRulesTest, FiltersOverlayWindows) {
+    const ui::dialogs::SourcePickerWindowIdentity identity{
+        QStringLiteral("NVIDIA Overlay"), QStringLiteral("NVIDIA Share.exe"), QStringLiteral("CEF-OSC-WIDGET")};
+    EXPECT_TRUE(ui::dialogs::ShouldExcludeByIdentity(identity));
+}
+
+TEST(SourcePickerWindowRulesTest, FiltersPhantomWinStubTitle) {
+    const ui::dialogs::SourcePickerWindowIdentity identity{QStringLiteral("[Win...]"),
+                                                           QStringLiteral("applicationframehost.exe"),
+                                                           QStringLiteral("ApplicationFrameWindow")};
+    EXPECT_TRUE(ui::dialogs::ShouldExcludeByIdentity(identity));
+}
+
+TEST(SourcePickerWindowRulesTest, KeepsNormalUserFacingWindow) {
+    const ui::dialogs::SourcePickerWindowIdentity identity{QStringLiteral("README.md - Visual Studio Code"),
+                                                           QStringLiteral("Code.exe"),
+                                                           QStringLiteral("Chrome_WidgetWin_1")};
+    EXPECT_FALSE(ui::dialogs::ShouldExcludeByIdentity(identity));
 }
 
 } // namespace

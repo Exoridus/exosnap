@@ -3,6 +3,7 @@
 #include "../diagnostics/AppLog.h"
 #include "../settings/AppSettingsStore.h"
 #include "../ui/dialogs/SourcePickerDialog.h"
+#include "../ui/dialogs/SourcePickerWindowRules.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/widgets/AudioSourceRow.h"
 #include "../ui/widgets/CaptureTargetCard.h"
@@ -229,10 +230,21 @@ struct ScreenPresentation {
 };
 
 struct WindowPresentation {
+    bool valid = false;
+    bool is_visible = false;
+    bool is_minimized = false;
+    bool is_cloaked = false;
+    bool is_owned = false;
+    bool is_tool_window = false;
+    bool is_child = false;
     bool has_client_size = false;
     int client_width = 0;
     int client_height = 0;
+    bool has_window_rect = false;
+    RECT window_rect{};
+    QString title;
     QString process_label;
+    QString class_name;
 };
 
 MinimumCaptureSize WindowMinimumForCodec(capability::VideoCodec codec) {
@@ -302,12 +314,91 @@ QString QueryWindowProcessLabel(HWND hwnd) {
     return process_name;
 }
 
+QString QueryWindowTitle(HWND hwnd) {
+    constexpr int kTitleBufferSize = 512;
+    wchar_t title[kTitleBufferSize] = {};
+    const int length = GetWindowTextW(hwnd, title, kTitleBufferSize);
+    if (length <= 0) {
+        return {};
+    }
+    return QString::fromWCharArray(title, length);
+}
+
+QString QueryWindowClassName(HWND hwnd) {
+    constexpr int kClassBufferSize = 256;
+    wchar_t class_name[kClassBufferSize] = {};
+    const int length = GetClassNameW(hwnd, class_name, kClassBufferSize);
+    if (length <= 0) {
+        return {};
+    }
+    return QString::fromWCharArray(class_name, length);
+}
+
+bool IsWindowOffscreen(const WindowPresentation& meta) {
+    if (!meta.has_window_rect) {
+        return true;
+    }
+
+    const RECT virtual_rect{
+        GetSystemMetrics(SM_XVIRTUALSCREEN),
+        GetSystemMetrics(SM_YVIRTUALSCREEN),
+        GetSystemMetrics(SM_XVIRTUALSCREEN) + GetSystemMetrics(SM_CXVIRTUALSCREEN),
+        GetSystemMetrics(SM_YVIRTUALSCREEN) + GetSystemMetrics(SM_CYVIRTUALSCREEN),
+    };
+
+    RECT intersection{};
+    return IntersectRect(&intersection, &meta.window_rect, &virtual_rect) == FALSE;
+}
+
+bool IsMeaningfulWindowTitle(const QString& title) {
+    const QString normalized = title.trimmed();
+    if (normalized.isEmpty()) {
+        return false;
+    }
+    if (normalized == QStringLiteral("-") || normalized == QStringLiteral(".")) {
+        return false;
+    }
+    return true;
+}
+
+bool ShouldExcludeKnownWindowNoise(const WindowPresentation& meta) {
+    ui::dialogs::SourcePickerWindowIdentity identity;
+    identity.title = meta.title;
+    identity.process_name = meta.process_label;
+    identity.class_name = meta.class_name;
+    return ui::dialogs::ShouldExcludeByIdentity(identity);
+}
+
+bool ShouldDedupeByProcess(const QString& process_label) {
+    const QString normalized = process_label.trimmed().toLower();
+    return normalized == QStringLiteral("systemsettings.exe");
+}
+
+QString DedupeKeyForWindow(const WindowPresentation& meta) {
+    const QString title_key = meta.title.trimmed().toLower();
+    const QString process_key = meta.process_label.trimmed().toLower();
+    return process_key + QStringLiteral("|") + title_key;
+}
+
 WindowPresentation QueryWindowPresentation(uintptr_t native_id) {
     WindowPresentation meta;
     const auto hwnd = reinterpret_cast<HWND>(native_id);
     if (hwnd == nullptr || IsWindow(hwnd) == FALSE) {
         return meta;
     }
+
+    meta.valid = true;
+    meta.is_visible = IsWindowVisible(hwnd) != FALSE;
+    meta.is_minimized = IsIconic(hwnd) != FALSE;
+
+    const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    const LONG_PTR ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    meta.is_child = (style & WS_CHILD) != 0;
+    meta.is_tool_window = (ex_style & WS_EX_TOOLWINDOW) != 0;
+    meta.is_owned = GetWindow(hwnd, GW_OWNER) != nullptr;
+
+    DWORD cloaked = 0;
+    meta.is_cloaked = SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked != 0;
 
     RECT client_rect{};
     if (GetClientRect(hwnd, &client_rect) != FALSE) {
@@ -316,7 +407,15 @@ WindowPresentation QueryWindowPresentation(uintptr_t native_id) {
         meta.has_client_size = meta.client_width > 0 && meta.client_height > 0;
     }
 
+    RECT window_rect{};
+    if (GetWindowRect(hwnd, &window_rect) != FALSE) {
+        meta.window_rect = window_rect;
+        meta.has_window_rect = true;
+    }
+
+    meta.title = QueryWindowTitle(hwnd);
     meta.process_label = QueryWindowProcessLabel(hwnd);
+    meta.class_name = QueryWindowClassName(hwnd);
     return meta;
 }
 
@@ -346,6 +445,39 @@ QString BuildWindowOptionDetail(const WindowPresentation& meta) {
 
 bool IsWindowBelowMinimum(const WindowPresentation& meta, const MinimumCaptureSize& min_size) {
     return meta.has_client_size && (meta.client_width < min_size.width || meta.client_height < min_size.height);
+}
+
+enum class WindowEligibility {
+    Include,
+    Exclude,
+    UnavailableMinimized,
+    UnavailableGeneric,
+    UnavailableTooSmall,
+};
+
+WindowEligibility ClassifyWindowForPicker(const WindowPresentation& meta, const MinimumCaptureSize& min_size) {
+    if (!meta.valid) {
+        return WindowEligibility::Exclude;
+    }
+    if (!meta.is_visible || meta.is_child || meta.is_owned || meta.is_tool_window) {
+        return WindowEligibility::Exclude;
+    }
+    if (!meta.has_client_size || meta.client_width < 4 || meta.client_height < 4) {
+        return WindowEligibility::Exclude;
+    }
+    if (meta.is_cloaked || IsWindowOffscreen(meta)) {
+        return WindowEligibility::Exclude;
+    }
+    if (!IsMeaningfulWindowTitle(meta.title) || ShouldExcludeKnownWindowNoise(meta)) {
+        return WindowEligibility::Exclude;
+    }
+    if (meta.is_minimized) {
+        return WindowEligibility::UnavailableMinimized;
+    }
+    if (IsWindowBelowMinimum(meta, min_size)) {
+        return WindowEligibility::UnavailableTooSmall;
+    }
+    return WindowEligibility::Include;
 }
 
 } // namespace
@@ -1534,6 +1666,45 @@ void RecordPage::onOpenSourcePicker() {
         screen_options.push_back(option);
     }
 
+    struct WindowOptionCandidate {
+        ui::dialogs::SourcePickerDialog::SourceOption option;
+        bool is_foreground = false;
+    };
+
+    std::vector<WindowOptionCandidate> default_window_candidates;
+    std::vector<ui::dialogs::SourcePickerDialog::SourceOption> unavailable_window_options;
+    std::unordered_set<uintptr_t> captured_hwnds;
+    std::unordered_set<uintptr_t> seen_unavailable_hwnds;
+    std::unordered_set<std::string> dedupe_keys;
+
+    for (const int target_index : window_target_indices_) {
+        if (target_index >= 0 && target_index < static_cast<int>(view_model_.targets.size())) {
+            captured_hwnds.insert(view_model_.targets[static_cast<std::size_t>(target_index)].native_id);
+        }
+    }
+
+    const HWND foreground_hwnd = GetAncestor(GetForegroundWindow(), GA_ROOT);
+    int unavailable_index = -1;
+
+    auto appendUnavailableWindow = [&](int target_index, uintptr_t native_id, const QString& title,
+                                       const WindowPresentation& window_meta, const QString& status_badge,
+                                       const QString& help_text, const QString& validation_summary,
+                                       const QString& minimum_text) {
+        ui::dialogs::SourcePickerDialog::SourceOption option;
+        option.target_index = target_index;
+        option.native_id = native_id;
+        option.title = title;
+        option.detail = BuildWindowOptionDetail(window_meta);
+        option.status_badge = status_badge;
+        option.selectable = false;
+        option.unavailable = true;
+        option.hidden_by_default = true;
+        option.help_text = help_text;
+        option.validation_summary = validation_summary;
+        option.minimum_detail = minimum_text;
+        unavailable_window_options.push_back(option);
+    };
+
     for (const int target_index : window_target_indices_) {
         if (target_index < 0 || target_index >= static_cast<int>(view_model_.targets.size())) {
             continue;
@@ -1543,115 +1714,167 @@ void RecordPage::onOpenSourcePicker() {
         if (hwnd == self_hwnd || hwnd == dialog_hwnd || GetAncestor(hwnd, GA_ROOT) == self_hwnd) {
             continue;
         }
+
         const WindowPresentation window_meta = QueryWindowPresentation(target.native_id);
-        ui::dialogs::SourcePickerDialog::SourceOption option;
-        option.target_index = target_index;
-        option.native_id = target.native_id;
-        option.title = windowLabelFromTarget(target);
-        option.detail = BuildWindowOptionDetail(window_meta);
-        option.status_badge = QStringLiteral("Window");
-        if (IsWindowBelowMinimum(window_meta, window_minimum)) {
-            option.selectable = false;
-            option.status_badge = QStringLiteral("Too small");
-            option.validation_summary = QStringLiteral(
-                "Selected window is too small for the active encoder. Choose a larger window or use Display capture.");
-            option.minimum_detail = minimum_detail;
+        if (window_meta.process_label.compare(QStringLiteral("exosnap.exe"), Qt::CaseInsensitive) == 0) {
+            continue;
         }
-        window_options.push_back(option);
-    }
 
-    {
-        struct UnavailableWindow {
-            uintptr_t native_id = 0;
-            QString title;
-            QString detail;
-            QString status_badge;
-            QString help_text;
-        };
-
-        struct UnavailableEnumContext {
-            std::vector<UnavailableWindow>* windows = nullptr;
-            const std::unordered_set<uintptr_t>* captured_set = nullptr;
-        };
-
-        std::vector<UnavailableWindow> unavailable;
-        std::unordered_set<uintptr_t> captured_hwnds;
-        for (const auto& target : view_model_.targets) {
-            if (target.kind == recorder_core::CaptureTarget::Kind::Window) {
-                captured_hwnds.insert(target.native_id);
+        if (ShouldDedupeByProcess(window_meta.process_label)) {
+            const std::string dedupe_key = DedupeKeyForWindow(window_meta).toStdString();
+            if (!dedupe_keys.insert(dedupe_key).second) {
+                continue;
             }
         }
 
-        UnavailableEnumContext ctx;
-        ctx.windows = &unavailable;
-        ctx.captured_set = &captured_hwnds;
+        QString title = windowLabelFromTarget(target).trimmed();
+        if (title.compare(QStringLiteral("Window"), Qt::CaseInsensitive) == 0) {
+            title = window_meta.title.trimmed();
+        }
+        if (title.isEmpty()) {
+            title = window_meta.title.trimmed();
+        }
 
-        EnumWindows(
-            [](HWND hwnd, LPARAM lParam) -> BOOL {
-                auto* ctx = reinterpret_cast<UnavailableEnumContext*>(lParam);
+        if (!IsMeaningfulWindowTitle(title)) {
+            continue;
+        }
 
-                if (!IsWindowVisible(hwnd))
-                    return TRUE;
-                if ((GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CHILD) != 0)
-                    return TRUE;
-                if (GetWindow(hwnd, GW_OWNER) != nullptr)
-                    return TRUE;
+        const WindowEligibility eligibility = ClassifyWindowForPicker(window_meta, window_minimum);
+        switch (eligibility) {
+        case WindowEligibility::Include: {
+            WindowOptionCandidate candidate;
+            candidate.option.target_index = target_index;
+            candidate.option.native_id = target.native_id;
+            candidate.option.title = title;
+            candidate.option.detail = BuildWindowOptionDetail(window_meta);
+            candidate.is_foreground = GetAncestor(hwnd, GA_ROOT) == foreground_hwnd;
+            default_window_candidates.push_back(candidate);
+            break;
+        }
+        case WindowEligibility::UnavailableMinimized:
+            appendUnavailableWindow(target_index, target.native_id, title, window_meta, QStringLiteral("Minimized"),
+                                    QStringLiteral("Restore the window to capture it."), {}, {});
+            seen_unavailable_hwnds.insert(target.native_id);
+            break;
+        case WindowEligibility::UnavailableTooSmall:
+            appendUnavailableWindow(
+                target_index, target.native_id, title, window_meta, QStringLiteral("Too small"), minimum_detail,
+                QStringLiteral(
+                    "Selected window is too small for the active encoder. Choose a larger window or use Display "
+                    "capture."),
+                minimum_detail);
+            seen_unavailable_hwnds.insert(target.native_id);
+            break;
+        case WindowEligibility::UnavailableGeneric:
+            appendUnavailableWindow(target_index, target.native_id, title, window_meta, QStringLiteral("Unavailable"),
+                                    QStringLiteral("This window cannot be captured right now."), {}, {});
+            seen_unavailable_hwnds.insert(target.native_id);
+            break;
+        case WindowEligibility::Exclude:
+            break;
+        }
+    }
 
-                const uintptr_t native = reinterpret_cast<uintptr_t>(hwnd);
-                if (ctx->captured_set->count(native) > 0)
-                    return TRUE;
+    struct UnavailableEnumContext {
+        std::vector<ui::dialogs::SourcePickerDialog::SourceOption>* unavailable = nullptr;
+        const std::unordered_set<uintptr_t>* captured_set = nullptr;
+        std::unordered_set<uintptr_t>* seen_unavailable = nullptr;
+        std::unordered_set<std::string>* dedupe_keys = nullptr;
+        const MinimumCaptureSize* window_minimum = nullptr;
+        const QString* minimum_detail = nullptr;
+        const HWND* self_hwnd = nullptr;
+        const HWND* dialog_hwnd = nullptr;
+        int* unavailable_index = nullptr;
+    };
 
-                bool is_minimized = (IsIconic(hwnd) != FALSE);
-                DWORD cloaked = 0;
-                const bool is_cloaked =
-                    SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked != 0;
+    UnavailableEnumContext unavailable_ctx;
+    unavailable_ctx.unavailable = &unavailable_window_options;
+    unavailable_ctx.captured_set = &captured_hwnds;
+    unavailable_ctx.seen_unavailable = &seen_unavailable_hwnds;
+    unavailable_ctx.dedupe_keys = &dedupe_keys;
+    unavailable_ctx.window_minimum = &window_minimum;
+    unavailable_ctx.minimum_detail = &minimum_detail;
+    unavailable_ctx.self_hwnd = &self_hwnd;
+    unavailable_ctx.dialog_hwnd = &dialog_hwnd;
+    unavailable_ctx.unavailable_index = &unavailable_index;
 
-                if (!is_minimized && !is_cloaked)
-                    return TRUE;
-
-                RECT client_rect{};
-                GetClientRect(hwnd, &client_rect);
-                const int client_w = client_rect.right - client_rect.left;
-                const int client_h = client_rect.bottom - client_rect.top;
-                if (client_w < 4 || client_h < 4)
-                    return TRUE;
-
-                wchar_t title[256] = {};
-                if (GetWindowTextW(hwnd, title, 256) == 0)
-                    return TRUE;
-
-                UnavailableWindow uw;
-                uw.native_id = native;
-                uw.title = QStringLiteral("[Window] ") + QString::fromWCharArray(title);
-                if (is_minimized) {
-                    uw.status_badge = QStringLiteral("Minimized");
-                    uw.help_text = QStringLiteral("Restore the window to capture it.");
-                } else {
-                    uw.status_badge = QStringLiteral("Unavailable");
-                    uw.help_text = QStringLiteral("This window cannot be captured right now.");
-                }
-                uw.detail =
-                    QStringLiteral("%1 \xC3\x97 %2").arg(client_w > 0 ? client_w : 0).arg(client_h > 0 ? client_h : 0);
-
-                ctx->windows->push_back(uw);
+    EnumWindows(
+        [](HWND hwnd, LPARAM lParam) -> BOOL {
+            auto* ctx = reinterpret_cast<UnavailableEnumContext*>(lParam);
+            if (!ctx || !ctx->unavailable || !ctx->captured_set || !ctx->seen_unavailable || !ctx->window_minimum ||
+                !ctx->minimum_detail || !ctx->self_hwnd || !ctx->dialog_hwnd || !ctx->unavailable_index ||
+                !ctx->dedupe_keys) {
                 return TRUE;
-            },
-            reinterpret_cast<LPARAM>(&ctx));
+            }
 
-        int unavailable_index = -1;
-        for (const auto& uw : unavailable) {
+            const HWND root = GetAncestor(hwnd, GA_ROOT);
+            if (hwnd == *ctx->self_hwnd || hwnd == *ctx->dialog_hwnd || root == *ctx->self_hwnd) {
+                return TRUE;
+            }
+
+            const uintptr_t native = reinterpret_cast<uintptr_t>(hwnd);
+            if (ctx->captured_set->count(native) > 0 || ctx->seen_unavailable->count(native) > 0) {
+                return TRUE;
+            }
+
+            const WindowPresentation window_meta = QueryWindowPresentation(native);
+            if (window_meta.process_label.compare(QStringLiteral("exosnap.exe"), Qt::CaseInsensitive) == 0) {
+                return TRUE;
+            }
+
+            if (ShouldDedupeByProcess(window_meta.process_label)) {
+                const std::string dedupe_key = DedupeKeyForWindow(window_meta).toStdString();
+                if (!ctx->dedupe_keys->insert(dedupe_key).second) {
+                    return TRUE;
+                }
+            }
+
+            const WindowEligibility eligibility = ClassifyWindowForPicker(window_meta, *ctx->window_minimum);
+            if (eligibility == WindowEligibility::Exclude) {
+                return TRUE;
+            }
+
             ui::dialogs::SourcePickerDialog::SourceOption option;
-            option.target_index = unavailable_index;
-            --unavailable_index;
-            option.native_id = uw.native_id;
-            option.title = uw.title;
-            option.detail = uw.detail;
-            option.status_badge = uw.status_badge;
+            option.target_index = *ctx->unavailable_index;
+            --(*ctx->unavailable_index);
+            option.native_id = native;
+            option.title = window_meta.title.trimmed();
+            option.detail = BuildWindowOptionDetail(window_meta);
             option.selectable = false;
             option.unavailable = true;
-            option.help_text = uw.help_text;
-            window_options.push_back(option);
-        }
+            option.hidden_by_default = true;
+
+            if (eligibility == WindowEligibility::UnavailableMinimized) {
+                option.status_badge = QStringLiteral("Minimized");
+                option.help_text = QStringLiteral("Restore the window to capture it.");
+            } else if (eligibility == WindowEligibility::UnavailableTooSmall) {
+                option.status_badge = QStringLiteral("Too small");
+                option.help_text = *ctx->minimum_detail;
+                option.validation_summary = QStringLiteral(
+                    "Selected window is too small for the active encoder. Choose a larger window or use Display "
+                    "capture.");
+                option.minimum_detail = *ctx->minimum_detail;
+            } else {
+                option.status_badge = QStringLiteral("Unavailable");
+                option.help_text = QStringLiteral("This window cannot be captured right now.");
+            }
+
+            ctx->unavailable->push_back(option);
+            ctx->seen_unavailable->insert(native);
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&unavailable_ctx));
+
+    std::stable_sort(default_window_candidates.begin(), default_window_candidates.end(),
+                     [](const WindowOptionCandidate& lhs, const WindowOptionCandidate& rhs) {
+                         return lhs.is_foreground && !rhs.is_foreground;
+                     });
+
+    for (const auto& candidate : default_window_candidates) {
+        window_options.push_back(candidate.option);
+    }
+    for (const auto& unavailable_option : unavailable_window_options) {
+        window_options.push_back(unavailable_option);
     }
 
     QString region_summary;

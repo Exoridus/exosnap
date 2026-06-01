@@ -32,6 +32,7 @@ qt_add_executable(exosnap WIN32
     ui/chrome/GlobalRecordingBar.cpp
     ui/dialogs/SourcePickerDialog.h
     ui/dialogs/SourcePickerDialog.cpp
+    ui/dialogs/SourcePickerWindowRules.h
     ui/widgets/SectionRuleHeader.h
     ui/widgets/SectionRuleHeader.cpp
     ui/widgets/StatusPill.h
