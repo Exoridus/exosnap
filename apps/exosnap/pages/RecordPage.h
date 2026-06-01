@@ -17,6 +17,7 @@
 #include <capability/config_types.h>
 
 class QComboBox;
+class QBoxLayout;
 class QFrame;
 class QLabel;
 class QPushButton;
@@ -99,6 +100,7 @@ class RecordPage : public QWidget {
     void updateResultDisplay();
     void updateTargetCards();
     void updateReadinessRows();
+    void updateResponsiveLayout();
     void updateAudioMeterLevels();
     void updateAudioControls();
     void updateAudioControlsVisibility();
@@ -148,6 +150,7 @@ class RecordPage : public QWidget {
 
     QLabel* capability_label_ = nullptr;
     QComboBox* target_combo_ = nullptr;
+    QBoxLayout* cockpit_split_layout_ = nullptr;
     QFrame* target_picker_panel_ = nullptr;
     QLabel* target_picker_kind_label_ = nullptr;
     QComboBox* target_picker_combo_ = nullptr;
@@ -162,6 +165,7 @@ class RecordPage : public QWidget {
     QLabel* source_kind_label_ = nullptr;
     QLabel* source_name_label_ = nullptr;
     QLabel* source_meta_label_ = nullptr;
+    QLabel* source_preset_label_ = nullptr;
     QLabel* source_lock_label_ = nullptr;
     QPushButton* change_source_btn_ = nullptr;
     ui::widgets::CaptureTargetCard* monitor_card_ = nullptr;
@@ -208,6 +212,7 @@ class RecordPage : public QWidget {
     QLabel* result_title_label_ = nullptr;
     QLabel* result_message_label_ = nullptr;
     QLabel* result_action_label_ = nullptr;
+    QLabel* result_file_label_ = nullptr;
     QLabel* result_stats_label_ = nullptr;
     QLabel* result_path_label_ = nullptr;
     QLabel* result_technical_label_ = nullptr;
@@ -231,7 +236,11 @@ class RecordPage : public QWidget {
     QPushButton* hero_action_btn_ = nullptr;
     QPushButton* secondary_action_btn_ = nullptr;
     QLabel* rail_readiness_label_ = nullptr;
+    QLabel* rail_summary_label_ = nullptr;
     QLabel* rail_stats_label_ = nullptr;
+    QLabel* readiness_summary_label_ = nullptr;
+    QPushButton* result_open_folder_btn_ = nullptr;
+    QPushButton* result_record_again_btn_ = nullptr;
 };
 
 } // namespace exosnap

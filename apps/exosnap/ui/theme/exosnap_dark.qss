@@ -321,12 +321,14 @@ QLabel[labelRole="recordCapabilityBanner"] {
 
 QFrame#recordControlPanel {
     background: ${bg2};
+    border-color: ${line3};
 }
 
 QLabel[labelRole="recordControlState"] {
     font-family: ${font-mono};
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.1em;
+    font-weight: 600;
     color: ${text2};
 }
 
@@ -355,10 +357,10 @@ QLabel[labelRole="recordHotkeyBadge"] {
 
 QLabel[labelRole="recordTimer"] {
     font-family: ${font-mono};
-    font-size: 40px;
+    font-size: 44px;
     letter-spacing: 0.04em;
     color: ${text2};
-    font-weight: 500;
+    font-weight: 600;
 }
 
 QLabel[labelRole="recordTimer"][timerState="recording"] {
@@ -412,11 +414,29 @@ QPushButton#recordHeroBtn[heroRole="muted"] {
     background: ${bg2};
 }
 
-QLabel[labelRole="railReadiness"] {
+QLabel[labelRole="railSummary"] {
     font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.04em;
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
     color: ${text2};
+    text-transform: uppercase;
+}
+
+QLabel[labelRole="railReadiness"] {
+    font-size: 12px;
+    color: ${text1};
+}
+
+QLabel[labelRole="railReadiness"][stateRole="ready"] {
+    color: ${ok};
+}
+
+QLabel[labelRole="railReadiness"][stateRole="warn"] {
+    color: ${warn};
+}
+
+QLabel[labelRole="railReadiness"][stateRole="blocked"] {
+    color: ${err};
 }
 
 QLabel[labelRole="railStats"] {
@@ -458,6 +478,13 @@ QLabel[labelRole="recordSourceMeta"] {
     font-family: ${font-mono};
     font-size: 11px;
     letter-spacing: 0.04em;
+    color: ${text2};
+}
+
+QLabel[labelRole="recordPresetSummary"] {
+    font-family: ${font-mono};
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
     color: ${text2};
 }
 
@@ -1002,9 +1029,22 @@ QLabel[labelRole="readinessTitle"] {
 
 QLabel[labelRole="readinessDetail"] {
     font-family: ${font-mono};
-    font-size: 12px;
+    font-size: 11px;
     letter-spacing: 0.04em;
     color: ${text2};
+}
+
+QLabel[labelRole="readinessSummary"] {
+    font-size: 12.5px;
+    color: ${text1};
+}
+
+QLabel[labelRole="readinessSummary"][stateRole="ready"] {
+    color: ${ok};
+}
+
+QLabel[labelRole="readinessSummary"][stateRole="blocked"] {
+    color: ${err};
 }
 
 QWidget#audioActivityRow {
@@ -1108,6 +1148,12 @@ QLabel[labelRole="resultUserMessage"] {
 QLabel[labelRole="resultActionHint"] {
     font-size: 11px;
     color: ${text2};
+}
+
+QLabel[labelRole="resultFile"] {
+    font-family: ${font-mono};
+    font-size: 11px;
+    color: ${text0};
 }
 
 QLabel[labelRole="resultStats"] {
