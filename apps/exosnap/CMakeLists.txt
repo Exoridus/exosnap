@@ -293,11 +293,24 @@ set_target_properties(webcam_page_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(webcam_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
 
 exosnap_add_gtest(
+    NAME hotkeys_page_tests
+    TEST_PREFIX hotkey.
+    SOURCES
+        tests/test_hotkeys_page.cpp
+        pages/HotkeysPage.cpp
+        ui/widgets/SectionRuleHeader.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(hotkeys_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(hotkeys_page_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
     NAME advanced_page_tests
     TEST_PREFIX advanced.
     SOURCES
         tests/test_advanced_page.cpp
         pages/AdvancedPage.cpp
+        ui/widgets/SectionRuleHeader.cpp
         ui/widgets/ComboBoxWheelFilter.cpp
         ui/widgets/ExoCheckBox.cpp
         models/OutputSettingsModel.cpp

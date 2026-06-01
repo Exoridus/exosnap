@@ -20,22 +20,28 @@ class HotkeysPage : public QWidget {
     void bindingChanged(int action_index, QKeySequence seq);
 
   private:
-    void buildRow(int index, const QString& action, const QKeySequence& default_binding, QVBoxLayout* parent_layout,
-                  QWidget* parent_widget);
+    static constexpr int kActionCount = 4;
+    void buildRow(int index, const QString& action, const QString& description, const QKeySequence& default_binding,
+                  bool supported, QVBoxLayout* parent_layout, QWidget* parent_widget);
+    QString bindingText(int index) const;
+    void updateRowPresentation(int index);
     void enterCapture(int index);
     void commitCapture(int index, const QKeySequence& seq);
     void cancelCapture(int index);
 
     struct RowWidgets {
+        bool supported = false;
+        QLabel* status_label = nullptr;
         QLabel* binding_label = nullptr;
         QPushButton* set_btn = nullptr;
         QPushButton* unset_btn = nullptr;
+        QWidget* normal_container = nullptr;
         QWidget* capture_container = nullptr;
         QKeySequenceEdit* capture_edit = nullptr;
         QKeySequence current_binding;
     };
 
-    std::array<RowWidgets, 7> rows_{};
+    std::array<RowWidgets, kActionCount> rows_{};
     int capturing_row_ = -1;
 };
 
