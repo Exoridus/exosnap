@@ -13,6 +13,30 @@ if(NOT Qt6_FOUND)
     return()
 endif()
 
+# ---- Build metadata ----
+set(EXOSNAP_VERSION "1.0-dev")
+
+find_package(Git QUIET)
+set(EXOSNAP_GIT_SHA "Unavailable")
+if(Git_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+        OUTPUT_VARIABLE _exosnap_git_sha
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(_exosnap_git_sha)
+        set(EXOSNAP_GIT_SHA "${_exosnap_git_sha}")
+    endif()
+endif()
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/ExoSnapBuildInfo.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/ExoSnapBuildInfo.h"
+    @ONLY
+)
+
 qt_add_executable(exosnap WIN32
     main.cpp
     startup_log.h
@@ -127,7 +151,7 @@ if(WIN32)
 endif()
 
 set_target_properties(exosnap PROPERTIES AUTOMOC ON AUTORCC ON OUTPUT_NAME "exosnap")
-target_compile_definitions(exosnap PRIVATE NOMINMAX)
+target_compile_definitions(exosnap PRIVATE NOMINMAX EXOSNAP_BUILD_CONFIG="$<CONFIG>")
 
 target_link_libraries(exosnap PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
@@ -136,7 +160,7 @@ target_link_libraries(exosnap PRIVATE
     mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib
 )
 
-target_include_directories(exosnap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(exosnap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
 exosnap_add_gtest(
     NAME record_viewmodel_audio_tests

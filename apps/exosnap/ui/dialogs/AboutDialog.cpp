@@ -1,4 +1,9 @@
 #include "AboutDialog.h"
+#include "ExoSnapBuildInfo.h"
+
+#ifndef EXOSNAP_BUILD_CONFIG
+#define EXOSNAP_BUILD_CONFIG "Unknown"
+#endif
 
 #include <QFrame>
 #include <QHBoxLayout>
@@ -9,7 +14,6 @@
 namespace exosnap::ui::dialogs {
 namespace {
 
-constexpr const char* kAppVersion = "1.0-dev";
 constexpr const char* kAppAuthor = "Exoridus";
 constexpr const char* kAppDescription =
     "Windows-native screen, app, and region recorder with a high-performance GPU pipeline, "
@@ -65,7 +69,9 @@ AboutDialog::AboutDialog(QWidget* parent) : QDialog(parent) {
     meta_layout->setContentsMargins(16, 14, 16, 14);
     meta_layout->setSpacing(10);
 
-    meta_layout->addWidget(makeMetaRow(QStringLiteral("VERSION"), QString::fromLatin1(kAppVersion), meta_panel));
+    meta_layout->addWidget(makeMetaRow(QStringLiteral("VERSION"), QString::fromLatin1(build::kVersion), meta_panel));
+    meta_layout->addWidget(makeMetaRow(QStringLiteral("BUILD"), QString::fromLatin1(EXOSNAP_BUILD_CONFIG), meta_panel));
+    meta_layout->addWidget(makeMetaRow(QStringLiteral("COMMIT"), QString::fromLatin1(build::kGitCommit), meta_panel));
     meta_layout->addWidget(makeMetaRow(QStringLiteral("AUTHOR"), QString::fromLatin1(kAppAuthor), meta_panel));
 
     main_layout->addWidget(meta_panel);

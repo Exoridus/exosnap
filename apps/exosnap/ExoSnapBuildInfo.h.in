@@ -1,0 +1,8 @@
+#pragma once
+
+namespace exosnap::build {
+
+constexpr const char* kVersion   = "@EXOSNAP_VERSION@";
+constexpr const char* kGitCommit = "@EXOSNAP_GIT_SHA@";
+
+} // namespace exosnap::build
