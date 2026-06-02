@@ -127,6 +127,25 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
     layout->setContentsMargins(M::kSpaceXl, M::kSpaceXl, M::kSpaceXl, M::kSpaceXl);
     layout->setSpacing(M::kSpaceLg);
 
+    // ---- Detail header: ‹ Settings / Advanced ----
+    {
+        auto* header = new QWidget(content);
+        header->setObjectName(QStringLiteral("detailPageHeader"));
+        auto* hl = new QHBoxLayout(header);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->setSpacing(4);
+        auto* back_btn = new QPushButton(QString::fromUtf8("\xe2\x80\xb9 Settings"), header);
+        back_btn->setProperty("role", "back");
+        back_btn->setCursor(Qt::PointingHandCursor);
+        auto* crumb = new QLabel(QStringLiteral("/ Advanced"), header);
+        crumb->setProperty("labelRole", "detailBreadcrumb");
+        hl->addWidget(back_btn);
+        hl->addWidget(crumb);
+        hl->addStretch(1);
+        layout->addWidget(header);
+        connect(back_btn, &QPushButton::clicked, this, &AdvancedPage::backToSettingsRequested);
+    }
+
     auto* guidance_panel = new QFrame(content);
     guidance_panel->setProperty("panelRole", "note");
     auto* guidance_layout = new QVBoxLayout(guidance_panel);
@@ -244,8 +263,14 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
 
     layout->addStretch();
 
-    content->setMaximumWidth(820);
-    scroll->setWidget(content);
+    content->setMaximumWidth(980);
+    auto* centering_host = new QWidget();
+    auto* ch_layout = new QHBoxLayout(centering_host);
+    ch_layout->setContentsMargins(0, 0, 0, 0);
+    ch_layout->addStretch(1);
+    ch_layout->addWidget(content, 0);
+    ch_layout->addStretch(1);
+    scroll->setWidget(centering_host);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);

@@ -292,7 +292,15 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     layout->addStretch();
 
     content->setMaximumWidth(1320);
-    scroll->setWidget(content);
+    {
+        auto* centering_host = new QWidget();
+        auto* ch = new QHBoxLayout(centering_host);
+        ch->setContentsMargins(0, 0, 0, 0);
+        ch->addStretch(1);
+        ch->addWidget(content, 0);
+        ch->addStretch(1);
+        scroll->setWidget(centering_host);
+    }
     root->addWidget(scroll);
 
     connect(run_check_btn_, &QPushButton::clicked, this, &DiagnosticsPage::onRunCheck);

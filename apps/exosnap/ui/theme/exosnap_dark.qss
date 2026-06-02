@@ -2273,3 +2273,31 @@ QToolTip {
     border: 1px solid ${line2};
     padding: ${space-xs}px ${space-sm}px;
 }
+
+/* Detail page header — back affordance for sub-pages (Webcam, Advanced) */
+QPushButton[role="back"] {
+    background: transparent;
+    border: none;
+    color: ${text2};
+    padding: 0 4px 0 0;
+    min-height: 0;
+    font-size: 13px;
+    font-weight: 500;
+    text-align: left;
+}
+
+QPushButton[role="back"]:hover {
+    color: ${accent};
+    background: transparent;
+}
+
+QPushButton[role="back"]:pressed {
+    color: ${accent};
+    background: transparent;
+}
+
+QLabel[labelRole="detailBreadcrumb"] {
+    font-size: 13px;
+    color: ${text2};
+    font-weight: 400;
+}

@@ -51,71 +51,108 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
 
-    auto* content = new QWidget(scroll);
+    auto* content = new QWidget();
+    content->setMaximumWidth(760);
     auto* layout = new QVBoxLayout(content);
     const int pad = ui::theme::ExoSnapMetrics::kSpaceXl;
     layout->setContentsMargins(pad, pad, pad, pad);
     layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
 
-    // ---- Camera preview (setup only) ----
+    // ---- Detail header: ‹ Settings / Webcam Setup ----
     {
-        layout->addWidget(makeLabel("Camera preview", "videoKvKey", content));
+        auto* header = new QWidget(content);
+        header->setObjectName(QStringLiteral("detailPageHeader"));
+        auto* hl = new QHBoxLayout(header);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->setSpacing(4);
+        auto* back_btn = new QPushButton(QString::fromUtf8("\xe2\x80\xb9 Settings"), header);
+        back_btn->setProperty("role", "back");
+        back_btn->setCursor(Qt::PointingHandCursor);
+        auto* crumb = new QLabel(QStringLiteral("/ Webcam Setup"), header);
+        crumb->setProperty("labelRole", "detailBreadcrumb");
+        hl->addWidget(back_btn);
+        hl->addWidget(crumb);
+        hl->addStretch(1);
+        layout->addWidget(header);
+        connect(back_btn, &QPushButton::clicked, this, &WebcamPage::backToSettingsRequested);
+    }
 
-        camera_preview_ = new ui::widgets::CameraPreview(content);
-        layout->addWidget(camera_preview_);
+    // ---- Camera preview card ----
+    {
+        auto* card = new QFrame(content);
+        card->setProperty("panelRole", "panel");
+        auto* cl = new QVBoxLayout(card);
+        cl->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
+                               ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
+        cl->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
 
-        auto* setup_note = makeLabel(QStringLiteral("Preview is for setup only. Enable “Include webcam in recording” "
-                                                    "to include it in recordings."),
-                                     "subtitle", content);
+        cl->addWidget(makeLabel(QStringLiteral("Camera preview"), "videoKvKey", card));
+
+        camera_preview_ = new ui::widgets::CameraPreview(card);
+        cl->addWidget(camera_preview_);
+
+        auto* setup_note = makeLabel(
+            QStringLiteral("Preview is for setup only. Enable \xe2\x80\x9cInclude webcam in recording\xe2\x80\x9d"
+                           " to include it in recordings."),
+            "subtitle", card);
         setup_note->setWordWrap(true);
-        layout->addWidget(setup_note);
+        cl->addWidget(setup_note);
 
-        auto* privacy_note = makeLabel(QStringLiteral("Preview activates the selected camera while this page is open."),
-                                       "muted", content);
+        auto* privacy_note =
+            makeLabel(QStringLiteral("Preview activates the selected camera while this page is open."), "muted", card);
         privacy_note->setWordWrap(true);
-        layout->addWidget(privacy_note);
-    }
-    layout->addWidget(makeDivider(content));
+        cl->addWidget(privacy_note);
 
-    // ---- Enable toggle ----
+        layout->addWidget(card);
+    }
+
+    // ---- Setup card ----
     {
-        auto* row = new QWidget(content);
-        auto* rl = new QHBoxLayout(row);
-        rl->setContentsMargins(0, 0, 0, 0);
-        rl->setSpacing(12);
-        auto* lbl = makeLabel("Include webcam in recording", "videoKvKey", row);
-        enable_toggle_ = new ui::widgets::ExoToggle(row);
+        auto* card = new QFrame(content);
+        card->setProperty("panelRole", "panel");
+        auto* cl = new QVBoxLayout(card);
+        cl->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
+                               ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
+        cl->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
+
+        // Enable toggle row
+        auto* toggle_row = new QWidget(card);
+        auto* tr = new QHBoxLayout(toggle_row);
+        tr->setContentsMargins(0, 0, 0, 0);
+        tr->setSpacing(12);
+        tr->addWidget(makeLabel(QStringLiteral("Include webcam in recording"), "videoKvKey", toggle_row), 1);
+        enable_toggle_ = new ui::widgets::ExoToggle(toggle_row);
         enable_toggle_->setChecked(false);
-        rl->addWidget(lbl);
-        rl->addStretch(1);
-        rl->addWidget(enable_toggle_);
-        layout->addWidget(row);
-    }
-    layout->addWidget(makeDivider(content));
+        tr->addWidget(enable_toggle_);
+        cl->addWidget(toggle_row);
 
-    // ---- Device + format ----
-    {
-        layout->addWidget(makeLabel("Device", "videoKvKey", content));
-        auto* dev_row = new QWidget(content);
+        cl->addWidget(makeDivider(card));
+
+        // Device
+        cl->addWidget(makeLabel(QStringLiteral("Device"), "videoKvKey", card));
+        auto* dev_row = new QWidget(card);
         auto* dr = new QHBoxLayout(dev_row);
         dr->setContentsMargins(0, 0, 0, 0);
         dr->setSpacing(8);
-        device_combo_ = new QComboBox(content);
+        device_combo_ = new QComboBox(card);
         device_combo_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         device_combo_->setMinimumWidth(280);
-        device_combo_->setMaximumWidth(560);
-        refresh_btn_ = new QPushButton("Rescan", content);
+        device_combo_->setMaximumWidth(480);
+        refresh_btn_ = new QPushButton(QStringLiteral("Rescan"), card);
         refresh_btn_->setProperty("role", "utility");
-        refresh_btn_->setToolTip("Rescan for connected cameras");
+        refresh_btn_->setToolTip(QStringLiteral("Rescan for connected cameras"));
         dr->addWidget(device_combo_, 1);
         dr->addWidget(refresh_btn_);
-        layout->addWidget(dev_row);
+        cl->addWidget(dev_row);
 
-        layout->addWidget(makeLabel("Resolution / FPS", "videoKvKey", content));
-        resolution_combo_ = new QComboBox(content);
+        // Resolution / FPS
+        cl->addWidget(makeLabel(QStringLiteral("Resolution / FPS"), "videoKvKey", card));
+        resolution_combo_ = new QComboBox(card);
         resolution_combo_->setMinimumWidth(280);
-        resolution_combo_->setMaximumWidth(420);
-        layout->addWidget(resolution_combo_);
+        resolution_combo_->setMaximumWidth(380);
+        cl->addWidget(resolution_combo_);
+
+        layout->addWidget(card);
     }
 
     // ---- Overlay Placement (not in MVP — widgets created for data binding, not added to layout) ----
@@ -139,12 +176,12 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
             row->hide();
         };
 
-        addSliderRow("X Position", pos_x_slider_, pos_x_label_, 0);
-        addSliderRow("Y Position", pos_y_slider_, pos_y_label_, 0);
-        addSliderRow("Width", size_w_slider_, size_w_label_, 25);
-        addSliderRow("Height", size_h_slider_, size_h_label_, 25);
+        addSliderRow(QStringLiteral("X Position"), pos_x_slider_, pos_x_label_, 0);
+        addSliderRow(QStringLiteral("Y Position"), pos_y_slider_, pos_y_label_, 0);
+        addSliderRow(QStringLiteral("Width"), size_w_slider_, size_w_label_, 25);
+        addSliderRow(QStringLiteral("Height"), size_h_slider_, size_h_label_, 25);
 
-        aspect_lock_check_ = new QCheckBox("Lock aspect ratio", content);
+        aspect_lock_check_ = new QCheckBox(QStringLiteral("Lock aspect ratio"), content);
         aspect_lock_check_->setChecked(true);
         aspect_lock_check_->hide();
         // not added to layout
@@ -160,7 +197,7 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
         auto* rl = new QHBoxLayout(row);
         rl->setContentsMargins(0, 0, 0, 0);
         rl->setSpacing(12);
-        rl->addWidget(makeLabel("Chroma Key", "videoKvKey", row));
+        rl->addWidget(makeLabel(QStringLiteral("Chroma Key"), "videoKvKey", row));
         rl->addStretch(1);
         chroma_toggle_ = new ui::widgets::ExoToggle(row);
         chroma_toggle_->setChecked(false);
@@ -170,12 +207,12 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
         auto* cr = new QHBoxLayout(color_row);
         cr->setContentsMargins(0, 0, 0, 0);
         cr->setSpacing(8);
-        cr->addWidget(makeLabel("Key Color", "videoKvKey", color_row));
+        cr->addWidget(makeLabel(QStringLiteral("Key Color"), "videoKvKey", color_row));
         cr->addStretch(1);
         chroma_color_btn_ = new QPushButton(chroma_container);
         chroma_color_btn_->setFixedSize(32, 22);
-        chroma_color_btn_->setStyleSheet("background:#00B140; border-radius:3px;");
-        chroma_color_btn_->setToolTip("Pick key color");
+        chroma_color_btn_->setStyleSheet(QStringLiteral("background:#00B140; border-radius:3px;"));
+        chroma_color_btn_->setToolTip(QStringLiteral("Pick key color"));
         cr->addWidget(chroma_color_btn_);
 
         auto addChromaSlider = [&](const QString& label, QSlider*& slider, QLabel*& valueLabel, int def) {
@@ -194,12 +231,19 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
             rl2->addWidget(slider);
             rl2->addWidget(valueLabel);
         };
-        addChromaSlider("Tolerance", tolerance_slider_, tolerance_label_, 30);
-        addChromaSlider("Softness", softness_slider_, softness_label_, 5);
+        addChromaSlider(QStringLiteral("Tolerance"), tolerance_slider_, tolerance_label_, 30);
+        addChromaSlider(QStringLiteral("Softness"), softness_slider_, softness_label_, 5);
     }
 
     layout->addStretch(1);
-    scroll->setWidget(content);
+
+    auto* centering_host = new QWidget();
+    auto* ch_layout = new QHBoxLayout(centering_host);
+    ch_layout->setContentsMargins(0, 0, 0, 0);
+    ch_layout->addStretch(1);
+    ch_layout->addWidget(content, 0);
+    ch_layout->addStretch(1);
+    scroll->setWidget(centering_host);
     page_layout->addWidget(scroll, 1);
 
     auto* combo_wheel_filter = new ui::widgets::ComboBoxWheelFilter(this);

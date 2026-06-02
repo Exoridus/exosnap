@@ -7,6 +7,7 @@
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSizePolicy>
 #include <QTextStream>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -40,7 +41,14 @@ QString readLogTail(const QString& path, int max_lines) {
 } // namespace
 
 LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
-    auto* layout = new QVBoxLayout(this);
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    auto* content = new QWidget();
+    content->setMaximumWidth(1320);
+    content->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+    auto* layout = new QVBoxLayout(content);
     layout->setContentsMargins(M::kSpaceXl, M::kSpaceXl, M::kSpaceXl, M::kSpaceXl);
     layout->setSpacing(M::kSpaceMd);
 
@@ -71,6 +79,14 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     log_viewer_->setLineWrapMode(QPlainTextEdit::NoWrap);
     log_viewer_->setMinimumHeight(300);
     layout->addWidget(log_viewer_, 1);
+
+    auto* centering_host = new QWidget();
+    auto* ch = new QHBoxLayout(centering_host);
+    ch->setContentsMargins(0, 0, 0, 0);
+    ch->addStretch(1);
+    ch->addWidget(content, 0);
+    ch->addStretch(1);
+    outer->addWidget(centering_host, 1);
 
     connect(refresh_btn_, &QPushButton::clicked, this, &LogsPage::onRefresh);
     connect(open_folder_btn_, &QPushButton::clicked, this, &LogsPage::onOpenFolder);

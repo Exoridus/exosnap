@@ -988,6 +988,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             [this]() { navigateToPage(kLogsPageIndex); });
     connect(config_page_, &ConfigPage::webcamDetailsRequested, this, [this]() { navigateToPage(kWebcamPageIndex); });
     connect(config_page_, &ConfigPage::advancedRequested, this, [this]() { navigateToPage(kAdvancedPageIndex); });
+    connect(webcam_page_, &WebcamPage::backToSettingsRequested, this, [this]() { navigateToPage(kSettingsPageIndex); });
+    connect(advanced_page_, &AdvancedPage::backToSettingsRequested, this,
+            [this]() { navigateToPage(kSettingsPageIndex); });
 
     record_page_->rebroadcastChromeState();
     applyActiveProfileToPages();

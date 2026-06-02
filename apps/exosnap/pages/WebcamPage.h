@@ -32,6 +32,7 @@ class WebcamPage : public QWidget {
 
   signals:
     void settingsChanged(WebcamSettings settings);
+    void backToSettingsRequested();
 
   private slots:
     void onEnableToggled(bool enabled);

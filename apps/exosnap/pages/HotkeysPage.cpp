@@ -127,8 +127,16 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
 
     layout->addStretch();
 
-    content->setMaximumWidth(820);
-    scroll->setWidget(content);
+    content->setMaximumWidth(860);
+    {
+        auto* centering_host = new QWidget();
+        auto* ch = new QHBoxLayout(centering_host);
+        ch->setContentsMargins(0, 0, 0, 0);
+        ch->addStretch(1);
+        ch->addWidget(content, 0);
+        ch->addStretch(1);
+        scroll->setWidget(centering_host);
+    }
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);

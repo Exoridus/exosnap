@@ -22,6 +22,9 @@ class AdvancedPage : public QWidget {
     // baseline panel. Called by MainWindow whenever the active profile changes.
     void setBaseline(const OutputSettingsModel& output, const VideoSettingsModel& video, const QString& profile_name);
 
+  signals:
+    void backToSettingsRequested();
+
   private:
     void onReset();
 

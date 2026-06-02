@@ -658,7 +658,15 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     layout->addStretch();
 
     content->setMaximumWidth(kMaxContentWidth);
-    scroll->setWidget(content);
+    {
+        auto* centering_host = new QWidget();
+        auto* ch = new QHBoxLayout(centering_host);
+        ch->setContentsMargins(0, 0, 0, 0);
+        ch->addStretch(1);
+        ch->addWidget(content, 0);
+        ch->addStretch(1);
+        scroll->setWidget(centering_host);
+    }
     outer->addWidget(scroll);
 
     connect(advanced_open_btn, &QPushButton::clicked, this, &ConfigPage::advancedRequested);
