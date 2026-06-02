@@ -17,24 +17,21 @@ endif()
 set(EXOSNAP_VERSION "1.0-dev")
 
 find_package(Git QUIET)
-set(EXOSNAP_GIT_SHA "Unavailable")
-if(Git_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
-    execute_process(
-        COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
-        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-        OUTPUT_VARIABLE _exosnap_git_sha
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET
-    )
-    if(_exosnap_git_sha)
-        set(EXOSNAP_GIT_SHA "${_exosnap_git_sha}")
-    endif()
-endif()
 
-configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/ExoSnapBuildInfo.h.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/ExoSnapBuildInfo.h"
-    @ONLY
+set(EXOSNAP_BUILD_INFO_HEADER "${CMAKE_CURRENT_BINARY_DIR}/ExoSnapBuildInfo.h")
+add_custom_target(exosnap_build_info
+    ALL
+    COMMAND
+        ${CMAKE_COMMAND}
+        -DEXOSNAP_VERSION=${EXOSNAP_VERSION}
+        -DEXOSNAP_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -DEXOSNAP_BUILD_INFO_TEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/ExoSnapBuildInfo.h.in
+        -DEXOSNAP_BUILD_INFO_OUTPUT=${EXOSNAP_BUILD_INFO_HEADER}
+        -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/GenerateBuildInfo.cmake
+    BYPRODUCTS "${EXOSNAP_BUILD_INFO_HEADER}"
+    COMMENT "Refreshing ExoSnap build metadata"
+    VERBATIM
 )
 
 qt_add_executable(exosnap WIN32
@@ -152,6 +149,7 @@ endif()
 
 set_target_properties(exosnap PROPERTIES AUTOMOC ON AUTORCC ON OUTPUT_NAME "exosnap")
 target_compile_definitions(exosnap PRIVATE NOMINMAX EXOSNAP_BUILD_CONFIG="$<CONFIG>")
+add_dependencies(exosnap exosnap_build_info)
 
 target_link_libraries(exosnap PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
