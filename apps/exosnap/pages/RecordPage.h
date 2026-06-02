@@ -157,7 +157,6 @@ class RecordPage : public QWidget {
     QWidget* preview_column_ = nullptr;
     QWidget* preview_context_row_ = nullptr;
     QLabel* preview_source_chip_label_ = nullptr;
-    QLabel* preview_aspect_chip_label_ = nullptr;
     QWidget* preview_surface_host_ = nullptr;
     QFrame* target_picker_panel_ = nullptr;
     QLabel* target_picker_kind_label_ = nullptr;

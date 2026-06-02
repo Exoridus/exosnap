@@ -20,20 +20,9 @@ QWidget#operationalTitleBar {
 }
 
 QWidget#titlebarBrandSlot,
-QWidget#titlebarPageSlot,
-QWidget#titlebarCaptureSlot,
-QWidget#titlebarMetricsSlot {
+QWidget#titlebarDragSlot,
+QWidget#titlebarStatusSlot {
     background: transparent;
-}
-
-QFrame#titlebarSeparator {
-    background: ${line1};
-    border: none;
-    min-width: 1px;
-    max-width: 1px;
-    min-height: 24px;
-    max-height: 24px;
-    margin: 16px 0;
 }
 
 QLabel[labelRole="titlebarWordmark"] {
@@ -42,26 +31,6 @@ QLabel[labelRole="titlebarWordmark"] {
     letter-spacing: 0.04em;
     font-weight: 500;
     color: ${text0};
-}
-
-QLabel[labelRole="titlebarPageCode"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    color: ${text2};
-}
-
-QLabel[labelRole="titlebarContext"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    color: ${text1};
-}
-
-QLabel[labelRole="titlebarRuntime"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    color: ${text1};
 }
 
 QPushButton#titlebarWindowButton {
@@ -83,75 +52,11 @@ QPushButton#titlebarWindowButton[windowControlRole="close"]:hover {
     color: #ffffff;
 }
 
-/* Global recording bar */
+/* Global recording status bar */
 QWidget#globalRecordingBar {
     background: ${bg2};
     border-top: 1px solid ${line1};
     border-bottom: 1px solid ${line1};
-}
-
-QWidget#globalBarStatusSlot,
-QWidget#globalBarActionsSlot,
-QWidget#globalBarContextSlot,
-QWidget#globalBarSummarySlot {
-    background: transparent;
-}
-
-QFrame#globalBarSeparator {
-    background: ${line1};
-    border: none;
-    min-width: 1px;
-    max-width: 1px;
-    min-height: 20px;
-    max-height: 20px;
-    margin: 6px 0;
-}
-
-QLabel[labelRole="globalBarContextKey"] {
-    font-family: ${font-mono};
-    font-size: 10px;
-    letter-spacing: 0.14em;
-    color: ${text3};
-}
-
-QLabel[labelRole="globalBarContextValue"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    color: ${text1};
-}
-
-QPushButton[role="globalBarPrimaryAction"] {
-    background: ${bg3};
-    border: 1px solid ${line2};
-    border-radius: ${radius-md}px;
-    min-height: 32px;
-    padding: 0 12px;
-    font-size: 12px;
-    font-weight: 600;
-    color: ${text0};
-}
-
-QPushButton[role="globalBarPrimaryAction"]:disabled {
-    background: ${bg2};
-    border-color: ${line1};
-    color: ${text2};
-}
-
-QPushButton[role="globalBarSecondaryAction"] {
-    background: ${bg3};
-    border: 1px solid ${line2};
-    border-radius: ${radius-md}px;
-    min-height: 32px;
-    padding: 0 10px;
-    font-size: 12px;
-    color: ${text1};
-}
-
-QPushButton[role="globalBarSecondaryAction"]:disabled {
-    background: ${bg2};
-    border-color: ${line1};
-    color: ${text3};
 }
 
 /* Sidebar */
@@ -181,33 +86,6 @@ QListWidget#mainNav::item {
 
 QWidget#sidebarFooter {
     background: transparent;
-}
-
-QWidget#sidebarFooterRow {
-    background: transparent;
-}
-
-QLabel[labelRole="sidebarFooterKey"] {
-    font-family: ${font-mono};
-    font-size: 10.5px;
-    letter-spacing: 0.14em;
-    color: ${text3};
-}
-
-QLabel[labelRole="sidebarFooterValue"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.08em;
-    font-weight: 600;
-    color: ${text1};
-}
-
-QLabel[labelRole="sidebarFooterValueLive"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.08em;
-    font-weight: 600;
-    color: ${accent};
 }
 
 /* Page header */
@@ -716,8 +594,7 @@ QWidget#recordPreviewSurfaceHost[recordState="done"] {
     border-color: rgba(120, 218, 149, 0.44);
 }
 
-QLabel[labelRole="recordPreviewSourceChip"],
-QLabel[labelRole="recordPreviewAspectChip"] {
+QLabel[labelRole="recordPreviewSourceChip"] {
     font-family: ${font-mono};
     font-size: 10.5px;
     letter-spacing: 0.05em;
@@ -728,36 +605,31 @@ QLabel[labelRole="recordPreviewAspectChip"] {
     padding: 4px 8px;
 }
 
-QLabel[labelRole="recordPreviewSourceChip"][stateRole="ready"],
-QLabel[labelRole="recordPreviewAspectChip"][stateRole="ready"] {
+QLabel[labelRole="recordPreviewSourceChip"][stateRole="ready"] {
     color: ${ok};
     border-color: rgba(120, 218, 149, 0.44);
     background: rgba(120, 218, 149, 0.12);
 }
 
-QLabel[labelRole="recordPreviewSourceChip"][stateRole="recording"],
-QLabel[labelRole="recordPreviewAspectChip"][stateRole="recording"] {
+QLabel[labelRole="recordPreviewSourceChip"][stateRole="recording"] {
     color: ${err};
     border-color: rgba(240, 91, 84, 0.58);
     background: rgba(240, 91, 84, 0.16);
 }
 
-QLabel[labelRole="recordPreviewSourceChip"][stateRole="warn"],
-QLabel[labelRole="recordPreviewAspectChip"][stateRole="warn"] {
+QLabel[labelRole="recordPreviewSourceChip"][stateRole="warn"] {
     color: ${warn};
     border-color: rgba(215, 167, 68, 0.5);
     background: rgba(215, 167, 68, 0.15);
 }
 
-QLabel[labelRole="recordPreviewSourceChip"][stateRole="blocked"],
-QLabel[labelRole="recordPreviewAspectChip"][stateRole="blocked"] {
+QLabel[labelRole="recordPreviewSourceChip"][stateRole="blocked"] {
     color: ${err};
     border-color: rgba(240, 91, 84, 0.6);
     background: rgba(240, 91, 84, 0.18);
 }
 
-QLabel[labelRole="recordPreviewSourceChip"][stateRole="muted"],
-QLabel[labelRole="recordPreviewAspectChip"][stateRole="muted"] {
+QLabel[labelRole="recordPreviewSourceChip"][stateRole="muted"] {
     color: ${text3};
     border-color: ${line1};
     background: ${bg2};
@@ -1560,21 +1432,22 @@ QLabel[labelRole="aboutMetaValue"] {
 }
 
 QPushButton#sidebarAboutButton {
-    background: transparent;
-    border: none;
-    color: ${text3};
-    padding: 0;
-    min-height: 0;
-    text-align: left;
+    background: ${bg2};
+    border: 1px solid ${line1};
+    border-radius: ${radius-sm}px;
+    color: ${text2};
+    padding: 6px 9px;
+    min-height: 28px;
     font-family: ${font-mono};
-    font-size: 10.5px;
-    letter-spacing: 0.08em;
+    font-size: 11px;
+    letter-spacing: 0.04em;
     font-weight: 500;
 }
 
 QPushButton#sidebarAboutButton:hover {
     color: ${accent};
-    background: transparent;
+    border-color: ${line2};
+    background: ${bg3};
 }
 
 QDialog#sourcePickerDialog {
@@ -2270,56 +2143,6 @@ QPushButton[role="link"] {
 QPushButton[role="link"]:hover {
     color: ${accent};
     background: transparent;
-}
-
-QPushButton[role="globalBarPrimaryAction"][semanticRole="primary"] {
-    color: ${bg0};
-    background: ${accent};
-    border-color: ${accent};
-}
-
-QPushButton[role="globalBarPrimaryAction"][semanticRole="primary"]:hover {
-    background: ${accent-hover};
-    border-color: ${accent-hover};
-}
-
-QPushButton[role="globalBarPrimaryAction"][semanticRole="danger"] {
-    color: #ffffff;
-    background: ${err};
-    border-color: ${err};
-}
-
-QPushButton[role="globalBarPrimaryAction"][semanticRole="danger"]:hover {
-    background: #ff645d;
-    border-color: ${err};
-}
-
-QPushButton[role="globalBarPrimaryAction"][semanticRole="accent"] {
-    color: ${ok};
-    background: rgba(120, 218, 149, 0.14);
-    border-color: rgba(120, 218, 149, 0.54);
-}
-
-QPushButton[role="globalBarPrimaryAction"][semanticRole="accent"]:hover {
-    background: rgba(120, 218, 149, 0.24);
-    border-color: rgba(120, 218, 149, 0.72);
-}
-
-QPushButton[role="globalBarPrimaryAction"][semanticRole="muted"] {
-    color: ${text2};
-    background: ${bg3};
-    border-color: ${line2};
-}
-
-QPushButton[role="globalBarSecondaryAction"][semanticRole="secondary"] {
-    color: ${text0};
-    background: ${bg3};
-    border-color: ${line2};
-}
-
-QPushButton[role="globalBarSecondaryAction"][semanticRole="secondary"]:hover {
-    background: ${bg4};
-    border-color: ${line3};
 }
 
 QCheckBox,

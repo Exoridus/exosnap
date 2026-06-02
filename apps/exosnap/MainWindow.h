@@ -15,13 +15,11 @@
 
 class QLabel;
 class QShowEvent;
-class QTimer;
 
 namespace exosnap {
 
 namespace ui::chrome {
 class OperationalTitleBar;
-class GlobalRecordingBar;
 } // namespace ui::chrome
 
 class AdvancedPage;
@@ -43,11 +41,6 @@ class MainWindow : public QMainWindow {
   private slots:
     void onNavRowChanged(int row);
     void onRecordChromeStateChanged(bool recording, const QString& status_label, const QString& context_text);
-    void onRecordChromeRuntimeMetricsChanged(const QString& elapsed_text, const QString& bitrate_text,
-                                             const QString& drop_text, const QString& size_text);
-    void onGlobalRecordingBarPrimaryActionRequested();
-    void onGlobalRecordingBarPauseActionRequested();
-    void pollIdleRuntimeMetrics();
     void onHotkeyBindingChanged(int action_index, QKeySequence seq);
     void toggleFullScreen();
 
@@ -68,11 +61,6 @@ class MainWindow : public QMainWindow {
     void navigateToPage(int index);
     void setCurrentPage(int index);
     void updatePageHeader(int index);
-    QString buildGlobalRecordingBarProfileSummary() const;
-    QString buildGlobalRecordingBarTargetSummary() const;
-    QString buildOutputPageMeta() const;
-    QString buildOutputSummary() const;
-    void refreshGlobalRecordingBarContext();
     void applyActiveProfileToPages();
     void refreshOutputProfileUi();
     void persistProfileState();
@@ -80,7 +68,6 @@ class MainWindow : public QMainWindow {
     void refreshDiagnosticsData();
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
-    ui::chrome::GlobalRecordingBar* global_recording_bar_ = nullptr;
     QListWidget* nav_ = nullptr;
     QStackedWidget* stack_ = nullptr;
     RecordPage* record_page_ = nullptr;
@@ -94,12 +81,9 @@ class MainWindow : public QMainWindow {
     RecordingProfileRegistry profile_registry_;
     AppSettingsStore settings_store_;
     PersistedAppSettings persisted_settings_;
-    QLabel* page_kicker_label_ = nullptr;
     QLabel* page_title_label_ = nullptr;
     QLabel* page_subtitle_label_ = nullptr;
     QLabel* page_meta_label_ = nullptr;
-    QLabel* sidebar_status_value_label_ = nullptr;
-    QTimer* idle_metrics_timer_ = nullptr;
     static constexpr int kHotkeyIdStartStop = 1;
     static constexpr int kHotkeyIdPauseResume = 2;
     static constexpr int kHotkeyIdSplit = 3;
@@ -121,12 +105,7 @@ class MainWindow : public QMainWindow {
     };
     capability::CapabilitySet runtime_caps_;
     bool runtime_caps_ready_ = false;
-    QString recording_context_text_;
     QString record_status_label_ = QStringLiteral("READY");
-    std::uint64_t last_cpu_idle_ticks_ = 0;
-    std::uint64_t last_cpu_kernel_ticks_ = 0;
-    std::uint64_t last_cpu_user_ticks_ = 0;
-    bool cpu_baseline_ready_ = false;
 };
 
 } // namespace exosnap

@@ -783,12 +783,9 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     preview_context_layout->setContentsMargins(0, 0, 0, 0);
     preview_context_layout->setSpacing(8);
     preview_source_chip_label_ = makeLabel("No source selected", "recordPreviewSourceChip", preview_context_row_);
-    preview_aspect_chip_label_ = makeLabel("16:9", "recordPreviewAspectChip", preview_context_row_);
     setStyledStringProperty(preview_source_chip_label_, "stateRole", "muted");
-    setStyledStringProperty(preview_aspect_chip_label_, "stateRole", "ready");
     preview_context_layout->addWidget(preview_source_chip_label_, 0, Qt::AlignLeft | Qt::AlignVCenter);
     preview_context_layout->addStretch(1);
-    preview_context_layout->addWidget(preview_aspect_chip_label_, 0, Qt::AlignRight | Qt::AlignVCenter);
     preview_column_layout->addWidget(preview_context_row_);
 
     preview_surface_host_ = new QWidget(preview_column_);
@@ -3566,7 +3563,7 @@ void RecordPage::updateSourceChip() {
 }
 
 void RecordPage::updatePreviewContextChips() {
-    if (!preview_source_chip_label_ || !preview_aspect_chip_label_) {
+    if (!preview_source_chip_label_) {
         return;
     }
 
@@ -3575,12 +3572,6 @@ void RecordPage::updatePreviewContextChips() {
     const bool locked = isSourceSelectionLocked();
     const bool blocked = (view_model_.state == UiRecordingState::Blocked);
     const bool failed = (view_model_.state == UiRecordingState::Failed);
-    const bool active_recording = (view_model_.state == UiRecordingState::Recording);
-    const bool paused = (view_model_.state == UiRecordingState::Paused);
-    const bool transition =
-        (view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::RegionSelecting ||
-         view_model_.state == UiRecordingState::Stopping || view_model_.state == UiRecordingState::LoadingCapabilities);
-
     QString source_text = QStringLiteral("No source selected");
     if (view_model_.capture_mode == CaptureMode::Region) {
         if (view_model_.has_region && view_model_.region.IsValid()) {
@@ -3616,29 +3607,6 @@ void RecordPage::updatePreviewContextChips() {
                             : has_selection   ? QStringLiteral("ready")
                                               : QStringLiteral("muted"));
     preview_source_chip_label_->setVisible(false);
-
-    QString aspect_text = QStringLiteral("16:9");
-    QString aspect_role = QStringLiteral("ready");
-    if (failed) {
-        aspect_text = QStringLiteral("ERROR");
-        aspect_role = QStringLiteral("blocked");
-    } else if (blocked) {
-        aspect_text = QStringLiteral("BLOCKED");
-        aspect_role = QStringLiteral("blocked");
-    } else if (active_recording) {
-        aspect_text = QStringLiteral("REC · 16:9");
-        aspect_role = QStringLiteral("recording");
-    } else if (paused) {
-        aspect_text = QStringLiteral("PAUSED · 16:9");
-        aspect_role = QStringLiteral("warn");
-    } else if (transition) {
-        aspect_text = QStringLiteral("%1 · 16:9").arg(stateDisplay(view_model_.state));
-        aspect_role = QStringLiteral("warn");
-    }
-
-    preview_aspect_chip_label_->setText(aspect_text);
-    preview_aspect_chip_label_->setToolTip(aspect_text);
-    setStyledStringProperty(preview_aspect_chip_label_, "stateRole", aspect_role);
 }
 
 void RecordPage::updateRailSourceStatusChips() {
