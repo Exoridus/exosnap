@@ -12,6 +12,7 @@
 #include "ui/chrome/GlobalRecordingBar.h"
 #include "ui/chrome/OperationalTitleBar.h"
 #include "ui/chrome/RecordingStatusGuards.h"
+#include "ui/dialogs/AboutDialog.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
 
@@ -780,6 +781,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     footer_layout->setSpacing(4);
     footer_layout->addWidget(makeFooterRow("STATUS", "READY", footer, &sidebar_status_value_label_));
     footer_layout->addWidget(makeFooterRow("BACKEND", "NVENC", footer));
+    footer_layout->addSpacing(8);
+
+    auto* about_btn = new QPushButton(QStringLiteral("About ExoSnap"), footer);
+    about_btn->setObjectName("sidebarAboutButton");
+    about_btn->setFocusPolicy(Qt::NoFocus);
+    about_btn->setCursor(Qt::PointingHandCursor);
+    connect(about_btn, &QPushButton::clicked, this, [this]() {
+        ui::dialogs::AboutDialog dlg(this);
+        dlg.exec();
+    });
+    footer_layout->addWidget(about_btn);
     sidebar_layout->addWidget(footer);
 
     body_layout->addWidget(sidebar);

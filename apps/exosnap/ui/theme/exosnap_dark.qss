@@ -1523,6 +1523,60 @@ QLabel[labelRole="resultTechnical"] {
     color: ${text3};
 }
 
+QDialog#aboutDialog {
+    background: ${bg1};
+    border: 1px solid ${line2};
+    border-radius: ${radius-lg}px;
+}
+
+QLabel[labelRole="aboutAppName"] {
+    font-size: 22px;
+    font-weight: 600;
+    color: ${text0};
+}
+
+QLabel[labelRole="aboutDescription"] {
+    font-size: 13px;
+    color: ${text1};
+}
+
+QWidget#aboutMetaRow {
+    background: transparent;
+}
+
+QLabel[labelRole="aboutMetaKey"] {
+    font-family: ${font-mono};
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    color: ${text3};
+}
+
+QLabel[labelRole="aboutMetaValue"] {
+    font-family: ${font-mono};
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+    color: ${text1};
+}
+
+QPushButton#sidebarAboutButton {
+    background: transparent;
+    border: none;
+    color: ${text3};
+    padding: 0;
+    min-height: 0;
+    text-align: left;
+    font-family: ${font-mono};
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    font-weight: 500;
+}
+
+QPushButton#sidebarAboutButton:hover {
+    color: ${accent};
+    background: transparent;
+}
+
 QDialog#sourcePickerDialog {
     background: ${bg1};
     border: 1px solid ${line2};
