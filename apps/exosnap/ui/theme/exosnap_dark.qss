@@ -221,7 +221,7 @@ QWidget#qualityCardsGrid {
 
 QPushButton[qualityCard="true"] {
     text-align: left;
-    min-height: 98px;
+    min-height: 64px;
     padding: 0;
     background: ${bg3};
     border: 1px solid ${line2};
@@ -1603,12 +1603,12 @@ QLabel[labelRole="muted"] {
 
 QLabel[labelRole="profileStatusBadge"] {
     font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.04em;
+    font-size: 10px;
+    letter-spacing: 0.08em;
     color: ${text1};
     border: 1px solid ${line2};
     border-radius: ${radius-sm}px;
-    padding: 4px 8px;
+    padding: 1px 6px;
     background: ${bg3};
 }
 

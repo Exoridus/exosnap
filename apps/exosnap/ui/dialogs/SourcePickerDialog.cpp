@@ -191,7 +191,7 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     auto* region_page = new QWidget(pages_);
     auto* region_layout = new QVBoxLayout(region_page);
     region_layout->setContentsMargins(0, 0, 0, 0);
-    region_layout->setSpacing(12);
+    region_layout->setSpacing(8);
 
     auto* region_note = new QFrame(region_page);
     region_note->setProperty("panelRole", "note");
@@ -207,13 +207,8 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
                    region_note);
     region_copy->setWordWrap(true);
     region_copy->setProperty("labelRole", "captureTargetPickerNote");
-    auto* region_cancel_copy =
-        new QLabel(QStringLiteral("Press Esc in the overlay to cancel and return."), region_note);
-    region_cancel_copy->setWordWrap(true);
-    region_cancel_copy->setProperty("labelRole", "captureTargetPickerNote");
     region_note_layout->addWidget(region_title);
     region_note_layout->addWidget(region_copy);
-    region_note_layout->addWidget(region_cancel_copy);
     region_layout->addWidget(region_note);
 
     auto* region_summary_panel = new QFrame(region_page);
@@ -238,9 +233,8 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
 
     pick_region_now_button_ = new QPushButton(QStringLiteral("Pick region now..."), region_page);
     pick_region_now_button_->setObjectName("sourcePickerPickRegionButton");
-    pick_region_now_button_->setProperty("role", "ghost");
+    pick_region_now_button_->setProperty("role", "primary");
     region_layout->addWidget(pick_region_now_button_, 0, Qt::AlignLeft);
-    region_layout->addStretch(1);
 
     pages_->addWidget(region_page);
     root->addWidget(pages_, 1);
@@ -512,17 +506,45 @@ void SourcePickerDialog::rebuildOptionCardsForSection(Section section) {
         card->setTitle(option.title);
         card->setToolTip(option.title);
 
-        QString subtitle = option.detail;
+        auto stripJargon = [](QString s) -> QString {
+            static const QStringList kJargon = {
+                QStringLiteral("DXGI OD monitor capture"),
+                QStringLiteral("WGC monitor capture"),
+                QStringLiteral("WGC window capture"),
+            };
+            for (const QString& j : kJargon) {
+                int pos = s.indexOf(j, 0, Qt::CaseInsensitive);
+                while (pos >= 0) {
+                    s.remove(pos, j.length());
+                    while (pos < s.length() &&
+                           (s[pos] == QLatin1Char(' ') || s[pos] == QChar(0xB7) || s[pos] == QLatin1Char('\n')))
+                        s.remove(pos, 1);
+                    pos = s.indexOf(j, pos, Qt::CaseInsensitive);
+                }
+            }
+            s = s.trimmed();
+            while (s.startsWith(QStringLiteral(" · ")))
+                s = s.mid(3);
+            while (s.endsWith(QStringLiteral(" · ")))
+                s.chop(3);
+            return s;
+        };
+
+        QString subtitle = stripJargon(option.detail);
+
         if (option.primary && section == Section::Screens) {
-            if (subtitle.isEmpty()) {
-                subtitle = QStringLiteral("Primary display");
-            } else {
-                subtitle += QStringLiteral(" · Primary");
+            const bool already_primary = subtitle.contains(QStringLiteral("Primary"), Qt::CaseInsensitive);
+            if (!already_primary) {
+                if (subtitle.isEmpty()) {
+                    subtitle = QStringLiteral("Primary display");
+                } else {
+                    subtitle += QStringLiteral(" · Primary");
+                }
             }
         }
         if (!option.minimum_detail.trimmed().isEmpty()) {
-            subtitle =
-                subtitle.isEmpty() ? option.minimum_detail : (subtitle + QStringLiteral("\n") + option.minimum_detail);
+            const QString min_detail = stripJargon(option.minimum_detail);
+            subtitle = subtitle.isEmpty() ? min_detail : (subtitle + QStringLiteral("\n") + min_detail);
         }
         if (subtitle.isEmpty()) {
             subtitle =

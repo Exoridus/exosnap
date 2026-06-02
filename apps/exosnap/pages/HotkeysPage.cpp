@@ -58,7 +58,7 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
         bool supported;
     } kActions[kActionCount] = {
         {"Start/Stop Recording", "Toggle recording from anywhere.", QKeySequence("Alt+F9"), true},
-        {"Pause/Resume Recording", "Pause or resume the current recording session.", QKeySequence(), true},
+        {"Pause/Resume Recording", "Pause or resume recording.", QKeySequence(), true},
         {"Split Active Recording", "Start a new file without stopping the current session.", QKeySequence(), false},
         {"Mute/Unmute Microphone", "Toggle microphone capture while recording.", QKeySequence(), false},
     };
@@ -66,15 +66,11 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
     auto* active_header = new ui::widgets::SectionRuleHeader(QStringLiteral("ACTIVE HOTKEYS"), content);
     active_header->setMeta(QStringLiteral("Available now"));
     layout->addWidget(active_header);
-    layout->addWidget(makeSubLabel(
-        QStringLiteral("These bindings are active in this build and can be changed immediately."), content));
 
     auto* active_panel = makePanel(content);
     auto* active_layout = new QVBoxLayout(active_panel);
     active_layout->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
     active_layout->setSpacing(M::kSpaceSm);
-    active_layout->addWidget(
-        makeSubLabel(QStringLiteral("Set and Unset are available only for supported actions."), active_panel));
 
     for (int i = 0; i < kActionCount; ++i) {
         if (!kActions[i].supported)
@@ -83,19 +79,11 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
                  kActions[i].binding, true, active_layout, active_panel);
     }
 
-    auto* active_conflict_note = new QLabel(
-        QStringLiteral("If another application already owns a shortcut, ExoSnap keeps the previous working binding."),
-        active_panel);
-    active_conflict_note->setProperty("labelRole", "subtle");
-    active_conflict_note->setWordWrap(true);
-    active_layout->addWidget(active_conflict_note);
     layout->addWidget(active_panel);
 
     auto* planned_header = new ui::widgets::SectionRuleHeader(QStringLiteral("PLANNED / UNAVAILABLE"), content);
     planned_header->setMeta(QStringLiteral("Not in this build"));
     layout->addWidget(planned_header);
-    layout->addWidget(
-        makeSubLabel(QStringLiteral("These actions are intentionally unavailable in this MVP build."), content));
 
     auto* planned_panel = new QFrame(content);
     planned_panel->setProperty("panelRole", "plannedNote");

@@ -49,7 +49,7 @@ AboutDialog::AboutDialog(QWidget* parent) : QDialog(parent) {
     setFixedWidth(460);
 
     auto* main_layout = new QVBoxLayout(this);
-    main_layout->setContentsMargins(28, 28, 28, 24);
+    main_layout->setContentsMargins(24, 24, 24, 20);
     main_layout->setSpacing(0);
 
     auto* app_name_label = new QLabel(QStringLiteral("ExoSnap"), this);
@@ -64,7 +64,7 @@ AboutDialog::AboutDialog(QWidget* parent) : QDialog(parent) {
     main_layout->addSpacing(20);
 
     auto* meta_panel = new QFrame(this);
-    meta_panel->setProperty("panelRole", "panel");
+    meta_panel->setProperty("panelRole", "note");
     auto* meta_layout = new QVBoxLayout(meta_panel);
     meta_layout->setContentsMargins(16, 14, 16, 14);
     meta_layout->setSpacing(10);

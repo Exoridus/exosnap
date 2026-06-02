@@ -246,10 +246,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     fmt_head->addWidget(profile_status_label_);
     fmt_layout->addLayout(fmt_head);
 
-    fmt_layout->addWidget(makeHint(
-        QStringLiteral("A preset is a saved bundle of the fields below. Edit them freely, then save to keep them."),
-        fmt_panel));
-
     fmt_layout->addWidget(makeFieldLabel(QStringLiteral("Active preset"), fmt_panel));
     auto* profile_row = new QHBoxLayout();
     profile_row->setSpacing(8);
@@ -375,10 +371,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         card->setProperty("qualityCard", true);
         card->setProperty("qualityCardSelected", false);
         card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        card->setMinimumHeight(102);
+        card->setMinimumHeight(68);
 
         auto* card_layout = new QVBoxLayout(card);
-        card_layout->setContentsMargins(12, 10, 12, 10);
+        card_layout->setContentsMargins(10, 8, 10, 8);
         card_layout->setSpacing(4);
 
         auto* title_row = new QHBoxLayout();
@@ -398,10 +394,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
         card_layout->addLayout(title_row);
 
-        auto* descriptor_label = new QLabel(descriptor, card);
-        descriptor_label->setProperty("labelRole", "qualityCardDescriptor");
-        descriptor_label->setWordWrap(true);
-        card_layout->addWidget(descriptor_label);
+        if (!descriptor.isEmpty()) {
+            auto* descriptor_label = new QLabel(descriptor, card);
+            descriptor_label->setProperty("labelRole", "qualityCardDescriptor");
+            descriptor_label->setWordWrap(true);
+            card_layout->addWidget(descriptor_label);
+        }
 
         auto* detail_label = new QLabel(detail, card);
         detail_label->setProperty("labelRole", "qualityCardDetail");
@@ -418,18 +416,18 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         return card;
     };
 
-    quality_card_high_ = makeQualityCard(QStringLiteral("qualityCardHigh"), QStringLiteral("High Quality"),
-                                         QStringLiteral("Sharper · larger files"), QStringLiteral("CQ 19"),
-                                         recorder_core::NvencQualityPreset::High);
-    quality_card_balanced_ = makeQualityCard(QStringLiteral("qualityCardBalanced"), QStringLiteral("Balanced"),
-                                             QStringLiteral("General purpose"), QStringLiteral("CQ 24"),
-                                             recorder_core::NvencQualityPreset::Balanced);
+    quality_card_high_ =
+        makeQualityCard(QStringLiteral("qualityCardHigh"), QStringLiteral("High Quality"), QStringLiteral(""),
+                        QStringLiteral("CQ 19"), recorder_core::NvencQualityPreset::High);
+    quality_card_balanced_ =
+        makeQualityCard(QStringLiteral("qualityCardBalanced"), QStringLiteral("Balanced"), QStringLiteral(""),
+                        QStringLiteral("CQ 24"), recorder_core::NvencQualityPreset::Balanced);
     quality_card_small_ =
-        makeQualityCard(QStringLiteral("qualityCardSmall"), QStringLiteral("Small"), QStringLiteral("Smaller files"),
+        makeQualityCard(QStringLiteral("qualityCardSmall"), QStringLiteral("Small"), QStringLiteral(""),
                         QStringLiteral("CQ 30"), recorder_core::NvencQualityPreset::Small);
-    quality_card_custom_ = makeQualityCard(
-        QStringLiteral("qualityCardCustom"), QStringLiteral("Custom · not available in this build"),
-        QStringLiteral("Dial in rate control, CQ, and encoder presets"), QStringLiteral("Not available"), std::nullopt);
+    quality_card_custom_ =
+        makeQualityCard(QStringLiteral("qualityCardCustom"), QStringLiteral("Custom"), QStringLiteral(""),
+                        QStringLiteral("Not available in this build"), std::nullopt);
 
     quality_cards_layout->addWidget(quality_card_high_, 0, 0);
     quality_cards_layout->addWidget(quality_card_balanced_, 0, 1);
@@ -447,8 +445,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     quality_settings_label_->setProperty("labelRole", "muted");
     video_panel_layout->addWidget(quality_settings_label_);
 
-    video_panel_layout->addWidget(
-        makeHint(QStringLiteral("Higher quality looks sharper but produces larger files."), video_panel));
     left_layout->addWidget(video_panel);
 
     // ---- CAPTURE BEHAVIOR CARD (left) ----
@@ -1544,7 +1540,7 @@ void ConfigPage::updateProfileActionState() {
         badge = QStringLiteral("Built-in preset");
         profile_status_label_->setProperty("stateRole", "ready");
     } else {
-        badge = QStringLiteral("User preset");
+        badge = QString(); // suppress "User preset" for clean user presets — ring/check is enough
         profile_status_label_->setProperty("stateRole", "ready");
     }
     profile_status_label_->setText(badge);
