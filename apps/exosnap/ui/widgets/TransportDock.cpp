@@ -83,7 +83,8 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     open_folder_btn_->setObjectName(QStringLiteral("recordDockOpenFolder"));
     open_folder_btn_->setProperty("dockAction", QStringLiteral("ghost"));
     open_folder_btn_->setCursor(Qt::PointingHandCursor);
-    open_folder_btn_->setMinimumHeight(36);
+    // Match the primary action-button height for a balanced completed row.
+    open_folder_btn_->setMinimumHeight(40);
     size_label_ = new QLabel(completed_row_);
     size_label_->setProperty("labelRole", QStringLiteral("recordDockSize"));
     completed_layout->addWidget(filename_link_);

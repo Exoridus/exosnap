@@ -14,6 +14,8 @@ CountdownSelect::CountdownSelect(QWidget* parent) : QComboBox(parent) {
     setToolTip(QStringLiteral("Recording delay is planned — not yet wired into capture."));
     setFocusPolicy(Qt::NoFocus);
     setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    // Match the dock action-button height so the Ready-state right zone aligns.
+    setMinimumHeight(40);
 }
 
 } // namespace exosnap::ui::widgets

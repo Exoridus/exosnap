@@ -845,8 +845,14 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
     if (record_status_label_.isEmpty())
         record_status_label_ = QStringLiteral("READY");
 
-    if (config_page_)
-        config_page_->setReadinessStatus(record_status_label_);
+    if (config_page_) {
+        // The title-bar pill distinguishes the post-recording "Saved" state, but the
+        // Settings readiness badge has no Saved concept — map it to the equivalent
+        // ready status so Settings behaviour is unchanged from before this slice.
+        const QString config_status =
+            (record_status_label_ == QStringLiteral("SAVED")) ? QStringLiteral("READY") : record_status_label_;
+        config_page_->setReadinessStatus(config_status);
+    }
 
     if (config_page_) {
         const QString upper = record_status_label_;

@@ -238,6 +238,18 @@ Delivered as **R2A — Record Preview + Dock Skeleton** (the full four-state doc
 - **Deferred to R2B:** live L/R stereo dB meters in the dock (real per-channel data not yet plumbed; no fakes added), title-bar Completed→"Saved" pill + recording-health metrics, and final pixel polish.
 - **Not touched:** Settings/Source/Webcam/Diagnostics/Logs/Hotkeys/About interiors, R1B shell/top-nav (status pill semantics unchanged), capture/encoder/muxer/audio internals, recording state machine, settings schema, build metadata, `PreviewSurface`/DXGI.
 
+### Implementation status — R2B landed
+
+Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, finishing the R2A visual gaps without expanding scope.
+
+- **Completed → "Saved" title pill:** `RecordPage::buildChromeStatusLabel()` now returns `SAVED` for a clean saved recording (`Completed` + `HasResult` + `last_succeeded`); `OperationalTitleBar` maps `SAVED` to a green `Saved` pill (same tone as Ready, distinct label), shown while the result dock is visible and reverting to Ready on the next record. No new coordinator/state-machine state was introduced — the label is derived from existing view-model result state. `MainWindow` normalizes `SAVED` → `READY` for the Settings readiness badge so Settings behaviour is unchanged.
+- **Source/change-source pill cleanup:** kept above the preview (the DXGI preview runs a native child HWND that is live in the Ready state, so on-surface Qt overlay pills would be occluded — PreviewSurface/DXGI internals untouched per the sanctioned fallback). Visually compressed: the vestigial empty pre-R2A `preview_context_row_` is collapsed, the column gap tightened (6px) so the source row reads as the preview's context header, and the source chip slimmed to a lighter pill. `Change source` still opens the unchanged Source Picker and stays locked while recording/paused.
+- **Dock pixel polish:** countdown select height aligned to the 40px action buttons (Ready-zone alignment), completed-zone Open folder button aligned to 40px. Stable 3-zone geometry preserved.
+- **Meter honesty:** no stereo meters added — no real L/R dBFS feed exists; deferred until the audio pipeline provides per-channel data. No mono RMS duplicated into fake stereo.
+- **Recording-health title metrics:** none added — encoder load is not available at the shell layer, so the simple Recording pill is kept (no generic CPU/GPU/RAM/Disk, no fabricated Drop/Frame/Enc).
+- **Tests:** new `chrome.OperationalTitleBarTest.StatusPill_ShowsSavedAfterCompletedRecording`; existing `record.TransportDockTest` unchanged and green. Debug build green; focused CTest 265/265; full CTest 562/562. Screenshot smoke under `.workspace/screenshots/hybrid-port-r2b-record-polish/`.
+- **Not touched:** Settings IA / Source Picker behaviour / Webcam / Diagnostics / Logs / Hotkeys / About, capture/encoder/muxer/audio internals, recording state machine, settings schema, build metadata, `PreviewSurface`/DXGI, right-rail/global-transport (remain absent).
+
 ---
 
 ## HYBRID-PORT-R3 — Settings Compact IA

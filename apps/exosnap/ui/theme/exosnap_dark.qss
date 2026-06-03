@@ -557,8 +557,8 @@ QLabel[labelRole="recordPreviewSourceChip"][stateRole="muted"] {
 }
 
 QFrame#recordSourceChip {
-    background: rgba(21, 21, 23, 0.92);
-    border: 1px solid ${line2};
+    background: rgba(21, 21, 23, 0.70);
+    border: 1px solid ${line1};
     border-radius: ${radius-sm}px;
 }
 

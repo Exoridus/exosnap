@@ -119,6 +119,24 @@ TEST_F(OperationalTitleBarTest, StatusPill_ReflectsReadyRecordingPaused) {
     EXPECT_EQ(pill->tone(), ui::widgets::StatusPill::Tone::Warn);
 }
 
+TEST_F(OperationalTitleBarTest, StatusPill_ShowsSavedAfterCompletedRecording) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+
+    auto* pill = bar.findChild<ui::widgets::StatusPill*>(QStringLiteral("titlebarStatusChip"));
+    ASSERT_NE(pill, nullptr);
+
+    // A clean, saved recording reads as green "Saved" (same tone as Ready).
+    bar.setStatusLabel(QStringLiteral("SAVED"));
+    EXPECT_EQ(pill->text(), QStringLiteral("Saved"));
+    EXPECT_EQ(pill->tone(), ui::widgets::StatusPill::Tone::Ready);
+
+    // Starting a new recording reverts the pill away from Saved.
+    bar.setStatusLabel(QStringLiteral("READY"));
+    EXPECT_EQ(pill->text(), QStringLiteral("Ready"));
+    EXPECT_EQ(pill->tone(), ui::widgets::StatusPill::Tone::Ready);
+}
+
 TEST_F(OperationalTitleBarTest, Shell_HasNoGlobalTransportButtons) {
     ui::chrome::OperationalTitleBar bar;
     bar.setNavItems(DefaultNavItems());

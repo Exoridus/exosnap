@@ -331,6 +331,12 @@ void OperationalTitleBar::refreshStatusChip() {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Blocked);
         status_pill_->setDotVisible(true);
         status_pill_->setText(QStringLiteral("Blocked"));
+    } else if (status.contains(QStringLiteral("SAVED"))) {
+        // Completed recording — same green tone as Ready, distinct "Saved" label,
+        // shown while the Record result dock is visible.
+        status_pill_->setTone(ui::widgets::StatusPill::Tone::Ready);
+        status_pill_->setDotVisible(true);
+        status_pill_->setText(QStringLiteral("Saved"));
     } else {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Ready);
         status_pill_->setDotVisible(true);

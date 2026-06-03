@@ -694,7 +694,9 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     preview_column_->setObjectName("recordPreviewColumn");
     auto* preview_column_layout = new QVBoxLayout(preview_column_);
     preview_column_layout->setContentsMargins(0, 0, 0, 0);
-    preview_column_layout->setSpacing(8);
+    // Snug gap so the source/change-source row reads as the preview's context
+    // header rather than a detached control strip (HYBRID-PORT-R2B).
+    preview_column_layout->setSpacing(6);
 
     source_row_ = new QWidget(preview_column_);
     source_row_->setObjectName("recordSourceRow");
@@ -706,7 +708,8 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     source_chip_panel_->setObjectName("recordSourceChip");
     source_chip_panel_->setProperty("sourceLocked", false);
     auto* source_chip_layout = new QHBoxLayout(source_chip_panel_);
-    source_chip_layout->setContentsMargins(8, 6, 8, 6);
+    // Slimmer pill so the source reads as preview context (HYBRID-PORT-R2B).
+    source_chip_layout->setContentsMargins(11, 5, 11, 5);
     source_chip_layout->setSpacing(6);
 
     source_kind_label_ = makeLabel("SCREEN", "recordSourceKind", source_chip_panel_);
@@ -750,6 +753,10 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     setStyledStringProperty(preview_source_chip_label_, "stateRole", "muted");
     preview_context_layout->addWidget(preview_source_chip_label_, 0, Qt::AlignLeft | Qt::AlignVCenter);
     preview_context_layout->addStretch(1);
+    // Vestigial pre-R2A duplicate of the source chip — its only child label is
+    // always hidden, so the whole row is collapsed to remove a dead gap above the
+    // preview. Kept constructed so updatePreviewContextChips() pointers stay valid.
+    preview_context_row_->setVisible(false);
     preview_column_layout->addWidget(preview_context_row_);
 
     preview_surface_host_ = new QWidget(preview_column_);
@@ -2901,8 +2908,15 @@ QString RecordPage::buildChromeStatusLabel() const {
         return QStringLiteral("STARTING");
     case UiRecordingState::Stopping:
         return QStringLiteral("STOPPING");
-    case UiRecordingState::Ready:
     case UiRecordingState::Completed:
+        // A clean, saved recording reads as "Saved" (green) in the title-bar pill
+        // for as long as the result dock is visible; any other completed case
+        // (e.g. no usable result) falls back to the neutral ready status. This is
+        // derived purely from the existing view-model result state — no new
+        // coordinator/state-machine state is introduced.
+        return (view_model_.HasResult() && view_model_.last_succeeded) ? QStringLiteral("SAVED")
+                                                                       : QStringLiteral("READY");
+    case UiRecordingState::Ready:
     default:
         return QStringLiteral("READY");
     }
