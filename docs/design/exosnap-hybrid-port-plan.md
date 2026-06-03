@@ -9,51 +9,113 @@ Last refreshed: 2026-06-03
 
 ## Overview
 
-This plan sequences the native Qt Widgets + QSS build of the Hybrid v3 design. Each phase is shippable on its own. Phases 1–3 land the MVP and resolve current "debug-heavy / oversized / kiosk" feedback. Phases 4–6 layer on modals, telemetry, and utility-surface polish.
+This plan sequences the native Qt Widgets + QSS build of the Hybrid v3 design. Each phase is shippable on its own. Phases R1A–R3 land the MVP and resolve current "debug-heavy / oversized / kiosk" feedback. Phases R4–R6 layer on modals, telemetry, and utility-surface polish.
 
 The prototype at `.workspace/design/exosnap-hybrid-v3/ExoSnap.html` is the pixel reference.
 
 ---
 
-## HYBRID-PORT-R1 — Tokens / Shell / Accent Foundation
+## HYBRID-PORT-R1A — Tokens / Fonts / Accent Foundation
 
 ### Scope
 
-- Frameless `QMainWindow` with custom title-bar widget hosting top navigation and min/max/close.
-- Generate QSS from a single palette / type / spacing token dict (new hybrid tokens: `#0E0E10` bg, `#151517` surf, `#1C1C1F` surf2, `#9BD9D2` accent, etc.).
-- Bundle Hanken Grotesk + IBM Plex Mono via `QFontDatabase::addApplicationFont`.
-- Status pill (Ready / Recording / Paused) bound to recording state machine.
-- Replace current sidebar navigation with top tab bar.
-- Navigation: Record, Settings, Hotkeys, Diagnostics, Logs, About (hybrid IA; replaces Video/Audio/Output/Advanced as top-level destinations).
-- Accent selection support (6 curated accents with live CSS variable-like mechanism).
+- Introduce Hybrid v3 token structure.
+- Map Hybrid colors into `ExoSnapPalette`, `ExoSnapMetrics`, and QSS variables/roles.
+- Add or prepare font loading for Hanken Grotesk and IBM Plex Mono via `QFontDatabase::addApplicationFont`.
+- Implement default accent token support (single primary accent: Studio Mint `#9BD9D2`).
+- Prepare curated accent variant data structures (6 accents) for future use.
+- Do not require a visible Tweaks panel yet unless trivial and low-risk.
+- Do not replace navigation/shell yet.
+- Do not remove the existing sidebar yet.
+- Do not remove `GlobalRecordingBar` yet.
+
+Accent scope note:
+- Accent variants exist in the design system as defined data structures.
+- The first Qt port uses the default Studio Mint accent.
+- A user-facing accent switcher / Tweaks panel is optional and should not block this phase.
+- Do not implement live accent CSS-variable switching if it increases risk.
 
 ### Likely files/classes
 
 **New / heavily modified:**
-- `MainWindow.h/.cpp` — replace `QListWidget` sidebar with top nav `QButtonGroup`; remove `QStackedWidget` in favor of framed window approach.
-- `ui/chrome/OperationalTitleBar.h/.cpp` — merge title bar and nav into a single 52px bar hosting logo + nav + status pill + window controls.
-- `ui/theme/exosnap_dark.qss` — full palette replacement (new hybrid tokens).
-- `ui/theme/ExoSnapPalette.h` — new color tokens.
+- `ui/theme/exosnap_dark.qss` — palette replacement (new hybrid tokens: `#0E0E10` bg, `#151517` surf, `#1C1C1F` surf2, `#9BD9D2` accent, etc.).
+- `ui/theme/ExoSnapPalette.h` — new hybrid color tokens.
 - `ui/theme/ExoSnapMetrics.h` — new spacing/radius metrics (8px base grid, 9–16px radii scale).
-- `ui/theme/ExoSnapTheme.h/.cpp` — font bundle loading.
+- `ui/theme/ExoSnapTheme.h/.cpp` — updated `ApplyExoSnapTheme()` loading the new QSS; font bundle loading.
+- `ui/brand/BrandMarkWidget.h/.cpp` — update to new circular aperture mark logo.
+
+**Not changed (yet):**
+- `MainWindow.h/.cpp` — sidebar and page stack remain unchanged.
+- `ui/chrome/OperationalTitleBar.h/.cpp` — title bar unchanged.
+- `ui/chrome/GlobalRecordingBar.h/.cpp` — global bar unchanged.
+
+### Risks
+
+- QSS token migration touches nearly every widget style rule.
+- Font bundling and license compliance for Hanken Grotesk + IBM Plex Mono.
+- New tokens must render correctly on every existing page without structural changes.
+
+### Validation
+
+- Screenshot smoke: every page at default and maximized widths — existing pages still render correctly with new tokens.
+- No functional changes.
+- Existing tests green.
+- Verify new tokens produce correct dark-mode look; no leftover amber-gold palette from previous design system.
+
+### Do not touch
+
+- Navigation, sidebar, shell structure.
+- Capture backend, encoder, muxer, audio pipeline.
+- Recording state machine logic.
+- Diagnostics backend probes.
+- Settings schema / profile registry.
+- Tests (update only if existing tests break due to token changes).
+
+### Model recommendation
+
+**Claude Opus xhigh** — token system design, QSS variable mapping, font bundling. The split from shell work reduces risk.
+
+---
+
+## HYBRID-PORT-R1B — Shell / Top Nav / Titlebar
+
+### Scope
+
+- Replace or adapt the current shell to the Hybrid v3 top-navigation direction.
+- Add custom titlebar/status pill behavior.
+- Move toward top navigation: Record, Settings, Hotkeys, Diagnostics, Logs, About.
+- Keep routing implementation low-risk.
+- Top navigation may continue to drive the existing `QStackedWidget` page model. Keep or replace `QStackedWidget` based on lowest-risk implementation. Do not replace routing architecture just for aesthetic reasons.
+- Do not require complete accent Tweaks UI unless already prepared in R1A.
+- Remove/demote old sidebar only once top nav is working.
+- Remove/absorb GlobalRecordingBar only if equivalent status behavior exists in the title bar pill.
+
+### Likely files/classes
+
+**New / heavily modified:**
+- `MainWindow.h/.cpp` — add top nav `QButtonGroup`; sidebar removal only after top nav is functional. Keep `QStackedWidget` behind the nav if it is the safest routing model.
+- `ui/chrome/OperationalTitleBar.h/.cpp` — merge title bar and nav into a single 52px bar hosting logo + nav tabs + status pill + window controls.
+- `ui/chrome/GlobalRecordingBar.h/.cpp` — demoted or absorbed into title-bar status pill once equivalent behavior is verified.
+- `ui/chrome/RecordingStatusGuards.h` — update guards for title-bar status pill.
 
 **Removed / repurposed:**
-- `ui/chrome/GlobalRecordingBar.h/.cpp` — global bar absorbed into title-bar status pill.
-- `ui/brand/BrandMarkWidget.h/.cpp` — update to new circular aperture mark logo.
+- Sidebar `QListWidget` — removed only after top nav is fully functional.
+- `GlobalRecordingBar` — absorbed only when title-bar status pill covers the same states.
 
 ### Risks
 
 - Frameless window on Windows requires careful DPI and resize handling.
 - Sidebar → top nav migration requires routing all page-creation code.
-- QSS token migration touches nearly every widget style rule.
-- Font bundling and license compliance for Hanken Grotesk + IBM Plex Mono.
+- Status pill must correctly consume recording state machine states (Ready / Recording / Paused / Completed).
+- Removing GlobalRecordingBar prematurely could lose recording-health visibility.
 
 ### Validation
 
-- Screenshot smoke: every page at default and maximized widths, title bar showing all states (Ready / Recording / Paused).
-- Verify accent toggle recolors the full app live without restart.
-- Verify navigation switches pages, correct tab is highlighted, no stale pages remain.
-- `git diff --stat` confirms only intended files changed; no sidebar or GlobalRecordingBar references remain active in page layouts.
+- Navigation smoke for all pages: Record, Settings, Hotkeys, Diagnostics, Logs, About.
+- Titlebar states: Ready (green), Recording (red + metrics), Paused (amber).
+- No regression to recording behavior — start/stop/pause/resume all work.
+- Screenshot smoke default + maximized.
+- Verify all pages are still accessible and render correctly.
 
 ### Do not touch
 
@@ -65,7 +127,7 @@ The prototype at `.workspace/design/exosnap-hybrid-v3/ExoSnap.html` is the pixel
 
 ### Model recommendation
 
-**Claude Opus xhigh** — architecturally sensitive (frameless window, token system, nav restructuring). Requires careful port of the prototype's CSS variable system to QSS.
+**Claude Opus xhigh** — architecturally sensitive (frameless window, nav restructuring, title-bar state pill). The split from token work reduces the blast radius.
 
 ---
 
@@ -73,7 +135,8 @@ The prototype at `.workspace/design/exosnap-hybrid-v3/ExoSnap.html` is the pixel
 
 ### Scope
 
-- `QVideoWidget` / `QOpenGLWidget` preview surface filling available space.
+- Preview-first layout: the preview fills available space. The design target is visual/layout behavior, not a mandate to replace the preview backend.
+- **Preserve the existing `PreviewSurface` / DXGI preview integration where possible.** Do not replace the preview backend with `QVideoWidget`/`QOpenGLWidget` unless there is a specific technical reason in a later dedicated capture/preview slice.
 - Remove debug terminal / legacy transport from preview surface.
 - Stable bottom transport dock `QFrame` with 3-zone grid (left: source toggles | center: duration | right: actions).
 - All four states: Ready, Recording, Paused, Completed (Result).
@@ -82,11 +145,25 @@ The prototype at `.workspace/design/exosnap-hybrid-v3/ExoSnap.html` is the pixel
 - Countdown select (Off / 3s / 5s / 10s) on the right side of the dock.
 - Preview overlay elements: REC/PAUSED chip, watermark, source name, "Change source" pill, result playback overlay.
 
+### Webcam PiP — MVP vs Later
+
+**MVP:**
+- PiP visible in Record preview if webcam recording is enabled and a preview path exists.
+- Settings contains webcam preview/device/mirror/chroma controls.
+- No placement controls in Settings.
+
+**Later:**
+- Free drag/resize/placement in Record preview if not already technically supported.
+- Advanced PiP styling/borders/shapes.
+- Real-time chroma processing if not already implemented.
+
+Do not present PiP as fake-active if the Qt app cannot support drag/resize yet.
+
 ### Likely files/classes
 
 **New / heavily modified:**
 - `pages/RecordPage.h/.cpp` — complete restructure: preview-dominant layout, dock integration, remove legacy right-rail transport.
-- `ui/widgets/PreviewSurface.h/.cpp` — update for hybrid dimensions, overlay support.
+- `ui/widgets/PreviewSurface.h/.cpp` — preserve existing DXGI/rendering path; update layout and overlay support only.
 - New: `ui/widgets/TransportDock.h/.cpp` — 3-zone grid dock widget with all state layouts.
 - New: `ui/widgets/AudioSourceToggle.h/.cpp` — circular icon toggle (System/Mic/Webcam/App).
 - New: `ui/widgets/StereoMeterWidget.h/.cpp` — custom paintEvent stereo dB meter (L/R bars).
@@ -99,7 +176,7 @@ The prototype at `.workspace/design/exosnap-hybrid-v3/ExoSnap.html` is the pixel
 
 ### Risks
 
-- Preview surface integration must not break existing DXGI swapchain rendering.
+- Preview surface layout changes must not break existing DXGI swapchain rendering.
 - Transport dock state transitions (Ready → Recording → Paused → Completed) must be driven by `RecordingCoordinator` state machine.
 - Stereo meter requires real audio thread feed; ensure ~30 Hz update doesn't block UI thread.
 - Completed state needs access to result data (filename, size, duration, format) from recording coordinator.
@@ -112,14 +189,16 @@ The prototype at `.workspace/design/exosnap-hybrid-v3/ExoSnap.html` is the pixel
 - Verify countdown works (dismissed if not yet wired end-to-end; clearly labeled as planned).
 - Verify preview fills available space on window resize.
 - Verify no regression on Settings/Diagnostics/other pages.
+- Verify existing DXGI preview still renders correctly after layout changes.
 
 ### Do not touch
 
+- DXGI capture backend / swapchain.
 - Settings/config pages.
 - Diagnostics.
 - Source picker modal.
 - Hotkeys/Logs/About.
-- Capture backend, encoder, muxer.
+- Encoder, muxer.
 - Settings schema.
 
 ### Model recommendation
@@ -155,7 +234,7 @@ The prototype at `.workspace/design/exosnap-hybrid-v3/ExoSnap.html` is the pixel
 - New: `ui/widgets/SettingsCard.h/.cpp` — card container with title, right accessory, border, radius (shared across cards).
 - `ui/widgets/AudioSourceRow.h/.cpp` — update to compact row style (icon + label + dB readout + toggle + inline stereo meter).
 - `ui/widgets/SegmentedControl.h/.cpp` — new widget for segmented button groups (container, quality, FPS, timing, output resolution).
-- New: `ui/widgets/ChromaKeyPicker.h/.cpp` — color swatch grid for webcam chroma key.
+- New: `ui/widgets/ChromaKeyPicker.h/.cpp` — color swatch grid for webcam chroma key. **MVP:** UI may show chroma key controls only if the feature exists or is clearly disabled/planned. Do not present chroma key as active if the capture/compositor path does not process it. **Later:** real-time chroma key processing, tolerance pipeline integration, preview parity with final recording output.
 
 **Removed / repurposed:**
 - `pages/VideoPage.h/.cpp` — absorbed into SettingsPage.
@@ -263,6 +342,19 @@ The prototype at `.workspace/design/exosnap-hybrid-v3/ExoSnap.html` is the pixel
 - Recommendation card based on detected issues.
 - Telemetry confined to this page — no global CPU/GPU/RAM/Disk stats.
 
+### Pipeline metrics — MVP vs Later
+
+**MVP:**
+- Pipeline section can be static/planned if real metrics are not instrumented.
+- Static/planned cards must be clearly labeled (e.g., "Pipeline metrics not yet instrumented").
+- Capability list should remain real (uses existing backend probes).
+- No fake precision on any metric.
+
+**Later:**
+- Live latency/queue depth/drops/throughput instrumentation.
+- Sparkline charts for encoder latency and bitrate.
+- Real bottleneck detection based on live data.
+
 ### Likely files/classes
 
 **New / heavily modified:**
@@ -276,9 +368,10 @@ The prototype at `.workspace/design/exosnap-hybrid-v3/ExoSnap.html` is the pixel
 
 ### Risks
 
-- Pipeline metrics may not yet have real instrumentation. Static cards must be clearly labeled if data is simulated.
+- Pipeline metrics may not yet have real instrumentation. Static cards must be clearly labeled (e.g., "Pipeline metrics not yet instrumented"). Never simulate live precision.
 - Sparklines via Qt Charts add a dependency; custom paintEvent is lower-risk.
 - Capability matrix must stay in sync with backend probes.
+- Do not show fake live gauges; static/planned cards are acceptable if honestly labeled.
 
 ### Validation
 
@@ -351,12 +444,13 @@ The prototype at `.workspace/design/exosnap-hybrid-v3/ExoSnap.html` is the pixel
 
 | Phase | Name | Priority | Effort | Model |
 |---|---|---|---|---|
-| R1 | Tokens / Shell / Accent Foundation | MVP | High | Claude Opus xhigh |
+| R1A | Tokens / Fonts / Accent Foundation | MVP | Medium | Claude Opus xhigh |
+| R1B | Shell / Top Nav / Titlebar | MVP | High | Claude Opus xhigh |
 | R2 | Record Preview + Stable Bottom Dock | MVP | High | Claude Opus xhigh/max |
-| R3 | Settings Compact IA | MVP | High | Codex xhigh or Claude Opus xhigh |
+| R3 | Settings Compact IA | MVP | High | Codex xhigh if docs/spec are precise; Claude Opus xhigh if layout interpretation is needed |
 | R4 | Source Modal + Region UX | MVP | High | Claude Opus xhigh/max |
-| R5 | Diagnostics Pipeline | MVP | Medium | Codex xhigh or Claude Opus xhigh |
-| R6 | Hotkeys / About / Logs Polish | MVP | Medium | Codex high/xhigh |
+| R5 | Diagnostics Pipeline | MVP | Medium | Codex xhigh if real metrics exist; Claude Opus xhigh if UI scaffolding/planned-state labeling is needed |
+| R6 | Hotkeys / About / Logs Polish | MVP | Medium | Codex high/xhigh
 
 ---
 
@@ -365,6 +459,6 @@ The prototype at `.workspace/design/exosnap-hybrid-v3/ExoSnap.html` is the pixel
 - Do not touch: capture backend, encoder, muxer, WASAPI audio pipeline, recording state machine internals, settings schema (add fields only if needed), build metadata generation.
 - Every phase must pass screenshot smoke at default and maximized window sizes.
 - Every phase must pass existing unit tests; fix only tests broken by removed/renamed widgets.
-- If a metric is not real in the current slice, label it clearly as planned/static.
-- UI-only phases may use simulated data but must not claim live instrumentation.
+- If a metric is not real in the current slice, label it clearly as planned/static. Never simulate live precision.
+- UI-only phases may use simulated placeholder data but must not claim live instrumentation.
 - Commit one phase at a time; do not mix phases in a single commit.

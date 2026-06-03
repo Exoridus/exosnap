@@ -15,6 +15,7 @@ Hybrid v3 is the approved design target direction.
 - Telemetry limited to Diagnostics, Logs, recording-health metrics, and audio meters.
 - Dark mode only.
 - Qt Widgets + QSS is the recommended native build stack.
+- Accent variants exist in the design system. The first Qt port uses the default Studio Mint accent. A user-facing accent switcher is optional and should not block the initial token/shell work.
 
 ---
 
@@ -93,10 +94,22 @@ Metrics shown during recording are recording-health only: dropped frames, frame 
 
 ### Layout
 
-- Preview-first: `QVideoWidget` / `QOpenGLWidget` fills available space, 16:9 ratio.
+- Preview-first: the preview fills available space, 16:9 ratio. Use the existing `PreviewSurface` / DXGI preview integration where possible. The design target is visual/layout behavior — preserve the existing preview backend unless a later dedicated capture/preview slice requires replacement.
 - Stable bottom transport dock (`QFrame`, 3-zone grid: left | duration | action).
-- WYSIWYG webcam PiP overlay in Record only (draggable, corner-resizable, mirror support).
+- WYSIWYG webcam PiP overlay in Record only.
 - Page padding: 20px around preview and dock.
+
+### Webcam PiP — MVP vs Later
+
+**MVP:**
+- PiP visible in Record preview if webcam recording is enabled and a preview path exists.
+- Settings contains webcam preview/device/mirror/chroma controls.
+- No placement controls in Settings.
+
+**Later:**
+- Free drag/resize/placement in Record preview if not already technically supported.
+- Advanced PiP styling/borders/shapes.
+- Real-time chroma processing if not already implemented.
 
 ### Transport dock — state layouts
 
@@ -186,6 +199,10 @@ Meters are live when source is on, idle (-∞) when off. Gain/volume controls ar
 | Chroma tolerance | Slider (0–100%) |
 
 No placement controls. Hint: "Position & size are set directly in the Record preview."
+
+**Chroma key — MVP vs Later:**
+- **MVP:** UI may show chroma key controls only if the feature exists or is clearly disabled/planned. Do not present chroma key as active if the capture/compositor path does not process it.
+- **Later:** Real-time chroma key processing, tolerance pipeline integration, preview parity with final recording output.
 
 ### Output card (span 2)
 
@@ -315,6 +332,19 @@ Sparkline charts for:
 
 Actionable guidance based on detected issues (e.g., "Application audio isolation unavailable for this target — use System audio or Window mode").
 
+### Pipeline metrics — MVP vs Later
+
+**MVP:**
+- Pipeline section can be static/planned if real metrics are not instrumented.
+- Static/planned cards must be clearly labeled (e.g., "Pipeline metrics not yet instrumented").
+- Capability list should remain real (uses existing backend probes).
+- No fake precision on any metric.
+
+**Later:**
+- Live latency/queue depth/drops/throughput instrumentation.
+- Sparkline charts (Qt Charts or custom paintEvent) for encoder latency and bitrate.
+- Real bottleneck detection based on live data.
+
 ---
 
 ## 9. Hotkeys / Logs / About
@@ -368,12 +398,13 @@ Default bindings:
 | Area | What's in |
 |---|---|
 | Shell | Frameless window, top nav, custom title bar, status pill |
-| Tokens / accent | Single palette → QSS, bundled fonts (Hanken Grotesk + IBM Plex Mono), accent selection |
-| Record | Preview surface, stable 3-zone bottom transport dock, all 4 states (ready/recording/paused/completed), countdown select, source-change pill |
+| Tokens / accent | Single palette → QSS, bundled fonts (Hanken Grotesk + IBM Plex Mono), default Studio Mint accent (curated accent variants in data structures; user-facing accent switcher is optional/later) |
+| Record | Preview surface (preserving existing DXGI path), stable 3-zone bottom transport dock, all 4 states (ready/recording/paused/completed), countdown select, source-change pill |
+| Webcam PiP | Visible in Record preview if webcam is enabled and a preview path exists (drag/resize/free placement is Later) |
 | Settings | Two-column card grid, compact controls (segmented, select, toggle), Format & Encoding card, Audio card, Output card |
-| Webcam | Settings card with preview, device/resolution/mirror/chroma controls (no PiP placement in MVP; position/size only in Record preview) |
+| Webcam card | Settings card with preview, device/resolution/mirror controls; chroma key UI only if feature exists or is clearly disabled/planned |
 | Source picker | In-window modal, three tabs (Displays / Windows / Region), card grids, region presets, basic region draw/resize |
-| Diagnostics | Capability matrix, static pipeline cards with status labels (clearly labeled if metrics are not yet live) |
+| Diagnostics | Capability matrix (real backend probes), pipeline section static/planned if metrics not instrumented (clearly labeled) |
 | Hotkeys | Table display with active bindings, reset button |
 | Logs | Contained log viewer, mono body, level coloring |
 | About | Clean centered dialog with version/build/commit/author/GitHub |
@@ -383,14 +414,14 @@ Default bindings:
 | Area | What's deferred |
 |---|---|
 | Region overlay | Full resize/move/preset behavior (if not fully implemented) |
-| Webcam PiP | Drag/resize/full WYSIWYG in Record preview |
-| Chroma key | Real-time processing (if not actually implemented) |
-| Pipeline metrics | Live latency/throughput/drops gauges (static cards until instrumentation lands) |
-| Sparklines | Qt Charts integration (ship static gauges first) |
+| Webcam PiP | Drag/resize/free placement in Record preview |
+| Chroma key | Real-time processing with tolerance pipeline integration and preview parity (if not actually implemented) |
+| Pipeline metrics | Live latency/throughput/drops gauges + sparklines (static cards until instrumentation lands) |
 | Hotkeys rebinding | Click-to-rebind + conflict detection |
 | Logs filtering | All / Info / Issues filter |
 | Presets | Full schema migration, save/manage/export |
 | Audio meters | Live dBFS reading in Settings (static layout until real audio thread feed) |
+| Accent switcher | User-facing Tweaks panel / live accent switching / persisted accent preference |
 
 ---
 
