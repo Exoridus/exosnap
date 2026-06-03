@@ -9,16 +9,14 @@ namespace exosnap::ui::brand {
 // Hybrid v3 aperture mark: concentric rings reducing to a centre dot.
 //
 // Idle uses the Studio Mint accent. The recording variant turns the inner ring and the centre
-// dot coral. Recording-state wiring into the shell is intentionally out of scope for
-// HYBRID-PORT-R1A (the title bar / GlobalRecordingBar still own recording status), so the
-// recording variant is exposed via setRecording() for a later phase to drive. The mark renders
-// idle/accent until then.
+// dot coral. As of HYBRID-PORT-R1B the shell title bar drives setRecording() from the recorder
+// state machine, so the mark tracks the live recording state alongside the status pill.
 class BrandMarkWidget : public QWidget {
   public:
     explicit BrandMarkWidget(QWidget* parent = nullptr);
 
-    // Switches between the idle (accent) and recording (coral) variants. Currently unwired in
-    // the shell; provided for the R1B title-bar status work.
+    // Switches between the idle (accent) and recording (coral) variants. Driven by the title
+    // bar from the recorder state machine.
     void setRecording(bool recording);
     bool isRecording() const {
         return recording_;

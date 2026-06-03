@@ -1,14 +1,21 @@
 #include "OperationalTitleBar.h"
 
 #include "../brand/BrandMarkWidget.h"
+#include "../theme/ExoSnapPalette.h"
 #include "../widgets/StatusPill.h"
 
+#include <QAbstractButton>
 #include <QApplication>
+#include <QButtonGroup>
+#include <QColor>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLayoutItem>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPen>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QStyle>
 #include <QWindow>
 
@@ -24,26 +31,43 @@ OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
+    // Brand: aperture mark + lowercase two-tone wordmark (exo neutral · snap accent).
     auto* brand_slot = new QWidget(this);
     brand_slot->setObjectName("titlebarBrandSlot");
-    brand_slot->setFixedWidth(150);
     auto* brand_layout = new QHBoxLayout(brand_slot);
-    brand_layout->setContentsMargins(10, 0, 10, 0);
+    brand_layout->setContentsMargins(16, 0, 8, 0);
     brand_layout->setSpacing(8);
 
-    auto* mark = new ui::brand::BrandMarkWidget(brand_slot);
-    mark->setFixedSize(20, 20);
-    auto* wordmark = new QLabel("EXO·SNAP", brand_slot);
+    brand_mark_ = new ui::brand::BrandMarkWidget(brand_slot);
+    brand_mark_->setFixedSize(20, 20);
+
+    auto* wordmark = new QLabel(brand_slot);
     wordmark->setProperty("labelRole", "titlebarWordmark");
+    wordmark->setTextFormat(Qt::RichText);
+    wordmark->setText(QStringLiteral("<span style=\"color:%1;\">exo</span><span style=\"color:%2;\">snap</span>")
+                          .arg(QString::fromLatin1(theme::ExoSnapPalette::kText0),
+                               QString::fromLatin1(theme::ExoSnapPalette::kAccent)));
 
-    brand_layout->addWidget(mark, 0, Qt::AlignVCenter);
+    brand_layout->addWidget(brand_mark_, 0, Qt::AlignVCenter);
     brand_layout->addWidget(wordmark, 0, Qt::AlignVCenter);
-    brand_layout->addStretch(1);
 
+    // Top navigation tabs (populated via setNavItems()).
+    auto* nav_container = new QWidget(this);
+    nav_container->setObjectName("titlebarNav");
+    nav_layout_ = new QHBoxLayout(nav_container);
+    nav_layout_->setContentsMargins(14, 0, 0, 0);
+    nav_layout_->setSpacing(2);
+
+    nav_group_ = new QButtonGroup(this);
+    nav_group_->setExclusive(true);
+    connect(nav_group_, &QButtonGroup::idClicked, this, &OperationalTitleBar::navPageRequested);
+
+    // Flexible drag region between nav and status.
     auto* drag_slot = new QWidget(this);
     drag_slot->setObjectName("titlebarDragSlot");
     drag_slot->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
 
+    // Compact status pill bound to recording state.
     auto* status_slot = new QWidget(this);
     status_slot->setObjectName("titlebarStatusSlot");
     auto* status_layout = new QHBoxLayout(status_slot);
@@ -51,10 +75,12 @@ OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     status_layout->setSpacing(0);
 
     status_pill_ = new ui::widgets::StatusPill(status_slot);
-    status_pill_->setText("READY");
+    status_pill_->setObjectName("titlebarStatusChip");
+    status_pill_->setText(QStringLiteral("Ready"));
     status_pill_->setTone(ui::widgets::StatusPill::Tone::Ready);
     status_layout->addWidget(status_pill_, 0, Qt::AlignVCenter);
 
+    // Window controls.
     auto* controls = new QWidget(this);
     controls->setObjectName("titlebarControls");
     controls->setFixedWidth(138);
@@ -78,6 +104,7 @@ OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     controls_layout->addWidget(close_btn_);
 
     root->addWidget(brand_slot);
+    root->addWidget(nav_container);
     root->addWidget(drag_slot, 1);
     root->addWidget(status_slot, 0, Qt::AlignVCenter);
     root->addWidget(controls);
@@ -89,11 +116,53 @@ OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     refreshStatusChip();
 }
 
+void OperationalTitleBar::setNavItems(const QVector<NavItem>& items) {
+    // Idempotent: drop any previously built tabs first.
+    const QList<QAbstractButton*> existing = nav_group_->buttons();
+    for (QAbstractButton* button : existing)
+        nav_group_->removeButton(button);
+    while (QLayoutItem* layout_item = nav_layout_->takeAt(0)) {
+        if (QWidget* widget = layout_item->widget())
+            widget->deleteLater();
+        delete layout_item;
+    }
+
+    QWidget* nav_container = nav_layout_->parentWidget();
+    for (const NavItem& item : items) {
+        auto* tab = new QPushButton(item.label, nav_container);
+        tab->setObjectName("titlebarNavTab");
+        tab->setProperty("titlebarNavTab", true);
+        tab->setFocusPolicy(Qt::NoFocus);
+        tab->setCursor(Qt::PointingHandCursor);
+        tab->setFixedHeight(kHeight);
+
+        if (item.page_index >= 0) {
+            tab->setCheckable(true);
+            nav_group_->addButton(tab, item.page_index);
+        } else {
+            // Action item (About): opens a dialog and never stays highlighted.
+            tab->setProperty("navAction", true);
+            connect(tab, &QPushButton::clicked, this, &OperationalTitleBar::aboutRequested);
+        }
+        nav_layout_->addWidget(tab);
+    }
+}
+
+void OperationalTitleBar::setActivePage(int page_index) {
+    QAbstractButton* button = nav_group_->button(page_index);
+    if (button == nullptr)
+        return;
+    const QSignalBlocker blocker(nav_group_);
+    button->setChecked(true);
+}
+
 void OperationalTitleBar::setRecordingActive(bool recording) {
     if (recording_active_ == recording)
         return;
     recording_active_ = recording;
     setProperty("recording", recording_active_);
+    if (brand_mark_ != nullptr)
+        brand_mark_->setRecording(recording_active_);
     style()->unpolish(this);
     style()->polish(this);
     refreshStatusChip();
@@ -225,8 +294,10 @@ void OperationalTitleBar::paintEvent(QPaintEvent* event) {
     Q_UNUSED(event);
 
     QPainter painter(this);
-    painter.fillRect(rect(), QColor("#14130f"));
-    painter.setPen(QPen(recording_active_ ? QColor("#d7a744") : QColor("#292826"), 1.0));
+    painter.fillRect(rect(), QColor(theme::ExoSnapPalette::kBg0));
+    // Hairline separator; turns coral while recording to echo the live state.
+    const QColor line = recording_active_ ? QColor(theme::ExoSnapPalette::kErr) : QColor(255, 255, 255, 18);
+    painter.setPen(QPen(line, 1.0));
     painter.drawLine(0, height() - 1, width(), height() - 1);
 }
 
@@ -235,35 +306,35 @@ void OperationalTitleBar::refreshStatusChip() {
     if (status.contains(QStringLiteral("REC"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Recording);
         status_pill_->setDotVisible(true);
-        status_pill_->setText(QStringLiteral("REC"));
+        status_pill_->setText(QStringLiteral("Recording"));
     } else if (status.contains(QStringLiteral("PAUSED"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
         status_pill_->setDotVisible(true);
-        status_pill_->setText(QStringLiteral("PAUSED"));
+        status_pill_->setText(QStringLiteral("Paused"));
     } else if (status.contains(QStringLiteral("STOPPING"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
         status_pill_->setDotVisible(true);
-        status_pill_->setText(QStringLiteral("STOPPING"));
+        status_pill_->setText(QStringLiteral("Stopping"));
     } else if (status.contains(QStringLiteral("STARTING"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
         status_pill_->setDotVisible(true);
-        status_pill_->setText(QStringLiteral("STARTING"));
+        status_pill_->setText(QStringLiteral("Starting"));
     } else if (status.contains(QStringLiteral("CHECK"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
         status_pill_->setDotVisible(true);
-        status_pill_->setText(QStringLiteral("CHECKING"));
+        status_pill_->setText(QStringLiteral("Checking"));
     } else if (status.contains(QStringLiteral("ERROR"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Blocked);
         status_pill_->setDotVisible(true);
-        status_pill_->setText(QStringLiteral("ERROR"));
+        status_pill_->setText(QStringLiteral("Error"));
     } else if (status.contains(QStringLiteral("BLOCK"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Blocked);
         status_pill_->setDotVisible(true);
-        status_pill_->setText(QStringLiteral("BLOCKED"));
+        status_pill_->setText(QStringLiteral("Blocked"));
     } else {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Ready);
-        status_pill_->setDotVisible(false);
-        status_pill_->setText(QStringLiteral("READY"));
+        status_pill_->setDotVisible(true);
+        status_pill_->setText(QStringLiteral("Ready"));
     }
     status_pill_->setVisible(true);
 }

@@ -1,6 +1,5 @@
 #pragma once
 #include <QKeySequence>
-#include <QListWidget>
 #include <QMainWindow>
 #include <QStackedWidget>
 #include <QString>
@@ -13,7 +12,6 @@
 #include "settings/AppSettingsStore.h"
 #include <capability/capability_set.h>
 
-class QLabel;
 class QShowEvent;
 
 namespace exosnap {
@@ -39,7 +37,6 @@ class MainWindow : public QMainWindow {
     void pauseToggleRequested();
 
   private slots:
-    void onNavRowChanged(int row);
     void onRecordChromeStateChanged(bool recording, const QString& status_label, const QString& context_text);
     void onHotkeyBindingChanged(int action_index, QKeySequence seq);
     void toggleFullScreen();
@@ -56,11 +53,9 @@ class MainWindow : public QMainWindow {
     void applyRestoredGeometry();
     void saveWindowGeometry();
 
-    int pageIndexForNavRow(int row) const;
-    int navRowForPageIndex(int index) const;
     void navigateToPage(int index);
     void setCurrentPage(int index);
-    void updatePageHeader(int index);
+    int navHighlightIndexFor(int index) const;
     void applyActiveProfileToPages();
     void refreshOutputProfileUi();
     void persistProfileState();
@@ -68,7 +63,6 @@ class MainWindow : public QMainWindow {
     void refreshDiagnosticsData();
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
-    QListWidget* nav_ = nullptr;
     QStackedWidget* stack_ = nullptr;
     RecordPage* record_page_ = nullptr;
     ConfigPage* config_page_ = nullptr;
@@ -81,9 +75,6 @@ class MainWindow : public QMainWindow {
     RecordingProfileRegistry profile_registry_;
     AppSettingsStore settings_store_;
     PersistedAppSettings persisted_settings_;
-    QLabel* page_title_label_ = nullptr;
-    QLabel* page_subtitle_label_ = nullptr;
-    QLabel* page_meta_label_ = nullptr;
     static constexpr int kHotkeyIdStartStop = 1;
     static constexpr int kHotkeyIdPauseResume = 2;
     static constexpr int kHotkeyIdSplit = 3;

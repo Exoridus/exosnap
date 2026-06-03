@@ -14,12 +14,13 @@ QWidget#mainCentral {
     background: ${bg0};
 }
 
-/* Operational titlebar */
+/* Operational titlebar (hosts brand + top nav + status pill + window controls) */
 QWidget#operationalTitleBar {
-    background: ${bg1};
+    background: ${bg0};
 }
 
 QWidget#titlebarBrandSlot,
+QWidget#titlebarNav,
 QWidget#titlebarDragSlot,
 QWidget#titlebarStatusSlot {
     background: transparent;
@@ -27,10 +28,30 @@ QWidget#titlebarStatusSlot {
 
 QLabel[labelRole="titlebarWordmark"] {
     font-family: ${font-sans};
-    font-size: 13px;
-    letter-spacing: 0.04em;
-    font-weight: 500;
+    font-size: 15px;
+    font-weight: 600;
     color: ${text0};
+}
+
+/* Top navigation tabs — active tab gets an accent underline, inactive tabs are muted. */
+QPushButton[titlebarNavTab="true"] {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 0 15px;
+    color: ${text2};
+    font-size: 13.5px;
+    font-weight: 500;
+}
+
+QPushButton[titlebarNavTab="true"]:hover {
+    color: ${text0};
+}
+
+QPushButton[titlebarNavTab="true"]:checked {
+    color: ${text0};
+    border-bottom: 2px solid ${accent};
+    font-weight: 600;
 }
 
 QPushButton#titlebarWindowButton {
@@ -57,70 +78,6 @@ QWidget#globalRecordingBar {
     background: ${bg2};
     border-top: 1px solid ${line1};
     border-bottom: 1px solid ${line1};
-}
-
-/* Sidebar */
-QWidget#mainSidebar {
-    background: ${bg1};
-    border-right: 1px solid ${line1};
-}
-
-QFrame#sidebarRule {
-    background: ${line1};
-    border: none;
-    min-height: 1px;
-    max-height: 1px;
-}
-
-QListWidget#mainNav {
-    background: transparent;
-    border: none;
-    outline: none;
-    padding: 0;
-}
-
-QListWidget#mainNav::item {
-    border: none;
-    background: transparent;
-}
-
-QWidget#sidebarFooter {
-    background: transparent;
-}
-
-/* Page header */
-QWidget#mainContent {
-    background: ${bg0};
-}
-
-QWidget#mainPageHead {
-    background: transparent;
-    border-bottom: 1px solid ${line1};
-}
-
-QLabel[labelRole="pageKicker"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.14em;
-    color: ${text2};
-}
-
-QLabel[labelRole="pageTitle"] {
-    font-size: 22px;
-    font-weight: 500;
-    color: ${text0};
-}
-
-QLabel[labelRole="pageSubtitle"] {
-    font-size: 13px;
-    color: ${text2};
-}
-
-QLabel[labelRole="pageMeta"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.06em;
-    color: ${text2};
 }
 
 QStackedWidget#mainStack {
@@ -1393,25 +1350,6 @@ QLabel[labelRole="aboutMetaValue"] {
     letter-spacing: 0.06em;
     font-weight: 600;
     color: ${text1};
-}
-
-QPushButton#sidebarAboutButton {
-    background: ${bg2};
-    border: 1px solid ${line1};
-    border-radius: ${radius-sm}px;
-    color: ${text2};
-    padding: 6px 9px;
-    min-height: 28px;
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    font-weight: 500;
-}
-
-QPushButton#sidebarAboutButton:hover {
-    color: ${accent};
-    border-color: ${line2};
-    background: ${bg3};
 }
 
 QDialog#sourcePickerDialog {

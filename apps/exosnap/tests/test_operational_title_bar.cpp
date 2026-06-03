@@ -1,0 +1,136 @@
+#include <gtest/gtest.h>
+
+#include <QApplication>
+#include <QCoreApplication>
+#include <QList>
+#include <QPushButton>
+#include <QSet>
+#include <QString>
+
+#include "ui/chrome/OperationalTitleBar.h"
+#include "ui/widgets/StatusPill.h"
+
+namespace exosnap {
+namespace {
+
+QApplication* EnsureApplication() {
+    if (auto* existing = qobject_cast<QApplication*>(QCoreApplication::instance()))
+        return existing;
+
+    static int argc = 1;
+    static char app_name[] = "operational_title_bar_tests";
+    static char* argv[] = {app_name, nullptr};
+    static QApplication app(argc, argv);
+    return &app;
+}
+
+class OperationalTitleBarTest : public ::testing::Test {
+  protected:
+    static void SetUpTestSuite() {
+        EnsureApplication();
+    }
+
+    // Page indices mirror the MainWindow page stack ordering used in production.
+    static QVector<ui::chrome::OperationalTitleBar::NavItem> DefaultNavItems() {
+        return {
+            {QStringLiteral("Record"), 0},      {QStringLiteral("Settings"), 1}, {QStringLiteral("Hotkeys"), 2},
+            {QStringLiteral("Diagnostics"), 3}, {QStringLiteral("Logs"), 4},     {QStringLiteral("About"), -1},
+        };
+    }
+
+    static QList<QPushButton*> NavTabs(const ui::chrome::OperationalTitleBar& bar) {
+        return bar.findChildren<QPushButton*>(QStringLiteral("titlebarNavTab"));
+    }
+};
+
+TEST_F(OperationalTitleBarTest, TopNav_ContainsRequiredTabsInOrder) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+
+    const QList<QPushButton*> tabs = NavTabs(bar);
+    QStringList labels;
+    for (const QPushButton* tab : tabs)
+        labels << tab->text();
+
+    const QStringList expected = {QStringLiteral("Record"),      QStringLiteral("Settings"), QStringLiteral("Hotkeys"),
+                                  QStringLiteral("Diagnostics"), QStringLiteral("Logs"),     QStringLiteral("About")};
+    EXPECT_EQ(labels, expected);
+}
+
+TEST_F(OperationalTitleBarTest, TopNav_HasNoPageNumbers) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+
+    for (const QPushButton* tab : NavTabs(bar)) {
+        for (const QChar ch : tab->text())
+            EXPECT_FALSE(ch.isDigit()) << "nav label must not contain page numbers: " << tab->text().toStdString();
+    }
+}
+
+TEST_F(OperationalTitleBarTest, TopNav_AboutIsActionNotCheckablePage) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+
+    int checkable_count = 0;
+    QPushButton* about = nullptr;
+    for (QPushButton* tab : NavTabs(bar)) {
+        if (tab->isCheckable())
+            ++checkable_count;
+        if (tab->text() == QStringLiteral("About"))
+            about = tab;
+    }
+
+    // The five routed pages are checkable tabs; About opens a dialog and must not be checkable.
+    EXPECT_EQ(checkable_count, 5);
+    ASSERT_NE(about, nullptr);
+    EXPECT_FALSE(about->isCheckable());
+}
+
+TEST_F(OperationalTitleBarTest, SetActivePage_HighlightsMatchingTab) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+
+    bar.setActivePage(3); // Diagnostics
+    for (const QPushButton* tab : NavTabs(bar)) {
+        if (!tab->isCheckable())
+            continue;
+        EXPECT_EQ(tab->isChecked(), tab->text() == QStringLiteral("Diagnostics"))
+            << "tab=" << tab->text().toStdString();
+    }
+}
+
+TEST_F(OperationalTitleBarTest, StatusPill_ReflectsReadyRecordingPaused) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+
+    auto* pill = bar.findChild<ui::widgets::StatusPill*>(QStringLiteral("titlebarStatusChip"));
+    ASSERT_NE(pill, nullptr);
+
+    bar.setStatusLabel(QStringLiteral("READY"));
+    EXPECT_EQ(pill->text(), QStringLiteral("Ready"));
+    EXPECT_EQ(pill->tone(), ui::widgets::StatusPill::Tone::Ready);
+
+    bar.setStatusLabel(QStringLiteral("REC"));
+    EXPECT_EQ(pill->text(), QStringLiteral("Recording"));
+    EXPECT_EQ(pill->tone(), ui::widgets::StatusPill::Tone::Recording);
+
+    bar.setStatusLabel(QStringLiteral("PAUSED"));
+    EXPECT_EQ(pill->text(), QStringLiteral("Paused"));
+    EXPECT_EQ(pill->tone(), ui::widgets::StatusPill::Tone::Warn);
+}
+
+TEST_F(OperationalTitleBarTest, Shell_HasNoGlobalTransportButtons) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+
+    const QStringList forbidden = {QStringLiteral("Start"),  QStringLiteral("Stop"),         QStringLiteral("Pause"),
+                                   QStringLiteral("Resume"), QStringLiteral("Record again"), QStringLiteral("Mic"),
+                                   QStringLiteral("Marker")};
+    for (const QPushButton* button : bar.findChildren<QPushButton*>()) {
+        EXPECT_FALSE(forbidden.contains(button->text()))
+            << "shell must not host transport control: " << button->text().toStdString();
+    }
+}
+
+} // namespace
+} // namespace exosnap

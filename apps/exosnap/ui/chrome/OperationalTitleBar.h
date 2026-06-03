@@ -1,11 +1,19 @@
 #pragma once
 
+#include <QString>
+#include <QVector>
 #include <QWidget>
 
 #include "../theme/ExoSnapMetrics.h"
 
+class QButtonGroup;
+class QHBoxLayout;
 class QLabel;
 class QPushButton;
+
+namespace exosnap::ui::brand {
+class BrandMarkWidget;
+}
 
 namespace exosnap::ui::widgets {
 class StatusPill;
@@ -23,9 +31,23 @@ class OperationalTitleBar : public QWidget {
         Close,
     };
 
+    // A top-navigation entry. A non-negative page_index selects a QStackedWidget page; a
+    // negative page_index marks an action item (e.g. About) that opens a dialog instead of
+    // switching the routed page.
+    struct NavItem {
+        QString label;
+        int page_index = -1;
+    };
+
     explicit OperationalTitleBar(QWidget* parent = nullptr);
 
     static constexpr int kHeight = ui::theme::ExoSnapMetrics::kTitlebarHeight;
+
+    // Builds the top-navigation tabs. Page items become checkable tabs in an exclusive group;
+    // action items become plain buttons that emit aboutRequested().
+    void setNavItems(const QVector<NavItem>& items);
+    // Highlights the tab bound to page_index (no-op when no tab maps to it).
+    void setActivePage(int page_index);
 
     void setRecordingActive(bool recording);
     bool isRecordingActive() const noexcept;
@@ -40,6 +62,8 @@ class OperationalTitleBar : public QWidget {
     QRect maximizeButtonRectInWindow() const;
 
   signals:
+    void navPageRequested(int page_index);
+    void aboutRequested();
     void minimizeRequested();
     void maximizeRestoreRequested();
     void closeRequested();
@@ -52,6 +76,9 @@ class OperationalTitleBar : public QWidget {
     void paintEvent(QPaintEvent* event) override;
 
   private:
+    ui::brand::BrandMarkWidget* brand_mark_ = nullptr;
+    QHBoxLayout* nav_layout_ = nullptr;
+    QButtonGroup* nav_group_ = nullptr;
     ui::widgets::StatusPill* status_pill_ = nullptr;
     QPushButton* minimize_btn_ = nullptr;
     QPushButton* maximize_btn_ = nullptr;

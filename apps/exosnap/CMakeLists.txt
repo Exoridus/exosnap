@@ -269,6 +269,19 @@ target_include_directories(global_recording_bar_tests PRIVATE ${CMAKE_CURRENT_SO
 set_target_properties(global_recording_bar_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
+    NAME operational_title_bar_tests
+    TEST_PREFIX chrome.
+    SOURCES
+        tests/test_operational_title_bar.cpp
+        ui/chrome/OperationalTitleBar.cpp
+        ui/brand/BrandMarkWidget.cpp
+        ui/widgets/StatusPill.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(operational_title_bar_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(operational_title_bar_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
     NAME config_page_tests
     TEST_PREFIX config.
     SOURCES

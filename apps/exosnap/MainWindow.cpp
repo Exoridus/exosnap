@@ -33,7 +33,6 @@
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
-#include <QListWidgetItem>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPainterPath>
@@ -43,8 +42,6 @@
 #include <QShortcut>
 #include <QShowEvent>
 #include <QStyle>
-#include <QStyleOptionViewItem>
-#include <QStyledItemDelegate>
 #include <QTextStream>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -190,8 +187,6 @@ constexpr std::array<PageDescriptor, 7> kPageDescriptors = {{
     {"Webcam", "Webcam device and capture settings.", "", false, SidebarIcon::Webcam},
 }};
 
-constexpr int kNavIconRole = Qt::UserRole + 1;
-constexpr int kNavPageIndexRole = Qt::UserRole + 2;
 constexpr int pageIndexForIcon(SidebarIcon icon) {
     for (std::size_t i = 0; i < kPageDescriptors.size(); ++i) {
         if (kPageDescriptors[i].icon == icon)
@@ -201,12 +196,14 @@ constexpr int pageIndexForIcon(SidebarIcon icon) {
 }
 constexpr int kRecordPageIndex = pageIndexForIcon(SidebarIcon::Record);
 constexpr int kSettingsPageIndex = pageIndexForIcon(SidebarIcon::Setup);
+constexpr int kHotkeysPageIndex = pageIndexForIcon(SidebarIcon::Hotkeys);
 constexpr int kAdvancedPageIndex = pageIndexForIcon(SidebarIcon::Advanced);
 constexpr int kDiagnosticsPageIndex = pageIndexForIcon(SidebarIcon::Diagnostics);
 constexpr int kWebcamPageIndex = pageIndexForIcon(SidebarIcon::Webcam);
 constexpr int kLogsPageIndex = pageIndexForIcon(SidebarIcon::Logs);
 static_assert(kRecordPageIndex >= 0, "Record page must exist in kPageDescriptors.");
 static_assert(kSettingsPageIndex >= 0, "Settings page must exist in kPageDescriptors.");
+static_assert(kHotkeysPageIndex >= 0, "Hotkeys page must exist in kPageDescriptors.");
 static_assert(kAdvancedPageIndex >= 0, "Advanced page must exist in kPageDescriptors.");
 static_assert(kDiagnosticsPageIndex >= 0, "Diagnostics page must exist in kPageDescriptors.");
 static_assert(kWebcamPageIndex >= 0, "Webcam page must exist in kPageDescriptors.");
@@ -231,10 +228,6 @@ QString PersistedHotkeyString(const QKeySequence& sequence) {
 QKeySequence ParsePersistedHotkey(const QString& value, const QKeySequence& fallback) {
     const QKeySequence parsed(value, QKeySequence::PortableText);
     return parsed.isEmpty() ? fallback : parsed;
-}
-
-QColor colorFrom(const char* value) {
-    return QColor(QString::fromLatin1(value));
 }
 
 ResizeZone resizeZoneFromLocalPoint(const QPoint& local, const QSize& size, bool maximized) {
@@ -406,187 +399,6 @@ void traceFrameMessage(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) 
     appendFrameTrace(line);
 }
 
-void drawIcon(QPainter& painter, SidebarIcon icon, const QRectF& rect, const QColor& color) {
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(QPen(color, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    painter.setBrush(Qt::NoBrush);
-
-    const qreal x = rect.x();
-    const qreal y = rect.y();
-    const qreal w = rect.width();
-    const qreal h = rect.height();
-    const qreal cx = x + (w * 0.5);
-    const qreal cy = y + (h * 0.5);
-
-    switch (icon) {
-    case SidebarIcon::Record: {
-        painter.drawRoundedRect(QRectF(x + 1.5, y + 2.0, w - 3.0, h - 4.0), 1.2, 1.2);
-        painter.setBrush(color);
-        painter.setPen(Qt::NoPen);
-        painter.drawEllipse(QRectF(cx - 2.0, cy - 2.0, 4.0, 4.0));
-        break;
-    }
-    case SidebarIcon::Video: {
-        painter.drawRoundedRect(QRectF(x + 1.5, y + 3.0, w - 8.0, h - 6.0), 1.2, 1.2);
-        QPainterPath tri;
-        tri.moveTo(x + w - 6.0, y + 6.0);
-        tri.lineTo(x + w - 1.5, y + 4.0);
-        tri.lineTo(x + w - 1.5, y + h - 4.0);
-        tri.lineTo(x + w - 6.0, y + h - 6.0);
-        tri.closeSubpath();
-        painter.drawPath(tri);
-        break;
-    }
-    case SidebarIcon::Audio: {
-        painter.drawLine(QPointF(x + 2.0, cy), QPointF(x + 2.0, cy + 1.0));
-        painter.drawLine(QPointF(x + 5.0, y + 4.0), QPointF(x + 5.0, y + h - 4.0));
-        painter.drawLine(QPointF(x + 8.0, y + 2.0), QPointF(x + 8.0, y + h - 2.0));
-        painter.drawLine(QPointF(x + 11.0, y + 5.0), QPointF(x + 11.0, y + h - 5.0));
-        painter.drawLine(QPointF(x + 14.0, cy - 1.0), QPointF(x + 14.0, cy + 1.0));
-        break;
-    }
-    case SidebarIcon::Output: {
-        painter.drawLine(QPointF(cx, y + 2.0), QPointF(cx, y + h - 5.0));
-        painter.drawLine(QPointF(cx, y + h - 5.0), QPointF(cx - 3.0, y + h - 8.0));
-        painter.drawLine(QPointF(cx, y + h - 5.0), QPointF(cx + 3.0, y + h - 8.0));
-        painter.drawRoundedRect(QRectF(x + 2.0, y + h - 4.0, w - 4.0, 2.0), 0.4, 0.4);
-        break;
-    }
-    case SidebarIcon::Webcam: {
-        // body rectangle
-        painter.drawRoundedRect(QRectF(x + 1.5, y + 3.5, w - 3.0, h - 7.0), 2.0, 2.0);
-        // lens circle
-        painter.drawEllipse(QRectF(cx - 2.5, cy - 2.5, 5.0, 5.0));
-        // stand + base
-        painter.drawLine(QPointF(cx, y + h - 3.5), QPointF(cx, y + h - 2.0));
-        painter.drawLine(QPointF(cx - 3.0, y + h - 1.5), QPointF(cx + 3.0, y + h - 1.5));
-        break;
-    }
-    case SidebarIcon::Hotkeys: {
-        painter.drawRoundedRect(QRectF(x + 1.5, y + 4.0, w - 3.0, h - 8.0), 1.2, 1.2);
-        painter.drawLine(QPointF(x + 4.0, cy), QPointF(x + w - 4.0, cy));
-        break;
-    }
-    case SidebarIcon::Diagnostics: {
-        QPainterPath path;
-        path.moveTo(x + 1.5, cy + 1.0);
-        path.lineTo(x + 4.0, cy + 1.0);
-        path.lineTo(x + 6.0, y + 4.0);
-        path.lineTo(x + 9.0, y + h - 4.0);
-        path.lineTo(x + 11.0, cy - 1.0);
-        path.lineTo(x + w - 1.5, cy - 1.0);
-        painter.drawPath(path);
-        break;
-    }
-    case SidebarIcon::Logs: {
-        painter.drawRoundedRect(QRectF(x + 2.0, y + 2.0, w - 4.0, h - 4.0), 1.2, 1.2);
-        painter.drawLine(QPointF(x + 5.0, y + 6.0), QPointF(x + w - 4.0, y + 6.0));
-        painter.drawLine(QPointF(x + 5.0, y + 9.5), QPointF(x + w - 4.0, y + 9.5));
-        break;
-    }
-    case SidebarIcon::Advanced: {
-        painter.drawEllipse(QRectF(cx - 2.5, cy - 2.5, 5.0, 5.0));
-        painter.drawLine(QPointF(cx, y + 1.0), QPointF(cx, y + 3.0));
-        painter.drawLine(QPointF(cx, y + h - 1.0), QPointF(cx, y + h - 3.0));
-        painter.drawLine(QPointF(x + 1.0, cy), QPointF(x + 3.0, cy));
-        painter.drawLine(QPointF(x + w - 1.0, cy), QPointF(x + w - 3.0, cy));
-        painter.drawLine(QPointF(x + 3.0, y + 3.0), QPointF(x + 4.5, y + 4.5));
-        painter.drawLine(QPointF(x + w - 3.0, y + h - 3.0), QPointF(x + w - 4.5, y + h - 4.5));
-        painter.drawLine(QPointF(x + w - 3.0, y + 3.0), QPointF(x + w - 4.5, y + 4.5));
-        painter.drawLine(QPointF(x + 3.0, y + h - 3.0), QPointF(x + 4.5, y + h - 4.5));
-        break;
-    }
-    case SidebarIcon::Setup: {
-        const qreal gx = cx - 5.5;
-        const qreal gy = cy - 5.5;
-        const qreal gs = 11.0;
-        painter.drawEllipse(QRectF(gx + 2.0, gy + 2.0, gs - 4.0, gs - 4.0));
-        painter.drawLine(QPointF(cx, y + 1.5), QPointF(cx, gy + 2.5));
-        painter.drawLine(QPointF(cx, gy + gs - 2.5), QPointF(cx, y + h - 1.5));
-        painter.drawLine(QPointF(x + 1.5, cy), QPointF(gx + 2.5, cy));
-        painter.drawLine(QPointF(gx + gs - 2.5, cy), QPointF(x + w - 1.5, cy));
-        painter.drawLine(QPointF(x + 2.5, y + 2.5), QPointF(gx + 4.0, gy + 4.0));
-        painter.drawLine(QPointF(gx + gs - 4.0, gy + gs - 4.0), QPointF(x + w - 2.5, y + h - 2.5));
-        painter.drawLine(QPointF(x + w - 2.5, y + 2.5), QPointF(gx + gs - 4.0, gy + 4.0));
-        painter.drawLine(QPointF(gx + 4.0, gy + gs - 4.0), QPointF(x + 2.5, y + h - 2.5));
-        break;
-    }
-    }
-
-    painter.restore();
-}
-
-class SidebarNavDelegate final : public QStyledItemDelegate {
-  public:
-    explicit SidebarNavDelegate(QObject* parent = nullptr) : QStyledItemDelegate(parent) {
-    }
-
-    QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
-        Q_UNUSED(option);
-        Q_UNUSED(index);
-        return {180, 54};
-    }
-
-    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
-        painter->save();
-
-        const QRect row_rect = option.rect;
-        const bool is_selected = (option.state & QStyle::State_Selected) != 0;
-        const bool is_hovered = (option.state & QStyle::State_MouseOver) != 0;
-
-        if (is_selected) {
-            painter->fillRect(QRect(row_rect.left(), row_rect.top() + 4, 2, row_rect.height() - 8),
-                              colorFrom(ui::theme::ExoSnapPalette::kAccent));
-        } else if (is_hovered) {
-            painter->fillRect(row_rect, colorFrom(ui::theme::ExoSnapPalette::kBg1).lighter(108));
-        }
-
-        const auto icon = static_cast<SidebarIcon>(index.data(kNavIconRole).toInt());
-        const QRectF icon_rect(row_rect.left() + 14.0, row_rect.top() + ((row_rect.height() - 16.0) * 0.5), 16.0, 16.0);
-        const QColor icon_color =
-            is_selected ? colorFrom(ui::theme::ExoSnapPalette::kAccent) : colorFrom(ui::theme::ExoSnapPalette::kText2);
-        drawIcon(*painter, icon, icon_rect, icon_color);
-
-        QFont label_font = option.font;
-        label_font.setPointSizeF(13.0);
-        label_font.setWeight(QFont::Medium);
-        painter->setFont(label_font);
-        painter->setPen(is_selected ? colorFrom(ui::theme::ExoSnapPalette::kAccent)
-                                    : colorFrom(ui::theme::ExoSnapPalette::kText1));
-        painter->drawText(QRect(row_rect.left() + 42, row_rect.top(), row_rect.width() - 86, row_rect.height()),
-                          Qt::AlignVCenter | Qt::AlignLeft, index.data(Qt::DisplayRole).toString());
-
-        painter->restore();
-    }
-};
-
-class NavHoverCursorFilter final : public QObject {
-  public:
-    explicit NavHoverCursorFilter(QListWidget* nav) : QObject(nav), nav_(nav) {
-    }
-
-  protected:
-    bool eventFilter(QObject* watched, QEvent* event) override {
-        if (nav_ == nullptr || watched != nav_->viewport())
-            return QObject::eventFilter(watched, event);
-
-        if (event->type() == QEvent::MouseMove || event->type() == QEvent::HoverMove ||
-            event->type() == QEvent::Enter) {
-            const QPoint local = nav_->viewport()->mapFromGlobal(QCursor::pos());
-            const bool is_nav_item = nav_->indexAt(local).isValid();
-            nav_->viewport()->setCursor(is_nav_item ? Qt::PointingHandCursor : Qt::ArrowCursor);
-        } else if (event->type() == QEvent::Leave) {
-            nav_->viewport()->unsetCursor();
-        }
-
-        return QObject::eventFilter(watched, event);
-    }
-
-  private:
-    QListWidget* nav_ = nullptr;
-};
-
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
@@ -633,109 +445,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     title_bar_ = new ui::chrome::OperationalTitleBar(central);
     main_layout->addWidget(title_bar_);
 
-    auto* body = new QWidget(central);
-    auto* body_layout = new QHBoxLayout(body);
-    body_layout->setContentsMargins(0, 0, 0, 0);
-    body_layout->setSpacing(0);
-    main_layout->addWidget(body, 1);
-
-    auto* sidebar = new QWidget(body);
-    sidebar->setObjectName("mainSidebar");
-    sidebar->setFixedWidth(ui::theme::ExoSnapMetrics::kSidebarWidth);
-    auto* sidebar_layout = new QVBoxLayout(sidebar);
-    sidebar_layout->setContentsMargins(0, 0, 0, 0);
-    sidebar_layout->setSpacing(0);
-
-    nav_ = new QListWidget(sidebar);
-    nav_->setObjectName("mainNav");
-    nav_->setFrameShape(QFrame::NoFrame);
-    nav_->setSelectionMode(QAbstractItemView::SingleSelection);
-    nav_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-    nav_->setMouseTracking(true);
-    nav_->viewport()->setMouseTracking(true);
-    nav_->setSpacing(0);
-    nav_->setUniformItemSizes(true);
-    nav_->setFocusPolicy(Qt::NoFocus);
-    nav_->setItemDelegate(new SidebarNavDelegate(nav_));
-    nav_->viewport()->installEventFilter(new NavHoverCursorFilter(nav_));
-
-    QPalette nav_palette = nav_->palette();
-    nav_palette.setColor(QPalette::Highlight, QColor(ui::theme::ExoSnapPalette::kBg2));
-    nav_palette.setColor(QPalette::HighlightedText, QColor(ui::theme::ExoSnapPalette::kText0));
-    nav_->setPalette(nav_palette);
-
-    for (std::size_t i = 0; i < kPageDescriptors.size(); ++i) {
-        const auto& page = kPageDescriptors[i];
-        if (!page.primary_nav)
-            continue;
-        auto* item = new QListWidgetItem(QString::fromUtf8(page.nav_label), nav_);
-        item->setData(kNavIconRole, static_cast<int>(page.icon));
-        item->setData(kNavPageIndexRole, static_cast<int>(i));
-        item->setSizeHint({180, 54});
-    }
-    sidebar_layout->addWidget(nav_, 1);
-
-    auto* bottom_rule = new QFrame(sidebar);
-    bottom_rule->setFrameShape(QFrame::HLine);
-    bottom_rule->setObjectName("sidebarRule");
-    sidebar_layout->addWidget(bottom_rule);
-
-    auto* footer = new QWidget(sidebar);
-    footer->setObjectName("sidebarFooter");
-    auto* footer_layout = new QVBoxLayout(footer);
-    footer_layout->setContentsMargins(18, 12, 18, 14);
-    footer_layout->setSpacing(0);
-
-    auto* about_btn = new QPushButton(QStringLiteral("ⓘ About"), footer);
-    about_btn->setObjectName("sidebarAboutButton");
-    about_btn->setFocusPolicy(Qt::NoFocus);
-    about_btn->setCursor(Qt::PointingHandCursor);
-    about_btn->setToolTip(QStringLiteral("About ExoSnap"));
-    about_btn->setAccessibleName(QStringLiteral("About ExoSnap"));
-    connect(about_btn, &QPushButton::clicked, this, [this]() {
-        ui::dialogs::AboutDialog dlg(this);
-        dlg.exec();
-    });
-    footer_layout->addWidget(about_btn);
-    sidebar_layout->addWidget(footer);
-
-    body_layout->addWidget(sidebar);
-
-    auto* content = new QWidget(body);
-    content->setObjectName("mainContent");
-    auto* content_layout = new QVBoxLayout(content);
-    content_layout->setContentsMargins(0, 0, 0, 0);
-    content_layout->setSpacing(0);
-
-    auto* page_head = new QWidget(content);
-    page_head->setObjectName("mainPageHead");
-    auto* page_head_layout = new QHBoxLayout(page_head);
-    page_head_layout->setContentsMargins(24, 10, 24, 10);
-    page_head_layout->setSpacing(12);
-
-    auto* page_head_left = new QWidget(page_head);
-    auto* page_head_left_layout = new QVBoxLayout(page_head_left);
-    page_head_left_layout->setContentsMargins(0, 0, 0, 0);
-    page_head_left_layout->setSpacing(2);
-
-    page_title_label_ = new QLabel(page_head_left);
-    page_title_label_->setProperty("labelRole", "pageTitle");
-    page_subtitle_label_ = new QLabel(page_head_left);
-    page_subtitle_label_->setProperty("labelRole", "pageSubtitle");
-    page_subtitle_label_->setWordWrap(true);
-
-    page_head_left_layout->addWidget(page_title_label_);
-    page_head_left_layout->addWidget(page_subtitle_label_);
-
-    page_meta_label_ = new QLabel(page_head);
-    page_meta_label_->setProperty("labelRole", "pageMeta");
-    page_meta_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-
-    page_head_layout->addWidget(page_head_left, 1);
-    page_head_layout->addWidget(page_meta_label_, 0, Qt::AlignBottom);
-    content_layout->addWidget(page_head);
-
-    stack_ = new QStackedWidget(content);
+    // Top navigation (in the title bar) drives the page stack directly — no sidebar, no
+    // secondary page header. Pages own their internal padding and fill the area below the bar.
+    stack_ = new QStackedWidget(central);
     stack_->setObjectName("mainStack");
     record_page_ = new RecordPage(stack_);
     config_page_ = new ConfigPage(output_settings_, video_settings_, stack_);
@@ -759,11 +471,22 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     record_page_->applyPersistedAudioSettings(persisted_settings_.audio_ui_state);
     config_page_->setAudioUiState(persisted_settings_.audio_ui_state);
     config_page_->setWebcamSettings(persisted_settings_.webcam);
-    content_layout->addWidget(stack_, 1);
+    main_layout->addWidget(stack_, 1);
 
-    body_layout->addWidget(content, 1);
+    title_bar_->setNavItems({
+        {QStringLiteral("Record"), kRecordPageIndex},
+        {QStringLiteral("Settings"), kSettingsPageIndex},
+        {QStringLiteral("Hotkeys"), kHotkeysPageIndex},
+        {QStringLiteral("Diagnostics"), kDiagnosticsPageIndex},
+        {QStringLiteral("Logs"), kLogsPageIndex},
+        {QStringLiteral("About"), -1},
+    });
 
-    connect(nav_, &QListWidget::currentRowChanged, this, &MainWindow::onNavRowChanged);
+    connect(title_bar_, &ui::chrome::OperationalTitleBar::navPageRequested, this, &MainWindow::navigateToPage);
+    connect(title_bar_, &ui::chrome::OperationalTitleBar::aboutRequested, this, [this]() {
+        ui::dialogs::AboutDialog dlg(this);
+        dlg.exec();
+    });
     connect(title_bar_, &ui::chrome::OperationalTitleBar::minimizeRequested, this, &QWidget::showMinimized);
     connect(title_bar_, &ui::chrome::OperationalTitleBar::maximizeRestoreRequested, this, [this]() {
         if (isFullScreen()) {
@@ -1115,10 +838,6 @@ bool MainWindow::effectiveMaximizedState() const {
     return isMaximized() || win32_maximized_ || isFullScreen();
 }
 
-void MainWindow::onNavRowChanged(int row) {
-    setCurrentPage(pageIndexForNavRow(row));
-}
-
 void MainWindow::onRecordChromeStateChanged(bool recording, const QString& status_label, const QString& context_text) {
     Q_UNUSED(context_text);
     recording_active_ = recording;
@@ -1455,45 +1174,21 @@ void MainWindow::applyRestoredGeometry() {
         QTimer::singleShot(0, this, &MainWindow::showMaximized);
 }
 
-int MainWindow::pageIndexForNavRow(int row) const {
-    if (!nav_ || row < 0 || row >= nav_->count())
-        return -1;
-
-    const QListWidgetItem* item = nav_->item(row);
-    if (!item)
-        return -1;
-
-    bool ok = false;
-    const int page_index = item->data(kNavPageIndexRole).toInt(&ok);
-    return ok ? page_index : -1;
-}
-
-int MainWindow::navRowForPageIndex(int index) const {
-    if (!nav_)
-        return -1;
-
-    for (int row = 0; row < nav_->count(); ++row) {
-        bool ok = false;
-        const int page_index = nav_->item(row)->data(kNavPageIndexRole).toInt(&ok);
-        if (ok && page_index == index)
-            return row;
-    }
-    return -1;
+int MainWindow::navHighlightIndexFor(int index) const {
+    // Advanced and Webcam are sub-pages reached from Settings; keep the Settings tab lit
+    // while they are shown (no dedicated top-nav tab exists for them).
+    if (index == kAdvancedPageIndex || index == kWebcamPageIndex)
+        return kSettingsPageIndex;
+    return index;
 }
 
 void MainWindow::navigateToPage(int index) {
     if (index < 0 || index >= static_cast<int>(kPageDescriptors.size()))
         return;
 
-    const int nav_row = navRowForPageIndex(index);
-    if (nav_row >= 0 && nav_) {
-        if (nav_->currentRow() != nav_row) {
-            nav_->setCurrentRow(nav_row);
-            return;
-        }
-    }
-
     setCurrentPage(index);
+    if (title_bar_)
+        title_bar_->setActivePage(navHighlightIndexFor(index));
 }
 
 void MainWindow::setCurrentPage(int index) {
@@ -1501,19 +1196,12 @@ void MainWindow::setCurrentPage(int index) {
         return;
 
     stack_->setCurrentIndex(index);
-    updatePageHeader(index);
-}
 
-void MainWindow::updatePageHeader(int index) {
-    const auto& descriptor = kPageDescriptors[static_cast<std::size_t>(index)];
-    page_title_label_->setText(descriptor.nav_label);
-    page_subtitle_label_->setText(descriptor.subtitle);
-    const QString page_meta = QString::fromUtf8(descriptor.page_meta);
-    page_meta_label_->setText(page_meta);
-    page_meta_label_->setVisible(!page_meta.trimmed().isEmpty());
-
-    title_bar_->setRecordingActive(recording_active_);
-    title_bar_->setStatusLabel(record_status_label_);
+    // Keep the title-bar status pill consistent across page switches.
+    if (title_bar_) {
+        title_bar_->setRecordingActive(recording_active_);
+        title_bar_->setStatusLabel(record_status_label_);
+    }
 }
 
 void MainWindow::applyActiveProfileToPages() {
