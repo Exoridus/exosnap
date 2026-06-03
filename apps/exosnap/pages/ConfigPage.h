@@ -151,6 +151,7 @@ class ConfigPage : public QWidget {
     QLabel* format_display_label_ = nullptr;
 
     QComboBox* quality_combo_ = nullptr;
+    QComboBox* frame_rate_combo_ = nullptr;
     QButtonGroup* quality_segment_group_ = nullptr;
     QPushButton* quality_segment_small_ = nullptr;
     QPushButton* quality_segment_balanced_ = nullptr;

@@ -320,6 +320,19 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
 
 **Codex xhigh** if R0 docs are precise and card-by-card specs are clear. **Claude Opus xhigh** if significant widget-creation ambiguity remains or if the consolidation of 5 pages into one requires architectural decisions.
 
+### Implementation status — landed
+
+- **Card IA:** `ConfigPage` reflowed into the hybrid compact card grid — full-width **Preset** card, two-column **Format & encoding | Audio** row (collapses to one column below 880px), full-width **Webcam** card, full-width **Output** card, and a collapsed **Advanced / Expert** note. The readiness banner stays at the top. The old "Preset & Format / Capture Quality / Capture Behavior / Audio Sources / Webcam Setup" titles are gone; their controls moved into the new cards with object names, signals, slots, and the single `config_page_` instance preserved.
+- **Consolidation reality:** `VideoPage`/`AudioPage`/`OutputPage` were already not compiled or routed (dead code from earlier slices); only `ConfigPage` is the live Settings surface. R3 reshapes its interior rather than merging five live pages. Advanced and Webcam remain Settings **sub-pages** (reached from the cards), not top-level nav — no shell/routing change was needed.
+- **Format & encoding:** container radios, video/audio codec selects (reconciliation unchanged), the compact 3-segment Quality control (hidden `videoQualityCombo` still the single emit seam), CFR + Capture cursor, and a new **read-only** Frame rate select (`frameRateCombo`, fixed 60 fps — honest, not a fake 30/120 selector).
+- **Audio:** hybrid source order System → Application → Microphone; Separate-track toggles + mic device select preserved. **No** meters added in Settings (no real per-source L/R feed); the hint points to the Record dock. No fake gain/volume.
+- **Webcam:** Record webcam + Camera + `Open Webcam Setup` preserved; no placement/PiP in Settings; Mirror honestly stated as not saved (`WebcamSettings` has no field); chroma stays in Webcam Setup where the real `video_thread` chroma pipeline lives.
+- **Output:** folder + Browse + filename pattern + token reference preserved; added a **disabled/planned** Output-resolution segmented (Native/4K/1440p/1080p/720p — scaling not implemented) and compact filename token chips (only tokens `FilenameBuilder` resolves: `{datetime}/{date}/{time}/{app}/{title}/{target}/{profile}/{container}`).
+- **Preset:** dropdown + quiet Save/Reset + Manage-presets overflow (identical menu/actions) + status badge; honest hint that webcam & source selection are saved separately (`RecordingProfile` stores output/video/audio only).
+- **QSS:** added `outputResSegmented` to the segmented-container rule and a `tokenChip` label role; reused existing panel/cardTitle/fieldLabel/qualitySegment/profileStatusBadge roles.
+- **Tests:** `test_config_page.cpp` updated — `HybridCardTitles_AreVisible`, `OutputResolution_IsPlannedAndDisabled`, `FrameRateControl_IsReadOnly`, `FilenameTokenChips_AreShown`; all existing object-name/behavior assertions kept. Debug build green; focused CTest 290/290; full CTest 565/565. Screenshot smoke under `.workspace/screenshots/hybrid-port-r3-settings-compact-ia/`; smoke note `.workspace/smokes/hybrid-port-r3-settings-compact-ia.md`.
+- **Not touched:** Record/TransportDock/PreviewSurface/DXGI, Source picker, Diagnostics/Logs/Hotkeys/About content, capture/encoder/muxer/audio internals, recording state machine, settings schema, profile registry, build metadata, shell/top-nav.
+
 ---
 
 ## HYBRID-PORT-R4 — Source Modal + Region UX

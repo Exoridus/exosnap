@@ -17,6 +17,7 @@
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QStringList>
 #include <QStyle>
 #include <QTimer>
 #include <QToolButton>
@@ -206,53 +207,38 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     layout->addWidget(readiness_panel_);
 
-    // ---- TWO-COLUMN REGION ----
-    // The left column holds the output format/quality/behavior cards; the right
-    // column holds the input-source cards (audio + webcam). On narrow viewports the
-    // columns flip from side-by-side to a single stacked column (updateResponsiveLayout()).
-    auto* columns = new QWidget(content);
-    columns_layout_ = new QHBoxLayout(columns);
-    columns_layout_->setContentsMargins(0, 0, 0, 0);
-    columns_layout_->setSpacing(18);
+    // ---- PRESET CARD (full width, top) ----
+    // A preset is a full recording setup, not just codec/quality. The card stays quiet:
+    // active-preset selector, contextual Save/Reset, and a "Manage presets" overflow menu.
+    auto* preset_panel = makePanel(content);
+    auto* preset_layout = new QVBoxLayout(preset_panel);
+    preset_layout->setContentsMargins(18, 16, 18, 16);
+    preset_layout->setSpacing(10);
 
-    auto* left_col = new QWidget(columns);
-    auto* left_layout = new QVBoxLayout(left_col);
-    left_layout->setContentsMargins(0, 0, 0, 0);
-    left_layout->setSpacing(18);
-
-    auto* right_col = new QWidget(columns);
-    auto* right_layout = new QVBoxLayout(right_col);
-    right_layout->setContentsMargins(0, 0, 0, 0);
-    right_layout->setSpacing(18);
-
-    columns_layout_->addWidget(left_col, 1);
-    columns_layout_->addWidget(right_col, 1);
-    layout->addWidget(columns);
-
-    // ---- PRESET & FORMAT CARD (left) ----
-    auto* fmt_panel = makePanel(left_col);
-    auto* fmt_layout = new QVBoxLayout(fmt_panel);
-    fmt_layout->setContentsMargins(18, 16, 18, 18);
-    fmt_layout->setSpacing(12);
-
-    auto* fmt_head = new QHBoxLayout();
-    fmt_head->setSpacing(10);
-    fmt_head->addWidget(makeCardTitle(QStringLiteral("Preset & Format"), fmt_panel));
-    fmt_head->addStretch();
-    profile_status_label_ = new QLabel(fmt_panel);
+    auto* preset_head = new QHBoxLayout();
+    preset_head->setSpacing(10);
+    preset_head->addWidget(makeCardTitle(QStringLiteral("Preset"), preset_panel));
+    preset_head->addStretch();
+    profile_status_label_ = new QLabel(preset_panel);
     profile_status_label_->setProperty("labelRole", "profileStatusBadge");
     profile_status_label_->setAlignment(Qt::AlignCenter);
-    fmt_head->addWidget(profile_status_label_);
-    fmt_layout->addLayout(fmt_head);
+    preset_head->addWidget(profile_status_label_);
+    preset_layout->addLayout(preset_head);
 
-    fmt_layout->addWidget(makeFieldLabel(QStringLiteral("Active preset"), fmt_panel));
     auto* profile_row = new QHBoxLayout();
     profile_row->setSpacing(8);
-    profile_combo_ = new QComboBox(fmt_panel);
+    profile_combo_ = new QComboBox(preset_panel);
     profile_combo_->setObjectName(QStringLiteral("profileCombo"));
-    profile_combo_->setMinimumWidth(180);
+    profile_combo_->setMinimumWidth(220);
     profile_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    profile_overflow_btn_ = new QToolButton(fmt_panel);
+
+    // Contextual quiet actions — hidden for the default built-in preset (updateProfileActionState()).
+    save_as_new_btn_ = new QPushButton(QStringLiteral("Save as preset"), preset_panel);
+    save_as_new_btn_->setProperty("role", "ghost");
+    reset_profile_btn_ = new QPushButton(QStringLiteral("Reset to preset"), preset_panel);
+    reset_profile_btn_->setProperty("role", "ghost");
+
+    profile_overflow_btn_ = new QToolButton(preset_panel);
     profile_overflow_btn_->setText(QStringLiteral("Manage presets"));
     profile_overflow_btn_->setPopupMode(QToolButton::InstantPopup);
     profile_overflow_btn_->setToolButtonStyle(Qt::ToolButtonTextOnly);
@@ -273,23 +259,47 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     profile_overflow_btn_->setMenu(profile_menu);
 
     profile_row->addWidget(profile_combo_, 1);
+    profile_row->addWidget(save_as_new_btn_);
+    profile_row->addWidget(reset_profile_btn_);
     profile_row->addWidget(profile_overflow_btn_);
-    fmt_layout->addLayout(profile_row);
+    preset_layout->addLayout(profile_row);
 
-    // Contextual preset actions - hidden for the default built-in preset.
-    auto* profile_actions_row = new QHBoxLayout();
-    profile_actions_row->setSpacing(6);
-    profile_actions_row->setContentsMargins(0, 0, 0, 0);
-    save_as_new_btn_ = new QPushButton(QStringLiteral("Save current as preset..."), fmt_panel);
-    save_as_new_btn_->setProperty("role", "ghost");
-    reset_profile_btn_ = new QPushButton(QStringLiteral("Reset to preset"), fmt_panel);
-    reset_profile_btn_->setProperty("role", "ghost");
-    profile_actions_row->addStretch();
-    profile_actions_row->addWidget(save_as_new_btn_);
-    profile_actions_row->addWidget(reset_profile_btn_);
-    fmt_layout->addLayout(profile_actions_row);
+    preset_layout->addWidget(
+        makeHint(QStringLiteral("A preset stores format, codecs, quality, audio sources, and output settings. "
+                                "Webcam and source selection are saved separately."),
+                 preset_panel));
+    layout->addWidget(preset_panel);
 
-    fmt_layout->addWidget(makeHRule(fmt_panel));
+    // ---- TWO-COLUMN REGION (Format & encoding | Audio) ----
+    // The left column holds Format & encoding; the right column holds Audio. On narrow
+    // viewports the columns flip from side-by-side to a single stacked column
+    // (updateResponsiveLayout()).
+    auto* columns = new QWidget(content);
+    columns_layout_ = new QHBoxLayout(columns);
+    columns_layout_->setContentsMargins(0, 0, 0, 0);
+    columns_layout_->setSpacing(18);
+
+    auto* left_col = new QWidget(columns);
+    auto* left_layout = new QVBoxLayout(left_col);
+    left_layout->setContentsMargins(0, 0, 0, 0);
+    left_layout->setSpacing(18);
+
+    auto* right_col = new QWidget(columns);
+    auto* right_layout = new QVBoxLayout(right_col);
+    right_layout->setContentsMargins(0, 0, 0, 0);
+    right_layout->setSpacing(18);
+
+    columns_layout_->addWidget(left_col, 1);
+    columns_layout_->addWidget(right_col, 1);
+    layout->addWidget(columns);
+
+    // ---- FORMAT & ENCODING CARD (left) ----
+    // Container, codecs, quality, frame rate, timing, and cursor live together here.
+    auto* fmt_panel = makePanel(left_col);
+    auto* fmt_layout = new QVBoxLayout(fmt_panel);
+    fmt_layout->setContentsMargins(18, 16, 18, 18);
+    fmt_layout->setSpacing(12);
+    fmt_layout->addWidget(makeCardTitle(QStringLiteral("Format & encoding"), fmt_panel));
 
     format_display_label_ = new QLabel(fmt_panel);
     format_display_label_->setProperty("labelRole", "muted");
@@ -329,30 +339,20 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     codec_row->addLayout(acol, 1);
 
     fmt_layout->addLayout(codec_row);
-    left_layout->addWidget(fmt_panel);
 
-    // ---- CAPTURE QUALITY CARD (left) ----
-    auto* video_panel = makePanel(left_col);
-    auto* video_panel_layout = new QVBoxLayout(video_panel);
-    video_panel_layout->setContentsMargins(18, 16, 18, 18);
-    video_panel_layout->setSpacing(8);
-    video_panel_layout->addWidget(makeCardTitle(QStringLiteral("Capture Quality"), video_panel));
-
-    video_panel_layout->addWidget(makeFieldLabel(QStringLiteral("Quality preset"), video_panel));
-    quality_combo_ = new QComboBox(video_panel);
+    // Quality — compact 3-segment control. The hidden videoQualityCombo stays the single
+    // place that emits the model change, so the existing summary flow and test seam are kept.
+    fmt_layout->addWidget(makeFieldLabel(QStringLiteral("Quality"), fmt_panel));
+    quality_combo_ = new QComboBox(fmt_panel);
     quality_combo_->setObjectName(QStringLiteral("videoQualityCombo"));
     quality_combo_->addItem(QStringLiteral("High Quality"), static_cast<int>(recorder_core::NvencQualityPreset::High));
     quality_combo_->addItem(QStringLiteral("Balanced"), static_cast<int>(recorder_core::NvencQualityPreset::Balanced));
     quality_combo_->addItem(QStringLiteral("Small"), static_cast<int>(recorder_core::NvencQualityPreset::Small));
     quality_combo_->setVisible(false);
     quality_combo_->setFocusPolicy(Qt::NoFocus);
-    video_panel_layout->addWidget(quality_combo_);
+    fmt_layout->addWidget(quality_combo_);
 
-    // Compact 3-segment quality control (replaces the former 2x2 quality cards).
-    // Each segment is a checkable button in an exclusive group; clicking a segment
-    // drives the hidden videoQualityCombo, which stays the single place that emits
-    // the model change so the existing summary flow is preserved.
-    auto* quality_segmented = new QWidget(video_panel);
+    auto* quality_segmented = new QWidget(fmt_panel);
     quality_segmented->setObjectName(QStringLiteral("qualitySegmented"));
     auto* quality_segmented_layout = new QHBoxLayout(quality_segmented);
     quality_segmented_layout->setContentsMargins(3, 3, 3, 3);
@@ -385,48 +385,56 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     quality_segment_high_ = makeQualitySegment(QStringLiteral("qualitySegmentHigh"), QStringLiteral("High · CQ19"),
                                                recorder_core::NvencQualityPreset::High);
 
-    video_panel_layout->addWidget(quality_segmented);
+    fmt_layout->addWidget(quality_segmented);
 
-    quality_badge_label_ = new QLabel(video_panel);
+    quality_badge_label_ = new QLabel(fmt_panel);
     quality_badge_label_->setObjectName(QStringLiteral("qualityBadgeLabel"));
     quality_badge_label_->setProperty("labelRole", "muted");
-    video_panel_layout->addWidget(quality_badge_label_);
+    fmt_layout->addWidget(quality_badge_label_);
 
-    quality_settings_label_ = new QLabel(video_panel);
+    quality_settings_label_ = new QLabel(fmt_panel);
     quality_settings_label_->setObjectName(QStringLiteral("qualitySettingsLabel"));
     quality_settings_label_->setProperty("labelRole", "muted");
-    video_panel_layout->addWidget(quality_settings_label_);
+    fmt_layout->addWidget(quality_settings_label_);
 
-    left_layout->addWidget(video_panel);
+    // Frame rate + timing. The recording pipeline is CFR-60-first and the frame rate is not
+    // user-selectable in this build, so it is shown read-only rather than as a fake selector.
+    auto* rate_row = new QHBoxLayout();
+    rate_row->setSpacing(14);
+    auto* rate_col = new QVBoxLayout();
+    rate_col->setSpacing(6);
+    rate_col->addWidget(makeFieldLabel(QStringLiteral("Frame rate"), fmt_panel));
+    frame_rate_combo_ = new QComboBox(fmt_panel);
+    frame_rate_combo_->setObjectName(QStringLiteral("frameRateCombo"));
+    frame_rate_combo_->addItem(QStringLiteral("60 fps"));
+    frame_rate_combo_->setEnabled(false);
+    frame_rate_combo_->setToolTip(QStringLiteral("Frame rate is fixed at 60 fps in this build."));
+    rate_col->addWidget(frame_rate_combo_);
+    rate_row->addLayout(rate_col, 1);
+    rate_row->addStretch(1);
+    fmt_layout->addLayout(rate_row);
 
-    // ---- CAPTURE BEHAVIOR CARD (left) ----
-    auto* behavior_panel = makePanel(left_col);
-    auto* behavior_panel_layout = new QVBoxLayout(behavior_panel);
-    behavior_panel_layout->setContentsMargins(18, 16, 18, 18);
-    behavior_panel_layout->setSpacing(10);
-    behavior_panel_layout->addWidget(makeCardTitle(QStringLiteral("Capture Behavior"), behavior_panel));
-
-    cfr_check_ = new QCheckBox(QStringLiteral("Constant frame rate (CFR 60 fps)"), behavior_panel);
+    cfr_check_ = new QCheckBox(QStringLiteral("Constant frame rate (CFR)"), fmt_panel);
     cfr_check_->setChecked(video_settings_.cfr);
-    behavior_panel_layout->addWidget(cfr_check_);
+    fmt_layout->addWidget(cfr_check_);
 
-    cursor_check_ = new QCheckBox(QStringLiteral("Capture cursor"), behavior_panel);
+    cursor_check_ = new QCheckBox(QStringLiteral("Capture cursor"), fmt_panel);
     cursor_check_->setChecked(video_settings_.capture_cursor);
-    behavior_panel_layout->addWidget(cursor_check_);
+    fmt_layout->addWidget(cursor_check_);
 
-    behavior_panel_layout->addWidget(makeHint(
+    fmt_layout->addWidget(makeHint(
         QStringLiteral("VFR can desync audio in some editors — keep CFR on unless you know you need otherwise."),
-        behavior_panel));
-    left_layout->addWidget(behavior_panel);
+        fmt_panel));
 
+    left_layout->addWidget(fmt_panel);
     left_layout->addStretch();
 
-    // ---- AUDIO SOURCES CARD (right) ----
+    // ---- AUDIO CARD (right) ----
     auto* audio_panel = makePanel(right_col);
     auto* audio_panel_layout = new QVBoxLayout(audio_panel);
     audio_panel_layout->setContentsMargins(18, 16, 18, 18);
     audio_panel_layout->setSpacing(10);
-    audio_panel_layout->addWidget(makeCardTitle(QStringLiteral("Audio Sources"), audio_panel));
+    audio_panel_layout->addWidget(makeCardTitle(QStringLiteral("Audio"), audio_panel));
 
     auto makeSourceRow = [&](const QString& title, QCheckBox*& enabled_check, QCheckBox*& separate_check,
                              QLabel*& source_label) {
@@ -447,6 +455,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         audio_panel_layout->addWidget(source_label);
     };
 
+    // Source order follows the hybrid Audio card: System, Application, Microphone.
+    makeSourceRow(QStringLiteral("System audio"), sys_enabled_check_, sys_separate_check_, sys_source_label_);
+    audio_panel_layout->addWidget(makeHRule(audio_panel));
     makeSourceRow(QStringLiteral("Application audio"), app_enabled_check_, app_separate_check_, app_source_label_);
     audio_panel_layout->addWidget(makeHRule(audio_panel));
     makeSourceRow(QStringLiteral("Microphone"), mic_enabled_check_, mic_separate_check_, mic_source_label_);
@@ -457,11 +468,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     mic_device_combo_->setMinimumWidth(180);
     audio_panel_layout->addWidget(mic_device_combo_);
 
-    audio_panel_layout->addWidget(makeHRule(audio_panel));
-    makeSourceRow(QStringLiteral("System audio"), sys_enabled_check_, sys_separate_check_, sys_source_label_);
-
     audio_panel_layout->addWidget(
-        makeHint(QStringLiteral("Separate tracks keep each source on its own channel for editing."), audio_panel));
+        makeHint(QStringLiteral("Separate tracks keep each source on its own channel for editing. "
+                                "Live meters appear on the Record dock once the audio thread is feeding data."),
+                 audio_panel));
 
     audio_summary_label_ = new QLabel(audio_panel);
     audio_summary_label_->setProperty("labelRole", "muted");
@@ -469,40 +479,50 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     audio_summary_label_->setVisible(false);
     audio_panel_layout->addWidget(audio_summary_label_);
     right_layout->addWidget(audio_panel);
+    right_layout->addStretch();
 
-    // ---- WEBCAM CARD (right) ----
-    auto* webcam_panel = makePanel(right_col);
+    // ---- WEBCAM CARD (full width) ----
+    auto* webcam_panel = makePanel(content);
     auto* webcam_panel_layout = new QVBoxLayout(webcam_panel);
     webcam_panel_layout->setContentsMargins(18, 16, 18, 18);
     webcam_panel_layout->setSpacing(8);
-    webcam_panel_layout->addWidget(makeCardTitle(QStringLiteral("Webcam Setup"), webcam_panel));
+    webcam_panel_layout->addWidget(makeCardTitle(QStringLiteral("Webcam"), webcam_panel));
 
+    auto* webcam_row = new QHBoxLayout();
+    webcam_row->setSpacing(18);
+
+    auto* webcam_fields = new QVBoxLayout();
+    webcam_fields->setSpacing(8);
     webcam_enabled_check_ = new QCheckBox(QStringLiteral("Record webcam"), webcam_panel);
-    webcam_panel_layout->addWidget(webcam_enabled_check_);
+    webcam_fields->addWidget(webcam_enabled_check_);
 
-    webcam_panel_layout->addWidget(makeFieldLabel(QStringLiteral("Camera"), webcam_panel));
+    webcam_fields->addWidget(makeFieldLabel(QStringLiteral("Camera"), webcam_panel));
     webcam_device_combo_ = new QComboBox(webcam_panel);
     webcam_device_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     webcam_device_combo_->setMinimumWidth(180);
-    webcam_panel_layout->addWidget(webcam_device_combo_);
+    webcam_fields->addWidget(webcam_device_combo_);
 
     webcam_info_label_ = new QLabel(webcam_panel);
     webcam_info_label_->setProperty("labelRole", "muted");
     webcam_info_label_->setWordWrap(true);
-    webcam_panel_layout->addWidget(webcam_info_label_);
+    webcam_fields->addWidget(webcam_info_label_);
+    webcam_row->addLayout(webcam_fields, 1);
 
-    webcam_panel_layout->addWidget(makeHint(
-        QStringLiteral("Open Webcam Setup for live preview and camera tuning. Placement and PiP controls are not "
-                       "available in this build."),
-        webcam_panel));
-
+    auto* webcam_aside = new QVBoxLayout();
+    webcam_aside->setSpacing(8);
+    webcam_aside->addWidget(
+        makeHint(QStringLiteral("Position & size are set in the Record preview. Open Webcam Setup for live preview, "
+                                "resolution, and chroma key. Mirror is not a saved option in this build."),
+                 webcam_panel));
     webcam_details_btn_ = new QPushButton(QStringLiteral("Open Webcam Setup"), webcam_panel);
     webcam_details_btn_->setObjectName(QStringLiteral("webcamDetailsBtn"));
     webcam_details_btn_->setProperty("role", "ghost");
-    webcam_panel_layout->addWidget(webcam_details_btn_, 0, Qt::AlignLeft);
+    webcam_aside->addWidget(webcam_details_btn_, 0, Qt::AlignLeft);
+    webcam_aside->addStretch();
+    webcam_row->addLayout(webcam_aside, 1);
 
-    right_layout->addWidget(webcam_panel);
-    right_layout->addStretch();
+    webcam_panel_layout->addLayout(webcam_row);
+    layout->addWidget(webcam_panel);
 
     // ---- OUTPUT CARD (full width) ----
     auto* out_panel = makePanel(content);
@@ -510,6 +530,30 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     out_panel_layout->setContentsMargins(18, 16, 18, 18);
     out_panel_layout->setSpacing(12);
     out_panel_layout->addWidget(makeCardTitle(QStringLiteral("Output"), out_panel));
+
+    // Output resolution: scaling is not implemented in this build, so the control is shown
+    // as a disabled/planned segmented fixed at the source ("Native") — never a fake scaler.
+    out_panel_layout->addWidget(makeFieldLabel(QStringLiteral("Output resolution"), out_panel));
+    auto* out_res_segmented = new QWidget(out_panel);
+    out_res_segmented->setObjectName(QStringLiteral("outputResSegmented"));
+    auto* out_res_layout = new QHBoxLayout(out_res_segmented);
+    out_res_layout->setContentsMargins(3, 3, 3, 3);
+    out_res_layout->setSpacing(0);
+    for (const QString& opt : {QStringLiteral("Native"), QStringLiteral("4K"), QStringLiteral("1440p"),
+                               QStringLiteral("1080p"), QStringLiteral("720p")}) {
+        auto* seg = new QPushButton(opt, out_res_segmented);
+        const bool is_native = opt == QStringLiteral("Native");
+        seg->setCheckable(true);
+        seg->setChecked(is_native);
+        seg->setProperty("qualitySegment", true);
+        seg->setProperty("qualitySegmentSelected", is_native);
+        seg->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        seg->setEnabled(false);
+        out_res_layout->addWidget(seg);
+    }
+    out_panel_layout->addWidget(out_res_segmented);
+    out_panel_layout->addWidget(makeHint(
+        QStringLiteral("Output scaling is planned — recordings currently use the source resolution."), out_panel));
 
     auto* output_split = new QWidget(out_panel);
     output_split_layout_ = new QHBoxLayout(output_split);
@@ -557,6 +601,28 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_help_layout->setSpacing(8);
 
     output_help_layout->addWidget(makeFieldLabel(QStringLiteral("Filename tokens"), output_help));
+
+    // Compact chips of the most common real tokens; the full reference stays behind the toggle.
+    // Only tokens the FilenameBuilder actually resolves are shown (e.g. {target}/{profile}).
+    const QStringList token_chips = {QStringLiteral("{datetime}"), QStringLiteral("{date}"),
+                                     QStringLiteral("{time}"),     QStringLiteral("{app}"),
+                                     QStringLiteral("{title}"),    QStringLiteral("{target}"),
+                                     QStringLiteral("{profile}"),  QStringLiteral("{container}")};
+    QHBoxLayout* chip_row = nullptr;
+    for (int i = 0; i < token_chips.size(); ++i) {
+        if (i % 4 == 0) {
+            chip_row = new QHBoxLayout();
+            chip_row->setContentsMargins(0, 0, 0, 0);
+            chip_row->setSpacing(6);
+            output_help_layout->addLayout(chip_row);
+        }
+        auto* chip = new QLabel(token_chips.at(i), output_help);
+        chip->setProperty("labelRole", "tokenChip");
+        chip_row->addWidget(chip, 0, Qt::AlignLeft);
+    }
+    if (chip_row)
+        chip_row->addStretch();
+
     token_help_toggle_btn_ = new QPushButton(QStringLiteral("Show token reference"), output_help);
     token_help_toggle_btn_->setObjectName(QStringLiteral("tokenHelpToggle"));
     token_help_toggle_btn_->setProperty("role", "ghost");

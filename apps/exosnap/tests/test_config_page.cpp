@@ -145,11 +145,54 @@ TEST_F(ConfigPageTest, PresetManagementButtonExists) {
     EXPECT_TRUE(found) << "Preset management overflow button not found";
 }
 
-TEST_F(ConfigPageTest, PresetAndFormatSectionTitle_IsVisible) {
+TEST_F(ConfigPageTest, HybridCardTitles_AreVisible) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Preset & Format")));
+    // The hybrid Settings IA splits the old combined card into discrete compact cards.
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Preset")));
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Format & encoding")));
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Audio")));
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Webcam")));
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Output")));
+
+    // The old combined "Preset & Format" card title is gone after the hybrid IA split.
+    EXPECT_FALSE(HasLabelText(page, QStringLiteral("Preset & Format")));
     EXPECT_FALSE(HasLabelText(page, QStringLiteral("Profile & Format")));
+}
+
+TEST_F(ConfigPageTest, OutputResolution_IsPlannedAndDisabled) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* segmented = page.findChild<QWidget*>(QStringLiteral("outputResSegmented"));
+    ASSERT_NE(segmented, nullptr);
+
+    // Output scaling is not implemented, so every segment must be disabled (planned/honest).
+    const auto segments = segmented->findChildren<QPushButton*>();
+    ASSERT_GE(segments.size(), 5);
+    for (const auto* seg : segments)
+        EXPECT_FALSE(seg->isEnabled()) << "Output resolution segment must not be interactive: "
+                                       << seg->text().toStdString();
+}
+
+TEST_F(ConfigPageTest, FrameRateControl_IsReadOnly) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* frame_rate = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
+    ASSERT_NE(frame_rate, nullptr);
+    // Frame rate is fixed at 60 fps in this build — shown read-only, never a fake selector.
+    EXPECT_FALSE(frame_rate->isEnabled());
+}
+
+TEST_F(ConfigPageTest, FilenameTokenChips_AreShown) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    int chip_count = 0;
+    const auto labels = page.findChildren<QLabel*>();
+    for (const auto* label : labels) {
+        if (label->property("labelRole").toString() == QStringLiteral("tokenChip"))
+            ++chip_count;
+    }
+    EXPECT_GE(chip_count, 4) << "Output card should expose compact filename token chips";
 }
 
 TEST_F(ConfigPageTest, BuiltInAndModifiedStates_UsePresetCopy) {
