@@ -75,6 +75,17 @@ Accent scope note:
 
 **Claude Opus xhigh** — token system design, QSS variable mapping, font bundling. The split from shell work reduces risk.
 
+### Implementation status — landed
+
+- **Tokens:** `ExoSnapPalette` remapped to the Hybrid v3 roles (neutral cool-dark `#0E0E10`/`#151517`/`#1C1C1F`/`#242428`, white-alpha hairlines, ink/muted/dim text ramp, Studio Mint `#9BD9D2` accent, coral `#E0786C` / green `#84CBA2` / amber `#E6C57C` semantics). Token *names* were preserved so the token-driven QSS keeps resolving without a structural rewrite. New `${accent-ink}` (`#08130F`) token added for text on accent fills.
+- **Accent variants:** the 7 curated accents (mint, amber, coral, azure, violet, lime, graphite) are defined as data only in `ui/theme/ExoSnapAccents.h`. No user-facing switcher (out of scope); a compile-time check keeps the default in sync with the palette.
+- **Metrics:** radius scale softened to the Hybrid range (sm 8 / md 10 / lg 14); spacing and control heights unchanged.
+- **Fonts:** target faces **Hanken Grotesk** (UI) and **IBM Plex Mono** (mono) are *not bundled* — no license-safe files are present in the repo and fonts are never copied from system folders. They sit at the front of the family stacks (`Hanken Grotesk, Inter, Segoe UI, sans-serif` / `IBM Plex Mono, JetBrains Mono, Consolas, monospace`) and are used only if the system provides them. The bundled Inter / JetBrains Mono remain the guaranteed fallback. *This deviates from the "bundled fonts" wording in `exosnap-hybrid-target.md` §10; bundling can be revisited if/when license-safe files are added.*
+- **BrandMark:** `BrandMarkWidget` now paints the concentric aperture mark programmatically (idle Studio Mint; coral recording variant exposed via `setRecording()`, currently unwired pending R1B title-bar status). `exosnap-logo.svg` updated to the matching aperture.
+- **QSS:** all hard-coded amber-accent/warn/ok/err and warm-neutral literals migrated to the Hybrid palette; on-accent text switched to `${accent-ink}`; Stop-button label darkened for contrast on coral. Object names, widget hierarchy, and test seams unchanged.
+- **Validation:** debug build green; focused + full CTest (544 tests) pass; screenshot smoke across Record/Settings/Hotkeys/Diagnostics/Logs/About/Source Picker shows correct dark-mode look, no leftover amber, no contrast/font/parse regressions.
+- **Not touched:** shell/sidebar/top-nav, `OperationalTitleBar`, `GlobalRecordingBar`, Record/Settings/Source layouts, capture/encoder/muxer/audio, settings schema, build metadata.
+
 ---
 
 ## HYBRID-PORT-R1B — Shell / Top Nav / Titlebar

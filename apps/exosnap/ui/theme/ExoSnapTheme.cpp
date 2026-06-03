@@ -13,11 +13,28 @@
 #include <QVector>
 #include <QtGlobal>
 
+#include "ExoSnapAccents.h"
 #include "ExoSnapMetrics.h"
 #include "ExoSnapPalette.h"
 
 namespace exosnap::ui::theme {
 namespace {
+
+constexpr bool CStrEqual(const char* a, const char* b) {
+    while (*a != '\0' && *a == *b) {
+        ++a;
+        ++b;
+    }
+    return *a == *b;
+}
+
+// Keep the curated accent table and the active palette in sync at compile time.
+static_assert(CStrEqual(kDefaultAccentId, kExoSnapAccents.front().id),
+              "kDefaultAccentId must reference the first curated accent.");
+static_assert(CStrEqual(kExoSnapAccents.front().base, ExoSnapPalette::kAccent),
+              "Default curated accent base must match ExoSnapPalette::kAccent.");
+static_assert(CStrEqual(kExoSnapAccents.front().ink, ExoSnapPalette::kAccentInk),
+              "Default curated accent ink must match ExoSnapPalette::kAccentInk.");
 
 struct ThemeToken {
     QString key;
@@ -64,12 +81,21 @@ QStringList BuildFamilyStack(const QString& primary_family, const QStringList& f
 }
 
 QStringList SansFamilies(const ThemeFontFamilies& font_families) {
-    return BuildFamilyStack(font_families.sans_primary, {QStringLiteral("Segoe UI"), QStringLiteral("sans-serif")});
+    // Hybrid v3 UI face. "Hanken Grotesk" is the design target; it is not bundled (no
+    // license-safe file is present in the repo), so it is only used when the system provides
+    // it. The bundled Inter family is the guaranteed fallback, then platform sans.
+    return BuildFamilyStack(QStringLiteral("Hanken Grotesk"),
+                            {font_families.sans_primary, QStringLiteral("Inter"), QStringLiteral("Segoe UI"),
+                             QStringLiteral("sans-serif")});
 }
 
 QStringList MonoFamilies(const ThemeFontFamilies& font_families) {
-    return BuildFamilyStack(font_families.mono_primary,
-                            {QStringLiteral("Cascadia Mono"), QStringLiteral("Consolas"), QStringLiteral("monospace")});
+    // Hybrid v3 mono face. "IBM Plex Mono" is the design target; it is not bundled, so it is
+    // only used when the system provides it. The bundled JetBrains Mono family is the
+    // guaranteed fallback, then platform monospace.
+    return BuildFamilyStack(QStringLiteral("IBM Plex Mono"),
+                            {font_families.mono_primary, QStringLiteral("JetBrains Mono"), QStringLiteral("Consolas"),
+                             QStringLiteral("monospace")});
 }
 
 QString CssFontFamily(const QStringList& families) {
@@ -110,6 +136,7 @@ QVector<ThemeToken> BuildTokens(const ThemeFontFamilies& font_families) {
         {"${text2}", ExoSnapPalette::kText2},
         {"${text3}", ExoSnapPalette::kText3},
         {"${accent}", ExoSnapPalette::kAccent},
+        {"${accent-ink}", ExoSnapPalette::kAccentInk},
         {"${accent-dim}", ExoSnapPalette::kAccentDim},
         {"${accent-line}", ExoSnapPalette::kAccentLine},
         {"${accent-hover}", ExoSnapPalette::kAccentHover},
@@ -180,7 +207,7 @@ void ApplyPalette(QApplication& app) {
     palette.setColor(QPalette::Button, QColor(ExoSnapPalette::kBg3));
     palette.setColor(QPalette::ButtonText, QColor(ExoSnapPalette::kText1));
     palette.setColor(QPalette::Highlight, QColor(ExoSnapPalette::kAccent));
-    palette.setColor(QPalette::HighlightedText, QColor(ExoSnapPalette::kBg0));
+    palette.setColor(QPalette::HighlightedText, QColor(ExoSnapPalette::kAccentInk));
     palette.setColor(QPalette::Link, QColor(ExoSnapPalette::kAccent));
     palette.setColor(QPalette::ToolTipBase, QColor(ExoSnapPalette::kBg2));
     palette.setColor(QPalette::ToolTipText, QColor(ExoSnapPalette::kText0));

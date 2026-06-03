@@ -41,6 +41,7 @@ qt_add_executable(exosnap WIN32
     assets/brand/exosnap_brand.qrc
     assets/fonts/exosnap_fonts.qrc
     ui/theme/ExoSnapPalette.h
+    ui/theme/ExoSnapAccents.h
     ui/theme/ExoSnapMetrics.h
     ui/theme/ExoSnapTheme.h
     ui/theme/ExoSnapTheme.cpp

@@ -10,9 +10,10 @@ struct ExoSnapMetrics final {
     static constexpr int kSpaceXl = 24;
     static constexpr int kSpace2xl = 32;
 
-    static constexpr int kRadiusSm = 7;
-    static constexpr int kRadiusMd = 9;
-    static constexpr int kRadiusLg = 12;
+    // Hybrid v3 radius scale (softer corners; selects ~9-10, cards ~14).
+    static constexpr int kRadiusSm = 8;
+    static constexpr int kRadiusMd = 10;
+    static constexpr int kRadiusLg = 14;
 
     static constexpr int kSidebarWidth = 200;
     static constexpr int kTitlebarHeight = 56;
