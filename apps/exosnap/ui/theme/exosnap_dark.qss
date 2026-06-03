@@ -380,7 +380,7 @@ QLabel[labelRole="recordHotkeyBadge"] {
 
 QLabel[labelRole="recordTimer"] {
     font-family: ${font-mono};
-    font-size: 42px;
+    font-size: 40px;
     letter-spacing: 0.04em;
     color: ${text2};
     font-weight: 600;
@@ -403,10 +403,10 @@ QLabel[labelRole="recordTimer"][timerState="blocked"] {
 }
 
 QPushButton#recordHeroBtn {
-    min-height: ${primary-cta-height}px;
+    min-height: 48px;
     font-size: 13px;
     font-weight: 600;
-    border-radius: ${radius-md}px;
+    border-radius: 8px;
 }
 
 QPushButton#recordHeroBtn[heroRole="start"] {
@@ -453,7 +453,7 @@ QLabel[labelRole="railSummary"] {
     font-family: ${font-mono};
     font-size: 11px;
     letter-spacing: 0.04em;
-    color: ${text1};
+    color: ${text2};
 }
 
 QWidget#recordRailSourceStatusPanel {
@@ -483,7 +483,7 @@ QLabel[labelRole="recordRailSourceChip"] {
     border: 1px solid ${line2};
     border-radius: ${radius-sm}px;
     background: ${bg3};
-    padding: 3px 7px;
+    padding: 8px 9px;
 }
 
 QLabel[labelRole="recordRailSourceChip"][stateRole="ready"] {
@@ -550,6 +550,12 @@ QLabel[labelRole="railStatValue"] {
     font-size: 26px;
     font-weight: 600;
     color: ${text0};
+}
+
+/* Readiness strip below the preview: a quiet hairline-bordered strip, not a filled card. */
+QFrame#recordReadinessPanel {
+    background: transparent;
+    border: 1px solid ${line1};
 }
 
 QWidget#recordSourceRow {

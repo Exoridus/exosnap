@@ -64,6 +64,10 @@
 namespace exosnap {
 namespace {
 
+// Record rail sizing (UX-RECOVERY-A): a fixed desktop-width rail, never a kiosk slab.
+constexpr int kRecordRailWidth = 320;
+constexpr int kRecordHeroButtonHeight = 48;
+
 QFrame* makePanel(QWidget* parent, const char* role = "panel") {
     auto* panel = new QFrame(parent);
     panel->setProperty("panelRole", role);
@@ -630,9 +634,24 @@ void RecordPage::updatePreviewHeightClamp() {
     }
 
     const bool narrow = cockpit_split_layout_ && cockpit_split_layout_->direction() == QBoxLayout::TopToBottom;
-    const int host_width = (preview_surface_host_ && preview_surface_host_->width() > 0)
-                               ? preview_surface_host_->width()
-                               : (preview_column_ ? preview_column_->width() : width());
+    int host_width = (preview_surface_host_ && preview_surface_host_->width() > 0)
+                         ? preview_surface_host_->width()
+                         : (preview_column_ ? preview_column_->width() : width());
+
+    if (!narrow) {
+        // Two-column layout: cap the preview by the genuinely available column width.
+        // A stale (full-width) host measurement during the stacked->side-by-side switch
+        // would otherwise inflate the preview and push the fixed rail off-screen — and,
+        // because the surface is pinned to a fixed size, the layout never recovers.
+        const int scrollbar = style()->pixelMetric(QStyle::PM_ScrollBarExtent);
+        const int reserved = 2 * ui::theme::ExoSnapMetrics::kSpaceXl + kRecordRailWidth +
+                             ui::theme::ExoSnapMetrics::kSpaceMd + scrollbar + 4;
+        const int column_cap = width() - reserved;
+        if (column_cap > 240) {
+            host_width = (std::min)(host_width, column_cap);
+        }
+    }
+
     const int safe_host_width = (std::max)(200, host_width);
     const int page_height = (std::max)(0, height());
 
@@ -669,8 +688,9 @@ void RecordPage::updateResponsiveLayout() {
         return;
     }
 
-    const bool narrow = width() < 1200;
-    const bool medium = width() < 1540;
+    // Keep preview + fixed rail side by side until the page is genuinely narrow.
+    // Only then stack the rail below the preview; never let it become a full-width slab.
+    const bool narrow = width() < 1100;
     const QBoxLayout::Direction desired = narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight;
     if (cockpit_split_layout_->direction() != desired) {
         cockpit_split_layout_->setDirection(desired);
@@ -681,14 +701,11 @@ void RecordPage::updateResponsiveLayout() {
     if (rail_control_panel_ && rail_control_panel_->parentWidget()) {
         auto* rail_column = rail_control_panel_->parentWidget();
         if (narrow) {
+            // Stacked under the preview: keep desktop sizing, never full width.
             rail_column->setMinimumWidth(0);
-            rail_column->setMaximumWidth(QWIDGETSIZE_MAX);
-        } else if (medium) {
-            rail_column->setMinimumWidth(336);
-            rail_column->setMaximumWidth(364);
+            rail_column->setMaximumWidth(kRecordRailWidth);
         } else {
-            rail_column->setMinimumWidth(340);
-            rail_column->setMaximumWidth(380);
+            rail_column->setFixedWidth(kRecordRailWidth);
         }
     }
 
@@ -807,8 +824,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     auto* rail_layout = new QVBoxLayout(rail_column);
     rail_layout->setContentsMargins(0, 0, 0, 0);
     rail_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
-    rail_column->setMinimumWidth(340);
-    rail_column->setMaximumWidth(380);
+    rail_column->setFixedWidth(kRecordRailWidth);
 
     rail_control_panel_ = makePanel(rail_column);
     rail_control_panel_->setObjectName("recordControlPanel");
@@ -835,7 +851,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 
     hero_action_btn_ = new QPushButton(QStringLiteral("Start Recording"), rail_control_panel_);
     hero_action_btn_->setObjectName("recordHeroBtn");
-    hero_action_btn_->setMinimumHeight(ui::theme::ExoSnapMetrics::kPrimaryCtaHeight);
+    hero_action_btn_->setMinimumHeight(kRecordHeroButtonHeight);
     hero_action_btn_->setEnabled(false);
     setStyledStringProperty(hero_action_btn_, "heroRole", "muted");
     control_layout->addWidget(hero_action_btn_);
@@ -847,7 +863,8 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     control_layout->addWidget(secondary_action_btn_);
 
     rail_summary_label_ = makeLabel(QStringLiteral("PRESET AV1 OPUS MKV"), "railSummary", rail_control_panel_);
-    rail_summary_label_->setWordWrap(true);
+    rail_summary_label_->setWordWrap(false);
+    rail_summary_label_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     control_layout->addWidget(rail_summary_label_);
 
     rail_source_status_panel_ = new QWidget(rail_control_panel_);
@@ -1026,6 +1043,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     layout->addWidget(readiness_header_);
 
     readiness_panel_ = makePanel(content);
+    readiness_panel_->setObjectName("recordReadinessPanel");
     auto* readiness_layout = new QVBoxLayout(readiness_panel_);
     readiness_layout->setContentsMargins(14, 10, 14, 10);
     readiness_layout->setSpacing(8);
