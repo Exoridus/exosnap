@@ -140,6 +140,15 @@ Accent scope note:
 
 **Claude Opus xhigh** — architecturally sensitive (frameless window, nav restructuring, title-bar state pill). The split from token work reduces the blast radius.
 
+### Implementation status — landed
+
+- **Shell:** the left `QListWidget` sidebar (and its footer About button) and the secondary `mainPageHead` title/subtitle/meta strip were removed. `OperationalTitleBar` now hosts the whole shell on one 56px bar: aperture mark + lowercase two-tone `exosnap` wordmark, top-nav tabs, a flexible drag spacer, the status pill, and min/max/close. The existing frameless window / native resize / DWM-border handling was kept as-is (lowest risk).
+- **Navigation:** top nav is **Record · Settings · Hotkeys · Diagnostics · Logs · About**. The five page tabs are checkable buttons in an exclusive `QButtonGroup` that drive the existing `QStackedWidget` (routing model unchanged); the active tab gets a 2px accent underline. About stays a `QDialog` launched from its tab (no stack page added). Advanced/Webcam remain reachable sub-pages and keep the Settings tab lit.
+- **Status pill:** consumes the existing recorder state only (`Ready` / `Recording` / `Paused`, plus the real transient `Checking`/`Starting`/`Stopping` and `Blocked`/`Error` states), now in hybrid title-case. The brand mark turns coral while recording via `BrandMarkWidget::setRecording`. No fabricated recording-health metrics are shown at the shell layer (real per-frame metrics are not surfaced here).
+- **GlobalRecordingBar:** was already not instantiated in the shell; left inert/untracked-by-shell (file + unit test retained) since the title-bar pill now covers the same states. No transport buttons, debug telemetry, page numbers, or global CPU/GPU/RAM/Disk stats were reintroduced.
+- **Tests:** new `chrome.OperationalTitleBarTest` covers nav tabs/order, no page numbers, About-as-action, `setActivePage`, status-pill states, and absence of transport buttons. Debug build green; focused + full CTest pass (550/550). Screenshot smoke under `.workspace/screenshots/hybrid-port-r1b-shell-titlebar/`.
+- **Not touched:** Record/Settings/Source/Webcam/Diagnostics/Logs/Hotkeys page interiors, capture/encoder/muxer/audio, recording state machine, settings schema, build metadata, PreviewSurface/DXGI.
+
 ---
 
 ## HYBRID-PORT-R2 — Record Preview + Stable Bottom Dock
