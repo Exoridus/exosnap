@@ -76,13 +76,23 @@ TEST_F(ConfigPageTest, VideoQualityComboExists) {
     EXPECT_GE(combos.size(), 2);
 }
 
-TEST_F(ConfigPageTest, QualityCardsExist_WithStableObjectNames) {
+TEST_F(ConfigPageTest, QualitySegmentsExist_WithStableObjectNames) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualityCardHigh")), nullptr);
-    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualityCardBalanced")), nullptr);
-    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualityCardSmall")), nullptr);
-    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualityCardCustom")), nullptr);
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall")), nullptr);
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualitySegmentBalanced")), nullptr);
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh")), nullptr);
+}
+
+TEST_F(ConfigPageTest, LegacyQualityCards_AreRemoved) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // The 2x2 card selector (and its disabled Custom placeholder) are gone.
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("qualityCardHigh")), nullptr);
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("qualityCardBalanced")), nullptr);
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("qualityCardSmall")), nullptr);
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("qualityCardCustom")), nullptr);
+    EXPECT_EQ(page.findChild<QWidget*>(QStringLiteral("qualityCardsGrid")), nullptr);
 }
 
 TEST_F(ConfigPageTest, AudioSourceCheckboxesExist) {
@@ -268,56 +278,74 @@ TEST_F(ConfigPageTest, VideoQualityChange_EmitsVideoSettingsChanged) {
     EXPECT_TRUE(emitted);
 }
 
-TEST_F(ConfigPageTest, QualityCardClick_UpdatesModelAndSummary) {
+TEST_F(ConfigPageTest, QualitySegmentClick_EachSegmentUpdatesModelAndSummary) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    bool emitted = false;
     VideoSettingsModel changed;
+    int emit_count = 0;
     QObject::connect(&page, &ConfigPage::videoSettingsChanged, [&](const VideoSettingsModel& settings) {
-        emitted = true;
+        ++emit_count;
         changed = settings;
     });
 
-    auto* high_card = page.findChild<QPushButton*>(QStringLiteral("qualityCardHigh"));
-    auto* small_card = page.findChild<QPushButton*>(QStringLiteral("qualityCardSmall"));
-    ASSERT_NE(high_card, nullptr);
-    ASSERT_NE(small_card, nullptr);
-
-    small_card->click();
-    EXPECT_TRUE(emitted);
-    EXPECT_EQ(changed.quality, recorder_core::NvencQualityPreset::Small);
-    EXPECT_TRUE(small_card->property("qualityCardSelected").toBool());
-    EXPECT_FALSE(high_card->property("qualityCardSelected").toBool());
+    auto* small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
+    auto* balanced_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentBalanced"));
+    auto* high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
+    ASSERT_NE(small_segment, nullptr);
+    ASSERT_NE(balanced_segment, nullptr);
+    ASSERT_NE(high_segment, nullptr);
 
     auto* settings_label = page.findChild<QLabel*>(QStringLiteral("qualitySettingsLabel"));
-    ASSERT_NE(settings_label, nullptr);
-    EXPECT_TRUE(settings_label->text().contains(QStringLiteral("CQ 30")));
-
     auto* badge_label = page.findChild<QLabel*>(QStringLiteral("qualityBadgeLabel"));
+    ASSERT_NE(settings_label, nullptr);
     ASSERT_NE(badge_label, nullptr);
+
+    // Default quality is High, so each click below is a real change and emits.
+    small_segment->click();
+    EXPECT_EQ(changed.quality, recorder_core::NvencQualityPreset::Small);
+    EXPECT_TRUE(small_segment->isChecked());
+    EXPECT_TRUE(small_segment->property("qualitySegmentSelected").toBool());
+    EXPECT_FALSE(high_segment->isChecked());
+    EXPECT_TRUE(settings_label->text().contains(QStringLiteral("CQ 30")));
     EXPECT_EQ(badge_label->text(), QStringLiteral("Smaller files"));
+
+    balanced_segment->click();
+    EXPECT_EQ(changed.quality, recorder_core::NvencQualityPreset::Balanced);
+    EXPECT_TRUE(balanced_segment->isChecked());
+    EXPECT_FALSE(small_segment->isChecked());
+    EXPECT_TRUE(settings_label->text().contains(QStringLiteral("CQ 24")));
+    EXPECT_EQ(badge_label->text(), QStringLiteral("General purpose"));
+
+    high_segment->click();
+    EXPECT_EQ(changed.quality, recorder_core::NvencQualityPreset::High);
+    EXPECT_TRUE(high_segment->isChecked());
+    EXPECT_FALSE(balanced_segment->isChecked());
+    EXPECT_TRUE(settings_label->text().contains(QStringLiteral("CQ 19")));
+    EXPECT_EQ(badge_label->text(), QStringLiteral("Sharper · larger files"));
+
+    EXPECT_EQ(emit_count, 3);
 }
 
-TEST_F(ConfigPageTest, SetVideoSettings_UpdatesQualityCardSelection) {
+TEST_F(ConfigPageTest, SetVideoSettings_UpdatesQualitySegmentSelection) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     VideoSettingsModel balanced = video_defaults_;
     balanced.quality = recorder_core::NvencQualityPreset::Balanced;
     page.setVideoSettings(balanced);
 
-    auto* high_card = page.findChild<QPushButton*>(QStringLiteral("qualityCardHigh"));
-    auto* balanced_card = page.findChild<QPushButton*>(QStringLiteral("qualityCardBalanced"));
-    auto* small_card = page.findChild<QPushButton*>(QStringLiteral("qualityCardSmall"));
-    auto* custom_card = page.findChild<QPushButton*>(QStringLiteral("qualityCardCustom"));
-    ASSERT_NE(high_card, nullptr);
-    ASSERT_NE(balanced_card, nullptr);
-    ASSERT_NE(small_card, nullptr);
-    ASSERT_NE(custom_card, nullptr);
+    auto* small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
+    auto* balanced_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentBalanced"));
+    auto* high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
+    ASSERT_NE(small_segment, nullptr);
+    ASSERT_NE(balanced_segment, nullptr);
+    ASSERT_NE(high_segment, nullptr);
 
-    EXPECT_FALSE(high_card->property("qualityCardSelected").toBool());
-    EXPECT_TRUE(balanced_card->property("qualityCardSelected").toBool());
-    EXPECT_FALSE(small_card->property("qualityCardSelected").toBool());
-    EXPECT_FALSE(custom_card->property("qualityCardSelected").toBool());
+    EXPECT_FALSE(high_segment->isChecked());
+    EXPECT_TRUE(balanced_segment->isChecked());
+    EXPECT_FALSE(small_segment->isChecked());
+    EXPECT_FALSE(high_segment->property("qualitySegmentSelected").toBool());
+    EXPECT_TRUE(balanced_segment->property("qualitySegmentSelected").toBool());
+    EXPECT_FALSE(small_segment->property("qualitySegmentSelected").toBool());
 }
 
 TEST_F(ConfigPageTest, SetRecordingControlsLocked_DisablesKeyControls) {
@@ -332,12 +360,12 @@ TEST_F(ConfigPageTest, SetRecordingControlsLocked_DisablesKeyControls) {
     auto* quality_combo = page.findChild<QComboBox*>(QStringLiteral("videoQualityCombo"));
     ASSERT_NE(quality_combo, nullptr);
     EXPECT_FALSE(quality_combo->isEnabled());
-    auto* quality_high_card = page.findChild<QPushButton*>(QStringLiteral("qualityCardHigh"));
-    ASSERT_NE(quality_high_card, nullptr);
-    EXPECT_FALSE(quality_high_card->isEnabled());
-    auto* quality_custom_card = page.findChild<QPushButton*>(QStringLiteral("qualityCardCustom"));
-    ASSERT_NE(quality_custom_card, nullptr);
-    EXPECT_FALSE(quality_custom_card->isEnabled());
+    auto* quality_high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
+    ASSERT_NE(quality_high_segment, nullptr);
+    EXPECT_FALSE(quality_high_segment->isEnabled());
+    auto* quality_small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
+    ASSERT_NE(quality_small_segment, nullptr);
+    EXPECT_FALSE(quality_small_segment->isEnabled());
 
     auto* dest_edit = page.findChild<QLineEdit*>(QStringLiteral("destinationEdit"));
     ASSERT_NE(dest_edit, nullptr);
@@ -366,12 +394,12 @@ TEST_F(ConfigPageTest, DefaultControlsAreEnabled) {
     auto* quality_combo = page.findChild<QComboBox*>(QStringLiteral("videoQualityCombo"));
     ASSERT_NE(quality_combo, nullptr);
     EXPECT_TRUE(quality_combo->isEnabled());
-    auto* quality_high_card = page.findChild<QPushButton*>(QStringLiteral("qualityCardHigh"));
-    ASSERT_NE(quality_high_card, nullptr);
-    EXPECT_TRUE(quality_high_card->isEnabled());
-    auto* quality_custom_card = page.findChild<QPushButton*>(QStringLiteral("qualityCardCustom"));
-    ASSERT_NE(quality_custom_card, nullptr);
-    EXPECT_FALSE(quality_custom_card->isEnabled());
+    auto* quality_high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
+    ASSERT_NE(quality_high_segment, nullptr);
+    EXPECT_TRUE(quality_high_segment->isEnabled());
+    auto* quality_small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
+    ASSERT_NE(quality_small_segment, nullptr);
+    EXPECT_TRUE(quality_small_segment->isEnabled());
 
     auto* mic_combo = page.findChild<QComboBox*>(QStringLiteral("micDeviceCombo"));
     ASSERT_NE(mic_combo, nullptr);

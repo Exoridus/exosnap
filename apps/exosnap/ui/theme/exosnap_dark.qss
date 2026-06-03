@@ -214,93 +214,51 @@ QFrame[panelRole="readinessBanner"][stateRole="blocked"] {
     border-color: rgba(240, 91, 84, 0.48);
 }
 
-/* Settings - capture quality cards */
-QWidget#qualityCardsGrid {
-    background: transparent;
-}
-
-QPushButton[qualityCard="true"] {
-    text-align: left;
-    min-height: 64px;
-    padding: 0;
-    background: ${bg3};
+/* Settings - capture quality segmented control */
+QWidget#qualitySegmented {
+    background: ${bg2};
     border: 1px solid ${line2};
     border-radius: ${radius-md}px;
 }
 
-QPushButton[qualityCard="true"]:hover {
-    background: ${bg4};
-    border-color: ${line3};
+QPushButton[qualitySegment="true"] {
+    min-height: 32px;
+    padding: 0 12px;
+    background: transparent;
+    border: none;
+    border-radius: ${radius-sm}px;
+    color: ${text1};
+    font-size: 12.5px;
+    text-align: center;
 }
 
-QPushButton[qualityCard="true"]:focus {
-    border-color: ${accent};
-    background: rgba(233, 179, 97, 0.12);
-}
-
-QPushButton[qualityCard="true"][qualityCardSelected="true"] {
-    border-color: ${accent};
-    background: rgba(233, 179, 97, 0.16);
-}
-
-QPushButton[qualityCard="true"][qualityCardSelected="true"]:hover {
-    border-color: ${accent};
-    background: rgba(233, 179, 97, 0.22);
-}
-
-QPushButton[qualityCard="true"][qualityCardFuture="true"] {
-    border-style: dashed;
-    background: ${bg2};
-}
-
-QPushButton[qualityCard="true"][qualityCardFuture="true"]:hover {
-    border-color: ${line2};
-    background: ${bg2};
-}
-
-QLabel[labelRole="qualityCardTitle"] {
-    font-size: 13.5px;
-    font-weight: 600;
+QPushButton[qualitySegment="true"]:hover {
+    background: ${bg3};
     color: ${text0};
 }
 
-QPushButton[qualityCard="true"][qualityCardSelected="true"] QLabel[labelRole="qualityCardTitle"] {
-    color: ${accent};
-}
-
-QLabel[labelRole="qualityCardDescriptor"] {
-    font-size: 12px;
-    color: ${text2};
-}
-
-QLabel[labelRole="qualityCardDetail"] {
-    font-family: ${font-mono};
-    font-size: 10.5px;
-    letter-spacing: 0.04em;
-    color: ${text2};
-}
-
-QLabel[labelRole="qualityCardCheck"] {
-    font-family: ${font-mono};
-    font-size: 11px;
+QPushButton[qualitySegment="true"]:checked,
+QPushButton[qualitySegment="true"][qualitySegmentSelected="true"] {
+    background: ${accent};
+    color: ${bg0};
     font-weight: 600;
-    color: ${accent};
-    border: 1px solid rgba(233, 179, 97, 0.62);
-    border-radius: ${radius-sm}px;
-    background: rgba(233, 179, 97, 0.16);
-    padding: 1px 6px;
 }
 
-QPushButton[qualityCard="true"]:disabled QLabel[labelRole="qualityCardTitle"],
-QPushButton[qualityCard="true"]:disabled QLabel[labelRole="qualityCardDescriptor"],
-QPushButton[qualityCard="true"]:disabled QLabel[labelRole="qualityCardDetail"] {
-    color: ${text3};
+QPushButton[qualitySegment="true"]:checked:hover,
+QPushButton[qualitySegment="true"][qualitySegmentSelected="true"]:hover {
+    background: ${accent-hover};
+    color: ${bg0};
 }
 
-QPushButton[qualityCard="true"]:disabled QLabel[labelRole="qualityCardCheck"] {
+QPushButton[qualitySegment="true"]:disabled {
     color: ${text3};
-    border-color: ${line1};
-    background: ${bg2};
+    background: transparent;
+}
+
+QPushButton[qualitySegment="true"]:checked:disabled,
+QPushButton[qualitySegment="true"][qualitySegmentSelected="true"]:disabled {
+    background: ${bg3};
+    color: ${text3};
 }
 
 /* Record page */
