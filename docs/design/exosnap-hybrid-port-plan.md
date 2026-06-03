@@ -225,6 +225,19 @@ Do not present PiP as fake-active if the Qt app cannot support drag/resize yet.
 
 **Claude Opus xhigh/max** — complex state-driven widget with real-time audio meter painting, recording-coordinator integration, and precise pixel alignment to prototype dock.
 
+### Implementation status — R2A landed
+
+Delivered as **R2A — Record Preview + Dock Skeleton** (the full four-state dock with real data); the genuinely honest-risky pieces (live meters, title-bar health metrics) are deferred to **R2B**.
+
+- **Preview-first layout:** `RecordPage` is now a single column — the existing `PreviewSurface` fills the available area above a bottom dock (page gutter 24px, 16px gap). `updatePreviewHeightClamp()` sizes the surface to the largest 16:9 rectangle that fits the host (no rail width reserved); `updateResponsiveLayout()` collapsed to a single-column no-op. The DXGI/preview backend, webcam PiP overlay, and `PreviewSurface` API are untouched. The legacy right rail / kiosk transport is gone from the visible page.
+- **New widgets:** `ui/widgets/TransportDock` (3-zone `QFrame`: left toggles/result | center duration | right actions, stable geometry across states), `ui/widgets/AudioSourceToggle` (circular self-painted icon pill; SVG icons via `QSvgRenderer`; on/off + interactive/read-only), `ui/widgets/CountdownSelect` (Off/3s/5s/10s, disabled/planned — recording delay is not wired).
+- **State behaviour:** Ready `[toggles] · 00:00:00 · countdown + Record]`; Recording `[toggles · timer · Pause + Stop]`; Paused `[toggles · timer(amber) · Resume + Stop]`; Completed `[filename link + Open folder + size · timer(green) · Record again]`. Driven from `updateTransportDock()` off the existing `RecordViewModel`/`RecordingCoordinator` state — no new engine wiring.
+- **Honesty:** audio toggles edit pre-record `AudioUiState` (System/Mic/App) via the existing `audioSettingsChanged` path and become read-only status pills while the source is locked; the webcam toggle is an honest read-only status pill (configured in Settings); the countdown is disabled/planned; the dock shows **no** audio meters and **no** fabricated recording-health numbers (timer is `--:--:--` until real live stats arrive). Completed uses real result filename/size/duration; the filename opens the file and Open folder reveals it.
+- **Legacy preservation:** the old below-preview sections (audio settings, destination, readiness, target pickers, result panel, right rail) are constructed exactly as before but parked off-screen in a hidden `recordLegacyHost` so every `refresh()`/`updateStats()`/`updateResult()` pointer stays valid and no engine path changed. They are removed for real when Settings absorbs them in **R3**.
+- **Tests:** new `record.TransportDockTest` (11 cases) covers the dock seams/objectNames, per-state visibility (Ready→Record, Recording→Pause+Stop, Paused→Resume+Stop, Completed→Record again + result info), primary-enable gating, interactive vs read-only toggles, the record signal, the timer text/role, and the absence of a kiosk "Start Recording" label. Debug build green; focused (264) + full (561) CTest pass; screenshot smoke under `.workspace/screenshots/hybrid-port-r2-record-dock/`.
+- **Deferred to R2B:** live L/R stereo dB meters in the dock (real per-channel data not yet plumbed; no fakes added), title-bar Completed→"Saved" pill + recording-health metrics, and final pixel polish.
+- **Not touched:** Settings/Source/Webcam/Diagnostics/Logs/Hotkeys/About interiors, R1B shell/top-nav (status pill semantics unchanged), capture/encoder/muxer/audio internals, recording state machine, settings schema, build metadata, `PreviewSurface`/DXGI.
+
 ---
 
 ## HYBRID-PORT-R3 — Settings Compact IA

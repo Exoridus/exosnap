@@ -33,6 +33,7 @@ class CaptureTargetCard;
 class ExoCheckBox;
 class PreviewSurface;
 class SectionRuleHeader;
+class TransportDock;
 class VUMeterWidget;
 } // namespace ui::widgets
 
@@ -99,6 +100,9 @@ class RecordPage : public QWidget {
     void refresh();
     void updateStatsDisplay();
     void updateResultDisplay();
+    void updateTransportDock();
+    void onDockSourceToggle(const QString& key);
+    void onDockFilenameActivated();
     void updateTargetCards();
     void updateReadinessRows();
     void updateResponsiveLayout();
@@ -265,6 +269,10 @@ class RecordPage : public QWidget {
     QLabel* readiness_summary_label_ = nullptr;
     QPushButton* result_open_folder_btn_ = nullptr;
     QPushButton* result_record_again_btn_ = nullptr;
+
+    // Hybrid v3 preview-first chrome (HYBRID-PORT-R2).
+    ui::widgets::TransportDock* transport_dock_ = nullptr;
+    QWidget* legacy_host_ = nullptr;
 };
 
 } // namespace exosnap

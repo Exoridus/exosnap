@@ -81,6 +81,12 @@ qt_add_executable(exosnap WIN32
     ui/widgets/RegionSelectionOverlay.cpp
     ui/widgets/AudioSourceRow.h
     ui/widgets/AudioSourceRow.cpp
+    ui/widgets/AudioSourceToggle.h
+    ui/widgets/AudioSourceToggle.cpp
+    ui/widgets/CountdownSelect.h
+    ui/widgets/CountdownSelect.cpp
+    ui/widgets/TransportDock.h
+    ui/widgets/TransportDock.cpp
     MainWindow.h
     MainWindow.cpp
     pages/RecordPage.h
@@ -366,3 +372,16 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(preview_helpers_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+    NAME transport_dock_tests
+    TEST_PREFIX record.
+    SOURCES
+        tests/test_transport_dock.cpp
+        ui/widgets/TransportDock.cpp
+        ui/widgets/AudioSourceToggle.cpp
+        ui/widgets/CountdownSelect.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
+)
+target_include_directories(transport_dock_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(transport_dock_tests PROPERTIES AUTOMOC ON)

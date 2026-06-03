@@ -2203,3 +2203,141 @@ QLabel[labelRole="detailBreadcrumb"] {
     color: ${text2};
     font-weight: 400;
 }
+
+/* ── Record transport dock (HYBRID-PORT-R2 — preview-first bottom dock) ── */
+QFrame#recordTransportDock {
+    background: ${bg1};
+    border: 1px solid ${line1};
+    border-radius: ${radius-lg}px;
+}
+
+/* Center duration — monospace, tabular, always centered. */
+QLabel[labelRole="recordDockTimer"] {
+    font-family: ${font-mono};
+    font-size: 30px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: ${text2};
+}
+
+QLabel[labelRole="recordDockTimer"][timerState="recording"] {
+    color: ${text0};
+}
+
+QLabel[labelRole="recordDockTimer"][timerState="paused"] {
+    color: ${warn};
+}
+
+QLabel[labelRole="recordDockTimer"][timerState="done"] {
+    color: ${ok};
+}
+
+QLabel[labelRole="recordDockTimer"][timerState="blocked"] {
+    color: ${err};
+}
+
+/* Action buttons — shared shape. */
+QPushButton#recordDockRecord,
+QPushButton#recordDockRecordAgain,
+QPushButton#recordDockResume,
+QPushButton#recordDockStop,
+QPushButton#recordDockPause,
+QPushButton#recordDockOpenFolder {
+    border-radius: 999px;
+    font-size: 13.5px;
+    font-weight: 600;
+    padding: 8px 18px;
+}
+
+QPushButton[dockAction="record"],
+QPushButton[dockAction="resume"] {
+    color: ${accent-ink};
+    background: ${accent};
+    border: 1px solid ${accent};
+}
+
+QPushButton[dockAction="record"]:hover,
+QPushButton[dockAction="resume"]:hover {
+    background: ${accent-hover};
+    border-color: ${accent-hover};
+}
+
+QPushButton[dockAction="record"]:disabled,
+QPushButton[dockAction="resume"]:disabled {
+    color: ${text3};
+    background: ${bg2};
+    border-color: ${line1};
+}
+
+QPushButton[dockAction="stop"] {
+    color: #1A0D0B;
+    background: ${err};
+    border: 1px solid ${err};
+}
+
+QPushButton[dockAction="stop"]:hover {
+    background: #EC8A7E;
+    border-color: #EC8A7E;
+}
+
+QPushButton[dockAction="stop"]:disabled {
+    color: ${text3};
+    background: ${bg2};
+    border-color: ${line1};
+}
+
+QPushButton[dockAction="ghost"] {
+    color: ${text2};
+    background: transparent;
+    border: 1px solid ${line2};
+}
+
+QPushButton[dockAction="ghost"]:hover {
+    color: ${text0};
+    border-color: ${accent-line};
+}
+
+QPushButton[dockAction="ghost"]:disabled {
+    color: ${text3};
+    border-color: ${line1};
+}
+
+/* Completed (result) zone. */
+QPushButton#recordDockFilename {
+    color: ${accent};
+    background: transparent;
+    border: none;
+    text-align: left;
+    font-family: ${font-mono};
+    font-size: 13px;
+    padding: 0;
+}
+
+QPushButton#recordDockFilename:hover {
+    color: ${accent-hover};
+    text-decoration: underline;
+}
+
+QPushButton#recordDockFilename:disabled {
+    color: ${text2};
+}
+
+QLabel[labelRole="recordDockSize"] {
+    font-family: ${font-mono};
+    font-size: 12px;
+    color: ${text2};
+}
+
+/* Countdown select — planned/disabled in this slice. */
+QComboBox#recordCountdownSelect {
+    background: ${bg2};
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    padding: 7px 11px;
+    color: ${text2};
+    min-width: 78px;
+}
+
+QComboBox#recordCountdownSelect:disabled {
+    color: ${text3};
+}

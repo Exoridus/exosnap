@@ -13,6 +13,7 @@
 #include "../ui/widgets/RegionSelectionOverlay.h"
 #include "../ui/widgets/SectionRuleHeader.h"
 #include "../ui/widgets/StatusPill.h"
+#include "../ui/widgets/TransportDock.h"
 #include "../ui/widgets/VUMeterWidget.h"
 
 #include <capability/capability_builder.h>
@@ -629,43 +630,21 @@ void RecordPage::showEvent(QShowEvent* event) {
 }
 
 void RecordPage::updatePreviewHeightClamp() {
-    if (!preview_surface_) {
+    if (!preview_surface_ || !preview_surface_host_) {
         return;
     }
 
-    const bool narrow = cockpit_split_layout_ && cockpit_split_layout_->direction() == QBoxLayout::TopToBottom;
-    int host_width = (preview_surface_host_ && preview_surface_host_->width() > 0)
-                         ? preview_surface_host_->width()
-                         : (preview_column_ ? preview_column_->width() : width());
+    // Preview-first (HYBRID-PORT-R2): the surface is the largest 16:9 rectangle
+    // that fits the available host area. No rail width is reserved any more — the
+    // preview owns the page width above the bottom transport dock.
+    const int avail_width = (std::max)(200, preview_surface_host_->width() - 2);
+    const int avail_height = (std::max)(120, preview_surface_host_->height() - 2);
 
-    if (!narrow) {
-        // Two-column layout: cap the preview by the genuinely available column width.
-        // A stale (full-width) host measurement during the stacked->side-by-side switch
-        // would otherwise inflate the preview and push the fixed rail off-screen — and,
-        // because the surface is pinned to a fixed size, the layout never recovers.
-        const int scrollbar = style()->pixelMetric(QStyle::PM_ScrollBarExtent);
-        const int reserved = 2 * ui::theme::ExoSnapMetrics::kSpaceXl + kRecordRailWidth +
-                             ui::theme::ExoSnapMetrics::kSpaceMd + scrollbar + 4;
-        const int column_cap = width() - reserved;
-        if (column_cap > 240) {
-            host_width = (std::min)(host_width, column_cap);
-        }
-    }
-
-    const int safe_host_width = (std::max)(200, host_width);
-    const int page_height = (std::max)(0, height());
-
-    const int min_height = narrow ? 260 : 300;
-    const int max_height = narrow ? std::clamp(static_cast<int>(page_height * 0.56), 320, 760)
-                                  : std::clamp(static_cast<int>(page_height * 0.76), 360, 980);
-
-    int frame_height = static_cast<int>((static_cast<double>(safe_host_width) * 9.0) / 16.0);
-    frame_height = std::clamp(frame_height, min_height, max_height);
-
-    int frame_width = static_cast<int>((static_cast<double>(frame_height) * 16.0) / 9.0);
-    if (frame_width > safe_host_width) {
-        frame_width = safe_host_width;
-        frame_height = static_cast<int>((static_cast<double>(frame_width) * 9.0) / 16.0);
+    int frame_width = avail_width;
+    int frame_height = static_cast<int>((static_cast<double>(frame_width) * 9.0) / 16.0);
+    if (frame_height > avail_height) {
+        frame_height = avail_height;
+        frame_width = static_cast<int>((static_cast<double>(frame_height) * 16.0) / 9.0);
     }
 
     frame_width = (std::max)(200, frame_width);
@@ -684,39 +663,7 @@ void RecordPage::updatePreviewHeightClamp() {
 }
 
 void RecordPage::updateResponsiveLayout() {
-    if (!cockpit_split_layout_) {
-        return;
-    }
-
-    // Keep preview + fixed rail side by side until the page is genuinely narrow.
-    // Only then stack the rail below the preview; never let it become a full-width slab.
-    const bool narrow = width() < 1100;
-    const QBoxLayout::Direction desired = narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight;
-    if (cockpit_split_layout_->direction() != desired) {
-        cockpit_split_layout_->setDirection(desired);
-    }
-    cockpit_split_layout_->setSpacing(narrow ? ui::theme::ExoSnapMetrics::kSpaceSm
-                                             : ui::theme::ExoSnapMetrics::kSpaceMd);
-
-    if (rail_control_panel_ && rail_control_panel_->parentWidget()) {
-        auto* rail_column = rail_control_panel_->parentWidget();
-        if (narrow) {
-            // Stacked under the preview: keep desktop sizing, never full width.
-            rail_column->setMinimumWidth(0);
-            rail_column->setMaximumWidth(kRecordRailWidth);
-        } else {
-            rail_column->setFixedWidth(kRecordRailWidth);
-        }
-    }
-
-    if (narrow) {
-        cockpit_split_layout_->setStretch(0, 1);
-        cockpit_split_layout_->setStretch(1, 0);
-    } else {
-        cockpit_split_layout_->setStretch(0, 7);
-        cockpit_split_layout_->setStretch(1, 3);
-    }
-
+    // Single-column preview-first layout; the bottom dock spans the full width.
     updatePreviewHeightClamp();
 }
 
@@ -813,7 +760,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     preview_surface_host_layout->setSpacing(0);
     preview_surface_host_layout->addStretch(1);
     preview_surface_ = new ui::widgets::PreviewSurface(preview_surface_host_);
-    preview_surface_host_layout->addWidget(preview_surface_, 0, Qt::AlignHCenter | Qt::AlignTop);
+    preview_surface_host_layout->addWidget(preview_surface_, 0, Qt::AlignHCenter | Qt::AlignVCenter);
     preview_surface_host_layout->addStretch(1);
     preview_column_layout->addWidget(preview_surface_host_, 1);
 
@@ -1317,9 +1264,30 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     layout->addStretch(1);
     scroll->setWidget(content);
 
+    // Hybrid v3 (HYBRID-PORT-R2): the visible Record page is preview-first with a
+    // stable bottom transport dock. The legacy sections (right rail, audio
+    // settings, destination, readiness, target pickers, result panel) are kept
+    // constructed but parked off-screen in `legacy_host_` so every existing
+    // pointer used by refresh()/updateStats()/updateResult() stays valid and no
+    // engine wiring changes. These sections migrate into Settings in R3.
+    cockpit_split_layout_->removeWidget(preview_column_);
+    preview_column_->setParent(nullptr);
+
+    legacy_host_ = new QWidget(this);
+    legacy_host_->setObjectName(QStringLiteral("recordLegacyHost"));
+    auto* legacy_host_layout = new QVBoxLayout(legacy_host_);
+    legacy_host_layout->setContentsMargins(0, 0, 0, 0);
+    legacy_host_layout->addWidget(scroll);
+    legacy_host_->setVisible(false);
+
+    transport_dock_ = new ui::widgets::TransportDock(this);
+
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->addWidget(scroll);
+    root->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
+                             ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
+    root->setSpacing(16);
+    root->addWidget(preview_column_, 1);
+    root->addWidget(transport_dock_, 0);
 
     auto* combo_wheel_filter = new ui::widgets::ComboBoxWheelFilter(this);
     combo_wheel_filter->installOn(target_picker_combo_);
@@ -1382,6 +1350,31 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
         else if (view_model_.CanStop())
             onStop();
     });
+
+    // Hybrid transport dock (HYBRID-PORT-R2) drives the same recording actions.
+    connect(transport_dock_, &ui::widgets::TransportDock::recordClicked, this, [this]() {
+        if (view_model_.CanStart())
+            onStart();
+    });
+    connect(transport_dock_, &ui::widgets::TransportDock::recordAgainClicked, this, [this]() {
+        if (view_model_.CanStart())
+            onStart();
+    });
+    connect(transport_dock_, &ui::widgets::TransportDock::stopClicked, this, [this]() {
+        if (view_model_.CanStop())
+            onStop();
+    });
+    connect(transport_dock_, &ui::widgets::TransportDock::pauseClicked, this, [this]() {
+        if (view_model_.CanPause())
+            onPause();
+    });
+    connect(transport_dock_, &ui::widgets::TransportDock::resumeClicked, this, [this]() {
+        if (view_model_.CanResume())
+            onResume();
+    });
+    connect(transport_dock_, &ui::widgets::TransportDock::openFolderClicked, this, &RecordPage::openOutputFolder);
+    connect(transport_dock_, &ui::widgets::TransportDock::filenameClicked, this, &RecordPage::onDockFilenameActivated);
+    connect(transport_dock_, &ui::widgets::TransportDock::sourceToggleClicked, this, &RecordPage::onDockSourceToggle);
 
     coordinator_needs_init_ = true;
     updateResponsiveLayout();
@@ -3130,8 +3123,117 @@ void RecordPage::refresh() {
     updateDestinationMeta();
     updateOpenFolderButtonState();
     updateHeroButton();
+    updateTransportDock();
 
     emitChromeState();
+}
+
+void RecordPage::updateTransportDock() {
+    if (!transport_dock_) {
+        return;
+    }
+    using ui::widgets::TransportDock;
+
+    const UiRecordingState s = view_model_.state;
+    const bool recording = (s == UiRecordingState::Recording);
+    const bool paused = (s == UiRecordingState::Paused);
+    const bool stopping = (s == UiRecordingState::Stopping);
+    const bool blocked = (s == UiRecordingState::Blocked);
+    const bool failed = (s == UiRecordingState::Failed);
+    const bool completed_success =
+        (s == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
+
+    TransportDock::State dock_state = TransportDock::State::Ready;
+    bool primary_enabled = view_model_.CanStart();
+    if (recording) {
+        dock_state = TransportDock::State::Recording;
+        primary_enabled = true;
+    } else if (paused) {
+        dock_state = TransportDock::State::Paused;
+        primary_enabled = true;
+    } else if (stopping) {
+        // Keep the Recording layout while the session winds down, actions disabled.
+        dock_state = TransportDock::State::Recording;
+        primary_enabled = false;
+    } else if (completed_success) {
+        dock_state = TransportDock::State::Completed;
+        primary_enabled = view_model_.CanStart();
+    }
+    transport_dock_->setState(dock_state);
+    transport_dock_->setPrimaryEnabled(primary_enabled);
+
+    const bool recording_for_timer = recording || paused || stopping;
+    transport_dock_->setTimerText(buildTimerText(recording_for_timer));
+    transport_dock_->setTimerRole(recording             ? QStringLiteral("recording")
+                                  : paused              ? QStringLiteral("paused")
+                                  : completed_success   ? QStringLiteral("done")
+                                  : (blocked || failed) ? QStringLiteral("blocked")
+                                                        : QStringLiteral("idle"));
+
+    // Audio toggles modify pre-recording config only; once the source is locked
+    // (recording/paused/preparing/stopping) they become read-only status pills.
+    const bool toggles_interactive = !isSourceSelectionLocked() && !(blocked || failed);
+    transport_dock_->setToggleState(QStringLiteral("system"), view_model_.audio_ui_state.IsSysEnabled(),
+                                    toggles_interactive);
+    transport_dock_->setToggleState(QStringLiteral("mic"), view_model_.audio_ui_state.IsMicEnabled(),
+                                    toggles_interactive);
+    transport_dock_->setToggleState(QStringLiteral("app"), view_model_.audio_ui_state.IsAppEnabled(),
+                                    toggles_interactive);
+    // Webcam is configured in Settings; here it is an honest read-only status pill.
+    transport_dock_->setToggleState(QStringLiteral("webcam"), current_webcam_settings_.enabled, false);
+
+    if (completed_success) {
+        const QString path = QString::fromStdWString(view_model_.result_output_path).trimmed();
+        const QString file_name = path.isEmpty() ? QStringLiteral("Recording saved") : QFileInfo(path).fileName();
+        const QString size_text =
+            view_model_.result_output_file_bytes > 0
+                ? QString::fromStdWString(RecordViewModel::FormatBytes(view_model_.result_output_file_bytes))
+                : QString();
+        transport_dock_->setCompletedInfo(file_name, size_text, !path.isEmpty());
+    }
+}
+
+void RecordPage::onDockSourceToggle(const QString& key) {
+    if (isSourceSelectionLocked()) {
+        return; // source is locked while recording — toggles are status-only.
+    }
+    auto& rows = view_model_.audio_ui_state.source_rows;
+    bool changed = false;
+    for (auto& row : rows) {
+        const bool is_sys = (row.kind == recorder_core::AudioSourceKind::Sys ||
+                             row.kind == recorder_core::AudioSourceKind::SystemOutput);
+        const bool match = (key == QLatin1String("system") && is_sys) ||
+                           (key == QLatin1String("mic") && row.kind == recorder_core::AudioSourceKind::Mic) ||
+                           (key == QLatin1String("app") && row.kind == recorder_core::AudioSourceKind::App);
+        if (match) {
+            row.enabled = !row.enabled;
+            changed = true;
+            break;
+        }
+    }
+    if (!changed) {
+        return; // e.g. webcam toggle is read-only and never reaches here.
+    }
+
+    view_model_.RebuildAudioPlan();
+    if (!audio_source_rows_.empty()) {
+        rebuildAudioRowWidgets(); // keep the (hidden) legacy rows in sync
+    }
+    updateAudioTrackPreview();
+    syncMicMeterService();
+    syncSysMeterService();
+    syncAppMeterService();
+    emitAudioSettingsChanged();
+    refresh();
+}
+
+void RecordPage::onDockFilenameActivated() {
+    const QString path = QString::fromStdWString(view_model_.result_output_path).trimmed();
+    if (path.isEmpty()) {
+        openOutputFolder();
+        return;
+    }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 }
 
 void RecordPage::updateStatsDisplay() {
