@@ -490,6 +490,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     }
 
     session_.SetStatsCallback([this](const recorder_core::SessionStats& stats) { PostStats(stats); });
+    session_.SetMeterCallback([this](const recorder_core::MeterSnapshot& m) { PostRecordingMeter(m.per_track_rms); });
 
     if (webcam_settings_.enabled) {
         webcam_service_.Stop();
@@ -733,6 +734,9 @@ void RecordingCoordinator::SetSysMeterUpdatedCallback(SysMeterUpdatedCallback cb
 void RecordingCoordinator::SetAppMeterUpdatedCallback(AppMeterUpdatedCallback cb) {
     on_app_meter_updated_ = std::move(cb);
 }
+void RecordingCoordinator::SetRecordingMeterCallback(RecordingMeterCallback cb) {
+    on_recording_meter_updated_ = std::move(cb);
+}
 
 void RecordingCoordinator::PostStateChange(UiRecordingState new_state) {
     state_ = new_state;
@@ -797,6 +801,19 @@ void RecordingCoordinator::PostAppMeter(float rms_linear) {
     }
     QMetaObject::invokeMethod(
         QCoreApplication::instance(), [cb, rms_linear]() { cb(rms_linear); }, Qt::QueuedConnection);
+}
+
+void RecordingCoordinator::PostRecordingMeter(std::array<float, 3> per_track_rms) {
+    if (!on_recording_meter_updated_) {
+        return;
+    }
+    auto cb = on_recording_meter_updated_;
+    if (QCoreApplication::instance() == nullptr) {
+        cb(per_track_rms);
+        return;
+    }
+    QMetaObject::invokeMethod(
+        QCoreApplication::instance(), [cb, per_track_rms]() { cb(per_track_rms); }, Qt::QueuedConnection);
 }
 
 std::filesystem::path RecordingCoordinator::GenerateOutputPath() const {

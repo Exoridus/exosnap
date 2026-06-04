@@ -280,3 +280,11 @@ exosnap_add_gtest(
     SOURCES tests/test_mp4_timestamp_normalization.cpp
     LIBRARIES recorder_core
 )
+
+exosnap_add_gtest(
+    NAME test_session_stats_meter
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_session_stats_meter.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_session_stats_meter PRIVATE src)

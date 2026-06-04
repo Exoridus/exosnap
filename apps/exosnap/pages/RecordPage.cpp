@@ -1695,6 +1695,10 @@ void RecordPage::initCoordinator() {
         preflight_app_rms_ = std::clamp(rms_linear, 0.0f, 1.0f);
         updateAudioMeterLevels();
     });
+    coordinator_->SetRecordingMeterCallback([this](const std::array<float, 3>& rms) {
+        view_model_.UpdateMeterRms(rms);
+        updateAudioMeterLevels();
+    });
     coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
         view_model_.SetResult(result);
         if (result.succeeded)

@@ -1,6 +1,6 @@
 #pragma once
 
-// Stats timer: fires the StatsCallback approximately every 250 ms.
+// Stats timer: fires MeterCallback at ~30 Hz (33 ms) and StatsCallback at ~264 ms (every 8 meter ticks).
 // Runs on a background thread owned by this object.
 
 #include "session_internal.h"

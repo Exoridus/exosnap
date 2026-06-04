@@ -319,36 +319,20 @@ void RecordViewModel::SetState(UiRecordingState new_state) {
     }
 }
 
-void RecordViewModel::UpdateStats(const recorder_core::SessionStats& stats) {
-    elapsed_text = FormatElapsed(stats.elapsed_seconds);
-    elapsed_seconds = stats.elapsed_seconds;
-    frames_captured = stats.video_frames_captured;
-    video_packets = stats.encoded_video_packets;
-    audio_packets = stats.audio_packets;
-    video_bytes = stats.video_bytes;
-    audio_bytes = stats.audio_bytes;
-    output_file_bytes = stats.output_file_bytes;
-    dropped_frames = stats.dropped_or_skipped_video_frames;
-    av_drift_ms = stats.duration_skew_ms;
-    output_size_text = FormatBytes(stats.output_file_bytes);
-    live_stats_available = (stats.elapsed_seconds > 0.0) || (stats.output_file_bytes > 0) || (stats.video_bytes > 0) ||
-                           (stats.audio_bytes > 0) || (stats.video_frames_captured > 0);
-
+void RecordViewModel::UpdateMeterRms(const std::array<float, 3>& per_track_rms) {
     audio_rms_app = 0.0f;
     audio_rms_sys = 0.0f;
     audio_rms_mic = 0.0f;
 
     for (const auto& preview : audio_track_preview) {
-        if (preview.track_number == 0) {
+        if (preview.track_number == 0)
             continue;
-        }
 
         const std::size_t track_index = static_cast<std::size_t>(preview.track_number - 1);
-        if (track_index >= stats.per_track_rms.size()) {
+        if (track_index >= per_track_rms.size())
             continue;
-        }
 
-        const float rms = stats.per_track_rms[track_index];
+        const float rms = per_track_rms[track_index];
 
         if (preview.source_key == "app") {
             audio_rms_app = rms;
@@ -365,6 +349,24 @@ void RecordViewModel::UpdateStats(const recorder_core::SessionStats& stats) {
                 audio_rms_mic = rms;
         }
     }
+}
+
+void RecordViewModel::UpdateStats(const recorder_core::SessionStats& stats) {
+    elapsed_text = FormatElapsed(stats.elapsed_seconds);
+    elapsed_seconds = stats.elapsed_seconds;
+    frames_captured = stats.video_frames_captured;
+    video_packets = stats.encoded_video_packets;
+    audio_packets = stats.audio_packets;
+    video_bytes = stats.video_bytes;
+    audio_bytes = stats.audio_bytes;
+    output_file_bytes = stats.output_file_bytes;
+    dropped_frames = stats.dropped_or_skipped_video_frames;
+    av_drift_ms = stats.duration_skew_ms;
+    output_size_text = FormatBytes(stats.output_file_bytes);
+    live_stats_available = (stats.elapsed_seconds > 0.0) || (stats.output_file_bytes > 0) || (stats.video_bytes > 0) ||
+                           (stats.audio_bytes > 0) || (stats.video_frames_captured > 0);
+
+    UpdateMeterRms(stats.per_track_rms);
 }
 
 void RecordViewModel::SetResult(const UiRecordingResult& result) {

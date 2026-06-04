@@ -28,6 +28,7 @@ namespace recorder_core {
 struct RecorderSession::Impl {
     SessionState state;
     StatsCallback stats_callback;
+    MeterCallback meter_callback;
     std::atomic<bool> recording{false};
 };
 
@@ -57,6 +58,10 @@ std::vector<CaptureTarget> RecorderSession::EnumerateTargets() {
 
 void RecorderSession::SetStatsCallback(StatsCallback cb) {
     m_impl->stats_callback = std::move(cb);
+}
+
+void RecorderSession::SetMeterCallback(MeterCallback cb) {
+    m_impl->meter_callback = std::move(cb);
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +274,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             st.session_start_qpc_100ns = (q / f) * 10000000ULL + (q % f) * 10000000ULL / f;
         }
         st.stats_callback = m_impl->stats_callback;
+        st.meter_callback = m_impl->meter_callback;
     }
 
     auto failPrepare = [&](int32_t hr, const std::string& detail) -> RecorderResult {

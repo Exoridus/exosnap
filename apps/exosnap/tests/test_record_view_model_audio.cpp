@@ -282,6 +282,101 @@ TEST(RecordViewModelAudioTest, RecordViewModel_ApplyTargetKindPreservingAudio_Wi
     EXPECT_TRUE(has_app_track);
 }
 
+// ---------------------------------------------------------------------------
+// UpdateMeterRms — high-cadence recording meter path
+// ---------------------------------------------------------------------------
+
+TEST(RecordViewModelAudioTest, RecordViewModel_UpdateMeterRms_MapsAppTrack) {
+    RecordViewModel vm;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+
+    std::array<float, 3> rms{0.6f, 0.0f, 0.0f};
+    vm.UpdateMeterRms(rms);
+
+    EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.6f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_sys, 0.0f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_mic, 0.0f);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_UpdateMeterRms_MapsMicTrack) {
+    RecordViewModel vm;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+
+    // Window default: track 0=app, track 1=mic, track 2=sys
+    std::array<float, 3> rms{0.0f, 0.9f, 0.0f};
+    vm.UpdateMeterRms(rms);
+
+    EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.0f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_mic, 0.9f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_sys, 0.0f);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_UpdateMeterRms_DoesNotAffectOtherFields) {
+    RecordViewModel vm;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+    vm.elapsed_seconds = 42.0;
+    vm.frames_captured = 123;
+
+    std::array<float, 3> rms{0.5f, 0.0f, 0.0f};
+    vm.UpdateMeterRms(rms);
+
+    // Elapsed and frame count must be untouched
+    EXPECT_DOUBLE_EQ(vm.elapsed_seconds, 42.0);
+    EXPECT_EQ(vm.frames_captured, 123u);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_UpdateMeterRms_DisabledSourceStaysZero) {
+    RecordViewModel vm;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+    // Disable Sys
+    for (auto& r : vm.audio_ui_state.source_rows)
+        if (r.kind == recorder_core::AudioSourceKind::Sys)
+            r.enabled = false;
+    vm.RebuildAudioPlan();
+
+    // Track 0=app, track 1=mic; sys is not a preview track
+    std::array<float, 3> rms{0.5f, 0.4f, 0.3f};
+    vm.UpdateMeterRms(rms);
+
+    EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.5f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_mic, 0.4f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_sys, 0.0f); // not in preview → stays zero
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_UpdateMeterRms_MergedTrackFillsAllActive) {
+    RecordViewModel vm;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+    // Merge mic and sys into app track
+    for (auto& r : vm.audio_ui_state.source_rows) {
+        if (r.kind == recorder_core::AudioSourceKind::Mic || r.kind == recorder_core::AudioSourceKind::Sys)
+            r.merge_with_above = true;
+    }
+    vm.RebuildAudioPlan();
+
+    std::array<float, 3> rms{0.4f, 0.0f, 0.0f};
+    vm.UpdateMeterRms(rms);
+
+    EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.4f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_sys, 0.4f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_mic, 0.4f);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_UpdateStats_StillMapsRmsCorrectly) {
+    // Verify that UpdateStats refactor (now delegates to UpdateMeterRms) still works.
+    RecordViewModel vm;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+
+    recorder_core::SessionStats stats;
+    stats.per_track_rms[0] = 0.3f;
+    stats.per_track_rms[1] = 0.7f;
+
+    vm.UpdateStats(stats);
+
+    EXPECT_FLOAT_EQ(vm.audio_rms_app, 0.3f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_mic, 0.7f);
+    EXPECT_FLOAT_EQ(vm.audio_rms_sys, 0.0f);
+}
+
 TEST(RecordViewModelAudioTest, RecordViewModel_DisplayLabelFromTarget_NormalizesWin32DisplayName) {
     EXPECT_EQ(RecordViewModel::DisplayLabelFromTarget(R"(\\.\DISPLAY1)"), "Display 1");
     EXPECT_EQ(RecordViewModel::DisplayLabelFromTarget("DISPLAY2"), "Display 2");

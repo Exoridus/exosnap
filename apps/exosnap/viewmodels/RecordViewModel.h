@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -128,6 +129,8 @@ class RecordViewModel {
     // Mutators
     void SetState(UiRecordingState new_state);
     void UpdateStats(const recorder_core::SessionStats& stats);
+    // Update only the audio meter RMS fields — used by the high-cadence recording meter path.
+    void UpdateMeterRms(const std::array<float, 3>& per_track_rms);
     void SetResult(const UiRecordingResult& result);
     void ResetStats();
     void ApplyTargetKind(capability::CaptureTargetKind kind);

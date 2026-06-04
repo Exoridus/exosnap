@@ -22,34 +22,45 @@ void SessionStatsCollector::Stop() {
 }
 
 void SessionStatsCollector::Run() {
-    constexpr auto kInterval = std::chrono::milliseconds(250);
+    constexpr auto kMeterInterval = std::chrono::milliseconds(33);
+    constexpr int kStatsEveryNTicks = 8; // 8 × 33 ms ≈ 264 ms
+    int tick = 0;
 
     while (!m_stop.load()) {
-        std::this_thread::sleep_for(kInterval);
+        std::this_thread::sleep_for(kMeterInterval);
         if (m_stop.load())
             break;
 
-        // Snapshot stats
-        SessionStats snapshot;
-        {
-            std::lock_guard lk(m_state.stats_mutex);
-            snapshot = m_state.stats;
+        // High-cadence meter snapshot (~30 Hz)
+        if (m_state.meter_callback) {
+            MeterSnapshot meter;
+            {
+                std::lock_guard lk(m_state.stats_mutex);
+                meter.per_track_rms = m_state.stats.per_track_rms;
+            }
+            m_state.meter_callback(meter);
         }
 
-        // Update elapsed
-        auto now = std::chrono::steady_clock::now();
-        snapshot.elapsed_seconds = std::chrono::duration<double>(now - m_start_time).count();
+        // Full stats every 8 ticks (~264 ms)
+        if (++tick % kStatsEveryNTicks == 0) {
+            SessionStats snapshot;
+            {
+                std::lock_guard lk(m_state.stats_mutex);
+                snapshot = m_state.stats;
+            }
 
-        // Compute skew
-        if (snapshot.video_duration_ns > 0 && snapshot.audio_duration_ns > 0) {
-            double vd = static_cast<double>(snapshot.video_duration_ns) / 1e6; // ms
-            double ad = static_cast<double>(snapshot.audio_duration_ns) / 1e6; // ms
-            snapshot.duration_skew_ms = (vd > ad) ? (vd - ad) : (ad - vd);
-        }
+            auto now = std::chrono::steady_clock::now();
+            snapshot.elapsed_seconds = std::chrono::duration<double>(now - m_start_time).count();
 
-        // Invoke callback (if set)
-        if (m_state.stats_callback) {
-            m_state.stats_callback(snapshot);
+            if (snapshot.video_duration_ns > 0 && snapshot.audio_duration_ns > 0) {
+                double vd = static_cast<double>(snapshot.video_duration_ns) / 1e6; // ms
+                double ad = static_cast<double>(snapshot.audio_duration_ns) / 1e6; // ms
+                snapshot.duration_skew_ms = (vd > ad) ? (vd - ad) : (ad - vd);
+            }
+
+            if (m_state.stats_callback) {
+                m_state.stats_callback(snapshot);
+            }
         }
     }
 }

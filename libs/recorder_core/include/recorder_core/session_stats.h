@@ -24,8 +24,17 @@ struct SessionStats {
     bool source_loss = false;
 };
 
-// Callback invoked approximately every 250 ms while recording is active.
+// Lightweight RMS snapshot for high-cadence meter updates (~30 Hz).
+struct MeterSnapshot {
+    std::array<float, 3> per_track_rms{};
+};
+
+// Callback invoked approximately every 264 ms while recording is active.
 // Called from an internal worker thread — implementations must be thread-safe.
 using StatsCallback = std::function<void(const SessionStats&)>;
+
+// Callback invoked approximately every 33 ms while recording is active.
+// Called from an internal worker thread — implementations must be thread-safe.
+using MeterCallback = std::function<void(const MeterSnapshot&)>;
 
 } // namespace recorder_core
