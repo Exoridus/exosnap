@@ -223,4 +223,19 @@ void TransportDock::setCompletedInfo(const QString& filename, const QString& siz
     size_label_->setVisible(!size_text.isEmpty());
 }
 
+void TransportDock::setMeterLevel(const QString& key, float level01) {
+    AudioSourceToggle* toggle = nullptr;
+    if (key == QLatin1String("system"))
+        toggle = system_toggle_;
+    else if (key == QLatin1String("mic"))
+        toggle = mic_toggle_;
+    else if (key == QLatin1String("app"))
+        toggle = app_toggle_;
+    // "webcam" intentionally has no audio meter
+    if (!toggle)
+        return;
+    toggle->setMeterActive(level01 > 0.0f);
+    toggle->setMeterLevel(level01);
+}
+
 } // namespace exosnap::ui::widgets

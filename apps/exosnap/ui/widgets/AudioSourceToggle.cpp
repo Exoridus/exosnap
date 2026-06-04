@@ -9,10 +9,16 @@
 #include <QRectF>
 #include <QSvgRenderer>
 
+#include <algorithm>
+
 namespace exosnap::ui::widgets {
 namespace {
 
 constexpr int kDiameter = 42;
+// Extra pixels below the icon circle for the mono meter strip (2 gap + 3 bar).
+constexpr int kMeterGap = 2;
+constexpr int kMeterBarH = 3;
+constexpr int kTotalHeight = kDiameter + kMeterGap + kMeterBarH; // 47
 
 // Lucide-style 24x24 stroke paths, matching the hybrid design icon set.
 QByteArray iconPathFor(const QString& key) {
@@ -51,7 +57,7 @@ AudioSourceToggle::AudioSourceToggle(const QString& icon_key, const QString& sou
     setProperty("toggleOn", false);
     setCursor(Qt::PointingHandCursor);
     setFocusPolicy(Qt::NoFocus);
-    setFixedSize(kDiameter, kDiameter);
+    setFixedSize(kDiameter, kTotalHeight);
 }
 
 void AudioSourceToggle::setOn(bool on) {
@@ -69,12 +75,27 @@ void AudioSourceToggle::setInteractive(bool interactive) {
     update();
 }
 
+void AudioSourceToggle::setMeterLevel(float level01) {
+    const float clamped = std::clamp(level01, 0.0f, 1.0f);
+    if (qFuzzyCompare(meter_level_, clamped))
+        return;
+    meter_level_ = clamped;
+    update();
+}
+
+void AudioSourceToggle::setMeterActive(bool active) {
+    if (meter_active_ == active)
+        return;
+    meter_active_ = active;
+    update();
+}
+
 QSize AudioSourceToggle::sizeHint() const {
-    return {kDiameter, kDiameter};
+    return {kDiameter, kTotalHeight};
 }
 
 QSize AudioSourceToggle::minimumSizeHint() const {
-    return {kDiameter, kDiameter};
+    return {kDiameter, kTotalHeight};
 }
 
 void AudioSourceToggle::paintEvent(QPaintEvent* /*event*/) {
@@ -83,7 +104,8 @@ void AudioSourceToggle::paintEvent(QPaintEvent* /*event*/) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
 
-    const QRectF circle = QRectF(rect()).adjusted(1.0, 1.0, -1.0, -1.0);
+    // Explicit circle rect: always kDiameter×kDiameter regardless of total height.
+    const QRectF circle = QRectF(1.0, 1.0, kDiameter - 2.0, kDiameter - 2.0);
 
     // ExoSnapPalette exposes accent-alpha roles as CSS rgba() strings (for QSS),
     // which QColor cannot parse — derive the alpha variants from the accent hex.
@@ -111,6 +133,24 @@ void AudioSourceToggle::paintEvent(QPaintEvent* /*event*/) {
     const QRectF icon_rect =
         circle.adjusted(circle.width() * 0.27, circle.height() * 0.27, -circle.width() * 0.27, -circle.height() * 0.27);
     paintIcon(painter, icon_key_, icon_rect, icon);
+
+    // Compact mono meter strip below the circle.
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    constexpr int kInset = 2;
+    const int mY = kDiameter + kMeterGap;
+    const int mW = width() - 2 * kInset;
+    painter.fillRect(QRect(kInset, mY, mW, kMeterBarH), QColor(0x2a, 0x26, 0x20));
+    if (meter_active_ && meter_level_ > 0.0f) {
+        const float ratio = std::clamp(meter_level_, 0.0f, 1.0f);
+        QColor bar;
+        if (ratio >= 0.86f)
+            bar = QColor(0xe2, 0x6a, 0x5a);
+        else if (ratio >= 0.62f)
+            bar = QColor(0xf1, 0xb4, 0x00);
+        else
+            bar = QColor(0x74, 0xc0, 0x8a);
+        painter.fillRect(QRect(kInset, mY, static_cast<int>(mW * ratio), kMeterBarH), bar);
+    }
 }
 
 } // namespace exosnap::ui::widgets

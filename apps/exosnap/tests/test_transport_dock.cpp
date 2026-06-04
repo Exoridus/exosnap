@@ -175,5 +175,62 @@ TEST_F(TransportDockTest, TimerTextAndRoleApply) {
     EXPECT_EQ(timer->property("timerState").toString(), QStringLiteral("recording"));
 }
 
+// ── Audio meter API ──────────────────────────────────────────────────────────
+
+TEST_F(TransportDockTest, SetMeterLevel_SystemToggleReceivesLevel) {
+    TransportDock dock;
+    dock.setMeterLevel(QStringLiteral("system"), 0.75f);
+    auto* tog = Toggle(dock, QStringLiteral("system"));
+    ASSERT_NE(tog, nullptr);
+    EXPECT_FLOAT_EQ(tog->meterLevel(), 0.75f);
+    EXPECT_TRUE(tog->isMeterActive());
+}
+
+TEST_F(TransportDockTest, SetMeterLevel_MicToggleReceivesLevel) {
+    TransportDock dock;
+    dock.setMeterLevel(QStringLiteral("mic"), 0.4f);
+    auto* tog = Toggle(dock, QStringLiteral("mic"));
+    ASSERT_NE(tog, nullptr);
+    EXPECT_FLOAT_EQ(tog->meterLevel(), 0.4f);
+    EXPECT_TRUE(tog->isMeterActive());
+}
+
+TEST_F(TransportDockTest, SetMeterLevel_AppToggleReceivesLevel) {
+    TransportDock dock;
+    dock.setMeterLevel(QStringLiteral("app"), 0.2f);
+    auto* tog = Toggle(dock, QStringLiteral("app"));
+    ASSERT_NE(tog, nullptr);
+    EXPECT_FLOAT_EQ(tog->meterLevel(), 0.2f);
+    EXPECT_TRUE(tog->isMeterActive());
+}
+
+TEST_F(TransportDockTest, SetMeterLevel_ZeroDeactivates) {
+    TransportDock dock;
+    dock.setMeterLevel(QStringLiteral("mic"), 0.6f);
+    dock.setMeterLevel(QStringLiteral("mic"), 0.0f);
+    auto* tog = Toggle(dock, QStringLiteral("mic"));
+    ASSERT_NE(tog, nullptr);
+    EXPECT_FLOAT_EQ(tog->meterLevel(), 0.0f);
+    EXPECT_FALSE(tog->isMeterActive());
+}
+
+TEST_F(TransportDockTest, SetMeterLevel_WebcamKeyIsIgnored) {
+    TransportDock dock;
+    // Should not crash; webcam has no audio meter
+    dock.setMeterLevel(QStringLiteral("webcam"), 0.9f);
+    auto* webcam = Toggle(dock, QStringLiteral("webcam"));
+    ASSERT_NE(webcam, nullptr);
+    EXPECT_FLOAT_EQ(webcam->meterLevel(), 0.0f);
+    EXPECT_FALSE(webcam->isMeterActive());
+}
+
+TEST_F(TransportDockTest, SetMeterLevel_UnknownKeyIsIgnored) {
+    TransportDock dock;
+    // Should not crash or affect any toggle
+    dock.setMeterLevel(QStringLiteral("nonexistent"), 1.0f);
+    for (auto* tog : dock.findChildren<AudioSourceToggle*>())
+        EXPECT_FLOAT_EQ(tog->meterLevel(), 0.0f);
+}
+
 } // namespace
 } // namespace exosnap

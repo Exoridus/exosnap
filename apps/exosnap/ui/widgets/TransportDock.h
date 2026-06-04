@@ -47,6 +47,10 @@ class TransportDock : public QFrame {
     // Completed (result) left-zone content.
     void setCompletedInfo(const QString& filename, const QString& size_text, bool has_file);
 
+    // Live audio meter for source toggles. key: "system" | "mic" | "app".
+    // level01: 0.0 = silence/inactive, 1.0 = peak. Webcam has no audio meter.
+    void setMeterLevel(const QString& key, float level01);
+
   signals:
     void recordClicked();
     void stopClicked();

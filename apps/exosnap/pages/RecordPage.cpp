@@ -4015,22 +4015,39 @@ void RecordPage::updateAudioMeterLevels() {
         }
     };
 
+    // Converts RMS to 0..1 for the dock meter strip, using the same dB scale as applyMeter.
+    auto dockLevel = [](float rms, bool show) -> float {
+        if (!show || rms <= 0.0f)
+            return 0.0f;
+        const float db = (std::max)(-60.0f, 20.0f * std::log10(rms));
+        return std::clamp((db + 60.0f) / 60.0f, 0.0f, 1.0f);
+    };
+
     const bool sys_meter_live =
         coordinator_ != nullptr && coordinator_->IsSysMeterRunning() && view_model_.audio_active_sys;
     const float sys_rms = sys_meter_live ? preflight_sys_rms_ : (recording_live ? view_model_.audio_rms_sys : 0.0f);
-    applyMeter(sys_meter_, sys_db_label_, sys_rms, sys_meter_live || (recording_live && view_model_.audio_active_sys));
+    const bool sys_show = sys_meter_live || (recording_live && view_model_.audio_active_sys);
+    applyMeter(sys_meter_, sys_db_label_, sys_rms, sys_show);
+    if (transport_dock_)
+        transport_dock_->setMeterLevel(QStringLiteral("system"), dockLevel(sys_rms, sys_show));
 
     const bool app_meter_live =
         coordinator_ != nullptr && coordinator_->IsAppMeterRunning() && view_model_.audio_active_app;
     const float app_rms = app_meter_live ? preflight_app_rms_ : (recording_live ? view_model_.audio_rms_app : 0.0f);
-    applyMeter(app_meter_, app_db_label_, app_rms, app_meter_live || (recording_live && view_model_.audio_active_app));
+    const bool app_show = app_meter_live || (recording_live && view_model_.audio_active_app);
+    applyMeter(app_meter_, app_db_label_, app_rms, app_show);
+    if (transport_dock_)
+        transport_dock_->setMeterLevel(QStringLiteral("app"), dockLevel(app_rms, app_show));
 
     const bool mic_meter_live = coordinator_ != nullptr && coordinator_->IsMicMeterRunning() &&
                                 view_model_.audio_ui_state.IsMicEnabled() && view_model_.audio_active_mic;
     const float mic_rms = mic_meter_live
                               ? std::clamp(preflight_mic_rms_ * view_model_.audio_ui_state.mic_gain_linear, 0.0f, 1.0f)
                               : (recording_live ? view_model_.audio_rms_mic : 0.0f);
-    applyMeter(mic_meter_, mic_db_label_, mic_rms, mic_meter_live || (recording_live && view_model_.audio_active_mic));
+    const bool mic_show = mic_meter_live || (recording_live && view_model_.audio_active_mic);
+    applyMeter(mic_meter_, mic_db_label_, mic_rms, mic_show);
+    if (transport_dock_)
+        transport_dock_->setMeterLevel(QStringLiteral("mic"), dockLevel(mic_rms, mic_show));
 }
 
 } // namespace exosnap
