@@ -60,8 +60,10 @@ TEST_F(AboutOverlayTest, ShowsRealBuildMetadata) {
 
     EXPECT_EQ(version->text(), QString::fromLatin1(build::kVersion));
     EXPECT_EQ(build_config->text(), QString::fromLatin1(EXOSNAP_BUILD_CONFIG));
-    EXPECT_EQ(commit->text(), QString::fromLatin1(build::kGitCommit));
-    EXPECT_EQ(author->text(), QStringLiteral("Exoridus"));
+    // Commit and author use rich-text hyperlinks, so text() returns the full HTML;
+    // verify the raw value is embedded rather than comparing the full HTML string.
+    EXPECT_TRUE(commit->text().contains(QString::fromLatin1(build::kGitCommit)));
+    EXPECT_TRUE(author->text().contains(QStringLiteral("Exoridus")));
 
     // Real metadata, not placeholders.
     EXPECT_FALSE(commit->text().isEmpty());
@@ -80,12 +82,43 @@ TEST_F(AboutOverlayTest, NoFakeReleaseNotesAction) {
     ui::dialogs::AboutOverlay overlay;
 
     // No published release feed is configured, so the About card must not offer a Release notes
-    // action. Copy details / GitHub / Close are the only real actions.
+    // action. Copy details / GitHub / × dismiss are the real actions.
     for (auto* btn : overlay.findChildren<QPushButton*>())
         EXPECT_FALSE(btn->text().contains(QStringLiteral("Release"), Qt::CaseInsensitive));
 
     EXPECT_NE(overlay.findChild<QPushButton*>(QStringLiteral("aboutCopyButton")), nullptr);
     EXPECT_NE(overlay.findChild<QPushButton*>(QStringLiteral("aboutCloseButton")), nullptr);
+}
+
+TEST_F(AboutOverlayTest, DismissButtonIsXSymbol) {
+    ui::dialogs::AboutOverlay overlay;
+    auto* close_btn = overlay.findChild<QPushButton*>(QStringLiteral("aboutCloseButton"));
+    ASSERT_NE(close_btn, nullptr);
+    // Compact top-right dismiss button uses × rather than the word "Close"
+    EXPECT_EQ(close_btn->text(), QString::fromLatin1("\xd7"));
+}
+
+TEST_F(AboutOverlayTest, NoPrimaryRoleCloseButton) {
+    ui::dialogs::AboutOverlay overlay;
+    // The dominant primary-role Close button was replaced by the compact × dismiss button
+    for (auto* btn : overlay.findChildren<QPushButton*>())
+        EXPECT_NE(btn->property("role").toString(), QStringLiteral("primary"));
+}
+
+TEST_F(AboutOverlayTest, CommitRowValueIsClickableLink) {
+    ui::dialogs::AboutOverlay overlay;
+    auto* commit_label = overlay.findChild<QLabel*>(QStringLiteral("aboutValueCommit"));
+    ASSERT_NE(commit_label, nullptr);
+    EXPECT_TRUE(commit_label->textInteractionFlags().testFlag(Qt::LinksAccessibleByMouse));
+    EXPECT_TRUE(commit_label->openExternalLinks());
+}
+
+TEST_F(AboutOverlayTest, AuthorRowValueIsClickableLink) {
+    ui::dialogs::AboutOverlay overlay;
+    auto* author_label = overlay.findChild<QLabel*>(QStringLiteral("aboutValueAuthor"));
+    ASSERT_NE(author_label, nullptr);
+    EXPECT_TRUE(author_label->textInteractionFlags().testFlag(Qt::LinksAccessibleByMouse));
+    EXPECT_TRUE(author_label->openExternalLinks());
 }
 
 TEST_F(AboutOverlayTest, OpenThenCloseTogglesOpenState) {

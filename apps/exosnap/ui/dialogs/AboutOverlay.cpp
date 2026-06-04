@@ -31,6 +31,8 @@ constexpr const char* kAppAuthor = "Exoridus";
 // Canonical repository URL — taken from the configured git remote (git@github.com:Exoridus/exosnap),
 // not invented. The GitHub action is only shown because this URL is real.
 constexpr const char* kGitHubUrl = "https://github.com/Exoridus/exosnap";
+// Author profile URL — derivable from the repo owner in kGitHubUrl, not invented.
+constexpr const char* kAuthorProfileUrl = "https://github.com/Exoridus";
 constexpr const char* kAppDescription =
     "A calm, preview-first screen recorder with a high-performance GPU pipeline, multi-track audio "
     "routing, and diagnostics when you need them.";
@@ -45,7 +47,9 @@ QFrame* makeHairline(QWidget* parent) {
     return line;
 }
 
-QWidget* makeMetaRow(const QString& key, const QString& value, const QString& value_object_name, QWidget* parent) {
+// url: if non-empty, the value label becomes a clickable hyperlink opening that URL.
+QWidget* makeMetaRow(const QString& key, const QString& value, const QString& value_object_name, QWidget* parent,
+                     const QString& url = {}) {
     auto* row = new QWidget(parent);
     row->setObjectName("aboutMetaRow");
     auto* layout = new QHBoxLayout(row);
@@ -56,11 +60,20 @@ QWidget* makeMetaRow(const QString& key, const QString& value, const QString& va
     key_label->setProperty("labelRole", "aboutMetaKey");
     key_label->setFixedWidth(96);
 
-    auto* value_label = new QLabel(value, row);
+    auto* value_label = new QLabel(row);
     value_label->setObjectName(value_object_name);
     value_label->setProperty("labelRole", "aboutMetaValue");
-    value_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    value_label->setCursor(Qt::IBeamCursor);
+
+    if (!url.isEmpty()) {
+        value_label->setTextFormat(Qt::RichText);
+        value_label->setText(QStringLiteral("<a href='%1'>%2</a>").arg(url, value));
+        value_label->setTextInteractionFlags(Qt::TextBrowserInteraction);
+        value_label->setOpenExternalLinks(true);
+    } else {
+        value_label->setText(value);
+        value_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        value_label->setCursor(Qt::IBeamCursor);
+    }
 
     layout->addWidget(key_label);
     layout->addWidget(value_label, 1);
@@ -128,6 +141,15 @@ QFrame* AboutOverlay::buildCard() {
     title_col->addWidget(wordmark);
     title_col->addWidget(version_line);
     header_row->addLayout(title_col, 1);
+
+    // Compact × dismiss button — top-right of the card header, replaces the large primary Close.
+    auto* dismiss_btn = new QPushButton(QString::fromLatin1("\xd7"), card);
+    dismiss_btn->setObjectName(QStringLiteral("aboutCloseButton"));
+    dismiss_btn->setFixedSize(28, 28);
+    dismiss_btn->setCursor(Qt::PointingHandCursor);
+    connect(dismiss_btn, &QPushButton::clicked, this, &AboutOverlay::closeOverlay);
+    header_row->addWidget(dismiss_btn, 0, Qt::AlignTop);
+
     main_layout->addLayout(header_row);
     main_layout->addSpacing(18);
 
@@ -145,6 +167,9 @@ QFrame* AboutOverlay::buildCard() {
     meta_layout->setContentsMargins(18, 2, 18, 2);
     meta_layout->setSpacing(0);
 
+    // Commit URL is constructable from the known repo URL + the real commit SHA.
+    const QString commit_url = QStringLiteral("%1/commit/%2").arg(QString::fromLatin1(kGitHubUrl), commit);
+
     meta_layout->addWidget(
         makeMetaRow(QStringLiteral("VERSION"), version, QStringLiteral("aboutValueVersion"), meta_panel));
     meta_layout->addWidget(makeHairline(meta_panel));
@@ -152,15 +177,16 @@ QFrame* AboutOverlay::buildCard() {
         makeMetaRow(QStringLiteral("BUILD"), build_config, QStringLiteral("aboutValueBuild"), meta_panel));
     meta_layout->addWidget(makeHairline(meta_panel));
     meta_layout->addWidget(
-        makeMetaRow(QStringLiteral("COMMIT"), commit, QStringLiteral("aboutValueCommit"), meta_panel));
+        makeMetaRow(QStringLiteral("COMMIT"), commit, QStringLiteral("aboutValueCommit"), meta_panel, commit_url));
     meta_layout->addWidget(makeHairline(meta_panel));
-    meta_layout->addWidget(
-        makeMetaRow(QStringLiteral("AUTHOR"), author, QStringLiteral("aboutValueAuthor"), meta_panel));
+    meta_layout->addWidget(makeMetaRow(QStringLiteral("AUTHOR"), author, QStringLiteral("aboutValueAuthor"), meta_panel,
+                                       QString::fromLatin1(kAuthorProfileUrl)));
 
     main_layout->addWidget(meta_panel);
-    main_layout->addSpacing(22);
+    main_layout->addSpacing(18);
 
-    // ── Actions: GitHub (configured) · Copy details · Close ───────────────────────────────────
+    // ── Actions: GitHub (configured) · Copy details ───────────────────────────────────────────
+    // No primary Close button — dismiss via × (top-right), Escape, or backdrop click.
     auto* github_btn = new QPushButton(QStringLiteral("GitHub"), card);
     github_btn->setObjectName(QStringLiteral("aboutGitHubButton"));
     github_btn->setProperty("role", "ghost");
@@ -179,20 +205,12 @@ QFrame* AboutOverlay::buildCard() {
         QGuiApplication::clipboard()->setText(details);
     });
 
-    auto* close_btn = new QPushButton(QStringLiteral("Close"), card);
-    close_btn->setObjectName(QStringLiteral("aboutCloseButton"));
-    close_btn->setProperty("role", "primary");
-    close_btn->setCursor(Qt::PointingHandCursor);
-    close_btn->setFixedWidth(96);
-    connect(close_btn, &QPushButton::clicked, this, &AboutOverlay::closeOverlay);
-
     auto* btn_row = new QHBoxLayout();
     btn_row->setContentsMargins(0, 0, 0, 0);
     btn_row->setSpacing(10);
     btn_row->addWidget(github_btn);
     btn_row->addWidget(copy_btn);
     btn_row->addStretch(1);
-    btn_row->addWidget(close_btn);
     main_layout->addLayout(btn_row);
 
     return card;

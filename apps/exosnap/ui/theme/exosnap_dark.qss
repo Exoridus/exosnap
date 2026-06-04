@@ -1417,6 +1417,26 @@ QLabel[labelRole="aboutVersionLine"] {
     color: ${text3};
 }
 
+/* Compact × dismiss button — top-right of the About card header. No border, no fill; reveals
+   a subtle bg3 hover tint so it reads as interactive without dominating the card. */
+QPushButton#aboutCloseButton {
+    background: transparent;
+    border: none;
+    color: ${text3};
+    font-size: 18px;
+    padding: 0;
+    min-width: 28px;
+    min-height: 28px;
+    max-width: 28px;
+    max-height: 28px;
+    border-radius: 4px;
+}
+
+QPushButton#aboutCloseButton:hover {
+    background: ${bg3};
+    color: ${text1};
+}
+
 /* Matches both the legacy native QDialog and the embedded Qt::Widget overlay variant. */
 QDialog#sourcePickerDialog,
 QWidget#sourcePickerDialog {
