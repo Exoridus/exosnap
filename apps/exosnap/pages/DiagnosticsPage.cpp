@@ -8,9 +8,12 @@
 #include "../models/VideoSettingsModel.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
+#include "../ui/widgets/PipelineFlow.h"
+#include "../ui/widgets/PipelineStepCard.h"
 #include "../ui/widgets/SectionRuleHeader.h"
 #include <capability/audio_ui_state.h>
 #include <capability/resolver.h>
+#include <capability/support_level.h>
 #include <capability/user_config.h>
 
 #include <QDateTime>
@@ -138,6 +141,7 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     export_report_btn_ = new QPushButton(QStringLiteral("Export Report"), readiness_panel_);
     export_report_btn_->setProperty("role", "ghost");
     export_report_btn_->setEnabled(false);
+    export_report_btn_->setToolTip(QStringLiteral("Diagnostic report export is planned for a future build."));
     btn_row->addWidget(run_check_btn_);
     btn_row->addWidget(export_report_btn_);
     head_row->addLayout(btn_row, 0);
@@ -177,8 +181,31 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     rl->addLayout(tiles_row);
     layout->addWidget(readiness_panel_);
 
-    // ── B: Top Issues ─────────────────────────────────────────────────────────
-    auto* issues_header = new ui::widgets::SectionRuleHeader(QStringLiteral("TOP ISSUES"), content);
+    // ── B: Capture pipeline (the page's visual center) ─────────────────────────
+    // Per-stage readiness from real capability checks. There is no live per-frame
+    // telemetry yet, so stages without a probe stay honestly Planned and no stage
+    // shows fabricated latency / queue depth / throughput numbers.
+    auto* pipeline_header = new ui::widgets::SectionRuleHeader(QStringLiteral("CAPTURE PIPELINE"), content);
+    pipeline_header->setMeta(QStringLiteral("Static checks"));
+    layout->addWidget(pipeline_header);
+    layout->addWidget(makeSubLabel(
+        QStringLiteral("Per-stage readiness for the active recording configuration. Live per-frame latency, queue "
+                       "depth, drops and throughput are not instrumented yet."),
+        content));
+
+    pipeline_flow_ = new ui::widgets::PipelineFlow(content);
+    layout->addWidget(pipeline_flow_);
+
+    auto* pipeline_caption = new QLabel(
+        QStringLiteral("Status reflects static availability checks, not live timing. Per-frame performance metrics "
+                       "are planned for a future build."),
+        content);
+    pipeline_caption->setProperty("labelRole", "pipelineCaption");
+    pipeline_caption->setWordWrap(true);
+    layout->addWidget(pipeline_caption);
+
+    // ── C: Recommendations (actionable cards based on real detected issues) ─────
+    auto* issues_header = new ui::widgets::SectionRuleHeader(QStringLiteral("RECOMMENDATIONS"), content);
     layout->addWidget(issues_header);
     layout->addWidget(makeSubLabel(
         QStringLiteral("Highest-priority blockers and notices for the current recording configuration."), content));
@@ -191,27 +218,29 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
         makeSubLabel(QStringLiteral("Run a system check to populate issue details."), issues_parent_));
     layout->addWidget(issues_parent_);
 
-    // ── C: Technical Details (demoted, collapsed by default) ───────────────────
-    auto* details_header = new ui::widgets::SectionRuleHeader(QStringLiteral("TECHNICAL DETAILS"), content);
-    details_header->setMeta(QStringLiteral("Reference"));
-    layout->addWidget(details_header);
+    // ── D: Capability matrix (real probes, visible but secondary) ──────────────
+    capabilities_header_ = new ui::widgets::SectionRuleHeader(QStringLiteral("CAPABILITY MATRIX"), content);
+    capabilities_header_->setMeta(QStringLiteral("Real probes"));
+    layout->addWidget(capabilities_header_);
     layout->addWidget(makeSubLabel(
-        QStringLiteral("Raw probe results and the active recording configuration. Available for reference — not the "
-                       "primary troubleshooting view."),
-        content));
-
-    // C1: Capabilities (collapsible)
-    capabilities_content_ = makeCollapsibleSection(
-        QStringLiteral("Detected capabilities"),
         QStringLiteral("Encoders, muxers and audio paths probed on this machine. Unavailable items are simply not "
                        "selectable — they never block a recording."),
-        content, capabilities_toggle_);
-    capabilities_layout_ = static_cast<QVBoxLayout*>(capabilities_content_->layout());
+        content));
+
+    auto* cap_panel = makePanel(content);
+    auto* cap_panel_layout = new QVBoxLayout(cap_panel);
+    cap_panel_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+    cap_panel_layout->setSpacing(0);
+    capabilities_content_ = new QWidget(cap_panel);
+    capabilities_layout_ = new QVBoxLayout(capabilities_content_);
+    capabilities_layout_->setContentsMargins(0, 0, 0, 0);
+    capabilities_layout_->setSpacing(0);
     capabilities_layout_->addWidget(
         makeSubLabel(QStringLiteral("Run a system check to populate this list."), capabilities_content_));
-    layout->addWidget(capabilities_toggle_->parentWidget());
+    cap_panel_layout->addWidget(capabilities_content_);
+    layout->addWidget(cap_panel);
 
-    // C2: Active configuration (collapsible)
+    // ── E: Active configuration (collapsed reference) ──────────────────────────
     config_content_ = makeCollapsibleSection(QStringLiteral("Active configuration"),
                                              QStringLiteral("Recording settings as currently configured in the app."),
                                              content, config_toggle_);
@@ -246,29 +275,6 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
         makeSubLabel(QStringLiteral("Run a system check or click Run Self-Test."), selftest_content_));
 
     layout->addWidget(selftest_content_);
-
-    // ── E: Pipeline (planned, no live timing yet) ──────────────────────────────
-    auto* pipeline_header = new ui::widgets::SectionRuleHeader(QStringLiteral("PIPELINE"), content);
-    pipeline_header->setMeta(QStringLiteral("Planned"));
-    layout->addWidget(pipeline_header);
-
-    auto* pipeline_note = makePanel(content);
-    pipeline_note->setProperty("panelRole", "plannedNote");
-    auto* pnl = new QHBoxLayout(pipeline_note);
-    pnl->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
-    pnl->setSpacing(M::kSpaceMd);
-    auto* planned_tag = new QLabel(QStringLiteral("PLANNED"), pipeline_note);
-    planned_tag->setProperty("labelRole", "plannedTag");
-    planned_tag->setAlignment(Qt::AlignCenter);
-    pnl->addWidget(planned_tag, 0, Qt::AlignTop);
-    auto* planned_text = new QLabel(
-        QStringLiteral("Per-frame pipeline timing and frame-budget analysis (capture, convert, encode, mux) will "
-                       "appear here in a future build. No live timing is collected yet."),
-        pipeline_note);
-    planned_text->setProperty("labelRole", "muted");
-    planned_text->setWordWrap(true);
-    pnl->addWidget(planned_text, 1);
-    layout->addWidget(pipeline_note);
 
     // ── F: Logs redirect ───────────────────────────────────────────────────────
     auto* logs_card = makePanel(content);
@@ -307,6 +313,9 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     connect(export_report_btn_, &QPushButton::clicked, this, &DiagnosticsPage::onExportReport);
     connect(selftest_run_btn_, &QPushButton::clicked, this, &DiagnosticsPage::onRunCheck);
     connect(go_logs_btn, &QPushButton::clicked, this, &DiagnosticsPage::navigateToLogsRequested);
+
+    // Seed the pipeline with honest "run a check" placeholders (no fake metrics).
+    refreshPipeline();
 }
 
 void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, const OutputSettingsModel& output,
@@ -331,6 +340,7 @@ void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, c
     refreshSelfTest();
     refreshCapabilities();
     refreshConfiguration();
+    refreshPipeline();
 }
 
 // --- Helpers ---
@@ -460,10 +470,11 @@ void DiagnosticsPage::onRunCheck() {
 
     refreshOverview();
     refreshSelfTest();
+    refreshPipeline();
 }
 
 void DiagnosticsPage::onExportReport() {
-    // Disabled until full report export is wired.
+    // Disabled/planned: report export is not wired yet (button stays disabled).
 }
 
 // --- Capabilities refresh ---
@@ -500,9 +511,8 @@ void DiagnosticsPage::refreshCapabilities() {
         first = false;
     }
 
-    if (capabilities_toggle_)
-        capabilities_toggle_->setText(collapseGlyph(capabilities_toggle_->isChecked()) +
-                                      QStringLiteral("Detected capabilities  (%1)").arg(cap_summary_.entries.size()));
+    if (capabilities_header_)
+        capabilities_header_->setMeta(QStringLiteral("%1 checks").arg(cap_summary_.entries.size()));
 }
 
 // --- Configuration refresh ---
@@ -718,7 +728,7 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
     if (issue_count == 0) {
         if (total_blockers == 0 && total_notices > 0) {
             overview_issues_layout_->addWidget(makeSubLabel(
-                QStringLiteral("No blockers. %1 informational notice(s) are listed in Technical Details below "
+                QStringLiteral("No blockers. %1 informational notice(s) are listed in the capability matrix below "
                                "and do not block the active recording configuration.")
                     .arg(total_notices),
                 issues_parent_));
@@ -793,8 +803,52 @@ void DiagnosticsPage::refreshOverview() {
     notice_count_->setText(QString::number(notices));
     pass_count_->setText(QString::number(passes));
     refreshTopIssues(recs, notices, blockers);
+}
 
-    export_report_btn_->setEnabled(true);
+// --- Pipeline refresh ---
+//
+// Maps the canonical capture-pipeline steps onto real capability probes where
+// one exists (Encoder/Muxer/Disk) and leaves probe-less internal stages
+// (Source Capture/Frame Queue/Compositor) honestly Planned. No live per-frame
+// timing exists yet, so no step ever shows fabricated latency/queue/throughput.
+void DiagnosticsPage::refreshPipeline() {
+    if (!pipeline_flow_)
+        return;
+
+    using Status = ui::widgets::PipelineStepCard::Status;
+
+    // Internal stages without a runtime probe: honestly Planned, never faked.
+    pipeline_flow_->setStepStatus(0, Status::Planned, QStringLiteral("Capture frame timing is not instrumented yet."));
+    pipeline_flow_->setStepStatus(1, Status::Planned, QStringLiteral("Frame-queue depth is not instrumented yet."));
+    pipeline_flow_->setStepStatus(2, Status::Planned, QStringLiteral("Compositor timing is not instrumented yet."));
+
+    if (!data_ready_) {
+        pipeline_flow_->setStepStatus(3, Status::Planned, QStringLiteral("Run a check to probe the encoder."));
+        pipeline_flow_->setStepStatus(4, Status::Planned, QStringLiteral("Run a check to probe the muxer."));
+        pipeline_flow_->setStepStatus(5, Status::Planned, QStringLiteral("Run a check to probe the output path."));
+        return;
+    }
+
+    // Encoder — real video-codec selectability for the active configuration.
+    const bool encoder_ok = capability::IsSelectable(caps_.QueryVideoCodec(active_user_config_.video_codec).level);
+    pipeline_flow_->setStepStatus(
+        3, encoder_ok ? Status::Ok : Status::Unavailable,
+        encoder_ok ? QStringLiteral("Selected video encoder is available. Live encoder load is not measured.")
+                   : QStringLiteral("Selected video codec is not available on this system."));
+
+    // Muxer — real container selectability.
+    const bool muxer_ok = capability::IsSelectable(caps_.QueryContainer(active_user_config_.container).level);
+    pipeline_flow_->setStepStatus(
+        4, muxer_ok ? Status::Ok : Status::Unavailable,
+        muxer_ok ? QStringLiteral("Selected container muxer is available. Write throughput is not measured.")
+                 : QStringLiteral("Selected container is not available on this system."));
+
+    // Disk — real temp-directory writability probe (no live throughput).
+    const bool disk_ok = diagnostics::SelfTestRunner::CheckOutputPathWritable(settings_path_).passed;
+    pipeline_flow_->setStepStatus(5, disk_ok ? Status::Ok : Status::Unavailable,
+                                  disk_ok
+                                      ? QStringLiteral("Output path is writable. Live disk throughput is not measured.")
+                                      : QStringLiteral("Output path is not writable."));
 }
 
 } // namespace exosnap

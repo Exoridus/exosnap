@@ -17,6 +17,11 @@ class QFrame;
 
 namespace exosnap {
 
+namespace ui::widgets {
+class PipelineFlow;
+class SectionRuleHeader;
+} // namespace ui::widgets
+
 struct OutputSettingsModel;
 struct VideoSettingsModel;
 
@@ -42,6 +47,7 @@ class DiagnosticsPage : public QWidget {
     void refreshSelfTest();
     void refreshCapabilities();
     void refreshConfiguration();
+    void refreshPipeline();
     void refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations, int total_notices,
                           int total_blockers);
     void setReadinessState(const QString& state);
@@ -70,14 +76,17 @@ class DiagnosticsPage : public QWidget {
     QLabel* notice_count_ = nullptr;
     QLabel* pass_count_ = nullptr;
 
-    // Top Issues
+    // Capture pipeline (the page's visual center)
+    ui::widgets::PipelineFlow* pipeline_flow_ = nullptr;
+
+    // Top Issues / recommendations
     QVBoxLayout* overview_issues_layout_ = nullptr;
     QWidget* issues_parent_ = nullptr;
 
-    // Capabilities (collapsible body)
+    // Capability matrix (visible, secondary real-probe table)
     QVBoxLayout* capabilities_layout_ = nullptr;
     QWidget* capabilities_content_ = nullptr;
-    QToolButton* capabilities_toggle_ = nullptr;
+    ui::widgets::SectionRuleHeader* capabilities_header_ = nullptr;
 
     // Configuration (collapsible body)
     QVBoxLayout* config_layout_ = nullptr;

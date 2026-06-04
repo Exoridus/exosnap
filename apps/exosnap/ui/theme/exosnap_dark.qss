@@ -1917,6 +1917,112 @@ QLabel[labelRole="plannedTag"] {
     padding: 2px 7px;
 }
 
+/* Diagnostics — capture pipeline flow (HYBRID-PORT-R5) */
+QWidget#pipelineFlow {
+    background: transparent;
+}
+
+QLabel[labelRole="pipelineArrow"] {
+    font-family: ${font-mono};
+    font-size: 15px;
+    color: ${text3};
+    min-width: 14px;
+}
+
+QLabel[labelRole="pipelineCaption"] {
+    font-family: ${font-mono};
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    color: ${text3};
+}
+
+QFrame#pipelineStepCard {
+    background: ${bg2};
+    border: 1px solid ${line2};
+    border-radius: ${radius-lg}px;
+}
+
+QFrame#pipelineStepCard[pipelineStatus="planned"] {
+    background: ${bg1};
+    border-style: dashed;
+    border-color: ${line2};
+}
+
+QFrame#pipelineStepCard[pipelineStatus="unavailable"] {
+    border-color: rgba(224, 120, 108, 0.48);
+    background: rgba(224, 120, 108, 0.08);
+}
+
+QFrame#pipelineStepCard[pipelineStatus="hotspot"] {
+    border-color: rgba(230, 197, 124, 0.48);
+}
+
+QFrame#pipelineStepCard[pipelineStatus="over"] {
+    border-color: rgba(224, 120, 108, 0.55);
+}
+
+QLabel[labelRole="pipelineStepName"] {
+    font-size: 13px;
+    font-weight: 600;
+    color: ${text0};
+}
+
+QFrame#pipelineStepCard[pipelineStatus="planned"] QLabel[labelRole="pipelineStepName"] {
+    color: ${text1};
+}
+
+QLabel[labelRole="pipelineStepNote"] {
+    font-family: ${font-mono};
+    font-size: 10.5px;
+    letter-spacing: 0.02em;
+    color: ${text2};
+}
+
+QFrame#pipelineStepCard[pipelineStatus="planned"] QLabel[labelRole="pipelineStepNote"] {
+    color: ${text3};
+}
+
+QLabel[labelRole="pipelineStepStatus"] {
+    font-family: ${font-mono};
+    font-size: 9.5px;
+    letter-spacing: 0.08em;
+    color: ${text3};
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    padding: 2px 7px;
+    background: ${bg3};
+}
+
+QLabel[labelRole="pipelineStepStatus"][pipelineStatus="ok"] {
+    color: ${ok};
+    border-color: rgba(132, 203, 162, 0.46);
+    background: rgba(132, 203, 162, 0.14);
+}
+
+QLabel[labelRole="pipelineStepStatus"][pipelineStatus="unavailable"] {
+    color: ${err};
+    border-color: rgba(224, 120, 108, 0.55);
+    background: rgba(224, 120, 108, 0.16);
+}
+
+QLabel[labelRole="pipelineStepStatus"][pipelineStatus="hotspot"] {
+    color: ${warn};
+    border-color: rgba(230, 197, 124, 0.5);
+    background: rgba(230, 197, 124, 0.15);
+}
+
+QLabel[labelRole="pipelineStepStatus"][pipelineStatus="over"] {
+    color: ${err};
+    border-color: rgba(224, 120, 108, 0.55);
+    background: rgba(224, 120, 108, 0.16);
+}
+
+QLabel[labelRole="pipelineStepStatus"][pipelineStatus="planned"] {
+    color: ${text3};
+    border-color: ${line2};
+    background: ${bg3};
+}
+
 /* Logs — raw viewer surface */
 QPlainTextEdit#logViewer {
     background: ${bg0};

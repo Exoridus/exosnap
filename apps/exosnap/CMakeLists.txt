@@ -69,6 +69,10 @@ qt_add_executable(exosnap WIN32
     ui/widgets/CaptureTargetCard.cpp
     ui/widgets/RegionPresetCard.h
     ui/widgets/RegionPresetCard.cpp
+    ui/widgets/PipelineStepCard.h
+    ui/widgets/PipelineStepCard.cpp
+    ui/widgets/PipelineFlow.h
+    ui/widgets/PipelineFlow.cpp
     ui/widgets/CodecCard.h
     ui/widgets/CodecCard.cpp
     ui/widgets/VUMeterWidget.h
@@ -388,3 +392,36 @@ exosnap_add_gtest(
 )
 target_include_directories(transport_dock_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(transport_dock_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME pipeline_flow_tests
+    TEST_PREFIX diagnostic.
+    SOURCES
+        tests/test_pipeline_flow.cpp
+        ui/widgets/PipelineFlow.cpp
+        ui/widgets/PipelineStepCard.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(pipeline_flow_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(pipeline_flow_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME diagnostics_page_tests
+    TEST_PREFIX diagnostic.
+    SOURCES
+        tests/test_diagnostics_page.cpp
+        pages/DiagnosticsPage.cpp
+        ui/widgets/SectionRuleHeader.cpp
+        ui/widgets/PipelineFlow.cpp
+        ui/widgets/PipelineStepCard.cpp
+        diagnostics/DiagnosticResult.cpp
+        diagnostics/CapabilitySummary.cpp
+        diagnostics/ConfigSummary.cpp
+        diagnostics/RecommendationEngine.cpp
+        diagnostics/SelfTestRunner.cpp
+        models/OutputSettingsModel.cpp
+        models/OutputPathPolicy.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(diagnostics_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(diagnostics_page_tests PROPERTIES AUTOMOC ON)
