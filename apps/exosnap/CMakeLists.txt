@@ -67,6 +67,8 @@ qt_add_executable(exosnap WIN32
     ui/widgets/CameraPreview.cpp
     ui/widgets/CaptureTargetCard.h
     ui/widgets/CaptureTargetCard.cpp
+    ui/widgets/RegionPresetCard.h
+    ui/widgets/RegionPresetCard.cpp
     ui/widgets/CodecCard.h
     ui/widgets/CodecCard.cpp
     ui/widgets/VUMeterWidget.h
@@ -313,6 +315,7 @@ exosnap_add_gtest(
         tests/test_source_picker_dialog.cpp
         ui/dialogs/SourcePickerDialog.cpp
         ui/widgets/CaptureTargetCard.cpp
+        ui/widgets/RegionPresetCard.cpp
         services/ThumbnailCapture.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
 )

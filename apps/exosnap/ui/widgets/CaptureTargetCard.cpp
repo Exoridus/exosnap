@@ -64,6 +64,20 @@ CaptureTargetCard::CaptureTargetCard(QWidget* parent) : QFrame(parent) {
     thumbnail_state_label_->setContentsMargins(10, 0, 10, 0);
     thumbnail_state_label_->installEventFilter(this);
     thumbnail_stack->addWidget(thumbnail_state_label_, 0, 0);
+
+    // Accent check badge — floats over the top-right of the preview while
+    // selected. The preview surface is a fixed size, so a fixed geometry keeps
+    // the badge stable without per-resize bookkeeping.
+    selected_check_badge_ = new QLabel(QStringLiteral("✓"), thumbnail_surface_);
+    selected_check_badge_->setObjectName("captureCardCheckBadge");
+    selected_check_badge_->setProperty("labelRole", "captureCardCheckBadge");
+    selected_check_badge_->setAlignment(Qt::AlignCenter);
+    selected_check_badge_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    selected_check_badge_->setFixedSize(22, 22);
+    selected_check_badge_->move(kThumbnailWidth - 22 - 10, 10);
+    selected_check_badge_->setVisible(false);
+    selected_check_badge_->raise();
+
     root->addWidget(thumbnail_surface_, 0, Qt::AlignCenter);
 
     auto* text_col = new QVBoxLayout();
@@ -160,6 +174,12 @@ void CaptureTargetCard::setSelected(bool selected) {
 
     selected_ = selected;
     setProperty("selected", selected_);
+    if (selected_check_badge_) {
+        selected_check_badge_->setVisible(selected_);
+        if (selected_) {
+            selected_check_badge_->raise();
+        }
+    }
     updateStatusLabel();
     restyle(this);
 }

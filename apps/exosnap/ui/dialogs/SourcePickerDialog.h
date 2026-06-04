@@ -25,7 +25,8 @@ class ThumbnailCapture;
 
 namespace exosnap::ui::widgets {
 class CaptureTargetCard;
-}
+class RegionPresetCard;
+} // namespace exosnap::ui::widgets
 
 namespace exosnap::ui::dialogs {
 
@@ -127,6 +128,8 @@ class SourcePickerDialog : public QDialog {
     SectionGrid windows_grid_;
     QLabel* region_summary_value_label_ = nullptr;
     QCheckBox* region_select_on_record_check_ = nullptr;
+    ui::widgets::RegionPresetCard* region_draw_card_ = nullptr;
+    std::vector<ui::widgets::RegionPresetCard*> region_preset_cards_;
     QLabel* summary_label_ = nullptr;
     QPushButton* use_button_ = nullptr;
     QPushButton* pick_region_now_button_ = nullptr;

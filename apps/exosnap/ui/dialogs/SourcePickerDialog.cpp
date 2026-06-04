@@ -2,6 +2,7 @@
 
 #include "../../services/ThumbnailCapture.h"
 #include "../widgets/CaptureTargetCard.h"
+#include "../widgets/RegionPresetCard.h"
 
 #include <QCheckBox>
 #include <QEvent>
@@ -23,6 +24,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <array>
 
 namespace exosnap::ui::dialogs {
 namespace {
@@ -92,11 +94,37 @@ void RestyleCard(QWidget* card, const char* tone) {
     card->update();
 }
 
+// Strip backend capture-method jargon (DXGI/WGC) so it never leaks into the
+// visible source metadata or the selection summary footer.
+QString StripCaptureJargon(QString s) {
+    static const QStringList kJargon = {
+        QStringLiteral("DXGI OD monitor capture"),
+        QStringLiteral("WGC monitor capture"),
+        QStringLiteral("WGC window capture"),
+    };
+    auto isSep = [](QChar c) { return c == QLatin1Char(' ') || c == QChar(0xB7) || c == QLatin1Char('\n'); };
+    for (const QString& j : kJargon) {
+        int pos = s.indexOf(j, 0, Qt::CaseInsensitive);
+        while (pos >= 0) {
+            s.remove(pos, j.length());
+            while (pos < s.length() && isSep(s[pos]))
+                s.remove(pos, 1);
+            pos = s.indexOf(j, pos, Qt::CaseInsensitive);
+        }
+    }
+    s = s.trimmed();
+    while (!s.isEmpty() && isSep(s.front()))
+        s.remove(0, 1);
+    while (!s.isEmpty() && isSep(s.back()))
+        s.chop(1);
+    return s;
+}
+
 } // namespace
 
 SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     setObjectName("sourcePickerDialog");
-    setWindowTitle(QStringLiteral("Choose capture source"));
+    setWindowTitle(QStringLiteral("Choose what to record"));
     setModal(true);
     resize(980, 700);
 
@@ -113,42 +141,44 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     root->setSpacing(12);
 
     auto* header_panel = new QFrame(this);
+    header_panel->setObjectName("sourcePickerHeader");
     header_panel->setProperty("panelRole", "panel");
-    auto* header_layout = new QVBoxLayout(header_panel);
-    header_layout->setContentsMargins(12, 10, 12, 10);
-    header_layout->setSpacing(4);
+    auto* header_layout = new QHBoxLayout(header_panel);
+    header_layout->setContentsMargins(16, 12, 16, 12);
+    header_layout->setSpacing(16);
 
-    auto* title_label = new QLabel(QStringLiteral("Choose capture source"), header_panel);
+    auto* header_text = new QVBoxLayout();
+    header_text->setContentsMargins(0, 0, 0, 0);
+    header_text->setSpacing(2);
+    auto* title_label = new QLabel(QStringLiteral("Choose what to record"), header_panel);
     title_label->setObjectName("sourcePickerTitle");
-    title_label->setProperty("labelRole", "captureCardTitle");
-    header_layout->addWidget(title_label);
+    title_label->setProperty("labelRole", "sourcePickerTitle");
+    auto* subtitle_label = new QLabel(QStringLiteral("Pick a display, window, or region."), header_panel);
+    subtitle_label->setObjectName("sourcePickerSubtitle");
+    subtitle_label->setProperty("labelRole", "sourcePickerSubtitle");
+    header_text->addWidget(title_label);
+    header_text->addWidget(subtitle_label);
+    header_layout->addLayout(header_text, 1);
 
-    const QString subtitle_text = QStringLiteral(
-        "Pick what to record using visual previews. Thumbnails refresh when opening tabs or rescanning.");
-    auto* subtitle_label = new QLabel(subtitle_text, header_panel);
-    subtitle_label->setWordWrap(true);
-    subtitle_label->setProperty("labelRole", "captureTargetPickerNote");
-    header_layout->addWidget(subtitle_label);
-    root->addWidget(header_panel);
-
-    auto* section_tabs = new QWidget(this);
+    auto* section_tabs = new QWidget(header_panel);
     section_tabs->setObjectName("sourcePickerSectionTabs");
     auto* section_row = new QHBoxLayout(section_tabs);
-    section_row->setContentsMargins(0, 0, 0, 0);
-    section_row->setSpacing(8);
-    screens_button_ = makeSectionButton("sourcePickerScreensButton", QStringLiteral("Screens"), section_tabs);
+    section_row->setContentsMargins(3, 3, 3, 3);
+    section_row->setSpacing(4);
+    screens_button_ = makeSectionButton("sourcePickerScreensButton", QStringLiteral("Displays"), section_tabs);
     windows_button_ = makeSectionButton("sourcePickerWindowsButton", QStringLiteral("Windows"), section_tabs);
     region_button_ = makeSectionButton("sourcePickerRegionButton", QStringLiteral("Region"), section_tabs);
     section_row->addWidget(screens_button_);
     section_row->addWidget(windows_button_);
     section_row->addWidget(region_button_);
-    section_row->addSpacing(8);
-    refresh_button_ = new QPushButton(QStringLiteral("Refresh previews"), section_tabs);
+    header_layout->addWidget(section_tabs, 0, Qt::AlignVCenter);
+
+    refresh_button_ = new QPushButton(QStringLiteral("Rescan"), header_panel);
     refresh_button_->setObjectName("sourcePickerRefreshButton");
     refresh_button_->setProperty("role", "utility");
-    section_row->addWidget(refresh_button_);
-    section_row->addStretch(1);
-    root->addWidget(section_tabs);
+    header_layout->addWidget(refresh_button_, 0, Qt::AlignVCenter);
+
+    root->addWidget(header_panel);
 
     pages_ = new QStackedWidget(this);
     pages_->setObjectName("sourcePickerPages");
@@ -189,53 +219,105 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     }
 
     auto* region_page = new QWidget(pages_);
-    auto* region_layout = new QVBoxLayout(region_page);
+    auto* region_page_layout = new QVBoxLayout(region_page);
+    region_page_layout->setContentsMargins(0, 0, 0, 0);
+    region_page_layout->setSpacing(0);
+
+    auto* region_scroll = new QScrollArea(region_page);
+    region_scroll->setObjectName("sourcePickerRegionScroll");
+    region_scroll->setWidgetResizable(true);
+    region_scroll->setFrameShape(QFrame::NoFrame);
+    region_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+    auto* region_content = new QWidget(region_scroll);
+    auto* region_layout = new QVBoxLayout(region_content);
     region_layout->setContentsMargins(0, 0, 0, 0);
-    region_layout->setSpacing(8);
+    region_layout->setSpacing(14);
 
-    auto* region_note = new QFrame(region_page);
-    region_note->setProperty("panelRole", "note");
-    auto* region_note_layout = new QVBoxLayout(region_note);
-    region_note_layout->setContentsMargins(12, 10, 12, 10);
-    region_note_layout->setSpacing(6);
+    auto* region_grid_host = new QWidget(region_content);
+    auto* region_grid = new QGridLayout(region_grid_host);
+    region_grid->setContentsMargins(0, 0, 0, 0);
+    region_grid->setHorizontalSpacing(12);
+    region_grid->setVerticalSpacing(12);
+    region_grid->setAlignment(Qt::AlignTop);
 
-    auto* region_title = new QLabel(QStringLiteral("Region capture"), region_note);
-    region_title->setProperty("labelRole", "captureCardTitle");
-    auto* region_copy =
-        new QLabel(QStringLiteral("Use this when you need only part of a screen. The region overlay appears outside "
-                                  "this dialog and can be triggered now or when recording starts."),
-                   region_note);
-    region_copy->setWordWrap(true);
-    region_copy->setProperty("labelRole", "captureTargetPickerNote");
-    region_note_layout->addWidget(region_title);
-    region_note_layout->addWidget(region_copy);
-    region_layout->addWidget(region_note);
+    struct RegionPresetDef {
+        const char* title;
+        const char* detail;
+        double aspect;
+        bool draw;
+        bool planned;
+    };
+    const std::array<RegionPresetDef, 6> region_presets = {{
+        {"Draw custom region", "Select an area", 16.0 / 9.0, true, false},
+        {"16:9 Landscape", "1920 × 1080", 16.0 / 9.0, false, true},
+        {"16:9 HD", "1280 × 720", 16.0 / 9.0, false, true},
+        {"9:16 Vertical", "1080 × 1920", 9.0 / 16.0, false, true},
+        {"1:1 Square", "1080 × 1080", 1.0, false, true},
+        {"4:5 Portrait", "1080 × 1350", 4.0 / 5.0, false, true},
+    }};
 
-    auto* region_summary_panel = new QFrame(region_page);
-    region_summary_panel->setProperty("panelRole", "panel");
-    auto* region_summary_layout = new QVBoxLayout(region_summary_panel);
-    region_summary_layout->setContentsMargins(12, 10, 12, 10);
-    region_summary_layout->setSpacing(4);
-    auto* region_summary_key = new QLabel(QStringLiteral("Current region"), region_summary_panel);
-    region_summary_key->setProperty("labelRole", "captureTargetPickerLabel");
-    region_summary_value_label_ = new QLabel(QStringLiteral("No region saved yet."), region_summary_panel);
+    constexpr int kRegionColumns = 3;
+    for (int i = 0; i < static_cast<int>(region_presets.size()); ++i) {
+        const RegionPresetDef& def = region_presets[static_cast<std::size_t>(i)];
+        auto* card = new ui::widgets::RegionPresetCard(region_grid_host);
+        card->setTitle(QString::fromUtf8(def.title));
+        card->setDetail(QString::fromUtf8(def.detail));
+        card->setAspectRatio(def.aspect);
+        card->setDrawVariant(def.draw);
+        card->setPlanned(def.planned);
+        region_preset_cards_.push_back(card);
+        if (def.draw) {
+            region_draw_card_ = card;
+            card->setObjectName("sourcePickerRegionDrawCard");
+            connect(card, &ui::widgets::RegionPresetCard::clicked, this, [this]() {
+                selected_section_ = Section::Region;
+                selected_target_index_ = -1;
+                pick_region_now_ = false;
+                setActiveSection(Section::Region);
+                refreshSelectionVisuals();
+                updateSummaryLabel();
+            });
+        }
+        region_grid->addWidget(card, i / kRegionColumns, i % kRegionColumns);
+    }
+    for (int col = 0; col < kRegionColumns; ++col) {
+        region_grid->setColumnStretch(col, 1);
+    }
+    region_layout->addWidget(region_grid_host);
+
+    auto* region_controls = new QFrame(region_content);
+    region_controls->setObjectName("sourcePickerRegionControls");
+    region_controls->setProperty("panelRole", "compactRow");
+    auto* region_controls_layout = new QVBoxLayout(region_controls);
+    region_controls_layout->setContentsMargins(12, 10, 12, 10);
+    region_controls_layout->setSpacing(8);
+
+    region_summary_value_label_ = new QLabel(QStringLiteral("No region saved yet."), region_controls);
     region_summary_value_label_->setObjectName("sourcePickerRegionSummary");
     region_summary_value_label_->setWordWrap(true);
     region_summary_value_label_->setProperty("labelRole", "captureTargetPickerNote");
-    region_summary_layout->addWidget(region_summary_key);
-    region_summary_layout->addWidget(region_summary_value_label_);
-    region_layout->addWidget(region_summary_panel);
+    region_controls_layout->addWidget(region_summary_value_label_);
 
-    region_select_on_record_check_ = new QCheckBox(QStringLiteral("Select region when recording starts"), region_page);
+    auto* region_action_row = new QHBoxLayout();
+    region_action_row->setContentsMargins(0, 0, 0, 0);
+    region_action_row->setSpacing(10);
+    region_select_on_record_check_ =
+        new QCheckBox(QStringLiteral("Select region when recording starts"), region_controls);
     region_select_on_record_check_->setObjectName("sourcePickerRegionSelectOnRecord");
     region_select_on_record_check_->setChecked(true);
-    region_layout->addWidget(region_select_on_record_check_);
-
-    pick_region_now_button_ = new QPushButton(QStringLiteral("Pick region now..."), region_page);
+    pick_region_now_button_ = new QPushButton(QStringLiteral("Pick region now..."), region_controls);
     pick_region_now_button_->setObjectName("sourcePickerPickRegionButton");
-    pick_region_now_button_->setProperty("role", "primary");
-    region_layout->addWidget(pick_region_now_button_, 0, Qt::AlignLeft);
+    pick_region_now_button_->setProperty("role", "utility");
+    region_action_row->addWidget(region_select_on_record_check_, 1);
+    region_action_row->addWidget(pick_region_now_button_, 0, Qt::AlignRight);
+    region_controls_layout->addLayout(region_action_row);
 
+    region_layout->addWidget(region_controls);
+    region_layout->addStretch(1);
+
+    region_scroll->setWidget(region_content);
+    region_page_layout->addWidget(region_scroll);
     pages_->addWidget(region_page);
     root->addWidget(pages_, 1);
 
@@ -506,44 +588,12 @@ void SourcePickerDialog::rebuildOptionCardsForSection(Section section) {
         card->setTitle(option.title);
         card->setToolTip(option.title);
 
-        auto stripJargon = [](QString s) -> QString {
-            static const QStringList kJargon = {
-                QStringLiteral("DXGI OD monitor capture"),
-                QStringLiteral("WGC monitor capture"),
-                QStringLiteral("WGC window capture"),
-            };
-            for (const QString& j : kJargon) {
-                int pos = s.indexOf(j, 0, Qt::CaseInsensitive);
-                while (pos >= 0) {
-                    s.remove(pos, j.length());
-                    while (pos < s.length() &&
-                           (s[pos] == QLatin1Char(' ') || s[pos] == QChar(0xB7) || s[pos] == QLatin1Char('\n')))
-                        s.remove(pos, 1);
-                    pos = s.indexOf(j, pos, Qt::CaseInsensitive);
-                }
-            }
-            s = s.trimmed();
-            while (s.startsWith(QStringLiteral(" · ")))
-                s = s.mid(3);
-            while (s.endsWith(QStringLiteral(" · ")))
-                s.chop(3);
-            return s;
-        };
+        QString subtitle = StripCaptureJargon(option.detail);
 
-        QString subtitle = stripJargon(option.detail);
-
-        if (option.primary && section == Section::Screens) {
-            const bool already_primary = subtitle.contains(QStringLiteral("Primary"), Qt::CaseInsensitive);
-            if (!already_primary) {
-                if (subtitle.isEmpty()) {
-                    subtitle = QStringLiteral("Primary display");
-                } else {
-                    subtitle += QStringLiteral(" · Primary");
-                }
-            }
-        }
+        // The "Primary" badge already marks the primary display, so do not also
+        // append "· Primary" to the subtitle (avoids duplicate Primary markers).
         if (!option.minimum_detail.trimmed().isEmpty()) {
-            const QString min_detail = stripJargon(option.minimum_detail);
+            const QString min_detail = StripCaptureJargon(option.minimum_detail);
             subtitle = subtitle.isEmpty() ? min_detail : (subtitle + QStringLiteral("\n") + min_detail);
         }
         if (subtitle.isEmpty()) {
@@ -552,7 +602,13 @@ void SourcePickerDialog::rebuildOptionCardsForSection(Section section) {
         }
         card->setSubtitle(subtitle);
 
-        card->setStatusText(option.status_badge.trimmed());
+        // Keep the Primary marker on displays, but drop the generic "Screen"
+        // badge — a badge on every display card is noise, not signal.
+        QString status_badge = option.status_badge.trimmed();
+        if (section == Section::Screens && status_badge.compare(QStringLiteral("Screen"), Qt::CaseInsensitive) == 0) {
+            status_badge.clear();
+        }
+        card->setStatusText(status_badge);
 
         QString state = QStringLiteral("normal");
         const QString status_detail =
@@ -708,6 +764,9 @@ void SourcePickerDialog::refreshSelectionVisuals() {
             option_card.section == selected_section_ && option_card.target_index == selected_target_index_;
         option_card.card->setSelected(selected);
     }
+    if (region_draw_card_) {
+        region_draw_card_->setSelected(selected_section_ == Section::Region);
+    }
     use_button_->setEnabled(hasValidSelection());
 }
 
@@ -752,8 +811,9 @@ void SourcePickerDialog::updateSummaryLabel() {
     }
 
     QString summary = option.title;
-    if (!option.detail.trimmed().isEmpty()) {
-        summary += QStringLiteral(" · ") + option.detail;
+    const QString detail = StripCaptureJargon(option.detail);
+    if (!detail.isEmpty()) {
+        summary += QStringLiteral(" · ") + detail;
     }
     summary_label_->setText(summary);
 }

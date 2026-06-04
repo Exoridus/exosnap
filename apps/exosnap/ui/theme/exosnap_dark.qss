@@ -762,6 +762,15 @@ QLabel[labelRole="captureCardSelectedChip"] {
     background: ${accent};
 }
 
+QLabel[labelRole="captureCardCheckBadge"] {
+    background: ${accent};
+    color: ${accent-ink};
+    border: none;
+    border-radius: 11px;
+    font-size: 13px;
+    font-weight: 700;
+}
+
 QLabel[labelRole="captureCardStatus"] {
     font-family: ${font-mono};
     font-size: 10.5px;
@@ -1425,6 +1434,90 @@ QPushButton#sourcePickerCancelButton {
 
 QLabel#sourcePickerSummary {
     color: ${text2};
+}
+
+QLabel[labelRole="sourcePickerTitle"] {
+    font-size: 18px;
+    font-weight: 600;
+    color: ${text0};
+}
+
+QLabel[labelRole="sourcePickerSubtitle"] {
+    font-size: 13px;
+    color: ${text2};
+}
+
+/* Source picker - region preset cards */
+QFrame#regionPresetCard {
+    background: ${bg2};
+    border: 1px solid ${line2};
+    border-radius: ${radius-lg}px;
+}
+
+QFrame#regionPresetCard:hover {
+    background: ${bg3};
+    border-color: ${line3};
+}
+
+QFrame#regionPresetCard[selected="true"] {
+    background: rgba(155, 217, 210, 0.12);
+    border-color: ${accent};
+}
+
+QFrame#regionPresetCard:focus {
+    border-color: ${accent};
+    background: rgba(155, 217, 210, 0.16);
+}
+
+QFrame#regionPresetCard[regionPresetPlanned="true"] {
+    background: ${bg1};
+    border-style: dashed;
+    border-color: ${line2};
+}
+
+QFrame#regionPresetPreviewBox {
+    background: ${bg3};
+    border: none;
+    border-radius: ${radius-md}px;
+}
+
+QFrame#regionPresetPreviewShape {
+    background: transparent;
+    border: 1.5px solid ${line3};
+    border-radius: 4px;
+}
+
+QFrame#regionPresetCard[regionPresetDraw="true"] QFrame#regionPresetPreviewShape {
+    border-style: dashed;
+}
+
+QFrame#regionPresetCard[selected="true"] QFrame#regionPresetPreviewShape {
+    border-color: ${accent};
+    background: ${accent-dim};
+}
+
+QLabel[labelRole="regionPresetTitle"] {
+    font-size: 13px;
+    font-weight: 600;
+    color: ${text0};
+}
+
+QLabel[labelRole="regionPresetDetail"] {
+    font-family: ${font-mono};
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    color: ${text2};
+}
+
+QLabel[labelRole="regionPresetPlannedBadge"] {
+    font-family: ${font-mono};
+    font-size: 9.5px;
+    letter-spacing: 0.08em;
+    color: ${text2};
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    padding: 1px 6px;
+    background: ${bg3};
 }
 
 /* Preview surface text roles */

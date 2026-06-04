@@ -3,12 +3,14 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPixmap>
 #include <QPushButton>
 
 #include "ui/dialogs/SourcePickerDialog.h"
 #include "ui/dialogs/SourcePickerWindowRules.h"
 #include "ui/widgets/CaptureTargetCard.h"
+#include "ui/widgets/RegionPresetCard.h"
 
 namespace exosnap {
 namespace {
@@ -41,6 +43,72 @@ TEST_F(SourcePickerDialogTest, Constructs_WithExpectedSectionsAndActions) {
     EXPECT_NE(dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerRefreshButton")), nullptr);
     EXPECT_NE(dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerCancelButton")), nullptr);
     EXPECT_NE(dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerUseButton")), nullptr);
+}
+
+TEST_F(SourcePickerDialogTest, ScreensTab_UsesHybridDisplaysLabel) {
+    ui::dialogs::SourcePickerDialog dialog;
+
+    auto* screens = dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerScreensButton"));
+    auto* windows = dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerWindowsButton"));
+    auto* region = dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerRegionButton"));
+    ASSERT_NE(screens, nullptr);
+    ASSERT_NE(windows, nullptr);
+    ASSERT_NE(region, nullptr);
+
+    EXPECT_EQ(screens->text(), QStringLiteral("Displays"));
+    EXPECT_EQ(windows->text(), QStringLiteral("Windows"));
+    EXPECT_EQ(region->text(), QStringLiteral("Region"));
+}
+
+TEST_F(SourcePickerDialogTest, DoesNotExposeSearchFieldAtCurrentListSize) {
+    ui::dialogs::SourcePickerDialog dialog;
+    EXPECT_TRUE(dialog.findChildren<QLineEdit*>().isEmpty());
+}
+
+TEST_F(SourcePickerDialogTest, RegionTab_ExposesPresetCardsWithDrawCustomOption) {
+    ui::dialogs::SourcePickerDialog dialog;
+
+    const auto preset_cards = dialog.findChildren<ui::widgets::RegionPresetCard*>();
+    EXPECT_EQ(preset_cards.size(), 6);
+
+    auto* draw_card = dialog.findChild<ui::widgets::RegionPresetCard*>(QStringLiteral("sourcePickerRegionDrawCard"));
+    ASSERT_NE(draw_card, nullptr);
+    EXPECT_TRUE(draw_card->isDrawVariant());
+    EXPECT_FALSE(draw_card->isPlanned());
+
+    int planned_count = 0;
+    int draw_count = 0;
+    for (auto* card : preset_cards) {
+        if (card->isDrawVariant()) {
+            ++draw_count;
+        }
+        if (card->isPlanned()) {
+            ++planned_count;
+        }
+    }
+    EXPECT_EQ(draw_count, 1);
+    EXPECT_EQ(planned_count, 5);
+}
+
+TEST_F(SourcePickerDialogTest, RegionSelection_IsValidAndSelectsDrawCustomCard) {
+    ui::dialogs::SourcePickerDialog dialog;
+    dialog.setRegionState(QStringLiteral("320, 180  —  1280 × 720"), true, true);
+
+    auto* region = dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerRegionButton"));
+    ASSERT_NE(region, nullptr);
+    region->click();
+
+    auto* draw_card = dialog.findChild<ui::widgets::RegionPresetCard*>(QStringLiteral("sourcePickerRegionDrawCard"));
+    ASSERT_NE(draw_card, nullptr);
+    EXPECT_TRUE(draw_card->isSelected());
+
+    auto* use_button = dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerUseButton"));
+    ASSERT_NE(use_button, nullptr);
+    EXPECT_TRUE(use_button->isEnabled());
+
+    const auto selection = dialog.selectionResult();
+    EXPECT_TRUE(selection.valid);
+    EXPECT_EQ(selection.section, ui::dialogs::SourcePickerDialog::Section::Region);
 }
 
 TEST_F(SourcePickerDialogTest, RefreshButton_DisabledForRegionAndEnabledForVisualSections) {
