@@ -49,7 +49,7 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
 
     auto* content = new QWidget();
     content->setMaximumWidth(1320);
-    content->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+    content->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto* layout = new QVBoxLayout(content);
     layout->setContentsMargins(M::kSpaceXl, M::kSpaceXl, M::kSpaceXl, M::kSpaceXl);
     layout->setSpacing(M::kSpaceMd);
@@ -100,7 +100,7 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     auto* ch = new QHBoxLayout(centering_host);
     ch->setContentsMargins(0, 0, 0, 0);
     ch->addStretch(1);
-    ch->addWidget(content, 0);
+    ch->addWidget(content, 10);
     ch->addStretch(1);
     outer->addWidget(centering_host, 1);
 

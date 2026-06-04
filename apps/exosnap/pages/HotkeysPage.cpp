@@ -118,13 +118,14 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
 
     layout->addStretch();
 
-    content->setMaximumWidth(760);
+    content->setMaximumWidth(1040);
+    content->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     {
         auto* centering_host = new QWidget();
         auto* ch = new QHBoxLayout(centering_host);
         ch->setContentsMargins(0, 0, 0, 0);
         ch->addStretch(1);
-        ch->addWidget(content, 0);
+        ch->addWidget(content, 10);
         ch->addStretch(1);
         scroll->setWidget(centering_host);
     }
