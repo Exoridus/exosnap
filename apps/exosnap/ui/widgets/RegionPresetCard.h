@@ -7,6 +7,7 @@ class QHBoxLayout;
 class QLabel;
 class QKeyEvent;
 class QMouseEvent;
+class QResizeEvent;
 
 namespace exosnap::ui::widgets {
 
@@ -49,12 +50,16 @@ class RegionPresetCard : public QFrame {
     void keyPressEvent(QKeyEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
   private:
     void updatePreviewGeometry();
 
+    void updateCheckBadge();
+
     QFrame* preview_box_ = nullptr;
     QFrame* preview_shape_ = nullptr;
+    QLabel* check_badge_ = nullptr;
     QLabel* title_label_ = nullptr;
     QLabel* detail_label_ = nullptr;
     QLabel* planned_badge_ = nullptr;

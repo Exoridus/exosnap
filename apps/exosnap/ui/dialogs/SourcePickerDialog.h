@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDialog>
+#include <QRect>
 #include <QSize>
 
 #include <memory>
@@ -52,6 +53,13 @@ class SourcePickerDialog : public QDialog {
         QString validation_summary;
         QString minimum_detail;
         QString help_text;
+        // Physical virtual-screen rect of the display (matches GetMonitorInfo
+        // rcMonitor). Only meaningful for screen options; used to place region
+        // presets. monitor_width == 0 means geometry is unknown.
+        int monitor_x = 0;
+        int monitor_y = 0;
+        int monitor_width = 0;
+        int monitor_height = 0;
     };
 
     struct SelectionResult {
@@ -60,7 +68,22 @@ class SourcePickerDialog : public QDialog {
         bool valid = false;
         bool select_on_record = true;
         bool pick_region_now = false;
+        // Region preset: a fixed-resolution region rectangle was chosen (rather
+        // than the manual-draw card). The rectangle is in virtual-screen
+        // coordinates on region_base_target_index (a display target).
+        bool region_preset = false;
+        int region_x = 0;
+        int region_y = 0;
+        int region_width = 0;
+        int region_height = 0;
+        int region_base_target_index = -1;
     };
+
+    // Pure helper: place a preset of preset_w × preset_h on the given monitor
+    // rect, centered, clamped to bounds, scaled down (aspect-preserving,
+    // even-aligned) when the preset is larger than the monitor. Returns the
+    // resulting rectangle in the monitor's virtual-screen coordinate space.
+    static QRect ComputePresetRegionRect(int preset_w, int preset_h, const QRect& monitor);
 
     explicit SourcePickerDialog(QWidget* parent = nullptr);
 
@@ -103,6 +126,11 @@ class SourcePickerDialog : public QDialog {
     void refreshSelectionVisuals();
     void updateSummaryLabel();
     bool hasValidSelection() const;
+    void selectRegionDraw();
+    void selectRegionPreset(int entry_index);
+    void updateRegionPresetAvailability();
+    bool regionPresetsEnabled() const;
+    bool findBaseDisplay(SourceOption* out) const;
     bool hasTargetInSection(Section section, int target_index) const;
     bool findOption(Section section, int target_index, SourceOption* out) const;
     OptionCard* findOptionCard(Section section, int target_index);
@@ -128,8 +156,21 @@ class SourcePickerDialog : public QDialog {
     SectionGrid windows_grid_;
     QLabel* region_summary_value_label_ = nullptr;
     QCheckBox* region_select_on_record_check_ = nullptr;
+
+    struct RegionPresetEntry {
+        ui::widgets::RegionPresetCard* card = nullptr;
+        int width = 0; // nominal preset resolution; 0 for the draw card
+        int height = 0;
+        bool draw = false;
+    };
+    std::vector<RegionPresetEntry> region_preset_entries_;
     ui::widgets::RegionPresetCard* region_draw_card_ = nullptr;
-    std::vector<ui::widgets::RegionPresetCard*> region_preset_cards_;
+    // Region choice state: -2 = none, -1 = draw card, >=0 = preset entry index.
+    static constexpr int kRegionChoiceNone = -2;
+    static constexpr int kRegionChoiceDraw = -1;
+    int region_choice_ = kRegionChoiceNone;
+    QRect pending_region_rect_;
+    int pending_region_base_index_ = -1;
     QLabel* summary_label_ = nullptr;
     QPushButton* use_button_ = nullptr;
     QPushButton* pick_region_now_button_ = nullptr;

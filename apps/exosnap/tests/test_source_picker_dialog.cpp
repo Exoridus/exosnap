@@ -111,6 +111,166 @@ TEST_F(SourcePickerDialogTest, RegionSelection_IsValidAndSelectsDrawCustomCard) 
     EXPECT_EQ(selection.section, ui::dialogs::SourcePickerDialog::Section::Region);
 }
 
+namespace {
+
+ui::dialogs::SourcePickerDialog::SourceOption MakeScreenWithGeometry(int target_index, int x, int y, int w, int h,
+                                                                     bool primary) {
+    ui::dialogs::SourcePickerDialog::SourceOption screen;
+    screen.target_index = target_index;
+    screen.title = QStringLiteral("Display %1").arg(target_index);
+    screen.detail = QStringLiteral("%1 × %2").arg(w).arg(h);
+    screen.primary = primary;
+    screen.monitor_x = x;
+    screen.monitor_y = y;
+    screen.monitor_width = w;
+    screen.monitor_height = h;
+    return screen;
+}
+
+ui::widgets::RegionPresetCard* FindRegionCardByTitle(ui::dialogs::SourcePickerDialog& dialog, const QString& title) {
+    for (auto* card : dialog.findChildren<ui::widgets::RegionPresetCard*>()) {
+        if (card->title() == title) {
+            return card;
+        }
+    }
+    return nullptr;
+}
+
+// RegionPresetCard is a QFrame (not a QAbstractButton); emit its clicked()
+// signal directly to exercise the wired selection handlers.
+void ClickRegionCard(ui::widgets::RegionPresetCard* card) {
+    ASSERT_NE(card, nullptr);
+    QMetaObject::invokeMethod(card, "clicked");
+}
+
+} // namespace
+
+TEST_F(SourcePickerDialogTest, ComputePresetRegionRect_CentersWithinLargerMonitor) {
+    const QRect rect = ui::dialogs::SourcePickerDialog::ComputePresetRegionRect(1920, 1080, QRect(0, 0, 2560, 1440));
+    EXPECT_EQ(rect, QRect(320, 180, 1920, 1080));
+}
+
+TEST_F(SourcePickerDialogTest, ComputePresetRegionRect_AppliesMonitorOrigin) {
+    const QRect rect = ui::dialogs::SourcePickerDialog::ComputePresetRegionRect(1920, 1080, QRect(100, 50, 2560, 1440));
+    EXPECT_EQ(rect, QRect(420, 230, 1920, 1080));
+}
+
+TEST_F(SourcePickerDialogTest, ComputePresetRegionRect_ScalesDownToFitSmallMonitor) {
+    const QRect rect = ui::dialogs::SourcePickerDialog::ComputePresetRegionRect(1920, 1080, QRect(0, 0, 1280, 720));
+    // Aspect-preserving scale to fit; even-aligned; clamped to the monitor.
+    EXPECT_LE(rect.width(), 1280);
+    EXPECT_LE(rect.height(), 720);
+    EXPECT_EQ(rect.width() % 2, 0);
+    EXPECT_EQ(rect.height() % 2, 0);
+    EXPECT_GE(rect.width(), 64);
+    EXPECT_GE(rect.height(), 64);
+}
+
+TEST_F(SourcePickerDialogTest, RegionPresets_BecomeActiveWhenDisplayGeometryKnown) {
+    ui::dialogs::SourcePickerDialog dialog;
+    dialog.setScreenOptions({MakeScreenWithGeometry(1, 0, 0, 2560, 1440, true)});
+
+    auto* preset = FindRegionCardByTitle(dialog, QStringLiteral("16:9 Landscape"));
+    ASSERT_NE(preset, nullptr);
+    EXPECT_FALSE(preset->isPlanned());
+
+    auto* draw = dialog.findChild<ui::widgets::RegionPresetCard*>(QStringLiteral("sourcePickerRegionDrawCard"));
+    ASSERT_NE(draw, nullptr);
+    EXPECT_FALSE(draw->isPlanned());
+}
+
+TEST_F(SourcePickerDialogTest, RegionPresets_StayPlannedWithoutDisplayGeometry) {
+    ui::dialogs::SourcePickerDialog dialog;
+
+    auto* preset = FindRegionCardByTitle(dialog, QStringLiteral("16:9 Landscape"));
+    ASSERT_NE(preset, nullptr);
+    EXPECT_TRUE(preset->isPlanned());
+}
+
+TEST_F(SourcePickerDialogTest, ClickingPreset_SelectsRegionSourceWithActualRect) {
+    ui::dialogs::SourcePickerDialog dialog;
+    dialog.setScreenOptions({MakeScreenWithGeometry(2, 0, 0, 2560, 1440, true)});
+
+    auto* preset = FindRegionCardByTitle(dialog, QStringLiteral("16:9 Landscape"));
+    ASSERT_NE(preset, nullptr);
+    ClickRegionCard(preset);
+
+    EXPECT_TRUE(preset->isSelected());
+    auto* draw = dialog.findChild<ui::widgets::RegionPresetCard*>(QStringLiteral("sourcePickerRegionDrawCard"));
+    ASSERT_NE(draw, nullptr);
+    EXPECT_FALSE(draw->isSelected());
+
+    auto* use_button = dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerUseButton"));
+    ASSERT_NE(use_button, nullptr);
+    EXPECT_TRUE(use_button->isEnabled());
+
+    const auto selection = dialog.selectionResult();
+    EXPECT_TRUE(selection.valid);
+    EXPECT_EQ(selection.section, ui::dialogs::SourcePickerDialog::Section::Region);
+    EXPECT_TRUE(selection.region_preset);
+    EXPECT_EQ(selection.region_width, 1920);
+    EXPECT_EQ(selection.region_height, 1080);
+    EXPECT_EQ(selection.region_x, 320);
+    EXPECT_EQ(selection.region_y, 180);
+    EXPECT_EQ(selection.region_base_target_index, 2);
+    EXPECT_FALSE(selection.select_on_record);
+}
+
+TEST_F(SourcePickerDialogTest, PresetSummary_ShowsActualDimensions) {
+    ui::dialogs::SourcePickerDialog dialog;
+    dialog.setScreenOptions({MakeScreenWithGeometry(1, 0, 0, 2560, 1440, true)});
+
+    auto* preset = FindRegionCardByTitle(dialog, QStringLiteral("16:9 Landscape"));
+    ASSERT_NE(preset, nullptr);
+    ClickRegionCard(preset);
+
+    auto* summary = dialog.findChild<QLabel*>(QStringLiteral("sourcePickerSummary"));
+    ASSERT_NE(summary, nullptr);
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("1920 × 1080")));
+}
+
+TEST_F(SourcePickerDialogTest, SwitchingToDisplayAfterPreset_OverridesRegionSelection) {
+    ui::dialogs::SourcePickerDialog dialog;
+    dialog.setScreenOptions({MakeScreenWithGeometry(5, 0, 0, 2560, 1440, true)});
+
+    auto* preset = FindRegionCardByTitle(dialog, QStringLiteral("16:9 Landscape"));
+    ASSERT_NE(preset, nullptr);
+    ClickRegionCard(preset);
+    ASSERT_TRUE(dialog.selectionResult().region_preset);
+
+    auto* screens = dialog.findChild<QPushButton*>(QStringLiteral("sourcePickerScreensButton"));
+    ASSERT_NE(screens, nullptr);
+    screens->click();
+    EXPECT_TRUE(dialog.selectSource(ui::dialogs::SourcePickerDialog::Section::Screens, 5));
+
+    const auto selection = dialog.selectionResult();
+    EXPECT_EQ(selection.section, ui::dialogs::SourcePickerDialog::Section::Screens);
+    EXPECT_FALSE(selection.region_preset);
+    EXPECT_EQ(selection.target_index, 5);
+}
+
+TEST_F(SourcePickerDialogTest, DrawCustomRegion_RemainsAvailableWithGeometry) {
+    ui::dialogs::SourcePickerDialog dialog;
+    dialog.setScreenOptions({MakeScreenWithGeometry(1, 0, 0, 2560, 1440, true)});
+
+    // Choose a preset, then go back to draw — draw stays a valid choice.
+    auto* preset = FindRegionCardByTitle(dialog, QStringLiteral("1:1 Square"));
+    ASSERT_NE(preset, nullptr);
+    ClickRegionCard(preset);
+
+    auto* draw = dialog.findChild<ui::widgets::RegionPresetCard*>(QStringLiteral("sourcePickerRegionDrawCard"));
+    ASSERT_NE(draw, nullptr);
+    ClickRegionCard(draw);
+
+    EXPECT_TRUE(draw->isSelected());
+    EXPECT_FALSE(preset->isSelected());
+
+    const auto selection = dialog.selectionResult();
+    EXPECT_EQ(selection.section, ui::dialogs::SourcePickerDialog::Section::Region);
+    EXPECT_FALSE(selection.region_preset);
+    EXPECT_TRUE(selection.valid);
+}
+
 TEST_F(SourcePickerDialogTest, RefreshButton_DisabledForRegionAndEnabledForVisualSections) {
     ui::dialogs::SourcePickerDialog dialog;
 

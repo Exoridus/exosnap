@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 namespace exosnap::ui::dialogs {
 namespace {
@@ -94,6 +95,10 @@ void RestyleCard(QWidget* card, const char* tone) {
     card->update();
 }
 
+// Mirrors recorder_core::CaptureRegion::kMinDimension. Kept local so the
+// dialog stays free of the engine headers.
+constexpr int kRegionMinDimension = 64;
+
 // Strip backend capture-method jargon (DXGI/WGC) so it never leaks into the
 // visible source metadata or the selection summary footer.
 QString StripCaptureJargon(QString s) {
@@ -121,6 +126,32 @@ QString StripCaptureJargon(QString s) {
 }
 
 } // namespace
+
+QRect SourcePickerDialog::ComputePresetRegionRect(int preset_w, int preset_h, const QRect& monitor) {
+    if (preset_w <= 0 || preset_h <= 0 || monitor.width() <= 0 || monitor.height() <= 0) {
+        return {};
+    }
+
+    double w = preset_w;
+    double h = preset_h;
+    // Scale down (aspect-preserving) when the preset does not fit the monitor.
+    if (w > monitor.width() || h > monitor.height()) {
+        const double scale =
+            std::min(static_cast<double>(monitor.width()) / w, static_cast<double>(monitor.height()) / h);
+        w *= scale;
+        h *= scale;
+    }
+
+    // Even-align for encoder friendliness; never exceed the monitor.
+    int iw = static_cast<int>(std::floor(w)) & ~1;
+    int ih = static_cast<int>(std::floor(h)) & ~1;
+    iw = std::clamp(iw, 0, monitor.width());
+    ih = std::clamp(ih, 0, monitor.height());
+
+    const int x = monitor.x() + (monitor.width() - iw) / 2;
+    const int y = monitor.y() + (monitor.height() - ih) / 2;
+    return QRect(x, y, iw, ih);
+}
 
 SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     setObjectName("sourcePickerDialog");
@@ -244,17 +275,18 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
     struct RegionPresetDef {
         const char* title;
         const char* detail;
+        int width; // 0 for the draw card
+        int height;
         double aspect;
         bool draw;
-        bool planned;
     };
     const std::array<RegionPresetDef, 6> region_presets = {{
-        {"Draw custom region", "Select an area", 16.0 / 9.0, true, false},
-        {"16:9 Landscape", "1920 × 1080", 16.0 / 9.0, false, true},
-        {"16:9 HD", "1280 × 720", 16.0 / 9.0, false, true},
-        {"9:16 Vertical", "1080 × 1920", 9.0 / 16.0, false, true},
-        {"1:1 Square", "1080 × 1080", 1.0, false, true},
-        {"4:5 Portrait", "1080 × 1350", 4.0 / 5.0, false, true},
+        {"Draw custom region", "Select an area", 0, 0, 16.0 / 9.0, true},
+        {"16:9 Landscape", "1920 × 1080", 1920, 1080, 16.0 / 9.0, false},
+        {"16:9 HD", "1280 × 720", 1280, 720, 16.0 / 9.0, false},
+        {"9:16 Vertical", "1080 × 1920", 1080, 1920, 9.0 / 16.0, false},
+        {"1:1 Square", "1080 × 1080", 1080, 1080, 1.0, false},
+        {"4:5 Portrait", "1080 × 1350", 1080, 1350, 4.0 / 5.0, false},
     }};
 
     constexpr int kRegionColumns = 3;
@@ -265,19 +297,18 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
         card->setDetail(QString::fromUtf8(def.detail));
         card->setAspectRatio(def.aspect);
         card->setDrawVariant(def.draw);
-        card->setPlanned(def.planned);
-        region_preset_cards_.push_back(card);
+        // Presets start planned until display geometry is known (see
+        // updateRegionPresetAvailability); the draw card is always active.
+        card->setPlanned(!def.draw);
+        const int entry_index = static_cast<int>(region_preset_entries_.size());
+        region_preset_entries_.push_back({card, def.width, def.height, def.draw});
         if (def.draw) {
             region_draw_card_ = card;
             card->setObjectName("sourcePickerRegionDrawCard");
-            connect(card, &ui::widgets::RegionPresetCard::clicked, this, [this]() {
-                selected_section_ = Section::Region;
-                selected_target_index_ = -1;
-                pick_region_now_ = false;
-                setActiveSection(Section::Region);
-                refreshSelectionVisuals();
-                updateSummaryLabel();
-            });
+            connect(card, &ui::widgets::RegionPresetCard::clicked, this, [this]() { selectRegionDraw(); });
+        } else {
+            connect(card, &ui::widgets::RegionPresetCard::clicked, this,
+                    [this, entry_index]() { selectRegionPreset(entry_index); });
         }
         region_grid->addWidget(card, i / kRegionColumns, i % kRegionColumns);
     }
@@ -362,6 +393,11 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
         selected_section_ = Section::Region;
         selected_target_index_ = -1;
         pick_region_now_ = false;
+        // Default the region choice to the manual-draw card when nothing in the
+        // Region tab has been chosen yet (keeps the source valid).
+        if (region_choice_ == kRegionChoiceNone) {
+            region_choice_ = kRegionChoiceDraw;
+        }
         setActiveSection(Section::Region);
         refreshSelectionVisuals();
         updateSummaryLabel();
@@ -389,6 +425,7 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent) : QDialog(parent) {
 void SourcePickerDialog::setScreenOptions(const std::vector<SourceOption>& options) {
     screen_options_ = options;
     rebuildOptionCards();
+    updateRegionPresetAvailability();
     if (isVisible() && selected_section_ == Section::Screens) {
         requestThumbnailsForSection(Section::Screens);
     }
@@ -426,6 +463,11 @@ void SourcePickerDialog::setCurrentSelection(Section section, int target_index) 
     pick_region_now_ = false;
     selected_section_ = section;
     selected_target_index_ = target_index;
+
+    if (section == Section::Region && region_choice_ == kRegionChoiceNone) {
+        // Default to the manual-draw card so the Region source stays valid.
+        region_choice_ = kRegionChoiceDraw;
+    }
 
     if (section != Section::Region && !hasTargetInSection(section, target_index)) {
         const auto& fallback = (section == Section::Windows) ? window_options_ : screen_options_;
@@ -466,6 +508,19 @@ SourcePickerDialog::SelectionResult SourcePickerDialog::selectionResult() const 
     result.valid = hasValidSelection();
     result.select_on_record = region_select_on_record_check_ ? region_select_on_record_check_->isChecked() : true;
     result.pick_region_now = pick_region_now_;
+
+    if (selected_section_ == Section::Region && region_choice_ >= 0 && pending_region_rect_.isValid()) {
+        result.region_preset = true;
+        result.region_x = pending_region_rect_.x();
+        result.region_y = pending_region_rect_.y();
+        result.region_width = pending_region_rect_.width();
+        result.region_height = pending_region_rect_.height();
+        result.region_base_target_index = pending_region_base_index_;
+        // An explicit preset rectangle is its own selection — never defer it to
+        // an at-record overlay.
+        result.select_on_record = false;
+        result.pick_region_now = false;
+    }
     return result;
 }
 
@@ -480,6 +535,11 @@ void SourcePickerDialog::onUseSelected() {
 void SourcePickerDialog::onPickRegionNow() {
     selected_section_ = Section::Region;
     selected_target_index_ = -1;
+    // "Pick region now" is the manual-draw-immediately action, so it overrides
+    // any chosen preset rectangle.
+    region_choice_ = kRegionChoiceDraw;
+    pending_region_rect_ = {};
+    pending_region_base_index_ = -1;
     pick_region_now_ = true;
     setActiveSection(Section::Region);
     refreshSelectionVisuals();
@@ -764,10 +824,120 @@ void SourcePickerDialog::refreshSelectionVisuals() {
             option_card.section == selected_section_ && option_card.target_index == selected_target_index_;
         option_card.card->setSelected(selected);
     }
-    if (region_draw_card_) {
-        region_draw_card_->setSelected(selected_section_ == Section::Region);
+
+    const bool region_active = selected_section_ == Section::Region;
+    for (int i = 0; i < static_cast<int>(region_preset_entries_.size()); ++i) {
+        auto* card = region_preset_entries_[static_cast<std::size_t>(i)].card;
+        if (!card) {
+            continue;
+        }
+        const bool is_draw = region_preset_entries_[static_cast<std::size_t>(i)].draw;
+        bool selected = false;
+        if (region_active) {
+            selected = is_draw ? (region_choice_ == kRegionChoiceDraw) : (region_choice_ == i);
+        }
+        card->setSelected(selected);
     }
     use_button_->setEnabled(hasValidSelection());
+}
+
+bool SourcePickerDialog::regionPresetsEnabled() const {
+    SourceOption base;
+    return findBaseDisplay(&base);
+}
+
+bool SourcePickerDialog::findBaseDisplay(SourceOption* out) const {
+    const SourceOption* preferred = nullptr;
+    const SourceOption* primary = nullptr;
+    const SourceOption* first = nullptr;
+    for (const auto& option : screen_options_) {
+        if (option.monitor_width <= 0 || option.monitor_height <= 0) {
+            continue;
+        }
+        if (!first) {
+            first = &option;
+        }
+        if (option.primary && !primary) {
+            primary = &option;
+        }
+        // Prefer the display the picker entered on (the current monitor).
+        if (option.target_index == selected_target_index_ && !preferred) {
+            preferred = &option;
+        }
+    }
+    const SourceOption* chosen = preferred ? preferred : (primary ? primary : first);
+    if (!chosen) {
+        return false;
+    }
+    if (out) {
+        *out = *chosen;
+    }
+    return true;
+}
+
+void SourcePickerDialog::updateRegionPresetAvailability() {
+    const bool enabled = regionPresetsEnabled();
+    for (auto& entry : region_preset_entries_) {
+        if (!entry.card || entry.draw) {
+            continue;
+        }
+        entry.card->setPlanned(!enabled);
+    }
+    // If presets just became unavailable, drop any pending preset selection.
+    if (!enabled && region_choice_ >= 0) {
+        region_choice_ = kRegionChoiceDraw;
+        pending_region_rect_ = {};
+        pending_region_base_index_ = -1;
+        refreshSelectionVisuals();
+        if (selected_section_ == Section::Region) {
+            updateSummaryLabel();
+        }
+    }
+}
+
+void SourcePickerDialog::selectRegionDraw() {
+    selected_section_ = Section::Region;
+    selected_target_index_ = -1;
+    region_choice_ = kRegionChoiceDraw;
+    pending_region_rect_ = {};
+    pending_region_base_index_ = -1;
+    pick_region_now_ = false;
+    setActiveSection(Section::Region);
+    refreshSelectionVisuals();
+    updateSummaryLabel();
+}
+
+void SourcePickerDialog::selectRegionPreset(int entry_index) {
+    if (entry_index < 0 || entry_index >= static_cast<int>(region_preset_entries_.size())) {
+        return;
+    }
+    const RegionPresetEntry& entry = region_preset_entries_[static_cast<std::size_t>(entry_index)];
+    if (entry.draw || entry.width <= 0 || entry.height <= 0) {
+        return;
+    }
+
+    SourceOption base;
+    if (!findBaseDisplay(&base)) {
+        // No display geometry — cannot place a preset; fall back to draw.
+        selectRegionDraw();
+        return;
+    }
+
+    const QRect monitor(base.monitor_x, base.monitor_y, base.monitor_width, base.monitor_height);
+    const QRect rect = ComputePresetRegionRect(entry.width, entry.height, monitor);
+    if (!rect.isValid() || rect.width() < kRegionMinDimension || rect.height() < kRegionMinDimension) {
+        return;
+    }
+
+    selected_section_ = Section::Region;
+    selected_target_index_ = base.target_index;
+    region_choice_ = entry_index;
+    pending_region_rect_ = rect;
+    pending_region_base_index_ = base.target_index;
+    pick_region_now_ = false;
+    setActiveSection(Section::Region);
+    refreshSelectionVisuals();
+    updateSummaryLabel();
 }
 
 void SourcePickerDialog::updateSummaryLabel() {
@@ -776,6 +946,26 @@ void SourcePickerDialog::updateSummaryLabel() {
     }
 
     if (selected_section_ == Section::Region) {
+        // A chosen preset reports its actual (post-scale) rectangle.
+        if (region_choice_ >= 0 && pending_region_rect_.isValid()) {
+            const QString actual =
+                QStringLiteral("Region · %1 × %2").arg(pending_region_rect_.width()).arg(pending_region_rect_.height());
+            summary_label_->setText(actual);
+            if (region_summary_value_label_) {
+                region_summary_value_label_->setText(QStringLiteral("%1, %2 — %3 × %4")
+                                                         .arg(pending_region_rect_.x())
+                                                         .arg(pending_region_rect_.y())
+                                                         .arg(pending_region_rect_.width())
+                                                         .arg(pending_region_rect_.height()));
+            }
+            return;
+        }
+        // Restore the saved-region text in the in-tab summary (a preset may have
+        // overwritten it).
+        if (region_summary_value_label_) {
+            region_summary_value_label_->setText(
+                region_summary_.trimmed().isEmpty() ? QStringLiteral("No region saved yet.") : region_summary_);
+        }
         const QString region_text = (has_region_ && !region_summary_.trimmed().isEmpty())
                                         ? QStringLiteral("Region · %1").arg(region_summary_)
                                         : QStringLiteral("Region · no saved region");
@@ -820,6 +1010,12 @@ void SourcePickerDialog::updateSummaryLabel() {
 
 bool SourcePickerDialog::hasValidSelection() const {
     if (selected_section_ == Section::Region) {
+        // A chosen preset is valid only once it resolves to a real rectangle;
+        // the manual-draw choice stays valid (the overlay produces the rect).
+        if (region_choice_ >= 0) {
+            return pending_region_rect_.isValid() && pending_region_rect_.width() >= kRegionMinDimension &&
+                   pending_region_rect_.height() >= kRegionMinDimension;
+        }
         return true;
     }
     SourceOption option;

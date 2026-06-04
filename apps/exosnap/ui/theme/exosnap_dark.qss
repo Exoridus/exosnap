@@ -1520,6 +1520,15 @@ QLabel[labelRole="regionPresetPlannedBadge"] {
     background: ${bg3};
 }
 
+QLabel[labelRole="regionPresetCheckBadge"] {
+    background: ${accent};
+    color: ${accent-ink};
+    border: none;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
 /* Preview surface text roles */
 QLabel[labelRole="previewMeta"] {
     font-family: ${font-mono};

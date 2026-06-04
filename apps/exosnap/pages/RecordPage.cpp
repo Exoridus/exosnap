@@ -313,6 +313,8 @@ struct ScreenPresentation {
     bool primary = false;
     int width = 0;
     int height = 0;
+    int origin_x = 0; // rcMonitor.left (virtual-screen coords)
+    int origin_y = 0; // rcMonitor.top
 };
 
 struct WindowPresentation {
@@ -372,6 +374,8 @@ ScreenPresentation QueryScreenPresentation(uintptr_t native_id) {
     meta.primary = (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
     meta.width = info.rcMonitor.right - info.rcMonitor.left;
     meta.height = info.rcMonitor.bottom - info.rcMonitor.top;
+    meta.origin_x = info.rcMonitor.left;
+    meta.origin_y = info.rcMonitor.top;
     return meta;
 }
 
@@ -2055,6 +2059,12 @@ void RecordPage::onOpenSourcePicker() {
                                            : QStringLiteral("Display capture · DXGI OD monitor capture");
         }
         option.status_badge = option.primary ? QStringLiteral("Primary") : QStringLiteral("Screen");
+        if (screen_meta.available) {
+            option.monitor_x = screen_meta.origin_x;
+            option.monitor_y = screen_meta.origin_y;
+            option.monitor_width = screen_meta.width;
+            option.monitor_height = screen_meta.height;
+        }
         screen_options.push_back(option);
     }
 
@@ -2300,6 +2310,39 @@ void RecordPage::onOpenSourcePicker() {
     }
 
     if (selection.section == ui::dialogs::SourcePickerDialog::Section::Region) {
+        // A fixed-resolution preset resolves to an explicit rectangle on a
+        // specific display — apply it directly (no at-record overlay).
+        if (selection.region_preset && selection.region_base_target_index >= 0) {
+            syncTargetSelectionToCombo(selection.region_base_target_index);
+            view_model_.capture_mode = CaptureMode::Region;
+            view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
+
+            recorder_core::CaptureRegion region;
+            region.x = selection.region_x;
+            region.y = selection.region_y;
+            region.width = selection.region_width;
+            region.height = selection.region_height;
+            view_model_.has_region = true;
+            view_model_.region = region;
+            view_model_.select_on_record = false;
+            if (select_on_record_check_) {
+                select_on_record_check_->setChecked(false);
+            }
+            if (region_summary_label_) {
+                region_summary_label_->setText(
+                    QString("%1, %2  —  %3 × %4").arg(region.x).arg(region.y).arg(region.width).arg(region.height));
+            }
+            diagnostics::AppLog(QStringLiteral("[target] region preset applied: %1 x %2 at %3,%4")
+                                    .arg(region.width)
+                                    .arg(region.height)
+                                    .arg(region.x)
+                                    .arg(region.y));
+            updateTargetCards();
+            rebuildTargetPicker();
+            refresh();
+            return;
+        }
+
         if (select_on_record_check_) {
             select_on_record_check_->setChecked(selection.select_on_record);
         }

@@ -4,6 +4,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QResizeEvent>
 #include <QStyle>
 #include <QVBoxLayout>
 
@@ -52,6 +53,16 @@ RegionPresetCard::RegionPresetCard(QWidget* parent) : QFrame(parent) {
     preview_layout->addStretch(1);
     preview_layout->addWidget(preview_shape_, 0, Qt::AlignCenter);
     preview_layout->addStretch(1);
+
+    // Accent check badge — floats over the top-right of the preview while
+    // selected (repositioned in resizeEvent since the card width is dynamic).
+    check_badge_ = new QLabel(QStringLiteral("✓"), preview_box_);
+    check_badge_->setObjectName("regionPresetCheckBadge");
+    check_badge_->setProperty("labelRole", "regionPresetCheckBadge");
+    check_badge_->setAlignment(Qt::AlignCenter);
+    check_badge_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    check_badge_->setFixedSize(20, 20);
+    check_badge_->setVisible(false);
 
     auto* title_row = new QHBoxLayout();
     title_row->setContentsMargins(0, 0, 0, 0);
@@ -143,11 +154,25 @@ void RegionPresetCard::setSelected(bool selected) {
     if (preview_shape_) {
         restyle(preview_shape_);
     }
+    updateCheckBadge();
     restyle(this);
 }
 
 bool RegionPresetCard::isSelected() const noexcept {
     return selected_;
+}
+
+void RegionPresetCard::updateCheckBadge() {
+    if (!check_badge_ || !preview_box_) {
+        return;
+    }
+    check_badge_->setVisible(selected_);
+    if (!selected_) {
+        return;
+    }
+    const int margin = 8;
+    check_badge_->move(preview_box_->width() - check_badge_->width() - margin, margin);
+    check_badge_->raise();
 }
 
 void RegionPresetCard::updatePreviewGeometry() {
@@ -202,6 +227,11 @@ void RegionPresetCard::mouseReleaseEvent(QMouseEvent* event) {
     }
     click_armed_ = false;
     QFrame::mouseReleaseEvent(event);
+}
+
+void RegionPresetCard::resizeEvent(QResizeEvent* event) {
+    QFrame::resizeEvent(event);
+    updateCheckBadge();
 }
 
 } // namespace exosnap::ui::widgets
