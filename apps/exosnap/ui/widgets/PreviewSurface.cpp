@@ -262,11 +262,12 @@ bool PreviewSurface::tryStartDxgiPreview(const recorder_core::CaptureTarget& tar
 
     dxgi_renderer_ = std::make_unique<exosnap::DxgiPreviewRenderer>();
 
-    const uint32_t hwndW = static_cast<uint32_t>(std::max(1, width()));
-    const uint32_t hwndH = static_cast<uint32_t>(std::max(1, height()));
+    // Win32 CreateWindowEx expects physical pixels for DPI-aware apps; Qt width()/height() are logical.
     const qreal dpr = devicePixelRatioF();
-    const uint32_t swapW = static_cast<uint32_t>(std::max(1.0, width() * dpr));
-    const uint32_t swapH = static_cast<uint32_t>(std::max(1.0, height() * dpr));
+    const uint32_t hwndW = static_cast<uint32_t>(std::max(1.0, width() * dpr));
+    const uint32_t hwndH = static_cast<uint32_t>(std::max(1.0, height() * dpr));
+    const uint32_t swapW = hwndW;
+    const uint32_t swapH = hwndH;
     if (!dxgi_renderer_->Initialize(hwnd, hwndW, hwndH, swapW, swapH)) {
         diagnostics::AppLog(QStringLiteral("[dxgi-preview] DxgiPreviewRenderer init failed, falling back to QImage"));
         dxgi_renderer_.reset();
@@ -310,11 +311,12 @@ void PreviewSurface::applyDxgiPreviewResize() {
     if (!dxgi_renderer_ || !dxgi_active_)
         return;
 
-    const uint32_t hwndW = static_cast<uint32_t>(std::max(1, width()));
-    const uint32_t hwndH = static_cast<uint32_t>(std::max(1, height()));
+    // Win32 SetWindowPos expects physical pixels for DPI-aware apps; Qt width()/height() are logical.
     const qreal dpr = devicePixelRatioF();
-    const uint32_t swapW = static_cast<uint32_t>(std::max(1.0, width() * dpr));
-    const uint32_t swapH = static_cast<uint32_t>(std::max(1.0, height() * dpr));
+    const uint32_t hwndW = static_cast<uint32_t>(std::max(1.0, width() * dpr));
+    const uint32_t hwndH = static_cast<uint32_t>(std::max(1.0, height() * dpr));
+    const uint32_t swapW = hwndW;
+    const uint32_t swapH = hwndH;
     dxgi_renderer_->Resize(hwndW, hwndH, swapW, swapH);
 }
 
