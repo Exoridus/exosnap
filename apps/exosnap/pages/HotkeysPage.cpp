@@ -37,19 +37,27 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
     layout->setContentsMargins(M::kSpaceXl, M::kSpaceXl, M::kSpaceXl, M::kSpaceXl);
     layout->setSpacing(M::kSpaceMd);
 
-    // Only the four actions the recorder backend actually models are shown. Start/Stop and
-    // Pause/Resume are wired through WM_HOTKEY; Split and Mute Mic register no live handler yet, so
-    // they are honestly presented as planned. Other design-target actions (change source, webcam,
-    // diagnostics, screenshot) have no backend slot and are deliberately not invented here.
+    // Active rows (supported=true): wired through WM_HOTKEY, accept Set/Unset rebinding.
+    // Planned rows (supported=false): design-target bindings shown as context; no live handler;
+    // no Set/Unset controls; "Not in this build" tag clearly marks each as unavailable.
     const struct {
         const char* action;
         QKeySequence binding;
         bool supported;
     } kActions[kActionCount] = {
+        // Active — backend-modelled, globally registered.
         {"Start / Stop recording", QKeySequence(QStringLiteral("Alt+F9")), true},
         {"Pause / Resume", QKeySequence(), true},
+        // Planned — registered but no live handler yet.
         {"Split recording", QKeySequence(), false},
         {"Mute / unmute microphone", QKeySequence(), false},
+        // Planned — design-target actions, no backend slot in this build.
+        {"Change source", QKeySequence(), false},
+        {"Toggle microphone", QKeySequence(), false},
+        {"Toggle webcam", QKeySequence(), false},
+        {"Toggle system audio", QKeySequence(), false},
+        {"Open diagnostics", QKeySequence(), false},
+        {"Capture frame (screenshot)", QKeySequence(), false},
     };
 
     // ── Active section ────────────────────────────────────────────────────────────────────────
@@ -138,7 +146,7 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
 }
 
 void HotkeysPage::setBindings(const std::array<QKeySequence, 4>& bindings) {
-    for (int i = 0; i < kActionCount; ++i) {
+    for (int i = 0; i < static_cast<int>(bindings.size()); ++i) {
         rows_[i].current_binding = bindings[static_cast<std::size_t>(i)];
         updateBindingChips(i);
     }

@@ -102,6 +102,64 @@ TEST_F(HotkeysPageTest, PlannedActionsAreUnavailableAndNotRebindable) {
     EXPECT_EQ(tag_mute->text(), QStringLiteral("Not in this build"));
 }
 
+TEST_F(HotkeysPageTest, DesignTargetPlannedActions_ArePresent) {
+    HotkeysPage page;
+    // The planned section must include all six design-target actions (indices 4–9).
+    const QStringList expected = {
+        QStringLiteral("hotkeyPlannedTag_4"), QStringLiteral("hotkeyPlannedTag_5"),
+        QStringLiteral("hotkeyPlannedTag_6"), QStringLiteral("hotkeyPlannedTag_7"),
+        QStringLiteral("hotkeyPlannedTag_8"), QStringLiteral("hotkeyPlannedTag_9"),
+    };
+    for (const auto& name : expected) {
+        auto* tag = page.findChild<QLabel*>(name);
+        ASSERT_NE(tag, nullptr) << name.toStdString() << " not found";
+        EXPECT_EQ(tag->text(), QStringLiteral("Not in this build"));
+    }
+}
+
+TEST_F(HotkeysPageTest, DesignTargetPlannedActions_ActionLabelsPresent) {
+    HotkeysPage page;
+    const QStringList expected_labels = {
+        QStringLiteral("Change source"),    QStringLiteral("Toggle microphone"),
+        QStringLiteral("Toggle webcam"),    QStringLiteral("Toggle system audio"),
+        QStringLiteral("Open diagnostics"), QStringLiteral("Capture frame (screenshot)"),
+    };
+    for (const auto& label : expected_labels) {
+        bool found = false;
+        for (auto* lbl : page.findChildren<QLabel*>()) {
+            if (lbl->text() == label) {
+                found = true;
+                break;
+            }
+        }
+        EXPECT_TRUE(found) << label.toStdString() << " label not found on page";
+    }
+}
+
+TEST_F(HotkeysPageTest, DesignTargetPlannedActions_HaveNoRebindControls) {
+    HotkeysPage page;
+    // Indices 4–9 are design-target planned rows and must not expose Set/Unset buttons.
+    for (int i = 4; i <= 9; ++i) {
+        EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_%1").arg(i)), nullptr)
+            << "Set button found for planned index " << i;
+        EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_%1").arg(i)), nullptr)
+            << "Unset button found for planned index " << i;
+        EXPECT_EQ(page.findChild<QWidget*>(QStringLiteral("hotkeyBinding_%1").arg(i)), nullptr)
+            << "Binding chip widget found for planned index " << i;
+    }
+}
+
+TEST_F(HotkeysPageTest, ActiveRowsUnaffectedByPlannedExpansion) {
+    HotkeysPage page;
+    page.setBindings({QKeySequence(QStringLiteral("Alt+F9")), QKeySequence(), QKeySequence(), QKeySequence()});
+    // Active row 0 (Start/Stop) still has Set/Unset.
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_0")), nullptr);
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_0")), nullptr);
+    // Active row 1 (Pause/Resume) still has Set/Unset.
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_1")), nullptr);
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_1")), nullptr);
+}
+
 TEST_F(HotkeysPageTest, ResetToDefaultsRestoresActiveBindings) {
     HotkeysPage page;
     auto* reset = page.findChild<QPushButton*>(QStringLiteral("hotkeyResetBtn"));

@@ -21,7 +21,7 @@ class HotkeysPage : public QWidget {
     void bindingChanged(int action_index, QKeySequence seq);
 
   private:
-    static constexpr int kActionCount = 4;
+    static constexpr int kActionCount = 10;
     void buildRow(int index, const QString& action, const QKeySequence& default_binding, bool supported,
                   QVBoxLayout* parent_layout, QWidget* parent_widget);
     void updateBindingChips(int index);
