@@ -413,7 +413,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     if (!QApplication::windowIcon().isNull()) {
         setWindowIcon(QApplication::windowIcon());
     } else {
-        static const QString kAppIconPath = QStringLiteral(":/brand/exosnap-logo-light-bg-dark.ico");
+        static const QString kAppIconPath = QStringLiteral(":/brand/exosnap-logo-idle.ico");
         if (!QFile::exists(kAppIconPath))
             qWarning().noquote() << "MainWindow icon resource missing:" << kAppIconPath;
         QIcon fallback_icon(kAppIconPath);
@@ -790,7 +790,7 @@ void MainWindow::applyRuntimeWindowIcon() {
         runtime_icon = QApplication::windowIcon();
 
     if (runtime_icon.isNull()) {
-        static const QString kAppIconPath = QStringLiteral(":/brand/exosnap-logo-light-bg-dark.ico");
+        static const QString kAppIconPath = QStringLiteral(":/brand/exosnap-logo-idle.ico");
         if (!QFile::exists(kAppIconPath))
             qWarning().noquote() << "Runtime icon resource missing during showEvent:" << kAppIconPath;
         runtime_icon = QIcon(kAppIconPath);
@@ -849,6 +849,50 @@ void MainWindow::applyRuntimeWindowIcon() {
     runtime_window_icon_bound_ = true;
 }
 
+void MainWindow::switchRecordingIcon(bool recording) {
+    // Switch the window/taskbar icon between the idle aperture mark and the coral
+    // recording variant. Qt's setWindowIcon updates the title-bar frame; WM_SETICON
+    // ensures the taskbar button also updates on Windows.
+    //
+    // Note: Windows may cache the EXE icon (shown before the app launches) even
+    // after WM_SETICON succeeds for the running window. The taskbar *button* icon
+    // does update live on Windows 10/11; the taskbar pinned icon and the EXE file
+    // icon shown in Explorer do not change at runtime — this is expected behavior.
+    static const QString kIdlePath = QStringLiteral(":/brand/exosnap-logo-idle.ico");
+    static const QString kRecordingPath = QStringLiteral(":/brand/exosnap-logo-recording.ico");
+    const QString& icon_path = recording ? kRecordingPath : kIdlePath;
+
+    QIcon icon(icon_path);
+    if (icon.isNull()) {
+        qWarning().noquote() << "switchRecordingIcon: icon load failed from" << icon_path;
+        return;
+    }
+
+    setWindowIcon(icon);
+    if (windowHandle())
+        windowHandle()->setIcon(icon);
+
+#if defined(Q_OS_WIN)
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (hwnd == nullptr)
+        return;
+    HINSTANCE inst = GetModuleHandleW(nullptr);
+    if (inst == nullptr)
+        return;
+
+    const WORD icon_id = recording ? IDI_EXOSNAP_APP_ICON_RECORDING : IDI_EXOSNAP_APP_ICON;
+    // LR_DEFAULTCOLOR | LR_SHARED: OS caches per (instance, id, size) tuple — safe for distinct IDs.
+    HICON small_icon = static_cast<HICON>(
+        LoadImageW(inst, MAKEINTRESOURCEW(icon_id), IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR | LR_SHARED));
+    HICON big_icon = static_cast<HICON>(
+        LoadImageW(inst, MAKEINTRESOURCEW(icon_id), IMAGE_ICON, 32, 32, LR_DEFAULTCOLOR | LR_SHARED));
+    if (small_icon)
+        SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(small_icon));
+    if (big_icon)
+        SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(big_icon));
+#endif
+}
+
 bool MainWindow::effectiveMaximizedState() const {
     return isMaximized() || win32_maximized_ || isFullScreen();
 }
@@ -878,6 +922,7 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
     }
 
     applyTitleBarStatus();
+    switchRecordingIcon(recording_active_);
 
     if (recording && isVisible() && !isMinimized() && stack_->currentIndex() != 0)
         navigateToPage(kRecordPageIndex);

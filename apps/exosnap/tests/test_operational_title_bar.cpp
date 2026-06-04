@@ -191,5 +191,49 @@ TEST_F(OperationalTitleBarTest, Shell_HasNoGlobalTransportButtons) {
     }
 }
 
+// ── Recording-border state (HYBRID-FIDELITY-R1 Part C) ───────────────────────
+
+TEST_F(OperationalTitleBarTest, RecordingBorder_IdleByDefault) {
+    ui::chrome::OperationalTitleBar bar;
+    EXPECT_FALSE(bar.isRecordingActive());
+}
+
+TEST_F(OperationalTitleBarTest, RecordingBorder_ActiveWhileRecording) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+    bar.setRecordingActive(true);
+    bar.setStatusLabel(QStringLiteral("REC"));
+    EXPECT_TRUE(bar.isRecordingActive());
+}
+
+TEST_F(OperationalTitleBarTest, RecordingBorder_ActiveWhilePaused) {
+    // The title-bar bottom border must still be active (non-neutral) while paused;
+    // the view distinguishes coral vs amber via the status label.
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+    bar.setRecordingActive(true);
+    bar.setStatusLabel(QStringLiteral("PAUSED"));
+    EXPECT_TRUE(bar.isRecordingActive());
+}
+
+TEST_F(OperationalTitleBarTest, RecordingBorder_NeutralAfterStop) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+    bar.setRecordingActive(true);
+    bar.setStatusLabel(QStringLiteral("REC"));
+    bar.setRecordingActive(false);
+    bar.setStatusLabel(QStringLiteral("READY"));
+    EXPECT_FALSE(bar.isRecordingActive());
+}
+
+TEST_F(OperationalTitleBarTest, RecordingBorder_NeutralAfterSaved) {
+    // After a completed recording the border must return to neutral.
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+    bar.setRecordingActive(false);
+    bar.setStatusLabel(QStringLiteral("SAVED"));
+    EXPECT_FALSE(bar.isRecordingActive());
+}
+
 } // namespace
 } // namespace exosnap

@@ -232,5 +232,79 @@ TEST_F(TransportDockTest, SetMeterLevel_UnknownKeyIsIgnored) {
         EXPECT_FLOAT_EQ(tog->meterLevel(), 0.0f);
 }
 
+// ── Timer contract (HYBRID-FIDELITY-R1 Part B) ───────────────────────────────
+
+TEST_F(TransportDockTest, Timer_DefaultIsZeroNotPlaceholder) {
+    // The dock must show 00:00:00 at construction, not the legacy --:--:-- placeholder.
+    TransportDock dock;
+    auto* timer = dock.findChild<QLabel*>(QStringLiteral("recordDockTimer"));
+    ASSERT_NE(timer, nullptr);
+    EXPECT_EQ(timer->text(), QStringLiteral("00:00:00"));
+    EXPECT_NE(timer->text(), QStringLiteral("--:--:--"));
+}
+
+TEST_F(TransportDockTest, Timer_Recording_NeverShowsPlaceholder) {
+    // The view layer must set a live clock (00:00:NN), never the --:--:-- sentinel,
+    // when the dock is in the Recording state.
+    TransportDock dock;
+    dock.setState(TransportDock::State::Recording);
+    dock.setTimerText(QStringLiteral("00:00:00")); // immediate start — 0 s elapsed
+    dock.setTimerRole(QStringLiteral("recording"));
+
+    auto* timer = dock.findChild<QLabel*>(QStringLiteral("recordDockTimer"));
+    ASSERT_NE(timer, nullptr);
+    EXPECT_NE(timer->text(), QStringLiteral("--:--:--"));
+    EXPECT_EQ(timer->text(), QStringLiteral("00:00:00"));
+}
+
+TEST_F(TransportDockTest, Timer_AdvancesWhenSetToLaterValue) {
+    TransportDock dock;
+    dock.setState(TransportDock::State::Recording);
+    dock.setTimerText(QStringLiteral("00:00:05")); // 5 s elapsed
+
+    auto* timer = dock.findChild<QLabel*>(QStringLiteral("recordDockTimer"));
+    ASSERT_NE(timer, nullptr);
+    EXPECT_EQ(timer->text(), QStringLiteral("00:00:05"));
+    EXPECT_NE(timer->text(), QStringLiteral("--:--:--"));
+}
+
+TEST_F(TransportDockTest, Timer_PausedFreezes) {
+    // The dock retains the last-set text when paused (view must not send --:--:--).
+    TransportDock dock;
+    dock.setState(TransportDock::State::Recording);
+    dock.setTimerText(QStringLiteral("00:01:30"));
+    dock.setState(TransportDock::State::Paused);
+    dock.setTimerRole(QStringLiteral("paused"));
+
+    auto* timer = dock.findChild<QLabel*>(QStringLiteral("recordDockTimer"));
+    ASSERT_NE(timer, nullptr);
+    EXPECT_EQ(timer->text(), QStringLiteral("00:01:30")); // frozen at pause time
+}
+
+TEST_F(TransportDockTest, Timer_CompletedRetainsDuration) {
+    TransportDock dock;
+    dock.setState(TransportDock::State::Recording);
+    dock.setTimerText(QStringLiteral("00:03:42"));
+    dock.setState(TransportDock::State::Completed);
+    dock.setTimerRole(QStringLiteral("done"));
+
+    auto* timer = dock.findChild<QLabel*>(QStringLiteral("recordDockTimer"));
+    ASSERT_NE(timer, nullptr);
+    EXPECT_EQ(timer->text(), QStringLiteral("00:03:42"));
+}
+
+TEST_F(TransportDockTest, Timer_ReadyResetsToZero) {
+    TransportDock dock;
+    dock.setState(TransportDock::State::Recording);
+    dock.setTimerText(QStringLiteral("00:00:10"));
+    dock.setState(TransportDock::State::Ready);
+    dock.setTimerText(QStringLiteral("00:00:00")); // view resets on Ready
+    dock.setTimerRole(QStringLiteral("idle"));
+
+    auto* timer = dock.findChild<QLabel*>(QStringLiteral("recordDockTimer"));
+    ASSERT_NE(timer, nullptr);
+    EXPECT_EQ(timer->text(), QStringLiteral("00:00:00"));
+}
+
 } // namespace
 } // namespace exosnap

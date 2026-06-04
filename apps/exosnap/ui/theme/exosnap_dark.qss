@@ -1429,7 +1429,7 @@ QPushButton#aboutCloseButton {
     min-height: 28px;
     max-width: 28px;
     max-height: 28px;
-    border-radius: 4px;
+    border-radius: 14px;
 }
 
 QPushButton#aboutCloseButton:hover {

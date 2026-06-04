@@ -82,7 +82,7 @@ int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     app.setApplicationName("ExoSnap");
 
-    static const QString kAppIconPath = QStringLiteral(":/brand/exosnap-logo-light-bg-dark.ico");
+    static const QString kAppIconPath = QStringLiteral(":/brand/exosnap-logo-idle.ico");
     if (!QFile::exists(kAppIconPath))
         qWarning().noquote() << "Runtime app icon resource missing:" << kAppIconPath;
 

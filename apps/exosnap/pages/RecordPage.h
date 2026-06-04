@@ -1,4 +1,5 @@
 #pragma once
+#include <QElapsedTimer>
 #include <QWidget>
 #include <filesystem>
 #include <memory>
@@ -279,6 +280,12 @@ class RecordPage : public QWidget {
     // Hybrid v3 preview-first chrome (HYBRID-PORT-R2).
     ui::widgets::TransportDock* transport_dock_ = nullptr;
     QWidget* legacy_host_ = nullptr;
+
+    // View-layer elapsed-time fallback used while live backend stats are pending.
+    // Starts when recording begins; pauses/resumes with the recording state.
+    QElapsedTimer recording_wall_clock_;
+    qint64 wall_elapsed_before_pause_ms_ = 0; // accumulated ms before most recent pause
+    QTimer* ui_clock_timer_ = nullptr;        // 1 Hz tick → updateTransportDock() during recording
 };
 
 } // namespace exosnap

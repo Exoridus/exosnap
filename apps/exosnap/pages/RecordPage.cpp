@@ -1388,6 +1388,16 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(transport_dock_, &ui::widgets::TransportDock::filenameClicked, this, &RecordPage::onDockFilenameActivated);
     connect(transport_dock_, &ui::widgets::TransportDock::sourceToggleClicked, this, &RecordPage::onDockSourceToggle);
 
+    // 1 Hz tick drives the dock timer display while the backend stats are pending.
+    ui_clock_timer_ = new QTimer(this);
+    ui_clock_timer_->setInterval(1000);
+    ui_clock_timer_->setSingleShot(false);
+    connect(ui_clock_timer_, &QTimer::timeout, this, [this]() {
+        if (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused) {
+            updateTransportDock();
+        }
+    });
+
     coordinator_needs_init_ = true;
     updateResponsiveLayout();
 }
@@ -1667,6 +1677,35 @@ void RecordPage::initCoordinator() {
     }
 
     coordinator_->SetStateChangedCallback([this](UiRecordingState state) {
+        // Wall-clock fallback timer: track elapsed independently of backend stats
+        // so the dock timer always shows a live count immediately, not --:--:--.
+        const UiRecordingState prev = view_model_.state;
+        if (state == UiRecordingState::Recording && prev != UiRecordingState::Recording) {
+            if (prev == UiRecordingState::Paused) {
+                // Resume: keep accumulated time, restart the running clock.
+                recording_wall_clock_.restart();
+            } else {
+                // Fresh start.
+                wall_elapsed_before_pause_ms_ = 0;
+                recording_wall_clock_.start();
+            }
+            if (ui_clock_timer_ && !ui_clock_timer_->isActive())
+                ui_clock_timer_->start();
+        } else if (state == UiRecordingState::Paused && prev == UiRecordingState::Recording) {
+            // Pause: snapshot current elapsed, invalidate running clock.
+            if (recording_wall_clock_.isValid())
+                wall_elapsed_before_pause_ms_ += recording_wall_clock_.elapsed();
+            recording_wall_clock_.invalidate();
+            if (ui_clock_timer_)
+                ui_clock_timer_->stop();
+        } else if (state != UiRecordingState::Recording && state != UiRecordingState::Paused) {
+            // Stopping / Completed / Ready: reset wall clock and stop tick timer.
+            recording_wall_clock_.invalidate();
+            wall_elapsed_before_pause_ms_ = 0;
+            if (ui_clock_timer_)
+                ui_clock_timer_->stop();
+        }
+
         view_model_.SetState(state);
         view_model_.capability_status_text = coordinator_->CapabilityStatusText();
         if (state == UiRecordingState::Recording)
@@ -3037,10 +3076,17 @@ QString RecordPage::buildTimerText(bool recording) const {
     if (!recording) {
         return QStringLiteral("00:00:00");
     }
-    if (!view_model_.live_stats_available) {
-        return QStringLiteral("--:--:--");
+
+    // Prefer backend stats when available (more accurate, derived from encoded frames).
+    // Fall back to the view-layer wall clock so the display always starts immediately
+    // at 00:00:00 rather than showing --:--:-- while the first stats packet is pending.
+    if (view_model_.live_stats_available) {
+        return toClock(view_model_.elapsed_text);
     }
-    return toClock(view_model_.elapsed_text);
+
+    const qint64 wall_ms =
+        wall_elapsed_before_pause_ms_ + (recording_wall_clock_.isValid() ? recording_wall_clock_.elapsed() : 0);
+    return clockFromSeconds(static_cast<double>(wall_ms) / 1000.0);
 }
 
 void RecordPage::emitChromeState() {
