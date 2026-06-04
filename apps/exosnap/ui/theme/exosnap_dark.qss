@@ -294,6 +294,44 @@ QLabel[labelRole="recordHotkeyBadge"] {
     background: ${bg1};
 }
 
+/* Hotkeys page — keycap chips + table rows (HYBRID-PORT-R6) */
+QLabel[labelRole="keycap"] {
+    font-family: ${font-mono};
+    font-size: 12px;
+    font-weight: 600;
+    color: ${text0};
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-bottom: 2px solid ${line2};
+    border-radius: ${radius-sm}px;
+    padding: 3px 9px;
+    min-width: 18px;
+}
+
+QLabel[labelRole="keycap"][stateRole="muted"] {
+    color: ${text3};
+    font-weight: 500;
+    background: ${bg2};
+    border-color: ${line1};
+    border-bottom-color: ${line1};
+}
+
+QLabel[labelRole="keycapPlus"] {
+    font-family: ${font-mono};
+    font-size: 12px;
+    color: ${text3};
+}
+
+QLabel[labelRole="hotkeyAction"] {
+    font-size: 14px;
+    color: ${text0};
+}
+
+QLabel[labelRole="hotkeyActionPlanned"] {
+    font-size: 14px;
+    color: ${text2};
+}
+
 QLabel[labelRole="recordTimer"] {
     font-family: ${font-mono};
     font-size: 40px;
@@ -1360,6 +1398,20 @@ QLabel[labelRole="aboutMetaValue"] {
     letter-spacing: 0.06em;
     font-weight: 600;
     color: ${text1};
+}
+
+QLabel[labelRole="aboutWordmark"] {
+    font-family: ${font-sans};
+    font-size: 28px;
+    font-weight: 600;
+    color: ${text0};
+}
+
+QLabel[labelRole="aboutVersionLine"] {
+    font-family: ${font-mono};
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: ${text3};
 }
 
 QDialog#sourcePickerDialog {

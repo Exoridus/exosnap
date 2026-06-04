@@ -15,11 +15,13 @@ class LogsPage : public QWidget {
   private:
     void onRefresh();
     void onOpenFolder();
+    void onCopy();
     void reloadLogContent();
 
     QPlainTextEdit* log_viewer_ = nullptr;
     QPushButton* refresh_btn_ = nullptr;
     QPushButton* open_folder_btn_ = nullptr;
+    QPushButton* copy_btn_ = nullptr;
     QLabel* status_label_ = nullptr;
 };
 

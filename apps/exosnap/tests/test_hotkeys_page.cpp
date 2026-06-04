@@ -5,8 +5,10 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QPushButton>
+#include <QWidget>
 
 #include "pages/HotkeysPage.h"
+#include "ui/widgets/KeycapChip.h"
 
 namespace exosnap {
 namespace {
@@ -46,13 +48,35 @@ TEST_F(HotkeysPageTest, ActiveControlsRemainAvailable) {
     EXPECT_TRUE(unset_start->isEnabled());
     EXPECT_TRUE(set_pause->isEnabled());
     EXPECT_TRUE(unset_pause->isEnabled());
+}
 
-    auto* status_start = page.findChild<QLabel*>(QStringLiteral("hotkeyStatus_0"));
-    auto* status_pause = page.findChild<QLabel*>(QStringLiteral("hotkeyStatus_1"));
-    ASSERT_NE(status_start, nullptr);
-    ASSERT_NE(status_pause, nullptr);
-    EXPECT_EQ(status_start->text(), QStringLiteral("Active"));
-    EXPECT_EQ(status_pause->text(), QStringLiteral("Active"));
+TEST_F(HotkeysPageTest, ActiveRowsRenderRealBindingsAsKeycaps) {
+    HotkeysPage page;
+    page.setBindings({QKeySequence(QStringLiteral("Alt+F9")), QKeySequence(QStringLiteral("Alt+F10")), QKeySequence(),
+                      QKeySequence()});
+
+    auto* start_chips = page.findChild<QWidget*>(QStringLiteral("hotkeyBinding_0"));
+    ASSERT_NE(start_chips, nullptr);
+    const auto keycaps = start_chips->findChildren<ui::widgets::KeycapChip*>();
+    ASSERT_EQ(keycaps.size(), 2);
+    EXPECT_FALSE(keycaps.at(0)->isMuted());
+    EXPECT_FALSE(keycaps.at(1)->isMuted());
+    QStringList labels;
+    for (auto* chip : keycaps)
+        labels << chip->text();
+    EXPECT_TRUE(labels.contains(QStringLiteral("Alt")));
+    EXPECT_TRUE(labels.contains(QStringLiteral("F9")));
+}
+
+TEST_F(HotkeysPageTest, UnsetActiveRowShowsMutedKeycap) {
+    HotkeysPage page;
+    page.setBindings({QKeySequence(QStringLiteral("Alt+F9")), QKeySequence(), QKeySequence(), QKeySequence()});
+
+    auto* pause_chips = page.findChild<QWidget*>(QStringLiteral("hotkeyBinding_1"));
+    ASSERT_NE(pause_chips, nullptr);
+    const auto keycaps = pause_chips->findChildren<ui::widgets::KeycapChip*>();
+    ASSERT_EQ(keycaps.size(), 1);
+    EXPECT_TRUE(keycaps.at(0)->isMuted());
 }
 
 TEST_F(HotkeysPageTest, PlannedActionsAreUnavailableAndNotRebindable) {
@@ -60,24 +84,45 @@ TEST_F(HotkeysPageTest, PlannedActionsAreUnavailableAndNotRebindable) {
     page.setBindings({QKeySequence(), QKeySequence(), QKeySequence(QStringLiteral("Alt+F8")),
                       QKeySequence(QStringLiteral("Ctrl+Alt+M"))});
 
+    // No rebind / unset controls for planned actions.
     EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_2")), nullptr);
     EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_2")), nullptr);
     EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_3")), nullptr);
     EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_3")), nullptr);
 
-    auto* status_split = page.findChild<QLabel*>(QStringLiteral("hotkeyStatus_2"));
-    auto* status_mute = page.findChild<QLabel*>(QStringLiteral("hotkeyStatus_3"));
-    ASSERT_NE(status_split, nullptr);
-    ASSERT_NE(status_mute, nullptr);
-    EXPECT_EQ(status_split->text(), QStringLiteral("Unavailable"));
-    EXPECT_EQ(status_mute->text(), QStringLiteral("Unavailable"));
+    // No keycap chips fabricated for planned actions, only an honest "Not in this build" tag.
+    EXPECT_EQ(page.findChild<QWidget*>(QStringLiteral("hotkeyBinding_2")), nullptr);
+    EXPECT_EQ(page.findChild<QWidget*>(QStringLiteral("hotkeyBinding_3")), nullptr);
 
-    auto* split_binding = page.findChild<QLabel*>(QStringLiteral("hotkeyBinding_2"));
-    auto* mute_binding = page.findChild<QLabel*>(QStringLiteral("hotkeyBinding_3"));
-    ASSERT_NE(split_binding, nullptr);
-    ASSERT_NE(mute_binding, nullptr);
-    EXPECT_TRUE(split_binding->text().contains(QStringLiteral("inactive")));
-    EXPECT_TRUE(mute_binding->text().contains(QStringLiteral("inactive")));
+    auto* tag_split = page.findChild<QLabel*>(QStringLiteral("hotkeyPlannedTag_2"));
+    auto* tag_mute = page.findChild<QLabel*>(QStringLiteral("hotkeyPlannedTag_3"));
+    ASSERT_NE(tag_split, nullptr);
+    ASSERT_NE(tag_mute, nullptr);
+    EXPECT_EQ(tag_split->text(), QStringLiteral("Not in this build"));
+    EXPECT_EQ(tag_mute->text(), QStringLiteral("Not in this build"));
+}
+
+TEST_F(HotkeysPageTest, ResetToDefaultsRestoresActiveBindings) {
+    HotkeysPage page;
+    auto* reset = page.findChild<QPushButton*>(QStringLiteral("hotkeyResetBtn"));
+    ASSERT_NE(reset, nullptr);
+
+    // Move both active rows away from defaults (Start/Stop default Alt+F9, Pause default unset).
+    page.setBindings({QKeySequence(QStringLiteral("Ctrl+F1")), QKeySequence(QStringLiteral("Ctrl+F2")), QKeySequence(),
+                      QKeySequence()});
+
+    int emit_count = 0;
+    QObject::connect(&page, &HotkeysPage::bindingChanged, &page, [&emit_count](int, QKeySequence) { ++emit_count; });
+    reset->click();
+
+    // Both active rows differed from defaults, so both emit on reset.
+    ASSERT_EQ(emit_count, 2);
+    auto* start_chips = page.findChild<QWidget*>(QStringLiteral("hotkeyBinding_0"));
+    ASSERT_NE(start_chips, nullptr);
+    QStringList labels;
+    for (auto* chip : start_chips->findChildren<ui::widgets::KeycapChip*>())
+        labels << chip->text();
+    EXPECT_TRUE(labels.contains(QStringLiteral("F9")));
 }
 
 } // namespace

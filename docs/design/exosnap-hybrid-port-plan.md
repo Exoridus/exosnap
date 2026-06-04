@@ -506,6 +506,49 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
 
 **Codex high/xhigh** — three independent UI surfaces, each well-defined in the prototype, with minimal architectural risk.
 
+### Implementation status — landed
+
+- **Hotkeys:** `HotkeysPage` reflowed into compact table-like rows inside two `panel` frames —
+  `ACTIVE HOTKEYS` (Available now) and `PLANNED / UNAVAILABLE` (Not in this build) — with hairline
+  row separators, no oversized cards. Bindings render via the new `ui/widgets/KeycapChip`
+  (IBM-Plex-Mono keycaps, subtle border + bottom-edge shadow, joined by dim `+` labels; muted
+  `Unset` chip when empty). Active rows keep the genuinely-supported Set / Unset rebind
+  (`QKeySequenceEdit`) plus a new `Reset to defaults` button; planned rows expose **no**
+  rebind/keycap controls, only an honest `Not in this build` tag. An honest footnote states
+  shortcuts register globally and that ExoSnap does **not** detect conflicts. Only the four
+  backend-modelled actions are shown — Start/Stop + Pause/Resume are the real WM_HOTKEY-wired
+  ones; Split + Mute Mic are presented as planned (registered but no live handler). No new global
+  hotkey backend, rebinding-where-unsupported, or fake conflict detection was added.
+- **Logs:** `LogsPage` keeps the contained dark `logViewer` (monospace, no-wrap) and gains a
+  `Copy` action (copies the visible tail; disabled when empty) alongside Refresh / Open Log
+  Folder, plus a footer note pointing at `%LOCALAPPDATA%\ExoSnap\logs`. **No** All/Info/Issues
+  filter was added: `AppLog` lines carry component tags (`[record]`, `[dxgi-preview]`, …) not
+  severity levels, and the design target lists level filters as *Later* — so honest, no fake
+  filtering. Guarded by a unit test.
+- **About:** `AboutDialog` rebuilt as a clean centered card — aperture `BrandMarkWidget` +
+  two-tone lowercase `exosnap` wordmark + `Version … · for Windows` line, description, and a
+  metadata table with hairline rows (VERSION / BUILD / COMMIT / AUTHOR) from the generated
+  `ExoSnapBuildInfo.h` / `EXOSNAP_BUILD_CONFIG`. Real actions only: `GitHub` opens the configured
+  repo URL (`https://github.com/Exoridus/exosnap`, from the git remote); `Copy details` copies the
+  real metadata; `Close` (primary). No Release-notes action (no published feed), no fake Encoder
+  capability row, no Copy-diagnostics no-op. QDialog keeps its native title bar but the inner
+  layout is a single clean panel (no debug-card double-frame). About routing from the top nav is
+  unchanged.
+- **QSS:** new `keycap` / `keycap` `[stateRole=muted]` / `keycapPlus` / `hotkeyAction` /
+  `hotkeyActionPlanned` roles and `aboutWordmark` / `aboutVersionLine` roles; existing
+  `plannedTag`, `panel`, `sectionRuleLine`, `note`, button-role styles reused.
+- **Tests:** `test_hotkeys_page` updated (active keycaps render real bindings, unset shows muted
+  keycap, planned rows expose no fake controls, reset restores defaults); new `test_logs_page`
+  (contained read-only no-wrap viewer + Refresh/Copy/Open-folder, no fake level filters, Copy
+  disabled when empty) and `test_about_dialog` (real Version/Build/Commit/Author, GitHub uses the
+  configured repo URL, no fake Release-notes action). Debug build green; focused CTest 329/329;
+  full CTest 596/596. Screenshot smoke `.workspace/screenshots/hybrid-port-r6-utility-polish/`;
+  note `.workspace/smokes/hybrid-port-r6-utility-polish.md`.
+- **Not touched:** Record dock / PreviewSurface / DXGI, Source picker / Region model, Settings IA,
+  Diagnostics backend/pipeline, capture/encoder/muxer/audio internals, recording state machine,
+  settings schema, build-metadata generation, shell/top navigation (About routing unchanged),
+  global hotkey registration backend, `AppLog` infrastructure.
+
 ---
 
 ## Phase Summary

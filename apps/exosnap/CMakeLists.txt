@@ -59,6 +59,8 @@ qt_add_executable(exosnap WIN32
     ui/dialogs/SourcePickerWindowRules.h
     ui/widgets/SectionRuleHeader.h
     ui/widgets/SectionRuleHeader.cpp
+    ui/widgets/KeycapChip.h
+    ui/widgets/KeycapChip.cpp
     ui/widgets/StatusPill.h
     ui/widgets/StatusPill.cpp
     ui/widgets/PreviewSurface.h
@@ -350,10 +352,38 @@ exosnap_add_gtest(
         tests/test_hotkeys_page.cpp
         pages/HotkeysPage.cpp
         ui/widgets/SectionRuleHeader.cpp
+        ui/widgets/KeycapChip.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
 )
 target_include_directories(hotkeys_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(hotkeys_page_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME logs_page_tests
+    TEST_PREFIX log.
+    SOURCES
+        tests/test_logs_page.cpp
+        pages/LogsPage.cpp
+        diagnostics/AppLog.cpp
+        ui/widgets/SectionRuleHeader.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(logs_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(logs_page_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME about_dialog_tests
+    TEST_PREFIX about.
+    SOURCES
+        tests/test_about_dialog.cpp
+        ui/dialogs/AboutDialog.cpp
+        ui/brand/BrandMarkWidget.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(about_dialog_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+target_compile_definitions(about_dialog_tests PRIVATE EXOSNAP_BUILD_CONFIG="$<CONFIG>")
+add_dependencies(about_dialog_tests exosnap_build_info)
+set_target_properties(about_dialog_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME advanced_page_tests
