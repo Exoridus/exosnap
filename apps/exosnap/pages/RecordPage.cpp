@@ -3,6 +3,7 @@
 #include "../diagnostics/AppLog.h"
 #include "../settings/AppSettingsStore.h"
 #include "../ui/dialogs/SourcePickerDialog.h"
+#include "../ui/dialogs/SourcePickerOverlay.h"
 #include "../ui/dialogs/SourcePickerWindowRules.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/widgets/AudioSourceRow.h"
@@ -2024,6 +2025,14 @@ void RecordPage::onSelectRegionTarget() {
     refresh();
 }
 
+void RecordPage::setSourcePickerOverlay(ui::dialogs::SourcePickerOverlay* overlay) {
+    source_picker_overlay_ = overlay;
+    if (overlay) {
+        connect(overlay, &ui::dialogs::SourcePickerOverlay::sourceSelected, this, &RecordPage::onSourcePickerAccepted);
+        connect(overlay, &ui::dialogs::SourcePickerOverlay::closed, this, &RecordPage::refresh);
+    }
+}
+
 void RecordPage::onOpenSourcePicker() {
     ensureCoordinatorInit();
     if (isSourceSelectionLocked()) {
@@ -2032,14 +2041,15 @@ void RecordPage::onOpenSourcePicker() {
 
     enumerateTargets(true);
 
-    ui::dialogs::SourcePickerDialog dialog(this);
     std::vector<ui::dialogs::SourcePickerDialog::SourceOption> screen_options;
     std::vector<ui::dialogs::SourcePickerDialog::SourceOption> window_options;
     const MinimumCaptureSize window_minimum = WindowMinimumForCodec(current_video_codec_);
     const QString minimum_detail = MinimumSizeText(window_minimum);
 
+    // Only the main app window HWND is needed to exclude ExoSnap from the window
+    // list. The overlay has no separate top-level HWND (it is a child widget of
+    // the main window, so GetAncestor(..., GA_ROOT) == self_hwnd covers it).
     const HWND self_hwnd = reinterpret_cast<HWND>(window()->effectiveWinId());
-    const HWND dialog_hwnd = reinterpret_cast<HWND>(dialog.winId());
 
     for (std::size_t i = 0; i < monitor_target_indices_.size(); ++i) {
         const int target_index = monitor_target_indices_[i];
@@ -2113,7 +2123,7 @@ void RecordPage::onOpenSourcePicker() {
         }
         const auto& target = view_model_.targets[static_cast<std::size_t>(target_index)];
         const auto hwnd = reinterpret_cast<HWND>(target.native_id);
-        if (hwnd == self_hwnd || hwnd == dialog_hwnd || GetAncestor(hwnd, GA_ROOT) == self_hwnd) {
+        if (hwnd == self_hwnd || GetAncestor(hwnd, GA_ROOT) == self_hwnd) {
             continue;
         }
 
@@ -2185,7 +2195,6 @@ void RecordPage::onOpenSourcePicker() {
         const MinimumCaptureSize* window_minimum = nullptr;
         const QString* minimum_detail = nullptr;
         const HWND* self_hwnd = nullptr;
-        const HWND* dialog_hwnd = nullptr;
         int* unavailable_index = nullptr;
     };
 
@@ -2197,20 +2206,18 @@ void RecordPage::onOpenSourcePicker() {
     unavailable_ctx.window_minimum = &window_minimum;
     unavailable_ctx.minimum_detail = &minimum_detail;
     unavailable_ctx.self_hwnd = &self_hwnd;
-    unavailable_ctx.dialog_hwnd = &dialog_hwnd;
     unavailable_ctx.unavailable_index = &unavailable_index;
 
     EnumWindows(
         [](HWND hwnd, LPARAM lParam) -> BOOL {
             auto* ctx = reinterpret_cast<UnavailableEnumContext*>(lParam);
             if (!ctx || !ctx->unavailable || !ctx->captured_set || !ctx->seen_unavailable || !ctx->window_minimum ||
-                !ctx->minimum_detail || !ctx->self_hwnd || !ctx->dialog_hwnd || !ctx->unavailable_index ||
-                !ctx->dedupe_keys) {
+                !ctx->minimum_detail || !ctx->self_hwnd || !ctx->unavailable_index || !ctx->dedupe_keys) {
                 return TRUE;
             }
 
             const HWND root = GetAncestor(hwnd, GA_ROOT);
-            if (hwnd == *ctx->self_hwnd || hwnd == *ctx->dialog_hwnd || root == *ctx->self_hwnd) {
+            if (hwnd == *ctx->self_hwnd || root == *ctx->self_hwnd) {
                 return TRUE;
             }
 
@@ -2286,9 +2293,14 @@ void RecordPage::onOpenSourcePicker() {
         region_summary = QString("%1, %2  —  %3 × %4").arg(region.x).arg(region.y).arg(region.width).arg(region.height);
     }
 
-    dialog.setScreenOptions(screen_options);
-    dialog.setWindowOptions(window_options);
-    dialog.setRegionState(region_summary, has_region, view_model_.select_on_record);
+    if (!source_picker_overlay_) {
+        refresh();
+        return;
+    }
+
+    source_picker_overlay_->setScreenOptions(screen_options);
+    source_picker_overlay_->setWindowOptions(window_options);
+    source_picker_overlay_->setRegionState(region_summary, has_region, view_model_.select_on_record);
 
     ui::dialogs::SourcePickerDialog::Section section = ui::dialogs::SourcePickerDialog::Section::Screens;
     if (view_model_.capture_mode == CaptureMode::Region) {
@@ -2296,14 +2308,11 @@ void RecordPage::onOpenSourcePicker() {
     } else if (view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window) {
         section = ui::dialogs::SourcePickerDialog::Section::Windows;
     }
-    dialog.setCurrentSelection(section, view_model_.selected_target_index);
+    source_picker_overlay_->setCurrentSection(section, view_model_.selected_target_index);
+    source_picker_overlay_->openOverlay();
+}
 
-    if (dialog.exec() != QDialog::Accepted) {
-        refresh();
-        return;
-    }
-
-    const auto selection = dialog.selectionResult();
+void RecordPage::onSourcePickerAccepted(ui::dialogs::SourcePickerDialog::SelectionResult selection) {
     if (!selection.valid) {
         refresh();
         return;

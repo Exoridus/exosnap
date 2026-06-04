@@ -54,8 +54,12 @@ qt_add_executable(exosnap WIN32
     ui/chrome/GlobalRecordingBar.cpp
     ui/dialogs/AboutOverlay.h
     ui/dialogs/AboutOverlay.cpp
+    ui/dialogs/SourcePickerPanel.h
+    ui/dialogs/SourcePickerPanel.cpp
     ui/dialogs/SourcePickerDialog.h
     ui/dialogs/SourcePickerDialog.cpp
+    ui/dialogs/SourcePickerOverlay.h
+    ui/dialogs/SourcePickerOverlay.cpp
     ui/dialogs/SourcePickerWindowRules.h
     ui/widgets/SectionRuleHeader.h
     ui/widgets/SectionRuleHeader.cpp
@@ -319,6 +323,7 @@ exosnap_add_gtest(
     TEST_PREFIX source.
     SOURCES
         tests/test_source_picker_dialog.cpp
+        ui/dialogs/SourcePickerPanel.cpp
         ui/dialogs/SourcePickerDialog.cpp
         ui/widgets/CaptureTargetCard.cpp
         ui/widgets/RegionPresetCard.cpp
@@ -328,6 +333,23 @@ exosnap_add_gtest(
 target_include_directories(source_picker_dialog_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(source_picker_dialog_tests PRIVATE NOMINMAX)
 set_target_properties(source_picker_dialog_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME source_picker_overlay_tests
+    TEST_PREFIX source.
+    SOURCES
+        tests/test_source_picker_overlay.cpp
+        ui/dialogs/SourcePickerOverlay.cpp
+        ui/dialogs/SourcePickerPanel.cpp
+        ui/dialogs/SourcePickerDialog.cpp
+        ui/widgets/CaptureTargetCard.cpp
+        ui/widgets/RegionPresetCard.cpp
+        services/ThumbnailCapture.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
+)
+target_include_directories(source_picker_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(source_picker_overlay_tests PRIVATE NOMINMAX)
+set_target_properties(source_picker_overlay_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME webcam_page_tests

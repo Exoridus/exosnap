@@ -16,6 +16,9 @@
 #include <capability/capability_set.h>
 #include <capability/config_types.h>
 
+// Full include required: SourcePickerDialog::SelectionResult is used in private slot signature.
+#include "../ui/dialogs/SourcePickerDialog.h"
+
 class QComboBox;
 class QBoxLayout;
 class QFrame;
@@ -38,7 +41,7 @@ class VUMeterWidget;
 } // namespace ui::widgets
 
 namespace ui::dialogs {
-class SourcePickerDialog;
+class SourcePickerOverlay;
 }
 
 class RecordPage : public QWidget {
@@ -65,6 +68,7 @@ class RecordPage : public QWidget {
   public slots:
     void onHotkeyToggle();
     void onHotkeyPauseToggle();
+    void setSourcePickerOverlay(ui::dialogs::SourcePickerOverlay* overlay);
 
   private slots:
     void onStart();
@@ -75,6 +79,7 @@ class RecordPage : public QWidget {
     void onSelectWindowTarget();
     void onSelectRegionTarget();
     void onOpenSourcePicker();
+    void onSourcePickerAccepted(ui::dialogs::SourcePickerDialog::SelectionResult result);
     void onTargetPickerChanged(int index);
     void onRefreshTargets();
     void onRegionSelected(QRect region_virtual_screen);
@@ -179,6 +184,7 @@ class RecordPage : public QWidget {
     QLabel* source_preset_label_ = nullptr;
     QLabel* source_lock_label_ = nullptr;
     QPushButton* change_source_btn_ = nullptr;
+    ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
     ui::widgets::CaptureTargetCard* monitor_card_ = nullptr;
     ui::widgets::CaptureTargetCard* window_card_ = nullptr;
     ui::widgets::CaptureTargetCard* region_card_ = nullptr;

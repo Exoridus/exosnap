@@ -22,6 +22,7 @@ class OperationalTitleBar;
 
 namespace ui::dialogs {
 class AboutOverlay;
+class SourcePickerOverlay;
 } // namespace ui::dialogs
 
 class AdvancedPage;
@@ -69,6 +70,7 @@ class MainWindow : public QMainWindow {
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
     ui::dialogs::AboutOverlay* about_overlay_ = nullptr;
+    ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
     QStackedWidget* stack_ = nullptr;
     RecordPage* record_page_ = nullptr;
     ConfigPage* config_page_ = nullptr;

@@ -12,6 +12,7 @@
 #include "ui/chrome/OperationalTitleBar.h"
 #include "ui/chrome/RecordingStatusGuards.h"
 #include "ui/dialogs/AboutOverlay.h"
+#include "ui/dialogs/SourcePickerOverlay.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
 
@@ -481,6 +482,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // open. Hidden until the About nav action.
     about_overlay_ = new ui::dialogs::AboutOverlay(stack_);
     about_overlay_->hide();
+
+    // Source picker overlay — in-window, same parenting rationale as About.
+    source_picker_overlay_ = new ui::dialogs::SourcePickerOverlay(stack_);
+    source_picker_overlay_->hide();
+    record_page_->setSourcePickerOverlay(source_picker_overlay_);
 
     title_bar_->setNavItems({
         {QStringLiteral("Record"), kRecordPageIndex},
@@ -1200,10 +1206,12 @@ void MainWindow::navigateToPage(int index) {
     if (index < 0 || index >= static_cast<int>(kPageDescriptors.size()))
         return;
 
-    // Any page switch cleanly dismisses the inline About surface so it never
-    // lingers over an unrelated page.
+    // Any page switch cleanly dismisses inline overlays so they never linger
+    // over an unrelated page.
     if (about_overlay_)
         about_overlay_->closeOverlay();
+    if (source_picker_overlay_)
+        source_picker_overlay_->closeOverlay();
 
     setCurrentPage(index);
     if (title_bar_)

@@ -1417,7 +1417,9 @@ QLabel[labelRole="aboutVersionLine"] {
     color: ${text3};
 }
 
-QDialog#sourcePickerDialog {
+/* Matches both the legacy native QDialog and the embedded Qt::Widget overlay variant. */
+QDialog#sourcePickerDialog,
+QWidget#sourcePickerDialog {
     background: ${bg1};
     border: 1px solid ${line2};
     border-radius: ${radius-lg}px;
