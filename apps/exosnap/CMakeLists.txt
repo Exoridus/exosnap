@@ -52,8 +52,8 @@ qt_add_executable(exosnap WIN32
     ui/chrome/OperationalTitleBar.cpp
     ui/chrome/GlobalRecordingBar.h
     ui/chrome/GlobalRecordingBar.cpp
-    ui/dialogs/AboutDialog.h
-    ui/dialogs/AboutDialog.cpp
+    ui/dialogs/AboutOverlay.h
+    ui/dialogs/AboutOverlay.cpp
     ui/dialogs/SourcePickerDialog.h
     ui/dialogs/SourcePickerDialog.cpp
     ui/dialogs/SourcePickerWindowRules.h
@@ -372,18 +372,18 @@ target_include_directories(logs_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(logs_page_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
-    NAME about_dialog_tests
+    NAME about_overlay_tests
     TEST_PREFIX about.
     SOURCES
-        tests/test_about_dialog.cpp
-        ui/dialogs/AboutDialog.cpp
+        tests/test_about_overlay.cpp
+        ui/dialogs/AboutOverlay.cpp
         ui/brand/BrandMarkWidget.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
 )
-target_include_directories(about_dialog_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
-target_compile_definitions(about_dialog_tests PRIVATE EXOSNAP_BUILD_CONFIG="$<CONFIG>")
-add_dependencies(about_dialog_tests exosnap_build_info)
-set_target_properties(about_dialog_tests PROPERTIES AUTOMOC ON)
+target_include_directories(about_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+target_compile_definitions(about_overlay_tests PRIVATE EXOSNAP_BUILD_CONFIG="$<CONFIG>")
+add_dependencies(about_overlay_tests exosnap_build_info)
+set_target_properties(about_overlay_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME advanced_page_tests

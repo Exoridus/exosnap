@@ -20,6 +20,10 @@ namespace ui::chrome {
 class OperationalTitleBar;
 } // namespace ui::chrome
 
+namespace ui::dialogs {
+class AboutOverlay;
+} // namespace ui::dialogs
+
 class AdvancedPage;
 class ConfigPage;
 class DiagnosticsPage;
@@ -56,6 +60,7 @@ class MainWindow : public QMainWindow {
     void navigateToPage(int index);
     void setCurrentPage(int index);
     int navHighlightIndexFor(int index) const;
+    void applyTitleBarStatus();
     void applyActiveProfileToPages();
     void refreshOutputProfileUi();
     void persistProfileState();
@@ -63,6 +68,7 @@ class MainWindow : public QMainWindow {
     void refreshDiagnosticsData();
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
+    ui::dialogs::AboutOverlay* about_overlay_ = nullptr;
     QStackedWidget* stack_ = nullptr;
     RecordPage* record_page_ = nullptr;
     ConfigPage* config_page_ = nullptr;

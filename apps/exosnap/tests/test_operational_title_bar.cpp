@@ -8,6 +8,7 @@
 #include <QString>
 
 #include "ui/chrome/OperationalTitleBar.h"
+#include "ui/chrome/RecordingStatusGuards.h"
 #include "ui/widgets/StatusPill.h"
 
 namespace exosnap {
@@ -135,6 +136,46 @@ TEST_F(OperationalTitleBarTest, StatusPill_ShowsSavedAfterCompletedRecording) {
     bar.setStatusLabel(QStringLiteral("READY"));
     EXPECT_EQ(pill->text(), QStringLiteral("Ready"));
     EXPECT_EQ(pill->tone(), ui::widgets::StatusPill::Tone::Ready);
+}
+
+TEST_F(OperationalTitleBarTest, SavedStatus_IsScopedToRecordPage) {
+    using ui::chrome::ScopeStatusLabelForActivePage;
+
+    // On the Record page the post-recording "Saved" pill is allowed while the
+    // result dock is visible.
+    EXPECT_EQ(ScopeStatusLabelForActivePage(QStringLiteral("SAVED"), /*on_record_page=*/true), QStringLiteral("SAVED"));
+
+    // Navigating away from Record must not leave a stale global "Saved" — it
+    // falls back to the steady READY status.
+    EXPECT_EQ(ScopeStatusLabelForActivePage(QStringLiteral("SAVED"), /*on_record_page=*/false),
+              QStringLiteral("READY"));
+}
+
+TEST_F(OperationalTitleBarTest, NonSavedStatus_IsGlobalAcrossPages) {
+    using ui::chrome::ScopeStatusLabelForActivePage;
+
+    // Every status other than Saved is global and unaffected by the current page.
+    for (const QString& label : {QStringLiteral("READY"), QStringLiteral("REC"), QStringLiteral("PAUSED"),
+                                 QStringLiteral("BLOCKED"), QStringLiteral("ERROR")}) {
+        EXPECT_EQ(ScopeStatusLabelForActivePage(label, /*on_record_page=*/true), label);
+        EXPECT_EQ(ScopeStatusLabelForActivePage(label, /*on_record_page=*/false), label);
+    }
+}
+
+TEST_F(OperationalTitleBarTest, SavedScope_DrivesPillLabelOnNavigation) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+
+    auto* pill = bar.findChild<ui::widgets::StatusPill*>(QStringLiteral("titlebarStatusChip"));
+    ASSERT_NE(pill, nullptr);
+
+    // Record page + saved result → "Saved".
+    bar.setStatusLabel(ui::chrome::ScopeStatusLabelForActivePage(QStringLiteral("SAVED"), /*on_record_page=*/true));
+    EXPECT_EQ(pill->text(), QStringLiteral("Saved"));
+
+    // Same underlying state, but viewed from another page → "Ready", not stale "Saved".
+    bar.setStatusLabel(ui::chrome::ScopeStatusLabelForActivePage(QStringLiteral("SAVED"), /*on_record_page=*/false));
+    EXPECT_EQ(pill->text(), QStringLiteral("Ready"));
 }
 
 TEST_F(OperationalTitleBarTest, Shell_HasNoGlobalTransportButtons) {

@@ -551,6 +551,43 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
 
 ---
 
+## HYBRID-ABOUT-INLINE-R1 — Inline About Overlay + Saved Status Scope
+
+Follow-up shell/About polish resolving the two HYBRID-VERIFY-R1 findings. Supersedes the
+R6 note that "About `QDialog` keeps its native title bar / About routing is unchanged".
+
+### Implementation status — landed
+
+- **Inline About (Part A):** the separate native About `QDialog` is removed; About is now an
+  in-window overlay (`ui/dialogs/AboutOverlay`) — a translucent backdrop (painted in code) with
+  a centered `#aboutCard`. It is parented to the page **stack**, so the title bar / window
+  controls stay usable and correctly painted (no semi-transparent sibling shine-through on the
+  chrome). Qt manages native-window z-order when the alien overlay is `raise()`d above the native
+  `PreviewSurface`, so it renders cleanly over the Record page (the DXGI preview yields behind the
+  card; `PreviewSurface`/DXGI untouched). The top-nav About action opens it; Close / `Escape` /
+  backdrop-click / any nav switch dismiss it; `navigateToPage()` closes it so it never lingers
+  over an unrelated page. No native title bar, no focus-sticky child window after closing. The R6
+  card content/actions are retained verbatim (aperture mark, two-tone wordmark, Version line,
+  description, real VERSION/BUILD/COMMIT/AUTHOR table, `GitHub` configured-URL-only, `Copy
+  details`, `Close`).
+- **Saved status scope (Part B):** the title-bar `Saved` pill is scoped to the Record page via a
+  pure helper `ui::chrome::ScopeStatusLabelForActivePage(label, on_record_page)` (in
+  `RecordingStatusGuards.h`) applied by `MainWindow::applyTitleBarStatus()` on every page switch
+  and chrome-state change. `SAVED` is normalized to `READY` on any non-Record page; every other
+  status stays global. `record_status_label_` is unchanged, so returning to Record restores
+  `Saved` while the result dock is visible. No recorder coordinator / state-machine change.
+- **Tests:** `about_overlay_tests` (renders in-window not as a `QDialog`, real metadata,
+  configured GitHub URL, no fake Release notes, open/close + `closed()` signal) replaces
+  `about_dialog_tests`; `operational_title_bar_tests` gains the Saved-scope cases. Debug build
+  green; focused CTest 330/330; full CTest 602/602. Screenshots
+  `.workspace/screenshots/hybrid-about-inline-r1/`; smoke note
+  `.workspace/smokes/hybrid-about-inline-r1.md`.
+- **Not touched:** Record transport dock layout, `PreviewSurface`/DXGI, Source picker / Region
+  model, Settings IA, Diagnostics pipeline/backend, Logs/Hotkeys content, capture/encoder/muxer/
+  audio internals, recorder state machine, settings schema, build-metadata generation.
+
+---
+
 ## Phase Summary
 
 | Phase | Name | Priority | Effort | Model |

@@ -10,7 +10,8 @@
 #include "pages/WebcamPage.h"
 #include "settings/ProfileExchange.h"
 #include "ui/chrome/OperationalTitleBar.h"
-#include "ui/dialogs/AboutDialog.h"
+#include "ui/chrome/RecordingStatusGuards.h"
+#include "ui/dialogs/AboutOverlay.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
 
@@ -473,6 +474,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     config_page_->setWebcamSettings(persisted_settings_.webcam);
     main_layout->addWidget(stack_, 1);
 
+    // In-window About surface — a translucent backdrop + centered card overlaid on the
+    // page stack. It replaces the former native About QDialog so nothing lingers as a
+    // focus-sticky OS window after closing. Parented to the stack (not the whole window)
+    // so the title bar / window controls stay usable and correctly painted while it is
+    // open. Hidden until the About nav action.
+    about_overlay_ = new ui::dialogs::AboutOverlay(stack_);
+    about_overlay_->hide();
+
     title_bar_->setNavItems({
         {QStringLiteral("Record"), kRecordPageIndex},
         {QStringLiteral("Settings"), kSettingsPageIndex},
@@ -484,8 +493,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     connect(title_bar_, &ui::chrome::OperationalTitleBar::navPageRequested, this, &MainWindow::navigateToPage);
     connect(title_bar_, &ui::chrome::OperationalTitleBar::aboutRequested, this, [this]() {
-        ui::dialogs::AboutDialog dlg(this);
-        dlg.exec();
+        if (about_overlay_)
+            about_overlay_->openOverlay();
     });
     connect(title_bar_, &ui::chrome::OperationalTitleBar::minimizeRequested, this, &QWidget::showMinimized);
     connect(title_bar_, &ui::chrome::OperationalTitleBar::maximizeRestoreRequested, this, [this]() {
@@ -862,8 +871,7 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
         config_page_->setRecordingControlsLocked(locked);
     }
 
-    title_bar_->setRecordingActive(recording);
-    title_bar_->setStatusLabel(record_status_label_);
+    applyTitleBarStatus();
 
     if (recording && isVisible() && !isMinimized() && stack_->currentIndex() != 0)
         navigateToPage(kRecordPageIndex);
@@ -1192,6 +1200,11 @@ void MainWindow::navigateToPage(int index) {
     if (index < 0 || index >= static_cast<int>(kPageDescriptors.size()))
         return;
 
+    // Any page switch cleanly dismisses the inline About surface so it never
+    // lingers over an unrelated page.
+    if (about_overlay_)
+        about_overlay_->closeOverlay();
+
     setCurrentPage(index);
     if (title_bar_)
         title_bar_->setActivePage(navHighlightIndexFor(index));
@@ -1203,11 +1216,18 @@ void MainWindow::setCurrentPage(int index) {
 
     stack_->setCurrentIndex(index);
 
-    // Keep the title-bar status pill consistent across page switches.
-    if (title_bar_) {
-        title_bar_->setRecordingActive(recording_active_);
-        title_bar_->setStatusLabel(record_status_label_);
-    }
+    // Keep the title-bar status pill consistent across page switches (the "Saved"
+    // state is scoped to the Record page — see applyTitleBarStatus()).
+    applyTitleBarStatus();
+}
+
+void MainWindow::applyTitleBarStatus() {
+    if (title_bar_ == nullptr)
+        return;
+
+    const bool on_record_page = (stack_ != nullptr && stack_->currentIndex() == kRecordPageIndex);
+    title_bar_->setRecordingActive(recording_active_);
+    title_bar_->setStatusLabel(ui::chrome::ScopeStatusLabelForActivePage(record_status_label_, on_record_page));
 }
 
 void MainWindow::applyActiveProfileToPages() {
