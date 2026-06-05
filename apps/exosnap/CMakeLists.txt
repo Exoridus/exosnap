@@ -310,6 +310,7 @@ exosnap_add_gtest(
         ui/widgets/ComboBoxWheelFilter.cpp
         ui/widgets/CameraPreview.cpp
         ui/widgets/ExoToggle.cpp
+        ui/widgets/VUMeterWidget.cpp
         ui/widgets/WebcamSetupPanel.cpp
         models/FilenameBuilder.cpp
         models/OutputPathPolicy.cpp

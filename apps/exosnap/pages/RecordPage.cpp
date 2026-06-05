@@ -4094,6 +4094,9 @@ void RecordPage::updateAudioMeterLevels() {
     applyMeter(mic_meter_, mic_db_label_, mic_rms, mic_show);
     if (transport_dock_)
         transport_dock_->setMeterLevel(QStringLiteral("mic"), dockLevel(mic_rms, mic_show));
+
+    emit audioMeterLevelsUpdated(dockLevel(sys_rms, sys_show), dockLevel(app_rms, app_show),
+                                 dockLevel(mic_rms, mic_show), sys_show, app_show, mic_show);
 }
 
 } // namespace exosnap

@@ -29,6 +29,7 @@
 #include "../models/OutputPathPolicy.h"
 #include "../services/WebcamService.h"
 #include "../ui/widgets/ComboBoxWheelFilter.h"
+#include "../ui/widgets/VUMeterWidget.h"
 #include "../ui/widgets/WebcamSetupPanel.h"
 
 #include <ctime>
@@ -438,17 +439,27 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     audio_panel_layout->addWidget(makeCardTitle(QStringLiteral("Audio"), audio_panel));
 
     auto makeSourceRow = [&](const QString& title, QCheckBox*& enabled_check, QCheckBox*& separate_check,
-                             QLabel*& source_label) {
+                             QLabel*& source_label, ui::widgets::VUMeterWidget*& meter_out, QLabel*& db_label_out) {
         auto* row = new QHBoxLayout();
         row->setSpacing(8);
 
         enabled_check = new QCheckBox(title, audio_panel);
         separate_check = new QCheckBox(QStringLiteral("Separate track"), audio_panel);
 
+        db_label_out = new QLabel(QStringLiteral("–"), audio_panel);
+        db_label_out->setProperty("labelRole", "muted");
+        db_label_out->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        db_label_out->setMinimumWidth(52);
+
         row->addWidget(enabled_check);
         row->addStretch();
+        row->addWidget(db_label_out);
         row->addWidget(separate_check);
         audio_panel_layout->addLayout(row);
+
+        meter_out = new ui::widgets::VUMeterWidget(audio_panel);
+        meter_out->setActive(false);
+        audio_panel_layout->addWidget(meter_out);
 
         source_label = new QLabel(audio_panel);
         source_label->setProperty("labelRole", "muted");
@@ -457,11 +468,20 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     };
 
     // Source order follows the hybrid Audio card: System, Application, Microphone.
-    makeSourceRow(QStringLiteral("System audio"), sys_enabled_check_, sys_separate_check_, sys_source_label_);
+    makeSourceRow(QStringLiteral("System audio"), sys_enabled_check_, sys_separate_check_, sys_source_label_,
+                  audio_sys_meter_, audio_sys_db_label_);
+    audio_sys_meter_->setObjectName(QStringLiteral("settingsAudioSysMeter"));
+    audio_sys_db_label_->setObjectName(QStringLiteral("settingsAudioSysDbLabel"));
     audio_panel_layout->addWidget(makeHRule(audio_panel));
-    makeSourceRow(QStringLiteral("Application audio"), app_enabled_check_, app_separate_check_, app_source_label_);
+    makeSourceRow(QStringLiteral("Application audio"), app_enabled_check_, app_separate_check_, app_source_label_,
+                  audio_app_meter_, audio_app_db_label_);
+    audio_app_meter_->setObjectName(QStringLiteral("settingsAudioAppMeter"));
+    audio_app_db_label_->setObjectName(QStringLiteral("settingsAudioAppDbLabel"));
     audio_panel_layout->addWidget(makeHRule(audio_panel));
-    makeSourceRow(QStringLiteral("Microphone"), mic_enabled_check_, mic_separate_check_, mic_source_label_);
+    makeSourceRow(QStringLiteral("Microphone"), mic_enabled_check_, mic_separate_check_, mic_source_label_,
+                  audio_mic_meter_, audio_mic_db_label_);
+    audio_mic_meter_->setObjectName(QStringLiteral("settingsAudioMicMeter"));
+    audio_mic_db_label_->setObjectName(QStringLiteral("settingsAudioMicDbLabel"));
 
     mic_device_combo_ = new QComboBox(audio_panel);
     mic_device_combo_->setObjectName(QStringLiteral("micDeviceCombo"));
@@ -470,9 +490,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     audio_panel_layout->addWidget(mic_device_combo_);
 
     audio_panel_layout->addWidget(
-        makeHint(QStringLiteral("Separate tracks keep each source on its own channel for editing. "
-                                "Live meters appear on the Record dock once the audio thread is feeding data."),
-                 audio_panel));
+        makeHint(QStringLiteral("Separate tracks keep each source on its own channel for editing."), audio_panel));
 
     audio_summary_label_ = new QLabel(audio_panel);
     audio_summary_label_->setProperty("labelRole", "muted");
@@ -1219,6 +1237,27 @@ void ConfigPage::updateAudioSourceAvailability() {
 
 void ConfigPage::emitCurrentAudioSettings() {
     emit audioSettingsChanged(audio_ui_state_);
+}
+
+void ConfigPage::setAudioMeterLevels(float sys01, float app01, float mic01, bool sys_active, bool app_active,
+                                     bool mic_active) {
+    auto update = [](ui::widgets::VUMeterWidget* meter, QLabel* db_label, float level01, bool active) {
+        if (!meter || !db_label)
+            return;
+        meter->setActive(active);
+        meter->setLevel(active ? level01 : 0.0f);
+        if (!active) {
+            db_label->setText(QStringLiteral("–"));
+        } else if (level01 <= 0.0f) {
+            db_label->setText(QStringLiteral("−∞"));
+        } else {
+            const int db_int = qRound(level01 * 60.0f - 60.0f);
+            db_label->setText(QString::number(db_int) + QStringLiteral(" dB"));
+        }
+    };
+    update(audio_sys_meter_, audio_sys_db_label_, sys01, sys_active);
+    update(audio_app_meter_, audio_app_db_label_, app01, app_active);
+    update(audio_mic_meter_, audio_mic_db_label_, mic01, mic_active);
 }
 
 void ConfigPage::onAudioAppToggled() {

@@ -16,6 +16,7 @@
 #include "models/WebcamSettings.h"
 #include "pages/ConfigPage.h"
 #include "ui/widgets/CameraPreview.h"
+#include "ui/widgets/VUMeterWidget.h"
 #include "ui/widgets/WebcamSetupPanel.h"
 
 namespace exosnap {
@@ -603,6 +604,182 @@ TEST_F(ConfigPageTest, QualitySettingsLabel_UpdatesOnSetVideoSettings) {
     auto* badge_label = page.findChild<QLabel*>(QStringLiteral("qualityBadgeLabel"));
     ASSERT_NE(badge_label, nullptr);
     EXPECT_EQ(badge_label->text(), QStringLiteral("Sharper · larger files"));
+}
+
+// ── SETTINGS-AUDIO-METER-R1: live mono meters in the Settings Audio card ─────
+
+TEST_F(ConfigPageTest, SettingsAudio_ExposesSysMeterWidget) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* meter = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioSysMeter"));
+    ASSERT_NE(meter, nullptr) << "Settings Audio card must contain a system mono meter";
+}
+
+TEST_F(ConfigPageTest, SettingsAudio_ExposesAppMeterWidget) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* meter = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioAppMeter"));
+    ASSERT_NE(meter, nullptr) << "Settings Audio card must contain an app mono meter";
+}
+
+TEST_F(ConfigPageTest, SettingsAudio_ExposesMicMeterWidget) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* meter = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioMicMeter"));
+    ASSERT_NE(meter, nullptr) << "Settings Audio card must contain a mic mono meter";
+}
+
+TEST_F(ConfigPageTest, SettingsAudio_MetersInactiveByDefault) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* sys = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioSysMeter"));
+    auto* app = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioAppMeter"));
+    auto* mic = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioMicMeter"));
+    ASSERT_NE(sys, nullptr);
+    ASSERT_NE(app, nullptr);
+    ASSERT_NE(mic, nullptr);
+    EXPECT_FALSE(sys->isActive()) << "System meter must be inactive before any level update";
+    EXPECT_FALSE(app->isActive()) << "App meter must be inactive before any level update";
+    EXPECT_FALSE(mic->isActive()) << "Mic meter must be inactive before any level update";
+}
+
+TEST_F(ConfigPageTest, SetAudioMeterLevels_SysActiveDoesNotModifyAppOrMic) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setAudioMeterLevels(0.5f, 0.0f, 0.0f, /*sys_active=*/true, /*app_active=*/false,
+                             /*mic_active=*/false);
+
+    auto* sys = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioSysMeter"));
+    auto* app = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioAppMeter"));
+    auto* mic = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioMicMeter"));
+    ASSERT_NE(sys, nullptr);
+    ASSERT_NE(app, nullptr);
+    ASSERT_NE(mic, nullptr);
+    EXPECT_TRUE(sys->isActive());
+    EXPECT_FLOAT_EQ(sys->level(), 0.5f);
+    EXPECT_FALSE(app->isActive());
+    EXPECT_FLOAT_EQ(app->level(), 0.0f);
+    EXPECT_FALSE(mic->isActive());
+    EXPECT_FLOAT_EQ(mic->level(), 0.0f);
+}
+
+TEST_F(ConfigPageTest, SetAudioMeterLevels_AppActiveDoesNotModifySystemOrMic) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setAudioMeterLevels(0.0f, 0.7f, 0.0f, /*sys_active=*/false, /*app_active=*/true,
+                             /*mic_active=*/false);
+
+    auto* sys = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioSysMeter"));
+    auto* app = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioAppMeter"));
+    auto* mic = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioMicMeter"));
+    ASSERT_NE(sys, nullptr);
+    ASSERT_NE(app, nullptr);
+    ASSERT_NE(mic, nullptr);
+    EXPECT_FALSE(sys->isActive());
+    EXPECT_FLOAT_EQ(sys->level(), 0.0f);
+    EXPECT_TRUE(app->isActive());
+    EXPECT_FLOAT_EQ(app->level(), 0.7f);
+    EXPECT_FALSE(mic->isActive());
+    EXPECT_FLOAT_EQ(mic->level(), 0.0f);
+}
+
+TEST_F(ConfigPageTest, SetAudioMeterLevels_MicActiveDoesNotModifySystemOrApp) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setAudioMeterLevels(0.0f, 0.0f, 0.4f, /*sys_active=*/false, /*app_active=*/false,
+                             /*mic_active=*/true);
+
+    auto* sys = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioSysMeter"));
+    auto* app = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioAppMeter"));
+    auto* mic = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioMicMeter"));
+    ASSERT_NE(sys, nullptr);
+    ASSERT_NE(app, nullptr);
+    ASSERT_NE(mic, nullptr);
+    EXPECT_FALSE(sys->isActive());
+    EXPECT_FLOAT_EQ(sys->level(), 0.0f);
+    EXPECT_FALSE(app->isActive());
+    EXPECT_FLOAT_EQ(app->level(), 0.0f);
+    EXPECT_TRUE(mic->isActive());
+    EXPECT_FLOAT_EQ(mic->level(), 0.4f);
+}
+
+TEST_F(ConfigPageTest, SetAudioMeterLevels_InactiveSourceHasZeroLevel) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // First activate all three meters.
+    page.setAudioMeterLevels(0.6f, 0.5f, 0.4f, true, true, true);
+
+    // Now deactivate system.
+    page.setAudioMeterLevels(0.0f, 0.5f, 0.4f, /*sys_active=*/false, true, true);
+
+    auto* sys = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioSysMeter"));
+    ASSERT_NE(sys, nullptr);
+    EXPECT_FALSE(sys->isActive());
+    EXPECT_FLOAT_EQ(sys->level(), 0.0f);
+}
+
+TEST_F(ConfigPageTest, SettingsAudio_NoWebcamMeter) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // The webcam source must not have an audio meter in the Settings Audio card.
+    const auto meters = page.findChildren<ui::widgets::VUMeterWidget*>();
+    // Only sys/app/mic meters exist — exactly 3.
+    EXPECT_EQ(meters.size(), 3) << "Expected exactly 3 audio meters (sys/app/mic); webcam must not have one";
+}
+
+TEST_F(ConfigPageTest, SettingsAudio_NoLRChannelTerminology) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // The Settings Audio card must not use L/R channel labels.
+    const auto labels = page.findChildren<QLabel*>();
+    for (const auto* label : labels) {
+        const QString text = label->text();
+        EXPECT_FALSE(text == QStringLiteral("L")) << "Found standalone 'L' channel label in Settings";
+        EXPECT_FALSE(text == QStringLiteral("R")) << "Found standalone 'R' channel label in Settings";
+        EXPECT_FALSE(text.contains(QStringLiteral("Left channel"))) << "Found 'Left channel' label in Settings";
+        EXPECT_FALSE(text.contains(QStringLiteral("Right channel"))) << "Found 'Right channel' label in Settings";
+    }
+}
+
+TEST_F(ConfigPageTest, SettingsAudio_ExistingSignalEmissionsUnchanged) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    int emit_count = 0;
+    QObject::connect(&page, &ConfigPage::audioSettingsChanged,
+                     [&emit_count](const capability::AudioUiState&) { ++emit_count; });
+
+    // Find the System audio checkbox explicitly by text so we are not sensitive to
+    // widget-tree ordering across the Format & encoding and Audio cards.
+    QCheckBox* sys_check = nullptr;
+    for (auto* cb : page.findChildren<QCheckBox*>()) {
+        if (cb->text() == QStringLiteral("System audio")) {
+            sys_check = cb;
+            break;
+        }
+    }
+    ASSERT_NE(sys_check, nullptr) << "System audio QCheckBox not found in Settings Audio card";
+
+    // Toggling must still emit audioSettingsChanged.
+    const bool was_checked = sys_check->isChecked();
+    sys_check->setChecked(!was_checked);
+    EXPECT_GE(emit_count, 1);
+}
+
+TEST_F(ConfigPageTest, SetAudioMeterLevels_DbLabelUpdatesCorrectly) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // Active at ~0.5 level01 → db = 0.5 * 60 - 60 = -30 → "−30 dB"
+    page.setAudioMeterLevels(0.5f, 0.0f, 0.0f, true, false, false);
+
+    auto* db_label = page.findChild<QLabel*>(QStringLiteral("settingsAudioSysDbLabel"));
+    ASSERT_NE(db_label, nullptr);
+    EXPECT_TRUE(db_label->text().contains(QStringLiteral("dB"))) << "dB label should show dBFS value when active";
+}
+
+TEST_F(ConfigPageTest, SetAudioMeterLevels_InactiveDbLabelShowsDash) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setAudioMeterLevels(0.0f, 0.0f, 0.0f, false, false, false);
+
+    auto* db_label = page.findChild<QLabel*>(QStringLiteral("settingsAudioSysDbLabel"));
+    ASSERT_NE(db_label, nullptr);
+    EXPECT_EQ(db_label->text(), QStringLiteral("–")) << "dB label should show dash when inactive";
 }
 
 } // namespace

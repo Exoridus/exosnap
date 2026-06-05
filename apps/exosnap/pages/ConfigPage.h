@@ -26,8 +26,9 @@ class QResizeEvent;
 class QToolButton;
 
 namespace exosnap::ui::widgets {
+class VUMeterWidget;
 class WebcamSetupPanel;
-}
+} // namespace exosnap::ui::widgets
 
 namespace exosnap {
 
@@ -56,6 +57,11 @@ class ConfigPage : public QWidget {
                            bool active_profile_modified);
     void setActiveProfileName(const QString& profile_name);
     void setRecordingControlsLocked(bool locked);
+
+    // Live audio meter update forwarded from RecordPage via MainWindow.
+    // sys01/app01/mic01: pre-computed 0..1 dock-level values (0 = inactive or silence).
+    // sys/app/mic_active: true when the meter service is running for that source.
+    void setAudioMeterLevels(float sys01, float app01, float mic01, bool sys_active, bool app_active, bool mic_active);
 
   signals:
     void formatSettingsChanged(const OutputSettingsModel& settings);
@@ -160,6 +166,14 @@ class ConfigPage : public QWidget {
     QCheckBox* cursor_check_ = nullptr;
 
     QLabel* audio_summary_label_ = nullptr;
+
+    // Per-source compact mono meters in the Settings Audio card.
+    ui::widgets::VUMeterWidget* audio_sys_meter_ = nullptr;
+    ui::widgets::VUMeterWidget* audio_app_meter_ = nullptr;
+    ui::widgets::VUMeterWidget* audio_mic_meter_ = nullptr;
+    QLabel* audio_sys_db_label_ = nullptr;
+    QLabel* audio_app_db_label_ = nullptr;
+    QLabel* audio_mic_db_label_ = nullptr;
 
     QCheckBox* app_enabled_check_ = nullptr;
     QCheckBox* app_separate_check_ = nullptr;

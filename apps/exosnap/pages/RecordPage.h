@@ -65,6 +65,13 @@ class RecordPage : public QWidget {
     void navigateToOutputPage();
     void navigateToDiagnosticsPage();
     void audioSettingsChanged(const capability::AudioUiState& state);
+    // Emitted at ~30 Hz during recording (via recording-meter callback) and at ~preflight cadence
+    // during Ready/Idle (via individual source meter callbacks). All three sources are included in
+    // every emission so the Settings Audio card can update all rows atomically.
+    // sys01/app01/mic01: pre-computed 0..1 dock-level values (0 = inactive or silence).
+    // sys/app/mic_active: true when the meter service is running for that source.
+    void audioMeterLevelsUpdated(float sys01, float app01, float mic01, bool sys_active, bool app_active,
+                                 bool mic_active);
 
   public slots:
     void onHotkeyToggle();
