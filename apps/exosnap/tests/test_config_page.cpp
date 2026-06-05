@@ -15,6 +15,8 @@
 #include "models/VideoSettingsModel.h"
 #include "models/WebcamSettings.h"
 #include "pages/ConfigPage.h"
+#include "ui/widgets/CameraPreview.h"
+#include "ui/widgets/WebcamSetupPanel.h"
 
 namespace exosnap {
 namespace {
@@ -214,14 +216,6 @@ TEST_F(ConfigPageTest, BuiltInAndModifiedStates_UsePresetCopy) {
     EXPECT_FALSE(HasLabelText(page, QStringLiteral("Modified from built-in")));
 }
 
-TEST_F(ConfigPageTest, WebcamDetailsButtonExists) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    auto* webcam_btn = page.findChild<QPushButton*>(QStringLiteral("webcamDetailsBtn"));
-    ASSERT_NE(webcam_btn, nullptr);
-    EXPECT_EQ(webcam_btn->text(), QStringLiteral("Open Webcam Setup"));
-}
-
 TEST_F(ConfigPageTest, AdvancedDetailsButtonExists) {
     ConfigPage page(output_defaults_, video_defaults_);
 
@@ -230,15 +224,86 @@ TEST_F(ConfigPageTest, AdvancedDetailsButtonExists) {
     EXPECT_EQ(advanced_btn->text(), QStringLiteral("Open Advanced"));
 }
 
-TEST_F(ConfigPageTest, WebcamDetailsButtonClick_EmitsSignal) {
+// ── HYBRID-SETTINGS-WEBCAM-R1: inline WebcamSetupPanel replaces stub + nav ──
+
+TEST_F(ConfigPageTest, WebcamSetupPanel_IsEmbeddedInSettings) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* panel = page.findChild<ui::widgets::WebcamSetupPanel*>(QStringLiteral("settingsWebcamSetupPanel"));
+    ASSERT_NE(panel, nullptr) << "Settings must contain an inline WebcamSetupPanel";
+}
+
+TEST_F(ConfigPageTest, WebcamSetupPanel_ContainsCameraPreview) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* panel = page.findChild<ui::widgets::WebcamSetupPanel*>(QStringLiteral("settingsWebcamSetupPanel"));
+    ASSERT_NE(panel, nullptr);
+
+    auto* preview = panel->findChild<ui::widgets::CameraPreview*>();
+    EXPECT_NE(preview, nullptr) << "WebcamSetupPanel must contain a CameraPreview widget";
+}
+
+TEST_F(ConfigPageTest, WebcamSetupPanel_ContainsDeviceAndResolutionCombos) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* panel = page.findChild<ui::widgets::WebcamSetupPanel*>(QStringLiteral("settingsWebcamSetupPanel"));
+    ASSERT_NE(panel, nullptr);
+
+    EXPECT_NE(panel->findChild<QComboBox*>(QStringLiteral("webcamPanelDeviceCombo")), nullptr);
+    EXPECT_NE(panel->findChild<QComboBox*>(QStringLiteral("webcamPanelResolutionCombo")), nullptr);
+}
+
+TEST_F(ConfigPageTest, WebcamSetupPanel_ContainsEnableToggle) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* panel = page.findChild<ui::widgets::WebcamSetupPanel*>(QStringLiteral("settingsWebcamSetupPanel"));
+    ASSERT_NE(panel, nullptr);
+
+    EXPECT_NE(panel->findChild<QWidget*>(QStringLiteral("webcamPanelEnableToggle")), nullptr);
+}
+
+TEST_F(ConfigPageTest, WebcamSetupPanel_HasCompactRescanNotLargeOpenSetup) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // The old "Open Webcam Setup" button must be gone from the primary settings flow.
+    for (const auto* btn : page.findChildren<QPushButton*>())
+        EXPECT_NE(btn->text(), QStringLiteral("Open Webcam Setup"))
+            << "Settings must not require 'Open Webcam Setup' for standard configuration";
+
+    // The compact rescan button lives inside the panel.
+    auto* panel = page.findChild<ui::widgets::WebcamSetupPanel*>(QStringLiteral("settingsWebcamSetupPanel"));
+    ASSERT_NE(panel, nullptr);
+    EXPECT_NE(panel->findChild<QPushButton*>(QStringLiteral("webcamPanelRescanBtn")), nullptr);
+}
+
+TEST_F(ConfigPageTest, WebcamSetupPanel_ApplySettingsUpdatesEnabledState) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* panel = page.findChild<ui::widgets::WebcamSetupPanel*>(QStringLiteral("settingsWebcamSetupPanel"));
+    ASSERT_NE(panel, nullptr);
+
+    WebcamSettings s;
+    s.enabled = true;
+    page.setWebcamSettings(s);
+
+    auto* toggle = panel->findChild<QWidget*>(QStringLiteral("webcamPanelEnableToggle"));
+    ASSERT_NE(toggle, nullptr);
+    // ExoToggle inherits QAbstractButton — isChecked() reflects enabled state.
+    auto* btn = qobject_cast<QAbstractButton*>(toggle);
+    ASSERT_NE(btn, nullptr);
+    EXPECT_TRUE(btn->isChecked());
+}
+
+TEST_F(ConfigPageTest, WebcamSetupPanel_SettingsChangedSignalPropagates) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     bool emitted = false;
-    QObject::connect(&page, &ConfigPage::webcamDetailsRequested, [&emitted]() { emitted = true; });
+    QObject::connect(&page, &ConfigPage::webcamSettingsChanged, [&emitted](const WebcamSettings&) { emitted = true; });
 
-    auto* webcam_btn = page.findChild<QPushButton*>(QStringLiteral("webcamDetailsBtn"));
-    ASSERT_NE(webcam_btn, nullptr);
-    webcam_btn->click();
+    auto* panel = page.findChild<ui::widgets::WebcamSetupPanel*>(QStringLiteral("settingsWebcamSetupPanel"));
+    ASSERT_NE(panel, nullptr);
+    // Emit from the panel and verify ConfigPage re-emits.
+    emit panel->settingsChanged(WebcamSettings{});
     EXPECT_TRUE(emitted);
 }
 
@@ -422,9 +487,12 @@ TEST_F(ConfigPageTest, SetRecordingControlsLocked_DisablesKeyControls) {
     ASSERT_NE(mic_combo, nullptr);
     EXPECT_FALSE(mic_combo->isEnabled());
 
-    auto* webcam_btn = page.findChild<QPushButton*>(QStringLiteral("webcamDetailsBtn"));
-    ASSERT_NE(webcam_btn, nullptr);
-    EXPECT_FALSE(webcam_btn->isEnabled());
+    // Webcam panel controls must be locked (inline panel replaced the old nav button).
+    auto* panel = page.findChild<ui::widgets::WebcamSetupPanel*>(QStringLiteral("settingsWebcamSetupPanel"));
+    ASSERT_NE(panel, nullptr);
+    auto* webcam_toggle = panel->findChild<QWidget*>(QStringLiteral("webcamPanelEnableToggle"));
+    ASSERT_NE(webcam_toggle, nullptr);
+    EXPECT_FALSE(webcam_toggle->isEnabled());
 
     auto* lock_note = page.findChild<QLabel*>(QStringLiteral("lockNoteLabel"));
     ASSERT_NE(lock_note, nullptr);
@@ -453,23 +521,20 @@ TEST_F(ConfigPageTest, DefaultControlsAreEnabled) {
     EXPECT_TRUE(lock_note->isHidden());
 }
 
-TEST_F(ConfigPageTest, WebcamInfoLabel_DisabledState_ShowsDisabledText) {
+TEST_F(ConfigPageTest, WebcamInfoLabel_DisabledState_ToggleReflectsState) {
+    // The old info-label text is replaced by the WebcamSetupPanel's enable toggle.
     ConfigPage page(output_defaults_, video_defaults_);
 
     WebcamSettings ws;
     ws.enabled = false;
-    ws.device_id = "";
     page.setWebcamSettings(ws);
 
-    const auto labels = page.findChildren<QLabel*>();
-    bool found_disabled = false;
-    for (const auto* l : labels) {
-        if (l->text() == QStringLiteral("Webcam recording is disabled.")) {
-            found_disabled = true;
-            break;
-        }
-    }
-    EXPECT_TRUE(found_disabled);
+    auto* panel = page.findChild<ui::widgets::WebcamSetupPanel*>(QStringLiteral("settingsWebcamSetupPanel"));
+    ASSERT_NE(panel, nullptr);
+    auto* toggle =
+        qobject_cast<QAbstractButton*>(panel->findChild<QWidget*>(QStringLiteral("webcamPanelEnableToggle")));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_FALSE(toggle->isChecked()) << "Disabled state must reflect in the enable toggle";
 }
 
 TEST_F(ConfigPageTest, WebcamInfoLabel_EnabledNoDevice_DoesNotShowStaleMessage) {

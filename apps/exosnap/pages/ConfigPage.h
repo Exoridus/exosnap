@@ -25,6 +25,10 @@ class QRadioButton;
 class QResizeEvent;
 class QToolButton;
 
+namespace exosnap::ui::widgets {
+class WebcamSetupPanel;
+}
+
 namespace exosnap {
 
 class ConfigPage : public QWidget {
@@ -112,12 +116,6 @@ class ConfigPage : public QWidget {
     void refreshMicDevices();
     void emitCurrentAudioSettings();
     void updateAudioSourceAvailability();
-
-    void onWebcamEnabledToggled();
-    void onWebcamDeviceChanged(int index);
-    void refreshWebcamDevices();
-    void emitCurrentWebcamSettings();
-    void updateWebcamInfoLabel();
 
     void onImportProfiles();
     void onExportSelectedProfile();
@@ -207,10 +205,7 @@ class ConfigPage : public QWidget {
     bool active_profile_is_modified_ = false;
     bool active_profile_is_available_ = true;
 
-    QCheckBox* webcam_enabled_check_ = nullptr;
-    QComboBox* webcam_device_combo_ = nullptr;
-    QLabel* webcam_info_label_ = nullptr;
-    QPushButton* webcam_details_btn_ = nullptr;
+    ui::widgets::WebcamSetupPanel* webcam_setup_panel_ = nullptr;
 
     QLabel* lock_note_label_ = nullptr;
     bool controls_locked_ = false;

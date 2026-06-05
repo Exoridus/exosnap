@@ -71,6 +71,8 @@ qt_add_executable(exosnap WIN32
     ui/widgets/PreviewSurface.cpp
     ui/widgets/CameraPreview.h
     ui/widgets/CameraPreview.cpp
+    ui/widgets/WebcamSetupPanel.h
+    ui/widgets/WebcamSetupPanel.cpp
     ui/widgets/CaptureTargetCard.h
     ui/widgets/CaptureTargetCard.cpp
     ui/widgets/RegionPresetCard.h
@@ -306,6 +308,9 @@ exosnap_add_gtest(
         tests/test_config_page.cpp
         pages/ConfigPage.cpp
         ui/widgets/ComboBoxWheelFilter.cpp
+        ui/widgets/CameraPreview.cpp
+        ui/widgets/ExoToggle.cpp
+        ui/widgets/WebcamSetupPanel.cpp
         models/FilenameBuilder.cpp
         models/OutputPathPolicy.cpp
         models/OutputPathValidator.cpp

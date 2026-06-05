@@ -29,6 +29,7 @@
 #include "../models/OutputPathPolicy.h"
 #include "../services/WebcamService.h"
 #include "../ui/widgets/ComboBoxWheelFilter.h"
+#include "../ui/widgets/WebcamSetupPanel.h"
 
 #include <ctime>
 #include <optional>
@@ -481,47 +482,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     right_layout->addWidget(audio_panel);
     right_layout->addStretch();
 
-    // ---- WEBCAM CARD (full width) ----
+    // ---- WEBCAM CARD (full width — inline setup panel, no navigation required) ----
     auto* webcam_panel = makePanel(content);
     auto* webcam_panel_layout = new QVBoxLayout(webcam_panel);
     webcam_panel_layout->setContentsMargins(18, 16, 18, 18);
-    webcam_panel_layout->setSpacing(8);
+    webcam_panel_layout->setSpacing(10);
     webcam_panel_layout->addWidget(makeCardTitle(QStringLiteral("Webcam"), webcam_panel));
 
-    auto* webcam_row = new QHBoxLayout();
-    webcam_row->setSpacing(18);
-
-    auto* webcam_fields = new QVBoxLayout();
-    webcam_fields->setSpacing(8);
-    webcam_enabled_check_ = new QCheckBox(QStringLiteral("Record webcam"), webcam_panel);
-    webcam_fields->addWidget(webcam_enabled_check_);
-
-    webcam_fields->addWidget(makeFieldLabel(QStringLiteral("Camera"), webcam_panel));
-    webcam_device_combo_ = new QComboBox(webcam_panel);
-    webcam_device_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    webcam_device_combo_->setMinimumWidth(180);
-    webcam_fields->addWidget(webcam_device_combo_);
-
-    webcam_info_label_ = new QLabel(webcam_panel);
-    webcam_info_label_->setProperty("labelRole", "muted");
-    webcam_info_label_->setWordWrap(true);
-    webcam_fields->addWidget(webcam_info_label_);
-    webcam_row->addLayout(webcam_fields, 1);
-
-    auto* webcam_aside = new QVBoxLayout();
-    webcam_aside->setSpacing(8);
-    webcam_aside->addWidget(
-        makeHint(QStringLiteral("Position & size are set in the Record preview. Open Webcam Setup for live preview, "
-                                "resolution, and chroma key. Mirror is not a saved option in this build."),
-                 webcam_panel));
-    webcam_details_btn_ = new QPushButton(QStringLiteral("Open Webcam Setup"), webcam_panel);
-    webcam_details_btn_->setObjectName(QStringLiteral("webcamDetailsBtn"));
-    webcam_details_btn_->setProperty("role", "ghost");
-    webcam_aside->addWidget(webcam_details_btn_, 0, Qt::AlignLeft);
-    webcam_aside->addStretch();
-    webcam_row->addLayout(webcam_aside, 1);
-
-    webcam_panel_layout->addLayout(webcam_row);
+    webcam_setup_panel_ = new ui::widgets::WebcamSetupPanel(webcam_panel);
+    webcam_setup_panel_->setObjectName(QStringLiteral("settingsWebcamSetupPanel"));
+    webcam_panel_layout->addWidget(webcam_setup_panel_);
     layout->addWidget(webcam_panel);
 
     // ---- OUTPUT CARD (full width) ----
@@ -707,9 +677,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(sys_separate_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioSysSeparateToggled);
     connect(mic_device_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onMicDeviceChanged);
-    connect(webcam_enabled_check_, &QCheckBox::toggled, this, &ConfigPage::onWebcamEnabledToggled);
-    connect(webcam_device_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &ConfigPage::onWebcamDeviceChanged);
+    connect(webcam_setup_panel_, &ui::widgets::WebcamSetupPanel::settingsChanged, this,
+            [this](const WebcamSettings& settings) {
+                webcam_settings_ = settings;
+                emit webcamSettingsChanged(webcam_settings_);
+            });
     connect(new_from_current_action_, &QAction::triggered, this, &ConfigPage::promptCreateProfileFromCurrent);
     connect(new_from_safe_default_action_, &QAction::triggered, this, &ConfigPage::promptCreateProfileFromSafeDefault);
     connect(duplicate_profile_action_, &QAction::triggered, this, &ConfigPage::duplicateActiveProfileRequested);
@@ -722,7 +694,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(export_all_users_action_, &QAction::triggered, this, &ConfigPage::onExportAllUserProfiles);
     connect(reset_all_action_, &QAction::triggered, this, &ConfigPage::onResetAllSettingsAndProfiles);
     connect(view_details_btn_, &QPushButton::clicked, this, &ConfigPage::diagnosticsRequested);
-    connect(webcam_details_btn_, &QPushButton::clicked, this, &ConfigPage::webcamDetailsRequested);
     connect(token_help_toggle_btn_, &QPushButton::clicked, this, [this]() {
         const bool now_visible = !token_help_label_->isVisible();
         token_help_label_->setVisible(now_visible);
@@ -739,7 +710,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     combo_wheel_filter->installOn(audio_codec_combo_);
     combo_wheel_filter->installOn(quality_combo_);
     combo_wheel_filter->installOn(mic_device_combo_);
-    combo_wheel_filter->installOn(webcam_device_combo_);
 
     setReadinessStatus(QStringLiteral("CHECKING"));
 
@@ -759,10 +729,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     QPointer<ConfigPage> safe = this;
     QTimer::singleShot(0, this, [safe]() {
-        if (safe) {
+        if (safe)
             safe->refreshMicDevices();
-            safe->refreshWebcamDevices();
-        }
     });
 }
 
@@ -1337,82 +1305,8 @@ void ConfigPage::onMicDeviceChanged(int index) {
 
 void ConfigPage::setWebcamSettings(const WebcamSettings& settings) {
     webcam_settings_ = settings;
-
-    const QSignalBlocker wb(webcam_enabled_check_);
-    webcam_enabled_check_->setChecked(settings.enabled);
-
-    if (webcam_device_combo_) {
-        const QSignalBlocker dc(webcam_device_combo_);
-        const QString device_id = QString::fromStdString(settings.device_id);
-        const int didx = webcam_device_combo_->findData(device_id);
-        if (didx >= 0)
-            webcam_device_combo_->setCurrentIndex(didx);
-        else if (webcam_device_combo_->count() > 0)
-            webcam_device_combo_->setCurrentIndex(0);
-    }
-
-    updateWebcamInfoLabel();
-}
-
-void ConfigPage::onWebcamEnabledToggled() {
-    webcam_settings_.enabled = webcam_enabled_check_->isChecked();
-    updateWebcamInfoLabel();
-    emit webcamSettingsChanged(webcam_settings_);
-}
-
-void ConfigPage::emitCurrentWebcamSettings() {
-    emit webcamSettingsChanged(webcam_settings_);
-}
-
-void ConfigPage::refreshWebcamDevices() {
-    if (!webcam_device_combo_)
-        return;
-
-    const QSignalBlocker dc(webcam_device_combo_);
-    const QString previous_id = webcam_device_combo_->currentData().toString();
-    webcam_device_combo_->clear();
-
-    const auto devices = WebcamService::EnumerateDevices();
-    for (const auto& device : devices) {
-        webcam_device_combo_->addItem(QString::fromStdString(device.name), QString::fromStdString(device.id));
-    }
-
-    if (devices.empty()) {
-        webcam_device_combo_->addItem(QStringLiteral("No camera found"), QString());
-        webcam_device_combo_->setEnabled(false);
-    } else {
-        webcam_device_combo_->setEnabled(true);
-        const int idx = webcam_device_combo_->findData(previous_id);
-        webcam_device_combo_->setCurrentIndex(idx >= 0 ? idx : 0);
-        if (!webcam_settings_.device_id.empty()) {
-            const int sidx = webcam_device_combo_->findData(QString::fromStdString(webcam_settings_.device_id));
-            if (sidx >= 0)
-                webcam_device_combo_->setCurrentIndex(sidx);
-        }
-    }
-
-    // Propagate auto-selected device so Setup and WebcamPage stay in sync.
-    // Only applies when settings had no prior device and a real device was found.
-    if (webcam_settings_.device_id.empty() && webcam_device_combo_->isEnabled()) {
-        const QString auto_id = webcam_device_combo_->currentData().toString();
-        if (!auto_id.isEmpty()) {
-            webcam_settings_.device_id = auto_id.toStdString();
-            emit webcamSettingsChanged(webcam_settings_);
-        }
-    }
-
-    updateWebcamInfoLabel();
-}
-
-void ConfigPage::onWebcamDeviceChanged(int index) {
-    if (index < 0)
-        return;
-    const QString device_id = webcam_device_combo_->itemData(index).toString();
-    if (device_id.isEmpty())
-        return;
-    webcam_settings_.device_id = device_id.toStdString();
-    updateWebcamInfoLabel();
-    emit webcamSettingsChanged(webcam_settings_);
+    if (webcam_setup_panel_)
+        webcam_setup_panel_->applySettings(settings);
 }
 
 void ConfigPage::setReadinessStatus(const QString& status_label) {
@@ -1458,28 +1352,6 @@ void ConfigPage::setReadinessStatus(const QString& status_label) {
     repolish(readiness_badge_label_);
 }
 
-void ConfigPage::updateWebcamInfoLabel() {
-    if (!webcam_info_label_ || !webcam_device_combo_)
-        return;
-
-    const bool enabled = webcam_settings_.enabled;
-    const bool has_devices = webcam_device_combo_->isEnabled();
-    const QString selected_id = webcam_device_combo_->currentData().toString();
-    const QString selected_name = webcam_device_combo_->currentText();
-
-    QString info;
-    if (!enabled) {
-        info = QStringLiteral("Webcam recording is disabled.");
-    } else if (!has_devices) {
-        info = QStringLiteral("No camera found.");
-    } else if (selected_id.isEmpty()) {
-        info = QStringLiteral("No camera selected.");
-    } else {
-        info = QStringLiteral("Selected camera: %1.").arg(selected_name);
-    }
-    webcam_info_label_->setText(info);
-}
-
 void ConfigPage::setRecordingControlsLocked(bool locked) {
     if (controls_locked_ == locked)
         return;
@@ -1512,9 +1384,8 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     sys_enabled_check_->setEnabled(enabled);
     sys_separate_check_->setEnabled(enabled);
 
-    webcam_enabled_check_->setEnabled(enabled);
-    webcam_device_combo_->setEnabled(enabled);
-    webcam_details_btn_->setEnabled(enabled);
+    if (webcam_setup_panel_)
+        webcam_setup_panel_->setControlsLocked(locked);
 
     destination_edit_->setEnabled(enabled);
     browse_btn_->setEnabled(enabled);
