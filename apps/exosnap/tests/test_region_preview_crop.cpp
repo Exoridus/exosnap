@@ -447,5 +447,55 @@ TEST(NeedsPreviewRestart, DifferentNativeIdRequiresRestart) {
     EXPECT_TRUE(NeedsPreviewRestart(mon_b, mon_a));
 }
 
+// ---------------------------------------------------------------------------
+// Display 2 region crop — regression for black preview on secondary monitor
+//
+// Root cause: if a region on Display 2 (origin 2560,0) is rendered with the
+// crop box computed relative to Display 1 (origin 0,0), the x offset equals
+// the full virtual-screen x (e.g. 2700), which lies outside Display 1's
+// 2560-pixel-wide frame. The D3D11 CopySubresourceRegion clamp produces
+// zero-width/height copies → black pixels.
+//
+// Correct behaviour: the crop box must be computed using the origin of the
+// monitor that the region's top-left corner belongs to (Display 2 in this
+// case), not the currently-selected monitor (which may still be Display 1).
+// ---------------------------------------------------------------------------
+
+// A region on Display 2 (top-left at virtual-screen x=2700) is out-of-range
+// when mistakenly computed relative to Display 1 (origin 0,0, width 2560).
+TEST(RegionToCropBox, Display2RegionRelativeToDisplay1OriginIsOutOfRange) {
+    // Display 2 sits at virtual-screen x=2560.  Region top-left is at (2700, 100).
+    // Incorrectly using Display 1 origin (0, 0):
+    const PreviewCropBox wrong_box = RegionToCropBox(2700, 100, 800, 600, /*monitor_origin*/ 0, 0);
+    // crop x = 2700 - 0 = 2700, which exceeds a typical 2560-pixel Display 1 width.
+    EXPECT_GT(wrong_box.x, 2560) << "Box x must exceed Display 1 width when wrong origin is used";
+    // IsValid only checks non-negative coords and positive dims; it is still
+    // technically valid here, but the D3D clamp would produce an empty copy.
+    // The caller (startPreviewIfIdle) must select the correct monitor first.
+}
+
+// Same region, now correctly computed relative to Display 2 origin (2560, 0).
+TEST(RegionToCropBox, Display2RegionRelativeToDisplay2OriginIsInRange) {
+    // Region at virtual-screen (2700, 100, 800, 600); Display 2 origin = (2560, 0).
+    const PreviewCropBox correct_box = RegionToCropBox(2700, 100, 800, 600, /*monitor_origin*/ 2560, 0);
+    EXPECT_EQ(correct_box.x, 140);
+    EXPECT_EQ(correct_box.y, 100);
+    EXPECT_EQ(correct_box.width, 800);
+    EXPECT_EQ(correct_box.height, 600);
+    EXPECT_TRUE(correct_box.IsValid());
+}
+
+// The correct preview config key for a Display 2 region must carry the
+// Display 2 monitor's target_index and native_id, not Display 1's.
+// This ensures NeedsPreviewRestart detects the monitor change correctly when
+// the user switches from a Display 1 region to a Display 2 region.
+TEST(NeedsPreviewRestart, Display1RegionToDisplay2RegionRequiresRestartAndDifferentTarget) {
+    // Display 1 region (index=0, native_id=111)
+    const PreviewConfigKey display1_region = MakeRegionKey(0, 111, 100, 100, 800, 600);
+    // Display 2 region (index=1, native_id=222) — different target AND different crop
+    const PreviewConfigKey display2_region = MakeRegionKey(1, 222, 2700, 100, 800, 600);
+    EXPECT_TRUE(NeedsPreviewRestart(display2_region, display1_region));
+}
+
 } // namespace
 } // namespace exosnap

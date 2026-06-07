@@ -2538,6 +2538,36 @@ void RecordPage::onRegionSelected(QRect region_virtual_screen) {
     view_model_.has_region = true;
     view_model_.region = region;
 
+    // Ensure the base capture monitor matches the display the region was drawn on.
+    // Without this, a region drawn on Display 2 while Display 1 is selected produces
+    // a crop box whose x/y offsets are relative to Display 1's frame — placing them
+    // outside the captured pixels and yielding a black preview.
+    for (const int target_idx : monitor_target_indices_) {
+        if (target_idx < 0 || target_idx >= static_cast<int>(view_model_.targets.size()))
+            continue;
+        const auto& t = view_model_.targets[static_cast<std::size_t>(target_idx)];
+        const ScreenPresentation meta = QueryScreenPresentation(t.native_id);
+        if (!meta.available)
+            continue;
+        if (region.x >= meta.origin_x && region.x < meta.origin_x + meta.width && region.y >= meta.origin_y &&
+            region.y < meta.origin_y + meta.height) {
+            if (target_idx != view_model_.selected_target_index) {
+                diagnostics::AppLog(QStringLiteral("[record] region: source monitor updated to index %1 (was %2)")
+                                        .arg(target_idx)
+                                        .arg(view_model_.selected_target_index));
+                view_model_.selected_target_index = target_idx;
+                monitor_target_index_ = target_idx;
+                if (target_combo_) {
+                    QSignalBlocker blocker(target_combo_);
+                    target_combo_->setCurrentIndex(target_idx);
+                }
+                rebuildTargetPicker();
+                syncCoordinatorTargetContext();
+            }
+            break;
+        }
+    }
+
     if (region_summary_label_) {
         region_summary_label_->setText(
             QString("%1, %2  —  %3 × %4").arg(region.x).arg(region.y).arg(region.width).arg(region.height));
