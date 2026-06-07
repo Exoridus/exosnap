@@ -782,5 +782,78 @@ TEST_F(ConfigPageTest, SetAudioMeterLevels_InactiveDbLabelShowsDash) {
     EXPECT_EQ(db_label->text(), QStringLiteral("–")) << "dB label should show dash when inactive";
 }
 
+// ── APP-AUDIO-ROW-FIX-R1: ConfigPage/ViewModel integration ───────────────────
+
+TEST_F(ConfigPageTest, SetAudioUiState_WindowWithAppRow_EnablesAppCheckbox) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    capability::AudioUiState state;
+    state.target_kind = capability::CaptureTargetKind::Window;
+    state.source_rows = {
+        {recorder_core::AudioSourceKind::App, true, false},
+        {recorder_core::AudioSourceKind::Mic, true, false},
+        {recorder_core::AudioSourceKind::Sys, true, false},
+    };
+    page.setAudioUiState(state);
+
+    QCheckBox* app_check = nullptr;
+    for (auto* cb : page.findChildren<QCheckBox*>()) {
+        if (cb->text() == QStringLiteral("Application audio")) {
+            app_check = cb;
+            break;
+        }
+    }
+    ASSERT_NE(app_check, nullptr) << "Application audio QCheckBox not found";
+    EXPECT_TRUE(app_check->isEnabled()) << "App checkbox must be enabled when App row is present";
+    EXPECT_TRUE(app_check->isChecked());
+}
+
+TEST_F(ConfigPageTest, SetAudioUiState_DisplayWithNoAppRow_DisablesAppCheckbox) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    capability::AudioUiState state;
+    state.target_kind = capability::CaptureTargetKind::Display;
+    state.source_rows = {
+        {recorder_core::AudioSourceKind::SystemOutput, true, false},
+        {recorder_core::AudioSourceKind::Mic, true, false},
+    };
+    page.setAudioUiState(state);
+
+    QCheckBox* app_check = nullptr;
+    for (auto* cb : page.findChildren<QCheckBox*>()) {
+        if (cb->text() == QStringLiteral("Application audio")) {
+            app_check = cb;
+            break;
+        }
+    }
+    ASSERT_NE(app_check, nullptr) << "Application audio QCheckBox not found";
+    EXPECT_FALSE(app_check->isEnabled()) << "App checkbox must be disabled when no App row is present";
+}
+
+TEST_F(ConfigPageTest, SetAudioUiState_AppSourceLabel_ReflectsAvailability) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // Display — no App row: label shows unavailable text.
+    capability::AudioUiState display_state;
+    display_state.target_kind = capability::CaptureTargetKind::Display;
+    display_state.source_rows = {
+        {recorder_core::AudioSourceKind::SystemOutput, true, false},
+        {recorder_core::AudioSourceKind::Mic, true, false},
+    };
+    page.setAudioUiState(display_state);
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Not available for current capture target")));
+
+    // Window — App row present: label shows available text.
+    capability::AudioUiState window_state;
+    window_state.target_kind = capability::CaptureTargetKind::Window;
+    window_state.source_rows = {
+        {recorder_core::AudioSourceKind::App, true, false},
+        {recorder_core::AudioSourceKind::Mic, true, false},
+        {recorder_core::AudioSourceKind::Sys, true, false},
+    };
+    page.setAudioUiState(window_state);
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Per-target, configured on Record page")));
+}
+
 } // namespace
 } // namespace exosnap

@@ -457,6 +457,17 @@ void RecordViewModel::ApplyTargetKindPreservingAudio(capability::CaptureTargetKi
         audio_ui_state.selected_window_pid.reset();
     }
 
+    if (kind == capability::CaptureTargetKind::Window) {
+        using K = recorder_core::AudioSourceKind;
+        const bool has_app = std::any_of(audio_ui_state.source_rows.begin(), audio_ui_state.source_rows.end(),
+                                         [](const recorder_core::AudioSourceRow& r) { return r.kind == K::App; });
+        if (!has_app) {
+            // App is first in canonical Window row order (App, Mic, Sys).
+            audio_ui_state.source_rows.insert(audio_ui_state.source_rows.begin(),
+                                              recorder_core::AudioSourceRow{K::App, true, false});
+        }
+    }
+
     RebuildAudioPlan();
 }
 

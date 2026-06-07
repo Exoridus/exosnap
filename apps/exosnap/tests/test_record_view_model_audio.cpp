@@ -452,6 +452,137 @@ TEST(RecordViewModelAudioTest, RecordViewModel_TargetLabelFromCaptureTarget_Uses
     EXPECT_EQ(RecordViewModel::TargetLabelFromCaptureTarget(window_target), "Brave - Claude Design");
 }
 
+// ---------------------------------------------------------------------------
+// APP-AUDIO-ROW-FIX-R1 — ApplyTargetKindPreservingAudio: Display → Window
+// ---------------------------------------------------------------------------
+
+TEST(RecordViewModelAudioTest, RecordViewModel_DisplayToWindow_AddsAppRow) {
+    RecordViewModel vm;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
+    ASSERT_EQ(FindRow(vm.audio_ui_state, recorder_core::AudioSourceKind::App), nullptr);
+
+    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
+
+    const auto* app_row = FindRow(vm.audio_ui_state, recorder_core::AudioSourceKind::App);
+    ASSERT_NE(app_row, nullptr);
+    EXPECT_TRUE(app_row->enabled);
+    EXPECT_FALSE(app_row->merge_with_above);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_DisplayToWindow_PreservesExistingSysAndMicRows) {
+    RecordViewModel vm;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
+    // Disable SystemOutput and leave Mic enabled.
+    for (auto& r : vm.audio_ui_state.source_rows) {
+        if (r.kind == recorder_core::AudioSourceKind::SystemOutput)
+            r.enabled = false;
+    }
+
+    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
+
+    EXPECT_FALSE(vm.audio_ui_state.IsSysEnabled());
+    EXPECT_TRUE(vm.audio_ui_state.IsMicEnabled());
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_DisplayToWindow_PreservesExistingEnabledStates) {
+    RecordViewModel vm;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
+    // Disable Mic.
+    for (auto& r : vm.audio_ui_state.source_rows)
+        if (r.kind == recorder_core::AudioSourceKind::Mic)
+            r.enabled = false;
+
+    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
+
+    EXPECT_FALSE(vm.audio_ui_state.IsMicEnabled());
+    EXPECT_NE(FindRow(vm.audio_ui_state, recorder_core::AudioSourceKind::App), nullptr);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_WindowToWindow_NoDuplicateAppRow) {
+    RecordViewModel vm;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+    const std::size_t row_count = vm.audio_ui_state.source_rows.size();
+
+    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
+
+    EXPECT_EQ(vm.audio_ui_state.source_rows.size(), row_count);
+    int app_count = 0;
+    for (const auto& r : vm.audio_ui_state.source_rows)
+        if (r.kind == recorder_core::AudioSourceKind::App)
+            ++app_count;
+    EXPECT_EQ(app_count, 1);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_WindowToWindow_PreservesAppEnabledState) {
+    RecordViewModel vm;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+    for (auto& r : vm.audio_ui_state.source_rows)
+        if (r.kind == recorder_core::AudioSourceKind::App)
+            r.enabled = false;
+
+    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
+
+    const auto* app_row = FindRow(vm.audio_ui_state, recorder_core::AudioSourceKind::App);
+    ASSERT_NE(app_row, nullptr);
+    EXPECT_FALSE(app_row->enabled);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_RepeatedWindowSwitch_IsIdempotent) {
+    RecordViewModel vm;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
+
+    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
+    const auto rows_after_first = vm.audio_ui_state.source_rows;
+
+    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
+
+    ASSERT_EQ(vm.audio_ui_state.source_rows.size(), rows_after_first.size());
+    for (std::size_t i = 0; i < rows_after_first.size(); ++i) {
+        EXPECT_EQ(vm.audio_ui_state.source_rows[i].kind, rows_after_first[i].kind);
+        EXPECT_EQ(vm.audio_ui_state.source_rows[i].enabled, rows_after_first[i].enabled);
+        EXPECT_EQ(vm.audio_ui_state.source_rows[i].merge_with_above, rows_after_first[i].merge_with_above);
+    }
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_WindowToDisplay_PreservesAppRowInModel) {
+    RecordViewModel vm;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Window);
+
+    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
+
+    EXPECT_EQ(vm.audio_ui_state.target_kind, capability::CaptureTargetKind::Display);
+    EXPECT_NE(FindRow(vm.audio_ui_state, recorder_core::AudioSourceKind::App), nullptr);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_DisplayToWindow_AppBecomesActive) {
+    RecordViewModel vm;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
+    EXPECT_FALSE(vm.audio_active_app);
+
+    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
+
+    EXPECT_TRUE(vm.audio_active_app);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_DisplayTarget_AppIsInactive) {
+    RecordViewModel vm;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
+
+    EXPECT_FALSE(vm.audio_active_app);
+}
+
+TEST(RecordViewModelAudioTest, RecordViewModel_DisplayToWindow_AppRowIsFirst) {
+    RecordViewModel vm;
+    vm.ApplyTargetKind(capability::CaptureTargetKind::Display);
+
+    vm.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
+
+    ASSERT_FALSE(vm.audio_ui_state.source_rows.empty());
+    EXPECT_EQ(vm.audio_ui_state.source_rows.front().kind, recorder_core::AudioSourceKind::App);
+}
+
+// ---------------------------------------------------------------------------
+
 TEST(RecordViewModelStateGuardTest, CanStart_Ready_WithTargets_ReturnsTrue) {
     RecordViewModel vm;
     vm.SetState(UiRecordingState::Ready);
