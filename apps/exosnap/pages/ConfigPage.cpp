@@ -438,15 +438,17 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     audio_panel_layout->setSpacing(10);
     audio_panel_layout->addWidget(makeCardTitle(QStringLiteral("Audio"), audio_panel));
 
-    auto makeSourceRow = [&](const QString& title, QCheckBox*& enabled_check, QCheckBox*& separate_check,
-                             QLabel*& source_label, ui::widgets::VUMeterWidget*& meter_out, QLabel*& db_label_out) {
+    // Helper: build a source row directly into a given layout+parent.
+    auto makeSourceRowInto = [&](QVBoxLayout* target_layout, QWidget* target_parent, const QString& title,
+                                 QCheckBox*& enabled_check, QCheckBox*& separate_check, QLabel*& source_label,
+                                 ui::widgets::VUMeterWidget*& meter_out, QLabel*& db_label_out) {
         auto* row = new QHBoxLayout();
         row->setSpacing(8);
 
-        enabled_check = new QCheckBox(title, audio_panel);
-        separate_check = new QCheckBox(QStringLiteral("Separate track"), audio_panel);
+        enabled_check = new QCheckBox(title, target_parent);
+        separate_check = new QCheckBox(QStringLiteral("Separate track"), target_parent);
 
-        db_label_out = new QLabel(QStringLiteral("–"), audio_panel);
+        db_label_out = new QLabel(QStringLiteral("–"), target_parent);
         db_label_out->setProperty("labelRole", "muted");
         db_label_out->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         db_label_out->setMinimumWidth(52);
@@ -455,31 +457,54 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         row->addStretch();
         row->addWidget(db_label_out);
         row->addWidget(separate_check);
-        audio_panel_layout->addLayout(row);
+        target_layout->addLayout(row);
 
-        meter_out = new ui::widgets::VUMeterWidget(audio_panel);
+        meter_out = new ui::widgets::VUMeterWidget(target_parent);
         meter_out->setActive(false);
-        audio_panel_layout->addWidget(meter_out);
+        target_layout->addWidget(meter_out);
 
-        source_label = new QLabel(audio_panel);
+        source_label = new QLabel(target_parent);
         source_label->setProperty("labelRole", "muted");
         source_label->setWordWrap(true);
-        audio_panel_layout->addWidget(source_label);
+        target_layout->addWidget(source_label);
     };
 
-    // Source order follows the hybrid Audio card: System, Application, Microphone.
-    makeSourceRow(QStringLiteral("System audio"), sys_enabled_check_, sys_separate_check_, sys_source_label_,
-                  audio_sys_meter_, audio_sys_db_label_);
+    // System audio row (label + description change based on capture target kind):
+    //   Display/Region → "Computer audio"
+    //   Window        → "Other system audio"
+    makeSourceRowInto(audio_panel_layout, audio_panel, QStringLiteral("Computer audio"), sys_enabled_check_,
+                      sys_separate_check_, sys_source_label_, audio_sys_meter_, audio_sys_db_label_);
+    sys_enabled_check_->setObjectName(QStringLiteral("settingsAudioSysCheck"));
     audio_sys_meter_->setObjectName(QStringLiteral("settingsAudioSysMeter"));
     audio_sys_db_label_->setObjectName(QStringLiteral("settingsAudioSysDbLabel"));
+
+    // Application audio section — wrapped in a container widget that is shown
+    // for Window targets and hidden for Display/Region targets.
+    app_row_section_ = new QWidget(audio_panel);
+    app_row_section_->setObjectName(QStringLiteral("settingsAudioAppSection"));
+    {
+        auto* app_section_layout = new QVBoxLayout(app_row_section_);
+        app_section_layout->setContentsMargins(0, 0, 0, 0);
+        app_section_layout->setSpacing(audio_panel_layout->spacing());
+
+        auto* app_rule = new QFrame(app_row_section_);
+        app_rule->setFrameShape(QFrame::HLine);
+        app_rule->setProperty("frameRole", "sectionRuleLine");
+        app_section_layout->addWidget(app_rule);
+
+        makeSourceRowInto(app_section_layout, app_row_section_, QStringLiteral("Application audio"), app_enabled_check_,
+                          app_separate_check_, app_source_label_, audio_app_meter_, audio_app_db_label_);
+        app_enabled_check_->setObjectName(QStringLiteral("settingsAudioAppCheck"));
+        audio_app_meter_->setObjectName(QStringLiteral("settingsAudioAppMeter"));
+        audio_app_db_label_->setObjectName(QStringLiteral("settingsAudioAppDbLabel"));
+    }
+    audio_panel_layout->addWidget(app_row_section_);
+    // Hidden by default — shown when target kind is Window.
+    app_row_section_->setVisible(false);
+
     audio_panel_layout->addWidget(makeHRule(audio_panel));
-    makeSourceRow(QStringLiteral("Application audio"), app_enabled_check_, app_separate_check_, app_source_label_,
-                  audio_app_meter_, audio_app_db_label_);
-    audio_app_meter_->setObjectName(QStringLiteral("settingsAudioAppMeter"));
-    audio_app_db_label_->setObjectName(QStringLiteral("settingsAudioAppDbLabel"));
-    audio_panel_layout->addWidget(makeHRule(audio_panel));
-    makeSourceRow(QStringLiteral("Microphone"), mic_enabled_check_, mic_separate_check_, mic_source_label_,
-                  audio_mic_meter_, audio_mic_db_label_);
+    makeSourceRowInto(audio_panel_layout, audio_panel, QStringLiteral("Microphone"), mic_enabled_check_,
+                      mic_separate_check_, mic_source_label_, audio_mic_meter_, audio_mic_db_label_);
     audio_mic_meter_->setObjectName(QStringLiteral("settingsAudioMicMeter"));
     audio_mic_db_label_->setObjectName(QStringLiteral("settingsAudioMicDbLabel"));
 
@@ -1145,11 +1170,14 @@ void ConfigPage::updateExampleFilename() {
 void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
     audio_ui_state_ = state;
 
+    const bool is_window = (state.target_kind == capability::CaptureTargetKind::Window);
+
     const auto findRow = [&](recorder_core::AudioSourceKind kind) -> const recorder_core::AudioSourceRow* {
         for (const auto& row : state.source_rows) {
             if (row.kind == kind)
                 return &row;
         }
+        // For Sys queries also accept SystemOutput (used in Display mode).
         if (kind == recorder_core::AudioSourceKind::Sys) {
             for (const auto& row : state.source_rows) {
                 if (row.kind == recorder_core::AudioSourceKind::SystemOutput)
@@ -1162,6 +1190,21 @@ void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
     const auto* app_row = findRow(recorder_core::AudioSourceKind::App);
     const auto* mic_row = findRow(recorder_core::AudioSourceKind::Mic);
     const auto* sys_row = findRow(recorder_core::AudioSourceKind::Sys);
+
+    // Show/hide the Application audio section based on target kind.
+    if (app_row_section_)
+        app_row_section_->setVisible(is_window);
+
+    // Relabel the system audio row and its description to match the target context.
+    if (sys_enabled_check_) {
+        sys_enabled_check_->setText(is_window ? QStringLiteral("Other system audio")
+                                              : QStringLiteral("Computer audio"));
+    }
+    if (sys_source_label_) {
+        sys_source_label_->setText(
+            is_window ? QStringLiteral("Also records audio from other applications and Windows.")
+                      : QStringLiteral("Records all sound played through the selected output device."));
+    }
 
     const QSignalBlocker ab(app_enabled_check_);
     const QSignalBlocker as(app_separate_check_);
@@ -1207,10 +1250,9 @@ void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
 
 void ConfigPage::updateAudioSourceAvailability() {
     const bool no_rows = audio_ui_state_.source_rows.empty();
+    // App section label — relevant only when visible (Window mode).
     if (app_source_label_) {
-        const bool available = app_enabled_check_ && app_enabled_check_->isEnabled();
-        app_source_label_->setText(available ? QStringLiteral("Per-target, configured on Record page")
-                                             : QStringLiteral("Not available for current capture target"));
+        app_source_label_->setText(QStringLiteral("Records audio from the selected application."));
     }
     if (mic_source_label_) {
         const bool available = mic_enabled_check_ && mic_enabled_check_->isEnabled();
@@ -1222,11 +1264,7 @@ void ConfigPage::updateAudioSourceAvailability() {
         mic_device_combo_->setVisible(available);
         mic_device_combo_->setEnabled(available);
     }
-    if (sys_source_label_) {
-        const bool available = sys_enabled_check_ && sys_enabled_check_->isEnabled();
-        sys_source_label_->setText(available ? QStringLiteral("All system audio except selected app")
-                                             : QStringLiteral("Not available for current capture target"));
-    }
+    // sys_source_label_ text is managed by setAudioUiState (target-kind-specific).
     if (audio_summary_label_) {
         audio_summary_label_->setVisible(no_rows);
         if (no_rows)

@@ -48,6 +48,21 @@ class ConfigPageTest : public ::testing::Test {
         return false;
     }
 
+    // Check QCheckBox text anywhere in the widget tree.
+    static bool HasCheckText(const ConfigPage& page, const QString& text) {
+        for (const auto* cb : page.findChildren<QCheckBox*>()) {
+            if (cb->text() == text)
+                return true;
+        }
+        return false;
+    }
+
+    // Returns true when the settingsAudioAppSection container is not explicitly hidden.
+    static bool AppSectionVisible(const ConfigPage& page) {
+        const auto* section = page.findChild<QWidget*>(QStringLiteral("settingsAudioAppSection"));
+        return (section != nullptr) && !section->isHidden();
+    }
+
     OutputSettingsModel output_defaults_;
     VideoSettingsModel video_defaults_;
 };
@@ -744,16 +759,9 @@ TEST_F(ConfigPageTest, SettingsAudio_ExistingSignalEmissionsUnchanged) {
     QObject::connect(&page, &ConfigPage::audioSettingsChanged,
                      [&emit_count](const capability::AudioUiState&) { ++emit_count; });
 
-    // Find the System audio checkbox explicitly by text so we are not sensitive to
-    // widget-tree ordering across the Format & encoding and Audio cards.
-    QCheckBox* sys_check = nullptr;
-    for (auto* cb : page.findChildren<QCheckBox*>()) {
-        if (cb->text() == QStringLiteral("System audio")) {
-            sys_check = cb;
-            break;
-        }
-    }
-    ASSERT_NE(sys_check, nullptr) << "System audio QCheckBox not found in Settings Audio card";
+    // Find the system audio checkbox by object name (text varies by target kind).
+    QCheckBox* sys_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioSysCheck"));
+    ASSERT_NE(sys_check, nullptr) << "settingsAudioSysCheck not found in Settings Audio card";
 
     // Toggling must still emit audioSettingsChanged.
     const bool was_checked = sys_check->isChecked();
@@ -796,63 +804,171 @@ TEST_F(ConfigPageTest, SetAudioUiState_WindowWithAppRow_EnablesAppCheckbox) {
     };
     page.setAudioUiState(state);
 
-    QCheckBox* app_check = nullptr;
-    for (auto* cb : page.findChildren<QCheckBox*>()) {
-        if (cb->text() == QStringLiteral("Application audio")) {
-            app_check = cb;
-            break;
-        }
-    }
-    ASSERT_NE(app_check, nullptr) << "Application audio QCheckBox not found";
+    EXPECT_TRUE(AppSectionVisible(page)) << "App section must be visible for Window target";
+
+    QCheckBox* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    ASSERT_NE(app_check, nullptr) << "settingsAudioAppCheck not found";
     EXPECT_TRUE(app_check->isEnabled()) << "App checkbox must be enabled when App row is present";
     EXPECT_TRUE(app_check->isChecked());
 }
 
-TEST_F(ConfigPageTest, SetAudioUiState_DisplayWithNoAppRow_DisablesAppCheckbox) {
+TEST_F(ConfigPageTest, SetAudioUiState_DisplayMode_HidesAppSection) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     capability::AudioUiState state;
     state.target_kind = capability::CaptureTargetKind::Display;
     state.source_rows = {
         {recorder_core::AudioSourceKind::SystemOutput, true, false},
-        {recorder_core::AudioSourceKind::Mic, true, false},
+        {recorder_core::AudioSourceKind::Mic, false, false},
     };
     page.setAudioUiState(state);
 
-    QCheckBox* app_check = nullptr;
-    for (auto* cb : page.findChildren<QCheckBox*>()) {
-        if (cb->text() == QStringLiteral("Application audio")) {
-            app_check = cb;
-            break;
-        }
-    }
-    ASSERT_NE(app_check, nullptr) << "Application audio QCheckBox not found";
-    EXPECT_FALSE(app_check->isEnabled()) << "App checkbox must be disabled when no App row is present";
+    EXPECT_FALSE(AppSectionVisible(page)) << "App section must be hidden for Display target";
 }
 
-TEST_F(ConfigPageTest, SetAudioUiState_AppSourceLabel_ReflectsAvailability) {
+TEST_F(ConfigPageTest, SetAudioUiState_DisplayMode_SysLabelIsComputerAudio) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    // Display — no App row: label shows unavailable text.
     capability::AudioUiState display_state;
     display_state.target_kind = capability::CaptureTargetKind::Display;
     display_state.source_rows = {
         {recorder_core::AudioSourceKind::SystemOutput, true, false},
-        {recorder_core::AudioSourceKind::Mic, true, false},
+        {recorder_core::AudioSourceKind::Mic, false, false},
     };
     page.setAudioUiState(display_state);
-    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Not available for current capture target")));
 
-    // Window — App row present: label shows available text.
+    auto* sys_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioSysCheck"));
+    ASSERT_NE(sys_check, nullptr);
+    EXPECT_EQ(sys_check->text(), QStringLiteral("Computer audio"));
+    EXPECT_FALSE(AppSectionVisible(page)) << "App section must be hidden for Display target";
+    EXPECT_FALSE(HasLabelText(page, QStringLiteral("Not available for current capture target")));
+}
+
+TEST_F(ConfigPageTest, SetAudioUiState_WindowMode_SysLabelIsOtherSystemAudio) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
     capability::AudioUiState window_state;
     window_state.target_kind = capability::CaptureTargetKind::Window;
     window_state.source_rows = {
         {recorder_core::AudioSourceKind::App, true, false},
-        {recorder_core::AudioSourceKind::Mic, true, false},
-        {recorder_core::AudioSourceKind::Sys, true, false},
+        {recorder_core::AudioSourceKind::Mic, false, false},
+        {recorder_core::AudioSourceKind::Sys, false, false},
     };
     page.setAudioUiState(window_state);
-    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Per-target, configured on Record page")));
+
+    auto* sys_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioSysCheck"));
+    ASSERT_NE(sys_check, nullptr);
+    EXPECT_EQ(sys_check->text(), QStringLiteral("Other system audio"));
+    EXPECT_TRUE(AppSectionVisible(page)) << "App section must not be hidden for Window target";
+}
+
+// ── AUDIO-SOURCE-POLICY-R1: context-aware Settings Audio card ─────────────────
+
+TEST_F(ConfigPageTest, AudioPolicy_DisplayMode_ShowsComputerAudioPlusmic) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    capability::AudioUiState state;
+    state.target_kind = capability::CaptureTargetKind::Display;
+    state.source_rows = {
+        {recorder_core::AudioSourceKind::SystemOutput, true, false},
+        {recorder_core::AudioSourceKind::Mic, false, false},
+    };
+    page.setAudioUiState(state);
+
+    EXPECT_TRUE(HasCheckText(page, QStringLiteral("Computer audio")));
+    EXPECT_FALSE(HasCheckText(page, QStringLiteral("Other system audio")));
+    EXPECT_FALSE(AppSectionVisible(page)) << "App section must be hidden for Display target";
+    EXPECT_FALSE(HasLabelText(page, QStringLiteral("Not available for current capture target")));
+}
+
+TEST_F(ConfigPageTest, AudioPolicy_WindowMode_ShowsAppPlusOtherSystemPlusMic) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    capability::AudioUiState state;
+    state.target_kind = capability::CaptureTargetKind::Window;
+    state.source_rows = {
+        {recorder_core::AudioSourceKind::App, true, false},
+        {recorder_core::AudioSourceKind::Mic, false, false},
+        {recorder_core::AudioSourceKind::Sys, false, false},
+    };
+    page.setAudioUiState(state);
+
+    EXPECT_TRUE(HasCheckText(page, QStringLiteral("Application audio")));
+    EXPECT_TRUE(HasCheckText(page, QStringLiteral("Other system audio")));
+    EXPECT_FALSE(HasCheckText(page, QStringLiteral("Computer audio")));
+    EXPECT_TRUE(AppSectionVisible(page)) << "App section must be visible for Window target";
+    EXPECT_FALSE(HasLabelText(page, QStringLiteral("Not available for current capture target")));
+}
+
+TEST_F(ConfigPageTest, AudioPolicy_DisplayToWindow_AppSectionBecomesVisible) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    capability::AudioUiState display_state;
+    display_state.target_kind = capability::CaptureTargetKind::Display;
+    display_state.source_rows = {{recorder_core::AudioSourceKind::SystemOutput, true, false},
+                                 {recorder_core::AudioSourceKind::Mic, false, false}};
+    page.setAudioUiState(display_state);
+    EXPECT_FALSE(AppSectionVisible(page));
+
+    capability::AudioUiState window_state;
+    window_state.target_kind = capability::CaptureTargetKind::Window;
+    window_state.source_rows = {{recorder_core::AudioSourceKind::App, true, false},
+                                {recorder_core::AudioSourceKind::Mic, false, false},
+                                {recorder_core::AudioSourceKind::Sys, false, false}};
+    page.setAudioUiState(window_state);
+    EXPECT_TRUE(AppSectionVisible(page));
+}
+
+TEST_F(ConfigPageTest, AudioPolicy_WindowToDisplay_AppSectionHides) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    capability::AudioUiState window_state;
+    window_state.target_kind = capability::CaptureTargetKind::Window;
+    window_state.source_rows = {{recorder_core::AudioSourceKind::App, true, false},
+                                {recorder_core::AudioSourceKind::Mic, false, false},
+                                {recorder_core::AudioSourceKind::Sys, false, false}};
+    page.setAudioUiState(window_state);
+    EXPECT_TRUE(AppSectionVisible(page));
+
+    capability::AudioUiState display_state;
+    display_state.target_kind = capability::CaptureTargetKind::Display;
+    display_state.source_rows = {{recorder_core::AudioSourceKind::SystemOutput, true, false},
+                                 {recorder_core::AudioSourceKind::Mic, false, false}};
+    page.setAudioUiState(display_state);
+    EXPECT_FALSE(AppSectionVisible(page));
+}
+
+TEST_F(ConfigPageTest, AudioPolicy_AppMeterInactiveForDisplayMode) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    capability::AudioUiState display_state;
+    display_state.target_kind = capability::CaptureTargetKind::Display;
+    display_state.source_rows = {{recorder_core::AudioSourceKind::SystemOutput, true, false},
+                                 {recorder_core::AudioSourceKind::Mic, false, false}};
+    page.setAudioUiState(display_state);
+
+    // App meter must stay inactive regardless of level update.
+    page.setAudioMeterLevels(0.8f, 0.5f, 0.0f, true, false, false);
+
+    auto* app_meter = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioAppMeter"));
+    ASSERT_NE(app_meter, nullptr);
+    EXPECT_FALSE(app_meter->isActive()) << "App meter must not be active for Display mode";
+}
+
+TEST_F(ConfigPageTest, AudioPolicy_SysMeterActiveForDisplayMode) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    capability::AudioUiState display_state;
+    display_state.target_kind = capability::CaptureTargetKind::Display;
+    display_state.source_rows = {{recorder_core::AudioSourceKind::SystemOutput, true, false},
+                                 {recorder_core::AudioSourceKind::Mic, false, false}};
+    page.setAudioUiState(display_state);
+
+    page.setAudioMeterLevels(0.7f, 0.0f, 0.0f, /*sys_active=*/true, false, false);
+
+    auto* sys_meter = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioSysMeter"));
+    ASSERT_NE(sys_meter, nullptr);
+    EXPECT_TRUE(sys_meter->isActive()) << "System meter (Computer audio) must be active for Display mode";
 }
 
 } // namespace

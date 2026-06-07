@@ -1925,8 +1925,10 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
     }
 
     view_model_.ApplyTargetKindPreservingAudio(new_kind);
-    if (kind_changed)
+    if (kind_changed) {
         rebuildAudioRowWidgets();
+        emitAudioSettingsChanged();
+    }
     syncCoordinatorTargetContext();
 
     diagnostics::AppLog(QStringLiteral("[target] selected: %1 (kind_changed=%2)")
@@ -2015,10 +2017,13 @@ void RecordPage::onHotkeyPauseToggle() {
 void RecordPage::onSelectMonitorTarget() {
     view_model_.capture_mode = CaptureMode::Monitor;
     if (monitor_target_indices_.empty()) {
+        const bool kind_changed = (view_model_.audio_ui_state.target_kind != capability::CaptureTargetKind::Display);
         view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
         view_model_.selected_target_index = -1;
         target_combo_->setCurrentIndex(-1);
         diagnostics::AppLog(QStringLiteral("[target] monitor mode selected with no display targets"));
+        if (kind_changed)
+            emitAudioSettingsChanged();
         updateTargetCards();
         rebuildTargetPicker();
         refresh();
@@ -2034,10 +2039,13 @@ void RecordPage::onSelectMonitorTarget() {
 void RecordPage::onSelectWindowTarget() {
     view_model_.capture_mode = CaptureMode::Window;
     if (window_target_indices_.empty()) {
+        const bool kind_changed = (view_model_.audio_ui_state.target_kind != capability::CaptureTargetKind::Window);
         view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
         view_model_.selected_target_index = -1;
         target_combo_->setCurrentIndex(-1);
         diagnostics::AppLog(QStringLiteral("[target] window mode selected with no window targets"));
+        if (kind_changed)
+            emitAudioSettingsChanged();
         updateTargetCards();
         rebuildTargetPicker();
         refresh();
@@ -2060,9 +2068,14 @@ void RecordPage::onSelectRegionTarget() {
             syncTargetSelectionToCombo(monitor_target_index_);
         }
     }
-    view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
-    view_model_.select_on_record = select_on_record_check_ ? select_on_record_check_->isChecked() : true;
-    diagnostics::AppLog(QStringLiteral("[target] region mode selected"));
+    {
+        const bool kind_changed = (view_model_.audio_ui_state.target_kind != capability::CaptureTargetKind::Display);
+        view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
+        view_model_.select_on_record = select_on_record_check_ ? select_on_record_check_->isChecked() : true;
+        diagnostics::AppLog(QStringLiteral("[target] region mode selected"));
+        if (kind_changed)
+            emitAudioSettingsChanged();
+    }
     updateTargetCards();
     rebuildTargetPicker();
     refresh();

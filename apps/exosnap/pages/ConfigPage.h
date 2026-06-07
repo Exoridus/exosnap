@@ -175,6 +175,9 @@ class ConfigPage : public QWidget {
     QLabel* audio_app_db_label_ = nullptr;
     QLabel* audio_mic_db_label_ = nullptr;
 
+    // Application audio section — shown for Window targets, hidden for Display/Region.
+    QWidget* app_row_section_ = nullptr;
+
     QCheckBox* app_enabled_check_ = nullptr;
     QCheckBox* app_separate_check_ = nullptr;
     QLabel* app_source_label_ = nullptr;
