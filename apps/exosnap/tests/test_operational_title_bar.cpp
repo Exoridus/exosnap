@@ -207,13 +207,32 @@ TEST_F(OperationalTitleBarTest, RecordingBorder_ActiveWhileRecording) {
 }
 
 TEST_F(OperationalTitleBarTest, RecordingBorder_ActiveWhilePaused) {
-    // The title-bar bottom border must still be active (non-neutral) while paused;
-    // the view distinguishes coral vs amber via the status label.
+    // recording_active_ must stay true while paused: it drives the brand mark (coral)
+    // and status pill. The chrome border is always neutral; recording emphasis is
+    // provided by the status pill and the preview border only.
     ui::chrome::OperationalTitleBar bar;
     bar.setNavItems(DefaultNavItems());
     bar.setRecordingActive(true);
     bar.setStatusLabel(QStringLiteral("PAUSED"));
     EXPECT_TRUE(bar.isRecordingActive());
+}
+
+TEST_F(OperationalTitleBarTest, ChromeBorder_RecordingStatePreservedForBrandMark) {
+    // Verify that setRecordingActive() still propagates the state for the brand mark and
+    // QSS "recording" property while the chrome border itself remains visually neutral.
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+
+    EXPECT_FALSE(bar.isRecordingActive());
+    EXPECT_EQ(bar.property("recording").toBool(), false);
+
+    bar.setRecordingActive(true);
+    EXPECT_TRUE(bar.isRecordingActive());
+    EXPECT_EQ(bar.property("recording").toBool(), true);
+
+    bar.setRecordingActive(false);
+    EXPECT_FALSE(bar.isRecordingActive());
+    EXPECT_EQ(bar.property("recording").toBool(), false);
 }
 
 TEST_F(OperationalTitleBarTest, RecordingBorder_NeutralAfterStop) {

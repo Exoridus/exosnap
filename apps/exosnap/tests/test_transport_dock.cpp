@@ -2,6 +2,7 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QComboBox>
 #include <QCoreApplication>
 #include <QLabel>
 #include <QList>
@@ -304,6 +305,72 @@ TEST_F(TransportDockTest, Timer_ReadyResetsToZero) {
     auto* timer = dock.findChild<QLabel*>(QStringLiteral("recordDockTimer"));
     ASSERT_NE(timer, nullptr);
     EXPECT_EQ(timer->text(), QStringLiteral("00:00:00"));
+}
+
+// ── Countdown selector (HYBRID-RECORD-FIDELITY-R2 Part D) ───────────────────
+
+TEST_F(TransportDockTest, Countdown_PresentInReadyState) {
+    TransportDock dock;
+    dock.setState(TransportDock::State::Ready);
+    auto* countdown = dock.findChild<QComboBox*>(QStringLiteral("recordCountdownSelect"));
+    ASSERT_NE(countdown, nullptr);
+    EXPECT_TRUE(countdown->isVisibleTo(&dock));
+}
+
+TEST_F(TransportDockTest, Countdown_HiddenDuringRecordingAndPaused) {
+    TransportDock dock;
+
+    dock.setState(TransportDock::State::Recording);
+    auto* countdown = dock.findChild<QComboBox*>(QStringLiteral("recordCountdownSelect"));
+    ASSERT_NE(countdown, nullptr);
+    EXPECT_FALSE(countdown->isVisibleTo(&dock));
+
+    dock.setState(TransportDock::State::Paused);
+    EXPECT_FALSE(countdown->isVisibleTo(&dock));
+}
+
+// ── Dock icon keys and tooltips (HYBRID-RECORD-FIDELITY-R2 Part E) ────────────
+
+TEST_F(TransportDockTest, DockToggle_SystemAudioTooltip) {
+    TransportDock dock;
+    auto* toggle = Toggle(dock, QStringLiteral("system"));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_EQ(toggle->toolTip(), QStringLiteral("System audio"));
+    EXPECT_EQ(toggle->property("sourceKey").toString(), QStringLiteral("system"));
+}
+
+TEST_F(TransportDockTest, DockToggle_MicrophoneTooltip) {
+    TransportDock dock;
+    auto* toggle = Toggle(dock, QStringLiteral("mic"));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_EQ(toggle->toolTip(), QStringLiteral("Microphone"));
+    EXPECT_EQ(toggle->property("sourceKey").toString(), QStringLiteral("mic"));
+}
+
+TEST_F(TransportDockTest, DockToggle_WebcamTooltip) {
+    // The webcam toggle must read as "Webcam" — the icon key drives the camera SVG path.
+    TransportDock dock;
+    auto* toggle = Toggle(dock, QStringLiteral("webcam"));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_EQ(toggle->toolTip(), QStringLiteral("Webcam"));
+    EXPECT_EQ(toggle->property("sourceKey").toString(), QStringLiteral("webcam"));
+}
+
+TEST_F(TransportDockTest, DockToggle_AppAudioTooltip) {
+    // The app toggle must read as "Application audio" — the icon key drives the window SVG path.
+    TransportDock dock;
+    auto* toggle = Toggle(dock, QStringLiteral("app"));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_EQ(toggle->toolTip(), QStringLiteral("Application audio"));
+    EXPECT_EQ(toggle->property("sourceKey").toString(), QStringLiteral("app"));
+}
+
+TEST_F(TransportDockTest, DockToggle_FourSourcesPresent) {
+    TransportDock dock;
+    EXPECT_NE(Toggle(dock, QStringLiteral("system")), nullptr);
+    EXPECT_NE(Toggle(dock, QStringLiteral("mic")), nullptr);
+    EXPECT_NE(Toggle(dock, QStringLiteral("webcam")), nullptr);
+    EXPECT_NE(Toggle(dock, QStringLiteral("app")), nullptr);
 }
 
 } // namespace

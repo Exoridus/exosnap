@@ -27,9 +27,14 @@ QByteArray iconPathFor(const QString& key) {
     if (key == QLatin1String("mic"))
         return QByteArrayLiteral("M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3");
     if (key == QLatin1String("webcam"))
-        return QByteArrayLiteral("M12 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM3 20a9 9 0 0 1 18 0");
+        // Camera body with lens circle — unambiguously a camera, not a person/profile.
+        return QByteArrayLiteral(
+            "M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"
+            "M12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6z");
     if (key == QLatin1String("app"))
-        return QByteArrayLiteral("M4 4h7v7H4zM13 4h7v7h-7zM13 13h7v7h-7zM4 13h7v7H4z");
+        // Application window with title-bar separator — communicates selected-app audio,
+        // distinct from the 4-square grid that read as a layout/menu icon.
+        return QByteArrayLiteral("M3 3h18a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM3 9h18");
     return {};
 }
 

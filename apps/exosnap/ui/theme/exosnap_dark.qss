@@ -33,11 +33,13 @@ QLabel[labelRole="titlebarWordmark"] {
     color: ${text0};
 }
 
-/* Top navigation tabs — active tab gets an accent underline, inactive tabs are muted. */
+/* Top navigation tabs — active tab gets a 2px straight accent underline, inactive tabs are muted.
+   border-radius: 0 prevents the bottom border from rendering as a rounded capsule. */
 QPushButton[titlebarNavTab="true"] {
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
+    border-radius: 0;
     padding: 0 15px;
     color: ${text2};
     font-size: 13.5px;
@@ -51,6 +53,7 @@ QPushButton[titlebarNavTab="true"]:hover {
 QPushButton[titlebarNavTab="true"]:checked {
     color: ${text0};
     border-bottom: 2px solid ${accent};
+    border-radius: 0;
     font-weight: 600;
 }
 
@@ -2533,14 +2536,21 @@ QLabel[labelRole="recordDockTimer"][timerState="blocked"] {
     color: ${err};
 }
 
-/* Action buttons — shared shape. */
+/* Primary dock action buttons — full pill shape. */
 QPushButton#recordDockRecord,
 QPushButton#recordDockRecordAgain,
 QPushButton#recordDockResume,
 QPushButton#recordDockStop,
-QPushButton#recordDockPause,
-QPushButton#recordDockOpenFolder {
+QPushButton#recordDockPause {
     border-radius: 999px;
+    font-size: 13.5px;
+    font-weight: 600;
+    padding: 8px 18px;
+}
+
+/* Open folder — secondary ghost action with text: rounded rectangle, not a full pill. */
+QPushButton#recordDockOpenFolder {
+    border-radius: ${radius-md}px;
     font-size: 13.5px;
     font-weight: 600;
     padding: 8px 18px;
@@ -2625,14 +2635,15 @@ QLabel[labelRole="recordDockSize"] {
     color: ${text2};
 }
 
-/* Countdown select — planned/disabled in this slice. */
+/* Countdown select — planned/disabled in this slice; compact secondary control. */
 QComboBox#recordCountdownSelect {
     background: ${bg2};
     border: 1px solid ${line2};
     border-radius: ${radius-sm}px;
     padding: 7px 11px;
     color: ${text2};
-    min-width: 78px;
+    min-width: 56px;
+    max-width: 96px;
 }
 
 QComboBox#recordCountdownSelect:disabled {

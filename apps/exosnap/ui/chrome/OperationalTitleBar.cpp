@@ -295,14 +295,9 @@ void OperationalTitleBar::paintEvent(QPaintEvent* event) {
 
     QPainter painter(this);
     painter.fillRect(rect(), QColor(theme::ExoSnapPalette::kBg0));
-    // Hairline bottom separator: coral while recording, amber while paused, neutral otherwise.
-    QColor line(255, 255, 255, 18);
-    if (recording_active_) {
-        const bool is_paused = status_label_.contains(QLatin1String("PAUSED"), Qt::CaseInsensitive) ||
-                               status_label_.contains(QLatin1String("PAUSE"), Qt::CaseInsensitive);
-        line = is_paused ? QColor(theme::ExoSnapPalette::kWarn) : QColor(theme::ExoSnapPalette::kErr);
-    }
-    painter.setPen(QPen(line, 1.0));
+    // Neutral hairline separator — recording state is communicated via the status pill
+    // and preview border, not the top-chrome border line.
+    painter.setPen(QPen(QColor(255, 255, 255, 18), 1.0));
     painter.drawLine(0, height() - 1, width(), height() - 1);
 }
 
