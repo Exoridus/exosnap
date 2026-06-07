@@ -57,6 +57,68 @@ inline PreviewCropBox RegionToCropBox(int32_t region_x, int32_t region_y, int32_
 }
 
 // ---------------------------------------------------------------------------
+// PreviewCropBox equality
+// ---------------------------------------------------------------------------
+
+[[nodiscard]] inline bool operator==(const PreviewCropBox& a, const PreviewCropBox& b) noexcept {
+    return a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height;
+}
+
+// ---------------------------------------------------------------------------
+// PreviewConfigKey — change-detection key for preview restart decisions.
+//
+// Captures the essential identity of a preview request: which target (by index
+// and OS handle), its kind, and whether a Region crop is active.  The region
+// coordinates are stored in virtual-screen space so the key can be compared
+// without re-calling QueryScreenPresentation.
+//
+// A default-constructed key is "no active preview" (target_index == -1).
+// ---------------------------------------------------------------------------
+
+struct PreviewConfigKey {
+    int32_t target_index = -1; // index in view_model_.targets; -1 = no preview
+    intptr_t native_id = 0;    // CaptureTarget::native_id (OS handle / HMONITOR / HWND)
+    int32_t kind = 0;          // 0 = Monitor, 1 = Window (matches CaptureTarget::Kind)
+    bool has_crop = false;
+    // Virtual-screen physical-pixel coordinates of the region (only valid when has_crop=true).
+    int32_t region_x = 0;
+    int32_t region_y = 0;
+    int32_t region_w = 0;
+    int32_t region_h = 0;
+
+    [[nodiscard]] bool IsValid() const noexcept {
+        return target_index >= 0;
+    }
+
+    [[nodiscard]] bool operator==(const PreviewConfigKey& o) const noexcept {
+        if (target_index != o.target_index)
+            return false;
+        if (native_id != o.native_id)
+            return false;
+        if (kind != o.kind)
+            return false;
+        if (has_crop != o.has_crop)
+            return false;
+        if (has_crop) {
+            if (region_x != o.region_x || region_y != o.region_y)
+                return false;
+            if (region_w != o.region_w || region_h != o.region_h)
+                return false;
+        }
+        return true;
+    }
+};
+
+// Returns true when any aspect of the preview configuration changed and a
+// renderer restart is required.  The `active` key describes the last
+// successfully started preview; a default-constructed key means no preview
+// is active.
+[[nodiscard]] inline bool NeedsPreviewRestart(const PreviewConfigKey& requested,
+                                              const PreviewConfigKey& active) noexcept {
+    return !(requested == active);
+}
+
+// ---------------------------------------------------------------------------
 // PreviewFrameIntervalMs
 // ---------------------------------------------------------------------------
 

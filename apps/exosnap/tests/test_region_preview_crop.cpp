@@ -236,5 +236,216 @@ TEST(PreviewRecordingParity, SecondaryMonitorPreviewCropMatchesRecordingRegionDi
     EXPECT_EQ(box.height, region_h);               // unchanged
 }
 
+// ---------------------------------------------------------------------------
+// PreviewCropBox::operator==
+// ---------------------------------------------------------------------------
+
+TEST(PreviewCropBoxEquality, IdenticalBoxesAreEqual) {
+    PreviewCropBox a{100, 200, 800, 600};
+    PreviewCropBox b{100, 200, 800, 600};
+    EXPECT_TRUE(a == b);
+}
+
+TEST(PreviewCropBoxEquality, DifferentXNotEqual) {
+    EXPECT_FALSE((PreviewCropBox{0, 0, 800, 600} == PreviewCropBox{1, 0, 800, 600}));
+}
+
+TEST(PreviewCropBoxEquality, DifferentYNotEqual) {
+    EXPECT_FALSE((PreviewCropBox{0, 0, 800, 600} == PreviewCropBox{0, 1, 800, 600}));
+}
+
+TEST(PreviewCropBoxEquality, DifferentWidthNotEqual) {
+    EXPECT_FALSE((PreviewCropBox{0, 0, 800, 600} == PreviewCropBox{0, 0, 801, 600}));
+}
+
+TEST(PreviewCropBoxEquality, DifferentHeightNotEqual) {
+    EXPECT_FALSE((PreviewCropBox{0, 0, 800, 600} == PreviewCropBox{0, 0, 800, 601}));
+}
+
+// ---------------------------------------------------------------------------
+// PreviewConfigKey — helper factories for tests
+// ---------------------------------------------------------------------------
+namespace {
+
+// Monitor target (no crop) at the given index/native_id.
+PreviewConfigKey MakeDisplayKey(int index, intptr_t native_id = 42) {
+    PreviewConfigKey k;
+    k.target_index = index;
+    k.native_id = native_id;
+    k.kind = 0; // Monitor
+    k.has_crop = false;
+    return k;
+}
+
+// Window target (no crop).
+PreviewConfigKey MakeWindowKey(int index, intptr_t native_id = 99) {
+    PreviewConfigKey k;
+    k.target_index = index;
+    k.native_id = native_id;
+    k.kind = 1; // Window
+    k.has_crop = false;
+    return k;
+}
+
+// Region target: monitor with a crop region in virtual-screen coordinates.
+PreviewConfigKey MakeRegionKey(int index, intptr_t native_id, int32_t rx, int32_t ry, int32_t rw, int32_t rh) {
+    PreviewConfigKey k;
+    k.target_index = index;
+    k.native_id = native_id;
+    k.kind = 0; // Monitor
+    k.has_crop = true;
+    k.region_x = rx;
+    k.region_y = ry;
+    k.region_w = rw;
+    k.region_h = rh;
+    return k;
+}
+
+} // anonymous namespace
+
+// ---------------------------------------------------------------------------
+// PreviewConfigKey — equality
+// ---------------------------------------------------------------------------
+
+TEST(PreviewConfigKey, DefaultIsInvalid) {
+    PreviewConfigKey k;
+    EXPECT_FALSE(k.IsValid());
+    EXPECT_EQ(k.target_index, -1);
+}
+
+TEST(PreviewConfigKey, ValidDisplayKeyIsValid) {
+    EXPECT_TRUE(MakeDisplayKey(0).IsValid());
+}
+
+TEST(PreviewConfigKey, SameDisplayKeysAreEqual) {
+    EXPECT_TRUE(MakeDisplayKey(0) == MakeDisplayKey(0));
+}
+
+TEST(PreviewConfigKey, DifferentTargetIndexNotEqual) {
+    EXPECT_FALSE(MakeDisplayKey(0) == MakeDisplayKey(1));
+}
+
+TEST(PreviewConfigKey, DifferentNativeIdNotEqual) {
+    EXPECT_FALSE(MakeDisplayKey(0, 10) == MakeDisplayKey(0, 20));
+}
+
+TEST(PreviewConfigKey, DisplayAndWindowNotEqual) {
+    EXPECT_FALSE(MakeDisplayKey(0) == MakeWindowKey(0, 42));
+}
+
+TEST(PreviewConfigKey, SameRegionKeysAreEqual) {
+    auto a = MakeRegionKey(0, 42, 100, 200, 800, 600);
+    auto b = MakeRegionKey(0, 42, 100, 200, 800, 600);
+    EXPECT_TRUE(a == b);
+}
+
+TEST(PreviewConfigKey, RegionAndDisplayNotEqualEvenSameTarget) {
+    auto region = MakeRegionKey(0, 42, 100, 200, 800, 600);
+    auto display = MakeDisplayKey(0, 42);
+    EXPECT_FALSE(region == display);
+}
+
+// ---------------------------------------------------------------------------
+// NeedsPreviewRestart — state-transition tests
+//
+// Each test corresponds to one of the required transition scenarios from the
+// REGION-PREVIEW-CROP-R2 spec.
+// ---------------------------------------------------------------------------
+
+// Transition 1: Region crop set → active config has crop.
+TEST(NeedsPreviewRestart, RegionCropSetRequiresRestartFromNoPreview) {
+    const PreviewConfigKey no_preview{}; // default: target_index == -1
+    const PreviewConfigKey region = MakeRegionKey(0, 42, 100, 200, 800, 600);
+    EXPECT_TRUE(NeedsPreviewRestart(region, no_preview));
+}
+
+// Transition 2: Region → Display → crop must be cleared.
+TEST(NeedsPreviewRestart, RegionToDisplayRequiresRestart) {
+    const PreviewConfigKey region = MakeRegionKey(0, 42, 100, 200, 800, 600);
+    const PreviewConfigKey display = MakeDisplayKey(0, 42);
+    // Switching from Region to Display changes has_crop → restart required.
+    EXPECT_TRUE(NeedsPreviewRestart(display, region));
+}
+
+// Transition 3: Region → Window → crop must be cleared.
+TEST(NeedsPreviewRestart, RegionToWindowRequiresRestart) {
+    const PreviewConfigKey region = MakeRegionKey(0, 42, 100, 200, 800, 600);
+    const PreviewConfigKey window = MakeWindowKey(1, 99);
+    EXPECT_TRUE(NeedsPreviewRestart(window, region));
+}
+
+// Transition 4: Display → Region → crop must be applied.
+TEST(NeedsPreviewRestart, DisplayToRegionRequiresRestart) {
+    const PreviewConfigKey display = MakeDisplayKey(0, 42);
+    const PreviewConfigKey region = MakeRegionKey(0, 42, 100, 200, 800, 600);
+    EXPECT_TRUE(NeedsPreviewRestart(region, display));
+}
+
+// Transition 5: Window → Region → crop must be applied.
+TEST(NeedsPreviewRestart, WindowToRegionRequiresRestart) {
+    const PreviewConfigKey window = MakeWindowKey(1, 99);
+    const PreviewConfigKey region = MakeRegionKey(0, 42, 100, 200, 800, 600);
+    EXPECT_TRUE(NeedsPreviewRestart(region, window));
+}
+
+// Transition 6: Region A → Region B with different origin replaces coordinates.
+TEST(NeedsPreviewRestart, RegionAToRegionBDifferentOriginRequiresRestart) {
+    const PreviewConfigKey region_a = MakeRegionKey(0, 42, 100, 200, 800, 600);
+    const PreviewConfigKey region_b = MakeRegionKey(0, 42, 300, 400, 800, 600); // same size, different offset
+    EXPECT_TRUE(NeedsPreviewRestart(region_b, region_a));
+}
+
+// Transition 7: Region A → differently sized Region B updates source dimensions.
+TEST(NeedsPreviewRestart, RegionAToRegionBDifferentSizeRequiresRestart) {
+    const PreviewConfigKey region_a = MakeRegionKey(0, 42, 100, 200, 800, 600);
+    const PreviewConfigKey region_b = MakeRegionKey(0, 42, 100, 200, 1280, 720); // same offset, different size
+    EXPECT_TRUE(NeedsPreviewRestart(region_b, region_a));
+}
+
+// Transition 8: Region → Display restores full source dimensions.
+// Represented by the same key check as Transition 2 — the restart clears crop.
+TEST(NeedsPreviewRestart, RegionToDisplayRestoresFullDimensions) {
+    const PreviewConfigKey region = MakeRegionKey(0, 42, 0, 0, 1280, 720);
+    const PreviewConfigKey display = MakeDisplayKey(0, 42); // full display, no crop
+    // has_crop changed → restart needed → renderer recreated with nullopt crop_box.
+    EXPECT_TRUE(NeedsPreviewRestart(display, region));
+}
+
+// Transition 9: Same Region reapplied — idempotent, no restart needed.
+TEST(NeedsPreviewRestart, SameRegionReappliedIsIdempotent) {
+    const PreviewConfigKey region_a = MakeRegionKey(0, 42, 100, 200, 800, 600);
+    const PreviewConfigKey region_b = MakeRegionKey(0, 42, 100, 200, 800, 600); // identical
+    EXPECT_FALSE(NeedsPreviewRestart(region_b, region_a));
+}
+
+// Transition 9b: Same Display reapplied — no restart needed.
+TEST(NeedsPreviewRestart, SameDisplayReappliedIsIdempotent) {
+    const PreviewConfigKey display = MakeDisplayKey(0, 42);
+    EXPECT_FALSE(NeedsPreviewRestart(display, display));
+}
+
+// Transition 10: Invalid region (no valid crop box) produces has_crop=false,
+// which differs from an active Region key → restart required to clear crop.
+TEST(NeedsPreviewRestart, InvalidRegionKeyDiffersFromActiveRegion) {
+    // A key representing "Region mode but no valid crop yet" has has_crop=false.
+    PreviewConfigKey invalid_region;
+    invalid_region.target_index = 0;
+    invalid_region.native_id = 42;
+    invalid_region.kind = 0;
+    invalid_region.has_crop = false; // crop couldn't be computed (invalid region)
+
+    const PreviewConfigKey active_region = MakeRegionKey(0, 42, 100, 200, 800, 600);
+
+    // Switching from active Region to invalid-region state → restart needed to clear preview.
+    EXPECT_TRUE(NeedsPreviewRestart(invalid_region, active_region));
+}
+
+// Transition: switching to different native_id on same index requires restart.
+TEST(NeedsPreviewRestart, DifferentNativeIdRequiresRestart) {
+    const PreviewConfigKey mon_a = MakeDisplayKey(0, 111);
+    const PreviewConfigKey mon_b = MakeDisplayKey(0, 222); // same index, different monitor handle
+    EXPECT_TRUE(NeedsPreviewRestart(mon_b, mon_a));
+}
+
 } // namespace
 } // namespace exosnap

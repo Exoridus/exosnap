@@ -9,6 +9,7 @@
 #include "../models/OutputSettingsModel.h"
 #include "../models/VideoSettingsModel.h"
 #include "../models/WebcamSettings.h"
+#include "../services/PreviewHelpers.h"
 #include "../services/PreviewService.h"
 #include "../services/RecordingCoordinator.h"
 #include "../ui/widgets/RegionSelectionOverlay.h"
@@ -293,6 +294,11 @@ class RecordPage : public QWidget {
     QElapsedTimer recording_wall_clock_;
     qint64 wall_elapsed_before_pause_ms_ = 0; // accumulated ms before most recent pause
     QTimer* ui_clock_timer_ = nullptr;        // 1 Hz tick → updateTransportDock() during recording
+
+    // Tracks the configuration of the last successfully started DXGI preview.
+    // Used by startPreviewIfIdle() to skip redundant restarts when the target
+    // and crop are unchanged.  Reset to default when the preview is stopped.
+    exosnap::PreviewConfigKey last_preview_key_{};
 };
 
 } // namespace exosnap

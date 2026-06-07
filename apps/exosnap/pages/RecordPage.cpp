@@ -1613,11 +1613,36 @@ void RecordPage::startPreviewIfIdle() {
     const bool has_target = view_model_.selected_target_index >= 0 &&
                             view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
 
+    // --- Idempotency guard ---
+    // Build the desired configuration key before touching any renderer state.
+    // If the DXGI preview is already active with exactly the same target and
+    // crop, skip the restart entirely (e.g. same Region reapplied, or
+    // syncTargetSelectionToCombo early-exit calling us for a truly unchanged state).
+    if (is_idle && has_target && preview_surface_ && preview_surface_->isDxgiPreviewActive()) {
+        const auto& t = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+        exosnap::PreviewConfigKey new_key;
+        new_key.target_index = view_model_.selected_target_index;
+        new_key.native_id = static_cast<intptr_t>(t.native_id);
+        new_key.kind = static_cast<int32_t>(t.kind);
+        if (view_model_.capture_mode == CaptureMode::Region && view_model_.has_region && view_model_.region.IsValid()) {
+            new_key.has_crop = true;
+            new_key.region_x = view_model_.region.x;
+            new_key.region_y = view_model_.region.y;
+            new_key.region_w = view_model_.region.width;
+            new_key.region_h = view_model_.region.height;
+        }
+        if (!exosnap::NeedsPreviewRestart(new_key, last_preview_key_)) {
+            return; // already active with same config — no restart needed
+        }
+    }
+
+    // --- Stop current preview and clear tracked config ---
     if (preview_surface_)
         preview_surface_->stopDxgiPreview();
     preview_service_->Stop();
     if (preview_surface_)
         preview_surface_->setLiveFrame(QImage{});
+    last_preview_key_ = {};
 
     if (!is_idle || !has_target)
         return;
@@ -1670,8 +1695,22 @@ void RecordPage::startPreviewIfIdle() {
                                 .arg(screen_meta.origin_y));
     }
 
+    // Build the active key that will represent this preview after a successful start.
+    exosnap::PreviewConfigKey active_key;
+    active_key.target_index = view_model_.selected_target_index;
+    active_key.native_id = static_cast<intptr_t>(target.native_id);
+    active_key.kind = static_cast<int32_t>(target.kind);
+    if (crop_box.has_value()) {
+        active_key.has_crop = true;
+        active_key.region_x = view_model_.region.x;
+        active_key.region_y = view_model_.region.y;
+        active_key.region_w = view_model_.region.width;
+        active_key.region_h = view_model_.region.height;
+    }
+
     if (preview_surface_ &&
         preview_surface_->tryStartDxgiPreview(target, cfg.frame_rate_num, cfg.frame_rate_den, crop_box)) {
+        last_preview_key_ = active_key;
         diagnostics::AppLog(QStringLiteral("[record] DXGI preview started for target"));
         return;
     }
@@ -1952,6 +1991,9 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
     if (target_index == view_model_.selected_target_index) {
         updateTargetCards();
         rebuildTargetPicker();
+        // The capture_mode may have changed (e.g. Region → Display) even though the underlying
+        // monitor index is the same.  Always restart the preview so stale crop state is cleared.
+        startPreviewIfIdle();
         return;
     }
 
