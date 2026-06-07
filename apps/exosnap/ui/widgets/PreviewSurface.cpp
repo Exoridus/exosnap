@@ -247,7 +247,7 @@ bool PreviewSurface::isRecording() const noexcept {
 }
 
 bool PreviewSurface::tryStartDxgiPreview(const recorder_core::CaptureTarget& target, uint32_t frame_rate_num,
-                                         uint32_t frame_rate_den) {
+                                         uint32_t frame_rate_den, std::optional<exosnap::PreviewCropBox> crop_box) {
     stopDxgiPreview();
 
     setAttribute(Qt::WA_NativeWindow);
@@ -274,7 +274,9 @@ bool PreviewSurface::tryStartDxgiPreview(const recorder_core::CaptureTarget& tar
         return false;
     }
 
-    if (!dxgi_renderer_->StartCapture(target, frame_rate_num, frame_rate_den)) {
+    // Pass the crop box (if any) so the renderer crops the monitor frame to the
+    // selected region.  For Display and Window targets this is std::nullopt.
+    if (!dxgi_renderer_->StartCapture(target, frame_rate_num, frame_rate_den, std::move(crop_box))) {
         diagnostics::AppLog(
             QStringLiteral("[dxgi-preview] DxgiPreviewRenderer StartCapture failed, falling back to QImage"));
         dxgi_renderer_->Shutdown();

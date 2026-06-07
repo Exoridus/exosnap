@@ -1625,7 +1625,53 @@ void RecordPage::startPreviewIfIdle() {
     const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
     const auto cfg = primaryRecorderConfig();
 
-    if (preview_surface_ && preview_surface_->tryStartDxgiPreview(target, cfg.frame_rate_num, cfg.frame_rate_den)) {
+    // --- Region preview: compute monitor-relative crop box ---
+    // For Region targets the preview must show only the selected rectangle.
+    // A full-display preview must never silently replace an active Region selection.
+    std::optional<exosnap::PreviewCropBox> crop_box;
+    if (view_model_.capture_mode == CaptureMode::Region) {
+        if (!view_model_.has_region || !view_model_.region.IsValid()) {
+            // No valid region yet — show the honest empty/unavailable state.
+            // Do not fall back to a full-display preview.
+            diagnostics::AppLog(QStringLiteral("[record] region preview: no valid region — preview not started"));
+            return;
+        }
+
+        // The selected target for Region mode is a Monitor.
+        // Query its virtual-screen origin to convert the region to monitor-relative
+        // physical pixels (the coordinate space expected by DxgiPreviewRenderer).
+        const ScreenPresentation screen_meta = QueryScreenPresentation(target.native_id);
+        if (!screen_meta.available) {
+            diagnostics::AppLog(
+                QStringLiteral("[record] region preview: monitor info unavailable — preview not started"));
+            return;
+        }
+
+        // region.x/y are virtual-screen physical pixels; subtracting the monitor's
+        // virtual-screen origin converts them to monitor-frame-relative pixels.
+        const exosnap::PreviewCropBox box =
+            exosnap::RegionToCropBox(view_model_.region.x, view_model_.region.y, view_model_.region.width,
+                                     view_model_.region.height, screen_meta.origin_x, screen_meta.origin_y);
+
+        if (!box.IsValid()) {
+            diagnostics::AppLog(
+                QStringLiteral("[record] region preview: crop box invalid (region before monitor origin) — "
+                               "preview not started"));
+            return;
+        }
+
+        crop_box = box;
+        diagnostics::AppLog(QStringLiteral("[record] region preview: crop x=%1 y=%2 w=%3 h=%4 (monitor origin %5,%6)")
+                                .arg(box.x)
+                                .arg(box.y)
+                                .arg(box.width)
+                                .arg(box.height)
+                                .arg(screen_meta.origin_x)
+                                .arg(screen_meta.origin_y));
+    }
+
+    if (preview_surface_ &&
+        preview_surface_->tryStartDxgiPreview(target, cfg.frame_rate_num, cfg.frame_rate_den, crop_box)) {
         diagnostics::AppLog(QStringLiteral("[record] DXGI preview started for target"));
         return;
     }
@@ -2404,6 +2450,10 @@ void RecordPage::onSourcePickerAccepted(ui::dialogs::SourcePickerDialog::Selecti
                                     .arg(region.y));
             updateTargetCards();
             rebuildTargetPicker();
+            // Restart the preview now that capture_mode and region are both set —
+            // startPreviewIfIdle inside syncTargetSelectionToCombo ran before the
+            // region was stored and would have seen CaptureMode::Monitor.
+            startPreviewIfIdle();
             refresh();
             return;
         }
@@ -2455,8 +2505,9 @@ void RecordPage::onRegionSelected(QRect region_virtual_screen) {
     if (view_model_.state == UiRecordingState::RegionSelecting) {
         doStartRecording(region);
     }
-    // Otherwise, the region was picked manually via the Pick Region button — just update the UI.
+    // Otherwise, the region was picked manually — start the cropped preview.
     else {
+        startPreviewIfIdle();
         refresh();
     }
 }

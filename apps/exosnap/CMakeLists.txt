@@ -439,6 +439,15 @@ exosnap_add_gtest(
 target_include_directories(preview_helpers_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
+    NAME region_preview_crop_tests
+    TEST_PREFIX preview.
+    SOURCES
+        tests/test_region_preview_crop.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(region_preview_crop_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
     NAME transport_dock_tests
     TEST_PREFIX record.
     SOURCES

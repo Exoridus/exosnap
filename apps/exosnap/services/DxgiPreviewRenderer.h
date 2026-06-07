@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 #include <recorder_core/recorder_session.h>
@@ -32,7 +33,11 @@ class DxgiPreviewRenderer {
 
     bool Initialize(HWND parentHwnd, uint32_t hwndWidth, uint32_t hwndHeight, uint32_t swapWidth, uint32_t swapHeight);
 
-    bool StartCapture(const recorder_core::CaptureTarget& target, uint32_t frame_rate_num, uint32_t frame_rate_den);
+    // crop_box: optional monitor-relative physical-pixel crop applied during preview.
+    // When set, only the specified sub-region of the captured monitor frame is rendered.
+    // std::nullopt captures the full monitor (Display and Window targets).
+    bool StartCapture(const recorder_core::CaptureTarget& target, uint32_t frame_rate_num, uint32_t frame_rate_den,
+                      std::optional<PreviewCropBox> crop_box = std::nullopt);
 
     void StopCapture();
 
@@ -93,6 +98,10 @@ class DxgiPreviewRenderer {
     uint32_t swapHeight_{0};
     uint32_t initialWidth_{0};
     uint32_t initialHeight_{0};
+
+    // Set in StartCapture before the render thread begins; immutable during rendering.
+    // Stores the monitor-relative crop rectangle for Region preview targets.
+    std::optional<PreviewCropBox> cropBox_{};
 };
 
 } // namespace exosnap

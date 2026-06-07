@@ -106,11 +106,15 @@ bool DxgiPreviewRenderer::Initialize(HWND parentHwnd, uint32_t hwndWidth, uint32
 }
 
 bool DxgiPreviewRenderer::StartCapture(const recorder_core::CaptureTarget& target, uint32_t frame_rate_num,
-                                       uint32_t frame_rate_den) {
+                                       uint32_t frame_rate_den, std::optional<PreviewCropBox> crop_box) {
     if (!initialized_.load())
         return false;
 
     StopCapture();
+
+    // Store crop box before thread creation so the render thread sees it
+    // without synchronization (jthread constructor provides the memory fence).
+    cropBox_ = std::move(crop_box);
 
     const uint32_t intervalMs = PreviewFrameIntervalMs(frame_rate_num, frame_rate_den);
     active_.store(true);
@@ -381,12 +385,22 @@ void DxgiPreviewRenderer::PollAndProcessFrames() {
             D3D11_TEXTURE2D_DESC desc{};
             frameTex->GetDesc(&desc);
 
-            bool sizeChanged = (desc.Width != srcWidth_ || desc.Height != srcHeight_);
-            srcWidth_ = desc.Width;
-            srcHeight_ = desc.Height;
+            // When a crop box is active (Region preview), render only the selected
+            // sub-region.  srcWidth_/srcHeight_ track the *effective* dimensions so
+            // ComputeContainFitRect receives the crop aspect ratio, not the full monitor
+            // dimensions.
+            const uint32_t effectiveW = cropBox_.has_value() ? static_cast<uint32_t>(cropBox_->width) : desc.Width;
+            const uint32_t effectiveH = cropBox_.has_value() ? static_cast<uint32_t>(cropBox_->height) : desc.Height;
+
+            bool sizeChanged = (effectiveW != srcWidth_ || effectiveH != srcHeight_);
+            srcWidth_ = effectiveW;
+            srcHeight_ = effectiveH;
 
             if (sizeChanged || !latestFrame_) {
                 D3D11_TEXTURE2D_DESC copyDesc = desc;
+                // Texture sized to the cropped dimensions; the shader renders from (0,0).
+                copyDesc.Width = effectiveW;
+                copyDesc.Height = effectiveH;
                 copyDesc.MiscFlags = 0;
                 copyDesc.CPUAccessFlags = 0;
                 copyDesc.Usage = D3D11_USAGE_DEFAULT;
@@ -408,7 +422,29 @@ void DxgiPreviewRenderer::PollAndProcessFrames() {
                     continue;
             }
 
-            d3dContext_->CopySubresourceRegion(latestFrame_.Get(), 0, 0, 0, 0, frameTex.Get(), 0, nullptr);
+            if (cropBox_.has_value()) {
+                // Clamp the crop box to the actual frame bounds to prevent out-of-range
+                // D3D11 access if the monitor resolution changed since the box was set.
+                const uint32_t cx = static_cast<uint32_t>(std::max(0, cropBox_->x));
+                const uint32_t cy = static_cast<uint32_t>(std::max(0, cropBox_->y));
+                const uint32_t maxCW = (cx < desc.Width) ? (desc.Width - cx) : 0u;
+                const uint32_t maxCH = (cy < desc.Height) ? (desc.Height - cy) : 0u;
+                const uint32_t cw = std::min(effectiveW, maxCW);
+                const uint32_t ch = std::min(effectiveH, maxCH);
+                if (cw > 0 && ch > 0) {
+                    // Copy only the selected region into the crop-sized latestFrame_.
+                    D3D11_BOX srcBox{};
+                    srcBox.left = cx;
+                    srcBox.top = cy;
+                    srcBox.right = cx + cw;
+                    srcBox.bottom = cy + ch;
+                    srcBox.front = 0;
+                    srcBox.back = 1;
+                    d3dContext_->CopySubresourceRegion(latestFrame_.Get(), 0, 0, 0, 0, frameTex.Get(), 0, &srcBox);
+                }
+            } else {
+                d3dContext_->CopySubresourceRegion(latestFrame_.Get(), 0, 0, 0, 0, frameTex.Get(), 0, nullptr);
+            }
         }
     } catch (...) {
     }

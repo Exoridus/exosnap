@@ -7,7 +7,9 @@
 #include <QWidget>
 
 #include <memory>
+#include <optional>
 
+#include "../../services/PreviewHelpers.h"
 #include <recorder_core/recorder_session.h>
 
 class QLabel;
@@ -38,8 +40,10 @@ class PreviewSurface : public QWidget {
 
     void setLiveFrame(QImage frame);
 
+    // crop_box: optional monitor-relative physical-pixel crop for Region targets.
+    // Pass std::nullopt for Display and Window targets (no crop).
     bool tryStartDxgiPreview(const recorder_core::CaptureTarget& target, uint32_t frame_rate_num,
-                             uint32_t frame_rate_den);
+                             uint32_t frame_rate_den, std::optional<exosnap::PreviewCropBox> crop_box = std::nullopt);
     void stopDxgiPreview();
     [[nodiscard]] bool isDxgiPreviewActive() const noexcept;
     void repositionDxgiPreview();
