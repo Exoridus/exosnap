@@ -139,6 +139,8 @@ qt_add_executable(exosnap WIN32
     models/RecordingProfile.cpp
     models/RecordingPreset.h
     models/RecordingPreset.cpp
+    models/RecordingPresetRegistry.h
+    models/RecordingPresetRegistry.cpp
     models/RecordingProfileRegistry.h
     models/RecordingProfileRegistry.cpp
     models/VideoSettingsModel.h
@@ -150,6 +152,8 @@ qt_add_executable(exosnap WIN32
     models/OutputPathPolicy.cpp
     settings/AppSettingsStore.h
     settings/AppSettingsStore.cpp
+    settings/RecordingPresetStore.h
+    settings/RecordingPresetStore.cpp
     settings/ProfileExchange.h
     settings/ProfileExchange.cpp
     diagnostics/error_message.h
@@ -597,3 +601,25 @@ exosnap_add_gtest(
 )
 target_include_directories(diagnostics_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(diagnostics_page_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME recording_preset_registry_tests
+    TEST_PREFIX preset.
+    SOURCES tests/test_recording_preset_registry.cpp
+            models/RecordingPresetRegistry.cpp
+            models/RecordingPreset.cpp
+            models/OutputSettingsModel.cpp
+    LIBRARIES exosnap_capability recorder_core)
+target_include_directories(recording_preset_registry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(recording_preset_registry_tests PRIVATE ole32.lib shell32.lib)
+
+exosnap_add_gtest(
+    NAME recording_preset_store_tests
+    TEST_PREFIX preset.
+    SOURCES tests/test_recording_preset_store.cpp
+            settings/RecordingPresetStore.cpp
+            models/RecordingPreset.cpp
+            models/OutputSettingsModel.cpp
+    LIBRARIES exosnap_capability recorder_core Qt6::Core)
+target_include_directories(recording_preset_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(recording_preset_store_tests PRIVATE ole32.lib shell32.lib)
