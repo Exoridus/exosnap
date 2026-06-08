@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include "diagnostics/AppLog.h"
+#include "models/RecordingPreset.h"
 #include "pages/AdvancedPage.h"
 #include "pages/ConfigPage.h"
 #include "pages/DiagnosticsPage.h"
@@ -8,7 +9,6 @@
 #include "pages/LogsPage.h"
 #include "pages/RecordPage.h"
 #include "pages/WebcamPage.h"
-#include "settings/ProfileExchange.h"
 #include "ui/chrome/OperationalTitleBar.h"
 #include "ui/chrome/RecordingStatusGuards.h"
 #include "ui/dialogs/AboutOverlay.h"
@@ -216,18 +216,6 @@ static_assert(kDiagnosticsPageIndex >= 0, "Diagnostics page must exist in kPageD
 static_assert(kWebcamPageIndex >= 0, "Webcam page must exist in kPageDescriptors.");
 static_assert(kLogsPageIndex >= 0, "Logs page must exist in kPageDescriptors.");
 
-capability::UserRecorderConfig ProfileToUserConfig(const RecordingProfile& profile) {
-    capability::UserRecorderConfig config;
-    config.container = profile.output.container;
-    config.video_codec = profile.output.video_codec;
-    config.audio_codec = profile.output.audio_codec;
-    config.chroma = capability::ChromaSubsampling::Cs420;
-    config.bit_depth = capability::BitDepth::Bit8;
-    config.frame_rate_num = 60;
-    config.frame_rate_den = 1;
-    return config;
-}
-
 QString PersistedHotkeyString(const QKeySequence& sequence) {
     return sequence.toString(QKeySequence::PortableText).trimmed();
 }
@@ -430,15 +418,28 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         qWarning().noquote() << "MainWindow icon is set but reports no available sizes.";
     setMinimumSize(1120, 700);
 
+    // ---- Load reduced AppSettingsStore (hotkeys + window geometry only) ----
     persisted_settings_ = settings_store_.Load();
-    profile_registry_.LoadState(persisted_settings_.user_profiles, persisted_settings_.modified_builtin_profiles,
-                                persisted_settings_.active_profile);
-    const RecordingProfile active_profile = profile_registry_.ActiveProfile();
-    output_settings_ = active_profile.output;
-    video_settings_ = active_profile.video;
-    persisted_settings_.audio_ui_state = active_profile.audio_ui_state;
-
     restoreHotkeyBindingsFromSettings();
+
+    // ---- Load preset store ----
+    PersistedPresetState loaded_presets = preset_store_.Load();
+    if (loaded_presets.was_reset) {
+        diagnostics::AppLog::warning(QStringLiteral("presets"),
+                                     QStringLiteral("Preset store missing/incompatible — reset to defaults"));
+        preset_store_.Save(loaded_presets.presets, loaded_presets.selected_id, loaded_presets.default_id);
+    }
+    preset_registry_.LoadState(loaded_presets.presets, loaded_presets.selected_id, loaded_presets.default_id);
+    // Startup: boot to the DEFAULT preset.
+    preset_registry_.SetSelected(preset_registry_.DefaultId());
+
+    // Initialize live mirrors from the selected preset.
+    const RecordingPresetConfig& startup_cfg = preset_registry_.SelectedSavedConfig();
+    output_settings_ = startup_cfg.output;
+    video_settings_ = startup_cfg.video;
+    live_audio_ = startup_cfg.audio;
+    live_webcam_ = startup_cfg.webcam;
+
     diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("settings loaded"));
 
     auto* central = new QWidget(this);
@@ -462,7 +463,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     hotkeys_page_->setBindings(persisted_hotkeys_);
     diagnostics_page_ = new DiagnosticsPage(stack_);
     webcam_page_ = new WebcamPage(stack_);
-    webcam_page_->applySettings(persisted_settings_.webcam);
+    webcam_page_->applySettings(live_webcam_);
     stack_->addWidget(record_page_);
     stack_->addWidget(config_page_);
     stack_->addWidget(hotkeys_page_);
@@ -471,15 +472,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     stack_->addWidget(logs_page_);
     advanced_page_ = new AdvancedPage(stack_);
     advanced_page_->setBaseline(output_settings_, video_settings_,
-                                QString::fromStdString(profile_registry_.ActiveProfile().name));
+                                QString::fromStdString(preset_registry_.SelectedPreset().name));
     stack_->addWidget(advanced_page_);
     stack_->addWidget(webcam_page_);
     record_page_->setOutputSettings(output_settings_);
     record_page_->setVideoSettings(video_settings_);
-    record_page_->setWebcamSettings(persisted_settings_.webcam);
-    record_page_->applyPersistedAudioSettings(persisted_settings_.audio_ui_state);
-    config_page_->setAudioUiState(persisted_settings_.audio_ui_state);
-    config_page_->setWebcamSettings(persisted_settings_.webcam);
+    record_page_->setWebcamSettings(live_webcam_);
+    record_page_->applyPersistedAudioSettings(live_audio_);
+    record_page_->setCountdownSeconds(startup_cfg.countdown_seconds);
+    config_page_->setAudioUiState(live_audio_);
+    config_page_->setWebcamSettings(live_webcam_);
     main_layout->addWidget(stack_, 1);
 
     // In-window About surface — a translucent backdrop + centered card overlaid on the
@@ -528,214 +530,136 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { navigateToPage(kSettingsPageIndex); });
     connect(record_page_, &RecordPage::navigateToDiagnosticsPage, this,
             [this]() { navigateToPage(kDiagnosticsPageIndex); });
+    // ---- Format settings changed (from ConfigPage) ----
     connect(config_page_, &ConfigPage::formatSettingsChanged, this, [this](const OutputSettingsModel& settings) {
+        if (applying_preset_)
+            return;
         output_settings_.container = settings.container;
         output_settings_.video_codec = settings.video_codec;
         output_settings_.audio_codec = settings.audio_codec;
         output_settings_.output_folder = settings.output_folder;
         output_settings_.naming_pattern = settings.naming_pattern;
         record_page_->setOutputSettings(output_settings_);
-        profile_registry_.ApplyOutputToActive(output_settings_);
-        persisted_settings_.output = output_settings_;
         if (advanced_page_) {
             advanced_page_->setBaseline(output_settings_, video_settings_,
-                                        QString::fromStdString(profile_registry_.ActiveProfile().name));
+                                        QString::fromStdString(preset_registry_.SelectedPreset().name));
         }
-        persistProfileState();
-        refreshOutputProfileUi();
+        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+        if (config_page_)
+            config_page_->setPresetDirty(dirty);
         refreshDiagnosticsData();
     });
-    connect(config_page_, &ConfigPage::activeProfileChanged, this, [this](const QString& profile_id) {
-        if (syncing_profile_ui_) {
-            return;
-        }
-        profile_registry_.SetActiveProfile(profile_id.toStdString());
-        applyActiveProfileToPages();
-        refreshOutputProfileUi();
-        persistProfileState();
-    });
-    connect(config_page_, &ConfigPage::audioSettingsChanged, this, [this](const capability::AudioUiState& state) {
-        if (record_page_)
-            record_page_->applyPersistedAudioSettings(state);
-        profile_registry_.ApplyAudioToActive(state);
-        persisted_settings_.audio_ui_state = state;
-        persistProfileState();
-        refreshDiagnosticsData();
-    });
-    connect(config_page_, &ConfigPage::newFromCurrentRequested, this, [this](const QString& name) {
-        profile_registry_.CreateUserProfileFromCurrent(name.toStdString());
-        applyActiveProfileToPages();
-        refreshOutputProfileUi();
-        persistProfileState();
-    });
-    connect(config_page_, &ConfigPage::newFromSafeDefaultRequested, this, [this](const QString& name) {
-        profile_registry_.CreateUserProfileFromSafeDefault(name.toStdString());
-        applyActiveProfileToPages();
-        refreshOutputProfileUi();
-        persistProfileState();
-    });
-    connect(config_page_, &ConfigPage::duplicateActiveProfileRequested, this, [this]() {
-        if (profile_registry_.DuplicateActiveProfile()) {
-            applyActiveProfileToPages();
-            refreshOutputProfileUi();
-            persistProfileState();
-        }
-    });
-    connect(config_page_, &ConfigPage::renameActiveProfileRequested, this, [this](const QString& name) {
-        if (profile_registry_.RenameActiveUserProfile(name.toStdString())) {
-            refreshOutputProfileUi();
-            persistProfileState();
-        }
-    });
-    connect(config_page_, &ConfigPage::deleteActiveProfileRequested, this, [this]() {
-        if (profile_registry_.DeleteActiveUserProfile()) {
-            applyActiveProfileToPages();
-            refreshOutputProfileUi();
-            persistProfileState();
-        }
-    });
-    connect(config_page_, &ConfigPage::resetActiveProfileRequested, this, [this]() {
-        if (profile_registry_.ResetActiveProfile()) {
-            applyActiveProfileToPages();
-            refreshOutputProfileUi();
-            persistProfileState();
-        }
-    });
-    connect(config_page_, &ConfigPage::saveModifiedBuiltInAsNewRequested, this, [this](const QString& name) {
-        if (profile_registry_.SaveModifiedBuiltInAsUserProfile(name.toStdString())) {
-            applyActiveProfileToPages();
-            refreshOutputProfileUi();
-            persistProfileState();
-        }
-    });
-    connect(config_page_, &ConfigPage::importProfilesRequested, this, [this](const QString& file_path) {
-        const ProfileImportResult imported = ImportProfilesFromJsonFile(file_path);
-        if (!imported.ok) {
-            QMessageBox::warning(this, QStringLiteral("Import Presets"),
-                                 imported.error_message.isEmpty() ? QStringLiteral("Import failed.")
-                                                                  : imported.error_message);
-            return;
-        }
 
-        const int count = profile_registry_.ImportUserProfiles(imported.profiles);
-        if (count <= 0) {
-            QMessageBox::warning(this, QStringLiteral("Import Presets"),
-                                 QStringLiteral("No presets were imported from the selected file."));
-            return;
-        }
+    // ---- Preset selected (combo changed) ----
+    connect(config_page_, &ConfigPage::presetSelected, this, [this](const QString& id) { onPresetSelected(id); });
 
-        refreshOutputProfileUi();
-        persistProfileState();
-        QMessageBox::information(this, QStringLiteral("Import Presets"),
-                                 QStringLiteral("Imported %1 preset(s).").arg(count));
-    });
-    connect(config_page_, &ConfigPage::exportSelectedProfileRequested, this, [this](const QString& file_path) {
-        QString error_message;
-        const RecordingProfile active_profile = profile_registry_.ActiveProfile();
-        if (!ExportProfilesToJsonFile(file_path, {active_profile}, &error_message)) {
-            QMessageBox::warning(this, QStringLiteral("Export Presets"),
-                                 error_message.isEmpty() ? QStringLiteral("Export failed.") : error_message);
-            return;
-        }
-
-        QMessageBox::information(this, QStringLiteral("Export Presets"), QStringLiteral("Selected preset exported."));
-    });
-    connect(config_page_, &ConfigPage::exportAllUserProfilesRequested, this, [this](const QString& file_path) {
-        const auto& users = profile_registry_.UserProfiles();
-        if (users.empty()) {
-            QMessageBox::warning(this, QStringLiteral("Export Presets"),
-                                 QStringLiteral("No user presets available to export."));
-            return;
-        }
-
-        QString error_message;
-        if (!ExportProfilesToJsonFile(file_path, users, &error_message)) {
-            QMessageBox::warning(this, QStringLiteral("Export Presets"),
-                                 error_message.isEmpty() ? QStringLiteral("Export failed.") : error_message);
-            return;
-        }
-
-        QMessageBox::information(this, QStringLiteral("Export Presets"),
-                                 QStringLiteral("Exported %1 user preset(s).").arg(users.size()));
-    });
-    connect(config_page_, &ConfigPage::resetAllSettingsAndProfilesRequested, this, [this]() {
-        profile_registry_ = RecordingProfileRegistry();
-        output_settings_ = OutputSettingsModel::Defaults();
-        video_settings_ = VideoSettingsModel::Defaults();
-        persisted_settings_ = PersistedAppSettings{};
-        persisted_settings_.output = output_settings_;
-        persisted_settings_.video = video_settings_;
-        persisted_settings_.audio_ui_state = capability::AudioUiState{};
-        persisted_settings_.active_profile.active_profile_id = std::string(kBuiltInProfileMkvH264AacId);
-        persisted_settings_.active_profile.active_profile_modified = false;
-
-        const std::array<QKeySequence, 4> defaults = {
-            QKeySequence(Qt::ALT | Qt::Key_F9),
-            QKeySequence(),
-            QKeySequence(),
-            QKeySequence(),
-        };
-        for (int i = 0; i < static_cast<int>(defaults.size()); ++i) {
-            onHotkeyBindingChanged(i, defaults[static_cast<std::size_t>(i)]);
-        }
-        if (hotkeys_page_) {
-            hotkeys_page_->setBindings(defaults);
-        }
-
-        applyActiveProfileToPages();
-        refreshOutputProfileUi();
-        persistProfileState();
-        QMessageBox::information(this, QStringLiteral("Reset Complete"),
-                                 QStringLiteral("Settings and presets were reset to defaults."));
-    });
+    // ---- Video settings changed ----
     connect(config_page_, &ConfigPage::videoSettingsChanged, this, [this](const VideoSettingsModel& settings) {
+        if (applying_preset_)
+            return;
         video_settings_ = settings;
         record_page_->setVideoSettings(settings);
-        profile_registry_.ApplyVideoToActive(settings);
-        persisted_settings_.video = settings;
         if (advanced_page_) {
             advanced_page_->setBaseline(output_settings_, video_settings_,
-                                        QString::fromStdString(profile_registry_.ActiveProfile().name));
+                                        QString::fromStdString(preset_registry_.SelectedPreset().name));
         }
-        persistProfileState();
+        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+        if (config_page_)
+            config_page_->setPresetDirty(dirty);
         refreshDiagnosticsData();
     });
+
+    // ---- Audio settings changed (from ConfigPage) ----
+    connect(config_page_, &ConfigPage::audioSettingsChanged, this, [this](const capability::AudioUiState& state) {
+        if (applying_preset_)
+            return;
+        live_audio_ = state;
+        if (record_page_)
+            record_page_->applyPersistedAudioSettings(state);
+        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+        if (config_page_)
+            config_page_->setPresetDirty(dirty);
+        refreshDiagnosticsData();
+    });
+
+    // ---- Audio settings changed (from RecordPage) ----
+    connect(record_page_, &RecordPage::audioSettingsChanged, this, [this](const capability::AudioUiState& state) {
+        if (applying_preset_)
+            return;
+        live_audio_ = state;
+        if (config_page_)
+            config_page_->setAudioUiState(state);
+        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+        if (config_page_)
+            config_page_->setPresetDirty(dirty);
+        refreshDiagnosticsData();
+    });
+
+    // ---- Recording config changed (target/region/countdown user action) ----
+    connect(record_page_, &RecordPage::recordingConfigChanged, this, [this]() {
+        if (applying_preset_)
+            return;
+        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+        if (config_page_)
+            config_page_->setPresetDirty(dirty);
+    });
+
+    // ---- Webcam settings changed (from WebcamPage) ----
     connect(webcam_page_, &WebcamPage::settingsChanged, this, [this](const WebcamSettings& settings) {
-        persisted_settings_.webcam = settings;
-        settings_store_.Save(persisted_settings_);
+        if (applying_preset_)
+            return;
+        live_webcam_ = settings;
         record_page_->setWebcamSettings(settings);
         if (config_page_)
             config_page_->setWebcamSettings(settings);
+        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+        if (config_page_)
+            config_page_->setPresetDirty(dirty);
     });
+
+    // ---- Webcam settings changed (from ConfigPage embedded panel) ----
     connect(config_page_, &ConfigPage::webcamSettingsChanged, this, [this](const WebcamSettings& settings) {
-        persisted_settings_.webcam = settings;
-        settings_store_.Save(persisted_settings_);
+        if (applying_preset_)
+            return;
+        live_webcam_ = settings;
         record_page_->setWebcamSettings(settings);
         if (webcam_page_)
             webcam_page_->applySettings(settings);
+        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+        if (config_page_)
+            config_page_->setPresetDirty(dirty);
     });
-    // PiP placement confirmed in the Record preview → persist + propagate to the
-    // Settings/Webcam surfaces (mirror, device, etc. stay in sync).
+
+    // ---- PiP placement confirmed in the Record preview ----
     connect(record_page_, &RecordPage::webcamSettingsChanged, this, [this](const WebcamSettings& settings) {
-        persisted_settings_.webcam = settings;
-        settings_store_.Save(persisted_settings_);
+        if (applying_preset_)
+            return;
+        live_webcam_ = settings;
         if (config_page_)
             config_page_->setWebcamSettings(settings);
         if (webcam_page_)
             webcam_page_->applySettings(settings);
+        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+        if (config_page_)
+            config_page_->setPresetDirty(dirty);
     });
+
+    // ---- Preset management operations ----
+    connect(config_page_, &ConfigPage::savePresetRequested, this, &MainWindow::onSavePreset);
+    connect(config_page_, &ConfigPage::savePresetAsRequested, this, &MainWindow::onSavePresetAs);
+    connect(config_page_, &ConfigPage::newPresetRequested, this, &MainWindow::onNewPreset);
+    connect(config_page_, &ConfigPage::duplicatePresetRequested, this, &MainWindow::onDuplicatePreset);
+    connect(config_page_, &ConfigPage::renamePresetRequested, this, &MainWindow::onRenamePreset);
+    connect(config_page_, &ConfigPage::deletePresetRequested, this, &MainWindow::onDeletePreset);
+    connect(config_page_, &ConfigPage::resetChangesRequested, this, &MainWindow::onResetChanges);
+    connect(config_page_, &ConfigPage::resetToDefaultsRequested, this, &MainWindow::onResetToDefaults);
+    connect(config_page_, &ConfigPage::setDefaultPresetRequested, this, &MainWindow::onSetDefaultPreset);
+
+    // ---- Hotkeys ----
     connect(this, &MainWindow::recordToggleRequested, record_page_, &RecordPage::onHotkeyToggle);
     connect(this, &MainWindow::pauseToggleRequested, record_page_, &RecordPage::onHotkeyPauseToggle);
     connect(hotkeys_page_, &HotkeysPage::bindingChanged, this, &MainWindow::onHotkeyBindingChanged);
     connect(record_page_, &RecordPage::audioMeterLevelsUpdated, config_page_, &ConfigPage::setAudioMeterLevels);
-    connect(record_page_, &RecordPage::audioSettingsChanged, this, [this](const capability::AudioUiState& state) {
-        profile_registry_.ApplyAudioToActive(state);
-        persisted_settings_.audio_ui_state = state;
-        if (config_page_)
-            config_page_->setAudioUiState(state);
-        persistProfileState();
-        refreshDiagnosticsData();
-    });
     connect(config_page_, &ConfigPage::diagnosticsRequested, this, [this]() {
         refreshDiagnosticsData();
         navigateToPage(kDiagnosticsPageIndex);
@@ -766,7 +690,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     }
 
     record_page_->rebroadcastChromeState();
-    applyActiveProfileToPages();
+    // Apply the startup preset config to all pages.
+    applyPresetConfig(startup_cfg);
 
     diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("MainWindow constructed"));
 
@@ -787,7 +712,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("capabilities probed"));
         if (record_page_)
             record_page_->setRuntimeCapabilities(runtime_caps_);
-        refreshOutputProfileUi();
+        refreshPresetUi();
         refreshDiagnosticsData();
     });
 }
@@ -1235,7 +1160,11 @@ void MainWindow::saveWindowGeometry() {
     geo.y = restore_rect.y();
     geo.width = restore_rect.width();
     geo.height = restore_rect.height();
-    settings_store_.Save(persisted_settings_);
+    settings_store_.Save(persisted_settings_); // saves hotkeys + window geometry only
+}
+
+void MainWindow::saveWindowGeometryToSettings() {
+    saveWindowGeometry();
 }
 
 void MainWindow::applyRestoredGeometry() {
@@ -1321,99 +1250,89 @@ void MainWindow::applyTitleBarStatus() {
     title_bar_->setStatusLabel(ui::chrome::ScopeStatusLabelForActivePage(record_status_label_, on_record_page));
 }
 
-void MainWindow::applyActiveProfileToPages() {
-    const RecordingProfile active_profile = profile_registry_.ActiveProfile();
-    output_settings_ = active_profile.output;
-    video_settings_ = active_profile.video;
-    persisted_settings_.audio_ui_state = active_profile.audio_ui_state;
-    persisted_settings_.output = output_settings_;
-    persisted_settings_.video = video_settings_;
+RecordingPresetConfig MainWindow::captureLiveConfig() const {
+    RecordingPresetConfig cfg;
+    if (record_page_)
+        cfg.capture = record_page_->currentCapturePolicy();
+    cfg.output = output_settings_;
+    cfg.video = video_settings_;
+    cfg.audio = live_audio_;
+    cfg.webcam = live_webcam_;
+    cfg.countdown_seconds = record_page_ ? record_page_->countdownSeconds() : 0;
+    return SanitizePresetConfig(cfg);
+}
 
+void MainWindow::applyPresetConfig(const RecordingPresetConfig& cfg) {
+    const RecordingPresetConfig cfg2 = SanitizePresetConfig(cfg);
+    applying_preset_ = true;
+
+    // Stage live mirrors.
+    output_settings_ = cfg2.output;
+    video_settings_ = cfg2.video;
+    live_audio_ = cfg2.audio;
+    live_webcam_ = cfg2.webcam;
+
+    // Push to pages (handlers early-return while applying_preset_).
     if (record_page_) {
-        record_page_->setOutputSettings(output_settings_);
-        record_page_->setVideoSettings(video_settings_);
-        record_page_->setActiveProfileName(active_profile.name);
-        record_page_->applyPersistedAudioSettings(persisted_settings_.audio_ui_state);
+        record_page_->setOutputSettings(cfg2.output);
+        record_page_->setVideoSettings(cfg2.video);
+        record_page_->applyPersistedAudioSettings(cfg2.audio);
+        record_page_->setWebcamSettings(cfg2.webcam);
+        record_page_->applyCapturePolicy(cfg2.capture);
+        record_page_->setCountdownSeconds(cfg2.countdown_seconds);
     }
     if (config_page_) {
-        config_page_->setOutputSettings(output_settings_);
-        config_page_->setVideoSettings(video_settings_);
-        config_page_->setActiveProfileName(QString::fromStdString(active_profile.name));
-        config_page_->setOutputFolder(output_settings_.output_folder);
-        config_page_->setAudioUiState(persisted_settings_.audio_ui_state);
+        config_page_->setOutputSettings(cfg2.output);
+        config_page_->setVideoSettings(cfg2.video);
+        config_page_->setAudioUiState(cfg2.audio);
+        config_page_->setWebcamSettings(cfg2.webcam);
+        config_page_->setOutputFolder(cfg2.output.output_folder);
+        config_page_->setActiveProfileName(QString::fromStdString(preset_registry_.SelectedPreset().name));
     }
     if (advanced_page_) {
-        advanced_page_->setBaseline(output_settings_, video_settings_, QString::fromStdString(active_profile.name));
+        advanced_page_->setBaseline(cfg2.output, cfg2.video,
+                                    QString::fromStdString(preset_registry_.SelectedPreset().name));
     }
+    if (webcam_page_) {
+        webcam_page_->applySettings(cfg2.webcam);
+    }
+
+    applying_preset_ = false;
+
+    // Finalize: recompute dirty and refresh preset UI once.
+    const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+    if (config_page_)
+        config_page_->setPresetDirty(dirty);
+    refreshPresetUi();
     refreshDiagnosticsData();
 }
 
-void MainWindow::refreshOutputProfileUi() {
-    const auto profile_available = [this](const RecordingProfile& profile, QString* reason_out) {
-        if (!runtime_caps_ready_) {
-            if (reason_out) {
-                *reason_out = QString();
-            }
-            return true;
-        }
-
-        capability::SettingsResolver resolver(runtime_caps_);
-        const capability::ResolveResult result = resolver.ValidateConfig(ProfileToUserConfig(profile));
-        if (!result.succeeded) {
-            if (reason_out) {
-                *reason_out = result.invalidity.empty() ? QStringLiteral("Unavailable")
-                                                        : QString::fromStdString(result.invalidity.front().message);
-            }
-            return false;
-        }
-        if (reason_out) {
-            *reason_out = QString();
-        }
-        return true;
-    };
-
+void MainWindow::refreshPresetUi() {
     std::vector<ConfigPage::ProfileOption> options;
-    options.reserve(profile_registry_.BuiltInProfiles().size() + profile_registry_.UserProfiles().size());
+    options.reserve(preset_registry_.Count());
 
-    for (const auto& profile : profile_registry_.BuiltInProfiles()) {
+    for (const auto& preset : preset_registry_.Presets()) {
         ConfigPage::ProfileOption option;
-        option.id = QString::fromStdString(profile.id);
-        option.label = QString::fromStdString(profile.name);
-        option.built_in = true;
-        option.modified = std::any_of(
-            profile_registry_.ModifiedBuiltInProfiles().begin(), profile_registry_.ModifiedBuiltInProfiles().end(),
-            [&profile](const RecordingProfile& modified) { return modified.id == profile.id; });
-        option.available = profile_available(profile, &option.availability_reason);
-        options.push_back(std::move(option));
-    }
-
-    for (const auto& profile : profile_registry_.UserProfiles()) {
-        ConfigPage::ProfileOption option;
-        option.id = QString::fromStdString(profile.id);
-        option.label = QString::fromStdString(profile.name);
+        option.id = QString::fromStdString(preset.id);
+        option.label = QString::fromStdString(preset.name);
         option.built_in = false;
         option.modified = false;
-        option.available = profile_available(profile, &option.availability_reason);
+        option.available = true;
         options.push_back(std::move(option));
     }
 
-    syncing_profile_ui_ = true;
+    const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+    syncing_preset_ui_ = true;
     if (config_page_) {
-        config_page_->setProfileOptions(options,
-                                        QString::fromStdString(profile_registry_.ActiveState().active_profile_id),
-                                        profile_registry_.IsActiveBuiltInModified());
-        config_page_->setActiveProfileName(QString::fromStdString(profile_registry_.ActiveProfile().name));
+        config_page_->setPresetOptions(options, QString::fromStdString(preset_registry_.SelectedId()),
+                                       QString::fromStdString(preset_registry_.DefaultId()), dirty);
+        config_page_->setActiveProfileName(QString::fromStdString(preset_registry_.SelectedPreset().name));
     }
-    syncing_profile_ui_ = false;
+    syncing_preset_ui_ = false;
 }
 
-void MainWindow::persistProfileState() {
-    persisted_settings_.output = output_settings_;
-    persisted_settings_.video = video_settings_;
-    persisted_settings_.user_profiles = profile_registry_.UserProfiles();
-    persisted_settings_.modified_builtin_profiles = profile_registry_.ModifiedBuiltInProfiles();
-    persisted_settings_.active_profile = profile_registry_.ActiveState();
-    settings_store_.Save(persisted_settings_);
+void MainWindow::persistPresetState() {
+    preset_store_.Save(preset_registry_.Presets(), preset_registry_.SelectedId(), preset_registry_.DefaultId());
 }
 
 void MainWindow::restoreHotkeyBindingsFromSettings() {
@@ -1441,7 +1360,7 @@ void MainWindow::onHotkeyBindingChanged(int action_index, QKeySequence seq) {
 
     persisted_hotkeys_[static_cast<std::size_t>(action_index)] = seq;
     persisted_settings_.hotkey_bindings[static_cast<std::size_t>(action_index)] = PersistedHotkeyString(seq);
-    persistProfileState();
+    settings_store_.Save(persisted_settings_);
     refreshDiagnosticsData();
 
 #if defined(Q_OS_WIN)
@@ -1484,10 +1403,114 @@ void MainWindow::refreshDiagnosticsData() {
     if (hotkeys_summary.empty())
         hotkeys_summary = "None configured";
 
-    const RecordingProfile active = profile_registry_.ActiveProfile();
-    diagnostics_page_->setDiagnosticData(runtime_caps_, output_settings_, video_settings_, active.audio_ui_state,
-                                         active.name, hotkeys_summary, settings_store_.SettingsFilePath().toStdString(),
+    const std::string preset_name = preset_registry_.SelectedPreset().name;
+    diagnostics_page_->setDiagnosticData(runtime_caps_, output_settings_, video_settings_, live_audio_, preset_name,
+                                         hotkeys_summary, settings_store_.SettingsFilePath().toStdString(),
                                          hotkeys_registered_);
+}
+
+// ---------------------------------------------------------------------------
+// Stage 2 — Preset operation handlers
+// ---------------------------------------------------------------------------
+
+void MainWindow::onPresetSelected(const QString& id) {
+    if (syncing_preset_ui_)
+        return;
+    if (!record_page_ || !record_page_->canApplyPresetNow()) {
+        // Reject switch during recording — revert the selector.
+        refreshPresetUi();
+        diagnostics::AppLog::warning(QStringLiteral("preset"),
+                                     QStringLiteral("preset switch rejected: recording in progress"));
+        return;
+    }
+    if (!preset_registry_.SetSelected(id.toStdString()))
+        return;
+    applyPresetConfig(preset_registry_.SelectedSavedConfig());
+    persistPresetState();
+}
+
+void MainWindow::onSavePreset() {
+    preset_registry_.SaveSelected(captureLiveConfig());
+    const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+    if (config_page_)
+        config_page_->setPresetDirty(dirty);
+    refreshPresetUi();
+    persistPresetState();
+}
+
+void MainWindow::onSavePresetAs(const QString& name) {
+    preset_registry_.AddPreset(captureLiveConfig(), name.toStdString());
+    const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+    if (config_page_)
+        config_page_->setPresetDirty(dirty);
+    refreshPresetUi();
+    persistPresetState();
+}
+
+void MainWindow::onNewPreset() {
+    preset_registry_.AddDefaultPreset();
+    applyPresetConfig(preset_registry_.SelectedSavedConfig());
+    persistPresetState();
+}
+
+void MainWindow::onDuplicatePreset() {
+    preset_registry_.DuplicateSelected();
+    applyPresetConfig(preset_registry_.SelectedSavedConfig());
+    persistPresetState();
+}
+
+void MainWindow::onRenamePreset(const QString& name) {
+    if (!preset_registry_.RenameSelected(name.toStdString())) {
+        QMessageBox::warning(this, QStringLiteral("Rename Preset"),
+                             QStringLiteral("Could not rename preset. The name may already be in use."));
+        return;
+    }
+    refreshPresetUi();
+    persistPresetState();
+}
+
+void MainWindow::onDeletePreset() {
+    if (!preset_registry_.DeleteSelected()) {
+        QMessageBox::warning(this, QStringLiteral("Delete Preset"), QStringLiteral("Cannot delete the only preset."));
+        return;
+    }
+    applyPresetConfig(preset_registry_.SelectedSavedConfig());
+    refreshPresetUi();
+    persistPresetState();
+}
+
+void MainWindow::onResetChanges() {
+    applyPresetConfig(preset_registry_.SelectedSavedConfig());
+    refreshPresetUi();
+    // No persistence needed (no registry mutation).
+}
+
+void MainWindow::onResetToDefaults() {
+    preset_registry_.ResetAllToDefault();
+    // Also reset hotkeys.
+    const std::array<QKeySequence, 4> defaults = {
+        QKeySequence(Qt::ALT | Qt::Key_F9),
+        QKeySequence(),
+        QKeySequence(),
+        QKeySequence(),
+    };
+    for (int i = 0; i < static_cast<int>(defaults.size()); ++i) {
+        onHotkeyBindingChanged(i, defaults[static_cast<std::size_t>(i)]);
+    }
+    if (hotkeys_page_) {
+        hotkeys_page_->setBindings(defaults);
+    }
+    applyPresetConfig(preset_registry_.SelectedSavedConfig());
+    refreshPresetUi();
+    persistPresetState();
+    QMessageBox::information(this, QStringLiteral("Reset Complete"),
+                             QStringLiteral("Settings and presets were reset to defaults."));
+}
+
+void MainWindow::onSetDefaultPreset() {
+    preset_registry_.SetDefault(preset_registry_.SelectedId());
+    refreshPresetUi();
+    persistPresetState();
 }
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)

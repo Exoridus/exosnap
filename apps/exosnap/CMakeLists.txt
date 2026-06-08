@@ -135,14 +135,10 @@ qt_add_executable(exosnap WIN32
     models/WebcamSettings.h
     models/OutputSettingsModel.h
     models/OutputSettingsModel.cpp
-    models/RecordingProfile.h
-    models/RecordingProfile.cpp
     models/RecordingPreset.h
     models/RecordingPreset.cpp
     models/RecordingPresetRegistry.h
     models/RecordingPresetRegistry.cpp
-    models/RecordingProfileRegistry.h
-    models/RecordingProfileRegistry.cpp
     models/VideoSettingsModel.h
     models/FilenameBuilder.h
     models/FilenameBuilder.cpp
@@ -154,8 +150,6 @@ qt_add_executable(exosnap WIN32
     settings/AppSettingsStore.cpp
     settings/RecordingPresetStore.h
     settings/RecordingPresetStore.cpp
-    settings/ProfileExchange.h
-    settings/ProfileExchange.cpp
     diagnostics/error_message.h
     diagnostics/error_message.cpp
     diagnostics/AppLog.h
@@ -297,8 +291,7 @@ exosnap_add_gtest(
         services/RecordingCoordinator.cpp
         services/WebcamService.cpp
         models/OutputSettingsModel.cpp
-        models/RecordingProfile.cpp
-        models/RecordingProfileRegistry.cpp
+        models/RecordingPreset.cpp
         models/FilenameBuilder.cpp
         models/OutputPathValidator.cpp
         models/OutputPathPolicy.cpp
@@ -314,13 +307,7 @@ exosnap_add_gtest(
     TEST_PREFIX settings.
     SOURCES
         tests/test_app_settings_store.cpp
-        tests/test_profile_exchange.cpp
         settings/AppSettingsStore.cpp
-        settings/ProfileExchange.cpp
-        models/OutputSettingsModel.cpp
-        models/RecordingProfile.cpp
-        models/RecordingProfileRegistry.cpp
-        models/OutputPathPolicy.cpp
     LIBRARIES exosnap_capability recorder_core Qt6::Core
 )
 target_include_directories(app_settings_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -341,19 +328,8 @@ exosnap_add_gtest(
 )
 target_include_directories(diagnostics_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-exosnap_add_gtest(
-    NAME webcam_settings_tests
-    TEST_PREFIX webcam.
-    SOURCES
-        tests/test_webcam_settings.cpp
-        settings/AppSettingsStore.cpp
-        models/OutputSettingsModel.cpp
-        models/RecordingProfile.cpp
-        models/RecordingProfileRegistry.cpp
-        models/OutputPathPolicy.cpp
-    LIBRARIES exosnap_capability recorder_core Qt6::Core
-)
-target_include_directories(webcam_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+# webcam_settings_tests removed: webcam is now persisted via RecordingPresetStore.
+# Coverage of WebcamSettings serialization is maintained by recording_preset_store_tests.
 
 exosnap_add_gtest(
     NAME global_recording_bar_tests
@@ -395,7 +371,7 @@ exosnap_add_gtest(
         models/FilenameBuilder.cpp
         models/OutputPathPolicy.cpp
         models/OutputPathValidator.cpp
-        models/RecordingProfile.cpp
+        models/RecordingPreset.cpp
         services/WebcamService.cpp
         models/OutputSettingsModel.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core

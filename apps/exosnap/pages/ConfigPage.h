@@ -54,6 +54,15 @@ class ConfigPage : public QWidget {
     void setAudioUiState(const capability::AudioUiState& state);
     void setWebcamSettings(const WebcamSettings& settings);
     void setReadinessStatus(const QString& status_label);
+    // New preset contract (Stage 3): replaces setProfileOptions/setActiveProfileName.
+    // options: list of presets (id + label); selected_id: currently selected preset;
+    // default_id: the startup-default preset (shown with a badge); dirty: unsaved changes.
+    void setPresetOptions(const std::vector<ProfileOption>& options, const QString& selected_id,
+                          const QString& default_id, bool dirty);
+    // Lightweight dirty-only update (avoids rebuilding the full combo).
+    void setPresetDirty(bool dirty);
+    // Legacy setter kept for backward compatibility (internally calls setPresetOptions
+    // with empty default_id and dirty=false).
     void setProfileOptions(const std::vector<ProfileOption>& options, const QString& active_profile_id,
                            bool active_profile_modified);
     void setActiveProfileName(const QString& profile_name);
@@ -71,6 +80,9 @@ class ConfigPage : public QWidget {
 
   signals:
     void formatSettingsChanged(const OutputSettingsModel& settings);
+    // New preset-selection signal (replaces activeProfileChanged).
+    void presetSelected(const QString& id);
+    // Keep for backward compatibility only — new code uses presetSelected.
     void activeProfileChanged(const QString& profile_id);
     void videoSettingsChanged(const VideoSettingsModel& settings);
     void audioSettingsChanged(const capability::AudioUiState& state);
@@ -79,6 +91,18 @@ class ConfigPage : public QWidget {
     void webcamDetailsRequested();
     void advancedRequested();
 
+    // ---- New preset management signals (Stage 3) ----
+    void savePresetRequested();
+    void savePresetAsRequested(const QString& name);
+    void newPresetRequested();
+    void duplicatePresetRequested();
+    void renamePresetRequested(const QString& name);
+    void deletePresetRequested();
+    void resetChangesRequested();
+    void resetToDefaultsRequested();
+    void setDefaultPresetRequested();
+
+    // ---- Legacy signals (kept for backward compat during transition) ----
     void newFromCurrentRequested(const QString& name);
     void newFromSafeDefaultRequested(const QString& name);
     void duplicateActiveProfileRequested();
@@ -146,6 +170,17 @@ class ConfigPage : public QWidget {
     void promptCreateProfileFromSafeDefault();
     void promptRenameActiveProfile();
     void promptSaveModifiedBuiltInAsNew();
+    // New preset management handlers.
+    void onSavePreset();
+    void onSavePresetAs();
+    void onNewPreset();
+    void onDuplicatePreset();
+    void onRenamePreset();
+    void onDeletePreset();
+    void onResetChanges();
+    void onResetToDefaults();
+    void onSetDefaultPreset();
+    void updatePresetActionState();
 
     capability::AudioUiState audio_ui_state_;
     WebcamSettings webcam_settings_;
@@ -154,6 +189,9 @@ class ConfigPage : public QWidget {
     VideoSettingsModel video_settings_;
     QString active_profile_name_;
     std::vector<ProfileOption> profile_options_;
+    QString active_preset_id_;
+    QString default_preset_id_;
+    bool preset_dirty_ = false;
 
     QBoxLayout* columns_layout_ = nullptr;
     QBoxLayout* output_split_layout_ = nullptr;
@@ -234,6 +272,16 @@ class ConfigPage : public QWidget {
     bool active_profile_is_built_in_ = true;
     bool active_profile_is_modified_ = false;
     bool active_profile_is_available_ = true;
+    // New preset actions wired to new signals.
+    QAction* save_preset_action_ = nullptr;
+    QAction* save_preset_as_action_ = nullptr;
+    QAction* new_preset_action_ = nullptr;
+    QAction* duplicate_preset_action_ = nullptr;
+    QAction* rename_preset_action_ = nullptr;
+    QAction* delete_preset_action_ = nullptr;
+    QAction* reset_changes_action_ = nullptr;
+    QAction* reset_to_defaults_action_ = nullptr;
+    QAction* set_default_preset_action_ = nullptr;
 
     ui::widgets::WebcamSetupPanel* webcam_setup_panel_ = nullptr;
 

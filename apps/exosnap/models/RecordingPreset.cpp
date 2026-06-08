@@ -411,4 +411,44 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Filename token helpers (moved from RecordingProfile.cpp)
+// ---------------------------------------------------------------------------
+
+std::wstring ContainerToken(capability::Container container) {
+    switch (container) {
+    case capability::Container::Matroska:
+        return L"mkv";
+    case capability::Container::Mp4:
+        return L"mp4";
+    case capability::Container::WebM:
+        return L"webm";
+    }
+    return L"mkv";
+}
+
+std::wstring CodecToken(capability::VideoCodec codec) {
+    switch (codec) {
+    case capability::VideoCodec::H264Nvenc:
+        return L"h264";
+    case capability::VideoCodec::HevcNvenc:
+        return L"hevc";
+    case capability::VideoCodec::Av1Nvenc:
+        return L"av1";
+    }
+    return L"h264";
+}
+
+std::wstring CodecToken(capability::AudioCodec codec) {
+    switch (codec) {
+    case capability::AudioCodec::AacMf:
+        return L"aac";
+    case capability::AudioCodec::Opus:
+        return L"opus";
+    case capability::AudioCodec::Pcm:
+        return L"pcm";
+    }
+    return L"aac";
+}
+
 } // namespace exosnap

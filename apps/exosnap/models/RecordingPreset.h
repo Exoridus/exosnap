@@ -132,4 +132,15 @@ void ReconcileContainerCodecs(OutputSettingsModel& output);
 // Floating-point fields use tolerances (see implementation for details).
 [[nodiscard]] bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPresetConfig& b);
 
+// ---------------------------------------------------------------------------
+// Filename token helpers (previously in RecordingProfile.h)
+// ---------------------------------------------------------------------------
+
+// Returns a short wstring token for use in filename patterns, e.g. "mkv".
+[[nodiscard]] std::wstring ContainerToken(capability::Container container);
+
+// Returns a short wstring token for a video or audio codec, e.g. "h264".
+[[nodiscard]] std::wstring CodecToken(capability::VideoCodec codec);
+[[nodiscard]] std::wstring CodecToken(capability::AudioCodec codec);
+
 } // namespace exosnap
