@@ -318,6 +318,14 @@ bool RecordViewModel::HasResult() const noexcept {
     return state == UiRecordingState::Completed || state == UiRecordingState::Failed;
 }
 
+bool RecordViewModel::HasCompletedRecording() const noexcept {
+    return HasResult() && last_succeeded;
+}
+
+bool RecordViewModel::HasRecentRecordings() const noexcept {
+    return !recent_recordings.isEmpty();
+}
+
 bool RecordViewModel::ShouldShowStats() const noexcept {
     return state == UiRecordingState::Recording || state == UiRecordingState::Paused ||
            state == UiRecordingState::Stopping;
@@ -469,9 +477,31 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
             result_destination_text += L"  ·  ";
             result_destination_text += format_display;
         }
+
+        // Populate CompletedRecording model from effective runtime result
+        CompletedRecording cr;
+        cr.succeeded = true;
+        cr.file_path = QString::fromStdWString(result.output_path);
+        cr.display_name = QString::fromStdWString(p.filename().wstring());
+        cr.file_size_bytes = static_cast<qint64>(result.output_file_bytes);
+        cr.duration_seconds = result.elapsed_seconds;
+        cr.source_width = result.source_width;
+        cr.source_height = result.source_height;
+        cr.output_width = result.output_width;
+        cr.output_height = result.output_height;
+        cr.frame_rate_num = result.frame_rate_num;
+        cr.frame_rate_den = result.frame_rate_den;
+        cr.cfr = result.cfr;
+        cr.container = result.container;
+        cr.video_codec = result.video_codec;
+        cr.audio_codec = result.audio_codec;
+        cr.completed_at = QDateTime::currentDateTime();
+        current_completed_recording = cr;
+        AddToRecentRecordings(cr);
     } else {
         result_stats_text = {};
         result_destination_text = {};
+        current_completed_recording = CompletedRecording{};
     }
 }
 
@@ -730,6 +760,53 @@ std::vector<int> RecordViewModel::SortWindowTargetIndices(const std::vector<reco
     }
 
     return sorted_indices;
+}
+
+// ---------------------------------------------------------------------------
+// Completed recording operations
+// ---------------------------------------------------------------------------
+
+void RecordViewModel::ClearCompletedResult() {
+    current_completed_recording = CompletedRecording{};
+    result_output_path.clear();
+    result_destination_text.clear();
+    result_stats_text.clear();
+    result_output_file_bytes = 0;
+    result_elapsed_seconds = 0.0;
+}
+
+void RecordViewModel::AddToRecentRecordings(const CompletedRecording& recording) {
+    if (!recording.succeeded || recording.file_path.isEmpty())
+        return;
+
+    for (int i = 0; i < recent_recordings.size(); ++i) {
+        if (recent_recordings[i].file_path == recording.file_path) {
+            recent_recordings.removeAt(i);
+            break;
+        }
+    }
+
+    recent_recordings.prepend(recording);
+
+    while (recent_recordings.size() > kMaxRecentRecordings) {
+        recent_recordings.removeLast();
+    }
+}
+
+void RecordViewModel::RemoveFromRecentRecordings(int index) {
+    if (index < 0 || index >= recent_recordings.size())
+        return;
+    recent_recordings.removeAt(index);
+}
+
+void RecordViewModel::UpdateRecentRecording(int index, const CompletedRecording& recording) {
+    if (index < 0 || index >= recent_recordings.size())
+        return;
+    recent_recordings[index] = recording;
+}
+
+void RecordViewModel::ClearRecentRecordings() {
+    recent_recordings.clear();
 }
 
 } // namespace exosnap
