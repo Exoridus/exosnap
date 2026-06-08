@@ -119,6 +119,9 @@ qt_add_executable(exosnap WIN32
     pages/LogsPage.cpp
     pages/AdvancedPage.h
     pages/AdvancedPage.cpp
+    services/DeviceDiscoveryCommon.h
+    services/AudioDeviceNotifier.h
+    services/AudioDeviceNotifier.cpp
     services/PreviewService.h
     services/PreviewService.cpp
     services/PreviewHelpers.h
@@ -635,3 +638,15 @@ exosnap_add_gtest(
     LIBRARIES exosnap_capability recorder_core Qt6::Core)
 target_include_directories(recording_preset_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_preset_store_tests PRIVATE ole32.lib shell32.lib)
+
+exosnap_add_gtest(
+    NAME audio_device_notifier_tests
+    TEST_PREFIX device.
+    SOURCES
+        tests/test_audio_device_notifier.cpp
+        services/AudioDeviceNotifier.cpp
+        diagnostics/AppLog.cpp
+    LIBRARIES Qt6::Core exosnap_capability recorder_core)
+target_include_directories(audio_device_notifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(audio_device_notifier_tests PRIVATE ole32.lib)
+set_target_properties(audio_device_notifier_tests PROPERTIES AUTOMOC ON)

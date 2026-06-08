@@ -38,9 +38,9 @@ std::string WideToUtf8(std::wstring_view value) {
     return converted;
 }
 
-} // namespace
-
-std::vector<AudioInputDeviceInfo> EnumerateAudioInputDevices() {
+// Shared helper: enumerate WASAPI endpoints for a given data flow direction.
+// flow must be eCapture or eRender. Returns {} on any COM failure.
+std::vector<AudioInputDeviceInfo> EnumerateAudioEndpoints(EDataFlow flow) {
     const HRESULT init_hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     const bool should_uninitialize = init_hr == S_OK || init_hr == S_FALSE;
     const bool com_ready = SUCCEEDED(init_hr) || init_hr == RPC_E_CHANGED_MODE;
@@ -60,7 +60,7 @@ std::vector<AudioInputDeviceInfo> EnumerateAudioInputDevices() {
     std::string default_device_id;
     IMMDevice* default_device = nullptr;
     LPWSTR default_id_wide = nullptr;
-    hr = enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &default_device);
+    hr = enumerator->GetDefaultAudioEndpoint(flow, eConsole, &default_device);
     if (SUCCEEDED(hr) && default_device != nullptr) {
         hr = default_device->GetId(&default_id_wide);
         if (SUCCEEDED(hr) && default_id_wide != nullptr) {
@@ -75,7 +75,7 @@ std::vector<AudioInputDeviceInfo> EnumerateAudioInputDevices() {
     }
 
     IMMDeviceCollection* collection = nullptr;
-    hr = enumerator->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &collection);
+    hr = enumerator->EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE, &collection);
     if (FAILED(hr) || collection == nullptr) {
         enumerator->Release();
         if (should_uninitialize) {
@@ -149,6 +149,16 @@ std::vector<AudioInputDeviceInfo> EnumerateAudioInputDevices() {
         CoUninitialize();
     }
     return devices;
+}
+
+} // namespace
+
+std::vector<AudioInputDeviceInfo> EnumerateAudioInputDevices() {
+    return EnumerateAudioEndpoints(eCapture);
+}
+
+std::vector<AudioInputDeviceInfo> EnumerateAudioOutputDevices() {
+    return EnumerateAudioEndpoints(eRender);
 }
 
 } // namespace recorder_core
