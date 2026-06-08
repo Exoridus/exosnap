@@ -17,6 +17,7 @@
 #include "../diagnostics/AppLog.h"
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputPathValidator.h"
+#include "../models/RecordingPreset.h"
 
 namespace exosnap {
 
@@ -204,6 +205,20 @@ static bool PlanRequiresTargetPid(const recorder_core::AudioTrackPlan& plan) {
 }
 
 void ApplyOutputSettingsToRecorderConfig(recorder_core::RecorderConfig& config, const OutputSettingsModel& settings) {
+    config.output_width = 0;
+    config.output_height = 0;
+    config.output_fit = settings.resolution.fit;
+    if (const auto preset_size = PresetOutputSize(settings.resolution.mode)) {
+        config.output_width = preset_size->width;
+        config.output_height = preset_size->height;
+    } else if (settings.resolution.mode == OutputResolutionMode::Custom) {
+        if (const auto custom_size = ResolveRequestedOutputSize(
+                settings.resolution, {settings.resolution.custom_width, settings.resolution.custom_height})) {
+            config.output_width = custom_size->width;
+            config.output_height = custom_size->height;
+        }
+    }
+
     switch (settings.audio_codec) {
     case capability::AudioCodec::Opus:
         config.audio_codec = recorder_core::AudioCodec::Opus;
@@ -213,6 +228,22 @@ void ApplyOutputSettingsToRecorderConfig(recorder_core::RecorderConfig& config, 
     default:
         config.audio_codec = recorder_core::AudioCodec::AacMf;
         return;
+    }
+}
+
+static void ApplyOutputSettingsToUserConfig(capability::UserRecorderConfig& config,
+                                            const OutputSettingsModel& settings) {
+    config.output_width = 0;
+    config.output_height = 0;
+    if (const auto preset_size = PresetOutputSize(settings.resolution.mode)) {
+        config.output_width = preset_size->width;
+        config.output_height = preset_size->height;
+    } else if (settings.resolution.mode == OutputResolutionMode::Custom) {
+        if (const auto custom_size = ResolveRequestedOutputSize(
+                settings.resolution, {settings.resolution.custom_width, settings.resolution.custom_height})) {
+            config.output_width = custom_size->width;
+            config.output_height = custom_size->height;
+        }
     }
 }
 
@@ -449,7 +480,15 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
 
     auto config = exosnap::capability::ToRecorderCoreConfig(resolved_user_config_, caps_);
     config.nvenc_quality_preset = video_settings_.quality;
+    config.frame_rate_num = video_settings_.frame_rate_num;
+    config.frame_rate_den = video_settings_.frame_rate_den;
     config.cfr = video_settings_.cfr;
+    if (config.container == recorder_core::Container::Mp4 && !config.cfr) {
+        diagnostics::AppLog::warning(
+            QStringLiteral("record.reconcile"),
+            QStringLiteral("field=timing requested=VFR effective=CFR reason=\"MP4 mux path is fixed-rate\""));
+        config.cfr = true;
+    }
     config.capture_cursor = video_settings_.capture_cursor;
     ApplyOutputSettingsToRecorderConfig(config, output_settings_);
     config.target = target;
@@ -683,6 +722,17 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
     ui_result.error_detail = ToWide(result.error_detail);
     ui_result.output_file_bytes = result.stats.output_file_bytes;
     ui_result.elapsed_seconds = result.stats.elapsed_seconds;
+    ui_result.source_width = result.stats.source_size.width;
+    ui_result.source_height = result.stats.source_size.height;
+    ui_result.output_width = result.stats.output_size.width;
+    ui_result.output_height = result.stats.output_size.height;
+    ui_result.content_rect = result.stats.content_rect;
+    ui_result.frame_rate_num = result.stats.frame_rate_num;
+    ui_result.frame_rate_den = result.stats.frame_rate_den;
+    ui_result.cfr = result.stats.cfr;
+    ui_result.container = result.stats.container;
+    ui_result.video_codec = result.stats.video_codec;
+    ui_result.audio_codec = result.stats.audio_codec;
 
     if (!result.succeeded) {
         diagnostics::AppLog::error(QStringLiteral("record.failure"),
@@ -721,31 +771,31 @@ std::filesystem::path RecordingCoordinator::CurrentOutputPath() const {
 }
 void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings) {
     output_settings_ = settings;
-    if (output_settings_.container == capability::Container::Mp4) {
-        output_settings_.video_codec = capability::VideoCodec::H264Nvenc;
-        output_settings_.audio_codec = capability::AudioCodec::AacMf;
-    } else if (output_settings_.container == capability::Container::WebM) {
-        output_settings_.video_codec = capability::VideoCodec::Av1Nvenc;
-        output_settings_.audio_codec = capability::AudioCodec::Opus;
-    } else {
-        if (output_settings_.video_codec == capability::VideoCodec::HevcNvenc) {
-            output_settings_.video_codec = capability::VideoCodec::H264Nvenc;
-        }
-        if (output_settings_.video_codec == capability::VideoCodec::H264Nvenc &&
-            output_settings_.audio_codec == capability::AudioCodec::Opus) {
-            output_settings_.audio_codec = capability::AudioCodec::AacMf;
-        }
-        if (output_settings_.audio_codec == capability::AudioCodec::Pcm) {
-            output_settings_.audio_codec = capability::AudioCodec::AacMf;
-        }
+    const OutputSettingsModel requested = output_settings_;
+    ReconcileContainerCodecs(output_settings_);
+    SanitizeOutputResolution(output_settings_.resolution);
+    if (requested.video_codec != output_settings_.video_codec ||
+        requested.audio_codec != output_settings_.audio_codec) {
+        diagnostics::AppLog::warning(QStringLiteral("record.reconcile"),
+                                     QStringLiteral("field=codec container=%1 video=%2 audio=%3")
+                                         .arg(static_cast<int>(output_settings_.container))
+                                         .arg(static_cast<int>(output_settings_.video_codec))
+                                         .arg(static_cast<int>(output_settings_.audio_codec)));
     }
 
     resolved_user_config_.container = output_settings_.container;
     resolved_user_config_.video_codec = output_settings_.video_codec;
     resolved_user_config_.audio_codec = output_settings_.audio_codec;
+    ApplyOutputSettingsToUserConfig(resolved_user_config_, output_settings_);
 }
 void RecordingCoordinator::SetVideoSettings(const VideoSettingsModel& settings) {
     video_settings_ = settings;
+    if (video_settings_.frame_rate_num == 0 || video_settings_.frame_rate_den == 0) {
+        video_settings_.frame_rate_num = 60;
+        video_settings_.frame_rate_den = 1;
+    }
+    resolved_user_config_.frame_rate_num = video_settings_.frame_rate_num;
+    resolved_user_config_.frame_rate_den = video_settings_.frame_rate_den;
 }
 void RecordingCoordinator::SetOutputTargetContext(const FilenameTargetContext& context) {
     output_target_context_ = context;

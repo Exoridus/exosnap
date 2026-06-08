@@ -325,9 +325,14 @@ class RecordPage : public QWidget {
     QLabel* result_technical_label_ = nullptr;
     QFrame* result_technical_separator_ = nullptr;
     std::filesystem::path last_output_folder_;
+    OutputSettingsModel current_output_settings_;
     capability::Container current_container_ = capability::Container::Matroska;
     capability::VideoCodec current_video_codec_ = capability::VideoCodec::H264Nvenc;
     capability::AudioCodec current_audio_codec_ = capability::AudioCodec::AacMf;
+    OutputResolutionSettings current_output_resolution_{};
+    uint32_t current_frame_rate_num_ = 60;
+    uint32_t current_frame_rate_den_ = 1;
+    bool current_cfr_ = true;
     WebcamSettings current_webcam_settings_{};
     std::wstring active_profile_name_;
     float preflight_mic_rms_ = 0.0f;

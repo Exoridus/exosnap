@@ -32,8 +32,10 @@ inline std::string InvalidFieldDisplayName(std::string_view field) {
 }
 
 inline std::string InvalidFieldActionHint(std::string_view field) {
-    if (field == "output_width" || field == "output_height" || field == "frame_rate")
-        return "Adjust this value in Video settings.";
+    if (field == "output_width" || field == "output_height")
+        return "Adjust this value in Output settings.";
+    if (field == "frame_rate")
+        return "Adjust this value in Format & Encoding settings.";
     return "Adjust the selected profile in Output or Video settings.";
 }
 

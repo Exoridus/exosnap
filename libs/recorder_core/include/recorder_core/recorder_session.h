@@ -4,6 +4,7 @@
 
 #include "codec_types.h"
 #include "error_types.h"
+#include "output_geometry.h"
 #include "session_stats.h"
 
 #include <cstdint>
@@ -154,6 +155,13 @@ struct RecorderConfig {
     // When true: CFR scheduler (duplicate/drop frames to hit constant rate).
     // When false: VFR passthrough (WGC timestamps used directly as PTS).
     bool cfr = true;
+
+    // Requested encoded output size. 0x0 means Native: the selected source
+    // dimensions are frozen at session start (after Region crop, when present).
+    // Non-zero values are exact encoder dimensions and must be even.
+    uint32_t output_width = 0;
+    uint32_t output_height = 0;
+    OutputFitMode output_fit = OutputFitMode::Contain;
 
     // Resolved output audio tracks from the APP/MIC/SYS source model.
     // Phase 2 legacy compatibility: empty plan means single audio track.

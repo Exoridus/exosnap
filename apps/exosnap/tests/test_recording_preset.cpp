@@ -50,6 +50,14 @@ TEST(RecordingPreset, DefaultPreset_Container_Video_Audio) {
     EXPECT_EQ(p.config.output.audio_codec, capability::AudioCodec::Opus);
 }
 
+TEST(RecordingPreset, DefaultPreset_OutputResolutionNativeContain) {
+    const RecordingPreset p = MakeDefaultPreset();
+    EXPECT_EQ(p.config.output.resolution.mode, OutputResolutionMode::Native);
+    EXPECT_EQ(p.config.output.resolution.custom_width, 0u);
+    EXPECT_EQ(p.config.output.resolution.custom_height, 0u);
+    EXPECT_EQ(p.config.output.resolution.fit, recorder_core::OutputFitMode::Contain);
+}
+
 TEST(RecordingPreset, DefaultPreset_VideoSettings) {
     const RecordingPreset p = MakeDefaultPreset();
     EXPECT_EQ(p.config.video.quality, recorder_core::NvencQualityPreset::High);
@@ -221,6 +229,50 @@ TEST(RecordingPreset, Sanitize_FrameRateDen0_ResetTo60_1) {
     const RecordingPresetConfig s = SanitizePresetConfig(cfg);
     EXPECT_EQ(s.video.frame_rate_num, 60u);
     EXPECT_EQ(s.video.frame_rate_den, 1u);
+}
+
+TEST(RecordingPreset, Sanitize_FrameRateUnsupported_ResetTo60_1) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.video.frame_rate_num = 47;
+    cfg.video.frame_rate_den = 1;
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_EQ(s.video.frame_rate_num, 60u);
+    EXPECT_EQ(s.video.frame_rate_den, 1u);
+}
+
+TEST(RecordingPreset, Sanitize_FrameRate120Unavailable_ResetTo60_1) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.video.frame_rate_num = 120;
+    cfg.video.frame_rate_den = 1;
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_EQ(s.video.frame_rate_num, 60u);
+    EXPECT_EQ(s.video.frame_rate_den, 1u);
+}
+
+TEST(RecordingPreset, Sanitize_Mp4Vfr_ReconcilesToCfr) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.container = capability::Container::Mp4;
+    cfg.video.cfr = false;
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_TRUE(s.video.cfr);
+}
+
+TEST(RecordingPreset, Sanitize_InvalidCustomResolution_ResetToNative) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.resolution.mode = OutputResolutionMode::Custom;
+    cfg.output.resolution.custom_width = 0;
+    cfg.output.resolution.custom_height = 720;
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_EQ(s.output.resolution.mode, OutputResolutionMode::Native);
+}
+
+TEST(RecordingPreset, DirtyEquivalent_DetectsAndRevertsResolutionChange) {
+    RecordingPresetConfig clean = MakeDefaultPreset().config;
+    RecordingPresetConfig changed = clean;
+    changed.output.resolution.mode = OutputResolutionMode::FHD1080;
+    EXPECT_FALSE(ConfigDirtyEquivalent(clean, changed));
+    changed.output.resolution.mode = OutputResolutionMode::Native;
+    EXPECT_TRUE(ConfigDirtyEquivalent(clean, changed));
 }
 
 // ===========================================================================

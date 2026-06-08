@@ -541,6 +541,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         output_settings_.audio_codec = settings.audio_codec;
         output_settings_.output_folder = settings.output_folder;
         output_settings_.naming_pattern = settings.naming_pattern;
+        output_settings_.resolution = settings.resolution;
         record_page_->setOutputSettings(output_settings_);
         if (advanced_page_) {
             advanced_page_->setBaseline(output_settings_, video_settings_,
@@ -1657,13 +1658,24 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
     output.audio_codec = capability::AudioCodec::Opus;
     output.output_folder = std::filesystem::path(L"C:\\Users\\User\\Videos\\ExoSnap");
     output.naming_pattern = L"visual-test_{datetime}_{title}";
+    output.container = scenario.container;
+    output.video_codec = scenario.video_codec;
+    output.audio_codec = scenario.audio_codec;
+    output.resolution.mode = scenario.output_resolution_mode;
+    if (scenario.output_resolution_mode == OutputResolutionMode::Custom) {
+        output.resolution.custom_width = static_cast<uint32_t>((std::max)(0, scenario.requested_width));
+        output.resolution.custom_height = static_cast<uint32_t>((std::max)(0, scenario.requested_height));
+    }
 
     VideoSettingsModel video;
+    video.frame_rate_num = scenario.frame_rate_num;
+    video.frame_rate_den = scenario.frame_rate_den;
+    video.cfr = scenario.cfr;
     config_page_->setOutputSettings(output);
     config_page_->setVideoSettings(video);
     config_page_->setAudioUiState(VisualAudioStateForSettings(scenario.settings_target));
     config_page_->setReadinessStatus(QStringLiteral("READY"));
-    config_page_->setRecordingControlsLocked(false);
+    config_page_->setRecordingControlsLocked(scenario.controls_locked);
     config_page_->setAudioMeterLevels(0.37f, 0.56f, 0.42f, true, true, true);
 
     // Webcam-card scenarios (mirror off/on, unavailable) drive the embedded panel

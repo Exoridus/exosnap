@@ -25,7 +25,9 @@
 
 #include <cstdio>
 #include <cstring>
+#include <optional>
 #include <sstream>
+#include <vector>
 
 // ============================================================================
 // D3D11 threading contract
@@ -69,6 +71,104 @@ int RectWidth(const RECT& r) noexcept {
 
 int RectHeight(const RECT& r) noexcept {
     return r.bottom - r.top;
+}
+
+struct Win32CursorBitmap {
+    std::vector<uint8_t> bgra;
+    int width = 0;
+    int height = 0;
+    int hotspot_x = 0;
+    int hotspot_y = 0;
+};
+
+bool CaptureWin32CursorBitmap(HCURSOR cursor, Win32CursorBitmap& out) {
+    if (cursor == nullptr) {
+        return false;
+    }
+
+    ICONINFO icon{};
+    if (GetIconInfo(cursor, &icon) == FALSE) {
+        return false;
+    }
+
+    auto cleanup = [&]() {
+        if (icon.hbmColor != nullptr) {
+            DeleteObject(icon.hbmColor);
+        }
+        if (icon.hbmMask != nullptr) {
+            DeleteObject(icon.hbmMask);
+        }
+    };
+
+    BITMAP bitmap{};
+    int width = 0;
+    int height = 0;
+    if (icon.hbmColor != nullptr && GetObjectW(icon.hbmColor, sizeof(bitmap), &bitmap) != 0) {
+        width = bitmap.bmWidth;
+        height = bitmap.bmHeight;
+    } else if (icon.hbmMask != nullptr && GetObjectW(icon.hbmMask, sizeof(bitmap), &bitmap) != 0) {
+        width = bitmap.bmWidth;
+        height = bitmap.bmHeight / 2;
+    }
+
+    if (width <= 0 || height <= 0 || width > 256 || height > 256) {
+        cleanup();
+        return false;
+    }
+
+    BITMAPINFO bmi{};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = width;
+    bmi.bmiHeader.biHeight = -height;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void* bits = nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    if (dc == nullptr) {
+        cleanup();
+        return false;
+    }
+    HBITMAP dib = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (dib == nullptr || bits == nullptr) {
+        if (dib != nullptr) {
+            DeleteObject(dib);
+        }
+        DeleteDC(dc);
+        cleanup();
+        return false;
+    }
+
+    HGDIOBJ old = SelectObject(dc, dib);
+    std::memset(bits, 0, static_cast<size_t>(width) * static_cast<size_t>(height) * 4u);
+    const BOOL drawn = DrawIconEx(dc, 0, 0, cursor, width, height, 0, nullptr, DI_NORMAL);
+    if (old != nullptr) {
+        SelectObject(dc, old);
+    }
+
+    if (drawn != FALSE) {
+        out.width = width;
+        out.height = height;
+        out.hotspot_x = static_cast<int>(icon.xHotspot);
+        out.hotspot_y = static_cast<int>(icon.yHotspot);
+        out.bgra.assign(static_cast<const uint8_t*>(bits),
+                        static_cast<const uint8_t*>(bits) + static_cast<size_t>(width) * height * 4u);
+    }
+
+    DeleteObject(dib);
+    DeleteDC(dc);
+    cleanup();
+    return drawn != FALSE;
+}
+
+int ScaleCoordinateToSource(LONG screen_delta, int source_pixels, int bounds_pixels) noexcept {
+    if (bounds_pixels <= 0 || source_pixels <= 0) {
+        return static_cast<int>(screen_delta);
+    }
+    const int64_t numerator = static_cast<int64_t>(screen_delta) * source_pixels;
+    const int64_t rounded = numerator >= 0 ? numerator + bounds_pixels / 2 : numerator - bounds_pixels / 2;
+    return static_cast<int>(rounded / bounds_pixels);
 }
 
 } // namespace
@@ -296,14 +396,25 @@ void VideoThread::Run() {
     uint32_t sourceWidth = static_cast<uint32_t>(sourceWidthSigned);
     uint32_t sourceHeight = static_cast<uint32_t>(sourceHeightSigned);
 
+    RECT wgcCursorBounds = windowRect;
+    if (target.kind == CaptureTarget::Kind::Window) {
+        RECT extendedFrameBounds{};
+        if (SUCCEEDED(DwmGetWindowAttribute(targetHwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &extendedFrameBounds,
+                                            sizeof(extendedFrameBounds))) &&
+            RectWidth(extendedFrameBounds) > 0 && RectHeight(extendedFrameBounds) > 0) {
+            wgcCursorBounds = extendedFrameBounds;
+        }
+    }
+
     // Determine crop region in monitor-local pixel coordinates.
     // CaptureRegion uses virtual-screen coordinates; subtract the monitor origin.
     bool hasCrop = false;
+    const bool cropRequested = m_state.config.crop_region.has_value() && target.kind == CaptureTarget::Kind::Monitor;
     int32_t cropX = 0, cropY = 0;
     int32_t cropW = static_cast<int32_t>(sourceWidth);
     int32_t cropH = static_cast<int32_t>(sourceHeight);
 
-    if (m_state.config.crop_region.has_value() && target.kind == CaptureTarget::Kind::Monitor) {
+    if (cropRequested) {
         const auto& region = *m_state.config.crop_region;
         HMONITOR hmon = reinterpret_cast<HMONITOR>(target.native_id);
         MONITORINFO mi{};
@@ -330,12 +441,29 @@ void VideoThread::Run() {
         }
     }
 
-    uint32_t encodeWidth = hasCrop ? (static_cast<uint32_t>(cropW) & ~1u) : (sourceWidth & ~1u);
-    uint32_t encodeHeight = hasCrop ? (static_cast<uint32_t>(cropH) & ~1u) : (sourceHeight & ~1u);
+    if (cropRequested && !hasCrop) {
+        std::ostringstream err;
+        err << "requested Region is outside the selected monitor or too small after clamping; preInit={" << diag.str()
+            << "}";
+        m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
+        if (com_inited && hr != RPC_E_CHANGED_MODE)
+            CoUninitialize();
+        return;
+    }
+
+    const uint32_t sourceContentWidth = hasCrop ? static_cast<uint32_t>(cropW) : sourceWidth;
+    const uint32_t sourceContentHeight = hasCrop ? static_cast<uint32_t>(cropH) : sourceHeight;
+    const bool fixedOutputRequested = m_state.config.output_width != 0 || m_state.config.output_height != 0;
+    uint32_t encodeWidth =
+        fixedOutputRequested ? m_state.config.output_width : AlignOutputDimensionEven(sourceContentWidth);
+    uint32_t encodeHeight =
+        fixedOutputRequested ? m_state.config.output_height : AlignOutputDimensionEven(sourceContentHeight);
 
     const bool dimsZero = (encodeWidth == 0 || encodeHeight == 0);
     const bool dimsEven = ((encodeWidth % 2u) == 0u) && ((encodeHeight % 2u) == 0u);
-    diag << ", encodeSize=" << encodeWidth << "x" << encodeHeight << ", encode.dimsZero=" << BoolText(dimsZero)
+    diag << ", sourceContentSize=" << sourceContentWidth << "x" << sourceContentHeight
+         << ", requestedOutputSize=" << m_state.config.output_width << "x" << m_state.config.output_height
+         << ", encodeSize=" << encodeWidth << "x" << encodeHeight << ", encode.dimsZero=" << BoolText(dimsZero)
          << ", encode.evenAligned=" << BoolText(dimsEven)
          << ", firstFrameTexture=unavailable_pre_init, firstFrameTextureFormat=unavailable_pre_init";
 
@@ -349,10 +477,32 @@ void VideoThread::Run() {
         return;
     }
 
+    const std::optional<OutputGeometry> outputGeometry =
+        ResolveOutputGeometry({sourceContentWidth, sourceContentHeight}, {encodeWidth, encodeHeight});
+    if (!outputGeometry.has_value()) {
+        std::ostringstream err;
+        err << "output geometry invalid for source " << sourceContentWidth << "x" << sourceContentHeight
+            << " and output " << encodeWidth << "x" << encodeHeight << "; preInit={" << diag.str() << "}";
+        m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
+        if (com_inited && hr != RPC_E_CHANGED_MODE)
+            CoUninitialize();
+        return;
+    }
+    const ContentRect contentRect = outputGeometry->content;
+
     {
         std::lock_guard lk(m_state.stats_mutex);
         m_state.encode_width = encodeWidth;
         m_state.encode_height = encodeHeight;
+        m_state.stats.source_size = {sourceContentWidth, sourceContentHeight};
+        m_state.stats.output_size = {encodeWidth, encodeHeight};
+        m_state.stats.content_rect = contentRect;
+        m_state.stats.frame_rate_num = m_state.config.frame_rate_num;
+        m_state.stats.frame_rate_den = m_state.config.frame_rate_den;
+        m_state.stats.cfr = m_state.config.cfr;
+        m_state.stats.container = m_state.config.container;
+        m_state.stats.video_codec = m_state.config.video_codec;
+        m_state.stats.audio_codec = m_state.config.audio_codec;
     }
 
     // --- NVENC encoder ---
@@ -413,9 +563,8 @@ void VideoThread::Run() {
         // Video processor enumerator (shared across all slots)
         D3D11_VIDEO_PROCESSOR_CONTENT_DESC contentDesc{};
         contentDesc.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
-        // For crop: InputWidth/Height = full monitor source so the source rect is valid.
-        contentDesc.InputWidth = hasCrop ? sourceWidth : encodeWidth;
-        contentDesc.InputHeight = hasCrop ? sourceHeight : encodeHeight;
+        contentDesc.InputWidth = sourceWidth;
+        contentDesc.InputHeight = sourceHeight;
         contentDesc.OutputWidth = encodeWidth;
         contentDesc.OutputHeight = encodeHeight;
         contentDesc.Usage = D3D11_VIDEO_USAGE_OPTIMAL_SPEED;
@@ -489,14 +638,24 @@ void VideoThread::Run() {
         }
     }
 
-    // Apply crop source/destination rects on the video processor.
-    // These are stream state that persists until changed, so set once before the loop.
-    if (hasCrop) {
-        const RECT srcRect = {static_cast<LONG>(cropX), static_cast<LONG>(cropY),
-                              static_cast<LONG>(cropX + static_cast<int32_t>(encodeWidth)),
-                              static_cast<LONG>(cropY + static_cast<int32_t>(encodeHeight))};
+    // Apply source crop, contain-fit destination, and black letterbox bars once.
+    // VideoProcessorBlt handles BGRA->NV12 conversion and GPU scaling.
+    {
+        D3D11_VIDEO_COLOR background{};
+        background.RGBA.A = 1.0f;
+        videoContext->VideoProcessorSetOutputBackgroundColor(videoProcessor.get(), FALSE, &background);
+
+        const RECT targetRect = {0, 0, static_cast<LONG>(encodeWidth), static_cast<LONG>(encodeHeight)};
+        videoContext->VideoProcessorSetOutputTargetRect(videoProcessor.get(), TRUE, &targetRect);
+
+        const RECT srcRect = {static_cast<LONG>(hasCrop ? cropX : 0), static_cast<LONG>(hasCrop ? cropY : 0),
+                              static_cast<LONG>((hasCrop ? cropX : 0) + static_cast<int32_t>(sourceContentWidth)),
+                              static_cast<LONG>((hasCrop ? cropY : 0) + static_cast<int32_t>(sourceContentHeight))};
         videoContext->VideoProcessorSetStreamSourceRect(videoProcessor.get(), 0, TRUE, &srcRect);
-        const RECT dstRect = {0, 0, static_cast<LONG>(encodeWidth), static_cast<LONG>(encodeHeight)};
+
+        const RECT dstRect = {static_cast<LONG>(contentRect.x), static_cast<LONG>(contentRect.y),
+                              static_cast<LONG>(contentRect.x + contentRect.width),
+                              static_cast<LONG>(contentRect.y + contentRect.height)};
         videoContext->VideoProcessorSetStreamDestRect(videoProcessor.get(), 0, TRUE, &dstRect);
     }
 
@@ -513,6 +672,9 @@ void VideoThread::Run() {
     DXGI_OUTDUPL_POINTER_SHAPE_INFO odCursorShapeInfo{};
     std::vector<uint8_t> odCursorBitmap;
     std::vector<uint8_t> odCursorUploadBgra;
+    HCURSOR wgcCursorHandle = nullptr;
+    Win32CursorBitmap wgcCursorBitmap;
+    std::vector<uint8_t> wgcCursorUploadBgra;
 
     if (useOdCapture) {
         {
@@ -540,10 +702,10 @@ void VideoThread::Run() {
     }
 
     // --- GPU compositing resources ---
-    // OD compositing operates on the full monitor texture; VideoProcessorBlt applies
-    // the crop rect afterwards. WGC compositing operates on the encode-sized frame.
+    // OD and WGC compositing operate in source coordinates. VideoProcessorBlt then
+    // applies crop, contain-fit scaling, letterbox background, and BGRA->NV12.
     const bool webcamProviderAvailable = (m_state.config.webcam.frame_provider != nullptr);
-    const bool needsGpuCompositor = webcamProviderAvailable || (useOdCapture && m_state.config.capture_cursor);
+    const bool needsGpuCompositor = webcamProviderAvailable || m_state.config.capture_cursor;
     const uint32_t compositorWidth = sourceWidth;
     const uint32_t compositorHeight = sourceHeight;
 
@@ -571,8 +733,8 @@ void VideoThread::Run() {
 
         const int contentX = (useOdCapture && hasCrop) ? cropX : 0;
         const int contentY = (useOdCapture && hasCrop) ? cropY : 0;
-        return MapWebcamPlacementToContent(placement, contentX, contentY, static_cast<int>(encodeWidth),
-                                           static_cast<int>(encodeHeight));
+        return MapWebcamPlacementToContent(placement, contentX, contentY, static_cast<int>(sourceContentWidth),
+                                           static_cast<int>(sourceContentHeight));
     };
 
     auto drawWebcamGpu = [&](const WebcamOverlayLive& overlay) -> bool {
@@ -682,6 +844,89 @@ void VideoThread::Run() {
         return true;
     };
 
+    auto drawWin32CursorGpu = [&]() -> bool {
+        if (useOdCapture || !m_state.config.capture_cursor) {
+            return true;
+        }
+
+        CURSORINFO cursorInfo{};
+        cursorInfo.cbSize = sizeof(cursorInfo);
+        if (GetCursorInfo(&cursorInfo) == FALSE || (cursorInfo.flags & CURSOR_SHOWING) == 0 ||
+            cursorInfo.hCursor == nullptr) {
+            return true;
+        }
+
+        if (cursorInfo.hCursor != wgcCursorHandle || wgcCursorBitmap.bgra.empty()) {
+            Win32CursorBitmap next;
+            if (!CaptureWin32CursorBitmap(cursorInfo.hCursor, next)) {
+                return true;
+            }
+            wgcCursorHandle = cursorInfo.hCursor;
+            wgcCursorBitmap = std::move(next);
+        }
+
+        const int boundsW = RectWidth(wgcCursorBounds);
+        const int boundsH = RectHeight(wgcCursorBounds);
+        if (boundsW <= 0 || boundsH <= 0) {
+            return true;
+        }
+
+        int32_t cx = ScaleCoordinateToSource(cursorInfo.ptScreenPos.x - wgcCursorBounds.left,
+                                             static_cast<int>(sourceWidth), boundsW) -
+                     wgcCursorBitmap.hotspot_x;
+        int32_t cy = ScaleCoordinateToSource(cursorInfo.ptScreenPos.y - wgcCursorBounds.top,
+                                             static_cast<int>(sourceHeight), boundsH) -
+                     wgcCursorBitmap.hotspot_y;
+        int32_t cw = wgcCursorBitmap.width;
+        int32_t ch = wgcCursorBitmap.height;
+
+        int32_t bitmapOffX = 0;
+        int32_t bitmapOffY = 0;
+        if (cx < 0) {
+            bitmapOffX = -cx;
+            cw += cx;
+            cx = 0;
+        }
+        if (cy < 0) {
+            bitmapOffY = -cy;
+            ch += cy;
+            cy = 0;
+        }
+
+        const int32_t targetW = static_cast<int32_t>(sourceWidth);
+        const int32_t targetH = static_cast<int32_t>(sourceHeight);
+        const int32_t maxW = targetW - cx;
+        const int32_t maxH = targetH - cy;
+        if (cw > maxW)
+            cw = maxW;
+        if (ch > maxH)
+            ch = maxH;
+        if (cw <= 0 || ch <= 0 || cw > 256 || ch > 256) {
+            return true;
+        }
+
+        wgcCursorUploadBgra.resize(static_cast<size_t>(cw) * ch * 4);
+        for (int32_t row = 0; row < ch; ++row) {
+            const size_t srcOff = (static_cast<size_t>(bitmapOffY + row) * wgcCursorBitmap.width + bitmapOffX) * 4u;
+            const uint8_t* srcRow = wgcCursorBitmap.bgra.data() + srcOff;
+            uint8_t* dstRow = wgcCursorUploadBgra.data() + static_cast<size_t>(row) * cw * 4u;
+            std::memcpy(dstRow, srcRow, static_cast<size_t>(cw) * 4u);
+        }
+
+        WebcamPixelRect rect;
+        rect.x = cx;
+        rect.y = cy;
+        rect.w = cw;
+        rect.h = ch;
+
+        std::string compErr;
+        if (!gpuCompositor.DrawCursor(wgcCursorUploadBgra.data(), cw, ch, rect, compErr)) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoCapture, "GPU WGC cursor composite: " + compErr);
+            return false;
+        }
+        return true;
+    };
+
     auto compositeFrameGpu = [&](ID3D11Texture2D* source, const WebcamOverlayLive& overlay) -> ID3D11Texture2D* {
         if (!gpuCompositorReady || source == nullptr) {
             return source;
@@ -689,7 +934,7 @@ void VideoThread::Run() {
 
         const bool webcamActive = overlay.enabled && webcamProviderAvailable;
         const bool cursorActive =
-            useOdCapture && m_state.config.capture_cursor && odCursorVisible && odCursorShapeValid;
+            m_state.config.capture_cursor && (!useOdCapture || (odCursorVisible && odCursorShapeValid));
         if (!webcamActive && !cursorActive) {
             return source;
         }
@@ -703,6 +948,9 @@ void VideoThread::Run() {
             return nullptr;
         }
         if (!drawCursorGpu()) {
+            return nullptr;
+        }
+        if (!drawWin32CursorGpu()) {
             return nullptr;
         }
         return gpuCompositor.Result();
@@ -727,7 +975,10 @@ void VideoThread::Run() {
 
             captureSession = framePool.CreateCaptureSession(item);
             captureSession.IsBorderRequired(false);
-            captureSession.IsCursorCaptureEnabled(m_state.config.capture_cursor);
+            // WGC's built-in cursor would be baked into the source frame before
+            // webcam composition. Draw it manually through the GPU compositor so
+            // cursor z-order matches DXGI Output Duplication.
+            captureSession.IsCursorCaptureEnabled(false);
             captureSession.StartCapture();
 
             closedToken = item.Closed([&sourceLost](const auto&, const auto&) { sourceLost = true; });
@@ -835,6 +1086,7 @@ void VideoThread::Run() {
     uint64_t lastVideoPts = 0;
     uint64_t videoFramesCaptured = 0;
     uint64_t droppedFrames = 0;
+    uint64_t duplicatedFrames = 0;
     uint64_t slotStallCount = 0;
 
     // CFR timing constants (computed once; valid for both paths)
@@ -911,6 +1163,8 @@ void VideoThread::Run() {
         {
             std::lock_guard slk(m_state.stats_mutex);
             m_state.stats.video_frames_captured = videoFramesCaptured;
+            m_state.stats.duplicated_video_frames = duplicatedFrames;
+            m_state.stats.dropped_or_skipped_video_frames = droppedFrames + slotStallCount;
             m_state.stats.encoded_video_packets++;
             m_state.stats.video_bytes += pkt_bytes_count;
         }
@@ -1010,6 +1264,17 @@ void VideoThread::Run() {
                             surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
                         winrt::com_ptr<ID3D11Texture2D> tex;
                         if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
+                            D3D11_TEXTURE2D_DESC frameDesc{};
+                            tex->GetDesc(&frameDesc);
+                            if (frameDesc.Width != sourceWidth || frameDesc.Height != sourceHeight) {
+                                std::ostringstream err;
+                                err << "capture source size changed during session from " << sourceWidth << "x"
+                                    << sourceHeight << " to " << frameDesc.Width << "x" << frameDesc.Height
+                                    << "; restart recording to reconfigure encoder";
+                                m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
+                                sourceLost = true;
+                                break;
+                            }
                             if (pendingWgcTex != nullptr)
                                 ++droppedFrames;
                             pendingWgcTex = tex;
@@ -1116,6 +1381,7 @@ void VideoThread::Run() {
                     // Duplicate: copy reference NV12 into this slot
                     d3dContext->CopyResource(nv12Textures[slot].get(), refNv12.get());
                     frameWritten = true;
+                    ++duplicatedFrames;
                 }
 
                 if (!frameWritten) {
@@ -1235,6 +1501,17 @@ void VideoThread::Run() {
                             surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
                         winrt::com_ptr<ID3D11Texture2D> tex;
                         if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
+                            D3D11_TEXTURE2D_DESC frameDesc{};
+                            tex->GetDesc(&frameDesc);
+                            if (frameDesc.Width != sourceWidth || frameDesc.Height != sourceHeight) {
+                                std::ostringstream err;
+                                err << "capture source size changed during session from " << sourceWidth << "x"
+                                    << sourceHeight << " to " << frameDesc.Width << "x" << frameDesc.Height
+                                    << "; restart recording to reconfigure encoder";
+                                m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
+                                sourceLost = true;
+                                break;
+                            }
                             if (latestTex != nullptr)
                                 ++droppedFrames;
                             latestTex = tex;
@@ -1273,6 +1550,9 @@ void VideoThread::Run() {
                 if (deltaTicks < 0)
                     deltaTicks = 0;
                 uint64_t framePts_ns = static_cast<uint64_t>(deltaTicks) * 100ULL;
+                if (videoFramesCaptured > 0 && framePts_ns <= lastVideoPts) {
+                    framePts_ns = lastVideoPts + 1;
+                }
                 lastVideoPts = framePts_ns;
 
                 // Acquire a free input slot
@@ -1437,6 +1717,7 @@ end_encode_loop:
     {
         std::lock_guard lk(m_state.stats_mutex);
         m_state.stats.video_frames_captured = videoFramesCaptured;
+        m_state.stats.duplicated_video_frames = duplicatedFrames;
         m_state.stats.dropped_or_skipped_video_frames = droppedFrames + slotStallCount;
         m_state.stats.video_duration_ns = lastVideoPts;
     }

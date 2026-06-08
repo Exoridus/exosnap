@@ -52,6 +52,7 @@ RecordingPreset MakeRegionPreset() {
     p.config.capture.region.width = 1280;
     p.config.capture.region.height = 720;
     p.config.capture.region_display_key = "monitor-0";
+    p.config.output.resolution.mode = OutputResolutionMode::FHD1080;
     return p;
 }
 
@@ -154,12 +155,39 @@ TEST(RecordingPresetStore, RoundTrip_3Presets_AllFieldsPreserved) {
 // Frame rate persists
 // ===========================================================================
 
-TEST(RecordingPresetStore, FrameRatePersists_120fps) {
+TEST(RecordingPresetStore, FrameRatePersists_50fps) {
     const QString path = UniqueTempPath();
 
     RecordingPreset p;
     p.id = GeneratePresetId();
-    p.name = "120fps Preset";
+    p.name = "50fps Preset";
+    p.config = MakeDefaultPreset().config;
+    p.config.video.frame_rate_num = 50;
+    p.config.video.frame_rate_den = 1;
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.video.frame_rate_num, 50u);
+        EXPECT_EQ(state.presets[0].config.video.frame_rate_den, 1u);
+    }
+
+    CleanupFile(path);
+}
+
+TEST(RecordingPresetStore, FrameRate120Unavailable_ResetsTo60fps) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Unavailable 120fps Preset";
     p.config = MakeDefaultPreset().config;
     p.config.video.frame_rate_num = 120;
     p.config.video.frame_rate_den = 1;
@@ -174,8 +202,38 @@ TEST(RecordingPresetStore, FrameRatePersists_120fps) {
         const PersistedPresetState state = store.Load();
         EXPECT_FALSE(state.was_reset);
         ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.video.frame_rate_num, 120u);
+        EXPECT_EQ(state.presets[0].config.video.frame_rate_num, 60u);
         EXPECT_EQ(state.presets[0].config.video.frame_rate_den, 1u);
+    }
+
+    CleanupFile(path);
+}
+
+TEST(RecordingPresetStore, OutputResolutionPersists_1440p) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "1440p Preset";
+    p.config = MakeDefaultPreset().config;
+    p.config.output.resolution.mode = OutputResolutionMode::QHD1440;
+    p.config.video.frame_rate_num = 30;
+    p.config.video.frame_rate_den = 1;
+    p.config.video.cfr = false;
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.output.resolution.mode, OutputResolutionMode::QHD1440);
+        EXPECT_EQ(state.presets[0].config.video.frame_rate_num, 30u);
+        EXPECT_FALSE(state.presets[0].config.video.cfr);
     }
 
     CleanupFile(path);

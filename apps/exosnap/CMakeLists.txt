@@ -228,7 +228,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         SOURCES
             tests/test_visual_scenarios.cpp
             visual_tests/VisualScenario.cpp
-        LIBRARIES Qt6::Core recorder_core
+        LIBRARIES Qt6::Core exosnap_capability recorder_core
     )
     target_include_directories(visual_scenario_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(visual_scenario_tests PRIVATE EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
@@ -452,7 +452,7 @@ exosnap_add_gtest(
         pages/LogsPage.cpp
         diagnostics/AppLog.cpp
         ui/widgets/SectionRuleHeader.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
 )
 target_include_directories(logs_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(logs_page_tests PRIVATE EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)

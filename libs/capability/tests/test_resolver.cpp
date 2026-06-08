@@ -36,6 +36,21 @@ TEST(SettingsResolverTest, ValidateDefaultConfigSucceedsWithoutAdjustments) {
     EXPECT_TRUE(result.invalidity.empty());
 }
 
+TEST(SettingsResolverTest, ValidateHalfSpecifiedOutputSizeFails) {
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+    const SettingsResolver resolver(caps);
+
+    UserRecorderConfig config;
+    config.output_width = 1920;
+    config.output_height = 0;
+
+    const ResolveResult result = resolver.ValidateConfig(config);
+
+    EXPECT_FALSE(result.succeeded);
+    ASSERT_FALSE(result.invalidity.empty());
+    EXPECT_EQ(result.invalidity.front().field, "output_height");
+}
+
 TEST(SettingsResolverTest, ContainerChangeToWebMSucceedsWithOpusAndAv1) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
     const SettingsResolver resolver(caps);

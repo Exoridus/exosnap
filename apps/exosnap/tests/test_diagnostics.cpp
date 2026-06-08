@@ -275,9 +275,9 @@ TEST(DiagnosticsPresentationTest, InvalidFieldMappings_ReturnExpectedDisplayName
     EXPECT_EQ(InvalidFieldDisplayName("config"), "Setting combination");
     EXPECT_EQ(InvalidFieldDisplayName("unknown_field"), "Configuration");
 
-    EXPECT_EQ(InvalidFieldActionHint("frame_rate"), "Adjust this value in Video settings.");
-    EXPECT_EQ(InvalidFieldActionHint("output_width"), "Adjust this value in Video settings.");
-    EXPECT_EQ(InvalidFieldActionHint("output_height"), "Adjust this value in Video settings.");
+    EXPECT_EQ(InvalidFieldActionHint("frame_rate"), "Adjust this value in Format & Encoding settings.");
+    EXPECT_EQ(InvalidFieldActionHint("output_width"), "Adjust this value in Output settings.");
+    EXPECT_EQ(InvalidFieldActionHint("output_height"), "Adjust this value in Output settings.");
     EXPECT_EQ(InvalidFieldActionHint("video_codec"), "Adjust the selected profile in Output or Video settings.");
 }
 
@@ -294,7 +294,8 @@ TEST(DiagnosticsPresentationTest, ResolverInvalidityField_MapsToSpecificFrameRat
     ASSERT_FALSE(result.invalidity.empty());
     EXPECT_EQ(result.invalidity.front().field, "frame_rate");
     EXPECT_EQ(InvalidFieldDisplayName(result.invalidity.front().field), "Frame rate");
-    EXPECT_EQ(InvalidFieldActionHint(result.invalidity.front().field), "Adjust this value in Video settings.");
+    EXPECT_EQ(InvalidFieldActionHint(result.invalidity.front().field),
+              "Adjust this value in Format & Encoding settings.");
 }
 
 TEST(DiagnosticsPresentationTest, BuildTopIssueRecommendations_BlockerFirstAndRec006SuppressedWhenInvalidityExists) {

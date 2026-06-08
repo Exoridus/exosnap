@@ -2,6 +2,8 @@
 
 #include <capability/config_types.h>
 
+#include <sstream>
+
 namespace exosnap::diagnostics {
 
 namespace {
@@ -84,19 +86,60 @@ std::string NvencQualityName(recorder_core::NvencQualityPreset q) {
     return "Balanced";
 }
 
+std::string ResolutionName(const OutputResolutionSettings& resolution) {
+    if (resolution.mode == OutputResolutionMode::Custom && resolution.custom_width > 0 &&
+        resolution.custom_height > 0) {
+        return std::to_string(resolution.custom_width) + "x" + std::to_string(resolution.custom_height);
+    }
+    switch (resolution.mode) {
+    case OutputResolutionMode::Native:
+        return "Native";
+    case OutputResolutionMode::UHD2160:
+        return "4K";
+    case OutputResolutionMode::QHD1440:
+        return "1440p";
+    case OutputResolutionMode::FHD1080:
+        return "1080p";
+    case OutputResolutionMode::HD720:
+        return "720p";
+    case OutputResolutionMode::Custom:
+        return "Custom";
+    }
+    return "Native";
+}
+
+std::string FrameRateName(uint32_t num, uint32_t den) {
+    if (num == 0 || den == 0) {
+        return "60";
+    }
+    if (den == 1) {
+        return std::to_string(num);
+    }
+    return std::to_string(num) + "/" + std::to_string(den);
+}
+
 } // namespace
 
 capability::UserRecorderConfig UserConfigFromSettings(const OutputSettingsModel& output,
                                                       const VideoSettingsModel& video) {
-    (void)video;
     capability::UserRecorderConfig config;
     config.container = output.container;
     config.video_codec = output.video_codec;
     config.audio_codec = output.audio_codec;
     config.chroma = capability::ChromaSubsampling::Cs420;
     config.bit_depth = capability::BitDepth::Bit8;
-    config.frame_rate_num = 60;
-    config.frame_rate_den = 1;
+    config.frame_rate_num = video.frame_rate_num == 0 ? 60 : video.frame_rate_num;
+    config.frame_rate_den = video.frame_rate_den == 0 ? 1 : video.frame_rate_den;
+    if (const auto fixed_size = PresetOutputSize(output.resolution.mode)) {
+        config.output_width = fixed_size->width;
+        config.output_height = fixed_size->height;
+    } else if (output.resolution.mode == OutputResolutionMode::Custom) {
+        if (const auto custom_size = ResolveRequestedOutputSize(
+                output.resolution, {output.resolution.custom_width, output.resolution.custom_height})) {
+            config.output_width = custom_size->width;
+            config.output_height = custom_size->height;
+        }
+    }
     return config;
 }
 
@@ -115,7 +158,9 @@ ConfigSummary ConfigSummary::FromCurrentSettings(const OutputSettingsModel& outp
     summary.entries.push_back({"Container", ContainerName(output.container)});
     summary.entries.push_back({"Video Codec", VideoCodecName(output.video_codec)});
     summary.entries.push_back({"Audio Codec", AudioCodecName(output.audio_codec)});
-    summary.entries.push_back({"FPS", "60"});
+    summary.entries.push_back({"Output Resolution", ResolutionName(output.resolution)});
+    summary.entries.push_back({"Fit Mode", "Fit"});
+    summary.entries.push_back({"FPS", FrameRateName(video.frame_rate_num, video.frame_rate_den)});
     summary.entries.push_back({"CFR/VFR", video.cfr ? "CFR" : "VFR"});
     summary.entries.push_back({"Quality", NvencQualityName(video.quality)});
     summary.entries.push_back({"Capture Cursor", video.capture_cursor ? "Yes" : "No"});

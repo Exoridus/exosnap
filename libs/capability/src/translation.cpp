@@ -58,6 +58,8 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
     core_config.bit_depth = recorder_core::BitDepth::Bit8;
     core_config.frame_rate_num = final_config.frame_rate_num;
     core_config.frame_rate_den = final_config.frame_rate_den;
+    core_config.output_width = final_config.output_width;
+    core_config.output_height = final_config.output_height;
 
     if (is_webm_av1_opus) {
         core_config.container = recorder_core::Container::WebM;

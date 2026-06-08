@@ -5,6 +5,9 @@
 #include <QStringView>
 #include <QVector>
 
+#include "models/OutputSettingsModel.h"
+#include <capability/config_types.h>
+
 namespace exosnap::visual {
 
 enum class VisualPage {
@@ -128,6 +131,27 @@ struct VisualScenario {
     bool preset_dirty = false;      // unsaved-changes indicator
     bool preset_menu_open = false;  // open the Manage overflow menu
     bool preset_save_error = false; // render an inline save/name error affordance
+
+    // Output scaling / format scenarios (OUTPUT-SCALING-R1 + FORMAT-CONTROLS-R1).
+    OutputResolutionMode output_resolution_mode = OutputResolutionMode::Native;
+    int requested_width = 2560;
+    int requested_height = 1440;
+    int effective_width = 2560;
+    int effective_height = 1440;
+    int source_width = 2560;
+    int source_height = 1440;
+    int content_x = 0;
+    int content_y = 0;
+    int content_width = 2560;
+    int content_height = 1440;
+    uint32_t frame_rate_num = 60;
+    uint32_t frame_rate_den = 1;
+    bool cfr = true;
+    capability::Container container = capability::Container::WebM;
+    capability::VideoCodec video_codec = capability::VideoCodec::Av1Nvenc;
+    capability::AudioCodec audio_codec = capability::AudioCodec::Opus;
+    QString reconciliation_warning;
+    bool controls_locked = false;
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

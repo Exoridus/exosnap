@@ -82,6 +82,12 @@ bool ValidateResolution(const CapabilitySet& caps, const UserRecorderConfig& con
     const uint32_t width = config.output_width;
     const uint32_t height = config.output_height;
 
+    if ((width == 0) != (height == 0)) {
+        AddInvalid(result, width == 0 ? "output_width" : "output_height",
+                   "Output width and height must both be zero or both be non-zero.");
+        return false;
+    }
+
     if (constraint.max_width != 0 && width > constraint.max_width) {
         AddInvalid(result, "output_width", "Requested width exceeds maximum supported width.");
         return false;

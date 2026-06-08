@@ -22,7 +22,6 @@ class QLabel;
 class QLineEdit;
 class QMenu;
 class QPushButton;
-class QRadioButton;
 class QResizeEvent;
 class QToolButton;
 
@@ -111,10 +110,16 @@ class ConfigPage : public QWidget {
     void onProfileSelectionChanged(int index);
     void onQualityChanged(int index);
     void onQualitySegmentSelected(int preset_id);
-    void onCfrChanged();
+    void onFrameRateChanged(int index);
+    void onTimingSelected(int timing_id);
+    void onOutputResolutionSelected(int mode_id);
     void onCursorChanged();
     void updateQualitySummary();
     void updateQualitySegmentSelection();
+    void updateFrameRateSelection();
+    void updateTimingSelection();
+    void updateOutputResolutionSelection();
+    void updateEffectiveOutputSummary();
     void onBrowse();
     void onDestinationEditingFinished();
     void onPatternEditingFinished();
@@ -175,9 +180,9 @@ class ConfigPage : public QWidget {
     QBoxLayout* output_split_layout_ = nullptr;
 
     QButtonGroup* container_group_ = nullptr;
-    QRadioButton* mkv_radio_ = nullptr;
-    QRadioButton* webm_radio_ = nullptr;
-    QRadioButton* mp4_radio_ = nullptr;
+    QPushButton* mkv_radio_ = nullptr;
+    QPushButton* webm_radio_ = nullptr;
+    QPushButton* mp4_radio_ = nullptr;
     QComboBox* video_codec_combo_ = nullptr;
     QComboBox* audio_codec_combo_ = nullptr;
     QComboBox* profile_combo_ = nullptr;
@@ -191,7 +196,9 @@ class ConfigPage : public QWidget {
     QPushButton* quality_segment_high_ = nullptr;
     QLabel* quality_badge_label_ = nullptr;
     QLabel* quality_settings_label_ = nullptr;
-    QCheckBox* cfr_check_ = nullptr;
+    QButtonGroup* timing_group_ = nullptr;
+    QPushButton* timing_cfr_btn_ = nullptr;
+    QPushButton* timing_vfr_btn_ = nullptr;
     QCheckBox* cursor_check_ = nullptr;
 
     QLabel* audio_summary_label_ = nullptr;
@@ -225,6 +232,13 @@ class ConfigPage : public QWidget {
     QLineEdit* destination_edit_ = nullptr;
     QPushButton* browse_btn_ = nullptr;
     QLineEdit* naming_edit_ = nullptr;
+    QButtonGroup* output_resolution_group_ = nullptr;
+    QPushButton* output_res_native_btn_ = nullptr;
+    QPushButton* output_res_4k_btn_ = nullptr;
+    QPushButton* output_res_1440_btn_ = nullptr;
+    QPushButton* output_res_1080_btn_ = nullptr;
+    QPushButton* output_res_720_btn_ = nullptr;
+    QLabel* output_effective_summary_label_ = nullptr;
     QLabel* folder_validation_label_ = nullptr;
     QLabel* pattern_validation_label_ = nullptr;
     QLabel* example_filename_label_ = nullptr;

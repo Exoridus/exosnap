@@ -192,13 +192,27 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         config.countdown_seconds = 0;
     }
 
-    // Output: reconcile codecs; leave output_folder as-is if empty.
+    // Output: reconcile codecs and normalize the canonical output-size intent.
     ReconcileContainerCodecs(config.output);
+    SanitizeOutputResolution(config.output.resolution);
 
     // Video: reset frame rate if degenerate (either numerator or denominator is zero).
     if (config.video.frame_rate_num == 0 || config.video.frame_rate_den == 0) {
         config.video.frame_rate_num = 60;
         config.video.frame_rate_den = 1;
+    }
+    {
+        constexpr std::array<uint32_t, 5> kValidFps = {24, 25, 30, 50, 60};
+        const bool valid_rate =
+            config.video.frame_rate_den == 1 &&
+            std::find(kValidFps.begin(), kValidFps.end(), config.video.frame_rate_num) != kValidFps.end();
+        if (!valid_rate) {
+            config.video.frame_rate_num = 60;
+            config.video.frame_rate_den = 1;
+        }
+    }
+    if (config.output.container == capability::Container::Mp4 && !config.video.cfr) {
+        config.video.cfr = true;
     }
 
     // Audio: ensure mic_gain_linear is finite and strictly positive.
@@ -290,6 +304,18 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
         return false;
     }
     if (a.output.audio_codec != b.output.audio_codec) {
+        return false;
+    }
+    if (a.output.resolution.mode != b.output.resolution.mode) {
+        return false;
+    }
+    if (a.output.resolution.custom_width != b.output.resolution.custom_width) {
+        return false;
+    }
+    if (a.output.resolution.custom_height != b.output.resolution.custom_height) {
+        return false;
+    }
+    if (a.output.resolution.fit != b.output.resolution.fit) {
         return false;
     }
     if (a.output.output_folder != b.output.output_folder) {
@@ -439,6 +465,18 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (a.output.audio_codec != b.output.audio_codec) {
+        return false;
+    }
+    if (a.output.resolution.mode != b.output.resolution.mode) {
+        return false;
+    }
+    if (a.output.resolution.custom_width != b.output.resolution.custom_width) {
+        return false;
+    }
+    if (a.output.resolution.custom_height != b.output.resolution.custom_height) {
+        return false;
+    }
+    if (a.output.resolution.fit != b.output.resolution.fit) {
         return false;
     }
     if (a.output.output_folder != b.output.output_folder) {

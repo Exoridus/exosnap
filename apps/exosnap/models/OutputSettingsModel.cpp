@@ -5,6 +5,14 @@
 
 namespace exosnap {
 
+namespace {
+
+[[nodiscard]] bool IsCustomSizeUsable(uint32_t width, uint32_t height) noexcept {
+    return width >= 2 && height >= 2;
+}
+
+} // namespace
+
 OutputSettingsModel OutputSettingsModel::Defaults() {
     OutputSettingsModel defaults;
 
@@ -28,6 +36,100 @@ OutputSettingsModel OutputSettingsModel::Defaults() {
     }
 
     return defaults;
+}
+
+std::optional<recorder_core::FrameSize> PresetOutputSize(OutputResolutionMode mode) noexcept {
+    switch (mode) {
+    case OutputResolutionMode::UHD2160:
+        return recorder_core::FrameSize{3840, 2160};
+    case OutputResolutionMode::QHD1440:
+        return recorder_core::FrameSize{2560, 1440};
+    case OutputResolutionMode::FHD1080:
+        return recorder_core::FrameSize{1920, 1080};
+    case OutputResolutionMode::HD720:
+        return recorder_core::FrameSize{1280, 720};
+    case OutputResolutionMode::Native:
+    case OutputResolutionMode::Custom:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+const wchar_t* OutputResolutionModeName(OutputResolutionMode mode) noexcept {
+    switch (mode) {
+    case OutputResolutionMode::Native:
+        return L"Native";
+    case OutputResolutionMode::UHD2160:
+        return L"4K";
+    case OutputResolutionMode::QHD1440:
+        return L"1440p";
+    case OutputResolutionMode::FHD1080:
+        return L"1080p";
+    case OutputResolutionMode::HD720:
+        return L"720p";
+    case OutputResolutionMode::Custom:
+        return L"Custom";
+    }
+    return L"Native";
+}
+
+const wchar_t* OutputFitModeName(recorder_core::OutputFitMode mode) noexcept {
+    switch (mode) {
+    case recorder_core::OutputFitMode::Contain:
+        return L"Fit";
+    }
+    return L"Fit";
+}
+
+std::optional<recorder_core::FrameSize> ResolveRequestedOutputSize(const OutputResolutionSettings& settings,
+                                                                   recorder_core::FrameSize source) noexcept {
+    if (settings.mode == OutputResolutionMode::Native) {
+        const recorder_core::FrameSize aligned = recorder_core::AlignOutputSizeEven(source);
+        if (!recorder_core::IsEncoderAlignedSize(aligned)) {
+            return std::nullopt;
+        }
+        return aligned;
+    }
+
+    if (const std::optional<recorder_core::FrameSize> preset = PresetOutputSize(settings.mode)) {
+        return *preset;
+    }
+
+    if (settings.mode == OutputResolutionMode::Custom) {
+        if (!IsCustomSizeUsable(settings.custom_width, settings.custom_height)) {
+            return std::nullopt;
+        }
+        const recorder_core::FrameSize aligned =
+            recorder_core::AlignOutputSizeEven({settings.custom_width, settings.custom_height});
+        if (!recorder_core::IsEncoderAlignedSize(aligned)) {
+            return std::nullopt;
+        }
+        return aligned;
+    }
+
+    return std::nullopt;
+}
+
+void SanitizeOutputResolution(OutputResolutionSettings& settings) noexcept {
+    if (settings.fit != recorder_core::OutputFitMode::Contain) {
+        settings.fit = recorder_core::OutputFitMode::Contain;
+    }
+
+    if (settings.mode != OutputResolutionMode::Custom) {
+        settings.custom_width = 0;
+        settings.custom_height = 0;
+        return;
+    }
+
+    if (!IsCustomSizeUsable(settings.custom_width, settings.custom_height)) {
+        settings.mode = OutputResolutionMode::Native;
+        settings.custom_width = 0;
+        settings.custom_height = 0;
+        return;
+    }
+
+    settings.custom_width = recorder_core::AlignOutputDimensionEven(settings.custom_width);
+    settings.custom_height = recorder_core::AlignOutputDimensionEven(settings.custom_height);
 }
 
 } // namespace exosnap

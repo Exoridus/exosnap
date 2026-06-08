@@ -209,6 +209,56 @@ std::optional<PresetCaptureKind> PresetCaptureKindFromString(QStringView s) {
     return std::nullopt;
 }
 
+QString OutputResolutionModeToString(OutputResolutionMode v) {
+    switch (v) {
+    case OutputResolutionMode::Native:
+        return QStringLiteral("native");
+    case OutputResolutionMode::UHD2160:
+        return QStringLiteral("uhd2160");
+    case OutputResolutionMode::QHD1440:
+        return QStringLiteral("qhd1440");
+    case OutputResolutionMode::FHD1080:
+        return QStringLiteral("fhd1080");
+    case OutputResolutionMode::HD720:
+        return QStringLiteral("hd720");
+    case OutputResolutionMode::Custom:
+        return QStringLiteral("custom");
+    }
+    return QStringLiteral("native");
+}
+
+std::optional<OutputResolutionMode> OutputResolutionModeFromString(QStringView s) {
+    const QString n = s.trimmed().toString().toLower();
+    if (n == QStringLiteral("native"))
+        return OutputResolutionMode::Native;
+    if (n == QStringLiteral("uhd2160") || n == QStringLiteral("4k"))
+        return OutputResolutionMode::UHD2160;
+    if (n == QStringLiteral("qhd1440") || n == QStringLiteral("1440p"))
+        return OutputResolutionMode::QHD1440;
+    if (n == QStringLiteral("fhd1080") || n == QStringLiteral("1080p"))
+        return OutputResolutionMode::FHD1080;
+    if (n == QStringLiteral("hd720") || n == QStringLiteral("720p"))
+        return OutputResolutionMode::HD720;
+    if (n == QStringLiteral("custom"))
+        return OutputResolutionMode::Custom;
+    return std::nullopt;
+}
+
+QString OutputFitModeToString(recorder_core::OutputFitMode v) {
+    switch (v) {
+    case recorder_core::OutputFitMode::Contain:
+        return QStringLiteral("contain");
+    }
+    return QStringLiteral("contain");
+}
+
+std::optional<recorder_core::OutputFitMode> OutputFitModeFromString(QStringView s) {
+    const QString n = s.trimmed().toString().toLower();
+    if (n == QStringLiteral("contain") || n == QStringLiteral("fit"))
+        return recorder_core::OutputFitMode::Contain;
+    return std::nullopt;
+}
+
 // ---------------------------------------------------------------------------
 // Per-item save / load helpers
 // ---------------------------------------------------------------------------
@@ -238,6 +288,10 @@ void SavePresetItem(QSettings& settings, const RecordingPreset& preset) {
     settings.setValue(QStringLiteral("out_container"), ContainerToString(out.container));
     settings.setValue(QStringLiteral("out_video_codec"), VideoCodecToString(out.video_codec));
     settings.setValue(QStringLiteral("out_audio_codec"), AudioCodecToString(out.audio_codec));
+    settings.setValue(QStringLiteral("out_resolution_mode"), OutputResolutionModeToString(out.resolution.mode));
+    settings.setValue(QStringLiteral("out_custom_width"), static_cast<int>(out.resolution.custom_width));
+    settings.setValue(QStringLiteral("out_custom_height"), static_cast<int>(out.resolution.custom_height));
+    settings.setValue(QStringLiteral("out_fit_mode"), OutputFitModeToString(out.resolution.fit));
 
     // --- Video ---
     const auto& vid = preset.config.video;
@@ -346,6 +400,26 @@ std::optional<RecordingPreset> LoadPresetItem(QSettings& settings) {
         const auto c = AudioCodecFromString(settings.value(QStringLiteral("out_audio_codec")).toString());
         if (c.has_value())
             out.audio_codec = *c;
+    }
+    {
+        const auto m = OutputResolutionModeFromString(settings.value(QStringLiteral("out_resolution_mode")).toString());
+        if (m.has_value())
+            out.resolution.mode = *m;
+    }
+    {
+        bool ok_w = false;
+        bool ok_h = false;
+        const int width = settings.value(QStringLiteral("out_custom_width"), 0).toInt(&ok_w);
+        const int height = settings.value(QStringLiteral("out_custom_height"), 0).toInt(&ok_h);
+        if (ok_w && ok_h && width >= 0 && height >= 0) {
+            out.resolution.custom_width = static_cast<uint32_t>(width);
+            out.resolution.custom_height = static_cast<uint32_t>(height);
+        }
+    }
+    {
+        const auto fit = OutputFitModeFromString(settings.value(QStringLiteral("out_fit_mode")).toString());
+        if (fit.has_value())
+            out.resolution.fit = *fit;
     }
 
     // --- Video ---
