@@ -80,10 +80,8 @@ class ConfigPage : public QWidget {
 
   signals:
     void formatSettingsChanged(const OutputSettingsModel& settings);
-    // New preset-selection signal (replaces activeProfileChanged).
+    // Preset-selection signal.
     void presetSelected(const QString& id);
-    // Keep for backward compatibility only — new code uses presetSelected.
-    void activeProfileChanged(const QString& profile_id);
     void videoSettingsChanged(const VideoSettingsModel& settings);
     void audioSettingsChanged(const capability::AudioUiState& state);
     void webcamSettingsChanged(const WebcamSettings& settings);
@@ -91,7 +89,7 @@ class ConfigPage : public QWidget {
     void webcamDetailsRequested();
     void advancedRequested();
 
-    // ---- New preset management signals (Stage 3) ----
+    // ---- Preset management signals ----
     void savePresetRequested();
     void savePresetAsRequested(const QString& name);
     void newPresetRequested();
@@ -101,19 +99,6 @@ class ConfigPage : public QWidget {
     void resetChangesRequested();
     void resetToDefaultsRequested();
     void setDefaultPresetRequested();
-
-    // ---- Legacy signals (kept for backward compat during transition) ----
-    void newFromCurrentRequested(const QString& name);
-    void newFromSafeDefaultRequested(const QString& name);
-    void duplicateActiveProfileRequested();
-    void renameActiveProfileRequested(const QString& name);
-    void deleteActiveProfileRequested();
-    void resetActiveProfileRequested();
-    void saveModifiedBuiltInAsNewRequested(const QString& name);
-    void importProfilesRequested(const QString& file_path);
-    void exportSelectedProfileRequested(const QString& file_path);
-    void exportAllUserProfilesRequested(const QString& file_path);
-    void resetAllSettingsAndProfilesRequested();
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
@@ -160,17 +145,7 @@ class ConfigPage : public QWidget {
     void refreshMicDevices();
     void emitCurrentAudioSettings();
 
-    void onImportProfiles();
-    void onExportSelectedProfile();
-    void onExportAllUserProfiles();
-    void onDeleteActiveProfile();
-    void onResetAllSettingsAndProfiles();
-    void updateProfileActionState();
-    void promptCreateProfileFromCurrent();
-    void promptCreateProfileFromSafeDefault();
-    void promptRenameActiveProfile();
-    void promptSaveModifiedBuiltInAsNew();
-    // New preset management handlers.
+    // Preset management handlers.
     void onSavePreset();
     void onSavePresetAs();
     void onNewPreset();
@@ -192,6 +167,9 @@ class ConfigPage : public QWidget {
     QString active_preset_id_;
     QString default_preset_id_;
     bool preset_dirty_ = false;
+    // Current selected preset's built_in/available flags (set by setPresetOptions).
+    bool active_preset_is_built_in_ = false;
+    bool active_preset_is_available_ = true;
 
     QBoxLayout* columns_layout_ = nullptr;
     QBoxLayout* output_split_layout_ = nullptr;
@@ -256,23 +234,14 @@ class ConfigPage : public QWidget {
     QLabel* readiness_detail_label_ = nullptr;
     QPushButton* view_details_btn_ = nullptr;
 
+    // Preset card widgets.
     QLabel* profile_status_label_ = nullptr;
-    QPushButton* save_as_new_btn_ = nullptr;
-    QPushButton* reset_profile_btn_ = nullptr;
+    QLabel* preset_dirty_indicator_ = nullptr;
+    QLabel* preset_default_badge_ = nullptr;
+    QPushButton* preset_save_btn_ = nullptr;
+    QPushButton* preset_save_as_btn_ = nullptr;
     QToolButton* profile_overflow_btn_ = nullptr;
-    QAction* new_from_current_action_ = nullptr;
-    QAction* new_from_safe_default_action_ = nullptr;
-    QAction* duplicate_profile_action_ = nullptr;
-    QAction* rename_profile_action_ = nullptr;
-    QAction* delete_profile_action_ = nullptr;
-    QAction* import_profiles_action_ = nullptr;
-    QAction* export_selected_action_ = nullptr;
-    QAction* export_all_users_action_ = nullptr;
-    QAction* reset_all_action_ = nullptr;
-    bool active_profile_is_built_in_ = true;
-    bool active_profile_is_modified_ = false;
-    bool active_profile_is_available_ = true;
-    // New preset actions wired to new signals.
+    // Preset management actions in the overflow menu.
     QAction* save_preset_action_ = nullptr;
     QAction* save_preset_as_action_ = nullptr;
     QAction* new_preset_action_ = nullptr;
