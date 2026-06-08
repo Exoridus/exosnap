@@ -122,6 +122,10 @@ qt_add_executable(exosnap WIN32
     services/DeviceDiscoveryCommon.h
     services/AudioDeviceNotifier.h
     services/AudioDeviceNotifier.cpp
+    services/WebcamDeviceNotifier.h
+    services/WebcamDeviceNotifier.cpp
+    services/DisplayDeviceNotifier.h
+    services/DisplayDeviceNotifier.cpp
     services/PreviewService.h
     services/PreviewService.cpp
     services/PreviewHelpers.h
@@ -650,3 +654,28 @@ exosnap_add_gtest(
 target_include_directories(audio_device_notifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(audio_device_notifier_tests PRIVATE ole32.lib)
 set_target_properties(audio_device_notifier_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME webcam_device_notifier_tests
+    TEST_PREFIX device.
+    SOURCES
+        tests/test_webcam_device_notifier.cpp
+        services/WebcamDeviceNotifier.cpp
+        services/WebcamService.cpp
+        diagnostics/AppLog.cpp
+    LIBRARIES Qt6::Core Qt6::Gui exosnap_capability recorder_core)
+target_include_directories(webcam_device_notifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(webcam_device_notifier_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
+set_target_properties(webcam_device_notifier_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME display_device_notifier_tests
+    TEST_PREFIX device.
+    SOURCES
+        tests/test_display_device_notifier.cpp
+        services/DisplayDeviceNotifier.cpp
+        diagnostics/AppLog.cpp
+    LIBRARIES Qt6::Core Qt6::Gui exosnap_capability recorder_core)
+target_include_directories(display_device_notifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(display_device_notifier_tests PRIVATE ole32.lib)
+set_target_properties(display_device_notifier_tests PROPERTIES AUTOMOC ON)
