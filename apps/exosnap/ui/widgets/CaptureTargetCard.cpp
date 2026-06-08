@@ -147,7 +147,7 @@ void CaptureTargetCard::setTitle(const QString& title) {
     setToolTip(title_text_);
 }
 
-QString CaptureTargetCard::title() const {
+const QString& CaptureTargetCard::title() const {
     return title_text_;
 }
 
@@ -164,7 +164,7 @@ void CaptureTargetCard::setStatusText(const QString& status) {
     updateStatusLabel();
 }
 
-QString CaptureTargetCard::statusText() const {
+const QString& CaptureTargetCard::statusText() const {
     return status_text_;
 }
 

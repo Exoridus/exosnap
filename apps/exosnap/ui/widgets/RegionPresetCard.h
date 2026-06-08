@@ -26,7 +26,7 @@ class RegionPresetCard : public QFrame {
     explicit RegionPresetCard(QWidget* parent = nullptr);
 
     void setTitle(const QString& title);
-    QString title() const;
+    const QString& title() const;
 
     void setDetail(const QString& detail);
     QString detail() const;

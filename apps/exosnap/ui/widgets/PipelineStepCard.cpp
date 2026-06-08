@@ -91,7 +91,7 @@ void PipelineStepCard::setStepName(const QString& name) {
     setAccessibleName(name);
 }
 
-QString PipelineStepCard::stepName() const {
+const QString& PipelineStepCard::stepName() const {
     return step_name_;
 }
 

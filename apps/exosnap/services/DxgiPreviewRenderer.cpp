@@ -516,7 +516,7 @@ void DxgiPreviewRenderer::RenderFrame() {
     swapChain_->Present(1, 0);
 }
 
-void DxgiPreviewRenderer::RenderThreadProc(recorder_core::CaptureTarget target, uint32_t frame_interval_ms,
+void DxgiPreviewRenderer::RenderThreadProc(const recorder_core::CaptureTarget& target, uint32_t frame_interval_ms,
                                            std::stop_token stop_token) {
     HRESULT coHr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     bool comInited = SUCCEEDED(coHr) || coHr == RPC_E_CHANGED_MODE;

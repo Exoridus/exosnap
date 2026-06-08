@@ -10,7 +10,7 @@ struct SourcePickerWindowIdentity {
     QString class_name;
 };
 
-inline QString NormalizeWindowRuleToken(QString value) {
+inline QString NormalizeWindowRuleToken(const QString& value) {
     return value.trimmed().toLower();
 }
 

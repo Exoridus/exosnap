@@ -27,7 +27,7 @@ class PipelineStepCard : public QFrame {
     explicit PipelineStepCard(QWidget* parent = nullptr);
 
     void setStepName(const QString& name);
-    QString stepName() const;
+    const QString& stepName() const;
 
     void setStatus(Status status);
     Status status() const noexcept;

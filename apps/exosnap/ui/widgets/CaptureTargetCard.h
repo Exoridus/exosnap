@@ -19,13 +19,13 @@ class CaptureTargetCard : public QFrame {
     explicit CaptureTargetCard(QWidget* parent = nullptr);
 
     void setTitle(const QString& title);
-    QString title() const;
+    const QString& title() const;
 
     void setSubtitle(const QString& subtitle);
     QString subtitle() const;
 
     void setStatusText(const QString& status);
-    QString statusText() const;
+    const QString& statusText() const;
 
     void setSelected(bool selected);
     bool isSelected() const noexcept;

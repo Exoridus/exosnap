@@ -33,7 +33,7 @@ class AudioSourceToggle : public QAbstractButton {
         return interactive_;
     }
 
-    [[nodiscard]] QString sourceKey() const {
+    [[nodiscard]] const QString& sourceKey() const {
         return source_key_;
     }
 

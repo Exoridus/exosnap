@@ -51,7 +51,8 @@ class DxgiPreviewRenderer {
   private:
     static LRESULT CALLBACK ChildWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-    void RenderThreadProc(recorder_core::CaptureTarget target, uint32_t frame_interval_ms, std::stop_token stop_token);
+    void RenderThreadProc(const recorder_core::CaptureTarget& target, uint32_t frame_interval_ms,
+                          std::stop_token stop_token);
 
     bool InitD3D11();
     bool InitSwapChain(uint32_t width, uint32_t height);

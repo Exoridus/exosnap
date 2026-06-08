@@ -100,7 +100,7 @@ void RegionPresetCard::setTitle(const QString& title) {
     setToolTip(title);
 }
 
-QString RegionPresetCard::title() const {
+const QString& RegionPresetCard::title() const {
     return title_text_;
 }
 
