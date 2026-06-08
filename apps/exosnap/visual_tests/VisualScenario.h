@@ -160,6 +160,15 @@ struct VisualScenario {
     bool source_selected_available = true;
     bool source_refresh_active = false; // refresh timer is running
     int source_refresh_generation = 0;  // monotonic generation counter
+
+    // --- Completed result scenarios (OUTPUT-RESULTS-R1) ---
+    QString result_file_name = QStringLiteral("visual-test-recording.webm");
+    uint64_t result_file_size_bytes = 52ULL * 1024ULL * 1024ULL;
+    double result_duration_seconds = 83.0;
+    bool result_file_exists = true;
+    int recent_result_count = 0;
+    bool show_delete_confirm = false;
+    bool show_rename_overlay = false;
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();
