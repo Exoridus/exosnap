@@ -2257,9 +2257,13 @@ void RecordPage::setInteractionMode(InteractionMode mode) {
     interaction_mode_ = mode;
 }
 
-void RecordPage::startCountdown(int seconds) {
+void RecordPage::startCountdown(int seconds, std::optional<recorder_core::CaptureRegion> crop_region) {
     if (seconds != 3 && seconds != 5 && seconds != 10) {
-        startRecordingFlow();
+        if (crop_region.has_value()) {
+            doStartRecording(crop_region);
+        } else {
+            startRecordingFlow();
+        }
         return;
     }
     if (interaction_mode_ != InteractionMode::None || isCountdownActive()) {
@@ -2273,6 +2277,7 @@ void RecordPage::startCountdown(int seconds) {
 
     setInteractionMode(InteractionMode::Countdown);
     countdown_remaining_seconds_ = seconds;
+    pending_countdown_region_ = crop_region;
     view_model_.SetState(UiRecordingState::Countdown);
     diagnostics::AppLog(QStringLiteral("[record] countdown started: %1s").arg(seconds));
     if (countdown_timer_ && !countdown_timer_->isActive()) {
@@ -2292,6 +2297,7 @@ void RecordPage::cancelCountdown() {
     }
     countdown_.reset();
     countdown_remaining_seconds_ = 0;
+    pending_countdown_region_.reset();
     setInteractionMode(InteractionMode::None);
     view_model_.SetState(UiRecordingState::Ready);
     diagnostics::AppLog(QStringLiteral("[record] countdown cancelled"));
@@ -2307,13 +2313,19 @@ void RecordPage::finishCountdown() {
         countdown_timer_->stop();
     }
     countdown_.complete();
+    const std::optional<recorder_core::CaptureRegion> crop_region = pending_countdown_region_;
     countdown_.reset();
     countdown_remaining_seconds_ = 0;
+    pending_countdown_region_.reset();
     setInteractionMode(InteractionMode::None);
     view_model_.SetState(UiRecordingState::Ready);
     diagnostics::AppLog(QStringLiteral("[record] countdown completed"));
     refresh();
-    startRecordingFlow();
+    if (crop_region.has_value()) {
+        doStartRecording(crop_region);
+    } else {
+        startRecordingFlow();
+    }
 }
 
 void RecordPage::updateCountdown() {
@@ -2347,6 +2359,13 @@ void RecordPage::cancelActiveInteraction() {
 void RecordPage::onStart() {
     ensureCoordinatorInit();
     if (interaction_mode_ != InteractionMode::None || isCountdownActive()) {
+        return;
+    }
+    const bool needs_region_before_countdown =
+        view_model_.capture_mode == CaptureMode::Region &&
+        (view_model_.select_on_record || !view_model_.has_region || !view_model_.region.IsValid());
+    if (selected_countdown_seconds_ > 0 && needs_region_before_countdown) {
+        startRecordingFlow();
         return;
     }
     if (selected_countdown_seconds_ > 0) {
@@ -2976,7 +2995,11 @@ void RecordPage::onRegionSelected(QRect region_virtual_screen) {
 
     // If we were in RegionSelecting (triggered from onStart), proceed to record.
     if (view_model_.state == UiRecordingState::RegionSelecting) {
-        doStartRecording(region);
+        if (selected_countdown_seconds_ > 0) {
+            startCountdown(selected_countdown_seconds_, region);
+        } else {
+            doStartRecording(region);
+        }
     }
     // Otherwise, the region was picked manually — start the cropped preview.
     else {

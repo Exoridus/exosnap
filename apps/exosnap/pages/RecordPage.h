@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <recorder_core/audio_input_device.h>
 #include <vector>
 
@@ -117,7 +118,7 @@ class RecordPage : public QWidget {
 
   private:
     void startRecordingFlow();
-    void startCountdown(int seconds);
+    void startCountdown(int seconds, std::optional<recorder_core::CaptureRegion> crop_region = std::nullopt);
     void cancelCountdown();
     void finishCountdown();
     void updateCountdown();
@@ -330,6 +331,7 @@ class RecordPage : public QWidget {
     RecordingCountdownController countdown_;
     int selected_countdown_seconds_ = 0;
     int countdown_remaining_seconds_ = 0;
+    std::optional<recorder_core::CaptureRegion> pending_countdown_region_;
     InteractionMode interaction_mode_ = InteractionMode::None;
 
     // Tracks the configuration of the last successfully started DXGI preview.
