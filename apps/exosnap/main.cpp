@@ -10,6 +10,9 @@
 #include "MainWindow.h"
 #include "exosnap_resource.h"
 #include "ui/theme/ExoSnapTheme.h"
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+#include "visual_tests/VisualTestHarness.h"
+#endif
 
 #if defined(Q_OS_WIN)
 #include <windows.h>
@@ -97,18 +100,34 @@ int main(int argc, char* argv[]) {
         QApplication::setWindowIcon(app_icon);
     exosnap::ui::theme::ApplyExoSnapTheme(app);
 
-#if defined(Q_OS_WIN)
-    HANDLE hMutex = CreateMutexW(nullptr, TRUE, kSingleInstanceMutexName);
-    if (hMutex != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) {
-        CloseHandle(hMutex);
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    exosnap::visual::VisualTestOptions visual_options;
+    QString visual_parse_error;
+    const bool visual_test_requested = exosnap::visual::HasVisualTestRequest(QCoreApplication::arguments());
+    if (visual_test_requested &&
+        !exosnap::visual::ParseVisualTestOptions(QCoreApplication::arguments(), &visual_options, &visual_parse_error)) {
+        qCritical().noquote() << visual_parse_error;
+        return 2;
+    }
+#else
+    constexpr bool visual_test_requested = false;
+#endif
 
-        HWND existingHwnd = FindWindowW(nullptr, L"ExoSnap");
-        if (existingHwnd != nullptr) {
-            if (IsIconic(existingHwnd))
-                ShowWindow(existingHwnd, SW_RESTORE);
-            SetForegroundWindow(existingHwnd);
+#if defined(Q_OS_WIN)
+    HANDLE hMutex = nullptr;
+    if (!visual_test_requested) {
+        hMutex = CreateMutexW(nullptr, TRUE, kSingleInstanceMutexName);
+        if (hMutex != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) {
+            CloseHandle(hMutex);
+
+            HWND existingHwnd = FindWindowW(nullptr, L"ExoSnap");
+            if (existingHwnd != nullptr) {
+                if (IsIconic(existingHwnd))
+                    ShowWindow(existingHwnd, SW_RESTORE);
+                SetForegroundWindow(existingHwnd);
+            }
+            return 0;
         }
-        return 0;
     }
 #endif
 
@@ -122,6 +141,11 @@ int main(int argc, char* argv[]) {
             qDebug().noquote() << "MainWindow icon sizes:" << FormatIconSizes(sizes);
         }
     }
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    if (visual_test_requested)
+        return exosnap::visual::RunVisualTest(app, win, visual_options);
+#endif
+
     win.resize(1100, 700);
     win.show();
     QTimer::singleShot(0, &win, [&win, app_icon]() {

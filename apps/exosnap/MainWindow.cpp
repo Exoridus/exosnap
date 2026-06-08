@@ -15,6 +15,9 @@
 #include "ui/dialogs/SourcePickerOverlay.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+#include "visual_tests/VisualScenario.h"
+#endif
 
 #include <capability/capability_builder.h>
 #include <capability/resolver.h>
@@ -43,6 +46,7 @@
 #include <QScreen>
 #include <QShortcut>
 #include <QShowEvent>
+#include <QSignalBlocker>
 #include <QStyle>
 #include <QTextStream>
 #include <QTimer>
@@ -51,6 +55,7 @@
 #include <QWindowStateChangeEvent>
 #include <algorithm>
 #include <array>
+#include <optional>
 
 #if defined(Q_OS_WIN)
 #include "exosnap_resource.h"
@@ -1467,5 +1472,183 @@ void MainWindow::refreshDiagnosticsData() {
                                          active.name, hotkeys_summary, settings_store_.SettingsFilePath().toStdString(),
                                          hotkeys_registered_);
 }
+
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+namespace {
+
+capability::AudioUiState VisualAudioStateForSettings(visual::VisualSettingsTarget target) {
+    using K = recorder_core::AudioSourceKind;
+    capability::AudioUiState state;
+    state.target_kind = target == visual::VisualSettingsTarget::Window ? capability::CaptureTargetKind::Window
+                                                                       : capability::CaptureTargetKind::Display;
+    state.selected_window_pid =
+        target == visual::VisualSettingsTarget::Window ? std::optional<uint32_t>{4242} : std::nullopt;
+    state.source_rows = {
+        {K::App, true, false},
+        {K::Mic, true, false},
+        {K::Sys, true, false},
+    };
+    state.selected_mic_device_id = std::string("visual-test-mic");
+    return state;
+}
+
+ui::dialogs::SourcePickerPanel::SourceOption VisualScreenOption() {
+    ui::dialogs::SourcePickerPanel::SourceOption option;
+    option.target_index = 0;
+    option.native_id = 1001;
+    option.title = QStringLiteral("Visual Test Display 1");
+    option.detail = QStringLiteral("2560 × 1440 · 60 Hz · primary");
+    option.primary = true;
+    option.status_badge = QStringLiteral("TEST");
+    option.monitor_width = 2560;
+    option.monitor_height = 1440;
+    return option;
+}
+
+ui::dialogs::SourcePickerPanel::SourceOption VisualWindowOption() {
+    ui::dialogs::SourcePickerPanel::SourceOption option;
+    option.target_index = 1;
+    option.native_id = 2001;
+    option.title = QStringLiteral("Visual Test Window");
+    option.detail = QStringLiteral("ExoSnap Fixture · PID 4242");
+    option.status_badge = QStringLiteral("TEST");
+    return option;
+}
+
+} // namespace
+
+void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
+    if (about_overlay_)
+        about_overlay_->closeOverlay();
+    if (source_picker_overlay_)
+        source_picker_overlay_->closeOverlay();
+
+    if (record_page_)
+        record_page_->applyVisualScenario(scenario);
+
+    switch (scenario.page) {
+    case visual::VisualPage::Record:
+        setCurrentPage(kRecordPageIndex);
+        break;
+    case visual::VisualPage::Settings:
+        applyVisualSettingsScenario(scenario);
+        break;
+    case visual::VisualPage::Webcam:
+        if (webcam_page_)
+            webcam_page_->applyVisualState(scenario.webcam_state);
+        setCurrentPage(kWebcamPageIndex);
+        break;
+    case visual::VisualPage::Hotkeys:
+        setCurrentPage(kHotkeysPageIndex);
+        break;
+    case visual::VisualPage::Diagnostics:
+        applyVisualDiagnosticsScenario();
+        setCurrentPage(kDiagnosticsPageIndex);
+        break;
+    case visual::VisualPage::Logs:
+        setCurrentPage(kLogsPageIndex);
+        break;
+    case visual::VisualPage::About:
+        setCurrentPage(kRecordPageIndex);
+        if (about_overlay_)
+            about_overlay_->openOverlay();
+        break;
+    }
+
+    if (scenario.source_picker_tab != visual::VisualSourcePickerTab::None)
+        applyVisualSourcePickerScenario(scenario);
+
+    if (title_bar_ && stack_)
+        title_bar_->setActivePage(navHighlightIndexFor(stack_->currentIndex()));
+    installVisualReadyMarker(scenario.id);
+    QTimer::singleShot(0, this, [this, scenario_id = scenario.id]() { installVisualReadyMarker(scenario_id); });
+    setWindowTitle(QStringLiteral("ExoSnap [visual-test:%1]").arg(scenario.id));
+}
+
+void MainWindow::installVisualReadyMarker(const QString& scenario_id) {
+    auto* host = centralWidget();
+    if (host == nullptr)
+        return;
+
+    auto* marker = findChild<QLabel*>(QStringLiteral("visualTestReadyMarker"));
+    if (marker == nullptr) {
+        marker = new QLabel(host);
+        marker->setObjectName(QStringLiteral("visualTestReadyMarker"));
+        marker->setAttribute(Qt::WA_TransparentForMouseEvents);
+        marker->setStyleSheet(QStringLiteral("QLabel#visualTestReadyMarker {"
+                                             "background: rgba(31, 196, 140, 0.18);"
+                                             "border: 1px solid rgba(31, 196, 140, 0.55);"
+                                             "border-radius: 4px;"
+                                             "color: #b9f6df;"
+                                             "font: 11px 'JetBrains Mono';"
+                                             "padding: 3px 6px;"
+                                             "}"));
+    }
+    marker->setText(QStringLiteral("VISUAL_TEST_READY:%1").arg(scenario_id));
+    marker->adjustSize();
+    marker->move(host->width() - marker->width() - 12, host->height() - marker->height() - 12);
+    marker->raise();
+    marker->show();
+}
+
+void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scenario) {
+    setCurrentPage(kSettingsPageIndex);
+    if (!config_page_)
+        return;
+
+    OutputSettingsModel output;
+    output.container = capability::Container::WebM;
+    output.video_codec = capability::VideoCodec::Av1Nvenc;
+    output.audio_codec = capability::AudioCodec::Opus;
+    output.output_folder = std::filesystem::path(L"C:\\Users\\User\\Videos\\ExoSnap");
+    output.naming_pattern = L"visual-test_{datetime}_{title}";
+
+    VideoSettingsModel video;
+    config_page_->setOutputSettings(output);
+    config_page_->setVideoSettings(video);
+    config_page_->setAudioUiState(VisualAudioStateForSettings(scenario.settings_target));
+    config_page_->setReadinessStatus(QStringLiteral("READY"));
+    config_page_->setRecordingControlsLocked(false);
+    config_page_->setAudioMeterLevels(0.37f, 0.56f, 0.42f, true, true, true);
+}
+
+void MainWindow::applyVisualSourcePickerScenario(const visual::VisualScenario& scenario) {
+    setCurrentPage(kRecordPageIndex);
+    if (!source_picker_overlay_)
+        return;
+
+    source_picker_overlay_->setScreenOptions({VisualScreenOption()});
+    source_picker_overlay_->setWindowOptions({VisualWindowOption()});
+    source_picker_overlay_->setRegionState(QStringLiteral("VISUAL TEST: 1280 × 720 on Display 1"), true, false);
+
+    ui::dialogs::SourcePickerPanel::Section section = ui::dialogs::SourcePickerPanel::Section::Screens;
+    int target_index = 0;
+    if (scenario.source_picker_tab == visual::VisualSourcePickerTab::Windows) {
+        section = ui::dialogs::SourcePickerPanel::Section::Windows;
+        target_index = 1;
+    } else if (scenario.source_picker_tab == visual::VisualSourcePickerTab::Region) {
+        section = ui::dialogs::SourcePickerPanel::Section::Region;
+        target_index = 0;
+    }
+
+    source_picker_overlay_->setCurrentSection(section, target_index);
+    source_picker_overlay_->openOverlay();
+}
+
+void MainWindow::applyVisualDiagnosticsScenario() {
+    if (!diagnostics_page_)
+        return;
+
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    OutputSettingsModel output;
+    output.container = capability::Container::WebM;
+    output.video_codec = capability::VideoCodec::Av1Nvenc;
+    output.audio_codec = capability::AudioCodec::Opus;
+    VideoSettingsModel video;
+    diagnostics_page_->setDiagnosticData(
+        caps, output, video, VisualAudioStateForSettings(visual::VisualSettingsTarget::Window),
+        "Visual Test WebM AV1 Opus", "Start/Stop: Alt+F9", "visual-test-settings.json", true);
+}
+#endif
 
 } // namespace exosnap

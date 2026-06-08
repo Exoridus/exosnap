@@ -16,6 +16,12 @@ class QShowEvent;
 
 namespace exosnap {
 
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+namespace visual {
+struct VisualScenario;
+}
+#endif
+
 namespace ui::chrome {
 class OperationalTitleBar;
 } // namespace ui::chrome
@@ -36,6 +42,10 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
   public:
     explicit MainWindow(QWidget* parent = nullptr);
+
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    void applyVisualScenario(const visual::VisualScenario& scenario);
+#endif
 
   signals:
     void recordToggleRequested();
@@ -68,6 +78,12 @@ class MainWindow : public QMainWindow {
     void persistProfileState();
     void restoreHotkeyBindingsFromSettings();
     void refreshDiagnosticsData();
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    void installVisualReadyMarker(const QString& scenario_id);
+    void applyVisualSettingsScenario(const visual::VisualScenario& scenario);
+    void applyVisualSourcePickerScenario(const visual::VisualScenario& scenario);
+    void applyVisualDiagnosticsScenario();
+#endif
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
     ui::dialogs::AboutOverlay* about_overlay_ = nullptr;

@@ -167,12 +167,23 @@ qt_add_executable(exosnap WIN32
     viewmodels/PresentationStateBuilder.cpp
 )
 
+target_sources(exosnap PRIVATE
+    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualScenario.h>"
+    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualScenario.cpp>"
+    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualTestHarness.h>"
+    "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/visual_tests/VisualTestHarness.cpp>"
+)
+
 if(WIN32)
     target_sources(exosnap PRIVATE exosnap.rc)
 endif()
 
 set_target_properties(exosnap PROPERTIES AUTOMOC ON AUTORCC ON OUTPUT_NAME "exosnap")
-target_compile_definitions(exosnap PRIVATE NOMINMAX EXOSNAP_BUILD_CONFIG="$<CONFIG>")
+target_compile_definitions(exosnap PRIVATE
+    NOMINMAX
+    EXOSNAP_BUILD_CONFIG="$<CONFIG>"
+    "$<$<NOT:$<CONFIG:Release>>:EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1>"
+)
 add_dependencies(exosnap exosnap_build_info)
 
 target_link_libraries(exosnap PRIVATE
@@ -193,6 +204,19 @@ exosnap_add_gtest(
     LIBRARIES exosnap_capability recorder_core
 )
 target_include_directories(presentation_state_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+    exosnap_add_gtest(
+        NAME visual_scenario_tests
+        TEST_PREFIX visual.
+        SOURCES
+            tests/test_visual_scenarios.cpp
+            visual_tests/VisualScenario.cpp
+        LIBRARIES Qt6::Core
+    )
+    target_include_directories(visual_scenario_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(visual_scenario_tests PRIVATE EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
+endif()
 
 exosnap_add_gtest(
     NAME record_viewmodel_audio_tests

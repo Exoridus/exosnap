@@ -32,6 +32,12 @@ class QVBoxLayout;
 
 namespace exosnap {
 
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+namespace visual {
+struct VisualScenario;
+}
+#endif
+
 namespace ui::widgets {
 class AudioSourceRow;
 class CaptureTargetCard;
@@ -58,6 +64,9 @@ class RecordPage : public QWidget {
     void applyPersistedAudioSettings(const capability::AudioUiState& state);
     void setRuntimeCapabilities(const capability::CapabilitySet& caps);
     void rebroadcastChromeState();
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    void applyVisualScenario(const visual::VisualScenario& scenario);
+#endif
 
   signals:
     void chromeStateChanged(bool recording, const QString& status_label, const QString& context_text);
@@ -301,6 +310,10 @@ class RecordPage : public QWidget {
     // Used by startPreviewIfIdle() to skip redundant restarts when the target
     // and crop are unchanged.  Reset to default when the preview is stopped.
     exosnap::PreviewConfigKey last_preview_key_{};
+
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    bool visual_test_mode_ = false;
+#endif
 };
 
 } // namespace exosnap

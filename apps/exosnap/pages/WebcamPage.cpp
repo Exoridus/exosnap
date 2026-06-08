@@ -5,6 +5,9 @@
 #include "../ui/widgets/ComboBoxWheelFilter.h"
 #include "../ui/widgets/ExoToggle.h"
 #include "../ui/widgets/SectionRuleHeader.h"
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+#include "../visual_tests/VisualScenario.h"
+#endif
 
 #include <QCheckBox>
 #include <QColorDialog>
@@ -328,6 +331,10 @@ WebcamPage::~WebcamPage() {
 
 void WebcamPage::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    if (visual_test_mode_)
+        return;
+#endif
     // Setup preview runs whenever the page is open and a camera is available —
     // independent of the "Include webcam in recording" toggle.
     startPreview();
@@ -335,6 +342,10 @@ void WebcamPage::showEvent(QShowEvent* event) {
 
 void WebcamPage::hideEvent(QHideEvent* event) {
     QWidget::hideEvent(event);
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    if (visual_test_mode_)
+        return;
+#endif
     // Release the camera while the page is hidden to avoid stale/frozen device state.
     stopPreview();
 }
@@ -395,6 +406,38 @@ void WebcamPage::applySettings(const WebcamSettings& settings) {
     if (isVisible())
         startPreview();
 }
+
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+void WebcamPage::applyVisualState(visual::VisualWebcamState state) {
+    visual_test_mode_ = true;
+    stopPreview();
+    suppress_signals_ = true;
+
+    device_combo_->clear();
+    resolution_combo_->clear();
+    if (state == visual::VisualWebcamState::Active) {
+        device_combo_->addItem(QStringLiteral("Visual Test Camera"), QStringLiteral("visual-test-camera"));
+        resolution_combo_->addItem(QStringLiteral("1280×720 @ 30 fps"), QVariantList{1280, 720});
+        enable_toggle_->setChecked(true);
+        if (camera_preview_) {
+            QImage frame(1280, 720, QImage::Format_RGB32);
+            frame.fill(QColor(36, 48, 58));
+            camera_preview_->setFrame(frame);
+            camera_preview_->setToolTip(QStringLiteral("Synthetic visual-test camera frame"));
+        }
+    } else {
+        device_combo_->addItem(QStringLiteral("(no visual-test camera)"), QString());
+        enable_toggle_->setChecked(false);
+        if (camera_preview_) {
+            camera_preview_->clearFrame();
+            camera_preview_->setPlaceholderText(QStringLiteral("VISUAL TEST: Camera unavailable"));
+            camera_preview_->setToolTip(QStringLiteral("Deterministic visual-test unavailable state"));
+        }
+    }
+
+    suppress_signals_ = false;
+}
+#endif
 
 void WebcamPage::onEnableToggled(bool enabled) {
     // This toggle only controls whether the webcam is included in recordings.
