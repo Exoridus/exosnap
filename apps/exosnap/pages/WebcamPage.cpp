@@ -409,6 +409,32 @@ void WebcamPage::applySettings(const WebcamSettings& settings) {
         startPreview();
 }
 
+void WebcamPage::setRecordingControlsLocked(bool locked) {
+    device_combo_->setEnabled(!locked);
+    resolution_combo_->setEnabled(!locked);
+    refresh_btn_->setEnabled(!locked);
+
+    enable_toggle_->setEnabled(true);
+    if (pos_x_slider_)
+        pos_x_slider_->setEnabled(true);
+    if (pos_y_slider_)
+        pos_y_slider_->setEnabled(true);
+    if (size_w_slider_)
+        size_w_slider_->setEnabled(true);
+    if (size_h_slider_)
+        size_h_slider_->setEnabled(true);
+    if (aspect_lock_check_)
+        aspect_lock_check_->setEnabled(true);
+    if (chroma_toggle_)
+        chroma_toggle_->setEnabled(true);
+    if (chroma_color_btn_)
+        chroma_color_btn_->setEnabled(true);
+    if (tolerance_slider_)
+        tolerance_slider_->setEnabled(true);
+    if (softness_slider_)
+        softness_slider_->setEnabled(true);
+}
+
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 void WebcamPage::applyVisualState(visual::VisualWebcamState state) {
     visual_test_mode_ = true;

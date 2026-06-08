@@ -31,6 +31,11 @@ enum class UiRecordingState {
     Failed,
 };
 
+[[nodiscard]] inline bool IsWebcamOverlayEditable(UiRecordingState state) noexcept {
+    return state == UiRecordingState::Ready || state == UiRecordingState::Countdown ||
+           state == UiRecordingState::Recording || state == UiRecordingState::Paused;
+}
+
 // ---------------------------------------------------------------------------
 // CaptureMode
 // ---------------------------------------------------------------------------

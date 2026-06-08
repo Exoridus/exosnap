@@ -6,7 +6,9 @@
 Video source
   → Windows Graphics Capture
   → D3D11 texture
-  → CFR scheduler
+  → CFR/VFR frame selection
+  → GPU BGRA overlay compositing
+  → VideoProcessorBlt BGRA-to-NV12
   → NVENC
   → muxer
 
@@ -27,11 +29,12 @@ Muxer
 ## Video path
 
 ### Capture
-Two backends; both deliver `ID3D11Texture2D` (BGRA) to the shared VideoProcessorBlt → NVENC pipeline.
+Two backends; both deliver `ID3D11Texture2D` (BGRA) to the shared GPU compositor →
+VideoProcessorBlt → NVENC pipeline.
 
 **Monitor targets** → `IDXGIOutputDuplication` (DXGI OD)
 - Passive GPU-buffer read; no VRR/G-Sync interference; no OS capture indicator
-- Cursor composited manually when `capture_cursor = true`
+- Cursor is alpha-blended by the engine GPU compositor when `capture_cursor = true`
 - `DXGI_ERROR_ACCESS_LOST` (desktop lock/session switch) terminates session
 
 **Window / App targets** → Windows Graphics Capture (`GraphicsCaptureSession`)
@@ -39,6 +42,15 @@ Two backends; both deliver `ID3D11Texture2D` (BGRA) to the shared VideoProcessor
 - Cursor composited by OS via `IsCursorCaptureEnabled`
 
 See ADR-0011 for the decision rationale.
+
+### Compositing
+- Webcam PiP and DXGI OD cursor overlays are composited in one D3D11 render pass before BGRA-to-NV12
+  conversion.
+- Webcam placement, mirror, enable, and chroma-key settings are read from a live per-session snapshot
+  and can update while recording.
+- Device, resolution, and FPS webcam settings are restart-class settings and are not changed during a
+  running session.
+- Encoder input remains NV12; the existing NVENC slot ring is unchanged.
 
 ### Output timing
 - Default output: 60 fps CFR

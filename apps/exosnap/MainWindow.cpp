@@ -951,6 +951,8 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
                              upper == QStringLiteral("STOPPING") || upper == QStringLiteral("CHECKING") ||
                              upper == QStringLiteral("STARTING") || upper == QStringLiteral("COUNTDOWN"));
         config_page_->setRecordingControlsLocked(locked);
+        if (webcam_page_)
+            webcam_page_->setRecordingControlsLocked(locked);
     }
 
     applyTitleBarStatus();

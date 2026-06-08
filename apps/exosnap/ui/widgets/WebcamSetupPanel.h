@@ -32,7 +32,8 @@ class WebcamSetupPanel : public QWidget {
     // Apply external settings without emitting settingsChanged.
     void applySettings(const WebcamSettings& settings);
 
-    // Lock all controls during recording (preview still runs if already started).
+    // Lock restart-class controls during recording (preview still runs if already started).
+    // Enable and mirror remain live-editable.
     void setControlsLocked(bool locked);
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)

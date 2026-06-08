@@ -218,6 +218,16 @@ void RecorderSession::Resume() {
     m_impl->state.pause_requested.store(false);
 }
 
+void RecorderSession::UpdateWebcamOverlay(const WebcamOverlayLive& overlay) {
+    if (!m_impl->recording.load()) {
+        return;
+    }
+    if (m_impl->state.config.webcam.frame_provider == nullptr) {
+        return;
+    }
+    m_impl->state.UpdateWebcamOverlay(overlay);
+}
+
 // ---------------------------------------------------------------------------
 // Record  (blocking)
 // ---------------------------------------------------------------------------
@@ -253,6 +263,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             st.stats = {};
         }
         st.config = config;
+        st.SeedWebcamOverlayFromConfig();
         if (!config.record_audio) {
             st.audio_track_count = 0;
         } else {

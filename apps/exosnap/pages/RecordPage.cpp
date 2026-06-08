@@ -1587,10 +1587,10 @@ void RecordPage::updateWebcamOverlay() {
     preview_surface_->setWebcamOverlayEnabled(current_webcam_settings_.enabled);
     preview_surface_->setWebcamMirror(current_webcam_settings_.mirror);
     preview_surface_->setAspectRatioLocked(current_webcam_settings_.aspect_ratio_locked);
-    // Placement editing is permitted only in the Ready state. The recording
-    // compositor runs from a config snapshot, so live edits during Countdown/
-    // Recording/Paused/Stopping would diverge from the output — lock them.
-    const bool editable = (view_model_.state == UiRecordingState::Ready);
+    // Overlay placement/mirror/chroma are live-applied to the running session
+    // via RecorderSession::UpdateWebcamOverlay, so editing is allowed while
+    // recording. States without a meaningful target stay locked.
+    const bool editable = IsWebcamOverlayEditable(view_model_.state);
     preview_surface_->setWebcamEditLocked(!editable);
 }
 

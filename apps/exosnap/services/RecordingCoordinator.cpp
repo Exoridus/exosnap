@@ -61,6 +61,24 @@ static bool StartsWithAsciiInsensitive(const std::string_view value, const std::
     return true;
 }
 
+static recorder_core::WebcamOverlayLive ToLiveWebcamOverlay(const WebcamSettings& settings) {
+    const WebcamSettings sanitized = SanitizeWebcamSettings(settings);
+    recorder_core::WebcamOverlayLive overlay;
+    overlay.enabled = sanitized.enabled;
+    overlay.overlay_x_norm = sanitized.overlay.x_norm;
+    overlay.overlay_y_norm = sanitized.overlay.y_norm;
+    overlay.overlay_w_norm = sanitized.overlay.w_norm;
+    overlay.overlay_h_norm = sanitized.overlay.h_norm;
+    overlay.mirror = sanitized.mirror;
+    overlay.chroma_key_enabled = sanitized.chroma_key.enabled;
+    overlay.chroma_r = sanitized.chroma_key.r;
+    overlay.chroma_g = sanitized.chroma_key.g;
+    overlay.chroma_b = sanitized.chroma_key.b;
+    overlay.chroma_tolerance = sanitized.chroma_key.tolerance;
+    overlay.chroma_softness = sanitized.chroma_key.softness;
+    return overlay;
+}
+
 static std::string DisplayLabelFromTargetDescription(const std::string& raw_description) {
     std::string value = TrimAscii(raw_description);
     if (value.empty()) {
@@ -320,9 +338,15 @@ void RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
     const bool fps_changed = sanitized.fps != webcam_settings_.fps;
     webcam_settings_ = sanitized;
 
-    // A device/resolution/fps change requires re-opening the capture; mirror and
-    // overlay placement are applied per-frame and never restart the device.
-    SyncWebcamService(device_changed || res_changed || fps_changed);
+    const bool recording = is_recording_.load();
+    if (recording) {
+        session_.UpdateWebcamOverlay(ToLiveWebcamOverlay(webcam_settings_));
+    }
+
+    // A device/resolution/fps change requires re-opening the capture, so do not
+    // restart the webcam device mid-recording. Live overlay fields are pushed
+    // above and enable/disable is handled by SyncWebcamService.
+    SyncWebcamService((device_changed || res_changed || fps_changed) && !recording);
 }
 
 void RecordingCoordinator::SetWebcamPreviewActive(bool active) {
@@ -430,21 +454,19 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.crop_region = crop_region;
     config.output_path = output_path;
 
-    if (webcam_settings_.enabled) {
-        config.webcam.enabled = true;
-        config.webcam.frame_provider = &webcam_service_;
-        config.webcam.overlay_x_norm = webcam_settings_.overlay.x_norm;
-        config.webcam.overlay_y_norm = webcam_settings_.overlay.y_norm;
-        config.webcam.overlay_w_norm = webcam_settings_.overlay.w_norm;
-        config.webcam.overlay_h_norm = webcam_settings_.overlay.h_norm;
-        config.webcam.mirror = webcam_settings_.mirror;
-        config.webcam.chroma_key_enabled = webcam_settings_.chroma_key.enabled;
-        config.webcam.chroma_r = webcam_settings_.chroma_key.r;
-        config.webcam.chroma_g = webcam_settings_.chroma_key.g;
-        config.webcam.chroma_b = webcam_settings_.chroma_key.b;
-        config.webcam.chroma_tolerance = webcam_settings_.chroma_key.tolerance;
-        config.webcam.chroma_softness = webcam_settings_.chroma_key.softness;
-    }
+    config.webcam.enabled = webcam_settings_.enabled;
+    config.webcam.frame_provider = &webcam_service_;
+    config.webcam.overlay_x_norm = webcam_settings_.overlay.x_norm;
+    config.webcam.overlay_y_norm = webcam_settings_.overlay.y_norm;
+    config.webcam.overlay_w_norm = webcam_settings_.overlay.w_norm;
+    config.webcam.overlay_h_norm = webcam_settings_.overlay.h_norm;
+    config.webcam.mirror = webcam_settings_.mirror;
+    config.webcam.chroma_key_enabled = webcam_settings_.chroma_key.enabled;
+    config.webcam.chroma_r = webcam_settings_.chroma_key.r;
+    config.webcam.chroma_g = webcam_settings_.chroma_key.g;
+    config.webcam.chroma_b = webcam_settings_.chroma_key.b;
+    config.webcam.chroma_tolerance = webcam_settings_.chroma_key.tolerance;
+    config.webcam.chroma_softness = webcam_settings_.chroma_key.softness;
 
     capability::AudioUiState audio_state = audio_ui_state;
     if (target.kind == recorder_core::CaptureTarget::Kind::Window && target.native_id != 0) {

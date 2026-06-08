@@ -35,6 +35,7 @@ class WebcamPage : public QWidget {
     ~WebcamPage() override;
 
     void applySettings(const WebcamSettings& settings);
+    void setRecordingControlsLocked(bool locked);
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void applyVisualState(visual::VisualWebcamState state);
 #endif

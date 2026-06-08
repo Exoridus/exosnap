@@ -9,6 +9,7 @@
 #include <QRectF>
 
 #include "ui/widgets/PreviewSurface.h"
+#include "viewmodels/RecordViewModel.h"
 
 namespace exosnap::ui::widgets {
 namespace {
@@ -170,6 +171,27 @@ TEST_F(PreviewSurfaceWebcamTest, LockDeselectsActiveSelection) {
 
     surface_->setWebcamEditLocked(true);
     EXPECT_FALSE(surface_->isWebcamSelected());
+}
+
+TEST_F(PreviewSurfaceWebcamTest, UnlockRestoresSelectionForLiveEditableStates) {
+    surface_->setWebcamOverlayEnabled(true);
+    surface_->setWebcamOverlayRect(QRectF(0.40, 0.40, 0.25, 0.25));
+    surface_->setWebcamEditLocked(true);
+    surface_->setWebcamEditLocked(false);
+
+    sendMouse(QEvent::MouseButtonPress, pipCenter(), Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, pipCenter(), Qt::LeftButton, Qt::NoButton);
+    EXPECT_TRUE(surface_->isWebcamSelected());
+}
+
+TEST(PreviewSurfaceWebcamPolicyTest, RecordingAndPausedStatesAreEditable) {
+    EXPECT_TRUE(exosnap::IsWebcamOverlayEditable(exosnap::UiRecordingState::Ready));
+    EXPECT_TRUE(exosnap::IsWebcamOverlayEditable(exosnap::UiRecordingState::Countdown));
+    EXPECT_TRUE(exosnap::IsWebcamOverlayEditable(exosnap::UiRecordingState::Recording));
+    EXPECT_TRUE(exosnap::IsWebcamOverlayEditable(exosnap::UiRecordingState::Paused));
+    EXPECT_FALSE(exosnap::IsWebcamOverlayEditable(exosnap::UiRecordingState::Stopping));
+    EXPECT_FALSE(exosnap::IsWebcamOverlayEditable(exosnap::UiRecordingState::Completed));
+    EXPECT_FALSE(exosnap::IsWebcamOverlayEditable(exosnap::UiRecordingState::Failed));
 }
 
 // 25. Cancelling interaction releases the active drag/pointer capture.

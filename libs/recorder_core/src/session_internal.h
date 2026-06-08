@@ -8,9 +8,12 @@
 #include <recorder_core/packet_types.h>
 #include <recorder_core/recorder_session.h>
 #include <recorder_core/session_stats.h>
+#include <recorder_core/webcam_placement.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -151,6 +154,9 @@ struct SessionState {
     // Record config captured at Record() time
     RecorderConfig config;
 
+    mutable std::mutex webcam_overlay_mutex;
+    WebcamOverlayLive webcam_overlay;
+
     // Number of expected output audio tracks for mux readiness/routing.
     uint32_t audio_track_count = 0;
 
@@ -168,6 +174,66 @@ struct SessionState {
     // ---------------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------------
+
+    static WebcamOverlayLive SanitizeWebcamOverlay(WebcamOverlayLive overlay) noexcept {
+        WebcamPlacement placement;
+        placement.x = overlay.overlay_x_norm;
+        placement.y = overlay.overlay_y_norm;
+        placement.w = overlay.overlay_w_norm;
+        placement.h = overlay.overlay_h_norm;
+        placement.mirror = overlay.mirror;
+        placement = SanitizeWebcamPlacement(placement);
+
+        overlay.overlay_x_norm = placement.x;
+        overlay.overlay_y_norm = placement.y;
+        overlay.overlay_w_norm = placement.w;
+        overlay.overlay_h_norm = placement.h;
+        overlay.mirror = placement.mirror;
+
+        if (!std::isfinite(static_cast<double>(overlay.chroma_tolerance))) {
+            overlay.chroma_tolerance = 0.30f;
+        }
+        if (!std::isfinite(static_cast<double>(overlay.chroma_softness))) {
+            overlay.chroma_softness = 0.05f;
+        }
+        overlay.chroma_tolerance = std::clamp(overlay.chroma_tolerance, 0.0f, 1.0f);
+        overlay.chroma_softness = std::clamp(overlay.chroma_softness, 0.0f, 1.0f);
+        return overlay;
+    }
+
+    static WebcamOverlayLive LiveOverlayFromConfig(const WebcamConfig& config) noexcept {
+        WebcamOverlayLive overlay;
+        overlay.enabled = config.enabled;
+        overlay.overlay_x_norm = config.overlay_x_norm;
+        overlay.overlay_y_norm = config.overlay_y_norm;
+        overlay.overlay_w_norm = config.overlay_w_norm;
+        overlay.overlay_h_norm = config.overlay_h_norm;
+        overlay.mirror = config.mirror;
+        overlay.chroma_key_enabled = config.chroma_key_enabled;
+        overlay.chroma_r = config.chroma_r;
+        overlay.chroma_g = config.chroma_g;
+        overlay.chroma_b = config.chroma_b;
+        overlay.chroma_tolerance = config.chroma_tolerance;
+        overlay.chroma_softness = config.chroma_softness;
+        return SanitizeWebcamOverlay(overlay);
+    }
+
+    void SeedWebcamOverlayFromConfig() {
+        const WebcamOverlayLive overlay = LiveOverlayFromConfig(config.webcam);
+        std::lock_guard lk(webcam_overlay_mutex);
+        webcam_overlay = overlay;
+    }
+
+    void UpdateWebcamOverlay(WebcamOverlayLive overlay) {
+        overlay = SanitizeWebcamOverlay(overlay);
+        std::lock_guard lk(webcam_overlay_mutex);
+        webcam_overlay = overlay;
+    }
+
+    [[nodiscard]] WebcamOverlayLive SnapshotWebcamOverlay() const {
+        std::lock_guard lk(webcam_overlay_mutex);
+        return webcam_overlay;
+    }
 
     // Record first failure; triggers stop_requested.
     // hr: platform error code (HRESULT on Windows); 0 == success.

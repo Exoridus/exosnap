@@ -190,7 +190,7 @@ class RecordPage : public QWidget {
     void syncCoordinatorTargetContext();
     void startPreviewIfIdle();
     // Push webcam enable/mirror/aspect/placement and the state-driven edit lock to
-    // the preview surface. Editing is permitted only in the Ready state.
+    // the preview surface. Live-editable states are defined by IsWebcamOverlayEditable().
     void updateWebcamOverlay();
     // Start/stop the shared idle webcam capture so the Ready preview shows a live PiP.
     void syncWebcamPreviewCapture();

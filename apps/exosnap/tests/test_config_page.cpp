@@ -503,12 +503,24 @@ TEST_F(ConfigPageTest, SetRecordingControlsLocked_DisablesKeyControls) {
     ASSERT_NE(mic_combo, nullptr);
     EXPECT_FALSE(mic_combo->isEnabled());
 
-    // Webcam panel controls must be locked (inline panel replaced the old nav button).
+    // Webcam restart-class controls lock; live enable/mirror remain editable.
     auto* panel = page.findChild<ui::widgets::WebcamSetupPanel*>(QStringLiteral("settingsWebcamSetupPanel"));
     ASSERT_NE(panel, nullptr);
     auto* webcam_toggle = panel->findChild<QWidget*>(QStringLiteral("webcamPanelEnableToggle"));
     ASSERT_NE(webcam_toggle, nullptr);
-    EXPECT_FALSE(webcam_toggle->isEnabled());
+    EXPECT_TRUE(webcam_toggle->isEnabled());
+    auto* webcam_mirror = panel->findChild<QWidget*>(QStringLiteral("webcamPanelMirrorToggle"));
+    ASSERT_NE(webcam_mirror, nullptr);
+    EXPECT_TRUE(webcam_mirror->isEnabled());
+    auto* webcam_device = panel->findChild<QComboBox*>(QStringLiteral("webcamPanelDeviceCombo"));
+    ASSERT_NE(webcam_device, nullptr);
+    EXPECT_FALSE(webcam_device->isEnabled());
+    auto* webcam_resolution = panel->findChild<QComboBox*>(QStringLiteral("webcamPanelResolutionCombo"));
+    ASSERT_NE(webcam_resolution, nullptr);
+    EXPECT_FALSE(webcam_resolution->isEnabled());
+    auto* webcam_rescan = panel->findChild<QPushButton*>(QStringLiteral("webcamPanelRescanBtn"));
+    ASSERT_NE(webcam_rescan, nullptr);
+    EXPECT_FALSE(webcam_rescan->isEnabled());
 
     auto* lock_note = page.findChild<QLabel*>(QStringLiteral("lockNoteLabel"));
     ASSERT_NE(lock_note, nullptr);

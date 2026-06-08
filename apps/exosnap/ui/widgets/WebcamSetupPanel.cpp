@@ -207,11 +207,11 @@ void WebcamSetupPanel::applySettings(const WebcamSettings& settings) {
 }
 
 void WebcamSetupPanel::setControlsLocked(bool locked) {
-    enable_toggle_->setEnabled(!locked);
     device_combo_->setEnabled(!locked);
     resolution_combo_->setEnabled(!locked);
-    mirror_toggle_->setEnabled(!locked);
     rescan_btn_->setEnabled(!locked);
+    enable_toggle_->setEnabled(true);
+    mirror_toggle_->setEnabled(true);
 }
 
 void WebcamSetupPanel::onEnableToggled(bool enabled) {

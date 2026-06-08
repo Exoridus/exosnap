@@ -78,9 +78,9 @@ class PreviewSurface : public QWidget {
     }
 
     // Editing lock. When locked the PiP video stays visible but selection/drag/resize
-    // and edit chrome are disabled and pointer events pass through. Set true outside
-    // the Ready state (countdown/recording/paused/stopping/blocked) so preview and the
-    // snapshot-based recording compositor cannot diverge.
+    // and edit chrome are disabled and pointer events pass through. RecordPage
+    // keeps this unlocked in states whose overlay edits are live-applied to the
+    // running session.
     void setWebcamEditLocked(bool locked);
     [[nodiscard]] bool isWebcamEditLocked() const noexcept {
         return webcam_edit_locked_;

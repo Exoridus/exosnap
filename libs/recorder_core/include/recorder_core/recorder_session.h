@@ -59,6 +59,23 @@ struct WebcamConfig {
     float chroma_softness = 0.05f;
 };
 
+// Live-mutable subset of WebcamConfig, updatable while Record() runs.
+// Device/resolution/fps are not here: changing those requires a capture restart.
+struct WebcamOverlayLive {
+    bool enabled = false; // allows mid-recording show/hide of the PiP
+    float overlay_x_norm = 0.0f;
+    float overlay_y_norm = 0.0f;
+    float overlay_w_norm = 0.25f;
+    float overlay_h_norm = 0.25f;
+    bool mirror = false;
+    bool chroma_key_enabled = false;
+    uint8_t chroma_r = 0;
+    uint8_t chroma_g = 177;
+    uint8_t chroma_b = 64;
+    float chroma_tolerance = 0.30f;
+    float chroma_softness = 0.05f;
+};
+
 } // namespace recorder_core
 
 namespace recorder_core {
@@ -220,6 +237,11 @@ class RecorderSession {
     // is running.  Workers drain their source during pause so buffers do not stall.
     void Pause();
     void Resume();
+
+    // Thread-safe live webcam overlay update. Safe to call from any thread while
+    // Record() is running. No-op if not recording or if the session was started
+    // without a webcam frame provider.
+    void UpdateWebcamOverlay(const WebcamOverlayLive& overlay);
 
     // Register a stats callback invoked approximately every 264 ms from an
     // internal worker thread.  Must be set before calling Record().

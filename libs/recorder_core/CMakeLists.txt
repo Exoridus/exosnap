@@ -102,6 +102,8 @@ add_library(recorder_core STATIC
     src/dxgi_od_capture_src.cpp
     src/nvenc_encoder.cpp
     src/mf_aac_encoder.cpp
+    src/gpu_compositor.cpp
+    src/gpu_compositor.h
     src/mixed_audio_src.cpp
     src/wasapi_capture_src.cpp
     src/wasapi_loopback.cpp
@@ -138,6 +140,7 @@ target_link_libraries(recorder_core
         Opus::opus
         mkvmuxer
         d3d11.lib
+        d3dcompiler.lib
         dxgi.lib
         dwmapi.lib
         user32.lib
@@ -288,3 +291,12 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_session_stats_meter PRIVATE src)
+
+exosnap_add_gtest(
+    NAME test_gpu_compositor
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_gpu_compositor.cpp
+    LIBRARIES recorder_core d3d11.lib dxgi.lib d3dcompiler.lib
+)
+target_include_directories(test_gpu_compositor PRIVATE src)
+target_compile_definitions(test_gpu_compositor PRIVATE NOMINMAX)

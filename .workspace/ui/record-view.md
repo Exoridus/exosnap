@@ -40,9 +40,17 @@ Operational surface for capture target selection, readiness, and start/stop cont
   - Bottom-right `AV1 · CQ 24 · SIZE …`
 - If a live value is unavailable, display `–` (never fake static values).
 
+## Webcam Overlay Rules
+
+- Webcam placement and resize edits are allowed in Ready, Countdown, Recording, and Paused states.
+- While recording, placement, mirror, enable, and chroma-key changes are live-applied to the running
+  session and the recorded output.
+- Stopping, Completed, Blocked, Failed, LoadingCapabilities, Preparing, and RegionSelecting states lock
+  webcam overlay editing.
+- Webcam device, resolution, and FPS are restart-class settings and stay locked during active recording.
+
 ## Honesty Rules
 
 - No static fake runtime values.
 - Audio dB labels show `– dB` when no live data is available.
 - Audio meters remain flat/dark when not live.
-
