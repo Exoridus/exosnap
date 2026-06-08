@@ -46,6 +46,10 @@ struct WebcamConfig {
     float overlay_w_norm = 0.25f;
     float overlay_h_norm = 0.25f;
 
+    // Horizontal mirror (left/right flip) of the webcam image before compositing.
+    // No vertical flip is performed.  Must match the Record-preview mirror state.
+    bool mirror = false;
+
     // Chroma key
     bool chroma_key_enabled = false;
     uint8_t chroma_r = 0;

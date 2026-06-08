@@ -320,21 +320,28 @@ void RecordingCoordinator::SetWebcamSettings(const WebcamSettings& settings) {
     const bool fps_changed = sanitized.fps != webcam_settings_.fps;
     webcam_settings_ = sanitized;
 
-    // Keep the capture device free while idle so WebcamPage preview can own it.
-    if (!is_recording_) {
+    // A device/resolution/fps change requires re-opening the capture; mirror and
+    // overlay placement are applied per-frame and never restart the device.
+    SyncWebcamService(device_changed || res_changed || fps_changed);
+}
+
+void RecordingCoordinator::SetWebcamPreviewActive(bool active) {
+    webcam_preview_active_ = active;
+    SyncWebcamService(false);
+}
+
+void RecordingCoordinator::SyncWebcamService(bool force_restart) {
+    // Recording always owns the device; while idle the capture runs only when the
+    // Record preview asked for it (live Ready PiP) and webcam is enabled.
+    const bool want_running = webcam_settings_.enabled && (is_recording_.load() || webcam_preview_active_);
+    if (!want_running) {
         webcam_service_.Stop();
         return;
     }
-
-    if (!sanitized.enabled) {
+    if (force_restart || !webcam_service_.IsRunning()) {
         webcam_service_.Stop();
-        return;
-    }
-
-    const bool needs_restart = !webcam_service_.IsRunning() || device_changed || res_changed || fps_changed;
-    if (needs_restart) {
-        webcam_service_.Stop();
-        webcam_service_.Start(sanitized.device_id, sanitized.width, sanitized.height, sanitized.fps);
+        webcam_service_.Start(webcam_settings_.device_id, webcam_settings_.width, webcam_settings_.height,
+                              webcam_settings_.fps);
     }
 }
 
@@ -430,6 +437,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         config.webcam.overlay_y_norm = webcam_settings_.overlay.y_norm;
         config.webcam.overlay_w_norm = webcam_settings_.overlay.w_norm;
         config.webcam.overlay_h_norm = webcam_settings_.overlay.h_norm;
+        config.webcam.mirror = webcam_settings_.mirror;
         config.webcam.chroma_key_enabled = webcam_settings_.chroma_key.enabled;
         config.webcam.chroma_r = webcam_settings_.chroma_key.r;
         config.webcam.chroma_g = webcam_settings_.chroma_key.g;
@@ -659,7 +667,9 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
 
     PostResult(std::move(ui_result));
     PostStateChange(result.succeeded ? UiRecordingState::Completed : UiRecordingState::Failed);
-    webcam_service_.Stop();
+    // is_recording_ is already false here; restore the idle preview capture if the
+    // Record page still wants a live PiP, otherwise release the device.
+    SyncWebcamService(false);
 }
 
 UiRecordingState RecordingCoordinator::State() const noexcept {
