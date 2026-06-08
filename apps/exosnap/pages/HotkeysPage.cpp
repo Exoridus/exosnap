@@ -1,5 +1,8 @@
 #include "HotkeysPage.h"
 
+#include "../ui/widgets/KeycapChip.h"
+#include "../ui/widgets/SectionRuleHeader.h"
+
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QKeySequenceEdit>
@@ -14,27 +17,12 @@ namespace exosnap {
 
 namespace {
 
-QLabel* makeSubLabel(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setProperty("labelRole", "subtitle");
-    l->setWordWrap(true);
-    return l;
-}
+using M = ui::theme::ExoSnapMetrics;
 
-QLabel* makeSectionLabel(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setProperty("labelRole", "section");
-    return l;
-}
-
-QFrame* makePanel(QWidget* parent) {
-    auto* panel = new QFrame(parent);
-    panel->setProperty("panelRole", "panel");
-    return panel;
-}
-
-QString bindingText(const QKeySequence& seq) {
-    return seq.isEmpty() ? "Unset" : seq.toString(QKeySequence::NativeText);
+QFrame* makeRowSeparator(QWidget* parent) {
+    auto* sep = new QFrame(parent);
+    sep->setProperty("frameRole", "sectionRuleLine");
+    return sep;
 }
 
 } // namespace
@@ -46,183 +34,285 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
 
     auto* content = new QWidget();
     auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
-                               ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
-    layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
+    layout->setContentsMargins(M::kSpaceXl, M::kSpaceXl, M::kSpaceXl, M::kSpaceXl);
+    layout->setSpacing(M::kSpaceMd);
 
-    // clang-format off
-    const struct { const char* action; QKeySequence binding; } kActions[4] = {
-        {"Start/Stop Recording",   QKeySequence("Alt+F9")},
-        {"Pause/Resume Recording", QKeySequence()},
-        {"Split Active Recording", QKeySequence()},
-        {"Mute/Unmute Microphone", QKeySequence()},
+    // Active rows (supported=true): wired through WM_HOTKEY, accept Set/Unset rebinding.
+    // Planned rows (supported=false): design-target bindings shown as context; no live handler;
+    // no Set/Unset controls; "Not in this build" tag clearly marks each as unavailable.
+    const struct {
+        const char* action;
+        QKeySequence binding;
+        bool supported;
+    } kActions[kActionCount] = {
+        // Active — backend-modelled, globally registered.
+        {"Start / Stop recording", QKeySequence(QStringLiteral("Alt+F9")), true},
+        {"Pause / Resume", QKeySequence(), true},
+        // Planned — registered but no live handler yet.
+        {"Split recording", QKeySequence(), false},
+        {"Mute / unmute microphone", QKeySequence(), false},
+        // Planned — design-target actions, no backend slot in this build.
+        {"Change source", QKeySequence(), false},
+        {"Toggle microphone", QKeySequence(), false},
+        {"Toggle webcam", QKeySequence(), false},
+        {"Toggle system audio", QKeySequence(), false},
+        {"Open diagnostics", QKeySequence(), false},
+        {"Capture frame (screenshot)", QKeySequence(), false},
     };
-    // clang-format on
 
-    layout->addWidget(makeSectionLabel("Recording Commands", content));
-    auto* commands_panel = makePanel(content);
-    auto* commands_layout = new QVBoxLayout(commands_panel);
-    commands_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceMd,
-                                        ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceMd);
-    commands_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
-    commands_layout->addWidget(
-        makeSubLabel("Global commands are staged here and applied through a later integration pass.", commands_panel));
+    // ── Active section ────────────────────────────────────────────────────────────────────────
+    auto* active_header_row = new QHBoxLayout();
+    active_header_row->setContentsMargins(0, 0, 0, 0);
+    active_header_row->setSpacing(M::kSpaceSm);
 
-    for (int i = 0; i < 4; ++i)
-        buildRow(i, kActions[i].action, kActions[i].binding, commands_layout, commands_panel);
+    auto* active_header = new ui::widgets::SectionRuleHeader(QStringLiteral("ACTIVE HOTKEYS"), content);
+    active_header->setMeta(QStringLiteral("Available now"));
+    active_header_row->addWidget(active_header, 1);
 
-    layout->addWidget(commands_panel);
+    auto* reset_btn = new QPushButton(QStringLiteral("Reset to defaults"), content);
+    reset_btn->setObjectName(QStringLiteral("hotkeyResetBtn"));
+    reset_btn->setProperty("role", "ghost");
+    active_header_row->addWidget(reset_btn, 0, Qt::AlignVCenter);
+    layout->addLayout(active_header_row);
 
-    layout->addWidget(makeSectionLabel("Global Shortcut Behavior", content));
-    auto* policy_panel = makePanel(content);
-    auto* policy_layout = new QVBoxLayout(policy_panel);
-    policy_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
-                                      ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
-    policy_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceXs);
-    policy_layout->addWidget(
-        makeSubLabel("Hotkeys are expected to work globally while ExoSnap is running.", policy_panel));
-    auto* policy_note = new QLabel("If a shortcut is unavailable, binding remains unchanged.", policy_panel);
-    policy_note->setProperty("labelRole", "subtle");
-    policy_layout->addWidget(policy_note);
-    layout->addWidget(policy_panel);
+    auto* active_panel = new QFrame(content);
+    active_panel->setProperty("panelRole", "panel");
+    auto* active_layout = new QVBoxLayout(active_panel);
+    active_layout->setContentsMargins(0, 0, 0, 0);
+    active_layout->setSpacing(0);
 
-    layout->addWidget(makeSectionLabel("Conflict / Availability Placeholder", content));
-    auto* conflict_panel = makePanel(content);
-    auto* conflict_layout = new QVBoxLayout(conflict_panel);
-    conflict_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
-                                        ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
-    auto* conflict_hint = new QLabel("Conflict detection summary is shown here in a later pass.", conflict_panel);
-    conflict_hint->setProperty("labelRole", "subtle");
-    conflict_layout->addWidget(conflict_hint);
-    layout->addWidget(conflict_panel);
+    bool first_active = true;
+    for (int i = 0; i < kActionCount; ++i) {
+        if (!kActions[i].supported)
+            continue;
+        if (!first_active)
+            active_layout->addWidget(makeRowSeparator(active_panel));
+        first_active = false;
+        buildRow(i, QString::fromUtf8(kActions[i].action), kActions[i].binding, true, active_layout, active_panel);
+    }
+    layout->addWidget(active_panel);
+
+    // ── Planned section ───────────────────────────────────────────────────────────────────────
+    auto* planned_header = new ui::widgets::SectionRuleHeader(QStringLiteral("PLANNED / UNAVAILABLE"), content);
+    planned_header->setMeta(QStringLiteral("Not in this build"));
+    layout->addWidget(planned_header);
+
+    auto* planned_panel = new QFrame(content);
+    planned_panel->setProperty("panelRole", "panel");
+    auto* planned_layout = new QVBoxLayout(planned_panel);
+    planned_layout->setContentsMargins(0, 0, 0, 0);
+    planned_layout->setSpacing(0);
+
+    bool first_planned = true;
+    for (int i = 0; i < kActionCount; ++i) {
+        if (kActions[i].supported)
+            continue;
+        if (!first_planned)
+            planned_layout->addWidget(makeRowSeparator(planned_panel));
+        first_planned = false;
+        buildRow(i, QString::fromUtf8(kActions[i].action), kActions[i].binding, false, planned_layout, planned_panel);
+    }
+    layout->addWidget(planned_panel);
+
+    // ── Honest registration footnote (no fake conflict detection) ─────────────────────────────
+    auto* footnote =
+        new QLabel(QStringLiteral("Shortcuts register globally and work while ExoSnap is running. ExoSnap does not "
+                                  "detect conflicts, so the last app to claim a key wins."),
+                   content);
+    footnote->setObjectName(QStringLiteral("hotkeyFootnote"));
+    footnote->setProperty("labelRole", "subtle");
+    footnote->setWordWrap(true);
+    layout->addWidget(footnote);
 
     layout->addStretch();
-    scroll->setWidget(content);
+
+    content->setMaximumWidth(1040);
+    content->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    {
+        auto* centering_host = new QWidget();
+        auto* ch = new QHBoxLayout(centering_host);
+        ch->setContentsMargins(0, 0, 0, 0);
+        ch->addStretch(1);
+        ch->addWidget(content, 10);
+        ch->addStretch(1);
+        scroll->setWidget(centering_host);
+    }
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->addWidget(scroll);
+
+    connect(reset_btn, &QPushButton::clicked, this, &HotkeysPage::resetToDefaults);
 }
 
 void HotkeysPage::setBindings(const std::array<QKeySequence, 4>& bindings) {
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < static_cast<int>(bindings.size()); ++i) {
         rows_[i].current_binding = bindings[static_cast<std::size_t>(i)];
-        if (rows_[i].binding_label) {
-            rows_[i].binding_label->setText(bindingText(rows_[i].current_binding));
-        }
-        if (rows_[i].unset_btn) {
-            rows_[i].unset_btn->setEnabled(!rows_[i].current_binding.isEmpty());
-        }
+        updateBindingChips(i);
     }
 }
 
-void HotkeysPage::buildRow(int index, const QString& action, const QKeySequence& default_binding,
-                           QVBoxLayout* parent_layout, QWidget* parent_widget) {
-    rows_[index].current_binding = default_binding;
+void HotkeysPage::updateBindingChips(int index) {
+    auto& row = rows_[index];
+    if (!row.supported || !row.binding_layout)
+        return;
+    ui::widgets::populateKeycaps(row.binding_layout, row.current_binding, row.binding_chips, QStringLiteral("Unset"));
+    if (row.unset_btn)
+        row.unset_btn->setEnabled(!row.current_binding.isEmpty());
+}
 
-    auto* row_frame = new QFrame(parent_widget);
-    row_frame->setProperty("panelRole", "compactRow");
+void HotkeysPage::buildRow(int index, const QString& action, const QKeySequence& default_binding, bool supported,
+                           QVBoxLayout* parent_layout, QWidget* parent_widget) {
+    rows_[index].supported = supported;
+    rows_[index].current_binding = default_binding;
+    rows_[index].default_binding = default_binding;
+
+    auto* row_frame = new QWidget(parent_widget);
+    row_frame->setObjectName(QStringLiteral("hotkeyRow_%1").arg(index));
+    row_frame->setProperty("rowRole", supported ? "hotkeyRow" : "hotkeyRowPlanned");
 
     auto* row_layout = new QHBoxLayout(row_frame);
-    row_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceSm,
-                                   ui::theme::ExoSnapMetrics::kSpaceMd, ui::theme::ExoSnapMetrics::kSpaceSm);
-    row_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
+    row_layout->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
+    row_layout->setSpacing(M::kSpaceMd);
 
-    // Action label
     auto* action_label = new QLabel(action, row_frame);
-    action_label->setProperty("labelRole", "body");
+    action_label->setProperty("labelRole", supported ? "hotkeyAction" : "hotkeyActionPlanned");
+    action_label->setObjectName(QStringLiteral("hotkeyAction_%1").arg(index));
+    row_layout->addWidget(action_label, 1);
 
-    // Normal-mode widgets: binding label + Set + Unset buttons
-    auto* normal_container = new QWidget(row_frame);
-    auto* normal_layout = new QHBoxLayout(normal_container);
-    normal_layout->setContentsMargins(0, 0, 0, 0);
-    normal_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
+    if (supported) {
+        rows_[index].binding_chips = new QWidget(row_frame);
+        rows_[index].binding_chips->setObjectName(QStringLiteral("hotkeyBinding_%1").arg(index));
+        rows_[index].binding_layout = new QHBoxLayout(rows_[index].binding_chips);
+        rows_[index].binding_layout->setContentsMargins(0, 0, 0, 0);
+        rows_[index].binding_layout->setSpacing(M::kSpaceXs + 2);
+        row_layout->addWidget(rows_[index].binding_chips, 0, Qt::AlignVCenter);
 
-    rows_[index].binding_label = new QLabel(bindingText(default_binding), normal_container);
-    rows_[index].binding_label->setProperty("labelRole", "mono");
-    rows_[index].binding_label->setMinimumWidth(100);
+        // Normal controls: Set / Unset.
+        rows_[index].normal_container = new QWidget(row_frame);
+        auto* normal_layout = new QHBoxLayout(rows_[index].normal_container);
+        normal_layout->setContentsMargins(0, 0, 0, 0);
+        normal_layout->setSpacing(M::kSpaceSm);
 
-    rows_[index].set_btn = new QPushButton("Set", normal_container);
-    rows_[index].set_btn->setProperty("role", "utility");
+        rows_[index].set_btn = new QPushButton(QStringLiteral("Set"), rows_[index].normal_container);
+        rows_[index].set_btn->setProperty("role", "utility");
+        rows_[index].set_btn->setObjectName(QStringLiteral("hotkeySetBtn_%1").arg(index));
 
-    rows_[index].unset_btn = new QPushButton("Unset", normal_container);
-    rows_[index].unset_btn->setProperty("role", "utility");
-    rows_[index].unset_btn->setEnabled(!default_binding.isEmpty());
+        rows_[index].unset_btn = new QPushButton(QStringLiteral("Unset"), rows_[index].normal_container);
+        rows_[index].unset_btn->setProperty("role", "utility");
+        rows_[index].unset_btn->setObjectName(QStringLiteral("hotkeyUnsetBtn_%1").arg(index));
 
-    normal_layout->addWidget(rows_[index].binding_label);
-    normal_layout->addWidget(rows_[index].set_btn);
-    normal_layout->addWidget(rows_[index].unset_btn);
+        normal_layout->addWidget(rows_[index].set_btn);
+        normal_layout->addWidget(rows_[index].unset_btn);
+        row_layout->addWidget(rows_[index].normal_container, 0, Qt::AlignVCenter);
 
-    // Capture-mode container (hidden initially)
-    rows_[index].capture_container = new QWidget(row_frame);
-    auto* capture_layout = new QHBoxLayout(rows_[index].capture_container);
-    capture_layout->setContentsMargins(0, 0, 0, 0);
-    capture_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
+        // Capture controls (shown while rebinding).
+        rows_[index].capture_container = new QWidget(row_frame);
+        auto* capture_layout = new QHBoxLayout(rows_[index].capture_container);
+        capture_layout->setContentsMargins(0, 0, 0, 0);
+        capture_layout->setSpacing(M::kSpaceSm);
 
-    auto* capture_hint = new QLabel("Enter hotkey now…", rows_[index].capture_container);
-    capture_hint->setProperty("labelRole", "signal");
+        auto* capture_hint = new QLabel(QStringLiteral("Press keys…"), rows_[index].capture_container);
+        capture_hint->setProperty("labelRole", "signal");
 
-    rows_[index].capture_edit = new QKeySequenceEdit(rows_[index].capture_container);
-    rows_[index].capture_edit->setMaximumSequenceLength(1);
-    rows_[index].capture_edit->setProperty("role", "capture");
-    rows_[index].capture_edit->setMinimumWidth(100);
+        rows_[index].capture_edit = new QKeySequenceEdit(rows_[index].capture_container);
+        rows_[index].capture_edit->setMaximumSequenceLength(1);
+        rows_[index].capture_edit->setProperty("role", "capture");
+        rows_[index].capture_edit->setMinimumWidth(140);
+        rows_[index].capture_edit->setObjectName(QStringLiteral("hotkeyCaptureEdit_%1").arg(index));
 
-    auto* cancel_btn = new QPushButton("Cancel", rows_[index].capture_container);
-    cancel_btn->setProperty("role", "utility");
+        auto* cancel_btn = new QPushButton(QStringLiteral("Cancel"), rows_[index].capture_container);
+        cancel_btn->setProperty("role", "utility");
+        cancel_btn->setObjectName(QStringLiteral("hotkeyCancelBtn_%1").arg(index));
 
-    capture_layout->addWidget(capture_hint);
-    capture_layout->addWidget(rows_[index].capture_edit);
-    capture_layout->addWidget(cancel_btn);
-    rows_[index].capture_container->hide();
+        capture_layout->addWidget(capture_hint);
+        capture_layout->addWidget(rows_[index].capture_edit);
+        capture_layout->addWidget(cancel_btn);
+        rows_[index].capture_container->hide();
+        row_layout->addWidget(rows_[index].capture_container, 0, Qt::AlignVCenter);
 
-    row_layout->addWidget(action_label);
-    row_layout->addStretch();
-    row_layout->addWidget(normal_container);
-    row_layout->addWidget(rows_[index].capture_container);
+        const int i = index;
+        connect(rows_[i].set_btn, &QPushButton::clicked, this, [this, i]() { enterCapture(i); });
+        connect(rows_[i].unset_btn, &QPushButton::clicked, this, [this, i]() { commitCapture(i, QKeySequence()); });
+        connect(cancel_btn, &QPushButton::clicked, this, [this, i]() { cancelCapture(i); });
+        connect(rows_[i].capture_edit, &QKeySequenceEdit::keySequenceChanged, this, [this, i](const QKeySequence& seq) {
+            if (!seq.isEmpty())
+                commitCapture(i, seq);
+        });
+
+        updateBindingChips(index);
+    } else {
+        auto* planned_tag = new QLabel(QStringLiteral("Not in this build"), row_frame);
+        planned_tag->setObjectName(QStringLiteral("hotkeyPlannedTag_%1").arg(index));
+        planned_tag->setProperty("labelRole", "plannedTag");
+        row_layout->addWidget(planned_tag, 0, Qt::AlignVCenter);
+    }
 
     parent_layout->addWidget(row_frame);
-
-    int i = index;
-    connect(rows_[i].set_btn, &QPushButton::clicked, this, [this, i]() { enterCapture(i); });
-    connect(rows_[i].unset_btn, &QPushButton::clicked, this, [this, i]() { commitCapture(i, QKeySequence()); });
-    connect(cancel_btn, &QPushButton::clicked, this, [this, i]() { cancelCapture(i); });
-    connect(rows_[i].capture_edit, &QKeySequenceEdit::keySequenceChanged, this, [this, i](const QKeySequence& seq) {
-        if (!seq.isEmpty())
-            commitCapture(i, seq);
-    });
 }
 
 void HotkeysPage::enterCapture(int index) {
+    if (index < 0 || index >= kActionCount)
+        return;
+
     if (capturing_row_ >= 0)
         cancelCapture(capturing_row_);
-    capturing_row_ = index;
 
     auto& row = rows_[index];
-    row.binding_label->parentWidget()->hide(); // hide normal_container
+    if (!row.supported || !row.normal_container || !row.capture_container || !row.capture_edit)
+        return;
+
+    capturing_row_ = index;
+    row.normal_container->hide();
     row.capture_container->show();
     row.capture_edit->clear();
     row.capture_edit->setFocus();
 }
 
 void HotkeysPage::commitCapture(int index, const QKeySequence& seq) {
+    if (index < 0 || index >= kActionCount)
+        return;
+
     auto& row = rows_[index];
+    if (!row.supported)
+        return;
+
     row.current_binding = seq;
-    row.binding_label->setText(bindingText(seq));
-    row.unset_btn->setEnabled(!seq.isEmpty());
     emit bindingChanged(index, seq);
 
-    if (capturing_row_ == index) {
+    if (capturing_row_ == index && row.capture_container && row.normal_container) {
         row.capture_container->hide();
-        row.binding_label->parentWidget()->show(); // show normal_container
+        row.normal_container->show();
         capturing_row_ = -1;
     }
+    updateBindingChips(index);
 }
 
 void HotkeysPage::cancelCapture(int index) {
+    if (index < 0 || index >= kActionCount)
+        return;
+
     auto& row = rows_[index];
+    if (!row.supported || !row.normal_container || !row.capture_container)
+        return;
+
     row.capture_container->hide();
-    row.binding_label->parentWidget()->show(); // show normal_container
+    row.normal_container->show();
     capturing_row_ = -1;
+    updateBindingChips(index);
+}
+
+void HotkeysPage::resetToDefaults() {
+    if (capturing_row_ >= 0)
+        cancelCapture(capturing_row_);
+
+    for (int i = 0; i < kActionCount; ++i) {
+        if (!rows_[i].supported)
+            continue;
+        if (rows_[i].current_binding == rows_[i].default_binding)
+            continue;
+        commitCapture(i, rows_[i].default_binding);
+    }
 }
 
 } // namespace exosnap

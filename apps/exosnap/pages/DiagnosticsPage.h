@@ -10,14 +10,17 @@
 
 class QLabel;
 class QPushButton;
-class QTabWidget;
+class QToolButton;
 class QVBoxLayout;
 class QScrollArea;
-class QComboBox;
-class QSpinBox;
 class QFrame;
 
 namespace exosnap {
+
+namespace ui::widgets {
+class PipelineFlow;
+class SectionRuleHeader;
+} // namespace ui::widgets
 
 struct OutputSettingsModel;
 struct VideoSettingsModel;
@@ -32,65 +35,63 @@ class DiagnosticsPage : public QWidget {
                            const std::string& profile_name, const std::string& hotkeys_summary,
                            const std::string& settings_path, bool hotkeys_ok);
 
+  signals:
+    void navigateToLogsRequested();
+
   private slots:
     void onRunCheck();
     void onExportReport();
-    void onOpenLogFolder();
-    void onCopyLatestLogs();
-    void onExportDiagnosticsBundle();
-    void onLogLevelChanged(int index);
 
   private:
-    void buildOverviewTab(QWidget* container);
-    void buildCapabilitiesTab(QWidget* container);
-    void buildConfigurationTab(QWidget* container);
-    void buildRecommendationsTab(QWidget* container);
-    void buildPerformanceTab(QWidget* container);
-    void buildLogsTab(QWidget* container);
-    void buildSelfTestTab(QWidget* container);
-
     void refreshOverview();
-    void refreshRecommendations();
     void refreshSelfTest();
     void refreshCapabilities();
     void refreshConfiguration();
-    void refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations);
+    void refreshPipeline();
+    void refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations, int total_notices,
+                          int total_blockers);
+    void setReadinessState(const QString& state);
 
     QLabel* makeSubLabel(const QString& text, QWidget* parent);
-    QLabel* makeSectionLabel(const QString& text, QWidget* parent);
     QFrame* makePanel(QWidget* parent);
-    QWidget* makeInfoRow(const QString& label, const QString& value, const QString& status, QWidget* parent);
+    QWidget* makeInfoRow(const QString& label, const QString& value, const QString& status, QWidget* parent,
+                         bool first_row);
 
-    QTabWidget* tabs_ = nullptr;
+    // Builds a collapsible "Technical details" section (disclosure head + hidden body).
+    // Returns the body widget the caller fills; the body starts collapsed.
+    QWidget* makeCollapsibleSection(const QString& title, const QString& subtitle, QWidget* parent,
+                                    QToolButton*& out_toggle);
 
-    // Overview
-    QLabel* status_label_ = nullptr;
+    // Readiness / status
+    QFrame* readiness_panel_ = nullptr;
+    QLabel* status_pill_ = nullptr;
     QLabel* last_check_label_ = nullptr;
     QLabel* summary_label_ = nullptr;
     QPushButton* run_check_btn_ = nullptr;
     QPushButton* export_report_btn_ = nullptr;
+    QFrame* blocker_tile_ = nullptr;
+    QFrame* notice_tile_ = nullptr;
+    QFrame* pass_tile_ = nullptr;
     QLabel* blocker_count_ = nullptr;
     QLabel* notice_count_ = nullptr;
     QLabel* pass_count_ = nullptr;
-    QVBoxLayout* overview_issues_layout_ = nullptr;
 
-    // Capabilities
+    // Capture pipeline (the page's visual center)
+    ui::widgets::PipelineFlow* pipeline_flow_ = nullptr;
+
+    // Top Issues / recommendations
+    QVBoxLayout* overview_issues_layout_ = nullptr;
+    QWidget* issues_parent_ = nullptr;
+
+    // Capability matrix (visible, secondary real-probe table)
     QVBoxLayout* capabilities_layout_ = nullptr;
     QWidget* capabilities_content_ = nullptr;
+    ui::widgets::SectionRuleHeader* capabilities_header_ = nullptr;
 
-    // Configuration
+    // Configuration (collapsible body)
     QVBoxLayout* config_layout_ = nullptr;
     QWidget* config_content_ = nullptr;
-
-    // Recommendations
-    QVBoxLayout* recommendations_layout_ = nullptr;
-    QWidget* recommendations_content_ = nullptr;
-
-    // Logs
-    QLabel* log_path_label_ = nullptr;
-    QComboBox* log_level_combo_ = nullptr;
-    QSpinBox* max_file_size_spin_ = nullptr;
-    QSpinBox* max_file_count_spin_ = nullptr;
+    QToolButton* config_toggle_ = nullptr;
 
     // Self-test
     QVBoxLayout* selftest_layout_ = nullptr;

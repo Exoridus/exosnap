@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdio>
+#include <filesystem>
 #include <string_view>
 #include <windows.h>
 
@@ -318,36 +319,20 @@ void RecordViewModel::SetState(UiRecordingState new_state) {
     }
 }
 
-void RecordViewModel::UpdateStats(const recorder_core::SessionStats& stats) {
-    elapsed_text = FormatElapsed(stats.elapsed_seconds);
-    elapsed_seconds = stats.elapsed_seconds;
-    frames_captured = stats.video_frames_captured;
-    video_packets = stats.encoded_video_packets;
-    audio_packets = stats.audio_packets;
-    video_bytes = stats.video_bytes;
-    audio_bytes = stats.audio_bytes;
-    output_file_bytes = stats.output_file_bytes;
-    dropped_frames = stats.dropped_or_skipped_video_frames;
-    av_drift_ms = stats.duration_skew_ms;
-    output_size_text = FormatBytes(stats.output_file_bytes);
-    live_stats_available = (stats.elapsed_seconds > 0.0) || (stats.output_file_bytes > 0) || (stats.video_bytes > 0) ||
-                           (stats.audio_bytes > 0) || (stats.video_frames_captured > 0);
-
+void RecordViewModel::UpdateMeterRms(const std::array<float, 3>& per_track_rms) {
     audio_rms_app = 0.0f;
     audio_rms_sys = 0.0f;
     audio_rms_mic = 0.0f;
 
     for (const auto& preview : audio_track_preview) {
-        if (preview.track_number == 0) {
+        if (preview.track_number == 0)
             continue;
-        }
 
         const std::size_t track_index = static_cast<std::size_t>(preview.track_number - 1);
-        if (track_index >= stats.per_track_rms.size()) {
+        if (track_index >= per_track_rms.size())
             continue;
-        }
 
-        const float rms = stats.per_track_rms[track_index];
+        const float rms = per_track_rms[track_index];
 
         if (preview.source_key == "app") {
             audio_rms_app = rms;
@@ -366,6 +351,24 @@ void RecordViewModel::UpdateStats(const recorder_core::SessionStats& stats) {
     }
 }
 
+void RecordViewModel::UpdateStats(const recorder_core::SessionStats& stats) {
+    elapsed_text = FormatElapsed(stats.elapsed_seconds);
+    elapsed_seconds = stats.elapsed_seconds;
+    frames_captured = stats.video_frames_captured;
+    video_packets = stats.encoded_video_packets;
+    audio_packets = stats.audio_packets;
+    video_bytes = stats.video_bytes;
+    audio_bytes = stats.audio_bytes;
+    output_file_bytes = stats.output_file_bytes;
+    dropped_frames = stats.dropped_or_skipped_video_frames;
+    av_drift_ms = stats.duration_skew_ms;
+    output_size_text = FormatBytes(stats.output_file_bytes);
+    live_stats_available = (stats.elapsed_seconds > 0.0) || (stats.output_file_bytes > 0) || (stats.video_bytes > 0) ||
+                           (stats.audio_bytes > 0) || (stats.video_frames_captured > 0);
+
+    UpdateMeterRms(stats.per_track_rms);
+}
+
 void RecordViewModel::SetResult(const UiRecordingResult& result) {
     last_succeeded = result.succeeded;
     result_status_text = result.succeeded ? L"Recording succeeded" : L"Recording failed";
@@ -373,6 +376,8 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
     result_error_phase = result.error_phase;
     result_hresult_text = result.hresult_text;
     result_error_detail = result.error_detail;
+    result_output_file_bytes = result.output_file_bytes;
+    result_elapsed_seconds = result.elapsed_seconds;
 
     const auto msg = exosnap::diagnostics::MapErrorToUserMessage(result);
     result_user_title = msg.title;
@@ -380,9 +385,23 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
     result_action_hint = msg.action_hint;
 
     if (result.succeeded) {
-        result_stats_text = elapsed_text + L"  ·  " + output_size_text;
+        const std::wstring elapsed_display =
+            result.elapsed_seconds > 0.0 ? FormatElapsed(result.elapsed_seconds) : elapsed_text;
+        const std::wstring size_display =
+            result.output_file_bytes > 0 ? FormatBytes(result.output_file_bytes) : output_size_text;
+        result_stats_text = elapsed_display + L"  ·  " + size_display;
+        std::filesystem::path p(result.output_path);
+        std::wstring filename = p.filename().wstring();
+        result_destination_text = filename;
+        if (!size_display.empty() || !elapsed_display.empty()) {
+            result_destination_text += L"  ·  ";
+            result_destination_text += size_display;
+            result_destination_text += L"  ·  ";
+            result_destination_text += elapsed_display;
+        }
     } else {
         result_stats_text = {};
+        result_destination_text = {};
     }
 }
 
@@ -415,17 +434,17 @@ void RecordViewModel::ApplyTargetKind(capability::CaptureTargetKind kind) {
 
     using K = recorder_core::AudioSourceKind;
     if (kind == capability::CaptureTargetKind::Window) {
-        // Default: APP + MIC + SYS enabled as separate tracks.
+        // Window: Application audio ON; Other system audio and Microphone OFF by default.
         audio_ui_state.source_rows = {
             {K::App, true, false},
-            {K::Mic, true, false},
-            {K::Sys, true, false},
+            {K::Mic, false, false},
+            {K::Sys, false, false},
         };
     } else {
-        // Display defaults keep both available sources enabled and separate.
+        // Display/Region: Computer audio ON; Microphone OFF by default.
         audio_ui_state.source_rows = {
             {K::SystemOutput, true, false},
-            {K::Mic, true, false},
+            {K::Mic, false, false},
         };
     }
 
@@ -436,6 +455,17 @@ void RecordViewModel::ApplyTargetKindPreservingAudio(capability::CaptureTargetKi
     audio_ui_state.target_kind = kind;
     if (kind != capability::CaptureTargetKind::Window) {
         audio_ui_state.selected_window_pid.reset();
+    }
+
+    if (kind == capability::CaptureTargetKind::Window) {
+        using K = recorder_core::AudioSourceKind;
+        const bool has_app = std::any_of(audio_ui_state.source_rows.begin(), audio_ui_state.source_rows.end(),
+                                         [](const recorder_core::AudioSourceRow& r) { return r.kind == K::App; });
+        if (!has_app) {
+            // App is first in canonical Window row order (App, Mic, Sys).
+            audio_ui_state.source_rows.insert(audio_ui_state.source_rows.begin(),
+                                              recorder_core::AudioSourceRow{K::App, true, false});
+        }
     }
 
     RebuildAudioPlan();

@@ -29,6 +29,15 @@ bool ContainsAny(std::wstring_view haystack, const std::array<std::wstring_view,
     return false;
 }
 
+bool ContainsAny(std::wstring_view haystack, const std::array<std::wstring_view, 4>& needles) {
+    for (const auto needle : needles) {
+        if (Contains(haystack, needle)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 UiErrorMessage MakeMessage(std::wstring title, std::wstring message, std::wstring action_hint) {
     return UiErrorMessage{
         std::move(title),
@@ -105,9 +114,15 @@ UiErrorMessage MapErrorToUserMessage(const UiRecordingResult& result) {
                            L"Check disk space.");
     }
 
-    if (Contains(detail, L"output directory")) {
-        return MakeMessage(L"Output folder error", L"The recording folder could not be created.",
-                           L"Check folder permissions.");
+    if (Contains(detail, L"unique output filename")) {
+        return MakeMessage(L"Filename collision", L"Could not create a unique filename in the output folder.",
+                           L"Empty the output folder, change the filename pattern, or choose a different folder.");
+    }
+
+    if (ContainsAny(detail, std::array<std::wstring_view, 4>{L"output directory", L"output folder", L"Output folder",
+                                                             L"Output directory"})) {
+        return MakeMessage(L"Output folder error", L"The recording folder could not be created or written to.",
+                           L"Check folder permissions and available disk space.");
     }
 
     if (phase == L"Shutdown") {

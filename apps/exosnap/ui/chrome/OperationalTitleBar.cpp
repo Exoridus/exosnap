@@ -1,32 +1,25 @@
 #include "OperationalTitleBar.h"
 
 #include "../brand/BrandMarkWidget.h"
+#include "../theme/ExoSnapPalette.h"
 #include "../widgets/StatusPill.h"
 
-#include <QFrame>
+#include <QAbstractButton>
+#include <QApplication>
+#include <QButtonGroup>
+#include <QColor>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLayoutItem>
+#include <QMouseEvent>
 #include <QPainter>
+#include <QPen>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QStyle>
+#include <QWindow>
 
 namespace exosnap::ui::chrome {
-namespace {
-
-QFrame* makeSeparator(QWidget* parent) {
-    auto* separator = new QFrame(parent);
-    separator->setObjectName("titlebarSeparator");
-    separator->setFrameShape(QFrame::VLine);
-    separator->setFixedWidth(1);
-    return separator;
-}
-
-QString fallbackDash(const QString& text) {
-    const QString trimmed = text.trimmed();
-    return trimmed.isEmpty() ? QStringLiteral("–") : trimmed;
-}
-
-} // namespace
 
 OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     setObjectName("operationalTitleBar");
@@ -38,64 +31,56 @@ OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
+    // Brand: aperture mark + lowercase two-tone wordmark (exo neutral · snap accent).
     auto* brand_slot = new QWidget(this);
     brand_slot->setObjectName("titlebarBrandSlot");
-    brand_slot->setFixedWidth(120);
     auto* brand_layout = new QHBoxLayout(brand_slot);
-    brand_layout->setContentsMargins(10, 0, 10, 0);
+    brand_layout->setContentsMargins(16, 0, 8, 0);
     brand_layout->setSpacing(8);
 
-    auto* mark = new ui::brand::BrandMarkWidget(brand_slot);
-    mark->setFixedSize(20, 20);
-    auto* wordmark = new QLabel("EXO·SNAP", brand_slot);
+    brand_mark_ = new ui::brand::BrandMarkWidget(brand_slot);
+    brand_mark_->setFixedSize(20, 20);
+
+    auto* wordmark = new QLabel(brand_slot);
     wordmark->setProperty("labelRole", "titlebarWordmark");
+    wordmark->setTextFormat(Qt::RichText);
+    wordmark->setText(QStringLiteral("<span style=\"color:%1;\">exo</span><span style=\"color:%2;\">snap</span>")
+                          .arg(QString::fromLatin1(theme::ExoSnapPalette::kText0),
+                               QString::fromLatin1(theme::ExoSnapPalette::kAccent)));
 
-    brand_layout->addWidget(mark, 0, Qt::AlignVCenter);
+    brand_layout->addWidget(brand_mark_, 0, Qt::AlignVCenter);
     brand_layout->addWidget(wordmark, 0, Qt::AlignVCenter);
-    brand_layout->addStretch(1);
 
-    auto* page_slot = new QWidget(this);
-    page_slot->setObjectName("titlebarPageSlot");
-    page_slot->setFixedWidth(220);
-    auto* page_layout = new QHBoxLayout(page_slot);
-    page_layout->setContentsMargins(10, 0, 10, 0);
-    page_layout->setSpacing(8);
+    // Top navigation tabs (populated via setNavItems()).
+    auto* nav_container = new QWidget(this);
+    nav_container->setObjectName("titlebarNav");
+    nav_layout_ = new QHBoxLayout(nav_container);
+    nav_layout_->setContentsMargins(14, 0, 0, 0);
+    nav_layout_->setSpacing(2);
 
-    page_code_label_ = new QLabel("01 · RECORD", page_slot);
-    page_code_label_->setProperty("labelRole", "titlebarPageCode");
+    nav_group_ = new QButtonGroup(this);
+    nav_group_->setExclusive(true);
+    connect(nav_group_, &QButtonGroup::idClicked, this, &OperationalTitleBar::navPageRequested);
 
-    status_pill_ = new ui::widgets::StatusPill(page_slot);
-    status_pill_->setText("READY");
+    // Flexible drag region between nav and status.
+    auto* drag_slot = new QWidget(this);
+    drag_slot->setObjectName("titlebarDragSlot");
+    drag_slot->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+
+    // Compact status pill bound to recording state.
+    auto* status_slot = new QWidget(this);
+    status_slot->setObjectName("titlebarStatusSlot");
+    auto* status_layout = new QHBoxLayout(status_slot);
+    status_layout->setContentsMargins(12, 0, 12, 0);
+    status_layout->setSpacing(0);
+
+    status_pill_ = new ui::widgets::StatusPill(status_slot);
+    status_pill_->setObjectName("titlebarStatusChip");
+    status_pill_->setText(QStringLiteral("Ready"));
     status_pill_->setTone(ui::widgets::StatusPill::Tone::Ready);
+    status_layout->addWidget(status_pill_, 0, Qt::AlignVCenter);
 
-    page_layout->addWidget(page_code_label_, 0, Qt::AlignVCenter);
-    page_layout->addWidget(status_pill_, 0, Qt::AlignVCenter);
-    page_layout->addStretch(1);
-
-    auto* capture_slot = new QWidget(this);
-    capture_slot->setObjectName("titlebarCaptureSlot");
-    capture_slot->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    auto* capture_layout = new QHBoxLayout(capture_slot);
-    capture_layout->setContentsMargins(12, 0, 12, 0);
-    capture_layout->setSpacing(0);
-
-    context_label_ = new QLabel("DISPLAY1 · 2560×1440 · 60 fps · AV1", capture_slot);
-    context_label_->setProperty("labelRole", "titlebarContext");
-    capture_layout->addWidget(context_label_, 1, Qt::AlignVCenter);
-
-    auto* metrics_slot = new QWidget(this);
-    metrics_slot->setObjectName("titlebarMetricsSlot");
-    metrics_slot->setFixedWidth(260);
-    auto* metrics_layout = new QHBoxLayout(metrics_slot);
-    metrics_layout->setContentsMargins(0, 0, 12, 0);
-    metrics_layout->setSpacing(0);
-
-    metrics_label_ = new QLabel(metrics_slot);
-    metrics_label_->setProperty("labelRole", "titlebarRuntime");
-    metrics_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    metrics_label_->setTextFormat(Qt::RichText);
-    metrics_layout->addWidget(metrics_label_);
-
+    // Window controls.
     auto* controls = new QWidget(this);
     controls->setObjectName("titlebarControls");
     controls->setFixedWidth(138);
@@ -119,11 +104,9 @@ OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     controls_layout->addWidget(close_btn_);
 
     root->addWidget(brand_slot);
-    root->addWidget(makeSeparator(this), 0, Qt::AlignVCenter);
-    root->addWidget(page_slot);
-    root->addWidget(makeSeparator(this), 0, Qt::AlignVCenter);
-    root->addWidget(capture_slot, 1);
-    root->addWidget(metrics_slot);
+    root->addWidget(nav_container);
+    root->addWidget(drag_slot, 1);
+    root->addWidget(status_slot, 0, Qt::AlignVCenter);
     root->addWidget(controls);
 
     connect(minimize_btn_, &QPushButton::clicked, this, &OperationalTitleBar::minimizeRequested);
@@ -131,12 +114,46 @@ OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     connect(close_btn_, &QPushButton::clicked, this, &OperationalTitleBar::closeRequested);
 
     refreshStatusChip();
-    refreshMetricsLabel();
 }
 
-void OperationalTitleBar::setPageContext(const QString& page_code, const QString& context_text) {
-    page_code_label_->setText(page_code);
-    context_label_->setText(context_text);
+void OperationalTitleBar::setNavItems(const QVector<NavItem>& items) {
+    // Idempotent: drop any previously built tabs first.
+    const QList<QAbstractButton*> existing = nav_group_->buttons();
+    for (QAbstractButton* button : existing)
+        nav_group_->removeButton(button);
+    while (QLayoutItem* layout_item = nav_layout_->takeAt(0)) {
+        if (QWidget* widget = layout_item->widget())
+            widget->deleteLater();
+        delete layout_item;
+    }
+
+    QWidget* nav_container = nav_layout_->parentWidget();
+    for (const NavItem& item : items) {
+        auto* tab = new QPushButton(item.label, nav_container);
+        tab->setObjectName("titlebarNavTab");
+        tab->setProperty("titlebarNavTab", true);
+        tab->setFocusPolicy(Qt::NoFocus);
+        tab->setCursor(Qt::PointingHandCursor);
+        tab->setFixedHeight(kHeight);
+
+        if (item.page_index >= 0) {
+            tab->setCheckable(true);
+            nav_group_->addButton(tab, item.page_index);
+        } else {
+            // Action item (About): opens a dialog and never stays highlighted.
+            tab->setProperty("navAction", true);
+            connect(tab, &QPushButton::clicked, this, &OperationalTitleBar::aboutRequested);
+        }
+        nav_layout_->addWidget(tab);
+    }
+}
+
+void OperationalTitleBar::setActivePage(int page_index) {
+    QAbstractButton* button = nav_group_->button(page_index);
+    if (button == nullptr)
+        return;
+    const QSignalBlocker blocker(nav_group_);
+    button->setChecked(true);
 }
 
 void OperationalTitleBar::setRecordingActive(bool recording) {
@@ -144,10 +161,11 @@ void OperationalTitleBar::setRecordingActive(bool recording) {
         return;
     recording_active_ = recording;
     setProperty("recording", recording_active_);
+    if (brand_mark_ != nullptr)
+        brand_mark_->setRecording(recording_active_);
     style()->unpolish(this);
     style()->polish(this);
     refreshStatusChip();
-    refreshMetricsLabel();
     update();
 }
 
@@ -161,24 +179,93 @@ void OperationalTitleBar::setStatusLabel(const QString& status_text) {
     refreshStatusChip();
 }
 
-void OperationalTitleBar::setRuntimeMeta(const QString& cpu_text, const QString& gpu_text, const QString& ram_text) {
-    idle_cpu_text_ = fallbackDash(cpu_text);
-    idle_gpu_text_ = fallbackDash(gpu_text);
-    idle_ram_text_ = fallbackDash(ram_text);
-    refreshMetricsLabel();
-}
-
-void OperationalTitleBar::setRecordingRuntime(const QString& elapsed_text, const QString& bitrate_text,
-                                              const QString& drop_text) {
-    rec_elapsed_text_ = elapsed_text.trimmed().isEmpty() ? QStringLiteral("--:--:--") : elapsed_text.trimmed();
-    rec_bitrate_text_ = fallbackDash(bitrate_text);
-    rec_drop_text_ = fallbackDash(drop_text);
-    refreshStatusChip();
-    refreshMetricsLabel();
-}
-
 void OperationalTitleBar::setMaximizedState(bool maximized) {
-    maximize_btn_->setText(maximized ? "❐" : "□");
+    maximize_btn_->setText(maximized ? "⧉" : "□"); // ⧉ TWO JOINED SQUARES — same visual weight as □
+}
+
+void OperationalTitleBar::mousePressEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        const QPoint local = mapFromGlobal(event->globalPosition().toPoint());
+        if (hitTestWindowButton(local) == WindowButtonHit::None) {
+            // Show the move cursor immediately on press.
+            QApplication::setOverrideCursor(Qt::SizeAllCursor);
+            move_cursor_active_ = true;
+
+            if (window()->isMaximized()) {
+                // Defer move until the user actually drags — a bare click on a
+                // maximized titlebar must not restore the window.
+                drag_press_global_pos_ = event->globalPosition().toPoint();
+                tracking_drag_from_max_ = true;
+                event->accept();
+                return;
+            }
+            if (QWindow* win = window()->windowHandle()) {
+                win->startSystemMove();
+                event->accept();
+                return;
+            }
+        }
+    }
+    tracking_drag_from_max_ = false;
+    QWidget::mousePressEvent(event);
+}
+
+void OperationalTitleBar::mouseMoveEvent(QMouseEvent* event) {
+    if (tracking_drag_from_max_ && window()->isMaximized() && (event->buttons() & Qt::LeftButton)) {
+        const QPoint current = event->globalPosition().toPoint();
+        if ((current - drag_press_global_pos_).manhattanLength() > 5) {
+            tracking_drag_from_max_ = false;
+
+            QWidget* win = window();
+            const QRect max_rect = win->geometry();
+            const QRect normal_rect = win->normalGeometry();
+
+            win->showNormal();
+
+            // Reposition so the cursor stays at roughly the same relative x in
+            // the titlebar, matching the native Windows restore-on-drag behavior.
+            if (normal_rect.isValid() && max_rect.width() > 0) {
+                const qreal rel_x = static_cast<qreal>(current.x() - max_rect.left()) / max_rect.width();
+                const int target_x = current.x() - qRound(win->width() * rel_x);
+                win->move(qMax(0, target_x), qMax(0, current.y() - kHeight / 2));
+            }
+
+            if (QWindow* handle = win->windowHandle()) {
+                handle->startSystemMove();
+                event->accept();
+                return;
+            }
+        }
+    }
+    QWidget::mouseMoveEvent(event);
+}
+
+void OperationalTitleBar::mouseReleaseEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        tracking_drag_from_max_ = false;
+        resetDragCursor(); // handles plain click (no drag) — WM_EXITSIZEMOVE handles drag end
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
+void OperationalTitleBar::resetDragCursor() {
+    if (move_cursor_active_) {
+        QApplication::restoreOverrideCursor();
+        move_cursor_active_ = false;
+    }
+}
+
+void OperationalTitleBar::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        const QPoint local = mapFromGlobal(event->globalPosition().toPoint());
+        if (hitTestWindowButton(local) == WindowButtonHit::None) {
+            QWidget* win = window();
+            win->isMaximized() ? win->showNormal() : win->showMaximized();
+            event->accept();
+            return;
+        }
+    }
+    QWidget::mouseDoubleClickEvent(event);
 }
 
 bool OperationalTitleBar::isInDragArea(const QPoint& local_pos) const {
@@ -207,8 +294,10 @@ void OperationalTitleBar::paintEvent(QPaintEvent* event) {
     Q_UNUSED(event);
 
     QPainter painter(this);
-    painter.fillRect(rect(), QColor("#14130f"));
-    painter.setPen(QPen(recording_active_ ? QColor("#d7a744") : QColor("#292826"), 1.0));
+    painter.fillRect(rect(), QColor(theme::ExoSnapPalette::kBg0));
+    // Neutral hairline separator — recording state is communicated via the status pill
+    // and preview border, not the top-chrome border line.
+    painter.setPen(QPen(QColor(255, 255, 255, 18), 1.0));
     painter.drawLine(0, height() - 1, width(), height() - 1);
 }
 
@@ -217,48 +306,43 @@ void OperationalTitleBar::refreshStatusChip() {
     if (status.contains(QStringLiteral("REC"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Recording);
         status_pill_->setDotVisible(true);
-        status_pill_->setText(QStringLiteral("REC"));
+        status_pill_->setText(QStringLiteral("Recording"));
     } else if (status.contains(QStringLiteral("PAUSED"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
         status_pill_->setDotVisible(true);
-        status_pill_->setText(QStringLiteral("PAUSED"));
+        status_pill_->setText(QStringLiteral("Paused"));
     } else if (status.contains(QStringLiteral("STOPPING"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
         status_pill_->setDotVisible(true);
-        status_pill_->setText(QStringLiteral("STOPPING"));
+        status_pill_->setText(QStringLiteral("Stopping"));
     } else if (status.contains(QStringLiteral("STARTING"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
         status_pill_->setDotVisible(true);
-        status_pill_->setText(QStringLiteral("STARTING"));
+        status_pill_->setText(QStringLiteral("Starting"));
     } else if (status.contains(QStringLiteral("CHECK"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
         status_pill_->setDotVisible(true);
-        status_pill_->setText(QStringLiteral("CHECKING"));
+        status_pill_->setText(QStringLiteral("Checking"));
     } else if (status.contains(QStringLiteral("ERROR"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Blocked);
         status_pill_->setDotVisible(true);
-        status_pill_->setText(QStringLiteral("ERROR"));
+        status_pill_->setText(QStringLiteral("Error"));
     } else if (status.contains(QStringLiteral("BLOCK"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Blocked);
         status_pill_->setDotVisible(true);
-        status_pill_->setText(QStringLiteral("BLOCKED"));
+        status_pill_->setText(QStringLiteral("Blocked"));
+    } else if (status.contains(QStringLiteral("SAVED"))) {
+        // Completed recording — same green tone as Ready, distinct "Saved" label,
+        // shown while the Record result dock is visible.
+        status_pill_->setTone(ui::widgets::StatusPill::Tone::Ready);
+        status_pill_->setDotVisible(true);
+        status_pill_->setText(QStringLiteral("Saved"));
     } else {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Ready);
-        status_pill_->setDotVisible(false);
-        status_pill_->setText(QStringLiteral("READY"));
+        status_pill_->setDotVisible(true);
+        status_pill_->setText(QStringLiteral("Ready"));
     }
-}
-
-void OperationalTitleBar::refreshMetricsLabel() {
-    if (recording_active_) {
-        metrics_label_->setText(QStringLiteral("BITRATE <b>%1</b>  DROP <b>%2</b>")
-                                    .arg(rec_bitrate_text_.toHtmlEscaped(), rec_drop_text_.toHtmlEscaped()));
-        return;
-    }
-
-    metrics_label_->setText(
-        QStringLiteral("CPU <b>%1</b>  GPU <b>%2</b>  RAM <b>%3</b>")
-            .arg(idle_cpu_text_.toHtmlEscaped(), idle_gpu_text_.toHtmlEscaped(), idle_ram_text_.toHtmlEscaped()));
+    status_pill_->setVisible(true);
 }
 
 } // namespace exosnap::ui::chrome

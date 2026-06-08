@@ -12,6 +12,7 @@
 #include "wasapi_process_loopback_src.h"
 #include "wgc_capture.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -27,6 +28,7 @@ namespace recorder_core {
 struct RecorderSession::Impl {
     SessionState state;
     StatsCallback stats_callback;
+    MeterCallback meter_callback;
     std::atomic<bool> recording{false};
 };
 
@@ -56,6 +58,10 @@ std::vector<CaptureTarget> RecorderSession::EnumerateTargets() {
 
 void RecorderSession::SetStatsCallback(StatsCallback cb) {
     m_impl->stats_callback = std::move(cb);
+}
+
+void RecorderSession::SetMeterCallback(MeterCallback cb) {
+    m_impl->meter_callback = std::move(cb);
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +274,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             st.session_start_qpc_100ns = (q / f) * 10000000ULL + (q % f) * 10000000ULL / f;
         }
         st.stats_callback = m_impl->stats_callback;
+        st.meter_callback = m_impl->meter_callback;
     }
 
     auto failPrepare = [&](int32_t hr, const std::string& detail) -> RecorderResult {
@@ -361,6 +368,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     m_impl->recording.store(true);
 
     // Start stats collector
+    const auto recording_wall_start = std::chrono::steady_clock::now();
     SessionStatsCollector statsCollector(m_impl->state);
     statsCollector.Start();
 
@@ -493,6 +501,13 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     {
         std::lock_guard slk(m_impl->state.stats_mutex);
         result.stats = m_impl->state.stats;
+    }
+
+    // Fill in elapsed_seconds from wall-clock time (stats_callback snapshots compute this per-tick
+    // but never write it back to m_state.stats, so the final stats always shows 0 without this).
+    {
+        const auto recording_wall_end = std::chrono::steady_clock::now();
+        result.stats.elapsed_seconds = std::chrono::duration<double>(recording_wall_end - recording_wall_start).count();
     }
 
     // Defensive: if nominally succeeded but no output file was produced

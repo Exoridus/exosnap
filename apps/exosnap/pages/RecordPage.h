@@ -1,4 +1,5 @@
 #pragma once
+#include <QElapsedTimer>
 #include <QWidget>
 #include <filesystem>
 #include <memory>
@@ -8,14 +9,20 @@
 #include "../models/OutputSettingsModel.h"
 #include "../models/VideoSettingsModel.h"
 #include "../models/WebcamSettings.h"
+#include "../services/PreviewHelpers.h"
 #include "../services/PreviewService.h"
 #include "../services/RecordingCoordinator.h"
 #include "../ui/widgets/RegionSelectionOverlay.h"
 #include "../viewmodels/RecordViewModel.h"
 
+#include <capability/capability_set.h>
 #include <capability/config_types.h>
 
+// Full include required: SourcePickerDialog::SelectionResult is used in private slot signature.
+#include "../ui/dialogs/SourcePickerDialog.h"
+
 class QComboBox;
+class QBoxLayout;
 class QFrame;
 class QLabel;
 class QPushButton;
@@ -31,8 +38,13 @@ class CaptureTargetCard;
 class ExoCheckBox;
 class PreviewSurface;
 class SectionRuleHeader;
+class TransportDock;
 class VUMeterWidget;
 } // namespace ui::widgets
+
+namespace ui::dialogs {
+class SourcePickerOverlay;
+}
 
 class RecordPage : public QWidget {
     Q_OBJECT
@@ -44,6 +56,7 @@ class RecordPage : public QWidget {
     void setWebcamSettings(const WebcamSettings& settings);
     void setActiveProfileName(const std::string& profile_name);
     void applyPersistedAudioSettings(const capability::AudioUiState& state);
+    void setRuntimeCapabilities(const capability::CapabilitySet& caps);
     void rebroadcastChromeState();
 
   signals:
@@ -51,11 +64,22 @@ class RecordPage : public QWidget {
     void chromeRuntimeMetricsChanged(const QString& elapsed_text, const QString& bitrate_text, const QString& drop_text,
                                      const QString& size_text);
     void navigateToOutputPage();
+    void navigateToDiagnosticsPage();
     void audioSettingsChanged(const capability::AudioUiState& state);
+    // Emitted at ~30 Hz during recording (via recording-meter callback) and at ~preflight cadence
+    // during Ready/Idle (via individual source meter callbacks). All three sources are included in
+    // every emission so the Settings Audio card can update all rows atomically.
+    // sys01/app01/mic01: pre-computed 0..1 dock-level values (0 = inactive or silence).
+    // sys/app/mic_active: true when the meter service is running for that source.
+    void audioMeterLevelsUpdated(float sys01, float app01, float mic01, bool sys_active, bool app_active,
+                                 bool mic_active);
 
   public slots:
     void onHotkeyToggle();
     void onHotkeyPauseToggle();
+    void setSourcePickerOverlay(ui::dialogs::SourcePickerOverlay* overlay);
+    // Refresh display/window source list; call on screen add/remove events.
+    void refreshDisplayTargets();
 
   private slots:
     void onStart();
@@ -65,6 +89,8 @@ class RecordPage : public QWidget {
     void onSelectMonitorTarget();
     void onSelectWindowTarget();
     void onSelectRegionTarget();
+    void onOpenSourcePicker();
+    void onSourcePickerAccepted(ui::dialogs::SourcePickerDialog::SelectionResult result);
     void onTargetPickerChanged(int index);
     void onRefreshTargets();
     void onRegionSelected(QRect region_virtual_screen);
@@ -84,17 +110,28 @@ class RecordPage : public QWidget {
 
     bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void ensureCoordinatorInit();
     void initCoordinator();
     void refresh();
     void updateStatsDisplay();
     void updateResultDisplay();
+    void updateTransportDock();
+    void onDockSourceToggle(const QString& key);
+    void onDockFilenameActivated();
     void updateTargetCards();
     void updateReadinessRows();
+    void updateResponsiveLayout();
     void updateAudioMeterLevels();
     void updateAudioControls();
     void updateAudioControlsVisibility();
     void updateAudioTrackPreview();
+    void updateHeroButton();
+    void updatePreviewContextChips();
+    void updateRailSourceStatusChips();
+    void updateSourceChip();
     void updateOpenFolderButtonState();
+    void updateDestinationMeta();
     void syncTargetSelectionToCombo(int target_index);
     void enumerateTargets(bool preserve_current_selection);
     void rebuildTargetPicker();
@@ -122,6 +159,7 @@ class RecordPage : public QWidget {
     QString buildPreviewBottomLeftText(bool recording) const;
     QString buildPreviewBottomRightText(bool recording) const;
     QString buildTimerText(bool recording) const;
+    bool isSourceSelectionLocked() const;
 
     int monitor_target_index_ = -1;
     int window_target_index_ = -1;
@@ -135,6 +173,11 @@ class RecordPage : public QWidget {
 
     QLabel* capability_label_ = nullptr;
     QComboBox* target_combo_ = nullptr;
+    QBoxLayout* cockpit_split_layout_ = nullptr;
+    QWidget* preview_column_ = nullptr;
+    QWidget* preview_context_row_ = nullptr;
+    QLabel* preview_source_chip_label_ = nullptr;
+    QWidget* preview_surface_host_ = nullptr;
     QFrame* target_picker_panel_ = nullptr;
     QLabel* target_picker_kind_label_ = nullptr;
     QComboBox* target_picker_combo_ = nullptr;
@@ -144,6 +187,15 @@ class RecordPage : public QWidget {
     QLabel* control_state_label_ = nullptr;
     QLabel* timer_label_ = nullptr;
     ui::widgets::SectionRuleHeader* capture_header_ = nullptr;
+    QWidget* source_row_ = nullptr;
+    QFrame* source_chip_panel_ = nullptr;
+    QLabel* source_kind_label_ = nullptr;
+    QLabel* source_name_label_ = nullptr;
+    QLabel* source_meta_label_ = nullptr;
+    QLabel* source_preset_label_ = nullptr;
+    QLabel* source_lock_label_ = nullptr;
+    QPushButton* change_source_btn_ = nullptr;
+    ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
     ui::widgets::CaptureTargetCard* monitor_card_ = nullptr;
     ui::widgets::CaptureTargetCard* window_card_ = nullptr;
     ui::widgets::CaptureTargetCard* region_card_ = nullptr;
@@ -154,6 +206,9 @@ class RecordPage : public QWidget {
     ui::widgets::ExoCheckBox* select_on_record_check_ = nullptr;
     ui::widgets::SectionRuleHeader* readiness_header_ = nullptr;
     QFrame* readiness_panel_ = nullptr;
+    QFrame* readiness_rule_ = nullptr;
+    QWidget* readiness_rows_container_ = nullptr;
+    QPushButton* readiness_diagnostics_btn_ = nullptr;
     std::vector<ReadinessRow> readiness_rows_;
     ui::widgets::SectionRuleHeader* audio_settings_header_ = nullptr;
     QWidget* audio_rows_container_ = nullptr;
@@ -188,6 +243,7 @@ class RecordPage : public QWidget {
     QLabel* result_title_label_ = nullptr;
     QLabel* result_message_label_ = nullptr;
     QLabel* result_action_label_ = nullptr;
+    QLabel* result_file_label_ = nullptr;
     QLabel* result_stats_label_ = nullptr;
     QLabel* result_path_label_ = nullptr;
     QLabel* result_technical_label_ = nullptr;
@@ -196,11 +252,55 @@ class RecordPage : public QWidget {
     capability::Container current_container_ = capability::Container::Matroska;
     capability::VideoCodec current_video_codec_ = capability::VideoCodec::H264Nvenc;
     capability::AudioCodec current_audio_codec_ = capability::AudioCodec::AacMf;
+    WebcamSettings current_webcam_settings_{};
     std::wstring active_profile_name_;
     float preflight_mic_rms_ = 0.0f;
     float preflight_sys_rms_ = 0.0f;
     float preflight_app_rms_ = 0.0f;
     uint32_t preflight_app_pid_ = 0;
+    bool coordinator_needs_init_ = true;
+    capability::CapabilitySet shared_runtime_caps_{};
+    bool shared_runtime_caps_received_ = false;
+
+    // Rail dashboard controls
+    QWidget* audio_settings_panel_ = nullptr;
+    QFrame* destination_panel_ = nullptr;
+    QPushButton* hero_action_btn_ = nullptr;
+    QPushButton* secondary_action_btn_ = nullptr;
+    QPushButton* rail_diagnostics_btn_ = nullptr;
+    QFrame* rail_control_panel_ = nullptr;
+    QFrame* rail_stats_grid_ = nullptr;
+    QWidget* rail_source_status_panel_ = nullptr;
+    QLabel* rail_source_status_summary_label_ = nullptr;
+    QLabel* rail_sys_audio_chip_ = nullptr;
+    QLabel* rail_app_audio_chip_ = nullptr;
+    QLabel* rail_mic_chip_ = nullptr;
+    QLabel* rail_webcam_chip_ = nullptr;
+    QLabel* rail_size_value_label_ = nullptr;
+    QLabel* rail_drop_value_label_ = nullptr;
+    QFrame* rail_fps_stat_cell_ = nullptr;
+    QLabel* rail_fps_value_label_ = nullptr;
+    QLabel* rail_readiness_label_ = nullptr;
+    QLabel* rail_summary_label_ = nullptr;
+    QLabel* rail_stats_label_ = nullptr;
+    QLabel* readiness_summary_label_ = nullptr;
+    QPushButton* result_open_folder_btn_ = nullptr;
+    QPushButton* result_record_again_btn_ = nullptr;
+
+    // Hybrid v3 preview-first chrome (HYBRID-PORT-R2).
+    ui::widgets::TransportDock* transport_dock_ = nullptr;
+    QWidget* legacy_host_ = nullptr;
+
+    // View-layer elapsed-time fallback used while live backend stats are pending.
+    // Starts when recording begins; pauses/resumes with the recording state.
+    QElapsedTimer recording_wall_clock_;
+    qint64 wall_elapsed_before_pause_ms_ = 0; // accumulated ms before most recent pause
+    QTimer* ui_clock_timer_ = nullptr;        // 1 Hz tick → updateTransportDock() during recording
+
+    // Tracks the configuration of the last successfully started DXGI preview.
+    // Used by startPreviewIfIdle() to skip redundant restarts when the target
+    // and crop are unchanged.  Reset to default when the preview is stopped.
+    exosnap::PreviewConfigKey last_preview_key_{};
 };
 
 } // namespace exosnap

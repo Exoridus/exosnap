@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -49,6 +50,8 @@ struct UiRecordingResult {
     std::wstring error_phase;
     std::wstring hresult_text;
     std::wstring error_detail;
+    uint64_t output_file_bytes = 0;
+    double elapsed_seconds = 0.0;
 };
 
 // ---------------------------------------------------------------------------
@@ -81,6 +84,9 @@ class RecordViewModel {
     std::wstring result_user_message;
     std::wstring result_action_hint;
     std::wstring result_stats_text;
+    uint64_t result_output_file_bytes = 0;
+    double result_elapsed_seconds = 0.0;
+    std::wstring result_destination_text;
 
     // Live stats fields
     std::wstring elapsed_text = L"0:00";
@@ -123,6 +129,8 @@ class RecordViewModel {
     // Mutators
     void SetState(UiRecordingState new_state);
     void UpdateStats(const recorder_core::SessionStats& stats);
+    // Update only the audio meter RMS fields — used by the high-cadence recording meter path.
+    void UpdateMeterRms(const std::array<float, 3>& per_track_rms);
     void SetResult(const UiRecordingResult& result);
     void ResetStats();
     void ApplyTargetKind(capability::CaptureTargetKind kind);

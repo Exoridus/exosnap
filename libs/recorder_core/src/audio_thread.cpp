@@ -164,17 +164,6 @@ void AudioThread::Run() {
 
         uint64_t encoderAccumulatedFrames = 0;
 
-        // QPC-based clock for tracking real time through idle gaps
-        LARGE_INTEGER qpcFreq;
-        QueryPerformanceFrequency(&qpcFreq);
-        uint64_t lastQpc100ns = 0;
-        auto Qpc100ns = [&]() -> uint64_t {
-            LARGE_INTEGER qpc;
-            QueryPerformanceCounter(&qpc);
-            return static_cast<uint64_t>(qpc.QuadPart) * 10000000ULL / static_cast<uint64_t>(qpcFreq.QuadPart);
-        };
-        lastQpc100ns = Qpc100ns();
-
         // --- Capture / encode loop ---
         while (!m_state.stop_requested.load()) {
             if (m_state.pause_requested.load()) {
@@ -192,18 +181,9 @@ void AudioThread::Run() {
 
             uint32_t pendingFrames = source_->PendingFrameCount();
             if (pendingFrames == 0) {
-                // Advance PTS by wall-clock time so idle gaps don't collapse the timeline
-                uint64_t now100ns = Qpc100ns();
-                if (now100ns > lastQpc100ns) {
-                    uint64_t elapsed_ns = (now100ns - lastQpc100ns) * 100ULL;
-                    uint64_t elapsed_frames = elapsed_ns * source_->SampleRate() / 1000000000ULL;
-                    encoderAccumulatedFrames += elapsed_frames;
-                }
-                lastQpc100ns = now100ns;
                 Sleep(1);
                 continue;
             }
-            lastQpc100ns = Qpc100ns();
 
             bool anyWork = false;
             while (source_->PendingFrameCount() > 0) {
@@ -344,16 +324,6 @@ void AudioThread::Run() {
 
     uint64_t audioAccumulatedFrames = 0;
 
-    LARGE_INTEGER qpcFreq;
-    QueryPerformanceFrequency(&qpcFreq);
-    uint64_t lastQpc100ns_aac = 0;
-    auto Qpc100ns_aac = [&]() -> uint64_t {
-        LARGE_INTEGER qpc;
-        QueryPerformanceCounter(&qpc);
-        return static_cast<uint64_t>(qpc.QuadPart) * 10000000ULL / static_cast<uint64_t>(qpcFreq.QuadPart);
-    };
-    lastQpc100ns_aac = Qpc100ns_aac();
-
     // --- Capture / encode loop ---
     while (!m_state.stop_requested.load()) {
         if (m_state.pause_requested.load()) {
@@ -371,17 +341,9 @@ void AudioThread::Run() {
 
         uint32_t pendingFrames = source_->PendingFrameCount();
         if (pendingFrames == 0) {
-            uint64_t now100ns = Qpc100ns_aac();
-            if (now100ns > lastQpc100ns_aac) {
-                uint64_t elapsed_ns = (now100ns - lastQpc100ns_aac) * 100ULL;
-                uint64_t elapsed_frames = elapsed_ns * kSampleRate / 1000000000ULL;
-                audioAccumulatedFrames += elapsed_frames;
-            }
-            lastQpc100ns_aac = now100ns;
             Sleep(1);
             continue;
         }
-        lastQpc100ns_aac = Qpc100ns_aac();
 
         bool anyWork = false;
         while (source_->PendingFrameCount() > 0) {

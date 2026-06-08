@@ -145,6 +145,9 @@ struct SessionState {
     // Stats callback (set before Record())
     StatsCallback stats_callback;
 
+    // Meter callback — high-cadence (~30 Hz) per-track RMS (set before Record())
+    MeterCallback meter_callback;
+
     // Record config captured at Record() time
     RecorderConfig config;
 

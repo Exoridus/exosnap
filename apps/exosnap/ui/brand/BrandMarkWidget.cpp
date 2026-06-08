@@ -1,66 +1,28 @@
 #include "BrandMarkWidget.h"
 
-#include <QDebug>
-#include <QFile>
+#include <QColor>
 #include <QPainter>
-#include <QPainterPath>
-#include <QSvgRenderer>
+#include <QPen>
+#include <QPointF>
 
-#include <cmath>
+#include <algorithm>
+
+#include "../theme/ExoSnapPalette.h"
 
 namespace exosnap::ui::brand {
-namespace {
-
-void drawFallbackMark(QPainter& painter, const QRectF& rect) {
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing, true);
-
-    const qreal w = rect.width();
-    const qreal h = rect.height();
-    const qreal pad = std::max<qreal>(1.0, std::floor(std::min(w, h) * 0.08));
-    const QRectF b = rect.adjusted(pad, pad, -pad, -pad);
-
-    QPainterPath e_shape;
-    e_shape.moveTo(b.left(), b.top());
-    e_shape.lineTo(b.right() * 0.84, b.top());
-    e_shape.lineTo(b.right() * 0.66, b.top() + (b.height() * 0.18));
-    e_shape.lineTo(b.left() + (b.width() * 0.22), b.top() + (b.height() * 0.18));
-    e_shape.lineTo(b.left() + (b.width() * 0.22), b.top() + (b.height() * 0.40));
-    e_shape.lineTo(b.left() + (b.width() * 0.50), b.center().y());
-    e_shape.lineTo(b.left() + (b.width() * 0.22), b.top() + (b.height() * 0.62));
-    e_shape.lineTo(b.left() + (b.width() * 0.22), b.bottom() - (b.height() * 0.18));
-    e_shape.lineTo(b.right() * 0.66, b.bottom() - (b.height() * 0.18));
-    e_shape.lineTo(b.right() * 0.84, b.bottom());
-    e_shape.lineTo(b.left(), b.bottom());
-    e_shape.closeSubpath();
-
-    painter.fillPath(e_shape, QColor("#f1ece1"));
-
-    QPainterPath caret;
-    caret.moveTo(b.left(), b.top() + (b.height() * 0.40));
-    caret.lineTo(b.left(), b.bottom() - (b.height() * 0.40));
-    caret.lineTo(b.left() + (b.width() * 0.25), b.center().y());
-    caret.closeSubpath();
-    painter.fillPath(caret, QColor("#f1b400"));
-
-    painter.restore();
-}
-
-} // namespace
 
 BrandMarkWidget::BrandMarkWidget(QWidget* parent) : QWidget(parent) {
-    static const QString kBrandLogoPath = QStringLiteral(":/brand/exosnap-logo.svg");
-    if (!QFile::exists(kBrandLogoPath))
-        qWarning().noquote() << "Brand logo resource missing:" << kBrandLogoPath;
-
-    renderer_ = new QSvgRenderer(kBrandLogoPath, this);
-    if (!renderer_->isValid())
-        qWarning().noquote() << "Failed to load valid brand SVG renderer from:" << kBrandLogoPath;
-
     setAttribute(Qt::WA_TranslucentBackground, true);
     setAutoFillBackground(false);
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     setFixedSize(kPreferredSize, kPreferredSize);
+}
+
+void BrandMarkWidget::setRecording(bool recording) {
+    if (recording_ == recording)
+        return;
+    recording_ = recording;
+    update();
 }
 
 QSize BrandMarkWidget::sizeHint() const {
@@ -76,23 +38,42 @@ void BrandMarkWidget::paintEvent(QPaintEvent* event) {
 
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
 
-    if (!renderer_ || !renderer_->isValid()) {
-        drawFallbackMark(painter, rect());
+    // Draw on the prototype's 32x32 design grid, scaled and centred into the widget rect so the
+    // stroke weights track the prototype regardless of widget size.
+    const qreal side = std::min(width(), height());
+    if (side <= 0.0)
         return;
-    }
+    const qreal scale = side / 32.0;
+    painter.translate((width() - side) / 2.0, (height() - side) / 2.0);
+    painter.scale(scale, scale);
 
-    QRectF target = rect();
-    const QSize default_size = renderer_->defaultSize();
-    if (default_size.isValid()) {
-        QSizeF scaled = default_size;
-        scaled.scale(target.size(), Qt::KeepAspectRatio);
-        const QPointF top_left((target.width() - scaled.width()) * 0.5, (target.height() - scaled.height()) * 0.5);
-        target = QRectF(top_left, scaled);
-    }
+    const QColor accent(theme::ExoSnapPalette::kAccent);
+    const QColor recording(theme::ExoSnapPalette::kErr); // coral while recording
+    const QColor inner_color = recording_ ? recording : accent;
 
-    renderer_->render(&painter, target);
+    const QPointF center(16.0, 16.0);
+
+    // Outer ring: accent, low opacity, thin stroke.
+    QColor outer_color = accent;
+    outer_color.setAlphaF(0.45f);
+    QPen outer_pen(outer_color);
+    outer_pen.setWidthF(1.5);
+    painter.setPen(outer_pen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawEllipse(center, 14.5, 14.5);
+
+    // Inner ring: accent (or coral while recording).
+    QPen inner_pen(inner_color);
+    inner_pen.setWidthF(1.6);
+    painter.setPen(inner_pen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawEllipse(center, 6.2, 6.2);
+
+    // Centre dot: filled accent (or coral while recording).
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(inner_color);
+    painter.drawEllipse(center, 2.4, 2.4);
 }
 
 } // namespace exosnap::ui::brand

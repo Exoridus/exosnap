@@ -1,11 +1,19 @@
 #pragma once
 
+#include <QString>
+#include <QVector>
 #include <QWidget>
 
 #include "../theme/ExoSnapMetrics.h"
 
+class QButtonGroup;
+class QHBoxLayout;
 class QLabel;
 class QPushButton;
+
+namespace exosnap::ui::brand {
+class BrandMarkWidget;
+}
 
 namespace exosnap::ui::widgets {
 class StatusPill;
@@ -23,51 +31,66 @@ class OperationalTitleBar : public QWidget {
         Close,
     };
 
+    // A top-navigation entry. A non-negative page_index selects a QStackedWidget page; a
+    // negative page_index marks an action item (e.g. About) that opens a dialog instead of
+    // switching the routed page.
+    struct NavItem {
+        QString label;
+        int page_index = -1;
+    };
+
     explicit OperationalTitleBar(QWidget* parent = nullptr);
 
     static constexpr int kHeight = ui::theme::ExoSnapMetrics::kTitlebarHeight;
 
-    void setPageContext(const QString& page_code, const QString& context_text);
+    // Builds the top-navigation tabs. Page items become checkable tabs in an exclusive group;
+    // action items become plain buttons that emit aboutRequested().
+    void setNavItems(const QVector<NavItem>& items);
+    // Highlights the tab bound to page_index (no-op when no tab maps to it).
+    void setActivePage(int page_index);
+
     void setRecordingActive(bool recording);
     bool isRecordingActive() const noexcept;
 
     void setStatusLabel(const QString& status_text);
-    void setRuntimeMeta(const QString& cpu_text, const QString& gpu_text, const QString& ram_text);
-    void setRecordingRuntime(const QString& elapsed_text, const QString& bitrate_text, const QString& drop_text);
 
     void setMaximizedState(bool maximized);
 
     bool isInDragArea(const QPoint& local_pos) const;
     WindowButtonHit hitTestWindowButton(const QPoint& local_pos) const;
+    void resetDragCursor();
     QRect maximizeButtonRectInWindow() const;
 
   signals:
+    void navPageRequested(int page_index);
+    void aboutRequested();
     void minimizeRequested();
     void maximizeRestoreRequested();
     void closeRequested();
 
   protected:
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
 
   private:
-    QLabel* page_code_label_ = nullptr;
+    ui::brand::BrandMarkWidget* brand_mark_ = nullptr;
+    QHBoxLayout* nav_layout_ = nullptr;
+    QButtonGroup* nav_group_ = nullptr;
     ui::widgets::StatusPill* status_pill_ = nullptr;
-    QLabel* context_label_ = nullptr;
-    QLabel* metrics_label_ = nullptr;
     QPushButton* minimize_btn_ = nullptr;
     QPushButton* maximize_btn_ = nullptr;
     QPushButton* close_btn_ = nullptr;
+    QPoint drag_press_global_pos_;
+    bool tracking_drag_from_max_ = false;
+    bool move_cursor_active_ = false;
+
     bool recording_active_ = false;
     QString status_label_ = QStringLiteral("READY");
-    QString idle_cpu_text_ = QStringLiteral("–");
-    QString idle_gpu_text_ = QStringLiteral("–");
-    QString idle_ram_text_ = QStringLiteral("–");
-    QString rec_elapsed_text_ = QStringLiteral("--:--:--");
-    QString rec_bitrate_text_ = QStringLiteral("–");
-    QString rec_drop_text_ = QStringLiteral("–");
 
     void refreshStatusChip();
-    void refreshMetricsLabel();
 };
 
 } // namespace exosnap::ui::chrome

@@ -12,12 +12,13 @@ class QComboBox;
 class QLabel;
 class QPushButton;
 class QSlider;
+class QTimer;
 
 namespace exosnap {
 
 namespace ui::widgets {
+class CameraPreview;
 class ExoToggle;
-class PreviewSurface;
 class SectionRuleHeader;
 } // namespace ui::widgets
 
@@ -31,6 +32,7 @@ class WebcamPage : public QWidget {
 
   signals:
     void settingsChanged(WebcamSettings settings);
+    void backToSettingsRequested();
 
   private slots:
     void onEnableToggled(bool enabled);
@@ -64,8 +66,10 @@ class WebcamPage : public QWidget {
     QComboBox* resolution_combo_ = nullptr;
     QPushButton* refresh_btn_ = nullptr;
 
-    // Preview (composition view)
-    ui::widgets::PreviewSurface* preview_surface_ = nullptr;
+    // Camera-only setup preview (no overlay / target compositing)
+    ui::widgets::CameraPreview* camera_preview_ = nullptr;
+    QTimer* preview_watchdog_ = nullptr;
+    bool preview_frame_seen_ = false;
 
     // Overlay position (simple sliders 0–100% for MVP)
     QSlider* pos_x_slider_ = nullptr;
@@ -88,7 +92,6 @@ class WebcamPage : public QWidget {
 
     WebcamSettings current_settings_;
     bool suppress_signals_ = false;
-    bool startup_overlay_pending_ = false;
 };
 
 } // namespace exosnap

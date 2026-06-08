@@ -124,7 +124,9 @@ class NvencEncoder {
     VideoCodec m_codec = VideoCodec::Av1Nvenc;
     NvencQualityPreset m_qualityPreset = NvencQualityPreset::Balanced;
 
-    const GUID m_presetGuid = NV_ENC_PRESET_P6_GUID;
+    // P6 for H.264 (synchronous), P4 for AV1 (P6 AV1 has internal pipeline depth
+    // that causes NV_ENC_ERR_NEED_MORE_INPUT on every frame even with lookahead disabled).
+    GUID m_presetGuid = NV_ENC_PRESET_P6_GUID;
     const NV_ENC_TUNING_INFO m_tuningInfo = NV_ENC_TUNING_INFO_HIGH_QUALITY;
 
     // Pending PTS FIFO — one entry per submitted frame not yet returned as output

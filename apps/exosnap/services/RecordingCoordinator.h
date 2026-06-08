@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
@@ -40,6 +41,8 @@ class RecordingCoordinator {
     using MicMeterUpdatedCallback = std::function<void(float rms_linear)>;
     using SysMeterUpdatedCallback = std::function<void(float rms_linear)>;
     using AppMeterUpdatedCallback = std::function<void(float rms_linear)>;
+    // Fired at ~30 Hz during recording; per-track RMS indexed by AudioThread track_id.
+    using RecordingMeterCallback = std::function<void(const std::array<float, 3>&)>;
 
     RecordingCoordinator();
     ~RecordingCoordinator();
@@ -76,6 +79,7 @@ class RecordingCoordinator {
 
     UiRecordingState State() const noexcept;
     const std::wstring& CapabilityStatusText() const;
+    std::wstring ResolvedVideoCodecLabel() const;
     std::filesystem::path CurrentOutputPath() const;
     void SetOutputSettings(const OutputSettingsModel& settings);
     void SetVideoSettings(const VideoSettingsModel& settings);
@@ -87,6 +91,7 @@ class RecordingCoordinator {
     void SetMicMeterUpdatedCallback(MicMeterUpdatedCallback cb);
     void SetSysMeterUpdatedCallback(SysMeterUpdatedCallback cb);
     void SetAppMeterUpdatedCallback(AppMeterUpdatedCallback cb);
+    void SetRecordingMeterCallback(RecordingMeterCallback cb);
 
   private:
     void RecordingThreadProc(const recorder_core::RecorderConfig& config, const std::filesystem::path& output_path);
@@ -96,6 +101,7 @@ class RecordingCoordinator {
     void PostMicMeter(float rms_linear);
     void PostSysMeter(float rms_linear);
     void PostAppMeter(float rms_linear);
+    void PostRecordingMeter(std::array<float, 3> per_track_rms);
 
     std::filesystem::path GenerateOutputPath() const;
     static std::wstring FormatHResult(int32_t hr);
@@ -130,6 +136,7 @@ class RecordingCoordinator {
     MicMeterUpdatedCallback on_mic_meter_updated_;
     SysMeterUpdatedCallback on_sys_meter_updated_;
     AppMeterUpdatedCallback on_app_meter_updated_;
+    RecordingMeterCallback on_recording_meter_updated_;
 
     std::optional<std::string> mic_meter_device_id_;
     recorder_core::MicChannelMode mic_meter_channel_mode_ = recorder_core::MicChannelMode::Auto;

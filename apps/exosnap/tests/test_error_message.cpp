@@ -133,5 +133,56 @@ TEST(ErrorMessageTest, MapErrorToUserMessage_UnknownFallback) {
     EXPECT_FALSE(msg.action_hint.empty());
 }
 
+TEST(ErrorMessageTest, MapErrorToUserMessage_OutputFolderInvalid) {
+    const auto msg = diagnostics::MapErrorToUserMessage(MakeFailure(L"Prepare", L"Output folder path is invalid."));
+
+    EXPECT_EQ(msg.title, L"Output folder error");
+    EXPECT_FALSE(msg.message.empty());
+    EXPECT_FALSE(msg.action_hint.empty());
+}
+
+TEST(ErrorMessageTest, MapErrorToUserMessage_OutputFolderNotWritable) {
+    const auto msg = diagnostics::MapErrorToUserMessage(MakeFailure(L"Prepare", L"Output folder is not writable."));
+
+    EXPECT_EQ(msg.title, L"Output folder error");
+    EXPECT_FALSE(msg.message.empty());
+    EXPECT_FALSE(msg.action_hint.empty());
+}
+
+TEST(ErrorMessageTest, MapErrorToUserMessage_OutputFolderCreationFailed) {
+    const auto msg = diagnostics::MapErrorToUserMessage(MakeFailure(L"Prepare", L"Failed to create output folder."));
+
+    EXPECT_EQ(msg.title, L"Output folder error");
+    EXPECT_FALSE(msg.message.empty());
+    EXPECT_FALSE(msg.action_hint.empty());
+}
+
+TEST(ErrorMessageTest, MapErrorToUserMessage_OutputDirectoryCreateFailed) {
+    const auto msg = diagnostics::MapErrorToUserMessage(
+        MakeFailure(L"Prepare", L"Failed to create output directory: permission denied"));
+
+    EXPECT_EQ(msg.title, L"Output folder error");
+    EXPECT_FALSE(msg.message.empty());
+    EXPECT_FALSE(msg.action_hint.empty());
+}
+
+TEST(ErrorMessageTest, MapErrorToUserMessage_UniqueFilenameExhausted) {
+    const auto msg = diagnostics::MapErrorToUserMessage(MakeFailure(
+        L"Prepare", L"Could not create a unique output filename. Change the filename pattern or output folder."));
+
+    EXPECT_EQ(msg.title, L"Filename collision");
+    EXPECT_FALSE(msg.message.empty());
+    EXPECT_FALSE(msg.action_hint.empty());
+}
+
+TEST(ErrorMessageTest, MapErrorToUserMessage_MuxOpenFailed) {
+    const auto msg =
+        diagnostics::MapErrorToUserMessage(MakeFailure(L"Mux", L"Failed to open output file: permission denied"));
+
+    EXPECT_EQ(msg.title, L"Output write failed");
+    EXPECT_FALSE(msg.message.empty());
+    EXPECT_FALSE(msg.action_hint.empty());
+}
+
 } // namespace
 } // namespace exosnap

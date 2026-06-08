@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/theme">
         <file>exosnap_dark.qss</file>
+        <file>icons/chevron-down.svg</file>
     </qresource>
 </RCC>

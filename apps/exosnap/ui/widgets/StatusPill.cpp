@@ -1,5 +1,7 @@
 #include "StatusPill.h"
 
+#include "../theme/ExoSnapPalette.h"
+
 #include <QFontMetrics>
 #include <QPaintEvent>
 #include <QPainter>
@@ -16,18 +18,25 @@ struct ToneColors {
 };
 
 ToneColors ColorsFor(StatusPill::Tone tone) {
+    using exosnap::ui::theme::ExoSnapPalette;
+
     switch (tone) {
     case StatusPill::Tone::Ready:
-        return {QColor("#74c08a"), QColor("#74c08a"), QColor(116, 192, 138, 0), QColor("#74c08a")};
+        return {QColor(ExoSnapPalette::kOk), QColor(120, 218, 149, 110), QColor(120, 218, 149, 28),
+                QColor(ExoSnapPalette::kOk)};
     case StatusPill::Tone::Recording:
-        return {QColor("#d7a744"), QColor("#d7a744"), QColor(215, 167, 68, 26), QColor("#d7a744")};
+        return {QColor(ExoSnapPalette::kErr), QColor(240, 91, 84, 122), QColor(240, 91, 84, 36),
+                QColor(ExoSnapPalette::kErr)};
     case StatusPill::Tone::Warn:
-        return {QColor("#c99550"), QColor("#c99550"), QColor(201, 149, 80, 0), QColor("#c99550")};
+        return {QColor(ExoSnapPalette::kWarn), QColor(194, 150, 83, 118), QColor(194, 150, 83, 24),
+                QColor(ExoSnapPalette::kWarn)};
     case StatusPill::Tone::Blocked:
-        return {QColor("#e26a5a"), QColor("#e26a5a"), QColor(226, 106, 90, 0), QColor("#e26a5a")};
+        return {QColor(ExoSnapPalette::kErr), QColor(240, 91, 84, 128), QColor(240, 91, 84, 42),
+                QColor(ExoSnapPalette::kErr)};
     case StatusPill::Tone::Neutral:
     default:
-        return {QColor("#c7c0b1"), QColor("#353330"), QColor(53, 51, 48, 0), QColor("#8d8880")};
+        return {QColor(ExoSnapPalette::kText1), QColor(ExoSnapPalette::kLine2), QColor(50, 46, 43, 0),
+                QColor(ExoSnapPalette::kText2)};
     }
 }
 
@@ -88,8 +97,8 @@ QSize StatusPill::sizeHint() const {
     mono_font.setLetterSpacing(QFont::AbsoluteSpacing, 0.8);
     QFontMetrics fm(mono_font);
     const int text_width = fm.horizontalAdvance(text_.isEmpty() ? QStringLiteral("STATE") : text_);
-    const int dot_width = dot_visible_ ? 7 : 0;
-    return {text_width + dot_width + 12, 18};
+    const int dot_width = dot_visible_ ? 9 : 0;
+    return {text_width + dot_width + 14, 20};
 }
 
 QSize StatusPill::minimumSizeHint() const {
@@ -106,7 +115,7 @@ void StatusPill::paintEvent(QPaintEvent* event) {
     const QRectF bounds = rect().adjusted(0.5, 0.5, -0.5, -0.5);
     painter.setPen(QPen(colors.border, 1.0));
     painter.setBrush(colors.background);
-    painter.drawRoundedRect(bounds, 3.0, 3.0);
+    painter.drawRoundedRect(bounds, 7.0, 7.0);
 
     QFont mono_font = font();
     mono_font.setLetterSpacing(QFont::AbsoluteSpacing, 0.8);
@@ -119,9 +128,9 @@ void StatusPill::paintEvent(QPaintEvent* event) {
         painter.setOpacity(dot_opacity_);
         painter.setPen(Qt::NoPen);
         painter.setBrush(colors.dot);
-        painter.drawEllipse(QRectF(6.0, (height() - 4.0) * 0.5, 4.0, 4.0));
+        painter.drawEllipse(QRectF(6.0, (height() - 5.0) * 0.5, 5.0, 5.0));
         painter.restore();
-        x += 7;
+        x += 9;
         painter.setPen(colors.text);
     }
 

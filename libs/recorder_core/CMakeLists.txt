@@ -99,6 +99,7 @@ add_library(recorder_core STATIC
     include/recorder_core/audio_meter.h
     src/audio_meter.cpp
     src/wgc_capture.cpp
+    src/dxgi_od_capture_src.cpp
     src/nvenc_encoder.cpp
     src/mf_aac_encoder.cpp
     src/mixed_audio_src.cpp
@@ -191,6 +192,14 @@ exosnap_add_gtest(
 target_include_directories(test_audio_thread_source_agnostic PRIVATE src)
 
 exosnap_add_gtest(
+    NAME test_mf_aac_encoder
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_mf_aac_encoder.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_mf_aac_encoder PRIVATE src)
+
+exosnap_add_gtest(
     NAME test_mic_channel_mapping
     TEST_PREFIX recorder_core.
     SOURCES tests/test_mic_channel_mapping.cpp
@@ -271,3 +280,11 @@ exosnap_add_gtest(
     SOURCES tests/test_mp4_timestamp_normalization.cpp
     LIBRARIES recorder_core
 )
+
+exosnap_add_gtest(
+    NAME test_session_stats_meter
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_session_stats_meter.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_session_stats_meter PRIVATE src)

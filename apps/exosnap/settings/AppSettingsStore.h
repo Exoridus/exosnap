@@ -12,6 +12,14 @@
 
 namespace exosnap {
 
+struct PersistedWindowGeometry {
+    int x = -1;
+    int y = -1;
+    int width = -1;
+    int height = -1;
+    bool maximized = false;
+};
+
 struct PersistedAppSettings {
     OutputSettingsModel output;
     VideoSettingsModel video;
@@ -26,6 +34,7 @@ struct PersistedAppSettings {
         QString(),
         QString(),
     };
+    PersistedWindowGeometry window_geometry;
 };
 
 class AppSettingsStore {

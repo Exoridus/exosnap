@@ -2,18 +2,17 @@
 
 #include "diagnostics/AppLog.h"
 #include "pages/AdvancedPage.h"
-#include "pages/AudioPage.h"
+#include "pages/ConfigPage.h"
 #include "pages/DiagnosticsPage.h"
 #include "pages/HotkeysPage.h"
 #include "pages/LogsPage.h"
-#include "pages/OutputPage.h"
 #include "pages/RecordPage.h"
-#include "pages/VideoPage.h"
 #include "pages/WebcamPage.h"
 #include "settings/ProfileExchange.h"
-#include "ui/chrome/GlobalRecordingBar.h"
 #include "ui/chrome/OperationalTitleBar.h"
 #include "ui/chrome/RecordingStatusGuards.h"
+#include "ui/dialogs/AboutOverlay.h"
+#include "ui/dialogs/SourcePickerOverlay.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
 
@@ -21,7 +20,9 @@
 #include <capability/resolver.h>
 #include <capability/user_config.h>
 
+#include <QAbstractButton>
 #include <QApplication>
+#include <QCloseEvent>
 #include <QColor>
 #include <QCoreApplication>
 #include <QCursor>
@@ -30,18 +31,19 @@
 #include <QEvent>
 #include <QFile>
 #include <QFrame>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
-#include <QListWidgetItem>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPalette>
+#include <QPushButton>
+#include <QScreen>
+#include <QShortcut>
 #include <QShowEvent>
 #include <QStyle>
-#include <QStyleOptionViewItem>
-#include <QStyledItemDelegate>
 #include <QTextStream>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -54,13 +56,11 @@
 #include "exosnap_resource.h"
 
 #include <dwmapi.h>
-#include <psapi.h>
 #include <windows.h>
 #include <windowsx.h>
 
 #if defined(_MSC_VER)
 #pragma comment(lib, "dwmapi.lib")
-#pragma comment(lib, "psapi.lib")
 #endif
 #endif
 
@@ -155,6 +155,7 @@ enum class SidebarIcon {
     Diagnostics = 6,
     Logs = 7,
     Advanced = 8,
+    Setup = 9,
 };
 
 enum class ResizeZone {
@@ -171,36 +172,23 @@ enum class ResizeZone {
 
 struct PageDescriptor {
     const char* nav_label;
-    const char* kicker;
     const char* subtitle;
     const char* page_meta;
-    const char* chrome_context;
+    bool primary_nav;
     SidebarIcon icon;
 };
 
-constexpr std::array<PageDescriptor, 9> kPageDescriptors = {{
-    {"Record", "01 · RECORD", "Operational view — target, readiness, and live runtime.", "",
-     "DISPLAY1 · 2560×1440 · 60 fps · AV1", SidebarIcon::Record},
-    {"Video", "02 · VIDEO", "Read-only MVP profile.", "LOCKED · MVP", "CFR 60 · NVENC AV1 · LOCKED",
-     SidebarIcon::Video},
-    {"Audio", "03 · AUDIO", "Read-only in MVP; configure on Record page.", "LOCKED · RECORD PAGE", "APP · MIC · SYS",
-     SidebarIcon::Audio},
-    {"Output", "04 · OUTPUT", "Container, destination, and recording output behavior.", "MKV · AV1 · OPUS",
-     "Destination + container", SidebarIcon::Output},
-    {"Webcam", "05 · WEBCAM", "Webcam device, overlay placement, and chroma key.", "OVERLAY",
-     "Camera composited into recording", SidebarIcon::Webcam},
-    {"Hotkeys", "06 · HOTKEYS", "Global command access for recording operations.", "GLOBAL SHORTCUTS",
-     "Trigger and visibility rules", SidebarIcon::Hotkeys},
-    {"Diagnostics", "07 · DIAGNOSTICS", "Capability checks, blockers, and system readiness.", "BLOCKER-FIRST",
-     "Probe matrix and drivers", SidebarIcon::Diagnostics},
-    {"Logs", "08 · LOGS", "Runtime events and recording diagnostics.", "SESSION EVENTS",
-     "Structured recorder telemetry", SidebarIcon::Logs},
-    {"Advanced", "09 · ADVANCED", "Lower-level behavior and non-default controls.", "EXPERT SETTINGS",
-     "Explicitly non-default", SidebarIcon::Advanced},
+constexpr std::array<PageDescriptor, 7> kPageDescriptors = {{
+    {"Record", "Operational view — target, readiness, and live runtime.", "", true, SidebarIcon::Record},
+    {"Settings", "Unified recording configuration — format, sources, and output.", "", true, SidebarIcon::Setup},
+    {"Hotkeys", "Global command access for recording operations.", "GLOBAL SHORTCUTS", true, SidebarIcon::Hotkeys},
+    {"Diagnostics", "Capability checks, blockers, and system readiness.", "BLOCKER-FIRST", true,
+     SidebarIcon::Diagnostics},
+    {"Logs", "Runtime events and recording diagnostics.", "SESSION EVENTS", true, SidebarIcon::Logs},
+    {"Advanced", "Lower-level behavior and non-default controls.", "EXPERT SETTINGS", false, SidebarIcon::Advanced},
+    {"Webcam", "Webcam device and capture settings.", "", false, SidebarIcon::Webcam},
 }};
 
-constexpr int kNavIndexRole = Qt::UserRole + 1;
-constexpr int kNavIconRole = Qt::UserRole + 2;
 constexpr int pageIndexForIcon(SidebarIcon icon) {
     for (std::size_t i = 0; i < kPageDescriptors.size(); ++i) {
         if (kPageDescriptors[i].icon == icon)
@@ -208,10 +196,20 @@ constexpr int pageIndexForIcon(SidebarIcon icon) {
     }
     return -1;
 }
-constexpr int kOutputPageIndex = pageIndexForIcon(SidebarIcon::Output);
+constexpr int kRecordPageIndex = pageIndexForIcon(SidebarIcon::Record);
+constexpr int kSettingsPageIndex = pageIndexForIcon(SidebarIcon::Setup);
+constexpr int kHotkeysPageIndex = pageIndexForIcon(SidebarIcon::Hotkeys);
+constexpr int kAdvancedPageIndex = pageIndexForIcon(SidebarIcon::Advanced);
 constexpr int kDiagnosticsPageIndex = pageIndexForIcon(SidebarIcon::Diagnostics);
-static_assert(kOutputPageIndex >= 0, "Output page must exist in kPageDescriptors.");
+constexpr int kWebcamPageIndex = pageIndexForIcon(SidebarIcon::Webcam);
+constexpr int kLogsPageIndex = pageIndexForIcon(SidebarIcon::Logs);
+static_assert(kRecordPageIndex >= 0, "Record page must exist in kPageDescriptors.");
+static_assert(kSettingsPageIndex >= 0, "Settings page must exist in kPageDescriptors.");
+static_assert(kHotkeysPageIndex >= 0, "Hotkeys page must exist in kPageDescriptors.");
+static_assert(kAdvancedPageIndex >= 0, "Advanced page must exist in kPageDescriptors.");
 static_assert(kDiagnosticsPageIndex >= 0, "Diagnostics page must exist in kPageDescriptors.");
+static_assert(kWebcamPageIndex >= 0, "Webcam page must exist in kPageDescriptors.");
+static_assert(kLogsPageIndex >= 0, "Logs page must exist in kPageDescriptors.");
 
 capability::UserRecorderConfig ProfileToUserConfig(const RecordingProfile& profile) {
     capability::UserRecorderConfig config;
@@ -232,44 +230,6 @@ QString PersistedHotkeyString(const QKeySequence& sequence) {
 QKeySequence ParsePersistedHotkey(const QString& value, const QKeySequence& fallback) {
     const QKeySequence parsed(value, QKeySequence::PortableText);
     return parsed.isEmpty() ? fallback : parsed;
-}
-
-QString targetSummaryFromContext(const QString& context_text) {
-    const QString simplified = context_text.simplified();
-    if (simplified.isEmpty())
-        return QStringLiteral("-");
-
-    const int dot_index = simplified.indexOf(QChar(0x00B7));
-    const QString target = (dot_index > 0 ? simplified.left(dot_index) : simplified).trimmed();
-    return target.isEmpty() ? QStringLiteral("-") : target;
-}
-
-QString outputSummaryFromSettings(const OutputSettingsModel& settings) {
-    if (settings.output_folder.empty())
-        return QStringLiteral("-");
-
-    const std::filesystem::path& folder = settings.output_folder;
-    const QString leaf = QString::fromStdWString(folder.filename().wstring()).trimmed();
-    if (!leaf.isEmpty())
-        return leaf;
-
-    const QString full_path = QString::fromStdWString(folder.wstring()).trimmed();
-    return full_path.isEmpty() ? QStringLiteral("-") : full_path;
-}
-
-QString globalBarRuntimePlaceholder() {
-    return QStringLiteral("DUR --:--:-- · SIZE -");
-}
-
-QColor colorFrom(const char* value) {
-    return QColor(QString::fromLatin1(value));
-}
-
-std::uint64_t fileTimeToUint64(const FILETIME& file_time) {
-    ULARGE_INTEGER value;
-    value.LowPart = file_time.dwLowDateTime;
-    value.HighPart = file_time.dwHighDateTime;
-    return value.QuadPart;
 }
 
 ResizeZone resizeZoneFromLocalPoint(const QPoint& local, const QSize& size, bool maximized) {
@@ -441,203 +401,6 @@ void traceFrameMessage(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) 
     appendFrameTrace(line);
 }
 
-void drawIcon(QPainter& painter, SidebarIcon icon, const QRectF& rect, const QColor& color) {
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(QPen(color, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    painter.setBrush(Qt::NoBrush);
-
-    const qreal x = rect.x();
-    const qreal y = rect.y();
-    const qreal w = rect.width();
-    const qreal h = rect.height();
-    const qreal cx = x + (w * 0.5);
-    const qreal cy = y + (h * 0.5);
-
-    switch (icon) {
-    case SidebarIcon::Record: {
-        painter.drawRoundedRect(QRectF(x + 1.5, y + 2.0, w - 3.0, h - 4.0), 1.2, 1.2);
-        painter.setBrush(color);
-        painter.setPen(Qt::NoPen);
-        painter.drawEllipse(QRectF(cx - 2.0, cy - 2.0, 4.0, 4.0));
-        break;
-    }
-    case SidebarIcon::Video: {
-        painter.drawRoundedRect(QRectF(x + 1.5, y + 3.0, w - 8.0, h - 6.0), 1.2, 1.2);
-        QPainterPath tri;
-        tri.moveTo(x + w - 6.0, y + 6.0);
-        tri.lineTo(x + w - 1.5, y + 4.0);
-        tri.lineTo(x + w - 1.5, y + h - 4.0);
-        tri.lineTo(x + w - 6.0, y + h - 6.0);
-        tri.closeSubpath();
-        painter.drawPath(tri);
-        break;
-    }
-    case SidebarIcon::Audio: {
-        painter.drawLine(QPointF(x + 2.0, cy), QPointF(x + 2.0, cy + 1.0));
-        painter.drawLine(QPointF(x + 5.0, y + 4.0), QPointF(x + 5.0, y + h - 4.0));
-        painter.drawLine(QPointF(x + 8.0, y + 2.0), QPointF(x + 8.0, y + h - 2.0));
-        painter.drawLine(QPointF(x + 11.0, y + 5.0), QPointF(x + 11.0, y + h - 5.0));
-        painter.drawLine(QPointF(x + 14.0, cy - 1.0), QPointF(x + 14.0, cy + 1.0));
-        break;
-    }
-    case SidebarIcon::Output: {
-        painter.drawLine(QPointF(cx, y + 2.0), QPointF(cx, y + h - 5.0));
-        painter.drawLine(QPointF(cx, y + h - 5.0), QPointF(cx - 3.0, y + h - 8.0));
-        painter.drawLine(QPointF(cx, y + h - 5.0), QPointF(cx + 3.0, y + h - 8.0));
-        painter.drawRoundedRect(QRectF(x + 2.0, y + h - 4.0, w - 4.0, 2.0), 0.4, 0.4);
-        break;
-    }
-    case SidebarIcon::Webcam: {
-        // body rectangle
-        painter.drawRoundedRect(QRectF(x + 1.5, y + 3.5, w - 3.0, h - 7.0), 2.0, 2.0);
-        // lens circle
-        painter.drawEllipse(QRectF(cx - 2.5, cy - 2.5, 5.0, 5.0));
-        // stand + base
-        painter.drawLine(QPointF(cx, y + h - 3.5), QPointF(cx, y + h - 2.0));
-        painter.drawLine(QPointF(cx - 3.0, y + h - 1.5), QPointF(cx + 3.0, y + h - 1.5));
-        break;
-    }
-    case SidebarIcon::Hotkeys: {
-        painter.drawRoundedRect(QRectF(x + 1.5, y + 4.0, w - 3.0, h - 8.0), 1.2, 1.2);
-        painter.drawLine(QPointF(x + 4.0, cy), QPointF(x + w - 4.0, cy));
-        break;
-    }
-    case SidebarIcon::Diagnostics: {
-        QPainterPath path;
-        path.moveTo(x + 1.5, cy + 1.0);
-        path.lineTo(x + 4.0, cy + 1.0);
-        path.lineTo(x + 6.0, y + 4.0);
-        path.lineTo(x + 9.0, y + h - 4.0);
-        path.lineTo(x + 11.0, cy - 1.0);
-        path.lineTo(x + w - 1.5, cy - 1.0);
-        painter.drawPath(path);
-        break;
-    }
-    case SidebarIcon::Logs: {
-        painter.drawRoundedRect(QRectF(x + 2.0, y + 2.0, w - 4.0, h - 4.0), 1.2, 1.2);
-        painter.drawLine(QPointF(x + 5.0, y + 6.0), QPointF(x + w - 4.0, y + 6.0));
-        painter.drawLine(QPointF(x + 5.0, y + 9.5), QPointF(x + w - 4.0, y + 9.5));
-        break;
-    }
-    case SidebarIcon::Advanced: {
-        painter.drawEllipse(QRectF(cx - 2.5, cy - 2.5, 5.0, 5.0));
-        painter.drawLine(QPointF(cx, y + 1.0), QPointF(cx, y + 3.0));
-        painter.drawLine(QPointF(cx, y + h - 1.0), QPointF(cx, y + h - 3.0));
-        painter.drawLine(QPointF(x + 1.0, cy), QPointF(x + 3.0, cy));
-        painter.drawLine(QPointF(x + w - 1.0, cy), QPointF(x + w - 3.0, cy));
-        painter.drawLine(QPointF(x + 3.0, y + 3.0), QPointF(x + 4.5, y + 4.5));
-        painter.drawLine(QPointF(x + w - 3.0, y + h - 3.0), QPointF(x + w - 4.5, y + h - 4.5));
-        painter.drawLine(QPointF(x + w - 3.0, y + 3.0), QPointF(x + w - 4.5, y + 4.5));
-        painter.drawLine(QPointF(x + 3.0, y + h - 3.0), QPointF(x + 4.5, y + h - 4.5));
-        break;
-    }
-    }
-
-    painter.restore();
-}
-
-class SidebarNavDelegate final : public QStyledItemDelegate {
-  public:
-    explicit SidebarNavDelegate(QObject* parent = nullptr) : QStyledItemDelegate(parent) {
-    }
-
-    QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
-        Q_UNUSED(option);
-        Q_UNUSED(index);
-        return {180, 54};
-    }
-
-    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
-        painter->save();
-
-        const QRect row_rect = option.rect;
-        const bool is_selected = (option.state & QStyle::State_Selected) != 0;
-        const bool is_hovered = (option.state & QStyle::State_MouseOver) != 0;
-
-        if (is_selected) {
-            painter->fillRect(QRect(row_rect.left(), row_rect.top() + 4, 2, row_rect.height() - 8),
-                              colorFrom(ui::theme::ExoSnapPalette::kAccent));
-        } else if (is_hovered) {
-            painter->fillRect(row_rect, colorFrom(ui::theme::ExoSnapPalette::kBg1).lighter(108));
-        }
-
-        const auto icon = static_cast<SidebarIcon>(index.data(kNavIconRole).toInt());
-        const QRectF icon_rect(row_rect.left() + 14.0, row_rect.top() + ((row_rect.height() - 16.0) * 0.5), 16.0, 16.0);
-        const QColor icon_color =
-            is_selected ? colorFrom(ui::theme::ExoSnapPalette::kAccent) : colorFrom(ui::theme::ExoSnapPalette::kText2);
-        drawIcon(*painter, icon, icon_rect, icon_color);
-
-        QFont label_font = option.font;
-        label_font.setPointSizeF(13.0);
-        label_font.setWeight(QFont::Medium);
-        painter->setFont(label_font);
-        painter->setPen(is_selected ? colorFrom(ui::theme::ExoSnapPalette::kAccent)
-                                    : colorFrom(ui::theme::ExoSnapPalette::kText1));
-        painter->drawText(QRect(row_rect.left() + 42, row_rect.top(), row_rect.width() - 86, row_rect.height()),
-                          Qt::AlignVCenter | Qt::AlignLeft, index.data(Qt::DisplayRole).toString());
-
-        QFont index_font = option.font;
-        index_font.setFamilies(
-            {QStringLiteral("JetBrains Mono"), QStringLiteral("Cascadia Mono"), QStringLiteral("Consolas")});
-        index_font.setPointSizeF(10.5);
-        painter->setFont(index_font);
-        painter->setPen(colorFrom(ui::theme::ExoSnapPalette::kText3));
-        painter->drawText(QRect(row_rect.right() - 46, row_rect.top(), 38, row_rect.height()),
-                          Qt::AlignVCenter | Qt::AlignRight, index.data(kNavIndexRole).toString());
-
-        painter->restore();
-    }
-};
-
-class NavHoverCursorFilter final : public QObject {
-  public:
-    explicit NavHoverCursorFilter(QListWidget* nav) : QObject(nav), nav_(nav) {
-    }
-
-  protected:
-    bool eventFilter(QObject* watched, QEvent* event) override {
-        if (nav_ == nullptr || watched != nav_->viewport())
-            return QObject::eventFilter(watched, event);
-
-        if (event->type() == QEvent::MouseMove || event->type() == QEvent::HoverMove ||
-            event->type() == QEvent::Enter) {
-            const QPoint local = nav_->viewport()->mapFromGlobal(QCursor::pos());
-            const bool is_nav_item = nav_->indexAt(local).isValid();
-            nav_->viewport()->setCursor(is_nav_item ? Qt::PointingHandCursor : Qt::ArrowCursor);
-        } else if (event->type() == QEvent::Leave) {
-            nav_->viewport()->unsetCursor();
-        }
-
-        return QObject::eventFilter(watched, event);
-    }
-
-  private:
-    QListWidget* nav_ = nullptr;
-};
-
-QWidget* makeFooterRow(const QString& key, const QString& value, QWidget* parent, QLabel** out_value_label = nullptr) {
-    auto* row = new QWidget(parent);
-    row->setObjectName("sidebarFooterRow");
-    auto* layout = new QHBoxLayout(row);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(8);
-
-    auto* key_label = new QLabel(key, row);
-    key_label->setProperty("labelRole", "sidebarFooterKey");
-    auto* value_label = new QLabel(value, row);
-    value_label->setProperty("labelRole", "sidebarFooterValue");
-    value_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-
-    layout->addWidget(key_label);
-    layout->addStretch(1);
-    layout->addWidget(value_label);
-
-    if (out_value_label != nullptr)
-        *out_value_label = value_label;
-    return row;
-}
-
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
@@ -650,7 +413,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     if (!QApplication::windowIcon().isNull()) {
         setWindowIcon(QApplication::windowIcon());
     } else {
-        static const QString kAppIconPath = QStringLiteral(":/brand/exosnap-logo-light-bg-dark.ico");
+        static const QString kAppIconPath = QStringLiteral(":/brand/exosnap-logo-idle.ico");
         if (!QFile::exists(kAppIconPath))
             qWarning().noquote() << "MainWindow icon resource missing:" << kAppIconPath;
         QIcon fallback_icon(kAppIconPath);
@@ -670,8 +433,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     video_settings_ = active_profile.video;
     persisted_settings_.audio_ui_state = active_profile.audio_ui_state;
 
-    runtime_caps_ = capability::CapabilityBuilder::BuildFromHardwareQuery();
-    runtime_caps_ready_ = true;
     restoreHotkeyBindingsFromSettings();
     diagnostics::AppLog(QStringLiteral("[window] settings loaded"));
 
@@ -685,143 +446,68 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     title_bar_ = new ui::chrome::OperationalTitleBar(central);
     main_layout->addWidget(title_bar_);
-    title_bar_->setRuntimeMeta(QStringLiteral("–"), QStringLiteral("–"), QStringLiteral("–"));
-    title_bar_->setRecordingRuntime(QStringLiteral("--:--:--"), QStringLiteral("–"), QStringLiteral("–"));
 
-    global_recording_bar_ = new ui::chrome::GlobalRecordingBar(central);
-    main_layout->addWidget(global_recording_bar_);
-    global_recording_bar_->setStatusLabel(record_status_label_);
-    refreshGlobalRecordingBarContext();
-    global_recording_bar_->setRuntimeSummary(globalBarRuntimePlaceholder());
-
-    idle_metrics_timer_ = new QTimer(this);
-    idle_metrics_timer_->setInterval(2000);
-    connect(idle_metrics_timer_, &QTimer::timeout, this, &MainWindow::pollIdleRuntimeMetrics);
-    idle_metrics_timer_->start();
-
-    auto* body = new QWidget(central);
-    auto* body_layout = new QHBoxLayout(body);
-    body_layout->setContentsMargins(0, 0, 0, 0);
-    body_layout->setSpacing(0);
-    main_layout->addWidget(body, 1);
-
-    auto* sidebar = new QWidget(body);
-    sidebar->setObjectName("mainSidebar");
-    sidebar->setFixedWidth(ui::theme::ExoSnapMetrics::kSidebarWidth);
-    auto* sidebar_layout = new QVBoxLayout(sidebar);
-    sidebar_layout->setContentsMargins(0, 0, 0, 0);
-    sidebar_layout->setSpacing(0);
-
-    nav_ = new QListWidget(sidebar);
-    nav_->setObjectName("mainNav");
-    nav_->setFrameShape(QFrame::NoFrame);
-    nav_->setSelectionMode(QAbstractItemView::SingleSelection);
-    nav_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-    nav_->setMouseTracking(true);
-    nav_->viewport()->setMouseTracking(true);
-    nav_->setSpacing(0);
-    nav_->setUniformItemSizes(true);
-    nav_->setFocusPolicy(Qt::NoFocus);
-    nav_->setItemDelegate(new SidebarNavDelegate(nav_));
-    nav_->viewport()->installEventFilter(new NavHoverCursorFilter(nav_));
-
-    QPalette nav_palette = nav_->palette();
-    nav_palette.setColor(QPalette::Highlight, QColor(ui::theme::ExoSnapPalette::kBg2));
-    nav_palette.setColor(QPalette::HighlightedText, QColor(ui::theme::ExoSnapPalette::kText0));
-    nav_->setPalette(nav_palette);
-
-    for (std::size_t i = 0; i < kPageDescriptors.size(); ++i) {
-        const auto& page = kPageDescriptors[i];
-        auto* item = new QListWidgetItem(QString::fromUtf8(page.nav_label), nav_);
-        item->setData(kNavIndexRole, QString("%1").arg(i + 1, 2, 10, QChar('0')));
-        item->setData(kNavIconRole, static_cast<int>(page.icon));
-        item->setSizeHint({180, 54});
-    }
-    sidebar_layout->addWidget(nav_, 1);
-
-    auto* bottom_rule = new QFrame(sidebar);
-    bottom_rule->setFrameShape(QFrame::HLine);
-    bottom_rule->setObjectName("sidebarRule");
-    sidebar_layout->addWidget(bottom_rule);
-
-    auto* footer = new QWidget(sidebar);
-    footer->setObjectName("sidebarFooter");
-    auto* footer_layout = new QVBoxLayout(footer);
-    footer_layout->setContentsMargins(18, 12, 18, 14);
-    footer_layout->setSpacing(4);
-    footer_layout->addWidget(makeFooterRow("STATUS", "READY", footer, &sidebar_status_value_label_));
-    footer_layout->addWidget(makeFooterRow("ENCODER", "NVENC", footer));
-    sidebar_layout->addWidget(footer);
-
-    body_layout->addWidget(sidebar);
-
-    auto* content = new QWidget(body);
-    content->setObjectName("mainContent");
-    auto* content_layout = new QVBoxLayout(content);
-    content_layout->setContentsMargins(0, 0, 0, 0);
-    content_layout->setSpacing(0);
-
-    auto* page_head = new QWidget(content);
-    page_head->setObjectName("mainPageHead");
-    auto* page_head_layout = new QHBoxLayout(page_head);
-    page_head_layout->setContentsMargins(24, 16, 24, 14);
-    page_head_layout->setSpacing(12);
-
-    auto* page_head_left = new QWidget(page_head);
-    auto* page_head_left_layout = new QVBoxLayout(page_head_left);
-    page_head_left_layout->setContentsMargins(0, 0, 0, 0);
-    page_head_left_layout->setSpacing(2);
-
-    page_kicker_label_ = new QLabel(page_head_left);
-    page_kicker_label_->setProperty("labelRole", "pageKicker");
-    page_title_label_ = new QLabel(page_head_left);
-    page_title_label_->setProperty("labelRole", "pageTitle");
-    page_subtitle_label_ = new QLabel(page_head_left);
-    page_subtitle_label_->setProperty("labelRole", "pageSubtitle");
-    page_subtitle_label_->setWordWrap(true);
-
-    page_head_left_layout->addWidget(page_kicker_label_);
-    page_head_left_layout->addWidget(page_title_label_);
-    page_head_left_layout->addWidget(page_subtitle_label_);
-
-    page_meta_label_ = new QLabel(page_head);
-    page_meta_label_->setProperty("labelRole", "pageMeta");
-    page_meta_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-
-    page_head_layout->addWidget(page_head_left, 1);
-    page_head_layout->addWidget(page_meta_label_, 0, Qt::AlignBottom);
-    content_layout->addWidget(page_head);
-
-    stack_ = new QStackedWidget(content);
+    // Top navigation (in the title bar) drives the page stack directly — no sidebar, no
+    // secondary page header. Pages own their internal padding and fill the area below the bar.
+    stack_ = new QStackedWidget(central);
     stack_->setObjectName("mainStack");
     record_page_ = new RecordPage(stack_);
-    output_page_ = new OutputPage(output_settings_, stack_);
-    video_page_ = new VideoPage(video_settings_, stack_);
-    stack_->addWidget(record_page_);
-    stack_->addWidget(video_page_);
-    stack_->addWidget(new AudioPage(stack_));
-    stack_->addWidget(output_page_);
-    webcam_page_ = new WebcamPage(stack_);
-    webcam_page_->applySettings(persisted_settings_.webcam);
-    stack_->addWidget(webcam_page_);
+    config_page_ = new ConfigPage(output_settings_, video_settings_, stack_);
     hotkeys_page_ = new HotkeysPage(stack_);
     hotkeys_page_->setBindings(persisted_hotkeys_);
-    stack_->addWidget(hotkeys_page_);
     diagnostics_page_ = new DiagnosticsPage(stack_);
+    webcam_page_ = new WebcamPage(stack_);
+    webcam_page_->applySettings(persisted_settings_.webcam);
+    stack_->addWidget(record_page_);
+    stack_->addWidget(config_page_);
+    stack_->addWidget(hotkeys_page_);
     stack_->addWidget(diagnostics_page_);
     stack_->addWidget(new LogsPage(stack_));
-    stack_->addWidget(new AdvancedPage(stack_));
+    advanced_page_ = new AdvancedPage(stack_);
+    advanced_page_->setBaseline(output_settings_, video_settings_,
+                                QString::fromStdString(profile_registry_.ActiveProfile().name));
+    stack_->addWidget(advanced_page_);
+    stack_->addWidget(webcam_page_);
     record_page_->setOutputSettings(output_settings_);
     record_page_->setVideoSettings(video_settings_);
     record_page_->applyPersistedAudioSettings(persisted_settings_.audio_ui_state);
-    output_page_->setOutputSettings(output_settings_);
-    content_layout->addWidget(stack_, 1);
+    config_page_->setAudioUiState(persisted_settings_.audio_ui_state);
+    config_page_->setWebcamSettings(persisted_settings_.webcam);
+    main_layout->addWidget(stack_, 1);
 
-    body_layout->addWidget(content, 1);
+    // In-window About surface — a translucent backdrop + centered card overlaid on the
+    // page stack. It replaces the former native About QDialog so nothing lingers as a
+    // focus-sticky OS window after closing. Parented to the stack (not the whole window)
+    // so the title bar / window controls stay usable and correctly painted while it is
+    // open. Hidden until the About nav action.
+    about_overlay_ = new ui::dialogs::AboutOverlay(stack_);
+    about_overlay_->hide();
 
-    connect(nav_, &QListWidget::currentRowChanged, this, &MainWindow::onNavRowChanged);
+    // Source picker overlay — in-window, same parenting rationale as About.
+    source_picker_overlay_ = new ui::dialogs::SourcePickerOverlay(stack_);
+    source_picker_overlay_->hide();
+    record_page_->setSourcePickerOverlay(source_picker_overlay_);
+
+    title_bar_->setNavItems({
+        {QStringLiteral("Record"), kRecordPageIndex},
+        {QStringLiteral("Settings"), kSettingsPageIndex},
+        {QStringLiteral("Hotkeys"), kHotkeysPageIndex},
+        {QStringLiteral("Diagnostics"), kDiagnosticsPageIndex},
+        {QStringLiteral("Logs"), kLogsPageIndex},
+        {QStringLiteral("About"), -1},
+    });
+
+    connect(title_bar_, &ui::chrome::OperationalTitleBar::navPageRequested, this, &MainWindow::navigateToPage);
+    connect(title_bar_, &ui::chrome::OperationalTitleBar::aboutRequested, this, [this]() {
+        if (about_overlay_)
+            about_overlay_->openOverlay();
+    });
     connect(title_bar_, &ui::chrome::OperationalTitleBar::minimizeRequested, this, &QWidget::showMinimized);
     connect(title_bar_, &ui::chrome::OperationalTitleBar::maximizeRestoreRequested, this, [this]() {
+        if (isFullScreen()) {
+            pre_fullscreen_maximized_ ? showMaximized() : showNormal();
+            return;
+        }
 #if defined(Q_OS_WIN)
         HWND hwnd = reinterpret_cast<HWND>(effectiveWinId());
         const bool zoomed = (hwnd != nullptr) && (IsZoomed(hwnd) != FALSE);
@@ -832,27 +518,27 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     });
     connect(title_bar_, &ui::chrome::OperationalTitleBar::closeRequested, this, &QWidget::close);
     connect(record_page_, &RecordPage::chromeStateChanged, this, &MainWindow::onRecordChromeStateChanged);
-    connect(record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
-            &MainWindow::onRecordChromeRuntimeMetricsChanged);
-    connect(global_recording_bar_, &ui::chrome::GlobalRecordingBar::primaryActionRequested, this,
-            &MainWindow::onGlobalRecordingBarPrimaryActionRequested);
-    connect(global_recording_bar_, &ui::chrome::GlobalRecordingBar::pauseActionRequested, this,
-            &MainWindow::onGlobalRecordingBarPauseActionRequested);
-    connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { nav_->setCurrentRow(kOutputPageIndex); });
-    connect(output_page_, &OutputPage::outputSettingsChanged, this, [this](const OutputSettingsModel& settings) {
-        output_settings_ = settings;
-        record_page_->setOutputSettings(settings);
-        profile_registry_.ApplyOutputToActive(settings);
-        persisted_settings_.output = settings;
+    connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { navigateToPage(kSettingsPageIndex); });
+    connect(record_page_, &RecordPage::navigateToDiagnosticsPage, this,
+            [this]() { navigateToPage(kDiagnosticsPageIndex); });
+    connect(config_page_, &ConfigPage::formatSettingsChanged, this, [this](const OutputSettingsModel& settings) {
+        output_settings_.container = settings.container;
+        output_settings_.video_codec = settings.video_codec;
+        output_settings_.audio_codec = settings.audio_codec;
+        output_settings_.output_folder = settings.output_folder;
+        output_settings_.naming_pattern = settings.naming_pattern;
+        record_page_->setOutputSettings(output_settings_);
+        profile_registry_.ApplyOutputToActive(output_settings_);
+        persisted_settings_.output = output_settings_;
+        if (advanced_page_) {
+            advanced_page_->setBaseline(output_settings_, video_settings_,
+                                        QString::fromStdString(profile_registry_.ActiveProfile().name));
+        }
         persistProfileState();
-        refreshGlobalRecordingBarContext();
         refreshOutputProfileUi();
         refreshDiagnosticsData();
-        if (stack_->currentIndex() == kOutputPageIndex) {
-            updatePageHeader(kOutputPageIndex);
-        }
     });
-    connect(output_page_, &OutputPage::activeProfileChanged, this, [this](const QString& profile_id) {
+    connect(config_page_, &ConfigPage::activeProfileChanged, this, [this](const QString& profile_id) {
         if (syncing_profile_ui_) {
             return;
         }
@@ -861,56 +547,64 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         refreshOutputProfileUi();
         persistProfileState();
     });
-    connect(output_page_, &OutputPage::newFromCurrentRequested, this, [this](const QString& name) {
+    connect(config_page_, &ConfigPage::audioSettingsChanged, this, [this](const capability::AudioUiState& state) {
+        if (record_page_)
+            record_page_->applyPersistedAudioSettings(state);
+        profile_registry_.ApplyAudioToActive(state);
+        persisted_settings_.audio_ui_state = state;
+        persistProfileState();
+        refreshDiagnosticsData();
+    });
+    connect(config_page_, &ConfigPage::newFromCurrentRequested, this, [this](const QString& name) {
         profile_registry_.CreateUserProfileFromCurrent(name.toStdString());
         applyActiveProfileToPages();
         refreshOutputProfileUi();
         persistProfileState();
     });
-    connect(output_page_, &OutputPage::newFromSafeDefaultRequested, this, [this](const QString& name) {
+    connect(config_page_, &ConfigPage::newFromSafeDefaultRequested, this, [this](const QString& name) {
         profile_registry_.CreateUserProfileFromSafeDefault(name.toStdString());
         applyActiveProfileToPages();
         refreshOutputProfileUi();
         persistProfileState();
     });
-    connect(output_page_, &OutputPage::duplicateActiveProfileRequested, this, [this]() {
+    connect(config_page_, &ConfigPage::duplicateActiveProfileRequested, this, [this]() {
         if (profile_registry_.DuplicateActiveProfile()) {
             applyActiveProfileToPages();
             refreshOutputProfileUi();
             persistProfileState();
         }
     });
-    connect(output_page_, &OutputPage::renameActiveProfileRequested, this, [this](const QString& name) {
+    connect(config_page_, &ConfigPage::renameActiveProfileRequested, this, [this](const QString& name) {
         if (profile_registry_.RenameActiveUserProfile(name.toStdString())) {
             refreshOutputProfileUi();
             persistProfileState();
         }
     });
-    connect(output_page_, &OutputPage::deleteActiveProfileRequested, this, [this]() {
+    connect(config_page_, &ConfigPage::deleteActiveProfileRequested, this, [this]() {
         if (profile_registry_.DeleteActiveUserProfile()) {
             applyActiveProfileToPages();
             refreshOutputProfileUi();
             persistProfileState();
         }
     });
-    connect(output_page_, &OutputPage::resetActiveProfileRequested, this, [this]() {
+    connect(config_page_, &ConfigPage::resetActiveProfileRequested, this, [this]() {
         if (profile_registry_.ResetActiveProfile()) {
             applyActiveProfileToPages();
             refreshOutputProfileUi();
             persistProfileState();
         }
     });
-    connect(output_page_, &OutputPage::saveModifiedBuiltInAsNewRequested, this, [this](const QString& name) {
+    connect(config_page_, &ConfigPage::saveModifiedBuiltInAsNewRequested, this, [this](const QString& name) {
         if (profile_registry_.SaveModifiedBuiltInAsUserProfile(name.toStdString())) {
             applyActiveProfileToPages();
             refreshOutputProfileUi();
             persistProfileState();
         }
     });
-    connect(output_page_, &OutputPage::importProfilesRequested, this, [this](const QString& file_path) {
+    connect(config_page_, &ConfigPage::importProfilesRequested, this, [this](const QString& file_path) {
         const ProfileImportResult imported = ImportProfilesFromJsonFile(file_path);
         if (!imported.ok) {
-            QMessageBox::warning(this, QStringLiteral("Import Profiles"),
+            QMessageBox::warning(this, QStringLiteral("Import Presets"),
                                  imported.error_message.isEmpty() ? QStringLiteral("Import failed.")
                                                                   : imported.error_message);
             return;
@@ -918,46 +612,46 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
         const int count = profile_registry_.ImportUserProfiles(imported.profiles);
         if (count <= 0) {
-            QMessageBox::warning(this, QStringLiteral("Import Profiles"),
-                                 QStringLiteral("No profiles were imported from the selected file."));
+            QMessageBox::warning(this, QStringLiteral("Import Presets"),
+                                 QStringLiteral("No presets were imported from the selected file."));
             return;
         }
 
         refreshOutputProfileUi();
         persistProfileState();
-        QMessageBox::information(this, QStringLiteral("Import Profiles"),
-                                 QStringLiteral("Imported %1 profile(s).").arg(count));
+        QMessageBox::information(this, QStringLiteral("Import Presets"),
+                                 QStringLiteral("Imported %1 preset(s).").arg(count));
     });
-    connect(output_page_, &OutputPage::exportSelectedProfileRequested, this, [this](const QString& file_path) {
+    connect(config_page_, &ConfigPage::exportSelectedProfileRequested, this, [this](const QString& file_path) {
         QString error_message;
         const RecordingProfile active_profile = profile_registry_.ActiveProfile();
         if (!ExportProfilesToJsonFile(file_path, {active_profile}, &error_message)) {
-            QMessageBox::warning(this, QStringLiteral("Export Profiles"),
+            QMessageBox::warning(this, QStringLiteral("Export Presets"),
                                  error_message.isEmpty() ? QStringLiteral("Export failed.") : error_message);
             return;
         }
 
-        QMessageBox::information(this, QStringLiteral("Export Profiles"), QStringLiteral("Selected profile exported."));
+        QMessageBox::information(this, QStringLiteral("Export Presets"), QStringLiteral("Selected preset exported."));
     });
-    connect(output_page_, &OutputPage::exportAllUserProfilesRequested, this, [this](const QString& file_path) {
+    connect(config_page_, &ConfigPage::exportAllUserProfilesRequested, this, [this](const QString& file_path) {
         const auto& users = profile_registry_.UserProfiles();
         if (users.empty()) {
-            QMessageBox::warning(this, QStringLiteral("Export Profiles"),
-                                 QStringLiteral("No user profiles available to export."));
+            QMessageBox::warning(this, QStringLiteral("Export Presets"),
+                                 QStringLiteral("No user presets available to export."));
             return;
         }
 
         QString error_message;
         if (!ExportProfilesToJsonFile(file_path, users, &error_message)) {
-            QMessageBox::warning(this, QStringLiteral("Export Profiles"),
+            QMessageBox::warning(this, QStringLiteral("Export Presets"),
                                  error_message.isEmpty() ? QStringLiteral("Export failed.") : error_message);
             return;
         }
 
-        QMessageBox::information(this, QStringLiteral("Export Profiles"),
-                                 QStringLiteral("Exported %1 user profile(s).").arg(users.size()));
+        QMessageBox::information(this, QStringLiteral("Export Presets"),
+                                 QStringLiteral("Exported %1 user preset(s).").arg(users.size()));
     });
-    connect(output_page_, &OutputPage::resetAllSettingsAndProfilesRequested, this, [this]() {
+    connect(config_page_, &ConfigPage::resetAllSettingsAndProfilesRequested, this, [this]() {
         profile_registry_ = RecordingProfileRegistry();
         output_settings_ = OutputSettingsModel::Defaults();
         video_settings_ = VideoSettingsModel::Defaults();
@@ -985,13 +679,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         refreshOutputProfileUi();
         persistProfileState();
         QMessageBox::information(this, QStringLiteral("Reset Complete"),
-                                 QStringLiteral("Settings and profiles were reset to defaults."));
+                                 QStringLiteral("Settings and presets were reset to defaults."));
     });
-    connect(video_page_, &VideoPage::videoSettingsChanged, this, [this](const VideoSettingsModel& settings) {
+    connect(config_page_, &ConfigPage::videoSettingsChanged, this, [this](const VideoSettingsModel& settings) {
         video_settings_ = settings;
         record_page_->setVideoSettings(settings);
         profile_registry_.ApplyVideoToActive(settings);
         persisted_settings_.video = settings;
+        if (advanced_page_) {
+            advanced_page_->setBaseline(output_settings_, video_settings_,
+                                        QString::fromStdString(profile_registry_.ActiveProfile().name));
+        }
         persistProfileState();
         refreshDiagnosticsData();
     });
@@ -999,30 +697,89 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         persisted_settings_.webcam = settings;
         settings_store_.Save(persisted_settings_);
         record_page_->setWebcamSettings(settings);
+        if (config_page_)
+            config_page_->setWebcamSettings(settings);
+    });
+    connect(config_page_, &ConfigPage::webcamSettingsChanged, this, [this](const WebcamSettings& settings) {
+        persisted_settings_.webcam = settings;
+        settings_store_.Save(persisted_settings_);
+        record_page_->setWebcamSettings(settings);
+        if (webcam_page_)
+            webcam_page_->applySettings(settings);
     });
     connect(this, &MainWindow::recordToggleRequested, record_page_, &RecordPage::onHotkeyToggle);
     connect(this, &MainWindow::pauseToggleRequested, record_page_, &RecordPage::onHotkeyPauseToggle);
     connect(hotkeys_page_, &HotkeysPage::bindingChanged, this, &MainWindow::onHotkeyBindingChanged);
+    connect(record_page_, &RecordPage::audioMeterLevelsUpdated, config_page_, &ConfigPage::setAudioMeterLevels);
     connect(record_page_, &RecordPage::audioSettingsChanged, this, [this](const capability::AudioUiState& state) {
         profile_registry_.ApplyAudioToActive(state);
         persisted_settings_.audio_ui_state = state;
+        if (config_page_)
+            config_page_->setAudioUiState(state);
         persistProfileState();
         refreshDiagnosticsData();
     });
+    connect(config_page_, &ConfigPage::diagnosticsRequested, this, [this]() {
+        refreshDiagnosticsData();
+        navigateToPage(kDiagnosticsPageIndex);
+    });
+    connect(diagnostics_page_, &DiagnosticsPage::navigateToLogsRequested, this,
+            [this]() { navigateToPage(kLogsPageIndex); });
+    connect(config_page_, &ConfigPage::webcamDetailsRequested, this, [this]() { navigateToPage(kWebcamPageIndex); });
+    connect(config_page_, &ConfigPage::advancedRequested, this, [this]() { navigateToPage(kAdvancedPageIndex); });
+    connect(webcam_page_, &WebcamPage::backToSettingsRequested, this, [this]() { navigateToPage(kSettingsPageIndex); });
+    connect(advanced_page_, &AdvancedPage::backToSettingsRequested, this,
+            [this]() { navigateToPage(kSettingsPageIndex); });
+
+    // Display discovery: refresh target list on monitor add/remove so the
+    // Source Picker and Record page stay current without manual Rescan.
+    if (auto* gui_app = qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
+        connect(gui_app, &QGuiApplication::screenAdded, this, [this](QScreen*) {
+            if (record_page_)
+                record_page_->refreshDisplayTargets();
+            diagnostics::AppLog(QStringLiteral("[window] screen added — refreshing display targets"));
+        });
+        connect(gui_app, &QGuiApplication::screenRemoved, this, [this](QScreen*) {
+            if (record_page_)
+                record_page_->refreshDisplayTargets();
+            diagnostics::AppLog(QStringLiteral("[window] screen removed — refreshing display targets"));
+        });
+    }
 
     record_page_->rebroadcastChromeState();
     applyActiveProfileToPages();
-    refreshOutputProfileUi();
 
     diagnostics::AppLog(QStringLiteral("[window] MainWindow constructed"));
 
-    refreshDiagnosticsData();
-    nav_->setCurrentRow(0);
-    pollIdleRuntimeMetrics();
+    navigateToPage(kRecordPageIndex);
+
+    auto* fullscreen_shortcut = new QShortcut(QKeySequence(Qt::Key_F11), this);
+    fullscreen_shortcut->setContext(Qt::ApplicationShortcut);
+    connect(fullscreen_shortcut, &QShortcut::activated, this, &MainWindow::toggleFullScreen);
+
+    // Application-level filter to catch mouse-press events in the resize border
+    // regardless of which child widget lies under the cursor.  Resize zones are
+    // HTCLIENT, so WM_NCLBUTTONDOWN never fires for them; we handle them here.
+    qApp->installEventFilter(this);
+
+    QTimer::singleShot(0, this, [this]() {
+        runtime_caps_ = capability::CapabilityBuilder::BuildFromHardwareQuery();
+        runtime_caps_ready_ = true;
+        diagnostics::AppLog(QStringLiteral("[window] capabilities probed"));
+        if (record_page_)
+            record_page_->setRuntimeCapabilities(runtime_caps_);
+        refreshOutputProfileUi();
+        refreshDiagnosticsData();
+    });
 }
 
 void MainWindow::showEvent(QShowEvent* event) {
     QMainWindow::showEvent(event);
+
+    if (!geometry_restored_) {
+        geometry_restored_ = true;
+        applyRestoredGeometry();
+    }
 
 #if defined(Q_OS_WIN)
     if (!resizable_style_applied_) {
@@ -1049,7 +806,7 @@ void MainWindow::applyRuntimeWindowIcon() {
         runtime_icon = QApplication::windowIcon();
 
     if (runtime_icon.isNull()) {
-        static const QString kAppIconPath = QStringLiteral(":/brand/exosnap-logo-light-bg-dark.ico");
+        static const QString kAppIconPath = QStringLiteral(":/brand/exosnap-logo-idle.ico");
         if (!QFile::exists(kAppIconPath))
             qWarning().noquote() << "Runtime icon resource missing during showEvent:" << kAppIconPath;
         runtime_icon = QIcon(kAppIconPath);
@@ -1108,142 +865,83 @@ void MainWindow::applyRuntimeWindowIcon() {
     runtime_window_icon_bound_ = true;
 }
 
-bool MainWindow::effectiveMaximizedState() const {
-    return isMaximized() || win32_maximized_;
+void MainWindow::switchRecordingIcon(bool recording) {
+    // Switch the window/taskbar icon between the idle aperture mark and the coral
+    // recording variant. Qt's setWindowIcon updates the title-bar frame; WM_SETICON
+    // ensures the taskbar button also updates on Windows.
+    //
+    // Note: Windows may cache the EXE icon (shown before the app launches) even
+    // after WM_SETICON succeeds for the running window. The taskbar *button* icon
+    // does update live on Windows 10/11; the taskbar pinned icon and the EXE file
+    // icon shown in Explorer do not change at runtime — this is expected behavior.
+    static const QString kIdlePath = QStringLiteral(":/brand/exosnap-logo-idle.ico");
+    static const QString kRecordingPath = QStringLiteral(":/brand/exosnap-logo-recording.ico");
+    const QString& icon_path = recording ? kRecordingPath : kIdlePath;
+
+    QIcon icon(icon_path);
+    if (icon.isNull()) {
+        qWarning().noquote() << "switchRecordingIcon: icon load failed from" << icon_path;
+        return;
+    }
+
+    setWindowIcon(icon);
+    if (windowHandle())
+        windowHandle()->setIcon(icon);
+
+#if defined(Q_OS_WIN)
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (hwnd == nullptr)
+        return;
+    HINSTANCE inst = GetModuleHandleW(nullptr);
+    if (inst == nullptr)
+        return;
+
+    const WORD icon_id = recording ? IDI_EXOSNAP_APP_ICON_RECORDING : IDI_EXOSNAP_APP_ICON;
+    // LR_DEFAULTCOLOR | LR_SHARED: OS caches per (instance, id, size) tuple — safe for distinct IDs.
+    HICON small_icon = static_cast<HICON>(
+        LoadImageW(inst, MAKEINTRESOURCEW(icon_id), IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR | LR_SHARED));
+    HICON big_icon = static_cast<HICON>(
+        LoadImageW(inst, MAKEINTRESOURCEW(icon_id), IMAGE_ICON, 32, 32, LR_DEFAULTCOLOR | LR_SHARED));
+    if (small_icon)
+        SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(small_icon));
+    if (big_icon)
+        SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(big_icon));
+#endif
 }
 
-void MainWindow::onNavRowChanged(int row) {
-    setCurrentPage(row);
+bool MainWindow::effectiveMaximizedState() const {
+    return isMaximized() || win32_maximized_ || isFullScreen();
 }
 
 void MainWindow::onRecordChromeStateChanged(bool recording, const QString& status_label, const QString& context_text) {
-    const bool recording_started = recording && !recording_active_;
+    Q_UNUSED(context_text);
     recording_active_ = recording;
-    recording_context_text_ = context_text;
     record_status_label_ = status_label.trimmed().toUpper();
     if (record_status_label_.isEmpty())
         record_status_label_ = QStringLiteral("READY");
 
-    title_bar_->setRecordingActive(recording);
-    title_bar_->setStatusLabel(record_status_label_);
-    if (global_recording_bar_) {
-        global_recording_bar_->setStatusLabel(record_status_label_);
-        refreshGlobalRecordingBarContext();
-    }
-    if (recording) {
-        title_bar_->setRecordingRuntime(QStringLiteral("--:--:--"), QStringLiteral("–"), QStringLiteral("–"));
-        if (recording_started && global_recording_bar_)
-            global_recording_bar_->setRuntimeSummary(globalBarRuntimePlaceholder());
-    } else {
-        pollIdleRuntimeMetrics();
-        if (global_recording_bar_)
-            global_recording_bar_->setRuntimeSummary(globalBarRuntimePlaceholder());
+    if (config_page_) {
+        // The title-bar pill distinguishes the post-recording "Saved" state, but the
+        // Settings readiness badge has no Saved concept — map it to the equivalent
+        // ready status so Settings behaviour is unchanged from before this slice.
+        const QString config_status =
+            (record_status_label_ == QStringLiteral("SAVED")) ? QStringLiteral("READY") : record_status_label_;
+        config_page_->setReadinessStatus(config_status);
     }
 
-    const bool live_recording_label = recording && record_status_label_ == QStringLiteral("REC");
-    sidebar_status_value_label_->setText(record_status_label_);
-    sidebar_status_value_label_->setProperty("labelRole",
-                                             live_recording_label ? "sidebarFooterValueLive" : "sidebarFooterValue");
-    sidebar_status_value_label_->style()->unpolish(sidebar_status_value_label_);
-    sidebar_status_value_label_->style()->polish(sidebar_status_value_label_);
-    sidebar_status_value_label_->update();
+    if (config_page_) {
+        const QString upper = record_status_label_;
+        const bool locked = (upper == QStringLiteral("REC") || upper == QStringLiteral("PAUSED") ||
+                             upper == QStringLiteral("STOPPING") || upper == QStringLiteral("CHECKING") ||
+                             upper == QStringLiteral("STARTING"));
+        config_page_->setRecordingControlsLocked(locked);
+    }
 
-    if (!context_text.isEmpty() && stack_->currentIndex() == 0)
-        title_bar_->setPageContext("01 · RECORD", context_text);
+    applyTitleBarStatus();
+    switchRecordingIcon(recording_active_);
 
     if (recording && isVisible() && !isMinimized() && stack_->currentIndex() != 0)
-        setCurrentPage(0);
-}
-
-void MainWindow::onGlobalRecordingBarPrimaryActionRequested() {
-    if (record_status_label_ == QStringLiteral("READY") || record_status_label_ == QStringLiteral("REC")) {
-        emit recordToggleRequested();
-        return;
-    }
-
-    if (record_status_label_ == QStringLiteral("PAUSED")) {
-        emit pauseToggleRequested();
-        return;
-    }
-
-    if (ui::chrome::ShouldOpenRecordingDiagnosticsForStatus(record_status_label_) && nav_) {
-        refreshDiagnosticsData();
-        nav_->setCurrentRow(kDiagnosticsPageIndex);
-    }
-}
-
-void MainWindow::onGlobalRecordingBarPauseActionRequested() {
-    if (record_status_label_ == QStringLiteral("REC") || record_status_label_ == QStringLiteral("PAUSED")) {
-        emit pauseToggleRequested();
-    }
-}
-
-void MainWindow::onRecordChromeRuntimeMetricsChanged(const QString& elapsed_text, const QString& bitrate_text,
-                                                     const QString& drop_text, const QString& size_text) {
-    if (!title_bar_)
-        return;
-
-    const bool should_show_recording_runtime = ui::chrome::ShouldShowRecordingRuntimeForStatus(record_status_label_);
-    if (!should_show_recording_runtime) {
-        pollIdleRuntimeMetrics();
-        if (global_recording_bar_)
-            global_recording_bar_->setRuntimeSummary(globalBarRuntimePlaceholder());
-        return;
-    }
-
-    title_bar_->setRecordingRuntime(elapsed_text, bitrate_text, drop_text);
-    if (global_recording_bar_) {
-        const QString elapsed = elapsed_text.trimmed().isEmpty() ? QStringLiteral("--:--:--") : elapsed_text.trimmed();
-        const QString size = size_text.trimmed().isEmpty() ? QStringLiteral("-") : size_text.trimmed();
-        global_recording_bar_->setRuntimeSummary(QStringLiteral("DUR %1 · SIZE %2").arg(elapsed, size));
-    }
-}
-
-void MainWindow::pollIdleRuntimeMetrics() {
-    if (!title_bar_ || recording_active_)
-        return;
-
-    QString cpu_text = QStringLiteral("–");
-    QString gpu_text = QStringLiteral("–");
-    QString ram_text = QStringLiteral("–");
-
-#if defined(Q_OS_WIN)
-    FILETIME idle_time = {};
-    FILETIME kernel_time = {};
-    FILETIME user_time = {};
-    if (GetSystemTimes(&idle_time, &kernel_time, &user_time) != FALSE) {
-        const std::uint64_t idle_ticks = fileTimeToUint64(idle_time);
-        const std::uint64_t kernel_ticks = fileTimeToUint64(kernel_time);
-        const std::uint64_t user_ticks = fileTimeToUint64(user_time);
-
-        if (cpu_baseline_ready_) {
-            const std::uint64_t idle_delta = idle_ticks - last_cpu_idle_ticks_;
-            const std::uint64_t kernel_delta = kernel_ticks - last_cpu_kernel_ticks_;
-            const std::uint64_t user_delta = user_ticks - last_cpu_user_ticks_;
-            const std::uint64_t total_delta = kernel_delta + user_delta;
-            if (total_delta > 0 && total_delta >= idle_delta) {
-                const double busy_ratio =
-                    static_cast<double>(total_delta - idle_delta) / static_cast<double>(total_delta);
-                cpu_text = QStringLiteral("%1%").arg(busy_ratio * 100.0, 0, 'f', 1);
-            }
-        }
-
-        last_cpu_idle_ticks_ = idle_ticks;
-        last_cpu_kernel_ticks_ = kernel_ticks;
-        last_cpu_user_ticks_ = user_ticks;
-        cpu_baseline_ready_ = true;
-    }
-
-    PROCESS_MEMORY_COUNTERS_EX memory_counters = {};
-    memory_counters.cb = sizeof(memory_counters);
-    if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&memory_counters),
-                             memory_counters.cb) != FALSE) {
-        const double working_set_mb = static_cast<double>(memory_counters.WorkingSetSize) / (1024.0 * 1024.0);
-        ram_text = QStringLiteral("%1M").arg(working_set_mb, 0, 'f', 0);
-    }
-#endif
-
-    title_bar_->setRuntimeMeta(cpu_text, gpu_text, ram_text);
+        navigateToPage(kRecordPageIndex);
 }
 
 bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintptr* result) {
@@ -1306,6 +1004,11 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
             if (msg->hwnd == main_hwnd && msg->message == WM_GETMINMAXINFO) {
                 auto* minmax_info = reinterpret_cast<MINMAXINFO*>(msg->lParam);
                 if (minmax_info != nullptr) {
+                    // Enforce minimum window size during native resize drag (device pixels).
+                    const double dpr = devicePixelRatioF();
+                    minmax_info->ptMinTrackSize.x = static_cast<LONG>(minimumWidth() * dpr);
+                    minmax_info->ptMinTrackSize.y = static_cast<LONG>(minimumHeight() * dpr);
+
                     MONITORINFO monitor_info = {};
                     monitor_info.cbSize = sizeof(monitor_info);
                     const HMONITOR monitor = MonitorFromWindow(msg->hwnd, MONITOR_DEFAULTTONEAREST);
@@ -1340,42 +1043,45 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
                 return true;
             }
 
-            if (msg->hwnd == main_hwnd && msg->message == WM_NCHITTEST) {
-                const QPoint global(GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
-                const QPoint local = mapFromGlobal(global);
-                const bool maximized = effectiveMaximizedState();
-
-                const ResizeZone zone = resizeZoneFromLocalPoint(local, size(), maximized);
-                if (zone != ResizeZone::None) {
-                    *result = hitTestFromResizeZone(zone);
-                    return true;
-                }
-
-                if (title_bar_ != nullptr) {
-                    const QPoint in_title = title_bar_->mapFromGlobal(global);
-                    if (title_bar_->rect().contains(in_title)) {
-                        const auto button_hit = title_bar_->hitTestWindowButton(in_title);
-                        if (button_hit != ui::chrome::OperationalTitleBar::WindowButtonHit::None) {
-                            // Keep client-side titlebar buttons clickable.
-                            *result = HTCLIENT;
-                            return true;
-                        }
-                        if (title_bar_->isInDragArea(in_title)) {
-                            *result = HTCAPTION;
+            // Resize cursor feedback: all zones are HTCLIENT, so WM_SETCURSOR's lParam
+            // always carries HTCLIENT.  Read the live cursor position via Qt (logical
+            // pixels) to derive the zone independently of NCHITTEST.
+            // When leaving the resize zone we explicitly reset to IDC_ARROW — without
+            // this the resize cursor sticks as Qt does not unconditionally call
+            // SetCursor on every WM_SETCURSOR for client-area messages.
+            if (msg->hwnd == main_hwnd && msg->message == WM_SETCURSOR) {
+                if (!effectiveMaximizedState()) {
+                    const QPoint local = mapFromGlobal(QCursor::pos());
+                    const ResizeZone zone = resizeZoneFromLocalPoint(local, size(), false);
+                    if (zone != ResizeZone::None) {
+                        HCURSOR cursor = cursorFromHitTestCode(hitTestFromResizeZone(zone));
+                        if (cursor != nullptr) {
+                            SetCursor(cursor);
+                            resize_cursor_shown_ = true;
+                            *result = TRUE;
                             return true;
                         }
                     }
+                    if (resize_cursor_shown_) {
+                        // Just left the resize zone — force-reset so the resize cursor
+                        // does not linger over the titlebar or content area.
+                        SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+                        resize_cursor_shown_ = false;
+                        // Return false so Qt can still set the correct cursor for the
+                        // widget under the cursor (e.g. pointing-hand for nav items).
+                    }
+                } else {
+                    resize_cursor_shown_ = false;
                 }
             }
 
-            if (msg->hwnd == main_hwnd && msg->message == WM_SETCURSOR && !effectiveMaximizedState()) {
-                const LRESULT hit_test = static_cast<LRESULT>(LOWORD(msg->lParam));
-                HCURSOR cursor = cursorFromHitTestCode(hit_test);
-                if (cursor != nullptr) {
-                    SetCursor(cursor);
-                    *result = TRUE;
-                    return true;
-                }
+            // Reset the drag/move override cursor when the window-move or resize
+            // operation ends.  WM_CAPTURECHANGED fires too early (ReleaseCapture is
+            // called inside startSystemMove before the loop starts), so WM_EXITSIZEMOVE
+            // is the reliable signal that the modal loop has actually finished.
+            if (msg->hwnd == main_hwnd && msg->message == WM_EXITSIZEMOVE) {
+                if (title_bar_ != nullptr)
+                    title_bar_->resetDragCursor();
             }
         }
     }
@@ -1385,6 +1091,56 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
     Q_UNUSED(result);
 #endif
     return QMainWindow::nativeEvent(event_type, message, result);
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    // Intercept mouse presses for the resize border zones.  All zones are
+    // HTCLIENT so Qt generates regular QMouseEvents — handle resize here.
+    if (event->type() == QEvent::MouseButtonPress && isVisible() && !isMaximized()) {
+        auto* me = static_cast<QMouseEvent*>(event);
+        if (me->button() == Qt::LeftButton) {
+            const QPoint local = mapFromGlobal(me->globalPosition().toPoint());
+            const ResizeZone zone = resizeZoneFromLocalPoint(local, size(), false);
+            if (zone != ResizeZone::None) {
+                Qt::Edges edges;
+                switch (zone) {
+                case ResizeZone::Left:
+                    edges = Qt::LeftEdge;
+                    break;
+                case ResizeZone::Right:
+                    edges = Qt::RightEdge;
+                    break;
+                case ResizeZone::Top:
+                    edges = Qt::TopEdge;
+                    break;
+                case ResizeZone::Bottom:
+                    edges = Qt::BottomEdge;
+                    break;
+                case ResizeZone::TopLeft:
+                    edges = Qt::LeftEdge | Qt::TopEdge;
+                    break;
+                case ResizeZone::TopRight:
+                    edges = Qt::RightEdge | Qt::TopEdge;
+                    break;
+                case ResizeZone::BottomLeft:
+                    edges = Qt::LeftEdge | Qt::BottomEdge;
+                    break;
+                case ResizeZone::BottomRight:
+                    edges = Qt::RightEdge | Qt::BottomEdge;
+                    break;
+                default:
+                    break;
+                }
+                if (edges) {
+                    if (QWindow* win = windowHandle()) {
+                        win->startSystemResize(edges);
+                        return true; // consume — do not forward to child widgets
+                    }
+                }
+            }
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
 
 void MainWindow::changeEvent(QEvent* event) {
@@ -1412,30 +1168,135 @@ void MainWindow::changeEvent(QEvent* event) {
     }
 }
 
+void MainWindow::closeEvent(QCloseEvent* event) {
+    saveWindowGeometry();
+
+    if (recording_active_) {
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle(QStringLiteral("Recording in progress"));
+        msgBox.setText(QStringLiteral("ExoSnap is still recording. Closing now will stop the current recording."));
+        msgBox.setIcon(QMessageBox::Warning);
+
+        auto* stopBtn = msgBox.addButton(QStringLiteral("Stop recording and close"), QMessageBox::AcceptRole);
+        auto* cancelBtn = msgBox.addButton(QStringLiteral("Cancel"), QMessageBox::RejectRole);
+        msgBox.setDefaultButton(cancelBtn);
+
+        msgBox.exec();
+
+        if (msgBox.clickedButton() == static_cast<QAbstractButton*>(stopBtn)) {
+            emit recordToggleRequested();
+            recording_active_ = false;
+            event->accept();
+        } else {
+            event->ignore();
+        }
+        return;
+    }
+    QMainWindow::closeEvent(event);
+}
+
+void MainWindow::toggleFullScreen() {
+    if (isFullScreen()) {
+        pre_fullscreen_maximized_ ? showMaximized() : showNormal();
+    } else {
+        pre_fullscreen_maximized_ = isMaximized() || win32_maximized_;
+        showFullScreen();
+    }
+}
+
+void MainWindow::saveWindowGeometry() {
+    auto& geo = persisted_settings_.window_geometry;
+    geo.maximized = isMaximized() || win32_maximized_;
+    // normalGeometry() returns the restore rect even when currently maximized or fullscreen.
+    const QRect restore_rect = (isMaximized() || isFullScreen()) ? normalGeometry() : geometry();
+    geo.x = restore_rect.x();
+    geo.y = restore_rect.y();
+    geo.width = restore_rect.width();
+    geo.height = restore_rect.height();
+    settings_store_.Save(persisted_settings_);
+}
+
+void MainWindow::applyRestoredGeometry() {
+    const auto& geo = persisted_settings_.window_geometry;
+    if (geo.width <= 0 || geo.height <= 0)
+        return;
+
+    // The title bar region that must remain accessible so the user can move the window.
+    const QRect title_strip(geo.x, geo.y, std::min(geo.width, 200), 40);
+
+    QScreen* screen = nullptr;
+    for (QScreen* s : QGuiApplication::screens()) {
+        if (s->availableGeometry().intersects(title_strip)) {
+            screen = s;
+            break;
+        }
+    }
+
+    if (screen == nullptr) {
+        // Saved position lands on no connected monitor: center on primary.
+        screen = QGuiApplication::primaryScreen();
+        if (screen == nullptr)
+            return;
+        const QRect avail = screen->availableGeometry();
+        const int w = std::clamp(geo.width, minimumWidth(), avail.width());
+        const int h = std::clamp(geo.height, minimumHeight(), avail.height());
+        setGeometry(avail.left() + (avail.width() - w) / 2, avail.top() + (avail.height() - h) / 2, w, h);
+    } else {
+        const QRect avail = screen->availableGeometry();
+        const int w = std::clamp(geo.width, minimumWidth(), avail.width());
+        const int h = std::clamp(geo.height, minimumHeight(), avail.height());
+        // Keep at least a 100×40px strip of the window inside the available area.
+        const int x = std::clamp(geo.x, avail.left(), avail.right() - std::min(w, 100));
+        const int y = std::clamp(geo.y, avail.top(), avail.bottom() - 40);
+        setGeometry(x, y, w, h);
+    }
+
+    if (geo.maximized)
+        QTimer::singleShot(0, this, &MainWindow::showMaximized);
+}
+
+int MainWindow::navHighlightIndexFor(int index) const {
+    // Advanced and Webcam are sub-pages reached from Settings; keep the Settings tab lit
+    // while they are shown (no dedicated top-nav tab exists for them).
+    if (index == kAdvancedPageIndex || index == kWebcamPageIndex)
+        return kSettingsPageIndex;
+    return index;
+}
+
+void MainWindow::navigateToPage(int index) {
+    if (index < 0 || index >= static_cast<int>(kPageDescriptors.size()))
+        return;
+
+    // Any page switch cleanly dismisses inline overlays so they never linger
+    // over an unrelated page.
+    if (about_overlay_)
+        about_overlay_->closeOverlay();
+    if (source_picker_overlay_)
+        source_picker_overlay_->closeOverlay();
+
+    setCurrentPage(index);
+    if (title_bar_)
+        title_bar_->setActivePage(navHighlightIndexFor(index));
+}
+
 void MainWindow::setCurrentPage(int index) {
     if (index < 0 || index >= static_cast<int>(kPageDescriptors.size()))
         return;
 
     stack_->setCurrentIndex(index);
-    updatePageHeader(index);
+
+    // Keep the title-bar status pill consistent across page switches (the "Saved"
+    // state is scoped to the Record page — see applyTitleBarStatus()).
+    applyTitleBarStatus();
 }
 
-void MainWindow::updatePageHeader(int index) {
-    const auto& descriptor = kPageDescriptors[static_cast<std::size_t>(index)];
-    page_kicker_label_->setText(descriptor.kicker);
-    page_title_label_->setText(descriptor.nav_label);
-    page_subtitle_label_->setText(descriptor.subtitle);
-    const QString page_meta =
-        index == kOutputPageIndex ? buildOutputPageMeta() : QString::fromUtf8(descriptor.page_meta);
-    page_meta_label_->setText(page_meta);
-    page_meta_label_->setVisible(!page_meta.trimmed().isEmpty());
+void MainWindow::applyTitleBarStatus() {
+    if (title_bar_ == nullptr)
+        return;
 
-    const QString context_text = (recording_active_ && index == 0 && !recording_context_text_.isEmpty())
-                                     ? recording_context_text_
-                                     : QString::fromUtf8(descriptor.chrome_context);
-    title_bar_->setPageContext(descriptor.kicker, context_text);
+    const bool on_record_page = (stack_ != nullptr && stack_->currentIndex() == kRecordPageIndex);
     title_bar_->setRecordingActive(recording_active_);
-    title_bar_->setStatusLabel(record_status_label_);
+    title_bar_->setStatusLabel(ui::chrome::ScopeStatusLabelForActivePage(record_status_label_, on_record_page));
 }
 
 void MainWindow::applyActiveProfileToPages() {
@@ -1452,25 +1313,20 @@ void MainWindow::applyActiveProfileToPages() {
         record_page_->setActiveProfileName(active_profile.name);
         record_page_->applyPersistedAudioSettings(persisted_settings_.audio_ui_state);
     }
-    if (output_page_) {
-        output_page_->setOutputSettings(output_settings_);
-        output_page_->setActiveProfileName(QString::fromStdString(active_profile.name));
+    if (config_page_) {
+        config_page_->setOutputSettings(output_settings_);
+        config_page_->setVideoSettings(video_settings_);
+        config_page_->setActiveProfileName(QString::fromStdString(active_profile.name));
+        config_page_->setOutputFolder(output_settings_.output_folder);
+        config_page_->setAudioUiState(persisted_settings_.audio_ui_state);
     }
-    if (video_page_) {
-        video_page_->setVideoSettings(video_settings_);
+    if (advanced_page_) {
+        advanced_page_->setBaseline(output_settings_, video_settings_, QString::fromStdString(active_profile.name));
     }
-    if (stack_ && stack_->currentIndex() == kOutputPageIndex) {
-        updatePageHeader(kOutputPageIndex);
-    }
-    refreshGlobalRecordingBarContext();
     refreshDiagnosticsData();
 }
 
 void MainWindow::refreshOutputProfileUi() {
-    if (!output_page_) {
-        return;
-    }
-
     const auto profile_available = [this](const RecordingProfile& profile, QString* reason_out) {
         if (!runtime_caps_ready_) {
             if (reason_out) {
@@ -1494,11 +1350,11 @@ void MainWindow::refreshOutputProfileUi() {
         return true;
     };
 
-    std::vector<OutputPage::ProfileOption> options;
+    std::vector<ConfigPage::ProfileOption> options;
     options.reserve(profile_registry_.BuiltInProfiles().size() + profile_registry_.UserProfiles().size());
 
     for (const auto& profile : profile_registry_.BuiltInProfiles()) {
-        OutputPage::ProfileOption option;
+        ConfigPage::ProfileOption option;
         option.id = QString::fromStdString(profile.id);
         option.label = QString::fromStdString(profile.name);
         option.built_in = true;
@@ -1510,7 +1366,7 @@ void MainWindow::refreshOutputProfileUi() {
     }
 
     for (const auto& profile : profile_registry_.UserProfiles()) {
-        OutputPage::ProfileOption option;
+        ConfigPage::ProfileOption option;
         option.id = QString::fromStdString(profile.id);
         option.label = QString::fromStdString(profile.name);
         option.built_in = false;
@@ -1520,11 +1376,13 @@ void MainWindow::refreshOutputProfileUi() {
     }
 
     syncing_profile_ui_ = true;
-    output_page_->setProfileOptions(options, QString::fromStdString(profile_registry_.ActiveState().active_profile_id),
-                                    profile_registry_.IsActiveBuiltInModified());
-    output_page_->setActiveProfileName(QString::fromStdString(profile_registry_.ActiveProfile().name));
+    if (config_page_) {
+        config_page_->setProfileOptions(options,
+                                        QString::fromStdString(profile_registry_.ActiveState().active_profile_id),
+                                        profile_registry_.IsActiveBuiltInModified());
+        config_page_->setActiveProfileName(QString::fromStdString(profile_registry_.ActiveProfile().name));
+    }
     syncing_profile_ui_ = false;
-    refreshGlobalRecordingBarContext();
 }
 
 void MainWindow::persistProfileState() {
@@ -1584,51 +1442,6 @@ void MainWindow::onHotkeyBindingChanged(int action_index, QKeySequence seq) {
 #else
     Q_UNUSED(seq)
 #endif
-}
-
-QString MainWindow::buildGlobalRecordingBarProfileSummary() const {
-    const bool builtin_modified = profile_registry_.IsActiveBuiltInModified();
-    const QString profile_name = QString::fromStdString(profile_registry_.ActiveProfile().name).trimmed();
-    if (!builtin_modified && !profile_name.isEmpty())
-        return profile_name;
-    return buildOutputPageMeta();
-}
-
-QString MainWindow::buildGlobalRecordingBarTargetSummary() const {
-    const QString context = recording_context_text_.trimmed().isEmpty()
-                                ? QString::fromUtf8(kPageDescriptors[0].chrome_context)
-                                : recording_context_text_;
-    return targetSummaryFromContext(context);
-}
-
-QString MainWindow::buildOutputPageMeta() const {
-    const QString container = output_settings_.container == capability::Container::Matroska
-                                  ? QStringLiteral("MKV")
-                                  : (output_settings_.container == capability::Container::Mp4 ? QStringLiteral("MP4")
-                                                                                              : QStringLiteral("WEBM"));
-    const QString video =
-        output_settings_.video_codec == capability::VideoCodec::H264Nvenc
-            ? QStringLiteral("H.264")
-            : (output_settings_.video_codec == capability::VideoCodec::HevcNvenc ? QStringLiteral("HEVC")
-                                                                                 : QStringLiteral("AV1"));
-    const QString audio = output_settings_.audio_codec == capability::AudioCodec::Opus
-                              ? QStringLiteral("OPUS")
-                              : (output_settings_.audio_codec == capability::AudioCodec::AacMf ? QStringLiteral("AAC")
-                                                                                               : QStringLiteral("PCM"));
-    return container + QStringLiteral(" · ") + video + QStringLiteral(" · ") + audio;
-}
-
-QString MainWindow::buildOutputSummary() const {
-    return outputSummaryFromSettings(output_settings_);
-}
-
-void MainWindow::refreshGlobalRecordingBarContext() {
-    if (!global_recording_bar_)
-        return;
-
-    global_recording_bar_->setProfileSummary(buildGlobalRecordingBarProfileSummary());
-    global_recording_bar_->setTargetSummary(buildGlobalRecordingBarTargetSummary());
-    global_recording_bar_->setOutputSummary(buildOutputSummary());
 }
 
 void MainWindow::refreshDiagnosticsData() {

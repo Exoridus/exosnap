@@ -1,5 +1,7 @@
 #include "PreviewSurface.h"
 
+#include "../../diagnostics/AppLog.h"
+#include "../../services/DxgiPreviewRenderer.h"
 #include "StatusPill.h"
 
 #include <QApplication>
@@ -13,6 +15,7 @@
 #include <QPen>
 #include <QResizeEvent>
 #include <QVBoxLayout>
+#include <QWindow>
 
 #include <algorithm>
 #include <cmath>
@@ -205,6 +208,10 @@ PreviewSurface::PreviewSurface(QWidget* parent) : QWidget(parent) {
     bottom_layout->addWidget(bottom_right_label_, 0);
 }
 
+PreviewSurface::~PreviewSurface() {
+    stopDxgiPreview();
+}
+
 bool PreviewSurface::hasHeightForWidth() const {
     return true;
 }
@@ -239,6 +246,96 @@ bool PreviewSurface::isRecording() const noexcept {
     return recording_;
 }
 
+bool PreviewSurface::tryStartDxgiPreview(const recorder_core::CaptureTarget& target, uint32_t frame_rate_num,
+                                         uint32_t frame_rate_den, std::optional<exosnap::PreviewCropBox> crop_box) {
+    stopDxgiPreview();
+
+    setAttribute(Qt::WA_NativeWindow);
+    winId();
+    HWND hwnd = reinterpret_cast<HWND>(effectiveWinId());
+    if (!hwnd) {
+        diagnostics::AppLog(QStringLiteral("[dxgi-preview] no native window handle for PreviewSurface"));
+        return false;
+    }
+
+    SetWindowLongPtrW(hwnd, GWL_STYLE, GetWindowLongPtrW(hwnd, GWL_STYLE) | WS_CLIPCHILDREN);
+
+    dxgi_renderer_ = std::make_unique<exosnap::DxgiPreviewRenderer>();
+
+    // Win32 CreateWindowEx expects physical pixels for DPI-aware apps; Qt width()/height() are logical.
+    const qreal dpr = devicePixelRatioF();
+    const uint32_t hwndW = static_cast<uint32_t>(std::max(1.0, width() * dpr));
+    const uint32_t hwndH = static_cast<uint32_t>(std::max(1.0, height() * dpr));
+    const uint32_t swapW = hwndW;
+    const uint32_t swapH = hwndH;
+    if (!dxgi_renderer_->Initialize(hwnd, hwndW, hwndH, swapW, swapH)) {
+        diagnostics::AppLog(QStringLiteral("[dxgi-preview] DxgiPreviewRenderer init failed, falling back to QImage"));
+        dxgi_renderer_.reset();
+        return false;
+    }
+
+    // Pass the crop box (if any) so the renderer crops the monitor frame to the
+    // selected region.  For Display and Window targets this is std::nullopt.
+    if (!dxgi_renderer_->StartCapture(target, frame_rate_num, frame_rate_den, std::move(crop_box))) {
+        diagnostics::AppLog(
+            QStringLiteral("[dxgi-preview] DxgiPreviewRenderer StartCapture failed, falling back to QImage"));
+        dxgi_renderer_->Shutdown();
+        dxgi_renderer_.reset();
+        return false;
+    }
+
+    applyDxgiPreviewResize();
+    dxgi_active_ = true;
+    current_frame_ = QImage{};
+    center_box_->setVisible(false);
+    update();
+    return true;
+}
+
+void PreviewSurface::stopDxgiPreview() {
+    dxgi_active_ = false;
+    if (dxgi_renderer_) {
+        dxgi_renderer_->StopCapture();
+        dxgi_renderer_->Shutdown();
+        dxgi_renderer_.reset();
+    }
+}
+
+bool PreviewSurface::isDxgiPreviewActive() const noexcept {
+    return dxgi_active_ && dxgi_renderer_ && dxgi_renderer_->IsActive();
+}
+
+void PreviewSurface::repositionDxgiPreview() {
+    applyDxgiPreviewResize();
+}
+
+void PreviewSurface::applyDxgiPreviewResize() {
+    if (!dxgi_renderer_ || !dxgi_active_)
+        return;
+
+    // Win32 SetWindowPos expects physical pixels for DPI-aware apps; Qt width()/height() are logical.
+    const qreal dpr = devicePixelRatioF();
+    const uint32_t hwndW = static_cast<uint32_t>(std::max(1.0, width() * dpr));
+    const uint32_t hwndH = static_cast<uint32_t>(std::max(1.0, height() * dpr));
+    const uint32_t swapW = hwndW;
+    const uint32_t swapH = hwndH;
+    dxgi_renderer_->Resize(hwndW, hwndH, swapW, swapH);
+}
+
+QRectF PreviewSurface::displayedFrameRectForSource(int srcW, int srcH) const {
+    if (width() <= 0 || height() <= 0 || srcW <= 0 || srcH <= 0)
+        return QRectF(0, 0, width(), height());
+
+    const double sx = static_cast<double>(width()) / static_cast<double>(srcW);
+    const double sy = static_cast<double>(height()) / static_cast<double>(srcH);
+    const double s = std::min(sx, sy);
+    const double dw = static_cast<double>(srcW) * s;
+    const double dh = static_cast<double>(srcH) * s;
+    const double dx = (static_cast<double>(width()) - dw) * 0.5;
+    const double dy = (static_cast<double>(height()) - dh) * 0.5;
+    return {dx, dy, dw, dh};
+}
+
 void PreviewSurface::setStatusText(const QString& text) {
     status_pill_->setText(text);
 }
@@ -262,6 +359,14 @@ void PreviewSurface::setBottomLeftText(const QString& text) {
 
 void PreviewSurface::setBottomRightText(const QString& text) {
     bottom_right_label_->setText(text);
+}
+
+void PreviewSurface::setFrameTone(FrameTone tone) {
+    if (frame_tone_ == tone) {
+        return;
+    }
+    frame_tone_ = tone;
+    update();
 }
 
 StatusPill* PreviewSurface::statusPill() const noexcept {
@@ -361,7 +466,7 @@ QRectF PreviewSurface::displayedFrameRect() const {
 
     const double sx = static_cast<double>(width()) / static_cast<double>(current_frame_.width());
     const double sy = static_cast<double>(height()) / static_cast<double>(current_frame_.height());
-    const double s = std::max(sx, sy);
+    const double s = std::min(sx, sy);
     const double dw = static_cast<double>(current_frame_.width()) * s;
     const double dh = static_cast<double>(current_frame_.height()) * s;
     const double dx = (static_cast<double>(width()) - dw) * 0.5;
@@ -675,42 +780,72 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
     painter.setRenderHint(QPainter::Antialiasing, true);
 
     const QRectF frame_rect = rect().adjusted(0.5, 0.5, -0.5, -0.5);
-    QLinearGradient bg_grad(frame_rect.topLeft(), frame_rect.bottomRight());
-    bg_grad.setColorAt(0.0, QColor("#181612"));
-    bg_grad.setColorAt(1.0, QColor("#0e0d0b"));
-    painter.setBrush(bg_grad);
-    painter.setPen(QPen(QColor("#353330"), 1.0));
-    painter.drawRoundedRect(frame_rect, 5.0, 5.0);
 
-    if (!current_frame_.isNull()) {
-        painter.save();
-        QPainterPath clipPath;
-        clipPath.addRoundedRect(frame_rect, 5.0, 5.0);
-        painter.setClipPath(clipPath);
-
-        const double sx = static_cast<double>(width()) / current_frame_.width();
-        const double sy = static_cast<double>(height()) / current_frame_.height();
-        const double s = std::max(sx, sy);
-        const int dw = static_cast<int>(current_frame_.width() * s);
-        const int dh = static_cast<int>(current_frame_.height() * s);
-        const int dx = (width() - dw) / 2;
-        const int dy = (height() - dh) / 2;
-        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        painter.drawImage(QRect(dx, dy, dw, dh), current_frame_);
-        painter.restore();
+    if (dxgi_active_) {
+        painter.setBrush(QColor(0, 0, 0));
+        painter.setPen(Qt::NoPen);
+        painter.drawRoundedRect(frame_rect, 5.0, 5.0);
     } else {
+        QLinearGradient bg_grad(frame_rect.topLeft(), frame_rect.bottomRight());
+        bg_grad.setColorAt(0.0, QColor("#181612"));
+        bg_grad.setColorAt(1.0, QColor("#0e0d0b"));
+        painter.setBrush(bg_grad);
+        painter.setPen(QPen(QColor("#353330"), 1.0));
+        painter.drawRoundedRect(frame_rect, 5.0, 5.0);
+
+        if (!current_frame_.isNull()) {
+            painter.save();
+            QPainterPath clipPath;
+            clipPath.addRoundedRect(frame_rect, 5.0, 5.0);
+            painter.setClipPath(clipPath);
+
+            const double sx = static_cast<double>(width()) / current_frame_.width();
+            const double sy = static_cast<double>(height()) / current_frame_.height();
+            const double s = std::min(sx, sy);
+            const int dw = static_cast<int>(current_frame_.width() * s);
+            const int dh = static_cast<int>(current_frame_.height() * s);
+            const int dx = (width() - dw) / 2;
+            const int dy = (height() - dh) / 2;
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            painter.drawImage(QRect(dx, dy, dw, dh), current_frame_);
+            painter.restore();
+        } else {
+            painter.save();
+            painter.setClipRect(rect().adjusted(1, 1, -1, -1));
+            painter.setPen(QPen(QColor(255, 255, 255, 6), 1.0));
+            for (int x = -height(); x < width() + height(); x += 12)
+                painter.drawLine(x, height(), x + height(), 0);
+            painter.restore();
+        }
+    }
+
+    const bool tone_recording = (frame_tone_ == FrameTone::Recording);
+    const bool tone_warn = (frame_tone_ == FrameTone::Warn);
+    const bool tone_blocked = (frame_tone_ == FrameTone::Blocked);
+
+    QColor tone_color("#45423d");
+    if (tone_recording) {
+        tone_color = QColor("#f05b54");
+    } else if (tone_warn) {
+        tone_color = QColor("#d7a744");
+    } else if (tone_blocked) {
+        tone_color = QColor("#f05b54");
+    }
+
+    if (tone_recording || tone_warn || tone_blocked) {
         painter.save();
-        painter.setClipRect(rect().adjusted(1, 1, -1, -1));
-        painter.setPen(QPen(QColor(255, 255, 255, 6), 1.0));
-        for (int x = -height(); x < width() + height(); x += 12)
-            painter.drawLine(x, height(), x + height(), 0);
+        QColor glow = tone_color;
+        glow.setAlpha(tone_recording ? 68 : 44);
+        painter.setPen(QPen(glow, tone_recording ? 2.0 : 1.5));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(frame_rect.adjusted(0.8, 0.8, -0.8, -0.8), 5.0, 5.0);
         painter.restore();
     }
 
-    if (recording_) {
+    if (tone_recording) {
         painter.save();
         painter.setClipRect(rect().adjusted(1, 1, -1, -1));
-        painter.setPen(QPen(QColor(215, 167, 68, 10), 1.0));
+        painter.setPen(QPen(QColor(240, 91, 84, 14), 1.0));
         for (int y = 0; y < height(); y += 4)
             painter.drawLine(1, y, width() - 1, y);
         painter.restore();
@@ -764,8 +899,7 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
         painter.restore();
     }
 
-    const QColor corner_color = recording_ ? QColor("#d7a744") : QColor("#45423d");
-    painter.setPen(QPen(corner_color, recording_ ? 1.8 : 1.2));
+    painter.setPen(QPen(tone_color, (tone_recording || tone_warn || tone_blocked) ? 1.8 : 1.2));
     const int inset = 15;
     const int len = 20;
     painter.drawLine(inset, inset, inset + len, inset);
@@ -790,6 +924,8 @@ void PreviewSurface::resizeEvent(QResizeEvent* event) {
     top_row_->setGeometry(pad_x, pad_top, width() - (pad_x * 2), top_height);
     center_box_->setGeometry(0, (height() - 90) / 2, width(), 90);
     bottom_row_->setGeometry(pad_x, height() - pad_bottom - bottom_height, width() - (pad_x * 2), bottom_height);
+
+    applyDxgiPreviewResize();
 }
 
 } // namespace exosnap::ui::widgets

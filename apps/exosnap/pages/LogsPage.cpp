@@ -1,129 +1,158 @@
 #include "LogsPage.h"
 
+#include <QClipboard>
 #include <QDesktopServices>
-#include <QFrame>
+#include <QFile>
+#include <QFileInfo>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPlainTextEdit>
 #include <QPushButton>
-#include <QScrollArea>
-#include <QStandardPaths>
+#include <QSizePolicy>
+#include <QTextStream>
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include "../diagnostics/AppLog.h"
 #include "../ui/theme/ExoSnapMetrics.h"
+#include "../ui/widgets/SectionRuleHeader.h"
 
 namespace exosnap {
-
 namespace {
 
-QLabel* makeSubLabel(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setProperty("labelRole", "subtitle");
-    l->setWordWrap(true);
-    return l;
-}
+using M = ui::theme::ExoSnapMetrics;
 
-QLabel* makeSectionLabel(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setProperty("labelRole", "section");
-    return l;
-}
+constexpr int kMaxLogLines = 500;
 
-QLabel* makePlaceholderRow(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setProperty("panelRole", "placeholder");
-    l->setProperty("labelRole", "mono");
-    return l;
-}
+QString readLogTail(const QString& path, int max_lines) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return {};
 
-QFrame* makePanel(QWidget* parent) {
-    auto* panel = new QFrame(parent);
-    panel->setProperty("panelRole", "panel");
-    return panel;
+    QStringList lines;
+    QTextStream stream(&file);
+    while (!stream.atEnd()) {
+        lines.append(stream.readLine());
+        if (lines.size() > max_lines)
+            lines.removeFirst();
+    }
+    return lines.join(QStringLiteral("\n"));
 }
 
 } // namespace
 
 LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
-    auto* scroll = new QScrollArea(this);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
 
     auto* content = new QWidget();
+    content->setMaximumWidth(1320);
+    content->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
-                               ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
-    layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
+    layout->setContentsMargins(M::kSpaceXl, M::kSpaceXl, M::kSpaceXl, M::kSpaceXl);
+    layout->setSpacing(M::kSpaceMd);
 
-    // Log viewer surface
-    layout->addWidget(makeSectionLabel("Log Viewer Surface", content));
-    auto* viewer_panel = makePanel(content);
-    auto* viewer_layout = new QVBoxLayout(viewer_panel);
-    viewer_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
-                                      ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
-    viewer_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
-    viewer_layout->addWidget(
-        makeSubLabel("Runtime and startup logs are displayed here once the log store is wired.", viewer_panel));
-    viewer_layout->addWidget(makePlaceholderRow("[viewer] log stream not initialized", viewer_panel));
-    viewer_layout->addWidget(makePlaceholderRow("[viewer] waiting for integrated session source", viewer_panel));
-    layout->addWidget(viewer_panel);
+    // Toolbar: log-file path / status on the left, raw-viewer actions on the right.
+    auto* toolbar = new ui::widgets::SectionRuleHeader(QStringLiteral("APPLICATION LOG"), content);
+    layout->addWidget(toolbar);
 
-    // Filters / scope placeholder
-    layout->addWidget(makeSectionLabel("Filters / Scope Placeholder", content));
-    auto* filters_panel = makePanel(content);
-    auto* filters_layout = new QVBoxLayout(filters_panel);
-    filters_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
-                                       ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
-    auto* filters_note = new QLabel("Filter and scope controls are introduced in a later pass.", filters_panel);
-    filters_note->setProperty("labelRole", "subtle");
-    filters_layout->addWidget(filters_note);
-    layout->addWidget(filters_panel);
+    auto* action_row = new QHBoxLayout();
+    action_row->setSpacing(M::kSpaceSm);
 
-    // Session export actions
-    layout->addWidget(makeSectionLabel("Export / Session Trace", content));
-    auto* actions_panel = makePanel(content);
-    auto* actions_layout = new QVBoxLayout(actions_panel);
-    actions_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
-                                       ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
-    actions_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
+    status_label_ = new QLabel(content);
+    status_label_->setProperty("labelRole", "logStatus");
+    status_label_->setWordWrap(true);
+    status_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    action_row->addWidget(status_label_, 1);
 
-    auto* btn_row = new QHBoxLayout();
-    btn_row->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
+    refresh_btn_ = new QPushButton(QStringLiteral("Refresh"), content);
+    refresh_btn_->setObjectName(QStringLiteral("logRefreshBtn"));
+    refresh_btn_->setProperty("role", "ghost");
+    copy_btn_ = new QPushButton(QStringLiteral("Copy"), content);
+    copy_btn_->setObjectName(QStringLiteral("logCopyBtn"));
+    copy_btn_->setProperty("role", "ghost");
+    open_folder_btn_ = new QPushButton(QStringLiteral("Open Log Folder"), content);
+    open_folder_btn_->setObjectName(QStringLiteral("logOpenFolderBtn"));
+    open_folder_btn_->setProperty("role", "ghost");
+    action_row->addWidget(refresh_btn_, 0);
+    action_row->addWidget(copy_btn_, 0);
+    action_row->addWidget(open_folder_btn_, 0);
+    layout->addLayout(action_row);
 
-    auto* export_btn = new QPushButton("Export Selected", actions_panel);
-    export_btn->setProperty("role", "ghost");
-    export_btn->setEnabled(false);
+    log_viewer_ = new QPlainTextEdit(content);
+    log_viewer_->setObjectName(QStringLiteral("logViewer"));
+    log_viewer_->setReadOnly(true);
+    log_viewer_->setLineWrapMode(QPlainTextEdit::NoWrap);
+    log_viewer_->setMinimumHeight(300);
+    layout->addWidget(log_viewer_, 1);
 
-    auto* open_btn = new QPushButton("Open Log Folder", actions_panel);
-    open_btn->setProperty("role", "ghost");
+    auto* footnote = new QLabel(
+        QStringLiteral("Full logs are written to %LOCALAPPDATA%\\ExoSnap\\logs — newest entries at the bottom."),
+        content);
+    footnote->setObjectName(QStringLiteral("logFootnote"));
+    footnote->setProperty("labelRole", "subtle");
+    footnote->setWordWrap(true);
+    layout->addWidget(footnote);
 
-    btn_row->addWidget(export_btn);
-    btn_row->addWidget(open_btn);
-    btn_row->addStretch();
-    actions_layout->addLayout(btn_row);
-    auto* actions_note = new QLabel("Export remains disabled until session log selection is available.", actions_panel);
-    actions_note->setProperty("labelRole", "subtle");
-    actions_layout->addWidget(actions_note);
-    layout->addWidget(actions_panel);
+    auto* centering_host = new QWidget();
+    auto* ch = new QHBoxLayout(centering_host);
+    ch->setContentsMargins(0, 0, 0, 0);
+    ch->addStretch(1);
+    ch->addWidget(content, 10);
+    ch->addStretch(1);
+    outer->addWidget(centering_host, 1);
 
-    layout->addStretch();
-    scroll->setWidget(content);
+    connect(refresh_btn_, &QPushButton::clicked, this, &LogsPage::onRefresh);
+    connect(copy_btn_, &QPushButton::clicked, this, &LogsPage::onCopy);
+    connect(open_folder_btn_, &QPushButton::clicked, this, &LogsPage::onOpenFolder);
 
-    auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->addWidget(scroll);
-
-    connect(export_btn, &QPushButton::clicked, this, &LogsPage::onExport);
-    connect(open_btn, &QPushButton::clicked, this, &LogsPage::onOpenFolder);
+    reloadLogContent();
 }
 
-void LogsPage::onExport() {
-    // Export functionality will be wired when the log store exists.
+void LogsPage::reloadLogContent() {
+    const QString path = diagnostics::LogFilePath();
+    if (path.isEmpty()) {
+        status_label_->setText(QStringLiteral("No log file found yet."));
+        log_viewer_->setPlainText({});
+        copy_btn_->setEnabled(false);
+        return;
+    }
+
+    QFileInfo info(path);
+    if (!info.exists()) {
+        status_label_->setText(
+            QStringLiteral("Log file not yet created. Log entries appear once recording or probing starts."));
+        log_viewer_->setPlainText({});
+        copy_btn_->setEnabled(false);
+        return;
+    }
+
+    const QString content = readLogTail(path, kMaxLogLines);
+    log_viewer_->setPlainText(content);
+    copy_btn_->setEnabled(!content.isEmpty());
+    status_label_->setText(QStringLiteral("Showing last %1 lines  \xc2\xb7  %2").arg(kMaxLogLines).arg(path));
+}
+
+void LogsPage::onRefresh() {
+    reloadLogContent();
+}
+
+void LogsPage::onCopy() {
+    if (!log_viewer_)
+        return;
+    const QString text = log_viewer_->toPlainText();
+    if (text.isEmpty())
+        return;
+    QGuiApplication::clipboard()->setText(text);
 }
 
 void LogsPage::onOpenFolder() {
-    QString videos = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
-    QDesktopServices::openUrl(QUrl::fromLocalFile(videos + "/Exosnap"));
+    const QString path = diagnostics::LogFilePath();
+    if (path.isEmpty())
+        return;
+    QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
 }
 
 } // namespace exosnap

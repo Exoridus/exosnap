@@ -259,6 +259,56 @@ TEST(OpusEncoderTest, OpusEncoder_EncodedPacketCanBeDecoded) {
     encoder.Shutdown();
 }
 
+TEST(OpusEncoderTest, OpusEncoder_PtsStepIs20ms_PerFrame) {
+    // 960 samples @ 48 kHz = exactly 20 ms per Opus frame.
+    // Feeding data in 480-sample chunks (simulating 10 ms WASAPI delivery)
+    // must still produce strictly 20 ms PTS steps.
+    OpusAudioEncoder encoder;
+    std::string err;
+    ASSERT_TRUE(encoder.Init(48000, 2, err));
+
+    uint64_t accumulated_frames = 0;
+    std::vector<EncodedAudioPacket> packets;
+
+    // 10 chunks × 480 frames/chunk × 2 ch = 9600 floats → 5 Opus packets
+    std::vector<float> chunk(480 * 2, 0.0f);
+    for (int i = 0; i < 10; ++i) {
+        encoder.FeedFloat32(chunk.data(), chunk.size(), 0, accumulated_frames, 48000, 2, packets);
+    }
+
+    ASSERT_EQ(packets.size(), 5u);
+    constexpr uint64_t kStep = 20000000ULL; // 20 ms in ns
+    EXPECT_EQ(packets[0].pts_ns, 0 * kStep);
+    EXPECT_EQ(packets[1].pts_ns, 1 * kStep);
+    EXPECT_EQ(packets[2].pts_ns, 2 * kStep);
+    EXPECT_EQ(packets[3].pts_ns, 3 * kStep);
+    EXPECT_EQ(packets[4].pts_ns, 4 * kStep);
+
+    encoder.Shutdown();
+}
+
+TEST(OpusEncoderTest, OpusEncoder_PtsStepIs20ms_NOpusFrames) {
+    // N consecutive Opus packets must have PTS = N * 20 ms.
+    OpusAudioEncoder encoder;
+    std::string err;
+    ASSERT_TRUE(encoder.Init(48000, 2, err));
+
+    uint64_t accumulated_frames = 0;
+    std::vector<EncodedAudioPacket> packets;
+
+    // Feed 8 complete Opus frames in one shot
+    std::vector<float> input(8 * 960 * 2, 0.0f);
+    encoder.FeedFloat32(input.data(), input.size(), 0, accumulated_frames, 48000, 2, packets);
+
+    ASSERT_EQ(packets.size(), 8u);
+    constexpr uint64_t kStep = 20000000ULL;
+    for (size_t i = 0; i < packets.size(); ++i) {
+        EXPECT_EQ(packets[i].pts_ns, i * kStep) << "Packet " << i << " has wrong PTS";
+    }
+
+    encoder.Shutdown();
+}
+
 TEST(OpusEncoderTest, OpusEncoder_Shutdown_IsIdempotent) {
     OpusAudioEncoder encoder;
     std::string err;

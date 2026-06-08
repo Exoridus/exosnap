@@ -14,6 +14,7 @@
 #include <sstream>
 #include <string_view>
 
+#include "../diagnostics/AppLog.h"
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputPathValidator.h"
 
@@ -197,6 +198,55 @@ void ApplyOutputSettingsToRecorderConfig(recorder_core::RecorderConfig& config, 
     }
 }
 
+static std::wstring BuildCapabilityStatusText(const capability::UserRecorderConfig& config) {
+    const wchar_t* container_name = L"MKV";
+    switch (config.container) {
+    case capability::Container::WebM:
+        container_name = L"WebM";
+        break;
+    case capability::Container::Mp4:
+        container_name = L"MP4";
+        break;
+    default:
+        break;
+    }
+
+    const wchar_t* video_name = L"AV1 NVENC";
+    switch (config.video_codec) {
+    case capability::VideoCodec::H264Nvenc:
+        video_name = L"H.264 NVENC";
+        break;
+    case capability::VideoCodec::HevcNvenc:
+        video_name = L"HEVC NVENC";
+        break;
+    default:
+        break;
+    }
+
+    const wchar_t* audio_name = L"Opus";
+    switch (config.audio_codec) {
+    case capability::AudioCodec::AacMf:
+        audio_name = L"AAC";
+        break;
+    case capability::AudioCodec::Pcm:
+        audio_name = L"PCM";
+        break;
+    default:
+        break;
+    }
+
+    std::wstring result = L"Ready: ";
+    result += container_name;
+    result += L" \u00B7 ";
+    result += video_name;
+    result += L" \u00B7 ";
+    result += audio_name;
+    result += L" \u00B7 ";
+    result += std::to_wstring(config.frame_rate_num);
+    result += L" fps";
+    return result;
+}
+
 RecordingCoordinator::RecordingCoordinator()
     : output_settings_(OutputSettingsModel::Defaults()),
       mic_meter_service_(std::make_unique<recorder_core::MicMeterService>()),
@@ -221,7 +271,7 @@ void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::Capabi
     resolved_user_config_ = validation.resolved_config;
     if (validation.succeeded) {
         state_ = UiRecordingState::Ready;
-        capability_status_text_ = L"Ready: MKV · H.264 NVENC · AAC · 60 fps";
+        capability_status_text_ = BuildCapabilityStatusText(validation.resolved_config);
     } else {
         state_ = UiRecordingState::Blocked;
         capability_status_text_ =
@@ -230,6 +280,8 @@ void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::Capabi
 }
 
 void RecordingCoordinator::OnCapabilityFailure(std::wstring message) {
+    diagnostics::AppLog(QStringLiteral("[record.failure] phase=Init category=CapabilityCheck detail=\"%1\"")
+                            .arg(QString::fromStdWString(message)));
     has_caps_ = false;
     state_ = UiRecordingState::Blocked;
     capability_status_text_ = std::move(message);
@@ -250,7 +302,7 @@ void RecordingCoordinator::RevalidateCapabilities() {
     const UiRecordingState new_state = result.succeeded ? UiRecordingState::Ready : UiRecordingState::Blocked;
     capability_status_text_ =
         result.succeeded
-            ? L"Ready"
+            ? BuildCapabilityStatusText(result.resolved_config)
             : (result.invalidity.empty() ? L"Recording unavailable" : ToWide(result.invalidity.front().message));
 
     if (new_state != state_)
@@ -299,10 +351,16 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         return false;
     const auto folder_check = ValidateOutputFolder(output_settings_.output_folder);
     if (folder_check != FolderValidationResult::Ok) {
+        diagnostics::AppLog(QStringLiteral("[record.failure] phase=Prepare category=OutputFolder "
+                                           "output_folder=\"%1\" detail=%2")
+                                .arg(QString::fromStdWString(output_settings_.output_folder.wstring()),
+                                     QString::fromStdWString(FolderValidationMessage(folder_check))));
+
         PostStateChange(UiRecordingState::Failed);
 
         UiRecordingResult result;
         result.succeeded = false;
+        result.error_phase = FormatErrorPhase(recorder_core::ErrorPhase::Prepare);
         result.error_detail = FolderValidationMessage(folder_check);
         PostResult(std::move(result));
 
@@ -320,11 +378,32 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     }
 
     auto output_path = GenerateOutputPath();
+    const auto resolved_path = ResolveAvailableOutputPath(output_path);
+    if (!resolved_path.has_value()) {
+        diagnostics::AppLog(QStringLiteral("[record.failure] phase=Prepare category=FilenameCollision "
+                                           "output_folder=\"%1\" detail=\"Collision resolution exhausted\"")
+                                .arg(QString::fromStdWString(output_settings_.output_folder.wstring())));
+
+        PostStateChange(UiRecordingState::Failed);
+        UiRecordingResult result;
+        result.succeeded = false;
+        result.output_path = output_path.wstring();
+        result.error_detail =
+            L"Could not create a unique output filename. Change the filename pattern or output folder.";
+        PostResult(std::move(result));
+        return false;
+    }
+    output_path = *resolved_path;
     current_output_path_ = output_path;
 
     std::error_code ec;
     std::filesystem::create_directories(output_path.parent_path(), ec);
     if (ec) {
+        diagnostics::AppLog(
+            QStringLiteral("[record.failure] phase=Prepare category=CreateDirectory "
+                           "output_path=\"%1\" detail=\"%2\"")
+                .arg(QString::fromStdWString(output_path.wstring()), QString::fromStdWString(ToWide(ec.message()))));
+
         PostStateChange(UiRecordingState::Failed);
         UiRecordingResult result;
         result.succeeded = false;
@@ -378,6 +457,10 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.mic_gain_linear = plan.mic_gain_linear;
 
     if (plan.record_audio && PlanRequiresTargetPid(plan.plan) && !plan.audio_target_process_id.has_value()) {
+        diagnostics::AppLog(QStringLiteral("[record.failure] phase=Prepare category=TargetPid "
+                                           "output_path=\"%1\" detail=\"Window target PID unavailable\"")
+                                .arg(QString::fromStdWString(output_path.wstring())));
+
         PostStateChange(UiRecordingState::Failed);
         UiRecordingResult result;
         result.succeeded = false;
@@ -390,6 +473,11 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
 
     recorder_core::RecorderResult validate_result;
     if (!session_.Validate(config, &validate_result)) {
+        diagnostics::AppLog(QStringLiteral("[record.failure] phase=Validate category=SessionValidate "
+                                           "output_path=\"%1\" detail=\"%2\"")
+                                .arg(QString::fromStdWString(output_path.wstring()),
+                                     QString::fromStdWString(ToWide(validate_result.error_detail))));
+
         PostStateChange(UiRecordingState::Failed);
         UiRecordingResult result;
         result.succeeded = false;
@@ -402,6 +490,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     }
 
     session_.SetStatsCallback([this](const recorder_core::SessionStats& stats) { PostStats(stats); });
+    session_.SetMeterCallback([this](const recorder_core::MeterSnapshot& m) { PostRecordingMeter(m.per_track_rms); });
 
     if (webcam_settings_.enabled) {
         webcam_service_.Stop();
@@ -413,6 +502,13 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
 
     is_recording_ = true;
     PostStateChange(UiRecordingState::Recording);
+
+    {
+        const bool is_monitor = (target.kind == recorder_core::CaptureTarget::Kind::Monitor);
+        const QString backend = is_monitor ? QStringLiteral("dxgi_od") : QStringLiteral("wgc");
+        const QString target_desc = QString::fromStdString(target.description);
+        diagnostics::AppLog(QStringLiteral("[record] start  backend=%1  target=\"%2\"").arg(backend, target_desc));
+    }
 
     recording_thread_ = std::jthread([this, cfg = std::move(config), op = std::move(output_path)](std::stop_token) {
         RecordingThreadProc(cfg, op);
@@ -550,6 +646,16 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
     ui_result.error_phase = FormatErrorPhase(result.error_phase);
     ui_result.hresult_text = FormatHResult(result.error_code);
     ui_result.error_detail = ToWide(result.error_detail);
+    ui_result.output_file_bytes = result.stats.output_file_bytes;
+    ui_result.elapsed_seconds = result.stats.elapsed_seconds;
+
+    if (!result.succeeded) {
+        diagnostics::AppLog(QStringLiteral("[record.failure] phase=%1 "
+                                           "output_path=\"%2\" detail=\"%3\"")
+                                .arg(QString::fromStdWString(ui_result.error_phase),
+                                     QString::fromStdWString(ui_result.output_path),
+                                     QString::fromStdWString(ui_result.error_detail)));
+    }
 
     PostResult(std::move(ui_result));
     PostStateChange(result.succeeded ? UiRecordingState::Completed : UiRecordingState::Failed);
@@ -561,6 +667,17 @@ UiRecordingState RecordingCoordinator::State() const noexcept {
 }
 const std::wstring& RecordingCoordinator::CapabilityStatusText() const {
     return capability_status_text_;
+}
+
+std::wstring RecordingCoordinator::ResolvedVideoCodecLabel() const {
+    switch (resolved_user_config_.video_codec) {
+    case capability::VideoCodec::H264Nvenc:
+        return L"H.264 NVENC encoder";
+    case capability::VideoCodec::HevcNvenc:
+        return L"HEVC NVENC encoder";
+    default:
+        return L"AV1 NVENC encoder";
+    }
 }
 std::filesystem::path RecordingCoordinator::CurrentOutputPath() const {
     return current_output_path_;
@@ -616,6 +733,9 @@ void RecordingCoordinator::SetSysMeterUpdatedCallback(SysMeterUpdatedCallback cb
 }
 void RecordingCoordinator::SetAppMeterUpdatedCallback(AppMeterUpdatedCallback cb) {
     on_app_meter_updated_ = std::move(cb);
+}
+void RecordingCoordinator::SetRecordingMeterCallback(RecordingMeterCallback cb) {
+    on_recording_meter_updated_ = std::move(cb);
 }
 
 void RecordingCoordinator::PostStateChange(UiRecordingState new_state) {
@@ -681,6 +801,19 @@ void RecordingCoordinator::PostAppMeter(float rms_linear) {
     }
     QMetaObject::invokeMethod(
         QCoreApplication::instance(), [cb, rms_linear]() { cb(rms_linear); }, Qt::QueuedConnection);
+}
+
+void RecordingCoordinator::PostRecordingMeter(std::array<float, 3> per_track_rms) {
+    if (!on_recording_meter_updated_) {
+        return;
+    }
+    auto cb = on_recording_meter_updated_;
+    if (QCoreApplication::instance() == nullptr) {
+        cb(per_track_rms);
+        return;
+    }
+    QMetaObject::invokeMethod(
+        QCoreApplication::instance(), [cb, per_track_rms]() { cb(per_track_rms); }, Qt::QueuedConnection);
 }
 
 std::filesystem::path RecordingCoordinator::GenerateOutputPath() const {

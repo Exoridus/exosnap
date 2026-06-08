@@ -14,7 +14,7 @@
 namespace exosnap {
 namespace {
 
-constexpr int kSettingsVersionCurrent = 4;
+constexpr int kSettingsVersionCurrent = 5;
 constexpr int kMicGainDbDefault = 0;
 constexpr int kMicGainDbMin = 0;
 constexpr int kMicGainDbMax = 24;
@@ -565,6 +565,14 @@ PersistedAppSettings AppSettingsStore::Load() const {
     }
     settings.endGroup();
 
+    settings.beginGroup(QStringLiteral("window"));
+    persisted.window_geometry.x = settings.value(QStringLiteral("x"), -1).toInt();
+    persisted.window_geometry.y = settings.value(QStringLiteral("y"), -1).toInt();
+    persisted.window_geometry.width = settings.value(QStringLiteral("width"), -1).toInt();
+    persisted.window_geometry.height = settings.value(QStringLiteral("height"), -1).toInt();
+    persisted.window_geometry.maximized = settings.value(QStringLiteral("maximized"), false).toBool();
+    settings.endGroup();
+
     settings.beginGroup(QStringLiteral("profiles"));
     {
         const QString active_id = settings.value(QStringLiteral("active_id")).toString().trimmed();
@@ -659,6 +667,14 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
         settings.setValue(QStringLiteral("binding_%1").arg(i),
                           settings_snapshot.hotkey_bindings[static_cast<std::size_t>(i)]);
     }
+    settings.endGroup();
+
+    settings.beginGroup(QStringLiteral("window"));
+    settings.setValue(QStringLiteral("x"), settings_snapshot.window_geometry.x);
+    settings.setValue(QStringLiteral("y"), settings_snapshot.window_geometry.y);
+    settings.setValue(QStringLiteral("width"), settings_snapshot.window_geometry.width);
+    settings.setValue(QStringLiteral("height"), settings_snapshot.window_geometry.height);
+    settings.setValue(QStringLiteral("maximized"), settings_snapshot.window_geometry.maximized);
     settings.endGroup();
 
     settings.remove(QStringLiteral("profiles"));

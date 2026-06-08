@@ -2,6 +2,9 @@
 
 #include "../diagnostics/AppLog.h"
 #include "../settings/AppSettingsStore.h"
+#include "../ui/dialogs/SourcePickerDialog.h"
+#include "../ui/dialogs/SourcePickerOverlay.h"
+#include "../ui/dialogs/SourcePickerWindowRules.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/widgets/AudioSourceRow.h"
 #include "../ui/widgets/CaptureTargetCard.h"
@@ -11,6 +14,7 @@
 #include "../ui/widgets/RegionSelectionOverlay.h"
 #include "../ui/widgets/SectionRuleHeader.h"
 #include "../ui/widgets/StatusPill.h"
+#include "../ui/widgets/TransportDock.h"
 #include "../ui/widgets/VUMeterWidget.h"
 
 #include <capability/capability_builder.h>
@@ -19,9 +23,11 @@
 #include <recorder_core/audio_input_device.h>
 
 #include <QAbstractItemView>
+#include <QBoxLayout>
 #include <QComboBox>
 #include <QDebug>
 #include <QDesktopServices>
+#include <QDialog>
 #include <QEvent>
 #include <QFileInfo>
 #include <QFrame>
@@ -31,11 +37,14 @@
 #include <QMouseEvent>
 #include <QPointer>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QResizeEvent>
 #include <QScrollArea>
+#include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QStyle>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -46,9 +55,20 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <dwmapi.h>
+#include <windows.h>
 
 namespace exosnap {
 namespace {
+
+// Record rail sizing (UX-RECOVERY-A): a fixed desktop-width rail, never a kiosk slab.
+constexpr int kRecordRailWidth = 320;
+constexpr int kRecordHeroButtonHeight = 48;
 
 QFrame* makePanel(QWidget* parent, const char* role = "panel") {
     auto* panel = new QFrame(parent);
@@ -98,6 +118,57 @@ QString stateDisplay(UiRecordingState state) {
     }
 }
 
+QString containerLabel(capability::Container container) {
+    switch (container) {
+    case capability::Container::Matroska:
+        return QStringLiteral("MKV");
+    case capability::Container::Mp4:
+        return QStringLiteral("MP4");
+    case capability::Container::WebM:
+        return QStringLiteral("WEBM");
+    default:
+        return QStringLiteral("MKV");
+    }
+}
+
+QString videoCodecLabel(capability::VideoCodec codec) {
+    switch (codec) {
+    case capability::VideoCodec::H264Nvenc:
+        return QStringLiteral("H.264");
+    case capability::VideoCodec::HevcNvenc:
+        return QStringLiteral("HEVC");
+    case capability::VideoCodec::Av1Nvenc:
+        return QStringLiteral("AV1");
+    default:
+        return QStringLiteral("AV1");
+    }
+}
+
+QString audioCodecLabel(capability::AudioCodec codec) {
+    switch (codec) {
+    case capability::AudioCodec::Opus:
+        return QStringLiteral("OPUS");
+    case capability::AudioCodec::AacMf:
+        return QStringLiteral("AAC");
+    case capability::AudioCodec::Pcm:
+        return QStringLiteral("PCM");
+    default:
+        return QStringLiteral("AAC");
+    }
+}
+
+QString profileLabelFromName(const std::wstring& active_profile_name) {
+    if (active_profile_name.empty()) {
+        return QStringLiteral("PRESET");
+    }
+    QString profile = QString::fromStdWString(active_profile_name).trimmed();
+    if (profile.isEmpty()) {
+        return QStringLiteral("PRESET");
+    }
+    profile.replace(QLatin1Char('_'), QLatin1Char(' '));
+    return profile.toUpper();
+}
+
 QString toClock(const std::wstring& elapsed_text) {
     const QString text = QString::fromStdWString(elapsed_text);
     const QStringList parts = text.split(':');
@@ -118,6 +189,34 @@ QString toClock(const std::wstring& elapsed_text) {
         .arg(hours, 2, 10, QChar('0'))
         .arg(rem_minutes, 2, 10, QChar('0'))
         .arg(seconds, 2, 10, QChar('0'));
+}
+
+QString clockFromSeconds(double elapsed_seconds) {
+    const uint64_t total = static_cast<uint64_t>((std::max)(0.0, elapsed_seconds));
+    const uint64_t hours = total / 3600ULL;
+    const uint64_t minutes = (total % 3600ULL) / 60ULL;
+    const uint64_t seconds = total % 60ULL;
+    return QStringLiteral("%1:%2:%3")
+        .arg(static_cast<int>(hours), 2, 10, QChar('0'))
+        .arg(static_cast<int>(minutes), 2, 10, QChar('0'))
+        .arg(static_cast<int>(seconds), 2, 10, QChar('0'));
+}
+
+QStringList blockerLinesFromText(const QString& capability_text) {
+    QString normalized = capability_text;
+    normalized.replace(QStringLiteral("•"), QStringLiteral("\n"));
+    normalized.replace(QStringLiteral(" - "), QStringLiteral("\n"));
+    normalized.replace(QLatin1Char(';'), QLatin1Char('\n'));
+    QStringList lines = normalized.split(QRegularExpression(QStringLiteral("[\\r\\n]+")), Qt::SkipEmptyParts);
+    QStringList cleaned;
+    cleaned.reserve(lines.size());
+    for (const QString& raw : lines) {
+        const QString line = raw.trimmed();
+        if (!line.isEmpty()) {
+            cleaned.push_back(line);
+        }
+    }
+    return cleaned;
 }
 
 QString checkGlyph(bool ok, bool blocked) {
@@ -205,6 +304,273 @@ std::vector<std::string> BuildMicDeviceLabels(const std::vector<recorder_core::A
     return labels;
 }
 
+struct MinimumCaptureSize {
+    int width = 0;
+    int height = 0;
+};
+
+struct ScreenPresentation {
+    bool available = false;
+    bool primary = false;
+    int width = 0;
+    int height = 0;
+    int origin_x = 0; // rcMonitor.left (virtual-screen coords)
+    int origin_y = 0; // rcMonitor.top
+};
+
+struct WindowPresentation {
+    bool valid = false;
+    bool is_visible = false;
+    bool is_minimized = false;
+    bool is_cloaked = false;
+    bool is_owned = false;
+    bool is_tool_window = false;
+    bool is_child = false;
+    bool has_client_size = false;
+    int client_width = 0;
+    int client_height = 0;
+    bool has_window_rect = false;
+    RECT window_rect{};
+    QString title;
+    QString process_label;
+    QString class_name;
+};
+
+MinimumCaptureSize WindowMinimumForCodec(capability::VideoCodec codec) {
+    switch (codec) {
+    case capability::VideoCodec::Av1Nvenc:
+    case capability::VideoCodec::HevcNvenc:
+    case capability::VideoCodec::H264Nvenc:
+    default:
+        // Conservative minimum that avoids known WGC + NVENC tiny-window failures.
+        return {192, 128};
+    }
+}
+
+QString FormatSizeText(int width, int height) {
+    if (width <= 0 || height <= 0) {
+        return {};
+    }
+    return QStringLiteral("%1 × %2").arg(width).arg(height);
+}
+
+QString MinimumSizeText(const MinimumCaptureSize& min_size) {
+    return QStringLiteral("Minimum %1×%2").arg(min_size.width).arg(min_size.height);
+}
+
+ScreenPresentation QueryScreenPresentation(uintptr_t native_id) {
+    ScreenPresentation meta;
+    const auto monitor = reinterpret_cast<HMONITOR>(native_id);
+    if (monitor == nullptr) {
+        return meta;
+    }
+
+    MONITORINFOEXW info{};
+    info.cbSize = sizeof(info);
+    if (!GetMonitorInfoW(monitor, &info)) {
+        return meta;
+    }
+
+    meta.available = true;
+    meta.primary = (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
+    meta.width = info.rcMonitor.right - info.rcMonitor.left;
+    meta.height = info.rcMonitor.bottom - info.rcMonitor.top;
+    meta.origin_x = info.rcMonitor.left;
+    meta.origin_y = info.rcMonitor.top;
+    return meta;
+}
+
+QString QueryWindowProcessLabel(HWND hwnd) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == 0) {
+        return {};
+    }
+
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (process == nullptr) {
+        return {};
+    }
+
+    std::wstring path_buffer(static_cast<std::size_t>(MAX_PATH), L'\0');
+    DWORD path_size = static_cast<DWORD>(path_buffer.size());
+    QString process_name;
+
+    if (QueryFullProcessImageNameW(process, 0, path_buffer.data(), &path_size) != FALSE && path_size > 0) {
+        const QString process_path = QString::fromWCharArray(path_buffer.data(), static_cast<int>(path_size));
+        process_name = QFileInfo(process_path).fileName();
+    }
+
+    CloseHandle(process);
+    return process_name;
+}
+
+QString QueryWindowTitle(HWND hwnd) {
+    constexpr int kTitleBufferSize = 512;
+    wchar_t title[kTitleBufferSize] = {};
+    const int length = GetWindowTextW(hwnd, title, kTitleBufferSize);
+    if (length <= 0) {
+        return {};
+    }
+    return QString::fromWCharArray(title, length);
+}
+
+QString QueryWindowClassName(HWND hwnd) {
+    constexpr int kClassBufferSize = 256;
+    wchar_t class_name[kClassBufferSize] = {};
+    const int length = GetClassNameW(hwnd, class_name, kClassBufferSize);
+    if (length <= 0) {
+        return {};
+    }
+    return QString::fromWCharArray(class_name, length);
+}
+
+bool IsWindowOffscreen(const WindowPresentation& meta) {
+    if (!meta.has_window_rect) {
+        return true;
+    }
+
+    const RECT virtual_rect{
+        GetSystemMetrics(SM_XVIRTUALSCREEN),
+        GetSystemMetrics(SM_YVIRTUALSCREEN),
+        GetSystemMetrics(SM_XVIRTUALSCREEN) + GetSystemMetrics(SM_CXVIRTUALSCREEN),
+        GetSystemMetrics(SM_YVIRTUALSCREEN) + GetSystemMetrics(SM_CYVIRTUALSCREEN),
+    };
+
+    RECT intersection{};
+    return IntersectRect(&intersection, &meta.window_rect, &virtual_rect) == FALSE;
+}
+
+bool IsMeaningfulWindowTitle(const QString& title) {
+    const QString normalized = title.trimmed();
+    if (normalized.isEmpty()) {
+        return false;
+    }
+    if (normalized == QStringLiteral("-") || normalized == QStringLiteral(".")) {
+        return false;
+    }
+    return true;
+}
+
+bool ShouldExcludeKnownWindowNoise(const WindowPresentation& meta) {
+    ui::dialogs::SourcePickerWindowIdentity identity;
+    identity.title = meta.title;
+    identity.process_name = meta.process_label;
+    identity.class_name = meta.class_name;
+    return ui::dialogs::ShouldExcludeByIdentity(identity);
+}
+
+bool ShouldDedupeByProcess(const QString& process_label) {
+    const QString normalized = process_label.trimmed().toLower();
+    return normalized == QStringLiteral("systemsettings.exe");
+}
+
+QString DedupeKeyForWindow(const WindowPresentation& meta) {
+    const QString title_key = meta.title.trimmed().toLower();
+    const QString process_key = meta.process_label.trimmed().toLower();
+    return process_key + QStringLiteral("|") + title_key;
+}
+
+WindowPresentation QueryWindowPresentation(uintptr_t native_id) {
+    WindowPresentation meta;
+    const auto hwnd = reinterpret_cast<HWND>(native_id);
+    if (hwnd == nullptr || IsWindow(hwnd) == FALSE) {
+        return meta;
+    }
+
+    meta.valid = true;
+    meta.is_visible = IsWindowVisible(hwnd) != FALSE;
+    meta.is_minimized = IsIconic(hwnd) != FALSE;
+
+    const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    const LONG_PTR ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    meta.is_child = (style & WS_CHILD) != 0;
+    meta.is_tool_window = (ex_style & WS_EX_TOOLWINDOW) != 0;
+    meta.is_owned = GetWindow(hwnd, GW_OWNER) != nullptr;
+
+    DWORD cloaked = 0;
+    meta.is_cloaked = SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked != 0;
+
+    RECT client_rect{};
+    if (GetClientRect(hwnd, &client_rect) != FALSE) {
+        meta.client_width = client_rect.right - client_rect.left;
+        meta.client_height = client_rect.bottom - client_rect.top;
+        meta.has_client_size = meta.client_width > 0 && meta.client_height > 0;
+    }
+
+    RECT window_rect{};
+    if (GetWindowRect(hwnd, &window_rect) != FALSE) {
+        meta.window_rect = window_rect;
+        meta.has_window_rect = true;
+    }
+
+    meta.title = QueryWindowTitle(hwnd);
+    meta.process_label = QueryWindowProcessLabel(hwnd);
+    meta.class_name = QueryWindowClassName(hwnd);
+    return meta;
+}
+
+QString BuildScreenOptionDetail(const ScreenPresentation& meta) {
+    const QString resolution = FormatSizeText(meta.width, meta.height);
+    const QString role = meta.primary ? QStringLiteral("Primary display") : QStringLiteral("Non-primary display");
+    if (resolution.isEmpty()) {
+        return QStringLiteral("%1 · DXGI OD monitor capture").arg(role);
+    }
+    return QStringLiteral("%1 · %2 · DXGI OD monitor capture").arg(resolution, role);
+}
+
+QString BuildWindowOptionDetail(const WindowPresentation& meta) {
+    QString detail;
+    const QString size_text = FormatSizeText(meta.client_width, meta.client_height);
+    if (!size_text.isEmpty()) {
+        detail = size_text;
+    }
+    if (!meta.process_label.trimmed().isEmpty()) {
+        detail = detail.isEmpty() ? meta.process_label : (detail + QStringLiteral(" · ") + meta.process_label);
+    }
+    if (detail.isEmpty()) {
+        detail = QStringLiteral("Window capture");
+    }
+    return detail;
+}
+
+bool IsWindowBelowMinimum(const WindowPresentation& meta, const MinimumCaptureSize& min_size) {
+    return meta.has_client_size && (meta.client_width < min_size.width || meta.client_height < min_size.height);
+}
+
+enum class WindowEligibility {
+    Include,
+    Exclude,
+    UnavailableMinimized,
+    UnavailableGeneric,
+    UnavailableTooSmall,
+};
+
+WindowEligibility ClassifyWindowForPicker(const WindowPresentation& meta, const MinimumCaptureSize& min_size) {
+    if (!meta.valid) {
+        return WindowEligibility::Exclude;
+    }
+    if (!meta.is_visible || meta.is_child || meta.is_owned || meta.is_tool_window) {
+        return WindowEligibility::Exclude;
+    }
+    if (!meta.has_client_size || meta.client_width < 4 || meta.client_height < 4) {
+        return WindowEligibility::Exclude;
+    }
+    if (meta.is_cloaked || IsWindowOffscreen(meta)) {
+        return WindowEligibility::Exclude;
+    }
+    if (!IsMeaningfulWindowTitle(meta.title) || ShouldExcludeKnownWindowNoise(meta)) {
+        return WindowEligibility::Exclude;
+    }
+    if (meta.is_minimized) {
+        return WindowEligibility::UnavailableMinimized;
+    }
+    if (IsWindowBelowMinimum(meta, min_size)) {
+        return WindowEligibility::UnavailableTooSmall;
+    }
+    return WindowEligibility::Include;
+}
+
 } // namespace
 
 bool RecordPage::eventFilter(QObject* watched, QEvent* event) {
@@ -258,16 +624,52 @@ bool RecordPage::eventFilter(QObject* watched, QEvent* event) {
 
 void RecordPage::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
+    updateResponsiveLayout();
     updatePreviewHeightClamp();
+    updatePreviewContextChips();
+}
+
+void RecordPage::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    QTimer::singleShot(0, this, [this]() { ensureCoordinatorInit(); });
 }
 
 void RecordPage::updatePreviewHeightClamp() {
-    if (!preview_surface_) {
+    if (!preview_surface_ || !preview_surface_host_) {
         return;
     }
-    const int clamped_max = std::clamp(static_cast<int>(height() * 0.42), 260, 460);
-    preview_surface_->setMinimumHeight(220);
-    preview_surface_->setMaximumHeight(clamped_max);
+
+    // Preview-first (HYBRID-PORT-R2): the surface is the largest 16:9 rectangle
+    // that fits the available host area. No rail width is reserved any more — the
+    // preview owns the page width above the bottom transport dock.
+    const int avail_width = (std::max)(200, preview_surface_host_->width() - 2);
+    const int avail_height = (std::max)(120, preview_surface_host_->height() - 2);
+
+    int frame_width = avail_width;
+    int frame_height = static_cast<int>((static_cast<double>(frame_width) * 9.0) / 16.0);
+    if (frame_height > avail_height) {
+        frame_height = avail_height;
+        frame_width = static_cast<int>((static_cast<double>(frame_height) * 16.0) / 9.0);
+    }
+
+    frame_width = (std::max)(200, frame_width);
+    frame_height = (std::max)(120, frame_height);
+
+    const QSize target_size(frame_width, frame_height);
+    if (preview_surface_->minimumSize() != target_size || preview_surface_->maximumSize() != target_size) {
+        preview_surface_->setMinimumSize(target_size);
+        preview_surface_->setMaximumSize(target_size);
+        preview_surface_->updateGeometry();
+    }
+
+    if (preview_surface_->isDxgiPreviewActive()) {
+        preview_surface_->repositionDxgiPreview();
+    }
+}
+
+void RecordPage::updateResponsiveLayout() {
+    // Single-column preview-first layout; the bottom dock spans the full width.
+    updatePreviewHeightClamp();
 }
 
 RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
@@ -287,51 +689,229 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     capability_label_->setVisible(false);
     layout->addWidget(capability_label_);
 
-    auto* hero_grid = new QGridLayout();
-    hero_grid->setHorizontalSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
-    hero_grid->setVerticalSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
-    hero_grid->setColumnStretch(0, 5);
-    hero_grid->setColumnStretch(1, 2);
-    layout->addLayout(hero_grid);
+    auto* cockpit_row = new QWidget(content);
+    cockpit_split_layout_ = new QBoxLayout(QBoxLayout::LeftToRight, cockpit_row);
+    cockpit_split_layout_->setContentsMargins(0, 0, 0, 0);
+    cockpit_split_layout_->setSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
+    layout->addWidget(cockpit_row);
 
-    preview_surface_ = new ui::widgets::PreviewSurface(content);
-    hero_grid->addWidget(preview_surface_, 0, 0, 1, 1);
+    preview_column_ = new QWidget(cockpit_row);
+    preview_column_->setObjectName("recordPreviewColumn");
+    auto* preview_column_layout = new QVBoxLayout(preview_column_);
+    preview_column_layout->setContentsMargins(0, 0, 0, 0);
+    // Snug gap so the source/change-source row reads as the preview's context
+    // header rather than a detached control strip (HYBRID-PORT-R2B).
+    preview_column_layout->setSpacing(6);
 
-    auto* rail_column = new QWidget(content);
+    source_row_ = new QWidget(preview_column_);
+    source_row_->setObjectName("recordSourceRow");
+    auto* source_row_layout = new QHBoxLayout(source_row_);
+    source_row_layout->setContentsMargins(0, 0, 0, 0);
+    source_row_layout->setSpacing(8);
+
+    source_chip_panel_ = new QFrame(source_row_);
+    source_chip_panel_->setObjectName("recordSourceChip");
+    source_chip_panel_->setProperty("sourceLocked", false);
+    auto* source_chip_layout = new QHBoxLayout(source_chip_panel_);
+    // Slimmer pill so the source reads as preview context (HYBRID-PORT-R2B).
+    source_chip_layout->setContentsMargins(11, 5, 11, 5);
+    source_chip_layout->setSpacing(6);
+
+    source_kind_label_ = makeLabel("SCREEN", "recordSourceKind", source_chip_panel_);
+    source_name_label_ = makeLabel("No source selected", "recordSourceName", source_chip_panel_);
+    source_name_label_->setWordWrap(false);
+    source_name_label_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    source_meta_label_ = makeLabel("Choose a source to preview and record.", "recordSourceMeta", source_chip_panel_);
+    source_meta_label_->setWordWrap(false);
+    source_kind_label_->setVisible(false);
+    source_meta_label_->setVisible(false);
+
+    source_chip_layout->addWidget(source_kind_label_);
+    source_chip_layout->addWidget(source_name_label_, 1);
+    source_chip_layout->addWidget(source_meta_label_);
+    source_chip_panel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+
+    source_lock_label_ = makeLabel("Source locked", "recordSourceLock", source_row_);
+    source_lock_label_->setVisible(false);
+
+    change_source_btn_ = new QPushButton("Change source", source_row_);
+    change_source_btn_->setObjectName("recordChangeSourceButton");
+    change_source_btn_->setProperty("role", "ghost");
+    change_source_btn_->setEnabled(false);
+
+    source_preset_label_ = makeLabel("PRESET · AV1 · OPUS · MKV", "recordPresetSummary", source_row_);
+    source_preset_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    source_preset_label_->setWordWrap(false);
+    source_preset_label_->setVisible(false);
+
+    source_row_layout->addWidget(source_chip_panel_, 1);
+    source_row_layout->addWidget(source_lock_label_, 0, Qt::AlignVCenter);
+    source_row_layout->addWidget(change_source_btn_, 0, Qt::AlignVCenter);
+    preview_column_layout->addWidget(source_row_);
+
+    preview_context_row_ = new QWidget(preview_column_);
+    preview_context_row_->setObjectName("recordPreviewContextRow");
+    auto* preview_context_layout = new QHBoxLayout(preview_context_row_);
+    preview_context_layout->setContentsMargins(0, 0, 0, 0);
+    preview_context_layout->setSpacing(8);
+    preview_source_chip_label_ = makeLabel("No source selected", "recordPreviewSourceChip", preview_context_row_);
+    setStyledStringProperty(preview_source_chip_label_, "stateRole", "muted");
+    preview_context_layout->addWidget(preview_source_chip_label_, 0, Qt::AlignLeft | Qt::AlignVCenter);
+    preview_context_layout->addStretch(1);
+    // Vestigial pre-R2A duplicate of the source chip — its only child label is
+    // always hidden, so the whole row is collapsed to remove a dead gap above the
+    // preview. Kept constructed so updatePreviewContextChips() pointers stay valid.
+    preview_context_row_->setVisible(false);
+    preview_column_layout->addWidget(preview_context_row_);
+
+    preview_surface_host_ = new QWidget(preview_column_);
+    preview_surface_host_->setObjectName("recordPreviewSurfaceHost");
+    setStyledStringProperty(preview_surface_host_, "recordState", "ready");
+    auto* preview_surface_host_layout = new QHBoxLayout(preview_surface_host_);
+    preview_surface_host_layout->setContentsMargins(1, 1, 1, 1);
+    preview_surface_host_layout->setSpacing(0);
+    preview_surface_host_layout->addStretch(1);
+    preview_surface_ = new ui::widgets::PreviewSurface(preview_surface_host_);
+    preview_surface_host_layout->addWidget(preview_surface_, 0, Qt::AlignHCenter | Qt::AlignVCenter);
+    preview_surface_host_layout->addStretch(1);
+    preview_column_layout->addWidget(preview_surface_host_, 1);
+
+    cockpit_split_layout_->addWidget(preview_column_, 7);
+
+    auto* rail_column = new QWidget(cockpit_row);
+    rail_column->setObjectName("recordRailColumn");
     auto* rail_layout = new QVBoxLayout(rail_column);
     rail_layout->setContentsMargins(0, 0, 0, 0);
     rail_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
+    rail_column->setFixedWidth(kRecordRailWidth);
 
-    auto* control_panel = makePanel(rail_column);
-    control_panel->setObjectName("recordControlPanel");
-    auto* control_layout = new QVBoxLayout(control_panel);
-    control_layout->setContentsMargins(14, 14, 14, 14);
-    control_layout->setSpacing(14);
+    rail_control_panel_ = makePanel(rail_column);
+    rail_control_panel_->setObjectName("recordControlPanel");
+    setStyledStringProperty(rail_control_panel_, "stateRole", "ready");
+    auto* control_layout = new QVBoxLayout(rail_control_panel_);
+    control_layout->setContentsMargins(16, 16, 16, 16);
+    control_layout->setSpacing(10);
 
     auto* control_head = new QHBoxLayout();
     control_head->setContentsMargins(0, 0, 0, 0);
     control_head->setSpacing(8);
-    control_state_label_ = makeLabel("READY", "recordControlState", control_panel);
-    auto* hotkey_label = makeLabel("ALT+F9", "recordHotkeyBadge", control_panel);
+    control_state_label_ = makeLabel("READY", "recordControlState", rail_control_panel_);
+    auto* hotkey_label = makeLabel("ALT+F9", "recordHotkeyBadge", rail_control_panel_);
     hotkey_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     control_head->addWidget(control_state_label_);
     control_head->addStretch(1);
     control_head->addWidget(hotkey_label);
     control_layout->addLayout(control_head);
 
-    timer_label_ = makeLabel("00:00:00", "recordTimer", control_panel);
+    timer_label_ = makeLabel("00:00:00", "recordTimer", rail_control_panel_);
     timer_label_->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
     timer_label_->setProperty("timerState", "idle");
     control_layout->addWidget(timer_label_);
 
-    rail_layout->addWidget(control_panel);
+    hero_action_btn_ = new QPushButton(QStringLiteral("Start Recording"), rail_control_panel_);
+    hero_action_btn_->setObjectName("recordHeroBtn");
+    hero_action_btn_->setMinimumHeight(kRecordHeroButtonHeight);
+    hero_action_btn_->setEnabled(false);
+    setStyledStringProperty(hero_action_btn_, "heroRole", "muted");
+    control_layout->addWidget(hero_action_btn_);
+
+    secondary_action_btn_ = new QPushButton(QStringLiteral("Pause"), rail_control_panel_);
+    secondary_action_btn_->setProperty("role", "ghost");
+    secondary_action_btn_->setProperty("actionRole", "transport");
+    secondary_action_btn_->setVisible(false);
+    control_layout->addWidget(secondary_action_btn_);
+
+    rail_summary_label_ = makeLabel(QStringLiteral("PRESET AV1 OPUS MKV"), "railSummary", rail_control_panel_);
+    rail_summary_label_->setWordWrap(false);
+    rail_summary_label_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    control_layout->addWidget(rail_summary_label_);
+
+    rail_source_status_panel_ = new QWidget(rail_control_panel_);
+    rail_source_status_panel_->setObjectName("recordRailSourceStatusPanel");
+    auto* rail_source_layout = new QGridLayout(rail_source_status_panel_);
+    rail_source_layout->setContentsMargins(0, 0, 0, 0);
+    rail_source_layout->setHorizontalSpacing(6);
+    rail_source_layout->setVerticalSpacing(6);
+    rail_source_layout->setColumnStretch(0, 1);
+    rail_source_layout->setColumnStretch(1, 1);
+
+    auto makeRailSourceChip = [&](const QString& text) {
+        auto* label = makeLabel(text, "recordRailSourceChip", rail_source_status_panel_);
+        setStyledStringProperty(label, "stateRole", "muted");
+        return label;
+    };
+
+    rail_sys_audio_chip_ = makeRailSourceChip(QStringLiteral("System audio"));
+    rail_app_audio_chip_ = makeRailSourceChip(QStringLiteral("App audio"));
+    rail_mic_chip_ = makeRailSourceChip(QStringLiteral("Mic off"));
+    rail_webcam_chip_ = makeRailSourceChip(QStringLiteral("Webcam off"));
+    rail_source_layout->addWidget(rail_sys_audio_chip_, 0, 0);
+    rail_source_layout->addWidget(rail_app_audio_chip_, 0, 1);
+    rail_source_layout->addWidget(rail_mic_chip_, 1, 0);
+    rail_source_layout->addWidget(rail_webcam_chip_, 1, 1);
+    control_layout->addWidget(rail_source_status_panel_);
+
+    rail_source_status_summary_label_ = makeLabel(QStringLiteral("System off · App off · Mic off · Webcam off"),
+                                                  "railSourceSummary", rail_control_panel_);
+    rail_source_status_summary_label_->setWordWrap(true);
+    rail_source_status_summary_label_->setVisible(false);
+    control_layout->addWidget(rail_source_status_summary_label_);
+
+    rail_readiness_label_ = makeLabel(QStringLiteral("Checking capabilities..."), "railReadiness", rail_control_panel_);
+    rail_readiness_label_->setWordWrap(true);
+    control_layout->addWidget(rail_readiness_label_);
+
+    rail_stats_grid_ = new QFrame(rail_control_panel_);
+    rail_stats_grid_->setObjectName("recordRailStatsGrid");
+    auto* rail_stats_layout = new QGridLayout(rail_stats_grid_);
+    rail_stats_layout->setContentsMargins(0, 0, 0, 0);
+    rail_stats_layout->setHorizontalSpacing(0);
+    rail_stats_layout->setVerticalSpacing(0);
+    rail_stats_layout->setColumnStretch(0, 1);
+    rail_stats_layout->setColumnStretch(1, 1);
+
+    auto makeRailStat = [&](const QString& key, QLabel** value_out) {
+        auto* cell = new QFrame(rail_stats_grid_);
+        cell->setProperty("panelRole", "recordRailStatCell");
+        auto* cell_layout = new QVBoxLayout(cell);
+        cell_layout->setContentsMargins(10, 8, 10, 8);
+        cell_layout->setSpacing(2);
+        auto* key_label = makeLabel(key, "railStatKey", cell);
+        auto* value_label = makeLabel(QStringLiteral("—"), "railStatValue", cell);
+        cell_layout->addWidget(key_label);
+        cell_layout->addWidget(value_label);
+        *value_out = value_label;
+        return cell;
+    };
+
+    rail_stats_layout->addWidget(makeRailStat(QStringLiteral("FILE SIZE"), &rail_size_value_label_), 0, 0);
+    rail_stats_layout->addWidget(makeRailStat(QStringLiteral("DROPPED FRAMES"), &rail_drop_value_label_), 0, 1);
+    rail_fps_stat_cell_ = makeRailStat(QStringLiteral("OUTPUT FPS"), &rail_fps_value_label_);
+    rail_stats_layout->addWidget(rail_fps_stat_cell_, 1, 0, 1, 2);
+    rail_stats_grid_->setVisible(false);
+    control_layout->addWidget(rail_stats_grid_);
+
+    rail_stats_label_ = makeLabel(QStringLiteral(""), "railStats", rail_control_panel_);
+    rail_stats_label_->setWordWrap(true);
+    rail_stats_label_->setVisible(false);
+    control_layout->addWidget(rail_stats_label_);
+
+    rail_diagnostics_btn_ = new QPushButton(QStringLiteral("Open Diagnostics →"), rail_control_panel_);
+    rail_diagnostics_btn_->setObjectName("recordOpenDiagnosticsButton");
+    rail_diagnostics_btn_->setProperty("role", "ghost");
+    rail_diagnostics_btn_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    rail_diagnostics_btn_->setMinimumHeight(32);
+    rail_diagnostics_btn_->setVisible(false);
+    control_layout->addWidget(rail_diagnostics_btn_);
+
+    rail_layout->addWidget(rail_control_panel_);
     rail_layout->addStretch(1);
 
-    hero_grid->addWidget(rail_column, 0, 1, 1, 1);
+    cockpit_split_layout_->addWidget(rail_column, 3);
 
     capture_header_ = new ui::widgets::SectionRuleHeader("CAPTURE TARGET", content);
     capture_header_->setMeta("DISPLAY1 · 2560×1440 · 60 fps");
-    layout->addWidget(capture_header_);
+    capture_header_->setVisible(false);
 
     auto* cards_row = new QWidget(content);
     auto* cards_layout = new QHBoxLayout(cards_row);
@@ -352,6 +932,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     region_card_->setAccessibleName("Region target");
     QWidget::setTabOrder(monitor_card_, window_card_);
     QWidget::setTabOrder(window_card_, region_card_);
+    cards_row->setVisible(false);
     layout->addWidget(cards_row);
 
     target_picker_panel_ = makePanel(content);
@@ -381,6 +962,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     target_picker_note_label_->setWordWrap(true);
     target_picker_note_label_->setVisible(false);
     target_picker_layout->addWidget(target_picker_note_label_);
+    target_picker_panel_->setVisible(false);
     layout->addWidget(target_picker_panel_);
 
     // Region capture options panel (visible only in Region mode)
@@ -420,17 +1002,47 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     layout->addWidget(readiness_header_);
 
     readiness_panel_ = makePanel(content);
+    readiness_panel_->setObjectName("recordReadinessPanel");
     auto* readiness_layout = new QVBoxLayout(readiness_panel_);
-    readiness_layout->setContentsMargins(0, 0, 0, 0);
-    readiness_layout->setSpacing(0);
+    readiness_layout->setContentsMargins(14, 10, 14, 10);
+    readiness_layout->setSpacing(8);
+
+    readiness_summary_label_ = makeLabel("Checking capabilities...", "readinessSummary", readiness_panel_);
+    readiness_summary_label_->setWordWrap(true);
+    setStyledStringProperty(readiness_summary_label_, "stateRole", "muted");
+    readiness_layout->addWidget(readiness_summary_label_);
+
+    auto* readiness_actions = new QWidget(readiness_panel_);
+    readiness_actions->setObjectName("readinessCompactActions");
+    auto* readiness_actions_layout = new QHBoxLayout(readiness_actions);
+    readiness_actions_layout->setContentsMargins(0, 0, 0, 0);
+    readiness_actions_layout->setSpacing(8);
+    readiness_actions_layout->addStretch(1);
+    readiness_diagnostics_btn_ = new QPushButton(QStringLiteral("Diagnostics →"), readiness_actions);
+    readiness_diagnostics_btn_->setObjectName("readinessDiagnosticsBtn");
+    readiness_diagnostics_btn_->setProperty("role", "ghost");
+    readiness_actions_layout->addWidget(readiness_diagnostics_btn_);
+    readiness_layout->addWidget(readiness_actions);
+
+    readiness_rule_ = new QFrame(readiness_panel_);
+    readiness_rule_->setFrameShape(QFrame::NoFrame);
+    readiness_rule_->setFixedHeight(1);
+    readiness_rule_->setProperty("frameRole", "sectionRuleLine");
+    readiness_layout->addWidget(readiness_rule_);
+
+    readiness_rows_container_ = new QWidget(readiness_panel_);
+    auto* readiness_rows_layout = new QVBoxLayout(readiness_rows_container_);
+    readiness_rows_layout->setContentsMargins(0, 0, 0, 0);
+    readiness_rows_layout->setSpacing(0);
+
     for (const QString& title :
          {QString("NVENC AV1 encoder"), QString("Display capture"), QString("Audio loopback (APP)"),
           QString("Output destination"), QString("Session state")}) {
-        auto* row = new QWidget(readiness_panel_);
+        auto* row = new QWidget(readiness_rows_container_);
         row->setObjectName("readinessRow");
         row->setProperty("firstRow", readiness_rows_.empty());
         auto* row_layout = new QHBoxLayout(row);
-        row_layout->setContentsMargins(14, 10, 14, 10);
+        row_layout->setContentsMargins(4, 6, 4, 6);
         row_layout->setSpacing(10);
 
         auto* icon = makeLabel("·", "readinessGlyph", row);
@@ -444,17 +1056,19 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
         row_layout->addWidget(row_title);
         row_layout->addStretch(1);
         row_layout->addWidget(detail, 0, Qt::AlignRight | Qt::AlignVCenter);
-        readiness_layout->addWidget(row);
+        readiness_rows_layout->addWidget(row);
 
         readiness_rows_.push_back({icon, row_title, detail});
     }
+    readiness_layout->addWidget(readiness_rows_container_);
     layout->addWidget(readiness_panel_);
 
     audio_settings_header_ = new ui::widgets::SectionRuleHeader("AUDIO SETTINGS", content);
     audio_settings_header_->setMeta("OUTPUT · INPUT · TRACK PREVIEW");
     layout->addWidget(audio_settings_header_);
 
-    auto* audio_settings_panel = makePanel(content);
+    audio_settings_panel_ = makePanel(content);
+    auto* audio_settings_panel = audio_settings_panel_;
     auto* audio_settings_layout = new QVBoxLayout(audio_settings_panel);
     audio_settings_layout->setContentsMargins(14, 12, 14, 12);
     audio_settings_layout->setSpacing(10);
@@ -579,7 +1193,8 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     destination_header_->setMeta("MKV · AV1 · OPUS");
     layout->addWidget(destination_header_);
 
-    auto* destination_panel = makePanel(content);
+    destination_panel_ = makePanel(content);
+    auto* destination_panel = destination_panel_;
     auto* destination_layout = new QHBoxLayout(destination_panel);
     destination_layout->setContentsMargins(14, 12, 14, 12);
     destination_layout->setSpacing(10);
@@ -614,12 +1229,24 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     result_panel_ = makePanel(content, "resultPanel");
     auto* result_layout = new QVBoxLayout(result_panel_);
     result_layout->setContentsMargins(14, 12, 14, 12);
-    result_layout->setSpacing(6);
+    result_layout->setSpacing(7);
     result_title_label_ = makeLabel("", "resultTitleOk", result_panel_);
     result_message_label_ = makeLabel("", "resultUserMessage", result_panel_);
     result_action_label_ = makeLabel("", "resultActionHint", result_panel_);
+    result_file_label_ = makeLabel("", "resultFile", result_panel_);
     result_stats_label_ = makeLabel("", "resultStats", result_panel_);
     result_path_label_ = makeLabel("", "resultPath", result_panel_);
+    auto* result_actions_row = new QWidget(result_panel_);
+    auto* result_actions_layout = new QHBoxLayout(result_actions_row);
+    result_actions_layout->setContentsMargins(0, 2, 0, 0);
+    result_actions_layout->setSpacing(8);
+    result_open_folder_btn_ = new QPushButton("Open Folder", result_actions_row);
+    result_open_folder_btn_->setProperty("role", "ghost");
+    result_record_again_btn_ = new QPushButton("Record Again", result_actions_row);
+    result_record_again_btn_->setProperty("role", "ghost");
+    result_actions_layout->addWidget(result_open_folder_btn_);
+    result_actions_layout->addWidget(result_record_again_btn_);
+    result_actions_layout->addStretch(1);
     result_technical_separator_ = new QFrame(result_panel_);
     result_technical_separator_->setFrameShape(QFrame::NoFrame);
     result_technical_separator_->setFixedHeight(1);
@@ -627,26 +1254,52 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     result_technical_label_ = makeLabel("", "resultTechnical", result_panel_);
     result_message_label_->setWordWrap(true);
     result_action_label_->setWordWrap(true);
+    result_file_label_->setWordWrap(false);
     result_path_label_->setWordWrap(true);
     result_technical_label_->setWordWrap(true);
     result_layout->addWidget(result_title_label_);
     result_layout->addWidget(result_message_label_);
     result_layout->addWidget(result_action_label_);
+    result_layout->addWidget(result_file_label_);
     result_layout->addWidget(result_stats_label_);
     result_layout->addWidget(result_path_label_);
+    result_layout->addWidget(result_actions_row);
     result_layout->addWidget(result_technical_separator_);
     result_layout->addWidget(result_technical_label_);
     result_technical_separator_->setVisible(false);
     result_technical_label_->setVisible(false);
+    result_open_folder_btn_->setVisible(false);
+    result_record_again_btn_->setVisible(false);
     result_panel_->setVisible(false);
-    layout->addWidget(result_panel_);
+    layout->insertWidget(5, result_panel_);
 
     layout->addStretch(1);
     scroll->setWidget(content);
 
+    // Hybrid v3 (HYBRID-PORT-R2): the visible Record page is preview-first with a
+    // stable bottom transport dock. The legacy sections (right rail, audio
+    // settings, destination, readiness, target pickers, result panel) are kept
+    // constructed but parked off-screen in `legacy_host_` so every existing
+    // pointer used by refresh()/updateStats()/updateResult() stays valid and no
+    // engine wiring changes. These sections migrate into Settings in R3.
+    cockpit_split_layout_->removeWidget(preview_column_);
+    preview_column_->setParent(nullptr);
+
+    legacy_host_ = new QWidget(this);
+    legacy_host_->setObjectName(QStringLiteral("recordLegacyHost"));
+    auto* legacy_host_layout = new QVBoxLayout(legacy_host_);
+    legacy_host_layout->setContentsMargins(0, 0, 0, 0);
+    legacy_host_layout->addWidget(scroll);
+    legacy_host_->setVisible(false);
+
+    transport_dock_ = new ui::widgets::TransportDock(this);
+
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->addWidget(scroll);
+    root->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
+                             ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
+    root->setSpacing(16);
+    root->addWidget(preview_column_, 1);
+    root->addWidget(transport_dock_, 0);
 
     auto* combo_wheel_filter = new ui::widgets::ComboBoxWheelFilter(this);
     combo_wheel_filter->installOn(target_picker_combo_);
@@ -658,6 +1311,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(monitor_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectMonitorTarget);
     connect(window_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectWindowTarget);
     connect(region_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectRegionTarget);
+    connect(change_source_btn_, &QPushButton::clicked, this, &RecordPage::onOpenSourcePicker);
     connect(region_pick_btn_, &QPushButton::clicked, this, [this]() {
         ensureRegionOverlay();
         region_overlay_->activateForSelection();
@@ -675,8 +1329,77 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(mic_gain_slider_, &QSlider::valueChanged, this, &RecordPage::onMicGainChanged);
     connect(open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
     connect(destination_settings_btn_, &QPushButton::clicked, this, [this]() { emit navigateToOutputPage(); });
+    connect(readiness_diagnostics_btn_, &QPushButton::clicked, this, [this]() { emit navigateToDiagnosticsPage(); });
+    connect(rail_diagnostics_btn_, &QPushButton::clicked, this, [this]() { emit navigateToDiagnosticsPage(); });
+    connect(result_open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
+    connect(result_record_again_btn_, &QPushButton::clicked, this, [this]() {
+        if (view_model_.CanStart()) {
+            onStart();
+        }
+    });
 
-    initCoordinator();
+    connect(hero_action_btn_, &QPushButton::clicked, this, [this]() {
+        if (view_model_.CanStart())
+            onStart();
+        else if (view_model_.CanResume())
+            onResume();
+        else if (view_model_.CanStop())
+            onStop();
+    });
+    connect(secondary_action_btn_, &QPushButton::clicked, this, [this]() {
+        const QString action_role = secondary_action_btn_->property("actionRole").toString();
+        if (action_role == QStringLiteral("diagnostics")) {
+            emit navigateToDiagnosticsPage();
+            return;
+        }
+        if (action_role == QStringLiteral("openFolder")) {
+            openOutputFolder();
+            return;
+        }
+
+        if (view_model_.CanPause())
+            onPause();
+        else if (view_model_.CanStop())
+            onStop();
+    });
+
+    // Hybrid transport dock (HYBRID-PORT-R2) drives the same recording actions.
+    connect(transport_dock_, &ui::widgets::TransportDock::recordClicked, this, [this]() {
+        if (view_model_.CanStart())
+            onStart();
+    });
+    connect(transport_dock_, &ui::widgets::TransportDock::recordAgainClicked, this, [this]() {
+        if (view_model_.CanStart())
+            onStart();
+    });
+    connect(transport_dock_, &ui::widgets::TransportDock::stopClicked, this, [this]() {
+        if (view_model_.CanStop())
+            onStop();
+    });
+    connect(transport_dock_, &ui::widgets::TransportDock::pauseClicked, this, [this]() {
+        if (view_model_.CanPause())
+            onPause();
+    });
+    connect(transport_dock_, &ui::widgets::TransportDock::resumeClicked, this, [this]() {
+        if (view_model_.CanResume())
+            onResume();
+    });
+    connect(transport_dock_, &ui::widgets::TransportDock::openFolderClicked, this, &RecordPage::openOutputFolder);
+    connect(transport_dock_, &ui::widgets::TransportDock::filenameClicked, this, &RecordPage::onDockFilenameActivated);
+    connect(transport_dock_, &ui::widgets::TransportDock::sourceToggleClicked, this, &RecordPage::onDockSourceToggle);
+
+    // 1 Hz tick drives the dock timer display while the backend stats are pending.
+    ui_clock_timer_ = new QTimer(this);
+    ui_clock_timer_->setInterval(1000);
+    ui_clock_timer_->setSingleShot(false);
+    connect(ui_clock_timer_, &QTimer::timeout, this, [this]() {
+        if (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused) {
+            updateTransportDock();
+        }
+    });
+
+    coordinator_needs_init_ = true;
+    updateResponsiveLayout();
 }
 
 RecordPage::~RecordPage() {
@@ -714,7 +1437,34 @@ void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
 
 void RecordPage::setActiveProfileName(const std::string& profile_name) {
     active_profile_name_ = std::wstring(profile_name.begin(), profile_name.end());
+    const QString profile = profileLabelFromName(active_profile_name_);
+    const bool has_selected_target = view_model_.selected_target_index >= 0 &&
+                                     view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
+    const QString target =
+        has_selected_target
+            ? normalizedTargetLabel(view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)])
+            : QStringLiteral("No source");
+    QString profile_summary = QString::fromStdWString(active_profile_name_).trimmed();
+    if (profile_summary.isEmpty()) {
+        profile_summary = QStringLiteral("Preset");
+    }
+    profile_summary.replace(QLatin1Char('_'), QLatin1Char(' '));
+    const QString summary =
+        QStringLiteral("%1 · %2 · 60 fps · %3").arg(target, videoCodecLabel(current_video_codec_), profile_summary);
+    if (source_preset_label_) {
+        source_preset_label_->setText(profile);
+        source_preset_label_->setToolTip(profile);
+    }
+    if (rail_summary_label_) {
+        rail_summary_label_->setText(summary);
+        rail_summary_label_->setToolTip(summary);
+    }
     syncCoordinatorTargetContext();
+}
+
+void RecordPage::setRuntimeCapabilities(const capability::CapabilitySet& caps) {
+    shared_runtime_caps_ = caps;
+    shared_runtime_caps_received_ = true;
 }
 
 void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& state) {
@@ -740,6 +1490,7 @@ void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& sta
     syncSysMeterService();
     syncAppMeterService();
     updateAudioMeterLevels();
+    updateRailSourceStatusChips();
 }
 
 void RecordPage::setVideoSettings(const VideoSettingsModel& settings) {
@@ -749,9 +1500,11 @@ void RecordPage::setVideoSettings(const VideoSettingsModel& settings) {
 }
 
 void RecordPage::setWebcamSettings(const WebcamSettings& settings) {
+    current_webcam_settings_ = settings;
     if (coordinator_) {
         coordinator_->SetWebcamSettings(settings);
     }
+    updateRailSourceStatusChips();
 }
 
 void RecordPage::rebroadcastChromeState() {
@@ -760,23 +1513,33 @@ void RecordPage::rebroadcastChromeState() {
 }
 
 void RecordPage::setOutputSettingsSummary(const OutputSettingsModel& settings) {
-    const QString container =
-        settings.container == capability::Container::Matroska
-            ? QStringLiteral("MKV")
-            : (settings.container == capability::Container::Mp4 ? QStringLiteral("MP4") : QStringLiteral("WEBM"));
-
-    const QString video = settings.video_codec == capability::VideoCodec::H264Nvenc
-                              ? QStringLiteral("H.264")
-                              : (settings.video_codec == capability::VideoCodec::HevcNvenc ? QStringLiteral("HEVC")
-                                                                                           : QStringLiteral("AV1"));
-
-    const QString audio =
-        settings.audio_codec == capability::AudioCodec::Opus
-            ? QStringLiteral("OPUS")
-            : (settings.audio_codec == capability::AudioCodec::AacMf ? QStringLiteral("AAC") : QStringLiteral("PCM"));
+    const QString container = containerLabel(settings.container);
+    const QString video = videoCodecLabel(settings.video_codec);
+    const QString audio = audioCodecLabel(settings.audio_codec);
+    const QString profile = profileLabelFromName(active_profile_name_);
+    const bool has_selected_target = view_model_.selected_target_index >= 0 &&
+                                     view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
+    const QString target =
+        has_selected_target
+            ? normalizedTargetLabel(view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)])
+            : QStringLiteral("No source");
+    QString profile_summary = QString::fromStdWString(active_profile_name_).trimmed();
+    if (profile_summary.isEmpty()) {
+        profile_summary = QStringLiteral("Preset");
+    }
+    profile_summary.replace(QLatin1Char('_'), QLatin1Char(' '));
+    const QString preset_summary = QStringLiteral("%1 · %2 · 60 fps · %3").arg(target, video, profile_summary);
 
     if (destination_header_) {
         destination_header_->setMeta(container + QStringLiteral(" · ") + video + QStringLiteral(" · ") + audio);
+    }
+    if (source_preset_label_) {
+        source_preset_label_->setText(profile);
+        source_preset_label_->setToolTip(profile);
+    }
+    if (rail_summary_label_) {
+        rail_summary_label_->setText(preset_summary);
+        rail_summary_label_->setToolTip(preset_summary);
     }
     if (output_meta_label_) {
         output_meta_label_->setText(QStringLiteral("Files are saved using the configured output settings."));
@@ -801,13 +1564,44 @@ void RecordPage::openOutputFolder() {
 }
 
 void RecordPage::updateOpenFolderButtonState() {
-    if (!open_folder_btn_) {
+    if (!open_folder_btn_ && !result_open_folder_btn_) {
         return;
     }
 
     const bool has_result_path = !QString::fromStdWString(view_model_.result_output_path).trimmed().isEmpty();
     const bool has_output_folder = !last_output_folder_.empty();
-    open_folder_btn_->setEnabled(has_result_path || has_output_folder);
+    const bool can_open = has_result_path || has_output_folder;
+    if (open_folder_btn_) {
+        open_folder_btn_->setEnabled(can_open);
+    }
+    if (result_open_folder_btn_) {
+        result_open_folder_btn_->setEnabled(can_open);
+    }
+
+    QString tooltip;
+    if (has_result_path) {
+        tooltip = QStringLiteral("Open folder: ") + QString::fromStdWString(view_model_.result_output_path);
+    } else if (has_output_folder) {
+        tooltip = QStringLiteral("Open folder: ") + QString::fromStdWString(last_output_folder_.wstring());
+    } else {
+        tooltip = {};
+    }
+
+    if (open_folder_btn_) {
+        open_folder_btn_->setToolTip(tooltip);
+    }
+    if (result_open_folder_btn_) {
+        result_open_folder_btn_->setToolTip(tooltip);
+    }
+}
+
+void RecordPage::updateDestinationMeta() {
+    if (!output_meta_label_)
+        return;
+
+    if (view_model_.HasResult() && view_model_.last_succeeded && !view_model_.result_destination_text.empty()) {
+        output_meta_label_->setText(QString::fromStdWString(view_model_.result_destination_text));
+    }
 }
 
 void RecordPage::startPreviewIfIdle() {
@@ -819,15 +1613,117 @@ void RecordPage::startPreviewIfIdle() {
     const bool has_target = view_model_.selected_target_index >= 0 &&
                             view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
 
+    // --- Idempotency guard ---
+    // Build the desired configuration key before touching any renderer state.
+    // If the DXGI preview is already active with exactly the same target and
+    // crop, skip the restart entirely (e.g. same Region reapplied, or
+    // syncTargetSelectionToCombo early-exit calling us for a truly unchanged state).
+    if (is_idle && has_target && preview_surface_ && preview_surface_->isDxgiPreviewActive()) {
+        const auto& t = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+        exosnap::PreviewConfigKey new_key;
+        new_key.target_index = view_model_.selected_target_index;
+        new_key.native_id = static_cast<intptr_t>(t.native_id);
+        new_key.kind = static_cast<int32_t>(t.kind);
+        if (view_model_.capture_mode == CaptureMode::Region && view_model_.has_region && view_model_.region.IsValid()) {
+            new_key.has_crop = true;
+            new_key.region_x = view_model_.region.x;
+            new_key.region_y = view_model_.region.y;
+            new_key.region_w = view_model_.region.width;
+            new_key.region_h = view_model_.region.height;
+        }
+        if (!exosnap::NeedsPreviewRestart(new_key, last_preview_key_)) {
+            return; // already active with same config — no restart needed
+        }
+    }
+
+    // --- Stop current preview and clear tracked config ---
+    if (preview_surface_)
+        preview_surface_->stopDxgiPreview();
     preview_service_->Stop();
     if (preview_surface_)
         preview_surface_->setLiveFrame(QImage{});
+    last_preview_key_ = {};
 
     if (!is_idle || !has_target)
         return;
 
     const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+    const auto cfg = primaryRecorderConfig();
+
+    // --- Region preview: compute monitor-relative crop box ---
+    // For Region targets the preview must show only the selected rectangle.
+    // A full-display preview must never silently replace an active Region selection.
+    std::optional<exosnap::PreviewCropBox> crop_box;
+    if (view_model_.capture_mode == CaptureMode::Region) {
+        if (!view_model_.has_region || !view_model_.region.IsValid()) {
+            // No valid region yet — show the honest empty/unavailable state.
+            // Do not fall back to a full-display preview.
+            diagnostics::AppLog(QStringLiteral("[record] region preview: no valid region — preview not started"));
+            return;
+        }
+
+        // The selected target for Region mode is a Monitor.
+        // Query its virtual-screen origin to convert the region to monitor-relative
+        // physical pixels (the coordinate space expected by DxgiPreviewRenderer).
+        const ScreenPresentation screen_meta = QueryScreenPresentation(target.native_id);
+        if (!screen_meta.available) {
+            diagnostics::AppLog(
+                QStringLiteral("[record] region preview: monitor info unavailable — preview not started"));
+            return;
+        }
+
+        // region.x/y are virtual-screen physical pixels; subtracting the monitor's
+        // virtual-screen origin converts them to monitor-frame-relative pixels.
+        const exosnap::PreviewCropBox box =
+            exosnap::RegionToCropBox(view_model_.region.x, view_model_.region.y, view_model_.region.width,
+                                     view_model_.region.height, screen_meta.origin_x, screen_meta.origin_y);
+
+        if (!box.IsValid()) {
+            diagnostics::AppLog(
+                QStringLiteral("[record] region preview: crop box invalid (region before monitor origin) — "
+                               "preview not started"));
+            return;
+        }
+
+        crop_box = box;
+        diagnostics::AppLog(QStringLiteral("[record] region preview: crop x=%1 y=%2 w=%3 h=%4 (monitor origin %5,%6)")
+                                .arg(box.x)
+                                .arg(box.y)
+                                .arg(box.width)
+                                .arg(box.height)
+                                .arg(screen_meta.origin_x)
+                                .arg(screen_meta.origin_y));
+    }
+
+    // Build the active key that will represent this preview after a successful start.
+    exosnap::PreviewConfigKey active_key;
+    active_key.target_index = view_model_.selected_target_index;
+    active_key.native_id = static_cast<intptr_t>(target.native_id);
+    active_key.kind = static_cast<int32_t>(target.kind);
+    if (crop_box.has_value()) {
+        active_key.has_crop = true;
+        active_key.region_x = view_model_.region.x;
+        active_key.region_y = view_model_.region.y;
+        active_key.region_w = view_model_.region.width;
+        active_key.region_h = view_model_.region.height;
+    }
+
+    if (preview_surface_ &&
+        preview_surface_->tryStartDxgiPreview(target, cfg.frame_rate_num, cfg.frame_rate_den, crop_box)) {
+        last_preview_key_ = active_key;
+        diagnostics::AppLog(QStringLiteral("[record] DXGI preview started for target"));
+        return;
+    }
+
+    diagnostics::AppLog(QStringLiteral("[record] falling back to QImage preview"));
     preview_service_->Start(target);
+}
+
+void RecordPage::ensureCoordinatorInit() {
+    if (coordinator_needs_init_) {
+        coordinator_needs_init_ = false;
+        initCoordinator();
+    }
 }
 
 void RecordPage::initCoordinator() {
@@ -838,24 +1734,63 @@ void RecordPage::initCoordinator() {
     preview_service_ = std::make_unique<PreviewService>();
     QPointer<ui::widgets::PreviewSurface> safeSurface = preview_surface_;
     preview_service_->SetFrameCallback([safeSurface](QImage frame) {
-        if (safeSurface)
+        if (safeSurface && !safeSurface->isDxgiPreviewActive())
             safeSurface->setLiveFrame(std::move(frame));
     });
 
     try {
-        const auto caps = capability::CapabilityBuilder::BuildFromHardwareQuery();
-        capability::SettingsResolver resolver(caps);
-        const auto validation = resolver.ValidateConfig(primaryRecorderConfig());
-        coordinator_->OnCapabilitiesReady(caps, validation);
+        if (shared_runtime_caps_received_) {
+            capability::SettingsResolver resolver(shared_runtime_caps_);
+            const auto validation = resolver.ValidateConfig(primaryRecorderConfig());
+            coordinator_->OnCapabilitiesReady(shared_runtime_caps_, validation);
+        } else {
+            const auto caps = capability::CapabilityBuilder::BuildFromHardwareQuery();
+            capability::SettingsResolver resolver(caps);
+            const auto validation = resolver.ValidateConfig(primaryRecorderConfig());
+            coordinator_->OnCapabilitiesReady(caps, validation);
+        }
     } catch (const std::exception& ex) {
         coordinator_->OnCapabilityFailure(L"Capability check failed.");
+        diagnostics::AppLog(QStringLiteral("[record.failure] phase=Init category=CapabilityCheck detail=\"%1\"")
+                                .arg(QString::fromUtf8(ex.what())));
         qWarning() << "Capability check failed:" << ex.what();
     } catch (...) {
         coordinator_->OnCapabilityFailure(L"Capability check failed.");
+        diagnostics::AppLog(
+            QStringLiteral("[record.failure] phase=Init category=CapabilityCheck detail=\"Unknown error\""));
         qWarning() << "Capability check failed with unknown error.";
     }
 
     coordinator_->SetStateChangedCallback([this](UiRecordingState state) {
+        // Wall-clock fallback timer: track elapsed independently of backend stats
+        // so the dock timer always shows a live count immediately, not --:--:--.
+        const UiRecordingState prev = view_model_.state;
+        if (state == UiRecordingState::Recording && prev != UiRecordingState::Recording) {
+            if (prev == UiRecordingState::Paused) {
+                // Resume: keep accumulated time, restart the running clock.
+                recording_wall_clock_.restart();
+            } else {
+                // Fresh start.
+                wall_elapsed_before_pause_ms_ = 0;
+                recording_wall_clock_.start();
+            }
+            if (ui_clock_timer_ && !ui_clock_timer_->isActive())
+                ui_clock_timer_->start();
+        } else if (state == UiRecordingState::Paused && prev == UiRecordingState::Recording) {
+            // Pause: snapshot current elapsed, invalidate running clock.
+            if (recording_wall_clock_.isValid())
+                wall_elapsed_before_pause_ms_ += recording_wall_clock_.elapsed();
+            recording_wall_clock_.invalidate();
+            if (ui_clock_timer_)
+                ui_clock_timer_->stop();
+        } else if (state != UiRecordingState::Recording && state != UiRecordingState::Paused) {
+            // Stopping / Completed / Ready: reset wall clock and stop tick timer.
+            recording_wall_clock_.invalidate();
+            wall_elapsed_before_pause_ms_ = 0;
+            if (ui_clock_timer_)
+                ui_clock_timer_->stop();
+        }
+
         view_model_.SetState(state);
         view_model_.capability_status_text = coordinator_->CapabilityStatusText();
         if (state == UiRecordingState::Recording)
@@ -884,15 +1819,22 @@ void RecordPage::initCoordinator() {
         preflight_app_rms_ = std::clamp(rms_linear, 0.0f, 1.0f);
         updateAudioMeterLevels();
     });
+    coordinator_->SetRecordingMeterCallback([this](const std::array<float, 3>& rms) {
+        view_model_.UpdateMeterRms(rms);
+        updateAudioMeterLevels();
+    });
     coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
         view_model_.SetResult(result);
         if (result.succeeded)
             diagnostics::AppLog(
                 QStringLiteral("[record] result: success  path=%1").arg(QString::fromStdWString(result.output_path)));
-        else
-            diagnostics::AppLog(QStringLiteral("[record] result: failed  phase=%1  hr=%2")
-                                    .arg(QString::fromStdWString(result.error_phase))
-                                    .arg(QString::fromStdWString(result.hresult_text)));
+        else {
+            QString failed_msg =
+                QStringLiteral("[record] result: failed  phase=%1").arg(QString::fromStdWString(result.error_phase));
+            if (!result.hresult_text.empty())
+                failed_msg += QStringLiteral("  hr=%1").arg(QString::fromStdWString(result.hresult_text));
+            diagnostics::AppLog(failed_msg);
+        }
         refresh();
     });
 
@@ -1049,6 +1991,9 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
     if (target_index == view_model_.selected_target_index) {
         updateTargetCards();
         rebuildTargetPicker();
+        // The capture_mode may have changed (e.g. Region → Display) even though the underlying
+        // monitor index is the same.  Always restart the preview so stale crop state is cleared.
+        startPreviewIfIdle();
         return;
     }
 
@@ -1068,8 +2013,10 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
     }
 
     view_model_.ApplyTargetKindPreservingAudio(new_kind);
-    if (kind_changed)
+    if (kind_changed) {
         rebuildAudioRowWidgets();
+        emitAudioSettingsChanged();
+    }
     syncCoordinatorTargetContext();
 
     diagnostics::AppLog(QStringLiteral("[target] selected: %1 (kind_changed=%2)")
@@ -1082,6 +2029,8 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
 }
 
 void RecordPage::onStart() {
+    ensureCoordinatorInit();
+
     // Region mode with select-on-record: show overlay before starting.
     if (view_model_.capture_mode == CaptureMode::Region && view_model_.select_on_record) {
         diagnostics::AppLog(QStringLiteral("[record] region select-on-record: opening overlay"));
@@ -1129,6 +2078,7 @@ void RecordPage::onStop() {
 }
 
 void RecordPage::onHotkeyToggle() {
+    ensureCoordinatorInit();
     if (view_model_.CanStart())
         onStart();
     else if (view_model_.CanStop())
@@ -1153,11 +2103,15 @@ void RecordPage::onHotkeyPauseToggle() {
 }
 
 void RecordPage::onSelectMonitorTarget() {
+    view_model_.capture_mode = CaptureMode::Monitor;
     if (monitor_target_indices_.empty()) {
+        const bool kind_changed = (view_model_.audio_ui_state.target_kind != capability::CaptureTargetKind::Display);
         view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
         view_model_.selected_target_index = -1;
         target_combo_->setCurrentIndex(-1);
         diagnostics::AppLog(QStringLiteral("[target] monitor mode selected with no display targets"));
+        if (kind_changed)
+            emitAudioSettingsChanged();
         updateTargetCards();
         rebuildTargetPicker();
         refresh();
@@ -1171,11 +2125,15 @@ void RecordPage::onSelectMonitorTarget() {
 }
 
 void RecordPage::onSelectWindowTarget() {
+    view_model_.capture_mode = CaptureMode::Window;
     if (window_target_indices_.empty()) {
+        const bool kind_changed = (view_model_.audio_ui_state.target_kind != capability::CaptureTargetKind::Window);
         view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
         view_model_.selected_target_index = -1;
         target_combo_->setCurrentIndex(-1);
         diagnostics::AppLog(QStringLiteral("[target] window mode selected with no window targets"));
+        if (kind_changed)
+            emitAudioSettingsChanged();
         updateTargetCards();
         rebuildTargetPicker();
         refresh();
@@ -1198,11 +2156,366 @@ void RecordPage::onSelectRegionTarget() {
             syncTargetSelectionToCombo(monitor_target_index_);
         }
     }
-    view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
-    view_model_.select_on_record = select_on_record_check_ ? select_on_record_check_->isChecked() : true;
-    diagnostics::AppLog(QStringLiteral("[target] region mode selected"));
+    {
+        const bool kind_changed = (view_model_.audio_ui_state.target_kind != capability::CaptureTargetKind::Display);
+        view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
+        view_model_.select_on_record = select_on_record_check_ ? select_on_record_check_->isChecked() : true;
+        diagnostics::AppLog(QStringLiteral("[target] region mode selected"));
+        if (kind_changed)
+            emitAudioSettingsChanged();
+    }
     updateTargetCards();
     rebuildTargetPicker();
+    refresh();
+}
+
+void RecordPage::setSourcePickerOverlay(ui::dialogs::SourcePickerOverlay* overlay) {
+    source_picker_overlay_ = overlay;
+    if (overlay) {
+        connect(overlay, &ui::dialogs::SourcePickerOverlay::sourceSelected, this, &RecordPage::onSourcePickerAccepted);
+        connect(overlay, &ui::dialogs::SourcePickerOverlay::closed, this, &RecordPage::refresh);
+    }
+}
+
+void RecordPage::onOpenSourcePicker() {
+    ensureCoordinatorInit();
+    if (isSourceSelectionLocked()) {
+        return;
+    }
+
+    enumerateTargets(true);
+
+    std::vector<ui::dialogs::SourcePickerDialog::SourceOption> screen_options;
+    std::vector<ui::dialogs::SourcePickerDialog::SourceOption> window_options;
+    const MinimumCaptureSize window_minimum = WindowMinimumForCodec(current_video_codec_);
+    const QString minimum_detail = MinimumSizeText(window_minimum);
+
+    // Only the main app window HWND is needed to exclude ExoSnap from the window
+    // list. The overlay has no separate top-level HWND (it is a child widget of
+    // the main window, so GetAncestor(..., GA_ROOT) == self_hwnd covers it).
+    const HWND self_hwnd = reinterpret_cast<HWND>(window()->effectiveWinId());
+
+    for (std::size_t i = 0; i < monitor_target_indices_.size(); ++i) {
+        const int target_index = monitor_target_indices_[i];
+        if (target_index < 0 || target_index >= static_cast<int>(view_model_.targets.size())) {
+            continue;
+        }
+        const auto& target = view_model_.targets[static_cast<std::size_t>(target_index)];
+        const ScreenPresentation screen_meta = QueryScreenPresentation(target.native_id);
+        ui::dialogs::SourcePickerDialog::SourceOption option;
+        option.target_index = target_index;
+        option.native_id = target.native_id;
+        option.title = displayLabelFromTarget(target);
+        option.detail = BuildScreenOptionDetail(screen_meta);
+        option.primary = screen_meta.available ? screen_meta.primary : (i == 0);
+        if (!screen_meta.available) {
+            option.detail = option.primary ? QStringLiteral("Primary display · DXGI OD monitor capture")
+                                           : QStringLiteral("Display capture · DXGI OD monitor capture");
+        }
+        option.status_badge = option.primary ? QStringLiteral("Primary") : QStringLiteral("Screen");
+        if (screen_meta.available) {
+            option.monitor_x = screen_meta.origin_x;
+            option.monitor_y = screen_meta.origin_y;
+            option.monitor_width = screen_meta.width;
+            option.monitor_height = screen_meta.height;
+        }
+        screen_options.push_back(option);
+    }
+
+    struct WindowOptionCandidate {
+        ui::dialogs::SourcePickerDialog::SourceOption option;
+        bool is_foreground = false;
+    };
+
+    std::vector<WindowOptionCandidate> default_window_candidates;
+    std::vector<ui::dialogs::SourcePickerDialog::SourceOption> unavailable_window_options;
+    std::unordered_set<uintptr_t> captured_hwnds;
+    std::unordered_set<uintptr_t> seen_unavailable_hwnds;
+    std::unordered_set<std::string> dedupe_keys;
+
+    for (const int target_index : window_target_indices_) {
+        if (target_index >= 0 && target_index < static_cast<int>(view_model_.targets.size())) {
+            captured_hwnds.insert(view_model_.targets[static_cast<std::size_t>(target_index)].native_id);
+        }
+    }
+
+    const HWND foreground_hwnd = GetAncestor(GetForegroundWindow(), GA_ROOT);
+    int unavailable_index = -1;
+
+    auto appendUnavailableWindow = [&](int target_index, uintptr_t native_id, const QString& title,
+                                       const WindowPresentation& window_meta, const QString& status_badge,
+                                       const QString& help_text, const QString& validation_summary,
+                                       const QString& minimum_text) {
+        ui::dialogs::SourcePickerDialog::SourceOption option;
+        option.target_index = target_index;
+        option.native_id = native_id;
+        option.title = title;
+        option.detail = BuildWindowOptionDetail(window_meta);
+        option.status_badge = status_badge;
+        option.selectable = false;
+        option.unavailable = true;
+        option.hidden_by_default = true;
+        option.help_text = help_text;
+        option.validation_summary = validation_summary;
+        option.minimum_detail = minimum_text;
+        unavailable_window_options.push_back(option);
+    };
+
+    for (const int target_index : window_target_indices_) {
+        if (target_index < 0 || target_index >= static_cast<int>(view_model_.targets.size())) {
+            continue;
+        }
+        const auto& target = view_model_.targets[static_cast<std::size_t>(target_index)];
+        const auto hwnd = reinterpret_cast<HWND>(target.native_id);
+        if (hwnd == self_hwnd || GetAncestor(hwnd, GA_ROOT) == self_hwnd) {
+            continue;
+        }
+
+        const WindowPresentation window_meta = QueryWindowPresentation(target.native_id);
+        if (window_meta.process_label.compare(QStringLiteral("exosnap.exe"), Qt::CaseInsensitive) == 0) {
+            continue;
+        }
+
+        if (ShouldDedupeByProcess(window_meta.process_label)) {
+            const std::string dedupe_key = DedupeKeyForWindow(window_meta).toStdString();
+            if (!dedupe_keys.insert(dedupe_key).second) {
+                continue;
+            }
+        }
+
+        QString title = windowLabelFromTarget(target).trimmed();
+        if (title.compare(QStringLiteral("Window"), Qt::CaseInsensitive) == 0) {
+            title = window_meta.title.trimmed();
+        }
+        if (title.isEmpty()) {
+            title = window_meta.title.trimmed();
+        }
+
+        if (!IsMeaningfulWindowTitle(title)) {
+            continue;
+        }
+
+        const WindowEligibility eligibility = ClassifyWindowForPicker(window_meta, window_minimum);
+        switch (eligibility) {
+        case WindowEligibility::Include: {
+            WindowOptionCandidate candidate;
+            candidate.option.target_index = target_index;
+            candidate.option.native_id = target.native_id;
+            candidate.option.title = title;
+            candidate.option.detail = BuildWindowOptionDetail(window_meta);
+            candidate.is_foreground = GetAncestor(hwnd, GA_ROOT) == foreground_hwnd;
+            default_window_candidates.push_back(candidate);
+            break;
+        }
+        case WindowEligibility::UnavailableMinimized:
+            appendUnavailableWindow(target_index, target.native_id, title, window_meta, QStringLiteral("Minimized"),
+                                    QStringLiteral("Restore the window to capture it."), {}, {});
+            seen_unavailable_hwnds.insert(target.native_id);
+            break;
+        case WindowEligibility::UnavailableTooSmall:
+            appendUnavailableWindow(
+                target_index, target.native_id, title, window_meta, QStringLiteral("Too small"), minimum_detail,
+                QStringLiteral(
+                    "Selected window is too small for the active encoder. Choose a larger window or use Display "
+                    "capture."),
+                minimum_detail);
+            seen_unavailable_hwnds.insert(target.native_id);
+            break;
+        case WindowEligibility::UnavailableGeneric:
+            appendUnavailableWindow(target_index, target.native_id, title, window_meta, QStringLiteral("Unavailable"),
+                                    QStringLiteral("This window cannot be captured right now."), {}, {});
+            seen_unavailable_hwnds.insert(target.native_id);
+            break;
+        case WindowEligibility::Exclude:
+            break;
+        }
+    }
+
+    struct UnavailableEnumContext {
+        std::vector<ui::dialogs::SourcePickerDialog::SourceOption>* unavailable = nullptr;
+        const std::unordered_set<uintptr_t>* captured_set = nullptr;
+        std::unordered_set<uintptr_t>* seen_unavailable = nullptr;
+        std::unordered_set<std::string>* dedupe_keys = nullptr;
+        const MinimumCaptureSize* window_minimum = nullptr;
+        const QString* minimum_detail = nullptr;
+        const HWND* self_hwnd = nullptr;
+        int* unavailable_index = nullptr;
+    };
+
+    UnavailableEnumContext unavailable_ctx;
+    unavailable_ctx.unavailable = &unavailable_window_options;
+    unavailable_ctx.captured_set = &captured_hwnds;
+    unavailable_ctx.seen_unavailable = &seen_unavailable_hwnds;
+    unavailable_ctx.dedupe_keys = &dedupe_keys;
+    unavailable_ctx.window_minimum = &window_minimum;
+    unavailable_ctx.minimum_detail = &minimum_detail;
+    unavailable_ctx.self_hwnd = &self_hwnd;
+    unavailable_ctx.unavailable_index = &unavailable_index;
+
+    EnumWindows(
+        [](HWND hwnd, LPARAM lParam) -> BOOL {
+            auto* ctx = reinterpret_cast<UnavailableEnumContext*>(lParam);
+            if (!ctx || !ctx->unavailable || !ctx->captured_set || !ctx->seen_unavailable || !ctx->window_minimum ||
+                !ctx->minimum_detail || !ctx->self_hwnd || !ctx->unavailable_index || !ctx->dedupe_keys) {
+                return TRUE;
+            }
+
+            const HWND root = GetAncestor(hwnd, GA_ROOT);
+            if (hwnd == *ctx->self_hwnd || root == *ctx->self_hwnd) {
+                return TRUE;
+            }
+
+            const uintptr_t native = reinterpret_cast<uintptr_t>(hwnd);
+            if (ctx->captured_set->count(native) > 0 || ctx->seen_unavailable->count(native) > 0) {
+                return TRUE;
+            }
+
+            const WindowPresentation window_meta = QueryWindowPresentation(native);
+            if (window_meta.process_label.compare(QStringLiteral("exosnap.exe"), Qt::CaseInsensitive) == 0) {
+                return TRUE;
+            }
+
+            if (ShouldDedupeByProcess(window_meta.process_label)) {
+                const std::string dedupe_key = DedupeKeyForWindow(window_meta).toStdString();
+                if (!ctx->dedupe_keys->insert(dedupe_key).second) {
+                    return TRUE;
+                }
+            }
+
+            const WindowEligibility eligibility = ClassifyWindowForPicker(window_meta, *ctx->window_minimum);
+            if (eligibility == WindowEligibility::Exclude) {
+                return TRUE;
+            }
+
+            ui::dialogs::SourcePickerDialog::SourceOption option;
+            option.target_index = *ctx->unavailable_index;
+            --(*ctx->unavailable_index);
+            option.native_id = native;
+            option.title = window_meta.title.trimmed();
+            option.detail = BuildWindowOptionDetail(window_meta);
+            option.selectable = false;
+            option.unavailable = true;
+            option.hidden_by_default = true;
+
+            if (eligibility == WindowEligibility::UnavailableMinimized) {
+                option.status_badge = QStringLiteral("Minimized");
+                option.help_text = QStringLiteral("Restore the window to capture it.");
+            } else if (eligibility == WindowEligibility::UnavailableTooSmall) {
+                option.status_badge = QStringLiteral("Too small");
+                option.help_text = *ctx->minimum_detail;
+                option.validation_summary = QStringLiteral(
+                    "Selected window is too small for the active encoder. Choose a larger window or use Display "
+                    "capture.");
+                option.minimum_detail = *ctx->minimum_detail;
+            } else {
+                option.status_badge = QStringLiteral("Unavailable");
+                option.help_text = QStringLiteral("This window cannot be captured right now.");
+            }
+
+            ctx->unavailable->push_back(option);
+            ctx->seen_unavailable->insert(native);
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&unavailable_ctx));
+
+    std::stable_sort(default_window_candidates.begin(), default_window_candidates.end(),
+                     [](const WindowOptionCandidate& lhs, const WindowOptionCandidate& rhs) {
+                         return lhs.is_foreground && !rhs.is_foreground;
+                     });
+
+    for (const auto& candidate : default_window_candidates) {
+        window_options.push_back(candidate.option);
+    }
+    for (const auto& unavailable_option : unavailable_window_options) {
+        window_options.push_back(unavailable_option);
+    }
+
+    QString region_summary;
+    const bool has_region = view_model_.has_region && view_model_.region.IsValid();
+    if (has_region) {
+        const auto& region = view_model_.region;
+        region_summary = QString("%1, %2  —  %3 × %4").arg(region.x).arg(region.y).arg(region.width).arg(region.height);
+    }
+
+    if (!source_picker_overlay_) {
+        refresh();
+        return;
+    }
+
+    source_picker_overlay_->setScreenOptions(screen_options);
+    source_picker_overlay_->setWindowOptions(window_options);
+    source_picker_overlay_->setRegionState(region_summary, has_region, view_model_.select_on_record);
+
+    ui::dialogs::SourcePickerDialog::Section section = ui::dialogs::SourcePickerDialog::Section::Screens;
+    if (view_model_.capture_mode == CaptureMode::Region) {
+        section = ui::dialogs::SourcePickerDialog::Section::Region;
+    } else if (view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window) {
+        section = ui::dialogs::SourcePickerDialog::Section::Windows;
+    }
+    source_picker_overlay_->setCurrentSection(section, view_model_.selected_target_index);
+    source_picker_overlay_->openOverlay();
+}
+
+void RecordPage::onSourcePickerAccepted(ui::dialogs::SourcePickerDialog::SelectionResult selection) {
+    if (!selection.valid) {
+        refresh();
+        return;
+    }
+
+    if (selection.section == ui::dialogs::SourcePickerDialog::Section::Region) {
+        // A fixed-resolution preset resolves to an explicit rectangle on a
+        // specific display — apply it directly (no at-record overlay).
+        if (selection.region_preset && selection.region_base_target_index >= 0) {
+            syncTargetSelectionToCombo(selection.region_base_target_index);
+            view_model_.capture_mode = CaptureMode::Region;
+            view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
+
+            recorder_core::CaptureRegion region;
+            region.x = selection.region_x;
+            region.y = selection.region_y;
+            region.width = selection.region_width;
+            region.height = selection.region_height;
+            view_model_.has_region = true;
+            view_model_.region = region;
+            view_model_.select_on_record = false;
+            if (select_on_record_check_) {
+                select_on_record_check_->setChecked(false);
+            }
+            if (region_summary_label_) {
+                region_summary_label_->setText(
+                    QString("%1, %2  —  %3 × %4").arg(region.x).arg(region.y).arg(region.width).arg(region.height));
+            }
+            diagnostics::AppLog(QStringLiteral("[target] region preset applied: %1 x %2 at %3,%4")
+                                    .arg(region.width)
+                                    .arg(region.height)
+                                    .arg(region.x)
+                                    .arg(region.y));
+            updateTargetCards();
+            rebuildTargetPicker();
+            // Restart the preview now that capture_mode and region are both set —
+            // startPreviewIfIdle inside syncTargetSelectionToCombo ran before the
+            // region was stored and would have seen CaptureMode::Monitor.
+            startPreviewIfIdle();
+            refresh();
+            return;
+        }
+
+        if (select_on_record_check_) {
+            select_on_record_check_->setChecked(selection.select_on_record);
+        }
+        view_model_.select_on_record = selection.select_on_record;
+        onSelectRegionTarget();
+        if (selection.pick_region_now) {
+            ensureRegionOverlay();
+            region_overlay_->activateForSelection();
+        }
+        return;
+    }
+
+    view_model_.capture_mode = selection.section == ui::dialogs::SourcePickerDialog::Section::Windows
+                                   ? CaptureMode::Window
+                                   : CaptureMode::Monitor;
+    syncTargetSelectionToCombo(selection.target_index);
     refresh();
 }
 
@@ -1225,6 +2538,36 @@ void RecordPage::onRegionSelected(QRect region_virtual_screen) {
     view_model_.has_region = true;
     view_model_.region = region;
 
+    // Ensure the base capture monitor matches the display the region was drawn on.
+    // Without this, a region drawn on Display 2 while Display 1 is selected produces
+    // a crop box whose x/y offsets are relative to Display 1's frame — placing them
+    // outside the captured pixels and yielding a black preview.
+    for (const int target_idx : monitor_target_indices_) {
+        if (target_idx < 0 || target_idx >= static_cast<int>(view_model_.targets.size()))
+            continue;
+        const auto& t = view_model_.targets[static_cast<std::size_t>(target_idx)];
+        const ScreenPresentation meta = QueryScreenPresentation(t.native_id);
+        if (!meta.available)
+            continue;
+        if (region.x >= meta.origin_x && region.x < meta.origin_x + meta.width && region.y >= meta.origin_y &&
+            region.y < meta.origin_y + meta.height) {
+            if (target_idx != view_model_.selected_target_index) {
+                diagnostics::AppLog(QStringLiteral("[record] region: source monitor updated to index %1 (was %2)")
+                                        .arg(target_idx)
+                                        .arg(view_model_.selected_target_index));
+                view_model_.selected_target_index = target_idx;
+                monitor_target_index_ = target_idx;
+                if (target_combo_) {
+                    QSignalBlocker blocker(target_combo_);
+                    target_combo_->setCurrentIndex(target_idx);
+                }
+                rebuildTargetPicker();
+                syncCoordinatorTargetContext();
+            }
+            break;
+        }
+    }
+
     if (region_summary_label_) {
         region_summary_label_->setText(
             QString("%1, %2  —  %3 × %4").arg(region.x).arg(region.y).arg(region.width).arg(region.height));
@@ -1234,8 +2577,9 @@ void RecordPage::onRegionSelected(QRect region_virtual_screen) {
     if (view_model_.state == UiRecordingState::RegionSelecting) {
         doStartRecording(region);
     }
-    // Otherwise, the region was picked manually via the Pick Region button — just update the UI.
+    // Otherwise, the region was picked manually — start the cropped preview.
     else {
+        startPreviewIfIdle();
         refresh();
     }
 }
@@ -1522,6 +2866,7 @@ void RecordPage::emitAudioSettingsChanged() {
                             .arg(view_model_.audio_ui_state.IsMicEnabled() ? 1 : 0)
                             .arg(static_cast<int>(view_model_.audio_ui_state.source_rows.size()))
                             .arg(view_model_.audio_ui_state.mic_gain_linear, 0, 'f', 2));
+    updateRailSourceStatusChips();
     emit audioSettingsChanged(view_model_.audio_ui_state);
     PersistMicGainForMvp(view_model_.audio_ui_state.mic_gain_linear);
 }
@@ -1794,8 +3139,15 @@ QString RecordPage::buildChromeStatusLabel() const {
         return QStringLiteral("STARTING");
     case UiRecordingState::Stopping:
         return QStringLiteral("STOPPING");
-    case UiRecordingState::Ready:
     case UiRecordingState::Completed:
+        // A clean, saved recording reads as "Saved" (green) in the title-bar pill
+        // for as long as the result dock is visible; any other completed case
+        // (e.g. no usable result) falls back to the neutral ready status. This is
+        // derived purely from the existing view-model result state — no new
+        // coordinator/state-machine state is introduced.
+        return (view_model_.HasResult() && view_model_.last_succeeded) ? QStringLiteral("SAVED")
+                                                                       : QStringLiteral("READY");
+    case UiRecordingState::Ready:
     default:
         return QStringLiteral("READY");
     }
@@ -1835,25 +3187,42 @@ QString RecordPage::buildPreviewBottomLeftText(bool recording) const {
 }
 
 QString RecordPage::buildPreviewBottomRightText(bool recording) const {
+    const QString codec_summary = QStringLiteral("%1 · %2 · %3")
+                                      .arg(videoCodecLabel(current_video_codec_), audioCodecLabel(current_audio_codec_),
+                                           containerLabel(current_container_));
+
     if (!recording) {
-        return QStringLiteral("AV1 · CQ 24");
+        return codec_summary;
     }
 
     const uint64_t live_bytes = view_model_.video_bytes + view_model_.audio_bytes;
     const QString size_text = view_model_.live_stats_available
                                   ? QString::fromStdWString(RecordViewModel::FormatBytes(live_bytes))
                                   : QStringLiteral("–");
-    return QStringLiteral("AV1 · CQ 24 · SIZE %1").arg(size_text);
+    return QStringLiteral("%1 · SIZE %2").arg(codec_summary, size_text);
 }
 
 QString RecordPage::buildTimerText(bool recording) const {
+    const bool completed_success =
+        (view_model_.state == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
+    if (completed_success) {
+        return clockFromSeconds(view_model_.result_elapsed_seconds);
+    }
+
     if (!recording) {
         return QStringLiteral("00:00:00");
     }
-    if (!view_model_.live_stats_available) {
-        return QStringLiteral("--:--:--");
+
+    // Prefer backend stats when available (more accurate, derived from encoded frames).
+    // Fall back to the view-layer wall clock so the display always starts immediately
+    // at 00:00:00 rather than showing --:--:-- while the first stats packet is pending.
+    if (view_model_.live_stats_available) {
+        return toClock(view_model_.elapsed_text);
     }
-    return toClock(view_model_.elapsed_text);
+
+    const qint64 wall_ms =
+        wall_elapsed_before_pause_ms_ + (recording_wall_clock_.isValid() ? recording_wall_clock_.elapsed() : 0);
+    return clockFromSeconds(static_cast<double>(wall_ms) / 1000.0);
 }
 
 void RecordPage::emitChromeState() {
@@ -1874,12 +3243,18 @@ void RecordPage::emitChromeState() {
 }
 
 void RecordPage::refresh() {
+    ensureCoordinatorInit();
+
     const QString capability_text = QString::fromStdWString(view_model_.capability_status_text).trimmed();
     const bool blocked = (view_model_.state == UiRecordingState::Blocked);
     const bool checking = (view_model_.state == UiRecordingState::LoadingCapabilities);
     const bool recording =
         (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
          view_model_.state == UiRecordingState::Stopping);
+    const bool paused = (view_model_.state == UiRecordingState::Paused);
+    const bool starting =
+        (view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::RegionSelecting);
+    const bool stopping = (view_model_.state == UiRecordingState::Stopping);
 
     capability_label_->setText(capability_text);
     capability_label_->setVisible((blocked || checking) && !capability_text.isEmpty());
@@ -1888,20 +3263,52 @@ void RecordPage::refresh() {
     }
 
     const QString status_text = stateDisplay(view_model_.state);
-    control_state_label_->setText(status_text);
     const bool failed = (view_model_.state == UiRecordingState::Failed);
     const bool active_recording = (view_model_.state == UiRecordingState::Recording);
-    setStyledStringProperty(control_state_label_, "stateRole",
-                            (blocked || failed) ? "blocked"
-                            : active_recording  ? "recording"
-                                                : (status_text == QStringLiteral("READY") ? "ready" : "muted"));
+    const bool completed_success =
+        (view_model_.state == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
+    const QString control_status_text = blocked                                           ? QStringLiteral("BLOCKED")
+                                        : failed                                          ? QStringLiteral("ERROR")
+                                        : active_recording                                ? QStringLiteral("RECORDING")
+                                        : (view_model_.state == UiRecordingState::Paused) ? QStringLiteral("PAUSED")
+                                        : completed_success                               ? QStringLiteral("SAVED")
+                                                                                          : status_text;
+    control_state_label_->setText(control_status_text);
+
+    QString control_state_role = QStringLiteral("muted");
+    if (blocked || failed) {
+        control_state_role = QStringLiteral("blocked");
+    } else if (active_recording) {
+        control_state_role = QStringLiteral("recording");
+    } else if (view_model_.state == UiRecordingState::Paused) {
+        control_state_role = QStringLiteral("warn");
+    } else if (completed_success) {
+        control_state_role = QStringLiteral("done");
+    } else if (status_text == QStringLiteral("READY")) {
+        control_state_role = QStringLiteral("ready");
+    }
+    setStyledStringProperty(control_state_label_, "stateRole", control_state_role);
+    if (rail_control_panel_) {
+        setStyledStringProperty(rail_control_panel_, "stateRole",
+                                (blocked || failed)                               ? QStringLiteral("blocked")
+                                : active_recording                                ? QStringLiteral("recording")
+                                : (view_model_.state == UiRecordingState::Paused) ? QStringLiteral("paused")
+                                : completed_success                               ? QStringLiteral("done")
+                                : (checking || starting || stopping)              ? QStringLiteral("warn")
+                                                                                  : QStringLiteral("ready"));
+    }
+    if (preview_surface_host_) {
+        setStyledStringProperty(preview_surface_host_, "recordState",
+                                (blocked || failed)                               ? QStringLiteral("blocked")
+                                : active_recording                                ? QStringLiteral("recording")
+                                : (view_model_.state == UiRecordingState::Paused) ? QStringLiteral("paused")
+                                : completed_success                               ? QStringLiteral("done")
+                                : (checking || starting || stopping)              ? QStringLiteral("warn")
+                                                                                  : QStringLiteral("ready"));
+    }
 
     output_path_label_->setText(QString::fromStdWString(view_model_.output_path_display));
 
-    const bool paused = (view_model_.state == UiRecordingState::Paused);
-    const bool starting =
-        (view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::RegionSelecting);
-    const bool stopping = (view_model_.state == UiRecordingState::Stopping);
     preview_surface_->setRecording(recording);
     preview_surface_->setStatusText(status_text);
     preview_surface_->statusPill()->setDotVisible(recording || checking || starting);
@@ -1910,6 +3317,11 @@ void RecordPage::refresh() {
                                             : (paused || checking || starting || stopping)
                                                 ? ui::widgets::StatusPill::Tone::Warn
                                                 : ui::widgets::StatusPill::Tone::Ready);
+    preview_surface_->setFrameTone((blocked || failed) ? ui::widgets::PreviewSurface::FrameTone::Blocked
+                                   : active_recording  ? ui::widgets::PreviewSurface::FrameTone::Recording
+                                   : (paused || checking || starting || stopping)
+                                       ? ui::widgets::PreviewSurface::FrameTone::Warn
+                                       : ui::widgets::PreviewSurface::FrameTone::Ready);
     QString target_desc = QStringLiteral("No target selected");
     const bool has_selected_target = view_model_.selected_target_index >= 0 &&
                                      view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
@@ -1918,10 +3330,10 @@ void RecordPage::refresh() {
         const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
         target_desc = normalizedTargetLabel(target);
         capture_header_->setMeta(QStringLiteral("%1 · 60 fps").arg(target_desc));
-        preview_surface_->setTopMetaText(QStringLiteral("%1 · 60 fps").arg(target_desc));
+        preview_surface_->setTopMetaText(QStringLiteral(""));
     } else {
         capture_header_->setMeta("NO TARGET");
-        preview_surface_->setTopMetaText("NO TARGET");
+        preview_surface_->setTopMetaText(QStringLiteral(""));
     }
 
     if (recording) {
@@ -1948,6 +3360,8 @@ void RecordPage::refresh() {
 
     updateTargetCards();
     rebuildTargetPicker();
+    updateSourceChip();
+    updatePreviewContextChips();
     updateReadinessRows();
     updateAudioControls();
     updateAudioTrackPreview();
@@ -1958,19 +3372,139 @@ void RecordPage::refresh() {
     updateStatsDisplay();
 
     updateResultDisplay();
+    updateDestinationMeta();
     updateOpenFolderButtonState();
+    updateHeroButton();
+    updateTransportDock();
 
     emitChromeState();
 }
 
+void RecordPage::updateTransportDock() {
+    if (!transport_dock_) {
+        return;
+    }
+    using ui::widgets::TransportDock;
+
+    const UiRecordingState s = view_model_.state;
+    const bool recording = (s == UiRecordingState::Recording);
+    const bool paused = (s == UiRecordingState::Paused);
+    const bool stopping = (s == UiRecordingState::Stopping);
+    const bool blocked = (s == UiRecordingState::Blocked);
+    const bool failed = (s == UiRecordingState::Failed);
+    const bool completed_success =
+        (s == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
+
+    TransportDock::State dock_state = TransportDock::State::Ready;
+    bool primary_enabled = view_model_.CanStart();
+    if (recording) {
+        dock_state = TransportDock::State::Recording;
+        primary_enabled = true;
+    } else if (paused) {
+        dock_state = TransportDock::State::Paused;
+        primary_enabled = true;
+    } else if (stopping) {
+        // Keep the Recording layout while the session winds down, actions disabled.
+        dock_state = TransportDock::State::Recording;
+        primary_enabled = false;
+    } else if (completed_success) {
+        dock_state = TransportDock::State::Completed;
+        primary_enabled = view_model_.CanStart();
+    }
+    transport_dock_->setState(dock_state);
+    transport_dock_->setPrimaryEnabled(primary_enabled);
+
+    const bool recording_for_timer = recording || paused || stopping;
+    transport_dock_->setTimerText(buildTimerText(recording_for_timer));
+    transport_dock_->setTimerRole(recording             ? QStringLiteral("recording")
+                                  : paused              ? QStringLiteral("paused")
+                                  : completed_success   ? QStringLiteral("done")
+                                  : (blocked || failed) ? QStringLiteral("blocked")
+                                                        : QStringLiteral("idle"));
+
+    // Audio toggles modify pre-recording config only; once the source is locked
+    // (recording/paused/preparing/stopping) they become read-only status pills.
+    const bool toggles_interactive = !isSourceSelectionLocked() && !(blocked || failed);
+    transport_dock_->setToggleState(QStringLiteral("system"), view_model_.audio_ui_state.IsSysEnabled(),
+                                    toggles_interactive);
+    transport_dock_->setToggleState(QStringLiteral("mic"), view_model_.audio_ui_state.IsMicEnabled(),
+                                    toggles_interactive);
+    transport_dock_->setToggleState(QStringLiteral("app"), view_model_.audio_ui_state.IsAppEnabled(),
+                                    toggles_interactive);
+    // Webcam is configured in Settings; here it is an honest read-only status pill.
+    transport_dock_->setToggleState(QStringLiteral("webcam"), current_webcam_settings_.enabled, false);
+
+    if (completed_success) {
+        const QString path = QString::fromStdWString(view_model_.result_output_path).trimmed();
+        const QString file_name = path.isEmpty() ? QStringLiteral("Recording saved") : QFileInfo(path).fileName();
+        const QString size_text =
+            view_model_.result_output_file_bytes > 0
+                ? QString::fromStdWString(RecordViewModel::FormatBytes(view_model_.result_output_file_bytes))
+                : QString();
+        transport_dock_->setCompletedInfo(file_name, size_text, !path.isEmpty());
+    }
+}
+
+void RecordPage::onDockSourceToggle(const QString& key) {
+    if (isSourceSelectionLocked()) {
+        return; // source is locked while recording — toggles are status-only.
+    }
+    auto& rows = view_model_.audio_ui_state.source_rows;
+    bool changed = false;
+    for (auto& row : rows) {
+        const bool is_sys = (row.kind == recorder_core::AudioSourceKind::Sys ||
+                             row.kind == recorder_core::AudioSourceKind::SystemOutput);
+        const bool match = (key == QLatin1String("system") && is_sys) ||
+                           (key == QLatin1String("mic") && row.kind == recorder_core::AudioSourceKind::Mic) ||
+                           (key == QLatin1String("app") && row.kind == recorder_core::AudioSourceKind::App);
+        if (match) {
+            row.enabled = !row.enabled;
+            changed = true;
+            break;
+        }
+    }
+    if (!changed) {
+        return; // e.g. webcam toggle is read-only and never reaches here.
+    }
+
+    view_model_.RebuildAudioPlan();
+    if (!audio_source_rows_.empty()) {
+        rebuildAudioRowWidgets(); // keep the (hidden) legacy rows in sync
+    }
+    updateAudioTrackPreview();
+    syncMicMeterService();
+    syncSysMeterService();
+    syncAppMeterService();
+    emitAudioSettingsChanged();
+    refresh();
+}
+
+void RecordPage::onDockFilenameActivated() {
+    const QString path = QString::fromStdWString(view_model_.result_output_path).trimmed();
+    if (path.isEmpty()) {
+        openOutputFolder();
+        return;
+    }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+}
+
 void RecordPage::updateStatsDisplay() {
-    const bool recording = view_model_.state == UiRecordingState::Recording ||
-                           view_model_.state == UiRecordingState::Paused ||
-                           view_model_.state == UiRecordingState::Stopping;
+    const bool active_recording = (view_model_.state == UiRecordingState::Recording);
+    const bool paused = (view_model_.state == UiRecordingState::Paused);
+    const bool recording = active_recording || paused || (view_model_.state == UiRecordingState::Stopping);
+    const bool blocked = (view_model_.state == UiRecordingState::Blocked);
+    const bool failed = (view_model_.state == UiRecordingState::Failed);
+    const bool completed_success =
+        (view_model_.state == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
 
     const QString timer_text = buildTimerText(recording);
     timer_label_->setText(timer_text);
-    setStyledStringProperty(timer_label_, "timerState", recording ? "recording" : "idle");
+    setStyledStringProperty(timer_label_, "timerState",
+                            active_recording      ? QStringLiteral("recording")
+                            : paused              ? QStringLiteral("paused")
+                            : completed_success   ? QStringLiteral("done")
+                            : (blocked || failed) ? QStringLiteral("blocked")
+                                                  : QStringLiteral("idle"));
 
     preview_surface_->setBottomLeftText(buildPreviewBottomLeftText(recording));
     preview_surface_->setBottomRightText(buildPreviewBottomRightText(recording));
@@ -1990,6 +3524,62 @@ void RecordPage::updateStatsDisplay() {
             : QStringLiteral("-");
     emit chromeRuntimeMetricsChanged(timer_text, bitrate_text, drop_text, size_text);
 
+    const bool show_live_grid = (active_recording || paused) && view_model_.live_stats_available;
+    if (rail_stats_grid_) {
+        rail_stats_grid_->setVisible(show_live_grid);
+    }
+    if (show_live_grid && rail_size_value_label_ && rail_drop_value_label_ && rail_fps_value_label_) {
+        const uint64_t total_bytes = view_model_.video_bytes + view_model_.audio_bytes;
+        const QString total_size = QString::fromStdWString(RecordViewModel::FormatBytes(total_bytes));
+        const QString dropped = QString::number(view_model_.dropped_frames);
+        QString output_fps = QStringLiteral("—");
+        const bool fps_live = active_recording && view_model_.elapsed_seconds > 0.0 && view_model_.frames_captured > 0;
+        if (view_model_.elapsed_seconds > 0.0 && view_model_.frames_captured > 0) {
+            const double fps = static_cast<double>(view_model_.frames_captured) / view_model_.elapsed_seconds;
+            output_fps = QStringLiteral("%1").arg(fps, 0, 'f', 1);
+        }
+        rail_size_value_label_->setText(total_size);
+        rail_drop_value_label_->setText(dropped);
+        rail_fps_value_label_->setText(output_fps);
+        if (rail_fps_stat_cell_) {
+            rail_fps_stat_cell_->setVisible(fps_live);
+        }
+    }
+
+    if (rail_stats_label_) {
+        if (blocked || failed) {
+            const QString capability_text = QString::fromStdWString(view_model_.capability_status_text).trimmed();
+            QStringList blockers = blockerLinesFromText(capability_text);
+            if (blockers.isEmpty()) {
+                blockers.push_back(QStringLiteral("Resolve diagnostics blockers before recording."));
+            }
+            if (blockers.size() > 3) {
+                blockers = blockers.mid(0, 3);
+                blockers.push_back(QStringLiteral("See Diagnostics for full details."));
+            }
+            rail_stats_label_->setText(blockers.join(QStringLiteral("\n")));
+            rail_stats_label_->setVisible(true);
+        } else if (completed_success) {
+            const QString out_path = QString::fromStdWString(view_model_.result_output_path).trimmed();
+            const QString file_name =
+                out_path.isEmpty() ? QStringLiteral("Saved recording") : QFileInfo(out_path).fileName();
+            const QString file_size =
+                view_model_.result_output_file_bytes > 0
+                    ? QString::fromStdWString(RecordViewModel::FormatBytes(view_model_.result_output_file_bytes))
+                    : QStringLiteral("—");
+            const QString duration = clockFromSeconds(view_model_.result_elapsed_seconds);
+            const QString codec_line =
+                QStringLiteral("%1 · %2 · %3")
+                    .arg(containerLabel(current_container_), videoCodecLabel(current_video_codec_),
+                         audioCodecLabel(current_audio_codec_));
+            rail_stats_label_->setText(
+                QStringLiteral("%1\nDURATION %2   SIZE %3\n%4").arg(file_name, duration, file_size, codec_line));
+            rail_stats_label_->setVisible(true);
+        } else {
+            rail_stats_label_->setVisible(false);
+        }
+    }
+
     updateAudioMeterLevels();
 }
 
@@ -2007,21 +3597,39 @@ void RecordPage::updateResultDisplay() {
     setStyledStringProperty(result_title_label_, "labelRole",
                             view_model_.last_succeeded ? "resultTitleOk" : "resultTitleErr");
 
-    result_title_label_->setText(QString::fromStdWString(view_model_.result_user_title));
-    result_title_label_->setVisible(!view_model_.result_user_title.empty());
-
-    result_message_label_->setText(QString::fromStdWString(view_model_.result_user_message));
-    result_message_label_->setVisible(!view_model_.last_succeeded && !view_model_.result_user_message.empty());
-
-    result_action_label_->setText(QString::fromStdWString(view_model_.result_action_hint));
-    result_action_label_->setVisible(!view_model_.last_succeeded && !view_model_.result_action_hint.empty());
-
-    result_stats_label_->setText(QString::fromStdWString(view_model_.result_stats_text));
-    result_stats_label_->setVisible(view_model_.last_succeeded && !view_model_.result_stats_text.empty());
-
     const QString path = QString::fromStdWString(view_model_.result_output_path).trimmed();
-    result_path_label_->setText(path.isEmpty() ? QString{} : QStringLiteral("→ ") + path);
-    result_path_label_->setVisible(!path.isEmpty());
+    if (view_model_.last_succeeded) {
+        const QString file_name = path.isEmpty() ? QString{} : QFileInfo(path).fileName();
+        const QString file_size =
+            view_model_.result_output_file_bytes > 0
+                ? QString::fromStdWString(RecordViewModel::FormatBytes(view_model_.result_output_file_bytes))
+                : QStringLiteral("—");
+        const QString duration = clockFromSeconds(view_model_.result_elapsed_seconds);
+        QString summary_line = QStringLiteral("Recording complete · %1 · %2").arg(duration, file_size);
+        if (!file_name.isEmpty()) {
+            summary_line += QStringLiteral(" · %1").arg(file_name);
+        }
+        result_title_label_->setText(summary_line);
+        result_title_label_->setVisible(true);
+        result_message_label_->setVisible(false);
+        result_action_label_->setVisible(false);
+        result_file_label_->setVisible(false);
+        result_stats_label_->setVisible(false);
+        result_path_label_->setVisible(false);
+    } else {
+        result_title_label_->setText(QString::fromStdWString(view_model_.result_user_title));
+        result_title_label_->setVisible(!view_model_.result_user_title.empty());
+        result_message_label_->setText(QString::fromStdWString(view_model_.result_user_message));
+        result_message_label_->setVisible(!view_model_.result_user_message.empty());
+        result_action_label_->setText(QString::fromStdWString(view_model_.result_action_hint));
+        result_action_label_->setVisible(!view_model_.result_action_hint.empty());
+        result_stats_label_->setVisible(false);
+        result_path_label_->setText(path.isEmpty() ? QString{} : QStringLiteral("Path: ") + path);
+        result_path_label_->setVisible(!path.isEmpty());
+        if (result_file_label_) {
+            result_file_label_->setVisible(false);
+        }
+    }
 
     const QString phase = QString::fromStdWString(view_model_.result_error_phase).trimmed();
     const QString hr = QString::fromStdWString(view_model_.result_hresult_text).trimmed();
@@ -2045,6 +3653,16 @@ void RecordPage::updateResultDisplay() {
     result_technical_label_->setVisible(!technical.isEmpty());
     if (result_technical_separator_) {
         result_technical_separator_->setVisible(!technical.isEmpty());
+    }
+
+    if (result_open_folder_btn_) {
+        result_open_folder_btn_->setVisible(false);
+    }
+    if (result_record_again_btn_) {
+        result_record_again_btn_->setVisible(false);
+    }
+    if (result_open_folder_btn_ && result_open_folder_btn_->parentWidget()) {
+        result_open_folder_btn_->parentWidget()->setVisible(false);
     }
 
     result_panel_->style()->unpolish(result_panel_);
@@ -2075,9 +3693,9 @@ void RecordPage::updateTargetCards() {
     if (region_card_)
         region_card_->setSelected(!recording && region_mode);
 
-    // Show region options panel only in region mode and not while recording
+    // Region controls are surfaced in the source picker dialog in this slice.
     if (region_options_panel_)
-        region_options_panel_->setVisible(region_mode && !recording);
+        region_options_panel_->setVisible(false);
 
     // Subtitle for the monitor card: use the currently active monitor target
     const int active_monitor_idx = monitor_target_index_;
@@ -2113,10 +3731,18 @@ void RecordPage::updateReadinessRows() {
 
     const bool is_window_target = view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window;
     readiness_rows_[2].title->setText(is_window_target ? "Audio loopback (APP)" : "Audio loopback (SYS)");
+    readiness_rows_[0].title->setText(QString::fromStdWString(coordinator_->ResolvedVideoCodecLabel()));
 
     const bool blocked = (view_model_.state == UiRecordingState::Blocked);
     const bool checking = (view_model_.state == UiRecordingState::LoadingCapabilities);
-    readiness_header_->setMeta(checking ? "CHECKING" : (blocked ? "BLOCKERS PRESENT" : "ALL CLEAR"));
+    const bool failed = (view_model_.state == UiRecordingState::Failed);
+    const bool completed_success =
+        (view_model_.state == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
+    const bool live =
+        (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
+         view_model_.state == UiRecordingState::Stopping);
+    readiness_header_->setMeta(checking ? "CHECKING"
+                                        : (failed ? "ERROR" : (blocked ? "BLOCKERS PRESENT" : "ALL CLEAR")));
 
     const QString target_detail =
         (view_model_.selected_target_index >= 0 &&
@@ -2127,22 +3753,73 @@ void RecordPage::updateReadinessRows() {
     const QString output_detail = QString::fromStdWString(view_model_.output_path_display);
     const QString session_state = QString::fromStdWString(view_model_.state_text);
     const QString capability_text = QString::fromStdWString(view_model_.capability_status_text).trimmed();
+    const QStringList blockers = blockerLinesFromText(capability_text);
 
-    const bool encoder_ok = !blocked && !checking;
+    const bool encoder_ok = !blocked && !checking && !failed;
     const bool target_ok = !target_detail.isEmpty() && target_detail != "No target selected";
     const bool output_ok = !output_detail.isEmpty() && output_detail != "--";
+    const bool show_detail_rows = checking;
+
+    if (readiness_summary_label_) {
+        QString summary_text;
+        QString summary_state = QStringLiteral("muted");
+        if (checking) {
+            summary_text = QStringLiteral("Checking capability probes and output readiness...");
+        } else if (blocked) {
+            summary_text = blockers.isEmpty() ? QStringLiteral("Blocked — resolve diagnostics before recording.")
+                                              : blockers.first();
+            summary_state = QStringLiteral("blocked");
+        } else if (failed) {
+            summary_text = QStringLiteral("Last recording ended with an error. Review result details and logs.");
+            summary_state = QStringLiteral("blocked");
+        } else if (live) {
+            summary_text = QStringLiteral("Capturing %1  ·  output %2  ·  target locked")
+                               .arg(target_detail, output_detail.isEmpty() ? QStringLiteral("—") : output_detail);
+            summary_state = QStringLiteral("warn");
+        } else if (completed_success) {
+            summary_text = QStringLiteral("Recording saved. Start again when ready.");
+            summary_state = QStringLiteral("ready");
+        } else if (!target_ok) {
+            summary_text = QStringLiteral("Select a source to start recording.");
+            summary_state = QStringLiteral("warn");
+        } else if (!output_ok) {
+            summary_text = QStringLiteral("Select a valid output destination before recording.");
+            summary_state = QStringLiteral("warn");
+        } else if (!encoder_ok) {
+            summary_text = QStringLiteral("Encoder capability is not ready yet.");
+            summary_state = QStringLiteral("warn");
+        } else {
+            summary_text = QStringLiteral("Ready to record. Encoder, target path, and output destination are clear.");
+            summary_state = QStringLiteral("ready");
+        }
+
+        readiness_summary_label_->setText(summary_text);
+        setStyledStringProperty(readiness_summary_label_, "stateRole", summary_state);
+    }
+    if (readiness_diagnostics_btn_) {
+        readiness_diagnostics_btn_->setVisible(true);
+        readiness_diagnostics_btn_->setText((blocked || failed) ? QStringLiteral("Open Diagnostics →")
+                                                                : QStringLiteral("Diagnostics →"));
+    }
+    if (readiness_rule_) {
+        readiness_rule_->setVisible(show_detail_rows);
+    }
+    if (readiness_rows_container_) {
+        readiness_rows_container_->setVisible(show_detail_rows);
+    }
 
     const struct RowData {
         bool ok;
         bool hard_blocked;
         QString detail;
     } rows[] = {
-        {encoder_ok, blocked,
-         checking ? QString("Checking capabilities...") : (blocked ? capability_text : QString("Available"))},
+        {encoder_ok, blocked || failed,
+         checking ? QString("Checking capabilities...")
+                  : ((blocked || failed) ? capability_text : QString("Available"))},
         {target_ok, false, target_detail},
         {true, false, QString("WASAPI loopback path available")},
         {output_ok, false, output_detail},
-        {!blocked && !checking, blocked, session_state},
+        {!blocked && !checking && !failed, blocked || failed, session_state},
     };
 
     for (int i = 0; i < 5; ++i) {
@@ -2152,6 +3829,349 @@ void RecordPage::updateReadinessRows() {
                                 rows[i].hard_blocked ? "blocked" : (rows[i].ok ? "ready" : "muted"));
         row_widgets.detail->setText(rows[i].detail);
     }
+}
+
+void RecordPage::updateSourceChip() {
+    if (!source_name_label_ || !change_source_btn_) {
+        return;
+    }
+
+    const bool has_selection = view_model_.selected_target_index >= 0 &&
+                               view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
+    const bool region_mode = view_model_.capture_mode == CaptureMode::Region;
+
+    QString source_kind = QStringLiteral("SCREEN");
+    QString source_name = QStringLiteral("No source selected");
+    QString source_meta = QStringLiteral("Choose a source to preview and record.");
+
+    if (region_mode) {
+        source_kind = QStringLiteral("REGION");
+        if (has_selection) {
+            const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+            source_name = displayLabelFromTarget(target);
+        } else {
+            source_name = QStringLiteral("Region");
+        }
+
+        if (view_model_.has_region && view_model_.region.IsValid()) {
+            const auto& region = view_model_.region;
+            source_meta =
+                QString("%1, %2  —  %3 × %4").arg(region.x).arg(region.y).arg(region.width).arg(region.height);
+        } else if (view_model_.select_on_record) {
+            source_meta = QStringLiteral("Area is selected when recording starts.");
+        } else {
+            source_meta = QStringLiteral("No region selected yet.");
+        }
+    } else if (has_selection) {
+        const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+        if (target.kind == recorder_core::CaptureTarget::Kind::Window) {
+            source_kind = QStringLiteral("WINDOW");
+            source_name = windowLabelFromTarget(target);
+        } else {
+            source_kind = QStringLiteral("SCREEN");
+            source_name = displayLabelFromTarget(target);
+        }
+        source_meta = normalizedTargetLabel(target);
+    } else if (view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window) {
+        source_kind = QStringLiteral("WINDOW");
+    }
+
+    QString compact_source = QStringLiteral("%1 · %2").arg(source_kind, source_name);
+    QString source_detail;
+    if (region_mode && view_model_.has_region && view_model_.region.IsValid()) {
+        source_detail = QStringLiteral("%1×%2").arg(view_model_.region.width).arg(view_model_.region.height);
+    } else {
+        const QRegularExpression resolution_expr(QStringLiteral("(\\d{3,5})\\s*[x×]\\s*(\\d{3,5})"));
+        const QRegularExpressionMatch match = resolution_expr.match(source_meta);
+        if (match.hasMatch()) {
+            source_detail = QStringLiteral("%1×%2").arg(match.captured(1), match.captured(2));
+        } else if (region_mode && view_model_.select_on_record) {
+            source_detail = QStringLiteral("Select on start");
+        }
+    }
+    if (!source_detail.isEmpty()) {
+        compact_source += QStringLiteral(" · ") + source_detail;
+    }
+
+    const bool locked = isSourceSelectionLocked();
+    const bool has_any_source = !monitor_target_indices_.empty() || !window_target_indices_.empty();
+    const int width_hint =
+        source_chip_panel_ ? ((source_chip_panel_->width() > 0) ? source_chip_panel_->width() - 20 : 520) : 520;
+    const QString compact_elided =
+        source_name_label_->fontMetrics().elidedText(compact_source, Qt::ElideRight, (std::max)(180, width_hint));
+
+    source_name_label_->setText(compact_elided);
+    source_name_label_->setToolTip(compact_source);
+    if (source_kind_label_) {
+        source_kind_label_->setText(source_kind);
+        source_kind_label_->setVisible(false);
+    }
+    if (source_meta_label_) {
+        source_meta_label_->setText(source_meta);
+        source_meta_label_->setToolTip(source_meta);
+        source_meta_label_->setVisible(false);
+    }
+
+    source_lock_label_->setVisible(locked);
+    source_lock_label_->setText(locked ? QStringLiteral("Source locked") : QString{});
+    source_lock_label_->setToolTip(locked ? QStringLiteral("Source remains locked while recording or paused.")
+                                          : QString{});
+    if (source_chip_panel_) {
+        setStyledStringProperty(source_chip_panel_, "sourceLocked", locked ? "true" : "false");
+    }
+    if (source_row_) {
+        setStyledStringProperty(source_row_, "sourceLocked", locked ? "true" : "false");
+    }
+
+    change_source_btn_->setEnabled(!locked && has_any_source);
+    change_source_btn_->setVisible(!locked);
+    if (!has_any_source) {
+        change_source_btn_->setToolTip(QStringLiteral("No capture sources are currently available."));
+    } else if (locked) {
+        change_source_btn_->setToolTip(QStringLiteral("Source changes are disabled while recording."));
+    } else {
+        change_source_btn_->setToolTip(QStringLiteral("Choose a screen, window, or region source."));
+    }
+}
+
+void RecordPage::updatePreviewContextChips() {
+    if (!preview_source_chip_label_) {
+        return;
+    }
+
+    const bool has_selection = view_model_.selected_target_index >= 0 &&
+                               view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
+    const bool locked = isSourceSelectionLocked();
+    const bool blocked = (view_model_.state == UiRecordingState::Blocked);
+    const bool failed = (view_model_.state == UiRecordingState::Failed);
+    QString source_text = QStringLiteral("No source selected");
+    if (view_model_.capture_mode == CaptureMode::Region) {
+        if (view_model_.has_region && view_model_.region.IsValid()) {
+            source_text = QStringLiteral("Region · %1×%2").arg(view_model_.region.width).arg(view_model_.region.height);
+        } else if (view_model_.select_on_record) {
+            source_text = QStringLiteral("Region · select on start");
+        } else {
+            source_text = QStringLiteral("Region");
+        }
+    } else if (has_selection) {
+        const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+        if (target.kind == recorder_core::CaptureTarget::Kind::Window) {
+            source_text = windowLabelFromTarget(target);
+        } else {
+            source_text = displayLabelFromTarget(target);
+            const QRegularExpression resolution_expr(QStringLiteral("(\\d{3,5})\\s*[x×]\\s*(\\d{3,5})"));
+            const QRegularExpressionMatch match = resolution_expr.match(QString::fromStdString(target.description));
+            if (match.hasMatch()) {
+                source_text += QStringLiteral(" · %1×%2").arg(match.captured(1), match.captured(2));
+            }
+        }
+    }
+
+    const int chip_width =
+        (preview_context_row_ && preview_context_row_->width() > 0) ? preview_context_row_->width() - 124 : 520;
+    const QString source_elided =
+        preview_source_chip_label_->fontMetrics().elidedText(source_text, Qt::ElideRight, (std::max)(180, chip_width));
+    preview_source_chip_label_->setText(source_elided);
+    preview_source_chip_label_->setToolTip(source_text);
+    setStyledStringProperty(preview_source_chip_label_, "stateRole",
+                            blocked || failed ? QStringLiteral("blocked")
+                            : locked          ? QStringLiteral("warn")
+                            : has_selection   ? QStringLiteral("ready")
+                                              : QStringLiteral("muted"));
+    preview_source_chip_label_->setVisible(false);
+}
+
+void RecordPage::updateRailSourceStatusChips() {
+    if (!rail_sys_audio_chip_ || !rail_app_audio_chip_ || !rail_mic_chip_ || !rail_webcam_chip_) {
+        return;
+    }
+
+    auto setChipState = [](QLabel* chip, const QString& enabled_text, const QString& disabled_text, bool enabled) {
+        if (!chip) {
+            return;
+        }
+        const QString text = enabled ? enabled_text : disabled_text;
+        chip->setText(text);
+        chip->setToolTip(text);
+        setStyledStringProperty(chip, "stateRole", enabled ? QStringLiteral("ready") : QStringLiteral("muted"));
+    };
+
+    const bool sys_enabled = view_model_.audio_ui_state.IsSysEnabled();
+    const bool app_enabled = view_model_.audio_ui_state.IsAppEnabled();
+    const bool mic_enabled = view_model_.audio_ui_state.IsMicEnabled();
+    const bool webcam_enabled = current_webcam_settings_.enabled;
+
+    const QString sys_text = sys_enabled ? QStringLiteral("System audio") : QStringLiteral("System off");
+    const QString app_text = app_enabled ? QStringLiteral("App audio") : QStringLiteral("App off");
+    const QString mic_text = mic_enabled ? QStringLiteral("Mic") : QStringLiteral("Mic off");
+    const QString webcam_text = webcam_enabled ? QStringLiteral("Webcam") : QStringLiteral("Webcam off");
+
+    setChipState(rail_sys_audio_chip_, QStringLiteral("System audio"), QStringLiteral("System off"), sys_enabled);
+    setChipState(rail_app_audio_chip_, QStringLiteral("App audio"), QStringLiteral("App off"), app_enabled);
+    setChipState(rail_mic_chip_, QStringLiteral("Mic"), QStringLiteral("Mic off"), mic_enabled);
+    setChipState(rail_webcam_chip_, QStringLiteral("Webcam"), QStringLiteral("Webcam off"), webcam_enabled);
+
+    if (rail_source_status_panel_) {
+        setStyledStringProperty(rail_source_status_panel_, "sourceLocked",
+                                isSourceSelectionLocked() ? QStringLiteral("true") : QStringLiteral("false"));
+    }
+    if (rail_source_status_summary_label_) {
+        const QString summary = QStringLiteral("%1 · %2 · %3 · %4").arg(sys_text, app_text, mic_text, webcam_text);
+        rail_source_status_summary_label_->setText(summary);
+        rail_source_status_summary_label_->setToolTip(summary);
+    }
+}
+
+bool RecordPage::isSourceSelectionLocked() const {
+    return view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::RegionSelecting ||
+           view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
+           view_model_.state == UiRecordingState::Stopping;
+}
+
+void RecordPage::updateHeroButton() {
+    if (!hero_action_btn_)
+        return;
+
+    const bool can_start = view_model_.CanStart();
+    const bool can_stop = view_model_.CanStop();
+    const bool can_pause = view_model_.CanPause();
+    const bool can_resume = view_model_.CanResume();
+    const bool blocked = (view_model_.state == UiRecordingState::Blocked);
+    const bool failed = (view_model_.state == UiRecordingState::Failed);
+    const bool completed_success =
+        (view_model_.state == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
+    const bool stopping = (view_model_.state == UiRecordingState::Stopping);
+    const bool preparing =
+        (view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::RegionSelecting);
+    const bool is_recording =
+        (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
+         view_model_.state == UiRecordingState::Stopping);
+
+    if (completed_success && can_start) {
+        hero_action_btn_->setText(QStringLiteral("Record Again"));
+        hero_action_btn_->setEnabled(true);
+        setStyledStringProperty(hero_action_btn_, "heroRole", "start");
+    } else if (can_start) {
+        hero_action_btn_->setText(QStringLiteral("Start Recording"));
+        hero_action_btn_->setEnabled(true);
+        setStyledStringProperty(hero_action_btn_, "heroRole", "start");
+    } else if (can_resume) {
+        hero_action_btn_->setText(QStringLiteral("Resume"));
+        hero_action_btn_->setEnabled(true);
+        setStyledStringProperty(hero_action_btn_, "heroRole", "resume");
+    } else if (can_stop) {
+        hero_action_btn_->setText(QStringLiteral("Stop Recording"));
+        hero_action_btn_->setEnabled(true);
+        setStyledStringProperty(hero_action_btn_, "heroRole", "stop");
+    } else if (preparing) {
+        hero_action_btn_->setText(QStringLiteral("Starting..."));
+        hero_action_btn_->setEnabled(false);
+        setStyledStringProperty(hero_action_btn_, "heroRole", "muted");
+    } else if (stopping) {
+        hero_action_btn_->setText(QStringLiteral("Stopping..."));
+        hero_action_btn_->setEnabled(false);
+        setStyledStringProperty(hero_action_btn_, "heroRole", "muted");
+    } else if (blocked || failed) {
+        hero_action_btn_->setText(QStringLiteral("Start Recording"));
+        hero_action_btn_->setEnabled(false);
+        setStyledStringProperty(hero_action_btn_, "heroRole", "blocked");
+    } else {
+        hero_action_btn_->setText(QStringLiteral("Start Recording"));
+        hero_action_btn_->setEnabled(false);
+        setStyledStringProperty(hero_action_btn_, "heroRole", "muted");
+    }
+
+    if (secondary_action_btn_) {
+        secondary_action_btn_->setProperty("actionRole", "transport");
+        if (can_pause) {
+            secondary_action_btn_->setText(QStringLiteral("Pause"));
+            secondary_action_btn_->setEnabled(true);
+            secondary_action_btn_->setVisible(true);
+        } else if (can_resume && can_stop) {
+            secondary_action_btn_->setText(QStringLiteral("Stop"));
+            secondary_action_btn_->setEnabled(true);
+            secondary_action_btn_->setVisible(true);
+        } else if (completed_success) {
+            const QString path = QString::fromStdWString(view_model_.result_output_path).trimmed();
+            secondary_action_btn_->setText(QStringLiteral("Open Folder"));
+            secondary_action_btn_->setEnabled(!path.isEmpty() || !last_output_folder_.empty());
+            secondary_action_btn_->setVisible(true);
+            secondary_action_btn_->setProperty("actionRole", "openFolder");
+        } else {
+            secondary_action_btn_->setVisible(false);
+        }
+    }
+
+    const bool has_selected_target = view_model_.selected_target_index >= 0 &&
+                                     view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
+    QString target_summary = QStringLiteral("No source");
+    if (view_model_.capture_mode == CaptureMode::Region) {
+        target_summary = QStringLiteral("Region");
+    } else if (has_selected_target) {
+        const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+        target_summary = (target.kind == recorder_core::CaptureTarget::Kind::Window) ? windowLabelFromTarget(target)
+                                                                                     : displayLabelFromTarget(target);
+    }
+
+    QString profile_summary = QString::fromStdWString(active_profile_name_).trimmed();
+    if (profile_summary.isEmpty()) {
+        profile_summary = QStringLiteral("Preset");
+    }
+    profile_summary.replace(QLatin1Char('_'), QLatin1Char(' '));
+
+    if (rail_summary_label_) {
+        const QString summary = QStringLiteral("%1 · %2 · 60 fps · %3")
+                                    .arg(target_summary, videoCodecLabel(current_video_codec_), profile_summary);
+        rail_summary_label_->setText(summary);
+        rail_summary_label_->setToolTip(summary);
+    }
+
+    if (rail_readiness_label_) {
+        if (view_model_.state == UiRecordingState::Paused) {
+            rail_readiness_label_->setText(QStringLiteral("Paused. Source remains locked until you resume or stop."));
+            setStyledStringProperty(rail_readiness_label_, "stateRole", "warn");
+        } else if (is_recording && has_selected_target) {
+            rail_readiness_label_->setText(QStringLiteral("Source locked while recording."));
+            setStyledStringProperty(rail_readiness_label_, "stateRole", "warn");
+        } else if (blocked) {
+            rail_readiness_label_->setText(QStringLiteral("Blocked. Resolve diagnostics issues to start recording."));
+            setStyledStringProperty(rail_readiness_label_, "stateRole", "blocked");
+        } else if (failed) {
+            rail_readiness_label_->setText(QStringLiteral("Recording error. Review result details and diagnostics."));
+            setStyledStringProperty(rail_readiness_label_, "stateRole", "blocked");
+        } else if (completed_success) {
+            rail_readiness_label_->setText(QStringLiteral("Saved recording details are ready."));
+            setStyledStringProperty(rail_readiness_label_, "stateRole", "ready");
+        } else if (view_model_.state == UiRecordingState::LoadingCapabilities) {
+            rail_readiness_label_->setText(QStringLiteral("Checking capabilities..."));
+            setStyledStringProperty(rail_readiness_label_, "stateRole", "muted");
+        } else if (!has_selected_target) {
+            rail_readiness_label_->setText(QStringLiteral("Select a source, then start recording."));
+            setStyledStringProperty(rail_readiness_label_, "stateRole", "warn");
+        } else {
+            rail_readiness_label_->setText(QStringLiteral("Ready to record"));
+            setStyledStringProperty(rail_readiness_label_, "stateRole", "ready");
+        }
+    }
+
+    if (rail_diagnostics_btn_) {
+        rail_diagnostics_btn_->setVisible(blocked || failed);
+    }
+
+    updateRailSourceStatusChips();
+    const bool show_source_chips = !(blocked || failed || completed_success) && !is_recording;
+    const bool show_source_summary = !(blocked || failed || completed_success) && is_recording;
+    if (rail_source_status_panel_) {
+        rail_source_status_panel_->setVisible(show_source_chips);
+    }
+    if (rail_source_status_summary_label_) {
+        rail_source_status_summary_label_->setVisible(show_source_summary);
+    }
+
+    if (audio_settings_header_)
+        audio_settings_header_->setVisible(!is_recording);
+    if (audio_settings_panel_)
+        audio_settings_panel_->setVisible(!is_recording);
 }
 
 void RecordPage::updateAudioMeterLevels() {
@@ -2177,22 +4197,52 @@ void RecordPage::updateAudioMeterLevels() {
         }
     };
 
+    // Converts RMS to 0..1 for the dock meter strip, using the same dB scale as applyMeter.
+    auto dockLevel = [](float rms, bool show) -> float {
+        if (!show || rms <= 0.0f)
+            return 0.0f;
+        const float db = (std::max)(-60.0f, 20.0f * std::log10(rms));
+        return std::clamp((db + 60.0f) / 60.0f, 0.0f, 1.0f);
+    };
+
     const bool sys_meter_live =
         coordinator_ != nullptr && coordinator_->IsSysMeterRunning() && view_model_.audio_active_sys;
     const float sys_rms = sys_meter_live ? preflight_sys_rms_ : (recording_live ? view_model_.audio_rms_sys : 0.0f);
-    applyMeter(sys_meter_, sys_db_label_, sys_rms, sys_meter_live || (recording_live && view_model_.audio_active_sys));
+    const bool sys_show = sys_meter_live || (recording_live && view_model_.audio_active_sys);
+    applyMeter(sys_meter_, sys_db_label_, sys_rms, sys_show);
+    if (transport_dock_)
+        transport_dock_->setMeterLevel(QStringLiteral("system"), dockLevel(sys_rms, sys_show));
 
     const bool app_meter_live =
         coordinator_ != nullptr && coordinator_->IsAppMeterRunning() && view_model_.audio_active_app;
     const float app_rms = app_meter_live ? preflight_app_rms_ : (recording_live ? view_model_.audio_rms_app : 0.0f);
-    applyMeter(app_meter_, app_db_label_, app_rms, app_meter_live || (recording_live && view_model_.audio_active_app));
+    const bool app_show = app_meter_live || (recording_live && view_model_.audio_active_app);
+    applyMeter(app_meter_, app_db_label_, app_rms, app_show);
+    if (transport_dock_)
+        transport_dock_->setMeterLevel(QStringLiteral("app"), dockLevel(app_rms, app_show));
 
     const bool mic_meter_live = coordinator_ != nullptr && coordinator_->IsMicMeterRunning() &&
                                 view_model_.audio_ui_state.IsMicEnabled() && view_model_.audio_active_mic;
     const float mic_rms = mic_meter_live
                               ? std::clamp(preflight_mic_rms_ * view_model_.audio_ui_state.mic_gain_linear, 0.0f, 1.0f)
                               : (recording_live ? view_model_.audio_rms_mic : 0.0f);
-    applyMeter(mic_meter_, mic_db_label_, mic_rms, mic_meter_live || (recording_live && view_model_.audio_active_mic));
+    const bool mic_show = mic_meter_live || (recording_live && view_model_.audio_active_mic);
+    applyMeter(mic_meter_, mic_db_label_, mic_rms, mic_show);
+    if (transport_dock_)
+        transport_dock_->setMeterLevel(QStringLiteral("mic"), dockLevel(mic_rms, mic_show));
+
+    emit audioMeterLevelsUpdated(dockLevel(sys_rms, sys_show), dockLevel(app_rms, app_show),
+                                 dockLevel(mic_rms, mic_show), sys_show, app_show, mic_show);
+}
+
+void RecordPage::refreshDisplayTargets() {
+    // Called when the OS reports a screen add/remove event.  Re-enumerate
+    // targets while preserving the current selection where possible.
+    if (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
+        view_model_.state == UiRecordingState::Stopping) {
+        return; // Do not disturb target list during active recording.
+    }
+    enumerateTargets(/*preserve_current_selection=*/true);
 }
 
 } // namespace exosnap

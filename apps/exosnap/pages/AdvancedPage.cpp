@@ -2,9 +2,11 @@
 
 #include "../ui/widgets/ComboBoxWheelFilter.h"
 #include "../ui/widgets/ExoCheckBox.h"
+#include "../ui/widgets/SectionRuleHeader.h"
 
 #include <QComboBox>
 #include <QFrame>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
@@ -16,27 +18,101 @@ namespace exosnap {
 
 namespace {
 
+using M = ui::theme::ExoSnapMetrics;
+
+QString ContainerLabel(capability::Container container) {
+    switch (container) {
+    case capability::Container::Matroska:
+        return QStringLiteral("MKV");
+    case capability::Container::Mp4:
+        return QStringLiteral("MP4");
+    case capability::Container::WebM:
+        return QStringLiteral("WebM");
+    }
+    return QStringLiteral("MKV");
+}
+
+QString VideoCodecLabel(capability::VideoCodec codec) {
+    switch (codec) {
+    case capability::VideoCodec::H264Nvenc:
+        return QStringLiteral("H.264 (NVENC)");
+    case capability::VideoCodec::HevcNvenc:
+        return QStringLiteral("HEVC (NVENC)");
+    case capability::VideoCodec::Av1Nvenc:
+        return QStringLiteral("AV1 (NVENC)");
+    }
+    return QStringLiteral("H.264 (NVENC)");
+}
+
+QString AudioCodecLabel(capability::AudioCodec codec) {
+    switch (codec) {
+    case capability::AudioCodec::AacMf:
+        return QStringLiteral("AAC");
+    case capability::AudioCodec::Opus:
+        return QStringLiteral("Opus");
+    case capability::AudioCodec::Pcm:
+        return QStringLiteral("PCM");
+    }
+    return QStringLiteral("AAC");
+}
+
+QString QualityLabel(recorder_core::NvencQualityPreset quality) {
+    switch (quality) {
+    case recorder_core::NvencQualityPreset::High:
+        return QStringLiteral("High  ·  CQ 19");
+    case recorder_core::NvencQualityPreset::Balanced:
+        return QStringLiteral("Balanced  ·  CQ 24");
+    case recorder_core::NvencQualityPreset::Small:
+        return QStringLiteral("Small  ·  CQ 30");
+    }
+    return QStringLiteral("Balanced  ·  CQ 24");
+}
+
 QLabel* makeSubLabel(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setProperty("labelRole", "subtitle");
-    l->setWordWrap(true);
-    return l;
+    auto* label = new QLabel(text, parent);
+    label->setProperty("labelRole", "subtitle");
+    label->setWordWrap(true);
+    return label;
 }
 
-QLabel* makeSectionLabel(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
-    l->setProperty("labelRole", "section");
-    return l;
+QLabel* makeCardTitle(const QString& text, QWidget* parent) {
+    auto* label = new QLabel(text, parent);
+    label->setProperty("labelRole", "cardTitle");
+    return label;
 }
 
-ui::widgets::ExoCheckBox* makeCheck(const QString& text, QWidget* parent) {
-    return new ui::widgets::ExoCheckBox(text, parent);
+QLabel* makeFieldLabel(const QString& text, QWidget* parent) {
+    auto* label = new QLabel(text.toUpper(), parent);
+    label->setProperty("labelRole", "fieldLabel");
+    return label;
 }
 
 QFrame* makePanel(QWidget* parent) {
     auto* panel = new QFrame(parent);
     panel->setProperty("panelRole", "panel");
     return panel;
+}
+
+ui::widgets::ExoCheckBox* makeCheck(const QString& text, QWidget* parent) {
+    return new ui::widgets::ExoCheckBox(text, parent);
+}
+
+QWidget* makeBaselineRow(const QString& key, QLabel*& value_label, QWidget* parent) {
+    auto* row = new QFrame(parent);
+    row->setProperty("panelRole", "compactRow");
+
+    auto* row_layout = new QHBoxLayout(row);
+    row_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+    row_layout->setSpacing(M::kSpaceSm);
+
+    auto* key_label = makeFieldLabel(key, row);
+    value_label = new QLabel(QStringLiteral("—"), row);
+    value_label->setProperty("labelRole", "mono");
+
+    row_layout->addWidget(key_label);
+    row_layout->addStretch();
+    row_layout->addWidget(value_label);
+    return row;
 }
 
 } // namespace
@@ -48,70 +124,153 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
 
     auto* content = new QWidget();
     auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
-                               ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
-    layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceLg);
+    layout->setContentsMargins(M::kSpaceXl, M::kSpaceXl, M::kSpaceXl, M::kSpaceXl);
+    layout->setSpacing(M::kSpaceLg);
 
-    // Warning note
-    auto* note = new QLabel("These settings override profile defaults. They are intended for testing, benchmarking,"
-                            " or expert tuning.",
-                            content);
-    note->setWordWrap(true);
-    note->setProperty("panelRole", "note");
-    layout->addWidget(note);
-
-    // Non-default behavior
-    layout->addWidget(makeSectionLabel("Non-default Behavior", content));
-    auto* behavior_panel = makePanel(content);
-    auto* behavior_layout = new QVBoxLayout(behavior_panel);
-    behavior_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
-                                        ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
-    behavior_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceXs);
-    behavior_layout->addWidget(
-        makeSubLabel("These values reflect the current resolved baseline profile.", behavior_panel));
-    for (const char* line : {
-             "Container: MKV",
-             "Video codec: AV1 (NVENC)",
-             "Quality: Balanced  ·  CQ 24",
-             "Frame rate: CFR 60 fps",
-             "Resolution: Source",
-             "Audio codec: Opus",
-             "Cursor: Captured",
-         }) {
-        auto* lbl = new QLabel(line, behavior_panel);
-        lbl->setProperty("labelRole", "mono");
-        behavior_layout->addWidget(lbl);
+    // ---- Detail header: ‹ Settings / Advanced ----
+    {
+        auto* header = new QWidget(content);
+        header->setObjectName(QStringLiteral("detailPageHeader"));
+        auto* hl = new QHBoxLayout(header);
+        hl->setContentsMargins(0, 0, 0, 0);
+        hl->setSpacing(4);
+        auto* back_btn = new QPushButton(QString::fromUtf8("\xe2\x80\xb9 Settings"), header);
+        back_btn->setProperty("role", "back");
+        back_btn->setCursor(Qt::PointingHandCursor);
+        auto* crumb = new QLabel(QStringLiteral("/ Advanced"), header);
+        crumb->setProperty("labelRole", "detailBreadcrumb");
+        hl->addWidget(back_btn);
+        hl->addWidget(crumb);
+        hl->addStretch(1);
+        layout->addWidget(header);
+        connect(back_btn, &QPushButton::clicked, this, &AdvancedPage::backToSettingsRequested);
     }
-    layout->addWidget(behavior_panel);
 
-    // Developer / experimental controls
-    layout->addWidget(makeSectionLabel("Developer / Experimental Controls", content));
-    auto* controls_panel = makePanel(content);
+    auto* guidance_panel = new QFrame(content);
+    guidance_panel->setProperty("panelRole", "note");
+    auto* guidance_layout = new QVBoxLayout(guidance_panel);
+    guidance_layout->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
+    guidance_layout->setSpacing(M::kSpaceXs);
+    guidance_layout->addWidget(makeCardTitle(QStringLiteral("Expert controls"), guidance_panel));
+    guidance_layout->addWidget(makeSubLabel(
+        QStringLiteral("Most users should use Settings for day-to-day recording setup. This page is for expert or "
+                       "debug workflows and keeps current behavior unchanged."),
+        guidance_panel));
+    layout->addWidget(guidance_panel);
+
+    auto* columns = new QWidget(content);
+    auto* columns_layout = new QHBoxLayout(columns);
+    columns_layout->setContentsMargins(0, 0, 0, 0);
+    columns_layout->setSpacing(M::kSpaceLg);
+
+    auto* left_col = new QWidget(columns);
+    auto* left_layout = new QVBoxLayout(left_col);
+    left_layout->setContentsMargins(0, 0, 0, 0);
+    left_layout->setSpacing(M::kSpaceSm);
+
+    auto* right_col = new QWidget(columns);
+    auto* right_layout = new QVBoxLayout(right_col);
+    right_layout->setContentsMargins(0, 0, 0, 0);
+    right_layout->setSpacing(M::kSpaceSm);
+
+    columns_layout->addWidget(left_col, 1);
+    columns_layout->addWidget(right_col, 1);
+    layout->addWidget(columns);
+
+    auto* baseline_header = new ui::widgets::SectionRuleHeader(QStringLiteral("CURRENT PROFILE SETTINGS"), left_col);
+    baseline_header->setMeta(QStringLiteral("Read-only"));
+    left_layout->addWidget(baseline_header);
+    left_layout->addWidget(makeSubLabel(
+        QStringLiteral("Resolved settings for the active preset and profile. Use this as a baseline snapshot before "
+                       "changing any expert overrides."),
+        left_col));
+
+    auto* baseline_panel = makePanel(left_col);
+    auto* baseline_layout = new QVBoxLayout(baseline_panel);
+    baseline_layout->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
+    baseline_layout->setSpacing(M::kSpaceSm);
+
+    auto* baseline_state = new QLabel(QStringLiteral("Baseline reflects current preset"), baseline_panel);
+    baseline_state->setProperty("labelRole", "profileStatusBadge");
+    baseline_state->setProperty("stateRole", "ready");
+    baseline_state->setAlignment(Qt::AlignCenter);
+    baseline_layout->addWidget(baseline_state, 0, Qt::AlignLeft);
+
+    baseline_layout->addWidget(makeBaselineRow(QStringLiteral("Profile"), baseline_profile_label_, baseline_panel));
+    baseline_layout->addWidget(makeBaselineRow(QStringLiteral("Container"), baseline_container_label_, baseline_panel));
+    baseline_layout->addWidget(makeBaselineRow(QStringLiteral("Video codec"), baseline_video_label_, baseline_panel));
+    baseline_layout->addWidget(makeBaselineRow(QStringLiteral("Quality"), baseline_quality_label_, baseline_panel));
+    baseline_layout->addWidget(
+        makeBaselineRow(QStringLiteral("Frame rate"), baseline_framerate_label_, baseline_panel));
+    baseline_layout->addWidget(makeBaselineRow(QStringLiteral("Audio codec"), baseline_audio_label_, baseline_panel));
+    baseline_layout->addWidget(makeBaselineRow(QStringLiteral("Cursor"), baseline_cursor_label_, baseline_panel));
+    left_layout->addWidget(baseline_panel);
+    left_layout->addStretch();
+
+    auto* controls_header = new ui::widgets::SectionRuleHeader(QStringLiteral("DEVELOPER / EXPERIMENTAL"), right_col);
+    controls_header->setMeta(QStringLiteral("Use with care"));
+    right_layout->addWidget(controls_header);
+    right_layout->addWidget(makeSubLabel(
+        QStringLiteral("These controls are intended for debugging, profiling, and controlled experiments."),
+        right_col));
+
+    auto* controls_panel = makePanel(right_col);
     auto* controls_layout = new QVBoxLayout(controls_panel);
-    controls_layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd,
-                                        ui::theme::ExoSnapMetrics::kSpaceLg, ui::theme::ExoSnapMetrics::kSpaceMd);
-    controls_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
-    controls_layout->addWidget(makeSectionLabel("Developer Logging Level", controls_panel));
-    log_level_combo_ = new QComboBox(controls_panel);
-    log_level_combo_->setMinimumWidth(200);
-    log_level_combo_->setMaximumWidth(280);
+    controls_layout->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
+    controls_layout->setSpacing(M::kSpaceSm);
+
+    auto* logging_row = new QFrame(controls_panel);
+    logging_row->setProperty("panelRole", "compactRow");
+    auto* logging_layout = new QVBoxLayout(logging_row);
+    logging_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+    logging_layout->setSpacing(M::kSpaceXs);
+    logging_layout->addWidget(makeFieldLabel(QStringLiteral("Developer logging level"), logging_row));
+    log_level_combo_ = new QComboBox(logging_row);
+    log_level_combo_->setMinimumWidth(220);
+    log_level_combo_->setMaximumWidth(320);
     log_level_combo_->addItems({"Off", "Error", "Warning", "Info", "Debug", "Trace"});
-    log_level_combo_->setCurrentIndex(3); // Info default
-    controls_layout->addWidget(log_level_combo_);
+    log_level_combo_->setCurrentIndex(3);
+    logging_layout->addWidget(log_level_combo_);
+    controls_layout->addWidget(logging_row);
 
-    // NVTX profiling
-    controls_layout->addWidget(makeSectionLabel("Profiling", controls_panel));
-    nvtx_check_ = makeCheck("Enable NVTX / profiling markers", controls_panel);
-    controls_layout->addWidget(nvtx_check_);
+    auto* profiling_row = new QFrame(controls_panel);
+    profiling_row->setProperty("panelRole", "compactRow");
+    auto* profiling_layout = new QVBoxLayout(profiling_row);
+    profiling_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+    profiling_layout->setSpacing(M::kSpaceXs);
+    profiling_layout->addWidget(makeFieldLabel(QStringLiteral("Profiling"), profiling_row));
+    nvtx_check_ = makeCheck(QStringLiteral("Enable NVTX / profiling markers"), profiling_row);
+    profiling_layout->addWidget(nvtx_check_);
+    controls_layout->addWidget(profiling_row);
+    right_layout->addWidget(controls_panel);
 
-    controls_layout->addWidget(makeSectionLabel("Safety", controls_panel));
-    auto* reset_btn = new QPushButton("Reset Advanced Overrides", controls_panel);
-    reset_btn->setProperty("role", "ghost");
-    controls_layout->addWidget(reset_btn);
-    layout->addWidget(controls_panel);
+    auto* danger_panel = new QFrame(right_col);
+    danger_panel->setProperty("panelRole", "blocker");
+    auto* danger_layout = new QVBoxLayout(danger_panel);
+    danger_layout->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
+    danger_layout->setSpacing(M::kSpaceXs);
+    danger_layout->addWidget(makeCardTitle(QStringLiteral("Reset overrides"), danger_panel));
+    danger_layout->addWidget(makeSubLabel(
+        QStringLiteral("Resets only Advanced-page overrides to their defaults. Preset and recording behavior remain "
+                       "unchanged."),
+        danger_panel));
+
+    auto* reset_btn = new QPushButton(QStringLiteral("Reset Advanced Overrides"), danger_panel);
+    reset_btn->setProperty("role", "danger");
+    danger_layout->addWidget(reset_btn, 0, Qt::AlignLeft);
+    right_layout->addWidget(danger_panel);
+    right_layout->addStretch();
 
     layout->addStretch();
-    scroll->setWidget(content);
+
+    content->setMaximumWidth(980);
+    auto* centering_host = new QWidget();
+    auto* ch_layout = new QHBoxLayout(centering_host);
+    ch_layout->setContentsMargins(0, 0, 0, 0);
+    ch_layout->addStretch(1);
+    ch_layout->addWidget(content, 0);
+    ch_layout->addStretch(1);
+    scroll->setWidget(centering_host);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
@@ -123,8 +282,28 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
     connect(reset_btn, &QPushButton::clicked, this, &AdvancedPage::onReset);
 }
 
+void AdvancedPage::setBaseline(const OutputSettingsModel& output, const VideoSettingsModel& video,
+                               const QString& profile_name) {
+    if (baseline_profile_label_)
+        baseline_profile_label_->setText(profile_name.isEmpty() ? QStringLiteral("—") : profile_name);
+    if (baseline_container_label_)
+        baseline_container_label_->setText(ContainerLabel(output.container));
+    if (baseline_video_label_)
+        baseline_video_label_->setText(VideoCodecLabel(output.video_codec));
+    if (baseline_quality_label_)
+        baseline_quality_label_->setText(QualityLabel(video.quality));
+    if (baseline_framerate_label_) {
+        const QString mode = video.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR");
+        baseline_framerate_label_->setText(QStringLiteral("%1 %2 fps").arg(mode).arg(video.frame_rate_num));
+    }
+    if (baseline_audio_label_)
+        baseline_audio_label_->setText(AudioCodecLabel(output.audio_codec));
+    if (baseline_cursor_label_)
+        baseline_cursor_label_->setText(video.capture_cursor ? QStringLiteral("Captured") : QStringLiteral("Hidden"));
+}
+
 void AdvancedPage::onReset() {
-    log_level_combo_->setCurrentIndex(3); // Info
+    log_level_combo_->setCurrentIndex(3);
     nvtx_check_->setChecked(false);
 }
 

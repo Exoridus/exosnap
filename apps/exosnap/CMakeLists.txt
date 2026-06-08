@@ -13,6 +13,27 @@ if(NOT Qt6_FOUND)
     return()
 endif()
 
+# ---- Build metadata ----
+set(EXOSNAP_VERSION "1.0-dev")
+
+find_package(Git QUIET)
+
+set(EXOSNAP_BUILD_INFO_HEADER "${CMAKE_CURRENT_BINARY_DIR}/ExoSnapBuildInfo.h")
+add_custom_target(exosnap_build_info
+    ALL
+    COMMAND
+        ${CMAKE_COMMAND}
+        -DEXOSNAP_VERSION=${EXOSNAP_VERSION}
+        -DEXOSNAP_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -DEXOSNAP_BUILD_INFO_TEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/ExoSnapBuildInfo.h.in
+        -DEXOSNAP_BUILD_INFO_OUTPUT=${EXOSNAP_BUILD_INFO_HEADER}
+        -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/GenerateBuildInfo.cmake
+    BYPRODUCTS "${EXOSNAP_BUILD_INFO_HEADER}"
+    COMMENT "Refreshing ExoSnap build metadata"
+    VERBATIM
+)
+
 qt_add_executable(exosnap WIN32
     main.cpp
     startup_log.h
@@ -20,6 +41,7 @@ qt_add_executable(exosnap WIN32
     assets/brand/exosnap_brand.qrc
     assets/fonts/exosnap_fonts.qrc
     ui/theme/ExoSnapPalette.h
+    ui/theme/ExoSnapAccents.h
     ui/theme/ExoSnapMetrics.h
     ui/theme/ExoSnapTheme.h
     ui/theme/ExoSnapTheme.cpp
@@ -30,14 +52,35 @@ qt_add_executable(exosnap WIN32
     ui/chrome/OperationalTitleBar.cpp
     ui/chrome/GlobalRecordingBar.h
     ui/chrome/GlobalRecordingBar.cpp
+    ui/dialogs/AboutOverlay.h
+    ui/dialogs/AboutOverlay.cpp
+    ui/dialogs/SourcePickerPanel.h
+    ui/dialogs/SourcePickerPanel.cpp
+    ui/dialogs/SourcePickerDialog.h
+    ui/dialogs/SourcePickerDialog.cpp
+    ui/dialogs/SourcePickerOverlay.h
+    ui/dialogs/SourcePickerOverlay.cpp
+    ui/dialogs/SourcePickerWindowRules.h
     ui/widgets/SectionRuleHeader.h
     ui/widgets/SectionRuleHeader.cpp
+    ui/widgets/KeycapChip.h
+    ui/widgets/KeycapChip.cpp
     ui/widgets/StatusPill.h
     ui/widgets/StatusPill.cpp
     ui/widgets/PreviewSurface.h
     ui/widgets/PreviewSurface.cpp
+    ui/widgets/CameraPreview.h
+    ui/widgets/CameraPreview.cpp
+    ui/widgets/WebcamSetupPanel.h
+    ui/widgets/WebcamSetupPanel.cpp
     ui/widgets/CaptureTargetCard.h
     ui/widgets/CaptureTargetCard.cpp
+    ui/widgets/RegionPresetCard.h
+    ui/widgets/RegionPresetCard.cpp
+    ui/widgets/PipelineStepCard.h
+    ui/widgets/PipelineStepCard.cpp
+    ui/widgets/PipelineFlow.h
+    ui/widgets/PipelineFlow.cpp
     ui/widgets/CodecCard.h
     ui/widgets/CodecCard.cpp
     ui/widgets/VUMeterWidget.h
@@ -52,16 +95,18 @@ qt_add_executable(exosnap WIN32
     ui/widgets/RegionSelectionOverlay.cpp
     ui/widgets/AudioSourceRow.h
     ui/widgets/AudioSourceRow.cpp
+    ui/widgets/AudioSourceToggle.h
+    ui/widgets/AudioSourceToggle.cpp
+    ui/widgets/CountdownSelect.h
+    ui/widgets/CountdownSelect.cpp
+    ui/widgets/TransportDock.h
+    ui/widgets/TransportDock.cpp
     MainWindow.h
     MainWindow.cpp
     pages/RecordPage.h
     pages/RecordPage.cpp
-    pages/VideoPage.h
-    pages/VideoPage.cpp
-    pages/AudioPage.h
-    pages/AudioPage.cpp
-    pages/OutputPage.h
-    pages/OutputPage.cpp
+    pages/ConfigPage.h
+    pages/ConfigPage.cpp
     pages/HotkeysPage.h
     pages/HotkeysPage.cpp
     pages/WebcamPage.h
@@ -74,6 +119,11 @@ qt_add_executable(exosnap WIN32
     pages/AdvancedPage.cpp
     services/PreviewService.h
     services/PreviewService.cpp
+    services/PreviewHelpers.h
+    services/ThumbnailCapture.h
+    services/ThumbnailCapture.cpp
+    services/DxgiPreviewRenderer.h
+    services/DxgiPreviewRenderer.cpp
     services/WebcamService.h
     services/WebcamService.cpp
     services/RecordingCoordinator.h
@@ -112,6 +162,9 @@ qt_add_executable(exosnap WIN32
     diagnostics/SelfTestRunner.cpp
     viewmodels/RecordViewModel.h
     viewmodels/RecordViewModel.cpp
+    viewmodels/PresentationState.h
+    viewmodels/PresentationStateBuilder.h
+    viewmodels/PresentationStateBuilder.cpp
 )
 
 if(WIN32)
@@ -119,15 +172,27 @@ if(WIN32)
 endif()
 
 set_target_properties(exosnap PROPERTIES AUTOMOC ON AUTORCC ON OUTPUT_NAME "exosnap")
+target_compile_definitions(exosnap PRIVATE NOMINMAX EXOSNAP_BUILD_CONFIG="$<CONFIG>")
+add_dependencies(exosnap exosnap_build_info)
 
 target_link_libraries(exosnap PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
     recorder_core exosnap::capability exosnap::warnings
-    d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
+    d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
     mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib
 )
 
-target_include_directories(exosnap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(exosnap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+
+exosnap_add_gtest(
+    NAME presentation_state_tests
+    TEST_PREFIX state.
+    SOURCES
+        tests/test_presentation_state.cpp
+        viewmodels/PresentationStateBuilder.cpp
+    LIBRARIES exosnap_capability recorder_core
+)
+target_include_directories(presentation_state_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME record_viewmodel_audio_tests
@@ -172,6 +237,7 @@ exosnap_add_gtest(
         models/FilenameBuilder.cpp
         models/OutputPathValidator.cpp
         models/OutputPathPolicy.cpp
+        diagnostics/AppLog.cpp
     LIBRARIES Qt6::Core Qt6::Gui exosnap_capability recorder_core
 )
 target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -234,3 +300,209 @@ exosnap_add_gtest(
 )
 target_include_directories(global_recording_bar_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(global_recording_bar_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME operational_title_bar_tests
+    TEST_PREFIX chrome.
+    SOURCES
+        tests/test_operational_title_bar.cpp
+        ui/chrome/OperationalTitleBar.cpp
+        ui/brand/BrandMarkWidget.cpp
+        ui/widgets/StatusPill.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(operational_title_bar_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(operational_title_bar_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME config_page_tests
+    TEST_PREFIX config.
+    SOURCES
+        tests/test_config_page.cpp
+        pages/ConfigPage.cpp
+        viewmodels/PresentationStateBuilder.cpp
+        ui/widgets/ComboBoxWheelFilter.cpp
+        ui/widgets/CameraPreview.cpp
+        ui/widgets/ExoToggle.cpp
+        ui/widgets/VUMeterWidget.cpp
+        ui/widgets/WebcamSetupPanel.cpp
+        models/FilenameBuilder.cpp
+        models/OutputPathPolicy.cpp
+        models/OutputPathValidator.cpp
+        models/RecordingProfile.cpp
+        services/WebcamService.cpp
+        models/OutputSettingsModel.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(config_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(config_page_tests PROPERTIES AUTOMOC ON)
+target_link_libraries(config_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
+
+exosnap_add_gtest(
+    NAME source_picker_dialog_tests
+    TEST_PREFIX source.
+    SOURCES
+        tests/test_source_picker_dialog.cpp
+        ui/dialogs/SourcePickerPanel.cpp
+        ui/dialogs/SourcePickerDialog.cpp
+        ui/widgets/CaptureTargetCard.cpp
+        ui/widgets/RegionPresetCard.cpp
+        services/ThumbnailCapture.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
+)
+target_include_directories(source_picker_dialog_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(source_picker_dialog_tests PRIVATE NOMINMAX)
+set_target_properties(source_picker_dialog_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME source_picker_overlay_tests
+    TEST_PREFIX source.
+    SOURCES
+        tests/test_source_picker_overlay.cpp
+        ui/dialogs/SourcePickerOverlay.cpp
+        ui/dialogs/SourcePickerPanel.cpp
+        ui/dialogs/SourcePickerDialog.cpp
+        ui/widgets/CaptureTargetCard.cpp
+        ui/widgets/RegionPresetCard.cpp
+        services/ThumbnailCapture.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
+)
+target_include_directories(source_picker_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(source_picker_overlay_tests PRIVATE NOMINMAX)
+set_target_properties(source_picker_overlay_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME webcam_page_tests
+    TEST_PREFIX webcam.
+    SOURCES
+        tests/test_webcam_page.cpp
+        pages/WebcamPage.cpp
+        ui/widgets/CameraPreview.cpp
+        ui/widgets/ExoToggle.cpp
+        ui/widgets/ComboBoxWheelFilter.cpp
+        services/WebcamService.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(webcam_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(webcam_page_tests PROPERTIES AUTOMOC ON)
+target_link_libraries(webcam_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
+
+exosnap_add_gtest(
+    NAME hotkeys_page_tests
+    TEST_PREFIX hotkey.
+    SOURCES
+        tests/test_hotkeys_page.cpp
+        pages/HotkeysPage.cpp
+        ui/widgets/SectionRuleHeader.cpp
+        ui/widgets/KeycapChip.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(hotkeys_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(hotkeys_page_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME logs_page_tests
+    TEST_PREFIX log.
+    SOURCES
+        tests/test_logs_page.cpp
+        pages/LogsPage.cpp
+        diagnostics/AppLog.cpp
+        ui/widgets/SectionRuleHeader.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(logs_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(logs_page_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME about_overlay_tests
+    TEST_PREFIX about.
+    SOURCES
+        tests/test_about_overlay.cpp
+        ui/dialogs/AboutOverlay.cpp
+        ui/brand/BrandMarkWidget.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(about_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+target_compile_definitions(about_overlay_tests PRIVATE EXOSNAP_BUILD_CONFIG="$<CONFIG>")
+add_dependencies(about_overlay_tests exosnap_build_info)
+set_target_properties(about_overlay_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME advanced_page_tests
+    TEST_PREFIX advanced.
+    SOURCES
+        tests/test_advanced_page.cpp
+        pages/AdvancedPage.cpp
+        ui/widgets/SectionRuleHeader.cpp
+        ui/widgets/ComboBoxWheelFilter.cpp
+        ui/widgets/ExoCheckBox.cpp
+        models/OutputSettingsModel.cpp
+        models/OutputPathPolicy.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(advanced_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(advanced_page_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME preview_helpers_tests
+    TEST_PREFIX preview.
+    SOURCES
+        tests/test_preview_helpers.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(preview_helpers_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+    NAME region_preview_crop_tests
+    TEST_PREFIX preview.
+    SOURCES
+        tests/test_region_preview_crop.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(region_preview_crop_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+    NAME transport_dock_tests
+    TEST_PREFIX record.
+    SOURCES
+        tests/test_transport_dock.cpp
+        ui/widgets/TransportDock.cpp
+        ui/widgets/AudioSourceToggle.cpp
+        ui/widgets/CountdownSelect.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
+)
+target_include_directories(transport_dock_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(transport_dock_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME pipeline_flow_tests
+    TEST_PREFIX diagnostic.
+    SOURCES
+        tests/test_pipeline_flow.cpp
+        ui/widgets/PipelineFlow.cpp
+        ui/widgets/PipelineStepCard.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(pipeline_flow_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(pipeline_flow_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME diagnostics_page_tests
+    TEST_PREFIX diagnostic.
+    SOURCES
+        tests/test_diagnostics_page.cpp
+        pages/DiagnosticsPage.cpp
+        ui/widgets/SectionRuleHeader.cpp
+        ui/widgets/PipelineFlow.cpp
+        ui/widgets/PipelineStepCard.cpp
+        diagnostics/DiagnosticResult.cpp
+        diagnostics/CapabilitySummary.cpp
+        diagnostics/ConfigSummary.cpp
+        diagnostics/RecommendationEngine.cpp
+        diagnostics/SelfTestRunner.cpp
+        models/OutputSettingsModel.cpp
+        models/OutputPathPolicy.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(diagnostics_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(diagnostics_page_tests PROPERTIES AUTOMOC ON)

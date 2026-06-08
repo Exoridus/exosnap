@@ -217,9 +217,13 @@ class RecorderSession {
     void Pause();
     void Resume();
 
-    // Register a stats callback invoked approximately every 250 ms from an
+    // Register a stats callback invoked approximately every 264 ms from an
     // internal worker thread.  Must be set before calling Record().
     void SetStatsCallback(StatsCallback cb);
+
+    // Register a meter callback invoked approximately every 33 ms from an
+    // internal worker thread.  Must be set before calling Record().
+    void SetMeterCallback(MeterCallback cb);
 
   private:
     struct Impl;
