@@ -118,6 +118,10 @@ TEST_F(OperationalTitleBarTest, StatusPill_ReflectsReadyRecordingPaused) {
     bar.setStatusLabel(QStringLiteral("PAUSED"));
     EXPECT_EQ(pill->text(), QStringLiteral("Paused"));
     EXPECT_EQ(pill->tone(), ui::widgets::StatusPill::Tone::Warn);
+
+    bar.setStatusLabel(QStringLiteral("COUNTDOWN"));
+    EXPECT_EQ(pill->text(), QStringLiteral("Countdown"));
+    EXPECT_EQ(pill->tone(), ui::widgets::StatusPill::Tone::Warn);
 }
 
 TEST_F(OperationalTitleBarTest, StatusPill_ShowsSavedAfterCompletedRecording) {

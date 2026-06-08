@@ -33,8 +33,12 @@ class SourcePickerOverlay : public QWidget {
 
     void setScreenOptions(const std::vector<SourceOption>& options);
     void setWindowOptions(const std::vector<SourceOption>& options);
-    void setRegionState(const QString& summary, bool has_region, bool select_on_record);
+    void setRegionState(const QString& summary, bool has_region, bool select_on_record,
+                        const QRect& region_rect = QRect());
     void setCurrentSection(Section section, int target_index);
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    void applyVisualRegionPreset(int preset_w, int preset_h);
+#endif
 
   signals:
     void sourceSelected(SourcePickerPanel::SelectionResult result);

@@ -146,6 +146,7 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
             [this]() { emit sourceToggleClicked(QStringLiteral("webcam")); });
     connect(app_toggle_, &AudioSourceToggle::clicked, this,
             [this]() { emit sourceToggleClicked(QStringLiteral("app")); });
+    connect(countdown_, &CountdownSelect::selectedSecondsChanged, this, &TransportDock::countdownSecondsChanged);
 
     applyState();
 }
@@ -166,6 +167,7 @@ void TransportDock::setPrimaryEnabled(bool enabled) {
 
 void TransportDock::applyState() {
     const bool ready = state_ == State::Ready;
+    const bool countdown = state_ == State::Countdown;
     const bool recording = state_ == State::Recording;
     const bool paused = state_ == State::Paused;
     const bool completed = state_ == State::Completed;
@@ -173,12 +175,16 @@ void TransportDock::applyState() {
     toggles_row_->setVisible(!completed);
     completed_row_->setVisible(completed);
 
-    countdown_->setVisible(ready);
-    record_btn_->setVisible(ready);
+    countdown_->setVisible(ready || countdown);
+    countdown_->setInteractive(ready && primary_enabled_);
+    record_btn_->setVisible(ready || countdown);
     pause_btn_->setVisible(recording);
     resume_btn_->setVisible(paused);
     stop_btn_->setVisible(recording || paused);
     record_again_btn_->setVisible(completed);
+
+    record_btn_->setText(countdown ? QStringLiteral("Cancel") : QStringLiteral("Record"));
+    setStyledProperty(record_btn_, "dockAction", countdown ? QStringLiteral("stop") : QStringLiteral("record"));
 
     record_btn_->setEnabled(primary_enabled_);
     pause_btn_->setEnabled(primary_enabled_);
@@ -186,7 +192,11 @@ void TransportDock::applyState() {
     stop_btn_->setEnabled(primary_enabled_);
     record_again_btn_->setEnabled(primary_enabled_);
 
-    const char* state_name = ready ? "ready" : recording ? "recording" : paused ? "paused" : "completed";
+    const char* state_name = ready       ? "ready"
+                             : countdown ? "countdown"
+                             : recording ? "recording"
+                             : paused    ? "paused"
+                                         : "completed";
     setStyledProperty(this, "dockState", QString::fromLatin1(state_name));
 }
 
@@ -196,6 +206,15 @@ void TransportDock::setTimerText(const QString& text) {
 
 void TransportDock::setTimerRole(const QString& role) {
     setStyledProperty(timer_label_, "timerState", role);
+}
+
+int TransportDock::countdownSeconds() const {
+    return countdown_ ? countdown_->selectedSeconds() : 0;
+}
+
+void TransportDock::setCountdownSeconds(int seconds) {
+    if (countdown_)
+        countdown_->setSelectedSeconds(seconds);
 }
 
 void TransportDock::setToggleState(const QString& key, bool on, bool interactive) {

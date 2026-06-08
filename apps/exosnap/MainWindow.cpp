@@ -938,14 +938,15 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
         const QString upper = record_status_label_;
         const bool locked = (upper == QStringLiteral("REC") || upper == QStringLiteral("PAUSED") ||
                              upper == QStringLiteral("STOPPING") || upper == QStringLiteral("CHECKING") ||
-                             upper == QStringLiteral("STARTING"));
+                             upper == QStringLiteral("STARTING") || upper == QStringLiteral("COUNTDOWN"));
         config_page_->setRecordingControlsLocked(locked);
     }
 
     applyTitleBarStatus();
     switchRecordingIcon(recording_active_);
 
-    if (recording && isVisible() && !isMinimized() && stack_->currentIndex() != 0)
+    if ((recording || record_status_label_ == QStringLiteral("COUNTDOWN")) && isVisible() && !isMinimized() &&
+        stack_->currentIndex() != 0)
         navigateToPage(kRecordPageIndex);
 }
 
@@ -1619,7 +1620,28 @@ void MainWindow::applyVisualSourcePickerScenario(const visual::VisualScenario& s
 
     source_picker_overlay_->setScreenOptions({VisualScreenOption()});
     source_picker_overlay_->setWindowOptions({VisualWindowOption()});
-    source_picker_overlay_->setRegionState(QStringLiteral("VISUAL TEST: 1280 × 720 on Display 1"), true, false);
+    const QRect visual_region(scenario.region_x, scenario.region_y, scenario.region_width, scenario.region_height);
+    bool has_region = true;
+    bool select_on_record = false;
+    QString region_summary =
+        QStringLiteral("VISUAL TEST: %1 × %2 on Display 1").arg(visual_region.width()).arg(visual_region.height());
+    if (scenario.region_state == visual::VisualRegionState::Empty ||
+        scenario.region_state == visual::VisualRegionState::None) {
+        has_region = false;
+        select_on_record = true;
+        region_summary = QStringLiteral("VISUAL TEST: no saved region");
+    } else if (scenario.region_state == visual::VisualRegionState::Editing) {
+        region_summary = QStringLiteral("VISUAL TEST EDITING: %1, %2 — %3 × %4")
+                             .arg(visual_region.x())
+                             .arg(visual_region.y())
+                             .arg(visual_region.width())
+                             .arg(visual_region.height());
+    } else if (scenario.region_state == visual::VisualRegionState::Invalid) {
+        has_region = false;
+        select_on_record = true;
+        region_summary = QStringLiteral("VISUAL TEST INVALID: below 64 × 64 minimum");
+    }
+    source_picker_overlay_->setRegionState(region_summary, has_region, select_on_record, visual_region);
 
     ui::dialogs::SourcePickerPanel::Section section = ui::dialogs::SourcePickerPanel::Section::Screens;
     int target_index = 0;
@@ -1632,6 +1654,11 @@ void MainWindow::applyVisualSourcePickerScenario(const visual::VisualScenario& s
     }
 
     source_picker_overlay_->setCurrentSection(section, target_index);
+    if (scenario.region_state == visual::VisualRegionState::Preset16x9) {
+        source_picker_overlay_->applyVisualRegionPreset(1920, 1080);
+    } else if (scenario.region_state == visual::VisualRegionState::Preset9x16) {
+        source_picker_overlay_->applyVisualRegionPreset(1080, 1920);
+    }
     source_picker_overlay_->openOverlay();
 }
 

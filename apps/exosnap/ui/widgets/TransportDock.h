@@ -23,7 +23,7 @@ class CountdownSelect;
 class TransportDock : public QFrame {
     Q_OBJECT
   public:
-    enum class State { Ready, Recording, Paused, Completed };
+    enum class State { Ready, Countdown, Recording, Paused, Completed };
     Q_ENUM(State)
 
     explicit TransportDock(QWidget* parent = nullptr);
@@ -38,7 +38,10 @@ class TransportDock : public QFrame {
     void setPrimaryEnabled(bool enabled);
 
     void setTimerText(const QString& text);
-    void setTimerRole(const QString& role); // idle | recording | paused | done | blocked
+    void setTimerRole(const QString& role); // idle | countdown | recording | paused | done | blocked
+
+    [[nodiscard]] int countdownSeconds() const;
+    void setCountdownSeconds(int seconds);
 
     // Left-zone source toggle: `on` reflects current config; `interactive`
     // controls whether the user may click it now (read-only status otherwise).
@@ -60,6 +63,7 @@ class TransportDock : public QFrame {
     void openFolderClicked();
     void filenameClicked();
     void sourceToggleClicked(const QString& key);
+    void countdownSecondsChanged(int seconds);
 
   private:
     void applyState();

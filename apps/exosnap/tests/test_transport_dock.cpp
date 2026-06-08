@@ -315,6 +315,42 @@ TEST_F(TransportDockTest, Countdown_PresentInReadyState) {
     auto* countdown = dock.findChild<QComboBox*>(QStringLiteral("recordCountdownSelect"));
     ASSERT_NE(countdown, nullptr);
     EXPECT_TRUE(countdown->isVisibleTo(&dock));
+    EXPECT_TRUE(countdown->isEnabled());
+    EXPECT_EQ(dock.countdownSeconds(), 0);
+}
+
+TEST_F(TransportDockTest, Countdown_CanSelectSupportedDelays) {
+    TransportDock dock;
+    dock.setState(TransportDock::State::Ready);
+
+    int signal_count = 0;
+    int emitted_seconds = -1;
+    QObject::connect(&dock, &TransportDock::countdownSecondsChanged, &dock, [&](int seconds) {
+        ++signal_count;
+        emitted_seconds = seconds;
+    });
+    dock.setCountdownSeconds(3);
+
+    EXPECT_EQ(dock.countdownSeconds(), 3);
+    EXPECT_EQ(signal_count, 1);
+    EXPECT_EQ(emitted_seconds, 3);
+}
+
+TEST_F(TransportDockTest, Countdown_StateShowsCancelAndLocksSelector) {
+    TransportDock dock;
+    dock.setCountdownSeconds(3);
+    dock.setState(TransportDock::State::Countdown);
+
+    auto* countdown = dock.findChild<QComboBox*>(QStringLiteral("recordCountdownSelect"));
+    auto* record = dock.findChild<QPushButton*>(QStringLiteral("recordDockRecord"));
+    ASSERT_NE(countdown, nullptr);
+    ASSERT_NE(record, nullptr);
+
+    EXPECT_TRUE(countdown->isVisibleTo(&dock));
+    EXPECT_FALSE(countdown->isEnabled());
+    EXPECT_EQ(dock.countdownSeconds(), 3);
+    EXPECT_EQ(record->text(), QStringLiteral("Cancel"));
+    EXPECT_EQ(record->property("dockAction").toString(), QStringLiteral("stop"));
 }
 
 TEST_F(TransportDockTest, Countdown_HiddenDuringRecordingAndPaused) {

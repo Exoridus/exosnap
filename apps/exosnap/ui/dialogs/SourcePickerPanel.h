@@ -77,14 +77,19 @@ class SourcePickerPanel : public QWidget {
         int region_base_target_index = -1;
     };
 
-    static QRect ComputePresetRegionRect(int preset_w, int preset_h, const QRect& monitor);
+    static QRect ComputePresetRegionRect(int preset_w, int preset_h, const QRect& monitor,
+                                         const QRect& existing_region = QRect());
 
     explicit SourcePickerPanel(QWidget* parent = nullptr);
 
     void setScreenOptions(const std::vector<SourceOption>& options);
     void setWindowOptions(const std::vector<SourceOption>& options);
-    void setRegionState(const QString& summary, bool has_region, bool select_on_record);
+    void setRegionState(const QString& summary, bool has_region, bool select_on_record,
+                        const QRect& region_rect = QRect());
     void setCurrentSelection(Section section, int target_index);
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    void applyVisualRegionPreset(int preset_w, int preset_h);
+#endif
 
     bool selectSource(Section section, int target_index);
     SelectionResult selectionResult() const;
@@ -180,6 +185,7 @@ class SourcePickerPanel : public QWidget {
     Section selected_section_ = Section::Screens;
     int selected_target_index_ = -1;
     bool has_region_ = false;
+    QRect current_region_rect_;
     QString region_summary_;
     bool pick_region_now_ = false;
     bool show_unavailable_windows_ = false;

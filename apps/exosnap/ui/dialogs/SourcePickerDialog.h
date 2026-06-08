@@ -19,13 +19,15 @@ class SourcePickerDialog : public QDialog {
     using SourceOption = SourcePickerPanel::SourceOption;
     using SelectionResult = SourcePickerPanel::SelectionResult;
 
-    static QRect ComputePresetRegionRect(int preset_w, int preset_h, const QRect& monitor);
+    static QRect ComputePresetRegionRect(int preset_w, int preset_h, const QRect& monitor,
+                                         const QRect& existing_region = QRect());
 
     explicit SourcePickerDialog(QWidget* parent = nullptr, Qt::WindowFlags flags = Qt::WindowFlags());
 
     void setScreenOptions(const std::vector<SourceOption>& options);
     void setWindowOptions(const std::vector<SourceOption>& options);
-    void setRegionState(const QString& summary, bool has_region, bool select_on_record);
+    void setRegionState(const QString& summary, bool has_region, bool select_on_record,
+                        const QRect& region_rect = QRect());
     void setCurrentSelection(Section section, int target_index);
     bool selectSource(Section section, int target_index);
     SelectionResult selectionResult() const;

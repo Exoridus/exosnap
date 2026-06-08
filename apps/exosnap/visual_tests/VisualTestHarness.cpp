@@ -99,9 +99,15 @@ QJsonObject BuildVisualManifest(const MainWindow& window, const VisualScenario& 
     root.insert(QStringLiteral("title"), scenario.title);
     root.insert(QStringLiteral("page"), ToString(scenario.page));
     root.insert(QStringLiteral("record_state"), ToString(scenario.record_state));
+    root.insert(QStringLiteral("countdown_seconds"), scenario.countdown_seconds);
+    root.insert(QStringLiteral("countdown_remaining"), scenario.countdown_remaining);
     root.insert(QStringLiteral("settings_target"), ToString(scenario.settings_target));
     root.insert(QStringLiteral("source_picker_tab"), ToString(scenario.source_picker_tab));
     root.insert(QStringLiteral("webcam_state"), ToString(scenario.webcam_state));
+    root.insert(QStringLiteral("region_state"), ToString(scenario.region_state));
+    root.insert(QStringLiteral("region_edit_mode"), ToString(scenario.region_edit_mode));
+    root.insert(QStringLiteral("region_geometry"),
+                RectToJson(QRect(scenario.region_x, scenario.region_y, scenario.region_width, scenario.region_height)));
     root.insert(QStringLiteral("ready_marker"), QStringLiteral("VISUAL_TEST_READY:%1").arg(scenario.id));
     root.insert(QStringLiteral("window_geometry"), RectToJson(window.geometry()));
 
@@ -163,6 +169,12 @@ int RunVisualTest(QApplication& app, MainWindow& window, const VisualTestOptions
     if (scenario == nullptr) {
         qCritical().noquote() << "Unknown visual scenario:" << options.scenario_id;
         qCritical().noquote() << "Known scenarios:" << VisualScenarioIds().join(QStringLiteral(", "));
+        return VisualRunnerExitCode(false, false, false, !options.manifest_path.isEmpty(),
+                                    !options.screenshot_path.isEmpty());
+    }
+    QString validation_error;
+    if (!ValidateVisualScenario(*scenario, &validation_error)) {
+        qCritical().noquote() << "Invalid visual scenario:" << options.scenario_id << validation_error;
         return VisualRunnerExitCode(false, false, false, !options.manifest_path.isEmpty(),
                                     !options.screenshot_path.isEmpty());
     }

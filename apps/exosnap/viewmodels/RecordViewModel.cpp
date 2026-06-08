@@ -298,6 +298,9 @@ void RecordViewModel::SetState(UiRecordingState new_state) {
     case UiRecordingState::Blocked:
         state_text = L"Blocked";
         break;
+    case UiRecordingState::Countdown:
+        state_text = L"Countdown";
+        break;
     case UiRecordingState::Preparing:
         state_text = L"Preparing...";
         break;
