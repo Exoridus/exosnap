@@ -106,6 +106,11 @@ class RecordPage : public QWidget {
 #endif
 
   signals:
+    // Emitted as the LAST statement of initCoordinator(), once all init work
+    // (targets enumerated, coordinator ready) is complete.  MainWindow connects
+    // to this to re-apply the selected preset after deferred init clobbers it.
+    void coordinatorInitialized();
+
     void chromeStateChanged(bool recording, const QString& status_label, const QString& context_text);
     void chromeRuntimeMetricsChanged(const QString& elapsed_text, const QString& bitrate_text, const QString& drop_text,
                                      const QString& size_text);

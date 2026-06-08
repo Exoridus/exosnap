@@ -539,6 +539,112 @@ TEST(RecordingPreset, NormalizedEquals_DifferentEnabledSets_NotEqual) {
 }
 
 // ===========================================================================
+// ConfigDirtyEquivalent — capture fields do NOT affect dirty state
+// ===========================================================================
+
+TEST(RecordingPreset, DirtyEquivalent_IdenticalConfigs_Equivalent) {
+    const RecordingPresetConfig a = MakeDefaultPreset().config;
+    const RecordingPresetConfig b = MakeDefaultPreset().config;
+    EXPECT_TRUE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(RecordingPreset, DirtyEquivalent_CaptureKindChange_StillEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.capture.kind = PresetCaptureKind::Window;
+    // Capture kind is excluded from dirty; must still be equivalent.
+    EXPECT_TRUE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(RecordingPreset, DirtyEquivalent_CaptureDisplayKeyChange_StillEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.capture.display_key = "MONITOR-001";
+    // display_key is excluded from dirty; preset must not show dirty on startup.
+    EXPECT_TRUE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(RecordingPreset, DirtyEquivalent_CaptureWindowKeyChange_StillEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.capture.window_key = "chrome.exe|Google Chrome";
+    EXPECT_TRUE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(RecordingPreset, DirtyEquivalent_CaptureRegionChange_StillEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    a.capture.kind = PresetCaptureKind::Region;
+    a.capture.has_region = true;
+    a.capture.region.x = 0;
+    a.capture.region.y = 0;
+    a.capture.region.width = 640;
+    a.capture.region.height = 480;
+    a.capture.region_display_key = "\\\\?\\DISPLAY#SAM#001";
+
+    RecordingPresetConfig b = a;
+    b.capture.region.width = 800;
+    b.capture.region_display_key = "\\\\?\\DISPLAY#SAM#002";
+    // Region geometry and region_display_key excluded from dirty.
+    EXPECT_TRUE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(RecordingPreset, DirtyEquivalent_VideoQualityChange_NotEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.video.quality = recorder_core::NvencQualityPreset::Small;
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(RecordingPreset, DirtyEquivalent_AudioRowEnabledFlip_NotEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.source_rows[0].enabled = false; // Disable SystemOutput
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(RecordingPreset, DirtyEquivalent_CountdownChange_NotEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.countdown_seconds = 5;
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(RecordingPreset, DirtyEquivalent_WebcamMirrorChange_NotEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.webcam.mirror = true;
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(RecordingPreset, DirtyEquivalent_OutputContainerChange_NotEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.output.container = capability::Container::Mp4;
+    ReconcileContainerCodecs(b.output);
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(RecordingPreset, DirtyEquivalent_PipWithinTol_Equivalent) {
+    const RecordingPresetConfig a = MakeDefaultPreset().config;
+    const RecordingPresetConfig b = WithPipDelta(a, 5e-4f);
+    EXPECT_TRUE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(RecordingPreset, DirtyEquivalent_PipBeyondTol_NotEquivalent) {
+    const RecordingPresetConfig a = MakeDefaultPreset().config;
+    const RecordingPresetConfig b = WithPipDelta(a, 5e-3f);
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+// NormalizedConfigEquals STILL detects capture changes (unchanged behaviour).
+TEST(RecordingPreset, NormalizedEquals_StillDetects_CaptureDisplayKeyChange) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.capture.display_key = "MONITOR-001";
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+// ===========================================================================
 // GeneratePresetId
 // ===========================================================================
 

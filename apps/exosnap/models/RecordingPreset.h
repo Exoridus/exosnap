@@ -132,6 +132,19 @@ void ReconcileContainerCodecs(OutputSettingsModel& output);
 // Floating-point fields use tolerances (see implementation for details).
 [[nodiscard]] bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPresetConfig& b);
 
+// Returns true when `a` and `b` are dirty-equivalent — i.e. the user has NOT
+// made meaningful changes.  Identical to NormalizedConfigEquals EXCEPT that the
+// capture sub-struct (kind, display_key, window_key, has_region, region,
+// region_display_key) is NOT compared.  Capture identity is transient: it
+// depends on device availability and on auto-resolution (the default preset
+// stores an empty display_key meaning "primary/any", but once applied the live
+// policy holds a concrete resolved key).  Comparing capture would cause the
+// preset to appear spuriously dirty on startup, on monitor replug, etc.
+// Per spec: temporary availability changes must not make the preset dirty.
+// NOTE: NormalizedConfigEquals is kept for persistence round-trip verification
+// and must NOT be changed.
+[[nodiscard]] bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPresetConfig& b);
+
 // ---------------------------------------------------------------------------
 // Filename token helpers (previously in RecordingProfile.h)
 // ---------------------------------------------------------------------------

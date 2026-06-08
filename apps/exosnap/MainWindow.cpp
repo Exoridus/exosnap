@@ -660,6 +660,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(this, &MainWindow::pauseToggleRequested, record_page_, &RecordPage::onHotkeyPauseToggle);
     connect(hotkeys_page_, &HotkeysPage::bindingChanged, this, &MainWindow::onHotkeyBindingChanged);
     connect(record_page_, &RecordPage::audioMeterLevelsUpdated, config_page_, &ConfigPage::setAudioMeterLevels);
+
+    // Re-apply the selected preset once the deferred coordinator init completes.
+    // initCoordinator() resets audio rows and enumerates targets, clobbering the
+    // preset applied in the constructor.  This connection restores the exact audio
+    // rows and capture target from the preset after all init work is done.
+    connect(record_page_, &RecordPage::coordinatorInitialized, this,
+            [this]() { applyPresetConfig(preset_registry_.SelectedSavedConfig()); });
+
     connect(config_page_, &ConfigPage::diagnosticsRequested, this, [this]() {
         refreshDiagnosticsData();
         navigateToPage(kDiagnosticsPageIndex);
@@ -1273,13 +1281,16 @@ void MainWindow::applyPresetConfig(const RecordingPresetConfig& cfg) {
     live_webcam_ = cfg2.webcam;
 
     // Push to pages (handlers early-return while applying_preset_).
+    // Order matters: applyCapturePolicy can rebuild/reset audio rows via
+    // ApplyTargetKindPreservingAudio; applyPersistedAudioSettings must come LAST
+    // so the preset's exact audio rows win over any kind-default rows.
     if (record_page_) {
         record_page_->setOutputSettings(cfg2.output);
         record_page_->setVideoSettings(cfg2.video);
-        record_page_->applyPersistedAudioSettings(cfg2.audio);
         record_page_->setWebcamSettings(cfg2.webcam);
         record_page_->applyCapturePolicy(cfg2.capture);
         record_page_->setCountdownSeconds(cfg2.countdown_seconds);
+        record_page_->applyPersistedAudioSettings(cfg2.audio); // LAST: wins over kind-defaults
     }
     if (config_page_) {
         config_page_->setOutputSettings(cfg2.output);

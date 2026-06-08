@@ -255,7 +255,10 @@ void RecordingPresetRegistry::ResetAllToDefault() {
 }
 
 bool RecordingPresetRegistry::IsSelectedDirty(const RecordingPresetConfig& live_config) const {
-    return !NormalizedConfigEquals(live_config, SelectedPreset().config);
+    // Use ConfigDirtyEquivalent (not NormalizedConfigEquals) so that capture
+    // identity (display_key, window_key, region) does not contribute to dirty
+    // state.  Capture is transient/auto-resolved and excluded from dirty per spec.
+    return !ConfigDirtyEquivalent(live_config, SelectedPreset().config);
 }
 
 // ---------------------------------------------------------------------------

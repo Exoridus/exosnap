@@ -412,6 +412,155 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
 }
 
 // ---------------------------------------------------------------------------
+// ConfigDirtyEquivalent
+// ---------------------------------------------------------------------------
+
+bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPresetConfig& b) {
+    // Capture identity (kind, display_key, window_key, has_region, region,
+    // region_display_key) is intentionally NOT compared here.  Capture depends
+    // on transient device availability and auto-resolution, so comparing it
+    // would cause spurious/unstable dirty state (e.g. default preset appears
+    // dirty at startup because the live policy resolves an empty display_key to
+    // a concrete monitor key, or because a monitor is replugged).
+    // Per spec: temporary availability changes must not make the preset dirty.
+    // NormalizedConfigEquals (full structural equality) is kept for persistence
+    // round-trip verification and must NOT be changed.
+
+    // Countdown
+    if (a.countdown_seconds != b.countdown_seconds) {
+        return false;
+    }
+
+    // --- Output ---
+    if (a.output.container != b.output.container) {
+        return false;
+    }
+    if (a.output.video_codec != b.output.video_codec) {
+        return false;
+    }
+    if (a.output.audio_codec != b.output.audio_codec) {
+        return false;
+    }
+    if (a.output.output_folder != b.output.output_folder) {
+        return false;
+    }
+    if (a.output.naming_pattern != b.output.naming_pattern) {
+        return false;
+    }
+
+    // --- Video ---
+    if (a.video.quality != b.video.quality) {
+        return false;
+    }
+    if (a.video.cfr != b.video.cfr) {
+        return false;
+    }
+    if (a.video.capture_cursor != b.video.capture_cursor) {
+        return false;
+    }
+    if (a.video.frame_rate_num != b.video.frame_rate_num) {
+        return false;
+    }
+    if (a.video.frame_rate_den != b.video.frame_rate_den) {
+        return false;
+    }
+
+    // --- Audio ---
+    if (a.audio.target_kind != b.audio.target_kind) {
+        return false;
+    }
+    if (a.audio.mic_channel_mode != b.audio.mic_channel_mode) {
+        return false;
+    }
+    if (a.audio.selected_mic_device_id != b.audio.selected_mic_device_id) {
+        return false;
+    }
+    if (a.audio.selected_window_pid != b.audio.selected_window_pid) {
+        return false;
+    }
+    if (std::abs(a.audio.mic_gain_linear - b.audio.mic_gain_linear) > 1e-3f) {
+        return false;
+    }
+
+    // Semantic audio-row equality: same resolved plan AND same enabled-source set.
+    {
+        const recorder_core::AudioTrackPlan plan_a = recorder_core::ResolveAudioTracks(a.audio.source_rows);
+        const recorder_core::AudioTrackPlan plan_b = recorder_core::ResolveAudioTracks(b.audio.source_rows);
+        if (!AudioTrackPlansEqual(plan_a, plan_b)) {
+            return false;
+        }
+        if (EnabledSourceKinds(a.audio.source_rows) != EnabledSourceKinds(b.audio.source_rows)) {
+            return false;
+        }
+    }
+
+    // --- Webcam ---
+    constexpr float kPipTol = 1e-3f;
+    constexpr float kChromaTol = 1e-3f;
+
+    if (a.webcam.enabled != b.webcam.enabled) {
+        return false;
+    }
+    if (a.webcam.device_id != b.webcam.device_id) {
+        return false;
+    }
+    if (a.webcam.width != b.webcam.width) {
+        return false;
+    }
+    if (a.webcam.height != b.webcam.height) {
+        return false;
+    }
+    if (a.webcam.fps != b.webcam.fps) {
+        return false;
+    }
+    if (a.webcam.mirror != b.webcam.mirror) {
+        return false;
+    }
+    if (a.webcam.aspect_ratio_locked != b.webcam.aspect_ratio_locked) {
+        return false;
+    }
+    if (a.webcam.overlay_user_placed != b.webcam.overlay_user_placed) {
+        return false;
+    }
+
+    // PiP overlay — float tolerance
+    if (std::abs(a.webcam.overlay.x_norm - b.webcam.overlay.x_norm) > kPipTol) {
+        return false;
+    }
+    if (std::abs(a.webcam.overlay.y_norm - b.webcam.overlay.y_norm) > kPipTol) {
+        return false;
+    }
+    if (std::abs(a.webcam.overlay.w_norm - b.webcam.overlay.w_norm) > kPipTol) {
+        return false;
+    }
+    if (std::abs(a.webcam.overlay.h_norm - b.webcam.overlay.h_norm) > kPipTol) {
+        return false;
+    }
+
+    // Chroma key
+    if (a.webcam.chroma_key.enabled != b.webcam.chroma_key.enabled) {
+        return false;
+    }
+    if (a.webcam.chroma_key.r != b.webcam.chroma_key.r) {
+        return false;
+    }
+    if (a.webcam.chroma_key.g != b.webcam.chroma_key.g) {
+        return false;
+    }
+    if (a.webcam.chroma_key.b != b.webcam.chroma_key.b) {
+        return false;
+    }
+    if (std::abs(a.webcam.chroma_key.tolerance - b.webcam.chroma_key.tolerance) > kChromaTol) {
+        return false;
+    }
+    if (std::abs(a.webcam.chroma_key.softness - b.webcam.chroma_key.softness) > kChromaTol) {
+        return false;
+    }
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Filename token helpers (moved from RecordingProfile.cpp)
 // ---------------------------------------------------------------------------
 

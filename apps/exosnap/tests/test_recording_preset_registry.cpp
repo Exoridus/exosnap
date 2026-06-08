@@ -321,6 +321,79 @@ TEST(RecordingPresetRegistry, IsSelectedDirty_FalseAfterLiveResetToSaved) {
     EXPECT_FALSE(reg.IsSelectedDirty(live));
 }
 
+// Capture identity mutations must NOT make the preset dirty (per spec).
+TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingCapturKind_NotDirty) {
+    RecordingPresetRegistry reg;
+    RecordingPresetConfig live = reg.SelectedSavedConfig();
+    live.capture.kind = PresetCaptureKind::Window;
+    EXPECT_FALSE(reg.IsSelectedDirty(live));
+}
+
+TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingCaptureDisplayKey_NotDirty) {
+    RecordingPresetRegistry reg;
+    RecordingPresetConfig live = reg.SelectedSavedConfig();
+    live.capture.display_key = "MONITOR-001"; // Resolved on startup
+    EXPECT_FALSE(reg.IsSelectedDirty(live));
+}
+
+TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingCaptureRegion_NotDirty) {
+    RecordingPresetRegistry reg;
+    RecordingPresetConfig live = reg.SelectedSavedConfig();
+    live.capture.kind = PresetCaptureKind::Region;
+    live.capture.has_region = true;
+    live.capture.region.x = 100;
+    live.capture.region.y = 100;
+    live.capture.region.width = 640;
+    live.capture.region.height = 480;
+    live.capture.region_display_key = "\\\\?\\DISPLAY#SAM#001";
+    EXPECT_FALSE(reg.IsSelectedDirty(live));
+}
+
+// Non-capture mutations MUST make the preset dirty.
+TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingAudio_IsDirty) {
+    RecordingPresetRegistry reg;
+    RecordingPresetConfig live = reg.SelectedSavedConfig();
+    // Flip the SystemOutput row from enabled to disabled.
+    live.audio.source_rows[0].enabled = false;
+    EXPECT_TRUE(reg.IsSelectedDirty(live));
+}
+
+TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingVideo_IsDirty) {
+    RecordingPresetRegistry reg;
+    RecordingPresetConfig live = reg.SelectedSavedConfig();
+    live.video.quality = recorder_core::NvencQualityPreset::Small;
+    EXPECT_TRUE(reg.IsSelectedDirty(live));
+}
+
+TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingWebcam_IsDirty) {
+    RecordingPresetRegistry reg;
+    RecordingPresetConfig live = reg.SelectedSavedConfig();
+    live.webcam.mirror = !live.webcam.mirror;
+    EXPECT_TRUE(reg.IsSelectedDirty(live));
+}
+
+TEST(RecordingPresetRegistry, IsSelectedDirty_MutatingOutput_IsDirty) {
+    RecordingPresetRegistry reg;
+    RecordingPresetConfig live = reg.SelectedSavedConfig();
+    live.output.container = capability::Container::Mp4;
+    ReconcileContainerCodecs(live.output);
+    EXPECT_TRUE(reg.IsSelectedDirty(live));
+}
+
+TEST(RecordingPresetRegistry, IsSelectedDirty_RevertingCaptureMutation_StillClean) {
+    RecordingPresetRegistry reg;
+    RecordingPresetConfig live = reg.SelectedSavedConfig();
+    // Mutate capture (simulates startup resolution).
+    live.capture.display_key = "MONITOR-001";
+    EXPECT_FALSE(reg.IsSelectedDirty(live));
+    // Mutate a real field.
+    live.countdown_seconds = 10;
+    EXPECT_TRUE(reg.IsSelectedDirty(live));
+    // Revert the real field.
+    live.countdown_seconds = reg.SelectedSavedConfig().countdown_seconds;
+    EXPECT_FALSE(reg.IsSelectedDirty(live));
+}
+
 // ===========================================================================
 // LoadState — repair invariants
 // ===========================================================================

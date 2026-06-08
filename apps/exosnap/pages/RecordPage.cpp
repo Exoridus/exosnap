@@ -2406,6 +2406,11 @@ void RecordPage::initCoordinator() {
     view_model_.capability_status_text = coordinator_->CapabilityStatusText();
     refresh();
     startPreviewIfIdle();
+
+    // All init work is done (targets enumerated, coordinator ready).
+    // MainWindow connects to this to re-apply the selected preset so that
+    // the audio/capture state from before deferred init is restored.
+    emit coordinatorInitialized();
 }
 
 void RecordPage::enumerateTargets(bool preserve_current_selection) {
