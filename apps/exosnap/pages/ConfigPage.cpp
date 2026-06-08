@@ -1371,6 +1371,13 @@ void ConfigPage::setWebcamSettings(const WebcamSettings& settings) {
         webcam_setup_panel_->applySettings(settings);
 }
 
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+void ConfigPage::applyVisualWebcamState(bool available, bool mirror) {
+    if (webcam_setup_panel_)
+        webcam_setup_panel_->applyVisualState(available, mirror);
+}
+#endif
+
 void ConfigPage::setReadinessStatus(const QString& status_label) {
     if (!readiness_badge_label_)
         return;

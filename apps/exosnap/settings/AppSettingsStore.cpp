@@ -304,6 +304,8 @@ void LoadWebcamSettingsFromCurrentGroup(QSettings& settings, WebcamSettings* out
     out->overlay.h_norm = settings.value(QStringLiteral("overlay_h"), 0.25f).toFloat();
     out->overlay_user_placed = settings.value(QStringLiteral("overlay_user_placed"), false).toBool();
     out->aspect_ratio_locked = settings.value(QStringLiteral("aspect_ratio_locked"), true).toBool();
+    // mirror defaults to off (the product default); absent keys simply read false.
+    out->mirror = settings.value(QStringLiteral("mirror"), false).toBool();
     out->chroma_key.enabled = settings.value(QStringLiteral("chroma_enabled"), false).toBool();
     out->chroma_key.r = static_cast<uint8_t>(settings.value(QStringLiteral("chroma_r"), 0).toInt());
     out->chroma_key.g = static_cast<uint8_t>(settings.value(QStringLiteral("chroma_g"), 177).toInt());
@@ -326,6 +328,7 @@ void SaveWebcamSettingsToCurrentGroup(QSettings& settings, const WebcamSettings&
     settings.setValue(QStringLiteral("overlay_h"), sanitized.overlay.h_norm);
     settings.setValue(QStringLiteral("overlay_user_placed"), sanitized.overlay_user_placed);
     settings.setValue(QStringLiteral("aspect_ratio_locked"), sanitized.aspect_ratio_locked);
+    settings.setValue(QStringLiteral("mirror"), sanitized.mirror);
     settings.setValue(QStringLiteral("chroma_enabled"), sanitized.chroma_key.enabled);
     settings.setValue(QStringLiteral("chroma_r"), static_cast<int>(sanitized.chroma_key.r));
     settings.setValue(QStringLiteral("chroma_g"), static_cast<int>(sanitized.chroma_key.g));

@@ -216,7 +216,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         SOURCES
             tests/test_visual_scenarios.cpp
             visual_tests/VisualScenario.cpp
-        LIBRARIES Qt6::Core
+        LIBRARIES Qt6::Core recorder_core
     )
     target_include_directories(visual_scenario_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(visual_scenario_tests PRIVATE EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
@@ -509,6 +509,32 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(region_preview_crop_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+    NAME webcam_placement_tests
+    TEST_PREFIX webcam.
+    SOURCES
+        tests/test_webcam_placement.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(webcam_placement_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+    NAME preview_surface_webcam_tests
+    TEST_PREFIX preview.
+    SOURCES
+        tests/test_preview_surface_webcam.cpp
+        ui/widgets/PreviewSurface.cpp
+        ui/widgets/StatusPill.cpp
+        services/DxgiPreviewRenderer.cpp
+        diagnostics/AppLog.cpp
+    LIBRARIES
+        Qt6::Core Qt6::Gui Qt6::Widgets recorder_core
+        d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
+)
+target_include_directories(preview_surface_webcam_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(preview_surface_webcam_tests PRIVATE NOMINMAX)
+set_target_properties(preview_surface_webcam_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME transport_dock_tests

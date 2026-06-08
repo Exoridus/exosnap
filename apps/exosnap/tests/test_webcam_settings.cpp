@@ -63,6 +63,7 @@ TEST(WebcamSettingsTest, LoadMissingFile_UsesDefaults) {
     EXPECT_FLOAT_EQ(loaded.webcam.overlay.h_norm, 0.25f);
     EXPECT_FALSE(loaded.webcam.overlay_user_placed);
     EXPECT_TRUE(loaded.webcam.aspect_ratio_locked);
+    EXPECT_FALSE(loaded.webcam.mirror); // mirror defaults off when the key is absent
     EXPECT_FALSE(loaded.webcam.chroma_key.enabled);
     EXPECT_EQ(loaded.webcam.chroma_key.r, 0);
     EXPECT_EQ(loaded.webcam.chroma_key.g, 177);
@@ -88,6 +89,7 @@ TEST(WebcamSettingsTest, SaveAndLoad_RoundTripsWebcamSettings) {
     settings.webcam.overlay.h_norm = 0.4f;
     settings.webcam.overlay_user_placed = true;
     settings.webcam.aspect_ratio_locked = false;
+    settings.webcam.mirror = true;
     settings.webcam.chroma_key.enabled = true;
     settings.webcam.chroma_key.r = 12;
     settings.webcam.chroma_key.g = 34;
@@ -109,6 +111,7 @@ TEST(WebcamSettingsTest, SaveAndLoad_RoundTripsWebcamSettings) {
     EXPECT_FLOAT_EQ(loaded.webcam.overlay.h_norm, 0.4f);
     EXPECT_TRUE(loaded.webcam.overlay_user_placed);
     EXPECT_FALSE(loaded.webcam.aspect_ratio_locked);
+    EXPECT_TRUE(loaded.webcam.mirror); // mirror round-trips
     EXPECT_TRUE(loaded.webcam.chroma_key.enabled);
     EXPECT_EQ(loaded.webcam.chroma_key.r, 12);
     EXPECT_EQ(loaded.webcam.chroma_key.g, 34);

@@ -1,6 +1,9 @@
 #include "VisualScenario.h"
 
+#include <recorder_core/webcam_placement.h>
+
 #include <algorithm>
+#include <cmath>
 
 namespace exosnap::visual {
 namespace {
@@ -257,6 +260,162 @@ const QVector<VisualScenario> kScenarios = {
      {{QStringLiteral("webcamCameraPreview"), QStringLiteral("synthetic test camera frame")}}},
     {QStringLiteral("webcam-unavailable"), QStringLiteral("Webcam / Unavailable"), VisualPage::Webcam,
      VisualRecordState::None, VisualSettingsTarget::None, VisualSourcePickerTab::None, VisualWebcamState::Unavailable},
+
+    // --- Webcam PiP placement + mirror (WEBCAM-PIP-MIRROR-R1) -------------------
+    // Record-page PiP scenarios run with a deterministic synthetic preview + camera
+    // frame (DXGI stopped), so the Qt paint path is exercised reproducibly.
+    {.id = QStringLiteral("record-webcam-disabled"),
+     .title = QStringLiteral("Record / Webcam Disabled"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .webcam_state = VisualWebcamState::None,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
+     .webcam_pip_enabled = false},
+    {.id = QStringLiteral("record-webcam-default-pip"),
+     .title = QStringLiteral("Record / Webcam Default PiP"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .webcam_state = VisualWebcamState::Active,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
+     .webcam_pip_enabled = true,
+     .webcam_x = 0.75f,
+     .webcam_y = 0.75f,
+     .webcam_w = 0.25f,
+     .webcam_h = 0.25f},
+    {.id = QStringLiteral("record-webcam-selected"),
+     .title = QStringLiteral("Record / Webcam Selected"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .webcam_state = VisualWebcamState::Active,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
+     .webcam_pip_enabled = true,
+     .webcam_pip_selected = true,
+     .webcam_x = 0.75f,
+     .webcam_y = 0.75f,
+     .webcam_w = 0.25f,
+     .webcam_h = 0.25f},
+    {.id = QStringLiteral("record-webcam-dragging"),
+     .title = QStringLiteral("Record / Webcam Dragging"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .webcam_state = VisualWebcamState::Active,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
+     .webcam_pip_enabled = true,
+     .webcam_pip_selected = true,
+     .webcam_handle = VisualWebcamHandle::Move,
+     .webcam_x = 0.40f,
+     .webcam_y = 0.40f,
+     .webcam_w = 0.25f,
+     .webcam_h = 0.25f},
+    {.id = QStringLiteral("record-webcam-resize-top-left"),
+     .title = QStringLiteral("Record / Webcam Resize Top-Left"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .webcam_state = VisualWebcamState::Active,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
+     .webcam_pip_enabled = true,
+     .webcam_pip_selected = true,
+     .webcam_handle = VisualWebcamHandle::ResizeTopLeft,
+     .webcam_x = 0.55f,
+     .webcam_y = 0.55f,
+     .webcam_w = 0.30f,
+     .webcam_h = 0.30f},
+    {.id = QStringLiteral("record-webcam-resize-bottom-right"),
+     .title = QStringLiteral("Record / Webcam Resize Bottom-Right"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .webcam_state = VisualWebcamState::Active,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
+     .webcam_pip_enabled = true,
+     .webcam_pip_selected = true,
+     .webcam_handle = VisualWebcamHandle::ResizeBottomRight,
+     .webcam_x = 0.40f,
+     .webcam_y = 0.40f,
+     .webcam_w = 0.40f,
+     .webcam_h = 0.40f},
+    {.id = QStringLiteral("record-webcam-min-size"),
+     .title = QStringLiteral("Record / Webcam Minimum Size"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .webcam_state = VisualWebcamState::Active,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
+     .webcam_pip_enabled = true,
+     .webcam_pip_selected = true,
+     .webcam_x = 0.90f,
+     .webcam_y = 0.90f,
+     .webcam_w = 0.05f,
+     .webcam_h = 0.05f},
+    {.id = QStringLiteral("record-webcam-max-size"),
+     .title = QStringLiteral("Record / Webcam Maximum Size"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .webcam_state = VisualWebcamState::Active,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
+     .webcam_pip_enabled = true,
+     .webcam_pip_selected = true,
+     .webcam_x = 0.05f,
+     .webcam_y = 0.05f,
+     .webcam_w = 0.90f,
+     .webcam_h = 0.90f},
+    {.id = QStringLiteral("record-webcam-mirrored"),
+     .title = QStringLiteral("Record / Webcam Mirrored"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .webcam_state = VisualWebcamState::Active,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
+     .webcam_pip_enabled = true,
+     .webcam_mirror = true,
+     .webcam_x = 0.75f,
+     .webcam_y = 0.75f,
+     .webcam_w = 0.25f,
+     .webcam_h = 0.25f},
+    {.id = QStringLiteral("record-webcam-countdown-locked"),
+     .title = QStringLiteral("Record / Webcam Countdown Locked"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Countdown,
+     .webcam_state = VisualWebcamState::Active,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
+     .countdown_seconds = 3,
+     .countdown_remaining = 3,
+     .webcam_pip_enabled = true,
+     .webcam_pip_edit_locked = true,
+     .webcam_x = 0.75f,
+     .webcam_y = 0.75f,
+     .webcam_w = 0.25f,
+     .webcam_h = 0.25f},
+    {.id = QStringLiteral("record-webcam-recording-locked"),
+     .title = QStringLiteral("Record / Webcam Recording Locked"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Recording,
+     .webcam_state = VisualWebcamState::Active,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("technical preview surface")},
+               {QStringLiteral("recordDockTimer"), QStringLiteral("fixed visual-test timer")}},
+     .webcam_pip_enabled = true,
+     .webcam_pip_edit_locked = true,
+     .webcam_x = 0.75f,
+     .webcam_y = 0.75f,
+     .webcam_w = 0.25f,
+     .webcam_h = 0.25f},
+    {.id = QStringLiteral("settings-webcam-mirror-off"),
+     .title = QStringLiteral("Settings / Webcam Mirror Off"),
+     .page = VisualPage::Settings,
+     .record_state = VisualRecordState::None,
+     .webcam_state = VisualWebcamState::Active,
+     .masks = {{QStringLiteral("webcamCameraPreview"), QStringLiteral("synthetic test camera frame")}},
+     .webcam_mirror = false},
+    {.id = QStringLiteral("settings-webcam-mirror-on"),
+     .title = QStringLiteral("Settings / Webcam Mirror On"),
+     .page = VisualPage::Settings,
+     .record_state = VisualRecordState::None,
+     .webcam_state = VisualWebcamState::Active,
+     .masks = {{QStringLiteral("webcamCameraPreview"), QStringLiteral("synthetic test camera frame")}},
+     .webcam_mirror = true},
+    {.id = QStringLiteral("settings-webcam-unavailable"),
+     .title = QStringLiteral("Settings / Webcam Unavailable"),
+     .page = VisualPage::Settings,
+     .record_state = VisualRecordState::None,
+     .webcam_state = VisualWebcamState::Unavailable},
+
     {QStringLiteral("diagnostics"), QStringLiteral("Diagnostics"), VisualPage::Diagnostics},
     {QStringLiteral("hotkeys"), QStringLiteral("Hotkeys"), VisualPage::Hotkeys},
     {QStringLiteral("logs"), QStringLiteral("Logs"), VisualPage::Logs},
@@ -326,6 +485,23 @@ bool ValidateVisualScenario(const VisualScenario& scenario, QString* error) {
     if (scenario.region_state == VisualRegionState::Empty &&
         (scenario.region_width != 0 || scenario.region_height != 0)) {
         return fail(QStringLiteral("Empty visual-test region must not carry geometry"));
+    }
+
+    // Webcam PiP placement must be a valid, bounds-safe normalized rectangle.
+    if (scenario.webcam_pip_enabled) {
+        constexpr float kMin = recorder_core::WebcamPlacement::kMinSize;
+        constexpr float kMax = recorder_core::WebcamPlacement::kMaxSize;
+        const float x = scenario.webcam_x;
+        const float y = scenario.webcam_y;
+        const float w = scenario.webcam_w;
+        const float h = scenario.webcam_h;
+        const bool finite = std::isfinite(x) && std::isfinite(y) && std::isfinite(w) && std::isfinite(h);
+        if (!finite)
+            return fail(QStringLiteral("Webcam PiP placement must be finite"));
+        if (w < kMin || h < kMin || w > kMax || h > kMax)
+            return fail(QStringLiteral("Webcam PiP size out of bounds"));
+        if (x < 0.0f || y < 0.0f || x + w > 1.0f + 1e-4f || y + h > 1.0f + 1e-4f)
+            return fail(QStringLiteral("Webcam PiP rectangle escapes the content frame"));
     }
 
     return true;
@@ -443,6 +619,24 @@ QString ToString(VisualRegionEditMode mode) {
         return QStringLiteral("resize-bottom-left");
     case VisualRegionEditMode::ResizeBottomRight:
         return QStringLiteral("resize-bottom-right");
+    }
+    return QStringLiteral("unknown");
+}
+
+QString ToString(VisualWebcamHandle handle) {
+    switch (handle) {
+    case VisualWebcamHandle::None:
+        return QStringLiteral("none");
+    case VisualWebcamHandle::Move:
+        return QStringLiteral("move");
+    case VisualWebcamHandle::ResizeTopLeft:
+        return QStringLiteral("tl");
+    case VisualWebcamHandle::ResizeTopRight:
+        return QStringLiteral("tr");
+    case VisualWebcamHandle::ResizeBottomLeft:
+        return QStringLiteral("bl");
+    case VisualWebcamHandle::ResizeBottomRight:
+        return QStringLiteral("br");
     }
     return QStringLiteral("unknown");
 }

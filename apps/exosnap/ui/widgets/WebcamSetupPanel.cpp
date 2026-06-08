@@ -103,6 +103,22 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
 
     right_layout->addWidget(makeHairline(right_col));
 
+    // Mirror toggle row (the only image-transform control here; placement is on Record).
+    auto* mirror_row = new QWidget(right_col);
+    auto* mr = new QHBoxLayout(mirror_row);
+    mr->setContentsMargins(0, 0, 0, 0);
+    mr->setSpacing(10);
+    auto* mirror_label = new QLabel(QStringLiteral("Mirror image"), mirror_row);
+    mirror_label->setProperty("labelRole", "videoKvKey");
+    mr->addWidget(mirror_label, 1);
+    mirror_toggle_ = new ExoToggle(mirror_row);
+    mirror_toggle_->setObjectName(QStringLiteral("webcamPanelMirrorToggle"));
+    mirror_toggle_->setChecked(false);
+    mr->addWidget(mirror_toggle_);
+    right_layout->addWidget(mirror_row);
+
+    right_layout->addWidget(makeHairline(right_col));
+
     // Placement note (no controls here)
     right_layout->addWidget(
         makeNote(QStringLiteral("Position and size are configured in the Record preview."), right_col));
@@ -119,6 +135,7 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
     connect(device_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, &WebcamSetupPanel::onDeviceChanged);
     connect(resolution_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this,
             &WebcamSetupPanel::onResolutionChanged);
+    connect(mirror_toggle_, &ExoToggle::toggled, this, &WebcamSetupPanel::onMirrorToggled);
     connect(rescan_btn_, &QPushButton::clicked, this, &WebcamSetupPanel::onRescan);
 
     // Preview frame callback: marshals to main thread via the Qt event loop.
@@ -162,6 +179,9 @@ void WebcamSetupPanel::applySettings(const WebcamSettings& settings) {
     current_settings_ = s;
 
     enable_toggle_->setChecked(s.enabled);
+    mirror_toggle_->setChecked(s.mirror);
+    if (camera_preview_)
+        camera_preview_->setMirror(s.mirror);
 
     for (int i = 0; i < device_combo_->count(); ++i) {
         if (device_combo_->itemData(i).toString().toStdString() == s.device_id) {
@@ -190,11 +210,20 @@ void WebcamSetupPanel::setControlsLocked(bool locked) {
     enable_toggle_->setEnabled(!locked);
     device_combo_->setEnabled(!locked);
     resolution_combo_->setEnabled(!locked);
+    mirror_toggle_->setEnabled(!locked);
     rescan_btn_->setEnabled(!locked);
 }
 
 void WebcamSetupPanel::onEnableToggled(bool enabled) {
     current_settings_.enabled = enabled;
+    if (!suppress_signals_)
+        emit settingsChanged(collectSettings());
+}
+
+void WebcamSetupPanel::onMirrorToggled(bool mirror) {
+    current_settings_.mirror = mirror;
+    if (camera_preview_)
+        camera_preview_->setMirror(mirror);
     if (!suppress_signals_)
         emit settingsChanged(collectSettings());
 }
@@ -264,6 +293,9 @@ void WebcamSetupPanel::refreshFormats() {
 }
 
 void WebcamSetupPanel::startPreview() {
+    // Visual-test mode drives the preview deterministically; never open a real device.
+    if (visual_test_mode_)
+        return;
     if (watchdog_)
         watchdog_->stop();
     preview_frame_seen_ = false;
@@ -303,6 +335,52 @@ void WebcamSetupPanel::stopPreview() {
         camera_preview_->clearFrame();
 }
 
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+void WebcamSetupPanel::applyVisualState(bool available, bool mirror) {
+    visual_test_mode_ = true;
+    stopPreview();
+    suppress_signals_ = true;
+
+    device_combo_->clear();
+    resolution_combo_->clear();
+    mirror_toggle_->setChecked(mirror);
+    if (camera_preview_)
+        camera_preview_->setMirror(mirror);
+
+    if (available) {
+        device_combo_->addItem(QStringLiteral("Visual Test Camera"), QStringLiteral("visual-test-camera"));
+        resolution_combo_->addItem(QStringLiteral("1280×720 @ 30 fps"), QVariantList{1280, 720});
+        enable_toggle_->setChecked(true);
+        if (camera_preview_) {
+            // Asymmetric left/right halves so the mirror flip is visibly verifiable.
+            QImage frame(320, 200, QImage::Format_ARGB32);
+            for (int y = 0; y < frame.height(); ++y) {
+                auto* row = reinterpret_cast<QRgb*>(frame.scanLine(y));
+                for (int x = 0; x < frame.width(); ++x)
+                    row[x] = (x < frame.width() / 2) ? qRgb(220, 90, 80) : qRgb(80, 140, 220);
+            }
+            for (int y = 10; y < 40; ++y) {
+                auto* row = reinterpret_cast<QRgb*>(frame.scanLine(y));
+                for (int x = 10; x < 40; ++x)
+                    row[x] = qRgb(245, 245, 245);
+            }
+            camera_preview_->setFrame(frame);
+            camera_preview_->setToolTip(QStringLiteral("Synthetic visual-test camera frame"));
+        }
+    } else {
+        device_combo_->addItem(QStringLiteral("(no visual-test camera)"), QString());
+        enable_toggle_->setChecked(false);
+        if (camera_preview_) {
+            camera_preview_->clearFrame();
+            camera_preview_->setPlaceholderText(QStringLiteral("VISUAL TEST: Camera unavailable"));
+            camera_preview_->setToolTip(QStringLiteral("Deterministic visual-test unavailable state"));
+        }
+    }
+
+    suppress_signals_ = false;
+}
+#endif
+
 WebcamSettings WebcamSetupPanel::collectSettings() const {
     WebcamSettings s;
     s.enabled = enable_toggle_->isChecked();
@@ -312,6 +390,8 @@ WebcamSettings WebcamSetupPanel::collectSettings() const {
     s.width = (res.size() >= 2) ? res[0].toInt() : 1280;
     s.height = (res.size() >= 2) ? res[1].toInt() : 720;
     s.fps = 30;
+
+    s.mirror = mirror_toggle_->isChecked();
 
     // Preserve overlay and chroma from current (panel does not expose these controls).
     s.overlay = current_settings_.overlay;

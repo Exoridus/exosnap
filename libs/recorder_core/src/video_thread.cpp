@@ -8,6 +8,7 @@
 
 #include <recorder_core/logging/logging.h>
 #include <recorder_core/packet_types.h>
+#include <recorder_core/webcam_placement.h>
 
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
@@ -597,13 +598,17 @@ void VideoThread::Run() {
     }
 
     // Helper: nearest-neighbour scale of BGRA webcam frame to overlay pixel size.
-    auto scaleNN = [](const uint8_t* src, int sw, int sh, uint8_t* dst, int dw, int dh) {
+    // When mirror is true the source is sampled right-to-left, producing a real
+    // horizontal flip (no vertical flip).  This matches the Record-preview mirror.
+    auto scaleNN = [](const uint8_t* src, int sw, int sh, uint8_t* dst, int dw, int dh, bool mirror) {
         for (int dy = 0; dy < dh; ++dy) {
             const int sy = (dy * sh) / dh;
             const uint8_t* srow = src + sy * sw * 4;
             uint8_t* drow = dst + dy * dw * 4;
             for (int dx = 0; dx < dw; ++dx) {
-                const int sx = (dx * sw) / dw;
+                int sx = (dx * sw) / dw;
+                if (mirror)
+                    sx = sw - 1 - sx;
                 const uint8_t* sp = srow + sx * 4;
                 uint8_t* dp = drow + dx * 4;
                 dp[0] = sp[0];
@@ -660,33 +665,32 @@ void VideoThread::Run() {
         if (cam_w <= 0 || cam_h <= 0 || camBgra.empty())
             return compositeTex.get();
 
-        // Overlay pixel rect (clamped to encode dims).
+        // Overlay pixel rect — mapped via the shared placement helper with the
+        // content rect = the full encode frame at origin.  The Record preview uses
+        // the same helper with its contain-fit content rect, so preview and output
+        // placement/size/mirror match exactly.
         // Future extension: if webcam is recorded as an independent output/track,
         // bypass this compositor path and keep native webcam dimensions untouched.
-        const float x_norm = (std::max)(0.0f, (std::min)(m_state.config.webcam.overlay_x_norm, 1.0f));
-        const float y_norm = (std::max)(0.0f, (std::min)(m_state.config.webcam.overlay_y_norm, 1.0f));
-        const float w_norm = (std::max)(0.0f, (std::min)(m_state.config.webcam.overlay_w_norm, 1.0f));
-        const float h_norm = (std::max)(0.0f, (std::min)(m_state.config.webcam.overlay_h_norm, 1.0f));
+        recorder_core::WebcamPlacement placement;
+        placement.x = m_state.config.webcam.overlay_x_norm;
+        placement.y = m_state.config.webcam.overlay_y_norm;
+        placement.w = m_state.config.webcam.overlay_w_norm;
+        placement.h = m_state.config.webcam.overlay_h_norm;
+        placement.mirror = m_state.config.webcam.mirror;
+        const recorder_core::WebcamPixelRect ovr = recorder_core::MapWebcamPlacementToContent(
+            placement, 0, 0, static_cast<int>(encodeWidth), static_cast<int>(encodeHeight));
 
-        const int ov_x = static_cast<int>(x_norm * static_cast<float>(encodeWidth));
-        const int ov_y = static_cast<int>(y_norm * static_cast<float>(encodeHeight));
-        int ov_w = static_cast<int>(w_norm * static_cast<float>(encodeWidth));
-        int ov_h = static_cast<int>(h_norm * static_cast<float>(encodeHeight));
-        if (ov_x < 0 || ov_y < 0 || ov_x >= static_cast<int>(encodeWidth) || ov_y >= static_cast<int>(encodeHeight))
+        const int ov_x = ovr.x;
+        const int ov_y = ovr.y;
+        const int ov_w = ovr.w;
+        const int ov_h = ovr.h;
+        // NVENC-safe minimum; the helper already clamps inside the frame.
+        if (ov_w < 2 || ov_h < 2)
             return compositeTex.get();
 
-        const int max_ov_w = static_cast<int>(encodeWidth) - ov_x;
-        const int max_ov_h = static_cast<int>(encodeHeight) - ov_y;
-        if (max_ov_w < 2 || max_ov_h < 2)
-            return compositeTex.get();
-        ov_w = (std::max)(2, (std::min)(ov_w, max_ov_w));
-        ov_h = (std::max)(2, (std::min)(ov_h, max_ov_h));
-        if (ov_w <= 0 || ov_h <= 0)
-            return compositeTex.get();
-
-        // Scale webcam to overlay size.
+        // Scale (and optionally horizontally mirror) the webcam to overlay size.
         scaledCam.resize(static_cast<size_t>(ov_w) * ov_h * 4);
-        scaleNN(camBgra.data(), cam_w, cam_h, scaledCam.data(), ov_w, ov_h);
+        scaleNN(camBgra.data(), cam_w, cam_h, scaledCam.data(), ov_w, ov_h, placement.mirror);
 
         const D3D11_BOX box = {static_cast<UINT>(ov_x),        static_cast<UINT>(ov_y),        0u,
                                static_cast<UINT>(ov_x + ov_w), static_cast<UINT>(ov_y + ov_h), 1u};

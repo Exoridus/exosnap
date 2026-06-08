@@ -288,6 +288,9 @@ bool PreviewSurface::tryStartDxgiPreview(const recorder_core::CaptureTarget& tar
     dxgi_active_ = true;
     current_frame_ = QImage{};
     center_box_->setVisible(false);
+    // The native child HWND occludes Qt painting, so push the current overlay
+    // (video + placement + chrome) to the renderer to composite it WYSIWYG.
+    syncWebcamOverlayToDxgi();
     update();
     return true;
 }
@@ -378,30 +381,42 @@ StatusPill* PreviewSurface::statusPill() const noexcept {
 // ---------------------------------------------------------------------------
 
 void PreviewSurface::setWebcamFrame(QImage frame) {
+    // Normalize to ARGB32 (BGRA byte order on little-endian) so both the Qt paint
+    // path and the DXGI overlay upload see a consistent pixel layout.
+    if (!frame.isNull() && frame.format() != QImage::Format_ARGB32 && frame.format() != QImage::Format_RGB32) {
+        frame = frame.convertToFormat(QImage::Format_ARGB32);
+    }
     if (!frame.isNull() && frame.width() > 0 && frame.height() > 0)
         webcam_aspect_ratio_ = static_cast<double>(frame.width()) / static_cast<double>(frame.height());
     webcam_frame_ = std::move(frame);
+    syncWebcamOverlayToDxgi();
     if (webcam_enabled_)
         update();
 }
 
 void PreviewSurface::setWebcamOverlayEnabled(bool enabled) {
     webcam_enabled_ = enabled;
-    if (!enabled && drag_mode_ != DragMode::None) {
-        drag_mode_ = DragMode::None;
-        if (drag_modifier_toggle_held_) {
-            drag_modifier_toggle_held_ = false;
+    if (!enabled) {
+        if (drag_mode_ != DragMode::None) {
+            drag_mode_ = DragMode::None;
+            if (QWidget::keyboardGrabber() == this) {
+                releaseKeyboard();
+            }
         }
-        if (QWidget::keyboardGrabber() == this) {
-            releaseKeyboard();
+        drag_modifier_toggle_held_ = false;
+        if (webcam_selected_) {
+            webcam_selected_ = false;
+            emit webcamSelectionChanged(false);
         }
     }
-    setMouseTracking(enabled);
+    setMouseTracking(webcamEditingAllowed());
+    syncWebcamOverlayToDxgi();
     update();
 }
 
 void PreviewSurface::setWebcamOverlayRect(QRectF rect_norm) {
     webcam_rect_norm_ = sanitizeOverlayRect(rect_norm);
+    syncWebcamOverlayToDxgi();
     update();
 }
 
@@ -411,7 +426,107 @@ void PreviewSurface::setAspectRatioLocked(bool locked) {
     aspect_ratio_locked_ = locked;
     if (aspect_ratio_locked_)
         snapOverlayRectToCurrentAspect();
+    syncWebcamOverlayToDxgi();
     update();
+}
+
+void PreviewSurface::setWebcamMirror(bool mirror) {
+    if (webcam_mirror_ == mirror)
+        return;
+    webcam_mirror_ = mirror;
+    syncWebcamOverlayToDxgi();
+    if (webcam_enabled_)
+        update();
+}
+
+bool PreviewSurface::webcamEditingAllowed() const noexcept {
+    return webcam_enabled_ && !webcam_edit_locked_;
+}
+
+void PreviewSurface::setWebcamEditLocked(bool locked) {
+    if (webcam_edit_locked_ == locked)
+        return;
+    webcam_edit_locked_ = locked;
+    if (locked) {
+        // Locking ends any interaction and drops the selection so no edit chrome
+        // lingers; the PiP video itself stays visible.
+        if (drag_mode_ != DragMode::None) {
+            drag_mode_ = DragMode::None;
+            if (QWidget::keyboardGrabber() == this) {
+                releaseKeyboard();
+            }
+        }
+        drag_modifier_toggle_held_ = false;
+        if (webcam_selected_) {
+            webcam_selected_ = false;
+            emit webcamSelectionChanged(false);
+        }
+    }
+    setMouseTracking(webcamEditingAllowed());
+    syncWebcamOverlayToDxgi();
+    update();
+}
+
+void PreviewSurface::setWebcamSelected(bool selected) {
+    // Selection only takes effect while editing is allowed.
+    const bool effective = selected && webcamEditingAllowed();
+    if (webcam_selected_ != effective) {
+        webcam_selected_ = effective;
+        emit webcamSelectionChanged(webcam_selected_);
+    }
+    syncWebcamOverlayToDxgi();
+    update();
+}
+
+void PreviewSurface::cancelWebcamInteraction() {
+    if (drag_mode_ != DragMode::None) {
+        drag_mode_ = DragMode::None;
+        drag_modifier_toggle_held_ = false;
+        if (QWidget::keyboardGrabber() == this) {
+            releaseKeyboard();
+        }
+    }
+    syncWebcamOverlayToDxgi();
+    update();
+}
+
+QRect PreviewSurface::webcamMappedPreviewRect() const {
+    return webcamPixelRect().toRect();
+}
+
+QString PreviewSurface::webcamActiveHandle() const {
+    switch (drag_mode_) {
+    case DragMode::Move:
+        return QStringLiteral("move");
+    case DragMode::ResizeTL:
+        return QStringLiteral("tl");
+    case DragMode::ResizeTR:
+        return QStringLiteral("tr");
+    case DragMode::ResizeBL:
+        return QStringLiteral("bl");
+    case DragMode::ResizeBR:
+        return QStringLiteral("br");
+    case DragMode::None:
+    default:
+        return QStringLiteral("none");
+    }
+}
+
+void PreviewSurface::syncWebcamOverlayToDxgi() {
+    if (!dxgi_active_ || !dxgi_renderer_)
+        return;
+    const bool show = webcam_enabled_;
+    const bool selected = webcam_selected_ && webcamEditingAllowed();
+    dxgi_renderer_->SetWebcamOverlayState(
+        show, selected, static_cast<float>(webcam_rect_norm_.x()), static_cast<float>(webcam_rect_norm_.y()),
+        static_cast<float>(webcam_rect_norm_.width()), static_cast<float>(webcam_rect_norm_.height()), webcam_mirror_);
+    if (show && !webcam_frame_.isNull()) {
+        const QImage& img = webcam_frame_;
+        dxgi_renderer_->SetWebcamOverlayFrame(img.constBits(), img.width(), img.height(),
+                                              static_cast<int>(img.bytesPerLine()));
+    } else {
+        dxgi_renderer_->SetWebcamOverlayFrame(nullptr, 0, 0, 0);
+    }
 }
 
 QRectF PreviewSurface::defaultWebcamOverlayRect(double camera_aspect_w_over_h) const {
@@ -460,35 +575,42 @@ QRectF PreviewSurface::displayedFrameRect() const {
     if (width() <= 0 || height() <= 0)
         return {};
 
-    const QRectF widget_rect = rect();
-    if (current_frame_.isNull() || current_frame_.width() <= 0 || current_frame_.height() <= 0)
-        return widget_rect;
+    // While the DXGI live preview runs, the captured source dimensions define the
+    // content rectangle: the renderer contain-fits the same way, so PiP hit-testing
+    // and the rendered overlay agree (no offset into letterbox margins).
+    if (dxgi_active_ && dxgi_renderer_) {
+        uint32_t sw = 0;
+        uint32_t sh = 0;
+        dxgi_renderer_->GetSourceSize(sw, sh);
+        if (sw > 0 && sh > 0)
+            return displayedFrameRectForSource(static_cast<int>(sw), static_cast<int>(sh));
+    }
 
-    const double sx = static_cast<double>(width()) / static_cast<double>(current_frame_.width());
-    const double sy = static_cast<double>(height()) / static_cast<double>(current_frame_.height());
-    const double s = std::min(sx, sy);
-    const double dw = static_cast<double>(current_frame_.width()) * s;
-    const double dh = static_cast<double>(current_frame_.height()) * s;
-    const double dx = (static_cast<double>(width()) - dw) * 0.5;
-    const double dy = (static_cast<double>(height()) - dh) * 0.5;
-    return {dx, dy, dw, dh};
+    if (current_frame_.isNull() || current_frame_.width() <= 0 || current_frame_.height() <= 0)
+        return rect();
+
+    return displayedFrameRectForSource(current_frame_.width(), current_frame_.height());
 }
 
 PreviewSurface::DragMode PreviewSurface::hitTestWebcam(QPointF pos) const {
     const QRectF r = webcamPixelRect();
-    constexpr double kHandle = 10.0;
-    const bool nearL = std::abs(pos.x() - r.left()) < kHandle;
-    const bool nearR = std::abs(pos.x() - r.right()) < kHandle;
-    const bool nearT = std::abs(pos.y() - r.top()) < kHandle;
-    const bool nearB = std::abs(pos.y() - r.bottom()) < kHandle;
-    if (nearT && nearL)
-        return DragMode::ResizeTL;
-    if (nearT && nearR)
-        return DragMode::ResizeTR;
-    if (nearB && nearL)
-        return DragMode::ResizeBL;
-    if (nearB && nearR)
-        return DragMode::ResizeBR;
+    // Corner resize handles are only active once the PiP is selected; an unselected
+    // PiP responds to a click anywhere inside it by selecting + moving.
+    if (webcam_selected_) {
+        constexpr double kHandle = 10.0;
+        const bool nearL = std::abs(pos.x() - r.left()) < kHandle;
+        const bool nearR = std::abs(pos.x() - r.right()) < kHandle;
+        const bool nearT = std::abs(pos.y() - r.top()) < kHandle;
+        const bool nearB = std::abs(pos.y() - r.bottom()) < kHandle;
+        if (nearT && nearL)
+            return DragMode::ResizeTL;
+        if (nearT && nearR)
+            return DragMode::ResizeTR;
+        if (nearB && nearL)
+            return DragMode::ResizeBL;
+        if (nearB && nearR)
+            return DragMode::ResizeBR;
+    }
     if (r.contains(pos))
         return DragMode::Move;
     return DragMode::None;
@@ -659,26 +781,43 @@ void PreviewSurface::applyDragFromPointer(QPointF pos, Qt::KeyboardModifiers mod
 }
 
 void PreviewSurface::mousePressEvent(QMouseEvent* event) {
-    if (!webcam_enabled_) {
+    if (!webcamEditingAllowed()) {
         QWidget::mousePressEvent(event);
         return;
     }
     const QPointF pos = event->position();
-    drag_mode_ = hitTestWebcam(pos);
-    if (drag_mode_ != DragMode::None) {
+    const DragMode hit = hitTestWebcam(pos);
+    if (hit != DragMode::None) {
+        // Clicking the PiP selects it (showing edit chrome) and begins the interaction.
+        if (!webcam_selected_) {
+            webcam_selected_ = true;
+            emit webcamSelectionChanged(true);
+        }
+        drag_mode_ = hit;
         drag_origin_ = pos;
         drag_start_rect_ = sanitizeOverlayRect(webcam_rect_norm_);
+        // Captured so Escape can roll back the in-progress drag/resize.
+        pre_interaction_rect_ = drag_start_rect_;
         drag_modifier_toggle_held_ = false;
         setFocus(Qt::MouseFocusReason);
         grabKeyboard();
+        syncWebcamOverlayToDxgi();
+        update();
         event->accept();
     } else {
+        // Clicking outside the PiP deselects (keeps the confirmed placement).
+        if (webcam_selected_) {
+            webcam_selected_ = false;
+            emit webcamSelectionChanged(false);
+            syncWebcamOverlayToDxgi();
+            update();
+        }
         QWidget::mousePressEvent(event);
     }
 }
 
 void PreviewSurface::mouseMoveEvent(QMouseEvent* event) {
-    if (!webcam_enabled_) {
+    if (!webcamEditingAllowed()) {
         QWidget::mouseMoveEvent(event);
         return;
     }
@@ -711,6 +850,7 @@ void PreviewSurface::mouseMoveEvent(QMouseEvent* event) {
     }
 
     applyDragFromPointer(pos, event->modifiers());
+    syncWebcamOverlayToDxgi();
     event->accept();
 }
 
@@ -724,7 +864,9 @@ void PreviewSurface::mouseReleaseEvent(QMouseEvent* event) {
         if (QWidget::keyboardGrabber() == this) {
             releaseKeyboard();
         }
+        // Confirm the new placement (RecordPage persists it).
         emit webcamOverlayMoved(webcam_rect_norm_);
+        syncWebcamOverlayToDxgi();
         event->accept();
     } else {
         QWidget::mouseReleaseEvent(event);
@@ -732,6 +874,31 @@ void PreviewSurface::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void PreviewSurface::keyPressEvent(QKeyEvent* event) {
+    if (webcam_enabled_ && event->key() == Qt::Key_Escape) {
+        if (drag_mode_ != DragMode::None) {
+            // Cancel the active drag/resize and restore the pre-interaction geometry.
+            drag_mode_ = DragMode::None;
+            drag_modifier_toggle_held_ = false;
+            webcam_rect_norm_ = sanitizeOverlayRect(pre_interaction_rect_);
+            if (QWidget::keyboardGrabber() == this) {
+                releaseKeyboard();
+            }
+            syncWebcamOverlayToDxgi();
+            update();
+            event->accept();
+            return;
+        }
+        if (webcam_selected_) {
+            // No active drag: Escape simply deselects (placement unchanged).
+            webcam_selected_ = false;
+            emit webcamSelectionChanged(false);
+            syncWebcamOverlayToDxgi();
+            update();
+            event->accept();
+            return;
+        }
+    }
+
     if (webcam_enabled_ && drag_mode_ != DragMode::None &&
         (event->key() == Qt::Key_Shift || event->key() == Qt::Key_Control)) {
         if (event->isAutoRepeat()) {
@@ -744,6 +911,7 @@ void PreviewSurface::keyPressEvent(QKeyEvent* event) {
         if (event->key() == Qt::Key_Control)
             mods |= Qt::ControlModifier;
         applyDragFromPointer(mapFromGlobal(QCursor::pos()), mods);
+        syncWebcamOverlayToDxgi();
         event->accept();
         return;
     }
@@ -763,6 +931,7 @@ void PreviewSurface::keyReleaseEvent(QKeyEvent* event) {
         if (event->key() == Qt::Key_Control)
             mods &= ~Qt::ControlModifier;
         applyDragFromPointer(mapFromGlobal(QCursor::pos()), mods);
+        syncWebcamOverlayToDxgi();
         event->accept();
         return;
     }
@@ -799,15 +968,12 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
             clipPath.addRoundedRect(frame_rect, 5.0, 5.0);
             painter.setClipPath(clipPath);
 
-            const double sx = static_cast<double>(width()) / current_frame_.width();
-            const double sy = static_cast<double>(height()) / current_frame_.height();
-            const double s = std::min(sx, sy);
-            const int dw = static_cast<int>(current_frame_.width() * s);
-            const int dh = static_cast<int>(current_frame_.height() * s);
-            const int dx = (width() - dw) / 2;
-            const int dy = (height() - dh) / 2;
+            // Draw through the same contain-fit rect used for PiP hit-testing and
+            // placement (displayedFrameRect) so the main image and the overlay share
+            // exactly one content rectangle (no sub-pixel divergence).
             painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-            painter.drawImage(QRect(dx, dy, dw, dh), current_frame_);
+            painter.drawImage(displayedFrameRectForSource(current_frame_.width(), current_frame_.height()),
+                              current_frame_);
             painter.restore();
         } else {
             painter.save();
@@ -851,27 +1017,36 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
         painter.restore();
     }
 
-    // Webcam overlay
+    // Webcam overlay (Qt paint path). When the DXGI live preview is active the native
+    // child HWND occludes this, and the renderer composites the PiP itself
+    // (syncWebcamOverlayToDxgi). This path drives the QImage preview and all
+    // deterministic visual-test scenarios (which run with DXGI stopped).
     if (webcam_enabled_) {
         const QRectF cam_rect = webcamPixelRect();
+        const bool show_chrome = webcam_selected_ && webcamEditingAllowed();
         if (!webcam_frame_.isNull()) {
             painter.save();
             painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
             const bool effective_aspect_lock = aspect_ratio_locked_ != drag_modifier_toggle_held_;
+            QRectF draw_rect = cam_rect;
             if (effective_aspect_lock) {
                 const double frame_ar = webcam_frame_.height() > 0
                                             ? static_cast<double>(webcam_frame_.width()) / webcam_frame_.height()
                                             : 0.0;
-                const QRectF draw_rect = fitAspectIntoRect(cam_rect, frame_ar);
+                draw_rect = fitAspectIntoRect(cam_rect, frame_ar);
                 if (draw_rect != cam_rect) {
                     painter.setPen(Qt::NoPen);
                     painter.setBrush(QColor(0, 0, 0, 140));
                     painter.drawRect(cam_rect);
                 }
-                painter.drawImage(draw_rect, webcam_frame_);
-            } else {
-                painter.drawImage(cam_rect, webcam_frame_);
             }
+            // Real horizontal mirror about the draw rect's vertical centre (no vertical flip).
+            if (webcam_mirror_) {
+                painter.translate(draw_rect.center());
+                painter.scale(-1.0, 1.0);
+                painter.translate(-draw_rect.center());
+            }
+            painter.drawImage(draw_rect, webcam_frame_);
             painter.restore();
         } else {
             painter.save();
@@ -884,19 +1059,22 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
             painter.restore();
         }
 
-        // Overlay border + resize handles
-        painter.save();
-        painter.setPen(QPen(QColor("#d7a744"), 1.5, Qt::DashLine));
-        painter.setBrush(Qt::NoBrush);
-        painter.drawRect(cam_rect);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor("#d7a744"));
-        constexpr double hs = 6.0;
-        for (const QPointF& corner :
-             {cam_rect.topLeft(), cam_rect.topRight(), cam_rect.bottomLeft(), cam_rect.bottomRight()}) {
-            painter.drawRect(QRectF(corner.x() - hs / 2, corner.y() - hs / 2, hs, hs));
+        // Edit chrome (selection border + corner handles) only while selected and
+        // editable. Never drawn into the recording (separate compositor path).
+        if (show_chrome) {
+            painter.save();
+            painter.setPen(QPen(QColor("#d7a744"), 1.5, Qt::DashLine));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawRect(cam_rect);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor("#d7a744"));
+            constexpr double hs = 6.0;
+            for (const QPointF& corner :
+                 {cam_rect.topLeft(), cam_rect.topRight(), cam_rect.bottomLeft(), cam_rect.bottomRight()}) {
+                painter.drawRect(QRectF(corner.x() - hs / 2, corner.y() - hs / 2, hs, hs));
+            }
+            painter.restore();
         }
-        painter.restore();
     }
 
     painter.setPen(QPen(tone_color, (tone_recording || tone_warn || tone_blocked) ? 1.8 : 1.2));

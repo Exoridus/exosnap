@@ -34,6 +34,9 @@ struct WebcamSettings {
     WebcamOverlayRect overlay;
     bool overlay_user_placed = false;
     bool aspect_ratio_locked = true;
+    // Horizontal mirror of the webcam image. Default off. Applied identically to
+    // the Settings preview, Record PiP and recorded output.
+    bool mirror = false;
     WebcamChromaKeySettings chroma_key;
 };
 

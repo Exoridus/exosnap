@@ -43,6 +43,20 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("source-region-invalid"),
         QStringLiteral("webcam-active"),
         QStringLiteral("webcam-unavailable"),
+        QStringLiteral("record-webcam-disabled"),
+        QStringLiteral("record-webcam-default-pip"),
+        QStringLiteral("record-webcam-selected"),
+        QStringLiteral("record-webcam-dragging"),
+        QStringLiteral("record-webcam-resize-top-left"),
+        QStringLiteral("record-webcam-resize-bottom-right"),
+        QStringLiteral("record-webcam-min-size"),
+        QStringLiteral("record-webcam-max-size"),
+        QStringLiteral("record-webcam-mirrored"),
+        QStringLiteral("record-webcam-countdown-locked"),
+        QStringLiteral("record-webcam-recording-locked"),
+        QStringLiteral("settings-webcam-mirror-off"),
+        QStringLiteral("settings-webcam-mirror-on"),
+        QStringLiteral("settings-webcam-unavailable"),
         QStringLiteral("diagnostics"),
         QStringLiteral("hotkeys"),
         QStringLiteral("logs"),
@@ -51,6 +65,49 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
 
     for (const QString& id : required)
         EXPECT_NE(FindVisualScenario(id), nullptr) << id.toStdString();
+}
+
+// 45. Every webcam scenario is registered with the expected routing + state.
+TEST(VisualScenarioTest, WebcamPipScenariosCarryDeterministicState) {
+    const VisualScenario* def = FindVisualScenario(QStringLiteral("record-webcam-default-pip"));
+    ASSERT_NE(def, nullptr);
+    EXPECT_EQ(def->page, VisualPage::Record);
+    EXPECT_TRUE(def->webcam_pip_enabled);
+    EXPECT_FALSE(def->webcam_pip_selected);
+    EXPECT_FALSE(def->webcam_mirror);
+
+    const VisualScenario* mirrored = FindVisualScenario(QStringLiteral("record-webcam-mirrored"));
+    ASSERT_NE(mirrored, nullptr);
+    EXPECT_TRUE(mirrored->webcam_mirror);
+
+    const VisualScenario* selected = FindVisualScenario(QStringLiteral("record-webcam-selected"));
+    ASSERT_NE(selected, nullptr);
+    EXPECT_TRUE(selected->webcam_pip_selected);
+
+    const VisualScenario* locked = FindVisualScenario(QStringLiteral("record-webcam-recording-locked"));
+    ASSERT_NE(locked, nullptr);
+    EXPECT_EQ(locked->record_state, VisualRecordState::Recording);
+    EXPECT_TRUE(locked->webcam_pip_edit_locked);
+
+    const VisualScenario* disabled = FindVisualScenario(QStringLiteral("record-webcam-disabled"));
+    ASSERT_NE(disabled, nullptr);
+    EXPECT_FALSE(disabled->webcam_pip_enabled);
+}
+
+// Settings webcam scenarios route to the Settings page and carry mirror/availability.
+TEST(VisualScenarioTest, SettingsWebcamScenariosRouteToSettings) {
+    const VisualScenario* off = FindVisualScenario(QStringLiteral("settings-webcam-mirror-off"));
+    const VisualScenario* on = FindVisualScenario(QStringLiteral("settings-webcam-mirror-on"));
+    const VisualScenario* unavailable = FindVisualScenario(QStringLiteral("settings-webcam-unavailable"));
+    ASSERT_NE(off, nullptr);
+    ASSERT_NE(on, nullptr);
+    ASSERT_NE(unavailable, nullptr);
+
+    EXPECT_EQ(off->page, VisualPage::Settings);
+    EXPECT_EQ(off->webcam_state, VisualWebcamState::Active);
+    EXPECT_FALSE(off->webcam_mirror);
+    EXPECT_TRUE(on->webcam_mirror);
+    EXPECT_EQ(unavailable->webcam_state, VisualWebcamState::Unavailable);
 }
 
 TEST(VisualScenarioTest, RecordStatesRouteToRecordPage) {
@@ -138,6 +195,44 @@ TEST(VisualScenarioTest, RegisteredScenariosValidate) {
         EXPECT_TRUE(ValidateVisualScenario(scenario, &error))
             << scenario.id.toStdString() << ": " << error.toStdString();
     }
+}
+
+// 46. Invalid webcam PiP placement inputs are rejected by validation.
+TEST(VisualScenarioTest, ScenarioParserRejectsInvalidWebcamPlacement) {
+    {
+        VisualScenario scenario;
+        scenario.id = QStringLiteral("bad-webcam-overflow");
+        scenario.webcam_pip_enabled = true;
+        scenario.webcam_x = 0.9f;
+        scenario.webcam_w = 0.5f; // x + w = 1.4 > 1
+        QString error;
+        EXPECT_FALSE(ValidateVisualScenario(scenario, &error));
+        EXPECT_TRUE(error.contains(QStringLiteral("Webcam")));
+    }
+    {
+        VisualScenario scenario;
+        scenario.id = QStringLiteral("bad-webcam-negative");
+        scenario.webcam_pip_enabled = true;
+        scenario.webcam_x = -0.1f;
+        QString error;
+        EXPECT_FALSE(ValidateVisualScenario(scenario, &error));
+    }
+    {
+        VisualScenario scenario;
+        scenario.id = QStringLiteral("bad-webcam-too-small");
+        scenario.webcam_pip_enabled = true;
+        scenario.webcam_w = 0.001f; // below kMinSize
+        QString error;
+        EXPECT_FALSE(ValidateVisualScenario(scenario, &error));
+    }
+}
+
+// 47. Webcam handle enum serialization is stable.
+TEST(VisualScenarioTest, WebcamHandleSerializationIsStable) {
+    EXPECT_EQ(ToString(VisualWebcamHandle::None), QStringLiteral("none"));
+    EXPECT_EQ(ToString(VisualWebcamHandle::Move), QStringLiteral("move"));
+    EXPECT_EQ(ToString(VisualWebcamHandle::ResizeTopLeft), QStringLiteral("tl"));
+    EXPECT_EQ(ToString(VisualWebcamHandle::ResizeBottomRight), QStringLiteral("br"));
 }
 
 } // namespace

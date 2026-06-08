@@ -1,6 +1,8 @@
 #include "VisualTestHarness.h"
 
 #include "../MainWindow.h"
+#include "../ui/widgets/ExoToggle.h"
+#include "../ui/widgets/PreviewSurface.h"
 
 #include <QApplication>
 #include <QDir>
@@ -110,6 +112,35 @@ QJsonObject BuildVisualManifest(const MainWindow& window, const VisualScenario& 
                 RectToJson(QRect(scenario.region_x, scenario.region_y, scenario.region_width, scenario.region_height)));
     root.insert(QStringLiteral("ready_marker"), QStringLiteral("VISUAL_TEST_READY:%1").arg(scenario.id));
     root.insert(QStringLiteral("window_geometry"), RectToJson(window.geometry()));
+
+    // Webcam PiP manifest (Record preview). Reflects actual PreviewSurface state, not
+    // the scenario inputs, so preview/output parity and lock/selection can be asserted.
+    if (const auto* preview = window.findChild<const ui::widgets::PreviewSurface*>(QStringLiteral("previewSurface"))) {
+        QJsonObject pip;
+        pip.insert(QStringLiteral("enabled"), preview->isWebcamOverlayEnabled());
+        const QRectF norm = preview->webcamOverlayRect();
+        QJsonObject placement;
+        placement.insert(QStringLiteral("x"), norm.x());
+        placement.insert(QStringLiteral("y"), norm.y());
+        placement.insert(QStringLiteral("w"), norm.width());
+        placement.insert(QStringLiteral("h"), norm.height());
+        pip.insert(QStringLiteral("placement_norm"), placement);
+        pip.insert(QStringLiteral("mapped_preview_rect"), RectToJson(preview->webcamMappedPreviewRect()));
+        pip.insert(QStringLiteral("mirror"), preview->webcamMirror());
+        pip.insert(QStringLiteral("selected"), preview->isWebcamSelected());
+        pip.insert(QStringLiteral("edit_locked"), preview->isWebcamEditLocked());
+        pip.insert(QStringLiteral("active_handle"), preview->webcamActiveHandle());
+        root.insert(QStringLiteral("webcam_pip"), pip);
+    }
+
+    // Webcam card manifest (Settings) — availability is in webcam_state; expose the
+    // mirror toggle truth too.
+    if (const auto* mirror_toggle =
+            window.findChild<const ui::widgets::ExoToggle*>(QStringLiteral("webcamPanelMirrorToggle"))) {
+        QJsonObject card;
+        card.insert(QStringLiteral("mirror"), mirror_toggle->isOn());
+        root.insert(QStringLiteral("webcam_card"), card);
+    }
 
     QJsonArray masks;
     for (const VisualMask& mask : scenario.masks) {

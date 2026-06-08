@@ -35,6 +35,13 @@ class WebcamSetupPanel : public QWidget {
     // Lock all controls during recording (preview still runs if already started).
     void setControlsLocked(bool locked);
 
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    // Deterministic visual-test state: suppresses real capture and injects a
+    // synthetic frame (available) or an honest unavailable placeholder, plus the
+    // mirror toggle/preview state. Never compiled into Release builds.
+    void applyVisualState(bool available, bool mirror);
+#endif
+
   signals:
     void settingsChanged(WebcamSettings settings);
 
@@ -42,6 +49,7 @@ class WebcamSetupPanel : public QWidget {
     void onEnableToggled(bool enabled);
     void onDeviceChanged(int index);
     void onResolutionChanged(int index);
+    void onMirrorToggled(bool mirror);
     void onRescan();
     void onPreviewFrame(QImage frame);
 
@@ -61,11 +69,13 @@ class WebcamSetupPanel : public QWidget {
     WebcamSettings current_settings_;
     bool suppress_signals_ = false;
     bool preview_frame_seen_ = false;
+    bool visual_test_mode_ = false;
 
     CameraPreview* camera_preview_ = nullptr;
     ExoToggle* enable_toggle_ = nullptr;
     QComboBox* device_combo_ = nullptr;
     QComboBox* resolution_combo_ = nullptr;
+    ExoToggle* mirror_toggle_ = nullptr;
     QPushButton* rescan_btn_ = nullptr;
     QTimer* watchdog_ = nullptr;
 };

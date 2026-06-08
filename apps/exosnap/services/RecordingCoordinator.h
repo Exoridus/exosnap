@@ -62,6 +62,10 @@ class RecordingCoordinator {
     // Webcam overlay
     void SetWebcamSettings(const WebcamSettings& settings);
     void SetWebcamFrameCallback(WebcamService::FrameCallback cb);
+    // Request that the shared webcam capture run while idle (not recording) so the
+    // Record preview can show a live PiP.  Recording always owns the device; this
+    // only affects the Ready/idle state.  Idempotent and safe to call repeatedly.
+    void SetWebcamPreviewActive(bool active);
     void StopRecording();
     void PauseRecording();
     void ResumeRecording();
@@ -95,6 +99,8 @@ class RecordingCoordinator {
 
   private:
     void RecordingThreadProc(const recorder_core::RecorderConfig& config, const std::filesystem::path& output_path);
+    // (Re)start or stop the shared webcam capture based on enabled/recording/preview state.
+    void SyncWebcamService(bool force_restart);
     void PostStateChange(UiRecordingState new_state);
     void PostResult(UiRecordingResult result);
     void PostStats(recorder_core::SessionStats stats);
@@ -115,6 +121,8 @@ class RecordingCoordinator {
     VideoSettingsModel video_settings_;
     WebcamSettings webcam_settings_;
     WebcamService webcam_service_;
+    // Record preview requested the idle webcam capture (Ready-state live PiP).
+    bool webcam_preview_active_ = false;
     bool has_output_target_context_ = false;
     FilenameTargetContext output_target_context_;
 
