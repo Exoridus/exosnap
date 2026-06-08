@@ -4,8 +4,9 @@
 
 namespace exosnap::ui::dialogs {
 
-QRect SourcePickerDialog::ComputePresetRegionRect(int preset_w, int preset_h, const QRect& monitor) {
-    return SourcePickerPanel::ComputePresetRegionRect(preset_w, preset_h, monitor);
+QRect SourcePickerDialog::ComputePresetRegionRect(int preset_w, int preset_h, const QRect& monitor,
+                                                  const QRect& existing_region) {
+    return SourcePickerPanel::ComputePresetRegionRect(preset_w, preset_h, monitor, existing_region);
 }
 
 SourcePickerDialog::SourcePickerDialog(QWidget* parent, Qt::WindowFlags flags) : QDialog(parent, flags) {
@@ -33,8 +34,9 @@ void SourcePickerDialog::setWindowOptions(const std::vector<SourceOption>& optio
     panel_->setWindowOptions(options);
 }
 
-void SourcePickerDialog::setRegionState(const QString& summary, bool has_region, bool select_on_record) {
-    panel_->setRegionState(summary, has_region, select_on_record);
+void SourcePickerDialog::setRegionState(const QString& summary, bool has_region, bool select_on_record,
+                                        const QRect& region_rect) {
+    panel_->setRegionState(summary, has_region, select_on_record, region_rect);
 }
 
 void SourcePickerDialog::setCurrentSelection(Section section, int target_index) {

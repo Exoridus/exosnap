@@ -93,6 +93,8 @@ qt_add_executable(exosnap WIN32
     ui/widgets/ComboBoxWheelFilter.cpp
     ui/widgets/RegionSelectionOverlay.h
     ui/widgets/RegionSelectionOverlay.cpp
+    ui/widgets/RegionGeometry.h
+    ui/widgets/RegionGeometry.cpp
     ui/widgets/AudioSourceRow.h
     ui/widgets/AudioSourceRow.cpp
     ui/widgets/AudioSourceToggle.h
@@ -128,6 +130,8 @@ qt_add_executable(exosnap WIN32
     services/WebcamService.cpp
     services/RecordingCoordinator.h
     services/RecordingCoordinator.cpp
+    services/RecordingCountdownController.h
+    services/RecordingCountdownController.cpp
     models/WebcamSettings.h
     models/OutputSettingsModel.h
     models/OutputSettingsModel.cpp
@@ -237,6 +241,25 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(region_model_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+    NAME recording_countdown_tests
+    TEST_PREFIX countdown.
+    SOURCES
+        tests/test_recording_countdown.cpp
+        services/RecordingCountdownController.cpp
+)
+target_include_directories(recording_countdown_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+    NAME region_geometry_tests
+    TEST_PREFIX region.
+    SOURCES
+        tests/test_region_geometry.cpp
+        ui/widgets/RegionGeometry.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(region_geometry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME error_message_tests
@@ -369,6 +392,7 @@ exosnap_add_gtest(
         tests/test_source_picker_dialog.cpp
         ui/dialogs/SourcePickerPanel.cpp
         ui/dialogs/SourcePickerDialog.cpp
+        ui/widgets/RegionGeometry.cpp
         ui/widgets/CaptureTargetCard.cpp
         ui/widgets/RegionPresetCard.cpp
         services/ThumbnailCapture.cpp
@@ -386,6 +410,7 @@ exosnap_add_gtest(
         ui/dialogs/SourcePickerOverlay.cpp
         ui/dialogs/SourcePickerPanel.cpp
         ui/dialogs/SourcePickerDialog.cpp
+        ui/widgets/RegionGeometry.cpp
         ui/widgets/CaptureTargetCard.cpp
         ui/widgets/RegionPresetCard.cpp
         services/ThumbnailCapture.cpp

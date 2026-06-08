@@ -319,6 +319,10 @@ void OperationalTitleBar::refreshStatusChip() {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
         status_pill_->setDotVisible(true);
         status_pill_->setText(QStringLiteral("Starting"));
+    } else if (status.contains(QStringLiteral("COUNTDOWN"))) {
+        status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
+        status_pill_->setDotVisible(true);
+        status_pill_->setText(QStringLiteral("Countdown"));
     } else if (status.contains(QStringLiteral("CHECK"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
         status_pill_->setDotVisible(true);

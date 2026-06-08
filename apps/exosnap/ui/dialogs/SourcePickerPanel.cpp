@@ -2,6 +2,7 @@
 
 #include "../../services/ThumbnailCapture.h"
 #include "../widgets/CaptureTargetCard.h"
+#include "../widgets/RegionGeometry.h"
 #include "../widgets/RegionPresetCard.h"
 
 #include <QCheckBox>
@@ -127,30 +128,9 @@ QString StripCaptureJargon(QString s) {
 
 } // namespace
 
-QRect SourcePickerPanel::ComputePresetRegionRect(int preset_w, int preset_h, const QRect& monitor) {
-    if (preset_w <= 0 || preset_h <= 0 || monitor.width() <= 0 || monitor.height() <= 0) {
-        return {};
-    }
-
-    double w = preset_w;
-    double h = preset_h;
-    // Scale down (aspect-preserving) when the preset does not fit the monitor.
-    if (w > monitor.width() || h > monitor.height()) {
-        const double scale =
-            std::min(static_cast<double>(monitor.width()) / w, static_cast<double>(monitor.height()) / h);
-        w *= scale;
-        h *= scale;
-    }
-
-    // Even-align for encoder friendliness; never exceed the monitor.
-    int iw = static_cast<int>(std::floor(w)) & ~1;
-    int ih = static_cast<int>(std::floor(h)) & ~1;
-    iw = std::clamp(iw, 0, monitor.width());
-    ih = std::clamp(ih, 0, monitor.height());
-
-    const int x = monitor.x() + (monitor.width() - iw) / 2;
-    const int y = monitor.y() + (monitor.height() - ih) / 2;
-    return QRect(x, y, iw, ih);
+QRect SourcePickerPanel::ComputePresetRegionRect(int preset_w, int preset_h, const QRect& monitor,
+                                                 const QRect& existing_region) {
+    return ui::widgets::PresetRegionWithinMonitor(preset_w, preset_h, monitor, existing_region, kRegionMinDimension);
 }
 
 SourcePickerPanel::SourcePickerPanel(QWidget* parent) : QWidget(parent) {
@@ -444,8 +424,10 @@ void SourcePickerPanel::setWindowOptions(const std::vector<SourceOption>& option
     }
 }
 
-void SourcePickerPanel::setRegionState(const QString& summary, bool has_region, bool select_on_record) {
+void SourcePickerPanel::setRegionState(const QString& summary, bool has_region, bool select_on_record,
+                                       const QRect& region_rect) {
     has_region_ = has_region;
+    current_region_rect_ = has_region ? region_rect : QRect();
     region_summary_ = summary;
     region_select_on_record_check_->setChecked(select_on_record);
     if (region_summary_.trimmed().isEmpty()) {
@@ -484,6 +466,18 @@ void SourcePickerPanel::setCurrentSelection(Section section, int target_index) {
     refreshSelectionVisuals();
     updateSummaryLabel();
 }
+
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+void SourcePickerPanel::applyVisualRegionPreset(int preset_w, int preset_h) {
+    for (int i = 0; i < static_cast<int>(region_preset_entries_.size()); ++i) {
+        const RegionPresetEntry& entry = region_preset_entries_[static_cast<std::size_t>(i)];
+        if (!entry.draw && entry.width == preset_w && entry.height == preset_h) {
+            selectRegionPreset(i);
+            return;
+        }
+    }
+}
+#endif
 
 bool SourcePickerPanel::selectSource(Section section, int target_index) {
     if (section == Section::Region) {
@@ -844,7 +838,13 @@ bool SourcePickerPanel::regionPresetsEnabled() const {
 }
 
 bool SourcePickerPanel::findBaseDisplay(SourceOption* out) const {
+    const QPoint current_center = current_region_rect_.isValid()
+                                      ? QPoint(current_region_rect_.x() + current_region_rect_.width() / 2,
+                                               current_region_rect_.y() + current_region_rect_.height() / 2)
+                                      : QPoint();
+    const bool has_current_center = current_region_rect_.isValid();
     const SourceOption* preferred = nullptr;
+    const SourceOption* current_region_display = nullptr;
     const SourceOption* primary = nullptr;
     const SourceOption* first = nullptr;
     for (const auto& option : screen_options_) {
@@ -857,12 +857,17 @@ bool SourcePickerPanel::findBaseDisplay(SourceOption* out) const {
         if (option.primary && !primary) {
             primary = &option;
         }
-        // Prefer the display the picker entered on (the current monitor).
         if (option.target_index == selected_target_index_ && !preferred) {
             preferred = &option;
         }
+        if (has_current_center && !current_region_display &&
+            QRect(option.monitor_x, option.monitor_y, option.monitor_width, option.monitor_height)
+                .contains(current_center)) {
+            current_region_display = &option;
+        }
     }
-    const SourceOption* chosen = preferred ? preferred : (primary ? primary : first);
+    const SourceOption* chosen =
+        current_region_display ? current_region_display : (preferred ? preferred : (primary ? primary : first));
     if (!chosen) {
         return false;
     }
@@ -921,7 +926,7 @@ void SourcePickerPanel::selectRegionPreset(int entry_index) {
     }
 
     const QRect monitor(base.monitor_x, base.monitor_y, base.monitor_width, base.monitor_height);
-    const QRect rect = ComputePresetRegionRect(entry.width, entry.height, monitor);
+    const QRect rect = ComputePresetRegionRect(entry.width, entry.height, monitor, current_region_rect_);
     if (!rect.isValid() || rect.width() < kRegionMinDimension || rect.height() < kRegionMinDimension) {
         return;
     }

@@ -19,6 +19,13 @@ TEST(VisualScenarioTest, ScenarioIdsAreUnique) {
 TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
     const QStringList required = {
         QStringLiteral("record-ready"),
+        QStringLiteral("record-ready-countdown-off"),
+        QStringLiteral("record-ready-countdown-3s"),
+        QStringLiteral("record-countdown-3"),
+        QStringLiteral("record-countdown-2"),
+        QStringLiteral("record-countdown-1"),
+        QStringLiteral("record-countdown-cancelled"),
+        QStringLiteral("record-recording-after-countdown"),
         QStringLiteral("record-recording"),
         QStringLiteral("record-paused"),
         QStringLiteral("record-completed"),
@@ -28,6 +35,12 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("source-picker-screens"),
         QStringLiteral("source-picker-windows"),
         QStringLiteral("source-picker-region"),
+        QStringLiteral("source-region-empty"),
+        QStringLiteral("source-region-selected"),
+        QStringLiteral("source-region-editing"),
+        QStringLiteral("source-region-preset-16x9"),
+        QStringLiteral("source-region-preset-9x16"),
+        QStringLiteral("source-region-invalid"),
         QStringLiteral("webcam-active"),
         QStringLiteral("webcam-unavailable"),
         QStringLiteral("diagnostics"),
@@ -41,8 +54,9 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
 }
 
 TEST(VisualScenarioTest, RecordStatesRouteToRecordPage) {
-    for (const QString& id : {QStringLiteral("record-ready"), QStringLiteral("record-recording"),
-                              QStringLiteral("record-paused"), QStringLiteral("record-completed")}) {
+    for (const QString& id :
+         {QStringLiteral("record-ready"), QStringLiteral("record-countdown-3"), QStringLiteral("record-recording"),
+          QStringLiteral("record-paused"), QStringLiteral("record-completed")}) {
         const VisualScenario* scenario = FindVisualScenario(id);
         ASSERT_NE(scenario, nullptr);
         EXPECT_EQ(scenario->page, VisualPage::Record);
@@ -82,6 +96,9 @@ TEST(VisualScenarioTest, ManifestSerializationEnumsAreStable) {
     ASSERT_NE(scenario, nullptr);
     EXPECT_EQ(ToString(scenario->page), QStringLiteral("record"));
     EXPECT_EQ(ToString(scenario->record_state), QStringLiteral("recording"));
+    EXPECT_EQ(ToString(VisualRecordState::Countdown), QStringLiteral("countdown"));
+    EXPECT_EQ(ToString(VisualRegionState::Preset16x9), QStringLiteral("preset-16x9"));
+    EXPECT_EQ(ToString(VisualRegionEditMode::ResizeTopLeft), QStringLiteral("resize-top-left"));
 }
 
 TEST(VisualScenarioTest, DiffMasksCoverDynamicRecordSurfaces) {
@@ -93,6 +110,34 @@ TEST(VisualScenarioTest, DiffMasksCoverDynamicRecordSurfaces) {
     EXPECT_TRUE(masked_objects.contains(QStringLiteral("previewSurface")));
     EXPECT_TRUE(masked_objects.contains(QStringLiteral("recordDockTimer")));
     EXPECT_TRUE(masked_objects.contains(QStringLiteral("recordTransportDock")));
+}
+
+TEST(VisualScenarioTest, ScenarioParserRejectsInvalidCountdown) {
+    VisualScenario scenario;
+    scenario.id = QStringLiteral("bad-countdown");
+    scenario.countdown_seconds = 4;
+    QString error;
+    EXPECT_FALSE(ValidateVisualScenario(scenario, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("countdown")));
+}
+
+TEST(VisualScenarioTest, ScenarioParserRejectsInvalidRegionGeometry) {
+    VisualScenario scenario;
+    scenario.id = QStringLiteral("bad-region");
+    scenario.region_state = VisualRegionState::Selected;
+    scenario.region_width = 63;
+    scenario.region_height = 720;
+    QString error;
+    EXPECT_FALSE(ValidateVisualScenario(scenario, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("region")));
+}
+
+TEST(VisualScenarioTest, RegisteredScenariosValidate) {
+    for (const VisualScenario& scenario : VisualScenarioRegistry()) {
+        QString error;
+        EXPECT_TRUE(ValidateVisualScenario(scenario, &error))
+            << scenario.id.toStdString() << ": " << error.toStdString();
+    }
 }
 
 } // namespace

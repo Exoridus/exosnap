@@ -21,6 +21,7 @@ enum class UiRecordingState {
     LoadingCapabilities,
     Ready,
     Blocked,
+    Countdown,
     Preparing,
     RegionSelecting, // overlay shown; user drawing selection rectangle
     Recording,

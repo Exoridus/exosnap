@@ -4,18 +4,37 @@ namespace exosnap::ui::widgets {
 
 CountdownSelect::CountdownSelect(QWidget* parent) : QComboBox(parent) {
     setObjectName(QStringLiteral("recordCountdownSelect"));
-    addItem(QStringLiteral("Off"));
-    addItem(QStringLiteral("3s"));
-    addItem(QStringLiteral("5s"));
-    addItem(QStringLiteral("10s"));
+    addItem(QStringLiteral("Off"), 0);
+    addItem(QStringLiteral("3s"), 3);
+    addItem(QStringLiteral("5s"), 5);
+    addItem(QStringLiteral("10s"), 10);
     setCurrentIndex(0);
-    // Honest state: recording delay is not yet wired into the capture path.
-    setEnabled(false);
-    setToolTip(QStringLiteral("Recording delay is planned — not yet wired into capture."));
+    setEnabled(true);
+    setToolTip(QStringLiteral("Delay before recording starts."));
     setFocusPolicy(Qt::NoFocus);
     setSizeAdjustPolicy(QComboBox::AdjustToContents);
     // Match the dock action-button height so the Ready-state right zone aligns.
     setMinimumHeight(40);
+
+    connect(this, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this]() { emit selectedSecondsChanged(selectedSeconds()); });
+}
+
+int CountdownSelect::selectedSeconds() const {
+    return currentData().toInt();
+}
+
+void CountdownSelect::setSelectedSeconds(int seconds) {
+    const int index = findData(seconds);
+    if (index >= 0 && index != currentIndex()) {
+        setCurrentIndex(index);
+    }
+}
+
+void CountdownSelect::setInteractive(bool interactive) {
+    setEnabled(interactive);
+    setToolTip(interactive ? QStringLiteral("Delay before recording starts.")
+                           : QStringLiteral("Countdown cannot change while recording controls are locked."));
 }
 
 } // namespace exosnap::ui::widgets

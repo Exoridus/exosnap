@@ -2635,7 +2635,7 @@ QLabel[labelRole="recordDockSize"] {
     color: ${text2};
 }
 
-/* Countdown select — planned/disabled in this slice; compact secondary control. */
+/* Countdown select — compact recording-delay control. */
 QComboBox#recordCountdownSelect {
     background: ${bg2};
     border: 1px solid ${line2};

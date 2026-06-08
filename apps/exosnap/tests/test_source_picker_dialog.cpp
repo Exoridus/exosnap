@@ -166,6 +166,12 @@ TEST_F(SourcePickerDialogTest, ComputePresetRegionRect_ScalesDownToFitSmallMonit
     EXPECT_GE(rect.height(), 64);
 }
 
+TEST_F(SourcePickerDialogTest, ComputePresetRegionRect_PreservesExistingCenterWhenPossible) {
+    const QRect rect = ui::dialogs::SourcePickerDialog::ComputePresetRegionRect(1280, 720, QRect(0, 0, 2560, 1440),
+                                                                                QRect(1000, 500, 400, 300));
+    EXPECT_EQ(rect, QRect(560, 290, 1280, 720));
+}
+
 TEST_F(SourcePickerDialogTest, RegionPresets_BecomeActiveWhenDisplayGeometryKnown) {
     ui::dialogs::SourcePickerDialog dialog;
     dialog.setScreenOptions({MakeScreenWithGeometry(1, 0, 0, 2560, 1440, true)});
@@ -214,6 +220,45 @@ TEST_F(SourcePickerDialogTest, ClickingPreset_SelectsRegionSourceWithActualRect)
     EXPECT_EQ(selection.region_y, 180);
     EXPECT_EQ(selection.region_base_target_index, 2);
     EXPECT_FALSE(selection.select_on_record);
+}
+
+TEST_F(SourcePickerDialogTest, ClickingPreset_ResizesExistingRegionAroundCurrentCenter) {
+    ui::dialogs::SourcePickerDialog dialog;
+    dialog.setScreenOptions({MakeScreenWithGeometry(2, 0, 0, 2560, 1440, true)});
+    dialog.setRegionState(QStringLiteral("1000, 500 — 400 × 300"), true, false, QRect(1000, 500, 400, 300));
+
+    auto* preset = FindRegionCardByTitle(dialog, QStringLiteral("16:9 HD"));
+    ASSERT_NE(preset, nullptr);
+    ClickRegionCard(preset);
+
+    const auto selection = dialog.selectionResult();
+    EXPECT_TRUE(selection.valid);
+    EXPECT_TRUE(selection.region_preset);
+    EXPECT_EQ(selection.region_width, 1280);
+    EXPECT_EQ(selection.region_height, 720);
+    EXPECT_EQ(selection.region_x, 560);
+    EXPECT_EQ(selection.region_y, 290);
+}
+
+TEST_F(SourcePickerDialogTest, ClickingPreset_UsesDisplayContainingExistingRegionCenter) {
+    ui::dialogs::SourcePickerDialog dialog;
+    dialog.setScreenOptions(
+        {MakeScreenWithGeometry(1, 0, 0, 1920, 1080, true), MakeScreenWithGeometry(2, -1920, 0, 1920, 1080, false)});
+    dialog.setCurrentSelection(ui::dialogs::SourcePickerDialog::Section::Screens, 1);
+    dialog.setRegionState(QStringLiteral("-1600, 100 — 640 × 360"), true, false, QRect(-1600, 100, 640, 360));
+
+    auto* preset = FindRegionCardByTitle(dialog, QStringLiteral("16:9 HD"));
+    ASSERT_NE(preset, nullptr);
+    ClickRegionCard(preset);
+
+    const auto selection = dialog.selectionResult();
+    EXPECT_TRUE(selection.valid);
+    EXPECT_TRUE(selection.region_preset);
+    EXPECT_EQ(selection.region_base_target_index, 2);
+    EXPECT_EQ(selection.region_x, -1920);
+    EXPECT_EQ(selection.region_y, 0);
+    EXPECT_EQ(selection.region_width, 1280);
+    EXPECT_EQ(selection.region_height, 720);
 }
 
 TEST_F(SourcePickerDialogTest, PresetSummary_ShowsActualDimensions) {

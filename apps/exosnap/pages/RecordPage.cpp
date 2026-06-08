@@ -11,6 +11,7 @@
 #include "../ui/widgets/ComboBoxWheelFilter.h"
 #include "../ui/widgets/ExoCheckBox.h"
 #include "../ui/widgets/PreviewSurface.h"
+#include "../ui/widgets/RegionGeometry.h"
 #include "../ui/widgets/RegionSelectionOverlay.h"
 #include "../ui/widgets/SectionRuleHeader.h"
 #include "../ui/widgets/StatusPill.h"
@@ -43,6 +44,7 @@
 #include <QRegularExpression>
 #include <QResizeEvent>
 #include <QScrollArea>
+#include <QShortcut>
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSlider>
@@ -102,6 +104,8 @@ QString stateDisplay(UiRecordingState state) {
         return "READY";
     case UiRecordingState::Blocked:
         return "BLOCKED";
+    case UiRecordingState::Countdown:
+        return "COUNTDOWN";
     case UiRecordingState::Preparing:
         return "STARTING";
     case UiRecordingState::Recording:
@@ -579,9 +583,7 @@ WindowEligibility ClassifyWindowForPicker(const WindowPresentation& meta, const 
 bool RecordPage::eventFilter(QObject* watched, QEvent* event) {
     // Refresh target list when the target picker combo popup opens.
     if (target_picker_combo_ && watched == target_picker_combo_->view() && event->type() == QEvent::Show) {
-        const bool busy =
-            view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::Recording ||
-            view_model_.state == UiRecordingState::Paused || view_model_.state == UiRecordingState::Stopping;
+        const bool busy = isSourceSelectionLocked();
         if (!busy) {
             enumerateTargets(true);
         }
@@ -1320,8 +1322,11 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(region_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectRegionTarget);
     connect(change_source_btn_, &QPushButton::clicked, this, &RecordPage::onOpenSourcePicker);
     connect(region_pick_btn_, &QPushButton::clicked, this, [this]() {
+        if (isSourceSelectionLocked())
+            return;
         ensureRegionOverlay();
-        region_overlay_->activateForSelection();
+        setInteractionMode(InteractionMode::RegionSelecting);
+        region_overlay_->activateForSelection(selectedMonitorRect(), currentRegionRect());
     });
     connect(select_on_record_check_, &QAbstractButton::toggled, this,
             [this](bool checked) { view_model_.select_on_record = checked; });
@@ -1340,13 +1345,15 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(rail_diagnostics_btn_, &QPushButton::clicked, this, [this]() { emit navigateToDiagnosticsPage(); });
     connect(result_open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
     connect(result_record_again_btn_, &QPushButton::clicked, this, [this]() {
-        if (view_model_.CanStart()) {
+        if (view_model_.CanStart() && interaction_mode_ == InteractionMode::None) {
             onStart();
         }
     });
 
     connect(hero_action_btn_, &QPushButton::clicked, this, [this]() {
-        if (view_model_.CanStart())
+        if (isCountdownActive())
+            cancelCountdown();
+        else if (view_model_.CanStart() && interaction_mode_ == InteractionMode::None)
             onStart();
         else if (view_model_.CanResume())
             onResume();
@@ -1372,11 +1379,15 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 
     // Hybrid transport dock (HYBRID-PORT-R2) drives the same recording actions.
     connect(transport_dock_, &ui::widgets::TransportDock::recordClicked, this, [this]() {
-        if (view_model_.CanStart())
+        if (isCountdownActive()) {
+            cancelCountdown();
+            return;
+        }
+        if (view_model_.CanStart() && interaction_mode_ == InteractionMode::None)
             onStart();
     });
     connect(transport_dock_, &ui::widgets::TransportDock::recordAgainClicked, this, [this]() {
-        if (view_model_.CanStart())
+        if (view_model_.CanStart() && interaction_mode_ == InteractionMode::None)
             onStart();
     });
     connect(transport_dock_, &ui::widgets::TransportDock::stopClicked, this, [this]() {
@@ -1394,6 +1405,8 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(transport_dock_, &ui::widgets::TransportDock::openFolderClicked, this, &RecordPage::openOutputFolder);
     connect(transport_dock_, &ui::widgets::TransportDock::filenameClicked, this, &RecordPage::onDockFilenameActivated);
     connect(transport_dock_, &ui::widgets::TransportDock::sourceToggleClicked, this, &RecordPage::onDockSourceToggle);
+    connect(transport_dock_, &ui::widgets::TransportDock::countdownSecondsChanged, this,
+            [this](int seconds) { selected_countdown_seconds_ = seconds; });
 
     // 1 Hz tick drives the dock timer display while the backend stats are pending.
     ui_clock_timer_ = new QTimer(this);
@@ -1405,11 +1418,28 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
         }
     });
 
+    countdown_timer_ = new QTimer(this);
+    countdown_timer_->setInterval(100);
+    countdown_timer_->setSingleShot(false);
+    connect(countdown_timer_, &QTimer::timeout, this, &RecordPage::updateCountdown);
+
+    auto* escape_shortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+    escape_shortcut->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(escape_shortcut, &QShortcut::activated, this, &RecordPage::cancelActiveInteraction);
+
     coordinator_needs_init_ = true;
     updateResponsiveLayout();
 }
 
 RecordPage::~RecordPage() {
+    if (countdown_timer_)
+        countdown_timer_->stop();
+    countdown_.reset();
+    if (region_overlay_) {
+        region_overlay_->hide();
+        delete region_overlay_;
+        region_overlay_ = nullptr;
+    }
     if (preview_service_)
         preview_service_->Stop();
     if (coordinator_) {
@@ -1524,6 +1554,12 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
     visual_test_mode_ = true;
     if (ui_clock_timer_)
         ui_clock_timer_->stop();
+    if (countdown_timer_)
+        countdown_timer_->stop();
+    countdown_.reset();
+    countdown_remaining_seconds_ = 0;
+    selected_countdown_seconds_ = scenario.countdown_seconds;
+    setInteractionMode(InteractionMode::None);
     if (preview_service_)
         preview_service_->Stop();
     if (preview_surface_) {
@@ -1557,6 +1593,26 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
     window_target_index_ = 1;
     view_model_.selected_target_index = 0;
     view_model_.capture_mode = CaptureMode::Monitor;
+    view_model_.has_region = false;
+    view_model_.select_on_record = true;
+
+    const bool visual_region_selected = scenario.region_state == visual::VisualRegionState::Selected ||
+                                        scenario.region_state == visual::VisualRegionState::Editing ||
+                                        scenario.region_state == visual::VisualRegionState::Preset16x9 ||
+                                        scenario.region_state == visual::VisualRegionState::Preset9x16;
+    if (scenario.region_state != visual::VisualRegionState::None) {
+        view_model_.capture_mode = CaptureMode::Region;
+        view_model_.select_on_record = !visual_region_selected;
+    }
+    if (visual_region_selected) {
+        recorder_core::CaptureRegion region;
+        region.x = scenario.region_x;
+        region.y = scenario.region_y;
+        region.width = scenario.region_width;
+        region.height = scenario.region_height;
+        view_model_.has_region = region.IsValid();
+        view_model_.region = region;
+    }
 
     if (target_combo_) {
         QSignalBlocker blocker(target_combo_);
@@ -1612,7 +1668,20 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
     view_model_.UpdateStats(stats);
 
     switch (scenario.record_state) {
+    case visual::VisualRecordState::Countdown:
+        view_model_.ResetStats();
+        view_model_.SetState(UiRecordingState::Countdown);
+        countdown_remaining_seconds_ = scenario.countdown_remaining;
+        setInteractionMode(InteractionMode::Countdown);
+        if (preview_surface_) {
+            preview_surface_->setFrameTone(ui::widgets::PreviewSurface::FrameTone::Warn);
+            preview_surface_->setCenterTitle(QString::number((std::max)(1, scenario.countdown_remaining)));
+            preview_surface_->setCenterSubtitle(QStringLiteral("Visual test countdown state"));
+        }
+        break;
     case visual::VisualRecordState::Recording:
+        if (scenario.id == QStringLiteral("record-recording-after-countdown"))
+            view_model_.ResetStats();
         view_model_.SetState(UiRecordingState::Recording);
         if (preview_surface_) {
             preview_surface_->setFrameTone(ui::widgets::PreviewSurface::FrameTone::Recording);
@@ -2096,10 +2165,7 @@ void RecordPage::rebuildTargetPicker() {
         return;
     }
 
-    const bool busy = view_model_.state == UiRecordingState::Preparing ||
-                      view_model_.state == UiRecordingState::RegionSelecting ||
-                      view_model_.state == UiRecordingState::Recording ||
-                      view_model_.state == UiRecordingState::Paused || view_model_.state == UiRecordingState::Stopping;
+    const bool busy = isSourceSelectionLocked();
 
     const bool window_mode = view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window;
     const auto& active_indices = window_mode ? window_target_indices_ : monitor_target_indices_;
@@ -2183,16 +2249,150 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
     startPreviewIfIdle();
 }
 
+bool RecordPage::isCountdownActive() const noexcept {
+    return countdown_.isRunning() || view_model_.state == UiRecordingState::Countdown;
+}
+
+void RecordPage::setInteractionMode(InteractionMode mode) {
+    interaction_mode_ = mode;
+}
+
+void RecordPage::startCountdown(int seconds, std::optional<recorder_core::CaptureRegion> crop_region) {
+    if (seconds != 3 && seconds != 5 && seconds != 10) {
+        if (crop_region.has_value()) {
+            doStartRecording(crop_region);
+        } else {
+            startRecordingFlow();
+        }
+        return;
+    }
+    if (interaction_mode_ != InteractionMode::None || isCountdownActive()) {
+        return;
+    }
+
+    countdown_clock_.restart();
+    if (!countdown_.start(seconds, 0)) {
+        return;
+    }
+
+    setInteractionMode(InteractionMode::Countdown);
+    countdown_remaining_seconds_ = seconds;
+    pending_countdown_region_ = crop_region;
+    view_model_.SetState(UiRecordingState::Countdown);
+    diagnostics::AppLog(QStringLiteral("[record] countdown started: %1s").arg(seconds));
+    if (countdown_timer_ && !countdown_timer_->isActive()) {
+        countdown_timer_->start();
+    }
+    refresh();
+}
+
+void RecordPage::cancelCountdown() {
+    if (!isCountdownActive()) {
+        return;
+    }
+
+    countdown_.cancel();
+    if (countdown_timer_) {
+        countdown_timer_->stop();
+    }
+    countdown_.reset();
+    countdown_remaining_seconds_ = 0;
+    pending_countdown_region_.reset();
+    setInteractionMode(InteractionMode::None);
+    view_model_.SetState(UiRecordingState::Ready);
+    diagnostics::AppLog(QStringLiteral("[record] countdown cancelled"));
+    refresh();
+}
+
+void RecordPage::finishCountdown() {
+    if (!isCountdownActive()) {
+        return;
+    }
+
+    if (countdown_timer_) {
+        countdown_timer_->stop();
+    }
+    countdown_.complete();
+    const std::optional<recorder_core::CaptureRegion> crop_region = pending_countdown_region_;
+    countdown_.reset();
+    countdown_remaining_seconds_ = 0;
+    pending_countdown_region_.reset();
+    setInteractionMode(InteractionMode::None);
+    view_model_.SetState(UiRecordingState::Ready);
+    diagnostics::AppLog(QStringLiteral("[record] countdown completed"));
+    refresh();
+    if (crop_region.has_value()) {
+        doStartRecording(crop_region);
+    } else {
+        startRecordingFlow();
+    }
+}
+
+void RecordPage::updateCountdown() {
+    if (!countdown_.isRunning()) {
+        return;
+    }
+
+    const int64_t elapsed_ms = countdown_clock_.isValid() ? countdown_clock_.elapsed() : 0;
+    if (countdown_.hasReachedZero(elapsed_ms)) {
+        finishCountdown();
+        return;
+    }
+
+    const int remaining = countdown_.remainingSeconds(elapsed_ms);
+    if (remaining != countdown_remaining_seconds_) {
+        countdown_remaining_seconds_ = remaining;
+        refresh();
+    }
+}
+
+void RecordPage::cancelActiveInteraction() {
+    if (isCountdownActive()) {
+        cancelCountdown();
+        return;
+    }
+    if (region_overlay_ && region_overlay_->isVisible()) {
+        region_overlay_->cancelSelection();
+    }
+}
+
 void RecordPage::onStart() {
     ensureCoordinatorInit();
+    if (interaction_mode_ != InteractionMode::None || isCountdownActive()) {
+        return;
+    }
+    const bool needs_region_before_countdown =
+        view_model_.capture_mode == CaptureMode::Region &&
+        (view_model_.select_on_record || !view_model_.has_region || !view_model_.region.IsValid());
+    if (selected_countdown_seconds_ > 0 && needs_region_before_countdown) {
+        startRecordingFlow();
+        return;
+    }
+    if (selected_countdown_seconds_ > 0) {
+        startCountdown(selected_countdown_seconds_);
+        return;
+    }
+
+    startRecordingFlow();
+}
+
+void RecordPage::startRecordingFlow() {
+    ensureCoordinatorInit();
+    if (interaction_mode_ == InteractionMode::Countdown) {
+        return;
+    }
+    if (interaction_mode_ != InteractionMode::None) {
+        return;
+    }
 
     // Region mode with select-on-record: show overlay before starting.
     if (view_model_.capture_mode == CaptureMode::Region && view_model_.select_on_record) {
         diagnostics::AppLog(QStringLiteral("[record] region select-on-record: opening overlay"));
         view_model_.SetState(UiRecordingState::RegionSelecting);
+        setInteractionMode(InteractionMode::RegionSelecting);
         refresh();
         ensureRegionOverlay();
-        region_overlay_->activateForSelection();
+        region_overlay_->activateForSelection(selectedMonitorRect(), currentRegionRect());
         return;
     }
 
@@ -2202,9 +2402,10 @@ void RecordPage::onStart() {
             // No valid region yet — fall back to overlay selection.
             diagnostics::AppLog(QStringLiteral("[record] region mode: no pre-defined region, opening overlay"));
             view_model_.SetState(UiRecordingState::RegionSelecting);
+            setInteractionMode(InteractionMode::RegionSelecting);
             refresh();
             ensureRegionOverlay();
-            region_overlay_->activateForSelection();
+            region_overlay_->activateForSelection(selectedMonitorRect(), currentRegionRect());
             return;
         }
         const int idx = view_model_.selected_target_index;
@@ -2234,10 +2435,13 @@ void RecordPage::onStop() {
 
 void RecordPage::onHotkeyToggle() {
     ensureCoordinatorInit();
-    if (view_model_.CanStart())
+    if (isCountdownActive()) {
+        cancelCountdown();
+    } else if (view_model_.CanStart() && interaction_mode_ == InteractionMode::None) {
         onStart();
-    else if (view_model_.CanStop())
+    } else if (view_model_.CanStop()) {
         onStop();
+    }
 }
 
 void RecordPage::onPause() {
@@ -2258,6 +2462,10 @@ void RecordPage::onHotkeyPauseToggle() {
 }
 
 void RecordPage::onSelectMonitorTarget() {
+    if (isCountdownActive()) {
+        return;
+    }
+    cancelActiveInteraction();
     view_model_.capture_mode = CaptureMode::Monitor;
     if (monitor_target_indices_.empty()) {
         const bool kind_changed = (view_model_.audio_ui_state.target_kind != capability::CaptureTargetKind::Display);
@@ -2280,6 +2488,10 @@ void RecordPage::onSelectMonitorTarget() {
 }
 
 void RecordPage::onSelectWindowTarget() {
+    if (isCountdownActive()) {
+        return;
+    }
+    cancelActiveInteraction();
     view_model_.capture_mode = CaptureMode::Window;
     if (window_target_indices_.empty()) {
         const bool kind_changed = (view_model_.audio_ui_state.target_kind != capability::CaptureTargetKind::Window);
@@ -2302,6 +2514,9 @@ void RecordPage::onSelectWindowTarget() {
 }
 
 void RecordPage::onSelectRegionTarget() {
+    if (interaction_mode_ == InteractionMode::Countdown) {
+        return;
+    }
     view_model_.capture_mode = CaptureMode::Region;
     // Preserve the current monitor selection as the base capture source.
     // If no monitor is selected yet, pick the first available one.
@@ -2599,7 +2814,8 @@ void RecordPage::onOpenSourcePicker() {
 
     source_picker_overlay_->setScreenOptions(screen_options);
     source_picker_overlay_->setWindowOptions(window_options);
-    source_picker_overlay_->setRegionState(region_summary, has_region, view_model_.select_on_record);
+    source_picker_overlay_->setRegionState(region_summary, has_region, view_model_.select_on_record,
+                                           currentRegionRect());
 
     ui::dialogs::SourcePickerDialog::Section section = ui::dialogs::SourcePickerDialog::Section::Screens;
     if (view_model_.capture_mode == CaptureMode::Region) {
@@ -2662,7 +2878,8 @@ void RecordPage::onSourcePickerAccepted(ui::dialogs::SourcePickerDialog::Selecti
         onSelectRegionTarget();
         if (selection.pick_region_now) {
             ensureRegionOverlay();
-            region_overlay_->activateForSelection();
+            setInteractionMode(InteractionMode::RegionSelecting);
+            region_overlay_->activateForSelection(selectedMonitorRect(), currentRegionRect());
         }
         return;
     }
@@ -2681,9 +2898,57 @@ void RecordPage::ensureRegionOverlay() {
     connect(region_overlay_, &ui::widgets::RegionSelectionOverlay::regionSelected, this, &RecordPage::onRegionSelected);
     connect(region_overlay_, &ui::widgets::RegionSelectionOverlay::regionCancelled, this,
             &RecordPage::onRegionCancelled);
+    connect(region_overlay_, &ui::widgets::RegionSelectionOverlay::interactionModeChanged, this,
+            [this](ui::widgets::RegionSelectionOverlay::InteractionMode mode) {
+                switch (mode) {
+                case ui::widgets::RegionSelectionOverlay::InteractionMode::Moving:
+                    setInteractionMode(InteractionMode::RegionMoving);
+                    break;
+                case ui::widgets::RegionSelectionOverlay::InteractionMode::ResizingTopLeft:
+                case ui::widgets::RegionSelectionOverlay::InteractionMode::ResizingTopRight:
+                case ui::widgets::RegionSelectionOverlay::InteractionMode::ResizingBottomLeft:
+                case ui::widgets::RegionSelectionOverlay::InteractionMode::ResizingBottomRight:
+                    setInteractionMode(InteractionMode::RegionResizing);
+                    break;
+                case ui::widgets::RegionSelectionOverlay::InteractionMode::Selecting:
+                    setInteractionMode(InteractionMode::RegionSelecting);
+                    break;
+                case ui::widgets::RegionSelectionOverlay::InteractionMode::None:
+                default:
+                    if (interaction_mode_ != InteractionMode::Countdown)
+                        setInteractionMode(region_overlay_ && region_overlay_->isVisible()
+                                               ? InteractionMode::RegionSelecting
+                                               : InteractionMode::None);
+                    break;
+                }
+            });
+}
+
+QRect RecordPage::selectedMonitorRect() const {
+    const int idx = view_model_.selected_target_index;
+    if (idx < 0 || idx >= static_cast<int>(view_model_.targets.size())) {
+        return {};
+    }
+    const auto& target = view_model_.targets[static_cast<std::size_t>(idx)];
+    if (target.kind != recorder_core::CaptureTarget::Kind::Monitor) {
+        return {};
+    }
+    const ScreenPresentation meta = QueryScreenPresentation(target.native_id);
+    if (!meta.available || meta.width <= 0 || meta.height <= 0) {
+        return {};
+    }
+    return QRect(meta.origin_x, meta.origin_y, meta.width, meta.height);
+}
+
+QRect RecordPage::currentRegionRect() const {
+    if (!view_model_.has_region || !view_model_.region.IsValid()) {
+        return {};
+    }
+    return QRect(view_model_.region.x, view_model_.region.y, view_model_.region.width, view_model_.region.height);
 }
 
 void RecordPage::onRegionSelected(QRect region_virtual_screen) {
+    setInteractionMode(InteractionMode::None);
     recorder_core::CaptureRegion region;
     region.x = region_virtual_screen.x();
     region.y = region_virtual_screen.y();
@@ -2730,7 +2995,11 @@ void RecordPage::onRegionSelected(QRect region_virtual_screen) {
 
     // If we were in RegionSelecting (triggered from onStart), proceed to record.
     if (view_model_.state == UiRecordingState::RegionSelecting) {
-        doStartRecording(region);
+        if (selected_countdown_seconds_ > 0) {
+            startCountdown(selected_countdown_seconds_, region);
+        } else {
+            doStartRecording(region);
+        }
     }
     // Otherwise, the region was picked manually — start the cropped preview.
     else {
@@ -2740,6 +3009,7 @@ void RecordPage::onRegionSelected(QRect region_virtual_screen) {
 }
 
 void RecordPage::onRegionCancelled() {
+    setInteractionMode(InteractionMode::None);
     // If we were in the select-on-record flow, return to Ready.
     if (view_model_.state == UiRecordingState::RegionSelecting) {
         view_model_.SetState(UiRecordingState::Ready);
@@ -2905,9 +3175,7 @@ void RecordPage::rebuildAudioRowWidgets() {
 
 void RecordPage::updateAudioRowMergeVisibility() {
     const bool mkv = (current_container_ == capability::Container::Matroska);
-    const bool busy = view_model_.state == UiRecordingState::Preparing ||
-                      view_model_.state == UiRecordingState::Recording ||
-                      view_model_.state == UiRecordingState::Paused || view_model_.state == UiRecordingState::Stopping;
+    const bool busy = isSourceSelectionLocked();
 
     for (int i = 1; i < static_cast<int>(audio_source_rows_.size()); ++i) {
         auto* w = audio_source_rows_[static_cast<std::size_t>(i)];
@@ -3066,9 +3334,7 @@ void RecordPage::updateAudioControls() {
 
 void RecordPage::updateAudioControlsVisibility() {
     const bool mic = view_model_.audio_ui_state.IsMicEnabled();
-    const bool busy = view_model_.state == UiRecordingState::Preparing ||
-                      view_model_.state == UiRecordingState::Recording ||
-                      view_model_.state == UiRecordingState::Paused || view_model_.state == UiRecordingState::Stopping;
+    const bool busy = isSourceSelectionLocked();
 
     // Disable row widgets while recording.
     for (auto* row : audio_source_rows_)
@@ -3289,6 +3555,8 @@ QString RecordPage::buildChromeStatusLabel() const {
         return QStringLiteral("ERROR");
     case UiRecordingState::LoadingCapabilities:
         return QStringLiteral("CHECKING");
+    case UiRecordingState::Countdown:
+        return QStringLiteral("COUNTDOWN");
     case UiRecordingState::RegionSelecting:
     case UiRecordingState::Preparing:
         return QStringLiteral("STARTING");
@@ -3358,6 +3626,10 @@ QString RecordPage::buildPreviewBottomRightText(bool recording) const {
 }
 
 QString RecordPage::buildTimerText(bool recording) const {
+    if (view_model_.state == UiRecordingState::Countdown) {
+        return QString::number((std::max)(1, countdown_remaining_seconds_));
+    }
+
     const bool completed_success =
         (view_model_.state == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
     if (completed_success) {
@@ -3406,9 +3678,10 @@ void RecordPage::refresh() {
     const bool recording =
         (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
          view_model_.state == UiRecordingState::Stopping);
+    const bool countdown = (view_model_.state == UiRecordingState::Countdown);
     const bool paused = (view_model_.state == UiRecordingState::Paused);
-    const bool starting =
-        (view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::RegionSelecting);
+    const bool starting = (countdown || view_model_.state == UiRecordingState::Preparing ||
+                           view_model_.state == UiRecordingState::RegionSelecting);
     const bool stopping = (view_model_.state == UiRecordingState::Stopping);
 
     capability_label_->setText(capability_text);
@@ -3435,7 +3708,7 @@ void RecordPage::refresh() {
         control_state_role = QStringLiteral("blocked");
     } else if (active_recording) {
         control_state_role = QStringLiteral("recording");
-    } else if (view_model_.state == UiRecordingState::Paused) {
+    } else if (view_model_.state == UiRecordingState::Paused || countdown) {
         control_state_role = QStringLiteral("warn");
     } else if (completed_success) {
         control_state_role = QStringLiteral("done");
@@ -3491,7 +3764,10 @@ void RecordPage::refresh() {
         preview_surface_->setTopMetaText(QStringLiteral(""));
     }
 
-    if (recording) {
+    if (countdown) {
+        preview_surface_->setCenterTitle(QString::number((std::max)(1, countdown_remaining_seconds_)));
+        preview_surface_->setCenterSubtitle(QStringLiteral("Recording starts when countdown reaches zero"));
+    } else if (recording) {
         if (paused) {
             preview_surface_->setCenterTitle(QStringLiteral("PAUSED"));
         } else if (stopping) {
@@ -3542,6 +3818,7 @@ void RecordPage::updateTransportDock() {
     using ui::widgets::TransportDock;
 
     const UiRecordingState s = view_model_.state;
+    const bool countdown = (s == UiRecordingState::Countdown);
     const bool recording = (s == UiRecordingState::Recording);
     const bool paused = (s == UiRecordingState::Paused);
     const bool stopping = (s == UiRecordingState::Stopping);
@@ -3551,8 +3828,11 @@ void RecordPage::updateTransportDock() {
         (s == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
 
     TransportDock::State dock_state = TransportDock::State::Ready;
-    bool primary_enabled = view_model_.CanStart();
-    if (recording) {
+    bool primary_enabled = view_model_.CanStart() && interaction_mode_ == InteractionMode::None;
+    if (countdown) {
+        dock_state = TransportDock::State::Countdown;
+        primary_enabled = true;
+    } else if (recording) {
         dock_state = TransportDock::State::Recording;
         primary_enabled = true;
     } else if (paused) {
@@ -3568,11 +3848,13 @@ void RecordPage::updateTransportDock() {
     }
     transport_dock_->setState(dock_state);
     transport_dock_->setPrimaryEnabled(primary_enabled);
+    transport_dock_->setCountdownSeconds(selected_countdown_seconds_);
 
     const bool recording_for_timer = recording || paused || stopping;
-    transport_dock_->setTimerText(buildTimerText(recording_for_timer));
+    transport_dock_->setTimerText(buildTimerText(recording_for_timer || countdown));
     transport_dock_->setTimerRole(recording             ? QStringLiteral("recording")
                                   : paused              ? QStringLiteral("paused")
+                                  : countdown           ? QStringLiteral("countdown")
                                   : completed_success   ? QStringLiteral("done")
                                   : (blocked || failed) ? QStringLiteral("blocked")
                                                         : QStringLiteral("idle"));
@@ -3646,17 +3928,19 @@ void RecordPage::onDockFilenameActivated() {
 void RecordPage::updateStatsDisplay() {
     const bool active_recording = (view_model_.state == UiRecordingState::Recording);
     const bool paused = (view_model_.state == UiRecordingState::Paused);
+    const bool countdown = (view_model_.state == UiRecordingState::Countdown);
     const bool recording = active_recording || paused || (view_model_.state == UiRecordingState::Stopping);
     const bool blocked = (view_model_.state == UiRecordingState::Blocked);
     const bool failed = (view_model_.state == UiRecordingState::Failed);
     const bool completed_success =
         (view_model_.state == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
 
-    const QString timer_text = buildTimerText(recording);
+    const QString timer_text = buildTimerText(recording || countdown);
     timer_label_->setText(timer_text);
     setStyledStringProperty(timer_label_, "timerState",
                             active_recording      ? QStringLiteral("recording")
                             : paused              ? QStringLiteral("paused")
+                            : countdown           ? QStringLiteral("countdown")
                             : completed_success   ? QStringLiteral("done")
                             : (blocked || failed) ? QStringLiteral("blocked")
                                                   : QStringLiteral("idle"));
@@ -3826,9 +4110,7 @@ void RecordPage::updateResultDisplay() {
 
 void RecordPage::updateTargetCards() {
     const int current = view_model_.selected_target_index;
-    const bool recording =
-        (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
-         view_model_.state == UiRecordingState::Stopping || view_model_.state == UiRecordingState::Preparing);
+    const bool recording = isSourceSelectionLocked();
     const bool has_selected_target = current >= 0 && current < static_cast<int>(view_model_.targets.size());
     const bool selected_monitor = has_selected_target && view_model_.targets[static_cast<std::size_t>(current)].kind ==
                                                              recorder_core::CaptureTarget::Kind::Monitor;
@@ -4178,7 +4460,8 @@ void RecordPage::updateRailSourceStatusChips() {
 }
 
 bool RecordPage::isSourceSelectionLocked() const {
-    return view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::RegionSelecting ||
+    return interaction_mode_ != InteractionMode::None || view_model_.state == UiRecordingState::Countdown ||
+           view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::RegionSelecting ||
            view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
            view_model_.state == UiRecordingState::Stopping;
 }
@@ -4191,13 +4474,14 @@ void RecordPage::updateHeroButton() {
     const bool can_stop = view_model_.CanStop();
     const bool can_pause = view_model_.CanPause();
     const bool can_resume = view_model_.CanResume();
+    const bool countdown = (view_model_.state == UiRecordingState::Countdown);
     const bool blocked = (view_model_.state == UiRecordingState::Blocked);
     const bool failed = (view_model_.state == UiRecordingState::Failed);
     const bool completed_success =
         (view_model_.state == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
     const bool stopping = (view_model_.state == UiRecordingState::Stopping);
-    const bool preparing =
-        (view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::RegionSelecting);
+    const bool preparing = (countdown || view_model_.state == UiRecordingState::Preparing ||
+                            view_model_.state == UiRecordingState::RegionSelecting);
     const bool is_recording =
         (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
          view_model_.state == UiRecordingState::Stopping);
@@ -4206,10 +4490,14 @@ void RecordPage::updateHeroButton() {
         hero_action_btn_->setText(QStringLiteral("Record Again"));
         hero_action_btn_->setEnabled(true);
         setStyledStringProperty(hero_action_btn_, "heroRole", "start");
-    } else if (can_start) {
+    } else if (can_start && interaction_mode_ == InteractionMode::None) {
         hero_action_btn_->setText(QStringLiteral("Start Recording"));
         hero_action_btn_->setEnabled(true);
         setStyledStringProperty(hero_action_btn_, "heroRole", "start");
+    } else if (countdown) {
+        hero_action_btn_->setText(QStringLiteral("Cancel"));
+        hero_action_btn_->setEnabled(true);
+        setStyledStringProperty(hero_action_btn_, "heroRole", "stop");
     } else if (can_resume) {
         hero_action_btn_->setText(QStringLiteral("Resume"));
         hero_action_btn_->setEnabled(true);
@@ -4282,7 +4570,10 @@ void RecordPage::updateHeroButton() {
     }
 
     if (rail_readiness_label_) {
-        if (view_model_.state == UiRecordingState::Paused) {
+        if (countdown) {
+            rail_readiness_label_->setText(QStringLiteral("Countdown running. Recording starts at zero."));
+            setStyledStringProperty(rail_readiness_label_, "stateRole", "warn");
+        } else if (view_model_.state == UiRecordingState::Paused) {
             rail_readiness_label_->setText(QStringLiteral("Paused. Source remains locked until you resume or stop."));
             setStyledStringProperty(rail_readiness_label_, "stateRole", "warn");
         } else if (is_recording && has_selected_target) {
@@ -4394,8 +4685,11 @@ void RecordPage::refreshDisplayTargets() {
     // Called when the OS reports a screen add/remove event.  Re-enumerate
     // targets while preserving the current selection where possible.
     if (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
-        view_model_.state == UiRecordingState::Stopping) {
-        return; // Do not disturb target list during active recording.
+        view_model_.state == UiRecordingState::Stopping || view_model_.state == UiRecordingState::Countdown) {
+        return; // Do not disturb target list during active recording or countdown.
+    }
+    if (region_overlay_ && region_overlay_->isVisible()) {
+        region_overlay_->cancelSelection();
     }
     enumerateTargets(/*preserve_current_selection=*/true);
 }

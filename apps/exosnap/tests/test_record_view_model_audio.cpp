@@ -737,6 +737,17 @@ TEST(RecordViewModelStateGuardTest, CanStart_Recording_ReturnsFalse) {
     EXPECT_FALSE(vm.CanStart());
 }
 
+TEST(RecordViewModelStateGuardTest, CanStart_TransientRecordingStatesReturnFalse) {
+    for (const UiRecordingState state : {UiRecordingState::Countdown, UiRecordingState::Preparing,
+                                         UiRecordingState::RegionSelecting, UiRecordingState::Stopping}) {
+        RecordViewModel vm;
+        vm.SetState(state);
+        vm.targets = {recorder_core::CaptureTarget{}};
+        vm.selected_target_index = 0;
+        EXPECT_FALSE(vm.CanStart());
+    }
+}
+
 TEST(RecordViewModelStateGuardTest, CanStart_Blocked_ReturnsFalse) {
     RecordViewModel vm;
     vm.SetState(UiRecordingState::Blocked);

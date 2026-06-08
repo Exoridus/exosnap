@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <recorder_core/audio_input_device.h>
 #include <vector>
 
@@ -12,6 +13,7 @@
 #include "../services/PreviewHelpers.h"
 #include "../services/PreviewService.h"
 #include "../services/RecordingCoordinator.h"
+#include "../services/RecordingCountdownController.h"
 #include "../ui/widgets/RegionSelectionOverlay.h"
 #include "../viewmodels/RecordViewModel.h"
 
@@ -28,9 +30,18 @@ class QLabel;
 class QPushButton;
 class QResizeEvent;
 class QSlider;
+class QTimer;
 class QVBoxLayout;
 
 namespace exosnap {
+
+enum class InteractionMode {
+    None,
+    Countdown,
+    RegionSelecting,
+    RegionMoving,
+    RegionResizing,
+};
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 namespace visual {
@@ -106,10 +117,20 @@ class RecordPage : public QWidget {
     void onRegionCancelled();
 
   private:
+    void startRecordingFlow();
+    void startCountdown(int seconds, std::optional<recorder_core::CaptureRegion> crop_region = std::nullopt);
+    void cancelCountdown();
+    void finishCountdown();
+    void updateCountdown();
+    bool isCountdownActive() const noexcept;
+    void cancelActiveInteraction();
+    void setInteractionMode(InteractionMode mode);
     // Resolve target and start recording (after any overlay selection is complete).
     void doStartRecording(std::optional<recorder_core::CaptureRegion> crop_region = std::nullopt);
     // Ensure the region overlay widget exists.
     void ensureRegionOverlay();
+    QRect selectedMonitorRect() const;
+    QRect currentRegionRect() const;
 
     struct ReadinessRow {
         QLabel* icon = nullptr;
@@ -305,6 +326,13 @@ class RecordPage : public QWidget {
     QElapsedTimer recording_wall_clock_;
     qint64 wall_elapsed_before_pause_ms_ = 0; // accumulated ms before most recent pause
     QTimer* ui_clock_timer_ = nullptr;        // 1 Hz tick → updateTransportDock() during recording
+    QTimer* countdown_timer_ = nullptr;       // monotonic countdown refresh
+    QElapsedTimer countdown_clock_;
+    RecordingCountdownController countdown_;
+    int selected_countdown_seconds_ = 0;
+    int countdown_remaining_seconds_ = 0;
+    std::optional<recorder_core::CaptureRegion> pending_countdown_region_;
+    InteractionMode interaction_mode_ = InteractionMode::None;
 
     // Tracks the configuration of the last successfully started DXGI preview.
     // Used by startPreviewIfIdle() to skip redundant restarts when the target

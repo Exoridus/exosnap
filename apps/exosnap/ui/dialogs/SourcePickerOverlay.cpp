@@ -78,15 +78,23 @@ void SourcePickerOverlay::setWindowOptions(const std::vector<SourceOption>& opti
         panel_->setWindowOptions(options);
 }
 
-void SourcePickerOverlay::setRegionState(const QString& summary, bool has_region, bool select_on_record) {
+void SourcePickerOverlay::setRegionState(const QString& summary, bool has_region, bool select_on_record,
+                                         const QRect& region_rect) {
     if (panel_)
-        panel_->setRegionState(summary, has_region, select_on_record);
+        panel_->setRegionState(summary, has_region, select_on_record, region_rect);
 }
 
 void SourcePickerOverlay::setCurrentSection(Section section, int target_index) {
     if (panel_)
         panel_->setCurrentSelection(section, target_index);
 }
+
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+void SourcePickerOverlay::applyVisualRegionPreset(int preset_w, int preset_h) {
+    if (panel_)
+        panel_->applyVisualRegionPreset(preset_w, preset_h);
+}
+#endif
 
 void SourcePickerOverlay::onPanelAccepted() {
     if (panel_ == nullptr)
