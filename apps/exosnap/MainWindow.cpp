@@ -15,6 +15,7 @@
 #include "ui/dialogs/SourcePickerOverlay.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
+#include "ui/widgets/WebcamSetupPanel.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 #include "visual_tests/VisualScenario.h"
 
@@ -683,21 +684,28 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(advanced_page_, &AdvancedPage::backToSettingsRequested, this,
             [this]() { navigateToPage(kSettingsPageIndex); });
 
-    // Display discovery: refresh target list on monitor add/remove so the
-    // Source Picker and Record page stay current without manual Rescan.
-    if (auto* gui_app = qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
-        connect(gui_app, &QGuiApplication::screenAdded, this, [this](QScreen*) {
-            if (record_page_)
-                record_page_->refreshDisplayTargets();
-            diagnostics::AppLog::info(QStringLiteral("window"),
-                                      QStringLiteral("screen added; refreshing display targets"));
-        });
-        connect(gui_app, &QGuiApplication::screenRemoved, this, [this](QScreen*) {
-            if (record_page_)
-                record_page_->refreshDisplayTargets();
-            diagnostics::AppLog::info(QStringLiteral("window"),
-                                      QStringLiteral("screen removed; refreshing display targets"));
-        });
+    // ---- Reactive device discovery wiring ----
+    // Audio: forward to both ConfigPage and RecordPage (under no-emit contract).
+    connect(&audio_notifier_, &AudioDeviceNotifier::snapshotChanged, this, &MainWindow::onAudioDevicesChanged);
+    // Webcam: forward to ConfigPage (which forwards to WebcamSetupPanel), WebcamPage, and RecordPage.
+    connect(&webcam_notifier_, &WebcamDeviceNotifier::snapshotChanged, this, &MainWindow::onWebcamDevicesChanged);
+    // Display: replaces the old QGuiApplication::screenAdded/Removed lambdas.
+    // DisplayDeviceNotifier covers add/remove AND geometry/DPI changes.
+    connect(&display_notifier_, &DisplayDeviceNotifier::snapshotChanged, this, &MainWindow::onDisplaysChanged);
+
+    // Route webcam Rescan through the canonical notifier path.
+    if (webcam_page_)
+        connect(webcam_page_, &WebcamPage::rescanRequested, &webcam_notifier_, &WebcamDeviceNotifier::rescan);
+    if (config_page_) {
+        // Route Settings audio Rescan through the audio notifier.
+        connect(config_page_, &ConfigPage::audioRescanRequested, &audio_notifier_, &AudioDeviceNotifier::rescan);
+        // Route Settings webcam panel Rescan through the webcam notifier.
+        // The WebcamSetupPanel is embedded in ConfigPage; access via findChild.
+        auto* setup_panel = config_page_->findChild<exosnap::ui::widgets::WebcamSetupPanel*>(
+            QStringLiteral("settingsWebcamSetupPanel"));
+        if (setup_panel)
+            connect(setup_panel, &exosnap::ui::widgets::WebcamSetupPanel::rescanRequested, &webcam_notifier_,
+                    &WebcamDeviceNotifier::rescan);
     }
 
     record_page_->rebroadcastChromeState();
@@ -725,7 +733,29 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             record_page_->setRuntimeCapabilities(runtime_caps_);
         refreshPresetUi();
         refreshDiagnosticsData();
+
+        // Start the device notifiers after the capability probe so the first
+        // snapshotChanged emission has the correct runtime context.
+        // rescan() seeds the initial availability state synchronously so pages
+        // know the device state without waiting for a native event.
+        audio_notifier_.start();
+        audio_notifier_.rescan();
+        webcam_notifier_.start();
+        webcam_notifier_.rescan();
+        display_notifier_.start();
+        display_notifier_.rescan();
+        diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("device notifiers started"));
     });
+}
+
+MainWindow::~MainWindow() {
+    // Stop notifiers FIRST, before any pages are torn down, so no late callback
+    // fires into a partially-destroyed page.  The notifiers also stop in their own
+    // destructors, but explicit ordering here prevents a race with the Qt object
+    // tree teardown.
+    audio_notifier_.stop();
+    webcam_notifier_.stop();
+    display_notifier_.stop();
 }
 
 void MainWindow::showEvent(QShowEvent* event) {
@@ -1815,5 +1845,38 @@ void MainWindow::applyVisualDiagnosticsScenario() {
         "Visual Test WebM AV1 Opus", "Start/Stop: Alt+F9", "visual-test-settings.json", true);
 }
 #endif
+
+// ---------------------------------------------------------------------------
+// Reactive device-change handlers
+// ---------------------------------------------------------------------------
+
+void MainWindow::onAudioDevicesChanged(const exosnap::AudioDeviceSnapshot& snap, exosnap::DiscoveryReason /*reason*/) {
+    // Forward to both pages under the no-emit, no-dirty contract.
+    // Neither page should emit audioSettingsChanged during these calls, so
+    // live_audio_ and the preset dirty state remain unchanged.
+    if (config_page_)
+        config_page_->onAudioDevicesChanged(snap);
+    if (record_page_)
+        record_page_->onAudioDevicesChanged(snap);
+}
+
+void MainWindow::onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapshot& snap,
+                                        exosnap::DiscoveryReason /*reason*/) {
+    // Forward to all three consumers.  None of these should emit webcamSettingsChanged
+    // so live_webcam_ and the preset dirty state remain unchanged.
+    if (config_page_)
+        config_page_->onWebcamDevicesChanged(snap);
+    if (webcam_page_)
+        webcam_page_->onWebcamDevicesChanged(snap);
+    if (record_page_)
+        record_page_->onWebcamDevicesChanged(snap);
+}
+
+void MainWindow::onDisplaysChanged(const exosnap::DisplaySnapshot& snap, exosnap::DiscoveryReason /*reason*/) {
+    // The display handler does not emit recordingConfigChanged for availability
+    // changes (only for actual user-initiated target switches), so preset stays clean.
+    if (record_page_)
+        record_page_->onDisplaysChanged(snap);
+}
 
 } // namespace exosnap

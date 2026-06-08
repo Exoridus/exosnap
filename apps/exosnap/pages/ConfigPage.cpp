@@ -25,6 +25,7 @@
 #include <QVBoxLayout>
 
 #include "../../../libs/recorder_core/include/recorder_core/audio_track_model.h"
+#include "../diagnostics/AppLog.h"
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputPathPolicy.h"
 #include "../models/RecordingPreset.h"
@@ -612,11 +613,26 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     audio_mic_meter_->setObjectName(QStringLiteral("settingsAudioMicMeter"));
     audio_mic_db_label_->setObjectName(QStringLiteral("settingsAudioMicDbLabel"));
 
-    mic_device_combo_ = new QComboBox(audio_panel);
-    mic_device_combo_->setObjectName(QStringLiteral("micDeviceCombo"));
-    mic_device_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    mic_device_combo_->setMinimumWidth(180);
-    audio_panel_layout->addWidget(mic_device_combo_);
+    // Mic device row: combo + compact Rescan button (routes through notifier).
+    {
+        auto* mic_row = new QWidget(audio_panel);
+        auto* mic_rl = new QHBoxLayout(mic_row);
+        mic_rl->setContentsMargins(0, 0, 0, 0);
+        mic_rl->setSpacing(6);
+        mic_device_combo_ = new QComboBox(mic_row);
+        mic_device_combo_->setObjectName(QStringLiteral("micDeviceCombo"));
+        mic_device_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        mic_device_combo_->setMinimumWidth(180);
+        mic_rl->addWidget(mic_device_combo_, 1);
+        audio_rescan_btn_ = new QPushButton(QStringLiteral("\xe2\x86\xba"), mic_row); // ↺
+        audio_rescan_btn_->setObjectName(QStringLiteral("audioRescanBtn"));
+        audio_rescan_btn_->setProperty("role", "ghost");
+        audio_rescan_btn_->setToolTip(QStringLiteral("Rescan audio devices"));
+        audio_rescan_btn_->setFixedWidth(36);
+        audio_rescan_btn_->setCursor(Qt::PointingHandCursor);
+        mic_rl->addWidget(audio_rescan_btn_);
+        audio_panel_layout->addWidget(mic_row);
+    }
 
     audio_panel_layout->addWidget(
         makeHint(QStringLiteral("Separate tracks keep each source on its own channel for editing."), audio_panel));
@@ -842,6 +858,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(sys_separate_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioSysSeparateToggled);
     connect(mic_device_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onMicDeviceChanged);
+    connect(audio_rescan_btn_, &QPushButton::clicked, this, &ConfigPage::audioRescanRequested);
     connect(webcam_setup_panel_, &ui::widgets::WebcamSetupPanel::settingsChanged, this,
             [this](const WebcamSettings& settings) {
                 webcam_settings_ = settings;
@@ -1703,6 +1720,11 @@ void ConfigPage::refreshMicDevices() {
     if (!mic_device_combo_)
         return;
 
+    // MUST-FIX B: restore selection from audio_ui_state_.selected_mic_device_id,
+    // with unavailable-placeholder handling, under QSignalBlocker.  Do NOT reset to
+    // index 0 unconditionally, and do NOT emit audioSettingsChanged.
+    const auto previous_id = audio_ui_state_.selected_mic_device_id;
+
     const QSignalBlocker mc(mic_device_combo_);
     mic_device_combo_->clear();
     mic_devices_.clear();
@@ -1719,7 +1741,34 @@ void ConfigPage::refreshMicDevices() {
         mic_devices_.push_back(dev);
     }
 
-    mic_device_combo_->setCurrentIndex(0);
+    int restore_index = 0;
+    bool found = false;
+    if (previous_id.has_value()) {
+        for (int i = 1; i < static_cast<int>(mic_devices_.size()); ++i) {
+            if (mic_devices_[static_cast<std::size_t>(i)].device_id == *previous_id) {
+                restore_index = i;
+                found = true;
+                break;
+            }
+        }
+    }
+
+    if (!found && previous_id.has_value()) {
+        // Configured device absent: append placeholder, keep stored id unchanged.
+        const QString placeholder = QString::fromStdString(*previous_id) + QStringLiteral(" (unavailable)");
+        mic_device_combo_->addItem(placeholder);
+        restore_index = mic_device_combo_->count() - 1;
+        // Do NOT modify audio_ui_state_.selected_mic_device_id.
+    } else if (found) {
+        const auto& sel = mic_devices_[static_cast<std::size_t>(restore_index)];
+        audio_ui_state_.selected_mic_device_id =
+            sel.device_id.empty() ? std::nullopt : std::optional<std::string>(sel.device_id);
+    } else {
+        // Semantic Default (nullopt): stay at index 0.
+        audio_ui_state_.selected_mic_device_id = std::nullopt;
+    }
+
+    mic_device_combo_->setCurrentIndex(restore_index);
 }
 
 void ConfigPage::onMicDeviceChanged(int index) {
@@ -1879,6 +1928,23 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     //   controls_enabled = visible && available && !controls_locked_
     // holds regardless of call order between setAudioUiState and setRecordingControlsLocked.
     applyAudioConfigurationState();
+}
+
+void ConfigPage::onAudioDevicesChanged(const exosnap::AudioDeviceSnapshot& snap) {
+    // Rewrite mic device combo preserving selection, under QSignalBlocker.
+    // refreshMicDevices() uses EnumerateAudioInputDevices() internally; calling it
+    // here means we re-enumerate, but the notifier has already deduplicated the
+    // snapshot — this simply rebuilds the UI list in sync.
+    refreshMicDevices();
+
+    diagnostics::AppLog::info(
+        QStringLiteral("audio"),
+        QStringLiteral("Settings audio device list refreshed (inputs=%1)").arg(snap.inputs.size()));
+}
+
+void ConfigPage::onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapshot& snap) {
+    if (webcam_setup_panel_)
+        webcam_setup_panel_->onWebcamDevicesChanged(snap);
 }
 
 } // namespace exosnap

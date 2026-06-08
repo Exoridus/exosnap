@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../models/WebcamSettings.h"
+#include "../../services/WebcamDeviceNotifier.h"
 #include "../../services/WebcamService.h"
 
 #include <QHideEvent>
@@ -32,6 +33,12 @@ class WebcamSetupPanel : public QWidget {
     // Apply external settings without emitting settingsChanged.
     void applySettings(const WebcamSettings& settings);
 
+    // Reactive device refresh: preserve the configured device_id/format across the
+    // new snapshot.  If the configured device is absent → stop preview, show
+    // unavailable placeholder, keep stored id.  If it returns → restore per
+    // showEvent/visibility rules.  Never emits settingsChanged.
+    void onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapshot& snap);
+
     // Lock restart-class controls during recording (preview still runs if already started).
     // Enable and mirror remain live-editable.
     void setControlsLocked(bool locked);
@@ -45,6 +52,11 @@ class WebcamSetupPanel : public QWidget {
 
   signals:
     void settingsChanged(WebcamSettings settings);
+    // Emitted when the user presses ↺ Rescan so MainWindow can route through
+    // the canonical WebcamDeviceNotifier::rescan() path instead of calling
+    // refreshDevices() directly.  MainWindow connects this before the panel is
+    // shown for the first time.
+    void rescanRequested();
 
   private slots:
     void onEnableToggled(bool enabled);

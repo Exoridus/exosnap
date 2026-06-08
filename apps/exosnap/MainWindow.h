@@ -10,6 +10,9 @@
 #include "models/RecordingPreset.h"
 #include "models/RecordingPresetRegistry.h"
 #include "models/VideoSettingsModel.h"
+#include "services/AudioDeviceNotifier.h"
+#include "services/DisplayDeviceNotifier.h"
+#include "services/WebcamDeviceNotifier.h"
 #include "settings/AppSettingsStore.h"
 #include "settings/RecordingPresetStore.h"
 #include <capability/audio_ui_state.h>
@@ -46,6 +49,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
   public:
     explicit MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override;
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void applyVisualScenario(const visual::VisualScenario& scenario);
@@ -59,6 +63,11 @@ class MainWindow : public QMainWindow {
     void onRecordChromeStateChanged(bool recording, const QString& status_label, const QString& context_text);
     void onHotkeyBindingChanged(int action_index, QKeySequence seq);
     void toggleFullScreen();
+
+    // Reactive device-change forwarding handlers.
+    void onAudioDevicesChanged(const exosnap::AudioDeviceSnapshot& snap, exosnap::DiscoveryReason reason);
+    void onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapshot& snap, exosnap::DiscoveryReason reason);
+    void onDisplaysChanged(const exosnap::DisplaySnapshot& snap, exosnap::DiscoveryReason reason);
 
   private:
     void showEvent(QShowEvent* event) override;
@@ -125,6 +134,11 @@ class MainWindow : public QMainWindow {
     WebcamPage* webcam_page_ = nullptr;
     HotkeysPage* hotkeys_page_ = nullptr;
     AdvancedPage* advanced_page_ = nullptr;
+
+    // Device notifiers (owned; started after capability probe; stopped first in ~MainWindow).
+    AudioDeviceNotifier audio_notifier_;
+    WebcamDeviceNotifier webcam_notifier_;
+    DisplayDeviceNotifier display_notifier_;
 
     // Live mirrors for the currently active configuration.
     OutputSettingsModel output_settings_;

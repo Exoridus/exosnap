@@ -397,13 +397,17 @@ exosnap_add_gtest(
         models/OutputPathPolicy.cpp
         models/OutputPathValidator.cpp
         models/RecordingPreset.cpp
+        services/AudioDeviceNotifier.cpp
+        services/WebcamDeviceNotifier.cpp
+        services/DisplayDeviceNotifier.cpp
         services/WebcamService.cpp
         models/OutputSettingsModel.cpp
+        diagnostics/AppLog.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
 )
 target_include_directories(config_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(config_page_tests PROPERTIES AUTOMOC ON)
-target_link_libraries(config_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
+target_link_libraries(config_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
 
 exosnap_add_gtest(
     NAME source_picker_dialog_tests
@@ -467,12 +471,14 @@ exosnap_add_gtest(
         ui/widgets/CameraPreview.cpp
         ui/widgets/ExoToggle.cpp
         ui/widgets/ComboBoxWheelFilter.cpp
+        services/WebcamDeviceNotifier.cpp
         services/WebcamService.cpp
+        diagnostics/AppLog.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
 )
 target_include_directories(webcam_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(webcam_page_tests PROPERTIES AUTOMOC ON)
-target_link_libraries(webcam_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
+target_link_libraries(webcam_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
 
 exosnap_add_gtest(
     NAME hotkeys_page_tests
@@ -679,3 +685,35 @@ exosnap_add_gtest(
 target_include_directories(display_device_notifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(display_device_notifier_tests PRIVATE ole32.lib)
 set_target_properties(display_device_notifier_tests PROPERTIES AUTOMOC ON)
+
+# Selection-preservation policy tests (Worker C).
+# Drives page methods with synthetic snapshots at the integration level.
+exosnap_add_gtest(
+    NAME device_selection_policy_tests
+    TEST_PREFIX discovery.
+    SOURCES
+        tests/test_device_selection_policy.cpp
+        pages/ConfigPage.cpp
+        pages/WebcamPage.cpp
+        viewmodels/PresentationStateBuilder.cpp
+        ui/widgets/ComboBoxWheelFilter.cpp
+        ui/widgets/CameraPreview.cpp
+        ui/widgets/ExoToggle.cpp
+        ui/widgets/VUMeterWidget.cpp
+        ui/widgets/WebcamSetupPanel.cpp
+        models/FilenameBuilder.cpp
+        models/OutputPathPolicy.cpp
+        models/OutputPathValidator.cpp
+        models/RecordingPreset.cpp
+        services/AudioDeviceNotifier.cpp
+        services/WebcamDeviceNotifier.cpp
+        services/DisplayDeviceNotifier.cpp
+        services/WebcamService.cpp
+        models/OutputSettingsModel.cpp
+        diagnostics/AppLog.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(device_selection_policy_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(device_selection_policy_tests PROPERTIES AUTOMOC ON)
+target_link_libraries(device_selection_policy_tests PRIVATE
+    mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
