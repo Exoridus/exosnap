@@ -289,6 +289,7 @@ exosnap_add_gtest(
 )
 target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(output_settings_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
+set_target_properties(output_settings_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME app_settings_store_tests
@@ -460,6 +461,7 @@ exosnap_add_gtest(
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
 )
 target_include_directories(logs_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(logs_page_tests PRIVATE EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
 set_target_properties(logs_page_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(

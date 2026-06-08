@@ -254,7 +254,8 @@ bool PreviewSurface::tryStartDxgiPreview(const recorder_core::CaptureTarget& tar
     winId();
     HWND hwnd = reinterpret_cast<HWND>(effectiveWinId());
     if (!hwnd) {
-        diagnostics::AppLog(QStringLiteral("[dxgi-preview] no native window handle for PreviewSurface"));
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                     QStringLiteral("no native window handle for PreviewSurface"));
         return false;
     }
 
@@ -269,7 +270,8 @@ bool PreviewSurface::tryStartDxgiPreview(const recorder_core::CaptureTarget& tar
     const uint32_t swapW = hwndW;
     const uint32_t swapH = hwndH;
     if (!dxgi_renderer_->Initialize(hwnd, hwndW, hwndH, swapW, swapH)) {
-        diagnostics::AppLog(QStringLiteral("[dxgi-preview] DxgiPreviewRenderer init failed, falling back to QImage"));
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                     QStringLiteral("DxgiPreviewRenderer init failed, falling back to QImage"));
         dxgi_renderer_.reset();
         return false;
     }
@@ -277,8 +279,8 @@ bool PreviewSurface::tryStartDxgiPreview(const recorder_core::CaptureTarget& tar
     // Pass the crop box (if any) so the renderer crops the monitor frame to the
     // selected region.  For Display and Window targets this is std::nullopt.
     if (!dxgi_renderer_->StartCapture(target, frame_rate_num, frame_rate_den, std::move(crop_box))) {
-        diagnostics::AppLog(
-            QStringLiteral("[dxgi-preview] DxgiPreviewRenderer StartCapture failed, falling back to QImage"));
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                     QStringLiteral("DxgiPreviewRenderer StartCapture failed, falling back to QImage"));
         dxgi_renderer_->Shutdown();
         dxgi_renderer_.reset();
         return false;
