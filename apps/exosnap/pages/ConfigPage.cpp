@@ -31,6 +31,7 @@
 #include "../ui/widgets/ComboBoxWheelFilter.h"
 #include "../ui/widgets/VUMeterWidget.h"
 #include "../ui/widgets/WebcamSetupPanel.h"
+#include "../viewmodels/PresentationStateBuilder.h"
 
 #include <ctime>
 #include <optional>
@@ -764,7 +765,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         const QSignalBlocker np(naming_edit_);
         naming_edit_->setText(QString::fromStdWString(format_settings_.naming_pattern));
     }
-    updateAudioSourceAvailability();
+    applyAudioConfigurationState();
     updateFormatDisplay();
     updateExampleFilename();
     updateQualitySummary();
@@ -1169,33 +1170,20 @@ void ConfigPage::updateExampleFilename() {
 
 void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
     audio_ui_state_ = state;
+    applyAudioConfigurationState();
+}
 
-    const bool is_window = (state.target_kind == capability::CaptureTargetKind::Window);
+void ConfigPage::applyAudioConfigurationState() {
+    const AudioConfigurationSnapshot snap =
+        PresentationStateBuilder::BuildAudioConfiguration(audio_ui_state_, controls_locked_);
 
-    const auto findRow = [&](recorder_core::AudioSourceKind kind) -> const recorder_core::AudioSourceRow* {
-        for (const auto& row : state.source_rows) {
-            if (row.kind == kind)
-                return &row;
-        }
-        // For Sys queries also accept SystemOutput (used in Display mode).
-        if (kind == recorder_core::AudioSourceKind::Sys) {
-            for (const auto& row : state.source_rows) {
-                if (row.kind == recorder_core::AudioSourceKind::SystemOutput)
-                    return &row;
-            }
-        }
-        return nullptr;
-    };
+    const bool is_window = (snap.target_kind == capability::CaptureTargetKind::Window);
 
-    const auto* app_row = findRow(recorder_core::AudioSourceKind::App);
-    const auto* mic_row = findRow(recorder_core::AudioSourceKind::Mic);
-    const auto* sys_row = findRow(recorder_core::AudioSourceKind::Sys);
-
-    // Show/hide the Application audio section based on target kind.
+    // App section visibility (target-kind policy).
     if (app_row_section_)
-        app_row_section_->setVisible(is_window);
+        app_row_section_->setVisible(snap.app.visible);
 
-    // Relabel the system audio row and its description to match the target context.
+    // System audio row labels (target-kind-specific).
     if (sys_enabled_check_) {
         sys_enabled_check_->setText(is_window ? QStringLiteral("Other system audio")
                                               : QStringLiteral("Computer audio"));
@@ -1206,65 +1194,62 @@ void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
                       : QStringLiteral("Records all sound played through the selected output device."));
     }
 
-    const QSignalBlocker ab(app_enabled_check_);
-    const QSignalBlocker as(app_separate_check_);
-    const QSignalBlocker mb(mic_enabled_check_);
-    const QSignalBlocker ms(mic_separate_check_);
-    const QSignalBlocker sb(sys_enabled_check_);
-    const QSignalBlocker ss(sys_separate_check_);
+    // Apply audio row widget states atomically.
+    // Required invariant: controls_enabled = visible && available && !controls_locked_
+    {
+        const QSignalBlocker ab(app_enabled_check_);
+        const QSignalBlocker as(app_separate_check_);
+        const QSignalBlocker mb(mic_enabled_check_);
+        const QSignalBlocker ms(mic_separate_check_);
+        const QSignalBlocker sb(sys_enabled_check_);
+        const QSignalBlocker ss(sys_separate_check_);
 
-    app_enabled_check_->setEnabled(app_row != nullptr);
-    app_separate_check_->setEnabled(app_row != nullptr);
-    app_enabled_check_->setChecked(app_row ? app_row->enabled : false);
-    app_separate_check_->setChecked(app_row ? !app_row->merge_with_above : false);
+        app_enabled_check_->setEnabled(snap.app.controls_enabled);
+        app_separate_check_->setEnabled(snap.app.controls_enabled);
+        app_enabled_check_->setChecked(snap.app.enabled);
+        app_separate_check_->setChecked(snap.app.separate_track);
 
-    mic_enabled_check_->setEnabled(mic_row != nullptr);
-    mic_separate_check_->setEnabled(mic_row != nullptr);
-    mic_enabled_check_->setChecked(mic_row ? mic_row->enabled : false);
-    mic_separate_check_->setChecked(mic_row ? !mic_row->merge_with_above : false);
+        mic_enabled_check_->setEnabled(snap.mic.controls_enabled);
+        mic_separate_check_->setEnabled(snap.mic.controls_enabled);
+        mic_enabled_check_->setChecked(snap.mic.enabled);
+        mic_separate_check_->setChecked(snap.mic.separate_track);
 
-    sys_enabled_check_->setEnabled(sys_row != nullptr);
-    sys_separate_check_->setEnabled(sys_row != nullptr);
-    sys_enabled_check_->setChecked(sys_row ? sys_row->enabled : false);
-    sys_separate_check_->setChecked(sys_row ? !sys_row->merge_with_above : false);
+        sys_enabled_check_->setEnabled(snap.system.controls_enabled);
+        sys_separate_check_->setEnabled(snap.system.controls_enabled);
+        sys_enabled_check_->setChecked(snap.system.enabled);
+        sys_separate_check_->setChecked(snap.system.separate_track);
+    }
 
+    // Mic device combo: visible when mic source is in the plan; enabled when interactable.
     if (mic_device_combo_) {
         const QSignalBlocker mc(mic_device_combo_);
-        const auto& device_id = state.selected_mic_device_id;
-        if (!device_id.has_value()) {
-            mic_device_combo_->setCurrentIndex(0);
-        } else {
+        mic_device_combo_->setVisible(snap.mic.available);
+        mic_device_combo_->setEnabled(snap.mic.controls_enabled);
+        if (snap.selected_mic_device_id.has_value()) {
+            const auto& device_id = *snap.selected_mic_device_id;
             int idx = 0;
             for (int i = 1; i < static_cast<int>(mic_devices_.size()); ++i) {
-                if (mic_devices_[static_cast<std::size_t>(i)].device_id == *device_id) {
+                if (mic_devices_[static_cast<std::size_t>(i)].device_id == device_id) {
                     idx = i;
                     break;
                 }
             }
             mic_device_combo_->setCurrentIndex(idx);
+        } else {
+            mic_device_combo_->setCurrentIndex(0);
         }
     }
 
-    updateAudioSourceAvailability();
-}
-
-void ConfigPage::updateAudioSourceAvailability() {
-    const bool no_rows = audio_ui_state_.source_rows.empty();
-    // App section label — relevant only when visible (Window mode).
-    if (app_source_label_) {
+    // Source description labels.
+    if (app_source_label_)
         app_source_label_->setText(QStringLiteral("Records audio from the selected application."));
-    }
     if (mic_source_label_) {
-        const bool available = mic_enabled_check_ && mic_enabled_check_->isEnabled();
-        mic_source_label_->setText(available ? QStringLiteral("Choose the microphone used for recording.")
-                                             : QStringLiteral("Not available"));
+        mic_source_label_->setText(snap.mic.available ? QStringLiteral("Choose the microphone used for recording.")
+                                                      : QStringLiteral("Not available"));
     }
-    if (mic_device_combo_) {
-        const bool available = mic_enabled_check_ && mic_enabled_check_->isEnabled();
-        mic_device_combo_->setVisible(available);
-        mic_device_combo_->setEnabled(available);
-    }
-    // sys_source_label_ text is managed by setAudioUiState (target-kind-specific).
+
+    // Summary label when no audio plan rows are present.
+    const bool no_rows = audio_ui_state_.source_rows.empty();
     if (audio_summary_label_) {
         audio_summary_label_->setVisible(no_rows);
         if (no_rows)
@@ -1436,6 +1421,7 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
 
     const bool enabled = !locked;
 
+    // Non-audio controls: locked unconditionally (no target-kind policy applies).
     profile_combo_->setEnabled(enabled);
     save_as_new_btn_->setEnabled(enabled);
     reset_profile_btn_->setEnabled(enabled);
@@ -1453,14 +1439,6 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     cfr_check_->setEnabled(enabled);
     cursor_check_->setEnabled(enabled);
 
-    app_enabled_check_->setEnabled(enabled);
-    app_separate_check_->setEnabled(enabled);
-    mic_enabled_check_->setEnabled(enabled);
-    mic_separate_check_->setEnabled(enabled);
-    mic_device_combo_->setEnabled(enabled);
-    sys_enabled_check_->setEnabled(enabled);
-    sys_separate_check_->setEnabled(enabled);
-
     if (webcam_setup_panel_)
         webcam_setup_panel_->setControlsLocked(locked);
 
@@ -1470,6 +1448,11 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
 
     if (lock_note_label_)
         lock_note_label_->setVisible(locked);
+
+    // Audio source rows: use the canonical snapshot so the invariant
+    //   controls_enabled = visible && available && !controls_locked_
+    // holds regardless of call order between setAudioUiState and setRecordingControlsLocked.
+    applyAudioConfigurationState();
 }
 
 void ConfigPage::updateProfileActionState() {

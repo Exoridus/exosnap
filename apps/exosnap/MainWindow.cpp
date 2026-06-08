@@ -731,6 +731,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(advanced_page_, &AdvancedPage::backToSettingsRequested, this,
             [this]() { navigateToPage(kSettingsPageIndex); });
 
+    // Display discovery: refresh target list on monitor add/remove so the
+    // Source Picker and Record page stay current without manual Rescan.
+    if (auto* gui_app = qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
+        connect(gui_app, &QGuiApplication::screenAdded, this, [this](QScreen*) {
+            if (record_page_)
+                record_page_->refreshDisplayTargets();
+            diagnostics::AppLog(QStringLiteral("[window] screen added — refreshing display targets"));
+        });
+        connect(gui_app, &QGuiApplication::screenRemoved, this, [this](QScreen*) {
+            if (record_page_)
+                record_page_->refreshDisplayTargets();
+            diagnostics::AppLog(QStringLiteral("[window] screen removed — refreshing display targets"));
+        });
+    }
+
     record_page_->rebroadcastChromeState();
     applyActiveProfileToPages();
 

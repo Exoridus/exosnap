@@ -4235,4 +4235,14 @@ void RecordPage::updateAudioMeterLevels() {
                                  dockLevel(mic_rms, mic_show), sys_show, app_show, mic_show);
 }
 
+void RecordPage::refreshDisplayTargets() {
+    // Called when the OS reports a screen add/remove event.  Re-enumerate
+    // targets while preserving the current selection where possible.
+    if (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
+        view_model_.state == UiRecordingState::Stopping) {
+        return; // Do not disturb target list during active recording.
+    }
+    enumerateTargets(/*preserve_current_selection=*/true);
+}
+
 } // namespace exosnap

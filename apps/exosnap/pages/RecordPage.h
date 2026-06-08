@@ -78,6 +78,8 @@ class RecordPage : public QWidget {
     void onHotkeyToggle();
     void onHotkeyPauseToggle();
     void setSourcePickerOverlay(ui::dialogs::SourcePickerOverlay* overlay);
+    // Refresh display/window source list; call on screen add/remove events.
+    void refreshDisplayTargets();
 
   private slots:
     void onStart();

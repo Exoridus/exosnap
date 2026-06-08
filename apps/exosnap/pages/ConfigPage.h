@@ -6,6 +6,7 @@
 #include "../models/OutputSettingsModel.h"
 #include "../models/VideoSettingsModel.h"
 #include "../models/WebcamSettings.h"
+#include "../viewmodels/PresentationState.h"
 
 #include <filesystem>
 #include <string>
@@ -112,6 +113,14 @@ class ConfigPage : public QWidget {
     void updateOutputValidationState();
     void updateExampleFilename();
 
+    // Single entry point for atomic audio widget state application.
+    // Derives widget visibility, enabled, checked, and label states from the
+    // stored audio_ui_state_ and controls_locked_ in one pass.  Both
+    // setAudioUiState() and setRecordingControlsLocked() delegate here after
+    // updating their respective stored value, ensuring call order cannot produce
+    // inconsistent widget state.
+    void applyAudioConfigurationState();
+
     void onAudioAppToggled();
     void onAudioMicToggled();
     void onAudioSysToggled();
@@ -121,7 +130,6 @@ class ConfigPage : public QWidget {
     void onMicDeviceChanged(int index);
     void refreshMicDevices();
     void emitCurrentAudioSettings();
-    void updateAudioSourceAvailability();
 
     void onImportProfiles();
     void onExportSelectedProfile();

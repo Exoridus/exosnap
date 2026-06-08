@@ -528,9 +528,12 @@ TEST_F(ConfigPageTest, DefaultControlsAreEnabled) {
     ASSERT_NE(quality_small_segment, nullptr);
     EXPECT_TRUE(quality_small_segment->isEnabled());
 
+    // Mic device combo: disabled by default because no audio plan has been set yet.
+    // (In production, setAudioUiState is called immediately after construction, so
+    // the default state is transient and never visible to the user.)
     auto* mic_combo = page.findChild<QComboBox*>(QStringLiteral("micDeviceCombo"));
     ASSERT_NE(mic_combo, nullptr);
-    EXPECT_TRUE(mic_combo->isEnabled());
+    EXPECT_FALSE(mic_combo->isEnabled());
 
     auto* lock_note = page.findChild<QLabel*>(QStringLiteral("lockNoteLabel"));
     ASSERT_NE(lock_note, nullptr);
@@ -969,6 +972,157 @@ TEST_F(ConfigPageTest, AudioPolicy_SysMeterActiveForDisplayMode) {
     auto* sys_meter = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioSysMeter"));
     ASSERT_NE(sys_meter, nullptr);
     EXPECT_TRUE(sys_meter->isActive()) << "System meter (Computer audio) must be active for Display mode";
+}
+
+// ---------------------------------------------------------------------------
+// Lock/order invariant tests
+// ---------------------------------------------------------------------------
+
+// Helper: build a Display AudioUiState with a sys + mic row.
+static capability::AudioUiState MakeDisplayAudioState() {
+    capability::AudioUiState s;
+    s.target_kind = capability::CaptureTargetKind::Display;
+    s.source_rows = {{recorder_core::AudioSourceKind::SystemOutput, true, false},
+                     {recorder_core::AudioSourceKind::Mic, false, false}};
+    return s;
+}
+
+// Helper: build a Window AudioUiState with app + sys + mic rows.
+static capability::AudioUiState MakeWindowAudioState() {
+    capability::AudioUiState s;
+    s.target_kind = capability::CaptureTargetKind::Window;
+    s.source_rows = {{recorder_core::AudioSourceKind::App, true, false},
+                     {recorder_core::AudioSourceKind::Sys, false, false},
+                     {recorder_core::AudioSourceKind::Mic, false, false}};
+    return s;
+}
+
+TEST_F(ConfigPageTest, LockOrderInvariant_AudioThenLock_AppCheckDisabled) {
+    // Test 23/25: setAudioUiState followed by setRecordingControlsLocked(true)
+    // must keep the App checkbox disabled.
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setAudioUiState(MakeWindowAudioState());
+    page.setRecordingControlsLocked(true);
+
+    auto* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    ASSERT_NE(app_check, nullptr);
+    EXPECT_FALSE(app_check->isEnabled()) << "Audio then lock: App checkbox must be disabled when controls are locked";
+}
+
+TEST_F(ConfigPageTest, LockOrderInvariant_LockThenAudio_AppCheckDisabled) {
+    // Test 25: setRecordingControlsLocked(true) followed by setAudioUiState
+    // must keep the App checkbox disabled.
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setRecordingControlsLocked(true);
+    page.setAudioUiState(MakeWindowAudioState());
+
+    auto* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    ASSERT_NE(app_check, nullptr);
+    EXPECT_FALSE(app_check->isEnabled())
+        << "Lock then audio: App checkbox must remain disabled when controls are locked";
+}
+
+TEST_F(ConfigPageTest, LockOrderInvariant_MeterUpdateCannotReenableLockedControls) {
+    // Test 25: A setAudioMeterLevels call must not re-enable locked controls.
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setAudioUiState(MakeWindowAudioState());
+    page.setRecordingControlsLocked(true);
+
+    // Verify locked before meter update.
+    auto* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    ASSERT_NE(app_check, nullptr);
+    ASSERT_FALSE(app_check->isEnabled());
+
+    // Apply a meter update — must not re-enable the locked checkbox.
+    page.setAudioMeterLevels(0.5f, 0.3f, 0.1f, true, true, true);
+    EXPECT_FALSE(app_check->isEnabled()) << "Meter update must not re-enable a locked App checkbox";
+}
+
+TEST_F(ConfigPageTest, LockOrderInvariant_UnlockRestoresControls) {
+    // Unlock after lock must restore the App checkbox to enabled.
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setAudioUiState(MakeWindowAudioState());
+    page.setRecordingControlsLocked(true);
+    page.setRecordingControlsLocked(false);
+
+    auto* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    ASSERT_NE(app_check, nullptr);
+    EXPECT_TRUE(app_check->isEnabled()) << "After unlock, App checkbox must be re-enabled for Window target";
+}
+
+TEST_F(ConfigPageTest, LockOrderInvariant_DisplayTarget_AppCheckAlwaysDisabledRegardlessOfLock) {
+    // Test 23/27: Display target — App check is always disabled (not visible/available),
+    // regardless of lock state.
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setAudioUiState(MakeDisplayAudioState());
+
+    auto* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    ASSERT_NE(app_check, nullptr);
+    EXPECT_FALSE(app_check->isEnabled()) << "Display target: App checkbox must be disabled (not available)";
+
+    page.setRecordingControlsLocked(true);
+    EXPECT_FALSE(app_check->isEnabled()) << "Display target + lock: App checkbox must still be disabled";
+
+    page.setRecordingControlsLocked(false);
+    EXPECT_FALSE(app_check->isEnabled()) << "Display target + unlock: App checkbox must stay disabled (no App row)";
+}
+
+TEST_F(ConfigPageTest, AudioState_OneSnapshotDeterminesRowVisibility) {
+    // Test 23: One audio snapshot fully determines row visibility.
+    // Window target → App section visible; Display target → App section hidden.
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setAudioUiState(MakeWindowAudioState());
+    EXPECT_TRUE(AppSectionVisible(page)) << "Window target: App section must be visible";
+
+    page.setAudioUiState(MakeDisplayAudioState());
+    EXPECT_FALSE(AppSectionVisible(page)) << "Display target: App section must be hidden";
+}
+
+TEST_F(ConfigPageTest, AudioState_TargetSwitch_UpdatesSettingsImmediately) {
+    // Test 26: Target switch must update Settings audio card state immediately.
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // Start with Window.
+    page.setAudioUiState(MakeWindowAudioState());
+    EXPECT_TRUE(AppSectionVisible(page));
+
+    // Switch to Display.
+    page.setAudioUiState(MakeDisplayAudioState());
+    EXPECT_FALSE(AppSectionVisible(page)) << "After switching to Display, App section must disappear immediately";
+}
+
+TEST_F(ConfigPageTest, AudioState_NoStaleAppRow_AfterWindowToDisplay) {
+    // Test 27: No stale App row after Window → Display switch.
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setAudioUiState(MakeWindowAudioState());
+    page.setAudioUiState(MakeDisplayAudioState());
+
+    auto* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    ASSERT_NE(app_check, nullptr);
+    // App section hidden → the check is either hidden or disabled.
+    EXPECT_FALSE(app_check->isEnabled()) << "After Window → Display switch, App checkbox must not be enabled";
+}
+
+TEST_F(ConfigPageTest, AudioState_NoMissingRow_AfterDisplayToWindow) {
+    // Test 28: No hidden relevant row after Display → Window.
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setAudioUiState(MakeDisplayAudioState());
+    EXPECT_FALSE(AppSectionVisible(page));
+
+    page.setAudioUiState(MakeWindowAudioState());
+    EXPECT_TRUE(AppSectionVisible(page)) << "After Display → Window switch, App section must appear";
+
+    auto* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    ASSERT_NE(app_check, nullptr);
+    EXPECT_TRUE(app_check->isEnabled()) << "After Display → Window switch, App checkbox must be enabled";
 }
 
 } // namespace

@@ -162,6 +162,9 @@ qt_add_executable(exosnap WIN32
     diagnostics/SelfTestRunner.cpp
     viewmodels/RecordViewModel.h
     viewmodels/RecordViewModel.cpp
+    viewmodels/PresentationState.h
+    viewmodels/PresentationStateBuilder.h
+    viewmodels/PresentationStateBuilder.cpp
 )
 
 if(WIN32)
@@ -180,6 +183,16 @@ target_link_libraries(exosnap PRIVATE
 )
 
 target_include_directories(exosnap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+
+exosnap_add_gtest(
+    NAME presentation_state_tests
+    TEST_PREFIX state.
+    SOURCES
+        tests/test_presentation_state.cpp
+        viewmodels/PresentationStateBuilder.cpp
+    LIBRARIES exosnap_capability recorder_core
+)
+target_include_directories(presentation_state_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME record_viewmodel_audio_tests
@@ -307,6 +320,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_config_page.cpp
         pages/ConfigPage.cpp
+        viewmodels/PresentationStateBuilder.cpp
         ui/widgets/ComboBoxWheelFilter.cpp
         ui/widgets/CameraPreview.cpp
         ui/widgets/ExoToggle.cpp
