@@ -1550,6 +1550,49 @@ void ConfigPage::applyVisualWebcamState(bool available, bool mirror) {
     if (webcam_setup_panel_)
         webcam_setup_panel_->applyVisualState(available, mirror);
 }
+
+void ConfigPage::applyVisualPresetSaveError(bool show) {
+    if (show && !visual_preset_error_label_) {
+        // Lazily insert the error label directly below the preset selector row in
+        // the same parent QWidget.  We locate the preset_save_btn_ parent layout
+        // and insert the label after the selector row.
+        QWidget* panel = preset_save_btn_ ? preset_save_btn_->parentWidget() : nullptr;
+        if (!panel)
+            return;
+        visual_preset_error_label_ = new QLabel(panel);
+        visual_preset_error_label_->setObjectName(QStringLiteral("presetVisualErrorLabel"));
+        visual_preset_error_label_->setProperty("labelRole", "validationError");
+        visual_preset_error_label_->setWordWrap(true);
+        visual_preset_error_label_->setText(
+            QStringLiteral("⚠ Name already exists. Choose a different name before saving."));
+        // Insert into the panel's layout immediately after the selector row.
+        if (QLayout* lay = panel->layout()) {
+            // Find the position of profile_overflow_btn_ in the layout and insert
+            // the error label right below the row that contains it.
+            int insert_pos = lay->count(); // fallback: append
+            for (int i = 0; i < lay->count(); ++i) {
+                QLayoutItem* item = lay->itemAt(i);
+                if (!item)
+                    continue;
+                if (QLayout* sub = item->layout()) {
+                    for (int j = 0; j < sub->count(); ++j) {
+                        QLayoutItem* sub_item = sub->itemAt(j);
+                        if (sub_item && sub_item->widget() == profile_overflow_btn_) {
+                            insert_pos = i + 1;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (auto* vlay = qobject_cast<QVBoxLayout*>(lay))
+                vlay->insertWidget(insert_pos, visual_preset_error_label_);
+            else
+                lay->addWidget(visual_preset_error_label_);
+        }
+    }
+    if (visual_preset_error_label_)
+        visual_preset_error_label_->setVisible(show);
+}
 #endif
 
 void ConfigPage::setReadinessStatus(const QString& status_label) {

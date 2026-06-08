@@ -119,6 +119,15 @@ struct VisualScenario {
     VisualLogFilter log_filter = VisualLogFilter::All;
     QString log_search_query;
     bool log_auto_scroll = true;
+
+    // Preset card (Settings) — synthetic state for deterministic scenarios.
+    // preset_count == 0 means "leave the card untouched".
+    int preset_count = 0;
+    QString preset_selected_name;   // selected preset display name
+    QString preset_default_name;    // startup-default preset name (for the badge)
+    bool preset_dirty = false;      // unsaved-changes indicator
+    bool preset_menu_open = false;  // open the Manage overflow menu
+    bool preset_save_error = false; // render an inline save/name error affordance
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

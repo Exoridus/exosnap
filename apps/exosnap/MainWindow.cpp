@@ -17,6 +17,8 @@
 #include "ui/theme/ExoSnapPalette.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 #include "visual_tests/VisualScenario.h"
+
+#include <QToolButton>
 #endif
 
 #include <capability/capability_builder.h>
@@ -1669,6 +1671,71 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
     if (scenario.webcam_state != visual::VisualWebcamState::None) {
         config_page_->applyVisualWebcamState(scenario.webcam_state == visual::VisualWebcamState::Active,
                                              scenario.webcam_mirror);
+    }
+
+    // Preset card — inject synthetic ProfileOption data when preset_count > 0 or
+    // the scenario id starts with "settings-preset".  Never touches
+    // RecordingPresetStore or RecordingPresetRegistry.
+    //
+    // The injection is deferred by one event-loop turn (singleShot 20 ms) so it
+    // fires AFTER the MainWindow constructor's singleShot(0) that calls
+    // refreshPresetUi() on capabilities-probe completion.  Without this the
+    // real preset registry would overwrite the synthetic data before the harness
+    // manifest is written at t=120 ms.
+    const bool drive_preset = scenario.preset_count > 0 || scenario.id.startsWith(QStringLiteral("settings-preset"));
+    if (drive_preset) {
+        // Capture scenario fields by value for the deferred lambda.
+        const int count = scenario.preset_count > 0 ? scenario.preset_count : 3;
+        const QString selected_name = scenario.preset_selected_name;
+        const QString default_name = scenario.preset_default_name;
+        const bool dirty = scenario.preset_dirty;
+        const bool save_error = scenario.preset_save_error;
+        const bool menu_open = scenario.preset_menu_open;
+
+        QTimer::singleShot(20, this, [this, count, selected_name, default_name, dirty, save_error, menu_open]() {
+            if (!config_page_)
+                return;
+
+            // Synthetic preset names in declaration order.
+            const QStringList kPresetNames = {QStringLiteral("Default"),   QStringLiteral("Gaming"),
+                                              QStringLiteral("Tutorial"),  QStringLiteral("Streaming"),
+                                              QStringLiteral("Cinematic"), QStringLiteral("Podcast"),
+                                              QStringLiteral("Archive")};
+
+            std::vector<ConfigPage::ProfileOption> opts;
+            opts.reserve(static_cast<std::size_t>(count));
+            for (int i = 0; i < count; ++i) {
+                ConfigPage::ProfileOption opt;
+                opt.id = QStringLiteral("preset.vis%1").arg(i + 1);
+                opt.label = (i < kPresetNames.size()) ? kPresetNames[i] : QStringLiteral("Preset %1").arg(i + 1);
+                opt.built_in = (i == 0); // first entry is the built-in default
+                opt.available = true;
+                opts.push_back(opt);
+            }
+
+            // Match selected_id and default_id to the scenario's named fields.
+            QString selected_id = opts.front().id;
+            QString default_id = opts.front().id;
+            for (const auto& opt : opts) {
+                if (opt.label == selected_name)
+                    selected_id = opt.id;
+                if (opt.label == default_name)
+                    default_id = opt.id;
+            }
+
+            config_page_->setPresetOptions(opts, selected_id, default_id, dirty);
+
+            // Inline save-error affordance (no modal — entirely deterministic).
+            config_page_->applyVisualPresetSaveError(save_error);
+
+            // Open the Manage overflow menu after a short delay so the widget is
+            // visible and the screenshot captures it.  The menu is non-blocking in
+            // Qt's event loop (QMenu::exec would block, showMenu() does not).
+            if (menu_open) {
+                if (auto* btn = config_page_->findChild<QToolButton*>(QStringLiteral("presetManageButton")))
+                    QTimer::singleShot(80, btn, [btn]() { btn->showMenu(); });
+            }
+        });
     }
 }
 

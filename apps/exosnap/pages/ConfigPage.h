@@ -71,6 +71,11 @@ class ConfigPage : public QWidget {
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     // Drive the embedded Webcam card deterministically for visual-test scenarios.
     void applyVisualWebcamState(bool available, bool mirror);
+
+    // Drive the inline preset save-error affordance for visual-test scenarios.
+    // Passing true shows a deterministic error label (name-conflict copy);
+    // passing false hides it.  No real save is performed.
+    void applyVisualPresetSaveError(bool show);
 #endif
 
     // Live audio meter update forwarded from RecordPage via MainWindow.
@@ -259,6 +264,13 @@ class ConfigPage : public QWidget {
 
     QLabel* token_help_label_ = nullptr;
     QPushButton* token_help_toggle_btn_ = nullptr;
+
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    // Inline error label for preset save-error visual-test scenario.
+    // Created lazily on first applyVisualPresetSaveError(true) call and placed
+    // below the preset selector row.  Hidden in all non-error-scenario states.
+    QLabel* visual_preset_error_label_ = nullptr;
+#endif
 };
 
 } // namespace exosnap

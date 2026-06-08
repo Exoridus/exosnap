@@ -68,6 +68,20 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("logs-long-message"),
         QStringLiteral("logs-buffer-truncated"),
         QStringLiteral("about"),
+        // Complete preset scenarios (COMPLETE-PRESET-R1).
+        QStringLiteral("settings-preset-default"),
+        QStringLiteral("settings-preset-modified"),
+        QStringLiteral("settings-preset-saved"),
+        QStringLiteral("settings-preset-menu"),
+        QStringLiteral("settings-preset-multiple"),
+        QStringLiteral("settings-preset-default-badge"),
+        QStringLiteral("settings-preset-delete-confirm"),
+        QStringLiteral("settings-preset-save-error"),
+        QStringLiteral("record-preset-display"),
+        QStringLiteral("record-preset-window"),
+        QStringLiteral("record-preset-region"),
+        QStringLiteral("record-preset-webcam"),
+        QStringLiteral("record-preset-countdown"),
     };
 
     for (const QString& id : required)

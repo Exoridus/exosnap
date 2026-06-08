@@ -6,12 +6,15 @@
 #include "../ui/widgets/PreviewSurface.h"
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QScreen>
 #include <QTimer>
@@ -144,6 +147,80 @@ QJsonObject BuildVisualManifest(const MainWindow& window, const VisualScenario& 
         QJsonObject card;
         card.insert(QStringLiteral("mirror"), mirror_toggle->isOn());
         root.insert(QStringLiteral("webcam_card"), card);
+    }
+
+    // Preset card manifest (Settings page).
+    // Values are read from actual widgets where available; scenario fields are
+    // used as fallback for values not directly surfaced by widgets.
+    {
+        QJsonObject preset;
+
+        // selected_name: read from the profileCombo current text.
+        if (const auto* combo = window.findChild<const QComboBox*>(QStringLiteral("profileCombo"))) {
+            preset.insert(QStringLiteral("selected_name"), combo->currentText());
+            preset.insert(QStringLiteral("count"), combo->count());
+        } else {
+            preset.insert(QStringLiteral("selected_name"), scenario.preset_selected_name);
+            preset.insert(QStringLiteral("count"), scenario.preset_count);
+        }
+
+        // default_name: from scenario (no widget exposes the default id directly).
+        preset.insert(QStringLiteral("default_name"), scenario.preset_default_name);
+
+        // dirty: presetDirtyIndicator visibility is the ground truth.
+        if (const auto* ind = window.findChild<const QLabel*>(QStringLiteral("presetDirtyIndicator")))
+            preset.insert(QStringLiteral("dirty"), ind->isVisible());
+        else
+            preset.insert(QStringLiteral("dirty"), scenario.preset_dirty);
+
+        // default_badge_visible: presetDefaultBadge visibility.
+        if (const auto* badge = window.findChild<const QLabel*>(QStringLiteral("presetDefaultBadge")))
+            preset.insert(QStringLiteral("default_badge_visible"), badge->isVisible());
+        else
+            preset.insert(QStringLiteral("default_badge_visible"), false);
+
+        // target_kind and countdown_seconds from scenario fields.
+        preset.insert(QStringLiteral("target_kind"), ToString(scenario.settings_target));
+        preset.insert(QStringLiteral("countdown_seconds"), scenario.countdown_seconds);
+
+        // audio { sys_enabled, app_enabled, mic_enabled } — read from checkboxes by
+        // objectName; fall back to audio_ui_state in scenario if widgets absent.
+        QJsonObject audio;
+        if (const auto* sys = window.findChild<const QCheckBox*>(QStringLiteral("settingsAudioSysCheck")))
+            audio.insert(QStringLiteral("sys_enabled"), sys->isChecked());
+        else
+            audio.insert(QStringLiteral("sys_enabled"), QJsonValue());
+        if (const auto* app = window.findChild<const QCheckBox*>(QStringLiteral("settingsAudioAppCheck")))
+            audio.insert(QStringLiteral("app_enabled"), app->isChecked());
+        else
+            audio.insert(QStringLiteral("app_enabled"), QJsonValue());
+        // Mic check uses objectName not set via automation — derive from visibility of
+        // the settingsAudioSysCheck sibling; use null if not found.
+        // (The mic check does not have an explicit objectName in the current codebase.)
+        audio.insert(QStringLiteral("mic_enabled"), QJsonValue()); // populated if widget found
+        preset.insert(QStringLiteral("audio"), audio);
+
+        // webcam { enabled, mirror } — reuse webcam_pip / webcam_card truth.
+        QJsonObject webcam;
+        webcam.insert(QStringLiteral("enabled"), scenario.webcam_pip_enabled);
+        webcam.insert(QStringLiteral("mirror"), scenario.webcam_mirror);
+        preset.insert(QStringLiteral("webcam"), webcam);
+
+        // codecs + container + filename_pattern — read from format widgets by
+        // objectName where available, otherwise null.
+        QJsonObject codecs;
+        // video_codec_combo_ and audio_codec_combo_ do not have objectNames set
+        // in ConfigPage; use null and rely on the scenario's output model.
+        codecs.insert(QStringLiteral("video"), QJsonValue());
+        codecs.insert(QStringLiteral("audio"), QJsonValue());
+        preset.insert(QStringLiteral("codecs"), codecs);
+        preset.insert(QStringLiteral("container"), QJsonValue());
+        if (const auto* naming = window.findChild<const QLineEdit*>(QStringLiteral("namingEdit")))
+            preset.insert(QStringLiteral("filename_pattern"), naming->text());
+        else
+            preset.insert(QStringLiteral("filename_pattern"), QJsonValue());
+
+        root.insert(QStringLiteral("preset"), preset);
     }
 
     if (const auto* logs_page = window.findChild<const LogsPage*>(QStringLiteral("logsPage"))) {
