@@ -16,6 +16,12 @@ class QTimer;
 
 namespace exosnap {
 
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+namespace visual {
+enum class VisualWebcamState;
+}
+#endif
+
 namespace ui::widgets {
 class CameraPreview;
 class ExoToggle;
@@ -29,6 +35,9 @@ class WebcamPage : public QWidget {
     ~WebcamPage() override;
 
     void applySettings(const WebcamSettings& settings);
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    void applyVisualState(visual::VisualWebcamState state);
+#endif
 
   signals:
     void settingsChanged(WebcamSettings settings);
@@ -92,6 +101,9 @@ class WebcamPage : public QWidget {
 
     WebcamSettings current_settings_;
     bool suppress_signals_ = false;
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    bool visual_test_mode_ = false;
+#endif
 };
 
 } // namespace exosnap

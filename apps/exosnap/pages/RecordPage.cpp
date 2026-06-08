@@ -16,6 +16,9 @@
 #include "../ui/widgets/StatusPill.h"
 #include "../ui/widgets/TransportDock.h"
 #include "../ui/widgets/VUMeterWidget.h"
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+#include "../visual_tests/VisualScenario.h"
+#endif
 
 #include <capability/capability_builder.h>
 #include <capability/resolver.h>
@@ -631,6 +634,10 @@ void RecordPage::resizeEvent(QResizeEvent* event) {
 
 void RecordPage::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    if (visual_test_mode_)
+        return;
+#endif
     QTimer::singleShot(0, this, [this]() { ensureCoordinatorInit(); });
 }
 
@@ -1511,6 +1518,154 @@ void RecordPage::rebroadcastChromeState() {
     updateStatsDisplay();
     emitChromeState();
 }
+
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
+    visual_test_mode_ = true;
+    if (ui_clock_timer_)
+        ui_clock_timer_->stop();
+    if (preview_service_)
+        preview_service_->Stop();
+    if (preview_surface_) {
+        preview_surface_->stopDxgiPreview();
+        QImage test_frame(1280, 720, QImage::Format_RGB32);
+        test_frame.fill(QColor(28, 37, 46));
+        preview_surface_->setLiveFrame(test_frame);
+        preview_surface_->setTopMetaText(QStringLiteral("VISUAL TEST TARGET"));
+        preview_surface_->setCenterTitle(QStringLiteral("Visual test preview"));
+        preview_surface_->setCenterSubtitle(QStringLiteral("Synthetic deterministic frame"));
+        preview_surface_->setBottomLeftText(QStringLiteral("Display 1 · 2560x1440"));
+        preview_surface_->setBottomRightText(QStringLiteral("AV1 · Opus · 60 fps"));
+        preview_surface_->setFrameTone(ui::widgets::PreviewSurface::FrameTone::Ready);
+    }
+
+    view_model_.targets.clear();
+    view_model_.target_display_names.clear();
+    recorder_core::CaptureTarget display;
+    display.kind = recorder_core::CaptureTarget::Kind::Monitor;
+    display.native_id = 1001;
+    display.description = "Visual Test Display 1 2560x1440";
+    recorder_core::CaptureTarget window;
+    window.kind = recorder_core::CaptureTarget::Kind::Window;
+    window.native_id = 2001;
+    window.description = "Visual Test Window - ExoSnap Fixture";
+    view_model_.targets = {display, window};
+    view_model_.target_display_names = {L"[Monitor] Visual Test Display 1", L"[Window] Visual Test Window"};
+    monitor_target_indices_ = {0};
+    window_target_indices_ = {1};
+    monitor_target_index_ = 0;
+    window_target_index_ = 1;
+    view_model_.selected_target_index = 0;
+    view_model_.capture_mode = CaptureMode::Monitor;
+
+    if (target_combo_) {
+        QSignalBlocker blocker(target_combo_);
+        target_combo_->clear();
+        target_combo_->addItem(QStringLiteral("[Monitor] Visual Test Display 1"), 0);
+        target_combo_->addItem(QStringLiteral("[Window] Visual Test Window"), 1);
+        target_combo_->setCurrentIndex(0);
+    }
+    if (target_picker_combo_) {
+        QSignalBlocker blocker(target_picker_combo_);
+        target_picker_combo_->clear();
+        target_picker_combo_->addItem(QStringLiteral("[Monitor] Visual Test Display 1"), 0);
+        target_picker_combo_->addItem(QStringLiteral("[Window] Visual Test Window"), 1);
+        target_picker_combo_->setCurrentIndex(0);
+    }
+
+    using K = recorder_core::AudioSourceKind;
+    view_model_.audio_ui_state.target_kind = capability::CaptureTargetKind::Window;
+    view_model_.audio_ui_state.selected_window_pid = 4242;
+    view_model_.audio_ui_state.source_rows = {
+        {K::App, true, false},
+        {K::Mic, true, false},
+        {K::Sys, true, false},
+    };
+    view_model_.audio_ui_state.selected_mic_device_id = std::string("visual-test-mic");
+    view_model_.audio_ui_state.mic_gain_linear = 1.0f;
+    view_model_.RebuildAudioPlan();
+    rebuildAudioRowWidgets();
+    updateAudioRowMergeVisibility();
+    updateAudioControlsVisibility();
+    updateAudioTrackPreview();
+
+    view_model_.ResetStats();
+    view_model_.capability_status_text = L"Visual test fixture: diagnostic blockers clear.";
+    view_model_.output_path_display = L"C:\\Users\\User\\Videos\\ExoSnap";
+    active_profile_name_ = L"Visual Test WebM AV1 Opus";
+    current_container_ = capability::Container::WebM;
+    current_video_codec_ = capability::VideoCodec::Av1Nvenc;
+    current_audio_codec_ = capability::AudioCodec::Opus;
+    last_output_folder_ = std::filesystem::path(L"C:\\Users\\User\\Videos\\ExoSnap");
+
+    recorder_core::SessionStats stats;
+    stats.elapsed_seconds = 83.0;
+    stats.video_frames_captured = 4980;
+    stats.encoded_video_packets = 4980;
+    stats.audio_packets = 249;
+    stats.video_bytes = 48ULL * 1024ULL * 1024ULL;
+    stats.audio_bytes = 3ULL * 1024ULL * 1024ULL;
+    stats.output_file_bytes = 52ULL * 1024ULL * 1024ULL;
+    stats.dropped_or_skipped_video_frames = 0;
+    stats.duration_skew_ms = 2.0;
+    stats.per_track_rms = {0.42f, 0.26f, 0.58f};
+    view_model_.UpdateStats(stats);
+
+    switch (scenario.record_state) {
+    case visual::VisualRecordState::Recording:
+        view_model_.SetState(UiRecordingState::Recording);
+        if (preview_surface_) {
+            preview_surface_->setFrameTone(ui::widgets::PreviewSurface::FrameTone::Recording);
+            preview_surface_->setCenterTitle(QStringLiteral("Recording"));
+            preview_surface_->setCenterSubtitle(QStringLiteral("Visual test technical recording view"));
+        }
+        break;
+    case visual::VisualRecordState::Paused:
+        view_model_.SetState(UiRecordingState::Paused);
+        if (preview_surface_) {
+            preview_surface_->setFrameTone(ui::widgets::PreviewSurface::FrameTone::Warn);
+            preview_surface_->setCenterTitle(QStringLiteral("Paused"));
+            preview_surface_->setCenterSubtitle(QStringLiteral("Visual test recording state is frozen"));
+        }
+        break;
+    case visual::VisualRecordState::Completed: {
+        UiRecordingResult result;
+        result.succeeded = true;
+        result.output_path = L"C:\\Users\\User\\Videos\\ExoSnap\\visual-test-recording.webm";
+        result.output_file_bytes = 52ULL * 1024ULL * 1024ULL;
+        result.elapsed_seconds = 83.0;
+        view_model_.SetResult(result);
+        view_model_.SetState(UiRecordingState::Completed);
+        if (preview_surface_) {
+            preview_surface_->setCenterTitle(QStringLiteral("Recording saved"));
+            preview_surface_->setCenterSubtitle(QStringLiteral("visual-test-recording.webm"));
+        }
+        break;
+    }
+    case visual::VisualRecordState::Ready:
+    case visual::VisualRecordState::None:
+    default:
+        view_model_.SetState(UiRecordingState::Ready);
+        break;
+    }
+
+    refresh();
+    updateAudioMeterLevels();
+
+    auto markMeter = [](QLabel* label, const QString& text) {
+        if (!label)
+            return;
+        label->setText(QStringLiteral("TEST ") + text);
+        label->setToolTip(QStringLiteral("Deterministic visual-test meter value"));
+    };
+    markMeter(app_db_label_, QStringLiteral("-18 dB"));
+    markMeter(mic_db_label_, QStringLiteral("-12 dB"));
+    markMeter(sys_db_label_, QStringLiteral("-22 dB"));
+
+    emitAudioSettingsChanged();
+    emitChromeState();
+}
+#endif
 
 void RecordPage::setOutputSettingsSummary(const OutputSettingsModel& settings) {
     const QString container = containerLabel(settings.container);
