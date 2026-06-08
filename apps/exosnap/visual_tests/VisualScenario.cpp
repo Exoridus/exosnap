@@ -1107,10 +1107,132 @@ const QVector<VisualScenario> kScenarios = {
      0},
 };
 
+// --- Completed result scenarios (OUTPUT-RESULTS-R1) ---
+// These are appended via a second initializer list since they reference
+// fields that were added after the original positional entries.
+// (scenarios are added here for build ordering convenience)
+} // namespace
+
+namespace {
+const QVector<VisualScenario> kCompletedScenarios = {
+    {.id = QStringLiteral("record-completed-details"),
+     .title = QStringLiteral("Record / Completed / Details"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Completed,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("completed preview may be masked")},
+               {QStringLiteral("recordDockTimer"), QStringLiteral("fixed completed duration")}},
+     .output_resolution_mode = OutputResolutionMode::FHD1080,
+     .effective_width = 1920,
+     .effective_height = 1080,
+     .source_width = 1920,
+     .source_height = 1080,
+     .content_x = 0,
+     .content_y = 0,
+     .content_width = 1920,
+     .content_height = 1080,
+     .container = capability::Container::Matroska,
+     .video_codec = capability::VideoCodec::H264Nvenc,
+     .audio_codec = capability::AudioCodec::AacMf,
+     .result_file_name = QStringLiteral("completed-detail.mkv"),
+     .result_file_size_bytes = 128ULL * 1024ULL * 1024ULL,
+     .result_duration_seconds = 120.0},
+
+    {.id = QStringLiteral("record-completed-long-filename"),
+     .title = QStringLiteral("Record / Completed / Long Filename"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Completed,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("completed preview may be masked")},
+               {QStringLiteral("recordDockTimer"), QStringLiteral("fixed completed duration")}},
+     .effective_width = 2560,
+     .effective_height = 1440,
+     .source_width = 2560,
+     .source_height = 1440,
+     .content_x = 0,
+     .content_y = 0,
+     .content_width = 2560,
+     .content_height = 1440,
+     .container = capability::Container::WebM,
+     .video_codec = capability::VideoCodec::Av1Nvenc,
+     .audio_codec = capability::AudioCodec::Opus,
+     .result_file_name = QStringLiteral("2024-12-25_very-long-recording-name-with-many-details-and-metadata.webm"),
+     .result_file_size_bytes = 256ULL * 1024ULL * 1024ULL,
+     .result_duration_seconds = 300.0},
+
+    {.id = QStringLiteral("record-completed-missing-file"),
+     .title = QStringLiteral("Record / Completed / Missing File"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Completed,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("completed preview may be masked")},
+               {QStringLiteral("recordDockTimer"), QStringLiteral("fixed completed duration")}},
+     .effective_width = 2560,
+     .effective_height = 1440,
+     .source_width = 2560,
+     .source_height = 1440,
+     .content_x = 0,
+     .content_y = 0,
+     .content_width = 2560,
+     .content_height = 1440,
+     .container = capability::Container::Matroska,
+     .video_codec = capability::VideoCodec::H264Nvenc,
+     .audio_codec = capability::AudioCodec::AacMf,
+     .result_file_name = QStringLiteral("deleted-recording.mkv"),
+     .result_file_size_bytes = 64ULL * 1024ULL * 1024ULL,
+     .result_duration_seconds = 45.0,
+     .result_file_exists = false},
+
+    {.id = QStringLiteral("record-completed-recent-history"),
+     .title = QStringLiteral("Record / Completed / Recent History"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Completed,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("completed preview may be masked")},
+               {QStringLiteral("recordDockTimer"), QStringLiteral("fixed completed duration")}},
+     .effective_width = 2560,
+     .effective_height = 1440,
+     .source_width = 2560,
+     .source_height = 1440,
+     .content_x = 0,
+     .content_y = 0,
+     .content_width = 2560,
+     .content_height = 1440,
+     .container = capability::Container::Matroska,
+     .video_codec = capability::VideoCodec::H264Nvenc,
+     .audio_codec = capability::AudioCodec::AacMf,
+     .result_file_name = QStringLiteral("latest-recording.mkv"),
+     .result_file_size_bytes = 32ULL * 1024ULL * 1024ULL,
+     .result_duration_seconds = 60.0,
+     .recent_result_count = 5},
+
+    {.id = QStringLiteral("record-completed-delete-confirm"),
+     .title = QStringLiteral("Record / Completed / Delete Confirm"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Completed,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("completed preview may be masked")},
+               {QStringLiteral("recordDockTimer"), QStringLiteral("fixed completed duration")}},
+     .effective_width = 2560,
+     .effective_height = 1440,
+     .source_width = 2560,
+     .source_height = 1440,
+     .content_x = 0,
+     .content_y = 0,
+     .content_width = 2560,
+     .content_height = 1440,
+     .container = capability::Container::Matroska,
+     .video_codec = capability::VideoCodec::H264Nvenc,
+     .audio_codec = capability::AudioCodec::AacMf,
+     .result_file_name = QStringLiteral("to-delete.mkv"),
+     .result_file_size_bytes = 10ULL * 1024ULL * 1024ULL,
+     .result_duration_seconds = 12.0,
+     .show_delete_confirm = true},
+};
 } // namespace
 
 const QVector<VisualScenario>& VisualScenarioRegistry() {
-    return kScenarios;
+    static QVector<VisualScenario> merged;
+    if (merged.isEmpty()) {
+        merged = kScenarios;
+        merged.append(kCompletedScenarios);
+    }
+    return merged;
 }
 
 const VisualScenario* FindVisualScenario(QStringView id) {

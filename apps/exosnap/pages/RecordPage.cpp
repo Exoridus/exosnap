@@ -27,17 +27,21 @@
 #include <recorder_core/audio_input_device.h>
 
 #include <QAbstractItemView>
+#include <QApplication>
 #include <QBoxLayout>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDebug>
 #include <QDesktopServices>
 #include <QDialog>
+#include <QDir>
 #include <QEvent>
 #include <QFileInfo>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QPointer>
 #include <QPushButton>
@@ -1362,11 +1366,119 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 
     transport_dock_ = new ui::widgets::TransportDock(this);
 
+    // --- Result details panel (shown on Completed success) ---
+    auto* result_details_panel_ = new QFrame(this);
+    result_details_panel_->setObjectName(QStringLiteral("resultDetailsPanel"));
+    result_details_panel_->setProperty("panelRole", "resultDetails");
+    result_details_panel_->setVisible(false);
+    auto* result_details_layout = new QHBoxLayout(result_details_panel_);
+    result_details_layout->setContentsMargins(4, 6, 4, 6);
+    result_details_layout->setSpacing(8);
+
+    // Left: metadata summary
+    auto* result_meta_label_ = new QLabel(result_details_panel_);
+    result_meta_label_->setObjectName(QStringLiteral("resultMetadataLabel"));
+    result_meta_label_->setProperty("labelRole", "resultMetadata");
+    result_meta_label_->setWordWrap(true);
+
+    // Right: action buttons (copy path, rename, delete)
+    auto* result_actions_widget_ = new QWidget(result_details_panel_);
+    auto* result_actions_layout_ = new QHBoxLayout(result_actions_widget_);
+    result_actions_layout_->setContentsMargins(0, 0, 0, 0);
+    result_actions_layout_->setSpacing(6);
+
+    result_copy_path_btn_ = new QPushButton(QStringLiteral("Copy path"), result_actions_widget_);
+    result_copy_path_btn_->setObjectName(QStringLiteral("resultCopyPathBtn"));
+    result_copy_path_btn_->setProperty("role", "ghost");
+    result_copy_path_btn_->setCursor(Qt::PointingHandCursor);
+    result_copy_path_btn_->setToolTip(QStringLiteral("Copy the full file path to the clipboard"));
+
+    result_rename_btn_ = new QPushButton(QStringLiteral("Rename"), result_actions_widget_);
+    result_rename_btn_->setObjectName(QStringLiteral("resultRenameBtn"));
+    result_rename_btn_->setProperty("role", "ghost");
+    result_rename_btn_->setCursor(Qt::PointingHandCursor);
+
+    result_delete_btn_ = new QPushButton(QStringLiteral("Delete"), result_actions_widget_);
+    result_delete_btn_->setObjectName(QStringLiteral("resultDeleteBtn"));
+    result_delete_btn_->setProperty("role", "ghost");
+    result_delete_btn_->setCursor(Qt::PointingHandCursor);
+
+    result_actions_layout_->addWidget(result_copy_path_btn_);
+    result_actions_layout_->addWidget(result_rename_btn_);
+    result_actions_layout_->addWidget(result_delete_btn_);
+    result_actions_layout_->addStretch(1);
+
+    result_details_layout->addWidget(result_meta_label_, 1);
+    result_details_layout->addWidget(result_actions_widget_, 0, Qt::AlignRight | Qt::AlignVCenter);
+
+    // --- Inline rename overlay ---
+    rename_overlay_ = new QFrame(result_details_panel_);
+    rename_overlay_->setObjectName(QStringLiteral("renameOverlay"));
+    rename_overlay_->setProperty("panelRole", "renameOverlay");
+    rename_overlay_->setVisible(false);
+    auto* rename_layout = new QHBoxLayout(rename_overlay_);
+    rename_layout->setContentsMargins(0, 0, 0, 0);
+    rename_layout->setSpacing(6);
+    rename_edit_ = new QLineEdit(rename_overlay_);
+    rename_edit_->setObjectName(QStringLiteral("renameEdit"));
+    rename_confirm_btn_ = new QPushButton(QStringLiteral("OK"), rename_overlay_);
+    rename_confirm_btn_->setObjectName(QStringLiteral("renameConfirmBtn"));
+    rename_cancel_btn_ = new QPushButton(QStringLiteral("Cancel"), rename_overlay_);
+    rename_cancel_btn_->setObjectName(QStringLiteral("renameCancelBtn"));
+    rename_cancel_btn_->setProperty("role", "ghost");
+    rename_error_label_ = new QLabel(rename_overlay_);
+    rename_error_label_->setObjectName(QStringLiteral("renameErrorLabel"));
+    rename_error_label_->setProperty("labelRole", "renameError");
+    rename_error_label_->setVisible(false);
+    rename_layout->addWidget(rename_edit_, 1);
+    rename_layout->addWidget(rename_confirm_btn_);
+    rename_layout->addWidget(rename_cancel_btn_);
+    rename_layout->addWidget(rename_error_label_);
+
+    // --- Delete confirmation overlay ---
+    delete_confirm_overlay_ = new QFrame(result_details_panel_);
+    delete_confirm_overlay_->setObjectName(QStringLiteral("deleteConfirmOverlay"));
+    delete_confirm_overlay_->setProperty("panelRole", "deleteConfirm");
+    delete_confirm_overlay_->setVisible(false);
+    auto* delete_layout = new QHBoxLayout(delete_confirm_overlay_);
+    delete_layout->setContentsMargins(0, 0, 0, 0);
+    delete_layout->setSpacing(6);
+    auto* delete_label = new QLabel(QStringLiteral("Delete this recording permanently?"), delete_confirm_overlay_);
+    delete_label->setObjectName(QStringLiteral("deleteConfirmLabel"));
+    delete_confirm_yes_btn_ = new QPushButton(QStringLiteral("Delete"), delete_confirm_overlay_);
+    delete_confirm_yes_btn_->setObjectName(QStringLiteral("deleteConfirmYesBtn"));
+    delete_confirm_no_btn_ = new QPushButton(QStringLiteral("Cancel"), delete_confirm_overlay_);
+    delete_confirm_no_btn_->setObjectName(QStringLiteral("deleteConfirmNoBtn"));
+    delete_confirm_no_btn_->setProperty("role", "ghost");
+    delete_layout->addWidget(delete_label, 1);
+    delete_layout->addWidget(delete_confirm_yes_btn_);
+    delete_layout->addWidget(delete_confirm_no_btn_);
+
+    // --- Recent recordings section ---
+    recent_section_ = new QFrame(this);
+    recent_section_->setObjectName(QStringLiteral("recentRecordingsSection"));
+    recent_section_->setProperty("panelRole", "recentRecordings");
+    recent_section_->setVisible(false);
+    auto* recent_section_layout = new QVBoxLayout(recent_section_);
+    recent_section_layout->setContentsMargins(4, 6, 4, 6);
+    recent_section_layout->setSpacing(4);
+    recent_header_label_ = new QLabel(QStringLiteral("Recent recordings"), recent_section_);
+    recent_header_label_->setObjectName(QStringLiteral("recentHeaderLabel"));
+    recent_header_label_->setProperty("labelRole", "recentHeader");
+    auto* recent_items_container_ = new QWidget(recent_section_);
+    recent_items_layout_ = new QVBoxLayout(recent_items_container_);
+    recent_items_layout_->setContentsMargins(0, 0, 0, 0);
+    recent_items_layout_->setSpacing(2);
+    recent_section_layout->addWidget(recent_header_label_);
+    recent_section_layout->addWidget(recent_items_container_);
+
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
                              ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
-    root->setSpacing(16);
+    root->setSpacing(10);
     root->addWidget(preview_column_, 1);
+    root->addWidget(result_details_panel_, 0);
+    root->addWidget(recent_section_, 0);
     root->addWidget(transport_dock_, 0);
 
     auto* combo_wheel_filter = new ui::widgets::ComboBoxWheelFilter(this);
@@ -1405,6 +1517,9 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(result_open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
     connect(result_record_again_btn_, &QPushButton::clicked, this, [this]() {
         if (view_model_.CanStart() && interaction_mode_ == InteractionMode::None) {
+            view_model_.ClearCompletedResult();
+            view_model_.SetState(UiRecordingState::Ready);
+            refresh();
             onStart();
         }
     });
@@ -1446,8 +1561,12 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
             onStart();
     });
     connect(transport_dock_, &ui::widgets::TransportDock::recordAgainClicked, this, [this]() {
-        if (view_model_.CanStart() && interaction_mode_ == InteractionMode::None)
+        if (view_model_.CanStart() && interaction_mode_ == InteractionMode::None) {
+            view_model_.ClearCompletedResult();
+            view_model_.SetState(UiRecordingState::Ready);
+            refresh();
             onStart();
+        }
     });
     connect(transport_dock_, &ui::widgets::TransportDock::stopClicked, this, [this]() {
         if (view_model_.CanStop())
@@ -1469,6 +1588,100 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
         if (!applying_external_config_)
             emit recordingConfigChanged();
     });
+
+    // Result action buttons
+    connect(result_copy_path_btn_, &QPushButton::clicked, this, &RecordPage::onCopyFilePath);
+    connect(result_rename_btn_, &QPushButton::clicked, this, &RecordPage::onRenameFile);
+    connect(result_delete_btn_, &QPushButton::clicked, this, &RecordPage::onDeleteFile);
+    connect(rename_cancel_btn_, &QPushButton::clicked, this, [this]() {
+        rename_overlay_->setVisible(false);
+        rename_error_label_->setVisible(false);
+    });
+    connect(rename_confirm_btn_, &QPushButton::clicked, this, [this]() {
+        const auto& rec = view_model_.current_completed_recording;
+        if (!rec.hasFile()) {
+            rename_overlay_->setVisible(false);
+            return;
+        }
+        const QString new_name = rename_edit_->text().trimmed();
+        const QString current_ext = QFileInfo(rec.file_path).suffix();
+        const QString extension = current_ext.isEmpty() ? QString() : QStringLiteral(".") + current_ext;
+        const QString parent_folder = rec.parentFolder();
+
+        if (auto error = ValidateRenameForFile(new_name, extension, parent_folder)) {
+            rename_error_label_->setText(*error);
+            rename_error_label_->setVisible(true);
+            return;
+        }
+
+        QString target_name = new_name;
+        if (!target_name.contains(QLatin1Char('.')) && !extension.isEmpty()) {
+            target_name += extension;
+        }
+        const QString target_path = QDir(parent_folder).absoluteFilePath(target_name);
+
+        if (QFile::rename(rec.file_path, target_path)) {
+            CompletedRecording updated = rec;
+            updated.file_path = target_path;
+            updated.display_name = target_name;
+            view_model_.current_completed_recording = updated;
+            view_model_.result_output_path = target_path.toStdWString();
+            std::filesystem::path p(target_path.toStdWString());
+            view_model_.result_destination_text = p.filename().wstring();
+
+            for (int i = 0; i < view_model_.recent_recordings.size(); ++i) {
+                if (view_model_.recent_recordings[i].file_path == rec.file_path) {
+                    view_model_.UpdateRecentRecording(i, updated);
+                    break;
+                }
+            }
+
+            diagnostics::AppLog::info(QStringLiteral("result.rename"),
+                                      QStringLiteral("from=\"%1\" to=\"%2\"").arg(rec.file_path, target_path));
+            rename_overlay_->setVisible(false);
+            rename_error_label_->setVisible(false);
+            refresh();
+        } else {
+            rename_error_label_->setText(QStringLiteral("Could not rename the file."));
+            rename_error_label_->setVisible(true);
+            diagnostics::AppLog::warning(
+                QStringLiteral("result.rename"),
+                QStringLiteral("failed from=\"%1\" to=\"%2\"").arg(rec.file_path, target_path));
+        }
+    });
+    connect(delete_confirm_yes_btn_, &QPushButton::clicked, this, [this]() {
+        const auto& rec = view_model_.current_completed_recording;
+        if (!rec.hasFile()) {
+            delete_confirm_overlay_->setVisible(false);
+            return;
+        }
+
+        QFile file(rec.file_path);
+        if (file.remove()) {
+            diagnostics::AppLog::info(QStringLiteral("result.delete"),
+                                      QStringLiteral("path=\"%1\"").arg(rec.file_path));
+
+            // Remove from recent history
+            for (int i = 0; i < view_model_.recent_recordings.size(); ++i) {
+                if (view_model_.recent_recordings[i].file_path == rec.file_path) {
+                    view_model_.RemoveFromRecentRecordings(i);
+                    break;
+                }
+            }
+
+            view_model_.ClearCompletedResult();
+            view_model_.SetState(UiRecordingState::Ready);
+            delete_confirm_overlay_->setVisible(false);
+            refresh();
+        } else {
+            diagnostics::AppLog::warning(
+                QStringLiteral("result.delete"),
+                QStringLiteral("failed path=\"%1\" error=\"%2\"").arg(rec.file_path, file.errorString()));
+            delete_confirm_overlay_->setVisible(false);
+        }
+    });
+    connect(delete_confirm_no_btn_, &QPushButton::clicked, this,
+            [this]() { delete_confirm_overlay_->setVisible(false); });
 
     // 1 Hz tick drives the dock timer display while the backend stats are pending.
     ui_clock_timer_ = new QTimer(this);
@@ -2062,9 +2275,9 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
     case visual::VisualRecordState::Completed: {
         UiRecordingResult result;
         result.succeeded = true;
-        result.output_path = L"C:\\Users\\User\\Videos\\ExoSnap\\visual-test-recording.webm";
-        result.output_file_bytes = 52ULL * 1024ULL * 1024ULL;
-        result.elapsed_seconds = 83.0;
+        result.output_path = L"C:\\Users\\User\\Videos\\ExoSnap\\" + scenario.result_file_name.toStdWString();
+        result.output_file_bytes = scenario.result_file_size_bytes;
+        result.elapsed_seconds = scenario.result_duration_seconds;
         result.source_width = static_cast<uint32_t>((std::max)(0, scenario.source_width));
         result.source_height = static_cast<uint32_t>((std::max)(0, scenario.source_height));
         result.output_width = static_cast<uint32_t>((std::max)(0, scenario.effective_width));
@@ -2111,9 +2324,50 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
         }
         view_model_.SetResult(result);
         view_model_.SetState(UiRecordingState::Completed);
+
+        // Apply recent history for visual tests
+        if (scenario.recent_result_count > 0) {
+            view_model_.ClearRecentRecordings();
+            for (int i = 0; i < scenario.recent_result_count; ++i) {
+                CompletedRecording hist_rec;
+                hist_rec.succeeded = true;
+                hist_rec.file_path =
+                    QStringLiteral("C:\\Users\\User\\Videos\\ExoSnap\\recent-recording-%1.webm").arg(i + 1);
+                hist_rec.display_name = QStringLiteral("recent-recording-%1.webm").arg(i + 1);
+                hist_rec.file_size_bytes = static_cast<qint64>(10 + i) * 1024 * 1024;
+                hist_rec.duration_seconds = 30.0 + i * 10.0;
+                hist_rec.output_width = 1920;
+                hist_rec.output_height = 1080;
+                hist_rec.frame_rate_num = 60;
+                hist_rec.frame_rate_den = 1;
+                hist_rec.cfr = true;
+                hist_rec.container = recorder_core::Container::Matroska;
+                hist_rec.video_codec = recorder_core::VideoCodec::H264Nvenc;
+                hist_rec.audio_codec = recorder_core::AudioCodec::AacMf;
+                hist_rec.completed_at = QDateTime::currentDateTime().addSecs(-(i * 120));
+                view_model_.recent_recordings.append(hist_rec);
+            }
+        }
+
+        // Show delete confirmation overlay for visual tests
+        if (scenario.show_delete_confirm) {
+            if (delete_confirm_overlay_)
+                delete_confirm_overlay_->setVisible(true);
+        }
+
+        // Show rename overlay for visual tests
+        if (scenario.show_rename_overlay) {
+            if (rename_overlay_) {
+                rename_overlay_->setVisible(true);
+                if (rename_edit_) {
+                    rename_edit_->setText(QStringLiteral("new-recording-name"));
+                }
+            }
+        }
+
         if (preview_surface_) {
             preview_surface_->setCenterTitle(QStringLiteral("Recording saved"));
-            preview_surface_->setCenterSubtitle(QStringLiteral("visual-test-recording.webm"));
+            preview_surface_->setCenterSubtitle(scenario.result_file_name);
         }
         break;
     }
@@ -2229,6 +2483,64 @@ void RecordPage::openOutputFolder() {
     if (folder.trimmed().isEmpty()) {
         return;
     }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+}
+
+void RecordPage::onCopyFilePath() {
+    const auto& rec = view_model_.current_completed_recording;
+    if (!rec.hasFile())
+        return;
+
+    QClipboard* clipboard = QApplication::clipboard();
+    if (clipboard) {
+        clipboard->setText(QDir::toNativeSeparators(rec.file_path));
+        diagnostics::AppLog::info(QStringLiteral("result.copy_path"), QStringLiteral("path=\"%1\"").arg(rec.file_path));
+    }
+}
+
+void RecordPage::onRenameFile() {
+    const auto& rec = view_model_.current_completed_recording;
+    if (!rec.hasFile())
+        return;
+
+    rename_error_label_->setVisible(false);
+    const QString current_name = QFileInfo(rec.file_path).fileName();
+    const int dot_pos = current_name.lastIndexOf(QLatin1Char('.'));
+    const QString stem = (dot_pos > 0) ? current_name.left(dot_pos) : current_name;
+    rename_edit_->setText(stem);
+    rename_overlay_->setVisible(true);
+    rename_edit_->setFocus();
+    rename_edit_->selectAll();
+}
+
+void RecordPage::onDeleteFile() {
+    const auto& rec = view_model_.current_completed_recording;
+    if (!rec.hasFile())
+        return;
+
+    delete_confirm_overlay_->setVisible(true);
+}
+
+void RecordPage::onRecentItemOpen(int history_index) {
+    if (history_index < 0 || history_index >= view_model_.recent_recordings.size())
+        return;
+
+    const auto& rec = view_model_.recent_recordings[history_index];
+    if (!rec.fileExists())
+        return;
+
+    QDesktopServices::openUrl(QUrl::fromLocalFile(rec.file_path));
+}
+
+void RecordPage::onRecentItemOpenFolder(int history_index) {
+    if (history_index < 0 || history_index >= view_model_.recent_recordings.size())
+        return;
+
+    const auto& rec = view_model_.recent_recordings[history_index];
+    const QString folder = rec.parentFolder();
+    if (folder.isEmpty())
+        return;
+
     QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
 }
 
@@ -4391,7 +4703,15 @@ void RecordPage::updateTransportDock() {
                 ? QString::fromStdWString(RecordViewModel::FormatBytes(view_model_.result_output_file_bytes))
                 : QString();
         transport_dock_->setCompletedInfo(file_name, size_text, !path.isEmpty());
+
+        // Update result details panel
+        updateResultDetailsPanel();
+    } else {
+        hideResultDetailsPanel();
     }
+
+    // Update recent recordings section
+    updateRecentRecordingsSection();
 }
 
 void RecordPage::onDockSourceToggle(const QString& key) {
@@ -5215,6 +5535,145 @@ void RecordPage::refreshDisplayTargets() {
     enumerateTargets(/*preserve_current_selection=*/true);
     if (source_picker_overlay_ && source_picker_overlay_->isOpen()) {
         pushSourceDataToPicker();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Result details panel helpers
+// ---------------------------------------------------------------------------
+
+void RecordPage::updateResultDetailsPanel() {
+    auto* panel = findChild<QFrame*>(QStringLiteral("resultDetailsPanel"));
+    if (!panel)
+        return;
+
+    const auto& rec = view_model_.current_completed_recording;
+    const bool has_valid_result = rec.succeeded && rec.hasFile();
+
+    if (!has_valid_result) {
+        hideResultDetailsPanel();
+        return;
+    }
+
+    panel->setVisible(true);
+
+    // Metadata label
+    auto* meta_label = panel->findChild<QLabel*>(QStringLiteral("resultMetadataLabel"));
+    if (meta_label) {
+        const QString size_text =
+            rec.file_size_bytes > 0
+                ? QString::fromStdWString(RecordViewModel::FormatBytes(static_cast<uint64_t>(rec.file_size_bytes)))
+                : QStringLiteral("—");
+        const QString duration = clockFromSeconds(rec.duration_seconds);
+        const QString output_dims = (rec.output_width > 0 && rec.output_height > 0)
+                                        ? QStringLiteral("%1×%2").arg(rec.output_width).arg(rec.output_height)
+                                        : QStringLiteral("—");
+        const QString fps = frameRateLabel(rec.frame_rate_num, rec.frame_rate_den);
+        const QString timing = fps + QStringLiteral(" ") + (rec.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
+        const QString codecs = videoCodecLabel(rec.video_codec) + QStringLiteral(" · ") +
+                               audioCodecLabel(rec.audio_codec) + QStringLiteral(" · ") + containerLabel(rec.container);
+
+        const bool file_exists = rec.fileExists();
+        const QString existence_note = file_exists ? QString() : QStringLiteral("  (file missing)");
+
+        meta_label->setText(QStringLiteral("%1 · %2 · %3 · %4 · %5%6")
+                                .arg(size_text, duration, output_dims, timing, codecs, existence_note));
+        meta_label->setProperty("missingFile", !file_exists);
+        meta_label->style()->unpolish(meta_label);
+        meta_label->style()->polish(meta_label);
+    }
+
+    // Action buttons
+    if (result_copy_path_btn_)
+        result_copy_path_btn_->setEnabled(rec.fileExists());
+    if (result_rename_btn_)
+        result_rename_btn_->setEnabled(rec.fileExists());
+    if (result_delete_btn_)
+        result_delete_btn_->setEnabled(rec.fileExists());
+
+    // Hide overlays if file is missing
+    if (!rec.fileExists()) {
+        if (rename_overlay_)
+            rename_overlay_->setVisible(false);
+        if (delete_confirm_overlay_)
+            delete_confirm_overlay_->setVisible(false);
+    }
+}
+
+void RecordPage::hideResultDetailsPanel() {
+    auto* panel = findChild<QFrame*>(QStringLiteral("resultDetailsPanel"));
+    if (panel)
+        panel->setVisible(false);
+
+    if (rename_overlay_)
+        rename_overlay_->setVisible(false);
+    if (delete_confirm_overlay_)
+        delete_confirm_overlay_->setVisible(false);
+}
+
+void RecordPage::updateRecentRecordingsSection() {
+    if (!recent_section_ || !recent_items_layout_)
+        return;
+
+    if (!view_model_.HasRecentRecordings()) {
+        recent_section_->setVisible(false);
+        return;
+    }
+
+    recent_section_->setVisible(true);
+
+    // Remove old items
+    QLayoutItem* child;
+    while ((child = recent_items_layout_->takeAt(0)) != nullptr) {
+        if (child->widget())
+            child->widget()->deleteLater();
+        delete child;
+    }
+
+    // Add each recent recording
+    int index = 0;
+    for (const auto& rec : view_model_.recent_recordings) {
+        auto* row = new QWidget(recent_section_);
+        row->setObjectName(QStringLiteral("recentItemRow_%1").arg(index));
+        auto* row_layout = new QHBoxLayout(row);
+        row_layout->setContentsMargins(4, 2, 4, 2);
+        row_layout->setSpacing(6);
+
+        // Filename button
+        auto* name_btn = new QPushButton(rec.fileName(), row);
+        name_btn->setObjectName(QStringLiteral("recentItemName_%1").arg(index));
+        name_btn->setProperty("role", "ghost");
+        name_btn->setCursor(Qt::PointingHandCursor);
+        name_btn->setToolTip(rec.fileExists() ? rec.file_path : QStringLiteral("File missing: ") + rec.file_path);
+        name_btn->setEnabled(rec.fileExists());
+        const int name_idx = index;
+        QObject::connect(name_btn, &QPushButton::clicked, this, [this, name_idx]() { onRecentItemOpen(name_idx); });
+
+        // Size + duration info
+        const QString size_text =
+            rec.file_size_bytes > 0
+                ? QString::fromStdWString(RecordViewModel::FormatBytes(static_cast<uint64_t>(rec.file_size_bytes)))
+                : QStringLiteral("—");
+        const QString duration = clockFromSeconds(rec.duration_seconds);
+        auto* info_label = new QLabel(QStringLiteral("%1 · %2").arg(size_text, duration), row);
+        info_label->setObjectName(QStringLiteral("recentItemInfo_%1").arg(index));
+        info_label->setProperty("labelRole", "recentItemInfo");
+
+        // Open folder button
+        auto* open_btn = new QPushButton(QStringLiteral("Folder"), row);
+        open_btn->setObjectName(QStringLiteral("recentItemOpen_%1").arg(index));
+        open_btn->setProperty("role", "ghost");
+        open_btn->setCursor(Qt::PointingHandCursor);
+        open_btn->setEnabled(rec.fileExists());
+        QObject::connect(open_btn, &QPushButton::clicked, this,
+                         [this, name_idx]() { onRecentItemOpenFolder(name_idx); });
+
+        row_layout->addWidget(name_btn);
+        row_layout->addWidget(info_label, 1);
+        row_layout->addWidget(open_btn);
+
+        recent_items_layout_->addWidget(row);
+        ++index;
     }
 }
 

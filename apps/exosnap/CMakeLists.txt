@@ -210,6 +210,24 @@ exosnap_add_gtest(
 target_include_directories(presentation_state_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
+    NAME completed_result_tests
+    TEST_PREFIX result.
+    SOURCES
+        tests/test_completed_result.cpp
+        viewmodels/RecordViewModel.cpp
+        diagnostics/error_message.cpp
+        models/FilenameBuilder.cpp
+        models/RecordingPreset.cpp
+        models/OutputPathPolicy.cpp
+        models/OutputSettingsModel.cpp
+        diagnostics/AppLog.cpp
+    LIBRARIES exosnap_capability recorder_core Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(completed_result_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(completed_result_tests PRIVATE ole32.lib shell32.lib)
+set_target_properties(completed_result_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
     NAME recording_preset_tests
     TEST_PREFIX preset.
     SOURCES
@@ -241,7 +259,7 @@ exosnap_add_gtest(
         tests/test_record_view_model_audio.cpp
         viewmodels/RecordViewModel.cpp
         diagnostics/error_message.cpp
-    LIBRARIES exosnap_capability recorder_core
+    LIBRARIES exosnap_capability recorder_core Qt6::Core
 )
 target_include_directories(record_viewmodel_audio_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -279,7 +297,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_error_message.cpp
         diagnostics/error_message.cpp
-    LIBRARIES exosnap_capability recorder_core
+    LIBRARIES exosnap_capability recorder_core Qt6::Core
 )
 target_include_directories(error_message_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 

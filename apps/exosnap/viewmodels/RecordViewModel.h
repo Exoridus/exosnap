@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -9,6 +10,7 @@
 #include <capability/audio_ui_state.h>
 #include <recorder_core/recorder_session.h>
 
+#include "models/CompletedRecording.h"
 #include "models/FilenameBuilder.h"
 
 namespace exosnap {
@@ -153,6 +155,7 @@ class RecordViewModel {
     bool HasTargets() const noexcept;
     bool HasResult() const noexcept;
     bool ShouldShowStats() const noexcept;
+    bool HasCompletedRecording() const noexcept;
 
     // Mutators
     void SetState(UiRecordingState new_state);
@@ -161,6 +164,18 @@ class RecordViewModel {
     void UpdateMeterRms(const std::array<float, 3>& per_track_rms);
     void SetResult(const UiRecordingResult& result);
     void ResetStats();
+    void ClearCompletedResult();
+
+    // Completed recording operations
+    CompletedRecording current_completed_recording;
+    QVector<CompletedRecording> recent_recordings;
+    static constexpr int kMaxRecentRecordings = 10;
+
+    void AddToRecentRecordings(const CompletedRecording& recording);
+    void RemoveFromRecentRecordings(int index);
+    void UpdateRecentRecording(int index, const CompletedRecording& recording);
+    void ClearRecentRecordings();
+    [[nodiscard]] bool HasRecentRecordings() const noexcept;
     void ApplyTargetKind(capability::CaptureTargetKind kind);
     void ApplyTargetKindPreservingAudio(capability::CaptureTargetKind kind);
     void RebuildAudioPlan();

@@ -28,6 +28,7 @@ class QComboBox;
 class QBoxLayout;
 class QFrame;
 class QLabel;
+class QLineEdit;
 class QPushButton;
 class QResizeEvent;
 class QSlider;
@@ -202,6 +203,9 @@ class RecordPage : public QWidget {
     void updateSourceChip();
     void updateOpenFolderButtonState();
     void updateDestinationMeta();
+    void updateResultDetailsPanel();
+    void hideResultDetailsPanel();
+    void updateRecentRecordingsSection();
     void syncTargetSelectionToCombo(int target_index);
     void enumerateTargets(bool preserve_current_selection);
     void rebuildTargetPicker();
@@ -215,6 +219,11 @@ class RecordPage : public QWidget {
     void onMicChannelChanged(int index);
     void onMicGainChanged(int db_value);
     void openOutputFolder();
+    void onCopyFilePath();
+    void onRenameFile();
+    void onDeleteFile();
+    void onRecentItemOpen(int history_index);
+    void onRecentItemOpenFolder(int history_index);
     void setOutputSettingsSummary(const OutputSettingsModel& settings);
     void populateMicDeviceCombo();
     void updateMicDeviceNoteLabel();
@@ -369,6 +378,26 @@ class RecordPage : public QWidget {
     QLabel* readiness_summary_label_ = nullptr;
     QPushButton* result_open_folder_btn_ = nullptr;
     QPushButton* result_record_again_btn_ = nullptr;
+    QPushButton* result_copy_path_btn_ = nullptr;
+    QPushButton* result_rename_btn_ = nullptr;
+    QPushButton* result_delete_btn_ = nullptr;
+
+    // Inline rename overlay
+    QWidget* rename_overlay_ = nullptr;
+    QLineEdit* rename_edit_ = nullptr;
+    QPushButton* rename_confirm_btn_ = nullptr;
+    QPushButton* rename_cancel_btn_ = nullptr;
+    QLabel* rename_error_label_ = nullptr;
+
+    // Delete confirmation overlay
+    QWidget* delete_confirm_overlay_ = nullptr;
+    QPushButton* delete_confirm_yes_btn_ = nullptr;
+    QPushButton* delete_confirm_no_btn_ = nullptr;
+
+    // Recent recordings section
+    QWidget* recent_section_ = nullptr;
+    QLabel* recent_header_label_ = nullptr;
+    QVBoxLayout* recent_items_layout_ = nullptr;
 
     // Hybrid v3 preview-first chrome (HYBRID-PORT-R2).
     ui::widgets::TransportDock* transport_dock_ = nullptr;
