@@ -1181,21 +1181,17 @@ void VideoThread::Run() {
                     // Compositing: webcam (both paths) + cursor (OD only)
                     ID3D11Texture2D* vpInput = nullptr;
                     if (useOdCapture) {
-                        // OD path: cursor composite first, then webcam
+                        // OD path: composite back-to-front — webcam under cursor.
+                        // Exactly one full-frame copy into compositeTex per tick.
                         if (compositeTex && (odCursorShapeValid || webcamActive)) {
-                            d3dContext->CopyResource(compositeTex.get(), rawSourceTex);
-                            compositeOdCursor();
                             if (webcamActive) {
-                                // compositeWebcam would re-copy — instead apply webcam directly on compositeTex
-                                // by calling it with compositeTex as source (CopyResource of same tex is
-                                // undefined; use webcam compositing logic inline via compositeWebcam on itself).
-                                // Simpler: call compositeWebcam with rawSourceTex, then re-composite cursor.
-                                // Actually compositeWebcam always CopyResource from its argument; use compositeTex
-                                // as argument only if it is different from compositeTex — which it is not.
-                                // Resolution: inline the webcam step here by calling compositeWebcam(rawSourceTex)
-                                // which overwrites compositeTex, then re-run cursor on top.
-                                compositeWebcam(rawSourceTex); // re-copies + webcam
-                                compositeOdCursor();           // cursor on top of webcam
+                                // compositeWebcam performs the CopyResource(compositeTex, src)
+                                // itself and pastes the webcam; the cursor then blends once on top.
+                                compositeWebcam(rawSourceTex);
+                                compositeOdCursor();
+                            } else {
+                                d3dContext->CopyResource(compositeTex.get(), rawSourceTex);
+                                compositeOdCursor();
                             }
                             vpInput = compositeTex.get();
                         } else {
@@ -1405,11 +1401,14 @@ void VideoThread::Run() {
                     // Compositing: cursor (OD) and/or webcam
                     ID3D11Texture2D* vpInput = nullptr;
                     if (useOdCapture) {
+                        // Composite back-to-front — webcam under cursor. Exactly one
+                        // full-frame copy into compositeTex per frame.
                         if (compositeTex && (odCursorShapeValid || webcamActive)) {
-                            d3dContext->CopyResource(compositeTex.get(), latestTex.get());
-                            compositeOdCursor();
                             if (webcamActive) {
                                 compositeWebcam(latestTex.get());
+                                compositeOdCursor();
+                            } else {
+                                d3dContext->CopyResource(compositeTex.get(), latestTex.get());
                                 compositeOdCursor();
                             }
                             vpInput = compositeTex.get();
