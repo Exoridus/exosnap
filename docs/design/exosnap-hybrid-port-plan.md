@@ -525,6 +525,10 @@ Delivered as **R2B — Record Dock Polish / Completed Status / Source Pill**, fi
   filter was added: `AppLog` lines carry component tags (`[record]`, `[dxgi-preview]`, …) not
   severity levels, and the design target lists level filters as *Later* — so honest, no fake
   filtering. Guarded by a unit test.
+- **LOG-SEVERITY-R1 update:** the R6 limitation above is superseded. `AppLog` now publishes
+  structured severity/category/message entries through a bounded in-memory history, and `LogsPage`
+  implements All / Info / Issues filters, case-insensitive category/message search, Copy of visible
+  rows, Export of complete history, Clear, and Auto-scroll.
 - **About:** `AboutDialog` rebuilt as a clean centered card — aperture `BrandMarkWidget` +
   two-tone lowercase `exosnap` wordmark + `Version … · for Windows` line, description, and a
   metadata table with hairline rows (VERSION / BUILD / COMMIT / AUTHOR) from the generated
