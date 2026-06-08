@@ -13,10 +13,10 @@
 #include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
-#include <QRadioButton>
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QStandardItemModel>
 #include <QStringList>
 #include <QStyle>
 #include <QTimer>
@@ -27,6 +27,7 @@
 #include "../../../libs/recorder_core/include/recorder_core/audio_track_model.h"
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputPathPolicy.h"
+#include "../models/RecordingPreset.h"
 #include "../services/WebcamService.h"
 #include "../ui/widgets/ComboBoxWheelFilter.h"
 #include "../ui/widgets/VUMeterWidget.h"
@@ -114,6 +115,24 @@ QString ContainerLabel(capability::Container container) {
         return QStringLiteral("WebM");
     }
     return QStringLiteral("MKV");
+}
+
+QString ResolutionLabel(const OutputResolutionSettings& resolution) {
+    if (resolution.mode == OutputResolutionMode::Custom && resolution.custom_width > 0 &&
+        resolution.custom_height > 0) {
+        return QStringLiteral("%1×%2").arg(resolution.custom_width).arg(resolution.custom_height);
+    }
+    return QString::fromWCharArray(OutputResolutionModeName(resolution.mode));
+}
+
+QString FrameRateLabel(uint32_t numerator, uint32_t denominator) {
+    if (numerator == 0 || denominator == 0) {
+        return QStringLiteral("60 fps");
+    }
+    if (denominator == 1) {
+        return QStringLiteral("%1 fps").arg(numerator);
+    }
+    return QStringLiteral("%1/%2 fps").arg(numerator).arg(denominator);
 }
 
 int VideoCodecToInt(capability::VideoCodec codec) {
@@ -346,19 +365,36 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     fmt_layout->addWidget(makeFieldLabel(QStringLiteral("Container"), fmt_panel));
     container_group_ = new QButtonGroup(this);
+    container_group_->setExclusive(true);
+    auto* container_segmented = new QWidget(fmt_panel);
+    container_segmented->setObjectName(QStringLiteral("containerSegmented"));
     auto* container_row = new QHBoxLayout();
-    container_row->setSpacing(18);
-    mkv_radio_ = new QRadioButton(QStringLiteral("MKV"), fmt_panel);
-    webm_radio_ = new QRadioButton(QStringLiteral("WebM"), fmt_panel);
-    mp4_radio_ = new QRadioButton(QStringLiteral("MP4"), fmt_panel);
-    container_group_->addButton(mkv_radio_, static_cast<int>(capability::Container::Matroska));
-    container_group_->addButton(webm_radio_, static_cast<int>(capability::Container::WebM));
-    container_group_->addButton(mp4_radio_, static_cast<int>(capability::Container::Mp4));
-    container_row->addWidget(mkv_radio_);
-    container_row->addWidget(webm_radio_);
-    container_row->addWidget(mp4_radio_);
-    container_row->addStretch();
-    fmt_layout->addLayout(container_row);
+    container_row->setContentsMargins(3, 3, 3, 3);
+    container_row->setSpacing(0);
+    container_segmented->setLayout(container_row);
+    auto makeContainerSegment = [&](const QString& object_name, const QString& label,
+                                    capability::Container container) -> QPushButton* {
+        auto* segment = new QPushButton(label, container_segmented);
+        segment->setObjectName(object_name);
+        segment->setAccessibleName(label);
+        segment->setCheckable(true);
+        segment->setAutoDefault(false);
+        segment->setDefault(false);
+        segment->setCursor(Qt::PointingHandCursor);
+        segment->setProperty("qualitySegment", true);
+        segment->setProperty("qualitySegmentSelected", false);
+        segment->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        container_group_->addButton(segment, static_cast<int>(container));
+        container_row->addWidget(segment);
+        return segment;
+    };
+    mkv_radio_ = makeContainerSegment(QStringLiteral("containerMkvButton"), QStringLiteral("MKV"),
+                                      capability::Container::Matroska);
+    webm_radio_ = makeContainerSegment(QStringLiteral("containerWebmButton"), QStringLiteral("WebM"),
+                                       capability::Container::WebM);
+    mp4_radio_ =
+        makeContainerSegment(QStringLiteral("containerMp4Button"), QStringLiteral("MP4"), capability::Container::Mp4);
+    fmt_layout->addWidget(container_segmented);
 
     auto* codec_row = new QHBoxLayout();
     codec_row->setSpacing(14);
@@ -436,8 +472,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     quality_settings_label_->setProperty("labelRole", "muted");
     fmt_layout->addWidget(quality_settings_label_);
 
-    // Frame rate + timing. The recording pipeline is CFR-60-first and the frame rate is not
-    // user-selectable in this build, so it is shown read-only rather than as a fake selector.
+    // Frame rate + timing. Values here are restart-class and feed the real encoder cadence.
     auto* rate_row = new QHBoxLayout();
     rate_row->setSpacing(14);
     auto* rate_col = new QVBoxLayout();
@@ -445,25 +480,57 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     rate_col->addWidget(makeFieldLabel(QStringLiteral("Frame rate"), fmt_panel));
     frame_rate_combo_ = new QComboBox(fmt_panel);
     frame_rate_combo_->setObjectName(QStringLiteral("frameRateCombo"));
-    frame_rate_combo_->addItem(QStringLiteral("60 fps"));
-    frame_rate_combo_->setEnabled(false);
-    frame_rate_combo_->setToolTip(QStringLiteral("Frame rate is fixed at 60 fps in this build."));
+    frame_rate_combo_->setAccessibleName(QStringLiteral("Frame rate"));
+    for (const int fps : {24, 25, 30, 50, 60}) {
+        frame_rate_combo_->addItem(QStringLiteral("%1 fps").arg(fps), fps);
+    }
+    frame_rate_combo_->addItem(QStringLiteral("120 fps (unavailable)"), 120);
+    if (auto* model = qobject_cast<QStandardItemModel*>(frame_rate_combo_->model())) {
+        if (auto* item = model->item(frame_rate_combo_->count() - 1)) {
+            item->setEnabled(false);
+            item->setToolTip(QStringLiteral("120 fps is hidden from runtime use until hardware support is proven."));
+        }
+    }
     rate_col->addWidget(frame_rate_combo_);
     rate_row->addLayout(rate_col, 1);
-    rate_row->addStretch(1);
+    auto* timing_col = new QVBoxLayout();
+    timing_col->setSpacing(6);
+    timing_col->addWidget(makeFieldLabel(QStringLiteral("Timing"), fmt_panel));
+    auto* timing_segmented = new QWidget(fmt_panel);
+    timing_segmented->setObjectName(QStringLiteral("timingSegmented"));
+    auto* timing_segmented_layout = new QHBoxLayout(timing_segmented);
+    timing_segmented_layout->setContentsMargins(3, 3, 3, 3);
+    timing_segmented_layout->setSpacing(0);
+    timing_group_ = new QButtonGroup(this);
+    timing_group_->setExclusive(true);
+    auto makeTimingSegment = [&](const QString& object_name, const QString& label, int id) -> QPushButton* {
+        auto* segment = new QPushButton(label, timing_segmented);
+        segment->setObjectName(object_name);
+        segment->setAccessibleName(label);
+        segment->setCheckable(true);
+        segment->setAutoDefault(false);
+        segment->setDefault(false);
+        segment->setCursor(Qt::PointingHandCursor);
+        segment->setProperty("qualitySegment", true);
+        segment->setProperty("qualitySegmentSelected", false);
+        segment->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        timing_group_->addButton(segment, id);
+        timing_segmented_layout->addWidget(segment);
+        return segment;
+    };
+    timing_cfr_btn_ = makeTimingSegment(QStringLiteral("timingCfrButton"), QStringLiteral("CFR"), 1);
+    timing_vfr_btn_ = makeTimingSegment(QStringLiteral("timingVfrButton"), QStringLiteral("VFR"), 0);
+    timing_col->addWidget(timing_segmented);
+    rate_row->addLayout(timing_col, 1);
     fmt_layout->addLayout(rate_row);
 
-    cfr_check_ = new QCheckBox(QStringLiteral("Constant frame rate (CFR)"), fmt_panel);
-    cfr_check_->setChecked(video_settings_.cfr);
-    fmt_layout->addWidget(cfr_check_);
-
     cursor_check_ = new QCheckBox(QStringLiteral("Capture cursor"), fmt_panel);
+    cursor_check_->setObjectName(QStringLiteral("captureCursorCheck"));
     cursor_check_->setChecked(video_settings_.capture_cursor);
     fmt_layout->addWidget(cursor_check_);
 
-    fmt_layout->addWidget(makeHint(
-        QStringLiteral("VFR can desync audio in some editors — keep CFR on unless you know you need otherwise."),
-        fmt_panel));
+    fmt_layout->addWidget(
+        makeHint(QStringLiteral("VFR is available for MKV/WebM. MP4 uses CFR for editor compatibility."), fmt_panel));
 
     left_layout->addWidget(fmt_panel);
     left_layout->addStretch();
@@ -581,29 +648,44 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     out_panel_layout->setSpacing(12);
     out_panel_layout->addWidget(makeCardTitle(QStringLiteral("Output"), out_panel));
 
-    // Output resolution: scaling is not implemented in this build, so the control is shown
-    // as a disabled/planned segmented fixed at the source ("Native") — never a fake scaler.
     out_panel_layout->addWidget(makeFieldLabel(QStringLiteral("Output resolution"), out_panel));
     auto* out_res_segmented = new QWidget(out_panel);
     out_res_segmented->setObjectName(QStringLiteral("outputResSegmented"));
     auto* out_res_layout = new QHBoxLayout(out_res_segmented);
     out_res_layout->setContentsMargins(3, 3, 3, 3);
     out_res_layout->setSpacing(0);
-    for (const QString& opt : {QStringLiteral("Native"), QStringLiteral("4K"), QStringLiteral("1440p"),
-                               QStringLiteral("1080p"), QStringLiteral("720p")}) {
-        auto* seg = new QPushButton(opt, out_res_segmented);
-        const bool is_native = opt == QStringLiteral("Native");
+    output_resolution_group_ = new QButtonGroup(this);
+    output_resolution_group_->setExclusive(true);
+    auto makeOutputResolutionSegment = [&](const QString& object_name, const QString& label,
+                                           OutputResolutionMode mode) -> QPushButton* {
+        auto* seg = new QPushButton(label, out_res_segmented);
+        seg->setObjectName(object_name);
+        seg->setAccessibleName(label);
         seg->setCheckable(true);
-        seg->setChecked(is_native);
+        seg->setAutoDefault(false);
+        seg->setDefault(false);
+        seg->setCursor(Qt::PointingHandCursor);
         seg->setProperty("qualitySegment", true);
-        seg->setProperty("qualitySegmentSelected", is_native);
+        seg->setProperty("qualitySegmentSelected", false);
         seg->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        seg->setEnabled(false);
+        output_resolution_group_->addButton(seg, static_cast<int>(mode));
         out_res_layout->addWidget(seg);
-    }
+        return seg;
+    };
+    output_res_native_btn_ = makeOutputResolutionSegment(QStringLiteral("outputResNativeButton"),
+                                                         QStringLiteral("Native"), OutputResolutionMode::Native);
+    output_res_4k_btn_ = makeOutputResolutionSegment(QStringLiteral("outputRes4kButton"), QStringLiteral("4K"),
+                                                     OutputResolutionMode::UHD2160);
+    output_res_1440_btn_ = makeOutputResolutionSegment(QStringLiteral("outputRes1440Button"), QStringLiteral("1440p"),
+                                                       OutputResolutionMode::QHD1440);
+    output_res_1080_btn_ = makeOutputResolutionSegment(QStringLiteral("outputRes1080Button"), QStringLiteral("1080p"),
+                                                       OutputResolutionMode::FHD1080);
+    output_res_720_btn_ = makeOutputResolutionSegment(QStringLiteral("outputRes720Button"), QStringLiteral("720p"),
+                                                      OutputResolutionMode::HD720);
     out_panel_layout->addWidget(out_res_segmented);
-    out_panel_layout->addWidget(makeHint(
-        QStringLiteral("Output scaling is planned — recordings currently use the source resolution."), out_panel));
+    output_effective_summary_label_ = makeHint(QString(), out_panel);
+    output_effective_summary_label_->setObjectName(QStringLiteral("outputEffectiveSummaryLabel"));
+    out_panel_layout->addWidget(output_effective_summary_label_);
 
     auto* output_split = new QWidget(out_panel);
     output_split_layout_ = new QHBoxLayout(output_split);
@@ -744,7 +826,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             &ConfigPage::onProfileSelectionChanged);
     connect(quality_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ConfigPage::onQualityChanged);
     connect(quality_segment_group_, &QButtonGroup::idClicked, this, &ConfigPage::onQualitySegmentSelected);
-    connect(cfr_check_, &QCheckBox::toggled, this, &ConfigPage::onCfrChanged);
+    connect(frame_rate_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConfigPage::onFrameRateChanged);
+    connect(timing_group_, &QButtonGroup::idClicked, this, &ConfigPage::onTimingSelected);
+    connect(output_resolution_group_, &QButtonGroup::idClicked, this, &ConfigPage::onOutputResolutionSelected);
     connect(cursor_check_, &QCheckBox::toggled, this, &ConfigPage::onCursorChanged);
     connect(browse_btn_, &QPushButton::clicked, this, &ConfigPage::onBrowse);
     connect(destination_edit_, &QLineEdit::editingFinished, this, &ConfigPage::onDestinationEditingFinished);
@@ -791,6 +876,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     combo_wheel_filter->installOn(video_codec_combo_);
     combo_wheel_filter->installOn(audio_codec_combo_);
     combo_wheel_filter->installOn(quality_combo_);
+    combo_wheel_filter->installOn(frame_rate_combo_);
     combo_wheel_filter->installOn(mic_device_combo_);
 
     setReadinessStatus(QStringLiteral("CHECKING"));
@@ -807,6 +893,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     updateFormatDisplay();
     updateExampleFilename();
     updateQualitySummary();
+    updateFrameRateSelection();
+    updateTimingSelection();
+    updateOutputResolutionSelection();
+    updateEffectiveOutputSummary();
     updateResponsiveLayout();
 
     QPointer<ConfigPage> safe = this;
@@ -846,11 +936,17 @@ void ConfigPage::emitCurrentFormatSettings() {
             format_settings_.naming_pattern = pattern_normalized.normalized_pattern;
         }
     }
+    const bool cfr_before = video_settings_.cfr;
     reconcileContainerCodecRules();
     updateFormatDisplay();
+    updateTimingSelection();
+    updateEffectiveOutputSummary();
     updateOutputValidationState();
     updateExampleFilename();
     emit formatSettingsChanged(format_settings_);
+    if (cfr_before != video_settings_.cfr) {
+        emitCurrentVideoSettings();
+    }
 }
 
 void ConfigPage::emitCurrentVideoSettings() {
@@ -879,10 +975,37 @@ void ConfigPage::onQualitySegmentSelected(int preset_id) {
     quality_combo_->setCurrentIndex(idx);
 }
 
-void ConfigPage::onCfrChanged() {
-    video_settings_.cfr = cfr_check_->isChecked();
+void ConfigPage::onFrameRateChanged(int index) {
+    if (index < 0)
+        return;
+    const int fps = frame_rate_combo_->itemData(index).toInt();
+    if (fps <= 0 || fps == 120)
+        return;
+    video_settings_.frame_rate_num = static_cast<uint32_t>(fps);
+    video_settings_.frame_rate_den = 1;
     updateQualitySummary();
+    updateEffectiveOutputSummary();
     emitCurrentVideoSettings();
+}
+
+void ConfigPage::onTimingSelected(int timing_id) {
+    const bool want_cfr = timing_id != 0;
+    if (!want_cfr && format_settings_.container == capability::Container::Mp4) {
+        video_settings_.cfr = true;
+    } else {
+        video_settings_.cfr = want_cfr;
+    }
+    updateTimingSelection();
+    updateQualitySummary();
+    updateEffectiveOutputSummary();
+    emitCurrentVideoSettings();
+}
+
+void ConfigPage::onOutputResolutionSelected(int mode_id) {
+    format_settings_.resolution.mode = static_cast<OutputResolutionMode>(mode_id);
+    SanitizeOutputResolution(format_settings_.resolution);
+    updateOutputResolutionSelection();
+    emitCurrentFormatSettings();
 }
 
 void ConfigPage::onCursorChanged() {
@@ -892,29 +1015,10 @@ void ConfigPage::onCursorChanged() {
 }
 
 void ConfigPage::reconcileContainerCodecRules() {
+    ReconcileContainerCodecs(format_settings_);
+    SanitizeOutputResolution(format_settings_.resolution);
     if (format_settings_.container == capability::Container::Mp4) {
-        format_settings_.video_codec = capability::VideoCodec::H264Nvenc;
-        format_settings_.audio_codec = capability::AudioCodec::AacMf;
-        updateVideoCodecChoices();
-        updateAudioCodecChoices();
-        return;
-    }
-    if (format_settings_.container == capability::Container::WebM) {
-        format_settings_.video_codec = capability::VideoCodec::Av1Nvenc;
-        format_settings_.audio_codec = capability::AudioCodec::Opus;
-        updateVideoCodecChoices();
-        updateAudioCodecChoices();
-        return;
-    }
-    if (format_settings_.video_codec == capability::VideoCodec::HevcNvenc) {
-        format_settings_.video_codec = capability::VideoCodec::H264Nvenc;
-    }
-    if (format_settings_.video_codec == capability::VideoCodec::H264Nvenc &&
-        format_settings_.audio_codec == capability::AudioCodec::Opus) {
-        format_settings_.audio_codec = capability::AudioCodec::AacMf;
-    }
-    if (format_settings_.audio_codec == capability::AudioCodec::Pcm) {
-        format_settings_.audio_codec = capability::AudioCodec::AacMf;
+        video_settings_.cfr = true;
     }
     updateVideoCodecChoices();
     updateAudioCodecChoices();
@@ -957,8 +1061,25 @@ void ConfigPage::updateAudioCodecChoices() {
 void ConfigPage::updateFormatDisplay() {
     const QString summary = ContainerLabel(format_settings_.container) + QStringLiteral(" · ") +
                             VideoCodecLabel(format_settings_.video_codec) + QStringLiteral(" · ") +
-                            AudioCodecLabel(format_settings_.audio_codec);
+                            AudioCodecLabel(format_settings_.audio_codec) + QStringLiteral(" · ") +
+                            FrameRateLabel(video_settings_.frame_rate_num, video_settings_.frame_rate_den) +
+                            QStringLiteral(" · ") +
+                            (video_settings_.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
     format_display_label_->setText(QStringLiteral("Current format: ") + summary);
+
+    const auto sync_container = [this](QPushButton* segment, capability::Container container) {
+        if (!segment)
+            return;
+        const bool selected = format_settings_.container == container;
+        segment->setChecked(selected);
+        segment->setProperty("qualitySegmentSelected", selected);
+        segment->style()->unpolish(segment);
+        segment->style()->polish(segment);
+    };
+    const QSignalBlocker blocker(container_group_);
+    sync_container(mkv_radio_, capability::Container::Matroska);
+    sync_container(webm_radio_, capability::Container::WebM);
+    sync_container(mp4_radio_, capability::Container::Mp4);
 }
 
 void ConfigPage::onContainerChanged(int id) {
@@ -997,6 +1118,8 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
     format_settings_.audio_codec = settings.audio_codec;
     format_settings_.output_folder = settings.output_folder;
     format_settings_.naming_pattern = settings.naming_pattern;
+    format_settings_.resolution = settings.resolution;
+    SanitizeOutputResolution(format_settings_.resolution);
 
     const QSignalBlocker blocker(container_group_);
     if (settings.container == capability::Container::Matroska)
@@ -1009,6 +1132,8 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
     updateVideoCodecChoices();
     updateAudioCodecChoices();
     updateFormatDisplay();
+    updateOutputResolutionSelection();
+    updateEffectiveOutputSummary();
 
     if (destination_edit_) {
         const QSignalBlocker db(destination_edit_);
@@ -1030,13 +1155,14 @@ void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
     if (qidx >= 0)
         quality_combo_->setCurrentIndex(qidx);
 
-    const QSignalBlocker cb(cfr_check_);
-    cfr_check_->setChecked(settings.cfr);
+    updateFrameRateSelection();
+    updateTimingSelection();
 
     const QSignalBlocker crb(cursor_check_);
     cursor_check_->setChecked(settings.capture_cursor);
 
     updateQualitySummary();
+    updateEffectiveOutputSummary();
 }
 
 void ConfigPage::updateQualitySummary() {
@@ -1067,7 +1193,8 @@ void ConfigPage::updateQualitySummary() {
         return QStringLiteral("CQ 24");
     }(video_settings_.quality);
 
-    const QString cfr_text = video_settings_.cfr ? QStringLiteral("CFR 60 fps") : QStringLiteral("VFR");
+    const QString cfr_text = (video_settings_.cfr ? QStringLiteral("CFR ") : QStringLiteral("VFR ")) +
+                             FrameRateLabel(video_settings_.frame_rate_num, video_settings_.frame_rate_den);
     const QString cursor_text =
         video_settings_.capture_cursor ? QStringLiteral("Cursor on") : QStringLiteral("Cursor off");
     quality_settings_label_->setText(cq + QStringLiteral(" · ") + cfr_text + QStringLiteral(" · ") + cursor_text);
@@ -1094,6 +1221,79 @@ void ConfigPage::updateQualitySegmentSelection() {
     sync_segment(quality_segment_small_, recorder_core::NvencQualityPreset::Small);
     sync_segment(quality_segment_balanced_, recorder_core::NvencQualityPreset::Balanced);
     sync_segment(quality_segment_high_, recorder_core::NvencQualityPreset::High);
+}
+
+void ConfigPage::updateFrameRateSelection() {
+    if (!frame_rate_combo_)
+        return;
+
+    const QSignalBlocker blocker(frame_rate_combo_);
+    const int idx = frame_rate_combo_->findData(static_cast<int>(video_settings_.frame_rate_num));
+    if (idx >= 0 && video_settings_.frame_rate_num != 120) {
+        frame_rate_combo_->setCurrentIndex(idx);
+    }
+}
+
+void ConfigPage::updateTimingSelection() {
+    if (!timing_group_)
+        return;
+
+    const bool vfr_available = format_settings_.container != capability::Container::Mp4;
+    if (!vfr_available && !video_settings_.cfr) {
+        video_settings_.cfr = true;
+    }
+
+    auto sync_segment = [this](QPushButton* segment, bool selected, bool enabled, const QString& unavailable_reason) {
+        if (!segment)
+            return;
+        segment->setChecked(selected);
+        segment->setEnabled(enabled && !controls_locked_);
+        segment->setToolTip(enabled ? QString() : unavailable_reason);
+        segment->setProperty("qualitySegmentSelected", selected);
+        segment->style()->unpolish(segment);
+        segment->style()->polish(segment);
+    };
+
+    const QSignalBlocker blocker(timing_group_);
+    sync_segment(timing_cfr_btn_, video_settings_.cfr, true, QString());
+    sync_segment(timing_vfr_btn_, !video_settings_.cfr, vfr_available,
+                 QStringLiteral("VFR is not available for MP4 in the current mux path."));
+}
+
+void ConfigPage::updateOutputResolutionSelection() {
+    if (!output_resolution_group_)
+        return;
+
+    auto sync_segment = [this](QPushButton* segment, OutputResolutionMode mode) {
+        if (!segment)
+            return;
+        const bool selected = format_settings_.resolution.mode == mode;
+        segment->setChecked(selected);
+        segment->setProperty("qualitySegmentSelected", selected);
+        segment->style()->unpolish(segment);
+        segment->style()->polish(segment);
+    };
+
+    const QSignalBlocker blocker(output_resolution_group_);
+    sync_segment(output_res_native_btn_, OutputResolutionMode::Native);
+    sync_segment(output_res_4k_btn_, OutputResolutionMode::UHD2160);
+    sync_segment(output_res_1440_btn_, OutputResolutionMode::QHD1440);
+    sync_segment(output_res_1080_btn_, OutputResolutionMode::FHD1080);
+    sync_segment(output_res_720_btn_, OutputResolutionMode::HD720);
+}
+
+void ConfigPage::updateEffectiveOutputSummary() {
+    if (!output_effective_summary_label_)
+        return;
+
+    const QString summary =
+        QStringLiteral("Output: %1 · %2 · %3 · %4 · %5 · %6")
+            .arg(ResolutionLabel(format_settings_.resolution),
+                 FrameRateLabel(video_settings_.frame_rate_num, video_settings_.frame_rate_den),
+                 video_settings_.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"),
+                 VideoCodecLabel(format_settings_.video_codec), AudioCodecLabel(format_settings_.audio_codec),
+                 ContainerLabel(format_settings_.container));
+    output_effective_summary_label_->setText(summary);
 }
 
 void ConfigPage::setOutputFolder(const std::filesystem::path& folder) {
@@ -1653,11 +1853,17 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     audio_codec_combo_->setEnabled(enabled);
 
     quality_combo_->setEnabled(enabled);
+    frame_rate_combo_->setEnabled(enabled);
     quality_segment_small_->setEnabled(enabled);
     quality_segment_balanced_->setEnabled(enabled);
     quality_segment_high_->setEnabled(enabled);
-    cfr_check_->setEnabled(enabled);
+    updateTimingSelection();
     cursor_check_->setEnabled(enabled);
+    output_res_native_btn_->setEnabled(enabled);
+    output_res_4k_btn_->setEnabled(enabled);
+    output_res_1440_btn_->setEnabled(enabled);
+    output_res_1080_btn_->setEnabled(enabled);
+    output_res_720_btn_->setEnabled(enabled);
 
     if (webcam_setup_panel_)
         webcam_setup_panel_->setControlsLocked(locked);

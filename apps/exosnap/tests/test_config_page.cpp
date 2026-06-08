@@ -10,7 +10,6 @@
 #include <QMenu>
 #include <QObject>
 #include <QPushButton>
-#include <QRadioButton>
 #include <QToolButton>
 
 #include "models/OutputSettingsModel.h"
@@ -82,11 +81,14 @@ TEST_F(ConfigPageTest, ProfileComboExists) {
     EXPECT_NE(combo, nullptr);
 }
 
-TEST_F(ConfigPageTest, ContainerRadiosExist) {
+TEST_F(ConfigPageTest, ContainerSegmentedControlExists) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    const auto radios = page.findChildren<QRadioButton*>();
-    EXPECT_GE(radios.size(), 3);
+    auto* segmented = page.findChild<QWidget*>(QStringLiteral("containerSegmented"));
+    ASSERT_NE(segmented, nullptr);
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("containerMkvButton")), nullptr);
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("containerWebmButton")), nullptr);
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("containerMp4Button")), nullptr);
 }
 
 TEST_F(ConfigPageTest, VideoQualityComboExists) {
@@ -180,27 +182,96 @@ TEST_F(ConfigPageTest, HybridCardTitles_AreVisible) {
     EXPECT_FALSE(HasLabelText(page, QStringLiteral("Profile & Format")));
 }
 
-TEST_F(ConfigPageTest, OutputResolution_IsPlannedAndDisabled) {
+TEST_F(ConfigPageTest, OutputResolution_IsFunctional) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     auto* segmented = page.findChild<QWidget*>(QStringLiteral("outputResSegmented"));
     ASSERT_NE(segmented, nullptr);
 
-    // Output scaling is not implemented, so every segment must be disabled (planned/honest).
     const auto segments = segmented->findChildren<QPushButton*>();
     ASSERT_GE(segments.size(), 5);
     for (const auto* seg : segments)
-        EXPECT_FALSE(seg->isEnabled()) << "Output resolution segment must not be interactive: "
-                                       << seg->text().toStdString();
+        EXPECT_TRUE(seg->isEnabled()) << "Output resolution segment must be interactive: " << seg->text().toStdString();
+
+    OutputSettingsModel changed;
+    bool emitted = false;
+    QObject::connect(&page, &ConfigPage::formatSettingsChanged, [&](const OutputSettingsModel& settings) {
+        emitted = true;
+        changed = settings;
+    });
+
+    auto* res1080 = page.findChild<QPushButton*>(QStringLiteral("outputRes1080Button"));
+    ASSERT_NE(res1080, nullptr);
+    res1080->click();
+    EXPECT_TRUE(emitted);
+    EXPECT_EQ(changed.resolution.mode, OutputResolutionMode::FHD1080);
 }
 
-TEST_F(ConfigPageTest, FrameRateControl_IsReadOnly) {
+TEST_F(ConfigPageTest, FrameRateControl_UsesRealValues) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     auto* frame_rate = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
     ASSERT_NE(frame_rate, nullptr);
-    // Frame rate is fixed at 60 fps in this build — shown read-only, never a fake selector.
-    EXPECT_FALSE(frame_rate->isEnabled());
+    EXPECT_TRUE(frame_rate->isEnabled());
+    EXPECT_GE(frame_rate->count(), 6);
+
+    VideoSettingsModel changed;
+    bool emitted = false;
+    QObject::connect(&page, &ConfigPage::videoSettingsChanged, [&](const VideoSettingsModel& settings) {
+        emitted = true;
+        changed = settings;
+    });
+
+    const int idx30 = frame_rate->findData(30);
+    ASSERT_GE(idx30, 0);
+    frame_rate->setCurrentIndex(idx30);
+    EXPECT_TRUE(emitted);
+    EXPECT_EQ(changed.frame_rate_num, 30u);
+    EXPECT_EQ(changed.frame_rate_den, 1u);
+}
+
+TEST_F(ConfigPageTest, TimingSegments_MapToVideoSettingsAndMp4DisablesVfr) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* vfr = page.findChild<QPushButton*>(QStringLiteral("timingVfrButton"));
+    auto* cfr = page.findChild<QPushButton*>(QStringLiteral("timingCfrButton"));
+    ASSERT_NE(vfr, nullptr);
+    ASSERT_NE(cfr, nullptr);
+
+    VideoSettingsModel changed;
+    QObject::connect(&page, &ConfigPage::videoSettingsChanged,
+                     [&](const VideoSettingsModel& settings) { changed = settings; });
+
+    vfr->click();
+    EXPECT_FALSE(changed.cfr);
+    EXPECT_TRUE(vfr->isChecked());
+
+    auto* mp4 = page.findChild<QPushButton*>(QStringLiteral("containerMp4Button"));
+    ASSERT_NE(mp4, nullptr);
+    mp4->click();
+    EXPECT_TRUE(changed.cfr);
+    EXPECT_TRUE(cfr->isChecked());
+    EXPECT_FALSE(vfr->isEnabled());
+}
+
+TEST_F(ConfigPageTest, OutputEffectiveSummaryReflectsFormatControls) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* summary = page.findChild<QLabel*>(QStringLiteral("outputEffectiveSummaryLabel"));
+    ASSERT_NE(summary, nullptr);
+
+    auto* res720 = page.findChild<QPushButton*>(QStringLiteral("outputRes720Button"));
+    auto* frame_rate = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
+    ASSERT_NE(res720, nullptr);
+    ASSERT_NE(frame_rate, nullptr);
+
+    res720->click();
+    const int idx24 = frame_rate->findData(24);
+    ASSERT_GE(idx24, 0);
+    frame_rate->setCurrentIndex(idx24);
+
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("720p")));
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("24 fps")));
 }
 
 TEST_F(ConfigPageTest, FilenameTokenChips_AreShown) {
@@ -497,6 +568,15 @@ TEST_F(ConfigPageTest, SetRecordingControlsLocked_DisablesKeyControls) {
     auto* quality_small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
     ASSERT_NE(quality_small_segment, nullptr);
     EXPECT_FALSE(quality_small_segment->isEnabled());
+    auto* frame_rate = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
+    ASSERT_NE(frame_rate, nullptr);
+    EXPECT_FALSE(frame_rate->isEnabled());
+    auto* timing_cfr = page.findChild<QPushButton*>(QStringLiteral("timingCfrButton"));
+    ASSERT_NE(timing_cfr, nullptr);
+    EXPECT_FALSE(timing_cfr->isEnabled());
+    auto* output_res = page.findChild<QPushButton*>(QStringLiteral("outputRes1080Button"));
+    ASSERT_NE(output_res, nullptr);
+    EXPECT_FALSE(output_res->isEnabled());
 
     auto* dest_edit = page.findChild<QLineEdit*>(QStringLiteral("destinationEdit"));
     ASSERT_NE(dest_edit, nullptr);

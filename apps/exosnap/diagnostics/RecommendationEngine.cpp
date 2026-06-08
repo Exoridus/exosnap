@@ -88,7 +88,8 @@ void RecommendationEngine::checkCodecAvailability(DiagnosticChecklist& checklist
             "rec.003", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
             "Selected video codec is unavailable", "The selected video codec is not available on this system.",
             "Codec: " + std::string(capability::ToString(config_.video_codec)) + ". Reason: " + v_ann.reason,
-            "Unavailable", "Switch to " + fallback + " which is available.", "Change video codec in Video settings.");
+            "Unavailable", "Switch to " + fallback + " which is available.",
+            "Change video codec in Format & Encoding settings.");
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
     }
@@ -100,7 +101,8 @@ void RecommendationEngine::checkCodecAvailability(DiagnosticChecklist& checklist
             "rec.004", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
             "Selected audio codec is unavailable", "The selected audio codec is not available on this system.",
             "Codec: " + std::string(capability::ToString(config_.audio_codec)) + ". Reason: " + a_ann.reason,
-            "Unavailable", "Switch to " + fallback + " which is available.", "Change audio codec in Video settings.");
+            "Unavailable", "Switch to " + fallback + " which is available.",
+            "Change audio codec in Format & Encoding settings.");
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
     }

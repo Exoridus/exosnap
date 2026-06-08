@@ -497,6 +497,91 @@ TEST(OutputSettingsTest, Defaults_VideoCodecIsH264) {
     EXPECT_EQ(defaults.video_codec, capability::VideoCodec::H264Nvenc);
 }
 
+TEST(OutputSettingsTest, DefaultResolutionIsNativeContain) {
+    const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
+    EXPECT_EQ(defaults.resolution.mode, OutputResolutionMode::Native);
+    EXPECT_EQ(defaults.resolution.fit, recorder_core::OutputFitMode::Contain);
+}
+
+TEST(OutputSettingsTest, FixedResolutionModesResolveToCanonicalSizes) {
+    EXPECT_EQ(PresetOutputSize(OutputResolutionMode::UHD2160)->width, 3840u);
+    EXPECT_EQ(PresetOutputSize(OutputResolutionMode::UHD2160)->height, 2160u);
+    EXPECT_EQ(PresetOutputSize(OutputResolutionMode::QHD1440)->width, 2560u);
+    EXPECT_EQ(PresetOutputSize(OutputResolutionMode::QHD1440)->height, 1440u);
+    EXPECT_EQ(PresetOutputSize(OutputResolutionMode::FHD1080)->width, 1920u);
+    EXPECT_EQ(PresetOutputSize(OutputResolutionMode::FHD1080)->height, 1080u);
+    EXPECT_EQ(PresetOutputSize(OutputResolutionMode::HD720)->width, 1280u);
+    EXPECT_EQ(PresetOutputSize(OutputResolutionMode::HD720)->height, 720u);
+}
+
+TEST(OutputSettingsTest, NativeResolutionUsesSourceSizeWithEncoderAlignment) {
+    OutputResolutionSettings settings;
+    settings.mode = OutputResolutionMode::Native;
+
+    const auto resolved = ResolveRequestedOutputSize(settings, {1919, 1079});
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(resolved->width, 1918u);
+    EXPECT_EQ(resolved->height, 1078u);
+}
+
+TEST(OutputSettingsTest, InvalidCustomResolutionSanitizesToNative) {
+    OutputResolutionSettings settings;
+    settings.mode = OutputResolutionMode::Custom;
+    settings.custom_width = 0;
+    settings.custom_height = 1080;
+
+    SanitizeOutputResolution(settings);
+    EXPECT_EQ(settings.mode, OutputResolutionMode::Native);
+    EXPECT_EQ(settings.custom_width, 0u);
+    EXPECT_EQ(settings.custom_height, 0u);
+}
+
+TEST(OutputSettingsTest, OddCustomResolutionAlignsDeterministically) {
+    OutputResolutionSettings settings;
+    settings.mode = OutputResolutionMode::Custom;
+    settings.custom_width = 1919;
+    settings.custom_height = 1079;
+
+    SanitizeOutputResolution(settings);
+    EXPECT_EQ(settings.mode, OutputResolutionMode::Custom);
+    EXPECT_EQ(settings.custom_width, 1918u);
+    EXPECT_EQ(settings.custom_height, 1078u);
+}
+
+TEST(OutputGeometryTest, ContainRect_16x9Into16x9FillsOutput) {
+    const auto rect = recorder_core::ResolveContainRect({1920, 1080}, {1280, 720});
+    ASSERT_TRUE(rect.has_value());
+    EXPECT_EQ(rect->x, 0u);
+    EXPECT_EQ(rect->y, 0u);
+    EXPECT_EQ(rect->width, 1280u);
+    EXPECT_EQ(rect->height, 720u);
+}
+
+TEST(OutputGeometryTest, ContainRect_4x3Into16x9LetterboxesHorizontally) {
+    const auto rect = recorder_core::ResolveContainRect({1024, 768}, {1920, 1080});
+    ASSERT_TRUE(rect.has_value());
+    EXPECT_EQ(rect->width, 1440u);
+    EXPECT_EQ(rect->height, 1080u);
+    EXPECT_EQ(rect->x, 240u);
+    EXPECT_EQ(rect->y, 0u);
+}
+
+TEST(OutputGeometryTest, ContainRect_PortraitIntoLandscapeCenters) {
+    const auto rect = recorder_core::ResolveContainRect({1080, 1920}, {1920, 1080});
+    ASSERT_TRUE(rect.has_value());
+    EXPECT_EQ(rect->width, 608u);
+    EXPECT_EQ(rect->height, 1080u);
+    EXPECT_EQ(rect->x, 656u);
+    EXPECT_EQ(rect->y, 0u);
+}
+
+TEST(OutputGeometryTest, ContainRect_NeverLeavesOutput) {
+    const auto rect = recorder_core::ResolveContainRect({1234, 321}, {1280, 720});
+    ASSERT_TRUE(rect.has_value());
+    EXPECT_LE(rect->x + rect->width, 1280u);
+    EXPECT_LE(rect->y + rect->height, 720u);
+}
+
 TEST(OutputSettingsTest, Mp4Profile_ExtensionIsMp4) {
     const std::time_t ts = LocalTimestamp(2026, 5, 23, 10, 0, 0);
     const auto filename = BuildFilename(L"rec_{datetime}", capability::Container::Mp4, ts);
@@ -547,6 +632,31 @@ TEST(OutputSettingsTest, ApplyOutputAudioCodec_UsesAacWhenSelected) {
 
     ApplyOutputSettingsToRecorderConfig(config, settings);
     EXPECT_EQ(config.audio_codec, recorder_core::AudioCodec::AacMf);
+}
+
+TEST(OutputSettingsTest, ApplyOutputResolution_PassesFixedSizeToRecorderConfig) {
+    recorder_core::RecorderConfig config{};
+
+    OutputSettingsModel settings = OutputSettingsModel::Defaults();
+    settings.resolution.mode = OutputResolutionMode::FHD1080;
+
+    ApplyOutputSettingsToRecorderConfig(config, settings);
+    EXPECT_EQ(config.output_width, 1920u);
+    EXPECT_EQ(config.output_height, 1080u);
+    EXPECT_EQ(config.output_fit, recorder_core::OutputFitMode::Contain);
+}
+
+TEST(OutputSettingsTest, ApplyOutputResolution_NativeUsesRuntimeSourceSize) {
+    recorder_core::RecorderConfig config{};
+    config.output_width = 1920;
+    config.output_height = 1080;
+
+    OutputSettingsModel settings = OutputSettingsModel::Defaults();
+    settings.resolution.mode = OutputResolutionMode::Native;
+
+    ApplyOutputSettingsToRecorderConfig(config, settings);
+    EXPECT_EQ(config.output_width, 0u);
+    EXPECT_EQ(config.output_height, 0u);
 }
 
 TEST(OutputSettingsTest, OutputFolderPolicy_HomeAliasResolvesToAbsolutePath) {

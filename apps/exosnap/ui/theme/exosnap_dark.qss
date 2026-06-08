@@ -174,7 +174,7 @@ QFrame[panelRole="readinessBanner"][stateRole="blocked"] {
     border-color: rgba(224, 120, 108, 0.48);
 }
 
-/* Settings - segmented controls (capture quality + planned output resolution) */
+/* Settings - segmented controls (capture quality + output resolution) */
 QWidget#qualitySegmented,
 QWidget#outputResSegmented,
 QWidget#logSeveritySegmented {

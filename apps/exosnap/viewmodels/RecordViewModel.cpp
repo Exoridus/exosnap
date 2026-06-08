@@ -59,6 +59,48 @@ bool EqualsAsciiInsensitive(const std::string_view a, const std::string_view b) 
     return true;
 }
 
+std::wstring ContainerLabel(recorder_core::Container container) {
+    switch (container) {
+    case recorder_core::Container::Matroska:
+        return L"MKV";
+    case recorder_core::Container::Mp4:
+        return L"MP4";
+    case recorder_core::Container::WebM:
+        return L"WebM";
+    }
+    return L"MKV";
+}
+
+std::wstring VideoCodecLabel(recorder_core::VideoCodec codec) {
+    switch (codec) {
+    case recorder_core::VideoCodec::H264Nvenc:
+        return L"H.264";
+    case recorder_core::VideoCodec::Av1Nvenc:
+        return L"AV1";
+    }
+    return L"AV1";
+}
+
+std::wstring AudioCodecLabel(recorder_core::AudioCodec codec) {
+    switch (codec) {
+    case recorder_core::AudioCodec::AacMf:
+        return L"AAC";
+    case recorder_core::AudioCodec::Opus:
+        return L"Opus";
+    }
+    return L"Opus";
+}
+
+std::wstring FrameRateLabel(uint32_t numerator, uint32_t denominator) {
+    if (numerator == 0 || denominator == 0) {
+        return L"60 fps";
+    }
+    if (denominator == 1) {
+        return std::to_wstring(numerator) + L" fps";
+    }
+    return std::to_wstring(numerator) + L"/" + std::to_wstring(denominator) + L" fps";
+}
+
 std::string ToLowerAscii(const std::string& value) {
     std::string result;
     result.reserve(value.size());
@@ -381,6 +423,17 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
     result_error_detail = result.error_detail;
     result_output_file_bytes = result.output_file_bytes;
     result_elapsed_seconds = result.elapsed_seconds;
+    result_source_width = result.source_width;
+    result_source_height = result.source_height;
+    result_output_width = result.output_width;
+    result_output_height = result.output_height;
+    result_content_rect = result.content_rect;
+    result_frame_rate_num = result.frame_rate_num;
+    result_frame_rate_den = result.frame_rate_den;
+    result_cfr = result.cfr;
+    result_container = result.container;
+    result_video_codec = result.video_codec;
+    result_audio_codec = result.audio_codec;
 
     const auto msg = exosnap::diagnostics::MapErrorToUserMessage(result);
     result_user_title = msg.title;
@@ -392,7 +445,17 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
             result.elapsed_seconds > 0.0 ? FormatElapsed(result.elapsed_seconds) : elapsed_text;
         const std::wstring size_display =
             result.output_file_bytes > 0 ? FormatBytes(result.output_file_bytes) : output_size_text;
-        result_stats_text = elapsed_display + L"  ·  " + size_display;
+        const std::wstring output_display =
+            (result.output_width > 0 && result.output_height > 0)
+                ? std::to_wstring(result.output_width) + L"x" + std::to_wstring(result.output_height)
+                : L"Output size unknown";
+        const std::wstring timing_display =
+            FrameRateLabel(result.frame_rate_num, result.frame_rate_den) + L" " + (result.cfr ? L"CFR" : L"VFR");
+        const std::wstring format_display = VideoCodecLabel(result.video_codec) + L" · " +
+                                            AudioCodecLabel(result.audio_codec) + L" · " +
+                                            ContainerLabel(result.container);
+        result_stats_text =
+            elapsed_display + L"  ·  " + size_display + L"  ·  " + output_display + L"  ·  " + timing_display;
         std::filesystem::path p(result.output_path);
         std::wstring filename = p.filename().wstring();
         result_destination_text = filename;
@@ -401,6 +464,10 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
             result_destination_text += size_display;
             result_destination_text += L"  ·  ";
             result_destination_text += elapsed_display;
+            result_destination_text += L"  ·  ";
+            result_destination_text += output_display;
+            result_destination_text += L"  ·  ";
+            result_destination_text += format_display;
         }
     } else {
         result_stats_text = {};
@@ -427,6 +494,17 @@ void RecordViewModel::ResetStats() {
     result_user_message = {};
     result_action_hint = {};
     result_stats_text = {};
+    result_source_width = 0;
+    result_source_height = 0;
+    result_output_width = 0;
+    result_output_height = 0;
+    result_content_rect = {};
+    result_frame_rate_num = 60;
+    result_frame_rate_den = 1;
+    result_cfr = true;
+    result_container = recorder_core::Container::WebM;
+    result_video_codec = recorder_core::VideoCodec::Av1Nvenc;
+    result_audio_codec = recorder_core::AudioCodec::Opus;
     live_stats_available = false;
 }
 

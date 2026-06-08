@@ -143,6 +143,7 @@ target_link_libraries(recorder_core
         d3dcompiler.lib
         dxgi.lib
         dwmapi.lib
+        gdi32.lib
         user32.lib
         runtimeobject.lib
         ole32.lib

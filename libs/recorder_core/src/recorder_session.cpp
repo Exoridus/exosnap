@@ -147,6 +147,16 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
     if (config.frame_rate_num == 0 || config.frame_rate_den == 0) {
         return fail(E_INVALIDARG, ErrorPhase::Prepare, "frame_rate_num and frame_rate_den must be non-zero");
     }
+    if ((config.output_width == 0) != (config.output_height == 0)) {
+        return fail(E_INVALIDARG, ErrorPhase::Prepare,
+                    "output_width and output_height must both be zero or both be non-zero");
+    }
+    if (config.output_width != 0 || config.output_height != 0) {
+        if (!IsEncoderAlignedSize({config.output_width, config.output_height})) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare,
+                        "output_width and output_height must be positive even encoder dimensions");
+        }
+    }
 
     if (config.record_audio) {
         if (config.audio_track_plan.tracks.size() > CodecPrivateData::kMaxAudioTracks) {

@@ -82,6 +82,28 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("record-preset-region"),
         QStringLiteral("record-preset-webcam"),
         QStringLiteral("record-preset-countdown"),
+        QStringLiteral("settings-output-native"),
+        QStringLiteral("settings-output-4k"),
+        QStringLiteral("settings-output-1440p"),
+        QStringLiteral("settings-output-1080p"),
+        QStringLiteral("settings-output-720p"),
+        QStringLiteral("settings-format-24-cfr"),
+        QStringLiteral("settings-format-30-cfr"),
+        QStringLiteral("settings-format-60-cfr"),
+        QStringLiteral("settings-format-120-unavailable"),
+        QStringLiteral("settings-format-vfr"),
+        QStringLiteral("settings-format-container-mkv"),
+        QStringLiteral("settings-format-container-mp4"),
+        QStringLiteral("settings-format-incompatible"),
+        QStringLiteral("settings-format-recording-locked"),
+        QStringLiteral("record-output-native"),
+        QStringLiteral("record-output-1080p"),
+        QStringLiteral("record-output-letterbox"),
+        QStringLiteral("record-output-region"),
+        QStringLiteral("record-output-webcam"),
+        QStringLiteral("record-output-summary"),
+        QStringLiteral("completed-output-1080p"),
+        QStringLiteral("completed-output-fallback"),
     };
 
     for (const QString& id : required)
@@ -209,6 +231,41 @@ TEST(VisualScenarioTest, ScenarioParserRejectsInvalidRegionGeometry) {
     QString error;
     EXPECT_FALSE(ValidateVisualScenario(scenario, &error));
     EXPECT_TRUE(error.contains(QStringLiteral("region")));
+}
+
+TEST(VisualScenarioTest, ScenarioParserRejectsInvalidOutputDimensions) {
+    VisualScenario scenario;
+    scenario.id = QStringLiteral("bad-output");
+    scenario.requested_width = 1920;
+    scenario.requested_height = 0;
+    QString error;
+    EXPECT_FALSE(ValidateVisualScenario(scenario, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("output")));
+}
+
+TEST(VisualScenarioTest, ScenarioParserRejectsInvalidFrameRate) {
+    VisualScenario scenario;
+    scenario.id = QStringLiteral("bad-frame-rate");
+    scenario.frame_rate_num = 0;
+    scenario.frame_rate_den = 1;
+    QString error;
+    EXPECT_FALSE(ValidateVisualScenario(scenario, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("frame rate")));
+}
+
+TEST(VisualScenarioTest, OutputFormatScenariosCarryManifestFields) {
+    const VisualScenario* letterbox = FindVisualScenario(QStringLiteral("record-output-letterbox"));
+    ASSERT_NE(letterbox, nullptr);
+    EXPECT_EQ(letterbox->output_resolution_mode, OutputResolutionMode::FHD1080);
+    EXPECT_EQ(letterbox->effective_width, 1920);
+    EXPECT_EQ(letterbox->effective_height, 1080);
+    EXPECT_EQ(letterbox->content_x, 240);
+    EXPECT_EQ(letterbox->content_width, 1440);
+
+    const VisualScenario* unavailable = FindVisualScenario(QStringLiteral("settings-format-120-unavailable"));
+    ASSERT_NE(unavailable, nullptr);
+    EXPECT_EQ(unavailable->frame_rate_num, 60u);
+    EXPECT_FALSE(unavailable->reconciliation_warning.isEmpty());
 }
 
 TEST(VisualScenarioTest, RegisteredScenariosValidate) {

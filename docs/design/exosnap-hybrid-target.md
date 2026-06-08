@@ -179,7 +179,7 @@ Nothing in the preset card is "saved separately": the entire setup — capture t
 | Video codec | Select: AV1 / H.264 / H.265 / VP9 |
 | Audio codec | Select: Opus / AAC / FLAC |
 | Quality | Segmented: High / Balanced / Small / Custom |
-| Frame rate | Select: 30 fps / 60 fps / 120 fps |
+| Frame rate | Select: 24 fps / 25 fps / 30 fps / 50 fps / 60 fps, 120 fps only when active capability is proven |
 | Timing | Segmented: CFR / VFR |
 | Capture cursor | Toggle (row) |
 
@@ -217,7 +217,7 @@ No placement controls. Hint: "Position & size are set directly in the Record pre
 
 | Control | Type |
 |---|---|
-| Output resolution | Segmented: Native / 4K / 1440p / 1080p / 720p / Custom |
+| Output resolution | Segmented: Native / 4K / 1440p / 1080p / 720p; Custom remains schema-ready until the Settings UI exposes validated dimensions |
 | Output folder | Read-only display + Browse button |
 | Filename pattern | Select: `exosnap_{date}_{n}` / `{source}_{datetime}` / `{preset}_{date}` |
 | Token reference chips | `{datetime}` `{date}` `{time}` `{source}` `{app}` `{title}` `{preset}` |
@@ -226,7 +226,7 @@ No placement controls. Hint: "Position & size are set directly in the Record pre
 
 ## 6. Presets
 
-Presets store the **complete** recording setup (schema version 1). A preset is the single authoritative source of the current recording configuration.
+Presets store the **complete** recording setup (schema version 2). A preset is the single authoritative source of the current recording configuration.
 
 ### Preset schema (`RecordingPreset` / `RecordingPresetConfig`)
 
@@ -234,7 +234,7 @@ Presets store the **complete** recording setup (schema version 1). A preset is t
 |---|---|
 | Identity | `id` (stable unique key), `name` (user-visible label) |
 | Capture target (`PresetCaptureTarget`) | `kind` (Display/Window/Region), `display_key`, `window_key`, `has_region`, `region` (virtual-screen coords), `region_display_key` |
-| Output (`OutputSettingsModel`) | Container (MKV/WebM/MP4), video codec (AV1/H.264/H.265/VP9), audio codec (Opus/AAC/FLAC), quality (High/Balanced/Small/Custom CQ), FPS (30/60/120), CFR/VFR, cursor capture, output folder, naming pattern |
+| Output (`OutputSettingsModel`) | Container (MKV/WebM/MP4), video codec (AV1/H.264/H.265/VP9), audio codec (Opus/AAC/FLAC), quality (High/Balanced/Small/Custom CQ), FPS (24/25/30/50/60; 120 only when capability-proven), CFR/VFR, cursor capture, output folder, naming pattern |
 | Video (`VideoSettingsModel`) | CQ value, frame rate, timing mode, cursor |
 | Audio (`AudioUiState`) | System / app / mic toggles, separate tracks, mic device |
 | Webcam (`WebcamSettings`) | Device, resolution, FPS, mirror, overlay placement, enabled flag |

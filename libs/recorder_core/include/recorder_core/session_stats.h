@@ -1,5 +1,8 @@
 #pragma once
 
+#include "codec_types.h"
+#include "output_geometry.h"
+
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -18,6 +21,16 @@ struct SessionStats {
     uint64_t audio_duration_ns = 0;
     double duration_skew_ms = 0.0;
     uint64_t dropped_or_skipped_video_frames = 0;
+    uint64_t duplicated_video_frames = 0;
+    FrameSize source_size;
+    FrameSize output_size;
+    ContentRect content_rect;
+    uint32_t frame_rate_num = 60;
+    uint32_t frame_rate_den = 1;
+    bool cfr = true;
+    Container container = Container::WebM;
+    VideoCodec video_codec = VideoCodec::Av1Nvenc;
+    AudioCodec audio_codec = AudioCodec::Opus;
     // Smoothed linear RMS level [0..1] per audio track.
     // Index is AudioThread track_id_ and is bounded by CodecPrivateData::kMaxAudioTracks.
     std::array<float, 3> per_track_rms{};

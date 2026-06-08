@@ -58,6 +58,17 @@ struct UiRecordingResult {
     std::wstring error_detail;
     uint64_t output_file_bytes = 0;
     double elapsed_seconds = 0.0;
+    uint32_t source_width = 0;
+    uint32_t source_height = 0;
+    uint32_t output_width = 0;
+    uint32_t output_height = 0;
+    recorder_core::ContentRect content_rect;
+    uint32_t frame_rate_num = 60;
+    uint32_t frame_rate_den = 1;
+    bool cfr = true;
+    recorder_core::Container container = recorder_core::Container::WebM;
+    recorder_core::VideoCodec video_codec = recorder_core::VideoCodec::Av1Nvenc;
+    recorder_core::AudioCodec audio_codec = recorder_core::AudioCodec::Opus;
 };
 
 // ---------------------------------------------------------------------------
@@ -93,6 +104,17 @@ class RecordViewModel {
     uint64_t result_output_file_bytes = 0;
     double result_elapsed_seconds = 0.0;
     std::wstring result_destination_text;
+    uint32_t result_source_width = 0;
+    uint32_t result_source_height = 0;
+    uint32_t result_output_width = 0;
+    uint32_t result_output_height = 0;
+    recorder_core::ContentRect result_content_rect;
+    uint32_t result_frame_rate_num = 60;
+    uint32_t result_frame_rate_den = 1;
+    bool result_cfr = true;
+    recorder_core::Container result_container = recorder_core::Container::WebM;
+    recorder_core::VideoCodec result_video_codec = recorder_core::VideoCodec::Av1Nvenc;
+    recorder_core::AudioCodec result_audio_codec = recorder_core::AudioCodec::Opus;
 
     // Live stats fields
     std::wstring elapsed_text = L"0:00";

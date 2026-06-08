@@ -164,6 +164,56 @@ QString audioCodecLabel(capability::AudioCodec codec) {
     }
 }
 
+QString containerLabel(recorder_core::Container container) {
+    switch (container) {
+    case recorder_core::Container::Matroska:
+        return QStringLiteral("MKV");
+    case recorder_core::Container::Mp4:
+        return QStringLiteral("MP4");
+    case recorder_core::Container::WebM:
+        return QStringLiteral("WEBM");
+    }
+    return QStringLiteral("MKV");
+}
+
+QString videoCodecLabel(recorder_core::VideoCodec codec) {
+    switch (codec) {
+    case recorder_core::VideoCodec::H264Nvenc:
+        return QStringLiteral("H.264");
+    case recorder_core::VideoCodec::Av1Nvenc:
+        return QStringLiteral("AV1");
+    }
+    return QStringLiteral("AV1");
+}
+
+QString audioCodecLabel(recorder_core::AudioCodec codec) {
+    switch (codec) {
+    case recorder_core::AudioCodec::Opus:
+        return QStringLiteral("OPUS");
+    case recorder_core::AudioCodec::AacMf:
+        return QStringLiteral("AAC");
+    }
+    return QStringLiteral("AAC");
+}
+
+QString frameRateLabel(uint32_t numerator, uint32_t denominator) {
+    if (numerator == 0 || denominator == 0) {
+        return QStringLiteral("60 fps");
+    }
+    if (denominator == 1) {
+        return QStringLiteral("%1 fps").arg(numerator);
+    }
+    return QStringLiteral("%1/%2 fps").arg(numerator).arg(denominator);
+}
+
+QString resolutionLabel(const OutputResolutionSettings& resolution) {
+    if (resolution.mode == OutputResolutionMode::Custom && resolution.custom_width > 0 &&
+        resolution.custom_height > 0) {
+        return QStringLiteral("%1×%2").arg(resolution.custom_width).arg(resolution.custom_height);
+    }
+    return QString::fromWCharArray(OutputResolutionModeName(resolution.mode));
+}
+
 QString profileLabelFromName(const std::wstring& active_profile_name) {
     if (active_profile_name.empty()) {
         return QStringLiteral("PRESET");
@@ -927,7 +977,8 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     cockpit_split_layout_->addWidget(rail_column, 3);
 
     capture_header_ = new ui::widgets::SectionRuleHeader("CAPTURE TARGET", content);
-    capture_header_->setMeta("DISPLAY1 · 2560×1440 · 60 fps");
+    capture_header_->setMeta(QStringLiteral("DISPLAY1 · 2560×1440 · %1")
+                                 .arg(frameRateLabel(current_frame_rate_num_, current_frame_rate_den_)));
     capture_header_->setVisible(false);
 
     auto* cards_row = new QWidget(content);
@@ -1459,9 +1510,11 @@ RecordPage::~RecordPage() {
 }
 
 void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
+    current_output_settings_ = settings;
     current_container_ = settings.container;
     current_video_codec_ = settings.video_codec;
     current_audio_codec_ = settings.audio_codec;
+    current_output_resolution_ = settings.resolution;
     last_output_folder_ = settings.output_folder;
     if (!settings.output_folder.empty()) {
         view_model_.output_path_display = settings.output_folder.wstring();
@@ -1498,8 +1551,9 @@ void RecordPage::setActiveProfileName(const std::string& profile_name) {
         profile_summary = QStringLiteral("Preset");
     }
     profile_summary.replace(QLatin1Char('_'), QLatin1Char(' '));
-    const QString summary =
-        QStringLiteral("%1 · %2 · 60 fps · %3").arg(target, videoCodecLabel(current_video_codec_), profile_summary);
+    const QString summary = QStringLiteral("%1 · %2 · %3 · %4")
+                                .arg(target, videoCodecLabel(current_video_codec_),
+                                     frameRateLabel(current_frame_rate_num_, current_frame_rate_den_), profile_summary);
     if (source_preset_label_) {
         source_preset_label_->setText(profile);
         source_preset_label_->setToolTip(profile);
@@ -1732,9 +1786,17 @@ void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& sta
 }
 
 void RecordPage::setVideoSettings(const VideoSettingsModel& settings) {
+    current_frame_rate_num_ = settings.frame_rate_num == 0 ? 60 : settings.frame_rate_num;
+    current_frame_rate_den_ = settings.frame_rate_den == 0 ? 1 : settings.frame_rate_den;
+    current_cfr_ = settings.cfr;
     if (coordinator_) {
         coordinator_->SetVideoSettings(settings);
+        coordinator_->RevalidateCapabilities();
+        view_model_.SetState(coordinator_->State());
+        view_model_.capability_status_text = coordinator_->CapabilityStatusText();
     }
+    setOutputSettingsSummary(current_output_settings_);
+    refresh();
 }
 
 void RecordPage::setWebcamSettings(const WebcamSettings& settings) {
@@ -1857,7 +1919,7 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
         preview_surface_->setCenterTitle(QStringLiteral("Visual test preview"));
         preview_surface_->setCenterSubtitle(QStringLiteral("Synthetic deterministic frame"));
         preview_surface_->setBottomLeftText(QStringLiteral("Display 1 · 2560x1440"));
-        preview_surface_->setBottomRightText(QStringLiteral("AV1 · Opus · 60 fps"));
+        preview_surface_->setBottomRightText(QStringLiteral("Native · 60 fps CFR · AV1 · Opus · WEBM"));
         preview_surface_->setFrameTone(ui::widgets::PreviewSurface::FrameTone::Ready);
     }
 
@@ -1935,10 +1997,24 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
     view_model_.capability_status_text = L"Visual test fixture: diagnostic blockers clear.";
     view_model_.output_path_display = L"C:\\Users\\User\\Videos\\ExoSnap";
     active_profile_name_ = L"Visual Test WebM AV1 Opus";
-    current_container_ = capability::Container::WebM;
-    current_video_codec_ = capability::VideoCodec::Av1Nvenc;
-    current_audio_codec_ = capability::AudioCodec::Opus;
+    current_container_ = scenario.container;
+    current_video_codec_ = scenario.video_codec;
+    current_audio_codec_ = scenario.audio_codec;
+    current_output_resolution_.mode = scenario.output_resolution_mode;
+    if (scenario.output_resolution_mode == OutputResolutionMode::Custom) {
+        current_output_resolution_.custom_width = static_cast<uint32_t>((std::max)(0, scenario.requested_width));
+        current_output_resolution_.custom_height = static_cast<uint32_t>((std::max)(0, scenario.requested_height));
+    }
+    current_frame_rate_num_ = scenario.frame_rate_num;
+    current_frame_rate_den_ = scenario.frame_rate_den;
+    current_cfr_ = scenario.cfr;
     last_output_folder_ = std::filesystem::path(L"C:\\Users\\User\\Videos\\ExoSnap");
+    current_output_settings_ = OutputSettingsModel::Defaults();
+    current_output_settings_.output_folder = last_output_folder_;
+    current_output_settings_.container = current_container_;
+    current_output_settings_.video_codec = current_video_codec_;
+    current_output_settings_.audio_codec = current_audio_codec_;
+    current_output_settings_.resolution = current_output_resolution_;
 
     recorder_core::SessionStats stats;
     stats.elapsed_seconds = 83.0;
@@ -1989,6 +2065,50 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
         result.output_path = L"C:\\Users\\User\\Videos\\ExoSnap\\visual-test-recording.webm";
         result.output_file_bytes = 52ULL * 1024ULL * 1024ULL;
         result.elapsed_seconds = 83.0;
+        result.source_width = static_cast<uint32_t>((std::max)(0, scenario.source_width));
+        result.source_height = static_cast<uint32_t>((std::max)(0, scenario.source_height));
+        result.output_width = static_cast<uint32_t>((std::max)(0, scenario.effective_width));
+        result.output_height = static_cast<uint32_t>((std::max)(0, scenario.effective_height));
+        result.content_rect = {static_cast<uint32_t>((std::max)(0, scenario.content_x)),
+                               static_cast<uint32_t>((std::max)(0, scenario.content_y)),
+                               static_cast<uint32_t>((std::max)(0, scenario.content_width)),
+                               static_cast<uint32_t>((std::max)(0, scenario.content_height))};
+        result.frame_rate_num = scenario.frame_rate_num;
+        result.frame_rate_den = scenario.frame_rate_den;
+        result.cfr = scenario.cfr;
+        switch (scenario.container) {
+        case capability::Container::Matroska:
+            result.container = recorder_core::Container::Matroska;
+            break;
+        case capability::Container::Mp4:
+            result.container = recorder_core::Container::Mp4;
+            break;
+        case capability::Container::WebM:
+            result.container = recorder_core::Container::WebM;
+            break;
+        }
+        switch (scenario.video_codec) {
+        case capability::VideoCodec::H264Nvenc:
+            result.video_codec = recorder_core::VideoCodec::H264Nvenc;
+            break;
+        case capability::VideoCodec::HevcNvenc:
+            result.video_codec = recorder_core::VideoCodec::H264Nvenc;
+            break;
+        case capability::VideoCodec::Av1Nvenc:
+            result.video_codec = recorder_core::VideoCodec::Av1Nvenc;
+            break;
+        }
+        switch (scenario.audio_codec) {
+        case capability::AudioCodec::AacMf:
+            result.audio_codec = recorder_core::AudioCodec::AacMf;
+            break;
+        case capability::AudioCodec::Opus:
+            result.audio_codec = recorder_core::AudioCodec::Opus;
+            break;
+        case capability::AudioCodec::Pcm:
+            result.audio_codec = recorder_core::AudioCodec::AacMf;
+            break;
+        }
         view_model_.SetResult(result);
         view_model_.SetState(UiRecordingState::Completed);
         if (preview_surface_) {
@@ -2072,10 +2192,14 @@ void RecordPage::setOutputSettingsSummary(const OutputSettingsModel& settings) {
         profile_summary = QStringLiteral("Preset");
     }
     profile_summary.replace(QLatin1Char('_'), QLatin1Char(' '));
-    const QString preset_summary = QStringLiteral("%1 · %2 · 60 fps · %3").arg(target, video, profile_summary);
+    const QString timing = frameRateLabel(current_frame_rate_num_, current_frame_rate_den_) + QStringLiteral(" · ") +
+                           (current_cfr_ ? QStringLiteral("CFR") : QStringLiteral("VFR"));
+    const QString output = resolutionLabel(settings.resolution);
+    const QString preset_summary = QStringLiteral("%1 · %2 · %3 · %4").arg(target, video, timing, profile_summary);
 
     if (destination_header_) {
-        destination_header_->setMeta(container + QStringLiteral(" · ") + video + QStringLiteral(" · ") + audio);
+        destination_header_->setMeta(output + QStringLiteral(" · ") + timing + QStringLiteral(" · ") + container +
+                                     QStringLiteral(" · ") + video + QStringLiteral(" · ") + audio);
     }
     if (source_preset_label_) {
         source_preset_label_->setText(profile);
@@ -2086,7 +2210,8 @@ void RecordPage::setOutputSettingsSummary(const OutputSettingsModel& settings) {
         rail_summary_label_->setToolTip(preset_summary);
     }
     if (output_meta_label_) {
-        output_meta_label_->setText(QStringLiteral("Files are saved using the configured output settings."));
+        output_meta_label_->setText(
+            QStringLiteral("Output: %1 · %2 · %3 · %4 · %5").arg(output, timing, video, audio, container));
     }
 }
 
@@ -3966,9 +4091,12 @@ QString RecordPage::buildPreviewBottomLeftText(bool recording) const {
 }
 
 QString RecordPage::buildPreviewBottomRightText(bool recording) const {
-    const QString codec_summary = QStringLiteral("%1 · %2 · %3")
-                                      .arg(videoCodecLabel(current_video_codec_), audioCodecLabel(current_audio_codec_),
-                                           containerLabel(current_container_));
+    const QString timing = frameRateLabel(current_frame_rate_num_, current_frame_rate_den_) + QStringLiteral(" ") +
+                           (current_cfr_ ? QStringLiteral("CFR") : QStringLiteral("VFR"));
+    const QString codec_summary =
+        QStringLiteral("%1 · %2 · %3 · %4 · %5")
+            .arg(resolutionLabel(current_output_resolution_), timing, videoCodecLabel(current_video_codec_),
+                 audioCodecLabel(current_audio_codec_), containerLabel(current_container_));
 
     if (!recording) {
         return codec_summary;
@@ -4018,11 +4146,17 @@ void RecordPage::emitChromeState() {
         view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {
         const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
         emit chromeStateChanged(recording, status,
-                                QStringLiteral("%1 · 60 fps · AV1").arg(normalizedTargetLabel(target)));
+                                QStringLiteral("%1 · %2 · %3")
+                                    .arg(normalizedTargetLabel(target),
+                                         frameRateLabel(current_frame_rate_num_, current_frame_rate_den_),
+                                         videoCodecLabel(current_video_codec_)));
         return;
     }
 
-    emit chromeStateChanged(recording, status, QStringLiteral("NO TARGET · 60 fps · AV1"));
+    emit chromeStateChanged(recording, status,
+                            QStringLiteral("NO TARGET · %1 · %2")
+                                .arg(frameRateLabel(current_frame_rate_num_, current_frame_rate_den_),
+                                     videoCodecLabel(current_video_codec_)));
 }
 
 void RecordPage::refresh() {
@@ -4113,7 +4247,8 @@ void RecordPage::refresh() {
         view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {
         const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
         target_desc = normalizedTargetLabel(target);
-        capture_header_->setMeta(QStringLiteral("%1 · 60 fps").arg(target_desc));
+        capture_header_->setMeta(QStringLiteral("%1 · %2").arg(
+            target_desc, frameRateLabel(current_frame_rate_num_, current_frame_rate_den_)));
         preview_surface_->setTopMetaText(QStringLiteral(""));
     } else {
         capture_header_->setMeta("NO TARGET");
@@ -4368,10 +4503,17 @@ void RecordPage::updateStatsDisplay() {
                     ? QString::fromStdWString(RecordViewModel::FormatBytes(view_model_.result_output_file_bytes))
                     : QStringLiteral("—");
             const QString duration = clockFromSeconds(view_model_.result_elapsed_seconds);
-            const QString codec_line =
-                QStringLiteral("%1 · %2 · %3")
-                    .arg(containerLabel(current_container_), videoCodecLabel(current_video_codec_),
-                         audioCodecLabel(current_audio_codec_));
+            const QString output_line =
+                (view_model_.result_output_width > 0 && view_model_.result_output_height > 0)
+                    ? QStringLiteral("%1×%2").arg(view_model_.result_output_width).arg(view_model_.result_output_height)
+                    : resolutionLabel(current_output_resolution_);
+            const QString timing_line =
+                frameRateLabel(view_model_.result_frame_rate_num, view_model_.result_frame_rate_den) +
+                QStringLiteral(" ") + (view_model_.result_cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
+            const QString codec_line = QStringLiteral("%1 · %2 · %3 · %4 · %5")
+                                           .arg(output_line, timing_line, containerLabel(view_model_.result_container),
+                                                videoCodecLabel(view_model_.result_video_codec),
+                                                audioCodecLabel(view_model_.result_audio_codec));
             rail_stats_label_->setText(
                 QStringLiteral("%1\nDURATION %2   SIZE %3\n%4").arg(file_name, duration, file_size, codec_line));
             rail_stats_label_->setVisible(true);
@@ -4924,8 +5066,10 @@ void RecordPage::updateHeroButton() {
     profile_summary.replace(QLatin1Char('_'), QLatin1Char(' '));
 
     if (rail_summary_label_) {
-        const QString summary = QStringLiteral("%1 · %2 · 60 fps · %3")
-                                    .arg(target_summary, videoCodecLabel(current_video_codec_), profile_summary);
+        const QString summary =
+            QStringLiteral("%1 · %2 · %3 · %4")
+                .arg(target_summary, videoCodecLabel(current_video_codec_),
+                     frameRateLabel(current_frame_rate_num_, current_frame_rate_den_), profile_summary);
         rail_summary_label_->setText(summary);
         rail_summary_label_->setToolTip(summary);
     }

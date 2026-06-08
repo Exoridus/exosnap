@@ -47,6 +47,53 @@ QString WidgetText(const QWidget* widget) {
     return {};
 }
 
+QString ResolutionModeName(OutputResolutionMode mode) {
+    return QString::fromWCharArray(OutputResolutionModeName(mode));
+}
+
+QString ContainerName(capability::Container container) {
+    switch (container) {
+    case capability::Container::Matroska:
+        return QStringLiteral("mkv");
+    case capability::Container::Mp4:
+        return QStringLiteral("mp4");
+    case capability::Container::WebM:
+        return QStringLiteral("webm");
+    }
+    return QStringLiteral("mkv");
+}
+
+QString VideoCodecName(capability::VideoCodec codec) {
+    switch (codec) {
+    case capability::VideoCodec::H264Nvenc:
+        return QStringLiteral("h264");
+    case capability::VideoCodec::HevcNvenc:
+        return QStringLiteral("hevc");
+    case capability::VideoCodec::Av1Nvenc:
+        return QStringLiteral("av1");
+    }
+    return QStringLiteral("av1");
+}
+
+QString AudioCodecName(capability::AudioCodec codec) {
+    switch (codec) {
+    case capability::AudioCodec::AacMf:
+        return QStringLiteral("aac");
+    case capability::AudioCodec::Opus:
+        return QStringLiteral("opus");
+    case capability::AudioCodec::Pcm:
+        return QStringLiteral("pcm");
+    }
+    return QStringLiteral("opus");
+}
+
+QJsonObject SizeToJson(int width, int height) {
+    QJsonObject out;
+    out.insert(QStringLiteral("width"), width);
+    out.insert(QStringLiteral("height"), height);
+    return out;
+}
+
 } // namespace
 
 bool HasVisualTestRequest(const QStringList& args) {
@@ -119,6 +166,27 @@ QJsonObject BuildVisualManifest(const MainWindow& window, const VisualScenario& 
                 RectToJson(QRect(scenario.region_x, scenario.region_y, scenario.region_width, scenario.region_height)));
     root.insert(QStringLiteral("ready_marker"), QStringLiteral("VISUAL_TEST_READY:%1").arg(scenario.id));
     root.insert(QStringLiteral("window_geometry"), RectToJson(window.geometry()));
+
+    QJsonObject output;
+    output.insert(QStringLiteral("requested_resolution_mode"), ResolutionModeName(scenario.output_resolution_mode));
+    output.insert(QStringLiteral("requested_dimensions"),
+                  SizeToJson(scenario.requested_width, scenario.requested_height));
+    output.insert(QStringLiteral("effective_output_dimensions"),
+                  SizeToJson(scenario.effective_width, scenario.effective_height));
+    output.insert(QStringLiteral("source_dimensions"), SizeToJson(scenario.source_width, scenario.source_height));
+    output.insert(
+        QStringLiteral("content_rectangle"),
+        RectToJson(QRect(scenario.content_x, scenario.content_y, scenario.content_width, scenario.content_height)));
+    output.insert(QStringLiteral("frame_rate_num"), static_cast<int>(scenario.frame_rate_num));
+    output.insert(QStringLiteral("frame_rate_den"), static_cast<int>(scenario.frame_rate_den));
+    output.insert(QStringLiteral("timing_mode"), scenario.cfr ? QStringLiteral("cfr") : QStringLiteral("vfr"));
+    output.insert(QStringLiteral("container"), ContainerName(scenario.container));
+    output.insert(QStringLiteral("video_codec"), VideoCodecName(scenario.video_codec));
+    output.insert(QStringLiteral("audio_codec"), AudioCodecName(scenario.audio_codec));
+    output.insert(QStringLiteral("reconciliation_warning"), scenario.reconciliation_warning);
+    output.insert(QStringLiteral("controls_locked"), scenario.controls_locked);
+    output.insert(QStringLiteral("preset_dirty_state"), scenario.preset_dirty);
+    root.insert(QStringLiteral("output_format"), output);
 
     // Webcam PiP manifest (Record preview). Reflects actual PreviewSurface state, not
     // the scenario inputs, so preview/output parity and lock/selection can be asserted.
