@@ -13,5 +13,5 @@ git -C $repoRoot config core.hooksPath .githooks
 if ($LASTEXITCODE -ne 0) { throw "git config failed." }
 
 Write-Host "Git hooks path set to .githooks/"
-Write-Host "  pre-commit -> scripts/check-format.ps1   (clang-format)"
-Write-Host "  pre-push   -> scripts/check-quality.ps1  (clang-tidy + cppcheck + build + test)"
+Write-Host "  pre-commit -> scripts/check-format.ps1 -Staged -Fix  (quiet staged C++ autoformat)"
+Write-Host "  pre-push   -> scripts/check-quality.ps1              (quiet branch-update quality gate)"
