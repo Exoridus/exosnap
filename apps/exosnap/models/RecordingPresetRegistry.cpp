@@ -132,7 +132,7 @@ bool RecordingPresetRegistry::SetDefault(std::string id) {
 // Mutations
 // ---------------------------------------------------------------------------
 
-std::string RecordingPresetRegistry::AddPreset(RecordingPresetConfig config, std::string name) {
+std::string RecordingPresetRegistry::AddPreset(RecordingPresetConfig config, const std::string& name) {
     RecordingPreset preset;
     preset.id = GeneratePresetId();
     preset.name = DeduplicateName(NormalizePresetName(name));

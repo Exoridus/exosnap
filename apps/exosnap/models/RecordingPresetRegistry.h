@@ -62,7 +62,7 @@ class RecordingPresetRegistry {
 
     // Sanitize config, dedup name, generate new id, select the new preset,
     // return its id.
-    std::string AddPreset(RecordingPresetConfig config, std::string name);
+    std::string AddPreset(RecordingPresetConfig config, const std::string& name);
 
     // Adds a fresh MakeDefaultPreset() config under a unique name ("New preset"),
     // new id, selects it, returns its id.

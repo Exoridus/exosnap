@@ -1106,12 +1106,6 @@ void ConfigPage::setOutputFolder(const std::filesystem::path& folder) {
     updateExampleFilename();
 }
 
-void ConfigPage::setProfileOptions(const std::vector<ProfileOption>& options, const QString& active_profile_id,
-                                   bool active_profile_modified) {
-    // Forward to the new preset API with legacy-compatible defaults.
-    setPresetOptions(options, active_profile_id, QString(), active_profile_modified);
-}
-
 void ConfigPage::setActiveProfileName(const QString& profile_name) {
     active_profile_name_ = profile_name;
     updateExampleFilename();

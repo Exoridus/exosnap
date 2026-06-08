@@ -54,17 +54,12 @@ class ConfigPage : public QWidget {
     void setAudioUiState(const capability::AudioUiState& state);
     void setWebcamSettings(const WebcamSettings& settings);
     void setReadinessStatus(const QString& status_label);
-    // New preset contract (Stage 3): replaces setProfileOptions/setActiveProfileName.
-    // options: list of presets (id + label); selected_id: currently selected preset;
-    // default_id: the startup-default preset (shown with a badge); dirty: unsaved changes.
+    // Preset card contract: options = presets (id + label); selected_id = active preset;
+    // default_id = startup-default preset (shown with a badge); dirty = unsaved changes.
     void setPresetOptions(const std::vector<ProfileOption>& options, const QString& selected_id,
                           const QString& default_id, bool dirty);
     // Lightweight dirty-only update (avoids rebuilding the full combo).
     void setPresetDirty(bool dirty);
-    // Legacy setter kept for backward compatibility (internally calls setPresetOptions
-    // with empty default_id and dirty=false).
-    void setProfileOptions(const std::vector<ProfileOption>& options, const QString& active_profile_id,
-                           bool active_profile_modified);
     void setActiveProfileName(const QString& profile_name);
     void setRecordingControlsLocked(bool locked);
 
