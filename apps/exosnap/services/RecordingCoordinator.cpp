@@ -298,8 +298,9 @@ void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::Capabi
 }
 
 void RecordingCoordinator::OnCapabilityFailure(std::wstring message) {
-    diagnostics::AppLog(QStringLiteral("[record.failure] phase=Init category=CapabilityCheck detail=\"%1\"")
-                            .arg(QString::fromStdWString(message)));
+    diagnostics::AppLog::error(
+        QStringLiteral("record.failure"),
+        QStringLiteral("phase=Init category=CapabilityCheck detail=\"%1\"").arg(QString::fromStdWString(message)));
     has_caps_ = false;
     state_ = UiRecordingState::Blocked;
     capability_status_text_ = std::move(message);
@@ -382,10 +383,10 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         return false;
     const auto folder_check = ValidateOutputFolder(output_settings_.output_folder);
     if (folder_check != FolderValidationResult::Ok) {
-        diagnostics::AppLog(QStringLiteral("[record.failure] phase=Prepare category=OutputFolder "
-                                           "output_folder=\"%1\" detail=%2")
-                                .arg(QString::fromStdWString(output_settings_.output_folder.wstring()),
-                                     QString::fromStdWString(FolderValidationMessage(folder_check))));
+        diagnostics::AppLog::error(QStringLiteral("record.failure"),
+                                   QStringLiteral("phase=Prepare category=OutputFolder output_folder=\"%1\" detail=%2")
+                                       .arg(QString::fromStdWString(output_settings_.output_folder.wstring()),
+                                            QString::fromStdWString(FolderValidationMessage(folder_check))));
 
         PostStateChange(UiRecordingState::Failed);
 
@@ -411,9 +412,10 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     auto output_path = GenerateOutputPath();
     const auto resolved_path = ResolveAvailableOutputPath(output_path);
     if (!resolved_path.has_value()) {
-        diagnostics::AppLog(QStringLiteral("[record.failure] phase=Prepare category=FilenameCollision "
-                                           "output_folder=\"%1\" detail=\"Collision resolution exhausted\"")
-                                .arg(QString::fromStdWString(output_settings_.output_folder.wstring())));
+        diagnostics::AppLog::error(QStringLiteral("record.failure"),
+                                   QStringLiteral("phase=Prepare category=FilenameCollision output_folder=\"%1\" "
+                                                  "detail=\"Collision resolution exhausted\"")
+                                       .arg(QString::fromStdWString(output_settings_.output_folder.wstring())));
 
         PostStateChange(UiRecordingState::Failed);
         UiRecordingResult result;
@@ -430,9 +432,9 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     std::error_code ec;
     std::filesystem::create_directories(output_path.parent_path(), ec);
     if (ec) {
-        diagnostics::AppLog(
-            QStringLiteral("[record.failure] phase=Prepare category=CreateDirectory "
-                           "output_path=\"%1\" detail=\"%2\"")
+        diagnostics::AppLog::error(
+            QStringLiteral("record.failure"),
+            QStringLiteral("phase=Prepare category=CreateDirectory output_path=\"%1\" detail=\"%2\"")
                 .arg(QString::fromStdWString(output_path.wstring()), QString::fromStdWString(ToWide(ec.message()))));
 
         PostStateChange(UiRecordingState::Failed);
@@ -487,9 +489,10 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.mic_gain_linear = plan.mic_gain_linear;
 
     if (plan.record_audio && PlanRequiresTargetPid(plan.plan) && !plan.audio_target_process_id.has_value()) {
-        diagnostics::AppLog(QStringLiteral("[record.failure] phase=Prepare category=TargetPid "
-                                           "output_path=\"%1\" detail=\"Window target PID unavailable\"")
-                                .arg(QString::fromStdWString(output_path.wstring())));
+        diagnostics::AppLog::error(QStringLiteral("record.failure"),
+                                   QStringLiteral("phase=Prepare category=TargetPid output_path=\"%1\" "
+                                                  "detail=\"Window target PID unavailable\"")
+                                       .arg(QString::fromStdWString(output_path.wstring())));
 
         PostStateChange(UiRecordingState::Failed);
         UiRecordingResult result;
@@ -503,10 +506,11 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
 
     recorder_core::RecorderResult validate_result;
     if (!session_.Validate(config, &validate_result)) {
-        diagnostics::AppLog(QStringLiteral("[record.failure] phase=Validate category=SessionValidate "
-                                           "output_path=\"%1\" detail=\"%2\"")
-                                .arg(QString::fromStdWString(output_path.wstring()),
-                                     QString::fromStdWString(ToWide(validate_result.error_detail))));
+        diagnostics::AppLog::error(
+            QStringLiteral("record.failure"),
+            QStringLiteral("phase=Validate category=SessionValidate output_path=\"%1\" detail=\"%2\"")
+                .arg(QString::fromStdWString(output_path.wstring()),
+                     QString::fromStdWString(ToWide(validate_result.error_detail))));
 
         PostStateChange(UiRecordingState::Failed);
         UiRecordingResult result;
@@ -537,7 +541,8 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         const bool is_monitor = (target.kind == recorder_core::CaptureTarget::Kind::Monitor);
         const QString backend = is_monitor ? QStringLiteral("dxgi_od") : QStringLiteral("wgc");
         const QString target_desc = QString::fromStdString(target.description);
-        diagnostics::AppLog(QStringLiteral("[record] start  backend=%1  target=\"%2\"").arg(backend, target_desc));
+        diagnostics::AppLog::info(QStringLiteral("record"),
+                                  QStringLiteral("start backend=%1 target=\"%2\"").arg(backend, target_desc));
     }
 
     recording_thread_ = std::jthread([this, cfg = std::move(config), op = std::move(output_path)](std::stop_token) {
@@ -680,11 +685,11 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
     ui_result.elapsed_seconds = result.stats.elapsed_seconds;
 
     if (!result.succeeded) {
-        diagnostics::AppLog(QStringLiteral("[record.failure] phase=%1 "
-                                           "output_path=\"%2\" detail=\"%3\"")
-                                .arg(QString::fromStdWString(ui_result.error_phase),
-                                     QString::fromStdWString(ui_result.output_path),
-                                     QString::fromStdWString(ui_result.error_detail)));
+        diagnostics::AppLog::error(QStringLiteral("record.failure"),
+                                   QStringLiteral("phase=%1 output_path=\"%2\" detail=\"%3\"")
+                                       .arg(QString::fromStdWString(ui_result.error_phase),
+                                            QString::fromStdWString(ui_result.output_path),
+                                            QString::fromStdWString(ui_result.error_detail)));
     }
 
     PostResult(std::move(ui_result));

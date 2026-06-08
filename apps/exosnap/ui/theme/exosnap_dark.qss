@@ -176,7 +176,8 @@ QFrame[panelRole="readinessBanner"][stateRole="blocked"] {
 
 /* Settings - segmented controls (capture quality + planned output resolution) */
 QWidget#qualitySegmented,
-QWidget#outputResSegmented {
+QWidget#outputResSegmented,
+QWidget#logSeveritySegmented {
     background: ${bg2};
     border: 1px solid ${line2};
     border-radius: ${radius-md}px;

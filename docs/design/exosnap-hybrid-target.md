@@ -374,11 +374,15 @@ Default bindings:
 ### Logs
 
 - Contained log surface (monospace, 12.5px, 1.7 line-height).
-- Columns: timestamp | level | message.
-- Level coloring: info (muted), warn (amber), ok (green), error (red).
-- Filter: All / Info / Issues (segmented control).
-- Copy button.
-- Footer note: full logs at `%LOCALAPPDATA%\ExoSnap\logs`.
+- Rows: timestamp | severity | category | message.
+- Severity is stored structurally by the app log backend, not inferred from rendered text.
+- Level coloring: debug (muted), info (normal), warning (amber), error (coral/red).
+- Filter: All / Info / Issues (segmented control); search matches category and message case-insensitively.
+- Copy exports the currently visible filtered rows as deterministic plain text.
+- Export writes the complete current in-memory log history as UTF-8 text.
+- Clear empties the current in-memory history; new entries continue normally.
+- Auto-scroll is user-controlled and does not force position while disabled.
+- Footer note: full session logs at `%LOCALAPPDATA%\ExoSnap\logs`.
 
 ### About
 

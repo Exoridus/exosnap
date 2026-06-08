@@ -60,6 +60,13 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("diagnostics"),
         QStringLiteral("hotkeys"),
         QStringLiteral("logs"),
+        QStringLiteral("logs-empty"),
+        QStringLiteral("logs-all-levels"),
+        QStringLiteral("logs-info-filter"),
+        QStringLiteral("logs-issues-filter"),
+        QStringLiteral("logs-search-results"),
+        QStringLiteral("logs-long-message"),
+        QStringLiteral("logs-buffer-truncated"),
         QStringLiteral("about"),
     };
 
@@ -156,6 +163,7 @@ TEST(VisualScenarioTest, ManifestSerializationEnumsAreStable) {
     EXPECT_EQ(ToString(VisualRecordState::Countdown), QStringLiteral("countdown"));
     EXPECT_EQ(ToString(VisualRegionState::Preset16x9), QStringLiteral("preset-16x9"));
     EXPECT_EQ(ToString(VisualRegionEditMode::ResizeTopLeft), QStringLiteral("resize-top-left"));
+    EXPECT_EQ(ToString(VisualLogFilter::Issues), QStringLiteral("issues"));
 }
 
 TEST(VisualScenarioTest, DiffMasksCoverDynamicRecordSurfaces) {

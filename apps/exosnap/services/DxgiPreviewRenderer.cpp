@@ -64,7 +64,8 @@ bool DxgiPreviewRenderer::Initialize(HWND parentHwnd, uint32_t hwndWidth, uint32
     initialHeight_ = swapHeight;
 
     if (!parentHwnd_) {
-        diagnostics::AppLog(QStringLiteral("[dxgi-preview] initialize failed: null parent HWND"));
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                     QStringLiteral("initialize failed: null parent HWND"));
         return false;
     }
 
@@ -80,8 +81,9 @@ bool DxgiPreviewRenderer::Initialize(HWND parentHwnd, uint32_t hwndWidth, uint32
     if (RegisterClassExW(&wc) == 0) {
         DWORD err = GetLastError();
         if (err != ERROR_CLASS_ALREADY_EXISTS) {
-            diagnostics::AppLog(
-                QStringLiteral("[dxgi-preview] RegisterClassExW failed: %1").arg(static_cast<unsigned long>(err)));
+            diagnostics::AppLog::warning(
+                QStringLiteral("dxgi-preview"),
+                QStringLiteral("RegisterClassExW failed: %1").arg(static_cast<unsigned long>(err)));
             return false;
         }
     }
@@ -91,21 +93,23 @@ bool DxgiPreviewRenderer::Initialize(HWND parentHwnd, uint32_t hwndWidth, uint32
                                  GetModuleHandleW(nullptr), nullptr);
 
     if (!childHwnd_) {
-        diagnostics::AppLog(QStringLiteral("[dxgi-preview] CreateWindowExW failed: %1")
-                                .arg(static_cast<unsigned long>(GetLastError())));
+        diagnostics::AppLog::warning(
+            QStringLiteral("dxgi-preview"),
+            QStringLiteral("CreateWindowExW failed: %1").arg(static_cast<unsigned long>(GetLastError())));
         return false;
     }
 
     SetWindowPos(childHwnd_, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
     initialized_.store(true);
-    diagnostics::AppLog(QStringLiteral("[dxgi-preview] initialized OK parent=0x%1 child=0x%2 hwnd=%3x%4 swap=%5x%6")
-                            .arg(reinterpret_cast<quintptr>(parentHwnd_), 0, 16)
-                            .arg(reinterpret_cast<quintptr>(childHwnd_), 0, 16)
-                            .arg(hwndWidth)
-                            .arg(hwndHeight)
-                            .arg(swapWidth)
-                            .arg(swapHeight));
+    diagnostics::AppLog::debug(QStringLiteral("dxgi-preview"),
+                               QStringLiteral("initialized OK parent=0x%1 child=0x%2 hwnd=%3x%4 swap=%5x%6")
+                                   .arg(reinterpret_cast<quintptr>(parentHwnd_), 0, 16)
+                                   .arg(reinterpret_cast<quintptr>(childHwnd_), 0, 16)
+                                   .arg(hwndWidth)
+                                   .arg(hwndHeight)
+                                   .arg(swapWidth)
+                                   .arg(swapHeight));
     return true;
 }
 
@@ -226,8 +230,9 @@ bool DxgiPreviewRenderer::InitD3D11() {
                                    nullptr, d3dContext_.GetAddressOf());
 
     if (FAILED(hr)) {
-        diagnostics::AppLog(
-            QStringLiteral("[dxgi-preview] D3D11CreateDevice failed: 0x%1").arg(static_cast<unsigned long>(hr), 8, 16));
+        diagnostics::AppLog::warning(
+            QStringLiteral("dxgi-preview"),
+            QStringLiteral("D3D11CreateDevice failed: 0x%1").arg(static_cast<unsigned long>(hr), 8, 16));
         return false;
     }
     return true;
@@ -264,8 +269,9 @@ bool DxgiPreviewRenderer::InitSwapChain(uint32_t width, uint32_t height) {
     hr = dxgiFactory->CreateSwapChainForHwnd(d3dDevice_.Get(), childHwnd_, &scDesc, nullptr, nullptr,
                                              swapChain_.GetAddressOf());
     if (FAILED(hr)) {
-        diagnostics::AppLog(QStringLiteral("[dxgi-preview] CreateSwapChainForHwnd failed: 0x%1")
-                                .arg(static_cast<unsigned long>(hr), 8, 16));
+        diagnostics::AppLog::warning(
+            QStringLiteral("dxgi-preview"),
+            QStringLiteral("CreateSwapChainForHwnd failed: 0x%1").arg(static_cast<unsigned long>(hr), 8, 16));
         return false;
     }
 
@@ -283,7 +289,8 @@ bool DxgiPreviewRenderer::InitShaders() {
                             0, 0, vsBlob.GetAddressOf(), errorBlob.GetAddressOf());
     if (FAILED(hr)) {
         if (errorBlob)
-            diagnostics::AppLog(QStringLiteral("[dxgi-preview] vertex shader compile failed"));
+            diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                         QStringLiteral("vertex shader compile failed"));
         return false;
     }
 
@@ -291,7 +298,7 @@ bool DxgiPreviewRenderer::InitShaders() {
                     psBlob.GetAddressOf(), errorBlob.GetAddressOf());
     if (FAILED(hr)) {
         if (errorBlob)
-            diagnostics::AppLog(QStringLiteral("[dxgi-preview] pixel shader compile failed"));
+            diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"), QStringLiteral("pixel shader compile failed"));
         return false;
     }
 
@@ -338,18 +345,19 @@ bool DxgiPreviewRenderer::InitCaptureItem(const recorder_core::CaptureTarget& ta
                                          winrt::put_abi(captureItem_)));
         }
     } catch (...) {
-        diagnostics::AppLog(QStringLiteral("[dxgi-preview] create capture item failed"));
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"), QStringLiteral("create capture item failed"));
         return false;
     }
 
     if (!captureItem_) {
-        diagnostics::AppLog(QStringLiteral("[dxgi-preview] capture item is null after creation"));
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                     QStringLiteral("capture item is null after creation"));
         return false;
     }
 
     auto sz = captureItem_.Size();
-    diagnostics::AppLog(
-        QStringLiteral("[dxgi-preview] capture item created OK size=%1x%2").arg(sz.Width).arg(sz.Height));
+    diagnostics::AppLog::debug(QStringLiteral("dxgi-preview"),
+                               QStringLiteral("capture item created OK size=%1x%2").arg(sz.Width).arg(sz.Height));
     return true;
 }
 
@@ -373,7 +381,7 @@ bool DxgiPreviewRenderer::InitFramePool() {
 
         closedToken_ = captureItem_.Closed([this](const auto&, const auto&) { sourceLost_.store(true); });
     } catch (...) {
-        diagnostics::AppLog(QStringLiteral("[dxgi-preview] InitFramePool failed"));
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"), QStringLiteral("InitFramePool failed"));
         return false;
     }
     return true;
@@ -743,35 +751,41 @@ void DxgiPreviewRenderer::RenderThreadProc(const recorder_core::CaptureTarget& t
     if (!InitD3D11()) {
         if (comInited && SUCCEEDED(coHr))
             CoUninitialize();
-        diagnostics::AppLog(QStringLiteral("[dxgi-preview] render thread: D3D11 init failed"));
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                     QStringLiteral("render thread: D3D11 init failed"));
         return;
     }
     if (!InitSwapChain(initialWidth_, initialHeight_)) {
         if (comInited && SUCCEEDED(coHr))
             CoUninitialize();
-        diagnostics::AppLog(QStringLiteral("[dxgi-preview] render thread: swap chain init failed"));
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                     QStringLiteral("render thread: swap chain init failed"));
         return;
     }
     if (!InitShaders()) {
         if (comInited && SUCCEEDED(coHr))
             CoUninitialize();
-        diagnostics::AppLog(QStringLiteral("[dxgi-preview] render thread: shader init failed"));
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                     QStringLiteral("render thread: shader init failed"));
         return;
     }
     if (!InitCaptureItem(target)) {
         if (comInited && SUCCEEDED(coHr))
             CoUninitialize();
-        diagnostics::AppLog(QStringLiteral("[dxgi-preview] render thread: capture item init failed"));
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                     QStringLiteral("render thread: capture item init failed"));
         return;
     }
     if (!InitFramePool()) {
         if (comInited && SUCCEEDED(coHr))
             CoUninitialize();
-        diagnostics::AppLog(QStringLiteral("[dxgi-preview] render thread: frame pool init failed"));
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"),
+                                     QStringLiteral("render thread: frame pool init failed"));
         return;
     }
 
-    diagnostics::AppLog(QStringLiteral("[dxgi-preview] render thread running interval=%1ms").arg(frame_interval_ms));
+    diagnostics::AppLog::debug(QStringLiteral("dxgi-preview"),
+                               QStringLiteral("render thread running interval=%1ms").arg(frame_interval_ms));
 
     ULONGLONG lastFrameMs = 0;
 
@@ -795,13 +809,13 @@ void DxgiPreviewRenderer::RenderThreadProc(const recorder_core::CaptureTarget& t
     }
 
     if (sourceLost_.load())
-        diagnostics::AppLog(QStringLiteral("[dxgi-preview] capture source lost"));
+        diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"), QStringLiteral("capture source lost"));
 
     CleanupCapture();
     if (comInited && SUCCEEDED(coHr))
         CoUninitialize();
 
-    diagnostics::AppLog(QStringLiteral("[dxgi-preview] render thread stopped"));
+    diagnostics::AppLog::debug(QStringLiteral("dxgi-preview"), QStringLiteral("render thread stopped"));
 }
 
 } // namespace exosnap

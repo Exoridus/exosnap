@@ -1,6 +1,7 @@
 #include "VisualTestHarness.h"
 
 #include "../MainWindow.h"
+#include "../pages/LogsPage.h"
 #include "../ui/widgets/ExoToggle.h"
 #include "../ui/widgets/PreviewSurface.h"
 
@@ -106,6 +107,9 @@ QJsonObject BuildVisualManifest(const MainWindow& window, const VisualScenario& 
     root.insert(QStringLiteral("settings_target"), ToString(scenario.settings_target));
     root.insert(QStringLiteral("source_picker_tab"), ToString(scenario.source_picker_tab));
     root.insert(QStringLiteral("webcam_state"), ToString(scenario.webcam_state));
+    root.insert(QStringLiteral("log_filter"), ToString(scenario.log_filter));
+    root.insert(QStringLiteral("log_search_query"), scenario.log_search_query);
+    root.insert(QStringLiteral("log_auto_scroll"), scenario.log_auto_scroll);
     root.insert(QStringLiteral("region_state"), ToString(scenario.region_state));
     root.insert(QStringLiteral("region_edit_mode"), ToString(scenario.region_edit_mode));
     root.insert(QStringLiteral("region_geometry"),
@@ -140,6 +144,18 @@ QJsonObject BuildVisualManifest(const MainWindow& window, const VisualScenario& 
         QJsonObject card;
         card.insert(QStringLiteral("mirror"), mirror_toggle->isOn());
         root.insert(QStringLiteral("webcam_card"), card);
+    }
+
+    if (const auto* logs_page = window.findChild<const LogsPage*>(QStringLiteral("logsPage"))) {
+        QJsonObject logs;
+        logs.insert(QStringLiteral("total_entry_count"), logs_page->totalEntryCount());
+        logs.insert(QStringLiteral("visible_entry_count"), logs_page->visibleEntryCount());
+        logs.insert(QStringLiteral("active_filter"), logs_page->activeFilterName());
+        logs.insert(QStringLiteral("search_query"), logs_page->searchQuery());
+        logs.insert(QStringLiteral("auto_scroll"), logs_page->autoScrollEnabled());
+        logs.insert(QStringLiteral("oldest_visible_severity"), logs_page->oldestVisibleSeverityName());
+        logs.insert(QStringLiteral("newest_visible_severity"), logs_page->newestVisibleSeverityName());
+        root.insert(QStringLiteral("logs"), logs);
     }
 
     QJsonArray masks;

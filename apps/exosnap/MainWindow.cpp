@@ -409,8 +409,8 @@ void traceFrameMessage(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) 
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
-    diagnostics::AppLogInit();
-    diagnostics::AppLog(QStringLiteral("[window] MainWindow constructing"));
+    diagnostics::AppLog::init();
+    diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("MainWindow constructing"));
 
     setWindowTitle("ExoSnap");
     setWindowFlags(windowFlags() | Qt::FramelessWindowHint | Qt::WindowMinMaxButtonsHint | Qt::WindowSystemMenuHint);
@@ -439,7 +439,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     persisted_settings_.audio_ui_state = active_profile.audio_ui_state;
 
     restoreHotkeyBindingsFromSettings();
-    diagnostics::AppLog(QStringLiteral("[window] settings loaded"));
+    diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("settings loaded"));
 
     auto* central = new QWidget(this);
     central->setObjectName("mainCentral");
@@ -467,7 +467,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     stack_->addWidget(config_page_);
     stack_->addWidget(hotkeys_page_);
     stack_->addWidget(diagnostics_page_);
-    stack_->addWidget(new LogsPage(stack_));
+    logs_page_ = new LogsPage(stack_);
+    stack_->addWidget(logs_page_);
     advanced_page_ = new AdvancedPage(stack_);
     advanced_page_->setBaseline(output_settings_, video_settings_,
                                 QString::fromStdString(profile_registry_.ActiveProfile().name));
@@ -753,19 +754,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         connect(gui_app, &QGuiApplication::screenAdded, this, [this](QScreen*) {
             if (record_page_)
                 record_page_->refreshDisplayTargets();
-            diagnostics::AppLog(QStringLiteral("[window] screen added — refreshing display targets"));
+            diagnostics::AppLog::info(QStringLiteral("window"),
+                                      QStringLiteral("screen added; refreshing display targets"));
         });
         connect(gui_app, &QGuiApplication::screenRemoved, this, [this](QScreen*) {
             if (record_page_)
                 record_page_->refreshDisplayTargets();
-            diagnostics::AppLog(QStringLiteral("[window] screen removed — refreshing display targets"));
+            diagnostics::AppLog::info(QStringLiteral("window"),
+                                      QStringLiteral("screen removed; refreshing display targets"));
         });
     }
 
     record_page_->rebroadcastChromeState();
     applyActiveProfileToPages();
 
-    diagnostics::AppLog(QStringLiteral("[window] MainWindow constructed"));
+    diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("MainWindow constructed"));
 
     navigateToPage(kRecordPageIndex);
 
@@ -781,7 +784,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     QTimer::singleShot(0, this, [this]() {
         runtime_caps_ = capability::CapabilityBuilder::BuildFromHardwareQuery();
         runtime_caps_ready_ = true;
-        diagnostics::AppLog(QStringLiteral("[window] capabilities probed"));
+        diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("capabilities probed"));
         if (record_page_)
             record_page_->setRuntimeCapabilities(runtime_caps_);
         refreshOutputProfileUi();
@@ -1560,6 +1563,8 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
         setCurrentPage(kDiagnosticsPageIndex);
         break;
     case visual::VisualPage::Logs:
+        if (logs_page_)
+            logs_page_->applyVisualScenario(scenario);
         setCurrentPage(kLogsPageIndex);
         break;
     case visual::VisualPage::About:

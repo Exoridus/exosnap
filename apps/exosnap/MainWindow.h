@@ -35,6 +35,7 @@ class AdvancedPage;
 class ConfigPage;
 class DiagnosticsPage;
 class HotkeysPage;
+class LogsPage;
 class RecordPage;
 class WebcamPage;
 
@@ -92,6 +93,7 @@ class MainWindow : public QMainWindow {
     RecordPage* record_page_ = nullptr;
     ConfigPage* config_page_ = nullptr;
     DiagnosticsPage* diagnostics_page_ = nullptr;
+    LogsPage* logs_page_ = nullptr;
     WebcamPage* webcam_page_ = nullptr;
     HotkeysPage* hotkeys_page_ = nullptr;
     AdvancedPage* advanced_page_ = nullptr;

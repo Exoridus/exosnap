@@ -75,6 +75,12 @@ enum class VisualWebcamHandle {
     ResizeBottomRight,
 };
 
+enum class VisualLogFilter {
+    All,
+    Info,
+    Issues,
+};
+
 struct VisualMask {
     QString object_name;
     QString reason;
@@ -109,6 +115,10 @@ struct VisualScenario {
     float webcam_y = 0.70f;
     float webcam_w = 0.25f;
     float webcam_h = 0.25f;
+
+    VisualLogFilter log_filter = VisualLogFilter::All;
+    QString log_search_query;
+    bool log_auto_scroll = true;
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();
@@ -128,5 +138,6 @@ QString ToString(VisualWebcamState state);
 QString ToString(VisualRegionState state);
 QString ToString(VisualRegionEditMode mode);
 QString ToString(VisualWebcamHandle handle);
+QString ToString(VisualLogFilter filter);
 
 } // namespace exosnap::visual

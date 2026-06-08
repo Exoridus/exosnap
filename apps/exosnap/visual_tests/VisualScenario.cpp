@@ -419,6 +419,42 @@ const QVector<VisualScenario> kScenarios = {
     {QStringLiteral("diagnostics"), QStringLiteral("Diagnostics"), VisualPage::Diagnostics},
     {QStringLiteral("hotkeys"), QStringLiteral("Hotkeys"), VisualPage::Hotkeys},
     {QStringLiteral("logs"), QStringLiteral("Logs"), VisualPage::Logs},
+    {.id = QStringLiteral("logs-empty"),
+     .title = QStringLiteral("Logs / Empty"),
+     .page = VisualPage::Logs,
+     .log_filter = VisualLogFilter::All,
+     .log_auto_scroll = true},
+    {.id = QStringLiteral("logs-all-levels"),
+     .title = QStringLiteral("Logs / All Levels"),
+     .page = VisualPage::Logs,
+     .log_filter = VisualLogFilter::All,
+     .log_auto_scroll = true},
+    {.id = QStringLiteral("logs-info-filter"),
+     .title = QStringLiteral("Logs / Info Filter"),
+     .page = VisualPage::Logs,
+     .log_filter = VisualLogFilter::Info,
+     .log_auto_scroll = true},
+    {.id = QStringLiteral("logs-issues-filter"),
+     .title = QStringLiteral("Logs / Issues Filter"),
+     .page = VisualPage::Logs,
+     .log_filter = VisualLogFilter::Issues,
+     .log_auto_scroll = true},
+    {.id = QStringLiteral("logs-search-results"),
+     .title = QStringLiteral("Logs / Search Results"),
+     .page = VisualPage::Logs,
+     .log_filter = VisualLogFilter::All,
+     .log_search_query = QStringLiteral("webcam"),
+     .log_auto_scroll = true},
+    {.id = QStringLiteral("logs-long-message"),
+     .title = QStringLiteral("Logs / Long Message"),
+     .page = VisualPage::Logs,
+     .log_filter = VisualLogFilter::All,
+     .log_auto_scroll = true},
+    {.id = QStringLiteral("logs-buffer-truncated"),
+     .title = QStringLiteral("Logs / Buffer Truncated"),
+     .page = VisualPage::Logs,
+     .log_filter = VisualLogFilter::All,
+     .log_auto_scroll = false},
     {QStringLiteral("about"), QStringLiteral("About"), VisualPage::About},
 };
 
@@ -637,6 +673,18 @@ QString ToString(VisualWebcamHandle handle) {
         return QStringLiteral("bl");
     case VisualWebcamHandle::ResizeBottomRight:
         return QStringLiteral("br");
+    }
+    return QStringLiteral("unknown");
+}
+
+QString ToString(VisualLogFilter filter) {
+    switch (filter) {
+    case VisualLogFilter::All:
+        return QStringLiteral("all");
+    case VisualLogFilter::Info:
+        return QStringLiteral("info");
+    case VisualLogFilter::Issues:
+        return QStringLiteral("issues");
     }
     return QStringLiteral("unknown");
 }

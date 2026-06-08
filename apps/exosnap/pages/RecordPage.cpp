@@ -1480,8 +1480,9 @@ void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
         syncCoordinatorTargetContext();
     }
     refresh();
-    diagnostics::AppLog(QStringLiteral("[output] settings applied: ") +
-                        QString::fromStdWString(view_model_.output_path_display));
+    diagnostics::AppLog::info(
+        QStringLiteral("output"),
+        QStringLiteral("settings applied: %1").arg(QString::fromStdWString(view_model_.output_path_display)));
 }
 
 void RecordPage::setActiveProfileName(const std::string& profile_name) {
@@ -2018,7 +2019,8 @@ void RecordPage::startPreviewIfIdle() {
         if (!view_model_.has_region || !view_model_.region.IsValid()) {
             // No valid region yet — show the honest empty/unavailable state.
             // Do not fall back to a full-display preview.
-            diagnostics::AppLog(QStringLiteral("[record] region preview: no valid region — preview not started"));
+            diagnostics::AppLog::debug(QStringLiteral("record"),
+                                       QStringLiteral("region preview: no valid region; preview not started"));
             return;
         }
 
@@ -2027,8 +2029,9 @@ void RecordPage::startPreviewIfIdle() {
         // physical pixels (the coordinate space expected by DxgiPreviewRenderer).
         const ScreenPresentation screen_meta = QueryScreenPresentation(target.native_id);
         if (!screen_meta.available) {
-            diagnostics::AppLog(
-                QStringLiteral("[record] region preview: monitor info unavailable — preview not started"));
+            diagnostics::AppLog::warning(
+                QStringLiteral("record"),
+                QStringLiteral("region preview: monitor info unavailable; preview not started"));
             return;
         }
 
@@ -2039,20 +2042,21 @@ void RecordPage::startPreviewIfIdle() {
                                      view_model_.region.height, screen_meta.origin_x, screen_meta.origin_y);
 
         if (!box.IsValid()) {
-            diagnostics::AppLog(
-                QStringLiteral("[record] region preview: crop box invalid (region before monitor origin) — "
-                               "preview not started"));
+            diagnostics::AppLog::warning(
+                QStringLiteral("record"),
+                QStringLiteral("region preview: crop box invalid (region before monitor origin); preview not started"));
             return;
         }
 
         crop_box = box;
-        diagnostics::AppLog(QStringLiteral("[record] region preview: crop x=%1 y=%2 w=%3 h=%4 (monitor origin %5,%6)")
-                                .arg(box.x)
-                                .arg(box.y)
-                                .arg(box.width)
-                                .arg(box.height)
-                                .arg(screen_meta.origin_x)
-                                .arg(screen_meta.origin_y));
+        diagnostics::AppLog::debug(QStringLiteral("record"),
+                                   QStringLiteral("region preview crop x=%1 y=%2 w=%3 h=%4 (monitor origin %5,%6)")
+                                       .arg(box.x)
+                                       .arg(box.y)
+                                       .arg(box.width)
+                                       .arg(box.height)
+                                       .arg(screen_meta.origin_x)
+                                       .arg(screen_meta.origin_y));
     }
 
     // Build the active key that will represent this preview after a successful start.
@@ -2071,11 +2075,11 @@ void RecordPage::startPreviewIfIdle() {
     if (preview_surface_ &&
         preview_surface_->tryStartDxgiPreview(target, cfg.frame_rate_num, cfg.frame_rate_den, crop_box)) {
         last_preview_key_ = active_key;
-        diagnostics::AppLog(QStringLiteral("[record] DXGI preview started for target"));
+        diagnostics::AppLog::debug(QStringLiteral("record"), QStringLiteral("DXGI preview started for target"));
         return;
     }
 
-    diagnostics::AppLog(QStringLiteral("[record] falling back to QImage preview"));
+    diagnostics::AppLog::warning(QStringLiteral("record"), QStringLiteral("falling back to QImage preview"));
     preview_service_->Start(target);
 }
 
@@ -2119,13 +2123,14 @@ void RecordPage::initCoordinator() {
         }
     } catch (const std::exception& ex) {
         coordinator_->OnCapabilityFailure(L"Capability check failed.");
-        diagnostics::AppLog(QStringLiteral("[record.failure] phase=Init category=CapabilityCheck detail=\"%1\"")
-                                .arg(QString::fromUtf8(ex.what())));
+        diagnostics::AppLog::error(
+            QStringLiteral("record.failure"),
+            QStringLiteral("phase=Init category=CapabilityCheck detail=\"%1\"").arg(QString::fromUtf8(ex.what())));
         qWarning() << "Capability check failed:" << ex.what();
     } catch (...) {
         coordinator_->OnCapabilityFailure(L"Capability check failed.");
-        diagnostics::AppLog(
-            QStringLiteral("[record.failure] phase=Init category=CapabilityCheck detail=\"Unknown error\""));
+        diagnostics::AppLog::error(QStringLiteral("record.failure"),
+                                   QStringLiteral("phase=Init category=CapabilityCheck detail=\"Unknown error\""));
         qWarning() << "Capability check failed with unknown error.";
     }
 
@@ -2162,11 +2167,11 @@ void RecordPage::initCoordinator() {
         view_model_.SetState(state);
         view_model_.capability_status_text = coordinator_->CapabilityStatusText();
         if (state == UiRecordingState::Recording)
-            diagnostics::AppLog(QStringLiteral("[record] recording started"));
+            diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("recording started"));
         else if (state == UiRecordingState::Paused)
-            diagnostics::AppLog(QStringLiteral("[record] recording paused"));
+            diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("recording paused"));
         else if (state == UiRecordingState::Stopping)
-            diagnostics::AppLog(QStringLiteral("[record] stopping"));
+            diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("stopping"));
         else if (state == UiRecordingState::Ready || state == UiRecordingState::Completed)
             startPreviewIfIdle();
         refresh();
@@ -2194,14 +2199,15 @@ void RecordPage::initCoordinator() {
     coordinator_->SetResultReadyCallback([this](const UiRecordingResult& result) {
         view_model_.SetResult(result);
         if (result.succeeded)
-            diagnostics::AppLog(
-                QStringLiteral("[record] result: success  path=%1").arg(QString::fromStdWString(result.output_path)));
+            diagnostics::AppLog::info(
+                QStringLiteral("record"),
+                QStringLiteral("result: success path=%1").arg(QString::fromStdWString(result.output_path)));
         else {
             QString failed_msg =
-                QStringLiteral("[record] result: failed  phase=%1").arg(QString::fromStdWString(result.error_phase));
+                QStringLiteral("result: failed phase=%1").arg(QString::fromStdWString(result.error_phase));
             if (!result.hresult_text.empty())
-                failed_msg += QStringLiteral("  hr=%1").arg(QString::fromStdWString(result.hresult_text));
-            diagnostics::AppLog(failed_msg);
+                failed_msg += QStringLiteral(" hr=%1").arg(QString::fromStdWString(result.hresult_text));
+            diagnostics::AppLog::error(QStringLiteral("record.failure"), failed_msg);
         }
         refresh();
     });
@@ -2298,10 +2304,10 @@ void RecordPage::enumerateTargets(bool preserve_current_selection) {
 
     syncCoordinatorTargetContext();
 
-    diagnostics::AppLog(QStringLiteral("[target] enumerated: total=%1 monitors=%2 windows=%3")
-                            .arg(static_cast<int>(view_model_.targets.size()))
-                            .arg(static_cast<int>(monitor_target_indices_.size()))
-                            .arg(static_cast<int>(window_target_indices_.size())));
+    diagnostics::AppLog::debug(QStringLiteral("target"), QStringLiteral("enumerated: total=%1 monitors=%2 windows=%3")
+                                                             .arg(static_cast<int>(view_model_.targets.size()))
+                                                             .arg(static_cast<int>(monitor_target_indices_.size()))
+                                                             .arg(static_cast<int>(window_target_indices_.size())));
 }
 
 void RecordPage::rebuildTargetPicker() {
@@ -2384,9 +2390,10 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
     }
     syncCoordinatorTargetContext();
 
-    diagnostics::AppLog(QStringLiteral("[target] selected: %1 (kind_changed=%2)")
-                            .arg(normalizedTargetLabel(target))
-                            .arg(kind_changed ? QStringLiteral("yes") : QStringLiteral("no")));
+    diagnostics::AppLog::info(QStringLiteral("target"),
+                              QStringLiteral("selected: %1 (kind_changed=%2)")
+                                  .arg(normalizedTargetLabel(target))
+                                  .arg(kind_changed ? QStringLiteral("yes") : QStringLiteral("no")));
 
     updateTargetCards();
     rebuildTargetPicker();
@@ -2423,7 +2430,7 @@ void RecordPage::startCountdown(int seconds, std::optional<recorder_core::Captur
     countdown_remaining_seconds_ = seconds;
     pending_countdown_region_ = crop_region;
     view_model_.SetState(UiRecordingState::Countdown);
-    diagnostics::AppLog(QStringLiteral("[record] countdown started: %1s").arg(seconds));
+    diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("countdown started: %1s").arg(seconds));
     if (countdown_timer_ && !countdown_timer_->isActive()) {
         countdown_timer_->start();
     }
@@ -2444,7 +2451,7 @@ void RecordPage::cancelCountdown() {
     pending_countdown_region_.reset();
     setInteractionMode(InteractionMode::None);
     view_model_.SetState(UiRecordingState::Ready);
-    diagnostics::AppLog(QStringLiteral("[record] countdown cancelled"));
+    diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("countdown cancelled"));
     refresh();
 }
 
@@ -2463,7 +2470,7 @@ void RecordPage::finishCountdown() {
     pending_countdown_region_.reset();
     setInteractionMode(InteractionMode::None);
     view_model_.SetState(UiRecordingState::Ready);
-    diagnostics::AppLog(QStringLiteral("[record] countdown completed"));
+    diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("countdown completed"));
     refresh();
     if (crop_region.has_value()) {
         doStartRecording(crop_region);
@@ -2531,7 +2538,7 @@ void RecordPage::startRecordingFlow() {
 
     // Region mode with select-on-record: show overlay before starting.
     if (view_model_.capture_mode == CaptureMode::Region && view_model_.select_on_record) {
-        diagnostics::AppLog(QStringLiteral("[record] region select-on-record: opening overlay"));
+        diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("region select-on-record: opening overlay"));
         view_model_.SetState(UiRecordingState::RegionSelecting);
         setInteractionMode(InteractionMode::RegionSelecting);
         refresh();
@@ -2544,7 +2551,8 @@ void RecordPage::startRecordingFlow() {
     if (view_model_.capture_mode == CaptureMode::Region) {
         if (!view_model_.has_region || !view_model_.region.IsValid()) {
             // No valid region yet — fall back to overlay selection.
-            diagnostics::AppLog(QStringLiteral("[record] region mode: no pre-defined region, opening overlay"));
+            diagnostics::AppLog::info(QStringLiteral("record"),
+                                      QStringLiteral("region mode: no pre-defined region, opening overlay"));
             view_model_.SetState(UiRecordingState::RegionSelecting);
             setInteractionMode(InteractionMode::RegionSelecting);
             refresh();
@@ -2555,8 +2563,9 @@ void RecordPage::startRecordingFlow() {
         const int idx = view_model_.selected_target_index;
         if (idx < 0 || idx >= static_cast<int>(view_model_.targets.size()))
             return;
-        diagnostics::AppLog(QStringLiteral("[record] start requested (region crop)  target=%1")
-                                .arg(normalizedTargetLabel(view_model_.targets[static_cast<std::size_t>(idx)])));
+        diagnostics::AppLog::info(QStringLiteral("record"),
+                                  QStringLiteral("start requested (region crop) target=%1")
+                                      .arg(normalizedTargetLabel(view_model_.targets[static_cast<std::size_t>(idx)])));
         doStartRecording(view_model_.region);
         return;
     }
@@ -2567,13 +2576,13 @@ void RecordPage::startRecordingFlow() {
         return;
 
     const QString target_label = normalizedTargetLabel(view_model_.targets[static_cast<std::size_t>(idx)]);
-    diagnostics::AppLog(QStringLiteral("[record] start requested  target=%1").arg(target_label));
+    diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("start requested target=%1").arg(target_label));
 
     doStartRecording();
 }
 
 void RecordPage::onStop() {
-    diagnostics::AppLog(QStringLiteral("[record] stop requested"));
+    diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("stop requested"));
     coordinator_->StopRecording();
 }
 
@@ -2589,12 +2598,12 @@ void RecordPage::onHotkeyToggle() {
 }
 
 void RecordPage::onPause() {
-    diagnostics::AppLog(QStringLiteral("[record] pause requested"));
+    diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("pause requested"));
     coordinator_->PauseRecording();
 }
 
 void RecordPage::onResume() {
-    diagnostics::AppLog(QStringLiteral("[record] resume requested"));
+    diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("resume requested"));
     coordinator_->ResumeRecording();
 }
 
@@ -2616,7 +2625,8 @@ void RecordPage::onSelectMonitorTarget() {
         view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
         view_model_.selected_target_index = -1;
         target_combo_->setCurrentIndex(-1);
-        diagnostics::AppLog(QStringLiteral("[target] monitor mode selected with no display targets"));
+        diagnostics::AppLog::warning(QStringLiteral("target"),
+                                     QStringLiteral("monitor mode selected with no display targets"));
         if (kind_changed)
             emitAudioSettingsChanged();
         updateTargetCards();
@@ -2642,7 +2652,8 @@ void RecordPage::onSelectWindowTarget() {
         view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
         view_model_.selected_target_index = -1;
         target_combo_->setCurrentIndex(-1);
-        diagnostics::AppLog(QStringLiteral("[target] window mode selected with no window targets"));
+        diagnostics::AppLog::warning(QStringLiteral("target"),
+                                     QStringLiteral("window mode selected with no window targets"));
         if (kind_changed)
             emitAudioSettingsChanged();
         updateTargetCards();
@@ -2674,7 +2685,7 @@ void RecordPage::onSelectRegionTarget() {
         const bool kind_changed = (view_model_.audio_ui_state.target_kind != capability::CaptureTargetKind::Display);
         view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
         view_model_.select_on_record = select_on_record_check_ ? select_on_record_check_->isChecked() : true;
-        diagnostics::AppLog(QStringLiteral("[target] region mode selected"));
+        diagnostics::AppLog::info(QStringLiteral("target"), QStringLiteral("region mode selected"));
         if (kind_changed)
             emitAudioSettingsChanged();
     }
@@ -3000,11 +3011,12 @@ void RecordPage::onSourcePickerAccepted(ui::dialogs::SourcePickerDialog::Selecti
                 region_summary_label_->setText(
                     QString("%1, %2  —  %3 × %4").arg(region.x).arg(region.y).arg(region.width).arg(region.height));
             }
-            diagnostics::AppLog(QStringLiteral("[target] region preset applied: %1 x %2 at %3,%4")
-                                    .arg(region.width)
-                                    .arg(region.height)
-                                    .arg(region.x)
-                                    .arg(region.y));
+            diagnostics::AppLog::info(QStringLiteral("target"),
+                                      QStringLiteral("region preset applied: %1 x %2 at %3,%4")
+                                          .arg(region.width)
+                                          .arg(region.height)
+                                          .arg(region.x)
+                                          .arg(region.y));
             updateTargetCards();
             rebuildTargetPicker();
             // Restart the preview now that capture_mode and region are both set —
@@ -3116,9 +3128,10 @@ void RecordPage::onRegionSelected(QRect region_virtual_screen) {
         if (region.x >= meta.origin_x && region.x < meta.origin_x + meta.width && region.y >= meta.origin_y &&
             region.y < meta.origin_y + meta.height) {
             if (target_idx != view_model_.selected_target_index) {
-                diagnostics::AppLog(QStringLiteral("[record] region: source monitor updated to index %1 (was %2)")
-                                        .arg(target_idx)
-                                        .arg(view_model_.selected_target_index));
+                diagnostics::AppLog::info(QStringLiteral("record"),
+                                          QStringLiteral("region source monitor updated to index %1 (was %2)")
+                                              .arg(target_idx)
+                                              .arg(view_model_.selected_target_index));
                 view_model_.selected_target_index = target_idx;
                 monitor_target_index_ = target_idx;
                 if (target_combo_) {
@@ -3188,7 +3201,7 @@ void RecordPage::onTargetPickerChanged(int index) {
 }
 
 void RecordPage::onRefreshTargets() {
-    diagnostics::AppLog(QStringLiteral("[target] refresh requested"));
+    diagnostics::AppLog::info(QStringLiteral("target"), QStringLiteral("refresh requested"));
     enumerateTargets(true);
     refresh();
 }
@@ -3427,12 +3440,13 @@ void RecordPage::onMicGainChanged(int db_value) {
 }
 
 void RecordPage::emitAudioSettingsChanged() {
-    diagnostics::AppLog(QStringLiteral("[audio] settings changed: app=%1 sys=%2 mic=%3 rows=%4 mic_gain=%5")
-                            .arg(view_model_.audio_ui_state.IsAppEnabled() ? 1 : 0)
-                            .arg(view_model_.audio_ui_state.IsSysEnabled() ? 1 : 0)
-                            .arg(view_model_.audio_ui_state.IsMicEnabled() ? 1 : 0)
-                            .arg(static_cast<int>(view_model_.audio_ui_state.source_rows.size()))
-                            .arg(view_model_.audio_ui_state.mic_gain_linear, 0, 'f', 2));
+    diagnostics::AppLog::debug(QStringLiteral("audio"),
+                               QStringLiteral("settings changed: app=%1 sys=%2 mic=%3 rows=%4 mic_gain=%5")
+                                   .arg(view_model_.audio_ui_state.IsAppEnabled() ? 1 : 0)
+                                   .arg(view_model_.audio_ui_state.IsSysEnabled() ? 1 : 0)
+                                   .arg(view_model_.audio_ui_state.IsMicEnabled() ? 1 : 0)
+                                   .arg(static_cast<int>(view_model_.audio_ui_state.source_rows.size()))
+                                   .arg(view_model_.audio_ui_state.mic_gain_linear, 0, 'f', 2));
     updateRailSourceStatusChips();
     emit audioSettingsChanged(view_model_.audio_ui_state);
     PersistMicGainForMvp(view_model_.audio_ui_state.mic_gain_linear);
