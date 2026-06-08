@@ -356,6 +356,8 @@ void WebcamPage::applySettings(const WebcamSettings& settings) {
     current_settings_ = sanitized_settings;
 
     enable_toggle_->setChecked(sanitized_settings.enabled);
+    if (camera_preview_)
+        camera_preview_->setMirror(sanitized_settings.mirror);
 
     // Find matching device.
     for (int i = 0; i < device_combo_->count(); ++i) {

@@ -28,6 +28,13 @@ class CameraPreview : public QWidget {
     // Set the message shown when no frame is present (supports '\n').
     void setPlaceholderText(const QString& text);
 
+    // Mirror the preview horizontally (no vertical flip) so the Settings preview
+    // reflects the same mirror state as the Record PiP and the recorded output.
+    void setMirror(bool mirror);
+    [[nodiscard]] bool mirror() const noexcept {
+        return mirror_;
+    }
+
     [[nodiscard]] bool hasFrame() const noexcept {
         return !frame_.isNull();
     }
@@ -38,6 +45,7 @@ class CameraPreview : public QWidget {
   private:
     QImage frame_;
     QString placeholder_ = QStringLiteral("Camera preview");
+    bool mirror_ = false;
 };
 
 } // namespace exosnap::ui::widgets

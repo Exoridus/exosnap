@@ -59,6 +59,11 @@ class ConfigPage : public QWidget {
     void setActiveProfileName(const QString& profile_name);
     void setRecordingControlsLocked(bool locked);
 
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    // Drive the embedded Webcam card deterministically for visual-test scenarios.
+    void applyVisualWebcamState(bool available, bool mirror);
+#endif
+
     // Live audio meter update forwarded from RecordPage via MainWindow.
     // sys01/app01/mic01: pre-computed 0..1 dock-level values (0 = inactive or silence).
     // sys/app/mic_active: true when the meter service is running for that source.

@@ -643,6 +643,16 @@ void RecordPage::showEvent(QShowEvent* event) {
     QTimer::singleShot(0, this, [this]() { ensureCoordinatorInit(); });
 }
 
+void RecordPage::hideEvent(QHideEvent* event) {
+    // Leaving the Record page must not leave a transient drag/pointer capture or a
+    // dangling selection behind.
+    if (preview_surface_) {
+        preview_surface_->cancelWebcamInteraction();
+        preview_surface_->setWebcamSelected(false);
+    }
+    QWidget::hideEvent(event);
+}
+
 void RecordPage::updatePreviewHeightClamp() {
     if (!preview_surface_ || !preview_surface_host_) {
         return;
@@ -781,6 +791,8 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     preview_surface_host_layout->setSpacing(0);
     preview_surface_host_layout->addStretch(1);
     preview_surface_ = new ui::widgets::PreviewSurface(preview_surface_host_);
+    connect(preview_surface_, &ui::widgets::PreviewSurface::webcamOverlayMoved, this,
+            &RecordPage::onWebcamOverlayMoved);
     preview_surface_host_layout->addWidget(preview_surface_, 0, Qt::AlignHCenter | Qt::AlignVCenter);
     preview_surface_host_layout->addStretch(1);
     preview_column_layout->addWidget(preview_surface_host_, 1);
@@ -1537,11 +1549,73 @@ void RecordPage::setVideoSettings(const VideoSettingsModel& settings) {
 }
 
 void RecordPage::setWebcamSettings(const WebcamSettings& settings) {
-    current_webcam_settings_ = settings;
-    if (coordinator_) {
-        coordinator_->SetWebcamSettings(settings);
+    WebcamSettings s = SanitizeWebcamSettings(settings);
+
+    // First-time default placement: bottom-right, camera-aspect, moderate size.
+    // Only applied until the user explicitly places the PiP (overlay_user_placed).
+    if (s.enabled && !s.overlay_user_placed && preview_surface_) {
+        const double cam_ar = s.height > 0 ? static_cast<double>(s.width) / static_cast<double>(s.height) : 0.0;
+        const QRectF def = preview_surface_->defaultWebcamOverlayRect(cam_ar);
+        s.overlay.x_norm = static_cast<float>(def.x());
+        s.overlay.y_norm = static_cast<float>(def.y());
+        s.overlay.w_norm = static_cast<float>(def.width());
+        s.overlay.h_norm = static_cast<float>(def.height());
+        s = SanitizeWebcamSettings(s);
     }
+
+    current_webcam_settings_ = s;
+
+    if (preview_surface_) {
+        preview_surface_->setAspectRatioLocked(s.aspect_ratio_locked);
+        preview_surface_->setWebcamMirror(s.mirror);
+        preview_surface_->setWebcamOverlayRect(
+            QRectF(s.overlay.x_norm, s.overlay.y_norm, s.overlay.w_norm, s.overlay.h_norm));
+        preview_surface_->setWebcamOverlayEnabled(s.enabled);
+    }
+
+    if (coordinator_) {
+        coordinator_->SetWebcamSettings(s);
+    }
+    updateWebcamOverlay();
+    syncWebcamPreviewCapture();
     updateRailSourceStatusChips();
+}
+
+void RecordPage::updateWebcamOverlay() {
+    if (!preview_surface_)
+        return;
+    preview_surface_->setWebcamOverlayEnabled(current_webcam_settings_.enabled);
+    preview_surface_->setWebcamMirror(current_webcam_settings_.mirror);
+    preview_surface_->setAspectRatioLocked(current_webcam_settings_.aspect_ratio_locked);
+    // Placement editing is permitted only in the Ready state. The recording
+    // compositor runs from a config snapshot, so live edits during Countdown/
+    // Recording/Paused/Stopping would diverge from the output — lock them.
+    const bool editable = (view_model_.state == UiRecordingState::Ready);
+    preview_surface_->setWebcamEditLocked(!editable);
+}
+
+void RecordPage::syncWebcamPreviewCapture() {
+    if (!coordinator_)
+        return;
+    const bool idle =
+        (view_model_.state == UiRecordingState::Ready || view_model_.state == UiRecordingState::Completed);
+    coordinator_->SetWebcamPreviewActive(current_webcam_settings_.enabled && idle);
+}
+
+void RecordPage::onWebcamOverlayMoved(QRectF rect_norm) {
+    const QRectF r = rect_norm;
+    current_webcam_settings_.overlay.x_norm = static_cast<float>(r.x());
+    current_webcam_settings_.overlay.y_norm = static_cast<float>(r.y());
+    current_webcam_settings_.overlay.w_norm = static_cast<float>(r.width());
+    current_webcam_settings_.overlay.h_norm = static_cast<float>(r.height());
+    current_webcam_settings_.overlay_user_placed = true;
+    current_webcam_settings_ = SanitizeWebcamSettings(current_webcam_settings_);
+
+    if (coordinator_)
+        coordinator_->SetWebcamSettings(current_webcam_settings_);
+    updateRailSourceStatusChips();
+    // Persist + propagate (MainWindow saves and updates the Settings/Webcam pages).
+    emit webcamSettingsChanged(current_webcam_settings_);
 }
 
 void RecordPage::rebroadcastChromeState() {
@@ -1550,6 +1624,29 @@ void RecordPage::rebroadcastChromeState() {
 }
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+namespace {
+// Deterministic synthetic webcam frame for PiP scenarios. The left and right halves
+// use distinct colours so the mirror flip is visibly verifiable; a small marker pins
+// the original left edge. Never produced in Release (whole file region is guarded).
+QImage MakeVisualTestWebcamFrame() {
+    QImage frame(320, 180, QImage::Format_ARGB32);
+    for (int y = 0; y < frame.height(); ++y) {
+        auto* row = reinterpret_cast<QRgb*>(frame.scanLine(y));
+        for (int x = 0; x < frame.width(); ++x) {
+            const bool left = x < frame.width() / 2;
+            row[x] = left ? qRgb(220, 90, 80) : qRgb(80, 140, 220);
+        }
+    }
+    // Marker square in the original top-left corner (moves to the right when mirrored).
+    for (int y = 8; y < 32; ++y) {
+        auto* row = reinterpret_cast<QRgb*>(frame.scanLine(y));
+        for (int x = 8; x < 32; ++x)
+            row[x] = qRgb(245, 245, 245);
+    }
+    return frame;
+}
+} // namespace
+
 void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
     visual_test_mode_ = true;
     if (ui_clock_timer_)
@@ -1718,7 +1815,41 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
         break;
     }
 
+    // Deterministic webcam PiP fixture: configure placement/mirror and inject a
+    // synthetic camera frame (no real capture). refresh() applies the state-driven
+    // edit lock; selection is set afterwards so the lock policy is respected.
+    {
+        WebcamSettings wc;
+        wc.enabled = scenario.webcam_pip_enabled;
+        wc.mirror = scenario.webcam_mirror;
+        wc.device_id = scenario.webcam_pip_enabled ? std::string("visual-test-camera") : std::string();
+        wc.width = 1280;
+        wc.height = 720;
+        wc.fps = 30;
+        wc.overlay_user_placed = true; // use the scenario's exact placement verbatim
+        wc.overlay.x_norm = scenario.webcam_x;
+        wc.overlay.y_norm = scenario.webcam_y;
+        wc.overlay.w_norm = scenario.webcam_w;
+        wc.overlay.h_norm = scenario.webcam_h;
+        current_webcam_settings_ = SanitizeWebcamSettings(wc);
+
+        if (preview_surface_) {
+            preview_surface_->setAspectRatioLocked(current_webcam_settings_.aspect_ratio_locked);
+            preview_surface_->setWebcamMirror(current_webcam_settings_.mirror);
+            preview_surface_->setWebcamOverlayRect(
+                QRectF(current_webcam_settings_.overlay.x_norm, current_webcam_settings_.overlay.y_norm,
+                       current_webcam_settings_.overlay.w_norm, current_webcam_settings_.overlay.h_norm));
+            preview_surface_->setWebcamOverlayEnabled(current_webcam_settings_.enabled);
+            if (current_webcam_settings_.enabled)
+                preview_surface_->setWebcamFrame(MakeVisualTestWebcamFrame());
+        }
+    }
+
     refresh();
+
+    // Selection only takes effect when editing is allowed (Ready, unlocked).
+    if (preview_surface_)
+        preview_surface_->setWebcamSelected(scenario.webcam_pip_selected);
     updateAudioMeterLevels();
 
     auto markMeter = [](QLabel* label, const QString& text) {
@@ -1861,8 +1992,13 @@ void RecordPage::startPreviewIfIdle() {
     }
 
     // --- Stop current preview and clear tracked config ---
-    if (preview_surface_)
+    // A preview (re)start means the target/region/crop changed: drop any transient
+    // PiP interaction and selection so no stale pointer capture or handles survive.
+    if (preview_surface_) {
+        preview_surface_->cancelWebcamInteraction();
+        preview_surface_->setWebcamSelected(false);
         preview_surface_->stopDxgiPreview();
+    }
     preview_service_->Stop();
     if (preview_surface_)
         preview_surface_->setLiveFrame(QImage{});
@@ -1961,6 +2097,14 @@ void RecordPage::initCoordinator() {
         if (safeSurface && !safeSurface->isDxgiPreviewActive())
             safeSurface->setLiveFrame(std::move(frame));
     });
+
+    // Live webcam frames feed the preview PiP (Qt paint or DXGI overlay). The
+    // coordinator marshals these onto the main thread.
+    coordinator_->SetWebcamFrameCallback([safeSurface](QImage frame) {
+        if (safeSurface)
+            safeSurface->setWebcamFrame(std::move(frame));
+    });
+    coordinator_->SetWebcamSettings(current_webcam_settings_);
 
     try {
         if (shared_runtime_caps_received_) {
@@ -3807,6 +3951,11 @@ void RecordPage::refresh() {
     updateOpenFolderButtonState();
     updateHeroButton();
     updateTransportDock();
+
+    // Webcam PiP enable/mirror/aspect + state-driven edit lock, and the idle
+    // capture that feeds the live Ready preview.
+    updateWebcamOverlay();
+    syncWebcamPreviewCapture();
 
     emitChromeState();
 }

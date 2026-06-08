@@ -475,6 +475,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     stack_->addWidget(webcam_page_);
     record_page_->setOutputSettings(output_settings_);
     record_page_->setVideoSettings(video_settings_);
+    record_page_->setWebcamSettings(persisted_settings_.webcam);
     record_page_->applyPersistedAudioSettings(persisted_settings_.audio_ui_state);
     config_page_->setAudioUiState(persisted_settings_.audio_ui_state);
     config_page_->setWebcamSettings(persisted_settings_.webcam);
@@ -709,6 +710,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         persisted_settings_.webcam = settings;
         settings_store_.Save(persisted_settings_);
         record_page_->setWebcamSettings(settings);
+        if (webcam_page_)
+            webcam_page_->applySettings(settings);
+    });
+    // PiP placement confirmed in the Record preview → persist + propagate to the
+    // Settings/Webcam surfaces (mirror, device, etc. stay in sync).
+    connect(record_page_, &RecordPage::webcamSettingsChanged, this, [this](const WebcamSettings& settings) {
+        persisted_settings_.webcam = settings;
+        settings_store_.Save(persisted_settings_);
+        if (config_page_)
+            config_page_->setWebcamSettings(settings);
         if (webcam_page_)
             webcam_page_->applySettings(settings);
     });
@@ -1611,6 +1622,13 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
     config_page_->setReadinessStatus(QStringLiteral("READY"));
     config_page_->setRecordingControlsLocked(false);
     config_page_->setAudioMeterLevels(0.37f, 0.56f, 0.42f, true, true, true);
+
+    // Webcam-card scenarios (mirror off/on, unavailable) drive the embedded panel
+    // deterministically without opening a real camera.
+    if (scenario.webcam_state != visual::VisualWebcamState::None) {
+        config_page_->applyVisualWebcamState(scenario.webcam_state == visual::VisualWebcamState::Active,
+                                             scenario.webcam_mirror);
+    }
 }
 
 void MainWindow::applyVisualSourcePickerScenario(const visual::VisualScenario& scenario) {

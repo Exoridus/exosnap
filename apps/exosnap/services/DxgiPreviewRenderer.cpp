@@ -2,6 +2,10 @@
 
 #include "../diagnostics/AppLog.h"
 
+#include <recorder_core/webcam_placement.h>
+
+#include <cstring>
+
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
 
@@ -155,6 +159,43 @@ void DxgiPreviewRenderer::GetSourceSize(uint32_t& outWidth, uint32_t& outHeight)
     std::lock_guard lock(frameMutex_);
     outWidth = srcWidth_;
     outHeight = srcHeight_;
+}
+
+void DxgiPreviewRenderer::SetWebcamOverlayState(bool enabled, bool selected, float nx, float ny, float nw, float nh,
+                                                bool mirror) {
+    std::lock_guard lock(overlayMutex_);
+    overlayEnabled_ = enabled;
+    overlaySelected_ = selected;
+    overlayNx_ = nx;
+    overlayNy_ = ny;
+    overlayNw_ = nw;
+    overlayNh_ = nh;
+    if (overlayMirror_ != mirror) {
+        overlayMirror_ = mirror;
+        overlayDirty_ = true; // re-upload with the new flip
+    }
+}
+
+void DxgiPreviewRenderer::SetWebcamOverlayFrame(const uint8_t* bgra, int width, int height, int stride) {
+    std::lock_guard lock(overlayMutex_);
+    if (bgra == nullptr || width <= 0 || height <= 0) {
+        overlayBgra_.clear();
+        overlayW_ = 0;
+        overlayH_ = 0;
+        overlayDirty_ = true;
+        return;
+    }
+    if (stride <= 0)
+        stride = width * 4;
+    const int rowBytes = width * 4;
+    overlayBgra_.resize(static_cast<size_t>(rowBytes) * static_cast<size_t>(height));
+    for (int y = 0; y < height; ++y) {
+        std::memcpy(overlayBgra_.data() + static_cast<size_t>(y) * rowBytes,
+                    bgra + static_cast<size_t>(y) * static_cast<size_t>(stride), static_cast<size_t>(rowBytes));
+    }
+    overlayW_ = width;
+    overlayH_ = height;
+    overlayDirty_ = true;
 }
 
 void DxgiPreviewRenderer::Shutdown() {
@@ -356,6 +397,16 @@ void DxgiPreviewRenderer::CleanupCapture() {
     vertexShader_.Reset();
     pixelShader_.Reset();
     samplerState_.Reset();
+    {
+        std::lock_guard lock(overlayMutex_);
+        overlayTex_.Reset();
+        overlaySRV_.Reset();
+        overlayTexW_ = 0;
+        overlayTexH_ = 0;
+        overlayDirty_ = true; // force re-upload if a new capture starts
+        chromeTex_.Reset();
+        chromeSRV_.Reset();
+    }
     d3dContext_.Reset();
     d3dDevice_.Reset();
     latestFrame_.Reset();
@@ -464,6 +515,161 @@ void DxgiPreviewRenderer::ResizeSwapChainInternal(uint32_t width, uint32_t heigh
     swapHeight_ = height;
 }
 
+void DxgiPreviewRenderer::EnsureChromeTexture() {
+    if (chromeSRV_)
+        return;
+    // 1x1 amber (BGRA) used as a solid fill for the PiP edit border + handles.
+    const uint8_t amber[4] = {0x44, 0xa7, 0xd7, 0xff}; // B,G,R,A == #d7a744
+    D3D11_TEXTURE2D_DESC d{};
+    d.Width = 1;
+    d.Height = 1;
+    d.MipLevels = 1;
+    d.ArraySize = 1;
+    d.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    d.SampleDesc.Count = 1;
+    d.Usage = D3D11_USAGE_IMMUTABLE;
+    d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA init{};
+    init.pSysMem = amber;
+    init.SysMemPitch = 4;
+    if (FAILED(d3dDevice_->CreateTexture2D(&d, &init, chromeTex_.GetAddressOf())))
+        return;
+    D3D11_SHADER_RESOURCE_VIEW_DESC s{};
+    s.Format = d.Format;
+    s.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    s.Texture2D.MipLevels = 1;
+    if (FAILED(d3dDevice_->CreateShaderResourceView(chromeTex_.Get(), &s, chromeSRV_.GetAddressOf())))
+        chromeTex_.Reset();
+}
+
+void DxgiPreviewRenderer::UploadOverlayTexture() {
+    // Caller holds overlayMutex_.
+    if (overlayBgra_.empty() || overlayW_ <= 0 || overlayH_ <= 0) {
+        overlaySRV_.Reset();
+        overlayTex_.Reset();
+        overlayTexW_ = 0;
+        overlayTexH_ = 0;
+        return;
+    }
+    if (!overlayTex_ || overlayTexW_ != overlayW_ || overlayTexH_ != overlayH_) {
+        overlayTex_.Reset();
+        overlaySRV_.Reset();
+        D3D11_TEXTURE2D_DESC d{};
+        d.Width = static_cast<UINT>(overlayW_);
+        d.Height = static_cast<UINT>(overlayH_);
+        d.MipLevels = 1;
+        d.ArraySize = 1;
+        d.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        d.SampleDesc.Count = 1;
+        d.Usage = D3D11_USAGE_DEFAULT;
+        d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(d3dDevice_->CreateTexture2D(&d, nullptr, overlayTex_.GetAddressOf())))
+            return;
+        D3D11_SHADER_RESOURCE_VIEW_DESC s{};
+        s.Format = d.Format;
+        s.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        s.Texture2D.MipLevels = 1;
+        if (FAILED(d3dDevice_->CreateShaderResourceView(overlayTex_.Get(), &s, overlaySRV_.GetAddressOf()))) {
+            overlayTex_.Reset();
+            return;
+        }
+        overlayTexW_ = overlayW_;
+        overlayTexH_ = overlayH_;
+    }
+
+    const int rowBytes = overlayW_ * 4;
+    if (overlayMirror_) {
+        // Real horizontal flip (no vertical flip) — matches the recording compositor.
+        overlayScratch_.resize(static_cast<size_t>(rowBytes) * static_cast<size_t>(overlayH_));
+        for (int y = 0; y < overlayH_; ++y) {
+            const uint8_t* src = overlayBgra_.data() + static_cast<size_t>(y) * rowBytes;
+            uint8_t* dst = overlayScratch_.data() + static_cast<size_t>(y) * rowBytes;
+            for (int x = 0; x < overlayW_; ++x) {
+                const uint8_t* sp = src + static_cast<size_t>(overlayW_ - 1 - x) * 4;
+                uint8_t* dp = dst + static_cast<size_t>(x) * 4;
+                dp[0] = sp[0];
+                dp[1] = sp[1];
+                dp[2] = sp[2];
+                dp[3] = sp[3];
+            }
+        }
+        d3dContext_->UpdateSubresource(overlayTex_.Get(), 0, nullptr, overlayScratch_.data(),
+                                       static_cast<UINT>(rowBytes), 0);
+    } else {
+        d3dContext_->UpdateSubresource(overlayTex_.Get(), 0, nullptr, overlayBgra_.data(), static_cast<UINT>(rowBytes),
+                                       0);
+    }
+}
+
+void DxgiPreviewRenderer::RenderWebcamOverlay(int contentX, int contentY, int contentW, int contentH) {
+    if (contentW <= 0 || contentH <= 0)
+        return;
+
+    std::lock_guard lock(overlayMutex_);
+    if (!overlayEnabled_)
+        return;
+    if (overlayDirty_) {
+        UploadOverlayTexture();
+        overlayDirty_ = false;
+    }
+    if (!overlaySRV_ || overlayW_ <= 0 || overlayH_ <= 0)
+        return;
+
+    // Map the normalized placement onto the content rect via the shared helper —
+    // the exact same math the recording compositor uses on the encode frame.
+    recorder_core::WebcamPlacement placement;
+    placement.x = overlayNx_;
+    placement.y = overlayNy_;
+    placement.w = overlayNw_;
+    placement.h = overlayNh_;
+    placement.mirror = overlayMirror_; // mirror already baked into the texture
+    const recorder_core::WebcamPixelRect r =
+        recorder_core::MapWebcamPlacementToContent(placement, contentX, contentY, contentW, contentH);
+    if (!r.IsValid())
+        return;
+
+    d3dContext_->VSSetShader(vertexShader_.Get(), nullptr, 0);
+    d3dContext_->PSSetShader(pixelShader_.Get(), nullptr, 0);
+    d3dContext_->PSSetSamplers(0, 1, samplerState_.GetAddressOf());
+    d3dContext_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    auto drawQuad = [&](ID3D11ShaderResourceView* srv, int x, int y, int w, int h) {
+        if (w <= 0 || h <= 0)
+            return;
+        D3D11_VIEWPORT vp{};
+        vp.TopLeftX = static_cast<float>(x);
+        vp.TopLeftY = static_cast<float>(y);
+        vp.Width = static_cast<float>(w);
+        vp.Height = static_cast<float>(h);
+        vp.MinDepth = 0.0f;
+        vp.MaxDepth = 1.0f;
+        d3dContext_->RSSetViewports(1, &vp);
+        d3dContext_->PSSetShaderResources(0, 1, &srv);
+        d3dContext_->Draw(3, 0);
+    };
+
+    // PiP video (stretched to the rect — same as the recording compositor).
+    drawQuad(overlaySRV_.Get(), r.x, r.y, r.w, r.h);
+
+    // Edit chrome (border + corner handles) only while selected.
+    if (overlaySelected_) {
+        EnsureChromeTexture();
+        if (chromeSRV_) {
+            ID3D11ShaderResourceView* c = chromeSRV_.Get();
+            constexpr int t = 2;  // border thickness
+            constexpr int hs = 8; // handle size
+            drawQuad(c, r.x, r.y, r.w, t);
+            drawQuad(c, r.x, r.y + r.h - t, r.w, t);
+            drawQuad(c, r.x, r.y, t, r.h);
+            drawQuad(c, r.x + r.w - t, r.y, t, r.h);
+            drawQuad(c, r.x - hs / 2, r.y - hs / 2, hs, hs);
+            drawQuad(c, r.x + r.w - hs / 2, r.y - hs / 2, hs, hs);
+            drawQuad(c, r.x - hs / 2, r.y + r.h - hs / 2, hs, hs);
+            drawQuad(c, r.x + r.w - hs / 2, r.y + r.h - hs / 2, hs, hs);
+        }
+    }
+}
+
 void DxgiPreviewRenderer::RenderFrame() {
     if (!swapChain_ || !d3dContext_)
         return;
@@ -485,6 +691,10 @@ void DxgiPreviewRenderer::RenderFrame() {
     D3D11_TEXTURE2D_DESC bbDesc{};
     backBuffer->GetDesc(&bbDesc);
 
+    // Content rectangle of the main frame inside the backbuffer (contain-fit). The
+    // PiP overlay is placed relative to this so it never lands in letterbox margins.
+    LONG contentX = 0, contentY = 0, contentW = 0, contentH = 0;
+
     {
         std::lock_guard lock(frameMutex_);
         if (latestFrame_ && srcWidth_ > 0 && srcHeight_ > 0) {
@@ -493,6 +703,11 @@ void DxgiPreviewRenderer::RenderFrame() {
                                   static_cast<LONG>(srcWidth_), static_cast<LONG>(srcHeight_), dx, dy, dw, dh);
 
             if (dw > 0 && dh > 0) {
+                contentX = dx;
+                contentY = dy;
+                contentW = dw;
+                contentH = dh;
+
                 D3D11_VIEWPORT vp{};
                 vp.TopLeftX = static_cast<float>(dx);
                 vp.TopLeftY = static_cast<float>(dy);
@@ -512,6 +727,10 @@ void DxgiPreviewRenderer::RenderFrame() {
             }
         }
     }
+
+    // Composite the webcam PiP (+ chrome) over the main frame's content rect.
+    RenderWebcamOverlay(static_cast<int>(contentX), static_cast<int>(contentY), static_cast<int>(contentW),
+                        static_cast<int>(contentH));
 
     swapChain_->Present(1, 0);
 }

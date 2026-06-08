@@ -38,6 +38,14 @@ void CameraPreview::setPlaceholderText(const QString& text) {
         update();
 }
 
+void CameraPreview::setMirror(bool mirror) {
+    if (mirror_ == mirror)
+        return;
+    mirror_ = mirror;
+    if (!frame_.isNull())
+        update();
+}
+
 void CameraPreview::paintEvent(QPaintEvent* /*event*/) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
@@ -64,8 +72,15 @@ void CameraPreview::paintEvent(QPaintEvent* /*event*/) {
         const int dh = static_cast<int>(frame_.height() * s);
         const int dx = (width() - dw) / 2;
         const int dy = (height() - dh) / 2;
+        const QRect draw_rect(dx, dy, dw, dh);
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        painter.drawImage(QRect(dx, dy, dw, dh), frame_);
+        // Real horizontal mirror about the draw rect's vertical centre (no vertical flip).
+        if (mirror_) {
+            painter.translate(draw_rect.center());
+            painter.scale(-1.0, 1.0);
+            painter.translate(-draw_rect.center());
+        }
+        painter.drawImage(draw_rect, frame_);
         painter.restore();
         return;
     }

@@ -86,6 +86,10 @@ class RecordPage : public QWidget {
     void navigateToOutputPage();
     void navigateToDiagnosticsPage();
     void audioSettingsChanged(const capability::AudioUiState& state);
+    // Emitted when the webcam PiP placement is confirmed in the Record preview
+    // (drag/resize release). Carries the full settings so MainWindow can persist
+    // and propagate to the Settings/Webcam surfaces.
+    void webcamSettingsChanged(const WebcamSettings& settings);
     // Emitted at ~30 Hz during recording (via recording-meter callback) and at ~preflight cadence
     // during Ready/Idle (via individual source meter callbacks). All three sources are included in
     // every emission so the Settings Audio card can update all rows atomically.
@@ -141,6 +145,7 @@ class RecordPage : public QWidget {
     bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
     void ensureCoordinatorInit();
     void initCoordinator();
     void refresh();
@@ -184,6 +189,13 @@ class RecordPage : public QWidget {
     void emitChromeState();
     void syncCoordinatorTargetContext();
     void startPreviewIfIdle();
+    // Push webcam enable/mirror/aspect/placement and the state-driven edit lock to
+    // the preview surface. Editing is permitted only in the Ready state.
+    void updateWebcamOverlay();
+    // Start/stop the shared idle webcam capture so the Ready preview shows a live PiP.
+    void syncWebcamPreviewCapture();
+    // Persist a confirmed PiP placement change from the preview (marks user-placed).
+    void onWebcamOverlayMoved(QRectF rect_norm);
     void updatePreviewHeightClamp();
     QString buildChromeStatusLabel() const;
     QString buildPreviewBottomLeftText(bool recording) const;
