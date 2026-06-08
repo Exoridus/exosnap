@@ -40,6 +40,7 @@ SourcePickerOverlay::SourcePickerOverlay(QWidget* parent) : QWidget(parent) {
 
     connect(panel_, &SourcePickerPanel::accepted, this, &SourcePickerOverlay::onPanelAccepted);
     connect(panel_, &SourcePickerPanel::rejected, this, &SourcePickerOverlay::closeOverlay);
+    connect(panel_, &SourcePickerPanel::sourceDataRequested, this, &SourcePickerOverlay::sourceDataRequested);
 
     if (parent != nullptr)
         parent->installEventFilter(this);

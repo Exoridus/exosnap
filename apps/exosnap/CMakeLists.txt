@@ -416,6 +416,24 @@ target_compile_definitions(source_picker_overlay_tests PRIVATE NOMINMAX)
 set_target_properties(source_picker_overlay_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
+    NAME source_picker_refresh_tests
+    TEST_PREFIX source.
+    SOURCES
+        tests/test_source_picker_refresh.cpp
+        ui/dialogs/SourcePickerPanel.cpp
+        ui/dialogs/SourcePickerDialog.cpp
+        ui/dialogs/SourcePickerOverlay.cpp
+        ui/widgets/RegionGeometry.cpp
+        ui/widgets/CaptureTargetCard.cpp
+        ui/widgets/RegionPresetCard.cpp
+        services/ThumbnailCapture.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
+)
+target_include_directories(source_picker_refresh_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(source_picker_refresh_tests PRIVATE NOMINMAX)
+set_target_properties(source_picker_refresh_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
     NAME webcam_page_tests
     TEST_PREFIX webcam.
     SOURCES

@@ -3017,6 +3017,8 @@ void RecordPage::setSourcePickerOverlay(ui::dialogs::SourcePickerOverlay* overla
     if (overlay) {
         connect(overlay, &ui::dialogs::SourcePickerOverlay::sourceSelected, this, &RecordPage::onSourcePickerAccepted);
         connect(overlay, &ui::dialogs::SourcePickerOverlay::closed, this, &RecordPage::refresh);
+        connect(overlay, &ui::dialogs::SourcePickerOverlay::sourceDataRequested, this,
+                &RecordPage::onSourceDataRequested);
     }
 }
 
@@ -3027,7 +3029,30 @@ void RecordPage::onOpenSourcePicker() {
     }
 
     enumerateTargets(true);
+    pushSourceDataToPicker();
 
+    ui::dialogs::SourcePickerDialog::Section section = ui::dialogs::SourcePickerDialog::Section::Screens;
+    if (view_model_.capture_mode == CaptureMode::Region) {
+        section = ui::dialogs::SourcePickerDialog::Section::Region;
+    } else if (view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window) {
+        section = ui::dialogs::SourcePickerDialog::Section::Windows;
+    }
+    source_picker_overlay_->setCurrentSection(section, view_model_.selected_target_index);
+    source_picker_overlay_->openOverlay();
+}
+
+void RecordPage::onSourceDataRequested() {
+    if (!source_picker_overlay_ || !source_picker_overlay_->isOpen()) {
+        return;
+    }
+    if (isSourceSelectionLocked()) {
+        return;
+    }
+    enumerateTargets(true);
+    pushSourceDataToPicker();
+}
+
+void RecordPage::pushSourceDataToPicker() {
     std::vector<ui::dialogs::SourcePickerDialog::SourceOption> screen_options;
     std::vector<ui::dialogs::SourcePickerDialog::SourceOption> window_options;
     const MinimumCaptureSize window_minimum = WindowMinimumForCodec(current_video_codec_);
@@ -3289,15 +3314,6 @@ void RecordPage::onOpenSourcePicker() {
     source_picker_overlay_->setWindowOptions(window_options);
     source_picker_overlay_->setRegionState(region_summary, has_region, view_model_.select_on_record,
                                            currentRegionRect());
-
-    ui::dialogs::SourcePickerDialog::Section section = ui::dialogs::SourcePickerDialog::Section::Screens;
-    if (view_model_.capture_mode == CaptureMode::Region) {
-        section = ui::dialogs::SourcePickerDialog::Section::Region;
-    } else if (view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window) {
-        section = ui::dialogs::SourcePickerDialog::Section::Windows;
-    }
-    source_picker_overlay_->setCurrentSection(section, view_model_.selected_target_index);
-    source_picker_overlay_->openOverlay();
 }
 
 void RecordPage::onSourcePickerAccepted(ui::dialogs::SourcePickerDialog::SelectionResult selection) {
@@ -5197,6 +5213,9 @@ void RecordPage::refreshDisplayTargets() {
         region_overlay_->cancelSelection();
     }
     enumerateTargets(/*preserve_current_selection=*/true);
+    if (source_picker_overlay_ && source_picker_overlay_->isOpen()) {
+        pushSourceDataToPicker();
+    }
 }
 
 } // namespace exosnap

@@ -43,6 +43,7 @@ class SourcePickerOverlay : public QWidget {
   signals:
     void sourceSelected(SourcePickerPanel::SelectionResult result);
     void closed();
+    void sourceDataRequested();
 
   protected:
     void keyPressEvent(QKeyEvent* event) override;

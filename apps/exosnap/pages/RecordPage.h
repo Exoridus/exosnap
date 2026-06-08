@@ -153,6 +153,7 @@ class RecordPage : public QWidget {
     void onRefreshTargets();
     void onRegionSelected(QRect region_virtual_screen);
     void onRegionCancelled();
+    void onSourceDataRequested();
 
   private:
     void startRecordingFlow();
@@ -204,6 +205,7 @@ class RecordPage : public QWidget {
     void syncTargetSelectionToCombo(int target_index);
     void enumerateTargets(bool preserve_current_selection);
     void rebuildTargetPicker();
+    void pushSourceDataToPicker();
     void onAudioRowEnabledChanged(int row_index, bool enabled);
     void onAudioRowMergeChanged(int row_index, bool merge);
     void swapAudioSourceRows(int a, int b);

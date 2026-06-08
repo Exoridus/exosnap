@@ -188,6 +188,15 @@ QJsonObject BuildVisualManifest(const MainWindow& window, const VisualScenario& 
     output.insert(QStringLiteral("preset_dirty_state"), scenario.preset_dirty);
     root.insert(QStringLiteral("output_format"), output);
 
+    QJsonObject source_picker;
+    source_picker.insert(QStringLiteral("display_count"), scenario.source_display_count);
+    source_picker.insert(QStringLiteral("window_count"), scenario.source_window_count);
+    source_picker.insert(QStringLiteral("selected_identity"), scenario.source_selected_identity);
+    source_picker.insert(QStringLiteral("selected_available"), scenario.source_selected_available);
+    source_picker.insert(QStringLiteral("refresh_active"), scenario.source_refresh_active);
+    source_picker.insert(QStringLiteral("refresh_generation"), scenario.source_refresh_generation);
+    root.insert(QStringLiteral("source_picker"), source_picker);
+
     // Webcam PiP manifest (Record preview). Reflects actual PreviewSurface state, not
     // the scenario inputs, so preview/output parity and lock/selection can be asserted.
     if (const auto* preview = window.findChild<const ui::widgets::PreviewSurface*>(QStringLiteral("previewSurface"))) {
