@@ -221,13 +221,14 @@ ThumbnailCapture::ThumbnailCapture(QObject* parent) : QObject(parent) {
 
             if (result.isNull()) {
                 QMetaObject::invokeMethod(
-                    QCoreApplication::instance(), [this, idx = req.target_index]() { emit thumbnailFailed(idx); },
+                    QCoreApplication::instance(),
+                    [this, idx = req.target_index, tkn = req.token]() { emit thumbnailFailed(idx, tkn); },
                     Qt::QueuedConnection);
             } else {
                 QMetaObject::invokeMethod(
                     QCoreApplication::instance(),
-                    [this, idx = req.target_index, img = std::move(result)]() mutable {
-                        emit thumbnailReady(idx, std::move(img));
+                    [this, idx = req.target_index, tkn = req.token, img = std::move(result)]() mutable {
+                        emit thumbnailReady(idx, tkn, std::move(img));
                     },
                     Qt::QueuedConnection);
             }
@@ -243,12 +244,12 @@ ThumbnailCapture::~ThumbnailCapture() {
     }
 }
 
-void ThumbnailCapture::requestMonitorThumbnail(int target_index, uintptr_t hmonitor, QSize desired_size) {
-    queueCapture(target_index, hmonitor, true, desired_size);
+void ThumbnailCapture::requestMonitorThumbnail(int target_index, uintptr_t hmonitor, QSize desired_size, int token) {
+    queueCapture(target_index, hmonitor, true, desired_size, token);
 }
 
-void ThumbnailCapture::requestWindowThumbnail(int target_index, uintptr_t hwnd, QSize desired_size) {
-    queueCapture(target_index, hwnd, false, desired_size);
+void ThumbnailCapture::requestWindowThumbnail(int target_index, uintptr_t hwnd, QSize desired_size, int token) {
+    queueCapture(target_index, hwnd, false, desired_size, token);
 }
 
 void ThumbnailCapture::cancelAll() {
@@ -259,7 +260,8 @@ void ThumbnailCapture::cancelAll() {
     cv_.notify_one();
 }
 
-void ThumbnailCapture::queueCapture(int target_index, uintptr_t native_id, bool is_monitor, QSize desired_size) {
+void ThumbnailCapture::queueCapture(int target_index, uintptr_t native_id, bool is_monitor, QSize desired_size,
+                                    int token) {
     cancelled_.store(false);
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -268,6 +270,7 @@ void ThumbnailCapture::queueCapture(int target_index, uintptr_t native_id, bool 
         req.native_id = native_id;
         req.is_monitor = is_monitor;
         req.desired_size = desired_size;
+        req.token = token;
         pending_.push_back(req);
     }
     cv_.notify_one();

@@ -32,6 +32,9 @@ class SourcePickerDialog : public QDialog {
     bool selectSource(Section section, int target_index);
     SelectionResult selectionResult() const;
 
+  signals:
+    void sourceDataRequested();
+
   private:
     SourcePickerPanel* panel_ = nullptr;
 };

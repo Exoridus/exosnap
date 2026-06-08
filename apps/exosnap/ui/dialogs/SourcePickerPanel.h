@@ -31,6 +31,29 @@ class RegionPresetCard;
 
 namespace exosnap::ui::dialogs {
 
+struct SourceCardSnapshot {
+    int target_index = -1;
+    uintptr_t native_id = 0;
+    QString title;
+    QString detail;
+    bool unavailable = false;
+    bool selectable = true;
+    bool hidden_by_default = false;
+    bool primary = false;
+};
+
+inline bool operator==(const SourceCardSnapshot& a, const SourceCardSnapshot& b) {
+    return a.target_index == b.target_index && a.native_id == b.native_id && a.title == b.title &&
+           a.detail == b.detail && a.unavailable == b.unavailable && a.selectable == b.selectable &&
+           a.hidden_by_default == b.hidden_by_default && a.primary == b.primary;
+}
+
+inline bool operator!=(const SourceCardSnapshot& a, const SourceCardSnapshot& b) {
+    return !(a == b);
+}
+
+bool operator==(const std::vector<SourceCardSnapshot>& a, const std::vector<SourceCardSnapshot>& b);
+
 // Pure content widget for the source picker — inherits QWidget so it can be
 // embedded in any parent container without creating a separate native OS window.
 // SourcePickerDialog wraps this in a thin QDialog shell (for tests that need
@@ -79,6 +102,7 @@ class SourcePickerPanel : public QWidget {
 
     static QRect ComputePresetRegionRect(int preset_w, int preset_h, const QRect& monitor,
                                          const QRect& existing_region = QRect());
+    static std::vector<SourceCardSnapshot> buildSnapshot(const std::vector<SourceOption>& options);
 
     explicit SourcePickerPanel(QWidget* parent = nullptr);
 
@@ -97,14 +121,16 @@ class SourcePickerPanel : public QWidget {
   signals:
     void accepted();
     void rejected();
+    void sourceDataRequested();
 
   private slots:
     void onUseSelected();
     void onPickRegionNow();
-    void onThumbnailReady(int target_index, QImage thumbnail);
-    void onThumbnailFailed(int target_index);
+    void onThumbnailReady(int target_index, int token, QImage thumbnail);
+    void onThumbnailFailed(int target_index, int token);
     void onRefreshRequested();
     void onPeriodicThumbnailRefresh();
+    void onSourceRefreshTimer();
 
   private:
     struct SectionGrid {
@@ -146,6 +172,7 @@ class SourcePickerPanel : public QWidget {
     bool eventFilter(QObject* watched, QEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
+    bool snapshotEqualsLast(Section section, const std::vector<SourceOption>& options) const;
 
     static constexpr QSize kThumbnailSize{320, 180};
 
@@ -177,10 +204,14 @@ class SourcePickerPanel : public QWidget {
     QPushButton* use_button_ = nullptr;
     QPushButton* pick_region_now_button_ = nullptr;
     QTimer* thumbnail_refresh_timer_ = nullptr;
+    QTimer* source_refresh_timer_ = nullptr;
 
     std::vector<SourceOption> screen_options_;
     std::vector<SourceOption> window_options_;
     std::vector<OptionCard> option_cards_;
+
+    std::vector<SourceCardSnapshot> last_screen_snapshot_;
+    std::vector<SourceCardSnapshot> last_window_snapshot_;
 
     Section selected_section_ = Section::Screens;
     int selected_target_index_ = -1;
@@ -189,6 +220,7 @@ class SourcePickerPanel : public QWidget {
     QString region_summary_;
     bool pick_region_now_ = false;
     bool show_unavailable_windows_ = false;
+    int refresh_generation_ = 0;
 
     ThumbnailCapture* thumbnail_capture_ = nullptr;
 };

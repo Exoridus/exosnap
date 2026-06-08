@@ -24,6 +24,7 @@ SourcePickerDialog::SourcePickerDialog(QWidget* parent, Qt::WindowFlags flags) :
 
     connect(panel_, &SourcePickerPanel::accepted, this, &QDialog::accept);
     connect(panel_, &SourcePickerPanel::rejected, this, &QDialog::reject);
+    connect(panel_, &SourcePickerPanel::sourceDataRequested, this, &SourcePickerDialog::sourceDataRequested);
 }
 
 void SourcePickerDialog::setScreenOptions(const std::vector<SourceOption>& options) {

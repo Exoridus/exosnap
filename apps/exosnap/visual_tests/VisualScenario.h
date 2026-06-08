@@ -152,6 +152,14 @@ struct VisualScenario {
     capability::AudioCodec audio_codec = capability::AudioCodec::Opus;
     QString reconciliation_warning;
     bool controls_locked = false;
+
+    // Source picker reactive refresh scenarios
+    int source_display_count = -1;    // synthetic: count of displays in picker
+    int source_window_count = -1;     // synthetic: count of windows in picker
+    QString source_selected_identity; // title of selected source
+    bool source_selected_available = true;
+    bool source_refresh_active = false; // refresh timer is running
+    int source_refresh_generation = 0;  // monotonic generation counter
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

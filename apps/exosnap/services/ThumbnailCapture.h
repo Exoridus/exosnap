@@ -22,23 +22,24 @@ class ThumbnailCapture : public QObject {
     ThumbnailCapture(const ThumbnailCapture&) = delete;
     ThumbnailCapture& operator=(const ThumbnailCapture&) = delete;
 
-    void requestMonitorThumbnail(int target_index, uintptr_t hmonitor, QSize desired_size);
-    void requestWindowThumbnail(int target_index, uintptr_t hwnd, QSize desired_size);
+    void requestMonitorThumbnail(int target_index, uintptr_t hmonitor, QSize desired_size, int token = 0);
+    void requestWindowThumbnail(int target_index, uintptr_t hwnd, QSize desired_size, int token = 0);
 
     void cancelAll();
 
   signals:
-    void thumbnailReady(int target_index, QImage thumbnail);
-    void thumbnailFailed(int target_index);
+    void thumbnailReady(int target_index, int token, QImage thumbnail);
+    void thumbnailFailed(int target_index, int token);
 
   private:
-    void queueCapture(int target_index, uintptr_t native_id, bool is_monitor, QSize desired_size);
+    void queueCapture(int target_index, uintptr_t native_id, bool is_monitor, QSize desired_size, int token);
 
     struct Request {
         int target_index = -1;
         uintptr_t native_id = 0;
         bool is_monitor = true;
         QSize desired_size;
+        int token = 0;
     };
 
     std::mutex mutex_;

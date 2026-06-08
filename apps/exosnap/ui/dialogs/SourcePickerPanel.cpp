@@ -144,6 +144,11 @@ SourcePickerPanel::SourcePickerPanel(QWidget* parent) : QWidget(parent) {
     thumbnail_refresh_timer_->setInterval(6000);
     connect(thumbnail_refresh_timer_, &QTimer::timeout, this, &SourcePickerPanel::onPeriodicThumbnailRefresh);
 
+    source_refresh_timer_ = new QTimer(this);
+    source_refresh_timer_->setInterval(1500);
+    source_refresh_timer_->setSingleShot(false);
+    connect(source_refresh_timer_, &QTimer::timeout, this, &SourcePickerPanel::onSourceRefreshTimer);
+
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(14, 14, 14, 14);
     root->setSpacing(12);
@@ -400,7 +405,11 @@ SourcePickerPanel::SourcePickerPanel(QWidget* parent) : QWidget(parent) {
 }
 
 void SourcePickerPanel::setScreenOptions(const std::vector<SourceOption>& options) {
+    if (snapshotEqualsLast(Section::Screens, options)) {
+        return;
+    }
     screen_options_ = options;
+    last_screen_snapshot_ = buildSnapshot(options);
     rebuildOptionCards();
     updateRegionPresetAvailability();
     if (isVisible() && selected_section_ == Section::Screens) {
@@ -409,7 +418,11 @@ void SourcePickerPanel::setScreenOptions(const std::vector<SourceOption>& option
 }
 
 void SourcePickerPanel::setWindowOptions(const std::vector<SourceOption>& options) {
+    if (snapshotEqualsLast(Section::Windows, options)) {
+        return;
+    }
     window_options_ = options;
+    last_window_snapshot_ = buildSnapshot(options);
     const bool has_hidden = std::any_of(window_options_.begin(), window_options_.end(),
                                         [](const SourceOption& option) { return option.hidden_by_default; });
     if (!has_hidden) {
@@ -538,7 +551,9 @@ void SourcePickerPanel::onPickRegionNow() {
     emit accepted();
 }
 
-void SourcePickerPanel::onThumbnailReady(int target_index, const QImage thumbnail) {
+void SourcePickerPanel::onThumbnailReady(int target_index, int token, const QImage thumbnail) {
+    if (!isVisible() || token != refresh_generation_)
+        return;
     auto* card = findOptionCard(Section::Screens, target_index);
     if (!card) {
         card = findOptionCard(Section::Windows, target_index);
@@ -551,7 +566,9 @@ void SourcePickerPanel::onThumbnailReady(int target_index, const QImage thumbnai
     card->card->setThumbnail(pixmap);
 }
 
-void SourcePickerPanel::onThumbnailFailed(int target_index) {
+void SourcePickerPanel::onThumbnailFailed(int target_index, int token) {
+    if (!isVisible() || token != refresh_generation_)
+        return;
     auto* card = findOptionCard(Section::Screens, target_index);
     if (!card) {
         card = findOptionCard(Section::Windows, target_index);
@@ -566,6 +583,7 @@ void SourcePickerPanel::onThumbnailFailed(int target_index) {
 }
 
 void SourcePickerPanel::onRefreshRequested() {
+    emit sourceDataRequested();
     if (selected_section_ == Section::Region) {
         return;
     }
@@ -771,7 +789,8 @@ void SourcePickerPanel::clearLayout(QLayout* layout) {
     QLayoutItem* item = nullptr;
     while ((item = layout->takeAt(0)) != nullptr) {
         if (auto* widget = item->widget()) {
-            widget->deleteLater();
+            widget->setParent(nullptr);
+            delete widget;
         }
         delete item;
     }
@@ -1098,6 +1117,7 @@ void SourcePickerPanel::requestThumbnailsForSection(Section section) {
     }
 
     thumbnail_capture_->cancelAll();
+    const int token = ++refresh_generation_;
 
     const auto& options = section == Section::Screens ? screen_options_ : window_options_;
     for (const auto& option : options) {
@@ -1116,9 +1136,9 @@ void SourcePickerPanel::requestThumbnailsForSection(Section section) {
         }
 
         if (section == Section::Screens) {
-            thumbnail_capture_->requestMonitorThumbnail(option.target_index, option.native_id, kThumbnailSize);
+            thumbnail_capture_->requestMonitorThumbnail(option.target_index, option.native_id, kThumbnailSize, token);
         } else {
-            thumbnail_capture_->requestWindowThumbnail(option.target_index, option.native_id, kThumbnailSize);
+            thumbnail_capture_->requestWindowThumbnail(option.target_index, option.native_id, kThumbnailSize, token);
         }
     }
 }
@@ -1174,19 +1194,71 @@ void SourcePickerPanel::showEvent(QShowEvent* event) {
     if (thumbnail_refresh_timer_) {
         thumbnail_refresh_timer_->start();
     }
+    if (source_refresh_timer_) {
+        source_refresh_timer_->start();
+    }
     if (selected_section_ != Section::Region) {
         requestThumbnailsForSection(selected_section_);
     }
+    emit sourceDataRequested();
 }
 
 void SourcePickerPanel::hideEvent(QHideEvent* event) {
     if (thumbnail_refresh_timer_) {
         thumbnail_refresh_timer_->stop();
     }
+    if (source_refresh_timer_) {
+        source_refresh_timer_->stop();
+    }
+    ++refresh_generation_;
     if (thumbnail_capture_) {
         thumbnail_capture_->cancelAll();
     }
     QWidget::hideEvent(event);
+}
+
+void SourcePickerPanel::onSourceRefreshTimer() {
+    emit sourceDataRequested();
+}
+
+bool SourcePickerPanel::snapshotEqualsLast(Section section, const std::vector<SourceOption>& options) const {
+    const std::vector<SourceCardSnapshot> current = buildSnapshot(options);
+    const auto& last = section == Section::Screens ? last_screen_snapshot_ : last_window_snapshot_;
+    if (current.size() != last.size())
+        return false;
+    for (std::size_t i = 0; i < current.size(); ++i) {
+        if (!(current[i] == last[i]))
+            return false;
+    }
+    return true;
+}
+
+std::vector<SourceCardSnapshot> SourcePickerPanel::buildSnapshot(const std::vector<SourceOption>& options) {
+    std::vector<SourceCardSnapshot> snapshots;
+    snapshots.reserve(options.size());
+    for (const auto& opt : options) {
+        SourceCardSnapshot snap;
+        snap.target_index = opt.target_index;
+        snap.native_id = opt.native_id;
+        snap.title = opt.title;
+        snap.detail = opt.detail;
+        snap.unavailable = opt.unavailable;
+        snap.selectable = opt.selectable;
+        snap.hidden_by_default = opt.hidden_by_default;
+        snap.primary = opt.primary;
+        snapshots.push_back(snap);
+    }
+    return snapshots;
+}
+
+bool operator==(const std::vector<SourceCardSnapshot>& a, const std::vector<SourceCardSnapshot>& b) {
+    if (a.size() != b.size())
+        return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (!(a[i] == b[i]))
+            return false;
+    }
+    return true;
 }
 
 } // namespace exosnap::ui::dialogs
