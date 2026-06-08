@@ -384,5 +384,83 @@ TEST_F(DeviceSelectionPolicyTest, WebcamNotifier_Rescan_SamePath) {
     EXPECT_EQ(emit_count, 1) << "Repeated rescan with same snapshot should be dedup'd";
 }
 
+// ---------------------------------------------------------------------------
+// Integration test: AudioDeviceNotifier Startup reason → page still suppresses signal
+//
+// Regression guard: onAudioDevicesChanged is driven by the notifier for any
+// DiscoveryReason (Startup, DeviceAdded, DeviceRemoved, DefaultChanged, …).
+// The page must suppress audioSettingsChanged for ALL reasons when the
+// configured selection has not changed by user action.
+// ---------------------------------------------------------------------------
+
+TEST_F(DeviceSelectionPolicyTest, StartupReason_DoesNotDirtyPreset) {
+    OutputSettingsModel output;
+    VideoSettingsModel video;
+    ConfigPage page(output, video);
+
+    capability::AudioUiState state;
+    state.selected_mic_device_id = std::string("startup-device");
+    page.setAudioUiState(state);
+
+    int sig_count = 0;
+    QObject::connect(&page, &ConfigPage::audioSettingsChanged, [&](const capability::AudioUiState&) { ++sig_count; });
+
+    // Simulate the Startup event: AudioDeviceNotifier calls snapshotChanged with
+    // DiscoveryReason::Startup; MainWindow forwards the snapshot to
+    // ConfigPage::onAudioDevicesChanged (reason not passed to the page).
+    AudioDeviceSnapshot snap = SnapWithInput("startup-device", "Headset", false);
+    page.onAudioDevicesChanged(snap);
+
+    EXPECT_EQ(sig_count, 0) << "Startup reason must not dirty the preset";
+}
+
+// ---------------------------------------------------------------------------
+// Integration test: Display snapshot with a different device count updates
+// the SourcePickerPanel card list (verified at the SourcePickerPanel level
+// since RecordPage is not compiled in this target; the SourcePickerPanel
+// consumer path is exercised via test_source_picker_refresh, test 13).
+//
+// Here we verify the guard: when a display IS in the snapshot the policy
+// test notifier emits exactly once, confirming the channel is live.
+// ---------------------------------------------------------------------------
+
+TEST_F(DeviceSelectionPolicyTest, DisplayNotifier_ChangedSnapshot_EmitsOnce) {
+    DisplayDeviceNotifier notifier;
+    notifier.setDebounceIntervalMsForTest(0);
+
+    DisplaySnapshot snap1;
+    snap1.displays.push_back([] {
+        DisplayInfo d;
+        d.id = QStringLiteral("\\\\.\\DISPLAY1");
+        d.name = QStringLiteral("Monitor 1");
+        d.geometry = QRect(0, 0, 1920, 1080);
+        d.primary = true;
+        return d;
+    }());
+    notifier.setEnumeratorForTest([&snap1] { return snap1; });
+
+    int emit_count = 0;
+    QObject::connect(&notifier, &DisplayDeviceNotifier::snapshotChanged,
+                     [&](const exosnap::DisplaySnapshot&, exosnap::DiscoveryReason) { ++emit_count; });
+
+    notifier.simulateNativeEvent(DiscoveryReason::Startup);
+    notifier.flushPendingForTest();
+    EXPECT_EQ(emit_count, 1);
+
+    // Switch to a snapshot with two displays: must emit.
+    DisplaySnapshot snap2 = snap1;
+    DisplayInfo d2;
+    d2.id = QStringLiteral("\\\\.\\DISPLAY2");
+    d2.name = QStringLiteral("Monitor 2");
+    d2.geometry = QRect(1920, 0, 2560, 1440);
+    d2.primary = false;
+    snap2.displays.push_back(d2);
+    notifier.setEnumeratorForTest([&snap2] { return snap2; });
+
+    notifier.simulateNativeEvent(DiscoveryReason::DeviceAdded);
+    notifier.flushPendingForTest();
+    EXPECT_EQ(emit_count, 2) << "Changed display snapshot must emit once";
+}
+
 } // namespace
 } // namespace exosnap

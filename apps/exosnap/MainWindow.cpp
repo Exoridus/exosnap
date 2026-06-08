@@ -1644,6 +1644,10 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
     if (scenario.source_picker_tab != visual::VisualSourcePickerTab::None)
         applyVisualSourcePickerScenario(scenario);
 
+    // Device-discovery state is applied last so it can override audio/webcam
+    // state set by the page-specific helpers above.
+    applyVisualDeviceDiscoveryScenario(scenario);
+
     if (title_bar_ && stack_)
         title_bar_->setActivePage(navHighlightIndexFor(stack_->currentIndex()));
     installVisualReadyMarker(scenario.id);
@@ -1843,6 +1847,84 @@ void MainWindow::applyVisualDiagnosticsScenario() {
     diagnostics_page_->setDiagnosticData(
         caps, output, video, VisualAudioStateForSettings(visual::VisualSettingsTarget::Window),
         "Visual Test WebM AV1 Opus", "Start/Stop: Alt+F9", "visual-test-settings.json", true);
+}
+
+void MainWindow::applyVisualDeviceDiscoveryScenario(const visual::VisualScenario& scenario) {
+    // Only engage when at least one device-discovery field is set.
+    const bool has_audio = scenario.dd_audio_input_count >= 0;
+    const bool has_webcam = scenario.dd_webcam_count >= 0;
+
+    // --- Audio mic list (Settings/Audio card) ---
+    // Build a synthetic AudioDeviceSnapshot matching the scenario state and
+    // push it to ConfigPage via the existing reactive handler.  This is the
+    // same path used during live hot-plug, so no new UI hooks are needed.
+    // Non-persistent: onAudioDevicesChanged() never writes to any store.
+    if (has_audio && config_page_) {
+        AudioDeviceSnapshot snap;
+        // Populate synthetic input devices.
+        const int n_inputs = scenario.dd_audio_input_count;
+        for (int i = 0; i < n_inputs; ++i) {
+            recorder_core::AudioInputDeviceInfo d;
+            d.device_id = QStringLiteral("vis-input-%1").arg(i + 1).toStdString();
+            d.display_name = QStringLiteral("Visual Test Input %1").arg(i + 1).toStdString();
+            d.is_default = (i == 0);
+            snap.inputs.push_back(d);
+        }
+        if (!snap.inputs.empty())
+            snap.default_input_id = snap.inputs.front().device_id;
+
+        // If the scenario has a selected mic that should be present, make sure
+        // that id appears in the snapshot.  If it should be absent, leave it out.
+        if (!scenario.dd_selected_mic_stable_id.isEmpty()) {
+            if (scenario.dd_selected_mic_available) {
+                // Replace the first synthetic device with the configured id so
+                // onAudioDevicesChanged() finds it and keeps it selected.
+                const std::string target_id = scenario.dd_selected_mic_stable_id.toStdString();
+                bool already_present = false;
+                for (auto& d : snap.inputs) {
+                    if (d.device_id == target_id) {
+                        already_present = true;
+                        break;
+                    }
+                }
+                if (!already_present) {
+                    recorder_core::AudioInputDeviceInfo target_dev;
+                    target_dev.device_id = target_id;
+                    target_dev.display_name =
+                        QStringLiteral("Visual Test Mic (%1)").arg(scenario.dd_selected_mic_stable_id).toStdString();
+                    target_dev.is_default = false;
+                    snap.inputs.push_back(target_dev);
+                }
+                // Pre-select by setting audio_ui_state before the reactive push.
+                capability::AudioUiState state;
+                state.selected_mic_device_id = target_id;
+                config_page_->setAudioUiState(state);
+            } else {
+                // Device is absent: configure the id first, then push a snapshot
+                // without it so the placeholder is shown.
+                capability::AudioUiState state;
+                state.selected_mic_device_id = scenario.dd_selected_mic_stable_id.toStdString();
+                config_page_->setAudioUiState(state);
+                // snap intentionally does NOT contain dd_selected_mic_stable_id.
+            }
+        }
+
+        config_page_->onAudioDevicesChanged(snap);
+    }
+
+    // --- Webcam card (Settings/Webcam) ---
+    // For webcam-missing scenarios the webcam_state is already set to
+    // Unavailable by the page-dispatch block; applyVisualWebcamState() is the
+    // existing harness hook — just make sure it is driven correctly here for
+    // discovery-specific scenarios that set dd_webcam_count.
+    if (has_webcam && config_page_) {
+        const bool cam_available = scenario.dd_selected_webcam_available;
+        const bool mirror = scenario.webcam_mirror;
+        // Only override if the scenario is on the Settings page (the webcam
+        // card lives there); the Record preview uses a separate path.
+        if (scenario.page == visual::VisualPage::Settings)
+            config_page_->applyVisualWebcamState(cam_available, mirror);
+    }
 }
 #endif
 

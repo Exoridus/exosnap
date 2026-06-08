@@ -197,6 +197,29 @@ QJsonObject BuildVisualManifest(const MainWindow& window, const VisualScenario& 
     source_picker.insert(QStringLiteral("refresh_generation"), scenario.source_refresh_generation);
     root.insert(QStringLiteral("source_picker"), source_picker);
 
+    // Device discovery manifest (DEVICE-DISCOVERY-R1).
+    // All fields carry sentinel values (-1 / empty / false) for scenarios that
+    // do not exercise device discovery, so consumers can distinguish "not set"
+    // from "zero devices present".
+    {
+        QJsonObject dd;
+        dd.insert(QStringLiteral("audio_input_count"), scenario.dd_audio_input_count);
+        dd.insert(QStringLiteral("audio_output_count"), scenario.dd_audio_output_count);
+        dd.insert(QStringLiteral("selected_mic_stable_id"), scenario.dd_selected_mic_stable_id);
+        dd.insert(QStringLiteral("selected_mic_available"), scenario.dd_selected_mic_available);
+        dd.insert(QStringLiteral("selected_output_semantic_default"), scenario.dd_selected_output_semantic_default);
+        dd.insert(QStringLiteral("webcam_count"), scenario.dd_webcam_count);
+        dd.insert(QStringLiteral("selected_webcam_stable_id"), scenario.dd_selected_webcam_stable_id);
+        dd.insert(QStringLiteral("selected_webcam_available"), scenario.dd_selected_webcam_available);
+        dd.insert(QStringLiteral("display_count"), scenario.dd_display_count);
+        dd.insert(QStringLiteral("selected_display_stable_id"), scenario.dd_selected_display_stable_id);
+        dd.insert(QStringLiteral("selected_display_available"), scenario.dd_selected_display_available);
+        dd.insert(QStringLiteral("current_target_resolved"), scenario.dd_current_target_resolved);
+        dd.insert(QStringLiteral("rescan_enabled"), scenario.dd_rescan_enabled);
+        dd.insert(QStringLiteral("last_discovery_reason"), scenario.dd_last_discovery_reason);
+        root.insert(QStringLiteral("device_discovery"), dd);
+    }
+
     // Webcam PiP manifest (Record preview). Reflects actual PreviewSurface state, not
     // the scenario inputs, so preview/output parity and lock/selection can be asserted.
     if (const auto* preview = window.findChild<const ui::widgets::PreviewSurface*>(QStringLiteral("previewSurface"))) {

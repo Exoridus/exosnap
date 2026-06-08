@@ -121,6 +121,9 @@ class MainWindow : public QMainWindow {
     void applyVisualSettingsScenario(const visual::VisualScenario& scenario);
     void applyVisualSourcePickerScenario(const visual::VisualScenario& scenario);
     void applyVisualDiagnosticsScenario();
+    // Apply device-discovery visual state (audio mic list, webcam availability).
+    // Guarded; non-persistent: no writes to AppSettingsStore or RecordingPresetStore.
+    void applyVisualDeviceDiscoveryScenario(const visual::VisualScenario& scenario);
 #endif
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;

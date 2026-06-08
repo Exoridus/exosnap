@@ -1226,11 +1226,160 @@ const QVector<VisualScenario> kCompletedScenarios = {
 };
 } // namespace
 
+// --- Device Discovery scenarios (DEVICE-DISCOVERY-R1) ---
+// Each scenario represents a specific device state encountered during reactive
+// device discovery.  Fields are deterministic and non-persistent: they do NOT
+// write to AppSettingsStore or RecordingPresetStore.
+const QVector<VisualScenario> kDeviceDiscoveryScenarios = {
+    // 1. Settings/Audio — normal state: mic list present, a mic selected & available.
+    {.id = QStringLiteral("settings-audio-devices-normal"),
+     .title = QStringLiteral("Settings / Audio / Devices Normal"),
+     .page = VisualPage::Settings,
+     .record_state = VisualRecordState::None,
+     .settings_target = VisualSettingsTarget::None,
+     .dd_audio_input_count = 2,
+     .dd_audio_output_count = 1,
+     .dd_selected_mic_stable_id = QStringLiteral("dev-mic-001"),
+     .dd_selected_mic_available = true,
+     .dd_selected_output_semantic_default = true,
+     .dd_rescan_enabled = true,
+     .dd_last_discovery_reason = QStringLiteral("Startup")},
+
+    // 2. Settings/Audio — selected mic unavailable (placeholder shown), id preserved.
+    {.id = QStringLiteral("settings-audio-selected-missing"),
+     .title = QStringLiteral("Settings / Audio / Selected Mic Missing"),
+     .page = VisualPage::Settings,
+     .record_state = VisualRecordState::None,
+     .settings_target = VisualSettingsTarget::None,
+     .dd_audio_input_count = 1,
+     .dd_audio_output_count = 1,
+     .dd_selected_mic_stable_id = QStringLiteral("dev-mic-001"),
+     .dd_selected_mic_available = false,
+     .dd_selected_output_semantic_default = true,
+     .dd_rescan_enabled = true,
+     .dd_last_discovery_reason = QStringLiteral("DeviceRemoved")},
+
+    // 3. Settings/Audio — semantic Default mic, last_discovery_reason=DefaultChanged.
+    {.id = QStringLiteral("settings-audio-default-changed"),
+     .title = QStringLiteral("Settings / Audio / Default Changed"),
+     .page = VisualPage::Settings,
+     .record_state = VisualRecordState::None,
+     .settings_target = VisualSettingsTarget::None,
+     .dd_audio_input_count = 2,
+     .dd_audio_output_count = 1,
+     .dd_selected_mic_stable_id = QString(),
+     .dd_selected_mic_available = true,
+     .dd_selected_output_semantic_default = true,
+     .dd_rescan_enabled = true,
+     .dd_last_discovery_reason = QStringLiteral("DefaultChanged")},
+
+    // 4. Settings/Webcam — camera present & available.
+    {.id = QStringLiteral("settings-webcam-devices-normal"),
+     .title = QStringLiteral("Settings / Webcam / Devices Normal"),
+     .page = VisualPage::Settings,
+     .record_state = VisualRecordState::None,
+     .webcam_state = VisualWebcamState::Active,
+     .masks = {{QStringLiteral("webcamCameraPreview"), QStringLiteral("synthetic test camera frame")}},
+     .dd_webcam_count = 1,
+     .dd_selected_webcam_stable_id = QStringLiteral("cam-vis-001"),
+     .dd_selected_webcam_available = true,
+     .dd_rescan_enabled = true,
+     .dd_last_discovery_reason = QStringLiteral("Startup")},
+
+    // 5. Settings/Webcam — selected camera unavailable (honest no-stale-frame state).
+    {.id = QStringLiteral("settings-webcam-selected-missing"),
+     .title = QStringLiteral("Settings / Webcam / Selected Camera Missing"),
+     .page = VisualPage::Settings,
+     .record_state = VisualRecordState::None,
+     .webcam_state = VisualWebcamState::Unavailable,
+     .dd_webcam_count = 0,
+     .dd_selected_webcam_stable_id = QStringLiteral("cam-vis-001"),
+     .dd_selected_webcam_available = false,
+     .dd_rescan_enabled = true,
+     .dd_last_discovery_reason = QStringLiteral("DeviceRemoved")},
+
+    // 6. Settings/Webcam — camera available again after a loss (reconnect path).
+    {.id = QStringLiteral("settings-webcam-reconnected"),
+     .title = QStringLiteral("Settings / Webcam / Camera Reconnected"),
+     .page = VisualPage::Settings,
+     .record_state = VisualRecordState::None,
+     .webcam_state = VisualWebcamState::Active,
+     .masks = {{QStringLiteral("webcamCameraPreview"), QStringLiteral("synthetic test camera frame")}},
+     .dd_webcam_count = 1,
+     .dd_selected_webcam_stable_id = QStringLiteral("cam-vis-001"),
+     .dd_selected_webcam_available = true,
+     .dd_rescan_enabled = true,
+     .dd_last_discovery_reason = QStringLiteral("DeviceAdded")},
+
+    // 7. Source Picker open, displays listed, one selected & available.
+    {.id = QStringLiteral("source-displays-normal"),
+     .title = QStringLiteral("Source Picker / Displays Normal"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .source_picker_tab = VisualSourcePickerTab::Screens,
+     .masks = {{QStringLiteral("sourcePickerDialog"), QStringLiteral("thumbnail cards may be masked")}},
+     .dd_display_count = 2,
+     .dd_selected_display_stable_id = QStringLiteral("\\\\.\\DISPLAY1"),
+     .dd_selected_display_available = true,
+     .dd_current_target_resolved = true,
+     .dd_rescan_enabled = true,
+     .dd_last_discovery_reason = QStringLiteral("Startup")},
+
+    // 8. Source Picker open, selected display unavailable (honest unresolved).
+    {.id = QStringLiteral("source-display-selected-missing"),
+     .title = QStringLiteral("Source Picker / Display Selected Missing"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .source_picker_tab = VisualSourcePickerTab::Screens,
+     .masks = {{QStringLiteral("sourcePickerDialog"), QStringLiteral("thumbnail cards may be masked")}},
+     .dd_display_count = 1,
+     .dd_selected_display_stable_id = QStringLiteral("\\\\.\\DISPLAY2"),
+     .dd_selected_display_available = false,
+     .dd_current_target_resolved = false,
+     .dd_rescan_enabled = true,
+     .dd_last_discovery_reason = QStringLiteral("DeviceRemoved")},
+
+    // 9. Record page, configured display unresolved (no stale preview, no silent switch).
+    {.id = QStringLiteral("record-display-unavailable"),
+     .title = QStringLiteral("Record / Display Unavailable"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")},
+               {QStringLiteral("recordTransportDock"), QStringLiteral("meter values are deterministic test levels")}},
+     .dd_display_count = 1,
+     .dd_selected_display_stable_id = QStringLiteral("\\\\.\\DISPLAY2"),
+     .dd_selected_display_available = false,
+     .dd_current_target_resolved = false,
+     .dd_rescan_enabled = true,
+     .dd_last_discovery_reason = QStringLiteral("DeviceRemoved")},
+
+    // 10. Record page, region invalidated because hosting monitor gone.
+    {.id = QStringLiteral("record-region-monitor-missing"),
+     .title = QStringLiteral("Record / Region / Monitor Missing"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .settings_target = VisualSettingsTarget::Region,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")},
+               {QStringLiteral("recordTransportDock"), QStringLiteral("meter values are deterministic test levels")}},
+     .region_state = VisualRegionState::Invalid,
+     .region_x = 100,
+     .region_y = 100,
+     .region_width = 64,
+     .region_height = 64,
+     .dd_display_count = 1,
+     .dd_selected_display_stable_id = QStringLiteral("\\\\.\\DISPLAY2"),
+     .dd_selected_display_available = false,
+     .dd_current_target_resolved = false,
+     .dd_rescan_enabled = true,
+     .dd_last_discovery_reason = QStringLiteral("DeviceRemoved")},
+};
+
 const QVector<VisualScenario>& VisualScenarioRegistry() {
     static QVector<VisualScenario> merged;
     if (merged.isEmpty()) {
         merged = kScenarios;
         merged.append(kCompletedScenarios);
+        merged.append(kDeviceDiscoveryScenarios);
     }
     return merged;
 }
