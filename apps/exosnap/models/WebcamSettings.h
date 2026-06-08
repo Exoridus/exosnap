@@ -4,8 +4,6 @@
 #include <cstdint>
 #include <string>
 
-#include <recorder_core/webcam_placement.h>
-
 namespace exosnap {
 
 struct WebcamOverlayRect {
@@ -36,15 +34,10 @@ struct WebcamSettings {
     WebcamOverlayRect overlay;
     bool overlay_user_placed = false;
     bool aspect_ratio_locked = true;
-    // Horizontal mirror of the webcam image. Backward-compatible default: off.
-    // Applied identically to the Settings preview, Record PiP and recorded output.
+    // Horizontal mirror of the webcam image. Default off. Applied identically to
+    // the Settings preview, Record PiP and recorded output.
     bool mirror = false;
     WebcamChromaKeySettings chroma_key;
-
-    // Canonical normalized placement (+mirror) for the shared mapping helper.
-    [[nodiscard]] recorder_core::WebcamPlacement placement() const noexcept {
-        return recorder_core::WebcamPlacement{overlay.x_norm, overlay.y_norm, overlay.w_norm, overlay.h_norm, mirror};
-    }
 };
 
 inline WebcamOverlayRect SanitizeWebcamOverlayRect(WebcamOverlayRect overlay) {

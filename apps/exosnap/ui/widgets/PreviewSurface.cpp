@@ -968,15 +968,12 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
             clipPath.addRoundedRect(frame_rect, 5.0, 5.0);
             painter.setClipPath(clipPath);
 
-            const double sx = static_cast<double>(width()) / current_frame_.width();
-            const double sy = static_cast<double>(height()) / current_frame_.height();
-            const double s = std::min(sx, sy);
-            const int dw = static_cast<int>(current_frame_.width() * s);
-            const int dh = static_cast<int>(current_frame_.height() * s);
-            const int dx = (width() - dw) / 2;
-            const int dy = (height() - dh) / 2;
+            // Draw through the same contain-fit rect used for PiP hit-testing and
+            // placement (displayedFrameRect) so the main image and the overlay share
+            // exactly one content rectangle (no sub-pixel divergence).
             painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-            painter.drawImage(QRect(dx, dy, dw, dh), current_frame_);
+            painter.drawImage(displayedFrameRectForSource(current_frame_.width(), current_frame_.height()),
+                              current_frame_);
             painter.restore();
         } else {
             painter.save();
