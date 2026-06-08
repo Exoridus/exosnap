@@ -65,6 +65,16 @@ enum class VisualRegionEditMode {
     ResizeBottomRight,
 };
 
+// Active webcam PiP drag handle (for deterministic interaction scenarios).
+enum class VisualWebcamHandle {
+    None,
+    Move,
+    ResizeTopLeft,
+    ResizeTopRight,
+    ResizeBottomLeft,
+    ResizeBottomRight,
+};
+
 struct VisualMask {
     QString object_name;
     QString reason;
@@ -87,6 +97,18 @@ struct VisualScenario {
     int region_y = 360;
     int region_width = 1280;
     int region_height = 720;
+
+    // --- Webcam PiP / mirror (Record preview + Settings webcam card) ---
+    // Trailing fields so existing positional initializers stay valid.
+    bool webcam_pip_enabled = false;
+    bool webcam_mirror = false;
+    bool webcam_pip_selected = false;
+    bool webcam_pip_edit_locked = false;
+    VisualWebcamHandle webcam_handle = VisualWebcamHandle::None;
+    float webcam_x = 0.70f;
+    float webcam_y = 0.70f;
+    float webcam_w = 0.25f;
+    float webcam_h = 0.25f;
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();
@@ -105,5 +127,6 @@ QString ToString(VisualSourcePickerTab tab);
 QString ToString(VisualWebcamState state);
 QString ToString(VisualRegionState state);
 QString ToString(VisualRegionEditMode mode);
+QString ToString(VisualWebcamHandle handle);
 
 } // namespace exosnap::visual
