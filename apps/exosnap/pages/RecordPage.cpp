@@ -1,7 +1,7 @@
 #include "RecordPage.h"
 
 #include "../diagnostics/AppLog.h"
-#include "../settings/AppSettingsStore.h"
+#include "../models/RecordingPreset.h"
 #include "../ui/dialogs/SourcePickerDialog.h"
 #include "../ui/dialogs/SourcePickerOverlay.h"
 #include "../ui/dialogs/SourcePickerWindowRules.h"
@@ -245,12 +245,8 @@ float SliderDbToLinear(int db) {
     return std::pow(10.0f, static_cast<float>(db) / 20.0f);
 }
 
-void PersistMicGainForMvp(float gain_linear) {
-    AppSettingsStore store;
-    PersistedAppSettings persisted = store.Load();
-    persisted.audio_ui_state.mic_gain_linear = gain_linear;
-    store.Save(persisted);
-}
+// Mic gain persistence was moved to RecordingPresetStore.
+// This function is intentionally removed (no-op replacement kept for reference only).
 
 QString displayLabelFromTarget(const recorder_core::CaptureTarget& target) {
     return QString::fromStdString(RecordViewModel::DisplayLabelFromTarget(target.description));
@@ -1417,8 +1413,11 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(transport_dock_, &ui::widgets::TransportDock::openFolderClicked, this, &RecordPage::openOutputFolder);
     connect(transport_dock_, &ui::widgets::TransportDock::filenameClicked, this, &RecordPage::onDockFilenameActivated);
     connect(transport_dock_, &ui::widgets::TransportDock::sourceToggleClicked, this, &RecordPage::onDockSourceToggle);
-    connect(transport_dock_, &ui::widgets::TransportDock::countdownSecondsChanged, this,
-            [this](int seconds) { selected_countdown_seconds_ = seconds; });
+    connect(transport_dock_, &ui::widgets::TransportDock::countdownSecondsChanged, this, [this](int seconds) {
+        selected_countdown_seconds_ = seconds;
+        if (!applying_external_config_)
+            emit recordingConfigChanged();
+    });
 
     // 1 Hz tick drives the dock timer display while the backend stats are pending.
     ui_clock_timer_ = new QTimer(this);
@@ -1515,6 +1514,195 @@ void RecordPage::setActiveProfileName(const std::string& profile_name) {
 void RecordPage::setRuntimeCapabilities(const capability::CapabilitySet& caps) {
     shared_runtime_caps_ = caps;
     shared_runtime_caps_received_ = true;
+}
+
+// ---------------------------------------------------------------------------
+// Stage 1 — Preset capture/countdown API
+// ---------------------------------------------------------------------------
+
+PresetCaptureTarget RecordPage::currentCapturePolicy() const {
+    PresetCaptureTarget cap;
+
+    switch (view_model_.capture_mode) {
+    case CaptureMode::Monitor:
+        cap.kind = PresetCaptureKind::Display;
+        break;
+    case CaptureMode::Window:
+        cap.kind = PresetCaptureKind::Window;
+        break;
+    case CaptureMode::Region:
+        cap.kind = PresetCaptureKind::Region;
+        break;
+    }
+
+    if (view_model_.selected_target_index >= 0 &&
+        view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {
+        const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+        const std::string desc = RecordViewModel::TargetLabelFromCaptureTarget(target);
+        if (cap.kind == PresetCaptureKind::Window) {
+            cap.window_key = desc;
+        } else {
+            // Display and Region: identify the monitor by its description.
+            cap.display_key = desc;
+        }
+    }
+
+    if (view_model_.capture_mode == CaptureMode::Region) {
+        cap.has_region = view_model_.has_region;
+        cap.region = view_model_.region;
+        // Identify the monitor that the region sits on (same as selected monitor).
+        cap.region_display_key = cap.display_key;
+    }
+
+    return cap;
+}
+
+void RecordPage::applyCapturePolicy(const PresetCaptureTarget& cap) {
+    applying_external_config_ = true;
+    // ---- RAII clear of the flag on all exit paths ----
+    struct Guard {
+        bool& flag;
+        ~Guard() {
+            flag = false;
+        }
+    } guard{applying_external_config_};
+
+    // ---- 1. Set capture mode ----
+    switch (cap.kind) {
+    case PresetCaptureKind::Display:
+        if (view_model_.capture_mode != CaptureMode::Monitor) {
+            view_model_.capture_mode = CaptureMode::Monitor;
+        }
+        break;
+    case PresetCaptureKind::Window:
+        if (view_model_.capture_mode != CaptureMode::Window) {
+            view_model_.capture_mode = CaptureMode::Window;
+        }
+        break;
+    case PresetCaptureKind::Region:
+        if (view_model_.capture_mode != CaptureMode::Region) {
+            view_model_.capture_mode = CaptureMode::Region;
+        }
+        break;
+    }
+
+    // ---- 2. Resolve target by key matching ----
+    const bool want_window = (cap.kind == PresetCaptureKind::Window);
+    const std::string& match_key = want_window ? cap.window_key : cap.display_key;
+    const auto& candidate_indices = want_window ? window_target_indices_ : monitor_target_indices_;
+
+    int resolved_index = -1;
+    if (match_key.empty()) {
+        // No preference: auto-pick primary/first target of the kind.
+        if (want_window && !window_target_indices_.empty()) {
+            resolved_index = window_target_indices_.front();
+        } else if (!want_window && monitor_target_index_ >= 0) {
+            resolved_index = monitor_target_index_;
+        } else if (!candidate_indices.empty()) {
+            resolved_index = candidate_indices.front();
+        }
+    } else {
+        // Try to match by description key.
+        for (int idx : candidate_indices) {
+            if (idx < 0 || idx >= static_cast<int>(view_model_.targets.size()))
+                continue;
+            const auto& t = view_model_.targets[static_cast<std::size_t>(idx)];
+            if (RecordViewModel::TargetLabelFromCaptureTarget(t) == match_key) {
+                resolved_index = idx;
+                break;
+            }
+        }
+        // Non-empty key with no match → UNRESOLVED: leave selection cleared.
+        // Do NOT auto-pick a different target.
+    }
+
+    // ---- 3. Apply region ----
+    if (cap.kind == PresetCaptureKind::Region) {
+        if (cap.has_region) {
+            view_model_.has_region = true;
+            view_model_.region = cap.region;
+            view_model_.select_on_record = false;
+            if (select_on_record_check_) {
+                QSignalBlocker b(select_on_record_check_);
+                select_on_record_check_->setChecked(false);
+            }
+        }
+        // Region mode: do NOT clear region — preserve it for future re-enumeration.
+    } else {
+        // Switching away from Region: clear stale crop via the preview-key mechanism.
+        // Reset has_region so startPreviewIfIdle() does not pass a stale crop box.
+        if (view_model_.has_region) {
+            view_model_.has_region = false;
+            view_model_.region = {};
+            last_preview_key_ = {};
+        }
+    }
+
+    // ---- 4. Push target selection (apply audio kind + preview) ----
+    if (resolved_index >= 0) {
+        // syncTargetSelectionToCombo handles audio plan + preview restart.
+        syncTargetSelectionToCombo(resolved_index);
+    } else {
+        // No resolution: update the audio kind from the capture mode, rebuild
+        // picker, and restart the preview (which will be blank if no target is
+        // selected, which is the correct "unresolved" UX).
+        const capability::CaptureTargetKind kind_for_audio =
+            want_window ? capability::CaptureTargetKind::Window : capability::CaptureTargetKind::Display;
+        const bool kind_changed = (view_model_.audio_ui_state.target_kind != kind_for_audio);
+        view_model_.ApplyTargetKindPreservingAudio(kind_for_audio);
+        if (kind_changed) {
+            rebuildAudioRowWidgets();
+        }
+        updateTargetCards();
+        rebuildTargetPicker();
+        startPreviewIfIdle();
+    }
+
+    refresh();
+}
+
+int RecordPage::countdownSeconds() const {
+    return selected_countdown_seconds_;
+}
+
+void RecordPage::setCountdownSeconds(int seconds) {
+    // Snap to allowed values.
+    constexpr int kAllowed[] = {0, 3, 5, 10};
+    int snapped = 0;
+    for (int v : kAllowed) {
+        if (seconds == v) {
+            snapped = v;
+            break;
+        }
+    }
+    selected_countdown_seconds_ = snapped;
+    // Push to dock without emitting countdownSecondsChanged (which would drive
+    // selected_countdown_seconds_ again — harmless but noisy).
+    if (transport_dock_) {
+        const bool was = applying_external_config_;
+        applying_external_config_ = true;
+        transport_dock_->setCountdownSeconds(snapped);
+        applying_external_config_ = was;
+    }
+}
+
+bool RecordPage::canApplyPresetNow() const {
+    switch (view_model_.state) {
+    case UiRecordingState::LoadingCapabilities:
+    case UiRecordingState::Ready:
+    case UiRecordingState::Blocked:
+    case UiRecordingState::Completed:
+    case UiRecordingState::Failed:
+        return true;
+    case UiRecordingState::Countdown:
+    case UiRecordingState::Preparing:
+    case UiRecordingState::RegionSelecting:
+    case UiRecordingState::Recording:
+    case UiRecordingState::Paused:
+    case UiRecordingState::Stopping:
+        return false;
+    }
+    return false;
 }
 
 void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& state) {
@@ -2218,6 +2406,11 @@ void RecordPage::initCoordinator() {
     view_model_.capability_status_text = coordinator_->CapabilityStatusText();
     refresh();
     startPreviewIfIdle();
+
+    // All init work is done (targets enumerated, coordinator ready).
+    // MainWindow connects to this to re-apply the selected preset so that
+    // the audio/capture state from before deferred init is restored.
+    emit coordinatorInitialized();
 }
 
 void RecordPage::enumerateTargets(bool preserve_current_selection) {
@@ -3044,6 +3237,8 @@ void RecordPage::onSourcePickerAccepted(ui::dialogs::SourcePickerDialog::Selecti
                                    ? CaptureMode::Window
                                    : CaptureMode::Monitor;
     syncTargetSelectionToCombo(selection.target_index);
+    if (!applying_external_config_)
+        emit recordingConfigChanged();
     refresh();
 }
 
@@ -3160,6 +3355,8 @@ void RecordPage::onRegionSelected(QRect region_virtual_screen) {
     }
     // Otherwise, the region was picked manually — start the cropped preview.
     else {
+        if (!applying_external_config_)
+            emit recordingConfigChanged();
         startPreviewIfIdle();
         refresh();
     }
@@ -3197,6 +3394,8 @@ void RecordPage::onTargetPickerChanged(int index) {
     }
 
     syncTargetSelectionToCombo(target_index);
+    if (!applying_external_config_)
+        emit recordingConfigChanged();
     refresh();
 }
 
@@ -3449,7 +3648,6 @@ void RecordPage::emitAudioSettingsChanged() {
                                    .arg(view_model_.audio_ui_state.mic_gain_linear, 0, 'f', 2));
     updateRailSourceStatusChips();
     emit audioSettingsChanged(view_model_.audio_ui_state);
-    PersistMicGainForMvp(view_model_.audio_ui_state.mic_gain_linear);
 }
 
 void RecordPage::updateAudioControls() {

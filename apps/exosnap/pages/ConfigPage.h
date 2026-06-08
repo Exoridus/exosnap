@@ -54,14 +54,23 @@ class ConfigPage : public QWidget {
     void setAudioUiState(const capability::AudioUiState& state);
     void setWebcamSettings(const WebcamSettings& settings);
     void setReadinessStatus(const QString& status_label);
-    void setProfileOptions(const std::vector<ProfileOption>& options, const QString& active_profile_id,
-                           bool active_profile_modified);
+    // Preset card contract: options = presets (id + label); selected_id = active preset;
+    // default_id = startup-default preset (shown with a badge); dirty = unsaved changes.
+    void setPresetOptions(const std::vector<ProfileOption>& options, const QString& selected_id,
+                          const QString& default_id, bool dirty);
+    // Lightweight dirty-only update (avoids rebuilding the full combo).
+    void setPresetDirty(bool dirty);
     void setActiveProfileName(const QString& profile_name);
     void setRecordingControlsLocked(bool locked);
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     // Drive the embedded Webcam card deterministically for visual-test scenarios.
     void applyVisualWebcamState(bool available, bool mirror);
+
+    // Drive the inline preset save-error affordance for visual-test scenarios.
+    // Passing true shows a deterministic error label (name-conflict copy);
+    // passing false hides it.  No real save is performed.
+    void applyVisualPresetSaveError(bool show);
 #endif
 
     // Live audio meter update forwarded from RecordPage via MainWindow.
@@ -71,7 +80,8 @@ class ConfigPage : public QWidget {
 
   signals:
     void formatSettingsChanged(const OutputSettingsModel& settings);
-    void activeProfileChanged(const QString& profile_id);
+    // Preset-selection signal.
+    void presetSelected(const QString& id);
     void videoSettingsChanged(const VideoSettingsModel& settings);
     void audioSettingsChanged(const capability::AudioUiState& state);
     void webcamSettingsChanged(const WebcamSettings& settings);
@@ -79,17 +89,16 @@ class ConfigPage : public QWidget {
     void webcamDetailsRequested();
     void advancedRequested();
 
-    void newFromCurrentRequested(const QString& name);
-    void newFromSafeDefaultRequested(const QString& name);
-    void duplicateActiveProfileRequested();
-    void renameActiveProfileRequested(const QString& name);
-    void deleteActiveProfileRequested();
-    void resetActiveProfileRequested();
-    void saveModifiedBuiltInAsNewRequested(const QString& name);
-    void importProfilesRequested(const QString& file_path);
-    void exportSelectedProfileRequested(const QString& file_path);
-    void exportAllUserProfilesRequested(const QString& file_path);
-    void resetAllSettingsAndProfilesRequested();
+    // ---- Preset management signals ----
+    void savePresetRequested();
+    void savePresetAsRequested(const QString& name);
+    void newPresetRequested();
+    void duplicatePresetRequested();
+    void renamePresetRequested(const QString& name);
+    void deletePresetRequested();
+    void resetChangesRequested();
+    void resetToDefaultsRequested();
+    void setDefaultPresetRequested();
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
@@ -136,16 +145,17 @@ class ConfigPage : public QWidget {
     void refreshMicDevices();
     void emitCurrentAudioSettings();
 
-    void onImportProfiles();
-    void onExportSelectedProfile();
-    void onExportAllUserProfiles();
-    void onDeleteActiveProfile();
-    void onResetAllSettingsAndProfiles();
-    void updateProfileActionState();
-    void promptCreateProfileFromCurrent();
-    void promptCreateProfileFromSafeDefault();
-    void promptRenameActiveProfile();
-    void promptSaveModifiedBuiltInAsNew();
+    // Preset management handlers.
+    void onSavePreset();
+    void onSavePresetAs();
+    void onNewPreset();
+    void onDuplicatePreset();
+    void onRenamePreset();
+    void onDeletePreset();
+    void onResetChanges();
+    void onResetToDefaults();
+    void onSetDefaultPreset();
+    void updatePresetActionState();
 
     capability::AudioUiState audio_ui_state_;
     WebcamSettings webcam_settings_;
@@ -154,6 +164,12 @@ class ConfigPage : public QWidget {
     VideoSettingsModel video_settings_;
     QString active_profile_name_;
     std::vector<ProfileOption> profile_options_;
+    QString active_preset_id_;
+    QString default_preset_id_;
+    bool preset_dirty_ = false;
+    // Current selected preset's built_in/available flags (set by setPresetOptions).
+    bool active_preset_is_built_in_ = false;
+    bool active_preset_is_available_ = true;
 
     QBoxLayout* columns_layout_ = nullptr;
     QBoxLayout* output_split_layout_ = nullptr;
@@ -218,22 +234,23 @@ class ConfigPage : public QWidget {
     QLabel* readiness_detail_label_ = nullptr;
     QPushButton* view_details_btn_ = nullptr;
 
+    // Preset card widgets.
     QLabel* profile_status_label_ = nullptr;
-    QPushButton* save_as_new_btn_ = nullptr;
-    QPushButton* reset_profile_btn_ = nullptr;
+    QLabel* preset_dirty_indicator_ = nullptr;
+    QLabel* preset_default_badge_ = nullptr;
+    QPushButton* preset_save_btn_ = nullptr;
+    QPushButton* preset_save_as_btn_ = nullptr;
     QToolButton* profile_overflow_btn_ = nullptr;
-    QAction* new_from_current_action_ = nullptr;
-    QAction* new_from_safe_default_action_ = nullptr;
-    QAction* duplicate_profile_action_ = nullptr;
-    QAction* rename_profile_action_ = nullptr;
-    QAction* delete_profile_action_ = nullptr;
-    QAction* import_profiles_action_ = nullptr;
-    QAction* export_selected_action_ = nullptr;
-    QAction* export_all_users_action_ = nullptr;
-    QAction* reset_all_action_ = nullptr;
-    bool active_profile_is_built_in_ = true;
-    bool active_profile_is_modified_ = false;
-    bool active_profile_is_available_ = true;
+    // Preset management actions in the overflow menu.
+    QAction* save_preset_action_ = nullptr;
+    QAction* save_preset_as_action_ = nullptr;
+    QAction* new_preset_action_ = nullptr;
+    QAction* duplicate_preset_action_ = nullptr;
+    QAction* rename_preset_action_ = nullptr;
+    QAction* delete_preset_action_ = nullptr;
+    QAction* reset_changes_action_ = nullptr;
+    QAction* reset_to_defaults_action_ = nullptr;
+    QAction* set_default_preset_action_ = nullptr;
 
     ui::widgets::WebcamSetupPanel* webcam_setup_panel_ = nullptr;
 
@@ -242,6 +259,13 @@ class ConfigPage : public QWidget {
 
     QLabel* token_help_label_ = nullptr;
     QPushButton* token_help_toggle_btn_ = nullptr;
+
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    // Inline error label for preset save-error visual-test scenario.
+    // Created lazily on first applyVisualPresetSaveError(true) call and placed
+    // below the preset selector row.  Hidden in all non-error-scenario states.
+    QLabel* visual_preset_error_label_ = nullptr;
+#endif
 };
 
 } // namespace exosnap

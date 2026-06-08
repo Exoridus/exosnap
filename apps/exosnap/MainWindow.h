@@ -7,9 +7,12 @@
 #include <cstdint>
 
 #include "models/OutputSettingsModel.h"
-#include "models/RecordingProfileRegistry.h"
+#include "models/RecordingPreset.h"
+#include "models/RecordingPresetRegistry.h"
 #include "models/VideoSettingsModel.h"
 #include "settings/AppSettingsStore.h"
+#include "settings/RecordingPresetStore.h"
+#include <capability/audio_ui_state.h>
 #include <capability/capability_set.h>
 
 class QShowEvent;
@@ -74,11 +77,36 @@ class MainWindow : public QMainWindow {
     void setCurrentPage(int index);
     int navHighlightIndexFor(int index) const;
     void applyTitleBarStatus();
-    void applyActiveProfileToPages();
-    void refreshOutputProfileUi();
-    void persistProfileState();
+    void refreshPresetUi();
     void restoreHotkeyBindingsFromSettings();
     void refreshDiagnosticsData();
+
+    // ---- Preset system (Stage 2) ----
+
+    // Assemble the current live config from all sources.
+    [[nodiscard]] RecordingPresetConfig captureLiveConfig() const;
+
+    // Apply a preset config atomically to all pages.
+    // Sets applying_preset_ = true for the duration.
+    void applyPresetConfig(const RecordingPresetConfig& cfg);
+
+    // Preset operation handlers (wired to ConfigPage signals).
+    void onPresetSelected(const QString& id);
+    void onSavePreset();
+    void onSavePresetAs(const QString& name);
+    void onNewPreset();
+    void onDuplicatePreset();
+    void onRenamePreset(const QString& name);
+    void onDeletePreset();
+    void onResetChanges();
+    void onResetToDefaults();
+    void onSetDefaultPreset();
+
+    // Persist the full preset store state.
+    void persistPresetState();
+
+    void saveWindowGeometryToSettings();
+
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void installVisualReadyMarker(const QString& scenario_id);
     void applyVisualSettingsScenario(const visual::VisualScenario& scenario);
@@ -97,11 +125,21 @@ class MainWindow : public QMainWindow {
     WebcamPage* webcam_page_ = nullptr;
     HotkeysPage* hotkeys_page_ = nullptr;
     AdvancedPage* advanced_page_ = nullptr;
+
+    // Live mirrors for the currently active configuration.
     OutputSettingsModel output_settings_;
     VideoSettingsModel video_settings_;
-    RecordingProfileRegistry profile_registry_;
+    capability::AudioUiState live_audio_;
+    WebcamSettings live_webcam_;
+
+    // Preset system (replaces legacy profile_registry_).
+    RecordingPresetRegistry preset_registry_;
+    RecordingPresetStore preset_store_;
+
+    // Reduced AppSettingsStore: hotkeys + window geometry only.
     AppSettingsStore settings_store_;
     PersistedAppSettings persisted_settings_;
+
     static constexpr int kHotkeyIdStartStop = 1;
     static constexpr int kHotkeyIdPauseResume = 2;
     static constexpr int kHotkeyIdSplit = 3;
@@ -112,7 +150,8 @@ class MainWindow : public QMainWindow {
     bool hotkeys_registered_ = false;
     bool win32_maximized_ = false;
     bool resize_cursor_shown_ = false;
-    bool syncing_profile_ui_ = false;
+    bool syncing_preset_ui_ = false;
+    bool applying_preset_ = false;
     bool geometry_restored_ = false;
     bool pre_fullscreen_maximized_ = false;
     std::array<QKeySequence, 4> persisted_hotkeys_ = {

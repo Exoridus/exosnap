@@ -155,12 +155,21 @@ Settings uses a two-column card grid on desktop (gap 18px), collapsing to one co
 
 ### Preset card (span 2, top)
 
+The preset card represents a complete recording setup stored and selected by name.
+
 | Control | Type |
 |---|---|
-| Preset dropdown | Select |
-| Save as preset | Ghost button |
-| Manage | Quiet button |
-| Hint text | "A preset stores sources, codecs, quality, audio, webcam & output." |
+| Preset dropdown | Select (profileCombo) |
+| Save | Ghost button — visible and enabled only when dirty |
+| Save As… | Ghost button — always enabled |
+| Manage | QToolButton with overflow menu (presetManageButton) |
+| Dirty indicator | Amber "● Unsaved" label (presetDirtyIndicator) — visible only when dirty |
+| Default badge | "Default" label (presetDefaultBadge) — visible when selected == startup default |
+| Hint text | "A preset stores the complete recording setup: source, video, audio, webcam, countdown & output." |
+
+The Manage overflow menu contains: Save preset, Save as new preset…, New preset from default…, Duplicate preset, Rename preset…, Delete preset, Set as default preset, Reset changes, Reset all presets to factory defaults….
+
+Nothing in the preset card is "saved separately": the entire setup — capture target, format, audio, webcam, countdown — is the preset. The old hint ("Sources and audio are saved separately") is incorrect and has been removed.
 
 ### Format & Encoding card
 
@@ -217,24 +226,44 @@ No placement controls. Hint: "Position & size are set directly in the Record pre
 
 ## 6. Presets
 
-Presets represent full recording setups, not only codec/quality:
+Presets store the **complete** recording setup (schema version 1). A preset is the single authoritative source of the current recording configuration.
 
-- Source preference (display/window/region + geometry)
-- Container (MKV / WebM / MP4)
-- Video codec (AV1 / H.264 / H.265 / VP9)
-- Audio codec (Opus / AAC / FLAC)
-- Quality (High / Balanced / Small / Custom CQ)
-- FPS (30 / 60 / 120)
-- CFR / VFR
-- Cursor capture on/off
-- Audio source toggles (system / app / mic)
-- Separate tracks per source
-- Webcam settings (device, resolution, mirror, chroma key, tolerance)
-- Output resolution
-- Output folder
-- Filename pattern
+### Preset schema (`RecordingPreset` / `RecordingPresetConfig`)
 
-Schema implications: implementation concern (not automatic in R0).
+| Field group | Fields |
+|---|---|
+| Identity | `id` (stable unique key), `name` (user-visible label) |
+| Capture target (`PresetCaptureTarget`) | `kind` (Display/Window/Region), `display_key`, `window_key`, `has_region`, `region` (virtual-screen coords), `region_display_key` |
+| Output (`OutputSettingsModel`) | Container (MKV/WebM/MP4), video codec (AV1/H.264/H.265/VP9), audio codec (Opus/AAC/FLAC), quality (High/Balanced/Small/Custom CQ), FPS (30/60/120), CFR/VFR, cursor capture, output folder, naming pattern |
+| Video (`VideoSettingsModel`) | CQ value, frame rate, timing mode, cursor |
+| Audio (`AudioUiState`) | System / app / mic toggles, separate tracks, mic device |
+| Webcam (`WebcamSettings`) | Device, resolution, FPS, mirror, overlay placement, enabled flag |
+| Countdown | `countdown_seconds` ∈ {0, 3, 5, 10} |
+
+### Persistence
+
+Presets are persisted to `presets.ini` by `RecordingPresetStore`. The file stores `schemaVersion`, `defaultId`, `selectedId`, and one section per preset. Schema version 1 is the initial persisted format.
+
+Startup boots to the **default preset**: the startup-default id is read from the store and the corresponding preset is applied atomically before the UI is shown.
+
+### Canonical default preset
+
+The single built-in default preset (id `preset.default`) is:
+
+- Capture: Display (primary)
+- Format: MKV + AV1 (Nvenc) + Opus
+- Quality: High / CFR 60 fps
+- Audio: System ON, App OFF, Mic OFF
+- Webcam: OFF
+- Countdown: 0 (off)
+
+### Dirty state
+
+The dirty indicator compares the **live working config** against the **selected preset's saved config** using `ConfigDirtyEquivalent`. Capture identity (target kind, display key, window key, region) is excluded from the dirty comparison because it is transient: device availability and auto-resolution at startup would otherwise make the preset spuriously dirty on every launch.
+
+### Breaking changes vs partial profiles (v0)
+
+Old partial profiles (pre-schema-v1) stored only codec/quality. When `schemaVersion` is absent or less than 1, the store resets all presets to the factory default rather than migrating. Import/export actions are removed. Webcam settings are now per-preset (previously app-global). `AppSettingsStore` is reduced to hotkeys and window geometry; settings file version is 6.
 
 ---
 

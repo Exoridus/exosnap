@@ -1,7 +1,7 @@
 #include "FilenameBuilder.h"
 
 #include "OutputPathPolicy.h"
-#include "RecordingProfile.h"
+#include "RecordingPreset.h"
 
 #include <algorithm>
 #include <array>

@@ -1,14 +1,8 @@
 #pragma once
 
-#include "../models/OutputSettingsModel.h"
-#include "../models/RecordingProfile.h"
-#include "../models/VideoSettingsModel.h"
-#include "../models/WebcamSettings.h"
-#include <capability/audio_ui_state.h>
-
 #include <QString>
 #include <array>
-#include <vector>
+#include <string>
 
 namespace exosnap {
 
@@ -21,13 +15,6 @@ struct PersistedWindowGeometry {
 };
 
 struct PersistedAppSettings {
-    OutputSettingsModel output;
-    VideoSettingsModel video;
-    capability::AudioUiState audio_ui_state;
-    WebcamSettings webcam;
-    std::vector<RecordingProfile> user_profiles;
-    std::vector<RecordingProfile> modified_builtin_profiles;
-    ActiveRecordingProfileState active_profile;
     std::array<QString, 4> hotkey_bindings = {
         QStringLiteral("Alt+F9"),
         QString(),

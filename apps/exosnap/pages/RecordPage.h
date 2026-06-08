@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "../models/OutputSettingsModel.h"
+#include "../models/RecordingPreset.h"
 #include "../models/VideoSettingsModel.h"
 #include "../models/WebcamSettings.h"
 #include "../services/PreviewHelpers.h"
@@ -75,11 +76,41 @@ class RecordPage : public QWidget {
     void applyPersistedAudioSettings(const capability::AudioUiState& state);
     void setRuntimeCapabilities(const capability::CapabilitySet& caps);
     void rebroadcastChromeState();
+
+    // ---- Preset capture/countdown API (Stage 1) ----
+
+    // Build a PresetCaptureTarget from current view_model_ state.
+    // Never stores raw platform handles; keys are description-based.
+    [[nodiscard]] PresetCaptureTarget currentCapturePolicy() const;
+
+    // Apply a saved capture policy:
+    //   - Empty key     → no stored preference: auto-pick primary/first target (OK).
+    //   - Non-empty key, match found  → select it.
+    //   - Non-empty key, no match     → leave selection cleared / unresolved;
+    //                                   do NOT auto-pick a different target.
+    // Clears stale Region crop when switching away from Region mode.
+    // Always restarts the preview via startPreviewIfIdle() when appropriate.
+    void applyCapturePolicy(const PresetCaptureTarget& cap);
+
+    // Returns selected_countdown_seconds_.
+    [[nodiscard]] int countdownSeconds() const;
+
+    // Snaps to {0,3,5,10}; updates the CountdownSelect widget + stored field.
+    // Does NOT emit recordingConfigChanged (programmatic change).
+    void setCountdownSeconds(int seconds);
+
+    // True iff the recording state allows a preset switch.
+    [[nodiscard]] bool canApplyPresetNow() const;
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void applyVisualScenario(const visual::VisualScenario& scenario);
 #endif
 
   signals:
+    // Emitted as the LAST statement of initCoordinator(), once all init work
+    // (targets enumerated, coordinator ready) is complete.  MainWindow connects
+    // to this to re-apply the selected preset after deferred init clobbers it.
+    void coordinatorInitialized();
+
     void chromeStateChanged(bool recording, const QString& status_label, const QString& context_text);
     void chromeRuntimeMetricsChanged(const QString& elapsed_text, const QString& bitrate_text, const QString& drop_text,
                                      const QString& size_text);
@@ -97,6 +128,9 @@ class RecordPage : public QWidget {
     // sys/app/mic_active: true when the meter service is running for that source.
     void audioMeterLevelsUpdated(float sys01, float app01, float mic01, bool sys_active, bool app_active,
                                  bool mic_active);
+    // Emitted when the USER changes target, region, or countdown (not when
+    // applyCapturePolicy / setCountdownSeconds drives them programmatically).
+    void recordingConfigChanged();
 
   public slots:
     void onHotkeyToggle();
@@ -350,6 +384,11 @@ class RecordPage : public QWidget {
     // Used by startPreviewIfIdle() to skip redundant restarts when the target
     // and crop are unchanged.  Reset to default when the preview is stopped.
     exosnap::PreviewConfigKey last_preview_key_{};
+
+    // True while applyCapturePolicy() or setCountdownSeconds() is driving
+    // widgets programmatically.  Prevents recordingConfigChanged() from being
+    // emitted for these non-user changes.
+    bool applying_external_config_ = false;
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     bool visual_test_mode_ = false;

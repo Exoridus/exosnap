@@ -456,6 +456,151 @@ const QVector<VisualScenario> kScenarios = {
      .log_filter = VisualLogFilter::All,
      .log_auto_scroll = false},
     {QStringLiteral("about"), QStringLiteral("About"), VisualPage::About},
+
+    // ---- Preset card scenarios (COMPLETE-PRESET-R1) -------------------------
+    // All Settings / preset scenarios use synthetic ConfigPage::ProfileOption
+    // data injected by applyVisualSettingsScenario — no RecordingPresetStore or
+    // registry is touched.  preset_count > 0 triggers the injection path.
+
+    // settings-preset-default: selected == default, clean state (badge visible,
+    // Save hidden).
+    {.id = QStringLiteral("settings-preset-default"),
+     .title = QStringLiteral("Settings / Preset Default"),
+     .page = VisualPage::Settings,
+     .preset_count = 3,
+     .preset_selected_name = QStringLiteral("Default"),
+     .preset_default_name = QStringLiteral("Default"),
+     .preset_dirty = false},
+
+    // settings-preset-modified: dirty state — presetDirtyIndicator visible,
+    // Save enabled.
+    {.id = QStringLiteral("settings-preset-modified"),
+     .title = QStringLiteral("Settings / Preset Modified"),
+     .page = VisualPage::Settings,
+     .preset_count = 3,
+     .preset_selected_name = QStringLiteral("Gaming"),
+     .preset_default_name = QStringLiteral("Default"),
+     .preset_dirty = true},
+
+    // settings-preset-saved: clean state after a save on a non-default preset.
+    {.id = QStringLiteral("settings-preset-saved"),
+     .title = QStringLiteral("Settings / Preset Saved"),
+     .page = VisualPage::Settings,
+     .preset_count = 3,
+     .preset_selected_name = QStringLiteral("Tutorial"),
+     .preset_default_name = QStringLiteral("Default"),
+     .preset_dirty = false},
+
+    // settings-preset-menu: Manage overflow menu shown with all actions.
+    {.id = QStringLiteral("settings-preset-menu"),
+     .title = QStringLiteral("Settings / Preset Menu Open"),
+     .page = VisualPage::Settings,
+     .preset_count = 3,
+     .preset_selected_name = QStringLiteral("Gaming"),
+     .preset_default_name = QStringLiteral("Default"),
+     .preset_dirty = false,
+     .preset_menu_open = true},
+
+    // settings-preset-multiple: 4+ presets in the combo.
+    {.id = QStringLiteral("settings-preset-multiple"),
+     .title = QStringLiteral("Settings / Preset Multiple"),
+     .page = VisualPage::Settings,
+     .preset_count = 5,
+     .preset_selected_name = QStringLiteral("Streaming"),
+     .preset_default_name = QStringLiteral("Default"),
+     .preset_dirty = false},
+
+    // settings-preset-default-badge: selected == default so presetDefaultBadge is
+    // visible; "Set as default" action would be disabled.
+    {.id = QStringLiteral("settings-preset-default-badge"),
+     .title = QStringLiteral("Settings / Preset Default Badge"),
+     .page = VisualPage::Settings,
+     .preset_count = 4,
+     .preset_selected_name = QStringLiteral("Default"),
+     .preset_default_name = QStringLiteral("Default"),
+     .preset_dirty = false},
+
+    // settings-preset-delete-confirm: represents the delete-confirmation intent
+    // deterministically by showing the Manage menu (no real blocking QMessageBox).
+    // The harness opens the menu and the Delete action is the highlighted entry.
+    // Screenshots capture the full menu open state before any confirmation dialog
+    // would appear.  This is the same approach used for settings-preset-menu.
+    {.id = QStringLiteral("settings-preset-delete-confirm"),
+     .title = QStringLiteral("Settings / Preset Delete (menu open, no modal)"),
+     .page = VisualPage::Settings,
+     .preset_count = 3,
+     .preset_selected_name = QStringLiteral("Gaming"),
+     .preset_default_name = QStringLiteral("Default"),
+     .preset_dirty = false,
+     .preset_menu_open = true},
+
+    // settings-preset-save-error: preset_save_error=true — inline name-conflict
+    // error affordance, deterministic, no modal.
+    {.id = QStringLiteral("settings-preset-save-error"),
+     .title = QStringLiteral("Settings / Preset Save Error"),
+     .page = VisualPage::Settings,
+     .preset_count = 3,
+     .preset_selected_name = QStringLiteral("Gaming"),
+     .preset_default_name = QStringLiteral("Default"),
+     .preset_dirty = true,
+     .preset_save_error = true},
+
+    // ---- Record page preset scenarios ----------------------------------------
+
+    // record-preset-display: Display capture kind, representative preset.
+    {.id = QStringLiteral("record-preset-display"),
+     .title = QStringLiteral("Record / Preset / Display"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .settings_target = VisualSettingsTarget::Display,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")},
+               {QStringLiteral("recordTransportDock"), QStringLiteral("meter values are deterministic test levels")}}},
+
+    // record-preset-window: Window capture kind.
+    {.id = QStringLiteral("record-preset-window"),
+     .title = QStringLiteral("Record / Preset / Window"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .settings_target = VisualSettingsTarget::Window,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")},
+               {QStringLiteral("recordTransportDock"), QStringLiteral("meter values are deterministic test levels")}}},
+
+    // record-preset-region: Region capture with a representative region rect.
+    {.id = QStringLiteral("record-preset-region"),
+     .title = QStringLiteral("Record / Preset / Region"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .settings_target = VisualSettingsTarget::Region,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")},
+               {QStringLiteral("recordTransportDock"), QStringLiteral("meter values are deterministic test levels")}},
+     .region_state = VisualRegionState::Selected,
+     .region_x = 640,
+     .region_y = 360,
+     .region_width = 1280,
+     .region_height = 720},
+
+    // record-preset-webcam: webcam PiP enabled with representative placement.
+    {.id = QStringLiteral("record-preset-webcam"),
+     .title = QStringLiteral("Record / Preset / Webcam PiP"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .webcam_state = VisualWebcamState::Active,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
+     .webcam_pip_enabled = true,
+     .webcam_mirror = false,
+     .webcam_x = 0.72f,
+     .webcam_y = 0.72f,
+     .webcam_w = 0.25f,
+     .webcam_h = 0.25f},
+
+    // record-preset-countdown: countdown_seconds=3, Ready state.
+    {.id = QStringLiteral("record-preset-countdown"),
+     .title = QStringLiteral("Record / Preset / Countdown 3s"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")},
+               {QStringLiteral("recordTransportDock"), QStringLiteral("meter values are deterministic test levels")}},
+     .countdown_seconds = 3},
 };
 
 } // namespace
