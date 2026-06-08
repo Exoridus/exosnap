@@ -137,6 +137,8 @@ qt_add_executable(exosnap WIN32
     models/OutputSettingsModel.cpp
     models/RecordingProfile.h
     models/RecordingProfile.cpp
+    models/RecordingPreset.h
+    models/RecordingPreset.cpp
     models/RecordingProfileRegistry.h
     models/RecordingProfileRegistry.cpp
     models/VideoSettingsModel.h
@@ -208,6 +210,18 @@ exosnap_add_gtest(
     LIBRARIES exosnap_capability recorder_core
 )
 target_include_directories(presentation_state_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+    NAME recording_preset_tests
+    TEST_PREFIX preset.
+    SOURCES
+        tests/test_recording_preset.cpp
+        models/RecordingPreset.cpp
+        models/OutputSettingsModel.cpp
+    LIBRARIES exosnap_capability recorder_core
+)
+target_include_directories(recording_preset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(recording_preset_tests PRIVATE ole32.lib shell32.lib)
 
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     exosnap_add_gtest(
