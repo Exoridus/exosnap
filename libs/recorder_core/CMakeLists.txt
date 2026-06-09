@@ -336,3 +336,11 @@ exosnap_add_gtest(
     LIBRARIES recorder_core EBML::ebml Matroska::matroska
 )
 target_include_directories(test_matroska_stream_writer PRIVATE src)
+
+exosnap_add_gtest(
+    NAME test_split_segments
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_split_segments.cpp
+    LIBRARIES recorder_core EBML::ebml Matroska::matroska
+)
+target_include_directories(test_split_segments PRIVATE src)
