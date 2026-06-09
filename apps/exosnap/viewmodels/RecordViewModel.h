@@ -16,6 +16,8 @@
 
 namespace exosnap {
 
+class RecordingHistoryStore;
+
 // ---------------------------------------------------------------------------
 // UiRecordingState
 // ---------------------------------------------------------------------------
@@ -174,6 +176,9 @@ class RecordViewModel {
     QVector<CompletedRecording> recent_recordings;
     static constexpr int kMaxRecentRecordings = 10;
 
+    void SetHistoryStore(RecordingHistoryStore* store);
+    void RestoreHistory(const QVector<CompletedRecording>& recordings);
+
     void AddToRecentRecordings(const CompletedRecording& recording);
     void RemoveFromRecentRecordings(int index);
     void UpdateRecentRecording(int index, const CompletedRecording& recording);
@@ -192,6 +197,10 @@ class RecordViewModel {
     static FilenameTargetContext FilenameContextFromCaptureTarget(const recorder_core::CaptureTarget& target);
     static std::vector<int> SortWindowTargetIndices(const std::vector<recorder_core::CaptureTarget>& targets,
                                                     const std::vector<int>& window_indices);
+
+  private:
+    RecordingHistoryStore* history_store_ = nullptr;
+    void PersistHistory() const;
 };
 
 } // namespace exosnap

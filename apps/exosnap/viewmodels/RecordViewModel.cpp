@@ -1,6 +1,7 @@
 #include "RecordViewModel.h"
 
 #include "../diagnostics/error_message.h"
+#include "../settings/RecordingHistoryStore.h"
 
 #include <algorithm>
 #include <cctype>
@@ -768,6 +769,23 @@ std::vector<int> RecordViewModel::SortWindowTargetIndices(const std::vector<reco
 // Completed recording operations
 // ---------------------------------------------------------------------------
 
+void RecordViewModel::SetHistoryStore(RecordingHistoryStore* store) {
+    history_store_ = store;
+}
+
+void RecordViewModel::RestoreHistory(const QVector<CompletedRecording>& recordings) {
+    recent_recordings = recordings;
+    while (recent_recordings.size() > kMaxRecentRecordings) {
+        recent_recordings.removeLast();
+    }
+    PersistHistory();
+}
+
+void RecordViewModel::PersistHistory() const {
+    if (history_store_)
+        history_store_->Save(recent_recordings);
+}
+
 void RecordViewModel::ClearCompletedResult() {
     current_completed_recording = CompletedRecording{};
     result_output_path.clear();
@@ -793,18 +811,22 @@ void RecordViewModel::AddToRecentRecordings(const CompletedRecording& recording)
     while (recent_recordings.size() > kMaxRecentRecordings) {
         recent_recordings.removeLast();
     }
+
+    PersistHistory();
 }
 
 void RecordViewModel::RemoveFromRecentRecordings(int index) {
     if (index < 0 || index >= recent_recordings.size())
         return;
     recent_recordings.removeAt(index);
+    PersistHistory();
 }
 
 void RecordViewModel::UpdateRecentRecording(int index, const CompletedRecording& recording) {
     if (index < 0 || index >= recent_recordings.size())
         return;
     recent_recordings[index] = recording;
+    PersistHistory();
 }
 
 void RecordViewModel::ClearRecentRecordings() {

@@ -18,6 +18,7 @@
 #include "../services/RecordingCoordinator.h"
 #include "../services/RecordingCountdownController.h"
 #include "../services/WebcamDeviceNotifier.h"
+#include "../settings/RecordingHistoryStore.h"
 #include "../ui/widgets/RegionSelectionOverlay.h"
 #include "../viewmodels/RecordViewModel.h"
 
@@ -80,6 +81,7 @@ class RecordPage : public QWidget {
     void applyPersistedAudioSettings(const capability::AudioUiState& state);
     void setRuntimeCapabilities(const capability::CapabilitySet& caps);
     void rebroadcastChromeState();
+    void restoreRecordingHistory();
 
     // ---- Preset capture/countdown API (Stage 1) ----
 
@@ -273,6 +275,7 @@ class RecordPage : public QWidget {
     std::vector<recorder_core::AudioInputDeviceInfo> mic_devices_;
 
     RecordViewModel view_model_;
+    RecordingHistoryStore history_store_;
     std::unique_ptr<RecordingCoordinator> coordinator_;
     std::unique_ptr<PreviewService> preview_service_;
 
