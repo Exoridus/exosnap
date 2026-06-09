@@ -159,6 +159,8 @@ qt_add_executable(exosnap WIN32
     settings/AppSettingsStore.cpp
     settings/RecordingPresetStore.h
     settings/RecordingPresetStore.cpp
+    settings/RecordingHistoryStore.h
+    settings/RecordingHistoryStore.cpp
     diagnostics/error_message.h
     diagnostics/error_message.cpp
     diagnostics/AppLog.h
@@ -235,9 +237,10 @@ target_link_libraries(exosnap_output_model_test_support PUBLIC
 exosnap_add_app_test_support(exosnap_record_viewmodel_test_support
     viewmodels/RecordViewModel.cpp
     diagnostics/error_message.cpp
+    settings/RecordingHistoryStore.cpp
 )
 target_link_libraries(exosnap_record_viewmodel_test_support PUBLIC
-    exosnap_output_model_test_support Qt6::Core Qt6::Gui Qt6::Widgets
+    exosnap_app_log_test_support exosnap_output_model_test_support Qt6::Core Qt6::Gui Qt6::Widgets
 )
 
 exosnap_add_app_test_support(exosnap_diagnostics_test_support
@@ -310,6 +313,16 @@ exosnap_add_gtest(
 target_include_directories(completed_result_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(completed_result_tests PRIVATE ole32.lib shell32.lib)
 set_target_properties(completed_result_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME recording_history_store_tests
+    TEST_PREFIX history_store.
+    SOURCES
+        tests/test_recording_history_store.cpp
+    LIBRARIES exosnap_app_log_test_support exosnap_record_viewmodel_test_support exosnap_capability recorder_core Qt6::Core
+)
+target_include_directories(recording_history_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(recording_history_store_tests PRIVATE ole32.lib shell32.lib)
 
 exosnap_add_gtest(
     NAME recording_preset_tests

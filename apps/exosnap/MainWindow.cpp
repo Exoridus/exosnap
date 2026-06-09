@@ -431,6 +431,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     record_page_->setWebcamSettings(live_webcam_);
     record_page_->applyPersistedAudioSettings(live_audio_);
     record_page_->setCountdownSeconds(startup_cfg.countdown_seconds);
+    record_page_->restoreRecordingHistory();
     config_page_->setAudioUiState(live_audio_);
     config_page_->setWebcamSettings(live_webcam_);
     main_layout->addWidget(stack_, 1);

@@ -2127,6 +2127,16 @@ void RecordPage::rebroadcastChromeState() {
     emitChromeState();
 }
 
+void RecordPage::restoreRecordingHistory() {
+    view_model_.SetHistoryStore(&history_store_);
+
+    QVector<CompletedRecording> loaded = history_store_.Load();
+    if (loaded.isEmpty())
+        return;
+
+    view_model_.RestoreHistory(loaded);
+}
+
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 namespace {
 // Deterministic synthetic webcam frame for PiP scenarios. The left and right halves
