@@ -68,13 +68,42 @@ jobs:
           name: ctest-logs-${{ matrix.preset }}
           path: build/${{ matrix.preset }}/Testing/Temporary/
 
-      - name: windeployqt (release only)
+      - name: Install and deploy (release only)
         if: matrix.preset == 'windows-x64-release'
         run: |
-          $exe = "build\windows-x64-release\Release\exosnap.exe"
-          if (Test-Path $exe) {
-            windeployqt --no-translations --no-opengl-sw $exe
+          cmake --install build/windows-x64-release --config Release --prefix build/install/exosnap
+        shell: pwsh
+
+      - name: Validate release artifact (release only)
+        if: matrix.preset == 'windows-x64-release'
+        run: |
+          $installDir = "build/install/exosnap"
+          $errors = @()
+
+          # Root files
+          @("LICENSE", "THIRD_PARTY_NOTICES.md") | ForEach-Object {
+            if (-not (Test-Path "$installDir/$_")) { $errors += "Missing root file: $_" }
           }
+
+          # License directory and files
+          if (-not (Test-Path "$installDir/licenses")) {
+            $errors += "Missing licenses/ directory"
+          } else {
+            @(
+              "spdlog.txt", "nlohmann_json.txt", "tomlplusplus.txt",
+              "opus.txt", "fdk-aac.txt", "libebml.txt",
+              "libmatroska.txt", "qt.txt"
+            ) | ForEach-Object {
+              if (-not (Test-Path "$installDir/licenses/$_")) { $errors += "Missing license: $_" }
+            }
+          }
+
+          if ($errors.Count -gt 0) {
+            Write-Host "##[error] License bundle validation FAILED:"
+            $errors | ForEach-Object { Write-Host "##[error]   $_" }
+            exit 1
+          }
+          Write-Host "License bundle validation PASSED"
         shell: pwsh
 
       - name: Upload release artifact
@@ -82,5 +111,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: exosnap-release
-          path: build\windows-x64-release\Release\
+          path: build/install/exosnap/
           if-no-files-found: ignore

@@ -1,5 +1,19 @@
 include(FetchContent)
 
+# License staging: copies canonical dependency license files into the build
+# tree so they can be installed alongside the exosnap binary with clean names.
+set(_exosnap_license_stage "${PROJECT_BINARY_DIR}/license_staging")
+file(MAKE_DIRECTORY "${_exosnap_license_stage}")
+
+function(_exosnap_install_license dep_name src_file dest_name)
+    if(EXISTS "${src_file}")
+        configure_file("${src_file}" "${_exosnap_license_stage}/${dest_name}" COPYONLY)
+        message(STATUS "License: ${dep_name} -> licenses/${dest_name}")
+    else()
+        message(FATAL_ERROR "License file for ${dep_name} not found: ${src_file}")
+    endif()
+endfunction()
+
 # --- GoogleTest ---
 FetchContent_Declare(
   googletest
@@ -20,6 +34,8 @@ set(SPDLOG_BUILD_TESTS OFF CACHE INTERNAL "")
 set(SPDLOG_BUILD_EXAMPLE OFF CACHE INTERNAL "")
 set(SPDLOG_INSTALL OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(spdlog)
+_exosnap_install_license("spdlog v1.14.1"
+    "${PROJECT_BINARY_DIR}/_deps/spdlog-src/LICENSE" "spdlog.txt")
 
 # --- nlohmann/json (retained for structured JSONL logging) ---
 FetchContent_Declare(
@@ -30,6 +46,8 @@ FetchContent_Declare(
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 set(JSON_Install OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(nlohmann_json)
+_exosnap_install_license("nlohmann/json v3.11.3"
+    "${PROJECT_BINARY_DIR}/_deps/nlohmann_json-src/LICENSE.MIT" "nlohmann_json.txt")
 
 # --- toml++ v3.4.0 (available for future config serialisation) ---
 FetchContent_Declare(
@@ -38,6 +56,8 @@ FetchContent_Declare(
   GIT_TAG        v3.4.0
 )
 FetchContent_MakeAvailable(tomlplusplus)
+_exosnap_install_license("toml++ v3.4.0"
+    "${PROJECT_BINARY_DIR}/_deps/tomlplusplus-src/LICENSE" "tomlplusplus.txt")
 
 # --- libopus v1.5.2 ---
 FetchContent_Declare(
@@ -51,6 +71,8 @@ set(OPUS_BUILD_PROGRAMS              OFF CACHE INTERNAL "")
 set(OPUS_INSTALL_PKG_CONFIG_MODULE   OFF CACHE INTERNAL "")
 set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(libopus)
+_exosnap_install_license("Opus v1.5.2"
+    "${PROJECT_BINARY_DIR}/_deps/libopus-src/COPYING" "opus.txt")
 
 # --- FDK-AAC v2.0.3 ---
 # Fraunhofer FDK AAC codec. License: compatible with GPL 3.0 per FSF (2017).
@@ -62,6 +84,8 @@ FetchContent_Declare(
 set(_exosnap_saved_bsl ${BUILD_SHARED_LIBS})
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(fdk-aac)
+_exosnap_install_license("FDK-AAC v2.0.3"
+    "${PROJECT_BINARY_DIR}/_deps/fdk-aac-src/NOTICE" "fdk-aac.txt")
 set(BUILD_SHARED_LIBS ${_exosnap_saved_bsl} CACHE BOOL "" FORCE)
 unset(_exosnap_saved_bsl)
 
@@ -76,6 +100,8 @@ FetchContent_Declare(
 )
 set(EBML_BUILD_SHARED_LIBS OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(EBML)
+_exosnap_install_license("libebml release-1.4.5"
+    "${PROJECT_BINARY_DIR}/_deps/ebml-src/LICENSE.LGPL" "libebml.txt")
 
 # FetchContent builds the raw 'ebml' target but install(EXPORT) is never run,
 # so EBMLTargets.cmake (referenced by EBMLConfig.cmake) does not exist.
@@ -103,6 +129,8 @@ FetchContent_Declare(
 )
 set(MATROSKA_BUILD_SHARED_LIBS OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(libmatroska)
+_exosnap_install_license("libmatroska release-1.7.1"
+    "${PROJECT_BINARY_DIR}/_deps/libmatroska-src/LICENSE.LGPL" "libmatroska.txt")
 
 # Same pattern: create build-tree targets file and namespaced alias.
 FetchContent_GetProperties(libmatroska BINARY_DIR _mkv_bindir SOURCE_DIR _mkv_srcdir)
@@ -142,3 +170,13 @@ if(_ebml_build_dir AND _ebml_src_dir AND EXISTS "${_ebml_build_dir}/ebml_export.
         COPYONLY
     )
 endif()
+
+# ---------------------------------------------------------------------------
+# Install all staged third-party license files into the install tree.
+# Each shipped dependency registered via _exosnap_install_license above.
+# ---------------------------------------------------------------------------
+install(
+    DIRECTORY "${_exosnap_license_stage}/"
+    DESTINATION "licenses"
+    FILES_MATCHING PATTERN "*.txt"
+)
