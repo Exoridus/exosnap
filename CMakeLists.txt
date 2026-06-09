@@ -8,6 +8,21 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
+option(EXOSNAP_USE_SCCACHE "Use sccache as the C++ compiler launcher when it is available." OFF)
+set(EXOSNAP_COMPILER_LAUNCHER "" CACHE STRING "Optional C++ compiler launcher executable, such as sccache.")
+
+if(EXOSNAP_COMPILER_LAUNCHER)
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${EXOSNAP_COMPILER_LAUNCHER}")
+elseif(EXOSNAP_USE_SCCACHE)
+    find_program(EXOSNAP_SCCACHE_EXE NAMES sccache)
+    if(EXOSNAP_SCCACHE_EXE)
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${EXOSNAP_SCCACHE_EXE}")
+        message(STATUS "Compiler launcher: sccache (${EXOSNAP_SCCACHE_EXE})")
+    else()
+        message(WARNING "EXOSNAP_USE_SCCACHE is ON, but sccache was not found. Configure continues without a compiler launcher.")
+    endif()
+endif()
+
 enable_testing()
 
 include(cmake/exosnap_warnings.cmake)
@@ -27,7 +42,12 @@ if(Git_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
     execute_process(
         COMMAND ${GIT_EXECUTABLE} config core.hooksPath .githooks
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+        RESULT_VARIABLE _exosnap_git_hooks_result
+        ERROR_QUIET
     )
+    if(NOT _exosnap_git_hooks_result EQUAL 0)
+        message(STATUS "Git hooks path was not updated during configure; continuing.")
+    endif()
 endif()
 
 add_subdirectory(libs/recorder_core)

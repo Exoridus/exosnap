@@ -1,6 +1,7 @@
 param(
     [int]$FailureTailLines = 160,
-    [switch]$VerboseOutput
+    [switch]$VerboseOutput,
+    [switch]$StaticOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -84,26 +85,51 @@ function Invoke-QuietNative {
 
 function Find-Tool {
     param([string]$Name, [switch]$Optional)
-    $cmd = Get-Command $Name -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
+    function Test-AppExecutionAlias {
+        param([string]$Path)
+        return $Path -and $Path.StartsWith((Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'), [StringComparison]::OrdinalIgnoreCase)
+    }
+
+    function Test-ToolCandidate {
+        param([string]$Path)
+        if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            return $false
+        }
+        if (Test-AppExecutionAlias $Path) {
+            return $false
+        }
+        try {
+            & $Path --version *> $null
+            return $LASTEXITCODE -eq 0
+        }
+        catch {
+            return $false
+        }
+    }
+
     $vsLlvm = Get-ChildItem -LiteralPath "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022" `
         -Recurse -Filter "$Name.exe" -ErrorAction SilentlyContinue |
         Where-Object { $_.FullName -match '\\Llvm\\x64\\bin\\' } |
+        Where-Object { Test-ToolCandidate $_.FullName } |
         Select-Object -First 1
     if ($vsLlvm) { return $vsLlvm.FullName }
     $llvm = Get-ChildItem -LiteralPath "${env:ProgramFiles}\LLVM" `
         -Recurse -Filter "$Name.exe" -ErrorAction SilentlyContinue |
+        Where-Object { Test-ToolCandidate $_.FullName } |
         Select-Object -First 1
     if ($llvm) { return $llvm.FullName }
     $cppcheckDir = Get-ChildItem -LiteralPath "${env:ProgramFiles}\Cppcheck" `
         -Filter "$Name.exe" -ErrorAction SilentlyContinue |
+        Where-Object { Test-ToolCandidate $_.FullName } |
         Select-Object -First 1
     if ($cppcheckDir) { return $cppcheckDir.FullName }
+    $cmd = Get-Command $Name -ErrorAction SilentlyContinue
+    if ($cmd -and (Test-ToolCandidate $cmd.Source)) { return $cmd.Source }
     if ($Optional) { return $null }
     throw "$Name.exe not found on PATH, VS LLVM, LLVM, or Cppcheck install."
 }
 
-$clangTidy = Find-Tool 'clang-tidy'
+$clangTidy = Find-Tool 'clang-tidy' -Optional
 $cppcheck  = Find-Tool 'cppcheck' -Optional
 
 $srcFiles = @(git -C $repoRoot ls-files -- 'libs/' 'apps/' 'tests/' |
@@ -116,6 +142,10 @@ $srcFiles = @(git -C $repoRoot ls-files -- 'libs/' 'apps/' 'tests/' |
 
 $compDb = Join-Path $repoRoot 'build/windows-x64-debug/compile_commands.json'
 if (Test-Path -Path $compDb -PathType Leaf) {
+    if (-not $clangTidy) {
+        throw "clang-tidy.exe not found on PATH, VS LLVM, or LLVM install."
+    }
+
     if ($srcFiles) {
         Invoke-QuietNative -Name 'clang-tidy' -FilePath $clangTidy -Arguments (@('-p', 'build/windows-x64-debug') + $srcFiles)
     }
@@ -152,6 +182,12 @@ if ($cppcheck) {
 }
 else {
     Write-Host "cppcheck: SKIP (not installed; install with: winget install Cppcheck.Cppcheck)"
+}
+
+if ($StaticOnly) {
+    Write-Host ""
+    Write-Host "Static quality check passed."
+    exit 0
 }
 
 # ---------------------------------------------------------------------------

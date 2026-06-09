@@ -61,6 +61,40 @@ blocks invalid recordings before start; and exposes rich diagnostics and live re
 - Developers can run `scripts/pre-commit.ps1` before committing.
 - The script runs formatting checks, optional clang-tidy when a compilation database exists, configure/build/test.
 
+## Fast local development workflow
+
+Use minimal validation during development, then run the complete gate once before merge.
+
+Implementation loop:
+
+```powershell
+cmake --preset windows-x64-debug
+cmake --build --preset windows-x64-debug-exosnap
+cmake --build --preset windows-x64-debug-presentation-state-tests
+cmake --build --preset windows-x64-debug --target <focused_test_target>
+ctest --preset windows-x64-debug -R "<focused_test_regex>" --output-on-failure
+scripts\check-format.ps1
+git diff --check
+```
+
+Final gate:
+
+```powershell
+scripts\check-format.ps1
+git diff --check
+cmake --build --preset windows-x64-debug
+ctest --preset windows-x64-debug --output-on-failure
+scripts\check-quality.ps1 -StaticOnly
+cmake --build --preset windows-x64-release-exosnap
+```
+
+`scripts\check-quality.ps1` keeps its default configure/build/test behavior for humans and hooks. Use `-StaticOnly` after a full build and CTest have already run, so final validation does not rebuild solely to run standalone static checks.
+
+Optional accelerators:
+
+- Ninja is supported by CMake when installed, but this repository does not define Ninja presets unless the toolchain is available and verified on the machine.
+- `sccache` can be enabled without hard-coded paths with `-DEXOSNAP_USE_SCCACHE=ON`, or by setting `-DEXOSNAP_COMPILER_LAUNCHER=<launcher>`. Configure continues without a compiler launcher when optional `sccache` is requested but unavailable.
+
 ## Working rule
 
 This pack is the initial source of truth. If implementation work discovers a real conflict, update the relevant spec and add or revise an ADR before letting the codebase drift.

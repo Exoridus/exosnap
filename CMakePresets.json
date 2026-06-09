@@ -37,8 +37,35 @@
       "configurePreset": "windows-x64-debug"
     },
     {
+      "name": "windows-x64-debug-exosnap",
+      "displayName": "Windows x64 Debug - exosnap app only",
+      "configurePreset": "windows-x64-debug",
+      "configuration": "Debug",
+      "targets": [
+        "exosnap"
+      ]
+    },
+    {
+      "name": "windows-x64-debug-presentation-state-tests",
+      "displayName": "Windows x64 Debug - presentation state tests",
+      "configurePreset": "windows-x64-debug",
+      "configuration": "Debug",
+      "targets": [
+        "presentation_state_tests"
+      ]
+    },
+    {
       "name": "windows-x64-release",
       "configurePreset": "windows-x64-release"
+    },
+    {
+      "name": "windows-x64-release-exosnap",
+      "displayName": "Windows x64 Release - exosnap app only",
+      "configurePreset": "windows-x64-release",
+      "configuration": "Release",
+      "targets": [
+        "exosnap"
+      ]
     },
     {
       "name": "windows-x64-lint",

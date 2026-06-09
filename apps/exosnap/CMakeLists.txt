@@ -206,6 +206,88 @@ target_link_libraries(exosnap PRIVATE
 
 target_include_directories(exosnap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
+function(exosnap_add_app_test_support NAME)
+    add_library(${NAME} STATIC ${ARGN})
+    target_include_directories(${NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+    target_compile_definitions(${NAME} PUBLIC NOMINMAX)
+    target_link_libraries(${NAME} PUBLIC exosnap::warnings)
+    set_target_properties(${NAME} PROPERTIES AUTOMOC ON)
+endfunction()
+
+exosnap_add_app_test_support(exosnap_app_log_test_support
+    diagnostics/AppLog.cpp
+)
+target_link_libraries(exosnap_app_log_test_support PUBLIC Qt6::Core)
+
+exosnap_add_app_test_support(exosnap_output_model_test_support
+    models/FilenameBuilder.cpp
+    models/OutputPathPolicy.cpp
+    models/OutputPathValidator.cpp
+    models/OutputSettingsModel.cpp
+    models/RecordingPreset.cpp
+)
+target_link_libraries(exosnap_output_model_test_support PUBLIC
+    Qt6::Core Qt6::Gui exosnap_capability recorder_core ole32.lib shell32.lib
+)
+
+exosnap_add_app_test_support(exosnap_record_viewmodel_test_support
+    viewmodels/RecordViewModel.cpp
+    diagnostics/error_message.cpp
+)
+target_link_libraries(exosnap_record_viewmodel_test_support PUBLIC
+    exosnap_output_model_test_support Qt6::Core Qt6::Gui Qt6::Widgets
+)
+
+exosnap_add_app_test_support(exosnap_diagnostics_test_support
+    diagnostics/DiagnosticResult.cpp
+    diagnostics/CapabilitySummary.cpp
+    diagnostics/ConfigSummary.cpp
+    diagnostics/RecommendationEngine.cpp
+    diagnostics/SelfTestRunner.cpp
+)
+target_link_libraries(exosnap_diagnostics_test_support PUBLIC
+    exosnap_output_model_test_support exosnap_capability recorder_core
+)
+
+exosnap_add_app_test_support(exosnap_device_service_test_support
+    services/AudioDeviceNotifier.cpp
+    services/WebcamDeviceNotifier.cpp
+    services/DisplayDeviceNotifier.cpp
+    services/WebcamService.cpp
+)
+target_link_libraries(exosnap_device_service_test_support PUBLIC
+    exosnap_app_log_test_support Qt6::Core Qt6::Gui exosnap_capability recorder_core
+    ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib
+)
+
+exosnap_add_app_test_support(exosnap_pages_test_support
+    pages/ConfigPage.cpp
+    pages/WebcamPage.cpp
+    viewmodels/PresentationStateBuilder.cpp
+    ui/widgets/ComboBoxWheelFilter.cpp
+    ui/widgets/CameraPreview.cpp
+    ui/widgets/ExoToggle.cpp
+    ui/widgets/VUMeterWidget.cpp
+    ui/widgets/WebcamSetupPanel.cpp
+)
+target_link_libraries(exosnap_pages_test_support PUBLIC
+    exosnap_device_service_test_support exosnap_output_model_test_support
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+
+exosnap_add_app_test_support(exosnap_source_picker_test_support
+    ui/dialogs/SourcePickerPanel.cpp
+    ui/dialogs/SourcePickerDialog.cpp
+    ui/dialogs/SourcePickerOverlay.cpp
+    ui/widgets/RegionGeometry.cpp
+    ui/widgets/CaptureTargetCard.cpp
+    ui/widgets/RegionPresetCard.cpp
+    services/ThumbnailCapture.cpp
+)
+target_link_libraries(exosnap_source_picker_test_support PUBLIC
+    Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
+)
+
 exosnap_add_gtest(
     NAME presentation_state_tests
     TEST_PREFIX state.
@@ -221,14 +303,7 @@ exosnap_add_gtest(
     TEST_PREFIX result.
     SOURCES
         tests/test_completed_result.cpp
-        viewmodels/RecordViewModel.cpp
-        diagnostics/error_message.cpp
-        models/FilenameBuilder.cpp
-        models/RecordingPreset.cpp
-        models/OutputPathPolicy.cpp
-        models/OutputSettingsModel.cpp
-        diagnostics/AppLog.cpp
-    LIBRARIES exosnap_capability recorder_core Qt6::Core Qt6::Gui Qt6::Widgets
+    LIBRARIES exosnap_record_viewmodel_test_support exosnap_capability recorder_core Qt6::Core Qt6::Gui Qt6::Widgets
 )
 target_include_directories(completed_result_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(completed_result_tests PRIVATE ole32.lib shell32.lib)
@@ -264,9 +339,7 @@ exosnap_add_gtest(
     TEST_PREFIX viewmodel.
     SOURCES
         tests/test_record_view_model_audio.cpp
-        viewmodels/RecordViewModel.cpp
-        diagnostics/error_message.cpp
-    LIBRARIES exosnap_capability recorder_core Qt6::Core
+    LIBRARIES exosnap_record_viewmodel_test_support exosnap_capability recorder_core Qt6::Core
 )
 target_include_directories(record_viewmodel_audio_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -314,14 +387,10 @@ exosnap_add_gtest(
     SOURCES
         tests/test_output_settings.cpp
         services/RecordingCoordinator.cpp
-        services/WebcamService.cpp
-        models/OutputSettingsModel.cpp
-        models/RecordingPreset.cpp
-        models/FilenameBuilder.cpp
-        models/OutputPathValidator.cpp
-        models/OutputPathPolicy.cpp
-        diagnostics/AppLog.cpp
-    LIBRARIES Qt6::Core Qt6::Gui exosnap_capability recorder_core
+    LIBRARIES
+        exosnap_output_model_test_support
+        exosnap_device_service_test_support
+        Qt6::Core Qt6::Gui exosnap_capability recorder_core
 )
 target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(output_settings_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
@@ -342,14 +411,7 @@ exosnap_add_gtest(
     TEST_PREFIX diagnostics.
     SOURCES
         tests/test_diagnostics.cpp
-        diagnostics/DiagnosticResult.cpp
-        diagnostics/CapabilitySummary.cpp
-        diagnostics/ConfigSummary.cpp
-        diagnostics/RecommendationEngine.cpp
-        diagnostics/SelfTestRunner.cpp
-        models/OutputSettingsModel.cpp
-        models/OutputPathPolicy.cpp
-    LIBRARIES exosnap_capability recorder_core
+    LIBRARIES exosnap_diagnostics_test_support exosnap_capability recorder_core
 )
 target_include_directories(diagnostics_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -386,24 +448,7 @@ exosnap_add_gtest(
     TEST_PREFIX config.
     SOURCES
         tests/test_config_page.cpp
-        pages/ConfigPage.cpp
-        viewmodels/PresentationStateBuilder.cpp
-        ui/widgets/ComboBoxWheelFilter.cpp
-        ui/widgets/CameraPreview.cpp
-        ui/widgets/ExoToggle.cpp
-        ui/widgets/VUMeterWidget.cpp
-        ui/widgets/WebcamSetupPanel.cpp
-        models/FilenameBuilder.cpp
-        models/OutputPathPolicy.cpp
-        models/OutputPathValidator.cpp
-        models/RecordingPreset.cpp
-        services/AudioDeviceNotifier.cpp
-        services/WebcamDeviceNotifier.cpp
-        services/DisplayDeviceNotifier.cpp
-        services/WebcamService.cpp
-        models/OutputSettingsModel.cpp
-        diagnostics/AppLog.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+    LIBRARIES exosnap_pages_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
 )
 target_include_directories(config_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(config_page_tests PROPERTIES AUTOMOC ON)
@@ -414,13 +459,7 @@ exosnap_add_gtest(
     TEST_PREFIX source.
     SOURCES
         tests/test_source_picker_dialog.cpp
-        ui/dialogs/SourcePickerPanel.cpp
-        ui/dialogs/SourcePickerDialog.cpp
-        ui/widgets/RegionGeometry.cpp
-        ui/widgets/CaptureTargetCard.cpp
-        ui/widgets/RegionPresetCard.cpp
-        services/ThumbnailCapture.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
+    LIBRARIES exosnap_source_picker_test_support Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
 )
 target_include_directories(source_picker_dialog_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(source_picker_dialog_tests PRIVATE NOMINMAX)
@@ -431,14 +470,7 @@ exosnap_add_gtest(
     TEST_PREFIX source.
     SOURCES
         tests/test_source_picker_overlay.cpp
-        ui/dialogs/SourcePickerOverlay.cpp
-        ui/dialogs/SourcePickerPanel.cpp
-        ui/dialogs/SourcePickerDialog.cpp
-        ui/widgets/RegionGeometry.cpp
-        ui/widgets/CaptureTargetCard.cpp
-        ui/widgets/RegionPresetCard.cpp
-        services/ThumbnailCapture.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
+    LIBRARIES exosnap_source_picker_test_support Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
 )
 target_include_directories(source_picker_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(source_picker_overlay_tests PRIVATE NOMINMAX)
@@ -449,14 +481,7 @@ exosnap_add_gtest(
     TEST_PREFIX source.
     SOURCES
         tests/test_source_picker_refresh.cpp
-        ui/dialogs/SourcePickerPanel.cpp
-        ui/dialogs/SourcePickerDialog.cpp
-        ui/dialogs/SourcePickerOverlay.cpp
-        ui/widgets/RegionGeometry.cpp
-        ui/widgets/CaptureTargetCard.cpp
-        ui/widgets/RegionPresetCard.cpp
-        services/ThumbnailCapture.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
+    LIBRARIES exosnap_source_picker_test_support Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
 )
 target_include_directories(source_picker_refresh_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(source_picker_refresh_tests PRIVATE NOMINMAX)
@@ -467,14 +492,7 @@ exosnap_add_gtest(
     TEST_PREFIX webcam.
     SOURCES
         tests/test_webcam_page.cpp
-        pages/WebcamPage.cpp
-        ui/widgets/CameraPreview.cpp
-        ui/widgets/ExoToggle.cpp
-        ui/widgets/ComboBoxWheelFilter.cpp
-        services/WebcamDeviceNotifier.cpp
-        services/WebcamService.cpp
-        diagnostics/AppLog.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+    LIBRARIES exosnap_pages_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
 )
 target_include_directories(webcam_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(webcam_page_tests PROPERTIES AUTOMOC ON)
@@ -615,14 +633,7 @@ exosnap_add_gtest(
         ui/widgets/SectionRuleHeader.cpp
         ui/widgets/PipelineFlow.cpp
         ui/widgets/PipelineStepCard.cpp
-        diagnostics/DiagnosticResult.cpp
-        diagnostics/CapabilitySummary.cpp
-        diagnostics/ConfigSummary.cpp
-        diagnostics/RecommendationEngine.cpp
-        diagnostics/SelfTestRunner.cpp
-        models/OutputSettingsModel.cpp
-        models/OutputPathPolicy.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+    LIBRARIES exosnap_diagnostics_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
 )
 target_include_directories(diagnostics_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(diagnostics_page_tests PROPERTIES AUTOMOC ON)
@@ -654,9 +665,7 @@ exosnap_add_gtest(
     TEST_PREFIX device.
     SOURCES
         tests/test_audio_device_notifier.cpp
-        services/AudioDeviceNotifier.cpp
-        diagnostics/AppLog.cpp
-    LIBRARIES Qt6::Core exosnap_capability recorder_core)
+    LIBRARIES exosnap_device_service_test_support Qt6::Core exosnap_capability recorder_core)
 target_include_directories(audio_device_notifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(audio_device_notifier_tests PRIVATE ole32.lib)
 set_target_properties(audio_device_notifier_tests PROPERTIES AUTOMOC ON)
@@ -666,10 +675,7 @@ exosnap_add_gtest(
     TEST_PREFIX device.
     SOURCES
         tests/test_webcam_device_notifier.cpp
-        services/WebcamDeviceNotifier.cpp
-        services/WebcamService.cpp
-        diagnostics/AppLog.cpp
-    LIBRARIES Qt6::Core Qt6::Gui exosnap_capability recorder_core)
+    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability recorder_core)
 target_include_directories(webcam_device_notifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(webcam_device_notifier_tests PRIVATE ole32.lib mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
 set_target_properties(webcam_device_notifier_tests PROPERTIES AUTOMOC ON)
@@ -679,9 +685,7 @@ exosnap_add_gtest(
     TEST_PREFIX device.
     SOURCES
         tests/test_display_device_notifier.cpp
-        services/DisplayDeviceNotifier.cpp
-        diagnostics/AppLog.cpp
-    LIBRARIES Qt6::Core Qt6::Gui exosnap_capability recorder_core)
+    LIBRARIES exosnap_device_service_test_support Qt6::Core Qt6::Gui exosnap_capability recorder_core)
 target_include_directories(display_device_notifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(display_device_notifier_tests PRIVATE ole32.lib)
 set_target_properties(display_device_notifier_tests PROPERTIES AUTOMOC ON)
@@ -693,25 +697,7 @@ exosnap_add_gtest(
     TEST_PREFIX discovery.
     SOURCES
         tests/test_device_selection_policy.cpp
-        pages/ConfigPage.cpp
-        pages/WebcamPage.cpp
-        viewmodels/PresentationStateBuilder.cpp
-        ui/widgets/ComboBoxWheelFilter.cpp
-        ui/widgets/CameraPreview.cpp
-        ui/widgets/ExoToggle.cpp
-        ui/widgets/VUMeterWidget.cpp
-        ui/widgets/WebcamSetupPanel.cpp
-        models/FilenameBuilder.cpp
-        models/OutputPathPolicy.cpp
-        models/OutputPathValidator.cpp
-        models/RecordingPreset.cpp
-        services/AudioDeviceNotifier.cpp
-        services/WebcamDeviceNotifier.cpp
-        services/DisplayDeviceNotifier.cpp
-        services/WebcamService.cpp
-        models/OutputSettingsModel.cpp
-        diagnostics/AppLog.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+    LIBRARIES exosnap_pages_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
 )
 target_include_directories(device_selection_policy_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(device_selection_policy_tests PROPERTIES AUTOMOC ON)
