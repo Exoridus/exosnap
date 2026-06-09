@@ -771,6 +771,27 @@ if(WIN32 AND Qt6_FOUND)
         OUTPUT_SCRIPT _exosnap_deploy_script
         NO_UNSUPPORTED_PLATFORM_ERROR
     )
+
+    # Root project license and third-party notices (before TARGETS so they
+    # install even if the exe target is missing during dev iteration).
+    install(
+        FILES
+            "${PROJECT_SOURCE_DIR}/LICENSE"
+            "${PROJECT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+        DESTINATION "."
+    )
+
+    # Qt LGPLv3 license text staged with a clean name alongside other
+    # third-party licenses. The staging directory is shared with
+    # third_party/CMakeLists.txt so the existing install(DIRECTORY) rule
+    # picks up this file automatically.
+    file(MAKE_DIRECTORY "${PROJECT_BINARY_DIR}/license_staging")
+    configure_file(
+        "${PROJECT_SOURCE_DIR}/third_party/qt/LGPL-3.0.txt"
+        "${PROJECT_BINARY_DIR}/license_staging/qt.txt"
+        COPYONLY
+    )
+
     install(TARGETS exosnap RUNTIME DESTINATION .)
     install(SCRIPT ${_exosnap_deploy_script})
 endif()
