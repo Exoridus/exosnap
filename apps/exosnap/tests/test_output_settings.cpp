@@ -548,6 +548,124 @@ TEST(OutputSettingsTest, OddCustomResolutionAlignsDeterministically) {
     EXPECT_EQ(settings.custom_height, 1078u);
 }
 
+TEST(OutputSettingsTest, CustomResolutionBounds_WidthBelowMinimum_SanitizesToNative) {
+    OutputResolutionSettings settings;
+    settings.mode = OutputResolutionMode::Custom;
+    settings.custom_width = 100;
+    settings.custom_height = 720;
+
+    SanitizeOutputResolution(settings);
+    EXPECT_EQ(settings.mode, OutputResolutionMode::Native);
+    EXPECT_EQ(settings.custom_width, 0u);
+    EXPECT_EQ(settings.custom_height, 0u);
+}
+
+TEST(OutputSettingsTest, CustomResolutionBounds_HeightBelowMinimum_SanitizesToNative) {
+    OutputResolutionSettings settings;
+    settings.mode = OutputResolutionMode::Custom;
+    settings.custom_width = 1920;
+    settings.custom_height = 100;
+
+    SanitizeOutputResolution(settings);
+    EXPECT_EQ(settings.mode, OutputResolutionMode::Native);
+    EXPECT_EQ(settings.custom_width, 0u);
+    EXPECT_EQ(settings.custom_height, 0u);
+}
+
+TEST(OutputSettingsTest, CustomResolutionBounds_WidthExceedsMaximum_SanitizesToNative) {
+    OutputResolutionSettings settings;
+    settings.mode = OutputResolutionMode::Custom;
+    settings.custom_width = 8000;
+    settings.custom_height = 4320;
+
+    SanitizeOutputResolution(settings);
+    EXPECT_EQ(settings.mode, OutputResolutionMode::Native);
+    EXPECT_EQ(settings.custom_width, 0u);
+    EXPECT_EQ(settings.custom_height, 0u);
+}
+
+TEST(OutputSettingsTest, CustomResolutionBounds_ValidValues_RemainCustom) {
+    OutputResolutionSettings settings;
+    settings.mode = OutputResolutionMode::Custom;
+    settings.custom_width = 1920;
+    settings.custom_height = 1080;
+
+    SanitizeOutputResolution(settings);
+    EXPECT_EQ(settings.mode, OutputResolutionMode::Custom);
+    EXPECT_EQ(settings.custom_width, 1920u);
+    EXPECT_EQ(settings.custom_height, 1080u);
+}
+
+TEST(OutputSettingsTest, CustomResolutionBounds_MinimumBounds_Accepted) {
+    OutputResolutionSettings settings;
+    settings.mode = OutputResolutionMode::Custom;
+    settings.custom_width = 320;
+    settings.custom_height = 180;
+
+    SanitizeOutputResolution(settings);
+    EXPECT_EQ(settings.mode, OutputResolutionMode::Custom);
+    EXPECT_EQ(settings.custom_width, 320u);
+    EXPECT_EQ(settings.custom_height, 180u);
+}
+
+TEST(OutputSettingsTest, CustomResolutionBounds_MaximumBounds_Accepted) {
+    OutputResolutionSettings settings;
+    settings.mode = OutputResolutionMode::Custom;
+    settings.custom_width = 7680;
+    settings.custom_height = 4320;
+
+    SanitizeOutputResolution(settings);
+    EXPECT_EQ(settings.mode, OutputResolutionMode::Custom);
+    EXPECT_EQ(settings.custom_width, 7680u);
+    EXPECT_EQ(settings.custom_height, 4320u);
+}
+
+TEST(OutputSettingsTest, ResolveRequestedOutputSize_Custom_ReturnsAlignedDimensions) {
+    OutputResolutionSettings settings;
+    settings.mode = OutputResolutionMode::Custom;
+    settings.custom_width = 1919;
+    settings.custom_height = 1079;
+
+    const auto resolved = ResolveRequestedOutputSize(settings, {2560, 1440});
+    ASSERT_TRUE(resolved.has_value());
+    EXPECT_EQ(resolved->width, 1918u);
+    EXPECT_EQ(resolved->height, 1078u);
+}
+
+TEST(OutputSettingsTest, ResolveRequestedOutputSize_Custom_InvalidBounds_ReturnsNullopt) {
+    OutputResolutionSettings settings;
+    settings.mode = OutputResolutionMode::Custom;
+    settings.custom_width = 100;
+    settings.custom_height = 100;
+
+    const auto resolved = ResolveRequestedOutputSize(settings, {2560, 1440});
+    EXPECT_FALSE(resolved.has_value());
+}
+
+TEST(OutputSettingsTest, ApplyOutputResolution_Custom_PassesAlignedSizeToRecorderConfig) {
+    recorder_core::RecorderConfig config{};
+
+    OutputSettingsModel settings = OutputSettingsModel::Defaults();
+    settings.resolution.mode = OutputResolutionMode::Custom;
+    settings.resolution.custom_width = 1919;
+    settings.resolution.custom_height = 1079;
+    SanitizeOutputResolution(settings.resolution);
+
+    ApplyOutputSettingsToRecorderConfig(config, settings);
+    EXPECT_EQ(config.output_width, 1918u);
+    EXPECT_EQ(config.output_height, 1078u);
+    EXPECT_EQ(config.output_fit, recorder_core::OutputFitMode::Contain);
+}
+
+TEST(OutputSettingsTest, FixedModesStillBehavior_Unchanged) {
+    EXPECT_EQ(PresetOutputSize(OutputResolutionMode::UHD2160)->width, 3840u);
+    EXPECT_EQ(PresetOutputSize(OutputResolutionMode::FHD1080)->width, 1920u);
+    EXPECT_EQ(PresetOutputSize(OutputResolutionMode::HD720)->height, 720u);
+
+    EXPECT_EQ(std::wstring(OutputResolutionModeName(OutputResolutionMode::Native)), L"Native");
+    EXPECT_EQ(std::wstring(OutputResolutionModeName(OutputResolutionMode::Custom)), L"Custom");
+}
+
 TEST(OutputGeometryTest, ContainRect_16x9Into16x9FillsOutput) {
     const auto rect = recorder_core::ResolveContainRect({1920, 1080}, {1280, 720});
     ASSERT_TRUE(rect.has_value());

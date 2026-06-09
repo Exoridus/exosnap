@@ -16,6 +16,7 @@
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QSpinBox>
 #include <QStandardItemModel>
 #include <QStringList>
 #include <QStyle>
@@ -698,7 +699,48 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                                                        OutputResolutionMode::FHD1080);
     output_res_720_btn_ = makeOutputResolutionSegment(QStringLiteral("outputRes720Button"), QStringLiteral("720p"),
                                                       OutputResolutionMode::HD720);
+    output_res_custom_btn_ = makeOutputResolutionSegment(QStringLiteral("outputResCustomButton"),
+                                                         QStringLiteral("Custom"), OutputResolutionMode::Custom);
     out_panel_layout->addWidget(out_res_segmented);
+
+    // Custom resolution width/height fields (CUSTOM-OUTPUT-RESOLUTION-R1).
+    custom_resolution_widget_ = new QWidget(out_panel);
+    custom_resolution_widget_->setObjectName(QStringLiteral("customResolutionWidget"));
+    custom_resolution_widget_->setVisible(false);
+    auto* custom_res_layout = new QHBoxLayout(custom_resolution_widget_);
+    custom_res_layout->setContentsMargins(0, 0, 0, 0);
+    custom_res_layout->setSpacing(8);
+
+    auto* width_label = new QLabel(QStringLiteral("Width"), custom_resolution_widget_);
+    width_label->setProperty("labelRole", "fieldLabel");
+    custom_width_spin_ = new QSpinBox(custom_resolution_widget_);
+    custom_width_spin_->setObjectName(QStringLiteral("customWidthSpin"));
+    custom_width_spin_->setRange(320, 7680);
+    custom_width_spin_->setSingleStep(2);
+    custom_width_spin_->setSuffix(QStringLiteral(" px"));
+    custom_width_spin_->setToolTip(QStringLiteral("Custom output width (320–7680)"));
+
+    auto* height_label = new QLabel(QStringLiteral("Height"), custom_resolution_widget_);
+    height_label->setProperty("labelRole", "fieldLabel");
+    custom_height_spin_ = new QSpinBox(custom_resolution_widget_);
+    custom_height_spin_->setObjectName(QStringLiteral("customHeightSpin"));
+    custom_height_spin_->setRange(180, 7680);
+    custom_height_spin_->setSingleStep(2);
+    custom_height_spin_->setSuffix(QStringLiteral(" px"));
+    custom_height_spin_->setToolTip(QStringLiteral("Custom output height (180–7680)"));
+
+    custom_res_layout->addWidget(width_label);
+    custom_res_layout->addWidget(custom_width_spin_);
+    custom_res_layout->addWidget(height_label);
+    custom_res_layout->addWidget(custom_height_spin_);
+    custom_res_layout->addStretch();
+    out_panel_layout->addWidget(custom_resolution_widget_);
+
+    custom_resolution_validation_label_ = makeHint(QString(), out_panel);
+    custom_resolution_validation_label_->setObjectName(QStringLiteral("customResolutionValidationLabel"));
+    custom_resolution_validation_label_->setVisible(false);
+    out_panel_layout->addWidget(custom_resolution_validation_label_);
+
     output_effective_summary_label_ = makeHint(QString(), out_panel);
     output_effective_summary_label_->setObjectName(QStringLiteral("outputEffectiveSummaryLabel"));
     out_panel_layout->addWidget(output_effective_summary_label_);
@@ -846,6 +888,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             &ConfigPage::onFrameRateChanged);
     connect(timing_group_, &QButtonGroup::idClicked, this, &ConfigPage::onTimingSelected);
     connect(output_resolution_group_, &QButtonGroup::idClicked, this, &ConfigPage::onOutputResolutionSelected);
+    connect(custom_width_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &ConfigPage::onCustomWidthChanged);
+    connect(custom_height_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &ConfigPage::onCustomHeightChanged);
     connect(cursor_check_, &QCheckBox::toggled, this, &ConfigPage::onCursorChanged);
     connect(browse_btn_, &QPushButton::clicked, this, &ConfigPage::onBrowse);
     connect(destination_edit_, &QLineEdit::editingFinished, this, &ConfigPage::onDestinationEditingFinished);
@@ -1019,8 +1063,28 @@ void ConfigPage::onTimingSelected(int timing_id) {
 }
 
 void ConfigPage::onOutputResolutionSelected(int mode_id) {
-    format_settings_.resolution.mode = static_cast<OutputResolutionMode>(mode_id);
+    const auto new_mode = static_cast<OutputResolutionMode>(mode_id);
+    const auto old_mode = format_settings_.resolution.mode;
+
+    if (old_mode == OutputResolutionMode::Custom && new_mode != OutputResolutionMode::Custom) {
+        stashed_custom_width_ = format_settings_.resolution.custom_width;
+        stashed_custom_height_ = format_settings_.resolution.custom_height;
+    }
+
+    if (new_mode == OutputResolutionMode::Custom) {
+        if (stashed_custom_width_ > 0 || stashed_custom_height_ > 0) {
+            format_settings_.resolution.custom_width = stashed_custom_width_;
+            format_settings_.resolution.custom_height = stashed_custom_height_;
+        } else {
+            format_settings_.resolution.custom_width = 1920;
+            format_settings_.resolution.custom_height = 1080;
+        }
+    }
+
+    format_settings_.resolution.mode = new_mode;
     SanitizeOutputResolution(format_settings_.resolution);
+
+    updateCustomResolutionVisibility();
     updateOutputResolutionSelection();
     emitCurrentFormatSettings();
 }
@@ -1137,6 +1201,10 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
     format_settings_.naming_pattern = settings.naming_pattern;
     format_settings_.resolution = settings.resolution;
     SanitizeOutputResolution(format_settings_.resolution);
+    if (settings.resolution.mode == OutputResolutionMode::Custom) {
+        stashed_custom_width_ = settings.resolution.custom_width;
+        stashed_custom_height_ = settings.resolution.custom_height;
+    }
 
     const QSignalBlocker blocker(container_group_);
     if (settings.container == capability::Container::Matroska)
@@ -1150,6 +1218,7 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
     updateAudioCodecChoices();
     updateFormatDisplay();
     updateOutputResolutionSelection();
+    updateCustomResolutionVisibility();
     updateEffectiveOutputSummary();
 
     if (destination_edit_) {
@@ -1297,6 +1366,81 @@ void ConfigPage::updateOutputResolutionSelection() {
     sync_segment(output_res_1440_btn_, OutputResolutionMode::QHD1440);
     sync_segment(output_res_1080_btn_, OutputResolutionMode::FHD1080);
     sync_segment(output_res_720_btn_, OutputResolutionMode::HD720);
+    sync_segment(output_res_custom_btn_, OutputResolutionMode::Custom);
+}
+
+void ConfigPage::updateCustomResolutionVisibility() {
+    if (!custom_resolution_widget_)
+        return;
+    const bool is_custom = format_settings_.resolution.mode == OutputResolutionMode::Custom;
+    custom_resolution_widget_->setVisible(is_custom);
+
+    if (is_custom && custom_width_spin_ && custom_height_spin_) {
+        const QSignalBlocker wb(custom_width_spin_);
+        const QSignalBlocker hb(custom_height_spin_);
+        const int w = static_cast<int>(format_settings_.resolution.custom_width);
+        const int h = static_cast<int>(format_settings_.resolution.custom_height);
+        if (w >= custom_width_spin_->minimum() && w <= custom_width_spin_->maximum())
+            custom_width_spin_->setValue(w);
+        if (h >= custom_height_spin_->minimum() && h <= custom_height_spin_->maximum())
+            custom_height_spin_->setValue(h);
+    }
+
+    updateCustomResolutionValidation();
+}
+
+void ConfigPage::updateCustomResolutionValidation() {
+    if (!custom_resolution_validation_label_)
+        return;
+    if (format_settings_.resolution.mode != OutputResolutionMode::Custom) {
+        custom_resolution_validation_label_->clear();
+        custom_resolution_validation_label_->setVisible(false);
+        return;
+    }
+
+    const uint32_t w = format_settings_.resolution.custom_width;
+    const uint32_t h = format_settings_.resolution.custom_height;
+
+    if (w < 320) {
+        custom_resolution_validation_label_->setText(QStringLiteral("Width must be at least 320 px."));
+        custom_resolution_validation_label_->setVisible(true);
+    } else if (w > 7680) {
+        custom_resolution_validation_label_->setText(QStringLiteral("Width must not exceed 7680 px."));
+        custom_resolution_validation_label_->setVisible(true);
+    } else if (h < 180) {
+        custom_resolution_validation_label_->setText(QStringLiteral("Height must be at least 180 px."));
+        custom_resolution_validation_label_->setVisible(true);
+    } else if (h > 7680) {
+        custom_resolution_validation_label_->setText(QStringLiteral("Height must not exceed 7680 px."));
+        custom_resolution_validation_label_->setVisible(true);
+    } else if (w % 2 != 0 || h % 2 != 0) {
+        custom_resolution_validation_label_->setText(
+            QStringLiteral("Dimensions will be aligned to even values (%1×%2).").arg(w & ~1u).arg(h & ~1u));
+        custom_resolution_validation_label_->setVisible(true);
+    } else {
+        custom_resolution_validation_label_->clear();
+        custom_resolution_validation_label_->setVisible(false);
+    }
+}
+
+void ConfigPage::onCustomWidthChanged(int value) {
+    if (value <= 0)
+        return;
+    format_settings_.resolution.custom_width = static_cast<uint32_t>(value);
+    SanitizeOutputResolution(format_settings_.resolution);
+    updateCustomResolutionVisibility();
+    updateEffectiveOutputSummary();
+    emitCurrentFormatSettings();
+}
+
+void ConfigPage::onCustomHeightChanged(int value) {
+    if (value <= 0)
+        return;
+    format_settings_.resolution.custom_height = static_cast<uint32_t>(value);
+    SanitizeOutputResolution(format_settings_.resolution);
+    updateCustomResolutionVisibility();
+    updateEffectiveOutputSummary();
+    emitCurrentFormatSettings();
 }
 
 void ConfigPage::updateEffectiveOutputSummary() {

@@ -87,6 +87,8 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("settings-output-1440p"),
         QStringLiteral("settings-output-1080p"),
         QStringLiteral("settings-output-720p"),
+        QStringLiteral("settings-output-custom-resolution"),
+        QStringLiteral("settings-output-custom-resolution-invalid"),
         QStringLiteral("settings-format-24-cfr"),
         QStringLiteral("settings-format-30-cfr"),
         QStringLiteral("settings-format-60-cfr"),
@@ -103,6 +105,7 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("record-output-webcam"),
         QStringLiteral("record-output-summary"),
         QStringLiteral("completed-output-1080p"),
+        QStringLiteral("completed-output-custom-resolution"),
         QStringLiteral("completed-output-fallback"),
         // Device discovery scenarios (DEVICE-DISCOVERY-R1).
         QStringLiteral("settings-audio-devices-normal"),

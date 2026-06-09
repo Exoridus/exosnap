@@ -275,6 +275,30 @@ TEST(RecordingPreset, DirtyEquivalent_DetectsAndRevertsResolutionChange) {
     EXPECT_TRUE(ConfigDirtyEquivalent(clean, changed));
 }
 
+TEST(RecordingPreset, Sanitize_ValidCustomResolution_KeptAsIs) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.resolution.mode = OutputResolutionMode::Custom;
+    cfg.output.resolution.custom_width = 1920;
+    cfg.output.resolution.custom_height = 1080;
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_EQ(s.output.resolution.mode, OutputResolutionMode::Custom);
+    EXPECT_EQ(s.output.resolution.custom_width, 1920u);
+    EXPECT_EQ(s.output.resolution.custom_height, 1080u);
+}
+
+TEST(RecordingPreset, DirtyEquivalent_DetectsCustomWidthChange) {
+    RecordingPresetConfig clean = MakeDefaultPreset().config;
+    clean.output.resolution.mode = OutputResolutionMode::Custom;
+    clean.output.resolution.custom_width = 1920;
+    clean.output.resolution.custom_height = 1080;
+    // clone and change
+    RecordingPresetConfig changed = clean;
+    changed.output.resolution.custom_width = 2560;
+    EXPECT_FALSE(ConfigDirtyEquivalent(clean, changed));
+    changed.output.resolution.custom_width = 1920;
+    EXPECT_TRUE(ConfigDirtyEquivalent(clean, changed));
+}
+
 // ===========================================================================
 // SanitizePresetConfig — mic gain
 // ===========================================================================

@@ -239,6 +239,35 @@ TEST(RecordingPresetStore, OutputResolutionPersists_1440p) {
     CleanupFile(path);
 }
 
+TEST(RecordingPresetStore, OutputResolutionPersists_Custom) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Custom Resolution Preset";
+    p.config = MakeDefaultPreset().config;
+    p.config.output.resolution.mode = OutputResolutionMode::Custom;
+    p.config.output.resolution.custom_width = 2560;
+    p.config.output.resolution.custom_height = 1440;
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.output.resolution.mode, OutputResolutionMode::Custom);
+        EXPECT_EQ(state.presets[0].config.output.resolution.custom_width, 2560u);
+        EXPECT_EQ(state.presets[0].config.output.resolution.custom_height, 1440u);
+    }
+
+    CleanupFile(path);
+}
+
 // ===========================================================================
 // Absent file → seeded default
 // ===========================================================================
