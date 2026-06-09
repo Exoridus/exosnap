@@ -5,6 +5,7 @@
 #include <QString>
 #include <array>
 #include <cstdint>
+#include <memory>
 
 #include "models/OutputSettingsModel.h"
 #include "models/RecordingPreset.h"
@@ -12,6 +13,7 @@
 #include "models/VideoSettingsModel.h"
 #include "services/AudioDeviceNotifier.h"
 #include "services/DisplayDeviceNotifier.h"
+#include "services/GlobalHotkeyService.h"
 #include "services/WebcamDeviceNotifier.h"
 #include "settings/AppSettingsStore.h"
 #include "settings/RecordingPresetStore.h"
@@ -61,7 +63,7 @@ class MainWindow : public QMainWindow {
 
   private slots:
     void onRecordChromeStateChanged(bool recording, const QString& status_label, const QString& context_text);
-    void onHotkeyBindingChanged(int action_index, QKeySequence seq);
+    void onHotkeyServiceBindingChanged(exosnap::HotkeyAction action, QKeySequence seq);
     void toggleFullScreen();
 
     // Reactive device-change forwarding handlers.
@@ -87,7 +89,7 @@ class MainWindow : public QMainWindow {
     int navHighlightIndexFor(int index) const;
     void applyTitleBarStatus();
     void refreshPresetUi();
-    void restoreHotkeyBindingsFromSettings();
+    void initHotkeyService();
     void refreshDiagnosticsData();
 
     // ---- Preset system (Stage 2) ----
@@ -124,6 +126,7 @@ class MainWindow : public QMainWindow {
     // Apply device-discovery visual state (audio mic list, webcam availability).
     // Guarded; non-persistent: no writes to AppSettingsStore or RecordingPresetStore.
     void applyVisualDeviceDiscoveryScenario(const visual::VisualScenario& scenario);
+    void applyVisualHotkeysScenario(const visual::VisualScenario& scenario);
 #endif
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
@@ -157,10 +160,10 @@ class MainWindow : public QMainWindow {
     AppSettingsStore settings_store_;
     PersistedAppSettings persisted_settings_;
 
-    static constexpr int kHotkeyIdStartStop = 1;
-    static constexpr int kHotkeyIdPauseResume = 2;
-    static constexpr int kHotkeyIdSplit = 3;
-    static constexpr int kHotkeyIdMuteMic = 4;
+    // Rebindable global hotkey service. Owns binding model + Win32 registration.
+    GlobalHotkeyService* hotkey_service_ = nullptr;
+    std::unique_ptr<IHotkeyRegistrar> win32_hotkey_registrar_;
+
     bool recording_active_ = false;
     bool runtime_window_icon_bound_ = false;
     bool resizable_style_applied_ = false;
@@ -171,12 +174,6 @@ class MainWindow : public QMainWindow {
     bool applying_preset_ = false;
     bool geometry_restored_ = false;
     bool pre_fullscreen_maximized_ = false;
-    std::array<QKeySequence, 4> persisted_hotkeys_ = {
-        QKeySequence(Qt::ALT | Qt::Key_F9),
-        QKeySequence(),
-        QKeySequence(),
-        QKeySequence(),
-    };
     capability::CapabilitySet runtime_caps_;
     bool runtime_caps_ready_ = false;
     QString record_status_label_ = QStringLiteral("READY");

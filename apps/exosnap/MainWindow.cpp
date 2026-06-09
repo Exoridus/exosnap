@@ -9,6 +9,7 @@
 #include "pages/LogsPage.h"
 #include "pages/RecordPage.h"
 #include "pages/WebcamPage.h"
+#include "services/GlobalHotkeyService.h"
 #include "ui/chrome/OperationalTitleBar.h"
 #include "ui/chrome/RecordingStatusGuards.h"
 #include "ui/dialogs/AboutOverlay.h"
@@ -78,65 +79,21 @@ namespace {
 constexpr bool kTraceFrameActivation = false;
 
 #if defined(Q_OS_WIN)
-// Maps Qt keyboard modifiers to Win32 RegisterHotKey modifier flags.
-UINT QtModifiersToWin32(Qt::KeyboardModifiers mods) {
-    UINT result = MOD_NOREPEAT;
-    if (mods & Qt::AltModifier)
-        result |= MOD_ALT;
-    if (mods & Qt::ControlModifier)
-        result |= MOD_CONTROL;
-    if (mods & Qt::ShiftModifier)
-        result |= MOD_SHIFT;
-    if (mods & Qt::MetaModifier)
-        result |= MOD_WIN;
-    return result;
-}
-
-// Maps a Qt key to a Win32 virtual key code. Returns 0 for unsupported keys.
-UINT QtKeyToVk(Qt::Key key) {
-    if (key >= Qt::Key_F1 && key <= Qt::Key_F24)
-        return static_cast<UINT>(VK_F1 + (key - Qt::Key_F1));
-    if (key >= Qt::Key_A && key <= Qt::Key_Z)
-        return static_cast<UINT>('A' + (key - Qt::Key_A));
-    if (key >= Qt::Key_0 && key <= Qt::Key_9)
-        return static_cast<UINT>('0' + (key - Qt::Key_0));
-    switch (key) {
-    case Qt::Key_Space:
-        return VK_SPACE;
-    case Qt::Key_Tab:
-        return VK_TAB;
-    case Qt::Key_Return:
-        return VK_RETURN;
-    case Qt::Key_Escape:
-        return VK_ESCAPE;
-    case Qt::Key_Backspace:
-        return VK_BACK;
-    case Qt::Key_Delete:
-        return VK_DELETE;
-    case Qt::Key_Insert:
-        return VK_INSERT;
-    case Qt::Key_Home:
-        return VK_HOME;
-    case Qt::Key_End:
-        return VK_END;
-    case Qt::Key_PageUp:
-        return VK_PRIOR;
-    case Qt::Key_PageDown:
-        return VK_NEXT;
-    case Qt::Key_Left:
-        return VK_LEFT;
-    case Qt::Key_Right:
-        return VK_RIGHT;
-    case Qt::Key_Up:
-        return VK_UP;
-    case Qt::Key_Down:
-        return VK_DOWN;
-    case Qt::Key_Pause:
-        return VK_PAUSE;
-    default:
-        return 0;
+// Win32 registrar — wraps a live HWND; created in showEvent once the handle is valid.
+class Win32HotkeyRegistrar : public IHotkeyRegistrar {
+  public:
+    explicit Win32HotkeyRegistrar(HWND hwnd) : hwnd_(hwnd) {
     }
-}
+    bool Register(int id, unsigned int modifiers, unsigned int vk) override {
+        return ::RegisterHotKey(hwnd_, id, static_cast<UINT>(modifiers), static_cast<UINT>(vk)) != FALSE;
+    }
+    void Unregister(int id) override {
+        ::UnregisterHotKey(hwnd_, id);
+    }
+
+  private:
+    HWND hwnd_ = nullptr;
+};
 #endif
 
 void appendFrameTrace(const QString& line) {
@@ -218,15 +175,6 @@ static_assert(kAdvancedPageIndex >= 0, "Advanced page must exist in kPageDescrip
 static_assert(kDiagnosticsPageIndex >= 0, "Diagnostics page must exist in kPageDescriptors.");
 static_assert(kWebcamPageIndex >= 0, "Webcam page must exist in kPageDescriptors.");
 static_assert(kLogsPageIndex >= 0, "Logs page must exist in kPageDescriptors.");
-
-QString PersistedHotkeyString(const QKeySequence& sequence) {
-    return sequence.toString(QKeySequence::PortableText).trimmed();
-}
-
-QKeySequence ParsePersistedHotkey(const QString& value, const QKeySequence& fallback) {
-    const QKeySequence parsed(value, QKeySequence::PortableText);
-    return parsed.isEmpty() ? fallback : parsed;
-}
 
 ResizeZone resizeZoneFromLocalPoint(const QPoint& local, const QSize& size, bool maximized) {
     if (maximized)
@@ -423,7 +371,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     // ---- Load reduced AppSettingsStore (hotkeys + window geometry only) ----
     persisted_settings_ = settings_store_.Load();
-    restoreHotkeyBindingsFromSettings();
+    initHotkeyService();
 
     // ---- Load preset store ----
     PersistedPresetState loaded_presets = preset_store_.Load();
@@ -463,7 +411,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     record_page_ = new RecordPage(stack_);
     config_page_ = new ConfigPage(output_settings_, video_settings_, stack_);
     hotkeys_page_ = new HotkeysPage(stack_);
-    hotkeys_page_->setBindings(persisted_hotkeys_);
+    hotkeys_page_->setService(hotkey_service_);
     diagnostics_page_ = new DiagnosticsPage(stack_);
     webcam_page_ = new WebcamPage(stack_);
     webcam_page_->applySettings(live_webcam_);
@@ -662,7 +610,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // ---- Hotkeys ----
     connect(this, &MainWindow::recordToggleRequested, record_page_, &RecordPage::onHotkeyToggle);
     connect(this, &MainWindow::pauseToggleRequested, record_page_, &RecordPage::onHotkeyPauseToggle);
-    connect(hotkeys_page_, &HotkeysPage::bindingChanged, this, &MainWindow::onHotkeyBindingChanged);
+    connect(hotkey_service_, &GlobalHotkeyService::bindingChanged, this, &MainWindow::onHotkeyServiceBindingChanged);
     connect(record_page_, &RecordPage::audioMeterLevelsUpdated, config_page_, &ConfigPage::setAudioMeterLevels);
 
     // Re-apply the selected preset once the deferred coordinator init completes.
@@ -775,9 +723,13 @@ void MainWindow::showEvent(QShowEvent* event) {
     }
     if (!hotkeys_registered_) {
         hotkeys_registered_ = true;
-        for (int i = 0; i < static_cast<int>(persisted_hotkeys_.size()); ++i) {
-            onHotkeyBindingChanged(i, persisted_hotkeys_[static_cast<std::size_t>(i)]);
+#if defined(Q_OS_WIN)
+        HWND hwnd = reinterpret_cast<HWND>(winId());
+        if (hwnd && hotkey_service_) {
+            win32_hotkey_registrar_ = std::make_unique<Win32HotkeyRegistrar>(hwnd);
+            hotkey_service_->SetRegistrar(win32_hotkey_registrar_.get());
         }
+#endif
     }
 #endif
 
@@ -927,6 +879,14 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
     applyTitleBarStatus();
     switchRecordingIcon(recording_active_);
 
+    // Lock hotkeys page editing while recording / countdown / stopping.
+    if (hotkeys_page_) {
+        const bool hk_locked =
+            (record_status_label_ == QStringLiteral("REC") || record_status_label_ == QStringLiteral("PAUSED") ||
+             record_status_label_ == QStringLiteral("STOPPING") || record_status_label_ == QStringLiteral("COUNTDOWN"));
+        hotkeys_page_->setEditingLocked(hk_locked);
+    }
+
     if ((recording || record_status_label_ == QStringLiteral("COUNTDOWN")) && isVisible() && !isMinimized() &&
         stack_->currentIndex() != 0)
         navigateToPage(kRecordPageIndex);
@@ -943,16 +903,11 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
                 traceFrameMessage(msg->hwnd, msg->message, msg->wParam, msg->lParam);
 
             if (msg->hwnd == main_hwnd && msg->message == WM_HOTKEY) {
-                switch (static_cast<int>(msg->wParam)) {
-                case kHotkeyIdStartStop:
+                const int hk_id = static_cast<int>(msg->wParam);
+                if (hk_id == GlobalHotkeyService::Win32IdForAction(HotkeyAction::ToggleRecording))
                     emit recordToggleRequested();
-                    break;
-                case kHotkeyIdPauseResume:
+                else if (hk_id == GlobalHotkeyService::Win32IdForAction(HotkeyAction::TogglePause))
                     emit pauseToggleRequested();
-                    break;
-                default:
-                    break;
-                }
                 *result = 0;
                 return true;
             }
@@ -1379,54 +1334,17 @@ void MainWindow::persistPresetState() {
     preset_store_.Save(preset_registry_.Presets(), preset_registry_.SelectedId(), preset_registry_.DefaultId());
 }
 
-void MainWindow::restoreHotkeyBindingsFromSettings() {
-    const std::array<QKeySequence, 4> defaults = {
-        QKeySequence(Qt::ALT | Qt::Key_F9),
-        QKeySequence(),
-        QKeySequence(),
-        QKeySequence(),
-    };
-
-    for (int i = 0; i < static_cast<int>(persisted_hotkeys_.size()); ++i) {
-        const QString persisted = persisted_settings_.hotkey_bindings[static_cast<std::size_t>(i)];
-        if (persisted.trimmed().isEmpty()) {
-            persisted_hotkeys_[static_cast<std::size_t>(i)] = defaults[static_cast<std::size_t>(i)];
-            continue;
-        }
-        persisted_hotkeys_[static_cast<std::size_t>(i)] =
-            ParsePersistedHotkey(persisted, defaults[static_cast<std::size_t>(i)]);
-    }
+void MainWindow::initHotkeyService() {
+    hotkey_service_ = new GlobalHotkeyService(this);
+    hotkey_service_->LoadFromStrings(persisted_settings_.hotkey_bindings);
 }
 
-void MainWindow::onHotkeyBindingChanged(int action_index, QKeySequence seq) {
-    if (action_index < 0 || action_index >= 4)
-        return;
-
-    persisted_hotkeys_[static_cast<std::size_t>(action_index)] = seq;
-    persisted_settings_.hotkey_bindings[static_cast<std::size_t>(action_index)] = PersistedHotkeyString(seq);
+void MainWindow::onHotkeyServiceBindingChanged(HotkeyAction /*action*/, QKeySequence /*seq*/) {
+    // Service has already committed the new binding. Persist to settings file.
+    if (hotkey_service_)
+        hotkey_service_->SaveToStrings(persisted_settings_.hotkey_bindings);
     settings_store_.Save(persisted_settings_);
     refreshDiagnosticsData();
-
-#if defined(Q_OS_WIN)
-    HWND hwnd = reinterpret_cast<HWND>(winId());
-    if (hwnd == nullptr)
-        return;
-
-    const int hotkey_id = action_index + 1;
-    UnregisterHotKey(hwnd, hotkey_id);
-
-    if (seq.isEmpty())
-        return;
-
-    const QKeyCombination combo = QKeyCombination::fromCombined(seq[0]);
-    const UINT vk = QtKeyToVk(combo.key());
-    if (vk == 0)
-        return;
-
-    RegisterHotKey(hwnd, hotkey_id, QtModifiersToWin32(combo.keyboardModifiers()), vk);
-#else
-    Q_UNUSED(seq)
-#endif
 }
 
 void MainWindow::refreshDiagnosticsData() {
@@ -1434,14 +1352,17 @@ void MainWindow::refreshDiagnosticsData() {
         return;
 
     std::string hotkeys_summary;
-    for (size_t i = 0; i < persisted_hotkeys_.size(); ++i) {
-        if (!persisted_hotkeys_[i].isEmpty()) {
-            if (!hotkeys_summary.empty())
-                hotkeys_summary += ", ";
-            const char* names[] = {"Start/Stop", "Pause/Resume", "Split", "Mute Mic"};
-            hotkeys_summary += names[i];
-            hotkeys_summary += ": ";
-            hotkeys_summary += persisted_hotkeys_[i].toString(QKeySequence::PortableText).toStdString();
+    if (hotkey_service_) {
+        for (int i = 0; i < kHotkeyActionCount; ++i) {
+            const auto action = static_cast<HotkeyAction>(i);
+            const QKeySequence seq = hotkey_service_->GetBinding(action);
+            if (!seq.isEmpty()) {
+                if (!hotkeys_summary.empty())
+                    hotkeys_summary += ", ";
+                hotkeys_summary += GlobalHotkeyService::ActionDisplayName(action).toStdString();
+                hotkeys_summary += ": ";
+                hotkeys_summary += seq.toString(QKeySequence::PortableText).toStdString();
+            }
         }
     }
     if (hotkeys_summary.empty())
@@ -1531,19 +1452,9 @@ void MainWindow::onResetChanges() {
 
 void MainWindow::onResetToDefaults() {
     preset_registry_.ResetAllToDefault();
-    // Also reset hotkeys.
-    const std::array<QKeySequence, 4> defaults = {
-        QKeySequence(Qt::ALT | Qt::Key_F9),
-        QKeySequence(),
-        QKeySequence(),
-        QKeySequence(),
-    };
-    for (int i = 0; i < static_cast<int>(defaults.size()); ++i) {
-        onHotkeyBindingChanged(i, defaults[static_cast<std::size_t>(i)]);
-    }
-    if (hotkeys_page_) {
-        hotkeys_page_->setBindings(defaults);
-    }
+    // Also reset hotkeys via service (handles Win32 re-registration + persistence signal).
+    if (hotkey_service_)
+        hotkey_service_->ResetAllToDefaults();
     applyPresetConfig(preset_registry_.SelectedSavedConfig());
     refreshPresetUi();
     persistPresetState();
@@ -1624,6 +1535,7 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
         break;
     case visual::VisualPage::Hotkeys:
         setCurrentPage(kHotkeysPageIndex);
+        applyVisualHotkeysScenario(scenario);
         break;
     case visual::VisualPage::Diagnostics:
         applyVisualDiagnosticsScenario();
@@ -1847,6 +1759,40 @@ void MainWindow::applyVisualDiagnosticsScenario() {
     diagnostics_page_->setDiagnosticData(
         caps, output, video, VisualAudioStateForSettings(visual::VisualSettingsTarget::Window),
         "Visual Test WebM AV1 Opus", "Start/Stop: Alt+F9", "visual-test-settings.json", true);
+}
+
+void MainWindow::applyVisualHotkeysScenario(const visual::VisualScenario& scenario) {
+    if (!hotkeys_page_)
+        return;
+
+    // Apply custom bindings (non-persistent: bypass service to avoid Win32 registration).
+    if (!scenario.hk_custom_binding_0.isEmpty() || !scenario.hk_custom_binding_1.isEmpty()) {
+        const QKeySequence b0 =
+            scenario.hk_custom_binding_0.isEmpty()
+                ? GlobalHotkeyService::DefaultBinding(HotkeyAction::ToggleRecording)
+                : QKeySequence::fromString(scenario.hk_custom_binding_0, QKeySequence::PortableText);
+        const QKeySequence b1 =
+            scenario.hk_custom_binding_1.isEmpty()
+                ? GlobalHotkeyService::DefaultBinding(HotkeyAction::TogglePause)
+                : QKeySequence::fromString(scenario.hk_custom_binding_1, QKeySequence::PortableText);
+        hotkeys_page_->setBindings({b0, b1});
+    }
+
+    hotkeys_page_->setEditingLocked(scenario.hk_editing_locked);
+
+    // Simulate conflict message on a specific row (visual-only, no Win32 state).
+    if (scenario.hk_conflict_shown && scenario.hk_conflict_action >= 0) {
+        const QString msg = scenario.hk_conflict_message.isEmpty() ? QStringLiteral("This shortcut is already in use.")
+                                                                   : scenario.hk_conflict_message;
+        // Use public slots to drive the error display.
+        // We call a test-only helper on HotkeysPage via objectName lookup.
+        auto* row =
+            hotkeys_page_->findChild<QLabel*>(QStringLiteral("hotkeyError_%1").arg(scenario.hk_conflict_action));
+        if (row) {
+            row->setText(msg);
+            row->show();
+        }
+    }
 }
 
 void MainWindow::applyVisualDeviceDiscoveryScenario(const visual::VisualScenario& scenario) {

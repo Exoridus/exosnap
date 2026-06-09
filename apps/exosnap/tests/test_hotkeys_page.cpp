@@ -33,8 +33,7 @@ class HotkeysPageTest : public ::testing::Test {
 
 TEST_F(HotkeysPageTest, ActiveControlsRemainAvailable) {
     HotkeysPage page;
-    page.setBindings({QKeySequence(QStringLiteral("Alt+F9")), QKeySequence(QStringLiteral("Ctrl+Shift+F11")),
-                      QKeySequence(), QKeySequence()});
+    page.setBindings({QKeySequence(QStringLiteral("Alt+F9")), QKeySequence(QStringLiteral("Ctrl+Shift+F11"))});
 
     auto* set_start = page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_0"));
     auto* unset_start = page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_0"));
@@ -52,8 +51,7 @@ TEST_F(HotkeysPageTest, ActiveControlsRemainAvailable) {
 
 TEST_F(HotkeysPageTest, ActiveRowsRenderRealBindingsAsKeycaps) {
     HotkeysPage page;
-    page.setBindings({QKeySequence(QStringLiteral("Alt+F9")), QKeySequence(QStringLiteral("Alt+F10")), QKeySequence(),
-                      QKeySequence()});
+    page.setBindings({QKeySequence(QStringLiteral("Alt+F9")), QKeySequence(QStringLiteral("Alt+F10"))});
 
     auto* start_chips = page.findChild<QWidget*>(QStringLiteral("hotkeyBinding_0"));
     ASSERT_NE(start_chips, nullptr);
@@ -70,7 +68,7 @@ TEST_F(HotkeysPageTest, ActiveRowsRenderRealBindingsAsKeycaps) {
 
 TEST_F(HotkeysPageTest, UnsetActiveRowShowsMutedKeycap) {
     HotkeysPage page;
-    page.setBindings({QKeySequence(QStringLiteral("Alt+F9")), QKeySequence(), QKeySequence(), QKeySequence()});
+    page.setBindings({QKeySequence(QStringLiteral("Alt+F9")), QKeySequence()});
 
     auto* pause_chips = page.findChild<QWidget*>(QStringLiteral("hotkeyBinding_1"));
     ASSERT_NE(pause_chips, nullptr);
@@ -81,10 +79,8 @@ TEST_F(HotkeysPageTest, UnsetActiveRowShowsMutedKeycap) {
 
 TEST_F(HotkeysPageTest, PlannedActionsAreUnavailableAndNotRebindable) {
     HotkeysPage page;
-    page.setBindings({QKeySequence(), QKeySequence(), QKeySequence(QStringLiteral("Alt+F8")),
-                      QKeySequence(QStringLiteral("Ctrl+Alt+M"))});
 
-    // No rebind / unset controls for planned actions.
+    // No rebind / unset controls for planned actions (indices 2-9).
     EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_2")), nullptr);
     EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_2")), nullptr);
     EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_3")), nullptr);
@@ -151,7 +147,7 @@ TEST_F(HotkeysPageTest, DesignTargetPlannedActions_HaveNoRebindControls) {
 
 TEST_F(HotkeysPageTest, ActiveRowsUnaffectedByPlannedExpansion) {
     HotkeysPage page;
-    page.setBindings({QKeySequence(QStringLiteral("Alt+F9")), QKeySequence(), QKeySequence(), QKeySequence()});
+    page.setBindings({QKeySequence(QStringLiteral("Alt+F9")), QKeySequence()});
     // Active row 0 (Start/Stop) still has Set/Unset.
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_0")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_0")), nullptr);
@@ -160,14 +156,13 @@ TEST_F(HotkeysPageTest, ActiveRowsUnaffectedByPlannedExpansion) {
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_1")), nullptr);
 }
 
-TEST_F(HotkeysPageTest, ResetToDefaultsRestoresActiveBindings) {
+TEST_F(HotkeysPageTest, ResetAllToDefaultsRestoresActiveBindings) {
     HotkeysPage page;
     auto* reset = page.findChild<QPushButton*>(QStringLiteral("hotkeyResetBtn"));
     ASSERT_NE(reset, nullptr);
 
-    // Move both active rows away from defaults (Start/Stop default Alt+F9, Pause default unset).
-    page.setBindings({QKeySequence(QStringLiteral("Ctrl+F1")), QKeySequence(QStringLiteral("Ctrl+F2")), QKeySequence(),
-                      QKeySequence()});
+    // Move both active rows away from defaults.
+    page.setBindings({QKeySequence(QStringLiteral("Ctrl+F1")), QKeySequence(QStringLiteral("Ctrl+F2"))});
 
     int emit_count = 0;
     QObject::connect(&page, &HotkeysPage::bindingChanged, &page, [&emit_count](int, QKeySequence) { ++emit_count; });
@@ -181,6 +176,48 @@ TEST_F(HotkeysPageTest, ResetToDefaultsRestoresActiveBindings) {
     for (auto* chip : start_chips->findChildren<ui::widgets::KeycapChip*>())
         labels << chip->text();
     EXPECT_TRUE(labels.contains(QStringLiteral("F9")));
+}
+
+TEST_F(HotkeysPageTest, PerRowResetButtonPresent) {
+    HotkeysPage page;
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeyResetRowBtn_0")), nullptr);
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeyResetRowBtn_1")), nullptr);
+    // Planned rows have no reset button.
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeyResetRowBtn_2")), nullptr);
+}
+
+TEST_F(HotkeysPageTest, EditingLockedDisablesActiveControls) {
+    HotkeysPage page;
+    page.setBindings({QKeySequence(QStringLiteral("Alt+F9")), QKeySequence()});
+    page.setEditingLocked(true);
+
+    auto* set_btn = page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_0"));
+    auto* unset_btn = page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_0"));
+    auto* reset_all = page.findChild<QPushButton*>(QStringLiteral("hotkeyResetBtn"));
+    ASSERT_NE(set_btn, nullptr);
+    ASSERT_NE(unset_btn, nullptr);
+    ASSERT_NE(reset_all, nullptr);
+    EXPECT_FALSE(set_btn->isEnabled());
+    EXPECT_FALSE(unset_btn->isEnabled());
+    EXPECT_FALSE(reset_all->isEnabled());
+}
+
+TEST_F(HotkeysPageTest, EditingUnlockedReenablesActiveControls) {
+    HotkeysPage page;
+    page.setBindings({QKeySequence(QStringLiteral("Alt+F9")), QKeySequence()});
+    page.setEditingLocked(true);
+    page.setEditingLocked(false);
+
+    auto* set_btn = page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_0"));
+    ASSERT_NE(set_btn, nullptr);
+    EXPECT_TRUE(set_btn->isEnabled());
+}
+
+TEST_F(HotkeysPageTest, ErrorLabelHiddenByDefault) {
+    HotkeysPage page;
+    auto* error = page.findChild<QLabel*>(QStringLiteral("hotkeyError_0"));
+    ASSERT_NE(error, nullptr);
+    EXPECT_FALSE(error->isVisible());
 }
 
 } // namespace
