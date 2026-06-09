@@ -7,8 +7,14 @@ namespace exosnap {
 
 namespace {
 
+// Canonical custom resolution bounds (CUSTOM-OUTPUT-RESOLUTION-R1).
+constexpr uint32_t kMinCustomWidth = 320;
+constexpr uint32_t kMinCustomHeight = 180;
+constexpr uint32_t kMaxCustomDimension = 7680;
+
 [[nodiscard]] bool IsCustomSizeUsable(uint32_t width, uint32_t height) noexcept {
-    return width >= 2 && height >= 2;
+    return width >= kMinCustomWidth && height >= kMinCustomHeight && width <= kMaxCustomDimension &&
+           height <= kMaxCustomDimension;
 }
 
 } // namespace

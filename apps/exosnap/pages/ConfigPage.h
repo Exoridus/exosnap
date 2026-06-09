@@ -25,6 +25,7 @@ class QLineEdit;
 class QMenu;
 class QPushButton;
 class QResizeEvent;
+class QSpinBox;
 class QToolButton;
 
 namespace exosnap::ui::widgets {
@@ -132,6 +133,10 @@ class ConfigPage : public QWidget {
     void updateFrameRateSelection();
     void updateTimingSelection();
     void updateOutputResolutionSelection();
+    void updateCustomResolutionVisibility();
+    void updateCustomResolutionValidation();
+    void onCustomWidthChanged(int value);
+    void onCustomHeightChanged(int value);
     void updateEffectiveOutputSummary();
     void onBrowse();
     void onDestinationEditingFinished();
@@ -254,7 +259,17 @@ class ConfigPage : public QWidget {
     QPushButton* output_res_1440_btn_ = nullptr;
     QPushButton* output_res_1080_btn_ = nullptr;
     QPushButton* output_res_720_btn_ = nullptr;
+    QPushButton* output_res_custom_btn_ = nullptr;
     QLabel* output_effective_summary_label_ = nullptr;
+
+    // Custom resolution widgets (CUSTOM-OUTPUT-RESOLUTION-R1).
+    QWidget* custom_resolution_widget_ = nullptr;
+    QSpinBox* custom_width_spin_ = nullptr;
+    QSpinBox* custom_height_spin_ = nullptr;
+    QLabel* custom_resolution_validation_label_ = nullptr;
+    // Stashed values preserved across mode switches.
+    uint32_t stashed_custom_width_ = 0;
+    uint32_t stashed_custom_height_ = 0;
     QLabel* folder_validation_label_ = nullptr;
     QLabel* pattern_validation_label_ = nullptr;
     QLabel* example_filename_label_ = nullptr;
