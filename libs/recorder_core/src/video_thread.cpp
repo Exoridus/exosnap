@@ -740,6 +740,7 @@ void VideoThread::Run() {
         chroma.b = overlay.chroma_b;
         chroma.tolerance = overlay.chroma_tolerance;
         chroma.softness = overlay.chroma_softness;
+        chroma.spill_reduction = overlay.chroma_spill_reduction;
 
         std::string compErr;
         if (!gpuCompositor.DrawWebcam(camBgra.data(), camW, camH, rect, overlay.mirror, chroma, compErr)) {

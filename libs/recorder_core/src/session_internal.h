@@ -198,13 +198,17 @@ struct SessionState {
         overlay.mirror = placement.mirror;
 
         if (!std::isfinite(static_cast<double>(overlay.chroma_tolerance))) {
-            overlay.chroma_tolerance = 0.30f;
+            overlay.chroma_tolerance = 0.40f;
         }
         if (!std::isfinite(static_cast<double>(overlay.chroma_softness))) {
-            overlay.chroma_softness = 0.05f;
+            overlay.chroma_softness = 0.15f;
+        }
+        if (!std::isfinite(static_cast<double>(overlay.chroma_spill_reduction))) {
+            overlay.chroma_spill_reduction = 0.30f;
         }
         overlay.chroma_tolerance = std::clamp(overlay.chroma_tolerance, 0.0f, 1.0f);
         overlay.chroma_softness = std::clamp(overlay.chroma_softness, 0.0f, 1.0f);
+        overlay.chroma_spill_reduction = std::clamp(overlay.chroma_spill_reduction, 0.0f, 1.0f);
         return overlay;
     }
 
@@ -222,6 +226,7 @@ struct SessionState {
         overlay.chroma_b = config.chroma_b;
         overlay.chroma_tolerance = config.chroma_tolerance;
         overlay.chroma_softness = config.chroma_softness;
+        overlay.chroma_spill_reduction = config.chroma_spill_reduction;
         return SanitizeWebcamOverlay(overlay);
     }
 

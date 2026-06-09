@@ -300,10 +300,16 @@ QJsonObject BuildVisualManifest(const MainWindow& window, const VisualScenario& 
         audio.insert(QStringLiteral("mic_enabled"), QJsonValue()); // populated if widget found
         preset.insert(QStringLiteral("audio"), audio);
 
-        // webcam { enabled, mirror } — reuse webcam_pip / webcam_card truth.
+        // webcam { enabled, mirror, chroma } — reuse webcam_pip / webcam_card truth.
         QJsonObject webcam;
         webcam.insert(QStringLiteral("enabled"), scenario.webcam_pip_enabled);
         webcam.insert(QStringLiteral("mirror"), scenario.webcam_mirror);
+        if (!scenario.webcam_chroma_color_mode.isEmpty()) {
+            QJsonObject chroma;
+            chroma.insert(QStringLiteral("enabled"), scenario.webcam_chroma_enabled);
+            chroma.insert(QStringLiteral("color_mode"), scenario.webcam_chroma_color_mode);
+            webcam.insert(QStringLiteral("chroma"), chroma);
+        }
         preset.insert(QStringLiteral("webcam"), webcam);
 
         // codecs + container + filename_pattern — read from format widgets by
