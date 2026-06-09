@@ -740,3 +740,24 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
     set_target_properties(capture_frame_tests PROPERTIES AUTOMOC ON)
 endif()
+
+# RECORDING-MARKERS-R1 tests
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+    exosnap_add_gtest(
+        NAME recording_marker_tests
+        TEST_PREFIX marker.
+        SOURCES
+            tests/test_recording_markers.cpp
+            services/RecordingCoordinator.cpp
+            services/GlobalHotkeyService.cpp
+            visual_tests/VisualScenario.cpp
+        LIBRARIES
+            exosnap_output_model_test_support
+            exosnap_device_service_test_support
+            Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+    )
+    target_include_directories(recording_marker_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(recording_marker_tests PRIVATE
+        NOMINMAX EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
+    set_target_properties(recording_marker_tests PROPERTIES AUTOMOC ON)
+endif()

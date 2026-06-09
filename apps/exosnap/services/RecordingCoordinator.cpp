@@ -9,8 +9,12 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMetaObject>
 #include <QRegularExpression>
+#include <QSaveFile>
 
 #include <algorithm>
 #include <cctype>
@@ -581,6 +585,14 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     }
 
     is_recording_ = true;
+
+    {
+        std::lock_guard<std::mutex> lock(markers_mutex_);
+        markers_.clear();
+        last_elapsed_seconds_ = 0.0;
+        markers_limit_reported_ = false;
+    }
+
     PostStateChange(UiRecordingState::Recording);
 
     {
@@ -740,6 +752,20 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
     ui_result.container = result.stats.container;
     ui_result.video_codec = result.stats.video_codec;
     ui_result.audio_codec = result.stats.audio_codec;
+
+    {
+        std::lock_guard<std::mutex> lock(markers_mutex_);
+        ui_result.markers = markers_;
+        ui_result.marker_sidecar_path = MarkerSidecarPath().wstring();
+    }
+
+    if (result.succeeded && !markers_.empty()) {
+        WriteMarkerSidecar();
+        diagnostics::AppLog::info(QStringLiteral("marker"),
+                                  QStringLiteral("sidecar finalized markers=%1 path=%2")
+                                      .arg(markers_.size())
+                                      .arg(QString::fromStdWString(MarkerSidecarPath().wstring())));
+    }
 
     if (!result.succeeded) {
         diagnostics::AppLog::error(QStringLiteral("record.failure"),
@@ -1043,6 +1069,10 @@ void RecordingCoordinator::PostResult(UiRecordingResult result) {
 }
 
 void RecordingCoordinator::PostStats(recorder_core::SessionStats stats) {
+    {
+        std::lock_guard<std::mutex> lock(markers_mutex_);
+        last_elapsed_seconds_ = stats.elapsed_seconds;
+    }
     if (!on_stats_updated_)
         return;
     auto cb = on_stats_updated_;
@@ -1142,6 +1172,98 @@ std::wstring RecordingCoordinator::FormatErrorPhase(recorder_core::ErrorPhase ph
         return L"Shutdown";
     default:
         return L"Unknown";
+    }
+}
+
+void RecordingCoordinator::AddMarker(RecordingMarkerType type) {
+    const auto st = State();
+    if (st != UiRecordingState::Recording && st != UiRecordingState::Paused) {
+        diagnostics::AppLog::warning(QStringLiteral("marker"),
+                                     QStringLiteral("rejected: unsupported state %1").arg(static_cast<int>(st)));
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(markers_mutex_);
+
+    if (markers_.size() >= kMaxRecordingMarkers) {
+        if (!markers_limit_reported_) {
+            diagnostics::AppLog::warning(QStringLiteral("marker"),
+                                         QStringLiteral("rejected: marker limit %1 reached").arg(kMaxRecordingMarkers));
+            markers_limit_reported_ = true;
+        }
+        return;
+    }
+
+    const uint64_t time_ms = static_cast<uint64_t>(last_elapsed_seconds_ * 1000.0);
+
+    RecordingMarker marker;
+    marker.time_ms = time_ms;
+    marker.type = type;
+    marker.label = RecordingMarkerTypeDefaultLabel(type);
+
+    markers_.push_back(marker);
+
+    diagnostics::AppLog::info(QStringLiteral("marker"), QStringLiteral("added id=%1 time_ms=%2 type=%3")
+                                                            .arg(markers_.size())
+                                                            .arg(time_ms)
+                                                            .arg(QLatin1String(RecordingMarkerTypeToString(type))));
+
+    WriteMarkerSidecar();
+}
+
+const std::vector<RecordingMarker>& RecordingCoordinator::Markers() const noexcept {
+    std::lock_guard<std::mutex> lock(markers_mutex_);
+    return markers_;
+}
+
+std::filesystem::path RecordingCoordinator::MarkerSidecarPath() const {
+    if (current_output_path_.empty())
+        return {};
+    auto sidecar = current_output_path_;
+    sidecar.replace_extension(L".markers.json");
+    return sidecar;
+}
+
+void RecordingCoordinator::WriteMarkerSidecar() {
+    const auto sidecar_path = MarkerSidecarPath();
+    if (sidecar_path.empty())
+        return;
+
+    std::vector<RecordingMarker> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(markers_mutex_);
+        snapshot = markers_;
+    }
+
+    QJsonArray markers_array;
+    for (const auto& m : snapshot) {
+        QJsonObject obj;
+        obj[QStringLiteral("timeMs")] = static_cast<qint64>(m.time_ms);
+        obj[QStringLiteral("type")] = QString::fromLatin1(RecordingMarkerTypeToString(m.type));
+        obj[QStringLiteral("label")] = QString::fromStdString(m.label);
+        markers_array.append(obj);
+    }
+
+    QJsonObject root;
+    root[QStringLiteral("version")] = 1;
+    root[QStringLiteral("media")] = QString::fromStdWString(current_output_path_.filename().wstring());
+    root[QStringLiteral("timebase")] = QStringLiteral("milliseconds");
+    root[QStringLiteral("markers")] = markers_array;
+
+    QJsonDocument doc(root);
+    const QString sidecar_qstr = QString::fromStdWString(sidecar_path.wstring());
+
+    QSaveFile file(sidecar_qstr);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        diagnostics::AppLog::warning(QStringLiteral("marker"),
+                                     QStringLiteral("sidecar write open failed: %1").arg(sidecar_qstr));
+        return;
+    }
+
+    file.write(doc.toJson(QJsonDocument::Indented));
+    if (!file.commit()) {
+        diagnostics::AppLog::warning(QStringLiteral("marker"),
+                                     QStringLiteral("sidecar write commit failed: %1").arg(sidecar_qstr));
     }
 }
 

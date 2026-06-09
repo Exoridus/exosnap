@@ -61,6 +61,7 @@ class MainWindow : public QMainWindow {
     void recordToggleRequested();
     void pauseToggleRequested();
     void captureFrameRequested();
+    void addMarkerRequested();
 
   private slots:
     void onRecordChromeStateChanged(bool recording, const QString& status_label, const QString& context_text);

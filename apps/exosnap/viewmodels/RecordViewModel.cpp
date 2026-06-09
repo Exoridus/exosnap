@@ -496,6 +496,8 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
         cr.video_codec = result.video_codec;
         cr.audio_codec = result.audio_codec;
         cr.completed_at = QDateTime::currentDateTime();
+        cr.markers = result.markers;
+        cr.marker_sidecar_path = QString::fromStdWString(result.marker_sidecar_path);
         current_completed_recording = cr;
         AddToRecentRecordings(cr);
     } else {

@@ -12,6 +12,7 @@
 
 #include "models/CompletedRecording.h"
 #include "models/FilenameBuilder.h"
+#include "models/RecordingMarker.h"
 
 namespace exosnap {
 
@@ -71,6 +72,8 @@ struct UiRecordingResult {
     recorder_core::Container container = recorder_core::Container::WebM;
     recorder_core::VideoCodec video_codec = recorder_core::VideoCodec::Av1Nvenc;
     recorder_core::AudioCodec audio_codec = recorder_core::AudioCodec::Opus;
+    std::vector<RecordingMarker> markers;
+    std::wstring marker_sidecar_path;
 };
 
 // ---------------------------------------------------------------------------

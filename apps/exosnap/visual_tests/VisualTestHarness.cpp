@@ -335,6 +335,20 @@ QJsonObject BuildVisualManifest(const MainWindow& window, const VisualScenario& 
         root.insert(QStringLiteral("logs"), logs);
     }
 
+    // Recording markers manifest
+    {
+        QJsonObject markers;
+        markers.insert(QStringLiteral("action_visible"), scenario.marker_action_visible);
+        markers.insert(QStringLiteral("action_enabled"), scenario.marker_action_enabled);
+        markers.insert(QStringLiteral("count"), scenario.marker_count);
+        markers.insert(QStringLiteral("latest_time_ms"), static_cast<qint64>(scenario.marker_latest_time_ms));
+        markers.insert(QStringLiteral("latest_type"), scenario.marker_latest_type);
+        markers.insert(QStringLiteral("sidecar_file"), scenario.marker_sidecar_file);
+        markers.insert(QStringLiteral("recording_state"), scenario.marker_recording_state);
+        markers.insert(QStringLiteral("hk_active"), scenario.hk_marker_active);
+        root.insert(QStringLiteral("markers"), markers);
+    }
+
     QJsonArray masks;
     for (const VisualMask& mask : scenario.masks) {
         QJsonObject item;

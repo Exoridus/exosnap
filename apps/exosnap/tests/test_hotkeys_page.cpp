@@ -80,22 +80,26 @@ TEST_F(HotkeysPageTest, UnsetActiveRowShowsMutedKeycap) {
 TEST_F(HotkeysPageTest, PlannedActionsAreUnavailableAndNotRebindable) {
     HotkeysPage page;
 
-    // Active index 2 (CaptureFrame) now HAS rebind controls — it is active.
-    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_2")), nullptr);
-    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_2")), nullptr);
+    // Active index 3 (AddMarker) has rebind controls — it is active.
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_3")), nullptr);
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_3")), nullptr);
 
-    // No rebind / unset controls for planned actions (indices 3-9).
-    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_3")), nullptr);
-    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_3")), nullptr);
+    // No rebind / unset controls for planned actions (indices 4-10).
     EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_4")), nullptr);
     EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_4")), nullptr);
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_5")), nullptr);
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_5")), nullptr);
 
     // No keycap chips fabricated for planned actions, only an honest "Not in this build" tag.
-    EXPECT_EQ(page.findChild<QWidget*>(QStringLiteral("hotkeyBinding_3")), nullptr);
     EXPECT_EQ(page.findChild<QWidget*>(QStringLiteral("hotkeyBinding_4")), nullptr);
+    EXPECT_EQ(page.findChild<QWidget*>(QStringLiteral("hotkeyBinding_5")), nullptr);
 
-    auto* tag_split = page.findChild<QLabel*>(QStringLiteral("hotkeyPlannedTag_3"));
-    auto* tag_mute = page.findChild<QLabel*>(QStringLiteral("hotkeyPlannedTag_4"));
+    // Active index 3 now has a binding chip and no planned tag.
+    EXPECT_NE(page.findChild<QWidget*>(QStringLiteral("hotkeyBinding_3")), nullptr);
+    EXPECT_EQ(page.findChild<QLabel*>(QStringLiteral("hotkeyPlannedTag_3")), nullptr);
+
+    auto* tag_split = page.findChild<QLabel*>(QStringLiteral("hotkeyPlannedTag_4"));
+    auto* tag_mute = page.findChild<QLabel*>(QStringLiteral("hotkeyPlannedTag_5"));
     ASSERT_NE(tag_split, nullptr);
     ASSERT_NE(tag_mute, nullptr);
     EXPECT_EQ(tag_split->text(), QStringLiteral("Not in this build"));
@@ -188,10 +192,10 @@ TEST_F(HotkeysPageTest, PerRowResetButtonPresent) {
     HotkeysPage page;
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeyResetRowBtn_0")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeyResetRowBtn_1")), nullptr);
-    // Index 2 is now CaptureFrame (active) — it has a reset button.
-    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeyResetRowBtn_2")), nullptr);
-    // Planned rows have no reset button (index 3+).
-    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeyResetRowBtn_3")), nullptr);
+    // Index 3 is now AddMarker (active) — it has a reset button.
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeyResetRowBtn_3")), nullptr);
+    // Planned rows have no reset button (index 4+).
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeyResetRowBtn_4")), nullptr);
 }
 
 TEST_F(HotkeysPageTest, EditingLockedDisablesActiveControls) {

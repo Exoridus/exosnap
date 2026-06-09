@@ -1371,18 +1371,23 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     result_details_panel_->setObjectName(QStringLiteral("resultDetailsPanel"));
     result_details_panel_->setProperty("panelRole", "resultDetails");
     result_details_panel_->setVisible(false);
-    auto* result_details_layout = new QHBoxLayout(result_details_panel_);
-    result_details_layout->setContentsMargins(4, 6, 4, 6);
+    auto* result_details_outer = new QVBoxLayout(result_details_panel_);
+    result_details_outer->setContentsMargins(4, 6, 4, 6);
+    result_details_outer->setSpacing(4);
+
+    auto* result_details_row = new QWidget(result_details_panel_);
+    auto* result_details_layout = new QHBoxLayout(result_details_row);
+    result_details_layout->setContentsMargins(0, 0, 0, 0);
     result_details_layout->setSpacing(8);
 
     // Left: metadata summary
-    auto* result_meta_label_ = new QLabel(result_details_panel_);
+    auto* result_meta_label_ = new QLabel(result_details_row);
     result_meta_label_->setObjectName(QStringLiteral("resultMetadataLabel"));
     result_meta_label_->setProperty("labelRole", "resultMetadata");
     result_meta_label_->setWordWrap(true);
 
     // Right: action buttons (copy path, rename, delete)
-    auto* result_actions_widget_ = new QWidget(result_details_panel_);
+    auto* result_actions_widget_ = new QWidget(result_details_row);
     auto* result_actions_layout_ = new QHBoxLayout(result_actions_widget_);
     result_actions_layout_->setContentsMargins(0, 0, 0, 0);
     result_actions_layout_->setSpacing(6);
@@ -1411,6 +1416,16 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     result_details_layout->addWidget(result_meta_label_, 1);
     result_details_layout->addWidget(result_actions_widget_, 0, Qt::AlignRight | Qt::AlignVCenter);
 
+    result_details_outer->addWidget(result_details_row);
+
+    // Markers label (shown when recording has markers)
+    auto* result_markers_label_ = new QLabel(result_details_panel_);
+    result_markers_label_->setObjectName(QStringLiteral("resultMarkersLabel"));
+    result_markers_label_->setProperty("labelRole", "resultMarkers");
+    result_markers_label_->setWordWrap(true);
+    result_markers_label_->setVisible(false);
+    result_details_outer->addWidget(result_markers_label_);
+
     // --- Inline rename overlay ---
     rename_overlay_ = new QFrame(result_details_panel_);
     rename_overlay_->setObjectName(QStringLiteral("renameOverlay"));
@@ -1434,6 +1449,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     rename_layout->addWidget(rename_confirm_btn_);
     rename_layout->addWidget(rename_cancel_btn_);
     rename_layout->addWidget(rename_error_label_);
+    result_details_outer->addWidget(rename_overlay_);
 
     // --- Delete confirmation overlay ---
     delete_confirm_overlay_ = new QFrame(result_details_panel_);
@@ -1453,6 +1469,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     delete_layout->addWidget(delete_label, 1);
     delete_layout->addWidget(delete_confirm_yes_btn_);
     delete_layout->addWidget(delete_confirm_no_btn_);
+    result_details_outer->addWidget(delete_confirm_overlay_);
 
     // --- Recent recordings section ---
     recent_section_ = new QFrame(this);
@@ -1484,11 +1501,22 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     capture_frame_status_timer_->setSingleShot(true);
     connect(capture_frame_status_timer_, &QTimer::timeout, capture_frame_status_label_, &QLabel::hide);
 
+    marker_feedback_label_ = new QLabel(this);
+    marker_feedback_label_->setObjectName(QStringLiteral("markerFeedbackLabel"));
+    marker_feedback_label_->setProperty("labelRole", QStringLiteral("markerFeedback"));
+    marker_feedback_label_->setAlignment(Qt::AlignCenter);
+    marker_feedback_label_->setWordWrap(true);
+    marker_feedback_label_->setVisible(false);
+    marker_feedback_timer_ = new QTimer(this);
+    marker_feedback_timer_->setSingleShot(true);
+    connect(marker_feedback_timer_, &QTimer::timeout, marker_feedback_label_, &QLabel::hide);
+
     root->setSpacing(10);
     root->addWidget(preview_column_, 1);
     root->addWidget(result_details_panel_, 0);
     root->addWidget(recent_section_, 0);
     root->addWidget(capture_frame_status_label_, 0);
+    root->addWidget(marker_feedback_label_, 0);
     root->addWidget(transport_dock_, 0);
 
     auto* combo_wheel_filter = new ui::widgets::ComboBoxWheelFilter(this);
@@ -1593,6 +1621,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(transport_dock_, &ui::widgets::TransportDock::openFolderClicked, this, &RecordPage::openOutputFolder);
     connect(transport_dock_, &ui::widgets::TransportDock::filenameClicked, this, &RecordPage::onDockFilenameActivated);
     connect(transport_dock_, &ui::widgets::TransportDock::captureFrameClicked, this, &RecordPage::onHotkeyCaptureFrame);
+    connect(transport_dock_, &ui::widgets::TransportDock::addMarkerClicked, this, &RecordPage::onDockAddMarker);
     connect(transport_dock_, &ui::widgets::TransportDock::sourceToggleClicked, this, &RecordPage::onDockSourceToggle);
     connect(transport_dock_, &ui::widgets::TransportDock::countdownSecondsChanged, this, [this](int seconds) {
         selected_countdown_seconds_ = seconds;
@@ -3276,6 +3305,44 @@ void RecordPage::onHotkeyCaptureFrame() {
     const auto st = coordinator_->State();
     if (st == UiRecordingState::Ready || st == UiRecordingState::Recording || st == UiRecordingState::Paused)
         coordinator_->CaptureFrame();
+}
+
+void RecordPage::onHotkeyAddMarker() {
+    onDockAddMarker();
+}
+
+void RecordPage::onDockAddMarker() {
+    ensureCoordinatorInit();
+    if (!coordinator_)
+        return;
+    const auto st = coordinator_->State();
+    if (st != UiRecordingState::Recording && st != UiRecordingState::Paused)
+        return;
+    coordinator_->AddMarker(RecordingMarkerType::General);
+    const auto& markers = coordinator_->Markers();
+    const size_t count = markers.size();
+    if (count == 0)
+        return;
+    const auto& last = markers.back();
+    const uint64_t secs = last.time_ms / 1000;
+    const uint64_t mins = secs / 60;
+    const uint64_t hrs = mins / 60;
+    const uint64_t ms = last.time_ms % 1000;
+    const QString text = QStringLiteral("Marker %1 · %2:%3:%4.%5")
+                             .arg(count, 2, 10, QChar('0'))
+                             .arg(hrs, 2, 10, QChar('0'))
+                             .arg(mins % 60, 2, 10, QChar('0'))
+                             .arg(secs % 60, 2, 10, QChar('0'))
+                             .arg(ms, 3, 10, QChar('0'));
+    showMarkerFeedback(text);
+}
+
+void RecordPage::showMarkerFeedback(const QString& text) {
+    if (!marker_feedback_label_ || !marker_feedback_timer_)
+        return;
+    marker_feedback_label_->setText(text);
+    marker_feedback_label_->setVisible(true);
+    marker_feedback_timer_->start(2000);
 }
 
 void RecordPage::showCaptureFrameStatus(bool success, const QString& path, const QString& error) {
@@ -5656,6 +5723,35 @@ void RecordPage::updateResultDetailsPanel() {
         meta_label->setProperty("missingFile", !file_exists);
         meta_label->style()->unpolish(meta_label);
         meta_label->style()->polish(meta_label);
+
+        // Append marker summary to metadata
+        auto* markers_label = panel->findChild<QLabel*>(QStringLiteral("resultMarkersLabel"));
+        if (markers_label) {
+            if (!rec.markers.empty()) {
+                const auto count = rec.markers.size();
+                QStringList lines;
+                lines.append(QString());
+                lines.append(QStringLiteral("MARKERS · %1").arg(count));
+                for (const auto& m : rec.markers) {
+                    const uint64_t secs = m.time_ms / 1000;
+                    const uint64_t mins = secs / 60;
+                    const uint64_t hrs = mins / 60;
+                    const uint64_t ms = m.time_ms % 1000;
+                    const QString ts = QStringLiteral("%1:%2:%3.%4")
+                                           .arg(hrs, 2, 10, QChar('0'))
+                                           .arg(mins % 60, 2, 10, QChar('0'))
+                                           .arg(secs % 60, 2, 10, QChar('0'))
+                                           .arg(ms, 3, 10, QChar('0'));
+                    const QString label = QString::fromStdString(m.label);
+                    lines.append(QStringLiteral("  %1   %2").arg(ts, label));
+                }
+                markers_label->setText(lines.join(QChar('\n')));
+                markers_label->setToolTip(rec.marker_sidecar_path);
+                markers_label->setVisible(true);
+            } else {
+                markers_label->setVisible(false);
+            }
+        }
     }
 
     // Action buttons

@@ -1433,6 +1433,47 @@ const QVector<VisualScenario> kCaptureFrameScenarios = {
      .capture_frame_last_saved = {}},
 };
 
+const QVector<VisualScenario> kMarkerScenarios = {
+    {.id = QStringLiteral("record-recording-with-markers"),
+     .title = QStringLiteral("Record / Recording / With Markers"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Recording,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
+     .marker_action_visible = true,
+     .marker_action_enabled = true,
+     .marker_count = 3,
+     .marker_latest_time_ms = 370200,
+     .marker_latest_type = QStringLiteral("cut"),
+     .marker_recording_state = QStringLiteral("Recording"),
+     .hk_marker_active = true},
+
+    {.id = QStringLiteral("record-paused-with-marker"),
+     .title = QStringLiteral("Record / Paused / With Marker"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Paused,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
+     .marker_action_visible = true,
+     .marker_action_enabled = true,
+     .marker_count = 1,
+     .marker_latest_time_ms = 207450,
+     .marker_latest_type = QStringLiteral("general"),
+     .marker_recording_state = QStringLiteral("Paused"),
+     .hk_marker_active = true},
+
+    {.id = QStringLiteral("record-completed-markers"),
+     .title = QStringLiteral("Record / Completed / Markers"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Completed,
+     .result_file_name = QStringLiteral("recording.webm"),
+     .result_file_size_bytes = 52ULL * 1024ULL * 1024ULL,
+     .result_duration_seconds = 83.0,
+     .result_file_exists = true,
+     .marker_count = 3,
+     .marker_latest_time_ms = 370200,
+     .marker_latest_type = QStringLiteral("cut"),
+     .marker_sidecar_file = QStringLiteral("recording.markers.json")},
+};
+
 const QVector<VisualScenario>& VisualScenarioRegistry() {
     static QVector<VisualScenario> merged;
     if (merged.isEmpty()) {
@@ -1440,6 +1481,7 @@ const QVector<VisualScenario>& VisualScenarioRegistry() {
         merged.append(kCompletedScenarios);
         merged.append(kDeviceDiscoveryScenarios);
         merged.append(kCaptureFrameScenarios);
+        merged.append(kMarkerScenarios);
     }
     return merged;
 }

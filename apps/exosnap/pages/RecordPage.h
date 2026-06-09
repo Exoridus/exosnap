@@ -140,6 +140,7 @@ class RecordPage : public QWidget {
     void onHotkeyToggle();
     void onHotkeyPauseToggle();
     void onHotkeyCaptureFrame();
+    void onHotkeyAddMarker();
     void setSourcePickerOverlay(ui::dialogs::SourcePickerOverlay* overlay);
     // Refresh display/window source list; call on screen add/remove events.
     void refreshDisplayTargets();
@@ -262,6 +263,8 @@ class RecordPage : public QWidget {
     QString buildTimerText(bool recording) const;
     bool isSourceSelectionLocked() const;
     void showCaptureFrameStatus(bool success, const QString& path, const QString& error);
+    void onDockAddMarker();
+    void showMarkerFeedback(const QString& text);
 
     int monitor_target_index_ = -1;
     int window_target_index_ = -1;
@@ -419,6 +422,10 @@ class RecordPage : public QWidget {
     QWidget* legacy_host_ = nullptr;
     QLabel* capture_frame_status_label_ = nullptr;
     QTimer* capture_frame_status_timer_ = nullptr;
+
+    // Marker feedback label (brief flash near the dock)
+    QLabel* marker_feedback_label_ = nullptr;
+    QTimer* marker_feedback_timer_ = nullptr;
 
     // Latest preview frame for Ready-state Capture Frame.
     QImage latest_preview_frame_;
