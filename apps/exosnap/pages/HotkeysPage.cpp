@@ -48,6 +48,7 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
         // Active — backend-modelled, globally registered.
         {"Start / Stop recording", GlobalHotkeyService::DefaultBinding(HotkeyAction::ToggleRecording), true},
         {"Pause / Resume", GlobalHotkeyService::DefaultBinding(HotkeyAction::TogglePause), true},
+        {"Capture frame", GlobalHotkeyService::DefaultBinding(HotkeyAction::CaptureFrame), true},
         // Planned — design-target actions, no backend slot in this build.
         {"Split recording", QKeySequence(), false},
         {"Mute / unmute microphone", QKeySequence(), false},
@@ -56,7 +57,6 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
         {"Toggle webcam", QKeySequence(), false},
         {"Toggle system audio", QKeySequence(), false},
         {"Open diagnostics", QKeySequence(), false},
-        {"Capture frame (screenshot)", QKeySequence(), false},
     };
 
     // ── Active section ────────────────────────────────────────────────────────────────────────

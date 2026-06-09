@@ -9,9 +9,10 @@ namespace exosnap {
 enum class HotkeyAction : int {
     ToggleRecording = 0,
     TogglePause = 1,
+    CaptureFrame = 2,
 };
 
-constexpr int kHotkeyActionCount = 2;
+constexpr int kHotkeyActionCount = 3;
 
 enum class RebindError {
     None,
@@ -86,7 +87,7 @@ class GlobalHotkeyService : public QObject {
     RebindResult AttemptRegistration(HotkeyAction action, QKeySequence new_seq, QKeySequence old_seq);
 
     IHotkeyRegistrar* registrar_ = nullptr;
-    std::array<QKeySequence, kHotkeyActionCount> bindings_{};
+    std::array<QKeySequence, static_cast<std::size_t>(kHotkeyActionCount)> bindings_{};
 };
 
 } // namespace exosnap

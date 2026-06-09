@@ -1475,10 +1475,20 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
                              ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
+    capture_frame_status_label_ = new QLabel(this);
+    capture_frame_status_label_->setObjectName(QStringLiteral("captureFrameStatusLabel"));
+    capture_frame_status_label_->setAlignment(Qt::AlignCenter);
+    capture_frame_status_label_->setWordWrap(true);
+    capture_frame_status_label_->setVisible(false);
+    capture_frame_status_timer_ = new QTimer(this);
+    capture_frame_status_timer_->setSingleShot(true);
+    connect(capture_frame_status_timer_, &QTimer::timeout, capture_frame_status_label_, &QLabel::hide);
+
     root->setSpacing(10);
     root->addWidget(preview_column_, 1);
     root->addWidget(result_details_panel_, 0);
     root->addWidget(recent_section_, 0);
+    root->addWidget(capture_frame_status_label_, 0);
     root->addWidget(transport_dock_, 0);
 
     auto* combo_wheel_filter = new ui::widgets::ComboBoxWheelFilter(this);
@@ -1582,6 +1592,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     });
     connect(transport_dock_, &ui::widgets::TransportDock::openFolderClicked, this, &RecordPage::openOutputFolder);
     connect(transport_dock_, &ui::widgets::TransportDock::filenameClicked, this, &RecordPage::onDockFilenameActivated);
+    connect(transport_dock_, &ui::widgets::TransportDock::captureFrameClicked, this, &RecordPage::onHotkeyCaptureFrame);
     connect(transport_dock_, &ui::widgets::TransportDock::sourceToggleClicked, this, &RecordPage::onDockSourceToggle);
     connect(transport_dock_, &ui::widgets::TransportDock::countdownSecondsChanged, this, [this](int seconds) {
         selected_countdown_seconds_ = seconds;
@@ -2722,7 +2733,9 @@ void RecordPage::initCoordinator() {
 
     preview_service_ = std::make_unique<PreviewService>();
     QPointer<ui::widgets::PreviewSurface> safeSurface = preview_surface_;
-    preview_service_->SetFrameCallback([safeSurface](QImage frame) {
+    preview_service_->SetFrameCallback([this, safeSurface](QImage frame) {
+        // Store the latest frame for Ready-state capture frame action.
+        latest_preview_frame_ = frame;
         if (safeSurface && !safeSurface->isDxgiPreviewActive())
             safeSurface->setLiveFrame(std::move(frame));
     });
@@ -2836,6 +2849,11 @@ void RecordPage::initCoordinator() {
         }
         refresh();
     });
+
+    coordinator_->SetFrameCapturedCallback([this](bool success, const QString& path, const QString& error) {
+        showCaptureFrameStatus(success, path, error);
+    });
+    coordinator_->SetReadyFrameSource([this]() -> QImage { return latest_preview_frame_; });
 
     enumerateTargets(false);
 
@@ -3249,6 +3267,34 @@ void RecordPage::onHotkeyPauseToggle() {
         onPause();
     else if (view_model_.CanResume())
         onResume();
+}
+
+void RecordPage::onHotkeyCaptureFrame() {
+    ensureCoordinatorInit();
+    if (!coordinator_)
+        return;
+    const auto st = coordinator_->State();
+    if (st == UiRecordingState::Ready || st == UiRecordingState::Recording || st == UiRecordingState::Paused)
+        coordinator_->CaptureFrame();
+}
+
+void RecordPage::showCaptureFrameStatus(bool success, const QString& path, const QString& error) {
+    if (!capture_frame_status_label_ || !capture_frame_status_timer_)
+        return;
+    if (success) {
+        const QString name = QFileInfo(path).fileName();
+        capture_frame_status_label_->setText(QStringLiteral("Frame saved: %1").arg(name));
+        capture_frame_status_label_->setToolTip(path);
+        capture_frame_status_label_->setProperty("statusRole", QStringLiteral("success"));
+    } else {
+        capture_frame_status_label_->setText(error.isEmpty() ? QStringLiteral("Capture failed") : error);
+        capture_frame_status_label_->setToolTip({});
+        capture_frame_status_label_->setProperty("statusRole", QStringLiteral("error"));
+    }
+    capture_frame_status_label_->style()->unpolish(capture_frame_status_label_);
+    capture_frame_status_label_->style()->polish(capture_frame_status_label_);
+    capture_frame_status_label_->setVisible(true);
+    capture_frame_status_timer_->start(3000);
 }
 
 void RecordPage::onSelectMonitorTarget() {

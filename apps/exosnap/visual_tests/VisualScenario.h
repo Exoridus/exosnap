@@ -189,6 +189,13 @@ struct VisualScenario {
     bool dd_rescan_enabled = true;                    // true when Rescan button is active/enabled
     QString dd_last_discovery_reason;                 // e.g. "DeviceRemoved", "DefaultChanged", "Startup"
 
+    // --- Capture frame state (capture-frame-* scenarios) ---
+    bool capture_frame_action_visible = false;
+    bool capture_frame_action_enabled = false;
+    bool capture_frame_pending = false; // a snapshot request is in flight
+    bool capture_frame_success = false; // last capture succeeded
+    QString capture_frame_last_saved;   // filename of last saved PNG
+
     // --- Hotkeys visual state (hotkeys-* scenarios) ---
     // hk_capture_action == -1 means "not in capture mode".
     bool hk_capture_active = false; // show one active row in capture mode

@@ -228,6 +228,16 @@ void RecorderSession::Resume() {
     m_impl->state.pause_requested.store(false);
 }
 
+void RecorderSession::RequestFrameSnapshot(FrameSnapshotCallback callback) {
+    if (!m_impl->recording.load())
+        return;
+    std::lock_guard lk(m_impl->state.snapshot_callback_mutex);
+    if (m_impl->state.snapshot_requested.load())
+        return; // already pending — ignore
+    m_impl->state.snapshot_callback = std::move(callback);
+    m_impl->state.snapshot_requested.store(true);
+}
+
 void RecorderSession::UpdateWebcamOverlay(const WebcamOverlayLive& overlay) {
     if (!m_impl->recording.load()) {
         return;
@@ -284,6 +294,11 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         st.encode_width = 0;
         st.encode_height = 0;
         st.video_epoch_qpc_100ns.store(0);
+        {
+            std::lock_guard slk(st.snapshot_callback_mutex);
+            st.snapshot_requested.store(false);
+            st.snapshot_callback = nullptr;
+        }
         {
             LARGE_INTEGER qpc, freq;
             QueryPerformanceFrequency(&freq);
@@ -516,6 +531,22 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             }
             result.error_detail += " m=" + std::string(muxJoined ? "ok" : "TIMEOUT") + "]";
         }
+    }
+
+    // Cancel any pending frame snapshot request — VideoThread has stopped so the
+    // callback will never fire from the capture loop.  Fire it with an error here.
+    {
+        FrameSnapshotCallback pending_cb;
+        {
+            std::lock_guard slk(m_impl->state.snapshot_callback_mutex);
+            if (m_impl->state.snapshot_requested.load()) {
+                pending_cb = std::move(m_impl->state.snapshot_callback);
+                m_impl->state.snapshot_callback = nullptr;
+                m_impl->state.snapshot_requested.store(false);
+            }
+        }
+        if (pending_cb)
+            pending_cb(false, 0, 0, {}, "recording session ended before snapshot completed");
     }
 
     // Final stats snapshot

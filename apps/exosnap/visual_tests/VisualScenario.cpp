@@ -1393,12 +1393,53 @@ const QVector<VisualScenario> kDeviceDiscoveryScenarios = {
      .dd_last_discovery_reason = QStringLiteral("DeviceRemoved")},
 };
 
+const QVector<VisualScenario> kCaptureFrameScenarios = {
+    // Ready state — action visible and enabled, no pending request.
+    {.id = QStringLiteral("record-capture-frame-ready"),
+     .title = QStringLiteral("Record / Capture Frame / Ready"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .capture_frame_action_visible = true,
+     .capture_frame_action_enabled = true,
+     .capture_frame_pending = false},
+
+    // Recording state — action visible, one request in flight.
+    {.id = QStringLiteral("record-capture-frame-recording"),
+     .title = QStringLiteral("Record / Capture Frame / Recording"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Recording,
+     .capture_frame_action_visible = true,
+     .capture_frame_action_enabled = true,
+     .capture_frame_pending = true},
+
+    // Saved feedback — action visible, last save succeeded.
+    {.id = QStringLiteral("record-capture-frame-saved"),
+     .title = QStringLiteral("Record / Capture Frame / Saved"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Recording,
+     .capture_frame_action_visible = true,
+     .capture_frame_action_enabled = true,
+     .capture_frame_success = true,
+     .capture_frame_last_saved = QStringLiteral("2026-06-09_12-00-00_frame.png")},
+
+    // Unavailable — no preview frame in ready state.
+    {.id = QStringLiteral("record-capture-frame-unavailable"),
+     .title = QStringLiteral("Record / Capture Frame / Unavailable"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Ready,
+     .capture_frame_action_visible = true,
+     .capture_frame_action_enabled = false,
+     .capture_frame_success = false,
+     .capture_frame_last_saved = {}},
+};
+
 const QVector<VisualScenario>& VisualScenarioRegistry() {
     static QVector<VisualScenario> merged;
     if (merged.isEmpty()) {
         merged = kScenarios;
         merged.append(kCompletedScenarios);
         merged.append(kDeviceDiscoveryScenarios);
+        merged.append(kCaptureFrameScenarios);
     }
     return merged;
 }

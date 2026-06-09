@@ -717,3 +717,26 @@ target_include_directories(device_selection_policy_tests PRIVATE ${CMAKE_CURRENT
 set_target_properties(device_selection_policy_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(device_selection_policy_tests PRIVATE
     mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
+
+# CAPTURE-FRAME-R1 tests
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+    exosnap_add_gtest(
+        NAME capture_frame_tests
+        TEST_PREFIX capture.frame.
+        SOURCES
+            tests/test_capture_frame.cpp
+            services/RecordingCoordinator.cpp
+            services/GlobalHotkeyService.cpp
+            visual_tests/VisualScenario.cpp
+        LIBRARIES
+            exosnap_output_model_test_support
+            exosnap_device_service_test_support
+            Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+    )
+    target_include_directories(capture_frame_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(capture_frame_tests PRIVATE
+        NOMINMAX EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
+    target_link_libraries(capture_frame_tests PRIVATE
+        mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
+    set_target_properties(capture_frame_tests PROPERTIES AUTOMOC ON)
+endif()

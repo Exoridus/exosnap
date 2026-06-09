@@ -139,6 +139,7 @@ class RecordPage : public QWidget {
   public slots:
     void onHotkeyToggle();
     void onHotkeyPauseToggle();
+    void onHotkeyCaptureFrame();
     void setSourcePickerOverlay(ui::dialogs::SourcePickerOverlay* overlay);
     // Refresh display/window source list; call on screen add/remove events.
     void refreshDisplayTargets();
@@ -260,6 +261,7 @@ class RecordPage : public QWidget {
     QString buildPreviewBottomRightText(bool recording) const;
     QString buildTimerText(bool recording) const;
     bool isSourceSelectionLocked() const;
+    void showCaptureFrameStatus(bool success, const QString& path, const QString& error);
 
     int monitor_target_index_ = -1;
     int window_target_index_ = -1;
@@ -415,6 +417,11 @@ class RecordPage : public QWidget {
     // Hybrid v3 preview-first chrome (HYBRID-PORT-R2).
     ui::widgets::TransportDock* transport_dock_ = nullptr;
     QWidget* legacy_host_ = nullptr;
+    QLabel* capture_frame_status_label_ = nullptr;
+    QTimer* capture_frame_status_timer_ = nullptr;
+
+    // Latest preview frame for Ready-state Capture Frame.
+    QImage latest_preview_frame_;
 
     // View-layer elapsed-time fallback used while live backend stats are pending.
     // Starts when recording begins; pauses/resumes with the recording state.

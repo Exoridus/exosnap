@@ -62,6 +62,7 @@ class TransportDock : public QFrame {
     void recordAgainClicked();
     void openFolderClicked();
     void filenameClicked();
+    void captureFrameClicked();
     void sourceToggleClicked(const QString& key);
     void countdownSecondsChanged(int seconds);
 
@@ -91,6 +92,7 @@ class TransportDock : public QFrame {
     QPushButton* resume_btn_ = nullptr;
     QPushButton* stop_btn_ = nullptr;
     QPushButton* record_again_btn_ = nullptr;
+    QPushButton* capture_frame_btn_ = nullptr;
 };
 
 } // namespace exosnap::ui::widgets

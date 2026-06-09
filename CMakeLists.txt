@@ -8,6 +8,14 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
+# Use embedded debug info (/Z7) instead of PDB (/Zi) to prevent parallel-build
+# PDB contention with the Visual Studio generator. Ninja builds are unaffected
+# because CMake already adds /FS for Ninja+MSVC. /Z7 embeds debug info in each
+# .obj file; debugging experience is equivalent to /Zi.
+if(MSVC)
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
+endif()
+
 option(EXOSNAP_USE_SCCACHE "Use sccache as the C++ compiler launcher when it is available." OFF)
 set(EXOSNAP_COMPILER_LAUNCHER "" CACHE STRING "Optional C++ compiler launcher executable, such as sccache.")
 
