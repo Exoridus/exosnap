@@ -271,6 +271,37 @@ std::optional<OutputResolutionMode> OutputResolutionModeFromString(QStringView s
     return std::nullopt;
 }
 
+QString SplitRecordingModeToString(SplitRecordingMode v) {
+    switch (v) {
+    case SplitRecordingMode::Off:
+        return QStringLiteral("off");
+    case SplitRecordingMode::Every15Min:
+        return QStringLiteral("every15");
+    case SplitRecordingMode::Every30Min:
+        return QStringLiteral("every30");
+    case SplitRecordingMode::Every60Min:
+        return QStringLiteral("every60");
+    case SplitRecordingMode::Custom:
+        return QStringLiteral("custom");
+    }
+    return QStringLiteral("off");
+}
+
+std::optional<SplitRecordingMode> SplitRecordingModeFromString(QStringView s) {
+    const QString n = s.trimmed().toString().toLower();
+    if (n == QStringLiteral("off"))
+        return SplitRecordingMode::Off;
+    if (n == QStringLiteral("every15"))
+        return SplitRecordingMode::Every15Min;
+    if (n == QStringLiteral("every30"))
+        return SplitRecordingMode::Every30Min;
+    if (n == QStringLiteral("every60"))
+        return SplitRecordingMode::Every60Min;
+    if (n == QStringLiteral("custom"))
+        return SplitRecordingMode::Custom;
+    return std::nullopt;
+}
+
 QString OutputFitModeToString(recorder_core::OutputFitMode v) {
     switch (v) {
     case recorder_core::OutputFitMode::Contain:
@@ -319,6 +350,8 @@ void SavePresetItem(QSettings& settings, const RecordingPreset& preset) {
     settings.setValue(QStringLiteral("out_custom_width"), static_cast<int>(out.resolution.custom_width));
     settings.setValue(QStringLiteral("out_custom_height"), static_cast<int>(out.resolution.custom_height));
     settings.setValue(QStringLiteral("out_fit_mode"), OutputFitModeToString(out.resolution.fit));
+    settings.setValue(QStringLiteral("out_split_mode"), SplitRecordingModeToString(out.split.mode));
+    settings.setValue(QStringLiteral("out_split_custom_minutes"), static_cast<int>(out.split.custom_minutes));
 
     // --- Video ---
     const auto& vid = preset.config.video;
@@ -450,6 +483,15 @@ std::optional<RecordingPreset> LoadPresetItem(QSettings& settings) {
         const auto fit = OutputFitModeFromString(settings.value(QStringLiteral("out_fit_mode")).toString());
         if (fit.has_value())
             out.resolution.fit = *fit;
+    }
+    {
+        const auto sm = SplitRecordingModeFromString(settings.value(QStringLiteral("out_split_mode")).toString());
+        if (sm.has_value())
+            out.split.mode = *sm;
+        bool ok = false;
+        const int minutes = settings.value(QStringLiteral("out_split_custom_minutes"), 30).toInt(&ok);
+        if (ok && minutes > 0)
+            out.split.custom_minutes = static_cast<uint32_t>(minutes);
     }
 
     // --- Video ---

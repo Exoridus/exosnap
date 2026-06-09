@@ -745,6 +745,45 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_effective_summary_label_->setObjectName(QStringLiteral("outputEffectiveSummaryLabel"));
     out_panel_layout->addWidget(output_effective_summary_label_);
 
+    // ---- Split recording (SPLIT-RECORDING-R1) ----
+    out_panel_layout->addWidget(makeFieldLabel(QStringLiteral("Split recording"), out_panel));
+    auto* split_row = new QHBoxLayout();
+    split_row->setContentsMargins(0, 0, 0, 0);
+    split_row->setSpacing(8);
+    split_mode_combo_ = new QComboBox(out_panel);
+    split_mode_combo_->setObjectName(QStringLiteral("splitModeCombo"));
+    split_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitRecordingMode::Off));
+    split_mode_combo_->addItem(QStringLiteral("Every 15 min"), static_cast<int>(SplitRecordingMode::Every15Min));
+    split_mode_combo_->addItem(QStringLiteral("Every 30 min"), static_cast<int>(SplitRecordingMode::Every30Min));
+    split_mode_combo_->addItem(QStringLiteral("Every 60 min"), static_cast<int>(SplitRecordingMode::Every60Min));
+    split_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitRecordingMode::Custom));
+    split_mode_combo_->setToolTip(
+        QStringLiteral("Automatically start a new file at the chosen interval (manual splits always work)."));
+    split_row->addWidget(split_mode_combo_, 0);
+
+    split_custom_widget_ = new QWidget(out_panel);
+    auto* split_custom_layout = new QHBoxLayout(split_custom_widget_);
+    split_custom_layout->setContentsMargins(0, 0, 0, 0);
+    split_custom_layout->setSpacing(8);
+    auto* split_every_label = new QLabel(QStringLiteral("Every"), split_custom_widget_);
+    split_every_label->setProperty("labelRole", "fieldLabel");
+    split_custom_minutes_spin_ = new QSpinBox(split_custom_widget_);
+    split_custom_minutes_spin_->setObjectName(QStringLiteral("splitCustomMinutesSpin"));
+    split_custom_minutes_spin_->setRange(static_cast<int>(SplitRecordingSettings::kMinMinutes),
+                                         static_cast<int>(SplitRecordingSettings::kMaxMinutes));
+    split_custom_minutes_spin_->setSuffix(QStringLiteral(" min"));
+    split_custom_minutes_spin_->setToolTip(QStringLiteral("Custom split interval (1 min – 24 h)"));
+    split_custom_layout->addWidget(split_every_label);
+    split_custom_layout->addWidget(split_custom_minutes_spin_);
+    split_custom_widget_->setVisible(false);
+    split_row->addWidget(split_custom_widget_, 0);
+    split_row->addStretch();
+    out_panel_layout->addLayout(split_row);
+
+    split_summary_label_ = makeHint(QString(), out_panel);
+    split_summary_label_->setObjectName(QStringLiteral("splitSummaryLabel"));
+    out_panel_layout->addWidget(split_summary_label_);
+
     auto* output_split = new QWidget(out_panel);
     output_split_layout_ = new QHBoxLayout(output_split);
     output_split_layout_->setContentsMargins(0, 0, 0, 0);
@@ -888,6 +927,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             &ConfigPage::onFrameRateChanged);
     connect(timing_group_, &QButtonGroup::idClicked, this, &ConfigPage::onTimingSelected);
     connect(output_resolution_group_, &QButtonGroup::idClicked, this, &ConfigPage::onOutputResolutionSelected);
+    connect(split_mode_combo_, &QComboBox::currentIndexChanged, this, &ConfigPage::onSplitModeChanged);
+    connect(split_custom_minutes_spin_, &QSpinBox::valueChanged, this, [this](int minutes) {
+        format_settings_.split.custom_minutes = static_cast<uint32_t>(minutes);
+        SanitizeSplitSettings(format_settings_.split);
+        updateSplitSelection();
+        emitCurrentFormatSettings();
+    });
     connect(custom_width_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &ConfigPage::onCustomWidthChanged);
     connect(custom_height_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &ConfigPage::onCustomHeightChanged);
     connect(cursor_check_, &QCheckBox::toggled, this, &ConfigPage::onCursorChanged);
@@ -1089,6 +1135,45 @@ void ConfigPage::onOutputResolutionSelected(int mode_id) {
     emitCurrentFormatSettings();
 }
 
+void ConfigPage::onSplitModeChanged(int index) {
+    if (!split_mode_combo_)
+        return;
+    const auto mode = static_cast<SplitRecordingMode>(split_mode_combo_->itemData(index).toInt());
+    format_settings_.split.mode = mode;
+    SanitizeSplitSettings(format_settings_.split);
+    updateSplitSelection();
+    emitCurrentFormatSettings();
+}
+
+void ConfigPage::updateSplitSelection() {
+    if (!split_mode_combo_)
+        return;
+    const SplitRecordingSettings& s = format_settings_.split;
+    {
+        QSignalBlocker block_combo(split_mode_combo_);
+        const int idx = split_mode_combo_->findData(static_cast<int>(s.mode));
+        if (idx >= 0)
+            split_mode_combo_->setCurrentIndex(idx);
+    }
+    if (split_custom_minutes_spin_) {
+        QSignalBlocker block_spin(split_custom_minutes_spin_);
+        split_custom_minutes_spin_->setValue(static_cast<int>(s.custom_minutes));
+    }
+    if (split_custom_widget_)
+        split_custom_widget_->setVisible(s.mode == SplitRecordingMode::Custom);
+
+    if (split_summary_label_) {
+        if (s.mode == SplitRecordingMode::Off) {
+            split_summary_label_->setText(QStringLiteral("Single file (split off). Manual splits still work."));
+        } else {
+            const uint64_t ms = SplitDurationMs(s);
+            const uint64_t minutes = ms / 60000ull;
+            split_summary_label_->setText(
+                QStringLiteral("New file automatically every %1 min.").arg(static_cast<qulonglong>(minutes)));
+        }
+    }
+}
+
 void ConfigPage::onCursorChanged() {
     video_settings_.capture_cursor = cursor_check_->isChecked();
     updateQualitySummary();
@@ -1200,7 +1285,9 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
     format_settings_.output_folder = settings.output_folder;
     format_settings_.naming_pattern = settings.naming_pattern;
     format_settings_.resolution = settings.resolution;
+    format_settings_.split = settings.split;
     SanitizeOutputResolution(format_settings_.resolution);
+    SanitizeSplitSettings(format_settings_.split);
     if (settings.resolution.mode == OutputResolutionMode::Custom) {
         stashed_custom_width_ = settings.resolution.custom_width;
         stashed_custom_height_ = settings.resolution.custom_height;
@@ -1220,6 +1307,7 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
     updateOutputResolutionSelection();
     updateCustomResolutionVisibility();
     updateEffectiveOutputSummary();
+    updateSplitSelection();
 
     if (destination_edit_) {
         const QSignalBlocker db(destination_edit_);

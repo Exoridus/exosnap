@@ -953,6 +953,14 @@ void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings
     resolved_user_config_.video_codec = output_settings_.video_codec;
     resolved_user_config_.audio_codec = output_settings_.audio_codec;
     ApplyOutputSettingsToUserConfig(resolved_user_config_, output_settings_);
+
+    // Translate the UI split policy into the engine settings applied at start.
+    SanitizeSplitSettings(output_settings_.split);
+    const uint64_t split_ms = SplitDurationMs(output_settings_.split);
+    split_settings_.mode =
+        split_ms > 0 ? recorder_core::RecordingSplitMode::Duration : recorder_core::RecordingSplitMode::Off;
+    if (split_ms > 0)
+        split_settings_.duration_ms = split_ms;
 }
 void RecordingCoordinator::SetVideoSettings(const VideoSettingsModel& settings) {
     video_settings_ = settings;

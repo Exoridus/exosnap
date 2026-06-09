@@ -197,6 +197,7 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
     // Output: reconcile codecs and normalize the canonical output-size intent.
     ReconcileContainerCodecs(config.output);
     SanitizeOutputResolution(config.output.resolution);
+    SanitizeSplitSettings(config.output.split);
 
     // Video: reset frame rate if degenerate (either numerator or denominator is zero).
     if (config.video.frame_rate_num == 0 || config.video.frame_rate_den == 0) {
@@ -324,6 +325,9 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
         return false;
     }
     if (a.output.naming_pattern != b.output.naming_pattern) {
+        return false;
+    }
+    if (a.output.split != b.output.split) {
         return false;
     }
 
@@ -491,6 +495,9 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (a.output.naming_pattern != b.output.naming_pattern) {
+        return false;
+    }
+    if (a.output.split != b.output.split) {
         return false;
     }
 
