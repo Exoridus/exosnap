@@ -406,6 +406,92 @@ TEST(RecordingHistoryStoreTest, InvalidEntrySkippedValidEntriesSurvive) {
 }
 
 // =============================================================================
+// 11b. Multi-segment recording round-trips (SPLIT-RECORDING-R1)
+// =============================================================================
+
+TEST(RecordingHistoryStoreTest, MultiSegmentRecordingRoundTrips) {
+    const QString path = UniqueTestStorePath();
+
+    CompletedRecording rec = MakeTestRecording(QStringLiteral("C:/videos/session.mkv"));
+    CompletedRecordingSegment s0;
+    s0.file_path = QStringLiteral("C:/videos/session.mkv");
+    s0.index = 0;
+    s0.session_start_ms = 0;
+    s0.duration_seconds = 30.0;
+    s0.file_size_bytes = 5000;
+    s0.succeeded = true;
+    CompletedRecordingSegment s1;
+    s1.file_path = QStringLiteral("C:/videos/session_part-002.mkv");
+    s1.index = 1;
+    s1.session_start_ms = 30000;
+    s1.duration_seconds = 12.5;
+    s1.file_size_bytes = 2300;
+    s1.succeeded = true;
+    rec.segments = {s0, s1};
+
+    {
+        RecordingHistoryStore store(path);
+        ASSERT_TRUE(store.Save({rec}));
+    }
+
+    RecordingHistoryStore store(path);
+    auto loaded = store.Load();
+    ASSERT_EQ(loaded.size(), 1);
+    ASSERT_EQ(loaded[0].segments.size(), 2u);
+    EXPECT_EQ(loaded[0].segments[1].file_path, QStringLiteral("C:/videos/session_part-002.mkv"));
+    EXPECT_EQ(loaded[0].segments[1].index, 1u);
+    EXPECT_EQ(loaded[0].segments[1].session_start_ms, 30000ull);
+    EXPECT_DOUBLE_EQ(loaded[0].segments[1].duration_seconds, 12.5);
+    EXPECT_EQ(loaded[0].segmentCount(), 2);
+    EXPECT_TRUE(loaded[0].isMultiSegment());
+    QFile::remove(path);
+}
+
+// =============================================================================
+// 11c. One invalid persisted segment does not drop the whole recording
+// =============================================================================
+
+TEST(RecordingHistoryStoreTest, InvalidSegmentSkippedRecordingSurvives) {
+    const QString path = UniqueTestStorePath();
+
+    QJsonObject good_seg;
+    good_seg[QStringLiteral("path")] = QStringLiteral("C:/videos/session.mkv");
+    good_seg[QStringLiteral("index")] = 0;
+    good_seg[QStringLiteral("durationMs")] = 30000;
+    QJsonObject bad_seg;
+    bad_seg[QStringLiteral("path")] = QStringLiteral(""); // invalid: empty path
+
+    QJsonArray segs;
+    segs.append(good_seg);
+    segs.append(bad_seg);
+
+    QJsonObject rec;
+    rec[QStringLiteral("path")] = QStringLiteral("C:/videos/session.mkv");
+    rec[QStringLiteral("container")] = QStringLiteral("mkv");
+    rec[QStringLiteral("segments")] = segs;
+
+    QJsonArray arr;
+    arr.append(rec);
+    QJsonObject root;
+    root[QStringLiteral("version")] = 2;
+    root[QStringLiteral("recordings")] = arr;
+
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(QJsonDocument(root).toJson());
+        file.close();
+    }
+
+    RecordingHistoryStore store(path);
+    auto loaded = store.Load();
+    ASSERT_EQ(loaded.size(), 1);              // recording survived
+    EXPECT_EQ(loaded[0].segments.size(), 1u); // only the valid segment kept
+    EXPECT_EQ(loaded[0].segments[0].file_path, QStringLiteral("C:/videos/session.mkv"));
+    QFile::remove(path);
+}
+
+// =============================================================================
 // 12. Unsupported schema version fails safely
 // =============================================================================
 

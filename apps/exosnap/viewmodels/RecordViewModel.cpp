@@ -499,6 +499,11 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
         cr.completed_at = QDateTime::currentDateTime();
         cr.markers = result.markers;
         cr.marker_sidecar_path = QString::fromStdWString(result.marker_sidecar_path);
+        // Multi-segment split results: carry the per-segment list so the completed
+        // panel and history can show totals / per-segment rows. The scalar fields
+        // above continue to describe the first (or only) segment for single-file
+        // compatibility.
+        cr.segments = result.segments;
         current_completed_recording = cr;
         AddToRecentRecordings(cr);
     } else {
