@@ -43,6 +43,27 @@ if(NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM)
     set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 endif()
 
+# These FetchContent dependencies are statically linked into exosnap and must
+# not leak development files (headers, static libs, cmake config) into the
+# runtime install tree.  The libraries have unconditional install() rules that
+# cannot be disabled through upstream options.  This install CODE overwrites
+# their cmake_install.cmake scripts before the subdirectory includes run,
+# so the install graph produces the correct tree directly.
+set(_exosnap_suppressed_deps
+    libopus-build
+    fdk-aac-build
+    ebml-build
+    libmatroska-build
+)
+install(CODE "
+  foreach(_d IN ITEMS ${_exosnap_suppressed_deps})
+    set(_p \"${PROJECT_BINARY_DIR}/_deps/\${_d}/cmake_install.cmake\")
+    if(EXISTS \"\${_p}\")
+      file(WRITE \"\${_p}\" \"# Install rules suppressed by exosnap — dependency is statically linked.\\n\")
+    endif()
+  endforeach()
+")
+
 # third_party must come before static analysis so its targets are not analyzed.
 add_subdirectory(third_party)
 
