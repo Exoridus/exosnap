@@ -34,6 +34,9 @@ class NvencVideoEncoder : public IVideoEncoder {
     bool EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width, uint32_t height, EncodedVideoPacket& out_packet,
                      std::string& out_error) override;
     bool Flush(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) override;
+    void RequestKeyframe() override {
+        m_nvenc.RequestKeyframe();
+    }
     void Destroy() override;
 
     // Expose ReleaseSlot for error-path callers that acquired a slot but did not submit it.

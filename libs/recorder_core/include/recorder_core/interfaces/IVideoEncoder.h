@@ -48,6 +48,12 @@ class IVideoEncoder {
     // Flush all buffered frames (EOS). Appends remaining packets.
     virtual bool Flush(std::vector<EncodedVideoPacket>& out_packets, std::string& out_error) = 0;
 
+    // Arm a forced keyframe (IDR) on the next submitted frame. Used at a segment
+    // boundary so the first frame of the new segment is self-contained. One-shot.
+    // Default no-op for encoders that always emit independent frames.
+    virtual void RequestKeyframe() {
+    }
+
     virtual void Destroy() = 0;
 };
 

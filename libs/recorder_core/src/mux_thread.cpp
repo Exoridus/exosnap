@@ -4,6 +4,7 @@
 #include "matroska_stream_writer.h"
 #include "session_internal.h"
 
+#include <recorder_core/logging/logging.h>
 #include <recorder_core/packet_types.h>
 
 #include <array>
@@ -11,6 +12,8 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <filesystem>
+#include <span>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -49,8 +52,31 @@ bool MuxThread::Join(unsigned timeout_ms) {
 }
 
 // ---------------------------------------------------------------------------
-// Run — streaming MKV write (constant-RAM via bounded reorder window)
+// Run — streaming MKV write (constant-RAM via bounded reorder window) with
+// in-place segment splitting (SPLIT-RECORDING-R1).
+//
+// A split is a SplitSentinel in the mux queue (emitted by VideoThread right
+// before the forced-keyframe that begins the new segment). On the sentinel the
+// current MatroskaStreamWriter is Finalize()d (drain window, Cues, Duration,
+// SeekHead, Segment size, close) and the segment's metadata is reported via the
+// segment callback. The next video packet's session PTS becomes the new
+// segment's epoch; every packet is rebased to segment-local time (PTS - epoch)
+// before Push. Because each writer owns exactly one file and frees clusters as
+// it goes, a failure opening/writing segment N cannot touch segments 1..N-1.
 // ---------------------------------------------------------------------------
+
+namespace {
+
+uint64_t QueryFileSizeBytes(const std::filesystem::path& path) {
+    WIN32_FILE_ATTRIBUTE_DATA fd{};
+    const std::wstring wpath = path.wstring();
+    if (GetFileAttributesExW(wpath.c_str(), GetFileExInfoStandard, &fd)) {
+        return (static_cast<uint64_t>(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
+    }
+    return 0;
+}
+
+} // namespace
 
 void MuxThread::Run() {
     // --- Step 1: Wait for codec private data to be ready ---
@@ -78,7 +104,7 @@ void MuxThread::Run() {
         return;
     }
 
-    // Save codec private data and encode dimensions for deferred track init
+    // Save codec private data and encode dimensions for deferred / per-segment track init
     std::vector<uint8_t> video_codec_private;
     std::array<AudioCodecPrivateSlot, CodecPrivateData::kMaxAudioTracks> audioCp{};
     {
@@ -104,90 +130,179 @@ void MuxThread::Run() {
         encH = m_state.encode_height;
     }
 
-    // --- Step 2: Configure and open the streaming Matroska writer ---
-    //
-    // Unlike the previous batch-collect muxer, packets are now written into
-    // clusters incrementally as they pass a bounded reorder window, so peak RAM
-    // is O(window seconds) rather than O(entire session). See
-    // matroska_stream_writer.{h,cpp}.
-    MatroskaStreamConfig sw_config;
-    sw_config.output_path = m_state.config.output_path.string();
-    sw_config.video_codec_id = (m_state.config.video_codec == VideoCodec::H264Nvenc) ? "V_MPEG4/ISO/AVC" : "V_AV1";
-    sw_config.video_codec_private = std::move(video_codec_private);
-    sw_config.encode_width = encW;
-    sw_config.encode_height = encH;
-    sw_config.frame_rate_num = m_state.config.frame_rate_num;
-    sw_config.frame_rate_den = m_state.config.frame_rate_den;
-    sw_config.audio_is_opus = (m_state.config.audio_codec == AudioCodec::Opus);
-    sw_config.audio_track_count = track_count;
+    const bool is_h264 = (m_state.config.video_codec == VideoCodec::H264Nvenc);
+    const std::filesystem::path base_output_path = m_state.config.output_path;
+
+    // Build a reusable writer config; only output_path changes per segment.
+    // codec-private blobs are copied (not moved) because every segment's Tracks
+    // element needs its own copy.
+    MatroskaStreamConfig sw_config_template;
+    sw_config_template.video_codec_id =
+        (m_state.config.video_codec == VideoCodec::H264Nvenc) ? "V_MPEG4/ISO/AVC" : "V_AV1";
+    sw_config_template.video_codec_private = video_codec_private;
+    sw_config_template.encode_width = encW;
+    sw_config_template.encode_height = encH;
+    sw_config_template.frame_rate_num = m_state.config.frame_rate_num;
+    sw_config_template.frame_rate_den = m_state.config.frame_rate_den;
+    sw_config_template.audio_is_opus = (m_state.config.audio_codec == AudioCodec::Opus);
+    sw_config_template.audio_track_count = track_count;
     for (uint32_t i = 0; i < track_count; ++i) {
-        sw_config.audio_tracks[i].codec_private = std::move(audioCp[i].bytes);
+        sw_config_template.audio_tracks[i].codec_private = audioCp[i].bytes;
     }
 
-    const bool is_h264 = (m_state.config.video_codec == VideoCodec::H264Nvenc);
+    // --- Segment state ---
+    struct SegmentState {
+        std::unique_ptr<MatroskaStreamWriter> writer;
+        std::filesystem::path path;
+        uint32_t index = 0;
+        // session PTS at which this segment began (epoch for segment-local rebasing)
+        uint64_t epoch_session_pts_ns = 0;
+        bool epoch_set = false;
+        // largest segment-local PTS emitted into this segment (for duration report)
+        uint64_t max_local_pts_ns = 0;
+    };
+    SegmentState seg;
 
-    MatroskaStreamWriter writer;
-    if (!writer.Open(sw_config)) {
-        m_state.RecordFailure(HRESULT_FROM_WIN32(ERROR_OPEN_FAILED), ErrorPhase::Mux,
-                              std::string("Matroska stream writer open failed: ") + writer.error());
+    bool write_error = false;
+    bool any_segment_opened = false;
+    uint64_t frame_dur_ns = 0;
+    if (m_state.config.frame_rate_num > 0 && m_state.config.frame_rate_den > 0) {
+        frame_dur_ns = static_cast<uint64_t>(m_state.config.frame_rate_den) * 1000000000ULL /
+                       static_cast<uint64_t>(m_state.config.frame_rate_num);
+    }
+
+    const auto open_segment = [&](uint32_t index, uint64_t epoch_session_pts_ns, bool epoch_set) -> bool {
+        seg.path = DeriveSegmentPath(base_output_path, index);
+        seg.index = index;
+        seg.epoch_session_pts_ns = epoch_session_pts_ns;
+        seg.epoch_set = epoch_set;
+        seg.max_local_pts_ns = 0;
+        seg.writer = std::make_unique<MatroskaStreamWriter>();
+
+        MatroskaStreamConfig cfg = sw_config_template;
+        cfg.output_path = seg.path.string();
+        if (!seg.writer->Open(cfg)) {
+            const std::string err = seg.writer->error();
+            seg.writer.reset();
+            m_state.RecordFailure(HRESULT_FROM_WIN32(ERROR_OPEN_FAILED), ErrorPhase::Mux,
+                                  "Matroska stream writer open failed (segment " + std::to_string(index) + "): " + err);
+            return false;
+        }
+        any_segment_opened = true;
+        logging::LogField fields[] = {{"segment_index", std::to_string(index)}, {"path", seg.path.string()}};
+        logging::log(logging::LogLevel::Info, "mux_thread", "segment started",
+                     std::span<const logging::LogField>(fields, std::size(fields)));
+        return true;
+    };
+
+    // Finalize the current segment, report it via the segment callback, and
+    // (optionally) quarantine the file on failure.
+    const auto finalize_segment = [&]() {
+        if (!seg.writer)
+            return;
+        const bool ok = seg.writer->Finalize();
+        const std::string err = seg.writer->error();
+        seg.writer.reset();
+
+        const uint64_t local_duration_ns = seg.max_local_pts_ns + (seg.max_local_pts_ns > 0 ? frame_dur_ns : 0);
+        const uint64_t file_bytes = ok ? QueryFileSizeBytes(seg.path) : 0;
+
+        CompletedSegment info;
+        info.path = seg.path;
+        info.index = seg.index;
+        info.session_start_ms = seg.epoch_session_pts_ns / 1000000ULL;
+        info.duration_ms = local_duration_ns / 1000000ULL;
+        info.file_size_bytes = file_bytes;
+        info.succeeded = ok;
+
+        if (!ok) {
+            write_error = true;
+            // Quarantine the incomplete current segment file; prior finalized
+            // segments are already closed and untouched.
+            std::error_code ec;
+            std::filesystem::remove(seg.path, ec);
+            info.file_size_bytes = 0;
+            logging::LogField fields[] = {
+                {"segment_index", std::to_string(seg.index)}, {"path", seg.path.string()}, {"error", err}};
+            logging::log(logging::LogLevel::Error, "mux_thread", "segment finalize failed; file quarantined",
+                         std::span<const logging::LogField>(fields, std::size(fields)));
+        } else {
+            logging::LogField fields[] = {{"segment_index", std::to_string(seg.index)},
+                                          {"duration_ms", std::to_string(info.duration_ms)},
+                                          {"bytes", std::to_string(info.file_size_bytes)}};
+            logging::log(logging::LogLevel::Info, "mux_thread", "segment finalized",
+                         std::span<const logging::LogField>(fields, std::size(fields)));
+        }
+
+        if (m_state.segment_callback) {
+            m_state.segment_callback(info);
+        }
+    };
+
+    // --- Open the first segment (index 0 keeps the base path) ---
+    if (!open_segment(0, /*epoch*/ 0, /*epoch_set*/ false)) {
         return;
     }
 
-    // --- A/V timestamp alignment, resolved incrementally ---
-    // Audio PTS tracks wall-clock (QPC) time; video PTS starts at the first WGC
-    // frame. We must shift audio down by the WGC init delay (head_start_ns) so
-    // both start near 0, and drop audio captured before the video epoch.
-    //
-    // In the streaming path head_start_ns becomes known as soon as the video
-    // epoch is published (which happens on the first encoded video frame, early
-    // in the session). Audio that arrives before the epoch is resolved is held
-    // in a small pending buffer and flushed once the offset is known. Video
-    // packets need no rebasing and are pushed immediately.
+    // --- A/V timestamp alignment, resolved incrementally (see header note) ---
     bool epoch_resolved = false;
     uint64_t head_start_ns = 0;
-    std::deque<EncodedAudioPacket> pending_audio; // bounded: drained on epoch resolve
+    std::deque<EncodedAudioPacket> pending_audio;
 
     auto resolve_epoch = [&]() {
         if (epoch_resolved)
             return;
         const uint64_t video_epoch = m_state.video_epoch_qpc_100ns.load();
         if (video_epoch == 0)
-            return; // not yet known
+            return;
         const uint64_t session_start = m_state.session_start_qpc_100ns;
         head_start_ns = (video_epoch > session_start) ? (video_epoch - session_start) * 100ULL : 0ULL;
         epoch_resolved = true;
     };
 
-    bool write_error = false;
+    // Rebase a session PTS to the current segment's local timeline (>= 0).
+    auto to_segment_local = [&](uint64_t session_pts_ns) -> uint64_t {
+        if (!seg.epoch_set)
+            return session_pts_ns;
+        return (session_pts_ns > seg.epoch_session_pts_ns) ? (session_pts_ns - seg.epoch_session_pts_ns) : 0ULL;
+    };
 
     auto push_audio = [&](EncodedAudioPacket&& payload) {
-        if (write_error)
+        if (write_error || !seg.writer)
             return;
         if (payload.track_id >= track_count || payload.track_id >= CodecPrivateData::kMaxAudioTracks) {
             std::fprintf(stderr, "MuxThread: skipping audio packet with out-of-range track_id=%u (track_count=%u)\n",
                          payload.track_id, track_count);
             return;
         }
-        // Drop audio captured before the video epoch; rebase the rest.
         if (head_start_ns > 0) {
             if (payload.pts_ns < head_start_ns)
                 return;
             payload.pts_ns -= head_start_ns;
         }
+        const uint64_t local = to_segment_local(payload.pts_ns);
         MuxPacket mp;
-        mp.pts_ns = payload.pts_ns;
+        mp.pts_ns = local;
         mp.track_num = 2 + payload.track_id;
         mp.is_key = true;
         mp.bytes = std::move(payload.bytes);
-        if (!writer.Push(std::move(mp)))
+        if (local > seg.max_local_pts_ns)
+            seg.max_local_pts_ns = local;
+        if (!seg.writer->Push(std::move(mp)))
             write_error = true;
     };
 
     auto push_video = [&](EncodedVideoPacket&& payload) {
-        if (write_error)
+        if (write_error || !seg.writer)
             return;
+        // A new segment's epoch is the first video packet seen after a split.
+        if (!seg.epoch_set) {
+            seg.epoch_session_pts_ns = payload.pts_ns;
+            seg.epoch_set = true;
+        }
+        const uint64_t local = to_segment_local(payload.pts_ns);
         MuxPacket mp;
-        mp.pts_ns = payload.pts_ns;
+        mp.pts_ns = local;
         mp.track_num = 1;
         mp.is_key = payload.keyframe;
         if (is_h264) {
@@ -199,7 +314,9 @@ void MuxThread::Run() {
         } else {
             mp.bytes = std::move(payload.bytes);
         }
-        if (!writer.Push(std::move(mp)))
+        if (local > seg.max_local_pts_ns)
+            seg.max_local_pts_ns = local;
+        if (!seg.writer->Push(std::move(mp)))
             write_error = true;
     };
 
@@ -210,6 +327,21 @@ void MuxThread::Run() {
             push_audio(std::move(pending_audio.front()));
             pending_audio.pop_front();
         }
+    };
+
+    // Begin a new segment at a SplitSentinel: finalize the current segment, then
+    // open the next. The new epoch is captured from the next video packet.
+    auto begin_new_segment = [&](const SplitSentinel& s) {
+        if (write_error)
+            return;
+        // Flush any buffered pre-epoch audio into the OLD segment first.
+        drain_pending_audio();
+        finalize_segment();
+        if (write_error)
+            return;
+        // Open the next segment with epoch unset; push_video sets it from the
+        // first video packet (the forced keyframe that follows the sentinel).
+        open_segment(s.new_segment_index, /*epoch*/ 0, /*epoch_set*/ false);
     };
 
     // A single dispatch for a queued MuxItem payload.
@@ -232,6 +364,8 @@ void MuxThread::Run() {
                     pending_audio.push_back(std::move(payload));
                 }
             }
+        } else if constexpr (std::is_same_v<T, SplitSentinel>) {
+            begin_new_segment(payload);
         } else if constexpr (std::is_same_v<T, VideoEosSentinel>) {
             video_eos = true;
         } else if constexpr (std::is_same_v<T, AudioEosSentinel>) {
@@ -316,28 +450,19 @@ void MuxThread::Run() {
         }
     }
 
-    // --- Step 3: Finalize (drain window, Cues, Duration, SeekHead, Segment size) ---
-    const bool finalize_ok = writer.Finalize();
+    // --- Step 3: Finalize the final segment ---
+    finalize_segment();
 
-    if (write_error || !finalize_ok) {
-        // Preserve first-error semantics: only record if not already failed.
+    if (write_error || !any_segment_opened) {
         if (!m_state.HasFailure()) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::Mux,
-                                  std::string("Matroska stream write failed: ") + writer.error());
+            m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Matroska stream write failed");
         }
-        // The file is closed by Finalize(); leave it for the owner to quarantine.
     }
 
-    // Report bounded buffering for diagnostics.
-    std::fprintf(stderr, "MuxThread: streaming mux peak window = %zu packets, %llu bytes\n",
-                 writer.peak_window_packets(), static_cast<unsigned long long>(writer.peak_window_bytes()));
-
-    // Update output file size in stats.
+    // Update output file size in stats from the (final) base segment if present.
     {
-        WIN32_FILE_ATTRIBUTE_DATA fd{};
-        std::wstring wPath = m_state.config.output_path.wstring();
-        if (GetFileAttributesExW(wPath.c_str(), GetFileExInfoStandard, &fd)) {
-            uint64_t sz = (static_cast<uint64_t>(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
+        const uint64_t sz = QueryFileSizeBytes(base_output_path);
+        if (sz > 0) {
             std::lock_guard lk(m_state.stats_mutex);
             m_state.stats.output_file_bytes = sz;
         }

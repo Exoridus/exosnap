@@ -1066,6 +1066,57 @@ void VideoThread::Run() {
     uint64_t duplicatedFrames = 0;
     uint64_t slotStallCount = 0;
 
+    // --- Split-recording boundary coordination (SPLIT-RECORDING-R1) ---
+    // VideoThread owns the segment boundary because it owns both the media
+    // timeline (encoded-frame session PTS) and the forced-IDR arming point.
+    //
+    // current_segment_index: 0-based index of the segment currently being filled.
+    // segment_start_session_pts_ns: session PTS at which the current segment began
+    //   (0 for the first segment); used to keep the auto interval per-segment so a
+    //   manual split resets the auto timer.
+    // next_auto_threshold_ns: session PTS at which the next AUTOMATIC split fires;
+    //   UINT64_MAX disables (mode Off). Recomputed after every boundary.
+    // split_last_seq: last split_request_seq value VideoThread has acted on.
+    // split_armed: a boundary has been decided and a forced IDR requested; the next
+    //   routed keyframe is the first frame of the new segment.
+    // split_armed_trigger: trigger that armed the pending boundary (for logging).
+    uint32_t current_segment_index = 0;
+    uint64_t segment_start_session_pts_ns = 0;
+    uint64_t split_last_seq = m_state.split_request_seq.load();
+    bool split_armed = false;
+    SplitTriggerSource split_armed_trigger = SplitTriggerSource::ManualButton;
+
+    const bool split_auto_enabled = (m_state.config.split.mode == RecordingSplitMode::Duration);
+    const uint64_t split_auto_interval_ns = split_auto_enabled ? (m_state.config.split.duration_ms * 1000000ULL) : 0ULL;
+    uint64_t next_auto_threshold_ns =
+        split_auto_enabled ? split_auto_interval_ns : (~0ULL); // first auto split one interval in
+
+    // Decide whether a split boundary should be armed for the frame about to be
+    // encoded at session PTS `pts_ns`. Arms the encoder forced-IDR exactly once
+    // per boundary. Manual (seq bump) and automatic (media-time threshold) share
+    // this single arming point; manual implicitly resets the auto interval because
+    // the threshold is recomputed off the new segment start when the boundary
+    // actually lands (in routePacket).
+    auto maybeArmSplit = [&](uint64_t pts_ns) {
+        if (split_armed)
+            return; // a boundary is already pending; coalesce further requests
+        const uint64_t seq = m_state.split_request_seq.load();
+        bool manual = (seq != split_last_seq);
+        bool automatic = (pts_ns >= next_auto_threshold_ns);
+        if (!manual && !automatic)
+            return;
+        split_last_seq = seq; // consume manual requests up to here (coalesced)
+        split_armed = true;
+        split_armed_trigger = manual ? static_cast<SplitTriggerSource>(m_state.split_last_trigger.load())
+                                     : SplitTriggerSource::AutomaticDuration;
+        nvenc.RequestKeyframe();
+        logging::LogField fields[] = {{"segment_index", std::to_string(current_segment_index + 1u)},
+                                      {"trigger", manual ? "manual" : "automatic"},
+                                      {"session_pts_ms", std::to_string(pts_ns / 1000000ULL)}};
+        logging::log(logging::LogLevel::Info, "video_thread", "split boundary armed (forced keyframe requested)",
+                     std::span<const logging::LogField>(fields, std::size(fields)));
+    };
+
     // CFR timing constants (computed once; valid for both paths)
     const uint64_t frame_interval_100ns =
         (m_state.config.frame_rate_den > 0 && m_state.config.frame_rate_num > 0)
@@ -1129,9 +1180,28 @@ void VideoThread::Run() {
                 m_state.video_premux.push_back(std::move(pkt));
             } else {
                 lk.unlock();
+                // Segment boundary: if a split is armed and THIS packet is the
+                // forced keyframe, emit a SplitSentinel into the mux queue
+                // immediately before the keyframe so the mux thread finalizes the
+                // current container and opens the next one, with this keyframe as
+                // the new segment's first (self-contained) frame. The new segment
+                // epoch is this packet's session PTS, so the auto interval resets
+                // off the actual boundary (manual splits therefore push the next
+                // auto split out by a full interval).
+                std::lock_guard mlk(m_state.mux_mutex);
+                if (split_armed && pkt.keyframe) {
+                    ++current_segment_index;
+                    segment_start_session_pts_ns = pkt.pts_ns;
+                    if (split_auto_enabled) {
+                        next_auto_threshold_ns = segment_start_session_pts_ns + split_auto_interval_ns;
+                    }
+                    MuxItem split_item;
+                    split_item.payload = SplitSentinel{current_segment_index, split_armed_trigger};
+                    m_state.mux_queue.push_back(std::move(split_item));
+                    split_armed = false;
+                }
                 MuxItem mux_item;
                 mux_item.payload = std::move(pkt);
-                std::lock_guard mlk(m_state.mux_mutex);
                 m_state.mux_queue.push_back(std::move(mux_item));
                 m_state.mux_cv.notify_one();
             }
@@ -1475,6 +1545,10 @@ void VideoThread::Run() {
                     continue;
                 }
 
+                // Arm a split boundary (manual or automatic) for this submission
+                // so its forced IDR opens the next segment. Done before encode.
+                maybeArmSplit(pts_ns);
+
                 EncodedVideoPacket pkt;
                 std::string encErr;
                 bool encOk = nvenc.EncodeFrame(slot, pts_ns, encodeWidth, encodeHeight, pkt, encErr);
@@ -1673,6 +1747,9 @@ void VideoThread::Run() {
                         if (SUCCEEDED(hr)) {
                             // Capture frame snapshot on real frames (VFR path).
                             performSnapshotIfRequested(slot);
+
+                            // Arm a split boundary for this submission (see CFR path).
+                            maybeArmSplit(framePts_ns);
 
                             EncodedVideoPacket pkt;
                             std::string encErr;
