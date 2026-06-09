@@ -126,7 +126,7 @@ void GlobalHotkeyService::SetRegistrar(IHotkeyRegistrar* registrar) {
         if (seq.isEmpty())
             continue;
 #if defined(Q_OS_WIN)
-        QKeyCombination combo = QKeyCombination::fromCombined(seq[0]);
+        QKeyCombination combo = seq[0];
         UINT vk = QtKeyToVk(combo.key());
         if (vk == 0)
             continue;
@@ -278,7 +278,7 @@ int GlobalHotkeyService::Win32IdForAction(HotkeyAction action) {
 RebindError GlobalHotkeyService::ValidateSequence(QKeySequence seq) {
     if (seq.isEmpty())
         return RebindError::None;
-    QKeyCombination combo = QKeyCombination::fromCombined(seq[0]);
+    QKeyCombination combo = seq[0];
     Qt::Key key = combo.key();
     Qt::KeyboardModifiers mods = combo.keyboardModifiers();
 
@@ -317,12 +317,12 @@ RebindResult GlobalHotkeyService::AttemptRegistration(HotkeyAction action, QKeyS
         return {true, RebindError::None, action, {}};
     }
 
-    QKeyCombination combo = QKeyCombination::fromCombined(new_seq[0]);
+    QKeyCombination combo = new_seq[0];
     UINT vk = QtKeyToVk(combo.key());
     if (vk == 0) {
         // Restore old binding.
         if (!old_seq.isEmpty()) {
-            QKeyCombination old_combo = QKeyCombination::fromCombined(old_seq[0]);
+            QKeyCombination old_combo = old_seq[0];
             UINT old_vk = QtKeyToVk(old_combo.key());
             if (old_vk != 0)
                 registrar_->Register(win32_id, QtModifiersToWin32(old_combo.keyboardModifiers()), old_vk);
@@ -334,7 +334,7 @@ RebindResult GlobalHotkeyService::AttemptRegistration(HotkeyAction action, QKeyS
     if (!registrar_->Register(win32_id, QtModifiersToWin32(combo.keyboardModifiers()), vk)) {
         // Registration failed — restore old binding.
         if (!old_seq.isEmpty()) {
-            QKeyCombination old_combo = QKeyCombination::fromCombined(old_seq[0]);
+            QKeyCombination old_combo = old_seq[0];
             UINT old_vk = QtKeyToVk(old_combo.key());
             if (old_vk != 0)
                 registrar_->Register(win32_id, QtModifiersToWin32(old_combo.keyboardModifiers()), old_vk);

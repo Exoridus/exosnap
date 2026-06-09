@@ -624,7 +624,7 @@ bool LogsPage::matchesActiveFilters(const LogEntry& entry) const {
 
 QTextCharFormat LogsPage::formatForSeverity(LogSeverity severity) const {
     QTextCharFormat format;
-    format.setFontFamily(QStringLiteral("JetBrains Mono"));
+    format.setFontFamilies({QStringLiteral("JetBrains Mono")});
     format.setProperty(kSeverityTextProperty, AppLog::severityKey(severity));
 
     QColor color(QStringLiteral("#D7DDE8"));

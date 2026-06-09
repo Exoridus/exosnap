@@ -649,13 +649,13 @@ bool RecordPage::eventFilter(QObject* watched, QEvent* event) {
                 continue;
 
             if (event->type() == QEvent::MouseButtonPress) {
-                if (mouse->x() <= 36) {
+                if (mouse->position().x() <= 36) {
                     drag_source_index_ = i;
-                    drag_start_y_ = mouse->globalY();
+                    drag_start_y_ = mouse->globalPosition().y();
                     return true;
                 }
             } else if (event->type() == QEvent::MouseMove && drag_source_index_ == i) {
-                const int delta = mouse->globalY() - drag_start_y_;
+                const int delta = mouse->globalPosition().y() - drag_start_y_;
                 const int row_height = audio_source_rows_[0]->height();
                 if (row_height > 0 && (delta > row_height / 2 || delta < -(row_height / 2))) {
                     const int direction = delta > 0 ? 1 : -1;
@@ -663,7 +663,7 @@ bool RecordPage::eventFilter(QObject* watched, QEvent* event) {
                     if (target >= 0 && target < static_cast<int>(audio_source_rows_.size())) {
                         swapAudioSourceRows(drag_source_index_, target);
                         drag_source_index_ = target;
-                        drag_start_y_ = mouse->globalY();
+                        drag_start_y_ = mouse->globalPosition().y();
                     }
                 }
                 return true;

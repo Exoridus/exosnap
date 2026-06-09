@@ -98,6 +98,22 @@ jobs:
             }
           }
 
+          # Absence checks — development files must NOT leak into the runtime tree
+          @("include", "lib") | ForEach-Object {
+            if (Test-Path "$installDir/$_") { $errors += "Dev directory leaked: $_/" }
+          }
+
+          # No .lib, .h, .hpp, .cpp, .cmake, .pc files
+          $forbiddenExts = @("*.lib", "*.h", "*.hpp", "*.cpp", "*.cmake", "*.pc")
+          $forbiddenExts | ForEach-Object {
+            $found = Get-ChildItem -Path $installDir -Recurse -Filter $_ -ErrorAction SilentlyContinue
+            if ($found) { $errors += "Forbidden file type leaked: $_" }
+          }
+
+          # No .workspace or .claude paths
+          if (Test-Path "$installDir/.workspace") { $errors += ".workspace leaked into install tree" }
+          if (Test-Path "$installDir/.claude")   { $errors += ".claude leaked into install tree" }
+
           if ($errors.Count -gt 0) {
             Write-Host "##[error] License bundle validation FAILED:"
             $errors | ForEach-Object { Write-Host "##[error]   $_" }
