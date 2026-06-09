@@ -29,6 +29,26 @@
         "EXOSNAP_CLANG_TIDY": "ON",
         "EXOSNAP_CPPCHECK": "ON"
       }
+    },
+    {
+      "name": "windows-x64-ninja-debug",
+      "displayName": "Windows x64 Ninja Debug",
+      "description": "Ninja + MSVC Debug. Run from a VS Developer PowerShell/Command Prompt.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "windows-x64-ninja-release",
+      "displayName": "Windows x64 Ninja Release",
+      "description": "Ninja + MSVC Release. Run from a VS Developer PowerShell/Command Prompt. Optionally enable sccache: -DEXOSNAP_USE_SCCACHE=ON",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     }
   ],
   "buildPresets": [
@@ -70,6 +90,38 @@
     {
       "name": "windows-x64-lint",
       "configurePreset": "windows-x64-lint"
+    },
+    {
+      "name": "windows-x64-ninja-debug",
+      "configurePreset": "windows-x64-ninja-debug"
+    },
+    {
+      "name": "windows-x64-ninja-debug-exosnap",
+      "displayName": "Windows x64 Ninja Debug - exosnap app only",
+      "configurePreset": "windows-x64-ninja-debug",
+      "targets": [
+        "exosnap"
+      ]
+    },
+    {
+      "name": "windows-x64-ninja-debug-presentation-state-tests",
+      "displayName": "Windows x64 Ninja Debug - presentation state tests",
+      "configurePreset": "windows-x64-ninja-debug",
+      "targets": [
+        "presentation_state_tests"
+      ]
+    },
+    {
+      "name": "windows-x64-ninja-release",
+      "configurePreset": "windows-x64-ninja-release"
+    },
+    {
+      "name": "windows-x64-ninja-release-exosnap",
+      "displayName": "Windows x64 Ninja Release - exosnap app only",
+      "configurePreset": "windows-x64-ninja-release",
+      "targets": [
+        "exosnap"
+      ]
     }
   ],
   "testPresets": [
@@ -83,6 +135,13 @@
     {
       "name": "windows-x64-release",
       "configurePreset": "windows-x64-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-x64-ninja-debug",
+      "configurePreset": "windows-x64-ninja-debug",
       "output": {
         "outputOnFailure": true
       }

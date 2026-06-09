@@ -90,10 +90,63 @@ cmake --build --preset windows-x64-release-exosnap
 
 `scripts\check-quality.ps1` keeps its default configure/build/test behavior for humans and hooks. Use `-StaticOnly` after a full build and CTest have already run, so final validation does not rebuild solely to run standalone static checks.
 
-Optional accelerators:
+### Ninja (optional, faster builds)
 
-- Ninja is supported by CMake when installed, but this repository does not define Ninja presets unless the toolchain is available and verified on the machine.
-- `sccache` can be enabled without hard-coded paths with `-DEXOSNAP_USE_SCCACHE=ON`, or by setting `-DEXOSNAP_COMPILER_LAUNCHER=<launcher>`. Configure continues without a compiler launcher when optional `sccache` is requested but unavailable.
+Install Ninja once:
+
+```powershell
+winget install --id Ninja-build.Ninja
+```
+
+Verify:
+
+```powershell
+ninja --version
+```
+
+The repository includes Ninja presets alongside the default Visual Studio presets. Ninja builds **must** be launched from a VS Developer PowerShell or Command Prompt so that `cl.exe` is on the PATH.
+
+```powershell
+# From a VS Developer PowerShell/Command Prompt:
+cmake --preset windows-x64-ninja-debug
+cmake --build --preset windows-x64-ninja-debug-exosnap
+cmake --build --preset windows-x64-ninja-debug-presentation-state-tests
+```
+
+Available Ninja presets:
+- `windows-x64-ninja-debug` / `windows-x64-ninja-release` (configure)
+- `windows-x64-ninja-debug-exosnap` / `windows-x64-ninja-release-exosnap` (app-only build)
+- `windows-x64-ninja-debug-presentation-state-tests` (focused test build)
+- `windows-x64-ninja-debug` (test preset)
+
+### sccache (optional, compiler cache)
+
+Install sccache once:
+
+```powershell
+winget install --id Mozilla.sccache
+```
+
+Verify:
+
+```powershell
+sccache --version
+sccache --show-stats
+```
+
+Enable sccache at configure time by adding `-DEXOSNAP_USE_SCCACHE=ON`. This works with both the Visual Studio and Ninja generators.
+
+```powershell
+# From a VS Developer PowerShell/Command Prompt:
+cmake --preset windows-x64-ninja-release -DEXOSNAP_USE_SCCACHE=ON
+cmake --build build/windows-x64-ninja-release --target exosnap
+```
+
+**Known limitation:** sccache can encounter PDB contention errors with MSVC Debug builds when third-party libraries (e.g. spdlog) enforce `/Zi`. Prefer sccache with Release builds or use `/Z7` to embed debug info in object files. Debug builds without sccache work reliably with both generators.
+
+To disable sccache for a previously configured build, reconfigure without the option or clear the build directory.
+
+Fall back to the default Visual Studio presets at any time. Existing builds continue to work without Ninja or sccache.
 
 ## Working rule
 
