@@ -54,6 +54,11 @@ class TransportDock : public QFrame {
     // level01: 0.0 = silence/inactive, 1.0 = peak. Webcam has no audio meter.
     void setMeterLevel(const QString& key, float level01);
 
+    // Split action gating (SPLIT-RECORDING-R1). The button is only visible in
+    // Recording/Paused; this disables it briefly while a split transition is in
+    // flight so coalesced clicks do not pile up.
+    void setSplitEnabled(bool enabled);
+
   signals:
     void recordClicked();
     void stopClicked();
@@ -64,6 +69,7 @@ class TransportDock : public QFrame {
     void filenameClicked();
     void captureFrameClicked();
     void addMarkerClicked();
+    void splitClicked();
     void sourceToggleClicked(const QString& key);
     void countdownSecondsChanged(int seconds);
 
@@ -95,6 +101,8 @@ class TransportDock : public QFrame {
     QPushButton* record_again_btn_ = nullptr;
     QPushButton* capture_frame_btn_ = nullptr;
     QPushButton* add_marker_btn_ = nullptr;
+    QPushButton* split_btn_ = nullptr;
+    bool split_enabled_ = true;
 };
 
 } // namespace exosnap::ui::widgets

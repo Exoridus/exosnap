@@ -143,6 +143,7 @@ class RecordPage : public QWidget {
     void onHotkeyPauseToggle();
     void onHotkeyCaptureFrame();
     void onHotkeyAddMarker();
+    void onHotkeySplitRecording();
     void setSourcePickerOverlay(ui::dialogs::SourcePickerOverlay* overlay);
     // Refresh display/window source list; call on screen add/remove events.
     void refreshDisplayTargets();
@@ -266,6 +267,8 @@ class RecordPage : public QWidget {
     bool isSourceSelectionLocked() const;
     void showCaptureFrameStatus(bool success, const QString& path, const QString& error);
     void onDockAddMarker();
+    void onDockSplit();
+    void requestSplit(recorder_core::SplitTriggerSource source);
     void showMarkerFeedback(const QString& text);
 
     int monitor_target_index_ = -1;
