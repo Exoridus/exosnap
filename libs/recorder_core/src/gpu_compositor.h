@@ -19,10 +19,11 @@ class GpuCompositor {
     struct ChromaKeyParams {
         bool enabled = false;
         uint8_t r = 0;
-        uint8_t g = 177;
-        uint8_t b = 64;
-        float tolerance = 0.30f;
-        float softness = 0.05f;
+        uint8_t g = 255;
+        uint8_t b = 0;
+        float tolerance = 0.40f;
+        float softness = 0.15f;
+        float spill_reduction = 0.30f;
     };
 
     bool Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, std::string& err);
@@ -45,8 +46,9 @@ class GpuCompositor {
     };
 
     struct PixelConstants {
-        float key_color[4]; // rgb + tolerance
-        float params[4];    // mirror, chroma enabled, force opaque, softness
+        float key_color[4]; // r, g, b (0-1) + tolerance
+        // x=mirror, y=mode(0=cursor/1=chroma/2=opaque), z=spillReduction, w=softness
+        float params[4];
     };
 
     bool UploadTexture(TextureResource& resource, const uint8_t* bgra, int width, int height, UINT row_pitch,

@@ -83,11 +83,15 @@ static recorder_core::WebcamOverlayLive ToLiveWebcamOverlay(const WebcamSettings
     overlay.overlay_h_norm = sanitized.overlay.h_norm;
     overlay.mirror = sanitized.mirror;
     overlay.chroma_key_enabled = sanitized.chroma_key.enabled;
-    overlay.chroma_r = sanitized.chroma_key.r;
-    overlay.chroma_g = sanitized.chroma_key.g;
-    overlay.chroma_b = sanitized.chroma_key.b;
+    {
+        const auto ac = sanitized.chroma_key.active_color();
+        overlay.chroma_r = ac.r;
+        overlay.chroma_g = ac.g;
+        overlay.chroma_b = ac.b;
+    }
     overlay.chroma_tolerance = sanitized.chroma_key.tolerance;
     overlay.chroma_softness = sanitized.chroma_key.softness;
+    overlay.chroma_spill_reduction = sanitized.chroma_key.spill_reduction;
     return overlay;
 }
 
@@ -514,11 +518,15 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.webcam.overlay_h_norm = webcam_settings_.overlay.h_norm;
     config.webcam.mirror = webcam_settings_.mirror;
     config.webcam.chroma_key_enabled = webcam_settings_.chroma_key.enabled;
-    config.webcam.chroma_r = webcam_settings_.chroma_key.r;
-    config.webcam.chroma_g = webcam_settings_.chroma_key.g;
-    config.webcam.chroma_b = webcam_settings_.chroma_key.b;
+    {
+        const auto ac = webcam_settings_.chroma_key.active_color();
+        config.webcam.chroma_r = ac.r;
+        config.webcam.chroma_g = ac.g;
+        config.webcam.chroma_b = ac.b;
+    }
     config.webcam.chroma_tolerance = webcam_settings_.chroma_key.tolerance;
     config.webcam.chroma_softness = webcam_settings_.chroma_key.softness;
+    config.webcam.chroma_spill_reduction = webcam_settings_.chroma_key.spill_reduction;
 
     capability::AudioUiState audio_state = audio_ui_state;
     if (target.kind == recorder_core::CaptureTarget::Kind::Window && target.native_id != 0) {

@@ -186,6 +186,33 @@ std::optional<recorder_core::AudioSourceKind> AudioSourceKindFromString(QStringV
     return std::nullopt;
 }
 
+QString WebcamChromaKeyColorModeToString(WebcamChromaKeyColorMode v) {
+    switch (v) {
+    case WebcamChromaKeyColorMode::Green:
+        return QStringLiteral("green");
+    case WebcamChromaKeyColorMode::Blue:
+        return QStringLiteral("blue");
+    case WebcamChromaKeyColorMode::Magenta:
+        return QStringLiteral("magenta");
+    case WebcamChromaKeyColorMode::Custom:
+        return QStringLiteral("custom");
+    }
+    return QStringLiteral("green");
+}
+
+std::optional<WebcamChromaKeyColorMode> WebcamChromaKeyColorModeFromString(QStringView s) {
+    const QString n = s.trimmed().toString().toLower();
+    if (n == QStringLiteral("green"))
+        return WebcamChromaKeyColorMode::Green;
+    if (n == QStringLiteral("blue"))
+        return WebcamChromaKeyColorMode::Blue;
+    if (n == QStringLiteral("magenta"))
+        return WebcamChromaKeyColorMode::Magenta;
+    if (n == QStringLiteral("custom"))
+        return WebcamChromaKeyColorMode::Custom;
+    return std::nullopt;
+}
+
 QString PresetCaptureKindToString(PresetCaptureKind v) {
     switch (v) {
     case PresetCaptureKind::Display:
@@ -336,11 +363,14 @@ void SavePresetItem(QSettings& settings, const RecordingPreset& preset) {
     settings.setValue(QStringLiteral("wc_aspect_ratio_locked"), wc.aspect_ratio_locked);
     settings.setValue(QStringLiteral("wc_mirror"), wc.mirror);
     settings.setValue(QStringLiteral("wc_chroma_enabled"), wc.chroma_key.enabled);
-    settings.setValue(QStringLiteral("wc_chroma_r"), static_cast<int>(wc.chroma_key.r));
-    settings.setValue(QStringLiteral("wc_chroma_g"), static_cast<int>(wc.chroma_key.g));
-    settings.setValue(QStringLiteral("wc_chroma_b"), static_cast<int>(wc.chroma_key.b));
+    settings.setValue(QStringLiteral("wc_chroma_color_mode"),
+                      WebcamChromaKeyColorModeToString(wc.chroma_key.color_mode));
+    settings.setValue(QStringLiteral("wc_chroma_custom_r"), static_cast<int>(wc.chroma_key.custom_r));
+    settings.setValue(QStringLiteral("wc_chroma_custom_g"), static_cast<int>(wc.chroma_key.custom_g));
+    settings.setValue(QStringLiteral("wc_chroma_custom_b"), static_cast<int>(wc.chroma_key.custom_b));
     settings.setValue(QStringLiteral("wc_chroma_tolerance"), static_cast<double>(wc.chroma_key.tolerance));
     settings.setValue(QStringLiteral("wc_chroma_softness"), static_cast<double>(wc.chroma_key.softness));
+    settings.setValue(QStringLiteral("wc_chroma_spill"), static_cast<double>(wc.chroma_key.spill_reduction));
 
     // --- Countdown ---
     settings.setValue(QStringLiteral("countdown_seconds"), preset.config.countdown_seconds);
@@ -518,12 +548,20 @@ std::optional<RecordingPreset> LoadPresetItem(QSettings& settings) {
     wc.aspect_ratio_locked = settings.value(QStringLiteral("wc_aspect_ratio_locked"), true).toBool();
     wc.mirror = settings.value(QStringLiteral("wc_mirror"), false).toBool();
     wc.chroma_key.enabled = settings.value(QStringLiteral("wc_chroma_enabled"), false).toBool();
-    wc.chroma_key.r = static_cast<uint8_t>(settings.value(QStringLiteral("wc_chroma_r"), 0).toInt());
-    wc.chroma_key.g = static_cast<uint8_t>(settings.value(QStringLiteral("wc_chroma_g"), 177).toInt());
-    wc.chroma_key.b = static_cast<uint8_t>(settings.value(QStringLiteral("wc_chroma_b"), 64).toInt());
+    {
+        const auto m =
+            WebcamChromaKeyColorModeFromString(settings.value(QStringLiteral("wc_chroma_color_mode")).toString());
+        if (m.has_value())
+            wc.chroma_key.color_mode = *m;
+    }
+    wc.chroma_key.custom_r = static_cast<uint8_t>(settings.value(QStringLiteral("wc_chroma_custom_r"), 0).toInt());
+    wc.chroma_key.custom_g = static_cast<uint8_t>(settings.value(QStringLiteral("wc_chroma_custom_g"), 255).toInt());
+    wc.chroma_key.custom_b = static_cast<uint8_t>(settings.value(QStringLiteral("wc_chroma_custom_b"), 0).toInt());
     wc.chroma_key.tolerance =
-        static_cast<float>(settings.value(QStringLiteral("wc_chroma_tolerance"), 0.30).toDouble());
-    wc.chroma_key.softness = static_cast<float>(settings.value(QStringLiteral("wc_chroma_softness"), 0.05).toDouble());
+        static_cast<float>(settings.value(QStringLiteral("wc_chroma_tolerance"), 0.40).toDouble());
+    wc.chroma_key.softness = static_cast<float>(settings.value(QStringLiteral("wc_chroma_softness"), 0.15).toDouble());
+    wc.chroma_key.spill_reduction =
+        static_cast<float>(settings.value(QStringLiteral("wc_chroma_spill"), 0.30).toDouble());
 
     // --- Countdown ---
     preset.config.countdown_seconds = settings.value(QStringLiteral("countdown_seconds"), 0).toInt();

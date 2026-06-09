@@ -1536,8 +1536,26 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
         applyVisualSettingsScenario(scenario);
         break;
     case visual::VisualPage::Webcam:
-        if (webcam_page_)
+        if (webcam_page_) {
             webcam_page_->applyVisualState(scenario.webcam_state);
+            if (!scenario.webcam_chroma_color_mode.isEmpty()) {
+                const auto colorModeFromStr = [](const QString& s) -> WebcamChromaKeyColorMode {
+                    if (s == QStringLiteral("blue"))
+                        return WebcamChromaKeyColorMode::Blue;
+                    if (s == QStringLiteral("magenta"))
+                        return WebcamChromaKeyColorMode::Magenta;
+                    if (s == QStringLiteral("custom"))
+                        return WebcamChromaKeyColorMode::Custom;
+                    return WebcamChromaKeyColorMode::Green;
+                };
+                WebcamSettings ws;
+                ws.enabled = scenario.webcam_state == visual::VisualWebcamState::Active;
+                ws.chroma_key.enabled = scenario.webcam_chroma_enabled;
+                ws.chroma_key.color_mode = colorModeFromStr(scenario.webcam_chroma_color_mode);
+                webcam_page_->applySettings(ws);
+            }
+            webcam_page_->setRecordingControlsLocked(scenario.controls_locked);
+        }
         setCurrentPage(kWebcamPageIndex);
         break;
     case visual::VisualPage::Hotkeys:

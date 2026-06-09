@@ -209,6 +209,10 @@ struct VisualScenario {
     QString hk_custom_binding_1;    // portable key sequence string for TogglePause
     bool hk_editing_locked = false; // editing locked (recording-in-progress state)
 
+    // --- Webcam chroma key (WEBCAM-EFFECTS-R1) ---
+    bool webcam_chroma_enabled = false;
+    QString webcam_chroma_color_mode; // "green" / "blue" / "magenta" / "custom" / "" (not set)
+
     // --- Recording marker scenarios (RECORDING-MARKERS-R1) ---
     bool marker_action_visible = false;
     bool marker_action_enabled = false;

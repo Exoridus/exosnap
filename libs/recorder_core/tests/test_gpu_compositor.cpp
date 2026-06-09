@@ -175,6 +175,85 @@ TEST(GpuCompositorTest, ChromaKeyMakesKeyColorTransparent) {
     ExpectPixelNear(pixels, 2, 1, 0, 0, 0, 255, 255);
 }
 
+TEST(GpuCompositorTest, ChromaKey_RedForeground_NotKeyed) {
+    // A red pixel in a green-keyed scene must NOT be transparent: YCbCr distance
+    // between pure red and pure green is large, so red passes through opaque.
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 2, 1, err)) << err;
+
+    auto background = CreateTexture(d3d.device.get(), 2, 1, SolidBgra(2, 1, 50, 50, 50));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+
+    std::vector<uint8_t> webcam = {
+        0, 0,   255, 255, // BGRA: pure red — key should NOT remove this
+        0, 255, 0,   255, // BGRA: pure green — key SHOULD remove this
+    };
+    GpuCompositor::ChromaKeyParams chroma;
+    chroma.enabled = true;
+    chroma.r = 0;
+    chroma.g = 255;
+    chroma.b = 0;
+    chroma.tolerance = 0.40f;
+    chroma.softness = 0.10f;
+    chroma.spill_reduction = 0.0f;
+    ASSERT_TRUE(compositor.DrawWebcam(webcam.data(), 2, 1, WebcamPixelRect{0, 0, 2, 1}, false, chroma, err)) << err;
+
+    const auto pixels = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+    // Red pixel: opaque — webcam red must dominate over dark background
+    ExpectPixelNear(pixels, 2, 0, 0, 0, 0, 255, 255, 10);
+    // Green pixel: transparent — background shines through
+    ExpectPixelNear(pixels, 2, 1, 0, 50, 50, 50, 255, 10);
+}
+
+TEST(GpuCompositorTest, SpillReduction_ReducesGreenTintOnSemiTransparentEdge) {
+    // An edge pixel that is semi-transparent (neither fully key nor fully opaque)
+    // should have its green spill reduced when spill_reduction > 0.
+    auto d3d = CreateWarpDevice();
+    ASSERT_TRUE(d3d.device);
+
+    GpuCompositor compositor;
+    std::string err;
+    ASSERT_TRUE(compositor.Init(d3d.device.get(), d3d.context.get(), 1, 1, err)) << err;
+
+    // Background: dark
+    auto background = CreateTexture(d3d.device.get(), 1, 1, SolidBgra(1, 1, 20, 20, 20));
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+
+    // Slightly-off-key green pixel (sits in the soft transition band): R=20,G=230,B=20
+    std::vector<uint8_t> webcam = {20, 230, 20, 255};
+
+    // tolerance=0.05, softness=0.10: YCbCr dist of this pixel ≈ 0.094,
+    // which falls in the soft zone [0.05, 0.15] → semi-transparent, so spill runs.
+    GpuCompositor::ChromaKeyParams chroma_no_spill;
+    chroma_no_spill.enabled = true;
+    chroma_no_spill.r = 0;
+    chroma_no_spill.g = 255;
+    chroma_no_spill.b = 0;
+    chroma_no_spill.tolerance = 0.05f;
+    chroma_no_spill.softness = 0.10f;
+    chroma_no_spill.spill_reduction = 0.0f;
+    ASSERT_TRUE(compositor.DrawWebcam(webcam.data(), 1, 1, WebcamPixelRect{0, 0, 1, 1}, false, chroma_no_spill, err))
+        << err;
+    const auto pixels_no_spill = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+
+    // Reset and draw with spill_reduction=1 (maximum)
+    ASSERT_TRUE(compositor.BeginFrame(background.get(), err)) << err;
+    GpuCompositor::ChromaKeyParams chroma_full_spill = chroma_no_spill;
+    chroma_full_spill.spill_reduction = 1.0f;
+    ASSERT_TRUE(compositor.DrawWebcam(webcam.data(), 1, 1, WebcamPixelRect{0, 0, 1, 1}, false, chroma_full_spill, err))
+        << err;
+    const auto pixels_full_spill = ReadTexture(d3d.device.get(), d3d.context.get(), compositor.Result());
+
+    // Green channel should be lower with spill reduction than without
+    const int g_no_spill = static_cast<int>(pixels_no_spill[1]);
+    const int g_full_spill = static_cast<int>(pixels_full_spill[1]);
+    EXPECT_LT(g_full_spill, g_no_spill) << "spill_reduction=1 must reduce green channel vs spill_reduction=0";
+}
+
 TEST(GpuCompositorTest, CursorUsesSourceAlpha) {
     auto d3d = CreateWarpDevice();
     ASSERT_TRUE(d3d.device);
@@ -224,8 +303,9 @@ TEST(SessionStateWebcamOverlayLiveTest, SeedUpdateAndSnapshotSanitizeLiveOverlay
     EXPECT_FLOAT_EQ(updated.overlay_y_norm, 0.0f);
     EXPECT_FLOAT_EQ(updated.overlay_w_norm, 1.0f);
     EXPECT_FLOAT_EQ(updated.overlay_h_norm, recorder_core::WebcamPlacement::kMinSize);
-    EXPECT_FLOAT_EQ(updated.chroma_tolerance, 0.30f);
-    EXPECT_FLOAT_EQ(updated.chroma_softness, 1.0f);
+    EXPECT_FLOAT_EQ(updated.chroma_tolerance, 0.40f); // NaN → fallback default
+    EXPECT_FLOAT_EQ(updated.chroma_softness, 1.0f);   // 2.0 clamped to 1.0
+    EXPECT_FLOAT_EQ(updated.chroma_spill_reduction, 0.30f);
 }
 
 } // namespace

@@ -140,13 +140,15 @@ RecordingPreset MakeDefaultPreset() {
     preset.config.webcam.overlay.x_norm = 1.0f - kPipSize - kDefaultPipInsetNorm;
     preset.config.webcam.overlay.y_norm = 1.0f - kPipSize - kDefaultPipInsetNorm;
 
-    // Chroma key — default (disabled, green screen defaults)
+    // Chroma key — default (disabled; conservative green-screen values)
     preset.config.webcam.chroma_key.enabled = false;
-    preset.config.webcam.chroma_key.r = 0;
-    preset.config.webcam.chroma_key.g = 177;
-    preset.config.webcam.chroma_key.b = 64;
-    preset.config.webcam.chroma_key.tolerance = 0.30f;
-    preset.config.webcam.chroma_key.softness = 0.05f;
+    preset.config.webcam.chroma_key.color_mode = WebcamChromaKeyColorMode::Green;
+    preset.config.webcam.chroma_key.custom_r = 0;
+    preset.config.webcam.chroma_key.custom_g = 255;
+    preset.config.webcam.chroma_key.custom_b = 0;
+    preset.config.webcam.chroma_key.tolerance = 0.40f;
+    preset.config.webcam.chroma_key.softness = 0.15f;
+    preset.config.webcam.chroma_key.spill_reduction = 0.30f;
 
     // Countdown
     preset.config.countdown_seconds = 0;
@@ -418,19 +420,25 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     if (a.webcam.chroma_key.enabled != b.webcam.chroma_key.enabled) {
         return false;
     }
-    if (a.webcam.chroma_key.r != b.webcam.chroma_key.r) {
+    if (a.webcam.chroma_key.color_mode != b.webcam.chroma_key.color_mode) {
         return false;
     }
-    if (a.webcam.chroma_key.g != b.webcam.chroma_key.g) {
+    if (a.webcam.chroma_key.custom_r != b.webcam.chroma_key.custom_r) {
         return false;
     }
-    if (a.webcam.chroma_key.b != b.webcam.chroma_key.b) {
+    if (a.webcam.chroma_key.custom_g != b.webcam.chroma_key.custom_g) {
+        return false;
+    }
+    if (a.webcam.chroma_key.custom_b != b.webcam.chroma_key.custom_b) {
         return false;
     }
     if (std::abs(a.webcam.chroma_key.tolerance - b.webcam.chroma_key.tolerance) > kChromaTol) {
         return false;
     }
     if (std::abs(a.webcam.chroma_key.softness - b.webcam.chroma_key.softness) > kChromaTol) {
+        return false;
+    }
+    if (std::abs(a.webcam.chroma_key.spill_reduction - b.webcam.chroma_key.spill_reduction) > kChromaTol) {
         return false;
     }
 
@@ -579,19 +587,25 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
     if (a.webcam.chroma_key.enabled != b.webcam.chroma_key.enabled) {
         return false;
     }
-    if (a.webcam.chroma_key.r != b.webcam.chroma_key.r) {
+    if (a.webcam.chroma_key.color_mode != b.webcam.chroma_key.color_mode) {
         return false;
     }
-    if (a.webcam.chroma_key.g != b.webcam.chroma_key.g) {
+    if (a.webcam.chroma_key.custom_r != b.webcam.chroma_key.custom_r) {
         return false;
     }
-    if (a.webcam.chroma_key.b != b.webcam.chroma_key.b) {
+    if (a.webcam.chroma_key.custom_g != b.webcam.chroma_key.custom_g) {
+        return false;
+    }
+    if (a.webcam.chroma_key.custom_b != b.webcam.chroma_key.custom_b) {
         return false;
     }
     if (std::abs(a.webcam.chroma_key.tolerance - b.webcam.chroma_key.tolerance) > kChromaTol) {
         return false;
     }
     if (std::abs(a.webcam.chroma_key.softness - b.webcam.chroma_key.softness) > kChromaTol) {
+        return false;
+    }
+    if (std::abs(a.webcam.chroma_key.spill_reduction - b.webcam.chroma_key.spill_reduction) > kChromaTol) {
         return false;
     }
 

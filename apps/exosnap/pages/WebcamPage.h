@@ -56,8 +56,10 @@ class WebcamPage : public QWidget {
     void onDeviceChanged(int index);
     void onResolutionChanged(int index);
     void onChromaEnableToggled(bool enabled);
+    void onColorModeChanged(WebcamChromaKeyColorMode mode);
     void onToleranceChanged(int value);
     void onSoftnessChanged(int value);
+    void onSpillReductionChanged(int value);
     void onRefreshDevices();
     void onPreviewFrame(QImage frame);
 
@@ -101,11 +103,16 @@ class WebcamPage : public QWidget {
 
     // Chroma key
     ui::widgets::ExoToggle* chroma_toggle_ = nullptr;
-    QPushButton* chroma_color_btn_ = nullptr;
+    QPushButton* chroma_green_btn_ = nullptr;
+    QPushButton* chroma_blue_btn_ = nullptr;
+    QPushButton* chroma_magenta_btn_ = nullptr;
+    QPushButton* chroma_custom_btn_ = nullptr;
     QSlider* tolerance_slider_ = nullptr;
     QSlider* softness_slider_ = nullptr;
+    QSlider* spill_slider_ = nullptr;
     QLabel* tolerance_label_ = nullptr;
     QLabel* softness_label_ = nullptr;
+    QLabel* spill_label_ = nullptr;
 
     WebcamSettings current_settings_;
     bool suppress_signals_ = false;

@@ -23,27 +23,56 @@ VS_OUTPUT main(uint id : SV_VertexID) {
 }
 )";
 
+// Chroma-distance algorithm: YCbCr (BT.601) chroma-only distance.
+// Separating luminance from chroma makes the key robust to lighting variation.
+//
+// PixelConstants layout:
+//   key_color : float4  r, g, b (0-1) + tolerance (0-1)
+//   params    : float4  mirror | mode | spill_reduction | softness
+//     mode 0 = cursor (preserve source alpha)
+//     mode 1 = chroma key enabled
+//     mode 2 = force opaque (webcam, chroma disabled)
+//
+// Spill reduction: reduces key-color chrominance contamination in partially
+// keyed edge pixels. Weight is proportional to (1 - alpha) so only edges
+// are corrected; fully opaque non-keyed regions are unaffected.
 const char* kPixelShaderSrc = R"(
 Texture2D frameTex : register(t0);
 SamplerState frameSamp : register(s0);
 
 cbuffer DrawConstants : register(b0) {
-    float4 keyColor; // rgb + tolerance
-    float4 params;   // mirror, chroma enabled, force opaque, softness
+    float4 keyColor; // r, g, b, tolerance
+    float4 params;   // x=mirror, y=mode(0=cursor/1=chroma/2=opaque), z=spillReduction, w=softness
 };
+
+// BT.601 RGB->CbCr. Output range [0,1] with neutral at 0.5.
+float2 RgbToCbCr(float3 c) {
+    float cb = -0.169f * c.r - 0.331f * c.g + 0.500f * c.b + 0.5f;
+    float cr =  0.500f * c.r - 0.419f * c.g - 0.081f * c.b + 0.5f;
+    return float2(cb, cr);
+}
 
 float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TARGET {
     float2 uv = texcoord;
-    if (params.x > 0.5f) {
+    if (params.x > 0.5f)
         uv.x = 1.0f - uv.x;
-    }
 
     float4 color = frameTex.Sample(frameSamp, uv);
-    if (params.y > 0.5f) {
-        const float dist = distance(color.rgb, keyColor.rgb);
-        const float tol = keyColor.a;
-        const float soft = max(params.w, 0.001f);
+    const float mode = params.y;
+
+    if (mode > 1.5f) {
+        // mode 2: opaque webcam, no chroma key
+        color.a = 1.0f;
+    } else if (mode > 0.5f) {
+        // mode 1: chroma key via YCbCr chroma distance
+        const float2 cbcr_sample = RgbToCbCr(color.rgb);
+        const float2 cbcr_key    = RgbToCbCr(keyColor.rgb);
+        const float  dist        = distance(cbcr_sample, cbcr_key);
+
+        const float tol       = keyColor.a;
+        const float soft      = max(params.w, 0.001f);
         const float softTotal = tol + soft;
+
         if (dist <= tol) {
             color.a = 0.0f;
         } else if (dist >= softTotal) {
@@ -51,9 +80,29 @@ float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TAR
         } else {
             color.a = (dist - tol) / (softTotal - tol);
         }
-    } else if (params.z > 0.5f) {
-        color.a = 1.0f;
+
+        // Spill reduction: suppress key chrominance on partially-keyed edges.
+        // Compute key luminance and its chroma direction, then remove the
+        // projection of the sample onto that direction, weighted by (1-alpha).
+        const float spill = params.z;
+        if (spill > 0.001f && color.a > 0.001f) {
+            const float key_lum      = dot(keyColor.rgb, float3(0.2126f, 0.7152f, 0.0722f));
+            const float3 key_chroma  = keyColor.rgb - float3(key_lum, key_lum, key_lum);
+            const float  key_lensq   = dot(key_chroma, key_chroma);
+            if (key_lensq > 0.001f) {
+                const float  clum        = dot(color.rgb, float3(0.2126f, 0.7152f, 0.0722f));
+                const float3 col_chroma  = color.rgb - float3(clum, clum, clum);
+                const float  proj        = dot(col_chroma, key_chroma);
+                if (proj > 0.0f) {
+                    const float strength = spill * (1.0f - color.a);
+                    color.rgb -= key_chroma * (proj / key_lensq) * strength;
+                    color.rgb  = saturate(color.rgb);
+                }
+            }
+        }
     }
+    // else mode 0: cursor — preserve source alpha unchanged
+
     return color;
 }
 )";
@@ -280,8 +329,15 @@ bool GpuCompositor::DrawTexture(ID3D11ShaderResourceView* srv, const WebcamPixel
     pc.key_color[2] = static_cast<float>(chroma.b) / 255.0f;
     pc.key_color[3] = chroma.tolerance;
     pc.params[0] = mirror ? 1.0f : 0.0f;
-    pc.params[1] = chroma.enabled ? 1.0f : 0.0f;
-    pc.params[2] = force_opaque ? 1.0f : 0.0f;
+    // mode: 1 = chroma active, 2 = force opaque (webcam/no-chroma), 0 = cursor
+    if (chroma.enabled) {
+        pc.params[1] = 1.0f;
+    } else if (force_opaque) {
+        pc.params[1] = 2.0f;
+    } else {
+        pc.params[1] = 0.0f;
+    }
+    pc.params[2] = chroma.spill_reduction;
     pc.params[3] = chroma.softness;
     context_->UpdateSubresource(constants_.get(), 0, nullptr, &pc, 0, 0);
 

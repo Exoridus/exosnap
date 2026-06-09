@@ -88,11 +88,13 @@ RecordingPreset MakeWebcamPreset() {
     p.config.webcam.aspect_ratio_locked = false;
     p.config.webcam.mirror = true;
     p.config.webcam.chroma_key.enabled = true;
-    p.config.webcam.chroma_key.r = 10;
-    p.config.webcam.chroma_key.g = 200;
-    p.config.webcam.chroma_key.b = 30;
+    p.config.webcam.chroma_key.color_mode = WebcamChromaKeyColorMode::Custom;
+    p.config.webcam.chroma_key.custom_r = 10;
+    p.config.webcam.chroma_key.custom_g = 200;
+    p.config.webcam.chroma_key.custom_b = 30;
     p.config.webcam.chroma_key.tolerance = 0.40f;
     p.config.webcam.chroma_key.softness = 0.10f;
+    p.config.webcam.chroma_key.spill_reduction = 0.25f;
     return p;
 }
 
@@ -534,6 +536,78 @@ TEST(RecordingPresetStore, WrongSchemaVersion_ReturnsReset) {
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
     EXPECT_TRUE(state.was_reset);
+
+    CleanupFile(path);
+}
+
+// ===========================================================================
+// Chroma key — color mode + spill round-trip
+// ===========================================================================
+
+TEST(RecordingPresetStore, ChromaColorMode_RoundTrip_Custom) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Chroma Custom";
+    p.config = MakeDefaultPreset().config;
+    p.config.webcam.chroma_key.enabled = true;
+    p.config.webcam.chroma_key.color_mode = WebcamChromaKeyColorMode::Custom;
+    p.config.webcam.chroma_key.custom_r = 128;
+    p.config.webcam.chroma_key.custom_g = 64;
+    p.config.webcam.chroma_key.custom_b = 200;
+    p.config.webcam.chroma_key.tolerance = 0.35f;
+    p.config.webcam.chroma_key.softness = 0.12f;
+    p.config.webcam.chroma_key.spill_reduction = 0.45f;
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        ASSERT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        const auto& ck = state.presets[0].config.webcam.chroma_key;
+        EXPECT_TRUE(ck.enabled);
+        EXPECT_EQ(ck.color_mode, WebcamChromaKeyColorMode::Custom);
+        EXPECT_EQ(ck.custom_r, 128u);
+        EXPECT_EQ(ck.custom_g, 64u);
+        EXPECT_EQ(ck.custom_b, 200u);
+        EXPECT_NEAR(ck.tolerance, 0.35f, 1e-4f);
+        EXPECT_NEAR(ck.softness, 0.12f, 1e-4f);
+        EXPECT_NEAR(ck.spill_reduction, 0.45f, 1e-4f);
+    }
+
+    CleanupFile(path);
+}
+
+TEST(RecordingPresetStore, ChromaColorMode_RoundTrip_Magenta) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Chroma Magenta";
+    p.config = MakeDefaultPreset().config;
+    p.config.webcam.chroma_key.color_mode = WebcamChromaKeyColorMode::Magenta;
+    p.config.webcam.chroma_key.spill_reduction = 0.20f;
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        ASSERT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        const auto& ck = state.presets[0].config.webcam.chroma_key;
+        EXPECT_EQ(ck.color_mode, WebcamChromaKeyColorMode::Magenta);
+        EXPECT_NEAR(ck.spill_reduction, 0.20f, 1e-4f);
+    }
 
     CleanupFile(path);
 }

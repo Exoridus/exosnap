@@ -126,11 +126,13 @@ TEST(RecordingPreset, DefaultPreset_AudioMiscFields) {
 TEST(RecordingPreset, DefaultPreset_ChromaKey) {
     const RecordingPreset p = MakeDefaultPreset();
     EXPECT_FALSE(p.config.webcam.chroma_key.enabled);
-    EXPECT_EQ(p.config.webcam.chroma_key.r, 0u);
-    EXPECT_EQ(p.config.webcam.chroma_key.g, 177u);
-    EXPECT_EQ(p.config.webcam.chroma_key.b, 64u);
-    EXPECT_FLOAT_EQ(p.config.webcam.chroma_key.tolerance, 0.30f);
-    EXPECT_FLOAT_EQ(p.config.webcam.chroma_key.softness, 0.05f);
+    EXPECT_EQ(p.config.webcam.chroma_key.color_mode, WebcamChromaKeyColorMode::Green);
+    EXPECT_EQ(p.config.webcam.chroma_key.custom_r, 0u);
+    EXPECT_EQ(p.config.webcam.chroma_key.custom_g, 255u);
+    EXPECT_EQ(p.config.webcam.chroma_key.custom_b, 0u);
+    EXPECT_FLOAT_EQ(p.config.webcam.chroma_key.tolerance, 0.40f);
+    EXPECT_FLOAT_EQ(p.config.webcam.chroma_key.softness, 0.15f);
+    EXPECT_FLOAT_EQ(p.config.webcam.chroma_key.spill_reduction, 0.30f);
 }
 
 // ===========================================================================
@@ -718,6 +720,113 @@ TEST(RecordingPreset, NormalizedEquals_StillDetects_CaptureDisplayKeyChange) {
     RecordingPresetConfig b = a;
     b.capture.display_key = "MONITOR-001";
     EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+// ===========================================================================
+// Chroma key — color mode, active_color(), dirty/normalized equality
+// ===========================================================================
+
+TEST(RecordingPreset, ChromaKey_ActiveColor_Green) {
+    WebcamChromaKeySettings s;
+    s.color_mode = WebcamChromaKeyColorMode::Green;
+    const auto ac = s.active_color();
+    EXPECT_EQ(ac.r, kChromaGreenR);
+    EXPECT_EQ(ac.g, kChromaGreenG);
+    EXPECT_EQ(ac.b, kChromaGreenB);
+}
+
+TEST(RecordingPreset, ChromaKey_ActiveColor_Blue) {
+    WebcamChromaKeySettings s;
+    s.color_mode = WebcamChromaKeyColorMode::Blue;
+    const auto ac = s.active_color();
+    EXPECT_EQ(ac.r, kChromaBlueR);
+    EXPECT_EQ(ac.g, kChromaBlueG);
+    EXPECT_EQ(ac.b, kChromaBlueB);
+}
+
+TEST(RecordingPreset, ChromaKey_ActiveColor_Magenta) {
+    WebcamChromaKeySettings s;
+    s.color_mode = WebcamChromaKeyColorMode::Magenta;
+    const auto ac = s.active_color();
+    EXPECT_EQ(ac.r, kChromaMagentaR);
+    EXPECT_EQ(ac.g, kChromaMagentaG);
+    EXPECT_EQ(ac.b, kChromaMagentaB);
+}
+
+TEST(RecordingPreset, ChromaKey_ActiveColor_Custom_ReturnsCustonRgb) {
+    WebcamChromaKeySettings s;
+    s.color_mode = WebcamChromaKeyColorMode::Custom;
+    s.custom_r = 10;
+    s.custom_g = 200;
+    s.custom_b = 30;
+    const auto ac = s.active_color();
+    EXPECT_EQ(ac.r, 10u);
+    EXPECT_EQ(ac.g, 200u);
+    EXPECT_EQ(ac.b, 30u);
+}
+
+TEST(RecordingPreset, ChromaKey_Equality_DefaultEqualsDefault) {
+    WebcamChromaKeySettings a;
+    WebcamChromaKeySettings b;
+    EXPECT_EQ(a, b);
+}
+
+TEST(RecordingPreset, ChromaKey_Equality_ColorModeChange_NotEqual) {
+    WebcamChromaKeySettings a;
+    WebcamChromaKeySettings b = a;
+    b.color_mode = WebcamChromaKeyColorMode::Blue;
+    EXPECT_NE(a, b);
+}
+
+TEST(RecordingPreset, ChromaKey_Equality_SpillReductionChange_NotEqual) {
+    WebcamChromaKeySettings a;
+    WebcamChromaKeySettings b = a;
+    b.spill_reduction = 0.0f;
+    EXPECT_NE(a, b);
+}
+
+TEST(RecordingPreset, Sanitize_Chroma_ColorModeOutOfRange_ResetToGreen) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.webcam.chroma_key.color_mode = static_cast<WebcamChromaKeyColorMode>(99);
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_EQ(s.webcam.chroma_key.color_mode, WebcamChromaKeyColorMode::Green);
+}
+
+TEST(RecordingPreset, Sanitize_Chroma_SpillReductionNaN_BecomesDefault) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.webcam.chroma_key.spill_reduction = std::numeric_limits<float>::quiet_NaN();
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_TRUE(std::isfinite(s.webcam.chroma_key.spill_reduction));
+    EXPECT_GE(s.webcam.chroma_key.spill_reduction, 0.0f);
+    EXPECT_LE(s.webcam.chroma_key.spill_reduction, 1.0f);
+}
+
+TEST(RecordingPreset, NormalizedEquals_ChromaColorModeChange_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.webcam.chroma_key.color_mode = WebcamChromaKeyColorMode::Blue;
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+TEST(RecordingPreset, NormalizedEquals_ChromaSpillChange_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.webcam.chroma_key.spill_reduction = 0.0f;
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+TEST(RecordingPreset, DirtyEquivalent_ChromaColorModeChange_NotEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.webcam.chroma_key.color_mode = WebcamChromaKeyColorMode::Magenta;
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(RecordingPreset, DirtyEquivalent_ChromaSpillChange_NotEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.webcam.chroma_key.spill_reduction = 0.0f;
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
 }
 
 // ===========================================================================

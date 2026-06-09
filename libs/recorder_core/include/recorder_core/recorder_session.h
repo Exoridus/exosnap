@@ -51,13 +51,16 @@ struct WebcamConfig {
     // No vertical flip is performed.  Must match the Record-preview mirror state.
     bool mirror = false;
 
-    // Chroma key
+    // Chroma key. chroma_r/g/b hold the resolved active key color (caller
+    // computes this from WebcamChromaKeySettings::active_color() before handing
+    // config to the engine; the engine never needs to know the color mode).
     bool chroma_key_enabled = false;
     uint8_t chroma_r = 0;
-    uint8_t chroma_g = 177;
-    uint8_t chroma_b = 64;
-    float chroma_tolerance = 0.30f;
-    float chroma_softness = 0.05f;
+    uint8_t chroma_g = 255;
+    uint8_t chroma_b = 0;
+    float chroma_tolerance = 0.40f;
+    float chroma_softness = 0.15f;
+    float chroma_spill_reduction = 0.30f;
 };
 
 // Live-mutable subset of WebcamConfig, updatable while Record() runs.
@@ -69,12 +72,14 @@ struct WebcamOverlayLive {
     float overlay_w_norm = 0.25f;
     float overlay_h_norm = 0.25f;
     bool mirror = false;
+    // chroma_r/g/b carry the resolved active key color (not the raw mode enum).
     bool chroma_key_enabled = false;
     uint8_t chroma_r = 0;
-    uint8_t chroma_g = 177;
-    uint8_t chroma_b = 64;
-    float chroma_tolerance = 0.30f;
-    float chroma_softness = 0.05f;
+    uint8_t chroma_g = 255;
+    uint8_t chroma_b = 0;
+    float chroma_tolerance = 0.40f;
+    float chroma_softness = 0.15f;
+    float chroma_spill_reduction = 0.30f;
 };
 
 } // namespace recorder_core
