@@ -70,6 +70,69 @@ Build a Windows-native, diagnostics-first recording application MVP with a high-
 - Codex handles repo bootstrap, mechanical work, tests, refactors, build fixes, and explicit task lists.
 - No agent should silently expand MVP scope.
 
+## Fast Iteration Policy
+
+This policy applies to all future ExoSnap agent sessions.
+
+### Scope
+
+- Normal feature slices target 30-60 minutes.
+- Keep each slice to one subsystem.
+- Do not broaden scope without a blocking technical need.
+- Record minor P2/polish findings for consolidated review instead of fixing everything immediately.
+
+### Agent use
+
+- Do not launch multiple Explore agents when direct repository inspection is sufficient.
+- Use at most one architecture/exploration pass for normal slices.
+- Use workers only for meaningful, clearly separated packages.
+- Run independent workers in parallel worktrees only when their file ownership is disjoint.
+- Never let workers concurrently edit high-churn files such as:
+  - `MainWindow.cpp`
+  - `RecordPage.cpp`
+  - `ConfigPage.cpp`
+  - shared stores/view models
+  - shared CMake files
+
+### Development validation
+
+During implementation, workers should use the smallest sufficient validation:
+
+1. Build only the affected target.
+2. Run focused tests for the changed subsystem.
+3. Do not run full Debug builds, full CTest, quality suite, and Release build after every worker or edit cycle.
+
+Canonical principle: `Minimal validation during development; complete validation once at the final gate.`
+
+### Final validation
+
+Run once after the integrated branch is complete:
+
+- format check
+- `git diff --check`
+- full Debug build
+- focused tests if still useful
+- full CTest
+- quality/static checks once
+- Release build only at the final gate or when Release-specific behavior is in scope
+
+Do not invoke `check-quality.ps1` after already running the same complete configure/build/test sequence unless the script provides additional required checks that cannot be invoked separately. Prefer invoking only the missing static-analysis step when possible.
+
+### Test and visual budgets
+
+For a normal feature slice:
+
+- approximately 5-15 targeted new tests
+- approximately 2-4 Visual Harness scenarios
+- no exhaustive matrix unless the feature is inherently high-risk
+- no fragile physical-device or multi-step external automation
+
+### Acceptance
+
+- Green automated tests and clean deterministic visual scenarios are sufficient for implementation waves.
+- Physical hardware checks and broad visual/product review are deferred to consolidated final review rounds.
+- One or two documented minor limitations do not block merge when core behavior is correct.
+
 ## Project agent roles
 
 Agent profiles exist for two tools:
