@@ -87,8 +87,6 @@ endif()
 # Full build — all M3.1 sources
 # ---------------------------------------------------------------------------
 
-FetchContent_GetProperties(libwebm SOURCE_DIR _libwebm_src)
-
 add_library(recorder_core STATIC
     src/version.cpp
     src/logging/logging.cpp
@@ -101,7 +99,9 @@ add_library(recorder_core STATIC
     src/wgc_capture.cpp
     src/dxgi_od_capture_src.cpp
     src/nvenc_encoder.cpp
+    src/nvenc_video_encoder.cpp
     src/mf_aac_encoder.cpp
+    src/fdk_aac_encoder.cpp
     src/gpu_compositor.cpp
     src/gpu_compositor.h
     src/mixed_audio_src.cpp
@@ -126,7 +126,6 @@ target_include_directories(recorder_core
     PUBLIC  include
     PRIVATE src
             "${CMAKE_SOURCE_DIR}/third_party/nvidia"
-            "${_libwebm_src}"
 )
 
 set_target_properties(recorder_core PROPERTIES
@@ -138,7 +137,9 @@ target_link_libraries(recorder_core
         spdlog::spdlog
         nlohmann_json::nlohmann_json
         Opus::opus
-        mkvmuxer
+        EBML::ebml
+        Matroska::matroska
+        fdk-aac
         d3d11.lib
         d3dcompiler.lib
         dxgi.lib
@@ -202,6 +203,23 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_mf_aac_encoder PRIVATE src)
+
+exosnap_add_gtest(
+    NAME test_fdk_aac_encoder
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_fdk_aac_encoder.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_fdk_aac_encoder PRIVATE src)
+
+exosnap_add_gtest(
+    NAME test_nvenc_video_encoder_interface
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_nvenc_video_encoder_interface.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_nvenc_video_encoder_interface PRIVATE src
+    "${CMAKE_SOURCE_DIR}/third_party/nvidia")
 
 exosnap_add_gtest(
     NAME test_mic_channel_mapping
@@ -301,3 +319,11 @@ exosnap_add_gtest(
 )
 target_include_directories(test_gpu_compositor PRIVATE src)
 target_compile_definitions(test_gpu_compositor PRIVATE NOMINMAX)
+
+exosnap_add_gtest(
+    NAME test_matroska_mux_structure
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_matroska_mux_structure.cpp
+    LIBRARIES recorder_core EBML::ebml Matroska::matroska
+)
+target_include_directories(test_matroska_mux_structure PRIVATE src)

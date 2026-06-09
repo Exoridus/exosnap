@@ -761,3 +761,16 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         NOMINMAX EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
     set_target_properties(recording_marker_tests PROPERTIES AUTOMOC ON)
 endif()
+
+# ---------------------------------------------------------------------------
+# Install / windeployqt
+# ---------------------------------------------------------------------------
+if(WIN32 AND Qt6_FOUND)
+    qt_generate_deploy_app_script(
+        TARGET exosnap
+        OUTPUT_SCRIPT _exosnap_deploy_script
+        NO_UNSUPPORTED_PLATFORM_ERROR
+    )
+    install(TARGETS exosnap RUNTIME DESTINATION .)
+    install(SCRIPT ${_exosnap_deploy_script})
+endif()

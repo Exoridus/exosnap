@@ -1,6 +1,7 @@
 #include "audio_thread.h"
 
 #include "codec_private.h"
+#include "fdk_aac_encoder.h"
 #include "mf_aac_encoder.h"
 #include "opus_audio_encoder.h"
 #include "recorder_core/audio_meter.h"
@@ -292,11 +293,11 @@ void AudioThread::Run() {
     }
 
     // --- Init AAC encoder ---
-    MfAacEncoder aacEnc;
+    FdkAacEncoder aacEnc;
     {
         std::string err;
         if (!aacEnc.Init(kSampleRate, kChannels, err)) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode, "MF AAC encoder init: " + err);
+            m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode, "FDK-AAC encoder init: " + err);
             source_->Shutdown();
             if (com_inited && hr != RPC_E_CHANGED_MODE)
                 CoUninitialize();
@@ -304,12 +305,11 @@ void AudioThread::Run() {
         }
     }
 
-    // --- Derive AAC codec private immediately after Init ---
+    // --- Read AAC codec private from FDK-AAC encoder ---
     {
-        char reason[256] = {};
-        uint8_t cp[2] = {};
-        if (!codec_private::DeriveAacCodecPrivate(aacEnc.OutputMediaType(), cp, reason, sizeof(reason))) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode, std::string("AAC codec private: ") + reason);
+        auto cp = aacEnc.CodecPrivateBytes();
+        if (cp.empty()) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode, "FDK-AAC codec private is empty after Init");
             aacEnc.Shutdown();
             source_->Shutdown();
             if (com_inited && hr != RPC_E_CHANGED_MODE)
@@ -317,7 +317,7 @@ void AudioThread::Run() {
             return;
         }
         std::lock_guard lk(m_state.premux_mutex);
-        m_state.codec_private.audio_codec_private[track_id_].bytes.assign(cp, cp + 2);
+        m_state.codec_private.audio_codec_private[track_id_].bytes = std::move(cp);
         m_state.codec_private.audio_track_ready[track_id_] = true;
         m_state.premux_cv.notify_all();
     }
@@ -358,56 +358,34 @@ void AudioThread::Run() {
                 break;
             }
 
-            uint64_t audio_ts_ns = audioAccumulatedFrames * 1000000000ULL / kSampleRate;
-            LONGLONG sampleDuration =
-                static_cast<LONGLONG>(raw.num_frames) * 10000000LL / static_cast<LONGLONG>(kSampleRate);
-
             std::vector<EncodedAudioPacket> pkts;
             float new_rms = 0.0f;
             const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(kChannels);
 
             if (raw.silent) {
-                // Feed silence
-                std::vector<uint8_t> silenceData(static_cast<size_t>(raw.num_frames) * aacEnc.InputBlockAlign(), 0);
-                aacEnc.FeedRaw(silenceData.data(), static_cast<DWORD>(silenceData.size()), audio_ts_ns, sampleDuration,
-                               pkts);
+                std::vector<float> silence(totalSamples, 0.0f);
+                aacEnc.FeedFloat32(silence.data(), silence.size(), 0, audioAccumulatedFrames, kSampleRate, kChannels,
+                                   pkts);
             } else if (raw.bytes == nullptr) {
                 source_->ReleaseBuffer();
                 m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture,
                                       "Audio source returned null bytes for non-silent packet");
                 goto end_audio_loop;
-            } else if (aacEnc.UsesPcm16()) {
-                if (sourceFormat == AudioSampleFormat::Int16) {
-                    new_rms = ComputeRmsFromInt16(reinterpret_cast<const std::int16_t*>(raw.bytes), totalSamples);
-                    UINT32 dataBytes = raw.num_frames * aacEnc.InputBlockAlign();
-                    aacEnc.FeedRaw(raw.bytes, dataBytes, audio_ts_ns, sampleDuration, pkts);
-                } else {
-                    new_rms = ComputeRmsLinear(reinterpret_cast<const float*>(raw.bytes), totalSamples);
-                    aacEnc.FeedFloat32(reinterpret_cast<const float*>(raw.bytes), totalSamples, audio_ts_ns,
-                                       audioAccumulatedFrames, kSampleRate, kChannels, pkts);
-                    // FeedFloat32 already increments accumulated_frames, reset to avoid double-count
-                    audioAccumulatedFrames -= raw.num_frames;
-                }
+            } else if (sourceFormat == AudioSampleFormat::Float32) {
+                new_rms = ComputeRmsLinear(reinterpret_cast<const float*>(raw.bytes), totalSamples);
+                aacEnc.FeedFloat32(reinterpret_cast<const float*>(raw.bytes), totalSamples, 0, audioAccumulatedFrames,
+                                   kSampleRate, kChannels, pkts);
             } else {
-                if (sourceFormat == AudioSampleFormat::Int16) {
-                    floatScratch.resize(totalSamples);
-                    ConvertInt16ToFloat32(reinterpret_cast<const std::int16_t*>(raw.bytes), floatScratch.data(),
-                                          totalSamples);
-                    new_rms = ComputeRmsLinear(floatScratch.data(), floatScratch.size());
-                    aacEnc.FeedFloat32(floatScratch.data(), totalSamples, audio_ts_ns, audioAccumulatedFrames,
-                                       kSampleRate, kChannels, pkts);
-                    // FeedFloat32 already increments accumulated_frames, reset to avoid double-count
-                    audioAccumulatedFrames -= raw.num_frames;
-                } else {
-                    new_rms = ComputeRmsLinear(reinterpret_cast<const float*>(raw.bytes), totalSamples);
-                    UINT32 dataBytes = raw.num_frames * aacEnc.InputBlockAlign();
-                    aacEnc.FeedRaw(raw.bytes, dataBytes, audio_ts_ns, sampleDuration, pkts);
-                }
+                floatScratch.resize(totalSamples);
+                ConvertInt16ToFloat32(reinterpret_cast<const std::int16_t*>(raw.bytes), floatScratch.data(),
+                                      totalSamples);
+                new_rms = ComputeRmsLinear(floatScratch.data(), floatScratch.size());
+                aacEnc.FeedFloat32(floatScratch.data(), floatScratch.size(), 0, audioAccumulatedFrames, kSampleRate,
+                                   kChannels, pkts);
             }
             m_smoothed_rms_ = kRmsEmaAlpha * new_rms + (1.0f - kRmsEmaAlpha) * m_smoothed_rms_;
 
             source_->ReleaseBuffer();
-            audioAccumulatedFrames += raw.num_frames;
 
             // Update stats
             {

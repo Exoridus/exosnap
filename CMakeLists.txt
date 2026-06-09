@@ -36,6 +36,13 @@ enable_testing()
 include(cmake/exosnap_warnings.cmake)
 include(cmake/exosnap_testing.cmake)
 
+# libebml/libmatroska/fdk-aac ship cmake_minimum_required() floors below CMake's
+# current minimum. Setting the policy version minimum lets FetchContent configure
+# them without per-developer command-line flags. Applies to all presets/generators.
+if(NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM)
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+endif()
+
 # third_party must come before static analysis so its targets are not analyzed.
 add_subdirectory(third_party)
 

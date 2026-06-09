@@ -4,7 +4,7 @@
 #include "codec_private.h"
 #include "dxgi_od_capture_src.h"
 #include "gpu_compositor.h"
-#include "nvenc_encoder.h"
+#include "nvenc_video_encoder.h"
 #include "session_internal.h"
 
 #include <recorder_core/logging/logging.h>
@@ -506,7 +506,7 @@ void VideoThread::Run() {
     }
 
     // --- NVENC encoder ---
-    NvencEncoder nvenc;
+    NvencVideoEncoder nvenc;
     {
         nvenc.SetCodec(m_state.config.video_codec);
         nvenc.SetQualityPreset(m_state.config.nvenc_quality_preset);
@@ -518,34 +518,10 @@ void VideoThread::Run() {
                 CoUninitialize();
             return;
         }
-
-        const bool nvencQueryOk = (m_state.config.video_codec == VideoCodec::H264Nvenc)
-                                      ? nvenc.QueryH264Nv12Support(err)
-                                      : nvenc.QueryAv1Nv12Support(err);
-        if (!nvencQueryOk) {
-            const char* label = (m_state.config.video_codec == VideoCodec::H264Nvenc) ? "H264/NV12" : "AV1/NV12";
-            m_state.RecordFailure(E_NOTIMPL, ErrorPhase::Prepare, std::string("NVENC ") + label + " support: " + err);
-            if (com_inited && hr != RPC_E_CHANGED_MODE)
-                CoUninitialize();
-            return;
-        }
-
-        if (!nvenc.FetchPresetConfig(err)) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "NVENC preset config: " + err);
-            if (com_inited && hr != RPC_E_CHANGED_MODE)
-                CoUninitialize();
-            return;
-        }
-        if (!nvenc.InitEncoder(encodeWidth, encodeHeight, m_state.config.frame_rate_num, m_state.config.frame_rate_den,
-                               err)) {
+        if (!nvenc.Configure(encodeWidth, encodeHeight, m_state.config.frame_rate_num, m_state.config.frame_rate_den,
+                             err)) {
             m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode,
-                                  "NVENC init: " + err + "; preInit={" + diag.str() + "}");
-            if (com_inited && hr != RPC_E_CHANGED_MODE)
-                CoUninitialize();
-            return;
-        }
-        if (!nvenc.CreateBitstreamBuffer(err)) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC bitstream buffer: " + err);
+                                  "NVENC configure: " + err + "; preInit={" + diag.str() + "}");
             if (com_inited && hr != RPC_E_CHANGED_MODE)
                 CoUninitialize();
             return;
@@ -1500,7 +1476,7 @@ void VideoThread::Run() {
 
                 EncodedVideoPacket pkt;
                 std::string encErr;
-                bool encOk = nvenc.EncodeFrame(slot, pts_ns, encodeWidth, encodeHeight, &pkt, encErr);
+                bool encOk = nvenc.EncodeFrame(slot, pts_ns, encodeWidth, encodeHeight, pkt, encErr);
 
                 if (!encOk) {
                     m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode (CFR): " + encErr);
@@ -1699,7 +1675,7 @@ void VideoThread::Run() {
 
                             EncodedVideoPacket pkt;
                             std::string encErr;
-                            bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, &pkt, encErr);
+                            bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkt, encErr);
 
                             if (!encOk) {
                                 m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode: " + encErr);
@@ -1817,7 +1793,6 @@ end_encode_loop:
     }
 
     // --- Unregister NVENC resources + destroy ---
-    nvenc.UnregisterAllSlots();
     nvenc.Destroy();
 
     // --- Update final stats ---

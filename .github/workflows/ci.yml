@@ -16,6 +16,7 @@ jobs:
         with:
           version: '6.9.0'
           arch: 'win64_msvc2022_64'
+          modules: 'qtsvg'
           cache: true
 
       - name: Install cppcheck
@@ -48,6 +49,7 @@ jobs:
         with:
           version: '6.9.0'
           arch: 'win64_msvc2022_64'
+          modules: 'qtsvg'
           cache: true
 
       - name: Configure (${{ matrix.preset }})
@@ -65,3 +67,20 @@ jobs:
         with:
           name: ctest-logs-${{ matrix.preset }}
           path: build/${{ matrix.preset }}/Testing/Temporary/
+
+      - name: windeployqt (release only)
+        if: matrix.preset == 'windows-x64-release'
+        run: |
+          $exe = "build\windows-x64-release\Release\exosnap.exe"
+          if (Test-Path $exe) {
+            windeployqt --no-translations --no-opengl-sw $exe
+          }
+        shell: pwsh
+
+      - name: Upload release artifact
+        if: matrix.preset == 'windows-x64-release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: exosnap-release
+          path: build\windows-x64-release\Release\
+          if-no-files-found: ignore
