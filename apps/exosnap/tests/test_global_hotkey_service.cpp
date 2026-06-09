@@ -277,5 +277,33 @@ TEST_F(HotkeyServiceTest, SignalNotEmittedOnFailure) {
     EXPECT_EQ(signal_count, 0);
 }
 
+// 19. Resetting TogglePause to its default yields an empty (unset) binding.
+//     Canonical Pause default is Unset per hotkeys-view.md: "all others unset".
+TEST_F(HotkeyServiceTest, ResetPauseToDefaultIsEmpty) {
+    GlobalHotkeyService svc;
+    FakeRegistrar reg;
+    svc.SetRegistrar(&reg);
+
+    // First set Pause to a non-empty binding.
+    const QKeySequence alt_f10(Qt::AltModifier | Qt::Key_F10);
+    RebindResult r = svc.TrySetBinding(HotkeyAction::TogglePause, alt_f10);
+    ASSERT_TRUE(r.success);
+    ASSERT_EQ(svc.GetBinding(HotkeyAction::TogglePause), alt_f10);
+
+    // Reset must restore the canonical default, which is empty.
+    RebindResult reset_r = svc.ResetToDefault(HotkeyAction::TogglePause);
+    EXPECT_TRUE(reset_r.success);
+    EXPECT_TRUE(svc.GetBinding(HotkeyAction::TogglePause).isEmpty());
+}
+
+// 20. An invalid persisted Pause string falls back to the default (empty / unset),
+//     not to any specific key such as Alt+F10.
+TEST_F(HotkeyServiceTest, InvalidPersistedPauseStringFallsToEmpty) {
+    GlobalHotkeyService svc;
+    std::array<QString, 4> stored = {QString(), QStringLiteral("NOT_VALID_SEQUENCE"), QString(), QString()};
+    svc.LoadFromStrings(stored);
+    EXPECT_TRUE(svc.GetBinding(HotkeyAction::TogglePause).isEmpty());
+}
+
 } // namespace
 } // namespace exosnap
