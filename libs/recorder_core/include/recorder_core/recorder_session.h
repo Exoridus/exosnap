@@ -259,6 +259,13 @@ class RecorderSession {
     // internal worker thread.  Must be set before calling Record().
     void SetMeterCallback(MeterCallback cb);
 
+    // Request a one-shot BGRA frame snapshot from the next composed video frame.
+    // The callback fires from VideoThread with (success, width, height, bgra_bytes, error).
+    // No-op if not recording or a snapshot is already pending.
+    // If the session stops while the request is pending the callback fires with success=false.
+    using FrameSnapshotCallback = std::function<void(bool, uint32_t, uint32_t, std::vector<uint8_t>, std::string)>;
+    void RequestFrameSnapshot(FrameSnapshotCallback callback);
+
   private:
     struct Impl;
     Impl* m_impl = nullptr;

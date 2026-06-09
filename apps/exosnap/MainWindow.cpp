@@ -610,6 +610,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // ---- Hotkeys ----
     connect(this, &MainWindow::recordToggleRequested, record_page_, &RecordPage::onHotkeyToggle);
     connect(this, &MainWindow::pauseToggleRequested, record_page_, &RecordPage::onHotkeyPauseToggle);
+    connect(this, &MainWindow::captureFrameRequested, record_page_, &RecordPage::onHotkeyCaptureFrame);
     connect(hotkey_service_, &GlobalHotkeyService::bindingChanged, this, &MainWindow::onHotkeyServiceBindingChanged);
     connect(record_page_, &RecordPage::audioMeterLevelsUpdated, config_page_, &ConfigPage::setAudioMeterLevels);
 
@@ -908,6 +909,8 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
                     emit recordToggleRequested();
                 else if (hk_id == GlobalHotkeyService::Win32IdForAction(HotkeyAction::TogglePause))
                     emit pauseToggleRequested();
+                else if (hk_id == GlobalHotkeyService::Win32IdForAction(HotkeyAction::CaptureFrame))
+                    emit captureFrameRequested();
                 *result = 0;
                 return true;
             }

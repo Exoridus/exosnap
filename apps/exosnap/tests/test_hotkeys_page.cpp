@@ -80,18 +80,22 @@ TEST_F(HotkeysPageTest, UnsetActiveRowShowsMutedKeycap) {
 TEST_F(HotkeysPageTest, PlannedActionsAreUnavailableAndNotRebindable) {
     HotkeysPage page;
 
-    // No rebind / unset controls for planned actions (indices 2-9).
-    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_2")), nullptr);
-    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_2")), nullptr);
+    // Active index 2 (CaptureFrame) now HAS rebind controls — it is active.
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_2")), nullptr);
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_2")), nullptr);
+
+    // No rebind / unset controls for planned actions (indices 3-9).
     EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_3")), nullptr);
     EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_3")), nullptr);
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeySetBtn_4")), nullptr);
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeyUnsetBtn_4")), nullptr);
 
     // No keycap chips fabricated for planned actions, only an honest "Not in this build" tag.
-    EXPECT_EQ(page.findChild<QWidget*>(QStringLiteral("hotkeyBinding_2")), nullptr);
     EXPECT_EQ(page.findChild<QWidget*>(QStringLiteral("hotkeyBinding_3")), nullptr);
+    EXPECT_EQ(page.findChild<QWidget*>(QStringLiteral("hotkeyBinding_4")), nullptr);
 
-    auto* tag_split = page.findChild<QLabel*>(QStringLiteral("hotkeyPlannedTag_2"));
-    auto* tag_mute = page.findChild<QLabel*>(QStringLiteral("hotkeyPlannedTag_3"));
+    auto* tag_split = page.findChild<QLabel*>(QStringLiteral("hotkeyPlannedTag_3"));
+    auto* tag_mute = page.findChild<QLabel*>(QStringLiteral("hotkeyPlannedTag_4"));
     ASSERT_NE(tag_split, nullptr);
     ASSERT_NE(tag_mute, nullptr);
     EXPECT_EQ(tag_split->text(), QStringLiteral("Not in this build"));
@@ -115,10 +119,12 @@ TEST_F(HotkeysPageTest, DesignTargetPlannedActions_ArePresent) {
 
 TEST_F(HotkeysPageTest, DesignTargetPlannedActions_ActionLabelsPresent) {
     HotkeysPage page;
+    // "Capture frame" is now an active action (index 2) — its label changed from
+    // "Capture frame (screenshot)" to "Capture frame" and it moved to Active section.
     const QStringList expected_labels = {
-        QStringLiteral("Change source"),    QStringLiteral("Toggle microphone"),
-        QStringLiteral("Toggle webcam"),    QStringLiteral("Toggle system audio"),
-        QStringLiteral("Open diagnostics"), QStringLiteral("Capture frame (screenshot)"),
+        QStringLiteral("Change source"),       QStringLiteral("Toggle microphone"), QStringLiteral("Toggle webcam"),
+        QStringLiteral("Toggle system audio"), QStringLiteral("Open diagnostics"),
+        QStringLiteral("Capture frame"), // active; was "Capture frame (screenshot)" in planned
     };
     for (const auto& label : expected_labels) {
         bool found = false;
@@ -182,8 +188,10 @@ TEST_F(HotkeysPageTest, PerRowResetButtonPresent) {
     HotkeysPage page;
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeyResetRowBtn_0")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeyResetRowBtn_1")), nullptr);
-    // Planned rows have no reset button.
-    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeyResetRowBtn_2")), nullptr);
+    // Index 2 is now CaptureFrame (active) — it has a reset button.
+    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("hotkeyResetRowBtn_2")), nullptr);
+    // Planned rows have no reset button (index 3+).
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("hotkeyResetRowBtn_3")), nullptr);
 }
 
 TEST_F(HotkeysPageTest, EditingLockedDisablesActiveControls) {

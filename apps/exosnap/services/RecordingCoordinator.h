@@ -12,6 +12,8 @@
 
 #include <windows.h>
 
+#include <QImage>
+
 #include <capability/audio_ui_state.h>
 #include <capability/capability_set.h>
 #include <capability/resolver.h>
@@ -43,6 +45,8 @@ class RecordingCoordinator {
     using AppMeterUpdatedCallback = std::function<void(float rms_linear)>;
     // Fired at ~30 Hz during recording; per-track RMS indexed by AudioThread track_id.
     using RecordingMeterCallback = std::function<void(const std::array<float, 3>&)>;
+    // Capture frame result: (success, saved_path_or_empty, error_message_or_empty)
+    using FrameCapturedCallback = std::function<void(bool success, const QString& path, const QString& error)>;
 
     RecordingCoordinator();
     ~RecordingCoordinator();
@@ -96,6 +100,16 @@ class RecordingCoordinator {
     void SetSysMeterUpdatedCallback(SysMeterUpdatedCallback cb);
     void SetAppMeterUpdatedCallback(AppMeterUpdatedCallback cb);
     void SetRecordingMeterCallback(RecordingMeterCallback cb);
+    void SetFrameCapturedCallback(FrameCapturedCallback cb);
+
+    // Inject a getter for the latest preview QImage (used in Ready state).
+    // The getter is called on the calling thread; must be safe to call from the UI thread.
+    void SetReadyFrameSource(std::function<QImage()> getter);
+
+    // Request a frame capture. Saves a PNG to the active output folder.
+    // Valid in Ready, Recording, and Paused states.
+    // Fires the FrameCapturedCallback on the Qt main thread when complete.
+    void CaptureFrame();
 
   private:
     void RecordingThreadProc(const recorder_core::RecorderConfig& config, const std::filesystem::path& output_path);
@@ -145,6 +159,8 @@ class RecordingCoordinator {
     SysMeterUpdatedCallback on_sys_meter_updated_;
     AppMeterUpdatedCallback on_app_meter_updated_;
     RecordingMeterCallback on_recording_meter_updated_;
+    FrameCapturedCallback on_frame_captured_;
+    std::function<QImage()> ready_frame_source_;
 
     std::optional<std::string> mic_meter_device_id_;
     recorder_core::MicChannelMode mic_meter_channel_mode_ = recorder_core::MicChannelMode::Auto;

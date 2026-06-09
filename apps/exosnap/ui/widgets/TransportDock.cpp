@@ -121,7 +121,12 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
                                          QStringLiteral("Record again"), 156, action_row_);
     stop_btn_ = makeActionButton(QStringLiteral("recordDockStop"), QStringLiteral("stop"), QStringLiteral("Stop"), 104,
                                  action_row_);
+    capture_frame_btn_ = makeActionButton(QStringLiteral("recordDockCaptureFrame"), QStringLiteral("utility"),
+                                          QStringLiteral("Capture frame"), 0, action_row_);
+    capture_frame_btn_->setToolTip(QStringLiteral("Save the current composed frame as PNG (Capture frame)"));
+
     // Fixed layout order; visibility per state keeps the right edge stable.
+    action_layout->addWidget(capture_frame_btn_);
     action_layout->addWidget(countdown_);
     action_layout->addWidget(pause_btn_);
     action_layout->addWidget(resume_btn_);
@@ -137,6 +142,7 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     connect(record_again_btn_, &QPushButton::clicked, this, &TransportDock::recordAgainClicked);
     connect(open_folder_btn_, &QPushButton::clicked, this, &TransportDock::openFolderClicked);
     connect(filename_link_, &QPushButton::clicked, this, &TransportDock::filenameClicked);
+    connect(capture_frame_btn_, &QPushButton::clicked, this, &TransportDock::captureFrameClicked);
 
     connect(system_toggle_, &AudioSourceToggle::clicked, this,
             [this]() { emit sourceToggleClicked(QStringLiteral("system")); });
@@ -182,6 +188,8 @@ void TransportDock::applyState() {
     resume_btn_->setVisible(paused);
     stop_btn_->setVisible(recording || paused);
     record_again_btn_->setVisible(completed);
+    capture_frame_btn_->setVisible(ready || recording || paused);
+    capture_frame_btn_->setEnabled(ready || recording || paused);
 
     record_btn_->setText(countdown ? QStringLiteral("Cancel") : QStringLiteral("Record"));
     setStyledProperty(record_btn_, "dockAction", countdown ? QStringLiteral("stop") : QStringLiteral("record"));

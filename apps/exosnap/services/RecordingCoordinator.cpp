@@ -4,7 +4,13 @@
 #include "../../../libs/recorder_core/src/mic_meter_service.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QImage>
 #include <QMetaObject>
+#include <QRegularExpression>
 
 #include <algorithm>
 #include <cctype>
@@ -13,6 +19,7 @@
 #include <ctime>
 #include <sstream>
 #include <string_view>
+#include <thread>
 
 #include "../diagnostics/AppLog.h"
 #include "../models/FilenameBuilder.h"
@@ -823,6 +830,200 @@ void RecordingCoordinator::SetAppMeterUpdatedCallback(AppMeterUpdatedCallback cb
 }
 void RecordingCoordinator::SetRecordingMeterCallback(RecordingMeterCallback cb) {
     on_recording_meter_updated_ = std::move(cb);
+}
+
+void RecordingCoordinator::SetFrameCapturedCallback(FrameCapturedCallback cb) {
+    on_frame_captured_ = std::move(cb);
+}
+
+void RecordingCoordinator::SetReadyFrameSource(std::function<QImage()> getter) {
+    ready_frame_source_ = std::move(getter);
+}
+
+void RecordingCoordinator::CaptureFrame() {
+    using diagnostics::AppLog;
+
+    const auto st = State();
+    if (st == UiRecordingState::Recording || st == UiRecordingState::Paused) {
+        AppLog::info(QStringLiteral("capture_frame"), QStringLiteral("snapshot requested"));
+
+        // Capture everything needed by value — the callback fires from VideoThread;
+        // the coordinator is alive because the recording thread is joined before
+        // destruction, but we still avoid capturing 'this' for safety.
+        const FrameCapturedCallback cb_copy = on_frame_captured_;
+        const std::wstring folder = output_settings_.output_folder.wstring();
+        const bool has_ctx = has_output_target_context_;
+        const FilenameTargetContext ctx = output_target_context_;
+
+        session_.RequestFrameSnapshot([cb_copy, folder, has_ctx, ctx](bool ok, uint32_t w, uint32_t h,
+                                                                      std::vector<uint8_t> bgra,
+                                                                      const std::string& err) mutable {
+            if (!ok) {
+                AppLog::warning(QStringLiteral("capture_frame"),
+                                QStringLiteral("readback failed: ") + QString::fromStdString(err));
+                QMetaObject::invokeMethod(
+                    QCoreApplication::instance(),
+                    [cb_copy, msg = QString::fromStdString(err)]() mutable {
+                        if (cb_copy)
+                            cb_copy(false, {}, msg);
+                    },
+                    Qt::QueuedConnection);
+                return;
+            }
+
+            // Build output path (collision-safe) from folder and context.
+            const QString dir_path = QString::fromStdWString(folder);
+            const QString datetime = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss"));
+            QString name_base = datetime;
+            if (has_ctx && !ctx.target_name.empty()) {
+                QString tname = QString::fromStdWString(ctx.target_name);
+                // Sanitize
+                static const QRegularExpression kBad(QStringLiteral("[<>:\"/\\\\|?*\\x00-\\x1f]"));
+                tname.replace(kBad, QStringLiteral("_"));
+                if (tname.length() > 32)
+                    tname = tname.left(32);
+                name_base += QStringLiteral("_") + tname;
+            }
+            name_base += QStringLiteral("_frame");
+
+            QDir out_dir(dir_path);
+            if (!out_dir.exists())
+                out_dir.mkpath(QStringLiteral("."));
+
+            auto uniquePath = [&]() -> QString {
+                QString p = out_dir.absoluteFilePath(name_base + QStringLiteral(".png"));
+                if (!QFileInfo::exists(p))
+                    return p;
+                for (int s = 1; s <= 999; ++s) {
+                    p = out_dir.absoluteFilePath(QStringLiteral("%1_%2.png").arg(name_base).arg(s, 3, 10, QChar('0')));
+                    if (!QFileInfo::exists(p))
+                        return p;
+                }
+                return p;
+            };
+            const QString out_path = uniquePath();
+
+            // PNG write off the VideoThread (detached worker thread).
+            std::thread([cb_copy, w, h, bgra = std::move(bgra), out_path]() mutable {
+                // BGRA bytes → QImage (Format_BGRA8888 = B G R A in memory order)
+                QImage img(static_cast<int>(w), static_cast<int>(h), QImage::Format_ARGB32);
+                std::memcpy(img.bits(), bgra.data(), bgra.size());
+
+                const QString tmp_path = out_path + QStringLiteral(".tmp");
+                bool saved = img.save(tmp_path, "PNG");
+                if (saved) {
+                    if (QFileInfo::exists(out_path))
+                        QFile::remove(out_path);
+                    saved = QFile::rename(tmp_path, out_path);
+                }
+                if (!saved)
+                    QFile::remove(tmp_path);
+
+                QMetaObject::invokeMethod(
+                    QCoreApplication::instance(),
+                    [cb_copy, saved, out_path]() mutable {
+                        if (saved) {
+                            AppLog::info(QStringLiteral("capture_frame"), QStringLiteral("frame saved: ") + out_path);
+                            if (cb_copy)
+                                cb_copy(true, out_path, {});
+                        } else {
+                            AppLog::warning(QStringLiteral("capture_frame"),
+                                            QStringLiteral("PNG write failed: ") + out_path);
+                            if (cb_copy)
+                                cb_copy(false, {}, QStringLiteral("Failed to write PNG file"));
+                        }
+                    },
+                    Qt::QueuedConnection);
+            }).detach();
+        });
+        return;
+    }
+
+    if (st == UiRecordingState::Ready) {
+        if (!ready_frame_source_) {
+            AppLog::warning(QStringLiteral("capture_frame"), QStringLiteral("no preview frame source in Ready state"));
+            if (on_frame_captured_)
+                on_frame_captured_(false, {}, QStringLiteral("No preview frame available"));
+            return;
+        }
+        QImage frame = ready_frame_source_();
+        if (frame.isNull()) {
+            AppLog::warning(QStringLiteral("capture_frame"), QStringLiteral("preview frame not yet available"));
+            if (on_frame_captured_)
+                on_frame_captured_(false, {}, QStringLiteral("No preview frame available yet"));
+            return;
+        }
+
+        AppLog::info(QStringLiteral("capture_frame"), QStringLiteral("snapshot from preview (Ready)"));
+
+        const std::wstring folder = output_settings_.output_folder.wstring();
+        const bool has_ctx = has_output_target_context_;
+        const FilenameTargetContext ctx = output_target_context_;
+        const FrameCapturedCallback cb_copy = on_frame_captured_;
+
+        std::thread([cb_copy, frame = std::move(frame), folder, has_ctx, ctx]() mutable {
+            const QString dir_path = QString::fromStdWString(folder);
+            const QString datetime = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss"));
+            QString name_base = datetime;
+            if (has_ctx && !ctx.target_name.empty()) {
+                QString tname = QString::fromStdWString(ctx.target_name);
+                static const QRegularExpression kBad(QStringLiteral("[<>:\"/\\\\|?*\\x00-\\x1f]"));
+                tname.replace(kBad, QStringLiteral("_"));
+                if (tname.length() > 32)
+                    tname = tname.left(32);
+                name_base += QStringLiteral("_") + tname;
+            }
+            name_base += QStringLiteral("_frame");
+
+            QDir out_dir(dir_path);
+            if (!out_dir.exists())
+                out_dir.mkpath(QStringLiteral("."));
+
+            QString out_path = out_dir.absoluteFilePath(name_base + QStringLiteral(".png"));
+            if (QFileInfo::exists(out_path)) {
+                for (int s = 1; s <= 999; ++s) {
+                    out_path =
+                        out_dir.absoluteFilePath(QStringLiteral("%1_%2.png").arg(name_base).arg(s, 3, 10, QChar('0')));
+                    if (!QFileInfo::exists(out_path))
+                        break;
+                }
+            }
+
+            const QString tmp_path = out_path + QStringLiteral(".tmp");
+            bool saved = frame.save(tmp_path, "PNG");
+            if (saved) {
+                if (QFileInfo::exists(out_path))
+                    QFile::remove(out_path);
+                saved = QFile::rename(tmp_path, out_path);
+            }
+            if (!saved)
+                QFile::remove(tmp_path);
+
+            QMetaObject::invokeMethod(
+                QCoreApplication::instance(),
+                [cb_copy, saved, out_path]() mutable {
+                    if (saved) {
+                        AppLog::info(QStringLiteral("capture_frame"),
+                                     QStringLiteral("frame saved (Ready): ") + out_path);
+                        if (cb_copy)
+                            cb_copy(true, out_path, {});
+                    } else {
+                        AppLog::warning(QStringLiteral("capture_frame"),
+                                        QStringLiteral("PNG write failed (Ready): ") + out_path);
+                        if (cb_copy)
+                            cb_copy(false, {}, QStringLiteral("Failed to write PNG file"));
+                    }
+                },
+                Qt::QueuedConnection);
+        }).detach();
+        return;
+    }
+
+    // Unsupported state
+    AppLog::warning(QStringLiteral("capture_frame"),
+                    QStringLiteral("rejected: unsupported state %1").arg(static_cast<int>(st)));
+    if (on_frame_captured_)
+        on_frame_captured_(false, {}, QStringLiteral("Capture frame is not available in this state"));
 }
 
 void RecordingCoordinator::PostStateChange(UiRecordingState new_state) {

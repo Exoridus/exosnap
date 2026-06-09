@@ -23,6 +23,7 @@ class HotkeysPage : public QWidget {
     void setService(GlobalHotkeyService* service);
 
     // Update binding display from an external source (no-service / test mode only).
+    // Array covers the first two active actions for backward compatibility with tests.
     void setBindings(const std::array<QKeySequence, 2>& bindings);
 
     // Lock / unlock editing (e.g. while recording).
@@ -34,7 +35,7 @@ class HotkeysPage : public QWidget {
 
   private:
     static constexpr int kActionCount = 10;
-    static constexpr int kActiveActionCount = 2;
+    static constexpr int kActiveActionCount = 3;
 
     void buildRow(int index, const QString& action, const QKeySequence& default_binding, bool supported,
                   QVBoxLayout* parent_layout, QWidget* parent_widget);

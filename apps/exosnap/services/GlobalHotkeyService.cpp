@@ -111,6 +111,7 @@ GlobalHotkeyService::GlobalHotkeyService(QObject* parent) : QObject(parent) {
     // Initialise defaults — registrar is not yet available.
     bindings_[0] = DefaultBinding(HotkeyAction::ToggleRecording);
     bindings_[1] = DefaultBinding(HotkeyAction::TogglePause);
+    bindings_[2] = DefaultBinding(HotkeyAction::CaptureFrame); // Unset by default
 }
 
 void GlobalHotkeyService::SetRegistrar(IHotkeyRegistrar* registrar) {
@@ -248,6 +249,8 @@ QKeySequence GlobalHotkeyService::DefaultBinding(HotkeyAction action) {
         return QKeySequence(Qt::ALT | Qt::Key_F9);
     case HotkeyAction::TogglePause:
         return QKeySequence();
+    case HotkeyAction::CaptureFrame:
+        return QKeySequence(); // no default binding per spec
     }
     return {};
 }
@@ -258,12 +261,14 @@ QString GlobalHotkeyService::ActionDisplayName(HotkeyAction action) {
         return QStringLiteral("Start / Stop recording");
     case HotkeyAction::TogglePause:
         return QStringLiteral("Pause / Resume");
+    case HotkeyAction::CaptureFrame:
+        return QStringLiteral("Capture frame");
     }
     return QStringLiteral("Unknown");
 }
 
 int GlobalHotkeyService::Win32IdForAction(HotkeyAction action) {
-    return static_cast<int>(action) + 1; // IDs are 1-based: ToggleRecording=1, TogglePause=2
+    return static_cast<int>(action) + 1; // IDs are 1-based: ToggleRecording=1, TogglePause=2, CaptureFrame=3
 }
 
 RebindError GlobalHotkeyService::ValidateSequence(QKeySequence seq) {

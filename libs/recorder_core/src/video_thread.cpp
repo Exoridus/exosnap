@@ -1171,6 +1171,108 @@ void VideoThread::Run() {
         return true;
     };
 
+    // --- Frame snapshot (CaptureFrame) ---
+    // Lazily created staging texture (USAGE_STAGING + CPU_ACCESS_READ) for NV12→BGRA readback.
+    // Lives until the encode loop exits; reused across multiple snapshot requests.
+    winrt::com_ptr<ID3D11Texture2D> snapshotStagingTex;
+    // Callback type alias — must precede the lambda that uses it.
+    using SnapshotCallback = std::function<void(bool, uint32_t, uint32_t, std::vector<uint8_t>, std::string)>;
+
+    // Perform a one-shot NV12→BGRA readback for the current slot if a snapshot is pending.
+    // Called only on real frames (not duplicates) to ensure non-stale data.
+    // NOTE: The Map(D3D11_MAP_READ) call below provides the minimal synchronization point;
+    //       it stalls the thread until the GPU completes the CopyResource, typically <1 ms.
+    auto performSnapshotIfRequested = [&](int32_t slot_idx) {
+        if (!m_state.snapshot_requested.load())
+            return;
+
+        // Lazily allocate the staging texture on first use.
+        if (!snapshotStagingTex) {
+            D3D11_TEXTURE2D_DESC sd{};
+            sd.Width = encodeWidth;
+            sd.Height = encodeHeight;
+            sd.MipLevels = 1;
+            sd.ArraySize = 1;
+            sd.Format = DXGI_FORMAT_NV12;
+            sd.SampleDesc = {1, 0};
+            sd.Usage = D3D11_USAGE_STAGING;
+            sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            sd.BindFlags = 0;
+            HRESULT shr = d3dDevice->CreateTexture2D(&sd, nullptr, snapshotStagingTex.put());
+            if (FAILED(shr)) {
+                char errbuf[80];
+                snprintf(errbuf, sizeof(errbuf), "snapshot staging tex failed 0x%08lX",
+                         static_cast<unsigned long>(shr));
+                SnapshotCallback pending_cb;
+                {
+                    std::lock_guard lk(m_state.snapshot_callback_mutex);
+                    pending_cb = std::move(m_state.snapshot_callback);
+                    m_state.snapshot_callback = nullptr;
+                    m_state.snapshot_requested.store(false);
+                }
+                if (pending_cb)
+                    pending_cb(false, 0, 0, {}, errbuf);
+                return;
+            }
+        }
+
+        // Copy the final NV12 encode-ready frame to the staging texture.
+        d3dContext->CopyResource(snapshotStagingTex.get(), nv12Textures[slot_idx].get());
+
+        // Map for CPU read (synchronization point — stalls until GPU copy completes).
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        HRESULT mhr = d3dContext->Map(snapshotStagingTex.get(), 0, D3D11_MAP_READ, 0, &mapped);
+
+        SnapshotCallback pending_cb;
+        {
+            std::lock_guard lk(m_state.snapshot_callback_mutex);
+            pending_cb = std::move(m_state.snapshot_callback);
+            m_state.snapshot_callback = nullptr;
+            m_state.snapshot_requested.store(false);
+        }
+
+        if (FAILED(mhr)) {
+            char errbuf[80];
+            snprintf(errbuf, sizeof(errbuf), "snapshot map failed 0x%08lX", static_cast<unsigned long>(mhr));
+            if (pending_cb)
+                pending_cb(false, 0, 0, {}, errbuf);
+            return;
+        }
+
+        // NV12 layout:
+        //   Plane Y:  rows 0 .. height-1, each row = RowPitch bytes, 1 byte per pixel
+        //   Plane UV: rows height .. height+height/2-1, interleaved U V, same RowPitch
+        const auto* y_plane = static_cast<const uint8_t*>(mapped.pData);
+        const auto* uv_plane = y_plane + static_cast<size_t>(mapped.RowPitch) * encodeHeight;
+        const uint32_t y_pitch = mapped.RowPitch;
+        const uint32_t uv_pitch = mapped.RowPitch;
+
+        std::vector<uint8_t> bgra;
+        bgra.resize(static_cast<size_t>(encodeWidth) * encodeHeight * 4u);
+
+        // BT.601 limited-range (studio swing) YUV → full-range RGB → BGRA
+        for (uint32_t row = 0; row < encodeHeight; ++row) {
+            const uint8_t* y_row = y_plane + static_cast<size_t>(row) * y_pitch;
+            const uint8_t* uv_row = uv_plane + static_cast<size_t>(row / 2u) * uv_pitch;
+            uint8_t* out_row = bgra.data() + static_cast<size_t>(row) * encodeWidth * 4u;
+            for (uint32_t col = 0; col < encodeWidth; ++col) {
+                const int y_val = static_cast<int>(y_row[col]) - 16;
+                const int u_val = static_cast<int>(uv_row[col & ~1u]) - 128;
+                const int v_val = static_cast<int>(uv_row[(col & ~1u) + 1u]) - 128;
+                auto clamp255 = [](int v) -> uint8_t { return static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v); };
+                out_row[col * 4u + 0u] = clamp255((298 * y_val + 516 * u_val + 128) >> 8);               // B
+                out_row[col * 4u + 1u] = clamp255((298 * y_val - 100 * u_val - 208 * v_val + 128) >> 8); // G
+                out_row[col * 4u + 2u] = clamp255((298 * y_val + 409 * v_val + 128) >> 8);               // R
+                out_row[col * 4u + 3u] = 255u;                                                           // A
+            }
+        }
+
+        d3dContext->Unmap(snapshotStagingTex.get(), 0);
+
+        if (pending_cb)
+            pending_cb(true, encodeWidth, encodeHeight, std::move(bgra), {});
+    };
+
     if (m_state.config.cfr) {
         // ====================================================================
         // CFR path: QPC-driven scheduler — duplicate/drop to hit constant rate
@@ -1374,6 +1476,8 @@ void VideoThread::Run() {
                                 d3dContext->CopyResource(refNv12.get(), nv12Textures[slot].get());
                                 refNv12Valid = true;
                             }
+                            // Capture frame snapshot on real (non-duplicate) frames.
+                            performSnapshotIfRequested(slot);
                             frameWritten = true;
                         }
                     }
@@ -1590,6 +1694,9 @@ void VideoThread::Run() {
                         latestTex = nullptr;
 
                         if (SUCCEEDED(hr)) {
+                            // Capture frame snapshot on real frames (VFR path).
+                            performSnapshotIfRequested(slot);
+
                             EncodedVideoPacket pkt;
                             std::string encErr;
                             bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, &pkt, encErr);

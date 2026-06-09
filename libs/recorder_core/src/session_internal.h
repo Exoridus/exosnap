@@ -108,6 +108,13 @@ struct SessionState {
     // Video threads adjust their epoch on resume so PTS continues seamlessly.
     std::atomic<bool> pause_requested{false};
 
+    // Frame snapshot (CaptureFrame) — VideoThread reads the flag on its next real frame,
+    // performs a one-shot NV12→BGRA readback, fires the callback, then clears the flag.
+    // At most one pending request is allowed; a second request while one is pending is ignored.
+    std::atomic<bool> snapshot_requested{false};
+    std::mutex snapshot_callback_mutex;
+    std::function<void(bool, uint32_t, uint32_t, std::vector<uint8_t>, std::string)> snapshot_callback;
+
     // First-error-wins: only the first failing thread records here
     mutable std::mutex failure_mutex;
     bool failure_recorded = false;
