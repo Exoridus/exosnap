@@ -253,9 +253,12 @@ TEST_F(LogsPageTest, CopyButtonWritesVisibleEntriesToClipboard) {
 
     auto* copy = page.findChild<QPushButton*>(QStringLiteral("logCopyBtn"));
     ASSERT_NE(copy, nullptr);
+
+    const QString previous_clipboard = QGuiApplication::clipboard()->text();
     copy->click();
 
     EXPECT_EQ(QGuiApplication::clipboard()->text(), page.copyText());
+    QGuiApplication::clipboard()->setText(previous_clipboard);
 }
 
 TEST_F(LogsPageTest, ExportUsesCompleteHistoryAndDeterministicUtf8Formatting) {
