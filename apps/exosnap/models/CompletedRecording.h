@@ -18,6 +18,49 @@
 
 namespace exosnap {
 
+// Overall outcome of a (possibly multi-segment) recording. A recording that
+// produced some valid segments but failed to finalize one is reported as
+// CompletedWithPartialFailure — never silently downgraded to a plain success.
+enum class CompletedRecordingStatus {
+    Completed,
+    CompletedWithPartialFailure,
+    Failed,
+};
+
+// One finalized media segment of a logical recording (SPLIT-RECORDING-R1).
+// Single-file recordings carry exactly one segment (index 0).
+struct CompletedRecordingSegment {
+    QString file_path;
+    uint32_t index = 0;            // 0-based segment index
+    uint64_t session_start_ms = 0; // start on the continuous session timeline
+    double duration_seconds = 0.0; // segment-local media duration
+    qint64 file_size_bytes = 0;
+    bool succeeded = false; // false => finalize failed / file quarantined
+
+    [[nodiscard]] QString fileName() const {
+        return file_path.isEmpty() ? QString() : QFileInfo(file_path).fileName();
+    }
+
+    [[nodiscard]] QString parentFolder() const {
+        return file_path.isEmpty() ? QString() : QFileInfo(file_path).absolutePath();
+    }
+
+    // Honest existence check: a segment reported succeeded but missing on disk
+    // (user deleted/moved it) is not "present".
+    [[nodiscard]] bool fileExists() const {
+        return succeeded && !file_path.isEmpty() && QFileInfo::exists(file_path);
+    }
+
+    bool operator==(const CompletedRecordingSegment& o) const noexcept {
+        return file_path == o.file_path && index == o.index && session_start_ms == o.session_start_ms &&
+               duration_seconds == o.duration_seconds && file_size_bytes == o.file_size_bytes &&
+               succeeded == o.succeeded;
+    }
+    bool operator!=(const CompletedRecordingSegment& o) const noexcept {
+        return !(*this == o);
+    }
+};
+
 struct CompletedRecording {
     QString file_path;
     QString display_name;
@@ -44,6 +87,56 @@ struct CompletedRecording {
     // Recording markers (finalized list after recording completes)
     std::vector<RecordingMarker> markers;
     QString marker_sidecar_path;
+
+    // Multi-segment split results (SPLIT-RECORDING-R1). A single-file recording
+    // carries exactly one segment whose file_path equals file_path above; a split
+    // recording carries one entry per finalized segment. Empty is treated as a
+    // legacy single-file recording described by the scalar fields above.
+    std::vector<CompletedRecordingSegment> segments;
+
+    [[nodiscard]] bool isMultiSegment() const noexcept {
+        return segments.size() > 1;
+    }
+
+    [[nodiscard]] int segmentCount() const noexcept {
+        return segments.empty() ? (hasFile() ? 1 : 0) : static_cast<int>(segments.size());
+    }
+
+    // Overall status derived from the per-segment success flags. A recording with
+    // no segments falls back to the scalar succeeded flag.
+    [[nodiscard]] CompletedRecordingStatus status() const noexcept {
+        if (segments.empty())
+            return succeeded ? CompletedRecordingStatus::Completed : CompletedRecordingStatus::Failed;
+        bool any_ok = false;
+        bool any_fail = false;
+        for (const auto& s : segments) {
+            any_ok |= s.succeeded;
+            any_fail |= !s.succeeded;
+        }
+        if (any_ok && any_fail)
+            return CompletedRecordingStatus::CompletedWithPartialFailure;
+        return any_ok ? CompletedRecordingStatus::Completed : CompletedRecordingStatus::Failed;
+    }
+
+    // Sum of segment-local durations (or the scalar duration for single-file).
+    [[nodiscard]] double totalDurationSeconds() const noexcept {
+        if (segments.empty())
+            return duration_seconds;
+        double total = 0.0;
+        for (const auto& s : segments)
+            total += s.duration_seconds;
+        return total;
+    }
+
+    // Sum of segment file sizes (or the scalar size for single-file).
+    [[nodiscard]] qint64 totalSizeBytes() const noexcept {
+        if (segments.empty())
+            return file_size_bytes;
+        qint64 total = 0;
+        for (const auto& s : segments)
+            total += s.file_size_bytes;
+        return total;
+    }
 
     [[nodiscard]] bool hasFile() const noexcept {
         return !file_path.isEmpty() && succeeded;

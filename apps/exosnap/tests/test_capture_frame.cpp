@@ -49,7 +49,7 @@ class CaptureFrameTest : public ::testing::Test {
 
 TEST_F(CaptureFrameTest, CaptureFrameActionIsTyped) {
     EXPECT_EQ(static_cast<int>(HotkeyAction::CaptureFrame), 2);
-    EXPECT_EQ(kHotkeyActionCount, 4);
+    EXPECT_EQ(kHotkeyActionCount, 5);
 }
 
 // ── Test 2: No default binding for CaptureFrame ─────────────────────────────
@@ -122,7 +122,7 @@ TEST_F(CaptureFrameTest, CaptureFrameBindingPersistsRoundTrip) {
     const QKeySequence seq(Qt::ALT | Qt::Key_F7);
     [[maybe_unused]] auto r = svc.TrySetBinding(HotkeyAction::CaptureFrame, seq);
 
-    std::array<QString, 4> stored{};
+    HotkeyBindings stored{};
     svc.SaveToStrings(stored);
 
     GlobalHotkeyService svc2;

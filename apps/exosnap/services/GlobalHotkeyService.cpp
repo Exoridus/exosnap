@@ -113,6 +113,7 @@ GlobalHotkeyService::GlobalHotkeyService(QObject* parent) : QObject(parent) {
     bindings_[1] = DefaultBinding(HotkeyAction::TogglePause);
     bindings_[2] = DefaultBinding(HotkeyAction::CaptureFrame);
     bindings_[3] = DefaultBinding(HotkeyAction::AddMarker);
+    bindings_[4] = DefaultBinding(HotkeyAction::SplitRecording);
 }
 
 void GlobalHotkeyService::SetRegistrar(IHotkeyRegistrar* registrar) {
@@ -213,7 +214,7 @@ QKeySequence GlobalHotkeyService::GetBinding(HotkeyAction action) const {
     return bindings_[static_cast<std::size_t>(idx)];
 }
 
-void GlobalHotkeyService::LoadFromStrings(const std::array<QString, 4>& stored) {
+void GlobalHotkeyService::LoadFromStrings(const HotkeyBindings& stored) {
     // Only load active action indices (0 and 1).
     for (int i = 0; i < kHotkeyActionCount; ++i) {
         const HotkeyAction action = static_cast<HotkeyAction>(i);
@@ -237,7 +238,7 @@ void GlobalHotkeyService::LoadFromStrings(const std::array<QString, 4>& stored) 
     }
 }
 
-void GlobalHotkeyService::SaveToStrings(std::array<QString, 4>& out) const {
+void GlobalHotkeyService::SaveToStrings(HotkeyBindings& out) const {
     for (int i = 0; i < kHotkeyActionCount; ++i) {
         out[static_cast<std::size_t>(i)] = bindings_[static_cast<std::size_t>(i)].toString(QKeySequence::PortableText);
     }
@@ -253,6 +254,8 @@ QKeySequence GlobalHotkeyService::DefaultBinding(HotkeyAction action) {
         return QKeySequence(); // no default binding per spec
     case HotkeyAction::AddMarker:
         return QKeySequence(); // no default binding per spec
+    case HotkeyAction::SplitRecording:
+        return QKeySequence(); // unset by default per SPLIT-RECORDING-R1
     }
     return {};
 }
@@ -267,6 +270,8 @@ QString GlobalHotkeyService::ActionDisplayName(HotkeyAction action) {
         return QStringLiteral("Capture frame");
     case HotkeyAction::AddMarker:
         return QStringLiteral("Add marker");
+    case HotkeyAction::SplitRecording:
+        return QStringLiteral("Split recording");
     }
     return QStringLiteral("Unknown");
 }

@@ -49,6 +49,10 @@ class RecordingCoordinator {
     using RecordingMeterCallback = std::function<void(const std::array<float, 3>&)>;
     // Capture frame result: (success, saved_path_or_empty, error_message_or_empty)
     using FrameCapturedCallback = std::function<void(bool success, const QString& path, const QString& error)>;
+    // Transient split feedback for the UI: (accepted, message). On accept the
+    // message is e.g. "Started segment 2"; on reject it explains why. Fired on the
+    // Qt main thread.
+    using SplitFeedbackCallback = std::function<void(bool accepted, const QString& message)>;
 
     RecordingCoordinator();
     ~RecordingCoordinator();
@@ -75,6 +79,22 @@ class RecordingCoordinator {
     void StopRecording();
     void PauseRecording();
     void ResumeRecording();
+
+    // Typed split command path (SPLIT-RECORDING-R1). Routes the manual button and
+    // the global hotkey through the exact same entry point. Accepted only while a
+    // session is active (Recording or Paused) and no split transition is already
+    // in flight; otherwise rejected honestly (logged, no-op). Returns true if the
+    // request was accepted and forwarded to the engine.
+    bool RequestSplit(recorder_core::SplitTriggerSource source);
+
+    // True while a split boundary is pending (request forwarded, new segment not
+    // yet started). Used to gate the UI so concurrent requests are coalesced.
+    [[nodiscard]] bool IsSplitPending() const noexcept;
+
+    // Configure automatic/manual split policy applied at the next StartRecording.
+    void SetSplitSettings(const recorder_core::RecordingSplitSettings& settings);
+    [[nodiscard]] recorder_core::RecordingSplitSettings SplitSettings() const noexcept;
+
     void AddMarker(RecordingMarkerType type = RecordingMarkerType::General);
     [[nodiscard]] const std::vector<RecordingMarker>& Markers() const noexcept;
     [[nodiscard]] std::filesystem::path MarkerSidecarPath() const;
@@ -106,6 +126,7 @@ class RecordingCoordinator {
     void SetAppMeterUpdatedCallback(AppMeterUpdatedCallback cb);
     void SetRecordingMeterCallback(RecordingMeterCallback cb);
     void SetFrameCapturedCallback(FrameCapturedCallback cb);
+    void SetSplitFeedbackCallback(SplitFeedbackCallback cb);
 
     // Inject a getter for the latest preview QImage (used in Ready state).
     // The getter is called on the calling thread; must be safe to call from the UI thread.
@@ -163,6 +184,18 @@ class RecordingCoordinator {
     std::vector<RecordingMarker> markers_;
     double last_elapsed_seconds_ = 0.0;
     bool markers_limit_reported_ = false;
+
+    // Split recording (SPLIT-RECORDING-R1)
+    recorder_core::RecordingSplitSettings split_settings_{};
+    // True between a forwarded split request and the next segment being reported
+    // by the engine. Guards against concurrent/coalesced requests.
+    std::atomic<bool> split_pending_{false};
+    // Segments accumulated from the engine SegmentCallback (mux worker thread).
+    mutable std::mutex segments_mutex_;
+    std::vector<recorder_core::CompletedSegment> segments_;
+    SplitFeedbackCallback on_split_feedback_;
+    void PostSplitFeedback(bool accepted, QString message);
+    void OnSegmentCompleted(const recorder_core::CompletedSegment& segment);
 
     StateChangedCallback on_state_changed_;
     StatsUpdatedCallback on_stats_updated_;

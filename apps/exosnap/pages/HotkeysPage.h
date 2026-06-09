@@ -35,7 +35,7 @@ class HotkeysPage : public QWidget {
 
   private:
     static constexpr int kActionCount = 11;
-    static constexpr int kActiveActionCount = 4;
+    static constexpr int kActiveActionCount = 5;
 
     void buildRow(int index, const QString& action, const QKeySequence& default_binding, bool supported,
                   QVBoxLayout* parent_layout, QWidget* parent_widget);

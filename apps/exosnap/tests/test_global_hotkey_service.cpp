@@ -158,13 +158,13 @@ TEST_F(HotkeyServiceTest, PersistenceNotUpdatedOnFailure) {
     FakeRegistrar reg;
     svc.SetRegistrar(&reg);
 
-    std::array<QString, 4> before{};
+    HotkeyBindings before{};
     svc.SaveToStrings(before);
 
     reg.fail_next_n = 1;
     [[maybe_unused]] auto r = svc.TrySetBinding(HotkeyAction::ToggleRecording, QKeySequence(Qt::ALT | Qt::Key_F8));
 
-    std::array<QString, 4> after{};
+    HotkeyBindings after{};
     svc.SaveToStrings(after);
 
     EXPECT_EQ(before[0], after[0]); // ToggleRecording unchanged
@@ -221,7 +221,7 @@ TEST_F(HotkeyServiceTest, ResetAllToDefaultsRestoresAll) {
 // 14. Invalid persisted string safely falls back to default.
 TEST_F(HotkeyServiceTest, InvalidPersistedStringSafelyFallsToDefault) {
     GlobalHotkeyService svc;
-    std::array<QString, 4> stored = {QStringLiteral("NOT_A_VALID_SEQUENCE"), QString(), QString(), QString()};
+    HotkeyBindings stored = {QStringLiteral("NOT_A_VALID_SEQUENCE"), QString(), QString(), QString(), QString()};
     svc.LoadFromStrings(stored);
     // Invalid string: should parse to empty via QKeySequence, then fall through to default.
     // QKeySequence::fromString returns empty for completely unknown strings.
@@ -234,7 +234,7 @@ TEST_F(HotkeyServiceTest, InvalidPersistedStringSafelyFallsToDefault) {
 // 15. LoadFromStrings with valid portable-text binding is correctly restored.
 TEST_F(HotkeyServiceTest, LoadFromStringsRestoresValidBinding) {
     GlobalHotkeyService svc;
-    std::array<QString, 4> stored = {QStringLiteral("Ctrl+Shift+R"), QString(), QString(), QString()};
+    HotkeyBindings stored = {QStringLiteral("Ctrl+Shift+R"), QString(), QString(), QString(), QString()};
     svc.LoadFromStrings(stored);
     EXPECT_EQ(svc.GetBinding(HotkeyAction::ToggleRecording),
               QKeySequence::fromString(QStringLiteral("Ctrl+Shift+R"), QKeySequence::PortableText));
@@ -300,9 +300,42 @@ TEST_F(HotkeyServiceTest, ResetPauseToDefaultIsEmpty) {
 //     not to any specific key such as Alt+F10.
 TEST_F(HotkeyServiceTest, InvalidPersistedPauseStringFallsToEmpty) {
     GlobalHotkeyService svc;
-    std::array<QString, 4> stored = {QString(), QStringLiteral("NOT_VALID_SEQUENCE"), QString(), QString()};
+    HotkeyBindings stored = {QString(), QStringLiteral("NOT_VALID_SEQUENCE"), QString(), QString(), QString()};
     svc.LoadFromStrings(stored);
     EXPECT_TRUE(svc.GetBinding(HotkeyAction::TogglePause).isEmpty());
+}
+
+// 21. SplitRecording is unset by default (no default binding per SPLIT-RECORDING-R1).
+TEST_F(HotkeyServiceTest, SplitRecordingUnsetByDefault) {
+    EXPECT_TRUE(GlobalHotkeyService::DefaultBinding(HotkeyAction::SplitRecording).isEmpty());
+    GlobalHotkeyService svc;
+    EXPECT_TRUE(svc.GetBinding(HotkeyAction::SplitRecording).isEmpty());
+}
+
+// 22. SplitRecording participates in conflict detection and rebinds on its own path.
+TEST_F(HotkeyServiceTest, SplitRecordingRebindAndConflict) {
+    GlobalHotkeyService svc;
+    FakeRegistrar reg;
+    svc.SetRegistrar(&reg);
+
+    const QKeySequence seq(Qt::ControlModifier | Qt::ShiftModifier | Qt::Key_S);
+    RebindResult ok = svc.TrySetBinding(HotkeyAction::SplitRecording, seq);
+    ASSERT_TRUE(ok.success);
+    EXPECT_EQ(svc.GetBinding(HotkeyAction::SplitRecording), seq);
+    EXPECT_TRUE(reg.IsRegistered(GlobalHotkeyService::Win32IdForAction(HotkeyAction::SplitRecording)));
+
+    // Assigning the same binding to AddMarker must be reported as a conflict against SplitRecording.
+    RebindResult conflict = svc.TrySetBinding(HotkeyAction::AddMarker, seq);
+    EXPECT_FALSE(conflict.success);
+    EXPECT_EQ(conflict.error, RebindError::InternalConflict);
+    EXPECT_EQ(conflict.conflict_action, HotkeyAction::SplitRecording);
+}
+
+// 23. The action count and Win32 id for SplitRecording are stable.
+TEST_F(HotkeyServiceTest, SplitRecordingActionIndexStable) {
+    EXPECT_EQ(kHotkeyActionCount, 5);
+    EXPECT_EQ(static_cast<int>(HotkeyAction::SplitRecording), 4);
+    EXPECT_EQ(GlobalHotkeyService::Win32IdForAction(HotkeyAction::SplitRecording), 5);
 }
 
 } // namespace

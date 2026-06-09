@@ -509,6 +509,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.target = target;
     config.crop_region = crop_region;
     config.output_path = output_path;
+    config.split = split_settings_;
 
     config.webcam.enabled = webcam_settings_.enabled;
     config.webcam.frame_provider = &webcam_service_;
@@ -583,6 +584,12 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
 
     session_.SetStatsCallback([this](const recorder_core::SessionStats& stats) { PostStats(stats); });
     session_.SetMeterCallback([this](const recorder_core::MeterSnapshot& m) { PostRecordingMeter(m.per_track_rms); });
+    {
+        std::lock_guard<std::mutex> lock(segments_mutex_);
+        segments_.clear();
+    }
+    split_pending_.store(false);
+    session_.SetSegmentCallback([this](const recorder_core::CompletedSegment& seg) { OnSegmentCompleted(seg); });
 
     if (webcam_settings_.enabled) {
         webcam_service_.Stop();
@@ -640,6 +647,108 @@ void RecordingCoordinator::ResumeRecording() {
     is_paused_.store(false);
     session_.Resume();
     PostStateChange(UiRecordingState::Recording);
+}
+
+static const char* SplitTriggerName(recorder_core::SplitTriggerSource source) {
+    switch (source) {
+    case recorder_core::SplitTriggerSource::AutomaticDuration:
+        return "auto";
+    case recorder_core::SplitTriggerSource::ManualButton:
+        return "button";
+    case recorder_core::SplitTriggerSource::Hotkey:
+        return "hotkey";
+    }
+    return "unknown";
+}
+
+bool RecordingCoordinator::RequestSplit(recorder_core::SplitTriggerSource source) {
+    // Central state validation: a split is meaningful only during an active
+    // session. Reject honestly elsewhere instead of silently swallowing.
+    const auto st = State();
+    if (!is_recording_.load() || (st != UiRecordingState::Recording && st != UiRecordingState::Paused)) {
+        diagnostics::AppLog::warning(QStringLiteral("split"),
+                                     QStringLiteral("rejected: not recording (state=%1 source=%2)")
+                                         .arg(static_cast<int>(st))
+                                         .arg(QLatin1String(SplitTriggerName(source))));
+        PostSplitFeedback(false, QStringLiteral("Split is only available while recording."));
+        return false;
+    }
+
+    // Coalesce concurrent requests: only one boundary may be pending at a time.
+    // The engine also coalesces via a monotonic seq, but rejecting here keeps the
+    // UI feedback honest ("already splitting") and avoids spurious toasts.
+    bool expected = false;
+    if (!split_pending_.compare_exchange_strong(expected, true)) {
+        diagnostics::AppLog::info(QStringLiteral("split"),
+                                  QStringLiteral("coalesced: split already pending (source=%1)")
+                                      .arg(QLatin1String(SplitTriggerName(source))));
+        return false;
+    }
+
+    diagnostics::AppLog::info(QStringLiteral("split"), QStringLiteral("requested source=%1 paused=%2")
+                                                           .arg(QLatin1String(SplitTriggerName(source)))
+                                                           .arg(st == UiRecordingState::Paused));
+    session_.RequestSplit(source);
+    return true;
+}
+
+bool RecordingCoordinator::IsSplitPending() const noexcept {
+    return split_pending_.load();
+}
+
+void RecordingCoordinator::SetSplitSettings(const recorder_core::RecordingSplitSettings& settings) {
+    split_settings_ = settings;
+}
+
+recorder_core::RecordingSplitSettings RecordingCoordinator::SplitSettings() const noexcept {
+    return split_settings_;
+}
+
+void RecordingCoordinator::SetSplitFeedbackCallback(SplitFeedbackCallback cb) {
+    on_split_feedback_ = std::move(cb);
+}
+
+void RecordingCoordinator::PostSplitFeedback(bool accepted, QString message) {
+    if (!on_split_feedback_)
+        return;
+    auto cb = on_split_feedback_;
+    if (QCoreApplication::instance() == nullptr) {
+        cb(accepted, message);
+        return;
+    }
+    QMetaObject::invokeMethod(
+        QCoreApplication::instance(), [cb, accepted, message = std::move(message)]() { cb(accepted, message); },
+        Qt::QueuedConnection);
+}
+
+void RecordingCoordinator::OnSegmentCompleted(const recorder_core::CompletedSegment& segment) {
+    // Fired from the mux worker thread as each segment is finalized (including the
+    // final one at session end). Accumulate for the multi-segment result and clear
+    // the pending flag — the next segment has started.
+    size_t total = 0;
+    {
+        std::lock_guard<std::mutex> lock(segments_mutex_);
+        segments_.push_back(segment);
+        total = segments_.size();
+    }
+    split_pending_.store(false);
+
+    diagnostics::AppLog::info(QStringLiteral("split"),
+                              QStringLiteral("segment finalized index=%1 duration_ms=%2 bytes=%3 ok=%4 path=%5")
+                                  .arg(segment.index)
+                                  .arg(segment.duration_ms)
+                                  .arg(segment.file_size_bytes)
+                                  .arg(segment.succeeded)
+                                  .arg(QString::fromStdWString(segment.path.filename().wstring())));
+
+    // Feedback names the segment that just *started* (the one after the boundary).
+    // total counts finalized segments; the new live segment index is total (0-based)
+    // i.e. human-friendly part number total+1. Only surface this while still
+    // recording (the final session-end finalize also fires this callback).
+    if (is_recording_.load() && segment.succeeded) {
+        const qulonglong next_part = static_cast<qulonglong>(total) + 1;
+        PostSplitFeedback(true, QStringLiteral("Started segment %1").arg(next_part));
+    }
 }
 
 bool RecordingCoordinator::StartMicMeter(std::optional<std::string> device_id,
@@ -766,6 +875,22 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
         ui_result.markers = markers_;
         ui_result.marker_sidecar_path = MarkerSidecarPath().wstring();
     }
+
+    {
+        std::lock_guard<std::mutex> lock(segments_mutex_);
+        ui_result.segments.reserve(segments_.size());
+        for (const auto& seg : segments_) {
+            CompletedRecordingSegment out;
+            out.file_path = QString::fromStdWString(seg.path.wstring());
+            out.index = seg.index;
+            out.session_start_ms = seg.session_start_ms;
+            out.duration_seconds = static_cast<double>(seg.duration_ms) / 1000.0;
+            out.file_size_bytes = static_cast<qint64>(seg.file_size_bytes);
+            out.succeeded = seg.succeeded;
+            ui_result.segments.push_back(std::move(out));
+        }
+    }
+    split_pending_.store(false);
 
     if (result.succeeded && !markers_.empty()) {
         WriteMarkerSidecar();

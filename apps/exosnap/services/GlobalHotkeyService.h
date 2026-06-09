@@ -11,9 +11,14 @@ enum class HotkeyAction : int {
     TogglePause = 1,
     CaptureFrame = 2,
     AddMarker = 3,
+    SplitRecording = 4,
 };
 
-constexpr int kHotkeyActionCount = 4;
+constexpr int kHotkeyActionCount = 5;
+
+// Persistence vector for all action bindings, indexed by HotkeyAction. Sized by
+// kHotkeyActionCount so adding an action keeps every call site in sync.
+using HotkeyBindings = std::array<QString, static_cast<std::size_t>(kHotkeyActionCount)>;
 
 enum class RebindError {
     None,
@@ -67,10 +72,10 @@ class GlobalHotkeyService : public QObject {
 
     // Load from stored strings (e.g. AppSettingsStore).
     // Invalid or empty strings fall back to defaults.
-    void LoadFromStrings(const std::array<QString, 4>& stored);
+    void LoadFromStrings(const HotkeyBindings& stored);
 
     // Write current bindings to stored strings.
-    void SaveToStrings(std::array<QString, 4>& out) const;
+    void SaveToStrings(HotkeyBindings& out) const;
 
     static QKeySequence DefaultBinding(HotkeyAction action);
     static QString ActionDisplayName(HotkeyAction action);
