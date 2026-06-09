@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../models/WebcamSettings.h"
+#include "../services/WebcamDeviceNotifier.h"
 #include "../services/WebcamService.h"
 
 #include <QHideEvent>
@@ -36,6 +37,9 @@ class WebcamPage : public QWidget {
 
     void applySettings(const WebcamSettings& settings);
     void setRecordingControlsLocked(bool locked);
+    // Reactive device refresh: preserve the configured device_id across the new
+    // snapshot.  Never emits settingsChanged.
+    void onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapshot& snap);
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void applyVisualState(visual::VisualWebcamState state);
 #endif
@@ -43,6 +47,9 @@ class WebcamPage : public QWidget {
   signals:
     void settingsChanged(WebcamSettings settings);
     void backToSettingsRequested();
+    // Emitted when the user clicks the Rescan button so MainWindow can route the
+    // request through the canonical WebcamDeviceNotifier::rescan() path.
+    void rescanRequested();
 
   private slots:
     void onEnableToggled(bool enabled);

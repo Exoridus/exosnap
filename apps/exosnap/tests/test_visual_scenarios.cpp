@@ -104,6 +104,17 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("record-output-summary"),
         QStringLiteral("completed-output-1080p"),
         QStringLiteral("completed-output-fallback"),
+        // Device discovery scenarios (DEVICE-DISCOVERY-R1).
+        QStringLiteral("settings-audio-devices-normal"),
+        QStringLiteral("settings-audio-selected-missing"),
+        QStringLiteral("settings-audio-default-changed"),
+        QStringLiteral("settings-webcam-devices-normal"),
+        QStringLiteral("settings-webcam-selected-missing"),
+        QStringLiteral("settings-webcam-reconnected"),
+        QStringLiteral("source-displays-normal"),
+        QStringLiteral("source-display-selected-missing"),
+        QStringLiteral("record-display-unavailable"),
+        QStringLiteral("record-region-monitor-missing"),
     };
 
     for (const QString& id : required)
@@ -312,6 +323,124 @@ TEST(VisualScenarioTest, WebcamHandleSerializationIsStable) {
     EXPECT_EQ(ToString(VisualWebcamHandle::Move), QStringLiteral("move"));
     EXPECT_EQ(ToString(VisualWebcamHandle::ResizeTopLeft), QStringLiteral("tl"));
     EXPECT_EQ(ToString(VisualWebcamHandle::ResizeBottomRight), QStringLiteral("br"));
+}
+
+// ---- Device Discovery scenarios (DEVICE-DISCOVERY-R1) -----------------------
+
+// 48. Audio device discovery scenarios carry deterministic discovery fields.
+TEST(VisualScenarioTest, DeviceDiscovery_AudioScenariosCarryDiscoveryFields) {
+    const VisualScenario* normal = FindVisualScenario(QStringLiteral("settings-audio-devices-normal"));
+    ASSERT_NE(normal, nullptr);
+    EXPECT_EQ(normal->page, VisualPage::Settings);
+    EXPECT_EQ(normal->dd_audio_input_count, 2);
+    EXPECT_TRUE(normal->dd_selected_mic_available);
+    EXPECT_EQ(normal->dd_last_discovery_reason, QStringLiteral("Startup"));
+
+    const VisualScenario* missing = FindVisualScenario(QStringLiteral("settings-audio-selected-missing"));
+    ASSERT_NE(missing, nullptr);
+    EXPECT_EQ(missing->page, VisualPage::Settings);
+    EXPECT_FALSE(missing->dd_selected_mic_available);
+    EXPECT_FALSE(missing->dd_selected_mic_stable_id.isEmpty())
+        << "Missing-mic scenario must preserve the configured stable id";
+    EXPECT_EQ(missing->dd_last_discovery_reason, QStringLiteral("DeviceRemoved"));
+
+    const VisualScenario* def = FindVisualScenario(QStringLiteral("settings-audio-default-changed"));
+    ASSERT_NE(def, nullptr);
+    EXPECT_TRUE(def->dd_selected_mic_stable_id.isEmpty()) << "semantic Default scenario has no stable id";
+    EXPECT_EQ(def->dd_last_discovery_reason, QStringLiteral("DefaultChanged"));
+}
+
+// 49. Webcam discovery scenarios carry deterministic discovery fields.
+TEST(VisualScenarioTest, DeviceDiscovery_WebcamScenariosCarryDiscoveryFields) {
+    const VisualScenario* normal = FindVisualScenario(QStringLiteral("settings-webcam-devices-normal"));
+    ASSERT_NE(normal, nullptr);
+    EXPECT_EQ(normal->page, VisualPage::Settings);
+    EXPECT_EQ(normal->webcam_state, VisualWebcamState::Active);
+    EXPECT_EQ(normal->dd_webcam_count, 1);
+    EXPECT_TRUE(normal->dd_selected_webcam_available);
+
+    const VisualScenario* missing = FindVisualScenario(QStringLiteral("settings-webcam-selected-missing"));
+    ASSERT_NE(missing, nullptr);
+    EXPECT_EQ(missing->webcam_state, VisualWebcamState::Unavailable);
+    EXPECT_FALSE(missing->dd_selected_webcam_available);
+    EXPECT_EQ(missing->dd_webcam_count, 0);
+    EXPECT_EQ(missing->dd_last_discovery_reason, QStringLiteral("DeviceRemoved"));
+
+    const VisualScenario* reconnected = FindVisualScenario(QStringLiteral("settings-webcam-reconnected"));
+    ASSERT_NE(reconnected, nullptr);
+    EXPECT_EQ(reconnected->webcam_state, VisualWebcamState::Active);
+    EXPECT_TRUE(reconnected->dd_selected_webcam_available);
+    EXPECT_EQ(reconnected->dd_last_discovery_reason, QStringLiteral("DeviceAdded"));
+}
+
+// 50. Display discovery scenarios carry deterministic discovery fields.
+TEST(VisualScenarioTest, DeviceDiscovery_DisplayScenariosCarryDiscoveryFields) {
+    const VisualScenario* normal = FindVisualScenario(QStringLiteral("source-displays-normal"));
+    ASSERT_NE(normal, nullptr);
+    EXPECT_EQ(normal->page, VisualPage::Record);
+    EXPECT_EQ(normal->source_picker_tab, VisualSourcePickerTab::Screens);
+    EXPECT_EQ(normal->dd_display_count, 2);
+    EXPECT_TRUE(normal->dd_selected_display_available);
+    EXPECT_TRUE(normal->dd_current_target_resolved);
+
+    const VisualScenario* missing = FindVisualScenario(QStringLiteral("source-display-selected-missing"));
+    ASSERT_NE(missing, nullptr);
+    EXPECT_FALSE(missing->dd_selected_display_available);
+    EXPECT_FALSE(missing->dd_current_target_resolved);
+    EXPECT_FALSE(missing->dd_selected_display_stable_id.isEmpty());
+    EXPECT_EQ(missing->dd_last_discovery_reason, QStringLiteral("DeviceRemoved"));
+}
+
+// 51. Record-page unavailability scenarios represent honest unresolved state.
+TEST(VisualScenarioTest, DeviceDiscovery_RecordPageUnavailabilityIsHonest) {
+    const VisualScenario* display_gone = FindVisualScenario(QStringLiteral("record-display-unavailable"));
+    ASSERT_NE(display_gone, nullptr);
+    EXPECT_EQ(display_gone->page, VisualPage::Record);
+    EXPECT_EQ(display_gone->record_state, VisualRecordState::Ready);
+    EXPECT_FALSE(display_gone->dd_current_target_resolved);
+    EXPECT_FALSE(display_gone->dd_selected_display_available);
+
+    const VisualScenario* region_gone = FindVisualScenario(QStringLiteral("record-region-monitor-missing"));
+    ASSERT_NE(region_gone, nullptr);
+    EXPECT_EQ(region_gone->page, VisualPage::Record);
+    EXPECT_EQ(region_gone->settings_target, VisualSettingsTarget::Region);
+    EXPECT_FALSE(region_gone->dd_current_target_resolved);
+    // Region invalid: geometry is 64x64 (minimum valid for the region field).
+    EXPECT_EQ(region_gone->region_state, VisualRegionState::Invalid);
+}
+
+// 52. Device discovery sentinel fields are defaulted correctly for non-discovery scenarios.
+TEST(VisualScenarioTest, DeviceDiscovery_DefaultSentinelsForNonDiscoveryScenarios) {
+    const VisualScenario* record_ready = FindVisualScenario(QStringLiteral("record-ready"));
+    ASSERT_NE(record_ready, nullptr);
+    // Sentinels: -1 means "not applicable"
+    EXPECT_EQ(record_ready->dd_audio_input_count, -1);
+    EXPECT_EQ(record_ready->dd_webcam_count, -1);
+    EXPECT_EQ(record_ready->dd_display_count, -1);
+    EXPECT_TRUE(record_ready->dd_selected_mic_stable_id.isEmpty());
+    EXPECT_TRUE(record_ready->dd_selected_display_stable_id.isEmpty());
+    EXPECT_TRUE(record_ready->dd_last_discovery_reason.isEmpty());
+}
+
+// 53. Applying a discovery scenario does not dirty the preset state.
+// Harness hooks are non-persistent: the scenario fields are driven by
+// in-memory page methods that never call RecordingPresetStore::Save() or
+// AppSettingsStore::Save().  We verify this at unit level by confirming that
+// the scenario struct itself carries no preset-dirty signal.
+TEST(VisualScenarioTest, DeviceDiscovery_ScenarioStructDoesNotSetPresetDirty) {
+    for (const VisualScenario& s : VisualScenarioRegistry()) {
+        if (!s.id.startsWith(QStringLiteral("settings-audio")) &&
+            !s.id.startsWith(QStringLiteral("settings-webcam-devices")) &&
+            !s.id.startsWith(QStringLiteral("settings-webcam-reconnected")) &&
+            !s.id.startsWith(QStringLiteral("source-displays")) &&
+            !s.id.startsWith(QStringLiteral("source-display-selected")) &&
+            !s.id.startsWith(QStringLiteral("record-display-unavailable")) &&
+            !s.id.startsWith(QStringLiteral("record-region-monitor-missing")))
+            continue;
+        // Discovery scenarios must NOT set preset_dirty = true (they do not
+        // represent a user edit; they only represent device availability state).
+        EXPECT_FALSE(s.preset_dirty) << "Discovery scenario " << s.id.toStdString() << " must not set preset_dirty";
+    }
 }
 
 } // namespace

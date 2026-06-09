@@ -11,10 +11,13 @@
 #include "../models/RecordingPreset.h"
 #include "../models/VideoSettingsModel.h"
 #include "../models/WebcamSettings.h"
+#include "../services/AudioDeviceNotifier.h"
+#include "../services/DisplayDeviceNotifier.h"
 #include "../services/PreviewHelpers.h"
 #include "../services/PreviewService.h"
 #include "../services/RecordingCoordinator.h"
 #include "../services/RecordingCountdownController.h"
+#include "../services/WebcamDeviceNotifier.h"
 #include "../ui/widgets/RegionSelectionOverlay.h"
 #include "../viewmodels/RecordViewModel.h"
 
@@ -140,6 +143,13 @@ class RecordPage : public QWidget {
     // Refresh display/window source list; call on screen add/remove events.
     void refreshDisplayTargets();
 
+    // Reactive device-change handlers (driven by MainWindow from the three notifiers).
+    // Each handler preserves the configured selection by stable ID; never emits
+    // audioSettingsChanged / webcamSettingsChanged; never dirties the preset.
+    void onAudioDevicesChanged(const exosnap::AudioDeviceSnapshot& snap);
+    void onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapshot& snap);
+    void onDisplaysChanged(const exosnap::DisplaySnapshot& snap);
+
   private slots:
     void onStart();
     void onStop();
@@ -207,7 +217,10 @@ class RecordPage : public QWidget {
     void hideResultDetailsPanel();
     void updateRecentRecordingsSection();
     void syncTargetSelectionToCombo(int target_index);
-    void enumerateTargets(bool preserve_current_selection);
+    // When allow_fallback is false the reactive path gets no silent switch:
+    // a vanished target becomes unresolved (selected_target_index = -1) instead
+    // of auto-picking the next monitor/window.
+    void enumerateTargets(bool preserve_current_selection, bool allow_fallback_to_other_target = true);
     void rebuildTargetPicker();
     void pushSourceDataToPicker();
     void onAudioRowEnabledChanged(int row_index, bool enabled);

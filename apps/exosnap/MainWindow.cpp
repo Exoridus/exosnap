@@ -15,6 +15,7 @@
 #include "ui/dialogs/SourcePickerOverlay.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
+#include "ui/widgets/WebcamSetupPanel.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 #include "visual_tests/VisualScenario.h"
 
@@ -683,21 +684,28 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(advanced_page_, &AdvancedPage::backToSettingsRequested, this,
             [this]() { navigateToPage(kSettingsPageIndex); });
 
-    // Display discovery: refresh target list on monitor add/remove so the
-    // Source Picker and Record page stay current without manual Rescan.
-    if (auto* gui_app = qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
-        connect(gui_app, &QGuiApplication::screenAdded, this, [this](QScreen*) {
-            if (record_page_)
-                record_page_->refreshDisplayTargets();
-            diagnostics::AppLog::info(QStringLiteral("window"),
-                                      QStringLiteral("screen added; refreshing display targets"));
-        });
-        connect(gui_app, &QGuiApplication::screenRemoved, this, [this](QScreen*) {
-            if (record_page_)
-                record_page_->refreshDisplayTargets();
-            diagnostics::AppLog::info(QStringLiteral("window"),
-                                      QStringLiteral("screen removed; refreshing display targets"));
-        });
+    // ---- Reactive device discovery wiring ----
+    // Audio: forward to both ConfigPage and RecordPage (under no-emit contract).
+    connect(&audio_notifier_, &AudioDeviceNotifier::snapshotChanged, this, &MainWindow::onAudioDevicesChanged);
+    // Webcam: forward to ConfigPage (which forwards to WebcamSetupPanel), WebcamPage, and RecordPage.
+    connect(&webcam_notifier_, &WebcamDeviceNotifier::snapshotChanged, this, &MainWindow::onWebcamDevicesChanged);
+    // Display: replaces the old QGuiApplication::screenAdded/Removed lambdas.
+    // DisplayDeviceNotifier covers add/remove AND geometry/DPI changes.
+    connect(&display_notifier_, &DisplayDeviceNotifier::snapshotChanged, this, &MainWindow::onDisplaysChanged);
+
+    // Route webcam Rescan through the canonical notifier path.
+    if (webcam_page_)
+        connect(webcam_page_, &WebcamPage::rescanRequested, &webcam_notifier_, &WebcamDeviceNotifier::rescan);
+    if (config_page_) {
+        // Route Settings audio Rescan through the audio notifier.
+        connect(config_page_, &ConfigPage::audioRescanRequested, &audio_notifier_, &AudioDeviceNotifier::rescan);
+        // Route Settings webcam panel Rescan through the webcam notifier.
+        // The WebcamSetupPanel is embedded in ConfigPage; access via findChild.
+        auto* setup_panel = config_page_->findChild<exosnap::ui::widgets::WebcamSetupPanel*>(
+            QStringLiteral("settingsWebcamSetupPanel"));
+        if (setup_panel)
+            connect(setup_panel, &exosnap::ui::widgets::WebcamSetupPanel::rescanRequested, &webcam_notifier_,
+                    &WebcamDeviceNotifier::rescan);
     }
 
     record_page_->rebroadcastChromeState();
@@ -725,7 +733,29 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             record_page_->setRuntimeCapabilities(runtime_caps_);
         refreshPresetUi();
         refreshDiagnosticsData();
+
+        // Start the device notifiers after the capability probe so the first
+        // snapshotChanged emission has the correct runtime context.
+        // rescan() seeds the initial availability state synchronously so pages
+        // know the device state without waiting for a native event.
+        audio_notifier_.start();
+        audio_notifier_.rescan();
+        webcam_notifier_.start();
+        webcam_notifier_.rescan();
+        display_notifier_.start();
+        display_notifier_.rescan();
+        diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("device notifiers started"));
     });
+}
+
+MainWindow::~MainWindow() {
+    // Stop notifiers FIRST, before any pages are torn down, so no late callback
+    // fires into a partially-destroyed page.  The notifiers also stop in their own
+    // destructors, but explicit ordering here prevents a race with the Qt object
+    // tree teardown.
+    audio_notifier_.stop();
+    webcam_notifier_.stop();
+    display_notifier_.stop();
 }
 
 void MainWindow::showEvent(QShowEvent* event) {
@@ -1614,6 +1644,10 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
     if (scenario.source_picker_tab != visual::VisualSourcePickerTab::None)
         applyVisualSourcePickerScenario(scenario);
 
+    // Device-discovery state is applied last so it can override audio/webcam
+    // state set by the page-specific helpers above.
+    applyVisualDeviceDiscoveryScenario(scenario);
+
     if (title_bar_ && stack_)
         title_bar_->setActivePage(navHighlightIndexFor(stack_->currentIndex()));
     installVisualReadyMarker(scenario.id);
@@ -1814,6 +1848,117 @@ void MainWindow::applyVisualDiagnosticsScenario() {
         caps, output, video, VisualAudioStateForSettings(visual::VisualSettingsTarget::Window),
         "Visual Test WebM AV1 Opus", "Start/Stop: Alt+F9", "visual-test-settings.json", true);
 }
+
+void MainWindow::applyVisualDeviceDiscoveryScenario(const visual::VisualScenario& scenario) {
+    // Only engage when at least one device-discovery field is set.
+    const bool has_audio = scenario.dd_audio_input_count >= 0;
+    const bool has_webcam = scenario.dd_webcam_count >= 0;
+
+    // --- Audio mic list (Settings/Audio card) ---
+    // Build a synthetic AudioDeviceSnapshot matching the scenario state and
+    // push it to ConfigPage via the existing reactive handler.  This is the
+    // same path used during live hot-plug, so no new UI hooks are needed.
+    // Non-persistent: onAudioDevicesChanged() never writes to any store.
+    if (has_audio && config_page_) {
+        AudioDeviceSnapshot snap;
+        // Populate synthetic input devices.
+        const int n_inputs = scenario.dd_audio_input_count;
+        for (int i = 0; i < n_inputs; ++i) {
+            recorder_core::AudioInputDeviceInfo d;
+            d.device_id = QStringLiteral("vis-input-%1").arg(i + 1).toStdString();
+            d.display_name = QStringLiteral("Visual Test Input %1").arg(i + 1).toStdString();
+            d.is_default = (i == 0);
+            snap.inputs.push_back(d);
+        }
+        if (!snap.inputs.empty())
+            snap.default_input_id = snap.inputs.front().device_id;
+
+        // If the scenario has a selected mic that should be present, make sure
+        // that id appears in the snapshot.  If it should be absent, leave it out.
+        if (!scenario.dd_selected_mic_stable_id.isEmpty()) {
+            if (scenario.dd_selected_mic_available) {
+                // Replace the first synthetic device with the configured id so
+                // onAudioDevicesChanged() finds it and keeps it selected.
+                const std::string target_id = scenario.dd_selected_mic_stable_id.toStdString();
+                bool already_present = false;
+                for (auto& d : snap.inputs) {
+                    if (d.device_id == target_id) {
+                        already_present = true;
+                        break;
+                    }
+                }
+                if (!already_present) {
+                    recorder_core::AudioInputDeviceInfo target_dev;
+                    target_dev.device_id = target_id;
+                    target_dev.display_name =
+                        QStringLiteral("Visual Test Mic (%1)").arg(scenario.dd_selected_mic_stable_id).toStdString();
+                    target_dev.is_default = false;
+                    snap.inputs.push_back(target_dev);
+                }
+                // Pre-select by setting audio_ui_state before the reactive push.
+                capability::AudioUiState state;
+                state.selected_mic_device_id = target_id;
+                config_page_->setAudioUiState(state);
+            } else {
+                // Device is absent: configure the id first, then push a snapshot
+                // without it so the placeholder is shown.
+                capability::AudioUiState state;
+                state.selected_mic_device_id = scenario.dd_selected_mic_stable_id.toStdString();
+                config_page_->setAudioUiState(state);
+                // snap intentionally does NOT contain dd_selected_mic_stable_id.
+            }
+        }
+
+        config_page_->onAudioDevicesChanged(snap);
+    }
+
+    // --- Webcam card (Settings/Webcam) ---
+    // For webcam-missing scenarios the webcam_state is already set to
+    // Unavailable by the page-dispatch block; applyVisualWebcamState() is the
+    // existing harness hook — just make sure it is driven correctly here for
+    // discovery-specific scenarios that set dd_webcam_count.
+    if (has_webcam && config_page_) {
+        const bool cam_available = scenario.dd_selected_webcam_available;
+        const bool mirror = scenario.webcam_mirror;
+        // Only override if the scenario is on the Settings page (the webcam
+        // card lives there); the Record preview uses a separate path.
+        if (scenario.page == visual::VisualPage::Settings)
+            config_page_->applyVisualWebcamState(cam_available, mirror);
+    }
+}
 #endif
+
+// ---------------------------------------------------------------------------
+// Reactive device-change handlers
+// ---------------------------------------------------------------------------
+
+void MainWindow::onAudioDevicesChanged(const exosnap::AudioDeviceSnapshot& snap, exosnap::DiscoveryReason /*reason*/) {
+    // Forward to both pages under the no-emit, no-dirty contract.
+    // Neither page should emit audioSettingsChanged during these calls, so
+    // live_audio_ and the preset dirty state remain unchanged.
+    if (config_page_)
+        config_page_->onAudioDevicesChanged(snap);
+    if (record_page_)
+        record_page_->onAudioDevicesChanged(snap);
+}
+
+void MainWindow::onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapshot& snap,
+                                        exosnap::DiscoveryReason /*reason*/) {
+    // Forward to all three consumers.  None of these should emit webcamSettingsChanged
+    // so live_webcam_ and the preset dirty state remain unchanged.
+    if (config_page_)
+        config_page_->onWebcamDevicesChanged(snap);
+    if (webcam_page_)
+        webcam_page_->onWebcamDevicesChanged(snap);
+    if (record_page_)
+        record_page_->onWebcamDevicesChanged(snap);
+}
+
+void MainWindow::onDisplaysChanged(const exosnap::DisplaySnapshot& snap, exosnap::DiscoveryReason /*reason*/) {
+    // The display handler does not emit recordingConfigChanged for availability
+    // changes (only for actual user-initiated target switches), so preset stays clean.
+    if (record_page_)
+        record_page_->onDisplaysChanged(snap);
+}
 
 } // namespace exosnap

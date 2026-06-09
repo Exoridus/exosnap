@@ -2850,7 +2850,7 @@ void RecordPage::initCoordinator() {
     emit coordinatorInitialized();
 }
 
-void RecordPage::enumerateTargets(bool preserve_current_selection) {
+void RecordPage::enumerateTargets(bool preserve_current_selection, bool allow_fallback_to_other_target) {
     const bool had_previous_selection =
         preserve_current_selection && view_model_.selected_target_index >= 0 &&
         view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
@@ -2903,22 +2903,29 @@ void RecordPage::enumerateTargets(bool preserve_current_selection) {
         }
     }
 
-    if (resolved_selection < 0 && previous_kind == capability::CaptureTargetKind::Window && window_target_index_ >= 0) {
-        resolved_selection = window_target_index_;
-    }
-    if (resolved_selection < 0 && previous_kind == capability::CaptureTargetKind::Display &&
-        monitor_target_index_ >= 0) {
-        resolved_selection = monitor_target_index_;
-    }
-    const bool keep_mode_without_selection =
-        preserve_current_selection &&
-        ((previous_kind == capability::CaptureTargetKind::Window && window_target_index_ < 0) ||
-         (previous_kind == capability::CaptureTargetKind::Display && monitor_target_index_ < 0));
-    if (resolved_selection < 0 && !keep_mode_without_selection && monitor_target_index_ >= 0) {
-        resolved_selection = monitor_target_index_;
-    }
-    if (resolved_selection < 0 && !keep_mode_without_selection && window_target_index_ >= 0) {
-        resolved_selection = window_target_index_;
+    // MUST-FIX C: when allow_fallback_to_other_target is false (reactive display-removal
+    // path) a vanished selection becomes unresolved (index -1) rather than silently
+    // switching to another monitor.  The existing startup/user-refresh paths still pass
+    // true and behave as before.
+    if (allow_fallback_to_other_target) {
+        if (resolved_selection < 0 && previous_kind == capability::CaptureTargetKind::Window &&
+            window_target_index_ >= 0) {
+            resolved_selection = window_target_index_;
+        }
+        if (resolved_selection < 0 && previous_kind == capability::CaptureTargetKind::Display &&
+            monitor_target_index_ >= 0) {
+            resolved_selection = monitor_target_index_;
+        }
+        const bool keep_mode_without_selection =
+            preserve_current_selection &&
+            ((previous_kind == capability::CaptureTargetKind::Window && window_target_index_ < 0) ||
+             (previous_kind == capability::CaptureTargetKind::Display && monitor_target_index_ < 0));
+        if (resolved_selection < 0 && !keep_mode_without_selection && monitor_target_index_ >= 0) {
+            resolved_selection = monitor_target_index_;
+        }
+        if (resolved_selection < 0 && !keep_mode_without_selection && window_target_index_ >= 0) {
+            resolved_selection = window_target_index_;
+        }
     }
 
     view_model_.selected_target_index = -1;
@@ -3997,6 +4004,10 @@ void RecordPage::populateMicDeviceCombo() {
         return;
     }
 
+    // MUST-FIX A: preserve the configured stable ID.  If the id is present in the
+    // new enumeration, restore the selection as before.  If the id is ABSENT, do
+    // NOT silently reset to Default — keep the stored id unchanged, append an
+    // "(unavailable)" placeholder, select it, and stop the mic meter safely.
     const auto previous_id = view_model_.audio_ui_state.selected_mic_device_id;
 
     QSignalBlocker blocker(mic_device_combo_);
@@ -4015,23 +4026,41 @@ void RecordPage::populateMicDeviceCombo() {
     }
 
     int restore_index = 0;
+    bool found = false;
     if (previous_id.has_value()) {
         for (int i = 1; i < static_cast<int>(mic_devices_.size()); ++i) {
             if (mic_devices_[static_cast<std::size_t>(i)].device_id == *previous_id) {
                 restore_index = i;
+                found = true;
                 break;
             }
         }
     }
 
-    mic_device_combo_->setCurrentIndex(restore_index);
-    if (restore_index <= 0 || restore_index >= static_cast<int>(mic_devices_.size())) {
-        view_model_.audio_ui_state.selected_mic_device_id = std::nullopt;
-    } else {
+    if (!found && previous_id.has_value()) {
+        // Configured device is absent: append a placeholder, keep stored id unchanged,
+        // stop the mic meter so no stale capture runs.  Do NOT overwrite selected_mic_device_id.
+        const QString placeholder = QString::fromStdString(*previous_id) + QStringLiteral(" (unavailable)");
+        mic_device_combo_->addItem(placeholder);
+        restore_index = mic_device_combo_->count() - 1;
+        // Do NOT update view_model_.audio_ui_state.selected_mic_device_id.
+        if (coordinator_) {
+            coordinator_->StopMicMeter();
+            preflight_mic_rms_ = 0.0f;
+        }
+        diagnostics::AppLog::warning(
+            QStringLiteral("audio"),
+            QStringLiteral("Selected mic device disconnected: %1").arg(QString::fromStdString(*previous_id)));
+    } else if (found) {
         const auto& selected = mic_devices_[static_cast<std::size_t>(restore_index)];
         view_model_.audio_ui_state.selected_mic_device_id =
             selected.device_id.empty() ? std::nullopt : std::optional<std::string>(selected.device_id);
+    } else {
+        // No previous id (semantic Default): stay at index 0.
+        view_model_.audio_ui_state.selected_mic_device_id = std::nullopt;
     }
+
+    mic_device_combo_->setCurrentIndex(restore_index);
 
     view_model_.RebuildAudioPlan();
     updateMicDeviceNoteLabel();
@@ -5675,6 +5704,163 @@ void RecordPage::updateRecentRecordingsSection() {
         recent_items_layout_->addWidget(row);
         ++index;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Reactive device-change handlers
+// ---------------------------------------------------------------------------
+
+void RecordPage::onAudioDevicesChanged(const exosnap::AudioDeviceSnapshot& snap) {
+    // Rebuild the mic combo, preserving the configured stable ID.
+    // populateMicDeviceCombo uses EnumerateAudioInputDevices() internally; we
+    // pass the snapshot's inputs directly so we use the already-deduplicated
+    // notifier snapshot instead of a fresh enumeration call.
+    // Implementation note: We reuse the existing populateMicDeviceCombo() which
+    // internally calls EnumerateAudioInputDevices(). The notifier already
+    // performed that enumeration; however since populateMicDeviceCombo uses
+    // QSignalBlocker it will NOT emit audioSettingsChanged, satisfying the
+    // no-dirty guarantee.
+    populateMicDeviceCombo();
+
+    // Handle semantic Default (nullopt): if the default microphone changed and a
+    // mic preflight meter is running, rebind it to the new default endpoint.
+    if (!view_model_.audio_ui_state.selected_mic_device_id.has_value()) {
+        // Nullopt = semantic Default: re-sync meter so it follows the new default.
+        syncMicMeterService();
+    }
+
+    // If the system-audio default render endpoint changed and the sys preflight
+    // meter is running, restart it so it follows the new default output device.
+    if (!snap.default_output_id.empty()) {
+        syncSysMeterService();
+    }
+
+    diagnostics::AppLog::info(QStringLiteral("audio"),
+                              QStringLiteral("Audio device list refreshed (inputs=%1 outputs=%2)")
+                                  .arg(snap.inputs.size())
+                                  .arg(snap.outputs.size()));
+}
+
+void RecordPage::onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapshot& snap) {
+    if (!coordinator_)
+        return;
+
+    const std::string configured_id = current_webcam_settings_.device_id;
+    if (configured_id.empty())
+        return;
+
+    // Check whether the configured device is present in the new snapshot.
+    bool present = false;
+    for (const auto& dev : snap.devices) {
+        if (dev.id == configured_id) {
+            present = true;
+            break;
+        }
+    }
+
+    const bool was_previously_available = !configured_id.empty();
+
+    if (!present) {
+        // Device disconnected: stop idle webcam PiP preview safely, keep stored id.
+        coordinator_->SetWebcamPreviewActive(false);
+        if (preview_surface_) {
+            preview_surface_->setWebcamOverlayEnabled(false);
+        }
+        diagnostics::AppLog::warning(
+            QStringLiteral("webcam"),
+            QStringLiteral("Configured webcam disconnected: %1").arg(QString::fromStdString(configured_id)));
+    } else if (was_previously_available) {
+        // Device returned or was always present: restore PiP per visibility rules.
+        syncWebcamPreviewCapture();
+        updateWebcamOverlay();
+        diagnostics::AppLog::info(
+            QStringLiteral("webcam"),
+            QStringLiteral("Configured webcam available: %1").arg(QString::fromStdString(configured_id)));
+    }
+    // Do NOT modify current_webcam_settings_.device_id in either branch.
+}
+
+void RecordPage::onDisplaysChanged(const exosnap::DisplaySnapshot& snap) {
+    // Guard: do not mutate the live session.
+    if (isSourceSelectionLocked()) {
+        // Log a warning if the currently captured display/region source vanished.
+        if (view_model_.selected_target_index >= 0 &&
+            view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {
+            const auto& current_target =
+                view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
+            if (current_target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+                bool still_present = false;
+                const QString current_native_name = QString::fromStdString(current_target.description);
+                for (const auto& display : snap.displays) {
+                    if (display.id == current_native_name || display.name == current_native_name) {
+                        still_present = true;
+                        break;
+                    }
+                }
+                if (!still_present) {
+                    diagnostics::AppLog::warning(
+                        QStringLiteral("display"),
+                        QStringLiteral("Configured display disappeared during recording: %1").arg(current_native_name));
+                }
+            }
+        }
+        return; // Do not disturb target list during active recording/countdown/etc.
+    }
+
+    // Handle Region mode: if the hosting monitor is gone, invalidate the runtime region.
+    if (view_model_.capture_mode == CaptureMode::Region && view_model_.has_region) {
+        // Find the hosting monitor for the region rectangle in virtual-screen coordinates.
+        bool host_still_present = false;
+        for (const auto& display : snap.displays) {
+            const QRect display_geom = display.geometry;
+            const QPoint region_origin(view_model_.region.x, view_model_.region.y);
+            if (display_geom.contains(region_origin)) {
+                host_still_present = true;
+                break;
+            }
+        }
+        if (!host_still_present && !snap.displays.isEmpty()) {
+            // The monitor hosting the region is gone: invalidate runtime region state.
+            // Do NOT write to the preset; just clear the live model.
+            view_model_.has_region = false;
+            view_model_.region = {};
+            last_preview_key_ = {};
+
+            // Remove any active RegionSelectionOverlay.
+            if (region_overlay_ && region_overlay_->isVisible()) {
+                region_overlay_->cancelSelection();
+            }
+
+            // Stop stale preview.
+            if (preview_service_) {
+                preview_service_->Stop();
+            }
+            if (preview_surface_) {
+                preview_surface_->stopDxgiPreview();
+                preview_surface_->setLiveFrame(QImage{});
+            }
+
+            diagnostics::AppLog::warning(QStringLiteral("display"),
+                                         QStringLiteral("Monitor hosting Region selection disconnected; "
+                                                        "region invalidated (capture mode preserved)"));
+        }
+        // If host monitor still present but geometry changed: do not move region to another
+        // display; clamp/validate is handled by RegionGeometry (not done here as the region
+        // bounds are in absolute virtual-screen coords and may still be valid within the monitor).
+    }
+
+    // Re-enumerate targets WITHOUT silent fallback so a vanished selection becomes
+    // unresolved rather than auto-picking a different monitor.
+    enumerateTargets(/*preserve_current_selection=*/true, /*allow_fallback_to_other_target=*/false);
+
+    // If the Source Picker overlay is open, refresh its cards.
+    if (source_picker_overlay_ && source_picker_overlay_->isOpen()) {
+        pushSourceDataToPicker();
+    }
+
+    diagnostics::AppLog::info(
+        QStringLiteral("display"),
+        QStringLiteral("Display topology changed; target list refreshed (displays=%1)").arg(snap.displays.size()));
 }
 
 } // namespace exosnap

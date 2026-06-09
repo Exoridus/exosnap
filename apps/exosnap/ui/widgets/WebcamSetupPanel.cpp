@@ -252,9 +252,89 @@ void WebcamSetupPanel::onResolutionChanged(int) {
 }
 
 void WebcamSetupPanel::onRescan() {
-    refreshDevices();
-    if (isVisible())
-        startPreview();
+    // Prefer the canonical notifier path when MainWindow has connected rescanRequested().
+    // That routes through WebcamDeviceNotifier::rescan() → snapshotChanged →
+    // onWebcamDevicesChanged, which deduplicates devices and fires the same handler as
+    // native plug/unplug events.
+    // If the signal has no receivers (e.g. in unit tests without a wired MainWindow)
+    // fall back to a direct local refresh.
+    if (receivers(SIGNAL(rescanRequested())) > 0) {
+        emit rescanRequested();
+    } else {
+        refreshDevices();
+        if (isVisible())
+            startPreview();
+    }
+}
+
+void WebcamSetupPanel::onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapshot& snap) {
+    const std::string configured_id = current_settings_.device_id;
+
+    // Rebuild the device combo while preserving the configured stable ID.
+    // Use QSignalBlocker on both combos for the entire rebuild to avoid
+    // re-entrancy issues with suppress_signals_ being reset by nested calls.
+    {
+        const QSignalBlocker db(device_combo_);
+        const QSignalBlocker resb(resolution_combo_);
+
+        device_combo_->clear();
+        device_combo_->addItem(QStringLiteral("(no camera)"), QString{});
+        devices_.clear();
+
+        for (const auto& dev : snap.devices) {
+            device_combo_->addItem(QString::fromStdString(dev.name), QString::fromStdString(dev.id));
+            devices_.push_back(dev);
+        }
+    }
+
+    // Try to restore the configured device.
+    bool found = false;
+    for (int i = 0; i < device_combo_->count(); ++i) {
+        if (device_combo_->itemData(i).toString().toStdString() == configured_id) {
+            {
+                const QSignalBlocker db(device_combo_);
+                device_combo_->setCurrentIndex(i);
+            }
+            found = true;
+            break;
+        }
+    }
+
+    if (!found && !configured_id.empty()) {
+        // Device absent: stop preview, show unavailable placeholder, keep stored id.
+        {
+            const QSignalBlocker db(device_combo_);
+            device_combo_->setCurrentIndex(0);
+        }
+        stopPreview();
+        if (camera_preview_) {
+            camera_preview_->clearFrame();
+            camera_preview_->setPlaceholderText(
+                QStringLiteral("Camera unavailable. Reconnect and click \xe2\x86\xba."));
+        }
+        // Do NOT modify current_settings_.device_id.
+    } else if (found) {
+        // Device present: refresh formats and restore preview per visibility rules.
+        suppress_signals_ = true;
+        refreshFormats();
+        // Restore format selection.
+        for (int i = 0; i < resolution_combo_->count(); ++i) {
+            const auto d = resolution_combo_->itemData(i).toList();
+            if (d.size() == 2 && d[0].toInt() == current_settings_.width && d[1].toInt() == current_settings_.height) {
+                const QSignalBlocker resb(resolution_combo_);
+                resolution_combo_->setCurrentIndex(i);
+                break;
+            }
+        }
+        suppress_signals_ = false;
+        if (isVisible())
+            startPreview();
+    } else {
+        // No configured device at all: just refresh formats for whatever is selected.
+        suppress_signals_ = true;
+        refreshFormats();
+        suppress_signals_ = false;
+    }
 }
 
 void WebcamSetupPanel::onPreviewFrame(QImage frame) {

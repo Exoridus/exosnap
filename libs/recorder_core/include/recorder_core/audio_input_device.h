@@ -11,10 +11,18 @@ struct AudioInputDeviceInfo {
     bool is_default = false;
 };
 
-// Enumerates active WASAPI capture endpoints.
+// Enumerates active WASAPI capture endpoints (eCapture).
 // Returns an empty list on COM failure.
 // Does not throw.
 // No COM types in this public header.
 [[nodiscard]] std::vector<AudioInputDeviceInfo> EnumerateAudioInputDevices();
+
+// Enumerates active WASAPI render endpoints (eRender).
+// AudioInputDeviceInfo is reused: device_id, display_name, is_default fields
+// carry the same semantics as for capture devices.
+// Returns an empty list on COM failure.
+// Does not throw.
+// No COM types in this public header.
+[[nodiscard]] std::vector<AudioInputDeviceInfo> EnumerateAudioOutputDevices();
 
 } // namespace recorder_core

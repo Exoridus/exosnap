@@ -6,6 +6,8 @@
 #include "../models/OutputSettingsModel.h"
 #include "../models/VideoSettingsModel.h"
 #include "../models/WebcamSettings.h"
+#include "../services/AudioDeviceNotifier.h"
+#include "../services/WebcamDeviceNotifier.h"
 #include "../viewmodels/PresentationState.h"
 
 #include <filesystem>
@@ -77,6 +79,11 @@ class ConfigPage : public QWidget {
     // sys/app/mic_active: true when the meter service is running for that source.
     void setAudioMeterLevels(float sys01, float app01, float mic01, bool sys_active, bool app_active, bool mic_active);
 
+    // Reactive device-change handlers (driven by MainWindow from the three notifiers).
+    // These preserve selection state and never emit settings-changed or dirty the preset.
+    void onAudioDevicesChanged(const exosnap::AudioDeviceSnapshot& snap);
+    void onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapshot& snap);
+
   signals:
     void formatSettingsChanged(const OutputSettingsModel& settings);
     // Preset-selection signal.
@@ -87,6 +94,12 @@ class ConfigPage : public QWidget {
     void diagnosticsRequested();
     void webcamDetailsRequested();
     void advancedRequested();
+
+    // Emitted when the user presses the Rescan button in the Audio card.
+    // MainWindow connects this to audio_notifier_.rescan() so Rescan and the
+    // reactive path share the same canonical refresh, with no duplicate
+    // enumeration and no duplicate devices.
+    void audioRescanRequested();
 
     // ---- Preset management signals ----
     void savePresetRequested();
@@ -221,6 +234,9 @@ class ConfigPage : public QWidget {
     QCheckBox* mic_enabled_check_ = nullptr;
     QCheckBox* mic_separate_check_ = nullptr;
     QComboBox* mic_device_combo_ = nullptr;
+    // Compact Rescan affordance for the Settings Audio card.
+    // Emits audioRescanRequested() which MainWindow routes to audio_notifier_.rescan().
+    QPushButton* audio_rescan_btn_ = nullptr;
     QLabel* mic_source_label_ = nullptr;
 
     std::vector<recorder_core::AudioInputDeviceInfo> mic_devices_;

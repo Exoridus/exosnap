@@ -169,6 +169,25 @@ struct VisualScenario {
     int recent_result_count = 0;
     bool show_delete_confirm = false;
     bool show_rename_overlay = false;
+
+    // --- Device discovery scenarios (DEVICE-DISCOVERY-R1) ---
+    // Sentinels: audio_input_count / audio_output_count / webcam_count /
+    // display_count == -1 means "not applicable" (scenario does not drive discovery).
+    // selected_*_stable_id == QString()  means not applicable / not set.
+    int dd_audio_input_count = -1;                    // total mic/input endpoints in snapshot
+    int dd_audio_output_count = -1;                   // total render/output endpoints in snapshot
+    QString dd_selected_mic_stable_id;                // stable id of configured mic (empty = not applicable)
+    bool dd_selected_mic_available = true;            // true when configured mic is present in snapshot
+    bool dd_selected_output_semantic_default = false; // true when output is semantic Default (nullopt)
+    int dd_webcam_count = -1;                         // total webcam devices in snapshot
+    QString dd_selected_webcam_stable_id;             // stable id of configured webcam (empty = not applicable)
+    bool dd_selected_webcam_available = true;         // true when configured webcam is present
+    int dd_display_count = -1;                        // total displays in snapshot
+    QString dd_selected_display_stable_id;            // stable id of selected display (empty = not applicable)
+    bool dd_selected_display_available = true;        // true when selected display is present
+    bool dd_current_target_resolved = true;           // false when the capture target is unresolved
+    bool dd_rescan_enabled = true;                    // true when Rescan button is active/enabled
+    QString dd_last_discovery_reason;                 // e.g. "DeviceRemoved", "DefaultChanged", "Startup"
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

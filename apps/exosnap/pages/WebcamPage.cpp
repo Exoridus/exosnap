@@ -485,9 +485,81 @@ void WebcamPage::onResolutionChanged(int) {
 }
 
 void WebcamPage::onRefreshDevices() {
-    refreshDevices();
-    if (isVisible())
-        startPreview();
+    // Prefer the canonical notifier path when MainWindow has connected rescanRequested().
+    if (receivers(SIGNAL(rescanRequested())) > 0) {
+        emit rescanRequested();
+    } else {
+        refreshDevices();
+        if (isVisible())
+            startPreview();
+    }
+}
+
+void WebcamPage::onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapshot& snap) {
+    const std::string configured_id = current_settings_.device_id;
+
+    // Use QSignalBlocker on both combos for the entire rebuild so that no
+    // currentIndexChanged fires during the update (avoids re-entrancy issues
+    // with the suppress_signals_ flag when refresh functions reset it mid-call).
+    {
+        const QSignalBlocker db(device_combo_);
+        const QSignalBlocker rb(resolution_combo_);
+
+        device_combo_->clear();
+        device_combo_->addItem("(no camera)", QString());
+        devices_.clear();
+
+        for (const auto& dev : snap.devices) {
+            device_combo_->addItem(QString::fromStdString(dev.name), QString::fromStdString(dev.id));
+            devices_.push_back(dev);
+        }
+    }
+
+    bool found = false;
+    for (int i = 0; i < device_combo_->count(); ++i) {
+        if (device_combo_->itemData(i).toString().toStdString() == configured_id) {
+            {
+                const QSignalBlocker db(device_combo_);
+                device_combo_->setCurrentIndex(i);
+            }
+            found = true;
+            break;
+        }
+    }
+
+    if (!found && !configured_id.empty()) {
+        // Device absent: stop preview, show unavailable state, keep stored id.
+        {
+            const QSignalBlocker db(device_combo_);
+            device_combo_->setCurrentIndex(0);
+        }
+        stopPreview();
+        if (camera_preview_) {
+            camera_preview_->clearFrame();
+            camera_preview_->setPlaceholderText(QStringLiteral("Camera unavailable.\nReconnect and click Rescan."));
+        }
+        // Do NOT modify current_settings_.device_id.
+    } else if (found) {
+        // Device returned: refresh formats and restore preview per visibility rules.
+        suppress_signals_ = true;
+        refreshFormats();
+        // Restore resolution selection.
+        for (int i = 0; i < resolution_combo_->count(); ++i) {
+            const auto d = resolution_combo_->itemData(i).toList();
+            if (d.size() == 2 && d[0].toInt() == current_settings_.width && d[1].toInt() == current_settings_.height) {
+                const QSignalBlocker resb(resolution_combo_);
+                resolution_combo_->setCurrentIndex(i);
+                break;
+            }
+        }
+        suppress_signals_ = false;
+        if (isVisible())
+            startPreview();
+    } else {
+        suppress_signals_ = true;
+        refreshFormats();
+        suppress_signals_ = false;
+    }
 }
 
 void WebcamPage::onChromaEnableToggled(bool enabled) {
