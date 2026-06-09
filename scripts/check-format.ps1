@@ -10,17 +10,41 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
 function Find-Tool {
     param([string]$Name)
-    $cmd = Get-Command $Name -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
+    function Test-AppExecutionAlias {
+        param([string]$Path)
+        return $Path -and $Path.StartsWith((Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'), [StringComparison]::OrdinalIgnoreCase)
+    }
+
+    function Test-ToolCandidate {
+        param([string]$Path)
+        if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            return $false
+        }
+        if (Test-AppExecutionAlias $Path) {
+            return $false
+        }
+        try {
+            & $Path --version *> $null
+            return $LASTEXITCODE -eq 0
+        }
+        catch {
+            return $false
+        }
+    }
+
     $vsLlvm = Get-ChildItem -LiteralPath "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022" `
         -Recurse -Filter "$Name.exe" -ErrorAction SilentlyContinue |
         Where-Object { $_.FullName -match '\\Llvm\\x64\\bin\\' } |
+        Where-Object { Test-ToolCandidate $_.FullName } |
         Select-Object -First 1
     if ($vsLlvm) { return $vsLlvm.FullName }
     $llvm = Get-ChildItem -LiteralPath "${env:ProgramFiles}\LLVM" `
         -Recurse -Filter "$Name.exe" -ErrorAction SilentlyContinue |
+        Where-Object { Test-ToolCandidate $_.FullName } |
         Select-Object -First 1
     if ($llvm) { return $llvm.FullName }
+    $cmd = Get-Command $Name -ErrorAction SilentlyContinue
+    if ($cmd -and (Test-ToolCandidate $cmd.Source)) { return $cmd.Source }
     throw "$Name.exe not found on PATH, VS LLVM, or LLVM install."
 }
 
