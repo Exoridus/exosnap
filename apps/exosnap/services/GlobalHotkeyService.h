@@ -10,9 +10,10 @@ enum class HotkeyAction : int {
     ToggleRecording = 0,
     TogglePause = 1,
     CaptureFrame = 2,
+    AddMarker = 3,
 };
 
-constexpr int kHotkeyActionCount = 3;
+constexpr int kHotkeyActionCount = 4;
 
 enum class RebindError {
     None,

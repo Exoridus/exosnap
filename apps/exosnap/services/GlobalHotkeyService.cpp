@@ -111,7 +111,8 @@ GlobalHotkeyService::GlobalHotkeyService(QObject* parent) : QObject(parent) {
     // Initialise defaults — registrar is not yet available.
     bindings_[0] = DefaultBinding(HotkeyAction::ToggleRecording);
     bindings_[1] = DefaultBinding(HotkeyAction::TogglePause);
-    bindings_[2] = DefaultBinding(HotkeyAction::CaptureFrame); // Unset by default
+    bindings_[2] = DefaultBinding(HotkeyAction::CaptureFrame);
+    bindings_[3] = DefaultBinding(HotkeyAction::AddMarker);
 }
 
 void GlobalHotkeyService::SetRegistrar(IHotkeyRegistrar* registrar) {
@@ -240,7 +241,6 @@ void GlobalHotkeyService::SaveToStrings(std::array<QString, 4>& out) const {
     for (int i = 0; i < kHotkeyActionCount; ++i) {
         out[static_cast<std::size_t>(i)] = bindings_[static_cast<std::size_t>(i)].toString(QKeySequence::PortableText);
     }
-    // Leave slots 2 and 3 (planned actions) unchanged.
 }
 
 QKeySequence GlobalHotkeyService::DefaultBinding(HotkeyAction action) {
@@ -250,6 +250,8 @@ QKeySequence GlobalHotkeyService::DefaultBinding(HotkeyAction action) {
     case HotkeyAction::TogglePause:
         return QKeySequence();
     case HotkeyAction::CaptureFrame:
+        return QKeySequence(); // no default binding per spec
+    case HotkeyAction::AddMarker:
         return QKeySequence(); // no default binding per spec
     }
     return {};
@@ -263,6 +265,8 @@ QString GlobalHotkeyService::ActionDisplayName(HotkeyAction action) {
         return QStringLiteral("Pause / Resume");
     case HotkeyAction::CaptureFrame:
         return QStringLiteral("Capture frame");
+    case HotkeyAction::AddMarker:
+        return QStringLiteral("Add marker");
     }
     return QStringLiteral("Unknown");
 }

@@ -125,8 +125,13 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
                                           QStringLiteral("Capture frame"), 0, action_row_);
     capture_frame_btn_->setToolTip(QStringLiteral("Save the current composed frame as PNG (Capture frame)"));
 
+    add_marker_btn_ = makeActionButton(QStringLiteral("recordDockAddMarker"), QStringLiteral("utility"),
+                                       QStringLiteral("Add marker"), 0, action_row_);
+    add_marker_btn_->setToolTip(QStringLiteral("Mark a notable moment on the recording timeline"));
+
     // Fixed layout order; visibility per state keeps the right edge stable.
     action_layout->addWidget(capture_frame_btn_);
+    action_layout->addWidget(add_marker_btn_);
     action_layout->addWidget(countdown_);
     action_layout->addWidget(pause_btn_);
     action_layout->addWidget(resume_btn_);
@@ -143,6 +148,7 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     connect(open_folder_btn_, &QPushButton::clicked, this, &TransportDock::openFolderClicked);
     connect(filename_link_, &QPushButton::clicked, this, &TransportDock::filenameClicked);
     connect(capture_frame_btn_, &QPushButton::clicked, this, &TransportDock::captureFrameClicked);
+    connect(add_marker_btn_, &QPushButton::clicked, this, &TransportDock::addMarkerClicked);
 
     connect(system_toggle_, &AudioSourceToggle::clicked, this,
             [this]() { emit sourceToggleClicked(QStringLiteral("system")); });
@@ -190,6 +196,8 @@ void TransportDock::applyState() {
     record_again_btn_->setVisible(completed);
     capture_frame_btn_->setVisible(ready || recording || paused);
     capture_frame_btn_->setEnabled(ready || recording || paused);
+    add_marker_btn_->setVisible(recording || paused);
+    add_marker_btn_->setEnabled(recording || paused);
 
     record_btn_->setText(countdown ? QStringLiteral("Cancel") : QStringLiteral("Record"));
     setStyledProperty(record_btn_, "dockAction", countdown ? QStringLiteral("stop") : QStringLiteral("record"));

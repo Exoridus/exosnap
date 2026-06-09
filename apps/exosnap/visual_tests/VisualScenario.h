@@ -208,6 +208,16 @@ struct VisualScenario {
     QString hk_custom_binding_0;    // portable key sequence string for ToggleRecording
     QString hk_custom_binding_1;    // portable key sequence string for TogglePause
     bool hk_editing_locked = false; // editing locked (recording-in-progress state)
+
+    // --- Recording marker scenarios (RECORDING-MARKERS-R1) ---
+    bool marker_action_visible = false;
+    bool marker_action_enabled = false;
+    int marker_count = 0;
+    uint64_t marker_latest_time_ms = 0;
+    QString marker_latest_type; // "general" / "cut" / "highlight"
+    QString marker_sidecar_file;
+    QString marker_recording_state; // "Recording" / "Paused"
+    bool hk_marker_active = false;  // hotkey action active on HotkeysPage
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

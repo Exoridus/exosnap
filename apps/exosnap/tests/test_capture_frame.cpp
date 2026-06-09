@@ -49,7 +49,7 @@ class CaptureFrameTest : public ::testing::Test {
 
 TEST_F(CaptureFrameTest, CaptureFrameActionIsTyped) {
     EXPECT_EQ(static_cast<int>(HotkeyAction::CaptureFrame), 2);
-    EXPECT_EQ(kHotkeyActionCount, 3);
+    EXPECT_EQ(kHotkeyActionCount, 4);
 }
 
 // ── Test 2: No default binding for CaptureFrame ─────────────────────────────

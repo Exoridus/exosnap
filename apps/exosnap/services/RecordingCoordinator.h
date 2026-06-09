@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -23,6 +24,7 @@
 
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputSettingsModel.h"
+#include "../models/RecordingMarker.h"
 #include "../models/VideoSettingsModel.h"
 #include "../models/WebcamSettings.h"
 #include "../viewmodels/RecordViewModel.h"
@@ -73,6 +75,9 @@ class RecordingCoordinator {
     void StopRecording();
     void PauseRecording();
     void ResumeRecording();
+    void AddMarker(RecordingMarkerType type = RecordingMarkerType::General);
+    [[nodiscard]] const std::vector<RecordingMarker>& Markers() const noexcept;
+    [[nodiscard]] std::filesystem::path MarkerSidecarPath() const;
     bool StartMicMeter(std::optional<std::string> device_id, recorder_core::MicChannelMode channel_mode);
     void StopMicMeter();
     [[nodiscard]] bool IsMicMeterRunning() const noexcept;
@@ -124,6 +129,7 @@ class RecordingCoordinator {
     void PostRecordingMeter(std::array<float, 3> per_track_rms);
 
     std::filesystem::path GenerateOutputPath() const;
+    void WriteMarkerSidecar();
     static std::wstring FormatHResult(int32_t hr);
     static std::wstring FormatErrorPhase(recorder_core::ErrorPhase phase);
 
@@ -151,6 +157,12 @@ class RecordingCoordinator {
     UiRecordingState state_ = UiRecordingState::LoadingCapabilities;
     std::wstring capability_status_text_;
     std::filesystem::path current_output_path_;
+
+    // Recording markers
+    mutable std::mutex markers_mutex_;
+    std::vector<RecordingMarker> markers_;
+    double last_elapsed_seconds_ = 0.0;
+    bool markers_limit_reported_ = false;
 
     StateChangedCallback on_state_changed_;
     StatsUpdatedCallback on_stats_updated_;

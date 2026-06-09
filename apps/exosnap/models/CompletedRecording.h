@@ -10,7 +10,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <string>
+#include <vector>
 
+#include "RecordingMarker.h"
 #include <recorder_core/recorder_session.h>
 
 namespace exosnap {
@@ -37,6 +40,10 @@ struct CompletedRecording {
     QDateTime completed_at;
 
     bool succeeded = false;
+
+    // Recording markers (finalized list after recording completes)
+    std::vector<RecordingMarker> markers;
+    QString marker_sidecar_path;
 
     [[nodiscard]] bool hasFile() const noexcept {
         return !file_path.isEmpty() && succeeded;

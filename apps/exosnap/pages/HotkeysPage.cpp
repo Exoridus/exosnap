@@ -49,6 +49,7 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
         {"Start / Stop recording", GlobalHotkeyService::DefaultBinding(HotkeyAction::ToggleRecording), true},
         {"Pause / Resume", GlobalHotkeyService::DefaultBinding(HotkeyAction::TogglePause), true},
         {"Capture frame", GlobalHotkeyService::DefaultBinding(HotkeyAction::CaptureFrame), true},
+        {"Add marker", GlobalHotkeyService::DefaultBinding(HotkeyAction::AddMarker), true},
         // Planned — design-target actions, no backend slot in this build.
         {"Split recording", QKeySequence(), false},
         {"Mute / unmute microphone", QKeySequence(), false},
