@@ -46,12 +46,11 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
         bool supported;
     } kActions[kActionCount] = {
         // Active — backend-modelled, globally registered.
-        {"Start / Stop recording", QKeySequence(QStringLiteral("Alt+F9")), true},
-        {"Pause / Resume", QKeySequence(), true},
-        // Planned — registered but no live handler yet.
+        {"Start / Stop recording", GlobalHotkeyService::DefaultBinding(HotkeyAction::ToggleRecording), true},
+        {"Pause / Resume", GlobalHotkeyService::DefaultBinding(HotkeyAction::TogglePause), true},
+        // Planned — design-target actions, no backend slot in this build.
         {"Split recording", QKeySequence(), false},
         {"Mute / unmute microphone", QKeySequence(), false},
-        // Planned — design-target actions, no backend slot in this build.
         {"Change source", QKeySequence(), false},
         {"Toggle microphone", QKeySequence(), false},
         {"Toggle webcam", QKeySequence(), false},
@@ -69,10 +68,10 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
     active_header->setMeta(QStringLiteral("Available now"));
     active_header_row->addWidget(active_header, 1);
 
-    auto* reset_btn = new QPushButton(QStringLiteral("Reset to defaults"), content);
-    reset_btn->setObjectName(QStringLiteral("hotkeyResetBtn"));
-    reset_btn->setProperty("role", "ghost");
-    active_header_row->addWidget(reset_btn, 0, Qt::AlignVCenter);
+    reset_all_btn_ = new QPushButton(QStringLiteral("Reset all to defaults"), content);
+    reset_all_btn_->setObjectName(QStringLiteral("hotkeyResetBtn"));
+    reset_all_btn_->setProperty("role", "ghost");
+    active_header_row->addWidget(reset_all_btn_, 0, Qt::AlignVCenter);
     layout->addLayout(active_header_row);
 
     auto* active_panel = new QFrame(content);
@@ -114,11 +113,10 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
     }
     layout->addWidget(planned_panel);
 
-    // ── Honest registration footnote (no fake conflict detection) ─────────────────────────────
-    auto* footnote =
-        new QLabel(QStringLiteral("Shortcuts register globally and work while ExoSnap is running. ExoSnap does not "
-                                  "detect conflicts, so the last app to claim a key wins."),
-                   content);
+    // ── Footnote ──────────────────────────────────────────────────────────────────────────────
+    auto* footnote = new QLabel(QStringLiteral("Shortcuts register globally and work while ExoSnap is running. "
+                                               "ExoSnap detects internal conflicts and reports registration failures."),
+                                content);
     footnote->setObjectName(QStringLiteral("hotkeyFootnote"));
     footnote->setProperty("labelRole", "subtle");
     footnote->setWordWrap(true);
@@ -142,37 +140,73 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
     root->setContentsMargins(0, 0, 0, 0);
     root->addWidget(scroll);
 
-    connect(reset_btn, &QPushButton::clicked, this, &HotkeysPage::resetToDefaults);
+    connect(reset_all_btn_, &QPushButton::clicked, this, &HotkeysPage::resetAll);
 }
 
-void HotkeysPage::setBindings(const std::array<QKeySequence, 4>& bindings) {
-    for (int i = 0; i < static_cast<int>(bindings.size()); ++i) {
-        rows_[i].current_binding = bindings[static_cast<std::size_t>(i)];
+void HotkeysPage::setService(GlobalHotkeyService* service) {
+    service_ = service;
+    if (!service_)
+        return;
+    // Initialise binding display from service state.
+    for (int i = 0; i < kActiveActionCount; ++i) {
+        rows_[static_cast<std::size_t>(i)].current_binding = service_->GetBinding(static_cast<HotkeyAction>(i));
         updateBindingChips(i);
+    }
+    connect(service_, &GlobalHotkeyService::bindingChanged, this, [this](HotkeyAction action, QKeySequence seq) {
+        const int idx = static_cast<int>(action);
+        if (idx < 0 || idx >= kActiveActionCount)
+            return;
+        rows_[static_cast<std::size_t>(idx)].current_binding = seq;
+        updateBindingChips(idx);
+        clearRowError(idx);
+        refreshRowButtons(idx);
+    });
+}
+
+void HotkeysPage::setBindings(const std::array<QKeySequence, 2>& bindings) {
+    for (int i = 0; i < static_cast<int>(bindings.size()); ++i) {
+        rows_[static_cast<std::size_t>(i)].current_binding = bindings[static_cast<std::size_t>(i)];
+        updateBindingChips(i);
+        refreshRowButtons(i);
     }
 }
 
+void HotkeysPage::setEditingLocked(bool locked) {
+    editing_locked_ = locked;
+    if (locked && capturing_row_ >= 0)
+        cancelCapture(capturing_row_);
+    for (int i = 0; i < kActionCount; ++i) {
+        refreshRowButtons(i);
+    }
+    if (reset_all_btn_)
+        reset_all_btn_->setEnabled(!locked);
+}
+
 void HotkeysPage::updateBindingChips(int index) {
-    auto& row = rows_[index];
+    auto& row = rows_[static_cast<std::size_t>(index)];
     if (!row.supported || !row.binding_layout)
         return;
     ui::widgets::populateKeycaps(row.binding_layout, row.current_binding, row.binding_chips, QStringLiteral("Unset"));
-    if (row.unset_btn)
-        row.unset_btn->setEnabled(!row.current_binding.isEmpty());
 }
 
 void HotkeysPage::buildRow(int index, const QString& action, const QKeySequence& default_binding, bool supported,
                            QVBoxLayout* parent_layout, QWidget* parent_widget) {
-    rows_[index].supported = supported;
-    rows_[index].current_binding = default_binding;
-    rows_[index].default_binding = default_binding;
+    auto& r = rows_[static_cast<std::size_t>(index)];
+    r.supported = supported;
+    r.current_binding = default_binding;
+    r.default_binding = default_binding;
 
     auto* row_frame = new QWidget(parent_widget);
     row_frame->setObjectName(QStringLiteral("hotkeyRow_%1").arg(index));
     row_frame->setProperty("rowRole", supported ? "hotkeyRow" : "hotkeyRowPlanned");
 
-    auto* row_layout = new QHBoxLayout(row_frame);
-    row_layout->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
+    auto* col_layout = new QVBoxLayout(row_frame);
+    col_layout->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceSm);
+    col_layout->setSpacing(M::kSpaceXs);
+
+    // Main row: label | keycap chips | controls
+    auto* row_layout = new QHBoxLayout();
+    row_layout->setContentsMargins(0, 0, 0, 0);
     row_layout->setSpacing(M::kSpaceMd);
 
     auto* action_label = new QLabel(action, row_frame);
@@ -181,138 +215,246 @@ void HotkeysPage::buildRow(int index, const QString& action, const QKeySequence&
     row_layout->addWidget(action_label, 1);
 
     if (supported) {
-        rows_[index].binding_chips = new QWidget(row_frame);
-        rows_[index].binding_chips->setObjectName(QStringLiteral("hotkeyBinding_%1").arg(index));
-        rows_[index].binding_layout = new QHBoxLayout(rows_[index].binding_chips);
-        rows_[index].binding_layout->setContentsMargins(0, 0, 0, 0);
-        rows_[index].binding_layout->setSpacing(M::kSpaceXs + 2);
-        row_layout->addWidget(rows_[index].binding_chips, 0, Qt::AlignVCenter);
+        r.binding_chips = new QWidget(row_frame);
+        r.binding_chips->setObjectName(QStringLiteral("hotkeyBinding_%1").arg(index));
+        r.binding_layout = new QHBoxLayout(r.binding_chips);
+        r.binding_layout->setContentsMargins(0, 0, 0, 0);
+        r.binding_layout->setSpacing(M::kSpaceXs + 2);
+        row_layout->addWidget(r.binding_chips, 0, Qt::AlignVCenter);
 
-        // Normal controls: Set / Unset.
-        rows_[index].normal_container = new QWidget(row_frame);
-        auto* normal_layout = new QHBoxLayout(rows_[index].normal_container);
+        // Normal controls: Set / Unset / Reset.
+        r.normal_container = new QWidget(row_frame);
+        auto* normal_layout = new QHBoxLayout(r.normal_container);
         normal_layout->setContentsMargins(0, 0, 0, 0);
         normal_layout->setSpacing(M::kSpaceSm);
 
-        rows_[index].set_btn = new QPushButton(QStringLiteral("Set"), rows_[index].normal_container);
-        rows_[index].set_btn->setProperty("role", "utility");
-        rows_[index].set_btn->setObjectName(QStringLiteral("hotkeySetBtn_%1").arg(index));
+        r.set_btn = new QPushButton(QStringLiteral("Set"), r.normal_container);
+        r.set_btn->setProperty("role", "utility");
+        r.set_btn->setObjectName(QStringLiteral("hotkeySetBtn_%1").arg(index));
 
-        rows_[index].unset_btn = new QPushButton(QStringLiteral("Unset"), rows_[index].normal_container);
-        rows_[index].unset_btn->setProperty("role", "utility");
-        rows_[index].unset_btn->setObjectName(QStringLiteral("hotkeyUnsetBtn_%1").arg(index));
+        r.unset_btn = new QPushButton(QStringLiteral("Unset"), r.normal_container);
+        r.unset_btn->setProperty("role", "utility");
+        r.unset_btn->setObjectName(QStringLiteral("hotkeyUnsetBtn_%1").arg(index));
 
-        normal_layout->addWidget(rows_[index].set_btn);
-        normal_layout->addWidget(rows_[index].unset_btn);
-        row_layout->addWidget(rows_[index].normal_container, 0, Qt::AlignVCenter);
+        r.reset_btn = new QPushButton(QStringLiteral("Reset"), r.normal_container);
+        r.reset_btn->setProperty("role", "ghost");
+        r.reset_btn->setObjectName(QStringLiteral("hotkeyResetRowBtn_%1").arg(index));
+
+        normal_layout->addWidget(r.set_btn);
+        normal_layout->addWidget(r.unset_btn);
+        normal_layout->addWidget(r.reset_btn);
+        row_layout->addWidget(r.normal_container, 0, Qt::AlignVCenter);
 
         // Capture controls (shown while rebinding).
-        rows_[index].capture_container = new QWidget(row_frame);
-        auto* capture_layout = new QHBoxLayout(rows_[index].capture_container);
+        r.capture_container = new QWidget(row_frame);
+        auto* capture_layout = new QHBoxLayout(r.capture_container);
         capture_layout->setContentsMargins(0, 0, 0, 0);
         capture_layout->setSpacing(M::kSpaceSm);
 
-        auto* capture_hint = new QLabel(QStringLiteral("Press keys…"), rows_[index].capture_container);
+        auto* capture_hint = new QLabel(QStringLiteral("Press keys…"), r.capture_container);
         capture_hint->setProperty("labelRole", "signal");
 
-        rows_[index].capture_edit = new QKeySequenceEdit(rows_[index].capture_container);
-        rows_[index].capture_edit->setMaximumSequenceLength(1);
-        rows_[index].capture_edit->setProperty("role", "capture");
-        rows_[index].capture_edit->setMinimumWidth(140);
-        rows_[index].capture_edit->setObjectName(QStringLiteral("hotkeyCaptureEdit_%1").arg(index));
+        r.capture_edit = new QKeySequenceEdit(r.capture_container);
+        r.capture_edit->setMaximumSequenceLength(1);
+        r.capture_edit->setProperty("role", "capture");
+        r.capture_edit->setMinimumWidth(140);
+        r.capture_edit->setObjectName(QStringLiteral("hotkeyCaptureEdit_%1").arg(index));
 
-        auto* cancel_btn = new QPushButton(QStringLiteral("Cancel"), rows_[index].capture_container);
+        auto* cancel_btn = new QPushButton(QStringLiteral("Cancel"), r.capture_container);
         cancel_btn->setProperty("role", "utility");
         cancel_btn->setObjectName(QStringLiteral("hotkeyCancelBtn_%1").arg(index));
 
         capture_layout->addWidget(capture_hint);
-        capture_layout->addWidget(rows_[index].capture_edit);
+        capture_layout->addWidget(r.capture_edit);
         capture_layout->addWidget(cancel_btn);
-        rows_[index].capture_container->hide();
-        row_layout->addWidget(rows_[index].capture_container, 0, Qt::AlignVCenter);
+        r.capture_container->hide();
+        row_layout->addWidget(r.capture_container, 0, Qt::AlignVCenter);
+
+        // Error label below the main row (hidden until there is an error).
+        r.error_label = new QLabel(row_frame);
+        r.error_label->setObjectName(QStringLiteral("hotkeyError_%1").arg(index));
+        r.error_label->setProperty("labelRole", "errorText");
+        r.error_label->setWordWrap(true);
+        r.error_label->hide();
 
         const int i = index;
-        connect(rows_[i].set_btn, &QPushButton::clicked, this, [this, i]() { enterCapture(i); });
-        connect(rows_[i].unset_btn, &QPushButton::clicked, this, [this, i]() { commitCapture(i, QKeySequence()); });
+        connect(r.set_btn, &QPushButton::clicked, this, [this, i]() { enterCapture(i); });
+        connect(r.unset_btn, &QPushButton::clicked, this, [this, i]() { commitCapture(i, QKeySequence()); });
+        connect(r.reset_btn, &QPushButton::clicked, this, [this, i]() { resetRow(i); });
         connect(cancel_btn, &QPushButton::clicked, this, [this, i]() { cancelCapture(i); });
-        connect(rows_[i].capture_edit, &QKeySequenceEdit::keySequenceChanged, this, [this, i](const QKeySequence& seq) {
+        connect(r.capture_edit, &QKeySequenceEdit::keySequenceChanged, this, [this, i](const QKeySequence& seq) {
             if (!seq.isEmpty())
                 commitCapture(i, seq);
         });
 
+        col_layout->addLayout(row_layout);
+        col_layout->addWidget(r.error_label);
+
         updateBindingChips(index);
+        refreshRowButtons(index);
     } else {
         auto* planned_tag = new QLabel(QStringLiteral("Not in this build"), row_frame);
         planned_tag->setObjectName(QStringLiteral("hotkeyPlannedTag_%1").arg(index));
         planned_tag->setProperty("labelRole", "plannedTag");
         row_layout->addWidget(planned_tag, 0, Qt::AlignVCenter);
+        col_layout->addLayout(row_layout);
     }
 
     parent_layout->addWidget(row_frame);
 }
 
 void HotkeysPage::enterCapture(int index) {
-    if (index < 0 || index >= kActionCount)
+    if (index < 0 || index >= kActionCount || editing_locked_)
         return;
 
     if (capturing_row_ >= 0)
         cancelCapture(capturing_row_);
 
-    auto& row = rows_[index];
-    if (!row.supported || !row.normal_container || !row.capture_container || !row.capture_edit)
+    auto& r = rows_[static_cast<std::size_t>(index)];
+    if (!r.supported || !r.normal_container || !r.capture_container || !r.capture_edit)
         return;
 
     capturing_row_ = index;
-    row.normal_container->hide();
-    row.capture_container->show();
-    row.capture_edit->clear();
-    row.capture_edit->setFocus();
+    clearRowError(index);
+    r.normal_container->hide();
+    r.capture_container->show();
+    r.capture_edit->clear();
+    r.capture_edit->setFocus();
 }
 
 void HotkeysPage::commitCapture(int index, const QKeySequence& seq) {
     if (index < 0 || index >= kActionCount)
         return;
 
-    auto& row = rows_[index];
-    if (!row.supported)
+    auto& r = rows_[static_cast<std::size_t>(index)];
+    if (!r.supported)
         return;
 
-    row.current_binding = seq;
-    emit bindingChanged(index, seq);
-
-    if (capturing_row_ == index && row.capture_container && row.normal_container) {
-        row.capture_container->hide();
-        row.normal_container->show();
-        capturing_row_ = -1;
+    if (service_ && index < kActiveActionCount) {
+        const auto action = static_cast<HotkeyAction>(index);
+        RebindResult result{true};
+        if (seq.isEmpty()) {
+            service_->UnsetBinding(action);
+        } else {
+            result = service_->TrySetBinding(action, seq);
+        }
+        if (result.success) {
+            // bindingChanged signal from service updates r.current_binding + UI.
+            if (capturing_row_ == index && r.capture_container && r.normal_container) {
+                r.capture_container->hide();
+                r.normal_container->show();
+                capturing_row_ = -1;
+            }
+            clearRowError(index);
+        } else {
+            // Stay in capture mode; show error; clear the edit so user can try again.
+            if (r.capture_edit)
+                r.capture_edit->clear();
+            showRowError(index, result.error_message);
+        }
+    } else {
+        // No-service path (tests / no registrar yet).
+        r.current_binding = seq;
+        emit bindingChanged(index, seq);
+        if (capturing_row_ == index && r.capture_container && r.normal_container) {
+            r.capture_container->hide();
+            r.normal_container->show();
+            capturing_row_ = -1;
+        }
+        updateBindingChips(index);
+        refreshRowButtons(index);
     }
-    updateBindingChips(index);
 }
 
 void HotkeysPage::cancelCapture(int index) {
     if (index < 0 || index >= kActionCount)
         return;
 
-    auto& row = rows_[index];
-    if (!row.supported || !row.normal_container || !row.capture_container)
+    auto& r = rows_[static_cast<std::size_t>(index)];
+    if (!r.supported || !r.normal_container || !r.capture_container)
         return;
 
-    row.capture_container->hide();
-    row.normal_container->show();
+    r.capture_container->hide();
+    r.normal_container->show();
     capturing_row_ = -1;
+    clearRowError(index);
     updateBindingChips(index);
 }
 
-void HotkeysPage::resetToDefaults() {
+void HotkeysPage::resetAll() {
+    if (editing_locked_)
+        return;
     if (capturing_row_ >= 0)
         cancelCapture(capturing_row_);
 
-    for (int i = 0; i < kActionCount; ++i) {
-        if (!rows_[i].supported)
-            continue;
-        if (rows_[i].current_binding == rows_[i].default_binding)
-            continue;
-        commitCapture(i, rows_[i].default_binding);
+    if (service_) {
+        service_->ResetAllToDefaults();
+    } else {
+        for (int i = 0; i < kActionCount; ++i) {
+            if (!rows_[static_cast<std::size_t>(i)].supported)
+                continue;
+            auto& r = rows_[static_cast<std::size_t>(i)];
+            if (r.current_binding == r.default_binding)
+                continue;
+            r.current_binding = r.default_binding;
+            emit bindingChanged(i, r.default_binding);
+            updateBindingChips(i);
+            refreshRowButtons(i);
+        }
     }
+}
+
+void HotkeysPage::resetRow(int index) {
+    if (index < 0 || index >= kActionCount || editing_locked_)
+        return;
+    if (capturing_row_ == index)
+        cancelCapture(index);
+    if (service_ && index < kActiveActionCount) {
+        [[maybe_unused]] auto r = service_->ResetToDefault(static_cast<HotkeyAction>(index));
+    } else {
+        auto& r = rows_[static_cast<std::size_t>(index)];
+        if (r.current_binding == r.default_binding)
+            return;
+        r.current_binding = r.default_binding;
+        emit bindingChanged(index, r.default_binding);
+        updateBindingChips(index);
+        refreshRowButtons(index);
+    }
+}
+
+void HotkeysPage::showRowError(int index, const QString& message) {
+    if (index < 0 || index >= kActionCount)
+        return;
+    auto& r = rows_[static_cast<std::size_t>(index)];
+    if (!r.error_label)
+        return;
+    r.error_label->setText(message);
+    r.error_label->show();
+}
+
+void HotkeysPage::clearRowError(int index) {
+    if (index < 0 || index >= kActionCount)
+        return;
+    auto& r = rows_[static_cast<std::size_t>(index)];
+    if (!r.error_label)
+        return;
+    r.error_label->hide();
+    r.error_label->clear();
+}
+
+void HotkeysPage::refreshRowButtons(int index) {
+    if (index < 0 || index >= kActionCount)
+        return;
+    auto& r = rows_[static_cast<std::size_t>(index)];
+    if (!r.supported)
+        return;
+    const bool can_edit = !editing_locked_;
+    if (r.set_btn)
+        r.set_btn->setEnabled(can_edit);
+    if (r.unset_btn)
+        r.unset_btn->setEnabled(can_edit && !r.current_binding.isEmpty());
+    if (r.reset_btn)
+        r.reset_btn->setEnabled(can_edit && r.current_binding != r.default_binding);
 }
 
 } // namespace exosnap

@@ -188,6 +188,19 @@ struct VisualScenario {
     bool dd_current_target_resolved = true;           // false when the capture target is unresolved
     bool dd_rescan_enabled = true;                    // true when Rescan button is active/enabled
     QString dd_last_discovery_reason;                 // e.g. "DeviceRemoved", "DefaultChanged", "Startup"
+
+    // --- Hotkeys visual state (hotkeys-* scenarios) ---
+    // hk_capture_action == -1 means "not in capture mode".
+    bool hk_capture_active = false; // show one active row in capture mode
+    int hk_capture_action = -1;     // 0=ToggleRecording, 1=TogglePause
+    bool hk_conflict_shown = false; // show inline conflict error on a row
+    int hk_conflict_action = -1;    // which row shows the conflict message
+    QString hk_conflict_message;    // text of the conflict message
+    // Custom bindings: indexed by HotkeyAction (0=ToggleRecording, 1=TogglePause).
+    // Empty string = leave default.
+    QString hk_custom_binding_0;    // portable key sequence string for ToggleRecording
+    QString hk_custom_binding_1;    // portable key sequence string for TogglePause
+    bool hk_editing_locked = false; // editing locked (recording-in-progress state)
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

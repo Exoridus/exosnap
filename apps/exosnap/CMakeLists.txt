@@ -126,6 +126,8 @@ qt_add_executable(exosnap WIN32
     services/WebcamDeviceNotifier.cpp
     services/DisplayDeviceNotifier.h
     services/DisplayDeviceNotifier.cpp
+    services/GlobalHotkeyService.h
+    services/GlobalHotkeyService.cpp
     services/PreviewService.h
     services/PreviewService.cpp
     services/PreviewHelpers.h
@@ -504,12 +506,24 @@ exosnap_add_gtest(
     SOURCES
         tests/test_hotkeys_page.cpp
         pages/HotkeysPage.cpp
+        services/GlobalHotkeyService.cpp
         ui/widgets/SectionRuleHeader.cpp
         ui/widgets/KeycapChip.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
 )
 target_include_directories(hotkeys_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(hotkeys_page_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME hotkey_service_tests
+    TEST_PREFIX hotkey_service.
+    SOURCES
+        tests/test_global_hotkey_service.cpp
+        services/GlobalHotkeyService.cpp
+    LIBRARIES Qt6::Core Qt6::Gui exosnap_capability recorder_core
+)
+target_include_directories(hotkey_service_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(hotkey_service_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME logs_page_tests
