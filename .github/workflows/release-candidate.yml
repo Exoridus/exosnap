@@ -19,7 +19,6 @@ jobs:
         with:
           version: '6.9.0'
           arch: 'win64_msvc2022_64'
-          modules: 'qtsvg'
           cache: true
 
       - name: Install WiX Toolset
