@@ -1,42 +1,25 @@
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
 
   <!--
     ExoSnap MSI Installer
     =====================
     Package identity: Codexo.ExoSnap
-    UpgradeCode is stable across versions.
+    UpgradeCode: 8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D (permanent)
     ProductCode is auto-generated per build (*).
     Sources files from the CMake install staging tree.
-    User data (settings, presets, history, logs, recordings) is NOT
-    installed or removed by this MSI.
+    User data is NOT installed or removed by this MSI.
   -->
 
-  <!--
-    UpgradeCode — stable across all ExoSnap versions.
-    ProductCode — auto-generated per build via "*".
-    ProductVersion — derived from CMake PROJECT_VERSION (0.1.0).
-  -->
   <Package Name="ExoSnap"
            Manufacturer="Codexo"
            Version="$(var.ProductVersion)"
-           UpgradeCode="{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
+           UpgradeCode="8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D"
            Scope="perMachine"
            Language="1033"
-           Codepage="1252"
-           Platform="x64">
+           Codepage="1252">
 
-    <!-- Major upgrade: remove older ExoSnap versions, prevent downgrades -->
     <MajorUpgrade DowngradeErrorMessage="A newer version of ExoSnap is already installed."
                   AllowSameVersionUpgrades="yes" />
-
-    <!-- Prevent installation of older versions -->
-    <Upgrade Id="{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}">
-      <UpgradeVersion OnlyDetect="no"
-                      Minimum="$(var.ProductVersion)"
-                      Property="NEWERVERSIONDETECTED"
-                      IncludeMinimum="no" />
-    </Upgrade>
 
     <Media Id="1" Cabinet="exosnap.cab" EmbedCab="yes" />
 
@@ -44,49 +27,118 @@
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="ManufacturerFolder" Name="Codexo">
         <Directory Id="INSTALLFOLDER" Name="ExoSnap">
+          <Component Id="RootExe" Guid="*">
+            <File Source="$(var.StagingDir)\exosnap.exe" KeyPath="yes" />
+          </Component>
+          <Component Id="RootQtConf" Guid="*">
+            <File Source="$(var.StagingDir)\qt.conf" KeyPath="yes" />
+          </Component>
+          <Component Id="RootLicense" Guid="*">
+            <File Source="$(var.StagingDir)\LICENSE" KeyPath="yes" />
+          </Component>
+          <Component Id="RootNotices" Guid="*">
+            <File Source="$(var.StagingDir)\THIRD_PARTY_NOTICES.md" KeyPath="yes" />
+          </Component>
+          <Component Id="RootKnownLimitations" Guid="*">
+            <File Source="$(var.StagingDir)\KNOWN_LIMITATIONS.md" KeyPath="yes" />
+          </Component>
+          <Component Id="RootPortableReadme" Guid="*">
+            <File Source="$(var.StagingDir)\README-PORTABLE.md" KeyPath="yes" />
+          </Component>
+          <Component Id="Qt6Core" Guid="*">
+            <File Source="$(var.StagingDir)\Qt6Core.dll" KeyPath="yes" />
+          </Component>
+          <Component Id="Qt6Gui" Guid="*">
+            <File Source="$(var.StagingDir)\Qt6Gui.dll" KeyPath="yes" />
+          </Component>
+          <Component Id="Qt6Widgets" Guid="*">
+            <File Source="$(var.StagingDir)\Qt6Widgets.dll" KeyPath="yes" />
+          </Component>
+          <Component Id="Qt6Svg" Guid="*">
+            <File Source="$(var.StagingDir)\Qt6Svg.dll" KeyPath="yes" />
+          </Component>
+          <Component Id="Qt6Network" Guid="*">
+            <File Source="$(var.StagingDir)\Qt6Network.dll" KeyPath="yes" />
+          </Component>
+          <Component Id="D3DCompiler47" Guid="*">
+            <File Source="$(var.StagingDir)\D3Dcompiler_47.dll" KeyPath="yes" />
+          </Component>
 
-          <!-- Root files from CMake install tree -->
-          <ComponentGroupRef Id="RootFiles" />
-
-          <!-- Qt plugins -->
           <Directory Id="PluginsFolder" Name="plugins">
             <Directory Id="PlatformsFolder" Name="platforms">
-              <ComponentGroupRef Id="PlatformPlugins" />
+              <Component Id="PlatformQWindows" Guid="*">
+                <File Source="$(var.StagingDir)\plugins\platforms\qwindows.dll" KeyPath="yes" />
+              </Component>
             </Directory>
             <Directory Id="IconEnginesFolder" Name="iconengines">
-              <ComponentGroupRef Id="IconEnginePlugins" />
+              <Component Id="IconEngineQSvg" Guid="*">
+                <File Source="$(var.StagingDir)\plugins\iconengines\qsvgicon.dll" KeyPath="yes" />
+              </Component>
             </Directory>
             <Directory Id="ImageFormatsFolder" Name="imageformats">
-              <ComponentGroupRef Id="ImageFormatPlugins" />
+              <Component Id="ImgFormatSvg" Guid="*">
+                <File Source="$(var.StagingDir)\plugins\imageformats\qsvg.dll" KeyPath="yes" />
+              </Component>
+              <Component Id="ImgFormatJpeg" Guid="*">
+                <File Source="$(var.StagingDir)\plugins\imageformats\qjpeg.dll" KeyPath="yes" />
+              </Component>
+              <Component Id="ImgFormatIco" Guid="*">
+                <File Source="$(var.StagingDir)\plugins\imageformats\qico.dll" KeyPath="yes" />
+              </Component>
+              <Component Id="ImgFormatGif" Guid="*">
+                <File Source="$(var.StagingDir)\plugins\imageformats\qgif.dll" KeyPath="yes" />
+              </Component>
             </Directory>
             <Directory Id="StylesFolder" Name="styles">
-              <ComponentGroupRef Id="StylePlugins" />
+              <Component Id="StyleModernWin" Guid="*">
+                <File Source="$(var.StagingDir)\plugins\styles\qmodernwindowsstyle.dll" KeyPath="yes" />
+              </Component>
             </Directory>
           </Directory>
 
-          <!-- Third-party licenses -->
           <Directory Id="LicensesFolder" Name="licenses">
-            <ComponentGroupRef Id="LicenseFiles" />
+            <Component Id="LicSpdlog" Guid="*">
+              <File Source="$(var.StagingDir)\licenses\spdlog.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="LicNlohmann" Guid="*">
+              <File Source="$(var.StagingDir)\licenses\nlohmann_json.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="LicTomlpp" Guid="*">
+              <File Source="$(var.StagingDir)\licenses\tomlplusplus.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="LicOpus" Guid="*">
+              <File Source="$(var.StagingDir)\licenses\opus.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="LicFdkAac" Guid="*">
+              <File Source="$(var.StagingDir)\licenses\fdk-aac.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="LicEbml" Guid="*">
+              <File Source="$(var.StagingDir)\licenses\libebml.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="LicMatroska" Guid="*">
+              <File Source="$(var.StagingDir)\licenses\libmatroska.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="LicQt" Guid="*">
+              <File Source="$(var.StagingDir)\licenses\qt.txt" KeyPath="yes" />
+            </Component>
           </Directory>
-
         </Directory>
       </Directory>
     </StandardDirectory>
 
-    <!-- Start Menu shortcut -->
+    <!-- Start Menu shortcut (all-users, per-machine) -->
     <StandardDirectory Id="ProgramMenuFolder">
-      <Component Id="StartMenuShortcut" Guid="{B2C3D4E5-F6A7-8901-BCDE-F12345678901}">
+      <Component Id="StartMenuShortcut" Guid="{C1D2E3F4-A5B6-7890-CDEF-1234567890AB}" KeyPath="yes">
         <Shortcut Id="StartMenuExoSnap"
                   Name="ExoSnap"
                   Description="Windows-native recording application"
                   Target="[INSTALLFOLDER]exosnap.exe"
                   WorkingDirectory="INSTALLFOLDER" />
-        <RegistryValue Root="HKCU"
+        <RegistryValue Root="HKLM"
                        Key="Software\Codexo\ExoSnap"
                        Name="installed"
                        Value="1"
-                       Type="integer"
-                       KeyPath="yes" />
+                       Type="integer" />
       </Component>
     </StandardDirectory>
 
@@ -105,55 +157,35 @@
              ConfigurableDirectory="INSTALLFOLDER"
              Display="expand"
              Description="ExoSnap recording application">
-      <ComponentGroupRef Id="RootFiles" />
-      <ComponentGroupRef Id="PlatformPlugins" />
-      <ComponentGroupRef Id="IconEnginePlugins" />
-      <ComponentGroupRef Id="ImageFormatPlugins" />
-      <ComponentGroupRef Id="StylePlugins" />
-      <ComponentGroupRef Id="LicenseFiles" />
+      <ComponentRef Id="RootExe" />
+      <ComponentRef Id="RootQtConf" />
+      <ComponentRef Id="RootLicense" />
+      <ComponentRef Id="RootNotices" />
+      <ComponentRef Id="RootKnownLimitations" />
+      <ComponentRef Id="RootPortableReadme" />
+      <ComponentRef Id="Qt6Core" />
+      <ComponentRef Id="Qt6Gui" />
+      <ComponentRef Id="Qt6Widgets" />
+      <ComponentRef Id="Qt6Svg" />
+      <ComponentRef Id="Qt6Network" />
+      <ComponentRef Id="D3DCompiler47" />
+      <ComponentRef Id="PlatformQWindows" />
+      <ComponentRef Id="IconEngineQSvg" />
+      <ComponentRef Id="ImgFormatSvg" />
+      <ComponentRef Id="ImgFormatJpeg" />
+      <ComponentRef Id="ImgFormatIco" />
+      <ComponentRef Id="ImgFormatGif" />
+      <ComponentRef Id="StyleModernWin" />
+      <ComponentRef Id="LicSpdlog" />
+      <ComponentRef Id="LicNlohmann" />
+      <ComponentRef Id="LicTomlpp" />
+      <ComponentRef Id="LicOpus" />
+      <ComponentRef Id="LicFdkAac" />
+      <ComponentRef Id="LicEbml" />
+      <ComponentRef Id="LicMatroska" />
+      <ComponentRef Id="LicQt" />
       <ComponentRef Id="StartMenuShortcut" />
     </Feature>
 
   </Package>
-
-  <!-- ========================================================================= -->
-  <!-- Component Groups — populated from the CMake install staging tree          -->
-  <!-- ========================================================================= -->
-
-  <!-- Root-level files (exe, DLLs, qt.conf, documentation) -->
-  <ComponentGroup Id="RootFiles" Directory="INSTALLFOLDER">
-    <Files Include="$(var.StagingDir)\*.exe" />
-    <Files Include="$(var.StagingDir)\*.dll" />
-    <Files Include="$(var.StagingDir)\qt.conf" />
-    <Files Include="$(var.StagingDir)\LICENSE" />
-    <Files Include="$(var.StagingDir)\THIRD_PARTY_NOTICES.md" />
-    <Files Include="$(var.StagingDir)\KNOWN_LIMITATIONS.md" />
-    <Files Include="$(var.StagingDir)\README-PORTABLE.md" />
-  </ComponentGroup>
-
-  <!-- platforms\qwindows.dll -->
-  <ComponentGroup Id="PlatformPlugins" Directory="PlatformsFolder">
-    <Files Include="$(var.StagingDir)\plugins\platforms\*.dll" />
-  </ComponentGroup>
-
-  <!-- iconengines\ -->
-  <ComponentGroup Id="IconEnginePlugins" Directory="IconEnginesFolder">
-    <Files Include="$(var.StagingDir)\plugins\iconengines\*.dll" />
-  </ComponentGroup>
-
-  <!-- imageformats\ -->
-  <ComponentGroup Id="ImageFormatPlugins" Directory="ImageFormatsFolder">
-    <Files Include="$(var.StagingDir)\plugins\imageformats\*.dll" />
-  </ComponentGroup>
-
-  <!-- styles\ -->
-  <ComponentGroup Id="StylePlugins" Directory="StylesFolder">
-    <Files Include="$(var.StagingDir)\plugins\styles\*.dll" />
-  </ComponentGroup>
-
-  <!-- licenses\ -->
-  <ComponentGroup Id="LicenseFiles" Directory="LicensesFolder">
-    <Files Include="$(var.StagingDir)\licenses\*.txt" />
-  </ComponentGroup>
-
 </Wix>

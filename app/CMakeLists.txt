@@ -13,6 +13,20 @@ if(NOT Qt6_FOUND)
     return()
 endif()
 
+# Qt test executables need Qt DLLs on PATH during gtest_discover_tests (POST_BUILD)
+# and during CTest execution. Add Qt's bin directory to the environment so both work.
+get_target_property(_qt6_core_loc Qt6::Core IMPORTED_LOCATION)
+if(NOT _qt6_core_loc)
+    get_target_property(_qt6_core_loc Qt6::Core LOCATION)
+endif()
+if(_qt6_core_loc)
+    get_filename_component(_qt6_bin_dir "${_qt6_core_loc}" DIRECTORY)
+    if(WIN32 AND _qt6_bin_dir)
+        string(REGEX REPLACE "/$" "" _qt6_bin_dir "${_qt6_bin_dir}")
+        set(ENV{PATH} "${_qt6_bin_dir}\;$ENV{PATH}")
+    endif()
+endif()
+
 # ---- Build metadata ----
 # Single source of truth: derived from the root project(... VERSION ...) call.
 # Never hard-code the version string here.
