@@ -11,6 +11,8 @@ jobs:
   build:
     name: Build Release Artifacts
     runs-on: windows-2022
+    env:
+      WIX_ACCEPT_EULA: '1'
     steps:
       - uses: actions/checkout@v4
 
@@ -29,8 +31,6 @@ jobs:
       - name: Build canonical release artifacts
         run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1
         shell: pwsh
-        env:
-          WIX_ACCEPT_EULA: '1'
 
       - name: Resolve artifact paths
         id: artifact
