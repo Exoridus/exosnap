@@ -222,6 +222,12 @@ struct VisualScenario {
     QString marker_sidecar_file;
     QString marker_recording_state; // "Recording" / "Paused"
     bool hk_marker_active = false;  // hotkey action active on HotkeysPage
+
+    // --- Split recording scenarios (SPLIT-RECORDING-R1) ---
+    bool split_action_visible = false;
+    bool split_action_enabled = false;
+    int completed_segment_count = 1;        // number of segments in completed result
+    bool completed_segment_missing = false; // at least one segment file is missing
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();
