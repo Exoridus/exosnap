@@ -105,7 +105,7 @@ cmake --build --preset windows-x64-debug --target probe_nvenc
 The executable is produced at:
 
 ```text
-build/windows-x64-debug/apps/probes/probe_nvenc/Debug/probe_nvenc.exe
+build/windows-x64-debug/tools/probes/probe_nvenc/Debug/probe_nvenc.exe
 ```
 
 ## Run

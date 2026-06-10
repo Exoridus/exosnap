@@ -160,7 +160,7 @@ function Find-Tool {
 $clangTidy = Find-Tool 'clang-tidy' -Optional
 $cppcheck  = Find-Tool 'cppcheck' -Optional
 
-$srcFiles = @(git -C $repoRoot ls-files -- 'libs/' 'apps/' 'tests/' |
+$srcFiles = @(git -C $repoRoot ls-files -- 'libs/' 'app/' 'tests/' |
     Where-Object { $_ -match '\.(cpp|h)$' }
 )
 
@@ -205,7 +205,7 @@ if ($cppcheck) {
         '-I', 'libs/capability/include',
         '-I', 'libs/recorder_facade/include',
         'libs',
-        'apps'
+        'app'
     )
 }
 else {

@@ -21,13 +21,13 @@ cmake --build --preset windows-x64-debug --target exosnap
 
 ```pwsh
 C:\Qt\6.9.0\msvc2022_64\bin\windeployqt6.exe `
-    build\windows-x64-debug\apps\exosnap\Debug\exosnap.exe
+    build\windows-x64-debug\app\Debug\exosnap.exe
 ```
 
 ## Project structure
 
 ```
-apps/exosnap/
+app/
 ├── main.cpp                        Qt entry point, centralized theme application
 ├── MainWindow.h / .cpp             QMainWindow: sidebar nav + QStackedWidget
 ├── ui/theme/

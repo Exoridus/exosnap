@@ -7,7 +7,7 @@ Design (Hybrid v3):
   - Inner ring: accent color (mint idle / coral recording), 1.6px stroke, r=6.2
   - Center dot: accent color filled, r=2.4
 
-Output (relative to script location ../apps/exosnap/assets/brand/):
+Output (relative to script location ../app/assets/brand/):
   exosnap-logo-idle.ico       -- 16, 32, 48, 64, 128, 256 px
   exosnap-logo-recording.ico  -- same sizes, coral inner ring + dot
 
@@ -115,7 +115,7 @@ def make_ico(recording: bool) -> list[Image.Image]:
 
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    brand_dir = os.path.join(script_dir, "..", "apps", "exosnap", "assets", "brand")
+    brand_dir = os.path.join(script_dir, "..", "app", "assets", "brand")
     os.makedirs(brand_dir, exist_ok=True)
 
     for recording, name in [(False, "exosnap-logo-idle.ico"), (True, "exosnap-logo-recording.ico")]:

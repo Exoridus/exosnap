@@ -32,6 +32,9 @@
 .PARAMETER SkipSmoke
     Skip the extracted-ZIP launch smoke test.
 
+.PARAMETER SkipMsi
+    Skip MSI package build (requires WiX Toolset v4).
+
 .PARAMETER KeepStaging
     Do not delete a previous staging tree before installing (debugging aid).
 #>
@@ -40,6 +43,7 @@ param(
     [switch]$SkipConfigure,
     [switch]$SkipBuild,
     [switch]$SkipSmoke,
+    [switch]$SkipMsi,
     [switch]$KeepStaging
 )
 
@@ -53,7 +57,7 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $Platform = 'windows-x64'
 $Preset = 'windows-x64-release'
 $BuildDir = Join-Path $RepoRoot "build/$Preset"
-$ReleaseExe = Join-Path $BuildDir 'apps/exosnap/Release/exosnap.exe'
+$ReleaseExe = Join-Path $BuildDir 'app/Release/exosnap.exe'
 
 # ---------------------------------------------------------------------------
 # Canonical version — single source of truth is the root project(... VERSION ...)
@@ -63,17 +67,23 @@ if ($cmakeText -notmatch 'project\(\s*exosnap\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]
     throw "Could not parse project(exosnap VERSION x.y.z) from root CMakeLists.txt."
 }
 $Version = $Matches[1]
-$PackageName = "ExoSnap-$Version-$Platform"
+$PortablePackageName = "ExoSnap-$Version-$Platform-portable"
+$MsiPackageName = "ExoSnap-$Version-$Platform"
 
 $ReleaseRoot = Join-Path $RepoRoot '.workspace/release'
 $ReleaseDir = Join-Path $ReleaseRoot $Version
 $StagingDir = Join-Path $ReleaseDir 'staging'
-$PackageRoot = Join-Path $StagingDir $PackageName
-$ZipPath = Join-Path $ReleaseDir "$PackageName.zip"
-$ShaPath = Join-Path $ReleaseDir "$PackageName.sha256"
+$PackageRoot = Join-Path $StagingDir $PortablePackageName
+$ZipPath = Join-Path $ReleaseDir "$PortablePackageName.zip"
+$ShaPath = Join-Path $ReleaseDir "$PortablePackageName.sha256"
+$MsiPath = Join-Path $ReleaseDir "$MsiPackageName.msi"
+$MsiShaPath = Join-Path $ReleaseDir "$MsiPackageName.msi.sha256"
 $ManifestPath = Join-Path $ReleaseDir 'artifact-manifest.json'
 $ReportPath = Join-Path $ReleaseDir 'validation-report.md'
 $SmokeDir = Join-Path $ReleaseDir 'smoke'
+
+$msiBuilt = $false
+$msiSha = ''
 
 $script:Errors = [System.Collections.Generic.List[string]]::new()
 $script:ReportLines = [System.Collections.Generic.List[string]]::new()
@@ -130,9 +140,10 @@ function Invoke-Heartbeat {
 
 Write-Host ""
 Write-Host "ExoSnap release artifact builder"
-Write-Host "  Version : $Version"
-Write-Host "  Package : $PackageName"
-Write-Host "  Output  : $ReleaseDir"
+Write-Host "  Version  : $Version"
+Write-Host "  Portable : $PortablePackageName"
+Write-Host "  MSI      : $MsiPackageName"
+Write-Host "  Output   : $ReleaseDir"
 Write-Host ""
 
 # ---------------------------------------------------------------------------
@@ -236,9 +247,43 @@ if ($knownLimits -notmatch [Regex]::Escape($Version)) { Add-Error "KNOWN_LIMITAT
 Write-Host "  Files in package : $($allFiles.Count)"
 
 # ---------------------------------------------------------------------------
+# 3a. Runtime pruning — remove safely known-unnecessary files
+# ---------------------------------------------------------------------------
+$pruneCandidates = @(
+    'opengl32sw.dll'           # Software OpenGL fallback — ExoSnap uses D3D11 exclusively
+)
+$removedFiles = @()
+foreach ($candidate in $pruneCandidates) {
+    $candidatePath = Join-Path $PackageRoot $candidate
+    if (Test-Path -LiteralPath $candidatePath) {
+        Remove-Item -LiteralPath $candidatePath -Force
+        $removedFiles += $candidate
+        Write-Host "  Pruned: $candidate"
+    }
+}
+# Remove translations directory if present (no i18n in MVP)
+$translationsDir = Join-Path $PackageRoot 'translations'
+if (Test-Path -LiteralPath $translationsDir) {
+    Remove-Item -LiteralPath $translationsDir -Recurse -Force
+    $removedFiles += 'translations/'
+    Write-Host "  Pruned: translations/"
+}
+# Remove bearer/TLS plugins (no network features in MVP)
+foreach ($dir in @('bearer', 'tls')) {
+    $pluginDir = Join-Path $PackageRoot "plugins/$dir"
+    if (Test-Path -LiteralPath $pluginDir) {
+        Remove-Item -LiteralPath $pluginDir -Recurse -Force
+        $removedFiles += "plugins/$dir/"
+        Write-Host "  Pruned: plugins/$dir/"
+    }
+}
+$allFiles = Get-ChildItem -LiteralPath $PackageRoot -Recurse -File
+Write-Host "  Files after pruning: $($allFiles.Count)"
+
+# ---------------------------------------------------------------------------
 # 4. Create the canonical ZIP (one top-level package directory)
 # ---------------------------------------------------------------------------
-Write-Step "Creating ZIP: $PackageName.zip"
+Write-Step "Creating ZIP: $PortablePackageName.zip"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
 # includeBaseDirectory = $true -> archive entries are prefixed with the package
@@ -253,34 +298,89 @@ $uncompressed = ($allFiles | Measure-Object -Property Length -Sum).Sum
 # 5. SHA-256 sidecar (generated AFTER the final ZIP)
 # ---------------------------------------------------------------------------
 $sha = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-Set-Content -LiteralPath $ShaPath -Value "$sha  $PackageName.zip" -NoNewline -Encoding ascii
+Set-Content -LiteralPath $ShaPath -Value "$sha  $PortablePackageName.zip" -NoNewline -Encoding ascii
 Write-Host "  SHA-256 : $sha"
 
 # ---------------------------------------------------------------------------
-# 6. Manifest + report
+# 6. MSI package (WiX Toolset v4)
+# ---------------------------------------------------------------------------
+if (-not $SkipMsi) {
+    Write-Step "Building MSI: $MsiPackageName.msi"
+
+    $wix = Get-Command wix -ErrorAction SilentlyContinue
+    if (-not $wix) {
+        Write-Host "  WiX Toolset v4 not found on PATH. Skipping MSI build."
+        Write-Host "  Install: dotnet tool install --global wix"
+    }
+    else {
+        $wxsPath = Join-Path $RepoRoot 'packaging/msi/Package.wxs'
+        if (-not (Test-Path -LiteralPath $wxsPath)) {
+            Add-Error "MSI: packaging/msi/Package.wxs not found"
+        }
+        else {
+            try {
+                $msiArgs = @(
+                    'build', '-arch', 'x64',
+                    '-o', $MsiPath,
+                    '-d', "StagingDir=$PackageRoot",
+                    '-d', "ProductVersion=$Version",
+                    $wxsPath
+                )
+                Invoke-Heartbeat -Name 'wix build' -FilePath 'wix' -Arguments $msiArgs
+
+                if (Test-Path -LiteralPath $MsiPath) {
+                    $msiSha = (Get-FileHash -LiteralPath $MsiPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                    Set-Content -LiteralPath $MsiShaPath -Value "$msiSha  $MsiPackageName.msi" -NoNewline -Encoding ascii
+                    Write-Host "  MSI SHA-256: $msiSha"
+                    $msiBuilt = $true
+                }
+                else {
+                    Add-Error "MSI: build did not produce output file"
+                    $msiBuilt = $false
+                }
+            }
+            catch {
+                Add-Error "MSI: build failed: $_"
+                $msiBuilt = $false
+            }
+        }
+    }
+}
+else {
+    Write-Step "Skipping MSI build (-SkipMsi)."
+    $msiBuilt = $false
+    $msiSha = ''
+}
+
+# ---------------------------------------------------------------------------
+# 7. Manifest + report
 # ---------------------------------------------------------------------------
 $sourceCommit = (& git -C $RepoRoot rev-parse HEAD).Trim()
 $fileEntries = foreach ($file in ($allFiles | Sort-Object FullName)) {
     [ordered]@{
-        path   = "$PackageName/" + $file.FullName.Substring($PackageRoot.Length + 1).Replace('\', '/')
+        path   = "$PortablePackageName/" + $file.FullName.Substring($PackageRoot.Length + 1).Replace('\', '/')
         size   = $file.Length
         sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     }
 }
 $manifest = [ordered]@{
-    product      = 'ExoSnap'
-    version      = $Version
-    platform     = $Platform
-    sourceCommit = $sourceCommit
-    archive      = "$PackageName.zip"
-    sha256       = $sha
-    fileCount    = $allFiles.Count
-    files        = $fileEntries
+    product         = 'ExoSnap'
+    version         = $Version
+    platform        = $Platform
+    sourceCommit    = $sourceCommit
+    portableArchive = "$PortablePackageName.zip"
+    portableSha256  = $sha
+    fileCount       = $allFiles.Count
+    files           = $fileEntries
+}
+if ($msiBuilt) {
+    $manifest['msiPackage'] = "$MsiPackageName.msi"
+    $manifest['msiSha256'] = $msiSha
 }
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ManifestPath -Encoding utf8
 
 # ---------------------------------------------------------------------------
-# 7. Extracted-ZIP smoke (isolated environment; cannot touch real user data)
+# 8. Extracted-ZIP smoke (isolated environment; cannot touch real user data)
 # ---------------------------------------------------------------------------
 $smokeResult = 'skipped'
 $smokeNotes = @()
@@ -293,9 +393,9 @@ if (-not $SkipSmoke) {
     New-Item -ItemType Directory -Path $extractRoot, $isoConfig, $isoTemp -Force | Out-Null
     [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $extractRoot)
 
-    $extractedPkg = Join-Path $extractRoot $PackageName
+    $extractedPkg = Join-Path $extractRoot $PortablePackageName
     if (-not (Test-Path -LiteralPath $extractedPkg -PathType Container)) {
-        Add-Error "Smoke: extracted ZIP does not contain a single top-level '$PackageName' directory"
+        Add-Error "Smoke: extracted ZIP does not contain a single top-level '$PortablePackageName' directory"
         $smokeResult = 'failed'
     }
     else {
@@ -358,7 +458,7 @@ else {
 }
 
 # ---------------------------------------------------------------------------
-# Report
+# 9. Report
 # ---------------------------------------------------------------------------
 Add-ReportLine "# ExoSnap $Version — Release Artifact Validation Report"
 Add-ReportLine ""
@@ -366,12 +466,17 @@ Add-ReportLine "- Generated (local time): $(Get-Date -Format 'yyyy-MM-dd HH:mm:s
 Add-ReportLine "- Source commit: $sourceCommit"
 Add-ReportLine "- Version: $Version"
 Add-ReportLine "- Build preset: $Preset (Release)"
-Add-ReportLine "- Archive: $PackageName.zip"
-Add-ReportLine "- Archive SHA-256: $sha"
-Add-ReportLine "- Checksum file: $PackageName.sha256"
+Add-ReportLine "- Portable archive: $PortablePackageName.zip"
+Add-ReportLine "- Portable SHA-256: $sha"
+Add-ReportLine "- Portable checksum file: $PortablePackageName.sha256"
 Add-ReportLine "- File count: $($allFiles.Count)"
 Add-ReportLine "- Compressed size: $([math]::Round($zipInfo.Length / 1MB, 2)) MB ($($zipInfo.Length) bytes)"
 Add-ReportLine "- Uncompressed size: $([math]::Round($uncompressed / 1MB, 2)) MB ($uncompressed bytes)"
+if ($msiBuilt) {
+    Add-ReportLine "- MSI package: $MsiPackageName.msi"
+    Add-ReportLine "- MSI SHA-256: $msiSha"
+    Add-ReportLine "- MSI checksum file: $MsiPackageName.msi.sha256"
+}
 Add-ReportLine ""
 Add-ReportLine "## Executable metadata"
 Add-ReportLine "- ProductName: $($vi.ProductName)"
@@ -398,8 +503,12 @@ else {
 $script:ReportLines -join "`n" | Set-Content -LiteralPath $ReportPath -Encoding utf8
 
 Write-Host ""
-Write-Host "Artifact   : $ZipPath"
-Write-Host "Checksum   : $ShaPath"
+Write-Host "Portable   : $ZipPath"
+Write-Host "Portable SHA: $ShaPath"
+if ($msiBuilt) {
+    Write-Host "MSI        : $MsiPath"
+    Write-Host "MSI SHA    : $MsiShaPath"
+}
 Write-Host "Manifest   : $ManifestPath"
 Write-Host "Report     : $ReportPath"
 Write-Host "Smoke      : $smokeResult"

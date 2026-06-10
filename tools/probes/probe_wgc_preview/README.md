@@ -14,7 +14,7 @@ cmake --build --preset windows-x64-debug --target probe_wgc_preview
 ```
 
 The executable is produced at:
-`build/windows-x64-debug/apps/probes/probe_wgc_preview/<Configuration>/probe_wgc_preview.exe`
+`build/windows-x64-debug/tools/probes/probe_wgc_preview/<Configuration>/probe_wgc_preview.exe`
 
 ## Run
 

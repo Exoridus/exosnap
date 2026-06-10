@@ -21,7 +21,7 @@ cmake --build --preset windows-x64-debug --target probe_process_loopback
 ```
 
 The executable is produced at:
-`build/windows-x64-debug/apps/probes/probe_process_loopback/<Configuration>/probe_process_loopback.exe`
+`build/windows-x64-debug/tools/probes/probe_process_loopback/<Configuration>/probe_process_loopback.exe`
 
 ## Run
 

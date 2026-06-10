@@ -37,9 +37,9 @@ CMakeLists.txt.user
 *.qbs.user.*
 
 #Qt / MSBuild artifacts
-apps/exosnap/Generated Files/
-apps/exosnap/obj/
-apps/exosnap/packages/
+app/Generated Files/
+app/obj/
+app/packages/
 
 #Log files
 *.log

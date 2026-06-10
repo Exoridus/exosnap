@@ -55,11 +55,11 @@ if ($VerboseOutput) {
 }
 
 if ($Staged) {
-    $srcFiles = @(git -C $repoRoot diff --cached --name-only --diff-filter=ACMR -- 'libs/' 'apps/' 'tests/' |
+    $srcFiles = @(git -C $repoRoot diff --cached --name-only --diff-filter=ACMR -- 'libs/' 'app/' 'tests/' |
         Where-Object { $_ -match '\.(cpp|h)$' })
 }
 else {
-    $srcFiles = @(git -C $repoRoot ls-files -- 'libs/' 'apps/' 'tests/' |
+    $srcFiles = @(git -C $repoRoot ls-files -- 'libs/' 'app/' 'tests/' |
         Where-Object { $_ -match '\.(cpp|h)$' })
 }
 
@@ -74,7 +74,7 @@ if (-not $srcFiles) {
 Push-Location $repoRoot
 try {
     if ($Fix -and $Staged) {
-        $unstagedFiles = @(git -C $repoRoot diff --name-only -- 'libs/' 'apps/' 'tests/' |
+        $unstagedFiles = @(git -C $repoRoot diff --name-only -- 'libs/' 'app/' 'tests/' |
             Where-Object { $_ -match '\.(cpp|h)$' })
         $unstagedSet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
         foreach ($file in $unstagedFiles) {
