@@ -29,6 +29,8 @@ jobs:
       - name: Build canonical release artifacts
         run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1
         shell: pwsh
+        env:
+          WIX_ACCEPT_EULA: '1'
 
       - name: Resolve artifact paths
         id: artifact
