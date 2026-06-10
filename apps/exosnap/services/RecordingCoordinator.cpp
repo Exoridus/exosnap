@@ -731,7 +731,10 @@ void RecordingCoordinator::OnSegmentCompleted(const recorder_core::CompletedSegm
         segments_.push_back(segment);
         total = segments_.size();
     }
-    split_pending_.store(false);
+    // True only when this finalize was triggered by a split request (a new segment
+    // follows). The final session-end finalize has no pending request, so it must
+    // not produce a spurious "Started segment N" toast.
+    const bool was_split_boundary = split_pending_.exchange(false);
 
     diagnostics::AppLog::info(QStringLiteral("split"),
                               QStringLiteral("segment finalized index=%1 duration_ms=%2 bytes=%3 ok=%4 path=%5")
@@ -748,10 +751,10 @@ void RecordingCoordinator::OnSegmentCompleted(const recorder_core::CompletedSegm
         WriteSegmentMarkerSidecar(segment);
 
     // Feedback names the segment that just *started* (the one after the boundary).
-    // total counts finalized segments; the new live segment index is total (0-based)
-    // i.e. human-friendly part number total+1. Only surface this while still
-    // recording (the final session-end finalize also fires this callback).
-    if (is_recording_.load() && segment.succeeded) {
+    // Only on an actual split boundary (not the final session-end finalize) and
+    // only for a successfully finalized prior segment. total counts finalized
+    // segments; the new live segment's human-friendly part number is total+1.
+    if (was_split_boundary && is_recording_.load() && segment.succeeded) {
         const qulonglong next_part = static_cast<qulonglong>(total) + 1;
         PostSplitFeedback(true, QStringLiteral("Started segment %1").arg(next_part));
     }
