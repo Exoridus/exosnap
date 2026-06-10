@@ -10,6 +10,7 @@
 #include "pages/RecordPage.h"
 #include "pages/WebcamPage.h"
 #include "services/GlobalHotkeyService.h"
+#include "ui/WindowGeometryPolicy.h"
 #include "ui/chrome/OperationalTitleBar.h"
 #include "ui/chrome/RecordingStatusGuards.h"
 #include "ui/dialogs/AboutOverlay.h"
@@ -1192,24 +1193,15 @@ void MainWindow::applyRestoredGeometry() {
         }
     }
 
-    if (screen == nullptr) {
-        // Saved position lands on no connected monitor: center on primary.
+    // Saved position lands on no connected monitor: center on primary.
+    const bool center_on_primary = screen == nullptr;
+    if (center_on_primary)
         screen = QGuiApplication::primaryScreen();
-        if (screen == nullptr)
-            return;
-        const QRect avail = screen->availableGeometry();
-        const int w = std::clamp(geo.width, minimumWidth(), avail.width());
-        const int h = std::clamp(geo.height, minimumHeight(), avail.height());
-        setGeometry(avail.left() + (avail.width() - w) / 2, avail.top() + (avail.height() - h) / 2, w, h);
-    } else {
-        const QRect avail = screen->availableGeometry();
-        const int w = std::clamp(geo.width, minimumWidth(), avail.width());
-        const int h = std::clamp(geo.height, minimumHeight(), avail.height());
-        // Keep at least a 100×40px strip of the window inside the available area.
-        const int x = std::clamp(geo.x, avail.left(), avail.right() - std::min(w, 100));
-        const int y = std::clamp(geo.y, avail.top(), avail.bottom() - 40);
-        setGeometry(x, y, w, h);
-    }
+    if (screen == nullptr)
+        return;
+    const QRect saved(geo.x, geo.y, geo.width, geo.height);
+    setGeometry(ui::ClampRestoredWindowGeometry(saved, screen->availableGeometry(),
+                                                QSize(minimumWidth(), minimumHeight()), center_on_primary));
 
     if (geo.maximized)
         QTimer::singleShot(0, this, &MainWindow::showMaximized);
@@ -1593,6 +1585,14 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
 
     if (title_bar_ && stack_)
         title_bar_->setActivePage(navHighlightIndexFor(stack_->currentIndex()));
+
+    // Deterministic keyboard focus (VR-004): give the named widget tab focus so
+    // :focus styling is visible in screenshots.
+    if (!scenario.focused_object.isEmpty()) {
+        if (auto* target = findChild<QWidget*>(scenario.focused_object); target && target->isEnabled())
+            target->setFocus(Qt::TabFocusReason);
+    }
+
     installVisualReadyMarker(scenario.id);
     QTimer::singleShot(0, this, [this, scenario_id = scenario.id]() { installVisualReadyMarker(scenario_id); });
     setWindowTitle(QStringLiteral("ExoSnap [visual-test:%1]").arg(scenario.id));

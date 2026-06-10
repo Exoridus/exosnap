@@ -78,6 +78,17 @@ std::optional<recorder_core::AudioCodec> StringToAudioCodec(const QString& s) {
     return std::nullopt;
 }
 
+std::optional<RecordingMarkerType> StringToMarkerType(const QString& s) {
+    const QString lower = s.trimmed().toLower();
+    if (lower == QStringLiteral("general"))
+        return RecordingMarkerType::General;
+    if (lower == QStringLiteral("cut"))
+        return RecordingMarkerType::Cut;
+    if (lower == QStringLiteral("highlight"))
+        return RecordingMarkerType::Highlight;
+    return std::nullopt;
+}
+
 // ---- Serialize ----
 
 QJsonObject SegmentToJson(const CompletedRecordingSegment& seg) {
@@ -148,6 +159,21 @@ QJsonObject RecordingToJson(const CompletedRecording& rec) {
             segs.append(SegmentToJson(seg));
         obj[QStringLiteral("segments")] = segs;
     }
+    // Markers (VR-006): without these the marker summary silently disappears
+    // from restored history entries even though the sidecar file still exists.
+    if (!rec.markers.empty()) {
+        QJsonArray markers;
+        for (const auto& m : rec.markers) {
+            QJsonObject mo;
+            mo[QStringLiteral("timeMs")] = static_cast<qint64>(m.time_ms);
+            mo[QStringLiteral("type")] = QLatin1StringView(RecordingMarkerTypeToString(m.type));
+            mo[QStringLiteral("label")] = QString::fromStdString(m.label);
+            markers.append(mo);
+        }
+        obj[QStringLiteral("markers")] = markers;
+    }
+    if (!rec.marker_sidecar_path.isEmpty())
+        obj[QStringLiteral("markerSidecarPath")] = rec.marker_sidecar_path;
     return obj;
 }
 
@@ -282,6 +308,38 @@ bool ValidateCompletedRecording(const QJsonObject& obj, CompletedRecording& out)
                 QStringLiteral("Skipped %1 invalid segment(s) in a recording entry").arg(skipped_segments));
         }
     }
+
+    // Markers (VR-006). An invalid marker is skipped; missing array means a
+    // marker-less (or pre-VR-006) entry — never a load failure.
+    if (obj.contains(QStringLiteral("markers")) && obj[QStringLiteral("markers")].isArray()) {
+        const QJsonArray markers = obj[QStringLiteral("markers")].toArray();
+        int skipped_markers = 0;
+        for (const QJsonValue& mv : markers) {
+            if (!mv.isObject()) {
+                ++skipped_markers;
+                continue;
+            }
+            const QJsonObject mo = mv.toObject();
+            const double time_ms = mo.value(QStringLiteral("timeMs")).toDouble(-1.0);
+            const auto type = StringToMarkerType(mo.value(QStringLiteral("type")).toString());
+            if (time_ms < 0.0 || !type.has_value()) {
+                ++skipped_markers;
+                continue;
+            }
+            RecordingMarker marker;
+            marker.time_ms = static_cast<uint64_t>(time_ms);
+            marker.type = *type;
+            marker.label = mo.value(QStringLiteral("label")).toString().toStdString();
+            out.markers.push_back(std::move(marker));
+        }
+        if (skipped_markers > 0) {
+            diagnostics::AppLog::warning(
+                QStringLiteral("history.store"),
+                QStringLiteral("Skipped %1 invalid marker(s) in a recording entry").arg(skipped_markers));
+        }
+    }
+    if (obj.contains(QStringLiteral("markerSidecarPath")))
+        out.marker_sidecar_path = obj[QStringLiteral("markerSidecarPath")].toString();
 
     out.succeeded = true;
     return true;

@@ -166,6 +166,13 @@ class PreviewSurface : public QWidget {
     bool recording_ = false;
     FrameTone frame_tone_ = FrameTone::Ready;
 
+    // Full overlay texts; the labels render an elided variant fitted to the
+    // current width and the rows hide entirely below a minimum width (VR-009).
+    QString top_meta_full_;
+    QString bottom_left_full_;
+    QString bottom_right_full_;
+    void applyOverlayTextElision();
+
     std::unique_ptr<exosnap::DxgiPreviewRenderer> dxgi_renderer_;
     bool dxgi_active_ = false;
 };

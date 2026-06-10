@@ -1047,6 +1047,7 @@ void ConfigPage::emitCurrentFormatSettings() {
     reconcileContainerCodecRules();
     updateFormatDisplay();
     updateTimingSelection();
+    updateSplitSelection();
     updateEffectiveOutputSummary();
     updateOutputValidationState();
     updateExampleFilename();
@@ -1149,6 +1150,9 @@ void ConfigPage::updateSplitSelection() {
     if (!split_mode_combo_)
         return;
     const SplitRecordingSettings& s = format_settings_.split;
+    // MP4 cannot produce segmented output (IMF Sink Writer); the configured split
+    // mode is preserved untouched so switching back to MKV/WebM restores it.
+    const bool split_supported = format_settings_.container != capability::Container::Mp4;
     {
         QSignalBlocker block_combo(split_mode_combo_);
         const int idx = split_mode_combo_->findData(static_cast<int>(s.mode));
@@ -1159,11 +1163,17 @@ void ConfigPage::updateSplitSelection() {
         QSignalBlocker block_spin(split_custom_minutes_spin_);
         split_custom_minutes_spin_->setValue(static_cast<int>(s.custom_minutes));
     }
+    split_mode_combo_->setEnabled(split_supported);
+    if (split_custom_minutes_spin_)
+        split_custom_minutes_spin_->setEnabled(split_supported);
     if (split_custom_widget_)
-        split_custom_widget_->setVisible(s.mode == SplitRecordingMode::Custom);
+        split_custom_widget_->setVisible(split_supported && s.mode == SplitRecordingMode::Custom);
 
     if (split_summary_label_) {
-        if (s.mode == SplitRecordingMode::Off) {
+        if (!split_supported) {
+            split_summary_label_->setText(
+                QStringLiteral("Automatic split is available for MKV/WebM. MP4 records a single file."));
+        } else if (s.mode == SplitRecordingMode::Off) {
             split_summary_label_->setText(QStringLiteral("Single file (split off). Manual splits still work."));
         } else {
             const uint64_t ms = SplitDurationMs(s);

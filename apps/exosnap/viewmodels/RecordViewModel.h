@@ -181,6 +181,9 @@ class RecordViewModel {
     static constexpr int kMaxRecentRecordings = 10;
 
     void SetHistoryStore(RecordingHistoryStore* store);
+    // Visual-test harness isolation (VR-003): when disabled, history mutations
+    // stay in-memory and never reach the user's persisted store.
+    void SetHistoryPersistenceEnabled(bool enabled);
     void RestoreHistory(const QVector<CompletedRecording>& recordings);
 
     void AddToRecentRecordings(const CompletedRecording& recording);
@@ -204,6 +207,7 @@ class RecordViewModel {
 
   private:
     RecordingHistoryStore* history_store_ = nullptr;
+    bool history_persistence_enabled_ = true;
     void PersistHistory() const;
 };
 

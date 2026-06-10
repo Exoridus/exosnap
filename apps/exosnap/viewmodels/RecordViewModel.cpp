@@ -785,6 +785,10 @@ void RecordViewModel::SetHistoryStore(RecordingHistoryStore* store) {
     history_store_ = store;
 }
 
+void RecordViewModel::SetHistoryPersistenceEnabled(bool enabled) {
+    history_persistence_enabled_ = enabled;
+}
+
 void RecordViewModel::RestoreHistory(const QVector<CompletedRecording>& recordings) {
     recent_recordings = recordings;
     while (recent_recordings.size() > kMaxRecentRecordings) {
@@ -794,7 +798,7 @@ void RecordViewModel::RestoreHistory(const QVector<CompletedRecording>& recordin
 }
 
 void RecordViewModel::PersistHistory() const {
-    if (history_store_)
+    if (history_persistence_enabled_ && history_store_)
         history_store_->Save(recent_recordings);
 }
 

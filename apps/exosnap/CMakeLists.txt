@@ -48,6 +48,8 @@ qt_add_executable(exosnap WIN32
     ui/theme/exosnap_theme.qrc
     ui/brand/BrandMarkWidget.h
     ui/brand/BrandMarkWidget.cpp
+    ui/WindowGeometryPolicy.h
+    ui/WindowGeometryPolicy.cpp
     ui/chrome/OperationalTitleBar.h
     ui/chrome/OperationalTitleBar.cpp
     ui/chrome/GlobalRecordingBar.h
@@ -387,6 +389,16 @@ exosnap_add_gtest(
     LIBRARIES Qt6::Core
 )
 target_include_directories(region_geometry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+    NAME window_geometry_policy_tests
+    TEST_PREFIX window.
+    SOURCES
+        tests/test_window_geometry_policy.cpp
+        ui/WindowGeometryPolicy.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(window_geometry_policy_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME error_message_tests

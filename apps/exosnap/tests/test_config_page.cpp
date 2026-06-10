@@ -10,6 +10,7 @@
 #include <QMenu>
 #include <QObject>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QToolButton>
 
 #include "models/OutputSettingsModel.h"
@@ -1567,6 +1568,71 @@ TEST_F(ConfigPageTest, ResetChanges_And_ResetToDefaults_AreDistinctActions) {
     }
     EXPECT_TRUE(found_reset_changes) << "Missing 'Reset changes' action in overflow menu";
     EXPECT_TRUE(found_reset_all) << "Missing 'Reset all presets to factory defaults' action in overflow menu";
+}
+
+// ---- MP4 automatic-split gating (VR-005 / functional P2-005) -------------
+
+TEST_F(ConfigPageTest, Mp4DisablesAutomaticSplitControlsWithHonestSummary) {
+    OutputSettingsModel settings = output_defaults_;
+    settings.container = capability::Container::Mp4;
+    settings.split.mode = SplitRecordingMode::Every30Min;
+
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setOutputSettings(settings);
+
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitModeCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_FALSE(combo->isEnabled());
+
+    auto* summary = page.findChild<QLabel*>(QStringLiteral("splitSummaryLabel"));
+    ASSERT_NE(summary, nullptr);
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("MKV/WebM")));
+    EXPECT_FALSE(summary->text().contains(QStringLiteral("Manual splits")));
+}
+
+TEST_F(ConfigPageTest, SplitModeSurvivesContainerRoundTripThroughMp4) {
+    OutputSettingsModel settings = output_defaults_;
+    settings.container = capability::Container::Matroska;
+    settings.split.mode = SplitRecordingMode::Every15Min;
+
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setOutputSettings(settings);
+
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitModeCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_TRUE(combo->isEnabled());
+    EXPECT_EQ(combo->currentData().toInt(), static_cast<int>(SplitRecordingMode::Every15Min));
+
+    auto* mp4_btn = page.findChild<QPushButton*>(QStringLiteral("containerMp4Button"));
+    ASSERT_NE(mp4_btn, nullptr);
+    mp4_btn->click();
+    EXPECT_FALSE(combo->isEnabled());
+    // The configured mode is preserved while MP4 is selected (not reset to Off).
+    EXPECT_EQ(combo->currentData().toInt(), static_cast<int>(SplitRecordingMode::Every15Min));
+
+    auto* mkv_btn = page.findChild<QPushButton*>(QStringLiteral("containerMkvButton"));
+    ASSERT_NE(mkv_btn, nullptr);
+    mkv_btn->click();
+    EXPECT_TRUE(combo->isEnabled());
+    EXPECT_EQ(combo->currentData().toInt(), static_cast<int>(SplitRecordingMode::Every15Min));
+}
+
+TEST_F(ConfigPageTest, Mp4HidesCustomSplitIntervalEditor) {
+    OutputSettingsModel settings = output_defaults_;
+    settings.container = capability::Container::Mp4;
+    settings.split.mode = SplitRecordingMode::Custom;
+    settings.split.custom_minutes = 45;
+
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setOutputSettings(settings);
+
+    auto* spin = page.findChild<QSpinBox*>(QStringLiteral("splitCustomMinutesSpin"));
+    ASSERT_NE(spin, nullptr);
+    EXPECT_FALSE(spin->isEnabled());
+    ASSERT_NE(spin->parentWidget(), nullptr);
+    EXPECT_TRUE(spin->parentWidget()->isHidden());
+    // Custom interval value survives the MP4 detour.
+    EXPECT_EQ(spin->value(), 45);
 }
 
 } // namespace

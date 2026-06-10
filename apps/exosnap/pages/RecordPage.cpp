@@ -1418,6 +1418,14 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 
     result_details_outer->addWidget(result_details_row);
 
+    // Multi-segment summary (shown for split recordings; flags partial failure)
+    auto* result_segments_label_ = new QLabel(result_details_panel_);
+    result_segments_label_->setObjectName(QStringLiteral("resultSegmentsLabel"));
+    result_segments_label_->setProperty("labelRole", "resultSegments");
+    result_segments_label_->setWordWrap(true);
+    result_segments_label_->setVisible(false);
+    result_details_outer->addWidget(result_segments_label_);
+
     // Markers label (shown when recording has markers)
     auto* result_markers_label_ = new QLabel(result_details_panel_);
     result_markers_label_->setObjectName(QStringLiteral("resultMarkersLabel"));
@@ -2230,6 +2238,11 @@ QImage MakeVisualTestWebcamFrame() {
 
 void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
     visual_test_mode_ = true;
+    // Harness isolation (VR-003): scenarios must never write into — or render
+    // from — the user's real recording history. Persistence is disabled before
+    // any SetResult below; the loaded history is replaced by scenario state.
+    view_model_.SetHistoryPersistenceEnabled(false);
+    view_model_.ClearRecentRecordings();
     if (ui_clock_timer_)
         ui_clock_timer_->stop();
     if (countdown_timer_)
@@ -2439,13 +2452,10 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
             result.audio_codec = recorder_core::AudioCodec::AacMf;
             break;
         }
-        view_model_.SetResult(result);
-        view_model_.SetState(UiRecordingState::Completed);
-
-        // Multi-segment split results (SPLIT-RECORDING-R1): populate synthetic
-        // segments for deterministic visual test scenarios.
+        // Multi-segment split results (SPLIT-RECORDING-R1 / VR-007): segments are
+        // attached BEFORE SetResult so the real product path builds the
+        // "N segments · ..." summary and per-segment history data.
         if (scenario.completed_segment_count > 1) {
-            auto& cr = view_model_.current_completed_recording;
             const double seg_duration =
                 scenario.result_duration_seconds / static_cast<double>(scenario.completed_segment_count);
             const qint64 seg_bytes = static_cast<qint64>(scenario.result_file_size_bytes) /
@@ -2459,12 +2469,11 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
                 seg.duration_seconds = seg_duration;
                 seg.file_size_bytes = seg_bytes;
                 seg.succeeded = !scenario.completed_segment_missing || i != 1; // segment 1 missing if flag set
-                cr.segments.push_back(seg);
+                result.segments.push_back(seg);
             }
-            // If a segment is missing, the scalar file_size_bytes/duration should
-            // reflect the honest sum of present segments; the scalar succeeded flag
-            // is set correspondingly.
         }
+        view_model_.SetResult(result);
+        view_model_.SetState(UiRecordingState::Completed);
 
         // Apply recent history for visual tests
         if (scenario.recent_result_count > 0) {
@@ -2487,22 +2496,6 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
                 hist_rec.audio_codec = recorder_core::AudioCodec::AacMf;
                 hist_rec.completed_at = QDateTime::currentDateTime().addSecs(-(i * 120));
                 view_model_.recent_recordings.append(hist_rec);
-            }
-        }
-
-        // Show delete confirmation overlay for visual tests
-        if (scenario.show_delete_confirm) {
-            if (delete_confirm_overlay_)
-                delete_confirm_overlay_->setVisible(true);
-        }
-
-        // Show rename overlay for visual tests
-        if (scenario.show_rename_overlay) {
-            if (rename_overlay_) {
-                rename_overlay_->setVisible(true);
-                if (rename_edit_) {
-                    rename_edit_->setText(QStringLiteral("new-recording-name"));
-                }
             }
         }
 
@@ -2556,6 +2549,17 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
     // the coordinator gates this; in visual-test mode we drive it directly.
     if (transport_dock_) {
         transport_dock_->setSplitEnabled(scenario.split_action_enabled);
+    }
+
+    // Destructive-dialog scenarios (VR-008): apply overlay visibility AFTER
+    // refresh(), because updateResultDetailsPanel hides overlays when the
+    // synthetic result file does not exist on disk.
+    if (scenario.show_delete_confirm && delete_confirm_overlay_)
+        delete_confirm_overlay_->setVisible(true);
+    if (scenario.show_rename_overlay && rename_overlay_) {
+        rename_overlay_->setVisible(true);
+        if (rename_edit_)
+            rename_edit_->setText(QStringLiteral("new-recording-name"));
     }
 
     // Selection only takes effect when editing is allowed (Ready, unlocked).
@@ -5883,8 +5887,36 @@ void RecordPage::updateResultDetailsPanel() {
         meta_label->setProperty("missingFile", !file_exists);
         meta_label->style()->unpolish(meta_label);
         meta_label->style()->polish(meta_label);
+    }
 
-        // Append marker summary to metadata
+    // Multi-segment summary (VR-002): a split recording with a failed or
+    // quarantined segment must be visibly distinct from full success without
+    // invalidating the intact sibling segments.
+    if (auto* segments_label = panel->findChild<QLabel*>(QStringLiteral("resultSegmentsLabel"))) {
+        if (rec.isMultiSegment()) {
+            QStringList failed_indices;
+            for (const auto& seg : rec.segments) {
+                if (!seg.succeeded)
+                    failed_indices << QString::number(seg.index + 1);
+            }
+            QString text = QStringLiteral("SEGMENTS · %1").arg(rec.segmentCount());
+            const bool partial = !failed_indices.isEmpty();
+            if (partial) {
+                text += QStringLiteral("  ·  segment %1 failed or missing — other segments are intact")
+                            .arg(failed_indices.join(QStringLiteral(", ")));
+            }
+            segments_label->setText(text);
+            segments_label->setProperty("missingFile", partial);
+            segments_label->style()->unpolish(segments_label);
+            segments_label->style()->polish(segments_label);
+            segments_label->setVisible(true);
+        } else {
+            segments_label->setVisible(false);
+        }
+    }
+
+    // Append marker summary to metadata
+    {
         auto* markers_label = panel->findChild<QLabel*>(QStringLiteral("resultMarkersLabel"));
         if (markers_label) {
             if (!rec.markers.empty()) {

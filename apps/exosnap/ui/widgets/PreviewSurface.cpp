@@ -166,6 +166,7 @@ PreviewSurface::PreviewSurface(QWidget* parent) : QWidget(parent) {
     status_pill_->setText("READY");
 
     top_meta_label_ = new QLabel("NO TARGET", top_row_);
+    top_meta_label_->setObjectName("previewTopMetaLabel");
     top_meta_label_->setProperty("labelRole", "previewMeta");
 
     top_layout->addWidget(status_pill_, 0, Qt::AlignVCenter);
@@ -196,16 +197,21 @@ PreviewSurface::PreviewSurface(QWidget* parent) : QWidget(parent) {
     bottom_layout->setSpacing(8);
 
     bottom_left_label_ = new QLabel(QString(), bottom_row_);
+    bottom_left_label_->setObjectName("previewBottomLeftLabel");
     bottom_left_label_->setProperty("labelRole", "previewBottomText");
     bottom_left_label_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     bottom_left_label_->setVisible(false);
 
     bottom_right_label_ = new QLabel("AV1 · CQ 24", bottom_row_);
+    bottom_right_label_->setObjectName("previewBottomRightLabel");
     bottom_right_label_->setProperty("labelRole", "previewBottomAccent");
     bottom_right_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
     bottom_layout->addWidget(bottom_left_label_, 1);
     bottom_layout->addWidget(bottom_right_label_, 0);
+
+    top_meta_full_ = top_meta_label_->text();
+    bottom_right_full_ = bottom_right_label_->text();
 }
 
 PreviewSurface::~PreviewSurface() {
@@ -346,7 +352,8 @@ void PreviewSurface::setStatusText(const QString& text) {
 }
 
 void PreviewSurface::setTopMetaText(const QString& text) {
-    top_meta_label_->setText(text);
+    top_meta_full_ = text;
+    applyOverlayTextElision();
 }
 
 void PreviewSurface::setCenterTitle(const QString& text) {
@@ -358,12 +365,44 @@ void PreviewSurface::setCenterSubtitle(const QString& text) {
 }
 
 void PreviewSurface::setBottomLeftText(const QString& text) {
-    bottom_left_label_->setText(text);
-    bottom_left_label_->setVisible(!text.trimmed().isEmpty());
+    bottom_left_full_ = text;
+    applyOverlayTextElision();
 }
 
 void PreviewSurface::setBottomRightText(const QString& text) {
-    bottom_right_label_->setText(text);
+    bottom_right_full_ = text;
+    applyOverlayTextElision();
+}
+
+// VR-009: the surface can shrink well below the overlay text width (compact
+// windows, letterboxed completed previews). Texts elide instead of painting
+// half-cut glyphs across the frame border, and the meta rows hide entirely
+// when there is no usable room.
+void PreviewSurface::applyOverlayTextElision() {
+    constexpr int kPadX = 16;
+    constexpr int kSpacing = 8;
+    constexpr int kMinOverlayTextWidth = 220;
+
+    const int row_width = width() - (kPadX * 2);
+    const bool rows_usable = width() >= kMinOverlayTextWidth;
+
+    const QString right =
+        bottom_right_label_->fontMetrics().elidedText(bottom_right_full_, Qt::ElideRight, std::max(0, row_width));
+    bottom_right_label_->setText(right);
+    bottom_right_label_->setVisible(rows_usable && !right.isEmpty());
+
+    const int left_avail =
+        row_width - (right.isEmpty() ? 0 : bottom_right_label_->fontMetrics().horizontalAdvance(right) + kSpacing);
+    const QString left =
+        bottom_left_label_->fontMetrics().elidedText(bottom_left_full_, Qt::ElideRight, std::max(0, left_avail));
+    bottom_left_label_->setText(left);
+    bottom_left_label_->setVisible(rows_usable && !left.trimmed().isEmpty());
+
+    const int meta_avail = row_width - status_pill_->sizeHint().width() - kSpacing;
+    const QString meta =
+        top_meta_label_->fontMetrics().elidedText(top_meta_full_, Qt::ElideRight, std::max(0, meta_avail));
+    top_meta_label_->setText(meta);
+    top_meta_label_->setVisible(rows_usable && !meta.isEmpty());
 }
 
 void PreviewSurface::setFrameTone(FrameTone tone) {
@@ -1105,6 +1144,7 @@ void PreviewSurface::resizeEvent(QResizeEvent* event) {
     center_box_->setGeometry(0, (height() - 90) / 2, width(), 90);
     bottom_row_->setGeometry(pad_x, height() - pad_bottom - bottom_height, width() - (pad_x * 2), bottom_height);
 
+    applyOverlayTextElision();
     applyDxgiPreviewResize();
 }
 

@@ -135,6 +135,10 @@ QRect SourcePickerPanel::ComputePresetRegionRect(int preset_w, int preset_h, con
 
 SourcePickerPanel::SourcePickerPanel(QWidget* parent) : QWidget(parent) {
     setObjectName("sourcePickerDialog");
+    // Plain QWidgets ignore stylesheet backgrounds without this attribute; the
+    // panel card (bg + border, incl. the footer zone) must paint opaquely so
+    // underlying page content cannot bleed through the overlay (VR-010).
+    setAttribute(Qt::WA_StyledBackground, true);
 
     thumbnail_capture_ = new ThumbnailCapture(this);
     connect(thumbnail_capture_, &ThumbnailCapture::thumbnailReady, this, &SourcePickerPanel::onThumbnailReady);

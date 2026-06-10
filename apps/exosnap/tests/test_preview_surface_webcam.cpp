@@ -4,6 +4,7 @@
 #include <QCoreApplication>
 #include <QImage>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QMouseEvent>
 #include <QPointF>
 #include <QRectF>
@@ -247,6 +248,60 @@ TEST_F(PreviewSurfaceWebcamTest, MappedPreviewRectInsideContent) {
     EXPECT_GE(r.top(), 0);
     EXPECT_LE(r.right(), 800);
     EXPECT_LE(r.bottom(), 450);
+}
+
+// ---- Overlay text elision (VR-009) ----------------------------------------
+
+TEST_F(PreviewSurfaceWebcamTest, OverlayTextFitsAtComfortableWidth) {
+    auto* right = surface_->findChild<QLabel*>(QStringLiteral("previewBottomRightLabel"));
+    ASSERT_NE(right, nullptr);
+
+    const QString text = QStringLiteral("Native · 60 fps CFR · AV1 · OPUS · WEBM");
+    surface_->setBottomRightText(text);
+    EXPECT_TRUE(right->isVisibleTo(surface_.get()));
+    EXPECT_EQ(right->text(), text); // no elision needed at 800 px
+}
+
+TEST_F(PreviewSurfaceWebcamTest, OverlayTextElidesInsteadOfClipping) {
+    auto* right = surface_->findChild<QLabel*>(QStringLiteral("previewBottomRightLabel"));
+    auto* left = surface_->findChild<QLabel*>(QStringLiteral("previewBottomLeftLabel"));
+    ASSERT_NE(right, nullptr);
+    ASSERT_NE(left, nullptr);
+
+    surface_->resize(360, 203);
+    // Long enough to require elision at 360 px regardless of the test font.
+    const QString long_right =
+        QStringLiteral("Native · 60 fps CFR · AV1 · OPUS · WEBM · SIZE 51.0 MB · BITRATE 5.2 Mb/s · DRIFT 2 ms");
+    surface_->setBottomLeftText(QStringLiteral("FRAME 16.67 ms · BITRATE 5.2 Mb/s · DROP 0 · DRIFT 2 ms"));
+    surface_->setBottomRightText(long_right);
+
+    EXPECT_TRUE(right->isVisibleTo(surface_.get()));
+    EXPECT_TRUE(right->text().endsWith(QChar(0x2026))); // "…"
+    const int row_width = 360 - 32;
+    EXPECT_LE(right->fontMetrics().horizontalAdvance(right->text()), row_width);
+    // The left text yields to the right text; combined they never exceed the row.
+    const int combined =
+        left->fontMetrics().horizontalAdvance(left->text()) + right->fontMetrics().horizontalAdvance(right->text());
+    EXPECT_LE(combined, row_width);
+}
+
+TEST_F(PreviewSurfaceWebcamTest, OverlayRowsHideBelowMinimumWidth) {
+    auto* right = surface_->findChild<QLabel*>(QStringLiteral("previewBottomRightLabel"));
+    auto* meta = surface_->findChild<QLabel*>(QStringLiteral("previewTopMetaLabel"));
+    ASSERT_NE(right, nullptr);
+    ASSERT_NE(meta, nullptr);
+
+    surface_->resize(180, 120);
+    surface_->setBottomRightText(QStringLiteral("Native · 60 fps CFR · AV1 · OPUS · WEBM"));
+    surface_->setTopMetaText(QStringLiteral("VISUAL TEST TARGET"));
+
+    EXPECT_FALSE(right->isVisibleTo(surface_.get()));
+    EXPECT_FALSE(meta->isVisibleTo(surface_.get()));
+
+    // Growing back restores the texts (no stale hidden state).
+    surface_->resize(800, 450);
+    surface_->setBottomRightText(QStringLiteral("Native · 60 fps CFR · AV1 · OPUS · WEBM"));
+    EXPECT_TRUE(right->isVisibleTo(surface_.get()));
 }
 
 } // namespace

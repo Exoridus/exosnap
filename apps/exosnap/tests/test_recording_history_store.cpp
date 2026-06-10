@@ -645,5 +645,122 @@ TEST(RecordingHistoryStoreTest, TimestampParsing) {
     EXPECT_EQ(loaded[0].completed_at.date().year(), 2026);
 }
 
+// =============================================================================
+// 16. Markers round-trip (VR-006)
+// =============================================================================
+
+TEST(RecordingHistoryStoreTest, MarkersRoundTrip) {
+    const QString path = UniqueTestStorePath();
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString file_path = dir.filePath(QStringLiteral("marked.mkv"));
+    {
+        QFile f(file_path);
+        f.open(QIODevice::WriteOnly);
+        f.close();
+    }
+
+    CompletedRecording rec = MakeTestRecording(file_path, 0);
+    rec.markers = {
+        {12345, RecordingMarkerType::General, "Marker 01"},
+        {98765, RecordingMarkerType::Cut, "Cut 02"},
+        {200000, RecordingMarkerType::Highlight, "Highlight 03"},
+    };
+    rec.marker_sidecar_path = dir.filePath(QStringLiteral("marked.markers.json"));
+
+    RecordingHistoryStore store(path);
+    ASSERT_TRUE(store.Save({rec}));
+
+    RecordingHistoryStore reader(path);
+    auto loaded = reader.Load();
+    ASSERT_EQ(loaded.size(), 1);
+    ASSERT_EQ(loaded[0].markers.size(), 3u);
+    EXPECT_EQ(loaded[0].markers[0], rec.markers[0]);
+    EXPECT_EQ(loaded[0].markers[1], rec.markers[1]);
+    EXPECT_EQ(loaded[0].markers[2], rec.markers[2]);
+    EXPECT_EQ(loaded[0].marker_sidecar_path, rec.marker_sidecar_path);
+}
+
+// =============================================================================
+// 17. Marker salvage: invalid marker is skipped, entry and rest survive
+// =============================================================================
+
+TEST(RecordingHistoryStoreTest, InvalidMarkerIsSkippedNotFatal) {
+    const QString path = UniqueTestStorePath();
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString file_path = dir.filePath(QStringLiteral("salvage.mkv"));
+    {
+        QFile f(file_path);
+        f.open(QIODevice::WriteOnly);
+        f.close();
+    }
+
+    {
+        QJsonObject good;
+        good[QStringLiteral("timeMs")] = 1000;
+        good[QStringLiteral("type")] = QStringLiteral("cut");
+        good[QStringLiteral("label")] = QStringLiteral("ok");
+
+        QJsonObject bad_type;
+        bad_type[QStringLiteral("timeMs")] = 2000;
+        bad_type[QStringLiteral("type")] = QStringLiteral("not-a-type");
+
+        QJsonObject bad_time;
+        bad_time[QStringLiteral("timeMs")] = -5;
+        bad_time[QStringLiteral("type")] = QStringLiteral("general");
+
+        QJsonObject entry;
+        entry[QStringLiteral("path")] = file_path;
+        entry[QStringLiteral("markers")] = QJsonArray({good, bad_type, bad_time});
+
+        QJsonObject root;
+        root[QStringLiteral("version")] = 2;
+        root[QStringLiteral("recordings")] = QJsonArray({entry});
+
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(QJsonDocument(root).toJson());
+        file.close();
+    }
+
+    RecordingHistoryStore store(path);
+    auto loaded = store.Load();
+    ASSERT_EQ(loaded.size(), 1);
+    ASSERT_EQ(loaded[0].markers.size(), 1u);
+    EXPECT_EQ(loaded[0].markers[0].time_ms, 1000u);
+    EXPECT_EQ(loaded[0].markers[0].type, RecordingMarkerType::Cut);
+}
+
+// =============================================================================
+// 18. Pre-VR-006 entry without markers loads with an empty marker list
+// =============================================================================
+
+TEST(RecordingHistoryStoreTest, EntryWithoutMarkersLoadsEmptyMarkerList) {
+    const QString path = UniqueTestStorePath();
+
+    {
+        QJsonObject entry;
+        entry[QStringLiteral("path")] = QStringLiteral("C:/some/legacy.mkv");
+
+        QJsonObject root;
+        root[QStringLiteral("version")] = 2;
+        root[QStringLiteral("recordings")] = QJsonArray({entry});
+
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(QJsonDocument(root).toJson());
+        file.close();
+    }
+
+    RecordingHistoryStore store(path);
+    auto loaded = store.Load();
+    ASSERT_EQ(loaded.size(), 1);
+    EXPECT_TRUE(loaded[0].markers.empty());
+    EXPECT_TRUE(loaded[0].marker_sidecar_path.isEmpty());
+}
+
 } // namespace
 } // namespace exosnap

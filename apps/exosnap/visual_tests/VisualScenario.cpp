@@ -1667,6 +1667,43 @@ const QVector<VisualScenario> kSplitRecordingScenarios = {
      .completed_segment_missing = true},
 };
 
+// --- Visual review & product polish scenarios (VISUAL-REVIEW-AND-PRODUCT-POLISH-R1) ---
+const QVector<VisualScenario> kPolishR1Scenarios = {
+    // VR-005 contract: MP4 presents automatic split as unavailable while the
+    // configured split mode is preserved for MKV/WebM.
+    {.id = QStringLiteral("settings-format-mp4-split-unavailable"),
+     .title = QStringLiteral("Settings / Format / MP4 Split Unavailable"),
+     .page = VisualPage::Settings,
+     .container = capability::Container::Mp4,
+     .video_codec = capability::VideoCodec::H264Nvenc,
+     .audio_codec = capability::AudioCodec::AacMf},
+
+    // VR-002 contract: a split recording with a failed/missing segment renders
+    // as partial failure, visibly distinct from full success.
+    {.id = QStringLiteral("completed-recording-partial-failure"),
+     .title = QStringLiteral("Record / Completed / Partial Failure"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Completed,
+     .container = capability::Container::Matroska,
+     .video_codec = capability::VideoCodec::H264Nvenc,
+     .audio_codec = capability::AudioCodec::AacMf,
+     .result_file_name = QStringLiteral("recording_part_002.mkv"),
+     .result_file_size_bytes = 96ULL * 1024ULL * 1024ULL,
+     .result_duration_seconds = 240.0,
+     .completed_segment_count = 2,
+     .completed_segment_missing = true},
+
+    // VR-004 contract: keyboard focus on the primary Stop action is visible.
+    {.id = QStringLiteral("record-transport-focused"),
+     .title = QStringLiteral("Record / Transport / Stop Focused"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Recording,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("technical preview surface")},
+               {QStringLiteral("recordDockTimer"), QStringLiteral("fixed visual-test timer")},
+               {QStringLiteral("recordTransportDock"), QStringLiteral("meter values are deterministic test levels")}},
+     .focused_object = QStringLiteral("recordDockStop")},
+};
+
 const QVector<VisualScenario>& VisualScenarioRegistry() {
     static QVector<VisualScenario> merged;
     if (merged.isEmpty()) {
@@ -1676,6 +1713,7 @@ const QVector<VisualScenario>& VisualScenarioRegistry() {
         merged.append(kCaptureFrameScenarios);
         merged.append(kMarkerScenarios);
         merged.append(kSplitRecordingScenarios);
+        merged.append(kPolishR1Scenarios);
     }
     return merged;
 }
