@@ -10,7 +10,7 @@ on:
 jobs:
   build:
     name: Build Release Artifacts
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
@@ -19,6 +19,7 @@ jobs:
         with:
           version: '6.9.0'
           arch: 'win64_msvc2022_64'
+          archives: 'qtsvg'
           cache: true
 
       - name: Install WiX Toolset
