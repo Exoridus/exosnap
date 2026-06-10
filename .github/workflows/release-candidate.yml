@@ -11,8 +11,6 @@ jobs:
   build:
     name: Build Release Artifacts
     runs-on: windows-2022
-    env:
-      WIX_ACCEPT_EULA: '1'
     steps:
       - uses: actions/checkout@v4
 
@@ -26,6 +24,10 @@ jobs:
 
       - name: Install WiX Toolset
         run: dotnet tool install --global wix
+        shell: pwsh
+
+      - name: Accept WiX EULA
+        run: wix eula accept wix7
         shell: pwsh
 
       - name: Build canonical release artifacts
