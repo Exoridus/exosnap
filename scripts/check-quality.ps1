@@ -52,35 +52,63 @@ function Invoke-QuietNative {
         return
     }
 
-    Write-Host "$Name..."
-    $exitCode = 0
-    $invokeError = $null
+    # Run quietly (full output is captured to $logPath for failure reporting) but emit a
+    # lightweight heartbeat so long-running steps (configure/build/test) visibly progress
+    # instead of looking hung. Output stays minimal: the step name, an elapsed-seconds
+    # marker roughly every 15 s, then the total duration.
+    Write-Host "$Name..." -NoNewline
+    $errPath = "$logPath.err"
+    Remove-Item -LiteralPath $errPath -Force -ErrorAction SilentlyContinue
+    $started = Get-Date
 
-    Push-Location $WorkingDirectory
+    $startArgs = @{
+        FilePath               = $FilePath
+        WorkingDirectory       = $WorkingDirectory
+        NoNewWindow            = $true
+        PassThru               = $true
+        RedirectStandardOutput = $logPath
+        RedirectStandardError  = $errPath
+    }
+    if ($Arguments -and $Arguments.Count -gt 0) {
+        $startArgs.ArgumentList = $Arguments
+    }
+
+    $proc = $null
     try {
-        & $FilePath @Arguments *> $logPath
-        $exitCode = $LASTEXITCODE
+        $proc = Start-Process @startArgs
     }
     catch {
-        $exitCode = if ($LASTEXITCODE -is [int]) { $LASTEXITCODE } else { 1 }
-        $invokeError = $_
-    }
-    finally {
-        Pop-Location
+        Write-Host ""
+        throw "$Name failed to start: $_"
     }
 
-    if ($invokeError) {
-        Write-CommandFailure -Name $Name -LogPath $logPath -TailLines $FailureTailLines
-        throw $invokeError
+    $nextBeat = 10
+    while (-not $proc.HasExited) {
+        Start-Sleep -Milliseconds 1000
+        $elapsed = ((Get-Date) - $started).TotalSeconds
+        if ($elapsed -ge $nextBeat) {
+            Write-Host (" {0}s" -f [int]$elapsed) -NoNewline
+            $nextBeat += 15
+        }
+    }
+    $proc.WaitForExit()
+    $exitCode = $proc.ExitCode
+
+    # Fold captured stderr into the step log so failure tails include it.
+    if (Test-Path -LiteralPath $errPath -PathType Leaf) {
+        Get-Content -LiteralPath $errPath -ErrorAction SilentlyContinue | Add-Content -LiteralPath $logPath
+        Remove-Item -LiteralPath $errPath -Force -ErrorAction SilentlyContinue
     }
 
+    $totalSeconds = [int]((Get-Date) - $started).TotalSeconds
     if ($exitCode -ne 0) {
+        Write-Host ""
         Write-CommandFailure -Name $Name -LogPath $logPath -TailLines $FailureTailLines
         throw "$Name failed with exit code $exitCode."
     }
 
     Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
-    Write-Host "${Name}: OK"
+    Write-Host " OK (${totalSeconds}s)"
 }
 
 function Find-Tool {
