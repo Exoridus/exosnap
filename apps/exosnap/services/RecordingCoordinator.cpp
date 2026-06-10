@@ -509,6 +509,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.target = target;
     config.crop_region = crop_region;
     config.output_path = output_path;
+    config.split = split_settings_;
 
     config.webcam.enabled = webcam_settings_.enabled;
     config.webcam.frame_provider = &webcam_service_;
@@ -583,6 +584,12 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
 
     session_.SetStatsCallback([this](const recorder_core::SessionStats& stats) { PostStats(stats); });
     session_.SetMeterCallback([this](const recorder_core::MeterSnapshot& m) { PostRecordingMeter(m.per_track_rms); });
+    {
+        std::lock_guard<std::mutex> lock(segments_mutex_);
+        segments_.clear();
+    }
+    split_pending_.store(false);
+    session_.SetSegmentCallback([this](const recorder_core::CompletedSegment& seg) { OnSegmentCompleted(seg); });
 
     if (webcam_settings_.enabled) {
         webcam_service_.Stop();
@@ -640,6 +647,117 @@ void RecordingCoordinator::ResumeRecording() {
     is_paused_.store(false);
     session_.Resume();
     PostStateChange(UiRecordingState::Recording);
+}
+
+static const char* SplitTriggerName(recorder_core::SplitTriggerSource source) {
+    switch (source) {
+    case recorder_core::SplitTriggerSource::AutomaticDuration:
+        return "auto";
+    case recorder_core::SplitTriggerSource::ManualButton:
+        return "button";
+    case recorder_core::SplitTriggerSource::Hotkey:
+        return "hotkey";
+    }
+    return "unknown";
+}
+
+bool RecordingCoordinator::RequestSplit(recorder_core::SplitTriggerSource source) {
+    // Central state validation: a split is meaningful only during an active
+    // session. Reject honestly elsewhere instead of silently swallowing.
+    const auto st = State();
+    if (!is_recording_.load() || (st != UiRecordingState::Recording && st != UiRecordingState::Paused)) {
+        diagnostics::AppLog::warning(QStringLiteral("split"),
+                                     QStringLiteral("rejected: not recording (state=%1 source=%2)")
+                                         .arg(static_cast<int>(st))
+                                         .arg(QLatin1String(SplitTriggerName(source))));
+        PostSplitFeedback(false, QStringLiteral("Split is only available while recording."));
+        return false;
+    }
+
+    // Coalesce concurrent requests: only one boundary may be pending at a time.
+    // The engine also coalesces via a monotonic seq, but rejecting here keeps the
+    // UI feedback honest ("already splitting") and avoids spurious toasts.
+    bool expected = false;
+    if (!split_pending_.compare_exchange_strong(expected, true)) {
+        diagnostics::AppLog::info(QStringLiteral("split"),
+                                  QStringLiteral("coalesced: split already pending (source=%1)")
+                                      .arg(QLatin1String(SplitTriggerName(source))));
+        return false;
+    }
+
+    diagnostics::AppLog::info(QStringLiteral("split"), QStringLiteral("requested source=%1 paused=%2")
+                                                           .arg(QLatin1String(SplitTriggerName(source)))
+                                                           .arg(st == UiRecordingState::Paused));
+    session_.RequestSplit(source);
+    return true;
+}
+
+bool RecordingCoordinator::IsSplitPending() const noexcept {
+    return split_pending_.load();
+}
+
+void RecordingCoordinator::SetSplitSettings(const recorder_core::RecordingSplitSettings& settings) {
+    split_settings_ = settings;
+}
+
+recorder_core::RecordingSplitSettings RecordingCoordinator::SplitSettings() const noexcept {
+    return split_settings_;
+}
+
+void RecordingCoordinator::SetSplitFeedbackCallback(SplitFeedbackCallback cb) {
+    on_split_feedback_ = std::move(cb);
+}
+
+void RecordingCoordinator::PostSplitFeedback(bool accepted, QString message) {
+    if (!on_split_feedback_)
+        return;
+    auto cb = on_split_feedback_;
+    if (QCoreApplication::instance() == nullptr) {
+        cb(accepted, message);
+        return;
+    }
+    QMetaObject::invokeMethod(
+        QCoreApplication::instance(), [cb, accepted, message = std::move(message)]() { cb(accepted, message); },
+        Qt::QueuedConnection);
+}
+
+void RecordingCoordinator::OnSegmentCompleted(const recorder_core::CompletedSegment& segment) {
+    // Fired from the mux worker thread as each segment is finalized (including the
+    // final one at session end). Accumulate for the multi-segment result and clear
+    // the pending flag — the next segment has started.
+    size_t total = 0;
+    {
+        std::lock_guard<std::mutex> lock(segments_mutex_);
+        segments_.push_back(segment);
+        total = segments_.size();
+    }
+    // True only when this finalize was triggered by a split request (a new segment
+    // follows). The final session-end finalize has no pending request, so it must
+    // not produce a spurious "Started segment N" toast.
+    const bool was_split_boundary = split_pending_.exchange(false);
+
+    diagnostics::AppLog::info(QStringLiteral("split"),
+                              QStringLiteral("segment finalized index=%1 duration_ms=%2 bytes=%3 ok=%4 path=%5")
+                                  .arg(segment.index)
+                                  .arg(segment.duration_ms)
+                                  .arg(segment.file_size_bytes)
+                                  .arg(segment.succeeded)
+                                  .arg(QString::fromStdWString(segment.path.filename().wstring())));
+
+    // Per-segment marker sidecar (SPLIT-RECORDING-R1): partition session markers
+    // into this segment, rebased to segment-local time. Only for successfully
+    // finalized segments (a quarantined file gets no orphan sidecar).
+    if (segment.succeeded)
+        WriteSegmentMarkerSidecar(segment);
+
+    // Feedback names the segment that just *started* (the one after the boundary).
+    // Only on an actual split boundary (not the final session-end finalize) and
+    // only for a successfully finalized prior segment. total counts finalized
+    // segments; the new live segment's human-friendly part number is total+1.
+    if (was_split_boundary && is_recording_.load() && segment.succeeded) {
+        const qulonglong next_part = static_cast<qulonglong>(total) + 1;
+        PostSplitFeedback(true, QStringLiteral("Started segment %1").arg(next_part));
+    }
 }
 
 bool RecordingCoordinator::StartMicMeter(std::optional<std::string> device_id,
@@ -767,7 +885,27 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
         ui_result.marker_sidecar_path = MarkerSidecarPath().wstring();
     }
 
-    if (result.succeeded && !markers_.empty()) {
+    {
+        std::lock_guard<std::mutex> lock(segments_mutex_);
+        ui_result.segments.reserve(segments_.size());
+        for (const auto& seg : segments_) {
+            CompletedRecordingSegment out;
+            out.file_path = QString::fromStdWString(seg.path.wstring());
+            out.index = seg.index;
+            out.session_start_ms = seg.session_start_ms;
+            out.duration_seconds = static_cast<double>(seg.duration_ms) / 1000.0;
+            out.file_size_bytes = static_cast<qint64>(seg.file_size_bytes);
+            out.succeeded = seg.succeeded;
+            ui_result.segments.push_back(std::move(out));
+        }
+    }
+    split_pending_.store(false);
+
+    // Single-file recordings keep the legacy base sidecar. For multi-segment
+    // recordings each segment's sidecar was already written (partitioned, segment-
+    // local) by OnSegmentCompleted, so do not clobber segment 0 with all markers.
+    const bool multi_segment = ui_result.segments.size() > 1;
+    if (result.succeeded && !markers_.empty() && !multi_segment) {
         WriteMarkerSidecar();
         diagnostics::AppLog::info(QStringLiteral("marker"),
                                   QStringLiteral("sidecar finalized markers=%1 path=%2")
@@ -828,6 +966,14 @@ void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings
     resolved_user_config_.video_codec = output_settings_.video_codec;
     resolved_user_config_.audio_codec = output_settings_.audio_codec;
     ApplyOutputSettingsToUserConfig(resolved_user_config_, output_settings_);
+
+    // Translate the UI split policy into the engine settings applied at start.
+    SanitizeSplitSettings(output_settings_.split);
+    const uint64_t split_ms = SplitDurationMs(output_settings_.split);
+    split_settings_.mode =
+        split_ms > 0 ? recorder_core::RecordingSplitMode::Duration : recorder_core::RecordingSplitMode::Off;
+    if (split_ms > 0)
+        split_settings_.duration_ms = split_ms;
 }
 void RecordingCoordinator::SetVideoSettings(const VideoSettingsModel& settings) {
     video_settings_ = settings;
@@ -1273,6 +1419,64 @@ void RecordingCoordinator::WriteMarkerSidecar() {
         diagnostics::AppLog::warning(QStringLiteral("marker"),
                                      QStringLiteral("sidecar write commit failed: %1").arg(sidecar_qstr));
     }
+}
+
+void RecordingCoordinator::WriteSegmentMarkerSidecar(const recorder_core::CompletedSegment& segment) {
+    std::vector<RecordingMarker> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(markers_mutex_);
+        snapshot = markers_;
+    }
+    if (snapshot.empty())
+        return;
+
+    // Partition + rebase to segment-local time. The half-open window excludes the
+    // boundary marker so a paused-split marker is never duplicated into both
+    // segments (it lands in the next segment at 0 ms). duration_ms == 0 yields an
+    // empty window -> no sidecar.
+    const std::vector<RecordingMarker> local =
+        PartitionSegmentMarkers(snapshot, segment.session_start_ms, segment.duration_ms);
+
+    // Zero-marker segment => no sidecar at all (no orphan files).
+    if (local.empty())
+        return;
+
+    QJsonArray markers_array;
+    for (const auto& m : local) {
+        QJsonObject obj;
+        obj[QStringLiteral("timeMs")] = static_cast<qint64>(m.time_ms);
+        obj[QStringLiteral("type")] = QString::fromLatin1(RecordingMarkerTypeToString(m.type));
+        obj[QStringLiteral("label")] = QString::fromStdString(m.label);
+        markers_array.append(obj);
+    }
+
+    auto sidecar_path = segment.path;
+    sidecar_path.replace_extension(L".markers.json");
+
+    QJsonObject root;
+    root[QStringLiteral("version")] = 1;
+    root[QStringLiteral("media")] = QString::fromStdWString(segment.path.filename().wstring());
+    root[QStringLiteral("timebase")] = QStringLiteral("milliseconds");
+    root[QStringLiteral("segmentIndex")] = static_cast<int>(segment.index);
+    root[QStringLiteral("markers")] = markers_array;
+
+    const QString sidecar_qstr = QString::fromStdWString(sidecar_path.wstring());
+    QSaveFile file(sidecar_qstr);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        diagnostics::AppLog::warning(QStringLiteral("marker"),
+                                     QStringLiteral("segment sidecar open failed: %1").arg(sidecar_qstr));
+        return;
+    }
+    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    if (!file.commit()) {
+        diagnostics::AppLog::warning(QStringLiteral("marker"),
+                                     QStringLiteral("segment sidecar commit failed: %1").arg(sidecar_qstr));
+        return;
+    }
+    diagnostics::AppLog::info(QStringLiteral("marker"), QStringLiteral("segment sidecar markers=%1 index=%2 path=%3")
+                                                            .arg(local.size())
+                                                            .arg(segment.index)
+                                                            .arg(sidecar_qstr));
 }
 
 } // namespace exosnap

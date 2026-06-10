@@ -664,6 +664,13 @@ bool NvencEncoder::EncodeFrame(int32_t slot_idx, uint64_t pts_ns, uint32_t width
     pic.bufferFmt = mapRes.mappedBufferFmt;
     pic.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
     pic.encodePicFlags = NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
+    if (m_forceIdrNext) {
+        // Force an IDR at a segment boundary: the first frame of the new segment
+        // must be a self-contained keyframe carrying fresh SPS/PPS so no dependent
+        // frame precedes it. Consume the one-shot request.
+        pic.encodePicFlags |= NV_ENC_PIC_FLAG_FORCEIDR;
+        m_forceIdrNext = false;
+    }
     pic.inputTimeStamp = m_frameIdx++;
 
     st = m_funcs.nvEncEncodePicture(m_encoder, &pic);

@@ -115,6 +115,7 @@ add_library(recorder_core STATIC
     src/video_thread.cpp
     src/audio_thread.cpp
     src/mux_thread.cpp
+    src/matroska_stream_writer.cpp
     src/annexb_to_avcc.cpp
     src/mp4_mux_thread.cpp
     src/audio_track_model.cpp
@@ -327,3 +328,19 @@ exosnap_add_gtest(
     LIBRARIES recorder_core EBML::ebml Matroska::matroska
 )
 target_include_directories(test_matroska_mux_structure PRIVATE src)
+
+exosnap_add_gtest(
+    NAME test_matroska_stream_writer
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_matroska_stream_writer.cpp
+    LIBRARIES recorder_core EBML::ebml Matroska::matroska
+)
+target_include_directories(test_matroska_stream_writer PRIVATE src)
+
+exosnap_add_gtest(
+    NAME test_split_segments
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_split_segments.cpp
+    LIBRARIES recorder_core EBML::ebml Matroska::matroska
+)
+target_include_directories(test_split_segments PRIVATE src)

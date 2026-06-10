@@ -129,9 +129,15 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
                                        QStringLiteral("Add marker"), 0, action_row_);
     add_marker_btn_->setToolTip(QStringLiteral("Mark a notable moment on the recording timeline"));
 
+    // Split recording — secondary (utility) action, never destructive styling.
+    split_btn_ = makeActionButton(QStringLiteral("recordDockSplit"), QStringLiteral("utility"),
+                                  QStringLiteral("Split recording"), 0, action_row_);
+    split_btn_->setToolTip(QStringLiteral("Split recording"));
+
     // Fixed layout order; visibility per state keeps the right edge stable.
     action_layout->addWidget(capture_frame_btn_);
     action_layout->addWidget(add_marker_btn_);
+    action_layout->addWidget(split_btn_);
     action_layout->addWidget(countdown_);
     action_layout->addWidget(pause_btn_);
     action_layout->addWidget(resume_btn_);
@@ -149,6 +155,7 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     connect(filename_link_, &QPushButton::clicked, this, &TransportDock::filenameClicked);
     connect(capture_frame_btn_, &QPushButton::clicked, this, &TransportDock::captureFrameClicked);
     connect(add_marker_btn_, &QPushButton::clicked, this, &TransportDock::addMarkerClicked);
+    connect(split_btn_, &QPushButton::clicked, this, &TransportDock::splitClicked);
 
     connect(system_toggle_, &AudioSourceToggle::clicked, this,
             [this]() { emit sourceToggleClicked(QStringLiteral("system")); });
@@ -198,6 +205,9 @@ void TransportDock::applyState() {
     capture_frame_btn_->setEnabled(ready || recording || paused);
     add_marker_btn_->setVisible(recording || paused);
     add_marker_btn_->setEnabled(recording || paused);
+    // Split: visible only with an active session; disabled mid-transition.
+    split_btn_->setVisible(recording || paused);
+    split_btn_->setEnabled((recording || paused) && split_enabled_);
 
     record_btn_->setText(countdown ? QStringLiteral("Cancel") : QStringLiteral("Record"));
     setStyledProperty(record_btn_, "dockAction", countdown ? QStringLiteral("stop") : QStringLiteral("record"));
@@ -256,6 +266,16 @@ void TransportDock::setCompletedInfo(const QString& filename, const QString& siz
     open_folder_btn_->setEnabled(has_file);
     size_label_->setText(size_text);
     size_label_->setVisible(!size_text.isEmpty());
+}
+
+void TransportDock::setSplitEnabled(bool enabled) {
+    if (split_enabled_ == enabled)
+        return;
+    split_enabled_ = enabled;
+    if (split_btn_) {
+        const bool active = state_ == State::Recording || state_ == State::Paused;
+        split_btn_->setEnabled(active && split_enabled_);
+    }
 }
 
 void TransportDock::setMeterLevel(const QString& key, float level01) {

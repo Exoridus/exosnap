@@ -26,6 +26,34 @@ struct OutputResolutionSettings {
     recorder_core::OutputFitMode fit = recorder_core::OutputFitMode::Contain;
 };
 
+// Automatic recording split (SPLIT-RECORDING-R1). Off keeps single-file behavior;
+// the preset durations map onto RecordingSplitSettings at session start. Manual
+// splits work regardless of mode.
+enum class SplitRecordingMode {
+    Off,
+    Every15Min,
+    Every30Min,
+    Every60Min,
+    Custom,
+};
+
+struct SplitRecordingSettings {
+    SplitRecordingMode mode = SplitRecordingMode::Off;
+    // Custom interval in minutes; clamped to [kMinMinutes, kMaxMinutes].
+    uint32_t custom_minutes = 30;
+
+    static constexpr uint32_t kMinMinutes = 1;
+    static constexpr uint32_t kMaxMinutes = 24u * 60u; // 24 hours
+
+    bool operator==(const SplitRecordingSettings&) const = default;
+};
+
+// Resolved media-time interval in milliseconds for the active mode, or 0 (Off).
+[[nodiscard]] uint64_t SplitDurationMs(const SplitRecordingSettings& s) noexcept;
+// Clamp custom_minutes into range; leaves preset modes untouched.
+void SanitizeSplitSettings(SplitRecordingSettings& s) noexcept;
+[[nodiscard]] const wchar_t* SplitRecordingModeName(SplitRecordingMode mode) noexcept;
+
 struct OutputSettingsModel {
     std::filesystem::path output_folder;
     std::wstring naming_pattern = L"{datetime}_{app}_{title}";
@@ -33,6 +61,7 @@ struct OutputSettingsModel {
     capability::VideoCodec video_codec = capability::VideoCodec::H264Nvenc;
     capability::AudioCodec audio_codec = capability::AudioCodec::AacMf;
     OutputResolutionSettings resolution;
+    SplitRecordingSettings split;
 
     static OutputSettingsModel Defaults();
 };

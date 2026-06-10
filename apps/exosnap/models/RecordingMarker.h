@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace exosnap {
 
@@ -51,5 +52,25 @@ inline const char* RecordingMarkerTypeDefaultLabel(RecordingMarkerType t) noexce
 
 // Maximum number of markers per recording session.
 inline constexpr uint64_t kMaxRecordingMarkers = 10000;
+
+// Partition session-timeline markers into one split segment and rebase them to
+// segment-local time (SPLIT-RECORDING-R1). Selects markers in the half-open
+// window [start_ms, start_ms + duration_ms): a marker exactly on the boundary
+// (== the next segment start) is excluded so a paused-split marker is never
+// duplicated into both segments — it lands in the next segment at 0 ms. Returns
+// the rebased (time_ms -= start_ms) markers in input order.
+[[nodiscard]] inline std::vector<RecordingMarker>
+PartitionSegmentMarkers(const std::vector<RecordingMarker>& session_markers, uint64_t start_ms, uint64_t duration_ms) {
+    std::vector<RecordingMarker> out;
+    const uint64_t end_ms = start_ms + duration_ms;
+    for (const auto& m : session_markers) {
+        if (m.time_ms < start_ms || m.time_ms >= end_ms)
+            continue;
+        RecordingMarker rebased = m;
+        rebased.time_ms = m.time_ms - start_ms;
+        out.push_back(rebased);
+    }
+    return out;
+}
 
 } // namespace exosnap

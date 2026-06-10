@@ -89,6 +89,14 @@ class NvencEncoder {
     // Clears in_flight without calling NVENC — safe only if EncodeFrame was not called.
     void ReleaseSlot(int32_t slot_idx) noexcept;
 
+    // Arm a forced IDR (keyframe) on the NEXT submitted frame. Used at a segment
+    // boundary so the first frame of a new segment is a self-contained keyframe
+    // with fresh SPS/PPS (no dependent frame precedes it). One-shot: the flag is
+    // consumed by the next EncodeFrame call.
+    void RequestKeyframe() noexcept {
+        m_forceIdrNext = true;
+    }
+
     // Submit one NV12 frame for encoding on a specific slot.
     // slot_idx must be a slot previously acquired via AcquireFreeSlot.
     // pts_ns is the capture-time PTS in nanoseconds.
@@ -139,6 +147,9 @@ class NvencEncoder {
 
     // Per-instance monotonic frame index for NVENC inputTimeStamp
     uint64_t m_frameIdx = 0;
+
+    // One-shot forced-IDR request consumed by the next EncodeFrame submission.
+    bool m_forceIdrNext = false;
 
     // Lock one bitstream and return an EncodedVideoPacket.
     // Also releases the associated input slot (unmap + mark free).

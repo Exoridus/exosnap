@@ -127,6 +127,8 @@ class ConfigPage : public QWidget {
     void onFrameRateChanged(int index);
     void onTimingSelected(int timing_id);
     void onOutputResolutionSelected(int mode_id);
+    void onSplitModeChanged(int index);
+    void updateSplitSelection();
     void onCursorChanged();
     void updateQualitySummary();
     void updateQualitySegmentSelection();
@@ -261,6 +263,12 @@ class ConfigPage : public QWidget {
     QPushButton* output_res_720_btn_ = nullptr;
     QPushButton* output_res_custom_btn_ = nullptr;
     QLabel* output_effective_summary_label_ = nullptr;
+
+    // Split recording widgets (SPLIT-RECORDING-R1).
+    QComboBox* split_mode_combo_ = nullptr;
+    QSpinBox* split_custom_minutes_spin_ = nullptr;
+    QWidget* split_custom_widget_ = nullptr;
+    QLabel* split_summary_label_ = nullptr;
 
     // Custom resolution widgets (CUSTOM-OUTPUT-RESOLUTION-R1).
     QWidget* custom_resolution_widget_ = nullptr;

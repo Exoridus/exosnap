@@ -13,7 +13,7 @@
 namespace exosnap {
 namespace {
 
-constexpr int kSchemaVersion = 1;
+constexpr int kSchemaVersion = 2;
 
 // ---- Serialization helpers ----
 
@@ -80,6 +80,49 @@ std::optional<recorder_core::AudioCodec> StringToAudioCodec(const QString& s) {
 
 // ---- Serialize ----
 
+QJsonObject SegmentToJson(const CompletedRecordingSegment& seg) {
+    QJsonObject obj;
+    obj[QStringLiteral("path")] = seg.file_path;
+    obj[QStringLiteral("index")] = static_cast<int>(seg.index);
+    obj[QStringLiteral("sessionStartMs")] = static_cast<qint64>(seg.session_start_ms);
+    obj[QStringLiteral("durationMs")] = static_cast<qint64>(seg.duration_seconds * 1000.0);
+    obj[QStringLiteral("fileSizeBytes")] = seg.file_size_bytes;
+    obj[QStringLiteral("succeeded")] = seg.succeeded;
+    return obj;
+}
+
+// Returns false when a segment object is structurally invalid (missing/empty
+// path or negative numerics). A false here drops just this segment, never the
+// whole recording.
+bool ValidateSegment(const QJsonObject& obj, CompletedRecordingSegment& out) {
+    if (!obj.contains(QStringLiteral("path")) || !obj[QStringLiteral("path")].isString())
+        return false;
+    out.file_path = obj[QStringLiteral("path")].toString().trimmed();
+    if (out.file_path.isEmpty())
+        return false;
+
+    out.index = static_cast<uint32_t>(obj.value(QStringLiteral("index")).toInt(0));
+    {
+        const double v = obj.value(QStringLiteral("sessionStartMs")).toDouble(0.0);
+        out.session_start_ms = v < 0.0 ? 0ull : static_cast<uint64_t>(v);
+    }
+    {
+        const double ms = obj.value(QStringLiteral("durationMs")).toDouble(0.0);
+        if (ms < 0.0)
+            return false;
+        out.duration_seconds = ms / 1000.0;
+    }
+    {
+        const QJsonValue& val = obj.value(QStringLiteral("fileSizeBytes"));
+        const qint64 v = static_cast<qint64>(val.toDouble(0.0));
+        if (v < 0)
+            return false;
+        out.file_size_bytes = v;
+    }
+    out.succeeded = obj.value(QStringLiteral("succeeded")).toBool(true);
+    return true;
+}
+
 QJsonObject RecordingToJson(const CompletedRecording& rec) {
     QJsonObject obj;
     obj[QStringLiteral("path")] = rec.file_path;
@@ -99,6 +142,12 @@ QJsonObject RecordingToJson(const CompletedRecording& rec) {
     obj[QStringLiteral("isDisplayTarget")] = rec.is_display_target;
     obj[QStringLiteral("createdAt")] =
         rec.completed_at.isValid() ? rec.completed_at.toString(Qt::ISODateWithMs) : QString();
+    if (!rec.segments.empty()) {
+        QJsonArray segs;
+        for (const auto& seg : rec.segments)
+            segs.append(SegmentToJson(seg));
+        obj[QStringLiteral("segments")] = segs;
+    }
     return obj;
 }
 
@@ -208,6 +257,29 @@ bool ValidateCompletedRecording(const QJsonObject& obj, CompletedRecording& out)
             if (!parsed.isValid())
                 return false;
             out.completed_at = parsed;
+        }
+    }
+
+    // Segments (v2). A single invalid segment is skipped; the rest (and the
+    // recording) survive. Missing/empty array => legacy single-file recording.
+    if (obj.contains(QStringLiteral("segments")) && obj[QStringLiteral("segments")].isArray()) {
+        const QJsonArray segs = obj[QStringLiteral("segments")].toArray();
+        int skipped_segments = 0;
+        for (const QJsonValue& sv : segs) {
+            if (!sv.isObject()) {
+                ++skipped_segments;
+                continue;
+            }
+            CompletedRecordingSegment seg;
+            if (ValidateSegment(sv.toObject(), seg))
+                out.segments.push_back(std::move(seg));
+            else
+                ++skipped_segments;
+        }
+        if (skipped_segments > 0) {
+            diagnostics::AppLog::warning(
+                QStringLiteral("history.store"),
+                QStringLiteral("Skipped %1 invalid segment(s) in a recording entry").arg(skipped_segments));
         }
     }
 

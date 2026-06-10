@@ -1622,6 +1622,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(transport_dock_, &ui::widgets::TransportDock::filenameClicked, this, &RecordPage::onDockFilenameActivated);
     connect(transport_dock_, &ui::widgets::TransportDock::captureFrameClicked, this, &RecordPage::onHotkeyCaptureFrame);
     connect(transport_dock_, &ui::widgets::TransportDock::addMarkerClicked, this, &RecordPage::onDockAddMarker);
+    connect(transport_dock_, &ui::widgets::TransportDock::splitClicked, this, &RecordPage::onDockSplit);
     connect(transport_dock_, &ui::widgets::TransportDock::sourceToggleClicked, this, &RecordPage::onDockSourceToggle);
     connect(transport_dock_, &ui::widgets::TransportDock::countdownSecondsChanged, this, [this](int seconds) {
         selected_countdown_seconds_ = seconds;
@@ -2892,6 +2893,13 @@ void RecordPage::initCoordinator() {
     coordinator_->SetFrameCapturedCallback([this](bool success, const QString& path, const QString& error) {
         showCaptureFrameStatus(success, path, error);
     });
+    coordinator_->SetSplitFeedbackCallback([this](bool accepted, const QString& message) {
+        // Reuse the transient capture-frame status banner for split feedback.
+        showCaptureFrameStatus(accepted, QString(), message);
+        // Re-enable the split button once the transition reports a new segment.
+        if (transport_dock_)
+            transport_dock_->setSplitEnabled(!coordinator_->IsSplitPending());
+    });
     coordinator_->SetReadyFrameSource([this]() -> QImage { return latest_preview_frame_; });
 
     enumerateTargets(false);
@@ -3321,6 +3329,25 @@ void RecordPage::onHotkeyAddMarker() {
     onDockAddMarker();
 }
 
+void RecordPage::onHotkeySplitRecording() {
+    requestSplit(recorder_core::SplitTriggerSource::Hotkey);
+}
+
+void RecordPage::onDockSplit() {
+    requestSplit(recorder_core::SplitTriggerSource::ManualButton);
+}
+
+void RecordPage::requestSplit(recorder_core::SplitTriggerSource source) {
+    ensureCoordinatorInit();
+    if (!coordinator_)
+        return;
+    // The coordinator does the authoritative state validation and coalescing; the
+    // button and hotkey both funnel through this single typed path.
+    const bool accepted = coordinator_->RequestSplit(source);
+    if (accepted && transport_dock_)
+        transport_dock_->setSplitEnabled(false); // re-enabled when the segment is reported
+}
+
 void RecordPage::onDockAddMarker() {
     ensureCoordinatorInit();
     if (!coordinator_)
@@ -3359,9 +3386,16 @@ void RecordPage::showCaptureFrameStatus(bool success, const QString& path, const
     if (!capture_frame_status_label_ || !capture_frame_status_timer_)
         return;
     if (success) {
-        const QString name = QFileInfo(path).fileName();
-        capture_frame_status_label_->setText(QStringLiteral("Frame saved: %1").arg(name));
-        capture_frame_status_label_->setToolTip(path);
+        // A path means a saved frame; otherwise `error` carries a plain status
+        // message (used for split feedback like "Started segment 2").
+        if (path.isEmpty() && !error.isEmpty()) {
+            capture_frame_status_label_->setText(error);
+            capture_frame_status_label_->setToolTip({});
+        } else {
+            const QString name = QFileInfo(path).fileName();
+            capture_frame_status_label_->setText(QStringLiteral("Frame saved: %1").arg(name));
+            capture_frame_status_label_->setToolTip(path);
+        }
         capture_frame_status_label_->setProperty("statusRole", QStringLiteral("success"));
     } else {
         capture_frame_status_label_->setText(error.isEmpty() ? QStringLiteral("Capture failed") : error);
@@ -4824,6 +4858,9 @@ void RecordPage::updateTransportDock() {
     }
     transport_dock_->setState(dock_state);
     transport_dock_->setPrimaryEnabled(primary_enabled);
+    // Split is available in an active session and disabled while a transition is
+    // in flight or while the session winds down.
+    transport_dock_->setSplitEnabled((recording || paused) && coordinator_ && !coordinator_->IsSplitPending());
     transport_dock_->setCountdownSeconds(selected_countdown_seconds_);
 
     const bool recording_for_timer = recording || paused || stopping;

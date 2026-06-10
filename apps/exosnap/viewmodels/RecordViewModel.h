@@ -76,6 +76,10 @@ struct UiRecordingResult {
     recorder_core::AudioCodec audio_codec = recorder_core::AudioCodec::Opus;
     std::vector<RecordingMarker> markers;
     std::wstring marker_sidecar_path;
+
+    // Multi-segment split results (SPLIT-RECORDING-R1). Empty for a legacy
+    // single-file recording (the scalar output_path/file fields describe it).
+    std::vector<CompletedRecordingSegment> segments;
 };
 
 // ---------------------------------------------------------------------------

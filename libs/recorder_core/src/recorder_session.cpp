@@ -22,6 +22,49 @@
 namespace recorder_core {
 
 // ---------------------------------------------------------------------------
+// DeriveSegmentPath
+// ---------------------------------------------------------------------------
+
+std::filesystem::path DeriveSegmentPath(const std::filesystem::path& base, std::uint32_t index) {
+    // Segment 0 keeps the base path verbatim (no rename of the first file).
+    if (index == 0) {
+        return base;
+    }
+
+    const std::filesystem::path parent = base.parent_path();
+    const std::wstring stem = base.stem().wstring();
+    const std::wstring ext = base.extension().wstring(); // includes leading '.'
+
+    // Zero-padded 3-digit, locale-independent. index is 0-based; the on-disk
+    // part number is index+1 so the second segment is "_part-002".
+    const unsigned part_number = index + 1u;
+    wchar_t numbuf[8] = {};
+    swprintf(numbuf, 8, L"%03u", part_number);
+
+    auto compose = [&](unsigned disambiguator) -> std::filesystem::path {
+        std::wstring name = stem + L"_part-" + numbuf;
+        if (disambiguator > 0) {
+            wchar_t dbuf[16] = {};
+            swprintf(dbuf, 16, L"_%u", disambiguator);
+            name += dbuf;
+        }
+        name += ext;
+        return parent.empty() ? std::filesystem::path(name) : (parent / name);
+    };
+
+    std::filesystem::path candidate = compose(0);
+    // Collision-safe: append "_N" until a free path is found. Bounded scan.
+    for (unsigned d = 1; d < 10000u; ++d) {
+        std::error_code ec;
+        if (!std::filesystem::exists(candidate, ec)) {
+            return candidate;
+        }
+        candidate = compose(d);
+    }
+    return candidate;
+}
+
+// ---------------------------------------------------------------------------
 // RecorderSession::Impl
 // ---------------------------------------------------------------------------
 
@@ -228,6 +271,19 @@ void RecorderSession::Resume() {
     m_impl->state.pause_requested.store(false);
 }
 
+void RecorderSession::RequestSplit(SplitTriggerSource source) {
+    if (!m_impl->recording.load())
+        return;
+    // Record the trigger (for logging) before bumping the sequence so the
+    // observing thread sees a consistent (seq, trigger) pair.
+    m_impl->state.split_last_trigger.store(static_cast<uint32_t>(source));
+    m_impl->state.split_request_seq.fetch_add(1);
+}
+
+void RecorderSession::SetSegmentCallback(SegmentCallback cb) {
+    m_impl->state.segment_callback = std::move(cb);
+}
+
 void RecorderSession::RequestFrameSnapshot(FrameSnapshotCallback callback) {
     if (!m_impl->recording.load())
         return;
@@ -294,6 +350,8 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         st.encode_width = 0;
         st.encode_height = 0;
         st.video_epoch_qpc_100ns.store(0);
+        st.split_request_seq.store(0);
+        st.split_last_trigger.store(static_cast<uint32_t>(SplitTriggerSource::ManualButton));
         {
             std::lock_guard slk(st.snapshot_callback_mutex);
             st.snapshot_requested.store(false);

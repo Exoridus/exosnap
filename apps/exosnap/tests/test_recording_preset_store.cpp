@@ -270,6 +270,57 @@ TEST(RecordingPresetStore, OutputResolutionPersists_Custom) {
     CleanupFile(path);
 }
 
+TEST(RecordingPresetStore, SplitSettingsPersist_Custom) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Split Preset";
+    p.config = MakeDefaultPreset().config;
+    p.config.output.split.mode = SplitRecordingMode::Custom;
+    p.config.output.split.custom_minutes = 45;
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.output.split.mode, SplitRecordingMode::Custom);
+        EXPECT_EQ(state.presets[0].config.output.split.custom_minutes, 45u);
+    }
+
+    CleanupFile(path);
+}
+
+TEST(RecordingPresetStore, SplitSettingsPersist_PresetDuration) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Split 30 Preset";
+    p.config = MakeDefaultPreset().config;
+    p.config.output.split.mode = SplitRecordingMode::Every30Min;
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.output.split.mode, SplitRecordingMode::Every30Min);
+    }
+
+    CleanupFile(path);
+}
+
 // ===========================================================================
 // Absent file → seeded default
 // ===========================================================================

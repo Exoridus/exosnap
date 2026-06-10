@@ -613,6 +613,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(this, &MainWindow::pauseToggleRequested, record_page_, &RecordPage::onHotkeyPauseToggle);
     connect(this, &MainWindow::captureFrameRequested, record_page_, &RecordPage::onHotkeyCaptureFrame);
     connect(this, &MainWindow::addMarkerRequested, record_page_, &RecordPage::onHotkeyAddMarker);
+    connect(this, &MainWindow::splitRecordingRequested, record_page_, &RecordPage::onHotkeySplitRecording);
     connect(hotkey_service_, &GlobalHotkeyService::bindingChanged, this, &MainWindow::onHotkeyServiceBindingChanged);
     connect(record_page_, &RecordPage::audioMeterLevelsUpdated, config_page_, &ConfigPage::setAudioMeterLevels);
 
@@ -915,6 +916,8 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
                     emit captureFrameRequested();
                 else if (hk_id == GlobalHotkeyService::Win32IdForAction(HotkeyAction::AddMarker))
                     emit addMarkerRequested();
+                else if (hk_id == GlobalHotkeyService::Win32IdForAction(HotkeyAction::SplitRecording))
+                    emit splitRecordingRequested();
                 *result = 0;
                 return true;
             }

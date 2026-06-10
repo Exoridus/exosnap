@@ -125,6 +125,61 @@ TEST_F(CompletedResultTest, ModelFileSizeFromDisk_UsesActualFile) {
     EXPECT_EQ(rec.fileSizeFromDisk(), 2048);
 }
 
+// --- Multi-segment results (SPLIT-RECORDING-R1) ---
+
+TEST_F(CompletedResultTest, SingleFileRecording_SegmentCountIsOne) {
+    CompletedRecording rec;
+    rec.succeeded = true;
+    rec.file_path = QStringLiteral("C:/videos/rec.mkv");
+    rec.duration_seconds = 42.0;
+    rec.file_size_bytes = 1234;
+    EXPECT_FALSE(rec.isMultiSegment());
+    EXPECT_EQ(rec.segmentCount(), 1);
+    EXPECT_EQ(rec.status(), CompletedRecordingStatus::Completed);
+    EXPECT_DOUBLE_EQ(rec.totalDurationSeconds(), 42.0);
+    EXPECT_EQ(rec.totalSizeBytes(), 1234);
+}
+
+TEST_F(CompletedResultTest, MultiSegment_TotalsAreSummed) {
+    CompletedRecording rec;
+    rec.succeeded = true;
+    rec.file_path = QStringLiteral("C:/videos/s.mkv");
+    CompletedRecordingSegment a;
+    a.succeeded = true;
+    a.duration_seconds = 30.0;
+    a.file_size_bytes = 1000;
+    CompletedRecordingSegment b;
+    b.succeeded = true;
+    b.duration_seconds = 12.0;
+    b.file_size_bytes = 500;
+    rec.segments = {a, b};
+    EXPECT_TRUE(rec.isMultiSegment());
+    EXPECT_EQ(rec.segmentCount(), 2);
+    EXPECT_DOUBLE_EQ(rec.totalDurationSeconds(), 42.0);
+    EXPECT_EQ(rec.totalSizeBytes(), 1500);
+    EXPECT_EQ(rec.status(), CompletedRecordingStatus::Completed);
+}
+
+TEST_F(CompletedResultTest, PartialFailure_NotHiddenAsSuccess) {
+    CompletedRecording rec;
+    rec.succeeded = true;
+    CompletedRecordingSegment ok;
+    ok.succeeded = true;
+    ok.duration_seconds = 30.0;
+    CompletedRecordingSegment bad;
+    bad.succeeded = false; // finalize failed / quarantined
+    rec.segments = {ok, bad};
+    EXPECT_EQ(rec.status(), CompletedRecordingStatus::CompletedWithPartialFailure);
+}
+
+TEST_F(CompletedResultTest, AllSegmentsFailed_StatusFailed) {
+    CompletedRecording rec;
+    CompletedRecordingSegment a;
+    a.succeeded = false;
+    rec.segments = {a};
+    EXPECT_EQ(rec.status(), CompletedRecordingStatus::Failed);
+}
+
 TEST_F(CompletedResultTest, ModelEquality_Identical) {
     CompletedRecording a;
     a.file_path = QStringLiteral("C:\\test.mkv");
@@ -176,6 +231,32 @@ TEST_F(CompletedResultTest, SetResult_Success_CreatesCompletedRecording) {
     EXPECT_EQ(vm.current_completed_recording.file_size_bytes, 1024 * 1024);
     EXPECT_DOUBLE_EQ(vm.current_completed_recording.duration_seconds, 15.5);
     EXPECT_EQ(vm.current_completed_recording.container, recorder_core::Container::Matroska);
+}
+
+TEST_F(CompletedResultTest, SetResult_MultiSegment_CarriesSegmentsAndSummary) {
+    RecordViewModel vm;
+    QString path = createDummyFile(QStringLiteral("session.mkv"));
+    auto result = MakeSuccessResult(path.toStdWString());
+    CompletedRecordingSegment a;
+    a.file_path = path;
+    a.index = 0;
+    a.duration_seconds = 30.0;
+    a.succeeded = true;
+    CompletedRecordingSegment b;
+    b.file_path = QStringLiteral("C:/videos/session_part-002.mkv");
+    b.index = 1;
+    b.duration_seconds = 12.0;
+    b.succeeded = true;
+    result.segments = {a, b};
+
+    vm.SetResult(result);
+    vm.SetState(UiRecordingState::Completed);
+
+    ASSERT_EQ(vm.current_completed_recording.segments.size(), 2u);
+    EXPECT_TRUE(vm.current_completed_recording.isMultiSegment());
+    EXPECT_EQ(vm.current_completed_recording.segmentCount(), 2);
+    // The completed-panel summary leads with the segment count.
+    EXPECT_NE(vm.result_destination_text.find(L"2 segments"), std::wstring::npos);
 }
 
 TEST_F(CompletedResultTest, SetResult_Failure_DoesNotCreateCompletedRecording) {

@@ -20,7 +20,10 @@ class RecordingHistoryStore {
   private:
     QString file_path_;
 
-    static constexpr int kSchemaVersion = 1;
+    // v1: single-file recordings only.
+    // v2: adds per-recording "segments" array (SPLIT-RECORDING-R1). v1 files load
+    //     forward-compatibly (no segments => single-file recording).
+    static constexpr int kSchemaVersion = 2;
 };
 
 } // namespace exosnap

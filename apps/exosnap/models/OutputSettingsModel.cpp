@@ -138,4 +138,49 @@ void SanitizeOutputResolution(OutputResolutionSettings& settings) noexcept {
     settings.custom_height = recorder_core::AlignOutputDimensionEven(settings.custom_height);
 }
 
+uint64_t SplitDurationMs(const SplitRecordingSettings& s) noexcept {
+    switch (s.mode) {
+    case SplitRecordingMode::Off:
+        return 0;
+    case SplitRecordingMode::Every15Min:
+        return 15ull * 60ull * 1000ull;
+    case SplitRecordingMode::Every30Min:
+        return 30ull * 60ull * 1000ull;
+    case SplitRecordingMode::Every60Min:
+        return 60ull * 60ull * 1000ull;
+    case SplitRecordingMode::Custom: {
+        uint32_t minutes = s.custom_minutes;
+        if (minutes < SplitRecordingSettings::kMinMinutes)
+            minutes = SplitRecordingSettings::kMinMinutes;
+        if (minutes > SplitRecordingSettings::kMaxMinutes)
+            minutes = SplitRecordingSettings::kMaxMinutes;
+        return static_cast<uint64_t>(minutes) * 60ull * 1000ull;
+    }
+    }
+    return 0;
+}
+
+void SanitizeSplitSettings(SplitRecordingSettings& s) noexcept {
+    if (s.custom_minutes < SplitRecordingSettings::kMinMinutes)
+        s.custom_minutes = SplitRecordingSettings::kMinMinutes;
+    if (s.custom_minutes > SplitRecordingSettings::kMaxMinutes)
+        s.custom_minutes = SplitRecordingSettings::kMaxMinutes;
+}
+
+const wchar_t* SplitRecordingModeName(SplitRecordingMode mode) noexcept {
+    switch (mode) {
+    case SplitRecordingMode::Off:
+        return L"Off";
+    case SplitRecordingMode::Every15Min:
+        return L"Every 15 min";
+    case SplitRecordingMode::Every30Min:
+        return L"Every 30 min";
+    case SplitRecordingMode::Every60Min:
+        return L"Every 60 min";
+    case SplitRecordingMode::Custom:
+        return L"Custom";
+    }
+    return L"Off";
+}
+
 } // namespace exosnap

@@ -876,5 +876,50 @@ TEST(OutputSettingsTest, PasteSplit_AbsolutePathWithoutTokenOrExtensionIsFolder)
     EXPECT_EQ(decision.folder_input, L"D:\\Captures\\Sessions");
 }
 
+// ── Split recording settings (SPLIT-RECORDING-R1) ────────────────────────────
+
+TEST(SplitSettingsTest, DefaultsToOffSingleFile) {
+    SplitRecordingSettings s;
+    EXPECT_EQ(s.mode, SplitRecordingMode::Off);
+    EXPECT_EQ(SplitDurationMs(s), 0ull);
+}
+
+TEST(SplitSettingsTest, PresetDurationsMapToMilliseconds) {
+    SplitRecordingSettings s;
+    s.mode = SplitRecordingMode::Every15Min;
+    EXPECT_EQ(SplitDurationMs(s), 15ull * 60ull * 1000ull);
+    s.mode = SplitRecordingMode::Every30Min;
+    EXPECT_EQ(SplitDurationMs(s), 30ull * 60ull * 1000ull);
+    s.mode = SplitRecordingMode::Every60Min;
+    EXPECT_EQ(SplitDurationMs(s), 60ull * 60ull * 1000ull);
+}
+
+TEST(SplitSettingsTest, CustomDurationUsesMinutes) {
+    SplitRecordingSettings s;
+    s.mode = SplitRecordingMode::Custom;
+    s.custom_minutes = 42;
+    EXPECT_EQ(SplitDurationMs(s), 42ull * 60ull * 1000ull);
+}
+
+TEST(SplitSettingsTest, CustomMinutesClampedToBounds) {
+    SplitRecordingSettings lo;
+    lo.custom_minutes = 0;
+    SanitizeSplitSettings(lo);
+    EXPECT_EQ(lo.custom_minutes, SplitRecordingSettings::kMinMinutes);
+
+    SplitRecordingSettings hi;
+    hi.custom_minutes = 100000;
+    SanitizeSplitSettings(hi);
+    EXPECT_EQ(hi.custom_minutes, SplitRecordingSettings::kMaxMinutes); // 24h
+    EXPECT_EQ(hi.custom_minutes, 24u * 60u);
+}
+
+TEST(SplitSettingsTest, SplitDurationClampsCustomEvenIfUnsanitized) {
+    SplitRecordingSettings s;
+    s.mode = SplitRecordingMode::Custom;
+    s.custom_minutes = 0; // below min; SplitDurationMs must still clamp
+    EXPECT_EQ(SplitDurationMs(s), static_cast<uint64_t>(SplitRecordingSettings::kMinMinutes) * 60ull * 1000ull);
+}
+
 } // namespace
 } // namespace exosnap

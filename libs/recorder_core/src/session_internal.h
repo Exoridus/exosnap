@@ -36,9 +36,19 @@ struct AudioEosSentinel {
     uint32_t track_id = 0;
 };
 
+// Marks a segment boundary in the mux queue. Enqueued by VideoThread immediately
+// BEFORE the first packet of the new segment (the forced keyframe), so the mux
+// thread finalizes the current container and opens the next one in stream order.
+// new_segment_index is the 0-based index of the segment that begins after this
+// boundary; trigger records why for logging only.
+struct SplitSentinel {
+    uint32_t new_segment_index = 0;
+    SplitTriggerSource trigger = SplitTriggerSource::ManualButton;
+};
+
 struct MuxItem {
-    // Discriminated union: encoded packet or EOS sentinel
-    std::variant<EncodedVideoPacket, EncodedAudioPacket, VideoEosSentinel, AudioEosSentinel> payload;
+    // Discriminated union: encoded packet or EOS/split sentinel
+    std::variant<EncodedVideoPacket, EncodedAudioPacket, VideoEosSentinel, AudioEosSentinel, SplitSentinel> payload;
 };
 
 // ---------------------------------------------------------------------------
@@ -107,6 +117,27 @@ struct SessionState {
     // Cooperative pause token — threads drain their source but discard output.
     // Video threads adjust their epoch on resume so PTS continues seamlessly.
     std::atomic<bool> pause_requested{false};
+
+    // ---------------------------------------------------------------------------
+    // Split recording coordination (SPLIT-RECORDING-R1)
+    // ---------------------------------------------------------------------------
+    //
+    // A manual split is requested by incrementing split_request_seq (monotone).
+    // VideoThread tracks the last value it has acted upon; a higher value means a
+    // new manual split is pending. Coalescing falls out naturally: many requests
+    // before the boundary is reached collapse to one observed delta. The trigger
+    // of the most recent request is recorded for structured logging only.
+    //
+    // VideoThread owns the actual boundary decision (it owns the media timeline
+    // via encoded-frame PTS and the forced-IDR arming point) for BOTH manual and
+    // automatic (duration-threshold) splits. When it decides to split it arms a
+    // forced keyframe on the encoder, enqueues a SplitSentinel into the mux queue,
+    // and the mux thread finalizes the current container + opens the next one.
+    std::atomic<uint64_t> split_request_seq{0};
+    std::atomic<uint32_t> split_last_trigger{0}; // SplitTriggerSource of latest request
+
+    // Set before Record(); invoked from the mux thread as each segment finalizes.
+    SegmentCallback segment_callback;
 
     // Frame snapshot (CaptureFrame) — VideoThread reads the flag on its next real frame,
     // performs a one-shot NV12→BGRA readback, fires the callback, then clears the flag.

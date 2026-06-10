@@ -479,6 +479,13 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
             result_destination_text += format_display;
         }
 
+        // Multi-segment recordings: prepend a "N segments" summary so the completed
+        // panel reads e.g. "3 segments · ..." (single-file recordings unchanged).
+        if (result.segments.size() > 1) {
+            result_destination_text =
+                std::to_wstring(result.segments.size()) + L" segments  ·  " + result_destination_text;
+        }
+
         // Populate CompletedRecording model from effective runtime result
         CompletedRecording cr;
         cr.succeeded = true;
@@ -499,6 +506,11 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
         cr.completed_at = QDateTime::currentDateTime();
         cr.markers = result.markers;
         cr.marker_sidecar_path = QString::fromStdWString(result.marker_sidecar_path);
+        // Multi-segment split results: carry the per-segment list so the completed
+        // panel and history can show totals / per-segment rows. The scalar fields
+        // above continue to describe the first (or only) segment for single-file
+        // compatibility.
+        cr.segments = result.segments;
         current_completed_recording = cr;
         AddToRecentRecordings(cr);
     } else {

@@ -132,6 +132,49 @@ enum class MicChannelMode {
 };
 
 // ---------------------------------------------------------------------------
+// Split recording (SPLIT-RECORDING-R1)
+// ---------------------------------------------------------------------------
+
+// How automatic segment splitting is scheduled. Off preserves the legacy
+// single-file recording behavior; manual splits still work regardless of mode.
+enum class RecordingSplitMode {
+    Off,      // no automatic splitting (single file unless a manual split is requested)
+    Duration, // split automatically every duration_ms of *media* time (pause excluded)
+};
+
+// Engine-level split configuration carried in RecorderConfig.
+struct RecordingSplitSettings {
+    RecordingSplitMode mode = RecordingSplitMode::Off;
+    // Media-time interval per automatic segment. Ignored when mode == Off.
+    std::uint64_t duration_ms = 30ull * 60ull * 1000ull; // 30 min default
+
+    bool operator==(const RecordingSplitSettings&) const = default;
+};
+
+// What triggered a split. Shared by the manual button and the global hotkey so
+// they route through the exact same typed command path.
+enum class SplitTriggerSource {
+    AutomaticDuration,
+    ManualButton,
+    Hotkey,
+};
+
+// Metadata for one finalized media segment, emitted via SegmentCallback as each
+// segment's container is closed (including the final segment at session end).
+struct CompletedSegment {
+    std::filesystem::path path;
+    std::uint64_t session_start_ms = 0; // segment start on the continuous session timeline
+    std::uint64_t duration_ms = 0;      // segment-local media duration
+    std::uint64_t file_size_bytes = 0;
+    std::uint32_t index = 0; // 0-based segment index
+    bool succeeded = false;  // false => finalize failed / file quarantined
+};
+
+// Invoked from the mux worker thread as each segment is finalized. Must be
+// thread-safe. Used by the app layer to build a multi-segment CompletedRecording.
+using SegmentCallback = std::function<void(const CompletedSegment&)>;
+
+// ---------------------------------------------------------------------------
 // RecorderConfig
 // ---------------------------------------------------------------------------
 
@@ -203,7 +246,17 @@ struct RecorderConfig {
 
     // Optional webcam overlay composited into the recorded video.
     WebcamConfig webcam;
+
+    // Automatic/manual segment splitting. Default Off == single-file recording.
+    RecordingSplitSettings split;
 };
+
+// Derive the on-disk path for segment `index` (0-based) from a base output path.
+// Segment 0 keeps the base name; later segments insert a "_part-NNN" suffix
+// before the extension (recording.mkv -> recording_part-002.mkv). If the derived
+// path already exists, a "_N" disambiguator is appended before the extension
+// (recording_part-002_2.mkv). Locale-independent, Windows-safe, deterministic.
+std::filesystem::path DeriveSegmentPath(const std::filesystem::path& base, std::uint32_t index);
 
 // ---------------------------------------------------------------------------
 // RecorderResult
@@ -250,6 +303,20 @@ class RecorderSession {
     // is running.  Workers drain their source during pause so buffers do not stall.
     void Pause();
     void Resume();
+
+    // Thread-safe request to split the recording at the next safe boundary.
+    // Valid only while Record() is running (in Recording or Paused state). The
+    // current segment is finalized and a new one begins with a forced keyframe;
+    // capture/encode/audio continue uninterrupted. Coalesced: repeated requests
+    // before the previous boundary is reached count as one. The trigger source
+    // is recorded for logging only. No-op if not recording or if the session was
+    // started without splitting wired (it is always wired; mode only gates auto).
+    void RequestSplit(SplitTriggerSource source);
+
+    // Register a callback invoked from the mux worker thread as each media
+    // segment is finalized (including the final one). Must be set before
+    // Record(). For single-file recordings, fires exactly once.
+    void SetSegmentCallback(SegmentCallback cb);
 
     // Thread-safe live webcam overlay update. Safe to call from any thread while
     // Record() is running. No-op if not recording or if the session was started
