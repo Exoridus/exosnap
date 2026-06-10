@@ -280,5 +280,62 @@ TEST_F(RecordingMarkerTest, MarkerRejectedInReadyState) {
     EXPECT_TRUE(coordinator.Markers().empty());
 }
 
+// =============================================================================
+// Per-segment marker partitioning (SPLIT-RECORDING-R1)
+// =============================================================================
+
+namespace {
+RecordingMarker Mk(uint64_t time_ms, RecordingMarkerType type = RecordingMarkerType::General, std::string label = "m") {
+    RecordingMarker m;
+    m.time_ms = time_ms;
+    m.type = type;
+    m.label = std::move(label);
+    return m;
+}
+} // namespace
+
+TEST(SegmentMarkerPartitionTest, PartitionsBySessionWindowAndRebasesToLocal) {
+    const std::vector<RecordingMarker> session = {Mk(1000), Mk(35000), Mk(65000)};
+    // Segment 1: starts at 30s, lasts 30s -> window [30000, 60000).
+    const auto seg1 = PartitionSegmentMarkers(session, 30000, 30000);
+    ASSERT_EQ(seg1.size(), 1u);
+    EXPECT_EQ(seg1[0].time_ms, 5000u); // 35000 - 30000, segment-local
+}
+
+TEST(SegmentMarkerPartitionTest, OnlyInSegmentMarkersIncluded) {
+    const std::vector<RecordingMarker> session = {Mk(1000), Mk(2000), Mk(40000)};
+    // Segment 0: [0, 30000).
+    const auto seg0 = PartitionSegmentMarkers(session, 0, 30000);
+    ASSERT_EQ(seg0.size(), 2u);
+    EXPECT_EQ(seg0[0].time_ms, 1000u);
+    EXPECT_EQ(seg0[1].time_ms, 2000u);
+}
+
+TEST(SegmentMarkerPartitionTest, BoundaryMarkerGoesToNextSegmentAtZero) {
+    // A marker exactly on the boundary (30000) must NOT appear in seg0 and must
+    // appear in seg1 at local 0 ms — never duplicated into both (paused-split).
+    const std::vector<RecordingMarker> session = {Mk(30000)};
+    const auto seg0 = PartitionSegmentMarkers(session, 0, 30000);     // [0, 30000)
+    const auto seg1 = PartitionSegmentMarkers(session, 30000, 30000); // [30000, 60000)
+    EXPECT_TRUE(seg0.empty());
+    ASSERT_EQ(seg1.size(), 1u);
+    EXPECT_EQ(seg1[0].time_ms, 0u);
+}
+
+TEST(SegmentMarkerPartitionTest, ZeroMarkerSegmentYieldsEmpty) {
+    const std::vector<RecordingMarker> session = {Mk(1000), Mk(2000)};
+    // Segment window with no markers in it.
+    const auto seg = PartitionSegmentMarkers(session, 30000, 30000);
+    EXPECT_TRUE(seg.empty());
+}
+
+TEST(SegmentMarkerPartitionTest, TypeAndLabelPreserved) {
+    const std::vector<RecordingMarker> session = {Mk(5000, RecordingMarkerType::Highlight, "key moment")};
+    const auto seg = PartitionSegmentMarkers(session, 0, 30000);
+    ASSERT_EQ(seg.size(), 1u);
+    EXPECT_EQ(seg[0].type, RecordingMarkerType::Highlight);
+    EXPECT_EQ(seg[0].label, std::string("key moment"));
+}
+
 } // namespace
 } // namespace exosnap

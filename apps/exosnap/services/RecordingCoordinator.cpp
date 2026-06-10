@@ -741,6 +741,12 @@ void RecordingCoordinator::OnSegmentCompleted(const recorder_core::CompletedSegm
                                   .arg(segment.succeeded)
                                   .arg(QString::fromStdWString(segment.path.filename().wstring())));
 
+    // Per-segment marker sidecar (SPLIT-RECORDING-R1): partition session markers
+    // into this segment, rebased to segment-local time. Only for successfully
+    // finalized segments (a quarantined file gets no orphan sidecar).
+    if (segment.succeeded)
+        WriteSegmentMarkerSidecar(segment);
+
     // Feedback names the segment that just *started* (the one after the boundary).
     // total counts finalized segments; the new live segment index is total (0-based)
     // i.e. human-friendly part number total+1. Only surface this while still
@@ -892,7 +898,11 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
     }
     split_pending_.store(false);
 
-    if (result.succeeded && !markers_.empty()) {
+    // Single-file recordings keep the legacy base sidecar. For multi-segment
+    // recordings each segment's sidecar was already written (partitioned, segment-
+    // local) by OnSegmentCompleted, so do not clobber segment 0 with all markers.
+    const bool multi_segment = ui_result.segments.size() > 1;
+    if (result.succeeded && !markers_.empty() && !multi_segment) {
         WriteMarkerSidecar();
         diagnostics::AppLog::info(QStringLiteral("marker"),
                                   QStringLiteral("sidecar finalized markers=%1 path=%2")
@@ -1406,6 +1416,64 @@ void RecordingCoordinator::WriteMarkerSidecar() {
         diagnostics::AppLog::warning(QStringLiteral("marker"),
                                      QStringLiteral("sidecar write commit failed: %1").arg(sidecar_qstr));
     }
+}
+
+void RecordingCoordinator::WriteSegmentMarkerSidecar(const recorder_core::CompletedSegment& segment) {
+    std::vector<RecordingMarker> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(markers_mutex_);
+        snapshot = markers_;
+    }
+    if (snapshot.empty())
+        return;
+
+    // Partition + rebase to segment-local time. The half-open window excludes the
+    // boundary marker so a paused-split marker is never duplicated into both
+    // segments (it lands in the next segment at 0 ms). duration_ms == 0 yields an
+    // empty window -> no sidecar.
+    const std::vector<RecordingMarker> local =
+        PartitionSegmentMarkers(snapshot, segment.session_start_ms, segment.duration_ms);
+
+    // Zero-marker segment => no sidecar at all (no orphan files).
+    if (local.empty())
+        return;
+
+    QJsonArray markers_array;
+    for (const auto& m : local) {
+        QJsonObject obj;
+        obj[QStringLiteral("timeMs")] = static_cast<qint64>(m.time_ms);
+        obj[QStringLiteral("type")] = QString::fromLatin1(RecordingMarkerTypeToString(m.type));
+        obj[QStringLiteral("label")] = QString::fromStdString(m.label);
+        markers_array.append(obj);
+    }
+
+    auto sidecar_path = segment.path;
+    sidecar_path.replace_extension(L".markers.json");
+
+    QJsonObject root;
+    root[QStringLiteral("version")] = 1;
+    root[QStringLiteral("media")] = QString::fromStdWString(segment.path.filename().wstring());
+    root[QStringLiteral("timebase")] = QStringLiteral("milliseconds");
+    root[QStringLiteral("segmentIndex")] = static_cast<int>(segment.index);
+    root[QStringLiteral("markers")] = markers_array;
+
+    const QString sidecar_qstr = QString::fromStdWString(sidecar_path.wstring());
+    QSaveFile file(sidecar_qstr);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        diagnostics::AppLog::warning(QStringLiteral("marker"),
+                                     QStringLiteral("segment sidecar open failed: %1").arg(sidecar_qstr));
+        return;
+    }
+    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    if (!file.commit()) {
+        diagnostics::AppLog::warning(QStringLiteral("marker"),
+                                     QStringLiteral("segment sidecar commit failed: %1").arg(sidecar_qstr));
+        return;
+    }
+    diagnostics::AppLog::info(QStringLiteral("marker"), QStringLiteral("segment sidecar markers=%1 index=%2 path=%3")
+                                                            .arg(local.size())
+                                                            .arg(segment.index)
+                                                            .arg(sidecar_qstr));
 }
 
 } // namespace exosnap

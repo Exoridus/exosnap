@@ -151,6 +151,10 @@ class RecordingCoordinator {
 
     std::filesystem::path GenerateOutputPath() const;
     void WriteMarkerSidecar();
+    // Write a per-segment marker sidecar adjacent to `segment_media_path`,
+    // containing only markers whose session time falls in this segment, rebased to
+    // segment-local time. No sidecar is written when the segment has zero markers.
+    void WriteSegmentMarkerSidecar(const recorder_core::CompletedSegment& segment);
     static std::wstring FormatHResult(int32_t hr);
     static std::wstring FormatErrorPhase(recorder_core::ErrorPhase phase);
 
