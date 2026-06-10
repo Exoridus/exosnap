@@ -14,7 +14,20 @@ if(NOT Qt6_FOUND)
 endif()
 
 # ---- Build metadata ----
-set(EXOSNAP_VERSION "1.0-dev")
+# Single source of truth: derived from the root project(... VERSION ...) call.
+# Never hard-code the version string here.
+set(EXOSNAP_VERSION "${PROJECT_VERSION}")
+
+# Windows VERSIONINFO requires a four-field numeric version. CMake leaves
+# PROJECT_VERSION_TWEAK empty for an X.Y.Z version, so default the tweak to 0.
+set(_exosnap_ver_tweak "${PROJECT_VERSION_TWEAK}")
+if(_exosnap_ver_tweak STREQUAL "")
+    set(_exosnap_ver_tweak 0)
+endif()
+set(EXOSNAP_VERSION_COMMA
+    "${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},${_exosnap_ver_tweak}")
+set(EXOSNAP_VERSION_FILE_STR
+    "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}.${_exosnap_ver_tweak}")
 
 find_package(Git QUIET)
 
@@ -194,7 +207,17 @@ target_sources(exosnap PRIVATE
 )
 
 if(WIN32)
-    target_sources(exosnap PRIVATE exosnap.rc)
+    # Windows VERSIONINFO resource — generated from the canonical project version
+    # so the installed exosnap.exe carries coherent File/Product version metadata.
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/exosnap_version.rc.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/exosnap_version.rc"
+        @ONLY
+    )
+    target_sources(exosnap PRIVATE
+        exosnap.rc
+        "${CMAKE_CURRENT_BINARY_DIR}/exosnap_version.rc"
+    )
 endif()
 
 set_target_properties(exosnap PROPERTIES AUTOMOC ON AUTORCC ON OUTPUT_NAME "exosnap")
@@ -581,6 +604,15 @@ add_dependencies(about_overlay_tests exosnap_build_info)
 set_target_properties(about_overlay_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
+    NAME version_tests
+    TEST_PREFIX version.
+    SOURCES
+        tests/test_version.cpp
+)
+target_include_directories(version_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+add_dependencies(version_tests exosnap_build_info)
+
+exosnap_add_gtest(
     NAME advanced_page_tests
     TEST_PREFIX advanced.
     SOURCES
@@ -800,12 +832,16 @@ if(WIN32 AND Qt6_FOUND)
         NO_UNSUPPORTED_PLATFORM_ERROR
     )
 
-    # Root project license and third-party notices (before TARGETS so they
-    # install even if the exe target is missing during dev iteration).
+    # Root project license, third-party notices, and release-facing portable
+    # documentation (before TARGETS so they install even if the exe target is
+    # missing during dev iteration). These are the only docs shipped in the
+    # portable artifact; CMake install is the sole authority for the tree.
     install(
         FILES
             "${PROJECT_SOURCE_DIR}/LICENSE"
             "${PROJECT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+            "${PROJECT_SOURCE_DIR}/KNOWN_LIMITATIONS.md"
+            "${PROJECT_SOURCE_DIR}/README-PORTABLE.md"
         DESTINATION "."
     )
 
@@ -821,5 +857,14 @@ if(WIN32 AND Qt6_FOUND)
     )
 
     install(TARGETS exosnap RUNTIME DESTINATION .)
+
+    # Deploy the Qt runtime (DLLs + qt.conf) flat next to exosnap.exe rather than
+    # into a bin/ subdirectory. exosnap.exe installs to the prefix root, and a
+    # root executable on Windows cannot load Qt DLLs from bin/ — a flat layout is
+    # required for the portable package to launch. Qt's deploy support honors a
+    # pre-set QT_DEPLOY_BIN_DIR (it only defaults the value when undefined), and
+    # this install(CODE) runs in the same cmake_install.cmake pass as the deploy
+    # script below, so the override is in effect when the script runs.
+    install(CODE "set(QT_DEPLOY_BIN_DIR \".\")")
     install(SCRIPT ${_exosnap_deploy_script})
 endif()

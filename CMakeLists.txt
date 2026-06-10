@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.27)
-project(exosnap LANGUAGES CXX)
+
+# Canonical version source of truth for the whole project. Every other version
+# form (application metadata, Windows VERSIONINFO, About surface, release
+# artifact name) is derived from PROJECT_VERSION — do not duplicate it elsewhere.
+project(exosnap VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

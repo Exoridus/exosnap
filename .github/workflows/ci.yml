@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   lint:
@@ -71,7 +72,8 @@ jobs:
       - name: Install and deploy (release only)
         if: matrix.preset == 'windows-x64-release'
         run: |
-          cmake --install build/windows-x64-release --config Release --prefix build/install/exosnap
+          # Qt's deploy support requires an absolute install prefix.
+          cmake --install build/windows-x64-release --config Release --prefix "${{ github.workspace }}/build/install/exosnap"
         shell: pwsh
 
       - name: Validate release artifact (release only)
@@ -80,10 +82,12 @@ jobs:
           $installDir = "build/install/exosnap"
           $errors = @()
 
-          # Root files
-          @("LICENSE", "THIRD_PARTY_NOTICES.md") | ForEach-Object {
+          # Root files (flat portable layout: exe + Qt runtime + docs at root)
+          @("LICENSE", "THIRD_PARTY_NOTICES.md", "KNOWN_LIMITATIONS.md", "README-PORTABLE.md",
+            "exosnap.exe", "qt.conf", "Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll") | ForEach-Object {
             if (-not (Test-Path "$installDir/$_")) { $errors += "Missing root file: $_" }
           }
+          if (-not (Test-Path "$installDir/plugins/platforms")) { $errors += "Missing plugins/platforms" }
 
           # License directory and files
           if (-not (Test-Path "$installDir/licenses")) {
@@ -128,4 +132,49 @@ jobs:
         with:
           name: exosnap-release
           path: build/install/exosnap/
+
+  # Canonical portable release candidate. Manual trigger only — this builds the
+  # exact ExoSnap-<version>-windows-x64.zip payload and its SHA-256 sidecar and
+  # uploads them as a workflow artifact. It does NOT create a git tag, a GitHub
+  # Release, or change repository visibility; publication remains a separate,
+  # explicitly approved step.
+  release-candidate:
+    name: release-candidate
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.9.0'
+          arch: 'win64_msvc2022_64'
+          modules: 'qtsvg'
+          cache: true
+
+      - name: Build canonical portable artifact
+        # The script configures + builds Release, installs via CMake (the sole
+        # packaging authority), validates the tree, and produces the ZIP, the
+        # SHA-256 sidecar, a manifest, and a report under .workspace/. Smoke is
+        # skipped here (headless runner); it is exercised in local validation.
+        run: pwsh -NonInteractive -File scripts/build-release-artifact.ps1 -SkipSmoke
+        shell: pwsh
+
+      - name: Resolve artifact paths
+        id: artifact
+        run: |
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(\s*exosnap\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)').Matches[0].Groups[1].Value
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "dir=.workspace/release/$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        shell: pwsh
+
+      - name: Upload portable release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64
+          path: |
+            ${{ steps.artifact.outputs.dir }}/ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64.zip
+            ${{ steps.artifact.outputs.dir }}/ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64.sha256
+          if-no-files-found: error
           if-no-files-found: ignore

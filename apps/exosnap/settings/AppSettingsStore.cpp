@@ -5,6 +5,8 @@
 #include <QSettings>
 #include <QStandardPaths>
 
+#include "settings/ConfigPaths.h"
+
 namespace exosnap {
 namespace {
 
@@ -15,7 +17,7 @@ constexpr int kSettingsVersionCurrent = 6;
 } // namespace
 
 AppSettingsStore::AppSettingsStore() {
-    const QString config_dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    const QString config_dir = settings::ResolveAppConfigDir();
     if (!config_dir.isEmpty()) {
         QDir().mkpath(config_dir);
         settings_path_ = QDir(config_dir).filePath(QStringLiteral("settings.ini"));

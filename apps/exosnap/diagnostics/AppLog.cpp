@@ -12,6 +12,8 @@
 #include <QTextStream>
 #include <QThread>
 
+#include "settings/ConfigPaths.h"
+
 #include <algorithm>
 #include <deque>
 #include <utility>
@@ -153,7 +155,7 @@ void AppLog::init() {
         if (s.initialized)
             return;
 
-        const QString data_dir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+        const QString data_dir = settings::ResolveAppDataDir();
         const QString log_dir = data_dir + QStringLiteral("/logs");
         QDir().mkpath(log_dir);
         s.log_path = log_dir + QStringLiteral("/exosnap.log");

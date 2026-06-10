@@ -9,6 +9,7 @@
 #include <QStandardPaths>
 
 #include "diagnostics/AppLog.h"
+#include "settings/ConfigPaths.h"
 
 namespace exosnap {
 namespace {
@@ -350,7 +351,7 @@ bool ValidateCompletedRecording(const QJsonObject& obj, CompletedRecording& out)
 // ---- RecordingHistoryStore ----
 
 RecordingHistoryStore::RecordingHistoryStore() {
-    const QString config_dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    const QString config_dir = settings::ResolveAppConfigDir();
     if (!config_dir.isEmpty()) {
         QDir().mkpath(config_dir);
         file_path_ = QDir(config_dir).filePath(QStringLiteral("recording-history.json"));

@@ -6,6 +6,8 @@
 #include <QStandardPaths>
 #include <QStringView>
 
+#include "settings/ConfigPaths.h"
+
 #include <algorithm>
 #include <optional>
 #include <set>
@@ -630,7 +632,7 @@ PersistedPresetState MakeResetState() {
 // ---------------------------------------------------------------------------
 
 RecordingPresetStore::RecordingPresetStore() {
-    const QString config_dir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    const QString config_dir = settings::ResolveAppConfigDir();
     if (!config_dir.isEmpty()) {
         QDir().mkpath(config_dir);
         file_path_ = QDir(config_dir).filePath(QStringLiteral("presets.ini"));
