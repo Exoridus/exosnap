@@ -82,6 +82,9 @@ $ManifestPath = Join-Path $ReleaseDir 'artifact-manifest.json'
 $ReportPath = Join-Path $ReleaseDir 'validation-report.md'
 $SmokeDir = Join-Path $ReleaseDir 'smoke'
 
+$msiBuilt = $false
+$msiSha = ''
+
 $script:Errors = [System.Collections.Generic.List[string]]::new()
 $script:ReportLines = [System.Collections.Generic.List[string]]::new()
 
@@ -299,7 +302,58 @@ Set-Content -LiteralPath $ShaPath -Value "$sha  $PortablePackageName.zip" -NoNew
 Write-Host "  SHA-256 : $sha"
 
 # ---------------------------------------------------------------------------
-# 6. Manifest + report
+# 6. MSI package (WiX Toolset v4)
+# ---------------------------------------------------------------------------
+if (-not $SkipMsi) {
+    Write-Step "Building MSI: $MsiPackageName.msi"
+
+    $wix = Get-Command wix -ErrorAction SilentlyContinue
+    if (-not $wix) {
+        Write-Host "  WiX Toolset v4 not found on PATH. Skipping MSI build."
+        Write-Host "  Install: dotnet tool install --global wix"
+    }
+    else {
+        $wxsPath = Join-Path $RepoRoot 'packaging/msi/Package.wxs'
+        if (-not (Test-Path -LiteralPath $wxsPath)) {
+            Add-Error "MSI: packaging/msi/Package.wxs not found"
+        }
+        else {
+            try {
+                $msiArgs = @(
+                    'build', '-arch', 'x64',
+                    '-o', $MsiPath,
+                    '-dStagingDir=' + $PackageRoot,
+                    '-dProductVersion=' + $Version,
+                    $wxsPath
+                )
+                Invoke-Heartbeat -Name 'wix build' -FilePath 'wix' -Arguments $msiArgs
+
+                if (Test-Path -LiteralPath $MsiPath) {
+                    $msiSha = (Get-FileHash -LiteralPath $MsiPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                    Set-Content -LiteralPath $MsiShaPath -Value "$msiSha  $MsiPackageName.msi" -NoNewline -Encoding ascii
+                    Write-Host "  MSI SHA-256: $msiSha"
+                    $msiBuilt = $true
+                }
+                else {
+                    Add-Error "MSI: build did not produce output file"
+                    $msiBuilt = $false
+                }
+            }
+            catch {
+                Add-Error "MSI: build failed: $_"
+                $msiBuilt = $false
+            }
+        }
+    }
+}
+else {
+    Write-Step "Skipping MSI build (-SkipMsi)."
+    $msiBuilt = $false
+    $msiSha = ''
+}
+
+# ---------------------------------------------------------------------------
+# 7. Manifest + report
 # ---------------------------------------------------------------------------
 $sourceCommit = (& git -C $RepoRoot rev-parse HEAD).Trim()
 $fileEntries = foreach ($file in ($allFiles | Sort-Object FullName)) {
@@ -326,7 +380,7 @@ if ($msiBuilt) {
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ManifestPath -Encoding utf8
 
 # ---------------------------------------------------------------------------
-# 7. Extracted-ZIP smoke (isolated environment; cannot touch real user data)
+# 8. Extracted-ZIP smoke (isolated environment; cannot touch real user data)
 # ---------------------------------------------------------------------------
 $smokeResult = 'skipped'
 $smokeNotes = @()
@@ -404,58 +458,7 @@ else {
 }
 
 # ---------------------------------------------------------------------------
-# 8. MSI package (WiX Toolset v4)
-# ---------------------------------------------------------------------------
-if (-not $SkipMsi) {
-    Write-Step "Building MSI: $MsiPackageName.msi"
-
-    $wix = Get-Command wix -ErrorAction SilentlyContinue
-    if (-not $wix) {
-        Write-Host "  WiX Toolset v4 not found on PATH. Skipping MSI build."
-        Write-Host "  Install: dotnet tool install --global wix"
-    }
-    else {
-        $wxsPath = Join-Path $RepoRoot 'packaging/msi/Package.wxs'
-        if (-not (Test-Path -LiteralPath $wxsPath)) {
-            Add-Error "MSI: packaging/msi/Package.wxs not found"
-        }
-        else {
-            try {
-                $msiArgs = @(
-                    'build', '-arch', 'x64',
-                    '-o', $MsiPath,
-                    '-dStagingDir=' + $PackageRoot,
-                    '-dProductVersion=' + $Version,
-                    $wxsPath
-                )
-                Invoke-Heartbeat -Name 'wix build' -FilePath 'wix' -Arguments $msiArgs
-
-                if (Test-Path -LiteralPath $MsiPath) {
-                    $msiSha = (Get-FileHash -LiteralPath $MsiPath -Algorithm SHA256).Hash.ToLowerInvariant()
-                    Set-Content -LiteralPath $MsiShaPath -Value "$msiSha  $MsiPackageName.msi" -NoNewline -Encoding ascii
-                    Write-Host "  MSI SHA-256: $msiSha"
-                    $msiBuilt = $true
-                }
-                else {
-                    Add-Error "MSI: build did not produce output file"
-                    $msiBuilt = $false
-                }
-            }
-            catch {
-                Add-Error "MSI: build failed: $_"
-                $msiBuilt = $false
-            }
-        }
-    }
-}
-else {
-    Write-Step "Skipping MSI build (-SkipMsi)."
-    $msiBuilt = $false
-    $msiSha = ''
-}
-
-# ---------------------------------------------------------------------------
-# Report
+# 9. Report
 # ---------------------------------------------------------------------------
 Add-ReportLine "# ExoSnap $Version — Release Artifact Validation Report"
 Add-ReportLine ""
