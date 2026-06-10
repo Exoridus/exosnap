@@ -1,0 +1,52 @@
+name: Release Candidate
+
+on:
+  workflow_dispatch:
+
+# This workflow produces the canonical release artifacts (portable ZIP + MSI)
+# from a single Release build and install tree. It does NOT create a git tag,
+# a GitHub Release, change repository visibility, or publish to WinGet.
+
+jobs:
+  build:
+    name: Build Release Artifacts
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.9.0'
+          arch: 'win64_msvc2022_64'
+          modules: 'qtsvg'
+          cache: true
+
+      - name: Install WiX Toolset
+        run: dotnet tool install --global wix
+        shell: pwsh
+
+      - name: Build canonical release artifacts
+        run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1
+        shell: pwsh
+
+      - name: Resolve artifact paths
+        id: artifact
+        run: |
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(\s*exosnap\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)').Matches[0].Groups[1].Value
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "dir=.workspace/release/$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        shell: pwsh
+
+      - name: Upload all release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64
+          path: |
+            ${{ steps.artifact.outputs.dir }}/ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64-portable.zip
+            ${{ steps.artifact.outputs.dir }}/ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64-portable.sha256
+            ${{ steps.artifact.outputs.dir }}/ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64.msi
+            ${{ steps.artifact.outputs.dir }}/ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64.msi.sha256
+            ${{ steps.artifact.outputs.dir }}/artifact-manifest.json
+            ${{ steps.artifact.outputs.dir }}/validation-report.md
+          if-no-files-found: error
