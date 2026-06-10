@@ -17,4 +17,9 @@ if [ "$has_branch_update" -eq 0 ]; then
     exit 0
 fi
 
-pwsh -NonInteractive -File "$(git rev-parse --show-toplevel)/scripts/check-quality.ps1"
+# Static checks only (cppcheck + clang-tidy, ~45 s). The full build + test for both the
+# Debug and Release presets is already run by GitHub CI on every push and pull_request
+# (.github/workflows/ci.yml), so duplicating a cold Visual-Studio build+test here only
+# made every push take minutes. Run scripts/check-quality.ps1 (no -StaticOnly) manually
+# when you want the full local gate.
+pwsh -NonInteractive -File "$(git rev-parse --show-toplevel)/scripts/check-quality.ps1" -StaticOnly
