@@ -2663,3 +2663,47 @@ QComboBox#recordCountdownSelect {
 QComboBox#recordCountdownSelect:disabled {
     color: ${text3};
 }
+
+/* ---------------------------------------------------------------------------
+   VISUAL-REVIEW-AND-PRODUCT-POLISH-R1 — keyboard focus and state distinction.
+   These rules must stay at the end of the sheet: the role/dockAction blocks
+   above override the global :focus/:disabled rules at equal specificity, which
+   made keyboard focus invisible on role-styled buttons (VR-004) and disabled
+   ghost/utility buttons indistinguishable from enabled ones (VR-011).
+   -------------------------------------------------------------------------- */
+
+QLabel[labelRole="errorText"] {
+    color: ${err};
+}
+
+QPushButton[role="ghost"]:disabled,
+QPushButton[role="utility"]:disabled {
+    color: ${text3};
+    background: ${bg2};
+    border-color: ${line1};
+}
+
+QPushButton[role="ghost"]:focus,
+QPushButton[role="utility"]:focus,
+QPushButton[dockAction="ghost"]:focus {
+    border-color: ${accent};
+    color: ${text0};
+}
+
+QPushButton[role="link"]:focus {
+    color: ${accent};
+    text-decoration: underline;
+}
+
+/* Filled buttons: an accent border is invisible on the accent/err fill, so
+   focus uses a light inner border instead. */
+QPushButton[role="primary"]:focus,
+QPushButton[dockAction="record"]:focus,
+QPushButton[dockAction="resume"]:focus {
+    border: 2px solid ${text0};
+}
+
+QPushButton[role="danger"]:focus,
+QPushButton[dockAction="stop"]:focus {
+    border: 2px solid ${text0};
+}
