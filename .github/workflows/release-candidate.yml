@@ -1,0 +1,113 @@
+name: Release Candidate
+
+on:
+  workflow_dispatch:
+
+# This workflow produces the canonical release artifacts (portable ZIP + MSI)
+# for the current HEAD commit. It does NOT create a git tag, a GitHub Release,
+# change repository visibility, or publish to WinGet. Publication remains a
+# separate, explicitly approved step.
+
+jobs:
+  build-portable:
+    name: Build Portable ZIP
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.9.0'
+          arch: 'win64_msvc2022_64'
+          modules: 'qtsvg'
+          cache: true
+
+      - name: Build canonical portable artifact
+        run: pwsh -NonInteractive -File scripts/build-release-artifact.ps1 -SkipSmoke
+        shell: pwsh
+
+      - name: Resolve artifact paths
+        id: artifact
+        run: |
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(\s*exosnap\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)').Matches[0].Groups[1].Value
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "dir=.workspace/release/$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        shell: pwsh
+
+      - name: Upload portable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64-portable
+          path: |
+            ${{ steps.artifact.outputs.dir }}/ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64-portable.zip
+            ${{ steps.artifact.outputs.dir }}/ExoSnap-${{ steps.artifact.outputs.version }}-windows-x64-portable.sha256
+          if-no-files-found: error
+
+  build-msi:
+    name: Build MSI
+    runs-on: windows-latest
+    needs: build-portable
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.9.0'
+          arch: 'win64_msvc2022_64'
+          modules: 'qtsvg'
+          cache: true
+
+      - name: Install WiX Toolset
+        run: dotnet tool install --global wix
+        shell: pwsh
+
+      - name: Configure Release
+        run: cmake --preset windows-x64-release
+        shell: pwsh
+
+      - name: Build Release
+        run: cmake --build --preset windows-x64-release-exosnap
+        shell: pwsh
+
+      - name: Install to staging
+        run: |
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(\s*exosnap\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)').Matches[0].Groups[1].Value
+          $staging = ".workspace/release/$version/staging/ExoSnap-$version-windows-x64"
+          New-Item -ItemType Directory -Path $staging -Force | Out-Null
+          cmake --install build/windows-x64-release --config Release --prefix $staging
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "staging=$staging" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        id: install
+        shell: pwsh
+
+      - name: Build MSI
+        run: |
+          $version = "${{ steps.install.outputs.version }}"
+          $staging = "${{ steps.install.outputs.staging }}"
+          $msiDir = ".workspace/release/$version"
+          $msiPath = "$msiDir/ExoSnap-$version-windows-x64.msi"
+          New-Item -ItemType Directory -Path $msiDir -Force | Out-Null
+
+          wix build -arch x64 -o "$msiPath" packaging/msi/Package.wxs `
+            -dStagingDir="$staging" `
+            -dProductVersion="$version"
+        shell: pwsh
+
+      - name: Compute MSI SHA-256
+        run: |
+          $version = "${{ steps.install.outputs.version }}"
+          $msiDir = ".workspace/release/$version"
+          $sha = (Get-FileHash -Path "$msiDir/ExoSnap-$version-windows-x64.msi" -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path "$msiDir/ExoSnap-$version-windows-x64.msi.sha256" -Value "$sha  ExoSnap-$version-windows-x64.msi" -NoNewline -Encoding ascii
+        shell: pwsh
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExoSnap-${{ steps.install.outputs.version }}-windows-x64-msi
+          path: |
+            .workspace/release/${{ steps.install.outputs.version }}/ExoSnap-${{ steps.install.outputs.version }}-windows-x64.msi
+            .workspace/release/${{ steps.install.outputs.version }}/ExoSnap-${{ steps.install.outputs.version }}-windows-x64.msi.sha256
+          if-no-files-found: error

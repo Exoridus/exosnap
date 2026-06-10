@@ -1,0 +1,159 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <!--
+    ExoSnap MSI Installer
+    =====================
+    Package identity: Codexo.ExoSnap
+    UpgradeCode is stable across versions.
+    ProductCode is auto-generated per build (*).
+    Sources files from the CMake install staging tree.
+    User data (settings, presets, history, logs, recordings) is NOT
+    installed or removed by this MSI.
+  -->
+
+  <!--
+    UpgradeCode — stable across all ExoSnap versions.
+    ProductCode — auto-generated per build via "*".
+    ProductVersion — derived from CMake PROJECT_VERSION (0.1.0).
+  -->
+  <Package Name="ExoSnap"
+           Manufacturer="Codexo"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
+           Scope="perMachine"
+           Language="1033"
+           Codepage="1252"
+           Platform="x64">
+
+    <!-- Major upgrade: remove older ExoSnap versions, prevent downgrades -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of ExoSnap is already installed."
+                  AllowSameVersionUpgrades="yes" />
+
+    <!-- Prevent installation of older versions -->
+    <Upgrade Id="{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}">
+      <UpgradeVersion OnlyDetect="no"
+                      Minimum="$(var.ProductVersion)"
+                      Property="NEWERVERSIONDETECTED"
+                      IncludeMinimum="no" />
+    </Upgrade>
+
+    <Media Id="1" Cabinet="exosnap.cab" EmbedCab="yes" />
+
+    <!-- Install to %ProgramFiles%\Codexo\ExoSnap\ -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="ManufacturerFolder" Name="Codexo">
+        <Directory Id="INSTALLFOLDER" Name="ExoSnap">
+
+          <!-- Root files from CMake install tree -->
+          <ComponentGroupRef Id="RootFiles" />
+
+          <!-- Qt plugins -->
+          <Directory Id="PluginsFolder" Name="plugins">
+            <Directory Id="PlatformsFolder" Name="platforms">
+              <ComponentGroupRef Id="PlatformPlugins" />
+            </Directory>
+            <Directory Id="IconEnginesFolder" Name="iconengines">
+              <ComponentGroupRef Id="IconEnginePlugins" />
+            </Directory>
+            <Directory Id="ImageFormatsFolder" Name="imageformats">
+              <ComponentGroupRef Id="ImageFormatPlugins" />
+            </Directory>
+            <Directory Id="StylesFolder" Name="styles">
+              <ComponentGroupRef Id="StylePlugins" />
+            </Directory>
+          </Directory>
+
+          <!-- Third-party licenses -->
+          <Directory Id="LicensesFolder" Name="licenses">
+            <ComponentGroupRef Id="LicenseFiles" />
+          </Directory>
+
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Start Menu shortcut -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="{B2C3D4E5-F6A7-8901-BCDE-F12345678901}">
+        <Shortcut Id="StartMenuExoSnap"
+                  Name="ExoSnap"
+                  Description="Windows-native recording application"
+                  Target="[INSTALLFOLDER]exosnap.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\Codexo\ExoSnap"
+                       Name="installed"
+                       Value="1"
+                       Type="integer"
+                       KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <!-- ARP (Add/Remove Programs) metadata -->
+    <Property Id="ARPCOMMENTS" Value="Windows-native diagnostics-first recording application" />
+    <Property Id="ARPCONTACT" Value="https://github.com/Exoridus/exosnap" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/Exoridus/exosnap" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/Exoridus/exosnap/issues" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPNOREPAIR" Value="0" />
+
+    <!-- Feature tree -->
+    <Feature Id="MainFeature"
+             Title="ExoSnap"
+             Level="1"
+             ConfigurableDirectory="INSTALLFOLDER"
+             Display="expand"
+             Description="ExoSnap recording application">
+      <ComponentGroupRef Id="RootFiles" />
+      <ComponentGroupRef Id="PlatformPlugins" />
+      <ComponentGroupRef Id="IconEnginePlugins" />
+      <ComponentGroupRef Id="ImageFormatPlugins" />
+      <ComponentGroupRef Id="StylePlugins" />
+      <ComponentGroupRef Id="LicenseFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+
+  </Package>
+
+  <!-- ========================================================================= -->
+  <!-- Component Groups — populated from the CMake install staging tree          -->
+  <!-- ========================================================================= -->
+
+  <!-- Root-level files (exe, DLLs, qt.conf, documentation) -->
+  <ComponentGroup Id="RootFiles" Directory="INSTALLFOLDER">
+    <Files Include="$(var.StagingDir)\*.exe" />
+    <Files Include="$(var.StagingDir)\*.dll" />
+    <Files Include="$(var.StagingDir)\qt.conf" />
+    <Files Include="$(var.StagingDir)\LICENSE" />
+    <Files Include="$(var.StagingDir)\THIRD_PARTY_NOTICES.md" />
+    <Files Include="$(var.StagingDir)\KNOWN_LIMITATIONS.md" />
+    <Files Include="$(var.StagingDir)\README-PORTABLE.md" />
+  </ComponentGroup>
+
+  <!-- platforms\qwindows.dll -->
+  <ComponentGroup Id="PlatformPlugins" Directory="PlatformsFolder">
+    <Files Include="$(var.StagingDir)\plugins\platforms\*.dll" />
+  </ComponentGroup>
+
+  <!-- iconengines\ -->
+  <ComponentGroup Id="IconEnginePlugins" Directory="IconEnginesFolder">
+    <Files Include="$(var.StagingDir)\plugins\iconengines\*.dll" />
+  </ComponentGroup>
+
+  <!-- imageformats\ -->
+  <ComponentGroup Id="ImageFormatPlugins" Directory="ImageFormatsFolder">
+    <Files Include="$(var.StagingDir)\plugins\imageformats\*.dll" />
+  </ComponentGroup>
+
+  <!-- styles\ -->
+  <ComponentGroup Id="StylePlugins" Directory="StylesFolder">
+    <Files Include="$(var.StagingDir)\plugins\styles\*.dll" />
+  </ComponentGroup>
+
+  <!-- licenses\ -->
+  <ComponentGroup Id="LicenseFiles" Directory="LicensesFolder">
+    <Files Include="$(var.StagingDir)\licenses\*.txt" />
+  </ComponentGroup>
+
+</Wix>

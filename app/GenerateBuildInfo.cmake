@@ -2,7 +2,7 @@ set(EXOSNAP_GIT_SHA "Unavailable")
 
 if(NOT DEFINED EXOSNAP_VERSION)
     # Fallback only; the real value is the canonical project(... VERSION ...)
-    # passed by apps/exosnap/CMakeLists.txt. Keep this in sync with that source.
+    # passed by app/CMakeLists.txt. Keep this in sync with that source.
     set(EXOSNAP_VERSION "0.1.0")
 endif()
 
