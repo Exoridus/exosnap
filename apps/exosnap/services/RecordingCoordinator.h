@@ -193,6 +193,7 @@ class RecordingCoordinator {
     mutable std::mutex markers_mutex_;
     std::vector<RecordingMarker> markers_;
     double last_elapsed_seconds_ = 0.0;
+    uint64_t last_media_time_ns_ = 0; // media-PTS for marker timestamps
     bool markers_limit_reported_ = false;
 
     // Split recording (SPLIT-RECORDING-R1)

@@ -238,7 +238,7 @@ class PipelineDiagnosticsAggregator {
     uint64_t split_failures_ = 0;
     DiagnosticsSplitTrigger last_split_trigger_ = DiagnosticsSplitTrigger::None;
     bool split_pending_ = false;
-    double segment_open_elapsed_ = 0.0;
+    time_point segment_open_time_{};
 
     // Reorder window (last reported by writer)
     uint32_t reorder_packets_ = 0;

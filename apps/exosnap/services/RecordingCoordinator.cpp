@@ -609,6 +609,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         std::lock_guard<std::mutex> lock(markers_mutex_);
         markers_.clear();
         last_elapsed_seconds_ = 0.0;
+        last_media_time_ns_ = 0;
         markers_limit_reported_ = false;
     }
 
@@ -909,11 +910,11 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
     // recordings each segment's sidecar was already written (partitioned, segment-
     // local) by OnSegmentCompleted, so do not clobber segment 0 with all markers.
     const bool multi_segment = ui_result.segments.size() > 1;
-    if (result.succeeded && !markers_.empty() && !multi_segment) {
+    if (result.succeeded && !ui_result.markers.empty() && !multi_segment) {
         WriteMarkerSidecar();
         diagnostics::AppLog::info(QStringLiteral("marker"),
                                   QStringLiteral("sidecar finalized markers=%1 path=%2")
-                                      .arg(markers_.size())
+                                      .arg(ui_result.markers.size())
                                       .arg(QString::fromStdWString(MarkerSidecarPath().wstring())));
     }
 
@@ -1233,6 +1234,7 @@ void RecordingCoordinator::PostStats(recorder_core::SessionStats stats) {
     {
         std::lock_guard<std::mutex> lock(markers_mutex_);
         last_elapsed_seconds_ = stats.elapsed_seconds;
+        last_media_time_ns_ = stats.video_duration_ns;
     }
     if (!on_stats_updated_)
         return;
@@ -1388,7 +1390,7 @@ void RecordingCoordinator::AddMarker(RecordingMarkerType type) {
         return;
     }
 
-    const uint64_t time_ms = static_cast<uint64_t>(last_elapsed_seconds_ * 1000.0);
+    const uint64_t time_ms = last_media_time_ns_ / 1000000ULL;
 
     RecordingMarker marker;
     marker.time_ms = time_ms;

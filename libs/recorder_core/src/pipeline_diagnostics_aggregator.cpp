@@ -102,7 +102,7 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     split_failures_ = 0;
     last_split_trigger_ = DiagnosticsSplitTrigger::None;
     split_pending_ = false;
-    segment_open_elapsed_ = 0.0;
+    segment_open_time_ = time_point{};
 
     reorder_packets_ = 0;
     reorder_packets_peak_ = 0;
@@ -237,6 +237,7 @@ void PipelineDiagnosticsAggregator::OnDiskWrite(time_point now, double ms, uint6
 void PipelineDiagnosticsAggregator::OnSegmentOpened(uint32_t index) noexcept {
     std::lock_guard lk(mutex_);
     segment_index_ = index;
+    segment_open_time_ = std::chrono::steady_clock::now();
     if (index + 1 > segment_count_) {
         segment_count_ = index + 1;
     }
@@ -428,7 +429,9 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     sp.split_failures = split_failures_;
     sp.availability = cfg_.split_supported ? MetricAvailability::Available : MetricAvailability::Unavailable;
     if (cfg_.split_supported && cfg_.auto_split && recording && cfg_.auto_split_seconds > 0.0) {
-        const double since = elapsed_seconds - segment_open_elapsed_;
+        const double since = segment_open_time_ != time_point{}
+                                 ? std::chrono::duration<double>(now - segment_open_time_).count()
+                                 : elapsed_seconds;
         sp.seconds_until_auto_split = std::max(0.0, cfg_.auto_split_seconds - since);
     } else {
         sp.seconds_until_auto_split = -1.0;

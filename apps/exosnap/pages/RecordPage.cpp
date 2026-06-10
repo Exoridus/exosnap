@@ -1665,6 +1665,52 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
             CompletedRecording updated = rec;
             updated.file_path = target_path;
             updated.display_name = target_name;
+
+            // Rename sidecar files to match the new media file name.
+            auto deriveSidecarPath = [](const QString& mediaPath) -> QString {
+                QString sidecar = mediaPath;
+                const int dot = sidecar.lastIndexOf(QLatin1Char('.'));
+                if (dot > sidecar.lastIndexOf(QLatin1Char('/')) && dot > sidecar.lastIndexOf(QLatin1Char('\\'))) {
+                    sidecar = sidecar.left(dot);
+                }
+                return sidecar + QStringLiteral(".markers.json");
+            };
+
+            // Base marker sidecar
+            if (!rec.marker_sidecar_path.isEmpty() && QFileInfo::exists(rec.marker_sidecar_path)) {
+                const QString newSidecar = deriveSidecarPath(target_path);
+                QFile::rename(rec.marker_sidecar_path, newSidecar);
+                updated.marker_sidecar_path = newSidecar;
+            }
+
+            // Per-segment files and their sidecars
+            if (!updated.segments.empty()) {
+                const QString oldStem = QFileInfo(rec.file_path).completeBaseName();
+                const QString newStem = QFileInfo(target_path).completeBaseName();
+                const QString ext = QFileInfo(rec.file_path).suffix();
+                const QString parentDir = QFileInfo(rec.file_path).absolutePath();
+
+                for (auto& seg : updated.segments) {
+                    const QString oldSegSidecar = deriveSidecarPath(seg.file_path);
+                    // Derive new segment path from the new base stem
+                    QString newSegPath;
+                    if (seg.index == 0) {
+                        newSegPath = target_path;
+                    } else {
+                        const uint32_t part = seg.index + 1;
+                        newSegPath = QStringLiteral("%1/%2_part-%3.%4")
+                                         .arg(parentDir, newStem)
+                                         .arg(part, 3, 10, QLatin1Char('0'))
+                                         .arg(ext);
+                    }
+                    // Rename segment sidecar if it exists
+                    if (QFileInfo::exists(oldSegSidecar)) {
+                        const QString newSegSidecar = deriveSidecarPath(newSegPath);
+                        QFile::rename(oldSegSidecar, newSegSidecar);
+                    }
+                    seg.file_path = newSegPath;
+                }
+            }
             view_model_.current_completed_recording = updated;
             view_model_.result_output_path = target_path.toStdWString();
             std::filesystem::path p(target_path.toStdWString());
@@ -1699,6 +1745,26 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 
         QFile file(rec.file_path);
         if (file.remove()) {
+            // Also delete associated sidecar files.
+            auto deriveSidecarPath = [](const QString& mediaPath) -> QString {
+                QString sidecar = mediaPath;
+                const int dot = sidecar.lastIndexOf(QLatin1Char('.'));
+                if (dot > sidecar.lastIndexOf(QLatin1Char('/')) && dot > sidecar.lastIndexOf(QLatin1Char('\\'))) {
+                    sidecar = sidecar.left(dot);
+                }
+                return sidecar + QStringLiteral(".markers.json");
+            };
+
+            // Base sidecar
+            if (!rec.marker_sidecar_path.isEmpty()) {
+                QFile::remove(rec.marker_sidecar_path);
+            }
+            // Per-segment sidecars
+            for (const auto& seg : rec.segments) {
+                const QString segSidecar = deriveSidecarPath(seg.file_path);
+                QFile::remove(segSidecar);
+            }
+
             diagnostics::AppLog::info(QStringLiteral("result.delete"),
                                       QStringLiteral("path=\"%1\"").arg(rec.file_path));
 
