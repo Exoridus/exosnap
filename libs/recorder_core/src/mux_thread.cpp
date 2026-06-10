@@ -337,6 +337,10 @@ void MuxThread::Run() {
         // Flush any buffered pre-epoch audio into the OLD segment first.
         drain_pending_audio();
         finalize_segment();
+        // finalize_segment() sets write_error on a finalize/I-O failure (failure
+        // isolation: quarantine the incomplete current file, keep prior segments).
+        // cppcheck cannot see the captured-by-ref mutation through the lambda call.
+        // cppcheck-suppress identicalConditionAfterEarlyExit
         if (write_error)
             return;
         // Open the next segment with epoch unset; push_video sets it from the
