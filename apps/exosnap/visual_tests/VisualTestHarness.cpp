@@ -130,6 +130,22 @@ bool ParseVisualTestOptions(const QStringList& args, VisualTestOptions* out, QSt
             parsed.exit_after_capture = true;
         } else if (arg == QStringLiteral("--visual-test-maximized")) {
             parsed.maximize = true;
+        } else if (arg == QStringLiteral("--visual-test-window-size")) {
+            QString size_text;
+            if (!require_value(&size_text))
+                return false;
+            const QStringList parts = size_text.split(QLatin1Char('x'));
+            bool ok_w = false;
+            bool ok_h = false;
+            if (parts.size() == 2) {
+                parsed.window_width = parts.at(0).toInt(&ok_w);
+                parsed.window_height = parts.at(1).toInt(&ok_h);
+            }
+            if (!ok_w || !ok_h || parsed.window_width <= 0 || parsed.window_height <= 0) {
+                if (error)
+                    *error = QStringLiteral("--visual-test-window-size requires WIDTHxHEIGHT");
+                return false;
+            }
         } else if (arg == QStringLiteral("--visual-test-exit")) {
             parsed.exit_after_capture = true;
         }
@@ -166,6 +182,12 @@ QJsonObject BuildVisualManifest(const MainWindow& window, const VisualScenario& 
                 RectToJson(QRect(scenario.region_x, scenario.region_y, scenario.region_width, scenario.region_height)));
     root.insert(QStringLiteral("ready_marker"), QStringLiteral("VISUAL_TEST_READY:%1").arg(scenario.id));
     root.insert(QStringLiteral("window_geometry"), RectToJson(window.geometry()));
+    root.insert(QStringLiteral("focused_object"), scenario.focused_object);
+    {
+        const QWidget* focus_widget = window.focusWidget();
+        root.insert(QStringLiteral("actual_focus_object"),
+                    focus_widget != nullptr ? focus_widget->objectName() : QString());
+    }
 
     QJsonObject output;
     output.insert(QStringLiteral("requested_resolution_mode"), ResolutionModeName(scenario.output_resolution_mode));
@@ -433,12 +455,25 @@ int RunVisualTest(QApplication& app, MainWindow& window, const VisualTestOptions
                                     !options.screenshot_path.isEmpty());
     }
 
-    window.resize(1280, 820);
+    const int target_w = options.window_width > 0 ? options.window_width : 1280;
+    const int target_h = options.window_height > 0 ? options.window_height : 820;
+    window.resize(target_w, target_h);
     window.applyVisualScenario(*scenario);
     if (options.maximize)
         window.showMaximized();
     else
         window.showNormal();
+
+    // showEvent restores persisted user geometry on first show; re-apply the
+    // deterministic harness geometry so captures do not depend on local settings
+    // or on which monitor the window was last used on.
+    if (!options.maximize) {
+        QPoint origin(0, 0);
+        if (const QScreen* primary = QGuiApplication::primaryScreen())
+            origin = primary->availableGeometry().topLeft();
+        window.move(origin);
+        window.resize(target_w, target_h);
+    }
 
     window.raise();
     window.activateWindow();

@@ -1585,6 +1585,14 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
 
     if (title_bar_ && stack_)
         title_bar_->setActivePage(navHighlightIndexFor(stack_->currentIndex()));
+
+    // Deterministic keyboard focus (VR-004): give the named widget tab focus so
+    // :focus styling is visible in screenshots.
+    if (!scenario.focused_object.isEmpty()) {
+        if (auto* target = findChild<QWidget*>(scenario.focused_object); target && target->isEnabled())
+            target->setFocus(Qt::TabFocusReason);
+    }
+
     installVisualReadyMarker(scenario.id);
     QTimer::singleShot(0, this, [this, scenario_id = scenario.id]() { installVisualReadyMarker(scenario_id); });
     setWindowTitle(QStringLiteral("ExoSnap [visual-test:%1]").arg(scenario.id));

@@ -234,6 +234,11 @@ struct VisualScenario {
     // Diagnostics page's live telemetry panel. Empty = static page only. Recognized:
     // "idle", "healthy", "encoder", "disk", "paused", "split".
     QString diag_live;
+
+    // --- Keyboard focus (VISUAL-REVIEW-AND-PRODUCT-POLISH-R1 / VR-004) ---
+    // objectName of a widget that receives keyboard focus (Qt::TabFocusReason)
+    // after the scenario is applied, so :focus styling renders deterministically.
+    QString focused_object;
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

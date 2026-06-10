@@ -510,5 +510,33 @@ TEST(VisualScenarioTest, LiveDiagnosticsScenariosCarryDeterministicState) {
     EXPECT_TRUE(plain->diag_live.isEmpty());
 }
 
+// 56. Polish-R1 scenarios carry their frozen visual contracts
+// (VISUAL-REVIEW-AND-PRODUCT-POLISH-R1).
+TEST(VisualScenarioTest, PolishR1ScenariosCarryFrozenContracts) {
+    // VR-005: MP4 split-unavailable Settings state.
+    const VisualScenario* mp4_split = FindVisualScenario(QStringLiteral("settings-format-mp4-split-unavailable"));
+    ASSERT_NE(mp4_split, nullptr);
+    EXPECT_EQ(mp4_split->page, VisualPage::Settings);
+    EXPECT_EQ(mp4_split->container, capability::Container::Mp4);
+
+    // VR-002: partial failure is a distinct completed contract.
+    const VisualScenario* partial = FindVisualScenario(QStringLiteral("completed-recording-partial-failure"));
+    ASSERT_NE(partial, nullptr);
+    EXPECT_EQ(partial->record_state, VisualRecordState::Completed);
+    EXPECT_EQ(partial->completed_segment_count, 2);
+    EXPECT_TRUE(partial->completed_segment_missing);
+
+    // VR-004: deterministic keyboard focus on the primary Stop action.
+    const VisualScenario* focused = FindVisualScenario(QStringLiteral("record-transport-focused"));
+    ASSERT_NE(focused, nullptr);
+    EXPECT_EQ(focused->record_state, VisualRecordState::Recording);
+    EXPECT_EQ(focused->focused_object, QStringLiteral("recordDockStop"));
+
+    // Non-focus scenarios keep the focus field empty (no hidden focus state).
+    const VisualScenario* ready = FindVisualScenario(QStringLiteral("record-ready"));
+    ASSERT_NE(ready, nullptr);
+    EXPECT_TRUE(ready->focused_object.isEmpty());
+}
+
 } // namespace
 } // namespace exosnap::visual
