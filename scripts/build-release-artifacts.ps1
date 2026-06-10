@@ -322,8 +322,8 @@ if (-not $SkipMsi) {
                 $msiArgs = @(
                     'build', '-arch', 'x64',
                     '-o', $MsiPath,
-                    '-dStagingDir=' + $PackageRoot,
-                    '-dProductVersion=' + $Version,
+                    '-d', "StagingDir=$PackageRoot",
+                    '-d', "ProductVersion=$Version",
                     $wxsPath
                 )
                 Invoke-Heartbeat -Name 'wix build' -FilePath 'wix' -Arguments $msiArgs
