@@ -355,6 +355,16 @@ QJsonObject BuildVisualManifest(const MainWindow& window, const VisualScenario& 
         root.insert(QStringLiteral("markers"), markers);
     }
 
+    // Split recording manifest (SPLIT-RECORDING-R1)
+    {
+        QJsonObject split;
+        split.insert(QStringLiteral("action_visible"), scenario.split_action_visible);
+        split.insert(QStringLiteral("action_enabled"), scenario.split_action_enabled);
+        split.insert(QStringLiteral("completed_segment_count"), scenario.completed_segment_count);
+        split.insert(QStringLiteral("completed_segment_missing"), scenario.completed_segment_missing);
+        root.insert(QStringLiteral("split"), split);
+    }
+
     QJsonArray masks;
     for (const VisualMask& mask : scenario.masks) {
         QJsonObject item;

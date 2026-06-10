@@ -2376,6 +2376,30 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
         view_model_.SetResult(result);
         view_model_.SetState(UiRecordingState::Completed);
 
+        // Multi-segment split results (SPLIT-RECORDING-R1): populate synthetic
+        // segments for deterministic visual test scenarios.
+        if (scenario.completed_segment_count > 1) {
+            auto& cr = view_model_.current_completed_recording;
+            const double seg_duration =
+                scenario.result_duration_seconds / static_cast<double>(scenario.completed_segment_count);
+            const qint64 seg_bytes = static_cast<qint64>(scenario.result_file_size_bytes) /
+                                     static_cast<qint64>(scenario.completed_segment_count);
+            for (int i = 0; i < scenario.completed_segment_count; ++i) {
+                CompletedRecordingSegment seg;
+                seg.file_path = QStringLiteral("C:\\Users\\User\\Videos\\ExoSnap\\recording_part_%1.mkv")
+                                    .arg(i + 1, 3, 10, QChar('0'));
+                seg.index = i;
+                seg.session_start_ms = static_cast<uint64_t>(i) * static_cast<uint64_t>(seg_duration * 1000.0);
+                seg.duration_seconds = seg_duration;
+                seg.file_size_bytes = seg_bytes;
+                seg.succeeded = !scenario.completed_segment_missing || i != 1; // segment 1 missing if flag set
+                cr.segments.push_back(seg);
+            }
+            // If a segment is missing, the scalar file_size_bytes/duration should
+            // reflect the honest sum of present segments; the scalar succeeded flag
+            // is set correspondingly.
+        }
+
         // Apply recent history for visual tests
         if (scenario.recent_result_count > 0) {
             view_model_.ClearRecentRecordings();
@@ -2460,6 +2484,13 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
     }
 
     refresh();
+
+    // Split recording visual state (SPLIT-RECORDING-R1): override the transport
+    // dock's split-enabled state for deterministic visual scenarios. In production
+    // the coordinator gates this; in visual-test mode we drive it directly.
+    if (transport_dock_) {
+        transport_dock_->setSplitEnabled(scenario.split_action_enabled);
+    }
 
     // Selection only takes effect when editing is allowed (Ready, unlocked).
     if (preview_surface_)
@@ -3341,6 +3372,17 @@ void RecordPage::requestSplit(recorder_core::SplitTriggerSource source) {
     ensureCoordinatorInit();
     if (!coordinator_)
         return;
+
+    // Split recording is supported only for Matroska containers (MKV/WebM).
+    // MP4 uses IMF Sink Writer which cannot produce segmented output.
+    const bool mkv =
+        (current_container_ == capability::Container::Matroska || current_container_ == capability::Container::WebM);
+    if (!mkv) {
+        showCaptureFrameStatus(false, QString(),
+                               QStringLiteral("Split recording is only available with MKV or WebM output."));
+        return;
+    }
+
     // The coordinator does the authoritative state validation and coalescing; the
     // button and hotkey both funnel through this single typed path.
     const bool accepted = coordinator_->RequestSplit(source);
@@ -4858,9 +4900,12 @@ void RecordPage::updateTransportDock() {
     }
     transport_dock_->setState(dock_state);
     transport_dock_->setPrimaryEnabled(primary_enabled);
-    // Split is available in an active session and disabled while a transition is
-    // in flight or while the session winds down.
-    transport_dock_->setSplitEnabled((recording || paused) && coordinator_ && !coordinator_->IsSplitPending());
+    // Split is available in an active session with a Matroska container (MKV/WebM)
+    // and disabled while a transition is in flight or while the session winds down.
+    // MP4 does not support segmented output.
+    const bool mkv =
+        (current_container_ == capability::Container::Matroska || current_container_ == capability::Container::WebM);
+    transport_dock_->setSplitEnabled(mkv && (recording || paused) && coordinator_ && !coordinator_->IsSplitPending());
     transport_dock_->setCountdownSeconds(selected_countdown_seconds_);
 
     const bool recording_for_timer = recording || paused || stopping;

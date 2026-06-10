@@ -1595,6 +1595,54 @@ const QVector<VisualScenario> kMarkerScenarios = {
      .marker_sidecar_file = QStringLiteral("recording.markers.json")},
 };
 
+const QVector<VisualScenario> kSplitRecordingScenarios = {
+    // --- Recording state: split available (SPLIT-RECORDING-R1) ---
+    {.id = QStringLiteral("record-split-available"),
+     .title = QStringLiteral("Record / Split / Available During Recording"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Recording,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")},
+               {QStringLiteral("recordDockTimer"), QStringLiteral("timer is dynamic during recording")}},
+     .container = capability::Container::Matroska,
+     .video_codec = capability::VideoCodec::Av1Nvenc,
+     .split_action_visible = true,
+     .split_action_enabled = true},
+
+    {.id = QStringLiteral("paused-split-available"),
+     .title = QStringLiteral("Record / Split / Available While Paused"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Paused,
+     .masks = {{QStringLiteral("previewSurface"), QStringLiteral("live preview is dynamic")}},
+     .container = capability::Container::Matroska,
+     .video_codec = capability::VideoCodec::Av1Nvenc,
+     .split_action_visible = true,
+     .split_action_enabled = true},
+
+    // --- Completed result: multi-segment (SPLIT-RECORDING-R1) ---
+    {.id = QStringLiteral("completed-recording-segments"),
+     .title = QStringLiteral("Record / Completed / Multi-Segment"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Completed,
+     .container = capability::Container::Matroska,
+     .result_file_name = QStringLiteral("recording_part_003.mkv"),
+     .result_file_size_bytes = 156ULL * 1024ULL * 1024ULL,
+     .result_duration_seconds = 605.0,
+     .result_file_exists = true,
+     .completed_segment_count = 3},
+
+    {.id = QStringLiteral("completed-recording-segment-missing"),
+     .title = QStringLiteral("Record / Completed / Segment Missing"),
+     .page = VisualPage::Record,
+     .record_state = VisualRecordState::Completed,
+     .container = capability::Container::Matroska,
+     .result_file_name = QStringLiteral("recording_part_002.mkv"),
+     .result_file_size_bytes = 52ULL * 1024ULL * 1024ULL,
+     .result_duration_seconds = 205.0,
+     .result_file_exists = true,
+     .completed_segment_count = 3,
+     .completed_segment_missing = true},
+};
+
 const QVector<VisualScenario>& VisualScenarioRegistry() {
     static QVector<VisualScenario> merged;
     if (merged.isEmpty()) {
@@ -1603,6 +1651,7 @@ const QVector<VisualScenario>& VisualScenarioRegistry() {
         merged.append(kDeviceDiscoveryScenarios);
         merged.append(kCaptureFrameScenarios);
         merged.append(kMarkerScenarios);
+        merged.append(kSplitRecordingScenarios);
     }
     return merged;
 }

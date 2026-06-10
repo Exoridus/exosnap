@@ -118,6 +118,11 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("source-display-selected-missing"),
         QStringLiteral("record-display-unavailable"),
         QStringLiteral("record-region-monitor-missing"),
+        // Split recording scenarios (SPLIT-RECORDING-R1).
+        QStringLiteral("record-split-available"),
+        QStringLiteral("paused-split-available"),
+        QStringLiteral("completed-recording-segments"),
+        QStringLiteral("completed-recording-segment-missing"),
     };
 
     for (const QString& id : required)
@@ -444,6 +449,33 @@ TEST(VisualScenarioTest, DeviceDiscovery_ScenarioStructDoesNotSetPresetDirty) {
         // represent a user edit; they only represent device availability state).
         EXPECT_FALSE(s.preset_dirty) << "Discovery scenario " << s.id.toStdString() << " must not set preset_dirty";
     }
+}
+
+// 54. Split recording scenarios carry deterministic state (SPLIT-RECORDING-R1).
+TEST(VisualScenarioTest, SplitRecordingScenariosCarryDeterministicState) {
+    const VisualScenario* rec_split = FindVisualScenario(QStringLiteral("record-split-available"));
+    ASSERT_NE(rec_split, nullptr);
+    EXPECT_EQ(rec_split->page, VisualPage::Record);
+    EXPECT_EQ(rec_split->record_state, VisualRecordState::Recording);
+    EXPECT_TRUE(rec_split->split_action_visible);
+    EXPECT_TRUE(rec_split->split_action_enabled);
+
+    const VisualScenario* paused_split = FindVisualScenario(QStringLiteral("paused-split-available"));
+    ASSERT_NE(paused_split, nullptr);
+    EXPECT_EQ(paused_split->record_state, VisualRecordState::Paused);
+    EXPECT_TRUE(paused_split->split_action_visible);
+    EXPECT_TRUE(paused_split->split_action_enabled);
+
+    const VisualScenario* segments = FindVisualScenario(QStringLiteral("completed-recording-segments"));
+    ASSERT_NE(segments, nullptr);
+    EXPECT_EQ(segments->record_state, VisualRecordState::Completed);
+    EXPECT_EQ(segments->completed_segment_count, 3);
+    EXPECT_FALSE(segments->completed_segment_missing);
+
+    const VisualScenario* missing = FindVisualScenario(QStringLiteral("completed-recording-segment-missing"));
+    ASSERT_NE(missing, nullptr);
+    EXPECT_EQ(missing->completed_segment_count, 3);
+    EXPECT_TRUE(missing->completed_segment_missing);
 }
 
 } // namespace
