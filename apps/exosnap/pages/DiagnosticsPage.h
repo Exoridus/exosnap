@@ -3,6 +3,7 @@
 
 #include <capability/capability_set.h>
 #include <capability/resolver.h>
+#include <recorder_core/pipeline_diagnostics.h>
 
 #include "../diagnostics/CapabilitySummary.h"
 #include "../diagnostics/ConfigSummary.h"
@@ -20,6 +21,7 @@ namespace exosnap {
 namespace ui::widgets {
 class PipelineFlow;
 class SectionRuleHeader;
+class LivePipelinePanel;
 } // namespace ui::widgets
 
 struct OutputSettingsModel;
@@ -34,6 +36,10 @@ class DiagnosticsPage : public QWidget {
                            const VideoSettingsModel& video, const capability::AudioUiState& audio,
                            const std::string& profile_name, const std::string& hotkeys_summary,
                            const std::string& settings_path, bool hotkeys_ok);
+
+    // Live recording-pipeline telemetry, delivered on the UI thread (~5 Hz while
+    // recording, plus one final frozen snapshot). Safe to call when idle.
+    void applyLiveDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
 
   signals:
     void navigateToLogsRequested();
@@ -78,6 +84,9 @@ class DiagnosticsPage : public QWidget {
 
     // Capture pipeline (the page's visual center)
     ui::widgets::PipelineFlow* pipeline_flow_ = nullptr;
+
+    // Live pipeline telemetry panel (fed by applyLiveDiagnostics).
+    ui::widgets::LivePipelinePanel* live_pipeline_panel_ = nullptr;
 
     // Top Issues / recommendations
     QVBoxLayout* overview_issues_layout_ = nullptr;

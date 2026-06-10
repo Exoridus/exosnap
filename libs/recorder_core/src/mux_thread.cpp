@@ -165,6 +165,9 @@ void MuxThread::Run() {
 
     bool write_error = false;
     bool any_segment_opened = false;
+    // Live-diagnostics baselines for per-segment write deltas (reset on each open).
+    uint64_t diag_prev_bytes = 0;
+    uint64_t diag_prev_flush = 0;
     uint64_t frame_dur_ns = 0;
     if (m_state.config.frame_rate_num > 0 && m_state.config.frame_rate_den > 0) {
         frame_dur_ns = static_cast<uint64_t>(m_state.config.frame_rate_den) * 1000000000ULL /
@@ -189,6 +192,9 @@ void MuxThread::Run() {
             return false;
         }
         any_segment_opened = true;
+        m_state.diagnostics.OnSegmentOpened(index);
+        diag_prev_bytes = 0;
+        diag_prev_flush = 0;
         logging::LogField fields[] = {{"segment_index", std::to_string(index)}, {"path", seg.path.string()}};
         logging::log(logging::LogLevel::Info, "mux_thread", "segment started",
                      std::span<const logging::LogField>(fields, std::size(fields)));
@@ -200,9 +206,13 @@ void MuxThread::Run() {
     const auto finalize_segment = [&]() {
         if (!seg.writer)
             return;
+        const auto finalize_t0 = std::chrono::steady_clock::now();
         const bool ok = seg.writer->Finalize();
+        const double finalize_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - finalize_t0).count();
         const std::string err = seg.writer->error();
         seg.writer.reset();
+        m_state.diagnostics.OnSegmentFinalized(finalize_ms, ok);
 
         const uint64_t local_duration_ns = seg.max_local_pts_ns + (seg.max_local_pts_ns > 0 ? frame_dur_ns : 0);
         const uint64_t file_bytes = ok ? QueryFileSizeBytes(seg.path) : 0;
@@ -217,6 +227,7 @@ void MuxThread::Run() {
 
         if (!ok) {
             write_error = true;
+            m_state.diagnostics.OnMuxFailure();
             // Quarantine the incomplete current segment file; prior finalized
             // segments are already closed and untouched.
             std::error_code ec;
@@ -288,8 +299,10 @@ void MuxThread::Run() {
         mp.bytes = std::move(payload.bytes);
         if (local > seg.max_local_pts_ns)
             seg.max_local_pts_ns = local;
-        if (!seg.writer->Push(std::move(mp)))
+        if (!seg.writer->Push(std::move(mp))) {
             write_error = true;
+            m_state.diagnostics.OnMuxFailure();
+        }
     };
 
     auto push_video = [&](EncodedVideoPacket&& payload) {
@@ -316,8 +329,10 @@ void MuxThread::Run() {
         }
         if (local > seg.max_local_pts_ns)
             seg.max_local_pts_ns = local;
-        if (!seg.writer->Push(std::move(mp)))
+        if (!seg.writer->Push(std::move(mp))) {
             write_error = true;
+            m_state.diagnostics.OnMuxFailure();
+        }
     };
 
     auto drain_pending_audio = [&]() {
@@ -345,6 +360,7 @@ void MuxThread::Run() {
             return;
         // Open the next segment with epoch unset; push_video sets it from the
         // first video packet (the forced keyframe that follows the sentinel).
+        m_state.diagnostics.OnSplitTransition(ToDiagnosticsSplitTrigger(s.trigger));
         open_segment(s.new_segment_index, /*epoch*/ 0, /*epoch_set*/ false);
     };
 
@@ -354,12 +370,14 @@ void MuxThread::Run() {
         using T = std::decay_t<decltype(payload)>;
         if constexpr (std::is_same_v<T, EncodedVideoPacket>) {
             if (!payload.bytes.empty()) {
+                m_state.diagnostics.OnMuxPacket(payload.bytes.size());
                 resolve_epoch();
                 push_video(std::move(payload));
                 drain_pending_audio();
             }
         } else if constexpr (std::is_same_v<T, EncodedAudioPacket>) {
             if (!payload.bytes.empty()) {
+                m_state.diagnostics.OnMuxPacket(payload.bytes.size());
                 resolve_epoch();
                 if (epoch_resolved) {
                     drain_pending_audio();
@@ -403,6 +421,24 @@ void MuxThread::Run() {
         m_state.audio_premux.clear();
     }
 
+    // Surface live mux/disk/reorder-window metrics from the active writer (filesystem
+    // write boundary). Called once per mux-loop iteration outside the queue lock.
+    const auto sample_mux_diagnostics = [&]() {
+        if (!seg.writer)
+            return;
+        m_state.diagnostics.OnReorderWindow(static_cast<uint32_t>(seg.writer->current_window_packets()),
+                                            static_cast<uint32_t>(seg.writer->peak_window_packets()),
+                                            seg.writer->current_window_bytes(), seg.writer->peak_window_bytes());
+        const uint64_t bytes = seg.writer->bytes_written();
+        const uint64_t flushes = seg.writer->flush_count();
+        if (flushes != diag_prev_flush) {
+            const uint64_t byte_delta = (bytes >= diag_prev_bytes) ? (bytes - diag_prev_bytes) : 0;
+            m_state.diagnostics.OnDiskWrite(std::chrono::steady_clock::now(), seg.writer->last_flush_ms(), byte_delta);
+            diag_prev_flush = flushes;
+            diag_prev_bytes = bytes;
+        }
+    };
+
     // 2b. Stream packets from the mux queue until both EOS sentinels arrive.
     bool videoEos = false;
     std::array<bool, CodecPrivateData::kMaxAudioTracks> audioEosReceived{};
@@ -421,6 +457,7 @@ void MuxThread::Run() {
         std::unique_lock lk(m_state.mux_mutex);
         m_state.mux_cv.wait_for(lk, std::chrono::milliseconds(5),
                                 [&] { return !m_state.mux_queue.empty() || m_state.stop_requested.load(); });
+        const uint32_t mux_queue_depth = static_cast<uint32_t>(m_state.mux_queue.size());
         if (m_state.HasFailure())
             break;
 
@@ -432,6 +469,9 @@ void MuxThread::Run() {
                        item.payload);
             lk.lock();
         }
+        lk.unlock();
+        m_state.diagnostics.OnVideoQueueDepth(mux_queue_depth);
+        sample_mux_diagnostics();
     }
 
     // 2c. Final drain for race-window packets (arrived after both EOS sentinels).

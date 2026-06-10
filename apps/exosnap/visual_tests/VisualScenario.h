@@ -228,6 +228,12 @@ struct VisualScenario {
     bool split_action_enabled = false;
     int completed_segment_count = 1;        // number of segments in completed result
     bool completed_segment_missing = false; // at least one segment file is missing
+
+    // --- Live pipeline diagnostics (DIAGNOSTICS-LIVE-PIPELINE-R1) ---
+    // Selects a deterministic synthetic RecordingDiagnosticsSnapshot injected into the
+    // Diagnostics page's live telemetry panel. Empty = static page only. Recognized:
+    // "idle", "healthy", "encoder", "disk", "paused", "split".
+    QString diag_live;
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

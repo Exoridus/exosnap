@@ -23,6 +23,7 @@
 #include <dwmapi.h>
 #include <dxgi.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <optional>
@@ -1110,6 +1111,8 @@ void VideoThread::Run() {
         split_armed_trigger = manual ? static_cast<SplitTriggerSource>(m_state.split_last_trigger.load())
                                      : SplitTriggerSource::AutomaticDuration;
         nvenc.RequestKeyframe();
+        m_state.diagnostics.OnForcedKeyframe();
+        m_state.diagnostics.SetSplitPending(true);
         logging::LogField fields[] = {{"segment_index", std::to_string(current_segment_index + 1u)},
                                       {"trigger", manual ? "manual" : "automatic"},
                                       {"session_pts_ms", std::to_string(pts_ns / 1000000ULL)}};
@@ -1397,8 +1400,16 @@ void VideoThread::Run() {
                         odCursorPosY = info.PointerPosition.Position.y;
                     }
                     odSrc.ReleaseFrame();
-                    if (odCapturedTexValid)
+                    // Only count capture/coalesce while actively recording — frames the
+                    // backend produces during pause are intentionally discarded, not drops.
+                    const bool diag_recording = !m_state.pause_requested.load();
+                    if (diag_recording)
+                        m_state.diagnostics.OnFrameCaptured();
+                    if (odCapturedTexValid) {
                         ++droppedFrames;
+                        if (diag_recording)
+                            m_state.diagnostics.OnFrameDroppedCoalesced();
+                    }
                     odCapturedTexValid = true;
                 }
             } else {
@@ -1424,8 +1435,14 @@ void VideoThread::Run() {
                                 sourceLost = true;
                                 break;
                             }
-                            if (pendingWgcTex != nullptr)
+                            const bool diag_recording = !m_state.pause_requested.load();
+                            if (diag_recording)
+                                m_state.diagnostics.OnFrameCaptured();
+                            if (pendingWgcTex != nullptr) {
                                 ++droppedFrames;
+                                if (diag_recording)
+                                    m_state.diagnostics.OnFrameDroppedCoalesced();
+                            }
                             pendingWgcTex = tex;
                         }
                     }
@@ -1477,6 +1494,7 @@ void VideoThread::Run() {
                 int32_t slot = nvenc.AcquireFreeSlot();
                 if (slot < 0) {
                     ++slotStallCount;
+                    m_state.diagnostics.OnFrameDroppedBackpressure();
                     break; // retry this tick next outer iteration once a slot is free
                 }
 
@@ -1488,7 +1506,12 @@ void VideoThread::Run() {
 
                 if (rawSourceTex != nullptr) {
                     const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
+                    const auto comp_t0 = std::chrono::steady_clock::now();
                     ID3D11Texture2D* vpInput = compositeFrameGpu(rawSourceTex, overlay);
+                    const auto comp_t1 = std::chrono::steady_clock::now();
+                    m_state.diagnostics.OnCompositorSubmit(
+                        comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),
+                        needsGpuCompositor);
                     if (vpInput == nullptr) {
                         nvenc.ReleaseSlot(slot);
                         goto end_encode_loop;
@@ -1539,6 +1562,7 @@ void VideoThread::Run() {
                     // VideoProcessorBlt failed or no reference yet — release slot and skip tick
                     nvenc.ReleaseSlot(slot);
                     ++droppedFrames;
+                    m_state.diagnostics.OnFrameDroppedCfr();
                     cfr_frame_idx++;
                     next_tick_100ns += frame_interval_100ns;
                     anyWork = true;
@@ -1551,7 +1575,12 @@ void VideoThread::Run() {
 
                 EncodedVideoPacket pkt;
                 std::string encErr;
+                m_state.diagnostics.OnEncodeSubmitted();
+                const auto enc_t0 = std::chrono::steady_clock::now();
                 bool encOk = nvenc.EncodeFrame(slot, pts_ns, encodeWidth, encodeHeight, pkt, encErr);
+                const auto enc_t1 = std::chrono::steady_clock::now();
+                m_state.diagnostics.OnEncodeLatency(enc_t1,
+                                                    std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
 
                 if (!encOk) {
                     m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode (CFR): " + encErr);
@@ -1634,8 +1663,16 @@ void VideoThread::Run() {
                             static_cast<int64_t>(lpt / qpcFreq * 10000000ULL + lpt % qpcFreq * 10000000ULL / qpcFreq);
                     }
                     odSrc.ReleaseFrame();
-                    if (odCapturedTexValid)
+                    // Only count capture/coalesce while actively recording — frames the
+                    // backend produces during pause are intentionally discarded, not drops.
+                    const bool diag_recording = !m_state.pause_requested.load();
+                    if (diag_recording)
+                        m_state.diagnostics.OnFrameCaptured();
+                    if (odCapturedTexValid) {
                         ++droppedFrames;
+                        if (diag_recording)
+                            m_state.diagnostics.OnFrameDroppedCoalesced();
+                    }
                     odCapturedTexValid = true;
                 }
                 if (odCapturedTexValid) {
@@ -1667,8 +1704,14 @@ void VideoThread::Run() {
                                 sourceLost = true;
                                 break;
                             }
-                            if (latestTex != nullptr)
+                            const bool diag_recording = !m_state.pause_requested.load();
+                            if (diag_recording)
+                                m_state.diagnostics.OnFrameCaptured();
+                            if (latestTex != nullptr) {
                                 ++droppedFrames;
+                                if (diag_recording)
+                                    m_state.diagnostics.OnFrameDroppedCoalesced();
+                            }
                             latestTex = tex;
                             latestFrameTicks100ns = frame.SystemRelativeTime().count();
                         }
@@ -1715,7 +1758,12 @@ void VideoThread::Run() {
 
                 if (slot >= 0) {
                     const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
+                    const auto comp_t0 = std::chrono::steady_clock::now();
                     ID3D11Texture2D* vpInput = compositeFrameGpu(latestTex.get(), overlay);
+                    const auto comp_t1 = std::chrono::steady_clock::now();
+                    m_state.diagnostics.OnCompositorSubmit(
+                        comp_t1, std::chrono::duration<double, std::milli>(comp_t1 - comp_t0).count(),
+                        needsGpuCompositor);
                     if (vpInput == nullptr) {
                         nvenc.ReleaseSlot(slot);
                         goto end_encode_loop;
@@ -1753,7 +1801,12 @@ void VideoThread::Run() {
 
                             EncodedVideoPacket pkt;
                             std::string encErr;
+                            m_state.diagnostics.OnEncodeSubmitted();
+                            const auto enc_t0 = std::chrono::steady_clock::now();
                             bool encOk = nvenc.EncodeFrame(slot, framePts_ns, encodeWidth, encodeHeight, pkt, encErr);
+                            const auto enc_t1 = std::chrono::steady_clock::now();
+                            m_state.diagnostics.OnEncodeLatency(
+                                enc_t1, std::chrono::duration<double, std::milli>(enc_t1 - enc_t0).count());
 
                             if (!encOk) {
                                 m_state.RecordFailure(E_FAIL, ErrorPhase::VideoEncode, "NVENC encode: " + encErr);
@@ -1774,6 +1827,7 @@ void VideoThread::Run() {
                     // No free slot — drop the frame and skip
                     latestTex = nullptr;
                     ++slotStallCount;
+                    m_state.diagnostics.OnFrameDroppedBackpressure();
                 }
 
                 anyWork = true;

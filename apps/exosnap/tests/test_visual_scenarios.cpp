@@ -58,6 +58,12 @@ TEST(VisualScenarioTest, RequiredScenariosAreRegistered) {
         QStringLiteral("settings-webcam-mirror-on"),
         QStringLiteral("settings-webcam-unavailable"),
         QStringLiteral("diagnostics"),
+        QStringLiteral("diagnostics-idle"),
+        QStringLiteral("diagnostics-recording-healthy"),
+        QStringLiteral("diagnostics-recording-encoder-pressure"),
+        QStringLiteral("diagnostics-recording-disk-pressure"),
+        QStringLiteral("diagnostics-paused"),
+        QStringLiteral("diagnostics-split-pending"),
         QStringLiteral("hotkeys"),
         QStringLiteral("logs"),
         QStringLiteral("logs-empty"),
@@ -476,6 +482,32 @@ TEST(VisualScenarioTest, SplitRecordingScenariosCarryDeterministicState) {
     ASSERT_NE(missing, nullptr);
     EXPECT_EQ(missing->completed_segment_count, 3);
     EXPECT_TRUE(missing->completed_segment_missing);
+}
+
+// 55. Live pipeline diagnostics scenarios route to Diagnostics and carry a diag_live kind
+// (DIAGNOSTICS-LIVE-PIPELINE-R1).
+TEST(VisualScenarioTest, LiveDiagnosticsScenariosCarryDeterministicState) {
+    const struct {
+        const char* id;
+        const char* kind;
+    } cases[] = {
+        {"diagnostics-idle", "idle"},
+        {"diagnostics-recording-healthy", "healthy"},
+        {"diagnostics-recording-encoder-pressure", "encoder"},
+        {"diagnostics-recording-disk-pressure", "disk"},
+        {"diagnostics-paused", "paused"},
+        {"diagnostics-split-pending", "split"},
+    };
+    for (const auto& c : cases) {
+        const VisualScenario* s = FindVisualScenario(QString::fromLatin1(c.id));
+        ASSERT_NE(s, nullptr) << c.id;
+        EXPECT_EQ(s->page, VisualPage::Diagnostics) << c.id;
+        EXPECT_EQ(s->diag_live, QString::fromLatin1(c.kind)) << c.id;
+    }
+    // The plain "diagnostics" scenario stays static (no live injection).
+    const VisualScenario* plain = FindVisualScenario(QStringLiteral("diagnostics"));
+    ASSERT_NE(plain, nullptr);
+    EXPECT_TRUE(plain->diag_live.isEmpty());
 }
 
 } // namespace

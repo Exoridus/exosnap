@@ -8,6 +8,7 @@
 #include "../models/VideoSettingsModel.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
+#include "../ui/widgets/LivePipelinePanel.h"
 #include "../ui/widgets/PipelineFlow.h"
 #include "../ui/widgets/PipelineStepCard.h"
 #include "../ui/widgets/SectionRuleHeader.h"
@@ -182,27 +183,36 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     layout->addWidget(readiness_panel_);
 
     // ── B: Capture pipeline (the page's visual center) ─────────────────────────
-    // Per-stage readiness from real capability checks. There is no live per-frame
-    // telemetry yet, so stages without a probe stay honestly Planned and no stage
-    // shows fabricated latency / queue depth / throughput numbers.
+    // Per-stage readiness from real capability checks. The static flow shows which
+    // stages are available; live per-frame telemetry is rendered in the LIVE PIPELINE
+    // section below. No stage card shows fabricated latency / queue / throughput.
     auto* pipeline_header = new ui::widgets::SectionRuleHeader(QStringLiteral("CAPTURE PIPELINE"), content);
     pipeline_header->setMeta(QStringLiteral("Static checks"));
     layout->addWidget(pipeline_header);
     layout->addWidget(makeSubLabel(
-        QStringLiteral("Per-stage readiness for the active recording configuration. Live per-frame latency, queue "
-                       "depth, drops and throughput are not instrumented yet."),
+        QStringLiteral("Per-stage availability for the active recording configuration. Live per-frame latency, queue "
+                       "depth, drops and throughput are shown in the Live pipeline section below while recording."),
         content));
 
     pipeline_flow_ = new ui::widgets::PipelineFlow(content);
     layout->addWidget(pipeline_flow_);
 
-    auto* pipeline_caption = new QLabel(
-        QStringLiteral("Status reflects static availability checks, not live timing. Per-frame performance metrics "
-                       "are planned for a future build."),
-        content);
+    auto* pipeline_caption =
+        new QLabel(QStringLiteral("Stage status reflects static availability checks. Live timing is below."), content);
     pipeline_caption->setProperty("labelRole", "pipelineCaption");
     pipeline_caption->setWordWrap(true);
     layout->addWidget(pipeline_caption);
+
+    // ── B2: Live pipeline telemetry (real runtime metrics while recording) ──────
+    auto* live_header = new ui::widgets::SectionRuleHeader(QStringLiteral("LIVE PIPELINE"), content);
+    live_header->setMeta(QStringLiteral("Live telemetry"));
+    layout->addWidget(live_header);
+    layout->addWidget(makeSubLabel(
+        QStringLiteral("Real low-overhead runtime metrics for the active recording, updated ~5×/second. Metrics that "
+                       "cannot be measured are shown as Unavailable, never as zero."),
+        content));
+    live_pipeline_panel_ = new ui::widgets::LivePipelinePanel(content);
+    layout->addWidget(live_pipeline_panel_);
 
     // ── C: Recommendations (actionable cards based on real detected issues) ─────
     auto* issues_header = new ui::widgets::SectionRuleHeader(QStringLiteral("RECOMMENDATIONS"), content);
@@ -341,6 +351,13 @@ void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, c
     refreshCapabilities();
     refreshConfiguration();
     refreshPipeline();
+}
+
+void DiagnosticsPage::applyLiveDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+    if (live_pipeline_panel_ == nullptr) {
+        return;
+    }
+    live_pipeline_panel_->applySnapshot(snapshot);
 }
 
 // --- Helpers ---

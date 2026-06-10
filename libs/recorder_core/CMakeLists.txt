@@ -112,6 +112,9 @@ add_library(recorder_core STATIC
     src/wasapi_process_loopback_src.h
     src/opus_audio_encoder.cpp
     src/session_stats_collector.cpp
+    src/pipeline_diagnostics_aggregator.cpp
+    src/pipeline_diagnostics_aggregator.h
+    include/recorder_core/pipeline_diagnostics.h
     src/video_thread.cpp
     src/audio_thread.cpp
     src/mux_thread.cpp
@@ -344,3 +347,11 @@ exosnap_add_gtest(
     LIBRARIES recorder_core EBML::ebml Matroska::matroska
 )
 target_include_directories(test_split_segments PRIVATE src)
+
+exosnap_add_gtest(
+    NAME test_pipeline_diagnostics
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_pipeline_diagnostics.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_pipeline_diagnostics PRIVATE src)

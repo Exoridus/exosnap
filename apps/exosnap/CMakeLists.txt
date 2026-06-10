@@ -81,6 +81,8 @@ qt_add_executable(exosnap WIN32
     ui/widgets/PipelineStepCard.cpp
     ui/widgets/PipelineFlow.h
     ui/widgets/PipelineFlow.cpp
+    ui/widgets/LivePipelinePanel.h
+    ui/widgets/LivePipelinePanel.cpp
     ui/widgets/CodecCard.h
     ui/widgets/CodecCard.cpp
     ui/widgets/VUMeterWidget.h
@@ -660,6 +662,7 @@ exosnap_add_gtest(
         ui/widgets/SectionRuleHeader.cpp
         ui/widgets/PipelineFlow.cpp
         ui/widgets/PipelineStepCard.cpp
+        ui/widgets/LivePipelinePanel.cpp
     LIBRARIES exosnap_diagnostics_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
 )
 target_include_directories(diagnostics_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -584,6 +584,10 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
 
     session_.SetStatsCallback([this](const recorder_core::SessionStats& stats) { PostStats(stats); });
     session_.SetMeterCallback([this](const recorder_core::MeterSnapshot& m) { PostRecordingMeter(m.per_track_rms); });
+    session_.SetDiagnosticsCallback(
+        [this](const recorder_core::RecordingDiagnosticsSnapshot& snapshot) { PostDiagnostics(snapshot); });
+    // Show an "initializing" diagnostics state until the engine emits live snapshots.
+    EmitInitializingDiagnostics();
     {
         std::lock_guard<std::mutex> lock(segments_mutex_);
         segments_.clear();
@@ -995,6 +999,9 @@ void RecordingCoordinator::SetStateChangedCallback(StateChangedCallback cb) {
 void RecordingCoordinator::SetStatsUpdatedCallback(StatsUpdatedCallback cb) {
     on_stats_updated_ = std::move(cb);
 }
+void RecordingCoordinator::SetDiagnosticsCallback(DiagnosticsUpdatedCallback cb) {
+    on_diagnostics_updated_ = std::move(cb);
+}
 void RecordingCoordinator::SetResultReadyCallback(ResultReadyCallback cb) {
     on_result_ready_ = std::move(cb);
 }
@@ -1232,6 +1239,39 @@ void RecordingCoordinator::PostStats(recorder_core::SessionStats stats) {
     auto cb = on_stats_updated_;
     QMetaObject::invokeMethod(
         QCoreApplication::instance(), [cb, s = std::move(stats)]() { cb(s); }, Qt::QueuedConnection);
+}
+
+void RecordingCoordinator::PostDiagnostics(recorder_core::RecordingDiagnosticsSnapshot snapshot) {
+    if (!on_diagnostics_updated_) {
+        return;
+    }
+    // Generation guard: drop snapshots from an older session so a stale recording's
+    // late callback can never update a newer recording's view. Applied on the posting
+    // side (never capturing `this` into the queued lambda, matching the other Post*).
+    {
+        std::lock_guard<std::mutex> lock(diagnostics_guard_mutex_);
+        if (!diagnostics_guard_.Accept(snapshot)) {
+            return;
+        }
+    }
+    auto cb = on_diagnostics_updated_;
+    if (QCoreApplication::instance() == nullptr) {
+        cb(snapshot);
+        return;
+    }
+    QMetaObject::invokeMethod(
+        QCoreApplication::instance(), [cb, s = std::move(snapshot)]() { cb(s); }, Qt::QueuedConnection);
+}
+
+void RecordingCoordinator::EmitInitializingDiagnostics() {
+    recorder_core::RecordingDiagnosticsSnapshot init;
+    init.lifecycle = recorder_core::DiagnosticsLifecycle::Initializing;
+    init.valid = false;
+    {
+        std::lock_guard<std::mutex> lock(diagnostics_guard_mutex_);
+        init.session_generation = diagnostics_guard_.max_generation();
+    }
+    PostDiagnostics(std::move(init));
 }
 
 void RecordingCoordinator::PostMicMeter(float rms_linear) {

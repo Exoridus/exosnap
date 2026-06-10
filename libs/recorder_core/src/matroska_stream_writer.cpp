@@ -28,6 +28,7 @@
 #endif
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
 
 namespace recorder_core {
@@ -338,7 +339,16 @@ bool MatroskaStreamWriter::FlushCluster() {
     if (m_cluster == nullptr)
         return true;
     try {
+        const uint64_t pos_before = static_cast<uint64_t>(m_io->getFilePointer());
+        const auto flush_t0 = std::chrono::steady_clock::now();
         m_cluster->Render(*m_io, *m_cues);
+        const auto flush_t1 = std::chrono::steady_clock::now();
+        m_last_flush_ms = std::chrono::duration<double, std::milli>(flush_t1 - flush_t0).count();
+        ++m_flush_count;
+        const uint64_t pos_after = static_cast<uint64_t>(m_io->getFilePointer());
+        if (pos_after > pos_before) {
+            m_bytes_written += pos_after - pos_before;
+        }
         const uint64_t cluster_pos = m_cluster->GetPosition();
         for (const uint64_t cue_ms : m_pending_cue_ms) {
             auto& point = libebml::AddNewChild<libmatroska::KaxCuePoint>(*m_cues);

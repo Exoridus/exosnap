@@ -479,11 +479,16 @@ void Mp4MuxThread::Run() {
             pWriter->Release();
             pWriter = nullptr;
             m_state.RecordFailure(static_cast<int32_t>(whr), ErrorPhase::Mux, buf);
+            m_state.diagnostics.OnMuxFailure();
             writeError = true;
             return false;
         }
+        m_state.diagnostics.OnMuxPacket(size);
         return true;
     };
+
+    // MP4 is a single-segment container (no splitting). Report the one logical segment.
+    m_state.diagnostics.OnSegmentOpened(0);
 
     // --- Step 7: Write premux packets immediately ---
     const auto tPremuxStart = std::chrono::steady_clock::now();
@@ -617,6 +622,8 @@ void Mp4MuxThread::Run() {
     pWriter = nullptr;
     const auto tFinalizeEnd = std::chrono::steady_clock::now();
     std::printf("[MP4] Finalize: %.3f s\n", std::chrono::duration<double>(tFinalizeEnd - tFinalizeStart).count());
+    m_state.diagnostics.OnSegmentFinalized(
+        std::chrono::duration<double, std::milli>(tFinalizeEnd - tFinalizeStart).count(), SUCCEEDED(hr));
 
     if (FAILED(hr)) {
         char buf[80];
