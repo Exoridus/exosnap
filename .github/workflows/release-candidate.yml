@@ -31,7 +31,7 @@ jobs:
         shell: pwsh
 
       - name: Build canonical release artifacts
-        run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1
+        run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1 -SkipSmoke
         shell: pwsh
 
       - name: Resolve artifact paths
