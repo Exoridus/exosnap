@@ -479,6 +479,13 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
             result_destination_text += format_display;
         }
 
+        // Multi-segment recordings: prepend a "N segments" summary so the completed
+        // panel reads e.g. "3 segments · ..." (single-file recordings unchanged).
+        if (result.segments.size() > 1) {
+            result_destination_text =
+                std::to_wstring(result.segments.size()) + L" segments  ·  " + result_destination_text;
+        }
+
         // Populate CompletedRecording model from effective runtime result
         CompletedRecording cr;
         cr.succeeded = true;

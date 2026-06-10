@@ -233,6 +233,32 @@ TEST_F(CompletedResultTest, SetResult_Success_CreatesCompletedRecording) {
     EXPECT_EQ(vm.current_completed_recording.container, recorder_core::Container::Matroska);
 }
 
+TEST_F(CompletedResultTest, SetResult_MultiSegment_CarriesSegmentsAndSummary) {
+    RecordViewModel vm;
+    QString path = createDummyFile(QStringLiteral("session.mkv"));
+    auto result = MakeSuccessResult(path.toStdWString());
+    CompletedRecordingSegment a;
+    a.file_path = path;
+    a.index = 0;
+    a.duration_seconds = 30.0;
+    a.succeeded = true;
+    CompletedRecordingSegment b;
+    b.file_path = QStringLiteral("C:/videos/session_part-002.mkv");
+    b.index = 1;
+    b.duration_seconds = 12.0;
+    b.succeeded = true;
+    result.segments = {a, b};
+
+    vm.SetResult(result);
+    vm.SetState(UiRecordingState::Completed);
+
+    ASSERT_EQ(vm.current_completed_recording.segments.size(), 2u);
+    EXPECT_TRUE(vm.current_completed_recording.isMultiSegment());
+    EXPECT_EQ(vm.current_completed_recording.segmentCount(), 2);
+    // The completed-panel summary leads with the segment count.
+    EXPECT_NE(vm.result_destination_text.find(L"2 segments"), std::wstring::npos);
+}
+
 TEST_F(CompletedResultTest, SetResult_Failure_DoesNotCreateCompletedRecording) {
     RecordViewModel vm;
     auto result = MakeFailedResult();
