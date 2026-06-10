@@ -128,6 +128,26 @@ class MatroskaStreamWriter {
     [[nodiscard]] uint64_t peak_window_bytes() const noexcept {
         return m_peak_window_bytes;
     }
+    [[nodiscard]] size_t current_window_packets() const noexcept {
+        return m_window.size();
+    }
+    [[nodiscard]] uint64_t current_window_bytes() const noexcept {
+        return m_cur_window_bytes;
+    }
+
+    // Filesystem write-boundary diagnostics. bytes_written is the cumulative file
+    // offset advanced by cluster renders; last_flush_ms is the most recent cluster
+    // Render() call duration. This is buffered write-call latency (stdio), NOT
+    // physical-media durability.
+    [[nodiscard]] uint64_t bytes_written() const noexcept {
+        return m_bytes_written;
+    }
+    [[nodiscard]] uint64_t flush_count() const noexcept {
+        return m_flush_count;
+    }
+    [[nodiscard]] double last_flush_ms() const noexcept {
+        return m_last_flush_ms;
+    }
 
   private:
     // Sorted-by-PTS reorder window entry.
@@ -182,6 +202,11 @@ class MatroskaStreamWriter {
     size_t m_peak_window_packets = 0;
     uint64_t m_peak_window_bytes = 0;
     uint64_t m_cur_window_bytes = 0;
+
+    // Filesystem write-boundary counters (see bytes_written()/last_flush_ms()).
+    uint64_t m_bytes_written = 0;
+    uint64_t m_flush_count = 0;
+    double m_last_flush_ms = 0.0;
 };
 
 } // namespace recorder_core

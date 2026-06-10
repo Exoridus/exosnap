@@ -6,9 +6,12 @@
 #include <recorder_core/codec_types.h>
 #include <recorder_core/error_types.h>
 #include <recorder_core/packet_types.h>
+#include <recorder_core/pipeline_diagnostics.h>
 #include <recorder_core/recorder_session.h>
 #include <recorder_core/session_stats.h>
 #include <recorder_core/webcam_placement.h>
+
+#include "pipeline_diagnostics_aggregator.h"
 
 #include <algorithm>
 #include <array>
@@ -188,6 +191,12 @@ struct SessionState {
 
     // Meter callback — high-cadence (~30 Hz) per-track RMS (set before Record())
     MeterCallback meter_callback;
+
+    // Live pipeline-diagnostics aggregator (worker-fed counters/timers) and its
+    // ~5 Hz callback. The aggregator owns its own mutex; worker inputs are cheap and
+    // never throw. Set/Reset before Record().
+    PipelineDiagnosticsAggregator diagnostics;
+    DiagnosticsCallback diagnostics_callback;
 
     // Record config captured at Record() time
     RecorderConfig config;

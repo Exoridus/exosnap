@@ -630,6 +630,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     });
     connect(diagnostics_page_, &DiagnosticsPage::navigateToLogsRequested, this,
             [this]() { navigateToPage(kLogsPageIndex); });
+    // Route live recording-pipeline diagnostics from the Record page's coordinator to
+    // the Diagnostics page (same UI thread; direct connection).
+    connect(record_page_, &RecordPage::diagnosticsUpdated, diagnostics_page_, &DiagnosticsPage::applyLiveDiagnostics);
     connect(config_page_, &ConfigPage::webcamDetailsRequested, this, [this]() { navigateToPage(kWebcamPageIndex); });
     connect(config_page_, &ConfigPage::advancedRequested, this, [this]() { navigateToPage(kAdvancedPageIndex); });
     connect(webcam_page_, &WebcamPage::backToSettingsRequested, this, [this]() { navigateToPage(kSettingsPageIndex); });
@@ -1566,7 +1569,7 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
         applyVisualHotkeysScenario(scenario);
         break;
     case visual::VisualPage::Diagnostics:
-        applyVisualDiagnosticsScenario();
+        applyVisualDiagnosticsScenario(scenario);
         setCurrentPage(kDiagnosticsPageIndex);
         break;
     case visual::VisualPage::Logs:
@@ -1774,7 +1777,146 @@ void MainWindow::applyVisualSourcePickerScenario(const visual::VisualScenario& s
     source_picker_overlay_->openOverlay();
 }
 
-void MainWindow::applyVisualDiagnosticsScenario() {
+namespace {
+
+// Deterministic synthetic live-pipeline snapshots for the Visual Harness. They are fed
+// through the SAME presentation path as production (DiagnosticsPage::applyLiveDiagnostics).
+recorder_core::RecordingDiagnosticsSnapshot makeLiveDiagnosticsSnapshot(const QString& kind) {
+    using namespace recorder_core;
+    RecordingDiagnosticsSnapshot s;
+    s.session_generation = 1;
+
+    if (kind == QStringLiteral("idle")) {
+        s.lifecycle = DiagnosticsLifecycle::Idle;
+        s.valid = false;
+        s.health = PipelineHealth::Idle;
+        return s;
+    }
+
+    s.lifecycle = DiagnosticsLifecycle::Recording;
+    s.valid = true;
+    s.elapsed_seconds = 42.0;
+
+    s.capture.target_fps = 60.0;
+    s.capture.actual_fps = 59.8;
+    s.capture.frames_captured = 2600;
+    s.capture.frames_emitted = 2520;
+    s.capture.frames_dropped_coalesced = 80;
+    s.capture.frames_duplicated = 3;
+    s.capture.frame_interval_ms = 1000.0 / 60.0;
+    s.capture.interval_observed = MetricAvailability::Unavailable;
+    s.capture.source_type = CaptureSourceType::Display;
+
+    s.compositor.active = true;
+    s.compositor.latest_ms = 1.3;
+    s.compositor.average_ms = 1.4;
+    s.compositor.peak_ms = 2.8;
+    s.compositor.frames_composed = 2520;
+
+    s.video_encoder.latest_ms = 2.0;
+    s.video_encoder.average_ms = 2.1;
+    s.video_encoder.peak_ms = 3.5;
+    s.video_encoder.output_fps = 60.0;
+    s.video_encoder.frames_submitted = 2520;
+    s.video_encoder.frames_encoded = 2520;
+    s.video_encoder.codec = VideoCodec::Av1Nvenc;
+    s.video_encoder.width = 1920;
+    s.video_encoder.height = 1080;
+    s.video_encoder.cfr = true;
+
+    s.audio.active = true;
+    s.audio.packets_encoded = 2000;
+    s.audio.bytes_encoded = 256000;
+    s.audio.queue_depth = 1;
+    s.audio.queue_peak = 3;
+    s.audio.sample_rate = 48000;
+    s.audio.channels = 2;
+    s.audio.codec = AudioCodec::Opus;
+    s.audio.track_count = 1;
+
+    s.video_queue.current_depth = 1;
+    s.video_queue.peak_depth = 3;
+    s.video_queue.capacity = 0;
+    s.video_queue.bounded = false;
+    s.audio_queue.current_depth = 0;
+    s.audio_queue.peak_depth = 12;
+    s.audio_queue.capacity = 600;
+    s.audio_queue.bounded = true;
+
+    s.mux.packets_processed = 4520;
+    s.mux.bytes_written = 18ull * 1024ull * 1024ull;
+    s.mux.throughput_mib_s = 18.7;
+    s.mux.latest_write_ms = 0.8;
+    s.mux.average_write_ms = 0.8;
+    s.mux.peak_write_ms = 4.2;
+    s.mux.current_segment_index = 0;
+    s.mux.segment_count = 1;
+    s.mux.reorder_packets = 1;
+    s.mux.reorder_packets_peak = 3;
+    s.mux.reorder_bytes = 2048;
+    s.mux.reorder_bytes_peak = 6144;
+    s.mux.availability = MetricAvailability::Available;
+
+    s.disk.bytes_written = s.mux.bytes_written;
+    s.disk.throughput_mib_s = 18.7;
+    s.disk.latest_write_ms = 0.8;
+    s.disk.average_write_ms = 0.8;
+    s.disk.peak_write_ms = 4.2;
+    s.disk.output_target = "C:";
+    s.disk.latency_availability = MetricAvailability::Available;
+
+    s.split.split_supported = true;
+    s.split.current_segment = 1;
+    s.split.completed_segments = 0;
+    s.split.availability = MetricAvailability::Available;
+    s.split.seconds_until_auto_split = -1.0;
+
+    s.bottleneck = PipelineBottleneck::None;
+    s.health = PipelineHealth::Good;
+
+    if (kind == QStringLiteral("encoder")) {
+        s.video_encoder.average_ms = 9.2;
+        s.video_encoder.peak_ms = 14.0;
+        s.video_encoder.backlog = 6;
+        s.video_encoder.frames_encoded = 2440;
+        s.video_queue.current_depth = 5;
+        s.bottleneck = PipelineBottleneck::VideoEncoder;
+        s.bottleneck_reason = "Encoder backlog rising";
+        s.health = PipelineHealth::Warning;
+    } else if (kind == QStringLiteral("disk")) {
+        s.mux.average_write_ms = 14.0;
+        s.mux.peak_write_ms = 22.0;
+        s.mux.throughput_mib_s = 4.0;
+        s.disk.average_write_ms = 14.0;
+        s.disk.peak_write_ms = 22.0;
+        s.disk.throughput_mib_s = 4.0;
+        s.video_queue.current_depth = 12;
+        s.bottleneck = PipelineBottleneck::Disk;
+        s.bottleneck_reason = "Write latency high";
+        s.health = PipelineHealth::Warning;
+    } else if (kind == QStringLiteral("paused")) {
+        s.lifecycle = DiagnosticsLifecycle::Paused;
+        s.capture.actual_fps = 0.0;
+        s.video_encoder.output_fps = 0.0;
+        s.mux.throughput_mib_s = 0.0;
+        s.disk.throughput_mib_s = 0.0;
+    } else if (kind == QStringLiteral("split")) {
+        s.split.current_segment = 2;
+        s.split.completed_segments = 1;
+        s.split.split_pending = true;
+        s.split.last_trigger = DiagnosticsSplitTrigger::ManualButton;
+        s.mux.current_segment_index = 1;
+        s.mux.segment_count = 2;
+        s.mux.split_transitions = 1;
+        s.video_encoder.forced_keyframes = 1;
+    }
+
+    return s;
+}
+
+} // namespace
+
+void MainWindow::applyVisualDiagnosticsScenario(const visual::VisualScenario& scenario) {
     if (!diagnostics_page_)
         return;
 
@@ -1787,6 +1929,10 @@ void MainWindow::applyVisualDiagnosticsScenario() {
     diagnostics_page_->setDiagnosticData(
         caps, output, video, VisualAudioStateForSettings(visual::VisualSettingsTarget::Window),
         "Visual Test WebM AV1 Opus", "Start/Stop: Alt+F9", "visual-test-settings.json", true);
+
+    if (!scenario.diag_live.isEmpty()) {
+        diagnostics_page_->applyLiveDiagnostics(makeLiveDiagnosticsSnapshot(scenario.diag_live));
+    }
 }
 
 void MainWindow::applyVisualHotkeysScenario(const visual::VisualScenario& scenario) {

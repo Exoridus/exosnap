@@ -2889,6 +2889,8 @@ void RecordPage::initCoordinator() {
         view_model_.UpdateStats(stats);
         updateStatsDisplay();
     });
+    coordinator_->SetDiagnosticsCallback(
+        [this](const recorder_core::RecordingDiagnosticsSnapshot& snapshot) { emit diagnosticsUpdated(snapshot); });
     coordinator_->SetMicMeterUpdatedCallback([this](float rms_linear) {
         preflight_mic_rms_ = std::clamp(rms_linear, 0.0f, 1.0f);
         updateAudioMeterLevels();

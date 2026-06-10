@@ -41,6 +41,7 @@ class RecordingCoordinator {
   public:
     using StateChangedCallback = std::function<void(UiRecordingState)>;
     using StatsUpdatedCallback = std::function<void(const recorder_core::SessionStats&)>;
+    using DiagnosticsUpdatedCallback = std::function<void(const recorder_core::RecordingDiagnosticsSnapshot&)>;
     using ResultReadyCallback = std::function<void(const UiRecordingResult&)>;
     using MicMeterUpdatedCallback = std::function<void(float rms_linear)>;
     using SysMeterUpdatedCallback = std::function<void(float rms_linear)>;
@@ -120,6 +121,7 @@ class RecordingCoordinator {
 
     void SetStateChangedCallback(StateChangedCallback cb);
     void SetStatsUpdatedCallback(StatsUpdatedCallback cb);
+    void SetDiagnosticsCallback(DiagnosticsUpdatedCallback cb);
     void SetResultReadyCallback(ResultReadyCallback cb);
     void SetMicMeterUpdatedCallback(MicMeterUpdatedCallback cb);
     void SetSysMeterUpdatedCallback(SysMeterUpdatedCallback cb);
@@ -144,6 +146,10 @@ class RecordingCoordinator {
     void PostStateChange(UiRecordingState new_state);
     void PostResult(UiRecordingResult result);
     void PostStats(recorder_core::SessionStats stats);
+    void PostDiagnostics(recorder_core::RecordingDiagnosticsSnapshot snapshot);
+    // Emit a single Initializing diagnostics snapshot so the Diagnostics page shows an
+    // "initializing" state during preparation, before the engine produces live data.
+    void EmitInitializingDiagnostics();
     void PostMicMeter(float rms_linear);
     void PostSysMeter(float rms_linear);
     void PostAppMeter(float rms_linear);
@@ -203,6 +209,10 @@ class RecordingCoordinator {
 
     StateChangedCallback on_state_changed_;
     StatsUpdatedCallback on_stats_updated_;
+    DiagnosticsUpdatedCallback on_diagnostics_updated_;
+    // Rejects stale-session diagnostics snapshots before they reach the UI.
+    recorder_core::DiagnosticsSessionGuard diagnostics_guard_;
+    std::mutex diagnostics_guard_mutex_;
     ResultReadyCallback on_result_ready_;
     MicMeterUpdatedCallback on_mic_meter_updated_;
     SysMeterUpdatedCallback on_sys_meter_updated_;

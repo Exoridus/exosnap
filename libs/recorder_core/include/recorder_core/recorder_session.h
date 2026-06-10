@@ -5,6 +5,7 @@
 #include "codec_types.h"
 #include "error_types.h"
 #include "output_geometry.h"
+#include "pipeline_diagnostics.h"
 #include "session_stats.h"
 
 #include <cstdint>
@@ -330,6 +331,12 @@ class RecorderSession {
     // Register a meter callback invoked approximately every 33 ms from an
     // internal worker thread.  Must be set before calling Record().
     void SetMeterCallback(MeterCallback cb);
+
+    // Register a live pipeline-diagnostics callback invoked approximately every
+    // 200 ms (5 Hz) from an internal worker thread while recording, plus one final
+    // frozen snapshot (Completed/Failed) when Record() returns. Must be set before
+    // calling Record(). Optional: leaving it unset disables diagnostics with no cost.
+    void SetDiagnosticsCallback(DiagnosticsCallback cb);
 
     // Request a one-shot BGRA frame snapshot from the next composed video frame.
     // The callback fires from VideoThread with (success, width, height, bgra_bytes, error).

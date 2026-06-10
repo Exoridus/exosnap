@@ -72,6 +72,8 @@ struct RecorderSession::Impl {
     SessionState state;
     StatsCallback stats_callback;
     MeterCallback meter_callback;
+    DiagnosticsCallback diagnostics_callback;
+    uint64_t diagnostics_generation{0};
     std::atomic<bool> recording{false};
 };
 
@@ -105,6 +107,10 @@ void RecorderSession::SetStatsCallback(StatsCallback cb) {
 
 void RecorderSession::SetMeterCallback(MeterCallback cb) {
     m_impl->meter_callback = std::move(cb);
+}
+
+void RecorderSession::SetDiagnosticsCallback(DiagnosticsCallback cb) {
+    m_impl->diagnostics_callback = std::move(cb);
 }
 
 // ---------------------------------------------------------------------------
@@ -369,6 +375,8 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         }
         st.stats_callback = m_impl->stats_callback;
         st.meter_callback = m_impl->meter_callback;
+        st.diagnostics_callback = m_impl->diagnostics_callback;
+        st.diagnostics.Reset(++m_impl->diagnostics_generation, MakeDiagnosticsStaticConfig(config));
     }
 
     auto failPrepare = [&](int32_t hr, const std::string& detail) -> RecorderResult {
@@ -635,6 +643,18 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         double vd = static_cast<double>(result.stats.video_duration_ns) / 1e6;
         double ad = static_cast<double>(result.stats.audio_duration_ns) / 1e6;
         result.stats.duration_skew_ms = (vd > ad) ? (vd - ad) : (ad - vd);
+    }
+
+    // Final frozen diagnostics snapshot (Completed/Failed). The stats collector is
+    // already stopped, so this is the single source of the terminal snapshot and no
+    // further periodic updates follow. Diagnostics failure must never fail recording.
+    if (m_impl->diagnostics_callback) {
+        const auto diag_now = std::chrono::steady_clock::now();
+        const DiagnosticsLifecycle lifecycle =
+            result.succeeded ? DiagnosticsLifecycle::Completed : DiagnosticsLifecycle::Failed;
+        const RecordingDiagnosticsSnapshot snapshot =
+            m_impl->state.diagnostics.BuildSnapshot(diag_now, result.stats, lifecycle, result.stats.elapsed_seconds);
+        m_impl->diagnostics_callback(snapshot);
     }
 
     return result;

@@ -105,6 +105,8 @@ void AudioThread::Run() {
 
     uint64_t lastAudioPts = 0;
 
+    m_state.diagnostics.SetAudioFormat(kSampleRate, kChannels);
+
     // M4 Phase 4: one audio producer; Phase 5 will instantiate multiple AudioThread workers.
     auto routeAudioPackets = [&](std::vector<EncodedAudioPacket>& pkts) {
         for (auto& pkt : pkts) {
@@ -127,6 +129,7 @@ void AudioThread::Run() {
                         return false;
                     }
                     m_state.audio_premux.push_back(std::move(pkt));
+                    m_state.diagnostics.OnAudioPremuxDepth(static_cast<uint32_t>(m_state.audio_premux.size()));
                 } else {
                     lk.unlock();
                     MuxItem mi;
@@ -181,6 +184,7 @@ void AudioThread::Run() {
             }
 
             uint32_t pendingFrames = source_->PendingFrameCount();
+            m_state.diagnostics.OnAudioQueueDepth(pendingFrames);
             if (pendingFrames == 0) {
                 Sleep(1);
                 continue;
@@ -197,6 +201,10 @@ void AudioThread::Run() {
                         goto end_opus_loop;
                     }
                     break;
+                }
+
+                if (raw.data_discontinuity) {
+                    m_state.diagnostics.OnAudioDiscontinuity();
                 }
 
                 std::vector<EncodedAudioPacket> pkts;
@@ -340,6 +348,7 @@ void AudioThread::Run() {
         }
 
         uint32_t pendingFrames = source_->PendingFrameCount();
+        m_state.diagnostics.OnAudioQueueDepth(pendingFrames);
         if (pendingFrames == 0) {
             Sleep(1);
             continue;
@@ -356,6 +365,10 @@ void AudioThread::Run() {
                     goto end_audio_loop;
                 }
                 break;
+            }
+
+            if (raw.data_discontinuity) {
+                m_state.diagnostics.OnAudioDiscontinuity();
             }
 
             std::vector<EncodedAudioPacket> pkts;

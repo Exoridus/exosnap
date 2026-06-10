@@ -125,7 +125,7 @@ class MainWindow : public QMainWindow {
     void installVisualReadyMarker(const QString& scenario_id);
     void applyVisualSettingsScenario(const visual::VisualScenario& scenario);
     void applyVisualSourcePickerScenario(const visual::VisualScenario& scenario);
-    void applyVisualDiagnosticsScenario();
+    void applyVisualDiagnosticsScenario(const visual::VisualScenario& scenario);
     // Apply device-discovery visual state (audio mic list, webcam availability).
     // Guarded; non-persistent: no writes to AppSettingsStore or RecordingPresetStore.
     void applyVisualDeviceDiscoveryScenario(const visual::VisualScenario& scenario);

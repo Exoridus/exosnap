@@ -124,5 +124,131 @@ TEST_F(DiagnosticsPageTest, ExportReportStaysDisabledHonestly) {
     EXPECT_FALSE(export_btn->isEnabled());
 }
 
+// ---- Live pipeline diagnostics (DIAGNOSTICS-LIVE-PIPELINE-R1) ----------------
+
+namespace {
+
+const QString kDash = QString::fromUtf8("\xE2\x80\x94");
+
+recorder_core::RecordingDiagnosticsSnapshot MakeRecordingSnapshot() {
+    using namespace recorder_core;
+    RecordingDiagnosticsSnapshot s;
+    s.session_generation = 1;
+    s.lifecycle = DiagnosticsLifecycle::Recording;
+    s.valid = true;
+    s.elapsed_seconds = 12.0;
+    s.capture.target_fps = 60.0;
+    s.capture.actual_fps = 59.8;
+    s.capture.frames_captured = 720;
+    s.capture.frames_emitted = 700;
+    s.capture.source_type = CaptureSourceType::Display;
+    s.compositor.active = true;
+    s.compositor.average_ms = 1.4;
+    s.compositor.peak_ms = 2.8;
+    s.video_encoder.frames_submitted = 700;
+    s.video_encoder.frames_encoded = 700;
+    s.video_encoder.output_fps = 60.0;
+    s.video_encoder.codec = VideoCodec::Av1Nvenc;
+    s.video_encoder.width = 1920;
+    s.video_encoder.height = 1080;
+    s.video_encoder.cfr = true;
+    s.audio.active = true;
+    s.audio.sample_rate = 48000;
+    s.audio.channels = 2;
+    s.audio.codec = AudioCodec::Opus;
+    s.audio.track_count = 1;
+    s.video_queue.bounded = false;
+    s.audio_queue.bounded = true;
+    s.audio_queue.capacity = 600;
+    s.mux.availability = MetricAvailability::Available;
+    s.disk.output_target = "C:";
+    s.disk.latency_availability = MetricAvailability::Available;
+    s.split.split_supported = true;
+    s.split.current_segment = 1;
+    s.bottleneck = PipelineBottleneck::None;
+    s.health = PipelineHealth::Good;
+    return s;
+}
+
+QString LiveValue(const DiagnosticsPage& page, const QString& key) {
+    auto* label = page.findChild<QLabel*>(key);
+    return label ? label->text() : QString();
+}
+
+} // namespace
+
+TEST_F(DiagnosticsPageTest, LiveDiagnosticsIdleShowsNeutralNotStale) {
+    DiagnosticsPage page;
+    recorder_core::RecordingDiagnosticsSnapshot idle;
+    idle.lifecycle = recorder_core::DiagnosticsLifecycle::Idle;
+    idle.valid = false;
+    page.applyLiveDiagnostics(idle);
+
+    EXPECT_EQ(LiveValue(page, QStringLiteral("liveCaptureFps")), kDash);
+    EXPECT_EQ(LiveValue(page, QStringLiteral("liveEncoderCounts")), kDash);
+    EXPECT_EQ(LiveValue(page, QStringLiteral("livePipelineLifecycle")), QStringLiteral("No active recording"));
+}
+
+TEST_F(DiagnosticsPageTest, LiveDiagnosticsRecordingShowsLiveMetrics) {
+    DiagnosticsPage page;
+    page.applyLiveDiagnostics(MakeRecordingSnapshot());
+
+    EXPECT_TRUE(LiveValue(page, QStringLiteral("liveCaptureFps")).contains(QStringLiteral("59.8")));
+    EXPECT_TRUE(LiveValue(page, QStringLiteral("liveCaptureFps")).contains(QStringLiteral("60.0")));
+    EXPECT_TRUE(LiveValue(page, QStringLiteral("liveEncoderCounts")).contains(QStringLiteral("submitted 700")));
+    EXPECT_TRUE(LiveValue(page, QStringLiteral("livePipelineLifecycle")).contains(QStringLiteral("Recording")));
+}
+
+TEST_F(DiagnosticsPageTest, LiveDiagnosticsIdleAfterRecordingClearsStaleValues) {
+    DiagnosticsPage page;
+    page.applyLiveDiagnostics(MakeRecordingSnapshot());
+    ASSERT_TRUE(LiveValue(page, QStringLiteral("liveCaptureFps")).contains(QStringLiteral("59.8")));
+
+    recorder_core::RecordingDiagnosticsSnapshot idle;
+    idle.lifecycle = recorder_core::DiagnosticsLifecycle::Idle;
+    idle.valid = false;
+    page.applyLiveDiagnostics(idle);
+
+    // No stale active-looking value remains.
+    EXPECT_EQ(LiveValue(page, QStringLiteral("liveCaptureFps")), kDash);
+    EXPECT_FALSE(LiveValue(page, QStringLiteral("liveCaptureFps")).contains(QStringLiteral("59.8")));
+}
+
+TEST_F(DiagnosticsPageTest, LiveDiagnosticsPausedShowsStableState) {
+    DiagnosticsPage page;
+    auto s = MakeRecordingSnapshot();
+    s.lifecycle = recorder_core::DiagnosticsLifecycle::Paused;
+    page.applyLiveDiagnostics(s);
+    EXPECT_TRUE(LiveValue(page, QStringLiteral("livePipelineLifecycle")).contains(QStringLiteral("Paused")));
+}
+
+TEST_F(DiagnosticsPageTest, LiveDiagnosticsUnavailableNotShownAsZero) {
+    DiagnosticsPage page;
+    auto s = MakeRecordingSnapshot();
+    // MP4-style: no measurable write boundary, no reorder window / split.
+    s.mux.availability = recorder_core::MetricAvailability::Unavailable;
+    s.disk.latency_availability = recorder_core::MetricAvailability::Unavailable;
+    s.split.split_supported = false;
+    s.split.availability = recorder_core::MetricAvailability::Unavailable;
+    page.applyLiveDiagnostics(s);
+
+    EXPECT_TRUE(LiveValue(page, QStringLiteral("liveReorder")).contains(QStringLiteral("Unavailable")));
+    EXPECT_TRUE(LiveValue(page, QStringLiteral("liveMuxWrite")).contains(QStringLiteral("Unavailable")));
+    EXPECT_TRUE(LiveValue(page, QStringLiteral("liveSegment")).contains(QStringLiteral("Single file")));
+}
+
+TEST_F(DiagnosticsPageTest, LiveDiagnosticsBottleneckStatusRendered) {
+    DiagnosticsPage page;
+    auto s = MakeRecordingSnapshot();
+    s.bottleneck = recorder_core::PipelineBottleneck::VideoEncoder;
+    s.bottleneck_reason = "Encoder backlog rising";
+    s.health = recorder_core::PipelineHealth::Warning;
+    page.applyLiveDiagnostics(s);
+
+    const QString status = LiveValue(page, QStringLiteral("livePipelineStatus"));
+    EXPECT_TRUE(status.contains(QStringLiteral("VideoEncoder")));
+    EXPECT_TRUE(status.contains(QStringLiteral("Warning")));
+}
+
 } // namespace
 } // namespace exosnap
