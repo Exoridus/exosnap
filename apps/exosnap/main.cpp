@@ -146,7 +146,7 @@ int main(int argc, char* argv[]) {
         return exosnap::visual::RunVisualTest(app, win, visual_options);
 #endif
 
-    win.resize(1100, 700);
+    win.resize(1120, 700); // matches MainWindow's minimum size (1120×700)
     win.show();
     QTimer::singleShot(0, &win, [&win, app_icon]() {
         if (!app_icon.isNull()) {

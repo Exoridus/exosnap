@@ -1418,6 +1418,14 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 
     result_details_outer->addWidget(result_details_row);
 
+    // Multi-segment summary (shown for split recordings; flags partial failure)
+    auto* result_segments_label_ = new QLabel(result_details_panel_);
+    result_segments_label_->setObjectName(QStringLiteral("resultSegmentsLabel"));
+    result_segments_label_->setProperty("labelRole", "resultSegments");
+    result_segments_label_->setWordWrap(true);
+    result_segments_label_->setVisible(false);
+    result_details_outer->addWidget(result_segments_label_);
+
     // Markers label (shown when recording has markers)
     auto* result_markers_label_ = new QLabel(result_details_panel_);
     result_markers_label_->setObjectName(QStringLiteral("resultMarkersLabel"));
@@ -5883,8 +5891,36 @@ void RecordPage::updateResultDetailsPanel() {
         meta_label->setProperty("missingFile", !file_exists);
         meta_label->style()->unpolish(meta_label);
         meta_label->style()->polish(meta_label);
+    }
 
-        // Append marker summary to metadata
+    // Multi-segment summary (VR-002): a split recording with a failed or
+    // quarantined segment must be visibly distinct from full success without
+    // invalidating the intact sibling segments.
+    if (auto* segments_label = panel->findChild<QLabel*>(QStringLiteral("resultSegmentsLabel"))) {
+        if (rec.isMultiSegment()) {
+            QStringList failed_indices;
+            for (const auto& seg : rec.segments) {
+                if (!seg.succeeded)
+                    failed_indices << QString::number(seg.index + 1);
+            }
+            QString text = QStringLiteral("SEGMENTS · %1").arg(rec.segmentCount());
+            const bool partial = !failed_indices.isEmpty();
+            if (partial) {
+                text += QStringLiteral("  ·  segment %1 failed or missing — other segments are intact")
+                            .arg(failed_indices.join(QStringLiteral(", ")));
+            }
+            segments_label->setText(text);
+            segments_label->setProperty("missingFile", partial);
+            segments_label->style()->unpolish(segments_label);
+            segments_label->style()->polish(segments_label);
+            segments_label->setVisible(true);
+        } else {
+            segments_label->setVisible(false);
+        }
+    }
+
+    // Append marker summary to metadata
+    {
         auto* markers_label = panel->findChild<QLabel*>(QStringLiteral("resultMarkersLabel"));
         if (markers_label) {
             if (!rec.markers.empty()) {

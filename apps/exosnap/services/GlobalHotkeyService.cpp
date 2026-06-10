@@ -215,7 +215,7 @@ QKeySequence GlobalHotkeyService::GetBinding(HotkeyAction action) const {
 }
 
 void GlobalHotkeyService::LoadFromStrings(const HotkeyBindings& stored) {
-    // Only load active action indices (0 and 1).
+    // Load every registered action; empty stored strings fall back to defaults.
     for (int i = 0; i < kHotkeyActionCount; ++i) {
         const HotkeyAction action = static_cast<HotkeyAction>(i);
         const QString& s = stored[static_cast<std::size_t>(i)];
