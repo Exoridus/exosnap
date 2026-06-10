@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -8,10 +10,17 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// EXOSNAP_INSTALL_TREE is set by CMake to the canonical install prefix
-// (e.g. during CI).  When unset the test searches a default location
-// relative to the build tree and skips if neither is present.
+// The install tree is located in priority order:
+//   1. EXOSNAP_INSTALL_TREE environment variable (lets `ctest` validate a freshly
+//      staged tree without reconfiguring the build).
+//   2. EXOSNAP_INSTALL_TREE compile definition (set by CI at configure time).
+// When neither resolves to a directory the tests skip.
 fs::path install_root() {
+    if (const char* env = std::getenv("EXOSNAP_INSTALL_TREE")) {
+        fs::path p{env};
+        if (!std::string(env).empty() && fs::exists(p) && fs::is_directory(p))
+            return p;
+    }
 #ifdef EXOSNAP_INSTALL_TREE
     fs::path p{EXOSNAP_INSTALL_TREE};
     if (fs::exists(p) && fs::is_directory(p))
@@ -48,6 +57,11 @@ std::string join(const std::vector<std::string>& paths) {
     return result;
 }
 
+std::string lower(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -69,11 +83,29 @@ fs::path InstallTreeTest::_root;
     } while (0)
 
 // ---------------------------------------------------------------------------
-// Presence — required runtime files
+// Presence — required runtime files (flat portable layout: exe + Qt DLLs +
+// qt.conf live at the package root so the executable is directly launchable)
 // ---------------------------------------------------------------------------
 TEST_F(InstallTreeTest, ExosnapExeExists) {
     SKIP_IF_NO_TREE();
     EXPECT_TRUE(file_exists(_root, "exosnap.exe")) << "Missing exosnap.exe in install tree";
+}
+
+TEST_F(InstallTreeTest, QtConfAtRoot) {
+    SKIP_IF_NO_TREE();
+    EXPECT_TRUE(file_exists(_root, "qt.conf")) << "Missing qt.conf next to the executable (flat deploy layout)";
+}
+
+TEST_F(InstallTreeTest, QtRuntimeDllsPresentAtRoot) {
+    SKIP_IF_NO_TREE();
+    EXPECT_TRUE(file_exists(_root, "Qt6Core.dll")) << "Missing Qt6Core.dll next to the executable";
+    EXPECT_TRUE(file_exists(_root, "Qt6Gui.dll")) << "Missing Qt6Gui.dll next to the executable";
+    EXPECT_TRUE(file_exists(_root, "Qt6Widgets.dll")) << "Missing Qt6Widgets.dll next to the executable";
+}
+
+TEST_F(InstallTreeTest, QtPluginsDirExists) {
+    SKIP_IF_NO_TREE();
+    EXPECT_TRUE(dir_exists(_root, "plugins/platforms")) << "Missing Qt platforms plugin directory";
 }
 
 TEST_F(InstallTreeTest, RootLicenseExists) {
@@ -84,6 +116,16 @@ TEST_F(InstallTreeTest, RootLicenseExists) {
 TEST_F(InstallTreeTest, ThirdPartyNoticesExists) {
     SKIP_IF_NO_TREE();
     EXPECT_TRUE(file_exists(_root, "THIRD_PARTY_NOTICES.md")) << "Missing THIRD_PARTY_NOTICES.md";
+}
+
+TEST_F(InstallTreeTest, KnownLimitationsExists) {
+    SKIP_IF_NO_TREE();
+    EXPECT_TRUE(file_exists(_root, "KNOWN_LIMITATIONS.md")) << "Missing KNOWN_LIMITATIONS.md portable doc";
+}
+
+TEST_F(InstallTreeTest, PortableReadmeExists) {
+    SKIP_IF_NO_TREE();
+    EXPECT_TRUE(file_exists(_root, "README-PORTABLE.md")) << "Missing README-PORTABLE.md portable doc";
 }
 
 TEST_F(InstallTreeTest, LicensesDirExists) {
@@ -100,17 +142,6 @@ TEST_F(InstallTreeTest, AllExpectedLicensesPresent) {
     for (const auto& lic : expected) {
         EXPECT_TRUE(file_exists(_root, lic)) << "Missing license: " << lic;
     }
-}
-
-TEST_F(InstallTreeTest, QtPluginsDirExists) {
-    SKIP_IF_NO_TREE();
-    EXPECT_TRUE(dir_exists(_root, "plugins/platforms")) << "Missing Qt platforms plugin directory";
-}
-
-TEST_F(InstallTreeTest, QtRuntimeDllsPresent) {
-    SKIP_IF_NO_TREE();
-    EXPECT_TRUE(file_exists(_root, "bin/Qt6Core.dll")) << "Missing Qt6Core.dll";
-    EXPECT_TRUE(file_exists(_root, "bin/Qt6Gui.dll")) << "Missing Qt6Gui.dll";
 }
 
 // ---------------------------------------------------------------------------
@@ -138,22 +169,43 @@ TEST_F(InstallTreeTest, NoPkgConfigFiles) {
     EXPECT_FALSE(fs::exists(pc_dir)) << "lib/pkgconfig/ must not appear in the runtime install tree";
 }
 
-TEST_F(InstallTreeTest, NoStaticLibs) {
+// Forbidden file extensions — static/import libs, symbols, intermediates, source.
+TEST_F(InstallTreeTest, NoForbiddenFileExtensions) {
     SKIP_IF_NO_TREE();
+    const std::vector<std::string> forbidden = {".lib", ".pdb", ".ilk", ".exp",   ".obj", ".pch", ".h",
+                                                ".hpp", ".cpp", ".c",   ".cmake", ".pc",  ".log", ".tmp"};
     for (const auto& p : relative_paths(_root)) {
-        auto ext = fs::path(p).extension().string();
-        EXPECT_NE(ext, ".lib") << "No .lib files (static/import libraries) may appear in the install tree, found: "
-                               << p;
+        auto ext = lower(fs::path(p).extension().string());
+        EXPECT_EQ(std::find(forbidden.begin(), forbidden.end(), ext), forbidden.end())
+            << "Forbidden development file leaked into install tree: " << p;
     }
 }
 
-TEST_F(InstallTreeTest, NoHeaderFiles) {
+// User data must never ship in the artifact.
+TEST_F(InstallTreeTest, NoUserDataFiles) {
+    SKIP_IF_NO_TREE();
+    const std::vector<std::string> forbidden_names = {"settings.ini", "presets.ini", "recording-history.json"};
+    for (const auto& p : relative_paths(_root)) {
+        auto name = lower(fs::path(p).filename().string());
+        EXPECT_EQ(std::find(forbidden_names.begin(), forbidden_names.end(), name), forbidden_names.end())
+            << "User-data file leaked into install tree: " << p;
+    }
+}
+
+// No Debug Qt DLLs (e.g. Qt6Cored.dll) may ship in a Release artifact.
+TEST_F(InstallTreeTest, NoDebugQtDlls) {
     SKIP_IF_NO_TREE();
     for (const auto& p : relative_paths(_root)) {
-        auto ext = fs::path(p).extension().string();
-        EXPECT_NE(ext, ".h") << "No .h header files may appear in the install tree, found: " << p;
-        EXPECT_NE(ext, ".hpp") << "No .hpp header files may appear in the install tree, found: " << p;
+        auto name = lower(fs::path(p).filename().string());
+        bool is_debug_qt = name.rfind("qt6", 0) == 0 && name.size() > 5 && name.substr(name.size() - 5) == "d.dll";
+        EXPECT_FALSE(is_debug_qt) << "Debug Qt DLL leaked into Release install tree: " << p;
     }
+}
+
+// The stale plain-text limitations file must not reappear.
+TEST_F(InstallTreeTest, NoStaleKnownLimitationsTxt) {
+    SKIP_IF_NO_TREE();
+    EXPECT_FALSE(file_exists(_root, "KNOWN_LIMITATIONS.txt")) << "Stale KNOWN_LIMITATIONS.txt must not ship";
 }
 
 TEST_F(InstallTreeTest, NoWorkspaceLeak) {
@@ -172,12 +224,4 @@ TEST_F(InstallTreeTest, NoAbsoluteBuildPaths) {
     SKIP_IF_NO_TREE();
     auto paths = join(relative_paths(_root));
     EXPECT_EQ(paths.find("C:"), std::string::npos) << "No absolute Windows paths may appear in install tree paths";
-}
-
-TEST_F(InstallTreeTest, NoSourceFiles) {
-    SKIP_IF_NO_TREE();
-    for (const auto& p : relative_paths(_root)) {
-        auto ext = fs::path(p).extension().string();
-        EXPECT_NE(ext, ".cpp") << "No .cpp source files may appear in the install tree, found: " << p;
-    }
 }
