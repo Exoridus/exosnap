@@ -2,6 +2,8 @@
 
 #include <QPainter>
 
+#include "../theme/ExoSnapPalette.h"
+
 namespace exosnap::ui::widgets {
 
 ExoToggle::ExoToggle(QWidget* parent) : QAbstractButton(parent) {
@@ -38,14 +40,16 @@ void ExoToggle::paintEvent(QPaintEvent* event) {
     const bool enabled = isEnabled();
     const bool checked = isChecked();
 
-    QColor track = QColor("#26221C");
-    QColor thumb = QColor("#8A8070");
+    // #03: on-state track = Studio Mint accent; knob = accent-ink dark on mint.
+    // Off-state: neutral dark track, muted knob. Disabled: dimmed.
+    QColor track = QColor(255, 255, 255, static_cast<int>(0.10 * 255)); // rgba(255,255,255,0.10)
+    QColor thumb = QColor("#65656A");                                   // mut (text3)
     if (!enabled) {
-        track = QColor("#1A1714");
-        thumb = QColor("#4A453E");
+        track = QColor(255, 255, 255, static_cast<int>(0.05 * 255));
+        thumb = QColor("#3A3A3F");
     } else if (checked) {
-        track = QColor("#F1B400");
-        thumb = QColor("#F1ECE1");
+        track = QColor(theme::ExoSnapPalette::kAccent);    // Studio Mint
+        thumb = QColor(theme::ExoSnapPalette::kAccentInk); // dark ink on accent fill
     }
 
     painter.setPen(Qt::NoPen);

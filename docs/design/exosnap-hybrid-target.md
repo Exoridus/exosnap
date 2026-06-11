@@ -138,7 +138,7 @@ Rules:
 - Left zone: circular icon toggles (System, Mic, Webcam, App). On = accent-dim fill + accent border; Off = transparent + muted icon.
 - Center: monospace timer, 30px, 600 weight, tabular-nums, always in the same position. **The countdown digit during pre-roll uses the same font size and weight as the recording timecode** — it is the primary user focus signal during the 3-second countdown (DF-03).
 - Right zone: countdown select (Off / 3s / 5s / 10s) + Record button (ready); Pause + Stop (recording); Resume + Stop (paused); Record again (completed).
-- Completed: filename is a clickable link, underlined in accent; **Open Folder is an icon-only 38×38 ghost button with border-radius 10, tooltip "Open folder"** (DF-04); file size shown in muted mono.
+- Completed: filename is a clickable link, underlined in accent; **Open Folder is an icon-only 38×38 ghost button with border-radius 10, tooltip "Open folder"** (DF-04). File size readout is owned by the metadata bar (D4) — the dock does NOT show a size label.
 - Stable geometry: all zones maintain position across state transitions. No layout shift.
 
 ### Preview overlay elements
@@ -516,6 +516,69 @@ The `presetDefaultBadge` is an intentional indicator that the selected preset is
 ### DF-18 — Hotkeys "Not in this build" section header subtitle (FIXED 2026-06-11)
 
 `planned_header->setMeta("Not in this build")` removed from HotkeysPage.cpp. The section is titled "PLANNED / UNAVAILABLE" which is self-explanatory. Each individual planned row already shows a "Not in this build" badge — the section-level repetition was redundant noise.
+
+### D3 — Logs page toolbar (FIXED 2026-06-11)
+
+Cut Refresh, Clear, and Open Log Folder from the toolbar. Redesigned as single-row toolbar: LEFT cluster = segmented All/Info/Issues + search field (flex) + Auto-scroll; 16px gap; RIGHT cluster = Copy + Export… ghost-sm buttons (h32, radius 999, border line2). Footer path is a clickable folder link (mono 12, accent color, underline) that opens the log folder. Copy operates on the currently filtered view. Removed buttons are absent from the DOM (EQ null in tests).
+
+### D4 — Saved-state metadata bar (FIXED 2026-06-11)
+
+(1) Metadata bar buttons (Copy path, Rename, Delete) styled ghost-sm (h32, radius 999); Delete gets coral hover tint only.
+(2) TransportDock: size readout (`size_label_`) hidden immediately after creation — the metadata bar owns file size. Label still exists as a C++ member for API compatibility but is never added to layout and never made visible.
+(3) Recent rows: per-row "Folder" button removed. Filename chip uses `setMinimumWidth(280)` + `Qt::ElideMiddle` elision instead of the old fixed 260px width.
+(4) Audio codec display casing: "OPUS" corrected to "Opus" in both `audioCodecLabel` overloads in RecordPage.cpp.
+
+### D3/D4 — RescanSVG icon (FIXED 2026-06-11)
+
+The ↺ (U+21BA) character was not rendering in IBM Plex Mono / Segoe UI — displayed as "!". Replaced with `:/theme/icons/rescan.svg` (16×16 SVG, currentColor fill) in both `WebcamSetupPanel` and `ConfigPage` audio rescan buttons. SVG registered in `exosnap_theme.qrc`. Text fallback preserved if SVG loads as null.
+
+### Polish #01 — AboutOverlay build table (FIXED 2026-06-11)
+
+Fixed clipped rows in the About overlay build metadata table. Removed fixed row height; set `min-height: 28px` via `setContentsMargins(0, 6, 0, 6)` per row, and `4px` bottom padding on the container.
+
+### Polish #02 — Recent-row filename chip (FIXED 2026-06-11)
+
+Changed from `setFixedWidth(260)` + `Qt::ElideMiddle` at 236px to `setMinimumWidth(280)` (no fixed cap) + `Qt::ElideMiddle` at `minimumWidth()-24`. Chip can grow with available space.
+
+### Polish #04 — Diagnostics summary tiles zero-count (FIXED 2026-06-11)
+
+Tile tinting is now conditional: count==0 → `statTone="zero"` (neutral bg2, line2 border, text3 numeral and label). Count>0 → active tone (blocker/notice/pass). Both QSS rules and C++ `setTileActive()` lambda added.
+
+### Polish #05 — Diagnostics pipeline card dimming (FIXED 2026-06-11)
+
+Planned pipeline step title color changed from `${text1}` (slightly dim) to `${text2}` (mut) in QSS, so Planned cards are visually quieter than OK cards whose title stays at `${text0}` (ink).
+
+### Polish #06 — Hotkeys "Unset" → "Clear" + "Not set" chip (FIXED 2026-06-11)
+
+Unset button text: `"Unset"` → `"Clear"`. KeycapChip empty_text: `"Unset"` → `"Not set"`. Object names unchanged (tests still find `hotkeyUnsetBtn_N`).
+
+### Polish #08 — Settings webcam: disabled selects when no camera (FIXED 2026-06-11)
+
+When no webcam device is selected, resolution and FPS combos now show a `"(no camera)"` placeholder item and are disabled (`setEnabled(false)`).
+
+### Polish #09 — Rescan button SVG icon (FIXED 2026-06-11)
+
+See D3/D4 — RescanSVG icon entry above.
+
+### Polish #10 — Diagnostics pluralization (FIXED 2026-06-11)
+
+`"NOTICE(S)"` → `"NOTICE"` / `"NOTICES"` based on count. `"blocker(s)"` → `"blocker"` / `"blockers"`. `"item(s)"` → `"item"` / `"items"`.
+
+### Polish #11 — Logs meta line path truncation (FIXED 2026-06-11)
+
+`folder_link_` in LogsPage shows `parentDir/filename` elided to 320px width via `QFontMetrics::elidedText(Qt::ElideMiddle)`. Full path is in the tooltip.
+
+### Polish #12 — Countdown select timer glyph (FIXED 2026-06-11)
+
+`CountdownSelect` items now use `addItem(timer_icon, text, data)` with a 14×14 `:/theme/icons/timer.svg` icon. Fallback to icon-less items if SVG not found. SVG registered in `exosnap_theme.qrc`.
+
+### Polish #13 — Countdown disabled during countdown (VERIFIED 2026-06-11)
+
+`CountdownSelect::setInteractive(false)` is called when `state_ == Countdown` (ready=false in `setReady(false && primary_enabled_)`). `Countdown_StateShowsCancelAndLocksSelector` test already passes, confirming correct behavior.
+
+### Polish #14 — Diagnostics "Active configuration" caption inside card (FIXED 2026-06-11)
+
+`makeCollapsibleSection` now places the subtitle label inside the `body` widget (collapses with it) instead of the outer `wrap` layout. The caption "Recording settings as currently configured in the app." is now hidden until the collapsible is opened.
 
 ## Design package files
 

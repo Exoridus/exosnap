@@ -7,9 +7,11 @@
 #include <QComboBox>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QPointer>
 #include <QPushButton>
+#include <QSize>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -83,12 +85,22 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
     device_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     dr->addWidget(device_combo_, 1);
 
-    rescan_btn_ = new QPushButton(QStringLiteral("↺"), right_col); // ↺ ANTICLOCKWISE OPEN CIRCLE ARROW
+    rescan_btn_ = new QPushButton(right_col); // #09: icon-only rescan button
     rescan_btn_->setObjectName(QStringLiteral("webcamPanelRescanBtn"));
     rescan_btn_->setProperty("role", "ghost");
     rescan_btn_->setToolTip(QStringLiteral("Rescan for cameras"));
     rescan_btn_->setFixedWidth(36);
     rescan_btn_->setCursor(Qt::PointingHandCursor);
+    {
+        const QIcon icon(QStringLiteral(":/theme/icons/rescan.svg"));
+        if (!icon.isNull()) {
+            rescan_btn_->setIcon(icon);
+            rescan_btn_->setIconSize(QSize(14, 14));
+        } else {
+            // Fallback text if SVG not found.
+            rescan_btn_->setText(QStringLiteral("\xe2\x86\xba"));
+        }
+    }
     dr->addWidget(rescan_btn_);
     right_layout->addWidget(device_row);
 
@@ -368,6 +380,12 @@ void WebcamSetupPanel::refreshFormats() {
             QVariantList res_data = {f.width, f.height};
             resolution_combo_->addItem(label, res_data);
         }
+        // #08: camera present — enable resolution combo.
+        resolution_combo_->setEnabled(true);
+    } else {
+        // #08: no camera selected — disable and show placeholder text.
+        resolution_combo_->addItem(QStringLiteral("(no camera)"), QVariant());
+        resolution_combo_->setEnabled(false);
     }
     suppress_signals_ = false;
 }

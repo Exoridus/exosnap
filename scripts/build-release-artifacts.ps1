@@ -333,7 +333,7 @@ foreach ($f in $requiredFiles) {
 foreach ($d in @('plugins/platforms', 'licenses')) {
     if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot $d) -PathType Container)) { Add-Error "Missing required directory: $d" }
 }
-$requiredLicenses = @('spdlog.txt', 'nlohmann_json.txt', 'tomlplusplus.txt', 'opus.txt', 'fdk-aac.txt', 'libebml.txt', 'libmatroska.txt', 'qt.txt')
+$requiredLicenses = @('spdlog.txt', 'nlohmann_json.txt', 'tomlplusplus.txt', 'opus.txt', 'fdk-aac.txt', 'libebml.txt', 'libmatroska.txt', 'qt.txt', 'ibm-plex-mono.txt')
 foreach ($lic in $requiredLicenses) {
     if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot "licenses/$lic") -PathType Leaf)) { Add-Error "Missing third-party license: licenses/$lic" }
 }

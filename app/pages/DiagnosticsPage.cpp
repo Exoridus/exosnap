@@ -392,18 +392,20 @@ QWidget* DiagnosticsPage::makeCollapsibleSection(const QString& title, const QSt
     toggle->setText(collapseGlyph(false) + title);
     wl->addWidget(toggle);
 
-    if (!subtitle.trimmed().isEmpty()) {
-        auto* sub = new QLabel(subtitle, wrap);
-        sub->setProperty("labelRole", "collapseSub");
-        sub->setWordWrap(true);
-        wl->addWidget(sub);
-    }
-
     auto* body = new QWidget(wrap);
     body->setVisible(false);
     auto* body_layout = new QVBoxLayout(body);
     body_layout->setContentsMargins(M::kSpaceXs, M::kSpaceSm, M::kSpaceXs, M::kSpaceSm);
     body_layout->setSpacing(M::kSpaceXs);
+
+    // #14: subtitle goes inside the collapsible body, not outside it.
+    if (!subtitle.trimmed().isEmpty()) {
+        auto* sub = new QLabel(subtitle, body);
+        sub->setProperty("labelRole", "collapseSub");
+        sub->setWordWrap(true);
+        body_layout->addWidget(sub);
+    }
+
     wl->addWidget(body);
 
     connect(toggle, &QToolButton::toggled, this, [toggle, body](bool on) {
@@ -798,15 +800,22 @@ void DiagnosticsPage::refreshOverview() {
     }
 
     if (blockers > 0) {
+        // #10: proper pluralization
+        const QString blocker_word = (blockers == 1) ? QStringLiteral("blocker") : QStringLiteral("blockers");
         status_pill_->setText(QStringLiteral("BLOCKED \xc2\xb7 %1").arg(blockers));
         setReadinessState(QStringLiteral("blocked"));
-        summary_label_->setText(
-            QStringLiteral("%1 blocker(s) must be resolved before recording. See Top Issues below.").arg(blockers));
+        summary_label_->setText(QStringLiteral("%1 %2 must be resolved before recording. See Top Issues below.")
+                                    .arg(blockers)
+                                    .arg(blocker_word));
     } else if (notices > 0) {
-        status_pill_->setText(QStringLiteral("READY \xc2\xb7 %1 NOTICE(S)").arg(notices));
+        // #10: proper pluralization
+        const QString notice_word = (notices == 1) ? QStringLiteral("NOTICE") : QStringLiteral("NOTICES");
+        const QString item_word = (notices == 1) ? QStringLiteral("item") : QStringLiteral("items");
+        status_pill_->setText(QStringLiteral("READY \xc2\xb7 %1 %2").arg(notices).arg(notice_word));
         setReadinessState(QStringLiteral("warn"));
-        summary_label_->setText(
-            QStringLiteral("No blockers — you can record now. %1 item(s) could be better.").arg(notices));
+        summary_label_->setText(QStringLiteral("No blockers \xe2\x80\x94 you can record now. %1 %2 could be better.")
+                                    .arg(notices)
+                                    .arg(item_word));
     } else {
         status_pill_->setText(QStringLiteral("READY"));
         setReadinessState(QStringLiteral("ready"));
@@ -819,6 +828,35 @@ void DiagnosticsPage::refreshOverview() {
     blocker_count_->setText(QString::number(blockers));
     notice_count_->setText(QString::number(notices));
     pass_count_->setText(QString::number(passes));
+
+    // #04: Tint tiles conditionally — count==0 → neutral (no alarm colour at zero).
+    const auto setTileActive = [](QFrame* tile, QLabel* num, const char* active_tone, bool active) {
+        if (!tile || !num)
+            return;
+        const QString tone = active ? QString::fromLatin1(active_tone) : QStringLiteral("zero");
+        tile->setProperty("statTone", tone);
+        num->setProperty("statTone", tone);
+        // Also update the sibling statTileLabel so it dims at zero.
+        for (auto* lbl : tile->findChildren<QLabel*>()) {
+            if (lbl->property("labelRole").toString() == QLatin1String("statTileLabel")) {
+                lbl->setProperty("statTone", tone);
+                lbl->style()->unpolish(lbl);
+                lbl->style()->polish(lbl);
+                lbl->update();
+            }
+        }
+        tile->style()->unpolish(tile);
+        tile->style()->polish(tile);
+        num->style()->unpolish(num);
+        num->style()->polish(num);
+        tile->update();
+        num->update();
+    };
+    setTileActive(blocker_tile_, blocker_count_, "blocker", blockers > 0);
+    setTileActive(notice_tile_, notice_count_, "notice", notices > 0);
+    // Pass tile: always neutral (green tint is fine at any count)
+    setTileActive(pass_tile_, pass_count_, "pass", passes > 0);
+
     refreshTopIssues(recs, notices, blockers);
 }
 

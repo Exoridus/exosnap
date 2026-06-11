@@ -59,6 +59,12 @@ FetchContent_MakeAvailable(tomlplusplus)
 _exosnap_install_license("toml++ v3.4.0"
     "${PROJECT_BINARY_DIR}/_deps/tomlplusplus-src/LICENSE" "tomlplusplus.txt")
 
+# --- IBM Plex Mono (bundled font, latin Regular/Medium) ---
+# Vendored TTFs live in app/assets/fonts (compiled into the Qt resource system);
+# only the SIL OFL 1.1 license text is staged here for the install tree.
+_exosnap_install_license("IBM Plex Mono (SIL OFL 1.1)"
+    "${PROJECT_SOURCE_DIR}/third_party/ibm-plex/LICENSE.txt" "ibm-plex-mono.txt")
+
 # --- libopus v1.5.2 ---
 FetchContent_Declare(
   libopus

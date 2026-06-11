@@ -188,7 +188,8 @@ void HotkeysPage::updateBindingChips(int index) {
     auto& row = rows_[static_cast<std::size_t>(index)];
     if (!row.supported || !row.binding_layout)
         return;
-    ui::widgets::populateKeycaps(row.binding_layout, row.current_binding, row.binding_chips, QStringLiteral("Unset"));
+    // #06: empty binding shows "Not set" chip (was "Unset").
+    ui::widgets::populateKeycaps(row.binding_layout, row.current_binding, row.binding_chips, QStringLiteral("Not set"));
 }
 
 void HotkeysPage::buildRow(int index, const QString& action, const QKeySequence& default_binding, bool supported,
@@ -234,7 +235,8 @@ void HotkeysPage::buildRow(int index, const QString& action, const QKeySequence&
         r.set_btn->setProperty("role", "utility");
         r.set_btn->setObjectName(QStringLiteral("hotkeySetBtn_%1").arg(index));
 
-        r.unset_btn = new QPushButton(QStringLiteral("Unset"), r.normal_container);
+        // #06: "Unset" action button renamed to "Clear" (object name kept for test stability).
+        r.unset_btn = new QPushButton(QStringLiteral("Clear"), r.normal_container);
         r.unset_btn->setProperty("role", "utility");
         r.unset_btn->setObjectName(QStringLiteral("hotkeyUnsetBtn_%1").arg(index));
 

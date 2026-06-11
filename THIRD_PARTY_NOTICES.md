@@ -85,6 +85,18 @@ directory alongside the ExoSnap binary.
   The specific commercial/Qt licensing terms for this distribution depend on the
   license under which the Qt binary SDK was obtained.
 
+### IBM Plex Mono
+
+- **Project:** https://github.com/IBM/plex
+- **License:** SIL Open Font License 1.1 (Copyright © 2017 IBM Corp. with
+  Reserved Font Name "Plex")
+- **Files:** `IBMPlexMono-Regular.ttf`, `IBMPlexMono-Medium.ttf` (latin),
+  compiled into the Qt resource system and loaded via `QFontDatabase`
+- **Bundled license:** `licenses/ibm-plex-mono.txt`
+- **Role:** the application's monospace UI face (timecode, chips, kicker
+  labels, log viewer, metadata values). UI sans text uses the system-provided
+  Segoe UI; no sans-serif font is bundled.
+
 ## Build-only dependencies (not shipped)
 
 These components are used during the build process and are not included in the
