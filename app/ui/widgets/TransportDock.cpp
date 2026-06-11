@@ -92,11 +92,13 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     open_folder_btn_->setIcon(QIcon(QStringLiteral(":/theme/icons/folder.svg")));
     open_folder_btn_->setIconSize(QSize(18, 18));
     open_folder_btn_->setFixedSize(38, 38);
+    // D4: size_label_ is still a member for API compatibility but hidden — bar owns size.
     size_label_ = new QLabel(completed_row_);
     size_label_->setProperty("labelRole", QStringLiteral("recordDockSize"));
+    size_label_->setVisible(false); // D4: size readout removed from dock; metadata bar owns it
     completed_layout->addWidget(filename_link_);
     completed_layout->addWidget(open_folder_btn_);
-    completed_layout->addWidget(size_label_);
+    // size_label_ not added to layout (D4)
     completed_row_->setVisible(false);
 
     left_layout->addWidget(toggles_row_);
@@ -271,8 +273,9 @@ void TransportDock::setCompletedInfo(const QString& filename, const QString& siz
     filename_link_->setToolTip(filename);
     filename_link_->setEnabled(has_file);
     open_folder_btn_->setEnabled(has_file);
+    // D4: size readout removed from dock; metadata bar owns size. Store for API compat only.
     size_label_->setText(size_text);
-    size_label_->setVisible(!size_text.isEmpty());
+    size_label_->setVisible(false); // always hidden
 }
 
 void TransportDock::setSplitEnabled(bool enabled) {

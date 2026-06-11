@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QFile>
+#include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollBar>
@@ -98,14 +99,18 @@ TEST_F(LogsPageTest, ContainedViewerAndCoreActionsExist) {
     EXPECT_TRUE(viewer->isReadOnly());
     EXPECT_EQ(viewer->lineWrapMode(), QPlainTextEdit::WidgetWidth);
 
-    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logRefreshBtn")), nullptr);
-    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logOpenFolderBtn")), nullptr);
+    // D3: Refresh/Clear/OpenFolder removed; Copy and Export… remain in right cluster.
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("logRefreshBtn")), nullptr);
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("logOpenFolderBtn")), nullptr);
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("logClearBtn")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logCopyBtn")), nullptr);
-    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logClearBtn")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logExportBtn")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logFilterAllBtn")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logFilterInfoBtn")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logFilterIssuesBtn")), nullptr);
+    // D3: footer folder link present
+    auto* folder_lnk = page.findChild<QLabel*>(QStringLiteral("logFolderLink"));
+    EXPECT_NE(folder_lnk, nullptr);
 }
 
 TEST_F(LogsPageTest, SeverityIsStoredStructurally) {

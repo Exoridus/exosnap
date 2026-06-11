@@ -42,8 +42,10 @@ struct ThemeToken {
 };
 
 struct ThemeFontFamilies {
-    QString sans_primary = QStringLiteral("Inter");
-    QString mono_primary = QStringLiteral("JetBrains Mono");
+    // D2: Segoe UI is the blessed system face for UI text (no bundled sans).
+    // IBM Plex Mono is bundled (Regular + Medium) for the mandatory mono voice.
+    QString sans_primary = QStringLiteral("Segoe UI");
+    QString mono_primary = QStringLiteral("IBM Plex Mono");
 };
 
 bool ContainsFamily(const QStringList& families, const QString& family) {
@@ -81,21 +83,18 @@ QStringList BuildFamilyStack(const QString& primary_family, const QStringList& f
 }
 
 QStringList SansFamilies(const ThemeFontFamilies& font_families) {
-    // Hybrid v3 UI face. "Hanken Grotesk" is the design target; it is not bundled (no
-    // license-safe file is present in the repo), so it is only used when the system provides
-    // it. The bundled Inter family is the guaranteed fallback, then platform sans.
-    return BuildFamilyStack(QStringLiteral("Hanken Grotesk"),
-                            {font_families.sans_primary, QStringLiteral("Inter"), QStringLiteral("Segoe UI"),
+    // D2: Segoe UI Variable Text / Segoe UI are the blessed 1.0 UI faces (system fonts;
+    // nothing bundled for sans). Hanken Grotesk is deferred to 1.1.
+    return BuildFamilyStack(QStringLiteral("Segoe UI Variable Text"),
+                            {QStringLiteral("Segoe UI"), font_families.sans_primary, QStringLiteral("system-ui"),
                              QStringLiteral("sans-serif")});
 }
 
 QStringList MonoFamilies(const ThemeFontFamilies& font_families) {
-    // Hybrid v3 mono face. "IBM Plex Mono" is the design target; it is not bundled, so it is
-    // only used when the system provides it. The bundled JetBrains Mono family is the
-    // guaranteed fallback, then platform monospace.
+    // D2: IBM Plex Mono is the mandatory 1.0 mono voice — bundled as Regular + Medium TTFs
+    // via QFontDatabase. Consolas is the platform fallback only; JetBrains Mono is removed.
     return BuildFamilyStack(QStringLiteral("IBM Plex Mono"),
-                            {font_families.mono_primary, QStringLiteral("JetBrains Mono"), QStringLiteral("Consolas"),
-                             QStringLiteral("monospace")});
+                            {font_families.mono_primary, QStringLiteral("Consolas"), QStringLiteral("monospace")});
 }
 
 QString CssFontFamily(const QStringList& families) {
@@ -138,7 +137,9 @@ QVector<ThemeToken> BuildTokens(const ThemeFontFamilies& font_families) {
         {"${accent}", ExoSnapPalette::kAccent},
         {"${accent-ink}", ExoSnapPalette::kAccentInk},
         {"${accent-dim}", ExoSnapPalette::kAccentDim},
+        {"${accent-soft}", ExoSnapPalette::kAccentSoft},
         {"${accent-line}", ExoSnapPalette::kAccentLine},
+        {"${accent-b2}", ExoSnapPalette::kAccentBorderStrong},
         {"${accent-hover}", ExoSnapPalette::kAccentHover},
         {"${accent-pressed}", ExoSnapPalette::kAccentPressed},
         {"${ok}", ExoSnapPalette::kOk},
@@ -251,17 +252,13 @@ QStringList LoadFontFamiliesFromResources(const QStringList& font_resources, con
 ThemeFontFamilies LoadBundledFonts() {
     ThemeFontFamilies font_families;
 
-    const QStringList inter_families = LoadFontFamiliesFromResources({QStringLiteral(":/fonts/Inter-Regular.ttf"),
-                                                                      QStringLiteral(":/fonts/Inter-Medium.ttf"),
-                                                                      QStringLiteral(":/fonts/Inter-SemiBold.ttf")},
-                                                                     QStringLiteral("Inter"));
-    const QStringList jetbrains_families = LoadFontFamiliesFromResources(
-        {QStringLiteral(":/fonts/JetBrainsMono-Regular.ttf"), QStringLiteral(":/fonts/JetBrainsMono-Medium.ttf"),
-         QStringLiteral(":/fonts/JetBrainsMono-SemiBold.ttf")},
-        QStringLiteral("JetBrains Mono"));
+    // D2: IBM Plex Mono (Regular + Medium) is the only bundled family. Segoe UI is a
+    // system font; no sans family is loaded from resources.
+    const QStringList plex_families = LoadFontFamiliesFromResources(
+        {QStringLiteral(":/fonts/IBMPlexMono-Regular.ttf"), QStringLiteral(":/fonts/IBMPlexMono-Medium.ttf")},
+        QStringLiteral("IBM Plex Mono"));
 
-    font_families.sans_primary = SelectPreferredFamily(inter_families, font_families.sans_primary);
-    font_families.mono_primary = SelectPreferredFamily(jetbrains_families, font_families.mono_primary);
+    font_families.mono_primary = SelectPreferredFamily(plex_families, font_families.mono_primary);
     return font_families;
 }
 

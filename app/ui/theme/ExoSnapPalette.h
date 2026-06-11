@@ -32,11 +32,16 @@ struct ExoSnapPalette final {
     static constexpr const char* kText2 = "#9C9C9A"; // muted
     static constexpr const char* kText3 = "#65656A"; // dim / disabled
 
-    // Accent — Studio Mint (default Hybrid v3 accent).
+    // Accent — Studio Mint, FIXED for 1.0 (D1). Derived alphas are frozen to the
+    // design's generated set: dim 0.14 · soft 0.24 · b1 0.42 · b2 0.60. Keep all
+    // accent usage token-driven (no mint literals at call sites) so the deferred
+    // 1.1 accent picker stays a config feature, not a refactor.
     static constexpr const char* kAccent = "#9BD9D2";
     static constexpr const char* kAccentInk = "#08130F"; // dark ink for text on accent fill
     static constexpr const char* kAccentDim = "rgba(155, 217, 210, 0.14)";
-    static constexpr const char* kAccentLine = "rgba(155, 217, 210, 0.42)";
+    static constexpr const char* kAccentSoft = "rgba(155, 217, 210, 0.24)";
+    static constexpr const char* kAccentLine = "rgba(155, 217, 210, 0.42)";         // b1
+    static constexpr const char* kAccentBorderStrong = "rgba(155, 217, 210, 0.60)"; // b2
     static constexpr const char* kAccentHover = "#B4E4DE";
     static constexpr const char* kAccentPressed = "#84C7C0";
 

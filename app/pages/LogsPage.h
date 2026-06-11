@@ -90,11 +90,10 @@ class LogsPage : public QWidget {
     QButtonGroup* severity_group_ = nullptr;
     QLineEdit* search_edit_ = nullptr;
     QCheckBox* auto_scroll_check_ = nullptr;
-    QPushButton* refresh_btn_ = nullptr;
-    QPushButton* open_folder_btn_ = nullptr;
+    // refresh_btn_, open_folder_btn_, clear_btn_ removed (D3: cut from toolbar).
     QPushButton* copy_btn_ = nullptr;
     QPushButton* export_btn_ = nullptr;
-    QPushButton* clear_btn_ = nullptr;
+    QLabel* folder_link_ = nullptr;
     QLabel* status_label_ = nullptr;
     QTimer* search_debounce_timer_ = nullptr;
 

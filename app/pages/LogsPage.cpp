@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFrame>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -169,10 +170,18 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     auto* toolbar = new ui::widgets::SectionRuleHeader(QStringLiteral("APPLICATION LOG"), content);
     layout->addWidget(toolbar);
 
+    // D3 toolbar: LEFT = segmented All/Info/Issues + search (flex) + Auto-scroll, gap 8
+    //             RIGHT = Copy + Export… both ghost sm, gap 8; 16px between clusters
     auto* control_row = new QHBoxLayout();
-    control_row->setSpacing(M::kSpaceSm);
+    control_row->setSpacing(0); // spacing managed per cluster
 
-    auto* segmented = new QWidget(content);
+    // Left cluster
+    auto* left_cluster = new QWidget(content);
+    auto* left_layout = new QHBoxLayout(left_cluster);
+    left_layout->setContentsMargins(0, 0, 0, 0);
+    left_layout->setSpacing(M::kSpaceSm);
+
+    auto* segmented = new QWidget(left_cluster);
     segmented->setObjectName(QStringLiteral("logSeveritySegmented"));
     auto* segmented_layout = new QHBoxLayout(segmented);
     segmented_layout->setContentsMargins(3, 3, 3, 3);
@@ -189,40 +198,39 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     segmented_layout->addWidget(all_btn);
     segmented_layout->addWidget(info_btn);
     segmented_layout->addWidget(issues_btn);
-    control_row->addWidget(segmented, 0);
+    left_layout->addWidget(segmented, 0);
 
-    search_edit_ = new QLineEdit(content);
+    search_edit_ = new QLineEdit(left_cluster);
     search_edit_->setObjectName(QStringLiteral("logSearchEdit"));
     search_edit_->setPlaceholderText(QStringLiteral("Search category or message"));
     search_edit_->setClearButtonEnabled(true);
-    control_row->addWidget(search_edit_, 1);
+    left_layout->addWidget(search_edit_, 1);
 
-    auto_scroll_check_ = new QCheckBox(QStringLiteral("Auto-scroll"), content);
+    auto_scroll_check_ = new QCheckBox(QStringLiteral("Auto-scroll"), left_cluster);
     auto_scroll_check_->setObjectName(QStringLiteral("logAutoScrollToggle"));
     auto_scroll_check_->setChecked(true);
-    control_row->addWidget(auto_scroll_check_, 0);
+    left_layout->addWidget(auto_scroll_check_, 0);
 
-    refresh_btn_ = new QPushButton(QStringLiteral("Refresh"), content);
-    refresh_btn_->setObjectName(QStringLiteral("logRefreshBtn"));
-    refresh_btn_->setProperty("role", "ghost");
-    clear_btn_ = new QPushButton(QStringLiteral("Clear"), content);
-    clear_btn_->setObjectName(QStringLiteral("logClearBtn"));
-    clear_btn_->setProperty("role", "ghost");
-    copy_btn_ = new QPushButton(QStringLiteral("Copy"), content);
+    // Right cluster
+    auto* right_cluster = new QWidget(content);
+    auto* right_layout = new QHBoxLayout(right_cluster);
+    right_layout->setContentsMargins(0, 0, 0, 0);
+    right_layout->setSpacing(M::kSpaceSm);
+
+    copy_btn_ = new QPushButton(QStringLiteral("Copy"), right_cluster);
     copy_btn_->setObjectName(QStringLiteral("logCopyBtn"));
     copy_btn_->setProperty("role", "ghost");
-    export_btn_ = new QPushButton(QStringLiteral("Export"), content);
+    copy_btn_->setProperty("logToolbarGhost", true);
+    export_btn_ = new QPushButton(QStringLiteral("Export\xe2\x80\xa6"), right_cluster); // "Export…"
     export_btn_->setObjectName(QStringLiteral("logExportBtn"));
     export_btn_->setProperty("role", "ghost");
-    open_folder_btn_ = new QPushButton(QStringLiteral("Open Log Folder"), content);
-    open_folder_btn_->setObjectName(QStringLiteral("logOpenFolderBtn"));
-    open_folder_btn_->setProperty("role", "ghost");
+    export_btn_->setProperty("logToolbarGhost", true);
+    right_layout->addWidget(copy_btn_);
+    right_layout->addWidget(export_btn_);
 
-    control_row->addWidget(refresh_btn_, 0);
-    control_row->addWidget(clear_btn_, 0);
-    control_row->addWidget(copy_btn_, 0);
-    control_row->addWidget(export_btn_, 0);
-    control_row->addWidget(open_folder_btn_, 0);
+    control_row->addWidget(left_cluster, 1);
+    control_row->addSpacing(16);
+    control_row->addWidget(right_cluster, 0);
     layout->addLayout(control_row);
 
     status_label_ = new QLabel(content);
@@ -239,12 +247,30 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     log_viewer_->setMinimumHeight(300);
     layout->addWidget(log_viewer_, 1);
 
-    auto* footnote =
-        new QLabel(QStringLiteral("Full session logs are written to %LOCALAPPDATA%\\ExoSnap\\logs."), content);
-    footnote->setObjectName(QStringLiteral("logFootnote"));
-    footnote->setProperty("labelRole", "subtle");
-    footnote->setWordWrap(true);
-    layout->addWidget(footnote);
+    // D3 footer: path portion is a clickable link that opens the folder.
+    // Using a QLabel with rich text for the link portion; folder_link_ holds just the
+    // clickable path label so we can update it when the log path becomes known.
+    auto* footnote_row = new QHBoxLayout();
+    footnote_row->setContentsMargins(0, 0, 0, 0);
+    footnote_row->setSpacing(4);
+
+    auto* footnote_prefix = new QLabel(QStringLiteral("Full session logs are written to"), content);
+    footnote_prefix->setObjectName(QStringLiteral("logFootnote"));
+    footnote_prefix->setProperty("labelRole", "subtle");
+    footnote_row->addWidget(footnote_prefix, 0);
+
+    folder_link_ = new QLabel(content);
+    folder_link_->setObjectName(QStringLiteral("logFolderLink"));
+    folder_link_->setProperty("labelRole", "logFolderLink");
+    folder_link_->setTextInteractionFlags(Qt::TextBrowserInteraction);
+    folder_link_->setOpenExternalLinks(false);
+    folder_link_->setCursor(Qt::PointingHandCursor);
+    folder_link_->setText(QStringLiteral("%LOCALAPPDATA%\\ExoSnap\\logs"));
+    footnote_row->addWidget(folder_link_, 0);
+    footnote_row->addStretch(1);
+
+    connect(folder_link_, &QLabel::linkActivated, this, [this](const QString&) { onOpenFolder(); });
+    layout->addLayout(footnote_row);
 
     auto* centering_host = new QWidget();
     auto* ch = new QHBoxLayout(centering_host);
@@ -258,11 +284,9 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     search_debounce_timer_->setSingleShot(true);
     search_debounce_timer_->setInterval(kSearchDebounceMs);
 
-    connect(refresh_btn_, &QPushButton::clicked, this, &LogsPage::onRefresh);
-    connect(clear_btn_, &QPushButton::clicked, this, &LogsPage::onClear);
+    // D3: refresh_btn_, clear_btn_, open_folder_btn_ removed from toolbar.
     connect(copy_btn_, &QPushButton::clicked, this, &LogsPage::onCopy);
     connect(export_btn_, &QPushButton::clicked, this, &LogsPage::onExport);
-    connect(open_folder_btn_, &QPushButton::clicked, this, &LogsPage::onOpenFolder);
     connect(severity_group_, &QButtonGroup::idClicked, this, &LogsPage::onFilterClicked);
     connect(search_edit_, &QLineEdit::textChanged, this, &LogsPage::onSearchTextChanged);
     connect(search_debounce_timer_, &QTimer::timeout, this, &LogsPage::applyPendingSearch);
@@ -577,10 +601,18 @@ void LogsPage::updateActionState() {
         copy_btn_->setEnabled(!visible_entries_.isEmpty());
     if (export_btn_)
         export_btn_->setEnabled(!entries_.isEmpty());
-    if (clear_btn_)
-        clear_btn_->setEnabled(!entries_.isEmpty());
-    if (open_folder_btn_)
-        open_folder_btn_->setEnabled(!AppLog::logFilePath().isEmpty());
+    // D3: folder link text updated when log path is known.
+    if (folder_link_) {
+        const QString path = AppLog::logFilePath();
+        if (!path.isEmpty()) {
+            // Show just filename + parent dir, middle-elided to ~40 chars (#11).
+            const QFileInfo fi(path);
+            const QString display = fi.dir().dirName() + QStringLiteral("/") + fi.fileName();
+            const QString elided = folder_link_->fontMetrics().elidedText(display, Qt::ElideMiddle, 320);
+            folder_link_->setText(QStringLiteral("<a href='folder'>%1</a>").arg(elided));
+            folder_link_->setToolTip(path);
+        }
+    }
 }
 
 void LogsPage::updateStatusLabel(const QString& feedback) {
@@ -589,13 +621,11 @@ void LogsPage::updateStatusLabel(const QString& feedback) {
 
     const QString search_part =
         search_query_.isEmpty() ? QStringLiteral("no search") : QStringLiteral("search \"%1\"").arg(search_query_);
+    // #11: Show only filename + parent dir in status; full path in footer link tooltip.
     QString text = QStringLiteral("Showing %1 of %2 entries | %3 | %4")
                        .arg(visible_entries_.size())
                        .arg(entries_.size())
                        .arg(activeFilterName(), search_part);
-    const QString path = AppLog::logFilePath();
-    if (!path.isEmpty())
-        text += QStringLiteral(" | %1").arg(path);
     if (!feedback.isEmpty())
         text += QStringLiteral(" | %1").arg(feedback);
     status_label_->setText(text);

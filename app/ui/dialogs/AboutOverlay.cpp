@@ -53,8 +53,10 @@ QWidget* makeMetaRow(const QString& key, const QString& value, const QString& va
     auto* row = new QWidget(parent);
     row->setObjectName("aboutMetaRow");
     auto* layout = new QHBoxLayout(row);
-    layout->setContentsMargins(0, 9, 0, 9);
+    // #01: no fixed row height; rows get min-height 28px, padding 6px 0; container gets 4px bottom.
+    layout->setContentsMargins(0, 6, 0, 6);
     layout->setSpacing(12);
+    row->setMinimumHeight(28);
 
     auto* key_label = new QLabel(key, row);
     key_label->setProperty("labelRole", "aboutMetaKey");
@@ -164,7 +166,8 @@ QFrame* AboutOverlay::buildCard() {
     auto* meta_panel = new QFrame(card);
     meta_panel->setProperty("panelRole", "note");
     auto* meta_layout = new QVBoxLayout(meta_panel);
-    meta_layout->setContentsMargins(18, 2, 18, 2);
+    // #01: 4px bottom padding so last rule isn't flush with inset edge.
+    meta_layout->setContentsMargins(18, 2, 18, 4);
     meta_layout->setSpacing(0);
 
     // Commit URL is constructable from the known repo URL + the real commit SHA.

@@ -6,6 +6,7 @@
 #include <QFileDialog>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
@@ -16,6 +17,7 @@
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QSize>
 #include <QSpinBox>
 #include <QStandardItemModel>
 #include <QStringList>
@@ -632,12 +634,21 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         mic_device_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         mic_device_combo_->setMinimumWidth(180);
         mic_rl->addWidget(mic_device_combo_, 1);
-        audio_rescan_btn_ = new QPushButton(QStringLiteral("\xe2\x86\xba"), mic_row); // ↺
+        audio_rescan_btn_ = new QPushButton(mic_row); // #09: icon-only rescan button
         audio_rescan_btn_->setObjectName(QStringLiteral("audioRescanBtn"));
         audio_rescan_btn_->setProperty("role", "ghost");
         audio_rescan_btn_->setToolTip(QStringLiteral("Rescan audio devices"));
         audio_rescan_btn_->setFixedWidth(36);
         audio_rescan_btn_->setCursor(Qt::PointingHandCursor);
+        {
+            const QIcon rescan_icon(QStringLiteral(":/theme/icons/rescan.svg"));
+            if (!rescan_icon.isNull()) {
+                audio_rescan_btn_->setIcon(rescan_icon);
+                audio_rescan_btn_->setIconSize(QSize(14, 14));
+            } else {
+                audio_rescan_btn_->setText(QStringLiteral("\xe2\x86\xba"));
+            }
+        }
         mic_rl->addWidget(audio_rescan_btn_);
         audio_panel_layout->addWidget(mic_row);
     }

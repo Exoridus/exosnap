@@ -827,7 +827,7 @@ QLabel[labelRole="captureCardStatus"] {
 
 QWidget#captureTargetCard[selected="true"] QLabel[labelRole="captureCardStatus"] {
     color: ${accent};
-    border-color: rgba(155, 217, 210, 0.72);
+    border-color: ${accent-b2};
     background: rgba(155, 217, 210, 0.18);
 }
 
@@ -1846,6 +1846,12 @@ QFrame[panelRole="statTile"][statTone="pass"] {
     background: rgba(132, 203, 162, 0.08);
 }
 
+/* #04: zero-count tile — neutral, no alarm colour */
+QFrame[panelRole="statTile"][statTone="zero"] {
+    border-color: ${line2};
+    background: ${bg2};
+}
+
 QLabel[labelRole="statTileNum"] {
     font-family: ${font-mono};
     font-size: 26px;
@@ -1865,9 +1871,18 @@ QLabel[labelRole="statTileNum"][statTone="pass"] {
     color: ${ok};
 }
 
+/* #04: zero-count numeral + label — dim */
+QLabel[labelRole="statTileNum"][statTone="zero"] {
+    color: ${text3};
+}
+
 QLabel[labelRole="statTileLabel"] {
     font-size: 12.5px;
     color: ${text2};
+}
+
+QLabel[labelRole="statTileLabel"][statTone="zero"] {
+    color: ${text3};
 }
 
 /* Diagnostics — issue / recommendation cards */
@@ -2062,8 +2077,9 @@ QLabel[labelRole="pipelineStepName"] {
     color: ${text0};
 }
 
+/* #05: Planned title = mut (text2), so OK title (text0/ink) clearly outshines it */
 QFrame#pipelineStepCard[pipelineStatus="planned"] QLabel[labelRole="pipelineStepName"] {
-    color: ${text1};
+    color: ${text2};
 }
 
 QLabel[labelRole="pipelineStepNote"] {
@@ -2142,6 +2158,69 @@ QLabel[labelRole="logStatus"] {
     color: ${text2};
 }
 
+/* D3: Logs toolbar ghost-sm buttons (Copy, Export) — h32, pill radius */
+QPushButton[logToolbarGhost="true"] {
+    background: transparent;
+    color: ${text1};
+    border: 1px solid ${line2};
+    border-radius: 999px;
+    min-height: 32px;
+    max-height: 32px;
+    padding: 0 14px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+QPushButton[logToolbarGhost="true"]:hover {
+    background: ${bg3};
+    border-color: ${line3};
+}
+
+QPushButton[logToolbarGhost="true"]:disabled {
+    color: ${text3};
+    background: transparent;
+    border-color: ${line1};
+}
+
+/* D3: Logs footer folder link — mono 12, accent color, underline */
+QLabel[labelRole="logFolderLink"] {
+    font-family: ${font-mono};
+    font-size: 12px;
+    color: ${accent};
+    text-decoration: underline;
+}
+
+QLabel[labelRole="logFolderLink"]:hover {
+    color: ${accent-hover};
+}
+
+/* D4: Metadata bar buttons — ghost sm (h32, radius 999) */
+QPushButton#resultCopyPathBtn,
+QPushButton#resultRenameBtn {
+    border-radius: 999px;
+    min-height: 32px;
+    max-height: 32px;
+    padding: 0 14px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+/* D4: Delete button gets coral danger hover */
+QPushButton#resultDeleteBtn {
+    border-radius: 999px;
+    min-height: 32px;
+    max-height: 32px;
+    padding: 0 14px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+QPushButton#resultDeleteBtn:hover {
+    color: ${err};
+    border-color: rgba(224, 120, 108, 0.52);
+    background: rgba(224, 120, 108, 0.10);
+}
+
 QLineEdit,
 QComboBox,
 QKeySequenceEdit {
@@ -2209,7 +2288,7 @@ QComboBox QAbstractItemView {
     border: 1px solid ${line2};
     border-radius: ${radius-md}px;
     padding: 4px;
-    selection-background-color: rgba(155, 217, 210, 0.2);
+    selection-background-color: ${accent-soft};
     selection-color: ${text0};
     color: ${text1};
     outline: none;
@@ -2228,7 +2307,7 @@ QComboBox QAbstractItemView::item:hover {
 }
 
 QComboBox QAbstractItemView::item:selected {
-    background: rgba(155, 217, 210, 0.22);
+    background: ${accent-soft};
     color: ${text0};
 }
 
@@ -2256,7 +2335,6 @@ QPushButton:disabled {
     color: ${text3};
     background: ${bg2};
     border-color: ${line1};
-    opacity: 0.72;
 }
 
 QPushButton:focus {
@@ -2401,7 +2479,7 @@ QRadioButton::indicator:checked {
 }
 
 QRadioButton::indicator:hover {
-    border-color: rgba(155, 217, 210, 102);
+    border-color: ${accent-line};
 }
 
 QScrollBar:vertical {
@@ -2687,10 +2765,24 @@ QLabel[labelRole="errorText"] {
     color: ${err};
 }
 
+/* #07: ghost/utility/dockAction disabled — dim text, line border (not line2),
+   no hover response. Applied after the base :disabled block to override specificity. */
 QPushButton[role="ghost"]:disabled,
-QPushButton[role="utility"]:disabled {
+QPushButton[role="utility"]:disabled,
+QPushButton[dockAction="ghost"]:disabled {
     color: ${text3};
-    background: ${bg2};
+    background: transparent;
+    border-color: ${line1};
+    /* Qt QSS has no `cursor` property (disabled widgets ignore the pointer
+       cursor anyway); declaring one logs an "Unknown property" warning per
+       style application and floods the session log. */
+}
+
+QPushButton[role="ghost"]:disabled:hover,
+QPushButton[role="utility"]:disabled:hover,
+QPushButton[dockAction="ghost"]:disabled:hover {
+    color: ${text3};
+    background: transparent;
     border-color: ${line1};
 }
 

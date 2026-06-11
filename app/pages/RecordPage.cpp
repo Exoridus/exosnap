@@ -158,7 +158,7 @@ QString videoCodecLabel(capability::VideoCodec codec) {
 QString audioCodecLabel(capability::AudioCodec codec) {
     switch (codec) {
     case capability::AudioCodec::Opus:
-        return QStringLiteral("OPUS");
+        return QStringLiteral("Opus"); // D4: display casing — never OPUS
     case capability::AudioCodec::AacMf:
         return QStringLiteral("AAC");
     case capability::AudioCodec::Pcm:
@@ -193,7 +193,7 @@ QString videoCodecLabel(recorder_core::VideoCodec codec) {
 QString audioCodecLabel(recorder_core::AudioCodec codec) {
     switch (codec) {
     case recorder_core::AudioCodec::Opus:
-        return QStringLiteral("OPUS");
+        return QStringLiteral("Opus"); // D4: display casing — never OPUS
     case recorder_core::AudioCodec::AacMf:
         return QStringLiteral("AAC");
     }
@@ -6002,18 +6002,19 @@ void RecordPage::updateRecentRecordingsSection() {
         row_layout->setContentsMargins(4, 2, 4, 2);
         row_layout->setSpacing(6);
 
-        // Filename button — DF-09: fixed-width column with elided text + full-path tooltip.
-        // The 260px cap prevents long filenames from squeezing the size/duration info column.
-        static constexpr int kFilenameColWidth = 260;
+        // Filename button — #02: min-width 280px, ElideMiddle, padding 8/12, mono 12.
+        // Year start and .mkv extension must survive elision.
         auto* name_btn = new QPushButton(row);
         name_btn->setObjectName(QStringLiteral("recentItemName_%1").arg(index));
         name_btn->setProperty("role", "ghost");
+        name_btn->setProperty("recentItemChip", true);
         name_btn->setCursor(Qt::PointingHandCursor);
-        name_btn->setFixedWidth(kFilenameColWidth);
-        // Elide the label at render time using the button's own font metrics.
+        name_btn->setMinimumWidth(280);
+        // Elide using the button's own font metrics at its actual minimum width.
+        // Reserve 24px for horizontal padding so elide and display widths match.
+        const int elide_width = std::max(280, name_btn->minimumWidth()) - 24;
         const QFontMetrics fm(name_btn->font());
-        // Reserve ~24px for internal padding (ghost button horizontal inset).
-        const QString elided = fm.elidedText(rec.fileName(), Qt::ElideMiddle, kFilenameColWidth - 24);
+        const QString elided = fm.elidedText(rec.fileName(), Qt::ElideMiddle, elide_width);
         name_btn->setText(elided);
         const QString full_path = rec.fileExists() ? rec.file_path : QStringLiteral("File missing: ") + rec.file_path;
         name_btn->setToolTip(full_path);
@@ -6021,7 +6022,7 @@ void RecordPage::updateRecentRecordingsSection() {
         const int name_idx = index;
         QObject::connect(name_btn, &QPushButton::clicked, this, [this, name_idx]() { onRecentItemOpen(name_idx); });
 
-        // Size + duration info
+        // Size + duration info — D4: history rows own name + size · duration; no Folder button
         const QString size_text =
             rec.file_size_bytes > 0
                 ? QString::fromStdWString(RecordViewModel::FormatBytes(static_cast<uint64_t>(rec.file_size_bytes)))
@@ -6031,18 +6032,10 @@ void RecordPage::updateRecentRecordingsSection() {
         info_label->setObjectName(QStringLiteral("recentItemInfo_%1").arg(index));
         info_label->setProperty("labelRole", "recentItemInfo");
 
-        // Open folder button
-        auto* open_btn = new QPushButton(QStringLiteral("Folder"), row);
-        open_btn->setObjectName(QStringLiteral("recentItemOpen_%1").arg(index));
-        open_btn->setProperty("role", "ghost");
-        open_btn->setCursor(Qt::PointingHandCursor);
-        open_btn->setEnabled(rec.fileExists());
-        QObject::connect(open_btn, &QPushButton::clicked, this,
-                         [this, name_idx]() { onRecentItemOpenFolder(name_idx); });
+        // D4: per-row "Folder" button removed — the dock's folder icon covers the latest file.
 
         row_layout->addWidget(name_btn);
         row_layout->addWidget(info_label, 1);
-        row_layout->addWidget(open_btn);
 
         recent_items_layout_->addWidget(row);
         ++index;
