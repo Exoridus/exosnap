@@ -46,6 +46,12 @@ project's GitHub Release.
 ExoSnap 0.1.0 is a pre-v1 preview. Settings, preset, and recording-history file
 formats are not frozen and may change incompatibly before 1.0.0.
 ]]></description>
+    <!-- exosnap.exe and the shipped Qt6 DLLs link the dynamic MSVC runtime (/MD);
+         the MSI does not bundle vcruntime140/msvcp140. Without this dependency a
+         clean machine fails to launch with STATUS_DLL_NOT_FOUND (0xC0000135). -->
+    <dependencies>
+      <dependency id="vcredist140" />
+    </dependencies>
   </metadata>
   <files>
     <file src="tools\**" target="tools" />
