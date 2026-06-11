@@ -485,6 +485,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     });
     connect(title_bar_, &ui::chrome::OperationalTitleBar::closeRequested, this, &QWidget::close);
     connect(record_page_, &RecordPage::chromeStateChanged, this, &MainWindow::onRecordChromeStateChanged);
+    // DF-11: wire drop count from recording stats into the titlebar Recording pill.
+    connect(record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
+            [this](const QString& /*elapsed*/, const QString& /*bitrate*/, const QString& drop_text,
+                   const QString& /*size*/) {
+                if (title_bar_) {
+                    bool ok = false;
+                    const int drops = drop_text.toInt(&ok);
+                    title_bar_->setRecordingDropCount(ok ? drops : 0);
+                }
+            });
     connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { navigateToPage(kSettingsPageIndex); });
     connect(record_page_, &RecordPage::navigateToDiagnosticsPage, this,
             [this]() { navigateToPage(kDiagnosticsPageIndex); });

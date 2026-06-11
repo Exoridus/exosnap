@@ -119,9 +119,10 @@ TEST_F(OperationalTitleBarTest, StatusPill_ReflectsReadyRecordingPaused) {
     EXPECT_EQ(pill->text(), QStringLiteral("Paused"));
     EXPECT_EQ(pill->tone(), ui::widgets::StatusPill::Tone::Warn);
 
+    // DF-15: Countdown uses Info (azure) — visually distinct from amber Warn (Paused).
     bar.setStatusLabel(QStringLiteral("COUNTDOWN"));
     EXPECT_EQ(pill->text(), QStringLiteral("Countdown"));
-    EXPECT_EQ(pill->tone(), ui::widgets::StatusPill::Tone::Warn);
+    EXPECT_EQ(pill->tone(), ui::widgets::StatusPill::Tone::Info);
 }
 
 TEST_F(OperationalTitleBarTest, StatusPill_ShowsSavedAfterCompletedRecording) {
@@ -256,6 +257,69 @@ TEST_F(OperationalTitleBarTest, RecordingBorder_NeutralAfterSaved) {
     bar.setRecordingActive(false);
     bar.setStatusLabel(QStringLiteral("SAVED"));
     EXPECT_FALSE(bar.isRecordingActive());
+}
+
+// ── DF-11: Recording pill drop-frame telemetry ───────────────────────────────
+
+TEST_F(OperationalTitleBarTest, RecordingPill_ShowsZeroDropsAsPlainLabel) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+
+    auto* pill = bar.findChild<ui::widgets::StatusPill*>(QStringLiteral("titlebarStatusChip"));
+    ASSERT_NE(pill, nullptr);
+
+    bar.setRecordingActive(true);
+    bar.setStatusLabel(QStringLiteral("REC"));
+    bar.setRecordingDropCount(0);
+    // No drops: pill reads "Recording" without any suffix.
+    EXPECT_EQ(pill->text(), QStringLiteral("Recording"));
+}
+
+TEST_F(OperationalTitleBarTest, RecordingPill_ShowsDropCountWhenNonZero) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+
+    auto* pill = bar.findChild<ui::widgets::StatusPill*>(QStringLiteral("titlebarStatusChip"));
+    ASSERT_NE(pill, nullptr);
+
+    bar.setRecordingActive(true);
+    bar.setStatusLabel(QStringLiteral("REC"));
+    bar.setRecordingDropCount(3);
+    EXPECT_EQ(pill->text(), QStringLiteral("Recording · 3↓"));
+}
+
+TEST_F(OperationalTitleBarTest, RecordingPill_DropCountResetOnRecordingStop) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+
+    auto* pill = bar.findChild<ui::widgets::StatusPill*>(QStringLiteral("titlebarStatusChip"));
+    ASSERT_NE(pill, nullptr);
+
+    bar.setRecordingActive(true);
+    bar.setStatusLabel(QStringLiteral("REC"));
+    bar.setRecordingDropCount(5);
+    EXPECT_EQ(pill->text(), QStringLiteral("Recording · 5↓"));
+
+    // After stopping, drop count resets; the next Recording session starts clean.
+    bar.setRecordingActive(false);
+    bar.setStatusLabel(QStringLiteral("READY"));
+    bar.setRecordingActive(true);
+    bar.setStatusLabel(QStringLiteral("REC"));
+    EXPECT_EQ(pill->text(), QStringLiteral("Recording"));
+}
+
+// ── DF-15: Starting state also uses Info tone ────────────────────────────────
+
+TEST_F(OperationalTitleBarTest, StatusPill_StartingUsesInfoTone) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+
+    auto* pill = bar.findChild<ui::widgets::StatusPill*>(QStringLiteral("titlebarStatusChip"));
+    ASSERT_NE(pill, nullptr);
+
+    bar.setStatusLabel(QStringLiteral("STARTING"));
+    EXPECT_EQ(pill->text(), QStringLiteral("Starting"));
+    EXPECT_EQ(pill->tone(), ui::widgets::StatusPill::Tone::Info);
 }
 
 } // namespace

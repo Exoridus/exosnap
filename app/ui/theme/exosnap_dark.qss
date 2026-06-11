@@ -599,16 +599,17 @@ QLabel[labelRole="recordPreviewSourceChip"][stateRole="muted"] {
     background: ${bg2};
 }
 
+/* DF-07: Source row chrome removed — borderless, transparent, reads as preview
+   context header without competing with the preview surface border. */
 QFrame#recordSourceChip {
-    background: rgba(21, 21, 23, 0.70);
-    border: 1px solid ${line1};
-    border-radius: ${radius-sm}px;
+    background: transparent;
+    border: none;
+    border-radius: 0;
 }
 
 QFrame#recordSourceChip[sourceLocked="true"] {
-    border-color: rgba(230, 197, 124, 0.48);
-    border-style: dashed;
-    background: rgba(36, 36, 40, 0.84);
+    background: transparent;
+    border: none;
 }
 
 QLabel[labelRole="recordSourceKind"] {
@@ -2125,7 +2126,7 @@ QPlainTextEdit#logViewer {
     border-radius: ${radius-md}px;
     padding: 12px 14px;
     font-family: ${font-mono};
-    font-size: 12px;
+    font-size: 12.5px;
     selection-background-color: ${accent-dim};
     selection-color: ${text0};
 }

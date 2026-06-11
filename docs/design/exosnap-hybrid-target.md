@@ -467,6 +467,56 @@ Default bindings:
 
 ---
 
+---
+
+## 11. Implementation Deviations (QSS / Widget fidelity)
+
+Tracked here so the design-tracking file reflects the actual shipped behavior.
+
+### DF-07 — Source row chrome (FIXED 2026-06-11)
+
+`QFrame#recordSourceChip` border and background removed. The source row is now a slim borderless strip that reads as preview context metadata without competing with the preview surface border. The locked state (`sourceLocked="true"`) retains no visual chrome.
+
+### DF-08 — TransportDock icon toggles: integrated audio meters (INTENTIONAL DEVIATION)
+
+The design spec shows plain icon toggles in the transport dock left zone. The implemented toggles include live 3-pixel RMS meter strips rendered below each circle icon, wired to real ~30 Hz audio callbacks (see AUDIO-METER-R3A). This is an intentional product feature — richer than the plain `IconToggle` in the spec.
+
+### DF-09 — Recent recordings filename column (FIXED 2026-06-11)
+
+The recent-recordings filename button is now a fixed-width 260px column with middle-ellipsis elision via `QFontMetrics::elidedText`. Full file path is in the tooltip.
+
+### DF-11 — Recording pill drop count (FIXED 2026-06-11)
+
+When dropped frames > 0 during recording, the titlebar Recording pill shows `"Recording · N↓"`. The drop count is reset when recording stops. Connected via `chromeRuntimeMetricsChanged` signal in MainWindow → `OperationalTitleBar::setRecordingDropCount()`.
+
+### DF-12 — Settings Audio "Separate track" control (FIXED 2026-06-11)
+
+The `QCheckBox "Separate track"` for each audio source (sys/app/mic) has been replaced with an `ExoToggle` pill toggle + "Separate track" `QLabel`. This aligns with the design spec toggle style for boolean rows. Signal is `QAbstractButton::toggled`.
+
+### DF-13 — Log viewer font size (FIXED 2026-06-11)
+
+`QPlainTextEdit#logViewer font-size` updated from `12px` to `12.5px`, matching the spec value of `12.5px / 1.7 line-height`. IBM Plex Mono is not bundled (deferred as OOS-05, `${font-mono}` falls back to JetBrains Mono); the size fix is applied regardless.
+
+### DF-14 — Hotkeys unset row dimming (SKIPPED-INVALID 2026-06-11)
+
+The "Unset" keycap chip already uses `stateRole="muted"` with `color: ${text3}; background: ${bg2}; border-color: ${line1}`. This is the lowest visible text tone — additional dimming would approach invisible. The existing QSS is the correct implementation.
+
+### DF-15 — Countdown pill color (FIXED 2026-06-11)
+
+Added `StatusPill::Tone::Info` (azure `#7FBEE8`). `COUNTDOWN` and `STARTING` states now use `Tone::Info` instead of `Tone::Warn` (amber). This makes Countdown/Starting visually distinct from Paused (amber). Paused remains on `Tone::Warn`.
+
+### DF-16 — Settings preset "Default" badge (SKIPPED-PRODUCT-DECISION 2026-06-11)
+
+The `presetDefaultBadge` is an intentional indicator that the selected preset is the startup default — it is NOT a dirty-state indicator. Changing it would remove a tested meaningful feature. Kept as-is.
+
+### DF-17 — AboutOverlay scrim opacity (SKIPPED-INVALID 2026-06-11)
+
+`kBackdropAlpha = 158 = 0.62 × 255`, exactly matching the design spec scrim of `rgba(8, 8, 10, 0.62)`. Already correct.
+
+### DF-18 — Hotkeys "Not in this build" section header subtitle (FIXED 2026-06-11)
+
+`planned_header->setMeta("Not in this build")` removed from HotkeysPage.cpp. The section is titled "PLANNED / UNAVAILABLE" which is self-explanatory. Each individual planned row already shows a "Not in this build" badge — the section-level repetition was redundant noise.
+
 ## Design package files
 
 Located at `.workspace/design/exosnap-hybrid-v3/`:

@@ -29,6 +29,7 @@ class QSpinBox;
 class QToolButton;
 
 namespace exosnap::ui::widgets {
+class ExoToggle;
 class VUMeterWidget;
 class WebcamSetupPanel;
 } // namespace exosnap::ui::widgets
@@ -235,11 +236,11 @@ class ConfigPage : public QWidget {
     QWidget* app_row_section_ = nullptr;
 
     QCheckBox* app_enabled_check_ = nullptr;
-    QCheckBox* app_separate_check_ = nullptr;
+    ui::widgets::ExoToggle* app_separate_check_ = nullptr; // DF-12: pill toggle replaces QCheckBox
     QLabel* app_source_label_ = nullptr;
 
     QCheckBox* mic_enabled_check_ = nullptr;
-    QCheckBox* mic_separate_check_ = nullptr;
+    ui::widgets::ExoToggle* mic_separate_check_ = nullptr; // DF-12: pill toggle replaces QCheckBox
     QComboBox* mic_device_combo_ = nullptr;
     // Compact Rescan affordance for the Settings Audio card.
     // Emits audioRescanRequested() which MainWindow routes to audio_notifier_.rescan().
@@ -249,7 +250,7 @@ class ConfigPage : public QWidget {
     std::vector<recorder_core::AudioInputDeviceInfo> mic_devices_;
 
     QCheckBox* sys_enabled_check_ = nullptr;
-    QCheckBox* sys_separate_check_ = nullptr;
+    ui::widgets::ExoToggle* sys_separate_check_ = nullptr; // DF-12: pill toggle replaces QCheckBox
     QLabel* sys_source_label_ = nullptr;
 
     QLineEdit* destination_edit_ = nullptr;

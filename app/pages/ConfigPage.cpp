@@ -32,6 +32,7 @@
 #include "../models/RecordingPreset.h"
 #include "../services/WebcamService.h"
 #include "../ui/widgets/ComboBoxWheelFilter.h"
+#include "../ui/widgets/ExoToggle.h"
 #include "../ui/widgets/VUMeterWidget.h"
 #include "../ui/widgets/WebcamSetupPanel.h"
 #include "../viewmodels/PresentationStateBuilder.h"
@@ -545,23 +546,29 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     audio_panel_layout->addWidget(makeCardTitle(QStringLiteral("Audio"), audio_panel));
 
     // Helper: build a source row directly into a given layout+parent.
+    // DF-12: separate_check is now an ExoToggle pill (was QCheckBox "Separate track").
     auto makeSourceRowInto = [&](QVBoxLayout* target_layout, QWidget* target_parent, const QString& title,
-                                 QCheckBox*& enabled_check, QCheckBox*& separate_check, QLabel*& source_label,
-                                 ui::widgets::VUMeterWidget*& meter_out, QLabel*& db_label_out) {
+                                 QCheckBox*& enabled_check, ui::widgets::ExoToggle*& separate_check,
+                                 QLabel*& source_label, ui::widgets::VUMeterWidget*& meter_out, QLabel*& db_label_out) {
         auto* row = new QHBoxLayout();
         row->setSpacing(8);
 
         enabled_check = new QCheckBox(title, target_parent);
-        separate_check = new QCheckBox(QStringLiteral("Separate track"), target_parent);
 
         db_label_out = new QLabel(QStringLiteral("–"), target_parent);
         db_label_out->setProperty("labelRole", "muted");
         db_label_out->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         db_label_out->setMinimumWidth(52);
 
+        // DF-12: pill toggle + label pair replaces the "Separate track" QCheckBox.
+        separate_check = new ui::widgets::ExoToggle(target_parent);
+        auto* separate_label = new QLabel(QStringLiteral("Separate track"), target_parent);
+        separate_label->setProperty("labelRole", "muted");
+
         row->addWidget(enabled_check);
         row->addStretch();
         row->addWidget(db_label_out);
+        row->addWidget(separate_label);
         row->addWidget(separate_check);
         target_layout->addLayout(row);
 
@@ -943,9 +950,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(app_enabled_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioAppToggled);
     connect(mic_enabled_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioMicToggled);
     connect(sys_enabled_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioSysToggled);
-    connect(app_separate_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioAppSeparateToggled);
-    connect(mic_separate_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioMicSeparateToggled);
-    connect(sys_separate_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioSysSeparateToggled);
+    // DF-12: ExoToggle inherits QAbstractButton::toggled — same connection pattern.
+    connect(app_separate_check_, &QAbstractButton::toggled, this, &ConfigPage::onAudioAppSeparateToggled);
+    connect(mic_separate_check_, &QAbstractButton::toggled, this, &ConfigPage::onAudioMicSeparateToggled);
+    connect(sys_separate_check_, &QAbstractButton::toggled, this, &ConfigPage::onAudioSysSeparateToggled);
     connect(mic_device_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onMicDeviceChanged);
     connect(audio_rescan_btn_, &QPushButton::clicked, this, &ConfigPage::audioRescanRequested);

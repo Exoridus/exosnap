@@ -53,6 +53,8 @@ class OperationalTitleBar : public QWidget {
     bool isRecordingActive() const noexcept;
 
     void setStatusLabel(const QString& status_text);
+    // DF-11: updates dropped-frame counter shown in the Recording pill (no-op outside Recording state).
+    void setRecordingDropCount(int drops);
 
     void setMaximizedState(bool maximized);
 
@@ -89,6 +91,7 @@ class OperationalTitleBar : public QWidget {
 
     bool recording_active_ = false;
     QString status_label_ = QStringLiteral("READY");
+    int recording_drop_count_ = 0; // DF-11: dropped frames shown in Recording pill
 
     void refreshStatusChip();
 };
