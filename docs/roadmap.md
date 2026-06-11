@@ -12,8 +12,9 @@ their own releases instead of being forced into oversized ones.
 
 ## Architecture guardrails
 
-These decisions govern new encoder/container work. They are recorded here today; the next
-architecture wave (`ROADMAP-AND-ADR-FOUNDATION-R1`) promotes them to tracked ADRs.
+These decisions govern new encoder/container work. They are tracked as ADRs 0006–0012 under
+`docs/decisions/` (plus ADR 0013 for monitor capture). The summaries below exist for quick
+reference; the ADRs are the authoritative source for rationale and detail.
 
 ### Encoders
 
@@ -165,6 +166,9 @@ These underpin multiple versions and must not be scattered into UI `if`-chains:
 
 ## Next step
 
-`ROADMAP-AND-ADR-FOUNDATION-R1` — promote the architecture guardrails above (native AMF/QSV, x264,
-fMP4, update system, capability model, final codec/container matrix) from this roadmap into tracked
-ADRs, so the rationale lives in the repository rather than only in planning notes.
+**v0.2.0 — wave 1: fMP4 backend + crash-resilient fragments + recovery**
+
+The first post-0.1.0 work slice is the reliability foundation described in the 0.2.0 row above.
+The fMP4 backend library choice (libavformat vs. controlled ISO-BMFF writer) is intentionally
+deferred to the start of this slice and will be documented in a follow-on ADR; see ADR 0008 for
+the criteria that will govern that decision.
