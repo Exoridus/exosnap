@@ -1,60 +1,28 @@
-# WinGet Manifest Template — Codexo.ExoSnap
+# WinGet manifests — Codexo.ExoSnap
 
-**Status:** Template only. Not submitted to WinGet. Not published.
+Source-of-truth WinGet manifests for ExoSnap, mirroring the `microsoft/winget-pkgs`
+layout under [`manifests/c/Codexo/ExoSnap/<version>/`](manifests/c/Codexo/ExoSnap).
 
-This template documents the expected future WinGet manifest structure for ExoSnap.
-All values marked `REQUIRED_BEFORE_SUBMISSION` must be filled before submission.
+Each version directory holds the standard multi-file manifest set (schema 1.10.0):
 
-## Package Identity
+- `Codexo.ExoSnap.yaml` — version manifest
+- `Codexo.ExoSnap.installer.yaml` — `wix` MSI installer (machine scope), with the
+  release `InstallerSha256`, `ProductCode`, and the permanent `UpgradeCode`
+- `Codexo.ExoSnap.locale.en-US.yaml` — default-locale metadata
 
-```yaml
-PackageIdentifier: Codexo.ExoSnap
-Publisher: Codexo
-PackageName: ExoSnap
-License: GPL-3.0-or-later
-LicenseUrl: https://github.com/Exoridus/exosnap/blob/main/LICENSE
-PackageUrl: https://github.com/Exoridus/exosnap
-Description: Windows-native diagnostics-first recording application
-Moniker: exosnap
-Tags:
-  - recorder
-  - screen-capture
-  - nvenc
-  - av1
-```
+## Submission
 
-## Installer
-
-```yaml
-PackageVersion: REQUIRED_BEFORE_SUBMISSION  # e.g. 0.1.0
-InstallerType: wix
-Architecture: x64
-Scope: machine
-InstallerUrl: REQUIRED_BEFORE_SUBMISSION   # URL to ExoSnap-<version>-windows-x64.msi
-InstallerSha256: REQUIRED_BEFORE_SUBMISSION
-ProductCode: REQUIRED_BEFORE_SUBMISSION
-UpgradeBehavior: install
-ReleaseDate: REQUIRED_BEFORE_SUBMISSION
-ReleaseNotesUrl: REQUIRED_BEFORE_SUBMISSION
-MinimumOSVersion: 10.0.17763.0
-```
-
-## Future Submission
-
-Use `wingetcreate` to generate and submit the manifest:
+Validate, then submit to `microsoft/winget-pkgs` with the standalone tooling:
 
 ```powershell
-wingetcreate new `
-  --PackageIdentifier Codexo.ExoSnap `
-  --PackageVersion <version> `
-  --InstallerType wix `
-  --InstallerUrl <url> `
-  --InstallerSha256 <sha256> `
-  https://github.com/Exoridus/exosnap/releases/download/v<version>/ExoSnap-<version>-windows-x64.msi
+winget validate --manifest packaging/winget/manifests/c/Codexo/ExoSnap/<version>
+wingetcreate submit --prtitle "New package: Codexo.ExoSnap version <version>" `
+  --token <github-token> packaging/winget/manifests/c/Codexo/ExoSnap/<version>
 ```
 
-**Do not submit until:**
-1. A public GitHub Release exists
-2. The MSI is publicly downloadable
-3. The repository is public
-4. All product decisions are finalized
+The installer always points at the immutable public GitHub Release MSI asset and its
+verified SHA-256 — never a mutable or pre-release URL.
+
+## Status
+
+- **0.1.0** — submitted: https://github.com/microsoft/winget-pkgs/pull/386449
