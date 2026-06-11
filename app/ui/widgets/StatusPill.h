@@ -15,6 +15,7 @@ class StatusPill : public QWidget {
         Warn,
         Blocked,
         Neutral,
+        Info, // DF-15: azure accent for pre-recording states (Countdown, Starting)
     };
     Q_ENUM(Tone)
 

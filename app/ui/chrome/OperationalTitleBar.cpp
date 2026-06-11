@@ -160,6 +160,8 @@ void OperationalTitleBar::setRecordingActive(bool recording) {
     if (recording_active_ == recording)
         return;
     recording_active_ = recording;
+    if (!recording_active_)
+        recording_drop_count_ = 0; // DF-11: reset drop count when recording stops
     setProperty("recording", recording_active_);
     if (brand_mark_ != nullptr)
         brand_mark_->setRecording(recording_active_);
@@ -176,6 +178,13 @@ bool OperationalTitleBar::isRecordingActive() const noexcept {
 void OperationalTitleBar::setStatusLabel(const QString& status_text) {
     const QString normalized = status_text.trimmed().toUpper();
     status_label_ = normalized.isEmpty() ? QStringLiteral("READY") : normalized;
+    refreshStatusChip();
+}
+
+void OperationalTitleBar::setRecordingDropCount(int drops) {
+    if (recording_drop_count_ == drops)
+        return;
+    recording_drop_count_ = drops;
     refreshStatusChip();
 }
 
@@ -306,7 +315,11 @@ void OperationalTitleBar::refreshStatusChip() {
     if (status.contains(QStringLiteral("REC"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Recording);
         status_pill_->setDotVisible(true);
-        status_pill_->setText(QStringLiteral("Recording"));
+        // DF-11: show dropped frame count inline when any frames have been dropped.
+        const QString rec_text = recording_drop_count_ > 0
+                                     ? QStringLiteral("Recording · %1↓").arg(recording_drop_count_)
+                                     : QStringLiteral("Recording");
+        status_pill_->setText(rec_text);
     } else if (status.contains(QStringLiteral("PAUSED"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
         status_pill_->setDotVisible(true);
@@ -316,11 +329,13 @@ void OperationalTitleBar::refreshStatusChip() {
         status_pill_->setDotVisible(true);
         status_pill_->setText(QStringLiteral("Stopping"));
     } else if (status.contains(QStringLiteral("STARTING"))) {
-        status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
+        // DF-15: azure Info tone for pre-recording states — visually distinct from amber Warn (Paused).
+        status_pill_->setTone(ui::widgets::StatusPill::Tone::Info);
         status_pill_->setDotVisible(true);
         status_pill_->setText(QStringLiteral("Starting"));
     } else if (status.contains(QStringLiteral("COUNTDOWN"))) {
-        status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
+        // DF-15: azure Info tone for Countdown — distinct from amber Paused/Warn.
+        status_pill_->setTone(ui::widgets::StatusPill::Tone::Info);
         status_pill_->setDotVisible(true);
         status_pill_->setText(QStringLiteral("Countdown"));
     } else if (status.contains(QStringLiteral("CHECK"))) {

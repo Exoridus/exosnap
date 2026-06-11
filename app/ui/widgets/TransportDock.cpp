@@ -5,8 +5,10 @@
 
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QPushButton>
+#include <QSize>
 #include <QStyle>
 
 namespace exosnap::ui::widgets {
@@ -79,12 +81,17 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     filename_link_->setObjectName(QStringLiteral("recordDockFilename"));
     filename_link_->setCursor(Qt::PointingHandCursor);
     filename_link_->setFlat(true);
-    open_folder_btn_ = new QPushButton(QStringLiteral("Open folder"), completed_row_);
+    // Icon-only 38×38 folder button (DF-04): no text label, fixed size, radius-10 via QSS.
+    // Tooltip and accessible name "Open folder" are preserved for UIA/capture tooling.
+    open_folder_btn_ = new QPushButton(completed_row_);
     open_folder_btn_->setObjectName(QStringLiteral("recordDockOpenFolder"));
     open_folder_btn_->setProperty("dockAction", QStringLiteral("ghost"));
     open_folder_btn_->setCursor(Qt::PointingHandCursor);
-    // Match the primary action-button height for a balanced completed row.
-    open_folder_btn_->setMinimumHeight(40);
+    open_folder_btn_->setToolTip(QStringLiteral("Open folder"));
+    open_folder_btn_->setAccessibleName(QStringLiteral("Open folder"));
+    open_folder_btn_->setIcon(QIcon(QStringLiteral(":/theme/icons/folder.svg")));
+    open_folder_btn_->setIconSize(QSize(18, 18));
+    open_folder_btn_->setFixedSize(38, 38);
     size_label_ = new QLabel(completed_row_);
     size_label_->setProperty("labelRole", QStringLiteral("recordDockSize"));
     completed_layout->addWidget(filename_link_);

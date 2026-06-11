@@ -93,8 +93,9 @@ HotkeysPage::HotkeysPage(QWidget* parent) : QWidget(parent) {
     layout->addWidget(active_panel);
 
     // ── Planned section ───────────────────────────────────────────────────────────────────────
+    // DF-18: section-level "Not in this build" meta subtitle removed — redundant with the
+    // per-row "Not in this build" badge on every planned row.
     auto* planned_header = new ui::widgets::SectionRuleHeader(QStringLiteral("PLANNED / UNAVAILABLE"), content);
-    planned_header->setMeta(QStringLiteral("Not in this build"));
     layout->addWidget(planned_header);
 
     auto* planned_panel = new QFrame(content);

@@ -121,8 +121,10 @@ TEST_F(ConfigPageTest, LegacyQualityCards_AreRemoved) {
 TEST_F(ConfigPageTest, AudioSourceCheckboxesExist) {
     ConfigPage page(output_defaults_, video_defaults_);
 
+    // 3 source-enable QCheckBoxes (sys / app / mic).
+    // The "Separate track" controls are ExoToggle pill-toggles (DF-12 — QCheckBox replaced).
     const auto checks = page.findChildren<QCheckBox*>();
-    EXPECT_GE(checks.size(), 6);
+    EXPECT_GE(checks.size(), 3);
 }
 
 TEST_F(ConfigPageTest, WebcamControlsExist) {

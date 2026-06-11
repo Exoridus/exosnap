@@ -33,6 +33,11 @@ ToneColors ColorsFor(StatusPill::Tone tone) {
     case StatusPill::Tone::Blocked:
         return {QColor(ExoSnapPalette::kErr), QColor(240, 91, 84, 128), QColor(240, 91, 84, 42),
                 QColor(ExoSnapPalette::kErr)};
+    case StatusPill::Tone::Info:
+        // DF-15: azure/blue-grey accent — visually distinct from amber Warn and
+        // coral Recording, used for pre-recording transitional states (Countdown, Starting).
+        return {QColor(ExoSnapPalette::kInfo), QColor(127, 190, 232, 110), QColor(127, 190, 232, 24),
+                QColor(ExoSnapPalette::kInfo)};
     case StatusPill::Tone::Neutral:
     default:
         return {QColor(ExoSnapPalette::kText1), QColor(ExoSnapPalette::kLine2), QColor(50, 46, 43, 0),

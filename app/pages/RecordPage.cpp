@@ -6002,12 +6002,21 @@ void RecordPage::updateRecentRecordingsSection() {
         row_layout->setContentsMargins(4, 2, 4, 2);
         row_layout->setSpacing(6);
 
-        // Filename button
-        auto* name_btn = new QPushButton(rec.fileName(), row);
+        // Filename button — DF-09: fixed-width column with elided text + full-path tooltip.
+        // The 260px cap prevents long filenames from squeezing the size/duration info column.
+        static constexpr int kFilenameColWidth = 260;
+        auto* name_btn = new QPushButton(row);
         name_btn->setObjectName(QStringLiteral("recentItemName_%1").arg(index));
         name_btn->setProperty("role", "ghost");
         name_btn->setCursor(Qt::PointingHandCursor);
-        name_btn->setToolTip(rec.fileExists() ? rec.file_path : QStringLiteral("File missing: ") + rec.file_path);
+        name_btn->setFixedWidth(kFilenameColWidth);
+        // Elide the label at render time using the button's own font metrics.
+        const QFontMetrics fm(name_btn->font());
+        // Reserve ~24px for internal padding (ghost button horizontal inset).
+        const QString elided = fm.elidedText(rec.fileName(), Qt::ElideMiddle, kFilenameColWidth - 24);
+        name_btn->setText(elided);
+        const QString full_path = rec.fileExists() ? rec.file_path : QStringLiteral("File missing: ") + rec.file_path;
+        name_btn->setToolTip(full_path);
         name_btn->setEnabled(rec.fileExists());
         const int name_idx = index;
         QObject::connect(name_btn, &QPushButton::clicked, this, [this, name_idx]() { onRecentItemOpen(name_idx); });
