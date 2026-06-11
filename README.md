@@ -13,6 +13,24 @@ captures `APP`, `SYS`, and `MIC` audio sources with reorderable / mergeable trac
 stores recordings primarily as `MKV + H.264 + AAC`;
 blocks invalid recordings before start; and exposes rich diagnostics and live recording metrics through a simple dark-mode-first UI.
 
+## Current release
+
+- **Version:** `0.1.0` — a **pre-v1 Windows preview**, not the final 1.0 release.
+- **Platform:** Windows 10/11 x64.
+- **Current hardware encoder:** NVIDIA NVENC (an NVIDIA GPU with supported NVENC
+  is currently required; AMD, Intel, and software encoding are not supported in
+  0.1.0).
+- **Distribution:** portable Windows x64 ZIP (no installer, no code signing yet).
+- **Containers:** MKV, WebM, MP4. Recording split is supported for MKV and WebM;
+  **MP4 split is not available** and progressive MP4 is not crash-safe.
+- **Schema notice:** settings, presets, and history formats are pre-v1 and may
+  change incompatibly before 1.0.0.
+
+See [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for the full current support
+boundary and [`README-PORTABLE.md`](README-PORTABLE.md) for the portable-release
+quick start. The full strategic roadmap is tracked separately and is not a
+0.1.0 commitment.
+
 ## Product defaults
 
 - **Theme:** Dark mode by default

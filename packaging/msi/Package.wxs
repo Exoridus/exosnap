@@ -1,0 +1,191 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <!--
+    ExoSnap MSI Installer
+    =====================
+    Package identity: Codexo.ExoSnap
+    UpgradeCode: 8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D (permanent)
+    ProductCode is auto-generated per build (*).
+    Sources files from the CMake install staging tree.
+    User data is NOT installed or removed by this MSI.
+  -->
+
+  <Package Name="ExoSnap"
+           Manufacturer="Codexo"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D"
+           Scope="perMachine"
+           Language="1033"
+           Codepage="1252">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of ExoSnap is already installed."
+                  AllowSameVersionUpgrades="yes" />
+
+    <Media Id="1" Cabinet="exosnap.cab" EmbedCab="yes" />
+
+    <!-- Install to %ProgramFiles%\Codexo\ExoSnap\ -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="ManufacturerFolder" Name="Codexo">
+        <Directory Id="INSTALLFOLDER" Name="ExoSnap">
+          <Component Id="RootExe" Guid="*">
+            <File Source="$(var.StagingDir)\exosnap.exe" KeyPath="yes" />
+          </Component>
+          <Component Id="RootQtConf" Guid="*">
+            <File Source="$(var.StagingDir)\qt.conf" KeyPath="yes" />
+          </Component>
+          <Component Id="RootLicense" Guid="*">
+            <File Source="$(var.StagingDir)\LICENSE" KeyPath="yes" />
+          </Component>
+          <Component Id="RootNotices" Guid="*">
+            <File Source="$(var.StagingDir)\THIRD_PARTY_NOTICES.md" KeyPath="yes" />
+          </Component>
+          <Component Id="RootKnownLimitations" Guid="*">
+            <File Source="$(var.StagingDir)\KNOWN_LIMITATIONS.md" KeyPath="yes" />
+          </Component>
+          <Component Id="RootPortableReadme" Guid="*">
+            <File Source="$(var.StagingDir)\README-PORTABLE.md" KeyPath="yes" />
+          </Component>
+          <Component Id="Qt6Core" Guid="*">
+            <File Source="$(var.StagingDir)\Qt6Core.dll" KeyPath="yes" />
+          </Component>
+          <Component Id="Qt6Gui" Guid="*">
+            <File Source="$(var.StagingDir)\Qt6Gui.dll" KeyPath="yes" />
+          </Component>
+          <Component Id="Qt6Widgets" Guid="*">
+            <File Source="$(var.StagingDir)\Qt6Widgets.dll" KeyPath="yes" />
+          </Component>
+          <Component Id="Qt6Svg" Guid="*">
+            <File Source="$(var.StagingDir)\Qt6Svg.dll" KeyPath="yes" />
+          </Component>
+          <Component Id="Qt6Network" Guid="*">
+            <File Source="$(var.StagingDir)\Qt6Network.dll" KeyPath="yes" />
+          </Component>
+          <Component Id="D3DCompiler47" Guid="*">
+            <File Source="$(var.StagingDir)\D3Dcompiler_47.dll" KeyPath="yes" />
+          </Component>
+
+          <Directory Id="PluginsFolder" Name="plugins">
+            <Directory Id="PlatformsFolder" Name="platforms">
+              <Component Id="PlatformQWindows" Guid="*">
+                <File Source="$(var.StagingDir)\plugins\platforms\qwindows.dll" KeyPath="yes" />
+              </Component>
+            </Directory>
+            <Directory Id="IconEnginesFolder" Name="iconengines">
+              <Component Id="IconEngineQSvg" Guid="*">
+                <File Source="$(var.StagingDir)\plugins\iconengines\qsvgicon.dll" KeyPath="yes" />
+              </Component>
+            </Directory>
+            <Directory Id="ImageFormatsFolder" Name="imageformats">
+              <Component Id="ImgFormatSvg" Guid="*">
+                <File Source="$(var.StagingDir)\plugins\imageformats\qsvg.dll" KeyPath="yes" />
+              </Component>
+              <Component Id="ImgFormatJpeg" Guid="*">
+                <File Source="$(var.StagingDir)\plugins\imageformats\qjpeg.dll" KeyPath="yes" />
+              </Component>
+              <Component Id="ImgFormatIco" Guid="*">
+                <File Source="$(var.StagingDir)\plugins\imageformats\qico.dll" KeyPath="yes" />
+              </Component>
+              <Component Id="ImgFormatGif" Guid="*">
+                <File Source="$(var.StagingDir)\plugins\imageformats\qgif.dll" KeyPath="yes" />
+              </Component>
+            </Directory>
+            <Directory Id="StylesFolder" Name="styles">
+              <Component Id="StyleModernWin" Guid="*">
+                <File Source="$(var.StagingDir)\plugins\styles\qmodernwindowsstyle.dll" KeyPath="yes" />
+              </Component>
+            </Directory>
+          </Directory>
+
+          <Directory Id="LicensesFolder" Name="licenses">
+            <Component Id="LicSpdlog" Guid="*">
+              <File Source="$(var.StagingDir)\licenses\spdlog.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="LicNlohmann" Guid="*">
+              <File Source="$(var.StagingDir)\licenses\nlohmann_json.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="LicTomlpp" Guid="*">
+              <File Source="$(var.StagingDir)\licenses\tomlplusplus.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="LicOpus" Guid="*">
+              <File Source="$(var.StagingDir)\licenses\opus.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="LicFdkAac" Guid="*">
+              <File Source="$(var.StagingDir)\licenses\fdk-aac.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="LicEbml" Guid="*">
+              <File Source="$(var.StagingDir)\licenses\libebml.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="LicMatroska" Guid="*">
+              <File Source="$(var.StagingDir)\licenses\libmatroska.txt" KeyPath="yes" />
+            </Component>
+            <Component Id="LicQt" Guid="*">
+              <File Source="$(var.StagingDir)\licenses\qt.txt" KeyPath="yes" />
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Start Menu shortcut (all-users, per-machine) -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="{C1D2E3F4-A5B6-7890-CDEF-1234567890AB}" KeyPath="yes">
+        <Shortcut Id="StartMenuExoSnap"
+                  Name="ExoSnap"
+                  Description="Windows-native recording application"
+                  Target="[INSTALLFOLDER]exosnap.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKLM"
+                       Key="Software\Codexo\ExoSnap"
+                       Name="installed"
+                       Value="1"
+                       Type="integer" />
+      </Component>
+    </StandardDirectory>
+
+    <!-- ARP (Add/Remove Programs) metadata -->
+    <Property Id="ARPCOMMENTS" Value="Windows-native diagnostics-first recording application" />
+    <Property Id="ARPCONTACT" Value="https://github.com/Exoridus/exosnap" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/Exoridus/exosnap" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/Exoridus/exosnap/issues" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPNOREPAIR" Value="0" />
+
+    <!-- Feature tree -->
+    <Feature Id="MainFeature"
+             Title="ExoSnap"
+             Level="1"
+             ConfigurableDirectory="INSTALLFOLDER"
+             Display="expand"
+             Description="ExoSnap recording application">
+      <ComponentRef Id="RootExe" />
+      <ComponentRef Id="RootQtConf" />
+      <ComponentRef Id="RootLicense" />
+      <ComponentRef Id="RootNotices" />
+      <ComponentRef Id="RootKnownLimitations" />
+      <ComponentRef Id="RootPortableReadme" />
+      <ComponentRef Id="Qt6Core" />
+      <ComponentRef Id="Qt6Gui" />
+      <ComponentRef Id="Qt6Widgets" />
+      <ComponentRef Id="Qt6Svg" />
+      <ComponentRef Id="Qt6Network" />
+      <ComponentRef Id="D3DCompiler47" />
+      <ComponentRef Id="PlatformQWindows" />
+      <ComponentRef Id="IconEngineQSvg" />
+      <ComponentRef Id="ImgFormatSvg" />
+      <ComponentRef Id="ImgFormatJpeg" />
+      <ComponentRef Id="ImgFormatIco" />
+      <ComponentRef Id="ImgFormatGif" />
+      <ComponentRef Id="StyleModernWin" />
+      <ComponentRef Id="LicSpdlog" />
+      <ComponentRef Id="LicNlohmann" />
+      <ComponentRef Id="LicTomlpp" />
+      <ComponentRef Id="LicOpus" />
+      <ComponentRef Id="LicFdkAac" />
+      <ComponentRef Id="LicEbml" />
+      <ComponentRef Id="LicMatroska" />
+      <ComponentRef Id="LicQt" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+
+  </Package>
+</Wix>

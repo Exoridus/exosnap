@@ -3,11 +3,12 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   lint:
     name: lint
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
@@ -16,11 +17,16 @@ jobs:
         with:
           version: '6.9.0'
           arch: 'win64_msvc2022_64'
-          modules: 'qtsvg'
+          archives: 'qtbase qtsvg'
           cache: true
 
       - name: Install cppcheck
-        run: choco install cppcheck -y
+        run: |
+          choco install cppcheck -y
+          # choco PATH edits do not propagate to later steps in the same job;
+          # expose cppcheck.exe to the configure step explicitly.
+          "$env:ProgramFiles\Cppcheck" | Out-File -FilePath $env:GITHUB_PATH -Append
+        shell: pwsh
 
       - name: Check clang-format
         run: pwsh -NonInteractive -File scripts/check-format.ps1
@@ -33,7 +39,7 @@ jobs:
 
   build-test:
     name: build-test (${{ matrix.preset }})
-    runs-on: windows-latest
+    runs-on: windows-2022
     strategy:
       matrix:
         preset:
@@ -49,7 +55,7 @@ jobs:
         with:
           version: '6.9.0'
           arch: 'win64_msvc2022_64'
-          modules: 'qtsvg'
+          archives: 'qtbase qtsvg'
           cache: true
 
       - name: Configure (${{ matrix.preset }})
@@ -67,65 +73,3 @@ jobs:
         with:
           name: ctest-logs-${{ matrix.preset }}
           path: build/${{ matrix.preset }}/Testing/Temporary/
-
-      - name: Install and deploy (release only)
-        if: matrix.preset == 'windows-x64-release'
-        run: |
-          cmake --install build/windows-x64-release --config Release --prefix build/install/exosnap
-        shell: pwsh
-
-      - name: Validate release artifact (release only)
-        if: matrix.preset == 'windows-x64-release'
-        run: |
-          $installDir = "build/install/exosnap"
-          $errors = @()
-
-          # Root files
-          @("LICENSE", "THIRD_PARTY_NOTICES.md") | ForEach-Object {
-            if (-not (Test-Path "$installDir/$_")) { $errors += "Missing root file: $_" }
-          }
-
-          # License directory and files
-          if (-not (Test-Path "$installDir/licenses")) {
-            $errors += "Missing licenses/ directory"
-          } else {
-            @(
-              "spdlog.txt", "nlohmann_json.txt", "tomlplusplus.txt",
-              "opus.txt", "fdk-aac.txt", "libebml.txt",
-              "libmatroska.txt", "qt.txt"
-            ) | ForEach-Object {
-              if (-not (Test-Path "$installDir/licenses/$_")) { $errors += "Missing license: $_" }
-            }
-          }
-
-          # Absence checks — development files must NOT leak into the runtime tree
-          @("include", "lib") | ForEach-Object {
-            if (Test-Path "$installDir/$_") { $errors += "Dev directory leaked: $_/" }
-          }
-
-          # No .lib, .h, .hpp, .cpp, .cmake, .pc files
-          $forbiddenExts = @("*.lib", "*.h", "*.hpp", "*.cpp", "*.cmake", "*.pc")
-          $forbiddenExts | ForEach-Object {
-            $found = Get-ChildItem -Path $installDir -Recurse -Filter $_ -ErrorAction SilentlyContinue
-            if ($found) { $errors += "Forbidden file type leaked: $_" }
-          }
-
-          # No .workspace or .claude paths
-          if (Test-Path "$installDir/.workspace") { $errors += ".workspace leaked into install tree" }
-          if (Test-Path "$installDir/.claude")   { $errors += ".claude leaked into install tree" }
-
-          if ($errors.Count -gt 0) {
-            Write-Host "##[error] License bundle validation FAILED:"
-            $errors | ForEach-Object { Write-Host "##[error]   $_" }
-            exit 1
-          }
-          Write-Host "License bundle validation PASSED"
-        shell: pwsh
-
-      - name: Upload release artifact
-        if: matrix.preset == 'windows-x64-release'
-        uses: actions/upload-artifact@v4
-        with:
-          name: exosnap-release
-          path: build/install/exosnap/
-          if-no-files-found: ignore

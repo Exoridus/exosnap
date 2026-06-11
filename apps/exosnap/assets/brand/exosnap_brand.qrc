@@ -1,9 +1,0 @@
-<RCC>
-    <qresource prefix="/brand">
-        <file>exosnap-logo.svg</file>
-        <file>exosnap-logo-idle.ico</file>
-        <file>exosnap-logo-recording.ico</file>
-        <file>exosnap-logo-light-bg-dark.ico</file>
-        <file>exosnap_wordmark-light-transparent.svg</file>
-    </qresource>
-</RCC>

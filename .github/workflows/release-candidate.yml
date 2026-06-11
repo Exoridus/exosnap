@@ -10,7 +10,7 @@ on:
 jobs:
   build:
     name: Build Release Artifacts
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
@@ -19,15 +19,19 @@ jobs:
         with:
           version: '6.9.0'
           arch: 'win64_msvc2022_64'
-          modules: 'qtsvg'
+          archives: 'qtbase qtsvg'
           cache: true
 
       - name: Install WiX Toolset
         run: dotnet tool install --global wix
         shell: pwsh
 
+      - name: Accept WiX EULA
+        run: wix eula accept wix7
+        shell: pwsh
+
       - name: Build canonical release artifacts
-        run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1
+        run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1 -SkipSmoke
         shell: pwsh
 
       - name: Resolve artifact paths

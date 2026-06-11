@@ -1,0 +1,5 @@
+#include "exosnap_resource.h"
+
+IDI_EXOSNAP_APP_ICON          ICON "assets/brand/exosnap-logo-idle.ico"
+IDI_EXOSNAP_APP_ICON_RECORDING ICON "assets/brand/exosnap-logo-recording.ico"
+IDI_EXOSNAP_APP_ICON_PAUSED   ICON "assets/brand/exosnap-logo-paused.ico"

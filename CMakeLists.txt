@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.27)
-project(exosnap LANGUAGES CXX)
+
+# Canonical version source of truth for the whole project. Every other version
+# form (application metadata, Windows VERSIONINFO, About surface, release
+# artifact name) is derived from PROJECT_VERSION — do not duplicate it elsewhere.
+project(exosnap VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -89,7 +93,10 @@ endif()
 add_subdirectory(libs/recorder_core)
 add_subdirectory(libs/capability)
 add_subdirectory(libs/recorder_facade)
-add_subdirectory(apps/recorder_cli)
-add_subdirectory(apps/exosnap)
-add_subdirectory(apps/probes)
+add_subdirectory(app)
 add_subdirectory(tests)
+
+option(EXOSNAP_BUILD_PROBES "Build ExoSnap developer probe executables" OFF)
+if(EXOSNAP_BUILD_PROBES)
+    add_subdirectory(tools/probes)
+endif()
