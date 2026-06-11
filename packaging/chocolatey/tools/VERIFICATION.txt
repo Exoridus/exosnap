@@ -1,0 +1,39 @@
+VERIFICATION
+
+Verification is intended to assist the Chocolatey moderators and the community in
+verifying that this package's contents are trustworthy.
+
+This is a download package: it does not embed the installer. At install time it
+downloads the official ExoSnap MSI from the project's GitHub Release, which is
+published by the software author (Codexo / Exoridus).
+
+Package software: ExoSnap 0.1.0
+Publisher / source: https://github.com/Exoridus/exosnap
+Release: https://github.com/Exoridus/exosnap/releases/tag/v0.1.0
+
+1. The installer downloaded by this package is:
+
+   x64 MSI:
+   https://github.com/Exoridus/exosnap/releases/download/v0.1.0/ExoSnap-0.1.0-windows-x64.msi
+
+2. Verify its checksum. In PowerShell:
+
+   (Get-FileHash '<downloaded-file>' -Algorithm SHA256).Hash
+
+   Or with the Chocolatey checksum tool:
+
+   checksum.exe -t sha256 -f '<downloaded-file>'
+
+   Expected value (also published as the .sha256 sidecar on the GitHub Release):
+
+   checksumType: sha256
+   checksum64:   6dedf7ecdd376afdf21952833caaba214b2b0d66ffecaf6a0b040e97acb577b6
+
+3. The same value is embedded in tools\chocolateyinstall.ps1, so the package will
+   refuse to install if the downloaded MSI does not match.
+
+LICENSE
+
+ExoSnap is licensed under GPL-3.0-or-later. The license file (tools\LICENSE.txt)
+is the project's LICENSE obtained from:
+  https://github.com/Exoridus/exosnap/blob/main/LICENSE

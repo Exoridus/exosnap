@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>exosnap</id>
+    <version>0.1.0</version>
+    <packageSourceUrl>https://github.com/Exoridus/exosnap/tree/main/packaging/chocolatey</packageSourceUrl>
+    <owners>Codexo</owners>
+    <title>ExoSnap</title>
+    <authors>Codexo</authors>
+    <projectUrl>https://github.com/Exoridus/exosnap</projectUrl>
+    <iconUrl>https://cdn.jsdelivr.net/gh/Exoridus/exosnap@v0.1.0/app/assets/brand/exosnap-logo.svg</iconUrl>
+    <copyright>Copyright 2026 Codexo</copyright>
+    <licenseUrl>https://github.com/Exoridus/exosnap/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <projectSourceUrl>https://github.com/Exoridus/exosnap</projectSourceUrl>
+    <docsUrl>https://github.com/Exoridus/exosnap/blob/main/README.md</docsUrl>
+    <bugTrackerUrl>https://github.com/Exoridus/exosnap/issues</bugTrackerUrl>
+    <tags>exosnap recorder screen-capture screen-recorder nvenc av1 webm mkv mp4 webcam diagnostics</tags>
+    <summary>Windows-native screen / application / region recorder with an NVIDIA NVENC pipeline, multi-track audio, and diagnostics.</summary>
+    <releaseNotes>https://github.com/Exoridus/exosnap/releases/tag/v0.1.0</releaseNotes>
+    <description><![CDATA[
+ExoSnap is a Windows-native screen / application / region recorder built around a
+high-performance NVIDIA NVENC pipeline, flexible container/codec profiles,
+multi-track audio routing, a webcam overlay, and built-in diagnostics.
+
+This package downloads and installs the official ExoSnap 0.1.0 MSI from the
+project's GitHub Release.
+
+## Highlights
+
+* Capture an application window, a monitor, or a screen region at CFR 60 fps.
+* NVIDIA NVENC hardware encoding: H.264 and AV1.
+* Multi-track audio (`APP`, `SYS`, `MIC`) with reorderable / mergeable layout.
+* Containers: MKV (default), WebM, MP4. Audio: AAC-LC, Opus.
+* Webcam picture-in-picture overlay, recording presets, rebindable global hotkeys.
+* Diagnostics-first: invalid recordings are blocked before start.
+
+## Requirements
+
+* Windows 10/11 x64.
+* An NVIDIA GPU with supported NVENC (AMD/Intel/software encoding are not supported in 0.1.0).
+* Microsoft Visual C++ 2022 x64 runtime.
+
+## Pre-v1 notice
+
+ExoSnap 0.1.0 is a pre-v1 preview. Settings, preset, and recording-history file
+formats are not frozen and may change incompatibly before 1.0.0.
+]]></description>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>
