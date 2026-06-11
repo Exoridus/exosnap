@@ -82,7 +82,7 @@ class MainWindow : public QMainWindow {
     void closeEvent(QCloseEvent* event) override;
 
     void applyRuntimeWindowIcon();
-    void switchRecordingIcon(bool recording);
+    void switchRecordingIcon(bool recording, bool paused);
     bool effectiveMaximizedState() const;
     void applyRestoredGeometry();
     void saveWindowGeometry();

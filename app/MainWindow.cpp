@@ -810,10 +810,11 @@ void MainWindow::applyRuntimeWindowIcon() {
     runtime_window_icon_bound_ = true;
 }
 
-void MainWindow::switchRecordingIcon(bool recording) {
-    // Switch the window/taskbar icon between the idle aperture mark and the coral
-    // recording variant. Qt's setWindowIcon updates the title-bar frame; WM_SETICON
-    // ensures the taskbar button also updates on Windows.
+void MainWindow::switchRecordingIcon(bool recording, bool paused) {
+    // Switch the window/taskbar icon between the idle aperture mark, the coral
+    // recording variant, and the amber paused variant. Qt's setWindowIcon updates
+    // the title-bar frame; WM_SETICON ensures the taskbar button also updates on
+    // Windows. Paused takes precedence over recording.
     //
     // Note: Windows may cache the EXE icon (shown before the app launches) even
     // after WM_SETICON succeeds for the running window. The taskbar *button* icon
@@ -821,7 +822,8 @@ void MainWindow::switchRecordingIcon(bool recording) {
     // icon shown in Explorer do not change at runtime — this is expected behavior.
     static const QString kIdlePath = QStringLiteral(":/brand/exosnap-logo-idle.ico");
     static const QString kRecordingPath = QStringLiteral(":/brand/exosnap-logo-recording.ico");
-    const QString& icon_path = recording ? kRecordingPath : kIdlePath;
+    static const QString kPausedPath = QStringLiteral(":/brand/exosnap-logo-paused.ico");
+    const QString& icon_path = paused ? kPausedPath : (recording ? kRecordingPath : kIdlePath);
 
     QIcon icon(icon_path);
     if (icon.isNull()) {
@@ -841,7 +843,8 @@ void MainWindow::switchRecordingIcon(bool recording) {
     if (inst == nullptr)
         return;
 
-    const WORD icon_id = recording ? IDI_EXOSNAP_APP_ICON_RECORDING : IDI_EXOSNAP_APP_ICON;
+    const WORD icon_id =
+        paused ? IDI_EXOSNAP_APP_ICON_PAUSED : (recording ? IDI_EXOSNAP_APP_ICON_RECORDING : IDI_EXOSNAP_APP_ICON);
     // LR_DEFAULTCOLOR | LR_SHARED: OS caches per (instance, id, size) tuple — safe for distinct IDs.
     HICON small_icon = static_cast<HICON>(
         LoadImageW(inst, MAKEINTRESOURCEW(icon_id), IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR | LR_SHARED));
@@ -885,7 +888,7 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
     }
 
     applyTitleBarStatus();
-    switchRecordingIcon(recording_active_);
+    switchRecordingIcon(recording_active_, record_status_label_ == QStringLiteral("PAUSED"));
 
     // Lock hotkeys page editing while recording / countdown / stopping.
     if (hotkeys_page_) {
