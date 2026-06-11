@@ -21,7 +21,12 @@ jobs:
           cache: true
 
       - name: Install cppcheck
-        run: choco install cppcheck -y
+        run: |
+          choco install cppcheck -y
+          # choco PATH edits do not propagate to later steps in the same job;
+          # expose cppcheck.exe to the configure step explicitly.
+          "$env:ProgramFiles\Cppcheck" | Out-File -FilePath $env:GITHUB_PATH -Append
+        shell: pwsh
 
       - name: Check clang-format
         run: pwsh -NonInteractive -File scripts/check-format.ps1

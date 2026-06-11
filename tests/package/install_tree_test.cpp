@@ -1,3 +1,7 @@
+// std::getenv is the portable way to read the install-tree override; silence the
+// MSVC CRT "unsafe" deprecation (C4996) so it does not trip warnings-as-error.
+#define _CRT_SECURE_NO_WARNINGS
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
