@@ -31,6 +31,9 @@ jobs:
       - name: Check clang-format
         run: pwsh -NonInteractive -File scripts/check-format.ps1
 
+      - name: Validate WinGet manifest
+        run: pwsh -NonInteractive -File scripts/validate-winget-manifest.ps1
+
       - name: Configure (lint preset)
         run: cmake --preset windows-x64-lint
 

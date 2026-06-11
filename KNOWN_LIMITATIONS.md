@@ -23,7 +23,9 @@ supported, do not assume it is available.
   display driver).
 - The Microsoft Visual C++ 2022 x64 runtime is required. It is normally already
   present on up-to-date Windows systems; otherwise install it from
-  <https://aka.ms/vs/17/release/vc_redist.x64.exe>.
+  <https://aka.ms/vs/17/release/vc_redist.x64.exe>. The WinGet package
+  installs this automatically as a declared dependency; MSI, portable ZIP,
+  Chocolatey, and Scoop installs do not bundle it.
 
 ## Hardware encoding
 

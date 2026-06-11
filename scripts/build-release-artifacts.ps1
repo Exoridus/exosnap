@@ -105,6 +105,145 @@ function Remove-SafeDir {
     }
 }
 
+# ---------------------------------------------------------------------------
+# Static runtime-dependency audit
+#
+# exosnap.exe and the shipped Qt6 DLLs link the dynamic MSVC runtime (/MD) and
+# statically import VCRUNTIME140.dll, MSVCP140.dll, etc. Neither the MSI nor
+# the portable ZIP bundle these — WinGet satisfies them via the declared
+# Microsoft.VCRedist.2015+.x64 package dependency, and direct MSI/portable
+# users are documented to install the VC++ 2015-2022 redistributable.
+#
+# This audit walks every PE binary in the staging tree with `dumpbin
+# /dependents` and classifies each statically-imported DLL name so that any
+# import that is neither shipped, a documented Windows system component, nor
+# the known MSVC runtime set fails the build instead of shipping silently.
+# ---------------------------------------------------------------------------
+
+# Windows system DLLs known to be present on a stock Windows 10/11 x64
+# install, grouped by subsystem. Anything not in this list (and not shipped
+# in the staging tree, and not a known MSVC runtime DLL) is UNRESOLVED.
+$WindowsSystemDllAllowlist = @(
+    # Core / kernel / process
+    'kernel32.dll', 'advapi32.dll', 'ntdll.dll', 'rpcrt4.dll', 'secur32.dll', 'sspicli.dll',
+    'userenv.dll', 'powrprof.dll', 'cfgmgr32.dll', 'setupapi.dll', 'normaliz.dll',
+    # MSVC / C runtime (system-provided, not part of the redistributable)
+    'ucrtbase.dll', 'msvcrt.dll',
+    # Shell / UI / windowing
+    'user32.dll', 'gdi32.dll', 'shell32.dll', 'shlwapi.dll', 'comdlg32.dll', 'comctl32.dll',
+    'uxtheme.dll', 'imm32.dll', 'uiautomationcore.dll', 'dwmapi.dll',
+    # COM / OLE
+    'ole32.dll', 'oleaut32.dll',
+    # Crypto / security
+    'crypt32.dll', 'bcrypt.dll', 'ncrypt.dll', 'authz.dll', 'dbghelp.dll',
+    # Networking
+    'ws2_32.dll', 'netapi32.dll', 'wtsapi32.dll', 'dnsapi.dll', 'iphlpapi.dll',
+    'winhttp.dll', 'wininet.dll', 'urlmon.dll', 'wldap32.dll', 'mpr.dll',
+    # Graphics / media (Direct3D, DXGI, Media Foundation, audio)
+    'd3d11.dll', 'd3d9.dll', 'd3d12.dll', 'dxgi.dll', 'dxva2.dll', 'dcomp.dll',
+    'dwrite.dll', 'd2d1.dll', 'windowscodecs.dll',
+    'mf.dll', 'mfplat.dll', 'mfreadwrite.dll', 'mfcore.dll',
+    'propsys.dll', 'avrt.dll', 'ksuser.dll', 'audioses.dll', 'mmdevapi.dll',
+    # Misc
+    'winmm.dll', 'version.dll'
+)
+
+# The dynamic MSVC runtime (vcruntime/msvcp/concrt/vcomp). Satisfied via the
+# WinGet package dependency Microsoft.VCRedist.2015+.x64 (installer manifest)
+# or a user-installed Microsoft Visual C++ 2015-2022 Redistributable (x64).
+$ExternalPrerequisiteDlls = @(
+    'vcruntime140.dll', 'vcruntime140_1.dll',
+    'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll',
+    'msvcp140_atomic_wait.dll', 'msvcp140_codecvt_ids.dll',
+    'concrt140.dll', 'vcomp140.dll'
+)
+
+# Locate dumpbin.exe via vswhere (part of the required MSVC toolchain).
+function Find-Dumpbin {
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+        throw "vswhere.exe not found at '$vswhere'. The MSVC toolchain (Visual Studio Build Tools/Community) is required."
+    }
+    $dumpbin = & $vswhere -latest -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1
+    if (-not $dumpbin -or -not (Test-Path -LiteralPath $dumpbin -PathType Leaf)) {
+        throw "dumpbin.exe not found via vswhere. Install the MSVC v143 build tools (Desktop development with C++)."
+    }
+    return $dumpbin
+}
+
+# Parse the "Image has the following dependencies:" block from `dumpbin
+# /dependents` output into a list of imported DLL names.
+function Get-DumpbinImports {
+    param([string]$Dumpbin, [string]$BinaryPath)
+
+    $out = & $Dumpbin /dependents $BinaryPath
+    if ($LASTEXITCODE -ne 0) { throw "dumpbin /dependents failed for '$BinaryPath' with exit code $LASTEXITCODE." }
+
+    $imports = [System.Collections.Generic.List[string]]::new()
+    $inDeps = $false
+    foreach ($line in $out) {
+        $trimmed = $line.Trim()
+        if (-not $inDeps) {
+            if ($trimmed -eq 'Image has the following dependencies:') { $inDeps = $true }
+            continue
+        }
+        if ($trimmed -eq '') { continue }
+        if ($trimmed -eq 'Summary') { break }
+        # Delay-loaded DLLs do not fail the loader at process start; only
+        # static imports are audited here.
+        if ($trimmed -like 'Image has the following delay load dependencies*') { break }
+        $imports.Add($trimmed)
+    }
+    return $imports
+}
+
+# Audit every .exe/.dll in $Root against $WindowsSystemDllAllowlist,
+# $ExternalPrerequisiteDlls, and the files present in $Root itself. Adds a
+# build error (via Add-Error) for every UNRESOLVED import. On success, prints
+# a one-line summary of classification counts.
+function Test-RuntimeDependencies {
+    param([string]$Root)
+
+    Write-Step "Auditing static runtime dependencies (dumpbin /dependents)"
+
+    $dumpbin = Find-Dumpbin
+    $binaries = Get-ChildItem -LiteralPath $Root -Recurse -Include '*.exe', '*.dll'
+
+    $shippedNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($b in $binaries) { [void]$shippedNames.Add($b.Name) }
+
+    $externalSet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($d in $ExternalPrerequisiteDlls) { [void]$externalSet.Add($d) }
+
+    $systemSet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($d in $WindowsSystemDllAllowlist) { [void]$systemSet.Add($d) }
+
+    $countPresent = 0
+    $countSystem = 0
+    $countExternal = 0
+    $unresolved = [System.Collections.Generic.List[string]]::new()
+    $externalSeen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($binary in $binaries) {
+        $imports = Get-DumpbinImports -Dumpbin $dumpbin -BinaryPath $binary.FullName
+        foreach ($import in $imports) {
+            if ($shippedNames.Contains($import)) { $countPresent++; continue }
+            if ($externalSet.Contains($import)) { $countExternal++; [void]$externalSeen.Add($import.ToLowerInvariant()); continue }
+            if ($systemSet.Contains($import)) { $countSystem++; continue }
+            if ($import -match '^(api-ms-win-|ext-ms-)') { $countSystem++; continue }
+            $unresolved.Add("$($binary.FullName.Substring($Root.Length + 1)) -> $import")
+        }
+    }
+
+    foreach ($entry in $unresolved) {
+        Add-Error "Unresolved runtime dependency: $entry"
+    }
+
+    if ($unresolved.Count -eq 0) {
+        Write-Host "  Runtime dependency audit: $($binaries.Count) binaries, $countPresent present-in-tree, $countSystem Windows-system, $countExternal MSVC-runtime (redistributable) imports, 0 unresolved."
+    }
+}
+
 # Run a native command with a lightweight elapsed-seconds heartbeat so long
 # build/install steps visibly progress. Streams output; throws on nonzero exit.
 function Invoke-Heartbeat {
@@ -279,6 +418,11 @@ foreach ($dir in @('bearer', 'tls')) {
 }
 $allFiles = Get-ChildItem -LiteralPath $PackageRoot -Recurse -File
 Write-Host "  Files after pruning: $($allFiles.Count)"
+
+# ---------------------------------------------------------------------------
+# 3b. Static runtime-dependency audit (final pruned tree)
+# ---------------------------------------------------------------------------
+Test-RuntimeDependencies -Root $PackageRoot
 
 # ---------------------------------------------------------------------------
 # 4. Create the canonical ZIP (one top-level package directory)

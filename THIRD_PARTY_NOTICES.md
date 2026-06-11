@@ -112,7 +112,14 @@ provided by the Windows operating system and are not bundled.
 - **Direct3D 11, DXGI** — Windows graphics infrastructure
 - **Media Foundation** — Windows multimedia framework
 - **WASAPI** — Windows audio session API
-- **Microsoft Visual C++ Runtime** — deployed by `windeployqt` if configured
+- **Microsoft Visual C++ Runtime** — `exosnap.exe` and the shipped Qt6 DLLs
+  link the dynamic MSVC runtime (`/MD`). It is **not bundled** in any ExoSnap
+  artifact (MSI, portable ZIP, Chocolatey, or Scoop package). The WinGet
+  package declares `Microsoft.VCRedist.2015+.x64` as a dependency and installs
+  it automatically. Users installing via the MSI, the portable ZIP,
+  Chocolatey, or Scoop must install the Microsoft Visual C++ 2015-2022
+  Redistributable (x64) themselves from
+  <https://aka.ms/vs/17/release/vc_redist.x64.exe> if it is not already present.
 
 ---
 *This document is maintained in the ExoSnap repository. For questions, see
