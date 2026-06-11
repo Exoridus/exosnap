@@ -438,15 +438,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     main_layout->addWidget(stack_, 1);
 
     // In-window About surface — a translucent backdrop + centered card overlaid on the
-    // page stack. It replaces the former native About QDialog so nothing lingers as a
-    // focus-sticky OS window after closing. Parented to the stack (not the whole window)
-    // so the title bar / window controls stay usable and correctly painted while it is
-    // open. Hidden until the About nav action.
-    about_overlay_ = new ui::dialogs::AboutOverlay(stack_);
+    // whole window content area.  Parented to the central widget (not the page stack)
+    // so the overlay subtree is accessible via UI Automation regardless of which
+    // QStackedWidget page is current (DF-A11Y: QAccessibleStackedWidget only exposes
+    // the current page child; parenting to central widget sidesteps this).  The overlay
+    // covers the full central area including the title bar — per design the nav must
+    // not be clickable while a modal overlay is open.  syncGeometryToParent() and the
+    // resize event filter both use parentWidget(), so they work correctly with the new
+    // parent.  raise() in openOverlay() / showEvent() ensures the overlay sits above
+    // the title bar widget in paint order.
+    about_overlay_ = new ui::dialogs::AboutOverlay(central);
     about_overlay_->hide();
 
-    // Source picker overlay — in-window, same parenting rationale as About.
-    source_picker_overlay_ = new ui::dialogs::SourcePickerOverlay(stack_);
+    // Source picker overlay — in-window, same accessibility-first parenting as About.
+    source_picker_overlay_ = new ui::dialogs::SourcePickerOverlay(central);
     source_picker_overlay_->hide();
     record_page_->setSourcePickerOverlay(source_picker_overlay_);
 

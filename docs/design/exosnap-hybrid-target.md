@@ -136,9 +136,9 @@ Metrics shown during recording are recording-health only: dropped frames, frame 
 Rules:
 
 - Left zone: circular icon toggles (System, Mic, Webcam, App). On = accent-dim fill + accent border; Off = transparent + muted icon.
-- Center: monospace timer, 30px, 500 weight, tabular-nums, always in the same position.
+- Center: monospace timer, 30px, 600 weight, tabular-nums, always in the same position. **The countdown digit during pre-roll uses the same font size and weight as the recording timecode** — it is the primary user focus signal during the 3-second countdown (DF-03).
 - Right zone: countdown select (Off / 3s / 5s / 10s) + Record button (ready); Pause + Stop (recording); Resume + Stop (paused); Record again (completed).
-- Completed: filename is a clickable link, underlined in accent; Open Folder is an icon button; file size shown in muted mono.
+- Completed: filename is a clickable link, underlined in accent; **Open Folder is an icon-only 38×38 ghost button with border-radius 10, tooltip "Open folder"** (DF-04); file size shown in muted mono.
 - Stable geometry: all zones maintain position across state transitions. No layout shift.
 
 ### Preview overlay elements
@@ -222,6 +222,8 @@ No placement controls. Hint: "Position & size are set directly in the Record pre
 | Filename pattern | Select: `exosnap_{date}_{n}` / `{source}_{datetime}` / `{preset}_{date}` |
 | Token reference chips | `{datetime}` `{date}` `{time}` `{source}` `{app}` `{title}` `{preset}` |
 
+**Runtime output-directory override:** When the `EXOSNAP_OUTPUT_DIR` environment variable is set to a non-empty path at startup, all recordings and capture-frame outputs are written to that path instead of the configured output folder. The override is never written back to settings and does not appear in the Output settings UI. It is a tooling/CI isolation mechanism complementing `EXOSNAP_CONFIG_DIR` (DF-HISTORY). Implementation: `RecordingCoordinator::EffectiveOutputFolder()` in `app/services/RecordingCoordinator.h`.
+
 ---
 
 ## 6. Presets
@@ -270,6 +272,13 @@ Old partial profiles (pre-schema-v1) stored only codec/quality. When `schemaVers
 ## 7. Source Selection Target
 
 Source picker is an in-window overlay modal (translucent backdrop + centered `QFrame`). Three tabs via segmented control: **Displays** / **Windows** / **Region**.
+
+**Overlay modal behavior:**
+
+- The overlay widget covers the entire central area (including title bar) so navigation is not accessible while the modal is open (DF-A11Y).
+- Backdrop scrim: `rgba(8, 8, 10, 0.62)` — the overlay paints this over its full rect so the page behind is visibly dimmed (DF-02).
+- Backdrop click (outside the picker panel) dismisses the overlay with cancel semantics (emits `closed()` signal identical to Escape).
+- Both `SourcePickerOverlay` and `AboutOverlay` are parented to the QMainWindow central widget, not to the page `QStackedWidget`, so their subtrees are always reachable by UI Automation regardless of which stack page is current (DF-A11Y).
 
 ### Displays tab
 

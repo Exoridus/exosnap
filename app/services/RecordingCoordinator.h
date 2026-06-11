@@ -119,6 +119,12 @@ class RecordingCoordinator {
     void SetVideoSettings(const VideoSettingsModel& settings);
     void SetOutputTargetContext(const FilenameTargetContext& context);
 
+    // Returns the recording output directory in effect at the moment of the call.
+    // When EXOSNAP_OUTPUT_DIR is set to a non-empty value it overrides the configured
+    // output_settings_.output_folder without modifying persisted settings (tooling /
+    // CI isolation; mirrors EXOSNAP_CONFIG_DIR in ConfigPaths.h).
+    [[nodiscard]] std::filesystem::path EffectiveOutputFolder() const;
+
     void SetStateChangedCallback(StateChangedCallback cb);
     void SetStatsUpdatedCallback(StatsUpdatedCallback cb);
     void SetDiagnosticsCallback(DiagnosticsUpdatedCallback cb);

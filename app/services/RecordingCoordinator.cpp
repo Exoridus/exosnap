@@ -427,11 +427,12 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
 
     if (is_recording_)
         return false;
-    const auto folder_check = ValidateOutputFolder(output_settings_.output_folder);
+    const std::filesystem::path effective_folder = EffectiveOutputFolder();
+    const auto folder_check = ValidateOutputFolder(effective_folder);
     if (folder_check != FolderValidationResult::Ok) {
         diagnostics::AppLog::error(QStringLiteral("record.failure"),
                                    QStringLiteral("phase=Prepare category=OutputFolder output_folder=\"%1\" detail=%2")
-                                       .arg(QString::fromStdWString(output_settings_.output_folder.wstring()),
+                                       .arg(QString::fromStdWString(effective_folder.wstring()),
                                             QString::fromStdWString(FolderValidationMessage(folder_check))));
 
         PostStateChange(UiRecordingState::Failed);
@@ -461,7 +462,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         diagnostics::AppLog::error(QStringLiteral("record.failure"),
                                    QStringLiteral("phase=Prepare category=FilenameCollision output_folder=\"%1\" "
                                                   "detail=\"Collision resolution exhausted\"")
-                                       .arg(QString::fromStdWString(output_settings_.output_folder.wstring())));
+                                       .arg(QString::fromStdWString(effective_folder.wstring())));
 
         PostStateChange(UiRecordingState::Failed);
         UiRecordingResult result;
@@ -1039,7 +1040,7 @@ void RecordingCoordinator::CaptureFrame() {
         // the coordinator is alive because the recording thread is joined before
         // destruction, but we still avoid capturing 'this' for safety.
         const FrameCapturedCallback cb_copy = on_frame_captured_;
-        const std::wstring folder = output_settings_.output_folder.wstring();
+        const std::wstring folder = EffectiveOutputFolder().wstring();
         const bool has_ctx = has_output_target_context_;
         const FilenameTargetContext ctx = output_target_context_;
 
@@ -1144,7 +1145,7 @@ void RecordingCoordinator::CaptureFrame() {
 
         AppLog::info(QStringLiteral("capture_frame"), QStringLiteral("snapshot from preview (Ready)"));
 
-        const std::wstring folder = output_settings_.output_folder.wstring();
+        const std::wstring folder = EffectiveOutputFolder().wstring();
         const bool has_ctx = has_output_target_context_;
         const FilenameTargetContext ctx = output_target_context_;
         const FrameCapturedCallback cb_copy = on_frame_captured_;
@@ -1330,11 +1331,23 @@ void RecordingCoordinator::PostRecordingMeter(std::array<float, 3> per_track_rms
         QCoreApplication::instance(), [cb, per_track_rms]() { cb(per_track_rms); }, Qt::QueuedConnection);
 }
 
+std::filesystem::path RecordingCoordinator::EffectiveOutputFolder() const {
+    // EXOSNAP_OUTPUT_DIR runtime override: when set to a non-empty value it takes
+    // precedence over the user-configured output_settings_.output_folder.  This
+    // mirrors the EXOSNAP_CONFIG_DIR pattern (ConfigPaths.h) and lets the capture
+    // harness and CI redirect recordings into a temp directory without modifying any
+    // persisted settings.  The override is never written back to disk.
+    const QString override_dir = qEnvironmentVariable("EXOSNAP_OUTPUT_DIR");
+    if (!override_dir.isEmpty())
+        return std::filesystem::path(override_dir.toStdWString());
+    return output_settings_.output_folder;
+}
+
 std::filesystem::path RecordingCoordinator::GenerateOutputPath() const {
     FilenameTargetContext context = output_target_context_;
     context.video_codec = output_settings_.video_codec;
     context.audio_codec = output_settings_.audio_codec;
-    return BuildOutputPath(output_settings_.output_folder, output_settings_.naming_pattern, output_settings_.container,
+    return BuildOutputPath(EffectiveOutputFolder(), output_settings_.naming_pattern, output_settings_.container,
                            std::time(nullptr), context);
 }
 

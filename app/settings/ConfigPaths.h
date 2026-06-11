@@ -17,6 +17,12 @@ namespace exosnap::settings {
 // run can be fully isolated from real user data — used by the release smoke
 // test and CI so launching the shipped executable cannot touch a real user's
 // settings, presets, or recording history.
+//
+// Related: EXOSNAP_OUTPUT_DIR (RecordingCoordinator::EffectiveOutputFolder).
+// When that variable is set, recording and capture-frame output is redirected
+// to the given path at runtime without modifying persisted settings.  Together,
+// EXOSNAP_CONFIG_DIR + EXOSNAP_OUTPUT_DIR fully isolate a tooling or CI run
+// from the real user's data.
 inline QString ResolveAppConfigDir() {
     const QString override_dir = qEnvironmentVariable("EXOSNAP_CONFIG_DIR");
     if (!override_dir.isEmpty())

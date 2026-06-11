@@ -7,12 +7,15 @@
 #include <fstream>
 #include <string>
 
+#include <QCoreApplication>
+
 #include <recorder_core/recorder_session.h>
 
 #include "models/FilenameBuilder.h"
 #include "models/OutputPathPolicy.h"
 #include "models/OutputPathValidator.h"
 #include "models/OutputSettingsModel.h"
+#include "services/RecordingCoordinator.h"
 
 namespace exosnap {
 
@@ -919,6 +922,56 @@ TEST(SplitSettingsTest, SplitDurationClampsCustomEvenIfUnsanitized) {
     s.mode = SplitRecordingMode::Custom;
     s.custom_minutes = 0; // below min; SplitDurationMs must still clamp
     EXPECT_EQ(SplitDurationMs(s), static_cast<uint64_t>(SplitRecordingSettings::kMinMinutes) * 60ull * 1000ull);
+}
+
+// ── EXOSNAP_OUTPUT_DIR override (DF-HISTORY) ─────────────────────────────────
+//
+// When EXOSNAP_OUTPUT_DIR is set to a non-empty path, EffectiveOutputFolder()
+// must return the override instead of the configured output_folder.  When the
+// variable is absent or empty, it must fall through to the configured folder.
+
+TEST(OutputDirOverrideTest, OverrideSet_ReturnsOverrideDir) {
+    const std::filesystem::path configured(L"C:\\Users\\User\\Videos\\ExoSnap");
+    const std::filesystem::path override_dir(L"C:\\Temp\\exosnap-test-output");
+
+    qputenv("EXOSNAP_OUTPUT_DIR", override_dir.string().c_str());
+
+    RecordingCoordinator coordinator;
+    OutputSettingsModel settings;
+    settings.output_folder = configured;
+    coordinator.SetOutputSettings(settings);
+
+    EXPECT_EQ(coordinator.EffectiveOutputFolder(), override_dir);
+
+    qunsetenv("EXOSNAP_OUTPUT_DIR");
+}
+
+TEST(OutputDirOverrideTest, OverrideUnset_ReturnsConfiguredDir) {
+    const std::filesystem::path configured(L"C:\\Users\\User\\Videos\\ExoSnap");
+
+    qunsetenv("EXOSNAP_OUTPUT_DIR");
+
+    RecordingCoordinator coordinator;
+    OutputSettingsModel settings;
+    settings.output_folder = configured;
+    coordinator.SetOutputSettings(settings);
+
+    EXPECT_EQ(coordinator.EffectiveOutputFolder(), configured);
+}
+
+TEST(OutputDirOverrideTest, OverrideEmptyString_ReturnsConfiguredDir) {
+    const std::filesystem::path configured(L"C:\\Users\\User\\Videos\\ExoSnap");
+
+    qputenv("EXOSNAP_OUTPUT_DIR", "");
+
+    RecordingCoordinator coordinator;
+    OutputSettingsModel settings;
+    settings.output_folder = configured;
+    coordinator.SetOutputSettings(settings);
+
+    EXPECT_EQ(coordinator.EffectiveOutputFolder(), configured);
+
+    qunsetenv("EXOSNAP_OUTPUT_DIR");
 }
 
 } // namespace
