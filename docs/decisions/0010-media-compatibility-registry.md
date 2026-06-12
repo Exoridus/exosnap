@@ -35,9 +35,9 @@ offered to the user unless the registry explicitly allows it.
 | Container | Video codecs | Audio codecs | Notes |
 |---|---|---|---|
 | MKV | AV1, HEVC, AVC | Opus, AAC, PCM, FLAC | Primary target; VFR supported |
-| MP4 (fMP4) | AV1, HEVC, AVC | AAC | Primary for Apple/NLE compatibility |
-| MP4 (fMP4) | — | PCM | Allowed; sample-entry variant and player matrix must be specified |
-| MP4 (fMP4) | — | FLAC | Not a 1.0 target; fragile MP4 compatibility |
+| MP4 | AV1, HEVC, AVC | AAC | Primary for Apple/NLE compatibility; delivered as progressive MP4 via remux-on-stop (ADR 0014) |
+| MP4 | — | PCM | Allowed; sample-entry variant and player matrix must be specified |
+| MP4 | — | FLAC | Not a 1.0 target; fragile MP4 compatibility |
 | WebM | AV1 | Opus | AV1 + Opus only |
 | WebM (optional) | VP9 (later) | Opus | — |
 
