@@ -14,9 +14,11 @@
 #include "services/AudioDeviceNotifier.h"
 #include "services/DisplayDeviceNotifier.h"
 #include "services/GlobalHotkeyService.h"
+#include "services/RecoveryService.h"
 #include "services/WebcamDeviceNotifier.h"
 #include "settings/AppSettingsStore.h"
 #include "settings/RecordingPresetStore.h"
+#include "settings/RecoveryManifestStore.h"
 #include <capability/audio_ui_state.h>
 #include <capability/capability_set.h>
 
@@ -36,6 +38,7 @@ class OperationalTitleBar;
 
 namespace ui::dialogs {
 class AboutOverlay;
+class RecoveryOverlay;
 class SourcePickerOverlay;
 } // namespace ui::dialogs
 
@@ -121,6 +124,9 @@ class MainWindow : public QMainWindow {
 
     void saveWindowGeometryToSettings();
 
+    // Startup recovery: scan the manifest; open the overlay when candidates exist.
+    void checkAndShowRecoveryOverlay();
+
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void installVisualReadyMarker(const QString& scenario_id);
     void applyVisualSettingsScenario(const visual::VisualScenario& scenario);
@@ -134,6 +140,7 @@ class MainWindow : public QMainWindow {
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
     ui::dialogs::AboutOverlay* about_overlay_ = nullptr;
+    ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
     QStackedWidget* stack_ = nullptr;
     RecordPage* record_page_ = nullptr;
@@ -162,6 +169,10 @@ class MainWindow : public QMainWindow {
     // Reduced AppSettingsStore: hotkeys + window geometry only.
     AppSettingsStore settings_store_;
     PersistedAppSettings persisted_settings_;
+
+    // Recovery manifest + service (owned by MainWindow; coordinator gets a pointer).
+    RecoveryManifestStore recovery_manifest_store_;
+    RecoveryService recovery_service_;
 
     // Rebindable global hotkey service. Owns binding model + Win32 registration.
     GlobalHotkeyService* hotkey_service_ = nullptr;

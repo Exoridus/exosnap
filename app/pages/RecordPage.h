@@ -19,6 +19,7 @@
 #include "../services/RecordingCountdownController.h"
 #include "../services/WebcamDeviceNotifier.h"
 #include "../settings/RecordingHistoryStore.h"
+#include "../settings/RecoveryManifestStore.h"
 #include "../ui/widgets/RegionSelectionOverlay.h"
 #include "../viewmodels/RecordViewModel.h"
 
@@ -112,6 +113,11 @@ class RecordPage : public QWidget {
     // remuxing (no-op).  Called by MainWindow::closeEvent when the user chooses
     // "Cancel save and close".
     void cancelRemux();
+
+    // Inject the recovery manifest store. Must be called before initCoordinator
+    // is triggered (i.e. before first show). Pointer is stored; the store must
+    // outlive this page.
+    void setRecoveryManifestStore(RecoveryManifestStore* store);
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void applyVisualScenario(const visual::VisualScenario& scenario);
 #endif
@@ -290,6 +296,8 @@ class RecordPage : public QWidget {
     RecordingHistoryStore history_store_;
     std::unique_ptr<RecordingCoordinator> coordinator_;
     std::unique_ptr<PreviewService> preview_service_;
+    // Injected by MainWindow before first show; forwarded to the coordinator.
+    RecoveryManifestStore* recovery_manifest_store_ = nullptr;
 
     QLabel* capability_label_ = nullptr;
     QComboBox* target_combo_ = nullptr;

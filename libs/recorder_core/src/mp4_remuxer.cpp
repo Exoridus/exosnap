@@ -113,15 +113,23 @@ struct DictGuard {
     DictGuard() = default;
 };
 
-} // namespace
+// Options for the generic stream-copy remux function.
+struct RemuxOptions {
+    const char* format_name = nullptr; // libavformat short name (e.g. "mp4", "matroska")
+    // Extra AVDictionary key/value pairs written before avformat_write_header.
+    // Pairs are (key, value); list must be even-length and null-terminated by a nullptr pair.
+    const char* const* extra_opts = nullptr; // may be nullptr
+};
 
-RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
-                                  RemuxProgressCallback progress_cb) {
+// Generic internal stream-copy remux. Both RemuxToProgressiveMp4 and
+// RemuxToMkv delegate here. opts.format_name must not be nullptr.
+static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
+                                   RemuxProgressCallback progress_cb, const RemuxOptions& opts) {
     const std::string in_str = input_path.string();
     const std::string out_str = output_path.string();
 
     {
-        logging::LogField fields[] = {{"input", in_str}, {"output", out_str}};
+        logging::LogField fields[] = {{"input", in_str}, {"output", out_str}, {"format", opts.format_name}};
         logging::log(logging::LogLevel::Info, kLogComponent, "Remux start",
                      std::span<const logging::LogField>(fields, std::size(fields)));
     }
@@ -151,7 +159,7 @@ RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const
     AVFormatContext* const in_ctx = in_guard.ctx;
 
     // Extract input duration for progress estimation.
-    // AV_NOPTS_VALUE means the container did not report it.
+    // AV_NOPTS_VALUE means the container did not report it (truncated MKV, etc.).
     const double input_duration_sec = (in_ctx->duration != AV_NOPTS_VALUE && in_ctx->duration > 0)
                                           ? static_cast<double>(in_ctx->duration) / AV_TIME_BASE
                                           : 0.0;
@@ -164,11 +172,11 @@ RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const
     }
 
     // -----------------------------------------------------------------------
-    // 2. Create output context (MP4)
+    // 2. Create output context
     // -----------------------------------------------------------------------
     OutputCtxGuard out_guard;
     {
-        int ret = avformat_alloc_output_context2(&out_guard.ctx, nullptr, "mp4", out_str.c_str());
+        int ret = avformat_alloc_output_context2(&out_guard.ctx, nullptr, opts.format_name, out_str.c_str());
         if (ret < 0 || !out_guard.ctx) {
             int err = (ret < 0) ? ret : AVERROR(ENOMEM);
             std::string msg = std::string("avformat_alloc_output_context2 failed: ") + av_err2str(err);
@@ -197,8 +205,8 @@ RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const
             return RemuxResult::Fail(ret, std::move(msg));
         }
 
-        // Let the MP4 muxer pick the correct codec tag.
-        // Do NOT copy the MKV codec tag; MP4 uses different FourCCs.
+        // Clear codec_tag so the output muxer picks the correct FourCC for its
+        // own container (MP4 and MKV use different tag spaces).
         out_st->codecpar->codec_tag = 0;
     }
 
@@ -216,15 +224,17 @@ RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const
     }
 
     // -----------------------------------------------------------------------
-    // 5. Write header with movflags=+faststart
+    // 5. Write header (with any caller-supplied muxer options)
     // -----------------------------------------------------------------------
-    DictGuard opts;
-    av_dict_set(&opts.dict, "movflags", "+faststart", 0);
+    DictGuard header_opts;
+    if (opts.extra_opts != nullptr) {
+        for (int k = 0; opts.extra_opts[k] != nullptr && opts.extra_opts[k + 1] != nullptr; k += 2) {
+            av_dict_set(&header_opts.dict, opts.extra_opts[k], opts.extra_opts[k + 1], 0);
+        }
+    }
 
     {
-        // avformat_write_header consumes the dict; remaining unknown keys stay.
-        int ret = avformat_write_header(out_ctx, &opts.dict);
-        // opts.dict is freed by DictGuard regardless of return value.
+        int ret = avformat_write_header(out_ctx, &header_opts.dict);
         if (ret < 0) {
             std::string msg = std::string("avformat_write_header failed: ") + av_err2str(ret);
             LogError(msg.c_str());
@@ -251,8 +261,8 @@ RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const
         if (ret < 0) {
             std::string msg = std::string("av_read_frame failed: ") + av_err2str(ret);
             LogWarn(msg.c_str());
-            // Treat a mid-stream read error as an incomplete but not catastrophic
-            // result — try to finalize what we have.
+            // Treat a mid-stream read error as incomplete but not catastrophic —
+            // try to finalize what we have.
             break;
         }
 
@@ -306,7 +316,7 @@ RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const
     // 7. Finalize (or clean up on cancel)
     // -----------------------------------------------------------------------
     if (cancelled) {
-        // Close handles before deleting the file.
+        // Close handles before deleting the partial file.
         if (out_guard.avio_opened && !(out_ctx->oformat->flags & AVFMT_NOFILE)) {
             avio_closep(&out_ctx->pb);
             out_guard.avio_opened = false;
@@ -326,7 +336,7 @@ RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const
         if (ret < 0) {
             std::string msg = std::string("av_write_trailer failed: ") + av_err2str(ret);
             LogWarn(msg.c_str());
-            // Not fatal — the file may still be usable; report success.
+            // Not fatal — file may still be usable.
         }
     }
 
@@ -342,6 +352,28 @@ RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const
     }
 
     return RemuxResult::Ok();
+}
+
+} // namespace
+
+RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
+                                  RemuxProgressCallback progress_cb) {
+    // movflags=+faststart: two-pass write that moves moov before mdat.
+    static const char* const kMp4Opts[] = {"movflags", "+faststart", nullptr};
+    RemuxOptions opts;
+    opts.format_name = "mp4";
+    opts.extra_opts = kMp4Opts;
+    return RemuxStreamCopy(input_path, output_path, std::move(progress_cb), opts);
+}
+
+RemuxResult RemuxToMkv(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
+                       RemuxProgressCallback progress_cb) {
+    // The matroska muxer writes Cues, SeekHead, and Duration at trailer time.
+    // No extra options needed: libavformat defaults are correct for recovery MKV.
+    RemuxOptions opts;
+    opts.format_name = "matroska";
+    opts.extra_opts = nullptr;
+    return RemuxStreamCopy(input_path, output_path, std::move(progress_cb), opts);
 }
 
 } // namespace recorder_core

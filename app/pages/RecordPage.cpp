@@ -2875,8 +2875,17 @@ void RecordPage::ensureCoordinatorInit() {
     }
 }
 
+void RecordPage::setRecoveryManifestStore(RecoveryManifestStore* store) {
+    recovery_manifest_store_ = store;
+    if (coordinator_)
+        coordinator_->SetRecoveryManifestStore(store);
+}
+
 void RecordPage::initCoordinator() {
     coordinator_ = std::make_unique<RecordingCoordinator>();
+    // Inject the manifest store if it was set before initCoordinator ran.
+    if (recovery_manifest_store_ != nullptr)
+        coordinator_->SetRecoveryManifestStore(recovery_manifest_store_);
     view_model_.ApplyTargetKind(capability::CaptureTargetKind::Display);
     rebuildAudioRowWidgets();
 

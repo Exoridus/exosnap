@@ -114,7 +114,11 @@ TEST(PortableDocs, RootReadmeDocumentsMp4SplitRestriction) {
 // Crash-recovery limitation
 // ---------------------------------------------------------------------------
 TEST(PortableDocs, KnownLimitationsDocumentsCrashRecoveryLimitation) {
-    EXPECT_TRUE(contains(known_limitations(), "no complete crash-recovery workflow"));
+    // 0.2.0: crash recovery is now implemented. The doc must describe the
+    // recovery workflow rather than saying it does not exist.
+    const auto doc = known_limitations();
+    EXPECT_TRUE(contains(doc, "Crash recovery is available"));
+    EXPECT_TRUE(contains(doc, "recovery manifest"));
 }
 
 // ---------------------------------------------------------------------------

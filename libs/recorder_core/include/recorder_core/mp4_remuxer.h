@@ -72,4 +72,15 @@ inline RemuxProgressCallback RemuxNoopCallback() {
 RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
                                   RemuxProgressCallback progress_cb = RemuxNoopCallback());
 
+// Remux `input_path` to `output_path` as a Matroska (MKV) file via
+// libavformat stream-copy (matroska muxer). The mkv muxer writes Cues,
+// SeekHead, and Duration in the trailer, producing a seekable, well-formed
+// output even when the input is a truncated or crash-interrupted file.
+//
+// Behaviour matches RemuxToProgressiveMp4 (cancel deletes output, progress
+// callback semantics identical). Use for the "Keep as MKV" recovery path
+// (ADR-0014) when the artefact is not finalized=true.
+RemuxResult RemuxToMkv(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
+                       RemuxProgressCallback progress_cb = RemuxNoopCallback());
+
 } // namespace recorder_core
