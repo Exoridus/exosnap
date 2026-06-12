@@ -100,10 +100,9 @@ if(NOT EXISTS "${_nvenc_header}")
         )
     endforeach()
     include(GoogleTest)
-    # PRE_TEST discovery defers test enumeration to ctest execution time, after
-    # all POST_BUILD commands (including the DLL copy above) have run.
-    gtest_discover_tests(test_mp4_remuxer TEST_PREFIX "recorder_core."
-                         DISCOVERY_MODE PRE_TEST)
+    # DLL copies above are registered before discovery, so the build-time
+    # discovery run finds them. PRE_TEST must not be used (see exosnap_testing.cmake).
+    gtest_discover_tests(test_mp4_remuxer TEST_PREFIX "recorder_core.")
 
     return()
 endif()
@@ -405,5 +404,6 @@ foreach(_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
     )
 endforeach()
 include(GoogleTest)
-gtest_discover_tests(test_mp4_remuxer TEST_PREFIX "recorder_core."
-                     DISCOVERY_MODE PRE_TEST)
+# DLL copies above are registered before discovery, so the build-time
+# discovery run finds them. PRE_TEST must not be used (see exosnap_testing.cmake).
+gtest_discover_tests(test_mp4_remuxer TEST_PREFIX "recorder_core.")

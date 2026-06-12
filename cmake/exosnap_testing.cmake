@@ -29,14 +29,28 @@ function(exosnap_add_gtest)
     ${ARG_LIBRARIES}
   )
 
+  # Copy the FFmpeg DLLs next to the test binary BEFORE registering test
+  # discovery: POST_BUILD commands run in registration order, and the default
+  # (POST_BUILD) discovery launches the binary at build time. Targets that pull
+  # FFmpeg-dependent objects out of recorder_core would otherwise fail to start
+  # (0xc0000135) during discovery on clean CI runners.
+  # NOTE: do not switch discovery to DISCOVERY_MODE PRE_TEST — the CI presets
+  # use the Visual Studio multi-config generator and ctest runs without a
+  # configuration, which makes PRE_TEST include files resolve to an empty
+  # tests-file name ("include could not find requested file").
+  foreach(_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
+    add_custom_command(TARGET ${ARG_NAME} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${_ffmpeg_dll}"
+          "$<TARGET_FILE_DIR:${ARG_NAME}>"
+      VERBATIM
+    )
+  endforeach()
+
   include(GoogleTest)
-  # Use PRE_TEST discovery so that POST_BUILD copy commands (e.g. FFmpeg DLLs)
-  # complete before the test binary is launched for discovery. PRE_TEST defers
-  # enumeration to ctest time; the binary is not run at build time.
   if(ARG_TEST_PREFIX)
-    gtest_discover_tests(${ARG_NAME} TEST_PREFIX "${ARG_TEST_PREFIX}"
-                         DISCOVERY_MODE PRE_TEST)
+    gtest_discover_tests(${ARG_NAME} TEST_PREFIX "${ARG_TEST_PREFIX}")
   else()
-    gtest_discover_tests(${ARG_NAME} DISCOVERY_MODE PRE_TEST)
+    gtest_discover_tests(${ARG_NAME})
   endif()
 endfunction()
