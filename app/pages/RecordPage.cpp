@@ -120,6 +120,8 @@ QString stateDisplay(UiRecordingState state) {
         return "STARTING";
     case UiRecordingState::Stopping:
         return "STOPPING";
+    case UiRecordingState::Saving:
+        return "SAVING";
     case UiRecordingState::Completed:
         return "READY";
     case UiRecordingState::Failed:
@@ -2082,9 +2084,15 @@ bool RecordPage::canApplyPresetNow() const {
     case UiRecordingState::Recording:
     case UiRecordingState::Paused:
     case UiRecordingState::Stopping:
+    case UiRecordingState::Saving:
         return false;
     }
     return false;
+}
+
+void RecordPage::cancelRemux() {
+    if (coordinator_)
+        coordinator_->CancelRemux();
 }
 
 void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& state) {
@@ -3004,6 +3012,12 @@ void RecordPage::initCoordinator() {
             transport_dock_->setSplitEnabled(!coordinator_->IsSplitPending());
     });
     coordinator_->SetReadyFrameSource([this]() -> QImage { return latest_preview_frame_; });
+
+    // ADR-0014: Forward remux progress to the TransportDock Saving state.
+    coordinator_->SetRemuxProgressCallback([this](float fraction) {
+        if (transport_dock_)
+            transport_dock_->setSavingProgress(fraction);
+    });
 
     enumerateTargets(false);
 
@@ -4500,8 +4514,9 @@ void RecordPage::syncMicMeterService() {
         return;
     }
 
-    const bool transition_busy =
-        view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::Stopping;
+    const bool transition_busy = view_model_.state == UiRecordingState::Preparing ||
+                                 view_model_.state == UiRecordingState::Stopping ||
+                                 view_model_.state == UiRecordingState::Saving;
     const bool should_run = view_model_.audio_ui_state.IsMicEnabled() && !transition_busy;
 
     if (!should_run) {
@@ -4521,8 +4536,9 @@ void RecordPage::syncSysMeterService() {
         return;
     }
 
-    const bool transition_busy =
-        view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::Stopping;
+    const bool transition_busy = view_model_.state == UiRecordingState::Preparing ||
+                                 view_model_.state == UiRecordingState::Stopping ||
+                                 view_model_.state == UiRecordingState::Saving;
     const bool should_run = view_model_.audio_active_sys && !transition_busy;
 
     if (!should_run) {
@@ -4539,8 +4555,9 @@ void RecordPage::syncAppMeterService() {
         return;
     }
 
-    const bool transition_busy =
-        view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::Stopping;
+    const bool transition_busy = view_model_.state == UiRecordingState::Preparing ||
+                                 view_model_.state == UiRecordingState::Stopping ||
+                                 view_model_.state == UiRecordingState::Saving;
 
     uint32_t target_pid = 0;
     if (!transition_busy && view_model_.audio_active_app && view_model_.selected_target_index >= 0 &&
@@ -4671,6 +4688,8 @@ QString RecordPage::buildChromeStatusLabel() const {
         return QStringLiteral("STARTING");
     case UiRecordingState::Stopping:
         return QStringLiteral("STOPPING");
+    case UiRecordingState::Saving:
+        return QStringLiteral("SAVING");
     case UiRecordingState::Completed:
         // A clean, saved recording reads as "Saved" (green) in the title-bar pill
         // for as long as the result dock is visible; any other completed case
@@ -4946,6 +4965,7 @@ void RecordPage::updateTransportDock() {
     const bool recording = (s == UiRecordingState::Recording);
     const bool paused = (s == UiRecordingState::Paused);
     const bool stopping = (s == UiRecordingState::Stopping);
+    const bool saving = (s == UiRecordingState::Saving);
     const bool blocked = (s == UiRecordingState::Blocked);
     const bool failed = (s == UiRecordingState::Failed);
     const bool completed_success =
@@ -4966,6 +4986,10 @@ void RecordPage::updateTransportDock() {
         // Keep the Recording layout while the session winds down, actions disabled.
         dock_state = TransportDock::State::Recording;
         primary_enabled = false;
+    } else if (saving) {
+        // ADR-0014: remux in progress — use Saving dock state, all actions disabled.
+        dock_state = TransportDock::State::Saving;
+        primary_enabled = false;
     } else if (completed_success) {
         dock_state = TransportDock::State::Completed;
         primary_enabled = view_model_.CanStart();
@@ -4981,10 +5005,12 @@ void RecordPage::updateTransportDock() {
     transport_dock_->setCountdownSeconds(selected_countdown_seconds_);
 
     const bool recording_for_timer = recording || paused || stopping;
-    transport_dock_->setTimerText(buildTimerText(recording_for_timer || countdown));
+    transport_dock_->setTimerText(saving ? QStringLiteral("Saving…")
+                                         : buildTimerText(recording_for_timer || countdown));
     transport_dock_->setTimerRole(recording             ? QStringLiteral("recording")
                                   : paused              ? QStringLiteral("paused")
                                   : countdown           ? QStringLiteral("countdown")
+                                  : saving              ? QStringLiteral("saving")
                                   : completed_success   ? QStringLiteral("done")
                                   : (blocked || failed) ? QStringLiteral("blocked")
                                                         : QStringLiteral("idle"));
@@ -5001,7 +5027,15 @@ void RecordPage::updateTransportDock() {
     // Webcam is configured in Settings; here it is an honest read-only status pill.
     transport_dock_->setToggleState(QStringLiteral("webcam"), current_webcam_settings_.enabled, false);
 
-    if (completed_success) {
+    if (saving) {
+        // ADR-0014: show a "Saving…" placeholder in the completed row left zone.
+        // The file name is the expected output (not yet written); size is pending.
+        const QString path =
+            coordinator_ ? QString::fromStdWString(coordinator_->CurrentOutputPath().wstring()).trimmed() : QString();
+        const QString file_name = path.isEmpty() ? QStringLiteral("Saving MP4…") : QFileInfo(path).fileName();
+        transport_dock_->setCompletedInfo(file_name, QStringLiteral("Saving…"), false);
+        hideResultDetailsPanel();
+    } else if (completed_success) {
         const QString path = QString::fromStdWString(view_model_.result_output_path).trimmed();
         const QString file_name = path.isEmpty() ? QStringLiteral("Recording saved") : QFileInfo(path).fileName();
         const QString size_text =
@@ -5608,7 +5642,7 @@ bool RecordPage::isSourceSelectionLocked() const {
     return interaction_mode_ != InteractionMode::None || view_model_.state == UiRecordingState::Countdown ||
            view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::RegionSelecting ||
            view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
-           view_model_.state == UiRecordingState::Stopping;
+           view_model_.state == UiRecordingState::Stopping || view_model_.state == UiRecordingState::Saving;
 }
 
 void RecordPage::updateHeroButton() {

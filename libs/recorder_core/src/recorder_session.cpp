@@ -2,7 +2,6 @@
 
 #include "audio_thread.h"
 #include "mixed_audio_src.h"
-#include "mp4_mux_thread.h"
 #include "mux_thread.h"
 #include "session_internal.h"
 #include "session_stats_collector.h"
@@ -20,6 +19,18 @@
 #include <vector>
 
 namespace recorder_core {
+
+// ---------------------------------------------------------------------------
+// DeriveTransientMkvPath
+// ---------------------------------------------------------------------------
+
+std::filesystem::path DeriveTransientMkvPath(const std::filesystem::path& mp4_output_path) {
+    // Replace .mp4 extension with .mkv.tmp so the transient file sits next to the
+    // intended output without colliding with any real MKV the user might have.
+    std::filesystem::path result = mp4_output_path;
+    result.replace_extension(L".mkv.tmp");
+    return result;
+}
 
 // ---------------------------------------------------------------------------
 // DeriveSegmentPath
@@ -321,6 +332,15 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         return validationResult;
     }
 
+    // ADR-0014: MP4 remux-on-stop. The engine always records to MKV (Matroska).
+    // When the user selected MP4, redirect the engine to a transient MKV path;
+    // the app layer handles the remux and deletion after this call returns.
+    RecorderConfig engine_config = config;
+    if (config.container == Container::Mp4) {
+        engine_config.container = Container::Matroska;
+        engine_config.output_path = DeriveTransientMkvPath(config.output_path);
+    }
+
     // Reset session state
     {
         auto& st = m_impl->state;
@@ -344,7 +364,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             std::lock_guard lk(st.stats_mutex);
             st.stats = {};
         }
-        st.config = config;
+        st.config = engine_config;
         st.SeedWebcamOverlayFromConfig();
         if (!config.record_audio) {
             st.audio_track_count = 0;
@@ -376,7 +396,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         st.stats_callback = m_impl->stats_callback;
         st.meter_callback = m_impl->meter_callback;
         st.diagnostics_callback = m_impl->diagnostics_callback;
-        st.diagnostics.Reset(++m_impl->diagnostics_generation, MakeDiagnosticsStaticConfig(config));
+        st.diagnostics.Reset(++m_impl->diagnostics_generation, MakeDiagnosticsStaticConfig(engine_config));
     }
 
     auto failPrepare = [&](int32_t hr, const std::string& detail) -> RecorderResult {
@@ -474,21 +494,16 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     SessionStatsCollector statsCollector(m_impl->state);
     statsCollector.Start();
 
-    // Start worker threads — dispatch mux thread by container
+    // Start worker threads — all containers (including MP4) use MuxThread/Matroska.
+    // For MP4: the engine records to a transient MKV; the app layer remuxes after stop.
     VideoThread videoThread(m_impl->state);
     MuxThread muxThread(m_impl->state);
-    Mp4MuxThread mp4MuxThread(m_impl->state);
-    const bool isMp4 = (config.container == Container::Mp4);
 
     for (auto& worker : audioWorkers) {
         worker->Start();
     }
     videoThread.Start();
-    if (isMp4) {
-        mp4MuxThread.Start();
-    } else {
-        muxThread.Start();
-    }
+    muxThread.Start();
 
     // Parallel join: all workers share a single 120-second budget.
     //
@@ -500,7 +515,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     for (auto& worker : audioWorkers) {
         allHandles.push_back(worker->NativeHandle());
     }
-    allHandles.push_back(isMp4 ? mp4MuxThread.NativeHandle() : muxThread.NativeHandle());
+    allHandles.push_back(muxThread.NativeHandle());
 
     bool hasNullHandle = false;
     for (HANDLE h : allHandles) {
@@ -527,14 +542,12 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     std::vector<bool> audioJoined(audioWorkers.size(), false);
     bool muxJoined = false;
 
-    auto joinMuxThread = [&](unsigned ms) -> bool { return isMp4 ? mp4MuxThread.Join(ms) : muxThread.Join(ms); };
-
     if (joinWait == WAIT_OBJECT_0) {
         videoJoined = videoThread.Join(0);
         for (size_t i = 0; i < audioWorkers.size(); ++i) {
             audioJoined[i] = audioWorkers[i]->Join(0);
         }
-        muxJoined = joinMuxThread(0);
+        muxJoined = muxThread.Join(0);
     } else {
         videoJoined = (allHandles[0] != nullptr && WaitForSingleObject(allHandles[0], 0) == WAIT_OBJECT_0);
         if (videoJoined) {
@@ -550,7 +563,7 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
         const HANDLE muxHandle = allHandles[1 + audioWorkers.size()];
         muxJoined = (muxHandle != nullptr && WaitForSingleObject(muxHandle, 0) == WAIT_OBJECT_0);
         if (muxJoined) {
-            joinMuxThread(0);
+            muxThread.Join(0);
         }
     }
 

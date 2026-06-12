@@ -198,10 +198,11 @@ void TransportDock::applyState() {
     const bool countdown = state_ == State::Countdown;
     const bool recording = state_ == State::Recording;
     const bool paused = state_ == State::Paused;
+    const bool saving = state_ == State::Saving;
     const bool completed = state_ == State::Completed;
 
-    toggles_row_->setVisible(!completed);
-    completed_row_->setVisible(completed);
+    toggles_row_->setVisible(!completed && !saving);
+    completed_row_->setVisible(completed || saving);
 
     countdown_->setVisible(ready || countdown);
     countdown_->setInteractive(ready && primary_enabled_);
@@ -209,7 +210,10 @@ void TransportDock::applyState() {
     pause_btn_->setVisible(recording);
     resume_btn_->setVisible(paused);
     stop_btn_->setVisible(recording || paused);
-    record_again_btn_->setVisible(completed);
+    // In Saving state show "Record Again" disabled — so the user knows they can
+    // record again once the save is done; we re-enable when saving finishes.
+    record_again_btn_->setVisible(completed || saving);
+    record_again_btn_->setEnabled(completed && primary_enabled_);
     capture_frame_btn_->setVisible(ready || recording || paused);
     capture_frame_btn_->setEnabled(ready || recording || paused);
     add_marker_btn_->setVisible(recording || paused);
@@ -225,14 +229,20 @@ void TransportDock::applyState() {
     pause_btn_->setEnabled(primary_enabled_);
     resume_btn_->setEnabled(primary_enabled_);
     stop_btn_->setEnabled(primary_enabled_);
-    record_again_btn_->setEnabled(primary_enabled_);
 
     const char* state_name = ready       ? "ready"
                              : countdown ? "countdown"
                              : recording ? "recording"
                              : paused    ? "paused"
+                             : saving    ? "saving"
                                          : "completed";
     setStyledProperty(this, "dockState", QString::fromLatin1(state_name));
+}
+
+void TransportDock::setSavingProgress(float /*fraction*/) {
+    // Progress value reserved for future progress bar; currently the "Saving…"
+    // label in the completed_row left zone is sufficient feedback.
+    // The timer label in the center zone shows "Saving…" via setTimerText().
 }
 
 void TransportDock::setTimerText(const QString& text) {

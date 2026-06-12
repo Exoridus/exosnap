@@ -880,6 +880,8 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
     Q_UNUSED(context_text);
     recording_active_ = recording;
     record_status_label_ = status_label.trimmed().toUpper();
+    // ADR-0014: track remux-on-stop phase separately so closeEvent can guard it.
+    remuxing_active_ = (record_status_label_ == QStringLiteral("SAVING"));
     if (record_status_label_.isEmpty())
         record_status_label_ = QStringLiteral("READY");
 
@@ -1145,6 +1147,35 @@ void MainWindow::changeEvent(QEvent* event) {
 
 void MainWindow::closeEvent(QCloseEvent* event) {
     saveWindowGeometry();
+
+    // ADR-0014: MP4 remux running after stop — ask user to wait.
+    if (remuxing_active_) {
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle(QStringLiteral("Saving in progress"));
+        msgBox.setText(QStringLiteral("ExoSnap is saving your MP4 recording. Closing now will cancel the save and "
+                                      "leave only the temporary MKV file on disk."));
+        msgBox.setIcon(QMessageBox::Warning);
+
+        auto* waitBtn = msgBox.addButton(QStringLiteral("Wait for save to finish"), QMessageBox::RejectRole);
+        auto* closeBtn = msgBox.addButton(QStringLiteral("Cancel save and close"), QMessageBox::AcceptRole);
+        Q_UNUSED(closeBtn);
+        msgBox.setDefaultButton(waitBtn);
+
+        msgBox.exec();
+
+        if (msgBox.clickedButton() == static_cast<QAbstractButton*>(waitBtn)) {
+            event->ignore();
+        } else {
+            // Cancel the remux and accept the close.  The coordinator cancels
+            // cooperatively; the jthread will finish quickly and the transient
+            // MKV is left on disk.
+            if (record_page_)
+                record_page_->cancelRemux();
+            remuxing_active_ = false;
+            event->accept();
+        }
+        return;
+    }
 
     if (recording_active_) {
         QMessageBox msgBox(this);

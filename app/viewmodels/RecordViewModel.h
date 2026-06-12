@@ -32,6 +32,10 @@ enum class UiRecordingState {
     Recording,
     Paused,
     Stopping,
+    // ADR-0014: MP4 remux-on-stop. After the recording engine stops for an MP4
+    // session, the background remux job runs before the result is ready.
+    // The UI shows "Saving…" with a progress indicator during this phase.
+    Saving,
     Completed,
     Failed,
 };
