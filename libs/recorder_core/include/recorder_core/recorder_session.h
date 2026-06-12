@@ -259,6 +259,13 @@ struct RecorderConfig {
 // (recording_part-002_2.mkv). Locale-independent, Windows-safe, deterministic.
 std::filesystem::path DeriveSegmentPath(const std::filesystem::path& base, std::uint32_t index);
 
+// Derive the transient MKV path used when recording with Container::Mp4
+// (ADR-0014: remux-on-stop architecture). The engine records to this MKV file;
+// on successful stop the app layer remuxes it to the final MP4 and deletes it.
+// The transient path is the requested MP4 path with extension replaced by ".mkv.tmp".
+// Example: "recording.mp4" -> "recording.mkv.tmp"
+std::filesystem::path DeriveTransientMkvPath(const std::filesystem::path& mp4_output_path);
+
 // ---------------------------------------------------------------------------
 // RecorderResult
 // ---------------------------------------------------------------------------

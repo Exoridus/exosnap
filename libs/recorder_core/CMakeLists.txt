@@ -83,6 +83,14 @@ if(NOT EXISTS "${_nvenc_header}")
     )
     target_include_directories(test_mic_meter_service PRIVATE src)
 
+    # test_mp4_remux_pipeline_flow: pure-logic tests; no FFmpeg runtime needed.
+    exosnap_add_gtest(
+        NAME test_mp4_remux_pipeline_flow
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_mp4_remux_pipeline_flow.cpp
+        LIBRARIES recorder_core
+    )
+
     add_executable(test_mp4_remuxer tests/test_mp4_remuxer.cpp)
     target_link_libraries(test_mp4_remuxer PRIVATE
         GTest::gtest_main
@@ -144,7 +152,6 @@ add_library(recorder_core STATIC
     src/mux_thread.cpp
     src/matroska_stream_writer.cpp
     src/annexb_to_avcc.cpp
-    src/mp4_mux_thread.cpp
     src/audio_track_model.cpp
     src/mic_meter_service.cpp
     src/loopback_meter_service.cpp
@@ -182,7 +189,6 @@ target_link_libraries(recorder_core
         mfplat.lib
         mf.lib
         mfuuid.lib
-        mfreadwrite.lib
         wmcodecdspuuid.lib
         exosnap::warnings
 )
@@ -328,13 +334,6 @@ exosnap_add_gtest(
 target_include_directories(mixed_audio_src_tests PRIVATE src)
 
 exosnap_add_gtest(
-    NAME test_mp4_timestamp_normalization
-    TEST_PREFIX recorder_core.
-    SOURCES tests/test_mp4_timestamp_normalization.cpp
-    LIBRARIES recorder_core
-)
-
-exosnap_add_gtest(
     NAME test_session_stats_meter
     TEST_PREFIX recorder_core.
     SOURCES tests/test_session_stats_meter.cpp
@@ -382,6 +381,15 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_pipeline_diagnostics PRIVATE src)
+
+# test_mp4_remux_pipeline_flow: pure-logic tests for DeriveTransientMkvPath
+# and codec-container gating rules (ADR-0014).  No FFmpeg runtime needed.
+exosnap_add_gtest(
+    NAME test_mp4_remux_pipeline_flow
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_mp4_remux_pipeline_flow.cpp
+    LIBRARIES recorder_core
+)
 
 # test_mp4_remuxer: needs FFmpeg DLLs at runtime for both test discovery and
 # CTest execution.  We copy the four mux-only DLLs next to the test binary via

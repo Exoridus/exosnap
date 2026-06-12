@@ -20,6 +20,7 @@
 #include <capability/resolver.h>
 #include <capability/translation.h>
 #include <capability/user_config.h>
+#include <recorder_core/mp4_remuxer.h>
 #include <recorder_core/recorder_session.h>
 
 #include "../models/FilenameBuilder.h"
@@ -54,6 +55,9 @@ class RecordingCoordinator {
     // message is e.g. "Started segment 2"; on reject it explains why. Fired on the
     // Qt main thread.
     using SplitFeedbackCallback = std::function<void(bool accepted, const QString& message)>;
+    // Remux progress: called on the Qt main thread with fraction in [0,1] during
+    // the MP4 remux phase (ADR-0014). fraction is -1 when remux starts (indeterminate).
+    using RemuxProgressCallback = std::function<void(float fraction)>;
 
     RecordingCoordinator();
     ~RecordingCoordinator();
@@ -135,6 +139,14 @@ class RecordingCoordinator {
     void SetRecordingMeterCallback(RecordingMeterCallback cb);
     void SetFrameCapturedCallback(FrameCapturedCallback cb);
     void SetSplitFeedbackCallback(SplitFeedbackCallback cb);
+    void SetRemuxProgressCallback(RemuxProgressCallback cb);
+
+    // Request cooperative cancellation of any in-progress remux job.
+    // Safe to call from the Qt main thread at any time; no-op if no remux is running.
+    void CancelRemux();
+
+    // True while the background remux job is running (Saving state).
+    [[nodiscard]] bool IsRemuxing() const noexcept;
 
     // Inject a getter for the latest preview QImage (used in Ready state).
     // The getter is called on the calling thread; must be safe to call from the UI thread.
@@ -213,6 +225,18 @@ class RecordingCoordinator {
     SplitFeedbackCallback on_split_feedback_;
     void PostSplitFeedback(bool accepted, QString message);
     void OnSegmentCompleted(const recorder_core::CompletedSegment& segment);
+
+    // ADR-0014: remux-on-stop state.
+    std::jthread remux_thread_;
+    std::atomic<bool> is_remuxing_{false};
+    std::atomic<bool> remux_cancel_requested_{false};
+    // Transient MKV path and final MP4 path for the current (or last) remux job.
+    std::filesystem::path transient_mkv_path_;
+    std::filesystem::path final_mp4_path_;
+    RemuxProgressCallback on_remux_progress_;
+    void PostRemuxProgress(float fraction);
+    void RunRemuxJob(const std::filesystem::path& transient_mkv, const std::filesystem::path& final_mp4,
+                     UiRecordingResult base_result);
 
     StateChangedCallback on_state_changed_;
     StatsUpdatedCallback on_stats_updated_;

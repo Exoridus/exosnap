@@ -23,7 +23,8 @@ class CountdownSelect;
 class TransportDock : public QFrame {
     Q_OBJECT
   public:
-    enum class State { Ready, Countdown, Recording, Paused, Completed };
+    // ADR-0014: Saving = MP4 remux running after recording stopped.
+    enum class State { Ready, Countdown, Recording, Paused, Saving, Completed };
     Q_ENUM(State)
 
     explicit TransportDock(QWidget* parent = nullptr);
@@ -58,6 +59,10 @@ class TransportDock : public QFrame {
     // Recording/Paused; this disables it briefly while a split transition is in
     // flight so coalesced clicks do not pile up.
     void setSplitEnabled(bool enabled);
+
+    // ADR-0014: update remux progress displayed in the Saving state.
+    // fraction in [0, 1]; pass -1 for indeterminate (spinner/pulse).
+    void setSavingProgress(float fraction);
 
   signals:
     void recordClicked();

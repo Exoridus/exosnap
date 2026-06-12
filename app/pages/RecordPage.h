@@ -107,6 +107,11 @@ class RecordPage : public QWidget {
 
     // True iff the recording state allows a preset switch.
     [[nodiscard]] bool canApplyPresetNow() const;
+
+    // ADR-0014: Cancel an in-progress MP4 remux job.  Safe to call when not
+    // remuxing (no-op).  Called by MainWindow::closeEvent when the user chooses
+    // "Cancel save and close".
+    void cancelRemux();
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void applyVisualScenario(const visual::VisualScenario& scenario);
 #endif

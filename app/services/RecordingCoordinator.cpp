@@ -3,6 +3,8 @@
 #include "../../../libs/recorder_core/src/loopback_meter_service.h"
 #include "../../../libs/recorder_core/src/mic_meter_service.h"
 
+#include <recorder_core/mp4_remuxer.h>
+
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -866,6 +868,8 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
     is_paused_.store(false);
 
     UiRecordingResult ui_result;
+    // For MP4 sessions, output_path is the final .mp4; the engine actually wrote
+    // to the transient .mkv.tmp path (ADR-0014). We expose the final path to the UI.
     ui_result.succeeded = result.succeeded;
     ui_result.output_path = output_path.wstring();
     ui_result.error_phase = FormatErrorPhase(result.error_phase);
@@ -881,7 +885,8 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
     ui_result.frame_rate_num = result.stats.frame_rate_num;
     ui_result.frame_rate_den = result.stats.frame_rate_den;
     ui_result.cfr = result.stats.cfr;
-    ui_result.container = result.stats.container;
+    // Report the user-requested container, not the internal Matroska container.
+    ui_result.container = config.container;
     ui_result.video_codec = result.stats.video_codec;
     ui_result.audio_codec = result.stats.audio_codec;
 
@@ -927,11 +932,130 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
                                             QString::fromStdWString(ui_result.error_detail)));
     }
 
+    // ADR-0014: MP4 remux-on-stop. When the engine succeeded and the user requested
+    // MP4, spawn the background remux job before reporting Completed.
+    const bool needs_remux = result.succeeded && (config.container == recorder_core::Container::Mp4);
+    if (needs_remux) {
+        const std::filesystem::path transient_mkv = recorder_core::DeriveTransientMkvPath(output_path);
+        PostStateChange(UiRecordingState::Saving);
+        SyncWebcamService(false);
+        RunRemuxJob(transient_mkv, output_path, std::move(ui_result));
+        return;
+    }
+
     PostResult(std::move(ui_result));
     PostStateChange(result.succeeded ? UiRecordingState::Completed : UiRecordingState::Failed);
     // is_recording_ is already false here; restore the idle preview capture if the
     // Record page still wants a live PiP, otherwise release the device.
     SyncWebcamService(false);
+}
+
+void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mkv,
+                                       const std::filesystem::path& final_mp4, UiRecordingResult base_result) {
+    is_remuxing_.store(true);
+    remux_cancel_requested_.store(false);
+    transient_mkv_path_ = transient_mkv;
+    final_mp4_path_ = final_mp4;
+
+    // Emit indeterminate start.
+    PostRemuxProgress(-1.0f);
+
+    diagnostics::AppLog::info(QStringLiteral("remux"), QStringLiteral("start transient=\"%1\" output=\"%2\"")
+                                                           .arg(QString::fromStdWString(transient_mkv.wstring()),
+                                                                QString::fromStdWString(final_mp4.wstring())));
+
+    remux_thread_ = std::jthread([this, transient_mkv, final_mp4, base = std::move(base_result)](std::stop_token) {
+        // Build the progress callback. Returns false to cancel when requested.
+        auto progress_cb = [this](float fraction) -> bool {
+            if (remux_cancel_requested_.load())
+                return false;
+            PostRemuxProgress(fraction);
+            return true;
+        };
+
+        const auto remux_result = recorder_core::RemuxToProgressiveMp4(transient_mkv, final_mp4, progress_cb);
+
+        // Back on the recording thread; marshal everything to the Qt main thread.
+        UiRecordingResult final_result = base;
+        is_remuxing_.store(false);
+
+        if (remux_result.success) {
+            // Delete the transient MKV.
+            std::error_code ec;
+            std::filesystem::remove(transient_mkv, ec);
+            if (ec) {
+                diagnostics::AppLog::warning(QStringLiteral("remux"),
+                                             QStringLiteral("transient MKV removal failed: %1")
+                                                 .arg(QString::fromStdWString(ToWide(ec.message()))));
+            }
+
+            // Update file size to reflect the final MP4.
+            std::error_code size_ec;
+            const auto mp4_size = std::filesystem::file_size(final_mp4, size_ec);
+            if (!size_ec)
+                final_result.output_file_bytes = mp4_size;
+
+            diagnostics::AppLog::info(QStringLiteral("remux"),
+                                      QStringLiteral("complete bytes=%1").arg(static_cast<qint64>(mp4_size)));
+
+            PostResult(std::move(final_result));
+            PostStateChange(UiRecordingState::Completed);
+        } else {
+            // Remux failed or was cancelled. The transient MKV is a valid, playable
+            // file — keep it and report the error pointing to it.
+            // The cancel flag is set before the progress callback returns false,
+            // so checking it is sufficient.  AVERROR(ECANCELED) detection is not
+            // needed because the flag is the canonical cancel indicator.
+            const bool cancelled = remux_cancel_requested_.load();
+            if (cancelled) {
+                diagnostics::AppLog::info(QStringLiteral("remux"),
+                                          QStringLiteral("cancelled — transient MKV retained: \"%1\"")
+                                              .arg(QString::fromStdWString(transient_mkv.wstring())));
+            } else {
+                diagnostics::AppLog::error(
+                    QStringLiteral("remux"),
+                    QStringLiteral("failed av_err=%1 detail=\"%2\" — transient MKV retained: \"%3\"")
+                        .arg(remux_result.av_error_code)
+                        .arg(QString::fromStdString(remux_result.message),
+                             QString::fromStdWString(transient_mkv.wstring())));
+            }
+
+            final_result.succeeded = false;
+            final_result.output_path = transient_mkv.wstring();
+            final_result.error_phase = L"Remux";
+            final_result.error_detail =
+                cancelled ? L"Remux cancelled — recording saved as MKV: " + transient_mkv.wstring()
+                          : ToWide(remux_result.message) + L" — recording saved as MKV: " + transient_mkv.wstring();
+
+            PostResult(std::move(final_result));
+            PostStateChange(UiRecordingState::Failed);
+        }
+
+        SyncWebcamService(false);
+    });
+}
+
+void RecordingCoordinator::CancelRemux() {
+    remux_cancel_requested_.store(true);
+}
+
+bool RecordingCoordinator::IsRemuxing() const noexcept {
+    return is_remuxing_.load();
+}
+
+void RecordingCoordinator::SetRemuxProgressCallback(RemuxProgressCallback cb) {
+    on_remux_progress_ = std::move(cb);
+}
+
+void RecordingCoordinator::PostRemuxProgress(float fraction) {
+    if (!on_remux_progress_)
+        return;
+    auto cb = on_remux_progress_;
+    if (QCoreApplication::instance() == nullptr) {
+        cb(fraction);
+        return;
+    }
+    QMetaObject::invokeMethod(QCoreApplication::instance(), [cb, fraction]() { cb(fraction); }, Qt::QueuedConnection);
 }
 
 UiRecordingState RecordingCoordinator::State() const noexcept {

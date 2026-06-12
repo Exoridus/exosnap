@@ -244,7 +244,7 @@ add_dependencies(exosnap exosnap_build_info)
 
 target_link_libraries(exosnap PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-    recorder_core exosnap::capability exosnap::warnings
+    recorder_core exosnap::capability exosnap::warnings FFmpeg::mux
     d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
     mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib
 )
@@ -459,7 +459,8 @@ exosnap_add_gtest(
         Qt6::Core Qt6::Gui exosnap_capability recorder_core
 )
 target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(output_settings_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib)
+# ADR-0014: mfreadwrite.lib removed (MF/SinkWriter path deleted).
+target_link_libraries(output_settings_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
 set_target_properties(output_settings_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
@@ -810,8 +811,9 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     target_include_directories(capture_frame_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(capture_frame_tests PRIVATE
         NOMINMAX EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
+    # ADR-0014: mfreadwrite.lib removed (MF/SinkWriter path deleted).
     target_link_libraries(capture_frame_tests PRIVATE
-        mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
+        mfplat.lib mf.lib mfuuid.lib ole32.lib)
     set_target_properties(capture_frame_tests PROPERTIES AUTOMOC ON)
 endif()
 
@@ -833,6 +835,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     target_include_directories(recording_marker_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(recording_marker_tests PRIVATE
         NOMINMAX EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
+    target_link_libraries(recording_marker_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
     set_target_properties(recording_marker_tests PROPERTIES AUTOMOC ON)
 endif()
 
