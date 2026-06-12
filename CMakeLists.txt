@@ -71,6 +71,11 @@ install(CODE "
 # third_party must come before static analysis so its targets are not analyzed.
 add_subdirectory(third_party)
 
+# FFmpeg lgpl-shared prebuilt (BtbN pinned).
+# Provides FFmpeg::avformat, FFmpeg::avcodec, FFmpeg::avutil, FFmpeg::swresample,
+# and the convenience bundle FFmpeg::mux.
+include(cmake/VendorFFmpeg.cmake)
+
 # Sets CMAKE_CXX_CLANG_TIDY / CMAKE_CXX_CPPCHECK for all subsequent targets.
 # Only active when EXOSNAP_CLANG_TIDY / EXOSNAP_CPPCHECK are ON (lint preset).
 include(cmake/exosnap_static_analysis.cmake)
