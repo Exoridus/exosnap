@@ -460,16 +460,7 @@ exosnap_add_gtest(
 )
 target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 # ADR-0014: mfreadwrite.lib removed (MF/SinkWriter path deleted).
-# FFmpeg DLLs are copied next to the binary so the test discovery step can run.
 target_link_libraries(output_settings_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
-foreach(_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
-    add_custom_command(TARGET output_settings_tests POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${_ffmpeg_dll}"
-            "$<TARGET_FILE_DIR:output_settings_tests>"
-        VERBATIM
-    )
-endforeach()
 set_target_properties(output_settings_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
@@ -821,17 +812,8 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     target_compile_definitions(capture_frame_tests PRIVATE
         NOMINMAX EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
     # ADR-0014: mfreadwrite.lib removed (MF/SinkWriter path deleted).
-    # FFmpeg DLLs are copied next to the binary so the test discovery step can run.
     target_link_libraries(capture_frame_tests PRIVATE
         mfplat.lib mf.lib mfuuid.lib ole32.lib)
-    foreach(_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
-        add_custom_command(TARGET capture_frame_tests POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_ffmpeg_dll}"
-                "$<TARGET_FILE_DIR:capture_frame_tests>"
-            VERBATIM
-        )
-    endforeach()
     set_target_properties(capture_frame_tests PROPERTIES AUTOMOC ON)
 endif()
 
@@ -853,17 +835,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     target_include_directories(recording_marker_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(recording_marker_tests PRIVATE
         NOMINMAX EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
-    # ADR-0014: mfreadwrite.lib removed (MF/SinkWriter path deleted).
-    # FFmpeg DLLs are copied next to the binary so the test discovery step can run.
     target_link_libraries(recording_marker_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
-    foreach(_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
-        add_custom_command(TARGET recording_marker_tests POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_ffmpeg_dll}"
-                "$<TARGET_FILE_DIR:recording_marker_tests>"
-            VERBATIM
-        )
-    endforeach()
     set_target_properties(recording_marker_tests PROPERTIES AUTOMOC ON)
 endif()
 
