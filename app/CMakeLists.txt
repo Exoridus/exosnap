@@ -459,6 +459,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_output_settings.cpp
         services/RecordingCoordinator.cpp
+        settings/RecoveryManifestStore.cpp
     LIBRARIES
         exosnap_output_model_test_support
         exosnap_device_service_test_support
@@ -846,6 +847,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         SOURCES
             tests/test_capture_frame.cpp
             services/RecordingCoordinator.cpp
+            settings/RecoveryManifestStore.cpp
             services/GlobalHotkeyService.cpp
             visual_tests/VisualScenario.cpp
         LIBRARIES
@@ -870,6 +872,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         SOURCES
             tests/test_recording_markers.cpp
             services/RecordingCoordinator.cpp
+            settings/RecoveryManifestStore.cpp
             services/GlobalHotkeyService.cpp
             visual_tests/VisualScenario.cpp
         LIBRARIES
