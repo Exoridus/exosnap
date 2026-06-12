@@ -97,6 +97,23 @@ directory alongside the ExoSnap binary.
   labels, log viewer, metadata values). UI sans text uses the system-provided
   Segoe UI; no sans-serif font is bundled.
 
+### FFmpeg
+
+- **Version:** N-124953-gd30dead35e-20260611 (BtbN `ffmpeg-master-latest-win64-lgpl-shared`)
+- **Project:** https://ffmpeg.org / https://github.com/BtbN/FFmpeg-Builds
+- **License:** LGPL-2.1-or-later (mux-only DLL set; no GPL codecs included)
+- **Linkage:** dynamic (shared DLLs deployed alongside the ExoSnap binary)
+- **Bundled license:** `licenses/ffmpeg.txt`
+- **DLLs deployed:** `avformat-62.dll`, `avcodec-62.dll`, `avutil-60.dll`,
+  `swresample-6.dll` (~92 MB uncompressed; not-needed DLLs avfilter/swscale/avdevice
+  are excluded from the portable ZIP)
+- **Role:** Post-recording stream-copy remux of MKV → progressive MP4 (`+faststart`).
+  No audio/video decoding or re-encoding is performed; the DLLs are used for
+  container-level operations only.
+- **Note:** ExoSnap is licensed GPL-3.0-or-later, which is compatible with LGPL-2.1.
+  No additional obligations arise from adding these LGPL libraries. Users may replace
+  the DLLs with compatible versions to exercise their LGPL rights.
+
 ## Build-only dependencies (not shipped)
 
 These components are used during the build process and are not included in the

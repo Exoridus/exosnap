@@ -16,6 +16,8 @@ if(NOT EXISTS "${_nvenc_header}")
         src/opus_audio_encoder.cpp
         src/mic_meter_service.cpp
         src/loopback_meter_service.cpp
+        include/recorder_core/mp4_remuxer.h
+        src/mp4_remuxer.cpp
     )
 
     target_include_directories(recorder_core PUBLIC include)
@@ -28,6 +30,7 @@ if(NOT EXISTS "${_nvenc_header}")
         spdlog::spdlog
         nlohmann_json::nlohmann_json
         Opus::opus
+        FFmpeg::mux
         mfuuid.lib
         ole32.lib
         exosnap::warnings
@@ -80,6 +83,28 @@ if(NOT EXISTS "${_nvenc_header}")
     )
     target_include_directories(test_mic_meter_service PRIVATE src)
 
+    add_executable(test_mp4_remuxer tests/test_mp4_remuxer.cpp)
+    target_link_libraries(test_mp4_remuxer PRIVATE
+        GTest::gtest_main
+        exosnap::warnings
+        recorder_core EBML::ebml Matroska::matroska FFmpeg::mux
+    )
+    target_include_directories(test_mp4_remuxer PRIVATE src)
+    # Copy FFmpeg DLLs next to the test binary so it can start.
+    foreach(_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
+        add_custom_command(TARGET test_mp4_remuxer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_ffmpeg_dll}"
+                "$<TARGET_FILE_DIR:test_mp4_remuxer>"
+            VERBATIM
+        )
+    endforeach()
+    include(GoogleTest)
+    # PRE_TEST discovery defers test enumeration to ctest execution time, after
+    # all POST_BUILD commands (including the DLL copy above) have run.
+    gtest_discover_tests(test_mp4_remuxer TEST_PREFIX "recorder_core."
+                         DISCOVERY_MODE PRE_TEST)
+
     return()
 endif()
 
@@ -124,6 +149,8 @@ add_library(recorder_core STATIC
     src/audio_track_model.cpp
     src/mic_meter_service.cpp
     src/loopback_meter_service.cpp
+    include/recorder_core/mp4_remuxer.h
+    src/mp4_remuxer.cpp
 )
 
 target_include_directories(recorder_core
@@ -144,6 +171,7 @@ target_link_libraries(recorder_core
         EBML::ebml
         Matroska::matroska
         fdk-aac
+        FFmpeg::mux
         d3d11.lib
         d3dcompiler.lib
         dxgi.lib
@@ -355,3 +383,27 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_pipeline_diagnostics PRIVATE src)
+
+# test_mp4_remuxer: needs FFmpeg DLLs at runtime for both test discovery and
+# CTest execution.  We copy the four mux-only DLLs next to the test binary via
+# a POST_BUILD command so the exe always finds them regardless of PATH.
+# PRE_TEST discovery defers test enumeration to ctest time so the DLL copy
+# runs first.
+add_executable(test_mp4_remuxer tests/test_mp4_remuxer.cpp)
+target_link_libraries(test_mp4_remuxer PRIVATE
+    GTest::gtest_main
+    exosnap::warnings
+    recorder_core EBML::ebml Matroska::matroska FFmpeg::mux
+)
+target_include_directories(test_mp4_remuxer PRIVATE src)
+foreach(_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
+    add_custom_command(TARGET test_mp4_remuxer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_ffmpeg_dll}"
+            "$<TARGET_FILE_DIR:test_mp4_remuxer>"
+        VERBATIM
+    )
+endforeach()
+include(GoogleTest)
+gtest_discover_tests(test_mp4_remuxer TEST_PREFIX "recorder_core."
+                     DISCOVERY_MODE PRE_TEST)
