@@ -83,6 +83,8 @@ qt_add_executable(exosnap WIN32
     ui/chrome/GlobalRecordingBar.cpp
     ui/dialogs/AboutOverlay.h
     ui/dialogs/AboutOverlay.cpp
+    ui/dialogs/RecoveryOverlay.h
+    ui/dialogs/RecoveryOverlay.cpp
     ui/dialogs/SourcePickerPanel.h
     ui/dialogs/SourcePickerPanel.cpp
     ui/dialogs/SourcePickerDialog.h
@@ -172,6 +174,8 @@ qt_add_executable(exosnap WIN32
     services/RecordingCoordinator.cpp
     services/RecordingCountdownController.h
     services/RecordingCountdownController.cpp
+    services/RecoveryService.h
+    services/RecoveryService.cpp
     models/WebcamSettings.h
     models/OutputSettingsModel.h
     models/OutputSettingsModel.cpp
@@ -192,6 +196,8 @@ qt_add_executable(exosnap WIN32
     settings/RecordingPresetStore.cpp
     settings/RecordingHistoryStore.h
     settings/RecordingHistoryStore.cpp
+    settings/RecoveryManifestStore.h
+    settings/RecoveryManifestStore.cpp
     diagnostics/error_message.h
     diagnostics/error_message.cpp
     diagnostics/AppLog.h
@@ -748,6 +754,45 @@ exosnap_add_gtest(
     LIBRARIES exosnap_capability recorder_core Qt6::Core)
 target_include_directories(recording_preset_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_preset_store_tests PRIVATE ole32.lib shell32.lib)
+
+# RECOVERY-MANIFEST-R1 tests
+exosnap_add_gtest(
+    NAME recovery_manifest_store_tests
+    TEST_PREFIX recovery.
+    SOURCES tests/test_recovery_manifest_store.cpp
+            settings/RecoveryManifestStore.cpp
+            diagnostics/AppLog.cpp
+    LIBRARIES exosnap_capability recorder_core Qt6::Core
+)
+target_include_directories(recovery_manifest_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(recovery_manifest_store_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME recovery_service_tests
+    TEST_PREFIX recovery.
+    SOURCES tests/test_recovery_service.cpp
+            settings/RecoveryManifestStore.cpp
+            services/RecoveryService.cpp
+            diagnostics/AppLog.cpp
+    LIBRARIES exosnap_capability recorder_core Qt6::Core FFmpeg::mux
+)
+target_include_directories(recovery_service_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(recovery_service_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME recovery_overlay_tests
+    TEST_PREFIX recovery.
+    SOURCES
+        tests/test_recovery_overlay.cpp
+        ui/dialogs/RecoveryOverlay.cpp
+        settings/RecoveryManifestStore.cpp
+        services/RecoveryService.cpp
+        diagnostics/AppLog.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core FFmpeg::mux
+)
+target_include_directories(recovery_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(recovery_overlay_tests PRIVATE NOMINMAX)
+set_target_properties(recovery_overlay_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME audio_device_notifier_tests

@@ -74,15 +74,16 @@ Invalid combinations are not offered.
 
 ## Crash safety and recovery
 
-- There is **no complete crash-recovery workflow** yet.
-- Progressive MP4 is **not crash-safe**: if the application or system is
-  interrupted while an MP4 is being written, the active file may be unusable.
+- **Crash recovery is available** (0.2.0). ExoSnap writes a recovery manifest
+  before each recording starts. If a session is interrupted, the next launch
+  shows a recovery overlay offering "Keep as MKV", "Export as MP4", or "Discard"
+  for each orphaned artefact. Dismissing defers the decision to the next launch.
+- No notification is shown when recovery candidates exist but the overlay is
+  dismissed (toast/tray notifications are planned for 0.3.0).
 - For MKV/WebM split recordings, segments that were already finalized before an
   interruption remain usable; an interrupted **active** segment may not be
   recoverable.
-- Fragmented MP4 (fMP4) and recovery manifests are planned work after 0.1.0 and
-  are not present in this build.
-- MP4 in 0.1.0 does not guarantee `hvc1`/Apple-style HEVC compatibility; HEVC is
+- MP4 does not guarantee `hvc1`/Apple-style HEVC compatibility; HEVC is
   not implemented.
 
 ## Other current limitations

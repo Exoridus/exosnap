@@ -14,6 +14,7 @@
 #include "ui/chrome/OperationalTitleBar.h"
 #include "ui/chrome/RecordingStatusGuards.h"
 #include "ui/dialogs/AboutOverlay.h"
+#include "ui/dialogs/RecoveryOverlay.h"
 #include "ui/dialogs/SourcePickerOverlay.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
@@ -348,7 +349,7 @@ void traceFrameMessage(HWND hwnd, UINT message, WPARAM w_param, LPARAM l_param) 
 
 } // namespace
 
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
+MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_(recovery_manifest_store_) {
     diagnostics::AppLog::init();
     diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("MainWindow constructing"));
 
@@ -427,6 +428,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                                 QString::fromStdString(preset_registry_.SelectedPreset().name));
     stack_->addWidget(advanced_page_);
     stack_->addWidget(webcam_page_);
+    // Inject the recovery manifest store before the coordinator is initialized.
+    record_page_->setRecoveryManifestStore(&recovery_manifest_store_);
     record_page_->setOutputSettings(output_settings_);
     record_page_->setVideoSettings(video_settings_);
     record_page_->setWebcamSettings(live_webcam_);
@@ -716,7 +719,34 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         display_notifier_.start();
         display_notifier_.rescan();
         diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("device notifiers started"));
+
+        // Startup crash-recovery: show the overlay if interrupted recordings exist.
+        checkAndShowRecoveryOverlay();
     });
+}
+
+void MainWindow::checkAndShowRecoveryOverlay() {
+    const auto candidates = recovery_service_.Scan();
+    if (candidates.isEmpty())
+        return;
+
+    diagnostics::AppLog::info(
+        QStringLiteral("recovery"),
+        QStringLiteral("Found %1 interrupted recording(s) — showing recovery overlay").arg(candidates.size()));
+
+    // Parent to the central widget (same pattern as about_overlay_ / source_picker_overlay_).
+    // The overlay should survive page navigation (not closed by navigateToPage); it is
+    // deliberately excluded from the navigateToPage close-list because recovery must
+    // remain visible regardless of which settings page the user switches to.
+    auto* central = centralWidget();
+    recovery_overlay_ = new ui::dialogs::RecoveryOverlay(recovery_service_, candidates, central);
+    recovery_overlay_->hide();
+    connect(recovery_overlay_, &ui::dialogs::RecoveryOverlay::closed, this, [this]() {
+        // Dismiss = "decide later". Entries stay in the manifest for next startup.
+        recovery_overlay_->deleteLater();
+        recovery_overlay_ = nullptr;
+    });
+    recovery_overlay_->openOverlay();
 }
 
 MainWindow::~MainWindow() {

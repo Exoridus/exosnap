@@ -28,6 +28,7 @@
 #include "../models/RecordingMarker.h"
 #include "../models/VideoSettingsModel.h"
 #include "../models/WebcamSettings.h"
+#include "../settings/RecoveryManifestStore.h"
 #include "../viewmodels/RecordViewModel.h"
 #include "WebcamService.h"
 
@@ -64,6 +65,12 @@ class RecordingCoordinator {
 
     RecordingCoordinator(const RecordingCoordinator&) = delete;
     RecordingCoordinator& operator=(const RecordingCoordinator&) = delete;
+
+    // Inject the recovery manifest store. Must be called before StartRecording.
+    // The store must outlive this object. When nullptr the manifest integration
+    // is silently disabled (tests that do not care about recovery can omit this).
+    void SetRecoveryManifestStore(RecoveryManifestStore* store);
+    [[nodiscard]] RecoveryManifestStore* GetRecoveryManifestStore() const noexcept;
 
     void OnCapabilitiesReady(const exosnap::capability::CapabilitySet& caps,
                              const exosnap::capability::ResolveResult& validation);
@@ -181,6 +188,12 @@ class RecordingCoordinator {
     void WriteSegmentMarkerSidecar(const recorder_core::CompletedSegment& segment);
     static std::wstring FormatHResult(int32_t hr);
     static std::wstring FormatErrorPhase(recorder_core::ErrorPhase phase);
+
+    // Recovery manifest store (nullable — injected by MainWindow via SetRecoveryManifestStore).
+    RecoveryManifestStore* recovery_manifest_store_ = nullptr;
+    // UUID of the manifest entry for the currently active or most recent recording.
+    // Empty when no session is in flight.
+    QString current_manifest_id_;
 
     exosnap::capability::CapabilitySet caps_{};
     bool has_caps_ = false;

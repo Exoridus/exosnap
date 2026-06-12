@@ -48,6 +48,7 @@ using recorder_core::MatroskaStreamWriter;
 using recorder_core::MuxPacket;
 using recorder_core::RemuxNoopCallback;
 using recorder_core::RemuxResult;
+using recorder_core::RemuxToMkv;
 using recorder_core::RemuxToProgressiveMp4;
 
 // ---------------------------------------------------------------------------
@@ -406,6 +407,121 @@ TEST_F(RemuxerTest, MultiTrackRemux) {
     EXPECT_EQ(audio_stream_count, kAudioTracks);
 
     avformat_close_input(&ctx);
+}
+
+// ---------------------------------------------------------------------------
+// RemuxToMkv tests — output opens, duration plausible, streams intact, cancel.
+// ---------------------------------------------------------------------------
+
+class MkvRemuxerTest : public ::testing::Test {
+  protected:
+    void SetUp() override {
+        auto tmp = std::filesystem::temp_directory_path();
+        src_mkv_path_ = (tmp / "exosnap_mkv_remux_src.mkv").string();
+        out_mkv_path_ = (tmp / "exosnap_mkv_remux_out.mkv").string();
+        std::remove(src_mkv_path_.c_str());
+        std::remove(out_mkv_path_.c_str());
+    }
+    void TearDown() override {
+        std::remove(src_mkv_path_.c_str());
+        std::remove(out_mkv_path_.c_str());
+    }
+    std::string src_mkv_path_;
+    std::string out_mkv_path_;
+};
+
+// Test 6: successful MKV→MKV remux — output opens with avformat, streams
+//         intact, duration plausible, output is seekable.
+TEST_F(MkvRemuxerTest, SuccessfulMkvRemux) {
+    ASSERT_FALSE(BuildTestMkv(src_mkv_path_).empty()) << "Failed to build source MKV fixture";
+
+    const auto result = RemuxToMkv(src_mkv_path_, out_mkv_path_);
+    ASSERT_TRUE(result.success) << "RemuxToMkv failed: " << result.message << " (av_err=" << result.av_error_code
+                                << ")";
+
+    ASSERT_GT(std::filesystem::file_size(out_mkv_path_), 0u);
+
+    AVFormatContext* ctx = nullptr;
+    int ret = avformat_open_input(&ctx, out_mkv_path_.c_str(), nullptr, nullptr);
+    ASSERT_EQ(ret, 0) << "avformat_open_input on MKV output failed: " << av_err2str_cpp_test(ret);
+    ASSERT_NE(ctx, nullptr);
+
+    ret = avformat_find_stream_info(ctx, nullptr);
+    EXPECT_GE(ret, 0) << "avformat_find_stream_info failed on MKV output";
+
+    // Duration should be plausible (we fed 3 seconds).
+    if (ctx->duration != AV_NOPTS_VALUE && ctx->duration > 0) {
+        const double dur = static_cast<double>(ctx->duration) / AV_TIME_BASE;
+        EXPECT_GE(dur, 1.0) << "MKV output duration unexpectedly short";
+        EXPECT_LE(dur, 10.0) << "MKV output duration unexpectedly long";
+    }
+
+    // Must have at least one stream.
+    EXPECT_GE(ctx->nb_streams, 1u);
+
+    // Read a few packets.
+    AVPacket* pkt = av_packet_alloc();
+    ASSERT_NE(pkt, nullptr);
+    int packet_count = 0;
+    while (av_read_frame(ctx, pkt) == 0) {
+        ++packet_count;
+        av_packet_unref(pkt);
+        if (packet_count >= 10)
+            break;
+    }
+    av_packet_free(&pkt);
+    avformat_close_input(&ctx);
+
+    EXPECT_GE(packet_count, 1) << "Could not read any packets from the MKV output";
+}
+
+// Test 7: progress callback fires with monotone values for MKV output.
+TEST_F(MkvRemuxerTest, MkvProgressCallbackFiresMonotone) {
+    ASSERT_FALSE(BuildTestMkv(src_mkv_path_).empty());
+
+    std::vector<float> progress_values;
+    auto cb = [&progress_values](float p) -> bool {
+        progress_values.push_back(p);
+        return true;
+    };
+
+    const auto result = RemuxToMkv(src_mkv_path_, out_mkv_path_, cb);
+    ASSERT_TRUE(result.success) << result.message;
+
+    EXPECT_GE(progress_values.size(), 1u);
+    for (float v : progress_values) {
+        EXPECT_GE(v, 0.0f);
+        EXPECT_LE(v, 1.0f);
+    }
+    for (size_t i = 1; i < progress_values.size(); ++i) {
+        EXPECT_GE(progress_values[i], progress_values[i - 1]);
+    }
+    EXPECT_FLOAT_EQ(progress_values.back(), 1.0f);
+}
+
+// Test 8: cancel mid-way aborts MKV remux and removes partial output.
+TEST_F(MkvRemuxerTest, MkvCancelAbortsCleansUp) {
+    ASSERT_FALSE(BuildTestMkv(src_mkv_path_, 5.0).empty());
+
+    std::atomic<int> call_count{0};
+    auto cb = [&call_count](float) -> bool {
+        ++call_count;
+        return call_count.load() < 2;
+    };
+
+    const auto result = RemuxToMkv(src_mkv_path_, out_mkv_path_, cb);
+
+    EXPECT_FALSE(result.success) << "Expected failure on cancel";
+    EXPECT_FALSE(std::filesystem::exists(out_mkv_path_)) << "Partial output file was not cleaned up after cancel";
+}
+
+// Test 9: bad input path returns structured error for MKV output.
+TEST_F(MkvRemuxerTest, MkvBadInputReturnsStructuredError) {
+    const auto result = RemuxToMkv("/nonexistent_path_xyz_exosnap_mkv_test.mkv", out_mkv_path_);
+
+    EXPECT_FALSE(result.success);
+    EXPECT_NE(result.av_error_code, 0);
+    EXPECT_FALSE(result.message.empty());
 }
 
 } // namespace

@@ -17,6 +17,7 @@
 #include <QMetaObject>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QUuid>
 
 #include <algorithm>
 #include <cctype>
@@ -31,6 +32,7 @@
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputPathValidator.h"
 #include "../models/RecordingPreset.h"
+#include "../settings/RecoveryManifestStore.h"
 
 namespace exosnap {
 
@@ -329,6 +331,14 @@ RecordingCoordinator::~RecordingCoordinator() {
     }
 }
 
+void RecordingCoordinator::SetRecoveryManifestStore(RecoveryManifestStore* store) {
+    recovery_manifest_store_ = store;
+}
+
+RecoveryManifestStore* RecordingCoordinator::GetRecoveryManifestStore() const noexcept {
+    return recovery_manifest_store_;
+}
+
 void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::CapabilitySet& caps,
                                                const exosnap::capability::ResolveResult& validation) {
     caps_ = caps;
@@ -614,6 +624,25 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         last_elapsed_seconds_ = 0.0;
         last_media_time_ns_ = 0;
         markers_limit_reported_ = false;
+    }
+
+    // Recovery manifest entry — written before the engine starts so a hard crash
+    // leaves a traceable artefact. The artefact_path is the file the engine will
+    // actually write (transient .mkv.tmp for MP4 target, final .mkv for MKV target).
+    current_manifest_id_.clear();
+    if (recovery_manifest_store_ != nullptr) {
+        const bool is_mp4 = (config.container == recorder_core::Container::Mp4);
+        RecoveryManifestEntry entry;
+        entry.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        entry.artefact_path =
+            is_mp4 ? QString::fromStdWString(recorder_core::DeriveTransientMkvPath(output_path).wstring())
+                   : QString::fromStdWString(output_path.wstring());
+        entry.intended_container = is_mp4 ? QStringLiteral("mp4") : QStringLiteral("mkv");
+        entry.final_output_path = QString::fromStdWString(output_path.wstring());
+        entry.started_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+        entry.finalized = false;
+        recovery_manifest_store_->Add(entry);
+        current_manifest_id_ = entry.id;
     }
 
     PostStateChange(UiRecordingState::Recording);
@@ -937,10 +966,23 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
     const bool needs_remux = result.succeeded && (config.container == recorder_core::Container::Mp4);
     if (needs_remux) {
         const std::filesystem::path transient_mkv = recorder_core::DeriveTransientMkvPath(output_path);
+        // Mark the manifest entry as finalized before remux so that if the
+        // remux itself is interrupted the startup UI knows the MKV is clean.
+        if (recovery_manifest_store_ != nullptr && !current_manifest_id_.isEmpty())
+            recovery_manifest_store_->UpdateFinalized(current_manifest_id_, true);
         PostStateChange(UiRecordingState::Saving);
         SyncWebcamService(false);
         RunRemuxJob(transient_mkv, output_path, std::move(ui_result));
         return;
+    }
+
+    // MKV target: engine succeeded → artefact is the final file; remove entry.
+    // Engine failed → leave the entry so recovery UI can offer repair.
+    if (recovery_manifest_store_ != nullptr && !current_manifest_id_.isEmpty()) {
+        if (result.succeeded)
+            recovery_manifest_store_->Remove(current_manifest_id_);
+        // On failure the entry stays — recovery UI will surface it.
+        current_manifest_id_.clear();
     }
 
     PostResult(std::move(ui_result));
@@ -998,6 +1040,12 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
             diagnostics::AppLog::info(QStringLiteral("remux"),
                                       QStringLiteral("complete bytes=%1").arg(static_cast<qint64>(mp4_size)));
 
+            // Remux complete — remove the manifest entry.
+            if (recovery_manifest_store_ != nullptr && !current_manifest_id_.isEmpty()) {
+                recovery_manifest_store_->Remove(current_manifest_id_);
+                current_manifest_id_.clear();
+            }
+
             PostResult(std::move(final_result));
             PostStateChange(UiRecordingState::Completed);
         } else {
@@ -1019,6 +1067,10 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
                         .arg(QString::fromStdString(remux_result.message),
                              QString::fromStdWString(transient_mkv.wstring())));
             }
+
+            // Manifest entry stays (finalized=true was set before the remux started).
+            // The recovery UI will offer re-export or keep-as-MKV at next startup.
+            current_manifest_id_.clear();
 
             final_result.succeeded = false;
             final_result.output_path = transient_mkv.wstring();
