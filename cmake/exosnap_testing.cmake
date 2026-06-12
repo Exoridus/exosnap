@@ -30,9 +30,13 @@ function(exosnap_add_gtest)
   )
 
   include(GoogleTest)
+  # Use PRE_TEST discovery so that POST_BUILD copy commands (e.g. FFmpeg DLLs)
+  # complete before the test binary is launched for discovery. PRE_TEST defers
+  # enumeration to ctest time; the binary is not run at build time.
   if(ARG_TEST_PREFIX)
-    gtest_discover_tests(${ARG_NAME} TEST_PREFIX "${ARG_TEST_PREFIX}")
+    gtest_discover_tests(${ARG_NAME} TEST_PREFIX "${ARG_TEST_PREFIX}"
+                         DISCOVERY_MODE PRE_TEST)
   else()
-    gtest_discover_tests(${ARG_NAME})
+    gtest_discover_tests(${ARG_NAME} DISCOVERY_MODE PRE_TEST)
   endif()
 endfunction()
