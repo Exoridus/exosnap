@@ -61,7 +61,8 @@ a real player matrix is validated.
 **`hvc1` vs `hev1` for HEVC in MP4:** These two four-character codes differ in where parameter
 sets are stored (`hvc1` = in `hvcC` box; `hev1` = in-band). Apple/QuickTime requires `hvc1` for
 hardware-accelerated playback. The correct variant must be verified on real files via `ffprobe`
-or Bento4/MP4Box during the fMP4 backend slice. The registry must not mark HEVC-in-MP4 as
+or Bento4/MP4Box in the 0.7.0 HEVC/HDR slice (via the libavformat remux path; see ADR 0014).
+The registry must not mark HEVC-in-MP4 as
 `Recommended` until this is confirmed.
 
 ### Compatibility classification

@@ -12,9 +12,9 @@ their own releases instead of being forced into oversized ones.
 
 ## Architecture guardrails
 
-These decisions govern new encoder/container work. They are tracked as ADRs 0006–0012 under
-`docs/decisions/` (plus ADR 0013 for monitor capture). The summaries below exist for quick
-reference; the ADRs are the authoritative source for rationale and detail.
+These decisions govern new encoder/container work. They are tracked as ADRs 0006–0013 under
+`docs/decisions/` (plus ADR 0014 for the MP4 remux-on-stop strategy). The summaries below exist
+for quick reference; the ADRs are the authoritative source for rationale and detail.
 
 ### Encoders
 
@@ -41,14 +41,15 @@ VideoEncoderFactory · CapabilityProbe · EncoderSelectionPolicy · EncoderDiagn
 ### Containers and tooling
 
 ```
-- libmatroska / libebml          → MKV / WebM
-- libavformat or an explicitly
-  controlled ISO-BMFF backend     → fMP4 / progressive MP4 / remux / trim
-- Media Foundation MP4 path       → transitional
+- libmatroska / libebml   → recording container: MKV / WebM
+- libavformat (lgpl)      → remux / trim engine: progressive MP4 on stop, Quick Trim
+- Media Foundation path   → removed in 0.2.0 (was transitional only)
 ```
 
-Encoders and containers are deliberately decoupled: libavformat can mux/remux/trim even where a
-native SDK does the encoding.
+Recording always writes MKV via libmatroska. MP4 output is delivered by remuxing the transient
+MKV to progressive MP4 (faststart) via libavformat stream-copy after stop (see ADR 0014).
+No fMP4 recording writer is built. Encoders and containers are deliberately decoupled:
+libavformat remuxes/trims packets produced by any encoder without re-encoding.
 
 ### Rate control
 
@@ -72,7 +73,7 @@ Encoders must never be forced to present as "CRF" when they don't use it.
 | Version  | Theme                              | Highlights |
 |----------|------------------------------------|-----------|
 | `0.1.0`  | Current MVP                        | NVIDIA/NVENC baseline, portable ZIP artifact. No further large features. |
-| `0.2.0`  | Reliability foundation             | fMP4 backend, crash-resilient fragments, progressive MP4 remux on stop, recovery manifest + startup recovery UI, low-disk guard, filesystem/FAT32 checks, MP4 split on fragment boundaries, `hvc1` verification + Apple matrix, container compatibility registry. |
+| `0.2.0`  | Reliability foundation             | MKV as sole recording container; libavformat remux engine (progressive MP4 on stop, faststart); MF/SinkWriter removal; recovery manifest + startup recovery UI; low-disk guard (including remux reserve); filesystem/FAT32 checks; MP4 split via per-segment remux; container compatibility registry. |
 | `0.3.0`  | Presence and notifications         | Recording overlay (excluded from capture), tray icon + recording/paused badge, notification center with unread badge, Windows toasts (low storage / saved / unexpected stop / recovery available), fullscreen/borderless/exclusive matrix. |
 | `0.4.0`  | Crash reporting and updates        | Crashpad, separate report dialog, privacy scrubbing, opt-in upload, symbol pipeline + backend; update check with Stable/Preview channels, auto-updater, hash/signature verification, rollback. *(Only pull crash reporting forward once backend, privacy, and symbol hosting actually exist.)* |
 | `0.5.0`  | Settings & media-capability        | TOML config, profile export/import, encoder factory, capability model, compatibility registry, Basic/Advanced/Expert settings, video rate-control/bitrate, audio bitrate, buffers, encoder presets, split time + size, themes/accent, color-pipeline ADR, audio-format ADR. |
@@ -110,8 +111,9 @@ tested player/editor matrix.
   concrete sample-entry/player matrix, not a bare "PCM".
 - **FLAC in MP4** is not a `1.0` target (FLAC fits MKV; MP4 compatibility is needlessly fragile).
 - **`hvc1` vs `hev1`** matters for HEVC-in-MP4 Apple/QuickTime compatibility (`hvc1` = parameter sets
-  in `hvcC`; `hev1` = in-band allowed). Not yet confirmed under the current MF/SinkWriter path; must be
-  verified on real files (`ffprobe` / Bento4 / MP4Box) in the fMP4 backend slice.
+  in `hvcC`; `hev1` = in-band allowed). libavformat defaults to `hev1`; the remux path must set
+  `codec_tag = MKTAG('h','v','c','1')` before `avformat_write_header()`. This must be verified on
+  real files (`ffprobe` / Bento4 / MP4Box) in the 0.7.0 HEVC/HDR slice.
 
 ### Opus defaults (recording)
 
@@ -134,7 +136,8 @@ Automatic split
 ```
 
 Both limits optional; manual split stays independent; counters reset per split; size is measured from
-committed container bytes (no `file_size()` polling); boundaries stay keyframe-safe; MP4 only after fMP4.
+committed container bytes (no `file_size()` polling); boundaries stay keyframe-safe; MP4 split
+produces one remuxed progressive MP4 per segment.
 
 ---
 
@@ -166,9 +169,9 @@ These underpin multiple versions and must not be scattered into UI `if`-chains:
 
 ## Next step
 
-**v0.2.0 — wave 1: fMP4 backend + crash-resilient fragments + recovery**
+**v0.2.0 — wave 1: libavformat remux engine + reliability foundation**
 
 The first post-0.1.0 work slice is the reliability foundation described in the 0.2.0 row above.
-The fMP4 backend library choice (libavformat vs. controlled ISO-BMFF writer) is intentionally
-deferred to the start of this slice and will be documented in a follow-on ADR; see ADR 0008 for
-the criteria that will govern that decision.
+The backend strategy is decided: ADR 0014 (remux-first, no fMP4 recording writer) is accepted.
+MKV is the sole recording container; libavformat is the remux/trim engine. Implementation of the
+remux engine and the MF/SinkWriter removal is the next active work slice.

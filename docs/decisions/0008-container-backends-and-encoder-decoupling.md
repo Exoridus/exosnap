@@ -5,6 +5,10 @@
 Accepted — libmatroska/libebml already shipped; fMP4 backend implementation scheduled for 0.2.0
 (see roadmap). fMP4 backend library choice intentionally deferred (criteria below).
 
+**Amended:** The deferred fMP4 backend choice has been resolved by ADR 0014 (remux-first,
+no fMP4 recording writer). MKV is the sole recording container; progressive MP4 is delivered
+via libavformat remux-on-stop. No fMP4 recording writer will be built.
+
 ## Context
 
 ExoSnap needs to write at least three container formats: MKV, WebM, and MP4 (progressive and
@@ -31,32 +35,34 @@ per-keyframe Cues, Duration metadata, AAC PTS alignment).
 
 This is the production-quality path for the current release.
 
-### fMP4 / progressive MP4 — backend choice deferred
+### fMP4 / progressive MP4 — backend choice resolved by ADR 0014
 
-For the 0.2.0 fMP4 slice, the backend will be one of:
+~~For the 0.2.0 fMP4 slice, the backend will be one of:~~
 
-- **`libavformat`** (FFmpeg) — proven, supports fMP4 fragment semantics, remux, and stream copy;
-  introduces GPL/LGPL surface to the MP4 path.
-- **Controlled ISO-BMFF writer** — purpose-built for ExoSnap's fragment semantics; avoids external
-  library surface; higher implementation cost.
+~~- **`libavformat`** (FFmpeg) — proven, supports fMP4 fragment semantics, remux, and stream copy;~~
+~~  introduces GPL/LGPL surface to the MP4 path.~~
+~~- **Controlled ISO-BMFF writer** — purpose-built for ExoSnap's fragment semantics; avoids external~~
+~~  library surface; higher implementation cost.~~
 
-The choice is intentionally left open until the 0.2.0 design work begins. The criteria that will
-decide it:
+~~The choice is intentionally left open until the 0.2.0 design work begins.~~
 
-| Criterion | Notes |
+**Resolved by ADR 0014:** No fMP4 recording writer is built. MKV (via libmatroska) is the sole
+recording container; progressive MP4 is delivered via libavformat remux-on-stop. The evaluation
+criteria from this section were resolved as follows:
+
+| Criterion | Resolution |
 |---|---|
-| Crash-resilient fragment semantics | Can the backend write sealed fragments without a final moov pass? |
-| Remux / trim needs | Does Quick Trim (0.11.0) require stream-copy capabilities that the backend already provides? |
-| GPL surface | Does using libavformat in the MP4 path add GPL obligations beyond what is already accepted? |
-| Binary size | Does adding libavformat for MP4 alone justify the size cost vs. a minimal writer? |
+| Crash-resilient fragment semantics | Provided by MKV (incremental cluster writes, truncation-tolerant); no fMP4 writer needed. |
+| Remux / trim needs | libavformat handles remux-on-stop (MP4 faststart) and Quick Trim stream-copy on both MKV and MP4 inputs. |
+| GPL surface | libavformat lgpl-shared, dynamically linked; no new obligations for a GPL-3.0-or-later project. |
+| Binary size | ~28–32 MB in portable ZIP; accepted by the maintainer. Custom minimal build deferred to 0.5.0. |
 
-The ADR for the fMP4 backend will be written at the start of the 0.2.0 slice with those criteria
-resolved.
+See ADR 0014 for the full rationale and evaluation numbers.
 
 ### Media Foundation MP4 path — transitional
 
 The current MF/SinkWriter MP4 path remains in place as a transitional fallback. It is not extended.
-It will be replaced by the fMP4 backend in 0.2.0.
+It is removed in the 0.2.0 slice and replaced by the libavformat remux-on-stop path (see ADR 0014).
 
 ### Encoder / container decoupling
 
@@ -73,10 +79,12 @@ This decoupling is enforced at the interface level: no muxer type is referenced 
 
 ## Consequences
 
-- The fMP4 backend choice must be documented in a follow-on ADR before implementation begins.
-- The MF MP4 path must not be extended with new features; any MP4 improvement targets the fMP4
-  backend.
-- Remux / trim (0.11.0) assumes the fMP4 backend is available; Quick Trim is not implementable
-  on the MF path.
+- ~~The fMP4 backend choice must be documented in a follow-on ADR before implementation begins.~~
+  Resolved: see ADR 0014.
+- The MF MP4 path must not be extended with new features; it is removed in the 0.2.0 slice
+  (see ADR 0014).
+- Remux / trim (0.11.0) uses libavformat (the remux/trim engine introduced in ADR 0014) for
+  stream-copy operations on both MKV and MP4 inputs; Quick Trim is not implementable on the
+  MF path (which is removed).
 - Container format support in the UI must accurately reflect which backend is active and what it
   supports (see ADR 0010 for the compatibility registry).
