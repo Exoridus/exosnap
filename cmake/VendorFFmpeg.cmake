@@ -12,8 +12,8 @@
 # Only the mux-only DLL set (avformat, avcodec, avutil, swresample) is shipped.
 # The remaining DLLs (avfilter, swscale, avdevice) are NOT deployed.
 #
-# FFmpeg build: BtbN ffmpeg-master-latest-win64-lgpl-shared
-# Version tag:  N-124953-gd30dead35e-20260611
+# FFmpeg build: BtbN ffmpeg-n8.1.1-12-ge0e38acd2f-win64-lgpl-shared-8.1
+# Release tag:  autobuild-2026-06-11-14-22 (stable n8.1.1 branch build)
 # License:      LGPL-2.1-or-later (compatible with ExoSnap GPL-3.0-or-later)
 #
 # CI cost note: The ZIP is ~88 MB. No cache entry currently exists for it in
@@ -22,23 +22,24 @@
 
 include(FetchContent)
 
-set(EXOSNAP_FFMPEG_VERSION "N-124953-gd30dead35e-20260611"
+set(EXOSNAP_FFMPEG_VERSION "n8.1.1-12-ge0e38acd2f"
     CACHE STRING "Pinned BtbN FFmpeg build version tag (informational)")
 
-# The master-latest URL is a stable redirect to the same content that was
-# verified with the hash below. Pinned by SHA256; the URL itself is content-
-# addressed through the hash check.
+# IMPORTANT: pin a dated autobuild release tag, never the rolling "latest" tag.
+# BtbN replaces the assets under releases/download/latest/ with every daily
+# autobuild, which would break the SHA256 pin (and every build) within a day.
+# Assets under a dated autobuild-* tag are immutable.
 FetchContent_Declare(
     ffmpeg_prebuilt
-    URL      "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl-shared.zip"
-    URL_HASH "SHA256=35183D1D86B6925589868D162908E66168827A70957FAD9D7485EB666317FB07"
+    URL      "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-06-11-14-22/ffmpeg-n8.1.1-12-ge0e38acd2f-win64-lgpl-shared-8.1.zip"
+    URL_HASH "SHA256=4C9A9CB7D8B4941DA7B0F6B086A2232D3328B1583FC07F9BC2DD79C05A96ED8B"
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(ffmpeg_prebuilt)
 FetchContent_GetProperties(ffmpeg_prebuilt SOURCE_DIR _ffmpeg_src)
 
 # CMake's FetchContent URL download strips the single top-level directory that
-# is present in the BtbN archive (ffmpeg-master-latest-win64-lgpl-shared/).
+# is present in the BtbN archive (ffmpeg-n8.1.1-...-win64-lgpl-shared-8.1/).
 # The content lands directly in ffmpeg_prebuilt-src/ so the root IS _ffmpeg_src.
 set(_ffmpeg_root "${_ffmpeg_src}")
 
