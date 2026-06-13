@@ -142,6 +142,8 @@ qt_add_executable(exosnap WIN32
     ui/overlay/CountdownOverlayWindow.cpp
     ui/overlay/DiagnosticsOverlayWindow.h
     ui/overlay/DiagnosticsOverlayWindow.cpp
+    ui/overlay/QuickControlPillWindow.h
+    ui/overlay/QuickControlPillWindow.cpp
     ui/overlay/RecordingOverlayWindow.h
     ui/overlay/RecordingOverlayWindow.cpp
     ui/overlay/NotificationToastWindow.h
@@ -966,6 +968,19 @@ target_include_directories(diagnostics_overlay_tests PRIVATE ${CMAKE_CURRENT_SOU
 target_compile_definitions(diagnostics_overlay_tests PRIVATE NOMINMAX)
 set_target_properties(diagnostics_overlay_tests PROPERTIES AUTOMOC ON)
 
+# QUICK-PILL-R1 tests
+exosnap_add_gtest(
+    NAME quick_control_pill_tests
+    TEST_PREFIX overlay.
+    SOURCES
+        tests/test_quick_control_pill.cpp
+        ui/overlay/QuickControlPillWindow.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(quick_control_pill_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(quick_control_pill_tests PRIVATE NOMINMAX)
+set_target_properties(quick_control_pill_tests PROPERTIES AUTOMOC ON)
+
 # NOTIFY-TOASTS-R1 tests
 exosnap_add_gtest(
     NAME notification_manager_tests
@@ -1023,6 +1038,7 @@ exosnap_add_gtest(
         notifications/NotificationManager.cpp
         ui/overlay/CountdownOverlayWindow.cpp
         ui/overlay/NotificationToastWindow.cpp
+        ui/overlay/QuickControlPillWindow.cpp
         ui/overlay/RecordingOverlayWindow.cpp
         ui/overlay/DiagnosticsOverlayWindow.cpp
         ui/widgets/RegionSelectionOverlay.cpp

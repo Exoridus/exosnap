@@ -45,6 +45,12 @@ struct PersistedAppSettings {
     // TRAY-CLOSE-TO-TRAY-R1: whether the one-time close-to-tray notice has
     // already been shown to the user. Default false (not yet shown).
     bool tray_close_notice_shown = false;
+
+    // QUICK-PILL-R1: whether the interactive quick-control pill overlay is shown
+    // during recording. Default OFF.  The pill is capture-excluded (via
+    // SetWindowDisplayAffinity) and interactive (NOT click-through), so it is an
+    // opt-in feature gated here.
+    bool show_quick_controls = false;
 };
 
 class AppSettingsStore {

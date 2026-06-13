@@ -340,6 +340,24 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
 
     connect(keep_in_tray_check_, &ui::widgets::ExoCheckBox::toggled, this, &AdvancedPage::keepRunningInTrayChanged);
 
+    // QUICK-PILL-R1: interactive quick-control pill toggle
+    auto* quick_controls_row = new QFrame(controls_panel);
+    quick_controls_row->setProperty("panelRole", "compactRow");
+    auto* quick_controls_layout = new QVBoxLayout(quick_controls_row);
+    quick_controls_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+    quick_controls_layout->setSpacing(M::kSpaceXs);
+    quick_controls_layout->addWidget(makeFieldLabel(QStringLiteral("Quick controls"), quick_controls_row));
+    quick_controls_check_ = makeCheck(QStringLiteral("Show quick-control pill during recording"), quick_controls_row);
+    quick_controls_check_->setChecked(false); // default OFF; overridden by setShowQuickControls()
+    quick_controls_layout->addWidget(quick_controls_check_);
+    quick_controls_layout->addWidget(makeSubLabel(
+        QStringLiteral("An interactive on-screen control pill (pause, stop, capture frame) shown "
+                       "over the recording target. Excluded from capture — interactive, not click-through."),
+        quick_controls_row));
+    controls_layout->addWidget(quick_controls_row);
+
+    connect(quick_controls_check_, &ui::widgets::ExoCheckBox::toggled, this, &AdvancedPage::showQuickControlsChanged);
+
     right_layout->addWidget(controls_panel);
 
     auto* danger_panel = new QFrame(right_col);
@@ -420,6 +438,11 @@ void AdvancedPage::setKeepRunningInTray(bool keep) {
         keep_in_tray_check_->setChecked(keep);
 }
 
+void AdvancedPage::setShowQuickControls(bool show) {
+    if (quick_controls_check_)
+        quick_controls_check_->setChecked(show);
+}
+
 void AdvancedPage::onReset() {
     log_level_combo_->setCurrentIndex(3);
     nvtx_check_->setChecked(false);
@@ -435,6 +458,9 @@ void AdvancedPage::onReset() {
     // Reset keep-in-tray to default OFF and emit so MainWindow persists the change.
     if (keep_in_tray_check_)
         keep_in_tray_check_->setChecked(false);
+    // Reset quick controls to default OFF and emit so MainWindow persists the change.
+    if (quick_controls_check_)
+        quick_controls_check_->setChecked(false);
 }
 
 } // namespace exosnap

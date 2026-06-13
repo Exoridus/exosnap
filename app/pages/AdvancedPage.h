@@ -38,6 +38,10 @@ class AdvancedPage : public QWidget {
     // Call once after construction with the persisted value.
     void setKeepRunningInTray(bool keep);
 
+    // QUICK-PILL-R1: populate the quick-controls checkbox from the stored setting.
+    // Call once after construction with the persisted value.
+    void setShowQuickControls(bool show);
+
   signals:
     void backToSettingsRequested();
     // Emitted when the "Show recording overlay" checkbox changes.
@@ -48,6 +52,8 @@ class AdvancedPage : public QWidget {
     void showNotificationsChanged(bool show);
     // TRAY-CLOSE-TO-TRAY-R1: emitted when the "Keep running in tray" checkbox changes.
     void keepRunningInTrayChanged(bool keep);
+    // QUICK-PILL-R1: emitted when the "Quick controls" checkbox changes.
+    void showQuickControlsChanged(bool show);
 
   private:
     void onReset();
@@ -57,7 +63,8 @@ class AdvancedPage : public QWidget {
     ui::widgets::ExoCheckBox* overlay_check_ = nullptr;
     ui::widgets::ExoCheckBox* diagnostics_overlay_check_ = nullptr;
     ui::widgets::ExoCheckBox* notifications_check_ = nullptr;
-    ui::widgets::ExoCheckBox* keep_in_tray_check_ = nullptr; // TRAY-CLOSE-TO-TRAY-R1
+    ui::widgets::ExoCheckBox* keep_in_tray_check_ = nullptr;   // TRAY-CLOSE-TO-TRAY-R1
+    ui::widgets::ExoCheckBox* quick_controls_check_ = nullptr; // QUICK-PILL-R1
 
     QLabel* baseline_profile_label_ = nullptr;
     QLabel* baseline_container_label_ = nullptr;
