@@ -61,6 +61,11 @@ class TrayPresence : public QObject {
     void show();
     void hide();
 
+    // TRAY-CLOSE-TO-TRAY-R1: show a tray balloon/message (platform-dependent;
+    // on Windows this appears as a tray notification bubble).
+    void showMessage(const QString& title, const QString& message,
+                     QSystemTrayIcon::MessageIcon icon = QSystemTrayIcon::Information, int msecs = 3000);
+
     // ---- Unread notification badge (NOTIFY-SKIN-R1) ----------------------
     // Increment the unread count; updates the Notifications menu item label.
     // Call from MainWindow when an actionable toast becomes visible.
@@ -136,5 +141,19 @@ class TrayPresence : public QObject {
 // Testable without a QApplication.
 
 [[nodiscard]] TrayIconState TrayIconStateFromStatusLabel(const QString& status_label);
+
+// ---------------------------------------------------------------------------
+// ShouldHideToTray
+// ---------------------------------------------------------------------------
+// Pure decision helper — testable without a QApplication or MainWindow.
+// Returns true when a window-close event should hide to tray instead of quit.
+//
+// Parameters:
+//   keep_running_in_tray  — the persisted opt-in setting.
+//   force_quit            — true when the user explicitly chose "Quit" from the
+//                           tray menu (bypasses the hide-to-tray path).
+//   tray_available        — QSystemTrayIcon::isSystemTrayAvailable() result.
+
+[[nodiscard]] bool ShouldHideToTray(bool keep_running_in_tray, bool force_quit, bool tray_available) noexcept;
 
 } // namespace exosnap::ui::tray

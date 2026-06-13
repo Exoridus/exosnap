@@ -128,26 +128,33 @@ void TrayPresence::hide() {
         tray_icon_->hide();
 }
 
+void TrayPresence::showMessage(const QString& title, const QString& message, QSystemTrayIcon::MessageIcon icon,
+                               int msecs) {
+    if (tray_icon_ && tray_icon_->isVisible())
+        tray_icon_->showMessage(title, message, icon, msecs);
+}
+
 QString TrayPresence::currentTooltip() const {
-    // Rebuild from current members — same logic as rebuildTooltip but returns the string.
-    QString tip = QStringLiteral("ExoSnap");
+    // Tooltip format per Mappe "Tray behavior" SpecBox:
+    //   "ExoSnap — Ready"
+    //   "ExoSnap — Recording 04:17"
+    //   "ExoSnap — Paused"
+    QString tip = QStringLiteral("ExoSnap — ");
 
-    const QString state_str = [this]() -> QString {
-        switch (state_) {
-        case TrayIconState::Recording:
-            return QStringLiteral("Recording");
-        case TrayIconState::Paused:
-            return QStringLiteral("Paused");
-        case TrayIconState::Idle:
-        default:
-            return QStringLiteral("Ready");
-        }
-    }();
-
-    tip += QStringLiteral(" — ") + state_str;
-
-    if (!elapsed_text_.isEmpty() && state_ != TrayIconState::Idle)
-        tip += QStringLiteral(" (") + elapsed_text_ + QStringLiteral(")");
+    switch (state_) {
+    case TrayIconState::Recording:
+        tip += QStringLiteral("Recording");
+        if (!elapsed_text_.isEmpty())
+            tip += QLatin1Char(' ') + elapsed_text_;
+        break;
+    case TrayIconState::Paused:
+        tip += QStringLiteral("Paused");
+        break;
+    case TrayIconState::Idle:
+    default:
+        tip += QStringLiteral("Ready");
+        break;
+    }
 
     return tip;
 }
@@ -215,12 +222,30 @@ void TrayPresence::rebuildNotificationsLabel() {
 }
 
 void TrayPresence::onTrayActivated(QSystemTrayIcon::ActivationReason reason) {
-    if (reason == QSystemTrayIcon::DoubleClick || reason == QSystemTrayIcon::Trigger)
+    // TRAY-CLOSE-TO-TRAY-R1 click semantics (from Mappe "Tray behavior" SpecBox):
+    //   Left-click (Trigger)  → show / focus window
+    //   Double-click          → start / stop recording
+    //   Right-click           → context menu (handled by Qt via setContextMenu)
+    if (reason == QSystemTrayIcon::Trigger)
         emit activateWindowRequested();
+    else if (reason == QSystemTrayIcon::DoubleClick)
+        emit recordToggleRequested();
 }
 
 void TrayPresence::onShowHideTriggered() {
     emit activateWindowRequested();
+}
+
+// ---------------------------------------------------------------------------
+// ShouldHideToTray (TRAY-CLOSE-TO-TRAY-R1)
+// ---------------------------------------------------------------------------
+
+bool ShouldHideToTray(bool keep_running_in_tray, bool force_quit, bool tray_available) noexcept {
+    // Hide to tray only when:
+    //   • the user has opted in (keep_running_in_tray == true), AND
+    //   • this is not a forced quit (e.g. from tray menu "Quit"), AND
+    //   • the system tray is actually available.
+    return keep_running_in_tray && !force_quit && tray_available;
 }
 
 } // namespace exosnap::ui::tray

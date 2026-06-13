@@ -322,6 +322,24 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
 
     connect(notifications_check_, &ui::widgets::ExoCheckBox::toggled, this, &AdvancedPage::showNotificationsChanged);
 
+    // TRAY-CLOSE-TO-TRAY-R1: close-to-tray opt-in toggle
+    auto* tray_row = new QFrame(controls_panel);
+    tray_row->setProperty("panelRole", "compactRow");
+    auto* tray_layout = new QVBoxLayout(tray_row);
+    tray_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+    tray_layout->setSpacing(M::kSpaceXs);
+    tray_layout->addWidget(makeFieldLabel(QStringLiteral("Tray behavior"), tray_row));
+    keep_in_tray_check_ = makeCheck(QStringLiteral("Keep running in tray when window closed"), tray_row);
+    keep_in_tray_check_->setChecked(false); // default OFF; overridden by setKeepRunningInTray()
+    tray_layout->addWidget(keep_in_tray_check_);
+    tray_layout->addWidget(
+        makeSubLabel(QStringLiteral("When enabled, closing the window hides ExoSnap to the tray instead of quitting. "
+                                    "Right-click the tray icon to quit."),
+                     tray_row));
+    controls_layout->addWidget(tray_row);
+
+    connect(keep_in_tray_check_, &ui::widgets::ExoCheckBox::toggled, this, &AdvancedPage::keepRunningInTrayChanged);
+
     right_layout->addWidget(controls_panel);
 
     auto* danger_panel = new QFrame(right_col);
@@ -397,6 +415,11 @@ void AdvancedPage::setShowNotifications(bool show) {
         notifications_check_->setChecked(show);
 }
 
+void AdvancedPage::setKeepRunningInTray(bool keep) {
+    if (keep_in_tray_check_)
+        keep_in_tray_check_->setChecked(keep);
+}
+
 void AdvancedPage::onReset() {
     log_level_combo_->setCurrentIndex(3);
     nvtx_check_->setChecked(false);
@@ -409,6 +432,9 @@ void AdvancedPage::onReset() {
     // Reset notifications to default ON and emit so MainWindow persists the change.
     if (notifications_check_)
         notifications_check_->setChecked(true);
+    // Reset keep-in-tray to default OFF and emit so MainWindow persists the change.
+    if (keep_in_tray_check_)
+        keep_in_tray_check_->setChecked(false);
 }
 
 } // namespace exosnap

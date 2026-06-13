@@ -20,6 +20,30 @@ namespace exosnap::ui::tray {
 namespace {
 
 // ---------------------------------------------------------------------------
+// Pure-logic tests: ShouldHideToTray (TRAY-CLOSE-TO-TRAY-R1)
+// ---------------------------------------------------------------------------
+
+TEST(ShouldHideToTrayTest, AllConditionsMet_ReturnsTrue) {
+    EXPECT_TRUE(ShouldHideToTray(/*keep=*/true, /*force=*/false, /*tray_available=*/true));
+}
+
+TEST(ShouldHideToTrayTest, SettingOff_ReturnsFalse) {
+    EXPECT_FALSE(ShouldHideToTray(/*keep=*/false, /*force=*/false, /*tray_available=*/true));
+}
+
+TEST(ShouldHideToTrayTest, ForceQuit_ReturnsFalse) {
+    EXPECT_FALSE(ShouldHideToTray(/*keep=*/true, /*force=*/true, /*tray_available=*/true));
+}
+
+TEST(ShouldHideToTrayTest, TrayUnavailable_ReturnsFalse) {
+    EXPECT_FALSE(ShouldHideToTray(/*keep=*/true, /*force=*/false, /*tray_available=*/false));
+}
+
+TEST(ShouldHideToTrayTest, AllFalse_ReturnsFalse) {
+    EXPECT_FALSE(ShouldHideToTray(/*keep=*/false, /*force=*/true, /*tray_available=*/false));
+}
+
+// ---------------------------------------------------------------------------
 // Pure-logic tests: TrayIconStateFromStatusLabel
 // ---------------------------------------------------------------------------
 
@@ -135,8 +159,9 @@ TEST_F(TrayPresenceTest, ApplyState_Paused_TooltipContainsPaused) {
     TrayPresence tp;
     tp.applyState(TrayIconState::Paused, QStringLiteral("PAUSED"), QStringLiteral("00:12:00"));
     EXPECT_EQ(tp.currentState(), TrayIconState::Paused);
+    // Spec: "ExoSnap — Paused" (elapsed not shown in Paused tooltip per Mappe spec).
     EXPECT_TRUE(tp.currentTooltip().contains(QStringLiteral("Paused")));
-    EXPECT_TRUE(tp.currentTooltip().contains(QStringLiteral("00:12:00")));
+    EXPECT_FALSE(tp.currentTooltip().contains(QStringLiteral("00:12:00")));
 }
 
 // ---- updateElapsedText ----
@@ -314,6 +339,67 @@ TEST_F(TrayPresenceTest, MultipleIncrements_CountCumulates) {
     for (int i = 0; i < 5; ++i)
         tp.incrementUnreadCount();
     EXPECT_EQ(tp.unreadCount(), 5);
+}
+
+// ---- TRAY-CLOSE-TO-TRAY-R1: click semantics ----
+// Verify that Trigger (single left-click) emits activateWindowRequested and
+// DoubleClick emits recordToggleRequested (spec: Mappe "Tray behavior" SpecBox).
+
+TEST_F(TrayPresenceTest, ClickSemantics_SingleLeftClick_EmitsActivateWindow) {
+    TrayPresence tp;
+    bool activate_received = false;
+    bool record_received = false;
+    QObject::connect(&tp, &TrayPresence::activateWindowRequested, [&] { activate_received = true; });
+    QObject::connect(&tp, &TrayPresence::recordToggleRequested, [&] { record_received = true; });
+
+    // Simulate single left-click (Trigger).
+    QMetaObject::invokeMethod(&tp, "onTrayActivated", Qt::DirectConnection,
+                              Q_ARG(QSystemTrayIcon::ActivationReason, QSystemTrayIcon::Trigger));
+
+    EXPECT_TRUE(activate_received);
+    EXPECT_FALSE(record_received);
+}
+
+TEST_F(TrayPresenceTest, ClickSemantics_DoubleClick_EmitsRecordToggle) {
+    TrayPresence tp;
+    bool activate_received = false;
+    bool record_received = false;
+    QObject::connect(&tp, &TrayPresence::activateWindowRequested, [&] { activate_received = true; });
+    QObject::connect(&tp, &TrayPresence::recordToggleRequested, [&] { record_received = true; });
+
+    // Simulate double-click.
+    QMetaObject::invokeMethod(&tp, "onTrayActivated", Qt::DirectConnection,
+                              Q_ARG(QSystemTrayIcon::ActivationReason, QSystemTrayIcon::DoubleClick));
+
+    EXPECT_FALSE(activate_received);
+    EXPECT_TRUE(record_received);
+}
+
+// ---- TRAY-CLOSE-TO-TRAY-R1: tooltip format ----
+// Spec: "ExoSnap — Ready" / "ExoSnap — Recording 04:17" / "ExoSnap — Paused"
+
+TEST_F(TrayPresenceTest, Tooltip_Idle_MatchesSpec) {
+    TrayPresence tp;
+    tp.applyState(TrayIconState::Idle, QStringLiteral("READY"));
+    EXPECT_EQ(tp.currentTooltip(), QStringLiteral("ExoSnap \xe2\x80\x94 Ready"));
+}
+
+TEST_F(TrayPresenceTest, Tooltip_Recording_NoElapsed_MatchesSpec) {
+    TrayPresence tp;
+    tp.applyState(TrayIconState::Recording, QStringLiteral("REC"));
+    EXPECT_EQ(tp.currentTooltip(), QStringLiteral("ExoSnap \xe2\x80\x94 Recording"));
+}
+
+TEST_F(TrayPresenceTest, Tooltip_Recording_WithElapsed_MatchesSpec) {
+    TrayPresence tp;
+    tp.applyState(TrayIconState::Recording, QStringLiteral("REC"), QStringLiteral("04:17"));
+    EXPECT_EQ(tp.currentTooltip(), QStringLiteral("ExoSnap \xe2\x80\x94 Recording 04:17"));
+}
+
+TEST_F(TrayPresenceTest, Tooltip_Paused_MatchesSpec) {
+    TrayPresence tp;
+    tp.applyState(TrayIconState::Paused, QStringLiteral("PAUSED"), QStringLiteral("00:12:00"));
+    EXPECT_EQ(tp.currentTooltip(), QStringLiteral("ExoSnap \xe2\x80\x94 Paused"));
 }
 
 } // namespace

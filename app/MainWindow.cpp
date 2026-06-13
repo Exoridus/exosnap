@@ -755,6 +755,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // ---- Notification toasts (NOTIFY-TOASTS-R1) ----
     initNotificationToasts();
 
+    // ---- Close-to-tray toggle (TRAY-CLOSE-TO-TRAY-R1) ----
+    if (advanced_page_)
+        advanced_page_->setKeepRunningInTray(persisted_settings_.keep_running_in_tray);
+    connect(advanced_page_, &AdvancedPage::keepRunningInTrayChanged, this, [this](bool keep) {
+        persisted_settings_.keep_running_in_tray = keep;
+        settings_store_.Save(persisted_settings_);
+    });
+
     // ---- Reactive device discovery wiring ----
     // Audio: forward to both ConfigPage and RecordPage (under no-emit contract).
     connect(&audio_notifier_, &AudioDeviceNotifier::snapshotChanged, this, &MainWindow::onAudioDevicesChanged);
@@ -791,8 +799,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         // Route tray record toggle → same slot as the global hotkey.
         connect(tray_presence_, &ui::tray::TrayPresence::recordToggleRequested, this,
                 &MainWindow::recordToggleRequested);
-        // Route tray quit → close the window (closeEvent handles recording guard).
-        connect(tray_presence_, &ui::tray::TrayPresence::quitRequested, this, &QWidget::close);
+        // Route tray quit → force-close (bypass close-to-tray; closeEvent handles recording guard).
+        // TRAY-CLOSE-TO-TRAY-R1: set force_quit_ so closeEvent knows this is a real quit, not a hide.
+        connect(tray_presence_, &ui::tray::TrayPresence::quitRequested, this, [this]() {
+            force_quit_ = true;
+            close();
+        });
         // Wire elapsed text updates into the tray tooltip at the existing cadence
         // (chromeRuntimeMetricsChanged fires ~30 Hz via MeterCallback when recording).
         connect(record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
@@ -1428,6 +1440,33 @@ void MainWindow::changeEvent(QEvent* event) {
 
 void MainWindow::closeEvent(QCloseEvent* event) {
     saveWindowGeometry();
+
+    // TRAY-CLOSE-TO-TRAY-R1: if close-to-tray is enabled and this is NOT a
+    // force-quit (e.g. from the tray "Quit" action or recording guard accept),
+    // hide the window to the tray instead of quitting.
+    if (ui::tray::ShouldHideToTray(persisted_settings_.keep_running_in_tray, force_quit_, tray_presence_ != nullptr)) {
+        event->ignore();
+        hide();
+        if (tray_presence_)
+            tray_presence_->setWindowVisible(false);
+
+        // One-time close-to-tray notice: shown on the first hide so the user
+        // knows ExoSnap is still running in the tray.
+        if (!persisted_settings_.tray_close_notice_shown) {
+            persisted_settings_.tray_close_notice_shown = true;
+            settings_store_.Save(persisted_settings_);
+            if (tray_presence_) {
+                tray_presence_->showMessage(
+                    QStringLiteral("ExoSnap is still running"),
+                    QStringLiteral("ExoSnap is running in the tray. Right-click the tray icon to quit."),
+                    QSystemTrayIcon::Information, 4000);
+            }
+        }
+        return;
+    }
+
+    // Reset the force-quit flag for next time (in case the window is re-shown).
+    force_quit_ = false;
 
     // ADR-0014: MP4 remux running after stop — ask user to wait.
     if (remuxing_active_) {

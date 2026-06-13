@@ -218,6 +218,9 @@ class MainWindow : public QMainWindow {
     bool recording_active_ = false;
     // ADR-0014: true while the MP4 remux job is running after the engine stopped.
     bool remuxing_active_ = false;
+    // TRAY-CLOSE-TO-TRAY-R1: set to true when the user explicitly quits via the
+    // tray menu "Quit" action so closeEvent bypasses the hide-to-tray logic.
+    bool force_quit_ = false;
     bool runtime_window_icon_bound_ = false;
     bool resizable_style_applied_ = false;
     bool hotkeys_registered_ = false;
