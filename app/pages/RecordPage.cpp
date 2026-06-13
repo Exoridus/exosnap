@@ -3625,6 +3625,18 @@ void RecordPage::onSelectRegionTarget() {
     refresh();
 }
 
+void RecordPage::armFromRecovery(const RecoveryManifestEntry& entry) {
+    if (!coordinator_)
+        return; // coordinator not yet initialised — safe since overlay appears post-init
+
+    RecordingCoordinator::RecoverySessionInfo info;
+    info.manifest_entry = entry;
+    // Target validity: we do not know the original capture target from the manifest
+    // (not stored), so mark it as requiring re-selection on resume.
+    info.target_valid = false;
+    coordinator_->ArmFromRecovery(info);
+}
+
 void RecordPage::setSourcePickerOverlay(ui::dialogs::SourcePickerOverlay* overlay) {
     source_picker_overlay_ = overlay;
     if (overlay) {

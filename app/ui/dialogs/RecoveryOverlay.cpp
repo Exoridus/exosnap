@@ -40,7 +40,7 @@ QString FormatSize(qint64 bytes) {
 } // namespace
 
 // ---------------------------------------------------------------------------
-// Per-candidate row widget
+// Per-candidate row widget (ADR-0015: Finish / Continue / Delete)
 // ---------------------------------------------------------------------------
 class RecoveryRow : public QWidget {
     Q_OBJECT
@@ -51,8 +51,10 @@ class RecoveryRow : public QWidget {
     }
 
   signals:
-    // Emitted when this row is fully resolved (action succeeded or discard confirmed).
+    // Emitted when this row is fully resolved (Finish succeeded or Delete confirmed).
     void resolved();
+    // Emitted when the user chooses "Continue" for this candidate (non-finalized only).
+    void continueRequested(const RecoveryManifestEntry& entry);
 
   private:
     void buildUi() {
@@ -96,13 +98,21 @@ class RecoveryRow : public QWidget {
         action_layout->setContentsMargins(0, 0, 0, 0);
         action_layout->setSpacing(8);
 
-        keep_btn_ = new QPushButton(QStringLiteral("Keep as MKV"), action_row);
-        keep_btn_->setObjectName("recoveryKeepBtn");
-        export_btn_ = new QPushButton(QStringLiteral("Export as MP4"), action_row);
-        export_btn_->setObjectName("recoveryExportBtn");
-        discard_btn_ = new QPushButton(QStringLiteral("Discard"), action_row);
-        discard_btn_->setObjectName("recoveryDiscardBtn");
-        discard_btn_->setProperty("role", "destructive");
+        // "Finish" — always shown.
+        finish_btn_ = new QPushButton(QStringLiteral("Finish"), action_row);
+        finish_btn_->setObjectName("recoveryFinishBtn");
+
+        // "Continue" — only for non-finalized candidates (true crashes).
+        // Finalized entries are deliberate stops whose remux failed; they get Finish/Delete only.
+        const bool can_continue = !candidate_.entry.finalized;
+        continue_btn_ = new QPushButton(QStringLiteral("Continue"), action_row);
+        continue_btn_->setObjectName("recoveryContinueBtn");
+        continue_btn_->setVisible(can_continue);
+
+        // "Delete" — always shown (destructive, inline two-step confirm).
+        delete_btn_ = new QPushButton(QStringLiteral("Delete"), action_row);
+        delete_btn_->setObjectName("recoveryDeleteBtn");
+        delete_btn_->setProperty("role", "destructive");
 
         status_label_ = new QLabel(action_row);
         status_label_->setObjectName("recoveryRowStatus");
@@ -121,9 +131,10 @@ class RecoveryRow : public QWidget {
         cancel_btn_->setObjectName("recoveryCancelBtn");
         cancel_btn_->setVisible(false);
 
-        action_layout->addWidget(keep_btn_);
-        action_layout->addWidget(export_btn_);
-        action_layout->addWidget(discard_btn_);
+        action_layout->addWidget(finish_btn_);
+        if (can_continue)
+            action_layout->addWidget(continue_btn_);
+        action_layout->addWidget(delete_btn_);
         action_layout->addSpacing(8);
         action_layout->addWidget(progress_bar_, 1);
         action_layout->addWidget(cancel_btn_);
@@ -133,16 +144,17 @@ class RecoveryRow : public QWidget {
         layout->addWidget(info_row);
         layout->addWidget(action_row);
 
-        connect(keep_btn_, &QPushButton::clicked, this, [this]() { onKeepAsMkv(); });
-        connect(export_btn_, &QPushButton::clicked, this, [this]() { onExportAsMp4(); });
-        connect(discard_btn_, &QPushButton::clicked, this, [this]() { onDiscard(); });
+        connect(finish_btn_, &QPushButton::clicked, this, [this]() { onFinish(); });
+        connect(continue_btn_, &QPushButton::clicked, this, [this]() { onContinue(); });
+        connect(delete_btn_, &QPushButton::clicked, this, [this]() { onDelete(); });
         connect(cancel_btn_, &QPushButton::clicked, this, [this]() { cancel_requested_ = true; });
     }
 
     void setButtonsEnabled(bool enabled) {
-        keep_btn_->setEnabled(enabled);
-        export_btn_->setEnabled(enabled);
-        discard_btn_->setEnabled(enabled);
+        finish_btn_->setEnabled(enabled);
+        if (continue_btn_->isVisible())
+            continue_btn_->setEnabled(enabled);
+        delete_btn_->setEnabled(enabled);
     }
 
     void showProgress(bool show) {
@@ -159,7 +171,7 @@ class RecoveryRow : public QWidget {
         status_label_->style()->polish(status_label_);
     }
 
-    void onKeepAsMkv() {
+    void onFinish() {
         setButtonsEnabled(false);
         showProgress(true);
         progress_bar_->setValue(0);
@@ -169,7 +181,7 @@ class RecoveryRow : public QWidget {
 
         // Run on a worker thread; marshal back via invokeMethod.
         auto* thread = QThread::create([this, entry]() {
-            const auto result = service_.KeepAsMkv(entry, [this](float f) -> bool {
+            const auto result = service_.Finish(entry, [this](float f) -> bool {
                 QMetaObject::invokeMethod(
                     this, [this, f]() { progress_bar_->setValue(static_cast<int>(f * 100.0f)); }, Qt::QueuedConnection);
                 return !cancel_requested_;
@@ -180,31 +192,18 @@ class RecoveryRow : public QWidget {
         thread->start();
     }
 
-    void onExportAsMp4() {
-        setButtonsEnabled(false);
-        showProgress(true);
-        progress_bar_->setValue(0);
-        cancel_requested_ = false;
-
-        const RecoveryManifestEntry entry = candidate_.entry;
-
-        auto* thread = QThread::create([this, entry]() {
-            const auto result = service_.ExportAsMp4(entry, [this](float f) -> bool {
-                QMetaObject::invokeMethod(
-                    this, [this, f]() { progress_bar_->setValue(static_cast<int>(f * 100.0f)); }, Qt::QueuedConnection);
-                return !cancel_requested_;
-            });
-            QMetaObject::invokeMethod(this, [this, result]() { onActionComplete(result); }, Qt::QueuedConnection);
-        });
-        thread->setParent(this);
-        thread->start();
+    void onContinue() {
+        // "Continue" emits the signal; the overlay closes; coordinator arms the session.
+        // No progress bar needed here — the artefact remux runs in the coordinator context.
+        emit continueRequested(candidate_.entry);
+        // Do not call resolved() — the overlay will close itself after emitting the signal.
     }
 
-    void onDiscard() {
+    void onDelete() {
         if (awaiting_confirm_) {
             // Second click: confirmed — proceed.
             awaiting_confirm_ = false;
-            discard_btn_->setText(QStringLiteral("Discard"));
+            delete_btn_->setText(QStringLiteral("Delete"));
             setButtonsEnabled(false);
 
             const RecoveryManifestEntry entry = candidate_.entry;
@@ -213,23 +212,24 @@ class RecoveryRow : public QWidget {
         } else {
             // First click: arm the inline confirm.
             awaiting_confirm_ = true;
-            discard_btn_->setText(QStringLiteral("Confirm discard"));
-            keep_btn_->setEnabled(false);
-            export_btn_->setEnabled(false);
+            delete_btn_->setText(QStringLiteral("Confirm delete"));
+            finish_btn_->setEnabled(false);
+            if (continue_btn_->isVisible())
+                continue_btn_->setEnabled(false);
         }
     }
 
     void onActionComplete(const RecoveryActionResult& result) {
         showProgress(false);
         if (result.success) {
-            // Show a brief "Saved" state then remove the row.
+            // Show a brief "Done" state then remove the row.
             setStatus(QStringLiteral("Done"));
             QTimer::singleShot(600, this, [this]() { emit resolved(); });
         } else {
             // Re-enable buttons; show inline error.
             setButtonsEnabled(true);
             awaiting_confirm_ = false;
-            discard_btn_->setText(QStringLiteral("Discard"));
+            delete_btn_->setText(QStringLiteral("Delete"));
             setStatus(QString::fromStdString(result.message), /*is_error=*/true);
         }
     }
@@ -240,9 +240,9 @@ class RecoveryRow : public QWidget {
     bool awaiting_confirm_ = false;
 
     QLabel* name_label_ = nullptr;
-    QPushButton* keep_btn_ = nullptr;
-    QPushButton* export_btn_ = nullptr;
-    QPushButton* discard_btn_ = nullptr;
+    QPushButton* finish_btn_ = nullptr;
+    QPushButton* continue_btn_ = nullptr;
+    QPushButton* delete_btn_ = nullptr;
     QProgressBar* progress_bar_ = nullptr;
     QPushButton* cancel_btn_ = nullptr;
     QLabel* status_label_ = nullptr;
@@ -290,18 +290,14 @@ QFrame* RecoveryOverlay::buildCard() {
     title->setProperty("labelRole", "recoveryTitle");
     title_row->addWidget(title, 1);
 
-    auto* dismiss_btn = new QPushButton(QString::fromLatin1("\xd7"), card);
-    dismiss_btn->setObjectName("recoveryCloseButton");
-    dismiss_btn->setFixedSize(28, 28);
-    connect(dismiss_btn, &QPushButton::clicked, this, &RecoveryOverlay::closeOverlay);
-    title_row->addWidget(dismiss_btn, 0, Qt::AlignTop);
-
     main_layout->addLayout(title_row);
     main_layout->addSpacing(6);
 
     // ── Hint text ─────────────────────────────────────────────────────────
     auto* hint = new QLabel(QStringLiteral("These recordings were interrupted before they could be saved. "
-                                           "Choose what to do with each one, or dismiss to decide later."),
+                                           "Finish saves the recording as originally configured. "
+                                           "Continue resumes recording from where you left off. "
+                                           "Or decide later — entries stay for the next launch."),
                             card);
     hint->setObjectName("recoveryHint");
     hint->setProperty("labelRole", "recoveryHint");
@@ -340,9 +336,29 @@ QFrame* RecoveryOverlay::buildCard() {
                 QTimer::singleShot(300, this, &RecoveryOverlay::closeOverlay);
             }
         });
+
+        connect(row, &RecoveryRow::continueRequested, this, [this](const RecoveryManifestEntry& entry) {
+            // Relay to the overlay signal; close the overlay.
+            emit continueRequested(entry);
+            closeOverlay();
+        });
     }
 
     main_layout->addWidget(rows_container);
+    main_layout->addSpacing(16);
+
+    // ── "Decide later" footer button ──────────────────────────────────────
+    auto* footer_row = new QHBoxLayout();
+    footer_row->setContentsMargins(0, 0, 0, 0);
+    footer_row->addStretch(1);
+
+    auto* decide_later_btn = new QPushButton(QStringLiteral("Decide later"), card);
+    decide_later_btn->setObjectName("recoveryDecideLaterBtn");
+    decide_later_btn->setFlat(true);
+    connect(decide_later_btn, &QPushButton::clicked, this, &RecoveryOverlay::closeOverlay);
+    footer_row->addWidget(decide_later_btn);
+
+    main_layout->addLayout(footer_row);
 
     return card;
 }

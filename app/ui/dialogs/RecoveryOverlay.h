@@ -20,13 +20,17 @@ namespace exosnap::ui::dialogs {
 //   - Plain QWidget (never a QDialog / OS window).
 //   - Parent = central widget; covers the full app window.
 //   - Scrim via paintEvent rgba(8,8,10,0.62).
-//   - Escape / backdrop-click = "dismiss" (decide later).
+//   - Escape / backdrop-click = "Decide later" (entries remain in manifest).
 //   - Geometry tracked via parent event-filter.
 //
-// For each candidate the card shows:
+// ADR-0015: per candidate the card shows:
 //   filename, recording size, timestamp, target container
-//   → "Keep as MKV" | "Export as MP4" | "Discard" (inline two-step confirm)
+//   → "Finish" | "Continue" (non-finalized only) | "Delete" (inline two-step confirm)
+//   → "Decide later" text button (bottom of card)
 //   → progress bar + Cancel while a remux is running
+//
+// "Continue" signal: emitted when the user arms a candidate for continuation.
+// The overlay closes; the coordinator enters ArmedFromRecovery state.
 //
 // When all entries are resolved the overlay auto-closes.
 class RecoveryOverlay : public QWidget {
@@ -42,6 +46,9 @@ class RecoveryOverlay : public QWidget {
 
   signals:
     void closed();
+    // Emitted when the user chooses "Continue" for a candidate.
+    // The coordinator (wired by MainWindow) calls ArmFromRecovery().
+    void continueRequested(const RecoveryManifestEntry& entry);
 
   protected:
     void keyPressEvent(QKeyEvent* event) override;

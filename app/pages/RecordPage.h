@@ -160,6 +160,12 @@ class RecordPage : public QWidget {
     void onHotkeyAddMarker();
     void onHotkeySplitRecording();
     void setSourcePickerOverlay(ui::dialogs::SourcePickerOverlay* overlay);
+
+    // ADR-0015: arm a recovery candidate for "Continue" continuation.
+    // Delegates to the coordinator's ArmFromRecovery(). No-op when coordinator
+    // is not yet initialised (deferred init); the overlay can only appear after
+    // coordinatorInitialized() fires so this is safe in practice.
+    void armFromRecovery(const RecoveryManifestEntry& entry);
     // Refresh display/window source list; call on screen add/remove events.
     void refreshDisplayTargets();
 
