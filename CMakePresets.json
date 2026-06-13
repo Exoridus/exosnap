@@ -49,6 +49,16 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "windows-x64-ninja-lint",
+      "displayName": "Windows x64 Ninja Lint",
+      "description": "Ninja + MSVC Debug with clang-tidy + cppcheck. Run from a VS Developer PowerShell/Command Prompt.",
+      "inherits": "windows-x64-ninja-debug",
+      "cacheVariables": {
+        "EXOSNAP_CLANG_TIDY": "ON",
+        "EXOSNAP_CPPCHECK": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -122,6 +132,10 @@
       "targets": [
         "exosnap"
       ]
+    },
+    {
+      "name": "windows-x64-ninja-lint",
+      "configurePreset": "windows-x64-ninja-lint"
     }
   ],
   "testPresets": [
@@ -142,6 +156,13 @@
     {
       "name": "windows-x64-ninja-debug",
       "configurePreset": "windows-x64-ninja-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-x64-ninja-release",
+      "configurePreset": "windows-x64-ninja-release",
       "output": {
         "outputOnFailure": true
       }

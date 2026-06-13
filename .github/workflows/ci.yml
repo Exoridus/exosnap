@@ -15,12 +15,23 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
+# Use sccache (GitHub Actions cache backend) as the MSVC compiler launcher to
+# cache compilation across runs. This requires the Ninja generator — the Visual
+# Studio / MSBuild generator ignores CMAKE_CXX_COMPILER_LAUNCHER. /Z7 (embedded
+# debug info) is already the project default, so the object cache has no PDB
+# contention. Ninja + MSVC needs the dev-cmd environment for cl.exe.
+env:
+  SCCACHE_GHA_ENABLED: "true"
+
 jobs:
   lint:
     name: lint
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Install Qt 6
         uses: jurplel/install-qt-action@v4
@@ -29,6 +40,9 @@ jobs:
           arch: 'win64_msvc2022_64'
           archives: 'qtbase qtsvg'
           cache: true
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Install cppcheck
         run: |
@@ -44,11 +58,15 @@ jobs:
       - name: Validate WinGet manifest
         run: pwsh -NonInteractive -File scripts/validate-winget-manifest.ps1
 
-      - name: Configure (lint preset)
-        run: cmake --preset windows-x64-lint
+      - name: Configure (ninja lint preset)
+        run: cmake --preset windows-x64-ninja-lint -DEXOSNAP_USE_SCCACHE=ON
 
       - name: Build with static analysis
-        run: cmake --build --preset windows-x64-lint
+        run: cmake --build --preset windows-x64-ninja-lint
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
 
   build-test:
     name: build-test (${{ matrix.preset }})
@@ -56,12 +74,15 @@ jobs:
     strategy:
       matrix:
         preset:
-          - windows-x64-debug
-          - windows-x64-release
+          - windows-x64-ninja-debug
+          - windows-x64-ninja-release
       fail-fast: false
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Install Qt 6
         uses: jurplel/install-qt-action@v4
@@ -71,14 +92,21 @@ jobs:
           archives: 'qtbase qtsvg'
           cache: true
 
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
       - name: Configure (${{ matrix.preset }})
-        run: cmake --preset ${{ matrix.preset }}
+        run: cmake --preset ${{ matrix.preset }} -DEXOSNAP_USE_SCCACHE=ON
 
       - name: Build (${{ matrix.preset }})
         run: cmake --build --preset ${{ matrix.preset }}
 
       - name: Test (${{ matrix.preset }})
         run: ctest --preset ${{ matrix.preset }} --output-on-failure
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
 
       - name: Upload test logs (${{ matrix.preset }})
         if: failure()
