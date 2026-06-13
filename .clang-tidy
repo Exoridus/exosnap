@@ -66,6 +66,9 @@ Checks: >
 #                       fallback avoids that include; it only affects analysis parsing,
 #                       not the real cl.exe build (which keeps SIMD).
 ExtraArgs:
+  # -Xclang is required: in cl driver mode a bare -fcxx-exceptions is rejected as
+  # an unknown argument (and silently dropped, leaving exceptions disabled).
+  - '-Xclang'
   - '-fcxx-exceptions'
   - '-D_XM_NO_INTRINSICS_'
 
