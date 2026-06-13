@@ -247,11 +247,18 @@ QString RegionSelectionOverlay::formatReadout(int width, int height) {
     if (width <= 0 || height <= 0) {
         return {};
     }
+    // Use QChar escapes so the Unicode code points are embedded directly into the
+    // QString without going through fromLatin1 (which misinterprets multi-byte
+    // UTF-8 sequences) or relying on the source-file encoding.
+    //   × = U+00D7 MULTIPLICATION SIGN
+    //   · = U+00B7 MIDDLE DOT
+    static const QChar kTimes(0x00D7);
+    static const QChar kDot(0x00B7);
     const QString ratio_label = nearestPresetLabel(width, height);
     if (!ratio_label.isEmpty()) {
-        return QString::fromLatin1("%1 \xC3\x97 %2 \xC2\xB7 %3").arg(width).arg(height).arg(ratio_label);
+        return QStringLiteral("%1 %2 %3 %4 %5").arg(width).arg(kTimes).arg(height).arg(kDot).arg(ratio_label);
     }
-    return QString::fromLatin1("%1 \xC3\x97 %2").arg(width).arg(height);
+    return QStringLiteral("%1 %2 %3").arg(width).arg(kTimes).arg(height);
 }
 
 // Snap: if the current ratio is within threshold_pct % of a preset, adjust the
