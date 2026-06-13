@@ -18,6 +18,7 @@
 #include "ui/dialogs/AboutOverlay.h"
 #include "ui/dialogs/RecoveryOverlay.h"
 #include "ui/dialogs/SourcePickerOverlay.h"
+#include "ui/overlay/CountdownOverlayWindow.h"
 #include "ui/overlay/DiagnosticsOverlayWindow.h"
 #include "ui/overlay/NotificationToastWindow.h"
 #include "ui/overlay/RecordingOverlayWindow.h"
@@ -670,6 +671,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(advanced_page_, &AdvancedPage::backToSettingsRequested, this,
             [this]() { navigateToPage(kSettingsPageIndex); });
 
+    // ---- Countdown overlay (COUNTDOWN-OVERLAY-R1) ----
+    // Top-level (no Qt parent) like the other overlays; centered on the recorded monitor.
+    countdown_overlay_ = new ui::overlay::CountdownOverlayWindow(nullptr);
+    connect(record_page_, &RecordPage::countdownStateChanged, this, &MainWindow::onCountdownStateChanged);
+
     // ---- Recording overlay (RECORDING-OVERLAY-R1) ----
     // Overlay window is top-level (no Qt parent) so it is not clipped by MainWindow.
     recording_overlay_ = new ui::overlay::RecordingOverlayWindow(nullptr);
@@ -685,6 +691,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // When the recorded monitor geometry changes (target switch / recording start), update position.
     connect(record_page_, &RecordPage::recordingMonitorGeometryChanged, this, [this](const QRect& rect) {
         recording_monitor_rect_ = rect;
+        if (countdown_overlay_)
+            countdown_overlay_->setMonitorGeometry(rect);
         if (recording_overlay_)
             recording_overlay_->setMonitorGeometry(rect);
         if (diagnostics_overlay_)
@@ -897,8 +905,10 @@ MainWindow::~MainWindow() {
     webcam_notifier_.stop();
     display_notifier_.stop();
 
-    // The overlay is top-level (no Qt parent); destroy it explicitly so it doesn't
-    // outlive the application shutdown.
+    // The overlays are top-level (no Qt parent); destroy them explicitly so they
+    // don't outlive the application shutdown.
+    delete countdown_overlay_;
+    countdown_overlay_ = nullptr;
     delete recording_overlay_;
     recording_overlay_ = nullptr;
     delete diagnostics_overlay_;
@@ -951,6 +961,25 @@ void MainWindow::updateDiagnosticsOverlay() {
         diagnostics_overlay_->showOverlay();
     } else {
         diagnostics_overlay_->hideOverlay();
+    }
+}
+
+void MainWindow::onCountdownStateChanged(bool active, int remaining_seconds, int duration_seconds) {
+    if (!countdown_overlay_)
+        return;
+
+    // Gate on show_recording_overlay — same setting as the REC status pill.
+    if (!persisted_settings_.show_recording_overlay) {
+        countdown_overlay_->hideOverlay();
+        return;
+    }
+
+    if (active) {
+        // Feed the updated monitor geometry in case it changed since construction.
+        countdown_overlay_->setMonitorGeometry(recording_monitor_rect_);
+        countdown_overlay_->showCountdown(remaining_seconds, duration_seconds);
+    } else {
+        countdown_overlay_->hideOverlay();
     }
 }
 

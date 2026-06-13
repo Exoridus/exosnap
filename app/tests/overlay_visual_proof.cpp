@@ -1,17 +1,18 @@
-// overlay_visual_proof.cpp — OVERLAY-SKIN-AND-PROOF-R1
+// overlay_visual_proof.cpp — OVERLAY-SKIN-AND-PROOF-R1 + COUNTDOWN-OVERLAY-R1
 //
 // Offscreen visual proof for capture-excluded overlay windows.
 // These windows use SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) and cannot
 // be screenshotted by normal means. QWidget::grab() renders regardless of
 // capture exclusion, so it is the correct verification path.
 //
-// Produces 6 PNGs under .workspace/screenshots/overlay-proof/:
-//   toast-success.png     — NotificationToastWindow, Saved type
-//   toast-caution.png     — NotificationToastWindow, LowStorage type
-//   toast-error.png       — NotificationToastWindow, UnexpectedStop type
-//   toast-info.png        — NotificationToastWindow, RecoveryAvailable type
-//   status-pill.png       — RecordingOverlayWindow, REC state with timecode
-//   diagnostics-pill.png  — DiagnosticsOverlayWindow, sample metrics + muted glyph
+// Produces 7 PNGs under .workspace/screenshots/overlay-proof/:
+//   toast-success.png      — NotificationToastWindow, Saved type
+//   toast-caution.png      — NotificationToastWindow, LowStorage type
+//   toast-error.png        — NotificationToastWindow, UnexpectedStop type
+//   toast-info.png         — NotificationToastWindow, RecoveryAvailable type
+//   status-pill.png        — RecordingOverlayWindow, REC state with timecode
+//   diagnostics-pill.png   — DiagnosticsOverlayWindow, sample metrics + muted glyph
+//   countdown-overlay.png  — CountdownOverlayWindow, digit "3", ~mid-depletion (3/5)
 //
 // All renders are composited onto a neutral mid-gray backdrop (#606060) so the
 // glassy dark pills read clearly against a non-black background.
@@ -34,6 +35,7 @@
 
 #include "notifications/NotificationEvent.h"
 #include "notifications/NotificationManager.h"
+#include "ui/overlay/CountdownOverlayWindow.h"
 #include "ui/overlay/DiagnosticsOverlayWindow.h"
 #include "ui/overlay/NotificationToastWindow.h"
 #include "ui/overlay/RecordingOverlayWindow.h"
@@ -45,6 +47,7 @@ using notifications::NotificationAction;
 using notifications::NotificationEvent;
 using notifications::NotificationManager;
 using notifications::NotificationType;
+using ui::overlay::CountdownOverlayWindow;
 using ui::overlay::DiagnosticsOverlayWindow;
 using ui::overlay::NotificationToastWindow;
 using ui::overlay::RecordingOverlayWindow;
@@ -256,6 +259,35 @@ TEST_F(OverlayVisualProofTest, DiagnosticsPill_WithMetrics) {
     const bool saved = grabAndSave(pill, QStringLiteral("diagnostics-pill.png"));
     EXPECT_TRUE(saved) << "Failed to save diagnostics-pill.png";
     pill.hide();
+}
+
+// ── Countdown overlay proof ───────────────────────────────────────────────────
+//
+// Renders the countdown overlay at digit "3", with ring ~60% depleted (3 of 5
+// seconds remaining).  The dark circle + amber ring + mono digit should be clearly
+// visible against the mid-gray backdrop.
+
+TEST_F(OverlayVisualProofTest, CountdownOverlay_Digit3_MidDepletion) {
+    CountdownOverlayWindow overlay;
+    // 3 remaining out of 5 total → ring at 3/5 = 60% progress (not yet shown;
+    // updateCountdown is safe to call before show() since it just updates state).
+    overlay.updateCountdown(3, 5);
+    overlay.resize(overlay.sizeHint());
+
+    // Force a paint; grab() bypasses the WDA_EXCLUDEFROMCAPTURE guard.
+    overlay.setWindowFlags(overlay.windowFlags() | Qt::WindowTransparentForInput);
+    overlay.setAttribute(Qt::WA_DontShowOnScreen, false);
+    overlay.show();
+    QCoreApplication::processEvents();
+
+    const bool saved = grabAndSave(overlay, QStringLiteral("countdown-overlay.png"));
+    EXPECT_TRUE(saved) << "Failed to save countdown-overlay.png";
+
+    const QString full_path = output_dir_ + QStringLiteral("/countdown-overlay.png");
+    std::printf("[overlay-proof] countdown-overlay.png path: %s\n", full_path.toUtf8().constData());
+    std::fflush(stdout);
+
+    overlay.hide();
 }
 
 // ── Output directory confirmation ─────────────────────────────────────────────

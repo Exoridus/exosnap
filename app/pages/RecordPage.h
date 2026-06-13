@@ -166,6 +166,13 @@ class RecordPage : public QWidget {
     //   disk-monitor auto-stop, other values for engine failures).
     void recordingResultReady(bool succeeded, const QString& output_path, const QString& error_phase);
 
+    // COUNTDOWN-OVERLAY-R1: emitted whenever countdown state changes.
+    // active=true while the pre-record countdown is running.
+    // remaining_seconds: current digit value (1..duration_seconds).
+    // duration_seconds: total countdown length for ring-progress computation.
+    // When active=false both second values are 0.
+    void countdownStateChanged(bool active, int remaining_seconds, int duration_seconds);
+
   public slots:
     void onHotkeyToggle();
     void onHotkeyPauseToggle();

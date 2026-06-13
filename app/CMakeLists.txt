@@ -138,6 +138,8 @@ qt_add_executable(exosnap WIN32
     ui/widgets/CountdownSelect.cpp
     ui/widgets/TransportDock.h
     ui/widgets/TransportDock.cpp
+    ui/overlay/CountdownOverlayWindow.h
+    ui/overlay/CountdownOverlayWindow.cpp
     ui/overlay/DiagnosticsOverlayWindow.h
     ui/overlay/DiagnosticsOverlayWindow.cpp
     ui/overlay/RecordingOverlayWindow.h
@@ -937,6 +939,19 @@ target_include_directories(recording_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURC
 target_compile_definitions(recording_overlay_tests PRIVATE NOMINMAX)
 set_target_properties(recording_overlay_tests PROPERTIES AUTOMOC ON)
 
+# COUNTDOWN-OVERLAY-R1 tests
+exosnap_add_gtest(
+    NAME countdown_overlay_tests
+    TEST_PREFIX overlay.
+    SOURCES
+        tests/test_countdown_overlay.cpp
+        ui/overlay/CountdownOverlayWindow.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(countdown_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(countdown_overlay_tests PRIVATE NOMINMAX)
+set_target_properties(countdown_overlay_tests PROPERTIES AUTOMOC ON)
+
 # DIAGNOSTICS-OVERLAY-R1 tests
 exosnap_add_gtest(
     NAME diagnostics_overlay_tests
@@ -985,6 +1000,7 @@ exosnap_add_gtest(
     SOURCES
         tests/overlay_visual_proof.cpp
         notifications/NotificationManager.cpp
+        ui/overlay/CountdownOverlayWindow.cpp
         ui/overlay/NotificationToastWindow.cpp
         ui/overlay/RecordingOverlayWindow.cpp
         ui/overlay/DiagnosticsOverlayWindow.cpp
