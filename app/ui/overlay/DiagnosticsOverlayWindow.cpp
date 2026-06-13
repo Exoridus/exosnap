@@ -12,6 +12,7 @@
 #include <QGuiApplication>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPointF>
 #include <QScreen>
 #include <QShowEvent>
 
@@ -72,13 +73,101 @@ constexpr int kPillGap = 8; // vertical gap between REC and diag pills
 } // namespace
 
 // ---------------------------------------------------------------------------
-// Helper: build the segment list for a row.
-// Each segment is a { text, color } pair. The font for all segments is the
-// mono font. The paintEvent and sizeHint share this builder for consistency.
+// Helper: vector glyph rendering for muted-source indicators.
+//
+// kGlyphW: fixed inline width reserved for each muted-source glyph (px).
+// The glyphs are ~13–15px wide, rendered as pure QPainter paths so no font
+// substitution or combining-character rendering is involved.
 // ---------------------------------------------------------------------------
+constexpr int kGlyphW = 15; // width reserved per muted-source glyph slot
+
+// Draw a mic-off glyph centered at (cx, cy) in the given slot height.
+// Mic body: rounded rectangle capsule. Base: a downward arc / U-shape + stem.
+// Slash: a diagonal line from top-right to bottom-left through the icon.
+static void drawMicOffGlyph(QPainter& p, int cx, int cy, int slot_h, const QColor& color) {
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(color, 1.2f, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    p.setBrush(Qt::NoBrush);
+
+    // Mic capsule: small rounded rect centered horizontally
+    const float body_w = 5.0f;
+    const float body_h = 7.0f;
+    const float body_r = 2.5f;
+    const QRectF body(cx - body_w * 0.5f, cy - slot_h * 0.30f, body_w, body_h);
+    p.drawRoundedRect(body, body_r, body_r);
+
+    // Base: U-shape arc below capsule
+    const float arc_r = 4.5f;
+    const QRectF arc_rect(cx - arc_r, cy - slot_h * 0.30f + body_h - arc_r, arc_r * 2.0f, arc_r * 2.0f);
+    p.drawArc(arc_rect, 0 * 16, -180 * 16); // bottom half arc (0° to -180°)
+
+    // Stem: vertical line below arc
+    const float stem_top = cy - slot_h * 0.30f + body_h;
+    const float stem_bot = stem_top + 3.0f;
+    p.drawLine(QPointF(cx, stem_top), QPointF(cx, stem_bot));
+
+    // Slash: diagonal through the glyph area (top-right → bottom-left)
+    const float glyph_top = cy - slot_h * 0.40f;
+    const float glyph_bot = cy + slot_h * 0.40f;
+    p.setPen(QPen(color, 1.4f, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(QPointF(cx + kGlyphW * 0.35f, glyph_top), QPointF(cx - kGlyphW * 0.35f, glyph_bot));
+
+    p.restore();
+}
+
+// Draw a speaker/sys-off glyph centered at (cx, cy).
+// Speaker: a small triangle pointing right + a rectangular back body.
+// Slash: diagonal through the icon.
+static void drawSysOffGlyph(QPainter& p, int cx, int cy, int slot_h, const QColor& color) {
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(color, 1.2f, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    p.setBrush(Qt::NoBrush);
+
+    // Speaker body: small rectangle on the left
+    const float body_w = 3.5f;
+    const float body_h = 6.0f;
+    const QRectF body(cx - 5.0f, cy - body_h * 0.5f, body_w, body_h);
+    p.drawRect(body);
+
+    // Speaker cone: triangle pointing right
+    const float cone_l = cx - 5.0f + body_w;
+    const float cone_r = cx + 2.5f;
+    const float cone_t = cy - body_h * 0.8f;
+    const float cone_b = cy + body_h * 0.8f;
+    QPolygonF cone;
+    cone << QPointF(cone_l, cy - body_h * 0.5f) << QPointF(cone_r, cone_t) << QPointF(cone_r, cone_b)
+         << QPointF(cone_l, cy + body_h * 0.5f);
+    p.drawPolyline(cone);
+
+    // Slash: diagonal through the glyph area
+    const float glyph_top = cy - slot_h * 0.40f;
+    const float glyph_bot = cy + slot_h * 0.40f;
+    p.setPen(QPen(color, 1.4f, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(QPointF(cx + kGlyphW * 0.35f, glyph_top), QPointF(cx - kGlyphW * 0.35f, glyph_bot));
+
+    p.restore();
+}
+
+// ---------------------------------------------------------------------------
+// Helper: build the segment list for a row.
+// Each segment is a { text, color, is_glyph, glyph_type } tuple.
+// Text segments are drawn via drawText(); glyph segments via vector draw.
+// ---------------------------------------------------------------------------
+enum class DiagGlyphType { None, MicOff, SysOff };
+
 struct DiagSegment {
     QString text;
     QColor color;
+    DiagGlyphType glyph = DiagGlyphType::None;
+
+    bool isGlyph() const {
+        return glyph != DiagGlyphType::None;
+    }
+    int width(const QFontMetrics& fm) const {
+        return isGlyph() ? kGlyphW : fm.horizontalAdvance(text);
+    }
 };
 
 static QVector<DiagSegment> buildSegments(const QString& fps_text, const QString& drop_text, const QString& drift_text,
@@ -108,11 +197,11 @@ static QVector<DiagSegment> buildSegments(const QString& fps_text, const QString
     // · [micOff glyph] [sysOff glyph] <size>
     segs.push_back({QStringLiteral("\xB7"), kSeparator});
 
-    // Muted-source glyphs (compact text labels in muted white per Mappe)
+    // Muted-source glyphs: pure QPainter vector paths (no combining characters)
     if (mic_muted)
-        segs.push_back({QStringLiteral("mic\xE2\x83\x9E"), kGlyphMuted}); // mic + combining enclosing circle
+        segs.push_back({QString(), kGlyphMuted, DiagGlyphType::MicOff});
     if (sys_muted)
-        segs.push_back({QStringLiteral("sys\xE2\x83\x9E"), kGlyphMuted});
+        segs.push_back({QString(), kGlyphMuted, DiagGlyphType::SysOff});
 
     // Size value
     segs.push_back({size_disp, kValue});
@@ -123,7 +212,7 @@ static QVector<DiagSegment> buildSegments(const QString& fps_text, const QString
 static int measureSegmentsWidth(const QVector<DiagSegment>& segs, const QFontMetrics& fm) {
     int w = kPaddingH * 2;
     for (int i = 0; i < segs.size(); ++i) {
-        w += fm.horizontalAdvance(segs[i].text);
+        w += segs[i].width(fm);
         if (i < segs.size() - 1)
             w += kItemGap;
     }
@@ -270,13 +359,23 @@ void DiagnosticsOverlayWindow::paintEvent(QPaintEvent* /*event*/) {
                                     mic_muted_, sys_muted_);
     const QFontMetrics fm(mono_font);
 
+    const int row_cy = r.height() / 2;
     int x = kPaddingH;
     for (int i = 0; i < segs.size(); ++i) {
         const auto& seg = segs[i];
-        const int seg_w = fm.horizontalAdvance(seg.text);
-        const QRect seg_rect(x, 0, seg_w, r.height());
-        p.setPen(seg.color);
-        p.drawText(seg_rect, Qt::AlignVCenter | Qt::AlignLeft, seg.text);
+        const int seg_w = seg.width(fm);
+        if (seg.isGlyph()) {
+            // Vector glyph: draw centered in the segment slot
+            const int glyph_cx = x + seg_w / 2;
+            if (seg.glyph == DiagGlyphType::MicOff)
+                drawMicOffGlyph(p, glyph_cx, row_cy, r.height(), seg.color);
+            else if (seg.glyph == DiagGlyphType::SysOff)
+                drawSysOffGlyph(p, glyph_cx, row_cy, r.height(), seg.color);
+        } else {
+            const QRect seg_rect(x, 0, seg_w, r.height());
+            p.setPen(seg.color);
+            p.drawText(seg_rect, Qt::AlignVCenter | Qt::AlignLeft, seg.text);
+        }
         x += seg_w;
         if (i < segs.size() - 1)
             x += kItemGap;
