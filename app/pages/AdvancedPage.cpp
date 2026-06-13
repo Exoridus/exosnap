@@ -261,13 +261,36 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
 
     connect(overlay_check_, &ui::widgets::ExoCheckBox::toggled, this, &AdvancedPage::showOverlayChanged);
 
-    // DIAGNOSTICS-OVERLAY-R1: diagnostics overlay toggle
+    // DIAGNOSTICS-OVERLAY-R1 + OVERLAY-SKIN-AND-PROOF-R1: diagnostics overlay toggle
     auto* diag_overlay_row = new QFrame(controls_panel);
     diag_overlay_row->setProperty("panelRole", "compactRow");
     auto* diag_overlay_layout = new QVBoxLayout(diag_overlay_row);
     diag_overlay_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
     diag_overlay_layout->setSpacing(M::kSpaceXs);
-    diag_overlay_layout->addWidget(makeFieldLabel(QStringLiteral("Diagnostics overlay"), diag_overlay_row));
+
+    // Header row: field label + anti-cheat ⓘ info affordance (Mappe Wave 0.3 spec)
+    {
+        auto* header_row = new QWidget(diag_overlay_row);
+        auto* header_hl = new QHBoxLayout(header_row);
+        header_hl->setContentsMargins(0, 0, 0, 0);
+        header_hl->setSpacing(M::kSpaceXs);
+        header_hl->addWidget(makeFieldLabel(QStringLiteral("Diagnostics overlay"), header_row));
+
+        // ⓘ anti-cheat note — hover tooltip per ADR 0016 convention
+        auto* anticheat_info = new QLabel(QString::fromUtf8("\xe2\x93\x98"), header_row); // ⓘ U+24D8
+        anticheat_info->setProperty("labelRole", "infoGlyph");
+        anticheat_info->setToolTip(
+            QStringLiteral("Anti-cheat note: This overlay is read-only and capture-excluded "
+                           "(SetWindowDisplayAffinity WDA_EXCLUDEFROMCAPTURE). It injects nothing into "
+                           "any process. However, some anti-cheat systems may still flag overlays rendered "
+                           "by any third-party process — disable this overlay if you encounter issues."));
+        anticheat_info->setCursor(Qt::WhatsThisCursor);
+        header_hl->addWidget(anticheat_info);
+        header_hl->addStretch(1);
+
+        diag_overlay_layout->addWidget(header_row);
+    }
+
     diagnostics_overlay_check_ =
         makeCheck(QStringLiteral("Show live diagnostics on the recorded monitor during recording"), diag_overlay_row);
     diagnostics_overlay_check_->setChecked(false); // default OFF; overridden by setShowDiagnosticsOverlay()
