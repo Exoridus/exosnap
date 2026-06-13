@@ -56,10 +56,11 @@ TEST_F(DiagnosticsOverlayTest, Construction_MuteGlyphsDefaultFalse) {
 TEST_F(DiagnosticsOverlayTest, SizeHint_IsReasonable) {
     DiagnosticsOverlayWindow overlay;
     const QSize hint = overlay.sizeHint();
-    // Width must accommodate "DROPS  99999 MB" — at minimum 80 px.
+    // OVERLAY-SKIN-AND-PROOF-R1: single-row OverlayPill; width covers the full
+    // horizontal segment sequence, height is one text-row + vertical padding.
     EXPECT_GT(hint.width(), 80);
     EXPECT_GT(hint.height(), 20);
-    EXPECT_LT(hint.height(), 120);
+    EXPECT_LT(hint.height(), 60); // single row: ~32px, not multi-row anymore
 }
 
 // ── State / metrics updates ──────────────────────────────────────────────────
@@ -109,6 +110,9 @@ TEST_F(DiagnosticsOverlayTest, UpdateMetrics_CanUpdateFieldsMultipleTimes) {
 // ── Glyph row — sizeHint height ─────────────────────────────────────────────
 
 TEST_F(DiagnosticsOverlayTest, SizeHint_GrowsWhenGlyphsPresent) {
+    // OVERLAY-SKIN-AND-PROOF-R1: single-row OverlayPill redesign.
+    // Muted-source glyphs are now part of the same horizontal row, so height
+    // stays constant while WIDTH grows when glyphs are shown.
     DiagnosticsOverlayWindow overlay_no_glyph;
     const QSize hint_no_glyph = overlay_no_glyph.sizeHint();
 
@@ -120,12 +124,16 @@ TEST_F(DiagnosticsOverlayTest, SizeHint_GrowsWhenGlyphsPresent) {
     overlay_both.updateMetrics(QString(), QString(), QString(), QString(), /*mic_muted=*/true, /*sys_muted=*/true);
     const QSize hint_both = overlay_both.sizeHint();
 
-    // Pill must grow when glyph row is shown.
-    EXPECT_GT(hint_mic.height(), hint_no_glyph.height()) << "sizeHint height must grow when mic glyph is shown";
-    EXPECT_GE(hint_both.height(), hint_mic.height())
-        << "sizeHint height must be at least as tall with both glyphs as with one";
+    // Width grows when glyphs are added (inline in the single row).
+    EXPECT_GE(hint_mic.width(), hint_no_glyph.width()) << "sizeHint width must not shrink when mic glyph is shown";
+    EXPECT_GE(hint_both.width(), hint_mic.width())
+        << "sizeHint width must be at least as wide with both glyphs as with one";
+    // Height stays constant (single row design).
+    EXPECT_EQ(hint_mic.height(), hint_no_glyph.height()) << "sizeHint height is constant (single row)";
+    EXPECT_EQ(hint_both.height(), hint_mic.height()) << "sizeHint height is constant (single row)";
     // Still within a sane upper bound.
-    EXPECT_LT(hint_both.height(), 160);
+    EXPECT_LT(hint_both.height(), 80);
+    EXPECT_LT(hint_both.width(), 800);
 }
 
 // ── A/V drift rendering ──────────────────────────────────────────────────────

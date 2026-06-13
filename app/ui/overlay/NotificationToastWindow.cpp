@@ -102,7 +102,8 @@ constexpr int kBarH = 3; // "height: 3" — bottom hairline
 
 // Vertical content heights for layout calculation
 constexpr int kTitleH = 18;         // single line title
-constexpr int kBodyH = 18;          // single line body
+constexpr int kBodyH = 18;          // height per body line
+constexpr int kBodyMaxLines = 2;    // word-wrap up to 2 lines; elide beyond
 constexpr int kBodyGapTop = 3;      // marginTop: 3 between title and body
 constexpr int kActionsGapTop = 11;  // marginTop: 11 before action row
 constexpr int kPillHTotal = kPillH; // pill row height
@@ -222,16 +223,38 @@ void drawDismissX(QPainter& p, const QRectF& rect, const QColor& color) {
     p.restore();
 }
 
+// Compute the number of body lines needed (1 or 2) for a given body text
+// within the available text column width.
+// text_w must be the same width used during paint (kToastWidth - text_x - kPadRight - kDismissSize - 6).
+int bodyLineCount(const QString& body, const QFontMetrics& body_fm, int text_w) {
+    if (body.isEmpty())
+        return 1;
+    // If the body fits on a single line, use 1 line.
+    if (body_fm.horizontalAdvance(body) <= text_w)
+        return 1;
+    // Otherwise: use 2 lines (the painter will word-wrap within the 2-line rect).
+    return kBodyMaxLines;
+}
+
+// The text column x-start and width match the paintEvent layout exactly.
+// text_x = kPadLeft + kChipSize + kChipTextGap
+// text_w = kToastWidth - text_x - kPadRight - kDismissSize - 6
+constexpr int kTextX = kPadLeft + kChipSize + kChipTextGap;
+constexpr int kTextW = kToastWidth - kTextX - kPadRight - kDismissSize - 6;
+
 // Calculate the total height of a single toast card including all sections.
 int toastHeight(const notifications::NotificationEvent& event, const QFontMetrics& title_fm,
-                const QFontMetrics& action_fm) {
+                const QFontMetrics& body_fm) {
     Q_UNUSED(title_fm);
-    Q_UNUSED(action_fm);
+
+    // Body may wrap to up to 2 lines.
+    const int body_lines = bodyLineCount(event.body, body_fm, kTextW);
+    const int body_total_h = kBodyH * body_lines;
 
     // Base: padTop + chip(30) but also: title + body + possibly actions + padBottom
     // Layout: top pad, then content row with chip (30px) and text column.
     // Text column: title + gap + body. Below body: optional action row.
-    int content_h = kTitleH + kBodyGapTop + kBodyH;
+    int content_h = kTitleH + kBodyGapTop + body_total_h;
     const bool has_action = event.hasAction();
     if (has_action)
         content_h += kActionsGapTop + kPillHTotal;
@@ -277,23 +300,23 @@ QSize NotificationToastWindow::sizeHint() const {
     if (n == 0)
         return QSize(kToastWidth, 0);
 
-    // Build title/action fonts to measure heights.
+    // Build title/body fonts to measure heights.
     QFont title_f;
     title_f.setFamily(QStringLiteral("Hanken Grotesk"));
     title_f.setPixelSize(kTitlePx);
     title_f.setWeight(QFont::DemiBold);
 
-    QFont action_f;
-    action_f.setFamily(QStringLiteral("Hanken Grotesk"));
-    action_f.setPixelSize(kActionPx);
-    action_f.setWeight(QFont::DemiBold);
+    QFont body_f;
+    body_f.setFamily(QStringLiteral("Hanken Grotesk"));
+    body_f.setPixelSize(kBodyPx);
+    body_f.setWeight(QFont::Normal);
 
     const QFontMetrics title_fm(title_f);
-    const QFontMetrics action_fm(action_f);
+    const QFontMetrics body_fm(body_f);
 
     int total_h = 0;
     for (int i = 0; i < n; ++i) {
-        total_h += toastHeight((*events_ptr)[i], title_fm, action_fm);
+        total_h += toastHeight((*events_ptr)[i], title_fm, body_fm);
         if (i < n - 1)
             total_h += kStackGap;
     }
@@ -349,7 +372,7 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
         const auto& event = events[idx];
         const StatusTokens tok = tokensForType(event.type);
         const bool sticky = isSticky(event.type);
-        const int card_h = toastHeight(event, title_fm, title_fm); // reuse for layout
+        const int card_h = toastHeight(event, title_fm, body_fm);
 
         // ── Card background ───────────────────────────────────────────────
         const QRectF card_rect(0.0, y_offset, kToastWidth, card_h - (sticky ? 0 : kBarH));
@@ -416,11 +439,23 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
         p.drawText(title_rect, Qt::AlignVCenter | Qt::AlignLeft,
                    title_fm.elidedText(event.title, Qt::ElideRight, text_w));
 
-        // Body
+        // Body: word-wrap up to 2 lines; elide only if it still overflows after 2 lines.
         p.setFont(body_font);
         p.setPen(kMut);
-        const QRect body_rect(text_x, effective_title_y + kTitleH + kBodyGapTop, text_w, kBodyH);
-        p.drawText(body_rect, Qt::AlignVCenter | Qt::AlignLeft, body_fm.elidedText(event.body, Qt::ElideRight, text_w));
+        {
+            const int body_lines = bodyLineCount(event.body, body_fm, text_w);
+            const int body_total_h = kBodyH * body_lines;
+            const QRect body_rect(text_x, effective_title_y + kTitleH + kBodyGapTop, text_w, body_total_h);
+            if (body_lines > 1) {
+                // Word-wrap: let Qt break lines naturally within the rect.
+                // If the text still doesn't fit after wrapping, elide the last line.
+                p.drawText(body_rect, Qt::AlignTop | Qt::AlignLeft | Qt::TextWordWrap, event.body);
+            } else {
+                // Single line: elide if it overflows.
+                p.drawText(body_rect, Qt::AlignVCenter | Qt::AlignLeft,
+                           body_fm.elidedText(event.body, Qt::ElideRight, text_w));
+            }
+        }
 
         // ── Dismiss ✕ ─────────────────────────────────────────────────────
         const QRectF dismiss_rect(kToastWidth - kPadRight - kDismissSize, y_offset + kPadTop, kDismissSize,
@@ -429,7 +464,9 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
 
         // ── Action pills ──────────────────────────────────────────────────
         if (event.hasAction()) {
-            const int actions_y = effective_title_y + kTitleH + kBodyGapTop + kBodyH + kActionsGapTop;
+            const int body_lines = bodyLineCount(event.body, body_fm, text_w);
+            const int body_total_h = kBodyH * body_lines;
+            const int actions_y = effective_title_y + kTitleH + kBodyGapTop + body_total_h + kActionsGapTop;
 
             // Determine primary / secondary button labels from the action enum
             struct ButtonSpec {
