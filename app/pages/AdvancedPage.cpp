@@ -281,6 +281,24 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
     connect(diagnostics_overlay_check_, &ui::widgets::ExoCheckBox::toggled, this,
             &AdvancedPage::showDiagnosticsOverlayChanged);
 
+    // NOTIFY-TOASTS-R1: notification toasts toggle
+    auto* notifications_row = new QFrame(controls_panel);
+    notifications_row->setProperty("panelRole", "compactRow");
+    auto* notifications_layout = new QVBoxLayout(notifications_row);
+    notifications_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+    notifications_layout->setSpacing(M::kSpaceXs);
+    notifications_layout->addWidget(makeFieldLabel(QStringLiteral("Notifications"), notifications_row));
+    notifications_check_ = makeCheck(QStringLiteral("Show on-screen notification toasts"), notifications_row);
+    notifications_check_->setChecked(true); // default ON; overridden by setShowNotifications()
+    notifications_layout->addWidget(notifications_check_);
+    notifications_layout->addWidget(
+        makeSubLabel(QStringLiteral("Transient toasts for low storage, saved recordings, and recovery. Excluded from "
+                                    "capture via SetWindowDisplayAffinity."),
+                     notifications_row));
+    controls_layout->addWidget(notifications_row);
+
+    connect(notifications_check_, &ui::widgets::ExoCheckBox::toggled, this, &AdvancedPage::showNotificationsChanged);
+
     right_layout->addWidget(controls_panel);
 
     auto* danger_panel = new QFrame(right_col);
@@ -351,6 +369,11 @@ void AdvancedPage::setShowDiagnosticsOverlay(bool show) {
         diagnostics_overlay_check_->setChecked(show);
 }
 
+void AdvancedPage::setShowNotifications(bool show) {
+    if (notifications_check_)
+        notifications_check_->setChecked(show);
+}
+
 void AdvancedPage::onReset() {
     log_level_combo_->setCurrentIndex(3);
     nvtx_check_->setChecked(false);
@@ -360,6 +383,9 @@ void AdvancedPage::onReset() {
     // Reset diagnostics overlay to default OFF and emit so MainWindow persists the change.
     if (diagnostics_overlay_check_)
         diagnostics_overlay_check_->setChecked(false);
+    // Reset notifications to default ON and emit so MainWindow persists the change.
+    if (notifications_check_)
+        notifications_check_->setChecked(true);
 }
 
 } // namespace exosnap

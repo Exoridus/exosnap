@@ -159,6 +159,13 @@ class RecordPage : public QWidget {
     // targets), or a null QRect for Window targets (caller uses primary screen).
     void recordingMonitorGeometryChanged(const QRect& monitor_rect);
 
+    // NOTIFY-TOASTS-R1: emitted when a recording result becomes available so
+    // MainWindow can enqueue the appropriate notification toast.
+    // output_path: final output file path (non-empty on success).
+    // error_phase: engine error phase string (non-empty on failure; "DiskSpace" for
+    //   disk-monitor auto-stop, other values for engine failures).
+    void recordingResultReady(bool succeeded, const QString& output_path, const QString& error_phase);
+
   public slots:
     void onHotkeyToggle();
     void onHotkeyPauseToggle();

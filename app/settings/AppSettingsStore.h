@@ -32,6 +32,11 @@ struct PersistedAppSettings {
     // recording / paused. Default OFF. Excluded from capture via
     // SetWindowDisplayAffinity; hidden on failure.
     bool show_diagnostics_overlay = false;
+
+    // NOTIFY-TOASTS-R1: whether transient notification toasts are shown.
+    // Default ON. Excluded from capture via SetWindowDisplayAffinity.
+    // Covers: LowStorage, Saved, UnexpectedStop, RecoveryAvailable.
+    bool show_notifications = true;
 };
 
 class AppSettingsStore {

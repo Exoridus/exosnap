@@ -30,12 +30,18 @@ class AdvancedPage : public QWidget {
     // Call once after construction with the persisted value.
     void setShowDiagnosticsOverlay(bool show);
 
+    // NOTIFY-TOASTS-R1: populate the notifications checkbox from the stored setting.
+    // Call once after construction with the persisted value.
+    void setShowNotifications(bool show);
+
   signals:
     void backToSettingsRequested();
     // Emitted when the "Show recording overlay" checkbox changes.
     void showOverlayChanged(bool show);
     // DIAGNOSTICS-OVERLAY-R1: emitted when the "Show diagnostics overlay" checkbox changes.
     void showDiagnosticsOverlayChanged(bool show);
+    // NOTIFY-TOASTS-R1: emitted when the "Show notifications" checkbox changes.
+    void showNotificationsChanged(bool show);
 
   private:
     void onReset();
@@ -44,6 +50,7 @@ class AdvancedPage : public QWidget {
     ui::widgets::ExoCheckBox* nvtx_check_ = nullptr;
     ui::widgets::ExoCheckBox* overlay_check_ = nullptr;
     ui::widgets::ExoCheckBox* diagnostics_overlay_check_ = nullptr;
+    ui::widgets::ExoCheckBox* notifications_check_ = nullptr;
 
     QLabel* baseline_profile_label_ = nullptr;
     QLabel* baseline_container_label_ = nullptr;

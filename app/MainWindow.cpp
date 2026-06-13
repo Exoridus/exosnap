@@ -2,6 +2,8 @@
 
 #include "diagnostics/AppLog.h"
 #include "models/RecordingPreset.h"
+#include "notifications/NotificationEvent.h"
+#include "notifications/NotificationManager.h"
 #include "pages/AdvancedPage.h"
 #include "pages/ConfigPage.h"
 #include "pages/DiagnosticsPage.h"
@@ -17,6 +19,7 @@
 #include "ui/dialogs/RecoveryOverlay.h"
 #include "ui/dialogs/SourcePickerOverlay.h"
 #include "ui/overlay/DiagnosticsOverlayWindow.h"
+#include "ui/overlay/NotificationToastWindow.h"
 #include "ui/overlay/RecordingOverlayWindow.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
@@ -52,6 +55,7 @@
 #include <QPainterPath>
 #include <QPalette>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScreen>
 #include <QShortcut>
 #include <QShowEvent>
@@ -739,6 +743,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
             Q_UNUSED(app_active);
         });
 
+    // ---- Notification toasts (NOTIFY-TOASTS-R1) ----
+    initNotificationToasts();
+
     // ---- Reactive device discovery wiring ----
     // Audio: forward to both ConfigPage and RecordPage (under no-emit contract).
     connect(&audio_notifier_, &AudioDeviceNotifier::snapshotChanged, this, &MainWindow::onAudioDevicesChanged);
@@ -841,6 +848,20 @@ void MainWindow::checkAndShowRecoveryOverlay() {
         QStringLiteral("recovery"),
         QStringLiteral("Found %1 interrupted recording(s) — showing recovery overlay").arg(candidates.size()));
 
+    // NOTIFY-TOASTS-R1 — Trigger 4: RecoveryAvailable.
+    // Enqueue a sticky toast so the user knows recovery is available even if the
+    // recovery overlay was dismissed. Gated on the show_notifications setting.
+    if (persisted_settings_.show_notifications && notification_manager_) {
+        notifications::NotificationEvent event;
+        event.type = notifications::NotificationType::RecoveryAvailable;
+        event.title = QStringLiteral("Interrupted recordings found");
+        event.body = (candidates.size() == 1)
+                         ? QStringLiteral("1 interrupted recording is ready to recover.")
+                         : QStringLiteral("%1 interrupted recordings are ready to recover.").arg(candidates.size());
+        event.action = notifications::NotificationAction::OpenRecovery;
+        notification_manager_->Enqueue(std::move(event));
+    }
+
     // Parent to the central widget (same pattern as about_overlay_ / source_picker_overlay_).
     // The overlay should survive page navigation (not closed by navigateToPage); it is
     // deliberately excluded from the navigateToPage close-list because recovery must
@@ -874,6 +895,10 @@ MainWindow::~MainWindow() {
     recording_overlay_ = nullptr;
     delete diagnostics_overlay_;
     diagnostics_overlay_ = nullptr;
+
+    // NOTIFY-TOASTS-R1: toast window is also top-level; destroy explicitly.
+    delete notification_toast_window_;
+    notification_toast_window_ = nullptr;
 }
 
 void MainWindow::updateRecordingOverlay() {
@@ -2359,6 +2384,84 @@ void MainWindow::onTrayActivateWindow() {
     // Update the Show/Hide label to reflect the new visibility state.
     if (tray_presence_)
         tray_presence_->setWindowVisible(isVisible());
+}
+
+// ---------------------------------------------------------------------------
+// NOTIFY-TOASTS-R1: Notification toast wiring
+// ---------------------------------------------------------------------------
+
+void MainWindow::initNotificationToasts() {
+    // Create the manager (parented to MainWindow — torn down with it).
+    notification_manager_ = new notifications::NotificationManager(this);
+
+    // Toast window is top-level (no Qt parent) to avoid being clipped by MainWindow.
+    // Destroyed explicitly in ~MainWindow().
+    notification_toast_window_ = new ui::overlay::NotificationToastWindow(notification_manager_, nullptr);
+
+    // Populate the Advanced page checkbox from the persisted setting.
+    if (advanced_page_)
+        advanced_page_->setShowNotifications(persisted_settings_.show_notifications);
+
+    // When the user toggles the notifications checkbox, persist and apply.
+    connect(advanced_page_, &AdvancedPage::showNotificationsChanged, this, [this](bool show) {
+        persisted_settings_.show_notifications = show;
+        settings_store_.Save(persisted_settings_);
+        updateNotificationToastsEnabled();
+    });
+
+    // ── Trigger 1 + 2 + 3: recording result ready (Saved / LowStorage / UnexpectedStop) ──
+    // Hooked into RecordPage::recordingResultReady emitted from the SetResultReadyCallback.
+    connect(record_page_, &RecordPage::recordingResultReady, this,
+            [this](bool succeeded, const QString& output_path, const QString& error_phase) {
+                if (!persisted_settings_.show_notifications || !notification_manager_)
+                    return;
+
+                notifications::NotificationEvent event;
+                if (succeeded) {
+                    // Trigger 2: recording saved successfully.
+                    event.type = notifications::NotificationType::Saved;
+                    event.title = QStringLiteral("Recording saved");
+                    // Prefer the filename; fall back to a generic body.
+                    if (!output_path.isEmpty()) {
+                        const QString name =
+                            output_path.contains(QLatin1Char('/')) || output_path.contains(QLatin1Char('\\'))
+                                ? output_path.mid(
+                                      output_path.lastIndexOf(QRegularExpression(QStringLiteral("[/\\\\]"))) + 1)
+                                : output_path;
+                        event.body = name.isEmpty() ? QStringLiteral("File saved to output folder") : name;
+                    } else {
+                        event.body = QStringLiteral("File saved to output folder");
+                    }
+                    event.action = notifications::NotificationAction::OpenFolder;
+                    event.action_payload = output_path;
+                } else if (error_phase == QStringLiteral("DiskSpace")) {
+                    // Trigger 1: disk monitor hard-stop.
+                    event.type = notifications::NotificationType::LowStorage;
+                    event.title = QStringLiteral("Storage full");
+                    event.body = QStringLiteral("Recording stopped — output drive is critically low on disk space.");
+                    event.action = notifications::NotificationAction::None;
+                } else {
+                    // Trigger 3: unexpected engine failure.
+                    event.type = notifications::NotificationType::UnexpectedStop;
+                    event.title = QStringLiteral("Recording stopped unexpectedly");
+                    event.body = error_phase.isEmpty() ? QStringLiteral("An error occurred during recording.")
+                                                       : QStringLiteral("Phase: %1").arg(error_phase);
+                    event.action = notifications::NotificationAction::None;
+                }
+                notification_manager_->Enqueue(std::move(event));
+            });
+
+    // ── Trigger 4: RecoveryAvailable is enqueued in checkAndShowRecoveryOverlay() ──
+    // (Wired there directly to avoid duplicating the candidate-count check.)
+}
+
+void MainWindow::updateNotificationToastsEnabled() {
+    // Nothing to do beyond persisting the setting — the individual enqueue calls
+    // already gate on persisted_settings_.show_notifications. The toast window
+    // auto-hides when the manager's visible set is empty.
+    if (!persisted_settings_.show_notifications && notification_toast_window_) {
+        notification_toast_window_->hide();
+    }
 }
 
 } // namespace exosnap
