@@ -3265,6 +3265,8 @@ void RecordPage::startCountdown(int seconds, std::optional<recorder_core::Captur
     if (countdown_timer_ && !countdown_timer_->isActive()) {
         countdown_timer_->start();
     }
+    // COUNTDOWN-OVERLAY-R1: notify overlay immediately when countdown starts.
+    emit countdownStateChanged(true, seconds, seconds);
     refresh();
 }
 
@@ -3283,6 +3285,8 @@ void RecordPage::cancelCountdown() {
     setInteractionMode(InteractionMode::None);
     view_model_.SetState(UiRecordingState::Ready);
     diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("countdown cancelled"));
+    // COUNTDOWN-OVERLAY-R1: notify overlay that countdown stopped.
+    emit countdownStateChanged(false, 0, 0);
     refresh();
 }
 
@@ -3302,6 +3306,8 @@ void RecordPage::finishCountdown() {
     setInteractionMode(InteractionMode::None);
     view_model_.SetState(UiRecordingState::Ready);
     diagnostics::AppLog::info(QStringLiteral("record"), QStringLiteral("countdown completed"));
+    // COUNTDOWN-OVERLAY-R1: notify overlay that countdown ended.
+    emit countdownStateChanged(false, 0, 0);
     refresh();
     if (crop_region.has_value()) {
         doStartRecording(crop_region);
@@ -3324,6 +3330,8 @@ void RecordPage::updateCountdown() {
     const int remaining = countdown_.remainingSeconds(elapsed_ms);
     if (remaining != countdown_remaining_seconds_) {
         countdown_remaining_seconds_ = remaining;
+        // COUNTDOWN-OVERLAY-R1: notify overlay of the updated digit.
+        emit countdownStateChanged(true, remaining, countdown_.durationSeconds());
         refresh();
     }
 }

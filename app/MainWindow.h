@@ -50,6 +50,7 @@ class SourcePickerOverlay;
 } // namespace ui::dialogs
 
 namespace ui::overlay {
+class CountdownOverlayWindow;
 class DiagnosticsOverlayWindow;
 class NotificationToastWindow;
 class RecordingOverlayWindow;
@@ -146,6 +147,8 @@ class MainWindow : public QMainWindow {
     void updateRecordingOverlay();
     // DIAGNOSTICS-OVERLAY-R1: update the diagnostics overlay visibility/state.
     void updateDiagnosticsOverlay();
+    // COUNTDOWN-OVERLAY-R1: update the countdown overlay.
+    void onCountdownStateChanged(bool active, int remaining_seconds, int duration_seconds);
 
     // NOTIFY-TOASTS-R1: instantiate the manager + toast window; called from constructor.
     void initNotificationToasts();
@@ -168,6 +171,7 @@ class MainWindow : public QMainWindow {
     ui::dialogs::AboutOverlay* about_overlay_ = nullptr;
     ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
+    ui::overlay::CountdownOverlayWindow* countdown_overlay_ = nullptr;
     ui::overlay::RecordingOverlayWindow* recording_overlay_ = nullptr;
     ui::overlay::DiagnosticsOverlayWindow* diagnostics_overlay_ = nullptr;
     // NOTIFY-TOASTS-R1: manager (owned by this) + toast window (top-level, no parent).
