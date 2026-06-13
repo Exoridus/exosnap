@@ -2,6 +2,7 @@
 
 #include "../diagnostics/ConfigSummary.h"
 #include "../diagnostics/DiagnosticsPresentation.h"
+#include "../diagnostics/DiskSpaceProvider.h"
 #include "../diagnostics/RecommendationEngine.h"
 #include "../diagnostics/SelfTestRunner.h"
 #include "../models/OutputSettingsModel.h"
@@ -337,6 +338,15 @@ void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, c
     hotkeys_summary_ = hotkeys_summary;
     settings_path_ = settings_path;
     hotkeys_ok_ = hotkeys_ok;
+    output_folder_ = output.output_folder;
+
+    // Query free space on the output drive so rec.005 / rec.007 actually fire.
+    // The Win32 provider returns 0 on failure, which suppresses the checks (safe
+    // default; better than a false positive when the path is not yet reachable).
+    {
+        diagnostics::Win32DiskSpaceProvider provider;
+        output_drive_free_bytes_ = provider.FreeBytesForPath(output_folder_);
+    }
 
     cap_summary_ = diagnostics::CapabilitySummary::FromCapabilitySet(caps_);
     config_summary_ = diagnostics::ConfigSummary::FromCurrentSettings(
@@ -765,7 +775,8 @@ void DiagnosticsPage::refreshOverview() {
     if (!data_ready_)
         return;
 
-    diagnostics::RecommendationEngine engine(caps_, active_user_config_, 0, 0, profile_validation_.succeeded);
+    diagnostics::RecommendationEngine engine(caps_, active_user_config_, 0, output_drive_free_bytes_,
+                                             profile_validation_.succeeded);
     auto recs = engine.Generate();
 
     diagnostics::DiagnosticChecklist combined;

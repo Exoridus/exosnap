@@ -32,6 +32,10 @@ class RecommendationEngine {
     uint32_t monitor_refresh_rate_;
     uint64_t output_drive_free_bytes_;
     bool is_profile_supported_;
+
+    // rec.007: hard-stop blocker threshold (500 MB).
+    // rec.005: soft warning threshold (2 GB).
+    // Both are defined in DiskSpaceThresholds.h.
 };
 
 } // namespace exosnap::diagnostics

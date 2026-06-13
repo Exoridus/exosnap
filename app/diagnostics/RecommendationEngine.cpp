@@ -1,5 +1,7 @@
 #include "RecommendationEngine.h"
 
+#include "DiskSpaceThresholds.h"
+
 #include <capability/support_level.h>
 
 #include <chrono>
@@ -109,17 +111,41 @@ void RecommendationEngine::checkCodecAvailability(DiagnosticChecklist& checklist
 }
 
 void RecommendationEngine::checkOutputDriveSpace(DiagnosticChecklist& checklist) const {
-    constexpr uint64_t kMinFreeBytes = 500ULL * 1024 * 1024; // 500 MB
-    if (output_drive_free_bytes_ > 0 && output_drive_free_bytes_ < kMinFreeBytes) {
-        const double free_gb = static_cast<double>(output_drive_free_bytes_) / (1024.0 * 1024.0 * 1024.0);
-        DiagnosticResult r = MakeResult("rec.005", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-                                        "Output drive is low on space", "Less than 500 MB free on the output drive.",
-                                        "Free space: " + std::to_string(free_gb).substr(0, 4) +
+    if (output_drive_free_bytes_ == 0) {
+        // 0 means "not queried" — skip to avoid false positives.
+        return;
+    }
+
+    const double free_gb = static_cast<double>(output_drive_free_bytes_) / (1024.0 * 1024.0 * 1024.0);
+    const std::string free_gb_str = std::to_string(free_gb).substr(0, 4);
+
+    if (output_drive_free_bytes_ <= kHardStopFreeBytes) {
+        // rec.007: hard-stop blocker — recording is blocked until free space is recovered.
+        DiagnosticResult r = MakeResult("rec.007", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
+                                        "Insufficient disk space — recording blocked",
+                                        "Less than 500 MB free on the output drive. Recording cannot start.",
+                                        "Free space: " + free_gb_str +
                                             " GB. "
-                                            "Recording may fail if space runs out during a session.",
-                                        std::to_string(free_gb).substr(0, 4) + " GB free",
-                                        "Free up disk space or switch to a different output drive.",
+                                            "At least 500 MB must be available before recording can begin. "
+                                            "Free up disk space or switch to a different output drive.",
+                                        free_gb_str + " GB free",
+                                        "Free up disk space or change the output folder to a drive with more space.",
                                         "Clear temporary files or change output folder in Output settings.");
+        checklist.has_blocker = true;
+        checklist.results.push_back(std::move(r));
+        return;
+    }
+
+    if (output_drive_free_bytes_ < kWarnFreeBytes) {
+        // rec.005: soft warning — recording is still allowed but space is getting low.
+        DiagnosticResult r =
+            MakeResult("rec.005", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+                       "Output drive is low on space", "Less than 2 GB free on the output drive.",
+                       "Free space: " + free_gb_str +
+                           " GB. "
+                           "Recording may stop automatically if space runs out during a session.",
+                       free_gb_str + " GB free", "Free up disk space or switch to a different output drive.",
+                       "Clear temporary files or change output folder in Output settings.");
         checklist.has_notice = true;
         checklist.results.push_back(std::move(r));
     }
@@ -140,7 +166,7 @@ void RecommendationEngine::checkProfileSupport(DiagnosticChecklist& checklist) c
 }
 
 std::vector<std::string> RecommendationEngine::GetAllRecommendationCodes() {
-    return {"rec.001", "rec.002", "rec.003", "rec.004", "rec.005", "rec.006"};
+    return {"rec.001", "rec.002", "rec.003", "rec.004", "rec.005", "rec.006", "rec.007"};
 }
 
 } // namespace exosnap::diagnostics
