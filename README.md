@@ -11,8 +11,8 @@ webcam PiP overlay, crash recovery, and built-in diagnostics. Dark-mode-first Qt
 - **Platform:** Windows 10/11 x64 (Windows 11 is the primary target; Windows 10 is best-effort).
 - **Hardware encoder:** NVIDIA NVENC only. An NVIDIA GPU with supported NVENC capability is required.
   AMD, Intel, and software encoding are not yet supported.
-- **Distribution:** portable ZIP — no installer, no code signing yet. Windows SmartScreen may warn on
-  first launch.
+- **Distribution:** portable ZIP and MSI. Builds are not yet code-signed (see
+  [Code signing](#code-signing) below); Windows SmartScreen may warn on first launch.
 
 ## Features (0.2.0 reliability wave)
 
@@ -159,6 +159,14 @@ tools/        developer tooling
   licenses are listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 - The FFmpeg binaries are produced by the companion repository
   [Exoridus/exosnap-ffmpeg-build](https://github.com/Exoridus/exosnap-ffmpeg-build).
+
+## Code signing
+
+ExoSnap participates in the [SignPath Foundation](https://signpath.org) free code-signing
+program for open-source projects, with code-signing infrastructure provided by
+[SignPath.io](https://signpath.io). Once the certificate is issued, Windows release binaries
+(portable ZIP and MSI) will be signed; pre-certificate builds are unsigned, so Windows
+SmartScreen may warn on first launch.
 
 ## Contributing / CI
 
