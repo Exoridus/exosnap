@@ -20,7 +20,7 @@ webcam PiP overlay, crash recovery, and built-in diagnostics. Dark-mode-first Qt
 - MKV-first recording; MP4 delivered via libavformat remux-on-stop (progressive, faststart); MKV and
   WebM are also supported as direct output formats.
 - Crash recovery: a recovery manifest written before each session, plus a startup recovery UI that
-  offers "Keep as MKV", "Export as MP4", or "Discard" for each orphaned artefact.
+  lets you finish, recover, or discard each interrupted recording on the next launch.
 - Low-disk guard: warning at a configurable soft threshold, hard stop at a lower threshold; for MP4
   sessions the effective threshold accounts for the transient MKV and output MP4 coexisting during remux.
 - FAT32 output-volume detection: a Diagnostics Notice about the 4 GiB per-file limit (recording is not
@@ -144,7 +144,7 @@ app/          application source (UI, models, recording pipeline)
 libs/         internal libraries (recorder_core, capability, etc.)
 docs/
   roadmap.md  version roadmap and architecture guardrails
-  decisions/  ADRs 0001–0014
+  decisions/  architecture decision records (ADRs)
 packaging/    WinGet, Chocolatey, and Scoop packaging manifests
 scripts/      build, quality, and release scripts
 tests/        test targets
