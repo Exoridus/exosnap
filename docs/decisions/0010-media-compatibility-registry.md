@@ -2,8 +2,43 @@
 
 ## Status
 
-Accepted — implementation scheduled for 0.2.0 (container registry) and 0.5.0 (full capability
-registry) (see roadmap).
+Partially implemented — 0.2.0 container registry shipped (CONTAINER-COMPAT-REGISTRY-R1).
+Full capability registry (encoder capabilities, HDR, rate-control) deferred to 0.5.0.
+
+### 0.2.0 implementation notes
+
+`ContainerCompatRegistry` (`libs/capability/include/capability/container_compat_registry.h`,
+`libs/capability/src/container_compat_registry.cpp`) is the single source of truth for
+container × video-codec × audio-codec compatibility.
+
+- All 27 combinations of the 3 × 3 × 3 enum dimensions are explicitly classified.
+- `ContainerCompatLevel` maps to the ADR classification model (`Recommended` / `Allowed` /
+  `Experimental` / `Fallback` / `Prohibited`).
+- The registry drives `CapabilitySet::QueryCombo()` (via `RegistryEntryToSupportAnnotation`):
+  `Recommended → Available`, `Allowed → ValidUnvalidated`,
+  `Experimental + Fallback → NotImplemented`, `Prohibited → Invalid`.
+- `RecordingPreset::ReconcileContainerCodecs()` now delegates entirely to
+  `ContainerCompatRegistry::ReconcileCodecs()`, removing the previous ad-hoc switch/if chain.
+- `SettingsResolver` (resolver.cpp) delegates preferred-codec queries to the registry.
+- The registry blocks recording start for Prohibited combinations via the existing
+  `CapabilitySet → SettingsResolver::ValidateConfig → RecordingCoordinator` path; no new
+  UI paradigm was introduced.
+- `Allowed → ValidUnvalidated` in the CapabilitySet: user-selectable, recording is not
+  blocked; a warning is surfaced in the UI. `Prohibited → Invalid`: hard block, must not
+  appear in any UI picker and recording cannot start.
+
+**Pre-v1 behaviour change (HEVC):** MKV + HEVC + (any audio) previously reconciled to MKV + H264 + AAC
+(ad-hoc HEVC→H264 downgrade). Under the registry the reconciler falls through to the primary
+working path (AV1 + Opus) because no Recommended or Allowed entry exists for HEVC in any
+combination today. The old H264 downgrade was implicit; the new path is explicit and reversible
+once HEVC is implemented.
+
+**Policy correction (MKV + H.264 + Opus):** This combination was initially classified
+`Prohibited` in the first registry implementation. That was incorrect: Matroska carries Opus
+natively and the Opus-in-MKV write path is production-validated via AV1+Opus. The combination
+is reclassified to `Allowed` (player-matrix pass for H.264+Opus specifically is not yet on
+file — that is the Allowed caveat). `ReconcileCodecs()` now leaves MKV+H264+Opus presets
+unchanged instead of rewriting the audio codec to AAC.
 
 ## Context
 
@@ -74,6 +109,13 @@ The registry must not mark HEVC-in-MP4 as
 | `Experimental` | Technically possible; not yet tested at scale |
 | `Fallback` | Used when a preferred combination fails; not user-selectable |
 | `Prohibited` | Must not appear in the UI under any circumstance |
+
+**Classification policy (authoritative):** `Prohibited` is reserved for genuinely
+incompatible container/codec pairings only — the container physically cannot carry
+the codec, or no major player supports the combination (e.g. AAC in WebM, H.264 in
+WebM). A combination that is technically compatible but lacks a full player-matrix
+validation pass must never be `Prohibited`; it belongs in `Experimental` (not yet
+tested at scale) or `Allowed` (works with known caveats, warning shown in UI).
 
 ## Consequences
 

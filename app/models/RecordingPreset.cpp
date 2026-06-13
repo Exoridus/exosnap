@@ -1,5 +1,6 @@
 #include "RecordingPreset.h"
 
+#include <capability/container_compat_registry.h>
 #include <recorder_core/audio_track_model.h>
 
 #include <algorithm>
@@ -161,24 +162,11 @@ RecordingPreset MakeDefaultPreset() {
 // ---------------------------------------------------------------------------
 
 void ReconcileContainerCodecs(OutputSettingsModel& output) {
-    if (output.container == capability::Container::Mp4) {
-        output.video_codec = capability::VideoCodec::H264Nvenc;
-        output.audio_codec = capability::AudioCodec::AacMf;
-    } else if (output.container == capability::Container::WebM) {
-        output.video_codec = capability::VideoCodec::Av1Nvenc;
-        output.audio_codec = capability::AudioCodec::Opus;
-    } else if (output.container == capability::Container::Matroska) {
-        if (output.video_codec == capability::VideoCodec::HevcNvenc) {
-            output.video_codec = capability::VideoCodec::H264Nvenc;
-        }
-        if (output.video_codec == capability::VideoCodec::H264Nvenc &&
-            output.audio_codec == capability::AudioCodec::Opus) {
-            output.audio_codec = capability::AudioCodec::AacMf;
-        }
-        if (output.audio_codec == capability::AudioCodec::Pcm) {
-            output.audio_codec = capability::AudioCodec::AacMf;
-        }
-    }
+    // Delegate to the single-source-of-truth registry (ADR 0010).
+    // ContainerCompatRegistry::ReconcileCodecs replaces the previous ad-hoc
+    // switch/if chain and uses the same compatibility table that gates
+    // recording start via CapabilitySet::QueryCombo().
+    capability::ContainerCompatRegistry::ReconcileCodecs(output.container, output.video_codec, output.audio_codec);
 }
 
 // ---------------------------------------------------------------------------
