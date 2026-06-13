@@ -93,9 +93,18 @@ replaces it.
   The UI must show progress and distinguish "Saving…" (remux in progress) from "Saved" (complete).
   The job is cancellable; cancellation retains the transient MKV.
 
+- **Split recording with MP4 (0.2.0 — MP4-SPLIT-REMUX-R1):** When split is enabled with MP4
+  output, each completed segment MKV is remuxed to progressive MP4 in the background while
+  recording continues into the next segment. The coordinator maintains a vector of `SegmentRemuxJob`
+  threads; "Saved" is only reported when all segment remux jobs have drained successfully. The
+  recovery manifest lifecycle (entry-before-start → `finalized=true` before remux → remove on
+  success) applies per segment.
+
 - **Disk space:** During a remux, the transient MKV and the output MP4 coexist briefly,
   requiring approximately 2× the final file size in free space. The low-disk guard (0.2.0)
-  must account for this remux reserve when computing the hard-stop threshold.
+  must account for this remux reserve when computing the hard-stop threshold. For split
+  recordings, the reserve is the conservative sum of all pending segment remux job transient
+  MKV sizes plus the current live segment estimate.
 
 - **Audio codec gating:** Opus audio is not supported in MP4 (see ADR 0010 compatibility
   registry; libavformat correctly muxes Opus into MKV/WebM but the container compatibility

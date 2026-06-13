@@ -72,9 +72,10 @@ container/codec combination. HEVC, PCM, and FLAC are not implemented in 0.1.0.
 
 ## Recording split overview
 
-- Split is supported for **MKV and WebM** recordings.
-- **MP4 split is not available** in 0.1.0. Progressive MP4 is not crash-safe;
-  see `KNOWN_LIMITATIONS.md`.
+- Split is supported for **MKV, WebM, and MP4** recordings (0.2.0).
+- For MP4 sessions, each completed segment is remuxed to progressive MP4 in the
+  background while recording continues. "Saved" is shown only when all remuxes
+  complete. See `KNOWN_LIMITATIONS.md`.
 
 ## Verifying your download
 

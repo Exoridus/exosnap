@@ -289,6 +289,61 @@ class RecordingCoordinator {
     void RunRemuxJob(const std::filesystem::path& transient_mkv, const std::filesystem::path& final_mp4,
                      UiRecordingResult base_result);
 
+    // MP4-SPLIT-REMUX-R1: per-segment background remux jobs.
+    //
+    // When container == MP4 and split is active, each completed MKV segment is
+    // remuxed concurrently in a background thread while recording continues into
+    // the next segment.  The final segment is handled the same way; the recording
+    // thread waits for all jobs to complete before posting "Saved"/"Failed".
+    //
+    // Manifest lifecycle per segment (mirrors the single-file flow):
+    //   1. Segment N's manifest entry is created before segment N starts writing:
+    //      - Segment 0: at StartRecording (uses current_manifest_id_).
+    //      - Segment N (N>0): created in OnSegmentCompleted for segment N-1,
+    //        stored in pending_segment_manifest_id_, then consumed by the
+    //        recording thread when it picks up the segment from the jobs queue.
+    //   2. finalized=true is written before the remux starts.
+    //   3. The entry is removed only on full remux success.
+    //   4. On failure the entry remains so recovery UI can offer re-export.
+
+    // One in-flight or completed segment remux job.
+    struct SegmentRemuxJob {
+        std::filesystem::path transient_mkv; // input .mkv.tmp
+        std::filesystem::path output_mp4;    // desired final .mp4
+        QString manifest_id;                 // recovery manifest entry for this segment
+        std::thread thread;                  // background remux thread
+        // Written by the thread before it exits; read on the recording thread by DrainSegmentRemuxJobs.
+        bool succeeded = false;
+        int av_error_code = 0;
+        std::string error_message;
+    };
+
+    // Protected by segment_remux_mutex_; appended from OnSegmentCompleted (mux
+    // worker thread) and drained from RecordingThreadProc (recording thread).
+    mutable std::mutex segment_remux_mutex_;
+    std::vector<std::unique_ptr<SegmentRemuxJob>> segment_remux_jobs_;
+
+    // Manifest ID for the next segment that has started recording but whose
+    // manifest entry was created when the previous segment completed.
+    // Written from OnSegmentCompleted (mux worker thread) under segment_remux_mutex_.
+    // Consumed by RecordingThreadProc when the session ends.
+    QString pending_segment_manifest_id_;
+
+    // Schedule a background remux job for one MKV segment → MP4.
+    // Creates a SegmentRemuxJob and starts its thread.  Called on the recording
+    // thread (for the final segment) or from OnSegmentCompleted via ScheduleSegmentRemux.
+    void StartSegmentRemuxThread(SegmentRemuxJob& job);
+
+    // Join all segment remux jobs and return false if any failed.
+    // cancel=true requests cancellation of any running remux.
+    // Called on the recording thread after Record() returns.
+    bool DrainSegmentRemuxJobs(bool cancel);
+
+    // Total bytes across all transient MKV files that have an outstanding remux
+    // job (not yet completed).  Used by the disk monitor for a conservative reserve.
+    // Thread-safe (acquires segment_remux_mutex_).
+    uint64_t PendingRemuxReserveBytes() const;
+
     StateChangedCallback on_state_changed_;
     StatsUpdatedCallback on_stats_updated_;
     DiagnosticsUpdatedCallback on_diagnostics_updated_;

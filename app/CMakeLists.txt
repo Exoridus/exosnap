@@ -478,6 +478,24 @@ target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_
 target_link_libraries(output_settings_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
 set_target_properties(output_settings_tests PROPERTIES AUTOMOC ON)
 
+# MP4-SPLIT-REMUX-R1: per-segment manifest lifecycle, disk reserve, split settings.
+exosnap_add_gtest(
+    NAME mp4_split_remux_tests
+    TEST_PREFIX split_remux.
+    SOURCES
+        tests/test_mp4_split_remux.cpp
+        services/RecordingCoordinator.cpp
+        settings/RecoveryManifestStore.cpp
+    LIBRARIES
+        exosnap_output_model_test_support
+        exosnap_device_service_test_support
+        exosnap_diagnostics_test_support
+        Qt6::Core Qt6::Gui exosnap_capability recorder_core
+)
+target_include_directories(mp4_split_remux_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(mp4_split_remux_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
+set_target_properties(mp4_split_remux_tests PROPERTIES AUTOMOC ON)
+
 exosnap_add_gtest(
     NAME app_settings_store_tests
     TEST_PREFIX settings.

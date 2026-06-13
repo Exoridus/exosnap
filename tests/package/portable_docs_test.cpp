@@ -96,18 +96,20 @@ TEST(PortableDocs, RootReadmeDocumentsNvidiaRequirement) {
 }
 
 // ---------------------------------------------------------------------------
-// MP4 split restriction
+// MP4 split support (0.2.0 — MP4-SPLIT-REMUX-R1)
 // ---------------------------------------------------------------------------
-TEST(PortableDocs, KnownLimitationsDocumentsMp4SplitRestriction) {
-    EXPECT_TRUE(contains(known_limitations(), "MP4 recording split is not available"));
+TEST(PortableDocs, KnownLimitationsDocumentsMp4SplitSupport) {
+    // MP4 split is now supported via per-segment remux.
+    EXPECT_TRUE(contains(known_limitations(), "split is supported for MKV, WebM, and MP4"));
 }
 
-TEST(PortableDocs, PortableReadmeDocumentsMp4SplitRestriction) {
-    EXPECT_TRUE(contains(portable_readme(), "MP4 split is not available"));
+TEST(PortableDocs, PortableReadmeDocumentsMp4SplitSupport) {
+    EXPECT_TRUE(contains(portable_readme(), "Split is supported for"));
+    EXPECT_TRUE(contains(portable_readme(), "MP4"));
 }
 
-TEST(PortableDocs, RootReadmeDocumentsMp4SplitRestriction) {
-    EXPECT_TRUE(contains(root_readme(), "MP4 split is not available"));
+TEST(PortableDocs, RootReadmeDocumentsMp4SplitSupport) {
+    EXPECT_TRUE(contains(root_readme(), "MP4 split remuxes each segment"));
 }
 
 // ---------------------------------------------------------------------------
