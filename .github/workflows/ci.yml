@@ -42,13 +42,17 @@ jobs:
         run: pwsh -NonInteractive -File scripts/validate-winget-manifest.ps1
 
   build-test:
-    name: build-test (${{ matrix.preset }})
+    # The job name is kept stable (windows-x64-debug / -release) so the required
+    # status checks keep matching; the Ninja preset is selected via matrix.preset.
+    name: build-test (${{ matrix.label }})
     runs-on: windows-2022
     strategy:
       matrix:
-        preset:
-          - windows-x64-ninja-debug
-          - windows-x64-ninja-release
+        include:
+          - label: windows-x64-debug
+            preset: windows-x64-ninja-debug
+          - label: windows-x64-release
+            preset: windows-x64-ninja-release
       fail-fast: false
 
     steps:
