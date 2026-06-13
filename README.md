@@ -13,6 +13,8 @@ webcam PiP overlay, crash recovery, and built-in diagnostics. Dark-mode-first Qt
   AMD, Intel, and software encoding are not yet supported.
 - **Distribution:** portable ZIP and MSI. Builds are not yet code-signed (see
   [Code signing](#code-signing) below); Windows SmartScreen may warn on first launch.
+- **Privacy:** no telemetry, analytics, or network connections — all data stays local.
+  See [`PRIVACY.md`](PRIVACY.md).
 
 ## Features (0.2.0 reliability wave)
 
