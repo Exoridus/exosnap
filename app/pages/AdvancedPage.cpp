@@ -242,6 +242,25 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
     nvtx_check_ = makeCheck(QStringLiteral("Enable NVTX / profiling markers"), profiling_row);
     profiling_layout->addWidget(nvtx_check_);
     controls_layout->addWidget(profiling_row);
+
+    // RECORDING-OVERLAY-R1: overlay toggle
+    auto* overlay_row = new QFrame(controls_panel);
+    overlay_row->setProperty("panelRole", "compactRow");
+    auto* overlay_layout = new QVBoxLayout(overlay_row);
+    overlay_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+    overlay_layout->setSpacing(M::kSpaceXs);
+    overlay_layout->addWidget(makeFieldLabel(QStringLiteral("Recording overlay"), overlay_row));
+    overlay_check_ = makeCheck(QStringLiteral("Show on-screen status overlay during recording"), overlay_row);
+    overlay_check_->setChecked(true); // default ON; overridden by setShowOverlay()
+    overlay_layout->addWidget(overlay_check_);
+    overlay_layout->addWidget(makeSubLabel(
+        QStringLiteral("A compact pill (REC \xc2\xb7 elapsed time) shown on the recorded monitor. Excluded from "
+                       "capture via SetWindowDisplayAffinity — hidden if exclusion fails."),
+        overlay_row));
+    controls_layout->addWidget(overlay_row);
+
+    connect(overlay_check_, &ui::widgets::ExoCheckBox::toggled, this, &AdvancedPage::showOverlayChanged);
+
     right_layout->addWidget(controls_panel);
 
     auto* danger_panel = new QFrame(right_col);
@@ -302,9 +321,17 @@ void AdvancedPage::setBaseline(const OutputSettingsModel& output, const VideoSet
         baseline_cursor_label_->setText(video.capture_cursor ? QStringLiteral("Captured") : QStringLiteral("Hidden"));
 }
 
+void AdvancedPage::setShowOverlay(bool show) {
+    if (overlay_check_)
+        overlay_check_->setChecked(show);
+}
+
 void AdvancedPage::onReset() {
     log_level_combo_->setCurrentIndex(3);
     nvtx_check_->setChecked(false);
+    // Reset overlay to default ON and emit so MainWindow persists the change.
+    if (overlay_check_)
+        overlay_check_->setChecked(true);
 }
 
 } // namespace exosnap

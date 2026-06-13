@@ -10,9 +10,8 @@
 namespace exosnap {
 namespace {
 
-// Bump to 6: legacy output/video/audio/webcam/profiles groups are actively
-// removed on Save() to canonicalize files written by older builds.
-constexpr int kSettingsVersionCurrent = 6;
+// Bump to 7: recording overlay toggle added.
+constexpr int kSettingsVersionCurrent = 7;
 
 } // namespace
 
@@ -55,6 +54,10 @@ PersistedAppSettings AppSettingsStore::Load() const {
     persisted.window_geometry.maximized = settings.value(QStringLiteral("maximized"), false).toBool();
     settings.endGroup();
 
+    settings.beginGroup(QStringLiteral("overlay"));
+    persisted.show_recording_overlay = settings.value(QStringLiteral("show_recording_overlay"), true).toBool();
+    settings.endGroup();
+
     return persisted;
 }
 
@@ -90,6 +93,10 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.setValue(QStringLiteral("width"), settings_snapshot.window_geometry.width);
     settings.setValue(QStringLiteral("height"), settings_snapshot.window_geometry.height);
     settings.setValue(QStringLiteral("maximized"), settings_snapshot.window_geometry.maximized);
+    settings.endGroup();
+
+    settings.beginGroup(QStringLiteral("overlay"));
+    settings.setValue(QStringLiteral("show_recording_overlay"), settings_snapshot.show_recording_overlay);
     settings.endGroup();
 
     settings.sync();

@@ -21,6 +21,11 @@ struct PersistedAppSettings {
         QStringLiteral("Alt+F9"), QString(), QString(), QString(), QString(),
     };
     PersistedWindowGeometry window_geometry;
+
+    // RECORDING-OVERLAY-R1: whether the on-screen recording status overlay is
+    // shown during recording / paused. Default ON. Excluded from capture via
+    // SetWindowDisplayAffinity; hidden on failure.
+    bool show_recording_overlay = true;
 };
 
 class AppSettingsStore {

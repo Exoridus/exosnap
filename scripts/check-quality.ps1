@@ -220,7 +220,15 @@ if ($StaticOnly) {
 
 # ---------------------------------------------------------------------------
 # cmake configure + build + test
+#
+# Qt must be on PATH so that gtest_discover_tests POST_BUILD discovery can
+# launch test executables that link Qt (0xc0000135 otherwise in worktrees).
 # ---------------------------------------------------------------------------
+
+$qtBin = 'C:\Qt\6.9.0\msvc2022_64\bin'
+if (Test-Path $qtBin -PathType Container) {
+    $env:PATH = "$qtBin;$env:PATH"
+}
 
 Invoke-QuietNative -Name 'cmake configure' -FilePath 'cmake' -Arguments @('--preset', 'windows-x64-debug')
 Invoke-QuietNative -Name 'cmake build' -FilePath 'cmake' -Arguments @('--build', '--preset', 'windows-x64-debug')

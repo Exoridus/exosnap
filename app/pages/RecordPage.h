@@ -153,6 +153,12 @@ class RecordPage : public QWidget {
     // applyCapturePolicy / setCountdownSeconds drives them programmatically).
     void recordingConfigChanged();
 
+    // RECORDING-OVERLAY-R1: emitted alongside chromeStateChanged to tell
+    // MainWindow which monitor geometry to use for overlay positioning.
+    // rect is the virtual-screen geometry of the captured monitor (Monitor/Region
+    // targets), or a null QRect for Window targets (caller uses primary screen).
+    void recordingMonitorGeometryChanged(const QRect& monitor_rect);
+
   public slots:
     void onHotkeyToggle();
     void onHotkeyPauseToggle();
