@@ -37,9 +37,11 @@ DiagnosticResult MakeResult(const std::string& id, DiagnosticGroup group, Diagno
 
 RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps,
                                            const capability::UserRecorderConfig& config, uint32_t monitor_refresh_rate,
-                                           uint64_t output_drive_free_bytes, bool is_profile_supported)
+                                           uint64_t output_drive_free_bytes, bool is_profile_supported,
+                                           std::string output_filesystem_name)
     : caps_(caps), config_(config), monitor_refresh_rate_(monitor_refresh_rate),
-      output_drive_free_bytes_(output_drive_free_bytes), is_profile_supported_(is_profile_supported) {
+      output_drive_free_bytes_(output_drive_free_bytes), is_profile_supported_(is_profile_supported),
+      output_filesystem_name_(std::move(output_filesystem_name)) {
 }
 
 DiagnosticChecklist RecommendationEngine::Generate() const {
@@ -48,6 +50,7 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
     checkMp4CrashResilience(checklist);
     checkCodecAvailability(checklist);
     checkOutputDriveSpace(checklist);
+    checkOutputFilesystem(checklist);
     checkProfileSupport(checklist);
     return checklist;
 }
@@ -151,6 +154,39 @@ void RecommendationEngine::checkOutputDriveSpace(DiagnosticChecklist& checklist)
     }
 }
 
+void RecommendationEngine::checkOutputFilesystem(DiagnosticChecklist& checklist) const {
+    if (output_filesystem_name_.empty()) {
+        // Empty means "not queried" — skip to avoid false positives.
+        return;
+    }
+
+    // Only FAT32 requires a warning.  NTFS, exFAT, and any other filesystem
+    // pass silently.  Unknown filesystems (unexpected names) also pass silently
+    // rather than emitting a spurious warning for network drives or future
+    // filesystems.
+    if (output_filesystem_name_ != "FAT32") {
+        return;
+    }
+
+    // rec.008: FAT32 output volume — Notice (not Blocker).
+    //
+    // Rationale: recordings under 4 GiB succeed on FAT32 without any issue.
+    // The limit only matters for long sessions.  Blocking recording start would
+    // prevent legitimate use of FAT32 volumes for short clips.  The user is
+    // informed and can act before starting a long recording.
+    DiagnosticResult r = MakeResult(
+        "rec.008", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+        "Output volume uses FAT32 — 4 GiB file size limit",
+        "FAT32 volumes cannot store files larger than 4 GiB. Long recordings will fail when this limit is reached.",
+        "The configured output folder is on a FAT32 volume. A single recording file cannot exceed 4,294,967,295 bytes "
+        "(~4 GiB). High-bitrate or long recordings will be cut off once the limit is reached.",
+        "Filesystem: FAT32",
+        "Move the output folder to an NTFS or exFAT volume to remove the 4 GiB per-file restriction.",
+        "Change the output folder in Output settings to a drive formatted with NTFS or exFAT.");
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
+}
+
 void RecommendationEngine::checkProfileSupport(DiagnosticChecklist& checklist) const {
     if (!is_profile_supported_) {
         DiagnosticResult r = MakeResult(
@@ -166,7 +202,7 @@ void RecommendationEngine::checkProfileSupport(DiagnosticChecklist& checklist) c
 }
 
 std::vector<std::string> RecommendationEngine::GetAllRecommendationCodes() {
-    return {"rec.001", "rec.002", "rec.003", "rec.004", "rec.005", "rec.006", "rec.007"};
+    return {"rec.001", "rec.002", "rec.003", "rec.004", "rec.005", "rec.006", "rec.007", "rec.008"};
 }
 
 } // namespace exosnap::diagnostics
