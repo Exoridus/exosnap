@@ -211,6 +211,8 @@ qt_add_executable(exosnap WIN32
     diagnostics/DiskSpaceProvider.h
     diagnostics/DiskSpaceProvider.cpp
     diagnostics/DiskSpaceThresholds.h
+    diagnostics/FilesystemProvider.h
+    diagnostics/FilesystemProvider.cpp
     diagnostics/RecommendationEngine.h
     diagnostics/RecommendationEngine.cpp
     diagnostics/SelfTestRunner.h
@@ -298,6 +300,7 @@ exosnap_add_app_test_support(exosnap_diagnostics_test_support
     diagnostics/CapabilitySummary.cpp
     diagnostics/ConfigSummary.cpp
     diagnostics/DiskSpaceProvider.cpp
+    diagnostics/FilesystemProvider.cpp
     diagnostics/RecommendationEngine.cpp
     diagnostics/SelfTestRunner.cpp
 )
@@ -521,6 +524,16 @@ exosnap_add_gtest(
     LIBRARIES exosnap_diagnostics_test_support exosnap_capability recorder_core Qt6::Core
 )
 target_include_directories(low_disk_guard_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# FILESYSTEM-CHECKS-R1 tests
+exosnap_add_gtest(
+    NAME filesystem_checks_tests
+    TEST_PREFIX fs.
+    SOURCES
+        tests/test_filesystem_checks.cpp
+    LIBRARIES exosnap_diagnostics_test_support exosnap_capability recorder_core
+)
+target_include_directories(filesystem_checks_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # webcam_settings_tests removed: webcam is now persisted via RecordingPresetStore.
 # Coverage of WebcamSettings serialization is maintained by recording_preset_store_tests.

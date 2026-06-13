@@ -127,6 +127,9 @@ class DiagnosticsPage : public QWidget {
     // Disk-space guard data (LOW-DISK-GUARD-R1)
     std::filesystem::path output_folder_;
     uint64_t output_drive_free_bytes_ = 0;
+
+    // Filesystem-check data (FILESYSTEM-CHECKS-R1)
+    std::string output_filesystem_name_; // e.g. "FAT32", "NTFS"; empty = not queried
 };
 
 } // namespace exosnap
