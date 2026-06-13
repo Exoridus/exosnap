@@ -16,6 +16,7 @@
 #include "ui/dialogs/AboutOverlay.h"
 #include "ui/dialogs/RecoveryOverlay.h"
 #include "ui/dialogs/SourcePickerOverlay.h"
+#include "ui/overlay/RecordingOverlayWindow.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
 #include "ui/widgets/WebcamSetupPanel.h"
@@ -489,15 +490,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(title_bar_, &ui::chrome::OperationalTitleBar::closeRequested, this, &QWidget::close);
     connect(record_page_, &RecordPage::chromeStateChanged, this, &MainWindow::onRecordChromeStateChanged);
     // DF-11: wire drop count from recording stats into the titlebar Recording pill.
-    connect(record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
-            [this](const QString& /*elapsed*/, const QString& /*bitrate*/, const QString& drop_text,
-                   const QString& /*size*/) {
-                if (title_bar_) {
-                    bool ok = false;
-                    const int drops = drop_text.toInt(&ok);
-                    title_bar_->setRecordingDropCount(ok ? drops : 0);
-                }
-            });
+    connect(
+        record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
+        [this](const QString& elapsed, const QString& /*bitrate*/, const QString& drop_text, const QString& /*size*/) {
+            if (title_bar_) {
+                bool ok = false;
+                const int drops = drop_text.toInt(&ok);
+                title_bar_->setRecordingDropCount(ok ? drops : 0);
+            }
+            // RECORDING-OVERLAY-R1: keep the overlay elapsed text in sync.
+            if (recording_overlay_ && recording_overlay_->isVisible())
+                recording_overlay_->updateElapsed(elapsed);
+        });
     connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { navigateToPage(kSettingsPageIndex); });
     connect(record_page_, &RecordPage::navigateToDiagnosticsPage, this,
             [this]() { navigateToPage(kDiagnosticsPageIndex); });
@@ -658,6 +662,25 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(advanced_page_, &AdvancedPage::backToSettingsRequested, this,
             [this]() { navigateToPage(kSettingsPageIndex); });
 
+    // ---- Recording overlay (RECORDING-OVERLAY-R1) ----
+    // Overlay window is top-level (no Qt parent) so it is not clipped by MainWindow.
+    recording_overlay_ = new ui::overlay::RecordingOverlayWindow(nullptr);
+    // Populate the Advanced page checkbox from the persisted setting.
+    if (advanced_page_)
+        advanced_page_->setShowOverlay(persisted_settings_.show_recording_overlay);
+    // When the user toggles the overlay checkbox, persist the change and update live state.
+    connect(advanced_page_, &AdvancedPage::showOverlayChanged, this, [this](bool show) {
+        persisted_settings_.show_recording_overlay = show;
+        settings_store_.Save(persisted_settings_);
+        updateRecordingOverlay();
+    });
+    // When the recorded monitor geometry changes (target switch / recording start), update position.
+    connect(record_page_, &RecordPage::recordingMonitorGeometryChanged, this, [this](const QRect& rect) {
+        recording_monitor_rect_ = rect;
+        if (recording_overlay_)
+            recording_overlay_->setMonitorGeometry(rect);
+    });
+
     // ---- Reactive device discovery wiring ----
     // Audio: forward to both ConfigPage and RecordPage (under no-emit contract).
     connect(&audio_notifier_, &AudioDeviceNotifier::snapshotChanged, this, &MainWindow::onAudioDevicesChanged);
@@ -757,6 +780,36 @@ MainWindow::~MainWindow() {
     audio_notifier_.stop();
     webcam_notifier_.stop();
     display_notifier_.stop();
+
+    // The overlay is top-level (no Qt parent); destroy it explicitly so it doesn't
+    // outlive the application shutdown.
+    delete recording_overlay_;
+    recording_overlay_ = nullptr;
+}
+
+void MainWindow::updateRecordingOverlay() {
+    if (!recording_overlay_)
+        return;
+
+    // Overlay is disabled by user setting.
+    if (!persisted_settings_.show_recording_overlay) {
+        recording_overlay_->hideOverlay();
+        return;
+    }
+
+    const bool is_recording = (record_status_label_ == QStringLiteral("REC"));
+    const bool is_paused = (record_status_label_ == QStringLiteral("PAUSED"));
+
+    if (is_recording) {
+        // Show recording state; elapsed text is provided via the timer label in
+        // TransportDock — for the overlay we synthesise a placeholder on first show
+        // and update via chromeRuntimeMetricsChanged.
+        recording_overlay_->showRecording(QStringLiteral("00:00:00"));
+    } else if (is_paused) {
+        recording_overlay_->showPaused(recording_overlay_->elapsedText());
+    } else {
+        recording_overlay_->hideOverlay();
+    }
 }
 
 void MainWindow::showEvent(QShowEvent* event) {
@@ -948,6 +1001,9 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
     if ((recording || record_status_label_ == QStringLiteral("COUNTDOWN")) && isVisible() && !isMinimized() &&
         stack_->currentIndex() != 0)
         navigateToPage(kRecordPageIndex);
+
+    // Update recording overlay visibility/state.
+    updateRecordingOverlay();
 }
 
 bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintptr* result) {

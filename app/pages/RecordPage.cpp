@@ -4806,6 +4806,13 @@ void RecordPage::emitChromeState() {
                                     .arg(normalizedTargetLabel(target),
                                          frameRateLabel(current_frame_rate_num_, current_frame_rate_den_),
                                          videoCodecLabel(current_video_codec_)));
+        // RECORDING-OVERLAY-R1: emit monitor geometry for overlay positioning.
+        // Monitor/Region targets provide a real rect; Window targets emit null.
+        if (target.kind == recorder_core::CaptureTarget::Kind::Monitor) {
+            emit recordingMonitorGeometryChanged(selectedMonitorRect());
+        } else {
+            emit recordingMonitorGeometryChanged(QRect{});
+        }
         return;
     }
 
@@ -4813,6 +4820,7 @@ void RecordPage::emitChromeState() {
                             QStringLiteral("NO TARGET · %1 · %2")
                                 .arg(frameRateLabel(current_frame_rate_num_, current_frame_rate_den_),
                                      videoCodecLabel(current_video_codec_)));
+    emit recordingMonitorGeometryChanged(QRect{});
 }
 
 void RecordPage::refresh() {

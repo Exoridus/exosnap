@@ -1,6 +1,7 @@
 #pragma once
 #include <QKeySequence>
 #include <QMainWindow>
+#include <QRect>
 #include <QStackedWidget>
 #include <QString>
 #include <array>
@@ -41,6 +42,10 @@ class AboutOverlay;
 class RecoveryOverlay;
 class SourcePickerOverlay;
 } // namespace ui::dialogs
+
+namespace ui::overlay {
+class RecordingOverlayWindow;
+} // namespace ui::overlay
 
 class AdvancedPage;
 class ConfigPage;
@@ -127,6 +132,9 @@ class MainWindow : public QMainWindow {
     // Startup recovery: scan the manifest; open the overlay when candidates exist.
     void checkAndShowRecoveryOverlay();
 
+    // RECORDING-OVERLAY-R1: update the recording overlay visibility/state.
+    void updateRecordingOverlay();
+
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void installVisualReadyMarker(const QString& scenario_id);
     void applyVisualSettingsScenario(const visual::VisualScenario& scenario);
@@ -142,6 +150,9 @@ class MainWindow : public QMainWindow {
     ui::dialogs::AboutOverlay* about_overlay_ = nullptr;
     ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
+    ui::overlay::RecordingOverlayWindow* recording_overlay_ = nullptr;
+    // Last known monitor rect from RecordPage for overlay positioning.
+    QRect recording_monitor_rect_;
     QStackedWidget* stack_ = nullptr;
     RecordPage* record_page_ = nullptr;
     ConfigPage* config_page_ = nullptr;

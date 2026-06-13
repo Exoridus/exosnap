@@ -136,6 +136,8 @@ qt_add_executable(exosnap WIN32
     ui/widgets/CountdownSelect.cpp
     ui/widgets/TransportDock.h
     ui/widgets/TransportDock.cpp
+    ui/overlay/RecordingOverlayWindow.h
+    ui/overlay/RecordingOverlayWindow.cpp
     MainWindow.h
     MainWindow.cpp
     pages/RecordPage.h
@@ -879,6 +881,20 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         mfplat.lib mf.lib mfuuid.lib ole32.lib)
     set_target_properties(capture_frame_tests PROPERTIES AUTOMOC ON)
 endif()
+
+# RECORDING-OVERLAY-R1 tests
+exosnap_add_gtest(
+    NAME recording_overlay_tests
+    TEST_PREFIX overlay.
+    SOURCES
+        tests/test_recording_overlay.cpp
+        ui/overlay/RecordingOverlayWindow.cpp
+        settings/AppSettingsStore.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(recording_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(recording_overlay_tests PRIVATE NOMINMAX)
+set_target_properties(recording_overlay_tests PROPERTIES AUTOMOC ON)
 
 # RECORDING-MARKERS-R1 tests
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")

@@ -79,7 +79,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_WindowGeometry) {
     EXPECT_TRUE(loaded.window_geometry.maximized);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion6) {
+TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion7) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
@@ -89,7 +89,8 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion6) {
     store.Save(settings);
 
     QSettings raw_settings(settings_path, QSettings::IniFormat);
-    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 6);
+    // Version bumped to 7 in RECORDING-OVERLAY-R1 (overlay toggle added).
+    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 7);
 }
 
 TEST(AppSettingsStoreTest, AppSettingsStore_Save_RemovesLegacyGroups) {
