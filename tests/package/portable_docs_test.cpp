@@ -109,7 +109,7 @@ TEST(PortableDocs, PortableReadmeDocumentsMp4SplitSupport) {
 }
 
 TEST(PortableDocs, RootReadmeDocumentsMp4SplitSupport) {
-    EXPECT_TRUE(contains(root_readme(), "MP4 split remuxes each segment"));
+    EXPECT_TRUE(contains(root_readme(), "per-segment background MP4 remux"));
 }
 
 // ---------------------------------------------------------------------------
