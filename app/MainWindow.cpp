@@ -18,6 +18,7 @@
 #include "ui/dialogs/SourcePickerOverlay.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
+#include "ui/tray/TrayPresence.h"
 #include "ui/widgets/WebcamSetupPanel.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 #include "visual_tests/VisualScenario.h"
@@ -54,6 +55,7 @@
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QStyle>
+#include <QSystemTrayIcon>
 #include <QTextStream>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -682,6 +684,32 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
                     &WebcamDeviceNotifier::rescan);
     }
 
+    // ---- Tray icon (TRAY-PRESENCE-R1) ----
+    // TrayPresence is parented to this so it is torn down with MainWindow.
+    // It must be created before rebroadcastChromeState() so the initial state
+    // signal reaches it.
+    if (QSystemTrayIcon::isSystemTrayAvailable()) {
+        tray_presence_ = new ui::tray::TrayPresence(this);
+        // Route tray activate → show/raise the window.
+        connect(tray_presence_, &ui::tray::TrayPresence::activateWindowRequested, this,
+                &MainWindow::onTrayActivateWindow);
+        // Route tray record toggle → same slot as the global hotkey.
+        connect(tray_presence_, &ui::tray::TrayPresence::recordToggleRequested, this,
+                &MainWindow::recordToggleRequested);
+        // Route tray quit → close the window (closeEvent handles recording guard).
+        connect(tray_presence_, &ui::tray::TrayPresence::quitRequested, this, &QWidget::close);
+        // Wire elapsed text updates into the tray tooltip at the existing cadence
+        // (chromeRuntimeMetricsChanged fires ~30 Hz via MeterCallback when recording).
+        connect(record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
+                [this](const QString& elapsed, const QString& /*bitrate*/, const QString& /*drop_text*/,
+                       const QString& /*size*/) {
+                    if (tray_presence_)
+                        tray_presence_->updateElapsedText(elapsed);
+                });
+        tray_presence_->setWindowVisible(isVisible());
+        tray_presence_->show();
+    }
+
     record_page_->rebroadcastChromeState();
     // Apply the startup preset config to all pages.
     applyPresetConfig(startup_cfg);
@@ -788,6 +816,10 @@ void MainWindow::showEvent(QShowEvent* event) {
 
     if (!runtime_window_icon_bound_)
         applyRuntimeWindowIcon();
+
+    // Sync the tray "Show/Hide window" label after the window becomes visible.
+    if (tray_presence_)
+        tray_presence_->setWindowVisible(true);
 }
 
 void MainWindow::applyRuntimeWindowIcon() {
@@ -936,6 +968,18 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
 
     applyTitleBarStatus();
     switchRecordingIcon(recording_active_, record_status_label_ == QStringLiteral("PAUSED"));
+
+    // Update tray presence (TRAY-PRESENCE-R1).
+    if (tray_presence_) {
+        const ui::tray::TrayIconState tray_state = ui::tray::TrayIconStateFromStatusLabel(record_status_label_);
+        tray_presence_->applyState(tray_state, record_status_label_);
+        // Blocked when status is BLOCKED or no recording is possible.
+        const bool blocked =
+            (record_status_label_ == QStringLiteral("BLOCKED") || record_status_label_ == QStringLiteral("ERROR") ||
+             record_status_label_ == QStringLiteral("CHECKING") || record_status_label_ == QStringLiteral("STOPPING") ||
+             record_status_label_ == QStringLiteral("SAVING"));
+        tray_presence_->setRecordingBlocked(blocked && tray_state == ui::tray::TrayIconState::Idle);
+    }
 
     // Lock hotkeys page editing while recording / countdown / stopping.
     if (hotkeys_page_) {
@@ -2158,6 +2202,24 @@ void MainWindow::onDisplaysChanged(const exosnap::DisplaySnapshot& snap, exosnap
     // changes (only for actual user-initiated target switches), so preset stays clean.
     if (record_page_)
         record_page_->onDisplaysChanged(snap);
+}
+
+// ---------------------------------------------------------------------------
+// Tray presence helpers (TRAY-PRESENCE-R1)
+// ---------------------------------------------------------------------------
+
+void MainWindow::onTrayActivateWindow() {
+    // Raise and activate the window — same as clicking the taskbar button.
+    // If the window is minimized, restore it first.
+    if (isMinimized())
+        showNormal();
+    else if (!isVisible())
+        show();
+    raise();
+    activateWindow();
+    // Update the Show/Hide label to reflect the new visibility state.
+    if (tray_presence_)
+        tray_presence_->setWindowVisible(isVisible());
 }
 
 } // namespace exosnap

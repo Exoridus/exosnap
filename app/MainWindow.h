@@ -19,6 +19,7 @@
 #include "settings/AppSettingsStore.h"
 #include "settings/RecordingPresetStore.h"
 #include "settings/RecoveryManifestStore.h"
+#include "ui/tray/TrayPresence.h"
 #include <capability/audio_ui_state.h>
 #include <capability/capability_set.h>
 
@@ -35,6 +36,10 @@ struct VisualScenario;
 namespace ui::chrome {
 class OperationalTitleBar;
 } // namespace ui::chrome
+
+namespace ui::tray {
+class TrayPresence;
+} // namespace ui::tray
 
 namespace ui::dialogs {
 class AboutOverlay;
@@ -76,6 +81,8 @@ class MainWindow : public QMainWindow {
     void onAudioDevicesChanged(const exosnap::AudioDeviceSnapshot& snap, exosnap::DiscoveryReason reason);
     void onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapshot& snap, exosnap::DiscoveryReason reason);
     void onDisplaysChanged(const exosnap::DisplaySnapshot& snap, exosnap::DiscoveryReason reason);
+
+    void onTrayActivateWindow();
 
   private:
     void showEvent(QShowEvent* event) override;
@@ -139,6 +146,7 @@ class MainWindow : public QMainWindow {
 #endif
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
+    ui::tray::TrayPresence* tray_presence_ = nullptr;
     ui::dialogs::AboutOverlay* about_overlay_ = nullptr;
     ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
