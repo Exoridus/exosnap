@@ -92,6 +92,8 @@ qt_add_executable(exosnap WIN32
     ui/dialogs/SourcePickerOverlay.h
     ui/dialogs/SourcePickerOverlay.cpp
     ui/dialogs/SourcePickerWindowRules.h
+    ui/tray/TrayPresence.h
+    ui/tray/TrayPresence.cpp
     ui/widgets/SectionRuleHeader.h
     ui/widgets/SectionRuleHeader.cpp
     ui/widgets/KeycapChip.h
@@ -934,6 +936,18 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     target_link_libraries(recording_marker_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
     set_target_properties(recording_marker_tests PROPERTIES AUTOMOC ON)
 endif()
+
+# TRAY-PRESENCE-R1 tests
+exosnap_add_gtest(
+    NAME tray_presence_tests
+    TEST_PREFIX tray.
+    SOURCES
+        tests/test_tray_presence.cpp
+        ui/tray/TrayPresence.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(tray_presence_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(tray_presence_tests PROPERTIES AUTOMOC ON)
 
 # ---------------------------------------------------------------------------
 # Install / windeployqt
