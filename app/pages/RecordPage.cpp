@@ -5162,7 +5162,8 @@ void RecordPage::updateStatsDisplay() {
         recording && view_model_.live_stats_available
             ? QString::fromStdWString(RecordViewModel::FormatBytes(view_model_.video_bytes + view_model_.audio_bytes))
             : QStringLiteral("-");
-    emit chromeRuntimeMetricsChanged(timer_text, bitrate_text, drop_text, size_text);
+    const double drift_ms = (recording && view_model_.live_stats_available) ? view_model_.av_drift_ms : 0.0;
+    emit chromeRuntimeMetricsChanged(timer_text, bitrate_text, drop_text, size_text, drift_ms);
 
     const bool show_live_grid = (active_recording || paused) && view_model_.live_stats_available;
     if (rail_stats_grid_) {

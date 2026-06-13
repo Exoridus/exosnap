@@ -106,6 +106,57 @@ TEST_F(DiagnosticsOverlayTest, UpdateMetrics_CanUpdateFieldsMultipleTimes) {
     EXPECT_EQ(overlay.fpsBitrateText(), QStringLiteral("60 fps"));
 }
 
+// ── Glyph row — sizeHint height ─────────────────────────────────────────────
+
+TEST_F(DiagnosticsOverlayTest, SizeHint_GrowsWhenGlyphsPresent) {
+    DiagnosticsOverlayWindow overlay_no_glyph;
+    const QSize hint_no_glyph = overlay_no_glyph.sizeHint();
+
+    DiagnosticsOverlayWindow overlay_mic;
+    overlay_mic.updateMetrics(QString(), QString(), QString(), QString(), /*mic_muted=*/true, /*sys_muted=*/false);
+    const QSize hint_mic = overlay_mic.sizeHint();
+
+    DiagnosticsOverlayWindow overlay_both;
+    overlay_both.updateMetrics(QString(), QString(), QString(), QString(), /*mic_muted=*/true, /*sys_muted=*/true);
+    const QSize hint_both = overlay_both.sizeHint();
+
+    // Pill must grow when glyph row is shown.
+    EXPECT_GT(hint_mic.height(), hint_no_glyph.height()) << "sizeHint height must grow when mic glyph is shown";
+    EXPECT_GE(hint_both.height(), hint_mic.height())
+        << "sizeHint height must be at least as tall with both glyphs as with one";
+    // Still within a sane upper bound.
+    EXPECT_LT(hint_both.height(), 160);
+}
+
+// ── A/V drift rendering ──────────────────────────────────────────────────────
+
+TEST_F(DiagnosticsOverlayTest, UpdateMetrics_DriftPositive_StoresFormattedText) {
+    DiagnosticsOverlayWindow overlay;
+    overlay.updateMetrics(QString(), QStringLiteral("+12 ms"), QString(), QString(), false, false);
+    EXPECT_EQ(overlay.avDriftText(), QStringLiteral("+12 ms"));
+}
+
+TEST_F(DiagnosticsOverlayTest, UpdateMetrics_DriftNegative_StoresFormattedText) {
+    DiagnosticsOverlayWindow overlay;
+    overlay.updateMetrics(QString(), QStringLiteral("-8 ms"), QString(), QString(), false, false);
+    EXPECT_EQ(overlay.avDriftText(), QStringLiteral("-8 ms"));
+}
+
+TEST_F(DiagnosticsOverlayTest, UpdateMetrics_DriftDash_StoresEmDash) {
+    // When no drift is available, MainWindow passes "—"; verify the overlay stores it.
+    DiagnosticsOverlayWindow overlay;
+    overlay.updateMetrics(QString(), QStringLiteral("—"), QString(), QString(), false, false);
+    EXPECT_EQ(overlay.avDriftText(), QStringLiteral("—"));
+}
+
+TEST_F(DiagnosticsOverlayTest, UpdateMetrics_DriftNotEmpty_NotDash) {
+    // After a real drift value is set, avDriftText must not be empty.
+    DiagnosticsOverlayWindow overlay;
+    overlay.updateMetrics(QString(), QStringLiteral("+3 ms"), QString(), QString(), false, false);
+    EXPECT_FALSE(overlay.avDriftText().isEmpty());
+    EXPECT_NE(overlay.avDriftText(), QStringLiteral("—"));
+}
+
 // ── Hide overlay ─────────────────────────────────────────────────────────────
 
 TEST_F(DiagnosticsOverlayTest, HideOverlay_WhenAlreadyHidden_DoesNotCrash) {

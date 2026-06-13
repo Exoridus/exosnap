@@ -219,17 +219,19 @@ QSize DiagnosticsOverlayWindow::sizeHint() const {
 
     // 4 metric rows + row gap between each
     const int num_rows = 4;
-    const int content_h = num_rows * row_h + (num_rows - 1) * kRowGap;
+    int content_h = num_rows * row_h + (num_rows - 1) * kRowGap;
+
+    // Glyph row: include its height when any source is muted so the pill grows
+    // to accommodate the row instead of clipping the painted glyphs.
+    if (mic_muted_ || sys_muted_) {
+        content_h += 2 + row_h; // 2 px separator gap + one text row height
+    }
 
     // Width: accommodate "DROPS  00000" comfortably
     const int label_w = fm.horizontalAdvance(QStringLiteral("DROPS"));
     const int value_w = fm.horizontalAdvance(QStringLiteral("99999 MB"));
     const int w = kPaddingH + label_w + 20 + value_w + kPaddingH;
 
-    // Height: add extra for possible glyph row (always reserve a small amount
-    // so the window does not resize when glyph row appears/disappears — but
-    // glyph row is conditional, so base height is for the 4 metric rows only
-    // and the window is sized once via showOverlay()/updatePosition()).
     const int h = content_h + kPaddingV * 2;
     return QSize(w, h);
 }

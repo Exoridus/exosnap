@@ -65,6 +65,7 @@
 #include <QWindowStateChangeEvent>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <optional>
 
 #if defined(Q_OS_WIN)
@@ -493,18 +494,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(title_bar_, &ui::chrome::OperationalTitleBar::closeRequested, this, &QWidget::close);
     connect(record_page_, &RecordPage::chromeStateChanged, this, &MainWindow::onRecordChromeStateChanged);
     // DF-11: wire drop count from recording stats into the titlebar Recording pill.
-    connect(
-        record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
-        [this](const QString& elapsed, const QString& /*bitrate*/, const QString& drop_text, const QString& /*size*/) {
-            if (title_bar_) {
-                bool ok = false;
-                const int drops = drop_text.toInt(&ok);
-                title_bar_->setRecordingDropCount(ok ? drops : 0);
-            }
-            // RECORDING-OVERLAY-R1: keep the overlay elapsed text in sync.
-            if (recording_overlay_ && recording_overlay_->isVisible())
-                recording_overlay_->updateElapsed(elapsed);
-        });
+    connect(record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
+            [this](const QString& elapsed, const QString& /*bitrate*/, const QString& drop_text,
+                   const QString& /*size*/, double /*av_drift_ms*/) {
+                if (title_bar_) {
+                    bool ok = false;
+                    const int drops = drop_text.toInt(&ok);
+                    title_bar_->setRecordingDropCount(ok ? drops : 0);
+                }
+                // RECORDING-OVERLAY-R1: keep the overlay elapsed text in sync.
+                if (recording_overlay_ && recording_overlay_->isVisible())
+                    recording_overlay_->updateElapsed(elapsed);
+            });
     connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { navigateToPage(kSettingsPageIndex); });
     connect(record_page_, &RecordPage::navigateToDiagnosticsPage, this,
             [this]() { navigateToPage(kDiagnosticsPageIndex); });
@@ -701,11 +702,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // Feed the diagnostics overlay from chromeRuntimeMetricsChanged (~4–30 Hz stats cadence).
     connect(record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
             [this](const QString& /*elapsed*/, const QString& bitrate_text, const QString& drop_text,
-                   const QString& size_text) {
+                   const QString& size_text, double av_drift_ms) {
                 if (diagnostics_overlay_ && diagnostics_overlay_->isVisible()) {
+                    // Format A/V drift: "+12 ms" / "-8 ms"; "—" when zero/unknown.
+                    QString drift_text;
+                    if (av_drift_ms == 0.0) {
+                        drift_text = QStringLiteral("—");
+                    } else {
+                        const int drift_rounded = static_cast<int>(std::round(av_drift_ms));
+                        drift_text = drift_rounded >= 0 ? QStringLiteral("+%1 ms").arg(drift_rounded)
+                                                        : QStringLiteral("%1 ms").arg(drift_rounded);
+                    }
                     // fps is embedded in bitrate_text as "fps / bitrate"; reuse directly.
                     diagnostics_overlay_->updateMetrics(bitrate_text, // fps / bitrate line
-                                                        QString(),    // A/V drift not in this signal; left blank
+                                                        drift_text,   // A/V drift
                                                         drop_text,    // dropped frames count
                                                         size_text,    // output file size
                                                         false, // mic_muted: derived from audioMeterLevelsUpdated below
@@ -771,7 +781,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         // (chromeRuntimeMetricsChanged fires ~30 Hz via MeterCallback when recording).
         connect(record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
                 [this](const QString& elapsed, const QString& /*bitrate*/, const QString& /*drop_text*/,
-                       const QString& /*size*/) {
+                       const QString& /*size*/, double /*av_drift_ms*/) {
                     if (tray_presence_)
                         tray_presence_->updateElapsedText(elapsed);
                 });
