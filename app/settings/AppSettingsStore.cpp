@@ -10,8 +10,8 @@
 namespace exosnap {
 namespace {
 
-// Bump to 7: recording overlay toggle added.
-constexpr int kSettingsVersionCurrent = 7;
+// Bump to 8: diagnostics overlay toggle added.
+constexpr int kSettingsVersionCurrent = 8;
 
 } // namespace
 
@@ -56,6 +56,7 @@ PersistedAppSettings AppSettingsStore::Load() const {
 
     settings.beginGroup(QStringLiteral("overlay"));
     persisted.show_recording_overlay = settings.value(QStringLiteral("show_recording_overlay"), true).toBool();
+    persisted.show_diagnostics_overlay = settings.value(QStringLiteral("show_diagnostics_overlay"), false).toBool();
     settings.endGroup();
 
     return persisted;
@@ -97,6 +98,7 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
 
     settings.beginGroup(QStringLiteral("overlay"));
     settings.setValue(QStringLiteral("show_recording_overlay"), settings_snapshot.show_recording_overlay);
+    settings.setValue(QStringLiteral("show_diagnostics_overlay"), settings_snapshot.show_diagnostics_overlay);
     settings.endGroup();
 
     settings.sync();

@@ -26,10 +26,16 @@ class AdvancedPage : public QWidget {
     // Call once after construction with the persisted value.
     void setShowOverlay(bool show);
 
+    // DIAGNOSTICS-OVERLAY-R1: populate the diagnostics overlay checkbox from the stored setting.
+    // Call once after construction with the persisted value.
+    void setShowDiagnosticsOverlay(bool show);
+
   signals:
     void backToSettingsRequested();
     // Emitted when the "Show recording overlay" checkbox changes.
     void showOverlayChanged(bool show);
+    // DIAGNOSTICS-OVERLAY-R1: emitted when the "Show diagnostics overlay" checkbox changes.
+    void showDiagnosticsOverlayChanged(bool show);
 
   private:
     void onReset();
@@ -37,6 +43,7 @@ class AdvancedPage : public QWidget {
     QComboBox* log_level_combo_ = nullptr;
     ui::widgets::ExoCheckBox* nvtx_check_ = nullptr;
     ui::widgets::ExoCheckBox* overlay_check_ = nullptr;
+    ui::widgets::ExoCheckBox* diagnostics_overlay_check_ = nullptr;
 
     QLabel* baseline_profile_label_ = nullptr;
     QLabel* baseline_container_label_ = nullptr;

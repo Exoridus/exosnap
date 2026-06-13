@@ -16,6 +16,7 @@
 #include "ui/dialogs/AboutOverlay.h"
 #include "ui/dialogs/RecoveryOverlay.h"
 #include "ui/dialogs/SourcePickerOverlay.h"
+#include "ui/overlay/DiagnosticsOverlayWindow.h"
 #include "ui/overlay/RecordingOverlayWindow.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
@@ -64,6 +65,7 @@
 #include <QWindowStateChangeEvent>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <optional>
 
 #if defined(Q_OS_WIN)
@@ -492,18 +494,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(title_bar_, &ui::chrome::OperationalTitleBar::closeRequested, this, &QWidget::close);
     connect(record_page_, &RecordPage::chromeStateChanged, this, &MainWindow::onRecordChromeStateChanged);
     // DF-11: wire drop count from recording stats into the titlebar Recording pill.
-    connect(
-        record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
-        [this](const QString& elapsed, const QString& /*bitrate*/, const QString& drop_text, const QString& /*size*/) {
-            if (title_bar_) {
-                bool ok = false;
-                const int drops = drop_text.toInt(&ok);
-                title_bar_->setRecordingDropCount(ok ? drops : 0);
-            }
-            // RECORDING-OVERLAY-R1: keep the overlay elapsed text in sync.
-            if (recording_overlay_ && recording_overlay_->isVisible())
-                recording_overlay_->updateElapsed(elapsed);
-        });
+    connect(record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
+            [this](const QString& elapsed, const QString& /*bitrate*/, const QString& drop_text,
+                   const QString& /*size*/, double /*av_drift_ms*/) {
+                if (title_bar_) {
+                    bool ok = false;
+                    const int drops = drop_text.toInt(&ok);
+                    title_bar_->setRecordingDropCount(ok ? drops : 0);
+                }
+                // RECORDING-OVERLAY-R1: keep the overlay elapsed text in sync.
+                if (recording_overlay_ && recording_overlay_->isVisible())
+                    recording_overlay_->updateElapsed(elapsed);
+            });
     connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { navigateToPage(kSettingsPageIndex); });
     connect(record_page_, &RecordPage::navigateToDiagnosticsPage, this,
             [this]() { navigateToPage(kDiagnosticsPageIndex); });
@@ -681,7 +683,61 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         recording_monitor_rect_ = rect;
         if (recording_overlay_)
             recording_overlay_->setMonitorGeometry(rect);
+        if (diagnostics_overlay_)
+            diagnostics_overlay_->setMonitorGeometry(rect);
     });
+
+    // ---- Diagnostics overlay (DIAGNOSTICS-OVERLAY-R1) ----
+    // Top-level (no Qt parent) like RecordingOverlayWindow; bottom-right corner.
+    diagnostics_overlay_ = new ui::overlay::DiagnosticsOverlayWindow(nullptr);
+    // Populate the Advanced page checkbox from the persisted setting.
+    if (advanced_page_)
+        advanced_page_->setShowDiagnosticsOverlay(persisted_settings_.show_diagnostics_overlay);
+    // When the user toggles the diagnostics overlay checkbox, persist and update live state.
+    connect(advanced_page_, &AdvancedPage::showDiagnosticsOverlayChanged, this, [this](bool show) {
+        persisted_settings_.show_diagnostics_overlay = show;
+        settings_store_.Save(persisted_settings_);
+        updateDiagnosticsOverlay();
+    });
+    // Feed the diagnostics overlay from chromeRuntimeMetricsChanged (~4–30 Hz stats cadence).
+    connect(record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
+            [this](const QString& /*elapsed*/, const QString& bitrate_text, const QString& drop_text,
+                   const QString& size_text, double av_drift_ms) {
+                if (diagnostics_overlay_ && diagnostics_overlay_->isVisible()) {
+                    // Format A/V drift: "+12 ms" / "-8 ms"; "—" when zero/unknown.
+                    QString drift_text;
+                    if (av_drift_ms == 0.0) {
+                        drift_text = QStringLiteral("—");
+                    } else {
+                        const int drift_rounded = static_cast<int>(std::round(av_drift_ms));
+                        drift_text = drift_rounded >= 0 ? QStringLiteral("+%1 ms").arg(drift_rounded)
+                                                        : QStringLiteral("%1 ms").arg(drift_rounded);
+                    }
+                    // fps is embedded in bitrate_text as "fps / bitrate"; reuse directly.
+                    diagnostics_overlay_->updateMetrics(bitrate_text, // fps / bitrate line
+                                                        drift_text,   // A/V drift
+                                                        drop_text,    // dropped frames count
+                                                        size_text,    // output file size
+                                                        false, // mic_muted: derived from audioMeterLevelsUpdated below
+                                                        false  // sys_muted: derived from audioMeterLevelsUpdated below
+                    );
+                }
+            });
+    // Feed muted-source glyphs from the audio meter signal.
+    connect(
+        record_page_, &RecordPage::audioMeterLevelsUpdated, this,
+        [this](float /*sys01*/, float /*app01*/, float /*mic01*/, bool sys_active, bool app_active, bool mic_active) {
+            if (diagnostics_overlay_ && diagnostics_overlay_->isVisible()) {
+                // "muted" means the source is not active during recording.
+                const bool mic_muted = !mic_active;
+                const bool sys_muted = !sys_active;
+                diagnostics_overlay_->updateMetrics(diagnostics_overlay_->fpsBitrateText(),
+                                                    diagnostics_overlay_->avDriftText(),
+                                                    diagnostics_overlay_->droppedFramesText(),
+                                                    diagnostics_overlay_->outputSizeText(), mic_muted, sys_muted);
+            }
+            Q_UNUSED(app_active);
+        });
 
     // ---- Reactive device discovery wiring ----
     // Audio: forward to both ConfigPage and RecordPage (under no-emit contract).
@@ -725,7 +781,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         // (chromeRuntimeMetricsChanged fires ~30 Hz via MeterCallback when recording).
         connect(record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
                 [this](const QString& elapsed, const QString& /*bitrate*/, const QString& /*drop_text*/,
-                       const QString& /*size*/) {
+                       const QString& /*size*/, double /*av_drift_ms*/) {
                     if (tray_presence_)
                         tray_presence_->updateElapsedText(elapsed);
                 });
@@ -816,6 +872,8 @@ MainWindow::~MainWindow() {
     // outlive the application shutdown.
     delete recording_overlay_;
     recording_overlay_ = nullptr;
+    delete diagnostics_overlay_;
+    diagnostics_overlay_ = nullptr;
 }
 
 void MainWindow::updateRecordingOverlay() {
@@ -840,6 +898,26 @@ void MainWindow::updateRecordingOverlay() {
         recording_overlay_->showPaused(recording_overlay_->elapsedText());
     } else {
         recording_overlay_->hideOverlay();
+    }
+}
+
+void MainWindow::updateDiagnosticsOverlay() {
+    if (!diagnostics_overlay_)
+        return;
+
+    // Overlay disabled by user setting.
+    if (!persisted_settings_.show_diagnostics_overlay) {
+        diagnostics_overlay_->hideOverlay();
+        return;
+    }
+
+    const bool is_recording = (record_status_label_ == QStringLiteral("REC"));
+    const bool is_paused = (record_status_label_ == QStringLiteral("PAUSED"));
+
+    if (is_recording || is_paused) {
+        diagnostics_overlay_->showOverlay();
+    } else {
+        diagnostics_overlay_->hideOverlay();
     }
 }
 
@@ -1051,6 +1129,8 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
 
     // Update recording overlay visibility/state.
     updateRecordingOverlay();
+    // Update diagnostics overlay visibility/state.
+    updateDiagnosticsOverlay();
 }
 
 bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintptr* result) {

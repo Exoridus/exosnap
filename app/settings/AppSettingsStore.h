@@ -26,6 +26,12 @@ struct PersistedAppSettings {
     // shown during recording / paused. Default ON. Excluded from capture via
     // SetWindowDisplayAffinity; hidden on failure.
     bool show_recording_overlay = true;
+
+    // DIAGNOSTICS-OVERLAY-R1: whether the live diagnostics overlay (fps, A/V
+    // drift, dropped frames, output size, muted-source glyphs) is shown during
+    // recording / paused. Default OFF. Excluded from capture via
+    // SetWindowDisplayAffinity; hidden on failure.
+    bool show_diagnostics_overlay = false;
 };
 
 class AppSettingsStore {
