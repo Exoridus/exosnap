@@ -120,12 +120,23 @@ TEST_F(RecordingOverlayTest, ExclusionFallback_PausedHiddenWhenNotExcluded) {
 
 // ── AppSettingsStore overlay toggle ─────────────────────────────────────────
 
-TEST(AppSettingsOverlayTest, DefaultShowOverlayIsTrue) {
+// These tests use QCoreApplication::applicationDirPath(), which requires a
+// QApplication instance. ctest (gtest_discover_tests) runs each test in
+// isolation via --gtest_filter, so they cannot rely on the RecordingOverlayTest
+// suite having created the application first.
+class AppSettingsOverlayTest : public ::testing::Test {
+  protected:
+    static void SetUpTestSuite() {
+        EnsureApplication();
+    }
+};
+
+TEST_F(AppSettingsOverlayTest, DefaultShowOverlayIsTrue) {
     PersistedAppSettings settings;
     EXPECT_TRUE(settings.show_recording_overlay);
 }
 
-TEST(AppSettingsOverlayTest, PersistAndLoadOverlaySetting_True) {
+TEST_F(AppSettingsOverlayTest, PersistAndLoadOverlaySetting_True) {
     const QString tmp_path = QCoreApplication::applicationDirPath() + QStringLiteral("/test_overlay_settings_on.ini");
     QFile::remove(tmp_path);
 
@@ -140,7 +151,7 @@ TEST(AppSettingsOverlayTest, PersistAndLoadOverlaySetting_True) {
     QFile::remove(tmp_path);
 }
 
-TEST(AppSettingsOverlayTest, PersistAndLoadOverlaySetting_False) {
+TEST_F(AppSettingsOverlayTest, PersistAndLoadOverlaySetting_False) {
     const QString tmp_path = QCoreApplication::applicationDirPath() + QStringLiteral("/test_overlay_settings_off.ini");
     QFile::remove(tmp_path);
 
@@ -155,7 +166,7 @@ TEST(AppSettingsOverlayTest, PersistAndLoadOverlaySetting_False) {
     QFile::remove(tmp_path);
 }
 
-TEST(AppSettingsOverlayTest, MissingKeyDefaultsToTrue) {
+TEST_F(AppSettingsOverlayTest, MissingKeyDefaultsToTrue) {
     // A store loaded from a file that has NO overlay group should default to true.
     const QString tmp_path =
         QCoreApplication::applicationDirPath() + QStringLiteral("/test_overlay_settings_missing.ini");
