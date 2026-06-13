@@ -52,12 +52,12 @@ TEST(PortableDocs, StalePlainTextLimitationsRemoved) {
 }
 
 // ---------------------------------------------------------------------------
-// Version consistency — every release-facing doc names 0.1.0 and none claims 1.0
+// Version consistency — every release-facing doc names 0.2.0 and none claims 1.0
 // ---------------------------------------------------------------------------
-TEST(PortableDocs, AllDocsNameVersion010) {
-    EXPECT_TRUE(contains(known_limitations(), "0.1.0"));
-    EXPECT_TRUE(contains(portable_readme(), "0.1.0"));
-    EXPECT_TRUE(contains(root_readme(), "0.1.0"));
+TEST(PortableDocs, AllDocsNameVersion020) {
+    EXPECT_TRUE(contains(known_limitations(), "0.2.0"));
+    EXPECT_TRUE(contains(portable_readme(), "0.2.0"));
+    EXPECT_TRUE(contains(root_readme(), "0.2.0"));
 }
 
 TEST(PortableDocs, NoDocClaimsItIsOnePointZeroRelease) {

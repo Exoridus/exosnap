@@ -6,8 +6,7 @@ webcam PiP overlay, crash recovery, and built-in diagnostics. Dark-mode-first Qt
 
 ## Status / current release
 
-- **Development version:** `0.2.0` — "Reliability foundation" (unreleased; landing on main now).
-- **Latest published portable build:** `0.1.0`.
+- **Latest release:** `0.2.0` — "Reliability foundation".
 - **Pre-v1 notice:** settings, preset, and recording-history schemas may change incompatibly before 1.0.0.
 - **Platform:** Windows 10/11 x64 (Windows 11 is the primary target; Windows 10 is best-effort).
 - **Hardware encoder:** NVIDIA NVENC only. An NVIDIA GPU with supported NVENC capability is required.
