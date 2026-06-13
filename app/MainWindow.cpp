@@ -46,6 +46,7 @@
 #include <QDebug>
 #include <QEvent>
 #include <QFile>
+#include <QFileInfo>
 #include <QFrame>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -2500,6 +2501,22 @@ void MainWindow::initNotificationToasts() {
                 }
                 notification_manager_->Enqueue(std::move(event));
             });
+
+    // ── CAPTURE-FRAME-BUTTON-R1: "Frame saved" success toast ──
+    // Triggered by RecordPage::captureFrameSaved when a frame PNG is written.
+    connect(record_page_, &RecordPage::captureFrameSaved, this, [this](const QString& frame_path) {
+        if (!persisted_settings_.show_notifications || !notification_manager_)
+            return;
+        notifications::NotificationEvent event;
+        event.type = notifications::NotificationType::Saved;
+        event.title = QStringLiteral("Frame saved");
+        const QString filename = QFileInfo(frame_path).fileName();
+        const QString folder = QFileInfo(frame_path).dir().path();
+        event.body = filename.isEmpty() ? folder : QStringLiteral("%1 — %2").arg(filename, folder);
+        event.action = notifications::NotificationAction::OpenFolder;
+        event.action_payload = frame_path;
+        notification_manager_->Enqueue(std::move(event));
+    });
 
     // ── Trigger 4: RecoveryAvailable is enqueued in checkAndShowRecoveryOverlay() ──
     // (Wired there directly to avoid duplicating the candidate-count check.)

@@ -978,6 +978,26 @@ exosnap_add_gtest(
 target_include_directories(notification_manager_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(notification_manager_tests PROPERTIES AUTOMOC ON)
 
+# CAPTURE-FRAME-BUTTON-R1 tests
+exosnap_add_gtest(
+    NAME capture_frame_button_tests
+    TEST_PREFIX capture.frame.button.
+    SOURCES
+        tests/test_capture_frame_button.cpp
+        services/RecordingCoordinator.cpp
+        settings/RecoveryManifestStore.cpp
+        notifications/NotificationManager.cpp
+    LIBRARIES
+        exosnap_output_model_test_support
+        exosnap_device_service_test_support
+        exosnap_diagnostics_test_support
+        Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(capture_frame_button_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(capture_frame_button_tests PRIVATE NOMINMAX)
+target_link_libraries(capture_frame_button_tests PRIVATE mfplat.lib mf.lib mfuuid.lib ole32.lib)
+set_target_properties(capture_frame_button_tests PROPERTIES AUTOMOC ON)
+
 exosnap_add_gtest(
     NAME notification_toast_tests
     TEST_PREFIX notify.

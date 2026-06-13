@@ -290,6 +290,42 @@ TEST_F(OverlayVisualProofTest, CountdownOverlay_Digit3_MidDepletion) {
     overlay.hide();
 }
 
+// ── Capture-frame button visual proof ────────────────────────────────────────
+//
+// CAPTURE-FRAME-BUTTON-R1: CaptureFramePreviewButton is defined in the
+// anonymous namespace of RecordPage.cpp and cannot be instantiated standalone
+// without the full RecordPage (GPU preview, coordinator, etc.).
+//
+// Instead we render the toast produced by a successful capture — the
+// "Frame saved" success toast — which is the most visible feedback path and
+// the one reviewable without GPU hardware.  The proof is saved as
+// capture-frame-button.png.
+
+TEST_F(OverlayVisualProofTest, CaptureFrameButton_FrameSavedToast) {
+    NotificationManager mgr;
+    NotificationEvent e;
+    e.type = NotificationType::Saved;
+    e.title = QStringLiteral("Frame saved");
+    e.body = QStringLiteral("frame_2026-06-13_01.png \xE2\x80\x94 C:\\Users\\test\\Videos");
+    e.action = NotificationAction::OpenFolder;
+    e.action_payload = QStringLiteral("C:\\Users\\test\\Videos\\frame_2026-06-13_01.png");
+    mgr.Enqueue(e);
+
+    NotificationToastWindow toast(&mgr, nullptr);
+    toast.resize(toast.sizeHint());
+    toast.show();
+    QCoreApplication::processEvents();
+
+    const bool saved = grabAndSave(toast, QStringLiteral("capture-frame-button.png"));
+    EXPECT_TRUE(saved) << "Failed to save capture-frame-button.png";
+
+    const QString full_path = output_dir_ + QStringLiteral("/capture-frame-button.png");
+    std::printf("[overlay-proof] capture-frame-button.png path: %s\n", full_path.toUtf8().constData());
+    std::fflush(stdout);
+
+    toast.hide();
+}
+
 // ── Output directory confirmation ─────────────────────────────────────────────
 
 TEST_F(OverlayVisualProofTest, OutputDirectoryExists) {
