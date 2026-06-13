@@ -391,16 +391,23 @@ void RecordingCoordinator::StartDiskMonitor(const std::filesystem::path& output_
                     continue;
                 }
 
-                // For MP4 sessions add the current transient MKV size as the
-                // remux reserve.  If we cannot stat the file (not yet written,
-                // rename in progress), fall back to 0 so we still protect with
-                // the base threshold.
+                // For MP4 sessions compute the remux reserve as the sum of:
+                //   (a) the current live transient MKV (segment being recorded now), and
+                //   (b) all segment MKV files that have an outstanding background remux
+                //       job (MP4-SPLIT-REMUX-R1: these coexist until each job finishes).
+                // This is conservative but correct: at worst we require enough space for
+                // all in-progress MKVs to have simultaneous output MP4 copies.
                 uint64_t remux_reserve = 0;
-                if (is_mp4 && !transient_mkv.empty()) {
-                    std::error_code ec;
-                    const auto mkv_size = std::filesystem::file_size(transient_mkv, ec);
-                    if (!ec)
-                        remux_reserve = static_cast<uint64_t>(mkv_size);
+                if (is_mp4) {
+                    // (a) current live segment
+                    if (!transient_mkv.empty()) {
+                        std::error_code ec;
+                        const auto mkv_size = std::filesystem::file_size(transient_mkv, ec);
+                        if (!ec)
+                            remux_reserve += static_cast<uint64_t>(mkv_size);
+                    }
+                    // (b) segments awaiting background remux
+                    remux_reserve += this->PendingRemuxReserveBytes();
                 }
 
                 const uint64_t threshold = diagnostics::ComputeHardStopThreshold(remux_reserve);
@@ -788,6 +795,13 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         markers_limit_reported_ = false;
     }
 
+    // MP4-SPLIT-REMUX-R1: clear per-segment remux state from any prior session.
+    {
+        std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+        segment_remux_jobs_.clear();
+        pending_segment_manifest_id_.clear();
+    }
+
     // Recovery manifest entry — written before the engine starts so a hard crash
     // leaves a traceable artefact. The artefact_path is the file the engine will
     // actually write (transient .mkv.tmp for MP4 target, final .mkv for MKV target).
@@ -956,6 +970,86 @@ void RecordingCoordinator::OnSegmentCompleted(const recorder_core::CompletedSegm
     // finalized segments (a quarantined file gets no orphan sidecar).
     if (segment.succeeded)
         WriteSegmentMarkerSidecar(segment);
+
+    // MP4-SPLIT-REMUX-R1: for intermediate segments in an MP4 session, kick off
+    // a background remux while recording continues into the next segment.
+    //
+    // This is a split boundary (not the final segment), the engine succeeded for
+    // this segment, and the session container is MP4. The coordinator already
+    // knows this via session_is_mp4_ set at StartDiskMonitor / StartRecording time.
+    //
+    // Manifest lifecycle:
+    //   - current_manifest_id_ was created (at StartRecording or the previous
+    //     OnSegmentCompleted) and represents THIS segment's recovery entry.
+    //   - We finalize it (UpdateFinalized=true) synchronously here since the MKV
+    //     is cleanly closed by the engine before this callback fires.
+    //   - We create a NEW manifest entry for the NEXT segment (segment N+1 just
+    //     started writing) and store it in pending_segment_manifest_id_.
+    //   - The recording thread will read pending_segment_manifest_id_ and use it
+    //     as current_manifest_id_ when it processes the final segment.
+    if (was_split_boundary && segment.succeeded && session_is_mp4_) {
+        // Derive the expected MP4 output path for this segment from the transient MKV path.
+        // segment.path is a .mkv.tmp (or _part-NNN.mkv.tmp) file; derive the .mp4 side.
+        // The base output path is current_output_path_ (the .mp4 path requested by the user).
+        // Use DeriveSegmentPath on the MP4 base to get the corresponding MP4 segment path.
+        const std::filesystem::path mp4_segment = recorder_core::DeriveSegmentPath(current_output_path_, segment.index);
+
+        // Capture the manifest ID for this segment before mutating current_manifest_id_.
+        QString this_segment_manifest_id;
+        QString next_segment_manifest_id;
+
+        {
+            // We use segment_remux_mutex_ to protect segment_remux_jobs_ and
+            // pending_segment_manifest_id_ which are shared with the recording thread.
+            std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+
+            // The manifest ID for THIS segment is the one current at this point.
+            // For segment 0 this is current_manifest_id_ set at StartRecording.
+            // For segment N (N>0) this was stored in pending_segment_manifest_id_
+            // when segment N-1 completed, and adopted below.
+            this_segment_manifest_id = current_manifest_id_;
+
+            // Finalize the manifest entry: the MKV is clean (engine closed it).
+            if (recovery_manifest_store_ != nullptr && !this_segment_manifest_id.isEmpty()) {
+                recovery_manifest_store_->UpdateFinalized(this_segment_manifest_id, true);
+            }
+
+            // Create a recovery manifest entry for the NEXT segment (now recording).
+            if (recovery_manifest_store_ != nullptr) {
+                const std::filesystem::path next_mkv =
+                    recorder_core::DeriveSegmentPath(session_transient_mkv_, segment.index + 1);
+                RecoveryManifestEntry next_entry;
+                next_entry.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+                next_entry.artefact_path = QString::fromStdWString(next_mkv.wstring());
+                next_entry.intended_container = QStringLiteral("mp4");
+                next_entry.final_output_path = QString::fromStdWString(
+                    recorder_core::DeriveSegmentPath(current_output_path_, segment.index + 1).wstring());
+                next_entry.started_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+                next_entry.finalized = false;
+                recovery_manifest_store_->Add(next_entry);
+                next_segment_manifest_id = next_entry.id;
+            }
+
+            // Update current_manifest_id_ so the recording thread sees the next segment's ID.
+            current_manifest_id_ = next_segment_manifest_id;
+            pending_segment_manifest_id_ = next_segment_manifest_id;
+
+            // Schedule the background remux for THIS segment.
+            auto job = std::make_unique<SegmentRemuxJob>();
+            job->transient_mkv = segment.path;
+            job->output_mp4 = mp4_segment;
+            job->manifest_id = this_segment_manifest_id;
+            StartSegmentRemuxThread(*job);
+            segment_remux_jobs_.push_back(std::move(job));
+        }
+
+        diagnostics::AppLog::info(
+            QStringLiteral("remux"),
+            QStringLiteral("split segment remux scheduled index=%1 transient=\"%2\" output=\"%3\"")
+                .arg(segment.index)
+                .arg(QString::fromStdWString(segment.path.filename().wstring()),
+                     QString::fromStdWString(mp4_segment.filename().wstring())));
+    }
 
     // Feedback names the segment that just *started* (the one after the boundary).
     // Only on an actual split boundary (not the final session-end finalize) and
@@ -1153,18 +1247,109 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
                                             QString::fromStdWString(ui_result.error_detail)));
     }
 
-    // ADR-0014: MP4 remux-on-stop. When the engine succeeded and the user requested
-    // MP4, spawn the background remux job before reporting Completed.
+    // ADR-0014 + MP4-SPLIT-REMUX-R1: remux-on-stop for MP4 sessions.
+    //
+    // For single-file recordings (no splits or MKV/WebM): use RunRemuxJob as before.
+    // For split recordings: one or more intermediate segment remux jobs may already
+    // be running in the background (kicked off by OnSegmentCompleted).  We need to
+    // also remux the FINAL segment and then wait for ALL jobs to complete.
     const bool needs_remux = result.succeeded && (config.container == recorder_core::Container::Mp4);
     if (needs_remux) {
-        const std::filesystem::path transient_mkv = recorder_core::DeriveTransientMkvPath(output_path);
-        // Mark the manifest entry as finalized before remux so that if the
-        // remux itself is interrupted the startup UI knows the MKV is clean.
+        // Determine whether any intermediate segments were already scheduled.
+        bool has_split_segments = false;
+        {
+            std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+            has_split_segments = !segment_remux_jobs_.empty();
+        }
+
+        if (!has_split_segments) {
+            // ── Single-file MP4 path (no splits) — unchanged from the original flow ──
+            const std::filesystem::path transient_mkv = recorder_core::DeriveTransientMkvPath(output_path);
+            // Mark the manifest entry as finalized before remux.
+            if (recovery_manifest_store_ != nullptr && !current_manifest_id_.isEmpty())
+                recovery_manifest_store_->UpdateFinalized(current_manifest_id_, true);
+            PostStateChange(UiRecordingState::Saving);
+            SyncWebcamService(false);
+            RunRemuxJob(transient_mkv, output_path, std::move(ui_result));
+            return;
+        }
+
+        // ── Split MP4 path: final segment + drain all background jobs ──
+        //
+        // The final segment's manifest ID is current_manifest_id_ (set either at
+        // StartRecording for a single-segment session, or updated by the last
+        // OnSegmentCompleted call for the preceding segment).
+        //
+        // The segments_ list accumulated from the engine includes ALL segments,
+        // including the final one (the engine fires SegmentCallback for the last
+        // segment when Record() stops).  Identify the final segment.
+        recorder_core::CompletedSegment final_seg;
+        {
+            std::lock_guard<std::mutex> lock(segments_mutex_);
+            if (!segments_.empty())
+                final_seg = segments_.back();
+        }
+
+        // Finalize the manifest entry for the final segment.
         if (recovery_manifest_store_ != nullptr && !current_manifest_id_.isEmpty())
             recovery_manifest_store_->UpdateFinalized(current_manifest_id_, true);
+
+        // Schedule the final segment remux (same as intermediate segments).
+        if (final_seg.succeeded && !final_seg.path.empty()) {
+            const std::filesystem::path mp4_final = recorder_core::DeriveSegmentPath(output_path, final_seg.index);
+            {
+                std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+                auto job = std::make_unique<SegmentRemuxJob>();
+                job->transient_mkv = final_seg.path;
+                job->output_mp4 = mp4_final;
+                job->manifest_id = current_manifest_id_;
+                StartSegmentRemuxThread(*job);
+                segment_remux_jobs_.push_back(std::move(job));
+            }
+            current_manifest_id_.clear(); // now owned by the job
+        } else {
+            // Final segment failed — keep the manifest entry for recovery.
+            current_manifest_id_.clear();
+        }
+
         PostStateChange(UiRecordingState::Saving);
         SyncWebcamService(false);
-        RunRemuxJob(transient_mkv, output_path, std::move(ui_result));
+
+        // Drain: join all segment remux jobs (intermediate + final).
+        const bool all_ok = DrainSegmentRemuxJobs(/*cancel=*/false);
+
+        // Build the final UI result.
+        if (all_ok) {
+            // Rewrite each segment's file_path from the transient MKV to the output MP4,
+            // and accumulate the total output bytes across all segments.
+            uint64_t total_bytes = 0;
+            for (auto& seg : ui_result.segments) {
+                const std::filesystem::path seg_mp4 =
+                    recorder_core::DeriveSegmentPath(output_path, static_cast<uint32_t>(seg.index));
+                seg.file_path = QString::fromStdWString(seg_mp4.wstring());
+                std::error_code sz_ec;
+                const auto sz = std::filesystem::file_size(seg_mp4, sz_ec);
+                if (!sz_ec)
+                    total_bytes += static_cast<uint64_t>(sz);
+            }
+            ui_result.output_file_bytes = total_bytes;
+            // Point the top-level output_path at the first segment for UI consistency
+            // (same convention as single-file: the path the user asked for).
+            ui_result.output_path = output_path.wstring();
+            PostResult(std::move(ui_result));
+            PostStateChange(UiRecordingState::Completed);
+        } else {
+            // At least one segment remux failed or was cancelled.
+            const bool cancelled = remux_cancel_requested_.load();
+            ui_result.succeeded = false;
+            ui_result.error_phase = L"Remux";
+            ui_result.error_detail = cancelled
+                                         ? L"Remux cancelled — recording segments saved as MKV"
+                                         : L"One or more segment remuxes failed — recording segments saved as MKV";
+            PostResult(std::move(ui_result));
+            PostStateChange(UiRecordingState::Failed);
+        }
+        SyncWebcamService(false);
         return;
     }
 
@@ -1277,6 +1462,112 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
 
         SyncWebcamService(false);
     });
+}
+
+// ---------------------------------------------------------------------------
+// MP4-SPLIT-REMUX-R1: per-segment background remux helpers
+// ---------------------------------------------------------------------------
+
+void RecordingCoordinator::StartSegmentRemuxThread(SegmentRemuxJob& job) {
+    // job must be fully initialised before this call.
+    // The thread writes job.succeeded / job.av_error_code / job.error_message
+    // and then exits; DrainSegmentRemuxJobs joins it.
+    job.thread = std::thread([this, &job]() {
+        const std::filesystem::path transient_mkv = job.transient_mkv;
+        const std::filesystem::path output_mp4 = job.output_mp4;
+        const QString manifest_id = job.manifest_id;
+
+        diagnostics::AppLog::info(QStringLiteral("remux"),
+                                  QStringLiteral("segment start transient=\"%1\" output=\"%2\"")
+                                      .arg(QString::fromStdWString(transient_mkv.filename().wstring()),
+                                           QString::fromStdWString(output_mp4.filename().wstring())));
+
+        auto progress_cb = [this](float /*fraction*/) -> bool { return !remux_cancel_requested_.load(); };
+        const auto result = recorder_core::RemuxToProgressiveMp4(transient_mkv, output_mp4, progress_cb);
+
+        job.succeeded = result.success;
+        job.av_error_code = result.av_error_code;
+        job.error_message = result.message;
+
+        if (result.success) {
+            // Delete the transient MKV for this segment.
+            std::error_code ec;
+            std::filesystem::remove(transient_mkv, ec);
+            if (ec) {
+                diagnostics::AppLog::warning(QStringLiteral("remux"),
+                                             QStringLiteral("segment transient MKV removal failed: %1 path=\"%2\"")
+                                                 .arg(QString::fromStdWString(ToWide(ec.message())),
+                                                      QString::fromStdWString(transient_mkv.filename().wstring())));
+            }
+
+            std::error_code size_ec;
+            const auto mp4_size = std::filesystem::file_size(output_mp4, size_ec);
+            diagnostics::AppLog::info(QStringLiteral("remux"),
+                                      QStringLiteral("segment complete bytes=%1 output=\"%2\"")
+                                          .arg(static_cast<qint64>(size_ec ? 0 : mp4_size))
+                                          .arg(QString::fromStdWString(output_mp4.filename().wstring())));
+
+            // Remove the manifest entry on success.
+            if (recovery_manifest_store_ != nullptr && !manifest_id.isEmpty()) {
+                recovery_manifest_store_->Remove(manifest_id);
+            }
+        } else {
+            const bool cancelled = remux_cancel_requested_.load();
+            if (cancelled) {
+                diagnostics::AppLog::info(QStringLiteral("remux"),
+                                          QStringLiteral("segment cancelled — transient MKV retained: \"%1\"")
+                                              .arg(QString::fromStdWString(transient_mkv.filename().wstring())));
+            } else {
+                diagnostics::AppLog::error(
+                    QStringLiteral("remux"),
+                    QStringLiteral("segment failed av_err=%1 detail=\"%2\" — transient MKV retained: \"%3\"")
+                        .arg(result.av_error_code)
+                        .arg(QString::fromStdString(result.message),
+                             QString::fromStdWString(transient_mkv.filename().wstring())));
+            }
+            // Manifest entry stays; recovery UI will offer re-export.
+        }
+    });
+}
+
+bool RecordingCoordinator::DrainSegmentRemuxJobs(bool cancel) {
+    if (cancel) {
+        remux_cancel_requested_.store(true);
+    }
+
+    std::vector<std::unique_ptr<SegmentRemuxJob>> jobs;
+    {
+        std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+        jobs = std::move(segment_remux_jobs_);
+    }
+
+    bool all_succeeded = true;
+    for (auto& job : jobs) {
+        if (job->thread.joinable()) {
+            job->thread.join();
+        }
+        if (!job->succeeded) {
+            all_succeeded = false;
+        }
+    }
+    return all_succeeded;
+}
+
+uint64_t RecordingCoordinator::PendingRemuxReserveBytes() const {
+    // Sum the on-disk sizes of all transient MKV files for jobs that are still
+    // in flight (the thread has not yet exited or cleaned up the file).
+    std::lock_guard<std::mutex> lock(segment_remux_mutex_);
+    uint64_t total = 0;
+    for (const auto& job : segment_remux_jobs_) {
+        if (job->thread.joinable()) {
+            // Thread still running — include the transient MKV in the reserve.
+            std::error_code ec;
+            const auto sz = std::filesystem::file_size(job->transient_mkv, ec);
+            if (!ec)
+                total += static_cast<uint64_t>(sz);
+        }
+    }
+    return total;
 }
 
 void RecordingCoordinator::CancelRemux() {

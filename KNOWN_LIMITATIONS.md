@@ -68,8 +68,10 @@ Invalid combinations are not offered.
 
 ## Recording split
 
-- Recording **split is supported for MKV and WebM only**.
-- **MP4 recording split is not available** in 0.1.0.
+- Recording **split is supported for MKV, WebM, and MP4** (0.2.0).
+- For MP4 sessions, each completed segment is remuxed to MP4 in the background
+  while recording continues into the next segment. "Saved" is reported only when
+  all segment remuxes have completed.
 - Already-finalized split segments remain independently usable.
 
 ## Crash safety and recovery
@@ -95,7 +97,9 @@ ExoSnap monitors free space on the output drive:
 - **Hard stop (500 MB free):** recording is blocked at start; a running recording
   stops gracefully. For MP4 sessions, the effective hard-stop threshold is higher
   because the transient MKV and the output MP4 coexist during the remux-on-stop
-  phase (roughly 2× the file size must be available).
+  phase (roughly 2× the file size must be available). For split MP4 sessions, the
+  threshold is raised conservatively by the sum of all pending background remux
+  job sizes plus the current live segment estimate.
 - No filesystem-type checks (FAT32, network drives) and no split-at-limit are
   implemented in 0.2.0; those are separate future slices.
 

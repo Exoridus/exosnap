@@ -21,8 +21,9 @@ blocks invalid recordings before start; and exposes rich diagnostics and live re
   is currently required; AMD, Intel, and software encoding are not supported in
   0.1.0).
 - **Distribution:** portable Windows x64 ZIP (no installer, no code signing yet).
-- **Containers:** MKV, WebM, MP4. Recording split is supported for MKV and WebM;
-  **MP4 split is not available** and progressive MP4 is not crash-safe.
+- **Containers:** MKV, WebM, MP4. Recording split is supported for all three
+  containers; **MP4 split remuxes each segment to progressive MP4 in the background**
+  while recording continues (0.2.0).
 - **Schema notice:** settings, presets, and history formats are pre-v1 and may
   change incompatibly before 1.0.0.
 
