@@ -34,6 +34,10 @@ class AdvancedPage : public QWidget {
     // Call once after construction with the persisted value.
     void setShowNotifications(bool show);
 
+    // TRAY-CLOSE-TO-TRAY-R1: populate the keep-in-tray checkbox from the stored setting.
+    // Call once after construction with the persisted value.
+    void setKeepRunningInTray(bool keep);
+
   signals:
     void backToSettingsRequested();
     // Emitted when the "Show recording overlay" checkbox changes.
@@ -42,6 +46,8 @@ class AdvancedPage : public QWidget {
     void showDiagnosticsOverlayChanged(bool show);
     // NOTIFY-TOASTS-R1: emitted when the "Show notifications" checkbox changes.
     void showNotificationsChanged(bool show);
+    // TRAY-CLOSE-TO-TRAY-R1: emitted when the "Keep running in tray" checkbox changes.
+    void keepRunningInTrayChanged(bool keep);
 
   private:
     void onReset();
@@ -51,6 +57,7 @@ class AdvancedPage : public QWidget {
     ui::widgets::ExoCheckBox* overlay_check_ = nullptr;
     ui::widgets::ExoCheckBox* diagnostics_overlay_check_ = nullptr;
     ui::widgets::ExoCheckBox* notifications_check_ = nullptr;
+    ui::widgets::ExoCheckBox* keep_in_tray_check_ = nullptr; // TRAY-CLOSE-TO-TRAY-R1
 
     QLabel* baseline_profile_label_ = nullptr;
     QLabel* baseline_container_label_ = nullptr;

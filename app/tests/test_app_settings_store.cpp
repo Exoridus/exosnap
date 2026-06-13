@@ -79,7 +79,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_WindowGeometry) {
     EXPECT_TRUE(loaded.window_geometry.maximized);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion9) {
+TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion10) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
@@ -89,8 +89,8 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion9) {
     store.Save(settings);
 
     QSettings raw_settings(settings_path, QSettings::IniFormat);
-    // Version bumped to 9: both DIAGNOSTICS-OVERLAY-R1 and NOTIFY-TOASTS-R1 fields added.
-    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 9);
+    // Version bumped to 10: TRAY-CLOSE-TO-TRAY-R1 fields added.
+    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 10);
 }
 
 // DIAGNOSTICS-OVERLAY-R1: show_diagnostics_overlay round-trip tests
@@ -243,6 +243,91 @@ TEST(AppSettingsStoreTest, AppSettingsStore_EmptyPath_SaveIsNoOp) {
     settings.hotkey_bindings[0] = QStringLiteral("Alt+F9");
     // Should not throw or crash.
     EXPECT_NO_THROW(store.Save(settings));
+}
+
+// TRAY-CLOSE-TO-TRAY-R1: keep_running_in_tray + tray_close_notice_shown round-trip tests
+
+TEST(AppSettingsStoreTest, AppSettingsStore_DefaultKeepRunningInTrayIsFalse) {
+    PersistedAppSettings settings;
+    EXPECT_FALSE(settings.keep_running_in_tray);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_DefaultTrayCloseNoticeShownIsFalse) {
+    PersistedAppSettings settings;
+    EXPECT_FALSE(settings.tray_close_notice_shown);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_KeepRunningInTray_True) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    settings.keep_running_in_tray = true;
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_TRUE(loaded.keep_running_in_tray);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_KeepRunningInTray_False) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    settings.keep_running_in_tray = false;
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_FALSE(loaded.keep_running_in_tray);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_TrayCloseNoticeShown_True) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    settings.tray_close_notice_shown = true;
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_TRUE(loaded.tray_close_notice_shown);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_TrayCloseNoticeShown_False) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    settings.tray_close_notice_shown = false;
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_FALSE(loaded.tray_close_notice_shown);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_MissingTrayKeys_DefaultToFalse) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    // Write a file without the [tray] group at all.
+    {
+        QSettings s(settings_path, QSettings::IniFormat);
+        s.beginGroup(QStringLiteral("overlay"));
+        s.setValue(QStringLiteral("show_recording_overlay"), true);
+        s.endGroup();
+        s.sync();
+    }
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    // Tray keys absent: must default to false.
+    EXPECT_FALSE(loaded.keep_running_in_tray);
+    EXPECT_FALSE(loaded.tray_close_notice_shown);
 }
 
 } // namespace exosnap

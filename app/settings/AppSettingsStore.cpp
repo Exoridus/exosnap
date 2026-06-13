@@ -10,10 +10,10 @@
 namespace exosnap {
 namespace {
 
-// Bump to 9: both diagnostics overlay toggle (DIAGNOSTICS-OVERLAY-R1) and
-// notification toasts toggle (NOTIFY-TOASTS-R1) added simultaneously.
+// Bump to 10: TRAY-CLOSE-TO-TRAY-R1 adds keep_running_in_tray and
+// tray_close_notice_shown.
 // Pre-1.0: no migration; incompatible persisted data is reset to defaults.
-constexpr int kSettingsVersionCurrent = 9;
+constexpr int kSettingsVersionCurrent = 10;
 
 } // namespace
 
@@ -66,6 +66,13 @@ PersistedAppSettings AppSettingsStore::Load() const {
     persisted.show_notifications = settings.value(QStringLiteral("show_notifications"), true).toBool();
     settings.endGroup();
 
+    settings.beginGroup(QStringLiteral("tray"));
+    // TRAY-CLOSE-TO-TRAY-R1: close-to-tray opt-in (default OFF).
+    persisted.keep_running_in_tray = settings.value(QStringLiteral("keep_running_in_tray"), false).toBool();
+    // TRAY-CLOSE-TO-TRAY-R1: one-time close notice shown flag (default false).
+    persisted.tray_close_notice_shown = settings.value(QStringLiteral("tray_close_notice_shown"), false).toBool();
+    settings.endGroup();
+
     return persisted;
 }
 
@@ -109,6 +116,13 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.setValue(QStringLiteral("show_diagnostics_overlay"), settings_snapshot.show_diagnostics_overlay);
     // NOTIFY-TOASTS-R1: notification toasts toggle.
     settings.setValue(QStringLiteral("show_notifications"), settings_snapshot.show_notifications);
+    settings.endGroup();
+
+    settings.beginGroup(QStringLiteral("tray"));
+    // TRAY-CLOSE-TO-TRAY-R1: close-to-tray opt-in.
+    settings.setValue(QStringLiteral("keep_running_in_tray"), settings_snapshot.keep_running_in_tray);
+    // TRAY-CLOSE-TO-TRAY-R1: one-time close notice shown flag.
+    settings.setValue(QStringLiteral("tray_close_notice_shown"), settings_snapshot.tray_close_notice_shown);
     settings.endGroup();
 
     settings.sync();

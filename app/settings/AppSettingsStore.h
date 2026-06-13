@@ -37,6 +37,14 @@ struct PersistedAppSettings {
     // Default ON. Excluded from capture via SetWindowDisplayAffinity.
     // Covers: LowStorage, Saved, UnexpectedStop, RecoveryAvailable.
     bool show_notifications = true;
+
+    // TRAY-CLOSE-TO-TRAY-R1: whether the window hides to the tray instead of
+    // quitting when the user clicks the window's close button. Default OFF.
+    bool keep_running_in_tray = false;
+
+    // TRAY-CLOSE-TO-TRAY-R1: whether the one-time close-to-tray notice has
+    // already been shown to the user. Default false (not yet shown).
+    bool tray_close_notice_shown = false;
 };
 
 class AppSettingsStore {
