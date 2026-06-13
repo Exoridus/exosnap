@@ -53,6 +53,7 @@ namespace ui::overlay {
 class CountdownOverlayWindow;
 class DiagnosticsOverlayWindow;
 class NotificationToastWindow;
+class QuickControlPillWindow;
 class RecordingOverlayWindow;
 } // namespace ui::overlay
 
@@ -154,6 +155,8 @@ class MainWindow : public QMainWindow {
     void initNotificationToasts();
     // Gate toasts on the show_notifications setting.
     void updateNotificationToastsEnabled();
+    // QUICK-PILL-R1: update the quick-control pill visibility/state.
+    void updateQuickControlPill();
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void installVisualReadyMarker(const QString& scenario_id);
@@ -174,6 +177,8 @@ class MainWindow : public QMainWindow {
     ui::overlay::CountdownOverlayWindow* countdown_overlay_ = nullptr;
     ui::overlay::RecordingOverlayWindow* recording_overlay_ = nullptr;
     ui::overlay::DiagnosticsOverlayWindow* diagnostics_overlay_ = nullptr;
+    // QUICK-PILL-R1: interactive capture-excluded quick-control pill (no parent; top-level).
+    ui::overlay::QuickControlPillWindow* quick_control_pill_ = nullptr;
     // NOTIFY-TOASTS-R1: manager (owned by this) + toast window (top-level, no parent).
     notifications::NotificationManager* notification_manager_ = nullptr;
     ui::overlay::NotificationToastWindow* notification_toast_window_ = nullptr;

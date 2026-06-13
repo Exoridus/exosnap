@@ -21,6 +21,7 @@
 #include "ui/overlay/CountdownOverlayWindow.h"
 #include "ui/overlay/DiagnosticsOverlayWindow.h"
 #include "ui/overlay/NotificationToastWindow.h"
+#include "ui/overlay/QuickControlPillWindow.h"
 #include "ui/overlay/RecordingOverlayWindow.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
@@ -763,6 +764,37 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         settings_store_.Save(persisted_settings_);
     });
 
+    // ---- Quick-control pill (QUICK-PILL-R1) ----
+    // Top-level window (no Qt parent) so it is not clipped by MainWindow.
+    // Interactive + capture-excluded: does NOT carry Qt::WindowTransparentForInput.
+    quick_control_pill_ = new ui::overlay::QuickControlPillWindow(nullptr);
+    // Populate the Advanced page checkbox from the persisted setting.
+    if (advanced_page_)
+        advanced_page_->setShowQuickControls(persisted_settings_.show_quick_controls);
+    // Propagate persisted setting to the pill immediately.
+    quick_control_pill_->setShowQuickControls(persisted_settings_.show_quick_controls);
+    // When the user toggles the quick controls checkbox, persist and update live state.
+    connect(advanced_page_, &AdvancedPage::showQuickControlsChanged, this, [this](bool show) {
+        persisted_settings_.show_quick_controls = show;
+        settings_store_.Save(persisted_settings_);
+        if (quick_control_pill_)
+            quick_control_pill_->setShowQuickControls(show);
+        updateQuickControlPill();
+    });
+    // Wire pill buttons to the existing recording actions on RecordPage.
+    connect(quick_control_pill_, &ui::overlay::QuickControlPillWindow::pauseResumeRequested, record_page_,
+            &RecordPage::onHotkeyPauseToggle);
+    connect(quick_control_pill_, &ui::overlay::QuickControlPillWindow::stopRequested, record_page_, [this]() {
+        // QUICK-PILL-R1: stop button — same path as TransportDock::stopClicked.
+        // RecordPage::onStop() is private; use the hotkey toggle signal which routes
+        // to onHotkeyToggle → onStop() when recording is active.
+        // Actually, emit recordToggleRequested which calls onHotkeyToggle.
+        // onHotkeyToggle in turn calls onStop() when CanStop().
+        emit recordToggleRequested();
+    });
+    connect(quick_control_pill_, &ui::overlay::QuickControlPillWindow::captureFrameRequested, record_page_,
+            &RecordPage::onHotkeyCaptureFrame);
+
     // ---- Reactive device discovery wiring ----
     // Audio: forward to both ConfigPage and RecordPage (under no-emit contract).
     connect(&audio_notifier_, &AudioDeviceNotifier::snapshotChanged, this, &MainWindow::onAudioDevicesChanged);
@@ -975,6 +1007,17 @@ void MainWindow::updateDiagnosticsOverlay() {
     } else {
         diagnostics_overlay_->hideOverlay();
     }
+}
+
+void MainWindow::updateQuickControlPill() {
+    if (!quick_control_pill_)
+        return;
+
+    const bool is_recording = (record_status_label_ == QStringLiteral("REC"));
+    const bool is_paused = (record_status_label_ == QStringLiteral("PAUSED"));
+    const bool active = is_recording || is_paused;
+
+    quick_control_pill_->updateState(active, is_paused);
 }
 
 void MainWindow::onCountdownStateChanged(bool active, int remaining_seconds, int duration_seconds) {
@@ -1206,6 +1249,8 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
     updateRecordingOverlay();
     // Update diagnostics overlay visibility/state.
     updateDiagnosticsOverlay();
+    // QUICK-PILL-R1: update interactive quick-control pill visibility/state.
+    updateQuickControlPill();
 }
 
 bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintptr* result) {

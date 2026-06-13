@@ -1,12 +1,12 @@
 // overlay_visual_proof.cpp — OVERLAY-SKIN-AND-PROOF-R1 + COUNTDOWN-OVERLAY-R1
-//                            + REGION-SELECTION-SKIN-R1
+//                            + REGION-SELECTION-SKIN-R1 + QUICK-PILL-R1
 //
 // Offscreen visual proof for capture-excluded overlay windows.
 // These windows use SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) and cannot
 // be screenshotted by normal means. QWidget::grab() renders regardless of
 // capture exclusion, so it is the correct verification path.
 //
-// Produces 8 PNGs under .workspace/screenshots/overlay-proof/:
+// Produces 9 PNGs under .workspace/screenshots/overlay-proof/:
 //   toast-success.png      — NotificationToastWindow, Saved type
 //   toast-caution.png      — NotificationToastWindow, LowStorage type
 //   toast-error.png        — NotificationToastWindow, UnexpectedStop type
@@ -16,6 +16,7 @@
 //   countdown-overlay.png  — CountdownOverlayWindow, digit "3", ~mid-depletion (3/5)
 //   region-selection.png   — RegionSelectionOverlay, sample selection with readout,
 //                            corner handles, scrim, and Confirm/Esc pills
+//   quick-pill.png         — QuickControlPillWindow, expanded state (3 buttons: pause, stop, capture)
 //
 // All renders are composited onto a neutral mid-gray backdrop (#606060) so the
 // glassy dark pills read clearly against a non-black background.
@@ -42,6 +43,7 @@
 #include "ui/overlay/CountdownOverlayWindow.h"
 #include "ui/overlay/DiagnosticsOverlayWindow.h"
 #include "ui/overlay/NotificationToastWindow.h"
+#include "ui/overlay/QuickControlPillWindow.h"
 #include "ui/overlay/RecordingOverlayWindow.h"
 #include "ui/widgets/RegionSelectionOverlay.h"
 
@@ -55,6 +57,7 @@ using notifications::NotificationType;
 using ui::overlay::CountdownOverlayWindow;
 using ui::overlay::DiagnosticsOverlayWindow;
 using ui::overlay::NotificationToastWindow;
+using ui::overlay::QuickControlPillWindow;
 using ui::overlay::RecordingOverlayWindow;
 using ui::widgets::RegionSelectionOverlay;
 
@@ -494,6 +497,37 @@ TEST_F(OverlayVisualProofTest, RegionSelection_WithReadoutHandlesScrim) {
     // Verify the readout text is correct.
     const QString readout = RegionSelectionOverlay::formatReadout(kSel.width(), kSel.height());
     EXPECT_TRUE(readout.contains(QStringLiteral("16:9"))) << readout.toStdString();
+}
+
+// ── Quick-control pill proof (QUICK-PILL-R1) ─────────────────────────────────
+//
+// Renders the QuickControlPillWindow in expanded state (pause/stop/capture-frame
+// buttons, no marker button — deferred to 0.11.0).
+//
+// The pill is grabbed offscreen using QWidget::grab(), which bypasses
+// SetWindowDisplayAffinity. We set the recording state to show pause glyph
+// (not paused → pause icon visible) to represent normal recording state.
+
+TEST_F(OverlayVisualProofTest, QuickPill_Expanded_ThreeButtons) {
+    QuickControlPillWindow pill;
+    // State: recording active, not paused → pause icon shown
+    pill.updateState(/*recording_active=*/true, /*paused=*/false);
+    pill.setExpanded(true);
+    pill.resize(pill.sizeHint());
+
+    // Force a paint via show (grab() bypasses WDA_EXCLUDEFROMCAPTURE guard).
+    pill.setAttribute(Qt::WA_DontShowOnScreen, false);
+    pill.show();
+    QCoreApplication::processEvents();
+
+    const bool saved = grabAndSave(pill, QStringLiteral("quick-pill.png"));
+    EXPECT_TRUE(saved) << "Failed to save quick-pill.png";
+
+    const QString full_path = output_dir_ + QStringLiteral("/quick-pill.png");
+    std::printf("[overlay-proof] quick-pill.png path: %s\n", full_path.toUtf8().constData());
+    std::fflush(stdout);
+
+    pill.hide();
 }
 
 // ── Output directory confirmation ─────────────────────────────────────────────
