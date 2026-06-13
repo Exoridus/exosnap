@@ -1014,6 +1014,7 @@ set_target_properties(notification_toast_tests PROPERTIES AUTOMOC ON)
 # OVERLAY-SKIN-AND-PROOF-R1: offscreen visual-proof renders for capture-excluded overlay windows.
 # Uses QWidget::grab() which bypasses WDA_EXCLUDEFROMCAPTURE; produces PNGs under
 # .workspace/screenshots/overlay-proof/ for human visual verification.
+# REGION-SELECTION-SKIN-R1: adds region-selection.png proof.
 exosnap_add_gtest(
     NAME overlay_visual_proof_tests
     TEST_PREFIX overlay.proof.
@@ -1024,11 +1025,27 @@ exosnap_add_gtest(
         ui/overlay/NotificationToastWindow.cpp
         ui/overlay/RecordingOverlayWindow.cpp
         ui/overlay/DiagnosticsOverlayWindow.cpp
+        ui/widgets/RegionSelectionOverlay.cpp
+        ui/widgets/RegionGeometry.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
 )
 target_include_directories(overlay_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(overlay_visual_proof_tests PRIVATE NOMINMAX)
 set_target_properties(overlay_visual_proof_tests PROPERTIES AUTOMOC ON)
+
+# REGION-SELECTION-SKIN-R1 unit tests.
+exosnap_add_gtest(
+    NAME region_selection_overlay_tests
+    TEST_PREFIX region.overlay.
+    SOURCES
+        tests/test_region_selection_overlay.cpp
+        ui/widgets/RegionSelectionOverlay.cpp
+        ui/widgets/RegionGeometry.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(region_selection_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(region_selection_overlay_tests PRIVATE NOMINMAX)
+set_target_properties(region_selection_overlay_tests PROPERTIES AUTOMOC ON)
 
 # RECORDING-MARKERS-R1 tests
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
