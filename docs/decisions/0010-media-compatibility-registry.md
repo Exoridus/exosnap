@@ -23,12 +23,22 @@ container × video-codec × audio-codec compatibility.
 - The registry blocks recording start for Prohibited combinations via the existing
   `CapabilitySet → SettingsResolver::ValidateConfig → RecordingCoordinator` path; no new
   UI paradigm was introduced.
+- `Allowed → ValidUnvalidated` in the CapabilitySet: user-selectable, recording is not
+  blocked; a warning is surfaced in the UI. `Prohibited → Invalid`: hard block, must not
+  appear in any UI picker and recording cannot start.
 
-**Pre-v1 behaviour change:** MKV + HEVC + (any audio) previously reconciled to MKV + H264 + AAC
+**Pre-v1 behaviour change (HEVC):** MKV + HEVC + (any audio) previously reconciled to MKV + H264 + AAC
 (ad-hoc HEVC→H264 downgrade). Under the registry the reconciler falls through to the primary
 working path (AV1 + Opus) because no Recommended or Allowed entry exists for HEVC in any
 combination today. The old H264 downgrade was implicit; the new path is explicit and reversible
 once HEVC is implemented.
+
+**Policy correction (MKV + H.264 + Opus):** This combination was initially classified
+`Prohibited` in the first registry implementation. That was incorrect: Matroska carries Opus
+natively and the Opus-in-MKV write path is production-validated via AV1+Opus. The combination
+is reclassified to `Allowed` (player-matrix pass for H.264+Opus specifically is not yet on
+file — that is the Allowed caveat). `ReconcileCodecs()` now leaves MKV+H264+Opus presets
+unchanged instead of rewriting the audio codec to AAC.
 
 ## Context
 
@@ -99,6 +109,13 @@ The registry must not mark HEVC-in-MP4 as
 | `Experimental` | Technically possible; not yet tested at scale |
 | `Fallback` | Used when a preferred combination fails; not user-selectable |
 | `Prohibited` | Must not appear in the UI under any circumstance |
+
+**Classification policy (authoritative):** `Prohibited` is reserved for genuinely
+incompatible container/codec pairings only — the container physically cannot carry
+the codec, or no major player supports the combination (e.g. AAC in WebM, H.264 in
+WebM). A combination that is technically compatible but lacks a full player-matrix
+validation pass must never be `Prohibited`; it belongs in `Experimental` (not yet
+tested at scale) or `Allowed` (works with known caveats, warning shown in UI).
 
 ## Consequences
 

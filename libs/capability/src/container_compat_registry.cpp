@@ -38,8 +38,11 @@ std::string_view ToString(ContainerCompatLevel level) noexcept {
 //   MKV  | HEVC         | AAC   → Experimental (not implemented; planned)
 //   MKV  | HEVC         | PCM   → Experimental (not implemented; planned)
 //   MKV  | H.264        | AAC   → Recommended  (validated MKV H.264+AAC)
-//   MKV  | H.264        | Opus  → Prohibited   (H.264+Opus in MKV not validated;
-//                                               reconciler replaces with AAC)
+//   MKV  | H.264        | Opus  → Allowed      (Matroska carries Opus natively;
+//                                               Opus-in-MKV write path is
+//                                               production-validated via AV1+Opus;
+//                                               dedicated player-matrix pass for
+//                                               H.264+Opus not yet on file)
 //   MKV  | H.264        | PCM   → Experimental (not implemented)
 //
 //   MP4  | H.264        | AAC   → Recommended  (primary validated MP4 path,
@@ -65,10 +68,11 @@ std::string_view ToString(ContainerCompatLevel level) noexcept {
 //   WebM | H.264        | PCM   → Prohibited
 //
 // Notes:
-//   - MKV + H.264 + Opus is Prohibited in this registry.  The existing
-//     ReconcileContainerCodecs() rule that converted H.264+Opus→H.264+AAC is
-//     preserved as behaviour: ContainerCompatRegistry::ReconcileCodecs() detects
-//     the Prohibited entry and falls back to AAC, which is Recommended.
+//   - MKV + H.264 + Opus is Allowed in this registry.  Matroska carries Opus
+//     natively; the Opus-in-MKV write path is production-validated (AV1+Opus);
+//     only a dedicated player-matrix pass for this exact pairing is missing.
+//     ReconcileCodecs() now leaves H.264+Opus presets unchanged (Allowed is a
+//     working combo); no rewrite to AAC occurs any more.
 //   - HEVC entries are Experimental rather than Prohibited so that future
 //     implementation can promote them to Allowed/Recommended without a
 //     registry-schema change.  The CapabilitySet will down-grade them to
@@ -91,8 +95,10 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
             if (audio == AudioCodec::AacMf)
                 return {ContainerCompatLevel::Recommended, "Validated MKV path: H.264 NVENC + AAC."};
             if (audio == AudioCodec::Opus)
-                return {ContainerCompatLevel::Prohibited, "MKV + H.264 + Opus is not a validated combination. "
-                                                          "Use AAC for H.264 recordings or switch to AV1 for Opus."};
+                return {ContainerCompatLevel::Allowed,
+                        "MKV + H.264 + Opus: Matroska carries Opus natively and the Opus-in-MKV write path "
+                        "is production-validated (AV1+Opus). A dedicated player-matrix pass for this exact "
+                        "pairing is not yet on file (ADR 0010 Allowed caveat)."};
             if (audio == AudioCodec::Pcm)
                 return {ContainerCompatLevel::Experimental, "MKV + H.264 + PCM: not implemented."};
         }

@@ -18,7 +18,7 @@ Read:
 - Default audio source order: `APP`, `SYS`, `MIC`
 - Default resulting tracks: `APP`, `SYS`, `MIC`
 - Exact label: `Merge with above`
-- Default profile: `MKV + H.264 + AAC + CFR 60 fps`
+- Default profile: `MKV + AV1 + Opus + CFR 60 fps`
 - Recording start is blocked by diagnostic blockers
 - Main UI pages:
   - Record

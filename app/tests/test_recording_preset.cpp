@@ -392,14 +392,16 @@ TEST(RecordingPreset, Reconcile_WebM_ForcesAv1Opus) {
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Opus);
 }
 
-TEST(RecordingPreset, Reconcile_Mkv_H264Opus_ForcesAac) {
+TEST(RecordingPreset, Reconcile_Mkv_H264Opus_Unchanged) {
+    // MKV + H.264 + Opus is now Allowed (working combo per ADR 0010 policy update).
+    // The reconciler must leave it unchanged — no rewrite to AAC.
     OutputSettingsModel out;
     out.container = capability::Container::Matroska;
     out.video_codec = capability::VideoCodec::H264Nvenc;
     out.audio_codec = capability::AudioCodec::Opus;
     ReconcileContainerCodecs(out);
     EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
-    EXPECT_EQ(out.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(out.audio_codec, capability::AudioCodec::Opus);
 }
 
 TEST(RecordingPreset, Reconcile_Mkv_Hevc_FallsToAv1Opus) {
@@ -455,14 +457,16 @@ TEST(RecordingPreset, Sanitize_WebMContainer_ForcesAv1Opus) {
     EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::Opus);
 }
 
-TEST(RecordingPreset, Sanitize_Mkv_H264Opus_ForcesAac) {
+TEST(RecordingPreset, Sanitize_Mkv_H264Opus_Unchanged) {
+    // MKV + H.264 + Opus is now Allowed (working combo per ADR 0010 policy update).
+    // Sanitization must leave it unchanged — no rewrite to AAC.
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.output.container = capability::Container::Matroska;
     cfg.output.video_codec = capability::VideoCodec::H264Nvenc;
     cfg.output.audio_codec = capability::AudioCodec::Opus;
     const RecordingPresetConfig s = SanitizePresetConfig(cfg);
     EXPECT_EQ(s.output.video_codec, capability::VideoCodec::H264Nvenc);
-    EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::Opus);
 }
 
 TEST(RecordingPreset, Sanitize_Mkv_Hevc_FallsToAv1Opus) {

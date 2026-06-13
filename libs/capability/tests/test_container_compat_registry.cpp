@@ -37,9 +37,11 @@ TEST(ContainerCompatRegistry, Mkv_H264_Aac_IsRecommended) {
     EXPECT_EQ(Level(Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::AacMf), ContainerCompatLevel::Recommended);
 }
 
-TEST(ContainerCompatRegistry, Mkv_H264_Opus_IsProhibited) {
-    // H.264 + Opus in MKV is not a validated combination.
-    EXPECT_EQ(Level(Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::Opus), ContainerCompatLevel::Prohibited);
+TEST(ContainerCompatRegistry, Mkv_H264_Opus_IsAllowed) {
+    // Matroska carries Opus natively; Opus-in-MKV write path is production-validated
+    // (AV1+Opus). Only a dedicated player-matrix pass for H.264+Opus is missing —
+    // that is the Allowed caveat per ADR 0010.
+    EXPECT_EQ(Level(Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::Opus), ContainerCompatLevel::Allowed);
 }
 
 TEST(ContainerCompatRegistry, Mkv_H264_Pcm_IsExperimental) {
@@ -268,13 +270,14 @@ TEST(ContainerCompatRegistry, Reconcile_Mkv_H264_Aac_Unchanged) {
     EXPECT_EQ(a, AudioCodec::AacMf);
 }
 
-TEST(ContainerCompatRegistry, Reconcile_Mkv_H264_Opus_FixesToAac) {
-    // H.264 + Opus in MKV is Prohibited; audio must be replaced with AAC.
+TEST(ContainerCompatRegistry, Reconcile_Mkv_H264_Opus_Unchanged) {
+    // MKV + H.264 + Opus is now Allowed (working combo). The reconciler must leave
+    // it unchanged — no rewrite to AAC occurs.
     VideoCodec v = VideoCodec::H264Nvenc;
     AudioCodec a = AudioCodec::Opus;
     ContainerCompatRegistry::ReconcileCodecs(Container::Matroska, v, a);
     EXPECT_EQ(v, VideoCodec::H264Nvenc);
-    EXPECT_EQ(a, AudioCodec::AacMf);
+    EXPECT_EQ(a, AudioCodec::Opus);
 }
 
 TEST(ContainerCompatRegistry, Reconcile_Mkv_H264_Pcm_FixesAudioToAac) {
