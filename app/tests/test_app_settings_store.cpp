@@ -79,7 +79,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_WindowGeometry) {
     EXPECT_TRUE(loaded.window_geometry.maximized);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion7) {
+TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion8) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
@@ -89,8 +89,56 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion7) {
     store.Save(settings);
 
     QSettings raw_settings(settings_path, QSettings::IniFormat);
-    // Version bumped to 7 in RECORDING-OVERLAY-R1 (overlay toggle added).
-    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 7);
+    // Version bumped to 8 in DIAGNOSTICS-OVERLAY-R1 (diagnostics overlay toggle added).
+    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 8);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_DiagnosticsOverlay_False) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    settings.show_diagnostics_overlay = false;
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_FALSE(loaded.show_diagnostics_overlay);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_DiagnosticsOverlay_True) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    settings.show_diagnostics_overlay = true;
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_TRUE(loaded.show_diagnostics_overlay);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_MissingDiagnosticsOverlayKey_DefaultsFalse) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    // Write a file that has the recording overlay key but NOT the diagnostics key.
+    {
+        QSettings s(settings_path, QSettings::IniFormat);
+        s.beginGroup(QStringLiteral("overlay"));
+        s.setValue(QStringLiteral("show_recording_overlay"), true);
+        s.endGroup();
+        s.sync();
+    }
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    // Diagnostics overlay key absent: must default to false.
+    EXPECT_FALSE(loaded.show_diagnostics_overlay);
+    // Recording overlay key present: must still be true.
+    EXPECT_TRUE(loaded.show_recording_overlay);
 }
 
 TEST(AppSettingsStoreTest, AppSettingsStore_Save_RemovesLegacyGroups) {

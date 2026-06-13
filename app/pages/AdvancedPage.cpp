@@ -261,6 +261,26 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
 
     connect(overlay_check_, &ui::widgets::ExoCheckBox::toggled, this, &AdvancedPage::showOverlayChanged);
 
+    // DIAGNOSTICS-OVERLAY-R1: diagnostics overlay toggle
+    auto* diag_overlay_row = new QFrame(controls_panel);
+    diag_overlay_row->setProperty("panelRole", "compactRow");
+    auto* diag_overlay_layout = new QVBoxLayout(diag_overlay_row);
+    diag_overlay_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+    diag_overlay_layout->setSpacing(M::kSpaceXs);
+    diag_overlay_layout->addWidget(makeFieldLabel(QStringLiteral("Diagnostics overlay"), diag_overlay_row));
+    diagnostics_overlay_check_ =
+        makeCheck(QStringLiteral("Show live diagnostics on the recorded monitor during recording"), diag_overlay_row);
+    diagnostics_overlay_check_->setChecked(false); // default OFF; overridden by setShowDiagnosticsOverlay()
+    diag_overlay_layout->addWidget(diagnostics_overlay_check_);
+    diag_overlay_layout->addWidget(makeSubLabel(
+        QStringLiteral("Displays fps, A/V drift, dropped frames, output size, and muted-source indicators. "
+                       "Excluded from capture via SetWindowDisplayAffinity \xe2\x80\x94 hidden if exclusion fails."),
+        diag_overlay_row));
+    controls_layout->addWidget(diag_overlay_row);
+
+    connect(diagnostics_overlay_check_, &ui::widgets::ExoCheckBox::toggled, this,
+            &AdvancedPage::showDiagnosticsOverlayChanged);
+
     right_layout->addWidget(controls_panel);
 
     auto* danger_panel = new QFrame(right_col);
@@ -326,12 +346,20 @@ void AdvancedPage::setShowOverlay(bool show) {
         overlay_check_->setChecked(show);
 }
 
+void AdvancedPage::setShowDiagnosticsOverlay(bool show) {
+    if (diagnostics_overlay_check_)
+        diagnostics_overlay_check_->setChecked(show);
+}
+
 void AdvancedPage::onReset() {
     log_level_combo_->setCurrentIndex(3);
     nvtx_check_->setChecked(false);
     // Reset overlay to default ON and emit so MainWindow persists the change.
     if (overlay_check_)
         overlay_check_->setChecked(true);
+    // Reset diagnostics overlay to default OFF and emit so MainWindow persists the change.
+    if (diagnostics_overlay_check_)
+        diagnostics_overlay_check_->setChecked(false);
 }
 
 } // namespace exosnap

@@ -134,12 +134,16 @@ and any other advanced-settings row where a sub-label would exceed one short lin
 
 ## Consequences
 
-- **`DIAGNOSTICS-OVERLAY-R1` (0.3.0 slice):** stats text (fps, drift, dropped
-  frames, output size) + status glyphs (muted mic, muted sys). Default OFF. Driven
-  by `chromeRuntimeMetricsChanged` + the ~4 Hz stats cadence already on the wire.
-  Do not replicate the Diagnostics page; surface the recording-critical subset only.
-  Reuses `RecordingOverlayWindow` placement logic; may share the same persistent
-  window or live in a sibling widget anchored to the same monitor corner.
+- **`DIAGNOSTICS-OVERLAY-R1` (0.3.0 slice — IMPLEMENTED):** stats text (fps/bitrate,
+  A/V drift, dropped frames, output size) + status glyphs (muted mic, muted sys).
+  Default OFF. Driven by `chromeRuntimeMetricsChanged` + `audioMeterLevelsUpdated`
+  at the ~4–30 Hz cadence already on the wire.
+  Implemented as a **sibling top-level window** (`DiagnosticsOverlayWindow`) anchored
+  to the **bottom-right** corner of the recorded monitor; `RecordingOverlayWindow`
+  (status pill) occupies top-right so the two windows are non-overlapping.
+  Toggle lives in AdvancedPage alongside the existing recording-overlay toggle.
+  Persisted as `show_diagnostics_overlay` (default `false`) in the `[overlay]`
+  settings group; settings version bumped to 8.
 
 - **Notification overlay (separate 0.3.0 slice):** tied to the 0.3.0 notification
   center. Anchored to the primary display. Implements queue + auto-dismiss. Does not
