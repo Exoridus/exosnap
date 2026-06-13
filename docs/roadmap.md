@@ -72,7 +72,7 @@ Encoders must never be forced to present as "CRF" when they don't use it.
 
 | Version  | Theme                              | Highlights |
 |----------|------------------------------------|-----------|
-| `0.1.0`  | Current MVP                        | NVIDIA/NVENC baseline, portable ZIP artifact. No further large features. |
+| `0.1.0`  | Initial MVP                        | NVIDIA/NVENC baseline, portable ZIP artifact. No further large features. |
 | `0.2.0`  | Reliability foundation             | MKV as sole recording container; libavformat remux engine (progressive MP4 on stop, faststart); MF/SinkWriter removal; recovery manifest + startup recovery UI; low-disk guard (including remux reserve); filesystem/FAT32 checks; MP4 split via per-segment remux; container compatibility registry. |
 | `0.3.0`  | Presence and notifications         | Recording overlay (excluded from capture), tray icon + recording/paused badge, notification center with unread badge, Windows toasts (low storage / saved / unexpected stop / recovery available), fullscreen/borderless/exclusive matrix. |
 | `0.4.0`  | Crash reporting and updates        | Crashpad, separate report dialog, privacy scrubbing, opt-in upload, symbol pipeline + backend; update check with Stable/Preview channels, auto-updater, hash/signature verification, rollback. *(Only pull crash reporting forward once backend, privacy, and symbol hosting actually exist.)* |
@@ -169,9 +169,12 @@ These underpin multiple versions and must not be scattered into UI `if`-chains:
 
 ## Next step
 
-**v0.2.0 — wave 1: libavformat remux engine + reliability foundation**
+**v0.3.0 — presence and notifications**
 
-The first post-0.1.0 work slice is the reliability foundation described in the 0.2.0 row above.
-The backend strategy is decided: ADR 0014 (remux-first, no fMP4 recording writer) is accepted.
-MKV is the sole recording container; libavformat is the remux/trim engine. Implementation of the
-remux engine and the MF/SinkWriter removal is the next active work slice.
+The 0.2.0 reliability foundation has shipped: MKV is the sole recording container, libavformat is
+the remux/trim engine (ADR 0014, remux-first with no fMP4 recording writer), the Media Foundation
+SinkWriter path is removed, and crash recovery, the low-disk guard (with remux reserve),
+filesystem/FAT32 checks, the container compatibility registry, and MP4 split via per-segment remux
+are all in place. The next wave is the 0.3.0 presence layer described in the table above — a
+capture-excluded recording overlay (ADR 0016), a tray icon with a recording/paused badge, and the
+notification center with Windows toasts.

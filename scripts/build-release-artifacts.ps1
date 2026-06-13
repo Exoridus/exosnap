@@ -379,7 +379,7 @@ if ($vi.ProductVersion -ne $Version) { Add-Error "exe ProductVersion '$($vi.Prod
 if ($vi.FileVersion -ne $expectedFileVersion) { Add-Error "exe FileVersion '$($vi.FileVersion)' != '$expectedFileVersion'" }
 if ($vi.ProductName -ne 'ExoSnap') { Add-Error "exe ProductName '$($vi.ProductName)' != 'ExoSnap'" }
 
-# Documentation must name 0.1.0 and not call the release 1.0.
+# Documentation must name the canonical version and not call the release 1.0.
 $knownLimits = Get-Content -LiteralPath (Join-Path $PackageRoot 'KNOWN_LIMITATIONS.md') -Raw
 if ($knownLimits -notmatch [Regex]::Escape($Version)) { Add-Error "KNOWN_LIMITATIONS.md does not name version $Version" }
 

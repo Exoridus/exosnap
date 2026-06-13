@@ -1,12 +1,12 @@
-# ExoSnap 0.1.0 — Known Limitations
+# ExoSnap 0.2.0 — Known Limitations
 
-This document describes the current support boundary of ExoSnap **0.1.0**. It is
+This document describes the current support boundary of ExoSnap **0.2.0**. It is
 factual and specific to this build. If a capability is not listed here as
 supported, do not assume it is available.
 
 ## Release status
 
-- ExoSnap 0.1.0 is a **pre-v1 Windows preview**, not a final 1.0 release.
+- ExoSnap 0.2.0 is a **pre-v1 Windows preview**, not a final 1.0 release.
 - Configuration, preset, and recording-history file schemas are **not frozen**
   and may change in incompatible ways before 1.0.0.
 - Keep your own backup copies of presets you care about during preview releases.
@@ -52,9 +52,9 @@ Supported containers:
 Supported encoders actually selectable and validated in this build:
 
 - **Video:** H.264 (NVENC) and AV1 (NVENC, where the installed GPU and driver
-  expose it). HEVC is **not** implemented in 0.1.0.
+  expose it). HEVC is **not** implemented in 0.2.0.
 - **Audio:** AAC-LC (`AAC` in the UI) and Opus. PCM and FLAC are **not**
-  implemented in 0.1.0.
+  implemented in 0.2.0.
 
 Container/codec rules:
 
@@ -141,10 +141,10 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   capture device mid-session does not retarget the pipeline; stop and restart the
   recording after reconnecting or selecting a new device.
 
-## Planned beyond 0.1.0 (not in this build)
+## Planned beyond 0.2.0 (not in this build)
 
 The following are intentionally deferred and are documented here only so the
-current boundary is unambiguous. They are **not** part of 0.1.0:
-crash-safe recording and fragmented MP4, recording overlay/tray/notifications,
-crash reporting, update checking, AMD and Intel hardware encoding, software
-encoding fallback, and an expanded codec/color pipeline.
+current boundary is unambiguous. They are **not** part of 0.2.0:
+recording overlay/tray/notifications, crash reporting, update checking, AMD and
+Intel hardware encoding, software encoding fallback, and an expanded codec/color
+pipeline.

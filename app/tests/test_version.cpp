@@ -14,8 +14,8 @@ std::string version() {
 }
 } // namespace
 
-TEST(Version, CanonicalSemanticVersionIs010) {
-    EXPECT_EQ(version(), "0.1.0");
+TEST(Version, CanonicalSemanticVersionIs020) {
+    EXPECT_EQ(version(), "0.2.0");
 }
 
 TEST(Version, IsThreeComponentSemVer) {
