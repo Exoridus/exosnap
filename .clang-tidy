@@ -1,21 +1,73 @@
+# clang-tidy configuration. NOTE: clang-tidy only runs under the Ninja generator
+# (the Visual Studio generator silently ignores CMAKE_CXX_CLANG_TIDY). The CI lint
+# job and the windows-x64-ninja-lint preset run it.
+#
+# Curated "moderate" check set: bug-prone and performance checks plus the sane
+# modernizations and readability checks, but NOT the high-noise stylistic ones
+# (magic numbers, literal-suffix case, designated initializers) nor the checks
+# that fight Win32/COM/D3D interop (pointer arithmetic, owning-memory, reinterpret
+# casts, union access for PROPVARIANT, etc.).
+#
 # Disabled checks and why:
-#   cppcoreguidelines-avoid-magic-numbers         pervasive in codec/timing/Win32 API code; enforce via code review instead
-#   cppcoreguidelines-pro-bounds-array-to-pointer-decay  required for C API interop (Win32, printf-family)
-#   cppcoreguidelines-pro-type-vararg             required for printf-style output in CLI harness
-#   modernize-use-trailing-return-type            LLVM style uses leading return types; trailing is not idiomatic here
+#   readability-magic-numbers / cppcoreguidelines-avoid-magic-numbers
+#                                                 pervasive in codec/timing/Win32/UI code; enforce via review
+#   readability-uppercase-literal-suffix          purely cosmetic (20.0f vs 20.0F)
+#   readability-implicit-bool-conversion          noisy against Win32 BOOL/HRESULT idioms
+#   readability-math-missing-parentheses          pedantic; harms readable arithmetic
+#   readability-function-cognitive-complexity     would force risky refactors of device-enumeration/COM code
 #   readability-identifier-length                 single-char variables are idiomatic in loops and math
-
+#   modernize-use-designated-initializers         C++20 stylistic; not idiomatic across this codebase
+#   modernize-use-trailing-return-type            LLVM style uses leading return types
+#   bugprone-easily-swappable-parameters          design taste, not a real bug; very noisy
+#   cppcoreguidelines-pro-bounds-* (pointer-arithmetic / array-to-pointer-decay / constant-array-index)
+#                                                 required for C/Win32 API interop
+#   cppcoreguidelines-owning-memory               COM/Win32 raw handles are not gsl::owner
+#   cppcoreguidelines-pro-type-reinterpret-cast / -static-cast-downcast / -const-cast
+#                                                 required for D3D11/DXGI/COM casts
+#   cppcoreguidelines-pro-type-union-access        required for PROPVARIANT/Win32 unions
+#   cppcoreguidelines-pro-type-vararg              required for printf-style output in the CLI harness
+#   cppcoreguidelines-non-private-member-variables-in-classes / -avoid-non-const-global-variables /
+#   cppcoreguidelines-macro-usage                 design taste; case-by-case, not a hard rule
 Checks: >
   bugprone-*,
   cppcoreguidelines-*,
   modernize-*,
   performance-*,
   readability-*,
-  -cppcoreguidelines-avoid-magic-numbers,
-  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
-  -cppcoreguidelines-pro-type-vararg,
+  -readability-magic-numbers,
+  -readability-uppercase-literal-suffix,
+  -readability-implicit-bool-conversion,
+  -readability-math-missing-parentheses,
+  -readability-function-cognitive-complexity,
+  -readability-identifier-length,
+  -modernize-use-designated-initializers,
   -modernize-use-trailing-return-type,
-  -readability-identifier-length
+  -bugprone-easily-swappable-parameters,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-owning-memory,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-pro-type-static-cast-downcast,
+  -cppcoreguidelines-pro-type-const-cast,
+  -cppcoreguidelines-pro-type-union-access,
+  -cppcoreguidelines-pro-type-vararg,
+  -cppcoreguidelines-non-private-member-variables-in-classes,
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -cppcoreguidelines-macro-usage
+
+# clang-tidy parses with the clang frontend in MSVC-compat mode. Two args make it
+# parse this codebase cleanly:
+#   -fcxx-exceptions    the code builds with /EHsc; without this, try/throw in
+#                       headers (spdlog) and sources are "exceptions disabled" errors.
+#   -D_XM_NO_INTRINSICS_  DirectXMath takes a __clang__ path that #includes <cpuid.h>,
+#                       which clang-tidy cannot resolve in cl driver mode. The scalar
+#                       fallback avoids that include; it only affects analysis parsing,
+#                       not the real cl.exe build (which keeps SIMD).
+ExtraArgs:
+  - '-fcxx-exceptions'
+  - '-D_XM_NO_INTRINSICS_'
 
 WarningsAsErrors: '*'
 HeaderFilterRegex: '^(?!.*third_party/).*'
