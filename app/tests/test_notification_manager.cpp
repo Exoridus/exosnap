@@ -143,22 +143,39 @@ TEST_F(NotificationManagerTest, Dismiss_DrainsPendingQueue) {
     EXPECT_EQ(mgr.PendingCount(), 0);
 }
 
-// ── Sticky types do not auto-dismiss ─────────────────────────────────────────
+// ── Per-type dwell behavior (NOTIFY-SKIN-R1: exact spec from Mappe ToastTypeTable) ──
+//
+// success / "Recording saved"  → Auto-dismiss 5 s (glanceable; file already written)
+// caution / "Storage running low" → Sticky (demands a decision before space runs out)
+// error   / "Unexpected stop"  → Sticky (failure; never vanish before seen)
+// info    / "Recovery available" → Sticky (pending choice on relaunch)
 
-TEST_F(NotificationManagerTest, DismissInterval_UnexpectedStop_IsZero) {
+TEST_F(NotificationManagerTest, DismissInterval_Saved_IsExactly5000ms) {
+    // spec: "Auto · 5 s"
+    EXPECT_EQ(NotificationManager::kDismissMs_Saved, 5000);
+}
+
+TEST_F(NotificationManagerTest, DismissInterval_LowStorage_IsZero_Sticky) {
+    // spec: "Sticky — demands a decision before space runs out"
+    EXPECT_EQ(NotificationManager::kDismissMs_LowStorage, 0);
+}
+
+TEST_F(NotificationManagerTest, DismissInterval_UnexpectedStop_IsZero_Sticky) {
+    // spec: "Sticky — a failure; never vanish before it's seen"
     EXPECT_EQ(NotificationManager::kDismissMs_UnexpectedStop, 0);
 }
 
-TEST_F(NotificationManagerTest, DismissInterval_RecoveryAvailable_IsZero) {
+TEST_F(NotificationManagerTest, DismissInterval_RecoveryAvailable_IsZero_Sticky) {
+    // spec: "Sticky — a pending choice on relaunch"
     EXPECT_EQ(NotificationManager::kDismissMs_RecoveryAvailable, 0);
 }
 
-TEST_F(NotificationManagerTest, DismissInterval_Saved_IsPositive) {
+TEST_F(NotificationManagerTest, OnlySaved_IsAutoDissmissType) {
+    // Exactly one type should auto-dismiss; the rest are sticky.
     EXPECT_GT(NotificationManager::kDismissMs_Saved, 0);
-}
-
-TEST_F(NotificationManagerTest, DismissInterval_LowStorage_IsPositive) {
-    EXPECT_GT(NotificationManager::kDismissMs_LowStorage, 0);
+    EXPECT_EQ(NotificationManager::kDismissMs_LowStorage, 0);
+    EXPECT_EQ(NotificationManager::kDismissMs_UnexpectedStop, 0);
+    EXPECT_EQ(NotificationManager::kDismissMs_RecoveryAvailable, 0);
 }
 
 // ── Signal emission ───────────────────────────────────────────────────────────
@@ -212,6 +229,56 @@ TEST_F(NotificationManagerTest, Enqueue_ActionAndPayloadPreserved) {
     ASSERT_EQ(mgr.VisibleEvents().size(), 1);
     EXPECT_EQ(mgr.VisibleEvents()[0].action, NotificationAction::OpenFolder);
     EXPECT_EQ(mgr.VisibleEvents()[0].action_payload, QStringLiteral("C:/Videos"));
+}
+
+// ── actionableEventShown signal (NOTIFY-SKIN-R1: tray badge) ─────────────────
+
+TEST_F(NotificationManagerTest, Enqueue_ActionableEvent_EmitsActionableEventShown) {
+    // An event with a non-None action must emit actionableEventShown.
+    int count = 0;
+    QObject::connect(
+        &mgr, &NotificationManager::actionableEventShown, &mgr, [&count]() { ++count; }, Qt::DirectConnection);
+
+    NotificationEvent e;
+    e.type = NotificationType::Saved;
+    e.action = NotificationAction::OpenFolder;
+    mgr.Enqueue(e);
+    EXPECT_EQ(count, 1);
+}
+
+TEST_F(NotificationManagerTest, Enqueue_NoActionEvent_DoesNotEmitActionableEventShown) {
+    // An event with action == None must NOT emit actionableEventShown.
+    int count = 0;
+    QObject::connect(
+        &mgr, &NotificationManager::actionableEventShown, &mgr, [&count]() { ++count; }, Qt::DirectConnection);
+
+    NotificationEvent e;
+    e.type = NotificationType::LowStorage;
+    e.action = NotificationAction::None;
+    mgr.Enqueue(e);
+    EXPECT_EQ(count, 0);
+}
+
+// ── hasAction helper ──────────────────────────────────────────────────────────
+
+TEST_F(NotificationManagerTest, HasAction_NoneAction_ReturnsFalse) {
+    NotificationEvent e;
+    e.action = NotificationAction::None;
+    e.secondary_action = NotificationAction::None;
+    EXPECT_FALSE(e.hasAction());
+}
+
+TEST_F(NotificationManagerTest, HasAction_PrimaryAction_ReturnsTrue) {
+    NotificationEvent e;
+    e.action = NotificationAction::OpenFolder;
+    EXPECT_TRUE(e.hasAction());
+}
+
+TEST_F(NotificationManagerTest, HasAction_SecondaryAction_ReturnsTrue) {
+    NotificationEvent e;
+    e.action = NotificationAction::None;
+    e.secondary_action = NotificationAction::Discard;
+    EXPECT_TRUE(e.hasAction());
 }
 
 } // namespace

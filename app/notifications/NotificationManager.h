@@ -35,15 +35,18 @@ class NotificationManager : public QObject {
     // Maximum concurrently visible toasts.
     static constexpr int kMaxVisible = 3;
 
-    // PLACEHOLDER dismiss durations in milliseconds.
-    // Final per-type timings are deferred to NOTIFY-DESIGN-R1.
+    // Per-type dwell durations in milliseconds — exact from Mappe spec (NOTIFY-SKIN-R1).
     // Sticky types use 0 (no auto-dismiss).
+    // success / "Recording saved" — auto-dismiss 5 s (glanceable; file already written).
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_Saved = 5000;
+    // caution / "Storage running low" — sticky (demands a decision before space runs out).
     // NOLINTNEXTLINE(readability-identifier-naming)
-    static constexpr int kDismissMs_LowStorage = 8000;
+    static constexpr int kDismissMs_LowStorage = 0; // sticky
+    // error / "Recording stopped unexpectedly" — sticky (failure; never vanish before seen).
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_UnexpectedStop = 0; // sticky
+    // info / "Recover last session?" — sticky (pending choice on relaunch).
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_RecoveryAvailable = 0; // sticky
 
@@ -67,6 +70,10 @@ class NotificationManager : public QObject {
     // Emitted when the visible set changes. Receivers (toast window) should
     // re-render based on VisibleEvents().
     void visibleSetChanged();
+
+    // Emitted when an actionable event (hasAction() == true) becomes visible.
+    // Receivers (tray badge) increment their unread count on this signal.
+    void actionableEventShown();
 
   private:
     // Returns the auto-dismiss interval for the given type.

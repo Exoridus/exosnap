@@ -208,5 +208,132 @@ TEST_F(NotificationToastTest, DismissAll_WindowHides) {
     }
 }
 
+// ── Skinned anatomy tests (NOTIFY-SKIN-R1) ────────────────────────────────────
+
+// The spec mandates 372px width.
+TEST_F(NotificationToastTest, SizeHint_Width_Is372px) {
+    NotificationManager mgr;
+    NotificationEvent e;
+    e.type = NotificationType::Saved;
+    e.title = QStringLiteral("Recording saved");
+    e.body = QStringLiteral("file.mkv · 179 MB");
+    e.action = NotificationAction::OpenFolder;
+    mgr.Enqueue(e);
+
+    NotificationToastWindow window(&mgr, nullptr);
+    EXPECT_EQ(window.sizeHint().width(), 372);
+}
+
+// Non-sticky (Saved) must have positive height (includes countdown bar).
+TEST_F(NotificationToastTest, SizeHint_Saved_HasCountdownBarHeight) {
+    NotificationManager mgr;
+    NotificationEvent e;
+    e.type = NotificationType::Saved;
+    e.title = QStringLiteral("Recording saved");
+    e.body = QStringLiteral("file.mkv · 179 MB");
+    e.action = NotificationAction::OpenFolder;
+    mgr.Enqueue(e);
+
+    NotificationToastWindow window(&mgr, nullptr);
+    const int h = window.sizeHint().height();
+    EXPECT_GT(h, 0) << "Saved toast must have positive height";
+    // Height must accommodate the 3px countdown bar
+    // (at minimum: padTop=14 + chip=30 + padBottom=14 + bar=3 = 61px)
+    EXPECT_GE(h, 61);
+}
+
+// Sticky toasts (LowStorage, UnexpectedStop, RecoveryAvailable) have no bar.
+// Their height should still be positive but without the bar contribution.
+TEST_F(NotificationToastTest, SizeHint_LowStorage_StickyNoBar) {
+    NotificationManager mgr;
+    NotificationEvent e;
+    e.type = NotificationType::LowStorage;
+    e.title = QStringLiteral("Storage running low");
+    e.body = QStringLiteral("1.2 GB free on C:. Recording may stop soon.");
+    e.action = NotificationAction::ChangeFolder;
+    mgr.Enqueue(e);
+
+    NotificationToastWindow window(&mgr, nullptr);
+    const int h = window.sizeHint().height();
+    EXPECT_GT(h, 0);
+    // LowStorage is sticky, no 3px bar at the bottom
+}
+
+// Render all 4 types with actions — must not crash.
+TEST_F(NotificationToastTest, PaintEvent_AllFourTypes_WithActions_NoFatalFailure) {
+    const struct {
+        NotificationType type;
+        NotificationAction action;
+        const char* title;
+        const char* body;
+    } cases[] = {
+        {NotificationType::Saved, NotificationAction::OpenFolder, "Recording saved",
+         "exosnap_2026-06-11_02.mkv · 179 MB"},
+        {NotificationType::LowStorage, NotificationAction::ChangeFolder, "Storage running low",
+         "1.2 GB free on C:. Recording may stop soon."},
+        {NotificationType::UnexpectedStop, NotificationAction::ShowFile, "Recording stopped unexpectedly",
+         "Disk write failed at 04:12. A partial file was recovered."},
+        {NotificationType::RecoveryAvailable, NotificationAction::OpenRecovery, "Recover last session?",
+         "A recording from 14:02 wasn't finalized."},
+    };
+
+    for (const auto& c : cases) {
+        NotificationManager mgr;
+        NotificationEvent e;
+        e.type = c.type;
+        e.title = QString::fromLatin1(c.title);
+        e.body = QString::fromLatin1(c.body);
+        e.action = c.action;
+        mgr.Enqueue(e);
+
+        NotificationToastWindow window(&mgr, nullptr);
+        EXPECT_NO_FATAL_FAILURE(window.grab()) << "Crash painting type=" << static_cast<int>(c.type);
+    }
+}
+
+// Three stacked toasts must each contribute height separated by 12px gaps.
+TEST_F(NotificationToastTest, SizeHint_ThreeEvents_HeightIsAdditive) {
+    NotificationManager mgr;
+    for (int i = 0; i < 3; ++i) {
+        NotificationEvent e;
+        e.type = NotificationType::Saved;
+        e.title = QStringLiteral("T%1").arg(i);
+        e.body = QStringLiteral("body%1").arg(i);
+        e.action = NotificationAction::OpenFolder;
+        mgr.Enqueue(e);
+    }
+
+    NotificationToastWindow window(&mgr, nullptr);
+    const int h3 = window.sizeHint().height();
+
+    // Manually compute a single toast height by querying with 1 event
+    NotificationManager mgr1;
+    NotificationEvent e1;
+    e1.type = NotificationType::Saved;
+    e1.title = QStringLiteral("T0");
+    e1.body = QStringLiteral("body0");
+    e1.action = NotificationAction::OpenFolder;
+    mgr1.Enqueue(e1);
+    NotificationToastWindow w1(&mgr1, nullptr);
+    const int h1 = w1.sizeHint().height();
+
+    // 3-stack = 3 * single + 2 * gap(12)
+    EXPECT_EQ(h3, 3 * h1 + 2 * 12);
+}
+
+// Window must remain class-1 (Qt::WindowTransparentForInput is in window flags).
+TEST_F(NotificationToastTest, WindowFlags_ContainsTransparentForInput) {
+    NotificationManager mgr;
+    NotificationToastWindow window(&mgr, nullptr);
+    EXPECT_TRUE((window.windowFlags() & Qt::WindowTransparentForInput) != Qt::WindowType{});
+}
+
+// Window is always hidden unless exclusion succeeded (WDA_EXCLUDEFROMCAPTURE guard).
+TEST_F(NotificationToastTest, ExclusionGuard_ConstructsHidden) {
+    NotificationManager mgr;
+    NotificationToastWindow window(&mgr, nullptr);
+    EXPECT_FALSE(window.isVisible());
+}
+
 } // namespace
 } // namespace exosnap

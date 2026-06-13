@@ -794,6 +794,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
                 });
         tray_presence_->setWindowVisible(isVisible());
         tray_presence_->show();
+
+        // NOTIFY-SKIN-R1: wire unread badge — incremented when an actionable toast is shown.
+        // Cleared when the user activates the window (focuses it) or opens the tray menu
+        // (handled in onTrayActivateWindow and via the Notifications action in TrayPresence).
+        // The notification_manager_ is created later in initNotificationToasts(); wire is
+        // deferred there so the manager pointer is valid.
     }
 
     record_page_->rebroadcastChromeState();
@@ -849,16 +855,18 @@ void MainWindow::checkAndShowRecoveryOverlay() {
         QStringLiteral("Found %1 interrupted recording(s) — showing recovery overlay").arg(candidates.size()));
 
     // NOTIFY-TOASTS-R1 — Trigger 4: RecoveryAvailable.
-    // Enqueue a sticky toast so the user knows recovery is available even if the
-    // recovery overlay was dismissed. Gated on the show_notifications setting.
+    // Mappe spec: "Recover last session?" (info, sticky) — actions "Recover" (primary) + "Discard".
+    // Gated on the show_notifications setting.
     if (persisted_settings_.show_notifications && notification_manager_) {
         notifications::NotificationEvent event;
         event.type = notifications::NotificationType::RecoveryAvailable;
-        event.title = QStringLiteral("Interrupted recordings found");
-        event.body = (candidates.size() == 1)
-                         ? QStringLiteral("1 interrupted recording is ready to recover.")
-                         : QStringLiteral("%1 interrupted recordings are ready to recover.").arg(candidates.size());
+        event.title = QStringLiteral("Recover last session?");
+        event.body =
+            (candidates.size() == 1)
+                ? QStringLiteral("A recording from the last session wasn’t finalized.")
+                : QStringLiteral("%1 recordings from the last session weren’t finalized.").arg(candidates.size());
         event.action = notifications::NotificationAction::OpenRecovery;
+        event.secondary_action = notifications::NotificationAction::Discard;
         notification_manager_->Enqueue(std::move(event));
     }
 
@@ -1360,6 +1368,11 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
 
 void MainWindow::changeEvent(QEvent* event) {
     QMainWindow::changeEvent(event);
+    // NOTIFY-SKIN-R1: clear unread badge when the window becomes active.
+    if (event->type() == QEvent::ActivationChange && isActiveWindow()) {
+        if (tray_presence_)
+            tray_presence_->clearUnreadCount();
+    }
     if (event->type() == QEvent::WindowStateChange) {
         win32_maximized_ = isMaximized();
         if (title_bar_ != nullptr)
@@ -2384,6 +2397,9 @@ void MainWindow::onTrayActivateWindow() {
     // Update the Show/Hide label to reflect the new visibility state.
     if (tray_presence_)
         tray_presence_->setWindowVisible(isVisible());
+    // NOTIFY-SKIN-R1: clear unread badge when the user focuses the window via tray.
+    if (tray_presence_)
+        tray_presence_->clearUnreadCount();
 }
 
 // ---------------------------------------------------------------------------
@@ -2435,24 +2451,38 @@ void MainWindow::initNotificationToasts() {
                     event.action = notifications::NotificationAction::OpenFolder;
                     event.action_payload = output_path;
                 } else if (error_phase == QStringLiteral("DiskSpace")) {
-                    // Trigger 1: disk monitor hard-stop.
+                    // Trigger 1: disk monitor hard-stop — "Storage running low" (caution, sticky).
+                    // Mappe spec: action "Change folder" (primary) + "Dismiss".
                     event.type = notifications::NotificationType::LowStorage;
-                    event.title = QStringLiteral("Storage full");
+                    event.title = QStringLiteral("Storage running low");
                     event.body = QStringLiteral("Recording stopped — output drive is critically low on disk space.");
-                    event.action = notifications::NotificationAction::None;
+                    event.action = notifications::NotificationAction::ChangeFolder;
+                    event.secondary_action = notifications::NotificationAction::None; // Dismiss shown by ghost pill
                 } else {
-                    // Trigger 3: unexpected engine failure.
+                    // Trigger 3: unexpected engine failure — "Recording stopped unexpectedly" (error, sticky).
+                    // Mappe spec: action "Show file" (primary).
                     event.type = notifications::NotificationType::UnexpectedStop;
                     event.title = QStringLiteral("Recording stopped unexpectedly");
-                    event.body = error_phase.isEmpty() ? QStringLiteral("An error occurred during recording.")
-                                                       : QStringLiteral("Phase: %1").arg(error_phase);
-                    event.action = notifications::NotificationAction::None;
+                    event.body = error_phase.isEmpty()
+                                     ? QStringLiteral("An error occurred during recording.")
+                                     : QStringLiteral("Disk write failed. A partial file was recovered.");
+                    event.action = notifications::NotificationAction::ShowFile;
+                    event.action_payload = output_path; // path to the partial file if available
                 }
                 notification_manager_->Enqueue(std::move(event));
             });
 
     // ── Trigger 4: RecoveryAvailable is enqueued in checkAndShowRecoveryOverlay() ──
     // (Wired there directly to avoid duplicating the candidate-count check.)
+
+    // NOTIFY-SKIN-R1: wire unread badge → tray presence.
+    // Increment when an actionable toast becomes visible; clear on window focus.
+    if (tray_presence_ && notification_manager_) {
+        connect(notification_manager_, &notifications::NotificationManager::actionableEventShown, this, [this]() {
+            if (tray_presence_)
+                tray_presence_->incrementUnreadCount();
+        });
+    }
 }
 
 void MainWindow::updateNotificationToastsEnabled() {

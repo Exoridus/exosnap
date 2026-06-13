@@ -27,6 +27,9 @@ enum class NotificationAction : uint8_t {
     None,         // no action button
     OpenFolder,   // open the output folder in Explorer (Saved type)
     OpenRecovery, // route to the existing recovery flow/overlay (RecoveryAvailable type)
+    ChangeFolder, // change output folder (LowStorage type)
+    ShowFile,     // show / reveal the partial file (UnexpectedStop type)
+    Discard,      // discard recovery session (secondary button on RecoveryAvailable)
 };
 
 // ---------------------------------------------------------------------------
@@ -42,8 +45,18 @@ struct NotificationEvent {
     // Extra payload for the action handler (e.g. file path for OpenFolder).
     QString action_payload;
 
+    // Optional secondary action (e.g. "Discard" on RecoveryAvailable,
+    // "Dismiss" on LowStorage). The primary action is in `action`.
+    NotificationAction secondary_action = NotificationAction::None;
+
     // Stable ordering key assigned by the manager on enqueue — not set by callers.
     uint64_t sequence = 0;
+
+    // Returns true if this event carries at least one actionable button.
+    // Used by the tray unread badge to decide whether to increment the count.
+    [[nodiscard]] bool hasAction() const noexcept {
+        return action != NotificationAction::None || secondary_action != NotificationAction::None;
+    }
 };
 
 } // namespace exosnap::notifications

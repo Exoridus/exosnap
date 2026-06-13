@@ -61,6 +61,20 @@ class TrayPresence : public QObject {
     void show();
     void hide();
 
+    // ---- Unread notification badge (NOTIFY-SKIN-R1) ----------------------
+    // Increment the unread count; updates the Notifications menu item label.
+    // Call from MainWindow when an actionable toast becomes visible.
+    void incrementUnreadCount();
+
+    // Reset the unread count to zero; updates the menu item.
+    // Call when the user focuses the window or opens the tray menu.
+    void clearUnreadCount();
+
+    // Returns the current unread count.
+    [[nodiscard]] int unreadCount() const noexcept {
+        return unread_count_;
+    }
+
     // Read-only introspection for tests.
     [[nodiscard]] TrayIconState currentState() const {
         return state_;
@@ -73,6 +87,9 @@ class TrayPresence : public QObject {
     }
     [[nodiscard]] QAction* recordToggleAction() const {
         return record_toggle_action_;
+    }
+    [[nodiscard]] QAction* notificationsAction() const {
+        return notifications_action_;
     }
 
   signals:
@@ -95,10 +112,13 @@ class TrayPresence : public QObject {
     void rebuildTooltip();
     void applyIcon();
 
+    void rebuildNotificationsLabel();
+
     QSystemTrayIcon* tray_icon_ = nullptr;
     QMenu* tray_menu_ = nullptr;
     QAction* show_hide_action_ = nullptr;
     QAction* record_toggle_action_ = nullptr;
+    QAction* notifications_action_ = nullptr; // NOTIFY-SKIN-R1: unread badge mirror
     QAction* quit_action_ = nullptr;
 
     TrayIconState state_ = TrayIconState::Idle;
@@ -106,6 +126,7 @@ class TrayPresence : public QObject {
     QString elapsed_text_;
     bool window_visible_ = true;
     bool recording_blocked_ = false;
+    int unread_count_ = 0; // NOTIFY-SKIN-R1
 };
 
 // ---------------------------------------------------------------------------

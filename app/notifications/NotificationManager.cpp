@@ -59,9 +59,13 @@ void NotificationManager::drainQueue() {
     while (!pending_queue_.empty() && visible_.size() < kMaxVisible) {
         NotificationEvent event = std::move(pending_queue_.front()); // NOLINT(performance-move-const-arg)
         pending_queue_.pop_front();
+        const bool has_action = event.hasAction();
         visible_.push_back(std::move(event));
         visible_shown_at_.push_back(now_ms);
         changed = true;
+        // Notify the tray badge when an actionable toast becomes visible.
+        if (has_action)
+            emit actionableEventShown();
     }
 
     if (changed) {
