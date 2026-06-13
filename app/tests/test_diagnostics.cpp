@@ -499,12 +499,13 @@ TEST(RecommendationEngineTest, Generate_UnsupportedProfile_Blocker) {
 
 TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
     auto codes = RecommendationEngine::GetAllRecommendationCodes();
-    // LOW-DISK-GUARD-R1 added rec.007 (hard-stop Blocker) — expect 7 codes now.
-    EXPECT_EQ(codes.size(), 7u);
+    // FILESYSTEM-CHECKS-R1 added rec.008 (FAT32 Notice) — expect 8 codes now.
+    EXPECT_EQ(codes.size(), 8u);
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.001"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.005"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.006"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.007"), codes.end());
+    EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.008"), codes.end());
 }
 
 // ─── REC-R10: Active output config → ValidateConfig wiring ───────────────────

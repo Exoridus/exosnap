@@ -86,7 +86,7 @@ Invalid combinations are not offered.
 - MP4 does not guarantee `hvc1`/Apple-style HEVC compatibility; HEVC is
   not implemented.
 
-## Disk space
+## Disk space and filesystem
 
 ExoSnap monitors free space on the output drive:
 
@@ -96,8 +96,16 @@ ExoSnap monitors free space on the output drive:
   stops gracefully. For MP4 sessions, the effective hard-stop threshold is higher
   because the transient MKV and the output MP4 coexist during the remux-on-stop
   phase (roughly 2× the file size must be available).
-- No filesystem-type checks (FAT32, network drives) and no split-at-limit are
-  implemented in 0.2.0; those are separate future slices.
+
+ExoSnap detects the filesystem of the output volume and warns about known limitations:
+
+- **FAT32 output volume (rec.008):** a Notice appears in Diagnostics. FAT32 volumes
+  impose a 4 GiB maximum file size. Recordings under 4 GiB succeed normally; longer
+  sessions will fail when the limit is reached. Move the output folder to an NTFS or
+  exFAT volume for unlimited file sizes. Recording is **not blocked** — short clips
+  on FAT32 work correctly.
+- NTFS, exFAT, and other filesystem types pass silently.
+- No automatic split-at-4-GiB-limit; that is a separate future slice.
 
 ## Other current limitations
 

@@ -3,6 +3,7 @@
 #include "../diagnostics/ConfigSummary.h"
 #include "../diagnostics/DiagnosticsPresentation.h"
 #include "../diagnostics/DiskSpaceProvider.h"
+#include "../diagnostics/FilesystemProvider.h"
 #include "../diagnostics/RecommendationEngine.h"
 #include "../diagnostics/SelfTestRunner.h"
 #include "../models/OutputSettingsModel.h"
@@ -346,6 +347,13 @@ void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, c
     {
         diagnostics::Win32DiskSpaceProvider provider;
         output_drive_free_bytes_ = provider.FreeBytesForPath(output_folder_);
+    }
+
+    // Query the filesystem name so rec.008 (FAT32 limit) fires when appropriate.
+    // An empty string suppresses the check — safe default on failure.
+    {
+        diagnostics::Win32FilesystemProvider provider;
+        output_filesystem_name_ = provider.FilesystemNameForPath(output_folder_);
     }
 
     cap_summary_ = diagnostics::CapabilitySummary::FromCapabilitySet(caps_);
@@ -776,7 +784,7 @@ void DiagnosticsPage::refreshOverview() {
         return;
 
     diagnostics::RecommendationEngine engine(caps_, active_user_config_, 0, output_drive_free_bytes_,
-                                             profile_validation_.succeeded);
+                                             profile_validation_.succeeded, output_filesystem_name_);
     auto recs = engine.Generate();
 
     diagnostics::DiagnosticChecklist combined;
