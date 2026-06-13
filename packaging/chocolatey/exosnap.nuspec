@@ -50,7 +50,10 @@ formats are not frozen and may change incompatibly before 1.0.0.
          the MSI does not bundle vcruntime140/msvcp140. Without this dependency a
          clean machine fails to launch with STATUS_DLL_NOT_FOUND (0xC0000135). -->
     <dependencies>
-      <dependency id="vcredist140" />
+      <!-- Minimum 14.30 (VS 2022 baseline): ExoSnap statically imports
+           msvcp140_atomic_wait.dll (added in 14.28) and the other VC++
+           2015-2022 runtime DLLs, so an older redistributable is insufficient. -->
+      <dependency id="vcredist140" version="14.30.30704" />
     </dependencies>
   </metadata>
   <files>
