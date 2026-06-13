@@ -1,86 +1,68 @@
-#ExoSnap
+# ExoSnap
 
-Windows - native screen / app / region recorder with a professional NVENC pipeline, flexible container / codec profiles,
-    multi - track audio routing, webcam overlay,
-    and diagnostics.
+Windows-native screen, application, and region recorder with a native NVENC pipeline.
+MKV-first recording with on-stop MP4 remux (faststart), multi-track audio routing,
+webcam PiP overlay, crash recovery, and built-in diagnostics. Dark-mode-first Qt 6 UI.
 
-        ##Product at a glance
+## Status / current release
 
-            A Windows 11 recorder that captures an application,
-    monitor, or region;
-records video as CFR 60 fps through a native GPU pipeline;
-captures `APP`, `SYS`, and `MIC` audio sources with reorderable / mergeable track layout;
-stores recordings primarily as `MKV + H.264 + AAC`;
-blocks invalid recordings before start; and exposes rich diagnostics and live recording metrics through a simple dark-mode-first UI.
+- **Development version:** `0.2.0` — "Reliability foundation" (unreleased; landing on main now).
+- **Latest published portable build:** `0.1.0`.
+- **Pre-v1 notice:** settings, preset, and recording-history schemas may change incompatibly before 1.0.0.
+- **Platform:** Windows 10/11 x64 (Windows 11 is the primary target; Windows 10 is best-effort).
+- **Hardware encoder:** NVIDIA NVENC only. An NVIDIA GPU with supported NVENC capability is required.
+  AMD, Intel, and software encoding are not yet supported.
+- **Distribution:** portable ZIP — no installer, no code signing yet. Windows SmartScreen may warn on
+  first launch.
 
-## Current release
+## Features (0.2.0 reliability wave)
 
-- **Version:** `0.1.0` — a **pre-v1 Windows preview**, not the final 1.0 release.
-- **Platform:** Windows 10/11 x64.
-- **Current hardware encoder:** NVIDIA NVENC (an NVIDIA GPU with supported NVENC
-  is currently required; AMD, Intel, and software encoding are not supported in
-  0.1.0).
-- **Distribution:** portable Windows x64 ZIP (no installer, no code signing yet).
-- **Containers:** MKV, WebM, MP4. Recording split is supported for all three
-  containers; **MP4 split remuxes each segment to progressive MP4 in the background**
-  while recording continues (0.2.0).
-- **Schema notice:** settings, presets, and history formats are pre-v1 and may
-  change incompatibly before 1.0.0.
+- MKV-first recording; MP4 delivered via libavformat remux-on-stop (progressive, faststart); MKV and
+  WebM are also supported as direct output formats.
+- Crash recovery: a recovery manifest written before each session, plus a startup recovery UI that
+  lets you finish, recover, or discard each interrupted recording on the next launch.
+- Low-disk guard: warning at a configurable soft threshold, hard stop at a lower threshold; for MP4
+  sessions the effective threshold accounts for the transient MKV and output MP4 coexisting during remux.
+- FAT32 output-volume detection: a Diagnostics Notice about the 4 GiB per-file limit (recording is not
+  blocked; short clips on FAT32 work correctly).
+- Container/codec compatibility registry: invalid combinations are blocked before recording starts.
+- Recording split with per-segment background MP4 remux for split MP4 sessions.
+- Global hotkeys, single-frame capture, webcam PiP with mirror, live A/V drift and size overlay.
 
-See [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for the full current support
-boundary and [`README-PORTABLE.md`](README-PORTABLE.md) for the portable-release
-quick start. The full strategic roadmap is tracked separately and is not a
-0.1.0 commitment.
+See [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for the precise current support boundary.
 
 ## Product defaults
 
-- **Theme:** Dark mode by default
-- **Default container:** MKV
-- **Default video codec:** H.264 NVENC
-- **Default audio codec:** AAC
-- **Default output frame rate:** CFR 60 fps
-- **Default audio source order:** `APP`, `SYS`, `MIC`
-- **Default audio source state:** all enabled, all separate tracks
-- **Default audio resulting tracks:**  
-  1. `APP`  
-  2. `SYS`  
-  3. `MIC`
-- **Navigation:**  
-  `Record`, `Video`, `Audio`, `Output`, `Webcam`, `Hotkeys`, `Diagnostics`, `Logs`, `Advanced`
-- **1.0 excludes:** streaming, replay buffer, HDR, hook-based game capture, export/editor, Linux parity
+| Setting | Default |
+|---------|---------|
+| Theme | Dark mode |
+| Container | MKV |
+| Video codec | AV1 (NVENC) |
+| Audio codec | Opus |
+| Frame rate | CFR 60 fps |
+| Audio source order | `APP`, `SYS`, `MIC` — all enabled, all separate tracks |
+| Navigation pages | `Record`, `Video`, `Audio`, `Output`, `Webcam`, `Hotkeys`, `Diagnostics`, `Logs`, `Advanced` |
 
-## Recommended reading order
+## Install / run
 
-1. `.workspace/product/exosnap-1.0-end-spec.md`
-2. `.workspace/architecture/system-overview.md`
-3. `.workspace/architecture/recording-pipeline.md`
-4. `.workspace/architecture/audio-track-model.md`
-5. `.workspace/ui/navigation.md`
-6. `.workspace/dev/milestone-plan.md`
-7. `.workspace/dev/model-workflow.md`
+See [`README-PORTABLE.md`](README-PORTABLE.md) for the portable-release quick start.
 
-## Pack structure
+**Runtime prerequisite:** the **Microsoft Visual C++ 2022 x64 Redistributable** is required.
+It is normally already present on up-to-date Windows systems. If the app fails to start with a
+missing-DLL error, install it from <https://aka.ms/vs/17/release/vc_redist.x64.exe>.
 
-```text
-.workspace/
-  product/          mvp-scope, user-flows
-  architecture/     system-overview, pipeline, audio-model, settings, telemetry, diagnostics
-  ui/               per-page view specs
-  decisions/        ADR-0001 through ADR-0010
-  design/           visual direction and design reference boards
-  dev/              repository-layout, milestone-plan, model-workflow
-```
+The portable build is not code-signed. Windows SmartScreen may warn on first launch — this is expected.
 
-## Coding standards
+## Building from source
 
-- C++ code is formatted with `clang-format`.
-- Static analysis baseline uses `clang-tidy`.
-- Repository-owned targets compile with strict warnings.
-- Third-party dependencies do not inherit project warning flags.
-- Developers can run `scripts/pre-commit.ps1` before committing.
-- The script runs formatting checks, optional clang-tidy when a compilation database exists, configure/build/test.
+### Prerequisites
 
-## Fast local development workflow
+- Visual Studio 2022 (Desktop development with C++ workload) — provides `cl.exe`, `MSBuild`, and the
+  Windows SDK.
+- CMake 3.25 or newer.
+- Git.
+
+### Fast local development loop
 
 Use minimal validation during development, then run the complete gate once before merge.
 
@@ -107,7 +89,9 @@ scripts\check-quality.ps1 -StaticOnly
 cmake --build --preset windows-x64-release-exosnap
 ```
 
-`scripts\check-quality.ps1` keeps its default configure/build/test behavior for humans and hooks. Use `-StaticOnly` after a full build and CTest have already run, so final validation does not rebuild solely to run standalone static checks.
+`scripts\check-quality.ps1` keeps its default configure/build/test behavior for humans and hooks.
+Use `-StaticOnly` after a full build and CTest have already run, so final validation does not rebuild
+solely to run standalone static checks.
 
 ### Ninja (optional, faster builds)
 
@@ -117,26 +101,14 @@ Install Ninja once:
 winget install --id Ninja-build.Ninja
 ```
 
-Verify:
-
-```powershell
-ninja --version
-```
-
-The repository includes Ninja presets alongside the default Visual Studio presets. Ninja builds **must** be launched from a VS Developer PowerShell or Command Prompt so that `cl.exe` is on the PATH.
+Ninja builds **must** be launched from a VS Developer PowerShell or Command Prompt so that `cl.exe`
+is on the PATH. Available Ninja configure presets: `windows-x64-ninja-debug` / `windows-x64-ninja-release`.
 
 ```powershell
 # From a VS Developer PowerShell/Command Prompt:
 cmake --preset windows-x64-ninja-debug
 cmake --build --preset windows-x64-ninja-debug-exosnap
-cmake --build --preset windows-x64-ninja-debug-presentation-state-tests
 ```
-
-Available Ninja presets:
-- `windows-x64-ninja-debug` / `windows-x64-ninja-release` (configure)
-- `windows-x64-ninja-debug-exosnap` / `windows-x64-ninja-release-exosnap` (app-only build)
-- `windows-x64-ninja-debug-presentation-state-tests` (focused test build)
-- `windows-x64-ninja-debug` (test preset)
 
 ### sccache (optional, compiler cache)
 
@@ -146,31 +118,50 @@ Install sccache once:
 winget install --id Mozilla.sccache
 ```
 
-Verify:
+Enable at configure time: `-DEXOSNAP_USE_SCCACHE=ON`. Works with both Visual Studio and Ninja generators.
 
 ```powershell
-sccache --version
-sccache --show-stats
-```
-
-Enable sccache at configure time by adding `-DEXOSNAP_USE_SCCACHE=ON`. This works with both the Visual Studio and Ninja generators.
-
-```powershell
-# From a VS Developer PowerShell/Command Prompt:
 cmake --preset windows-x64-ninja-release -DEXOSNAP_USE_SCCACHE=ON
 cmake --build build/windows-x64-ninja-release --target exosnap
 ```
 
-**Known limitation:** sccache can encounter PDB contention errors with MSVC Debug builds when third-party libraries (e.g. spdlog) enforce `/Zi`. Prefer sccache with Release builds or use `/Z7` to embed debug info in object files. Debug builds without sccache work reliably with both generators.
+**Known limitation:** sccache can encounter PDB contention errors with MSVC Debug builds when
+third-party libraries enforce `/Zi`. Prefer sccache with Release builds or use `/Z7` to embed debug
+info in object files.
 
-To disable sccache for a previously configured build, reconfigure without the option or clear the build directory.
+### Coding standards
 
-Fall back to the default Visual Studio presets at any time. Existing builds continue to work without Ninja or sccache.
+- C++ code is formatted with `clang-format`.
+- Static analysis baseline uses `clang-tidy`.
+- Repository-owned targets compile with strict warnings.
+- Run `scripts\pre-commit.ps1` before committing. It runs formatting checks, optional clang-tidy, and
+  configure/build/test.
 
-## Working rule
+## Repo layout
 
-This pack is the initial source of truth. If implementation work discovers a real conflict, update the relevant spec and add or revise an ADR before letting the codebase drift.
+```text
+app/          application source (UI, models, recording pipeline)
+libs/         internal libraries (recorder_core, capability, etc.)
+docs/
+  roadmap.md  version roadmap and architecture guardrails
+  decisions/  architecture decision records (ADRs)
+packaging/    WinGet, Chocolatey, and Scoop packaging manifests
+scripts/      build, quality, and release scripts
+tests/        test targets
+cmake/        CMake helper modules (VendorFFmpeg, etc.)
+third_party/  vendored third-party sources (libmatroska, libebml, etc.)
+tools/        developer tooling
+```
 
-## Continuous integration
+## Third-party / licensing
 
-GitHub Actions runs configure, build, and test on Windows for both `windows-x64-debug` and `windows-x64-release`. Test logs are uploaded as artifacts only when a CI test step fails. A status badge can be added after the repository exists remotely.
+- ExoSnap is licensed under **GPL-3.0-or-later**; see [`LICENSE`](LICENSE).
+- ExoSnap bundles FFmpeg as **LGPL-2.1-or-later** shared DLLs (dynamic linking). Third-party component
+  licenses are listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+- The FFmpeg binaries are produced by the companion repository
+  [Exoridus/exosnap-ffmpeg-build](https://github.com/Exoridus/exosnap-ffmpeg-build).
+
+## Contributing / CI
+
+GitHub Actions runs configure, build, and test on Windows for both `windows-x64-debug` and
+`windows-x64-release`, plus a lint pass. PRs are the review gate.
