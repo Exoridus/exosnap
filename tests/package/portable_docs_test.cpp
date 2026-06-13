@@ -52,12 +52,18 @@ TEST(PortableDocs, StalePlainTextLimitationsRemoved) {
 }
 
 // ---------------------------------------------------------------------------
-// Version consistency — every release-facing doc names 0.2.0 and none claims 1.0
+// Version consistency — every release-facing doc names the canonical project
+// version and none claims 1.0. EXOSNAP_PROJECT_VERSION is injected from
+// PROJECT_VERSION at build time, so this self-updates on a version bump: the
+// only edit a release needs is the canonical project(... VERSION ...).
 // ---------------------------------------------------------------------------
-TEST(PortableDocs, AllDocsNameVersion020) {
-    EXPECT_TRUE(contains(known_limitations(), "0.2.0"));
-    EXPECT_TRUE(contains(portable_readme(), "0.2.0"));
-    EXPECT_TRUE(contains(root_readme(), "0.2.0"));
+TEST(PortableDocs, AllDocsNameCanonicalVersion) {
+    EXPECT_TRUE(contains(known_limitations(), EXOSNAP_PROJECT_VERSION))
+        << "KNOWN_LIMITATIONS.md must name version " << EXOSNAP_PROJECT_VERSION;
+    EXPECT_TRUE(contains(portable_readme(), EXOSNAP_PROJECT_VERSION))
+        << "README-PORTABLE.md must name version " << EXOSNAP_PROJECT_VERSION;
+    EXPECT_TRUE(contains(root_readme(), EXOSNAP_PROJECT_VERSION))
+        << "README.md must name version " << EXOSNAP_PROJECT_VERSION;
 }
 
 TEST(PortableDocs, NoDocClaimsItIsOnePointZeroRelease) {

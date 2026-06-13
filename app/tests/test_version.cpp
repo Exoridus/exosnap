@@ -14,8 +14,11 @@ std::string version() {
 }
 } // namespace
 
-TEST(Version, CanonicalSemanticVersionIs020) {
-    EXPECT_EQ(version(), "0.2.0");
+// Verifies the build-info generation chain: the runtime kVersion must equal the
+// canonical PROJECT_VERSION (injected as EXOSNAP_EXPECTED_VERSION at build time).
+// Self-updates on a version bump — no per-release edit needed here.
+TEST(Version, MatchesCanonicalProjectVersion) {
+    EXPECT_EQ(version(), EXOSNAP_EXPECTED_VERSION);
 }
 
 TEST(Version, IsThreeComponentSemVer) {

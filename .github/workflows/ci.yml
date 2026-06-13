@@ -1,9 +1,19 @@
 name: CI
 
 on:
+  # Run on the default branch and release tags directly, and on every pull
+  # request. Feature branches are covered by their PR, so a plain branch push
+  # no longer triggers a second, redundant run alongside the pull_request run.
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
+
+# Cancel an in-progress run when a newer commit is pushed to the same PR/branch.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint:

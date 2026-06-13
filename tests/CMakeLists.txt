@@ -37,4 +37,5 @@ exosnap_add_gtest(
   SOURCES package/portable_docs_test.cpp
 )
 target_compile_definitions(portable_docs_tests PRIVATE
-    EXOSNAP_PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    EXOSNAP_PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+    EXOSNAP_PROJECT_VERSION="${PROJECT_VERSION}")

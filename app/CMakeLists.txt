@@ -682,6 +682,7 @@ exosnap_add_gtest(
         tests/test_version.cpp
 )
 target_include_directories(version_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+target_compile_definitions(version_tests PRIVATE EXOSNAP_EXPECTED_VERSION="${PROJECT_VERSION}")
 add_dependencies(version_tests exosnap_build_info)
 
 exosnap_add_gtest(
