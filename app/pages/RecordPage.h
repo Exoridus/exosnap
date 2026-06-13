@@ -29,6 +29,7 @@
 // Full include required: SourcePickerDialog::SelectionResult is used in private slot signature.
 #include "../ui/dialogs/SourcePickerDialog.h"
 
+class QAbstractButton;
 class QComboBox;
 class QBoxLayout;
 class QFrame;
@@ -165,6 +166,11 @@ class RecordPage : public QWidget {
     // error_phase: engine error phase string (non-empty on failure; "DiskSpace" for
     //   disk-monitor auto-stop, other values for engine failures).
     void recordingResultReady(bool succeeded, const QString& output_path, const QString& error_phase);
+
+    // CAPTURE-FRAME-BUTTON-R1: emitted on a successful frame capture so MainWindow
+    // can enqueue a "Frame saved" success toast.
+    // frame_path: full path to the saved PNG file.
+    void captureFrameSaved(const QString& frame_path);
 
     // COUNTDOWN-OVERLAY-R1: emitted whenever countdown state changes.
     // active=true while the pre-record countdown is running.
@@ -307,6 +313,11 @@ class RecordPage : public QWidget {
     QString buildTimerText(bool recording) const;
     bool isSourceSelectionLocked() const;
     void showCaptureFrameStatus(bool success, const QString& path, const QString& error);
+    // CAPTURE-FRAME-BUTTON-R1: reposition the capture-frame button and shutter flash
+    // to the top-right of the actual preview_surface_ within preview_surface_host_.
+    void repositionCaptureFrameButton();
+    void triggerShutterFlash();
+    void updateCaptureFrameButtonState();
     void onDockAddMarker();
     void onDockSplit();
     void requestSplit(recorder_core::SplitTriggerSource source);
@@ -471,6 +482,15 @@ class RecordPage : public QWidget {
     QWidget* legacy_host_ = nullptr;
     QLabel* capture_frame_status_label_ = nullptr;
     QTimer* capture_frame_status_timer_ = nullptr;
+
+    // CAPTURE-FRAME-BUTTON-R1: round 44px camera button overlaid at top-right of the
+    // live preview.  Positioned as a sibling of preview_surface_ inside
+    // preview_surface_host_; repositioned by repositionCaptureFrameButton().
+    // Type: CaptureFramePreviewButton (QAbstractButton subclass in RecordPage.cpp anon-ns).
+    QAbstractButton* capture_frame_preview_btn_ = nullptr;
+    // 120ms white shutter-flash overlay — same parent as capture_frame_preview_btn_.
+    QWidget* shutter_flash_overlay_ = nullptr;
+    QTimer* shutter_flash_timer_ = nullptr;
 
     // Marker feedback label (brief flash near the dock)
     QLabel* marker_feedback_label_ = nullptr;

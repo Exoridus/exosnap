@@ -657,6 +657,12 @@ QPushButton#recordChangeSourceButton {
     padding: 0 12px;
 }
 
+/* CAPTURE-FRAME-BUTTON-R1: 120ms shutter-flash overlay on a successful capture. */
+QWidget#captureShutterFlash {
+    background: rgba(255, 255, 255, 0.55);
+    border-radius: ${radius-md}px;
+}
+
 QPushButton#recordOpenDiagnosticsButton {
     min-height: 34px;
 }
