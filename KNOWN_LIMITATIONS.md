@@ -1,12 +1,12 @@
-# ExoSnap 0.2.0 — Known Limitations
+# ExoSnap 0.3.0 — Known Limitations
 
-This document describes the current support boundary of ExoSnap **0.2.0**. It is
+This document describes the current support boundary of ExoSnap **0.3.0**. It is
 factual and specific to this build. If a capability is not listed here as
 supported, do not assume it is available.
 
 ## Release status
 
-- ExoSnap 0.2.0 is a **pre-v1 Windows preview**, not a final 1.0 release.
+- ExoSnap 0.3.0 is a **pre-v1 Windows preview**, not a final 1.0 release.
 - Configuration, preset, and recording-history file schemas are **not frozen**
   and may change in incompatible ways before 1.0.0.
 - Keep your own backup copies of presets you care about during preview releases.
@@ -93,8 +93,7 @@ Invalid combinations are not offered.
   candidate takes its place).
 - Continued sessions produce independent recording slices — no single-file concat.
   Use Quick Trim (planned for 0.11.0) for post-hoc joining.
-- No notification is shown when recovery candidates exist but the overlay is
-  dismissed (toast/tray notifications are planned for 0.3.0).
+- Notification toasts (recovery available, saved, unexpected stop, low storage) are shown via the tray notification system (0.3.0).
 - For MKV/WebM split recordings, segments that were already finalized before an
   interruption remain usable; an interrupted **active** segment may not be
   recoverable.
@@ -141,10 +140,26 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   capture device mid-session does not retarget the pipeline; stop and restart the
   recording after reconnecting or selecting a new device.
 
-## Planned beyond 0.2.0 (not in this build)
+## Overlay and notification limitations (0.3.0)
+
+- The on-screen recording overlay, diagnostics overlay, countdown overlay, and quick-control pill
+  all use `WDA_EXCLUDEFROMCAPTURE` to stay outside the captured frame. If the capture exclusion
+  API fails on a given system, the overlay hides itself and logs the failure.
+- The quick-control pill is **opt-in** (off by default). Enable it in Advanced settings.
+- The notification "center" is implemented as a tray unread badge only — there is no persistent
+  notification history panel in this release.
+- Toast notifications appear in the bottom-right corner and auto-dismiss. They are not queued
+  visually when multiple arrive simultaneously; only the most recent is displayed.
+- Countdown overlay is anchored to the recorded monitor's bottom-center. On multi-monitor setups,
+  it follows the selected monitor. It is not configurable in 0.3.0.
+- The fullscreen/borderless/exclusive capture matrix (capturing games that use exclusive fullscreen)
+  is deferred to 0.12.x (RC stabilization wave).
+- Tray notifications may be suppressed by Windows Focus Assist / Do Not Disturb mode.
+
+## Planned beyond 0.3.0 (not in this build)
 
 The following are intentionally deferred and are documented here only so the
-current boundary is unambiguous. They are **not** part of 0.2.0:
-recording overlay/tray/notifications, crash reporting, update checking, AMD and
-Intel hardware encoding, software encoding fallback, and an expanded codec/color
-pipeline.
+current boundary is unambiguous. They are **not** part of 0.3.0:
+crash reporting (Crashpad, opt-in upload, symbol pipeline), in-app update checking,
+AMD and Intel hardware encoding, software encoding fallback, fullscreen/exclusive
+capture matrix (0.12.x), and an expanded codec/color pipeline.
