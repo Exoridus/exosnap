@@ -5,6 +5,8 @@
 
 #include <recorder_core/mp4_remuxer.h>
 
+#include "../diagnostics/DiskSpaceThresholds.h"
+
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -35,6 +37,10 @@
 #include "../settings/RecoveryManifestStore.h"
 
 namespace exosnap {
+
+// Disk-stop reason surfaced in UiRecordingResult::error_detail.
+const wchar_t* RecordingCoordinator::kDiskSpaceStopReason =
+    L"Recording stopped automatically: output drive is critically low on disk space.";
 
 static std::wstring ToWide(const std::string& s) {
     if (s.empty())
@@ -339,6 +345,127 @@ RecoveryManifestStore* RecordingCoordinator::GetRecoveryManifestStore() const no
     return recovery_manifest_store_;
 }
 
+void RecordingCoordinator::SetDiskSpaceProvider(diagnostics::IDiskSpaceProvider* provider) {
+    disk_space_provider_ = provider;
+}
+
+// ---------------------------------------------------------------------------
+// Low-disk guard (LOW-DISK-GUARD-R1)
+// ---------------------------------------------------------------------------
+
+void RecordingCoordinator::StartDiskMonitor(const std::filesystem::path& output_folder, bool is_mp4,
+                                            const std::filesystem::path& transient_mkv) {
+    session_is_mp4_ = is_mp4;
+    session_transient_mkv_ = transient_mkv;
+    disk_stop_triggered_.store(false);
+
+    // Lazily construct the Win32 provider if no stub was injected.
+    if (disk_space_provider_ == nullptr) {
+        if (!default_disk_space_provider_) {
+            default_disk_space_provider_ = std::make_unique<diagnostics::Win32DiskSpaceProvider>();
+        }
+        disk_space_provider_ = default_disk_space_provider_.get();
+    }
+
+    diagnostics::IDiskSpaceProvider* provider = disk_space_provider_;
+
+    disk_monitor_thread_ =
+        std::jthread([this, output_folder, is_mp4, transient_mkv, provider](std::stop_token stop_token) {
+            // Poll every 5 seconds.
+            constexpr auto kPollInterval = std::chrono::seconds(5);
+
+            while (!stop_token.stop_requested()) {
+                // Interruptible sleep.
+                {
+                    std::this_thread::sleep_for(kPollInterval);
+                    if (stop_token.stop_requested())
+                        break;
+                }
+
+                if (!is_recording_.load())
+                    break;
+
+                const uint64_t free_bytes = provider->FreeBytesForPath(output_folder);
+                if (free_bytes == 0) {
+                    // Query failed — skip this poll, do not trigger a false stop.
+                    continue;
+                }
+
+                // For MP4 sessions add the current transient MKV size as the
+                // remux reserve.  If we cannot stat the file (not yet written,
+                // rename in progress), fall back to 0 so we still protect with
+                // the base threshold.
+                uint64_t remux_reserve = 0;
+                if (is_mp4 && !transient_mkv.empty()) {
+                    std::error_code ec;
+                    const auto mkv_size = std::filesystem::file_size(transient_mkv, ec);
+                    if (!ec)
+                        remux_reserve = static_cast<uint64_t>(mkv_size);
+                }
+
+                const uint64_t threshold = diagnostics::ComputeHardStopThreshold(remux_reserve);
+                if (free_bytes <= threshold) {
+                    OnDiskSpaceLow(free_bytes, threshold);
+                    break; // stop monitoring — we already triggered the stop
+                }
+            }
+        });
+}
+
+void RecordingCoordinator::StopDiskMonitor() {
+    disk_monitor_thread_.request_stop();
+    // Do NOT join here — the thread may be sleeping; we just request_stop and
+    // let the jthread destructor join when it completes.  The jthread destructor
+    // is called when disk_monitor_thread_ is replaced or the coordinator is
+    // destroyed.
+}
+
+void RecordingCoordinator::OnDiskSpaceLow(uint64_t free_bytes, uint64_t threshold_bytes) {
+    // Only fire once per session.
+    bool expected = false;
+    if (!disk_stop_triggered_.compare_exchange_strong(expected, true))
+        return;
+
+    {
+        const double free_gb = static_cast<double>(free_bytes) / (1024.0 * 1024.0 * 1024.0);
+        const double thresh_mb = static_cast<double>(threshold_bytes) / (1024.0 * 1024.0);
+        diagnostics::AppLog::error(
+            QStringLiteral("disk_guard"),
+            QStringLiteral("auto-stop triggered free_bytes=%1 threshold_bytes=%2 free_gb=%3 threshold_mb=%4")
+                .arg(static_cast<qint64>(free_bytes))
+                .arg(static_cast<qint64>(threshold_bytes))
+                .arg(free_gb, 0, 'f', 3)
+                .arg(thresh_mb, 0, 'f', 0));
+    }
+
+    // Trigger a graceful stop on the Qt main thread (same path as user stop).
+    if (QCoreApplication::instance() != nullptr) {
+        QMetaObject::invokeMethod(
+            QCoreApplication::instance(),
+            [this, free_bytes, threshold_bytes]() {
+                // Re-check is_recording_ on the main thread in case it already stopped.
+                if (!is_recording_.load())
+                    return;
+
+                // Surface the reason via a synthetic result that will be delivered
+                // after the engine stops.  We set the detail before stopping so the
+                // result path can pick it up.
+                disk_stop_reason_bytes_free_ = free_bytes;
+                disk_stop_reason_threshold_ = threshold_bytes;
+
+                StopRecording();
+            },
+            Qt::QueuedConnection);
+    } else {
+        // Test environment without Qt event loop — call directly.
+        if (is_recording_.load()) {
+            disk_stop_reason_bytes_free_ = free_bytes;
+            disk_stop_reason_threshold_ = threshold_bytes;
+            StopRecording();
+        }
+    }
+}
+
 void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::CapabilitySet& caps,
                                                const exosnap::capability::ResolveResult& validation) {
     caps_ = caps;
@@ -440,6 +567,39 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     if (is_recording_)
         return false;
     const std::filesystem::path effective_folder = EffectiveOutputFolder();
+
+    // Pre-start disk-space guard (LOW-DISK-GUARD-R1).
+    // Block recording when free space is at or below the hard-stop threshold.
+    // Uses the injected provider if available, otherwise the Win32 implementation.
+    {
+        if (disk_space_provider_ == nullptr) {
+            if (!default_disk_space_provider_) {
+                default_disk_space_provider_ = std::make_unique<diagnostics::Win32DiskSpaceProvider>();
+            }
+            disk_space_provider_ = default_disk_space_provider_.get();
+        }
+        const uint64_t free_bytes = disk_space_provider_->FreeBytesForPath(effective_folder);
+        // Use the base threshold (no remux reserve) for the pre-start check;
+        // at this point we do not yet know the MKV size.
+        const uint64_t threshold = diagnostics::kHardStopFreeBytes;
+        if (free_bytes > 0 && free_bytes <= threshold) {
+            const double free_gb = static_cast<double>(free_bytes) / (1024.0 * 1024.0 * 1024.0);
+            diagnostics::AppLog::error(QStringLiteral("disk_guard"),
+                                       QStringLiteral("pre-start blocked: free_bytes=%1 threshold_bytes=%2 free_gb=%3")
+                                           .arg(static_cast<qint64>(free_bytes))
+                                           .arg(static_cast<qint64>(threshold))
+                                           .arg(free_gb, 0, 'f', 3));
+
+            PostStateChange(UiRecordingState::Failed);
+            UiRecordingResult result;
+            result.succeeded = false;
+            result.error_phase = L"DiskSpace";
+            result.error_detail = kDiskSpaceStopReason;
+            PostResult(std::move(result));
+            return false;
+        }
+    }
+
     const auto folder_check = ValidateOutputFolder(effective_folder);
     if (folder_check != FolderValidationResult::Ok) {
         diagnostics::AppLog::error(QStringLiteral("record.failure"),
@@ -617,6 +777,8 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     }
 
     is_recording_ = true;
+    disk_stop_reason_bytes_free_ = 0;
+    disk_stop_reason_threshold_ = 0;
 
     {
         std::lock_guard<std::mutex> lock(markers_mutex_);
@@ -653,6 +815,14 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         const QString target_desc = QString::fromStdString(target.description);
         diagnostics::AppLog::info(QStringLiteral("record"),
                                   QStringLiteral("start backend=%1 target=\"%2\"").arg(backend, target_desc));
+    }
+
+    // Start the low-disk guard monitor thread (LOW-DISK-GUARD-R1).
+    {
+        const bool is_mp4 = (config.container == recorder_core::Container::Mp4);
+        const std::filesystem::path transient_mkv =
+            is_mp4 ? recorder_core::DeriveTransientMkvPath(output_path) : std::filesystem::path{};
+        StartDiskMonitor(EffectiveOutputFolder(), is_mp4, transient_mkv);
     }
 
     recording_thread_ = std::jthread([this, cfg = std::move(config), op = std::move(output_path)](std::stop_token) {
@@ -896,6 +1066,11 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
     is_recording_ = false;
     is_paused_.store(false);
 
+    // Stop the disk monitor now that recording has ended.  The monitor thread
+    // may already have stopped itself (if it triggered the auto-stop), or it may
+    // be in a sleep.  request_stop() is idempotent.
+    StopDiskMonitor();
+
     UiRecordingResult ui_result;
     // For MP4 sessions, output_path is the final .mp4; the engine actually wrote
     // to the transient .mkv.tmp path (ADR-0014). We expose the final path to the UI.
@@ -953,7 +1128,24 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
                                       .arg(QString::fromStdWString(MarkerSidecarPath().wstring())));
     }
 
-    if (!result.succeeded) {
+    // LOW-DISK-GUARD-R1: if the auto-stop fired, override the error_detail and
+    // mark the result as a disk-space stop (not a hard engine failure).  The
+    // recording may still have succeeded up to the stop point — we leave
+    // result.succeeded as-is and only enrich the detail string.
+    if (disk_stop_triggered_.load()) {
+        const double free_gb = static_cast<double>(disk_stop_reason_bytes_free_) / (1024.0 * 1024.0 * 1024.0);
+        const double thresh_mb = static_cast<double>(disk_stop_reason_threshold_) / (1024.0 * 1024.0);
+        wchar_t buf[256] = {};
+        _snwprintf_s(buf, _TRUNCATE, L"%ls (%.3f GB free, %.0f MB threshold)", kDiskSpaceStopReason, free_gb,
+                     thresh_mb);
+        ui_result.error_detail = buf;
+        // Surface the disk-stop reason even when the engine itself "succeeded"
+        // (graceful stop produces succeeded=true for the engine's perspective).
+        ui_result.error_phase = L"DiskSpace";
+        ui_result.succeeded = false;
+    }
+
+    if (!result.succeeded && !disk_stop_triggered_.load()) {
         diagnostics::AppLog::error(QStringLiteral("record.failure"),
                                    QStringLiteral("phase=%1 output_path=\"%2\" detail=\"%3\"")
                                        .arg(QString::fromStdWString(ui_result.error_phase),

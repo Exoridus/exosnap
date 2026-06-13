@@ -86,6 +86,19 @@ Invalid combinations are not offered.
 - MP4 does not guarantee `hvc1`/Apple-style HEVC compatibility; HEVC is
   not implemented.
 
+## Disk space
+
+ExoSnap monitors free space on the output drive:
+
+- **Warning (2 GB free):** a Notice appears in Diagnostics. Recording is still
+  allowed.
+- **Hard stop (500 MB free):** recording is blocked at start; a running recording
+  stops gracefully. For MP4 sessions, the effective hard-stop threshold is higher
+  because the transient MKV and the output MP4 coexist during the remux-on-stop
+  phase (roughly 2× the file size must be available).
+- No filesystem-type checks (FAT32, network drives) and no split-at-limit are
+  implemented in 0.2.0; those are separate future slices.
+
 ## Other current limitations
 
 - No automatic update checking or in-app updater.

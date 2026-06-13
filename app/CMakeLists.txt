@@ -208,6 +208,9 @@ qt_add_executable(exosnap WIN32
     diagnostics/CapabilitySummary.cpp
     diagnostics/ConfigSummary.h
     diagnostics/ConfigSummary.cpp
+    diagnostics/DiskSpaceProvider.h
+    diagnostics/DiskSpaceProvider.cpp
+    diagnostics/DiskSpaceThresholds.h
     diagnostics/RecommendationEngine.h
     diagnostics/RecommendationEngine.cpp
     diagnostics/SelfTestRunner.h
@@ -294,6 +297,7 @@ exosnap_add_app_test_support(exosnap_diagnostics_test_support
     diagnostics/DiagnosticResult.cpp
     diagnostics/CapabilitySummary.cpp
     diagnostics/ConfigSummary.cpp
+    diagnostics/DiskSpaceProvider.cpp
     diagnostics/RecommendationEngine.cpp
     diagnostics/SelfTestRunner.cpp
 )
@@ -463,6 +467,7 @@ exosnap_add_gtest(
     LIBRARIES
         exosnap_output_model_test_support
         exosnap_device_service_test_support
+        exosnap_diagnostics_test_support
         Qt6::Core Qt6::Gui exosnap_capability recorder_core
 )
 target_include_directories(output_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -488,6 +493,16 @@ exosnap_add_gtest(
     LIBRARIES exosnap_diagnostics_test_support exosnap_capability recorder_core
 )
 target_include_directories(diagnostics_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# LOW-DISK-GUARD-R1 tests
+exosnap_add_gtest(
+    NAME low_disk_guard_tests
+    TEST_PREFIX disk.
+    SOURCES
+        tests/test_low_disk_guard.cpp
+    LIBRARIES exosnap_diagnostics_test_support exosnap_capability recorder_core Qt6::Core
+)
+target_include_directories(low_disk_guard_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # webcam_settings_tests removed: webcam is now persisted via RecordingPresetStore.
 # Coverage of WebcamSettings serialization is maintained by recording_preset_store_tests.
@@ -853,6 +868,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         LIBRARIES
             exosnap_output_model_test_support
             exosnap_device_service_test_support
+            exosnap_diagnostics_test_support
             Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
     )
     target_include_directories(capture_frame_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -878,6 +894,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         LIBRARIES
             exosnap_output_model_test_support
             exosnap_device_service_test_support
+            exosnap_diagnostics_test_support
             Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
     )
     target_include_directories(recording_marker_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

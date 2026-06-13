@@ -9,6 +9,9 @@
 #include "../diagnostics/ConfigSummary.h"
 #include "../diagnostics/RecommendationEngine.h"
 
+#include <cstdint>
+#include <filesystem>
+
 class QLabel;
 class QPushButton;
 class QToolButton;
@@ -120,6 +123,10 @@ class DiagnosticsPage : public QWidget {
     bool data_ready_ = false;
     capability::UserRecorderConfig active_user_config_{};
     capability::ResolveResult profile_validation_;
+
+    // Disk-space guard data (LOW-DISK-GUARD-R1)
+    std::filesystem::path output_folder_;
+    uint64_t output_drive_free_bytes_ = 0;
 };
 
 } // namespace exosnap

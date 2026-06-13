@@ -465,8 +465,9 @@ TEST(RecommendationEngineTest, Generate_LowDiskSpace_Warns) {
 
     capability::UserRecorderConfig config;
 
-    // 100 MB free = warn
-    RecommendationEngine engine(caps, config, 0, 100ULL * 1024 * 1024, true);
+    // 1 GB free: above the 500 MB hard-stop, below the 2 GB soft-warn → rec.005 Notice.
+    // (LOW-DISK-GUARD-R1: 100 MB would now produce a rec.007 Blocker instead.)
+    RecommendationEngine engine(caps, config, 0, 1ULL * 1024 * 1024 * 1024, true);
     auto checklist = engine.Generate();
 
     bool found_space = false;
@@ -498,9 +499,12 @@ TEST(RecommendationEngineTest, Generate_UnsupportedProfile_Blocker) {
 
 TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
     auto codes = RecommendationEngine::GetAllRecommendationCodes();
-    EXPECT_EQ(codes.size(), 6u);
+    // LOW-DISK-GUARD-R1 added rec.007 (hard-stop Blocker) — expect 7 codes now.
+    EXPECT_EQ(codes.size(), 7u);
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.001"), codes.end());
+    EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.005"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.006"), codes.end());
+    EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.007"), codes.end());
 }
 
 // ─── REC-R10: Active output config → ValidateConfig wiring ───────────────────

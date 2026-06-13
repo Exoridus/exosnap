@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -23,6 +24,7 @@
 #include <recorder_core/mp4_remuxer.h>
 #include <recorder_core/recorder_session.h>
 
+#include "../diagnostics/DiskSpaceProvider.h"
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputSettingsModel.h"
 #include "../models/RecordingMarker.h"
@@ -71,6 +73,16 @@ class RecordingCoordinator {
     // is silently disabled (tests that do not care about recovery can omit this).
     void SetRecoveryManifestStore(RecoveryManifestStore* store);
     [[nodiscard]] RecoveryManifestStore* GetRecoveryManifestStore() const noexcept;
+
+    // Inject a disk-space provider for the runtime low-disk guard.
+    // When nullptr (the default) a Win32DiskSpaceProvider is used automatically.
+    // Tests inject a stub to simulate arbitrary free-space conditions.
+    // Must be called before StartRecording; safe to call after construction.
+    void SetDiskSpaceProvider(diagnostics::IDiskSpaceProvider* provider);
+
+    // Disk-space stop reason reported via the result when an auto-stop fires.
+    // Exposed for tests.
+    static const wchar_t* kDiskSpaceStopReason;
 
     void OnCapabilitiesReady(const exosnap::capability::CapabilitySet& caps,
                              const exosnap::capability::ResolveResult& validation);
@@ -194,6 +206,32 @@ class RecordingCoordinator {
     // UUID of the manifest entry for the currently active or most recent recording.
     // Empty when no session is in flight.
     QString current_manifest_id_;
+
+    // Low-disk guard (LOW-DISK-GUARD-R1)
+    // Nullable injected provider; fallback to the Win32 implementation when nullptr.
+    diagnostics::IDiskSpaceProvider* disk_space_provider_ = nullptr;
+    // Owned Win32 fallback; allocated lazily on first StartRecording if no provider was injected.
+    std::unique_ptr<diagnostics::Win32DiskSpaceProvider> default_disk_space_provider_;
+    // Background thread polling free space during recording.
+    std::jthread disk_monitor_thread_;
+    // Set to true when the disk-monitor auto-stop fires to suppress duplicate stops.
+    std::atomic<bool> disk_stop_triggered_{false};
+    // True when the active session targets MP4 (requires remux reserve in threshold).
+    bool session_is_mp4_ = false;
+    // Path of the transient MKV for the active MP4 session (used to size remux reserve).
+    std::filesystem::path session_transient_mkv_;
+
+    void StartDiskMonitor(const std::filesystem::path& output_folder, bool is_mp4,
+                          const std::filesystem::path& transient_mkv);
+    void StopDiskMonitor();
+    // Called by the monitor thread when the threshold is crossed.
+    void OnDiskSpaceLow(uint64_t free_bytes, uint64_t threshold_bytes);
+
+    // Captured by OnDiskSpaceLow before calling StopRecording; read in
+    // RecordingThreadProc to enrich the UiRecordingResult::error_detail.
+    // Protected by the single-fire guarantee of disk_stop_triggered_.
+    uint64_t disk_stop_reason_bytes_free_ = 0;
+    uint64_t disk_stop_reason_threshold_ = 0;
 
     exosnap::capability::CapabilitySet caps_{};
     bool has_caps_ = false;
