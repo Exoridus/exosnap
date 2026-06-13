@@ -3007,6 +3007,9 @@ void RecordPage::initCoordinator() {
                 failed_msg += QStringLiteral(" hr=%1").arg(QString::fromStdWString(result.hresult_text));
             diagnostics::AppLog::error(QStringLiteral("record.failure"), failed_msg);
         }
+        // NOTIFY-TOASTS-R1: surface the result to MainWindow for toast enqueuing.
+        emit recordingResultReady(result.succeeded, QString::fromStdWString(result.output_path),
+                                  QString::fromStdWString(result.error_phase));
         refresh();
     });
 

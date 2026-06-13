@@ -243,5 +243,78 @@ TEST_F(TrayPresenceTest, StateRoundTrip) {
     EXPECT_TRUE(tp.currentTooltip().contains(QStringLiteral("Ready")));
 }
 
+// ---- Unread notification badge (NOTIFY-SKIN-R1) ----
+
+TEST_F(TrayPresenceTest, UnreadCount_DefaultIsZero) {
+    TrayPresence tp;
+    EXPECT_EQ(tp.unreadCount(), 0);
+}
+
+TEST_F(TrayPresenceTest, IncrementUnreadCount_CountIncreases) {
+    TrayPresence tp;
+    tp.incrementUnreadCount();
+    EXPECT_EQ(tp.unreadCount(), 1);
+    tp.incrementUnreadCount();
+    EXPECT_EQ(tp.unreadCount(), 2);
+}
+
+TEST_F(TrayPresenceTest, ClearUnreadCount_ResetsToZero) {
+    TrayPresence tp;
+    tp.incrementUnreadCount();
+    tp.incrementUnreadCount();
+    ASSERT_EQ(tp.unreadCount(), 2);
+    tp.clearUnreadCount();
+    EXPECT_EQ(tp.unreadCount(), 0);
+}
+
+TEST_F(TrayPresenceTest, ClearUnreadCount_WhenAlreadyZero_IsNoOp) {
+    TrayPresence tp;
+    ASSERT_EQ(tp.unreadCount(), 0);
+    // Should not crash or change count
+    tp.clearUnreadCount();
+    EXPECT_EQ(tp.unreadCount(), 0);
+}
+
+TEST_F(TrayPresenceTest, NotificationsAction_IsHiddenByDefault) {
+    TrayPresence tp;
+    QAction* action = tp.notificationsAction();
+    ASSERT_NE(action, nullptr);
+    EXPECT_FALSE(action->isVisible());
+}
+
+TEST_F(TrayPresenceTest, NotificationsAction_VisibleAfterIncrement) {
+    TrayPresence tp;
+    tp.incrementUnreadCount();
+    QAction* action = tp.notificationsAction();
+    ASSERT_NE(action, nullptr);
+    EXPECT_TRUE(action->isVisible());
+}
+
+TEST_F(TrayPresenceTest, NotificationsAction_LabelContainsCount) {
+    TrayPresence tp;
+    tp.incrementUnreadCount();
+    tp.incrementUnreadCount();
+    tp.incrementUnreadCount();
+    QAction* action = tp.notificationsAction();
+    ASSERT_NE(action, nullptr);
+    EXPECT_TRUE(action->text().contains(QStringLiteral("3")))
+        << "Expected count in action text: " << action->text().toStdString();
+}
+
+TEST_F(TrayPresenceTest, NotificationsAction_HiddenAfterClear) {
+    TrayPresence tp;
+    tp.incrementUnreadCount();
+    ASSERT_TRUE(tp.notificationsAction()->isVisible());
+    tp.clearUnreadCount();
+    EXPECT_FALSE(tp.notificationsAction()->isVisible());
+}
+
+TEST_F(TrayPresenceTest, MultipleIncrements_CountCumulates) {
+    TrayPresence tp;
+    for (int i = 0; i < 5; ++i)
+        tp.incrementUnreadCount();
+    EXPECT_EQ(tp.unreadCount(), 5);
+}
+
 } // namespace
 } // namespace exosnap::ui::tray

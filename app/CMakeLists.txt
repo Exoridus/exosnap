@@ -142,6 +142,11 @@ qt_add_executable(exosnap WIN32
     ui/overlay/DiagnosticsOverlayWindow.cpp
     ui/overlay/RecordingOverlayWindow.h
     ui/overlay/RecordingOverlayWindow.cpp
+    ui/overlay/NotificationToastWindow.h
+    ui/overlay/NotificationToastWindow.cpp
+    notifications/NotificationEvent.h
+    notifications/NotificationManager.h
+    notifications/NotificationManager.cpp
     MainWindow.h
     MainWindow.cpp
     pages/RecordPage.h
@@ -945,6 +950,31 @@ exosnap_add_gtest(
 target_include_directories(diagnostics_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(diagnostics_overlay_tests PRIVATE NOMINMAX)
 set_target_properties(diagnostics_overlay_tests PROPERTIES AUTOMOC ON)
+
+# NOTIFY-TOASTS-R1 tests
+exosnap_add_gtest(
+    NAME notification_manager_tests
+    TEST_PREFIX notify.
+    SOURCES
+        tests/test_notification_manager.cpp
+        notifications/NotificationManager.cpp
+    LIBRARIES Qt6::Core exosnap_capability recorder_core
+)
+target_include_directories(notification_manager_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(notification_manager_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME notification_toast_tests
+    TEST_PREFIX notify.
+    SOURCES
+        tests/test_notification_toast.cpp
+        notifications/NotificationManager.cpp
+        ui/overlay/NotificationToastWindow.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(notification_toast_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(notification_toast_tests PRIVATE NOMINMAX)
+set_target_properties(notification_toast_tests PROPERTIES AUTOMOC ON)
 
 # RECORDING-MARKERS-R1 tests
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")

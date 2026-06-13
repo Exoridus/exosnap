@@ -10,8 +10,10 @@
 namespace exosnap {
 namespace {
 
-// Bump to 8: diagnostics overlay toggle added.
-constexpr int kSettingsVersionCurrent = 8;
+// Bump to 9: both diagnostics overlay toggle (DIAGNOSTICS-OVERLAY-R1) and
+// notification toasts toggle (NOTIFY-TOASTS-R1) added simultaneously.
+// Pre-1.0: no migration; incompatible persisted data is reset to defaults.
+constexpr int kSettingsVersionCurrent = 9;
 
 } // namespace
 
@@ -56,7 +58,12 @@ PersistedAppSettings AppSettingsStore::Load() const {
 
     settings.beginGroup(QStringLiteral("overlay"));
     persisted.show_recording_overlay = settings.value(QStringLiteral("show_recording_overlay"), true).toBool();
+    // DIAGNOSTICS-OVERLAY-R1: diagnostics overlay toggle (default OFF).
+    // Pre-1.0: no migration; missing key defaults to false.
     persisted.show_diagnostics_overlay = settings.value(QStringLiteral("show_diagnostics_overlay"), false).toBool();
+    // NOTIFY-TOASTS-R1: notification toasts toggle (default ON).
+    // Pre-1.0: no migration; missing key defaults to true.
+    persisted.show_notifications = settings.value(QStringLiteral("show_notifications"), true).toBool();
     settings.endGroup();
 
     return persisted;
@@ -98,7 +105,10 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
 
     settings.beginGroup(QStringLiteral("overlay"));
     settings.setValue(QStringLiteral("show_recording_overlay"), settings_snapshot.show_recording_overlay);
+    // DIAGNOSTICS-OVERLAY-R1: diagnostics overlay toggle.
     settings.setValue(QStringLiteral("show_diagnostics_overlay"), settings_snapshot.show_diagnostics_overlay);
+    // NOTIFY-TOASTS-R1: notification toasts toggle.
+    settings.setValue(QStringLiteral("show_notifications"), settings_snapshot.show_notifications);
     settings.endGroup();
 
     settings.sync();

@@ -79,7 +79,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_WindowGeometry) {
     EXPECT_TRUE(loaded.window_geometry.maximized);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion8) {
+TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion9) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
@@ -89,10 +89,11 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion8) {
     store.Save(settings);
 
     QSettings raw_settings(settings_path, QSettings::IniFormat);
-    // Version bumped to 8 in DIAGNOSTICS-OVERLAY-R1 (diagnostics overlay toggle added).
-    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 8);
+    // Version bumped to 9: both DIAGNOSTICS-OVERLAY-R1 and NOTIFY-TOASTS-R1 fields added.
+    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 9);
 }
 
+// DIAGNOSTICS-OVERLAY-R1: show_diagnostics_overlay round-trip tests
 TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_DiagnosticsOverlay_False) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
@@ -139,6 +140,57 @@ TEST(AppSettingsStoreTest, AppSettingsStore_MissingDiagnosticsOverlayKey_Default
     EXPECT_FALSE(loaded.show_diagnostics_overlay);
     // Recording overlay key present: must still be true.
     EXPECT_TRUE(loaded.show_recording_overlay);
+}
+
+// NOTIFY-TOASTS-R1: show_notifications round-trip tests
+TEST(AppSettingsStoreTest, AppSettingsStore_DefaultShowNotificationsIsTrue) {
+    PersistedAppSettings settings;
+    EXPECT_TRUE(settings.show_notifications);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_ShowNotifications_True) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    settings.show_notifications = true;
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_TRUE(loaded.show_notifications);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_ShowNotifications_False) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    settings.show_notifications = false;
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_FALSE(loaded.show_notifications);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_MissingShowNotifications_DefaultsToTrue) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    // Write a file without the show_notifications key in [overlay].
+    {
+        QSettings s(settings_path, QSettings::IniFormat);
+        s.beginGroup(QStringLiteral("overlay"));
+        s.setValue(QStringLiteral("show_recording_overlay"), true);
+        s.endGroup();
+        s.sync();
+    }
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_TRUE(loaded.show_notifications);
 }
 
 TEST(AppSettingsStoreTest, AppSettingsStore_Save_RemovesLegacyGroups) {

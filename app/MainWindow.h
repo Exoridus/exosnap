@@ -12,6 +12,7 @@
 #include "models/RecordingPreset.h"
 #include "models/RecordingPresetRegistry.h"
 #include "models/VideoSettingsModel.h"
+#include "notifications/NotificationManager.h"
 #include "services/AudioDeviceNotifier.h"
 #include "services/DisplayDeviceNotifier.h"
 #include "services/GlobalHotkeyService.h"
@@ -50,6 +51,7 @@ class SourcePickerOverlay;
 
 namespace ui::overlay {
 class DiagnosticsOverlayWindow;
+class NotificationToastWindow;
 class RecordingOverlayWindow;
 } // namespace ui::overlay
 
@@ -145,6 +147,11 @@ class MainWindow : public QMainWindow {
     // DIAGNOSTICS-OVERLAY-R1: update the diagnostics overlay visibility/state.
     void updateDiagnosticsOverlay();
 
+    // NOTIFY-TOASTS-R1: instantiate the manager + toast window; called from constructor.
+    void initNotificationToasts();
+    // Gate toasts on the show_notifications setting.
+    void updateNotificationToastsEnabled();
+
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void installVisualReadyMarker(const QString& scenario_id);
     void applyVisualSettingsScenario(const visual::VisualScenario& scenario);
@@ -163,6 +170,9 @@ class MainWindow : public QMainWindow {
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
     ui::overlay::RecordingOverlayWindow* recording_overlay_ = nullptr;
     ui::overlay::DiagnosticsOverlayWindow* diagnostics_overlay_ = nullptr;
+    // NOTIFY-TOASTS-R1: manager (owned by this) + toast window (top-level, no parent).
+    notifications::NotificationManager* notification_manager_ = nullptr;
+    ui::overlay::NotificationToastWindow* notification_toast_window_ = nullptr;
     // Last known monitor rect from RecordPage for overlay positioning.
     QRect recording_monitor_rect_;
     QStackedWidget* stack_ = nullptr;

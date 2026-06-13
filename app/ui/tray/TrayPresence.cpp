@@ -40,10 +40,22 @@ TrayPresence::TrayPresence(QObject* parent) : QObject(parent) {
     show_hide_action_ = tray_menu_->addAction(QStringLiteral("Show window"));
     record_toggle_action_ = tray_menu_->addAction(QStringLiteral("Start recording"));
     tray_menu_->addSeparator();
+    // NOTIFY-SKIN-R1: clickable mirror for over-game toasts.
+    // Clicking this focuses/shows the ExoSnap window (the spec's named mechanism).
+    // Label is updated as "Notifications (N)" when N > 0, else hidden.
+    notifications_action_ = tray_menu_->addAction(QStringLiteral("Notifications"));
+    notifications_action_->setVisible(false); // hidden until there are unread items
+    tray_menu_->addSeparator();
     quit_action_ = tray_menu_->addAction(QStringLiteral("Quit ExoSnap"));
 
     connect(show_hide_action_, &QAction::triggered, this, &TrayPresence::onShowHideTriggered);
     connect(record_toggle_action_, &QAction::triggered, this, &TrayPresence::recordToggleRequested);
+    // Notifications action: clicking focuses the window and clears the badge
+    // (MainWindow wires clearUnreadCount via activateWindowRequested).
+    connect(notifications_action_, &QAction::triggered, this, [this]() {
+        clearUnreadCount();
+        emit activateWindowRequested();
+    });
     connect(quit_action_, &QAction::triggered, this, &TrayPresence::quitRequested);
 
     tray_icon_->setContextMenu(tray_menu_);
@@ -171,6 +183,35 @@ void TrayPresence::applyIcon() {
         return;
     }
     tray_icon_->setIcon(icon);
+}
+
+// ---------------------------------------------------------------------------
+// Unread notification badge (NOTIFY-SKIN-R1)
+// ---------------------------------------------------------------------------
+
+void TrayPresence::incrementUnreadCount() {
+    ++unread_count_;
+    rebuildNotificationsLabel();
+}
+
+void TrayPresence::clearUnreadCount() {
+    if (unread_count_ == 0)
+        return;
+    unread_count_ = 0;
+    rebuildNotificationsLabel();
+}
+
+void TrayPresence::rebuildNotificationsLabel() {
+    if (!notifications_action_)
+        return;
+
+    if (unread_count_ <= 0) {
+        notifications_action_->setVisible(false);
+        return;
+    }
+
+    notifications_action_->setText(QStringLiteral("Notifications (%1)").arg(unread_count_));
+    notifications_action_->setVisible(true);
 }
 
 void TrayPresence::onTrayActivated(QSystemTrayIcon::ActivationReason reason) {
