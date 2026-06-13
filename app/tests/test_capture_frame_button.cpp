@@ -1,12 +1,22 @@
-// CAPTURE-FRAME-BUTTON-R1 unit tests
+// CAPTURE-FRAME-DOCK-BUTTON-R1 unit tests
+//
+// The capture-frame affordance moved from the preview-corner overlay (removed —
+// occluded by DXGI HWND) to a round camera icon button on the right side of the
+// transport dock.  The notification / toast path is unchanged.
 //
 // Tests cover:
 //   1. NotificationManager enqueues a "Frame saved" success event with the right fields.
 //   2. The event has type Saved, action OpenFolder, non-empty title + body.
 //   3. Enqueueing a frame-saved event with the folder path does not crash.
-//   4. A second capture does not enqueue while the first is in-flight (disabled state).
-//   5. The RecordPage::captureFrameSaved signal emits with the correct path.
-//   6. State-gating: button disabled in LoadingCapabilities state, enabled in Ready.
+//   4. Frame-saved toast is auto-dismissible (5 s dwell via kDismissMs_Saved).
+//   5. Frame-saved toast has an Open-folder action.
+//   6. State-gating: CaptureFrame rejected in LoadingCapabilities state.
+//   7. Multiple frame-saved events stack in the queue (capped at kMaxVisible).
+//   8. "Frame saved" title is distinct from "Recording saved".
+//   9. Frame-path payload is forwarded to action_payload.
+//  10. Dismiss clears the frame-saved toast.
+//  11. Dock button exists on TransportDock with correct object name + tooltip.
+//  12. Dock button is visible in Ready state and hidden in Saving/Completed.
 //
 // Follows the QCoreApplication-fixture pattern (no GPU / real window needed).
 // ctest runs each test in isolation via --gtest_filter.
@@ -17,6 +27,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QPushButton>
 #include <QString>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -24,6 +35,7 @@
 #include "notifications/NotificationEvent.h"
 #include "notifications/NotificationManager.h"
 #include "services/RecordingCoordinator.h"
+#include "ui/widgets/TransportDock.h"
 
 namespace exosnap {
 namespace {
@@ -222,6 +234,68 @@ TEST_F(CaptureFrameButtonTest, FrameSavedEvent_CanBeDismissed) {
     const uint64_t seq = mgr.VisibleEvents().front().sequence;
     mgr.Dismiss(seq);
     EXPECT_TRUE(mgr.VisibleEvents().isEmpty());
+}
+
+// ── Test 11: Dock button exists with correct seams ───────────────────────────
+// CAPTURE-FRAME-DOCK-BUTTON-R1: the camera icon button must live on the dock,
+// not in the preview overlay.
+
+TEST_F(CaptureFrameButtonTest, DockButton_ExistsWithCorrectSeams) {
+    ui::widgets::TransportDock dock;
+
+    auto* btn = dock.findChild<QPushButton*>(QStringLiteral("recordDockCaptureFrame"));
+    ASSERT_NE(btn, nullptr) << "round capture-frame button must exist on the TransportDock";
+
+    // Tooltip must mention "Capture frame" and the hotkey.
+    EXPECT_TRUE(btn->toolTip().contains(QStringLiteral("Capture frame")));
+    // Accessible name must be "Capture frame" for UIA / screen readers.
+    EXPECT_EQ(btn->accessibleName(), QStringLiteral("Capture frame"));
+    // Must be icon-only (no text label).
+    EXPECT_TRUE(btn->text().isEmpty());
+    // Must be the spec 44×44 fixed size.
+    EXPECT_EQ(btn->width(), 44);
+    EXPECT_EQ(btn->height(), 44);
+}
+
+// ── Test 12: Dock button visible in Ready/Recording/Paused, absent in Saving ──
+
+TEST_F(CaptureFrameButtonTest, DockButton_VisibilityByState) {
+    ui::widgets::TransportDock dock;
+
+    auto* btn = dock.findChild<QPushButton*>(QStringLiteral("recordDockCaptureFrame"));
+    ASSERT_NE(btn, nullptr);
+
+    dock.setState(ui::widgets::TransportDock::State::Ready);
+    EXPECT_TRUE(btn->isVisibleTo(&dock)) << "button must be visible in Ready state";
+
+    dock.setState(ui::widgets::TransportDock::State::Recording);
+    EXPECT_TRUE(btn->isVisibleTo(&dock)) << "button must be visible during Recording";
+
+    dock.setState(ui::widgets::TransportDock::State::Paused);
+    EXPECT_TRUE(btn->isVisibleTo(&dock)) << "button must be visible while Paused";
+
+    dock.setState(ui::widgets::TransportDock::State::Saving);
+    EXPECT_FALSE(btn->isVisibleTo(&dock)) << "button must be hidden during Saving";
+
+    dock.setState(ui::widgets::TransportDock::State::Completed);
+    EXPECT_FALSE(btn->isVisibleTo(&dock)) << "button must be hidden in Completed state";
+}
+
+// ── Test 13: Dock button click emits captureFrameClicked signal ──────────────
+
+TEST_F(CaptureFrameButtonTest, DockButton_ClickEmitsCaptureFrameClicked) {
+    ui::widgets::TransportDock dock;
+    dock.setState(ui::widgets::TransportDock::State::Ready);
+    dock.setPrimaryEnabled(true);
+
+    bool fired = false;
+    QObject::connect(&dock, &ui::widgets::TransportDock::captureFrameClicked, &dock, [&fired]() { fired = true; });
+
+    auto* btn = dock.findChild<QPushButton*>(QStringLiteral("recordDockCaptureFrame"));
+    ASSERT_NE(btn, nullptr);
+    ASSERT_TRUE(btn->isEnabled());
+    btn->click();
+    EXPECT_TRUE(fired);
 }
 
 } // namespace

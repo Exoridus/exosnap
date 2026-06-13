@@ -993,7 +993,10 @@ exosnap_add_gtest(
 target_include_directories(notification_manager_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(notification_manager_tests PROPERTIES AUTOMOC ON)
 
-# CAPTURE-FRAME-BUTTON-R1 tests
+# CAPTURE-FRAME-DOCK-BUTTON-R1 tests
+# TransportDock, AudioSourceToggle, CountdownSelect included so tests 11-13
+# (dock button seams/visibility/click) can exercise the live widget without
+# requiring the full RecordPage.
 exosnap_add_gtest(
     NAME capture_frame_button_tests
     TEST_PREFIX capture.frame.button.
@@ -1002,11 +1005,14 @@ exosnap_add_gtest(
         services/RecordingCoordinator.cpp
         settings/RecoveryManifestStore.cpp
         notifications/NotificationManager.cpp
+        ui/widgets/TransportDock.cpp
+        ui/widgets/AudioSourceToggle.cpp
+        ui/widgets/CountdownSelect.cpp
     LIBRARIES
         exosnap_output_model_test_support
         exosnap_device_service_test_support
         exosnap_diagnostics_test_support
-        Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
 )
 target_include_directories(capture_frame_button_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(capture_frame_button_tests PRIVATE NOMINMAX)

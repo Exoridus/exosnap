@@ -6,7 +6,6 @@
 #include "../ui/dialogs/SourcePickerOverlay.h"
 #include "../ui/dialogs/SourcePickerWindowRules.h"
 #include "../ui/theme/ExoSnapMetrics.h"
-#include "../ui/theme/ExoSnapPalette.h"
 #include "../ui/widgets/AudioSourceRow.h"
 #include "../ui/widgets/CaptureTargetCard.h"
 #include "../ui/widgets/ComboBoxWheelFilter.h"
@@ -47,8 +46,6 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMouseEvent>
-#include <QPaintEvent>
-#include <QPainter>
 #include <QPointer>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -59,7 +56,6 @@
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QStyle>
-#include <QSvgRenderer>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -637,103 +633,6 @@ WindowEligibility ClassifyWindowForPicker(const WindowPresentation& meta, const 
     return WindowEligibility::Include;
 }
 
-// CAPTURE-FRAME-BUTTON-R1: round 44px camera-glyph button rendered via SVG —
-// matches the Mappe CaptureButtonMock spec exactly (idle/hover/pressed/disabled).
-//
-// SVG path: Lucide-compatible camera body + lens, same source used by
-// AudioSourceToggle for the "webcam" icon key.
-class CaptureFramePreviewButton : public QAbstractButton {
-    Q_OBJECT
-  public:
-    explicit CaptureFramePreviewButton(QWidget* parent = nullptr) : QAbstractButton(parent) {
-        setCursor(Qt::PointingHandCursor);
-        setFocusPolicy(Qt::NoFocus);
-        setFixedSize(44, 44);
-        setAttribute(Qt::WA_Hover, true);
-    }
-
-  protected:
-    void paintEvent(QPaintEvent* /*event*/) override {
-        using ui::theme::ExoSnapPalette;
-
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-
-        const QRectF circle(0.5, 0.5, 43.0, 43.0);
-
-        // ── Resolve colors by interaction state ────────────────────────────────
-        const bool disabled = !isEnabled();
-        const bool hovered = underMouse() && !disabled;
-        const bool pressed = isDown() && !disabled;
-
-        QColor fill;
-        QColor border;
-        QColor glyph;
-
-        const QColor accent(ExoSnapPalette::kAccent); // Studio Mint #9BD9D2
-
-        if (disabled) {
-            // opacity 0.38 handled by setEnabled(false) but we still draw with dim colors
-            fill = QColor(14, 14, 16);
-            fill.setAlpha(static_cast<int>(0.72 * 255));
-            border = QColor(255, 255, 255, static_cast<int>(0.07 * 255)); // line (HT.line)
-            glyph = QColor(ExoSnapPalette::kText2);
-            painter.setOpacity(0.38);
-        } else if (pressed) {
-            // --ac-dim fill, glyph in accent (Studio Mint)
-            fill = accent;
-            fill.setAlpha(static_cast<int>(0.14 * 255)); // ac-dim = rgba(155,217,210,0.14)
-            border = accent;                             // --ac border
-            glyph = accent;
-        } else if (hovered) {
-            // hover: darker bg, accent border --ac-b2 (rgba 0.60)
-            fill = QColor(14, 14, 16);
-            fill.setAlpha(static_cast<int>(0.85 * 255));
-            border = accent;
-            border.setAlpha(static_cast<int>(0.60 * 255)); // --ac-b2
-            glyph = QColor(ExoSnapPalette::kText0);        // HT.ink #F1F1EF
-        } else {
-            // idle: rgba(14,14,16,0.72), line2 border
-            fill = QColor(14, 14, 16);
-            fill.setAlpha(static_cast<int>(0.72 * 255));
-            border = QColor(255, 255, 255, static_cast<int>(0.12 * 255)); // line2
-            glyph = QColor(ExoSnapPalette::kText0);                       // HT.ink
-        }
-
-        painter.setPen(QPen(border, 1.0));
-        painter.setBrush(fill);
-        painter.drawEllipse(circle);
-
-        // Camera SVG path: body + lens (same as AudioSourceToggle "webcam" key)
-        const QByteArray cameraPath =
-            "M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"
-            "M12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6z";
-
-        QByteArray svg;
-        svg.reserve(400);
-        svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='");
-        svg.append(glyph.name(QColor::HexRgb).toUtf8());
-        svg.append("' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='");
-        svg.append(cameraPath);
-        svg.append("'/></svg>");
-
-        QSvgRenderer renderer(svg);
-        // 19px glyph centered in 44px circle: margin = (44-19)/2 ≈ 12.5
-        constexpr double kGlyphSize = 19.0;
-        constexpr double kOffset = (44.0 - kGlyphSize) / 2.0;
-        renderer.render(&painter, QRectF(kOffset, kOffset, kGlyphSize, kGlyphSize));
-    }
-
-    // Trigger repaint on hover changes.
-    bool event(QEvent* e) override {
-        if (e->type() == QEvent::HoverEnter || e->type() == QEvent::HoverLeave ||
-            e->type() == QEvent::MouseButtonPress || e->type() == QEvent::MouseButtonRelease) {
-            update();
-        }
-        return QAbstractButton::event(e);
-    }
-};
-
 } // namespace
 
 bool RecordPage::eventFilter(QObject* watched, QEvent* event) {
@@ -788,7 +687,6 @@ void RecordPage::resizeEvent(QResizeEvent* event) {
     updateResponsiveLayout();
     updatePreviewHeightClamp();
     updatePreviewContextChips();
-    repositionCaptureFrameButton();
 }
 
 void RecordPage::showEvent(QShowEvent* event) {
@@ -841,8 +739,6 @@ void RecordPage::updatePreviewHeightClamp() {
     if (preview_surface_->isDxgiPreviewActive()) {
         preview_surface_->repositionDxgiPreview();
     }
-
-    repositionCaptureFrameButton();
 }
 
 void RecordPage::updateResponsiveLayout() {
@@ -956,28 +852,9 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     preview_surface_host_layout->addStretch(1);
     preview_column_layout->addWidget(preview_surface_host_, 1);
 
-    // CAPTURE-FRAME-BUTTON-R1: 44px round camera button floating top-right of the
-    // preview surface.  Parented to preview_surface_host_ so it clips to the
-    // preview column; repositioned after layout by repositionCaptureFrameButton().
-    auto* cfpb = new CaptureFramePreviewButton(preview_surface_host_);
-    cfpb->setObjectName(QStringLiteral("captureFramePreviewButton"));
-    cfpb->setToolTip(QStringLiteral("Capture frame"));
-    cfpb->setEnabled(false); // enabled once coordinator is ready
-    cfpb->setVisible(false);
-    connect(cfpb, &QAbstractButton::clicked, this, &RecordPage::onHotkeyCaptureFrame);
-    capture_frame_preview_btn_ = cfpb;
-
-    // Shutter-flash overlay: a semi-transparent white panel that briefly covers
-    // the preview surface on a successful frame capture.
-    shutter_flash_overlay_ = new QWidget(preview_surface_host_);
-    shutter_flash_overlay_->setObjectName(QStringLiteral("captureShutterFlash"));
-    shutter_flash_overlay_->setAttribute(Qt::WA_TransparentForMouseEvents);
-    shutter_flash_overlay_->setVisible(false);
-
-    shutter_flash_timer_ = new QTimer(this);
-    shutter_flash_timer_->setSingleShot(true);
-    connect(shutter_flash_timer_, &QTimer::timeout, shutter_flash_overlay_, &QWidget::hide);
-
+    // CAPTURE-FRAME-DOCK-BUTTON-R1: the capture-frame action is now on the transport
+    // dock (right side, round icon button).  The preview-corner button and shutter
+    // flash overlay were removed because they were occluded by the DXGI native HWND.
     cockpit_split_layout_->addWidget(preview_column_, 7);
 
     auto* rail_column = new QWidget(cockpit_row);
@@ -3588,9 +3465,8 @@ void RecordPage::onHotkeyCaptureFrame() {
         return;
     const auto st = coordinator_->State();
     if (st == UiRecordingState::Ready || st == UiRecordingState::Recording || st == UiRecordingState::Paused) {
-        // CAPTURE-FRAME-BUTTON-R1: disable the preview button while save is in flight.
-        if (capture_frame_preview_btn_)
-            capture_frame_preview_btn_->setEnabled(false);
+        // CAPTURE-FRAME-DOCK-BUTTON-R1: dock button is disabled via applyState() while
+        // a capture is in flight; the coordinator's callback re-enables it via refresh().
         coordinator_->CaptureFrame();
     }
 }
@@ -3676,9 +3552,8 @@ void RecordPage::showCaptureFrameStatus(bool success, const QString& path, const
             const QString name = QFileInfo(path).fileName();
             capture_frame_status_label_->setText(QStringLiteral("Frame saved: %1").arg(name));
             capture_frame_status_label_->setToolTip(path);
-            // CAPTURE-FRAME-BUTTON-R1: shutter flash + success toast on frame save.
+            // CAPTURE-FRAME-DOCK-BUTTON-R1: success toast on frame save.
             if (!path.isEmpty()) {
-                triggerShutterFlash();
                 emit captureFrameSaved(path);
             }
         }
@@ -3692,55 +3567,8 @@ void RecordPage::showCaptureFrameStatus(bool success, const QString& path, const
     capture_frame_status_label_->style()->polish(capture_frame_status_label_);
     capture_frame_status_label_->setVisible(true);
     capture_frame_status_timer_->start(3000);
-    // Re-enable the preview button once the save is complete.
-    updateCaptureFrameButtonState();
-}
-
-// CAPTURE-FRAME-BUTTON-R1 helpers ─────────────────────────────────────────────
-
-void RecordPage::repositionCaptureFrameButton() {
-    if (!capture_frame_preview_btn_ || !preview_surface_ || !preview_surface_host_)
-        return;
-
-    // The actual preview_surface_ is centered inside preview_surface_host_ by the
-    // HBoxLayout's stretches.  Compute its position in host-local coordinates.
-    const QRect surface_rect = preview_surface_->geometry();
-
-    // Button sits 14px from the top-right of the actual preview surface.
-    constexpr int kMargin = 14;
-    constexpr int kBtnSize = 44;
-    const int btn_x = surface_rect.right() - kBtnSize - kMargin + 1;
-    const int btn_y = surface_rect.top() + kMargin;
-    capture_frame_preview_btn_->setGeometry(btn_x, btn_y, kBtnSize, kBtnSize);
-    capture_frame_preview_btn_->raise();
-
-    // Shutter-flash covers the entire preview surface.
-    if (shutter_flash_overlay_) {
-        shutter_flash_overlay_->setGeometry(surface_rect);
-        shutter_flash_overlay_->raise();
-    }
-}
-
-void RecordPage::triggerShutterFlash() {
-    if (!shutter_flash_overlay_ || !shutter_flash_timer_)
-        return;
-    shutter_flash_overlay_->show();
-    shutter_flash_timer_->start(120); // 120 ms per spec
-}
-
-void RecordPage::updateCaptureFrameButtonState() {
-    if (!capture_frame_preview_btn_)
-        return;
-    if (!coordinator_) {
-        capture_frame_preview_btn_->setEnabled(false);
-        return;
-    }
-    const auto st = coordinator_->State();
-    const bool capturable =
-        (st == UiRecordingState::Ready || st == UiRecordingState::Recording || st == UiRecordingState::Paused);
-    capture_frame_preview_btn_->setEnabled(capturable);
-    // Show only when there is something to capture.
-    capture_frame_preview_btn_->setVisible(capturable);
+    // CAPTURE-FRAME-DOCK-BUTTON-R1: dock button state is driven by applyState() via
+    // updateTransportDock(); no separate re-enable call needed here.
 }
 
 void RecordPage::onSelectMonitorTarget() {
@@ -5179,9 +5007,6 @@ void RecordPage::refresh() {
     syncWebcamPreviewCapture();
 
     emitChromeState();
-
-    // CAPTURE-FRAME-BUTTON-R1: sync the preview overlay button enabled/visible state.
-    updateCaptureFrameButtonState();
 }
 
 void RecordPage::updateTransportDock() {
@@ -6466,7 +6291,4 @@ void RecordPage::onDisplaysChanged(const exosnap::DisplaySnapshot& snap) {
 
 } // namespace exosnap
 
-// CAPTURE-FRAME-BUTTON-R1: CaptureFramePreviewButton is a Q_OBJECT defined in
-// the anonymous namespace of this translation unit; AUTOMOC needs this include
-// to find the generated metaclass code.
 #include "RecordPage.moc"

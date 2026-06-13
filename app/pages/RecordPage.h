@@ -313,11 +313,6 @@ class RecordPage : public QWidget {
     QString buildTimerText(bool recording) const;
     bool isSourceSelectionLocked() const;
     void showCaptureFrameStatus(bool success, const QString& path, const QString& error);
-    // CAPTURE-FRAME-BUTTON-R1: reposition the capture-frame button and shutter flash
-    // to the top-right of the actual preview_surface_ within preview_surface_host_.
-    void repositionCaptureFrameButton();
-    void triggerShutterFlash();
-    void updateCaptureFrameButtonState();
     void onDockAddMarker();
     void onDockSplit();
     void requestSplit(recorder_core::SplitTriggerSource source);
@@ -482,15 +477,6 @@ class RecordPage : public QWidget {
     QWidget* legacy_host_ = nullptr;
     QLabel* capture_frame_status_label_ = nullptr;
     QTimer* capture_frame_status_timer_ = nullptr;
-
-    // CAPTURE-FRAME-BUTTON-R1: round 44px camera button overlaid at top-right of the
-    // live preview.  Positioned as a sibling of preview_surface_ inside
-    // preview_surface_host_; repositioned by repositionCaptureFrameButton().
-    // Type: CaptureFramePreviewButton (QAbstractButton subclass in RecordPage.cpp anon-ns).
-    QAbstractButton* capture_frame_preview_btn_ = nullptr;
-    // 120ms white shutter-flash overlay — same parent as capture_frame_preview_btn_.
-    QWidget* shutter_flash_overlay_ = nullptr;
-    QTimer* shutter_flash_timer_ = nullptr;
 
     // Marker feedback label (brief flash near the dock)
     QLabel* marker_feedback_label_ = nullptr;
