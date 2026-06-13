@@ -2,8 +2,33 @@
 
 ## Status
 
-Accepted — implementation scheduled for 0.2.0 (container registry) and 0.5.0 (full capability
-registry) (see roadmap).
+Partially implemented — 0.2.0 container registry shipped (CONTAINER-COMPAT-REGISTRY-R1).
+Full capability registry (encoder capabilities, HDR, rate-control) deferred to 0.5.0.
+
+### 0.2.0 implementation notes
+
+`ContainerCompatRegistry` (`libs/capability/include/capability/container_compat_registry.h`,
+`libs/capability/src/container_compat_registry.cpp`) is the single source of truth for
+container × video-codec × audio-codec compatibility.
+
+- All 27 combinations of the 3 × 3 × 3 enum dimensions are explicitly classified.
+- `ContainerCompatLevel` maps to the ADR classification model (`Recommended` / `Allowed` /
+  `Experimental` / `Fallback` / `Prohibited`).
+- The registry drives `CapabilitySet::QueryCombo()` (via `RegistryEntryToSupportAnnotation`):
+  `Recommended → Available`, `Allowed → ValidUnvalidated`,
+  `Experimental + Fallback → NotImplemented`, `Prohibited → Invalid`.
+- `RecordingPreset::ReconcileContainerCodecs()` now delegates entirely to
+  `ContainerCompatRegistry::ReconcileCodecs()`, removing the previous ad-hoc switch/if chain.
+- `SettingsResolver` (resolver.cpp) delegates preferred-codec queries to the registry.
+- The registry blocks recording start for Prohibited combinations via the existing
+  `CapabilitySet → SettingsResolver::ValidateConfig → RecordingCoordinator` path; no new
+  UI paradigm was introduced.
+
+**Pre-v1 behaviour change:** MKV + HEVC + (any audio) previously reconciled to MKV + H264 + AAC
+(ad-hoc HEVC→H264 downgrade). Under the registry the reconciler falls through to the primary
+working path (AV1 + Opus) because no Recommended or Allowed entry exists for HEVC in any
+combination today. The old H264 downgrade was implicit; the new path is explicit and reversible
+once HEVC is implemented.
 
 ## Context
 

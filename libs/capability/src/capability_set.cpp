@@ -1,5 +1,7 @@
 #include <capability/capability_set.h>
 
+#include <capability/container_compat_registry.h>
+
 #include <string_view>
 
 namespace exosnap::capability {
@@ -41,64 +43,33 @@ SupportAnnotation LookupAnnotation(const MapT& map, const KeyT& key, std::string
     return it->second;
 }
 
+// Maps a ContainerCompatLevel from the registry to a SupportLevel for the
+// CapabilitySet query layer.
+//
+// Mapping rationale (ADR 0010):
+//   Recommended  → Available        (vetted; fully selectable)
+//   Allowed      → ValidUnvalidated (selectable with caveat; warning emitted)
+//   Experimental → NotImplemented   (not user-selectable until validated)
+//   Fallback     → NotImplemented   (not user-selectable)
+//   Prohibited   → Invalid          (hard block; must not appear in UI)
+SupportAnnotation RegistryEntryToSupportAnnotation(const ContainerCompatEntry& entry) {
+    switch (entry.level) {
+    case ContainerCompatLevel::Recommended:
+        return {SupportLevel::Available, std::string(entry.reason)};
+    case ContainerCompatLevel::Allowed:
+        return {SupportLevel::ValidUnvalidated, std::string(entry.reason)};
+    case ContainerCompatLevel::Experimental:
+        return {SupportLevel::NotImplemented, std::string(entry.reason)};
+    case ContainerCompatLevel::Fallback:
+        return {SupportLevel::NotImplemented, std::string(entry.reason)};
+    case ContainerCompatLevel::Prohibited:
+        return {SupportLevel::Invalid, std::string(entry.reason)};
+    }
+    return {SupportLevel::Invalid, "Unknown compatibility level."};
+}
+
 SupportAnnotation BaseContainerVideoAudioAnnotation(Container c, VideoCodec v, AudioCodec a) {
-    if (c == Container::WebM) {
-        if (a == AudioCodec::AacMf) {
-            return {SupportLevel::Invalid, "WebM does not support AAC in ExoSnap's product matrix."};
-        }
-        if (a == AudioCodec::Pcm) {
-            return {SupportLevel::Invalid, "WebM + PCM is not supported in the current product matrix."};
-        }
-        if (v == VideoCodec::H264Nvenc || v == VideoCodec::HevcNvenc) {
-            return {SupportLevel::Invalid, "WebM supports AV1 in ExoSnap's product matrix; H.264/HEVC are invalid."};
-        }
-        if (v == VideoCodec::Av1Nvenc && a == AudioCodec::Opus) {
-            return {SupportLevel::Available, "Primary validated WebM path: AV1 NVENC + Opus."};
-        }
-        return {SupportLevel::Invalid, "This WebM combination is not in the supported product matrix."};
-    }
-
-    if (c == Container::Mp4) {
-        if (a == AudioCodec::Opus) {
-            return {SupportLevel::Invalid, "MP4 does not support Opus; select AAC for MP4 recordings."};
-        }
-        if (a == AudioCodec::Pcm) {
-            return {SupportLevel::Invalid, "MP4 + PCM is not supported."};
-        }
-        if (a == AudioCodec::AacMf) {
-            if (v == VideoCodec::H264Nvenc) {
-                return {SupportLevel::Available, "Validated MP4 H.264+AAC path via IMFSinkWriter."};
-            }
-            if (v == VideoCodec::HevcNvenc) {
-                return {SupportLevel::NotImplemented, "MP4 + HEVC + AAC is not implemented; implement H.264 first."};
-            }
-            if (v == VideoCodec::Av1Nvenc) {
-                return {SupportLevel::NotImplemented, "AV1-in-MP4 is deferred; use WebM for AV1 recordings."};
-            }
-        }
-        return {SupportLevel::Invalid, "This MP4 combination is not in the supported product matrix."};
-    }
-
-    if (c == Container::Matroska) {
-        if (v == VideoCodec::Av1Nvenc && a == AudioCodec::AacMf) {
-            return {SupportLevel::Available, "Validated M3.2 path."};
-        }
-        if (v == VideoCodec::Av1Nvenc && a == AudioCodec::Opus) {
-            return {SupportLevel::Available, "Validated M4 Opus path (MKV + AV1 NVENC + Opus)."};
-        }
-        if (v == VideoCodec::Av1Nvenc && a == AudioCodec::Pcm) {
-            return {SupportLevel::NotImplemented, "MKV + AV1 + PCM is not implemented."};
-        }
-        if (v == VideoCodec::H264Nvenc && a == AudioCodec::AacMf) {
-            return {SupportLevel::Available, "Validated MKV H.264+AAC path via libwebm Matroska muxer."};
-        }
-        if (v == VideoCodec::HevcNvenc && a == AudioCodec::AacMf) {
-            return {SupportLevel::NotImplemented, "MKV + HEVC + AAC is planned but not yet implemented."};
-        }
-        return {SupportLevel::Invalid, "This MKV combination is not in the supported product matrix."};
-    }
-
-    return {SupportLevel::Invalid, "Unknown container in capability matrix."};
+    return RegistryEntryToSupportAnnotation(ContainerCompatRegistry::Query(c, v, a));
 }
 
 SupportAnnotation StaticMatrixAnnotation(Container c, VideoCodec v, AudioCodec a, ChromaSubsampling cs, BitDepth bd) {

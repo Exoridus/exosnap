@@ -1,5 +1,6 @@
 add_library(exosnap_capability STATIC
   src/config_types.cpp
+  src/container_compat_registry.cpp
   src/capability_set.cpp
   src/capability_builder.cpp
   src/runtime_query.cpp
@@ -23,6 +24,13 @@ target_link_libraries(exosnap_capability
     mfuuid
     dxgi
     ole32
+)
+
+exosnap_add_gtest(
+  NAME container_compat_registry_tests
+  TEST_PREFIX capability.
+  SOURCES tests/test_container_compat_registry.cpp
+  LIBRARIES exosnap_capability
 )
 
 exosnap_add_gtest(

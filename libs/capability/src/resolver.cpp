@@ -1,6 +1,7 @@
 #include <capability/resolver.h>
 
 #include <capability/config_types.h>
+#include <capability/container_compat_registry.h>
 
 #include <utility>
 
@@ -27,28 +28,13 @@ std::string Stringify(BitDepth value) {
     return std::string(ToString(value));
 }
 
+// Delegates to the registry so the preferred codecs are defined in a single place.
 AudioCodec PreferredAudioCodecForContainer(Container container) {
-    switch (container) {
-    case Container::Matroska:
-        return AudioCodec::Opus;
-    case Container::WebM:
-        return AudioCodec::Opus;
-    case Container::Mp4:
-        return AudioCodec::AacMf;
-    }
-    return AudioCodec::AacMf;
+    return ContainerCompatRegistry::PreferredAudioCodec(container);
 }
 
 VideoCodec PreferredVideoCodecForContainer(Container container) {
-    switch (container) {
-    case Container::WebM:
-        return VideoCodec::Av1Nvenc;
-    case Container::Matroska:
-        return VideoCodec::Av1Nvenc;
-    case Container::Mp4:
-        return VideoCodec::H264Nvenc;
-    }
-    return VideoCodec::H264Nvenc;
+    return ContainerCompatRegistry::PreferredVideoCodec(container);
 }
 
 SupportAnnotation QueryResolvedCombo(const CapabilitySet& caps, const UserRecorderConfig& config) {
