@@ -198,9 +198,12 @@ QSize RecordingOverlayWindow::sizeHint() const {
     font.setWeight(QFont::Medium);
     font.setLetterSpacing(QFont::AbsoluteSpacing, 0.5);
 
-    const QString label = QStringLiteral("REC  00:00:00");
     const QFontMetrics fm(font);
-    const int text_width = fm.horizontalAdvance(label);
+    // Reserve width for the widest state label so the elapsed time never clips
+    // when paused ("PAUSED  00:00:00" is wider than "REC  00:00:00"). This also
+    // keeps the pill width stable across REC<->PAUSED transitions.
+    const int text_width = qMax(fm.horizontalAdvance(QStringLiteral("REC  00:00:00")),
+                                fm.horizontalAdvance(QStringLiteral("PAUSED  00:00:00")));
     const int w = kPaddingH + kDotSize + kDotTextGap + text_width + kPaddingH;
     const int h = fm.height() + kPaddingV * 2;
     return QSize(w, h);
