@@ -2672,6 +2672,37 @@ QPushButton#recordDockOpenFolder {
     padding: 0;
 }
 
+/* Capture-frame dock button — CAPTURE-FRAME-DOCK-BUTTON-R1.
+   Round 44×44 icon-only camera button on the right side of the dock.
+   States: idle / hover (accent border) / pressed (ac-dim fill) / disabled (0.38).
+   Fixed size and border-radius enforced in C++ (setFixedSize(44,44)). */
+QPushButton[dockAction="captureFrame"] {
+    border-radius: 22px;
+    padding: 0;
+    background: rgba(14, 14, 16, 184);
+    border: 1px solid rgba(255, 255, 255, 31);
+}
+
+QPushButton[dockAction="captureFrame"]:hover {
+    background: rgba(14, 14, 16, 217);
+    border-color: rgba(155, 217, 210, 153);
+}
+
+QPushButton[dockAction="captureFrame"]:pressed {
+    background: rgba(155, 217, 210, 36);
+    border-color: ${accent};
+}
+
+QPushButton[dockAction="captureFrame"]:disabled {
+    background: rgba(14, 14, 16, 184);
+    border-color: rgba(255, 255, 255, 18);
+    opacity: 0.38;
+}
+
+QPushButton[dockAction="captureFrame"]:focus {
+    border-color: ${accent};
+}
+
 QPushButton[dockAction="record"],
 QPushButton[dockAction="resume"] {
     color: ${accent-ink};

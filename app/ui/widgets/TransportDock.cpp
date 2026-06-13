@@ -3,13 +3,17 @@
 #include "AudioSourceToggle.h"
 #include "CountdownSelect.h"
 
+#include <QByteArray>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
+#include <QPainter>
+#include <QPixmap>
 #include <QPushButton>
 #include <QSize>
 #include <QStyle>
+#include <QSvgRenderer>
 
 namespace exosnap::ui::widgets {
 namespace {
@@ -33,6 +37,47 @@ void setStyledProperty(QWidget* widget, const char* name, const QString& value) 
     widget->style()->unpolish(widget);
     widget->style()->polish(widget);
     widget->update();
+}
+
+// Build a 44×44 round camera icon button for the dock's capture-frame action.
+// The camera glyph is the same Lucide-compatible SVG path used by AudioSourceToggle
+// for the "webcam" key.  State (idle/hover/pressed/disabled) is styled via QSS on the
+// "dockAction=captureFrame" property — no manual painting required.
+QPushButton* makeCaptureFrameButton(QWidget* parent) {
+    // Camera SVG: body + lens — identical to AudioSourceToggle "webcam" icon path.
+    constexpr auto kCameraPath =
+        "M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"
+        "M12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6z";
+
+    // Build an SVG at a neutral color; QSS will tint via the object-name rule.
+    QByteArray svg;
+    svg.reserve(400);
+    svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'"
+               " stroke='#C8C8C4' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'>"
+               "<path d='");
+    svg.append(kCameraPath);
+    svg.append("'/></svg>");
+
+    QSvgRenderer renderer(svg);
+    constexpr int kBtn = 44;
+    constexpr int kGlyph = 19;
+    QPixmap pix(kGlyph, kGlyph);
+    pix.fill(Qt::transparent);
+    {
+        QPainter p(&pix);
+        renderer.render(&p, QRectF(0, 0, kGlyph, kGlyph));
+    }
+
+    auto* btn = new QPushButton(parent);
+    btn->setObjectName(QStringLiteral("recordDockCaptureFrame"));
+    btn->setProperty("dockAction", QStringLiteral("captureFrame"));
+    btn->setCursor(Qt::PointingHandCursor);
+    btn->setFixedSize(kBtn, kBtn);
+    btn->setIcon(QIcon(pix));
+    btn->setIconSize(QSize(kGlyph, kGlyph));
+    btn->setToolTip(QStringLiteral("Capture frame (Alt+P)"));
+    btn->setAccessibleName(QStringLiteral("Capture frame"));
+    return btn;
 }
 
 } // namespace
@@ -130,9 +175,10 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
                                          QStringLiteral("Record again"), 156, action_row_);
     stop_btn_ = makeActionButton(QStringLiteral("recordDockStop"), QStringLiteral("stop"), QStringLiteral("Stop"), 104,
                                  action_row_);
-    capture_frame_btn_ = makeActionButton(QStringLiteral("recordDockCaptureFrame"), QStringLiteral("utility"),
-                                          QStringLiteral("Capture frame"), 0, action_row_);
-    capture_frame_btn_->setToolTip(QStringLiteral("Save the current composed frame as PNG (Capture frame)"));
+    // CAPTURE-FRAME-DOCK-BUTTON-R1: round 44×44 icon-only camera button on the right
+    // side of the dock, replacing the old text "Capture frame" button and the
+    // removed preview-corner overlay button.  Styled via dockAction="captureFrame".
+    capture_frame_btn_ = makeCaptureFrameButton(action_row_);
 
     add_marker_btn_ = makeActionButton(QStringLiteral("recordDockAddMarker"), QStringLiteral("utility"),
                                        QStringLiteral("Add marker"), 0, action_row_);
