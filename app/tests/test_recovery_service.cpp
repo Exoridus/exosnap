@@ -183,5 +183,142 @@ TEST(RecoveryServiceTest, ScanReturnsSizeMetadata) {
     EXPECT_EQ(candidates[0].artefact_size_bytes, 1024);
 }
 
+// =============================================================================
+// ADR-0015: Finish tests
+// =============================================================================
+
+// 6. Finish with MKV-intended + finalized=true → rename
+TEST(RecoveryServiceTest, FinishMkvFinalizedRenames) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    const QString store_path = QDir(tmp.path()).filePath(QStringLiteral("manifest.json"));
+    RecoveryManifestStore store(store_path);
+    RecoveryService service(store);
+
+    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("session.mkv.tmp"));
+    ASSERT_TRUE(CreateDummyFile(artefact));
+
+    auto e = MakeEntry(QStringLiteral("finish-mkv-id"), artefact, QStringLiteral("mkv"), /*finalized=*/true);
+    e.final_output_path = QDir(tmp.path()).filePath(QStringLiteral("session.mkv"));
+    store.Add(e);
+
+    const auto result = service.Finish(e);
+    EXPECT_TRUE(result.success) << result.message;
+
+    // Artefact should be gone (renamed).
+    EXPECT_FALSE(QFileInfo::exists(artefact));
+    // Manifest entry removed on success.
+    EXPECT_TRUE(store.Entries().isEmpty());
+    // Renamed file at final output path.
+    EXPECT_TRUE(QFileInfo::exists(QDir(tmp.path()).filePath(QStringLiteral("session.mkv"))));
+}
+
+// 7. Finish with MKV-intended + finalized=false → does NOT crash on bad path
+//    (RemuxToMkv will fail gracefully; entry preserved)
+TEST(RecoveryServiceTest, FinishMkvNonFinalizedPreservesEntryOnRemuxFail) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    const QString store_path = QDir(tmp.path()).filePath(QStringLiteral("manifest.json"));
+    RecoveryManifestStore store(store_path);
+    RecoveryService service(store);
+
+    // Artefact exists but is not a valid MKV (dummy content) — remux will fail.
+    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("corrupt.mkv"));
+    ASSERT_TRUE(CreateDummyFile(artefact, QByteArray("not a real mkv")));
+
+    auto e = MakeEntry(QStringLiteral("finish-corrupt-id"), artefact, QStringLiteral("mkv"), /*finalized=*/false);
+    e.final_output_path = QDir(tmp.path()).filePath(QStringLiteral("corrupt.mkv"));
+    store.Add(e);
+
+    const auto result = service.Finish(e);
+    // Remux fails on dummy data; Finish returns failure and preserves the entry.
+    EXPECT_FALSE(result.success);
+    EXPECT_FALSE(result.message.empty());
+    // Artefact is preserved.
+    EXPECT_TRUE(QFileInfo::exists(artefact));
+    // Manifest entry is preserved.
+    EXPECT_EQ(store.Entries().size(), 1);
+}
+
+// 8. Finish uses fallback folder when stored folder no longer exists
+TEST(RecoveryServiceTest, FinishFallsBackToConfiguredOutputFolder) {
+    QTemporaryDir tmp_artefact;
+    QTemporaryDir tmp_fallback;
+    ASSERT_TRUE(tmp_artefact.isValid());
+    ASSERT_TRUE(tmp_fallback.isValid());
+
+    const QString store_path = QDir(tmp_artefact.path()).filePath(QStringLiteral("manifest.json"));
+    RecoveryManifestStore store(store_path);
+    RecoveryService service(store);
+    service.SetFallbackOutputFolder(tmp_fallback.path());
+
+    // Create artefact in artefact dir.
+    const QString artefact = QDir(tmp_artefact.path()).filePath(QStringLiteral("rec.mkv.tmp"));
+    ASSERT_TRUE(CreateDummyFile(artefact));
+
+    // Set final_output_path to a dir that does NOT exist.
+    auto e = MakeEntry(QStringLiteral("fallback-id"), artefact, QStringLiteral("mkv"), /*finalized=*/true);
+    e.final_output_path = QStringLiteral("C:/NonExistentDir12345/rec.mkv");
+    store.Add(e);
+
+    const auto result = service.Finish(e);
+    EXPECT_TRUE(result.success) << result.message;
+    // The renamed file should be in the fallback folder.
+    EXPECT_FALSE(QFileInfo::exists(artefact));
+    const QString expected_in_fallback = QDir(tmp_fallback.path()).filePath(QStringLiteral("rec.mkv"));
+    EXPECT_TRUE(QFileInfo::exists(expected_in_fallback));
+}
+
+// 9. Finish with MP4-intended → does NOT crash on dummy data (graceful failure)
+TEST(RecoveryServiceTest, FinishMp4NonFinalizedPreservesEntryOnRemuxFail) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    const QString store_path = QDir(tmp.path()).filePath(QStringLiteral("manifest.json"));
+    RecoveryManifestStore store(store_path);
+    RecoveryService service(store);
+
+    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("rec.mkv.tmp"));
+    ASSERT_TRUE(CreateDummyFile(artefact, QByteArray("not a real mkv")));
+
+    auto e = MakeEntry(QStringLiteral("mp4-finish-id"), artefact, QStringLiteral("mp4"), /*finalized=*/false);
+    e.final_output_path = QDir(tmp.path()).filePath(QStringLiteral("rec.mp4"));
+    store.Add(e);
+
+    const auto result = service.Finish(e);
+    EXPECT_FALSE(result.success);             // remux fails on dummy data
+    EXPECT_TRUE(QFileInfo::exists(artefact)); // artefact preserved
+    EXPECT_EQ(store.Entries().size(), 1);     // entry preserved
+}
+
+// 10. SetFallbackOutputFolder with non-existent fallback still uses artefact parent
+TEST(RecoveryServiceTest, FinishFallsBackToArtefactParentWhenNothingExists) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    const QString store_path = QDir(tmp.path()).filePath(QStringLiteral("manifest.json"));
+    RecoveryManifestStore store(store_path);
+    RecoveryService service(store);
+    // Set a non-existent fallback.
+    service.SetFallbackOutputFolder(QStringLiteral("C:/DoesNotExist99999"));
+
+    const QString artefact = QDir(tmp.path()).filePath(QStringLiteral("lastresort.mkv.tmp"));
+    ASSERT_TRUE(CreateDummyFile(artefact));
+
+    // final_output_path points to a non-existent dir.
+    auto e = MakeEntry(QStringLiteral("lastresort-id"), artefact, QStringLiteral("mkv"), /*finalized=*/true);
+    e.final_output_path = QStringLiteral("C:/DoesNotExist88888/lastresort.mkv");
+    store.Add(e);
+
+    const auto result = service.Finish(e);
+    // Last resort is artefact parent (tmp.path()), which exists → rename succeeds.
+    EXPECT_TRUE(result.success) << result.message;
+    EXPECT_FALSE(QFileInfo::exists(artefact));
+    // Renamed file is in artefact parent (tmp.path()).
+    EXPECT_TRUE(QFileInfo::exists(QDir(tmp.path()).filePath(QStringLiteral("lastresort.mkv"))));
+}
+
 } // namespace
 } // namespace exosnap

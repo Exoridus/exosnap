@@ -78,8 +78,21 @@ Invalid combinations are not offered.
 
 - **Crash recovery is available** (0.2.0). ExoSnap writes a recovery manifest
   before each recording starts. If a session is interrupted, the next launch
-  shows a recovery overlay offering "Keep as MKV", "Export as MP4", or "Discard"
-  for each orphaned artefact. Dismissing defers the decision to the next launch.
+  shows a recovery overlay with three actions per candidate (ADR-0015):
+  - **Finish** — saves the recording as originally configured (MKV rename/repair
+    or MP4 remux, honouring the manifest snapshot; no user format choice).
+  - **Continue** — shown only for non-finalized (true-crash) artefacts. Arms the
+    coordinator in a paused state; Resume starts the next recording slice aligned
+    with the per-segment machinery. The 1–2 s data loss at the crash boundary is
+    accepted and visible as the slice boundary.
+  - **Delete** — inline two-step confirm, permanently removes the artefact.
+  - **Decide later** — explicit text button (replacing the bare `×`). Entries
+    remain in the manifest; the overlay re-shows at the next launch.
+- At most one **Continue** session can be armed at a time. Choosing Continue on a
+  second candidate finalizes the first (its background remux completes; the new
+  candidate takes its place).
+- Continued sessions produce independent recording slices — no single-file concat.
+  Use Quick Trim (planned for 0.11.0) for post-hoc joining.
 - No notification is shown when recovery candidates exist but the overlay is
   dismissed (toast/tray notifications are planned for 0.3.0).
 - For MKV/WebM split recordings, segments that were already finalized before an

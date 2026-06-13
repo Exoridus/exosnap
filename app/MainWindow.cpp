@@ -746,6 +746,9 @@ void MainWindow::checkAndShowRecoveryOverlay() {
         recovery_overlay_->deleteLater();
         recovery_overlay_ = nullptr;
     });
+    // ADR-0015: wire "Continue" to the coordinator via RecordPage.
+    connect(recovery_overlay_, &ui::dialogs::RecoveryOverlay::continueRequested, record_page_,
+            &RecordPage::armFromRecovery);
     recovery_overlay_->openOverlay();
 }
 

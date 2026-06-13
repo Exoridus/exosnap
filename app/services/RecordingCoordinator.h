@@ -74,6 +74,37 @@ class RecordingCoordinator {
     void SetRecoveryManifestStore(RecoveryManifestStore* store);
     [[nodiscard]] RecoveryManifestStore* GetRecoveryManifestStore() const noexcept;
 
+    // ADR-0015: armed-from-recovery state.
+    // Enter the armed-from-recovery (paused) state for the given candidate.
+    // The artefact is repaired/remuxed in the background as the first slice;
+    // resume starts the next slice (same session naming). If another candidate
+    // is already armed, it is finalized first (multi-recovery replacement rule).
+    // `audio_ui_state` and `preset` carry forward the session configuration.
+    // The caller is responsible for kicking off the background remux of the
+    // artefact (via RecoveryService::Finish); this only records the armed state.
+    //
+    // Returns false if the coordinator is currently recording (not in Ready /
+    // Completed / Failed / ArmedFromRecovery state).
+    struct RecoverySessionInfo {
+        RecoveryManifestEntry manifest_entry; // the candidate being continued
+        recorder_core::CaptureTarget target;  // capture target to resume on
+        bool target_valid = false;            // false when target needs re-selection
+    };
+    bool ArmFromRecovery(const RecoverySessionInfo& info);
+
+    // Finalize the currently armed recovery session: its slices become a finished
+    // recording (background remux already in flight or completed). Transitions back
+    // to Ready / ArmedFromRecovery (for the new candidate) or Ready.
+    // No-op when not in ArmedFromRecovery state.
+    void FinalizeArmedRecovery();
+
+    // True when in the ArmedFromRecovery state.
+    [[nodiscard]] bool IsArmedFromRecovery() const noexcept;
+
+    // Returns the currently armed recovery session info (valid only when
+    // IsArmedFromRecovery() returns true).
+    [[nodiscard]] const RecoverySessionInfo& ArmedRecoverySession() const noexcept;
+
     // Inject a disk-space provider for the runtime low-disk guard.
     // When nullptr (the default) a Win32DiskSpaceProvider is used automatically.
     // Tests inject a stub to simulate arbitrary free-space conditions.
@@ -206,6 +237,12 @@ class RecordingCoordinator {
     // UUID of the manifest entry for the currently active or most recent recording.
     // Empty when no session is in flight.
     QString current_manifest_id_;
+
+    // ADR-0015: armed-from-recovery state.
+    bool is_armed_from_recovery_ = false;
+    RecoverySessionInfo armed_recovery_session_{};
+    // Placeholder for future: slice count for the recovery session.
+    int armed_recovery_slice_count_ = 0;
 
     // Low-disk guard (LOW-DISK-GUARD-R1)
     // Nullable injected provider; fallback to the Win32 implementation when nullptr.

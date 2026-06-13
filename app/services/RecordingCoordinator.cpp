@@ -502,7 +502,8 @@ void RecordingCoordinator::RevalidateCapabilities() {
     if (!has_caps_)
         return;
     const bool busy = state_ == UiRecordingState::Preparing || state_ == UiRecordingState::Recording ||
-                      state_ == UiRecordingState::Paused || state_ == UiRecordingState::Stopping;
+                      state_ == UiRecordingState::Paused || state_ == UiRecordingState::Stopping ||
+                      state_ == UiRecordingState::ArmedFromRecovery;
     if (busy)
         return;
 
@@ -625,7 +626,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
         return false;
     }
     if (state_ != UiRecordingState::Ready && state_ != UiRecordingState::Completed &&
-        state_ != UiRecordingState::Failed) {
+        state_ != UiRecordingState::Failed && state_ != UiRecordingState::ArmedFromRecovery) {
         return false;
     }
     if (!has_caps_)
@@ -844,6 +845,74 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     });
 
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0015: armed-from-recovery state
+// ---------------------------------------------------------------------------
+
+bool RecordingCoordinator::ArmFromRecovery(const RecoverySessionInfo& info) {
+    // Only valid when not actively recording and in a stable UI state.
+    const auto st = State();
+    if (st == UiRecordingState::Preparing || st == UiRecordingState::Recording || st == UiRecordingState::Stopping ||
+        st == UiRecordingState::Saving) {
+        diagnostics::AppLog::warning(QStringLiteral("recovery"),
+                                     QStringLiteral("ArmFromRecovery rejected: state=%1").arg(static_cast<int>(st)));
+        return false;
+    }
+
+    // Multi-recovery replacement rule: if another candidate is already armed,
+    // finalize it first (its slices become a finished recording; the background
+    // remux is already in flight or completed by the overlay's Finish action).
+    if (is_armed_from_recovery_) {
+        diagnostics::AppLog::info(QStringLiteral("recovery"),
+                                  QStringLiteral("ArmFromRecovery: finalizing previous armed session id=%1")
+                                      .arg(armed_recovery_session_.manifest_entry.id));
+        FinalizeArmedRecovery();
+    }
+
+    is_armed_from_recovery_ = true;
+    armed_recovery_session_ = info;
+    armed_recovery_slice_count_ = 0;
+
+    diagnostics::AppLog::info(QStringLiteral("recovery"), QStringLiteral("ArmFromRecovery: armed id=%1 target_valid=%2")
+                                                              .arg(info.manifest_entry.id)
+                                                              .arg(info.target_valid));
+
+    PostStateChange(UiRecordingState::ArmedFromRecovery);
+    return true;
+}
+
+void RecordingCoordinator::FinalizeArmedRecovery() {
+    if (!is_armed_from_recovery_)
+        return;
+
+    diagnostics::AppLog::info(QStringLiteral("recovery"), QStringLiteral("FinalizeArmedRecovery: id=%1 slices=%2")
+                                                              .arg(armed_recovery_session_.manifest_entry.id)
+                                                              .arg(armed_recovery_slice_count_));
+
+    is_armed_from_recovery_ = false;
+    armed_recovery_session_ = {};
+    armed_recovery_slice_count_ = 0;
+
+    // Transition back to Ready (if capabilities loaded) or the pre-existing state.
+    const auto st = State();
+    if (st == UiRecordingState::ArmedFromRecovery) {
+        if (has_caps_ && validation_result_.succeeded) {
+            PostStateChange(UiRecordingState::Ready);
+        } else if (has_caps_) {
+            PostStateChange(UiRecordingState::Blocked);
+        }
+        // If no caps yet, stay in LoadingCapabilities (OnCapabilitiesReady will update).
+    }
+}
+
+bool RecordingCoordinator::IsArmedFromRecovery() const noexcept {
+    return is_armed_from_recovery_;
+}
+
+const RecordingCoordinator::RecoverySessionInfo& RecordingCoordinator::ArmedRecoverySession() const noexcept {
+    return armed_recovery_session_;
 }
 
 void RecordingCoordinator::StopRecording() {
