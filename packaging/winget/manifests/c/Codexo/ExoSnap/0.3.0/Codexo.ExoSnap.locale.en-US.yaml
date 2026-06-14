@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
 PackageIdentifier: Codexo.ExoSnap
-PackageVersion: 0.2.0
+PackageVersion: 0.3.0
 PackageLocale: en-US
 Publisher: Codexo
 PublisherUrl: https://github.com/Exoridus
@@ -16,8 +16,10 @@ Description: >-
   high-performance NVIDIA NVENC pipeline, flexible container/codec profiles, multi-track
   audio routing, a webcam overlay, and built-in diagnostics. It captures an application
   window, a monitor, or a screen region at CFR 60 fps, records to MKV, WebM, or MP4, and
-  blocks invalid recordings before start. ExoSnap 0.2.0 is a pre-v1 Windows preview and
-  requires an NVIDIA GPU with supported NVENC.
+  blocks invalid recordings before start. ExoSnap 0.3.0 adds capture-excluded on-screen
+  overlays (recording status, diagnostics, countdown), a tray icon with unread badge,
+  notification toasts, close-to-tray, and an opt-in quick-control pill. Requires an NVIDIA
+  GPU with supported NVENC.
 Moniker: exosnap
 Tags:
   - recorder
@@ -27,6 +29,7 @@ Tags:
   - av1
   - webcam
   - diagnostics
-ReleaseNotesUrl: https://github.com/Exoridus/exosnap/releases/tag/v0.2.0
+  - overlay
+ReleaseNotesUrl: https://github.com/Exoridus/exosnap/releases/tag/v0.3.0
 ManifestType: defaultLocale
 ManifestVersion: 1.10.0

@@ -6,7 +6,7 @@ webcam PiP overlay, crash recovery, and built-in diagnostics. Dark-mode-first Qt
 
 ## Status / current release
 
-- **Latest release:** `0.2.0` — "Reliability foundation".
+- **Latest release:** `0.3.0` — "Presence and notifications".
 - **Pre-v1 notice:** settings, preset, and recording-history schemas may change incompatibly before 1.0.0.
 - **Platform:** Windows 10/11 x64 (Windows 11 is the primary target; Windows 10 is best-effort).
 - **Hardware encoder:** NVIDIA NVENC only. An NVIDIA GPU with supported NVENC capability is required.
@@ -16,8 +16,14 @@ webcam PiP overlay, crash recovery, and built-in diagnostics. Dark-mode-first Qt
 - **Privacy:** no telemetry, analytics, or network connections — all data stays local.
   See [`PRIVACY.md`](PRIVACY.md).
 
-## Features (0.2.0 reliability wave)
+## Features (0.3.0 presence and notifications wave)
 
+- Capture-excluded on-screen overlays (recording status, diagnostics, countdown) — visible on screen
+  but excluded from the captured frame via `WDA_EXCLUDEFROMCAPTURE`.
+- Tray icon with idle/recording/paused states and an unread notification badge.
+- Notification toasts: saved, low storage, unexpected stop, recovery available.
+- Close-to-tray (opt-in); opt-in interactive quick-control pill overlay.
+- Refined region-selection overlay and capture-frame dock button.
 - MKV-first recording; MP4 delivered via libavformat remux-on-stop (progressive, faststart); MKV and
   WebM are also supported as direct output formats.
 - Crash recovery: a recovery manifest written before each session, plus a startup recovery UI that

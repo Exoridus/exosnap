@@ -39,5 +39,6 @@ cannot start. Do not remove the `Dependencies` block;
 
 ## Status
 
-- **0.2.0** — current manifest in this directory; submitted to `microsoft/winget-pkgs` for the v0.2.0 release.
+- **0.3.0** — current manifest in this directory; to be submitted to `microsoft/winget-pkgs` for the v0.3.0 release. SHA256 placeholder to be filled after the build.
+- **0.2.0** — earlier submission: https://github.com/microsoft/winget-pkgs/pull/387393
 - **0.1.0** — earlier submission: https://github.com/microsoft/winget-pkgs/pull/386449
