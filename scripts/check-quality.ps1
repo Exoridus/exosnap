@@ -204,6 +204,10 @@ if ($cppcheck) {
         '-I', 'libs/recorder_core/include',
         '-I', 'libs/capability/include',
         '-I', 'libs/recorder_facade/include',
+        # Vendored third-party sources are not ours to analyze (matches the /W0
+        # treatment in libs/update/CMakeLists.txt). Monocypher's header uses a
+        # C++ `namespace` behind a macro guard that cppcheck mis-parses as C.
+        '-i', 'libs/update/third_party',
         'libs',
         'app'
     )
