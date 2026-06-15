@@ -98,6 +98,7 @@ endif()
 add_subdirectory(libs/recorder_core)
 add_subdirectory(libs/capability)
 add_subdirectory(libs/recorder_facade)
+add_subdirectory(libs/update)
 add_subdirectory(app)
 add_subdirectory(tests)
 
