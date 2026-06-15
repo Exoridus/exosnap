@@ -35,7 +35,7 @@ set(SPDLOG_BUILD_EXAMPLE OFF CACHE INTERNAL "")
 set(SPDLOG_INSTALL OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(spdlog)
 _exosnap_install_license("spdlog v1.14.1"
-    "${PROJECT_BINARY_DIR}/_deps/spdlog-src/LICENSE" "spdlog.txt")
+    "${spdlog_SOURCE_DIR}/LICENSE" "spdlog.txt")
 
 # --- nlohmann/json (retained for structured JSONL logging) ---
 FetchContent_Declare(
@@ -47,7 +47,7 @@ set(JSON_BuildTests OFF CACHE INTERNAL "")
 set(JSON_Install OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(nlohmann_json)
 _exosnap_install_license("nlohmann/json v3.11.3"
-    "${PROJECT_BINARY_DIR}/_deps/nlohmann_json-src/LICENSE.MIT" "nlohmann_json.txt")
+    "${nlohmann_json_SOURCE_DIR}/LICENSE.MIT" "nlohmann_json.txt")
 
 # --- toml++ v3.4.0 (available for future config serialisation) ---
 FetchContent_Declare(
@@ -57,7 +57,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(tomlplusplus)
 _exosnap_install_license("toml++ v3.4.0"
-    "${PROJECT_BINARY_DIR}/_deps/tomlplusplus-src/LICENSE" "tomlplusplus.txt")
+    "${tomlplusplus_SOURCE_DIR}/LICENSE" "tomlplusplus.txt")
 
 # --- IBM Plex Mono (bundled font, latin Regular/Medium) ---
 # Vendored TTFs live in app/assets/fonts (compiled into the Qt resource system);
@@ -78,7 +78,7 @@ set(OPUS_INSTALL_PKG_CONFIG_MODULE   OFF CACHE INTERNAL "")
 set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(libopus)
 _exosnap_install_license("Opus v1.5.2"
-    "${PROJECT_BINARY_DIR}/_deps/libopus-src/COPYING" "opus.txt")
+    "${libopus_SOURCE_DIR}/COPYING" "opus.txt")
 
 # --- FDK-AAC v2.0.3 ---
 # Fraunhofer FDK AAC codec. License: compatible with GPL 3.0 per FSF (2017).
@@ -91,7 +91,7 @@ set(_exosnap_saved_bsl ${BUILD_SHARED_LIBS})
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(fdk-aac)
 _exosnap_install_license("FDK-AAC v2.0.3"
-    "${PROJECT_BINARY_DIR}/_deps/fdk-aac-src/NOTICE" "fdk-aac.txt")
+    "${fdk-aac_SOURCE_DIR}/NOTICE" "fdk-aac.txt")
 set(BUILD_SHARED_LIBS ${_exosnap_saved_bsl} CACHE BOOL "" FORCE)
 unset(_exosnap_saved_bsl)
 
@@ -107,7 +107,7 @@ FetchContent_Declare(
 set(EBML_BUILD_SHARED_LIBS OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(EBML)
 _exosnap_install_license("libebml release-1.4.5"
-    "${PROJECT_BINARY_DIR}/_deps/ebml-src/LICENSE.LGPL" "libebml.txt")
+    "${ebml_SOURCE_DIR}/LICENSE.LGPL" "libebml.txt")
 
 # FetchContent builds the raw 'ebml' target but install(EXPORT) is never run,
 # so EBMLTargets.cmake (referenced by EBMLConfig.cmake) does not exist.
@@ -136,7 +136,7 @@ FetchContent_Declare(
 set(MATROSKA_BUILD_SHARED_LIBS OFF CACHE INTERNAL "")
 FetchContent_MakeAvailable(libmatroska)
 _exosnap_install_license("libmatroska release-1.7.1"
-    "${PROJECT_BINARY_DIR}/_deps/libmatroska-src/LICENSE.LGPL" "libmatroska.txt")
+    "${libmatroska_SOURCE_DIR}/LICENSE.LGPL" "libmatroska.txt")
 
 # Same pattern: create build-tree targets file and namespaced alias.
 FetchContent_GetProperties(libmatroska BINARY_DIR _mkv_bindir SOURCE_DIR _mkv_srcdir)
