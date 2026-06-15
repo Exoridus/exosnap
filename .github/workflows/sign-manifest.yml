@@ -1,0 +1,110 @@
+# sign-manifest.yml -- CI step: generate and sign the ExoSnap update manifest.
+#
+# Triggered after a release build succeeds. Reads the ed25519 private key from
+# the repository secret EXOSNAP_UPDATE_SIGNING_KEY (base64-encoded 64-byte
+# ed25519 seed), constructs a JSON manifest, signs it with minisign-compatible
+# ed25519, and uploads the manifest as a release asset.
+#
+# The PRIVATE KEY is NEVER committed to the repository.
+# The corresponding PUBLIC KEY (32 bytes) is embedded in the binary at
+# build time via EXOSNAP_UPDATE_PUBLIC_KEY_HEX.
+#
+# Tool: python3 with pynacl (libsodium Python binding), which is available
+# on all GitHub Actions runners via pip.
+
+name: Sign Update Manifest
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      installer_sha256:
+        required: true
+        type: string
+      portable_sha256:
+        required: true
+        type: string
+      installer_url:
+        required: true
+        type: string
+      portable_url:
+        required: true
+        type: string
+    secrets:
+      EXOSNAP_UPDATE_SIGNING_KEY:
+        required: true
+
+jobs:
+  sign-manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install pynacl
+        run: pip install pynacl
+
+      - name: Generate and sign manifest
+        env:
+          SIGNING_KEY_B64: ${{ secrets.EXOSNAP_UPDATE_SIGNING_KEY }}
+          VERSION:          ${{ inputs.version }}
+          INSTALLER_SHA256: ${{ inputs.installer_sha256 }}
+          PORTABLE_SHA256:  ${{ inputs.portable_sha256 }}
+          INSTALLER_URL:    ${{ inputs.installer_url }}
+          PORTABLE_URL:     ${{ inputs.portable_url }}
+        run: |
+          python3 - <<'EOF'
+          import base64, json, os, nacl.signing
+
+          seed_b64 = os.environ["SIGNING_KEY_B64"]
+          seed = base64.b64decode(seed_b64)
+          signing_key = nacl.signing.SigningKey(seed)
+
+          body = {
+              "version":                  os.environ["VERSION"],
+              "minimum_accepted_version": os.environ["VERSION"],
+              "packages": [
+                  {
+                      "kind":   "installer",
+                      "url":    os.environ["INSTALLER_URL"],
+                      "sha256": os.environ["INSTALLER_SHA256"].lower()
+                  },
+                  {
+                      "kind":   "portable",
+                      "url":    os.environ["PORTABLE_URL"],
+                      "sha256": os.environ["PORTABLE_SHA256"].lower()
+                  }
+              ]
+          }
+
+          body_json = json.dumps(body, separators=(",", ":"))
+          sig_bytes = signing_key.sign(body_json.encode()).signature
+          sig_hex   = sig_bytes.hex()
+
+          manifest = dict(body)
+          manifest["signature"] = sig_hex
+
+          with open("update-manifest.json", "w") as f:
+              json.dump(manifest, f, indent=2)
+
+          print("Manifest signed successfully.")
+          print(f"Version:   {body['version']}")
+          print(f"Signature: {sig_hex[:16]}...")
+          EOF
+
+      - name: Upload manifest as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-manifest
+          path: update-manifest.json
+
+  # ---------------------------------------------------------------------------
+  # Authenticode signing hook (DORMANT -- awaiting SignPath cert)
+  # ---------------------------------------------------------------------------
+  # sign-authenticode:
+  #   needs: sign-manifest
+  #   runs-on: windows-latest
+  #   steps:
+  #     - name: Sign installer (SignPath)
+  #       # Uncomment and configure once SignPath certificate is provisioned.
+  #       # See docs/decisions/0012-update-security-model.md for context.
+  #       run: echo "Authenticode signing dormant -- awaiting cert"

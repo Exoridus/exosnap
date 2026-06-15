@@ -77,6 +77,38 @@ The update system supports two channels: `Stable` and `Preview`. The default is 
 may opt in to `Preview` in settings. Each channel has its own signed manifest. Channel switching
 requires an explicit user action and a restart.
 
+## Clarification (0.4.0 implementation)
+
+The original decision conflates two independent signatures. They are explicitly separated here so
+the 0.4.0 slices and the hosting model are unambiguous.
+
+### Update-integrity signature (ed25519) — required, self-managed, no cost
+
+The "signed manifest and package hash" requirement above is satisfied by an **ed25519 (minisign-
+style) signature**, not by an Authenticode code-signing certificate. The release pipeline holds the
+private key as a CI secret (e.g. a GitHub Actions secret) and signs the manifest in the release
+step; the corresponding public key is **embedded in the client binary** at build time. This needs
+no certificate authority, no paid certificate, and no server beyond the public release host.
+
+### Hosting over GitHub Releases — no custom infrastructure
+
+Manifests and packages are hosted as **GitHub Release assets**. `Stable` maps to the latest
+non-prerelease, `Preview` to the latest prerelease (each with its own signed manifest). Update
+checks hit the public, unauthenticated GitHub Releases API — consistent with "no GitHub token in
+the client". No ExoSnap-operated server is required for the updater.
+
+### Authenticode code-signing — separate concern, not gating this wave
+
+Authenticode signing (which addresses Windows Defender SmartScreen reputation and the "unknown
+publisher" prompt) is a **different** mechanism from the update-integrity signature and from
+HTTPS — HTTPS protects the download in transit, Authenticode binds the file to a verified publisher
+at rest and across mirrors (WinGet/Chocolatey/Scoop). It is **not** required for update integrity
+and is **not** a blocker for the 0.4.0 updater. It is wired as an **optional, late-bound CI signing
+step** that activates once an OSS code-signing certificate is available (a SignPath Foundation
+application is pending as of this writing). Until then official builds ship unsigned, exactly as
+0.3.0 did, and the broader installer/reputation work remains a later-version concern per the
+roadmap.
+
 ## Consequences
 
 - No update-related secret is ever present in the client binary or configuration file.

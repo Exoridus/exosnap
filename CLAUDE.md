@@ -20,16 +20,8 @@ Read:
 - Exact label: `Merge with above`
 - Default profile: `MKV + AV1 + Opus + CFR 60 fps`
 - Recording start is blocked by diagnostic blockers
-- Main UI pages:
-  - Record
-  - Video
-  - Audio
-  - Output
-  - Webcam
-  - Hotkeys
-  - Diagnostics
-  - Logs
-  - Advanced
+- Top-level navigation: **Record, Settings, Hotkeys, Diagnostics, Logs, About**
+  - **Settings** hosts Video, Audio, Output, Webcam, and Advanced as embedded sections
 
 ## Work style
 

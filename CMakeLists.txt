@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.27)
 # Canonical version source of truth for the whole project. Every other version
 # form (application metadata, Windows VERSIONINFO, About surface, release
 # artifact name) is derived from PROJECT_VERSION — do not duplicate it elsewhere.
-project(exosnap VERSION 0.3.0 LANGUAGES CXX)
+project(exosnap VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -76,6 +76,12 @@ add_subdirectory(third_party)
 # and the convenience bundle FFmpeg::mux.
 include(cmake/VendorFFmpeg.cmake)
 
+# sentry-native crash capture (optional; off by default).
+# Set EXOSNAP_ENABLE_CRASH_CAPTURE=ON to fetch and link sentry-native.
+# Set EXOSNAP_OFFICIAL_BUILD=ON (release pipeline only) to compile in the DSN.
+# See cmake/VendorSentry.cmake for license audit, spike verdict, and usage notes.
+include(cmake/VendorSentry.cmake)
+
 # Sets CMAKE_CXX_CLANG_TIDY / CMAKE_CXX_CPPCHECK for all subsequent targets.
 # Only active when EXOSNAP_CLANG_TIDY / EXOSNAP_CPPCHECK are ON (lint preset).
 include(cmake/exosnap_static_analysis.cmake)
@@ -98,8 +104,14 @@ endif()
 add_subdirectory(libs/recorder_core)
 add_subdirectory(libs/capability)
 add_subdirectory(libs/recorder_facade)
+add_subdirectory(libs/crash_capture)
+add_subdirectory(libs/update)
 add_subdirectory(app)
 add_subdirectory(tests)
+
+# crashpad_handler.exe staging lives in app/CMakeLists.txt, where the exosnap
+# target is defined (correct POST_BUILD scope) and the crashpad_handler target
+# is reachable via $<TARGET_FILE:crashpad_handler>.
 
 option(EXOSNAP_BUILD_PROBES "Build ExoSnap developer probe executables" OFF)
 if(EXOSNAP_BUILD_PROBES)
