@@ -4,6 +4,8 @@
 #include "runtime_snapshot.h"
 #include "support_level.h"
 
+#include <recorder_core/codec_types.h>
+
 #include <cstddef>
 #include <string>
 #include <unordered_map>
@@ -48,6 +50,11 @@ struct CapabilitySet {
     SupportAnnotation QueryAudioCodec(AudioCodec a) const;
     SupportAnnotation QueryChroma(ChromaSubsampling cs) const;
     SupportAnnotation QueryBitDepth(BitDepth bd) const;
+
+    // Query support for a canonical rate-control mode (ADR 0009).
+    // Returns Available for CQ/VBR/CBR; NotImplemented for Lossless.
+    // This is a static capability declaration (not runtime-probed per-session).
+    SupportAnnotation QueryRateControlMode(recorder_core::RateControlMode mode) const;
 };
 
 } // namespace exosnap::capability

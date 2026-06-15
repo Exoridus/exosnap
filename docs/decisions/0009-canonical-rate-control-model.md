@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted — UI exposure and per-encoder mapping implementation scheduled for 0.5.0 (see roadmap).
+Accepted — NVENC ConstantQuality / VariableBitrate / ConstantBitrate implemented in 0.5.0
+(feat/0.5.0-video-rate-control). Lossless deferred; CapabilitySet::QueryRateControlMode returns
+NotImplemented for Lossless and the UI hides it.
 
 ## Context
 

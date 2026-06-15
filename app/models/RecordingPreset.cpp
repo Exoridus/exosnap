@@ -205,6 +205,24 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
     if (config.output.container == capability::Container::Mp4 && !config.video.cfr) {
         config.video.cfr = true;
     }
+    // Video: rate_control — default to ConstantQuality if an unknown value slips through.
+    using RC = recorder_core::RateControlMode;
+    if (config.video.rate_control != RC::ConstantQuality && config.video.rate_control != RC::VariableBitrate &&
+        config.video.rate_control != RC::ConstantBitrate && config.video.rate_control != RC::Lossless) {
+        config.video.rate_control = RC::ConstantQuality;
+    }
+    // Lossless is not implemented — silently revert to ConstantQuality.
+    if (config.video.rate_control == RC::Lossless) {
+        config.video.rate_control = RC::ConstantQuality;
+    }
+    // Video: clamp bitrate to [1000, 200000] kbps; only meaningful for VBR/CBR.
+    constexpr uint32_t kMinBitrateKbps = 1000u;
+    constexpr uint32_t kMaxBitrateKbps = 200000u;
+    if (config.video.bitrate_kbps < kMinBitrateKbps) {
+        config.video.bitrate_kbps = kMinBitrateKbps;
+    } else if (config.video.bitrate_kbps > kMaxBitrateKbps) {
+        config.video.bitrate_kbps = kMaxBitrateKbps;
+    }
 
     // Audio: ensure mic_gain_linear is finite and strictly positive.
     if (!std::isfinite(config.audio.mic_gain_linear) || config.audio.mic_gain_linear <= 0.0f) {
@@ -321,6 +339,12 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
 
     // --- Video ---
     if (a.video.quality != b.video.quality) {
+        return false;
+    }
+    if (a.video.rate_control != b.video.rate_control) {
+        return false;
+    }
+    if (a.video.bitrate_kbps != b.video.bitrate_kbps) {
         return false;
     }
     if (a.video.cfr != b.video.cfr) {
@@ -491,6 +515,12 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
 
     // --- Video ---
     if (a.video.quality != b.video.quality) {
+        return false;
+    }
+    if (a.video.rate_control != b.video.rate_control) {
+        return false;
+    }
+    if (a.video.bitrate_kbps != b.video.bitrate_kbps) {
         return false;
     }
     if (a.video.cfr != b.video.cfr) {

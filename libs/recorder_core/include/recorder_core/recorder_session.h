@@ -194,8 +194,15 @@ struct RecorderConfig {
     ChromaSubsampling chroma = ChromaSubsampling::Cs420;
     BitDepth bit_depth = BitDepth::Bit8;
 
-    // NVENC quality tier — maps to CQP values in the encoder.
+    // NVENC quality tier — maps to CQP values in the encoder (used for ConstantQuality mode).
     NvencQualityPreset nvenc_quality_preset = NvencQualityPreset::Balanced;
+
+    // Canonical rate-control mode (ADR 0009). Defaults to ConstantQuality (existing behavior).
+    RateControlMode nvenc_rate_control = RateControlMode::ConstantQuality;
+
+    // Target bitrate in kbps — used for VariableBitrate and ConstantBitrate modes.
+    // Ignored (and zero-ed by the encoder) when mode is ConstantQuality.
+    uint32_t nvenc_bitrate_kbps = 20000;
 
     // Frame rate (numerator/denominator)
     uint32_t frame_rate_num = 60;

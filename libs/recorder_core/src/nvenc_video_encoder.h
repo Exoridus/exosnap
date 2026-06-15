@@ -21,6 +21,11 @@ class NvencVideoEncoder : public IVideoEncoder {
         m_nvenc.SetQualityPreset(preset);
     }
 
+    // Set canonical rate-control mode and target bitrate before Configure().
+    void SetRateControl(RateControlMode mode, uint32_t bitrate_kbps) noexcept {
+        m_nvenc.SetRateControl(mode, bitrate_kbps);
+    }
+
     bool Open(void* gpu_context, std::string& out_error) override;
     bool Configure(uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den,
                    std::string& out_error) override;

@@ -111,6 +111,33 @@ std::optional<recorder_core::NvencQualityPreset> NvencQualityPresetFromString(QS
     return std::nullopt;
 }
 
+QString RateControlModeToString(recorder_core::RateControlMode v) {
+    switch (v) {
+    case recorder_core::RateControlMode::ConstantQuality:
+        return QStringLiteral("cq");
+    case recorder_core::RateControlMode::VariableBitrate:
+        return QStringLiteral("vbr");
+    case recorder_core::RateControlMode::ConstantBitrate:
+        return QStringLiteral("cbr");
+    case recorder_core::RateControlMode::Lossless:
+        return QStringLiteral("lossless");
+    }
+    return QStringLiteral("cq");
+}
+
+std::optional<recorder_core::RateControlMode> RateControlModeFromString(QStringView s) {
+    const QString n = s.trimmed().toString().toLower();
+    if (n == QStringLiteral("cq"))
+        return recorder_core::RateControlMode::ConstantQuality;
+    if (n == QStringLiteral("vbr"))
+        return recorder_core::RateControlMode::VariableBitrate;
+    if (n == QStringLiteral("cbr"))
+        return recorder_core::RateControlMode::ConstantBitrate;
+    if (n == QStringLiteral("lossless"))
+        return recorder_core::RateControlMode::Lossless;
+    return std::nullopt;
+}
+
 QString MicChannelModeToString(recorder_core::MicChannelMode v) {
     switch (v) {
     case recorder_core::MicChannelMode::Auto:
@@ -358,6 +385,8 @@ void SavePresetItem(QSettings& settings, const RecordingPreset& preset) {
     // --- Video ---
     const auto& vid = preset.config.video;
     settings.setValue(QStringLiteral("vid_quality"), NvencQualityPresetToString(vid.quality));
+    settings.setValue(QStringLiteral("vid_rate_control"), RateControlModeToString(vid.rate_control));
+    settings.setValue(QStringLiteral("vid_bitrate_kbps"), static_cast<int>(vid.bitrate_kbps));
     settings.setValue(QStringLiteral("vid_cfr"), vid.cfr);
     settings.setValue(QStringLiteral("vid_capture_cursor"), vid.capture_cursor);
     settings.setValue(QStringLiteral("vid_frame_rate_num"), static_cast<int>(vid.frame_rate_num));
@@ -502,6 +531,19 @@ std::optional<RecordingPreset> LoadPresetItem(QSettings& settings) {
         const auto q = NvencQualityPresetFromString(settings.value(QStringLiteral("vid_quality")).toString());
         if (q.has_value())
             vid.quality = *q;
+    }
+    {
+        const auto rc = RateControlModeFromString(settings.value(QStringLiteral("vid_rate_control")).toString());
+        if (rc.has_value())
+            vid.rate_control = *rc;
+        // If absent (older preset schema), defaults to ConstantQuality — no behavior change.
+    }
+    {
+        bool ok = false;
+        const int bk = settings.value(QStringLiteral("vid_bitrate_kbps"), 20000).toInt(&ok);
+        if (ok && bk > 0)
+            vid.bitrate_kbps = static_cast<uint32_t>(bk);
+        // SanitizePreset() will clamp to [1000, 200000].
     }
     if (settings.contains(QStringLiteral("vid_cfr"))) {
         vid.cfr = settings.value(QStringLiteral("vid_cfr"), true).toBool();

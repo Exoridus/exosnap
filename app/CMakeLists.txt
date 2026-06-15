@@ -441,6 +441,20 @@ exosnap_add_gtest(
 target_include_directories(recording_preset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_preset_tests PRIVATE ole32.lib shell32.lib)
 
+# 0.5.0 video rate-control tests (ADR 0009): ComputeNvencRcParams mapping,
+# preset round-trip, dirty-tracking, sanitize, and capability queries.
+exosnap_add_gtest(
+    NAME video_rate_control_tests
+    TEST_PREFIX video_rc.
+    SOURCES
+        tests/test_video_rate_control.cpp
+        models/RecordingPreset.cpp
+        models/OutputSettingsModel.cpp
+    LIBRARIES exosnap_capability recorder_core
+)
+target_include_directories(video_rate_control_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(video_rate_control_tests PRIVATE ole32.lib shell32.lib)
+
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     exosnap_add_gtest(
         NAME visual_scenario_tests

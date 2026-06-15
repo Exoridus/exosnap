@@ -676,6 +676,8 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
 
     auto config = exosnap::capability::ToRecorderCoreConfig(resolved_user_config_, caps_);
     config.nvenc_quality_preset = video_settings_.quality;
+    config.nvenc_rate_control = video_settings_.rate_control;
+    config.nvenc_bitrate_kbps = video_settings_.bitrate_kbps;
     config.frame_rate_num = video_settings_.frame_rate_num;
     config.frame_rate_den = video_settings_.frame_rate_den;
     config.cfr = video_settings_.cfr;

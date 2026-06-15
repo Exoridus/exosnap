@@ -258,6 +258,16 @@ exosnap_add_gtest(
 target_include_directories(test_nvenc_video_encoder_interface PRIVATE src
     "${CMAKE_SOURCE_DIR}/third_party/nvidia")
 
+# test_nvenc_rc_params: pure unit tests for ComputeNvencRcParams (no GPU needed).
+exosnap_add_gtest(
+    NAME test_nvenc_rc_params
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_nvenc_rc_params.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_nvenc_rc_params PRIVATE src
+    "${CMAKE_SOURCE_DIR}/third_party/nvidia")
+
 exosnap_add_gtest(
     NAME test_mic_channel_mapping
     TEST_PREFIX recorder_core.
