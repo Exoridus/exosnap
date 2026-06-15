@@ -1,9 +1,16 @@
 # sign-manifest.yml -- CI step: generate and sign the ExoSnap update manifest.
 #
 # Triggered after a release build succeeds. Reads the ed25519 private key from
-# the repository secret EXOSNAP_UPDATE_SIGNING_KEY (base64-encoded 64-byte
-# ed25519 seed), constructs a JSON manifest, signs it with minisign-compatible
-# ed25519, and uploads the manifest as a release asset.
+# the repository secret EXOSNAP_UPDATE_SIGNING_KEY (base64-encoded 32-byte
+# ed25519 seed — PyNaCl's SigningKey requires exactly 32 bytes), constructs a
+# JSON manifest, signs it with ed25519 (RFC 8032, verified client-side by
+# Monocypher), and uploads the signed manifest as a CI artifact.
+#
+# NOTE: 0.4.0's shipping update feature (check + notify) does NOT consume this
+# manifest — it compares versions via the public GitHub Releases API. The signed
+# manifest is forward-looking for the deferred in-place updater (Update C), which
+# verifies it against the embedded public key. Running this is therefore optional
+# for the 0.4.0 release.
 #
 # The PRIVATE KEY is NEVER committed to the repository.
 # The corresponding PUBLIC KEY (32 bytes) is embedded in the binary at
@@ -35,6 +42,31 @@ on:
     secrets:
       EXOSNAP_UPDATE_SIGNING_KEY:
         required: true
+  # Standalone manual trigger (run from the Actions UI after the GitHub Release
+  # exists, supplying the final asset URLs + SHA-256 hashes). Uses the repository
+  # secret EXOSNAP_UPDATE_SIGNING_KEY directly.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, e.g. 0.4.0'
+        required: true
+        type: string
+      installer_sha256:
+        description: 'SHA-256 of the MSI (hex)'
+        required: true
+        type: string
+      portable_sha256:
+        description: 'SHA-256 of the portable ZIP (hex)'
+        required: true
+        type: string
+      installer_url:
+        description: 'Public URL of the MSI release asset'
+        required: true
+        type: string
+      portable_url:
+        description: 'Public URL of the portable ZIP release asset'
+        required: true
+        type: string
 
 jobs:
   sign-manifest:

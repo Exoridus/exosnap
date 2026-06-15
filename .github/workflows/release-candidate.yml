@@ -33,15 +33,56 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
 
+      # Crashpad + mini_chromium nest extremely deep under FetchContent; the
+      # default build-tree path blows past Windows MAX_PATH (260). Long-path
+      # support is mandatory for the official (crash-capture ON) build to succeed.
+      - name: Enable git long paths
+        run: git config --global core.longpaths true
+
+      # Cache the fetched + built sentry-native/Crashpad tree (official build only)
+      # so reruns do not re-clone and re-build the whole dependency. Mirrors the
+      # crash-capture-build job; keyed on the pinned sentry-native version.
+      - name: Cache FetchContent deps (sentry-native + Crashpad)
+        uses: actions/cache@v4
+        with:
+          path: C:/es
+          key: es-fetchcontent-${{ runner.os }}-${{ hashFiles('cmake/VendorSentry.cmake') }}
+          restore-keys: |
+            es-fetchcontent-${{ runner.os }}-
+
       # Pre-configure the Release tree with EXOSNAP_RELEASE_PDB=ON so the linker
       # emits a separate exosnap.pdb the symbol-archiving step can collect. The
       # release script is then invoked with -SkipConfigure so it builds + packages
       # against this already-configured tree (its build dir is build/windows-x64-
       # release, matching this preset). The .pdb stays in the build tree; the
       # install/ZIP/MSI never ship it (install deploys RUNTIME only).
-      - name: Configure Release tree (with separate PDB)
-        run: cmake --preset windows-x64-release -DEXOSNAP_RELEASE_PDB=ON
+      #
+      # Official build: when the EXOSNAP_UPDATE_PUBLIC_KEY_HEX repo VARIABLE is set,
+      # this enables the full 0.4.0 feature set — crash capture (out-of-process
+      # Crashpad + the Sentry Stage-1 DSN, gated on EXOSNAP_OFFICIAL_BUILD) and
+      # runtime update checking (IsUpdateCheckEnabled() returns true only for
+      # official builds). The embedded public key is required by the CMake gate and
+      # used by the (currently dormant) signed-manifest verification. If the variable
+      # is absent the workflow still produces an UNOFFICIAL build (no DSN, update
+      # checking disabled) so the artifact pipeline never hard-fails on a fresh fork.
+      - name: Configure Release tree
         shell: pwsh
+        env:
+          PUBKEY: ${{ vars.EXOSNAP_UPDATE_PUBLIC_KEY_HEX }}
+        run: |
+          $cfgArgs = @('--preset', 'windows-x64-release', '-DEXOSNAP_RELEASE_PDB=ON')
+          if ($env:PUBKEY) {
+            Write-Host "Official build: crash capture (Sentry DSN) + update checking ENABLED."
+            $cfgArgs += @(
+              '-DEXOSNAP_ENABLE_CRASH_CAPTURE=ON',
+              '-DEXOSNAP_OFFICIAL_BUILD=ON',
+              "-DEXOSNAP_UPDATE_PUBLIC_KEY_HEX=$($env:PUBKEY)",
+              '-DFETCHCONTENT_BASE_DIR=C:/es'
+            )
+          } else {
+            Write-Host "::warning::EXOSNAP_UPDATE_PUBLIC_KEY_HEX repo variable not set — building UNOFFICIAL (no Sentry DSN, update checking disabled at runtime)."
+          }
+          cmake @cfgArgs
 
       - name: Build canonical release artifacts
         run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1 -SkipConfigure -SkipSmoke
