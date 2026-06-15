@@ -25,6 +25,26 @@ set(EXOSNAP_UPDATE_PUBLIC_KEY_HEX ""
 Required when EXOSNAP_OFFICIAL_BUILD=ON. Leave empty for dev builds.")
 
 # ---------------------------------------------------------------------------
+# Vendored Monocypher sources (C, not C++) -- compiled without exosnap::warnings
+# to avoid MSVC /W4 /WX noise on third-party code.
+# ---------------------------------------------------------------------------
+set(_monocypher_dir "${CMAKE_CURRENT_SOURCE_DIR}/third_party/monocypher")
+
+add_library(exosnap_monocypher STATIC
+    ${_monocypher_dir}/monocypher.c
+    ${_monocypher_dir}/monocypher-ed25519.c
+)
+# Public so that consumers can #include the headers without repeating the path.
+target_include_directories(exosnap_monocypher PUBLIC ${_monocypher_dir})
+
+# Suppress all warnings on this third-party target (MSVC: /W0; Clang/GCC: -w).
+target_compile_options(exosnap_monocypher PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/W0>
+    $<$<CXX_COMPILER_ID:Clang>:-w>
+    $<$<CXX_COMPILER_ID:GNU>:-w>
+)
+
+# ---------------------------------------------------------------------------
 # Library
 # ---------------------------------------------------------------------------
 add_library(exosnap_update STATIC
@@ -47,6 +67,7 @@ target_link_libraries(exosnap_update
         nlohmann_json::nlohmann_json
     PRIVATE
         exosnap::warnings
+        exosnap_monocypher   # vendored Monocypher (RFC-8032 ed25519 via SHA-512)
         winhttp    # WinHTTP.lib (Windows SDK)
         bcrypt     # BCrypt.lib  (Windows SDK, SHA-256)
         shell32    # ShellExecuteW

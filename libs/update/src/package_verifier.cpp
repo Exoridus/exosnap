@@ -5,7 +5,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <bcrypt.h>
 #include <shellapi.h>
-#include <windows.h>
+#include <windows.h> // Must come before bcrypt.h (defines LONG/NTSTATUS)
 #pragma comment(lib, "bcrypt.lib")
 
 #include <algorithm>
