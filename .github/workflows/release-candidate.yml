@@ -30,9 +30,55 @@ jobs:
         run: wix eula accept wix7
         shell: pwsh
 
-      - name: Build canonical release artifacts
-        run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1 -SkipSmoke
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # Pre-configure the Release tree with EXOSNAP_RELEASE_PDB=ON so the linker
+      # emits a separate exosnap.pdb the symbol-archiving step can collect. The
+      # release script is then invoked with -SkipConfigure so it builds + packages
+      # against this already-configured tree (its build dir is build/windows-x64-
+      # release, matching this preset). The .pdb stays in the build tree; the
+      # install/ZIP/MSI never ship it (install deploys RUNTIME only).
+      - name: Configure Release tree (with separate PDB)
+        run: cmake --preset windows-x64-release -DEXOSNAP_RELEASE_PDB=ON
         shell: pwsh
+
+      - name: Build canonical release artifacts
+        run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1 -SkipConfigure -SkipSmoke
+        shell: pwsh
+
+      # Archive the Release PDBs for offline symbolication of crash minidumps
+      # (ADR 0017 § Symbol pipeline). Keyed by version + run id so a given build's
+      # symbols are uniquely retrievable. This is the local/offline path; it does
+      # NOT push symbols to a crash service.
+      #
+      # TODO(Crash-C): once a Sentry auth token is provisioned, add a step that
+      # runs `sentry-cli debug-files upload --org <org> --project exosnap <pdbs>`
+      # (and the matching crashpad_handler.pdb) so uploaded minidumps symbolicate
+      # server-side. Deferred per ADR 0017 — needs a CI secret (auth token).
+      - name: Collect Release PDBs
+        id: pdbs
+        run: |
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(\s*exosnap\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)').Matches[0].Groups[1].Value
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $stage = Join-Path $env:RUNNER_TEMP "exosnap-pdbs"
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          $found = Get-ChildItem -Path build/windows-x64-release -Recurse -Filter *.pdb -File -ErrorAction SilentlyContinue
+          foreach ($p in $found) { Copy-Item -LiteralPath $p.FullName -Destination $stage -Force }
+          $count = (Get-ChildItem -Path $stage -Filter *.pdb -File).Count
+          Write-Host "Collected $count PDB file(s) into $stage"
+          if ($count -eq 0) {
+            Write-Host "::warning::No PDB files were found in the Release build tree. Symbol archiving will be empty."
+          }
+          "dir=$stage" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        shell: pwsh
+
+      - name: Upload Release PDBs (symbol archive)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExoSnap-${{ steps.pdbs.outputs.version }}-windows-x64-pdb-${{ github.run_id }}
+          path: ${{ steps.pdbs.outputs.dir }}/*.pdb
+          if-no-files-found: warn
 
       - name: Resolve artifact paths
         id: artifact

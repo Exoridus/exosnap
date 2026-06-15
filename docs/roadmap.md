@@ -169,7 +169,16 @@ These underpin multiple versions and must not be scattered into UI `if`-chains:
 
 ## Next step
 
-**v0.4.0 — crash reporting and updates**
+**v0.4.0 — crash reporting and updates** *(in progress — implemented, pending release tag)*
+
+The 0.4.0 wave is code-complete and undergoing release readiness: local-first Crashpad capture, the
+next-launch privacy-scrubbed crash dialog with Stage-0 GitHub-issue delivery, the Sentry EU SaaS DSN
+(Stage 1, consent-gated, compiled in under the official-build gate), update check with Stable/Preview
+channels, and ed25519 (Monocypher) + SHA-256 signed-manifest verification. Release plumbing — a CI
+job that validates the crash-capture ON build, crashpad_handler.exe packaged into the portable ZIP and
+MSI, and PDB symbol archiving — is in place. Deferred past 0.4.0: the immediate crash reporter
+(Crash A2), automated `sentry-cli` symbol upload (pending an auth token), and in-place auto-update
+(Update C; 0.4.0 is check + notify + manual download). The release tag is **not yet cut**.
 
 The 0.3.0 presence layer has shipped: capture-excluded recording and diagnostics overlays
 (ADR 0016), the tray icon with recording/paused + unread badge, notification toasts (low storage /

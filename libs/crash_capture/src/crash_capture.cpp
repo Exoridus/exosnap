@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -206,7 +207,7 @@ bool Initialize(const CrashCaptureConfig& config) {
 #if defined(EXOSNAP_OFFICIAL_BUILD)
     // EU/.de ingest; write-only key (not a secret)
     sentry_options_set_dsn(
-        options, "https://e57ff3eff29ad472e673830d7f2fee21@o4511566018576384.ingest.de.sentry.io/4511566053900368");
+        options, "https://821c04d67576831b7c77efce2dc13bbc@o4511566018576384.ingest.de.sentry.io/4511566055931984");
 #else
     // No DSN; local minidumps only, no network traffic
     sentry_options_set_dsn(options, "");
@@ -279,6 +280,17 @@ void RevokeUserConsent() {
 #endif
 }
 
+void SendTestEvent(std::string_view message) {
+#if EXOSNAP_SENTRY_AVAILABLE
+    if (s_initialized) {
+        std::string msg(message);
+        sentry_capture_event(sentry_value_new_message_event(SENTRY_LEVEL_INFO, "verify", msg.c_str()));
+    }
+#else
+    (void)message;
+#endif
+}
+
 // ---------------------------------------------------------------------------
 // SetTag
 // ---------------------------------------------------------------------------
@@ -346,6 +358,179 @@ bool ReadAndClearDumpHandledSentinel(const std::string& crash_dir) {
         return false;
     std::filesystem::remove(path, ec);
     return true; // it was present (we don't parse the JSON; presence is the signal)
+}
+
+// ---------------------------------------------------------------------------
+// Session context + clean-exit detection
+//
+// The sidecar is hand-rolled JSON, matching the simplicity of the dump_handled
+// sentinel above (no JSON library). All string values are scrubbed before
+// being written. The reader is a tiny tolerant parser that looks for
+// "key":"value" pairs and the "clean_exit":true|false flag.
+// ---------------------------------------------------------------------------
+static std::string SessionPath(const std::string& crash_dir) {
+    return crash_dir + "\\last_session.json";
+}
+
+// Escape the characters JSON forbids in a string value. The values here are
+// short identifiers (versions/codecs) but we escape defensively so a stray
+// quote/backslash from a scrubbed value cannot corrupt the sidecar.
+static std::string JsonEscape(const std::string& in) {
+    std::string out;
+    out.reserve(in.size() + 8);
+    for (char c : in) {
+        switch (c) {
+        case '"':
+            out += "\\\"";
+            break;
+        case '\\':
+            out += "\\\\";
+            break;
+        case '\n':
+            out += "\\n";
+            break;
+        case '\r':
+            out += "\\r";
+            break;
+        case '\t':
+            out += "\\t";
+            break;
+        default:
+            out += c;
+            break;
+        }
+    }
+    return out;
+}
+
+// Tolerant extractor for a string field: finds "key" then the next ':' then the
+// quoted value, undoing the minimal escaping JsonEscape produces.
+static std::optional<std::string> JsonFindString(const std::string& doc, const std::string& key) {
+    std::string needle = "\"" + key + "\"";
+    size_t kpos = doc.find(needle);
+    if (kpos == std::string::npos)
+        return std::nullopt;
+    size_t colon = doc.find(':', kpos + needle.size());
+    if (colon == std::string::npos)
+        return std::nullopt;
+    size_t open = doc.find('"', colon + 1);
+    if (open == std::string::npos)
+        return std::nullopt;
+    std::string value;
+    for (size_t i = open + 1; i < doc.size(); ++i) {
+        char c = doc[i];
+        if (c == '\\' && i + 1 < doc.size()) {
+            char n = doc[i + 1];
+            switch (n) {
+            case 'n':
+                value += '\n';
+                break;
+            case 'r':
+                value += '\r';
+                break;
+            case 't':
+                value += '\t';
+                break;
+            default:
+                // Covers an escaped quote or an escaped backslash: emit the
+                // following char verbatim.
+                value += n;
+                break;
+            }
+            ++i;
+            continue;
+        }
+        if (c == '"')
+            return value; // closing quote
+        value += c;
+    }
+    return std::nullopt; // unterminated string
+}
+
+// Write the sidecar with clean_exit set to the given value. All context strings
+// are scrubbed before serialization.
+static bool WriteSession(const std::string& crash_dir, const SessionContext& ctx, bool clean_exit) {
+    if (crash_dir.empty())
+        return false;
+    std::error_code ec;
+    std::filesystem::create_directories(crash_dir, ec);
+    if (ec)
+        return false;
+
+    std::ofstream f(SessionPath(crash_dir), std::ios::trunc);
+    if (!f.is_open())
+        return false;
+
+    f << "{\"clean_exit\":" << (clean_exit ? "true" : "false") << ",\"app_version\":\""
+      << JsonEscape(ScrubString(ctx.app_version)) << "\""
+      << ",\"encoder_backend\":\"" << JsonEscape(ScrubString(ctx.encoder_backend)) << "\""
+      << ",\"container\":\"" << JsonEscape(ScrubString(ctx.container)) << "\""
+      << ",\"video_codec\":\"" << JsonEscape(ScrubString(ctx.video_codec)) << "\""
+      << ",\"audio_codec\":\"" << JsonEscape(ScrubString(ctx.audio_codec)) << "\""
+      << "}\n";
+    return f.good();
+}
+
+bool BeginSession(const std::string& crash_dir, const SessionContext& ctx) {
+    return WriteSession(crash_dir, ctx, /*clean_exit=*/false);
+}
+
+bool UpdateSessionContext(const std::string& crash_dir, const SessionContext& ctx) {
+    return WriteSession(crash_dir, ctx, /*clean_exit=*/false);
+}
+
+bool MarkCleanExit(const std::string& crash_dir) {
+    if (crash_dir.empty())
+        return false;
+    std::string path = SessionPath(crash_dir);
+
+    // Preserve the existing context fields; only flip clean_exit to true. If the
+    // sidecar is missing (BeginSession was never called), write a minimal
+    // clean record so a later read still reports a clean prior session.
+    SessionContext ctx;
+    std::ifstream in(path);
+    if (in.is_open()) {
+        std::stringstream ss;
+        ss << in.rdbuf();
+        std::string doc = ss.str();
+        ctx.app_version = JsonFindString(doc, "app_version").value_or("");
+        ctx.encoder_backend = JsonFindString(doc, "encoder_backend").value_or("");
+        ctx.container = JsonFindString(doc, "container").value_or("");
+        ctx.video_codec = JsonFindString(doc, "video_codec").value_or("");
+        ctx.audio_codec = JsonFindString(doc, "audio_codec").value_or("");
+    }
+    return WriteSession(crash_dir, ctx, /*clean_exit=*/true);
+}
+
+std::optional<SessionContext> ReadPreviousCrashContext(const std::string& crash_dir) {
+    if (crash_dir.empty())
+        return std::nullopt;
+    std::string path = SessionPath(crash_dir);
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec) || ec)
+        return std::nullopt;
+
+    std::ifstream in(path);
+    if (!in.is_open())
+        return std::nullopt;
+    std::stringstream ss;
+    ss << in.rdbuf();
+    std::string doc = ss.str();
+
+    // Only a previous session that did NOT mark a clean exit is a crash.
+    // Look for the literal token "clean_exit":false; anything else (true, or a
+    // malformed/missing flag) is treated as "not a crash".
+    bool is_crash = doc.find("\"clean_exit\":false") != std::string::npos;
+    if (!is_crash)
+        return std::nullopt;
+
+    SessionContext ctx;
+    ctx.app_version = JsonFindString(doc, "app_version").value_or("");
+    ctx.encoder_backend = JsonFindString(doc, "encoder_backend").value_or("");
+    ctx.container = JsonFindString(doc, "container").value_or("");
+    ctx.video_codec = JsonFindString(doc, "video_codec").value_or("");
+    ctx.audio_codec = JsonFindString(doc, "audio_codec").value_or("");
+    return ctx;
 }
 
 } // namespace exosnap::crash_capture

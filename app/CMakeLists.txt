@@ -73,6 +73,8 @@ qt_add_executable(exosnap WIN32
     ui/theme/ExoSnapTheme.h
     ui/theme/ExoSnapTheme.cpp
     ui/theme/exosnap_theme.qrc
+    ui/theme/LucideIcon.h
+    ui/theme/LucideIcon.cpp
     ui/brand/BrandMarkWidget.h
     ui/brand/BrandMarkWidget.cpp
     ui/WindowGeometryPolicy.h
@@ -83,6 +85,8 @@ qt_add_executable(exosnap WIN32
     ui/chrome/GlobalRecordingBar.cpp
     ui/dialogs/AboutOverlay.h
     ui/dialogs/AboutOverlay.cpp
+    ui/dialogs/UpdateSettingsPanel.h
+    ui/dialogs/UpdateSettingsPanel.cpp
     ui/dialogs/RecoveryOverlay.h
     ui/dialogs/RecoveryOverlay.cpp
     ui/dialogs/SourcePickerPanel.h
@@ -92,6 +96,10 @@ qt_add_executable(exosnap WIN32
     ui/dialogs/SourcePickerOverlay.h
     ui/dialogs/SourcePickerOverlay.cpp
     ui/dialogs/SourcePickerWindowRules.h
+    ui/dialogs/CrashReportPanel.h
+    ui/dialogs/CrashReportPanel.cpp
+    ui/dialogs/CrashReportOverlay.h
+    ui/dialogs/CrashReportOverlay.cpp
     ui/tray/TrayPresence.h
     ui/tray/TrayPresence.cpp
     ui/widgets/SectionRuleHeader.h
@@ -191,6 +199,10 @@ qt_add_executable(exosnap WIN32
     services/RecordingCountdownController.cpp
     services/RecoveryService.h
     services/RecoveryService.cpp
+    services/CrashIssueReport.h
+    services/CrashIssueReport.cpp
+    services/UpdateService.h
+    services/UpdateService.cpp
     models/WebcamSettings.h
     models/OutputSettingsModel.h
     models/OutputSettingsModel.cpp
@@ -270,7 +282,8 @@ add_dependencies(exosnap exosnap_build_info)
 
 target_link_libraries(exosnap PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-    recorder_core exosnap::capability exosnap::warnings FFmpeg::mux
+    recorder_core exosnap::capability exosnap::warnings FFmpeg::mux exosnap::crash_capture
+    exosnap::update
     d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
     mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib
 )
@@ -362,10 +375,14 @@ exosnap_add_app_test_support(exosnap_pages_test_support
     ui/widgets/ExoToggle.cpp
     ui/widgets/VUMeterWidget.cpp
     ui/widgets/WebcamSetupPanel.cpp
+    # UPDATE-WIRE-R1: ConfigPage now embeds the UpdateSettingsPanel, which pulls in
+    # the Lucide glyph renderer.
+    ui/dialogs/UpdateSettingsPanel.cpp
+    ui/theme/LucideIcon.cpp
 )
 target_link_libraries(exosnap_pages_test_support PUBLIC
     exosnap_device_service_test_support exosnap_output_model_test_support
-    Qt6::Core Qt6::Gui Qt6::Widgets
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
 
 exosnap_add_app_test_support(exosnap_source_picker_test_support
@@ -704,6 +721,53 @@ target_include_directories(about_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DI
 target_compile_definitions(about_overlay_tests PRIVATE EXOSNAP_BUILD_CONFIG="$<CONFIG>")
 add_dependencies(about_overlay_tests exosnap_build_info)
 set_target_properties(about_overlay_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME crash_report_overlay_tests
+    TEST_PREFIX crash.
+    SOURCES
+        tests/test_crash_report_overlay.cpp
+        ui/dialogs/CrashReportPanel.cpp
+        ui/dialogs/CrashReportOverlay.cpp
+        ui/brand/BrandMarkWidget.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(crash_report_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+set_target_properties(crash_report_overlay_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME crash_issue_report_tests
+    TEST_PREFIX crashissue.
+    SOURCES
+        tests/test_crash_issue_report.cpp
+        services/CrashIssueReport.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(crash_issue_report_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
+    NAME lucide_icon_tests
+    TEST_PREFIX lucide.
+    SOURCES
+        tests/test_lucide_icon.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(lucide_icon_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+set_target_properties(lucide_icon_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME update_settings_panel_tests
+    TEST_PREFIX update_ui.
+    SOURCES
+        tests/test_update_settings_panel.cpp
+        ui/dialogs/UpdateSettingsPanel.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(update_settings_panel_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+set_target_properties(update_settings_panel_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME version_tests
@@ -1073,6 +1137,28 @@ exosnap_add_gtest(
 target_include_directories(overlay_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(overlay_visual_proof_tests PRIVATE NOMINMAX)
 set_target_properties(overlay_visual_proof_tests PROPERTIES AUTOMOC ON)
+
+# CRASH-UPDATE-VISUAL-PROOF-R1: offscreen renders of the 0.4.0 crash + update UI
+# surfaces. Applies the real ExoSnap theme (QSS + bundled fonts), so the theme
+# and fonts qrc resources are compiled in via AUTORCC. Produces 6 PNGs under
+# .workspace/screenshots/0.4.0/ for human visual verification.
+exosnap_add_gtest(
+    NAME crash_update_visual_proof_tests
+    TEST_PREFIX crash.update.proof.
+    SOURCES
+        tests/crash_update_visual_proof.cpp
+        ui/dialogs/CrashReportPanel.cpp
+        ui/dialogs/UpdateSettingsPanel.cpp
+        ui/brand/BrandMarkWidget.cpp
+        ui/theme/LucideIcon.cpp
+        ui/theme/ExoSnapTheme.cpp
+        ui/theme/exosnap_theme.qrc
+        assets/fonts/exosnap_fonts.qrc
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(crash_update_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(crash_update_visual_proof_tests PRIVATE NOMINMAX)
+set_target_properties(crash_update_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
 
 # REGION-SELECTION-SKIN-R1 unit tests.
 exosnap_add_gtest(

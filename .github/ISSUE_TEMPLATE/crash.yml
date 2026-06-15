@@ -1,0 +1,39 @@
+name: Crash report
+description: Report an ExoSnap crash. Auto-filled from the in-app crash dialog.
+title: "[crash] "
+labels: ["crash"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a crash. If you can, **attach the `.dmp` file** from your
+        crash folder — open it via **Diagnostics → Open crash folder** in ExoSnap
+        (or `%LOCALAPPDATA%\ExoSnap\crashes`). The minidump lets us resolve the exact
+        stack server-side. No personal data is in the metadata block below.
+  - type: textarea
+    id: what_doing
+    attributes:
+      label: What were you doing?
+      description: What were you recording / clicking when it crashed?
+      placeholder: e.g. Started a Display recording, switched the source to a window, then it closed.
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: If you can reproduce it, list the steps.
+      placeholder: |
+        1. Open ExoSnap
+        2. ...
+        3. Crash
+    validations:
+      required: false
+  - type: textarea
+    id: metadata
+    attributes:
+      label: Crash metadata (auto-filled — do not edit)
+      description: Automatically populated by the in-app crash dialog. Allowlisted fields only.
+      render: text
+    validations:
+      required: false

@@ -49,6 +49,9 @@ class NotificationManager : public QObject {
     // info / "Recover last session?" — sticky (pending choice on relaunch).
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_RecoveryAvailable = 0; // sticky
+    // info / "Update available" — auto-dismiss 8 s (non-urgent; the card stays in Settings).
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_UpdateAvailable = 8000;
 
     explicit NotificationManager(QObject* parent = nullptr);
 

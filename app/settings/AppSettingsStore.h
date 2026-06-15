@@ -51,6 +51,19 @@ struct PersistedAppSettings {
     // SetWindowDisplayAffinity) and interactive (NOT click-through), so it is an
     // opt-in feature gated here.
     bool show_quick_controls = false;
+
+    // CRASH-WIRE-R1 (ADR 0017): when true, the next-launch crash dialog is
+    // suppressed and consent is granted silently so the (dormant w/o DSN) report
+    // is sent automatically. Opt-in only; default OFF.
+    bool auto_send_crash_reports = false;
+
+    // UPDATE-WIRE-R1 (ADR 0012): the selected update channel — "Stable" | "Preview".
+    // Applied immediately on change (persist + re-check); default Stable.
+    QString update_channel = QStringLiteral("Stable");
+
+    // UPDATE-WIRE-R1 (ADR 0012): whether to run a guarded update check on startup.
+    // Default ON.
+    bool check_updates_on_start = true;
 };
 
 class AppSettingsStore {

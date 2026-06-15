@@ -11,13 +11,17 @@
 #include "pages/LogsPage.h"
 #include "pages/RecordPage.h"
 #include "pages/WebcamPage.h"
+#include "services/CrashIssueReport.h"
 #include "services/GlobalHotkeyService.h"
+#include "services/UpdateService.h"
 #include "ui/WindowGeometryPolicy.h"
 #include "ui/chrome/OperationalTitleBar.h"
 #include "ui/chrome/RecordingStatusGuards.h"
 #include "ui/dialogs/AboutOverlay.h"
+#include "ui/dialogs/CrashReportOverlay.h"
 #include "ui/dialogs/RecoveryOverlay.h"
 #include "ui/dialogs/SourcePickerOverlay.h"
+#include "ui/dialogs/UpdateSettingsPanel.h"
 #include "ui/overlay/CountdownOverlayWindow.h"
 #include "ui/overlay/DiagnosticsOverlayWindow.h"
 #include "ui/overlay/NotificationToastWindow.h"
@@ -33,18 +37,26 @@
 #include <QToolButton>
 #endif
 
+#include "ExoSnapBuildInfo.h" // exosnap::build::kVersion / kGitCommit
+
 #include <capability/capability_builder.h>
+#include <capability/config_types.h>
 #include <capability/resolver.h>
 #include <capability/user_config.h>
+#include <crash_capture/crash_capture.h>
+#include <crash_capture/crash_scrubber.h>
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QClipboard>
 #include <QCloseEvent>
 #include <QColor>
 #include <QCoreApplication>
 #include <QCursor>
 #include <QDateTime>
 #include <QDebug>
+#include <QDesktopServices>
+#include <QDir>
 #include <QEvent>
 #include <QFile>
 #include <QFileInfo>
@@ -64,9 +76,11 @@
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QStyle>
+#include <QSysInfo>
 #include <QSystemTrayIcon>
 #include <QTextStream>
 #include <QTimer>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWindow>
 #include <QWindowStateChangeEvent>
@@ -74,6 +88,7 @@
 #include <array>
 #include <cmath>
 #include <optional>
+#include <string>
 
 #if defined(Q_OS_WIN)
 #include "exosnap_resource.h"
@@ -189,6 +204,17 @@ static_assert(kAdvancedPageIndex >= 0, "Advanced page must exist in kPageDescrip
 static_assert(kDiagnosticsPageIndex >= 0, "Diagnostics page must exist in kPageDescriptors.");
 static_assert(kWebcamPageIndex >= 0, "Webcam page must exist in kPageDescriptors.");
 static_assert(kLogsPageIndex >= 0, "Logs page must exist in kPageDescriptors.");
+
+// UPDATE-WIRE-R1: map between the persisted/UI channel string ("Stable"|"Preview")
+// and the engine enum. Unknown values fall back to Stable.
+update::UpdateChannel UpdateChannelFromString(const QString& channel) {
+    return channel.compare(QStringLiteral("Preview"), Qt::CaseInsensitive) == 0 ? update::UpdateChannel::Preview
+                                                                                : update::UpdateChannel::Stable;
+}
+
+QString UpdateChannelToString(update::UpdateChannel channel) {
+    return channel == update::UpdateChannel::Preview ? QStringLiteral("Preview") : QStringLiteral("Stable");
+}
 
 ResizeZone resizeZoneFromLocalPoint(const QPoint& local, const QSize& size, bool maximized) {
     if (maximized)
@@ -387,6 +413,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     persisted_settings_ = settings_store_.Load();
     initHotkeyService();
 
+    // ---- Update engine bridge (UPDATE-WIRE-R1 · ADR 0012) ----
+    // Pass nullptr for the coordinator: the recording guard is enforced at the app
+    // layer in this slice (triggerUpdateCheck()/auto-check gate on recording_active_),
+    // so the engine guard intentionally returns NotBlocked.
+    update_service_ = new UpdateService(nullptr, this);
+    update_service_->SetChannel(UpdateChannelFromString(persisted_settings_.update_channel));
+    connect(update_service_, &UpdateService::updateCheckComplete, this, &MainWindow::onUpdateCheckComplete);
+
     // ---- Load preset store ----
     PersistedPresetState loaded_presets = preset_store_.Load();
     if (loaded_presets.was_reset) {
@@ -406,6 +440,28 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     live_webcam_ = startup_cfg.webcam;
 
     diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("settings loaded"));
+
+    // ---- Crash-capture session lifecycle (CRASH-WIRE-R1 · ADR 0017) ----
+    // ORDER IS CRITICAL: read the previous session's crash context (if any)
+    // BEFORE BeginSession overwrites the sidecar with the new session marker.
+    // crash_capture::Initialize() already ran in main(); we only manage the
+    // session sidecar here. Honest crash detection = "previous session did not
+    // mark a clean exit" — works even in the OFF/stub build (no Crashpad).
+    crash_dir_ = crash_capture::ResolveCrashDir();
+    if (!crash_dir_.empty()) {
+        pending_crash_ = crash_capture::ReadPreviousCrashContext(crash_dir_);
+        if (pending_crash_) {
+            diagnostics::AppLog::warning(
+                QStringLiteral("crash"),
+                QStringLiteral("Previous session did not exit cleanly — crash dialog pending"));
+        }
+        crash_capture::BeginSession(crash_dir_, currentSessionContext());
+        // Mirror the context into the live Sentry scope (no-op w/o DSN).
+        refreshCrashSessionContext();
+    } else {
+        diagnostics::AppLog::warning(QStringLiteral("crash"),
+                                     QStringLiteral("Crash dir unavailable — session tracking disabled"));
+    }
 
     auto* central = new QWidget(this);
     central->setObjectName("mainCentral");
@@ -534,6 +590,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
         if (config_page_)
             config_page_->setPresetDirty(dirty);
+        // CRASH-WIRE-R1: container/codec context changed — refresh the sidecar.
+        refreshCrashSessionContext();
         refreshDiagnosticsData();
     });
 
@@ -817,6 +875,47 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         if (setup_panel)
             connect(setup_panel, &exosnap::ui::widgets::WebcamSetupPanel::rescanRequested, &webcam_notifier_,
                     &WebcamDeviceNotifier::rescan);
+
+        // ---- Settings → Software updates card (UPDATE-WIRE-R1 · ADR 0012) ----
+        auto* update_panel =
+            config_page_->findChild<exosnap::ui::dialogs::UpdateSettingsPanel*>(QStringLiteral("settingsUpdatePanel"));
+        if (update_panel) {
+            // Seed the panel from the persisted channel + current version.
+            ui::dialogs::UpdateUiModel seed;
+            seed.current_version = QString::fromLatin1(exosnap::build::kVersion);
+            seed.channel = persisted_settings_.update_channel;
+            update_panel->setModel(seed);
+            update_panel->setState(ui::dialogs::UpdateUiState::UpToDate);
+
+            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::checkRequested, this,
+                    &MainWindow::triggerUpdateCheck);
+
+            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::channelChanged, this,
+                    [this](const QString& channel) {
+                        persisted_settings_.update_channel = channel;
+                        settings_store_.Save(persisted_settings_);
+                        if (update_service_)
+                            update_service_->SetChannel(UpdateChannelFromString(channel));
+                        // Channel applies immediately: re-check on the new channel (guarded).
+                        triggerUpdateCheck();
+                    });
+
+            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::openReleasesPageRequested, this, [this]() {
+                QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/Exoridus/exosnap/releases")));
+            });
+
+            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::openReleaseNotesRequested, this, [this]() {
+                const QString url = last_update_releases_url_.isEmpty()
+                                        ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
+                                        : last_update_releases_url_;
+                QDesktopServices::openUrl(QUrl(url));
+            });
+
+            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::remindLaterRequested, this, [this]() {
+                diagnostics::AppLog::info(QStringLiteral("update"),
+                                          QStringLiteral("Update reminder dismissed (remind me later)"));
+            });
+        }
     }
 
     // ---- Tray icon (TRAY-PRESENCE-R1) ----
@@ -895,6 +994,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
 
         // Startup crash-recovery: show the overlay if interrupted recordings exist.
         checkAndShowRecoveryOverlay();
+        // CRASH-WIRE-R1: next-launch crash dialog (deferred behind recovery).
+        checkAndShowCrashReportOverlay();
+
+        // UPDATE-WIRE-R1 (ADR 0012): auto-check for updates on startup, guarded so we
+        // never contact the update server while a recording/finalize is in flight.
+        // TODO(Update-A): gate auto-check behind EXOSNAP_OFFICIAL_BUILD (self-builds
+        // should not phone home); not compiled out in this slice.
+        if (persisted_settings_.check_updates_on_start && !recording_active_ && !remuxing_active_)
+            triggerUpdateCheck();
     });
 }
 
@@ -939,6 +1047,202 @@ void MainWindow::checkAndShowRecoveryOverlay() {
     connect(recovery_overlay_, &ui::dialogs::RecoveryOverlay::continueRequested, record_page_,
             &RecordPage::armFromRecovery);
     recovery_overlay_->openOverlay();
+}
+
+namespace {
+
+// Compact container/codec tokens for the session sidecar + crash report.
+// The capability ToString() helpers are verbose ("Matroska", "AV1 NVENC",
+// "AAC (Media Foundation)"); the crash facts want short, allowlisted tokens.
+// (Prefixed Crash* to avoid colliding with the std::wstring ContainerToken in
+// RecordingPreset.h used for filename building.)
+std::string CrashContainerToken(capability::Container c) {
+    switch (c) {
+    case capability::Container::Matroska:
+        return "MKV";
+    case capability::Container::Mp4:
+        return "MP4";
+    case capability::Container::WebM:
+        return "WebM";
+    }
+    return "MKV";
+}
+
+std::string CrashVideoCodecToken(capability::VideoCodec v) {
+    switch (v) {
+    case capability::VideoCodec::Av1Nvenc:
+        return "AV1";
+    case capability::VideoCodec::HevcNvenc:
+        return "HEVC";
+    case capability::VideoCodec::H264Nvenc:
+        return "H.264";
+    }
+    return "AV1";
+}
+
+std::string CrashAudioCodecToken(capability::AudioCodec a) {
+    switch (a) {
+    case capability::AudioCodec::Opus:
+        return "Opus";
+    case capability::AudioCodec::AacMf:
+        return "AAC";
+    case capability::AudioCodec::Pcm:
+        return "PCM";
+    }
+    return "Opus";
+}
+
+} // namespace
+
+crash_capture::SessionContext MainWindow::currentSessionContext() const {
+    crash_capture::SessionContext ctx;
+    ctx.app_version = exosnap::build::kVersion;
+    // All NVENC video codecs ship today; the encoder backend baseline is nvenc.
+    ctx.encoder_backend = "nvenc";
+    ctx.container = CrashContainerToken(output_settings_.container);
+    ctx.video_codec = CrashVideoCodecToken(output_settings_.video_codec);
+    ctx.audio_codec = CrashAudioCodecToken(output_settings_.audio_codec);
+    return ctx;
+}
+
+void MainWindow::refreshCrashSessionContext() {
+    if (crash_dir_.empty())
+        return;
+    const crash_capture::SessionContext ctx = currentSessionContext();
+    crash_capture::UpdateSessionContext(crash_dir_, ctx);
+    crash_capture::SetEncoderContext(ctx.encoder_backend, ctx.container, ctx.video_codec, ctx.audio_codec);
+}
+
+void MainWindow::checkAndShowCrashReportOverlay() {
+    if (!pending_crash_)
+        return;
+
+    // Auto-send path: the user previously opted into silent send. Grant consent
+    // (dormant w/o DSN) and skip the dialog entirely.
+    if (persisted_settings_.auto_send_crash_reports) {
+        crash_capture::GiveUserConsent();
+        diagnostics::AppLog::info(
+            QStringLiteral("crash"),
+            QStringLiteral("Auto-send enabled — consent granted silently; crash dialog suppressed"));
+        return;
+    }
+
+    // If the recovery overlay is currently open, defer behind it (no double-prompt).
+    if (recovery_overlay_ != nullptr && recovery_overlay_->isOpen()) {
+        connect(
+            recovery_overlay_, &ui::dialogs::RecoveryOverlay::closed, this, [this]() { openCrashReportOverlay(); },
+            Qt::SingleShotConnection);
+        return;
+    }
+
+    openCrashReportOverlay();
+}
+
+void MainWindow::openCrashReportOverlay() {
+    if (!pending_crash_ || crash_overlay_ != nullptr)
+        return;
+
+    // A crash mid-recording leaves a recovery candidate behind.
+    const bool recording_was_active = !recovery_service_.Scan().isEmpty();
+
+    ui::dialogs::CrashReportModel model;
+    model.recording_was_active = recording_was_active;
+
+    // Version: "<version> · build <sha>" when a short SHA is available.
+    const QString version = QString::fromUtf8(exosnap::build::kVersion);
+    const QString sha = QString::fromUtf8(exosnap::build::kGitCommit);
+    model.version =
+        (sha.isEmpty() || sha == QStringLiteral("Unavailable")) ? version : version + QStringLiteral(" · build ") + sha;
+
+    model.os = QSysInfo::prettyProductName() + QStringLiteral(" · ") + QSysInfo::kernelVersion();
+
+    // GPU: CapabilitySet exposes the adapter name only (no driver version).
+    if (runtime_caps_ready_ && !runtime_caps_.gpu_adapter_name.empty())
+        model.gpu = QString::fromStdString(runtime_caps_.gpu_adapter_name);
+    else
+        model.gpu = QStringLiteral("—");
+
+    // Encoder: "<BACKEND> <video> → <container>" e.g. "NVENC AV1 → MKV".
+    const QString backend = QString::fromStdString(pending_crash_->encoder_backend).toUpper();
+    const QString vcodec = QString::fromStdString(pending_crash_->video_codec);
+    const QString container = QString::fromStdString(pending_crash_->container);
+    QStringList encoder_parts;
+    if (!backend.isEmpty())
+        encoder_parts << backend;
+    if (!vcodec.isEmpty())
+        encoder_parts << vcodec;
+    QString encoder = encoder_parts.join(QStringLiteral(" "));
+    if (!container.isEmpty())
+        encoder += QStringLiteral(" → ") + container;
+    model.encoder = encoder.trimmed();
+
+    // exception/module/thread/stack are intentionally empty: the client does not
+    // symbolicate — the .dmp holds the rest and Sentry resolves stacks via PDB.
+    model.crash_dir = QString::fromStdString(crash_dir_);
+
+    // Best-effort newest *.dmp under the crash dir (may be empty in stub builds).
+    QDir dir(QString::fromStdString(crash_dir_));
+    if (dir.exists()) {
+        const QFileInfoList dumps = dir.entryInfoList({QStringLiteral("*.dmp")}, QDir::Files, QDir::Time);
+        if (!dumps.isEmpty())
+            model.dmp_path = dumps.first().absoluteFilePath();
+    }
+
+    crash_overlay_ = new ui::dialogs::CrashReportOverlay(model, centralWidget());
+    crash_overlay_->hide();
+
+    connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::sendReportRequested, this, [this]() {
+        crash_capture::GiveUserConsent();
+        if (crash_overlay_ && crash_overlay_->autoSendChecked()) {
+            persisted_settings_.auto_send_crash_reports = true;
+            settings_store_.Save(persisted_settings_);
+        }
+        diagnostics::AppLog::info(QStringLiteral("crash"), QStringLiteral("User granted crash-report consent (send)"));
+        if (crash_overlay_)
+            crash_overlay_->closeOverlay();
+    });
+
+    connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::restartRequested, this, [this]() {
+        relaunch_requested_ = true;
+        diagnostics::AppLog::info(QStringLiteral("crash"), QStringLiteral("User chose Restart ExoSnap"));
+        qApp->quit();
+    });
+
+    connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::reportOnGitHubRequested, this, [this, model]() {
+        services::CrashIssueData data;
+        data.app_version = model.version;
+        data.os = model.os;
+        data.gpu = model.gpu;
+        data.encoder = model.encoder;
+        data.exception = model.exception;
+        data.correlation_id = QString::fromStdString(crash_capture::GenerateCorrelationId());
+        QDesktopServices::openUrl(QUrl(services::BuildCrashIssueUrl(data)));
+        if (auto* clipboard = QGuiApplication::clipboard())
+            clipboard->setText(services::BuildCrashMetadataBlock(data));
+        diagnostics::AppLog::info(QStringLiteral("crash"), QStringLiteral("Opened GitHub crash issue form"));
+    });
+
+    connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::openCrashFolderRequested, this,
+            [this]() { QDesktopServices::openUrl(QUrl::fromLocalFile(QString::fromStdString(crash_dir_))); });
+
+    connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::dontSendRequested, this, [this]() {
+        // The overlay already dismisses itself on this signal; just log.
+        diagnostics::AppLog::info(QStringLiteral("crash"), QStringLiteral("User declined crash report (don't send)"));
+    });
+
+    connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::autoSendToggled, this, [this](bool checked) {
+        persisted_settings_.auto_send_crash_reports = checked;
+        settings_store_.Save(persisted_settings_);
+    });
+
+    connect(crash_overlay_, &ui::dialogs::CrashReportOverlay::closed, this, [this]() {
+        if (crash_overlay_) {
+            crash_overlay_->deleteLater();
+            crash_overlay_ = nullptr;
+        }
+    });
+
+    crash_overlay_->openOverlay();
 }
 
 MainWindow::~MainWindow() {
@@ -1192,8 +1496,14 @@ bool MainWindow::effectiveMaximizedState() const {
 
 void MainWindow::onRecordChromeStateChanged(bool recording, const QString& status_label, const QString& context_text) {
     Q_UNUSED(context_text);
+    const bool was_recording = recording_active_;
     recording_active_ = recording;
     record_status_label_ = status_label.trimmed().toUpper();
+
+    // CRASH-WIRE-R1: refresh crash context on the recording-start edge so a crash
+    // mid-recording carries the live encoder/output context.
+    if (recording && !was_recording)
+        refreshCrashSessionContext();
     // ADR-0014: track remux-on-stop phase separately so closeEvent can guard it.
     remuxing_active_ = (record_status_label_ == QStringLiteral("SAVING"));
     if (record_status_label_.isEmpty())
@@ -1216,6 +1526,12 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
         config_page_->setRecordingControlsLocked(locked);
         if (webcam_page_)
             webcam_page_->setRecordingControlsLocked(locked);
+
+        // UPDATE-WIRE-R1: pause update checks (disable the Check button + show the
+        // paused banner) while capturing or finalizing.
+        if (auto* update_panel = config_page_->findChild<exosnap::ui::dialogs::UpdateSettingsPanel*>(
+                QStringLiteral("settingsUpdatePanel")))
+            update_panel->setRecordingActive(recording_active_ || remuxing_active_);
     }
 
     applyTitleBarStatus();
@@ -2621,6 +2937,101 @@ void MainWindow::updateNotificationToastsEnabled() {
     // auto-hides when the manager's visible set is empty.
     if (!persisted_settings_.show_notifications && notification_toast_window_) {
         notification_toast_window_->hide();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UPDATE-WIRE-R1 (ADR 0012): update check + result handling
+// ---------------------------------------------------------------------------
+
+void MainWindow::triggerUpdateCheck() {
+    if (update_service_ == nullptr)
+        return;
+
+    auto* update_panel =
+        config_page_
+            ? config_page_->findChild<exosnap::ui::dialogs::UpdateSettingsPanel*>(QStringLiteral("settingsUpdatePanel"))
+            : nullptr;
+
+    // App-layer recording guard: never contact the update server while a recording
+    // or MP4 remux is in flight. The panel surfaces the paused banner instead.
+    if (recording_active_ || remuxing_active_) {
+        if (update_panel)
+            update_panel->setRecordingActive(true);
+        diagnostics::AppLog::info(QStringLiteral("update"),
+                                  QStringLiteral("Update check skipped — recording/finalizing in progress"));
+        return;
+    }
+
+    if (update_panel)
+        update_panel->setState(ui::dialogs::UpdateUiState::Checking);
+    update_service_->RequestUpdateCheck();
+}
+
+void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) {
+    auto* update_panel =
+        config_page_
+            ? config_page_->findChild<exosnap::ui::dialogs::UpdateSettingsPanel*>(QStringLiteral("settingsUpdatePanel"))
+            : nullptr;
+
+    const QString current_version = QString::fromLatin1(exosnap::build::kVersion);
+    const QString channel =
+        update_service_ ? UpdateChannelToString(update_service_->Channel()) : persisted_settings_.update_channel;
+
+    // The engine result exposes only a releases-page URL (no tag-specific notes body
+    // / html URL). Map that to both the releases link and the notes link; leave
+    // whats_new empty since there is no structured changelog from the check.
+    last_update_releases_url_ = result.releases_page_url
+                                    ? QString::fromStdString(*result.releases_page_url)
+                                    : QStringLiteral("https://github.com/Exoridus/exosnap/releases");
+
+    const QString available_version =
+        result.available_version ? QString::fromStdString(result.available_version->ToString()) : QString();
+
+    ui::dialogs::UpdateUiModel model;
+    model.current_version = current_version;
+    model.available_version = available_version;
+    model.channel = channel;
+    model.last_checked = QDateTime::currentDateTime().toString(QStringLiteral("MMM d, h:mm AP"));
+    model.release_url = last_update_releases_url_;
+    model.release_notes_url = last_update_releases_url_;
+
+    if (result.check_failed || result.error_message) {
+        model.error_message = result.error_message ? QString::fromStdString(*result.error_message)
+                                                   : QStringLiteral("Couldn't reach the update server.");
+        if (update_panel) {
+            update_panel->setModel(model);
+            update_panel->setState(ui::dialogs::UpdateUiState::Error);
+        }
+        diagnostics::AppLog::warning(QStringLiteral("update"),
+                                     QStringLiteral("Update check failed: %1").arg(model.error_message));
+        return;
+    }
+
+    if (update_panel) {
+        update_panel->setModel(model);
+        update_panel->setState(result.update_available ? ui::dialogs::UpdateUiState::Available
+                                                       : ui::dialogs::UpdateUiState::UpToDate);
+    }
+
+    diagnostics::AppLog::info(
+        QStringLiteral("update"),
+        result.update_available
+            ? QStringLiteral("Update available: %1 → %2 (%3)").arg(current_version, available_version, channel)
+            : QStringLiteral("Up to date (%1, %2)").arg(current_version, channel));
+
+    // Notify-on-available: timed info toast routed to Settings → Software updates.
+    // (Toast action pills are visual-only today — the toast is capture-excluded /
+    // transparent-for-input — but OpenUpdate carries the intent to navigate to
+    // kSettingsPageIndex once toast actions become interactive.)
+    if (result.update_available && persisted_settings_.show_notifications && notification_manager_) {
+        notifications::NotificationEvent event;
+        event.type = notifications::NotificationType::UpdateAvailable;
+        event.title = QStringLiteral("Update available — %1").arg(available_version);
+        event.body = QStringLiteral("%1 channel · %2 → %3").arg(channel, current_version, available_version);
+        event.action = notifications::NotificationAction::OpenUpdate;
+        event.secondary_action = notifications::NotificationAction::None;
+        notification_manager_->Enqueue(std::move(event));
     }
 }
 

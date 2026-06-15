@@ -14,6 +14,7 @@
 //     so the recovery overlay and the crash dialog do not double-report.
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -79,6 +80,13 @@ void GiveUserConsent();
 void RevokeUserConsent();
 
 // ---------------------------------------------------------------------------
+// Send a single diagnostic message event (Sentry "Verify" step). No-op unless
+// the engine is active with a DSN (official build) and consent has been given.
+// Used only by the env-gated verification path; never fires in normal operation.
+// ---------------------------------------------------------------------------
+void SendTestEvent(std::string_view message);
+
+// ---------------------------------------------------------------------------
 // Attach metadata to the current scope. Safe to call after Initialize().
 // Used by the app layer to record runtime context for crashes.
 //   key  — tag name; must appear in the allow-list in crash_scrubber.h
@@ -113,6 +121,53 @@ bool IsActive() noexcept;
 // ---------------------------------------------------------------------------
 bool WriteDumpHandledSentinel(const std::string& crash_dir);
 bool ReadAndClearDumpHandledSentinel(const std::string& crash_dir);
+
+// ---------------------------------------------------------------------------
+// Session context + clean-exit detection (next-launch crash dialog source).
+//
+// The next-launch crash dialog is populated from an app-written session
+// sidecar, NOT from parsing minidumps (the client cannot symbolicate; Sentry
+// resolves stacks server-side via PDB). Crash detection therefore means:
+// "the previous session did not mark a clean exit." This is honest (it covers
+// any abnormal termination — crash, kill, power loss) and works even in the
+// OFF/stub build with no Crashpad present.
+//
+// Sidecar file: <crash_dir>/last_session.json
+// Schema:
+//   {"clean_exit":false,"app_version":"...","encoder_backend":"...",
+//    "container":"...","video_codec":"...","audio_codec":"..."}
+//
+// All string values are passed through ScrubString before being written
+// (defense in depth — they should not contain paths, but scrub anyway).
+//
+// These functions are pure C++ (no Sentry dependency) and are intended for
+// single-threaded startup/shutdown use.
+// ---------------------------------------------------------------------------
+struct SessionContext {
+    std::string app_version;     // e.g. "0.4.0"
+    std::string encoder_backend; // e.g. "nvenc" (empty until known)
+    std::string container;       // e.g. "MKV"
+    std::string video_codec;     // e.g. "AV1"
+    std::string audio_codec;     // e.g. "Opus"
+};
+
+// Write <crash_dir>/last_session.json with clean_exit=false and the given
+// context. Call once at startup. Overwrites any prior file. Returns true on
+// success.
+bool BeginSession(const std::string& crash_dir, const SessionContext& ctx);
+
+// Re-write the context, keeping clean_exit=false. Call whenever the
+// encoder/output context becomes known or changes. Returns true on success.
+bool UpdateSessionContext(const std::string& crash_dir, const SessionContext& ctx);
+
+// Set clean_exit=true (normal shutdown). After this, ReadPreviousCrashContext
+// returns nullopt next launch. Returns true on success.
+bool MarkCleanExit(const std::string& crash_dir);
+
+// Read <crash_dir>/last_session.json. Returns the stored context IFF the file
+// exists AND clean_exit==false (i.e. the previous session crashed / was
+// killed). Returns std::nullopt otherwise. Does NOT modify the file.
+std::optional<SessionContext> ReadPreviousCrashContext(const std::string& crash_dir);
 
 // ---------------------------------------------------------------------------
 // Resolve the platform crash directory.

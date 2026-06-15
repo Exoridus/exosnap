@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Effective date:** 2026-06-13
+**Effective date:** 2026-06-15
 
 ExoSnap is a local, Windows-native screen/application/region recorder. This document
 describes what data ExoSnap processes. It reflects the **current** state of the software and
@@ -10,9 +10,11 @@ will be updated if data processing ever changes.
 
 ## Summary
 
-ExoSnap does **not** collect, transmit, or share any personal data. It has no telemetry, no
-analytics, no account system, and makes **no network connections** during normal operation.
-Everything stays on your computer.
+ExoSnap collects **no** telemetry or analytics, has **no** account system, and never transmits
+your recordings or personal data. By default it makes **no network connections**. As of 0.4.0,
+two strictly **opt-in** features can contact external services, and only when you act: an
+**update check** (public GitHub Releases) and **crash reporting** (consent-gated, to Sentry with
+EU data residency). Both are detailed below. Everything else stays on your computer.
 
 ## Data stored locally (never transmitted)
 
@@ -63,20 +65,10 @@ This request transmits your IP address to GitHub (GitHub Inc., USA) and the ExoS
 string. No other data is sent. Update channel downloads are hosted as GitHub Release assets.
 No ExoSnap-operated server is involved.
 
-## Network features (planned — not present in current releases)
+## Both network features are off by default
 
-Current ExoSnap releases make **no** network connections. Future versions may add the following
-features. When they ship, this policy will be updated, and the features will be **off by default**
-(opt-in):
-
-- **Update check** — contacts the public GitHub Releases API to compare the installed version
-  against the latest release. Transmits your **IP address** to GitHub (GitHub Inc., USA) and
-  the current application version. No other data is sent.
-- **Crash reporting** — only with your explicit consent, sends crash diagnostics (stack traces
-  and limited system information, with sensitive paths scrubbed) to Sentry (EU data residency).
-  See the "Crash reporting" section above for the full data set and controls.
-
-Neither feature exists in current releases.
+Neither the update check nor crash reporting runs unless you opt in. Self-built binaries never
+include the crash-reporting ingest key and never upload. You can use ExoSnap fully offline.
 
 ## Contact
 

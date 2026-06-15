@@ -79,7 +79,11 @@ target_link_libraries(exosnap_update
 if(EXOSNAP_OFFICIAL_BUILD)
     target_compile_definitions(exosnap_update PUBLIC EXOSNAP_OFFICIAL_BUILD)
 
-    if(NOT EXOSNAP_UPDATE_PUBLIC_KEY_HEX MATCHES "^[0-9a-fA-F]{64}$")
+    # CMake's regex engine does NOT support {n} interval quantifiers, so a
+    # pattern like "^[0-9a-fA-F]{64}$" matches a single hex char followed by the
+    # literal "{64}" and rejects every real key. Validate length + charset apart.
+    string(LENGTH "${EXOSNAP_UPDATE_PUBLIC_KEY_HEX}" _key_len)
+    if(NOT _key_len EQUAL 64 OR NOT EXOSNAP_UPDATE_PUBLIC_KEY_HEX MATCHES "^[0-9a-fA-F]+$")
         message(FATAL_ERROR
             "EXOSNAP_OFFICIAL_BUILD=ON requires EXOSNAP_UPDATE_PUBLIC_KEY_HEX \
 to be exactly 64 hex characters. Got: '${EXOSNAP_UPDATE_PUBLIC_KEY_HEX}'")

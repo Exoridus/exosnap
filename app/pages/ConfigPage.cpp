@@ -33,6 +33,7 @@
 #include "../models/OutputPathPolicy.h"
 #include "../models/RecordingPreset.h"
 #include "../services/WebcamService.h"
+#include "../ui/dialogs/UpdateSettingsPanel.h"
 #include "../ui/widgets/ComboBoxWheelFilter.h"
 #include "../ui/widgets/ExoToggle.h"
 #include "../ui/widgets/VUMeterWidget.h"
@@ -890,6 +891,14 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_split_layout_->addWidget(output_help, 2);
     out_panel_layout->addWidget(output_split);
     layout->addWidget(out_panel);
+
+    // ---- SOFTWARE UPDATES CARD (full width — UPDATE-WIRE-R1) ----
+    // The UpdateSettingsPanel is a self-contained card (own header/border), so it is
+    // added directly to the scroll column rather than wrapped in another makePanel.
+    // MainWindow wires it via findChild(objectName "settingsUpdatePanel").
+    update_settings_panel_ = new ui::dialogs::UpdateSettingsPanel(content);
+    update_settings_panel_->setObjectName(QStringLiteral("settingsUpdatePanel"));
+    layout->addWidget(update_settings_panel_);
 
     // ---- ADVANCED SUMMARY (full width) ----
     auto* advanced_panel = makePanel(content);

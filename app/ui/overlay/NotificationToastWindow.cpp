@@ -135,6 +135,8 @@ StatusTokens tokensForType(notifications::NotificationType type) noexcept {
         return {kErrorC, kErrorDim, kErrorB};
     case notifications::NotificationType::RecoveryAvailable:
         return {kInfoC, kInfoDim, kInfoB};
+    case notifications::NotificationType::UpdateAvailable:
+        return {kInfoC, kInfoDim, kInfoB}; // azure/info tone
     }
     return {kInfoC, kInfoDim, kInfoB};
 }
@@ -151,6 +153,8 @@ bool isSticky(notifications::NotificationType type) noexcept {
         return notifications::NotificationManager::kDismissMs_UnexpectedStop == 0;
     case notifications::NotificationType::RecoveryAvailable:
         return notifications::NotificationManager::kDismissMs_RecoveryAvailable == 0;
+    case notifications::NotificationType::UpdateAvailable:
+        return notifications::NotificationManager::kDismissMs_UpdateAvailable == 0;
     }
     return true;
 }
@@ -207,6 +211,18 @@ void drawStatusGlyph(QPainter& p, notifications::NotificationType type, int cx, 
         p.drawPoint(QPointF(cx, cy - r * 0.28f));
         p.setPen(QPen(color, 1.5f));
         p.drawLine(QPointF(cx, cy - r * 0.05f), QPointF(cx, cy + r * 0.38f));
+        break;
+    }
+    case notifications::NotificationType::UpdateAvailable: {
+        // download: down-arrow into a tray (Lucide "download").
+        p.setPen(QPen(color, 1.6f, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        // Vertical shaft.
+        p.drawLine(QPointF(cx, cy - r * 0.62f), QPointF(cx, cy + r * 0.22f));
+        // Arrowhead.
+        p.drawLine(QPointF(cx - r * 0.34f, cy - r * 0.12f), QPointF(cx, cy + r * 0.22f));
+        p.drawLine(QPointF(cx + r * 0.34f, cy - r * 0.12f), QPointF(cx, cy + r * 0.22f));
+        // Tray base.
+        p.drawLine(QPointF(cx - r * 0.5f, cy + r * 0.5f), QPointF(cx + r * 0.5f, cy + r * 0.5f));
         break;
     }
     }
@@ -492,6 +508,9 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
                 break;
             case notifications::NotificationAction::ShowFile:
                 buttons.push_back({QStringLiteral("Show file"), true});
+                break;
+            case notifications::NotificationAction::OpenUpdate:
+                buttons.push_back({QStringLiteral("View update"), true});
                 break;
             case notifications::NotificationAction::Discard:
                 buttons.push_back({QStringLiteral("Discard"), false});

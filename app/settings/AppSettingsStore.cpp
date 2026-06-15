@@ -10,9 +10,10 @@
 namespace exosnap {
 namespace {
 
-// Bump to 11: QUICK-PILL-R1 adds show_quick_controls (default false).
+// Bump to 13: UPDATE-WIRE-R1 adds update_channel (default "Stable") +
+// check_updates_on_start (default true).
 // Pre-1.0: no migration; incompatible persisted data is reset to defaults.
-constexpr int kSettingsVersionCurrent = 11;
+constexpr int kSettingsVersionCurrent = 13;
 
 } // namespace
 
@@ -78,6 +79,19 @@ PersistedAppSettings AppSettingsStore::Load() const {
     persisted.show_quick_controls = settings.value(QStringLiteral("show_quick_controls"), false).toBool();
     settings.endGroup();
 
+    settings.beginGroup(QStringLiteral("crash"));
+    // CRASH-WIRE-R1: auto-send opt-in (default OFF).
+    // Pre-1.0: no migration; missing key defaults to false.
+    persisted.auto_send_crash_reports = settings.value(QStringLiteral("auto_send_crash_reports"), false).toBool();
+    settings.endGroup();
+
+    settings.beginGroup(QStringLiteral("update"));
+    // UPDATE-WIRE-R1: update channel (default "Stable") + auto-check-on-start (default true).
+    // Pre-1.0: no migration; missing keys default to Stable / true.
+    persisted.update_channel = settings.value(QStringLiteral("channel"), QStringLiteral("Stable")).toString();
+    persisted.check_updates_on_start = settings.value(QStringLiteral("check_updates_on_start"), true).toBool();
+    settings.endGroup();
+
     return persisted;
 }
 
@@ -133,6 +147,17 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.beginGroup(QStringLiteral("presence"));
     // QUICK-PILL-R1: interactive quick-control pill toggle.
     settings.setValue(QStringLiteral("show_quick_controls"), settings_snapshot.show_quick_controls);
+    settings.endGroup();
+
+    settings.beginGroup(QStringLiteral("crash"));
+    // CRASH-WIRE-R1: auto-send opt-in.
+    settings.setValue(QStringLiteral("auto_send_crash_reports"), settings_snapshot.auto_send_crash_reports);
+    settings.endGroup();
+
+    settings.beginGroup(QStringLiteral("update"));
+    // UPDATE-WIRE-R1: update channel + auto-check-on-start.
+    settings.setValue(QStringLiteral("channel"), settings_snapshot.update_channel);
+    settings.setValue(QStringLiteral("check_updates_on_start"), settings_snapshot.check_updates_on_start);
     settings.endGroup();
 
     settings.sync();

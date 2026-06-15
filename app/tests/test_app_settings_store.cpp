@@ -79,7 +79,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_WindowGeometry) {
     EXPECT_TRUE(loaded.window_geometry.maximized);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion11) {
+TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion13) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
@@ -89,8 +89,46 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion11) {
     store.Save(settings);
 
     QSettings raw_settings(settings_path, QSettings::IniFormat);
-    // Version bumped to 11: QUICK-PILL-R1 adds show_quick_controls.
-    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 11);
+    // Version bumped to 13: UPDATE-WIRE-R1 adds update_channel + check_updates_on_start.
+    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 13);
+}
+
+// CRASH-WIRE-R1: auto_send_crash_reports round-trip + default tests
+TEST(AppSettingsStoreTest, AppSettingsStore_DefaultAutoSendCrashReportsIsFalse) {
+    PersistedAppSettings settings;
+    EXPECT_FALSE(settings.auto_send_crash_reports);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_AutoSendCrashReports_True) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    settings.auto_send_crash_reports = true;
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_TRUE(loaded.auto_send_crash_reports);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_MissingAutoSendCrashReportsKey_DefaultsFalse) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    // Write a file without the crash group at all.
+    {
+        QSettings s(settings_path, QSettings::IniFormat);
+        s.beginGroup(QStringLiteral("overlay"));
+        s.setValue(QStringLiteral("show_recording_overlay"), true);
+        s.endGroup();
+        s.sync();
+    }
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_FALSE(loaded.auto_send_crash_reports);
 }
 
 // DIAGNOSTICS-OVERLAY-R1: show_diagnostics_overlay round-trip tests
@@ -381,6 +419,65 @@ TEST(AppSettingsStoreTest, AppSettingsStore_MissingShowQuickControls_DefaultsFal
     const PersistedAppSettings loaded = store.Load();
     // Quick-controls key absent: must default to false.
     EXPECT_FALSE(loaded.show_quick_controls);
+}
+
+// UPDATE-WIRE-R1: update_channel + check_updates_on_start round-trip tests
+
+TEST(AppSettingsStoreTest, AppSettingsStore_DefaultUpdateChannelIsStable) {
+    PersistedAppSettings settings;
+    EXPECT_EQ(settings.update_channel, QStringLiteral("Stable"));
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_DefaultCheckUpdatesOnStartIsTrue) {
+    PersistedAppSettings settings;
+    EXPECT_TRUE(settings.check_updates_on_start);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_UpdateChannel_Preview) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    settings.update_channel = QStringLiteral("Preview");
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_EQ(loaded.update_channel, QStringLiteral("Preview"));
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_CheckUpdatesOnStart_False) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    settings.check_updates_on_start = false;
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_FALSE(loaded.check_updates_on_start);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_MissingUpdateKeys_DefaultToStableAndTrue) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    // Write a file without the [update] group.
+    {
+        QSettings s(settings_path, QSettings::IniFormat);
+        s.beginGroup(QStringLiteral("overlay"));
+        s.setValue(QStringLiteral("show_recording_overlay"), true);
+        s.endGroup();
+        s.sync();
+    }
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    // Update keys absent: must default to Stable / true.
+    EXPECT_EQ(loaded.update_channel, QStringLiteral("Stable"));
+    EXPECT_TRUE(loaded.check_updates_on_start);
 }
 
 } // namespace exosnap

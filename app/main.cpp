@@ -2,11 +2,13 @@
 #include <QDebug>
 #include <QFile>
 #include <QIcon>
+#include <QProcess>
 #include <QSize>
 #include <QStringList>
 #include <QTimer>
 #include <QWindow>
 
+#include "ExoSnapBuildInfo.h" // exosnap::build::kVersion
 #include "MainWindow.h"
 #include "exosnap_resource.h"
 #include "ui/theme/ExoSnapTheme.h"
@@ -15,6 +17,11 @@
 #endif
 
 #if defined(Q_OS_WIN)
+#include <crash_capture/crash_capture.h>
+
+#include <filesystem>
+#include <string>
+
 #include <windows.h>
 #endif
 
@@ -131,6 +138,45 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
+#if defined(Q_OS_WIN)
+    // ---- Crash capture init (ADR 0017) --------------------------------------
+    // Resolve + create the crash dir, then Initialize. In the default OFF/stub
+    // build this no-ops the Sentry path but the session sidecar + next-launch
+    // dialog still work (that is intended). BeginSession is NOT called here —
+    // MainWindow does it after ReadPreviousCrashContext so the previous-session
+    // crash context survives the rewrite.
+    std::string crash_dir = exosnap::crash_capture::ResolveCrashDir();
+    if (!crash_dir.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(crash_dir), ec);
+        if (ec) {
+            qWarning().noquote() << "Failed to create crash dir:" << QString::fromStdString(crash_dir)
+                                 << QString::fromStdString(ec.message());
+        }
+        exosnap::crash_capture::CrashCaptureConfig crash_cfg;
+        crash_cfg.crash_dir = crash_dir;
+        crash_cfg.handler_exe_path = exosnap::crash_capture::ResolveHandlerExePath();
+        crash_cfg.app_version = exosnap::build::kVersion;
+        crash_cfg.debug_mode = false;
+        exosnap::crash_capture::Initialize(crash_cfg);
+    } else {
+        qWarning().noquote() << "Crash capture disabled: could not resolve crash dir.";
+    }
+
+    // Sentry "Verify" hook: EXOSNAP_SENTRY_TEST_EVENT=1 sends one diagnostic
+    // event and exits. Harmless in production (env var unset); only does
+    // anything in an official ON build where a DSN is compiled in.
+    if (qEnvironmentVariableIsSet("EXOSNAP_SENTRY_TEST_EVENT")) {
+        exosnap::crash_capture::GiveUserConsent();
+        exosnap::crash_capture::SendTestEvent("It works! - ExoSnap Sentry verify");
+        if (!crash_dir.empty())
+            exosnap::crash_capture::MarkCleanExit(crash_dir);
+        exosnap::crash_capture::Shutdown(); // flushes pending events
+        qInfo().noquote() << "Sentry test event sent; exiting.";
+        return 0;
+    }
+#endif
+
     exosnap::MainWindow win;
     if (!app_icon.isNull()) {
         win.setWindowIcon(app_icon);
@@ -142,8 +188,15 @@ int main(int argc, char* argv[]) {
         }
     }
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
-    if (visual_test_requested)
-        return exosnap::visual::RunVisualTest(app, win, visual_options);
+    if (visual_test_requested) {
+        const int visual_rc = exosnap::visual::RunVisualTest(app, win, visual_options);
+#if defined(Q_OS_WIN)
+        if (!crash_dir.empty())
+            exosnap::crash_capture::MarkCleanExit(crash_dir);
+        exosnap::crash_capture::Shutdown();
+#endif
+        return visual_rc;
+    }
 #endif
 
     win.resize(1120, 700); // matches MainWindow's minimum size (1120×700)
@@ -165,5 +218,27 @@ int main(int argc, char* argv[]) {
 #endif
     });
 
-    return app.exec();
+    const int rc = app.exec();
+
+#if defined(Q_OS_WIN)
+    // Normal shutdown: mark a clean exit so the next launch does not show the
+    // crash dialog, then flush + shut down the crash engine.
+    if (!crash_dir.empty())
+        exosnap::crash_capture::MarkCleanExit(crash_dir);
+    exosnap::crash_capture::Shutdown();
+
+    // Relaunch path (dialog "Restart ExoSnap"): MarkCleanExit + Shutdown already
+    // ran above, so the relaunched instance is quiet. Release the single-instance
+    // mutex so the new process can acquire it, then spawn a detached copy.
+    if (win.relaunchRequested()) {
+        if (hMutex != nullptr) {
+            ReleaseMutex(hMutex);
+            CloseHandle(hMutex);
+            hMutex = nullptr;
+        }
+        QProcess::startDetached(QApplication::applicationFilePath(), {});
+    }
+#endif
+
+    return rc;
 }
