@@ -15,6 +15,7 @@ enum class NotificationType : uint8_t {
     Saved,             // recording finalized / saved successfully
     UnexpectedStop,    // recording stopped due to engine error (non-disk failure)
     RecoveryAvailable, // startup scan found recoverable sessions
+    UpdateAvailable,   // a newer release exists on the active channel (ADR 0012)
 };
 
 // ---------------------------------------------------------------------------
@@ -30,6 +31,7 @@ enum class NotificationAction : uint8_t {
     ChangeFolder, // change output folder (LowStorage type)
     ShowFile,     // show / reveal the partial file (UnexpectedStop type)
     Discard,      // discard recovery session (secondary button on RecoveryAvailable)
+    OpenUpdate,   // navigate to Settings → Software updates card (UpdateAvailable type)
 };
 
 // ---------------------------------------------------------------------------

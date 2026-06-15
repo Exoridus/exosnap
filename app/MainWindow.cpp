@@ -13,6 +13,7 @@
 #include "pages/WebcamPage.h"
 #include "services/CrashIssueReport.h"
 #include "services/GlobalHotkeyService.h"
+#include "services/UpdateService.h"
 #include "ui/WindowGeometryPolicy.h"
 #include "ui/chrome/OperationalTitleBar.h"
 #include "ui/chrome/RecordingStatusGuards.h"
@@ -20,6 +21,7 @@
 #include "ui/dialogs/CrashReportOverlay.h"
 #include "ui/dialogs/RecoveryOverlay.h"
 #include "ui/dialogs/SourcePickerOverlay.h"
+#include "ui/dialogs/UpdateSettingsPanel.h"
 #include "ui/overlay/CountdownOverlayWindow.h"
 #include "ui/overlay/DiagnosticsOverlayWindow.h"
 #include "ui/overlay/NotificationToastWindow.h"
@@ -202,6 +204,17 @@ static_assert(kAdvancedPageIndex >= 0, "Advanced page must exist in kPageDescrip
 static_assert(kDiagnosticsPageIndex >= 0, "Diagnostics page must exist in kPageDescriptors.");
 static_assert(kWebcamPageIndex >= 0, "Webcam page must exist in kPageDescriptors.");
 static_assert(kLogsPageIndex >= 0, "Logs page must exist in kPageDescriptors.");
+
+// UPDATE-WIRE-R1: map between the persisted/UI channel string ("Stable"|"Preview")
+// and the engine enum. Unknown values fall back to Stable.
+update::UpdateChannel UpdateChannelFromString(const QString& channel) {
+    return channel.compare(QStringLiteral("Preview"), Qt::CaseInsensitive) == 0 ? update::UpdateChannel::Preview
+                                                                                : update::UpdateChannel::Stable;
+}
+
+QString UpdateChannelToString(update::UpdateChannel channel) {
+    return channel == update::UpdateChannel::Preview ? QStringLiteral("Preview") : QStringLiteral("Stable");
+}
 
 ResizeZone resizeZoneFromLocalPoint(const QPoint& local, const QSize& size, bool maximized) {
     if (maximized)
@@ -399,6 +412,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // ---- Load reduced AppSettingsStore (hotkeys + window geometry only) ----
     persisted_settings_ = settings_store_.Load();
     initHotkeyService();
+
+    // ---- Update engine bridge (UPDATE-WIRE-R1 · ADR 0012) ----
+    // Pass nullptr for the coordinator: the recording guard is enforced at the app
+    // layer in this slice (triggerUpdateCheck()/auto-check gate on recording_active_),
+    // so the engine guard intentionally returns NotBlocked.
+    update_service_ = new UpdateService(nullptr, this);
+    update_service_->SetChannel(UpdateChannelFromString(persisted_settings_.update_channel));
+    connect(update_service_, &UpdateService::updateCheckComplete, this, &MainWindow::onUpdateCheckComplete);
 
     // ---- Load preset store ----
     PersistedPresetState loaded_presets = preset_store_.Load();
@@ -854,6 +875,47 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         if (setup_panel)
             connect(setup_panel, &exosnap::ui::widgets::WebcamSetupPanel::rescanRequested, &webcam_notifier_,
                     &WebcamDeviceNotifier::rescan);
+
+        // ---- Settings → Software updates card (UPDATE-WIRE-R1 · ADR 0012) ----
+        auto* update_panel =
+            config_page_->findChild<exosnap::ui::dialogs::UpdateSettingsPanel*>(QStringLiteral("settingsUpdatePanel"));
+        if (update_panel) {
+            // Seed the panel from the persisted channel + current version.
+            ui::dialogs::UpdateUiModel seed;
+            seed.current_version = QString::fromLatin1(exosnap::build::kVersion);
+            seed.channel = persisted_settings_.update_channel;
+            update_panel->setModel(seed);
+            update_panel->setState(ui::dialogs::UpdateUiState::UpToDate);
+
+            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::checkRequested, this,
+                    &MainWindow::triggerUpdateCheck);
+
+            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::channelChanged, this,
+                    [this](const QString& channel) {
+                        persisted_settings_.update_channel = channel;
+                        settings_store_.Save(persisted_settings_);
+                        if (update_service_)
+                            update_service_->SetChannel(UpdateChannelFromString(channel));
+                        // Channel applies immediately: re-check on the new channel (guarded).
+                        triggerUpdateCheck();
+                    });
+
+            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::openReleasesPageRequested, this, [this]() {
+                QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/Exoridus/exosnap/releases")));
+            });
+
+            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::openReleaseNotesRequested, this, [this]() {
+                const QString url = last_update_releases_url_.isEmpty()
+                                        ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
+                                        : last_update_releases_url_;
+                QDesktopServices::openUrl(QUrl(url));
+            });
+
+            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::remindLaterRequested, this, [this]() {
+                diagnostics::AppLog::info(QStringLiteral("update"),
+                                          QStringLiteral("Update reminder dismissed (remind me later)"));
+            });
+        }
     }
 
     // ---- Tray icon (TRAY-PRESENCE-R1) ----
@@ -934,6 +996,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         checkAndShowRecoveryOverlay();
         // CRASH-WIRE-R1: next-launch crash dialog (deferred behind recovery).
         checkAndShowCrashReportOverlay();
+
+        // UPDATE-WIRE-R1 (ADR 0012): auto-check for updates on startup, guarded so we
+        // never contact the update server while a recording/finalize is in flight.
+        // TODO(Update-A): gate auto-check behind EXOSNAP_OFFICIAL_BUILD (self-builds
+        // should not phone home); not compiled out in this slice.
+        if (persisted_settings_.check_updates_on_start && !recording_active_ && !remuxing_active_)
+            triggerUpdateCheck();
     });
 }
 
@@ -985,7 +1054,9 @@ namespace {
 // Compact container/codec tokens for the session sidecar + crash report.
 // The capability ToString() helpers are verbose ("Matroska", "AV1 NVENC",
 // "AAC (Media Foundation)"); the crash facts want short, allowlisted tokens.
-std::string ContainerToken(capability::Container c) {
+// (Prefixed Crash* to avoid colliding with the std::wstring ContainerToken in
+// RecordingPreset.h used for filename building.)
+std::string CrashContainerToken(capability::Container c) {
     switch (c) {
     case capability::Container::Matroska:
         return "MKV";
@@ -997,7 +1068,7 @@ std::string ContainerToken(capability::Container c) {
     return "MKV";
 }
 
-std::string VideoCodecToken(capability::VideoCodec v) {
+std::string CrashVideoCodecToken(capability::VideoCodec v) {
     switch (v) {
     case capability::VideoCodec::Av1Nvenc:
         return "AV1";
@@ -1009,7 +1080,7 @@ std::string VideoCodecToken(capability::VideoCodec v) {
     return "AV1";
 }
 
-std::string AudioCodecToken(capability::AudioCodec a) {
+std::string CrashAudioCodecToken(capability::AudioCodec a) {
     switch (a) {
     case capability::AudioCodec::Opus:
         return "Opus";
@@ -1028,9 +1099,9 @@ crash_capture::SessionContext MainWindow::currentSessionContext() const {
     ctx.app_version = exosnap::build::kVersion;
     // All NVENC video codecs ship today; the encoder backend baseline is nvenc.
     ctx.encoder_backend = "nvenc";
-    ctx.container = ContainerToken(output_settings_.container);
-    ctx.video_codec = VideoCodecToken(output_settings_.video_codec);
-    ctx.audio_codec = AudioCodecToken(output_settings_.audio_codec);
+    ctx.container = CrashContainerToken(output_settings_.container);
+    ctx.video_codec = CrashVideoCodecToken(output_settings_.video_codec);
+    ctx.audio_codec = CrashAudioCodecToken(output_settings_.audio_codec);
     return ctx;
 }
 
@@ -1455,6 +1526,12 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
         config_page_->setRecordingControlsLocked(locked);
         if (webcam_page_)
             webcam_page_->setRecordingControlsLocked(locked);
+
+        // UPDATE-WIRE-R1: pause update checks (disable the Check button + show the
+        // paused banner) while capturing or finalizing.
+        if (auto* update_panel = config_page_->findChild<exosnap::ui::dialogs::UpdateSettingsPanel*>(
+                QStringLiteral("settingsUpdatePanel")))
+            update_panel->setRecordingActive(recording_active_ || remuxing_active_);
     }
 
     applyTitleBarStatus();
@@ -2860,6 +2937,101 @@ void MainWindow::updateNotificationToastsEnabled() {
     // auto-hides when the manager's visible set is empty.
     if (!persisted_settings_.show_notifications && notification_toast_window_) {
         notification_toast_window_->hide();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UPDATE-WIRE-R1 (ADR 0012): update check + result handling
+// ---------------------------------------------------------------------------
+
+void MainWindow::triggerUpdateCheck() {
+    if (update_service_ == nullptr)
+        return;
+
+    auto* update_panel =
+        config_page_
+            ? config_page_->findChild<exosnap::ui::dialogs::UpdateSettingsPanel*>(QStringLiteral("settingsUpdatePanel"))
+            : nullptr;
+
+    // App-layer recording guard: never contact the update server while a recording
+    // or MP4 remux is in flight. The panel surfaces the paused banner instead.
+    if (recording_active_ || remuxing_active_) {
+        if (update_panel)
+            update_panel->setRecordingActive(true);
+        diagnostics::AppLog::info(QStringLiteral("update"),
+                                  QStringLiteral("Update check skipped — recording/finalizing in progress"));
+        return;
+    }
+
+    if (update_panel)
+        update_panel->setState(ui::dialogs::UpdateUiState::Checking);
+    update_service_->RequestUpdateCheck();
+}
+
+void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) {
+    auto* update_panel =
+        config_page_
+            ? config_page_->findChild<exosnap::ui::dialogs::UpdateSettingsPanel*>(QStringLiteral("settingsUpdatePanel"))
+            : nullptr;
+
+    const QString current_version = QString::fromLatin1(exosnap::build::kVersion);
+    const QString channel =
+        update_service_ ? UpdateChannelToString(update_service_->Channel()) : persisted_settings_.update_channel;
+
+    // The engine result exposes only a releases-page URL (no tag-specific notes body
+    // / html URL). Map that to both the releases link and the notes link; leave
+    // whats_new empty since there is no structured changelog from the check.
+    last_update_releases_url_ = result.releases_page_url
+                                    ? QString::fromStdString(*result.releases_page_url)
+                                    : QStringLiteral("https://github.com/Exoridus/exosnap/releases");
+
+    const QString available_version =
+        result.available_version ? QString::fromStdString(result.available_version->ToString()) : QString();
+
+    ui::dialogs::UpdateUiModel model;
+    model.current_version = current_version;
+    model.available_version = available_version;
+    model.channel = channel;
+    model.last_checked = QDateTime::currentDateTime().toString(QStringLiteral("MMM d, h:mm AP"));
+    model.release_url = last_update_releases_url_;
+    model.release_notes_url = last_update_releases_url_;
+
+    if (result.check_failed || result.error_message) {
+        model.error_message = result.error_message ? QString::fromStdString(*result.error_message)
+                                                   : QStringLiteral("Couldn't reach the update server.");
+        if (update_panel) {
+            update_panel->setModel(model);
+            update_panel->setState(ui::dialogs::UpdateUiState::Error);
+        }
+        diagnostics::AppLog::warning(QStringLiteral("update"),
+                                     QStringLiteral("Update check failed: %1").arg(model.error_message));
+        return;
+    }
+
+    if (update_panel) {
+        update_panel->setModel(model);
+        update_panel->setState(result.update_available ? ui::dialogs::UpdateUiState::Available
+                                                       : ui::dialogs::UpdateUiState::UpToDate);
+    }
+
+    diagnostics::AppLog::info(
+        QStringLiteral("update"),
+        result.update_available
+            ? QStringLiteral("Update available: %1 → %2 (%3)").arg(current_version, available_version, channel)
+            : QStringLiteral("Up to date (%1, %2)").arg(current_version, channel));
+
+    // Notify-on-available: timed info toast routed to Settings → Software updates.
+    // (Toast action pills are visual-only today — the toast is capture-excluded /
+    // transparent-for-input — but OpenUpdate carries the intent to navigate to
+    // kSettingsPageIndex once toast actions become interactive.)
+    if (result.update_available && persisted_settings_.show_notifications && notification_manager_) {
+        notifications::NotificationEvent event;
+        event.type = notifications::NotificationType::UpdateAvailable;
+        event.title = QStringLiteral("Update available — %1").arg(available_version);
+        event.body = QStringLiteral("%1 channel · %2 → %3").arg(channel, current_version, available_version);
+        event.action = notifications::NotificationAction::OpenUpdate;
+        event.secondary_action = notifications::NotificationAction::None;
+        notification_manager_->Enqueue(std::move(event));
     }
 }
 

@@ -201,6 +201,8 @@ qt_add_executable(exosnap WIN32
     services/RecoveryService.cpp
     services/CrashIssueReport.h
     services/CrashIssueReport.cpp
+    services/UpdateService.h
+    services/UpdateService.cpp
     models/WebcamSettings.h
     models/OutputSettingsModel.h
     models/OutputSettingsModel.cpp
@@ -281,6 +283,7 @@ add_dependencies(exosnap exosnap_build_info)
 target_link_libraries(exosnap PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
     recorder_core exosnap::capability exosnap::warnings FFmpeg::mux exosnap::crash_capture
+    exosnap::update
     d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
     mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib
 )
@@ -372,10 +375,14 @@ exosnap_add_app_test_support(exosnap_pages_test_support
     ui/widgets/ExoToggle.cpp
     ui/widgets/VUMeterWidget.cpp
     ui/widgets/WebcamSetupPanel.cpp
+    # UPDATE-WIRE-R1: ConfigPage now embeds the UpdateSettingsPanel, which pulls in
+    # the Lucide glyph renderer.
+    ui/dialogs/UpdateSettingsPanel.cpp
+    ui/theme/LucideIcon.cpp
 )
 target_link_libraries(exosnap_pages_test_support PUBLIC
     exosnap_device_service_test_support exosnap_output_model_test_support
-    Qt6::Core Qt6::Gui Qt6::Widgets
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
 
 exosnap_add_app_test_support(exosnap_source_picker_test_support

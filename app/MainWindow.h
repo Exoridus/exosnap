@@ -68,7 +68,12 @@ class DiagnosticsPage;
 class HotkeysPage;
 class LogsPage;
 class RecordPage;
+class UpdateService;
 class WebcamPage;
+
+namespace update {
+struct UpdateCheckResult;
+} // namespace update
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -176,6 +181,13 @@ class MainWindow : public QMainWindow {
     void initNotificationToasts();
     // Gate toasts on the show_notifications setting.
     void updateNotificationToastsEnabled();
+
+    // UPDATE-WIRE-R1 (ADR 0012): trigger a guarded update check. No-op (and shows
+    // the paused banner) while recording / remuxing.
+    void triggerUpdateCheck();
+    // Handle the async result: build the UI model + state, and enqueue a toast when
+    // an update is available and notifications are enabled.
+    void onUpdateCheckComplete(const update::UpdateCheckResult& result);
     // QUICK-PILL-R1: update the quick-control pill visibility/state.
     void updateQuickControlPill();
 
@@ -204,6 +216,10 @@ class MainWindow : public QMainWindow {
     // NOTIFY-TOASTS-R1: manager (owned by this) + toast window (top-level, no parent).
     notifications::NotificationManager* notification_manager_ = nullptr;
     ui::overlay::NotificationToastWindow* notification_toast_window_ = nullptr;
+    // UPDATE-WIRE-R1 (ADR 0012): Qt bridge to the update engine (owned by this).
+    UpdateService* update_service_ = nullptr;
+    // Last update check's releases-page URL (for the panel's "Open releases" / notes link).
+    QString last_update_releases_url_;
     // Last known monitor rect from RecordPage for overlay positioning.
     QRect recording_monitor_rect_;
     QStackedWidget* stack_ = nullptr;

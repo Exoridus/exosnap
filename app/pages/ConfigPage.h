@@ -34,6 +34,10 @@ class VUMeterWidget;
 class WebcamSetupPanel;
 } // namespace exosnap::ui::widgets
 
+namespace exosnap::ui::dialogs {
+class UpdateSettingsPanel;
+} // namespace exosnap::ui::dialogs
+
 namespace exosnap {
 
 class ConfigPage : public QWidget {
@@ -307,6 +311,10 @@ class ConfigPage : public QWidget {
     QAction* set_default_preset_action_ = nullptr;
 
     ui::widgets::WebcamSetupPanel* webcam_setup_panel_ = nullptr;
+
+    // UPDATE-WIRE-R1: embedded "Software updates" card (Settings → near Advanced).
+    // Wired from MainWindow via findChild(objectName "settingsUpdatePanel").
+    ui::dialogs::UpdateSettingsPanel* update_settings_panel_ = nullptr;
 
     QLabel* lock_note_label_ = nullptr;
     bool controls_locked_ = false;
