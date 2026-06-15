@@ -706,6 +706,19 @@ add_dependencies(about_overlay_tests exosnap_build_info)
 set_target_properties(about_overlay_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
+    NAME crash_report_overlay_tests
+    TEST_PREFIX crash.
+    SOURCES
+        tests/test_crash_report_overlay.cpp
+        ui/dialogs/CrashReportPanel.cpp
+        ui/dialogs/CrashReportOverlay.cpp
+        ui/brand/BrandMarkWidget.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(crash_report_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+set_target_properties(crash_report_overlay_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
     NAME version_tests
     TEST_PREFIX version.
     SOURCES
