@@ -274,6 +274,10 @@ QWidget* UpdateSettingsPanel::buildChannelSelector() {
     seg_layout->setSpacing(3);
     seg_layout->addWidget(channel_stable_);
     seg_layout->addWidget(channel_preview_);
+    // clearBody() hid these persistent buttons; re-show them now that they are
+    // re-parented into the fresh segmented track (mirrors check_button_->show()).
+    channel_stable_->show();
+    channel_preview_->show();
     row_layout->addWidget(segmented, 0, Qt::AlignVCenter);
 
     outer->addWidget(row);

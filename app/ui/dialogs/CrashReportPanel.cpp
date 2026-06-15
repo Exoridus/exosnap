@@ -488,7 +488,8 @@ QWidget* CrashReportPanel::buildActionsRow() {
     overflow_button_->setIconSize(QSize(16, 16));
     overflow_button_->setStyleSheet(
         QStringLiteral("QPushButton { background:transparent; border:1px solid %1; border-radius:17px; }"
-                       "QPushButton:hover { border:1px solid %2; }")
+                       "QPushButton:hover { border:1px solid %2; }"
+                       "QPushButton::menu-indicator { image: none; width: 0; }")
             .arg(tok(ExoSnapPalette::kLine2), tok(ExoSnapPalette::kAccentBorderStrong)));
 
     overflow_menu_ = new QMenu(overflow_button_);

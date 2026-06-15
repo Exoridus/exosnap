@@ -119,7 +119,14 @@ class CrashUpdateVisualProofTest : public ::testing::Test {
         settleLayout(widget);
         const QSize wsize = widget.sizeHint().expandedTo(widget.size()).expandedTo(QSize(1, 1));
         widget.resize(wsize);
-        // Lay out children at the final size before rendering.
+        // Show off-screen so a real layout/polish pass runs: persistent widgets that
+        // are re-parented + re-shown across a rebuild (e.g. the channel selector
+        // buttons) only acquire geometry after an actual show — render() on a
+        // never-shown tree leaves them collapsed. Off-screen avoids any flicker.
+        widget.move(-20000, -20000);
+        widget.show();
+        settleLayout(widget);
+        widget.resize(wsize);
         settleLayout(widget);
 
         constexpr int kMargin = 20;
