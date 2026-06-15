@@ -16,8 +16,24 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 # PDB contention with the Visual Studio generator. Ninja builds are unaffected
 # because CMake already adds /FS for Ninja+MSVC. /Z7 embeds debug info in each
 # .obj file; debugging experience is equivalent to /Zi.
+#
+# EXOSNAP_RELEASE_PDB (default OFF): the release pipeline turns this ON so the
+# Release config emits a SEPARATE .pdb (/Zi + linker /DEBUG) that CI can archive
+# for offline symbolication of crash minidumps (ADR 0017 § Symbol pipeline). The
+# default OFF build is unchanged: plain Release stays PDB-free, and the install
+# tree never ships a .pdb regardless (install(TARGETS) deploys RUNTIME only).
+option(EXOSNAP_RELEASE_PDB
+    "Emit a separate PDB for the Release config so the release pipeline can archive symbols."
+    OFF)
 if(MSVC)
-    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
+    if(EXOSNAP_RELEASE_PDB)
+        set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>$<$<CONFIG:Release>:ProgramDatabase>")
+        # /Zi alone records debug info in the objects; the linker must be told to
+        # produce the .pdb and keep it (Release otherwise strips debug data).
+        add_link_options("$<$<CONFIG:Release>:/DEBUG>" "$<$<CONFIG:Release>:/OPT:REF>" "$<$<CONFIG:Release>:/OPT:ICF>")
+    else()
+        set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
+    endif()
 endif()
 
 option(EXOSNAP_USE_SCCACHE "Use sccache as the C++ compiler launcher when it is available." OFF)

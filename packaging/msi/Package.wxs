@@ -64,6 +64,19 @@
             <File Source="$(var.StagingDir)\D3Dcompiler_47.dll" KeyPath="yes" />
           </Component>
 
+          <!--
+            Crashpad out-of-process handler (ADR 0017). Only present when the
+            artifact was built with EXOSNAP_ENABLE_CRASH_CAPTURE=ON; the release
+            build script defines IncludeCrashpad accordingly. An OFF build omits
+            both the file and this component so the MSI build does not fail on a
+            missing source.
+          -->
+          <?if $(var.IncludeCrashpad) = "yes" ?>
+          <Component Id="CrashpadHandler" Guid="*">
+            <File Source="$(var.StagingDir)\crashpad_handler.exe" KeyPath="yes" />
+          </Component>
+          <?endif?>
+
           <Directory Id="PluginsFolder" Name="plugins">
             <Directory Id="PlatformsFolder" Name="platforms">
               <Component Id="PlatformQWindows" Guid="*">
@@ -169,6 +182,9 @@
       <ComponentRef Id="Qt6Svg" />
       <ComponentRef Id="Qt6Network" />
       <ComponentRef Id="D3DCompiler47" />
+      <?if $(var.IncludeCrashpad) = "yes" ?>
+      <ComponentRef Id="CrashpadHandler" />
+      <?endif?>
       <ComponentRef Id="PlatformQWindows" />
       <ComponentRef Id="IconEngineQSvg" />
       <ComponentRef Id="ImgFormatSvg" />

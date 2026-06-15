@@ -1,0 +1,110 @@
+name: Crash-Capture Build
+
+# Validates the EXOSNAP_ENABLE_CRASH_CAPTURE=ON build so the crash strand cannot
+# silently break on main. The ON build fetches and compiles sentry-native 0.15.0
+# + Crashpad + mini_chromium from source — that is slow (~10-20 min), so this job
+# is deliberately NOT part of the per-PR `ci.yml`. It is gated to:
+#
+#   - push to `main`          (catch breakage the moment it lands)
+#   - workflow_dispatch       (manual on-demand validation)
+#   - PRs labeled `crash-capture` (opt-in heavy check when touching the strand)
+#
+# EXOSNAP_OFFICIAL_BUILD stays OFF here, so NO secrets are required: the Sentry
+# DSN is not compiled in and the ed25519 update public key is not needed. This
+# job only proves the crash-capture code path configures, builds, and produces
+# crashpad_handler.exe. The DSN + signed-update key are exercised only by the
+# release pipeline, which carries the maintainer secrets.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+concurrency:
+  group: crash-capture-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  crash-capture-build:
+    name: crash-capture-build (ON)
+    runs-on: windows-2022
+    # On PRs, only run when the `crash-capture` label is present. Push to main
+    # and manual dispatch always run (github.event.label is null there, so the
+    # second clause short-circuits via the event_name check).
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'crash-capture')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Crashpad + mini_chromium nest extremely deep under FetchContent; the
+      # default build-tree path blows past Windows MAX_PATH (260). Long-path
+      # support is mandatory for the Crashpad checkout/build to succeed.
+      - name: Enable git long paths
+        run: git config --global core.longpaths true
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.9.0'
+          arch: 'win64_msvc2022_64'
+          archives: 'qtbase qtsvg'
+          cache: true
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      # Cache the fetched + built sentry-native/Crashpad source tree so reruns do
+      # not re-clone and re-build the whole dependency. Keyed on the pinned
+      # sentry-native version embedded in VendorSentry.cmake; bump the version
+      # there and the cache key rotates automatically.
+      - name: Cache FetchContent deps (sentry-native + Crashpad)
+        uses: actions/cache@v4
+        with:
+          path: C:/es
+          key: es-fetchcontent-${{ runner.os }}-${{ hashFiles('cmake/VendorSentry.cmake') }}
+          restore-keys: |
+            es-fetchcontent-${{ runner.os }}-
+
+      # Configure with a SHORT FetchContent base (C:/es) per VendorSentry.cmake's
+      # MAX_PATH guidance. Ninja + sccache mirror the rest of CI. OFFICIAL_BUILD
+      # stays OFF so no DSN / update key secret is needed.
+      - name: Configure (crash capture ON)
+        run: >-
+          cmake -S . -B build/win-on -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DEXOSNAP_USE_SCCACHE=ON
+          -DEXOSNAP_ENABLE_CRASH_CAPTURE=ON
+          -DEXOSNAP_OFFICIAL_BUILD=OFF
+          -DFETCHCONTENT_BASE_DIR=C:/es
+
+      - name: Build exosnap (crash capture ON)
+        run: cmake --build build/win-on --target exosnap
+
+      # Prove the out-of-process crash handler shipped next to the app binary —
+      # the POST_BUILD stage in app/CMakeLists.txt copies it there. If it is
+      # missing, the runtime crash handler would never launch.
+      - name: Verify crashpad_handler.exe is staged
+        shell: pwsh
+        run: |
+          $exe = "build/win-on/app/crashpad_handler.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            Write-Host "::error::crashpad_handler.exe was not staged next to exosnap.exe at $exe"
+            Get-ChildItem -LiteralPath "build/win-on/app" -Filter "*.exe" |
+              ForEach-Object { Write-Host "  found: $($_.Name)" }
+            exit 1
+          }
+          Write-Host "crashpad_handler.exe present: $((Get-Item $exe).Length) bytes"
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats

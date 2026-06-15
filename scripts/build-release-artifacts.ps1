@@ -338,6 +338,24 @@ foreach ($lic in $requiredLicenses) {
     if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot "licenses/$lic") -PathType Leaf)) { Add-Error "Missing third-party license: licenses/$lic" }
 }
 
+# Crash-capture (ADR 0017) is an optional build: crashpad_handler.exe is only in
+# the install tree when EXOSNAP_ENABLE_CRASH_CAPTURE=ON. When present, the Sentry/
+# Crashpad/mini_chromium license texts MUST ship alongside it (VendorSentry stages
+# them into licenses/). When absent (OFF build), neither is required, so packaging
+# does not break for self-builds.
+$CrashpadHandlerName = 'crashpad_handler.exe'
+$IncludeCrashpad = Test-Path -LiteralPath (Join-Path $PackageRoot $CrashpadHandlerName) -PathType Leaf
+if ($IncludeCrashpad) {
+    Write-Host "  Crash capture: ON ($CrashpadHandlerName present — bundling handler + sentry licenses)"
+    $crashLicenses = @('sentry-native.txt', 'crashpad.txt', 'mini_chromium.txt')
+    foreach ($lic in $crashLicenses) {
+        if (-not (Test-Path -LiteralPath (Join-Path $PackageRoot "licenses/$lic") -PathType Leaf)) { Add-Error "Missing crash-capture license: licenses/$lic" }
+    }
+}
+else {
+    Write-Host "  Crash capture: OFF ($CrashpadHandlerName absent — handler/sentry licenses not bundled)"
+}
+
 # Absence — development files, user data, and workspace artifacts must not leak.
 $forbiddenExt = @('.pdb', '.ilk', '.exp', '.lib', '.obj', '.pch', '.h', '.hpp', '.cpp', '.c', '.cmake', '.pc',
     '.suo', '.user', '.vcxproj', '.sln', '.log', '.tmp')
@@ -463,11 +481,16 @@ if (-not $SkipMsi) {
         }
         else {
             try {
+                # IncludeCrashpad mirrors the staging tree: only emit the
+                # crashpad_handler.exe component when the ON build produced it,
+                # so `wix build` never references a missing source file.
+                $includeCrashpadValue = if ($IncludeCrashpad) { 'yes' } else { 'no' }
                 $msiArgs = @(
                     'build', '-arch', 'x64',
                     '-o', $MsiPath,
                     '-d', "StagingDir=$PackageRoot",
                     '-d', "ProductVersion=$Version",
+                    '-d', "IncludeCrashpad=$includeCrashpadValue",
                     $wxsPath
                 )
                 Invoke-Heartbeat -Name 'wix build' -FilePath 'wix' -Arguments $msiArgs
