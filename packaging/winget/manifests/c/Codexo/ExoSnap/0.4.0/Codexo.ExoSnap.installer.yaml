@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
+PackageIdentifier: Codexo.ExoSnap
+PackageVersion: 0.4.0
+InstallerType: wix
+Scope: machine
+InstallModes:
+  - silent
+  - silentWithProgress
+UpgradeBehavior: install
+Dependencies:
+  PackageDependencies:
+    - PackageIdentifier: Microsoft.VCRedist.2015+.x64
+ReleaseDate: 2026-06-15
+MinimumOSVersion: 10.0.17763.0
+Installers:
+  # PLACEHOLDER InstallerSha256 + ProductCode — fill from the official MSI build at
+  # release time (see .workspace/release/0.4.0-release-checklist.md). The all-zero SHA
+  # and null GUID are format-valid (CI lint passes) but MUST be replaced before the
+  # winget submission, or install will fail the checksum / Apps-and-Features match.
+  - Architecture: x64
+    InstallerUrl: https://github.com/Exoridus/exosnap/releases/download/v0.4.0/ExoSnap-0.4.0-windows-x64.msi
+    InstallerSha256: '0000000000000000000000000000000000000000000000000000000000000000'
+    ProductCode: '{00000000-0000-0000-0000-000000000000}'
+    AppsAndFeaturesEntries:
+      - DisplayName: ExoSnap
+        Publisher: Codexo
+        DisplayVersion: 0.4.0
+        ProductCode: '{00000000-0000-0000-0000-000000000000}'
+        UpgradeCode: '{8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D}'
+        InstallerType: wix
+ManifestType: installer
+ManifestVersion: 1.10.0

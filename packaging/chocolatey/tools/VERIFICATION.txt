@@ -7,14 +7,14 @@ This is a download package: it does not embed the installer. At install time it
 downloads the official ExoSnap MSI from the project's GitHub Release, which is
 published by the software author (Codexo / Exoridus).
 
-Package software: ExoSnap 0.3.0
+Package software: ExoSnap 0.4.0
 Publisher / source: https://github.com/Exoridus/exosnap
-Release: https://github.com/Exoridus/exosnap/releases/tag/v0.3.0
+Release: https://github.com/Exoridus/exosnap/releases/tag/v0.4.0
 
 1. The installer downloaded by this package is:
 
    x64 MSI:
-   https://github.com/Exoridus/exosnap/releases/download/v0.3.0/ExoSnap-0.3.0-windows-x64.msi
+   https://github.com/Exoridus/exosnap/releases/download/v0.4.0/ExoSnap-0.4.0-windows-x64.msi
 
 2. Verify its checksum. In PowerShell:
 
@@ -27,7 +27,7 @@ Release: https://github.com/Exoridus/exosnap/releases/tag/v0.3.0
    Expected value (also published as the .sha256 sidecar on the GitHub Release):
 
    checksumType: sha256
-   checksum64:   bac652533c6d52a6099d7234876ca4ffcb007650e3ec73833e41444f0c2ebd57
+   checksum64:   PLACEHOLDER_FILL_MSI_SHA256_AT_RELEASE
 
 3. The same value is embedded in tools\chocolateyinstall.ps1, so the package will
    refuse to install if the downloaded MSI does not match.

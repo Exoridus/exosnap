@@ -6,17 +6,34 @@ webcam PiP overlay, crash recovery, and built-in diagnostics. Dark-mode-first Qt
 
 ## Status / current release
 
-- **Latest release:** `0.3.0` — "Presence and notifications".
+- **Latest release:** `0.4.0` — "Crash reporting and updates".
 - **Pre-v1 notice:** settings, preset, and recording-history schemas may change incompatibly before 1.0.0.
 - **Platform:** Windows 10/11 x64 (Windows 11 is the primary target; Windows 10 is best-effort).
 - **Hardware encoder:** NVIDIA NVENC only. An NVIDIA GPU with supported NVENC capability is required.
   AMD, Intel, and software encoding are not yet supported.
 - **Distribution:** portable ZIP and MSI. Builds are not yet code-signed (see
   [Code signing](#code-signing) below); Windows SmartScreen may warn on first launch.
-- **Privacy:** no telemetry, analytics, or network connections — all data stays local.
+- **Privacy:** no analytics and no background telemetry. Recordings and settings stay local. The only
+  network features are **opt-in and consent-gated**: an update check against public GitHub Releases
+  (off by default for self-built binaries) and a privacy-scrubbed crash report you explicitly choose to
+  send (Stage 0 assisted GitHub issue, or Stage 1 automated upload to Sentry with EU data residency).
   See [`PRIVACY.md`](PRIVACY.md).
 
-## Features (0.3.0 presence and notifications wave)
+## Features (0.4.0 crash reporting and updates wave)
+
+- Local-first crash capture (out-of-process Crashpad). On the next launch after a crash, a
+  privacy-scrubbed crash dialog lets you review and choose how to report — nothing is sent without
+  consent.
+- Two-stage, consent-gated crash delivery: **Stage 0** prefills an assisted GitHub issue;
+  **Stage 1** is an automated opt-in upload to Sentry (EU data residency, DPA-governed), compiled in
+  only under the official-build gate. Self-built binaries never phone home.
+- Update checking with **Stable** and **Preview** channels: notifies when a newer release is
+  available and opens the releases page (no silent auto-restart; in-place download deferred).
+- Signed update manifest: ed25519 signature (Monocypher verify) + SHA-256 package hash, with
+  downgrade/rollback protection. No GitHub token in the client; updates are off by default for
+  self-built binaries.
+
+### Carried over from earlier waves
 
 - Capture-excluded on-screen overlays (recording status, diagnostics, countdown) — visible on screen
   but excluded from the captured frame via `WDA_EXCLUDEFROMCAPTURE`.
