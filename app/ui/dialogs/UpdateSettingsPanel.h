@@ -52,7 +52,7 @@ class UpdateSettingsPanel : public QWidget {
     void setState(UpdateUiState state);
     void setModel(const UpdateUiModel& model);
     void setRecordingActive(bool active);
-    QString channel() const;
+    const QString& channel() const;
 
   signals:
     void checkRequested();

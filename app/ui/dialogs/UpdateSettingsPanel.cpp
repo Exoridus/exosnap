@@ -170,7 +170,7 @@ UpdateSettingsPanel::UpdateSettingsPanel(QWidget* parent) : QWidget(parent) {
     rebuild();
 }
 
-QString UpdateSettingsPanel::channel() const {
+const QString& UpdateSettingsPanel::channel() const {
     return model_.channel;
 }
 
