@@ -2,9 +2,14 @@
 
 ## Status
 
-Proposed — implementation scheduled for 0.4.0 (see roadmap). Companion to ADR 0012
+Accepted — implementation scheduled for 0.4.0 (see roadmap). Companion to ADR 0012
 (update security model); the two share the official-build gate and the "no secret in the
 client" rule.
+
+**Updated 2026-06:** Self-hosted Germany-only endpoint superseded by **Sentry SaaS (EU data
+residency)**. Self-hosted Sentry was rejected as too RAM-heavy for a small VPS. Stage 1
+(automated opt-in upload) is now in scope for 0.4.0 — not deferred — subject to the consent
+gate and the privacy controls enumerated in this ADR.
 
 ## Context
 
@@ -21,8 +26,9 @@ Constraints that shape the decision:
 - **No standing infrastructure.** As of 0.4.0 planning there is no crash backend, no symbol
   hosting, and no signing/CA setup. The explicit goal is to avoid running custom servers when a
   hosted free-tier service or GitHub can do the job.
-- **Roadmap precondition.** The roadmap only pulls crash *upload* forward once backend, privacy,
-  and symbol hosting actually exist. The *local* crash experience has no such precondition.
+- **Upload target now identified.** Stage 1 (automated opt-in upload) targets Sentry SaaS with EU
+  data residency; this resolves the earlier open question. The *local* crash experience has no
+  infrastructure precondition regardless.
 - **Existing recovery machinery.** ADR 0015 already defines a recovery manifest + startup
   recovery overlay for unfinished recordings. Crash reporting must coordinate with it, not
   duplicate or fight it.
@@ -72,10 +78,10 @@ Dialog contents and actions:
   code, app version, GPU/driver, encoder backend), so the dialog is not dominated by a wall of
   text. The raw binary minidump is never shown here.
 - Actions: **Restart ExoSnap** (primary), **Report on GitHub** (Stage 0 prefilled issue),
-  **Open crash folder** (reveals the raw `.dmp` for users who want it), **Close**. When automated
-  upload lights up (Stage 1), a **Send** action joins them, gated and opt-in. (The design mappe
-  mock shows a Stage-1 "Send report" primary + "Send automatically next time" — that is the
-  *target* state, not the 0.4.0 shipping state, which has no upload backend.)
+  **Open crash folder** (reveals the raw `.dmp` for users who want it), **Close**. In 0.4.0,
+  when Stage 1 (Sentry EU SaaS) is active, a **Send** action joins them, consent-gated and
+  opt-in. (The design mappe mock shows a Stage-1 "Send report" primary + "Send automatically
+  next time" — that is the target UX for users who enable automated upload.)
 
 ### Two triggers: an immediate reporter and a next-launch check
 
@@ -112,23 +118,35 @@ that links reports across time.
 Upload is off by default and requires explicit, informed consent (per-report or remembered).
 The client binary contains no token or credential, consistent with ADR 0012.
 
-**The upload target is deliberately a gated integration point, not hardcoded in the 0.4.0 local
-slice.** GitHub is unsuitable as an *automated* crash-ingest endpoint: it offers no anonymous
-minidump ingest, and the Issues API would require a client-side token, which is forbidden.
+**The chosen automated upload target is Sentry SaaS with EU data residency (EU/Germany ingest).**
+GitHub is unsuitable as an *automated* crash-ingest endpoint: it offers no anonymous minidump
+ingest, and the Issues API would require a client-side token, which is forbidden. A self-hosted
+Germany-only endpoint was considered but rejected: self-hosted Sentry is too RAM-heavy for a small
+VPS, and lighter alternatives would require building and hardening custom ingest infrastructure.
+Sentry SaaS with EU data residency satisfies the privacy posture via a Data Processing Agreement,
+keeps data within the EU, and is available without standing up custom servers.
 
-The preferred automated target is a **self-hosted, Germany-only endpoint** on the maintainer's
-own infrastructure (VPS or homelab), which avoids any third-party data processor and the
-associated DPA/AVV burden — a strong privacy advantage over SaaS. The concrete software (e.g.
-self-hosted Sentry, a lighter Sentry-compatible backend, or a minimal minidump receiver) is a
-Crash-C decision and must be verified for native Crashpad *minidump* ingest; self-hosted Sentry
-is RAM-heavy and would not fit a small VPS. A hosted SaaS (Sentry) remains a fallback only.
+**Privacy controls for Stage 1 (Sentry EU SaaS):**
 
-**A crash-ingest endpoint accepts untrusted binary data from arbitrary internet clients and parses
-it — a real attack surface.** Automated upload activation is therefore deferred not only until a
-concrete target exists and passes privacy review, but until the hosting network is hardened
-(logging, intrusion detection, DMZ/VLAN segmentation). Until then automated upload ships compiled
-out or hard-disabled, exactly like the official-build update gate, and Stage 0 (assisted GitHub
-issue) is the only delivery path.
+- `require_user_consent=1` — nothing is transmitted without explicit opt-in; upload is off by
+  default and requires per-report (or remembered) consent.
+- `enable_logs=0` — Crashpad breadcrumb logs are not collected.
+- `debug=0` in Release builds.
+- `before_send` scrubbing via an **allowlist**: only OS build, GPU model/driver version, app
+  version, encoder backend, container/codec, plus the stack/minidump are included. Usernames,
+  file paths (including output path and recording filenames), and the machine name are stripped
+  before the report leaves the process.
+- Crash database at `%LOCALAPPDATA%\ExoSnap\crashes\`.
+- The Sentry DSN is compiled in **only** under `EXOSNAP_OFFICIAL_BUILD`; self-builds never phone
+  home. The DSN is a write-only ingest key (not a secret in the ADR 0012 sense — it cannot read
+  data back from the project's Sentry org).
+- **No persistent install identifier.** No stable device-level id is generated or stored; at most
+  a per-report random correlation id may be attached for a single submission's de-duplication.
+- Sentry org-level Security & Privacy settings are all ON: Require Data Scrubber, Require Default
+  Scrubbers, Prevent Storing IP Addresses.
+
+Automated upload is compiled out or hard-disabled in the absence of `EXOSNAP_OFFICIAL_BUILD`,
+exactly like the official-build update gate.
 
 ### Staged delivery: assisted manual report first, automated upload later
 
@@ -144,15 +162,18 @@ backend**:
   (~8 KB) and the Issues API would need a client token — so the user attaches the `.dmp` manually.
   This is an accepted OSS pattern: full consent, full transparency, no third-party data processor,
   and no DPA obligation. Users without a GitHub account fall back to the clipboard copy.
-- **Stage 1 — automated upload (later, gated).** When a concrete automated target exists and
-  passes privacy review, opt-in automated upload (e.g. Sentry minidump ingest) lights up behind
-  the gate above, replacing the manual attach step for users who consent. Stage 0 remains as the
-  no-account / declined-upload fallback.
+- **Stage 1 — automated opt-in upload to Sentry (EU data residency) — in scope for 0.4.0, gated
+  by consent.** The upload target is Sentry SaaS with EU data residency; this is the Crash C
+  deliverable. Opt-in automated upload lights up behind the `EXOSNAP_OFFICIAL_BUILD` gate and the
+  consent gate above, replacing the manual attach step for users who consent. Stage 0 remains as
+  the no-account / declined-upload fallback. The upload targets Sentry's EU ingest endpoint; a
+  Data Processing Agreement governs the relationship. See the privacy controls enumerated above.
 
 The trade-off is explicit: Stage 0 captures fewer reports (manual steps lower conversion) and
 omits the binary unless the user attaches it, but it requires no infrastructure, no account on
 ExoSnap's side, and no data-processing agreement. Stage 1 raises fidelity and conversion at the
-cost of an external dependency and a privacy review.
+cost of an external dependency and a DPA obligation — the latter is met by the Sentry EU SaaS
+arrangement.
 
 ### Symbol pipeline via release artifacts, not a custom server
 
@@ -173,8 +194,8 @@ upload and never phone home.
   infrastructure**. This is the primary stability win on the path to `1.0`.
 - The only piece blocked on an external decision is opt-in upload + automatic symbolication. It
   sits behind a compile/config gate and can light up later without reopening this architecture.
-- `PRIVACY.md` already pre-announces crash reporting as opt-in; it must be updated to describe the
-  concrete data set and target when upload actually ships.
+- `PRIVACY.md` already pre-announces crash reporting as opt-in; it is updated in 0.4.0 to describe
+  the concrete data set (allowlist), the Sentry EU SaaS target, and the consent gate.
 - Crashpad adds a separate handler executable that must be packaged in the portable ZIP and the
   MSI, and located at runtime (alongside the main binary; resolved by application directory).
 - Recovery (ADR 0015) and crash reporting share next-launch real estate; their ordering and the
