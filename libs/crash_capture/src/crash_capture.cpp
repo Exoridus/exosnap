@@ -207,7 +207,7 @@ bool Initialize(const CrashCaptureConfig& config) {
 #if defined(EXOSNAP_OFFICIAL_BUILD)
     // EU/.de ingest; write-only key (not a secret)
     sentry_options_set_dsn(
-        options, "https://e57ff3eff29ad472e673830d7f2fee21@o4511566018576384.ingest.de.sentry.io/4511566053900368");
+        options, "https://821c04d67576831b7c77efce2dc13bbc@o4511566018576384.ingest.de.sentry.io/4511566055931984");
 #else
     // No DSN; local minidumps only, no network traffic
     sentry_options_set_dsn(options, "");
