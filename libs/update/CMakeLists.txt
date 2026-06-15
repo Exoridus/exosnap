@@ -105,6 +105,9 @@ endif()
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-if(BUILD_TESTING)
-    add_subdirectory(tests)
-endif()
+# Tests are always registered (project convention: top-level tests/ and the
+# crash_capture lib both register unconditionally via exosnap_add_gtest). The
+# root build uses enable_testing(), not include(CTest), so BUILD_TESTING is
+# undefined in the standard preset — gating on it would silently drop these
+# suites from the authoritative ctest run.
+add_subdirectory(tests)

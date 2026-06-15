@@ -48,6 +48,29 @@ endif()
 include(FetchContent)
 
 # ---------------------------------------------------------------------------
+# Windows MAX_PATH mitigation (REQUIRED for the Crashpad build)
+#
+# Crashpad + mini_chromium nest extremely deep, e.g.
+#   <base>/sentry_native-src/external/crashpad/third_party/mini_chromium/
+#          mini_chromium/base/...
+# The default FetchContent base under the build tree routinely exceeds Windows
+# MAX_PATH (260) and breaks the Crashpad configure/build. Mitigate with BOTH:
+#   1) a SHORT fetch root:   cmake -DFETCHCONTENT_BASE_DIR=C:/es-deps ...
+#   2) long-path support:    git config --global core.longpaths true
+# CI release jobs that build with EXOSNAP_ENABLE_CRASH_CAPTURE=ON set both.
+# We do not hard-code a drive path here (not portable / not CI-safe); instead we
+# warn early if the projected path is already at risk.
+string(LENGTH
+    "${FETCHCONTENT_BASE_DIR}/sentry_native-src/external/crashpad/third_party/mini_chromium/mini_chromium"
+    _exosnap_crashpad_base_len)
+if(_exosnap_crashpad_base_len GREATER 180)
+    message(WARNING
+        "VendorSentry: FetchContent base path is long (${_exosnap_crashpad_base_len} chars before "
+        "Crashpad's own deep nesting). If the Crashpad build fails with path errors, re-configure with "
+        "a short -DFETCHCONTENT_BASE_DIR=C:/es-deps and run 'git config --global core.longpaths true'.")
+endif()
+
+# ---------------------------------------------------------------------------
 # sentry-native 0.15.0 (latest stable, June 2026)
 # Pin to an immutable release tag — never to a rolling branch.
 # ---------------------------------------------------------------------------
@@ -101,9 +124,10 @@ endif()
 # tree under the sentry_native binary directory.  We copy it next to
 # exosnap.exe so the runtime lookup (ResolveHandlerExePath) finds it.
 #
-# This block is added as a POST_BUILD command on the exosnap target by the
-# root CMakeLists.txt AFTER this include runs (see root CMakeLists.txt usage
-# block at the bottom of this file for the snippet to add).
+# The build-tree copy is a POST_BUILD command on the exosnap target in
+# app/CMakeLists.txt (where the exosnap target is defined — correct scope),
+# guarded by EXOSNAP_ENABLE_CRASH_CAPTURE and using $<TARGET_FILE:crashpad_handler>
+# so the Visual Studio multi-config per-config subdir is resolved correctly.
 #
 # Install rule: flat next to exosnap.exe (same pattern as Qt DLLs and FFmpeg).
 # ---------------------------------------------------------------------------
@@ -153,16 +177,10 @@ message(STATUS "VendorSentry: sentry-native ${EXOSNAP_SENTRY_VERSION} configured
 message(STATUS "VendorSentry: crashpad_handler.exe expected at ${EXOSNAP_CRASHPAD_HANDLER_EXE}")
 
 # ---------------------------------------------------------------------------
-# Usage snippet for root CMakeLists.txt (add after include(cmake/VendorSentry.cmake)):
-#
-#   # Copy crashpad_handler.exe next to exosnap.exe after each build
-#   if(EXOSNAP_ENABLE_CRASH_CAPTURE AND EXOSNAP_CRASHPAD_HANDLER_EXE)
-#       add_custom_command(TARGET exosnap POST_BUILD
-#           COMMAND ${CMAKE_COMMAND} -E copy_if_different
-#               "${EXOSNAP_CRASHPAD_HANDLER_EXE}"
-#               "$<TARGET_FILE_DIR:exosnap>/crashpad_handler.exe"
-#           COMMENT "Staging crashpad_handler.exe next to exosnap.exe"
-#           VERBATIM
-#       )
-#   endif()
+# The build-tree staging of crashpad_handler.exe is implemented in
+# app/CMakeLists.txt (search: "Stage crashpad_handler.exe"). It uses the
+# crashpad_handler TARGET via $<TARGET_FILE:crashpad_handler> rather than the
+# cached EXOSNAP_CRASHPAD_HANDLER_EXE path string, because the latter omits the
+# Visual Studio multi-config per-config subdir. The cached path remains the
+# source of truth for the install(FILES ...) rule above.
 # ---------------------------------------------------------------------------

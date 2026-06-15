@@ -109,17 +109,9 @@ add_subdirectory(libs/update)
 add_subdirectory(app)
 add_subdirectory(tests)
 
-# Stage crashpad_handler.exe next to exosnap.exe when sentry-native is linked.
-# exosnap target is defined in app/CMakeLists.txt above.
-if(FALSE)  # SPIKE: POST_BUILD scope bug; real fix moves this block into app/CMakeLists.txt
-    add_custom_command(TARGET exosnap POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${EXOSNAP_CRASHPAD_HANDLER_EXE}"
-            "$<TARGET_FILE_DIR:exosnap>/crashpad_handler.exe"
-        COMMENT "Staging crashpad_handler.exe next to exosnap.exe"
-        VERBATIM
-    )
-endif()
+# crashpad_handler.exe staging lives in app/CMakeLists.txt, where the exosnap
+# target is defined (correct POST_BUILD scope) and the crashpad_handler target
+# is reachable via $<TARGET_FILE:crashpad_handler>.
 
 option(EXOSNAP_BUILD_PROBES "Build ExoSnap developer probe executables" OFF)
 if(EXOSNAP_BUILD_PROBES)

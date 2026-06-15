@@ -8,6 +8,7 @@
 #include <update/update_checker.h>
 #include <update/update_types.h>
 
+#include "ExoSnapBuildInfo.h" // exosnap::build::kVersion (generated from PROJECT_VERSION)
 #include "RecordingCoordinator.h"
 
 #include "../viewmodels/RecordViewModel.h" // for UiRecordingState
@@ -96,7 +97,7 @@ void UpdateService::RequestUpdateCheck() {
         namespace upd = exosnap::update;
 
         upd::CheckParams params;
-        params.current_version = upd::ParseSemVer("0.3.0").value_or(upd::SemVer{0, 0, 0});
+        params.current_version = upd::ParseSemVer(exosnap::build::kVersion).value_or(upd::SemVer{0, 0, 0});
         params.channel = impl->channel;
         params.recording_guard = impl->MakeGuard();
 

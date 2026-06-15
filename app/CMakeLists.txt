@@ -277,6 +277,25 @@ target_link_libraries(exosnap PRIVATE
 
 target_include_directories(exosnap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
+# Stage crashpad_handler.exe next to exosnap.exe so the runtime lookup
+# (crash_capture::ResolveHandlerExePath) resolves it when running from the build
+# tree. Only relevant when crash capture is enabled (sentry-native + Crashpad
+# fetched); inert in the default build. Resolve the handler via the
+# crashpad_handler TARGET (generator expression) rather than a fixed path: the
+# Visual Studio multi-config generator emits the exe under a per-config subdir
+# (Debug/, Release/) that the cached EXOSNAP_CRASHPAD_HANDLER_EXE string misses.
+# The cached path stays the source of truth for the install() rule in VendorSentry.
+if(EXOSNAP_ENABLE_CRASH_CAPTURE AND TARGET crashpad_handler)
+    add_dependencies(exosnap crashpad_handler)
+    add_custom_command(TARGET exosnap POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:crashpad_handler>"
+            "$<TARGET_FILE_DIR:exosnap>/crashpad_handler.exe"
+        COMMENT "Staging crashpad_handler.exe next to exosnap.exe"
+        VERBATIM
+    )
+endif()
+
 function(exosnap_add_app_test_support NAME)
     add_library(${NAME} STATIC ${ARGN})
     target_include_directories(${NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
