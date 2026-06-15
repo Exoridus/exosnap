@@ -27,20 +27,56 @@ ExoSnap stores the following on your machine only:
 
 None of this leaves your device. You can delete any of it at any time.
 
+## Crash reporting
+
+ExoSnap 0.4.0 introduces opt-in crash reporting powered by **Sentry** (data processor) with
+**EU data residency**. A Data Processing Agreement governs this relationship. Crash reporting
+is subject to the following guarantees:
+
+- **Opt-in and consent-gated.** Nothing is transmitted without your explicit consent. Upload is
+  off by default. A crash-report dialog shows you exactly what would be sent before you decide.
+- **Self-builds never upload.** Official builds compile in the Sentry ingest key
+  (`EXOSNAP_OFFICIAL_BUILD`); self-built binaries do not include it and never phone home.
+- **What is sent (allowlist).** If you choose to send a report, the following fields are
+  included: OS build, GPU model and driver version, ExoSnap version, active encoder backend,
+  container and codec, and the crash stack/minidump. No other data is included.
+- **What is never sent.** Usernames, file paths (including your chosen output folder and
+  recording filenames), and machine name are stripped before the report leaves the process.
+  Breadcrumb logs are disabled (`enable_logs=0`). Recording content is never captured.
+- **No persistent identifier.** No stable device-level identifier is generated or stored. At
+  most a per-report random correlation id may be attached for de-duplication within a single
+  crash submission.
+- **IP address.** Sentry's servers are configured to not store IP addresses (org-level setting:
+  Prevent Storing IP Addresses). Transmission to Sentry's EU ingest endpoint still involves an
+  IP address in transit, as with any network request.
+- **Org-level data hygiene.** The ExoSnap Sentry organisation has Require Data Scrubber,
+  Require Default Scrubbers, and Prevent Storing IP Addresses enabled.
+
+Local crash captures (minidumps in `%LOCALAPPDATA%\ExoSnap\crashes\`) are stored on your device
+only, whether or not you consent to upload.
+
+## Update channel
+
+When the update check is enabled (opt-in), ExoSnap contacts the **public GitHub Releases API**
+to compare the installed version against the latest release. No authentication token is used.
+This request transmits your IP address to GitHub (GitHub Inc., USA) and the ExoSnap version
+string. No other data is sent. Update channel downloads are hosted as GitHub Release assets.
+No ExoSnap-operated server is involved.
+
 ## Network features (planned — not present in current releases)
 
 Current ExoSnap releases make **no** network connections. Future versions may add the following
 features. When they ship, this policy will be updated, and the features will be **off by default**
 (opt-in):
 
-- **Update check** — would contact a server (for example the GitHub Releases API) to compare the
-  installed version against the latest release. Any such request necessarily transmits your **IP
-  address** to that server (and, where GitHub is the host, to GitHub Inc. in the USA), together
-  with the current application version. No other data would be sent.
-- **Crash reporting** — would, **only with your explicit consent**, send crash diagnostics (stack
-  traces and limited system information, with sensitive paths scrubbed) to help diagnose defects.
+- **Update check** — contacts the public GitHub Releases API to compare the installed version
+  against the latest release. Transmits your **IP address** to GitHub (GitHub Inc., USA) and
+  the current application version. No other data is sent.
+- **Crash reporting** — only with your explicit consent, sends crash diagnostics (stack traces
+  and limited system information, with sensitive paths scrubbed) to Sentry (EU data residency).
+  See the "Crash reporting" section above for the full data set and controls.
 
-Neither feature exists today.
+Neither feature exists in current releases.
 
 ## Contact
 
