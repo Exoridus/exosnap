@@ -229,6 +229,28 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         config.audio.mic_gain_linear = 1.0f;
     }
 
+    // Audio encoding params (ADR 0019):
+    // audio_bitrate_kbps: 0 is valid (auto default); non-zero clamped to broadest safe range.
+    // Codec-specific clamping ([32,510] Opus / [64,320] AAC) happens in the engine.
+    if (config.audio.audio_bitrate_kbps > 510u) {
+        config.audio.audio_bitrate_kbps = 510u;
+    }
+    // opus_complexity: clamp to [0, 10].
+    if (config.audio.opus_complexity < 0) {
+        config.audio.opus_complexity = 0;
+    } else if (config.audio.opus_complexity > 10) {
+        config.audio.opus_complexity = 10;
+    }
+    // opus_frame_duration: reset unknown values to the default (20 ms).
+    {
+        using D = recorder_core::OpusFrameDuration;
+        const int d = static_cast<int>(config.audio.opus_frame_duration);
+        if (d != static_cast<int>(D::Ms20) && d != static_cast<int>(D::Ms10) && d != static_cast<int>(D::Ms5) &&
+            d != static_cast<int>(D::Ms2_5)) {
+            config.audio.opus_frame_duration = D::Ms20;
+        }
+    }
+
     // Webcam: delegate to the provided sanitizer (handles NaN/Inf + clamping).
     config.webcam = SanitizeWebcamSettings(config.webcam);
 
@@ -374,6 +396,17 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
         return false;
     }
     if (std::abs(a.audio.mic_gain_linear - b.audio.mic_gain_linear) > 1e-3f) {
+        return false;
+    }
+
+    // Audio encoding params (ADR 0019).
+    if (a.audio.audio_bitrate_kbps != b.audio.audio_bitrate_kbps) {
+        return false;
+    }
+    if (a.audio.opus_frame_duration != b.audio.opus_frame_duration) {
+        return false;
+    }
+    if (a.audio.opus_complexity != b.audio.opus_complexity) {
         return false;
     }
 
@@ -550,6 +583,17 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (std::abs(a.audio.mic_gain_linear - b.audio.mic_gain_linear) > 1e-3f) {
+        return false;
+    }
+
+    // Audio encoding params (ADR 0019).
+    if (a.audio.audio_bitrate_kbps != b.audio.audio_bitrate_kbps) {
+        return false;
+    }
+    if (a.audio.opus_frame_duration != b.audio.opus_frame_duration) {
+        return false;
+    }
+    if (a.audio.opus_complexity != b.audio.opus_complexity) {
         return false;
     }
 

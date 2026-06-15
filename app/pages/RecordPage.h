@@ -38,6 +38,7 @@ class QLineEdit;
 class QPushButton;
 class QResizeEvent;
 class QSlider;
+class QSpinBox;
 class QTimer;
 class QVBoxLayout;
 
@@ -283,6 +284,9 @@ class RecordPage : public QWidget {
     void onMicDeviceChanged(int index);
     void onMicChannelChanged(int index);
     void onMicGainChanged(int db_value);
+    void onAudioBitrateChanged(int kbps);
+    void onOpusFrameDurationChanged(int index);
+    void onOpusComplexityChanged(int value);
     void openOutputFolder();
     void onCopyFilePath();
     void onRenameFile();
@@ -385,6 +389,13 @@ class RecordPage : public QWidget {
     QWidget* mic_gain_row_ = nullptr;
     QSlider* mic_gain_slider_ = nullptr;
     QLabel* mic_gain_value_label_ = nullptr;
+    // Audio encoding params (ADR 0019).
+    QWidget* audio_bitrate_row_ = nullptr;
+    QSpinBox* audio_bitrate_spin_ = nullptr;
+    QWidget* opus_frame_duration_row_ = nullptr;
+    QComboBox* opus_frame_duration_combo_ = nullptr;
+    QWidget* opus_complexity_row_ = nullptr;
+    QSpinBox* opus_complexity_spin_ = nullptr;
     QFrame* track_preview_panel_ = nullptr;
     QVBoxLayout* track_preview_layout_ = nullptr;
     ui::widgets::SectionRuleHeader* audio_header_ = nullptr;

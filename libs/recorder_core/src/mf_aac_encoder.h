@@ -30,6 +30,14 @@ class MfAacEncoder {
     MfAacEncoder(const MfAacEncoder&) = delete;
     MfAacEncoder& operator=(const MfAacEncoder&) = delete;
 
+    // Set AAC bitrate before Init(). bitrate_kbps=0 keeps the default (192 kbps).
+    // Valid range: [64, 320] kbps. Values outside the range are clamped.
+    void SetBitrateKbps(uint32_t bitrate_kbps) noexcept;
+
+    // Clamp to valid MF AAC range [64, 320] kbps. 0 maps to kDefaultBitrateKbps.
+    // Exposed as public for unit testing.
+    static uint32_t ResolveBitrateKbps(uint32_t kbps) noexcept;
+
     // Enumerate, activate, configure input/output types and begin streaming.
     // sample_rate must be 48000, channels must be 2.
     bool Init(uint32_t sample_rate, uint32_t channels, std::string& out_error);
@@ -78,6 +86,10 @@ class MfAacEncoder {
     }
 
   private:
+    static constexpr uint32_t kDefaultBitrateKbps = 192;
+
+    uint32_t m_bitrate_kbps = 0; // 0 = use kDefaultBitrateKbps
+
     bool m_mfStarted = false;
     bool m_usedDirectClsid = false;
     IMFActivate* m_pActivate = nullptr;

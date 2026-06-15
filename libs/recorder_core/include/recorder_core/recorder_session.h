@@ -176,6 +176,26 @@ struct CompletedSegment {
 using SegmentCallback = std::function<void(const CompletedSegment&)>;
 
 // ---------------------------------------------------------------------------
+// OpusFrameDuration — configurable Opus frame size (ADR 0019)
+// ---------------------------------------------------------------------------
+
+// Supported Opus frame durations. Maps to frame-size-in-samples at 48 kHz.
+// 20 ms is the default; shorter durations reduce latency at the cost of
+// higher CPU usage and slightly lower coding efficiency.
+enum class OpusFrameDuration {
+    Ms20 = 960,  // 20 ms — default, best coding efficiency
+    Ms10 = 480,  // 10 ms — lower latency
+    Ms5 = 240,   // 5 ms  — low latency / higher CPU
+    Ms2_5 = 120, // 2.5 ms — very low latency / highest CPU (expert)
+};
+
+// Returns the frame size in samples for a given OpusFrameDuration.
+// Equivalent to static_cast<int>(duration) but named for clarity.
+inline constexpr int OpusFrameSizeSamples(OpusFrameDuration d) noexcept {
+    return static_cast<int>(d);
+}
+
+// ---------------------------------------------------------------------------
 // RecorderConfig
 // ---------------------------------------------------------------------------
 
@@ -203,6 +223,24 @@ struct RecorderConfig {
     // Target bitrate in kbps — used for VariableBitrate and ConstantBitrate modes.
     // Ignored (and zero-ed by the encoder) when mode is ConstantQuality.
     uint32_t nvenc_bitrate_kbps = 20000;
+
+    // ---------------------------------------------------------------------------
+    // Audio encoding parameters (ADR 0019)
+    // ---------------------------------------------------------------------------
+
+    // Target audio bitrate in kbps. 0 = use encoder default.
+    // Opus: applied via OPUS_SET_BITRATE (VBR); range [32, 510] kbps; default 160 kbps.
+    // AAC:  applied via MF_MT_AVG_BITRATE / AACENC_BITRATE; range [64, 320] kbps; default 192 kbps.
+    uint32_t audio_bitrate_kbps = 0;
+
+    // Opus frame duration. Controls the latency ↔ CPU tradeoff.
+    // 20 ms is the default (best coding efficiency). AAC frame size is fixed at 1024
+    // samples and is not configurable — this field is ignored when audio_codec != Opus.
+    OpusFrameDuration opus_frame_duration = OpusFrameDuration::Ms20;
+
+    // Opus encoder complexity 0–10 (10 = best quality / highest CPU load).
+    // Default 10 per the roadmap. Ignored when audio_codec != Opus.
+    int opus_complexity = 10;
 
     // Frame rate (numerator/denominator)
     uint32_t frame_rate_num = 60;

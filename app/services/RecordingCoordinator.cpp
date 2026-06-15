@@ -729,6 +729,10 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.mic_channel_mode = plan.mic_channel_mode;
     config.mic_device_id = plan.mic_device_id;
     config.mic_gain_linear = plan.mic_gain_linear;
+    // Audio encoding parameters (ADR 0019).
+    config.audio_bitrate_kbps = plan.audio_bitrate_kbps;
+    config.opus_frame_duration = plan.opus_frame_duration;
+    config.opus_complexity = plan.opus_complexity;
 
     if (plan.record_audio && PlanRequiresTargetPid(plan.plan) && !plan.audio_target_process_id.has_value()) {
         diagnostics::AppLog::error(QStringLiteral("record.failure"),

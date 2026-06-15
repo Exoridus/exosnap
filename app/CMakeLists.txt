@@ -455,6 +455,20 @@ exosnap_add_gtest(
 target_include_directories(video_rate_control_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(video_rate_control_tests PRIVATE ole32.lib shell32.lib)
 
+# 0.5.0 audio encoding param tests (ADR 0019): preset round-trip, dirty-tracking, sanitize bounds.
+exosnap_add_gtest(
+    NAME audio_encoding_preset_tests
+    TEST_PREFIX audio_enc.
+    SOURCES
+        tests/test_audio_encoding_preset.cpp
+        settings/RecordingPresetStore.cpp
+        models/RecordingPreset.cpp
+        models/OutputSettingsModel.cpp
+    LIBRARIES exosnap_capability recorder_core Qt6::Core
+)
+target_include_directories(audio_encoding_preset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(audio_encoding_preset_tests PRIVATE ole32.lib shell32.lib)
+
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     exosnap_add_gtest(
         NAME visual_scenario_tests

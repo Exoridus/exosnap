@@ -346,6 +346,33 @@ std::optional<recorder_core::OutputFitMode> OutputFitModeFromString(QStringView 
     return std::nullopt;
 }
 
+QString OpusFrameDurationToString(recorder_core::OpusFrameDuration v) {
+    switch (v) {
+    case recorder_core::OpusFrameDuration::Ms20:
+        return QStringLiteral("20ms");
+    case recorder_core::OpusFrameDuration::Ms10:
+        return QStringLiteral("10ms");
+    case recorder_core::OpusFrameDuration::Ms5:
+        return QStringLiteral("5ms");
+    case recorder_core::OpusFrameDuration::Ms2_5:
+        return QStringLiteral("2.5ms");
+    }
+    return QStringLiteral("20ms");
+}
+
+std::optional<recorder_core::OpusFrameDuration> OpusFrameDurationFromString(QStringView s) {
+    const QString n = s.trimmed().toString().toLower();
+    if (n == QStringLiteral("20ms"))
+        return recorder_core::OpusFrameDuration::Ms20;
+    if (n == QStringLiteral("10ms"))
+        return recorder_core::OpusFrameDuration::Ms10;
+    if (n == QStringLiteral("5ms"))
+        return recorder_core::OpusFrameDuration::Ms5;
+    if (n == QStringLiteral("2.5ms"))
+        return recorder_core::OpusFrameDuration::Ms2_5;
+    return std::nullopt;
+}
+
 // ---------------------------------------------------------------------------
 // Per-item save / load helpers
 // ---------------------------------------------------------------------------
@@ -411,6 +438,10 @@ void SavePresetItem(QSettings& settings, const RecordingPreset& preset) {
         settings.setValue(QStringLiteral("aud_row_%1_enabled").arg(i), row.enabled);
         settings.setValue(QStringLiteral("aud_row_%1_merge").arg(i), row.merge_with_above);
     }
+    // Audio encoding params (ADR 0019).
+    settings.setValue(QStringLiteral("aud_audio_bitrate_kbps"), static_cast<int>(aud.audio_bitrate_kbps));
+    settings.setValue(QStringLiteral("aud_opus_frame_duration"), OpusFrameDurationToString(aud.opus_frame_duration));
+    settings.setValue(QStringLiteral("aud_opus_complexity"), aud.opus_complexity);
 
     // --- Webcam ---
     const auto& wc = preset.config.webcam;
@@ -617,6 +648,23 @@ std::optional<RecordingPreset> LoadPresetItem(QSettings& settings) {
             row.merge_with_above = settings.value(QStringLiteral("aud_row_%1_merge").arg(i), false).toBool();
             aud.source_rows.push_back(row);
         }
+    }
+    // Audio encoding params (ADR 0019).
+    {
+        bool ok = false;
+        const int bk = settings.value(QStringLiteral("aud_audio_bitrate_kbps"), 160).toInt(&ok);
+        aud.audio_bitrate_kbps = (ok && bk >= 0) ? static_cast<uint32_t>(bk) : 160u;
+        // SanitizePresetConfig() clamps to valid codec-specific ranges.
+    }
+    {
+        const auto fd =
+            OpusFrameDurationFromString(settings.value(QStringLiteral("aud_opus_frame_duration")).toString());
+        aud.opus_frame_duration = fd.value_or(recorder_core::OpusFrameDuration::Ms20);
+    }
+    {
+        bool ok = false;
+        const int cplx = settings.value(QStringLiteral("aud_opus_complexity"), 10).toInt(&ok);
+        aud.opus_complexity = (ok && cplx >= 0 && cplx <= 10) ? cplx : 10;
     }
 
     // --- Webcam ---

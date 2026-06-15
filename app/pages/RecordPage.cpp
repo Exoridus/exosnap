@@ -55,6 +55,7 @@
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QSpinBox>
 #include <QStyle>
 #include <QTimer>
 #include <QUrl>
@@ -1213,6 +1214,55 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     mic_gain_row_layout->addWidget(mic_gain_value_label_);
     audio_settings_layout->addWidget(mic_gain_row_);
 
+    // --- Audio encoding params (ADR 0019) ---
+    audio_bitrate_row_ = new QWidget(audio_settings_panel);
+    auto* audio_bitrate_row_layout = new QHBoxLayout(audio_bitrate_row_);
+    audio_bitrate_row_layout->setContentsMargins(0, 0, 0, 0);
+    audio_bitrate_row_layout->setSpacing(10);
+    audio_bitrate_row_layout->addWidget(makeLabel("Bitrate", "audioSettingsRowLabel", audio_bitrate_row_));
+    audio_bitrate_spin_ = new QSpinBox(audio_bitrate_row_);
+    audio_bitrate_spin_->setRange(32, 510);
+    audio_bitrate_spin_->setSingleStep(16);
+    audio_bitrate_spin_->setValue(160);
+    audio_bitrate_spin_->setSuffix(QStringLiteral(" kbps"));
+    audio_bitrate_spin_->setObjectName(QStringLiteral("audioSettingsSpinBox"));
+    audio_bitrate_row_layout->addWidget(audio_bitrate_spin_);
+    audio_bitrate_row_layout->addStretch(1);
+    audio_settings_layout->addWidget(audio_bitrate_row_);
+
+    opus_frame_duration_row_ = new QWidget(audio_settings_panel);
+    auto* opus_frame_duration_row_layout = new QHBoxLayout(opus_frame_duration_row_);
+    opus_frame_duration_row_layout->setContentsMargins(0, 0, 0, 0);
+    opus_frame_duration_row_layout->setSpacing(10);
+    opus_frame_duration_row_layout->addWidget(
+        makeLabel("Frame size", "audioSettingsRowLabel", opus_frame_duration_row_));
+    opus_frame_duration_combo_ = new QComboBox(opus_frame_duration_row_);
+    opus_frame_duration_combo_->addItem(QStringLiteral("20 ms (default)"),
+                                        QVariant::fromValue(static_cast<int>(recorder_core::OpusFrameDuration::Ms20)));
+    opus_frame_duration_combo_->addItem(QStringLiteral("10 ms"),
+                                        QVariant::fromValue(static_cast<int>(recorder_core::OpusFrameDuration::Ms10)));
+    opus_frame_duration_combo_->addItem(QStringLiteral("5 ms"),
+                                        QVariant::fromValue(static_cast<int>(recorder_core::OpusFrameDuration::Ms5)));
+    opus_frame_duration_combo_->addItem(QStringLiteral("2.5 ms"),
+                                        QVariant::fromValue(static_cast<int>(recorder_core::OpusFrameDuration::Ms2_5)));
+    opus_frame_duration_combo_->setObjectName(QStringLiteral("audioSettingsCombo"));
+    opus_frame_duration_row_layout->addWidget(opus_frame_duration_combo_, 1);
+    audio_settings_layout->addWidget(opus_frame_duration_row_);
+
+    opus_complexity_row_ = new QWidget(audio_settings_panel);
+    auto* opus_complexity_row_layout = new QHBoxLayout(opus_complexity_row_);
+    opus_complexity_row_layout->setContentsMargins(0, 0, 0, 0);
+    opus_complexity_row_layout->setSpacing(10);
+    opus_complexity_row_layout->addWidget(makeLabel("Complexity", "audioSettingsRowLabel", opus_complexity_row_));
+    opus_complexity_spin_ = new QSpinBox(opus_complexity_row_);
+    opus_complexity_spin_->setRange(0, 10);
+    opus_complexity_spin_->setSingleStep(1);
+    opus_complexity_spin_->setValue(10);
+    opus_complexity_spin_->setObjectName(QStringLiteral("audioSettingsSpinBox"));
+    opus_complexity_row_layout->addWidget(opus_complexity_spin_);
+    opus_complexity_row_layout->addStretch(1);
+    audio_settings_layout->addWidget(opus_complexity_row_);
+
     audio_settings_layout->addSpacing(6);
     audio_settings_layout->addWidget(makeLabel("Resulting Tracks", "audioSettingsGroupTitle", audio_settings_panel));
     track_preview_panel_ = makePanel(audio_settings_panel);
@@ -1564,6 +1614,11 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(mic_channel_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &RecordPage::onMicChannelChanged);
     connect(mic_gain_slider_, &QSlider::valueChanged, this, &RecordPage::onMicGainChanged);
+    connect(audio_bitrate_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &RecordPage::onAudioBitrateChanged);
+    connect(opus_frame_duration_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &RecordPage::onOpusFrameDurationChanged);
+    connect(opus_complexity_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            &RecordPage::onOpusComplexityChanged);
     connect(open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
     connect(destination_settings_btn_, &QPushButton::clicked, this, [this]() { emit navigateToOutputPage(); });
     connect(readiness_diagnostics_btn_, &QPushButton::clicked, this, [this]() { emit navigateToDiagnosticsPage(); });
@@ -2111,6 +2166,9 @@ void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& sta
     view_model_.audio_ui_state.mic_channel_mode = state.mic_channel_mode;
     view_model_.audio_ui_state.selected_mic_device_id = state.selected_mic_device_id;
     view_model_.audio_ui_state.mic_gain_linear = state.mic_gain_linear;
+    view_model_.audio_ui_state.audio_bitrate_kbps = state.audio_bitrate_kbps;
+    view_model_.audio_ui_state.opus_frame_duration = state.opus_frame_duration;
+    view_model_.audio_ui_state.opus_complexity = state.opus_complexity;
     view_model_.audio_ui_state.target_kind = target_kind;
     view_model_.audio_ui_state.selected_window_pid = selected_window_pid;
 
@@ -4452,6 +4510,30 @@ void RecordPage::onMicGainChanged(int db_value) {
     emitAudioSettingsChanged();
 }
 
+void RecordPage::onAudioBitrateChanged(int kbps) {
+    view_model_.audio_ui_state.audio_bitrate_kbps = static_cast<uint32_t>(kbps);
+    view_model_.RebuildAudioPlan();
+    emitAudioSettingsChanged();
+}
+
+void RecordPage::onOpusFrameDurationChanged(int index) {
+    if (!opus_frame_duration_combo_)
+        return;
+    const QVariant item_data = opus_frame_duration_combo_->itemData(index);
+    if (item_data.isValid()) {
+        view_model_.audio_ui_state.opus_frame_duration =
+            static_cast<recorder_core::OpusFrameDuration>(item_data.toInt());
+    }
+    view_model_.RebuildAudioPlan();
+    emitAudioSettingsChanged();
+}
+
+void RecordPage::onOpusComplexityChanged(int value) {
+    view_model_.audio_ui_state.opus_complexity = value;
+    view_model_.RebuildAudioPlan();
+    emitAudioSettingsChanged();
+}
+
 void RecordPage::emitAudioSettingsChanged() {
     diagnostics::AppLog::debug(QStringLiteral("audio"),
                                QStringLiteral("settings changed: app=%1 sys=%2 mic=%3 rows=%4 mic_gain=%5")
@@ -4499,6 +4581,26 @@ void RecordPage::updateAudioControls() {
         mic_gain_value_label_->setText(db == 0 ? QStringLiteral("0 dB") : QStringLiteral("+%1 dB").arg(db));
     }
 
+    // Audio encoding params (ADR 0019).
+    if (audio_bitrate_spin_) {
+        QSignalBlocker b_br(audio_bitrate_spin_);
+        audio_bitrate_spin_->setValue(static_cast<int>(view_model_.audio_ui_state.audio_bitrate_kbps));
+    }
+    if (opus_frame_duration_combo_) {
+        QSignalBlocker b_fd(opus_frame_duration_combo_);
+        const int target = static_cast<int>(view_model_.audio_ui_state.opus_frame_duration);
+        for (int i = 0; i < opus_frame_duration_combo_->count(); ++i) {
+            if (opus_frame_duration_combo_->itemData(i).toInt() == target) {
+                opus_frame_duration_combo_->setCurrentIndex(i);
+                break;
+            }
+        }
+    }
+    if (opus_complexity_spin_) {
+        QSignalBlocker b_cx(opus_complexity_spin_);
+        opus_complexity_spin_->setValue(view_model_.audio_ui_state.opus_complexity);
+    }
+
     updateAudioControlsVisibility();
 }
 
@@ -4522,6 +4624,13 @@ void RecordPage::updateAudioControlsVisibility() {
     if (mic_refresh_btn_) {
         mic_refresh_btn_->setEnabled(!busy);
     }
+    // Audio encoding params — disable during recording.
+    if (audio_bitrate_spin_)
+        audio_bitrate_spin_->setEnabled(!busy);
+    if (opus_frame_duration_combo_)
+        opus_frame_duration_combo_->setEnabled(!busy);
+    if (opus_complexity_spin_)
+        opus_complexity_spin_->setEnabled(!busy);
     updateMicDeviceNoteLabel();
 }
 
