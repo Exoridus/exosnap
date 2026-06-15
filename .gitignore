@@ -41,6 +41,9 @@ app/Generated Files/
 app/obj/
 app/packages/
 
+# Stray compiler object files in root (should never be committed)
+/*.obj
+
 #Log files
 *.log
 logs/
