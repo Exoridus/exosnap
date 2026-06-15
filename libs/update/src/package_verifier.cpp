@@ -2,11 +2,14 @@
 
 #include <update/package_verifier.h>
 
+// clang-format off
+// windows.h must come first: it defines LONG/NTSTATUS used by bcrypt.h.
 #define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #include <bcrypt.h>
 #include <shellapi.h>
-#include <windows.h> // Must come before bcrypt.h (defines LONG/NTSTATUS)
 #pragma comment(lib, "bcrypt.lib")
+// clang-format on
 
 #include <algorithm>
 #include <cctype>
