@@ -73,6 +73,8 @@ qt_add_executable(exosnap WIN32
     ui/theme/ExoSnapTheme.h
     ui/theme/ExoSnapTheme.cpp
     ui/theme/exosnap_theme.qrc
+    ui/theme/LucideIcon.h
+    ui/theme/LucideIcon.cpp
     ui/brand/BrandMarkWidget.h
     ui/brand/BrandMarkWidget.cpp
     ui/WindowGeometryPolicy.h
@@ -83,6 +85,8 @@ qt_add_executable(exosnap WIN32
     ui/chrome/GlobalRecordingBar.cpp
     ui/dialogs/AboutOverlay.h
     ui/dialogs/AboutOverlay.cpp
+    ui/dialogs/UpdateSettingsPanel.h
+    ui/dialogs/UpdateSettingsPanel.cpp
     ui/dialogs/RecoveryOverlay.h
     ui/dialogs/RecoveryOverlay.cpp
     ui/dialogs/SourcePickerPanel.h
@@ -713,10 +717,34 @@ exosnap_add_gtest(
         ui/dialogs/CrashReportPanel.cpp
         ui/dialogs/CrashReportOverlay.cpp
         ui/brand/BrandMarkWidget.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
 target_include_directories(crash_report_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 set_target_properties(crash_report_overlay_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME lucide_icon_tests
+    TEST_PREFIX lucide.
+    SOURCES
+        tests/test_lucide_icon.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(lucide_icon_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+set_target_properties(lucide_icon_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME update_settings_panel_tests
+    TEST_PREFIX update_ui.
+    SOURCES
+        tests/test_update_settings_panel.cpp
+        ui/dialogs/UpdateSettingsPanel.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(update_settings_panel_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+set_target_properties(update_settings_panel_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME version_tests

@@ -71,6 +71,7 @@ class CrashReportPanel : public QWidget {
     CrashReportModel model_;
 
     QPushButton* details_toggle_ = nullptr;
+    QLabel* details_chevron_ = nullptr;
     QFrame* scrubbed_report_ = nullptr;
     QCheckBox* auto_send_check_ = nullptr;
     QPushButton* overflow_button_ = nullptr;

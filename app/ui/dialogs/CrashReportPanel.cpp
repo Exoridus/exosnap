@@ -2,7 +2,9 @@
 
 #include "../brand/BrandMarkWidget.h"
 #include "../theme/ExoSnapPalette.h"
+#include "../theme/LucideIcon.h"
 
+#include <QAction>
 #include <QCheckBox>
 #include <QColor>
 #include <QFrame>
@@ -11,6 +13,7 @@
 #include <QLabel>
 #include <QMenu>
 #include <QPushButton>
+#include <QSize>
 #include <QString>
 #include <QVBoxLayout>
 
@@ -31,6 +34,16 @@ QString rgba(const char* base, double alpha) {
 
 QString tok(const char* base) {
     return QString::fromLatin1(base);
+}
+
+// A QLabel carrying a tinted Lucide glyph at logical `size` (DPR-crisp).
+QLabel* makeIconLabel(const QString& name, const char* color_base, int size, QWidget* parent) {
+    auto* label = new QLabel(parent);
+    const qreal dpr = parent != nullptr ? parent->devicePixelRatioF() : 1.0;
+    label->setPixmap(theme::lucidePixmap(name, tok(color_base), size, dpr));
+    label->setFixedSize(size, size);
+    label->setStyleSheet(QStringLiteral("background:transparent; border:none;"));
+    return label;
 }
 
 // Copy — exact strings from the FINAL design (mappe-waves-late.jsx).
@@ -55,9 +68,10 @@ QFrame* makeBullet(const char* color_base, QWidget* parent) {
     return dot;
 }
 
-// One "What gets sent / Never sent" column.
-QWidget* makeTransparencyColumn(const QString& heading, const char* color_base, const QStringList& items,
-                                bool left_rule, QWidget* parent) {
+// One "What gets sent / Never sent" column. `icon_name` is the Lucide glyph shown
+// before the heading (check for "sent", x for "never sent").
+QWidget* makeTransparencyColumn(const QString& icon_name, const QString& heading, const char* color_base,
+                                const QStringList& items, bool left_rule, QWidget* parent) {
     auto* col = new QWidget(parent);
     auto* layout = new QVBoxLayout(col);
     if (left_rule)
@@ -66,12 +80,18 @@ QWidget* makeTransparencyColumn(const QString& heading, const char* color_base, 
         layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(10);
 
-    auto* title = new QLabel(heading, col);
+    auto* title_row = new QWidget(col);
+    auto* title_layout = new QHBoxLayout(title_row);
+    title_layout->setContentsMargins(0, 0, 0, 0);
+    title_layout->setSpacing(6);
+    title_layout->addWidget(makeIconLabel(icon_name, color_base, 12, title_row), 0, Qt::AlignVCenter);
+    auto* title = new QLabel(heading, title_row);
     title->setStyleSheet(
         QStringLiteral("font-family:'IBM Plex Mono','Consolas',monospace; font-size:10px; letter-spacing:0.6px; "
                        "text-transform:uppercase; color:%1; background:transparent;")
             .arg(tok(color_base)));
-    layout->addWidget(title);
+    title_layout->addWidget(title, 1);
+    layout->addWidget(title_row);
 
     for (const QString& item : items) {
         auto* row = new QWidget(col);
@@ -221,15 +241,15 @@ QWidget* CrashReportPanel::buildChromeBar() {
     layout->addStretch(1);
 
     // Window-chrome close X — declines & closes, same as the overflow danger item.
-    auto* close_btn = new QPushButton(QString::fromUtf8("\xc3\x97"), bar); // ×
+    auto* close_btn = new QPushButton(bar);
     close_btn->setObjectName(QStringLiteral("crashChromeCloseButton"));
     close_btn->setFixedSize(30, 30);
     close_btn->setCursor(Qt::PointingHandCursor);
-    close_btn->setStyleSheet(
-        QStringLiteral(
-            "QPushButton { background:transparent; border:none; border-radius:7px; color:%1; font-size:14px; }"
-            "QPushButton:hover { background:%2; color:%3; }")
-            .arg(tok(ExoSnapPalette::kText2), tok(ExoSnapPalette::kBg3), tok(ExoSnapPalette::kText0)));
+    close_btn->setIcon(theme::lucideIcon(QStringLiteral("x"), tok(ExoSnapPalette::kText2), 14, devicePixelRatioF()));
+    close_btn->setIconSize(QSize(14, 14));
+    close_btn->setStyleSheet(QStringLiteral("QPushButton { background:transparent; border:none; border-radius:7px; }"
+                                            "QPushButton:hover { background:%1; }")
+                                 .arg(tok(ExoSnapPalette::kBg3)));
     connect(close_btn, &QPushButton::clicked, this, &CrashReportPanel::dontSendRequested);
     layout->addWidget(close_btn, 0, Qt::AlignVCenter);
 
@@ -246,8 +266,8 @@ QWidget* CrashReportPanel::buildStatement() {
     auto* tile = new QLabel(row);
     tile->setFixedSize(34, 34);
     tile->setAlignment(Qt::AlignCenter);
-    tile->setText(QString::fromUtf8("\xf0\x9f\x90\x9b")); // bug glyph fallback
-    tile->setStyleSheet(QStringLiteral("background:%1; border:1px solid %2; border-radius:10px; font-size:16px;")
+    tile->setPixmap(theme::lucidePixmap(QStringLiteral("bug"), tok(ExoSnapPalette::kErr), 18, devicePixelRatioF()));
+    tile->setStyleSheet(QStringLiteral("background:%1; border:1px solid %2; border-radius:10px;")
                             .arg(rgba(ExoSnapPalette::kErr, 0.13), rgba(ExoSnapPalette::kErr, 0.42)));
     layout->addWidget(tile, 0, Qt::AlignTop);
 
@@ -283,9 +303,7 @@ QWidget* CrashReportPanel::buildRecordingBanner() {
     layout->setContentsMargins(13, 10, 13, 10);
     layout->setSpacing(10);
 
-    auto* icon = new QLabel(QString::fromUtf8("\xe2\x9c\x93"), banner); // check mark
-    icon->setStyleSheet(
-        QStringLiteral("font-size:14px; color:%1; background:transparent;").arg(tok(ExoSnapPalette::kOk)));
+    auto* icon = makeIconLabel(QStringLiteral("shield-check"), ExoSnapPalette::kOk, 16, banner);
     layout->addWidget(icon, 0, Qt::AlignTop);
 
     auto* text = new QLabel(QStringLiteral("Your recording was secured and will be restored on next launch."), banner);
@@ -312,11 +330,11 @@ QWidget* CrashReportPanel::buildTransparencyBlock() {
     cols_layout->setContentsMargins(0, 0, 0, 0);
     cols_layout->setSpacing(16);
 
-    auto* sent_col =
-        makeTransparencyColumn(QStringLiteral("\xe2\x9c\x93  What gets sent"), ExoSnapPalette::kOk, kSent, false, cols);
+    auto* sent_col = makeTransparencyColumn(QStringLiteral("check"), QStringLiteral("What gets sent"),
+                                            ExoSnapPalette::kOk, kSent, false, cols);
     sent_col->setObjectName(QStringLiteral("crashWhatGetsSentColumn"));
-    auto* never_col =
-        makeTransparencyColumn(QString::fromUtf8("\xc3\x97  Never sent"), ExoSnapPalette::kErr, kNever, true, cols);
+    auto* never_col = makeTransparencyColumn(QStringLiteral("x"), QStringLiteral("Never sent"), ExoSnapPalette::kErr,
+                                             kNever, true, cols);
     never_col->setObjectName(QStringLiteral("crashNeverSentColumn"));
     cols_layout->addWidget(sent_col, 1);
     cols_layout->addWidget(never_col, 1);
@@ -334,17 +352,33 @@ QWidget* CrashReportPanel::buildTransparencyBlock() {
 }
 
 QWidget* CrashReportPanel::buildDetailsSection() {
+    // Left `layers` icon + text on the button itself; a right `chevron-down` label is
+    // overlaid via an internal layout and rotated (swapped to up) when expanded.
     details_toggle_ = new QPushButton(this);
     details_toggle_->setObjectName(QStringLiteral("crashDetailsToggle"));
     details_toggle_->setCheckable(true);
     details_toggle_->setCursor(Qt::PointingHandCursor);
     details_toggle_->setText(QStringLiteral("Show report details"));
+    details_toggle_->setIcon(
+        theme::lucideIcon(QStringLiteral("layers"), tok(ExoSnapPalette::kText2), 14, devicePixelRatioF()));
+    details_toggle_->setIconSize(QSize(14, 14));
     details_toggle_->setStyleSheet(
         QStringLiteral("QPushButton { text-align:left; padding:10px 13px; background:transparent; border:1px solid %1; "
                        "border-radius:10px; color:%2; font-size:12.5px; font-weight:500; }"
                        "QPushButton:hover { border:1px solid %3; }")
             .arg(tok(ExoSnapPalette::kLine2), tok(ExoSnapPalette::kText0), tok(ExoSnapPalette::kLine3)));
     connect(details_toggle_, &QPushButton::clicked, this, &CrashReportPanel::toggleDetails);
+
+    // Right-aligned chevron inside the button's padding (down = collapsed, up = expanded).
+    auto* chevron_layout = new QHBoxLayout(details_toggle_);
+    chevron_layout->setContentsMargins(0, 0, 13, 0);
+    chevron_layout->addStretch(1);
+    details_chevron_ = new QLabel(details_toggle_);
+    details_chevron_->setFixedSize(15, 15);
+    details_chevron_->setStyleSheet(QStringLiteral("background:transparent; border:none;"));
+    details_chevron_->setPixmap(
+        theme::lucidePixmap(QStringLiteral("chevron-down"), tok(ExoSnapPalette::kText2), 15, devicePixelRatioF()));
+    chevron_layout->addWidget(details_chevron_, 0, Qt::AlignVCenter);
     return details_toggle_;
 }
 
@@ -389,9 +423,7 @@ QWidget* CrashReportPanel::buildScrubbedReport() {
     auto* footer_layout = new QHBoxLayout(footer);
     footer_layout->setContentsMargins(15, 9, 15, 9);
     footer_layout->setSpacing(8);
-    auto* lock = new QLabel(QString::fromUtf8("\xf0\x9f\x94\x92"), footer); // lock glyph
-    lock->setStyleSheet(QStringLiteral("font-size:11px; color:%1; background:transparent; border:none;")
-                            .arg(tok(ExoSnapPalette::kText3)));
+    auto* lock = makeIconLabel(QStringLiteral("lock"), ExoSnapPalette::kText3, 12, footer);
     footer_layout->addWidget(lock, 0, Qt::AlignTop);
     auto* footer_text = new QLabel(
         QStringLiteral("Read-only — this is exactly what uploads. The raw minidump (.dmp) is attached but never shown "
@@ -412,10 +444,14 @@ QWidget* CrashReportPanel::buildActionsRow() {
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(9);
 
-    // Primary "Send report" — Studio Mint accent.
+    // Primary "Send report" — Studio Mint accent. The upload glyph sits on the mint
+    // fill, so it's tinted with the accent-ink colour.
     auto* send_btn = new QPushButton(QStringLiteral("Send report"), row);
     send_btn->setObjectName(QStringLiteral("crashSendButton"));
     send_btn->setCursor(Qt::PointingHandCursor);
+    send_btn->setIcon(
+        theme::lucideIcon(QStringLiteral("upload"), tok(ExoSnapPalette::kAccentInk), 14, devicePixelRatioF()));
+    send_btn->setIconSize(QSize(14, 14));
     send_btn->setStyleSheet(
         QStringLiteral("QPushButton { background:%1; color:%2; border:none; border-radius:8px; padding:8px 14px; "
                        "font-size:12.5px; font-weight:600; }"
@@ -443,15 +479,17 @@ QWidget* CrashReportPanel::buildActionsRow() {
     layout->addStretch(1);
 
     // Overflow "⋯" — secondary fallbacks + danger decline.
-    overflow_button_ = new QPushButton(QString::fromUtf8("\xe2\x8b\xaf"), row); // ⋯
+    overflow_button_ = new QPushButton(row);
     overflow_button_->setObjectName(QStringLiteral("crashOverflowButton"));
     overflow_button_->setFixedSize(34, 34);
     overflow_button_->setCursor(Qt::PointingHandCursor);
+    overflow_button_->setIcon(
+        theme::lucideIcon(QStringLiteral("more-horizontal"), tok(ExoSnapPalette::kText2), 16, devicePixelRatioF()));
+    overflow_button_->setIconSize(QSize(16, 16));
     overflow_button_->setStyleSheet(
-        QStringLiteral("QPushButton { background:transparent; border:1px solid %1; border-radius:17px; color:%2; "
-                       "font-size:15px; }"
-                       "QPushButton:hover { border:1px solid %3; }")
-            .arg(tok(ExoSnapPalette::kLine2), tok(ExoSnapPalette::kText2), tok(ExoSnapPalette::kAccentBorderStrong)));
+        QStringLiteral("QPushButton { background:transparent; border:1px solid %1; border-radius:17px; }"
+                       "QPushButton:hover { border:1px solid %2; }")
+            .arg(tok(ExoSnapPalette::kLine2), tok(ExoSnapPalette::kAccentBorderStrong)));
 
     overflow_menu_ = new QMenu(overflow_button_);
     overflow_menu_->setStyleSheet(
@@ -462,12 +500,16 @@ QWidget* CrashReportPanel::buildActionsRow() {
             .arg(tok(ExoSnapPalette::kBg3), tok(ExoSnapPalette::kLine2), tok(ExoSnapPalette::kText0),
                  tok(ExoSnapPalette::kBg4), tok(ExoSnapPalette::kLine1)));
 
+    const qreal dpr = devicePixelRatioF();
     auto* github_action = overflow_menu_->addAction(QStringLiteral("Report on GitHub"));
+    github_action->setIcon(theme::lucideIcon(QStringLiteral("github"), tok(ExoSnapPalette::kText2), 14, dpr));
     connect(github_action, &QAction::triggered, this, &CrashReportPanel::reportOnGitHubRequested);
     auto* folder_action = overflow_menu_->addAction(QStringLiteral("Open crash folder"));
+    folder_action->setIcon(theme::lucideIcon(QStringLiteral("folder"), tok(ExoSnapPalette::kText2), 14, dpr));
     connect(folder_action, &QAction::triggered, this, &CrashReportPanel::openCrashFolderRequested);
     overflow_menu_->addSeparator();
     auto* decline_action = overflow_menu_->addAction(QStringLiteral("Don't send & close"));
+    decline_action->setIcon(theme::lucideIcon(QStringLiteral("x"), tok(ExoSnapPalette::kText2), 14, dpr));
     connect(decline_action, &QAction::triggered, this, &CrashReportPanel::dontSendRequested);
 
     overflow_button_->setMenu(overflow_menu_);
@@ -484,6 +526,12 @@ void CrashReportPanel::toggleDetails() {
         details_toggle_->setChecked(details_expanded_);
         details_toggle_->setText(details_expanded_ ? QStringLiteral("Hide report details")
                                                    : QStringLiteral("Show report details"));
+    }
+    if (details_chevron_ != nullptr) {
+        // Swap to an up chevron when expanded (clearer than a CSS rotation in QSS).
+        details_chevron_->setPixmap(
+            theme::lucidePixmap(details_expanded_ ? QStringLiteral("chevron-up") : QStringLiteral("chevron-down"),
+                                tok(ExoSnapPalette::kText2), 15, devicePixelRatioF()));
     }
 }
 
