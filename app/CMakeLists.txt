@@ -1138,6 +1138,28 @@ target_include_directories(overlay_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SO
 target_compile_definitions(overlay_visual_proof_tests PRIVATE NOMINMAX)
 set_target_properties(overlay_visual_proof_tests PROPERTIES AUTOMOC ON)
 
+# CRASH-UPDATE-VISUAL-PROOF-R1: offscreen renders of the 0.4.0 crash + update UI
+# surfaces. Applies the real ExoSnap theme (QSS + bundled fonts), so the theme
+# and fonts qrc resources are compiled in via AUTORCC. Produces 6 PNGs under
+# .workspace/screenshots/0.4.0/ for human visual verification.
+exosnap_add_gtest(
+    NAME crash_update_visual_proof_tests
+    TEST_PREFIX crash.update.proof.
+    SOURCES
+        tests/crash_update_visual_proof.cpp
+        ui/dialogs/CrashReportPanel.cpp
+        ui/dialogs/UpdateSettingsPanel.cpp
+        ui/brand/BrandMarkWidget.cpp
+        ui/theme/LucideIcon.cpp
+        ui/theme/ExoSnapTheme.cpp
+        ui/theme/exosnap_theme.qrc
+        assets/fonts/exosnap_fonts.qrc
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(crash_update_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(crash_update_visual_proof_tests PRIVATE NOMINMAX)
+set_target_properties(crash_update_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
+
 # REGION-SELECTION-SKIN-R1 unit tests.
 exosnap_add_gtest(
     NAME region_selection_overlay_tests
