@@ -16,12 +16,17 @@
 #include <string_view>
 
 // Windows headers required for username / machine name resolution.
+// windows.h MUST be included before lmcons.h/shlobj.h: lmcons.h defines PASCAL,
+// and a later windows.h redefines it (C4005 -> C2220 under /WX on Ninja+MSVC).
+// The VS generator tolerated the wrong order; Ninja+MSVC does not.
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+// clang-format off
+#include <windows.h>
 #include <lmcons.h> // UNLEN
 #include <shlobj.h> // SHGetKnownFolderPath
-#include <windows.h>
+// clang-format on
 
 namespace exosnap::crash_capture {
 
