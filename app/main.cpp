@@ -162,6 +162,19 @@ int main(int argc, char* argv[]) {
     } else {
         qWarning().noquote() << "Crash capture disabled: could not resolve crash dir.";
     }
+
+    // Sentry "Verify" hook: EXOSNAP_SENTRY_TEST_EVENT=1 sends one diagnostic
+    // event and exits. Harmless in production (env var unset); only does
+    // anything in an official ON build where a DSN is compiled in.
+    if (qEnvironmentVariableIsSet("EXOSNAP_SENTRY_TEST_EVENT")) {
+        exosnap::crash_capture::GiveUserConsent();
+        exosnap::crash_capture::SendTestEvent("It works! - ExoSnap Sentry verify");
+        if (!crash_dir.empty())
+            exosnap::crash_capture::MarkCleanExit(crash_dir);
+        exosnap::crash_capture::Shutdown(); // flushes pending events
+        qInfo().noquote() << "Sentry test event sent; exiting.";
+        return 0;
+    }
 #endif
 
     exosnap::MainWindow win;

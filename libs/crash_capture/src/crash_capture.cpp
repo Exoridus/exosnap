@@ -280,6 +280,17 @@ void RevokeUserConsent() {
 #endif
 }
 
+void SendTestEvent(std::string_view message) {
+#if EXOSNAP_SENTRY_AVAILABLE
+    if (s_initialized) {
+        std::string msg(message);
+        sentry_capture_event(sentry_value_new_message_event(SENTRY_LEVEL_INFO, "verify", msg.c_str()));
+    }
+#else
+    (void)message;
+#endif
+}
+
 // ---------------------------------------------------------------------------
 // SetTag
 // ---------------------------------------------------------------------------

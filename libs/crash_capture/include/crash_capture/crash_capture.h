@@ -80,6 +80,13 @@ void GiveUserConsent();
 void RevokeUserConsent();
 
 // ---------------------------------------------------------------------------
+// Send a single diagnostic message event (Sentry "Verify" step). No-op unless
+// the engine is active with a DSN (official build) and consent has been given.
+// Used only by the env-gated verification path; never fires in normal operation.
+// ---------------------------------------------------------------------------
+void SendTestEvent(std::string_view message);
+
+// ---------------------------------------------------------------------------
 // Attach metadata to the current scope. Safe to call after Initialize().
 // Used by the app layer to record runtime context for crashes.
 //   key  — tag name; must appear in the allow-list in crash_scrubber.h
