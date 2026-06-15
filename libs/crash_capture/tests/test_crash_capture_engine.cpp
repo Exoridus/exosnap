@@ -18,6 +18,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 
 #ifndef NOMINMAX
@@ -243,4 +244,140 @@ TEST_F(CrashEngineLifecycleTest, SetEncoderContextDoesNotCrash) {
     Initialize(cfg);
 
     EXPECT_NO_FATAL_FAILURE(SetEncoderContext("nvenc", "mkv", "av1", "opus"));
+}
+
+// ---------------------------------------------------------------------------
+// Session context + clean-exit detection
+// ---------------------------------------------------------------------------
+
+class SessionContextTest : public ::testing::Test {
+  protected:
+    std::string crash_dir_;
+
+    void SetUp() override {
+        crash_dir_ = GetTempDir() + "\\exosnap_session_test_" + std::to_string(GetCurrentProcessId());
+        // Start from a clean slate so a leftover sidecar from a prior run does
+        // not pollute the no-file / read assertions.
+        std::error_code ec;
+        fs::remove_all(crash_dir_, ec);
+        fs::create_directories(crash_dir_);
+    }
+
+    void TearDown() override {
+        std::error_code ec;
+        fs::remove_all(crash_dir_, ec);
+    }
+
+    static SessionContext MakeContext() {
+        SessionContext ctx;
+        ctx.app_version = "0.4.0";
+        ctx.encoder_backend = "nvenc";
+        ctx.container = "MKV";
+        ctx.video_codec = "AV1";
+        ctx.audio_codec = "Opus";
+        return ctx;
+    }
+};
+
+TEST_F(SessionContextTest, NoFileReturnsNullopt) {
+    EXPECT_FALSE(ReadPreviousCrashContext(crash_dir_).has_value())
+        << "With no sidecar present, ReadPreviousCrashContext must be nullopt";
+}
+
+TEST_F(SessionContextTest, EmptyCrashDirReturnsNullopt) {
+    EXPECT_FALSE(ReadPreviousCrashContext("").has_value());
+    EXPECT_FALSE(BeginSession("", MakeContext()));
+    EXPECT_FALSE(UpdateSessionContext("", MakeContext()));
+    EXPECT_FALSE(MarkCleanExit(""));
+}
+
+TEST_F(SessionContextTest, BeginSessionWritesFile) {
+    EXPECT_TRUE(BeginSession(crash_dir_, MakeContext()));
+    EXPECT_TRUE(fs::exists(crash_dir_ + "\\last_session.json")) << "BeginSession must create last_session.json";
+}
+
+TEST_F(SessionContextTest, BeginSessionThenReadReturnsContext) {
+    SessionContext ctx = MakeContext();
+    ASSERT_TRUE(BeginSession(crash_dir_, ctx));
+
+    // clean_exit==false ⇒ the prior session is a crash ⇒ Some(context)
+    auto read = ReadPreviousCrashContext(crash_dir_);
+    ASSERT_TRUE(read.has_value()) << "BeginSession leaves clean_exit=false, so a read must return the context";
+    EXPECT_EQ(read->app_version, "0.4.0");
+    EXPECT_EQ(read->encoder_backend, "nvenc");
+    EXPECT_EQ(read->container, "MKV");
+    EXPECT_EQ(read->video_codec, "AV1");
+    EXPECT_EQ(read->audio_codec, "Opus");
+}
+
+TEST_F(SessionContextTest, ReadDoesNotModifyFile) {
+    ASSERT_TRUE(BeginSession(crash_dir_, MakeContext()));
+    ASSERT_TRUE(ReadPreviousCrashContext(crash_dir_).has_value());
+    // A second read must still see the crash state (read is non-destructive).
+    EXPECT_TRUE(ReadPreviousCrashContext(crash_dir_).has_value())
+        << "ReadPreviousCrashContext must not modify the sidecar";
+}
+
+TEST_F(SessionContextTest, MarkCleanExitMakesReadReturnNullopt) {
+    ASSERT_TRUE(BeginSession(crash_dir_, MakeContext()));
+    ASSERT_TRUE(MarkCleanExit(crash_dir_));
+    EXPECT_FALSE(ReadPreviousCrashContext(crash_dir_).has_value())
+        << "After MarkCleanExit, the previous session is clean ⇒ nullopt";
+}
+
+TEST_F(SessionContextTest, UpdateSessionContextChangesFieldsButStaysCrashDetectable) {
+    ASSERT_TRUE(BeginSession(crash_dir_, MakeContext()));
+
+    SessionContext updated = MakeContext();
+    updated.encoder_backend = "amf";
+    updated.video_codec = "HEVC";
+    ASSERT_TRUE(UpdateSessionContext(crash_dir_, updated));
+
+    auto read = ReadPreviousCrashContext(crash_dir_);
+    ASSERT_TRUE(read.has_value()) << "UpdateSessionContext must keep clean_exit=false (still crash-detectable)";
+    EXPECT_EQ(read->encoder_backend, "amf");
+    EXPECT_EQ(read->video_codec, "HEVC");
+    // Untouched fields survive.
+    EXPECT_EQ(read->app_version, "0.4.0");
+    EXPECT_EQ(read->audio_codec, "Opus");
+}
+
+TEST_F(SessionContextTest, MarkCleanExitPreservesContextFields) {
+    // MarkCleanExit only flips the flag; if a later read is forced (e.g. the
+    // file is inspected), the context fields must still be present.
+    ASSERT_TRUE(BeginSession(crash_dir_, MakeContext()));
+    ASSERT_TRUE(MarkCleanExit(crash_dir_));
+
+    std::ifstream in(crash_dir_ + "\\last_session.json");
+    ASSERT_TRUE(in.is_open());
+    std::string doc((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    EXPECT_NE(doc.find("\"clean_exit\":true"), std::string::npos);
+    EXPECT_NE(doc.find("nvenc"), std::string::npos) << "Context fields must be preserved across MarkCleanExit";
+    EXPECT_NE(doc.find("0.4.0"), std::string::npos);
+}
+
+TEST_F(SessionContextTest, MarkCleanExitWithoutPriorSessionWritesCleanRecord) {
+    // No BeginSession first. MarkCleanExit should still produce a clean record
+    // so a subsequent read does not misreport a crash.
+    ASSERT_TRUE(MarkCleanExit(crash_dir_));
+    EXPECT_FALSE(ReadPreviousCrashContext(crash_dir_).has_value());
+}
+
+TEST_F(SessionContextTest, PathLikeValuesAreScrubbed) {
+    // Defense in depth: even though callers pass clean identifiers, any value
+    // routed through the sidecar is scrubbed. An absolute Windows path in a
+    // field must not survive verbatim into the file.
+    SessionContext ctx = MakeContext();
+    ctx.encoder_backend = "C:\\Users\\Alice\\secret\\nvenc.log";
+    ASSERT_TRUE(BeginSession(crash_dir_, ctx));
+
+    std::ifstream in(crash_dir_ + "\\last_session.json");
+    ASSERT_TRUE(in.is_open());
+    std::string doc((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    EXPECT_EQ(doc.find("C:\\Users\\Alice"), std::string::npos)
+        << "A path-like value must be scrubbed before being written to the sidecar";
+
+    auto read = ReadPreviousCrashContext(crash_dir_);
+    ASSERT_TRUE(read.has_value());
+    EXPECT_EQ(read->encoder_backend.find("Alice"), std::string::npos) << "Scrubbed value must not contain the username";
 }

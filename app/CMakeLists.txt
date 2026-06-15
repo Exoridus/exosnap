@@ -724,6 +724,16 @@ target_include_directories(crash_report_overlay_tests PRIVATE ${CMAKE_CURRENT_SO
 set_target_properties(crash_report_overlay_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
+    NAME crash_issue_report_tests
+    TEST_PREFIX crashissue.
+    SOURCES
+        tests/test_crash_issue_report.cpp
+        services/CrashIssueReport.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(crash_issue_report_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+exosnap_add_gtest(
     NAME lucide_icon_tests
     TEST_PREFIX lucide.
     SOURCES
