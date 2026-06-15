@@ -42,6 +42,10 @@ class AdvancedPage : public QWidget {
     // Call once after construction with the persisted value.
     void setShowQuickControls(bool show);
 
+    // ACCENT-PICKER-R1: populate the accent combo from the stored accent id.
+    // Call once after construction with the persisted value.
+    void setAccentId(const QString& accent_id);
+
   signals:
     void backToSettingsRequested();
     // Emitted when the "Show recording overlay" checkbox changes.
@@ -54,6 +58,8 @@ class AdvancedPage : public QWidget {
     void keepRunningInTrayChanged(bool keep);
     // QUICK-PILL-R1: emitted when the "Quick controls" checkbox changes.
     void showQuickControlsChanged(bool show);
+    // ACCENT-PICKER-R1: emitted when the user selects a different accent.
+    void accentIdChanged(const QString& accent_id);
 
   private:
     void onReset();
@@ -65,6 +71,7 @@ class AdvancedPage : public QWidget {
     ui::widgets::ExoCheckBox* notifications_check_ = nullptr;
     ui::widgets::ExoCheckBox* keep_in_tray_check_ = nullptr;   // TRAY-CLOSE-TO-TRAY-R1
     ui::widgets::ExoCheckBox* quick_controls_check_ = nullptr; // QUICK-PILL-R1
+    QComboBox* accent_combo_ = nullptr;                        // ACCENT-PICKER-R1
 
     QLabel* baseline_profile_label_ = nullptr;
     QLabel* baseline_container_label_ = nullptr;

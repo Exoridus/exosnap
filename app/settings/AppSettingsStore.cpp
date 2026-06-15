@@ -10,10 +10,9 @@
 namespace exosnap {
 namespace {
 
-// Bump to 13: UPDATE-WIRE-R1 adds update_channel (default "Stable") +
-// check_updates_on_start (default true).
+// Bump to 14: ACCENT-PICKER-R1 adds accent_id (default "mint").
 // Pre-1.0: no migration; incompatible persisted data is reset to defaults.
-constexpr int kSettingsVersionCurrent = 13;
+constexpr int kSettingsVersionCurrent = 14;
 
 } // namespace
 
@@ -92,6 +91,12 @@ PersistedAppSettings AppSettingsStore::Load() const {
     persisted.check_updates_on_start = settings.value(QStringLiteral("check_updates_on_start"), true).toBool();
     settings.endGroup();
 
+    settings.beginGroup(QStringLiteral("appearance"));
+    // ACCENT-PICKER-R1: accent color id (default "mint" = Studio Mint).
+    // Pre-1.0: no migration; missing key defaults to "mint".
+    persisted.accent_id = settings.value(QStringLiteral("accent_id"), QStringLiteral("mint")).toString();
+    settings.endGroup();
+
     return persisted;
 }
 
@@ -158,6 +163,11 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     // UPDATE-WIRE-R1: update channel + auto-check-on-start.
     settings.setValue(QStringLiteral("channel"), settings_snapshot.update_channel);
     settings.setValue(QStringLiteral("check_updates_on_start"), settings_snapshot.check_updates_on_start);
+    settings.endGroup();
+
+    settings.beginGroup(QStringLiteral("appearance"));
+    // ACCENT-PICKER-R1: accent color id.
+    settings.setValue(QStringLiteral("accent_id"), settings_snapshot.accent_id);
     settings.endGroup();
 
     settings.sync();

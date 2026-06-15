@@ -79,7 +79,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_WindowGeometry) {
     EXPECT_TRUE(loaded.window_geometry.maximized);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion13) {
+TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion14) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
@@ -89,8 +89,8 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion13) {
     store.Save(settings);
 
     QSettings raw_settings(settings_path, QSettings::IniFormat);
-    // Version bumped to 13: UPDATE-WIRE-R1 adds update_channel + check_updates_on_start.
-    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 13);
+    // Version bumped to 14: ACCENT-PICKER-R1 adds accent_id.
+    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 14);
 }
 
 // CRASH-WIRE-R1: auto_send_crash_reports round-trip + default tests
@@ -478,6 +478,74 @@ TEST(AppSettingsStoreTest, AppSettingsStore_MissingUpdateKeys_DefaultToStableAnd
     // Update keys absent: must default to Stable / true.
     EXPECT_EQ(loaded.update_channel, QStringLiteral("Stable"));
     EXPECT_TRUE(loaded.check_updates_on_start);
+}
+
+// ---------------------------------------------------------------------------
+// ACCENT-PICKER-R1 (0.5.0-B): accent_id round-trip + default tests
+// ---------------------------------------------------------------------------
+
+TEST(AppSettingsStoreTest, AppSettingsStore_DefaultAccentIdIsMint) {
+    PersistedAppSettings settings;
+    EXPECT_EQ(settings.accent_id, QStringLiteral("mint"));
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_AccentId_Azure) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    settings.accent_id = QStringLiteral("azure");
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_EQ(loaded.accent_id, QStringLiteral("azure"));
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_AccentId_Violet) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    settings.accent_id = QStringLiteral("violet");
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_EQ(loaded.accent_id, QStringLiteral("violet"));
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_AccentId_Mint) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    settings.accent_id = QStringLiteral("mint");
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_EQ(loaded.accent_id, QStringLiteral("mint"));
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_MissingAccentId_DefaultsToMint) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    // Write a file without the [appearance] group.
+    {
+        QSettings s(settings_path, QSettings::IniFormat);
+        s.beginGroup(QStringLiteral("overlay"));
+        s.setValue(QStringLiteral("show_recording_overlay"), true);
+        s.endGroup();
+        s.sync();
+    }
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    // Accent key absent: must default to "mint".
+    EXPECT_EQ(loaded.accent_id, QStringLiteral("mint"));
 }
 
 } // namespace exosnap

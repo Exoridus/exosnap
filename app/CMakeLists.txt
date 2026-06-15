@@ -585,6 +585,17 @@ exosnap_add_gtest(
 )
 target_include_directories(app_settings_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# ACCENT-PICKER-R1 (0.5.0-B): accent id resolution and table invariant tests.
+# Headless — no QApplication required; only inspects ExoSnapAccents + ExoSnapPalette.
+exosnap_add_gtest(
+    NAME accent_theme_tests
+    TEST_PREFIX accent.
+    SOURCES
+        tests/test_accent_theme.cpp
+    LIBRARIES Qt6::Core Qt6::Gui
+)
+target_include_directories(accent_theme_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 exosnap_add_gtest(
     NAME diagnostics_tests
     TEST_PREFIX diagnostics.

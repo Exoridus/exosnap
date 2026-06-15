@@ -29,6 +29,7 @@
 #include "ui/overlay/RecordingOverlayWindow.h"
 #include "ui/theme/ExoSnapMetrics.h"
 #include "ui/theme/ExoSnapPalette.h"
+#include "ui/theme/ExoSnapTheme.h"
 #include "ui/tray/TrayPresence.h"
 #include "ui/widgets/WebcamSetupPanel.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
@@ -839,6 +840,22 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
             quick_control_pill_->setShowQuickControls(show);
         updateQuickControlPill();
     });
+    // ---- Accent color picker (ACCENT-PICKER-R1) ----
+    // Populate the Advanced page combo from the persisted setting.
+    if (advanced_page_)
+        advanced_page_->setAccentId(persisted_settings_.accent_id);
+    // Apply the persisted accent on startup (no-op if "mint" since ApplyExoSnapTheme
+    // already used the default; called unconditionally for any non-default stored accent).
+    if (persisted_settings_.accent_id != QStringLiteral("mint")) {
+        ui::theme::ReapplyAccent(*qApp, persisted_settings_.accent_id);
+    }
+    // When the user picks a different accent, apply it live and persist.
+    connect(advanced_page_, &AdvancedPage::accentIdChanged, this, [this](const QString& id) {
+        persisted_settings_.accent_id = id;
+        settings_store_.Save(persisted_settings_);
+        ui::theme::ReapplyAccent(*qApp, id);
+    });
+
     // Wire pill buttons to the existing recording actions on RecordPage.
     connect(quick_control_pill_, &ui::overlay::QuickControlPillWindow::pauseResumeRequested, record_page_,
             &RecordPage::onHotkeyPauseToggle);
