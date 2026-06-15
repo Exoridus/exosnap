@@ -24,6 +24,10 @@
 #include "ui/tray/TrayPresence.h"
 #include <capability/audio_ui_state.h>
 #include <capability/capability_set.h>
+#include <crash_capture/crash_capture.h>
+
+#include <optional>
+#include <string>
 
 class QShowEvent;
 
@@ -45,6 +49,7 @@ class TrayPresence;
 
 namespace ui::dialogs {
 class AboutOverlay;
+class CrashReportOverlay;
 class RecoveryOverlay;
 class SourcePickerOverlay;
 } // namespace ui::dialogs
@@ -70,6 +75,12 @@ class MainWindow : public QMainWindow {
   public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
+
+    // CRASH-WIRE-R1: true when the crash dialog's "Restart ExoSnap" was chosen.
+    // main() reads this after app.exec() to relaunch a detached instance.
+    [[nodiscard]] bool relaunchRequested() const noexcept {
+        return relaunch_requested_;
+    }
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void applyVisualScenario(const visual::VisualScenario& scenario);
@@ -144,6 +155,16 @@ class MainWindow : public QMainWindow {
     // Startup recovery: scan the manifest; open the overlay when candidates exist.
     void checkAndShowRecoveryOverlay();
 
+    // CRASH-WIRE-R1 (ADR 0017): next-launch crash dialog. Shown when the previous
+    // session did not mark a clean exit. Deferred behind the recovery overlay so
+    // the user is never double-prompted.
+    void checkAndShowCrashReportOverlay();
+    void openCrashReportOverlay();
+    // Build the live session context (version + output context) for the sidecar.
+    [[nodiscard]] crash_capture::SessionContext currentSessionContext() const;
+    // Push the current context to the crash engine + session sidecar. Cheap.
+    void refreshCrashSessionContext();
+
     // RECORDING-OVERLAY-R1: update the recording overlay visibility/state.
     void updateRecordingOverlay();
     // DIAGNOSTICS-OVERLAY-R1: update the diagnostics overlay visibility/state.
@@ -174,6 +195,7 @@ class MainWindow : public QMainWindow {
     ui::dialogs::AboutOverlay* about_overlay_ = nullptr;
     ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
+    ui::dialogs::CrashReportOverlay* crash_overlay_ = nullptr;
     ui::overlay::CountdownOverlayWindow* countdown_overlay_ = nullptr;
     ui::overlay::RecordingOverlayWindow* recording_overlay_ = nullptr;
     ui::overlay::DiagnosticsOverlayWindow* diagnostics_overlay_ = nullptr;
@@ -238,6 +260,11 @@ class MainWindow : public QMainWindow {
     capability::CapabilitySet runtime_caps_;
     bool runtime_caps_ready_ = false;
     QString record_status_label_ = QStringLiteral("READY");
+
+    // CRASH-WIRE-R1 (ADR 0017): crash-capture session lifecycle.
+    std::string crash_dir_;
+    std::optional<crash_capture::SessionContext> pending_crash_;
+    bool relaunch_requested_ = false;
 };
 
 } // namespace exosnap

@@ -51,6 +51,11 @@ struct PersistedAppSettings {
     // SetWindowDisplayAffinity) and interactive (NOT click-through), so it is an
     // opt-in feature gated here.
     bool show_quick_controls = false;
+
+    // CRASH-WIRE-R1 (ADR 0017): when true, the next-launch crash dialog is
+    // suppressed and consent is granted silently so the (dormant w/o DSN) report
+    // is sent automatically. Opt-in only; default OFF.
+    bool auto_send_crash_reports = false;
 };
 
 class AppSettingsStore {

@@ -79,7 +79,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_WindowGeometry) {
     EXPECT_TRUE(loaded.window_geometry.maximized);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion11) {
+TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion12) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
@@ -89,8 +89,46 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion11) {
     store.Save(settings);
 
     QSettings raw_settings(settings_path, QSettings::IniFormat);
-    // Version bumped to 11: QUICK-PILL-R1 adds show_quick_controls.
-    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 11);
+    // Version bumped to 12: CRASH-WIRE-R1 adds auto_send_crash_reports.
+    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 12);
+}
+
+// CRASH-WIRE-R1: auto_send_crash_reports round-trip + default tests
+TEST(AppSettingsStoreTest, AppSettingsStore_DefaultAutoSendCrashReportsIsFalse) {
+    PersistedAppSettings settings;
+    EXPECT_FALSE(settings.auto_send_crash_reports);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_AutoSendCrashReports_True) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+    PersistedAppSettings settings;
+    settings.auto_send_crash_reports = true;
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_TRUE(loaded.auto_send_crash_reports);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_MissingAutoSendCrashReportsKey_DefaultsFalse) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString settings_path = TempSettingsPath(temp_dir);
+
+    // Write a file without the crash group at all.
+    {
+        QSettings s(settings_path, QSettings::IniFormat);
+        s.beginGroup(QStringLiteral("overlay"));
+        s.setValue(QStringLiteral("show_recording_overlay"), true);
+        s.endGroup();
+        s.sync();
+    }
+
+    AppSettingsStore store(settings_path);
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_FALSE(loaded.auto_send_crash_reports);
 }
 
 // DIAGNOSTICS-OVERLAY-R1: show_diagnostics_overlay round-trip tests

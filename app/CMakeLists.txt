@@ -96,6 +96,10 @@ qt_add_executable(exosnap WIN32
     ui/dialogs/SourcePickerOverlay.h
     ui/dialogs/SourcePickerOverlay.cpp
     ui/dialogs/SourcePickerWindowRules.h
+    ui/dialogs/CrashReportPanel.h
+    ui/dialogs/CrashReportPanel.cpp
+    ui/dialogs/CrashReportOverlay.h
+    ui/dialogs/CrashReportOverlay.cpp
     ui/tray/TrayPresence.h
     ui/tray/TrayPresence.cpp
     ui/widgets/SectionRuleHeader.h
@@ -195,6 +199,8 @@ qt_add_executable(exosnap WIN32
     services/RecordingCountdownController.cpp
     services/RecoveryService.h
     services/RecoveryService.cpp
+    services/CrashIssueReport.h
+    services/CrashIssueReport.cpp
     models/WebcamSettings.h
     models/OutputSettingsModel.h
     models/OutputSettingsModel.cpp
@@ -274,7 +280,7 @@ add_dependencies(exosnap exosnap_build_info)
 
 target_link_libraries(exosnap PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
-    recorder_core exosnap::capability exosnap::warnings FFmpeg::mux
+    recorder_core exosnap::capability exosnap::warnings FFmpeg::mux exosnap::crash_capture
     d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
     mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib
 )
