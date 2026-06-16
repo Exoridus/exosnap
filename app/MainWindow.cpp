@@ -9,6 +9,7 @@
 #include "pages/DiagnosticsPage.h"
 #include "pages/HotkeysPage.h"
 #include "pages/LogsPage.h"
+#include "pages/OutputPage.h"
 #include "pages/RecordPage.h"
 #include "pages/WebcamPage.h"
 #include "services/CrashIssueReport.h"
@@ -83,6 +84,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QVector>
 #include <QWindow>
 #include <QWindowStateChangeEvent>
 #include <algorithm>
@@ -173,7 +175,7 @@ struct PageDescriptor {
     SidebarIcon icon;
 };
 
-constexpr std::array<PageDescriptor, 7> kPageDescriptors = {{
+constexpr std::array<PageDescriptor, 8> kPageDescriptors = {{
     {"Record", "Operational view — target, readiness, and live runtime.", "", true, SidebarIcon::Record},
     {"Settings", "Unified recording configuration — format, sources, and output.", "", true, SidebarIcon::Setup},
     {"Hotkeys", "Global command access for recording operations.", "GLOBAL SHORTCUTS", true, SidebarIcon::Hotkeys},
@@ -182,6 +184,7 @@ constexpr std::array<PageDescriptor, 7> kPageDescriptors = {{
     {"Logs", "Runtime events and recording diagnostics.", "SESSION EVENTS", true, SidebarIcon::Logs},
     {"Advanced", "Lower-level behavior and non-default controls.", "EXPERT SETTINGS", false, SidebarIcon::Advanced},
     {"Webcam", "Webcam device and capture settings.", "", false, SidebarIcon::Webcam},
+    {"Output", "Recording preset management — create, export, and import presets.", "", false, SidebarIcon::Output},
 }};
 
 constexpr int pageIndexForIcon(SidebarIcon icon) {
@@ -198,6 +201,7 @@ constexpr int kAdvancedPageIndex = pageIndexForIcon(SidebarIcon::Advanced);
 constexpr int kDiagnosticsPageIndex = pageIndexForIcon(SidebarIcon::Diagnostics);
 constexpr int kWebcamPageIndex = pageIndexForIcon(SidebarIcon::Webcam);
 constexpr int kLogsPageIndex = pageIndexForIcon(SidebarIcon::Logs);
+constexpr int kOutputPageIndex = pageIndexForIcon(SidebarIcon::Output);
 static_assert(kRecordPageIndex >= 0, "Record page must exist in kPageDescriptors.");
 static_assert(kSettingsPageIndex >= 0, "Settings page must exist in kPageDescriptors.");
 static_assert(kHotkeysPageIndex >= 0, "Hotkeys page must exist in kPageDescriptors.");
@@ -205,6 +209,7 @@ static_assert(kAdvancedPageIndex >= 0, "Advanced page must exist in kPageDescrip
 static_assert(kDiagnosticsPageIndex >= 0, "Diagnostics page must exist in kPageDescriptors.");
 static_assert(kWebcamPageIndex >= 0, "Webcam page must exist in kPageDescriptors.");
 static_assert(kLogsPageIndex >= 0, "Logs page must exist in kPageDescriptors.");
+static_assert(kOutputPageIndex >= 0, "Output page must exist in kPageDescriptors.");
 
 // UPDATE-WIRE-R1: map between the persisted/UI channel string ("Stable"|"Preview")
 // and the engine enum. Unknown values fall back to Stable.
@@ -497,6 +502,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
                                 QString::fromStdString(preset_registry_.SelectedPreset().name));
     stack_->addWidget(advanced_page_);
     stack_->addWidget(webcam_page_);
+    output_page_ = new OutputPage(output_settings_, stack_);
+    stack_->addWidget(output_page_);
     // Inject the recovery manifest store before the coordinator is initialized.
     record_page_->setRecoveryManifestStore(&recovery_manifest_store_);
     record_page_->setOutputSettings(output_settings_);
@@ -570,7 +577,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
                 if (recording_overlay_ && recording_overlay_->isVisible())
                     recording_overlay_->updateElapsed(elapsed);
             });
-    connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { navigateToPage(kSettingsPageIndex); });
+    connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { navigateToPage(kOutputPageIndex); });
     connect(record_page_, &RecordPage::navigateToDiagnosticsPage, this,
             [this]() { navigateToPage(kDiagnosticsPageIndex); });
     // ---- Format settings changed (from ConfigPage) ----
@@ -731,6 +738,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(webcam_page_, &WebcamPage::backToSettingsRequested, this, [this]() { navigateToPage(kSettingsPageIndex); });
     connect(advanced_page_, &AdvancedPage::backToSettingsRequested, this,
             [this]() { navigateToPage(kSettingsPageIndex); });
+
+    // ---- OutputPage preset management signals ----
+    connect(output_page_, &OutputPage::activeProfileChanged, this, [this](const QString& id) { onPresetSelected(id); });
+    connect(output_page_, &OutputPage::newFromCurrentRequested, this,
+            [this](const QString& name) { onSavePresetAs(name); });
+    connect(output_page_, &OutputPage::newFromSafeDefaultRequested, this,
+            [this](const QString& /*name*/) { onNewPreset(); });
+    connect(output_page_, &OutputPage::duplicateActiveProfileRequested, this, &MainWindow::onDuplicatePreset);
+    connect(output_page_, &OutputPage::renameActiveProfileRequested, this, &MainWindow::onRenamePreset);
+    connect(output_page_, &OutputPage::deleteActiveProfileRequested, this, &MainWindow::onDeletePreset);
+    connect(output_page_, &OutputPage::resetActiveProfileRequested, this, &MainWindow::onResetChanges);
+    connect(output_page_, &OutputPage::saveModifiedBuiltInAsNewRequested, this,
+            [this](const QString& name) { onSavePresetAs(name); });
+    connect(output_page_, &OutputPage::resetAllSettingsAndProfilesRequested, this, &MainWindow::onResetToDefaults);
+    // Export / import — these require the file path passed as argument.
+    connect(output_page_, &OutputPage::exportSelectedProfileRequested, this, &MainWindow::onExportSelectedProfile);
+    connect(output_page_, &OutputPage::exportAllUserProfilesRequested, this, &MainWindow::onExportAllUserProfiles);
+    connect(output_page_, &OutputPage::importProfilesRequested, this, &MainWindow::onImportProfiles);
 
     // ---- Countdown overlay (COUNTDOWN-OVERLAY-R1) ----
     // Top-level (no Qt parent) like the other overlays; centered on the recorded monitor.
@@ -1955,9 +1980,9 @@ void MainWindow::applyRestoredGeometry() {
 }
 
 int MainWindow::navHighlightIndexFor(int index) const {
-    // Advanced and Webcam are sub-pages reached from Settings; keep the Settings tab lit
-    // while they are shown (no dedicated top-nav tab exists for them).
-    if (index == kAdvancedPageIndex || index == kWebcamPageIndex)
+    // Advanced, Webcam, and Output are sub-pages reached from Settings; keep the
+    // Settings tab lit while they are shown (no dedicated top-nav tab for them).
+    if (index == kAdvancedPageIndex || index == kWebcamPageIndex || index == kOutputPageIndex)
         return kSettingsPageIndex;
     return index;
 }
@@ -2059,25 +2084,39 @@ void MainWindow::applyPresetConfig(const RecordingPresetConfig& cfg) {
 }
 
 void MainWindow::refreshPresetUi() {
-    std::vector<ConfigPage::ProfileOption> options;
-    options.reserve(preset_registry_.Count());
+    std::vector<ConfigPage::ProfileOption> config_options;
+    config_options.reserve(preset_registry_.Count());
+    std::vector<OutputPage::ProfileOption> output_options;
+    output_options.reserve(preset_registry_.Count());
 
     for (const auto& preset : preset_registry_.Presets()) {
-        ConfigPage::ProfileOption option;
-        option.id = QString::fromStdString(preset.id);
-        option.label = QString::fromStdString(preset.name);
-        option.built_in = false;
-        option.modified = false;
-        option.available = true;
-        options.push_back(std::move(option));
+        ConfigPage::ProfileOption co;
+        co.id = QString::fromStdString(preset.id);
+        co.label = QString::fromStdString(preset.name);
+        co.built_in = false;
+        co.modified = false;
+        co.available = true;
+        config_options.push_back(co);
+
+        OutputPage::ProfileOption oo;
+        oo.id = co.id;
+        oo.label = co.label;
+        oo.built_in = false;
+        oo.modified = false;
+        oo.available = true;
+        output_options.push_back(std::move(oo));
     }
 
     const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
     syncing_preset_ui_ = true;
     if (config_page_) {
-        config_page_->setPresetOptions(options, QString::fromStdString(preset_registry_.SelectedId()),
+        config_page_->setPresetOptions(config_options, QString::fromStdString(preset_registry_.SelectedId()),
                                        QString::fromStdString(preset_registry_.DefaultId()), dirty);
         config_page_->setActiveProfileName(QString::fromStdString(preset_registry_.SelectedPreset().name));
+    }
+    if (output_page_) {
+        output_page_->setProfileOptions(output_options, QString::fromStdString(preset_registry_.SelectedId()), dirty);
+        output_page_->setActiveProfileName(QString::fromStdString(preset_registry_.SelectedPreset().name));
     }
     syncing_preset_ui_ = false;
 }
@@ -2218,6 +2257,80 @@ void MainWindow::onSetDefaultPreset() {
     preset_registry_.SetDefault(preset_registry_.SelectedId());
     refreshPresetUi();
     persistPresetState();
+}
+
+// ---------------------------------------------------------------------------
+// Export / import handlers
+// ---------------------------------------------------------------------------
+
+void MainWindow::onExportSelectedProfile(const QString& path) {
+    const RecordingPreset& selected = preset_registry_.SelectedPreset();
+    QString err;
+    if (!RecordingPresetStore::ExportPresetToFile(selected, path, &err)) {
+        QMessageBox::warning(this, QStringLiteral("Export Failed"), err);
+        return;
+    }
+    diagnostics::AppLog::info(
+        QStringLiteral("preset"),
+        QStringLiteral("exported preset '%1' to %2").arg(QString::fromStdString(selected.name), path));
+    QMessageBox::information(
+        this, QStringLiteral("Export Successful"),
+        QStringLiteral("Preset \"%1\" exported successfully.").arg(QString::fromStdString(selected.name)));
+}
+
+void MainWindow::onExportAllUserProfiles(const QString& path) {
+    const std::vector<RecordingPreset>& all = preset_registry_.Presets();
+    // Collect all presets (no built-in distinction in the current registry).
+    QVector<RecordingPreset> presets_to_export;
+    presets_to_export.reserve(static_cast<int>(all.size()));
+    for (const auto& p : all) {
+        presets_to_export.push_back(p);
+    }
+
+    if (presets_to_export.isEmpty()) {
+        QMessageBox::information(this, QStringLiteral("Export Presets"), QStringLiteral("No presets to export."));
+        return;
+    }
+
+    QString err;
+    if (!RecordingPresetStore::ExportAllUserPresetsToFile(presets_to_export, path, &err)) {
+        QMessageBox::warning(this, QStringLiteral("Export Failed"), err);
+        return;
+    }
+    diagnostics::AppLog::info(QStringLiteral("preset"),
+                              QStringLiteral("exported %1 preset(s) to %2").arg(presets_to_export.size()).arg(path));
+    QMessageBox::information(this, QStringLiteral("Export Successful"),
+                             QStringLiteral("Exported %1 preset(s) successfully.").arg(presets_to_export.size()));
+}
+
+void MainWindow::onImportProfiles(const QString& path) {
+    // Build the current id set for collision detection.
+    std::vector<std::string> existing_ids;
+    existing_ids.reserve(preset_registry_.Count());
+    for (const auto& p : preset_registry_.Presets()) {
+        existing_ids.push_back(p.id);
+    }
+
+    QString err;
+    const QVector<RecordingPreset> imported = RecordingPresetStore::ImportPresetsFromFile(path, existing_ids, &err);
+
+    if (imported.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Import Failed"),
+                             err.isEmpty() ? QStringLiteral("No valid presets found in the file.") : err);
+        return;
+    }
+
+    for (const RecordingPreset& p : imported) {
+        preset_registry_.ImportPreset(p);
+    }
+
+    refreshPresetUi();
+    persistPresetState();
+
+    diagnostics::AppLog::info(QStringLiteral("preset"),
+                              QStringLiteral("imported %1 preset(s) from %2").arg(imported.size()).arg(path));
+    QMessageBox::information(this, QStringLiteral("Import Successful"),
+                             QStringLiteral("Imported %1 preset(s).").arg(imported.size()));
 }
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)

@@ -175,6 +175,8 @@ qt_add_executable(exosnap WIN32
     pages/LogsPage.cpp
     pages/AdvancedPage.h
     pages/AdvancedPage.cpp
+    pages/OutputPage.h
+    pages/OutputPage.cpp
     services/DeviceDiscoveryCommon.h
     services/AudioDeviceNotifier.h
     services/AudioDeviceNotifier.cpp
@@ -939,6 +941,19 @@ exosnap_add_gtest(
     LIBRARIES exosnap_capability recorder_core Qt6::Core)
 target_include_directories(recording_preset_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_preset_store_tests PRIVATE ole32.lib shell32.lib)
+
+# PRESET-EXPORT-IMPORT-R1 tests
+exosnap_add_gtest(
+    NAME preset_export_import_tests
+    TEST_PREFIX preset.
+    SOURCES tests/test_preset_export_import.cpp
+            settings/RecordingPresetStore.cpp
+            models/RecordingPreset.cpp
+            models/RecordingPresetRegistry.cpp
+            models/OutputSettingsModel.cpp
+    LIBRARIES exosnap_capability recorder_core Qt6::Core)
+target_include_directories(preset_export_import_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(preset_export_import_tests PRIVATE ole32.lib shell32.lib)
 
 # RECOVERY-MANIFEST-R1 tests
 exosnap_add_gtest(

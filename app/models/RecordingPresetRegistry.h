@@ -91,6 +91,12 @@ class RecordingPresetRegistry {
     // Returns the selected preset's saved config (for "Reset changes").
     [[nodiscard]] RecordingPresetConfig SelectedSavedConfig() const;
 
+    // Insert a fully-formed preset produced by the import flow.
+    // The id must already be unique (caller is responsible for collision resolution).
+    // The name is deduplicated if it collides with an existing preset name.
+    // The newly imported preset is NOT auto-selected (unlike AddPreset).
+    void ImportPreset(RecordingPreset preset);
+
     // Clear to a single MakeDefaultPreset(); selected = default = kDefaultPresetId.
     void ResetAllToDefault();
 

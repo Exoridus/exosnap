@@ -5,6 +5,7 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QStringView>
+#include <QVector>
 
 #include "settings/ConfigPaths.h"
 
@@ -860,6 +861,179 @@ void RecordingPresetStore::Save(const std::vector<RecordingPreset>& presets, con
 
 const QString& RecordingPresetStore::FilePath() const {
     return file_path_;
+}
+
+// ---------------------------------------------------------------------------
+// ExportPresetToFile
+// ---------------------------------------------------------------------------
+
+bool RecordingPresetStore::ExportPresetToFile(const RecordingPreset& preset, const QString& path, QString* err) {
+    if (path.isEmpty()) {
+        if (err)
+            *err = QStringLiteral("Export path is empty.");
+        return false;
+    }
+
+    const QFileInfo info(path);
+    if (!QDir().mkpath(info.absolutePath())) {
+        if (err)
+            *err = QStringLiteral("Could not create parent directory: %1").arg(info.absolutePath());
+        return false;
+    }
+
+    QSettings settings(path, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("schemaVersion"), kPresetSchemaVersion);
+    // Tag as a single-preset export so ImportPresetsFromFile can detect which
+    // layout was used without ambiguity.
+    settings.setValue(QStringLiteral("exportKind"), QStringLiteral("single"));
+
+    settings.beginWriteArray(QStringLiteral("items"), 1);
+    settings.setArrayIndex(0);
+    SavePresetItem(settings, preset);
+    settings.endArray();
+    settings.sync();
+
+    if (settings.status() != QSettings::NoError) {
+        if (err)
+            *err = QStringLiteral("Failed to write preset file: %1").arg(path);
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// ExportAllUserPresetsToFile
+// ---------------------------------------------------------------------------
+
+bool RecordingPresetStore::ExportAllUserPresetsToFile(const QVector<RecordingPreset>& presets, const QString& path,
+                                                      QString* err) {
+    if (path.isEmpty()) {
+        if (err)
+            *err = QStringLiteral("Export path is empty.");
+        return false;
+    }
+
+    const QFileInfo info(path);
+    if (!QDir().mkpath(info.absolutePath())) {
+        if (err)
+            *err = QStringLiteral("Could not create parent directory: %1").arg(info.absolutePath());
+        return false;
+    }
+
+    QSettings settings(path, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("schemaVersion"), kPresetSchemaVersion);
+    settings.setValue(QStringLiteral("exportKind"), QStringLiteral("all"));
+
+    settings.beginWriteArray(QStringLiteral("items"), static_cast<int>(presets.size()));
+    for (int i = 0; i < presets.size(); ++i) {
+        settings.setArrayIndex(i);
+        SavePresetItem(settings, presets[i]);
+    }
+    settings.endArray();
+    settings.sync();
+
+    if (settings.status() != QSettings::NoError) {
+        if (err)
+            *err = QStringLiteral("Failed to write preset file: %1").arg(path);
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// ImportPresetsFromFile
+// ---------------------------------------------------------------------------
+
+QVector<RecordingPreset> RecordingPresetStore::ImportPresetsFromFile(const QString& path,
+                                                                     const std::vector<std::string>& existing_ids,
+                                                                     QString* err) {
+    if (path.isEmpty()) {
+        if (err)
+            *err = QStringLiteral("Import path is empty.");
+        return {};
+    }
+
+    if (!QFileInfo::exists(path)) {
+        if (err)
+            *err = QStringLiteral("File not found: %1").arg(path);
+        return {};
+    }
+
+    QSettings settings(path, QSettings::IniFormat);
+
+    if (settings.status() != QSettings::NoError) {
+        if (err)
+            *err = QStringLiteral("Could not open file for reading: %1").arg(path);
+        return {};
+    }
+
+    // Schema version check: best-effort — log a warning but still attempt to
+    // parse.  Pre-1.0: no migration; newer files are parsed as-is + sanitized.
+    bool version_ok = false;
+    const int file_version = settings.value(QStringLiteral("schemaVersion"), -1).toInt(&version_ok);
+    const bool version_mismatch = !version_ok || file_version != kPresetSchemaVersion;
+
+    const int count = settings.beginReadArray(QStringLiteral("items"));
+
+    if (count <= 0) {
+        settings.endArray();
+        if (err) {
+            if (version_mismatch) {
+                *err = QStringLiteral("Preset file has an unsupported schema version (%1, expected %2). No items could "
+                                      "be imported.")
+                           .arg(file_version)
+                           .arg(kPresetSchemaVersion);
+            } else {
+                *err = QStringLiteral("Preset file contains no items.");
+            }
+        }
+        return {};
+    }
+
+    // Build a fast-lookup set of existing ids (plus ids we have already
+    // assigned to earlier items in this import batch).
+    std::set<std::string> used_ids(existing_ids.begin(), existing_ids.end());
+
+    QVector<RecordingPreset> result;
+    result.reserve(count);
+
+    for (int i = 0; i < count; ++i) {
+        settings.setArrayIndex(i);
+        const auto maybe = LoadPresetItem(settings);
+        if (!maybe.has_value())
+            continue; // Malformed — skip.
+
+        RecordingPreset preset = SanitizePreset(*maybe);
+
+        // Collision handling: if the id is already used, generate a fresh one
+        // and suffix the name so the user can tell it apart.
+        if (used_ids.count(preset.id) > 0) {
+            preset.id = GeneratePresetId();
+            if (!preset.name.empty() && preset.name.rfind(" (imported)") == std::string::npos) {
+                preset.name += " (imported)";
+            }
+        }
+        used_ids.insert(preset.id);
+        result.push_back(std::move(preset));
+    }
+
+    settings.endArray();
+
+    if (result.isEmpty()) {
+        if (err) {
+            if (version_mismatch) {
+                *err = QStringLiteral("Preset file has an unsupported schema version (%1, expected %2). No valid items "
+                                      "could be imported.")
+                           .arg(file_version)
+                           .arg(kPresetSchemaVersion);
+            } else {
+                *err = QStringLiteral("No valid presets found in file: %1").arg(path);
+            }
+        }
+        return {};
+    }
+
+    return result;
 }
 
 } // namespace exosnap

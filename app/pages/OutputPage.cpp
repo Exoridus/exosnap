@@ -236,7 +236,7 @@ void OutputPage::updateProfileActionState() {
 
 void OutputPage::onImportProfiles() {
     const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Import Presets"), QString(),
-                                                      QStringLiteral("ExoSnap Presets (*.json);;All Files (*.*)"));
+                                                      QStringLiteral("ExoSnap Presets (*.ini);;All Files (*.*)"));
     if (path.isEmpty()) {
         return;
     }
@@ -244,8 +244,11 @@ void OutputPage::onImportProfiles() {
 }
 
 void OutputPage::onExportSelectedProfile() {
-    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export Selected Preset"), QString(),
-                                                      QStringLiteral("ExoSnap Presets (*.json);;All Files (*.*)"));
+    const QString active_label = profile_combo_ ? profile_combo_->currentText().trimmed() : QString();
+    const QString default_name = active_label.isEmpty() ? QStringLiteral("preset") : active_label;
+    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export Selected Preset"),
+                                                      default_name + QStringLiteral(".ini"),
+                                                      QStringLiteral("ExoSnap Presets (*.ini);;All Files (*.*)"));
     if (path.isEmpty()) {
         return;
     }
@@ -253,8 +256,9 @@ void OutputPage::onExportSelectedProfile() {
 }
 
 void OutputPage::onExportAllUserProfiles() {
-    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export All User Presets"), QString(),
-                                                      QStringLiteral("ExoSnap Presets (*.json);;All Files (*.*)"));
+    const QString path =
+        QFileDialog::getSaveFileName(this, QStringLiteral("Export All User Presets"), QStringLiteral("presets.ini"),
+                                     QStringLiteral("ExoSnap Presets (*.ini);;All Files (*.*)"));
     if (path.isEmpty()) {
         return;
     }

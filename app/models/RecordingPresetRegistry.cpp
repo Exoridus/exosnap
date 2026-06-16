@@ -160,6 +160,17 @@ std::string RecordingPresetRegistry::AddDefaultPreset() {
     return id;
 }
 
+void RecordingPresetRegistry::ImportPreset(RecordingPreset preset) {
+    // The caller has already resolved id collisions.  Deduplicate the name only.
+    preset.name = DeduplicateName(NormalizePresetName(preset.name));
+    if (preset.name.empty()) {
+        preset.name = DeduplicateName("Imported preset");
+    }
+    preset = SanitizePreset(std::move(preset));
+    presets_.push_back(std::move(preset));
+    // selected_id_ is intentionally NOT changed: the user selects explicitly.
+}
+
 bool RecordingPresetRegistry::SaveSelected(RecordingPresetConfig config) {
     const std::size_t idx = IndexById(selected_id_);
     if (idx == std::string::npos) {
