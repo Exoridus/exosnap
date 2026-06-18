@@ -134,12 +134,20 @@ endif()
 FetchContent_GetProperties(sentry_native BINARY_DIR _sentry_bindir)
 
 # crashpad_handler.exe lands in <sentry-binary-dir>/crashpad_build/handler/
+# (single-config) or .../handler/<Config>/ (Visual Studio multi-config). The
+# cached path below omits the per-config subdir, so it is informational only.
 set(EXOSNAP_CRASHPAD_HANDLER_EXE
     "${_sentry_bindir}/crashpad_build/handler/crashpad_handler.exe"
-    CACHE INTERNAL "Path to crashpad_handler.exe in the build tree")
+    CACHE INTERNAL "Path to crashpad_handler.exe in the build tree (single-config; informational)")
 
-# Install alongside exosnap.exe in the flat portable layout
-install(FILES "${EXOSNAP_CRASHPAD_HANDLER_EXE}" DESTINATION ".")
+# Install alongside exosnap.exe in the flat portable layout. Use the
+# crashpad_handler TARGET via a generator expression rather than the fixed cached
+# path: the Visual Studio multi-config generator emits the exe into a per-config
+# subdir (handler/Release/) that the fixed path misses, which breaks
+# `cmake --install` with "file INSTALL cannot find ...". $<TARGET_FILE:...>
+# resolves the per-config location for both Ninja and Visual Studio. Mirrors the
+# POST_BUILD staging rule in app/CMakeLists.txt.
+install(FILES "$<TARGET_FILE:crashpad_handler>" DESTINATION ".")
 
 # LICENSE staging
 set(_sentry_license "${_sentry_bindir}/../sentry_native-src/LICENSE")

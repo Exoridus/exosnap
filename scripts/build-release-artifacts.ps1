@@ -314,6 +314,28 @@ Invoke-Heartbeat -Name 'cmake install' -FilePath 'cmake' `
     -Arguments @('--install', $BuildDir, '--config', 'Release', '--prefix', $PackageRoot)
 
 # ---------------------------------------------------------------------------
+# 2b. Prune leaked dependency development trees
+#
+# Several vendored static dependencies (libmatroska, libebml, fdk-aac, opus,
+# Crashpad/mini_chromium) carry install(TARGETS)/install(FILES) rules we never
+# consume: they emit import libraries, headers, CMake package configs, and
+# pkg-config files into lib/ and include/. Unlike gtest/spdlog/nlohmann/sentry —
+# all disabled via their own INSTALL=OFF switches in third_party/CMakeLists.txt
+# and VendorSentry.cmake — these projects expose no such switch (or install via a
+# git submodule we do not control), so `cmake --install` unavoidably stages their
+# dev trees. The portable package ships runtime only: exosnap.exe, the Qt/FFmpeg
+# DLLs, crashpad_handler.exe, plugins/, and licenses/ — all flat or under
+# plugins/ per Qt convention. Nothing the app loads at runtime lives in lib/ or
+# include/, so remove these dev trees before the absence audit asserts on them.
+foreach ($devDir in @('lib', 'include')) {
+    $devPath = Join-Path $PackageRoot $devDir
+    if (Test-Path -LiteralPath $devPath -PathType Container) {
+        Remove-Item -LiteralPath $devPath -Recurse -Force
+        Write-Host "  Pruned leaked dependency dev tree: $devDir/"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 3. Validate the install tree
 # ---------------------------------------------------------------------------
 Write-Step "Validating install tree"
