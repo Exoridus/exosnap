@@ -13,7 +13,7 @@
     "architecture": {
         "64bit": {
             "url": "https://github.com/Exoridus/exosnap/releases/download/v0.4.0/ExoSnap-0.4.0-windows-x64-portable.zip",
-            "hash": "PLACEHOLDER_FILL_PORTABLE_ZIP_SHA256_AT_RELEASE",
+            "hash": "44ccd051813317bb79d1df7609ae33761167b69fe76601d85df1564c74d943eb",
             "extract_dir": "ExoSnap-0.4.0-windows-x64-portable"
         }
     },
