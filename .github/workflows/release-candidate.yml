@@ -40,15 +40,23 @@ jobs:
         run: git config --global core.longpaths true
 
       # Cache the fetched + built sentry-native/Crashpad tree (official build only)
-      # so reruns do not re-clone and re-build the whole dependency. Mirrors the
-      # crash-capture-build job; keyed on the pinned sentry-native version.
+      # so reruns do not re-clone and re-build the whole dependency. Keyed on the
+      # pinned sentry-native version AND scoped to the Visual Studio generator.
+      #
+      # The cache MUST be generator-scoped: this job configures C:/es with the
+      # "Visual Studio 17 2022" generator (preset windows-x64-release), while
+      # crash-capture-build.yml configures the same C:/es path with `-G Ninja`.
+      # A shared key let a Ninja-configured FetchContent subbuild (googletest)
+      # leak into this VS configure, and CMake aborts with "generator: Visual
+      # Studio 17 2022 does not match the generator used previously: Ninja".
+      # The `-vs2022-` namespace keeps the two generators' caches from crossing.
       - name: Cache FetchContent deps (sentry-native + Crashpad)
         uses: actions/cache@v4
         with:
           path: C:/es
-          key: es-fetchcontent-${{ runner.os }}-${{ hashFiles('cmake/VendorSentry.cmake') }}
+          key: es-fetchcontent-${{ runner.os }}-vs2022-${{ hashFiles('cmake/VendorSentry.cmake') }}
           restore-keys: |
-            es-fetchcontent-${{ runner.os }}-
+            es-fetchcontent-${{ runner.os }}-vs2022-
 
       # Pre-configure the Release tree with EXOSNAP_RELEASE_PDB=ON so the linker
       # emits a separate exosnap.pdb the symbol-archiving step can collect. The
