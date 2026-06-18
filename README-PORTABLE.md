@@ -1,4 +1,4 @@
-# ExoSnap 0.3.0 — Portable Release
+# ExoSnap 0.4.0 — Portable Release
 
 Thanks for trying ExoSnap. This file is the quick-start guide for the portable
 Windows build.
@@ -11,7 +11,7 @@ multi-track audio routing, a webcam overlay, and built-in diagnostics.
 
 ## Release status
 
-This is **ExoSnap 0.3.0**, a **pre-v1 Windows preview**. It is not the final
+This is **ExoSnap 0.4.0**, a **pre-v1 Windows preview**. It is not the final
 1.0 release. Settings, presets, and recording-history file formats may change in
 incompatible ways before 1.0.0. See `KNOWN_LIMITATIONS.md` for the full current
 support boundary.
@@ -20,7 +20,7 @@ support boundary.
 
 - Windows 10 or 11, 64-bit (Windows 11 recommended).
 - An **NVIDIA GPU with supported NVENC** capability (RTX 20-series or newer
-  recommended) and a current NVIDIA display driver. ExoSnap 0.3.0 requires
+  recommended) and a current NVIDIA display driver. ExoSnap 0.4.0 requires
   NVIDIA NVENC for video encoding; AMD, Intel, and software encoding are not
   supported in this release.
 - Microsoft Visual C++ 2022 x64 runtime (usually already installed). If the app
@@ -29,7 +29,7 @@ support boundary.
 
 ## How to launch
 
-1. Extract the entire `ExoSnap-0.3.0-windows-x64-portable` folder from the ZIP to a
+1. Extract the entire `ExoSnap-0.4.0-windows-x64-portable` folder from the ZIP to a
    location of your choice.
 2. Run `exosnap.exe` from the extracted folder.
 
@@ -68,7 +68,7 @@ Diagnostics view expose richer logging and a way to open the log folder.
   WebM uses AV1 + Opus; MKV is the flexible default.
 
 Exact availability depends on your GPU generation, driver, and the selected
-container/codec combination. HEVC, PCM, and FLAC are not implemented in 0.3.0.
+container/codec combination. HEVC, PCM, and FLAC are not implemented in 0.4.0.
 
 ## Recording split overview
 
@@ -77,13 +77,23 @@ container/codec combination. HEVC, PCM, and FLAC are not implemented in 0.3.0.
   background while recording continues. "Saved" is shown only when all remuxes
   complete. See `KNOWN_LIMITATIONS.md`.
 
+## Updates and crash reporting (0.4.0)
+
+- **Update check:** the official build checks public GitHub Releases for a newer version and notifies
+  you in-app (Stable and Preview channels). It never downloads or restarts on its own — it opens the
+  releases page so you choose when to update. No GitHub token is used.
+- **Crash reporting is opt-in.** If ExoSnap crashes, the next launch shows a privacy-scrubbed crash
+  dialog. Nothing is sent unless you choose to: either an assisted GitHub issue (Stage 0) or an
+  automated upload to Sentry with EU data residency (Stage 1). Recordings, file paths, machine names,
+  and similar identifying data are scrubbed. See `PRIVACY.md` for the exact fields.
+
 ## Verifying your download
 
 A SHA-256 checksum is published next to the ZIP as
-`ExoSnap-0.3.0-windows-x64-portable.sha256`. To verify integrity in PowerShell:
+`ExoSnap-0.4.0-windows-x64-portable.sha256`. To verify integrity in PowerShell:
 
 ```powershell
-Get-FileHash .\ExoSnap-0.3.0-windows-x64-portable.zip -Algorithm SHA256
+Get-FileHash .\ExoSnap-0.4.0-windows-x64-portable.zip -Algorithm SHA256
 ```
 
 The printed hash must match the value in the `.sha256` file. The checksum
