@@ -556,6 +556,7 @@ TEST(PipelineDiagnostics, SplitTriggerMapping) {
     EXPECT_EQ(ToDiagnosticsSplitTrigger(SplitTriggerSource::Hotkey), DiagnosticsSplitTrigger::Hotkey);
     EXPECT_EQ(ToDiagnosticsSplitTrigger(SplitTriggerSource::AutomaticDuration),
               DiagnosticsSplitTrigger::AutomaticDuration);
+    EXPECT_EQ(ToDiagnosticsSplitTrigger(SplitTriggerSource::AutomaticSize), DiagnosticsSplitTrigger::AutomaticSize);
 }
 
 } // namespace

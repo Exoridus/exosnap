@@ -803,6 +803,41 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     split_summary_label_->setObjectName(QStringLiteral("splitSummaryLabel"));
     out_panel_layout->addWidget(split_summary_label_);
 
+    // ---- Split recording by size (SPLIT-BY-SIZE-R1) ----
+    out_panel_layout->addWidget(makeFieldLabel(QStringLiteral("Split by size"), out_panel));
+    auto* split_size_row = new QHBoxLayout();
+    split_size_row->setContentsMargins(0, 0, 0, 0);
+    split_size_row->setSpacing(8);
+    split_size_mode_combo_ = new QComboBox(out_panel);
+    split_size_mode_combo_->setObjectName(QStringLiteral("splitSizeModeCombo"));
+    split_size_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitSizeMode::Off));
+    split_size_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitSizeMode::Custom));
+    split_size_mode_combo_->setToolTip(
+        QStringLiteral("Automatically start a new file when the segment reaches the chosen size."));
+    split_size_row->addWidget(split_size_mode_combo_, 0);
+
+    split_size_custom_widget_ = new QWidget(out_panel);
+    auto* split_size_custom_layout = new QHBoxLayout(split_size_custom_widget_);
+    split_size_custom_layout->setContentsMargins(0, 0, 0, 0);
+    split_size_custom_layout->setSpacing(8);
+    auto* split_size_label = new QLabel(QStringLiteral("Every"), split_size_custom_widget_);
+    split_size_label->setProperty("labelRole", "fieldLabel");
+    split_custom_size_spin_ = new QSpinBox(split_size_custom_widget_);
+    split_custom_size_spin_->setObjectName(QStringLiteral("splitCustomSizeSpin"));
+    // kMaxSizeMb = 1024*1024 = 1048576 which fits in int (< 2147483647).
+    split_custom_size_spin_->setRange(static_cast<int>(SplitRecordingSettings::kMinSizeMb),
+                                      static_cast<int>(SplitRecordingSettings::kMaxSizeMb));
+    split_custom_size_spin_->setSuffix(QStringLiteral(" MB"));
+    split_custom_size_spin_->setToolTip(
+        QStringLiteral("Split segment size in MiB (50 MiB – 1 TiB). Whichever limit (time or size) "
+                       "is reached first triggers the split."));
+    split_size_custom_layout->addWidget(split_size_label);
+    split_size_custom_layout->addWidget(split_custom_size_spin_);
+    split_size_custom_widget_->setVisible(false);
+    split_size_row->addWidget(split_size_custom_widget_, 0);
+    split_size_row->addStretch();
+    out_panel_layout->addLayout(split_size_row);
+
     auto* output_split = new QWidget(out_panel);
     output_split_layout_ = new QHBoxLayout(output_split);
     output_split_layout_->setContentsMargins(0, 0, 0, 0);
@@ -959,6 +994,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         format_settings_.split.custom_minutes = static_cast<uint32_t>(minutes);
         SanitizeSplitSettings(format_settings_.split);
         updateSplitSelection();
+        emitCurrentFormatSettings();
+    });
+    connect(split_size_mode_combo_, &QComboBox::currentIndexChanged, this, &ConfigPage::onSplitSizeModeChanged);
+    connect(split_custom_size_spin_, &QSpinBox::valueChanged, this, [this](int size_mb) {
+        format_settings_.split.custom_size_mb = static_cast<uint32_t>(size_mb);
+        SanitizeSplitSettings(format_settings_.split);
+        updateSplitSizeSelection();
         emitCurrentFormatSettings();
     });
     connect(custom_width_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &ConfigPage::onCustomWidthChanged);
@@ -1210,6 +1252,40 @@ void ConfigPage::updateSplitSelection() {
                 QStringLiteral("New file automatically every %1 min.").arg(static_cast<qulonglong>(minutes)));
         }
     }
+    // Also keep size controls in sync.
+    updateSplitSizeSelection();
+}
+
+void ConfigPage::onSplitSizeModeChanged(int index) {
+    if (!split_size_mode_combo_)
+        return;
+    const auto mode = static_cast<SplitSizeMode>(split_size_mode_combo_->itemData(index).toInt());
+    format_settings_.split.size_mode = mode;
+    SanitizeSplitSettings(format_settings_.split);
+    updateSplitSizeSelection();
+    emitCurrentFormatSettings();
+}
+
+void ConfigPage::updateSplitSizeSelection() {
+    if (!split_size_mode_combo_)
+        return;
+    const SplitRecordingSettings& s = format_settings_.split;
+    const bool split_supported = format_settings_.container != capability::Container::Mp4;
+    {
+        QSignalBlocker block_combo(split_size_mode_combo_);
+        const int idx = split_size_mode_combo_->findData(static_cast<int>(s.size_mode));
+        if (idx >= 0)
+            split_size_mode_combo_->setCurrentIndex(idx);
+    }
+    if (split_custom_size_spin_) {
+        QSignalBlocker block_spin(split_custom_size_spin_);
+        split_custom_size_spin_->setValue(static_cast<int>(s.custom_size_mb));
+    }
+    split_size_mode_combo_->setEnabled(split_supported);
+    if (split_custom_size_spin_)
+        split_custom_size_spin_->setEnabled(split_supported);
+    if (split_size_custom_widget_)
+        split_size_custom_widget_->setVisible(split_supported && s.size_mode == SplitSizeMode::Custom);
 }
 
 void ConfigPage::onCursorChanged() {

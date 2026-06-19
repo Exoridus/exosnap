@@ -337,6 +337,25 @@ std::optional<SplitRecordingMode> SplitRecordingModeFromString(QStringView s) {
     return std::nullopt;
 }
 
+QString SplitSizeModeToString(SplitSizeMode v) {
+    switch (v) {
+    case SplitSizeMode::Off:
+        return QStringLiteral("off");
+    case SplitSizeMode::Custom:
+        return QStringLiteral("custom");
+    }
+    return QStringLiteral("off");
+}
+
+std::optional<SplitSizeMode> SplitSizeModeFromString(QStringView s) {
+    const QString n = s.trimmed().toString().toLower();
+    if (n == QStringLiteral("off"))
+        return SplitSizeMode::Off;
+    if (n == QStringLiteral("custom"))
+        return SplitSizeMode::Custom;
+    return std::nullopt;
+}
+
 QString OutputFitModeToString(recorder_core::OutputFitMode v) {
     switch (v) {
     case recorder_core::OutputFitMode::Contain:
@@ -450,6 +469,8 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     out_tbl.emplace("fit_mode", OutputFitModeToString(out.resolution.fit).toStdString());
     out_tbl.emplace("split_mode", SplitRecordingModeToString(out.split.mode).toStdString());
     out_tbl.emplace("split_custom_minutes", static_cast<int64_t>(out.split.custom_minutes));
+    out_tbl.emplace("split_size_mode", SplitSizeModeToString(out.split.size_mode).toStdString());
+    out_tbl.emplace("split_custom_size_mb", static_cast<int64_t>(out.split.custom_size_mb));
     tbl.emplace("output", std::move(out_tbl));
 
     // --- Video ---
@@ -607,6 +628,12 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
         const int64_t minutes = TomlInt(tbl["output"]["split_custom_minutes"], 30);
         if (minutes > 0)
             out.split.custom_minutes = static_cast<uint32_t>(minutes);
+        const auto ssm = SplitSizeModeFromString(QString::fromStdString(TomlStr(tbl["output"]["split_size_mode"])));
+        if (ssm.has_value())
+            out.split.size_mode = *ssm;
+        const int64_t size_mb = TomlInt(tbl["output"]["split_custom_size_mb"], 2048);
+        if (size_mb > 0)
+            out.split.custom_size_mb = static_cast<uint32_t>(size_mb);
     }
 
     // --- Video ---

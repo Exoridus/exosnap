@@ -333,6 +333,58 @@ TEST(RecordingPresetStore, SplitSettingsPersist_PresetDuration) {
     CleanupFile(path);
 }
 
+// SPLIT-BY-SIZE-R1: size threshold survives save→load roundtrip.
+TEST(RecordingPresetStore, SplitSizeSettingsPersist_Custom) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Size Split Preset";
+    p.config = MakeDefaultPreset().config;
+    p.config.output.split.size_mode = SplitSizeMode::Custom;
+    p.config.output.split.custom_size_mb = 512;
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.output.split.size_mode, SplitSizeMode::Custom);
+        EXPECT_EQ(state.presets[0].config.output.split.custom_size_mb, 512u);
+    }
+
+    CleanupFile(path);
+}
+
+TEST(RecordingPresetStore, SplitSizeSettingsPersist_Off) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Size Split Off Preset";
+    p.config = MakeDefaultPreset().config;
+    p.config.output.split.size_mode = SplitSizeMode::Off;
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.output.split.size_mode, SplitSizeMode::Off);
+    }
+
+    CleanupFile(path);
+}
+
 // ===========================================================================
 // Absent file → seeded default
 // ===========================================================================

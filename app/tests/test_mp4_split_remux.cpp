@@ -287,7 +287,8 @@ TEST_F(Mp4SplitRemuxTest, SetOutputSettings_SplitModeOff_PropagatesCorrectly) {
     coordinator.SetOutputSettings(settings);
 
     const auto split = coordinator.SplitSettings();
-    EXPECT_EQ(split.mode, recorder_core::RecordingSplitMode::Off);
+    EXPECT_EQ(split.duration_ms, 0ULL);
+    EXPECT_EQ(split.size_bytes, 0ULL);
 }
 
 // ─── 12. Split mode 15Min propagates to coordinator ──────────────────────────
@@ -300,7 +301,7 @@ TEST_F(Mp4SplitRemuxTest, SetOutputSettings_SplitMode15Min_PropagatesCorrectly) 
     coordinator.SetOutputSettings(settings);
 
     const auto split = coordinator.SplitSettings();
-    EXPECT_EQ(split.mode, recorder_core::RecordingSplitMode::Duration);
+    EXPECT_GT(split.duration_ms, 0ULL);
     EXPECT_EQ(split.duration_ms, 15ULL * 60 * 1000);
 }
 
@@ -315,7 +316,7 @@ TEST_F(Mp4SplitRemuxTest, SetOutputSettings_SplitModeCustom_PropagatesCorrectly)
     coordinator.SetOutputSettings(settings);
 
     const auto split = coordinator.SplitSettings();
-    EXPECT_EQ(split.mode, recorder_core::RecordingSplitMode::Duration);
+    EXPECT_GT(split.duration_ms, 0ULL);
     EXPECT_EQ(split.duration_ms, 42ULL * 60 * 1000);
 }
 

@@ -12,6 +12,8 @@ DiagnosticsSplitTrigger ToDiagnosticsSplitTrigger(SplitTriggerSource src) noexce
     switch (src) {
     case SplitTriggerSource::AutomaticDuration:
         return DiagnosticsSplitTrigger::AutomaticDuration;
+    case SplitTriggerSource::AutomaticSize:
+        return DiagnosticsSplitTrigger::AutomaticSize;
     case SplitTriggerSource::ManualButton:
         return DiagnosticsSplitTrigger::ManualButton;
     case SplitTriggerSource::Hotkey:
@@ -32,7 +34,7 @@ DiagnosticsStaticConfig MakeDiagnosticsStaticConfig(const RecorderConfig& config
     }
 
     cfg.split_supported = (config.container == Container::Matroska || config.container == Container::WebM);
-    cfg.auto_split = (config.split.mode == RecordingSplitMode::Duration);
+    cfg.auto_split = (config.split.duration_ms > 0 || config.split.size_bytes > 0);
     cfg.auto_split_seconds = static_cast<double>(config.split.duration_ms) / 1000.0;
 
     try {

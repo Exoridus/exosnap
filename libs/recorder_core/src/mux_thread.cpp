@@ -361,6 +361,9 @@ void MuxThread::Run() {
         // Open the next segment with epoch unset; push_video sets it from the
         // first video packet (the forced keyframe that follows the sentinel).
         m_state.diagnostics.OnSplitTransition(ToDiagnosticsSplitTrigger(s.trigger));
+        // Reset size-split guard so the new segment can trigger if it also exceeds
+        // the threshold.
+        m_state.size_split_armed.store(false);
         open_segment(s.new_segment_index, /*epoch*/ 0, /*epoch_set*/ false);
     };
 
@@ -421,8 +424,12 @@ void MuxThread::Run() {
         m_state.audio_premux.clear();
     }
 
+    // Size-split threshold (SPLIT-BY-SIZE-R1): 0 means disabled.
+    const uint64_t size_split_threshold = m_state.config.split.size_bytes;
+
     // Surface live mux/disk/reorder-window metrics from the active writer (filesystem
     // write boundary). Called once per mux-loop iteration outside the queue lock.
+    // Also triggers a size-based split when the segment byte count crosses the threshold.
     const auto sample_mux_diagnostics = [&]() {
         if (!seg.writer)
             return;
@@ -436,6 +443,23 @@ void MuxThread::Run() {
             m_state.diagnostics.OnDiskWrite(std::chrono::steady_clock::now(), seg.writer->last_flush_ms(), byte_delta);
             diag_prev_flush = flushes;
             diag_prev_bytes = bytes;
+        }
+        // Size-based split check (SPLIT-BY-SIZE-R1): if the committed byte count for
+        // the current segment crosses the threshold and we haven't yet armed a size
+        // split for this segment, request one via the same seq path as manual splits.
+        // VideoThread sees the seq bump, arms a forced keyframe, and enqueues a
+        // SplitSentinel; begin_new_segment resets size_split_armed for the next segment.
+        if (size_split_threshold > 0 && bytes >= size_split_threshold && !m_state.size_split_armed.load()) {
+            bool expected = false;
+            if (m_state.size_split_armed.compare_exchange_strong(expected, true)) {
+                m_state.split_last_trigger.store(static_cast<uint32_t>(SplitTriggerSource::AutomaticSize));
+                m_state.split_request_seq.fetch_add(1);
+                logging::LogField fields[] = {{"segment_index", std::to_string(seg.index)},
+                                              {"bytes", std::to_string(bytes)},
+                                              {"threshold", std::to_string(size_split_threshold)}};
+                logging::log(logging::LogLevel::Info, "mux_thread", "size threshold reached; size split requested",
+                             std::span<const logging::LogField>(fields, std::size(fields)));
+            }
         }
     };
 

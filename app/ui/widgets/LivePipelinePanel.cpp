@@ -84,6 +84,8 @@ QString triggerText(DiagnosticsSplitTrigger t) {
     switch (t) {
     case DiagnosticsSplitTrigger::AutomaticDuration:
         return QStringLiteral("auto");
+    case DiagnosticsSplitTrigger::AutomaticSize:
+        return QStringLiteral("size");
     case DiagnosticsSplitTrigger::ManualButton:
         return QStringLiteral("manual");
     case DiagnosticsSplitTrigger::Hotkey:
