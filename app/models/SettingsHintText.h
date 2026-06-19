@@ -32,6 +32,14 @@ inline const QString kOutputFolder = QStringLiteral("Where recordings are saved"
 inline const QString kFilenamePattern = QStringLiteral("Tokens for auto-naming");
 inline const QString kSplitRecording = QStringLiteral("New file every N min / ~N GB");
 
+// ---- Presence / Appearance (moved from AdvancedPage in SETTINGS-TIERS-P3) ----
+inline const QString kRecordingOverlay = QStringLiteral("On-screen REC badge \xC2\xB7 excluded from capture");
+inline const QString kDiagnosticsOverlay = QStringLiteral("Live fps/drops on screen \xC2\xB7 excluded");
+inline const QString kQuickControlPill = QStringLiteral("Floating controls while recording");
+inline const QString kCloseToTray = QStringLiteral("Keep running when window closed");
+inline const QString kNotifications = QStringLiteral("Toasts for saved / low disk / stops");
+inline const QString kAccent = QStringLiteral("App highlight color");
+
 // ---- Skipped (control does not exist in v0.5.0 UI) ----
 // kVideoCodecHevc        — HEVC codec (0.7 wave)
 // kRateControlCQ/VBR/CBR — rate-control mode selector (not yet wired in Settings)
@@ -51,13 +59,7 @@ inline const QString kSplitRecording = QStringLiteral("New file every N min / ~N
 // kBrickwallLimiter      — brickwall limiter (0.6 wave)
 // kHighPassFilter        — high-pass filter (0.6 wave)
 // kAutoOpenOutput        — auto-open Output page (Output-editor wave)
-// kAccent                — accent color (0.5 wave — advanced page, not in scope)
-// kRecordingOverlay      — recording overlay (AdvancedPage, not in scope)
-// kDiagnosticsOverlay    — diagnostics overlay (AdvancedPage, not in scope)
-// kCountdownOverlay      — countdown overlay (AdvancedPage, not in scope)
-// kQuickControlPill      — quick-control pill (AdvancedPage, not in scope)
-// kCloseToTray           — close to tray (AdvancedPage, not in scope)
-// kNotifications         — notifications (AdvancedPage, not in scope)
+// kCountdownOverlay      — countdown overlay (future wave)
 // kUpdateChannel         — update channel (0.4 wave, inside UpdateSettingsPanel, not in scope)
 // kCrashReporting        — crash reporting (0.4 wave, inside CrashReportPanel, not in scope)
 

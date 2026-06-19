@@ -29,6 +29,7 @@ class QSpinBox;
 class QToolButton;
 
 namespace exosnap::ui::widgets {
+class ExoCheckBox;
 class ExoToggle;
 class SettingsCardExpander;
 class VUMeterWidget;
@@ -96,6 +97,14 @@ class ConfigPage : public QWidget {
     // sys/app/mic_active: true when the meter service is running for that source.
     void setAudioMeterLevels(float sys01, float app01, float mic01, bool sys_active, bool app_active, bool mic_active);
 
+    // SETTINGS-TIERS-P3: presence + appearance setters (moved from AdvancedPage).
+    void setShowOverlay(bool show);
+    void setShowDiagnosticsOverlay(bool show);
+    void setShowNotifications(bool show);
+    void setKeepRunningInTray(bool keep);
+    void setShowQuickControls(bool show);
+    void setAccentId(const QString& accent_id);
+
     // Reactive device-change handlers (driven by MainWindow from the three notifiers).
     // These preserve selection state and never emit settings-changed or dirty the preset.
     void onAudioDevicesChanged(const exosnap::AudioDeviceSnapshot& snap);
@@ -110,7 +119,6 @@ class ConfigPage : public QWidget {
     void webcamSettingsChanged(const WebcamSettings& settings);
     void diagnosticsRequested();
     void webcamDetailsRequested();
-    void advancedRequested();
 
     // SETTINGS-TIERS-R1: emitted when Expert mode changes via the toggle button.
     void expertModeChanged(bool enabled);
@@ -124,6 +132,14 @@ class ConfigPage : public QWidget {
     // reactive path share the same canonical refresh, with no duplicate
     // enumeration and no duplicate devices.
     void audioRescanRequested();
+
+    // SETTINGS-TIERS-P3: presence + appearance signals (moved from AdvancedPage).
+    void showOverlayChanged(bool show);
+    void showDiagnosticsOverlayChanged(bool show);
+    void showNotificationsChanged(bool show);
+    void keepRunningInTrayChanged(bool keep);
+    void showQuickControlsChanged(bool show);
+    void accentIdChanged(const QString& accent_id);
 
     // ---- Preset management signals ----
     void savePresetRequested();
@@ -358,6 +374,16 @@ class ConfigPage : public QWidget {
     // SETTINGS-TIERS-R1: Per-card Advanced expanders (collapsible sections).
     ui::widgets::SettingsCardExpander* output_split_expander_ = nullptr;
     ui::widgets::SettingsCardExpander* audio_separate_expander_ = nullptr;
+
+    // SETTINGS-TIERS-P3: presence + appearance controls (moved from AdvancedPage).
+    ui::widgets::ExoCheckBox* overlay_check_ = nullptr;
+    ui::widgets::ExoCheckBox* diagnostics_overlay_check_ = nullptr;
+    ui::widgets::ExoCheckBox* notifications_check_ = nullptr;
+    ui::widgets::ExoCheckBox* keep_in_tray_check_ = nullptr;
+    ui::widgets::ExoCheckBox* quick_controls_check_ = nullptr;
+    QComboBox* accent_combo_ = nullptr;
+    // Expert-gated developer card (hidden when expert_mode_enabled_ == false).
+    QWidget* developer_card_ = nullptr;
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     // Inline error label for preset save-error visual-test scenario.

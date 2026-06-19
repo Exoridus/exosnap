@@ -35,7 +35,10 @@
 #include "../models/SettingsHintText.h"
 #include "../services/WebcamService.h"
 #include "../ui/dialogs/UpdateSettingsPanel.h"
+#include "../ui/theme/ExoSnapAccents.h"
+#include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/widgets/ComboBoxWheelFilter.h"
+#include "../ui/widgets/ExoCheckBox.h"
 #include "../ui/widgets/ExoToggle.h"
 #include "../ui/widgets/InfoHintIcon.h"
 #include "../ui/widgets/SettingsCardExpander.h"
@@ -49,6 +52,8 @@
 namespace exosnap {
 
 namespace {
+
+using M = ui::theme::ExoSnapMetrics;
 
 // Upper bound for the Config form width. Settings is a wide product surface;
 // the cap prevents absurd stretching on ultra-wide displays while preserving
@@ -1011,30 +1016,190 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     update_settings_panel_->setObjectName(QStringLiteral("settingsUpdatePanel"));
     layout->addWidget(update_settings_panel_);
 
-    // ---- ADVANCED SUMMARY (full width) ----
-    auto* advanced_panel = makePanel(content);
-    advanced_panel->setProperty("panelRole", "note");
-    auto* advanced_layout = new QVBoxLayout(advanced_panel);
-    advanced_layout->setContentsMargins(18, 14, 18, 14);
-    advanced_layout->setSpacing(8);
+    // ---- PRESENCE CARD (full width — SETTINGS-TIERS-P3) ----
+    // Recording overlay, Diagnostics overlay (+ anti-cheat ⓘ), Notifications,
+    // Close-to-tray, Quick controls. All persisted via AppSettingsStore.
+    {
+        auto* presence_panel = makePanel(content);
+        auto* presence_layout = new QVBoxLayout(presence_panel);
+        presence_layout->setContentsMargins(18, 14, 18, 14);
+        presence_layout->setSpacing(M::kSpaceSm);
+        presence_layout->addWidget(makeCardTitle(QStringLiteral("Presence"), presence_panel));
 
-    auto* advanced_head = new QHBoxLayout();
-    advanced_head->setSpacing(12);
-    auto* advanced_text = new QVBoxLayout();
-    advanced_text->setSpacing(2);
-    advanced_text->addWidget(makeCardTitle(QStringLiteral("Advanced / Expert Settings"), advanced_panel));
-    advanced_text->addWidget(makeHint(
-        QStringLiteral("Normal recording configuration lives in Settings. Use Advanced for diagnostics, developer, "
-                       "and expert-only options."),
-        advanced_panel));
-    advanced_head->addLayout(advanced_text, 1);
+        // Recording overlay row
+        {
+            auto* row = new QFrame(presence_panel);
+            row->setProperty("panelRole", "compactRow");
+            auto* rl = new QVBoxLayout(row);
+            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+            rl->setSpacing(M::kSpaceXs);
+            rl->addWidget(
+                makeFieldLabelWithHint(QStringLiteral("Recording overlay"), ui::hints::kRecordingOverlay, row));
+            overlay_check_ =
+                new ui::widgets::ExoCheckBox(QStringLiteral("Show on-screen status overlay during recording"), row);
+            overlay_check_->setChecked(true);
+            rl->addWidget(overlay_check_);
+            presence_layout->addWidget(row);
+        }
 
-    auto* advanced_open_btn = new QPushButton(QStringLiteral("Open Advanced"), advanced_panel);
-    advanced_open_btn->setObjectName(QStringLiteral("advancedDetailsBtn"));
-    advanced_open_btn->setProperty("role", "ghost");
-    advanced_head->addWidget(advanced_open_btn, 0, Qt::AlignVCenter);
-    advanced_layout->addLayout(advanced_head);
-    layout->addWidget(advanced_panel);
+        // Diagnostics overlay row (with anti-cheat ⓘ)
+        {
+            auto* row = new QFrame(presence_panel);
+            row->setProperty("panelRole", "compactRow");
+            auto* rl = new QVBoxLayout(row);
+            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+            rl->setSpacing(M::kSpaceXs);
+
+            // Header: field label + anti-cheat ⓘ note (per AdvancedPage pattern)
+            {
+                auto* header_row = new QWidget(row);
+                auto* header_hl = new QHBoxLayout(header_row);
+                header_hl->setContentsMargins(0, 0, 0, 0);
+                header_hl->setSpacing(4);
+                auto* hint_row = makeFieldLabelWithHint(QStringLiteral("Diagnostics overlay"),
+                                                        ui::hints::kDiagnosticsOverlay, header_row);
+                header_hl->addWidget(hint_row);
+
+                auto* anticheat_info = new QLabel(QString::fromUtf8("\xe2\x93\x98"), header_row); // ⓘ U+24D8
+                anticheat_info->setProperty("labelRole", "infoGlyph");
+                anticheat_info->setToolTip(
+                    QStringLiteral("Anti-cheat note: This overlay is read-only and capture-excluded "
+                                   "(SetWindowDisplayAffinity WDA_EXCLUDEFROMCAPTURE). It injects nothing into "
+                                   "any process. However, some anti-cheat systems may still flag overlays rendered "
+                                   "by any third-party process — disable this overlay if you encounter issues."));
+                anticheat_info->setCursor(Qt::WhatsThisCursor);
+                header_hl->addWidget(anticheat_info);
+                header_hl->addStretch(1);
+                rl->addWidget(header_row);
+            }
+
+            diagnostics_overlay_check_ = new ui::widgets::ExoCheckBox(
+                QStringLiteral("Show live diagnostics on the recorded monitor during recording"), row);
+            diagnostics_overlay_check_->setChecked(false);
+            rl->addWidget(diagnostics_overlay_check_);
+            presence_layout->addWidget(row);
+        }
+
+        // Notifications row
+        {
+            auto* row = new QFrame(presence_panel);
+            row->setProperty("panelRole", "compactRow");
+            auto* rl = new QVBoxLayout(row);
+            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+            rl->setSpacing(M::kSpaceXs);
+            rl->addWidget(makeFieldLabelWithHint(QStringLiteral("Notifications"), ui::hints::kNotifications, row));
+            notifications_check_ =
+                new ui::widgets::ExoCheckBox(QStringLiteral("Show on-screen notification toasts"), row);
+            notifications_check_->setChecked(true);
+            rl->addWidget(notifications_check_);
+            presence_layout->addWidget(row);
+        }
+
+        // Close-to-tray row
+        {
+            auto* row = new QFrame(presence_panel);
+            row->setProperty("panelRole", "compactRow");
+            auto* rl = new QVBoxLayout(row);
+            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+            rl->setSpacing(M::kSpaceXs);
+            rl->addWidget(makeFieldLabelWithHint(QStringLiteral("Tray behavior"), ui::hints::kCloseToTray, row));
+            keep_in_tray_check_ =
+                new ui::widgets::ExoCheckBox(QStringLiteral("Keep running in tray when window closed"), row);
+            keep_in_tray_check_->setChecked(false);
+            rl->addWidget(keep_in_tray_check_);
+            presence_layout->addWidget(row);
+        }
+
+        // Quick controls row
+        {
+            auto* row = new QFrame(presence_panel);
+            row->setProperty("panelRole", "compactRow");
+            auto* rl = new QVBoxLayout(row);
+            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+            rl->setSpacing(M::kSpaceXs);
+            rl->addWidget(makeFieldLabelWithHint(QStringLiteral("Quick controls"), ui::hints::kQuickControlPill, row));
+            quick_controls_check_ =
+                new ui::widgets::ExoCheckBox(QStringLiteral("Show quick-control pill during recording"), row);
+            quick_controls_check_->setChecked(false);
+            rl->addWidget(quick_controls_check_);
+            presence_layout->addWidget(row);
+        }
+
+        layout->addWidget(presence_panel);
+    }
+
+    // ---- APPEARANCE CARD (full width — SETTINGS-TIERS-P3) ----
+    {
+        auto* appearance_panel = makePanel(content);
+        auto* appearance_layout = new QVBoxLayout(appearance_panel);
+        appearance_layout->setContentsMargins(18, 14, 18, 14);
+        appearance_layout->setSpacing(M::kSpaceSm);
+        appearance_layout->addWidget(makeCardTitle(QStringLiteral("Appearance"), appearance_panel));
+
+        auto* accent_row = new QFrame(appearance_panel);
+        accent_row->setProperty("panelRole", "compactRow");
+        auto* accent_layout = new QVBoxLayout(accent_row);
+        accent_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+        accent_layout->setSpacing(M::kSpaceXs);
+        accent_layout->addWidget(
+            makeFieldLabelWithHint(QStringLiteral("Accent color"), ui::hints::kAccent, accent_row));
+        accent_combo_ = new QComboBox(accent_row);
+        accent_combo_->setMinimumWidth(220);
+        accent_combo_->setMaximumWidth(320);
+        for (const auto& a : ui::theme::kExoSnapAccents) {
+            accent_combo_->addItem(QString::fromUtf8(a.name), QString::fromUtf8(a.id));
+        }
+        accent_layout->addWidget(accent_combo_);
+        appearance_layout->addWidget(accent_row);
+
+        layout->addWidget(appearance_panel);
+    }
+
+    // ---- DEVELOPER CARD (Expert-gated — SETTINGS-TIERS-P3) ----
+    // UI-only debug stubs (log level, NVTX). No persistence — local variables only.
+    {
+        developer_card_ = makePanel(content);
+        developer_card_->setObjectName(QStringLiteral("settingsDeveloperCard"));
+        auto* dev_layout = new QVBoxLayout(developer_card_);
+        dev_layout->setContentsMargins(18, 14, 18, 14);
+        dev_layout->setSpacing(M::kSpaceSm);
+        dev_layout->addWidget(makeCardTitle(QStringLiteral("Developer"), developer_card_));
+        dev_layout->addWidget(
+            makeHint(QStringLiteral("Expert debug controls — not persisted between sessions."), developer_card_));
+
+        // Log level (UI stub — not wired to any backend)
+        {
+            auto* row = new QFrame(developer_card_);
+            row->setProperty("panelRole", "compactRow");
+            auto* rl = new QVBoxLayout(row);
+            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+            rl->setSpacing(M::kSpaceXs);
+            rl->addWidget(makeFieldLabel(QStringLiteral("Developer logging level"), row));
+            auto* log_level_combo = new QComboBox(row);
+            log_level_combo->setMinimumWidth(220);
+            log_level_combo->setMaximumWidth(320);
+            log_level_combo->addItems({"Off", "Error", "Warning", "Info", "Debug", "Trace"});
+            log_level_combo->setCurrentIndex(3);
+            rl->addWidget(log_level_combo);
+            dev_layout->addWidget(row);
+        }
+
+        // NVTX profiling markers (UI stub — not wired to any backend)
+        {
+            auto* row = new QFrame(developer_card_);
+            row->setProperty("panelRole", "compactRow");
+            auto* rl = new QVBoxLayout(row);
+            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+            rl->setSpacing(M::kSpaceXs);
+            rl->addWidget(makeFieldLabel(QStringLiteral("Profiling"), row));
+            auto* nvtx_check = new ui::widgets::ExoCheckBox(QStringLiteral("Enable NVTX / profiling markers"), row);
+            rl->addWidget(nvtx_check);
+            dev_layout->addWidget(row);
+        }
+
+        developer_card_->setVisible(expert_mode_enabled_);
+        layout->addWidget(developer_card_);
+    }
 
     layout->addStretch();
 
@@ -1050,7 +1215,18 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     }
     outer->addWidget(scroll);
 
-    connect(advanced_open_btn, &QPushButton::clicked, this, &ConfigPage::advancedRequested);
+    // SETTINGS-TIERS-P3: presence + appearance control connections.
+    connect(overlay_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::showOverlayChanged);
+    connect(diagnostics_overlay_check_, &ui::widgets::ExoCheckBox::toggled, this,
+            &ConfigPage::showDiagnosticsOverlayChanged);
+    connect(notifications_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::showNotificationsChanged);
+    connect(keep_in_tray_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::keepRunningInTrayChanged);
+    connect(quick_controls_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::showQuickControlsChanged);
+    connect(accent_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        const QString id = accent_combo_->itemData(index).toString();
+        if (!id.isEmpty())
+            emit accentIdChanged(id);
+    });
 
     connect(container_group_, &QButtonGroup::idClicked, this, &ConfigPage::onContainerChanged);
     connect(video_codec_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -2154,8 +2330,59 @@ bool ConfigPage::audioSeparateExpanderExpanded() const noexcept {
 }
 
 void ConfigPage::updateExpertModeVisibility() {
-    // Phase 1: no Expert-tier controls exist yet in the two chosen cards.
-    // The toggle mechanism is wired; later phases add Expert rows.
+    // SETTINGS-TIERS-P3: show/hide the expert-gated Developer card.
+    if (developer_card_)
+        developer_card_->setVisible(expert_mode_enabled_);
+}
+
+// SETTINGS-TIERS-P3: presence + appearance setters (moved from AdvancedPage).
+
+void ConfigPage::setShowOverlay(bool show) {
+    if (overlay_check_) {
+        const QSignalBlocker blocker(overlay_check_);
+        overlay_check_->setChecked(show);
+    }
+}
+
+void ConfigPage::setShowDiagnosticsOverlay(bool show) {
+    if (diagnostics_overlay_check_) {
+        const QSignalBlocker blocker(diagnostics_overlay_check_);
+        diagnostics_overlay_check_->setChecked(show);
+    }
+}
+
+void ConfigPage::setShowNotifications(bool show) {
+    if (notifications_check_) {
+        const QSignalBlocker blocker(notifications_check_);
+        notifications_check_->setChecked(show);
+    }
+}
+
+void ConfigPage::setKeepRunningInTray(bool keep) {
+    if (keep_in_tray_check_) {
+        const QSignalBlocker blocker(keep_in_tray_check_);
+        keep_in_tray_check_->setChecked(keep);
+    }
+}
+
+void ConfigPage::setShowQuickControls(bool show) {
+    if (quick_controls_check_) {
+        const QSignalBlocker blocker(quick_controls_check_);
+        quick_controls_check_->setChecked(show);
+    }
+}
+
+void ConfigPage::setAccentId(const QString& accent_id) {
+    if (!accent_combo_)
+        return;
+    for (int i = 0; i < accent_combo_->count(); ++i) {
+        if (accent_combo_->itemData(i).toString() == accent_id) {
+            const QSignalBlocker blocker(accent_combo_);
+            accent_combo_->setCurrentIndex(i);
+            return;
+        }
+    }
+    // Unknown id: leave selection unchanged (default stays selected).
 }
 
 void ConfigPage::onAudioAppToggled() {

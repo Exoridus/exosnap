@@ -18,6 +18,7 @@
 #include "models/WebcamSettings.h"
 #include "pages/ConfigPage.h"
 #include "ui/widgets/CameraPreview.h"
+#include "ui/widgets/ExoCheckBox.h"
 #include "ui/widgets/VUMeterWidget.h"
 #include "ui/widgets/WebcamSetupPanel.h"
 
@@ -54,6 +55,33 @@ class ConfigPageTest : public ::testing::Test {
     static bool HasCheckText(const ConfigPage& page, const QString& text) {
         for (const auto* cb : page.findChildren<QCheckBox*>()) {
             if (cb->text() == text)
+                return true;
+        }
+        return false;
+    }
+
+    // Check ExoCheckBox text anywhere in the widget tree.
+    static bool HasExoCheckText(const ConfigPage& page, const QString& text) {
+        for (const auto* cb : page.findChildren<ui::widgets::ExoCheckBox*>()) {
+            if (cb->text() == text)
+                return true;
+        }
+        return false;
+    }
+
+    // Returns the first ExoCheckBox with matching text, or nullptr.
+    static ui::widgets::ExoCheckBox* FindExoCheck(const ConfigPage& page, const QString& text) {
+        for (auto* cb : page.findChildren<ui::widgets::ExoCheckBox*>()) {
+            if (cb->text() == text)
+                return cb;
+        }
+        return nullptr;
+    }
+
+    // Returns true if any visible QLabel (isVisible() == true) has the given text.
+    static bool HasVisibleLabelText(const ConfigPage& page, const QString& text) {
+        for (const auto* l : page.findChildren<QLabel*>()) {
+            if (l->text() == text && l->isVisible())
                 return true;
         }
         return false;
@@ -313,14 +341,6 @@ TEST_F(ConfigPageTest, BuiltInAndModifiedStates_UsePresetCopy) {
     EXPECT_TRUE(HasLabelText(page, QStringLiteral("Built-in preset")));
 }
 
-TEST_F(ConfigPageTest, AdvancedDetailsButtonExists) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    auto* advanced_btn = page.findChild<QPushButton*>(QStringLiteral("advancedDetailsBtn"));
-    ASSERT_NE(advanced_btn, nullptr);
-    EXPECT_EQ(advanced_btn->text(), QStringLiteral("Open Advanced"));
-}
-
 // ── HYBRID-SETTINGS-WEBCAM-R1: inline WebcamSetupPanel replaces stub + nav ──
 
 TEST_F(ConfigPageTest, WebcamSetupPanel_IsEmbeddedInSettings) {
@@ -401,18 +421,6 @@ TEST_F(ConfigPageTest, WebcamSetupPanel_SettingsChangedSignalPropagates) {
     ASSERT_NE(panel, nullptr);
     // Emit from the panel and verify ConfigPage re-emits.
     emit panel->settingsChanged(WebcamSettings{});
-    EXPECT_TRUE(emitted);
-}
-
-TEST_F(ConfigPageTest, AdvancedDetailsButtonClick_EmitsSignal) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    bool emitted = false;
-    QObject::connect(&page, &ConfigPage::advancedRequested, [&emitted]() { emitted = true; });
-
-    auto* advanced_btn = page.findChild<QPushButton*>(QStringLiteral("advancedDetailsBtn"));
-    ASSERT_NE(advanced_btn, nullptr);
-    advanced_btn->click();
     EXPECT_TRUE(emitted);
 }
 
@@ -1691,6 +1699,163 @@ TEST_F(ConfigPageTest, Mp4_DisablesSplitSizeCombo) {
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitSizeModeCombo"));
     ASSERT_NE(combo, nullptr);
     EXPECT_FALSE(combo->isEnabled());
+}
+
+// ── SETTINGS-TIERS-P3: Presence + Appearance cards (moved from AdvancedPage) ──
+
+TEST_F(ConfigPageTest, PresenceCard_CardTitleVisible) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Presence"))) << "Settings must contain a Presence card title";
+}
+
+TEST_F(ConfigPageTest, PresenceCard_AllCheckboxesExist) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // ExoCheckBox inherits QAbstractButton (not QCheckBox), so use the typed helper.
+    EXPECT_TRUE(HasExoCheckText(page, QStringLiteral("Show on-screen status overlay during recording")))
+        << "Recording overlay ExoCheckBox missing";
+    EXPECT_TRUE(HasExoCheckText(page, QStringLiteral("Show live diagnostics on the recorded monitor during recording")))
+        << "Diagnostics overlay ExoCheckBox missing";
+    EXPECT_TRUE(HasExoCheckText(page, QStringLiteral("Show on-screen notification toasts")))
+        << "Notifications ExoCheckBox missing";
+    EXPECT_TRUE(HasExoCheckText(page, QStringLiteral("Keep running in tray when window closed")))
+        << "Close-to-tray ExoCheckBox missing";
+    EXPECT_TRUE(HasExoCheckText(page, QStringLiteral("Show quick-control pill during recording")))
+        << "Quick controls ExoCheckBox missing";
+}
+
+TEST_F(ConfigPageTest, PresenceCard_SetShowOverlay_UpdatesCheckState) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setShowOverlay(false);
+
+    auto* cb = FindExoCheck(page, QStringLiteral("Show on-screen status overlay during recording"));
+    ASSERT_NE(cb, nullptr) << "Recording overlay ExoCheckBox not found";
+    EXPECT_FALSE(cb->isChecked()) << "setShowOverlay(false) must uncheck the control";
+}
+
+TEST_F(ConfigPageTest, PresenceCard_SetShowOverlay_DoesNotEmitSignal) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    bool emitted = false;
+    QObject::connect(&page, &ConfigPage::showOverlayChanged, [&emitted](bool) { emitted = true; });
+
+    // Setter must use QSignalBlocker — no spurious emission.
+    page.setShowOverlay(false);
+    EXPECT_FALSE(emitted) << "setShowOverlay must not emit showOverlayChanged";
+}
+
+TEST_F(ConfigPageTest, PresenceCard_ShowOverlayToggle_EmitsSignal) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setShowOverlay(true);
+
+    bool emitted = false;
+    bool emitted_value = true;
+    QObject::connect(&page, &ConfigPage::showOverlayChanged, [&](bool show) {
+        emitted = true;
+        emitted_value = show;
+    });
+
+    auto* cb = FindExoCheck(page, QStringLiteral("Show on-screen status overlay during recording"));
+    ASSERT_NE(cb, nullptr) << "Recording overlay ExoCheckBox not found";
+    cb->setChecked(false); // user toggling triggers toggled() → signal
+    EXPECT_TRUE(emitted) << "showOverlayChanged must be emitted on user toggle";
+    EXPECT_FALSE(emitted_value);
+}
+
+TEST_F(ConfigPageTest, PresenceCard_SetKeepRunningInTray_UpdatesCheckState) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setKeepRunningInTray(true);
+
+    auto* cb = FindExoCheck(page, QStringLiteral("Keep running in tray when window closed"));
+    ASSERT_NE(cb, nullptr) << "Close-to-tray ExoCheckBox not found";
+    EXPECT_TRUE(cb->isChecked()) << "setKeepRunningInTray(true) must check the control";
+}
+
+TEST_F(ConfigPageTest, AppearanceCard_CardTitleVisible) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Appearance"))) << "Settings must contain an Appearance card title";
+}
+
+TEST_F(ConfigPageTest, AppearanceCard_AccentComboHasEntries) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // The accent combo should have at least one entry (mint default).
+    const auto combos = page.findChildren<QComboBox*>();
+    bool found_accent_combo = false;
+    for (const auto* cb : combos) {
+        // The accent combo is filled from kExoSnapAccents; any entry with id data "mint" means it's the accent combo.
+        for (int i = 0; i < cb->count(); ++i) {
+            if (cb->itemData(i).toString() == QStringLiteral("mint")) {
+                found_accent_combo = true;
+                EXPECT_GE(cb->count(), 1);
+                break;
+            }
+        }
+        if (found_accent_combo)
+            break;
+    }
+    EXPECT_TRUE(found_accent_combo) << "Accent combo with 'mint' entry not found in Settings";
+}
+
+TEST_F(ConfigPageTest, AppearanceCard_SetAccentId_SelectsCorrectItem) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setAccentId(QStringLiteral("mint"));
+
+    bool found = false;
+    for (const auto* cb : page.findChildren<QComboBox*>()) {
+        for (int i = 0; i < cb->count(); ++i) {
+            if (cb->itemData(i).toString() == QStringLiteral("mint")) {
+                EXPECT_EQ(cb->currentIndex(), i) << "setAccentId must select the matching combo entry";
+                found = true;
+                break;
+            }
+        }
+        if (found)
+            break;
+    }
+    EXPECT_TRUE(found) << "Accent combo with 'mint' entry not found";
+}
+
+TEST_F(ConfigPageTest, AppearanceCard_SetAccentId_DoesNotEmitSignal) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    bool emitted = false;
+    QObject::connect(&page, &ConfigPage::accentIdChanged, [&emitted](const QString&) { emitted = true; });
+
+    page.setAccentId(QStringLiteral("mint"));
+    EXPECT_FALSE(emitted) << "setAccentId must not emit accentIdChanged";
+}
+
+TEST_F(ConfigPageTest, AdvancedDetailsButton_IsGone) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // SETTINGS-TIERS-P3: the "Open Advanced" signpost button is removed.
+    auto* advanced_btn = page.findChild<QPushButton*>(QStringLiteral("advancedDetailsBtn"));
+    EXPECT_EQ(advanced_btn, nullptr) << "Settings must not contain the 'Open Advanced' signpost button after P3";
+}
+
+TEST_F(ConfigPageTest, DeveloperCard_HiddenByDefault) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // Expert mode is off by default; the Developer card must be explicitly hidden.
+    auto* card = page.findChild<QWidget*>(QStringLiteral("settingsDeveloperCard"));
+    ASSERT_NE(card, nullptr) << "settingsDeveloperCard widget not found";
+    EXPECT_TRUE(card->isHidden()) << "Developer card must be hidden when expert mode is off";
+}
+
+TEST_F(ConfigPageTest, DeveloperCard_VisibleWhenExpertModeEnabled) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    page.setExpertModeEnabled(true);
+
+    auto* card = page.findChild<QWidget*>(QStringLiteral("settingsDeveloperCard"));
+    ASSERT_NE(card, nullptr) << "settingsDeveloperCard widget not found";
+    EXPECT_FALSE(card->isHidden()) << "Developer card must not be hidden when expert mode is on";
 }
 
 } // namespace

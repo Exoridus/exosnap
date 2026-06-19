@@ -63,7 +63,6 @@ class QuickControlPillWindow;
 class RecordingOverlayWindow;
 } // namespace ui::overlay
 
-class AdvancedPage;
 class ConfigPage;
 class DiagnosticsPage;
 class HotkeysPage;
@@ -242,7 +241,6 @@ class MainWindow : public QMainWindow {
     LogsPage* logs_page_ = nullptr;
     WebcamPage* webcam_page_ = nullptr;
     HotkeysPage* hotkeys_page_ = nullptr;
-    AdvancedPage* advanced_page_ = nullptr;
 
     // Device notifiers (owned; started after capability probe; stopped first in ~MainWindow).
     AudioDeviceNotifier audio_notifier_;
