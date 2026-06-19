@@ -85,6 +85,8 @@ qt_add_executable(exosnap WIN32
     ui/chrome/GlobalRecordingBar.cpp
     ui/dialogs/AboutOverlay.h
     ui/dialogs/AboutOverlay.cpp
+    ui/dialogs/PresetManageOverlay.h
+    ui/dialogs/PresetManageOverlay.cpp
     ui/dialogs/UpdateSettingsPanel.h
     ui/dialogs/UpdateSettingsPanel.cpp
     ui/dialogs/RecoveryOverlay.h
@@ -763,6 +765,22 @@ target_include_directories(about_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DI
 target_compile_definitions(about_overlay_tests PRIVATE EXOSNAP_BUILD_CONFIG="$<CONFIG>")
 add_dependencies(about_overlay_tests exosnap_build_info)
 set_target_properties(about_overlay_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME preset_manage_overlay_tests
+    TEST_PREFIX preset_manage.
+    SOURCES
+        tests/test_preset_manage_overlay.cpp
+        ui/dialogs/PresetManageOverlay.cpp
+        models/RecordingPreset.cpp
+        models/RecordingPresetRegistry.cpp
+        models/OutputSettingsModel.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(preset_manage_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+target_compile_definitions(preset_manage_overlay_tests PRIVATE NOMINMAX)
+target_link_libraries(preset_manage_overlay_tests PRIVATE ole32.lib shell32.lib)
+set_target_properties(preset_manage_overlay_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME crash_report_overlay_tests

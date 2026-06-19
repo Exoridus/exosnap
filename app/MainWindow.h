@@ -50,6 +50,7 @@ class TrayPresence;
 namespace ui::dialogs {
 class AboutOverlay;
 class CrashReportOverlay;
+class PresetManageOverlay;
 class RecoveryOverlay;
 class SourcePickerOverlay;
 } // namespace ui::dialogs
@@ -161,6 +162,10 @@ class MainWindow : public QMainWindow {
     void onExportAllUserProfiles(const QString& path);
     void onImportProfiles(const QString& path);
 
+    // Preset manage overlay.
+    void openPresetManageOverlay();
+    void refreshPresetManageOverlay();
+
     void saveWindowGeometryToSettings();
 
     // Startup recovery: scan the manifest; open the overlay when candidates exist.
@@ -211,6 +216,7 @@ class MainWindow : public QMainWindow {
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
     ui::tray::TrayPresence* tray_presence_ = nullptr;
     ui::dialogs::AboutOverlay* about_overlay_ = nullptr;
+    ui::dialogs::PresetManageOverlay* preset_manage_overlay_ = nullptr;
     ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
     ui::dialogs::CrashReportOverlay* crash_overlay_ = nullptr;

@@ -20,6 +20,7 @@
 #include "ui/chrome/RecordingStatusGuards.h"
 #include "ui/dialogs/AboutOverlay.h"
 #include "ui/dialogs/CrashReportOverlay.h"
+#include "ui/dialogs/PresetManageOverlay.h"
 #include "ui/dialogs/RecoveryOverlay.h"
 #include "ui/dialogs/SourcePickerOverlay.h"
 #include "ui/dialogs/UpdateSettingsPanel.h"
@@ -529,6 +530,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     about_overlay_ = new ui::dialogs::AboutOverlay(central);
     about_overlay_->hide();
 
+    // Preset manage overlay — in-window, same pattern as About.
+    preset_manage_overlay_ = new ui::dialogs::PresetManageOverlay(central);
+    preset_manage_overlay_->hide();
+
     // Source picker overlay — in-window, same accessibility-first parenting as About.
     source_picker_overlay_ = new ui::dialogs::SourcePickerOverlay(central);
     source_picker_overlay_->hide();
@@ -707,6 +712,25 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(config_page_, &ConfigPage::resetChangesRequested, this, &MainWindow::onResetChanges);
     connect(config_page_, &ConfigPage::resetToDefaultsRequested, this, &MainWindow::onResetToDefaults);
     connect(config_page_, &ConfigPage::setDefaultPresetRequested, this, &MainWindow::onSetDefaultPreset);
+    connect(config_page_, &ConfigPage::managePresetsRequested, this, &MainWindow::openPresetManageOverlay);
+
+    // Wire preset manage overlay signals to the same handlers the overflow menu uses.
+    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::duplicatePresetRequested, this,
+            &MainWindow::onDuplicatePreset);
+    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::renamePresetRequested, this,
+            &MainWindow::onRenamePreset);
+    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::deletePresetRequested, this,
+            &MainWindow::onDeletePreset);
+    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::setDefaultPresetRequested, this,
+            &MainWindow::onSetDefaultPreset);
+    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::exportSelectedPresetRequested, this,
+            &MainWindow::onExportSelectedProfile);
+    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::exportAllPresetsRequested, this,
+            &MainWindow::onExportAllUserProfiles);
+    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::importPresetsRequested, this,
+            &MainWindow::onImportProfiles);
+    connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::presetSelectionRequested, this,
+            &MainWindow::onPresetSelected);
 
     // ---- Hotkeys ----
     connect(this, &MainWindow::recordToggleRequested, record_page_, &RecordPage::onHotkeyToggle);
@@ -2119,6 +2143,8 @@ void MainWindow::refreshPresetUi() {
         output_page_->setActiveProfileName(QString::fromStdString(preset_registry_.SelectedPreset().name));
     }
     syncing_preset_ui_ = false;
+    // Keep the manage overlay list in sync whenever the preset UI is refreshed.
+    refreshPresetManageOverlay();
 }
 
 void MainWindow::persistPresetState() {
@@ -2206,12 +2232,14 @@ void MainWindow::onSavePresetAs(const QString& name) {
 void MainWindow::onNewPreset() {
     preset_registry_.AddDefaultPreset();
     applyPresetConfig(preset_registry_.SelectedSavedConfig());
+    refreshPresetUi();
     persistPresetState();
 }
 
 void MainWindow::onDuplicatePreset() {
     preset_registry_.DuplicateSelected();
     applyPresetConfig(preset_registry_.SelectedSavedConfig());
+    refreshPresetUi();
     persistPresetState();
 }
 
@@ -2331,6 +2359,24 @@ void MainWindow::onImportProfiles(const QString& path) {
                               QStringLiteral("imported %1 preset(s) from %2").arg(imported.size()).arg(path));
     QMessageBox::information(this, QStringLiteral("Import Successful"),
                              QStringLiteral("Imported %1 preset(s).").arg(imported.size()));
+    // Keep the manage overlay list in sync after a successful import.
+    refreshPresetManageOverlay();
+}
+
+// ---------------------------------------------------------------------------
+// Preset manage overlay
+// ---------------------------------------------------------------------------
+
+void MainWindow::openPresetManageOverlay() {
+    if (!preset_manage_overlay_)
+        return;
+    refreshPresetManageOverlay();
+    preset_manage_overlay_->openOverlay();
+}
+
+void MainWindow::refreshPresetManageOverlay() {
+    if (preset_manage_overlay_)
+        preset_manage_overlay_->refreshPresets(preset_registry_);
 }
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
