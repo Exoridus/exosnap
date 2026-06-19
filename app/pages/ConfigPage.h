@@ -117,6 +117,8 @@ class ConfigPage : public QWidget {
     void resetChangesRequested();
     void resetToDefaultsRequested();
     void setDefaultPresetRequested();
+    // Emitted when the user opens the Manage presets overlay.
+    void managePresetsRequested();
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
@@ -187,6 +189,7 @@ class ConfigPage : public QWidget {
     void onResetChanges();
     void onResetToDefaults();
     void onSetDefaultPreset();
+    void onManagePresets();
     void updatePresetActionState();
 
     capability::AudioUiState audio_ui_state_;
@@ -315,6 +318,7 @@ class ConfigPage : public QWidget {
     QAction* reset_changes_action_ = nullptr;
     QAction* reset_to_defaults_action_ = nullptr;
     QAction* set_default_preset_action_ = nullptr;
+    QAction* manage_presets_action_ = nullptr;
 
     ui::widgets::WebcamSetupPanel* webcam_setup_panel_ = nullptr;
 

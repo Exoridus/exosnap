@@ -320,6 +320,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     profile_menu->addSeparator();
     // Destructive reset is separated so it cannot be confused with "Reset changes".
     reset_to_defaults_action_ = profile_menu->addAction(QStringLiteral("Reset all presets to factory defaults…"));
+    profile_menu->addSeparator();
+    // Section 5: Manage overlay.
+    manage_presets_action_ = profile_menu->addAction(QStringLiteral("Manage presets…"));
     profile_overflow_btn_->setMenu(profile_menu);
 
     profile_row->addWidget(profile_combo_, 1);
@@ -1034,6 +1037,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(set_default_preset_action_, &QAction::triggered, this, &ConfigPage::onSetDefaultPreset);
     connect(reset_changes_action_, &QAction::triggered, this, &ConfigPage::onResetChanges);
     connect(reset_to_defaults_action_, &QAction::triggered, this, &ConfigPage::onResetToDefaults);
+    connect(manage_presets_action_, &QAction::triggered, this, &ConfigPage::onManagePresets);
     // Preset management connections — primary action buttons.
     connect(preset_save_btn_, &QPushButton::clicked, this, &ConfigPage::onSavePreset);
     connect(preset_save_as_btn_, &QPushButton::clicked, this, &ConfigPage::onSavePresetAs);
@@ -1830,6 +1834,10 @@ void ConfigPage::onResetToDefaults() {
 
 void ConfigPage::onSetDefaultPreset() {
     emit setDefaultPresetRequested();
+}
+
+void ConfigPage::onManagePresets() {
+    emit managePresetsRequested();
 }
 
 void ConfigPage::onBrowse() {
