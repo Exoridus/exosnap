@@ -18,6 +18,7 @@ enum class VisualPage {
     Diagnostics,
     Logs,
     About,
+    EditExport,
 };
 
 enum class VisualRecordState {
@@ -245,6 +246,17 @@ struct VisualScenario {
     // live-app capture script cannot reach (it only renders defaults).
     bool settings_expert_mode = false;       // Expert mode ON → Developer card revealed
     bool settings_advanced_expanded = false; // Output card "Advanced" expander open
+
+    // --- EditExport scenarios (PHASE-G-EDIT-EXPORT-R1) ---
+    QString edit_export_phase;
+    QString edit_export_file_path;
+    QString edit_export_duration;
+    QString edit_export_size;
+    QString edit_export_resolution;
+    QString edit_export_fps;
+    QString edit_export_video_codec;
+    QString edit_export_audio_codec;
+    QString edit_export_container;
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

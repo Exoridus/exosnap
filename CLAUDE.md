@@ -20,8 +20,8 @@ Read:
 - Exact label: `Merge with above`
 - Default profile: `MKV + AV1 + Opus + CFR 60 fps`
 - Recording start is blocked by diagnostic blockers
-- Top-level navigation: **Record, Settings, Hotkeys, Diagnostics, Logs, About**
-  - **Settings** hosts Video, Audio, Output, Webcam, and Advanced as embedded sections
+- Top-level navigation: **Record, Settings, Diagnostics, Logs, About** (5 items; Hotkeys moved into Settings as an embedded card — PS-PHASE-C)
+  - **Settings** hosts Video, Audio, Output, Webcam, Hotkeys, and Advanced (expert-only) as embedded sections
 
 ## Work style
 

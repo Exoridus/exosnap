@@ -40,6 +40,7 @@ struct VisualScenario;
 #endif
 
 namespace ui::chrome {
+class NotificationHubPanel;
 class OperationalTitleBar;
 } // namespace ui::chrome
 
@@ -65,6 +66,7 @@ class RecordingOverlayWindow;
 
 class ConfigPage;
 class DiagnosticsPage;
+class EditExportPage;
 class HotkeysPage;
 class LogsPage;
 class OutputPage;
@@ -131,6 +133,9 @@ class MainWindow : public QMainWindow {
     void refreshPresetUi();
     void initHotkeyService();
     void refreshDiagnosticsData();
+    void navigateToEditExportPage(const QString& file_path, const QString& duration, const QString& size,
+                                  const QString& resolution, const QString& fps, const QString& video_codec,
+                                  const QString& audio_codec, const QString& container);
 
     // ---- Preset system (Stage 2) ----
 
@@ -180,6 +185,9 @@ class MainWindow : public QMainWindow {
     // Push the current context to the crash engine + session sidecar. Cheap.
     void refreshCrashSessionContext();
 
+    // PS-PHASE-B: toggle the notification hub panel popup.
+    void toggleNotificationHub();
+
     // RECORDING-OVERLAY-R1: update the recording overlay visibility/state.
     void updateRecordingOverlay();
     // DIAGNOSTICS-OVERLAY-R1: update the diagnostics overlay visibility/state.
@@ -198,6 +206,9 @@ class MainWindow : public QMainWindow {
     // Handle the async result: build the UI model + state, and enqueue a toast when
     // an update is available and notifications are enabled.
     void onUpdateCheckComplete(const update::UpdateCheckResult& result);
+
+    // PS-PHASE-E: refresh the bell unread badge from the hub's live unread count.
+    void refreshHubUnreadBell();
     // QUICK-PILL-R1: update the quick-control pill visibility/state.
     void updateQuickControlPill();
 
@@ -210,6 +221,7 @@ class MainWindow : public QMainWindow {
     // Guarded; non-persistent: no writes to AppSettingsStore or RecordingPresetStore.
     void applyVisualDeviceDiscoveryScenario(const visual::VisualScenario& scenario);
     void applyVisualHotkeysScenario(const visual::VisualScenario& scenario);
+    void applyVisualEditExportScenario(const visual::VisualScenario& scenario);
 #endif
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
@@ -227,6 +239,8 @@ class MainWindow : public QMainWindow {
     // NOTIFY-TOASTS-R1: manager (owned by this) + toast window (top-level, no parent).
     notifications::NotificationManager* notification_manager_ = nullptr;
     ui::overlay::NotificationToastWindow* notification_toast_window_ = nullptr;
+    // PS-PHASE-B: notification hub panel (top-level popup, no Qt parent).
+    ui::chrome::NotificationHubPanel* notification_hub_ = nullptr;
     // UPDATE-WIRE-R1 (ADR 0012): Qt bridge to the update engine (owned by this).
     UpdateService* update_service_ = nullptr;
     // Last update check's releases-page URL (for the panel's "Open releases" / notes link).
@@ -241,6 +255,7 @@ class MainWindow : public QMainWindow {
     LogsPage* logs_page_ = nullptr;
     WebcamPage* webcam_page_ = nullptr;
     HotkeysPage* hotkeys_page_ = nullptr;
+    EditExportPage* edit_export_page_ = nullptr;
 
     // Device notifiers (owned; started after capability probe; stopped first in ~MainWindow).
     AudioDeviceNotifier audio_notifier_;

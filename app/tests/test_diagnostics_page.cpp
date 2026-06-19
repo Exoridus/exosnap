@@ -124,6 +124,112 @@ TEST_F(DiagnosticsPageTest, ExportReportStaysDisabledHonestly) {
     EXPECT_FALSE(export_btn->isEnabled());
 }
 
+// ---- Phase D: Readiness verdicts (suite-diag.jsx clear/issues/blocked) ------
+
+TEST_F(DiagnosticsPageTest, VerdictClearShowsReadyPillAndPassCount) {
+    // Validated baseline with a supported config → no blockers, no notices from
+    // the recommendation engine → "clear" state (READY pill).
+    DiagnosticsPage page;
+    LoadData(page);
+
+    QPushButton* run = FindButton(page, QStringLiteral("Run Check"));
+    ASSERT_NE(run, nullptr);
+    run->click();
+
+    // The status pill must contain READY.
+    bool has_ready_pill = false;
+    for (auto* lbl : page.findChildren<QLabel*>())
+        if (lbl->property("labelRole").toString() == QLatin1String("profileStatusBadge") &&
+            lbl->text().contains(QStringLiteral("READY")))
+            has_ready_pill = true;
+    EXPECT_TRUE(has_ready_pill) << "Expected READY in status pill for a clean baseline config";
+
+    // Pass tile count must be > 0 (capability entries all pass on the static baseline).
+    bool pass_tile_nonzero = false;
+    for (auto* lbl : page.findChildren<QLabel*>())
+        if (lbl->property("labelRole").toString() == QLatin1String("statTileNum") &&
+            lbl->property("statTone").toString() == QLatin1String("pass") && lbl->text().toInt() > 0)
+            pass_tile_nonzero = true;
+    EXPECT_TRUE(pass_tile_nonzero) << "Expected pass tile count > 0 after run check";
+}
+
+TEST_F(DiagnosticsPageTest, VerdictPipelineStagesAllPresent) {
+    // Canonical six stages must be present and named correctly (suite-diag.jsx order).
+    DiagnosticsPage page;
+    auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
+    ASSERT_NE(flow, nullptr);
+    ASSERT_EQ(flow->stepCount(), 6);
+    // Per suite-diag.jsx: Source → Queue → Compositor → Encoder → Muxer → Disk
+    EXPECT_EQ(flow->card(0)->stepName(), QStringLiteral("Source Capture"));
+    EXPECT_EQ(flow->card(1)->stepName(), QStringLiteral("Frame Queue"));
+    EXPECT_EQ(flow->card(2)->stepName(), QStringLiteral("Compositor"));
+    EXPECT_EQ(flow->card(3)->stepName(), QStringLiteral("Encoder"));
+    EXPECT_EQ(flow->card(4)->stepName(), QStringLiteral("Muxer"));
+    EXPECT_EQ(flow->card(5)->stepName(), QStringLiteral("Disk"));
+}
+
+TEST_F(DiagnosticsPageTest, VerdictBlockerTileIsLabelledBlockers) {
+    DiagnosticsPage page;
+    const QList<QLabel*> labels = page.findChildren<QLabel*>();
+    bool found = false;
+    for (auto* lbl : labels)
+        if (lbl->property("labelRole").toString() == QLatin1String("statTileLabel") &&
+            lbl->text() == QStringLiteral("Blockers"))
+            found = true;
+    EXPECT_TRUE(found) << "Blocker stat tile must be labelled 'Blockers'";
+}
+
+TEST_F(DiagnosticsPageTest, VerdictIssueTileIsLabelledIssues) {
+    // suite-diag.jsx names the amber middle tile "Issues" (not "Notices").
+    DiagnosticsPage page;
+    const QList<QLabel*> labels = page.findChildren<QLabel*>();
+    bool found = false;
+    for (auto* lbl : labels)
+        if (lbl->property("labelRole").toString() == QLatin1String("statTileLabel") &&
+            lbl->text() == QStringLiteral("Issues"))
+            found = true;
+    EXPECT_TRUE(found) << "Notice/amber stat tile must be labelled 'Issues' (suite-diag.jsx design)";
+}
+
+TEST_F(DiagnosticsPageTest, VerdictPassTileIsLabelledPasses) {
+    DiagnosticsPage page;
+    const QList<QLabel*> labels = page.findChildren<QLabel*>();
+    bool found = false;
+    for (auto* lbl : labels)
+        if (lbl->property("labelRole").toString() == QLatin1String("statTileLabel") &&
+            lbl->text() == QStringLiteral("Passes"))
+            found = true;
+    EXPECT_TRUE(found) << "Pass stat tile must be labelled 'Passes'";
+}
+
+TEST_F(DiagnosticsPageTest, VerdictLastCheckLabelUpdatesAfterRunCheck) {
+    DiagnosticsPage page;
+    LoadData(page);
+
+    QPushButton* run = FindButton(page, QStringLiteral("Run Check"));
+    ASSERT_NE(run, nullptr);
+
+    // Before run check the label shows the em-dash placeholder.
+    bool has_placeholder = false;
+    for (auto* lbl : page.findChildren<QLabel*>())
+        if (lbl->property("labelRole").toString() == QLatin1String("subtle") &&
+            lbl->text().contains(QStringLiteral("Last check:")))
+            has_placeholder = true;
+    EXPECT_TRUE(has_placeholder);
+
+    run->click();
+
+    // After run check the label must show a real timestamp (not the em-dash).
+    bool has_timestamp = false;
+    for (auto* lbl : page.findChildren<QLabel*>())
+        if (lbl->property("labelRole").toString() == QLatin1String("subtle") &&
+            lbl->text().contains(QStringLiteral("Last check:")) &&
+            !lbl->text().contains(QString::fromUtf8("\xe2\x80\x94")) &&
+            !lbl->text().contains(QStringLiteral("running")))
+            has_timestamp = true;
+    EXPECT_TRUE(has_timestamp) << "Last check label should show a date/time after Run Check";
+}
+
 // ---- Live pipeline diagnostics (DIAGNOSTICS-LIVE-PIPELINE-R1) ----------------
 
 namespace {

@@ -79,6 +79,8 @@ qt_add_executable(exosnap WIN32
     ui/brand/BrandMarkWidget.cpp
     ui/WindowGeometryPolicy.h
     ui/WindowGeometryPolicy.cpp
+    ui/chrome/NotificationHubPanel.h
+    ui/chrome/NotificationHubPanel.cpp
     ui/chrome/OperationalTitleBar.h
     ui/chrome/OperationalTitleBar.cpp
     ui/chrome/GlobalRecordingBar.h
@@ -108,6 +110,8 @@ qt_add_executable(exosnap WIN32
     ui/widgets/SectionRuleHeader.cpp
     ui/widgets/KeycapChip.h
     ui/widgets/KeycapChip.cpp
+    ui/widgets/HotkeysSettingsPanel.h
+    ui/widgets/HotkeysSettingsPanel.cpp
     ui/widgets/StatusPill.h
     ui/widgets/StatusPill.cpp
     ui/widgets/PreviewSurface.h
@@ -152,6 +156,18 @@ qt_add_executable(exosnap WIN32
     ui/widgets/AudioSourceToggle.cpp
     ui/widgets/CountdownSelect.h
     ui/widgets/CountdownSelect.cpp
+    ui/widgets/ExoSpinBox.h
+    ui/widgets/ExoSpinBox.cpp
+    ui/widgets/NotificationBell.h
+    ui/widgets/NotificationBell.cpp
+    ui/widgets/AdvisoryItem.h
+    ui/widgets/AdvisoryItem.cpp
+    ui/widgets/CornerCaptureButton.h
+    ui/widgets/CornerCaptureButton.cpp
+    ui/widgets/KeyCap.h
+    ui/widgets/KeyCap.cpp
+    ui/widgets/PlaceholderRow.h
+    ui/widgets/PlaceholderRow.cpp
     ui/widgets/TransportDock.h
     ui/widgets/TransportDock.cpp
     ui/overlay/CountdownOverlayWindow.h
@@ -183,6 +199,8 @@ qt_add_executable(exosnap WIN32
     pages/LogsPage.cpp
     pages/OutputPage.h
     pages/OutputPage.cpp
+    pages/EditExportPage.h
+    pages/EditExportPage.cpp
     services/DeviceDiscoveryCommon.h
     services/AudioDeviceNotifier.h
     services/AudioDeviceNotifier.cpp
@@ -396,6 +414,13 @@ exosnap_add_app_test_support(exosnap_pages_test_support
     # the Lucide glyph renderer.
     ui/dialogs/UpdateSettingsPanel.cpp
     ui/theme/LucideIcon.cpp
+    # PS-PHASE-C: HotkeysSettingsPanel embedded in ConfigPage.
+    ui/widgets/HotkeysSettingsPanel.cpp
+    ui/widgets/KeycapChip.cpp
+    pages/HotkeysPage.cpp
+    services/GlobalHotkeyService.cpp
+    ui/widgets/SectionRuleHeader.cpp
+    ui/widgets/PlaceholderRow.cpp
 )
 target_link_libraries(exosnap_pages_test_support PUBLIC
     exosnap_device_service_test_support exosnap_output_model_test_support
@@ -664,8 +689,10 @@ exosnap_add_gtest(
         tests/test_operational_title_bar.cpp
         ui/chrome/OperationalTitleBar.cpp
         ui/brand/BrandMarkWidget.cpp
+        ui/widgets/NotificationBell.cpp
         ui/widgets/StatusPill.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
 )
 target_include_directories(operational_title_bar_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(operational_title_bar_tests PROPERTIES AUTOMOC ON)
@@ -693,6 +720,89 @@ exosnap_add_gtest(
 )
 target_include_directories(info_hint_icon_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(info_hint_icon_tests PROPERTIES AUTOMOC ON)
+
+# PS-FOUNDATIONS-R1: Suite foundation widget tests.
+exosnap_add_gtest(
+    NAME exo_spin_box_tests
+    TEST_PREFIX suite.
+    SOURCES
+        tests/test_exo_spin_box.cpp
+        ui/widgets/ExoSpinBox.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(exo_spin_box_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(exo_spin_box_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME notification_bell_tests
+    TEST_PREFIX suite.
+    SOURCES
+        tests/test_notification_bell.cpp
+        ui/widgets/NotificationBell.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(notification_bell_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(notification_bell_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME advisory_item_tests
+    TEST_PREFIX suite.
+    SOURCES
+        tests/test_advisory_item.cpp
+        ui/widgets/AdvisoryItem.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(advisory_item_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(advisory_item_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME notification_hub_panel_tests
+    TEST_PREFIX suite.
+    SOURCES
+        tests/test_notification_hub_panel.cpp
+        ui/chrome/NotificationHubPanel.cpp
+        ui/widgets/AdvisoryItem.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(notification_hub_panel_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(notification_hub_panel_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME corner_capture_button_tests
+    TEST_PREFIX suite.
+    SOURCES
+        tests/test_corner_capture_button.cpp
+        ui/widgets/CornerCaptureButton.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(corner_capture_button_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(corner_capture_button_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME key_cap_tests
+    TEST_PREFIX suite.
+    SOURCES
+        tests/test_key_cap.cpp
+        ui/widgets/KeyCap.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(key_cap_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(key_cap_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME placeholder_row_tests
+    TEST_PREFIX suite.
+    SOURCES
+        tests/test_placeholder_row.cpp
+        ui/widgets/PlaceholderRow.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(placeholder_row_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(placeholder_row_tests PROPERTIES AUTOMOC ON)
 
 # Settings-Redesign D6: CompareHint widget + compare data unit tests.
 exosnap_add_gtest(
@@ -823,12 +933,27 @@ exosnap_add_gtest(
         tests/test_about_overlay.cpp
         ui/dialogs/AboutOverlay.cpp
         ui/brand/BrandMarkWidget.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+        # PS-PHASE-E: AboutOverlay now embeds UpdateSettingsPanel.
+        ui/dialogs/UpdateSettingsPanel.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
 target_include_directories(about_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 target_compile_definitions(about_overlay_tests PRIVATE EXOSNAP_BUILD_CONFIG="$<CONFIG>")
 add_dependencies(about_overlay_tests exosnap_build_info)
 set_target_properties(about_overlay_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME edit_export_page_tests
+    TEST_PREFIX edit_export.
+    SOURCES
+        tests/test_edit_export_page.cpp
+        pages/EditExportPage.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(edit_export_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(edit_export_page_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME preset_manage_overlay_tests

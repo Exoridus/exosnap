@@ -413,6 +413,17 @@ void PreviewSurface::setFrameTone(FrameTone tone) {
     update();
 }
 
+void PreviewSurface::setCountdownState(bool active, int remaining_seconds, int duration_seconds) {
+    if (countdown_active_ == active && countdown_remaining_ == remaining_seconds &&
+        countdown_duration_ == duration_seconds) {
+        return;
+    }
+    countdown_active_ = active;
+    countdown_remaining_ = remaining_seconds;
+    countdown_duration_ = duration_seconds > 0 ? duration_seconds : 1;
+    update();
+}
+
 StatusPill* PreviewSurface::statusPill() const noexcept {
     return status_pill_;
 }
@@ -1116,6 +1127,47 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
             }
             painter.restore();
         }
+    }
+
+    // SUITE-PHASE-F: In-window countdown ring.
+    // Drawn only when DXGI is not active (QImage / Ready-state preview) because
+    // the DXGI native HWND occludes Qt painting — the on-screen
+    // CountdownOverlayWindow handles the live-capture case instead.
+    if (countdown_active_ && countdown_remaining_ > 0 && !dxgi_active_) {
+        painter.save();
+
+        // Dim scrim over the whole preview
+        painter.fillRect(rect(), QColor(8, 8, 10, 89)); // 35% opacity
+
+        // Ring geometry (120 px circle, centred)
+        constexpr int kDiameter = 120;
+        constexpr int kRadius = kDiameter / 2;
+        const int cx = width() / 2;
+        const int cy = height() / 2;
+        const QRectF ring_rect(cx - kRadius, cy - kRadius, kDiameter, kDiameter);
+
+        // Blurred glass background (approximated by a filled, partially-opaque circle)
+        painter.setBrush(QColor(14, 14, 16, 153)); // rgba(14,14,16,0.6)
+        painter.setPen(Qt::NoPen);
+        painter.drawEllipse(ring_rect);
+
+        // Ring border (caution amber)
+        constexpr QColor kCautionBorder(0xE6, 0xC5, 0x7C, 120); // ~50% amber border
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(kCautionBorder, 2.0));
+        painter.drawEllipse(ring_rect.adjusted(1.0, 1.0, -1.0, -1.0));
+
+        // Digit
+        painter.setPen(QColor(0xE6, 0xC5, 0x7C)); // amber text
+        QFont digit_font(QStringLiteral("IBM Plex Mono"));
+        if (digit_font.family().isEmpty())
+            digit_font.setFamily(QStringLiteral("Consolas"));
+        digit_font.setPixelSize(56);
+        digit_font.setWeight(QFont::Medium);
+        painter.setFont(digit_font);
+        painter.drawText(ring_rect, Qt::AlignCenter, QString::number(countdown_remaining_));
+
+        painter.restore();
     }
 
     painter.setPen(QPen(tone_color, (tone_recording || tone_warn || tone_blocked) ? 1.8 : 1.2));

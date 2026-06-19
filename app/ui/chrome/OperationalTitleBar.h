@@ -16,8 +16,9 @@ class BrandMarkWidget;
 }
 
 namespace exosnap::ui::widgets {
+class NotificationBell;
 class StatusPill;
-}
+} // namespace exosnap::ui::widgets
 
 namespace exosnap::ui::chrome {
 
@@ -58,6 +59,12 @@ class OperationalTitleBar : public QWidget {
 
     void setMaximizedState(bool maximized);
 
+    // PS-PHASE-B: notification bell API.
+    void setBellUnreadCount(int count);
+    ui::widgets::NotificationBell* bellWidget() const {
+        return bell_;
+    }
+
     bool isInDragArea(const QPoint& local_pos) const;
     WindowButtonHit hitTestWindowButton(const QPoint& local_pos) const;
     void resetDragCursor();
@@ -66,6 +73,7 @@ class OperationalTitleBar : public QWidget {
   signals:
     void navPageRequested(int page_index);
     void aboutRequested();
+    void bellClicked(); // PS-PHASE-B: emitted when the notification bell is clicked.
     void minimizeRequested();
     void maximizeRestoreRequested();
     void closeRequested();
@@ -82,6 +90,7 @@ class OperationalTitleBar : public QWidget {
     QHBoxLayout* nav_layout_ = nullptr;
     QButtonGroup* nav_group_ = nullptr;
     ui::widgets::StatusPill* status_pill_ = nullptr;
+    ui::widgets::NotificationBell* bell_ = nullptr; // PS-PHASE-B
     QPushButton* minimize_btn_ = nullptr;
     QPushButton* maximize_btn_ = nullptr;
     QPushButton* close_btn_ = nullptr;

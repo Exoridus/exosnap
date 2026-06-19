@@ -1,5 +1,6 @@
 #include "AboutOverlay.h"
 #include "ExoSnapBuildInfo.h"
+#include "UpdateSettingsPanel.h"
 
 #include "../brand/BrandMarkWidget.h"
 #include "../theme/ExoSnapPalette.h"
@@ -23,6 +24,7 @@
 #include <QShowEvent>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QtGlobal>
 
 namespace exosnap::ui::dialogs {
 namespace {
@@ -91,8 +93,8 @@ AboutOverlay::AboutOverlay(QWidget* parent) : QWidget(parent) {
 
     card_ = buildCard();
 
-    // Center the card over the backdrop; the surrounding margin/stretch is the
-    // dimmed, click-to-dismiss region.
+    // Center the container (aboutCard + update panel) over the backdrop.
+    // The surrounding stretch is the dimmed, click-to-dismiss region.
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(30, 30, 30, 30);
     layout->addStretch(1);
@@ -103,10 +105,25 @@ AboutOverlay::AboutOverlay(QWidget* parent) : QWidget(parent) {
         parent->installEventFilter(this);
 }
 
-QFrame* AboutOverlay::buildCard() {
-    auto* card = new QFrame(this);
+QWidget* AboutOverlay::buildCard() {
+    // PS-PHASE-E: card_ is now a plain QWidget container holding:
+    //   1. The aboutCard QFrame (info card — same as before, width 480)
+    //   2. 14px spacing
+    //   3. The UpdateSettingsPanel (width 480)
+    // The container uses QSizePolicy(Fixed, Preferred) so backdrop clicks outside it dismiss.
+
+    auto* container = new QWidget(this);
+    container->setObjectName(QStringLiteral("aboutContainer"));
+    container->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
+    container->setFixedWidth(480);
+
+    auto* container_layout = new QVBoxLayout(container);
+    container_layout->setContentsMargins(0, 0, 0, 0);
+    container_layout->setSpacing(0);
+
+    // ── About info card (QFrame "aboutCard") ─────────────────────────────────────────────────
+    auto* card = new QFrame(container);
     card->setObjectName("aboutCard");
-    card->setFixedWidth(480);
 
     auto* main_layout = new QVBoxLayout(card);
     main_layout->setContentsMargins(28, 26, 28, 22);
@@ -116,6 +133,7 @@ QFrame* AboutOverlay::buildCard() {
     const QString build_config = QString::fromLatin1(EXOSNAP_BUILD_CONFIG);
     const QString commit = QString::fromLatin1(build::kGitCommit);
     const QString author = QString::fromLatin1(kAppAuthor);
+    const QString qt_version = QString::fromLatin1(QT_VERSION_STR);
 
     // ── Header: aperture mark + two-tone wordmark + version line ──────────────────────────────
     auto* header_row = new QHBoxLayout();
@@ -184,6 +202,8 @@ QFrame* AboutOverlay::buildCard() {
     meta_layout->addWidget(makeHairline(meta_panel));
     meta_layout->addWidget(makeMetaRow(QStringLiteral("AUTHOR"), author, QStringLiteral("aboutValueAuthor"), meta_panel,
                                        QString::fromLatin1(kAuthorProfileUrl)));
+    meta_layout->addWidget(makeHairline(meta_panel));
+    meta_layout->addWidget(makeMetaRow(QStringLiteral("QT"), qt_version, QStringLiteral("aboutValueQt"), meta_panel));
 
     main_layout->addWidget(meta_panel);
     main_layout->addSpacing(18);
@@ -202,9 +222,9 @@ QFrame* AboutOverlay::buildCard() {
     copy_btn->setObjectName(QStringLiteral("aboutCopyButton"));
     copy_btn->setProperty("role", "ghost");
     copy_btn->setCursor(Qt::PointingHandCursor);
-    connect(copy_btn, &QPushButton::clicked, this, [version, build_config, commit, author]() {
-        const QString details = QStringLiteral("ExoSnap\nVersion: %1\nBuild: %2\nCommit: %3\nAuthor: %4")
-                                    .arg(version, build_config, commit, author);
+    connect(copy_btn, &QPushButton::clicked, this, [version, build_config, commit, author, qt_version]() {
+        const QString details = QStringLiteral("ExoSnap\nVersion: %1\nBuild: %2\nCommit: %3\nAuthor: %4\nQt: %5")
+                                    .arg(version, build_config, commit, author, qt_version);
         QGuiApplication::clipboard()->setText(details);
     });
 
@@ -216,7 +236,29 @@ QFrame* AboutOverlay::buildCard() {
     btn_row->addStretch(1);
     main_layout->addLayout(btn_row);
 
-    return card;
+    // ── Assemble container ────────────────────────────────────────────────────────────────────
+    container_layout->addWidget(card);
+    container_layout->addSpacing(10);
+
+    // ── Software updates panel — wrapped in its own card frame so it shares the same
+    //    visual material as the info card above (no bare update controls rendered on the scrim).
+    //    (PS-PHASE-E: moved from ConfigPage Settings; card wrapper added in Polish-R1.)
+    auto* update_card = new QFrame(container);
+    update_card->setObjectName(QStringLiteral("aboutUpdateCard"));
+
+    auto* update_card_layout = new QVBoxLayout(update_card);
+    update_card_layout->setContentsMargins(0, 0, 0, 0);
+    update_card_layout->setSpacing(0);
+
+    update_panel_ = new UpdateSettingsPanel(update_card);
+    update_panel_->setObjectName(QStringLiteral("aboutUpdatePanel"));
+    // Forward the panel's checkRequested signal so MainWindow can connect to the overlay.
+    connect(update_panel_, &UpdateSettingsPanel::checkRequested, this, &AboutOverlay::checkForUpdatesRequested);
+
+    update_card_layout->addWidget(update_panel_);
+    container_layout->addWidget(update_card);
+
+    return container;
 }
 
 void AboutOverlay::openOverlay() {

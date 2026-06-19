@@ -25,22 +25,25 @@ class QLineEdit;
 class QMenu;
 class QPushButton;
 class QResizeEvent;
+class QScrollArea;
+class QSlider;
 class QSpinBox;
 class QString;
 class QToolButton;
+
+namespace exosnap {
+class GlobalHotkeyService;
+} // namespace exosnap
 
 namespace exosnap::ui::widgets {
 class CompareHint;
 class ExoCheckBox;
 class ExoToggle;
+class HotkeysSettingsPanel;
 class SettingsCardExpander;
 class VUMeterWidget;
 class WebcamSetupPanel;
 } // namespace exosnap::ui::widgets
-
-namespace exosnap::ui::dialogs {
-class UpdateSettingsPanel;
-} // namespace exosnap::ui::dialogs
 
 namespace exosnap {
 
@@ -73,6 +76,17 @@ class ConfigPage : public QWidget {
     void setPresetDirty(bool dirty);
     void setActiveProfileName(const QString& profile_name);
     void setRecordingControlsLocked(bool locked);
+
+    // PS-PHASE-C: Wire the embedded hotkeys panel to the live global hotkey service.
+    void setHotkeyService(GlobalHotkeyService* service);
+    // PS-PHASE-C: Lock/unlock hotkey rebinding (forwarded from recording state).
+    void setHotkeyEditingLocked(bool locked);
+
+    // PS-PHASE-E: deep-link target support — scrolls the Settings page to the named section.
+    // Target strings: "settings/audio", "settings/output", "settings/video", "settings/webcam",
+    //                 "settings/presence", "settings/appearance", "settings/hotkeys".
+    // No-op for unknown targets.
+    void scrollToSection(const QString& section_target);
 
     // SETTINGS-TIERS-R1: Expert mode toggle (persisted by MainWindow).
     void setExpertModeEnabled(bool enabled);
@@ -253,6 +267,7 @@ class ConfigPage : public QWidget {
     bool active_preset_is_built_in_ = false;
     bool active_preset_is_available_ = true;
 
+    QScrollArea* scroll_area_ = nullptr;        // main scroll area (for scrollToSection)
     QBoxLayout* columns_layout_ = nullptr;      // host for the two-column card grid
     QBoxLayout* output_split_layout_ = nullptr; // inner field/help split inside Output card
 
@@ -382,10 +397,6 @@ class ConfigPage : public QWidget {
 
     ui::widgets::WebcamSetupPanel* webcam_setup_panel_ = nullptr;
 
-    // UPDATE-WIRE-R1: embedded "Software updates" card (Settings → near Advanced).
-    // Wired from MainWindow via findChild(objectName "settingsUpdatePanel").
-    ui::dialogs::UpdateSettingsPanel* update_settings_panel_ = nullptr;
-
     QLabel* lock_note_label_ = nullptr;
     bool controls_locked_ = false;
 
@@ -419,6 +430,26 @@ class ConfigPage : public QWidget {
     // Expert-gated developer card (hidden when expert_mode_enabled_ == false).
     QWidget* developer_card_ = nullptr;
 
+    // PS-PHASE-C: Embedded hotkeys panel (full-width card, below the two-column grid).
+    ui::widgets::HotkeysSettingsPanel* hotkeys_settings_panel_ = nullptr;
+
+    // PS-PHASE-C: Expert Format section — rate control (CQ/VBR/CBR) + bitrate + placeholders.
+    QWidget* fmt_expert_section_ = nullptr; // container for rate control, bitrate, and Format placeholders
+    QWidget* rate_control_row_widget_ = nullptr;
+    QButtonGroup* rate_control_group_ = nullptr;
+    QWidget* bitrate_row_widget_ = nullptr;
+    QSpinBox* bitrate_kbps_spin_ = nullptr;
+
+    // PS-PHASE-C: Expert Audio section — mic gain, channel mode, bitrate, Opus params + placeholders.
+    QWidget* audio_expert_section_ = nullptr;
+    // Mic-gain: QSlider (–12…+12 dB, step 1) + read-only dB label (Polish-R1: Slider per mockup).
+    QSlider* mic_gain_slider_ = nullptr;
+    QLabel* mic_gain_db_label_ = nullptr;
+    QComboBox* mic_channel_mode_combo_ = nullptr;
+    QSpinBox* audio_bitrate_kbps_spin_ = nullptr;
+    QComboBox* opus_frame_duration_combo_ = nullptr;
+    QSpinBox* opus_complexity_spin_ = nullptr;
+
     // SETTINGS-SEARCH-R1: settings search box and match count label.
     QWidget* settings_search_pill_ = nullptr;
     QLineEdit* settings_search_box_ = nullptr;
@@ -435,7 +466,6 @@ class ConfigPage : public QWidget {
     QWidget* audio_panel_ = nullptr;
     QWidget* webcam_panel_ = nullptr;
     QWidget* out_panel_ = nullptr;
-    QWidget* update_panel_wrapper_ = nullptr; // wraps update_settings_panel_
     QWidget* presence_panel_ = nullptr;
     QWidget* appearance_panel_ = nullptr;
 

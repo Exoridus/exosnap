@@ -6,6 +6,7 @@
 #include "notifications/NotificationManager.h"
 #include "pages/ConfigPage.h"
 #include "pages/DiagnosticsPage.h"
+#include "pages/EditExportPage.h"
 #include "pages/HotkeysPage.h"
 #include "pages/LogsPage.h"
 #include "pages/OutputPage.h"
@@ -15,6 +16,7 @@
 #include "services/GlobalHotkeyService.h"
 #include "services/UpdateService.h"
 #include "ui/WindowGeometryPolicy.h"
+#include "ui/chrome/NotificationHubPanel.h"
 #include "ui/chrome/OperationalTitleBar.h"
 #include "ui/chrome/RecordingStatusGuards.h"
 #include "ui/dialogs/AboutOverlay.h"
@@ -32,6 +34,7 @@
 #include "ui/theme/ExoSnapPalette.h"
 #include "ui/theme/ExoSnapTheme.h"
 #include "ui/tray/TrayPresence.h"
+#include "ui/widgets/NotificationBell.h"
 #include "ui/widgets/WebcamSetupPanel.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 #include "visual_tests/VisualScenario.h"
@@ -488,6 +491,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     config_page_ = new ConfigPage(output_settings_, video_settings_, stack_);
     hotkeys_page_ = new HotkeysPage(stack_);
     hotkeys_page_->setService(hotkey_service_);
+    config_page_->setHotkeyService(hotkey_service_);
     diagnostics_page_ = new DiagnosticsPage(stack_);
     webcam_page_ = new WebcamPage(stack_);
     webcam_page_->applySettings(live_webcam_);
@@ -500,6 +504,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     stack_->addWidget(webcam_page_);
     output_page_ = new OutputPage(output_settings_, stack_);
     stack_->addWidget(output_page_);
+    edit_export_page_ = new EditExportPage(stack_);
+    stack_->addWidget(edit_export_page_);
+    connect(edit_export_page_, &EditExportPage::backRequested, this, [this]() { navigateToPage(kRecordPageIndex); });
     // Inject the recovery manifest store before the coordinator is initialized.
     record_page_->setRecoveryManifestStore(&recovery_manifest_store_);
     record_page_->setOutputSettings(output_settings_);
@@ -552,10 +559,42 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     source_picker_overlay_->hide();
     record_page_->setSourcePickerOverlay(source_picker_overlay_);
 
+    // PS-PHASE-B: Notification hub panel — top-level popup, no Qt parent.
+    notification_hub_ = new ui::chrome::NotificationHubPanel(nullptr);
+    notification_hub_->hide();
+
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    notification_hub_->setDemoAdvisories(true);
+    title_bar_->setBellUnreadCount(2);
+#endif
+
+    // PS-PHASE-E: Deep-link target contract — route by target string.
+    connect(notification_hub_, &ui::chrome::NotificationHubPanel::deepLinkRequested, this,
+            [this](const QString& target) {
+                notification_hub_->hide();
+                if (target == QStringLiteral("update-view") || target == QStringLiteral("about")) {
+                    // Update panel lives in About overlay now.
+                    if (about_overlay_)
+                        about_overlay_->openOverlay();
+                } else if (target == QStringLiteral("recovery-view")) {
+                    // Recovery overlay (if still open) or just navigate to Record.
+                    navigateToPage(kRecordPageIndex);
+                } else if (target.startsWith(QStringLiteral("settings/"))) {
+                    navigateToPage(kSettingsPageIndex);
+                    if (config_page_)
+                        config_page_->scrollToSection(target);
+                } else {
+                    navigateToPage(kSettingsPageIndex);
+                }
+            });
+
+    connect(title_bar_, &ui::chrome::OperationalTitleBar::bellClicked, this, &MainWindow::toggleNotificationHub);
+
+    // PS-PHASE-B: Hotkeys removed from primary nav (6→5 items); HotkeysPage stays in
+    // the stack at kHotkeysPageIndex and remains reachable via programmatic navigation.
     title_bar_->setNavItems({
         {QStringLiteral("Record"), kRecordPageIndex},
         {QStringLiteral("Settings"), kSettingsPageIndex},
-        {QStringLiteral("Hotkeys"), kHotkeysPageIndex},
         {QStringLiteral("Diagnostics"), kDiagnosticsPageIndex},
         {QStringLiteral("Logs"), kLogsPageIndex},
         {QStringLiteral("About"), -1},
@@ -598,6 +637,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { navigateToPage(kOutputPageIndex); });
     connect(record_page_, &RecordPage::navigateToDiagnosticsPage, this,
             [this]() { navigateToPage(kDiagnosticsPageIndex); });
+    connect(record_page_, &RecordPage::editExportRequested, this, &MainWindow::navigateToEditExportPage);
     // ---- Format settings changed (from ConfigPage) ----
     connect(config_page_, &ConfigPage::formatSettingsChanged, this, [this](const OutputSettingsModel& settings) {
         if (applying_preset_)
@@ -943,47 +983,45 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         if (setup_panel)
             connect(setup_panel, &exosnap::ui::widgets::WebcamSetupPanel::rescanRequested, &webcam_notifier_,
                     &WebcamDeviceNotifier::rescan);
+    }
 
-        // ---- Settings → Software updates card (UPDATE-WIRE-R1 · ADR 0012) ----
-        auto* update_panel =
-            config_page_->findChild<exosnap::ui::dialogs::UpdateSettingsPanel*>(QStringLiteral("settingsUpdatePanel"));
-        if (update_panel) {
-            // Seed the panel from the persisted channel + current version.
-            ui::dialogs::UpdateUiModel seed;
-            seed.current_version = QString::fromLatin1(exosnap::build::kVersion);
-            seed.channel = persisted_settings_.update_channel;
-            update_panel->setModel(seed);
-            update_panel->setState(ui::dialogs::UpdateUiState::UpToDate);
+    // ---- About overlay → Software updates panel (PS-PHASE-E: moved from ConfigPage) ----
+    if (about_overlay_) {
+        auto* update_panel = about_overlay_->updatePanel();
+        // Seed the panel from the persisted channel + current version.
+        ui::dialogs::UpdateUiModel seed;
+        seed.current_version = QString::fromLatin1(exosnap::build::kVersion);
+        seed.channel = persisted_settings_.update_channel;
+        update_panel->setModel(seed);
+        update_panel->setState(ui::dialogs::UpdateUiState::UpToDate);
 
-            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::checkRequested, this,
-                    &MainWindow::triggerUpdateCheck);
+        connect(about_overlay_, &ui::dialogs::AboutOverlay::checkForUpdatesRequested, this,
+                &MainWindow::triggerUpdateCheck);
 
-            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::channelChanged, this,
-                    [this](const QString& channel) {
-                        persisted_settings_.update_channel = channel;
-                        settings_store_.Save(persisted_settings_);
-                        if (update_service_)
-                            update_service_->SetChannel(UpdateChannelFromString(channel));
-                        // Channel applies immediately: re-check on the new channel (guarded).
-                        triggerUpdateCheck();
-                    });
+        connect(update_panel, &ui::dialogs::UpdateSettingsPanel::channelChanged, this, [this](const QString& channel) {
+            persisted_settings_.update_channel = channel;
+            settings_store_.Save(persisted_settings_);
+            if (update_service_)
+                update_service_->SetChannel(UpdateChannelFromString(channel));
+            // Channel applies immediately: re-check on the new channel (guarded).
+            triggerUpdateCheck();
+        });
 
-            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::openReleasesPageRequested, this, [this]() {
-                QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/Exoridus/exosnap/releases")));
-            });
+        connect(update_panel, &ui::dialogs::UpdateSettingsPanel::openReleasesPageRequested, this, [this]() {
+            QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/Exoridus/exosnap/releases")));
+        });
 
-            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::openReleaseNotesRequested, this, [this]() {
-                const QString url = last_update_releases_url_.isEmpty()
-                                        ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
-                                        : last_update_releases_url_;
-                QDesktopServices::openUrl(QUrl(url));
-            });
+        connect(update_panel, &ui::dialogs::UpdateSettingsPanel::openReleaseNotesRequested, this, [this]() {
+            const QString url = last_update_releases_url_.isEmpty()
+                                    ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
+                                    : last_update_releases_url_;
+            QDesktopServices::openUrl(QUrl(url));
+        });
 
-            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::remindLaterRequested, this, [this]() {
-                diagnostics::AppLog::info(QStringLiteral("update"),
-                                          QStringLiteral("Update reminder dismissed (remind me later)"));
-            });
-        }
+        connect(update_panel, &ui::dialogs::UpdateSettingsPanel::remindLaterRequested, this, [this]() {
+            diagnostics::AppLog::info(QStringLiteral("update"),
+                                      QStringLiteral("Update reminder dismissed (remind me later)"));
+        });
     }
 
     // ---- Tray icon (TRAY-PRESENCE-R1) ----
@@ -1097,6 +1135,20 @@ void MainWindow::checkAndShowRecoveryOverlay() {
         event.action = notifications::NotificationAction::OpenRecovery;
         event.secondary_action = notifications::NotificationAction::Discard;
         notification_manager_->Enqueue(std::move(event));
+    }
+
+    // PS-PHASE-E: add a hub advisory for recovery-available.
+    if (notification_hub_) {
+        notification_hub_->removeAdvisoryById(QStringLiteral("recovery-available"));
+        const QString recovery_body =
+            (candidates.size() == 1)
+                ? QStringLiteral("A recording from the last session wasn’t finalized.")
+                : QStringLiteral("%1 recordings from the last session weren’t finalized.").arg(candidates.size());
+        notification_hub_->addAdvisory(QStringLiteral("recovery-available"), QStringLiteral("error"),
+                                       QStringLiteral("Recording recovered"), recovery_body, QStringLiteral("now"),
+                                       /*unread=*/true, QStringLiteral("recovery-view"), QStringLiteral("Recover"),
+                                       /*is_deep_link=*/false);
+        refreshHubUnreadBell();
     }
 
     // Parent to the central widget (same pattern as about_overlay_ / source_picker_overlay_).
@@ -1334,6 +1386,27 @@ MainWindow::~MainWindow() {
     // NOTIFY-TOASTS-R1: toast window is also top-level; destroy explicitly.
     delete notification_toast_window_;
     notification_toast_window_ = nullptr;
+
+    // PS-PHASE-B: hub panel is also top-level (no Qt parent); destroy explicitly.
+    delete notification_hub_;
+    notification_hub_ = nullptr;
+}
+
+void MainWindow::toggleNotificationHub() {
+    if (!notification_hub_)
+        return;
+    if (notification_hub_->isVisible()) {
+        notification_hub_->hide();
+        return;
+    }
+    if (!title_bar_->bellWidget())
+        return;
+    // Anchor: bottom-right corner of the bell widget, mapped to global coordinates.
+    const QWidget* bell = title_bar_->bellWidget();
+    const QPoint bell_bottom_right = bell->mapToGlobal(QPoint(bell->width(), bell->height()));
+    notification_hub_->anchorToPoint(bell_bottom_right + QPoint(0, 4));
+    notification_hub_->show();
+    notification_hub_->raise();
 }
 
 void MainWindow::updateRecordingOverlay() {
@@ -1595,11 +1668,10 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
         if (webcam_page_)
             webcam_page_->setRecordingControlsLocked(locked);
 
-        // UPDATE-WIRE-R1: pause update checks (disable the Check button + show the
-        // paused banner) while capturing or finalizing.
-        if (auto* update_panel = config_page_->findChild<exosnap::ui::dialogs::UpdateSettingsPanel*>(
-                QStringLiteral("settingsUpdatePanel")))
-            update_panel->setRecordingActive(recording_active_ || remuxing_active_);
+        // PS-PHASE-E: pause update checks (disable the Check button + show the
+        // paused banner) while capturing or finalizing. Panel is now in About overlay.
+        if (about_overlay_ && about_overlay_->updatePanel())
+            about_overlay_->updatePanel()->setRecordingActive(recording_active_ || remuxing_active_);
     }
 
     applyTitleBarStatus();
@@ -1623,6 +1695,9 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
             (record_status_label_ == QStringLiteral("REC") || record_status_label_ == QStringLiteral("PAUSED") ||
              record_status_label_ == QStringLiteral("STOPPING") || record_status_label_ == QStringLiteral("COUNTDOWN"));
         hotkeys_page_->setEditingLocked(hk_locked);
+        // PS-PHASE-C: also lock/unlock the embedded hotkeys panel in Settings.
+        if (config_page_)
+            config_page_->setHotkeyEditingLocked(hk_locked);
     }
 
     if ((recording || record_status_label_ == QStringLiteral("COUNTDOWN")) && isVisible() && !isMinimized() &&
@@ -2478,6 +2553,9 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
         if (about_overlay_)
             about_overlay_->openOverlay();
         break;
+    case visual::VisualPage::EditExport:
+        applyVisualEditExportScenario(scenario);
+        break;
     }
 
     if (scenario.source_picker_tab != visual::VisualSourcePickerTab::None)
@@ -3067,6 +3145,18 @@ void MainWindow::initNotificationToasts() {
                     event.body = QStringLiteral("Recording stopped — output drive is critically low on disk space.");
                     event.action = notifications::NotificationAction::ChangeFolder;
                     event.secondary_action = notifications::NotificationAction::None; // Dismiss shown by ghost pill
+                    // PS-PHASE-E: also add a hub advisory for low-disk.
+                    if (notification_hub_) {
+                        notification_hub_->removeAdvisoryById(QStringLiteral("low-disk"));
+                        notification_hub_->addAdvisory(
+                            QStringLiteral("low-disk"), QStringLiteral("caution"),
+                            QStringLiteral("Storage running low"),
+                            QStringLiteral("Recording stopped — output drive is critically low on disk space."),
+                            QStringLiteral("now"), /*unread=*/true, QStringLiteral("settings/output"),
+                            QStringLiteral("Change folder"),
+                            /*is_deep_link=*/true);
+                        refreshHubUnreadBell();
+                    }
                 } else {
                     // Trigger 3: unexpected engine failure — "Recording stopped unexpectedly" (error, sticky).
                     // Mappe spec: action "Show file" (primary).
@@ -3120,6 +3210,16 @@ void MainWindow::updateNotificationToastsEnabled() {
 }
 
 // ---------------------------------------------------------------------------
+// PS-PHASE-E: hub bell unread count refresh
+// ---------------------------------------------------------------------------
+
+void MainWindow::refreshHubUnreadBell() {
+    if (!notification_hub_ || !title_bar_)
+        return;
+    title_bar_->setBellUnreadCount(notification_hub_->unreadCount());
+}
+
+// ---------------------------------------------------------------------------
 // UPDATE-WIRE-R1 (ADR 0012): update check + result handling
 // ---------------------------------------------------------------------------
 
@@ -3127,10 +3227,8 @@ void MainWindow::triggerUpdateCheck() {
     if (update_service_ == nullptr)
         return;
 
-    auto* update_panel =
-        config_page_
-            ? config_page_->findChild<exosnap::ui::dialogs::UpdateSettingsPanel*>(QStringLiteral("settingsUpdatePanel"))
-            : nullptr;
+    // PS-PHASE-E: update panel is in AboutOverlay, not ConfigPage.
+    auto* update_panel = about_overlay_ ? about_overlay_->updatePanel() : nullptr;
 
     // App-layer recording guard: never contact the update server while a recording
     // or MP4 remux is in flight. The panel surfaces the paused banner instead.
@@ -3148,10 +3246,8 @@ void MainWindow::triggerUpdateCheck() {
 }
 
 void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) {
-    auto* update_panel =
-        config_page_
-            ? config_page_->findChild<exosnap::ui::dialogs::UpdateSettingsPanel*>(QStringLiteral("settingsUpdatePanel"))
-            : nullptr;
+    // PS-PHASE-E: update panel is in AboutOverlay.
+    auto* update_panel = about_overlay_ ? about_overlay_->updatePanel() : nullptr;
 
     const QString current_version = QString::fromLatin1(exosnap::build::kVersion);
     const QString channel =
@@ -3199,10 +3295,25 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
             ? QStringLiteral("Update available: %1 → %2 (%3)").arg(current_version, available_version, channel)
             : QStringLiteral("Up to date (%1, %2)").arg(current_version, channel));
 
-    // Notify-on-available: timed info toast routed to Settings → Software updates.
+    // Notify-on-available: timed info toast + hub advisory.
     // (Toast action pills are visual-only today — the toast is capture-excluded /
-    // transparent-for-input — but OpenUpdate carries the intent to navigate to
-    // kSettingsPageIndex once toast actions become interactive.)
+    // transparent-for-input — but OpenUpdate carries the intent to open About once
+    // toast actions become interactive.)
+    // PS-PHASE-E: hub advisory update-available → deep-link "update-view" → open About overlay.
+    if (notification_hub_) {
+        // Always clear stale advisory first (handles: up-to-date after was-available).
+        notification_hub_->removeAdvisoryById(QStringLiteral("update-available"));
+        if (result.update_available) {
+            notification_hub_->addAdvisory(QStringLiteral("update-available"), QStringLiteral("info"),
+                                           QStringLiteral("Update available \xe2\x80\x94 %1").arg(available_version),
+                                           QStringLiteral("Signature verified. Open About to download."),
+                                           QStringLiteral("now"), /*unread=*/true, QStringLiteral("update-view"),
+                                           QStringLiteral("View in About"),
+                                           /*is_deep_link=*/false);
+            refreshHubUnreadBell();
+        }
+    }
+
     if (result.update_available && persisted_settings_.show_notifications && notification_manager_) {
         notifications::NotificationEvent event;
         event.type = notifications::NotificationType::UpdateAvailable;
@@ -3213,5 +3324,42 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
         notification_manager_->Enqueue(std::move(event));
     }
 }
+
+void MainWindow::navigateToEditExportPage(const QString& file_path, const QString& duration, const QString& size,
+                                          const QString& resolution, const QString& fps, const QString& video_codec,
+                                          const QString& audio_codec, const QString& container) {
+    if (!edit_export_page_)
+        return;
+    edit_export_page_->setRecordingInfo(file_path, duration, size, resolution, fps, video_codec, audio_codec,
+                                        container);
+    edit_export_page_->setPhase(EditExportPage::Phase::Review);
+    title_bar_->setActivePage(kRecordPageIndex);
+    stack_->setCurrentWidget(edit_export_page_);
+}
+
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& scenario) {
+    if (!edit_export_page_)
+        return;
+    edit_export_page_->setRecordingInfo(scenario.edit_export_file_path, scenario.edit_export_duration,
+                                        scenario.edit_export_size, scenario.edit_export_resolution,
+                                        scenario.edit_export_fps, scenario.edit_export_video_codec,
+                                        scenario.edit_export_audio_codec, scenario.edit_export_container);
+    EditExportPage::Phase phase = EditExportPage::Phase::Review;
+    if (scenario.edit_export_phase == QStringLiteral("edit"))
+        phase = EditExportPage::Phase::Edit;
+    else if (scenario.edit_export_phase == QStringLiteral("output"))
+        phase = EditExportPage::Phase::Output;
+    else if (scenario.edit_export_phase == QStringLiteral("exporting"))
+        phase = EditExportPage::Phase::Exporting;
+    else if (scenario.edit_export_phase == QStringLiteral("done"))
+        phase = EditExportPage::Phase::Done;
+    else if (scenario.edit_export_phase == QStringLiteral("failed"))
+        phase = EditExportPage::Phase::Failed;
+    edit_export_page_->setPhase(phase);
+    stack_->setCurrentWidget(edit_export_page_);
+    title_bar_->setActivePage(kRecordPageIndex);
+}
+#endif
 
 } // namespace exosnap

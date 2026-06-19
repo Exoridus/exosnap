@@ -178,7 +178,7 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     };
 
     makeStatTile("blocker", QStringLiteral("Blockers"), blocker_tile_, blocker_count_);
-    makeStatTile("notice", QStringLiteral("Notices"), notice_tile_, notice_count_);
+    makeStatTile("notice", QStringLiteral("Issues"), notice_tile_, notice_count_);
     makeStatTile("pass", QStringLiteral("Passes"), pass_tile_, pass_count_);
     rl->addSpacing(M::kSpaceXs);
     rl->addLayout(tiles_row);
