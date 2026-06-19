@@ -5,10 +5,11 @@
 #include <vector>
 
 #include <QDir>
-#include <QSettings>
+#include <QFile>
 #include <QStandardPaths>
 #include <QString>
 #include <QTemporaryDir>
+#include <QTextStream>
 
 #include <capability/audio_ui_state.h>
 #include <recorder_core/audio_track_model.h>
@@ -29,7 +30,18 @@ namespace {
 QString UniqueTempPath() {
     const QString temp_dir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
     static int s_counter = 0;
-    return QDir(temp_dir).filePath(QStringLiteral("exosnap_test_presets_%1.ini").arg(++s_counter));
+    return QDir(temp_dir).filePath(QStringLiteral("exosnap_test_presets_%1.toml").arg(++s_counter));
+}
+
+// Write a TOML string to a file (UTF-8, no BOM).
+bool WriteTomlString(const QString& path, const QString& toml_content) {
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text))
+        return false;
+    QTextStream ts(&f);
+    ts.setEncoding(QStringConverter::Utf8);
+    ts << toml_content;
+    return true;
 }
 
 // Cleanup helper — deletes the temp file if it exists.
@@ -344,32 +356,149 @@ TEST(RecordingPresetStore, AbsentFile_ReturnsResetDefault) {
 TEST(RecordingPresetStore, MalformedItem_EmptyId_Skipped_ValidKept) {
     const QString path = UniqueTempPath();
 
-    // Write the file manually using a second QSettings.
-    {
-        QSettings s(path, QSettings::IniFormat);
-        s.setValue(QStringLiteral("schemaVersion"), kPresetSchemaVersion);
-        s.setValue(QStringLiteral("selectedId"), QStringLiteral("preset.aabbccddeeff0011"));
-        s.setValue(QStringLiteral("defaultId"), QStringLiteral("preset.aabbccddeeff0011"));
+    // Hand-write a TOML fixture: one valid preset + one with empty id.
+    const QString toml = QStringLiteral("schema_version = %1\n"
+                                        "selected_id = \"preset.aabbccddeeff0011\"\n"
+                                        "default_id  = \"preset.aabbccddeeff0011\"\n"
+                                        "\n"
+                                        "[[presets]]\n"
+                                        "id   = \"preset.aabbccddeeff0011\"\n"
+                                        "name = \"Good Item\"\n"
+                                        "countdown_seconds = 0\n"
+                                        "[presets.capture]\n"
+                                        "kind = \"display\"\n"
+                                        "display_key = \"\"\n"
+                                        "window_key  = \"\"\n"
+                                        "has_region  = false\n"
+                                        "region_x = 0\n"
+                                        "region_y = 0\n"
+                                        "region_w = 0\n"
+                                        "region_h = 0\n"
+                                        "region_display_key = \"\"\n"
+                                        "[presets.output]\n"
+                                        "folder = \"\"\n"
+                                        "naming_pattern = \"\"\n"
+                                        "container = \"mkv\"\n"
+                                        "video_codec = \"av1\"\n"
+                                        "audio_codec = \"opus\"\n"
+                                        "resolution_mode = \"native\"\n"
+                                        "custom_width = 0\n"
+                                        "custom_height = 0\n"
+                                        "fit_mode = \"contain\"\n"
+                                        "split_mode = \"off\"\n"
+                                        "split_custom_minutes = 30\n"
+                                        "[presets.video]\n"
+                                        "quality = \"balanced\"\n"
+                                        "rate_control = \"cq\"\n"
+                                        "bitrate_kbps = 20000\n"
+                                        "cfr = true\n"
+                                        "capture_cursor = true\n"
+                                        "frame_rate_num = 60\n"
+                                        "frame_rate_den = 1\n"
+                                        "[presets.audio]\n"
+                                        "target_kind = \"display\"\n"
+                                        "mic_channel_mode = \"auto\"\n"
+                                        "selected_mic_device_id = \"\"\n"
+                                        "mic_gain_linear = 1.0\n"
+                                        "has_window_pid = false\n"
+                                        "window_pid = 0\n"
+                                        "audio_bitrate_kbps = 160\n"
+                                        "opus_frame_duration = \"20ms\"\n"
+                                        "opus_complexity = 10\n"
+                                        "sources = []\n"
+                                        "[presets.webcam]\n"
+                                        "enabled = false\n"
+                                        "device_id = \"\"\n"
+                                        "width = 1280\n"
+                                        "height = 720\n"
+                                        "fps = 30\n"
+                                        "overlay_x = 0.0\n"
+                                        "overlay_y = 0.0\n"
+                                        "overlay_w = 0.25\n"
+                                        "overlay_h = 0.25\n"
+                                        "overlay_user_placed = false\n"
+                                        "aspect_ratio_locked = true\n"
+                                        "mirror = false\n"
+                                        "[presets.webcam.chroma_key]\n"
+                                        "enabled = false\n"
+                                        "color_mode = \"green\"\n"
+                                        "custom_r = 0\n"
+                                        "custom_g = 255\n"
+                                        "custom_b = 0\n"
+                                        "tolerance = 0.4\n"
+                                        "softness = 0.15\n"
+                                        "spill = 0.3\n"
+                                        "\n"
+                                        "[[presets]]\n"
+                                        "id   = \"\"\n"
+                                        "name = \"Bad Item\"\n"
+                                        "countdown_seconds = 0\n"
+                                        "[presets.capture]\n"
+                                        "kind = \"display\"\n"
+                                        "display_key = \"\"\n"
+                                        "window_key  = \"\"\n"
+                                        "has_region  = false\n"
+                                        "region_x = 0\n"
+                                        "region_y = 0\n"
+                                        "region_w = 0\n"
+                                        "region_h = 0\n"
+                                        "region_display_key = \"\"\n"
+                                        "[presets.output]\n"
+                                        "folder = \"\"\n"
+                                        "naming_pattern = \"\"\n"
+                                        "container = \"mkv\"\n"
+                                        "video_codec = \"av1\"\n"
+                                        "audio_codec = \"opus\"\n"
+                                        "resolution_mode = \"native\"\n"
+                                        "custom_width = 0\n"
+                                        "custom_height = 0\n"
+                                        "fit_mode = \"contain\"\n"
+                                        "split_mode = \"off\"\n"
+                                        "split_custom_minutes = 30\n"
+                                        "[presets.video]\n"
+                                        "quality = \"balanced\"\n"
+                                        "rate_control = \"cq\"\n"
+                                        "bitrate_kbps = 20000\n"
+                                        "cfr = true\n"
+                                        "capture_cursor = true\n"
+                                        "frame_rate_num = 60\n"
+                                        "frame_rate_den = 1\n"
+                                        "[presets.audio]\n"
+                                        "target_kind = \"display\"\n"
+                                        "mic_channel_mode = \"auto\"\n"
+                                        "selected_mic_device_id = \"\"\n"
+                                        "mic_gain_linear = 1.0\n"
+                                        "has_window_pid = false\n"
+                                        "window_pid = 0\n"
+                                        "audio_bitrate_kbps = 160\n"
+                                        "opus_frame_duration = \"20ms\"\n"
+                                        "opus_complexity = 10\n"
+                                        "sources = []\n"
+                                        "[presets.webcam]\n"
+                                        "enabled = false\n"
+                                        "device_id = \"\"\n"
+                                        "width = 1280\n"
+                                        "height = 720\n"
+                                        "fps = 30\n"
+                                        "overlay_x = 0.0\n"
+                                        "overlay_y = 0.0\n"
+                                        "overlay_w = 0.25\n"
+                                        "overlay_h = 0.25\n"
+                                        "overlay_user_placed = false\n"
+                                        "aspect_ratio_locked = true\n"
+                                        "mirror = false\n"
+                                        "[presets.webcam.chroma_key]\n"
+                                        "enabled = false\n"
+                                        "color_mode = \"green\"\n"
+                                        "custom_r = 0\n"
+                                        "custom_g = 255\n"
+                                        "custom_b = 0\n"
+                                        "tolerance = 0.4\n"
+                                        "softness = 0.15\n"
+                                        "spill = 0.3\n")
+                             .arg(kPresetSchemaVersion);
 
-        s.beginWriteArray(QStringLiteral("items"), 2);
-
-        // Item 0: valid.
-        s.setArrayIndex(0);
-        s.setValue(QStringLiteral("id"), QStringLiteral("preset.aabbccddeeff0011"));
-        s.setValue(QStringLiteral("name"), QStringLiteral("Good Item"));
-        s.setValue(QStringLiteral("capture_kind"), QStringLiteral("display"));
-        s.setValue(QStringLiteral("out_container"), QStringLiteral("mkv"));
-        s.setValue(QStringLiteral("out_video_codec"), QStringLiteral("av1"));
-        s.setValue(QStringLiteral("out_audio_codec"), QStringLiteral("opus"));
-
-        // Item 1: malformed (empty id).
-        s.setArrayIndex(1);
-        s.setValue(QStringLiteral("id"), QStringLiteral(""));
-        s.setValue(QStringLiteral("name"), QStringLiteral("Bad Item"));
-
-        s.endArray();
-        s.sync();
-    }
+    ASSERT_TRUE(WriteTomlString(path, toml));
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
@@ -388,33 +517,87 @@ TEST(RecordingPresetStore, MalformedItem_EmptyId_Skipped_ValidKept) {
 TEST(RecordingPresetStore, DuplicateIds_Repaired_OneKeepedFirst) {
     const QString path = UniqueTempPath();
 
-    {
-        QSettings s(path, QSettings::IniFormat);
-        s.setValue(QStringLiteral("schemaVersion"), kPresetSchemaVersion);
-        s.setValue(QStringLiteral("selectedId"), QStringLiteral("preset.aabbccddeeff0011"));
-        s.setValue(QStringLiteral("defaultId"), QStringLiteral("preset.aabbccddeeff0011"));
+    // Hand-write a TOML fixture with two presets sharing the same id.
+    // The minimal required sub-tables are provided; missing optional fields fall
+    // back to defaults inside PresetFromToml.
+    const QString preset_block = QStringLiteral("[[presets]]\n"
+                                                "id   = \"preset.aabbccddeeff0011\"\n"
+                                                "name = \"%1\"\n"
+                                                "countdown_seconds = 0\n"
+                                                "[presets.capture]\n"
+                                                "kind = \"display\"\n"
+                                                "display_key = \"\"\n"
+                                                "window_key  = \"\"\n"
+                                                "has_region  = false\n"
+                                                "region_x = 0\n"
+                                                "region_y = 0\n"
+                                                "region_w = 0\n"
+                                                "region_h = 0\n"
+                                                "region_display_key = \"\"\n"
+                                                "[presets.output]\n"
+                                                "folder = \"\"\n"
+                                                "naming_pattern = \"\"\n"
+                                                "container = \"mkv\"\n"
+                                                "video_codec = \"av1\"\n"
+                                                "audio_codec = \"opus\"\n"
+                                                "resolution_mode = \"native\"\n"
+                                                "custom_width = 0\n"
+                                                "custom_height = 0\n"
+                                                "fit_mode = \"contain\"\n"
+                                                "split_mode = \"off\"\n"
+                                                "split_custom_minutes = 30\n"
+                                                "[presets.video]\n"
+                                                "quality = \"balanced\"\n"
+                                                "rate_control = \"cq\"\n"
+                                                "bitrate_kbps = 20000\n"
+                                                "cfr = true\n"
+                                                "capture_cursor = true\n"
+                                                "frame_rate_num = 60\n"
+                                                "frame_rate_den = 1\n"
+                                                "[presets.audio]\n"
+                                                "target_kind = \"display\"\n"
+                                                "mic_channel_mode = \"auto\"\n"
+                                                "selected_mic_device_id = \"\"\n"
+                                                "mic_gain_linear = 1.0\n"
+                                                "has_window_pid = false\n"
+                                                "window_pid = 0\n"
+                                                "audio_bitrate_kbps = 160\n"
+                                                "opus_frame_duration = \"20ms\"\n"
+                                                "opus_complexity = 10\n"
+                                                "sources = []\n"
+                                                "[presets.webcam]\n"
+                                                "enabled = false\n"
+                                                "device_id = \"\"\n"
+                                                "width = 1280\n"
+                                                "height = 720\n"
+                                                "fps = 30\n"
+                                                "overlay_x = 0.0\n"
+                                                "overlay_y = 0.0\n"
+                                                "overlay_w = 0.25\n"
+                                                "overlay_h = 0.25\n"
+                                                "overlay_user_placed = false\n"
+                                                "aspect_ratio_locked = true\n"
+                                                "mirror = false\n"
+                                                "[presets.webcam.chroma_key]\n"
+                                                "enabled = false\n"
+                                                "color_mode = \"green\"\n"
+                                                "custom_r = 0\n"
+                                                "custom_g = 255\n"
+                                                "custom_b = 0\n"
+                                                "tolerance = 0.4\n"
+                                                "softness = 0.15\n"
+                                                "spill = 0.3\n"
+                                                "\n");
 
-        s.beginWriteArray(QStringLiteral("items"), 2);
+    const QString toml = QStringLiteral("schema_version = %1\n"
+                                        "selected_id = \"preset.aabbccddeeff0011\"\n"
+                                        "default_id  = \"preset.aabbccddeeff0011\"\n"
+                                        "\n")
+                             .arg(kPresetSchemaVersion) +
+                         preset_block.arg(QStringLiteral("First")) +
+                         preset_block.arg(QStringLiteral("Second")); // Duplicate id.
 
-        s.setArrayIndex(0);
-        s.setValue(QStringLiteral("id"), QStringLiteral("preset.aabbccddeeff0011"));
-        s.setValue(QStringLiteral("name"), QStringLiteral("First"));
-        s.setValue(QStringLiteral("capture_kind"), QStringLiteral("display"));
-        s.setValue(QStringLiteral("out_container"), QStringLiteral("mkv"));
-        s.setValue(QStringLiteral("out_video_codec"), QStringLiteral("av1"));
-        s.setValue(QStringLiteral("out_audio_codec"), QStringLiteral("opus"));
-
-        s.setArrayIndex(1);
-        s.setValue(QStringLiteral("id"), QStringLiteral("preset.aabbccddeeff0011")); // Duplicate.
-        s.setValue(QStringLiteral("name"), QStringLiteral("Second"));
-        s.setValue(QStringLiteral("capture_kind"), QStringLiteral("display"));
-        s.setValue(QStringLiteral("out_container"), QStringLiteral("mkv"));
-        s.setValue(QStringLiteral("out_video_codec"), QStringLiteral("av1"));
-        s.setValue(QStringLiteral("out_audio_codec"), QStringLiteral("opus"));
-
-        s.endArray();
-        s.sync();
-    }
+    ASSERT_TRUE(WriteTomlString(path, toml));
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();
@@ -570,19 +753,153 @@ TEST(RecordingPresetStore, EmptyPath_Save_NoCrash) {
 TEST(RecordingPresetStore, WrongSchemaVersion_ReturnsReset) {
     const QString path = UniqueTempPath();
 
-    {
-        QSettings s(path, QSettings::IniFormat);
-        s.setValue(QStringLiteral("schemaVersion"), kPresetSchemaVersion + 1);
-        s.setValue(QStringLiteral("selectedId"), QStringLiteral("preset.default"));
-        s.setValue(QStringLiteral("defaultId"), QStringLiteral("preset.default"));
+    // Write a TOML file with schema_version one higher than current — must reset.
+    const QString toml = QStringLiteral("schema_version = %1\n"
+                                        "selected_id = \"preset.default\"\n"
+                                        "default_id  = \"preset.default\"\n"
+                                        "\n"
+                                        "[[presets]]\n"
+                                        "id   = \"preset.default\"\n"
+                                        "name = \"Default\"\n"
+                                        "countdown_seconds = 0\n"
+                                        "[presets.capture]\n"
+                                        "kind = \"display\"\n"
+                                        "display_key = \"\"\n"
+                                        "window_key  = \"\"\n"
+                                        "has_region  = false\n"
+                                        "region_x = 0\n"
+                                        "region_y = 0\n"
+                                        "region_w = 0\n"
+                                        "region_h = 0\n"
+                                        "region_display_key = \"\"\n"
+                                        "[presets.output]\n"
+                                        "folder = \"\"\n"
+                                        "naming_pattern = \"\"\n"
+                                        "container = \"mkv\"\n"
+                                        "video_codec = \"av1\"\n"
+                                        "audio_codec = \"opus\"\n"
+                                        "resolution_mode = \"native\"\n"
+                                        "custom_width = 0\n"
+                                        "custom_height = 0\n"
+                                        "fit_mode = \"contain\"\n"
+                                        "split_mode = \"off\"\n"
+                                        "split_custom_minutes = 30\n"
+                                        "[presets.video]\n"
+                                        "quality = \"balanced\"\n"
+                                        "rate_control = \"cq\"\n"
+                                        "bitrate_kbps = 20000\n"
+                                        "cfr = true\n"
+                                        "capture_cursor = true\n"
+                                        "frame_rate_num = 60\n"
+                                        "frame_rate_den = 1\n"
+                                        "[presets.audio]\n"
+                                        "target_kind = \"display\"\n"
+                                        "mic_channel_mode = \"auto\"\n"
+                                        "selected_mic_device_id = \"\"\n"
+                                        "mic_gain_linear = 1.0\n"
+                                        "has_window_pid = false\n"
+                                        "window_pid = 0\n"
+                                        "audio_bitrate_kbps = 160\n"
+                                        "opus_frame_duration = \"20ms\"\n"
+                                        "opus_complexity = 10\n"
+                                        "sources = []\n"
+                                        "[presets.webcam]\n"
+                                        "enabled = false\n"
+                                        "device_id = \"\"\n"
+                                        "width = 1280\n"
+                                        "height = 720\n"
+                                        "fps = 30\n"
+                                        "overlay_x = 0.0\n"
+                                        "overlay_y = 0.0\n"
+                                        "overlay_w = 0.25\n"
+                                        "overlay_h = 0.25\n"
+                                        "overlay_user_placed = false\n"
+                                        "aspect_ratio_locked = true\n"
+                                        "mirror = false\n"
+                                        "[presets.webcam.chroma_key]\n"
+                                        "enabled = false\n"
+                                        "color_mode = \"green\"\n"
+                                        "custom_r = 0\n"
+                                        "custom_g = 255\n"
+                                        "custom_b = 0\n"
+                                        "tolerance = 0.4\n"
+                                        "softness = 0.15\n"
+                                        "spill = 0.3\n")
+                             .arg(kPresetSchemaVersion + 1); // Wrong version!
 
-        s.beginWriteArray(QStringLiteral("items"), 1);
-        s.setArrayIndex(0);
-        s.setValue(QStringLiteral("id"), QStringLiteral("preset.default"));
-        s.setValue(QStringLiteral("name"), QStringLiteral("Default"));
-        s.endArray();
-        s.sync();
+    ASSERT_TRUE(WriteTomlString(path, toml));
+
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+    EXPECT_TRUE(state.was_reset);
+
+    CleanupFile(path);
+}
+
+// ===========================================================================
+// New: TOML on-disk human-readability round-trip
+// ===========================================================================
+
+TEST(RecordingPresetStore, TomlOnDisk_IsValidTomlWithExpectedKeys) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p = MakeDefaultPreset();
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
     }
+
+    // Re-parse the file independently and verify expected keys exist.
+    ASSERT_TRUE(QFileInfo::exists(path));
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QByteArray raw = f.readAll();
+    f.close();
+
+    // Must be non-empty and contain expected TOML keys.
+    EXPECT_FALSE(raw.isEmpty());
+    const QString content = QString::fromUtf8(raw);
+    EXPECT_TRUE(content.contains(QStringLiteral("schema_version")));
+    EXPECT_TRUE(content.contains(QStringLiteral("[[presets]]")));
+    EXPECT_TRUE(content.contains(QStringLiteral("[presets.audio]")));
+    EXPECT_TRUE(content.contains(QStringLiteral("[presets.webcam]")));
+
+    CleanupFile(path);
+}
+
+// ===========================================================================
+// New: Malformed TOML → Load returns reset; no crash
+// ===========================================================================
+
+TEST(RecordingPresetStore, MalformedToml_Load_ReturnsReset_NoCrash) {
+    const QString path = UniqueTempPath();
+
+    // Syntactically broken TOML.
+    ASSERT_TRUE(WriteTomlString(path, QStringLiteral("schema_version = !!INVALID[[[TOML\x00garbage")));
+
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+    EXPECT_TRUE(state.was_reset);
+    ASSERT_EQ(state.presets.size(), 1u);
+    EXPECT_EQ(state.selected_id, std::string(kDefaultPresetId));
+
+    CleanupFile(path);
+}
+
+// ===========================================================================
+// New: Incompatible schema (old version) → Load returns reset
+// ===========================================================================
+
+TEST(RecordingPresetStore, OldSchemaVersion_Load_ReturnsReset) {
+    const QString path = UniqueTempPath();
+
+    const QString toml = QStringLiteral("schema_version = %1\n"
+                                        "selected_id = \"preset.default\"\n"
+                                        "default_id  = \"preset.default\"\n")
+                             .arg(kPresetSchemaVersion - 1);
+
+    ASSERT_TRUE(WriteTomlString(path, toml));
 
     RecordingPresetStore store(path);
     const PersistedPresetState state = store.Load();

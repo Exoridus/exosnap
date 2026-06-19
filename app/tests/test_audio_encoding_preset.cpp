@@ -7,9 +7,9 @@
 #include <gtest/gtest.h>
 
 #include <QFile>
-#include <QSettings>
 #include <QString>
 #include <QTemporaryDir>
+#include <QTextStream>
 
 #include <capability/audio_ui_state.h>
 #include <recorder_core/recorder_session.h>
@@ -139,7 +139,18 @@ TEST(AudioEncodingPreset, DirtyEquivalent_SameAudioParams_IsEquivalent) {
 static QString UniqueTempPath() {
     QTemporaryDir tmp;
     tmp.setAutoRemove(false); // we'll let the preset store write here
-    return tmp.filePath(QStringLiteral("presets_audio_enc.ini"));
+    return tmp.filePath(QStringLiteral("presets_audio_enc.toml"));
+}
+
+// Write a TOML string to a file (UTF-8).
+static bool WriteTomlString(const QString& path, const QString& toml_content) {
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text))
+        return false;
+    QTextStream ts(&f);
+    ts.setEncoding(QStringConverter::Utf8);
+    ts << toml_content;
+    return true;
 }
 
 TEST(AudioEncodingPreset, StoreRoundTrip_Bitrate) {
@@ -232,19 +243,83 @@ TEST(AudioEncodingPreset, StoreRoundTrip_AllThreeFields) {
 }
 
 TEST(AudioEncodingPreset, StoreLoad_MissingKeys_FallsBackToDefaults) {
-    // Write a minimal INI without the audio encoding keys.
+    // Write a minimal TOML fixture without the audio encoding keys.
+    // Missing keys must fall back to defaults inside PresetFromToml.
     const QString path = UniqueTempPath();
-    {
-        QSettings settings(path, QSettings::IniFormat);
-        settings.setValue(QStringLiteral("schemaVersion"), kPresetSchemaVersion);
-        settings.setValue(QStringLiteral("selectedId"), QStringLiteral("preset.default"));
-        settings.setValue(QStringLiteral("defaultId"), QStringLiteral("preset.default"));
-        settings.beginWriteArray(QStringLiteral("items"), 1);
-        settings.setArrayIndex(0);
-        settings.setValue(QStringLiteral("id"), QStringLiteral("preset.default"));
-        settings.setValue(QStringLiteral("name"), QStringLiteral("Default"));
-        settings.endArray();
-    }
+    const QString toml =
+        QStringLiteral("schema_version = %1\n"
+                       "selected_id = \"preset.default\"\n"
+                       "default_id  = \"preset.default\"\n"
+                       "\n"
+                       "[[presets]]\n"
+                       "id   = \"preset.default\"\n"
+                       "name = \"Default\"\n"
+                       "countdown_seconds = 0\n"
+                       "[presets.capture]\n"
+                       "kind = \"display\"\n"
+                       "display_key = \"\"\n"
+                       "window_key  = \"\"\n"
+                       "has_region  = false\n"
+                       "region_x = 0\n"
+                       "region_y = 0\n"
+                       "region_w = 0\n"
+                       "region_h = 0\n"
+                       "region_display_key = \"\"\n"
+                       "[presets.output]\n"
+                       "folder = \"\"\n"
+                       "naming_pattern = \"\"\n"
+                       "container = \"mkv\"\n"
+                       "video_codec = \"av1\"\n"
+                       "audio_codec = \"opus\"\n"
+                       "resolution_mode = \"native\"\n"
+                       "custom_width = 0\n"
+                       "custom_height = 0\n"
+                       "fit_mode = \"contain\"\n"
+                       "split_mode = \"off\"\n"
+                       "split_custom_minutes = 30\n"
+                       "[presets.video]\n"
+                       "quality = \"balanced\"\n"
+                       "rate_control = \"cq\"\n"
+                       "bitrate_kbps = 20000\n"
+                       "cfr = true\n"
+                       "capture_cursor = true\n"
+                       "frame_rate_num = 60\n"
+                       "frame_rate_den = 1\n"
+                       "[presets.audio]\n"
+                       "target_kind = \"display\"\n"
+                       "mic_channel_mode = \"auto\"\n"
+                       "selected_mic_device_id = \"\"\n"
+                       "mic_gain_linear = 1.0\n"
+                       "has_window_pid = false\n"
+                       "window_pid = 0\n"
+                       "# audio_bitrate_kbps, opus_frame_duration, opus_complexity intentionally omitted\n"
+                       "sources = []\n"
+                       "[presets.webcam]\n"
+                       "enabled = false\n"
+                       "device_id = \"\"\n"
+                       "width = 1280\n"
+                       "height = 720\n"
+                       "fps = 30\n"
+                       "overlay_x = 0.0\n"
+                       "overlay_y = 0.0\n"
+                       "overlay_w = 0.25\n"
+                       "overlay_h = 0.25\n"
+                       "overlay_user_placed = false\n"
+                       "aspect_ratio_locked = true\n"
+                       "mirror = false\n"
+                       "[presets.webcam.chroma_key]\n"
+                       "enabled = false\n"
+                       "color_mode = \"green\"\n"
+                       "custom_r = 0\n"
+                       "custom_g = 255\n"
+                       "custom_b = 0\n"
+                       "tolerance = 0.4\n"
+                       "softness = 0.15\n"
+                       "spill = 0.3\n")
+            .arg(kPresetSchemaVersion);
+
+    ASSERT_TRUE(WriteTomlString(path, toml));
+
     RecordingPresetStore store(path);
     const auto state = store.Load();
     ASSERT_FALSE(state.presets.empty());
