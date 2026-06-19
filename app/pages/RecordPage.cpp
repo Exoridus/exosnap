@@ -1897,6 +1897,15 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     countdown_timer_->setSingleShot(false);
     connect(countdown_timer_, &QTimer::timeout, this, &RecordPage::updateCountdown);
 
+    // SUITE-PHASE-F: wire countdown state to the in-window preview ring.
+    // Only applies when the DXGI preview is not active (QImage path — source not
+    // yet started or Ready state). The CountdownOverlayWindow handles the live-
+    // capture (DXGI active) case via MainWindow::onCountdownStateChanged.
+    connect(this, &RecordPage::countdownStateChanged, this, [this](bool active, int remaining, int duration) {
+        if (preview_surface_)
+            preview_surface_->setCountdownState(active, remaining, duration);
+    });
+
     auto* escape_shortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
     escape_shortcut->setContext(Qt::WidgetWithChildrenShortcut);
     connect(escape_shortcut, &QShortcut::activated, this, &RecordPage::cancelActiveInteraction);
@@ -5385,6 +5394,18 @@ void RecordPage::updateStatsDisplay() {
     }
 
     updateAudioMeterLevels();
+
+    // SUITE-PHASE-F: sync in-window countdown ring on every stats refresh.
+    // This covers the case where refresh() is called while the timer is active
+    // (e.g. digit change). The signal-connect above already handles start/stop.
+    if (preview_surface_) {
+        if (countdown) {
+            preview_surface_->setCountdownState(true, countdown_remaining_seconds_,
+                                                countdown_.durationSeconds() > 0 ? countdown_.durationSeconds() : 1);
+        } else {
+            preview_surface_->setCountdownState(false, 0, 0);
+        }
+    }
 }
 
 void RecordPage::updateResultDisplay() {

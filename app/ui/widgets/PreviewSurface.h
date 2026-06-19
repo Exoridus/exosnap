@@ -40,6 +40,18 @@ class PreviewSurface : public QWidget {
     void setRecording(bool recording);
     bool isRecording() const noexcept;
 
+    // SUITE-PHASE-F: in-window countdown ring drawn over the preview.
+    // Call with active=true and the current digit + total duration while the
+    // pre-record countdown is running; call with active=false (or remaining=0)
+    // to clear.  The ring is drawn directly in paintEvent, so it works both
+    // when the DXGI native child is absent (QImage path) and in the Qt overlay
+    // layer (the ring is composited above the DXGI surface via a layered window
+    // trick: we place a translucent QWidget child over the HWND).
+    // In practice the DXGI surface occludes the Qt paint; the on-screen
+    // CountdownOverlayWindow handles that case. This method drives the
+    // in-window preview-first appearance (no DXGI active = QImage preview).
+    void setCountdownState(bool active, int remaining_seconds, int duration_seconds);
+
     void setLiveFrame(QImage frame);
 
     // crop_box: optional monitor-relative physical-pixel crop for Region targets.
@@ -165,6 +177,11 @@ class PreviewSurface : public QWidget {
     QWidget* bottom_row_ = nullptr;
     bool recording_ = false;
     FrameTone frame_tone_ = FrameTone::Ready;
+
+    // In-window countdown ring state (SUITE-PHASE-F).
+    bool countdown_active_ = false;
+    int countdown_remaining_ = 0;
+    int countdown_duration_ = 0;
 
     // Full overlay texts; the labels render an elided variant fitted to the
     // current width and the rows hide entirely below a minimum width (VR-009).

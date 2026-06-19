@@ -408,19 +408,30 @@ void RegionSelectionOverlay::paintScrimAndSelection(QPainter& p, const QRect& se
 }
 
 void RegionSelectionOverlay::paintCornerHandles(QPainter& p, const QRect& sel) const {
+    // SUITE-PHASE-F: 8 handles — 4 corners (interactive, hit-tested) +
+    // 4 edge-centre (visual only; ResizeRegionFromCorner is corner-only so
+    // hit-testing stays unchanged and existing tests are unaffected).
     // Handles: 13×13 squares, radius 4, accent fill with 2 px bg-color border.
-    // Positioned so their center aligns with the corner of the rect (offset by half).
     const int hs = kHandleSize;
     const int off = hs / 2; // 6
 
-    const QPoint corners[4] = {
+    const int cx = sel.left() + sel.width() / 2;
+    const int cy = sel.top() + sel.height() / 2;
+
+    // 8 anchor points: corners first, then edge centres.
+    const QPoint anchors[8] = {
         sel.topLeft(),
         QPoint(sel.right(), sel.top()),
         QPoint(sel.left(), sel.bottom()),
         sel.bottomRight(),
+        // Edge centres
+        QPoint(cx, sel.top()),
+        QPoint(sel.right(), cy),
+        QPoint(cx, sel.bottom()),
+        QPoint(sel.left(), cy),
     };
 
-    for (const QPoint& c : corners) {
+    for (const QPoint& c : anchors) {
         const QRectF handle(c.x() - off, c.y() - off, hs, hs);
 
         // Bg-color border: draw a slightly larger rounded rect in bg color first.

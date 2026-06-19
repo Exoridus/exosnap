@@ -2768,8 +2768,8 @@ QPushButton#recordDockOpenFolder {
 }
 
 /* Capture-frame dock button — round 44×44 icon-only button.
-   Styled identically to ghost dock buttons so it blends with sys/mic/app/webcam
-   toggles. Fixed size and border-radius enforced in C++ (setFixedSize(44,44)). */
+   Hover shows accent-dim fill + accent-line border per suite-record.jsx
+   CaptureFrameStudy. Fixed size and border-radius enforced in C++. */
 QPushButton[dockAction="captureFrame"] {
     border-radius: 22px;
     padding: 0;
@@ -2778,11 +2778,12 @@ QPushButton[dockAction="captureFrame"] {
 }
 
 QPushButton[dockAction="captureFrame"]:hover {
+    background: ${accent-dim};
     border-color: ${accent-line};
 }
 
 QPushButton[dockAction="captureFrame"]:pressed {
-    background: rgba(155, 217, 210, 36);
+    background: ${accent};
     border-color: ${accent};
 }
 
