@@ -13,7 +13,7 @@ class KeyCap : public QLabel {
     explicit KeyCap(QWidget* parent = nullptr);
 
     void setKey(const QString& key);
-    QString key() const;
+    [[nodiscard]] const QString& key() const;
 
   private:
     QString key_;

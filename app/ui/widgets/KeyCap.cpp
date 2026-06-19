@@ -19,7 +19,7 @@ void KeyCap::setKey(const QString& key) {
     setText(key);
 }
 
-QString KeyCap::key() const {
+const QString& KeyCap::key() const {
     return key_;
 }
 
