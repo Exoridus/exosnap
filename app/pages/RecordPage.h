@@ -180,6 +180,11 @@ class RecordPage : public QWidget {
     // When active=false both second values are 0.
     void countdownStateChanged(bool active, int remaining_seconds, int duration_seconds);
 
+    // PHASE-G-EDIT-EXPORT-R1: emitted when the user wants to edit/export a recording.
+    void editExportRequested(const QString& file_path, const QString& duration, const QString& size,
+                             const QString& resolution, const QString& fps, const QString& video_codec,
+                             const QString& audio_codec, const QString& container);
+
   public slots:
     void onHotkeyToggle();
     void onHotkeyPauseToggle();

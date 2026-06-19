@@ -6,6 +6,7 @@
 #include "notifications/NotificationManager.h"
 #include "pages/ConfigPage.h"
 #include "pages/DiagnosticsPage.h"
+#include "pages/EditExportPage.h"
 #include "pages/HotkeysPage.h"
 #include "pages/LogsPage.h"
 #include "pages/OutputPage.h"
@@ -503,6 +504,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     stack_->addWidget(webcam_page_);
     output_page_ = new OutputPage(output_settings_, stack_);
     stack_->addWidget(output_page_);
+    edit_export_page_ = new EditExportPage(stack_);
+    stack_->addWidget(edit_export_page_);
+    connect(edit_export_page_, &EditExportPage::backRequested, this, [this]() { navigateToPage(kRecordPageIndex); });
     // Inject the recovery manifest store before the coordinator is initialized.
     record_page_->setRecoveryManifestStore(&recovery_manifest_store_);
     record_page_->setOutputSettings(output_settings_);
@@ -633,6 +637,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { navigateToPage(kOutputPageIndex); });
     connect(record_page_, &RecordPage::navigateToDiagnosticsPage, this,
             [this]() { navigateToPage(kDiagnosticsPageIndex); });
+    connect(record_page_, &RecordPage::editExportRequested, this, &MainWindow::navigateToEditExportPage);
     // ---- Format settings changed (from ConfigPage) ----
     connect(config_page_, &ConfigPage::formatSettingsChanged, this, [this](const OutputSettingsModel& settings) {
         if (applying_preset_)
@@ -2548,6 +2553,9 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
         if (about_overlay_)
             about_overlay_->openOverlay();
         break;
+    case visual::VisualPage::EditExport:
+        applyVisualEditExportScenario(scenario);
+        break;
     }
 
     if (scenario.source_picker_tab != visual::VisualSourcePickerTab::None)
@@ -3316,5 +3324,42 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
         notification_manager_->Enqueue(std::move(event));
     }
 }
+
+void MainWindow::navigateToEditExportPage(const QString& file_path, const QString& duration, const QString& size,
+                                          const QString& resolution, const QString& fps, const QString& video_codec,
+                                          const QString& audio_codec, const QString& container) {
+    if (!edit_export_page_)
+        return;
+    edit_export_page_->setRecordingInfo(file_path, duration, size, resolution, fps, video_codec, audio_codec,
+                                        container);
+    edit_export_page_->setPhase(EditExportPage::Phase::Review);
+    title_bar_->setActivePage(kRecordPageIndex);
+    stack_->setCurrentWidget(edit_export_page_);
+}
+
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& scenario) {
+    if (!edit_export_page_)
+        return;
+    edit_export_page_->setRecordingInfo(scenario.edit_export_file_path, scenario.edit_export_duration,
+                                        scenario.edit_export_size, scenario.edit_export_resolution,
+                                        scenario.edit_export_fps, scenario.edit_export_video_codec,
+                                        scenario.edit_export_audio_codec, scenario.edit_export_container);
+    EditExportPage::Phase phase = EditExportPage::Phase::Review;
+    if (scenario.edit_export_phase == QStringLiteral("edit"))
+        phase = EditExportPage::Phase::Edit;
+    else if (scenario.edit_export_phase == QStringLiteral("output"))
+        phase = EditExportPage::Phase::Output;
+    else if (scenario.edit_export_phase == QStringLiteral("exporting"))
+        phase = EditExportPage::Phase::Exporting;
+    else if (scenario.edit_export_phase == QStringLiteral("done"))
+        phase = EditExportPage::Phase::Done;
+    else if (scenario.edit_export_phase == QStringLiteral("failed"))
+        phase = EditExportPage::Phase::Failed;
+    edit_export_page_->setPhase(phase);
+    stack_->setCurrentWidget(edit_export_page_);
+    title_bar_->setActivePage(kRecordPageIndex);
+}
+#endif
 
 } // namespace exosnap

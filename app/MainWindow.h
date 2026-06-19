@@ -66,6 +66,7 @@ class RecordingOverlayWindow;
 
 class ConfigPage;
 class DiagnosticsPage;
+class EditExportPage;
 class HotkeysPage;
 class LogsPage;
 class OutputPage;
@@ -132,6 +133,9 @@ class MainWindow : public QMainWindow {
     void refreshPresetUi();
     void initHotkeyService();
     void refreshDiagnosticsData();
+    void navigateToEditExportPage(const QString& file_path, const QString& duration, const QString& size,
+                                  const QString& resolution, const QString& fps, const QString& video_codec,
+                                  const QString& audio_codec, const QString& container);
 
     // ---- Preset system (Stage 2) ----
 
@@ -217,6 +221,7 @@ class MainWindow : public QMainWindow {
     // Guarded; non-persistent: no writes to AppSettingsStore or RecordingPresetStore.
     void applyVisualDeviceDiscoveryScenario(const visual::VisualScenario& scenario);
     void applyVisualHotkeysScenario(const visual::VisualScenario& scenario);
+    void applyVisualEditExportScenario(const visual::VisualScenario& scenario);
 #endif
 
     ui::chrome::OperationalTitleBar* title_bar_ = nullptr;
@@ -250,6 +255,7 @@ class MainWindow : public QMainWindow {
     LogsPage* logs_page_ = nullptr;
     WebcamPage* webcam_page_ = nullptr;
     HotkeysPage* hotkeys_page_ = nullptr;
+    EditExportPage* edit_export_page_ = nullptr;
 
     // Device notifiers (owned; started after capability probe; stopped first in ~MainWindow).
     AudioDeviceNotifier audio_notifier_;

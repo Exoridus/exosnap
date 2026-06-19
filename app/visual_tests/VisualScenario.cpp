@@ -1714,6 +1714,45 @@ const QVector<VisualScenario> kPolishR1Scenarios = {
      .focused_object = QStringLiteral("recordDockStop")},
 };
 
+const QVector<VisualScenario> kEditExportScenarios = {
+    {.id = QStringLiteral("edit-review"),
+     .title = QStringLiteral("Edit Export / Review"),
+     .page = VisualPage::EditExport,
+     .edit_export_phase = QStringLiteral("review"),
+     .edit_export_file_path = QStringLiteral("C:\\Users\\User\\Videos\\ExoSnap\\2026-06-19_Sprint-demo.mkv"),
+     .edit_export_duration = QStringLiteral("00:04:18"),
+     .edit_export_size = QStringLiteral("612 MB"),
+     .edit_export_resolution = QStringLiteral("2560 \xd7 1440"),
+     .edit_export_fps = QStringLiteral("60 fps CFR"),
+     .edit_export_video_codec = QStringLiteral("AV1"),
+     .edit_export_audio_codec = QStringLiteral("Opus"),
+     .edit_export_container = QStringLiteral("MKV")},
+    {.id = QStringLiteral("edit-output"),
+     .title = QStringLiteral("Edit Export / Output"),
+     .page = VisualPage::EditExport,
+     .edit_export_phase = QStringLiteral("output"),
+     .edit_export_file_path = QStringLiteral("C:\\Users\\User\\Videos\\ExoSnap\\2026-06-19_Sprint-demo.mkv"),
+     .edit_export_duration = QStringLiteral("00:04:18"),
+     .edit_export_size = QStringLiteral("612 MB"),
+     .edit_export_resolution = QStringLiteral("2560 \xd7 1440"),
+     .edit_export_fps = QStringLiteral("60 fps CFR"),
+     .edit_export_video_codec = QStringLiteral("AV1"),
+     .edit_export_audio_codec = QStringLiteral("Opus"),
+     .edit_export_container = QStringLiteral("MKV")},
+    {.id = QStringLiteral("edit-done"),
+     .title = QStringLiteral("Edit Export / Done"),
+     .page = VisualPage::EditExport,
+     .edit_export_phase = QStringLiteral("done"),
+     .edit_export_file_path = QStringLiteral("C:\\Users\\User\\Videos\\ExoSnap\\2026-06-19_Sprint-demo.mkv"),
+     .edit_export_duration = QStringLiteral("00:04:18"),
+     .edit_export_size = QStringLiteral("612 MB"),
+     .edit_export_resolution = QStringLiteral("2560 \xd7 1440"),
+     .edit_export_fps = QStringLiteral("60 fps CFR"),
+     .edit_export_video_codec = QStringLiteral("AV1"),
+     .edit_export_audio_codec = QStringLiteral("Opus"),
+     .edit_export_container = QStringLiteral("MKV")},
+};
+
 const QVector<VisualScenario>& VisualScenarioRegistry() {
     static QVector<VisualScenario> merged;
     if (merged.isEmpty()) {
@@ -1724,6 +1763,7 @@ const QVector<VisualScenario>& VisualScenarioRegistry() {
         merged.append(kMarkerScenarios);
         merged.append(kSplitRecordingScenarios);
         merged.append(kPolishR1Scenarios);
+        merged.append(kEditExportScenarios);
     }
     return merged;
 }
@@ -1843,6 +1883,8 @@ QString ToString(VisualPage page) {
         return QStringLiteral("logs");
     case VisualPage::About:
         return QStringLiteral("about");
+    case VisualPage::EditExport:
+        return QStringLiteral("edit-export");
     }
     return QStringLiteral("unknown");
 }

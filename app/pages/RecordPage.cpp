@@ -1395,8 +1395,12 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     result_open_folder_btn_->setProperty("role", "ghost");
     result_record_again_btn_ = new QPushButton("Record Again", result_actions_row);
     result_record_again_btn_->setProperty("role", "ghost");
+    auto* result_edit_export_btn_ = new QPushButton("Edit & export", result_actions_row);
+    result_edit_export_btn_->setProperty("role", "ghost");
+    result_edit_export_btn_->setObjectName(QStringLiteral("resultEditExportBtn"));
     result_actions_layout->addWidget(result_open_folder_btn_);
     result_actions_layout->addWidget(result_record_again_btn_);
+    result_actions_layout->addWidget(result_edit_export_btn_);
     result_actions_layout->addStretch(1);
     result_technical_separator_ = new QFrame(result_panel_);
     result_technical_separator_->setFrameShape(QFrame::NoFrame);
@@ -1652,6 +1656,63 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
             refresh();
             onStart();
         }
+    });
+    connect(result_edit_export_btn_, &QPushButton::clicked, this, [this]() {
+        const QString path = QString::fromStdWString(view_model_.result_output_path);
+        const double dur_sec = view_model_.result_elapsed_seconds;
+        const int h = static_cast<int>(dur_sec) / 3600;
+        const int m = (static_cast<int>(dur_sec) % 3600) / 60;
+        const int s = static_cast<int>(dur_sec) % 60;
+        const QString duration = QStringLiteral("%1:%2:%3")
+                                     .arg(h, 2, 10, QLatin1Char('0'))
+                                     .arg(m, 2, 10, QLatin1Char('0'))
+                                     .arg(s, 2, 10, QLatin1Char('0'));
+        const uint64_t bytes = view_model_.result_output_file_bytes;
+        QString size;
+        if (bytes >= 1024ULL * 1024ULL * 1024ULL)
+            size = QStringLiteral("%1 GB").arg(bytes / (1024.0 * 1024.0 * 1024.0), 0, 'f', 1);
+        else
+            size = QStringLiteral("%1 MB").arg(bytes / (1024.0 * 1024.0), 0, 'f', 0);
+        const QString resolution =
+            QStringLiteral("%1 \xd7 %2").arg(view_model_.result_output_width).arg(view_model_.result_output_height);
+        const uint32_t fps_num = view_model_.result_frame_rate_num;
+        const uint32_t fps_den = view_model_.result_frame_rate_den;
+        const QString fps = QStringLiteral("%1 fps%2")
+                                .arg(fps_den > 0 ? fps_num / fps_den : fps_num)
+                                .arg(view_model_.result_cfr ? QStringLiteral(" CFR") : QStringLiteral(" VFR"));
+        // Container/codec labels
+        const auto containerStr = [](recorder_core::Container c) -> QString {
+            switch (c) {
+            case recorder_core::Container::WebM:
+                return QStringLiteral("WebM");
+            case recorder_core::Container::Matroska:
+                return QStringLiteral("MKV");
+            case recorder_core::Container::Mp4:
+                return QStringLiteral("MP4");
+            default:
+                return QStringLiteral("MKV");
+            }
+        };
+        const auto videoStr = [](recorder_core::VideoCodec vc) -> QString {
+            switch (vc) {
+            case recorder_core::VideoCodec::Av1Nvenc:
+                return QStringLiteral("AV1");
+            case recorder_core::VideoCodec::H264Nvenc:
+                return QStringLiteral("H.264");
+            }
+            return QStringLiteral("AV1");
+        };
+        const auto audioStr = [](recorder_core::AudioCodec ac) -> QString {
+            switch (ac) {
+            case recorder_core::AudioCodec::Opus:
+                return QStringLiteral("Opus");
+            case recorder_core::AudioCodec::AacMf:
+                return QStringLiteral("AAC");
+            }
+            return QStringLiteral("Opus");
+        };
+        emit editExportRequested(path, duration, size, resolution, fps, videoStr(view_model_.result_video_codec),
+                                 audioStr(view_model_.result_audio_codec), containerStr(view_model_.result_container));
     });
 
     connect(hero_action_btn_, &QPushButton::clicked, this, [this]() {
