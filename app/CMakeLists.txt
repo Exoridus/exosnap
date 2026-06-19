@@ -134,6 +134,8 @@ qt_add_executable(exosnap WIN32
     ui/widgets/ExoToggle.cpp
     ui/widgets/ExoCheckBox.h
     ui/widgets/ExoCheckBox.cpp
+    ui/widgets/InfoHintIcon.h
+    ui/widgets/InfoHintIcon.cpp
     ui/widgets/SettingsCardExpander.h
     ui/widgets/SettingsCardExpander.cpp
     ui/widgets/ComboBoxWheelFilter.h
@@ -380,6 +382,7 @@ exosnap_add_app_test_support(exosnap_pages_test_support
     ui/widgets/ComboBoxWheelFilter.cpp
     ui/widgets/CameraPreview.cpp
     ui/widgets/ExoToggle.cpp
+    ui/widgets/InfoHintIcon.cpp
     ui/widgets/SettingsCardExpander.cpp
     ui/widgets/VUMeterWidget.cpp
     ui/widgets/WebcamSetupPanel.cpp
@@ -671,6 +674,31 @@ exosnap_add_gtest(
 target_include_directories(config_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(config_page_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(config_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
+
+# SETTINGS-TIERS-R2 Phase 2: InfoHintIcon widget unit tests.
+exosnap_add_gtest(
+    NAME info_hint_icon_tests
+    TEST_PREFIX hint.
+    SOURCES
+        tests/test_info_hint_icon.cpp
+        ui/widgets/InfoHintIcon.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(info_hint_icon_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(info_hint_icon_tests PROPERTIES AUTOMOC ON)
+
+# SETTINGS-TIERS-R2 Phase 2: ConfigPage InfoHint integration tests.
+exosnap_add_gtest(
+    NAME info_hints_config_tests
+    TEST_PREFIX hint.
+    SOURCES
+        tests/test_info_hints_config.cpp
+    LIBRARIES exosnap_pages_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(info_hints_config_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(info_hints_config_tests PROPERTIES AUTOMOC ON)
+target_link_libraries(info_hints_config_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
 
 # SETTINGS-TIERS-R1: Expert mode toggle, per-card expander, and persistence tests.
 exosnap_add_gtest(

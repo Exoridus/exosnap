@@ -32,10 +32,12 @@
 #include "../models/FilenameBuilder.h"
 #include "../models/OutputPathPolicy.h"
 #include "../models/RecordingPreset.h"
+#include "../models/SettingsHintText.h"
 #include "../services/WebcamService.h"
 #include "../ui/dialogs/UpdateSettingsPanel.h"
 #include "../ui/widgets/ComboBoxWheelFilter.h"
 #include "../ui/widgets/ExoToggle.h"
+#include "../ui/widgets/InfoHintIcon.h"
 #include "../ui/widgets/SettingsCardExpander.h"
 #include "../ui/widgets/VUMeterWidget.h"
 #include "../ui/widgets/WebcamSetupPanel.h"
@@ -86,6 +88,23 @@ QLabel* makeHint(const QString& text, QWidget* parent) {
     l->setProperty("labelRole", "muted");
     l->setWordWrap(true);
     return l;
+}
+
+// Build a QWidget containing a fieldLabel + an InfoHintIcon side-by-side.
+// Use this wherever a plain makeFieldLabel would be placed; the result is
+// reparented to parent and can be inserted into any layout.
+QWidget* makeFieldLabelWithHint(const QString& text, const QString& hint_text, QWidget* parent) {
+    auto* row = new QWidget(parent);
+    auto* hl = new QHBoxLayout(row);
+    hl->setContentsMargins(0, 0, 0, 0);
+    hl->setSpacing(4);
+    auto* label = new QLabel(text.toUpper(), row);
+    label->setProperty("labelRole", "fieldLabel");
+    auto* hint = new ui::widgets::InfoHintIcon(hint_text, row);
+    hl->addWidget(label);
+    hl->addWidget(hint, 0, Qt::AlignVCenter);
+    hl->addStretch();
+    return row;
 }
 
 QString VideoCodecLabel(capability::VideoCodec codec) {
@@ -395,7 +414,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     format_display_label_->setProperty("labelRole", "muted");
     fmt_layout->addWidget(format_display_label_);
 
-    fmt_layout->addWidget(makeFieldLabel(QStringLiteral("Container"), fmt_panel));
+    fmt_layout->addWidget(makeFieldLabelWithHint(QStringLiteral("Container"), ui::hints::kContainer, fmt_panel));
     container_group_ = new QButtonGroup(this);
     container_group_->setExclusive(true);
     auto* container_segmented = new QWidget(fmt_panel);
@@ -434,14 +453,14 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* vcol = new QVBoxLayout();
     vcol->setSpacing(6);
     video_codec_combo_ = new QComboBox(fmt_panel);
-    vcol->addWidget(makeFieldLabel(QStringLiteral("Video codec"), fmt_panel));
+    vcol->addWidget(makeFieldLabelWithHint(QStringLiteral("Video codec"), ui::hints::kVideoCodecAv1, fmt_panel));
     vcol->addWidget(video_codec_combo_);
     codec_row->addLayout(vcol, 1);
 
     auto* acol = new QVBoxLayout();
     acol->setSpacing(6);
     audio_codec_combo_ = new QComboBox(fmt_panel);
-    acol->addWidget(makeFieldLabel(QStringLiteral("Audio codec"), fmt_panel));
+    acol->addWidget(makeFieldLabelWithHint(QStringLiteral("Audio codec"), ui::hints::kAudioCodecOpus, fmt_panel));
     acol->addWidget(audio_codec_combo_);
     codec_row->addLayout(acol, 1);
 
@@ -449,7 +468,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     // Quality — compact 3-segment control. The hidden videoQualityCombo stays the single
     // place that emits the model change, so the existing summary flow and test seam are kept.
-    fmt_layout->addWidget(makeFieldLabel(QStringLiteral("Quality"), fmt_panel));
+    fmt_layout->addWidget(makeFieldLabelWithHint(QStringLiteral("Quality"), ui::hints::kQualityPreset, fmt_panel));
     quality_combo_ = new QComboBox(fmt_panel);
     quality_combo_->setObjectName(QStringLiteral("videoQualityCombo"));
     quality_combo_->addItem(QStringLiteral("High Quality"), static_cast<int>(recorder_core::NvencQualityPreset::High));
@@ -509,7 +528,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     rate_row->setSpacing(14);
     auto* rate_col = new QVBoxLayout();
     rate_col->setSpacing(6);
-    rate_col->addWidget(makeFieldLabel(QStringLiteral("Frame rate"), fmt_panel));
+    rate_col->addWidget(makeFieldLabelWithHint(QStringLiteral("Frame rate"), ui::hints::kFrameRate, fmt_panel));
     frame_rate_combo_ = new QComboBox(fmt_panel);
     frame_rate_combo_->setObjectName(QStringLiteral("frameRateCombo"));
     frame_rate_combo_->setAccessibleName(QStringLiteral("Frame rate"));
@@ -556,10 +575,19 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     rate_row->addLayout(timing_col, 1);
     fmt_layout->addLayout(rate_row);
 
-    cursor_check_ = new QCheckBox(QStringLiteral("Capture cursor"), fmt_panel);
-    cursor_check_->setObjectName(QStringLiteral("captureCursorCheck"));
-    cursor_check_->setChecked(video_settings_.capture_cursor);
-    fmt_layout->addWidget(cursor_check_);
+    {
+        auto* cursor_row = new QWidget(fmt_panel);
+        auto* cursor_hl = new QHBoxLayout(cursor_row);
+        cursor_hl->setContentsMargins(0, 0, 0, 0);
+        cursor_hl->setSpacing(4);
+        cursor_check_ = new QCheckBox(QStringLiteral("Capture cursor"), cursor_row);
+        cursor_check_->setObjectName(QStringLiteral("captureCursorCheck"));
+        cursor_check_->setChecked(video_settings_.capture_cursor);
+        cursor_hl->addWidget(cursor_check_);
+        cursor_hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kCaptureCursor, cursor_row), 0, Qt::AlignVCenter);
+        cursor_hl->addStretch();
+        fmt_layout->addWidget(cursor_row);
+    }
 
     fmt_layout->addWidget(
         makeHint(QStringLiteral("VFR is available for MKV/WebM. MP4 uses CFR for editor compatibility."), fmt_panel));
@@ -576,6 +604,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     // Helper: build a source row directly into a given layout+parent.
     // DF-12: separate_check is now an ExoToggle pill (was QCheckBox "Separate track").
+    // SETTINGS-TIERS-R2: InfoHintIcon added after enabled check and after separate_check.
     auto makeSourceRowInto = [&](QVBoxLayout* target_layout, QWidget* target_parent, const QString& title,
                                  QCheckBox*& enabled_check, ui::widgets::ExoToggle*& separate_check,
                                  QLabel*& source_label, ui::widgets::VUMeterWidget*& meter_out, QLabel*& db_label_out) {
@@ -583,7 +612,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         row->setSpacing(8);
 
         enabled_check = new QCheckBox(title, target_parent);
-
         db_label_out = new QLabel(QStringLiteral("–"), target_parent);
         db_label_out->setProperty("labelRole", "muted");
         db_label_out->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -591,14 +619,19 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
         // DF-12: pill toggle + label pair replaces the "Separate track" QCheckBox.
         separate_check = new ui::widgets::ExoToggle(target_parent);
-        auto* separate_label = new QLabel(QStringLiteral("Separate track"), target_parent);
+        QLabel* separate_label = new QLabel(QStringLiteral("Separate track"), target_parent);
         separate_label->setProperty("labelRole", "muted");
 
         row->addWidget(enabled_check);
+        // InfoHint for the source enable toggle (next to the checkbox).
+        row->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kAudioSourceEnable, target_parent), 0,
+                       Qt::AlignVCenter);
         row->addStretch();
         row->addWidget(db_label_out);
         row->addWidget(separate_label);
         row->addWidget(separate_check);
+        // InfoHint for the "Separate track" toggle.
+        row->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kSeparateTrack, target_parent), 0, Qt::AlignVCenter);
         target_layout->addLayout(row);
 
         meter_out = new ui::widgets::VUMeterWidget(target_parent);
@@ -715,7 +748,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     out_panel_layout->setSpacing(12);
     out_panel_layout->addWidget(makeCardTitle(QStringLiteral("Output"), out_panel));
 
-    out_panel_layout->addWidget(makeFieldLabel(QStringLiteral("Output resolution"), out_panel));
+    out_panel_layout->addWidget(
+        makeFieldLabelWithHint(QStringLiteral("Output resolution"), ui::hints::kOutputResolution, out_panel));
     auto* out_res_segmented = new QWidget(out_panel);
     out_res_segmented->setObjectName(QStringLiteral("outputResSegmented"));
     auto* out_res_layout = new QHBoxLayout(out_res_segmented);
@@ -801,8 +835,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_split_expander_->setObjectName(QStringLiteral("outputSplitExpander"));
     auto* split_expander_content_layout = qobject_cast<QVBoxLayout*>(output_split_expander_->contentWidget()->layout());
 
-    split_expander_content_layout->addWidget(
-        makeFieldLabel(QStringLiteral("Split recording"), output_split_expander_->contentWidget()));
+    split_expander_content_layout->addWidget(makeFieldLabelWithHint(
+        QStringLiteral("Split recording"), ui::hints::kSplitRecording, output_split_expander_->contentWidget()));
     auto* split_row = new QHBoxLayout();
     split_row->setContentsMargins(0, 0, 0, 0);
     split_row->setSpacing(8);
@@ -888,7 +922,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_fields_layout->setContentsMargins(0, 0, 0, 0);
     output_fields_layout->setSpacing(8);
 
-    output_fields_layout->addWidget(makeFieldLabel(QStringLiteral("Destination folder"), output_fields));
+    output_fields_layout->addWidget(
+        makeFieldLabelWithHint(QStringLiteral("Destination folder"), ui::hints::kOutputFolder, output_fields));
     auto* dest_row = new QHBoxLayout();
     dest_row->setSpacing(8);
     destination_edit_ = new QLineEdit(output_fields);
@@ -904,7 +939,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     folder_validation_label_->setVisible(false);
     output_fields_layout->addWidget(folder_validation_label_);
 
-    output_fields_layout->addWidget(makeFieldLabel(QStringLiteral("Filename pattern"), output_fields));
+    output_fields_layout->addWidget(
+        makeFieldLabelWithHint(QStringLiteral("Filename pattern"), ui::hints::kFilenamePattern, output_fields));
     naming_edit_ = new QLineEdit(output_fields);
     naming_edit_->setObjectName(QStringLiteral("namingEdit"));
     naming_edit_->setPlaceholderText(QStringLiteral("{datetime}_{app}_{title}"));
