@@ -410,7 +410,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     }
     if (!windowIcon().isNull() && windowIcon().availableSizes().isEmpty())
         qWarning().noquote() << "MainWindow icon is set but reports no available sizes.";
-    setMinimumSize(1120, 700);
+    // D6 wave-2 responsive: lowered from 1120 so a single Settings card column
+    // is fully visible at the minimum width.  RecordPage preview scales down
+    // gracefully to ~200 px; rail column is fixed at 320 px.
+    setMinimumSize(860, 700);
 
     // ---- Load reduced AppSettingsStore (hotkeys + window geometry only) ----
     persisted_settings_ = settings_store_.Load();

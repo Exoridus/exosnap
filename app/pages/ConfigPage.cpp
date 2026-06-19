@@ -64,6 +64,82 @@ using M = ui::theme::ExoSnapMetrics;
 // the full two-column desktop rhythm at typical window sizes.
 constexpr int kMaxContentWidth = 1440;
 
+// ---- Responsive layout threshold (D6 wave-2) ----
+// Single-column layout kicks in below this width so both columns always have
+// enough space when the two-column view is shown.  Must be larger than
+// kMinWindowWidth so the app cannot be resized into a broken two-column state.
+// 2×360 card min-width + 18 gap + two 24px outer margins ≈ 810; we use 1280 as
+// a comfortable threshold that gives each card ~600px at the breakpoint.
+constexpr int kColumnBreakThreshold = 1280;
+
+// ---- Chip flow widget (D6 wave-2 responsive) ----
+// A simple flow-wrap container: children are arranged left-to-right and wrapped
+// to the next row when they would overflow the available width.  This replaces
+// the fixed "4 chips per row" QHBoxLayout in the filename-token help section.
+class ChipFlowWidget : public QWidget {
+  public:
+    explicit ChipFlowWidget(QWidget* parent = nullptr) : QWidget(parent) {
+        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    }
+
+    void addChip(QWidget* chip) {
+        chip->setParent(this);
+        chips_.append(chip);
+        updateGeometry();
+    }
+
+    QSize sizeHint() const override {
+        return doLayout(rect(), /*apply=*/false);
+    }
+    QSize minimumSizeHint() const override {
+        // Minimum: as narrow as the widest single chip.
+        int max_w = 0;
+        for (auto* c : chips_)
+            max_w = qMax(max_w, c->sizeHint().width());
+        int total_h = 0;
+        for (auto* c : chips_)
+            total_h += c->sizeHint().height();
+        const int row_gap = 6;
+        if (!chips_.isEmpty())
+            total_h += row_gap * (chips_.size() - 1);
+        return {max_w, total_h};
+    }
+
+  protected:
+    void resizeEvent(QResizeEvent* event) override {
+        QWidget::resizeEvent(event);
+        doLayout(rect(), /*apply=*/true);
+    }
+
+  private:
+    // Lays out chips in rows.  If apply==false, only measures and returns the
+    // needed size without moving widgets.
+    QSize doLayout(const QRect& area, bool apply) const {
+        const int h_gap = 6;
+        const int v_gap = 6;
+        int x = area.x();
+        int y = area.y();
+        int row_h = 0;
+
+        for (auto* chip : chips_) {
+            const QSize sh = chip->sizeHint();
+            if (x + sh.width() > area.right() + 1 && x != area.x()) {
+                // Wrap to next row.
+                x = area.x();
+                y += row_h + v_gap;
+                row_h = 0;
+            }
+            if (apply)
+                chip->setGeometry(QRect(QPoint(x, y), sh));
+            x += sh.width() + h_gap;
+            row_h = qMax(row_h, sh.height());
+        }
+        return {area.width(), y + row_h - area.y()};
+    }
+
+    QVector<QWidget*> chips_;
+};
+
 QFrame* makePanel(QWidget* parent) {
     auto* panel = new QFrame(parent);
     panel->setProperty("panelRole", "panel");
@@ -1267,24 +1343,19 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     // Compact chips of the most common real tokens; the full reference stays behind the toggle.
     // Only tokens the FilenameBuilder actually resolves are shown (e.g. {target}/{profile}).
+    // D6 wave-2: replaced fixed "4 per row" QHBoxLayouts with a ChipFlowWidget so chips
+    // wrap naturally at any available width without overflow or clipping.
     const QStringList token_chips = {QStringLiteral("{datetime}"), QStringLiteral("{date}"),
                                      QStringLiteral("{time}"),     QStringLiteral("{app}"),
                                      QStringLiteral("{title}"),    QStringLiteral("{target}"),
                                      QStringLiteral("{profile}"),  QStringLiteral("{container}")};
-    QHBoxLayout* chip_row = nullptr;
-    for (int i = 0; i < token_chips.size(); ++i) {
-        if (i % 4 == 0) {
-            chip_row = new QHBoxLayout();
-            chip_row->setContentsMargins(0, 0, 0, 0);
-            chip_row->setSpacing(6);
-            output_help_layout->addLayout(chip_row);
-        }
-        auto* chip = new QLabel(token_chips.at(i), output_help);
+    auto* chip_flow = new ChipFlowWidget(output_help);
+    for (const QString& token : token_chips) {
+        auto* chip = new QLabel(token, chip_flow);
         chip->setProperty("labelRole", "tokenChip");
-        chip_row->addWidget(chip, 0, Qt::AlignLeft);
+        chip_flow->addChip(chip);
     }
-    if (chip_row)
-        chip_row->addStretch();
+    output_help_layout->addWidget(chip_flow);
 
     token_help_toggle_btn_ = new QPushButton(QStringLiteral("Show token reference"), output_help);
     token_help_toggle_btn_->setObjectName(QStringLiteral("tokenHelpToggle"));
@@ -1715,9 +1786,11 @@ bool ConfigPage::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void ConfigPage::updateResponsiveLayout() {
-    // Wave 2 Part C: raised threshold from 880 → 1100 so single-column kicks in
-    // well before any card content overflows horizontally.
-    const bool narrow = width() < 1100;
+    // D6 wave-2 responsive: raised threshold to kColumnBreakThreshold (1280) so
+    // two-column view only activates when there is comfortably enough room for
+    // both cards without overflow.  At the new minimum window width (860) and at
+    // the old minimum (1120) the layout is always single-column.
+    const bool narrow = width() < kColumnBreakThreshold;
     const QBoxLayout::Direction desired = narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight;
 
     if (columns_layout_ && columns_layout_->direction() != desired)
