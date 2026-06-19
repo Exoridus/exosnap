@@ -2,6 +2,12 @@ name: Release Candidate
 
 on:
   workflow_dispatch:
+  # Run automatically on version tags (e.g. v0.5.0) and release/** branches so
+  # a missing-DLL or packaging regression is caught before the release ships.
+  # Do NOT add pull_request here — the full VS Release build is too slow for PR CI.
+  push:
+    tags: ['v*']
+    branches: ['release/**']
 
 # This workflow produces the canonical release artifacts (portable ZIP + MSI)
 # from a single Release build and install tree. It does NOT create a git tag,
@@ -93,7 +99,7 @@ jobs:
           cmake @cfgArgs
 
       - name: Build canonical release artifacts
-        run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1 -SkipConfigure -SkipSmoke
+        run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1 -SkipConfigure
         shell: pwsh
 
       # Archive the Release PDBs for offline symbolication of crash minidumps

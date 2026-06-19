@@ -570,11 +570,83 @@ $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ManifestPath -En
 
 # ---------------------------------------------------------------------------
 # 8. Extracted-ZIP smoke (isolated environment; cannot touch real user data)
+#
+# Missing-DLL robustness: by default Windows shows a modal "System Error" /
+# "Systemfehler" dialog when a required DLL cannot be found, and the loader
+# hangs waiting for the user to dismiss it.  The smoke would then see a live
+# process at timeout and report 'launched' — a false positive.
+#
+# Fix (two layers):
+#   Layer 1 — SetErrorMode: before launching the child, we suppress the
+#     Windows hard-error UI with SetErrorMode(SEM_FAILCRITICALERRORS |
+#     SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX).  Child processes
+#     inherit the error mode, so the loader converts a missing-DLL condition
+#     into an immediate non-zero exit instead of a dialog.  The parent's
+#     prior error mode is restored after launch.
+#   Layer 2 — dialog sentinel: during the poll loop we enumerate top-level
+#     windows on the smoke process and treat any window whose title matches
+#     the Windows hard-error / application-error dialog pattern as a failure
+#     (catches any residual dialog from a runtime that resets its own error
+#     mode before the loader dialog fires).
 # ---------------------------------------------------------------------------
 $smokeResult = 'skipped'
 $smokeNotes = @()
 if (-not $SkipSmoke) {
     Write-Step "Running extracted-ZIP smoke (isolated)"
+
+    # Load Win32 helpers needed for the two robustness layers.
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Collections.Generic;
+using System.Text;
+
+public static class SmokeNative {
+    // Error-mode flags
+    public const uint SEM_FAILCRITICALERRORS  = 0x0001;
+    public const uint SEM_NOGPFAULTERRORBOX   = 0x0002;
+    public const uint SEM_NOOPENFILEERRORBOX  = 0x8000;
+
+    [DllImport("kernel32.dll")]
+    public static extern uint SetErrorMode(uint uMode);
+
+    // Window enumeration for dialog sentinel
+    public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint lpdwProcessId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowText(IntPtr hwnd, StringBuilder lpString, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindowVisible(IntPtr hwnd);
+
+    /// <summary>
+    /// Returns all visible top-level window titles belonging to the given PID.
+    /// </summary>
+    public static List<string> GetVisibleWindowTitles(int pid) {
+        var titles = new List<string>();
+        EnumWindows((hwnd, _) => {
+            uint wpid;
+            GetWindowThreadProcessId(hwnd, out wpid);
+            if ((int)wpid == pid && IsWindowVisible(hwnd)) {
+                var sb = new StringBuilder(512);
+                GetWindowText(hwnd, sb, sb.Capacity);
+                var t = sb.ToString();
+                if (t.Length > 0) titles.Add(t);
+            }
+            return true;
+        }, IntPtr.Zero);
+        return titles;
+    }
+}
+'@ -Language CSharp -ErrorAction Stop
+
     Remove-SafeDir $SmokeDir
     $extractRoot = Join-Path $SmokeDir 'extracted'
     $isoConfig = Join-Path $SmokeDir 'config'
@@ -607,11 +679,53 @@ if (-not $SkipSmoke) {
         $psi.EnvironmentVariables['TEMP'] = $isoTemp
         $psi.EnvironmentVariables['TMP'] = $isoTemp
 
-        $proc = [System.Diagnostics.Process]::Start($psi)
-        $deadline = (Get-Date).AddSeconds(8)
-        while (-not $proc.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+        # Layer 1: suppress Windows hard-error dialogs in the child.
+        # SetErrorMode is inherited by child processes; the loader turns a
+        # missing-DLL condition into a non-zero exit instead of a modal dialog.
+        $suppressFlags = [SmokeNative]::SEM_FAILCRITICALERRORS `
+                       -bor [SmokeNative]::SEM_NOGPFAULTERRORBOX `
+                       -bor [SmokeNative]::SEM_NOOPENFILEERRORBOX
+        $prevErrorMode = [SmokeNative]::SetErrorMode($suppressFlags)
+        try {
+            $proc = [System.Diagnostics.Process]::Start($psi)
+        } finally {
+            # Restore the parent's error mode immediately after fork.
+            [SmokeNative]::SetErrorMode($prevErrorMode) | Out-Null
+        }
 
-        if ($proc.HasExited) {
+        # Layer 2 — dialog sentinel title patterns (belt-and-suspenders).
+        # Matches the Windows "System Error" / "Systemfehler" hard-error box
+        # and the WER "exosnap.exe has stopped working" dialog.
+        $dialogPatterns = @(
+            [regex]::new('System(fehler| Error)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase),
+            [regex]::new([regex]::Escape('exosnap.exe'), [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        )
+
+        $deadline = (Get-Date).AddSeconds(8)
+        $dialogDetected = $false
+        while (-not $proc.HasExited -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 500
+            # Check for error dialog windows owned by the smoke process.
+            try {
+                $titles = [SmokeNative]::GetVisibleWindowTitles($proc.Id)
+                foreach ($title in $titles) {
+                    if ($dialogPatterns | Where-Object { $_.IsMatch($title) }) {
+                        $smokeNotes += "Dialog sentinel matched window title: '$title'"
+                        $dialogDetected = $true
+                        break
+                    }
+                }
+            } catch { <# EnumWindows can race with process exit; ignore. #> }
+            if ($dialogDetected) { break }
+        }
+
+        if ($dialogDetected) {
+            # Kill the hung dialog process and report failure.
+            try { $proc.Kill($true) } catch { }
+            Add-Error "Smoke: error dialog detected (title matched sentinel pattern) — likely a missing DLL or loader failure"
+            $smokeResult = 'failed'
+        }
+        elseif ($proc.HasExited) {
             if ($proc.ExitCode -eq 0) {
                 $smokeResult = 'inconclusive'
                 $smokeNotes += "Process exited cleanly (exit 0) within the wait window; may be the single-instance guard. UI stability not confirmed."
@@ -622,7 +736,7 @@ if (-not $SkipSmoke) {
             }
         }
         else {
-            # Reached the run loop without crashing -> stable enough for R1.
+            # Reached the run loop without crashing -> stable enough.
             $smokeResult = 'launched'
             $null = $proc.CloseMainWindow()
             if (-not $proc.WaitForExit(5000)) { $proc.Kill($true); $smokeNotes += "Forced close after graceful-close timeout." }
