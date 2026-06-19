@@ -70,6 +70,7 @@ enum class CaptureSourceType : uint8_t {
 enum class DiagnosticsSplitTrigger : uint8_t {
     None,
     AutomaticDuration,
+    AutomaticSize,
     ManualButton,
     Hotkey,
 };

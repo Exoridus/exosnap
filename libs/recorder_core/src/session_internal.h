@@ -122,7 +122,7 @@ struct SessionState {
     std::atomic<bool> pause_requested{false};
 
     // ---------------------------------------------------------------------------
-    // Split recording coordination (SPLIT-RECORDING-R1)
+    // Split recording coordination (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1)
     // ---------------------------------------------------------------------------
     //
     // A manual split is requested by incrementing split_request_seq (monotone).
@@ -136,8 +136,16 @@ struct SessionState {
     // automatic (duration-threshold) splits. When it decides to split it arms a
     // forced keyframe on the encoder, enqueues a SplitSentinel into the mux queue,
     // and the mux thread finalizes the current container + opens the next one.
+    //
+    // Size-based splits (SPLIT-BY-SIZE-R1): the mux thread monitors bytes_written()
+    // on the active segment writer. When it exceeds the configured size threshold it
+    // bumps split_request_seq (setting split_last_trigger to AutomaticSize) via the
+    // same path as a manual request, so VideoThread arms the keyframe and the normal
+    // SplitSentinel rollover fires. size_split_armed prevents repeated bumps for the
+    // same segment overage; the mux thread resets it when begin_new_segment runs.
     std::atomic<uint64_t> split_request_seq{0};
     std::atomic<uint32_t> split_last_trigger{0}; // SplitTriggerSource of latest request
+    std::atomic<bool> size_split_armed{false};   // mux has requested a size split; reset on transition
 
     // Set before Record(); invoked from the mux thread as each segment finalizes.
     SegmentCallback segment_callback;

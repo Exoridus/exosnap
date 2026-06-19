@@ -37,6 +37,13 @@ enum class SplitRecordingMode {
     Custom,
 };
 
+// Automatic split-by-size mode (SPLIT-BY-SIZE-R1). Independent of the time mode;
+// when both are active, whichever threshold is hit first triggers the split.
+enum class SplitSizeMode {
+    Off,    // no size-based splitting
+    Custom, // split when segment bytes >= custom_size_mb * 1024 * 1024
+};
+
 struct SplitRecordingSettings {
     SplitRecordingMode mode = SplitRecordingMode::Off;
     // Custom interval in minutes; clamped to [kMinMinutes, kMaxMinutes].
@@ -45,14 +52,25 @@ struct SplitRecordingSettings {
     static constexpr uint32_t kMinMinutes = 1;
     static constexpr uint32_t kMaxMinutes = 24u * 60u; // 24 hours
 
+    // Size threshold (SPLIT-BY-SIZE-R1): independent of the time threshold.
+    SplitSizeMode size_mode = SplitSizeMode::Off;
+    // Custom segment size in MiB; clamped to [kMinSizeMb, kMaxSizeMb].
+    uint32_t custom_size_mb = 2048; // 2 GiB default
+
+    static constexpr uint32_t kMinSizeMb = 50;
+    static constexpr uint32_t kMaxSizeMb = 1024u * 1024u; // 1 TiB
+
     bool operator==(const SplitRecordingSettings&) const = default;
 };
 
 // Resolved media-time interval in milliseconds for the active mode, or 0 (Off).
 [[nodiscard]] uint64_t SplitDurationMs(const SplitRecordingSettings& s) noexcept;
-// Clamp custom_minutes into range; leaves preset modes untouched.
+// Resolved segment size threshold in bytes for the active size mode, or 0 (Off).
+[[nodiscard]] uint64_t SplitSizeBytes(const SplitRecordingSettings& s) noexcept;
+// Clamp custom_minutes and custom_size_mb into their valid ranges.
 void SanitizeSplitSettings(SplitRecordingSettings& s) noexcept;
 [[nodiscard]] const wchar_t* SplitRecordingModeName(SplitRecordingMode mode) noexcept;
+[[nodiscard]] const wchar_t* SplitSizeModeName(SplitSizeMode mode) noexcept;
 
 struct OutputSettingsModel {
     std::filesystem::path output_folder;

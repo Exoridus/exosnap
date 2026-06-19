@@ -1637,5 +1637,61 @@ TEST_F(ConfigPageTest, Mp4HidesCustomSplitIntervalEditor) {
     EXPECT_EQ(spin->value(), 45);
 }
 
+// ---- Split-by-size controls (SPLIT-BY-SIZE-R1) ----------------------------
+
+TEST_F(ConfigPageTest, SplitSizeModeCombo_ExistsWithOffAndCustomItems) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitSizeModeCombo"));
+    ASSERT_NE(combo, nullptr);
+    // Should have at least Off and Custom.
+    EXPECT_GE(combo->count(), 2);
+}
+
+TEST_F(ConfigPageTest, SplitSizeMode_Off_HidesCustomSizeSpin) {
+    OutputSettingsModel settings = output_defaults_;
+    settings.container = capability::Container::Matroska;
+    settings.split.size_mode = SplitSizeMode::Off;
+
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setOutputSettings(settings);
+
+    auto* spin = page.findChild<QSpinBox*>(QStringLiteral("splitCustomSizeSpin"));
+    ASSERT_NE(spin, nullptr);
+    // When size_mode == Off the custom widget should be hidden.
+    ASSERT_NE(spin->parentWidget(), nullptr);
+    EXPECT_TRUE(spin->parentWidget()->isHidden());
+}
+
+TEST_F(ConfigPageTest, SplitSizeMode_Custom_ShowsCustomSizeSpin) {
+    OutputSettingsModel settings = output_defaults_;
+    settings.container = capability::Container::Matroska;
+    settings.split.size_mode = SplitSizeMode::Custom;
+    settings.split.custom_size_mb = 512;
+
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setOutputSettings(settings);
+
+    auto* spin = page.findChild<QSpinBox*>(QStringLiteral("splitCustomSizeSpin"));
+    ASSERT_NE(spin, nullptr);
+    ASSERT_NE(spin->parentWidget(), nullptr);
+    EXPECT_FALSE(spin->parentWidget()->isHidden());
+    EXPECT_EQ(spin->value(), 512);
+}
+
+TEST_F(ConfigPageTest, Mp4_DisablesSplitSizeCombo) {
+    OutputSettingsModel settings = output_defaults_;
+    settings.container = capability::Container::Mp4;
+    settings.split.size_mode = SplitSizeMode::Custom;
+    settings.split.custom_size_mb = 1024;
+
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setOutputSettings(settings);
+
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitSizeModeCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_FALSE(combo->isEnabled());
+}
+
 } // namespace
 } // namespace exosnap

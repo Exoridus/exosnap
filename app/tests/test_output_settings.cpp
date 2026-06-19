@@ -924,6 +924,82 @@ TEST(SplitSettingsTest, SplitDurationClampsCustomEvenIfUnsanitized) {
     EXPECT_EQ(SplitDurationMs(s), static_cast<uint64_t>(SplitRecordingSettings::kMinMinutes) * 60ull * 1000ull);
 }
 
+// ── Split-by-size settings (SPLIT-BY-SIZE-R1) ────────────────────────────────
+
+TEST(SplitSizeSettingsTest, DefaultsToOff) {
+    SplitRecordingSettings s;
+    EXPECT_EQ(s.size_mode, SplitSizeMode::Off);
+    EXPECT_EQ(SplitSizeBytes(s), 0ull);
+}
+
+TEST(SplitSizeSettingsTest, CustomSizeModeReturnsBytesFromMb) {
+    SplitRecordingSettings s;
+    s.size_mode = SplitSizeMode::Custom;
+    s.custom_size_mb = 1024; // 1 GiB
+    EXPECT_EQ(SplitSizeBytes(s), 1024ull * 1024ull * 1024ull);
+}
+
+TEST(SplitSizeSettingsTest, SplitSizeBytesClampsTooSmall) {
+    SplitRecordingSettings s;
+    s.size_mode = SplitSizeMode::Custom;
+    s.custom_size_mb = 0; // below min
+    EXPECT_EQ(SplitSizeBytes(s), static_cast<uint64_t>(SplitRecordingSettings::kMinSizeMb) * 1024ull * 1024ull);
+}
+
+TEST(SplitSizeSettingsTest, SanitizeSplitSettingsClampsSizeMb) {
+    SplitRecordingSettings lo;
+    lo.size_mode = SplitSizeMode::Custom;
+    lo.custom_size_mb = 0;
+    SanitizeSplitSettings(lo);
+    EXPECT_EQ(lo.custom_size_mb, SplitRecordingSettings::kMinSizeMb);
+
+    SplitRecordingSettings hi;
+    hi.size_mode = SplitSizeMode::Custom;
+    hi.custom_size_mb = 0xFFFFFFFF; // above max
+    SanitizeSplitSettings(hi);
+    EXPECT_EQ(hi.custom_size_mb, SplitRecordingSettings::kMaxSizeMb);
+}
+
+TEST(SplitSizeSettingsTest, OffModeReturnsZeroRegardlessOfMb) {
+    SplitRecordingSettings s;
+    s.size_mode = SplitSizeMode::Off;
+    s.custom_size_mb = 500;
+    EXPECT_EQ(SplitSizeBytes(s), 0ull);
+}
+
+TEST(SplitSizeSettingsTest, EqualityIncludesSizeFields) {
+    SplitRecordingSettings a;
+    SplitRecordingSettings b;
+    EXPECT_EQ(a, b);
+    b.size_mode = SplitSizeMode::Custom;
+    EXPECT_NE(a, b);
+    a.size_mode = SplitSizeMode::Custom;
+    EXPECT_EQ(a, b);
+    b.custom_size_mb = 999;
+    EXPECT_NE(a, b);
+}
+
+TEST(SplitSizeSettingsTest, SizeSplitPropagatesViaCoordinator) {
+    RecordingCoordinator coordinator;
+    OutputSettingsModel settings = OutputSettingsModel::Defaults();
+    settings.split.size_mode = SplitSizeMode::Custom;
+    settings.split.custom_size_mb = 2048;
+    coordinator.SetOutputSettings(settings);
+
+    const auto split = coordinator.SplitSettings();
+    EXPECT_EQ(split.size_bytes, 2048ull * 1024ull * 1024ull);
+}
+
+TEST(SplitSizeSettingsTest, SizeSplitOffPropagatesZeroViaCoordinator) {
+    RecordingCoordinator coordinator;
+    OutputSettingsModel settings = OutputSettingsModel::Defaults();
+    settings.split.size_mode = SplitSizeMode::Off;
+    coordinator.SetOutputSettings(settings);
+
+    const auto split = coordinator.SplitSettings();
+    EXPECT_EQ(split.size_bytes, 0ull);
+}
+
 // ── EXOSNAP_OUTPUT_DIR override (DF-HISTORY) ─────────────────────────────────
 //
 // When EXOSNAP_OUTPUT_DIR is set to a non-empty path, EffectiveOutputFolder()

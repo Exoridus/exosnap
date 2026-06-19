@@ -160,11 +160,26 @@ uint64_t SplitDurationMs(const SplitRecordingSettings& s) noexcept {
     return 0;
 }
 
+uint64_t SplitSizeBytes(const SplitRecordingSettings& s) noexcept {
+    if (s.size_mode == SplitSizeMode::Off)
+        return 0;
+    uint32_t mb = s.custom_size_mb;
+    if (mb < SplitRecordingSettings::kMinSizeMb)
+        mb = SplitRecordingSettings::kMinSizeMb;
+    if (mb > SplitRecordingSettings::kMaxSizeMb)
+        mb = SplitRecordingSettings::kMaxSizeMb;
+    return static_cast<uint64_t>(mb) * 1024ULL * 1024ULL;
+}
+
 void SanitizeSplitSettings(SplitRecordingSettings& s) noexcept {
     if (s.custom_minutes < SplitRecordingSettings::kMinMinutes)
         s.custom_minutes = SplitRecordingSettings::kMinMinutes;
     if (s.custom_minutes > SplitRecordingSettings::kMaxMinutes)
         s.custom_minutes = SplitRecordingSettings::kMaxMinutes;
+    if (s.custom_size_mb < SplitRecordingSettings::kMinSizeMb)
+        s.custom_size_mb = SplitRecordingSettings::kMinSizeMb;
+    if (s.custom_size_mb > SplitRecordingSettings::kMaxSizeMb)
+        s.custom_size_mb = SplitRecordingSettings::kMaxSizeMb;
 }
 
 const wchar_t* SplitRecordingModeName(SplitRecordingMode mode) noexcept {
@@ -178,6 +193,16 @@ const wchar_t* SplitRecordingModeName(SplitRecordingMode mode) noexcept {
     case SplitRecordingMode::Every60Min:
         return L"Every 60 min";
     case SplitRecordingMode::Custom:
+        return L"Custom";
+    }
+    return L"Off";
+}
+
+const wchar_t* SplitSizeModeName(SplitSizeMode mode) noexcept {
+    switch (mode) {
+    case SplitSizeMode::Off:
+        return L"Off";
+    case SplitSizeMode::Custom:
         return L"Custom";
     }
     return L"Off";

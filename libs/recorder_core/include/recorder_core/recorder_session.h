@@ -133,21 +133,31 @@ enum class MicChannelMode {
 };
 
 // ---------------------------------------------------------------------------
-// Split recording (SPLIT-RECORDING-R1)
+// Split recording (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1)
 // ---------------------------------------------------------------------------
 
-// How automatic segment splitting is scheduled. Off preserves the legacy
-// single-file recording behavior; manual splits still work regardless of mode.
+// Engine-level split configuration carried in RecorderConfig.
+//
+// Two independent thresholds (ADR 0021: dual time+size, whichever first):
+//   duration_ms == 0  → time-based splitting disabled
+//   size_bytes   == 0 → size-based splitting disabled
+// Both may be active simultaneously. Manual splits are always available
+// regardless of these settings.
+//
+// Note: RecordingSplitMode is kept for backward source-level compatibility but
+// is no longer used internally. The coordinator resolves UI settings to numeric
+// thresholds (duration_ms / size_bytes) before handing them to the engine.
 enum class RecordingSplitMode {
-    Off,      // no automatic splitting (single file unless a manual split is requested)
-    Duration, // split automatically every duration_ms of *media* time (pause excluded)
+    Off,      // legacy: equivalent to duration_ms = 0
+    Duration, // legacy: equivalent to duration_ms > 0
 };
 
 // Engine-level split configuration carried in RecorderConfig.
 struct RecordingSplitSettings {
-    RecordingSplitMode mode = RecordingSplitMode::Off;
-    // Media-time interval per automatic segment. Ignored when mode == Off.
-    std::uint64_t duration_ms = 30ull * 60ull * 1000ull; // 30 min default
+    // Media-time interval per automatic segment (0 = disabled).
+    std::uint64_t duration_ms = 0;
+    // Committed-bytes threshold per segment (0 = disabled).
+    std::uint64_t size_bytes = 0;
 
     bool operator==(const RecordingSplitSettings&) const = default;
 };
@@ -156,6 +166,7 @@ struct RecordingSplitSettings {
 // they route through the exact same typed command path.
 enum class SplitTriggerSource {
     AutomaticDuration,
+    AutomaticSize,
     ManualButton,
     Hotkey,
 };

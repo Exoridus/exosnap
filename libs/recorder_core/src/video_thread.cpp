@@ -1088,7 +1088,7 @@ void VideoThread::Run() {
     bool split_armed = false;
     SplitTriggerSource split_armed_trigger = SplitTriggerSource::ManualButton;
 
-    const bool split_auto_enabled = (m_state.config.split.mode == RecordingSplitMode::Duration);
+    const bool split_auto_enabled = (m_state.config.split.duration_ms > 0);
     const uint64_t split_auto_interval_ns = split_auto_enabled ? (m_state.config.split.duration_ms * 1000000ULL) : 0ULL;
     uint64_t next_auto_threshold_ns =
         split_auto_enabled ? split_auto_interval_ns : (~0ULL); // first auto split one interval in

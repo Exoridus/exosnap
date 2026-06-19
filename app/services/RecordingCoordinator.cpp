@@ -949,6 +949,8 @@ static const char* SplitTriggerName(recorder_core::SplitTriggerSource source) {
     switch (source) {
     case recorder_core::SplitTriggerSource::AutomaticDuration:
         return "auto";
+    case recorder_core::SplitTriggerSource::AutomaticSize:
+        return "size";
     case recorder_core::SplitTriggerSource::ManualButton:
         return "button";
     case recorder_core::SplitTriggerSource::Hotkey:
@@ -1708,12 +1710,11 @@ void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings
     ApplyOutputSettingsToUserConfig(resolved_user_config_, output_settings_);
 
     // Translate the UI split policy into the engine settings applied at start.
+    // Both duration_ms and size_bytes are independent thresholds (ADR 0021);
+    // 0 means that dimension is disabled. Whichever is hit first triggers the split.
     SanitizeSplitSettings(output_settings_.split);
-    const uint64_t split_ms = SplitDurationMs(output_settings_.split);
-    split_settings_.mode =
-        split_ms > 0 ? recorder_core::RecordingSplitMode::Duration : recorder_core::RecordingSplitMode::Off;
-    if (split_ms > 0)
-        split_settings_.duration_ms = split_ms;
+    split_settings_.duration_ms = SplitDurationMs(output_settings_.split);
+    split_settings_.size_bytes = SplitSizeBytes(output_settings_.split);
 }
 void RecordingCoordinator::SetVideoSettings(const VideoSettingsModel& settings) {
     video_settings_ = settings;

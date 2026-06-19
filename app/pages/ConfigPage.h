@@ -136,6 +136,8 @@ class ConfigPage : public QWidget {
     void onOutputResolutionSelected(int mode_id);
     void onSplitModeChanged(int index);
     void updateSplitSelection();
+    void onSplitSizeModeChanged(int index);
+    void updateSplitSizeSelection();
     void onCursorChanged();
     void updateQualitySummary();
     void updateQualitySegmentSelection();
@@ -272,11 +274,15 @@ class ConfigPage : public QWidget {
     QPushButton* output_res_custom_btn_ = nullptr;
     QLabel* output_effective_summary_label_ = nullptr;
 
-    // Split recording widgets (SPLIT-RECORDING-R1).
+    // Split recording widgets (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1).
     QComboBox* split_mode_combo_ = nullptr;
     QSpinBox* split_custom_minutes_spin_ = nullptr;
     QWidget* split_custom_widget_ = nullptr;
     QLabel* split_summary_label_ = nullptr;
+    // Size-split controls (SPLIT-BY-SIZE-R1).
+    QComboBox* split_size_mode_combo_ = nullptr;
+    QSpinBox* split_custom_size_spin_ = nullptr;
+    QWidget* split_size_custom_widget_ = nullptr;
 
     // Custom resolution widgets (CUSTOM-OUTPUT-RESOLUTION-R1).
     QWidget* custom_resolution_widget_ = nullptr;
