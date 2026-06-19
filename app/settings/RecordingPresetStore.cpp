@@ -1,17 +1,22 @@
 #include "RecordingPresetStore.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
-#include <QSettings>
+#include <QSaveFile>
 #include <QStandardPaths>
 #include <QStringView>
+#include <QTextStream>
 #include <QVector>
 
 #include "settings/ConfigPaths.h"
 
+#include <toml++/toml.hpp>
+
 #include <algorithm>
 #include <optional>
 #include <set>
+#include <sstream>
 
 namespace exosnap {
 namespace {
@@ -375,258 +380,298 @@ std::optional<recorder_core::OpusFrameDuration> OpusFrameDurationFromString(QStr
 }
 
 // ---------------------------------------------------------------------------
-// Per-item save / load helpers
+// TOML helpers — safe node readers with defaults
 // ---------------------------------------------------------------------------
 
-// Save a single RecordingPreset into the QSettings array item at the current
-// array index.  The caller has already called settings.setArrayIndex(i).
-void SavePresetItem(QSettings& settings, const RecordingPreset& preset) {
-    settings.setValue(QStringLiteral("id"), QString::fromStdString(preset.id));
-    settings.setValue(QStringLiteral("name"), QString::fromStdString(preset.name));
+// Read a string from a toml node, returning default_val when missing or
+// wrong type.
+std::string TomlStr(const toml::node_view<const toml::node>& node, std::string_view default_val = "") {
+    if (const auto* s = node.as_string())
+        return **s;
+    return std::string(default_val);
+}
+
+bool TomlBool(const toml::node_view<const toml::node>& node, bool default_val = false) {
+    if (const auto* b = node.as_boolean())
+        return **b;
+    return default_val;
+}
+
+int64_t TomlInt(const toml::node_view<const toml::node>& node, int64_t default_val = 0) {
+    if (const auto* i = node.as_integer())
+        return **i;
+    return default_val;
+}
+
+double TomlFloat(const toml::node_view<const toml::node>& node, double default_val = 0.0) {
+    if (const auto* f = node.as_floating_point())
+        return **f;
+    // Also accept integer nodes (no decimal in TOML) — convert silently.
+    if (const auto* i = node.as_integer())
+        return static_cast<double>(**i);
+    return default_val;
+}
+
+// ---------------------------------------------------------------------------
+// Per-item TOML serialization helpers
+// ---------------------------------------------------------------------------
+
+toml::table PresetToToml(const RecordingPreset& preset) {
+    toml::table tbl;
+
+    tbl.emplace("id", preset.id);
+    tbl.emplace("name", preset.name);
 
     // --- Capture ---
     const auto& cap = preset.config.capture;
-    settings.setValue(QStringLiteral("capture_kind"), PresetCaptureKindToString(cap.kind));
-    settings.setValue(QStringLiteral("capture_display_key"), QString::fromStdString(cap.display_key));
-    settings.setValue(QStringLiteral("capture_window_key"), QString::fromStdString(cap.window_key));
-    settings.setValue(QStringLiteral("capture_has_region"), cap.has_region);
-    settings.setValue(QStringLiteral("capture_region_x"), cap.region.x);
-    settings.setValue(QStringLiteral("capture_region_y"), cap.region.y);
-    settings.setValue(QStringLiteral("capture_region_w"), cap.region.width);
-    settings.setValue(QStringLiteral("capture_region_h"), cap.region.height);
-    settings.setValue(QStringLiteral("capture_region_display_key"), QString::fromStdString(cap.region_display_key));
+    toml::table cap_tbl;
+    cap_tbl.emplace("kind", PresetCaptureKindToString(cap.kind).toStdString());
+    cap_tbl.emplace("display_key", cap.display_key);
+    cap_tbl.emplace("window_key", cap.window_key);
+    cap_tbl.emplace("has_region", cap.has_region);
+    cap_tbl.emplace("region_x", static_cast<int64_t>(cap.region.x));
+    cap_tbl.emplace("region_y", static_cast<int64_t>(cap.region.y));
+    cap_tbl.emplace("region_w", static_cast<int64_t>(cap.region.width));
+    cap_tbl.emplace("region_h", static_cast<int64_t>(cap.region.height));
+    cap_tbl.emplace("region_display_key", cap.region_display_key);
+    tbl.emplace("capture", std::move(cap_tbl));
 
     // --- Output ---
     const auto& out = preset.config.output;
-    settings.setValue(QStringLiteral("out_folder"), QString::fromStdWString(out.output_folder.wstring()));
-    settings.setValue(QStringLiteral("out_naming_pattern"), QString::fromStdWString(out.naming_pattern));
-    settings.setValue(QStringLiteral("out_container"), ContainerToString(out.container));
-    settings.setValue(QStringLiteral("out_video_codec"), VideoCodecToString(out.video_codec));
-    settings.setValue(QStringLiteral("out_audio_codec"), AudioCodecToString(out.audio_codec));
-    settings.setValue(QStringLiteral("out_resolution_mode"), OutputResolutionModeToString(out.resolution.mode));
-    settings.setValue(QStringLiteral("out_custom_width"), static_cast<int>(out.resolution.custom_width));
-    settings.setValue(QStringLiteral("out_custom_height"), static_cast<int>(out.resolution.custom_height));
-    settings.setValue(QStringLiteral("out_fit_mode"), OutputFitModeToString(out.resolution.fit));
-    settings.setValue(QStringLiteral("out_split_mode"), SplitRecordingModeToString(out.split.mode));
-    settings.setValue(QStringLiteral("out_split_custom_minutes"), static_cast<int>(out.split.custom_minutes));
+    toml::table out_tbl;
+    out_tbl.emplace("folder", QString::fromStdWString(out.output_folder.wstring()).toStdString());
+    out_tbl.emplace("naming_pattern", QString::fromStdWString(out.naming_pattern).toStdString());
+    out_tbl.emplace("container", ContainerToString(out.container).toStdString());
+    out_tbl.emplace("video_codec", VideoCodecToString(out.video_codec).toStdString());
+    out_tbl.emplace("audio_codec", AudioCodecToString(out.audio_codec).toStdString());
+    out_tbl.emplace("resolution_mode", OutputResolutionModeToString(out.resolution.mode).toStdString());
+    out_tbl.emplace("custom_width", static_cast<int64_t>(out.resolution.custom_width));
+    out_tbl.emplace("custom_height", static_cast<int64_t>(out.resolution.custom_height));
+    out_tbl.emplace("fit_mode", OutputFitModeToString(out.resolution.fit).toStdString());
+    out_tbl.emplace("split_mode", SplitRecordingModeToString(out.split.mode).toStdString());
+    out_tbl.emplace("split_custom_minutes", static_cast<int64_t>(out.split.custom_minutes));
+    tbl.emplace("output", std::move(out_tbl));
 
     // --- Video ---
     const auto& vid = preset.config.video;
-    settings.setValue(QStringLiteral("vid_quality"), NvencQualityPresetToString(vid.quality));
-    settings.setValue(QStringLiteral("vid_rate_control"), RateControlModeToString(vid.rate_control));
-    settings.setValue(QStringLiteral("vid_bitrate_kbps"), static_cast<int>(vid.bitrate_kbps));
-    settings.setValue(QStringLiteral("vid_cfr"), vid.cfr);
-    settings.setValue(QStringLiteral("vid_capture_cursor"), vid.capture_cursor);
-    settings.setValue(QStringLiteral("vid_frame_rate_num"), static_cast<int>(vid.frame_rate_num));
-    settings.setValue(QStringLiteral("vid_frame_rate_den"), static_cast<int>(vid.frame_rate_den));
+    toml::table vid_tbl;
+    vid_tbl.emplace("quality", NvencQualityPresetToString(vid.quality).toStdString());
+    vid_tbl.emplace("rate_control", RateControlModeToString(vid.rate_control).toStdString());
+    vid_tbl.emplace("bitrate_kbps", static_cast<int64_t>(vid.bitrate_kbps));
+    vid_tbl.emplace("cfr", vid.cfr);
+    vid_tbl.emplace("capture_cursor", vid.capture_cursor);
+    vid_tbl.emplace("frame_rate_num", static_cast<int64_t>(vid.frame_rate_num));
+    vid_tbl.emplace("frame_rate_den", static_cast<int64_t>(vid.frame_rate_den));
+    tbl.emplace("video", std::move(vid_tbl));
 
     // --- Audio ---
     const auto& aud = preset.config.audio;
-    settings.setValue(QStringLiteral("aud_target_kind"), CaptureTargetKindToString(aud.target_kind));
-    settings.setValue(QStringLiteral("aud_mic_channel_mode"), MicChannelModeToString(aud.mic_channel_mode));
-    settings.setValue(QStringLiteral("aud_selected_mic_device_id"),
-                      aud.selected_mic_device_id.has_value() ? QString::fromStdString(*aud.selected_mic_device_id)
-                                                             : QString());
-    // Store as double for lossless round-trip.
-    settings.setValue(QStringLiteral("aud_mic_gain_linear"), static_cast<double>(aud.mic_gain_linear));
-    settings.setValue(QStringLiteral("aud_has_window_pid"), aud.selected_window_pid.has_value());
-    settings.setValue(QStringLiteral("aud_window_pid"),
-                      aud.selected_window_pid.has_value() ? static_cast<uint>(aud.selected_window_pid.value()) : 0u);
-    settings.setValue(QStringLiteral("aud_row_count"), static_cast<int>(aud.source_rows.size()));
-    for (int i = 0; i < static_cast<int>(aud.source_rows.size()); ++i) {
-        const auto& row = aud.source_rows[static_cast<std::size_t>(i)];
-        settings.setValue(QStringLiteral("aud_row_%1_kind").arg(i), AudioSourceKindToString(row.kind));
-        settings.setValue(QStringLiteral("aud_row_%1_enabled").arg(i), row.enabled);
-        settings.setValue(QStringLiteral("aud_row_%1_merge").arg(i), row.merge_with_above);
+    toml::table aud_tbl;
+    aud_tbl.emplace("target_kind", CaptureTargetKindToString(aud.target_kind).toStdString());
+    aud_tbl.emplace("mic_channel_mode", MicChannelModeToString(aud.mic_channel_mode).toStdString());
+    aud_tbl.emplace("selected_mic_device_id",
+                    aud.selected_mic_device_id.has_value() ? *aud.selected_mic_device_id : std::string());
+    aud_tbl.emplace("mic_gain_linear", static_cast<double>(aud.mic_gain_linear));
+    aud_tbl.emplace("has_window_pid", aud.selected_window_pid.has_value());
+    aud_tbl.emplace("window_pid",
+                    static_cast<int64_t>(aud.selected_window_pid.has_value() ? aud.selected_window_pid.value() : 0u));
+    aud_tbl.emplace("audio_bitrate_kbps", static_cast<int64_t>(aud.audio_bitrate_kbps));
+    aud_tbl.emplace("opus_frame_duration", OpusFrameDurationToString(aud.opus_frame_duration).toStdString());
+    aud_tbl.emplace("opus_complexity", static_cast<int64_t>(aud.opus_complexity));
+
+    // audio sources as array-of-tables
+    toml::array sources_arr;
+    for (const auto& row : aud.source_rows) {
+        toml::table row_tbl;
+        row_tbl.emplace("kind", AudioSourceKindToString(row.kind).toStdString());
+        row_tbl.emplace("enabled", row.enabled);
+        row_tbl.emplace("merge", row.merge_with_above);
+        sources_arr.push_back(std::move(row_tbl));
     }
-    // Audio encoding params (ADR 0019).
-    settings.setValue(QStringLiteral("aud_audio_bitrate_kbps"), static_cast<int>(aud.audio_bitrate_kbps));
-    settings.setValue(QStringLiteral("aud_opus_frame_duration"), OpusFrameDurationToString(aud.opus_frame_duration));
-    settings.setValue(QStringLiteral("aud_opus_complexity"), aud.opus_complexity);
+    aud_tbl.emplace("sources", std::move(sources_arr));
+    tbl.emplace("audio", std::move(aud_tbl));
 
     // --- Webcam ---
     const auto& wc = preset.config.webcam;
-    settings.setValue(QStringLiteral("wc_enabled"), wc.enabled);
-    settings.setValue(QStringLiteral("wc_device_id"), QString::fromStdString(wc.device_id));
-    settings.setValue(QStringLiteral("wc_width"), wc.width);
-    settings.setValue(QStringLiteral("wc_height"), wc.height);
-    settings.setValue(QStringLiteral("wc_fps"), wc.fps);
-    settings.setValue(QStringLiteral("wc_overlay_x"), static_cast<double>(wc.overlay.x_norm));
-    settings.setValue(QStringLiteral("wc_overlay_y"), static_cast<double>(wc.overlay.y_norm));
-    settings.setValue(QStringLiteral("wc_overlay_w"), static_cast<double>(wc.overlay.w_norm));
-    settings.setValue(QStringLiteral("wc_overlay_h"), static_cast<double>(wc.overlay.h_norm));
-    settings.setValue(QStringLiteral("wc_overlay_user_placed"), wc.overlay_user_placed);
-    settings.setValue(QStringLiteral("wc_aspect_ratio_locked"), wc.aspect_ratio_locked);
-    settings.setValue(QStringLiteral("wc_mirror"), wc.mirror);
-    settings.setValue(QStringLiteral("wc_chroma_enabled"), wc.chroma_key.enabled);
-    settings.setValue(QStringLiteral("wc_chroma_color_mode"),
-                      WebcamChromaKeyColorModeToString(wc.chroma_key.color_mode));
-    settings.setValue(QStringLiteral("wc_chroma_custom_r"), static_cast<int>(wc.chroma_key.custom_r));
-    settings.setValue(QStringLiteral("wc_chroma_custom_g"), static_cast<int>(wc.chroma_key.custom_g));
-    settings.setValue(QStringLiteral("wc_chroma_custom_b"), static_cast<int>(wc.chroma_key.custom_b));
-    settings.setValue(QStringLiteral("wc_chroma_tolerance"), static_cast<double>(wc.chroma_key.tolerance));
-    settings.setValue(QStringLiteral("wc_chroma_softness"), static_cast<double>(wc.chroma_key.softness));
-    settings.setValue(QStringLiteral("wc_chroma_spill"), static_cast<double>(wc.chroma_key.spill_reduction));
+    toml::table wc_tbl;
+    wc_tbl.emplace("enabled", wc.enabled);
+    wc_tbl.emplace("device_id", wc.device_id);
+    wc_tbl.emplace("width", static_cast<int64_t>(wc.width));
+    wc_tbl.emplace("height", static_cast<int64_t>(wc.height));
+    wc_tbl.emplace("fps", static_cast<int64_t>(wc.fps));
+    wc_tbl.emplace("overlay_x", static_cast<double>(wc.overlay.x_norm));
+    wc_tbl.emplace("overlay_y", static_cast<double>(wc.overlay.y_norm));
+    wc_tbl.emplace("overlay_w", static_cast<double>(wc.overlay.w_norm));
+    wc_tbl.emplace("overlay_h", static_cast<double>(wc.overlay.h_norm));
+    wc_tbl.emplace("overlay_user_placed", wc.overlay_user_placed);
+    wc_tbl.emplace("aspect_ratio_locked", wc.aspect_ratio_locked);
+    wc_tbl.emplace("mirror", wc.mirror);
+
+    toml::table ck_tbl;
+    ck_tbl.emplace("enabled", wc.chroma_key.enabled);
+    ck_tbl.emplace("color_mode", WebcamChromaKeyColorModeToString(wc.chroma_key.color_mode).toStdString());
+    ck_tbl.emplace("custom_r", static_cast<int64_t>(wc.chroma_key.custom_r));
+    ck_tbl.emplace("custom_g", static_cast<int64_t>(wc.chroma_key.custom_g));
+    ck_tbl.emplace("custom_b", static_cast<int64_t>(wc.chroma_key.custom_b));
+    ck_tbl.emplace("tolerance", static_cast<double>(wc.chroma_key.tolerance));
+    ck_tbl.emplace("softness", static_cast<double>(wc.chroma_key.softness));
+    ck_tbl.emplace("spill", static_cast<double>(wc.chroma_key.spill_reduction));
+    wc_tbl.emplace("chroma_key", std::move(ck_tbl));
+
+    tbl.emplace("webcam", std::move(wc_tbl));
 
     // --- Countdown ---
-    settings.setValue(QStringLiteral("countdown_seconds"), preset.config.countdown_seconds);
+    tbl.emplace("countdown_seconds", static_cast<int64_t>(preset.config.countdown_seconds));
+
+    return tbl;
 }
 
-// Parse a single array item at the current array index into a RecordingPreset.
-// Returns nullopt if the item is malformed (empty id or other invariant failure).
-std::optional<RecordingPreset> LoadPresetItem(QSettings& settings) {
+// Parse a single TOML preset table into a RecordingPreset.
+// Returns nullopt if the item is malformed (empty id).
+std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
     RecordingPreset preset;
 
-    preset.id = settings.value(QStringLiteral("id")).toString().trimmed().toStdString();
+    preset.id = QString::fromStdString(TomlStr(tbl["id"])).trimmed().toStdString();
     if (preset.id.empty()) {
         return std::nullopt; // Malformed — skip.
     }
-    preset.name = settings.value(QStringLiteral("name")).toString().toStdString();
+    preset.name = TomlStr(tbl["name"]);
 
     // --- Capture ---
     auto& cap = preset.config.capture;
     {
-        const auto kind = PresetCaptureKindFromString(settings.value(QStringLiteral("capture_kind")).toString());
+        const auto kind = PresetCaptureKindFromString(QString::fromStdString(TomlStr(tbl["capture"]["kind"])));
         cap.kind = kind.value_or(PresetCaptureKind::Display);
     }
-    cap.display_key = settings.value(QStringLiteral("capture_display_key")).toString().toStdString();
-    cap.window_key = settings.value(QStringLiteral("capture_window_key")).toString().toStdString();
-    cap.has_region = settings.value(QStringLiteral("capture_has_region"), false).toBool();
-    cap.region.x = settings.value(QStringLiteral("capture_region_x"), 0).toInt();
-    cap.region.y = settings.value(QStringLiteral("capture_region_y"), 0).toInt();
-    cap.region.width = settings.value(QStringLiteral("capture_region_w"), 0).toInt();
-    cap.region.height = settings.value(QStringLiteral("capture_region_h"), 0).toInt();
-    cap.region_display_key = settings.value(QStringLiteral("capture_region_display_key")).toString().toStdString();
+    cap.display_key = TomlStr(tbl["capture"]["display_key"]);
+    cap.window_key = TomlStr(tbl["capture"]["window_key"]);
+    cap.has_region = TomlBool(tbl["capture"]["has_region"], false);
+    cap.region.x = static_cast<int>(TomlInt(tbl["capture"]["region_x"], 0));
+    cap.region.y = static_cast<int>(TomlInt(tbl["capture"]["region_y"], 0));
+    cap.region.width = static_cast<int>(TomlInt(tbl["capture"]["region_w"], 0));
+    cap.region.height = static_cast<int>(TomlInt(tbl["capture"]["region_h"], 0));
+    cap.region_display_key = TomlStr(tbl["capture"]["region_display_key"]);
 
     // --- Output ---
     auto& out = preset.config.output;
     {
-        const QString folder = settings.value(QStringLiteral("out_folder")).toString().trimmed();
-        if (!folder.isEmpty()) {
-            out.output_folder = std::filesystem::path(folder.toStdWString());
+        const std::string folder = TomlStr(tbl["output"]["folder"]);
+        if (!folder.empty()) {
+            out.output_folder = std::filesystem::path(QString::fromStdString(folder).toStdWString());
         }
     }
     {
-        const QString pat = settings.value(QStringLiteral("out_naming_pattern")).toString();
-        if (!pat.isEmpty()) {
-            out.naming_pattern = pat.toStdWString();
+        const std::string pat = TomlStr(tbl["output"]["naming_pattern"]);
+        if (!pat.empty()) {
+            out.naming_pattern = QString::fromStdString(pat).toStdWString();
         }
     }
     {
-        const auto c = ContainerFromString(settings.value(QStringLiteral("out_container")).toString());
+        const auto c = ContainerFromString(QString::fromStdString(TomlStr(tbl["output"]["container"])));
         if (c.has_value())
             out.container = *c;
     }
     {
-        const auto c = VideoCodecFromString(settings.value(QStringLiteral("out_video_codec")).toString());
+        const auto c = VideoCodecFromString(QString::fromStdString(TomlStr(tbl["output"]["video_codec"])));
         if (c.has_value())
             out.video_codec = *c;
     }
     {
-        const auto c = AudioCodecFromString(settings.value(QStringLiteral("out_audio_codec")).toString());
+        const auto c = AudioCodecFromString(QString::fromStdString(TomlStr(tbl["output"]["audio_codec"])));
         if (c.has_value())
             out.audio_codec = *c;
     }
     {
-        const auto m = OutputResolutionModeFromString(settings.value(QStringLiteral("out_resolution_mode")).toString());
+        const auto m =
+            OutputResolutionModeFromString(QString::fromStdString(TomlStr(tbl["output"]["resolution_mode"])));
         if (m.has_value())
             out.resolution.mode = *m;
     }
     {
-        bool ok_w = false;
-        bool ok_h = false;
-        const int width = settings.value(QStringLiteral("out_custom_width"), 0).toInt(&ok_w);
-        const int height = settings.value(QStringLiteral("out_custom_height"), 0).toInt(&ok_h);
-        if (ok_w && ok_h && width >= 0 && height >= 0) {
-            out.resolution.custom_width = static_cast<uint32_t>(width);
-            out.resolution.custom_height = static_cast<uint32_t>(height);
+        const int64_t w = TomlInt(tbl["output"]["custom_width"], 0);
+        const int64_t h = TomlInt(tbl["output"]["custom_height"], 0);
+        if (w >= 0 && h >= 0) {
+            out.resolution.custom_width = static_cast<uint32_t>(w);
+            out.resolution.custom_height = static_cast<uint32_t>(h);
         }
     }
     {
-        const auto fit = OutputFitModeFromString(settings.value(QStringLiteral("out_fit_mode")).toString());
+        const auto fit = OutputFitModeFromString(QString::fromStdString(TomlStr(tbl["output"]["fit_mode"])));
         if (fit.has_value())
             out.resolution.fit = *fit;
     }
     {
-        const auto sm = SplitRecordingModeFromString(settings.value(QStringLiteral("out_split_mode")).toString());
+        const auto sm = SplitRecordingModeFromString(QString::fromStdString(TomlStr(tbl["output"]["split_mode"])));
         if (sm.has_value())
             out.split.mode = *sm;
-        bool ok = false;
-        const int minutes = settings.value(QStringLiteral("out_split_custom_minutes"), 30).toInt(&ok);
-        if (ok && minutes > 0)
+        const int64_t minutes = TomlInt(tbl["output"]["split_custom_minutes"], 30);
+        if (minutes > 0)
             out.split.custom_minutes = static_cast<uint32_t>(minutes);
     }
 
     // --- Video ---
     auto& vid = preset.config.video;
     {
-        const auto q = NvencQualityPresetFromString(settings.value(QStringLiteral("vid_quality")).toString());
+        const auto q = NvencQualityPresetFromString(QString::fromStdString(TomlStr(tbl["video"]["quality"])));
         if (q.has_value())
             vid.quality = *q;
     }
     {
-        const auto rc = RateControlModeFromString(settings.value(QStringLiteral("vid_rate_control")).toString());
+        const auto rc = RateControlModeFromString(QString::fromStdString(TomlStr(tbl["video"]["rate_control"])));
         if (rc.has_value())
             vid.rate_control = *rc;
-        // If absent (older preset schema), defaults to ConstantQuality — no behavior change.
     }
     {
-        bool ok = false;
-        const int bk = settings.value(QStringLiteral("vid_bitrate_kbps"), 20000).toInt(&ok);
-        if (ok && bk > 0)
+        const int64_t bk = TomlInt(tbl["video"]["bitrate_kbps"], 20000);
+        if (bk > 0)
             vid.bitrate_kbps = static_cast<uint32_t>(bk);
-        // SanitizePreset() will clamp to [1000, 200000].
     }
-    if (settings.contains(QStringLiteral("vid_cfr"))) {
-        vid.cfr = settings.value(QStringLiteral("vid_cfr"), true).toBool();
+    // cfr / capture_cursor: only override when the key is present.
+    if (tbl["video"]["cfr"]) {
+        vid.cfr = TomlBool(tbl["video"]["cfr"], true);
     }
-    if (settings.contains(QStringLiteral("vid_capture_cursor"))) {
-        vid.capture_cursor = settings.value(QStringLiteral("vid_capture_cursor"), true).toBool();
+    if (tbl["video"]["capture_cursor"]) {
+        vid.capture_cursor = TomlBool(tbl["video"]["capture_cursor"], true);
     }
     {
-        bool ok_num = false;
-        bool ok_den = false;
-        const int num = settings.value(QStringLiteral("vid_frame_rate_num"), 60).toInt(&ok_num);
-        const int den = settings.value(QStringLiteral("vid_frame_rate_den"), 1).toInt(&ok_den);
-        if (ok_num && ok_den && num > 0 && den > 0) {
+        const int64_t num = TomlInt(tbl["video"]["frame_rate_num"], 60);
+        const int64_t den = TomlInt(tbl["video"]["frame_rate_den"], 1);
+        if (num > 0 && den > 0) {
             vid.frame_rate_num = static_cast<uint32_t>(num);
             vid.frame_rate_den = static_cast<uint32_t>(den);
         }
-        // If not present or invalid, SanitizePreset() will reset to 60/1.
     }
 
     // --- Audio ---
     auto& aud = preset.config.audio;
     {
-        const auto k = CaptureTargetKindFromString(settings.value(QStringLiteral("aud_target_kind")).toString());
+        const auto k = CaptureTargetKindFromString(QString::fromStdString(TomlStr(tbl["audio"]["target_kind"])));
         if (k.has_value())
             aud.target_kind = *k;
     }
     {
-        const auto m = MicChannelModeFromString(settings.value(QStringLiteral("aud_mic_channel_mode")).toString());
+        const auto m = MicChannelModeFromString(QString::fromStdString(TomlStr(tbl["audio"]["mic_channel_mode"])));
         if (m.has_value())
             aud.mic_channel_mode = *m;
     }
     {
-        const QString mic_dev = settings.value(QStringLiteral("aud_selected_mic_device_id")).toString().trimmed();
-        if (mic_dev.isEmpty()) {
+        const std::string mic_dev =
+            QString::fromStdString(TomlStr(tbl["audio"]["selected_mic_device_id"])).trimmed().toStdString();
+        if (mic_dev.empty()) {
             aud.selected_mic_device_id = std::nullopt;
         } else {
-            aud.selected_mic_device_id = mic_dev.toStdString();
+            aud.selected_mic_device_id = mic_dev;
         }
     }
     {
-        // Stored as double for lossless round-trip.
-        bool ok = false;
-        const double gain = settings.value(QStringLiteral("aud_mic_gain_linear"), 1.0).toDouble(&ok);
-        aud.mic_gain_linear = ok ? static_cast<float>(gain) : 1.0f;
+        const double gain = TomlFloat(tbl["audio"]["mic_gain_linear"], 1.0);
+        aud.mic_gain_linear = static_cast<float>(gain);
     }
     {
-        const bool has_pid = settings.value(QStringLiteral("aud_has_window_pid"), false).toBool();
+        const bool has_pid = TomlBool(tbl["audio"]["has_window_pid"], false);
         if (has_pid) {
-            bool ok = false;
-            const uint pid = settings.value(QStringLiteral("aud_window_pid"), 0u).toUInt(&ok);
-            if (ok && pid != 0) {
+            const int64_t pid = TomlInt(tbl["audio"]["window_pid"], 0);
+            if (pid > 0) {
                 aud.selected_window_pid = static_cast<uint32_t>(pid);
             } else {
                 aud.selected_window_pid = std::nullopt;
@@ -635,73 +680,133 @@ std::optional<RecordingPreset> LoadPresetItem(QSettings& settings) {
             aud.selected_window_pid = std::nullopt;
         }
     }
-    {
-        const int row_count = settings.value(QStringLiteral("aud_row_count"), 0).toInt();
-        aud.source_rows.clear();
-        for (int i = 0; i < row_count; ++i) {
-            const auto kind =
-                AudioSourceKindFromString(settings.value(QStringLiteral("aud_row_%1_kind").arg(i)).toString());
-            if (!kind.has_value())
-                continue;
-            recorder_core::AudioSourceRow row;
-            row.kind = *kind;
-            row.enabled = settings.value(QStringLiteral("aud_row_%1_enabled").arg(i), true).toBool();
-            row.merge_with_above = settings.value(QStringLiteral("aud_row_%1_merge").arg(i), false).toBool();
-            aud.source_rows.push_back(row);
-        }
-    }
     // Audio encoding params (ADR 0019).
     {
-        bool ok = false;
-        const int bk = settings.value(QStringLiteral("aud_audio_bitrate_kbps"), 160).toInt(&ok);
-        aud.audio_bitrate_kbps = (ok && bk >= 0) ? static_cast<uint32_t>(bk) : 160u;
-        // SanitizePresetConfig() clamps to valid codec-specific ranges.
+        const int64_t bk = TomlInt(tbl["audio"]["audio_bitrate_kbps"], 160);
+        aud.audio_bitrate_kbps = (bk >= 0) ? static_cast<uint32_t>(bk) : 160u;
     }
     {
         const auto fd =
-            OpusFrameDurationFromString(settings.value(QStringLiteral("aud_opus_frame_duration")).toString());
+            OpusFrameDurationFromString(QString::fromStdString(TomlStr(tbl["audio"]["opus_frame_duration"])));
         aud.opus_frame_duration = fd.value_or(recorder_core::OpusFrameDuration::Ms20);
     }
     {
-        bool ok = false;
-        const int cplx = settings.value(QStringLiteral("aud_opus_complexity"), 10).toInt(&ok);
-        aud.opus_complexity = (ok && cplx >= 0 && cplx <= 10) ? cplx : 10;
+        const int64_t cplx = TomlInt(tbl["audio"]["opus_complexity"], 10);
+        aud.opus_complexity = (cplx >= 0 && cplx <= 10) ? static_cast<int>(cplx) : 10;
+    }
+    // Audio source rows — array-of-tables [[audio.sources]]
+    {
+        aud.source_rows.clear();
+        if (const auto* sources_node = tbl["audio"]["sources"].as_array()) {
+            for (const auto& elem : *sources_node) {
+                if (const auto* row_tbl = elem.as_table()) {
+                    const auto kind = AudioSourceKindFromString(QString::fromStdString(TomlStr((*row_tbl)["kind"])));
+                    if (!kind.has_value())
+                        continue;
+                    recorder_core::AudioSourceRow row;
+                    row.kind = *kind;
+                    row.enabled = TomlBool((*row_tbl)["enabled"], true);
+                    row.merge_with_above = TomlBool((*row_tbl)["merge"], false);
+                    aud.source_rows.push_back(row);
+                }
+            }
+        }
     }
 
     // --- Webcam ---
     auto& wc = preset.config.webcam;
-    wc.enabled = settings.value(QStringLiteral("wc_enabled"), false).toBool();
-    wc.device_id = settings.value(QStringLiteral("wc_device_id")).toString().toStdString();
-    wc.width = settings.value(QStringLiteral("wc_width"), 1280).toInt();
-    wc.height = settings.value(QStringLiteral("wc_height"), 720).toInt();
-    wc.fps = settings.value(QStringLiteral("wc_fps"), 30).toInt();
-    wc.overlay.x_norm = static_cast<float>(settings.value(QStringLiteral("wc_overlay_x"), 0.0).toDouble());
-    wc.overlay.y_norm = static_cast<float>(settings.value(QStringLiteral("wc_overlay_y"), 0.0).toDouble());
-    wc.overlay.w_norm = static_cast<float>(settings.value(QStringLiteral("wc_overlay_w"), 0.25).toDouble());
-    wc.overlay.h_norm = static_cast<float>(settings.value(QStringLiteral("wc_overlay_h"), 0.25).toDouble());
-    wc.overlay_user_placed = settings.value(QStringLiteral("wc_overlay_user_placed"), false).toBool();
-    wc.aspect_ratio_locked = settings.value(QStringLiteral("wc_aspect_ratio_locked"), true).toBool();
-    wc.mirror = settings.value(QStringLiteral("wc_mirror"), false).toBool();
-    wc.chroma_key.enabled = settings.value(QStringLiteral("wc_chroma_enabled"), false).toBool();
+    wc.enabled = TomlBool(tbl["webcam"]["enabled"], false);
+    wc.device_id = TomlStr(tbl["webcam"]["device_id"]);
+    wc.width = static_cast<int>(TomlInt(tbl["webcam"]["width"], 1280));
+    wc.height = static_cast<int>(TomlInt(tbl["webcam"]["height"], 720));
+    wc.fps = static_cast<int>(TomlInt(tbl["webcam"]["fps"], 30));
+    wc.overlay.x_norm = static_cast<float>(TomlFloat(tbl["webcam"]["overlay_x"], 0.0));
+    wc.overlay.y_norm = static_cast<float>(TomlFloat(tbl["webcam"]["overlay_y"], 0.0));
+    wc.overlay.w_norm = static_cast<float>(TomlFloat(tbl["webcam"]["overlay_w"], 0.25));
+    wc.overlay.h_norm = static_cast<float>(TomlFloat(tbl["webcam"]["overlay_h"], 0.25));
+    wc.overlay_user_placed = TomlBool(tbl["webcam"]["overlay_user_placed"], false);
+    wc.aspect_ratio_locked = TomlBool(tbl["webcam"]["aspect_ratio_locked"], true);
+    wc.mirror = TomlBool(tbl["webcam"]["mirror"], false);
+    wc.chroma_key.enabled = TomlBool(tbl["webcam"]["chroma_key"]["enabled"], false);
     {
-        const auto m =
-            WebcamChromaKeyColorModeFromString(settings.value(QStringLiteral("wc_chroma_color_mode")).toString());
+        const auto m = WebcamChromaKeyColorModeFromString(
+            QString::fromStdString(TomlStr(tbl["webcam"]["chroma_key"]["color_mode"])));
         if (m.has_value())
             wc.chroma_key.color_mode = *m;
     }
-    wc.chroma_key.custom_r = static_cast<uint8_t>(settings.value(QStringLiteral("wc_chroma_custom_r"), 0).toInt());
-    wc.chroma_key.custom_g = static_cast<uint8_t>(settings.value(QStringLiteral("wc_chroma_custom_g"), 255).toInt());
-    wc.chroma_key.custom_b = static_cast<uint8_t>(settings.value(QStringLiteral("wc_chroma_custom_b"), 0).toInt());
-    wc.chroma_key.tolerance =
-        static_cast<float>(settings.value(QStringLiteral("wc_chroma_tolerance"), 0.40).toDouble());
-    wc.chroma_key.softness = static_cast<float>(settings.value(QStringLiteral("wc_chroma_softness"), 0.15).toDouble());
-    wc.chroma_key.spill_reduction =
-        static_cast<float>(settings.value(QStringLiteral("wc_chroma_spill"), 0.30).toDouble());
+    wc.chroma_key.custom_r = static_cast<uint8_t>(TomlInt(tbl["webcam"]["chroma_key"]["custom_r"], 0));
+    wc.chroma_key.custom_g = static_cast<uint8_t>(TomlInt(tbl["webcam"]["chroma_key"]["custom_g"], 255));
+    wc.chroma_key.custom_b = static_cast<uint8_t>(TomlInt(tbl["webcam"]["chroma_key"]["custom_b"], 0));
+    wc.chroma_key.tolerance = static_cast<float>(TomlFloat(tbl["webcam"]["chroma_key"]["tolerance"], 0.40));
+    wc.chroma_key.softness = static_cast<float>(TomlFloat(tbl["webcam"]["chroma_key"]["softness"], 0.15));
+    wc.chroma_key.spill_reduction = static_cast<float>(TomlFloat(tbl["webcam"]["chroma_key"]["spill"], 0.30));
 
     // --- Countdown ---
-    preset.config.countdown_seconds = settings.value(QStringLiteral("countdown_seconds"), 0).toInt();
+    preset.config.countdown_seconds = static_cast<int>(TomlInt(tbl["countdown_seconds"], 0));
 
     return preset;
+}
+
+// ---------------------------------------------------------------------------
+// Serialize a document to a UTF-8 string (toml++ << operator).
+// ---------------------------------------------------------------------------
+
+std::string TomlDocToString(const toml::table& doc) {
+    std::ostringstream oss;
+    oss << doc;
+    return oss.str();
+}
+
+// ---------------------------------------------------------------------------
+// Atomic write: serialise `doc` and write via QSaveFile.
+// Returns true on success; on failure sets *err (if non-null) and returns false.
+// ---------------------------------------------------------------------------
+
+bool WriteTomlAtomic(const toml::table& doc, const QString& path, QString* err) {
+    const std::string toml_str = TomlDocToString(doc);
+
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        if (err)
+            *err = QStringLiteral("Could not open file for writing: %1").arg(path);
+        return false;
+    }
+    const QByteArray bytes = QByteArray::fromStdString(toml_str);
+    if (file.write(bytes) != bytes.size()) {
+        if (err)
+            *err = QStringLiteral("Failed to write preset data to: %1").arg(path);
+        file.cancelWriting();
+        return false;
+    }
+    if (!file.commit()) {
+        if (err)
+            *err = QStringLiteral("Failed to commit preset file (atomic rename): %1").arg(path);
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Parse a TOML file non-throwingly.
+// Returns an empty optional on any parse error; sets *parse_failed.
+//
+// Note: toml++ uses exceptions by default on MSVC (TOML_EXCEPTIONS=1).
+// When exceptions are enabled, toml::parse_result IS toml::table, and
+// toml::parse_file throws toml::parse_error on failure instead of returning
+// a discriminated union.  We always wrap in try/catch for robustness.
+// ---------------------------------------------------------------------------
+
+std::optional<toml::table> ParseTomlFile(const QString& path, bool* parse_failed) {
+    *parse_failed = false;
+    try {
+        return toml::parse_file(path.toStdString());
+    } catch (const toml::parse_error&) {
+        *parse_failed = true;
+        return std::nullopt;
+    } catch (...) {
+        *parse_failed = true;
+        return std::nullopt;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -726,9 +831,9 @@ RecordingPresetStore::RecordingPresetStore() {
     const QString config_dir = settings::ResolveAppConfigDir();
     if (!config_dir.isEmpty()) {
         QDir().mkpath(config_dir);
-        file_path_ = QDir(config_dir).filePath(QStringLiteral("presets.ini"));
+        file_path_ = QDir(config_dir).filePath(QStringLiteral("presets.toml"));
     } else {
-        file_path_ = QStringLiteral("presets.ini");
+        file_path_ = QStringLiteral("presets.toml");
     }
 }
 
@@ -749,23 +854,32 @@ PersistedPresetState RecordingPresetStore::Load() const {
         return MakeResetState();
     }
 
-    QSettings settings(file_path_, QSettings::IniFormat);
+    bool parse_failed = false;
+    const auto maybe_doc = ParseTomlFile(file_path_, &parse_failed);
+    if (!maybe_doc.has_value()) {
+        return MakeResetState();
+    }
+    const toml::table& doc = *maybe_doc;
 
     // Version check.
-    bool version_ok = false;
-    const int schema_version = settings.value(QStringLiteral("schemaVersion"), -1).toInt(&version_ok);
-    if (!version_ok || schema_version != kPresetSchemaVersion) {
+    const int64_t schema_version = TomlInt(doc["schema_version"], -1);
+    if (schema_version != kPresetSchemaVersion) {
         return MakeResetState();
     }
 
-    const int count = settings.beginReadArray(QStringLiteral("items"));
+    const toml::array* presets_arr = doc["presets"].as_array();
+    if (!presets_arr) {
+        return MakeResetState();
+    }
 
     std::vector<RecordingPreset> accepted;
     std::set<std::string> seen_ids;
 
-    for (int i = 0; i < count; ++i) {
-        settings.setArrayIndex(i);
-        const auto maybe = LoadPresetItem(settings);
+    for (const auto& elem : *presets_arr) {
+        const auto* item_tbl = elem.as_table();
+        if (!item_tbl)
+            continue;
+        const auto maybe = PresetFromToml(*item_tbl);
         if (!maybe.has_value()) {
             continue; // Malformed item — skip.
         }
@@ -780,8 +894,6 @@ PersistedPresetState RecordingPresetStore::Load() const {
         accepted.push_back(SanitizePreset(raw));
     }
 
-    settings.endArray();
-
     // No valid items → reset.
     if (accepted.empty()) {
         return MakeResetState();
@@ -795,8 +907,8 @@ PersistedPresetState RecordingPresetStore::Load() const {
     };
 
     // Repair selected_id.
-    std::string selected_id = settings.value(QStringLiteral("selectedId")).toString().toStdString();
-    std::string default_id = settings.value(QStringLiteral("defaultId")).toString().toStdString();
+    std::string selected_id = TomlStr(doc["selected_id"]);
+    std::string default_id = TomlStr(doc["default_id"]);
 
     if (!id_in_list(selected_id)) {
         if (id_in_list(default_id)) {
@@ -808,7 +920,6 @@ PersistedPresetState RecordingPresetStore::Load() const {
 
     // Repair default_id.
     if (!id_in_list(default_id)) {
-        // Prefer kDefaultPresetId if present.
         const std::string canonical(kDefaultPresetId);
         if (id_in_list(canonical)) {
             default_id = canonical;
@@ -838,21 +949,18 @@ void RecordingPresetStore::Save(const std::vector<RecordingPreset>& presets, con
     const QFileInfo info(file_path_);
     QDir().mkpath(info.absolutePath());
 
-    QSettings settings(file_path_, QSettings::IniFormat);
-    settings.setValue(QStringLiteral("schemaVersion"), kPresetSchemaVersion);
-    settings.setValue(QStringLiteral("selectedId"), QString::fromStdString(selected_id));
-    settings.setValue(QStringLiteral("defaultId"), QString::fromStdString(default_id));
+    toml::table doc;
+    doc.emplace("schema_version", static_cast<int64_t>(kPresetSchemaVersion));
+    doc.emplace("selected_id", selected_id);
+    doc.emplace("default_id", default_id);
 
-    // beginWriteArray clears any prior array entries — deleted presets leave no
-    // stale keys.
-    settings.beginWriteArray(QStringLiteral("items"), static_cast<int>(presets.size()));
-    for (int i = 0; i < static_cast<int>(presets.size()); ++i) {
-        settings.setArrayIndex(i);
-        SavePresetItem(settings, presets[static_cast<std::size_t>(i)]);
+    toml::array presets_arr;
+    for (const auto& preset : presets) {
+        presets_arr.push_back(PresetToToml(preset));
     }
-    settings.endArray();
+    doc.emplace("presets", std::move(presets_arr));
 
-    settings.sync(); // QSettings atomic write (temp + rename).
+    WriteTomlAtomic(doc, file_path_, nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -881,24 +989,15 @@ bool RecordingPresetStore::ExportPresetToFile(const RecordingPreset& preset, con
         return false;
     }
 
-    QSettings settings(path, QSettings::IniFormat);
-    settings.setValue(QStringLiteral("schemaVersion"), kPresetSchemaVersion);
-    // Tag as a single-preset export so ImportPresetsFromFile can detect which
-    // layout was used without ambiguity.
-    settings.setValue(QStringLiteral("exportKind"), QStringLiteral("single"));
+    toml::table doc;
+    doc.emplace("schema_version", static_cast<int64_t>(kPresetSchemaVersion));
+    doc.emplace("export_kind", std::string("single"));
 
-    settings.beginWriteArray(QStringLiteral("items"), 1);
-    settings.setArrayIndex(0);
-    SavePresetItem(settings, preset);
-    settings.endArray();
-    settings.sync();
+    toml::array presets_arr;
+    presets_arr.push_back(PresetToToml(preset));
+    doc.emplace("presets", std::move(presets_arr));
 
-    if (settings.status() != QSettings::NoError) {
-        if (err)
-            *err = QStringLiteral("Failed to write preset file: %1").arg(path);
-        return false;
-    }
-    return true;
+    return WriteTomlAtomic(doc, path, err);
 }
 
 // ---------------------------------------------------------------------------
@@ -920,24 +1019,17 @@ bool RecordingPresetStore::ExportAllUserPresetsToFile(const QVector<RecordingPre
         return false;
     }
 
-    QSettings settings(path, QSettings::IniFormat);
-    settings.setValue(QStringLiteral("schemaVersion"), kPresetSchemaVersion);
-    settings.setValue(QStringLiteral("exportKind"), QStringLiteral("all"));
+    toml::table doc;
+    doc.emplace("schema_version", static_cast<int64_t>(kPresetSchemaVersion));
+    doc.emplace("export_kind", std::string("all"));
 
-    settings.beginWriteArray(QStringLiteral("items"), static_cast<int>(presets.size()));
-    for (int i = 0; i < presets.size(); ++i) {
-        settings.setArrayIndex(i);
-        SavePresetItem(settings, presets[i]);
+    toml::array presets_arr;
+    for (const auto& preset : presets) {
+        presets_arr.push_back(PresetToToml(preset));
     }
-    settings.endArray();
-    settings.sync();
+    doc.emplace("presets", std::move(presets_arr));
 
-    if (settings.status() != QSettings::NoError) {
-        if (err)
-            *err = QStringLiteral("Failed to write preset file: %1").arg(path);
-        return false;
-    }
-    return true;
+    return WriteTomlAtomic(doc, path, err);
 }
 
 // ---------------------------------------------------------------------------
@@ -959,24 +1051,21 @@ QVector<RecordingPreset> RecordingPresetStore::ImportPresetsFromFile(const QStri
         return {};
     }
 
-    QSettings settings(path, QSettings::IniFormat);
-
-    if (settings.status() != QSettings::NoError) {
+    bool parse_failed = false;
+    const auto maybe_doc = ParseTomlFile(path, &parse_failed);
+    if (!maybe_doc.has_value()) {
         if (err)
-            *err = QStringLiteral("Could not open file for reading: %1").arg(path);
+            *err = QStringLiteral("Could not parse preset file (invalid TOML): %1").arg(path);
         return {};
     }
+    const toml::table& doc = *maybe_doc;
 
-    // Schema version check: best-effort — log a warning but still attempt to
-    // parse.  Pre-1.0: no migration; newer files are parsed as-is + sanitized.
-    bool version_ok = false;
-    const int file_version = settings.value(QStringLiteral("schemaVersion"), -1).toInt(&version_ok);
-    const bool version_mismatch = !version_ok || file_version != kPresetSchemaVersion;
+    // Schema version check: best-effort — attempt to parse regardless.
+    const int64_t file_version = TomlInt(doc["schema_version"], -1);
+    const bool version_mismatch = (file_version != kPresetSchemaVersion);
 
-    const int count = settings.beginReadArray(QStringLiteral("items"));
-
-    if (count <= 0) {
-        settings.endArray();
+    const toml::array* presets_arr = doc["presets"].as_array();
+    if (!presets_arr || presets_arr->empty()) {
         if (err) {
             if (version_mismatch) {
                 *err = QStringLiteral("Preset file has an unsupported schema version (%1, expected %2). No items could "
@@ -995,11 +1084,13 @@ QVector<RecordingPreset> RecordingPresetStore::ImportPresetsFromFile(const QStri
     std::set<std::string> used_ids(existing_ids.begin(), existing_ids.end());
 
     QVector<RecordingPreset> result;
-    result.reserve(count);
+    result.reserve(static_cast<qsizetype>(presets_arr->size()));
 
-    for (int i = 0; i < count; ++i) {
-        settings.setArrayIndex(i);
-        const auto maybe = LoadPresetItem(settings);
+    for (const auto& elem : *presets_arr) {
+        const auto* item_tbl = elem.as_table();
+        if (!item_tbl)
+            continue;
+        const auto maybe = PresetFromToml(*item_tbl);
         if (!maybe.has_value())
             continue; // Malformed — skip.
 
@@ -1016,8 +1107,6 @@ QVector<RecordingPreset> RecordingPresetStore::ImportPresetsFromFile(const QStri
         used_ids.insert(preset.id);
         result.push_back(std::move(preset));
     }
-
-    settings.endArray();
 
     if (result.isEmpty()) {
         if (err) {

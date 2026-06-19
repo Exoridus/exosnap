@@ -1,6 +1,6 @@
 // test_preset_export_import.cpp
 //
-// Tests for recording preset export / import (INI round-trip).
+// Tests for recording preset export / import (TOML round-trip).
 // Covers: ExportPresetToFile, ExportAllUserPresetsToFile, ImportPresetsFromFile,
 // RecordingPresetRegistry::ImportPreset.
 
@@ -9,9 +9,9 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QSettings>
 #include <QStandardPaths>
 #include <QString>
+#include <QTextStream>
 #include <QVector>
 
 #include <string>
@@ -34,9 +34,20 @@ namespace {
 
 static int s_counter = 0;
 
-QString UniqueTempPath(const char* suffix = ".ini") {
+QString UniqueTempPath(const char* suffix = ".toml") {
     const QString temp_dir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
     return QDir(temp_dir).filePath(QStringLiteral("exosnap_export_import_test_%1%2").arg(++s_counter).arg(suffix));
+}
+
+// Write a TOML string to a file (UTF-8).
+bool WriteTomlString(const QString& path, const QString& toml_content) {
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text))
+        return false;
+    QTextStream ts(&f);
+    ts.setEncoding(QStringConverter::Utf8);
+    ts << toml_content;
+    return true;
 }
 
 void CleanupFile(const QString& path) {
@@ -147,7 +158,7 @@ TEST(PresetExportImport, IdCollision_NewIdAssigned_ConfigPreserved) {
 // ===========================================================================
 
 TEST(PresetExportImport, MissingFile_ReturnsEmpty_ErrSet) {
-    const QString path = QStringLiteral("/nonexistent/path/no_such_file_12345.ini");
+    const QString path = QStringLiteral("/nonexistent/path/no_such_file_12345.toml");
     QString err;
     const QVector<RecordingPreset> imported = RecordingPresetStore::ImportPresetsFromFile(path, {}, &err);
     EXPECT_TRUE(imported.isEmpty());
@@ -166,7 +177,7 @@ TEST(PresetExportImport, EmptyPath_ReturnsEmpty_ErrSet) {
 }
 
 // ===========================================================================
-// Import of a garbage (non-INI) file → clean failure
+// Import of a garbage (non-TOML) file → clean failure, no crash
 // ===========================================================================
 
 TEST(PresetExportImport, GarbageFile_ReturnsEmpty_ErrSet) {
@@ -174,17 +185,15 @@ TEST(PresetExportImport, GarbageFile_ReturnsEmpty_ErrSet) {
     {
         QFile f(path);
         ASSERT_TRUE(f.open(QIODevice::WriteOnly | QIODevice::Text));
-        f.write("THIS IS NOT A VALID INI FILE\x00\xFF\xFE garbage\n");
+        // Syntactically broken — not valid TOML.
+        f.write("THIS IS NOT VALID TOML [[[garbage\x00\xFF\xFE\n");
     }
 
     QString err;
     const QVector<RecordingPreset> imported = RecordingPresetStore::ImportPresetsFromFile(path, {}, &err);
-    // The file opens (QSettings doesn't hard-fail on non-INI; it just reads
-    // no valid items).  Expect either empty result with err set.
+    // TOML parse failure → empty result + err set, no crash.
     EXPECT_TRUE(imported.isEmpty());
-    // err may or may not be set depending on QSettings behavior; at minimum,
-    // no crash.
-    (void)err;
+    EXPECT_FALSE(err.isEmpty());
 
     CleanupFile(path);
 }
@@ -207,16 +216,30 @@ TEST(PresetExportImport, ExportToEmptyPath_Fails) {
 TEST(PresetExportImport, SchemaMismatch_ErrSet_EmptyResult) {
     const QString path = UniqueTempPath();
 
-    // Write a file with a schema version newer than kPresetSchemaVersion and
-    // no items.  ImportPresetsFromFile must not crash.
-    {
-        QSettings s(path, QSettings::IniFormat);
-        s.setValue(QStringLiteral("schemaVersion"), kPresetSchemaVersion + 99);
-        s.setValue(QStringLiteral("exportKind"), QStringLiteral("single"));
-        s.beginWriteArray(QStringLiteral("items"), 0);
-        s.endArray();
-        s.sync();
-    }
+    // Write a TOML file with a schema_version newer than kPresetSchemaVersion
+    // and no presets array entries.  ImportPresetsFromFile must not crash.
+    const QString toml = QStringLiteral("schema_version = %1\n"
+                                        "export_kind = \"single\"\n"
+                                        "presets = []\n")
+                             .arg(kPresetSchemaVersion + 99);
+
+    ASSERT_TRUE(WriteTomlString(path, toml));
+
+    QString err;
+    const QVector<RecordingPreset> imported = RecordingPresetStore::ImportPresetsFromFile(path, {}, &err);
+    EXPECT_TRUE(imported.isEmpty());
+    EXPECT_FALSE(err.isEmpty());
+
+    CleanupFile(path);
+}
+
+// ===========================================================================
+// New: Malformed TOML → ImportPresetsFromFile returns empty + err, no crash
+// ===========================================================================
+
+TEST(PresetExportImport, MalformedToml_ImportReturnsEmpty_ErrSet_NoCrash) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(path, QStringLiteral("schema_version = !!BAD [[[TOML garbage")));
 
     QString err;
     const QVector<RecordingPreset> imported = RecordingPresetStore::ImportPresetsFromFile(path, {}, &err);

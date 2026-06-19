@@ -33,7 +33,7 @@ struct PersistedPresetState {
 
 class RecordingPresetStore {
   public:
-    // Default path: QStandardPaths::AppConfigLocation + "/presets.ini".
+    // Default path: QStandardPaths::AppConfigLocation + "/presets.toml".
     RecordingPresetStore();
 
     // Explicit path — intended for tests.  An empty path causes Load() to

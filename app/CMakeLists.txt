@@ -286,6 +286,7 @@ target_link_libraries(exosnap PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
     recorder_core exosnap::capability exosnap::warnings FFmpeg::mux exosnap::crash_capture
     exosnap::update
+    tomlplusplus::tomlplusplus
     d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
     mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib
 )
@@ -469,7 +470,7 @@ exosnap_add_gtest(
     LIBRARIES exosnap_capability recorder_core Qt6::Core
 )
 target_include_directories(audio_encoding_preset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(audio_encoding_preset_tests PRIVATE ole32.lib shell32.lib)
+target_link_libraries(audio_encoding_preset_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
 
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     exosnap_add_gtest(
@@ -940,7 +941,7 @@ exosnap_add_gtest(
             models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability recorder_core Qt6::Core)
 target_include_directories(recording_preset_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(recording_preset_store_tests PRIVATE ole32.lib shell32.lib)
+target_link_libraries(recording_preset_store_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
 
 # PRESET-EXPORT-IMPORT-R1 tests
 exosnap_add_gtest(
@@ -953,7 +954,7 @@ exosnap_add_gtest(
             models/OutputSettingsModel.cpp
     LIBRARIES exosnap_capability recorder_core Qt6::Core)
 target_include_directories(preset_export_import_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(preset_export_import_tests PRIVATE ole32.lib shell32.lib)
+target_link_libraries(preset_export_import_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
 
 # RECOVERY-MANIFEST-R1 tests
 exosnap_add_gtest(
