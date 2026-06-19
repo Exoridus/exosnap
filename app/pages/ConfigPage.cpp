@@ -1050,25 +1050,21 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
             rl->setSpacing(M::kSpaceXs);
 
-            // Header: field label + anti-cheat ⓘ note (per AdvancedPage pattern)
+            // Header: field label + a single InfoHint ⓘ whose tooltip folds in
+            // the anti-cheat note (no second glyph).
             {
                 auto* header_row = new QWidget(row);
                 auto* header_hl = new QHBoxLayout(header_row);
                 header_hl->setContentsMargins(0, 0, 0, 0);
                 header_hl->setSpacing(4);
-                auto* hint_row = makeFieldLabelWithHint(QStringLiteral("Diagnostics overlay"),
-                                                        ui::hints::kDiagnosticsOverlay, header_row);
+                auto* hint_row = makeFieldLabelWithHint(
+                    QStringLiteral("Diagnostics overlay"),
+                    ui::hints::kDiagnosticsOverlay +
+                        QStringLiteral("\n\nRead-only and capture-excluded — injects nothing into any "
+                                       "process. Some anti-cheat systems may still flag third-party "
+                                       "overlays; disable it if you hit issues."),
+                    header_row);
                 header_hl->addWidget(hint_row);
-
-                auto* anticheat_info = new QLabel(QString::fromUtf8("\xe2\x93\x98"), header_row); // ⓘ U+24D8
-                anticheat_info->setProperty("labelRole", "infoGlyph");
-                anticheat_info->setToolTip(
-                    QStringLiteral("Anti-cheat note: This overlay is read-only and capture-excluded "
-                                   "(SetWindowDisplayAffinity WDA_EXCLUDEFROMCAPTURE). It injects nothing into "
-                                   "any process. However, some anti-cheat systems may still flag overlays rendered "
-                                   "by any third-party process — disable this overlay if you encounter issues."));
-                anticheat_info->setCursor(Qt::WhatsThisCursor);
-                header_hl->addWidget(anticheat_info);
                 header_hl->addStretch(1);
                 rl->addWidget(header_row);
             }
