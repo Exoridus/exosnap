@@ -515,6 +515,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     record_page_->restoreRecordingHistory();
     config_page_->setAudioUiState(live_audio_);
     config_page_->setWebcamSettings(live_webcam_);
+
+    // SETTINGS-TIERS-R1: expert mode toggle + per-card expander state.
+    config_page_->setExpertModeEnabled(persisted_settings_.expert_mode_enabled);
+    config_page_->setOutputSplitExpanderExpanded(persisted_settings_.output_split_expander_expanded);
+    config_page_->setAudioSeparateExpanderExpanded(persisted_settings_.audio_separate_expander_expanded);
+    connect(config_page_, &ConfigPage::expertModeChanged, this, [this](bool enabled) {
+        persisted_settings_.expert_mode_enabled = enabled;
+        settings_store_.Save(persisted_settings_);
+    });
+    connect(config_page_, &ConfigPage::outputSplitExpanderChanged, this, [this](bool expanded) {
+        persisted_settings_.output_split_expander_expanded = expanded;
+        settings_store_.Save(persisted_settings_);
+    });
+    connect(config_page_, &ConfigPage::audioSeparateExpanderChanged, this, [this](bool expanded) {
+        persisted_settings_.audio_separate_expander_expanded = expanded;
+        settings_store_.Save(persisted_settings_);
+    });
+
     main_layout->addWidget(stack_, 1);
 
     // In-window About surface — a translucent backdrop + centered card overlaid on the

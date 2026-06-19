@@ -68,6 +68,13 @@ struct PersistedAppSettings {
     // ACCENT-PICKER-R1 (0.5.0-B): selected accent id from kExoSnapAccents.
     // Default "mint" (Studio Mint) so existing users see no change.
     QString accent_id = QStringLiteral("mint");
+
+    // SETTINGS-TIERS-R1: global Expert mode toggle (default OFF).
+    bool expert_mode_enabled = false;
+
+    // SETTINGS-TIERS-R1: per-card expander expanded states (default collapsed).
+    bool output_split_expander_expanded = false;
+    bool audio_separate_expander_expanded = false;
 };
 
 class AppSettingsStore {

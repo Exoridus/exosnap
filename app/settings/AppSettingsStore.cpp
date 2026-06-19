@@ -10,9 +10,9 @@
 namespace exosnap {
 namespace {
 
-// Bump to 14: ACCENT-PICKER-R1 adds accent_id (default "mint").
+// Bump to 15: SETTINGS-TIERS-R1 adds expert_mode_enabled + per-card expander states.
 // Pre-1.0: no migration; incompatible persisted data is reset to defaults.
-constexpr int kSettingsVersionCurrent = 14;
+constexpr int kSettingsVersionCurrent = 15;
 
 } // namespace
 
@@ -97,6 +97,16 @@ PersistedAppSettings AppSettingsStore::Load() const {
     persisted.accent_id = settings.value(QStringLiteral("accent_id"), QStringLiteral("mint")).toString();
     settings.endGroup();
 
+    settings.beginGroup(QStringLiteral("settings_tiers"));
+    // SETTINGS-TIERS-R1: expert mode toggle (default OFF).
+    persisted.expert_mode_enabled = settings.value(QStringLiteral("expert_mode_enabled"), false).toBool();
+    // SETTINGS-TIERS-R1: per-card expander expanded states (default collapsed).
+    persisted.output_split_expander_expanded =
+        settings.value(QStringLiteral("output_split_expander_expanded"), false).toBool();
+    persisted.audio_separate_expander_expanded =
+        settings.value(QStringLiteral("audio_separate_expander_expanded"), false).toBool();
+    settings.endGroup();
+
     return persisted;
 }
 
@@ -168,6 +178,16 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.beginGroup(QStringLiteral("appearance"));
     // ACCENT-PICKER-R1: accent color id.
     settings.setValue(QStringLiteral("accent_id"), settings_snapshot.accent_id);
+    settings.endGroup();
+
+    settings.beginGroup(QStringLiteral("settings_tiers"));
+    // SETTINGS-TIERS-R1: expert mode toggle.
+    settings.setValue(QStringLiteral("expert_mode_enabled"), settings_snapshot.expert_mode_enabled);
+    // SETTINGS-TIERS-R1: per-card expander expanded states.
+    settings.setValue(QStringLiteral("output_split_expander_expanded"),
+                      settings_snapshot.output_split_expander_expanded);
+    settings.setValue(QStringLiteral("audio_separate_expander_expanded"),
+                      settings_snapshot.audio_separate_expander_expanded);
     settings.endGroup();
 
     settings.sync();

@@ -30,6 +30,7 @@ class QToolButton;
 
 namespace exosnap::ui::widgets {
 class ExoToggle;
+class SettingsCardExpander;
 class VUMeterWidget;
 class WebcamSetupPanel;
 } // namespace exosnap::ui::widgets
@@ -70,6 +71,16 @@ class ConfigPage : public QWidget {
     void setActiveProfileName(const QString& profile_name);
     void setRecordingControlsLocked(bool locked);
 
+    // SETTINGS-TIERS-R1: Expert mode toggle (persisted by MainWindow).
+    void setExpertModeEnabled(bool enabled);
+    [[nodiscard]] bool expertModeEnabled() const noexcept;
+
+    // SETTINGS-TIERS-R1: Per-card expander state (persisted by MainWindow).
+    void setOutputSplitExpanderExpanded(bool expanded);
+    [[nodiscard]] bool outputSplitExpanderExpanded() const noexcept;
+    void setAudioSeparateExpanderExpanded(bool expanded);
+    [[nodiscard]] bool audioSeparateExpanderExpanded() const noexcept;
+
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     // Drive the embedded Webcam card deterministically for visual-test scenarios.
     void applyVisualWebcamState(bool available, bool mirror);
@@ -100,6 +111,13 @@ class ConfigPage : public QWidget {
     void diagnosticsRequested();
     void webcamDetailsRequested();
     void advancedRequested();
+
+    // SETTINGS-TIERS-R1: emitted when Expert mode changes via the toggle button.
+    void expertModeChanged(bool enabled);
+    // Emitted when the output-split expander is toggled.
+    void outputSplitExpanderChanged(bool expanded);
+    // Emitted when the audio-separate expander is toggled.
+    void audioSeparateExpanderChanged(bool expanded);
 
     // Emitted when the user presses the Rescan button in the Audio card.
     // MainWindow connects this to audio_notifier_.rescan() so Rescan and the
@@ -191,6 +209,7 @@ class ConfigPage : public QWidget {
     void onSetDefaultPreset();
     void onManagePresets();
     void updatePresetActionState();
+    void updateExpertModeVisibility();
 
     capability::AudioUiState audio_ui_state_;
     WebcamSettings webcam_settings_;
@@ -331,6 +350,14 @@ class ConfigPage : public QWidget {
 
     QLabel* token_help_label_ = nullptr;
     QPushButton* token_help_toggle_btn_ = nullptr;
+
+    // SETTINGS-TIERS-R1: Expert mode toggle button in settings header.
+    QPushButton* expert_mode_btn_ = nullptr;
+    bool expert_mode_enabled_ = false;
+
+    // SETTINGS-TIERS-R1: Per-card Advanced expanders (collapsible sections).
+    ui::widgets::SettingsCardExpander* output_split_expander_ = nullptr;
+    ui::widgets::SettingsCardExpander* audio_separate_expander_ = nullptr;
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     // Inline error label for preset save-error visual-test scenario.

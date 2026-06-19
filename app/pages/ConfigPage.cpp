@@ -36,6 +36,7 @@
 #include "../ui/dialogs/UpdateSettingsPanel.h"
 #include "../ui/widgets/ComboBoxWheelFilter.h"
 #include "../ui/widgets/ExoToggle.h"
+#include "../ui/widgets/SettingsCardExpander.h"
 #include "../ui/widgets/VUMeterWidget.h"
 #include "../ui/widgets/WebcamSetupPanel.h"
 #include "../viewmodels/PresentationStateBuilder.h"
@@ -234,6 +235,28 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     status_layout->addWidget(lock_note_label_);
 
     layout->addWidget(readiness_panel_);
+
+    // ---- EXPERT MODE TOGGLE (full width, top of settings) ----
+    // SETTINGS-TIERS-R1: global expert mode; persisted via AppSettingsStore.
+    auto* expert_panel = makePanel(content);
+    expert_panel->setObjectName(QStringLiteral("expertModePanel"));
+    expert_panel->setProperty("panelRole", "note");
+    auto* expert_layout = new QHBoxLayout(expert_panel);
+    expert_layout->setContentsMargins(18, 10, 18, 10);
+    expert_layout->setSpacing(12);
+    auto* expert_label_layout = new QVBoxLayout();
+    expert_label_layout->setSpacing(2);
+    expert_label_layout->addWidget(makeCardTitle(QStringLiteral("Expert mode"), expert_panel));
+    expert_label_layout->addWidget(makeHint(QStringLiteral("Reveals lower-level controls that can produce incompatible "
+                                                           "files. Enable only if you know what you are doing."),
+                                            expert_panel));
+    expert_layout->addLayout(expert_label_layout, 1);
+    expert_mode_btn_ = new QPushButton(QStringLiteral("Enable"), expert_panel);
+    expert_mode_btn_->setObjectName(QStringLiteral("expertModeToggleBtn"));
+    expert_mode_btn_->setProperty("role", "ghost");
+    expert_mode_btn_->setCheckable(false);
+    expert_layout->addWidget(expert_mode_btn_, 0, Qt::AlignVCenter);
+    layout->addWidget(expert_panel);
 
     // ---- PRESET CARD (full width, top) ----
     // A preset is a full recording setup. The card exposes: selector, dirty indicator,
@@ -657,6 +680,34 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         audio_panel_layout->addWidget(mic_row);
     }
 
+    // SETTINGS-TIERS-R1: "Separate track" toggles behind an Advanced expander.
+    // The three separate_check_ widgets are reparented from their original rows
+    // into the expander content. Qt removes them from the old layouts automatically.
+    audio_separate_expander_ = new ui::widgets::SettingsCardExpander(3, audio_panel);
+    audio_separate_expander_->setObjectName(QStringLiteral("audioSeparateExpander"));
+    {
+        auto* sep_content = audio_separate_expander_->contentWidget();
+        auto* sep_layout = qobject_cast<QVBoxLayout*>(sep_content->layout());
+
+        auto makeSeprateRow = [&](const QString& label_text, ui::widgets::ExoToggle* toggle) {
+            auto* row = new QHBoxLayout();
+            row->setSpacing(8);
+            auto* lbl = new QLabel(label_text, sep_content);
+            lbl->setProperty("labelRole", "muted");
+            row->addWidget(lbl);
+            row->addStretch();
+            // Reparent the toggle from its original audio row into the expander content.
+            // Qt removes it from the old QHBoxLayout cell automatically.
+            toggle->setParent(sep_content);
+            row->addWidget(toggle);
+            sep_layout->addLayout(row);
+        };
+        makeSeprateRow(QStringLiteral("System audio"), sys_separate_check_);
+        makeSeprateRow(QStringLiteral("App audio"), app_separate_check_);
+        makeSeprateRow(QStringLiteral("Microphone"), mic_separate_check_);
+    }
+    audio_panel_layout->addWidget(audio_separate_expander_);
+
     audio_panel_layout->addWidget(
         makeHint(QStringLiteral("Separate tracks keep each source on its own channel for editing."), audio_panel));
 
@@ -767,12 +818,18 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_effective_summary_label_->setObjectName(QStringLiteral("outputEffectiveSummaryLabel"));
     out_panel_layout->addWidget(output_effective_summary_label_);
 
-    // ---- Split recording (SPLIT-RECORDING-R1) ----
-    out_panel_layout->addWidget(makeFieldLabel(QStringLiteral("Split recording"), out_panel));
+    // ---- Split recording (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1) behind Advanced expander ----
+    // SETTINGS-TIERS-R1: split settings are Advanced-tier; hidden behind the expander by default.
+    output_split_expander_ = new ui::widgets::SettingsCardExpander(2, out_panel);
+    output_split_expander_->setObjectName(QStringLiteral("outputSplitExpander"));
+    auto* split_expander_content_layout = qobject_cast<QVBoxLayout*>(output_split_expander_->contentWidget()->layout());
+
+    split_expander_content_layout->addWidget(
+        makeFieldLabel(QStringLiteral("Split recording"), output_split_expander_->contentWidget()));
     auto* split_row = new QHBoxLayout();
     split_row->setContentsMargins(0, 0, 0, 0);
     split_row->setSpacing(8);
-    split_mode_combo_ = new QComboBox(out_panel);
+    split_mode_combo_ = new QComboBox(output_split_expander_->contentWidget());
     split_mode_combo_->setObjectName(QStringLiteral("splitModeCombo"));
     split_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitRecordingMode::Off));
     split_mode_combo_->addItem(QStringLiteral("Every 15 min"), static_cast<int>(SplitRecordingMode::Every15Min));
@@ -783,7 +840,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         QStringLiteral("Automatically start a new file at the chosen interval (manual splits always work)."));
     split_row->addWidget(split_mode_combo_, 0);
 
-    split_custom_widget_ = new QWidget(out_panel);
+    split_custom_widget_ = new QWidget(output_split_expander_->contentWidget());
     auto* split_custom_layout = new QHBoxLayout(split_custom_widget_);
     split_custom_layout->setContentsMargins(0, 0, 0, 0);
     split_custom_layout->setSpacing(8);
@@ -800,18 +857,19 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     split_custom_widget_->setVisible(false);
     split_row->addWidget(split_custom_widget_, 0);
     split_row->addStretch();
-    out_panel_layout->addLayout(split_row);
+    split_expander_content_layout->addLayout(split_row);
 
-    split_summary_label_ = makeHint(QString(), out_panel);
+    split_summary_label_ = makeHint(QString(), output_split_expander_->contentWidget());
     split_summary_label_->setObjectName(QStringLiteral("splitSummaryLabel"));
-    out_panel_layout->addWidget(split_summary_label_);
+    split_expander_content_layout->addWidget(split_summary_label_);
 
     // ---- Split recording by size (SPLIT-BY-SIZE-R1) ----
-    out_panel_layout->addWidget(makeFieldLabel(QStringLiteral("Split by size"), out_panel));
+    split_expander_content_layout->addWidget(
+        makeFieldLabel(QStringLiteral("Split by size"), output_split_expander_->contentWidget()));
     auto* split_size_row = new QHBoxLayout();
     split_size_row->setContentsMargins(0, 0, 0, 0);
     split_size_row->setSpacing(8);
-    split_size_mode_combo_ = new QComboBox(out_panel);
+    split_size_mode_combo_ = new QComboBox(output_split_expander_->contentWidget());
     split_size_mode_combo_->setObjectName(QStringLiteral("splitSizeModeCombo"));
     split_size_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitSizeMode::Off));
     split_size_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitSizeMode::Custom));
@@ -819,13 +877,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         QStringLiteral("Automatically start a new file when the segment reaches the chosen size."));
     split_size_row->addWidget(split_size_mode_combo_, 0);
 
-    split_size_custom_widget_ = new QWidget(out_panel);
+    split_size_custom_widget_ = new QWidget(output_split_expander_->contentWidget());
     auto* split_size_custom_layout = new QHBoxLayout(split_size_custom_widget_);
     split_size_custom_layout->setContentsMargins(0, 0, 0, 0);
     split_size_custom_layout->setSpacing(8);
     auto* split_size_label = new QLabel(QStringLiteral("Every"), split_size_custom_widget_);
     split_size_label->setProperty("labelRole", "fieldLabel");
-    split_custom_size_spin_ = new QSpinBox(split_size_custom_widget_);
+    split_custom_size_spin_ = new QSpinBox(output_split_expander_->contentWidget());
     split_custom_size_spin_->setObjectName(QStringLiteral("splitCustomSizeSpin"));
     // kMaxSizeMb = 1024*1024 = 1048576 which fits in int (< 2147483647).
     split_custom_size_spin_->setRange(static_cast<int>(SplitRecordingSettings::kMinSizeMb),
@@ -839,7 +897,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     split_size_custom_widget_->setVisible(false);
     split_size_row->addWidget(split_size_custom_widget_, 0);
     split_size_row->addStretch();
-    out_panel_layout->addLayout(split_size_row);
+    split_expander_content_layout->addLayout(split_size_row);
+
+    out_panel_layout->addWidget(output_split_expander_);
 
     auto* output_split = new QWidget(out_panel);
     output_split_layout_ = new QHBoxLayout(output_split);
@@ -1048,6 +1108,31 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         token_help_toggle_btn_->setText(now_visible ? QStringLiteral("Hide token reference")
                                                     : QStringLiteral("Show token reference"));
     });
+
+    // SETTINGS-TIERS-R1: Expert mode toggle button.
+    connect(expert_mode_btn_, &QPushButton::clicked, this, [this]() {
+        if (!expert_mode_enabled_) {
+            // First enable: show confirmation dialog.
+            auto* msgbox = new QMessageBox(this);
+            msgbox->setWindowTitle(QStringLiteral("Enable Expert mode?"));
+            msgbox->setText(QStringLiteral("Expert mode reveals lower-level controls that can produce incompatible "
+                                           "files.\n\nEnable only if you know what you are doing."));
+            msgbox->setStandardButtons(QMessageBox::Yes | QMessageBox::Cancel);
+            msgbox->setDefaultButton(QMessageBox::Cancel);
+            if (msgbox->exec() != QMessageBox::Yes)
+                return;
+        }
+        expert_mode_enabled_ = !expert_mode_enabled_;
+        expert_mode_btn_->setText(expert_mode_enabled_ ? QStringLiteral("Disable") : QStringLiteral("Enable"));
+        updateExpertModeVisibility();
+        emit expertModeChanged(expert_mode_enabled_);
+    });
+
+    // SETTINGS-TIERS-R1: expander state change signals.
+    connect(output_split_expander_, &ui::widgets::SettingsCardExpander::expandedChanged, this,
+            [this](bool expanded) { emit outputSplitExpanderChanged(expanded); });
+    connect(audio_separate_expander_, &ui::widgets::SettingsCardExpander::expandedChanged, this,
+            [this](bool expanded) { emit audioSeparateExpanderChanged(expanded); });
 
     // Prevent accidental value changes when the mouse wheel scrolls the (long) Config
     // page while the cursor happens to be over a combo box. The filter forwards the
@@ -2020,6 +2105,44 @@ void ConfigPage::setAudioMeterLevels(float sys01, float app01, float mic01, bool
     update(audio_sys_meter_, audio_sys_db_label_, sys01, sys_active);
     update(audio_app_meter_, audio_app_db_label_, app01, app_active);
     update(audio_mic_meter_, audio_mic_db_label_, mic01, mic_active);
+}
+
+// ---- SETTINGS-TIERS-R1: Expert mode + per-card expander public API ----
+
+void ConfigPage::setExpertModeEnabled(bool enabled) {
+    if (expert_mode_enabled_ == enabled)
+        return;
+    expert_mode_enabled_ = enabled;
+    if (expert_mode_btn_)
+        expert_mode_btn_->setText(enabled ? QStringLiteral("Disable") : QStringLiteral("Enable"));
+    updateExpertModeVisibility();
+}
+
+bool ConfigPage::expertModeEnabled() const noexcept {
+    return expert_mode_enabled_;
+}
+
+void ConfigPage::setOutputSplitExpanderExpanded(bool expanded) {
+    if (output_split_expander_)
+        output_split_expander_->setExpanded(expanded);
+}
+
+bool ConfigPage::outputSplitExpanderExpanded() const noexcept {
+    return output_split_expander_ ? output_split_expander_->isExpanded() : false;
+}
+
+void ConfigPage::setAudioSeparateExpanderExpanded(bool expanded) {
+    if (audio_separate_expander_)
+        audio_separate_expander_->setExpanded(expanded);
+}
+
+bool ConfigPage::audioSeparateExpanderExpanded() const noexcept {
+    return audio_separate_expander_ ? audio_separate_expander_->isExpanded() : false;
+}
+
+void ConfigPage::updateExpertModeVisibility() {
+    // Phase 1: no Expert-tier controls exist yet in the two chosen cards.
+    // The toggle mechanism is wired; later phases add Expert rows.
 }
 
 void ConfigPage::onAudioAppToggled() {

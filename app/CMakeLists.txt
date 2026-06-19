@@ -134,6 +134,8 @@ qt_add_executable(exosnap WIN32
     ui/widgets/ExoToggle.cpp
     ui/widgets/ExoCheckBox.h
     ui/widgets/ExoCheckBox.cpp
+    ui/widgets/SettingsCardExpander.h
+    ui/widgets/SettingsCardExpander.cpp
     ui/widgets/ComboBoxWheelFilter.h
     ui/widgets/ComboBoxWheelFilter.cpp
     ui/widgets/RegionSelectionOverlay.h
@@ -378,6 +380,7 @@ exosnap_add_app_test_support(exosnap_pages_test_support
     ui/widgets/ComboBoxWheelFilter.cpp
     ui/widgets/CameraPreview.cpp
     ui/widgets/ExoToggle.cpp
+    ui/widgets/SettingsCardExpander.cpp
     ui/widgets/VUMeterWidget.cpp
     ui/widgets/WebcamSetupPanel.cpp
     # UPDATE-WIRE-R1: ConfigPage now embeds the UpdateSettingsPanel, which pulls in
@@ -668,6 +671,19 @@ exosnap_add_gtest(
 target_include_directories(config_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(config_page_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(config_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
+
+# SETTINGS-TIERS-R1: Expert mode toggle, per-card expander, and persistence tests.
+exosnap_add_gtest(
+    NAME settings_tiers_tests
+    TEST_PREFIX tiers.
+    SOURCES
+        tests/test_settings_tiers.cpp
+        settings/AppSettingsStore.cpp
+    LIBRARIES exosnap_pages_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(settings_tiers_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(settings_tiers_tests PROPERTIES AUTOMOC ON)
+target_link_libraries(settings_tiers_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
 
 exosnap_add_gtest(
     NAME source_picker_dialog_tests
