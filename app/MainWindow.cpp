@@ -4,7 +4,6 @@
 #include "models/RecordingPreset.h"
 #include "notifications/NotificationEvent.h"
 #include "notifications/NotificationManager.h"
-#include "pages/AdvancedPage.h"
 #include "pages/ConfigPage.h"
 #include "pages/DiagnosticsPage.h"
 #include "pages/HotkeysPage.h"
@@ -176,14 +175,13 @@ struct PageDescriptor {
     SidebarIcon icon;
 };
 
-constexpr std::array<PageDescriptor, 8> kPageDescriptors = {{
+constexpr std::array<PageDescriptor, 7> kPageDescriptors = {{
     {"Record", "Operational view — target, readiness, and live runtime.", "", true, SidebarIcon::Record},
     {"Settings", "Unified recording configuration — format, sources, and output.", "", true, SidebarIcon::Setup},
     {"Hotkeys", "Global command access for recording operations.", "GLOBAL SHORTCUTS", true, SidebarIcon::Hotkeys},
     {"Diagnostics", "Capability checks, blockers, and system readiness.", "BLOCKER-FIRST", true,
      SidebarIcon::Diagnostics},
     {"Logs", "Runtime events and recording diagnostics.", "SESSION EVENTS", true, SidebarIcon::Logs},
-    {"Advanced", "Lower-level behavior and non-default controls.", "EXPERT SETTINGS", false, SidebarIcon::Advanced},
     {"Webcam", "Webcam device and capture settings.", "", false, SidebarIcon::Webcam},
     {"Output", "Recording preset management — create, export, and import presets.", "", false, SidebarIcon::Output},
 }};
@@ -198,7 +196,6 @@ constexpr int pageIndexForIcon(SidebarIcon icon) {
 constexpr int kRecordPageIndex = pageIndexForIcon(SidebarIcon::Record);
 constexpr int kSettingsPageIndex = pageIndexForIcon(SidebarIcon::Setup);
 constexpr int kHotkeysPageIndex = pageIndexForIcon(SidebarIcon::Hotkeys);
-constexpr int kAdvancedPageIndex = pageIndexForIcon(SidebarIcon::Advanced);
 constexpr int kDiagnosticsPageIndex = pageIndexForIcon(SidebarIcon::Diagnostics);
 constexpr int kWebcamPageIndex = pageIndexForIcon(SidebarIcon::Webcam);
 constexpr int kLogsPageIndex = pageIndexForIcon(SidebarIcon::Logs);
@@ -206,7 +203,6 @@ constexpr int kOutputPageIndex = pageIndexForIcon(SidebarIcon::Output);
 static_assert(kRecordPageIndex >= 0, "Record page must exist in kPageDescriptors.");
 static_assert(kSettingsPageIndex >= 0, "Settings page must exist in kPageDescriptors.");
 static_assert(kHotkeysPageIndex >= 0, "Hotkeys page must exist in kPageDescriptors.");
-static_assert(kAdvancedPageIndex >= 0, "Advanced page must exist in kPageDescriptors.");
 static_assert(kDiagnosticsPageIndex >= 0, "Diagnostics page must exist in kPageDescriptors.");
 static_assert(kWebcamPageIndex >= 0, "Webcam page must exist in kPageDescriptors.");
 static_assert(kLogsPageIndex >= 0, "Logs page must exist in kPageDescriptors.");
@@ -498,10 +494,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     stack_->addWidget(diagnostics_page_);
     logs_page_ = new LogsPage(stack_);
     stack_->addWidget(logs_page_);
-    advanced_page_ = new AdvancedPage(stack_);
-    advanced_page_->setBaseline(output_settings_, video_settings_,
-                                QString::fromStdString(preset_registry_.SelectedPreset().name));
-    stack_->addWidget(advanced_page_);
     stack_->addWidget(webcam_page_);
     output_page_ = new OutputPage(output_settings_, stack_);
     stack_->addWidget(output_page_);
@@ -515,6 +507,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     record_page_->restoreRecordingHistory();
     config_page_->setAudioUiState(live_audio_);
     config_page_->setWebcamSettings(live_webcam_);
+
+    // SETTINGS-TIERS-R1: expert mode toggle + per-card expander state.
+    config_page_->setExpertModeEnabled(persisted_settings_.expert_mode_enabled);
+    config_page_->setOutputSplitExpanderExpanded(persisted_settings_.output_split_expander_expanded);
+    config_page_->setAudioSeparateExpanderExpanded(persisted_settings_.audio_separate_expander_expanded);
+    connect(config_page_, &ConfigPage::expertModeChanged, this, [this](bool enabled) {
+        persisted_settings_.expert_mode_enabled = enabled;
+        settings_store_.Save(persisted_settings_);
+    });
+    connect(config_page_, &ConfigPage::outputSplitExpanderChanged, this, [this](bool expanded) {
+        persisted_settings_.output_split_expander_expanded = expanded;
+        settings_store_.Save(persisted_settings_);
+    });
+    connect(config_page_, &ConfigPage::audioSeparateExpanderChanged, this, [this](bool expanded) {
+        persisted_settings_.audio_separate_expander_expanded = expanded;
+        settings_store_.Save(persisted_settings_);
+    });
+
     main_layout->addWidget(stack_, 1);
 
     // In-window About surface — a translucent backdrop + centered card overlaid on the
@@ -596,10 +606,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         output_settings_.naming_pattern = settings.naming_pattern;
         output_settings_.resolution = settings.resolution;
         record_page_->setOutputSettings(output_settings_);
-        if (advanced_page_) {
-            advanced_page_->setBaseline(output_settings_, video_settings_,
-                                        QString::fromStdString(preset_registry_.SelectedPreset().name));
-        }
         const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
         if (config_page_)
             config_page_->setPresetDirty(dirty);
@@ -617,10 +623,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
             return;
         video_settings_ = settings;
         record_page_->setVideoSettings(settings);
-        if (advanced_page_) {
-            advanced_page_->setBaseline(output_settings_, video_settings_,
-                                        QString::fromStdString(preset_registry_.SelectedPreset().name));
-        }
         const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
         if (config_page_)
             config_page_->setPresetDirty(dirty);
@@ -758,10 +760,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // the Diagnostics page (same UI thread; direct connection).
     connect(record_page_, &RecordPage::diagnosticsUpdated, diagnostics_page_, &DiagnosticsPage::applyLiveDiagnostics);
     connect(config_page_, &ConfigPage::webcamDetailsRequested, this, [this]() { navigateToPage(kWebcamPageIndex); });
-    connect(config_page_, &ConfigPage::advancedRequested, this, [this]() { navigateToPage(kAdvancedPageIndex); });
     connect(webcam_page_, &WebcamPage::backToSettingsRequested, this, [this]() { navigateToPage(kSettingsPageIndex); });
-    connect(advanced_page_, &AdvancedPage::backToSettingsRequested, this,
-            [this]() { navigateToPage(kSettingsPageIndex); });
 
     // ---- OutputPage preset management signals ----
     connect(output_page_, &OutputPage::activeProfileChanged, this, [this](const QString& id) { onPresetSelected(id); });
@@ -789,11 +788,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // ---- Recording overlay (RECORDING-OVERLAY-R1) ----
     // Overlay window is top-level (no Qt parent) so it is not clipped by MainWindow.
     recording_overlay_ = new ui::overlay::RecordingOverlayWindow(nullptr);
-    // Populate the Advanced page checkbox from the persisted setting.
-    if (advanced_page_)
-        advanced_page_->setShowOverlay(persisted_settings_.show_recording_overlay);
+    // Populate the Settings page checkbox from the persisted setting.
+    if (config_page_)
+        config_page_->setShowOverlay(persisted_settings_.show_recording_overlay);
     // When the user toggles the overlay checkbox, persist the change and update live state.
-    connect(advanced_page_, &AdvancedPage::showOverlayChanged, this, [this](bool show) {
+    connect(config_page_, &ConfigPage::showOverlayChanged, this, [this](bool show) {
         persisted_settings_.show_recording_overlay = show;
         settings_store_.Save(persisted_settings_);
         updateRecordingOverlay();
@@ -812,11 +811,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // ---- Diagnostics overlay (DIAGNOSTICS-OVERLAY-R1) ----
     // Top-level (no Qt parent) like RecordingOverlayWindow; bottom-right corner.
     diagnostics_overlay_ = new ui::overlay::DiagnosticsOverlayWindow(nullptr);
-    // Populate the Advanced page checkbox from the persisted setting.
-    if (advanced_page_)
-        advanced_page_->setShowDiagnosticsOverlay(persisted_settings_.show_diagnostics_overlay);
+    // Populate the Settings page checkbox from the persisted setting.
+    if (config_page_)
+        config_page_->setShowDiagnosticsOverlay(persisted_settings_.show_diagnostics_overlay);
     // When the user toggles the diagnostics overlay checkbox, persist and update live state.
-    connect(advanced_page_, &AdvancedPage::showDiagnosticsOverlayChanged, this, [this](bool show) {
+    connect(config_page_, &ConfigPage::showDiagnosticsOverlayChanged, this, [this](bool show) {
         persisted_settings_.show_diagnostics_overlay = show;
         settings_store_.Save(persisted_settings_);
         updateDiagnosticsOverlay();
@@ -865,9 +864,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     initNotificationToasts();
 
     // ---- Close-to-tray toggle (TRAY-CLOSE-TO-TRAY-R1) ----
-    if (advanced_page_)
-        advanced_page_->setKeepRunningInTray(persisted_settings_.keep_running_in_tray);
-    connect(advanced_page_, &AdvancedPage::keepRunningInTrayChanged, this, [this](bool keep) {
+    if (config_page_)
+        config_page_->setKeepRunningInTray(persisted_settings_.keep_running_in_tray);
+    connect(config_page_, &ConfigPage::keepRunningInTrayChanged, this, [this](bool keep) {
         persisted_settings_.keep_running_in_tray = keep;
         settings_store_.Save(persisted_settings_);
     });
@@ -876,13 +875,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // Top-level window (no Qt parent) so it is not clipped by MainWindow.
     // Interactive + capture-excluded: does NOT carry Qt::WindowTransparentForInput.
     quick_control_pill_ = new ui::overlay::QuickControlPillWindow(nullptr);
-    // Populate the Advanced page checkbox from the persisted setting.
-    if (advanced_page_)
-        advanced_page_->setShowQuickControls(persisted_settings_.show_quick_controls);
+    // Populate the Settings page checkbox from the persisted setting.
+    if (config_page_)
+        config_page_->setShowQuickControls(persisted_settings_.show_quick_controls);
     // Propagate persisted setting to the pill immediately.
     quick_control_pill_->setShowQuickControls(persisted_settings_.show_quick_controls);
     // When the user toggles the quick controls checkbox, persist and update live state.
-    connect(advanced_page_, &AdvancedPage::showQuickControlsChanged, this, [this](bool show) {
+    connect(config_page_, &ConfigPage::showQuickControlsChanged, this, [this](bool show) {
         persisted_settings_.show_quick_controls = show;
         settings_store_.Save(persisted_settings_);
         if (quick_control_pill_)
@@ -890,16 +889,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         updateQuickControlPill();
     });
     // ---- Accent color picker (ACCENT-PICKER-R1) ----
-    // Populate the Advanced page combo from the persisted setting.
-    if (advanced_page_)
-        advanced_page_->setAccentId(persisted_settings_.accent_id);
+    // Populate the Settings page combo from the persisted setting.
+    if (config_page_)
+        config_page_->setAccentId(persisted_settings_.accent_id);
     // Apply the persisted accent on startup (no-op if "mint" since ApplyExoSnapTheme
     // already used the default; called unconditionally for any non-default stored accent).
     if (persisted_settings_.accent_id != QStringLiteral("mint")) {
         ui::theme::ReapplyAccent(*qApp, persisted_settings_.accent_id);
     }
     // When the user picks a different accent, apply it live and persist.
-    connect(advanced_page_, &AdvancedPage::accentIdChanged, this, [this](const QString& id) {
+    connect(config_page_, &ConfigPage::accentIdChanged, this, [this](const QString& id) {
         persisted_settings_.accent_id = id;
         settings_store_.Save(persisted_settings_);
         ui::theme::ReapplyAccent(*qApp, id);
@@ -2004,9 +2003,9 @@ void MainWindow::applyRestoredGeometry() {
 }
 
 int MainWindow::navHighlightIndexFor(int index) const {
-    // Advanced, Webcam, and Output are sub-pages reached from Settings; keep the
+    // Webcam and Output are sub-pages reached from Settings; keep the
     // Settings tab lit while they are shown (no dedicated top-nav tab for them).
-    if (index == kAdvancedPageIndex || index == kWebcamPageIndex || index == kOutputPageIndex)
+    if (index == kWebcamPageIndex || index == kOutputPageIndex)
         return kSettingsPageIndex;
     return index;
 }
@@ -2088,10 +2087,6 @@ void MainWindow::applyPresetConfig(const RecordingPresetConfig& cfg) {
         config_page_->setWebcamSettings(cfg2.webcam);
         config_page_->setOutputFolder(cfg2.output.output_folder);
         config_page_->setActiveProfileName(QString::fromStdString(preset_registry_.SelectedPreset().name));
-    }
-    if (advanced_page_) {
-        advanced_page_->setBaseline(cfg2.output, cfg2.video,
-                                    QString::fromStdString(preset_registry_.SelectedPreset().name));
     }
     if (webcam_page_) {
         webcam_page_->applySettings(cfg2.webcam);
@@ -2561,6 +2556,11 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
     config_page_->setRecordingControlsLocked(scenario.controls_locked);
     config_page_->setAudioMeterLevels(0.37f, 0.56f, 0.42f, true, true, true);
 
+    // Settings-tiers progressive-disclosure state (SETTINGS-TIERS-R1): drive the
+    // Expert-mode reveal + Advanced expander deterministically for visual scenarios.
+    config_page_->setExpertModeEnabled(scenario.settings_expert_mode);
+    config_page_->setOutputSplitExpanderExpanded(scenario.settings_advanced_expanded);
+
     // Webcam-card scenarios (mirror off/on, unavailable) drive the embedded panel
     // deterministically without opening a real camera.
     if (scenario.webcam_state != visual::VisualWebcamState::None) {
@@ -3020,12 +3020,12 @@ void MainWindow::initNotificationToasts() {
     // Destroyed explicitly in ~MainWindow().
     notification_toast_window_ = new ui::overlay::NotificationToastWindow(notification_manager_, nullptr);
 
-    // Populate the Advanced page checkbox from the persisted setting.
-    if (advanced_page_)
-        advanced_page_->setShowNotifications(persisted_settings_.show_notifications);
+    // Populate the Settings page checkbox from the persisted setting.
+    if (config_page_)
+        config_page_->setShowNotifications(persisted_settings_.show_notifications);
 
     // When the user toggles the notifications checkbox, persist and apply.
-    connect(advanced_page_, &AdvancedPage::showNotificationsChanged, this, [this](bool show) {
+    connect(config_page_, &ConfigPage::showNotificationsChanged, this, [this](bool show) {
         persisted_settings_.show_notifications = show;
         settings_store_.Save(persisted_settings_);
         updateNotificationToastsEnabled();

@@ -134,6 +134,10 @@ qt_add_executable(exosnap WIN32
     ui/widgets/ExoToggle.cpp
     ui/widgets/ExoCheckBox.h
     ui/widgets/ExoCheckBox.cpp
+    ui/widgets/InfoHintIcon.h
+    ui/widgets/InfoHintIcon.cpp
+    ui/widgets/SettingsCardExpander.h
+    ui/widgets/SettingsCardExpander.cpp
     ui/widgets/ComboBoxWheelFilter.h
     ui/widgets/ComboBoxWheelFilter.cpp
     ui/widgets/RegionSelectionOverlay.h
@@ -175,8 +179,6 @@ qt_add_executable(exosnap WIN32
     pages/DiagnosticsPage.cpp
     pages/LogsPage.h
     pages/LogsPage.cpp
-    pages/AdvancedPage.h
-    pages/AdvancedPage.cpp
     pages/OutputPage.h
     pages/OutputPage.cpp
     services/DeviceDiscoveryCommon.h
@@ -377,7 +379,10 @@ exosnap_add_app_test_support(exosnap_pages_test_support
     viewmodels/PresentationStateBuilder.cpp
     ui/widgets/ComboBoxWheelFilter.cpp
     ui/widgets/CameraPreview.cpp
+    ui/widgets/ExoCheckBox.cpp
     ui/widgets/ExoToggle.cpp
+    ui/widgets/InfoHintIcon.cpp
+    ui/widgets/SettingsCardExpander.cpp
     ui/widgets/VUMeterWidget.cpp
     ui/widgets/WebcamSetupPanel.cpp
     # UPDATE-WIRE-R1: ConfigPage now embeds the UpdateSettingsPanel, which pulls in
@@ -669,6 +674,44 @@ target_include_directories(config_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 set_target_properties(config_page_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(config_page_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
 
+# SETTINGS-TIERS-R2 Phase 2: InfoHintIcon widget unit tests.
+exosnap_add_gtest(
+    NAME info_hint_icon_tests
+    TEST_PREFIX hint.
+    SOURCES
+        tests/test_info_hint_icon.cpp
+        ui/widgets/InfoHintIcon.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(info_hint_icon_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(info_hint_icon_tests PROPERTIES AUTOMOC ON)
+
+# SETTINGS-TIERS-R2 Phase 2: ConfigPage InfoHint integration tests.
+exosnap_add_gtest(
+    NAME info_hints_config_tests
+    TEST_PREFIX hint.
+    SOURCES
+        tests/test_info_hints_config.cpp
+    LIBRARIES exosnap_pages_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(info_hints_config_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(info_hints_config_tests PROPERTIES AUTOMOC ON)
+target_link_libraries(info_hints_config_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
+
+# SETTINGS-TIERS-R1: Expert mode toggle, per-card expander, and persistence tests.
+exosnap_add_gtest(
+    NAME settings_tiers_tests
+    TEST_PREFIX tiers.
+    SOURCES
+        tests/test_settings_tiers.cpp
+        settings/AppSettingsStore.cpp
+    LIBRARIES exosnap_pages_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+)
+target_include_directories(settings_tiers_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(settings_tiers_tests PROPERTIES AUTOMOC ON)
+target_link_libraries(settings_tiers_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
+
 exosnap_add_gtest(
     NAME source_picker_dialog_tests
     TEST_PREFIX source.
@@ -838,22 +881,6 @@ exosnap_add_gtest(
 target_include_directories(version_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 target_compile_definitions(version_tests PRIVATE EXOSNAP_EXPECTED_VERSION="${PROJECT_VERSION}")
 add_dependencies(version_tests exosnap_build_info)
-
-exosnap_add_gtest(
-    NAME advanced_page_tests
-    TEST_PREFIX advanced.
-    SOURCES
-        tests/test_advanced_page.cpp
-        pages/AdvancedPage.cpp
-        ui/widgets/SectionRuleHeader.cpp
-        ui/widgets/ComboBoxWheelFilter.cpp
-        ui/widgets/ExoCheckBox.cpp
-        models/OutputSettingsModel.cpp
-        models/OutputPathPolicy.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
-)
-target_include_directories(advanced_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(advanced_page_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME preview_helpers_tests

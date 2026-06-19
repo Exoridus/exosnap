@@ -1224,6 +1224,16 @@ const QVector<VisualScenario> kScenarios = {
      true,
      true,
      0},
+    {.id = QStringLiteral("settings-expert-on"),
+     .title = QStringLiteral("Settings / Expert mode on"),
+     .page = VisualPage::Settings,
+     .settings_target = VisualSettingsTarget::Display,
+     .settings_expert_mode = true},
+    {.id = QStringLiteral("settings-advanced-open"),
+     .title = QStringLiteral("Settings / Advanced expander open"),
+     .page = VisualPage::Settings,
+     .settings_target = VisualSettingsTarget::Display,
+     .settings_advanced_expanded = true},
 };
 
 // --- Completed result scenarios (OUTPUT-RESULTS-R1) ---

@@ -79,7 +79,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_WindowGeometry) {
     EXPECT_TRUE(loaded.window_geometry.maximized);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion14) {
+TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion15) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
@@ -89,8 +89,8 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion14) {
     store.Save(settings);
 
     QSettings raw_settings(settings_path, QSettings::IniFormat);
-    // Version bumped to 14: ACCENT-PICKER-R1 adds accent_id.
-    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 14);
+    // Version bumped to 15: SETTINGS-TIERS-R1 adds expert_mode_enabled + per-card expander states.
+    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 15);
 }
 
 // CRASH-WIRE-R1: auto_send_crash_reports round-trip + default tests

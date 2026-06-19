@@ -239,6 +239,12 @@ struct VisualScenario {
     // objectName of a widget that receives keyboard focus (Qt::TabFocusReason)
     // after the scenario is applied, so :focus styling renders deterministically.
     QString focused_object;
+
+    // --- Settings tiers (SETTINGS-TIERS-R1) ---
+    // Drive the deterministic Settings progressive-disclosure states that the
+    // live-app capture script cannot reach (it only renders defaults).
+    bool settings_expert_mode = false;       // Expert mode ON → Developer card revealed
+    bool settings_advanced_expanded = false; // Output card "Advanced" expander open
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

@@ -2433,6 +2433,25 @@ QToolButton::menu-indicator {
     height: 12px;
 }
 
+/* InfoHint "i" glyph button: flat icon only, no button chrome. The generic
+   QToolButton rule above paints a bg/border/padding box that otherwise hides
+   the 15px info glyph; reset it so only the icon shows (faint at rest, mint on
+   hover/focus is handled in C++ by swapping the icon colour). */
+QToolButton[labelRole="infoGlyph"] {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    margin: 0;
+    min-height: 0;
+    min-width: 0;
+}
+
+QToolButton[labelRole="infoGlyph"]:hover {
+    background: transparent;
+    border: none;
+}
+
 QPushButton[role="link"] {
     background: transparent;
     border: none;
