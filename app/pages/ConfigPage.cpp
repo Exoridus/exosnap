@@ -347,60 +347,86 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     layout->addWidget(readiness_panel_);
 
-    // ---- EXPERT MODE TOGGLE (full width, top of settings) ----
-    // SETTINGS-TIERS-R1: global expert mode; persisted via AppSettingsStore.
-    auto* expert_panel = makePanel(content);
-    expert_panel->setObjectName(QStringLiteral("expertModePanel"));
-    expert_panel->setProperty("panelRole", "note");
-    auto* expert_layout = new QHBoxLayout(expert_panel);
-    expert_layout->setContentsMargins(18, 10, 18, 10);
-    expert_layout->setSpacing(12);
-    auto* expert_label_layout = new QVBoxLayout();
-    expert_label_layout->setSpacing(2);
-    expert_label_layout->addWidget(makeCardTitle(QStringLiteral("Expert mode"), expert_panel));
-    expert_label_layout->addWidget(makeHint(QStringLiteral("Reveals lower-level controls that can produce incompatible "
-                                                           "files. Enable only if you know what you are doing."),
-                                            expert_panel));
-    expert_layout->addLayout(expert_label_layout, 1);
-    expert_mode_btn_ = new QPushButton(QStringLiteral("Enable"), expert_panel);
-    expert_mode_btn_->setObjectName(QStringLiteral("expertModeToggleBtn"));
-    expert_mode_btn_->setProperty("role", "ghost");
-    expert_mode_btn_->setCheckable(false);
-    expert_layout->addWidget(expert_mode_btn_, 0, Qt::AlignVCenter);
-    layout->addWidget(expert_panel);
-
-    // ---- SETTINGS SEARCH BOX (SETTINGS-SEARCH-R1) ----
-    // A QLineEdit with a placeholder and a match count label. Placed between the
-    // Expert mode panel and the Preset card so it sits at the top of the content area.
+    // ---- D6 HEADER ZONE ----
+    // Titelzeile: "Settings" | Such-Pill | Stretch | "Expert mode" | ExoToggle
+    // Unterzeile: Match-Count + Expert-Hint-Label + Expert-Warnhinweis
     {
-        auto* search_row = new QWidget(content);
-        auto* search_rl = new QHBoxLayout(search_row);
-        search_rl->setContentsMargins(0, 0, 0, 0);
-        search_rl->setSpacing(8);
+        auto* header_zone = new QWidget(content);
+        header_zone->setObjectName(QStringLiteral("settingsHeaderZone"));
+        auto* header_vl = new QVBoxLayout(header_zone);
+        header_vl->setContentsMargins(0, 0, 0, 0);
+        header_vl->setSpacing(8);
 
-        settings_search_box_ = new QLineEdit(search_row);
+        // Titelzeile
+        auto* title_row = new QHBoxLayout();
+        title_row->setSpacing(14);
+
+        auto* page_title = new QLabel(QStringLiteral("Settings"), header_zone);
+        page_title->setProperty("labelRole", "pageTitle");
+        title_row->addWidget(page_title);
+
+        // Such-Pill: Container-Widget mit Lupe + QLineEdit
+        auto* search_pill = new QWidget(header_zone);
+        search_pill->setObjectName(QStringLiteral("settingsSearchPill"));
+        search_pill->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        auto* pill_hl = new QHBoxLayout(search_pill);
+        pill_hl->setContentsMargins(10, 6, 10, 6);
+        pill_hl->setSpacing(6);
+
+        auto* search_icon = new QLabel(search_pill);
+        // No search.svg in resources — hide the icon label silently.
+        search_icon->setVisible(false);
+        pill_hl->addWidget(search_icon);
+
+        settings_search_box_ = new QLineEdit(search_pill);
         settings_search_box_->setObjectName(QStringLiteral("settingsSearchBox"));
         settings_search_box_->setPlaceholderText(QStringLiteral("Search settings\xe2\x80\xa6"));
         settings_search_box_->setClearButtonEnabled(true);
+        settings_search_box_->setFrame(false);
+        settings_search_box_->setProperty("role", "pillInput");
         settings_search_box_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        pill_hl->addWidget(settings_search_box_, 1);
 
-        settings_search_count_label_ = new QLabel(search_row);
+        title_row->addWidget(search_pill);
+        title_row->addStretch(1);
+
+        auto* expert_label = new QLabel(QStringLiteral("Expert mode"), header_zone);
+        expert_label->setProperty("labelRole", "muted");
+        title_row->addWidget(expert_label, 0, Qt::AlignVCenter);
+
+        expert_mode_toggle_ = new ui::widgets::ExoToggle(header_zone);
+        expert_mode_toggle_->setObjectName(QStringLiteral("expertModeToggleBtn"));
+        expert_mode_toggle_->setOn(false);
+        title_row->addWidget(expert_mode_toggle_, 0, Qt::AlignVCenter);
+
+        header_vl->addLayout(title_row);
+
+        // Unterzeile: Match-Count
+        settings_search_count_label_ = new QLabel(header_zone);
         settings_search_count_label_->setObjectName(QStringLiteral("settingsSearchCountLabel"));
         settings_search_count_label_->setProperty("labelRole", "muted");
         settings_search_count_label_->setVisible(false);
+        header_vl->addWidget(settings_search_count_label_);
 
-        search_rl->addWidget(settings_search_box_, 1);
-        search_rl->addWidget(settings_search_count_label_, 0, Qt::AlignVCenter);
-        layout->addWidget(search_row);
-
-        // "Enable Expert mode to show X developer settings" — shown when a Developer
-        // card keyword matches but Expert mode is off.
-        search_expert_hint_label_ = new QLabel(content);
+        // Expert-hint: "Enable Expert mode to show developer settings"
+        search_expert_hint_label_ = new QLabel(header_zone);
         search_expert_hint_label_->setObjectName(QStringLiteral("searchExpertHintLabel"));
         search_expert_hint_label_->setProperty("labelRole", "muted");
         search_expert_hint_label_->setWordWrap(true);
         search_expert_hint_label_->setVisible(false);
-        layout->addWidget(search_expert_hint_label_);
+        header_vl->addWidget(search_expert_hint_label_);
+
+        // Expert inline warn hint (amber, klein): sichtbar wenn Expert-Mode AN + keine Suche
+        expert_warn_label_ = new QLabel(header_zone);
+        expert_warn_label_->setObjectName(QStringLiteral("expertWarnLabel"));
+        expert_warn_label_->setText(QStringLiteral("Expert mode reveals lower-level controls that can produce "
+                                                   "incompatible files. Enable only if you know why."));
+        expert_warn_label_->setProperty("labelRole", "warnHint");
+        expert_warn_label_->setWordWrap(true);
+        expert_warn_label_->setVisible(false);
+        header_vl->addWidget(expert_warn_label_);
+
+        layout->addWidget(header_zone);
     }
 
     // ---- PRESET CARD (full width, top) ----
@@ -1463,21 +1489,29 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                                                     : QStringLiteral("Show token reference"));
     });
 
-    // SETTINGS-TIERS-R1: Expert mode toggle button.
-    connect(expert_mode_btn_, &QPushButton::clicked, this, [this]() {
-        if (!expert_mode_enabled_) {
-            // First enable: show confirmation dialog.
+    // D6: ExoToggle replaces QPushButton for Expert-Mode.
+    connect(expert_mode_toggle_, &QAbstractButton::clicked, this, [this]() {
+        const bool current = expert_mode_enabled_;
+        if (!current) {
+            // Einschalten: Bestätigungsdialog zeigen
             auto* msgbox = new QMessageBox(this);
             msgbox->setWindowTitle(QStringLiteral("Enable Expert mode?"));
             msgbox->setText(QStringLiteral("Expert mode reveals lower-level controls that can produce incompatible "
                                            "files.\n\nEnable only if you know what you are doing."));
             msgbox->setStandardButtons(QMessageBox::Yes | QMessageBox::Cancel);
             msgbox->setDefaultButton(QMessageBox::Cancel);
-            if (msgbox->exec() != QMessageBox::Yes)
+            if (msgbox->exec() != QMessageBox::Yes) {
+                // Rollback: Toggle zurücksetzen
+                const QSignalBlocker b(expert_mode_toggle_);
+                expert_mode_toggle_->setOn(false);
                 return;
+            }
         }
-        expert_mode_enabled_ = !expert_mode_enabled_;
-        expert_mode_btn_->setText(expert_mode_enabled_ ? QStringLiteral("Disable") : QStringLiteral("Enable"));
+        expert_mode_enabled_ = !current;
+        {
+            const QSignalBlocker b(expert_mode_toggle_);
+            expert_mode_toggle_->setOn(expert_mode_enabled_);
+        }
         updateExpertModeVisibility();
         emit expertModeChanged(expert_mode_enabled_);
     });
@@ -2617,8 +2651,10 @@ void ConfigPage::setExpertModeEnabled(bool enabled) {
     if (expert_mode_enabled_ == enabled)
         return;
     expert_mode_enabled_ = enabled;
-    if (expert_mode_btn_)
-        expert_mode_btn_->setText(enabled ? QStringLiteral("Disable") : QStringLiteral("Enable"));
+    if (expert_mode_toggle_) {
+        const QSignalBlocker b(expert_mode_toggle_);
+        expert_mode_toggle_->setOn(enabled);
+    }
     updateExpertModeVisibility();
 }
 
@@ -2648,6 +2684,11 @@ void ConfigPage::updateExpertModeVisibility() {
     // SETTINGS-TIERS-P3: show/hide the expert-gated Developer card.
     if (developer_card_)
         developer_card_->setVisible(expert_mode_enabled_);
+    // D6: Expert warn hint — visible when Expert ON and no active search.
+    if (expert_warn_label_) {
+        const bool searching = settings_search_box_ && !settings_search_box_->text().trimmed().isEmpty();
+        expert_warn_label_->setVisible(expert_mode_enabled_ && !searching);
+    }
 }
 
 // SETTINGS-SEARCH-R1: per-card live settings filter.
@@ -2784,6 +2825,9 @@ void ConfigPage::applySettingsSearch(const QString& query) {
             settings_search_count_label_->setVisible(false);
         if (search_expert_hint_label_)
             search_expert_hint_label_->setVisible(false);
+        // D6: restore expert warn hint to its visibility-gated state.
+        if (expert_warn_label_)
+            expert_warn_label_->setVisible(expert_mode_enabled_);
         return;
     }
 
@@ -2863,6 +2907,10 @@ void ConfigPage::applySettingsSearch(const QString& query) {
         if (search_expert_hint_label_)
             search_expert_hint_label_->setVisible(false);
     }
+
+    // D6: hide expert warn hint during active search (it'd compete with hint label).
+    if (expert_warn_label_)
+        expert_warn_label_->setVisible(false);
 
     // Match count.
     int match_count = 0;

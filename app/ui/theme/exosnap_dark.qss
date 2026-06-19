@@ -2949,3 +2949,39 @@ QPushButton[role="danger"]:focus,
 QPushButton[dockAction="stop"]:focus {
     border: 2px solid ${text0};
 }
+
+/* ── D6 Settings header zone ─────────────────────────────────────────────────
+   settingsHeaderZone  — header container (title row + sub-row).
+   pageTitle           — "Settings" label, large bold.
+   settingsSearchPill  — rounded pill wrapping search box + optional icon.
+   pillInput           — the QLineEdit inside the search pill (frameless).
+   warnHint            — amber inline warning label (Expert mode on, no search). */
+
+QLabel[labelRole="pageTitle"] {
+    font-size: 22px;
+    font-weight: 700;
+    color: ${text0};
+}
+
+QWidget#settingsSearchPill {
+    background: ${bg2};
+    border: 1px solid ${line2};
+    border-radius: 999px;
+}
+
+QLineEdit[role="pillInput"] {
+    background: transparent;
+    border: none;
+    font-size: 13px;
+}
+
+/* Expert warn hint: amber background + border, similar to the compat callout */
+QLabel[labelRole="warnHint"] {
+    font-size: 12px;
+    color: ${text0};
+    background: rgba(230, 197, 124, 0.10);
+    border: 1px solid rgba(230, 197, 124, 0.42);
+    border-left: 3px solid ${warn};
+    border-radius: ${radius-md}px;
+    padding: 8px 12px;
+}

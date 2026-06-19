@@ -390,9 +390,11 @@ class ConfigPage : public QWidget {
     QLabel* token_help_label_ = nullptr;
     QPushButton* token_help_toggle_btn_ = nullptr;
 
-    // SETTINGS-TIERS-R1: Expert mode toggle button in settings header.
-    QPushButton* expert_mode_btn_ = nullptr;
+    // SETTINGS-TIERS-R1 / D6: Expert mode toggle (ExoToggle in D6 header zone).
+    ui::widgets::ExoToggle* expert_mode_toggle_ = nullptr;
     bool expert_mode_enabled_ = false;
+    // D6: Expert inline warn hint (amber), shown when Expert ON and no active search.
+    QLabel* expert_warn_label_ = nullptr;
 
     // SETTINGS-TIERS-R1: Per-card Advanced expanders (collapsible sections).
     ui::widgets::SettingsCardExpander* output_split_expander_ = nullptr;

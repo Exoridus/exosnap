@@ -14,6 +14,7 @@
 #include "models/VideoSettingsModel.h"
 #include "pages/ConfigPage.h"
 #include "settings/AppSettingsStore.h"
+#include "ui/widgets/ExoToggle.h"
 #include "ui/widgets/SettingsCardExpander.h"
 
 namespace exosnap {
@@ -208,8 +209,8 @@ TEST_F(SettingsTiersTest, SettingsCardExpander_HeaderButtonExists) {
 
 TEST_F(SettingsTiersTest, ConfigPage_ExpertModeToggleExists) {
     ConfigPage page(output_defaults_, video_defaults_);
-    auto* btn = page.findChild<QPushButton*>(QStringLiteral("expertModeToggleBtn"));
-    ASSERT_NE(btn, nullptr);
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("expertModeToggleBtn"));
+    ASSERT_NE(toggle, nullptr);
 }
 
 TEST_F(SettingsTiersTest, ConfigPage_ExpertMode_DefaultOff) {
