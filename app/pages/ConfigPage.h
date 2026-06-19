@@ -78,7 +78,8 @@ class ConfigPage : public QWidget {
     void setExpertModeEnabled(bool enabled);
     [[nodiscard]] bool expertModeEnabled() const noexcept;
 
-    // SETTINGS-TIERS-R1: Per-card expander state (persisted by MainWindow).
+    // SETTINGS-TIERS-R1: Per-card expander state — no-op stubs kept for MainWindow compat.
+    // Wave 2: the output-split expander was dissolved; split controls are now expert-gated.
     void setOutputSplitExpanderExpanded(bool expanded);
     [[nodiscard]] bool outputSplitExpanderExpanded() const noexcept;
     void setAudioSeparateExpanderExpanded(bool expanded);
@@ -397,9 +398,16 @@ class ConfigPage : public QWidget {
     // D6: Expert inline warn hint (amber), shown when Expert ON and no active search.
     QLabel* expert_warn_label_ = nullptr;
 
-    // SETTINGS-TIERS-R1: Per-card Advanced expanders (collapsible sections).
-    ui::widgets::SettingsCardExpander* output_split_expander_ = nullptr;
-    ui::widgets::SettingsCardExpander* audio_separate_expander_ = nullptr;
+    // Wave 2: split recording controls moved out of expander; now expert-gated section.
+    QWidget* split_expert_section_ = nullptr;
+
+    // Wave 2: Part B — Quality row widget (promoted from local var) and CQ precision spinbox.
+    QWidget* quality_row_widget_ = nullptr;    // the standard 3-segment quality row
+    QWidget* quality_expert_widget_ = nullptr; // CQ spinbox row shown in expert mode
+    QSpinBox* quality_cq_spin_ = nullptr;      // precision CQ input (range 1–51)
+
+    // audio_separate_expander_ is null (Phase 1b); kept as no-op for compat.
+    // output_split_expander_ removed in Wave 2; split_expert_section_ replaces it.
 
     // SETTINGS-TIERS-P3: presence + appearance controls (moved from AdvancedPage).
     ui::widgets::ExoCheckBox* overlay_check_ = nullptr;
@@ -430,9 +438,6 @@ class ConfigPage : public QWidget {
     QWidget* update_panel_wrapper_ = nullptr; // wraps update_settings_panel_
     QWidget* presence_panel_ = nullptr;
     QWidget* appearance_panel_ = nullptr;
-
-    // Persisted expander state before search forced it open.
-    bool expander_was_open_before_search_ = false;
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     // Inline error label for preset save-error visual-test scenario.

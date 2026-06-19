@@ -486,7 +486,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     profile_combo_->setObjectName(QStringLiteral("profileCombo"));
     profile_combo_->setAccessibleName(QStringLiteral("presetCombo"));
     profile_combo_->setProperty("presetComboAlias", QStringLiteral("presetCombo"));
-    profile_combo_->setMinimumWidth(220);
+    profile_combo_->setMinimumWidth(0); // Wave 2 Part C: let it shrink with the layout
     profile_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
     // Primary action buttons — Save (dirty-gated) and Save As (always available).
@@ -703,18 +703,19 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         new ui::widgets::CompareHint(QStringLiteral("quality"), QStringLiteral("Balanced"), fmt_panel);
 
     // Quality row: segmented on right, compare hint in label area
+    // Wave 2: quality_row_widget_ promoted to member so expert-mode can show/hide it.
     {
-        auto* quality_row_container = new QWidget(fmt_panel);
-        auto* qvl = new QVBoxLayout(quality_row_container);
+        quality_row_widget_ = new QWidget(fmt_panel);
+        auto* qvl = new QVBoxLayout(quality_row_widget_);
         qvl->setContentsMargins(0, 0, 0, 0);
         qvl->setSpacing(0);
         // hairline
-        auto* qrule = new QFrame(quality_row_container);
+        auto* qrule = new QFrame(quality_row_widget_);
         qrule->setFrameShape(QFrame::HLine);
         qrule->setProperty("frameRole", "sectionRuleLine");
         qvl->addWidget(qrule);
         // content
-        auto* qcontent = new QWidget(quality_row_container);
+        auto* qcontent = new QWidget(quality_row_widget_);
         auto* qhl = new QHBoxLayout(qcontent);
         qhl->setContentsMargins(0, 12, 0, 12);
         qhl->setSpacing(14);
@@ -737,8 +738,41 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         qhl->addWidget(qleft, 1);
         qhl->addWidget(quality_segmented, 0, Qt::AlignVCenter);
         qvl->addWidget(qcontent);
-        quality_row_container->setProperty("settingsRow", true);
-        fmt_layout->addWidget(quality_row_container);
+        quality_row_widget_->setProperty("settingsRow", true);
+        fmt_layout->addWidget(quality_row_widget_);
+    }
+
+    // Wave 2 Part B: CQ precision spinbox row — shown in expert mode, hidden otherwise.
+    {
+        quality_expert_widget_ = new QWidget(fmt_panel);
+        quality_expert_widget_->setObjectName(QStringLiteral("qualityExpertWidget"));
+        auto* qevl = new QVBoxLayout(quality_expert_widget_);
+        qevl->setContentsMargins(0, 0, 0, 0);
+        qevl->setSpacing(0);
+        // hairline
+        auto* qerule = new QFrame(quality_expert_widget_);
+        qerule->setFrameShape(QFrame::HLine);
+        qerule->setProperty("frameRole", "sectionRuleLine");
+        qevl->addWidget(qerule);
+        // content row
+        auto* qecontent = new QWidget(quality_expert_widget_);
+        auto* qehl = new QHBoxLayout(qecontent);
+        qehl->setContentsMargins(0, 12, 0, 12);
+        qehl->setSpacing(14);
+        auto* qelbl = new QLabel(QStringLiteral("Quality (CQ)"), qecontent);
+        qelbl->setProperty("labelRole", "settingsRowLabel");
+        qehl->addWidget(qelbl, 1);
+        quality_cq_spin_ = new QSpinBox(qecontent);
+        quality_cq_spin_->setObjectName(QStringLiteral("qualityCqSpin"));
+        quality_cq_spin_->setRange(1, 51);
+        quality_cq_spin_->setSuffix(QStringLiteral(" (CQ)"));
+        quality_cq_spin_->setToolTip(QStringLiteral("NVENC Constant Quality value (1=best, 51=worst). "
+                                                    "Low=19 (High), 24 (Balanced), 30 (Small)."));
+        qehl->addWidget(quality_cq_spin_, 0, Qt::AlignVCenter);
+        qevl->addWidget(qecontent);
+        quality_expert_widget_->setProperty("settingsRow", true);
+        quality_expert_widget_->setVisible(false); // hidden until expert mode is on
+        fmt_layout->addWidget(quality_expert_widget_);
     }
 
     // --- Frame rate row ---
@@ -940,7 +974,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         mic_device_combo_ = new QComboBox(mic_row);
         mic_device_combo_->setObjectName(QStringLiteral("micDeviceCombo"));
         mic_device_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        mic_device_combo_->setMinimumWidth(180);
+        mic_device_combo_->setMinimumWidth(0); // Wave 2 Part C: let it shrink with the layout
         mic_rl->addWidget(mic_device_combo_, 1);
         audio_rescan_btn_ = new QPushButton(mic_row); // #09: icon-only rescan button
         audio_rescan_btn_->setObjectName(QStringLiteral("audioRescanBtn"));
@@ -1093,88 +1127,94 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_effective_summary_label_->setObjectName(QStringLiteral("outputEffectiveSummaryLabel"));
     out_panel_layout->addWidget(output_effective_summary_label_);
 
-    // ---- Split recording (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1) behind Advanced expander ----
-    // SETTINGS-TIERS-R1: split settings are Advanced-tier; hidden behind the expander by default.
-    output_split_expander_ = new ui::widgets::SettingsCardExpander(2, out_panel);
-    output_split_expander_->setObjectName(QStringLiteral("outputSplitExpander"));
-    auto* split_expander_content_layout = qobject_cast<QVBoxLayout*>(output_split_expander_->contentWidget()->layout());
+    // ---- Split recording (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1) — Wave 2: expert-gated section ----
+    // Wave 2: the SettingsCardExpander was dissolved. Split controls now live in a plain
+    // QWidget that is shown/hidden by updateExpertModeVisibility() together with the
+    // developer card (same expert-mode gate, no per-card expander).
+    split_expert_section_ = new QWidget(out_panel);
+    split_expert_section_->setObjectName(QStringLiteral("splitExpertSection"));
+    split_expert_section_->setVisible(false); // hidden until expert mode is on
+    {
+        auto* split_expert_layout = new QVBoxLayout(split_expert_section_);
+        split_expert_layout->setContentsMargins(0, 0, 0, 0);
+        split_expert_layout->setSpacing(8);
 
-    split_expander_content_layout->addWidget(makeOutputSubLabelWithHint(
-        QStringLiteral("Split recording"), ui::hints::kSplitRecording, output_split_expander_->contentWidget()));
-    auto* split_row = new QHBoxLayout();
-    split_row->setContentsMargins(0, 0, 0, 0);
-    split_row->setSpacing(8);
-    split_mode_combo_ = new QComboBox(output_split_expander_->contentWidget());
-    split_mode_combo_->setObjectName(QStringLiteral("splitModeCombo"));
-    split_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitRecordingMode::Off));
-    split_mode_combo_->addItem(QStringLiteral("Every 15 min"), static_cast<int>(SplitRecordingMode::Every15Min));
-    split_mode_combo_->addItem(QStringLiteral("Every 30 min"), static_cast<int>(SplitRecordingMode::Every30Min));
-    split_mode_combo_->addItem(QStringLiteral("Every 60 min"), static_cast<int>(SplitRecordingMode::Every60Min));
-    split_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitRecordingMode::Custom));
-    split_mode_combo_->setToolTip(
-        QStringLiteral("Automatically start a new file at the chosen interval (manual splits always work)."));
-    split_row->addWidget(split_mode_combo_, 0);
+        split_expert_layout->addWidget(makeOutputSubLabelWithHint(QStringLiteral("Split recording"),
+                                                                  ui::hints::kSplitRecording, split_expert_section_));
+        auto* split_row = new QHBoxLayout();
+        split_row->setContentsMargins(0, 0, 0, 0);
+        split_row->setSpacing(8);
+        split_mode_combo_ = new QComboBox(split_expert_section_);
+        split_mode_combo_->setObjectName(QStringLiteral("splitModeCombo"));
+        split_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitRecordingMode::Off));
+        split_mode_combo_->addItem(QStringLiteral("Every 15 min"), static_cast<int>(SplitRecordingMode::Every15Min));
+        split_mode_combo_->addItem(QStringLiteral("Every 30 min"), static_cast<int>(SplitRecordingMode::Every30Min));
+        split_mode_combo_->addItem(QStringLiteral("Every 60 min"), static_cast<int>(SplitRecordingMode::Every60Min));
+        split_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitRecordingMode::Custom));
+        split_mode_combo_->setToolTip(
+            QStringLiteral("Automatically start a new file at the chosen interval (manual splits always work)."));
+        split_row->addWidget(split_mode_combo_, 0);
 
-    split_custom_widget_ = new QWidget(output_split_expander_->contentWidget());
-    auto* split_custom_layout = new QHBoxLayout(split_custom_widget_);
-    split_custom_layout->setContentsMargins(0, 0, 0, 0);
-    split_custom_layout->setSpacing(8);
-    auto* split_every_label = new QLabel(QStringLiteral("Every"), split_custom_widget_);
-    split_every_label->setProperty("labelRole", "settingsRowLabel");
-    split_custom_minutes_spin_ = new QSpinBox(split_custom_widget_);
-    split_custom_minutes_spin_->setObjectName(QStringLiteral("splitCustomMinutesSpin"));
-    split_custom_minutes_spin_->setRange(static_cast<int>(SplitRecordingSettings::kMinMinutes),
-                                         static_cast<int>(SplitRecordingSettings::kMaxMinutes));
-    split_custom_minutes_spin_->setSuffix(QStringLiteral(" min"));
-    split_custom_minutes_spin_->setToolTip(QStringLiteral("Custom split interval (1 min – 24 h)"));
-    split_custom_layout->addWidget(split_every_label);
-    split_custom_layout->addWidget(split_custom_minutes_spin_);
-    split_custom_widget_->setVisible(false);
-    split_row->addWidget(split_custom_widget_, 0);
-    split_row->addStretch();
-    split_expander_content_layout->addLayout(split_row);
+        split_custom_widget_ = new QWidget(split_expert_section_);
+        auto* split_custom_layout = new QHBoxLayout(split_custom_widget_);
+        split_custom_layout->setContentsMargins(0, 0, 0, 0);
+        split_custom_layout->setSpacing(8);
+        auto* split_every_label = new QLabel(QStringLiteral("Every"), split_custom_widget_);
+        split_every_label->setProperty("labelRole", "settingsRowLabel");
+        split_custom_minutes_spin_ = new QSpinBox(split_custom_widget_);
+        split_custom_minutes_spin_->setObjectName(QStringLiteral("splitCustomMinutesSpin"));
+        split_custom_minutes_spin_->setRange(static_cast<int>(SplitRecordingSettings::kMinMinutes),
+                                             static_cast<int>(SplitRecordingSettings::kMaxMinutes));
+        split_custom_minutes_spin_->setSuffix(QStringLiteral(" min"));
+        split_custom_minutes_spin_->setToolTip(QStringLiteral("Custom split interval (1 min – 24 h)"));
+        split_custom_layout->addWidget(split_every_label);
+        split_custom_layout->addWidget(split_custom_minutes_spin_);
+        split_custom_widget_->setVisible(false);
+        split_row->addWidget(split_custom_widget_, 0);
+        split_row->addStretch();
+        split_expert_layout->addLayout(split_row);
 
-    split_summary_label_ = makeHint(QString(), output_split_expander_->contentWidget());
-    split_summary_label_->setObjectName(QStringLiteral("splitSummaryLabel"));
-    split_expander_content_layout->addWidget(split_summary_label_);
+        split_summary_label_ = makeHint(QString(), split_expert_section_);
+        split_summary_label_->setObjectName(QStringLiteral("splitSummaryLabel"));
+        split_expert_layout->addWidget(split_summary_label_);
 
-    // ---- Split recording by size (SPLIT-BY-SIZE-R1) ----
-    split_expander_content_layout->addWidget(
-        makeOutputSubLabel(QStringLiteral("Split by size"), output_split_expander_->contentWidget()));
-    auto* split_size_row = new QHBoxLayout();
-    split_size_row->setContentsMargins(0, 0, 0, 0);
-    split_size_row->setSpacing(8);
-    split_size_mode_combo_ = new QComboBox(output_split_expander_->contentWidget());
-    split_size_mode_combo_->setObjectName(QStringLiteral("splitSizeModeCombo"));
-    split_size_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitSizeMode::Off));
-    split_size_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitSizeMode::Custom));
-    split_size_mode_combo_->setToolTip(
-        QStringLiteral("Automatically start a new file when the segment reaches the chosen size."));
-    split_size_row->addWidget(split_size_mode_combo_, 0);
+        // ---- Split recording by size (SPLIT-BY-SIZE-R1) ----
+        split_expert_layout->addWidget(makeOutputSubLabel(QStringLiteral("Split by size"), split_expert_section_));
+        auto* split_size_row = new QHBoxLayout();
+        split_size_row->setContentsMargins(0, 0, 0, 0);
+        split_size_row->setSpacing(8);
+        split_size_mode_combo_ = new QComboBox(split_expert_section_);
+        split_size_mode_combo_->setObjectName(QStringLiteral("splitSizeModeCombo"));
+        split_size_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitSizeMode::Off));
+        split_size_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitSizeMode::Custom));
+        split_size_mode_combo_->setToolTip(
+            QStringLiteral("Automatically start a new file when the segment reaches the chosen size."));
+        split_size_row->addWidget(split_size_mode_combo_, 0);
 
-    split_size_custom_widget_ = new QWidget(output_split_expander_->contentWidget());
-    auto* split_size_custom_layout = new QHBoxLayout(split_size_custom_widget_);
-    split_size_custom_layout->setContentsMargins(0, 0, 0, 0);
-    split_size_custom_layout->setSpacing(8);
-    auto* split_size_label = new QLabel(QStringLiteral("Every"), split_size_custom_widget_);
-    split_size_label->setProperty("labelRole", "settingsRowLabel");
-    split_custom_size_spin_ = new QSpinBox(output_split_expander_->contentWidget());
-    split_custom_size_spin_->setObjectName(QStringLiteral("splitCustomSizeSpin"));
-    // kMaxSizeMb = 1024*1024 = 1048576 which fits in int (< 2147483647).
-    split_custom_size_spin_->setRange(static_cast<int>(SplitRecordingSettings::kMinSizeMb),
-                                      static_cast<int>(SplitRecordingSettings::kMaxSizeMb));
-    split_custom_size_spin_->setSuffix(QStringLiteral(" MB"));
-    split_custom_size_spin_->setToolTip(
-        QStringLiteral("Split segment size in MiB (50 MiB – 1 TiB). Whichever limit (time or size) "
-                       "is reached first triggers the split."));
-    split_size_custom_layout->addWidget(split_size_label);
-    split_size_custom_layout->addWidget(split_custom_size_spin_);
-    split_size_custom_widget_->setVisible(false);
-    split_size_row->addWidget(split_size_custom_widget_, 0);
-    split_size_row->addStretch();
-    split_expander_content_layout->addLayout(split_size_row);
+        split_size_custom_widget_ = new QWidget(split_expert_section_);
+        auto* split_size_custom_layout = new QHBoxLayout(split_size_custom_widget_);
+        split_size_custom_layout->setContentsMargins(0, 0, 0, 0);
+        split_size_custom_layout->setSpacing(8);
+        auto* split_size_label = new QLabel(QStringLiteral("Every"), split_size_custom_widget_);
+        split_size_label->setProperty("labelRole", "settingsRowLabel");
+        split_custom_size_spin_ = new QSpinBox(split_expert_section_);
+        split_custom_size_spin_->setObjectName(QStringLiteral("splitCustomSizeSpin"));
+        // kMaxSizeMb = 1024*1024 = 1048576 which fits in int (< 2147483647).
+        split_custom_size_spin_->setRange(static_cast<int>(SplitRecordingSettings::kMinSizeMb),
+                                          static_cast<int>(SplitRecordingSettings::kMaxSizeMb));
+        split_custom_size_spin_->setSuffix(QStringLiteral(" MB"));
+        split_custom_size_spin_->setToolTip(
+            QStringLiteral("Split segment size in MiB (50 MiB – 1 TiB). Whichever limit (time or size) "
+                           "is reached first triggers the split."));
+        split_size_custom_layout->addWidget(split_size_label);
+        split_size_custom_layout->addWidget(split_custom_size_spin_);
+        split_size_custom_widget_->setVisible(false);
+        split_size_row->addWidget(split_size_custom_widget_, 0);
+        split_size_row->addStretch();
+        split_expert_layout->addLayout(split_size_row);
+    }
 
-    out_panel_layout->addWidget(output_split_expander_);
+    out_panel_layout->addWidget(split_expert_section_);
 
     auto* output_split = new QWidget(out_panel);
     output_split_layout_ = new QHBoxLayout(output_split);
@@ -1333,7 +1373,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         appearance_layout->addWidget(makeCardTitle(QStringLiteral("Appearance"), appearance_panel));
 
         accent_combo_ = new QComboBox(appearance_panel);
-        accent_combo_->setMinimumWidth(220);
+        accent_combo_->setMinimumWidth(0); // Wave 2 Part C: let it shrink with the layout
         accent_combo_->setMaximumWidth(320);
         for (const auto& a : ui::theme::kExoSnapAccents) {
             accent_combo_->addItem(QString::fromUtf8(a.name), QString::fromUtf8(a.id));
@@ -1405,6 +1445,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     layout->addStretch();
 
     content->setMaximumWidth(kMaxContentWidth);
+    // Wave 2 Part C: ensure content never narrows past a single comfortable card column.
+    content->setMinimumWidth(360);
     {
         auto* centering_host = new QWidget();
         auto* ch = new QHBoxLayout(centering_host);
@@ -1510,9 +1552,33 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         emit expertModeChanged(expert_mode_enabled_);
     });
 
-    // SETTINGS-TIERS-R1: expander state change signals.
-    connect(output_split_expander_, &ui::widgets::SettingsCardExpander::expandedChanged, this,
-            [this](bool expanded) { emit outputSplitExpanderChanged(expanded); });
+    // Wave 2: output_split_expander_ dissolved; outputSplitExpanderChanged is kept as
+    // a no-op signal for MainWindow compat (AppSettingsStore field still persists).
+
+    // Wave 2 Part B: CQ spinbox — find nearest NvencQualityPreset from CQ value.
+    connect(quality_cq_spin_, &QSpinBox::valueChanged, this, [this](int cq) {
+        // Nearest preset: |cq-19|→High, |cq-24|→Balanced, |cq-30|→Small
+        const int d_high = std::abs(cq - 19);
+        const int d_balanced = std::abs(cq - 24);
+        const int d_small = std::abs(cq - 30);
+        if (d_high <= d_balanced && d_high <= d_small) {
+            video_settings_.quality = recorder_core::NvencQualityPreset::High;
+        } else if (d_balanced <= d_small) {
+            video_settings_.quality = recorder_core::NvencQualityPreset::Balanced;
+        } else {
+            video_settings_.quality = recorder_core::NvencQualityPreset::Small;
+        }
+        // Sync the hidden combo so onQualityChanged path stays consistent.
+        if (quality_combo_) {
+            const QSignalBlocker qb(quality_combo_);
+            const int idx = quality_combo_->findData(static_cast<int>(video_settings_.quality));
+            if (idx >= 0)
+                quality_combo_->setCurrentIndex(idx);
+        }
+        updateQualitySegmentSelection();
+        updateQualitySummary();
+        emitCurrentVideoSettings();
+    });
 
     // SETTINGS-SEARCH-R1: live search filter wired to textChanged.
     connect(settings_search_box_, &QLineEdit::textChanged, this, &ConfigPage::applySettingsSearch);
@@ -1649,9 +1715,9 @@ bool ConfigPage::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void ConfigPage::updateResponsiveLayout() {
-    // Below this width the two-column form (and the Output card's field/help split)
-    // becomes too cramped, so flip both to a single stacked column.
-    const bool narrow = width() < 880;
+    // Wave 2 Part C: raised threshold from 880 → 1100 so single-column kicks in
+    // well before any card content overflows horizontally.
+    const bool narrow = width() < 1100;
     const QBoxLayout::Direction desired = narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight;
 
     if (columns_layout_ && columns_layout_->direction() != desired)
@@ -2043,6 +2109,22 @@ void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
     if (qidx >= 0)
         quality_combo_->setCurrentIndex(qidx);
 
+    // Wave 2 Part B: sync CQ spinbox from loaded preset.
+    if (quality_cq_spin_) {
+        const QSignalBlocker sb(quality_cq_spin_);
+        switch (settings.quality) {
+        case recorder_core::NvencQualityPreset::High:
+            quality_cq_spin_->setValue(19);
+            break;
+        case recorder_core::NvencQualityPreset::Small:
+            quality_cq_spin_->setValue(30);
+            break;
+        default: // Balanced
+            quality_cq_spin_->setValue(24);
+            break;
+        }
+    }
+
     updateFrameRateSelection();
     updateTimingSelection();
 
@@ -2097,6 +2179,22 @@ void ConfigPage::updateQualitySummary() {
             break;
         case recorder_core::NvencQualityPreset::Small:
             quality_compare_hint_->setCurrentValue(QStringLiteral("Small"));
+            break;
+        }
+    }
+
+    // Wave 2 Part B: keep CQ spinbox in sync with model (under blocker to avoid feedback loop).
+    if (quality_cq_spin_) {
+        const QSignalBlocker b(quality_cq_spin_);
+        switch (video_settings_.quality) {
+        case recorder_core::NvencQualityPreset::High:
+            quality_cq_spin_->setValue(19);
+            break;
+        case recorder_core::NvencQualityPreset::Small:
+            quality_cq_spin_->setValue(30);
+            break;
+        default: // Balanced
+            quality_cq_spin_->setValue(24);
             break;
         }
     }
@@ -2676,28 +2774,53 @@ bool ConfigPage::expertModeEnabled() const noexcept {
     return expert_mode_enabled_;
 }
 
-void ConfigPage::setOutputSplitExpanderExpanded(bool expanded) {
-    if (output_split_expander_)
-        output_split_expander_->setExpanded(expanded);
+void ConfigPage::setOutputSplitExpanderExpanded(bool /*expanded*/) {
+    // Wave 2: output_split_expander_ dissolved; split controls are now expert-gated.
+    // No-op kept for MainWindow backward compat (store field still persists).
 }
 
 bool ConfigPage::outputSplitExpanderExpanded() const noexcept {
-    return output_split_expander_ ? output_split_expander_->isExpanded() : false;
+    // Wave 2: always false — no expander widget exists.
+    return false;
 }
 
-void ConfigPage::setAudioSeparateExpanderExpanded(bool expanded) {
-    if (audio_separate_expander_)
-        audio_separate_expander_->setExpanded(expanded);
+void ConfigPage::setAudioSeparateExpanderExpanded(bool /*expanded*/) {
+    // Phase 1b + Wave 2: audio_separate_expander_ removed; no-op for compat.
 }
 
 bool ConfigPage::audioSeparateExpanderExpanded() const noexcept {
-    return audio_separate_expander_ ? audio_separate_expander_->isExpanded() : false;
+    // Phase 1b: always false — no audio separate expander widget exists.
+    return false;
 }
 
 void ConfigPage::updateExpertModeVisibility() {
     // SETTINGS-TIERS-P3: show/hide the expert-gated Developer card.
     if (developer_card_)
         developer_card_->setVisible(expert_mode_enabled_);
+    // Wave 2 Part A: split recording section is now expert-gated (was behind expander).
+    if (split_expert_section_)
+        split_expert_section_->setVisible(expert_mode_enabled_);
+    // Wave 2 Part B: quality CQ spinbox row shown in expert mode; segment row hidden.
+    if (quality_row_widget_)
+        quality_row_widget_->setVisible(!expert_mode_enabled_);
+    if (quality_expert_widget_) {
+        quality_expert_widget_->setVisible(expert_mode_enabled_);
+        if (expert_mode_enabled_ && quality_cq_spin_) {
+            // Seed the spinbox from the current model quality on first show.
+            const QSignalBlocker b(quality_cq_spin_);
+            switch (video_settings_.quality) {
+            case recorder_core::NvencQualityPreset::High:
+                quality_cq_spin_->setValue(19);
+                break;
+            case recorder_core::NvencQualityPreset::Small:
+                quality_cq_spin_->setValue(30);
+                break;
+            default: // Balanced
+                quality_cq_spin_->setValue(24);
+                break;
+            }
+        }
+    }
     // D6: Expert warn hint — visible when Expert ON and no active search.
     if (expert_warn_label_) {
         const bool searching = settings_search_box_ && !settings_search_box_->text().trimmed().isEmpty();
@@ -2825,15 +2948,7 @@ void ConfigPage::applySettingsSearch(const QString& query) {
         // Developer card: restore to expert-mode-gated state.
         if (developer_card_)
             developer_card_->setVisible(expert_mode_enabled_);
-        // Restore expander to persisted state.
-        if (output_split_expander_ && expander_was_open_before_search_) {
-            // Only restore if we had forced it open — leave it as-is otherwise.
-            // (We track whether we forced it; restoring a naturally-open expander
-            // to the same state is a no-op anyway.)
-        } else if (output_split_expander_ && !expander_was_open_before_search_) {
-            output_split_expander_->setExpanded(false);
-        }
-        expander_was_open_before_search_ = false;
+        // Wave 2: output_split_expander_ dissolved — no expander restore needed.
 
         if (settings_search_count_label_)
             settings_search_count_label_->setVisible(false);
@@ -2887,15 +3002,9 @@ void ConfigPage::applySettingsSearch(const QString& query) {
     if (appearance_panel_)
         appearance_panel_->setVisible(appearance_match);
 
-    // Output Advanced expander auto-open.
-    if (output_split_expander_ && output_match && expander_trigger) {
-        if (!output_split_expander_->isExpanded()) {
-            expander_was_open_before_search_ = false;
-            output_split_expander_->setExpanded(true);
-        } else {
-            expander_was_open_before_search_ = true;
-        }
-    }
+    // Wave 2: output_split_expander_ dissolved — no expander auto-open needed.
+    // Split controls are part of the Output card and visible when expert mode is on.
+    (void)expander_trigger; // still declared; suppress unused-variable warning
 
     // Developer card: expert-mode affordance.
     if (developer_match) {

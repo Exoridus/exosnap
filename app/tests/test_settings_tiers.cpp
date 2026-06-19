@@ -234,42 +234,52 @@ TEST_F(SettingsTiersTest, ConfigPage_ExpertModeChanged_Signal) {
     EXPECT_TRUE(page.expertModeEnabled());
 }
 
+// Wave 2: output_split_expander_ dissolved; split controls are now expert-gated.
+// Tests updated to reflect the new structure.
+
 TEST_F(SettingsTiersTest, ConfigPage_OutputSplitExpanderExists) {
+    // Wave 2: no SettingsCardExpander named "outputSplitExpander" exists.
+    // The split expert section (plain QWidget) replaced it.
     ConfigPage page(output_defaults_, video_defaults_);
     auto* expander = page.findChild<ui::widgets::SettingsCardExpander*>(QStringLiteral("outputSplitExpander"));
-    ASSERT_NE(expander, nullptr);
+    EXPECT_EQ(expander, nullptr);
+    // The split controls do still exist (inside splitExpertSection).
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitModeCombo"));
+    EXPECT_NE(combo, nullptr);
 }
 
 TEST_F(SettingsTiersTest, ConfigPage_OutputSplitExpander_DefaultCollapsed) {
+    // Wave 2: API is a no-op; always returns false.
     ConfigPage page(output_defaults_, video_defaults_);
     EXPECT_FALSE(page.outputSplitExpanderExpanded());
 }
 
 TEST_F(SettingsTiersTest, ConfigPage_SplitModeComboInExpander_HiddenByDefault) {
+    // Wave 2: splitModeCombo is now inside split_expert_section_ (expert-gated).
+    // It is hidden by default because expert mode is off.
     ConfigPage page(output_defaults_, video_defaults_);
-    // splitModeCombo is inside the expander content, which is hidden when collapsed.
-    // Check the expander content (the direct parent of the combo's ancestor) is hidden.
-    auto* expander = page.findChild<ui::widgets::SettingsCardExpander*>(QStringLiteral("outputSplitExpander"));
-    ASSERT_NE(expander, nullptr);
-    EXPECT_TRUE(expander->contentWidget()->isHidden());
+    auto* section = page.findChild<QWidget*>(QStringLiteral("splitExpertSection"));
+    ASSERT_NE(section, nullptr);
+    EXPECT_TRUE(section->isHidden());
 }
 
 TEST_F(SettingsTiersTest, ConfigPage_SplitModeComboInExpander_VisibleWhenExpanded) {
+    // Wave 2: split controls are shown when expert mode is on (not via expander).
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setOutputSplitExpanderExpanded(true);
-    auto* expander = page.findChild<ui::widgets::SettingsCardExpander*>(QStringLiteral("outputSplitExpander"));
-    ASSERT_NE(expander, nullptr);
-    // Content widget is not hidden when expanded.
-    EXPECT_FALSE(expander->contentWidget()->isHidden());
-    // The combo is also findable.
+    page.setExpertModeEnabled(true);
+    auto* section = page.findChild<QWidget*>(QStringLiteral("splitExpertSection"));
+    ASSERT_NE(section, nullptr);
+    EXPECT_FALSE(section->isHidden());
+    // The combo is findable.
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitModeCombo"));
     ASSERT_NE(combo, nullptr);
 }
 
 TEST_F(SettingsTiersTest, ConfigPage_SetOutputSplitExpanderExpanded_RoundTrip) {
+    // Wave 2: setOutputSplitExpanderExpanded is a no-op; outputSplitExpanderExpanded always false.
     ConfigPage page(output_defaults_, video_defaults_);
     page.setOutputSplitExpanderExpanded(true);
-    EXPECT_TRUE(page.outputSplitExpanderExpanded());
+    EXPECT_FALSE(page.outputSplitExpanderExpanded());
     page.setOutputSplitExpanderExpanded(false);
     EXPECT_FALSE(page.outputSplitExpanderExpanded());
 }
