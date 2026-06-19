@@ -136,6 +136,8 @@ qt_add_executable(exosnap WIN32
     ui/widgets/ExoCheckBox.cpp
     ui/widgets/InfoHintIcon.h
     ui/widgets/InfoHintIcon.cpp
+    ui/widgets/CompareHint.h
+    ui/widgets/CompareHint.cpp
     ui/widgets/SettingsCardExpander.h
     ui/widgets/SettingsCardExpander.cpp
     ui/widgets/ComboBoxWheelFilter.h
@@ -210,6 +212,8 @@ qt_add_executable(exosnap WIN32
     services/UpdateService.h
     services/UpdateService.cpp
     models/WebcamSettings.h
+    models/SettingsCompareData.h
+    models/SettingsCompareData.cpp
     models/OutputSettingsModel.h
     models/OutputSettingsModel.cpp
     models/RecordingPreset.h
@@ -686,6 +690,20 @@ exosnap_add_gtest(
 )
 target_include_directories(info_hint_icon_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(info_hint_icon_tests PROPERTIES AUTOMOC ON)
+
+# Settings-Redesign D6: CompareHint widget + compare data unit tests.
+exosnap_add_gtest(
+    NAME compare_hint_tests
+    TEST_PREFIX compare.
+    SOURCES
+        tests/test_compare_hint.cpp
+        ui/widgets/CompareHint.cpp
+        models/SettingsCompareData.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(compare_hint_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(compare_hint_tests PROPERTIES AUTOMOC ON)
 
 # SETTINGS-TIERS-R2 Phase 2: ConfigPage InfoHint integration tests.
 exosnap_add_gtest(

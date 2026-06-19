@@ -667,6 +667,21 @@ QPushButton#recordOpenDiagnosticsButton {
     min-height: 34px;
 }
 
+/* ── Settings D6: CompareHint glyph button ───────────────────────────────────
+   Same flat "infoGlyph" treatment as InfoHintIcon: no border, no background,
+   18×18 touch target. Color is driven by the icon rendered in C++
+   (kText3 rest → kAccent hover/open), so no color rule is needed here. */
+QToolButton[labelRole="compareGlyph"] {
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+QToolButton[labelRole="compareGlyph"]:hover,
+QToolButton[labelRole="compareGlyph"]:focus {
+    background: transparent;
+    outline: none;
+}
+
 QLabel[labelRole="audioSettingsGroupTitle"] {
     font-family: ${font-mono};
     font-size: 11px;
