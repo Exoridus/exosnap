@@ -80,11 +80,11 @@ void CompareHint::setCurrentValue(const QString& value) {
         rebuildRows();
 }
 
-QString CompareHint::compareKey() const {
+const QString& CompareHint::compareKey() const {
     return compare_key_;
 }
 
-QString CompareHint::currentValue() const {
+const QString& CompareHint::currentValue() const {
     return current_value_;
 }
 

@@ -32,8 +32,8 @@ class CompareHint : public QToolButton {
     // Updates the highlighted row without reopening/closing the popover.
     void setCurrentValue(const QString& value);
 
-    [[nodiscard]] QString compareKey() const;
-    [[nodiscard]] QString currentValue() const;
+    [[nodiscard]] const QString& compareKey() const;
+    [[nodiscard]] const QString& currentValue() const;
 
   signals:
     // Emitted when the user clicks an option row in the popover.
