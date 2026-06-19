@@ -30,6 +30,7 @@ class QString;
 class QToolButton;
 
 namespace exosnap::ui::widgets {
+class CompareHint;
 class ExoCheckBox;
 class ExoToggle;
 class SettingsCardExpander;
@@ -77,7 +78,8 @@ class ConfigPage : public QWidget {
     void setExpertModeEnabled(bool enabled);
     [[nodiscard]] bool expertModeEnabled() const noexcept;
 
-    // SETTINGS-TIERS-R1: Per-card expander state (persisted by MainWindow).
+    // SETTINGS-TIERS-R1: Per-card expander state — no-op stubs kept for MainWindow compat.
+    // Wave 2: the output-split expander was dissolved; split controls are now expert-gated.
     void setOutputSplitExpanderExpanded(bool expanded);
     [[nodiscard]] bool outputSplitExpanderExpanded() const noexcept;
     void setAudioSeparateExpanderExpanded(bool expanded);
@@ -157,6 +159,7 @@ class ConfigPage : public QWidget {
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
     void updateResponsiveLayout();
@@ -193,6 +196,7 @@ class ConfigPage : public QWidget {
     void updateVideoCodecChoices();
     void updateAudioCodecChoices();
     void updateFormatDisplay();
+    void updateCompatCallout();
     void updateOutputValidationState();
     void updateExampleFilename();
 
@@ -249,8 +253,8 @@ class ConfigPage : public QWidget {
     bool active_preset_is_built_in_ = false;
     bool active_preset_is_available_ = true;
 
-    QBoxLayout* columns_layout_ = nullptr;
-    QBoxLayout* output_split_layout_ = nullptr;
+    QBoxLayout* columns_layout_ = nullptr;      // host for the two-column card grid
+    QBoxLayout* output_split_layout_ = nullptr; // inner field/help split inside Output card
 
     QButtonGroup* container_group_ = nullptr;
     QPushButton* mkv_radio_ = nullptr;
@@ -260,6 +264,19 @@ class ConfigPage : public QWidget {
     QComboBox* audio_codec_combo_ = nullptr;
     QComboBox* profile_combo_ = nullptr;
     QLabel* format_display_label_ = nullptr;
+
+    // D6: CompareHint pointers for setCurrentValue sync
+    ui::widgets::CompareHint* container_compare_hint_ = nullptr;
+    ui::widgets::CompareHint* video_codec_compare_hint_ = nullptr;
+    ui::widgets::CompareHint* audio_codec_compare_hint_ = nullptr;
+    ui::widgets::CompareHint* quality_compare_hint_ = nullptr;
+    ui::widgets::CompareHint* timing_compare_hint_ = nullptr;
+    ui::widgets::CompareHint* resolution_compare_hint_ = nullptr;
+
+    // D6: compat callout widgets (replaces format_display_label_ visually)
+    QFrame* compat_callout_widget_ = nullptr;
+    QLabel* callout_text_ = nullptr;
+    QLabel* compat_ok_label_ = nullptr;
 
     QComboBox* quality_combo_ = nullptr;
     QComboBox* frame_rate_combo_ = nullptr;
@@ -375,13 +392,22 @@ class ConfigPage : public QWidget {
     QLabel* token_help_label_ = nullptr;
     QPushButton* token_help_toggle_btn_ = nullptr;
 
-    // SETTINGS-TIERS-R1: Expert mode toggle button in settings header.
-    QPushButton* expert_mode_btn_ = nullptr;
+    // SETTINGS-TIERS-R1 / D6: Expert mode toggle (ExoToggle in D6 header zone).
+    ui::widgets::ExoToggle* expert_mode_toggle_ = nullptr;
     bool expert_mode_enabled_ = false;
+    // D6: Expert inline warn hint (amber), shown when Expert ON and no active search.
+    QLabel* expert_warn_label_ = nullptr;
 
-    // SETTINGS-TIERS-R1: Per-card Advanced expanders (collapsible sections).
-    ui::widgets::SettingsCardExpander* output_split_expander_ = nullptr;
-    ui::widgets::SettingsCardExpander* audio_separate_expander_ = nullptr;
+    // Wave 2: split recording controls moved out of expander; now expert-gated section.
+    QWidget* split_expert_section_ = nullptr;
+
+    // Wave 2: Part B — Quality row widget (promoted from local var) and CQ precision spinbox.
+    QWidget* quality_row_widget_ = nullptr;    // the standard 3-segment quality row
+    QWidget* quality_expert_widget_ = nullptr; // CQ spinbox row shown in expert mode
+    QSpinBox* quality_cq_spin_ = nullptr;      // precision CQ input (range 1–51)
+
+    // audio_separate_expander_ is null (Phase 1b); kept as no-op for compat.
+    // output_split_expander_ removed in Wave 2; split_expert_section_ replaces it.
 
     // SETTINGS-TIERS-P3: presence + appearance controls (moved from AdvancedPage).
     ui::widgets::ExoCheckBox* overlay_check_ = nullptr;
@@ -394,6 +420,7 @@ class ConfigPage : public QWidget {
     QWidget* developer_card_ = nullptr;
 
     // SETTINGS-SEARCH-R1: settings search box and match count label.
+    QWidget* settings_search_pill_ = nullptr;
     QLineEdit* settings_search_box_ = nullptr;
     QLabel* settings_search_count_label_ = nullptr;
     // "Enable Expert mode to show" hint shown when a Developer card keyword matches
@@ -411,9 +438,6 @@ class ConfigPage : public QWidget {
     QWidget* update_panel_wrapper_ = nullptr; // wraps update_settings_panel_
     QWidget* presence_panel_ = nullptr;
     QWidget* appearance_panel_ = nullptr;
-
-    // Persisted expander state before search forced it open.
-    bool expander_was_open_before_search_ = false;
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     // Inline error label for preset save-error visual-test scenario.

@@ -61,7 +61,7 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
     er->setContentsMargins(0, 0, 0, 0);
     er->setSpacing(10);
     auto* enable_label = new QLabel(QStringLiteral("Record webcam"), enable_row);
-    enable_label->setProperty("labelRole", "videoKvKey");
+    enable_label->setProperty("labelRole", "settingsRowLabel");
     er->addWidget(enable_label, 1);
     enable_toggle_ = new ExoToggle(enable_row);
     enable_toggle_->setObjectName(QStringLiteral("webcamPanelEnableToggle"));
@@ -73,7 +73,7 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
 
     // Device row: combo + compact rescan button
     auto* device_label = new QLabel(QStringLiteral("Camera"), right_col);
-    device_label->setProperty("labelRole", "fieldLabel");
+    device_label->setProperty("labelRole", "settingsRowLabel");
     right_layout->addWidget(device_label);
 
     auto* device_row = new QWidget(right_col);
@@ -106,7 +106,7 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
 
     // Resolution / FPS
     auto* res_label = new QLabel(QStringLiteral("Resolution / FPS"), right_col);
-    res_label->setProperty("labelRole", "fieldLabel");
+    res_label->setProperty("labelRole", "settingsRowLabel");
     right_layout->addWidget(res_label);
 
     resolution_combo_ = new QComboBox(right_col);
@@ -121,7 +121,7 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
     mr->setContentsMargins(0, 0, 0, 0);
     mr->setSpacing(10);
     auto* mirror_label = new QLabel(QStringLiteral("Mirror image"), mirror_row);
-    mirror_label->setProperty("labelRole", "videoKvKey");
+    mirror_label->setProperty("labelRole", "settingsRowLabel");
     mr->addWidget(mirror_label, 1);
     mirror_toggle_ = new ExoToggle(mirror_row);
     mirror_toggle_->setObjectName(QStringLiteral("webcamPanelMirrorToggle"));

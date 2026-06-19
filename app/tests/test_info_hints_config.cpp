@@ -3,11 +3,13 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QCoreApplication>
+#include <QFrame>
 
 #include "models/OutputSettingsModel.h"
 #include "models/SettingsHintText.h"
 #include "models/VideoSettingsModel.h"
 #include "pages/ConfigPage.h"
+#include "ui/widgets/CompareHint.h"
 #include "ui/widgets/InfoHintIcon.h"
 
 namespace exosnap {
@@ -40,6 +42,16 @@ class InfoHintsConfigTest : public ::testing::Test {
         return count;
     }
 
+    // Count CompareHint widgets with a specific compare key in the page.
+    static int CountCompareHintsWithKey(const ConfigPage& page, const QString& key) {
+        int count = 0;
+        for (const auto* h : page.findChildren<ui::widgets::CompareHint*>()) {
+            if (h->compareKey() == key)
+                ++count;
+        }
+        return count;
+    }
+
     OutputSettingsModel output_defaults_;
     VideoSettingsModel video_defaults_;
 };
@@ -53,32 +65,72 @@ TEST_F(InfoHintsConfigTest, ConfigPage_HasAtLeastOneInfoHintIcon) {
     EXPECT_GT(static_cast<int>(hints.size()), 0) << "ConfigPage must contain at least one InfoHintIcon";
 }
 
+// D6: Container, VideoCodec, AudioCodec, Quality rows now use CompareHint instead of InfoHintIcon.
 TEST_F(InfoHintsConfigTest, ConfigPage_Container_HasInfoHint) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    const int count = CountHintsWithText(page, ui::hints::kContainer);
-    EXPECT_GE(count, 1) << "Container setting must have an InfoHint";
+    const int count = CountCompareHintsWithKey(page, QStringLiteral("container"));
+    EXPECT_GE(count, 1) << "Container setting must have a CompareHint (key='container')";
 }
 
 TEST_F(InfoHintsConfigTest, ConfigPage_VideoCodec_HasInfoHint) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    const int count = CountHintsWithText(page, ui::hints::kVideoCodecAv1);
-    EXPECT_GE(count, 1) << "Video codec setting must have an InfoHint (AV1 hint)";
+    const int count = CountCompareHintsWithKey(page, QStringLiteral("videoCodec"));
+    EXPECT_GE(count, 1) << "Video codec setting must have a CompareHint (key='videoCodec')";
 }
 
 TEST_F(InfoHintsConfigTest, ConfigPage_AudioCodec_HasInfoHint) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    const int count = CountHintsWithText(page, ui::hints::kAudioCodecOpus);
-    EXPECT_GE(count, 1) << "Audio codec setting must have an InfoHint (Opus hint)";
+    const int count = CountCompareHintsWithKey(page, QStringLiteral("audioCodec"));
+    EXPECT_GE(count, 1) << "Audio codec setting must have a CompareHint (key='audioCodec')";
 }
 
 TEST_F(InfoHintsConfigTest, ConfigPage_Quality_HasInfoHint) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    const int count = CountHintsWithText(page, ui::hints::kQualityPreset);
-    EXPECT_GE(count, 1) << "Quality setting must have an InfoHint";
+    const int count = CountCompareHintsWithKey(page, QStringLiteral("quality"));
+    EXPECT_GE(count, 1) << "Quality setting must have a CompareHint (key='quality')";
+}
+
+// ---- D6: Additional CompareHint tests ----
+
+TEST_F(InfoHintsConfigTest, ConfigPage_Container_HasCompareHint) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    const int count = CountCompareHintsWithKey(page, QStringLiteral("container"));
+    EXPECT_GE(count, 1) << "Container row must contain a CompareHint widget";
+}
+
+TEST_F(InfoHintsConfigTest, ConfigPage_VideoCodec_HasCompareHint) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    const int count = CountCompareHintsWithKey(page, QStringLiteral("videoCodec"));
+    EXPECT_GE(count, 1) << "Video codec row must contain a CompareHint widget";
+}
+
+TEST_F(InfoHintsConfigTest, ConfigPage_AudioCodec_HasCompareHint) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    const int count = CountCompareHintsWithKey(page, QStringLiteral("audioCodec"));
+    EXPECT_GE(count, 1) << "Audio codec row must contain a CompareHint widget";
+}
+
+TEST_F(InfoHintsConfigTest, ConfigPage_WebMWithH264_ShowsCompatCallout) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // Simulate selecting WebM container + H.264 video codec (incompatible combo).
+    OutputSettingsModel settings = output_defaults_;
+    settings.container = capability::Container::WebM;
+    settings.video_codec = capability::VideoCodec::H264Nvenc;
+    settings.audio_codec = capability::AudioCodec::Opus;
+    page.setOutputSettings(settings);
+
+    // The compat callout should not be explicitly hidden (setVisible(true) was called).
+    const auto* callout = page.findChild<QFrame*>(QStringLiteral("compatCalloutWidget"));
+    ASSERT_NE(callout, nullptr) << "compatCalloutWidget must exist";
+    EXPECT_FALSE(callout->isHidden()) << "compatCalloutWidget must not be hidden for WebM+H.264";
 }
 
 TEST_F(InfoHintsConfigTest, ConfigPage_FrameRate_HasInfoHint) {
@@ -95,11 +147,13 @@ TEST_F(InfoHintsConfigTest, ConfigPage_CaptureCursor_HasInfoHint) {
     EXPECT_GE(count, 1) << "Capture cursor setting must have an InfoHint";
 }
 
-TEST_F(InfoHintsConfigTest, ConfigPage_OutputResolution_HasInfoHint) {
+TEST_F(InfoHintsConfigTest, ConfigPage_OutputResolution_HasCompareHint) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    const int count = CountHintsWithText(page, ui::hints::kOutputResolution);
-    EXPECT_GE(count, 1) << "Output resolution setting must have an InfoHint";
+    // D6: Output resolution is a multi-option control and uses a CompareHint
+    // (key "resolution"), not the single-line InfoHint it had before.
+    const int count = CountCompareHintsWithKey(page, QStringLiteral("resolution"));
+    EXPECT_GE(count, 1) << "Output resolution row must contain a CompareHint widget";
 }
 
 TEST_F(InfoHintsConfigTest, ConfigPage_AudioSourceEnable_HasInfoHints) {

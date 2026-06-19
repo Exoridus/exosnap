@@ -1971,33 +1971,41 @@ TEST_F(ConfigPageTest, SettingsSearch_NoMatch_CountLabelSaysNoMatches) {
         << "No-match query must show 'No matches' in the count label";
 }
 
-TEST_F(ConfigPageTest, SettingsSearch_SplitQuery_AutoOpensOutputExpander) {
+// Wave 2: the per-card Output "Advanced" expander was dissolved. Split controls are now
+// expert-gated and live inside the Output card (objectName "splitExpertSection"). Searching
+// must therefore respect the expert gate rather than auto-opening a (no-longer-existing)
+// expander.
+TEST_F(ConfigPageTest, SettingsSearch_SplitQuery_ExpertOn_KeepsSplitControlsVisible) {
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
 
-    // Expander must start collapsed.
-    ASSERT_FALSE(page.outputSplitExpanderExpanded());
+    auto* split = page.findChild<QWidget*>(QStringLiteral("splitExpertSection"));
+    ASSERT_NE(split, nullptr);
+    ASSERT_FALSE(split->isHidden()) << "Split controls must be visible once Expert mode is on";
 
     auto* box = page.findChild<QLineEdit*>(QStringLiteral("settingsSearchBox"));
     ASSERT_NE(box, nullptr);
     box->setText(QStringLiteral("split"));
 
-    // "split" is a keyword inside the Output Advanced expander content.
-    EXPECT_TRUE(page.outputSplitExpanderExpanded()) << "Typing 'split' must auto-open the Output Advanced expander";
+    // 'split' matches the Output card; with Expert on, the split controls stay visible.
+    EXPECT_FALSE(split->isHidden()) << "Searching 'split' with Expert on must keep the split controls visible";
 }
 
-TEST_F(ConfigPageTest, SettingsSearch_OutputExpanderAutoOpen_ClearRestoresCollapsed) {
+TEST_F(ConfigPageTest, SettingsSearch_SplitQuery_ExpertOff_SplitStaysHidden) {
     ConfigPage page(output_defaults_, video_defaults_);
+    ASSERT_FALSE(page.expertModeEnabled());
 
-    ASSERT_FALSE(page.outputSplitExpanderExpanded());
+    auto* split = page.findChild<QWidget*>(QStringLiteral("splitExpertSection"));
+    ASSERT_NE(split, nullptr);
+    ASSERT_TRUE(split->isHidden()) << "Split controls start hidden when Expert mode is off";
 
     auto* box = page.findChild<QLineEdit*>(QStringLiteral("settingsSearchBox"));
     ASSERT_NE(box, nullptr);
     box->setText(QStringLiteral("split"));
-    ASSERT_TRUE(page.outputSplitExpanderExpanded());
 
-    box->clear();
-    EXPECT_FALSE(page.outputSplitExpanderExpanded())
-        << "Clearing search after auto-open must collapse the expander back";
+    // Split is expert-gated: a search must NOT reveal it without Expert mode.
+    EXPECT_TRUE(split->isHidden())
+        << "Searching 'split' must not reveal expert-gated split controls when Expert is off";
 }
 
 TEST_F(ConfigPageTest, SettingsSearch_DeveloperKeyword_ExpertOff_ShowsHint) {

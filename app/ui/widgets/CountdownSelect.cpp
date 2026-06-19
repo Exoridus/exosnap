@@ -26,9 +26,8 @@ CountdownSelect::CountdownSelect(QWidget* parent) : QComboBox(parent) {
     setEnabled(true);
     setToolTip(QStringLiteral("Delay before recording starts."));
     setFocusPolicy(Qt::NoFocus);
-    setSizeAdjustPolicy(QComboBox::AdjustToContents);
-    // Match the dock action-button height so the Ready-state right zone aligns.
-    setMinimumHeight(40);
+    // Compact fixed height to sit flush with other dock elements.
+    setFixedHeight(32);
 
     connect(this, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             [this]() { emit selectedSecondsChanged(selectedSeconds()); });

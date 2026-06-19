@@ -4,6 +4,9 @@
 
 Partially implemented — 0.2.0 container registry shipped (CONTAINER-COMPAT-REGISTRY-R1).
 Full capability registry (encoder capabilities, HDR, rate-control) deferred to 0.5.0.
+0.5.0 Settings redesign (SETTINGS-REDESIGN-D6) changes the codec-picker UI paradigm
+from hide-invalid to show-all-plus-callout (see "0.5.0 UI behaviour change" below);
+the registry and engine constraints are unchanged.
 
 ### 0.2.0 implementation notes
 
@@ -39,6 +42,35 @@ natively and the Opus-in-MKV write path is production-validated via AV1+Opus. Th
 is reclassified to `Allowed` (player-matrix pass for H.264+Opus specifically is not yet on
 file — that is the Allowed caveat). `ReconcileCodecs()` now leaves MKV+H264+Opus presets
 unchanged instead of rewriting the audio codec to AAC.
+
+### 0.5.0 UI behaviour change (Settings Redesign D6)
+
+The 0.5.0 Settings surface redesign (SETTINGS-REDESIGN-D6) changes how the Settings codec
+pickers present compatibility, **without changing the registry or the engine constraints**:
+
+- **Codec pickers no longer filter by container.** The Format & encoding card offers every
+  real video codec (AV1, H.264 today) and audio codec (Opus, AAC today) at all times. The
+  earlier behaviour — hiding the combinations a container cannot hold — is removed.
+- **Incompatible combinations surface a compatibility callout instead of disappearing.** When
+  the active container/codec pair is registry-`Prohibited`/`Invalid` (e.g. WebM + H.264,
+  MP4 + Opus, MP4 + AV1), the card shows an amber callout naming the conflict plus a
+  **"Fix codecs"** action that calls `RecordingPreset::ReconcileContainerCodecs()` (the same
+  registry reconciliation). When compatible, a green "Current format: …" status line is shown.
+- **This supersedes the UI-only clauses of this ADR** that said prohibited combinations
+  "must not appear in any UI picker" and that "UI pickers are generated from registry queries;
+  per-page hardcoded lists are removed". For the Settings codec pickers those clauses no longer
+  hold: the picker shows all real codecs and the registry verdict is surfaced as an explainable
+  callout rather than by hiding options. Rationale: the D6 "compare, don't hide" principle —
+  hiding an option never told the user *why* it was unavailable.
+- **Engine constraints are unchanged.** The registry remains the single authority;
+  `ReconcileContainerCodecs()` still enforces valid combinations on load and on "Fix codecs";
+  recording start is still blocked for prohibited combinations via the existing
+  diagnostic-blocker path. The callout is the proactive in-place warning; the blocker remains
+  the backstop.
+- Multi-option settings additionally expose a **CompareHint** popover that lists each option
+  with its own qualitative effect line (the explainer doubles as the picker). Future codecs
+  (HEVC, PCM, FLAC) appear there with a version tag ("0.6"/"0.7") and stay non-selectable until
+  their controls exist.
 
 ## Context
 

@@ -3,6 +3,7 @@
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -37,7 +38,10 @@
 #include "../ui/dialogs/UpdateSettingsPanel.h"
 #include "../ui/theme/ExoSnapAccents.h"
 #include "../ui/theme/ExoSnapMetrics.h"
+#include "../ui/theme/ExoSnapPalette.h"
+#include "../ui/theme/LucideIcon.h"
 #include "../ui/widgets/ComboBoxWheelFilter.h"
+#include "../ui/widgets/CompareHint.h"
 #include "../ui/widgets/ExoCheckBox.h"
 #include "../ui/widgets/ExoToggle.h"
 #include "../ui/widgets/InfoHintIcon.h"
@@ -60,6 +64,82 @@ using M = ui::theme::ExoSnapMetrics;
 // the full two-column desktop rhythm at typical window sizes.
 constexpr int kMaxContentWidth = 1440;
 
+// ---- Responsive layout threshold (D6 wave-2) ----
+// Single-column layout kicks in below this width so both columns always have
+// enough space when the two-column view is shown.  Must be larger than
+// kMinWindowWidth so the app cannot be resized into a broken two-column state.
+// 2×360 card min-width + 18 gap + two 24px outer margins ≈ 810; we use 1280 as
+// a comfortable threshold that gives each card ~600px at the breakpoint.
+constexpr int kColumnBreakThreshold = 1280;
+
+// ---- Chip flow widget (D6 wave-2 responsive) ----
+// A simple flow-wrap container: children are arranged left-to-right and wrapped
+// to the next row when they would overflow the available width.  This replaces
+// the fixed "4 chips per row" QHBoxLayout in the filename-token help section.
+class ChipFlowWidget : public QWidget {
+  public:
+    explicit ChipFlowWidget(QWidget* parent = nullptr) : QWidget(parent) {
+        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    }
+
+    void addChip(QWidget* chip) {
+        chip->setParent(this);
+        chips_.append(chip);
+        updateGeometry();
+    }
+
+    QSize sizeHint() const override {
+        return doLayout(rect(), /*apply=*/false);
+    }
+    QSize minimumSizeHint() const override {
+        // Minimum: as narrow as the widest single chip.
+        int max_w = 0;
+        for (auto* c : chips_)
+            max_w = qMax(max_w, c->sizeHint().width());
+        int total_h = 0;
+        for (auto* c : chips_)
+            total_h += c->sizeHint().height();
+        const int row_gap = 6;
+        if (!chips_.isEmpty())
+            total_h += row_gap * (chips_.size() - 1);
+        return {max_w, total_h};
+    }
+
+  protected:
+    void resizeEvent(QResizeEvent* event) override {
+        QWidget::resizeEvent(event);
+        doLayout(rect(), /*apply=*/true);
+    }
+
+  private:
+    // Lays out chips in rows.  If apply==false, only measures and returns the
+    // needed size without moving widgets.
+    QSize doLayout(const QRect& area, bool apply) const {
+        const int h_gap = 6;
+        const int v_gap = 6;
+        int x = area.x();
+        int y = area.y();
+        int row_h = 0;
+
+        for (auto* chip : chips_) {
+            const QSize sh = chip->sizeHint();
+            if (x + sh.width() > area.right() + 1 && x != area.x()) {
+                // Wrap to next row.
+                x = area.x();
+                y += row_h + v_gap;
+                row_h = 0;
+            }
+            if (apply)
+                chip->setGeometry(QRect(QPoint(x, y), sh));
+            x += sh.width() + h_gap;
+            row_h = qMax(row_h, sh.height());
+        }
+        return {area.width(), y + row_h - area.y()};
+    }
+
+    QVector<QWidget*> chips_;
+};
+
 QFrame* makePanel(QWidget* parent) {
     auto* panel = new QFrame(parent);
     panel->setProperty("panelRole", "panel");
@@ -74,9 +154,18 @@ QLabel* makeCardTitle(const QString& text, QWidget* parent) {
 }
 
 // Mono uppercase "eyebrow" label that sits directly above a form control.
+// Used outside the Settings Output card (e.g. Advanced / Developer section).
 QLabel* makeFieldLabel(const QString& text, QWidget* parent) {
     auto* l = new QLabel(text.toUpper(), parent);
     l->setProperty("labelRole", "fieldLabel");
+    return l;
+}
+
+// D6: Normal-case sub-section label for the Output card (no mono/uppercase).
+// Matches the settingsRowLabel role used by makeSettingsRow left-side labels.
+QLabel* makeOutputSubLabel(const QString& text, QWidget* parent) {
+    auto* l = new QLabel(text, parent);
+    l->setProperty("labelRole", "settingsRowLabel");
     return l;
 }
 
@@ -95,6 +184,67 @@ QLabel* makeHint(const QString& text, QWidget* parent) {
     return l;
 }
 
+// D6: Creates a "quiet row": hairline on top (unless first=true), label left, control right.
+// Returns the container QWidget* (parent is `parent`).
+QWidget* makeSettingsRow(QWidget* parent, const QString& label, QWidget* hint_widget, const QString& sub_label,
+                         QWidget* control, bool first = false) {
+    auto* container = new QWidget(parent);
+    auto* vl = new QVBoxLayout(container);
+    vl->setContentsMargins(0, 0, 0, 0);
+    vl->setSpacing(0);
+
+    if (!first) {
+        auto* rule = new QFrame(container);
+        rule->setFrameShape(QFrame::HLine);
+        rule->setProperty("frameRole", "sectionRuleLine");
+        vl->addWidget(rule);
+    }
+
+    auto* content = new QWidget(container);
+    auto* hl = new QHBoxLayout(content);
+    hl->setContentsMargins(0, 12, 0, 12);
+    hl->setSpacing(14);
+
+    // Left side: label block
+    auto* left = new QWidget(content);
+    auto* ll = new QVBoxLayout(left);
+    ll->setContentsMargins(0, 0, 0, 0);
+    ll->setSpacing(2);
+
+    auto* label_row = new QWidget(left);
+    auto* lrl = new QHBoxLayout(label_row);
+    lrl->setContentsMargins(0, 0, 0, 0);
+    lrl->setSpacing(4);
+
+    auto* lbl = new QLabel(label, label_row);
+    lbl->setProperty("labelRole", "settingsRowLabel");
+    lrl->addWidget(lbl);
+
+    if (hint_widget) {
+        lrl->addWidget(hint_widget, 0, Qt::AlignVCenter);
+    }
+    lrl->addStretch();
+    ll->addWidget(label_row);
+
+    if (!sub_label.isEmpty()) {
+        auto* sub = new QLabel(sub_label, left);
+        sub->setProperty("labelRole", "muted");
+        sub->setWordWrap(true);
+        ll->addWidget(sub);
+    }
+
+    hl->addWidget(left, 1);
+
+    // Right side: control
+    if (control) {
+        hl->addWidget(control, 0, Qt::AlignVCenter);
+    }
+
+    vl->addWidget(content);
+    container->setProperty("settingsRow", true);
+    return container;
+}
+
 // Build a QWidget containing a fieldLabel + an InfoHintIcon side-by-side.
 // Use this wherever a plain makeFieldLabel would be placed; the result is
 // reparented to parent and can be inserted into any layout.
@@ -105,6 +255,22 @@ QWidget* makeFieldLabelWithHint(const QString& text, const QString& hint_text, Q
     hl->setSpacing(4);
     auto* label = new QLabel(text.toUpper(), row);
     label->setProperty("labelRole", "fieldLabel");
+    auto* hint = new ui::widgets::InfoHintIcon(hint_text, row);
+    hl->addWidget(label);
+    hl->addWidget(hint, 0, Qt::AlignVCenter);
+    hl->addStretch();
+    return row;
+}
+
+// D6: Normal-case sub-section label + InfoHintIcon for the Output card.
+// Like makeFieldLabelWithHint but uses settingsRowLabel (no mono/uppercase).
+QWidget* makeOutputSubLabelWithHint(const QString& text, const QString& hint_text, QWidget* parent) {
+    auto* row = new QWidget(parent);
+    auto* hl = new QHBoxLayout(row);
+    hl->setContentsMargins(0, 0, 0, 0);
+    hl->setSpacing(4);
+    auto* label = new QLabel(text, row);
+    label->setProperty("labelRole", "settingsRowLabel");
     auto* hint = new ui::widgets::InfoHintIcon(hint_text, row);
     hl->addWidget(label);
     hl->addWidget(hint, 0, Qt::AlignVCenter);
@@ -260,60 +426,93 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     layout->addWidget(readiness_panel_);
 
-    // ---- EXPERT MODE TOGGLE (full width, top of settings) ----
-    // SETTINGS-TIERS-R1: global expert mode; persisted via AppSettingsStore.
-    auto* expert_panel = makePanel(content);
-    expert_panel->setObjectName(QStringLiteral("expertModePanel"));
-    expert_panel->setProperty("panelRole", "note");
-    auto* expert_layout = new QHBoxLayout(expert_panel);
-    expert_layout->setContentsMargins(18, 10, 18, 10);
-    expert_layout->setSpacing(12);
-    auto* expert_label_layout = new QVBoxLayout();
-    expert_label_layout->setSpacing(2);
-    expert_label_layout->addWidget(makeCardTitle(QStringLiteral("Expert mode"), expert_panel));
-    expert_label_layout->addWidget(makeHint(QStringLiteral("Reveals lower-level controls that can produce incompatible "
-                                                           "files. Enable only if you know what you are doing."),
-                                            expert_panel));
-    expert_layout->addLayout(expert_label_layout, 1);
-    expert_mode_btn_ = new QPushButton(QStringLiteral("Enable"), expert_panel);
-    expert_mode_btn_->setObjectName(QStringLiteral("expertModeToggleBtn"));
-    expert_mode_btn_->setProperty("role", "ghost");
-    expert_mode_btn_->setCheckable(false);
-    expert_layout->addWidget(expert_mode_btn_, 0, Qt::AlignVCenter);
-    layout->addWidget(expert_panel);
-
-    // ---- SETTINGS SEARCH BOX (SETTINGS-SEARCH-R1) ----
-    // A QLineEdit with a placeholder and a match count label. Placed between the
-    // Expert mode panel and the Preset card so it sits at the top of the content area.
+    // ---- D6 HEADER ZONE ----
+    // Titelzeile: "Settings" | Such-Pill | Stretch | "Expert mode" | ExoToggle
+    // Unterzeile: Match-Count + Expert-Hint-Label + Expert-Warnhinweis
     {
-        auto* search_row = new QWidget(content);
-        auto* search_rl = new QHBoxLayout(search_row);
-        search_rl->setContentsMargins(0, 0, 0, 0);
-        search_rl->setSpacing(8);
+        auto* header_zone = new QWidget(content);
+        header_zone->setObjectName(QStringLiteral("settingsHeaderZone"));
+        auto* header_vl = new QVBoxLayout(header_zone);
+        header_vl->setContentsMargins(0, 0, 0, 0);
+        header_vl->setSpacing(8);
 
-        settings_search_box_ = new QLineEdit(search_row);
+        // Titelzeile
+        auto* title_row = new QHBoxLayout();
+        title_row->setSpacing(14);
+
+        auto* page_title = new QLabel(QStringLiteral("Settings"), header_zone);
+        page_title->setProperty("labelRole", "pageTitle");
+        title_row->addWidget(page_title);
+
+        // Such-Pill: Container-Widget mit Lupe + QLineEdit
+        auto* search_pill = new QWidget(header_zone);
+        settings_search_pill_ = search_pill;
+        search_pill->setObjectName(QStringLiteral("settingsSearchPill"));
+        search_pill->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        search_pill->setFixedHeight(34);
+        auto* pill_hl = new QHBoxLayout(search_pill);
+        pill_hl->setContentsMargins(10, 6, 10, 6);
+        pill_hl->setSpacing(6);
+
+        auto* search_icon = new QLabel(search_pill);
+        // D6: a dim Lucide "search" glyph at the left of the pill (rendered from
+        // the icon font, not an SVG resource).
+        search_icon->setFixedSize(15, 15);
+        search_icon->setScaledContents(true);
+        search_icon->setPixmap(ui::theme::lucidePixmap(QStringLiteral("search"),
+                                                       QString::fromLatin1(ui::theme::ExoSnapPalette::kText3), 15,
+                                                       search_icon->devicePixelRatioF()));
+        pill_hl->addWidget(search_icon);
+
+        settings_search_box_ = new QLineEdit(search_pill);
         settings_search_box_->setObjectName(QStringLiteral("settingsSearchBox"));
         settings_search_box_->setPlaceholderText(QStringLiteral("Search settings\xe2\x80\xa6"));
         settings_search_box_->setClearButtonEnabled(true);
+        settings_search_box_->setFrame(false);
+        settings_search_box_->setProperty("role", "pillInput");
         settings_search_box_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        pill_hl->addWidget(settings_search_box_, 1);
 
-        settings_search_count_label_ = new QLabel(search_row);
+        title_row->addWidget(search_pill);
+        title_row->addStretch(1);
+
+        auto* expert_label = new QLabel(QStringLiteral("Expert mode"), header_zone);
+        expert_label->setProperty("labelRole", "muted");
+        title_row->addWidget(expert_label, 0, Qt::AlignVCenter);
+
+        expert_mode_toggle_ = new ui::widgets::ExoToggle(header_zone);
+        expert_mode_toggle_->setObjectName(QStringLiteral("expertModeToggleBtn"));
+        expert_mode_toggle_->setOn(false);
+        title_row->addWidget(expert_mode_toggle_, 0, Qt::AlignVCenter);
+
+        header_vl->addLayout(title_row);
+
+        // Unterzeile: Match-Count
+        settings_search_count_label_ = new QLabel(header_zone);
         settings_search_count_label_->setObjectName(QStringLiteral("settingsSearchCountLabel"));
         settings_search_count_label_->setProperty("labelRole", "muted");
         settings_search_count_label_->setVisible(false);
+        header_vl->addWidget(settings_search_count_label_);
 
-        search_rl->addWidget(settings_search_box_, 1);
-        search_rl->addWidget(settings_search_count_label_, 0, Qt::AlignVCenter);
-        layout->addWidget(search_row);
-
-        // "Enable Expert mode to show X developer settings" — shown when a Developer
-        // card keyword matches but Expert mode is off.
-        search_expert_hint_label_ = new QLabel(content);
+        // Expert-hint: "Enable Expert mode to show developer settings"
+        search_expert_hint_label_ = new QLabel(header_zone);
         search_expert_hint_label_->setObjectName(QStringLiteral("searchExpertHintLabel"));
         search_expert_hint_label_->setProperty("labelRole", "muted");
         search_expert_hint_label_->setWordWrap(true);
         search_expert_hint_label_->setVisible(false);
-        layout->addWidget(search_expert_hint_label_);
+        header_vl->addWidget(search_expert_hint_label_);
+
+        // Expert inline warn hint (amber, klein): sichtbar wenn Expert-Mode AN + keine Suche
+        expert_warn_label_ = new QLabel(header_zone);
+        expert_warn_label_->setObjectName(QStringLiteral("expertWarnLabel"));
+        expert_warn_label_->setText(QStringLiteral("Expert mode reveals lower-level controls that can produce "
+                                                   "incompatible files. Enable only if you know why."));
+        expert_warn_label_->setProperty("labelRole", "warnHint");
+        expert_warn_label_->setWordWrap(true);
+        expert_warn_label_->setVisible(false);
+        header_vl->addWidget(expert_warn_label_);
+
+        layout->addWidget(header_zone);
     }
 
     // ---- PRESET CARD (full width, top) ----
@@ -363,7 +562,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     profile_combo_->setObjectName(QStringLiteral("profileCombo"));
     profile_combo_->setAccessibleName(QStringLiteral("presetCombo"));
     profile_combo_->setProperty("presetComboAlias", QStringLiteral("presetCombo"));
-    profile_combo_->setMinimumWidth(220);
+    profile_combo_->setMinimumWidth(0); // Wave 2 Part C: let it shrink with the layout
     profile_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
     // Primary action buttons — Save (dirty-gated) and Save As (always available).
@@ -419,10 +618,14 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                  preset_panel));
     layout->addWidget(preset_panel);
 
-    // ---- TWO-COLUMN REGION (Format & encoding | Audio) ----
-    // The left column holds Format & encoding; the right column holds Audio. On narrow
-    // viewports the columns flip from side-by-side to a single stacked column
-    // (updateResponsiveLayout()).
+    // ---- TWO-COLUMN CARD GRID (D6 design: Format | Audio / Webcam | Output / Presence | Appearance) ----
+    // Left column: Format & encoding, Webcam, Presence.
+    // Right column: Audio, Output, Appearance.
+    // On narrow viewports updateResponsiveLayout() flips both columns to a single stacked column.
+    // Updates card is placed full-width below the grid; Developer is full-width below that
+    // (expert-gated). The six main cards are individually visibility-controlled by
+    // applySettingsSearch so the grid host (columns_widget_) is only hidden when all six are
+    // hidden (cosmetic gap limitation is acceptable — see applySettingsSearch).
     auto* columns = new QWidget(content);
     columns_widget_ = columns;
     columns_layout_ = new QHBoxLayout(columns);
@@ -443,28 +646,29 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     columns_layout_->addWidget(right_col, 1);
     layout->addWidget(columns);
 
-    // ---- FORMAT & ENCODING CARD (left) ----
-    // Container, codecs, quality, frame rate, timing, and cursor live together here.
+    // ---- FORMAT & ENCODING CARD (left) — D6: flat SRows ----
     auto* fmt_panel = makePanel(left_col);
     fmt_panel_ = fmt_panel;
     auto* fmt_layout = new QVBoxLayout(fmt_panel);
     fmt_layout->setContentsMargins(18, 16, 18, 18);
-    fmt_layout->setSpacing(12);
+    fmt_layout->setSpacing(0);
     fmt_layout->addWidget(makeCardTitle(QStringLiteral("Format & encoding"), fmt_panel));
 
+    // format_display_label_ kept for backward compat (hidden)
     format_display_label_ = new QLabel(fmt_panel);
     format_display_label_->setProperty("labelRole", "muted");
+    format_display_label_->setVisible(false);
     fmt_layout->addWidget(format_display_label_);
 
-    fmt_layout->addWidget(makeFieldLabelWithHint(QStringLiteral("Container"), ui::hints::kContainer, fmt_panel));
+    // --- Container row ---
     container_group_ = new QButtonGroup(this);
     container_group_->setExclusive(true);
     auto* container_segmented = new QWidget(fmt_panel);
     container_segmented->setObjectName(QStringLiteral("containerSegmented"));
-    auto* container_row = new QHBoxLayout();
-    container_row->setContentsMargins(3, 3, 3, 3);
-    container_row->setSpacing(0);
-    container_segmented->setLayout(container_row);
+    auto* container_row_layout = new QHBoxLayout();
+    container_row_layout->setContentsMargins(3, 3, 3, 3);
+    container_row_layout->setSpacing(0);
+    container_segmented->setLayout(container_row_layout);
     auto makeContainerSegment = [&](const QString& object_name, const QString& label,
                                     capability::Container container) -> QPushButton* {
         auto* segment = new QPushButton(label, container_segmented);
@@ -478,7 +682,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         segment->setProperty("qualitySegmentSelected", false);
         segment->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         container_group_->addButton(segment, static_cast<int>(container));
-        container_row->addWidget(segment);
+        container_row_layout->addWidget(segment);
         return segment;
     };
     mkv_radio_ = makeContainerSegment(QStringLiteral("containerMkvButton"), QStringLiteral("MKV"),
@@ -487,30 +691,28 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                                        capability::Container::WebM);
     mp4_radio_ =
         makeContainerSegment(QStringLiteral("containerMp4Button"), QStringLiteral("MP4"), capability::Container::Mp4);
-    fmt_layout->addWidget(container_segmented);
 
-    auto* codec_row = new QHBoxLayout();
-    codec_row->setSpacing(14);
+    container_compare_hint_ =
+        new ui::widgets::CompareHint(QStringLiteral("container"), QStringLiteral("MKV"), fmt_panel);
+    fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Container"), container_compare_hint_, QString(),
+                                          container_segmented, /*first=*/true));
 
-    auto* vcol = new QVBoxLayout();
-    vcol->setSpacing(6);
+    // --- Video codec row ---
     video_codec_combo_ = new QComboBox(fmt_panel);
-    vcol->addWidget(makeFieldLabelWithHint(QStringLiteral("Video codec"), ui::hints::kVideoCodecAv1, fmt_panel));
-    vcol->addWidget(video_codec_combo_);
-    codec_row->addLayout(vcol, 1);
+    video_codec_compare_hint_ =
+        new ui::widgets::CompareHint(QStringLiteral("videoCodec"), QStringLiteral("AV1"), fmt_panel);
+    fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Video codec"), video_codec_compare_hint_,
+                                          QString(), video_codec_combo_));
 
-    auto* acol = new QVBoxLayout();
-    acol->setSpacing(6);
+    // --- Audio codec row ---
     audio_codec_combo_ = new QComboBox(fmt_panel);
-    acol->addWidget(makeFieldLabelWithHint(QStringLiteral("Audio codec"), ui::hints::kAudioCodecOpus, fmt_panel));
-    acol->addWidget(audio_codec_combo_);
-    codec_row->addLayout(acol, 1);
+    audio_codec_compare_hint_ =
+        new ui::widgets::CompareHint(QStringLiteral("audioCodec"), QStringLiteral("Opus"), fmt_panel);
+    fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Audio codec"), audio_codec_compare_hint_,
+                                          QString(), audio_codec_combo_));
 
-    fmt_layout->addLayout(codec_row);
-
-    // Quality — compact 3-segment control. The hidden videoQualityCombo stays the single
-    // place that emits the model change, so the existing summary flow and test seam are kept.
-    fmt_layout->addWidget(makeFieldLabelWithHint(QStringLiteral("Quality"), ui::hints::kQualityPreset, fmt_panel));
+    // --- Quality row ---
+    // Hidden combo is the single model-change emitter (existing test seam).
     quality_combo_ = new QComboBox(fmt_panel);
     quality_combo_->setObjectName(QStringLiteral("videoQualityCombo"));
     quality_combo_->addItem(QStringLiteral("High Quality"), static_cast<int>(recorder_core::NvencQualityPreset::High));
@@ -545,32 +747,111 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         return segment;
     };
 
-    quality_segment_small_ = makeQualitySegment(QStringLiteral("qualitySegmentSmall"), QStringLiteral("Small · CQ30"),
-                                                recorder_core::NvencQualityPreset::Small);
+    quality_segment_small_ =
+        makeQualitySegment(QStringLiteral("qualitySegmentSmall"), QStringLiteral("Small \xC2\xB7 CQ30"),
+                           recorder_core::NvencQualityPreset::Small);
     quality_segment_balanced_ =
-        makeQualitySegment(QStringLiteral("qualitySegmentBalanced"), QStringLiteral("Balanced · CQ24"),
+        makeQualitySegment(QStringLiteral("qualitySegmentBalanced"), QStringLiteral("Balanced \xC2\xB7 CQ24"),
                            recorder_core::NvencQualityPreset::Balanced);
-    quality_segment_high_ = makeQualitySegment(QStringLiteral("qualitySegmentHigh"), QStringLiteral("High · CQ19"),
-                                               recorder_core::NvencQualityPreset::High);
-
-    fmt_layout->addWidget(quality_segmented);
+    quality_segment_high_ =
+        makeQualitySegment(QStringLiteral("qualitySegmentHigh"), QStringLiteral("High \xC2\xB7 CQ19"),
+                           recorder_core::NvencQualityPreset::High);
 
     quality_badge_label_ = new QLabel(fmt_panel);
     quality_badge_label_->setObjectName(QStringLiteral("qualityBadgeLabel"));
     quality_badge_label_->setProperty("labelRole", "muted");
-    fmt_layout->addWidget(quality_badge_label_);
 
     quality_settings_label_ = new QLabel(fmt_panel);
     quality_settings_label_->setObjectName(QStringLiteral("qualitySettingsLabel"));
     quality_settings_label_->setProperty("labelRole", "muted");
-    fmt_layout->addWidget(quality_settings_label_);
 
-    // Frame rate + timing. Values here are restart-class and feed the real encoder cadence.
-    auto* rate_row = new QHBoxLayout();
-    rate_row->setSpacing(14);
-    auto* rate_col = new QVBoxLayout();
-    rate_col->setSpacing(6);
-    rate_col->addWidget(makeFieldLabelWithHint(QStringLiteral("Frame rate"), ui::hints::kFrameRate, fmt_panel));
+    // Quality sub-label widget combining both badge+settings labels
+    auto* quality_sub_widget = new QWidget(fmt_panel);
+    {
+        auto* qsl = new QVBoxLayout(quality_sub_widget);
+        qsl->setContentsMargins(0, 0, 0, 0);
+        qsl->setSpacing(2);
+        qsl->addWidget(quality_badge_label_);
+        qsl->addWidget(quality_settings_label_);
+    }
+
+    quality_compare_hint_ =
+        new ui::widgets::CompareHint(QStringLiteral("quality"), QStringLiteral("Balanced"), fmt_panel);
+
+    // Quality row: segmented on right, compare hint in label area
+    // Wave 2: quality_row_widget_ promoted to member so expert-mode can show/hide it.
+    {
+        quality_row_widget_ = new QWidget(fmt_panel);
+        auto* qvl = new QVBoxLayout(quality_row_widget_);
+        qvl->setContentsMargins(0, 0, 0, 0);
+        qvl->setSpacing(0);
+        // hairline
+        auto* qrule = new QFrame(quality_row_widget_);
+        qrule->setFrameShape(QFrame::HLine);
+        qrule->setProperty("frameRole", "sectionRuleLine");
+        qvl->addWidget(qrule);
+        // content
+        auto* qcontent = new QWidget(quality_row_widget_);
+        auto* qhl = new QHBoxLayout(qcontent);
+        qhl->setContentsMargins(0, 12, 0, 12);
+        qhl->setSpacing(14);
+        // left: label + hint + sub labels
+        auto* qleft = new QWidget(qcontent);
+        auto* qll = new QVBoxLayout(qleft);
+        qll->setContentsMargins(0, 0, 0, 0);
+        qll->setSpacing(2);
+        auto* qlabel_row = new QWidget(qleft);
+        auto* qlrl = new QHBoxLayout(qlabel_row);
+        qlrl->setContentsMargins(0, 0, 0, 0);
+        qlrl->setSpacing(4);
+        auto* qlbl = new QLabel(QStringLiteral("Quality"), qlabel_row);
+        qlbl->setProperty("labelRole", "settingsRowLabel");
+        qlrl->addWidget(qlbl);
+        qlrl->addWidget(quality_compare_hint_, 0, Qt::AlignVCenter);
+        qlrl->addStretch();
+        qll->addWidget(qlabel_row);
+        qll->addWidget(quality_sub_widget);
+        qhl->addWidget(qleft, 1);
+        qhl->addWidget(quality_segmented, 0, Qt::AlignVCenter);
+        qvl->addWidget(qcontent);
+        quality_row_widget_->setProperty("settingsRow", true);
+        fmt_layout->addWidget(quality_row_widget_);
+    }
+
+    // Wave 2 Part B: CQ precision spinbox row — shown in expert mode, hidden otherwise.
+    {
+        quality_expert_widget_ = new QWidget(fmt_panel);
+        quality_expert_widget_->setObjectName(QStringLiteral("qualityExpertWidget"));
+        auto* qevl = new QVBoxLayout(quality_expert_widget_);
+        qevl->setContentsMargins(0, 0, 0, 0);
+        qevl->setSpacing(0);
+        // hairline
+        auto* qerule = new QFrame(quality_expert_widget_);
+        qerule->setFrameShape(QFrame::HLine);
+        qerule->setProperty("frameRole", "sectionRuleLine");
+        qevl->addWidget(qerule);
+        // content row
+        auto* qecontent = new QWidget(quality_expert_widget_);
+        auto* qehl = new QHBoxLayout(qecontent);
+        qehl->setContentsMargins(0, 12, 0, 12);
+        qehl->setSpacing(14);
+        auto* qelbl = new QLabel(QStringLiteral("Quality (CQ)"), qecontent);
+        qelbl->setProperty("labelRole", "settingsRowLabel");
+        qehl->addWidget(qelbl, 1);
+        quality_cq_spin_ = new QSpinBox(qecontent);
+        quality_cq_spin_->setObjectName(QStringLiteral("qualityCqSpin"));
+        quality_cq_spin_->setRange(1, 51);
+        quality_cq_spin_->setSuffix(QStringLiteral(" (CQ)"));
+        quality_cq_spin_->setToolTip(QStringLiteral("NVENC Constant Quality value (1=best, 51=worst). "
+                                                    "Low=19 (High), 24 (Balanced), 30 (Small)."));
+        qehl->addWidget(quality_cq_spin_, 0, Qt::AlignVCenter);
+        qevl->addWidget(qecontent);
+        quality_expert_widget_->setProperty("settingsRow", true);
+        quality_expert_widget_->setVisible(false); // hidden until expert mode is on
+        fmt_layout->addWidget(quality_expert_widget_);
+    }
+
+    // --- Frame rate row ---
     frame_rate_combo_ = new QComboBox(fmt_panel);
     frame_rate_combo_->setObjectName(QStringLiteral("frameRateCombo"));
     frame_rate_combo_->setAccessibleName(QStringLiteral("Frame rate"));
@@ -584,11 +865,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             item->setToolTip(QStringLiteral("120 fps is hidden from runtime use until hardware support is proven."));
         }
     }
-    rate_col->addWidget(frame_rate_combo_);
-    rate_row->addLayout(rate_col, 1);
-    auto* timing_col = new QVBoxLayout();
-    timing_col->setSpacing(6);
-    timing_col->addWidget(makeFieldLabel(QStringLiteral("Timing"), fmt_panel));
+
+    fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Frame rate"),
+                                          new ui::widgets::InfoHintIcon(ui::hints::kFrameRate, fmt_panel), QString(),
+                                          frame_rate_combo_));
+
+    // --- Frame timing row ---
     auto* timing_segmented = new QWidget(fmt_panel);
     timing_segmented->setObjectName(QStringLiteral("timingSegmented"));
     auto* timing_segmented_layout = new QHBoxLayout(timing_segmented);
@@ -613,31 +895,64 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     };
     timing_cfr_btn_ = makeTimingSegment(QStringLiteral("timingCfrButton"), QStringLiteral("CFR"), 1);
     timing_vfr_btn_ = makeTimingSegment(QStringLiteral("timingVfrButton"), QStringLiteral("VFR"), 0);
-    timing_col->addWidget(timing_segmented);
-    rate_row->addLayout(timing_col, 1);
-    fmt_layout->addLayout(rate_row);
 
+    timing_compare_hint_ = new ui::widgets::CompareHint(QStringLiteral("timing"), QStringLiteral("CFR"), fmt_panel);
+    fmt_layout->addWidget(
+        makeSettingsRow(fmt_panel, QStringLiteral("Frame timing"), timing_compare_hint_, QString(), timing_segmented));
+
+    // --- Capture cursor row ---
+    cursor_check_ = new QCheckBox(QStringLiteral("Capture cursor"), fmt_panel);
+    cursor_check_->setObjectName(QStringLiteral("captureCursorCheck"));
+    cursor_check_->setChecked(video_settings_.capture_cursor);
+    fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Capture cursor"),
+                                          new ui::widgets::InfoHintIcon(ui::hints::kCaptureCursor, fmt_panel),
+                                          QString(), cursor_check_));
+
+    // --- Compat callout (D6: replaces format_display_label_ visually) ---
+    compat_callout_widget_ = new QFrame(fmt_panel);
+    compat_callout_widget_->setObjectName(QStringLiteral("compatCalloutWidget"));
+    compat_callout_widget_->setProperty("panelRole", "compatCallout");
+    compat_callout_widget_->setProperty("stateRole", "caution");
     {
-        auto* cursor_row = new QWidget(fmt_panel);
-        auto* cursor_hl = new QHBoxLayout(cursor_row);
-        cursor_hl->setContentsMargins(0, 0, 0, 0);
-        cursor_hl->setSpacing(4);
-        cursor_check_ = new QCheckBox(QStringLiteral("Capture cursor"), cursor_row);
-        cursor_check_->setObjectName(QStringLiteral("captureCursorCheck"));
-        cursor_check_->setChecked(video_settings_.capture_cursor);
-        cursor_hl->addWidget(cursor_check_);
-        cursor_hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kCaptureCursor, cursor_row), 0, Qt::AlignVCenter);
-        cursor_hl->addStretch();
-        fmt_layout->addWidget(cursor_row);
+        auto* callout_layout = new QHBoxLayout(compat_callout_widget_);
+        callout_layout->setContentsMargins(12, 8, 12, 8);
+        callout_layout->setSpacing(8);
+        auto* callout_icon = new QLabel(compat_callout_widget_);
+        callout_icon->setText(QStringLiteral("\xe2\x9a\xa0"));
+        callout_layout->addWidget(callout_icon);
+        callout_text_ = new QLabel(compat_callout_widget_);
+        callout_text_->setObjectName(QStringLiteral("compatCalloutText"));
+        callout_text_->setWordWrap(true);
+        callout_layout->addWidget(callout_text_, 1);
+        auto* fix_btn = new QPushButton(QStringLiteral("Fix codecs"), compat_callout_widget_);
+        fix_btn->setObjectName(QStringLiteral("fixCodecsButton"));
+        fix_btn->setProperty("role", "ghost");
+        fix_btn->setCursor(Qt::PointingHandCursor);
+        connect(fix_btn, &QPushButton::clicked, this, [this]() {
+            reconcileContainerCodecRules();
+            updateCompatCallout();
+            emitCurrentFormatSettings();
+        });
+        callout_layout->addWidget(fix_btn);
     }
+    compat_callout_widget_->setVisible(false);
+    fmt_layout->addWidget(compat_callout_widget_);
+
+    compat_ok_label_ = new QLabel(fmt_panel);
+    compat_ok_label_->setObjectName(QStringLiteral("compatOkLabel"));
+    compat_ok_label_->setProperty("labelRole", "muted");
+    fmt_layout->addWidget(compat_ok_label_);
 
     fmt_layout->addWidget(
         makeHint(QStringLiteral("VFR is available for MKV/WebM. MP4 uses CFR for editor compatibility."), fmt_panel));
 
-    left_layout->addWidget(fmt_panel);
-    left_layout->addStretch();
+    // Pre-fill codec combos (D6: free choice, fills once)
+    updateVideoCodecChoices();
+    updateAudioCodecChoices();
 
-    // ---- AUDIO CARD (right) ----
+    left_layout->addWidget(fmt_panel);
+
+    // ---- AUDIO CARD (right column) ----
     auto* audio_panel = makePanel(right_col);
     audio_panel_ = audio_panel;
     auto* audio_panel_layout = new QVBoxLayout(audio_panel);
@@ -735,7 +1050,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         mic_device_combo_ = new QComboBox(mic_row);
         mic_device_combo_->setObjectName(QStringLiteral("micDeviceCombo"));
         mic_device_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        mic_device_combo_->setMinimumWidth(180);
+        mic_device_combo_->setMinimumWidth(0); // Wave 2 Part C: let it shrink with the layout
         mic_rl->addWidget(mic_device_combo_, 1);
         audio_rescan_btn_ = new QPushButton(mic_row); // #09: icon-only rescan button
         audio_rescan_btn_->setObjectName(QStringLiteral("audioRescanBtn"));
@@ -770,10 +1085,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     audio_summary_label_->setVisible(false);
     audio_panel_layout->addWidget(audio_summary_label_);
     right_layout->addWidget(audio_panel);
-    right_layout->addStretch();
 
-    // ---- WEBCAM CARD (full width — inline setup panel, no navigation required) ----
-    auto* webcam_panel = makePanel(content);
+    // ---- WEBCAM CARD (left column — D6: in 2-column grid below Format) ----
+    auto* webcam_panel = makePanel(left_col);
     webcam_panel_ = webcam_panel;
     auto* webcam_panel_layout = new QVBoxLayout(webcam_panel);
     webcam_panel_layout->setContentsMargins(18, 16, 18, 18);
@@ -783,18 +1097,33 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     webcam_setup_panel_ = new ui::widgets::WebcamSetupPanel(webcam_panel);
     webcam_setup_panel_->setObjectName(QStringLiteral("settingsWebcamSetupPanel"));
     webcam_panel_layout->addWidget(webcam_setup_panel_);
-    layout->addWidget(webcam_panel);
+    left_layout->addWidget(webcam_panel);
 
-    // ---- OUTPUT CARD (full width) ----
-    auto* out_panel = makePanel(content);
+    // ---- OUTPUT CARD (right column — D6: in 2-column grid below Audio) ----
+    auto* out_panel = makePanel(right_col);
     out_panel_ = out_panel;
     auto* out_panel_layout = new QVBoxLayout(out_panel);
     out_panel_layout->setContentsMargins(18, 16, 18, 18);
     out_panel_layout->setSpacing(12);
     out_panel_layout->addWidget(makeCardTitle(QStringLiteral("Output"), out_panel));
 
-    out_panel_layout->addWidget(
-        makeFieldLabelWithHint(QStringLiteral("Output resolution"), ui::hints::kOutputResolution, out_panel));
+    // D6: CompareHint for Output resolution (replaces plain InfoHintIcon).
+    resolution_compare_hint_ =
+        new ui::widgets::CompareHint(QStringLiteral("resolution"), QStringLiteral("Native"), out_panel);
+
+    // Label + CompareHint side by side (matches makeFieldLabelWithHint layout but with CompareHint).
+    {
+        auto* res_label_row = new QWidget(out_panel);
+        auto* rll = new QHBoxLayout(res_label_row);
+        rll->setContentsMargins(0, 0, 0, 0);
+        rll->setSpacing(4);
+        auto* res_lbl = new QLabel(QStringLiteral("Output resolution"), res_label_row);
+        res_lbl->setProperty("labelRole", "settingsRowLabel");
+        rll->addWidget(res_lbl);
+        rll->addWidget(resolution_compare_hint_, 0, Qt::AlignVCenter);
+        rll->addStretch();
+        out_panel_layout->addWidget(res_label_row);
+    }
     auto* out_res_segmented = new QWidget(out_panel);
     out_res_segmented->setObjectName(QStringLiteral("outputResSegmented"));
     auto* out_res_layout = new QHBoxLayout(out_res_segmented);
@@ -841,7 +1170,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     custom_res_layout->setSpacing(8);
 
     auto* width_label = new QLabel(QStringLiteral("Width"), custom_resolution_widget_);
-    width_label->setProperty("labelRole", "fieldLabel");
+    width_label->setProperty("labelRole", "settingsRowLabel");
     custom_width_spin_ = new QSpinBox(custom_resolution_widget_);
     custom_width_spin_->setObjectName(QStringLiteral("customWidthSpin"));
     custom_width_spin_->setRange(320, 7680);
@@ -850,7 +1179,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     custom_width_spin_->setToolTip(QStringLiteral("Custom output width (320–7680)"));
 
     auto* height_label = new QLabel(QStringLiteral("Height"), custom_resolution_widget_);
-    height_label->setProperty("labelRole", "fieldLabel");
+    height_label->setProperty("labelRole", "settingsRowLabel");
     custom_height_spin_ = new QSpinBox(custom_resolution_widget_);
     custom_height_spin_->setObjectName(QStringLiteral("customHeightSpin"));
     custom_height_spin_->setRange(180, 7680);
@@ -874,88 +1203,94 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_effective_summary_label_->setObjectName(QStringLiteral("outputEffectiveSummaryLabel"));
     out_panel_layout->addWidget(output_effective_summary_label_);
 
-    // ---- Split recording (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1) behind Advanced expander ----
-    // SETTINGS-TIERS-R1: split settings are Advanced-tier; hidden behind the expander by default.
-    output_split_expander_ = new ui::widgets::SettingsCardExpander(2, out_panel);
-    output_split_expander_->setObjectName(QStringLiteral("outputSplitExpander"));
-    auto* split_expander_content_layout = qobject_cast<QVBoxLayout*>(output_split_expander_->contentWidget()->layout());
+    // ---- Split recording (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1) — Wave 2: expert-gated section ----
+    // Wave 2: the SettingsCardExpander was dissolved. Split controls now live in a plain
+    // QWidget that is shown/hidden by updateExpertModeVisibility() together with the
+    // developer card (same expert-mode gate, no per-card expander).
+    split_expert_section_ = new QWidget(out_panel);
+    split_expert_section_->setObjectName(QStringLiteral("splitExpertSection"));
+    split_expert_section_->setVisible(false); // hidden until expert mode is on
+    {
+        auto* split_expert_layout = new QVBoxLayout(split_expert_section_);
+        split_expert_layout->setContentsMargins(0, 0, 0, 0);
+        split_expert_layout->setSpacing(8);
 
-    split_expander_content_layout->addWidget(makeFieldLabelWithHint(
-        QStringLiteral("Split recording"), ui::hints::kSplitRecording, output_split_expander_->contentWidget()));
-    auto* split_row = new QHBoxLayout();
-    split_row->setContentsMargins(0, 0, 0, 0);
-    split_row->setSpacing(8);
-    split_mode_combo_ = new QComboBox(output_split_expander_->contentWidget());
-    split_mode_combo_->setObjectName(QStringLiteral("splitModeCombo"));
-    split_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitRecordingMode::Off));
-    split_mode_combo_->addItem(QStringLiteral("Every 15 min"), static_cast<int>(SplitRecordingMode::Every15Min));
-    split_mode_combo_->addItem(QStringLiteral("Every 30 min"), static_cast<int>(SplitRecordingMode::Every30Min));
-    split_mode_combo_->addItem(QStringLiteral("Every 60 min"), static_cast<int>(SplitRecordingMode::Every60Min));
-    split_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitRecordingMode::Custom));
-    split_mode_combo_->setToolTip(
-        QStringLiteral("Automatically start a new file at the chosen interval (manual splits always work)."));
-    split_row->addWidget(split_mode_combo_, 0);
+        split_expert_layout->addWidget(makeOutputSubLabelWithHint(QStringLiteral("Split recording"),
+                                                                  ui::hints::kSplitRecording, split_expert_section_));
+        auto* split_row = new QHBoxLayout();
+        split_row->setContentsMargins(0, 0, 0, 0);
+        split_row->setSpacing(8);
+        split_mode_combo_ = new QComboBox(split_expert_section_);
+        split_mode_combo_->setObjectName(QStringLiteral("splitModeCombo"));
+        split_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitRecordingMode::Off));
+        split_mode_combo_->addItem(QStringLiteral("Every 15 min"), static_cast<int>(SplitRecordingMode::Every15Min));
+        split_mode_combo_->addItem(QStringLiteral("Every 30 min"), static_cast<int>(SplitRecordingMode::Every30Min));
+        split_mode_combo_->addItem(QStringLiteral("Every 60 min"), static_cast<int>(SplitRecordingMode::Every60Min));
+        split_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitRecordingMode::Custom));
+        split_mode_combo_->setToolTip(
+            QStringLiteral("Automatically start a new file at the chosen interval (manual splits always work)."));
+        split_row->addWidget(split_mode_combo_, 0);
 
-    split_custom_widget_ = new QWidget(output_split_expander_->contentWidget());
-    auto* split_custom_layout = new QHBoxLayout(split_custom_widget_);
-    split_custom_layout->setContentsMargins(0, 0, 0, 0);
-    split_custom_layout->setSpacing(8);
-    auto* split_every_label = new QLabel(QStringLiteral("Every"), split_custom_widget_);
-    split_every_label->setProperty("labelRole", "fieldLabel");
-    split_custom_minutes_spin_ = new QSpinBox(split_custom_widget_);
-    split_custom_minutes_spin_->setObjectName(QStringLiteral("splitCustomMinutesSpin"));
-    split_custom_minutes_spin_->setRange(static_cast<int>(SplitRecordingSettings::kMinMinutes),
-                                         static_cast<int>(SplitRecordingSettings::kMaxMinutes));
-    split_custom_minutes_spin_->setSuffix(QStringLiteral(" min"));
-    split_custom_minutes_spin_->setToolTip(QStringLiteral("Custom split interval (1 min – 24 h)"));
-    split_custom_layout->addWidget(split_every_label);
-    split_custom_layout->addWidget(split_custom_minutes_spin_);
-    split_custom_widget_->setVisible(false);
-    split_row->addWidget(split_custom_widget_, 0);
-    split_row->addStretch();
-    split_expander_content_layout->addLayout(split_row);
+        split_custom_widget_ = new QWidget(split_expert_section_);
+        auto* split_custom_layout = new QHBoxLayout(split_custom_widget_);
+        split_custom_layout->setContentsMargins(0, 0, 0, 0);
+        split_custom_layout->setSpacing(8);
+        auto* split_every_label = new QLabel(QStringLiteral("Every"), split_custom_widget_);
+        split_every_label->setProperty("labelRole", "settingsRowLabel");
+        split_custom_minutes_spin_ = new QSpinBox(split_custom_widget_);
+        split_custom_minutes_spin_->setObjectName(QStringLiteral("splitCustomMinutesSpin"));
+        split_custom_minutes_spin_->setRange(static_cast<int>(SplitRecordingSettings::kMinMinutes),
+                                             static_cast<int>(SplitRecordingSettings::kMaxMinutes));
+        split_custom_minutes_spin_->setSuffix(QStringLiteral(" min"));
+        split_custom_minutes_spin_->setToolTip(QStringLiteral("Custom split interval (1 min – 24 h)"));
+        split_custom_layout->addWidget(split_every_label);
+        split_custom_layout->addWidget(split_custom_minutes_spin_);
+        split_custom_widget_->setVisible(false);
+        split_row->addWidget(split_custom_widget_, 0);
+        split_row->addStretch();
+        split_expert_layout->addLayout(split_row);
 
-    split_summary_label_ = makeHint(QString(), output_split_expander_->contentWidget());
-    split_summary_label_->setObjectName(QStringLiteral("splitSummaryLabel"));
-    split_expander_content_layout->addWidget(split_summary_label_);
+        split_summary_label_ = makeHint(QString(), split_expert_section_);
+        split_summary_label_->setObjectName(QStringLiteral("splitSummaryLabel"));
+        split_expert_layout->addWidget(split_summary_label_);
 
-    // ---- Split recording by size (SPLIT-BY-SIZE-R1) ----
-    split_expander_content_layout->addWidget(
-        makeFieldLabel(QStringLiteral("Split by size"), output_split_expander_->contentWidget()));
-    auto* split_size_row = new QHBoxLayout();
-    split_size_row->setContentsMargins(0, 0, 0, 0);
-    split_size_row->setSpacing(8);
-    split_size_mode_combo_ = new QComboBox(output_split_expander_->contentWidget());
-    split_size_mode_combo_->setObjectName(QStringLiteral("splitSizeModeCombo"));
-    split_size_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitSizeMode::Off));
-    split_size_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitSizeMode::Custom));
-    split_size_mode_combo_->setToolTip(
-        QStringLiteral("Automatically start a new file when the segment reaches the chosen size."));
-    split_size_row->addWidget(split_size_mode_combo_, 0);
+        // ---- Split recording by size (SPLIT-BY-SIZE-R1) ----
+        split_expert_layout->addWidget(makeOutputSubLabel(QStringLiteral("Split by size"), split_expert_section_));
+        auto* split_size_row = new QHBoxLayout();
+        split_size_row->setContentsMargins(0, 0, 0, 0);
+        split_size_row->setSpacing(8);
+        split_size_mode_combo_ = new QComboBox(split_expert_section_);
+        split_size_mode_combo_->setObjectName(QStringLiteral("splitSizeModeCombo"));
+        split_size_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitSizeMode::Off));
+        split_size_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitSizeMode::Custom));
+        split_size_mode_combo_->setToolTip(
+            QStringLiteral("Automatically start a new file when the segment reaches the chosen size."));
+        split_size_row->addWidget(split_size_mode_combo_, 0);
 
-    split_size_custom_widget_ = new QWidget(output_split_expander_->contentWidget());
-    auto* split_size_custom_layout = new QHBoxLayout(split_size_custom_widget_);
-    split_size_custom_layout->setContentsMargins(0, 0, 0, 0);
-    split_size_custom_layout->setSpacing(8);
-    auto* split_size_label = new QLabel(QStringLiteral("Every"), split_size_custom_widget_);
-    split_size_label->setProperty("labelRole", "fieldLabel");
-    split_custom_size_spin_ = new QSpinBox(output_split_expander_->contentWidget());
-    split_custom_size_spin_->setObjectName(QStringLiteral("splitCustomSizeSpin"));
-    // kMaxSizeMb = 1024*1024 = 1048576 which fits in int (< 2147483647).
-    split_custom_size_spin_->setRange(static_cast<int>(SplitRecordingSettings::kMinSizeMb),
-                                      static_cast<int>(SplitRecordingSettings::kMaxSizeMb));
-    split_custom_size_spin_->setSuffix(QStringLiteral(" MB"));
-    split_custom_size_spin_->setToolTip(
-        QStringLiteral("Split segment size in MiB (50 MiB – 1 TiB). Whichever limit (time or size) "
-                       "is reached first triggers the split."));
-    split_size_custom_layout->addWidget(split_size_label);
-    split_size_custom_layout->addWidget(split_custom_size_spin_);
-    split_size_custom_widget_->setVisible(false);
-    split_size_row->addWidget(split_size_custom_widget_, 0);
-    split_size_row->addStretch();
-    split_expander_content_layout->addLayout(split_size_row);
+        split_size_custom_widget_ = new QWidget(split_expert_section_);
+        auto* split_size_custom_layout = new QHBoxLayout(split_size_custom_widget_);
+        split_size_custom_layout->setContentsMargins(0, 0, 0, 0);
+        split_size_custom_layout->setSpacing(8);
+        auto* split_size_label = new QLabel(QStringLiteral("Every"), split_size_custom_widget_);
+        split_size_label->setProperty("labelRole", "settingsRowLabel");
+        split_custom_size_spin_ = new QSpinBox(split_expert_section_);
+        split_custom_size_spin_->setObjectName(QStringLiteral("splitCustomSizeSpin"));
+        // kMaxSizeMb = 1024*1024 = 1048576 which fits in int (< 2147483647).
+        split_custom_size_spin_->setRange(static_cast<int>(SplitRecordingSettings::kMinSizeMb),
+                                          static_cast<int>(SplitRecordingSettings::kMaxSizeMb));
+        split_custom_size_spin_->setSuffix(QStringLiteral(" MB"));
+        split_custom_size_spin_->setToolTip(
+            QStringLiteral("Split segment size in MiB (50 MiB – 1 TiB). Whichever limit (time or size) "
+                           "is reached first triggers the split."));
+        split_size_custom_layout->addWidget(split_size_label);
+        split_size_custom_layout->addWidget(split_custom_size_spin_);
+        split_size_custom_widget_->setVisible(false);
+        split_size_row->addWidget(split_size_custom_widget_, 0);
+        split_size_row->addStretch();
+        split_expert_layout->addLayout(split_size_row);
+    }
 
-    out_panel_layout->addWidget(output_split_expander_);
+    out_panel_layout->addWidget(split_expert_section_);
 
     auto* output_split = new QWidget(out_panel);
     output_split_layout_ = new QHBoxLayout(output_split);
@@ -968,7 +1303,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_fields_layout->setSpacing(8);
 
     output_fields_layout->addWidget(
-        makeFieldLabelWithHint(QStringLiteral("Destination folder"), ui::hints::kOutputFolder, output_fields));
+        makeOutputSubLabelWithHint(QStringLiteral("Destination folder"), ui::hints::kOutputFolder, output_fields));
     auto* dest_row = new QHBoxLayout();
     dest_row->setSpacing(8);
     destination_edit_ = new QLineEdit(output_fields);
@@ -985,7 +1320,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_fields_layout->addWidget(folder_validation_label_);
 
     output_fields_layout->addWidget(
-        makeFieldLabelWithHint(QStringLiteral("Filename pattern"), ui::hints::kFilenamePattern, output_fields));
+        makeOutputSubLabelWithHint(QStringLiteral("Filename pattern"), ui::hints::kFilenamePattern, output_fields));
     naming_edit_ = new QLineEdit(output_fields);
     naming_edit_->setObjectName(QStringLiteral("namingEdit"));
     naming_edit_->setPlaceholderText(QStringLiteral("{datetime}_{app}_{title}"));
@@ -1004,28 +1339,23 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_help_layout->setContentsMargins(0, 0, 0, 0);
     output_help_layout->setSpacing(8);
 
-    output_help_layout->addWidget(makeFieldLabel(QStringLiteral("Filename tokens"), output_help));
+    output_help_layout->addWidget(makeOutputSubLabel(QStringLiteral("Filename tokens"), output_help));
 
     // Compact chips of the most common real tokens; the full reference stays behind the toggle.
     // Only tokens the FilenameBuilder actually resolves are shown (e.g. {target}/{profile}).
+    // D6 wave-2: replaced fixed "4 per row" QHBoxLayouts with a ChipFlowWidget so chips
+    // wrap naturally at any available width without overflow or clipping.
     const QStringList token_chips = {QStringLiteral("{datetime}"), QStringLiteral("{date}"),
                                      QStringLiteral("{time}"),     QStringLiteral("{app}"),
                                      QStringLiteral("{title}"),    QStringLiteral("{target}"),
                                      QStringLiteral("{profile}"),  QStringLiteral("{container}")};
-    QHBoxLayout* chip_row = nullptr;
-    for (int i = 0; i < token_chips.size(); ++i) {
-        if (i % 4 == 0) {
-            chip_row = new QHBoxLayout();
-            chip_row->setContentsMargins(0, 0, 0, 0);
-            chip_row->setSpacing(6);
-            output_help_layout->addLayout(chip_row);
-        }
-        auto* chip = new QLabel(token_chips.at(i), output_help);
+    auto* chip_flow = new ChipFlowWidget(output_help);
+    for (const QString& token : token_chips) {
+        auto* chip = new QLabel(token, chip_flow);
         chip->setProperty("labelRole", "tokenChip");
-        chip_row->addWidget(chip, 0, Qt::AlignLeft);
+        chip_flow->addChip(chip);
     }
-    if (chip_row)
-        chip_row->addStretch();
+    output_help_layout->addWidget(chip_flow);
 
     token_help_toggle_btn_ = new QPushButton(QStringLiteral("Show token reference"), output_help);
     token_help_toggle_btn_->setObjectName(QStringLiteral("tokenHelpToggle"));
@@ -1046,9 +1376,89 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_split_layout_->addWidget(output_fields, 3);
     output_split_layout_->addWidget(output_help, 2);
     out_panel_layout->addWidget(output_split);
-    layout->addWidget(out_panel);
+    right_layout->addWidget(out_panel);
 
-    // ---- SOFTWARE UPDATES CARD (full width — UPDATE-WIRE-R1) ----
+    // ---- PRESENCE CARD (left column — SETTINGS-TIERS-P3) — D6: flat rows, below Webcam ----
+    {
+        auto* presence_panel = makePanel(left_col);
+        presence_panel_ = presence_panel;
+        auto* presence_layout = new QVBoxLayout(presence_panel);
+        presence_layout->setContentsMargins(18, 14, 18, 14);
+        presence_layout->setSpacing(0);
+        presence_layout->addWidget(makeCardTitle(QStringLiteral("Presence"), presence_panel));
+
+        overlay_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Show on-screen status overlay during recording"),
+                                                      presence_panel);
+        overlay_check_->setChecked(true);
+        presence_layout->addWidget(
+            makeSettingsRow(presence_panel, QStringLiteral("Recording overlay"),
+                            new ui::widgets::InfoHintIcon(ui::hints::kRecordingOverlay, presence_panel), QString(),
+                            overlay_check_, /*first=*/true));
+
+        diagnostics_overlay_check_ = new ui::widgets::ExoCheckBox(
+            QStringLiteral("Show live diagnostics on the recorded monitor during recording"), presence_panel);
+        diagnostics_overlay_check_->setChecked(false);
+        presence_layout->addWidget(
+            makeSettingsRow(presence_panel, QStringLiteral("Diagnostics overlay"),
+                            new ui::widgets::InfoHintIcon(
+                                ui::hints::kDiagnosticsOverlay +
+                                    QStringLiteral("\n\nRead-only and capture-excluded — injects nothing into any "
+                                                   "process. Some anti-cheat systems may still flag third-party "
+                                                   "overlays; disable it if you hit issues."),
+                                presence_panel),
+                            QString(), diagnostics_overlay_check_));
+
+        notifications_check_ =
+            new ui::widgets::ExoCheckBox(QStringLiteral("Show on-screen notification toasts"), presence_panel);
+        notifications_check_->setChecked(true);
+        presence_layout->addWidget(makeSettingsRow(
+            presence_panel, QStringLiteral("Notifications"),
+            new ui::widgets::InfoHintIcon(ui::hints::kNotifications, presence_panel), QString(), notifications_check_));
+
+        keep_in_tray_check_ =
+            new ui::widgets::ExoCheckBox(QStringLiteral("Keep running in tray when window closed"), presence_panel);
+        keep_in_tray_check_->setChecked(false);
+        presence_layout->addWidget(makeSettingsRow(
+            presence_panel, QStringLiteral("Tray behavior"),
+            new ui::widgets::InfoHintIcon(ui::hints::kCloseToTray, presence_panel), QString(), keep_in_tray_check_));
+
+        quick_controls_check_ =
+            new ui::widgets::ExoCheckBox(QStringLiteral("Show quick-control pill during recording"), presence_panel);
+        quick_controls_check_->setChecked(false);
+        presence_layout->addWidget(
+            makeSettingsRow(presence_panel, QStringLiteral("Quick controls"),
+                            new ui::widgets::InfoHintIcon(ui::hints::kQuickControlPill, presence_panel), QString(),
+                            quick_controls_check_));
+
+        left_layout->addWidget(presence_panel);
+        left_layout->addStretch();
+    }
+
+    // ---- APPEARANCE CARD (right column — SETTINGS-TIERS-P3) — D6: flat rows, below Output ----
+    {
+        auto* appearance_panel = makePanel(right_col);
+        appearance_panel_ = appearance_panel;
+        auto* appearance_layout = new QVBoxLayout(appearance_panel);
+        appearance_layout->setContentsMargins(18, 14, 18, 14);
+        appearance_layout->setSpacing(0);
+        appearance_layout->addWidget(makeCardTitle(QStringLiteral("Appearance"), appearance_panel));
+
+        accent_combo_ = new QComboBox(appearance_panel);
+        accent_combo_->setMinimumWidth(0); // Wave 2 Part C: let it shrink with the layout
+        accent_combo_->setMaximumWidth(320);
+        for (const auto& a : ui::theme::kExoSnapAccents) {
+            accent_combo_->addItem(QString::fromUtf8(a.name), QString::fromUtf8(a.id));
+        }
+        appearance_layout->addWidget(
+            makeSettingsRow(appearance_panel, QStringLiteral("Accent color"),
+                            new ui::widgets::InfoHintIcon(ui::hints::kAccent, appearance_panel), QString(),
+                            accent_combo_, /*first=*/true));
+
+        right_layout->addWidget(appearance_panel);
+        right_layout->addStretch();
+    }
+
+    // ---- SOFTWARE UPDATES CARD (full width — UPDATE-WIRE-R1, below the 2-column grid) ----
     // The UpdateSettingsPanel is a self-contained card (own header/border), so it is
     // added directly to the scroll column rather than wrapped in another makePanel.
     // MainWindow wires it via findChild(objectName "settingsUpdatePanel").
@@ -1057,144 +1467,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     update_panel_wrapper_ = update_settings_panel_; // search filter alias
     layout->addWidget(update_settings_panel_);
 
-    // ---- PRESENCE CARD (full width — SETTINGS-TIERS-P3) ----
-    // Recording overlay, Diagnostics overlay (+ anti-cheat ⓘ), Notifications,
-    // Close-to-tray, Quick controls. All persisted via AppSettingsStore.
-    {
-        auto* presence_panel = makePanel(content);
-        presence_panel_ = presence_panel;
-        auto* presence_layout = new QVBoxLayout(presence_panel);
-        presence_layout->setContentsMargins(18, 14, 18, 14);
-        presence_layout->setSpacing(M::kSpaceSm);
-        presence_layout->addWidget(makeCardTitle(QStringLiteral("Presence"), presence_panel));
-
-        // Recording overlay row
-        {
-            auto* row = new QFrame(presence_panel);
-            row->setProperty("panelRole", "compactRow");
-            auto* rl = new QVBoxLayout(row);
-            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-            rl->setSpacing(M::kSpaceXs);
-            rl->addWidget(
-                makeFieldLabelWithHint(QStringLiteral("Recording overlay"), ui::hints::kRecordingOverlay, row));
-            overlay_check_ =
-                new ui::widgets::ExoCheckBox(QStringLiteral("Show on-screen status overlay during recording"), row);
-            overlay_check_->setChecked(true);
-            rl->addWidget(overlay_check_);
-            presence_layout->addWidget(row);
-        }
-
-        // Diagnostics overlay row (with anti-cheat ⓘ)
-        {
-            auto* row = new QFrame(presence_panel);
-            row->setProperty("panelRole", "compactRow");
-            auto* rl = new QVBoxLayout(row);
-            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-            rl->setSpacing(M::kSpaceXs);
-
-            // Header: field label + a single InfoHint ⓘ whose tooltip folds in
-            // the anti-cheat note (no second glyph).
-            {
-                auto* header_row = new QWidget(row);
-                auto* header_hl = new QHBoxLayout(header_row);
-                header_hl->setContentsMargins(0, 0, 0, 0);
-                header_hl->setSpacing(4);
-                auto* hint_row = makeFieldLabelWithHint(
-                    QStringLiteral("Diagnostics overlay"),
-                    ui::hints::kDiagnosticsOverlay +
-                        QStringLiteral("\n\nRead-only and capture-excluded — injects nothing into any "
-                                       "process. Some anti-cheat systems may still flag third-party "
-                                       "overlays; disable it if you hit issues."),
-                    header_row);
-                header_hl->addWidget(hint_row);
-                header_hl->addStretch(1);
-                rl->addWidget(header_row);
-            }
-
-            diagnostics_overlay_check_ = new ui::widgets::ExoCheckBox(
-                QStringLiteral("Show live diagnostics on the recorded monitor during recording"), row);
-            diagnostics_overlay_check_->setChecked(false);
-            rl->addWidget(diagnostics_overlay_check_);
-            presence_layout->addWidget(row);
-        }
-
-        // Notifications row
-        {
-            auto* row = new QFrame(presence_panel);
-            row->setProperty("panelRole", "compactRow");
-            auto* rl = new QVBoxLayout(row);
-            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-            rl->setSpacing(M::kSpaceXs);
-            rl->addWidget(makeFieldLabelWithHint(QStringLiteral("Notifications"), ui::hints::kNotifications, row));
-            notifications_check_ =
-                new ui::widgets::ExoCheckBox(QStringLiteral("Show on-screen notification toasts"), row);
-            notifications_check_->setChecked(true);
-            rl->addWidget(notifications_check_);
-            presence_layout->addWidget(row);
-        }
-
-        // Close-to-tray row
-        {
-            auto* row = new QFrame(presence_panel);
-            row->setProperty("panelRole", "compactRow");
-            auto* rl = new QVBoxLayout(row);
-            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-            rl->setSpacing(M::kSpaceXs);
-            rl->addWidget(makeFieldLabelWithHint(QStringLiteral("Tray behavior"), ui::hints::kCloseToTray, row));
-            keep_in_tray_check_ =
-                new ui::widgets::ExoCheckBox(QStringLiteral("Keep running in tray when window closed"), row);
-            keep_in_tray_check_->setChecked(false);
-            rl->addWidget(keep_in_tray_check_);
-            presence_layout->addWidget(row);
-        }
-
-        // Quick controls row
-        {
-            auto* row = new QFrame(presence_panel);
-            row->setProperty("panelRole", "compactRow");
-            auto* rl = new QVBoxLayout(row);
-            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-            rl->setSpacing(M::kSpaceXs);
-            rl->addWidget(makeFieldLabelWithHint(QStringLiteral("Quick controls"), ui::hints::kQuickControlPill, row));
-            quick_controls_check_ =
-                new ui::widgets::ExoCheckBox(QStringLiteral("Show quick-control pill during recording"), row);
-            quick_controls_check_->setChecked(false);
-            rl->addWidget(quick_controls_check_);
-            presence_layout->addWidget(row);
-        }
-
-        layout->addWidget(presence_panel);
-    }
-
-    // ---- APPEARANCE CARD (full width — SETTINGS-TIERS-P3) ----
-    {
-        auto* appearance_panel = makePanel(content);
-        appearance_panel_ = appearance_panel;
-        auto* appearance_layout = new QVBoxLayout(appearance_panel);
-        appearance_layout->setContentsMargins(18, 14, 18, 14);
-        appearance_layout->setSpacing(M::kSpaceSm);
-        appearance_layout->addWidget(makeCardTitle(QStringLiteral("Appearance"), appearance_panel));
-
-        auto* accent_row = new QFrame(appearance_panel);
-        accent_row->setProperty("panelRole", "compactRow");
-        auto* accent_layout = new QVBoxLayout(accent_row);
-        accent_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-        accent_layout->setSpacing(M::kSpaceXs);
-        accent_layout->addWidget(
-            makeFieldLabelWithHint(QStringLiteral("Accent color"), ui::hints::kAccent, accent_row));
-        accent_combo_ = new QComboBox(accent_row);
-        accent_combo_->setMinimumWidth(220);
-        accent_combo_->setMaximumWidth(320);
-        for (const auto& a : ui::theme::kExoSnapAccents) {
-            accent_combo_->addItem(QString::fromUtf8(a.name), QString::fromUtf8(a.id));
-        }
-        accent_layout->addWidget(accent_combo_);
-        appearance_layout->addWidget(accent_row);
-
-        layout->addWidget(appearance_panel);
-    }
-
-    // ---- DEVELOPER CARD (Expert-gated — SETTINGS-TIERS-P3) ----
+    // ---- DEVELOPER CARD (Expert-gated, full width — SETTINGS-TIERS-P3) ----
     // UI-only debug stubs (log level, NVTX). No persistence — local variables only.
     {
         developer_card_ = makePanel(content);
@@ -1243,6 +1516,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     layout->addStretch();
 
     content->setMaximumWidth(kMaxContentWidth);
+    // Wave 2 Part C: ensure content never narrows past a single comfortable card column.
+    content->setMinimumWidth(360);
     {
         auto* centering_host = new QWidget();
         auto* ch = new QHBoxLayout(centering_host);
@@ -1337,31 +1612,54 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                                                     : QStringLiteral("Show token reference"));
     });
 
-    // SETTINGS-TIERS-R1: Expert mode toggle button.
-    connect(expert_mode_btn_, &QPushButton::clicked, this, [this]() {
-        if (!expert_mode_enabled_) {
-            // First enable: show confirmation dialog.
-            auto* msgbox = new QMessageBox(this);
-            msgbox->setWindowTitle(QStringLiteral("Enable Expert mode?"));
-            msgbox->setText(QStringLiteral("Expert mode reveals lower-level controls that can produce incompatible "
-                                           "files.\n\nEnable only if you know what you are doing."));
-            msgbox->setStandardButtons(QMessageBox::Yes | QMessageBox::Cancel);
-            msgbox->setDefaultButton(QMessageBox::Cancel);
-            if (msgbox->exec() != QMessageBox::Yes)
-                return;
-        }
+    // D6: ExoToggle replaces QPushButton for Expert-Mode.
+    connect(expert_mode_toggle_, &QAbstractButton::clicked, this, [this]() {
         expert_mode_enabled_ = !expert_mode_enabled_;
-        expert_mode_btn_->setText(expert_mode_enabled_ ? QStringLiteral("Disable") : QStringLiteral("Enable"));
+        {
+            const QSignalBlocker b(expert_mode_toggle_);
+            expert_mode_toggle_->setOn(expert_mode_enabled_);
+        }
         updateExpertModeVisibility();
         emit expertModeChanged(expert_mode_enabled_);
     });
 
-    // SETTINGS-TIERS-R1: expander state change signals.
-    connect(output_split_expander_, &ui::widgets::SettingsCardExpander::expandedChanged, this,
-            [this](bool expanded) { emit outputSplitExpanderChanged(expanded); });
+    // Wave 2: output_split_expander_ dissolved; outputSplitExpanderChanged is kept as
+    // a no-op signal for MainWindow compat (AppSettingsStore field still persists).
+
+    // Wave 2 Part B: CQ spinbox — find nearest NvencQualityPreset from CQ value.
+    connect(quality_cq_spin_, &QSpinBox::valueChanged, this, [this](int cq) {
+        // Nearest preset: |cq-19|→High, |cq-24|→Balanced, |cq-30|→Small
+        const int d_high = std::abs(cq - 19);
+        const int d_balanced = std::abs(cq - 24);
+        const int d_small = std::abs(cq - 30);
+        if (d_high <= d_balanced && d_high <= d_small) {
+            video_settings_.quality = recorder_core::NvencQualityPreset::High;
+        } else if (d_balanced <= d_small) {
+            video_settings_.quality = recorder_core::NvencQualityPreset::Balanced;
+        } else {
+            video_settings_.quality = recorder_core::NvencQualityPreset::Small;
+        }
+        // Sync the hidden combo so onQualityChanged path stays consistent.
+        if (quality_combo_) {
+            const QSignalBlocker qb(quality_combo_);
+            const int idx = quality_combo_->findData(static_cast<int>(video_settings_.quality));
+            if (idx >= 0)
+                quality_combo_->setCurrentIndex(idx);
+        }
+        updateQualitySegmentSelection();
+        updateQualitySummary();
+        emitCurrentVideoSettings();
+    });
 
     // SETTINGS-SEARCH-R1: live search filter wired to textChanged.
     connect(settings_search_box_, &QLineEdit::textChanged, this, &ConfigPage::applySettingsSearch);
+
+    // Search pill focus indicator: install an event filter on the QLineEdit so we
+    // can set a "focused" dynamic property on the pill when focus enters/leaves.
+    // (Qt QSS does not support :focus-within; a dynamic property + repolish is the
+    // standard Qt workaround.)
+    settings_search_box_->installEventFilter(this);
+
     // audio_separate_expander_ is null (removed in Phase 1b); audioSeparateExpanderChanged
     // is kept in the header for backward compatibility but is never emitted.
 
@@ -1375,6 +1673,72 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     combo_wheel_filter->installOn(quality_combo_);
     combo_wheel_filter->installOn(frame_rate_combo_);
     combo_wheel_filter->installOn(mic_device_combo_);
+
+    // D6: CompareHint → format change connections.
+    connect(container_compare_hint_, &ui::widgets::CompareHint::optionSelected, this, [this](const QString& v) {
+        if (v == QLatin1String("MKV"))
+            onContainerChanged(static_cast<int>(capability::Container::Matroska));
+        else if (v == QLatin1String("WebM"))
+            onContainerChanged(static_cast<int>(capability::Container::WebM));
+        else if (v == QLatin1String("MP4"))
+            onContainerChanged(static_cast<int>(capability::Container::Mp4));
+    });
+    connect(video_codec_compare_hint_, &ui::widgets::CompareHint::optionSelected, this, [this](const QString& v) {
+        if (v == QLatin1String("AV1")) {
+            const QSignalBlocker b(video_codec_combo_);
+            const int idx = video_codec_combo_->findData(VideoCodecToInt(capability::VideoCodec::Av1Nvenc));
+            if (idx >= 0) {
+                video_codec_combo_->setCurrentIndex(idx);
+                onVideoCodecChanged(idx);
+            }
+        } else if (v == QLatin1String("H.264")) {
+            const QSignalBlocker b(video_codec_combo_);
+            const int idx = video_codec_combo_->findData(VideoCodecToInt(capability::VideoCodec::H264Nvenc));
+            if (idx >= 0) {
+                video_codec_combo_->setCurrentIndex(idx);
+                onVideoCodecChanged(idx);
+            }
+        }
+        // HEVC → no-op
+    });
+    connect(audio_codec_compare_hint_, &ui::widgets::CompareHint::optionSelected, this, [this](const QString& v) {
+        if (v == QLatin1String("Opus")) {
+            const QSignalBlocker b(audio_codec_combo_);
+            const int idx = audio_codec_combo_->findData(AudioCodecToInt(capability::AudioCodec::Opus));
+            if (idx >= 0) {
+                audio_codec_combo_->setCurrentIndex(idx);
+                onAudioCodecChanged(idx);
+            }
+        } else if (v == QLatin1String("AAC")) {
+            const QSignalBlocker b(audio_codec_combo_);
+            const int idx = audio_codec_combo_->findData(AudioCodecToInt(capability::AudioCodec::AacMf));
+            if (idx >= 0) {
+                audio_codec_combo_->setCurrentIndex(idx);
+                onAudioCodecChanged(idx);
+            }
+        }
+        // PCM/FLAC → no-op
+    });
+    connect(timing_compare_hint_, &ui::widgets::CompareHint::optionSelected, this, [this](const QString& v) {
+        if (v == QLatin1String("CFR"))
+            onTimingSelected(1);
+        else if (v == QLatin1String("VFR"))
+            onTimingSelected(0);
+    });
+    // D6 Task C: resolution CompareHint → output resolution selection.
+    // Options: "Native" (Native), "1080p" (FHD1080), "720p" (HD720), "Custom" (Custom).
+    // 4K and 1440p are intentionally not in the compare data; they fall through as no-op.
+    connect(resolution_compare_hint_, &ui::widgets::CompareHint::optionSelected, this, [this](const QString& v) {
+        if (v == QLatin1String("Native"))
+            onOutputResolutionSelected(static_cast<int>(OutputResolutionMode::Native));
+        else if (v == QLatin1String("1080p"))
+            onOutputResolutionSelected(static_cast<int>(OutputResolutionMode::FHD1080));
+        else if (v == QLatin1String("720p"))
+            onOutputResolutionSelected(static_cast<int>(OutputResolutionMode::HD720));
+        else if (v == QLatin1String("Custom"))
+            onOutputResolutionSelected(static_cast<int>(OutputResolutionMode::Custom));
+        // 4K / 1440p: no-op (not in compare data)
+    });
 
     setReadinessStatus(QStringLiteral("CHECKING"));
 
@@ -1408,10 +1772,25 @@ void ConfigPage::resizeEvent(QResizeEvent* event) {
     updateResponsiveLayout();
 }
 
+bool ConfigPage::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == settings_search_box_ && settings_search_pill_) {
+        const auto t = event->type();
+        if (t == QEvent::FocusIn || t == QEvent::FocusOut) {
+            const bool focused = (t == QEvent::FocusIn);
+            settings_search_pill_->setProperty("focused", focused);
+            settings_search_pill_->style()->unpolish(settings_search_pill_);
+            settings_search_pill_->style()->polish(settings_search_pill_);
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
 void ConfigPage::updateResponsiveLayout() {
-    // Below this width the two-column form (and the Output card's field/help split)
-    // becomes too cramped, so flip both to a single stacked column.
-    const bool narrow = width() < 880;
+    // D6 wave-2 responsive: raised threshold to kColumnBreakThreshold (1280) so
+    // two-column view only activates when there is comfortably enough room for
+    // both cards without overflow.  At the new minimum window width (860) and at
+    // the old minimum (1120) the layout is always single-column.
+    const bool narrow = width() < kColumnBreakThreshold;
     const QBoxLayout::Direction desired = narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight;
 
     if (columns_layout_ && columns_layout_->direction() != desired)
@@ -1626,14 +2005,9 @@ void ConfigPage::reconcileContainerCodecRules() {
 
 void ConfigPage::updateVideoCodecChoices() {
     const QSignalBlocker blocker(video_codec_combo_);
-    video_codec_combo_->clear();
-    if (format_settings_.container == capability::Container::Mp4) {
-        video_codec_combo_->addItem(QStringLiteral("H.264"), VideoCodecToInt(capability::VideoCodec::H264Nvenc));
-    } else if (format_settings_.container == capability::Container::WebM) {
+    if (video_codec_combo_->count() == 0) {
         video_codec_combo_->addItem(QStringLiteral("AV1"), VideoCodecToInt(capability::VideoCodec::Av1Nvenc));
-    } else {
         video_codec_combo_->addItem(QStringLiteral("H.264"), VideoCodecToInt(capability::VideoCodec::H264Nvenc));
-        video_codec_combo_->addItem(QStringLiteral("AV1"), VideoCodecToInt(capability::VideoCodec::Av1Nvenc));
     }
     const int vidx = video_codec_combo_->findData(VideoCodecToInt(format_settings_.video_codec));
     if (vidx >= 0)
@@ -1642,15 +2016,8 @@ void ConfigPage::updateVideoCodecChoices() {
 
 void ConfigPage::updateAudioCodecChoices() {
     const QSignalBlocker blocker(audio_codec_combo_);
-    audio_codec_combo_->clear();
-    if (format_settings_.container == capability::Container::Mp4) {
-        audio_codec_combo_->addItem(QStringLiteral("AAC"), AudioCodecToInt(capability::AudioCodec::AacMf));
-    } else if (format_settings_.container == capability::Container::WebM) {
+    if (audio_codec_combo_->count() == 0) {
         audio_codec_combo_->addItem(QStringLiteral("Opus"), AudioCodecToInt(capability::AudioCodec::Opus));
-    } else if (format_settings_.video_codec == capability::VideoCodec::Av1Nvenc) {
-        audio_codec_combo_->addItem(QStringLiteral("Opus"), AudioCodecToInt(capability::AudioCodec::Opus));
-        audio_codec_combo_->addItem(QStringLiteral("AAC"), AudioCodecToInt(capability::AudioCodec::AacMf));
-    } else {
         audio_codec_combo_->addItem(QStringLiteral("AAC"), AudioCodecToInt(capability::AudioCodec::AacMf));
     }
     const int aidx = audio_codec_combo_->findData(AudioCodecToInt(format_settings_.audio_codec));
@@ -1659,14 +2026,58 @@ void ConfigPage::updateAudioCodecChoices() {
 }
 
 void ConfigPage::updateFormatDisplay() {
-    const QString summary = ContainerLabel(format_settings_.container) + QStringLiteral(" · ") +
-                            VideoCodecLabel(format_settings_.video_codec) + QStringLiteral(" · ") +
-                            AudioCodecLabel(format_settings_.audio_codec) + QStringLiteral(" · ") +
-                            FrameRateLabel(video_settings_.frame_rate_num, video_settings_.frame_rate_den) +
-                            QStringLiteral(" · ") +
-                            (video_settings_.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
-    format_display_label_->setText(QStringLiteral("Current format: ") + summary);
+    updateCompatCallout();
+}
 
+void ConfigPage::updateCompatCallout() {
+    const auto c = format_settings_.container;
+    const auto v = format_settings_.video_codec;
+    const auto a = format_settings_.audio_codec;
+    bool video_bad = false, audio_bad = false;
+    if (c == capability::Container::WebM) {
+        video_bad = (v != capability::VideoCodec::Av1Nvenc);
+        audio_bad = (a != capability::AudioCodec::Opus);
+    } else if (c == capability::Container::Mp4) {
+        video_bad = (v != capability::VideoCodec::H264Nvenc);
+        audio_bad = (a != capability::AudioCodec::AacMf);
+    }
+    const bool compat_bad = video_bad || audio_bad;
+
+    const QString summary = ContainerLabel(c) + QStringLiteral(" \xC2\xB7 ") + VideoCodecLabel(v) +
+                            QStringLiteral(" \xC2\xB7 ") + AudioCodecLabel(a) + QStringLiteral(" \xC2\xB7 ") +
+                            FrameRateLabel(video_settings_.frame_rate_num, video_settings_.frame_rate_den) +
+                            QStringLiteral(" \xC2\xB7 ") +
+                            (video_settings_.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
+
+    if (format_display_label_) {
+        format_display_label_->setText(QStringLiteral("Current format: ") + summary);
+    }
+
+    if (compat_callout_widget_)
+        compat_callout_widget_->setVisible(compat_bad);
+    if (compat_ok_label_)
+        compat_ok_label_->setVisible(!compat_bad);
+
+    if (compat_bad && callout_text_) {
+        QStringList bad_parts;
+        if (video_bad)
+            bad_parts << VideoCodecLabel(v);
+        if (audio_bad)
+            bad_parts << AudioCodecLabel(a);
+        const QString bad_str = bad_parts.join(QStringLiteral(" + "));
+        QString hint;
+        if (c == capability::Container::WebM)
+            hint = QStringLiteral("WebM supports AV1 + Opus only.");
+        else if (c == capability::Container::Mp4)
+            hint = QStringLiteral("MP4 supports H.264 + AAC only.");
+        callout_text_->setText(ContainerLabel(c) + QStringLiteral(" can't hold ") + bad_str + QStringLiteral(". ") +
+                               hint);
+    }
+    if (!compat_bad && compat_ok_label_) {
+        compat_ok_label_->setText(QStringLiteral("\xe2\x9c\x93 Current format: ") + summary);
+    }
+
+    // Container segment sync (was in updateFormatDisplay)
     const auto sync_container = [this](QPushButton* segment, capability::Container container) {
         if (!segment)
             return;
@@ -1680,6 +2091,14 @@ void ConfigPage::updateFormatDisplay() {
     sync_container(mkv_radio_, capability::Container::Matroska);
     sync_container(webm_radio_, capability::Container::WebM);
     sync_container(mp4_radio_, capability::Container::Mp4);
+
+    // CompareHint value sync
+    if (container_compare_hint_)
+        container_compare_hint_->setCurrentValue(ContainerLabel(format_settings_.container));
+    if (video_codec_compare_hint_)
+        video_codec_compare_hint_->setCurrentValue(VideoCodecLabel(format_settings_.video_codec));
+    if (audio_codec_compare_hint_)
+        audio_codec_compare_hint_->setCurrentValue(AudioCodecLabel(format_settings_.audio_codec));
 }
 
 void ConfigPage::onContainerChanged(int id) {
@@ -1763,6 +2182,22 @@ void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
     if (qidx >= 0)
         quality_combo_->setCurrentIndex(qidx);
 
+    // Wave 2 Part B: sync CQ spinbox from loaded preset.
+    if (quality_cq_spin_) {
+        const QSignalBlocker sb(quality_cq_spin_);
+        switch (settings.quality) {
+        case recorder_core::NvencQualityPreset::High:
+            quality_cq_spin_->setValue(19);
+            break;
+        case recorder_core::NvencQualityPreset::Small:
+            quality_cq_spin_->setValue(30);
+            break;
+        default: // Balanced
+            quality_cq_spin_->setValue(24);
+            break;
+        }
+    }
+
     updateFrameRateSelection();
     updateTimingSelection();
 
@@ -1806,6 +2241,36 @@ void ConfigPage::updateQualitySummary() {
     const QString cursor_text =
         video_settings_.capture_cursor ? QStringLiteral("Cursor on") : QStringLiteral("Cursor off");
     quality_settings_label_->setText(cq + QStringLiteral(" · ") + cfr_text + QStringLiteral(" · ") + cursor_text);
+
+    if (quality_compare_hint_) {
+        switch (video_settings_.quality) {
+        case recorder_core::NvencQualityPreset::High:
+            quality_compare_hint_->setCurrentValue(QStringLiteral("High"));
+            break;
+        case recorder_core::NvencQualityPreset::Balanced:
+            quality_compare_hint_->setCurrentValue(QStringLiteral("Balanced"));
+            break;
+        case recorder_core::NvencQualityPreset::Small:
+            quality_compare_hint_->setCurrentValue(QStringLiteral("Small"));
+            break;
+        }
+    }
+
+    // Wave 2 Part B: keep CQ spinbox in sync with model (under blocker to avoid feedback loop).
+    if (quality_cq_spin_) {
+        const QSignalBlocker b(quality_cq_spin_);
+        switch (video_settings_.quality) {
+        case recorder_core::NvencQualityPreset::High:
+            quality_cq_spin_->setValue(19);
+            break;
+        case recorder_core::NvencQualityPreset::Small:
+            quality_cq_spin_->setValue(30);
+            break;
+        default: // Balanced
+            quality_cq_spin_->setValue(24);
+            break;
+        }
+    }
 
     updateQualitySegmentSelection();
 }
@@ -1866,6 +2331,9 @@ void ConfigPage::updateTimingSelection() {
     sync_segment(timing_cfr_btn_, video_settings_.cfr, true, QString());
     sync_segment(timing_vfr_btn_, !video_settings_.cfr, vfr_available,
                  QStringLiteral("VFR is not available for MP4 in the current mux path."));
+
+    if (timing_compare_hint_)
+        timing_compare_hint_->setCurrentValue(video_settings_.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
 }
 
 void ConfigPage::updateOutputResolutionSelection() {
@@ -1889,6 +2357,30 @@ void ConfigPage::updateOutputResolutionSelection() {
     sync_segment(output_res_1080_btn_, OutputResolutionMode::FHD1080);
     sync_segment(output_res_720_btn_, OutputResolutionMode::HD720);
     sync_segment(output_res_custom_btn_, OutputResolutionMode::Custom);
+
+    // D6 Task C: keep resolution CompareHint highlighted row in sync.
+    if (resolution_compare_hint_) {
+        const auto mode = format_settings_.resolution.mode;
+        QString label;
+        switch (mode) {
+        case OutputResolutionMode::Native:
+            label = QStringLiteral("Native");
+            break;
+        case OutputResolutionMode::FHD1080:
+            label = QStringLiteral("1080p");
+            break;
+        case OutputResolutionMode::HD720:
+            label = QStringLiteral("720p");
+            break;
+        case OutputResolutionMode::Custom:
+            label = QStringLiteral("Custom");
+            break;
+        default:
+            label = QStringLiteral("Native");
+            break;
+        }
+        resolution_compare_hint_->setCurrentValue(label);
+    }
 }
 
 void ConfigPage::updateCustomResolutionVisibility() {
@@ -2344,8 +2836,10 @@ void ConfigPage::setExpertModeEnabled(bool enabled) {
     if (expert_mode_enabled_ == enabled)
         return;
     expert_mode_enabled_ = enabled;
-    if (expert_mode_btn_)
-        expert_mode_btn_->setText(enabled ? QStringLiteral("Disable") : QStringLiteral("Enable"));
+    if (expert_mode_toggle_) {
+        const QSignalBlocker b(expert_mode_toggle_);
+        expert_mode_toggle_->setOn(enabled);
+    }
     updateExpertModeVisibility();
 }
 
@@ -2353,28 +2847,58 @@ bool ConfigPage::expertModeEnabled() const noexcept {
     return expert_mode_enabled_;
 }
 
-void ConfigPage::setOutputSplitExpanderExpanded(bool expanded) {
-    if (output_split_expander_)
-        output_split_expander_->setExpanded(expanded);
+void ConfigPage::setOutputSplitExpanderExpanded(bool /*expanded*/) {
+    // Wave 2: output_split_expander_ dissolved; split controls are now expert-gated.
+    // No-op kept for MainWindow backward compat (store field still persists).
 }
 
 bool ConfigPage::outputSplitExpanderExpanded() const noexcept {
-    return output_split_expander_ ? output_split_expander_->isExpanded() : false;
+    // Wave 2: always false — no expander widget exists.
+    return false;
 }
 
-void ConfigPage::setAudioSeparateExpanderExpanded(bool expanded) {
-    if (audio_separate_expander_)
-        audio_separate_expander_->setExpanded(expanded);
+void ConfigPage::setAudioSeparateExpanderExpanded(bool /*expanded*/) {
+    // Phase 1b + Wave 2: audio_separate_expander_ removed; no-op for compat.
 }
 
 bool ConfigPage::audioSeparateExpanderExpanded() const noexcept {
-    return audio_separate_expander_ ? audio_separate_expander_->isExpanded() : false;
+    // Phase 1b: always false — no audio separate expander widget exists.
+    return false;
 }
 
 void ConfigPage::updateExpertModeVisibility() {
     // SETTINGS-TIERS-P3: show/hide the expert-gated Developer card.
     if (developer_card_)
         developer_card_->setVisible(expert_mode_enabled_);
+    // Wave 2 Part A: split recording section is now expert-gated (was behind expander).
+    if (split_expert_section_)
+        split_expert_section_->setVisible(expert_mode_enabled_);
+    // Wave 2 Part B: quality CQ spinbox row shown in expert mode; segment row hidden.
+    if (quality_row_widget_)
+        quality_row_widget_->setVisible(!expert_mode_enabled_);
+    if (quality_expert_widget_) {
+        quality_expert_widget_->setVisible(expert_mode_enabled_);
+        if (expert_mode_enabled_ && quality_cq_spin_) {
+            // Seed the spinbox from the current model quality on first show.
+            const QSignalBlocker b(quality_cq_spin_);
+            switch (video_settings_.quality) {
+            case recorder_core::NvencQualityPreset::High:
+                quality_cq_spin_->setValue(19);
+                break;
+            case recorder_core::NvencQualityPreset::Small:
+                quality_cq_spin_->setValue(30);
+                break;
+            default: // Balanced
+                quality_cq_spin_->setValue(24);
+                break;
+            }
+        }
+    }
+    // D6: Expert warn hint — visible when Expert ON and no active search.
+    if (expert_warn_label_) {
+        const bool searching = settings_search_box_ && !settings_search_box_->text().trimmed().isEmpty();
+        expert_warn_label_->setVisible(expert_mode_enabled_ && !searching);
+    }
 }
 
 // SETTINGS-SEARCH-R1: per-card live settings filter.
@@ -2497,20 +3021,15 @@ void ConfigPage::applySettingsSearch(const QString& query) {
         // Developer card: restore to expert-mode-gated state.
         if (developer_card_)
             developer_card_->setVisible(expert_mode_enabled_);
-        // Restore expander to persisted state.
-        if (output_split_expander_ && expander_was_open_before_search_) {
-            // Only restore if we had forced it open — leave it as-is otherwise.
-            // (We track whether we forced it; restoring a naturally-open expander
-            // to the same state is a no-op anyway.)
-        } else if (output_split_expander_ && !expander_was_open_before_search_) {
-            output_split_expander_->setExpanded(false);
-        }
-        expander_was_open_before_search_ = false;
+        // Wave 2: output_split_expander_ dissolved — no expander restore needed.
 
         if (settings_search_count_label_)
             settings_search_count_label_->setVisible(false);
         if (search_expert_hint_label_)
             search_expert_hint_label_->setVisible(false);
+        // D6: restore expert warn hint to its visibility-gated state.
+        if (expert_warn_label_)
+            expert_warn_label_->setVisible(expert_mode_enabled_);
         return;
     }
 
@@ -2532,7 +3051,12 @@ void ConfigPage::applySettingsSearch(const QString& query) {
     if (preset_panel_)
         preset_panel_->setVisible(preset_match);
 
-    const bool any_column_visible = fmt_match || audio_match;
+    // D6: all 6 grid cards (fmt, audio, webcam, output, presence, appearance) live in
+    // columns_widget_. Hide the host only when all six are hidden to avoid an empty gap.
+    // Cosmetic: when only some cards are hidden, the remaining card in each column expands
+    // vertically to fill the gap — this is an accepted limitation per the D6 brief.
+    const bool any_column_visible =
+        fmt_match || audio_match || webcam_match || output_match || presence_match || appearance_match;
     if (columns_widget_)
         columns_widget_->setVisible(any_column_visible);
     if (fmt_panel_)
@@ -2551,15 +3075,9 @@ void ConfigPage::applySettingsSearch(const QString& query) {
     if (appearance_panel_)
         appearance_panel_->setVisible(appearance_match);
 
-    // Output Advanced expander auto-open.
-    if (output_split_expander_ && output_match && expander_trigger) {
-        if (!output_split_expander_->isExpanded()) {
-            expander_was_open_before_search_ = false;
-            output_split_expander_->setExpanded(true);
-        } else {
-            expander_was_open_before_search_ = true;
-        }
-    }
+    // Wave 2: output_split_expander_ dissolved — no expander auto-open needed.
+    // Split controls are part of the Output card and visible when expert mode is on.
+    (void)expander_trigger; // still declared; suppress unused-variable warning
 
     // Developer card: expert-mode affordance.
     if (developer_match) {
@@ -2585,6 +3103,10 @@ void ConfigPage::applySettingsSearch(const QString& query) {
         if (search_expert_hint_label_)
             search_expert_hint_label_->setVisible(false);
     }
+
+    // D6: hide expert warn hint during active search (it'd compete with hint label).
+    if (expert_warn_label_)
+        expert_warn_label_->setVisible(false);
 
     // Match count.
     int match_count = 0;
@@ -2878,6 +3400,7 @@ void ConfigPage::setReadinessStatus(const QString& status_label) {
         w->style()->polish(w);
     };
     if (readiness_panel_) {
+        readiness_panel_->setVisible(!ready);
         readiness_panel_->setProperty("stateRole", state);
         repolish(readiness_panel_);
     }

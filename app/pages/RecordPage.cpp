@@ -696,7 +696,28 @@ void RecordPage::showEvent(QShowEvent* event) {
     if (visual_test_mode_)
         return;
 #endif
-    QTimer::singleShot(0, this, [this]() { ensureCoordinatorInit(); });
+    // On the very first show the coordinator (and therefore the preview surface) has
+    // never been initialised.  Deferring by a single event-loop tick (delay=0) is not
+    // enough: the DXGI child-HWND created by startPreviewIfIdle() becomes visible
+    // before the Qt chrome (nav, dock) has completed its first paint cycle, causing a
+    // brief flash where the preview appears alone against a black background.
+    // Using a 150 ms delay for the first-time init gives the window compositor enough
+    // time to present the fully-painted chrome before the preview starts.
+    // Subsequent navigations back to the Record page skip this path (coordinator
+    // already running) so there is no visible delay for the common case.
+    const int init_delay_ms = coordinator_needs_init_ ? 150 : 0;
+    QTimer::singleShot(init_delay_ms, this, [this]() { ensureCoordinatorInit(); });
+
+    // A hidden QStackedWidget page receives no resizeEvent. If the window was resized
+    // or maximized while the Record page was on the stack but not the current page, the
+    // preview kept its stale (e.g. windowed) size. Recompute the responsive layout and
+    // the 16:9 preview clamp now that the page is visible again. Deferred via a
+    // zero-timer so the host widget has settled to its final size before we clamp.
+    QTimer::singleShot(0, this, [this]() {
+        updateResponsiveLayout();
+        updatePreviewHeightClamp();
+        updatePreviewContextChips();
+    });
 }
 
 void RecordPage::hideEvent(QHideEvent* event) {

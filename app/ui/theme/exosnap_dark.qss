@@ -667,6 +667,75 @@ QPushButton#recordOpenDiagnosticsButton {
     min-height: 34px;
 }
 
+/* ── Settings D6: CompareHint glyph button ───────────────────────────────────
+   Same flat "infoGlyph" treatment as InfoHintIcon: no border, no background,
+   18×18 touch target. Color is driven by the icon rendered in C++
+   (kText3 rest → kAccent hover/open), so no color rule is needed here. */
+QToolButton[labelRole="compareGlyph"] {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    margin: 0;
+    min-height: 0;
+    min-width: 0;
+}
+QToolButton[labelRole="compareGlyph"]:hover,
+QToolButton[labelRole="compareGlyph"]:focus {
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+/* ── Settings D6: Compatibility callout (Format & encoding card footer) ────────
+   compatCalloutWidget  — amber frame shown when container / codec are incompatible.
+   compatCalloutText    — body text inside the frame.
+   fixCodecsButton      — amber text-only action button (inside the frame).
+   compatOkLabel        — green status line shown when format is valid.
+
+   kWarn = #E6C57C (amber). Derived dim: rgba(230,197,124,0.12). Border: rgba(230,197,124,0.42).
+   kOk   = #84CBA2 (green). No background on ok-label; colour-only.
+   No cursor property — Qt QSS does not support it and logs a warning per repolish. */
+
+QFrame#compatCalloutWidget {
+    background: rgba(230, 197, 124, 0.10);
+    border: 1px solid rgba(230, 197, 124, 0.42);
+    border-left: 3px solid ${warn};
+    border-radius: ${radius-md}px;
+}
+
+QLabel#compatCalloutText {
+    font-size: 12.5px;
+    color: ${text0};
+    line-height: 1.5;
+}
+
+QPushButton#fixCodecsButton {
+    background: transparent;
+    border: none;
+    color: ${warn};
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 2px 6px;
+}
+
+QPushButton#fixCodecsButton:hover {
+    color: ${text0};
+    background: rgba(230, 197, 124, 0.14);
+    border-radius: ${radius-sm}px;
+}
+
+QPushButton#fixCodecsButton:pressed {
+    color: ${text0};
+    background: rgba(230, 197, 124, 0.22);
+    border-radius: ${radius-sm}px;
+}
+
+QLabel#compatOkLabel {
+    font-size: 12px;
+    color: ${ok};
+}
+
 QLabel[labelRole="audioSettingsGroupTitle"] {
     font-family: ${font-mono};
     font-size: 11px;
@@ -685,6 +754,13 @@ QLabel[labelRole="audioSettingsRowLabel"] {
 QLabel[labelRole="audioSettingsNote"] {
     font-size: 11.5px;
     color: ${text2};
+}
+
+/* D6: Settings quiet-row left-side label — normal case, no mono/uppercase.
+   Used in Format, Output, Presence, Appearance, and Webcam settings rows. */
+QLabel[labelRole="settingsRowLabel"] {
+    font-size: 13px;
+    color: ${text1};
 }
 
 QWidget#captureTargetCard {
@@ -2691,20 +2767,18 @@ QPushButton#recordDockOpenFolder {
     padding: 0;
 }
 
-/* Capture-frame dock button — CAPTURE-FRAME-DOCK-BUTTON-R1.
-   Round 44×44 icon-only camera button on the right side of the dock.
-   States: idle / hover (accent border) / pressed (ac-dim fill) / disabled (0.38).
-   Fixed size and border-radius enforced in C++ (setFixedSize(44,44)). */
+/* Capture-frame dock button — round 44×44 icon-only button.
+   Styled identically to ghost dock buttons so it blends with sys/mic/app/webcam
+   toggles. Fixed size and border-radius enforced in C++ (setFixedSize(44,44)). */
 QPushButton[dockAction="captureFrame"] {
     border-radius: 22px;
     padding: 0;
-    background: rgba(14, 14, 16, 184);
-    border: 1px solid rgba(255, 255, 255, 31);
+    background: transparent;
+    border: 1px solid ${line2};
 }
 
 QPushButton[dockAction="captureFrame"]:hover {
-    background: rgba(14, 14, 16, 217);
-    border-color: rgba(155, 217, 210, 153);
+    border-color: ${accent-line};
 }
 
 QPushButton[dockAction="captureFrame"]:pressed {
@@ -2713,8 +2787,7 @@ QPushButton[dockAction="captureFrame"]:pressed {
 }
 
 QPushButton[dockAction="captureFrame"]:disabled {
-    background: rgba(14, 14, 16, 184);
-    border-color: rgba(255, 255, 255, 18);
+    border-color: ${line1};
     opacity: 0.38;
 }
 
@@ -2804,9 +2877,9 @@ QLabel[labelRole="recordDockSize"] {
 /* Countdown select — compact recording-delay control. */
 QComboBox#recordCountdownSelect {
     background: ${bg2};
-    border: 1px solid ${line2};
+    border: 1px solid ${line1};
     border-radius: ${radius-sm}px;
-    padding: 7px 11px;
+    padding: 4px 8px;
     color: ${text2};
     min-width: 56px;
     max-width: 96px;
@@ -2872,4 +2945,46 @@ QPushButton[dockAction="resume"]:focus {
 QPushButton[role="danger"]:focus,
 QPushButton[dockAction="stop"]:focus {
     border: 2px solid ${text0};
+}
+
+/* ── D6 Settings header zone ─────────────────────────────────────────────────
+   settingsHeaderZone  — header container (title row + sub-row).
+   pageTitle           — "Settings" label, large bold.
+   settingsSearchPill  — rounded pill wrapping search box + optional icon.
+   pillInput           — the QLineEdit inside the search pill (frameless).
+   warnHint            — amber inline warning label (Expert mode on, no search). */
+
+QLabel[labelRole="pageTitle"] {
+    font-size: 22px;
+    font-weight: 700;
+    color: ${text0};
+}
+
+QWidget#settingsSearchPill {
+    background: ${bg2};
+    border: 1px solid ${line2};
+    border-radius: 999px;
+}
+
+QWidget#settingsSearchPill[focused="true"] {
+    border-color: ${accent};
+}
+
+QLineEdit[role="pillInput"] {
+    background: transparent;
+    border: none;
+    min-height: 0;
+    max-height: none;
+    font-size: 13px;
+}
+
+/* Expert warn hint: amber background + border, similar to the compat callout */
+QLabel[labelRole="warnHint"] {
+    font-size: 12px;
+    color: ${text0};
+    background: rgba(230, 197, 124, 0.10);
+    border: 1px solid rgba(230, 197, 124, 0.42);
+    border-left: 3px solid ${warn};
+    border-radius: ${radius-md}px;
+    padding: 8px 12px;
 }
