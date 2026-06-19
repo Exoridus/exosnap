@@ -38,6 +38,7 @@
 #include "../ui/theme/ExoSnapAccents.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/widgets/ComboBoxWheelFilter.h"
+#include "../ui/widgets/CompareHint.h"
 #include "../ui/widgets/ExoCheckBox.h"
 #include "../ui/widgets/ExoToggle.h"
 #include "../ui/widgets/InfoHintIcon.h"
@@ -93,6 +94,67 @@ QLabel* makeHint(const QString& text, QWidget* parent) {
     l->setProperty("labelRole", "muted");
     l->setWordWrap(true);
     return l;
+}
+
+// D6: Creates a "quiet row": hairline on top (unless first=true), label left, control right.
+// Returns the container QWidget* (parent is `parent`).
+QWidget* makeSettingsRow(QWidget* parent, const QString& label, QWidget* hint_widget, const QString& sub_label,
+                         QWidget* control, bool first = false) {
+    auto* container = new QWidget(parent);
+    auto* vl = new QVBoxLayout(container);
+    vl->setContentsMargins(0, 0, 0, 0);
+    vl->setSpacing(0);
+
+    if (!first) {
+        auto* rule = new QFrame(container);
+        rule->setFrameShape(QFrame::HLine);
+        rule->setProperty("frameRole", "sectionRuleLine");
+        vl->addWidget(rule);
+    }
+
+    auto* content = new QWidget(container);
+    auto* hl = new QHBoxLayout(content);
+    hl->setContentsMargins(0, 12, 0, 12);
+    hl->setSpacing(14);
+
+    // Left side: label block
+    auto* left = new QWidget(content);
+    auto* ll = new QVBoxLayout(left);
+    ll->setContentsMargins(0, 0, 0, 0);
+    ll->setSpacing(2);
+
+    auto* label_row = new QWidget(left);
+    auto* lrl = new QHBoxLayout(label_row);
+    lrl->setContentsMargins(0, 0, 0, 0);
+    lrl->setSpacing(4);
+
+    auto* lbl = new QLabel(label, label_row);
+    lbl->setProperty("labelRole", "settingsRowLabel");
+    lrl->addWidget(lbl);
+
+    if (hint_widget) {
+        lrl->addWidget(hint_widget, 0, Qt::AlignVCenter);
+    }
+    lrl->addStretch();
+    ll->addWidget(label_row);
+
+    if (!sub_label.isEmpty()) {
+        auto* sub = new QLabel(sub_label, left);
+        sub->setProperty("labelRole", "muted");
+        sub->setWordWrap(true);
+        ll->addWidget(sub);
+    }
+
+    hl->addWidget(left, 1);
+
+    // Right side: control
+    if (control) {
+        hl->addWidget(control, 0, Qt::AlignVCenter);
+    }
+
+    vl->addWidget(content);
+    container->setProperty("settingsRow", true);
+    return container;
 }
 
 // Build a QWidget containing a fieldLabel + an InfoHintIcon side-by-side.
@@ -443,28 +505,29 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     columns_layout_->addWidget(right_col, 1);
     layout->addWidget(columns);
 
-    // ---- FORMAT & ENCODING CARD (left) ----
-    // Container, codecs, quality, frame rate, timing, and cursor live together here.
+    // ---- FORMAT & ENCODING CARD (left) — D6: flat SRows ----
     auto* fmt_panel = makePanel(left_col);
     fmt_panel_ = fmt_panel;
     auto* fmt_layout = new QVBoxLayout(fmt_panel);
     fmt_layout->setContentsMargins(18, 16, 18, 18);
-    fmt_layout->setSpacing(12);
+    fmt_layout->setSpacing(0);
     fmt_layout->addWidget(makeCardTitle(QStringLiteral("Format & encoding"), fmt_panel));
 
+    // format_display_label_ kept for backward compat (hidden)
     format_display_label_ = new QLabel(fmt_panel);
     format_display_label_->setProperty("labelRole", "muted");
+    format_display_label_->setVisible(false);
     fmt_layout->addWidget(format_display_label_);
 
-    fmt_layout->addWidget(makeFieldLabelWithHint(QStringLiteral("Container"), ui::hints::kContainer, fmt_panel));
+    // --- Container row ---
     container_group_ = new QButtonGroup(this);
     container_group_->setExclusive(true);
     auto* container_segmented = new QWidget(fmt_panel);
     container_segmented->setObjectName(QStringLiteral("containerSegmented"));
-    auto* container_row = new QHBoxLayout();
-    container_row->setContentsMargins(3, 3, 3, 3);
-    container_row->setSpacing(0);
-    container_segmented->setLayout(container_row);
+    auto* container_row_layout = new QHBoxLayout();
+    container_row_layout->setContentsMargins(3, 3, 3, 3);
+    container_row_layout->setSpacing(0);
+    container_segmented->setLayout(container_row_layout);
     auto makeContainerSegment = [&](const QString& object_name, const QString& label,
                                     capability::Container container) -> QPushButton* {
         auto* segment = new QPushButton(label, container_segmented);
@@ -478,7 +541,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         segment->setProperty("qualitySegmentSelected", false);
         segment->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         container_group_->addButton(segment, static_cast<int>(container));
-        container_row->addWidget(segment);
+        container_row_layout->addWidget(segment);
         return segment;
     };
     mkv_radio_ = makeContainerSegment(QStringLiteral("containerMkvButton"), QStringLiteral("MKV"),
@@ -487,30 +550,28 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                                        capability::Container::WebM);
     mp4_radio_ =
         makeContainerSegment(QStringLiteral("containerMp4Button"), QStringLiteral("MP4"), capability::Container::Mp4);
-    fmt_layout->addWidget(container_segmented);
 
-    auto* codec_row = new QHBoxLayout();
-    codec_row->setSpacing(14);
+    container_compare_hint_ =
+        new ui::widgets::CompareHint(QStringLiteral("container"), QStringLiteral("MKV"), fmt_panel);
+    fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Container"), container_compare_hint_, QString(),
+                                          container_segmented, /*first=*/true));
 
-    auto* vcol = new QVBoxLayout();
-    vcol->setSpacing(6);
+    // --- Video codec row ---
     video_codec_combo_ = new QComboBox(fmt_panel);
-    vcol->addWidget(makeFieldLabelWithHint(QStringLiteral("Video codec"), ui::hints::kVideoCodecAv1, fmt_panel));
-    vcol->addWidget(video_codec_combo_);
-    codec_row->addLayout(vcol, 1);
+    video_codec_compare_hint_ =
+        new ui::widgets::CompareHint(QStringLiteral("videoCodec"), QStringLiteral("AV1"), fmt_panel);
+    fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Video codec"), video_codec_compare_hint_,
+                                          QString(), video_codec_combo_));
 
-    auto* acol = new QVBoxLayout();
-    acol->setSpacing(6);
+    // --- Audio codec row ---
     audio_codec_combo_ = new QComboBox(fmt_panel);
-    acol->addWidget(makeFieldLabelWithHint(QStringLiteral("Audio codec"), ui::hints::kAudioCodecOpus, fmt_panel));
-    acol->addWidget(audio_codec_combo_);
-    codec_row->addLayout(acol, 1);
+    audio_codec_compare_hint_ =
+        new ui::widgets::CompareHint(QStringLiteral("audioCodec"), QStringLiteral("Opus"), fmt_panel);
+    fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Audio codec"), audio_codec_compare_hint_,
+                                          QString(), audio_codec_combo_));
 
-    fmt_layout->addLayout(codec_row);
-
-    // Quality — compact 3-segment control. The hidden videoQualityCombo stays the single
-    // place that emits the model change, so the existing summary flow and test seam are kept.
-    fmt_layout->addWidget(makeFieldLabelWithHint(QStringLiteral("Quality"), ui::hints::kQualityPreset, fmt_panel));
+    // --- Quality row ---
+    // Hidden combo is the single model-change emitter (existing test seam).
     quality_combo_ = new QComboBox(fmt_panel);
     quality_combo_->setObjectName(QStringLiteral("videoQualityCombo"));
     quality_combo_->addItem(QStringLiteral("High Quality"), static_cast<int>(recorder_core::NvencQualityPreset::High));
@@ -545,32 +606,77 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         return segment;
     };
 
-    quality_segment_small_ = makeQualitySegment(QStringLiteral("qualitySegmentSmall"), QStringLiteral("Small · CQ30"),
-                                                recorder_core::NvencQualityPreset::Small);
+    quality_segment_small_ =
+        makeQualitySegment(QStringLiteral("qualitySegmentSmall"), QStringLiteral("Small \xC2\xB7 CQ30"),
+                           recorder_core::NvencQualityPreset::Small);
     quality_segment_balanced_ =
-        makeQualitySegment(QStringLiteral("qualitySegmentBalanced"), QStringLiteral("Balanced · CQ24"),
+        makeQualitySegment(QStringLiteral("qualitySegmentBalanced"), QStringLiteral("Balanced \xC2\xB7 CQ24"),
                            recorder_core::NvencQualityPreset::Balanced);
-    quality_segment_high_ = makeQualitySegment(QStringLiteral("qualitySegmentHigh"), QStringLiteral("High · CQ19"),
-                                               recorder_core::NvencQualityPreset::High);
-
-    fmt_layout->addWidget(quality_segmented);
+    quality_segment_high_ =
+        makeQualitySegment(QStringLiteral("qualitySegmentHigh"), QStringLiteral("High \xC2\xB7 CQ19"),
+                           recorder_core::NvencQualityPreset::High);
 
     quality_badge_label_ = new QLabel(fmt_panel);
     quality_badge_label_->setObjectName(QStringLiteral("qualityBadgeLabel"));
     quality_badge_label_->setProperty("labelRole", "muted");
-    fmt_layout->addWidget(quality_badge_label_);
 
     quality_settings_label_ = new QLabel(fmt_panel);
     quality_settings_label_->setObjectName(QStringLiteral("qualitySettingsLabel"));
     quality_settings_label_->setProperty("labelRole", "muted");
-    fmt_layout->addWidget(quality_settings_label_);
 
-    // Frame rate + timing. Values here are restart-class and feed the real encoder cadence.
-    auto* rate_row = new QHBoxLayout();
-    rate_row->setSpacing(14);
-    auto* rate_col = new QVBoxLayout();
-    rate_col->setSpacing(6);
-    rate_col->addWidget(makeFieldLabelWithHint(QStringLiteral("Frame rate"), ui::hints::kFrameRate, fmt_panel));
+    // Quality sub-label widget combining both badge+settings labels
+    auto* quality_sub_widget = new QWidget(fmt_panel);
+    {
+        auto* qsl = new QVBoxLayout(quality_sub_widget);
+        qsl->setContentsMargins(0, 0, 0, 0);
+        qsl->setSpacing(2);
+        qsl->addWidget(quality_badge_label_);
+        qsl->addWidget(quality_settings_label_);
+    }
+
+    quality_compare_hint_ =
+        new ui::widgets::CompareHint(QStringLiteral("quality"), QStringLiteral("Balanced"), fmt_panel);
+
+    // Quality row: segmented on right, compare hint in label area
+    {
+        auto* quality_row_container = new QWidget(fmt_panel);
+        auto* qvl = new QVBoxLayout(quality_row_container);
+        qvl->setContentsMargins(0, 0, 0, 0);
+        qvl->setSpacing(0);
+        // hairline
+        auto* qrule = new QFrame(quality_row_container);
+        qrule->setFrameShape(QFrame::HLine);
+        qrule->setProperty("frameRole", "sectionRuleLine");
+        qvl->addWidget(qrule);
+        // content
+        auto* qcontent = new QWidget(quality_row_container);
+        auto* qhl = new QHBoxLayout(qcontent);
+        qhl->setContentsMargins(0, 12, 0, 12);
+        qhl->setSpacing(14);
+        // left: label + hint + sub labels
+        auto* qleft = new QWidget(qcontent);
+        auto* qll = new QVBoxLayout(qleft);
+        qll->setContentsMargins(0, 0, 0, 0);
+        qll->setSpacing(2);
+        auto* qlabel_row = new QWidget(qleft);
+        auto* qlrl = new QHBoxLayout(qlabel_row);
+        qlrl->setContentsMargins(0, 0, 0, 0);
+        qlrl->setSpacing(4);
+        auto* qlbl = new QLabel(QStringLiteral("Quality"), qlabel_row);
+        qlbl->setProperty("labelRole", "settingsRowLabel");
+        qlrl->addWidget(qlbl);
+        qlrl->addWidget(quality_compare_hint_, 0, Qt::AlignVCenter);
+        qlrl->addStretch();
+        qll->addWidget(qlabel_row);
+        qll->addWidget(quality_sub_widget);
+        qhl->addWidget(qleft, 1);
+        qhl->addWidget(quality_segmented, 0, Qt::AlignVCenter);
+        qvl->addWidget(qcontent);
+        quality_row_container->setProperty("settingsRow", true);
+        fmt_layout->addWidget(quality_row_container);
+    }
+
+    // --- Frame rate row ---
     frame_rate_combo_ = new QComboBox(fmt_panel);
     frame_rate_combo_->setObjectName(QStringLiteral("frameRateCombo"));
     frame_rate_combo_->setAccessibleName(QStringLiteral("Frame rate"));
@@ -584,11 +690,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             item->setToolTip(QStringLiteral("120 fps is hidden from runtime use until hardware support is proven."));
         }
     }
-    rate_col->addWidget(frame_rate_combo_);
-    rate_row->addLayout(rate_col, 1);
-    auto* timing_col = new QVBoxLayout();
-    timing_col->setSpacing(6);
-    timing_col->addWidget(makeFieldLabel(QStringLiteral("Timing"), fmt_panel));
+
+    fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Frame rate"),
+                                          new ui::widgets::InfoHintIcon(ui::hints::kFrameRate, fmt_panel), QString(),
+                                          frame_rate_combo_));
+
+    // --- Frame timing row ---
     auto* timing_segmented = new QWidget(fmt_panel);
     timing_segmented->setObjectName(QStringLiteral("timingSegmented"));
     auto* timing_segmented_layout = new QHBoxLayout(timing_segmented);
@@ -613,26 +720,60 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     };
     timing_cfr_btn_ = makeTimingSegment(QStringLiteral("timingCfrButton"), QStringLiteral("CFR"), 1);
     timing_vfr_btn_ = makeTimingSegment(QStringLiteral("timingVfrButton"), QStringLiteral("VFR"), 0);
-    timing_col->addWidget(timing_segmented);
-    rate_row->addLayout(timing_col, 1);
-    fmt_layout->addLayout(rate_row);
 
+    timing_compare_hint_ = new ui::widgets::CompareHint(QStringLiteral("timing"), QStringLiteral("CFR"), fmt_panel);
+    fmt_layout->addWidget(
+        makeSettingsRow(fmt_panel, QStringLiteral("Frame timing"), timing_compare_hint_, QString(), timing_segmented));
+
+    // --- Capture cursor row ---
+    cursor_check_ = new QCheckBox(QStringLiteral("Capture cursor"), fmt_panel);
+    cursor_check_->setObjectName(QStringLiteral("captureCursorCheck"));
+    cursor_check_->setChecked(video_settings_.capture_cursor);
+    fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Capture cursor"),
+                                          new ui::widgets::InfoHintIcon(ui::hints::kCaptureCursor, fmt_panel),
+                                          QString(), cursor_check_));
+
+    // --- Compat callout (D6: replaces format_display_label_ visually) ---
+    compat_callout_widget_ = new QFrame(fmt_panel);
+    compat_callout_widget_->setObjectName(QStringLiteral("compatCalloutWidget"));
+    compat_callout_widget_->setProperty("panelRole", "compatCallout");
+    compat_callout_widget_->setProperty("stateRole", "caution");
     {
-        auto* cursor_row = new QWidget(fmt_panel);
-        auto* cursor_hl = new QHBoxLayout(cursor_row);
-        cursor_hl->setContentsMargins(0, 0, 0, 0);
-        cursor_hl->setSpacing(4);
-        cursor_check_ = new QCheckBox(QStringLiteral("Capture cursor"), cursor_row);
-        cursor_check_->setObjectName(QStringLiteral("captureCursorCheck"));
-        cursor_check_->setChecked(video_settings_.capture_cursor);
-        cursor_hl->addWidget(cursor_check_);
-        cursor_hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kCaptureCursor, cursor_row), 0, Qt::AlignVCenter);
-        cursor_hl->addStretch();
-        fmt_layout->addWidget(cursor_row);
+        auto* callout_layout = new QHBoxLayout(compat_callout_widget_);
+        callout_layout->setContentsMargins(12, 8, 12, 8);
+        callout_layout->setSpacing(8);
+        auto* callout_icon = new QLabel(compat_callout_widget_);
+        callout_icon->setText(QStringLiteral("\xe2\x9a\xa0"));
+        callout_layout->addWidget(callout_icon);
+        callout_text_ = new QLabel(compat_callout_widget_);
+        callout_text_->setObjectName(QStringLiteral("compatCalloutText"));
+        callout_text_->setWordWrap(true);
+        callout_layout->addWidget(callout_text_, 1);
+        auto* fix_btn = new QPushButton(QStringLiteral("Fix codecs"), compat_callout_widget_);
+        fix_btn->setObjectName(QStringLiteral("fixCodecsButton"));
+        fix_btn->setProperty("role", "ghost");
+        fix_btn->setCursor(Qt::PointingHandCursor);
+        connect(fix_btn, &QPushButton::clicked, this, [this]() {
+            reconcileContainerCodecRules();
+            updateCompatCallout();
+            emitCurrentFormatSettings();
+        });
+        callout_layout->addWidget(fix_btn);
     }
+    compat_callout_widget_->setVisible(false);
+    fmt_layout->addWidget(compat_callout_widget_);
+
+    compat_ok_label_ = new QLabel(fmt_panel);
+    compat_ok_label_->setObjectName(QStringLiteral("compatOkLabel"));
+    compat_ok_label_->setProperty("labelRole", "muted");
+    fmt_layout->addWidget(compat_ok_label_);
 
     fmt_layout->addWidget(
         makeHint(QStringLiteral("VFR is available for MKV/WebM. MP4 uses CFR for editor compatibility."), fmt_panel));
+
+    // Pre-fill codec combos (D6: free choice, fills once)
+    updateVideoCodecChoices();
+    updateAudioCodecChoices();
 
     left_layout->addWidget(fmt_panel);
     left_layout->addStretch();
@@ -1057,139 +1198,80 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     update_panel_wrapper_ = update_settings_panel_; // search filter alias
     layout->addWidget(update_settings_panel_);
 
-    // ---- PRESENCE CARD (full width — SETTINGS-TIERS-P3) ----
-    // Recording overlay, Diagnostics overlay (+ anti-cheat ⓘ), Notifications,
-    // Close-to-tray, Quick controls. All persisted via AppSettingsStore.
+    // ---- PRESENCE CARD (full width — SETTINGS-TIERS-P3) — D6: flat rows ----
     {
         auto* presence_panel = makePanel(content);
         presence_panel_ = presence_panel;
         auto* presence_layout = new QVBoxLayout(presence_panel);
         presence_layout->setContentsMargins(18, 14, 18, 14);
-        presence_layout->setSpacing(M::kSpaceSm);
+        presence_layout->setSpacing(0);
         presence_layout->addWidget(makeCardTitle(QStringLiteral("Presence"), presence_panel));
 
-        // Recording overlay row
-        {
-            auto* row = new QFrame(presence_panel);
-            row->setProperty("panelRole", "compactRow");
-            auto* rl = new QVBoxLayout(row);
-            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-            rl->setSpacing(M::kSpaceXs);
-            rl->addWidget(
-                makeFieldLabelWithHint(QStringLiteral("Recording overlay"), ui::hints::kRecordingOverlay, row));
-            overlay_check_ =
-                new ui::widgets::ExoCheckBox(QStringLiteral("Show on-screen status overlay during recording"), row);
-            overlay_check_->setChecked(true);
-            rl->addWidget(overlay_check_);
-            presence_layout->addWidget(row);
-        }
+        overlay_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Show on-screen status overlay during recording"),
+                                                      presence_panel);
+        overlay_check_->setChecked(true);
+        presence_layout->addWidget(
+            makeSettingsRow(presence_panel, QStringLiteral("Recording overlay"),
+                            new ui::widgets::InfoHintIcon(ui::hints::kRecordingOverlay, presence_panel), QString(),
+                            overlay_check_, /*first=*/true));
 
-        // Diagnostics overlay row (with anti-cheat ⓘ)
-        {
-            auto* row = new QFrame(presence_panel);
-            row->setProperty("panelRole", "compactRow");
-            auto* rl = new QVBoxLayout(row);
-            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-            rl->setSpacing(M::kSpaceXs);
+        diagnostics_overlay_check_ = new ui::widgets::ExoCheckBox(
+            QStringLiteral("Show live diagnostics on the recorded monitor during recording"), presence_panel);
+        diagnostics_overlay_check_->setChecked(false);
+        presence_layout->addWidget(
+            makeSettingsRow(presence_panel, QStringLiteral("Diagnostics overlay"),
+                            new ui::widgets::InfoHintIcon(
+                                ui::hints::kDiagnosticsOverlay +
+                                    QStringLiteral("\n\nRead-only and capture-excluded — injects nothing into any "
+                                                   "process. Some anti-cheat systems may still flag third-party "
+                                                   "overlays; disable it if you hit issues."),
+                                presence_panel),
+                            QString(), diagnostics_overlay_check_));
 
-            // Header: field label + a single InfoHint ⓘ whose tooltip folds in
-            // the anti-cheat note (no second glyph).
-            {
-                auto* header_row = new QWidget(row);
-                auto* header_hl = new QHBoxLayout(header_row);
-                header_hl->setContentsMargins(0, 0, 0, 0);
-                header_hl->setSpacing(4);
-                auto* hint_row = makeFieldLabelWithHint(
-                    QStringLiteral("Diagnostics overlay"),
-                    ui::hints::kDiagnosticsOverlay +
-                        QStringLiteral("\n\nRead-only and capture-excluded — injects nothing into any "
-                                       "process. Some anti-cheat systems may still flag third-party "
-                                       "overlays; disable it if you hit issues."),
-                    header_row);
-                header_hl->addWidget(hint_row);
-                header_hl->addStretch(1);
-                rl->addWidget(header_row);
-            }
+        notifications_check_ =
+            new ui::widgets::ExoCheckBox(QStringLiteral("Show on-screen notification toasts"), presence_panel);
+        notifications_check_->setChecked(true);
+        presence_layout->addWidget(makeSettingsRow(
+            presence_panel, QStringLiteral("Notifications"),
+            new ui::widgets::InfoHintIcon(ui::hints::kNotifications, presence_panel), QString(), notifications_check_));
 
-            diagnostics_overlay_check_ = new ui::widgets::ExoCheckBox(
-                QStringLiteral("Show live diagnostics on the recorded monitor during recording"), row);
-            diagnostics_overlay_check_->setChecked(false);
-            rl->addWidget(diagnostics_overlay_check_);
-            presence_layout->addWidget(row);
-        }
+        keep_in_tray_check_ =
+            new ui::widgets::ExoCheckBox(QStringLiteral("Keep running in tray when window closed"), presence_panel);
+        keep_in_tray_check_->setChecked(false);
+        presence_layout->addWidget(makeSettingsRow(
+            presence_panel, QStringLiteral("Tray behavior"),
+            new ui::widgets::InfoHintIcon(ui::hints::kCloseToTray, presence_panel), QString(), keep_in_tray_check_));
 
-        // Notifications row
-        {
-            auto* row = new QFrame(presence_panel);
-            row->setProperty("panelRole", "compactRow");
-            auto* rl = new QVBoxLayout(row);
-            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-            rl->setSpacing(M::kSpaceXs);
-            rl->addWidget(makeFieldLabelWithHint(QStringLiteral("Notifications"), ui::hints::kNotifications, row));
-            notifications_check_ =
-                new ui::widgets::ExoCheckBox(QStringLiteral("Show on-screen notification toasts"), row);
-            notifications_check_->setChecked(true);
-            rl->addWidget(notifications_check_);
-            presence_layout->addWidget(row);
-        }
-
-        // Close-to-tray row
-        {
-            auto* row = new QFrame(presence_panel);
-            row->setProperty("panelRole", "compactRow");
-            auto* rl = new QVBoxLayout(row);
-            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-            rl->setSpacing(M::kSpaceXs);
-            rl->addWidget(makeFieldLabelWithHint(QStringLiteral("Tray behavior"), ui::hints::kCloseToTray, row));
-            keep_in_tray_check_ =
-                new ui::widgets::ExoCheckBox(QStringLiteral("Keep running in tray when window closed"), row);
-            keep_in_tray_check_->setChecked(false);
-            rl->addWidget(keep_in_tray_check_);
-            presence_layout->addWidget(row);
-        }
-
-        // Quick controls row
-        {
-            auto* row = new QFrame(presence_panel);
-            row->setProperty("panelRole", "compactRow");
-            auto* rl = new QVBoxLayout(row);
-            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-            rl->setSpacing(M::kSpaceXs);
-            rl->addWidget(makeFieldLabelWithHint(QStringLiteral("Quick controls"), ui::hints::kQuickControlPill, row));
-            quick_controls_check_ =
-                new ui::widgets::ExoCheckBox(QStringLiteral("Show quick-control pill during recording"), row);
-            quick_controls_check_->setChecked(false);
-            rl->addWidget(quick_controls_check_);
-            presence_layout->addWidget(row);
-        }
+        quick_controls_check_ =
+            new ui::widgets::ExoCheckBox(QStringLiteral("Show quick-control pill during recording"), presence_panel);
+        quick_controls_check_->setChecked(false);
+        presence_layout->addWidget(
+            makeSettingsRow(presence_panel, QStringLiteral("Quick controls"),
+                            new ui::widgets::InfoHintIcon(ui::hints::kQuickControlPill, presence_panel), QString(),
+                            quick_controls_check_));
 
         layout->addWidget(presence_panel);
     }
 
-    // ---- APPEARANCE CARD (full width — SETTINGS-TIERS-P3) ----
+    // ---- APPEARANCE CARD (full width — SETTINGS-TIERS-P3) — D6: flat rows ----
     {
         auto* appearance_panel = makePanel(content);
         appearance_panel_ = appearance_panel;
         auto* appearance_layout = new QVBoxLayout(appearance_panel);
         appearance_layout->setContentsMargins(18, 14, 18, 14);
-        appearance_layout->setSpacing(M::kSpaceSm);
+        appearance_layout->setSpacing(0);
         appearance_layout->addWidget(makeCardTitle(QStringLiteral("Appearance"), appearance_panel));
 
-        auto* accent_row = new QFrame(appearance_panel);
-        accent_row->setProperty("panelRole", "compactRow");
-        auto* accent_layout = new QVBoxLayout(accent_row);
-        accent_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-        accent_layout->setSpacing(M::kSpaceXs);
-        accent_layout->addWidget(
-            makeFieldLabelWithHint(QStringLiteral("Accent color"), ui::hints::kAccent, accent_row));
-        accent_combo_ = new QComboBox(accent_row);
+        accent_combo_ = new QComboBox(appearance_panel);
         accent_combo_->setMinimumWidth(220);
         accent_combo_->setMaximumWidth(320);
         for (const auto& a : ui::theme::kExoSnapAccents) {
             accent_combo_->addItem(QString::fromUtf8(a.name), QString::fromUtf8(a.id));
         }
-        accent_layout->addWidget(accent_combo_);
-        appearance_layout->addWidget(accent_row);
+        appearance_layout->addWidget(
+            makeSettingsRow(appearance_panel, QStringLiteral("Accent color"),
+                            new ui::widgets::InfoHintIcon(ui::hints::kAccent, appearance_panel), QString(),
+                            accent_combo_, /*first=*/true));
 
         layout->addWidget(appearance_panel);
     }
@@ -1375,6 +1457,58 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     combo_wheel_filter->installOn(quality_combo_);
     combo_wheel_filter->installOn(frame_rate_combo_);
     combo_wheel_filter->installOn(mic_device_combo_);
+
+    // D6: CompareHint → format change connections.
+    connect(container_compare_hint_, &ui::widgets::CompareHint::optionSelected, this, [this](const QString& v) {
+        if (v == QLatin1String("MKV"))
+            onContainerChanged(static_cast<int>(capability::Container::Matroska));
+        else if (v == QLatin1String("WebM"))
+            onContainerChanged(static_cast<int>(capability::Container::WebM));
+        else if (v == QLatin1String("MP4"))
+            onContainerChanged(static_cast<int>(capability::Container::Mp4));
+    });
+    connect(video_codec_compare_hint_, &ui::widgets::CompareHint::optionSelected, this, [this](const QString& v) {
+        if (v == QLatin1String("AV1")) {
+            const QSignalBlocker b(video_codec_combo_);
+            const int idx = video_codec_combo_->findData(VideoCodecToInt(capability::VideoCodec::Av1Nvenc));
+            if (idx >= 0) {
+                video_codec_combo_->setCurrentIndex(idx);
+                onVideoCodecChanged(idx);
+            }
+        } else if (v == QLatin1String("H.264")) {
+            const QSignalBlocker b(video_codec_combo_);
+            const int idx = video_codec_combo_->findData(VideoCodecToInt(capability::VideoCodec::H264Nvenc));
+            if (idx >= 0) {
+                video_codec_combo_->setCurrentIndex(idx);
+                onVideoCodecChanged(idx);
+            }
+        }
+        // HEVC → no-op
+    });
+    connect(audio_codec_compare_hint_, &ui::widgets::CompareHint::optionSelected, this, [this](const QString& v) {
+        if (v == QLatin1String("Opus")) {
+            const QSignalBlocker b(audio_codec_combo_);
+            const int idx = audio_codec_combo_->findData(AudioCodecToInt(capability::AudioCodec::Opus));
+            if (idx >= 0) {
+                audio_codec_combo_->setCurrentIndex(idx);
+                onAudioCodecChanged(idx);
+            }
+        } else if (v == QLatin1String("AAC")) {
+            const QSignalBlocker b(audio_codec_combo_);
+            const int idx = audio_codec_combo_->findData(AudioCodecToInt(capability::AudioCodec::AacMf));
+            if (idx >= 0) {
+                audio_codec_combo_->setCurrentIndex(idx);
+                onAudioCodecChanged(idx);
+            }
+        }
+        // PCM/FLAC → no-op
+    });
+    connect(timing_compare_hint_, &ui::widgets::CompareHint::optionSelected, this, [this](const QString& v) {
+        if (v == QLatin1String("CFR"))
+            onTimingSelected(1);
+        else if (v == QLatin1String("VFR"))
+            onTimingSelected(0);
+    });
 
     setReadinessStatus(QStringLiteral("CHECKING"));
 
@@ -1626,14 +1760,9 @@ void ConfigPage::reconcileContainerCodecRules() {
 
 void ConfigPage::updateVideoCodecChoices() {
     const QSignalBlocker blocker(video_codec_combo_);
-    video_codec_combo_->clear();
-    if (format_settings_.container == capability::Container::Mp4) {
-        video_codec_combo_->addItem(QStringLiteral("H.264"), VideoCodecToInt(capability::VideoCodec::H264Nvenc));
-    } else if (format_settings_.container == capability::Container::WebM) {
+    if (video_codec_combo_->count() == 0) {
         video_codec_combo_->addItem(QStringLiteral("AV1"), VideoCodecToInt(capability::VideoCodec::Av1Nvenc));
-    } else {
         video_codec_combo_->addItem(QStringLiteral("H.264"), VideoCodecToInt(capability::VideoCodec::H264Nvenc));
-        video_codec_combo_->addItem(QStringLiteral("AV1"), VideoCodecToInt(capability::VideoCodec::Av1Nvenc));
     }
     const int vidx = video_codec_combo_->findData(VideoCodecToInt(format_settings_.video_codec));
     if (vidx >= 0)
@@ -1642,15 +1771,8 @@ void ConfigPage::updateVideoCodecChoices() {
 
 void ConfigPage::updateAudioCodecChoices() {
     const QSignalBlocker blocker(audio_codec_combo_);
-    audio_codec_combo_->clear();
-    if (format_settings_.container == capability::Container::Mp4) {
-        audio_codec_combo_->addItem(QStringLiteral("AAC"), AudioCodecToInt(capability::AudioCodec::AacMf));
-    } else if (format_settings_.container == capability::Container::WebM) {
+    if (audio_codec_combo_->count() == 0) {
         audio_codec_combo_->addItem(QStringLiteral("Opus"), AudioCodecToInt(capability::AudioCodec::Opus));
-    } else if (format_settings_.video_codec == capability::VideoCodec::Av1Nvenc) {
-        audio_codec_combo_->addItem(QStringLiteral("Opus"), AudioCodecToInt(capability::AudioCodec::Opus));
-        audio_codec_combo_->addItem(QStringLiteral("AAC"), AudioCodecToInt(capability::AudioCodec::AacMf));
-    } else {
         audio_codec_combo_->addItem(QStringLiteral("AAC"), AudioCodecToInt(capability::AudioCodec::AacMf));
     }
     const int aidx = audio_codec_combo_->findData(AudioCodecToInt(format_settings_.audio_codec));
@@ -1659,14 +1781,58 @@ void ConfigPage::updateAudioCodecChoices() {
 }
 
 void ConfigPage::updateFormatDisplay() {
-    const QString summary = ContainerLabel(format_settings_.container) + QStringLiteral(" · ") +
-                            VideoCodecLabel(format_settings_.video_codec) + QStringLiteral(" · ") +
-                            AudioCodecLabel(format_settings_.audio_codec) + QStringLiteral(" · ") +
-                            FrameRateLabel(video_settings_.frame_rate_num, video_settings_.frame_rate_den) +
-                            QStringLiteral(" · ") +
-                            (video_settings_.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
-    format_display_label_->setText(QStringLiteral("Current format: ") + summary);
+    updateCompatCallout();
+}
 
+void ConfigPage::updateCompatCallout() {
+    const auto c = format_settings_.container;
+    const auto v = format_settings_.video_codec;
+    const auto a = format_settings_.audio_codec;
+    bool video_bad = false, audio_bad = false;
+    if (c == capability::Container::WebM) {
+        video_bad = (v != capability::VideoCodec::Av1Nvenc);
+        audio_bad = (a != capability::AudioCodec::Opus);
+    } else if (c == capability::Container::Mp4) {
+        video_bad = (v != capability::VideoCodec::H264Nvenc);
+        audio_bad = (a != capability::AudioCodec::AacMf);
+    }
+    const bool compat_bad = video_bad || audio_bad;
+
+    const QString summary = ContainerLabel(c) + QStringLiteral(" \xC2\xB7 ") + VideoCodecLabel(v) +
+                            QStringLiteral(" \xC2\xB7 ") + AudioCodecLabel(a) + QStringLiteral(" \xC2\xB7 ") +
+                            FrameRateLabel(video_settings_.frame_rate_num, video_settings_.frame_rate_den) +
+                            QStringLiteral(" \xC2\xB7 ") +
+                            (video_settings_.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
+
+    if (format_display_label_) {
+        format_display_label_->setText(QStringLiteral("Current format: ") + summary);
+    }
+
+    if (compat_callout_widget_)
+        compat_callout_widget_->setVisible(compat_bad);
+    if (compat_ok_label_)
+        compat_ok_label_->setVisible(!compat_bad);
+
+    if (compat_bad && callout_text_) {
+        QStringList bad_parts;
+        if (video_bad)
+            bad_parts << VideoCodecLabel(v);
+        if (audio_bad)
+            bad_parts << AudioCodecLabel(a);
+        const QString bad_str = bad_parts.join(QStringLiteral(" + "));
+        QString hint;
+        if (c == capability::Container::WebM)
+            hint = QStringLiteral("WebM supports AV1 + Opus only.");
+        else if (c == capability::Container::Mp4)
+            hint = QStringLiteral("MP4 supports H.264 + AAC only.");
+        callout_text_->setText(ContainerLabel(c) + QStringLiteral(" can't hold ") + bad_str + QStringLiteral(". ") +
+                               hint);
+    }
+    if (!compat_bad && compat_ok_label_) {
+        compat_ok_label_->setText(QStringLiteral("\xe2\x9c\x93 Current format: ") + summary);
+    }
+
+    // Container segment sync (was in updateFormatDisplay)
     const auto sync_container = [this](QPushButton* segment, capability::Container container) {
         if (!segment)
             return;
@@ -1680,6 +1846,14 @@ void ConfigPage::updateFormatDisplay() {
     sync_container(mkv_radio_, capability::Container::Matroska);
     sync_container(webm_radio_, capability::Container::WebM);
     sync_container(mp4_radio_, capability::Container::Mp4);
+
+    // CompareHint value sync
+    if (container_compare_hint_)
+        container_compare_hint_->setCurrentValue(ContainerLabel(format_settings_.container));
+    if (video_codec_compare_hint_)
+        video_codec_compare_hint_->setCurrentValue(VideoCodecLabel(format_settings_.video_codec));
+    if (audio_codec_compare_hint_)
+        audio_codec_compare_hint_->setCurrentValue(AudioCodecLabel(format_settings_.audio_codec));
 }
 
 void ConfigPage::onContainerChanged(int id) {
@@ -1807,6 +1981,20 @@ void ConfigPage::updateQualitySummary() {
         video_settings_.capture_cursor ? QStringLiteral("Cursor on") : QStringLiteral("Cursor off");
     quality_settings_label_->setText(cq + QStringLiteral(" · ") + cfr_text + QStringLiteral(" · ") + cursor_text);
 
+    if (quality_compare_hint_) {
+        switch (video_settings_.quality) {
+        case recorder_core::NvencQualityPreset::High:
+            quality_compare_hint_->setCurrentValue(QStringLiteral("High"));
+            break;
+        case recorder_core::NvencQualityPreset::Balanced:
+            quality_compare_hint_->setCurrentValue(QStringLiteral("Balanced"));
+            break;
+        case recorder_core::NvencQualityPreset::Small:
+            quality_compare_hint_->setCurrentValue(QStringLiteral("Small"));
+            break;
+        }
+    }
+
     updateQualitySegmentSelection();
 }
 
@@ -1866,6 +2054,9 @@ void ConfigPage::updateTimingSelection() {
     sync_segment(timing_cfr_btn_, video_settings_.cfr, true, QString());
     sync_segment(timing_vfr_btn_, !video_settings_.cfr, vfr_available,
                  QStringLiteral("VFR is not available for MP4 in the current mux path."));
+
+    if (timing_compare_hint_)
+        timing_compare_hint_->setCurrentValue(video_settings_.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
 }
 
 void ConfigPage::updateOutputResolutionSelection() {

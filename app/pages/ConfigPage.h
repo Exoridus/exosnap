@@ -30,6 +30,7 @@ class QString;
 class QToolButton;
 
 namespace exosnap::ui::widgets {
+class CompareHint;
 class ExoCheckBox;
 class ExoToggle;
 class SettingsCardExpander;
@@ -193,6 +194,7 @@ class ConfigPage : public QWidget {
     void updateVideoCodecChoices();
     void updateAudioCodecChoices();
     void updateFormatDisplay();
+    void updateCompatCallout();
     void updateOutputValidationState();
     void updateExampleFilename();
 
@@ -252,6 +254,16 @@ class ConfigPage : public QWidget {
     QBoxLayout* columns_layout_ = nullptr;
     QBoxLayout* output_split_layout_ = nullptr;
 
+    // D6: additional two-column layout blocks
+    QBoxLayout* webcam_output_layout_ = nullptr;
+    QBoxLayout* presence_appearance_layout_ = nullptr;
+    QWidget* webcam_output_widget_ = nullptr;
+    QWidget* webcam_col_ = nullptr;
+    QWidget* output_col_ = nullptr;
+    QWidget* presence_appearance_widget_ = nullptr;
+    QWidget* presence_col_ = nullptr;
+    QWidget* appearance_col_ = nullptr;
+
     QButtonGroup* container_group_ = nullptr;
     QPushButton* mkv_radio_ = nullptr;
     QPushButton* webm_radio_ = nullptr;
@@ -260,6 +272,19 @@ class ConfigPage : public QWidget {
     QComboBox* audio_codec_combo_ = nullptr;
     QComboBox* profile_combo_ = nullptr;
     QLabel* format_display_label_ = nullptr;
+
+    // D6: CompareHint pointers for setCurrentValue sync
+    ui::widgets::CompareHint* container_compare_hint_ = nullptr;
+    ui::widgets::CompareHint* video_codec_compare_hint_ = nullptr;
+    ui::widgets::CompareHint* audio_codec_compare_hint_ = nullptr;
+    ui::widgets::CompareHint* quality_compare_hint_ = nullptr;
+    ui::widgets::CompareHint* timing_compare_hint_ = nullptr;
+    ui::widgets::CompareHint* resolution_compare_hint_ = nullptr;
+
+    // D6: compat callout widgets (replaces format_display_label_ visually)
+    QFrame* compat_callout_widget_ = nullptr;
+    QLabel* callout_text_ = nullptr;
+    QLabel* compat_ok_label_ = nullptr;
 
     QComboBox* quality_combo_ = nullptr;
     QComboBox* frame_rate_combo_ = nullptr;

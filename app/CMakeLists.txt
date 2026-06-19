@@ -386,6 +386,9 @@ exosnap_add_app_test_support(exosnap_pages_test_support
     ui/widgets/ExoCheckBox.cpp
     ui/widgets/ExoToggle.cpp
     ui/widgets/InfoHintIcon.cpp
+    # D6: CompareHint + compare data needed by ConfigPage.
+    ui/widgets/CompareHint.cpp
+    models/SettingsCompareData.cpp
     ui/widgets/SettingsCardExpander.cpp
     ui/widgets/VUMeterWidget.cpp
     ui/widgets/WebcamSetupPanel.cpp

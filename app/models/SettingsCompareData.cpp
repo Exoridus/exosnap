@@ -30,7 +30,8 @@ const CompareData kVideoCodec{
         {QStringLiteral("AV1"), QStringLiteral("Smallest files \xC2\xB7 newer players \xC2\xB7 slower"), true,
          QString()},
         {QStringLiteral("H.264"), QStringLiteral("Universal \xC2\xB7 larger files \xC2\xB7 fastest"), false, QString()},
-        {QStringLiteral("HEVC"), QStringLiteral("Smaller than H.264 \xC2\xB7 patent caveats"), false, QString()},
+        {QStringLiteral("HEVC"), QStringLiteral("Smaller than H.264 \xC2\xB7 patent caveats"), false,
+         QStringLiteral("0.7")},
     },
 };
 
