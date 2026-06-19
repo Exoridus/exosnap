@@ -37,6 +37,8 @@
 #include "../ui/dialogs/UpdateSettingsPanel.h"
 #include "../ui/theme/ExoSnapAccents.h"
 #include "../ui/theme/ExoSnapMetrics.h"
+#include "../ui/theme/ExoSnapPalette.h"
+#include "../ui/theme/LucideIcon.h"
 #include "../ui/widgets/ComboBoxWheelFilter.h"
 #include "../ui/widgets/CompareHint.h"
 #include "../ui/widgets/ExoCheckBox.h"
@@ -374,8 +376,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         pill_hl->setSpacing(6);
 
         auto* search_icon = new QLabel(search_pill);
-        // No search.svg in resources — hide the icon label silently.
-        search_icon->setVisible(false);
+        // D6: a dim Lucide "search" glyph at the left of the pill (rendered from
+        // the icon font, not an SVG resource).
+        search_icon->setFixedSize(15, 15);
+        search_icon->setScaledContents(true);
+        search_icon->setPixmap(ui::theme::lucidePixmap(QStringLiteral("search"),
+                                                       QString::fromLatin1(ui::theme::ExoSnapPalette::kText3), 15,
+                                                       search_icon->devicePixelRatioF()));
         pill_hl->addWidget(search_icon);
 
         settings_search_box_ = new QLineEdit(search_pill);

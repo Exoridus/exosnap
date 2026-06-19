@@ -147,11 +147,13 @@ TEST_F(InfoHintsConfigTest, ConfigPage_CaptureCursor_HasInfoHint) {
     EXPECT_GE(count, 1) << "Capture cursor setting must have an InfoHint";
 }
 
-TEST_F(InfoHintsConfigTest, ConfigPage_OutputResolution_HasInfoHint) {
+TEST_F(InfoHintsConfigTest, ConfigPage_OutputResolution_HasCompareHint) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    const int count = CountHintsWithText(page, ui::hints::kOutputResolution);
-    EXPECT_GE(count, 1) << "Output resolution setting must have an InfoHint";
+    // D6: Output resolution is a multi-option control and uses a CompareHint
+    // (key "resolution"), not the single-line InfoHint it had before.
+    const int count = CountCompareHintsWithKey(page, QStringLiteral("resolution"));
+    EXPECT_GE(count, 1) << "Output resolution row must contain a CompareHint widget";
 }
 
 TEST_F(InfoHintsConfigTest, ConfigPage_AudioSourceEnable_HasInfoHints) {
