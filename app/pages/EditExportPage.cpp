@@ -90,18 +90,20 @@ void EditExportPage::buildUi() {
     stepper_layout->setContentsMargins(M::kSpaceLg, 0, M::kSpaceLg, 0);
     stepper_layout->setSpacing(24);
 
-    const auto makeStep = [&](const QString& text, bool active) -> QLabel* {
+    const auto makeStep = [&](const QString& text) -> QLabel* {
         auto* lbl = new QLabel(text, stepper_widget_);
-        lbl->setStyleSheet(active ? QStringLiteral("QLabel { color:%1; font-weight:600; font-size:12px; border-bottom: "
-                                                   "2px solid %1; padding-bottom:2px; }")
-                                        .arg(P::kAccent)
-                                  : QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(P::kText3));
+        // Initial style: inactive (refreshPhase() will set the active one).
+        lbl->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(P::kText3));
         return lbl;
     };
 
-    stepper_layout->addWidget(makeStep(QStringLiteral("Review"), true));
-    stepper_layout->addWidget(makeStep(QStringLiteral("Edit"), false));
-    stepper_layout->addWidget(makeStep(QStringLiteral("Output"), false));
+    stepper_review_lbl_ = makeStep(QStringLiteral("Review"));
+    stepper_edit_lbl_ = makeStep(QStringLiteral("Edit"));
+    stepper_output_lbl_ = makeStep(QStringLiteral("Output"));
+
+    stepper_layout->addWidget(stepper_review_lbl_);
+    stepper_layout->addWidget(stepper_edit_lbl_);
+    stepper_layout->addWidget(stepper_output_lbl_);
     stepper_layout->addStretch();
 
     root_layout->addWidget(stepper_widget_);
@@ -338,17 +340,17 @@ void EditExportPage::buildUi() {
 
     output_opt_keep_mkv_ =
         makeOutputCard(QStringLiteral("Keep MKV"), QStringLiteral("stream-copy"), QString::fromLatin1(P::kOk),
-                       QStringLiteral("Stream-copy \xb7 instant \xb7 lossless"), true);
+                       QStringLiteral("Stream-copy \xc2\xb7 instant \xc2\xb7 lossless"), true);
     output_opt_keep_mkv_->setObjectName(QStringLiteral("editOutputOptKeepMkv"));
 
     output_opt_remux_mp4_ = makeOutputCard(
         QStringLiteral("Remux to MP4"), QStringLiteral("stream-copy"), QString::fromLatin1(P::kOk),
-        QStringLiteral("Stream-copy AV1+Opus \xe2\x86\x92 MP4 \xb7 instant \xb7 lossless (ADR 0014)"), false);
+        QStringLiteral("Stream-copy AV1+Opus \xe2\x86\x92 MP4 \xc2\xb7 instant \xc2\xb7 lossless (ADR 0014)"), false);
     output_opt_remux_mp4_->setObjectName(QStringLiteral("editOutputOptRemuxMp4"));
 
-    output_opt_reencode_ =
-        makeOutputCard(QStringLiteral("MP4 \xb7 H.264 + AAC"), QStringLiteral("re-encode"),
-                       QString::fromLatin1(P::kWarn), QStringLiteral("Re-encode \xb7 ~3 min \xb7 quality cost"), false);
+    output_opt_reencode_ = makeOutputCard(QStringLiteral("MP4 \xc2\xb7 H.264 + AAC"), QStringLiteral("re-encode"),
+                                          QString::fromLatin1(P::kWarn),
+                                          QStringLiteral("Re-encode \xc2\xb7 ~3 min \xc2\xb7 quality cost"), false);
     output_opt_reencode_->setObjectName(QStringLiteral("editOutputOptReencode"));
 
     output_panel_layout->addWidget(output_opt_keep_mkv_);
@@ -402,7 +404,7 @@ void EditExportPage::buildUi() {
                                                  "QProgressBar::chunk { background:%2; border-radius:3px; }")
                                       .arg(P::kBg3, P::kAccent));
 
-    exporting_detail_label_ = new QLabel(QStringLiteral("Stream-copy \xb7 no quality loss"), exporting_panel_);
+    exporting_detail_label_ = new QLabel(QStringLiteral("Stream-copy \xc2\xb7 no quality loss"), exporting_panel_);
     exporting_detail_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(P::kText2));
 
     exporting_layout->addWidget(exporting_status_label_);
@@ -605,7 +607,27 @@ void EditExportPage::setPhase(Phase phase) {
 }
 
 void EditExportPage::refreshPhase() {
-    // Show/hide panels
+    // ---- Stepper highlight ----
+    // Map phases to the logical stepper step (Review/Edit → "Review" active,
+    // Output/Exporting → "Output" active, Done/Failed → "Output" stays active).
+    const auto stepStyle = [&](bool active) -> QString {
+        return active ? QStringLiteral("QLabel { color:%1; font-weight:600; font-size:12px; "
+                                       "border-bottom: 2px solid %1; padding-bottom:2px; }")
+                            .arg(P::kAccent)
+                      : QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(P::kText3);
+    };
+    const bool step_review = (phase_ == Phase::Review);
+    const bool step_edit = (phase_ == Phase::Edit);
+    const bool step_output =
+        (phase_ == Phase::Output || phase_ == Phase::Exporting || phase_ == Phase::Done || phase_ == Phase::Failed);
+    if (stepper_review_lbl_)
+        stepper_review_lbl_->setStyleSheet(stepStyle(step_review));
+    if (stepper_edit_lbl_)
+        stepper_edit_lbl_->setStyleSheet(stepStyle(step_edit));
+    if (stepper_output_lbl_)
+        stepper_output_lbl_->setStyleSheet(stepStyle(step_output));
+
+    // ---- Show/hide panels ----
     const bool show_player = (phase_ == Phase::Review || phase_ == Phase::Edit);
     const bool show_edit = (phase_ == Phase::Review || phase_ == Phase::Edit);
     const bool show_timeline = (phase_ == Phase::Review || phase_ == Phase::Edit);
@@ -662,7 +684,7 @@ void EditExportPage::refreshPhase() {
                 QStringLiteral("QLabel { color:%1; font-weight:600; font-size:16px; }").arg(P::kOk));
         }
         if (result_detail_label_)
-            result_detail_label_->setText(QStringLiteral("Sprint-demo.mp4 \xb7 stream-copy \xb7 lossless"));
+            result_detail_label_->setText(QStringLiteral("Sprint-demo.mp4 \xc2\xb7 stream-copy \xc2\xb7 lossless"));
         break;
     case Phase::Failed:
         primary_action_btn_->setText(QStringLiteral("Retry export"));

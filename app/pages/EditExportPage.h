@@ -72,6 +72,9 @@ class EditExportPage : public QWidget {
 
     // Phase-Stepper
     QWidget* stepper_widget_ = nullptr;
+    QLabel* stepper_review_lbl_ = nullptr;
+    QLabel* stepper_edit_lbl_ = nullptr;
+    QLabel* stepper_output_lbl_ = nullptr;
 
     // Player-Area
     QFrame* player_frame_ = nullptr;

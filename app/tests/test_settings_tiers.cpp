@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSettings>
+#include <QSlider>
 #include <QSpinBox>
 #include <QTemporaryDir>
 
@@ -395,7 +396,9 @@ TEST_F(SettingsTiersTest, ConfigPage_AudioExpertSection_VisibleInExpertMode) {
 
 TEST_F(SettingsTiersTest, ConfigPage_AudioExpertControls_Exist) {
     ConfigPage page(output_defaults_, video_defaults_);
-    EXPECT_NE(page.findChild<QSpinBox*>(QStringLiteral("micGainDbSpin")), nullptr);
+    // Polish-R1: mic gain is now a QSlider (micGainSlider) + read-only QLabel (micGainDbLabel).
+    EXPECT_NE(page.findChild<QSlider*>(QStringLiteral("micGainSlider")), nullptr);
+    EXPECT_NE(page.findChild<QLabel*>(QStringLiteral("micGainDbLabel")), nullptr);
     EXPECT_NE(page.findChild<QComboBox*>(QStringLiteral("micChannelModeCombo")), nullptr);
     EXPECT_NE(page.findChild<QSpinBox*>(QStringLiteral("audioBitrateKbpsSpin")), nullptr);
     EXPECT_NE(page.findChild<QComboBox*>(QStringLiteral("opusFrameDurationCombo")), nullptr);

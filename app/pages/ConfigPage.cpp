@@ -19,6 +19,7 @@
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSize>
+#include <QSlider>
 #include <QSpinBox>
 #include <QStandardItemModel>
 #include <QStringList>
@@ -1029,6 +1030,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             ph4->setLabel(QStringLiteral("HDR10 + colour metadata"));
             ph4->setVersionTag(QStringLiteral("0.7"));
             fes_layout->addWidget(ph4);
+
+            auto* ph5 = new ui::widgets::PlaceholderRow(fmt_expert_section_);
+            ph5->setObjectName(QStringLiteral("chromaSubsamplingPlaceholder"));
+            ph5->setLabel(QStringLiteral("Chroma subsampling (4:2:0 \xc2\xb7 4:2:2 \xc2\xb7 4:4:4)"));
+            ph5->setVersionTag(QStringLiteral("0.7"));
+            fes_layout->addWidget(ph5);
         }
 
         fmt_layout->addWidget(fmt_expert_section_);
@@ -1216,7 +1223,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         aes_rule_top->setProperty("frameRole", "sectionRuleLine");
         aes_layout->addWidget(aes_rule_top);
 
-        // Mic gain dB
+        // Mic gain — QSlider (–12…+12 dB, step 1) + read-only dB label.
+        // Polish-R1: switched from QSpinBox to QSlider per mockup (suite-settings.jsx).
         {
             auto* row = new QWidget(audio_expert_section_);
             auto* hl = new QHBoxLayout(row);
@@ -1225,13 +1233,27 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             auto* lbl = new QLabel(QStringLiteral("Mic gain"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
             hl->addWidget(lbl, 1);
-            mic_gain_db_spin_ = new QSpinBox(row);
-            mic_gain_db_spin_->setObjectName(QStringLiteral("micGainDbSpin"));
-            mic_gain_db_spin_->setRange(-12, 12);
-            mic_gain_db_spin_->setSuffix(QStringLiteral(" dB"));
-            mic_gain_db_spin_->setValue(
-                static_cast<int>(std::roundf(20.f * std::log10f(std::max(0.001f, audio_ui_state_.mic_gain_linear)))));
-            hl->addWidget(mic_gain_db_spin_, 0, Qt::AlignVCenter);
+
+            const int init_db =
+                static_cast<int>(std::roundf(20.f * std::log10f(std::max(0.001f, audio_ui_state_.mic_gain_linear))));
+
+            mic_gain_slider_ = new QSlider(Qt::Horizontal, row);
+            mic_gain_slider_->setObjectName(QStringLiteral("micGainSlider"));
+            mic_gain_slider_->setRange(-12, 12);
+            mic_gain_slider_->setSingleStep(1);
+            mic_gain_slider_->setPageStep(3);
+            mic_gain_slider_->setValue(init_db);
+            mic_gain_slider_->setFixedWidth(120);
+            hl->addWidget(mic_gain_slider_, 0, Qt::AlignVCenter);
+
+            mic_gain_db_label_ = new QLabel(row);
+            mic_gain_db_label_->setObjectName(QStringLiteral("micGainDbLabel"));
+            mic_gain_db_label_->setProperty("labelRole", "settingsValueLabel");
+            mic_gain_db_label_->setFixedWidth(42);
+            mic_gain_db_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            mic_gain_db_label_->setText(QStringLiteral("%1 dB").arg(init_db));
+            hl->addWidget(mic_gain_db_label_, 0, Qt::AlignVCenter);
+
             row->setProperty("settingsRow", true);
             aes_layout->addWidget(row);
         }
@@ -1991,8 +2013,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         emitCurrentVideoSettings();
     });
 
-    // PS-PHASE-C: Audio expert controls.
-    connect(mic_gain_db_spin_, &QSpinBox::valueChanged, this, [this](int db) {
+    // PS-PHASE-C: Audio expert controls (Polish-R1: slider replaces spinbox for mic gain).
+    connect(mic_gain_slider_, &QSlider::valueChanged, this, [this](int db) {
+        if (mic_gain_db_label_)
+            mic_gain_db_label_->setText(QStringLiteral("%1 dB").arg(db));
         audio_ui_state_.mic_gain_linear = std::powf(10.f, static_cast<float>(db) / 20.f);
         emitCurrentAudioSettings();
     });
@@ -3106,10 +3130,13 @@ void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
     applyAudioConfigurationState();
     // PS-PHASE-C: sync expert audio controls if visible.
     if (expert_mode_enabled_) {
-        if (mic_gain_db_spin_) {
-            const QSignalBlocker b(mic_gain_db_spin_);
-            mic_gain_db_spin_->setValue(
-                static_cast<int>(std::roundf(20.f * std::log10f(std::max(0.001f, audio_ui_state_.mic_gain_linear)))));
+        if (mic_gain_slider_) {
+            const QSignalBlocker b(mic_gain_slider_);
+            const int db =
+                static_cast<int>(std::roundf(20.f * std::log10f(std::max(0.001f, audio_ui_state_.mic_gain_linear))));
+            mic_gain_slider_->setValue(db);
+            if (mic_gain_db_label_)
+                mic_gain_db_label_->setText(QStringLiteral("%1 dB").arg(db));
         }
         if (mic_channel_mode_combo_) {
             const QSignalBlocker b(mic_channel_mode_combo_);
@@ -3337,10 +3364,13 @@ void ConfigPage::updateExpertModeVisibility() {
         audio_expert_section_->setVisible(expert_mode_enabled_);
     if (expert_mode_enabled_) {
         // Seed audio expert controls from model.
-        if (mic_gain_db_spin_) {
-            const QSignalBlocker b(mic_gain_db_spin_);
-            mic_gain_db_spin_->setValue(
-                static_cast<int>(std::roundf(20.f * std::log10f(std::max(0.001f, audio_ui_state_.mic_gain_linear)))));
+        if (mic_gain_slider_) {
+            const QSignalBlocker b(mic_gain_slider_);
+            const int db =
+                static_cast<int>(std::roundf(20.f * std::log10f(std::max(0.001f, audio_ui_state_.mic_gain_linear))));
+            mic_gain_slider_->setValue(db);
+            if (mic_gain_db_label_)
+                mic_gain_db_label_->setText(QStringLiteral("%1 dB").arg(db));
         }
         if (mic_channel_mode_combo_) {
             const QSignalBlocker b(mic_channel_mode_combo_);

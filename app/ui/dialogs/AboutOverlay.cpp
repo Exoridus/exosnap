@@ -238,15 +238,25 @@ QWidget* AboutOverlay::buildCard() {
 
     // ── Assemble container ────────────────────────────────────────────────────────────────────
     container_layout->addWidget(card);
-    container_layout->addSpacing(14);
+    container_layout->addSpacing(10);
 
-    // ── Software updates panel (PS-PHASE-E: moved from ConfigPage Settings) ──────────────────
-    update_panel_ = new UpdateSettingsPanel(container);
+    // ── Software updates panel — wrapped in its own card frame so it shares the same
+    //    visual material as the info card above (no bare update controls rendered on the scrim).
+    //    (PS-PHASE-E: moved from ConfigPage Settings; card wrapper added in Polish-R1.)
+    auto* update_card = new QFrame(container);
+    update_card->setObjectName(QStringLiteral("aboutUpdateCard"));
+
+    auto* update_card_layout = new QVBoxLayout(update_card);
+    update_card_layout->setContentsMargins(0, 0, 0, 0);
+    update_card_layout->setSpacing(0);
+
+    update_panel_ = new UpdateSettingsPanel(update_card);
     update_panel_->setObjectName(QStringLiteral("aboutUpdatePanel"));
     // Forward the panel's checkRequested signal so MainWindow can connect to the overlay.
     connect(update_panel_, &UpdateSettingsPanel::checkRequested, this, &AboutOverlay::checkForUpdatesRequested);
 
-    container_layout->addWidget(update_panel_);
+    update_card_layout->addWidget(update_panel_);
+    container_layout->addWidget(update_card);
 
     return container;
 }

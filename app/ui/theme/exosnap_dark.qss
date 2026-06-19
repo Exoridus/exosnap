@@ -1453,8 +1453,15 @@ QLabel[labelRole="resultTechnical"] {
 
 /* In-window About surface: the #aboutOverlay backdrop dim is painted in code
    (a plain non-opaque QWidget) so it composites over the page beneath; only the
-   centered card carries a styled background. */
+   centered cards carry a styled background. */
 QFrame#aboutCard {
+    background: ${bg1};
+    border: 1px solid ${line2};
+    border-radius: ${radius-lg}px;
+}
+
+/* Update-panel card: same surface/border as the info card, forms one visual unit. */
+QFrame#aboutUpdateCard {
     background: ${bg1};
     border: 1px solid ${line2};
     border-radius: ${radius-lg}px;

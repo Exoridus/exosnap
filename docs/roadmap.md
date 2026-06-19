@@ -82,7 +82,7 @@ Encoders must never be forced to present as "CRF" when they don't use it.
 | `0.8.0`  | Software encoding                  | x264, optional SVT-AV1, GPU→CPU readback, performance warnings, fallback policy, software capability matrix. |
 | `0.9.0`  | AMD hardware                       | Native AMF, hardware test matrix, diagnostics, fallback behavior. |
 | `0.10.0` | Intel hardware                     | Native oneVPL/QSV, allocator/surface integration, hardware test matrix, diagnostics, fallback behavior. |
-| `0.11.0` | Quick Trim & markers               | Quick Trim (stream copy), marker display, chapter export, optional post-recording transcription. |
+| `0.11.0` | Edit / Output / Save               | Quick Trim (stream copy), marker display, chapter export; Edit/Output/Save surface (ADR 0022) shipping as interactive shell; optional post-recording transcription deferred. |
 | `0.12.x` | RC stabilization                   | Long recordings, recovery drills, all GPU vendors, fullscreen/borderless/exclusive capture matrix (deferred from 0.3.0), A/V sync, updater, installer, signing, privacy review, compatibility matrix. |
 | `1.0.0`  | First stable release               | Only once these promises are genuinely validated. |
 
@@ -191,3 +191,37 @@ persistent panel) and the fullscreen/borderless/exclusive capture matrix was def
 Stage 0 via assisted GitHub issue, Stage 1 via automated opt-in upload to Sentry with EU data
 residency, symbol pipeline) and the update system (Stable/Preview channels, ed25519 (Monocypher
 verify) + SHA-256 signature verification, rollback).
+
+---
+
+## Production Suite design changes (shipped in feat/production-suite-redesign)
+
+These structural UI decisions took effect before the 0.5.0 release and are now the canonical state:
+
+**Top-level navigation: 6 → 5 items.** Hotkeys was removed as a top-level nav item and embedded as
+a full-width card inside Settings (below the two-column grid). The IA is:
+`Record · Settings · Diagnostics · Logs · About`. Settings sections: Video · Audio · Output · Webcam
+· Hotkeys · Advanced (expert-only, collapsible via SettingsCardExpander).
+
+**Update-check UI → About overlay.** The UpdateSettingsPanel was moved from the Settings page into
+the About overlay (PS-PHASE-E). It is no longer reachable from Settings. ADR 0012 (update security
+model) is unchanged; only the UI placement changed.
+
+**Notification Hub.** A persistent in-app notification layer sits alongside toast notifications
+(ADR 0016). The tray badge counts unread items; the hub panel (accessible via the bell icon in the
+title bar) lists them persistently. Architecture: `NotificationHub` singleton; toasts fire-and-forget
+via `INotificationService`; hub entries survive until dismissed. See ADR 0016 for the on-screen
+overlay architecture context.
+
+**Edit / Output / Save surface (0.11 wave, ADR 0022).** A new post-stop surface (`EditExportPage`)
+is an in-window mode (not a tab or a separate dialog): after recording stops the stack switches to
+the Edit/Export view, and Back returns to Record. Three phases (Review → Edit → Output) are stepped;
+the engine implementation (Quick Trim, stream-copy remux, chapter export) is deferred to 0.11. The
+surface ships as a UI shell + placeholder banner in the Production Suite wave.
+
+**Settings Expert split.** The Quality card gained an Expert section (CQ · VBR · CBR rate control,
+bitrate, frame-timing — ADR 0009 mapping) hidden behind the Expert toggle. Audio likewise has an
+Expert section (mic gain slider, channel mode, bitrate, Opus complexity/frame-duration — ADR 0011
+context). v1.0-placeholder rows (chroma subsampling 0.7, HEVC codec 0.7, bit depth 0.7, HDR10 0.7,
+PCM/FLAC codecs 0.6, noise gate/AGC/limiter 0.6) are shown in the expert sections to communicate
+the roadmap without enabling unimplemented controls.

@@ -26,6 +26,7 @@ class QMenu;
 class QPushButton;
 class QResizeEvent;
 class QScrollArea;
+class QSlider;
 class QSpinBox;
 class QString;
 class QToolButton;
@@ -441,7 +442,9 @@ class ConfigPage : public QWidget {
 
     // PS-PHASE-C: Expert Audio section — mic gain, channel mode, bitrate, Opus params + placeholders.
     QWidget* audio_expert_section_ = nullptr;
-    QSpinBox* mic_gain_db_spin_ = nullptr;
+    // Mic-gain: QSlider (–12…+12 dB, step 1) + read-only dB label (Polish-R1: Slider per mockup).
+    QSlider* mic_gain_slider_ = nullptr;
+    QLabel* mic_gain_db_label_ = nullptr;
     QComboBox* mic_channel_mode_combo_ = nullptr;
     QSpinBox* audio_bitrate_kbps_spin_ = nullptr;
     QComboBox* opus_frame_duration_combo_ = nullptr;
