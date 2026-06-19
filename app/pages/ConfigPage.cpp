@@ -3,6 +3,7 @@
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -369,8 +370,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
         // Such-Pill: Container-Widget mit Lupe + QLineEdit
         auto* search_pill = new QWidget(header_zone);
+        settings_search_pill_ = search_pill;
         search_pill->setObjectName(QStringLiteral("settingsSearchPill"));
         search_pill->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        search_pill->setFixedHeight(34);
         auto* pill_hl = new QHBoxLayout(search_pill);
         pill_hl->setContentsMargins(10, 6, 10, 6);
         pill_hl->setSpacing(6);
@@ -1498,23 +1501,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     // D6: ExoToggle replaces QPushButton for Expert-Mode.
     connect(expert_mode_toggle_, &QAbstractButton::clicked, this, [this]() {
-        const bool current = expert_mode_enabled_;
-        if (!current) {
-            // Einschalten: Bestätigungsdialog zeigen
-            auto* msgbox = new QMessageBox(this);
-            msgbox->setWindowTitle(QStringLiteral("Enable Expert mode?"));
-            msgbox->setText(QStringLiteral("Expert mode reveals lower-level controls that can produce incompatible "
-                                           "files.\n\nEnable only if you know what you are doing."));
-            msgbox->setStandardButtons(QMessageBox::Yes | QMessageBox::Cancel);
-            msgbox->setDefaultButton(QMessageBox::Cancel);
-            if (msgbox->exec() != QMessageBox::Yes) {
-                // Rollback: Toggle zurücksetzen
-                const QSignalBlocker b(expert_mode_toggle_);
-                expert_mode_toggle_->setOn(false);
-                return;
-            }
-        }
-        expert_mode_enabled_ = !current;
+        expert_mode_enabled_ = !expert_mode_enabled_;
         {
             const QSignalBlocker b(expert_mode_toggle_);
             expert_mode_toggle_->setOn(expert_mode_enabled_);
@@ -1529,6 +1516,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     // SETTINGS-SEARCH-R1: live search filter wired to textChanged.
     connect(settings_search_box_, &QLineEdit::textChanged, this, &ConfigPage::applySettingsSearch);
+
+    // Search pill focus indicator: install an event filter on the QLineEdit so we
+    // can set a "focused" dynamic property on the pill when focus enters/leaves.
+    // (Qt QSS does not support :focus-within; a dynamic property + repolish is the
+    // standard Qt workaround.)
+    settings_search_box_->installEventFilter(this);
+
     // audio_separate_expander_ is null (removed in Phase 1b); audioSeparateExpanderChanged
     // is kept in the header for backward compatibility but is never emitted.
 
@@ -1639,6 +1633,19 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 void ConfigPage::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     updateResponsiveLayout();
+}
+
+bool ConfigPage::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == settings_search_box_ && settings_search_pill_) {
+        const auto t = event->type();
+        if (t == QEvent::FocusIn || t == QEvent::FocusOut) {
+            const bool focused = (t == QEvent::FocusIn);
+            settings_search_pill_->setProperty("focused", focused);
+            settings_search_pill_->style()->unpolish(settings_search_pill_);
+            settings_search_pill_->style()->polish(settings_search_pill_);
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void ConfigPage::updateResponsiveLayout() {
@@ -3211,6 +3218,7 @@ void ConfigPage::setReadinessStatus(const QString& status_label) {
         w->style()->polish(w);
     };
     if (readiness_panel_) {
+        readiness_panel_->setVisible(!ready);
         readiness_panel_->setProperty("stateRole", state);
         repolish(readiness_panel_);
     }

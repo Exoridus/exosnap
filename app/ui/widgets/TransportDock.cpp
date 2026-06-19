@@ -39,15 +39,15 @@ void setStyledProperty(QWidget* widget, const char* name, const QString& value) 
     widget->update();
 }
 
-// Build a 44×44 round camera icon button for the dock's capture-frame action.
-// The camera glyph is the same Lucide-compatible SVG path used by AudioSourceToggle
-// for the "webcam" key.  State (idle/hover/pressed/disabled) is styled via QSS on the
+// Build a 44×44 round image icon button for the dock's capture-frame action.
+// Uses the Lucide "image" path (landscape photo framing) to distinguish it from
+// the webcam toggle which uses the camera icon.
+// State (idle/hover/pressed/disabled) is styled via QSS on the
 // "dockAction=captureFrame" property — no manual painting required.
 QPushButton* makeCaptureFrameButton(QWidget* parent) {
-    // Camera SVG: body + lens — identical to AudioSourceToggle "webcam" icon path.
-    constexpr auto kCameraPath =
-        "M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"
-        "M12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6z";
+    // Lucide "image" icon — rectangular frame with mountain + sun, distinct from the
+    // camera glyph used by AudioSourceToggle for the "webcam" key.
+    constexpr auto kCameraPath = "M21 15a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2z";
 
     // Build an SVG at a neutral color; QSS will tint via the object-name rule.
     QByteArray svg;

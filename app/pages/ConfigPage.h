@@ -158,6 +158,7 @@ class ConfigPage : public QWidget {
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
     void updateResponsiveLayout();
@@ -411,6 +412,7 @@ class ConfigPage : public QWidget {
     QWidget* developer_card_ = nullptr;
 
     // SETTINGS-SEARCH-R1: settings search box and match count label.
+    QWidget* settings_search_pill_ = nullptr;
     QLineEdit* settings_search_box_ = nullptr;
     QLabel* settings_search_count_label_ = nullptr;
     // "Enable Expert mode to show" hint shown when a Developer card keyword matches
