@@ -2,6 +2,7 @@
 
 #include "../brand/BrandMarkWidget.h"
 #include "../theme/ExoSnapPalette.h"
+#include "../widgets/NotificationBell.h"
 #include "../widgets/StatusPill.h"
 
 #include <QAbstractButton>
@@ -80,6 +81,13 @@ OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     status_pill_->setTone(ui::widgets::StatusPill::Tone::Ready);
     status_layout->addWidget(status_pill_, 0, Qt::AlignVCenter);
 
+    // PS-PHASE-B: Notification bell — sits between the status pill and the window buttons.
+    auto* bell_spacer = new QWidget(this);
+    bell_spacer->setFixedWidth(10);
+    bell_ = new ui::widgets::NotificationBell(this);
+    bell_->setObjectName("titlebarBell");
+    connect(bell_, &ui::widgets::NotificationBell::clicked, this, &OperationalTitleBar::bellClicked);
+
     // Window controls.
     auto* controls = new QWidget(this);
     controls->setObjectName("titlebarControls");
@@ -107,6 +115,8 @@ OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     root->addWidget(nav_container);
     root->addWidget(drag_slot, 1);
     root->addWidget(status_slot, 0, Qt::AlignVCenter);
+    root->addWidget(bell_spacer);
+    root->addWidget(bell_, 0, Qt::AlignVCenter);
     root->addWidget(controls);
 
     connect(minimize_btn_, &QPushButton::clicked, this, &OperationalTitleBar::minimizeRequested);
@@ -308,6 +318,11 @@ void OperationalTitleBar::paintEvent(QPaintEvent* event) {
     // and preview border, not the top-chrome border line.
     painter.setPen(QPen(QColor(255, 255, 255, 18), 1.0));
     painter.drawLine(0, height() - 1, width(), height() - 1);
+}
+
+void OperationalTitleBar::setBellUnreadCount(int count) {
+    if (bell_)
+        bell_->setUnreadCount(count);
 }
 
 void OperationalTitleBar::refreshStatusChip() {

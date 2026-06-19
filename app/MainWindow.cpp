@@ -15,6 +15,7 @@
 #include "services/GlobalHotkeyService.h"
 #include "services/UpdateService.h"
 #include "ui/WindowGeometryPolicy.h"
+#include "ui/chrome/NotificationHubPanel.h"
 #include "ui/chrome/OperationalTitleBar.h"
 #include "ui/chrome/RecordingStatusGuards.h"
 #include "ui/dialogs/AboutOverlay.h"
@@ -32,6 +33,7 @@
 #include "ui/theme/ExoSnapPalette.h"
 #include "ui/theme/ExoSnapTheme.h"
 #include "ui/tray/TrayPresence.h"
+#include "ui/widgets/NotificationBell.h"
 #include "ui/widgets/WebcamSetupPanel.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 #include "visual_tests/VisualScenario.h"
@@ -552,10 +554,29 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     source_picker_overlay_->hide();
     record_page_->setSourcePickerOverlay(source_picker_overlay_);
 
+    // PS-PHASE-B: Notification hub panel — top-level popup, no Qt parent.
+    notification_hub_ = new ui::chrome::NotificationHubPanel(nullptr);
+    notification_hub_->hide();
+
+#if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
+    notification_hub_->setDemoAdvisories(true);
+    title_bar_->setBellUnreadCount(2);
+#endif
+
+    // Deep-link: navigate to Settings and close the hub.
+    connect(notification_hub_, &ui::chrome::NotificationHubPanel::deepLinkRequested, this,
+            [this](const QString& /*target*/) {
+                notification_hub_->hide();
+                navigateToPage(kSettingsPageIndex);
+            });
+
+    connect(title_bar_, &ui::chrome::OperationalTitleBar::bellClicked, this, &MainWindow::toggleNotificationHub);
+
+    // PS-PHASE-B: Hotkeys removed from primary nav (6→5 items); HotkeysPage stays in
+    // the stack at kHotkeysPageIndex and remains reachable via programmatic navigation.
     title_bar_->setNavItems({
         {QStringLiteral("Record"), kRecordPageIndex},
         {QStringLiteral("Settings"), kSettingsPageIndex},
-        {QStringLiteral("Hotkeys"), kHotkeysPageIndex},
         {QStringLiteral("Diagnostics"), kDiagnosticsPageIndex},
         {QStringLiteral("Logs"), kLogsPageIndex},
         {QStringLiteral("About"), -1},
@@ -1334,6 +1355,27 @@ MainWindow::~MainWindow() {
     // NOTIFY-TOASTS-R1: toast window is also top-level; destroy explicitly.
     delete notification_toast_window_;
     notification_toast_window_ = nullptr;
+
+    // PS-PHASE-B: hub panel is also top-level (no Qt parent); destroy explicitly.
+    delete notification_hub_;
+    notification_hub_ = nullptr;
+}
+
+void MainWindow::toggleNotificationHub() {
+    if (!notification_hub_)
+        return;
+    if (notification_hub_->isVisible()) {
+        notification_hub_->hide();
+        return;
+    }
+    if (!title_bar_->bellWidget())
+        return;
+    // Anchor: bottom-right corner of the bell widget, mapped to global coordinates.
+    const QWidget* bell = title_bar_->bellWidget();
+    const QPoint bell_bottom_right = bell->mapToGlobal(QPoint(bell->width(), bell->height()));
+    notification_hub_->anchorToPoint(bell_bottom_right + QPoint(0, 4));
+    notification_hub_->show();
+    notification_hub_->raise();
 }
 
 void MainWindow::updateRecordingOverlay() {

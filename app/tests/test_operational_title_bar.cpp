@@ -9,6 +9,7 @@
 
 #include "ui/chrome/OperationalTitleBar.h"
 #include "ui/chrome/RecordingStatusGuards.h"
+#include "ui/widgets/NotificationBell.h"
 #include "ui/widgets/StatusPill.h"
 
 namespace exosnap {
@@ -32,10 +33,11 @@ class OperationalTitleBarTest : public ::testing::Test {
     }
 
     // Page indices mirror the MainWindow page stack ordering used in production.
+    // Hotkeys is at stack index 2 but no longer appears in the primary nav (PS-PHASE-B).
     static QVector<ui::chrome::OperationalTitleBar::NavItem> DefaultNavItems() {
         return {
-            {QStringLiteral("Record"), 0},      {QStringLiteral("Settings"), 1}, {QStringLiteral("Hotkeys"), 2},
-            {QStringLiteral("Diagnostics"), 3}, {QStringLiteral("Logs"), 4},     {QStringLiteral("About"), -1},
+            {QStringLiteral("Record"), 0}, {QStringLiteral("Settings"), 1}, {QStringLiteral("Diagnostics"), 3},
+            {QStringLiteral("Logs"), 4},   {QStringLiteral("About"), -1},
         };
     }
 
@@ -53,8 +55,8 @@ TEST_F(OperationalTitleBarTest, TopNav_ContainsRequiredTabsInOrder) {
     for (const QPushButton* tab : tabs)
         labels << tab->text();
 
-    const QStringList expected = {QStringLiteral("Record"),      QStringLiteral("Settings"), QStringLiteral("Hotkeys"),
-                                  QStringLiteral("Diagnostics"), QStringLiteral("Logs"),     QStringLiteral("About")};
+    const QStringList expected = {QStringLiteral("Record"), QStringLiteral("Settings"), QStringLiteral("Diagnostics"),
+                                  QStringLiteral("Logs"), QStringLiteral("About")};
     EXPECT_EQ(labels, expected);
 }
 
@@ -81,8 +83,9 @@ TEST_F(OperationalTitleBarTest, TopNav_AboutIsActionNotCheckablePage) {
             about = tab;
     }
 
-    // The five routed pages are checkable tabs; About opens a dialog and must not be checkable.
-    EXPECT_EQ(checkable_count, 5);
+    // PS-PHASE-B: four routed pages are checkable tabs (Record/Settings/Diagnostics/Logs);
+    // About opens an in-window overlay and must not be checkable.
+    EXPECT_EQ(checkable_count, 4);
     ASSERT_NE(about, nullptr);
     EXPECT_FALSE(about->isCheckable());
 }
@@ -320,6 +323,48 @@ TEST_F(OperationalTitleBarTest, StatusPill_StartingUsesInfoTone) {
     bar.setStatusLabel(QStringLiteral("STARTING"));
     EXPECT_EQ(pill->text(), QStringLiteral("Starting"));
     EXPECT_EQ(pill->tone(), ui::widgets::StatusPill::Tone::Info);
+}
+
+// ── PS-PHASE-B: 5-item nav + notification bell ───────────────────────────────
+
+TEST_F(OperationalTitleBarTest, TopNav_HasFiveItems) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+    EXPECT_EQ(NavTabs(bar).size(), 5);
+}
+
+TEST_F(OperationalTitleBarTest, TopNav_DoesNotContainHotkeys) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setNavItems(DefaultNavItems());
+    for (const QPushButton* tab : NavTabs(bar))
+        EXPECT_NE(tab->text(), QStringLiteral("Hotkeys")) << "Hotkeys must not appear in the slim nav";
+}
+
+TEST_F(OperationalTitleBarTest, Bell_PresentInTitleBar) {
+    ui::chrome::OperationalTitleBar bar;
+    EXPECT_NE(bar.bellWidget(), nullptr);
+}
+
+TEST_F(OperationalTitleBarTest, Bell_DefaultZeroCount) {
+    ui::chrome::OperationalTitleBar bar;
+    ASSERT_NE(bar.bellWidget(), nullptr);
+    EXPECT_EQ(bar.bellWidget()->unreadCount(), 0);
+}
+
+TEST_F(OperationalTitleBarTest, Bell_SetUnreadCountPropagates) {
+    ui::chrome::OperationalTitleBar bar;
+    bar.setBellUnreadCount(3);
+    ASSERT_NE(bar.bellWidget(), nullptr);
+    EXPECT_EQ(bar.bellWidget()->unreadCount(), 3);
+}
+
+TEST_F(OperationalTitleBarTest, Bell_ClickEmitsBellClickedSignal) {
+    ui::chrome::OperationalTitleBar bar;
+    int click_count = 0;
+    QObject::connect(&bar, &ui::chrome::OperationalTitleBar::bellClicked, [&]() { ++click_count; });
+    ASSERT_NE(bar.bellWidget(), nullptr);
+    bar.bellWidget()->click();
+    EXPECT_EQ(click_count, 1);
 }
 
 } // namespace

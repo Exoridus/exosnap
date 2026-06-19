@@ -40,6 +40,7 @@ struct VisualScenario;
 #endif
 
 namespace ui::chrome {
+class NotificationHubPanel;
 class OperationalTitleBar;
 } // namespace ui::chrome
 
@@ -180,6 +181,9 @@ class MainWindow : public QMainWindow {
     // Push the current context to the crash engine + session sidecar. Cheap.
     void refreshCrashSessionContext();
 
+    // PS-PHASE-B: toggle the notification hub panel popup.
+    void toggleNotificationHub();
+
     // RECORDING-OVERLAY-R1: update the recording overlay visibility/state.
     void updateRecordingOverlay();
     // DIAGNOSTICS-OVERLAY-R1: update the diagnostics overlay visibility/state.
@@ -227,6 +231,8 @@ class MainWindow : public QMainWindow {
     // NOTIFY-TOASTS-R1: manager (owned by this) + toast window (top-level, no parent).
     notifications::NotificationManager* notification_manager_ = nullptr;
     ui::overlay::NotificationToastWindow* notification_toast_window_ = nullptr;
+    // PS-PHASE-B: notification hub panel (top-level popup, no Qt parent).
+    ui::chrome::NotificationHubPanel* notification_hub_ = nullptr;
     // UPDATE-WIRE-R1 (ADR 0012): Qt bridge to the update engine (owned by this).
     UpdateService* update_service_ = nullptr;
     // Last update check's releases-page URL (for the panel's "Open releases" / notes link).

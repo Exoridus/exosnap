@@ -79,6 +79,8 @@ qt_add_executable(exosnap WIN32
     ui/brand/BrandMarkWidget.cpp
     ui/WindowGeometryPolicy.h
     ui/WindowGeometryPolicy.cpp
+    ui/chrome/NotificationHubPanel.h
+    ui/chrome/NotificationHubPanel.cpp
     ui/chrome/OperationalTitleBar.h
     ui/chrome/OperationalTitleBar.cpp
     ui/chrome/GlobalRecordingBar.h
@@ -676,8 +678,10 @@ exosnap_add_gtest(
         tests/test_operational_title_bar.cpp
         ui/chrome/OperationalTitleBar.cpp
         ui/brand/BrandMarkWidget.cpp
+        ui/widgets/NotificationBell.cpp
         ui/widgets/StatusPill.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
 )
 target_include_directories(operational_title_bar_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(operational_title_bar_tests PROPERTIES AUTOMOC ON)
@@ -741,6 +745,19 @@ exosnap_add_gtest(
 )
 target_include_directories(advisory_item_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(advisory_item_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME notification_hub_panel_tests
+    TEST_PREFIX suite.
+    SOURCES
+        tests/test_notification_hub_panel.cpp
+        ui/chrome/NotificationHubPanel.cpp
+        ui/widgets/AdvisoryItem.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(notification_hub_panel_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(notification_hub_panel_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME corner_capture_button_tests
