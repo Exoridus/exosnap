@@ -674,11 +674,16 @@ QPushButton#recordOpenDiagnosticsButton {
 QToolButton[labelRole="compareGlyph"] {
     background: transparent;
     border: none;
+    border-radius: 0;
     padding: 0;
+    margin: 0;
+    min-height: 0;
+    min-width: 0;
 }
 QToolButton[labelRole="compareGlyph"]:hover,
 QToolButton[labelRole="compareGlyph"]:focus {
     background: transparent;
+    border: none;
     outline: none;
 }
 
@@ -749,6 +754,13 @@ QLabel[labelRole="audioSettingsRowLabel"] {
 QLabel[labelRole="audioSettingsNote"] {
     font-size: 11.5px;
     color: ${text2};
+}
+
+/* D6: Settings quiet-row left-side label — normal case, no mono/uppercase.
+   Used in Format, Output, Presence, Appearance, and Webcam settings rows. */
+QLabel[labelRole="settingsRowLabel"] {
+    font-size: 13px;
+    color: ${text1};
 }
 
 QWidget#captureTargetCard {

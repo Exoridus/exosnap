@@ -46,6 +46,8 @@ CompareHint::CompareHint(const QString& compare_key, const QString& current_valu
     : QToolButton(parent), compare_key_(compare_key), current_value_(current_value) {
     using P = ui::theme::ExoSnapPalette;
 
+    // Flat "compareGlyph" role — same treatment as InfoHintIcon's "infoGlyph".
+    setProperty("labelRole", "compareGlyph");
     setAutoRaise(true);
     setFocusPolicy(Qt::TabFocus);
     setFixedSize(18, 18);

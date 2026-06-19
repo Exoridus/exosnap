@@ -73,7 +73,7 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
 
     // Device row: combo + compact rescan button
     auto* device_label = new QLabel(QStringLiteral("Camera"), right_col);
-    device_label->setProperty("labelRole", "fieldLabel");
+    device_label->setProperty("labelRole", "settingsRowLabel");
     right_layout->addWidget(device_label);
 
     auto* device_row = new QWidget(right_col);
@@ -106,7 +106,7 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
 
     // Resolution / FPS
     auto* res_label = new QLabel(QStringLiteral("Resolution / FPS"), right_col);
-    res_label->setProperty("labelRole", "fieldLabel");
+    res_label->setProperty("labelRole", "settingsRowLabel");
     right_layout->addWidget(res_label);
 
     resolution_combo_ = new QComboBox(right_col);

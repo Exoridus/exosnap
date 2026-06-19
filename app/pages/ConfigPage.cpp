@@ -75,9 +75,18 @@ QLabel* makeCardTitle(const QString& text, QWidget* parent) {
 }
 
 // Mono uppercase "eyebrow" label that sits directly above a form control.
+// Used outside the Settings Output card (e.g. Advanced / Developer section).
 QLabel* makeFieldLabel(const QString& text, QWidget* parent) {
     auto* l = new QLabel(text.toUpper(), parent);
     l->setProperty("labelRole", "fieldLabel");
+    return l;
+}
+
+// D6: Normal-case sub-section label for the Output card (no mono/uppercase).
+// Matches the settingsRowLabel role used by makeSettingsRow left-side labels.
+QLabel* makeOutputSubLabel(const QString& text, QWidget* parent) {
+    auto* l = new QLabel(text, parent);
+    l->setProperty("labelRole", "settingsRowLabel");
     return l;
 }
 
@@ -167,6 +176,22 @@ QWidget* makeFieldLabelWithHint(const QString& text, const QString& hint_text, Q
     hl->setSpacing(4);
     auto* label = new QLabel(text.toUpper(), row);
     label->setProperty("labelRole", "fieldLabel");
+    auto* hint = new ui::widgets::InfoHintIcon(hint_text, row);
+    hl->addWidget(label);
+    hl->addWidget(hint, 0, Qt::AlignVCenter);
+    hl->addStretch();
+    return row;
+}
+
+// D6: Normal-case sub-section label + InfoHintIcon for the Output card.
+// Like makeFieldLabelWithHint but uses settingsRowLabel (no mono/uppercase).
+QWidget* makeOutputSubLabelWithHint(const QString& text, const QString& hint_text, QWidget* parent) {
+    auto* row = new QWidget(parent);
+    auto* hl = new QHBoxLayout(row);
+    hl->setContentsMargins(0, 0, 0, 0);
+    hl->setSpacing(4);
+    auto* label = new QLabel(text, row);
+    label->setProperty("labelRole", "settingsRowLabel");
     auto* hint = new ui::widgets::InfoHintIcon(hint_text, row);
     hl->addWidget(label);
     hl->addWidget(hint, 0, Qt::AlignVCenter);
@@ -946,8 +971,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* rll = new QHBoxLayout(res_label_row);
         rll->setContentsMargins(0, 0, 0, 0);
         rll->setSpacing(4);
-        auto* res_lbl = new QLabel(QStringLiteral("OUTPUT RESOLUTION"), res_label_row);
-        res_lbl->setProperty("labelRole", "fieldLabel");
+        auto* res_lbl = new QLabel(QStringLiteral("Output resolution"), res_label_row);
+        res_lbl->setProperty("labelRole", "settingsRowLabel");
         rll->addWidget(res_lbl);
         rll->addWidget(resolution_compare_hint_, 0, Qt::AlignVCenter);
         rll->addStretch();
@@ -999,7 +1024,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     custom_res_layout->setSpacing(8);
 
     auto* width_label = new QLabel(QStringLiteral("Width"), custom_resolution_widget_);
-    width_label->setProperty("labelRole", "fieldLabel");
+    width_label->setProperty("labelRole", "settingsRowLabel");
     custom_width_spin_ = new QSpinBox(custom_resolution_widget_);
     custom_width_spin_->setObjectName(QStringLiteral("customWidthSpin"));
     custom_width_spin_->setRange(320, 7680);
@@ -1008,7 +1033,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     custom_width_spin_->setToolTip(QStringLiteral("Custom output width (320–7680)"));
 
     auto* height_label = new QLabel(QStringLiteral("Height"), custom_resolution_widget_);
-    height_label->setProperty("labelRole", "fieldLabel");
+    height_label->setProperty("labelRole", "settingsRowLabel");
     custom_height_spin_ = new QSpinBox(custom_resolution_widget_);
     custom_height_spin_->setObjectName(QStringLiteral("customHeightSpin"));
     custom_height_spin_->setRange(180, 7680);
@@ -1038,7 +1063,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_split_expander_->setObjectName(QStringLiteral("outputSplitExpander"));
     auto* split_expander_content_layout = qobject_cast<QVBoxLayout*>(output_split_expander_->contentWidget()->layout());
 
-    split_expander_content_layout->addWidget(makeFieldLabelWithHint(
+    split_expander_content_layout->addWidget(makeOutputSubLabelWithHint(
         QStringLiteral("Split recording"), ui::hints::kSplitRecording, output_split_expander_->contentWidget()));
     auto* split_row = new QHBoxLayout();
     split_row->setContentsMargins(0, 0, 0, 0);
@@ -1059,7 +1084,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     split_custom_layout->setContentsMargins(0, 0, 0, 0);
     split_custom_layout->setSpacing(8);
     auto* split_every_label = new QLabel(QStringLiteral("Every"), split_custom_widget_);
-    split_every_label->setProperty("labelRole", "fieldLabel");
+    split_every_label->setProperty("labelRole", "settingsRowLabel");
     split_custom_minutes_spin_ = new QSpinBox(split_custom_widget_);
     split_custom_minutes_spin_->setObjectName(QStringLiteral("splitCustomMinutesSpin"));
     split_custom_minutes_spin_->setRange(static_cast<int>(SplitRecordingSettings::kMinMinutes),
@@ -1079,7 +1104,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     // ---- Split recording by size (SPLIT-BY-SIZE-R1) ----
     split_expander_content_layout->addWidget(
-        makeFieldLabel(QStringLiteral("Split by size"), output_split_expander_->contentWidget()));
+        makeOutputSubLabel(QStringLiteral("Split by size"), output_split_expander_->contentWidget()));
     auto* split_size_row = new QHBoxLayout();
     split_size_row->setContentsMargins(0, 0, 0, 0);
     split_size_row->setSpacing(8);
@@ -1096,7 +1121,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     split_size_custom_layout->setContentsMargins(0, 0, 0, 0);
     split_size_custom_layout->setSpacing(8);
     auto* split_size_label = new QLabel(QStringLiteral("Every"), split_size_custom_widget_);
-    split_size_label->setProperty("labelRole", "fieldLabel");
+    split_size_label->setProperty("labelRole", "settingsRowLabel");
     split_custom_size_spin_ = new QSpinBox(output_split_expander_->contentWidget());
     split_custom_size_spin_->setObjectName(QStringLiteral("splitCustomSizeSpin"));
     // kMaxSizeMb = 1024*1024 = 1048576 which fits in int (< 2147483647).
@@ -1126,7 +1151,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_fields_layout->setSpacing(8);
 
     output_fields_layout->addWidget(
-        makeFieldLabelWithHint(QStringLiteral("Destination folder"), ui::hints::kOutputFolder, output_fields));
+        makeOutputSubLabelWithHint(QStringLiteral("Destination folder"), ui::hints::kOutputFolder, output_fields));
     auto* dest_row = new QHBoxLayout();
     dest_row->setSpacing(8);
     destination_edit_ = new QLineEdit(output_fields);
@@ -1143,7 +1168,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_fields_layout->addWidget(folder_validation_label_);
 
     output_fields_layout->addWidget(
-        makeFieldLabelWithHint(QStringLiteral("Filename pattern"), ui::hints::kFilenamePattern, output_fields));
+        makeOutputSubLabelWithHint(QStringLiteral("Filename pattern"), ui::hints::kFilenamePattern, output_fields));
     naming_edit_ = new QLineEdit(output_fields);
     naming_edit_->setObjectName(QStringLiteral("namingEdit"));
     naming_edit_->setPlaceholderText(QStringLiteral("{datetime}_{app}_{title}"));
@@ -1162,7 +1187,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_help_layout->setContentsMargins(0, 0, 0, 0);
     output_help_layout->setSpacing(8);
 
-    output_help_layout->addWidget(makeFieldLabel(QStringLiteral("Filename tokens"), output_help));
+    output_help_layout->addWidget(makeOutputSubLabel(QStringLiteral("Filename tokens"), output_help));
 
     // Compact chips of the most common real tokens; the full reference stays behind the toggle.
     // Only tokens the FilenameBuilder actually resolves are shown (e.g. {target}/{profile}).
