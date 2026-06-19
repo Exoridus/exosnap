@@ -2556,6 +2556,11 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
     config_page_->setRecordingControlsLocked(scenario.controls_locked);
     config_page_->setAudioMeterLevels(0.37f, 0.56f, 0.42f, true, true, true);
 
+    // Settings-tiers progressive-disclosure state (SETTINGS-TIERS-R1): drive the
+    // Expert-mode reveal + Advanced expander deterministically for visual scenarios.
+    config_page_->setExpertModeEnabled(scenario.settings_expert_mode);
+    config_page_->setOutputSplitExpanderExpanded(scenario.settings_advanced_expanded);
+
     // Webcam-card scenarios (mirror off/on, unavailable) drive the embedded panel
     // deterministically without opening a real camera.
     if (scenario.webcam_state != visual::VisualWebcamState::None) {
