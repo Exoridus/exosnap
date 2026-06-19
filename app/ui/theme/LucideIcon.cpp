@@ -91,6 +91,11 @@ const QHash<QString, LucideEntry>& iconTable() {
          {"<circle cx='12' cy='12' r='10' stroke='%1'/>"
           "<path stroke='%1' d='M12 16v-4'/><path stroke='%1' d='M12 8h.01'/>",
           false}},
+        // search (magnifying glass)
+        {QStringLiteral("search"),
+         {"<circle cx='11' cy='11' r='8' stroke='%1'/>"
+          "<path stroke='%1' d='m21 21-4.3-4.3'/>",
+          false}},
         // external-link
         {QStringLiteral("external-link"),
          {"<path stroke='%1' d='M15 3h6v6'/><path stroke='%1' d='M10 14 21 3'/>"
