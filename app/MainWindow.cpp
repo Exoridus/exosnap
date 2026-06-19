@@ -490,6 +490,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     config_page_ = new ConfigPage(output_settings_, video_settings_, stack_);
     hotkeys_page_ = new HotkeysPage(stack_);
     hotkeys_page_->setService(hotkey_service_);
+    config_page_->setHotkeyService(hotkey_service_);
     diagnostics_page_ = new DiagnosticsPage(stack_);
     webcam_page_ = new WebcamPage(stack_);
     webcam_page_->applySettings(live_webcam_);
@@ -1665,6 +1666,9 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
             (record_status_label_ == QStringLiteral("REC") || record_status_label_ == QStringLiteral("PAUSED") ||
              record_status_label_ == QStringLiteral("STOPPING") || record_status_label_ == QStringLiteral("COUNTDOWN"));
         hotkeys_page_->setEditingLocked(hk_locked);
+        // PS-PHASE-C: also lock/unlock the embedded hotkeys panel in Settings.
+        if (config_page_)
+            config_page_->setHotkeyEditingLocked(hk_locked);
     }
 
     if ((recording || record_status_label_ == QStringLiteral("COUNTDOWN")) && isVisible() && !isMinimized() &&

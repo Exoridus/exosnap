@@ -110,6 +110,8 @@ qt_add_executable(exosnap WIN32
     ui/widgets/SectionRuleHeader.cpp
     ui/widgets/KeycapChip.h
     ui/widgets/KeycapChip.cpp
+    ui/widgets/HotkeysSettingsPanel.h
+    ui/widgets/HotkeysSettingsPanel.cpp
     ui/widgets/StatusPill.h
     ui/widgets/StatusPill.cpp
     ui/widgets/PreviewSurface.h
@@ -410,6 +412,13 @@ exosnap_add_app_test_support(exosnap_pages_test_support
     # the Lucide glyph renderer.
     ui/dialogs/UpdateSettingsPanel.cpp
     ui/theme/LucideIcon.cpp
+    # PS-PHASE-C: HotkeysSettingsPanel embedded in ConfigPage.
+    ui/widgets/HotkeysSettingsPanel.cpp
+    ui/widgets/KeycapChip.cpp
+    pages/HotkeysPage.cpp
+    services/GlobalHotkeyService.cpp
+    ui/widgets/SectionRuleHeader.cpp
+    ui/widgets/PlaceholderRow.cpp
 )
 target_link_libraries(exosnap_pages_test_support PUBLIC
     exosnap_device_service_test_support exosnap_output_model_test_support

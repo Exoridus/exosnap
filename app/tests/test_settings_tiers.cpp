@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSettings>
+#include <QSpinBox>
 #include <QTemporaryDir>
 
 #include "models/OutputSettingsModel.h"
@@ -314,6 +315,91 @@ TEST_F(SettingsTiersTest, ConfigPage_AudioSeparateTogglesInSourceRows) {
     ASSERT_NE(sys_check, nullptr);
     auto* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr);
+}
+
+// ---- PS-PHASE-C: Hotkeys card, expert controls, search pill gating ----
+
+TEST_F(SettingsTiersTest, ConfigPage_HotkeysCard_ResetAllButtonExists) {
+    // The embedded hotkeys panel must expose its "Reset all" button.
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* btn = page.findChild<QPushButton*>(QStringLiteral("settingsHkResetAllBtn"));
+    ASSERT_NE(btn, nullptr);
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_HotkeysCard_ActiveRowsExist) {
+    // All five active hotkey rows must be in the Settings tree.
+    ConfigPage page(output_defaults_, video_defaults_);
+    for (int i = 0; i < 5; ++i) {
+        auto* set_btn = page.findChild<QPushButton*>(QStringLiteral("settingsHkSetBtn_%1").arg(i));
+        EXPECT_NE(set_btn, nullptr) << "settingsHkSetBtn_" << i << " not found";
+    }
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_SearchPill_HiddenInDefaultMode) {
+    // The search pill must be hidden when expert mode is off.
+    ConfigPage page(output_defaults_, video_defaults_);
+    ASSERT_FALSE(page.expertModeEnabled());
+    auto* pill = page.findChild<QWidget*>(QStringLiteral("settingsSearchPill"));
+    ASSERT_NE(pill, nullptr);
+    EXPECT_TRUE(pill->isHidden());
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_SearchPill_VisibleInExpertMode) {
+    // The search pill must become visible when expert mode is enabled.
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+    auto* pill = page.findChild<QWidget*>(QStringLiteral("settingsSearchPill"));
+    ASSERT_NE(pill, nullptr);
+    EXPECT_FALSE(pill->isHidden());
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_FmtExpertSection_HiddenByDefault) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* section = page.findChild<QWidget*>(QStringLiteral("fmtExpertSection"));
+    ASSERT_NE(section, nullptr);
+    EXPECT_TRUE(section->isHidden());
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_FmtExpertSection_VisibleInExpertMode) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+    auto* section = page.findChild<QWidget*>(QStringLiteral("fmtExpertSection"));
+    ASSERT_NE(section, nullptr);
+    EXPECT_FALSE(section->isHidden());
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_RateControlSegmented_Exists) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* cq_btn = page.findChild<QPushButton*>(QStringLiteral("rateControlCqButton"));
+    ASSERT_NE(cq_btn, nullptr);
+    auto* vbr_btn = page.findChild<QPushButton*>(QStringLiteral("rateControlVbrButton"));
+    ASSERT_NE(vbr_btn, nullptr);
+    auto* cbr_btn = page.findChild<QPushButton*>(QStringLiteral("rateControlCbrButton"));
+    ASSERT_NE(cbr_btn, nullptr);
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_AudioExpertSection_HiddenByDefault) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* section = page.findChild<QWidget*>(QStringLiteral("audioExpertSection"));
+    ASSERT_NE(section, nullptr);
+    EXPECT_TRUE(section->isHidden());
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_AudioExpertSection_VisibleInExpertMode) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+    auto* section = page.findChild<QWidget*>(QStringLiteral("audioExpertSection"));
+    ASSERT_NE(section, nullptr);
+    EXPECT_FALSE(section->isHidden());
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_AudioExpertControls_Exist) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    EXPECT_NE(page.findChild<QSpinBox*>(QStringLiteral("micGainDbSpin")), nullptr);
+    EXPECT_NE(page.findChild<QComboBox*>(QStringLiteral("micChannelModeCombo")), nullptr);
+    EXPECT_NE(page.findChild<QSpinBox*>(QStringLiteral("audioBitrateKbpsSpin")), nullptr);
+    EXPECT_NE(page.findChild<QComboBox*>(QStringLiteral("opusFrameDurationCombo")), nullptr);
+    EXPECT_NE(page.findChild<QSpinBox*>(QStringLiteral("opusComplexitySpin")), nullptr);
 }
 
 } // namespace

@@ -29,10 +29,15 @@ class QSpinBox;
 class QString;
 class QToolButton;
 
+namespace exosnap {
+class GlobalHotkeyService;
+} // namespace exosnap
+
 namespace exosnap::ui::widgets {
 class CompareHint;
 class ExoCheckBox;
 class ExoToggle;
+class HotkeysSettingsPanel;
 class SettingsCardExpander;
 class VUMeterWidget;
 class WebcamSetupPanel;
@@ -73,6 +78,11 @@ class ConfigPage : public QWidget {
     void setPresetDirty(bool dirty);
     void setActiveProfileName(const QString& profile_name);
     void setRecordingControlsLocked(bool locked);
+
+    // PS-PHASE-C: Wire the embedded hotkeys panel to the live global hotkey service.
+    void setHotkeyService(GlobalHotkeyService* service);
+    // PS-PHASE-C: Lock/unlock hotkey rebinding (forwarded from recording state).
+    void setHotkeyEditingLocked(bool locked);
 
     // SETTINGS-TIERS-R1: Expert mode toggle (persisted by MainWindow).
     void setExpertModeEnabled(bool enabled);
@@ -418,6 +428,24 @@ class ConfigPage : public QWidget {
     QComboBox* accent_combo_ = nullptr;
     // Expert-gated developer card (hidden when expert_mode_enabled_ == false).
     QWidget* developer_card_ = nullptr;
+
+    // PS-PHASE-C: Embedded hotkeys panel (full-width card, below the two-column grid).
+    ui::widgets::HotkeysSettingsPanel* hotkeys_settings_panel_ = nullptr;
+
+    // PS-PHASE-C: Expert Format section — rate control (CQ/VBR/CBR) + bitrate + placeholders.
+    QWidget* fmt_expert_section_ = nullptr; // container for rate control, bitrate, and Format placeholders
+    QWidget* rate_control_row_widget_ = nullptr;
+    QButtonGroup* rate_control_group_ = nullptr;
+    QWidget* bitrate_row_widget_ = nullptr;
+    QSpinBox* bitrate_kbps_spin_ = nullptr;
+
+    // PS-PHASE-C: Expert Audio section — mic gain, channel mode, bitrate, Opus params + placeholders.
+    QWidget* audio_expert_section_ = nullptr;
+    QSpinBox* mic_gain_db_spin_ = nullptr;
+    QComboBox* mic_channel_mode_combo_ = nullptr;
+    QSpinBox* audio_bitrate_kbps_spin_ = nullptr;
+    QComboBox* opus_frame_duration_combo_ = nullptr;
+    QSpinBox* opus_complexity_spin_ = nullptr;
 
     // SETTINGS-SEARCH-R1: settings search box and match count label.
     QWidget* settings_search_pill_ = nullptr;
