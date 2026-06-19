@@ -202,6 +202,9 @@ class MainWindow : public QMainWindow {
     // Handle the async result: build the UI model + state, and enqueue a toast when
     // an update is available and notifications are enabled.
     void onUpdateCheckComplete(const update::UpdateCheckResult& result);
+
+    // PS-PHASE-E: refresh the bell unread badge from the hub's live unread count.
+    void refreshHubUnreadBell();
     // QUICK-PILL-R1: update the quick-control pill visibility/state.
     void updateQuickControlPill();
 

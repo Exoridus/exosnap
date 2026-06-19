@@ -107,5 +107,95 @@ TEST_F(NotificationHubPanelTest, HubTitle_IsNotifications) {
     EXPECT_EQ(title->text(), QStringLiteral("Notifications"));
 }
 
+// PS-PHASE-E: removeAdvisoryById + unreadCount tests
+
+TEST_F(NotificationHubPanelTest, UnreadCount_ZeroByDefault) {
+    ui::chrome::NotificationHubPanel panel;
+    EXPECT_EQ(panel.unreadCount(), 0);
+}
+
+TEST_F(NotificationHubPanelTest, UnreadCount_IncreasesOnUnreadAdvisory) {
+    ui::chrome::NotificationHubPanel panel;
+    panel.addAdvisory(QStringLiteral("a1"), QStringLiteral("info"), QStringLiteral("Test"), QStringLiteral("Body"),
+                      QStringLiteral("now"), /*unread=*/true, QString(), QString(), false);
+    EXPECT_EQ(panel.unreadCount(), 1);
+
+    panel.addAdvisory(QStringLiteral("a2"), QStringLiteral("info"), QStringLiteral("Test2"), QStringLiteral("Body2"),
+                      QStringLiteral("now"), /*unread=*/false, QString(), QString(), false);
+    // Only the first was unread
+    EXPECT_EQ(panel.unreadCount(), 1);
+}
+
+TEST_F(NotificationHubPanelTest, RemoveAdvisoryById_NoOpForUnknownId) {
+    ui::chrome::NotificationHubPanel panel;
+    panel.addAdvisory(QStringLiteral("a1"), QStringLiteral("info"), QStringLiteral("Test"), QStringLiteral("Body"),
+                      QString(), true, QString(), QString(), false);
+    // Should not crash or change count
+    panel.removeAdvisoryById(QStringLiteral("nonexistent"));
+    const auto* empty = findEmptyState(panel);
+    ASSERT_NE(empty, nullptr);
+    EXPECT_TRUE(empty->isHidden()); // still has 1 item
+}
+
+TEST_F(NotificationHubPanelTest, RemoveAdvisoryById_RemovesItem) {
+    ui::chrome::NotificationHubPanel panel;
+    panel.addAdvisory(QStringLiteral("a1"), QStringLiteral("info"), QStringLiteral("Test"), QStringLiteral("Body"),
+                      QString(), true, QString(), QString(), false);
+    panel.addAdvisory(QStringLiteral("a2"), QStringLiteral("caution"), QStringLiteral("Test2"), QStringLiteral("Body2"),
+                      QString(), false, QString(), QString(), false);
+
+    panel.removeAdvisoryById(QStringLiteral("a1"));
+
+    // One item remains — empty state still hidden.
+    const auto* empty = findEmptyState(panel);
+    ASSERT_NE(empty, nullptr);
+    EXPECT_TRUE(empty->isHidden());
+    EXPECT_EQ(panel.unreadCount(), 0); // the unread one was removed
+}
+
+TEST_F(NotificationHubPanelTest, RemoveAdvisoryById_LastItem_ShowsEmpty) {
+    ui::chrome::NotificationHubPanel panel;
+    panel.addAdvisory(QStringLiteral("only"), QStringLiteral("info"), QStringLiteral("Only item"),
+                      QStringLiteral("Body"), QString(), true, QString(), QString(), false);
+    EXPECT_EQ(panel.unreadCount(), 1);
+
+    panel.removeAdvisoryById(QStringLiteral("only"));
+
+    const auto* empty = findEmptyState(panel);
+    ASSERT_NE(empty, nullptr);
+    EXPECT_FALSE(empty->isHidden()); // should show empty state again
+    EXPECT_EQ(panel.unreadCount(), 0);
+}
+
+TEST_F(NotificationHubPanelTest, AddAdvisory_DuplicateId_Replaces) {
+    ui::chrome::NotificationHubPanel panel;
+    panel.addAdvisory(QStringLiteral("dup"), QStringLiteral("info"), QStringLiteral("Original"), QStringLiteral("Body"),
+                      QString(), true, QString(), QString(), false);
+    EXPECT_EQ(panel.unreadCount(), 1);
+
+    // Adding same id again should replace the original.
+    panel.addAdvisory(QStringLiteral("dup"), QStringLiteral("caution"), QStringLiteral("Replaced"),
+                      QStringLiteral("Body2"), QString(), false, QString(), QString(), false);
+    // The replaced entry is not unread; original was removed.
+    EXPECT_EQ(panel.unreadCount(), 0);
+
+    // Empty state should still be hidden (one item exists).
+    const auto* empty = findEmptyState(panel);
+    ASSERT_NE(empty, nullptr);
+    EXPECT_TRUE(empty->isHidden());
+}
+
+TEST_F(NotificationHubPanelTest, ClearAdvisories_ResetsUnreadCount) {
+    ui::chrome::NotificationHubPanel panel;
+    panel.addAdvisory(QStringLiteral("a1"), QStringLiteral("info"), QStringLiteral("Test"), QStringLiteral("Body"),
+                      QString(), true, QString(), QString(), false);
+    panel.addAdvisory(QStringLiteral("a2"), QStringLiteral("info"), QStringLiteral("Test2"), QStringLiteral("Body2"),
+                      QString(), true, QString(), QString(), false);
+    EXPECT_EQ(panel.unreadCount(), 2);
+
+    panel.clearAdvisories();
+    EXPECT_EQ(panel.unreadCount(), 0);
+}
+
 } // namespace
 } // namespace exosnap

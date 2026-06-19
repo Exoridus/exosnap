@@ -10,6 +10,7 @@
 
 #include "ExoSnapBuildInfo.h"
 #include "ui/dialogs/AboutOverlay.h"
+#include "ui/dialogs/UpdateSettingsPanel.h"
 
 #ifndef EXOSNAP_BUILD_CONFIG
 #define EXOSNAP_BUILD_CONFIG "Unknown"
@@ -78,16 +79,42 @@ TEST_F(AboutOverlayTest, GitHubButtonUsesConfiguredRepositoryUrl) {
     EXPECT_EQ(github->property("url").toString(), QStringLiteral("https://github.com/Exoridus/exosnap"));
 }
 
-TEST_F(AboutOverlayTest, NoFakeReleaseNotesAction) {
+TEST_F(AboutOverlayTest, InfoCardHasNoPrimaryReleaseNotesButton) {
     ui::dialogs::AboutOverlay overlay;
 
-    // No published release feed is configured, so the About card must not offer a Release notes
-    // action. Copy details / GitHub / × dismiss are the real actions.
-    for (auto* btn : overlay.findChildren<QPushButton*>())
+    // The info card (QFrame "aboutCard") must not offer a standalone Release notes action —
+    // Copy details / GitHub / × dismiss are the real actions on the card itself.
+    // NOTE: The embedded UpdateSettingsPanel may have its own release-notes affordance in the
+    // "Available" state; this test intentionally scopes only to the aboutCard QFrame.
+    auto* card = overlay.findChild<QFrame*>(QStringLiteral("aboutCard"));
+    ASSERT_NE(card, nullptr);
+    for (auto* btn : card->findChildren<QPushButton*>())
         EXPECT_FALSE(btn->text().contains(QStringLiteral("Release"), Qt::CaseInsensitive));
 
     EXPECT_NE(overlay.findChild<QPushButton*>(QStringLiteral("aboutCopyButton")), nullptr);
     EXPECT_NE(overlay.findChild<QPushButton*>(QStringLiteral("aboutCloseButton")), nullptr);
+}
+
+TEST_F(AboutOverlayTest, EmbeddedUpdatePanelPresent) {
+    ui::dialogs::AboutOverlay overlay;
+
+    // PS-PHASE-E: the overlay now embeds an UpdateSettingsPanel below the info card.
+    auto* panel = overlay.updatePanel();
+    ASSERT_NE(panel, nullptr);
+
+    // The panel is also findable via object hierarchy.
+    auto* found = overlay.findChild<ui::dialogs::UpdateSettingsPanel*>(QStringLiteral("aboutUpdatePanel"));
+    EXPECT_EQ(found, panel);
+}
+
+TEST_F(AboutOverlayTest, QtVersionRowPresent) {
+    ui::dialogs::AboutOverlay overlay;
+
+    // PS-PHASE-E: a QT row showing QT_VERSION_STR is now part of the metadata table.
+    auto* qt_label = overlay.findChild<QLabel*>(QStringLiteral("aboutValueQt"));
+    ASSERT_NE(qt_label, nullptr);
+    EXPECT_FALSE(qt_label->text().isEmpty());
+    EXPECT_TRUE(qt_label->text().contains(QLatin1Char('.')));
 }
 
 TEST_F(AboutOverlayTest, DismissButtonIsXSymbol) {

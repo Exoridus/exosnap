@@ -25,6 +25,7 @@ class QLineEdit;
 class QMenu;
 class QPushButton;
 class QResizeEvent;
+class QScrollArea;
 class QSpinBox;
 class QString;
 class QToolButton;
@@ -42,10 +43,6 @@ class SettingsCardExpander;
 class VUMeterWidget;
 class WebcamSetupPanel;
 } // namespace exosnap::ui::widgets
-
-namespace exosnap::ui::dialogs {
-class UpdateSettingsPanel;
-} // namespace exosnap::ui::dialogs
 
 namespace exosnap {
 
@@ -83,6 +80,12 @@ class ConfigPage : public QWidget {
     void setHotkeyService(GlobalHotkeyService* service);
     // PS-PHASE-C: Lock/unlock hotkey rebinding (forwarded from recording state).
     void setHotkeyEditingLocked(bool locked);
+
+    // PS-PHASE-E: deep-link target support — scrolls the Settings page to the named section.
+    // Target strings: "settings/audio", "settings/output", "settings/video", "settings/webcam",
+    //                 "settings/presence", "settings/appearance", "settings/hotkeys".
+    // No-op for unknown targets.
+    void scrollToSection(const QString& section_target);
 
     // SETTINGS-TIERS-R1: Expert mode toggle (persisted by MainWindow).
     void setExpertModeEnabled(bool enabled);
@@ -263,6 +266,7 @@ class ConfigPage : public QWidget {
     bool active_preset_is_built_in_ = false;
     bool active_preset_is_available_ = true;
 
+    QScrollArea* scroll_area_ = nullptr;        // main scroll area (for scrollToSection)
     QBoxLayout* columns_layout_ = nullptr;      // host for the two-column card grid
     QBoxLayout* output_split_layout_ = nullptr; // inner field/help split inside Output card
 
@@ -392,10 +396,6 @@ class ConfigPage : public QWidget {
 
     ui::widgets::WebcamSetupPanel* webcam_setup_panel_ = nullptr;
 
-    // UPDATE-WIRE-R1: embedded "Software updates" card (Settings → near Advanced).
-    // Wired from MainWindow via findChild(objectName "settingsUpdatePanel").
-    ui::dialogs::UpdateSettingsPanel* update_settings_panel_ = nullptr;
-
     QLabel* lock_note_label_ = nullptr;
     bool controls_locked_ = false;
 
@@ -463,7 +463,6 @@ class ConfigPage : public QWidget {
     QWidget* audio_panel_ = nullptr;
     QWidget* webcam_panel_ = nullptr;
     QWidget* out_panel_ = nullptr;
-    QWidget* update_panel_wrapper_ = nullptr; // wraps update_settings_panel_
     QWidget* presence_panel_ = nullptr;
     QWidget* appearance_panel_ = nullptr;
 

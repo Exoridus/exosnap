@@ -36,7 +36,6 @@
 #include "../models/SettingsHintText.h"
 #include "../services/GlobalHotkeyService.h"
 #include "../services/WebcamService.h"
-#include "../ui/dialogs/UpdateSettingsPanel.h"
 #include "../ui/theme/ExoSnapAccents.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
@@ -381,7 +380,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
 
-    auto* scroll = new QScrollArea(this);
+    scroll_area_ = new QScrollArea(this);
+    auto* scroll = scroll_area_;
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -1788,15 +1788,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
         layout->addWidget(hotkeys_panel);
     }
-
-    // ---- SOFTWARE UPDATES CARD (full width — UPDATE-WIRE-R1, below the 2-column grid) ----
-    // The UpdateSettingsPanel is a self-contained card (own header/border), so it is
-    // added directly to the scroll column rather than wrapped in another makePanel.
-    // MainWindow wires it via findChild(objectName "settingsUpdatePanel").
-    update_settings_panel_ = new ui::dialogs::UpdateSettingsPanel(content);
-    update_settings_panel_->setObjectName(QStringLiteral("settingsUpdatePanel"));
-    update_panel_wrapper_ = update_settings_panel_; // search filter alias
-    layout->addWidget(update_settings_panel_);
 
     // ---- DEVELOPER CARD (Expert-gated, full width — SETTINGS-TIERS-P3) ----
     // UI-only debug stubs (log level, NVTX). No persistence — local variables only.
@@ -3461,9 +3452,6 @@ void ConfigPage::applySettingsSearch(const QString& query) {
         QStringLiteral("1080"),   QStringLiteral("1440"),       QStringLiteral("720"),
         QStringLiteral("native"), QStringLiteral("custom")};
 
-    const QStringList update_kws = {QStringLiteral("update"), QStringLiteral("software"), QStringLiteral("version"),
-                                    QStringLiteral("check"), QStringLiteral("automatic")};
-
     const QStringList presence_kws = {QStringLiteral("presence"),     QStringLiteral("overlay"),
                                       QStringLiteral("notification"), QStringLiteral("tray"),
                                       QStringLiteral("diagnostics"),  QStringLiteral("quick"),
@@ -3502,8 +3490,6 @@ void ConfigPage::applySettingsSearch(const QString& query) {
             webcam_panel_->setVisible(true);
         if (out_panel_)
             out_panel_->setVisible(true);
-        if (update_panel_wrapper_)
-            update_panel_wrapper_->setVisible(true);
         if (presence_panel_)
             presence_panel_->setVisible(true);
         if (appearance_panel_)
@@ -3529,7 +3515,6 @@ void ConfigPage::applySettingsSearch(const QString& query) {
     const bool audio_match = kwMatch(audio_kws);
     const bool webcam_match = kwMatch(webcam_kws);
     const bool output_match = kwMatch(output_kws);
-    const bool update_match = kwMatch(update_kws);
     const bool presence_match = kwMatch(presence_kws);
     const bool appearance_match = kwMatch(appearance_kws);
     const bool developer_match = kwMatch(developer_kws);
@@ -3558,8 +3543,6 @@ void ConfigPage::applySettingsSearch(const QString& query) {
         webcam_panel_->setVisible(webcam_match);
     if (out_panel_)
         out_panel_->setVisible(output_match);
-    if (update_panel_wrapper_)
-        update_panel_wrapper_->setVisible(update_match);
     if (presence_panel_)
         presence_panel_->setVisible(presence_match);
     if (appearance_panel_)
@@ -3611,8 +3594,6 @@ void ConfigPage::applySettingsSearch(const QString& query) {
     if (webcam_match)
         ++match_count;
     if (output_match)
-        ++match_count;
-    if (update_match)
         ++match_count;
     if (presence_match)
         ++match_count;
@@ -3973,6 +3954,31 @@ void ConfigPage::setHotkeyService(GlobalHotkeyService* service) {
 void ConfigPage::setHotkeyEditingLocked(bool locked) {
     if (hotkeys_settings_panel_)
         hotkeys_settings_panel_->setEditingLocked(locked);
+}
+
+// PS-PHASE-E: deep-link target support — scroll Settings to the named section.
+void ConfigPage::scrollToSection(const QString& section_target) {
+    if (!scroll_area_)
+        return;
+
+    QWidget* target_widget = nullptr;
+    if (section_target == QStringLiteral("settings/audio"))
+        target_widget = audio_panel_;
+    else if (section_target == QStringLiteral("settings/video") || section_target == QStringLiteral("settings/format"))
+        target_widget = fmt_panel_;
+    else if (section_target == QStringLiteral("settings/output"))
+        target_widget = out_panel_;
+    else if (section_target == QStringLiteral("settings/webcam"))
+        target_widget = webcam_panel_;
+    else if (section_target == QStringLiteral("settings/presence"))
+        target_widget = presence_panel_;
+    else if (section_target == QStringLiteral("settings/appearance"))
+        target_widget = appearance_panel_;
+    else if (section_target == QStringLiteral("settings/hotkeys"))
+        target_widget = hotkeys_settings_panel_;
+
+    if (target_widget)
+        scroll_area_->ensureWidgetVisible(target_widget);
 }
 
 } // namespace exosnap

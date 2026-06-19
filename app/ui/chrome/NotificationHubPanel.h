@@ -1,5 +1,6 @@
 #pragma once
 #include <QFrame>
+#include <QMap>
 #include <QString>
 
 class QLabel;
@@ -28,6 +29,12 @@ class NotificationHubPanel : public QFrame {
     // Remove all advisories and revert to the empty state.
     void clearAdvisories();
 
+    // PS-PHASE-E: Remove a specific advisory by id. No-op if id not found.
+    void removeAdvisoryById(const QString& id);
+
+    // PS-PHASE-E: Returns the current number of unread advisories.
+    int unreadCount() const noexcept;
+
     // Populate with two demo advisories for harness/visual testing.
     // Passing false clears all advisories.
     void setDemoAdvisories(bool enabled);
@@ -46,7 +53,7 @@ class NotificationHubPanel : public QFrame {
 
   private:
     void refreshEmptyState();
-    void addAdvisoryWidget(ui::widgets::AdvisoryItem* item);
+    void addAdvisoryWidget(ui::widgets::AdvisoryItem* item, const QString& id, bool unread);
 
     QLabel* mark_all_read_label_ = nullptr;
     QWidget* list_container_ = nullptr;
@@ -54,6 +61,16 @@ class NotificationHubPanel : public QFrame {
     QWidget* empty_state_ = nullptr;
     QScrollArea* scroll_ = nullptr;
     int advisory_count_ = 0;
+    int unread_count_ = 0;
+
+    // PS-PHASE-E: advisory tracking by id for removeAdvisoryById.
+    // Each entry stores the AdvisoryItem widget and its preceding divider (if any).
+    struct AdvisoryEntry {
+        ui::widgets::AdvisoryItem* item = nullptr;
+        QFrame* divider_before = nullptr; // 1px divider widget prepended before this item; null for first
+        bool unread = false;
+    };
+    QMap<QString, AdvisoryEntry> advisory_by_id_;
 };
 
 } // namespace exosnap::ui::chrome

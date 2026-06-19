@@ -931,7 +931,10 @@ exosnap_add_gtest(
         tests/test_about_overlay.cpp
         ui/dialogs/AboutOverlay.cpp
         ui/brand/BrandMarkWidget.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+        # PS-PHASE-E: AboutOverlay now embeds UpdateSettingsPanel.
+        ui/dialogs/UpdateSettingsPanel.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
 target_include_directories(about_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 target_compile_definitions(about_overlay_tests PRIVATE EXOSNAP_BUILD_CONFIG="$<CONFIG>")

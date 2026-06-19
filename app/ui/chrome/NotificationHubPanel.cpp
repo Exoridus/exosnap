@@ -145,6 +145,10 @@ void NotificationHubPanel::paintEvent(QPaintEvent* event) {
 void NotificationHubPanel::addAdvisory(const QString& id, const QString& status, const QString& title,
                                        const QString& body, const QString& time_label, bool unread,
                                        const QString& action_id, const QString& action_label, bool is_deep_link) {
+    // Prevent duplicate ids: remove existing entry with same id first.
+    if (advisory_by_id_.contains(id))
+        removeAdvisoryById(id);
+
     auto* item = new ui::widgets::AdvisoryItem(list_container_);
     item->setStatus(status);
     item->setTitle(title);
@@ -161,15 +165,16 @@ void NotificationHubPanel::addAdvisory(const QString& id, const QString& status,
                 [this, captured_id]() { emit deepLinkRequested(captured_id); });
     }
 
-    addAdvisoryWidget(item);
+    addAdvisoryWidget(item, id, unread);
 }
 
-void NotificationHubPanel::addAdvisoryWidget(ui::widgets::AdvisoryItem* item) {
+void NotificationHubPanel::addAdvisoryWidget(ui::widgets::AdvisoryItem* item, const QString& id, bool unread) {
     // Insert before the trailing stretch (last item in list_layout_).
     const int stretch_index = list_layout_->count() - 1;
+    QFrame* divider = nullptr;
     if (advisory_count_ > 0) {
         // Add a 1px divider before this item.
-        auto* divider = new QFrame(list_container_);
+        divider = new QFrame(list_container_);
         divider->setFrameShape(QFrame::HLine);
         divider->setObjectName("hubItemDivider");
         divider->setFixedHeight(1);
@@ -177,7 +182,88 @@ void NotificationHubPanel::addAdvisoryWidget(ui::widgets::AdvisoryItem* item) {
     }
     list_layout_->insertWidget(stretch_index + (advisory_count_ > 0 ? 1 : 0), item);
     ++advisory_count_;
+    if (unread)
+        ++unread_count_;
+
+    // Track by id for removeAdvisoryById.
+    AdvisoryEntry entry;
+    entry.item = item;
+    entry.divider_before = divider;
+    entry.unread = unread;
+    advisory_by_id_.insert(id, entry);
+
     refreshEmptyState();
+}
+
+void NotificationHubPanel::removeAdvisoryById(const QString& id) {
+    auto it = advisory_by_id_.find(id);
+    if (it == advisory_by_id_.end())
+        return;
+
+    const AdvisoryEntry& entry = it.value();
+
+    // Remove divider before this item (if any).
+    if (entry.divider_before) {
+        list_layout_->removeWidget(entry.divider_before);
+        entry.divider_before->deleteLater();
+    }
+
+    // If this was the first item (no divider before it) and there is a next item,
+    // the next item's divider_before pointer needs to be cleared. We handle this by
+    // finding the next entry in the map and updating its divider_before to null
+    // (the physical QFrame was prepended to the next item's entry, not the removed one).
+    // Actually the divider is tracked on the *following* item only when this item has
+    // none. Since we track divider_before on the item that comes AFTER the divider,
+    // the first-item removal leaves the second item's divider_before as the now-orphaned
+    // divider. We need to remove it instead.
+    // Simpler: when divider_before is null (first item), find any entry whose
+    // divider_before points to a QFrame that immediately follows the item we're removing.
+    // This is complex. Use a safer approach: scan advisory_by_id_ for an entry
+    // whose divider_before is the next sibling in the layout after our item.
+    // Even simpler: since insertions are ordered, the item directly after ours in the
+    // layout (if any) has a divider that was previously between our item and it.
+    // We can find that by looking at layout positions.
+    if (entry.divider_before == nullptr) {
+        // This was the first item. If a second item exists, its divider_before
+        // was inserted between the first (now-removed) item and itself.
+        // Find it and remove it too.
+        const int item_idx = list_layout_->indexOf(entry.item);
+        if (item_idx >= 0 && item_idx + 1 < list_layout_->count()) {
+            QLayoutItem* next_li = list_layout_->itemAt(item_idx + 1);
+            if (next_li) {
+                if (QWidget* next_w = next_li->widget()) {
+                    if (next_w->objectName() == QStringLiteral("hubItemDivider")) {
+                        // This is the divider that was between the first and second items.
+                        // Remove it and update the second item's entry.
+                        list_layout_->removeWidget(next_w);
+                        next_w->deleteLater();
+                        // Clear divider_before for the entry that owned this divider.
+                        for (auto& e : advisory_by_id_) {
+                            if (e.divider_before == next_w) {
+                                e.divider_before = nullptr;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Remove and delete the advisory widget.
+    list_layout_->removeWidget(entry.item);
+    entry.item->deleteLater();
+
+    if (entry.unread && unread_count_ > 0)
+        --unread_count_;
+    --advisory_count_;
+
+    advisory_by_id_.erase(it);
+    refreshEmptyState();
+}
+
+int NotificationHubPanel::unreadCount() const noexcept {
+    return unread_count_;
 }
 
 void NotificationHubPanel::clearAdvisories() {
@@ -197,6 +283,8 @@ void NotificationHubPanel::clearAdvisories() {
         delete li;
     }
     advisory_count_ = 0;
+    unread_count_ = 0;
+    advisory_by_id_.clear();
     refreshEmptyState();
 }
 

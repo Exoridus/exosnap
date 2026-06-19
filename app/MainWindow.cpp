@@ -564,11 +564,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     title_bar_->setBellUnreadCount(2);
 #endif
 
-    // Deep-link: navigate to Settings and close the hub.
+    // PS-PHASE-E: Deep-link target contract — route by target string.
     connect(notification_hub_, &ui::chrome::NotificationHubPanel::deepLinkRequested, this,
-            [this](const QString& /*target*/) {
+            [this](const QString& target) {
                 notification_hub_->hide();
-                navigateToPage(kSettingsPageIndex);
+                if (target == QStringLiteral("update-view") || target == QStringLiteral("about")) {
+                    // Update panel lives in About overlay now.
+                    if (about_overlay_)
+                        about_overlay_->openOverlay();
+                } else if (target == QStringLiteral("recovery-view")) {
+                    // Recovery overlay (if still open) or just navigate to Record.
+                    navigateToPage(kRecordPageIndex);
+                } else if (target.startsWith(QStringLiteral("settings/"))) {
+                    navigateToPage(kSettingsPageIndex);
+                    if (config_page_)
+                        config_page_->scrollToSection(target);
+                } else {
+                    navigateToPage(kSettingsPageIndex);
+                }
             });
 
     connect(title_bar_, &ui::chrome::OperationalTitleBar::bellClicked, this, &MainWindow::toggleNotificationHub);
@@ -965,47 +978,45 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         if (setup_panel)
             connect(setup_panel, &exosnap::ui::widgets::WebcamSetupPanel::rescanRequested, &webcam_notifier_,
                     &WebcamDeviceNotifier::rescan);
+    }
 
-        // ---- Settings → Software updates card (UPDATE-WIRE-R1 · ADR 0012) ----
-        auto* update_panel =
-            config_page_->findChild<exosnap::ui::dialogs::UpdateSettingsPanel*>(QStringLiteral("settingsUpdatePanel"));
-        if (update_panel) {
-            // Seed the panel from the persisted channel + current version.
-            ui::dialogs::UpdateUiModel seed;
-            seed.current_version = QString::fromLatin1(exosnap::build::kVersion);
-            seed.channel = persisted_settings_.update_channel;
-            update_panel->setModel(seed);
-            update_panel->setState(ui::dialogs::UpdateUiState::UpToDate);
+    // ---- About overlay → Software updates panel (PS-PHASE-E: moved from ConfigPage) ----
+    if (about_overlay_) {
+        auto* update_panel = about_overlay_->updatePanel();
+        // Seed the panel from the persisted channel + current version.
+        ui::dialogs::UpdateUiModel seed;
+        seed.current_version = QString::fromLatin1(exosnap::build::kVersion);
+        seed.channel = persisted_settings_.update_channel;
+        update_panel->setModel(seed);
+        update_panel->setState(ui::dialogs::UpdateUiState::UpToDate);
 
-            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::checkRequested, this,
-                    &MainWindow::triggerUpdateCheck);
+        connect(about_overlay_, &ui::dialogs::AboutOverlay::checkForUpdatesRequested, this,
+                &MainWindow::triggerUpdateCheck);
 
-            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::channelChanged, this,
-                    [this](const QString& channel) {
-                        persisted_settings_.update_channel = channel;
-                        settings_store_.Save(persisted_settings_);
-                        if (update_service_)
-                            update_service_->SetChannel(UpdateChannelFromString(channel));
-                        // Channel applies immediately: re-check on the new channel (guarded).
-                        triggerUpdateCheck();
-                    });
+        connect(update_panel, &ui::dialogs::UpdateSettingsPanel::channelChanged, this, [this](const QString& channel) {
+            persisted_settings_.update_channel = channel;
+            settings_store_.Save(persisted_settings_);
+            if (update_service_)
+                update_service_->SetChannel(UpdateChannelFromString(channel));
+            // Channel applies immediately: re-check on the new channel (guarded).
+            triggerUpdateCheck();
+        });
 
-            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::openReleasesPageRequested, this, [this]() {
-                QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/Exoridus/exosnap/releases")));
-            });
+        connect(update_panel, &ui::dialogs::UpdateSettingsPanel::openReleasesPageRequested, this, [this]() {
+            QDesktopServices::openUrl(QUrl(QStringLiteral("https://github.com/Exoridus/exosnap/releases")));
+        });
 
-            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::openReleaseNotesRequested, this, [this]() {
-                const QString url = last_update_releases_url_.isEmpty()
-                                        ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
-                                        : last_update_releases_url_;
-                QDesktopServices::openUrl(QUrl(url));
-            });
+        connect(update_panel, &ui::dialogs::UpdateSettingsPanel::openReleaseNotesRequested, this, [this]() {
+            const QString url = last_update_releases_url_.isEmpty()
+                                    ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
+                                    : last_update_releases_url_;
+            QDesktopServices::openUrl(QUrl(url));
+        });
 
-            connect(update_panel, &ui::dialogs::UpdateSettingsPanel::remindLaterRequested, this, [this]() {
-                diagnostics::AppLog::info(QStringLiteral("update"),
-                                          QStringLiteral("Update reminder dismissed (remind me later)"));
-            });
-        }
+        connect(update_panel, &ui::dialogs::UpdateSettingsPanel::remindLaterRequested, this, [this]() {
+            diagnostics::AppLog::info(QStringLiteral("update"),
+                                      QStringLiteral("Update reminder dismissed (remind me later)"));
+        });
     }
 
     // ---- Tray icon (TRAY-PRESENCE-R1) ----
@@ -1119,6 +1130,20 @@ void MainWindow::checkAndShowRecoveryOverlay() {
         event.action = notifications::NotificationAction::OpenRecovery;
         event.secondary_action = notifications::NotificationAction::Discard;
         notification_manager_->Enqueue(std::move(event));
+    }
+
+    // PS-PHASE-E: add a hub advisory for recovery-available.
+    if (notification_hub_) {
+        notification_hub_->removeAdvisoryById(QStringLiteral("recovery-available"));
+        const QString recovery_body =
+            (candidates.size() == 1)
+                ? QStringLiteral("A recording from the last session wasn’t finalized.")
+                : QStringLiteral("%1 recordings from the last session weren’t finalized.").arg(candidates.size());
+        notification_hub_->addAdvisory(QStringLiteral("recovery-available"), QStringLiteral("error"),
+                                       QStringLiteral("Recording recovered"), recovery_body, QStringLiteral("now"),
+                                       /*unread=*/true, QStringLiteral("recovery-view"), QStringLiteral("Recover"),
+                                       /*is_deep_link=*/false);
+        refreshHubUnreadBell();
     }
 
     // Parent to the central widget (same pattern as about_overlay_ / source_picker_overlay_).
@@ -1638,11 +1663,10 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
         if (webcam_page_)
             webcam_page_->setRecordingControlsLocked(locked);
 
-        // UPDATE-WIRE-R1: pause update checks (disable the Check button + show the
-        // paused banner) while capturing or finalizing.
-        if (auto* update_panel = config_page_->findChild<exosnap::ui::dialogs::UpdateSettingsPanel*>(
-                QStringLiteral("settingsUpdatePanel")))
-            update_panel->setRecordingActive(recording_active_ || remuxing_active_);
+        // PS-PHASE-E: pause update checks (disable the Check button + show the
+        // paused banner) while capturing or finalizing. Panel is now in About overlay.
+        if (about_overlay_ && about_overlay_->updatePanel())
+            about_overlay_->updatePanel()->setRecordingActive(recording_active_ || remuxing_active_);
     }
 
     applyTitleBarStatus();
@@ -3113,6 +3137,18 @@ void MainWindow::initNotificationToasts() {
                     event.body = QStringLiteral("Recording stopped — output drive is critically low on disk space.");
                     event.action = notifications::NotificationAction::ChangeFolder;
                     event.secondary_action = notifications::NotificationAction::None; // Dismiss shown by ghost pill
+                    // PS-PHASE-E: also add a hub advisory for low-disk.
+                    if (notification_hub_) {
+                        notification_hub_->removeAdvisoryById(QStringLiteral("low-disk"));
+                        notification_hub_->addAdvisory(
+                            QStringLiteral("low-disk"), QStringLiteral("caution"),
+                            QStringLiteral("Storage running low"),
+                            QStringLiteral("Recording stopped — output drive is critically low on disk space."),
+                            QStringLiteral("now"), /*unread=*/true, QStringLiteral("settings/output"),
+                            QStringLiteral("Change folder"),
+                            /*is_deep_link=*/true);
+                        refreshHubUnreadBell();
+                    }
                 } else {
                     // Trigger 3: unexpected engine failure — "Recording stopped unexpectedly" (error, sticky).
                     // Mappe spec: action "Show file" (primary).
@@ -3166,6 +3202,16 @@ void MainWindow::updateNotificationToastsEnabled() {
 }
 
 // ---------------------------------------------------------------------------
+// PS-PHASE-E: hub bell unread count refresh
+// ---------------------------------------------------------------------------
+
+void MainWindow::refreshHubUnreadBell() {
+    if (!notification_hub_ || !title_bar_)
+        return;
+    title_bar_->setBellUnreadCount(notification_hub_->unreadCount());
+}
+
+// ---------------------------------------------------------------------------
 // UPDATE-WIRE-R1 (ADR 0012): update check + result handling
 // ---------------------------------------------------------------------------
 
@@ -3173,10 +3219,8 @@ void MainWindow::triggerUpdateCheck() {
     if (update_service_ == nullptr)
         return;
 
-    auto* update_panel =
-        config_page_
-            ? config_page_->findChild<exosnap::ui::dialogs::UpdateSettingsPanel*>(QStringLiteral("settingsUpdatePanel"))
-            : nullptr;
+    // PS-PHASE-E: update panel is in AboutOverlay, not ConfigPage.
+    auto* update_panel = about_overlay_ ? about_overlay_->updatePanel() : nullptr;
 
     // App-layer recording guard: never contact the update server while a recording
     // or MP4 remux is in flight. The panel surfaces the paused banner instead.
@@ -3194,10 +3238,8 @@ void MainWindow::triggerUpdateCheck() {
 }
 
 void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) {
-    auto* update_panel =
-        config_page_
-            ? config_page_->findChild<exosnap::ui::dialogs::UpdateSettingsPanel*>(QStringLiteral("settingsUpdatePanel"))
-            : nullptr;
+    // PS-PHASE-E: update panel is in AboutOverlay.
+    auto* update_panel = about_overlay_ ? about_overlay_->updatePanel() : nullptr;
 
     const QString current_version = QString::fromLatin1(exosnap::build::kVersion);
     const QString channel =
@@ -3245,10 +3287,25 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
             ? QStringLiteral("Update available: %1 → %2 (%3)").arg(current_version, available_version, channel)
             : QStringLiteral("Up to date (%1, %2)").arg(current_version, channel));
 
-    // Notify-on-available: timed info toast routed to Settings → Software updates.
+    // Notify-on-available: timed info toast + hub advisory.
     // (Toast action pills are visual-only today — the toast is capture-excluded /
-    // transparent-for-input — but OpenUpdate carries the intent to navigate to
-    // kSettingsPageIndex once toast actions become interactive.)
+    // transparent-for-input — but OpenUpdate carries the intent to open About once
+    // toast actions become interactive.)
+    // PS-PHASE-E: hub advisory update-available → deep-link "update-view" → open About overlay.
+    if (notification_hub_) {
+        // Always clear stale advisory first (handles: up-to-date after was-available).
+        notification_hub_->removeAdvisoryById(QStringLiteral("update-available"));
+        if (result.update_available) {
+            notification_hub_->addAdvisory(QStringLiteral("update-available"), QStringLiteral("info"),
+                                           QStringLiteral("Update available \xe2\x80\x94 %1").arg(available_version),
+                                           QStringLiteral("Signature verified. Open About to download."),
+                                           QStringLiteral("now"), /*unread=*/true, QStringLiteral("update-view"),
+                                           QStringLiteral("View in About"),
+                                           /*is_deep_link=*/false);
+            refreshHubUnreadBell();
+        }
+    }
+
     if (result.update_available && persisted_settings_.show_notifications && notification_manager_) {
         notifications::NotificationEvent event;
         event.type = notifications::NotificationType::UpdateAvailable;

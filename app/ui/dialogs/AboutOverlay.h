@@ -9,6 +9,10 @@ class QPaintEvent;
 class QShowEvent;
 
 namespace exosnap::ui::dialogs {
+class UpdateSettingsPanel;
+} // namespace exosnap::ui::dialogs
+
+namespace exosnap::ui::dialogs {
 
 // In-window About surface. Renders as a translucent backdrop with a centered
 // About card *inside* the application window — there is no separate native OS
@@ -18,6 +22,9 @@ namespace exosnap::ui::dialogs {
 // central widget); it tracks the parent's geometry and fills it. Open with
 // openOverlay(); it dismisses on Escape, on a backdrop click, or via the Close
 // action, emitting closed() each time it is dismissed.
+//
+// PS-PHASE-E: The overlay now hosts the UpdateSettingsPanel below the info card.
+// MainWindow wires the update panel via updatePanel() instead of findChild on ConfigPage.
 class AboutOverlay : public QWidget {
     Q_OBJECT
   public:
@@ -27,8 +34,15 @@ class AboutOverlay : public QWidget {
     void closeOverlay();
     bool isOpen() const noexcept;
 
+    // Returns the embedded update settings panel (never null after construction).
+    UpdateSettingsPanel* updatePanel() const {
+        return update_panel_;
+    }
+
   signals:
     void closed();
+    // Forwarded from UpdateSettingsPanel::checkRequested — MainWindow connects here.
+    void checkForUpdatesRequested();
 
   protected:
     void keyPressEvent(QKeyEvent* event) override;
@@ -39,9 +53,15 @@ class AboutOverlay : public QWidget {
 
   private:
     void syncGeometryToParent();
-    QFrame* buildCard();
+    // Builds and returns the container widget (holds the aboutCard QFrame +
+    // the UpdateSettingsPanel). card_ points to this container; the inner QFrame
+    // keeps the objectName "aboutCard" for tests.
+    QWidget* buildCard();
 
-    QFrame* card_ = nullptr;
+    // Container widget (holds aboutCard QFrame + update panel).
+    QWidget* card_ = nullptr;
+    // Embedded update settings panel — wired by MainWindow via updatePanel().
+    UpdateSettingsPanel* update_panel_ = nullptr;
 };
 
 } // namespace exosnap::ui::dialogs
