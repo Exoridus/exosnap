@@ -680,33 +680,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         audio_panel_layout->addWidget(mic_row);
     }
 
-    // SETTINGS-TIERS-R1: "Separate track" toggles behind an Advanced expander.
-    // The three separate_check_ widgets are reparented from their original rows
-    // into the expander content. Qt removes them from the old layouts automatically.
-    audio_separate_expander_ = new ui::widgets::SettingsCardExpander(3, audio_panel);
-    audio_separate_expander_->setObjectName(QStringLiteral("audioSeparateExpander"));
-    {
-        auto* sep_content = audio_separate_expander_->contentWidget();
-        auto* sep_layout = qobject_cast<QVBoxLayout*>(sep_content->layout());
-
-        auto makeSeprateRow = [&](const QString& label_text, ui::widgets::ExoToggle* toggle) {
-            auto* row = new QHBoxLayout();
-            row->setSpacing(8);
-            auto* lbl = new QLabel(label_text, sep_content);
-            lbl->setProperty("labelRole", "muted");
-            row->addWidget(lbl);
-            row->addStretch();
-            // Reparent the toggle from its original audio row into the expander content.
-            // Qt removes it from the old QHBoxLayout cell automatically.
-            toggle->setParent(sep_content);
-            row->addWidget(toggle);
-            sep_layout->addLayout(row);
-        };
-        makeSeprateRow(QStringLiteral("System audio"), sys_separate_check_);
-        makeSeprateRow(QStringLiteral("App audio"), app_separate_check_);
-        makeSeprateRow(QStringLiteral("Microphone"), mic_separate_check_);
-    }
-    audio_panel_layout->addWidget(audio_separate_expander_);
+    // SETTINGS-TIERS-R1 Phase 1b: the "Separate track" toggles stay in their own
+    // source rows (beside the enabled check and dB label).  An expander is wrong
+    // here because each toggle is a per-row control, not a cohesive Advanced group.
+    // audio_separate_expander_ remains null; the store field is harmless / unused.
 
     audio_panel_layout->addWidget(
         makeHint(QStringLiteral("Separate tracks keep each source on its own channel for editing."), audio_panel));
@@ -1131,8 +1108,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // SETTINGS-TIERS-R1: expander state change signals.
     connect(output_split_expander_, &ui::widgets::SettingsCardExpander::expandedChanged, this,
             [this](bool expanded) { emit outputSplitExpanderChanged(expanded); });
-    connect(audio_separate_expander_, &ui::widgets::SettingsCardExpander::expandedChanged, this,
-            [this](bool expanded) { emit audioSeparateExpanderChanged(expanded); });
+    // audio_separate_expander_ is null (removed in Phase 1b); audioSeparateExpanderChanged
+    // is kept in the header for backward compatibility but is never emitted.
 
     // Prevent accidental value changes when the mouse wheel scrolls the (long) Config
     // page while the cursor happens to be over a combo box. The filter forwards the

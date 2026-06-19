@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDir>
@@ -91,11 +92,14 @@ TEST(AppSettingsTiersStoreTest, OutputSplitExpanderExpanded_SaveAndLoad_True) {
 }
 
 TEST(AppSettingsTiersStoreTest, AudioSeparateExpanderExpanded_DefaultIsFalse) {
+    // audio_separate_expander_expanded is kept in the store for forward-compat
+    // (Phase 1b removed the audio expander from the UI; the store field is harmless).
     PersistedAppSettings settings;
     EXPECT_FALSE(settings.audio_separate_expander_expanded);
 }
 
 TEST(AppSettingsTiersStoreTest, AudioSeparateExpanderExpanded_SaveAndLoad_True) {
+    // Store round-trip is preserved even though the UI no longer shows an audio expander.
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
@@ -269,23 +273,36 @@ TEST_F(SettingsTiersTest, ConfigPage_SetOutputSplitExpanderExpanded_RoundTrip) {
     EXPECT_FALSE(page.outputSplitExpanderExpanded());
 }
 
-TEST_F(SettingsTiersTest, ConfigPage_AudioSeparateExpanderExists) {
+// Phase 1b: the audio-separate expander was removed (per-row toggles stay beside
+// their own row).  The public API (setAudioSeparateExpanderExpanded / audioSeparateExpanderExpanded)
+// is preserved for backward compat but always returns false — no expander widget exists.
+
+TEST_F(SettingsTiersTest, ConfigPage_AudioSeparateExpanderAbsent) {
+    // Phase 1b: no audioSeparateExpander widget exists in the tree.
     ConfigPage page(output_defaults_, video_defaults_);
     auto* expander = page.findChild<ui::widgets::SettingsCardExpander*>(QStringLiteral("audioSeparateExpander"));
-    ASSERT_NE(expander, nullptr);
+    EXPECT_EQ(expander, nullptr);
 }
 
-TEST_F(SettingsTiersTest, ConfigPage_AudioSeparateExpander_DefaultCollapsed) {
+TEST_F(SettingsTiersTest, ConfigPage_AudioSeparateExpanderExpanded_AlwaysFalse) {
+    // Phase 1b: getter returns false because no expander exists.
     ConfigPage page(output_defaults_, video_defaults_);
     EXPECT_FALSE(page.audioSeparateExpanderExpanded());
-}
-
-TEST_F(SettingsTiersTest, ConfigPage_SetAudioSeparateExpanderExpanded_RoundTrip) {
-    ConfigPage page(output_defaults_, video_defaults_);
+    // Setting expanded has no effect.
     page.setAudioSeparateExpanderExpanded(true);
-    EXPECT_TRUE(page.audioSeparateExpanderExpanded());
-    page.setAudioSeparateExpanderExpanded(false);
     EXPECT_FALSE(page.audioSeparateExpanderExpanded());
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_AudioSeparateTogglesInSourceRows) {
+    // Phase 1b: sys/app/mic separate-track toggles must exist as children of ConfigPage
+    // (inside their source rows, not inside an expander).
+    ConfigPage page(output_defaults_, video_defaults_);
+    // The toggles are ExoToggle widgets; we verify they are present and correctly wired
+    // by checking the named audio check boxes that sit beside them.
+    auto* sys_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioSysCheck"));
+    ASSERT_NE(sys_check, nullptr);
+    auto* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    ASSERT_NE(app_check, nullptr);
 }
 
 } // namespace
