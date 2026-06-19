@@ -697,6 +697,17 @@ void RecordPage::showEvent(QShowEvent* event) {
         return;
 #endif
     QTimer::singleShot(0, this, [this]() { ensureCoordinatorInit(); });
+
+    // A hidden QStackedWidget page receives no resizeEvent. If the window was resized
+    // or maximized while the Record page was on the stack but not the current page, the
+    // preview kept its stale (e.g. windowed) size. Recompute the responsive layout and
+    // the 16:9 preview clamp now that the page is visible again. Deferred via a
+    // zero-timer so the host widget has settled to its final size before we clamp.
+    QTimer::singleShot(0, this, [this]() {
+        updateResponsiveLayout();
+        updatePreviewHeightClamp();
+        updatePreviewContextChips();
+    });
 }
 
 void RecordPage::hideEvent(QHideEvent* event) {
