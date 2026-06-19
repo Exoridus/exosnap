@@ -481,10 +481,14 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                  preset_panel));
     layout->addWidget(preset_panel);
 
-    // ---- TWO-COLUMN REGION (Format & encoding | Audio) ----
-    // The left column holds Format & encoding; the right column holds Audio. On narrow
-    // viewports the columns flip from side-by-side to a single stacked column
-    // (updateResponsiveLayout()).
+    // ---- TWO-COLUMN CARD GRID (D6 design: Format | Audio / Webcam | Output / Presence | Appearance) ----
+    // Left column: Format & encoding, Webcam, Presence.
+    // Right column: Audio, Output, Appearance.
+    // On narrow viewports updateResponsiveLayout() flips both columns to a single stacked column.
+    // Updates card is placed full-width below the grid; Developer is full-width below that
+    // (expert-gated). The six main cards are individually visibility-controlled by
+    // applySettingsSearch so the grid host (columns_widget_) is only hidden when all six are
+    // hidden (cosmetic gap limitation is acceptable — see applySettingsSearch).
     auto* columns = new QWidget(content);
     columns_widget_ = columns;
     columns_layout_ = new QHBoxLayout(columns);
@@ -776,9 +780,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     updateAudioCodecChoices();
 
     left_layout->addWidget(fmt_panel);
-    left_layout->addStretch();
 
-    // ---- AUDIO CARD (right) ----
+    // ---- AUDIO CARD (right column) ----
     auto* audio_panel = makePanel(right_col);
     audio_panel_ = audio_panel;
     auto* audio_panel_layout = new QVBoxLayout(audio_panel);
@@ -911,10 +914,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     audio_summary_label_->setVisible(false);
     audio_panel_layout->addWidget(audio_summary_label_);
     right_layout->addWidget(audio_panel);
-    right_layout->addStretch();
 
-    // ---- WEBCAM CARD (full width — inline setup panel, no navigation required) ----
-    auto* webcam_panel = makePanel(content);
+    // ---- WEBCAM CARD (left column — D6: in 2-column grid below Format) ----
+    auto* webcam_panel = makePanel(left_col);
     webcam_panel_ = webcam_panel;
     auto* webcam_panel_layout = new QVBoxLayout(webcam_panel);
     webcam_panel_layout->setContentsMargins(18, 16, 18, 18);
@@ -924,18 +926,33 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     webcam_setup_panel_ = new ui::widgets::WebcamSetupPanel(webcam_panel);
     webcam_setup_panel_->setObjectName(QStringLiteral("settingsWebcamSetupPanel"));
     webcam_panel_layout->addWidget(webcam_setup_panel_);
-    layout->addWidget(webcam_panel);
+    left_layout->addWidget(webcam_panel);
 
-    // ---- OUTPUT CARD (full width) ----
-    auto* out_panel = makePanel(content);
+    // ---- OUTPUT CARD (right column — D6: in 2-column grid below Audio) ----
+    auto* out_panel = makePanel(right_col);
     out_panel_ = out_panel;
     auto* out_panel_layout = new QVBoxLayout(out_panel);
     out_panel_layout->setContentsMargins(18, 16, 18, 18);
     out_panel_layout->setSpacing(12);
     out_panel_layout->addWidget(makeCardTitle(QStringLiteral("Output"), out_panel));
 
-    out_panel_layout->addWidget(
-        makeFieldLabelWithHint(QStringLiteral("Output resolution"), ui::hints::kOutputResolution, out_panel));
+    // D6: CompareHint for Output resolution (replaces plain InfoHintIcon).
+    resolution_compare_hint_ =
+        new ui::widgets::CompareHint(QStringLiteral("resolution"), QStringLiteral("Native"), out_panel);
+
+    // Label + CompareHint side by side (matches makeFieldLabelWithHint layout but with CompareHint).
+    {
+        auto* res_label_row = new QWidget(out_panel);
+        auto* rll = new QHBoxLayout(res_label_row);
+        rll->setContentsMargins(0, 0, 0, 0);
+        rll->setSpacing(4);
+        auto* res_lbl = new QLabel(QStringLiteral("OUTPUT RESOLUTION"), res_label_row);
+        res_lbl->setProperty("labelRole", "fieldLabel");
+        rll->addWidget(res_lbl);
+        rll->addWidget(resolution_compare_hint_, 0, Qt::AlignVCenter);
+        rll->addStretch();
+        out_panel_layout->addWidget(res_label_row);
+    }
     auto* out_res_segmented = new QWidget(out_panel);
     out_res_segmented->setObjectName(QStringLiteral("outputResSegmented"));
     auto* out_res_layout = new QHBoxLayout(out_res_segmented);
@@ -1187,20 +1204,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_split_layout_->addWidget(output_fields, 3);
     output_split_layout_->addWidget(output_help, 2);
     out_panel_layout->addWidget(output_split);
-    layout->addWidget(out_panel);
+    right_layout->addWidget(out_panel);
 
-    // ---- SOFTWARE UPDATES CARD (full width — UPDATE-WIRE-R1) ----
-    // The UpdateSettingsPanel is a self-contained card (own header/border), so it is
-    // added directly to the scroll column rather than wrapped in another makePanel.
-    // MainWindow wires it via findChild(objectName "settingsUpdatePanel").
-    update_settings_panel_ = new ui::dialogs::UpdateSettingsPanel(content);
-    update_settings_panel_->setObjectName(QStringLiteral("settingsUpdatePanel"));
-    update_panel_wrapper_ = update_settings_panel_; // search filter alias
-    layout->addWidget(update_settings_panel_);
-
-    // ---- PRESENCE CARD (full width — SETTINGS-TIERS-P3) — D6: flat rows ----
+    // ---- PRESENCE CARD (left column — SETTINGS-TIERS-P3) — D6: flat rows, below Webcam ----
     {
-        auto* presence_panel = makePanel(content);
+        auto* presence_panel = makePanel(left_col);
         presence_panel_ = presence_panel;
         auto* presence_layout = new QVBoxLayout(presence_panel);
         presence_layout->setContentsMargins(18, 14, 18, 14);
@@ -1250,12 +1258,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                             new ui::widgets::InfoHintIcon(ui::hints::kQuickControlPill, presence_panel), QString(),
                             quick_controls_check_));
 
-        layout->addWidget(presence_panel);
+        left_layout->addWidget(presence_panel);
+        left_layout->addStretch();
     }
 
-    // ---- APPEARANCE CARD (full width — SETTINGS-TIERS-P3) — D6: flat rows ----
+    // ---- APPEARANCE CARD (right column — SETTINGS-TIERS-P3) — D6: flat rows, below Output ----
     {
-        auto* appearance_panel = makePanel(content);
+        auto* appearance_panel = makePanel(right_col);
         appearance_panel_ = appearance_panel;
         auto* appearance_layout = new QVBoxLayout(appearance_panel);
         appearance_layout->setContentsMargins(18, 14, 18, 14);
@@ -1273,10 +1282,20 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                             new ui::widgets::InfoHintIcon(ui::hints::kAccent, appearance_panel), QString(),
                             accent_combo_, /*first=*/true));
 
-        layout->addWidget(appearance_panel);
+        right_layout->addWidget(appearance_panel);
+        right_layout->addStretch();
     }
 
-    // ---- DEVELOPER CARD (Expert-gated — SETTINGS-TIERS-P3) ----
+    // ---- SOFTWARE UPDATES CARD (full width — UPDATE-WIRE-R1, below the 2-column grid) ----
+    // The UpdateSettingsPanel is a self-contained card (own header/border), so it is
+    // added directly to the scroll column rather than wrapped in another makePanel.
+    // MainWindow wires it via findChild(objectName "settingsUpdatePanel").
+    update_settings_panel_ = new ui::dialogs::UpdateSettingsPanel(content);
+    update_settings_panel_->setObjectName(QStringLiteral("settingsUpdatePanel"));
+    update_panel_wrapper_ = update_settings_panel_; // search filter alias
+    layout->addWidget(update_settings_panel_);
+
+    // ---- DEVELOPER CARD (Expert-gated, full width — SETTINGS-TIERS-P3) ----
     // UI-only debug stubs (log level, NVTX). No persistence — local variables only.
     {
         developer_card_ = makePanel(content);
@@ -1508,6 +1527,20 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             onTimingSelected(1);
         else if (v == QLatin1String("VFR"))
             onTimingSelected(0);
+    });
+    // D6 Task C: resolution CompareHint → output resolution selection.
+    // Options: "Native" (Native), "1080p" (FHD1080), "720p" (HD720), "Custom" (Custom).
+    // 4K and 1440p are intentionally not in the compare data; they fall through as no-op.
+    connect(resolution_compare_hint_, &ui::widgets::CompareHint::optionSelected, this, [this](const QString& v) {
+        if (v == QLatin1String("Native"))
+            onOutputResolutionSelected(static_cast<int>(OutputResolutionMode::Native));
+        else if (v == QLatin1String("1080p"))
+            onOutputResolutionSelected(static_cast<int>(OutputResolutionMode::FHD1080));
+        else if (v == QLatin1String("720p"))
+            onOutputResolutionSelected(static_cast<int>(OutputResolutionMode::HD720));
+        else if (v == QLatin1String("Custom"))
+            onOutputResolutionSelected(static_cast<int>(OutputResolutionMode::Custom));
+        // 4K / 1440p: no-op (not in compare data)
     });
 
     setReadinessStatus(QStringLiteral("CHECKING"));
@@ -2080,6 +2113,30 @@ void ConfigPage::updateOutputResolutionSelection() {
     sync_segment(output_res_1080_btn_, OutputResolutionMode::FHD1080);
     sync_segment(output_res_720_btn_, OutputResolutionMode::HD720);
     sync_segment(output_res_custom_btn_, OutputResolutionMode::Custom);
+
+    // D6 Task C: keep resolution CompareHint highlighted row in sync.
+    if (resolution_compare_hint_) {
+        const auto mode = format_settings_.resolution.mode;
+        QString label;
+        switch (mode) {
+        case OutputResolutionMode::Native:
+            label = QStringLiteral("Native");
+            break;
+        case OutputResolutionMode::FHD1080:
+            label = QStringLiteral("1080p");
+            break;
+        case OutputResolutionMode::HD720:
+            label = QStringLiteral("720p");
+            break;
+        case OutputResolutionMode::Custom:
+            label = QStringLiteral("Custom");
+            break;
+        default:
+            label = QStringLiteral("Native");
+            break;
+        }
+        resolution_compare_hint_->setCurrentValue(label);
+    }
 }
 
 void ConfigPage::updateCustomResolutionVisibility() {
@@ -2723,7 +2780,12 @@ void ConfigPage::applySettingsSearch(const QString& query) {
     if (preset_panel_)
         preset_panel_->setVisible(preset_match);
 
-    const bool any_column_visible = fmt_match || audio_match;
+    // D6: all 6 grid cards (fmt, audio, webcam, output, presence, appearance) live in
+    // columns_widget_. Hide the host only when all six are hidden to avoid an empty gap.
+    // Cosmetic: when only some cards are hidden, the remaining card in each column expands
+    // vertically to fill the gap — this is an accepted limitation per the D6 brief.
+    const bool any_column_visible =
+        fmt_match || audio_match || webcam_match || output_match || presence_match || appearance_match;
     if (columns_widget_)
         columns_widget_->setVisible(any_column_visible);
     if (fmt_panel_)

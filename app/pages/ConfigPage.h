@@ -251,18 +251,8 @@ class ConfigPage : public QWidget {
     bool active_preset_is_built_in_ = false;
     bool active_preset_is_available_ = true;
 
-    QBoxLayout* columns_layout_ = nullptr;
-    QBoxLayout* output_split_layout_ = nullptr;
-
-    // D6: additional two-column layout blocks
-    QBoxLayout* webcam_output_layout_ = nullptr;
-    QBoxLayout* presence_appearance_layout_ = nullptr;
-    QWidget* webcam_output_widget_ = nullptr;
-    QWidget* webcam_col_ = nullptr;
-    QWidget* output_col_ = nullptr;
-    QWidget* presence_appearance_widget_ = nullptr;
-    QWidget* presence_col_ = nullptr;
-    QWidget* appearance_col_ = nullptr;
+    QBoxLayout* columns_layout_ = nullptr;      // host for the two-column card grid
+    QBoxLayout* output_split_layout_ = nullptr; // inner field/help split inside Output card
 
     QButtonGroup* container_group_ = nullptr;
     QPushButton* mkv_radio_ = nullptr;
