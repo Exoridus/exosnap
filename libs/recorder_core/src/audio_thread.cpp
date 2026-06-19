@@ -148,6 +148,8 @@ void AudioThread::Run() {
     if (m_state.config.audio_codec == AudioCodec::Opus) {
         // --- Opus encoder init ---
         OpusAudioEncoder opusEnc;
+        opusEnc.SetEncodingParams(m_state.config.audio_bitrate_kbps, m_state.config.opus_frame_duration,
+                                  m_state.config.opus_complexity);
         {
             std::string err;
             if (!opusEnc.Init(kSampleRate, kChannels, err)) {
@@ -302,6 +304,7 @@ void AudioThread::Run() {
 
     // --- Init AAC encoder ---
     FdkAacEncoder aacEnc;
+    aacEnc.SetBitrateKbps(m_state.config.audio_bitrate_kbps);
     {
         std::string err;
         if (!aacEnc.Init(kSampleRate, kChannels, err)) {

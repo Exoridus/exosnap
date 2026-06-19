@@ -67,6 +67,7 @@ class ConfigPage;
 class DiagnosticsPage;
 class HotkeysPage;
 class LogsPage;
+class OutputPage;
 class RecordPage;
 class UpdateService;
 class WebcamPage;
@@ -155,6 +156,11 @@ class MainWindow : public QMainWindow {
     // Persist the full preset store state.
     void persistPresetState();
 
+    // Export / import handlers (wired to OutputPage signals).
+    void onExportSelectedProfile(const QString& path);
+    void onExportAllUserProfiles(const QString& path);
+    void onImportProfiles(const QString& path);
+
     void saveWindowGeometryToSettings();
 
     // Startup recovery: scan the manifest; open the overlay when candidates exist.
@@ -225,6 +231,7 @@ class MainWindow : public QMainWindow {
     QStackedWidget* stack_ = nullptr;
     RecordPage* record_page_ = nullptr;
     ConfigPage* config_page_ = nullptr;
+    OutputPage* output_page_ = nullptr;
     DiagnosticsPage* diagnostics_page_ = nullptr;
     LogsPage* logs_page_ = nullptr;
     WebcamPage* webcam_page_ = nullptr;

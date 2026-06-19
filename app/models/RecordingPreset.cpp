@@ -205,10 +205,50 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
     if (config.output.container == capability::Container::Mp4 && !config.video.cfr) {
         config.video.cfr = true;
     }
+    // Video: rate_control — default to ConstantQuality if an unknown value slips through.
+    using RC = recorder_core::RateControlMode;
+    if (config.video.rate_control != RC::ConstantQuality && config.video.rate_control != RC::VariableBitrate &&
+        config.video.rate_control != RC::ConstantBitrate && config.video.rate_control != RC::Lossless) {
+        config.video.rate_control = RC::ConstantQuality;
+    }
+    // Lossless is not implemented — silently revert to ConstantQuality.
+    if (config.video.rate_control == RC::Lossless) {
+        config.video.rate_control = RC::ConstantQuality;
+    }
+    // Video: clamp bitrate to [1000, 200000] kbps; only meaningful for VBR/CBR.
+    constexpr uint32_t kMinBitrateKbps = 1000u;
+    constexpr uint32_t kMaxBitrateKbps = 200000u;
+    if (config.video.bitrate_kbps < kMinBitrateKbps) {
+        config.video.bitrate_kbps = kMinBitrateKbps;
+    } else if (config.video.bitrate_kbps > kMaxBitrateKbps) {
+        config.video.bitrate_kbps = kMaxBitrateKbps;
+    }
 
     // Audio: ensure mic_gain_linear is finite and strictly positive.
     if (!std::isfinite(config.audio.mic_gain_linear) || config.audio.mic_gain_linear <= 0.0f) {
         config.audio.mic_gain_linear = 1.0f;
+    }
+
+    // Audio encoding params (ADR 0019):
+    // audio_bitrate_kbps: 0 is valid (auto default); non-zero clamped to broadest safe range.
+    // Codec-specific clamping ([32,510] Opus / [64,320] AAC) happens in the engine.
+    if (config.audio.audio_bitrate_kbps > 510u) {
+        config.audio.audio_bitrate_kbps = 510u;
+    }
+    // opus_complexity: clamp to [0, 10].
+    if (config.audio.opus_complexity < 0) {
+        config.audio.opus_complexity = 0;
+    } else if (config.audio.opus_complexity > 10) {
+        config.audio.opus_complexity = 10;
+    }
+    // opus_frame_duration: reset unknown values to the default (20 ms).
+    {
+        using D = recorder_core::OpusFrameDuration;
+        const int d = static_cast<int>(config.audio.opus_frame_duration);
+        if (d != static_cast<int>(D::Ms20) && d != static_cast<int>(D::Ms10) && d != static_cast<int>(D::Ms5) &&
+            d != static_cast<int>(D::Ms2_5)) {
+            config.audio.opus_frame_duration = D::Ms20;
+        }
     }
 
     // Webcam: delegate to the provided sanitizer (handles NaN/Inf + clamping).
@@ -323,6 +363,12 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     if (a.video.quality != b.video.quality) {
         return false;
     }
+    if (a.video.rate_control != b.video.rate_control) {
+        return false;
+    }
+    if (a.video.bitrate_kbps != b.video.bitrate_kbps) {
+        return false;
+    }
     if (a.video.cfr != b.video.cfr) {
         return false;
     }
@@ -350,6 +396,17 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
         return false;
     }
     if (std::abs(a.audio.mic_gain_linear - b.audio.mic_gain_linear) > 1e-3f) {
+        return false;
+    }
+
+    // Audio encoding params (ADR 0019).
+    if (a.audio.audio_bitrate_kbps != b.audio.audio_bitrate_kbps) {
+        return false;
+    }
+    if (a.audio.opus_frame_duration != b.audio.opus_frame_duration) {
+        return false;
+    }
+    if (a.audio.opus_complexity != b.audio.opus_complexity) {
         return false;
     }
 
@@ -493,6 +550,12 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
     if (a.video.quality != b.video.quality) {
         return false;
     }
+    if (a.video.rate_control != b.video.rate_control) {
+        return false;
+    }
+    if (a.video.bitrate_kbps != b.video.bitrate_kbps) {
+        return false;
+    }
     if (a.video.cfr != b.video.cfr) {
         return false;
     }
@@ -520,6 +583,17 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (std::abs(a.audio.mic_gain_linear - b.audio.mic_gain_linear) > 1e-3f) {
+        return false;
+    }
+
+    // Audio encoding params (ADR 0019).
+    if (a.audio.audio_bitrate_kbps != b.audio.audio_bitrate_kbps) {
+        return false;
+    }
+    if (a.audio.opus_frame_duration != b.audio.opus_frame_duration) {
+        return false;
+    }
+    if (a.audio.opus_complexity != b.audio.opus_complexity) {
         return false;
     }
 

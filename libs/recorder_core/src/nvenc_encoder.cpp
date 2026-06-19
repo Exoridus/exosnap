@@ -336,6 +336,74 @@ bool NvencEncoder::QueryH264Nv12Support(std::string& out_error) {
 }
 
 // ---------------------------------------------------------------------------
+// ComputeNvencRcParams — pure mapping from canonical rate-control to NVENC
+// ---------------------------------------------------------------------------
+//
+// NVENC SDK field names used here (NV_ENC_RC_PARAMS):
+//   rcParams.rateControlMode   — NV_ENC_PARAMS_RC_CONSTQP / _VBR / _CBR
+//   rcParams.constQP.qpIntra   — CQP I-frame quantizer (ConstantQuality)
+//   rcParams.constQP.qpInterP  — CQP P-frame quantizer (ConstantQuality)
+//   rcParams.constQP.qpInterB  — CQP B-frame quantizer (ConstantQuality; B=0 here)
+//   rcParams.averageBitRate    — target average bitrate in bps (VBR/CBR)
+//   rcParams.maxBitRate        — peak bitrate in bps (VBR: 1.5× avg; CBR: = avg)
+
+RcParams ComputeNvencRcParams(RateControlMode mode, NvencQualityPreset quality, uint32_t bitrate_kbps) {
+    RcParams p{};
+    switch (mode) {
+    case RateControlMode::ConstantQuality: {
+        p.rateControlMode = static_cast<uint32_t>(NV_ENC_PARAMS_RC_CONSTQP);
+        switch (quality) {
+        case NvencQualityPreset::High:
+            p.qpIntra = 19;
+            p.qpInterP = 21;
+            p.qpInterB = 21;
+            break;
+        case NvencQualityPreset::Balanced:
+            p.qpIntra = 24;
+            p.qpInterP = 26;
+            p.qpInterB = 26;
+            break;
+        case NvencQualityPreset::Small:
+            p.qpIntra = 30;
+            p.qpInterP = 32;
+            p.qpInterB = 32;
+            break;
+        }
+        p.averageBitRate = 0;
+        p.maxBitRate = 0;
+        break;
+    }
+    case RateControlMode::VariableBitrate: {
+        // VBR: encoder targets averageBitRate; allows peaks up to maxBitRate (1.5×).
+        // rcParams.averageBitRate / rcParams.maxBitRate are in bps (not kbps).
+        p.rateControlMode = static_cast<uint32_t>(NV_ENC_PARAMS_RC_VBR);
+        p.averageBitRate = bitrate_kbps * 1000u;
+        p.maxBitRate = bitrate_kbps * 1000u * 3u / 2u;
+        p.qpIntra = 0;
+        p.qpInterP = 0;
+        p.qpInterB = 0;
+        break;
+    }
+    case RateControlMode::ConstantBitrate: {
+        // CBR: strict bitrate — averageBitRate == maxBitRate.
+        p.rateControlMode = static_cast<uint32_t>(NV_ENC_PARAMS_RC_CBR);
+        p.averageBitRate = bitrate_kbps * 1000u;
+        p.maxBitRate = bitrate_kbps * 1000u;
+        p.qpIntra = 0;
+        p.qpInterP = 0;
+        p.qpInterB = 0;
+        break;
+    }
+    case RateControlMode::Lossless:
+        // Lossless is not yet implemented. Capability marks it NotImplemented so
+        // the UI hides it. Defensively fall back to ConstantQuality/Balanced.
+        p = ComputeNvencRcParams(RateControlMode::ConstantQuality, NvencQualityPreset::Balanced, bitrate_kbps);
+        break;
+    }
+    return p;
+}
+
+// ---------------------------------------------------------------------------
 // FetchPresetConfig
 // ---------------------------------------------------------------------------
 
@@ -366,28 +434,18 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
         m_encodeConfig.encodeCodecConfig.av1Config.chromaFormatIDC = 1; // YUV420/NV12
     }
 
-    // CQP mode: quality tier drives QP values; bitrate is implicit.
-    m_encodeConfig.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CONSTQP;
-    uint32_t qpI = 24, qpP = 26;
-    switch (m_qualityPreset) {
-    case NvencQualityPreset::High:
-        qpI = 19;
-        qpP = 21;
-        break;
-    case NvencQualityPreset::Balanced:
-        qpI = 24;
-        qpP = 26;
-        break;
-    case NvencQualityPreset::Small:
-        qpI = 30;
-        qpP = 32;
-        break;
-    }
-    m_encodeConfig.rcParams.constQP.qpIntra = qpI;
-    m_encodeConfig.rcParams.constQP.qpInterP = qpP;
-    m_encodeConfig.rcParams.constQP.qpInterB = qpP;
+    // Apply canonical rate-control via the pure, testable ComputeNvencRcParams helper.
+    // NVENC SDK field names: rcParams.rateControlMode / constQP / averageBitRate / maxBitRate.
+    const RcParams rc = ComputeNvencRcParams(m_rateControlMode, m_qualityPreset, m_bitrate_kbps);
+    m_encodeConfig.rcParams.rateControlMode = static_cast<NV_ENC_PARAMS_RC_MODE>(rc.rateControlMode);
+    m_encodeConfig.rcParams.constQP.qpIntra = rc.qpIntra;
+    m_encodeConfig.rcParams.constQP.qpInterP = rc.qpInterP;
+    m_encodeConfig.rcParams.constQP.qpInterB = rc.qpInterB;
+    m_encodeConfig.rcParams.averageBitRate = rc.averageBitRate;
+    m_encodeConfig.rcParams.maxBitRate = rc.maxBitRate;
 
     // Zero lookahead and P-only: prevents 8-slot NVENC input ring from exhausting.
+    // AV1 P4 constraint — do not change frameIntervalP.
     m_encodeConfig.rcParams.enableLookahead = 0;
     m_encodeConfig.rcParams.lookaheadDepth = 0;
     m_encodeConfig.frameIntervalP = 1;

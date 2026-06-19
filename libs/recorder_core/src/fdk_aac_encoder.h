@@ -14,6 +14,14 @@ class FdkAacEncoder : public IAudioEncoder {
   public:
     ~FdkAacEncoder() override;
 
+    // Set AAC bitrate before Init(). bitrate_kbps=0 keeps the hardcoded default (192 kbps).
+    // Valid range: [64, 320] kbps. Values outside the range are clamped.
+    void SetBitrateKbps(uint32_t bitrate_kbps) noexcept;
+
+    // Clamp to valid FDK-AAC range [64, 320] kbps. 0 maps to kDefaultBitrateKbps.
+    // Exposed as public for unit testing.
+    static uint32_t ResolveBitrateKbps(uint32_t kbps) noexcept;
+
     bool Init(uint32_t sample_rate, uint32_t channels, std::string& out_error) override;
 
     void FeedFloat32(const float* data, size_t total_float_samples, uint64_t pts_ns, uint64_t& accumulated_frames,
@@ -27,6 +35,9 @@ class FdkAacEncoder : public IAudioEncoder {
 
   private:
     static constexpr int kFrameSizeSamples = 1024;
+    static constexpr uint32_t kDefaultBitrateKbps = 192;
+
+    uint32_t m_bitrate_kbps = 0; // 0 = use kDefaultBitrateKbps
 
     AACENCODER* m_enc = nullptr;
     uint32_t m_sample_rate = 0;

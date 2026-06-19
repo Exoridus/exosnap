@@ -137,4 +137,21 @@ SupportAnnotation CapabilitySet::QueryBitDepth(BitDepth bd) const {
     return LookupAnnotation(bit_depths, bd, "bit depth");
 }
 
+SupportAnnotation CapabilitySet::QueryRateControlMode(recorder_core::RateControlMode mode) const {
+    // Static capability declaration for NVENC (ADR 0009).
+    // CQ / VBR / CBR are implemented and available.
+    // Lossless is not yet implemented for any encoder — hidden in UI per ADR 0009.
+    switch (mode) {
+    case recorder_core::RateControlMode::ConstantQuality:
+        return {SupportLevel::Available, "NVENC CQP — quality-target, encoder chooses bitrate."};
+    case recorder_core::RateControlMode::VariableBitrate:
+        return {SupportLevel::Available, "NVENC VBR — encoder targets a bitrate, quality varies."};
+    case recorder_core::RateControlMode::ConstantBitrate:
+        return {SupportLevel::Available, "NVENC CBR — strict bitrate, quality managed by encoder."};
+    case recorder_core::RateControlMode::Lossless:
+        return {SupportLevel::NotImplemented, "Lossless encoding is not yet implemented. Hidden in UI."};
+    }
+    return {SupportLevel::Invalid, "Unknown rate-control mode."};
+}
+
 } // namespace exosnap::capability

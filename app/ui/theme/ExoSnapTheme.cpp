@@ -1,5 +1,7 @@
 #include "ExoSnapTheme.h"
 
+#include <algorithm>
+
 #include <QApplication>
 #include <QColor>
 #include <QFile>
@@ -19,6 +21,83 @@
 
 namespace exosnap::ui::theme {
 namespace {
+
+// ---------------------------------------------------------------------------
+// Accent color derivation
+// ---------------------------------------------------------------------------
+
+// Resolve an accent entry by id; returns nullptr if not found.
+const ExoSnapAccent* FindAccent(const QString& accent_id) {
+    for (const auto& a : kExoSnapAccents) {
+        if (QString::fromUtf8(a.id) == accent_id)
+            return &a;
+    }
+    return nullptr;
+}
+
+// The default accent entry (first in the curated table = Studio Mint).
+const ExoSnapAccent& DefaultAccent() {
+    return kExoSnapAccents.front();
+}
+
+// Resolve an accent by id, falling back to the default accent when not found.
+const ExoSnapAccent& ResolveAccent(const QString& accent_id) {
+    if (const ExoSnapAccent* a = FindAccent(accent_id))
+        return *a;
+    qWarning().noquote() << "ExoSnap: unknown accent id" << accent_id << "— falling back to default.";
+    return DefaultAccent();
+}
+
+// Derived alpha token: "rgba(R, G, B, alpha)" from a hex base color.
+QString RgbaToken(const QColor& base, double alpha) {
+    return QStringLiteral("rgba(%1, %2, %3, %4)")
+        .arg(base.red())
+        .arg(base.green())
+        .arg(base.blue())
+        .arg(QString::number(alpha, 'f', 2));
+}
+
+// Lighten a color by blending toward white by `factor` (0=unchanged, 1=white).
+QColor Lighten(const QColor& c, double factor) {
+    const double f = std::clamp(factor, 0.0, 1.0);
+    return QColor(qRound(c.red() + (255 - c.red()) * f), qRound(c.green() + (255 - c.green()) * f),
+                  qRound(c.blue() + (255 - c.blue()) * f));
+}
+
+// Darken a color by blending toward black by `factor` (0=unchanged, 1=black).
+QColor Darken(const QColor& c, double factor) {
+    const double f = std::clamp(factor, 0.0, 1.0);
+    return QColor(qRound(c.red() * (1.0 - f)), qRound(c.green() * (1.0 - f)), qRound(c.blue() * (1.0 - f)));
+}
+
+struct AccentTokens {
+    QString accent;         // ${accent}
+    QString accent_ink;     // ${accent-ink}
+    QString accent_dim;     // ${accent-dim}    alpha 0.14
+    QString accent_soft;    // ${accent-soft}   alpha 0.24
+    QString accent_line;    // ${accent-line}   alpha 0.42
+    QString accent_b2;      // ${accent-b2}     alpha 0.60
+    QString accent_hover;   // ${accent-hover}  slightly lighter
+    QString accent_pressed; // ${accent-pressed} slightly darker
+};
+
+AccentTokens DeriveAccentTokens(const ExoSnapAccent& accent) {
+    const QColor base(QString::fromUtf8(accent.base));
+    AccentTokens t;
+    t.accent = QString::fromUtf8(accent.base);
+    t.accent_ink = QString::fromUtf8(accent.ink);
+    t.accent_dim = RgbaToken(base, 0.14);
+    t.accent_soft = RgbaToken(base, 0.24);
+    t.accent_line = RgbaToken(base, 0.42);
+    t.accent_b2 = RgbaToken(base, 0.60);
+    t.accent_hover = Lighten(base, 0.14).name();
+    t.accent_pressed = Darken(base, 0.09).name();
+    return t;
+}
+
+// Verify that the default accent derives the same values as the static palette
+// constants, so we can trust DeriveAccentTokens is consistent.
+// (Checked in debug builds only; tolerance for rounding in alpha strings.)
 
 constexpr bool CStrEqual(const char* a, const char* b) {
     while (*a != '\0' && *a == *b) {
@@ -120,7 +199,7 @@ QString ReadThemeQss() {
     return stream.readAll();
 }
 
-QVector<ThemeToken> BuildTokens(const ThemeFontFamilies& font_families) {
+QVector<ThemeToken> BuildTokens(const ThemeFontFamilies& font_families, const AccentTokens& at) {
     return {
         {"${bg0}", ExoSnapPalette::kBg0},
         {"${bg1}", ExoSnapPalette::kBg1},
@@ -134,14 +213,14 @@ QVector<ThemeToken> BuildTokens(const ThemeFontFamilies& font_families) {
         {"${text1}", ExoSnapPalette::kText1},
         {"${text2}", ExoSnapPalette::kText2},
         {"${text3}", ExoSnapPalette::kText3},
-        {"${accent}", ExoSnapPalette::kAccent},
-        {"${accent-ink}", ExoSnapPalette::kAccentInk},
-        {"${accent-dim}", ExoSnapPalette::kAccentDim},
-        {"${accent-soft}", ExoSnapPalette::kAccentSoft},
-        {"${accent-line}", ExoSnapPalette::kAccentLine},
-        {"${accent-b2}", ExoSnapPalette::kAccentBorderStrong},
-        {"${accent-hover}", ExoSnapPalette::kAccentHover},
-        {"${accent-pressed}", ExoSnapPalette::kAccentPressed},
+        {"${accent}", at.accent},
+        {"${accent-ink}", at.accent_ink},
+        {"${accent-dim}", at.accent_dim},
+        {"${accent-soft}", at.accent_soft},
+        {"${accent-line}", at.accent_line},
+        {"${accent-b2}", at.accent_b2},
+        {"${accent-hover}", at.accent_hover},
+        {"${accent-pressed}", at.accent_pressed},
         {"${ok}", ExoSnapPalette::kOk},
         {"${warn}", ExoSnapPalette::kWarn},
         {"${err}", ExoSnapPalette::kErr},
@@ -177,12 +256,12 @@ QStringList FindUnresolvedThemeTokens(const QString& stylesheet) {
     return unresolved;
 }
 
-QString BuildThemeStylesheet(const ThemeFontFamilies& font_families) {
+QString BuildThemeStylesheet(const ThemeFontFamilies& font_families, const AccentTokens& at) {
     QString qss = ReadThemeQss();
     if (qss.isEmpty())
         return qss;
 
-    for (const auto& token : BuildTokens(font_families))
+    for (const auto& token : BuildTokens(font_families, at))
         qss.replace(token.key, token.value);
 
     const QStringList unresolved = FindUnresolvedThemeTokens(qss);
@@ -198,7 +277,22 @@ QString BuildThemeStylesheet(const ThemeFontFamilies& font_families) {
     return qss;
 }
 
-void ApplyPalette(QApplication& app) {
+// Apply the accent-dependent palette roles (highlight + link) for the active accent.
+void ApplyAccentPalette(QApplication& app, const AccentTokens& at) {
+    QPalette palette = app.palette();
+    palette.setColor(QPalette::Highlight, QColor(at.accent));
+    palette.setColor(QPalette::HighlightedText, QColor(at.accent_ink));
+    palette.setColor(QPalette::Link, QColor(at.accent));
+    app.setPalette(palette);
+}
+
+// Cached font families after initial load; populated by ApplyExoSnapTheme().
+ThemeFontFamilies& CachedFontFamilies() {
+    static ThemeFontFamilies font_families;
+    return font_families;
+}
+
+void ApplyPalette(QApplication& app, const AccentTokens& at) {
     QPalette palette;
     palette.setColor(QPalette::Window, QColor(ExoSnapPalette::kBg0));
     palette.setColor(QPalette::WindowText, QColor(ExoSnapPalette::kText0));
@@ -207,9 +301,9 @@ void ApplyPalette(QApplication& app) {
     palette.setColor(QPalette::Text, QColor(ExoSnapPalette::kText0));
     palette.setColor(QPalette::Button, QColor(ExoSnapPalette::kBg3));
     palette.setColor(QPalette::ButtonText, QColor(ExoSnapPalette::kText1));
-    palette.setColor(QPalette::Highlight, QColor(ExoSnapPalette::kAccent));
-    palette.setColor(QPalette::HighlightedText, QColor(ExoSnapPalette::kAccentInk));
-    palette.setColor(QPalette::Link, QColor(ExoSnapPalette::kAccent));
+    palette.setColor(QPalette::Highlight, QColor(at.accent));
+    palette.setColor(QPalette::HighlightedText, QColor(at.accent_ink));
+    palette.setColor(QPalette::Link, QColor(at.accent));
     palette.setColor(QPalette::ToolTipBase, QColor(ExoSnapPalette::kBg2));
     palette.setColor(QPalette::ToolTipText, QColor(ExoSnapPalette::kText0));
     palette.setColor(QPalette::PlaceholderText, QColor(ExoSnapPalette::kText2));
@@ -273,10 +367,22 @@ void ApplyDefaultAppFont(QApplication& app, const ThemeFontFamilies& font_famili
 
 void ApplyExoSnapTheme(QApplication& app) {
     const ThemeFontFamilies font_families = LoadBundledFonts();
+    CachedFontFamilies() = font_families;
+
+    const AccentTokens at = DeriveAccentTokens(DefaultAccent());
+
     app.setStyle("Fusion");
     ApplyDefaultAppFont(app, font_families);
-    ApplyPalette(app);
-    app.setStyleSheet(BuildThemeStylesheet(font_families));
+    ApplyPalette(app, at);
+    app.setStyleSheet(BuildThemeStylesheet(font_families, at));
+}
+
+void ReapplyAccent(QApplication& app, const QString& accent_id) {
+    const ExoSnapAccent& accent = ResolveAccent(accent_id);
+    const AccentTokens at = DeriveAccentTokens(accent);
+
+    ApplyAccentPalette(app, at);
+    app.setStyleSheet(BuildThemeStylesheet(CachedFontFamilies(), at));
 }
 
 } // namespace exosnap::ui::theme

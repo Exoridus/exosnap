@@ -7,6 +7,21 @@
 namespace recorder_core {
 
 // ---------------------------------------------------------------------------
+// SetBitrateKbps / ResolveBitrateKbps
+// ---------------------------------------------------------------------------
+
+void MfAacEncoder::SetBitrateKbps(uint32_t bitrate_kbps) noexcept {
+    m_bitrate_kbps = bitrate_kbps;
+}
+
+/*static*/ uint32_t MfAacEncoder::ResolveBitrateKbps(uint32_t kbps) noexcept {
+    if (kbps == 0) {
+        return kDefaultBitrateKbps;
+    }
+    return std::clamp(kbps, 64u, 320u);
+}
+
+// ---------------------------------------------------------------------------
 // Float32 -> PCM16 utility — lifted from M2.8 probe
 // ---------------------------------------------------------------------------
 
@@ -168,8 +183,14 @@ bool MfAacEncoder::Init(uint32_t sample_rate, uint32_t channels, std::string& ou
         ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, sample_rate));
         ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, channels));
         ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16));
-        ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 24000)); // ~192 kbps
-        ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE, 0));               // RAW
+        {
+            // MF_MT_AVG_BITRATE / MF_MT_AUDIO_AVG_BYTES_PER_SECOND must be consistent.
+            // avg_bytes_per_sec = bitrate_bps / 8.
+            const UINT32 resolved_kbps = ResolveBitrateKbps(m_bitrate_kbps);
+            const UINT32 avg_bytes_per_sec = (resolved_kbps * 1000u) / 8u;
+            ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, avg_bytes_per_sec));
+        }
+        ok = ok && SUCCEEDED(pOutputType->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE, 0)); // RAW
         ok = ok &&
              SUCCEEDED(pOutputType->SetUINT32(MF_MT_AAC_AUDIO_PROFILE_LEVEL_INDICATION, 0x29)); // AAC-LC stereo 48kHz
 

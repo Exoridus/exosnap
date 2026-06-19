@@ -511,6 +511,7 @@ void VideoThread::Run() {
     {
         nvenc.SetCodec(m_state.config.video_codec);
         nvenc.SetQualityPreset(m_state.config.nvenc_quality_preset);
+        nvenc.SetRateControl(m_state.config.nvenc_rate_control, m_state.config.nvenc_bitrate_kbps);
 
         std::string err;
         if (!nvenc.Open(d3dDevice.get(), err)) {

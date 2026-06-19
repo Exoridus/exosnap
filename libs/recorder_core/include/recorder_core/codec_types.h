@@ -33,4 +33,13 @@ enum class NvencQualityPreset {
     Small,    // qpIntra=30, qpInterP=32 — smaller files, lower quality
 };
 
+// Canonical rate-control modes (ADR 0009). Encoders map from this model to
+// their native parameters internally. The UI never uses per-vendor terminology.
+enum class RateControlMode {
+    ConstantQuality, // NVENC: CQP — quality-target, encoder chooses bitrate
+    VariableBitrate, // NVENC: VBR — encoder targets a bitrate, quality varies
+    ConstantBitrate, // NVENC: CBR — strict bitrate, quality managed by encoder
+    Lossless,        // Not yet implemented for any encoder; capability-gated/hidden in UI
+};
+
 } // namespace recorder_core

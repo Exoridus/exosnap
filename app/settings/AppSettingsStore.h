@@ -64,6 +64,10 @@ struct PersistedAppSettings {
     // UPDATE-WIRE-R1 (ADR 0012): whether to run a guarded update check on startup.
     // Default ON.
     bool check_updates_on_start = true;
+
+    // ACCENT-PICKER-R1 (0.5.0-B): selected accent id from kExoSnapAccents.
+    // Default "mint" (Studio Mint) so existing users see no change.
+    QString accent_id = QStringLiteral("mint");
 };
 
 class AppSettingsStore {

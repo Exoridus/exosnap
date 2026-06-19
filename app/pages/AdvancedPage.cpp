@@ -12,6 +12,7 @@
 #include <QScrollArea>
 #include <QVBoxLayout>
 
+#include "../ui/theme/ExoSnapAccents.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 
 namespace exosnap {
@@ -207,6 +208,44 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
     left_layout->addWidget(baseline_panel);
     left_layout->addStretch();
 
+    // ---- APPEARANCE section (ACCENT-PICKER-R1) ----
+    auto* appearance_header = new ui::widgets::SectionRuleHeader(QStringLiteral("APPEARANCE"), right_col);
+    right_layout->addWidget(appearance_header);
+
+    auto* appearance_panel = makePanel(right_col);
+    auto* appearance_layout = new QVBoxLayout(appearance_panel);
+    appearance_layout->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
+    appearance_layout->setSpacing(M::kSpaceSm);
+
+    {
+        auto* accent_row = new QFrame(appearance_panel);
+        accent_row->setProperty("panelRole", "compactRow");
+        auto* accent_layout = new QVBoxLayout(accent_row);
+        accent_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+        accent_layout->setSpacing(M::kSpaceXs);
+        accent_layout->addWidget(makeFieldLabel(QStringLiteral("Accent color"), accent_row));
+        accent_combo_ = new QComboBox(accent_row);
+        accent_combo_->setMinimumWidth(220);
+        accent_combo_->setMaximumWidth(320);
+        for (const auto& a : ui::theme::kExoSnapAccents) {
+            accent_combo_->addItem(QString::fromUtf8(a.name), QString::fromUtf8(a.id));
+        }
+        accent_layout->addWidget(accent_combo_);
+        accent_layout->addWidget(makeSubLabel(
+            QStringLiteral("Selects the primary accent color used throughout the app. Changes apply immediately."),
+            accent_row));
+        appearance_layout->addWidget(accent_row);
+    }
+
+    right_layout->addWidget(appearance_panel);
+
+    connect(accent_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        const QString id = accent_combo_->itemData(index).toString();
+        if (!id.isEmpty())
+            emit accentIdChanged(id);
+    });
+
+    // ---- DEVELOPER / EXPERIMENTAL section ----
     auto* controls_header = new ui::widgets::SectionRuleHeader(QStringLiteral("DEVELOPER / EXPERIMENTAL"), right_col);
     controls_header->setMeta(QStringLiteral("Use with care"));
     right_layout->addWidget(controls_header);
@@ -394,6 +433,7 @@ AdvancedPage::AdvancedPage(QWidget* parent) : QWidget(parent) {
 
     auto* combo_wheel_filter = new ui::widgets::ComboBoxWheelFilter(this);
     combo_wheel_filter->installOn(log_level_combo_);
+    combo_wheel_filter->installOn(accent_combo_);
 
     connect(reset_btn, &QPushButton::clicked, this, &AdvancedPage::onReset);
 }
@@ -443,6 +483,19 @@ void AdvancedPage::setShowQuickControls(bool show) {
         quick_controls_check_->setChecked(show);
 }
 
+void AdvancedPage::setAccentId(const QString& accent_id) {
+    if (!accent_combo_)
+        return;
+    for (int i = 0; i < accent_combo_->count(); ++i) {
+        if (accent_combo_->itemData(i).toString() == accent_id) {
+            const QSignalBlocker blocker(accent_combo_);
+            accent_combo_->setCurrentIndex(i);
+            return;
+        }
+    }
+    // Unknown id: leave selection unchanged (default stays selected).
+}
+
 void AdvancedPage::onReset() {
     log_level_combo_->setCurrentIndex(3);
     nvtx_check_->setChecked(false);
@@ -461,6 +514,15 @@ void AdvancedPage::onReset() {
     // Reset quick controls to default OFF and emit so MainWindow persists the change.
     if (quick_controls_check_)
         quick_controls_check_->setChecked(false);
+    // ACCENT-PICKER-R1: reset accent to default (mint) and emit so MainWindow persists + re-applies.
+    if (accent_combo_) {
+        for (int i = 0; i < accent_combo_->count(); ++i) {
+            if (accent_combo_->itemData(i).toString() == QLatin1String("mint")) {
+                accent_combo_->setCurrentIndex(i);
+                break;
+            }
+        }
+    }
 }
 
 } // namespace exosnap

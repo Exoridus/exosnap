@@ -175,6 +175,8 @@ qt_add_executable(exosnap WIN32
     pages/LogsPage.cpp
     pages/AdvancedPage.h
     pages/AdvancedPage.cpp
+    pages/OutputPage.h
+    pages/OutputPage.cpp
     services/DeviceDiscoveryCommon.h
     services/AudioDeviceNotifier.h
     services/AudioDeviceNotifier.cpp
@@ -441,6 +443,34 @@ exosnap_add_gtest(
 target_include_directories(recording_preset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_preset_tests PRIVATE ole32.lib shell32.lib)
 
+# 0.5.0 video rate-control tests (ADR 0009): ComputeNvencRcParams mapping,
+# preset round-trip, dirty-tracking, sanitize, and capability queries.
+exosnap_add_gtest(
+    NAME video_rate_control_tests
+    TEST_PREFIX video_rc.
+    SOURCES
+        tests/test_video_rate_control.cpp
+        models/RecordingPreset.cpp
+        models/OutputSettingsModel.cpp
+    LIBRARIES exosnap_capability recorder_core
+)
+target_include_directories(video_rate_control_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(video_rate_control_tests PRIVATE ole32.lib shell32.lib)
+
+# 0.5.0 audio encoding param tests (ADR 0019): preset round-trip, dirty-tracking, sanitize bounds.
+exosnap_add_gtest(
+    NAME audio_encoding_preset_tests
+    TEST_PREFIX audio_enc.
+    SOURCES
+        tests/test_audio_encoding_preset.cpp
+        settings/RecordingPresetStore.cpp
+        models/RecordingPreset.cpp
+        models/OutputSettingsModel.cpp
+    LIBRARIES exosnap_capability recorder_core Qt6::Core
+)
+target_include_directories(audio_encoding_preset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(audio_encoding_preset_tests PRIVATE ole32.lib shell32.lib)
+
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     exosnap_add_gtest(
         NAME visual_scenario_tests
@@ -556,6 +586,17 @@ exosnap_add_gtest(
     LIBRARIES exosnap_capability recorder_core Qt6::Core
 )
 target_include_directories(app_settings_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# ACCENT-PICKER-R1 (0.5.0-B): accent id resolution and table invariant tests.
+# Headless — no QApplication required; only inspects ExoSnapAccents + ExoSnapPalette.
+exosnap_add_gtest(
+    NAME accent_theme_tests
+    TEST_PREFIX accent.
+    SOURCES
+        tests/test_accent_theme.cpp
+    LIBRARIES Qt6::Core Qt6::Gui
+)
+target_include_directories(accent_theme_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME diagnostics_tests
@@ -900,6 +941,19 @@ exosnap_add_gtest(
     LIBRARIES exosnap_capability recorder_core Qt6::Core)
 target_include_directories(recording_preset_store_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(recording_preset_store_tests PRIVATE ole32.lib shell32.lib)
+
+# PRESET-EXPORT-IMPORT-R1 tests
+exosnap_add_gtest(
+    NAME preset_export_import_tests
+    TEST_PREFIX preset.
+    SOURCES tests/test_preset_export_import.cpp
+            settings/RecordingPresetStore.cpp
+            models/RecordingPreset.cpp
+            models/RecordingPresetRegistry.cpp
+            models/OutputSettingsModel.cpp
+    LIBRARIES exosnap_capability recorder_core Qt6::Core)
+target_include_directories(preset_export_import_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(preset_export_import_tests PRIVATE ole32.lib shell32.lib)
 
 # RECOVERY-MANIFEST-R1 tests
 exosnap_add_gtest(

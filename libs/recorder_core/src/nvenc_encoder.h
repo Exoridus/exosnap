@@ -25,6 +25,29 @@ struct EncodedVideoPacket;
 const char* NvencStatusName(NVENCSTATUS st) noexcept;
 
 // ---------------------------------------------------------------------------
+// RcParams — pure value type for NVENC rate-control parameters.
+// Used by ComputeNvencRcParams (testable without GPU).
+// ---------------------------------------------------------------------------
+
+struct RcParams {
+    // NV_ENC_PARAMS_RC_MODE value — NV_ENC_PARAMS_RC_CONSTQP, _VBR, or _CBR
+    uint32_t rateControlMode = 0;
+    // constQP fields (valid for ConstantQuality; zero otherwise)
+    uint32_t qpIntra = 0;
+    uint32_t qpInterP = 0;
+    uint32_t qpInterB = 0;
+    // Bitrate fields (NV_ENC_RC_PARAMS::averageBitRate / maxBitRate, in bps)
+    uint32_t averageBitRate = 0;
+    uint32_t maxBitRate = 0;
+};
+
+// Pure, testable mapping from canonical rate-control mode to NVENC parameters.
+// No GPU or NVENC session required. Used by FetchPresetConfig().
+// NVENC SDK field names: rcParams.rateControlMode, rcParams.averageBitRate,
+//   rcParams.maxBitRate, rcParams.constQP.{qpIntra, qpInterP, qpInterB}.
+RcParams ComputeNvencRcParams(RateControlMode mode, NvencQualityPreset quality, uint32_t bitrate_kbps);
+
+// ---------------------------------------------------------------------------
 // InputSlot — one NVENC GPU input resource in the slot ring
 // ---------------------------------------------------------------------------
 
@@ -53,8 +76,16 @@ class NvencEncoder {
     }
 
     // Set quality tier before calling FetchPresetConfig(). Defaults to Balanced.
+    // Only meaningful for ConstantQuality mode.
     void SetQualityPreset(NvencQualityPreset preset) noexcept {
         m_qualityPreset = preset;
+    }
+
+    // Set canonical rate-control mode and target bitrate (kbps).
+    // Must be called before FetchPresetConfig(). Defaults: ConstantQuality / 20000.
+    void SetRateControl(RateControlMode mode, uint32_t bitrate_kbps) noexcept {
+        m_rateControlMode = mode;
+        m_bitrate_kbps = bitrate_kbps;
     }
 
     // Load nvEncodeAPI64.dll and open a D3D11 encode session.
@@ -131,6 +162,8 @@ class NvencEncoder {
 
     VideoCodec m_codec = VideoCodec::Av1Nvenc;
     NvencQualityPreset m_qualityPreset = NvencQualityPreset::Balanced;
+    RateControlMode m_rateControlMode = RateControlMode::ConstantQuality;
+    uint32_t m_bitrate_kbps = 20000;
 
     // P6 for H.264 (synchronous), P4 for AV1 (P6 AV1 has internal pipeline depth
     // that causes NV_ENC_ERR_NEED_MORE_INPUT on every frame even with lookahead disabled).

@@ -16,6 +16,8 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScrollArea>
+#include <QSpinBox>
+#include <QStackedWidget>
 #include <QVBoxLayout>
 
 namespace exosnap {
@@ -54,6 +56,35 @@ QLabel* addKvRow(QGridLayout* layout, QWidget* parent, int row, const QString& k
     return value_label;
 }
 
+// Map rate-control group id to RateControlMode
+recorder_core::RateControlMode RateControlFromId(int id) {
+    switch (id) {
+    case 0:
+        return recorder_core::RateControlMode::ConstantQuality;
+    case 1:
+        return recorder_core::RateControlMode::VariableBitrate;
+    case 2:
+        return recorder_core::RateControlMode::ConstantBitrate;
+    default:
+        return recorder_core::RateControlMode::ConstantQuality;
+    }
+}
+
+int RateControlToId(recorder_core::RateControlMode mode) {
+    switch (mode) {
+    case recorder_core::RateControlMode::ConstantQuality:
+        return 0;
+    case recorder_core::RateControlMode::VariableBitrate:
+        return 1;
+    case recorder_core::RateControlMode::ConstantBitrate:
+        return 2;
+    case recorder_core::RateControlMode::Lossless:
+        // Lossless is hidden (NotImplemented); fall back to CQ
+        return 0;
+    }
+    return 0;
+}
+
 } // namespace
 
 VideoPage::VideoPage(const VideoSettingsModel& initial_settings, QWidget* parent) : QWidget(parent) {
@@ -75,9 +106,9 @@ VideoPage::VideoPage(const VideoSettingsModel& initial_settings, QWidget* parent
     auto* locked_note_layout = new QVBoxLayout(locked_note_panel);
     locked_note_layout->setContentsMargins(12, 10, 12, 10);
     locked_note_layout->setSpacing(0);
-    auto* locked_note =
-        makeLabel("Codec, frame rate, and resolution are fixed for this MVP build. Quality can be adjusted below.",
-                  "videoCompatNote", locked_note_panel);
+    auto* locked_note = makeLabel("Codec, frame rate, and resolution are fixed for this MVP build. Quality and rate "
+                                  "control can be adjusted below.",
+                                  "videoCompatNote", locked_note_panel);
     locked_note->setWordWrap(true);
     locked_note_layout->addWidget(locked_note);
     left_layout->addWidget(locked_note_panel);
@@ -218,10 +249,75 @@ VideoPage::VideoPage(const VideoSettingsModel& initial_settings, QWidget* parent
     for (auto* card : codec_cards_)
         connect(card, &ui::widgets::CodecCard::clicked, this, [this, card]() { selectCodecCard(card); });
 
-    auto* quality_header = new ui::widgets::SectionRuleHeader("QUALITY", left_content);
-    left_layout->addWidget(quality_header);
+    // ---------------------------------------------------------------------------
+    // RATE CONTROL section — selector (Constant quality / Variable bitrate / Constant bitrate)
+    // Lossless is HIDDEN (capability marks it NotImplemented — ADR 0009).
+    // ---------------------------------------------------------------------------
+    auto* rc_header = new ui::widgets::SectionRuleHeader("RATE CONTROL", left_content);
+    left_layout->addWidget(rc_header);
 
-    auto* quality_panel = makePanel(left_content);
+    auto* rc_panel = makePanel(left_content);
+    auto* rc_panel_layout = new QVBoxLayout(rc_panel);
+    rc_panel_layout->setContentsMargins(0, 0, 0, 0);
+    rc_panel_layout->setSpacing(0);
+
+    rate_control_group_ = new QButtonGroup(this);
+    rate_control_group_->setExclusive(true);
+
+    struct RcRow {
+        const char* label;
+        const char* detail;
+        int id;
+    };
+    const RcRow rc_rows[] = {
+        {"Constant quality", "Encoder chooses bitrate — quality-first", 0},
+        {"Variable bitrate", "Targets a bitrate — quality varies", 1},
+        {"Constant bitrate", "Strict bitrate — encoder manages quality", 2},
+    };
+
+    for (int i = 0; i < 3; ++i) {
+        if (i != 0)
+            rc_panel_layout->addWidget(makeDivider(rc_panel));
+
+        auto* row = new QWidget(rc_panel);
+        auto* row_layout = new QHBoxLayout(row);
+        row_layout->setContentsMargins(14, 12, 14, 12);
+        row_layout->setSpacing(10);
+
+        auto* radio = new QRadioButton(rc_rows[i].label, row);
+        auto* detail = makeLabel(rc_rows[i].detail, "videoQualityDetail", row);
+        detail->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+        rate_control_group_->addButton(radio, rc_rows[i].id);
+        row_layout->addWidget(radio);
+        row_layout->addStretch(1);
+        row_layout->addWidget(detail);
+        rc_panel_layout->addWidget(row);
+    }
+    {
+        const int rc_id = RateControlToId(initial_settings.rate_control);
+        if (auto* btn = rate_control_group_->button(rc_id))
+            btn->setChecked(true);
+    }
+    left_layout->addWidget(rc_panel);
+
+    // ---------------------------------------------------------------------------
+    // QUALITY / BITRATE stacked widget
+    // Page 0: quality preset radios (Constant quality mode)
+    // Page 1: bitrate spinbox (Variable/Constant bitrate mode)
+    // ---------------------------------------------------------------------------
+    quality_stack_ = new QStackedWidget(left_content);
+
+    // --- Page 0: Quality radios ---
+    auto* quality_page = new QWidget(quality_stack_);
+    auto* quality_page_layout = new QVBoxLayout(quality_page);
+    quality_page_layout->setContentsMargins(0, 0, 0, 0);
+    quality_page_layout->setSpacing(0);
+
+    auto* quality_header = new ui::widgets::SectionRuleHeader("QUALITY", quality_page);
+    quality_page_layout->addWidget(quality_header);
+
+    auto* quality_panel = makePanel(quality_page);
     auto* quality_layout = new QVBoxLayout(quality_panel);
     quality_layout->setContentsMargins(0, 0, 0, 0);
     quality_layout->setSpacing(0);
@@ -265,7 +361,43 @@ VideoPage::VideoPage(const VideoSettingsModel& initial_settings, QWidget* parent
             btn->setChecked(true);
     }
 
-    left_layout->addWidget(quality_panel);
+    quality_page_layout->addWidget(quality_panel);
+    quality_stack_->addWidget(quality_page); // index 0
+
+    // --- Page 1: Bitrate input ---
+    auto* bitrate_page = new QWidget(quality_stack_);
+    auto* bitrate_page_layout = new QVBoxLayout(bitrate_page);
+    bitrate_page_layout->setContentsMargins(0, 0, 0, 0);
+    bitrate_page_layout->setSpacing(0);
+
+    auto* bitrate_header = new ui::widgets::SectionRuleHeader("TARGET BITRATE", bitrate_page);
+    bitrate_page_layout->addWidget(bitrate_header);
+
+    auto* bitrate_panel = makePanel(bitrate_page);
+    auto* bitrate_panel_layout = new QHBoxLayout(bitrate_panel);
+    bitrate_panel_layout->setContentsMargins(14, 12, 14, 12);
+    bitrate_panel_layout->setSpacing(10);
+
+    bitrate_spinbox_ = new QSpinBox(bitrate_panel);
+    bitrate_spinbox_->setRange(1, 200000); // 1–200 000 kbps
+    bitrate_spinbox_->setSingleStep(1000);
+    bitrate_spinbox_->setValue(static_cast<int>(initial_settings.bitrate_kbps));
+    bitrate_spinbox_->setSuffix(" kbps");
+    bitrate_spinbox_->setMinimumWidth(180);
+
+    bitrate_panel_layout->addWidget(makeLabel("Bitrate", "videoQualityDetail", bitrate_panel));
+    bitrate_panel_layout->addStretch(1);
+    bitrate_panel_layout->addWidget(bitrate_spinbox_);
+    bitrate_page_layout->addWidget(bitrate_panel);
+    quality_stack_->addWidget(bitrate_page); // index 1
+
+    // Set initial stack page
+    {
+        const bool is_cq = (initial_settings.rate_control == recorder_core::RateControlMode::ConstantQuality);
+        quality_stack_->setCurrentIndex(is_cq ? 0 : 1);
+    }
+
+    left_layout->addWidget(quality_stack_);
 
     auto* cursor_header = new ui::widgets::SectionRuleHeader("CURSOR", left_content);
     left_layout->addWidget(cursor_header);
@@ -284,6 +416,9 @@ VideoPage::VideoPage(const VideoSettingsModel& initial_settings, QWidget* parent
     scroll->setWidget(left_content);
     page_layout->addWidget(scroll, 1);
 
+    // ---------------------------------------------------------------------------
+    // Right rail
+    // ---------------------------------------------------------------------------
     rail_widget_ = new QWidget(this);
     rail_widget_->setObjectName("videoEffectiveRail");
     rail_widget_->setFixedWidth(260);
@@ -312,8 +447,8 @@ VideoPage::VideoPage(const VideoSettingsModel& initial_settings, QWidget* parent
     kv_layout->setColumnStretch(0, 0);
     kv_layout->setColumnStretch(1, 1);
     addKvRow(kv_layout, output_panel, 0, "ENCODER", "NVENC AV1", "videoKvValueAccent");
-    addKvRow(kv_layout, output_panel, 1, "PRESET", "P6", "videoKvValue");
-    addKvRow(kv_layout, output_panel, 2, "RATE CTRL", "CQP", "videoKvValue");
+    addKvRow(kv_layout, output_panel, 1, "PRESET", "P4", "videoKvValue");
+    rail_rc_label_ = addKvRow(kv_layout, output_panel, 2, "RATE CTRL", "CQP", "videoKvValue");
     rail_cq_label_ = addKvRow(kv_layout, output_panel, 3, "CQ", "24", "videoKvValue");
     addKvRow(kv_layout, output_panel, 4, "FRAME RATE", "CFR 60.00", "videoKvValue");
     addKvRow(kv_layout, output_panel, 5, "RESOLUTION", "2560×1440", "videoKvValue");
@@ -362,15 +497,45 @@ VideoPage::VideoPage(const VideoSettingsModel& initial_settings, QWidget* parent
     rail_layout->addStretch(1);
     page_layout->addWidget(rail_widget_, 0);
 
+    // Connections
     connect(quality_group_, &QButtonGroup::idClicked, this, &VideoPage::onQualityChanged);
     connect(cfr_vfr_group_, &QButtonGroup::idClicked, this, &VideoPage::onCfrVfrChanged);
     connect(cursor_check_, &QAbstractButton::toggled, this, &VideoPage::onCursorToggled);
+    connect(rate_control_group_, &QButtonGroup::idClicked, this, &VideoPage::onRateControlChanged);
+    connect(bitrate_spinbox_, QOverload<int>::of(&QSpinBox::valueChanged), this, &VideoPage::onBitrateChanged);
 
     // Sync rail with initial selection (labels now exist).
     {
         QSignalBlocker blocker(this);
         onQualityChanged(quality_group_->checkedId());
+        onRateControlChanged(rate_control_group_->checkedId());
     }
+}
+
+VideoSettingsModel VideoPage::collectSettings() const {
+    VideoSettingsModel m;
+
+    // Quality
+    const int qid = quality_group_ ? quality_group_->checkedId() : 1;
+    if (qid == 0) {
+        m.quality = recorder_core::NvencQualityPreset::High;
+    } else if (qid == 2) {
+        m.quality = recorder_core::NvencQualityPreset::Small;
+    } else {
+        m.quality = recorder_core::NvencQualityPreset::Balanced;
+    }
+
+    // Rate control
+    m.rate_control = RateControlFromId(rate_control_group_ ? rate_control_group_->checkedId() : 0);
+    m.bitrate_kbps = bitrate_spinbox_ ? static_cast<uint32_t>(bitrate_spinbox_->value()) : 20000u;
+
+    // CFR/VFR
+    m.cfr = (cfr_vfr_group_ == nullptr || cfr_vfr_group_->checkedId() == 0);
+
+    // Cursor
+    m.capture_cursor = (cursor_check_ == nullptr || cursor_check_->isChecked());
+
+    return m;
 }
 
 void VideoPage::setVideoSettings(const VideoSettingsModel& settings) {
@@ -387,6 +552,21 @@ void VideoPage::setVideoSettings(const VideoSettingsModel& settings) {
         if (auto* quality_btn = quality_group_->button(quality_id)) {
             quality_btn->setChecked(true);
         }
+    }
+    {
+        QSignalBlocker rc_blocker(rate_control_group_);
+        const int rc_id = RateControlToId(settings.rate_control);
+        if (auto* rc_btn = rate_control_group_->button(rc_id)) {
+            rc_btn->setChecked(true);
+        }
+        // Update stacked widget
+        if (quality_stack_) {
+            quality_stack_->setCurrentIndex(rc_id == 0 ? 0 : 1);
+        }
+    }
+    if (bitrate_spinbox_) {
+        QSignalBlocker br_blocker(bitrate_spinbox_);
+        bitrate_spinbox_->setValue(static_cast<int>(settings.bitrate_kbps));
     }
     {
         QSignalBlocker frame_mode_blocker(cfr_vfr_group_);
@@ -407,6 +587,7 @@ void VideoPage::setVideoSettings(const VideoSettingsModel& settings) {
         rail_cursor_label_->setText(settings.capture_cursor ? "Captured" : "Hidden");
     }
 
+    // Update rail CQ label
     if (quality_id == 0) {
         if (rail_cq_label_)
             rail_cq_label_->setText("19");
@@ -428,6 +609,24 @@ void VideoPage::setVideoSettings(const VideoSettingsModel& settings) {
             rail_bitrate_label_->setText("~38 Mb/s");
         if (rail_size_label_)
             rail_size_label_->setText("~17.1 GB");
+    }
+
+    // Update RATE CTRL rail label
+    if (rail_rc_label_) {
+        switch (settings.rate_control) {
+        case recorder_core::RateControlMode::ConstantQuality:
+            rail_rc_label_->setText("CQP");
+            break;
+        case recorder_core::RateControlMode::VariableBitrate:
+            rail_rc_label_->setText("VBR");
+            break;
+        case recorder_core::RateControlMode::ConstantBitrate:
+            rail_rc_label_->setText("CBR");
+            break;
+        case recorder_core::RateControlMode::Lossless:
+            rail_rc_label_->setText("CQP"); // fallback; lossless is hidden
+            break;
+        }
     }
 }
 
@@ -454,6 +653,7 @@ void VideoPage::onQualityChanged(int id) {
         size_text = "~8.1 GB";
     }
 
+    (void)preset; // Used via collectSettings()
     if (rail_cq_label_)
         rail_cq_label_->setText(QString::fromLatin1(cq_text));
     if (rail_bitrate_label_)
@@ -461,11 +661,38 @@ void VideoPage::onQualityChanged(int id) {
     if (rail_size_label_)
         rail_size_label_->setText(QString::fromLatin1(size_text));
 
-    VideoSettingsModel m;
-    m.quality = preset;
-    m.cfr = (cfr_vfr_group_ == nullptr || cfr_vfr_group_->checkedId() == 0);
-    m.capture_cursor = (cursor_check_ == nullptr || cursor_check_->isChecked());
-    emit videoSettingsChanged(m);
+    emit videoSettingsChanged(collectSettings());
+}
+
+void VideoPage::onRateControlChanged(int id) {
+    // Switch stacked widget: page 0 = quality, page 1 = bitrate
+    if (quality_stack_) {
+        quality_stack_->setCurrentIndex(id == 0 ? 0 : 1);
+    }
+
+    // Update RATE CTRL rail label
+    if (rail_rc_label_) {
+        switch (id) {
+        case 0:
+            rail_rc_label_->setText("CQP");
+            break;
+        case 1:
+            rail_rc_label_->setText("VBR");
+            break;
+        case 2:
+            rail_rc_label_->setText("CBR");
+            break;
+        default:
+            rail_rc_label_->setText("CQP");
+            break;
+        }
+    }
+
+    emit videoSettingsChanged(collectSettings());
+}
+
+void VideoPage::onBitrateChanged(int /*value*/) {
+    emit videoSettingsChanged(collectSettings());
 }
 
 void VideoPage::onCfrVfrChanged(int id) {
@@ -478,41 +705,14 @@ void VideoPage::onCfrVfrChanged(int id) {
         }
     }
 
-    recorder_core::NvencQualityPreset preset = recorder_core::NvencQualityPreset::Balanced;
-    if (quality_group_) {
-        const int qid = quality_group_->checkedId();
-        if (qid == 0) {
-            preset = recorder_core::NvencQualityPreset::High;
-        } else if (qid == 2) {
-            preset = recorder_core::NvencQualityPreset::Small;
-        }
-    }
-
-    VideoSettingsModel m;
-    m.quality = preset;
-    m.cfr = (id == 0);
-    m.capture_cursor = (cursor_check_ == nullptr || cursor_check_->isChecked());
-    emit videoSettingsChanged(m);
+    emit videoSettingsChanged(collectSettings());
 }
 
 void VideoPage::onCursorToggled(bool checked) {
     if (rail_cursor_label_)
         rail_cursor_label_->setText(checked ? "Captured" : "Hidden");
 
-    recorder_core::NvencQualityPreset preset = recorder_core::NvencQualityPreset::Balanced;
-    if (quality_group_) {
-        const int qid = quality_group_->checkedId();
-        if (qid == 0)
-            preset = recorder_core::NvencQualityPreset::High;
-        else if (qid == 2)
-            preset = recorder_core::NvencQualityPreset::Small;
-    }
-
-    VideoSettingsModel m;
-    m.quality = preset;
-    m.cfr = (cfr_vfr_group_ == nullptr || cfr_vfr_group_->checkedId() == 0);
-    m.capture_cursor = checked;
-    emit videoSettingsChanged(m);
+    emit videoSettingsChanged(collectSettings());
 }
 
 } // namespace exosnap

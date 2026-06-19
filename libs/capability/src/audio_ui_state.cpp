@@ -31,6 +31,11 @@ AudioPlanResult BuildAudioPlan(const AudioUiState& state) {
     result.mic_device_id = state.selected_mic_device_id;
     result.mic_gain_linear = state.mic_gain_linear;
 
+    // Audio encoding params (ADR 0019) — pass through directly.
+    result.audio_bitrate_kbps = state.audio_bitrate_kbps;
+    result.opus_frame_duration = state.opus_frame_duration;
+    result.opus_complexity = state.opus_complexity;
+
     result.plan = recorder_core::ResolveAudioTracks(state.source_rows);
 
     const bool app_active = state.IsAppEnabled();

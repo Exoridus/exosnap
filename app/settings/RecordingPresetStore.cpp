@@ -5,6 +5,7 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QStringView>
+#include <QVector>
 
 #include "settings/ConfigPaths.h"
 
@@ -108,6 +109,33 @@ std::optional<recorder_core::NvencQualityPreset> NvencQualityPresetFromString(QS
         return recorder_core::NvencQualityPreset::Balanced;
     if (n == QStringLiteral("small"))
         return recorder_core::NvencQualityPreset::Small;
+    return std::nullopt;
+}
+
+QString RateControlModeToString(recorder_core::RateControlMode v) {
+    switch (v) {
+    case recorder_core::RateControlMode::ConstantQuality:
+        return QStringLiteral("cq");
+    case recorder_core::RateControlMode::VariableBitrate:
+        return QStringLiteral("vbr");
+    case recorder_core::RateControlMode::ConstantBitrate:
+        return QStringLiteral("cbr");
+    case recorder_core::RateControlMode::Lossless:
+        return QStringLiteral("lossless");
+    }
+    return QStringLiteral("cq");
+}
+
+std::optional<recorder_core::RateControlMode> RateControlModeFromString(QStringView s) {
+    const QString n = s.trimmed().toString().toLower();
+    if (n == QStringLiteral("cq"))
+        return recorder_core::RateControlMode::ConstantQuality;
+    if (n == QStringLiteral("vbr"))
+        return recorder_core::RateControlMode::VariableBitrate;
+    if (n == QStringLiteral("cbr"))
+        return recorder_core::RateControlMode::ConstantBitrate;
+    if (n == QStringLiteral("lossless"))
+        return recorder_core::RateControlMode::Lossless;
     return std::nullopt;
 }
 
@@ -319,6 +347,33 @@ std::optional<recorder_core::OutputFitMode> OutputFitModeFromString(QStringView 
     return std::nullopt;
 }
 
+QString OpusFrameDurationToString(recorder_core::OpusFrameDuration v) {
+    switch (v) {
+    case recorder_core::OpusFrameDuration::Ms20:
+        return QStringLiteral("20ms");
+    case recorder_core::OpusFrameDuration::Ms10:
+        return QStringLiteral("10ms");
+    case recorder_core::OpusFrameDuration::Ms5:
+        return QStringLiteral("5ms");
+    case recorder_core::OpusFrameDuration::Ms2_5:
+        return QStringLiteral("2.5ms");
+    }
+    return QStringLiteral("20ms");
+}
+
+std::optional<recorder_core::OpusFrameDuration> OpusFrameDurationFromString(QStringView s) {
+    const QString n = s.trimmed().toString().toLower();
+    if (n == QStringLiteral("20ms"))
+        return recorder_core::OpusFrameDuration::Ms20;
+    if (n == QStringLiteral("10ms"))
+        return recorder_core::OpusFrameDuration::Ms10;
+    if (n == QStringLiteral("5ms"))
+        return recorder_core::OpusFrameDuration::Ms5;
+    if (n == QStringLiteral("2.5ms"))
+        return recorder_core::OpusFrameDuration::Ms2_5;
+    return std::nullopt;
+}
+
 // ---------------------------------------------------------------------------
 // Per-item save / load helpers
 // ---------------------------------------------------------------------------
@@ -358,6 +413,8 @@ void SavePresetItem(QSettings& settings, const RecordingPreset& preset) {
     // --- Video ---
     const auto& vid = preset.config.video;
     settings.setValue(QStringLiteral("vid_quality"), NvencQualityPresetToString(vid.quality));
+    settings.setValue(QStringLiteral("vid_rate_control"), RateControlModeToString(vid.rate_control));
+    settings.setValue(QStringLiteral("vid_bitrate_kbps"), static_cast<int>(vid.bitrate_kbps));
     settings.setValue(QStringLiteral("vid_cfr"), vid.cfr);
     settings.setValue(QStringLiteral("vid_capture_cursor"), vid.capture_cursor);
     settings.setValue(QStringLiteral("vid_frame_rate_num"), static_cast<int>(vid.frame_rate_num));
@@ -382,6 +439,10 @@ void SavePresetItem(QSettings& settings, const RecordingPreset& preset) {
         settings.setValue(QStringLiteral("aud_row_%1_enabled").arg(i), row.enabled);
         settings.setValue(QStringLiteral("aud_row_%1_merge").arg(i), row.merge_with_above);
     }
+    // Audio encoding params (ADR 0019).
+    settings.setValue(QStringLiteral("aud_audio_bitrate_kbps"), static_cast<int>(aud.audio_bitrate_kbps));
+    settings.setValue(QStringLiteral("aud_opus_frame_duration"), OpusFrameDurationToString(aud.opus_frame_duration));
+    settings.setValue(QStringLiteral("aud_opus_complexity"), aud.opus_complexity);
 
     // --- Webcam ---
     const auto& wc = preset.config.webcam;
@@ -503,6 +564,19 @@ std::optional<RecordingPreset> LoadPresetItem(QSettings& settings) {
         if (q.has_value())
             vid.quality = *q;
     }
+    {
+        const auto rc = RateControlModeFromString(settings.value(QStringLiteral("vid_rate_control")).toString());
+        if (rc.has_value())
+            vid.rate_control = *rc;
+        // If absent (older preset schema), defaults to ConstantQuality — no behavior change.
+    }
+    {
+        bool ok = false;
+        const int bk = settings.value(QStringLiteral("vid_bitrate_kbps"), 20000).toInt(&ok);
+        if (ok && bk > 0)
+            vid.bitrate_kbps = static_cast<uint32_t>(bk);
+        // SanitizePreset() will clamp to [1000, 200000].
+    }
     if (settings.contains(QStringLiteral("vid_cfr"))) {
         vid.cfr = settings.value(QStringLiteral("vid_cfr"), true).toBool();
     }
@@ -575,6 +649,23 @@ std::optional<RecordingPreset> LoadPresetItem(QSettings& settings) {
             row.merge_with_above = settings.value(QStringLiteral("aud_row_%1_merge").arg(i), false).toBool();
             aud.source_rows.push_back(row);
         }
+    }
+    // Audio encoding params (ADR 0019).
+    {
+        bool ok = false;
+        const int bk = settings.value(QStringLiteral("aud_audio_bitrate_kbps"), 160).toInt(&ok);
+        aud.audio_bitrate_kbps = (ok && bk >= 0) ? static_cast<uint32_t>(bk) : 160u;
+        // SanitizePresetConfig() clamps to valid codec-specific ranges.
+    }
+    {
+        const auto fd =
+            OpusFrameDurationFromString(settings.value(QStringLiteral("aud_opus_frame_duration")).toString());
+        aud.opus_frame_duration = fd.value_or(recorder_core::OpusFrameDuration::Ms20);
+    }
+    {
+        bool ok = false;
+        const int cplx = settings.value(QStringLiteral("aud_opus_complexity"), 10).toInt(&ok);
+        aud.opus_complexity = (ok && cplx >= 0 && cplx <= 10) ? cplx : 10;
     }
 
     // --- Webcam ---
@@ -770,6 +861,179 @@ void RecordingPresetStore::Save(const std::vector<RecordingPreset>& presets, con
 
 const QString& RecordingPresetStore::FilePath() const {
     return file_path_;
+}
+
+// ---------------------------------------------------------------------------
+// ExportPresetToFile
+// ---------------------------------------------------------------------------
+
+bool RecordingPresetStore::ExportPresetToFile(const RecordingPreset& preset, const QString& path, QString* err) {
+    if (path.isEmpty()) {
+        if (err)
+            *err = QStringLiteral("Export path is empty.");
+        return false;
+    }
+
+    const QFileInfo info(path);
+    if (!QDir().mkpath(info.absolutePath())) {
+        if (err)
+            *err = QStringLiteral("Could not create parent directory: %1").arg(info.absolutePath());
+        return false;
+    }
+
+    QSettings settings(path, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("schemaVersion"), kPresetSchemaVersion);
+    // Tag as a single-preset export so ImportPresetsFromFile can detect which
+    // layout was used without ambiguity.
+    settings.setValue(QStringLiteral("exportKind"), QStringLiteral("single"));
+
+    settings.beginWriteArray(QStringLiteral("items"), 1);
+    settings.setArrayIndex(0);
+    SavePresetItem(settings, preset);
+    settings.endArray();
+    settings.sync();
+
+    if (settings.status() != QSettings::NoError) {
+        if (err)
+            *err = QStringLiteral("Failed to write preset file: %1").arg(path);
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// ExportAllUserPresetsToFile
+// ---------------------------------------------------------------------------
+
+bool RecordingPresetStore::ExportAllUserPresetsToFile(const QVector<RecordingPreset>& presets, const QString& path,
+                                                      QString* err) {
+    if (path.isEmpty()) {
+        if (err)
+            *err = QStringLiteral("Export path is empty.");
+        return false;
+    }
+
+    const QFileInfo info(path);
+    if (!QDir().mkpath(info.absolutePath())) {
+        if (err)
+            *err = QStringLiteral("Could not create parent directory: %1").arg(info.absolutePath());
+        return false;
+    }
+
+    QSettings settings(path, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("schemaVersion"), kPresetSchemaVersion);
+    settings.setValue(QStringLiteral("exportKind"), QStringLiteral("all"));
+
+    settings.beginWriteArray(QStringLiteral("items"), static_cast<int>(presets.size()));
+    for (int i = 0; i < presets.size(); ++i) {
+        settings.setArrayIndex(i);
+        SavePresetItem(settings, presets[i]);
+    }
+    settings.endArray();
+    settings.sync();
+
+    if (settings.status() != QSettings::NoError) {
+        if (err)
+            *err = QStringLiteral("Failed to write preset file: %1").arg(path);
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// ImportPresetsFromFile
+// ---------------------------------------------------------------------------
+
+QVector<RecordingPreset> RecordingPresetStore::ImportPresetsFromFile(const QString& path,
+                                                                     const std::vector<std::string>& existing_ids,
+                                                                     QString* err) {
+    if (path.isEmpty()) {
+        if (err)
+            *err = QStringLiteral("Import path is empty.");
+        return {};
+    }
+
+    if (!QFileInfo::exists(path)) {
+        if (err)
+            *err = QStringLiteral("File not found: %1").arg(path);
+        return {};
+    }
+
+    QSettings settings(path, QSettings::IniFormat);
+
+    if (settings.status() != QSettings::NoError) {
+        if (err)
+            *err = QStringLiteral("Could not open file for reading: %1").arg(path);
+        return {};
+    }
+
+    // Schema version check: best-effort — log a warning but still attempt to
+    // parse.  Pre-1.0: no migration; newer files are parsed as-is + sanitized.
+    bool version_ok = false;
+    const int file_version = settings.value(QStringLiteral("schemaVersion"), -1).toInt(&version_ok);
+    const bool version_mismatch = !version_ok || file_version != kPresetSchemaVersion;
+
+    const int count = settings.beginReadArray(QStringLiteral("items"));
+
+    if (count <= 0) {
+        settings.endArray();
+        if (err) {
+            if (version_mismatch) {
+                *err = QStringLiteral("Preset file has an unsupported schema version (%1, expected %2). No items could "
+                                      "be imported.")
+                           .arg(file_version)
+                           .arg(kPresetSchemaVersion);
+            } else {
+                *err = QStringLiteral("Preset file contains no items.");
+            }
+        }
+        return {};
+    }
+
+    // Build a fast-lookup set of existing ids (plus ids we have already
+    // assigned to earlier items in this import batch).
+    std::set<std::string> used_ids(existing_ids.begin(), existing_ids.end());
+
+    QVector<RecordingPreset> result;
+    result.reserve(count);
+
+    for (int i = 0; i < count; ++i) {
+        settings.setArrayIndex(i);
+        const auto maybe = LoadPresetItem(settings);
+        if (!maybe.has_value())
+            continue; // Malformed — skip.
+
+        RecordingPreset preset = SanitizePreset(*maybe);
+
+        // Collision handling: if the id is already used, generate a fresh one
+        // and suffix the name so the user can tell it apart.
+        if (used_ids.count(preset.id) > 0) {
+            preset.id = GeneratePresetId();
+            if (!preset.name.empty() && preset.name.rfind(" (imported)") == std::string::npos) {
+                preset.name += " (imported)";
+            }
+        }
+        used_ids.insert(preset.id);
+        result.push_back(std::move(preset));
+    }
+
+    settings.endArray();
+
+    if (result.isEmpty()) {
+        if (err) {
+            if (version_mismatch) {
+                *err = QStringLiteral("Preset file has an unsupported schema version (%1, expected %2). No valid items "
+                                      "could be imported.")
+                           .arg(file_version)
+                           .arg(kPresetSchemaVersion);
+            } else {
+                *err = QStringLiteral("No valid presets found in file: %1").arg(path);
+            }
+        }
+        return {};
+    }
+
+    return result;
 }
 
 } // namespace exosnap

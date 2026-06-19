@@ -7,6 +7,21 @@
 
 namespace recorder_core {
 
+// ---------------------------------------------------------------------------
+// SetBitrateKbps / ResolveBitrateKbps
+// ---------------------------------------------------------------------------
+
+void FdkAacEncoder::SetBitrateKbps(uint32_t bitrate_kbps) noexcept {
+    m_bitrate_kbps = bitrate_kbps;
+}
+
+/*static*/ uint32_t FdkAacEncoder::ResolveBitrateKbps(uint32_t kbps) noexcept {
+    if (kbps == 0) {
+        return kDefaultBitrateKbps;
+    }
+    return std::clamp(kbps, 64u, 320u);
+}
+
 FdkAacEncoder::~FdkAacEncoder() {
     Shutdown();
 }
@@ -48,12 +63,15 @@ bool FdkAacEncoder::Init(uint32_t sample_rate, uint32_t channels, std::string& o
         return false;
     }
 
-    if ((err = aacEncoder_SetParam(m_enc, AACENC_BITRATE, 192000)) != AACENC_OK) {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "AACENC_BITRATE failed: 0x%08X", static_cast<unsigned>(err));
-        out_error = buf;
-        Shutdown();
-        return false;
+    {
+        const UINT aac_bps = static_cast<UINT>(ResolveBitrateKbps(m_bitrate_kbps) * 1000u);
+        if ((err = aacEncoder_SetParam(m_enc, AACENC_BITRATE, aac_bps)) != AACENC_OK) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "AACENC_BITRATE failed: 0x%08X", static_cast<unsigned>(err));
+            out_error = buf;
+            Shutdown();
+            return false;
+        }
     }
 
     if ((err = aacEncoder_SetParam(m_enc, AACENC_TRANSMUX, TT_MP4_RAW)) != AACENC_OK) {

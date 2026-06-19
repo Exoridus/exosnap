@@ -3,7 +3,9 @@
 #include "models/RecordingPreset.h"
 
 #include <QString>
+#include <QVector>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -49,6 +51,42 @@ class RecordingPresetStore {
               const std::string& default_id) const;
 
     [[nodiscard]] const QString& FilePath() const;
+
+    // ---------------------------------------------------------------------------
+    // Export / import helpers
+    //
+    // All three methods use the same IniFormat serialization as Save/Load so
+    // there is exactly one serialization code path.  kPresetSchemaVersion is
+    // embedded in every exported file so future Load() callers can reject
+    // incompatible files.
+    // ---------------------------------------------------------------------------
+
+    // Write a single preset to a standalone .ini file.
+    // Returns true on success; on failure writes a human-readable message into
+    // *err (if non-null) and returns false.
+    [[nodiscard]] static bool ExportPresetToFile(const RecordingPreset& preset, const QString& path, QString* err);
+
+    // Write all given user presets to one .ini file using the same multi-item
+    // array layout the live store uses for presets.ini.
+    // Returns true on success.
+    [[nodiscard]] static bool ExportAllUserPresetsToFile(const QVector<RecordingPreset>& presets, const QString& path,
+                                                         QString* err);
+
+    // Read one or more presets from a .ini file previously created by
+    // ExportPresetToFile or ExportAllUserPresetsToFile.
+    //
+    // existing_ids: the caller supplies the current live preset ids so that
+    // collision handling can assign fresh ids to any imported preset whose id
+    // is already in use.  The imported preset's name is also suffixed with
+    // " (imported)" on collision so the user can tell it apart.
+    //
+    // On unrecoverable failure (file missing, garbage content, no valid
+    // items) returns an empty vector and sets *err.
+    // Schema version mismatch is treated as best-effort: the file is still
+    // parsed and SanitizePreset is applied; if no valid items survive, *err is
+    // set and an empty vector is returned.
+    [[nodiscard]] static QVector<RecordingPreset>
+    ImportPresetsFromFile(const QString& path, const std::vector<std::string>& existing_ids, QString* err);
 
   private:
     QString file_path_;
