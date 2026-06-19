@@ -35,7 +35,7 @@ InfoHintIcon::InfoHintIcon(const QString& hint_text, QWidget* parent) : QToolBut
     updateIcon(false);
 }
 
-QString InfoHintIcon::hintText() const {
+const QString& InfoHintIcon::hintText() const {
     return hint_text_;
 }
 

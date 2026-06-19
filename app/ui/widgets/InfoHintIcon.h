@@ -23,7 +23,7 @@ class InfoHintIcon : public QToolButton {
     explicit InfoHintIcon(const QString& hint_text, QWidget* parent = nullptr);
 
     // The hint string (the tooltip text).
-    [[nodiscard]] QString hintText() const;
+    [[nodiscard]] const QString& hintText() const;
 
   protected:
     void enterEvent(QEnterEvent* event) override;
