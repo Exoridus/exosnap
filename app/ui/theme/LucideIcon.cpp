@@ -123,6 +123,26 @@ const QHash<QString, LucideEntry>& iconTable() {
           "<circle cx='19' cy='12' r='1' fill='%1' stroke='%1'/>"
           "<circle cx='5' cy='12' r='1' fill='%1' stroke='%1'/>",
           true}},
+        // bell (notification)
+        {QStringLiteral("bell"),
+         {"<path stroke='%1' d='M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9'/>"
+          "<path stroke='%1' d='M10.3 21a1.94 1.94 0 0 0 3.4 0'/>",
+          false}},
+        // check-circle
+        {QStringLiteral("check-circle"),
+         {"<path stroke='%1' d='M22 11.08V12a10 10 0 1 1-5.93-9.14'/>"
+          "<path stroke='%1' d='M22 4 12 14.01l-3-3'/>",
+          false}},
+        // x-circle
+        {QStringLiteral("x-circle"),
+         {"<circle cx='12' cy='12' r='10' stroke='%1'/>"
+          "<path stroke='%1' d='m15 9-6 6'/><path stroke='%1' d='m9 9 6 6'/>",
+          false}},
+        // camera
+        {QStringLiteral("camera"),
+         {"<path stroke='%1' d='M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z'/>"
+          "<circle cx='12' cy='13' r='3' stroke='%1'/>",
+          false}},
     };
     return table;
 }

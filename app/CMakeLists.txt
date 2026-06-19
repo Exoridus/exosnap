@@ -152,6 +152,18 @@ qt_add_executable(exosnap WIN32
     ui/widgets/AudioSourceToggle.cpp
     ui/widgets/CountdownSelect.h
     ui/widgets/CountdownSelect.cpp
+    ui/widgets/ExoSpinBox.h
+    ui/widgets/ExoSpinBox.cpp
+    ui/widgets/NotificationBell.h
+    ui/widgets/NotificationBell.cpp
+    ui/widgets/AdvisoryItem.h
+    ui/widgets/AdvisoryItem.cpp
+    ui/widgets/CornerCaptureButton.h
+    ui/widgets/CornerCaptureButton.cpp
+    ui/widgets/KeyCap.h
+    ui/widgets/KeyCap.cpp
+    ui/widgets/PlaceholderRow.h
+    ui/widgets/PlaceholderRow.cpp
     ui/widgets/TransportDock.h
     ui/widgets/TransportDock.cpp
     ui/overlay/CountdownOverlayWindow.h
@@ -693,6 +705,76 @@ exosnap_add_gtest(
 )
 target_include_directories(info_hint_icon_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(info_hint_icon_tests PROPERTIES AUTOMOC ON)
+
+# PS-FOUNDATIONS-R1: Suite foundation widget tests.
+exosnap_add_gtest(
+    NAME exo_spin_box_tests
+    TEST_PREFIX suite.
+    SOURCES
+        tests/test_exo_spin_box.cpp
+        ui/widgets/ExoSpinBox.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(exo_spin_box_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(exo_spin_box_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME notification_bell_tests
+    TEST_PREFIX suite.
+    SOURCES
+        tests/test_notification_bell.cpp
+        ui/widgets/NotificationBell.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(notification_bell_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(notification_bell_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME advisory_item_tests
+    TEST_PREFIX suite.
+    SOURCES
+        tests/test_advisory_item.cpp
+        ui/widgets/AdvisoryItem.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(advisory_item_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(advisory_item_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME corner_capture_button_tests
+    TEST_PREFIX suite.
+    SOURCES
+        tests/test_corner_capture_button.cpp
+        ui/widgets/CornerCaptureButton.cpp
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(corner_capture_button_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(corner_capture_button_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME key_cap_tests
+    TEST_PREFIX suite.
+    SOURCES
+        tests/test_key_cap.cpp
+        ui/widgets/KeyCap.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(key_cap_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(key_cap_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME placeholder_row_tests
+    TEST_PREFIX suite.
+    SOURCES
+        tests/test_placeholder_row.cpp
+        ui/widgets/PlaceholderRow.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
+)
+target_include_directories(placeholder_row_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(placeholder_row_tests PROPERTIES AUTOMOC ON)
 
 # Settings-Redesign D6: CompareHint widget + compare data unit tests.
 exosnap_add_gtest(

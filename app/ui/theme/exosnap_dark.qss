@@ -2988,3 +2988,64 @@ QLabel[labelRole="warnHint"] {
     border-radius: ${radius-md}px;
     padding: 8px 12px;
 }
+
+/* ExoSpinBox */
+QSpinBox[widgetRole="exoSpinBox"] {
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    padding: 5px 8px;
+    font-family: ${font-mono};
+    font-size: 13px;
+    color: ${text0};
+    min-height: 32px;
+    min-width: 80px;
+}
+QSpinBox[widgetRole="exoSpinBox"]:focus {
+    border: 1px solid ${accent};
+    outline: none;
+}
+QSpinBox[widgetRole="exoSpinBox"]:disabled {
+    color: ${text3};
+    border-color: ${line1};
+    opacity: 0.5;
+}
+QSpinBox[widgetRole="exoSpinBox"]::up-button,
+QSpinBox[widgetRole="exoSpinBox"]::down-button {
+    background: ${bg3};
+    border: none;
+    border-left: 1px solid ${line2};
+    width: 22px;
+}
+QSpinBox[widgetRole="exoSpinBox"]::up-button:hover,
+QSpinBox[widgetRole="exoSpinBox"]::down-button:hover {
+    background: ${bg4};
+}
+QSpinBox[widgetRole="exoSpinBox"]::up-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 5px solid ${text2};
+}
+QSpinBox[widgetRole="exoSpinBox"]::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid ${text2};
+}
+
+/* KeyCap */
+QLabel[widgetRole="keyCap"] {
+    font-family: ${font-mono};
+    font-size: 11.5px;
+    color: ${text0};
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    padding: 4px 9px;
+    min-width: 26px;
+}
