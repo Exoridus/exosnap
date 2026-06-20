@@ -113,6 +113,13 @@ TEST(MicDspAudioSrcTest, AnyEnabled_DefaultIsFalse) {
     EXPECT_TRUE(cfg.AnyEnabled());
 }
 
+TEST(MicDspAudioSrcTest, AnyEnabled_GateAloneEnablesChain) {
+    MicDspConfig cfg;
+    EXPECT_FALSE(cfg.AnyEnabled());
+    cfg.gate_enabled = true;
+    EXPECT_TRUE(cfg.AnyEnabled());
+}
+
 // ---------------------------------------------------------------------------
 // Pass-through (DSP disabled) — output equals input within int16->float eps
 // ---------------------------------------------------------------------------
@@ -195,6 +202,75 @@ TEST(MicDspAudioSrcTest, HpfAttenuatesDcWhenEnabled) {
         tail = std::max(tail, std::fabs(samples[i]));
     }
     EXPECT_LT(tail, 1e-2f);
+    src.ReleaseBuffer();
+}
+
+// ---------------------------------------------------------------------------
+// Gate enabled attenuates a below-threshold input
+// ---------------------------------------------------------------------------
+
+TEST(MicDspAudioSrcTest, GateAttenuatesQuietInputWhenEnabled) {
+    auto mock = std::make_unique<MockAudioCaptureSource>(2, AudioSampleFormat::Float32);
+    auto* mock_ptr = mock.get();
+    const uint32_t frames = 48000;
+    mock_ptr->SetPendingFrames(frames);
+    // 0.001 ≈ -60 dBFS is below the -45 dB threshold → gate stays closed.
+    mock_ptr->SetData(MakeFloat32Bytes(frames, 2, 0.001f));
+
+    MicDspConfig cfg;
+    cfg.gate_enabled = true;
+    cfg.gate_threshold_db = -45.0f;
+    MicDspAudioSrc src(std::move(mock), cfg);
+    std::string err;
+    ASSERT_TRUE(src.Init(err)) << err;
+
+    RawAudioBuffer out{};
+    ASSERT_TRUE(src.AcquireBuffer(out, err)) << err;
+    ASSERT_NE(out.bytes, nullptr);
+
+    // The closed gate drives the quiet tail toward silence.
+    const float* samples = reinterpret_cast<const float*>(out.bytes);
+    float tail = 0.0f;
+    for (uint32_t i = (frames * 2 - 200); i < frames * 2; ++i) {
+        tail = std::max(tail, std::fabs(samples[i]));
+    }
+    EXPECT_LT(tail, 1e-4f);
+    src.ReleaseBuffer();
+}
+
+// ---------------------------------------------------------------------------
+// Chain order: HPF -> gate (both enabled). Low-frequency rumble below the gate
+// threshold is removed by the HPF first, so it cannot hold the gate open.
+// ---------------------------------------------------------------------------
+
+TEST(MicDspAudioSrcTest, HpfThenGateChainAttenuatesLowFreqRumble) {
+    auto mock = std::make_unique<MockAudioCaptureSource>(2, AudioSampleFormat::Float32);
+    auto* mock_ptr = mock.get();
+    const uint32_t frames = 48000;
+    mock_ptr->SetPendingFrames(frames);
+    mock_ptr->SetData(MakeFloat32Bytes(frames, 2, 0.6f)); // strong DC rumble
+
+    MicDspConfig cfg;
+    cfg.hpf_enabled = true;
+    cfg.hpf_cutoff_hz = 80.0f;
+    cfg.gate_enabled = true;
+    cfg.gate_threshold_db = -45.0f;
+    MicDspAudioSrc src(std::move(mock), cfg);
+    std::string err;
+    ASSERT_TRUE(src.Init(err)) << err;
+
+    RawAudioBuffer out{};
+    ASSERT_TRUE(src.AcquireBuffer(out, err)) << err;
+    ASSERT_NE(out.bytes, nullptr);
+
+    // HPF strips the DC so the residual is well below threshold; the gate then
+    // closes. The combined result decays to silence in the tail.
+    const float* samples = reinterpret_cast<const float*>(out.bytes);
+    float tail = 0.0f;
+    for (uint32_t i = (frames * 2 - 200); i < frames * 2; ++i) {
+        tail = std::max(tail, std::fabs(samples[i]));
+    }
+    EXPECT_LT(tail, 1e-3f);
     src.ReleaseBuffer();
 }
 

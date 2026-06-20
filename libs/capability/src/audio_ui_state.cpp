@@ -44,6 +44,10 @@ AudioPlanResult BuildAudioPlan(const AudioUiState& state) {
     result.mic_hpf_enabled = state.mic_hpf_enabled;
     result.mic_hpf_cutoff_hz = state.mic_hpf_cutoff_hz;
 
+    // Microphone noise gate (Audio v2) — pass through directly.
+    result.mic_gate_enabled = state.mic_gate_enabled;
+    result.mic_gate_threshold_db = state.mic_gate_threshold_db;
+
     result.plan = recorder_core::ResolveAudioTracks(state.source_rows);
 
     const bool app_active = state.IsAppEnabled();

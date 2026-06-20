@@ -109,6 +109,15 @@ if(NOT EXISTS "${_nvenc_header}")
     )
     target_include_directories(test_high_pass_filter PRIVATE src)
 
+    # Audio v2 (0.6.0): mic noise gate DSP (self-contained; no FFmpeg/NVENC).
+    exosnap_add_gtest(
+        NAME test_noise_gate
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_noise_gate.cpp
+                src/noise_gate.cpp
+    )
+    target_include_directories(test_noise_gate PRIVATE src)
+
     # Audio v2 (0.6.0): MicDspAudioSrc decorator (self-contained; no FFmpeg/NVENC).
     exosnap_add_gtest(
         NAME test_mic_dsp_audio_src
@@ -116,6 +125,7 @@ if(NOT EXISTS "${_nvenc_header}")
         SOURCES tests/test_mic_dsp_audio_src.cpp
                 src/mic_dsp_audio_src.cpp
                 src/high_pass_filter.cpp
+                src/noise_gate.cpp
     )
     target_include_directories(test_mic_dsp_audio_src PRIVATE src include)
 
@@ -177,6 +187,8 @@ add_library(recorder_core STATIC
     src/brickwall_limiter.h
     src/high_pass_filter.cpp
     src/high_pass_filter.h
+    src/noise_gate.cpp
+    src/noise_gate.h
     src/mic_dsp_audio_src.cpp
     src/mic_dsp_audio_src.h
     src/wasapi_capture_src.cpp
@@ -411,6 +423,15 @@ exosnap_add_gtest(
 )
 target_include_directories(test_high_pass_filter PRIVATE src)
 
+# Audio v2 (0.6.0): mic noise gate DSP (self-contained; no FFmpeg/NVENC).
+exosnap_add_gtest(
+    NAME test_noise_gate
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_noise_gate.cpp
+            src/noise_gate.cpp
+)
+target_include_directories(test_noise_gate PRIVATE src)
+
 # Audio v2 (0.6.0): MicDspAudioSrc decorator (self-contained; no FFmpeg/NVENC).
 exosnap_add_gtest(
     NAME test_mic_dsp_audio_src
@@ -418,6 +439,7 @@ exosnap_add_gtest(
     SOURCES tests/test_mic_dsp_audio_src.cpp
             src/mic_dsp_audio_src.cpp
             src/high_pass_filter.cpp
+            src/noise_gate.cpp
 )
 target_include_directories(test_mic_dsp_audio_src PRIVATE src include)
 

@@ -69,6 +69,17 @@ struct AudioUiState {
     // High-pass cutoff (−3 dB) frequency in Hz. Default 80 Hz.
     float mic_hpf_cutoff_hz = 80.0f;
 
+    // ---------------------------------------------------------------------------
+    // Microphone noise gate (Audio v2 — 0.6.0)
+    // ---------------------------------------------------------------------------
+
+    // Run the mic input through a downward noise gate to silence low-level noise
+    // between speech. Default false (mic DSP alters captured audio, opt-in).
+    bool mic_gate_enabled = false;
+
+    // Gate threshold in dBFS. Below this the gate closes. Default -45 dB.
+    float mic_gate_threshold_db = -45.0f;
+
     // Convenience predicates.
     [[nodiscard]] bool IsAppEnabled() const noexcept;
     [[nodiscard]] bool IsSysEnabled() const noexcept;
@@ -95,6 +106,10 @@ struct AudioPlanResult {
     // Microphone high-pass filter (Audio v2 — 0.6.0) — passed through from AudioUiState.
     bool mic_hpf_enabled = false;
     float mic_hpf_cutoff_hz = 80.0f;
+
+    // Microphone noise gate (Audio v2 — 0.6.0) — passed through from AudioUiState.
+    bool mic_gate_enabled = false;
+    float mic_gate_threshold_db = -45.0f;
 };
 
 [[nodiscard]] AudioPlanResult BuildAudioPlan(const AudioUiState& state);

@@ -739,6 +739,9 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     // Microphone high-pass filter (Audio v2).
     config.mic_hpf_enabled = plan.mic_hpf_enabled;
     config.mic_hpf_cutoff_hz = plan.mic_hpf_cutoff_hz;
+    // Microphone noise gate (Audio v2).
+    config.mic_gate_enabled = plan.mic_gate_enabled;
+    config.mic_gate_threshold_db = plan.mic_gate_threshold_db;
 
     if (plan.record_audio && PlanRequiresTargetPid(plan.plan) && !plan.audio_target_process_id.has_value()) {
         diagnostics::AppLog::error(QStringLiteral("record.failure"),

@@ -1563,6 +1563,44 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             aes_layout->addWidget(crow);
         }
 
+        // Microphone noise gate (Audio v2 — 0.6.0)
+        {
+            auto* rule = new QFrame(audio_expert_section_);
+            rule->setFrameShape(QFrame::HLine);
+            rule->setProperty("frameRole", "sectionRuleLine");
+            aes_layout->addWidget(rule);
+
+            auto* row = new QWidget(audio_expert_section_);
+            auto* hl = new QHBoxLayout(row);
+            hl->setContentsMargins(0, 12, 0, 12);
+            hl->setSpacing(14);
+            mic_gate_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Noise gate"), row);
+            mic_gate_check_->setObjectName(QStringLiteral("micGateCheck"));
+            mic_gate_check_->setChecked(audio_ui_state_.mic_gate_enabled);
+            hl->addWidget(mic_gate_check_, 1);
+            row->setProperty("settingsRow", true);
+            aes_layout->addWidget(row);
+
+            auto* trow = new QWidget(audio_expert_section_);
+            auto* thl = new QHBoxLayout(trow);
+            thl->setContentsMargins(0, 12, 0, 12);
+            thl->setSpacing(14);
+            auto* tlbl = new QLabel(QStringLiteral("Gate threshold"), trow);
+            tlbl->setProperty("labelRole", "settingsRowLabel");
+            thl->addWidget(tlbl, 1);
+            mic_gate_threshold_spin_ = new QDoubleSpinBox(trow);
+            mic_gate_threshold_spin_->setObjectName(QStringLiteral("micGateThresholdSpin"));
+            mic_gate_threshold_spin_->setRange(-80.0, 0.0);
+            mic_gate_threshold_spin_->setSingleStep(1.0);
+            mic_gate_threshold_spin_->setDecimals(0);
+            mic_gate_threshold_spin_->setSuffix(QStringLiteral(" dB"));
+            mic_gate_threshold_spin_->setValue(static_cast<double>(audio_ui_state_.mic_gate_threshold_db));
+            mic_gate_threshold_spin_->setEnabled(audio_ui_state_.mic_gate_enabled);
+            thl->addWidget(mic_gate_threshold_spin_, 0, Qt::AlignVCenter);
+            trow->setProperty("settingsRow", true);
+            aes_layout->addWidget(trow);
+        }
+
         // Audio PlaceholderRows
         {
             auto* ph1 = new ui::widgets::PlaceholderRow(audio_expert_section_);
@@ -1571,7 +1609,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             aes_layout->addWidget(ph1);
 
             auto* ph2 = new ui::widgets::PlaceholderRow(audio_expert_section_);
-            ph2->setLabel(QStringLiteral("Noise gate \xc2\xb7 AGC"));
+            ph2->setLabel(QStringLiteral("AGC"));
             ph2->setVersionTag(QStringLiteral("0.6"));
             aes_layout->addWidget(ph2);
         }
@@ -2352,6 +2390,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     });
     connect(mic_hpf_cutoff_spin_, &QDoubleSpinBox::valueChanged, this, [this](double hz) {
         audio_ui_state_.mic_hpf_cutoff_hz = static_cast<float>(hz);
+        emitCurrentAudioSettings();
+    });
+    connect(mic_gate_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
+        audio_ui_state_.mic_gate_enabled = on;
+        if (mic_gate_threshold_spin_)
+            mic_gate_threshold_spin_->setEnabled(on);
+        emitCurrentAudioSettings();
+    });
+    connect(mic_gate_threshold_spin_, &QDoubleSpinBox::valueChanged, this, [this](double db) {
+        audio_ui_state_.mic_gate_threshold_db = static_cast<float>(db);
         emitCurrentAudioSettings();
     });
 
@@ -3488,6 +3536,15 @@ void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
             mic_hpf_cutoff_spin_->setValue(static_cast<double>(audio_ui_state_.mic_hpf_cutoff_hz));
             mic_hpf_cutoff_spin_->setEnabled(audio_ui_state_.mic_hpf_enabled);
         }
+        if (mic_gate_check_) {
+            const QSignalBlocker b(mic_gate_check_);
+            mic_gate_check_->setChecked(audio_ui_state_.mic_gate_enabled);
+        }
+        if (mic_gate_threshold_spin_) {
+            const QSignalBlocker b(mic_gate_threshold_spin_);
+            mic_gate_threshold_spin_->setValue(static_cast<double>(audio_ui_state_.mic_gate_threshold_db));
+            mic_gate_threshold_spin_->setEnabled(audio_ui_state_.mic_gate_enabled);
+        }
     }
 }
 
@@ -3739,6 +3796,15 @@ void ConfigPage::updateExpertModeVisibility() {
             const QSignalBlocker b(mic_hpf_cutoff_spin_);
             mic_hpf_cutoff_spin_->setValue(static_cast<double>(audio_ui_state_.mic_hpf_cutoff_hz));
             mic_hpf_cutoff_spin_->setEnabled(audio_ui_state_.mic_hpf_enabled);
+        }
+        if (mic_gate_check_) {
+            const QSignalBlocker b(mic_gate_check_);
+            mic_gate_check_->setChecked(audio_ui_state_.mic_gate_enabled);
+        }
+        if (mic_gate_threshold_spin_) {
+            const QSignalBlocker b(mic_gate_threshold_spin_);
+            mic_gate_threshold_spin_->setValue(static_cast<double>(audio_ui_state_.mic_gate_threshold_db));
+            mic_gate_threshold_spin_->setEnabled(audio_ui_state_.mic_gate_enabled);
         }
     }
     // PS-PHASE-C: Output v1.0 placeholder section.

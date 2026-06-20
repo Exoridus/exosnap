@@ -103,6 +103,24 @@ TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesMicHpfSettings) {
     EXPECT_FLOAT_EQ(result.mic_hpf_cutoff_hz, 120.0f);
 }
 
+TEST(AudioPlanBuilderTest, BuildAudioPlan_DefaultMicGateDisabledAtMinus45Db) {
+    AudioUiState state;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_FALSE(result.mic_gate_enabled);
+    EXPECT_FLOAT_EQ(result.mic_gate_threshold_db, -45.0f);
+}
+
+TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesMicGateSettings) {
+    AudioUiState state;
+    state.mic_gate_enabled = true;
+    state.mic_gate_threshold_db = -30.0f;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_TRUE(result.mic_gate_enabled);
+    EXPECT_FLOAT_EQ(result.mic_gate_threshold_db, -30.0f);
+}
+
 TEST(AudioPlanBuilderTest, WindowTarget_AppOnly) {
     AudioUiState state = WindowSep(1001u);
     state.source_rows = {{K::App, true, false}};

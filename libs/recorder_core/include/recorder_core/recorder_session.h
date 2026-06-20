@@ -321,6 +321,20 @@ struct RecorderConfig {
     // High-pass cutoff (−3 dB) frequency in Hz. Default 80 Hz.
     float mic_hpf_cutoff_hz = 80.0f;
 
+    // ---------------------------------------------------------------------------
+    // Microphone noise gate (Audio v2 — 0.6.0)
+    // ---------------------------------------------------------------------------
+
+    // When true, the microphone input is run through a downward noise gate (the
+    // second stage of the MicDspAudioSrc chain, after the high-pass filter): below
+    // the threshold the mic is attenuated toward silence (keyboard/fan/room noise
+    // between speech), above it the mic passes through. Default false: mic DSP
+    // alters captured audio, so it is opt-in.
+    bool mic_gate_enabled = false;
+
+    // Gate threshold in dBFS. Levels below this close the gate. Default -45 dB.
+    float mic_gate_threshold_db = -45.0f;
+
     // Whether the mouse cursor is composited into the captured frames.
     // Maps to GraphicsCaptureSession.IsCursorCaptureEnabled. Default true = WGC default.
     bool capture_cursor = true;

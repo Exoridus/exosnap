@@ -3,6 +3,7 @@
 #include <recorder_core/interfaces/IAudioCaptureSource.h>
 
 #include "high_pass_filter.h"
+#include "noise_gate.h"
 
 #include <cstdint>
 #include <memory>
@@ -15,18 +16,21 @@ namespace recorder_core {
 // MicDspConfig (Audio v2 — 0.6.0)
 // ---------------------------------------------------------------------------
 //
-// The single aggregate of microphone-DSP settings. Today it carries only the
-// high-pass filter; later Audio v2 slices (noise gate, AGC, RNNoise) add their
-// own enable flags and parameters here so MicDspAudioSrc stays the one chain
-// that owns all mic processing.
+// The single aggregate of microphone-DSP settings. Today it carries the
+// high-pass filter and the noise gate; later Audio v2 slices (AGC, RNNoise) add
+// their own enable flags and parameters here so MicDspAudioSrc stays the one
+// chain that owns all mic processing.
 struct MicDspConfig {
     bool hpf_enabled = false;
     float hpf_cutoff_hz = 80.0f;
 
+    bool gate_enabled = false;
+    float gate_threshold_db = -45.0f;
+
     // True when at least one DSP stage is enabled. When false the decorator is a
     // no-op and the caller should not bother wrapping the mic source.
     [[nodiscard]] bool AnyEnabled() const {
-        return hpf_enabled;
+        return hpf_enabled || gate_enabled;
     }
 };
 
@@ -39,8 +43,8 @@ struct MicDspConfig {
 // decorator always emits interleaved Float32 (Int16 inner sources are converted
 // up), preserving the inner channel count and sample rate.
 //
-// Stages run in a fixed order (currently only the high-pass filter). The class
-// is not thread-safe; one source is processed on one thread (the audio thread).
+// Stages run in a fixed order (high-pass filter, then noise gate). The class is
+// not thread-safe; one source is processed on one thread (the audio thread).
 class MicDspAudioSrc final : public IAudioCaptureSource {
   public:
     MicDspAudioSrc(std::unique_ptr<IAudioCaptureSource> inner, const MicDspConfig& cfg);
@@ -62,6 +66,7 @@ class MicDspAudioSrc final : public IAudioCaptureSource {
     MicDspConfig cfg_;
 
     HighPassFilter hpf_;
+    NoiseGate gate_;
 
     std::vector<float> scratch_buffer_; // interleaved Float32, valid until ReleaseBuffer
     uint32_t channels_ = 2;

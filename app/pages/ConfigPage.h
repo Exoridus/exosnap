@@ -459,6 +459,9 @@ class ConfigPage : public QWidget {
     // Microphone high-pass filter (Audio v2 — 0.6.0).
     ui::widgets::ExoCheckBox* mic_hpf_check_ = nullptr;
     QDoubleSpinBox* mic_hpf_cutoff_spin_ = nullptr;
+    // Microphone noise gate (Audio v2 — 0.6.0).
+    ui::widgets::ExoCheckBox* mic_gate_check_ = nullptr;
+    QDoubleSpinBox* mic_gate_threshold_spin_ = nullptr;
 
     // SETTINGS-SEARCH-R1: settings search box and match count label.
     QWidget* settings_search_pill_ = nullptr;
