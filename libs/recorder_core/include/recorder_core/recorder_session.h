@@ -349,6 +349,18 @@ struct RecorderConfig {
     // AGC target loudness in dBFS. Default -18 dB.
     float mic_agc_target_db = -18.0f;
 
+    // ---------------------------------------------------------------------------
+    // Microphone RNNoise neural noise suppression (Audio v2 — 0.6.0)
+    // ---------------------------------------------------------------------------
+
+    // When true, the microphone input is run through RNNoise (the fourth and
+    // final stage of the MicDspAudioSrc chain, after the high-pass filter, the
+    // noise gate, and the AGC): a trained recurrent network attenuates background
+    // noise (fans, keyboards, hum, hiss) while preserving speech. Default false:
+    // mic DSP alters captured audio, so it is opt-in. RNNoise has no numeric
+    // parameter (it is a fixed trained model). It runs only at 48 kHz.
+    bool mic_rnnoise_enabled = false;
+
     // Whether the mouse cursor is composited into the captured frames.
     // Maps to GraphicsCaptureSession.IsCursorCaptureEnabled. Default true = WGC default.
     bool capture_cursor = true;

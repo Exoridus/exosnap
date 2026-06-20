@@ -92,6 +92,16 @@ struct AudioUiState {
     // AGC target loudness in dBFS. Default -18 dB.
     float mic_agc_target_db = -18.0f;
 
+    // ---------------------------------------------------------------------------
+    // Microphone RNNoise neural noise suppression (Audio v2 — 0.6.0)
+    // ---------------------------------------------------------------------------
+
+    // Run the mic input through RNNoise neural noise suppression (the fourth
+    // stage of the mic-DSP chain) to attenuate background noise while preserving
+    // speech. Default false (mic DSP alters captured audio, opt-in). No numeric
+    // parameter — RNNoise is a fixed trained model.
+    bool mic_rnnoise_enabled = false;
+
     // Convenience predicates.
     [[nodiscard]] bool IsAppEnabled() const noexcept;
     [[nodiscard]] bool IsSysEnabled() const noexcept;
@@ -126,6 +136,9 @@ struct AudioPlanResult {
     // Microphone automatic gain control (Audio v2 — 0.6.0) — passed through from AudioUiState.
     bool mic_agc_enabled = false;
     float mic_agc_target_db = -18.0f;
+
+    // Microphone RNNoise neural noise suppression (Audio v2 — 0.6.0) — passed through.
+    bool mic_rnnoise_enabled = false;
 };
 
 [[nodiscard]] AudioPlanResult BuildAudioPlan(const AudioUiState& state);

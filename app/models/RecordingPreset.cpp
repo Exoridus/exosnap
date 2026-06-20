@@ -487,6 +487,10 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     if (std::abs(a.audio.mic_agc_target_db - b.audio.mic_agc_target_db) > 1e-2f) {
         return false;
     }
+    // Mic RNNoise (Audio v2): enabled (exact); no numeric parameter.
+    if (a.audio.mic_rnnoise_enabled != b.audio.mic_rnnoise_enabled) {
+        return false;
+    }
 
     // Semantic audio-row equality: same resolved plan AND same enabled-source set.
     {
@@ -716,6 +720,10 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (std::abs(a.audio.mic_agc_target_db - b.audio.mic_agc_target_db) > 1e-2f) {
+        return false;
+    }
+    // Mic RNNoise (Audio v2): enabled (exact); no numeric parameter.
+    if (a.audio.mic_rnnoise_enabled != b.audio.mic_rnnoise_enabled) {
         return false;
     }
 

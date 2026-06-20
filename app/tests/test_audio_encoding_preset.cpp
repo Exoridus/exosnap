@@ -651,5 +651,43 @@ TEST(AudioEncodingPreset, StoreRoundTrip_MicAgc) {
     QFile::remove(path);
 }
 
+// ===========================================================================
+// Mic RNNoise (Audio v2 — 0.6.0). Bool only — no numeric parameter.
+// ===========================================================================
+
+TEST(AudioEncodingPreset, DefaultPreset_MicRnnoise_Disabled) {
+    const RecordingPreset p = MakeDefaultPreset();
+    EXPECT_FALSE(p.config.audio.mic_rnnoise_enabled);
+}
+
+TEST(AudioEncodingPreset, NormalizedEquals_DifferentMicRnnoiseEnabled_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.mic_rnnoise_enabled = !a.audio.mic_rnnoise_enabled;
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+TEST(AudioEncodingPreset, DirtyEquivalent_DifferentMicRnnoiseEnabled_NotEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.mic_rnnoise_enabled = !a.audio.mic_rnnoise_enabled;
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(AudioEncodingPreset, StoreRoundTrip_MicRnnoise) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+
+    RecordingPreset p = MakeDefaultPreset();
+    p.config.audio.mic_rnnoise_enabled = true;
+    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+
+    const auto state = store.Load();
+    ASSERT_FALSE(state.presets.empty());
+    const auto& loaded = state.presets.front().config.audio;
+    EXPECT_TRUE(loaded.mic_rnnoise_enabled);
+    QFile::remove(path);
+}
+
 } // namespace
 } // namespace exosnap

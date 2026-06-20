@@ -1643,17 +1643,32 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             aes_layout->addWidget(trow);
         }
 
+        // Microphone RNNoise neural noise suppression (Audio v2 — 0.6.0). Bool
+        // only — RNNoise is a fixed trained model with no user parameter.
+        {
+            auto* rule = new QFrame(audio_expert_section_);
+            rule->setFrameShape(QFrame::HLine);
+            rule->setProperty("frameRole", "sectionRuleLine");
+            aes_layout->addWidget(rule);
+
+            auto* row = new QWidget(audio_expert_section_);
+            auto* hl = new QHBoxLayout(row);
+            hl->setContentsMargins(0, 12, 0, 12);
+            hl->setSpacing(14);
+            mic_rnnoise_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Noise suppression (RNNoise)"), row);
+            mic_rnnoise_check_->setObjectName(QStringLiteral("micRnnoiseCheck"));
+            mic_rnnoise_check_->setChecked(audio_ui_state_.mic_rnnoise_enabled);
+            hl->addWidget(mic_rnnoise_check_, 1);
+            row->setProperty("settingsRow", true);
+            aes_layout->addWidget(row);
+        }
+
         // Audio PlaceholderRows
         {
             auto* ph1 = new ui::widgets::PlaceholderRow(audio_expert_section_);
             ph1->setLabel(QStringLiteral("PCM / FLAC codecs"));
             ph1->setVersionTag(QStringLiteral("0.6"));
             aes_layout->addWidget(ph1);
-
-            auto* ph2 = new ui::widgets::PlaceholderRow(audio_expert_section_);
-            ph2->setLabel(QStringLiteral("RNNoise"));
-            ph2->setVersionTag(QStringLiteral("0.6"));
-            aes_layout->addWidget(ph2);
         }
 
         audio_panel_layout->addWidget(audio_expert_section_);
@@ -2452,6 +2467,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     });
     connect(mic_agc_target_spin_, &QDoubleSpinBox::valueChanged, this, [this](double db) {
         audio_ui_state_.mic_agc_target_db = static_cast<float>(db);
+        emitCurrentAudioSettings();
+    });
+    connect(mic_rnnoise_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
+        audio_ui_state_.mic_rnnoise_enabled = on;
         emitCurrentAudioSettings();
     });
 
@@ -3628,6 +3647,10 @@ void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
             mic_agc_target_spin_->setValue(static_cast<double>(audio_ui_state_.mic_agc_target_db));
             mic_agc_target_spin_->setEnabled(audio_ui_state_.mic_agc_enabled);
         }
+        if (mic_rnnoise_check_) {
+            const QSignalBlocker b(mic_rnnoise_check_);
+            mic_rnnoise_check_->setChecked(audio_ui_state_.mic_rnnoise_enabled);
+        }
     }
 }
 
@@ -3897,6 +3920,10 @@ void ConfigPage::updateExpertModeVisibility() {
             const QSignalBlocker b(mic_agc_target_spin_);
             mic_agc_target_spin_->setValue(static_cast<double>(audio_ui_state_.mic_agc_target_db));
             mic_agc_target_spin_->setEnabled(audio_ui_state_.mic_agc_enabled);
+        }
+        if (mic_rnnoise_check_) {
+            const QSignalBlocker b(mic_rnnoise_check_);
+            mic_rnnoise_check_->setChecked(audio_ui_state_.mic_rnnoise_enabled);
         }
     }
     // PS-PHASE-C: Output v1.0 placeholder section.

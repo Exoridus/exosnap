@@ -515,6 +515,8 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     // Microphone automatic gain control (Audio v2 — 0.6.0).
     aud_tbl.emplace("mic_agc_enabled", aud.mic_agc_enabled);
     aud_tbl.emplace("mic_agc_target_db", static_cast<double>(aud.mic_agc_target_db));
+    // Microphone RNNoise neural noise suppression (Audio v2 — 0.6.0). Bool only.
+    aud_tbl.emplace("mic_rnnoise_enabled", aud.mic_rnnoise_enabled);
 
     // audio sources as array-of-tables
     toml::array sources_arr;
@@ -763,6 +765,11 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
     {
         aud.mic_agc_enabled = TomlBool(tbl["audio"]["mic_agc_enabled"], false);
         aud.mic_agc_target_db = static_cast<float>(TomlFloat(tbl["audio"]["mic_agc_target_db"], -18.0));
+    }
+    // Microphone RNNoise neural noise suppression (Audio v2 — 0.6.0). Older
+    // presets default to disabled (no behavior change vs unsuppressed capture).
+    {
+        aud.mic_rnnoise_enabled = TomlBool(tbl["audio"]["mic_rnnoise_enabled"], false);
     }
     // Audio source rows — array-of-tables [[audio.sources]]
     {
