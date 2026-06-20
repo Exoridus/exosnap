@@ -502,6 +502,9 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     // Brickwall limiter (Audio v2 — 0.6.0).
     aud_tbl.emplace("limiter_enabled", aud.limiter_enabled);
     aud_tbl.emplace("limiter_ceiling_db", static_cast<double>(aud.limiter_ceiling_db));
+    // Microphone high-pass filter (Audio v2 — 0.6.0).
+    aud_tbl.emplace("mic_hpf_enabled", aud.mic_hpf_enabled);
+    aud_tbl.emplace("mic_hpf_cutoff_hz", static_cast<double>(aud.mic_hpf_cutoff_hz));
 
     // audio sources as array-of-tables
     toml::array sources_arr;
@@ -732,6 +735,12 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
     {
         aud.limiter_enabled = TomlBool(tbl["audio"]["limiter_enabled"], true);
         aud.limiter_ceiling_db = static_cast<float>(TomlFloat(tbl["audio"]["limiter_ceiling_db"], 0.0));
+    }
+    // Microphone high-pass filter (Audio v2 — 0.6.0). Older presets default to
+    // disabled / 80 Hz (no behavior change vs unfiltered mic capture).
+    {
+        aud.mic_hpf_enabled = TomlBool(tbl["audio"]["mic_hpf_enabled"], false);
+        aud.mic_hpf_cutoff_hz = static_cast<float>(TomlFloat(tbl["audio"]["mic_hpf_cutoff_hz"], 80.0));
     }
     // Audio source rows — array-of-tables [[audio.sources]]
     {

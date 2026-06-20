@@ -85,6 +85,24 @@ TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesLimiterSettings) {
     EXPECT_FLOAT_EQ(result.limiter_ceiling_db, -3.0f);
 }
 
+TEST(AudioPlanBuilderTest, BuildAudioPlan_DefaultMicHpfDisabledAt80Hz) {
+    AudioUiState state;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_FALSE(result.mic_hpf_enabled);
+    EXPECT_FLOAT_EQ(result.mic_hpf_cutoff_hz, 80.0f);
+}
+
+TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesMicHpfSettings) {
+    AudioUiState state;
+    state.mic_hpf_enabled = true;
+    state.mic_hpf_cutoff_hz = 120.0f;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_TRUE(result.mic_hpf_enabled);
+    EXPECT_FLOAT_EQ(result.mic_hpf_cutoff_hz, 120.0f);
+}
+
 TEST(AudioPlanBuilderTest, WindowTarget_AppOnly) {
     AudioUiState state = WindowSep(1001u);
     state.source_rows = {{K::App, true, false}};

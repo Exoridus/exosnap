@@ -58,6 +58,17 @@ struct AudioUiState {
     // Limiter ceiling in dBFS (<= 0). Default 0.0 keeps the previous clamp ceiling.
     float limiter_ceiling_db = 0.0f;
 
+    // ---------------------------------------------------------------------------
+    // Microphone high-pass filter (Audio v2 — 0.6.0)
+    // ---------------------------------------------------------------------------
+
+    // Run the mic input through a high-pass filter to remove low-frequency
+    // rumble. Default false (mic DSP alters captured audio, so it is opt-in).
+    bool mic_hpf_enabled = false;
+
+    // High-pass cutoff (−3 dB) frequency in Hz. Default 80 Hz.
+    float mic_hpf_cutoff_hz = 80.0f;
+
     // Convenience predicates.
     [[nodiscard]] bool IsAppEnabled() const noexcept;
     [[nodiscard]] bool IsSysEnabled() const noexcept;
@@ -80,6 +91,10 @@ struct AudioPlanResult {
     // Brickwall limiter (Audio v2 — 0.6.0) — passed through from AudioUiState.
     bool limiter_enabled = true;
     float limiter_ceiling_db = 0.0f;
+
+    // Microphone high-pass filter (Audio v2 — 0.6.0) — passed through from AudioUiState.
+    bool mic_hpf_enabled = false;
+    float mic_hpf_cutoff_hz = 80.0f;
 };
 
 [[nodiscard]] AudioPlanResult BuildAudioPlan(const AudioUiState& state);

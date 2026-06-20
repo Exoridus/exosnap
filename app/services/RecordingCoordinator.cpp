@@ -736,6 +736,9 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     // Brickwall limiter (Audio v2).
     config.audio_limiter_enabled = plan.limiter_enabled;
     config.audio_limiter_ceiling_db = plan.limiter_ceiling_db;
+    // Microphone high-pass filter (Audio v2).
+    config.mic_hpf_enabled = plan.mic_hpf_enabled;
+    config.mic_hpf_cutoff_hz = plan.mic_hpf_cutoff_hz;
 
     if (plan.record_audio && PlanRequiresTargetPid(plan.plan) && !plan.audio_target_process_id.has_value()) {
         diagnostics::AppLog::error(QStringLiteral("record.failure"),

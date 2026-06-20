@@ -40,6 +40,10 @@ AudioPlanResult BuildAudioPlan(const AudioUiState& state) {
     result.limiter_enabled = state.limiter_enabled;
     result.limiter_ceiling_db = state.limiter_ceiling_db;
 
+    // Microphone high-pass filter (Audio v2) — pass through directly.
+    result.mic_hpf_enabled = state.mic_hpf_enabled;
+    result.mic_hpf_cutoff_hz = state.mic_hpf_cutoff_hz;
+
     result.plan = recorder_core::ResolveAudioTracks(state.source_rows);
 
     const bool app_active = state.IsAppEnabled();

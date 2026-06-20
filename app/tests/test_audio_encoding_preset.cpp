@@ -332,6 +332,9 @@ TEST(AudioEncodingPreset, StoreLoad_MissingKeys_FallsBackToDefaults) {
     // Limiter keys also omitted → enabled / 0.0 dBFS defaults.
     EXPECT_TRUE(state.presets.front().config.audio.limiter_enabled);
     EXPECT_FLOAT_EQ(state.presets.front().config.audio.limiter_ceiling_db, 0.0f);
+    // Mic HPF keys also omitted → disabled / 80 Hz defaults.
+    EXPECT_FALSE(state.presets.front().config.audio.mic_hpf_enabled);
+    EXPECT_FLOAT_EQ(state.presets.front().config.audio.mic_hpf_cutoff_hz, 80.0f);
     QFile::remove(path);
 }
 
@@ -401,6 +404,75 @@ TEST(AudioEncodingPreset, StoreRoundTrip_Limiter) {
     const auto& loaded = state.presets.front().config.audio;
     EXPECT_FALSE(loaded.limiter_enabled);
     EXPECT_NEAR(loaded.limiter_ceiling_db, -3.0f, 0.01f);
+    QFile::remove(path);
+}
+
+// ===========================================================================
+// Microphone high-pass filter (Audio v2 — 0.6.0)
+// ===========================================================================
+
+TEST(AudioEncodingPreset, DefaultPreset_MicHpf_DisabledAt80Hz) {
+    const RecordingPreset p = MakeDefaultPreset();
+    EXPECT_FALSE(p.config.audio.mic_hpf_enabled);
+    EXPECT_FLOAT_EQ(p.config.audio.mic_hpf_cutoff_hz, 80.0f);
+}
+
+TEST(AudioEncodingPreset, Sanitize_MicHpfCutoff_AboveMaxClampsTo1000) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.mic_hpf_cutoff_hz = 5000.0f;
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_FLOAT_EQ(sanitized.audio.mic_hpf_cutoff_hz, 1000.0f);
+}
+
+TEST(AudioEncodingPreset, Sanitize_MicHpfCutoff_BelowMinClampsTo20) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.mic_hpf_cutoff_hz = 5.0f;
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_FLOAT_EQ(sanitized.audio.mic_hpf_cutoff_hz, 20.0f);
+}
+
+TEST(AudioEncodingPreset, Sanitize_MicHpfCutoff_NonFiniteResetsTo80) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.mic_hpf_cutoff_hz = std::nanf("");
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_FLOAT_EQ(sanitized.audio.mic_hpf_cutoff_hz, 80.0f);
+}
+
+TEST(AudioEncodingPreset, NormalizedEquals_DifferentMicHpfEnabled_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.mic_hpf_enabled = !a.audio.mic_hpf_enabled;
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+TEST(AudioEncodingPreset, NormalizedEquals_DifferentMicHpfCutoff_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.mic_hpf_cutoff_hz = a.audio.mic_hpf_cutoff_hz + 40.0f;
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+TEST(AudioEncodingPreset, DirtyEquivalent_DifferentMicHpfCutoff_NotEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.mic_hpf_cutoff_hz = 200.0f;
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(AudioEncodingPreset, StoreRoundTrip_MicHpf) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+
+    RecordingPreset p = MakeDefaultPreset();
+    p.config.audio.mic_hpf_enabled = true;
+    p.config.audio.mic_hpf_cutoff_hz = 120.0f;
+    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+
+    const auto state = store.Load();
+    ASSERT_FALSE(state.presets.empty());
+    const auto& loaded = state.presets.front().config.audio;
+    EXPECT_TRUE(loaded.mic_hpf_enabled);
+    EXPECT_NEAR(loaded.mic_hpf_cutoff_hz, 120.0f, 0.01f);
     QFile::remove(path);
 }
 
