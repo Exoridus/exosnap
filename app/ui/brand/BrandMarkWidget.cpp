@@ -7,7 +7,7 @@
 
 #include <algorithm>
 
-#include "../theme/ExoSnapPalette.h"
+#include "../theme/ExoSnapTheme.h"
 
 namespace exosnap::ui::brand {
 
@@ -48,8 +48,9 @@ void BrandMarkWidget::paintEvent(QPaintEvent* event) {
     painter.translate((width() - side) / 2.0, (height() - side) / 2.0);
     painter.scale(scale, scale);
 
-    const QColor accent(theme::ExoSnapPalette::kAccent);
-    const QColor recording(theme::ExoSnapPalette::kErr); // coral while recording
+    const auto& active_theme = theme::ActiveTheme();
+    const QColor accent(QString::fromUtf8(active_theme.ac));
+    const QColor recording(QString::fromUtf8(active_theme.error)); // coral while recording
     const QColor inner_color = recording_ ? recording : accent;
 
     const QPointF center(16.0, 16.0);

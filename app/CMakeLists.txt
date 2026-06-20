@@ -72,6 +72,7 @@ qt_add_executable(exosnap WIN32
     ui/theme/ExoSnapMetrics.h
     ui/theme/ExoSnapTheme.h
     ui/theme/ExoSnapTheme.cpp
+    ui/theme/ExoSnapThemes.h
     ui/theme/exosnap_theme.qrc
     ui/theme/LucideIcon.h
     ui/theme/LucideIcon.cpp
@@ -421,6 +422,8 @@ exosnap_add_app_test_support(exosnap_pages_test_support
     services/GlobalHotkeyService.cpp
     ui/widgets/SectionRuleHeader.cpp
     ui/widgets/PlaceholderRow.cpp
+    # THEME-SLICE-1: ExoCheckBox now calls ActiveTheme()/ParseThemeColor() from ExoSnapTheme.cpp.
+    ui/theme/ExoSnapTheme.cpp
 )
 target_link_libraries(exosnap_pages_test_support PUBLIC
     exosnap_device_service_test_support exosnap_output_model_test_support
@@ -692,6 +695,8 @@ exosnap_add_gtest(
         ui/widgets/NotificationBell.cpp
         ui/widgets/StatusPill.cpp
         ui/theme/LucideIcon.cpp
+        # THEME-SLICE-1: BrandMarkWidget now calls ActiveTheme() from ExoSnapTheme.cpp.
+        ui/theme/ExoSnapTheme.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
 )
 target_include_directories(operational_title_bar_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -936,6 +941,8 @@ exosnap_add_gtest(
         # PS-PHASE-E: AboutOverlay now embeds UpdateSettingsPanel.
         ui/dialogs/UpdateSettingsPanel.cpp
         ui/theme/LucideIcon.cpp
+        # THEME-SLICE-1: BrandMarkWidget now calls ActiveTheme() from ExoSnapTheme.cpp.
+        ui/theme/ExoSnapTheme.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
 target_include_directories(about_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
@@ -980,6 +987,8 @@ exosnap_add_gtest(
         ui/dialogs/CrashReportOverlay.cpp
         ui/brand/BrandMarkWidget.cpp
         ui/theme/LucideIcon.cpp
+        # THEME-SLICE-1: BrandMarkWidget now calls ActiveTheme() from ExoSnapTheme.cpp.
+        ui/theme/ExoSnapTheme.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
 target_include_directories(crash_report_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})

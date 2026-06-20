@@ -16,6 +16,7 @@
 #include "models/VideoSettingsModel.h"
 #include "pages/ConfigPage.h"
 #include "settings/AppSettingsStore.h"
+#include "ui/widgets/ExoCheckBox.h"
 #include "ui/widgets/ExoToggle.h"
 #include "ui/widgets/SettingsCardExpander.h"
 
@@ -115,7 +116,8 @@ TEST(AppSettingsTiersStoreTest, AudioSeparateExpanderExpanded_SaveAndLoad_True) 
     EXPECT_TRUE(loaded.audio_separate_expander_expanded);
 }
 
-TEST(AppSettingsTiersStoreTest, SettingsVersion_BumpedTo15) {
+// THEME-SLICE-1: renamed from BumpedTo15 → BumpedTo16.
+TEST(AppSettingsTiersStoreTest, SettingsVersion_BumpedTo16) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString path = QDir(temp_dir.path()).filePath(QStringLiteral("settings.ini"));
@@ -125,7 +127,8 @@ TEST(AppSettingsTiersStoreTest, SettingsVersion_BumpedTo15) {
     store.Save(settings);
 
     QSettings raw(path, QSettings::IniFormat);
-    EXPECT_EQ(raw.value(QStringLiteral("settings_version")).toInt(), 15);
+    // THEME-SLICE-1: version bumped from 15 → 16 (accent_id renamed to theme_id).
+    EXPECT_EQ(raw.value(QStringLiteral("settings_version")).toInt(), 16);
 }
 
 TEST(AppSettingsTiersStoreTest, MissingSettingsTiersGroup_DefaultsToFalse) {
@@ -312,9 +315,10 @@ TEST_F(SettingsTiersTest, ConfigPage_AudioSeparateTogglesInSourceRows) {
     ConfigPage page(output_defaults_, video_defaults_);
     // The toggles are ExoToggle widgets; we verify they are present and correctly wired
     // by checking the named audio check boxes that sit beside them.
-    auto* sys_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioSysCheck"));
+    // THEME-SLICE-1: audio source rows switched from QCheckBox to ExoCheckBox.
+    auto* sys_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioSysCheck"));
     ASSERT_NE(sys_check, nullptr);
-    auto* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr);
 }
 

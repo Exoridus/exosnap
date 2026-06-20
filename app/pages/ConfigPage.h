@@ -120,7 +120,7 @@ class ConfigPage : public QWidget {
     void setShowNotifications(bool show);
     void setKeepRunningInTray(bool keep);
     void setShowQuickControls(bool show);
-    void setAccentId(const QString& accent_id);
+    void setThemeId(const QString& theme_id);
 
     // Reactive device-change handlers (driven by MainWindow from the three notifiers).
     // These preserve selection state and never emit settings-changed or dirty the preset.
@@ -156,7 +156,7 @@ class ConfigPage : public QWidget {
     void showNotificationsChanged(bool show);
     void keepRunningInTrayChanged(bool keep);
     void showQuickControlsChanged(bool show);
-    void accentIdChanged(const QString& accent_id);
+    void themeIdChanged(const QString& theme_id);
 
     // ---- Preset management signals ----
     void savePresetRequested();
@@ -304,7 +304,7 @@ class ConfigPage : public QWidget {
     QButtonGroup* timing_group_ = nullptr;
     QPushButton* timing_cfr_btn_ = nullptr;
     QPushButton* timing_vfr_btn_ = nullptr;
-    QCheckBox* cursor_check_ = nullptr;
+    ui::widgets::ExoCheckBox* cursor_check_ = nullptr;
 
     QLabel* audio_summary_label_ = nullptr;
 
@@ -319,11 +319,11 @@ class ConfigPage : public QWidget {
     // Application audio section — shown for Window targets, hidden for Display/Region.
     QWidget* app_row_section_ = nullptr;
 
-    QCheckBox* app_enabled_check_ = nullptr;
+    ui::widgets::ExoCheckBox* app_enabled_check_ = nullptr;
     ui::widgets::ExoToggle* app_separate_check_ = nullptr; // DF-12: pill toggle replaces QCheckBox
     QLabel* app_source_label_ = nullptr;
 
-    QCheckBox* mic_enabled_check_ = nullptr;
+    ui::widgets::ExoCheckBox* mic_enabled_check_ = nullptr;
     ui::widgets::ExoToggle* mic_separate_check_ = nullptr; // DF-12: pill toggle replaces QCheckBox
     QComboBox* mic_device_combo_ = nullptr;
     // Compact Rescan affordance for the Settings Audio card.
@@ -333,7 +333,7 @@ class ConfigPage : public QWidget {
 
     std::vector<recorder_core::AudioInputDeviceInfo> mic_devices_;
 
-    QCheckBox* sys_enabled_check_ = nullptr;
+    ui::widgets::ExoCheckBox* sys_enabled_check_ = nullptr;
     ui::widgets::ExoToggle* sys_separate_check_ = nullptr; // DF-12: pill toggle replaces QCheckBox
     QLabel* sys_source_label_ = nullptr;
 
@@ -426,7 +426,10 @@ class ConfigPage : public QWidget {
     ui::widgets::ExoCheckBox* notifications_check_ = nullptr;
     ui::widgets::ExoCheckBox* keep_in_tray_check_ = nullptr;
     ui::widgets::ExoCheckBox* quick_controls_check_ = nullptr;
-    QComboBox* accent_combo_ = nullptr;
+    // THEME-SLICE-1: theme picker (replaces accent_combo_).
+    QButtonGroup* theme_button_group_ = nullptr;
+    QWidget* theme_picker_widget_ = nullptr;
+    QString current_theme_id_ = QStringLiteral("dark-default");
     // Expert-gated developer card (hidden when expert_mode_enabled_ == false).
     QWidget* developer_card_ = nullptr;
 

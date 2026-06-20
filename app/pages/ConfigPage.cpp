@@ -37,9 +37,10 @@
 #include "../models/SettingsHintText.h"
 #include "../services/GlobalHotkeyService.h"
 #include "../services/WebcamService.h"
-#include "../ui/theme/ExoSnapAccents.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
+#include "../ui/theme/ExoSnapTheme.h"
+#include "../ui/theme/ExoSnapThemes.h"
 #include "../ui/theme/LucideIcon.h"
 #include "../ui/widgets/ComboBoxWheelFilter.h"
 #include "../ui/widgets/CompareHint.h"
@@ -908,7 +909,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         makeSettingsRow(fmt_panel, QStringLiteral("Frame timing"), timing_compare_hint_, QString(), timing_segmented));
 
     // --- Capture cursor row ---
-    cursor_check_ = new QCheckBox(QStringLiteral("Capture cursor"), fmt_panel);
+    cursor_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Capture cursor"), fmt_panel);
     cursor_check_->setObjectName(QStringLiteral("captureCursorCheck"));
     cursor_check_->setChecked(video_settings_.capture_cursor);
     fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Capture cursor"),
@@ -1097,12 +1098,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // DF-12: separate_check is now an ExoToggle pill (was QCheckBox "Separate track").
     // SETTINGS-TIERS-R2: InfoHintIcon added after enabled check and after separate_check.
     auto makeSourceRowInto = [&](QVBoxLayout* target_layout, QWidget* target_parent, const QString& title,
-                                 QCheckBox*& enabled_check, ui::widgets::ExoToggle*& separate_check,
+                                 ui::widgets::ExoCheckBox*& enabled_check, ui::widgets::ExoToggle*& separate_check,
                                  QLabel*& source_label, ui::widgets::VUMeterWidget*& meter_out, QLabel*& db_label_out) {
         auto* row = new QHBoxLayout();
         row->setSpacing(8);
 
-        enabled_check = new QCheckBox(title, target_parent);
+        enabled_check = new ui::widgets::ExoCheckBox(title, target_parent);
         db_label_out = new QLabel(QStringLiteral("–"), target_parent);
         db_label_out->setProperty("labelRole", "muted");
         db_label_out->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -1771,7 +1772,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         left_layout->addStretch();
     }
 
-    // ---- APPEARANCE CARD (right column — SETTINGS-TIERS-P3) — D6: flat rows, below Output ----
+    // ---- APPEARANCE CARD (right column — THEME-SLICE-1) ----
     {
         auto* appearance_panel = makePanel(right_col);
         appearance_panel_ = appearance_panel;
@@ -1780,17 +1781,107 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         appearance_layout->setSpacing(0);
         appearance_layout->addWidget(makeCardTitle(QStringLiteral("Appearance"), appearance_panel));
 
-        accent_combo_ = new QComboBox(appearance_panel);
-        accent_combo_->setMinimumWidth(0); // Wave 2 Part C: let it shrink with the layout
-        accent_combo_->setMaximumWidth(320);
-        for (const auto& a : ui::theme::kExoSnapAccents) {
-            accent_combo_->addItem(QString::fromUtf8(a.name), QString::fromUtf8(a.id));
-        }
-        appearance_layout->addWidget(
-            makeSettingsRow(appearance_panel, QStringLiteral("Accent color"),
-                            new ui::widgets::InfoHintIcon(ui::hints::kAccent, appearance_panel), QString(),
-                            accent_combo_, /*first=*/true));
+        // Brief description
+        auto* appearance_desc = new QLabel(
+            QStringLiteral("Four curated themes \xE2\x80\x94 two dark, two light. Each is a complete colour set. "
+                           "Status colours stay on-meaning in every theme."),
+            appearance_panel);
+        appearance_desc->setWordWrap(true);
+        appearance_desc->setProperty("labelRole", "body");
+        appearance_desc->setContentsMargins(0, 4, 0, 10);
+        appearance_layout->addWidget(appearance_desc);
 
+        // Build theme picker cards
+        auto* theme_grid = new QWidget(appearance_panel);
+        theme_picker_widget_ = theme_grid;
+        auto* theme_grid_layout = new QVBoxLayout(theme_grid);
+        theme_grid_layout->setContentsMargins(0, 0, 0, 0);
+        theme_grid_layout->setSpacing(10);
+
+        theme_button_group_ = new QButtonGroup(this);
+        theme_button_group_->setExclusive(true);
+
+        auto makeGroupLabel = [&](const QString& label) -> QLabel* {
+            auto* lbl = new QLabel(label, theme_grid);
+            lbl->setProperty("labelRole", "fieldLabel");
+            return lbl;
+        };
+
+        auto makeThemeCard = [&](const ui::theme::ExoTheme& t) -> QPushButton* {
+            auto* card = new QPushButton(theme_grid);
+            card->setCheckable(true);
+            card->setAutoDefault(false);
+            card->setDefault(false);
+            card->setCursor(Qt::PointingHandCursor);
+            card->setProperty("themePickerCard", true);
+            card->setProperty("themeId", QString::fromUtf8(t.id));
+            card->setObjectName(QStringLiteral("themeCard_") + QString::fromUtf8(t.id));
+
+            auto* card_layout = new QHBoxLayout(card);
+            card_layout->setContentsMargins(10, 10, 10, 10);
+            card_layout->setSpacing(10);
+
+            // Swatch: a small colored rectangle showing bg color
+            auto* swatch = new QFrame(card);
+            swatch->setFixedSize(52, 36);
+            swatch->setStyleSheet(
+                QStringLiteral("background: %1; border: 1px solid rgba(128,128,128,0.3); border-radius: 5px;")
+                    .arg(QString::fromUtf8(t.bg)));
+
+            // Text area
+            auto* text_col = new QWidget(card);
+            auto* text_layout = new QVBoxLayout(text_col);
+            text_layout->setContentsMargins(0, 0, 0, 0);
+            text_layout->setSpacing(2);
+
+            auto* name_lbl = new QLabel(QString::fromUtf8(t.name), text_col);
+            name_lbl->setProperty("labelRole", "settingsRowLabel");
+
+            auto* intent_lbl = new QLabel(QString::fromUtf8(t.intent), text_col);
+            intent_lbl->setProperty("labelRole", "subtle");
+            intent_lbl->setWordWrap(true);
+
+            text_layout->addWidget(name_lbl);
+            text_layout->addWidget(intent_lbl);
+            text_layout->addStretch();
+
+            card_layout->addWidget(swatch, 0, Qt::AlignTop);
+            card_layout->addWidget(text_col, 1);
+
+            return card;
+        };
+
+        // Dark group
+        auto* dark_label = makeGroupLabel(QStringLiteral("Dark"));
+        theme_grid_layout->addWidget(dark_label);
+        auto* dark_row = new QWidget(theme_grid);
+        auto* dark_row_layout = new QHBoxLayout(dark_row);
+        dark_row_layout->setContentsMargins(0, 0, 0, 0);
+        dark_row_layout->setSpacing(8);
+
+        // Light group
+        auto* light_label = makeGroupLabel(QStringLiteral("Light"));
+        auto* light_row = new QWidget(theme_grid);
+        auto* light_row_layout = new QHBoxLayout(light_row);
+        light_row_layout->setContentsMargins(0, 0, 0, 0);
+        light_row_layout->setSpacing(8);
+
+        int btn_id = 0;
+        for (const auto& t : ui::theme::kExoThemes) {
+            auto* card = makeThemeCard(t);
+            theme_button_group_->addButton(card, btn_id++);
+            if (QString::fromUtf8(t.group) == QStringLiteral("Dark"))
+                dark_row_layout->addWidget(card);
+            else
+                light_row_layout->addWidget(card);
+        }
+
+        theme_grid_layout->addWidget(dark_row);
+        theme_grid_layout->addSpacing(8);
+        theme_grid_layout->addWidget(light_label);
+        theme_grid_layout->addWidget(light_row);
+
+        appearance_layout->addWidget(theme_grid);
         right_layout->addWidget(appearance_panel);
         right_layout->addStretch();
     }
@@ -1880,10 +1971,15 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(notifications_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::showNotificationsChanged);
     connect(keep_in_tray_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::keepRunningInTrayChanged);
     connect(quick_controls_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::showQuickControlsChanged);
-    connect(accent_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
-        const QString id = accent_combo_->itemData(index).toString();
-        if (!id.isEmpty())
-            emit accentIdChanged(id);
+    connect(theme_button_group_, &QButtonGroup::idClicked, this, [this](int btn_id) {
+        auto* btn = theme_button_group_->button(btn_id);
+        if (!btn)
+            return;
+        const QString id = btn->property("themeId").toString();
+        if (!id.isEmpty()) {
+            current_theme_id_ = id;
+            emit themeIdChanged(id);
+        }
     });
 
     connect(container_group_, &QButtonGroup::idClicked, this, &ConfigPage::onContainerChanged);
@@ -1915,13 +2011,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     });
     connect(custom_width_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &ConfigPage::onCustomWidthChanged);
     connect(custom_height_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &ConfigPage::onCustomHeightChanged);
-    connect(cursor_check_, &QCheckBox::toggled, this, &ConfigPage::onCursorChanged);
+    connect(cursor_check_, &QAbstractButton::toggled, this, &ConfigPage::onCursorChanged);
     connect(browse_btn_, &QPushButton::clicked, this, &ConfigPage::onBrowse);
     connect(destination_edit_, &QLineEdit::editingFinished, this, &ConfigPage::onDestinationEditingFinished);
     connect(naming_edit_, &QLineEdit::editingFinished, this, &ConfigPage::onPatternEditingFinished);
-    connect(app_enabled_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioAppToggled);
-    connect(mic_enabled_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioMicToggled);
-    connect(sys_enabled_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioSysToggled);
+    connect(app_enabled_check_, &QAbstractButton::toggled, this, &ConfigPage::onAudioAppToggled);
+    connect(mic_enabled_check_, &QAbstractButton::toggled, this, &ConfigPage::onAudioMicToggled);
+    connect(sys_enabled_check_, &QAbstractButton::toggled, this, &ConfigPage::onAudioSysToggled);
     // DF-12: ExoToggle inherits QAbstractButton::toggled — same connection pattern.
     connect(app_separate_check_, &QAbstractButton::toggled, this, &ConfigPage::onAudioAppSeparateToggled);
     connect(mic_separate_check_, &QAbstractButton::toggled, this, &ConfigPage::onAudioMicSeparateToggled);
@@ -3434,7 +3530,7 @@ void ConfigPage::updateExpertModeVisibility() {
 //   Updates         → "update", "software", "version", "check", "automatic"
 //   Presence        → "presence", "overlay", "notification", "tray", "diagnostics",
 //                     "quick", "controls"
-//   Appearance      → "appearance", "accent", "color", "colour", "theme"
+//   Appearance      → "appearance", "theme", "color", "colour", "dark", "light"
 //   Developer       → "developer", "log", "logging", "nvtx", "profiling", "debug",
 //                     "expert"
 //
@@ -3487,8 +3583,8 @@ void ConfigPage::applySettingsSearch(const QString& query) {
                                       QStringLiteral("diagnostics"),  QStringLiteral("quick"),
                                       QStringLiteral("controls")};
 
-    const QStringList appearance_kws = {QStringLiteral("appearance"), QStringLiteral("accent"), QStringLiteral("color"),
-                                        QStringLiteral("colour"), QStringLiteral("theme")};
+    const QStringList appearance_kws = {QStringLiteral("appearance"), QStringLiteral("theme"), QStringLiteral("color"),
+                                        QStringLiteral("colour"),     QStringLiteral("dark"),  QStringLiteral("light")};
 
     const QStringList developer_kws = {
         QStringLiteral("developer"), QStringLiteral("log"),   QStringLiteral("logging"), QStringLiteral("nvtx"),
@@ -3682,17 +3778,21 @@ void ConfigPage::setShowQuickControls(bool show) {
     }
 }
 
-void ConfigPage::setAccentId(const QString& accent_id) {
-    if (!accent_combo_)
+void ConfigPage::setThemeId(const QString& theme_id) {
+    current_theme_id_ = theme_id;
+    if (!theme_button_group_)
         return;
-    for (int i = 0; i < accent_combo_->count(); ++i) {
-        if (accent_combo_->itemData(i).toString() == accent_id) {
-            const QSignalBlocker blocker(accent_combo_);
-            accent_combo_->setCurrentIndex(i);
+    const QSignalBlocker blocker(theme_button_group_);
+    const auto& buttons = theme_button_group_->buttons();
+    for (QAbstractButton* btn : buttons) {
+        if (btn->property("themeId").toString() == theme_id) {
+            btn->setChecked(true);
             return;
         }
     }
-    // Unknown id: leave selection unchanged (default stays selected).
+    // Unknown id: check the first button (dark-default).
+    if (!buttons.isEmpty())
+        buttons.first()->setChecked(true);
 }
 
 void ConfigPage::onAudioAppToggled() {

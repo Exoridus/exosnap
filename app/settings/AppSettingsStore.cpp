@@ -10,9 +10,9 @@
 namespace exosnap {
 namespace {
 
-// Bump to 15: SETTINGS-TIERS-R1 adds expert_mode_enabled + per-card expander states.
-// Pre-1.0: no migration; incompatible persisted data is reset to defaults.
-constexpr int kSettingsVersionCurrent = 15;
+// Bump to 16: THEME-SLICE-1 renames accent_id -> theme_id; no migration.
+// Pre-1.0: stale accent_id key in persisted data is simply ignored.
+constexpr int kSettingsVersionCurrent = 16;
 
 } // namespace
 
@@ -92,9 +92,9 @@ PersistedAppSettings AppSettingsStore::Load() const {
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("appearance"));
-    // ACCENT-PICKER-R1: accent color id (default "mint" = Studio Mint).
-    // Pre-1.0: no migration; missing key defaults to "mint".
-    persisted.accent_id = settings.value(QStringLiteral("accent_id"), QStringLiteral("mint")).toString();
+    // THEME-SLICE-1: theme_id (replaces accent_id). Default "dark-default".
+    // Pre-1.0: stale accent_id key is ignored; missing key defaults to "dark-default".
+    persisted.theme_id = settings.value(QStringLiteral("theme_id"), QStringLiteral("dark-default")).toString();
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("settings_tiers"));
@@ -176,8 +176,8 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("appearance"));
-    // ACCENT-PICKER-R1: accent color id.
-    settings.setValue(QStringLiteral("accent_id"), settings_snapshot.accent_id);
+    // THEME-SLICE-1: theme_id (replaces accent_id).
+    settings.setValue(QStringLiteral("theme_id"), settings_snapshot.theme_id);
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("settings_tiers"));

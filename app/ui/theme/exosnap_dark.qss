@@ -3057,3 +3057,28 @@ QLabel[widgetRole="keyCap"] {
     padding: 4px 9px;
     min-width: 26px;
 }
+
+/* Theme picker cards (THEME-SLICE-1) */
+QPushButton[themePickerCard="true"] {
+    background: ${bg2};
+    border: 1px solid ${line2};
+    border-radius: ${radius-md}px;
+    padding: 0;
+    text-align: left;
+    min-height: 72px;
+}
+
+QPushButton[themePickerCard="true"]:hover {
+    background: ${bg3};
+    border-color: ${accent-line};
+}
+
+QPushButton[themePickerCard="true"]:checked {
+    background: ${accent-dim};
+    border-color: ${accent-b2};
+}
+
+QPushButton[themePickerCard="true"]:focus {
+    border-color: ${accent};
+    outline: none;
+}

@@ -51,8 +51,13 @@ class ConfigPageTest : public ::testing::Test {
         return false;
     }
 
-    // Check QCheckBox text anywhere in the widget tree.
+    // Check ExoCheckBox (or QCheckBox) text anywhere in the widget tree.
+    // THEME-SLICE-1: audio source rows are now ExoCheckBox, so search both.
     static bool HasCheckText(const ConfigPage& page, const QString& text) {
+        for (const auto* cb : page.findChildren<ui::widgets::ExoCheckBox*>()) {
+            if (cb->text() == text)
+                return true;
+        }
         for (const auto* cb : page.findChildren<QCheckBox*>()) {
             if (cb->text() == text)
                 return true;
@@ -149,9 +154,10 @@ TEST_F(ConfigPageTest, LegacyQualityCards_AreRemoved) {
 TEST_F(ConfigPageTest, AudioSourceCheckboxesExist) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    // 3 source-enable QCheckBoxes (sys / app / mic).
+    // 3 source-enable ExoCheckBoxes (sys / app / mic).
+    // THEME-SLICE-1: audio source rows switched from QCheckBox to ExoCheckBox.
     // The "Separate track" controls are ExoToggle pill-toggles (DF-12 — QCheckBox replaced).
-    const auto checks = page.findChildren<QCheckBox*>();
+    const auto checks = page.findChildren<ui::widgets::ExoCheckBox*>();
     EXPECT_GE(checks.size(), 3);
 }
 
@@ -873,7 +879,8 @@ TEST_F(ConfigPageTest, SettingsAudio_ExistingSignalEmissionsUnchanged) {
                      [&emit_count](const capability::AudioUiState&) { ++emit_count; });
 
     // Find the system audio checkbox by object name (text varies by target kind).
-    QCheckBox* sys_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioSysCheck"));
+    // THEME-SLICE-1: audio source rows are ExoCheckBox (not QCheckBox).
+    auto* sys_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioSysCheck"));
     ASSERT_NE(sys_check, nullptr) << "settingsAudioSysCheck not found in Settings Audio card";
 
     // Toggling must still emit audioSettingsChanged.
@@ -919,7 +926,7 @@ TEST_F(ConfigPageTest, SetAudioUiState_WindowWithAppRow_EnablesAppCheckbox) {
 
     EXPECT_TRUE(AppSectionVisible(page)) << "App section must be visible for Window target";
 
-    QCheckBox* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr) << "settingsAudioAppCheck not found";
     EXPECT_TRUE(app_check->isEnabled()) << "App checkbox must be enabled when App row is present";
     EXPECT_TRUE(app_check->isChecked());
@@ -950,7 +957,7 @@ TEST_F(ConfigPageTest, SetAudioUiState_DisplayMode_SysLabelIsComputerAudio) {
     };
     page.setAudioUiState(display_state);
 
-    auto* sys_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioSysCheck"));
+    auto* sys_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioSysCheck"));
     ASSERT_NE(sys_check, nullptr);
     EXPECT_EQ(sys_check->text(), QStringLiteral("Computer audio"));
     EXPECT_FALSE(AppSectionVisible(page)) << "App section must be hidden for Display target";
@@ -969,7 +976,7 @@ TEST_F(ConfigPageTest, SetAudioUiState_WindowMode_SysLabelIsOtherSystemAudio) {
     };
     page.setAudioUiState(window_state);
 
-    auto* sys_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioSysCheck"));
+    auto* sys_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioSysCheck"));
     ASSERT_NE(sys_check, nullptr);
     EXPECT_EQ(sys_check->text(), QStringLiteral("Other system audio"));
     EXPECT_TRUE(AppSectionVisible(page)) << "App section must not be hidden for Window target";
@@ -1115,7 +1122,7 @@ TEST_F(ConfigPageTest, LockOrderInvariant_AudioThenLock_AppCheckDisabled) {
     page.setAudioUiState(MakeWindowAudioState());
     page.setRecordingControlsLocked(true);
 
-    auto* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr);
     EXPECT_FALSE(app_check->isEnabled()) << "Audio then lock: App checkbox must be disabled when controls are locked";
 }
@@ -1128,7 +1135,7 @@ TEST_F(ConfigPageTest, LockOrderInvariant_LockThenAudio_AppCheckDisabled) {
     page.setRecordingControlsLocked(true);
     page.setAudioUiState(MakeWindowAudioState());
 
-    auto* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr);
     EXPECT_FALSE(app_check->isEnabled())
         << "Lock then audio: App checkbox must remain disabled when controls are locked";
@@ -1142,7 +1149,7 @@ TEST_F(ConfigPageTest, LockOrderInvariant_MeterUpdateCannotReenableLockedControl
     page.setRecordingControlsLocked(true);
 
     // Verify locked before meter update.
-    auto* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr);
     ASSERT_FALSE(app_check->isEnabled());
 
@@ -1159,7 +1166,7 @@ TEST_F(ConfigPageTest, LockOrderInvariant_UnlockRestoresControls) {
     page.setRecordingControlsLocked(true);
     page.setRecordingControlsLocked(false);
 
-    auto* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr);
     EXPECT_TRUE(app_check->isEnabled()) << "After unlock, App checkbox must be re-enabled for Window target";
 }
@@ -1171,7 +1178,7 @@ TEST_F(ConfigPageTest, LockOrderInvariant_DisplayTarget_AppCheckAlwaysDisabledRe
 
     page.setAudioUiState(MakeDisplayAudioState());
 
-    auto* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr);
     EXPECT_FALSE(app_check->isEnabled()) << "Display target: App checkbox must be disabled (not available)";
 
@@ -1214,7 +1221,7 @@ TEST_F(ConfigPageTest, AudioState_NoStaleAppRow_AfterWindowToDisplay) {
     page.setAudioUiState(MakeWindowAudioState());
     page.setAudioUiState(MakeDisplayAudioState());
 
-    auto* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr);
     // App section hidden → the check is either hidden or disabled.
     EXPECT_FALSE(app_check->isEnabled()) << "After Window → Display switch, App checkbox must not be enabled";
@@ -1230,7 +1237,7 @@ TEST_F(ConfigPageTest, AudioState_NoMissingRow_AfterDisplayToWindow) {
     page.setAudioUiState(MakeWindowAudioState());
     EXPECT_TRUE(AppSectionVisible(page)) << "After Display → Window switch, App section must appear";
 
-    auto* app_check = page.findChild<QCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
+    auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr);
     EXPECT_TRUE(app_check->isEnabled()) << "After Display → Window switch, App checkbox must be enabled";
 }
@@ -1780,55 +1787,43 @@ TEST_F(ConfigPageTest, AppearanceCard_CardTitleVisible) {
     EXPECT_TRUE(HasLabelText(page, QStringLiteral("Appearance"))) << "Settings must contain an Appearance card title";
 }
 
-TEST_F(ConfigPageTest, AppearanceCard_AccentComboHasEntries) {
+TEST_F(ConfigPageTest, AppearanceCard_ThemePickerHasFourCards) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    // The accent combo should have at least one entry (mint default).
-    const auto combos = page.findChildren<QComboBox*>();
-    bool found_accent_combo = false;
-    for (const auto* cb : combos) {
-        // The accent combo is filled from kExoSnapAccents; any entry with id data "mint" means it's the accent combo.
-        for (int i = 0; i < cb->count(); ++i) {
-            if (cb->itemData(i).toString() == QStringLiteral("mint")) {
-                found_accent_combo = true;
-                EXPECT_GE(cb->count(), 1);
-                break;
-            }
-        }
-        if (found_accent_combo)
-            break;
+    // The theme picker should have 4 theme card buttons (one per theme in kExoThemes).
+    int theme_card_count = 0;
+    for (const auto* btn : page.findChildren<QPushButton*>()) {
+        if (btn->property("themePickerCard").toBool())
+            ++theme_card_count;
     }
-    EXPECT_TRUE(found_accent_combo) << "Accent combo with 'mint' entry not found in Settings";
+    EXPECT_EQ(theme_card_count, 4)
+        << "Theme picker must have 4 cards (dark-default, dark-indigo, light-paper, light-slate)";
 }
 
-TEST_F(ConfigPageTest, AppearanceCard_SetAccentId_SelectsCorrectItem) {
+TEST_F(ConfigPageTest, AppearanceCard_SetThemeId_SelectsCorrectCard) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    page.setAccentId(QStringLiteral("mint"));
+    page.setThemeId(QStringLiteral("dark-default"));
 
     bool found = false;
-    for (const auto* cb : page.findChildren<QComboBox*>()) {
-        for (int i = 0; i < cb->count(); ++i) {
-            if (cb->itemData(i).toString() == QStringLiteral("mint")) {
-                EXPECT_EQ(cb->currentIndex(), i) << "setAccentId must select the matching combo entry";
-                found = true;
-                break;
-            }
-        }
-        if (found)
+    for (const auto* btn : page.findChildren<QPushButton*>()) {
+        if (btn->property("themeId").toString() == QStringLiteral("dark-default")) {
+            EXPECT_TRUE(btn->isChecked()) << "setThemeId must check the matching card";
+            found = true;
             break;
+        }
     }
-    EXPECT_TRUE(found) << "Accent combo with 'mint' entry not found";
+    EXPECT_TRUE(found) << "dark-default theme card not found";
 }
 
-TEST_F(ConfigPageTest, AppearanceCard_SetAccentId_DoesNotEmitSignal) {
+TEST_F(ConfigPageTest, AppearanceCard_SetThemeId_DoesNotEmitSignal) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     bool emitted = false;
-    QObject::connect(&page, &ConfigPage::accentIdChanged, [&emitted](const QString&) { emitted = true; });
+    QObject::connect(&page, &ConfigPage::themeIdChanged, [&emitted](const QString&) { emitted = true; });
 
-    page.setAccentId(QStringLiteral("mint"));
-    EXPECT_FALSE(emitted) << "setAccentId must not emit accentIdChanged";
+    page.setThemeId(QStringLiteral("dark-default"));
+    EXPECT_FALSE(emitted) << "setThemeId must not emit themeIdChanged";
 }
 
 TEST_F(ConfigPageTest, AdvancedDetailsButton_IsGone) {

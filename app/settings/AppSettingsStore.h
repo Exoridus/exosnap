@@ -65,9 +65,9 @@ struct PersistedAppSettings {
     // Default ON.
     bool check_updates_on_start = true;
 
-    // ACCENT-PICKER-R1 (0.5.0-B): selected accent id from kExoSnapAccents.
-    // Default "mint" (Studio Mint) so existing users see no change.
-    QString accent_id = QStringLiteral("mint");
+    // THEME-SLICE-1: accent_id renamed to theme_id. Pre-1.0: stale accent_id key in
+    // persisted data is simply ignored.
+    QString theme_id = QStringLiteral("dark-default");
 
     // SETTINGS-TIERS-R1: global Expert mode toggle (default OFF).
     bool expert_mode_enabled = false;
