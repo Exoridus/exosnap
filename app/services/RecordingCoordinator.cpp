@@ -251,6 +251,9 @@ void ApplyOutputSettingsToRecorderConfig(recorder_core::RecorderConfig& config, 
     case capability::AudioCodec::Pcm:
         config.audio_codec = recorder_core::AudioCodec::Pcm;
         return;
+    case capability::AudioCodec::Flac:
+        config.audio_codec = recorder_core::AudioCodec::Flac;
+        return;
     case capability::AudioCodec::AacMf:
     default:
         config.audio_codec = recorder_core::AudioCodec::AacMf;
@@ -306,6 +309,9 @@ static std::wstring BuildCapabilityStatusText(const capability::UserRecorderConf
         break;
     case capability::AudioCodec::Pcm:
         audio_name = L"PCM";
+        break;
+    case capability::AudioCodec::Flac:
+        audio_name = L"FLAC";
         break;
     default:
         break;

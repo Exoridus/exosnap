@@ -442,6 +442,29 @@ TEST(RecordingPreset, Reconcile_WebM_Pcm_ForcesOpus) {
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Opus);
 }
 
+TEST(RecordingPreset, Reconcile_Mkv_Flac_Unchanged) {
+    // 0.6.0 Audio v2: MKV + (AV1|H.264) + FLAC is Allowed (lossless A_FLAC), so
+    // the reconciler leaves FLAC in place. FLAC is MKV-only; WebM/MP4 reconcile away.
+    OutputSettingsModel out;
+    out.container = capability::Container::Matroska;
+    out.video_codec = capability::VideoCodec::H264Nvenc;
+    out.audio_codec = capability::AudioCodec::Flac;
+    ReconcileContainerCodecs(out);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(out.audio_codec, capability::AudioCodec::Flac);
+}
+
+TEST(RecordingPreset, Reconcile_WebM_Flac_ForcesOpus) {
+    // WebM cannot carry FLAC (Prohibited); reconciler swaps to WebM-preferred Opus.
+    OutputSettingsModel out;
+    out.container = capability::Container::WebM;
+    out.video_codec = capability::VideoCodec::Av1Nvenc;
+    out.audio_codec = capability::AudioCodec::Flac;
+    ReconcileContainerCodecs(out);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::Av1Nvenc);
+    EXPECT_EQ(out.audio_codec, capability::AudioCodec::Opus);
+}
+
 TEST(RecordingPreset, Reconcile_Mkv_Av1Opus_Unchanged) {
     OutputSettingsModel out;
     out.container = capability::Container::Matroska;

@@ -181,7 +181,7 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
     if (config.container == Container::Mp4) {
         if (config.audio_codec != AudioCodec::AacMf) {
             return fail(E_INVALIDARG, ErrorPhase::Prepare,
-                        "Container::Mp4 requires AudioCodec::AacMf; Opus and PCM are not valid for MP4");
+                        "Container::Mp4 requires AudioCodec::AacMf; Opus, PCM and FLAC are not valid for MP4");
         }
     } else if (config.audio_codec == AudioCodec::Opus) {
         // Opus: valid for WebM and Matroska
@@ -197,9 +197,17 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
                         "AudioCodec::Pcm is only valid for Container::Matroska (MKV); "
                         "WebM and MP4 cannot carry A_PCM/INT_LIT in this build");
         }
+    } else if (config.audio_codec == AudioCodec::Flac) {
+        // FLAC (A_FLAC): Matroska only.
+        if (config.container != Container::Matroska) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare,
+                        "AudioCodec::Flac is only valid for Container::Matroska (MKV); "
+                        "WebM and MP4 cannot carry A_FLAC in this build");
+        }
     } else {
         return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                    "Unsupported audio codec; supported: AudioCodec::Opus, AudioCodec::AacMf, AudioCodec::Pcm");
+                    "Unsupported audio codec; supported: AudioCodec::Opus, AudioCodec::AacMf, "
+                    "AudioCodec::Pcm, AudioCodec::Flac");
     }
 
     // Chroma: only Cs420 supported

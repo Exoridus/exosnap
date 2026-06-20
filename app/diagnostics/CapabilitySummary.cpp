@@ -38,6 +38,8 @@ std::string AudioCodecDisplayName(capability::AudioCodec a) {
         return "AAC (Media Foundation)";
     case capability::AudioCodec::Pcm:
         return "PCM";
+    case capability::AudioCodec::Flac:
+        return "FLAC";
     }
     return "Unknown";
 }
@@ -97,7 +99,8 @@ CapabilitySummary CapabilitySummary::FromCapabilitySet(const capability::Capabil
     summary.entries.push_back({"VP9", "Not probed", "unavailable", false});
 
     // Audio codecs
-    for (const auto& a : {capability::AudioCodec::Opus, capability::AudioCodec::AacMf, capability::AudioCodec::Pcm}) {
+    for (const auto& a : {capability::AudioCodec::Opus, capability::AudioCodec::AacMf, capability::AudioCodec::Pcm,
+                          capability::AudioCodec::Flac}) {
         const auto& ann = caps.QueryAudioCodec(a);
         summary.entries.push_back({AudioCodecDisplayName(a), SupportLevelString(ann.level),
                                    capability::IsSelectable(ann.level) ? "available" : "unavailable",

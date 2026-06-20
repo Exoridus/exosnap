@@ -124,8 +124,8 @@ TEST(MultiTrackPacketTypesTest, Validate_RejectsUnknownAudioCodec) {
 
     RecorderResult validation{};
     EXPECT_FALSE(session.Validate(cfg, &validation));
-    EXPECT_EQ(validation.error_detail,
-              "Unsupported audio codec; supported: AudioCodec::Opus, AudioCodec::AacMf, AudioCodec::Pcm");
+    EXPECT_EQ(validation.error_detail, "Unsupported audio codec; supported: AudioCodec::Opus, AudioCodec::AacMf, "
+                                       "AudioCodec::Pcm, AudioCodec::Flac");
 }
 
 } // namespace

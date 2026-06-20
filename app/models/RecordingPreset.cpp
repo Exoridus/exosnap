@@ -855,6 +855,8 @@ std::wstring CodecToken(capability::AudioCodec codec) {
         return L"opus";
     case capability::AudioCodec::Pcm:
         return L"pcm";
+    case capability::AudioCodec::Flac:
+        return L"flac";
     }
     return L"aac";
 }

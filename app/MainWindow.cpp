@@ -1223,6 +1223,8 @@ std::string CrashAudioCodecToken(capability::AudioCodec a) {
         return "AAC";
     case capability::AudioCodec::Pcm:
         return "PCM";
+    case capability::AudioCodec::Flac:
+        return "FLAC";
     }
     return "Opus";
 }

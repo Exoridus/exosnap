@@ -2,6 +2,7 @@
 
 #include "codec_private.h"
 #include "fdk_aac_encoder.h"
+#include "flac_audio_encoder.h"
 #include "mf_aac_encoder.h"
 #include "opus_audio_encoder.h"
 #include "pcm_audio_encoder.h"
@@ -445,6 +446,172 @@ void AudioThread::Run() {
         }
 
         pcmEnc.Shutdown();
+        if (com_inited && hr != RPC_E_CHANGED_MODE)
+            CoUninitialize();
+        return;
+    }
+
+    if (m_state.config.audio_codec == AudioCodec::Flac) {
+        // --- FLAC lossless encoder init (MKV-only A_FLAC via libFLAC) ---
+        FlacAudioEncoder flacEnc;
+        {
+            std::string err;
+            if (!flacEnc.Init(kSampleRate, kChannels, err)) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode, "FLAC encoder init: " + err);
+                source_->Shutdown();
+                if (com_inited && hr != RPC_E_CHANGED_MODE)
+                    CoUninitialize();
+                return;
+            }
+        }
+
+        // FLAC's CodecPrivate (native "fLaC" header + STREAMINFO) is produced by
+        // the encoder during Init() via its write callback. Publish it now and
+        // mark the track ready so the pre-mux readiness gate releases.
+        {
+            auto cp = flacEnc.CodecPrivateBytes();
+            if (cp.empty()) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::AudioEncode, "FLAC codec private is empty after Init");
+                flacEnc.Shutdown();
+                source_->Shutdown();
+                if (com_inited && hr != RPC_E_CHANGED_MODE)
+                    CoUninitialize();
+                return;
+            }
+            std::lock_guard lk(m_state.premux_mutex);
+            m_state.codec_private.audio_codec_private[track_id_].bytes = std::move(cp);
+            m_state.codec_private.audio_track_ready[track_id_] = true;
+            m_state.premux_cv.notify_all();
+        }
+
+        uint64_t encoderAccumulatedFrames = 0;
+
+        // --- Capture / encode loop ---
+        while (!m_state.stop_requested.load()) {
+            if (m_state.pause_requested.load()) {
+                while (source_->PendingFrameCount() > 0) {
+                    RawAudioBuffer raw{};
+                    std::string err;
+                    if (source_->AcquireBuffer(raw, err))
+                        source_->ReleaseBuffer();
+                    else
+                        break;
+                }
+                Sleep(1);
+                continue;
+            }
+
+            uint32_t pendingFrames = source_->PendingFrameCount();
+            m_state.diagnostics.OnAudioQueueDepth(pendingFrames);
+            if (pendingFrames == 0) {
+                Sleep(1);
+                continue;
+            }
+
+            bool anyWork = false;
+            while (source_->PendingFrameCount() > 0) {
+                RawAudioBuffer raw{};
+                std::string captureErr;
+                if (!source_->AcquireBuffer(raw, captureErr)) {
+                    if (!captureErr.empty()) {
+                        m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture,
+                                              "Audio source AcquireBuffer failed: " + captureErr);
+                        goto end_flac_loop;
+                    }
+                    break;
+                }
+
+                if (raw.data_discontinuity) {
+                    m_state.diagnostics.OnAudioDiscontinuity();
+                }
+
+                std::vector<EncodedAudioPacket> pkts;
+                float new_rms = 0.0f;
+                const size_t totalSamples = static_cast<size_t>(raw.num_frames) * static_cast<size_t>(kChannels);
+                if (raw.silent) {
+                    std::vector<float> silence(totalSamples, 0.0f);
+                    flacEnc.FeedFloat32(silence.data(), silence.size(), 0, encoderAccumulatedFrames, kSampleRate,
+                                        kChannels, pkts);
+                } else if (raw.bytes == nullptr) {
+                    source_->ReleaseBuffer();
+                    m_state.RecordFailure(E_FAIL, ErrorPhase::AudioCapture,
+                                          "Audio source returned null bytes for non-silent packet");
+                    goto end_flac_loop;
+                } else if (sourceFormat == AudioSampleFormat::Float32) {
+                    new_rms = ComputeRmsLinear(reinterpret_cast<const float*>(raw.bytes), totalSamples);
+                    flacEnc.FeedFloat32(reinterpret_cast<const float*>(raw.bytes), totalSamples, 0,
+                                        encoderAccumulatedFrames, kSampleRate, kChannels, pkts);
+                } else {
+                    floatScratch.resize(totalSamples);
+                    ConvertInt16ToFloat32(reinterpret_cast<const std::int16_t*>(raw.bytes), floatScratch.data(),
+                                          totalSamples);
+                    new_rms = ComputeRmsLinear(floatScratch.data(), floatScratch.size());
+                    flacEnc.FeedFloat32(floatScratch.data(), floatScratch.size(), 0, encoderAccumulatedFrames,
+                                        kSampleRate, kChannels, pkts);
+                }
+                m_smoothed_rms_ = kRmsEmaAlpha * new_rms + (1.0f - kRmsEmaAlpha) * m_smoothed_rms_;
+
+                source_->ReleaseBuffer();
+
+                // Update stats
+                {
+                    std::lock_guard slk(m_state.stats_mutex);
+                    for (const auto& p : pkts) {
+                        m_state.stats.audio_packets++;
+                        m_state.stats.audio_bytes += p.bytes.size();
+                    }
+                    if (track_id_ < m_state.stats.per_track_rms.size()) {
+                        m_state.stats.per_track_rms[track_id_] = m_smoothed_rms_;
+                    }
+                }
+
+                if (!routeAudioPackets(pkts))
+                    goto end_flac_loop;
+
+                anyWork = true;
+            }
+
+            if (!anyWork)
+                Sleep(1);
+        }
+
+    end_flac_loop:
+        source_->Shutdown();
+
+        // --- Drain FLAC encoder (finish stream; emits remaining buffered frames) ---
+        {
+            std::vector<EncodedAudioPacket> drainPkts;
+            flacEnc.Flush(drainPkts);
+
+            {
+                std::lock_guard slk(m_state.stats_mutex);
+                for (const auto& p : drainPkts) {
+                    m_state.stats.audio_packets++;
+                    m_state.stats.audio_bytes += p.bytes.size();
+                }
+            }
+
+            routeAudioPackets(drainPkts);
+        }
+
+        // --- Update final stats ---
+        {
+            std::lock_guard lk(m_state.stats_mutex);
+            if (lastAudioPts > m_state.stats.audio_duration_ns) {
+                m_state.stats.audio_duration_ns = lastAudioPts;
+            }
+        }
+
+        // --- Push audio EOS sentinel ---
+        {
+            MuxItem eos;
+            eos.payload = AudioEosSentinel{track_id_};
+            std::lock_guard lk(m_state.mux_mutex);
+            m_state.mux_queue.push_back(std::move(eos));
+            m_state.mux_cv.notify_one();
+        }
+
+        flacEnc.Shutdown();
         if (com_inited && hr != RPC_E_CHANGED_MODE)
             CoUninitialize();
         return;

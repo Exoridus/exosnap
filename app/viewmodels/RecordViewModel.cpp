@@ -90,6 +90,8 @@ std::wstring AudioCodecLabel(recorder_core::AudioCodec codec) {
         return L"Opus";
     case recorder_core::AudioCodec::Pcm:
         return L"PCM";
+    case recorder_core::AudioCodec::Flac:
+        return L"FLAC";
     }
     return L"Opus";
 }

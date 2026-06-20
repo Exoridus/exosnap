@@ -165,4 +165,55 @@ TEST(WebMContainerValidationTest, Validate_RejectsMp4Pcm) {
     EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
 }
 
+// --- FLAC (0.6.0 Audio v2): Matroska-only A_FLAC ---
+
+TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaAv1Flac) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidMatroskaConfig();
+    cfg.audio_codec = AudioCodec::Flac;
+
+    RecorderResult result{};
+    EXPECT_TRUE(session.Validate(cfg, &result));
+    EXPECT_TRUE(result.succeeded);
+}
+
+TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaH264Flac) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidMatroskaConfig();
+    cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.audio_codec = AudioCodec::Flac;
+
+    RecorderResult result{};
+    EXPECT_TRUE(session.Validate(cfg, &result));
+    EXPECT_TRUE(result.succeeded);
+}
+
+TEST(WebMContainerValidationTest, Validate_RejectsWebMFlac) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidWebMConfig();
+    cfg.audio_codec = AudioCodec::Flac;
+
+    RecorderResult result{};
+    EXPECT_FALSE(session.Validate(cfg, &result));
+    EXPECT_EQ(result.error_code, E_INVALIDARG);
+    EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
+    EXPECT_NE(result.error_detail.find("Flac"), std::string::npos);
+}
+
+TEST(WebMContainerValidationTest, Validate_RejectsMp4Flac) {
+    RecorderSession session;
+    RecorderConfig cfg{};
+    cfg.output_path = std::filesystem::current_path() / "test_mp4_flac.mp4";
+    cfg.target.kind = CaptureTarget::Kind::Monitor;
+    cfg.target.native_id = 1;
+    cfg.container = Container::Mp4;
+    cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.audio_codec = AudioCodec::Flac;
+
+    RecorderResult result{};
+    EXPECT_FALSE(session.Validate(cfg, &result));
+    EXPECT_EQ(result.error_code, E_INVALIDARG);
+    EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
+}
+
 } // namespace

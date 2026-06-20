@@ -35,6 +35,12 @@ TEST(ContainerCompatRegistry, Mkv_Av1_Pcm_IsAllowed) {
     EXPECT_EQ(Level(Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::Pcm), ContainerCompatLevel::Allowed);
 }
 
+TEST(ContainerCompatRegistry, Mkv_Av1_Flac_IsAllowed) {
+    // 0.6.0 Audio v2: lossless FLAC (A_FLAC) is Matroska-only and implemented;
+    // MKV + AV1 + FLAC is Allowed.
+    EXPECT_EQ(Level(Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::Flac), ContainerCompatLevel::Allowed);
+}
+
 TEST(ContainerCompatRegistry, Mkv_H264_Aac_IsRecommended) {
     EXPECT_EQ(Level(Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::AacMf), ContainerCompatLevel::Recommended);
 }
@@ -49,6 +55,21 @@ TEST(ContainerCompatRegistry, Mkv_H264_Opus_IsAllowed) {
 TEST(ContainerCompatRegistry, Mkv_H264_Pcm_IsAllowed) {
     // 0.6.0 Audio v2: PCM is implemented and Matroska-only; MKV + H.264 + PCM is Allowed.
     EXPECT_EQ(Level(Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::Pcm), ContainerCompatLevel::Allowed);
+}
+
+TEST(ContainerCompatRegistry, Mkv_H264_Flac_IsAllowed) {
+    // 0.6.0 Audio v2: FLAC is implemented and Matroska-only; MKV + H.264 + FLAC is Allowed.
+    EXPECT_EQ(Level(Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::Flac), ContainerCompatLevel::Allowed);
+}
+
+TEST(ContainerCompatRegistry, WebM_Av1_Flac_IsProhibited) {
+    // WebM cannot carry FLAC.
+    EXPECT_EQ(Level(Container::WebM, VideoCodec::Av1Nvenc, AudioCodec::Flac), ContainerCompatLevel::Prohibited);
+}
+
+TEST(ContainerCompatRegistry, Mp4_H264_Flac_IsExperimental) {
+    // FLAC-in-MP4 is not specified in this build.
+    EXPECT_EQ(Level(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::Flac), ContainerCompatLevel::Experimental);
 }
 
 TEST(ContainerCompatRegistry, Mkv_Hevc_Aac_IsExperimental) {
@@ -199,7 +220,8 @@ TEST(ContainerCompatRegistry, AllCombinations_HaveNonEmptyReason) {
             }
         }
     }
-    EXPECT_EQ(count, 27);
+    // 3 containers × 3 video × 4 audio (Opus/AAC/PCM/FLAC).
+    EXPECT_EQ(count, 36);
 }
 
 TEST(ContainerCompatRegistry, AllCombinations_LevelIsDefinedValue) {
@@ -322,6 +344,44 @@ TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Pcm_FixesAudioToAac) {
     EXPECT_EQ(a, AudioCodec::AacMf);
 }
 
+TEST(ContainerCompatRegistry, Reconcile_Mkv_Av1_Flac_Unchanged) {
+    // MKV + AV1 + FLAC is Allowed; reconciler leaves it unchanged.
+    VideoCodec v = VideoCodec::Av1Nvenc;
+    AudioCodec a = AudioCodec::Flac;
+    ContainerCompatRegistry::ReconcileCodecs(Container::Matroska, v, a);
+    EXPECT_EQ(v, VideoCodec::Av1Nvenc);
+    EXPECT_EQ(a, AudioCodec::Flac);
+}
+
+TEST(ContainerCompatRegistry, Reconcile_Mkv_H264_Flac_Unchanged) {
+    // MKV + H.264 + FLAC is Allowed; reconciler leaves it unchanged.
+    VideoCodec v = VideoCodec::H264Nvenc;
+    AudioCodec a = AudioCodec::Flac;
+    ContainerCompatRegistry::ReconcileCodecs(Container::Matroska, v, a);
+    EXPECT_EQ(v, VideoCodec::H264Nvenc);
+    EXPECT_EQ(a, AudioCodec::Flac);
+}
+
+TEST(ContainerCompatRegistry, Reconcile_WebM_Av1_Flac_FixesAudioToOpus) {
+    // WebM cannot carry FLAC (Prohibited). Reconciler keeps AV1 and swaps audio
+    // to the WebM-preferred codec, Opus.
+    VideoCodec v = VideoCodec::Av1Nvenc;
+    AudioCodec a = AudioCodec::Flac;
+    ContainerCompatRegistry::ReconcileCodecs(Container::WebM, v, a);
+    EXPECT_EQ(v, VideoCodec::Av1Nvenc);
+    EXPECT_EQ(a, AudioCodec::Opus);
+}
+
+TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Flac_FixesAudioToAac) {
+    // MP4 cannot carry FLAC in this build (Experimental). Reconciler keeps H.264
+    // and swaps audio to AAC.
+    VideoCodec v = VideoCodec::H264Nvenc;
+    AudioCodec a = AudioCodec::Flac;
+    ContainerCompatRegistry::ReconcileCodecs(Container::Mp4, v, a);
+    EXPECT_EQ(v, VideoCodec::H264Nvenc);
+    EXPECT_EQ(a, AudioCodec::AacMf);
+}
+
 TEST(ContainerCompatRegistry, Reconcile_Mkv_Hevc_Aac_FallsToAv1Opus) {
     // HEVC + AAC in MKV is Experimental (not selectable). Reconciler tries
     // audio-only fix first: HEVC + Opus is also Experimental. Then tries full
@@ -414,7 +474,8 @@ TEST(ContainerCompatRegistry, Reconcile_AllInputs_ResultIsRecommendedOrAllowed) 
             }
         }
     }
-    EXPECT_EQ(total, 27);
+    // 3 containers × 3 video × 4 audio (Opus/AAC/PCM/FLAC).
+    EXPECT_EQ(total, 36);
 }
 
 // ---------------------------------------------------------------------------

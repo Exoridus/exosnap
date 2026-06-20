@@ -440,6 +440,8 @@ QString AudioCodecLabel(capability::AudioCodec codec) {
         return QStringLiteral("Opus");
     case capability::AudioCodec::Pcm:
         return QStringLiteral("PCM");
+    case capability::AudioCodec::Flac:
+        return QStringLiteral("FLAC");
     }
     return QStringLiteral("AAC");
 }
@@ -495,6 +497,8 @@ capability::AudioCodec IntToAudioCodec(int value) {
         return capability::AudioCodec::Opus;
     if (value == static_cast<int>(capability::AudioCodec::Pcm))
         return capability::AudioCodec::Pcm;
+    if (value == static_cast<int>(capability::AudioCodec::Flac))
+        return capability::AudioCodec::Flac;
     return capability::AudioCodec::AacMf;
 }
 
@@ -2816,10 +2820,11 @@ void ConfigPage::updateVideoCodecChoices() {
 
 void ConfigPage::updateAudioCodecChoices() {
     const QSignalBlocker blocker(audio_codec_combo_);
-    // Rebuild the list so PCM (MKV-only) appears only when MKV is selected. The
-    // common Opus/AAC entries are always present; PCM is appended for Matroska.
+    // Rebuild the list so the lossless codecs (PCM + FLAC, MKV-only) appear only
+    // when MKV is selected. The common Opus/AAC entries are always present; PCM
+    // and FLAC are appended for Matroska.
     const bool mkv = (format_settings_.container == capability::Container::Matroska);
-    const int desired = mkv ? 3 : 2;
+    const int desired = mkv ? 4 : 2;
     const bool has_pcm = audio_codec_combo_->findData(AudioCodecToInt(capability::AudioCodec::Pcm)) >= 0;
     if (audio_codec_combo_->count() != desired || (mkv && !has_pcm) || (!mkv && has_pcm)) {
         audio_codec_combo_->clear();
@@ -2828,6 +2833,8 @@ void ConfigPage::updateAudioCodecChoices() {
         if (mkv) {
             audio_codec_combo_->addItem(QStringLiteral("PCM (uncompressed)"),
                                         AudioCodecToInt(capability::AudioCodec::Pcm));
+            audio_codec_combo_->addItem(QStringLiteral("FLAC (lossless)"),
+                                        AudioCodecToInt(capability::AudioCodec::Flac));
         }
     }
     const int aidx = audio_codec_combo_->findData(AudioCodecToInt(format_settings_.audio_codec));
@@ -2913,10 +2920,12 @@ void ConfigPage::updateCompatCallout() {
 
 void ConfigPage::onContainerChanged(int id) {
     format_settings_.container = static_cast<capability::Container>(id);
-    // PCM is MKV-only: rebuild the audio-codec list so the option appears/disappears
-    // with the container. If PCM was selected and we leave MKV, fall back to Opus.
+    // PCM and FLAC are MKV-only: rebuild the audio-codec list so the options
+    // appear/disappear with the container. If a lossless codec was selected and
+    // we leave MKV, fall back to Opus.
     if (format_settings_.container != capability::Container::Matroska &&
-        format_settings_.audio_codec == capability::AudioCodec::Pcm) {
+        (format_settings_.audio_codec == capability::AudioCodec::Pcm ||
+         format_settings_.audio_codec == capability::AudioCodec::Flac)) {
         format_settings_.audio_codec = capability::AudioCodec::Opus;
     }
     updateAudioCodecChoices();
