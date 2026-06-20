@@ -137,8 +137,8 @@ QWidget[panelRole="note"] {
 
 QFrame[panelRole="blocker"],
 QWidget[panelRole="blocker"] {
-    background: rgba(224, 120, 108, 0.12);
-    border: 1px solid rgba(224, 120, 108, 0.48);
+    background: ${err-a12};
+    border: 1px solid ${err-a48};
     border-radius: ${radius-lg}px;
     padding: ${space-sm}px ${space-md}px;
 }
@@ -160,18 +160,18 @@ QWidget[panelRole="readinessBanner"] {
 }
 
 QFrame[panelRole="readinessBanner"][stateRole="ready"] {
-    background: rgba(132, 203, 162, 0.13);
-    border-color: rgba(132, 203, 162, 0.42);
+    background: ${ok-a13};
+    border-color: ${ok-a42};
 }
 
 QFrame[panelRole="readinessBanner"][stateRole="warn"] {
-    background: rgba(230, 197, 124, 0.12);
-    border-color: rgba(230, 197, 124, 0.48);
+    background: ${warn-a12};
+    border-color: ${warn-a48};
 }
 
 QFrame[panelRole="readinessBanner"][stateRole="blocked"] {
-    background: rgba(224, 120, 108, 0.12);
-    border-color: rgba(224, 120, 108, 0.48);
+    background: ${err-a12};
+    border-color: ${err-a48};
 }
 
 /* Settings - segmented controls (capture quality + output resolution) */
@@ -235,28 +235,28 @@ QFrame#recordControlPanel {
 }
 
 QFrame#recordControlPanel[stateRole="ready"] {
-    background: rgba(132, 203, 162, 0.06);
-    border-color: rgba(132, 203, 162, 0.34);
+    background: ${ok-a06};
+    border-color: ${ok-a34};
 }
 
 QFrame#recordControlPanel[stateRole="recording"] {
-    background: rgba(224, 120, 108, 0.08);
-    border-color: rgba(224, 120, 108, 0.42);
+    background: ${err-a08};
+    border-color: ${err-a42};
 }
 
 QFrame#recordControlPanel[stateRole="paused"] {
-    background: rgba(230, 197, 124, 0.08);
-    border-color: rgba(230, 197, 124, 0.42);
+    background: ${warn-a08};
+    border-color: ${warn-a42};
 }
 
 QFrame#recordControlPanel[stateRole="done"] {
-    background: rgba(132, 203, 162, 0.08);
-    border-color: rgba(132, 203, 162, 0.42);
+    background: ${ok-a08};
+    border-color: ${ok-a42};
 }
 
 QFrame#recordControlPanel[stateRole="blocked"] {
-    background: rgba(224, 120, 108, 0.08);
-    border-color: rgba(224, 120, 108, 0.42);
+    background: ${err-a08};
+    border-color: ${err-a42};
 }
 
 QLabel[labelRole="recordControlState"] {
@@ -391,13 +391,13 @@ QPushButton#recordHeroBtn[heroRole="stop"]:hover {
 
 QPushButton#recordHeroBtn[heroRole="resume"] {
     color: ${ok};
-    border-color: rgba(132, 203, 162, 0.52);
-    background: rgba(132, 203, 162, 0.12);
+    border-color: ${ok-a52};
+    background: ${ok-a12};
 }
 
 QPushButton#recordHeroBtn[heroRole="resume"]:hover {
-    background: rgba(132, 203, 162, 0.2);
-    border-color: rgba(132, 203, 162, 0.68);
+    background: ${ok-a20};
+    border-color: ${ok-a68};
 }
 
 QPushButton#recordHeroBtn[heroRole="blocked"],
@@ -417,13 +417,13 @@ QLabel[labelRole="railSummary"] {
 QWidget#recordRailSourceStatusPanel {
     border: 1px solid ${line1};
     border-radius: ${radius-sm}px;
-    background: rgba(28, 28, 31, 0.78);
+    background: ${surf2-a78};
     padding: 6px;
 }
 
 QWidget#recordRailSourceStatusPanel[sourceLocked="true"] {
-    border-color: rgba(230, 197, 124, 0.44);
-    background: rgba(28, 28, 31, 0.86);
+    border-color: ${warn-a44};
+    background: ${surf2-a86};
 }
 
 QLabel[labelRole="railSourceSummary"] {
@@ -446,8 +446,8 @@ QLabel[labelRole="recordRailSourceChip"] {
 
 QLabel[labelRole="recordRailSourceChip"][stateRole="ready"] {
     color: ${ok};
-    border-color: rgba(132, 203, 162, 0.46);
-    background: rgba(132, 203, 162, 0.14);
+    border-color: ${ok-a46};
+    background: ${ok-a14};
 }
 
 QLabel[labelRole="recordRailSourceChip"][stateRole="muted"] {
@@ -539,23 +539,23 @@ QWidget#recordPreviewSurfaceHost[recordState="ready"] {
 }
 
 QWidget#recordPreviewSurfaceHost[recordState="recording"] {
-    border-color: rgba(224, 120, 108, 0.66);
+    border-color: ${err-a66};
 }
 
 QWidget#recordPreviewSurfaceHost[recordState="paused"] {
-    border-color: rgba(230, 197, 124, 0.64);
+    border-color: ${warn-a64};
 }
 
 QWidget#recordPreviewSurfaceHost[recordState="warn"] {
-    border-color: rgba(230, 197, 124, 0.52);
+    border-color: ${warn-a52};
 }
 
 QWidget#recordPreviewSurfaceHost[recordState="blocked"] {
-    border-color: rgba(224, 120, 108, 0.7);
+    border-color: ${err-a70};
 }
 
 QWidget#recordPreviewSurfaceHost[recordState="done"] {
-    border-color: rgba(132, 203, 162, 0.44);
+    border-color: ${ok-a44};
 }
 
 QLabel[labelRole="recordPreviewSourceChip"] {
@@ -565,32 +565,32 @@ QLabel[labelRole="recordPreviewSourceChip"] {
     color: ${text2};
     border: 1px solid ${line2};
     border-radius: ${radius-sm}px;
-    background: rgba(21, 21, 23, 0.92);
+    background: ${surf-a92};
     padding: 4px 8px;
 }
 
 QLabel[labelRole="recordPreviewSourceChip"][stateRole="ready"] {
     color: ${ok};
-    border-color: rgba(132, 203, 162, 0.44);
-    background: rgba(132, 203, 162, 0.12);
+    border-color: ${ok-a44};
+    background: ${ok-a12};
 }
 
 QLabel[labelRole="recordPreviewSourceChip"][stateRole="recording"] {
     color: ${err};
-    border-color: rgba(224, 120, 108, 0.58);
-    background: rgba(224, 120, 108, 0.16);
+    border-color: ${err-a58};
+    background: ${err-a16};
 }
 
 QLabel[labelRole="recordPreviewSourceChip"][stateRole="warn"] {
     color: ${warn};
-    border-color: rgba(230, 197, 124, 0.5);
-    background: rgba(230, 197, 124, 0.15);
+    border-color: ${warn-a50};
+    background: ${warn-a15};
 }
 
 QLabel[labelRole="recordPreviewSourceChip"][stateRole="blocked"] {
     color: ${err};
-    border-color: rgba(224, 120, 108, 0.6);
-    background: rgba(224, 120, 108, 0.18);
+    border-color: ${err-a60};
+    background: ${err-a18};
 }
 
 QLabel[labelRole="recordPreviewSourceChip"][stateRole="muted"] {
@@ -645,9 +645,9 @@ QLabel[labelRole="recordSourceLock"] {
     font-size: 10px;
     letter-spacing: 0.08em;
     color: ${warn};
-    border: 1px solid rgba(230, 197, 124, 0.48);
+    border: 1px solid ${warn-a48};
     border-radius: ${radius-sm}px;
-    background: rgba(230, 197, 124, 0.12);
+    background: ${warn-a12};
     padding: 3px 8px;
 }
 
@@ -698,8 +698,8 @@ QToolButton[labelRole="compareGlyph"]:focus {
    No cursor property — Qt QSS does not support it and logs a warning per repolish. */
 
 QFrame#compatCalloutWidget {
-    background: rgba(230, 197, 124, 0.10);
-    border: 1px solid rgba(230, 197, 124, 0.42);
+    background: ${warn-a10};
+    border: 1px solid ${warn-a42};
     border-left: 3px solid ${warn};
     border-radius: ${radius-md}px;
 }
@@ -721,13 +721,13 @@ QPushButton#fixCodecsButton {
 
 QPushButton#fixCodecsButton:hover {
     color: ${text0};
-    background: rgba(230, 197, 124, 0.14);
+    background: ${warn-a14};
     border-radius: ${radius-sm}px;
 }
 
 QPushButton#fixCodecsButton:pressed {
     color: ${text0};
-    background: rgba(230, 197, 124, 0.22);
+    background: ${warn-a22};
     border-radius: ${radius-sm}px;
 }
 
@@ -775,23 +775,23 @@ QWidget#captureTargetCard:hover {
 }
 
 QWidget#captureTargetCard[selected="true"] {
-    background: rgba(155, 217, 210, 0.12);
+    background: ${ac-a12};
     border-color: ${accent};
 }
 
 QWidget#captureTargetCard[captureCardTone="warning"] {
-    border-color: rgba(230, 197, 124, 0.58);
-    background: rgba(230, 197, 124, 0.12);
+    border-color: ${warn-a58};
+    background: ${warn-a12};
 }
 
 QWidget#captureTargetCard[captureCardTone="warning"]:hover {
     border-color: ${warn};
-    background: rgba(230, 197, 124, 0.2);
+    background: ${warn-a20};
 }
 
 QWidget#captureTargetCard[captureCardTone="warning"][selected="true"] {
     border-color: ${warn};
-    background: rgba(230, 197, 124, 0.24);
+    background: ${warn-a24};
 }
 
 QWidget#captureTargetCard:disabled {
@@ -801,8 +801,8 @@ QWidget#captureTargetCard:disabled {
 }
 
 QWidget#captureTargetCard[unavailable="true"] {
-    background: rgba(230, 197, 124, 0.08);
-    border-color: rgba(230, 197, 124, 0.42);
+    background: ${warn-a08};
+    border-color: ${warn-a42};
 }
 
 QWidget#captureTargetCard[captureCardState="minimized"] {
@@ -810,12 +810,12 @@ QWidget#captureTargetCard[captureCardState="minimized"] {
 }
 
 QWidget#captureTargetCard[captureCardState="too-small"] {
-    border-color: rgba(230, 197, 124, 0.68);
+    border-color: ${warn-a68};
 }
 
 QWidget#captureTargetCard:focus {
     border-color: ${accent};
-    background: rgba(155, 217, 210, 0.16);
+    background: ${ac-a16};
 }
 
 QFrame#captureCardThumbnailSurface {
@@ -829,17 +829,17 @@ QFrame#captureCardThumbnailSurface[thumbnailState="ready"] {
 }
 
 QFrame#captureCardThumbnailSurface[thumbnailState="loading"] {
-    background: rgba(28, 28, 31, 0.92);
+    background: ${surf2-a92};
 }
 
 QFrame#captureCardThumbnailSurface[thumbnailState="failed"] {
     border-color: ${warn};
-    background: rgba(230, 197, 124, 0.16);
+    background: ${warn-a16};
 }
 
 QFrame#captureCardThumbnailSurface[thumbnailState="unavailable"] {
     border-color: ${warn};
-    background: rgba(230, 197, 124, 0.18);
+    background: ${warn-a18};
 }
 
 QLabel[labelRole="captureCardThumbnail"] {
@@ -910,21 +910,21 @@ QLabel[labelRole="captureCardStatus"] {
 QWidget#captureTargetCard[selected="true"] QLabel[labelRole="captureCardStatus"] {
     color: ${accent};
     border-color: ${accent-b2};
-    background: rgba(155, 217, 210, 0.18);
+    background: ${ac-a18};
 }
 
 QWidget#captureTargetCard[captureCardTone="warning"] QLabel[labelRole="captureCardStatus"] {
     color: ${warn};
     border-color: ${warn};
-    background: rgba(230, 197, 124, 0.2);
+    background: ${warn-a20};
 }
 
 QWidget#captureTargetCard[captureCardState="too-small"] QLabel[labelRole="captureCardStatus"],
 QWidget#captureTargetCard[captureCardState="minimized"] QLabel[labelRole="captureCardStatus"],
 QWidget#captureTargetCard[captureCardState="unavailable"] QLabel[labelRole="captureCardStatus"] {
     color: ${warn};
-    border-color: rgba(230, 197, 124, 0.68);
-    background: rgba(230, 197, 124, 0.22);
+    border-color: ${warn-a68};
+    background: ${warn-a22};
 }
 
 QLabel[labelRole="captureCardSubtitle"] {
@@ -1248,7 +1248,7 @@ QLabel[labelRole="codecCardTag"] {
 QWidget#codecCard[selected="true"] QLabel[labelRole="codecCardTag"] {
     color: ${accent};
     border-color: ${accent};
-    background: rgba(155, 217, 210, 0.10);
+    background: ${ac-a10};
 }
 
 QLabel[labelRole="codecCardDesc"] {
@@ -1570,12 +1570,12 @@ QPushButton[sourcePickerSection="true"]:hover {
 QPushButton[sourcePickerSection="true"]:checked {
     border-color: ${accent};
     color: ${accent};
-    background: rgba(155, 217, 210, 0.16);
+    background: ${ac-a16};
 }
 
 QPushButton[sourcePickerSection="true"]:focus {
     border-color: ${accent};
-    background: rgba(155, 217, 210, 0.12);
+    background: ${ac-a12};
 }
 
 QPushButton#sourcePickerRefreshButton {
@@ -1631,13 +1631,13 @@ QFrame#regionPresetCard:hover {
 }
 
 QFrame#regionPresetCard[selected="true"] {
-    background: rgba(155, 217, 210, 0.12);
+    background: ${ac-a12};
     border-color: ${accent};
 }
 
 QFrame#regionPresetCard:focus {
     border-color: ${accent};
-    background: rgba(155, 217, 210, 0.16);
+    background: ${ac-a16};
 }
 
 QFrame#regionPresetCard[regionPresetPlanned="true"] {
@@ -1790,26 +1790,26 @@ QLabel[labelRole="profileStatusBadge"] {
 
 QLabel[labelRole="profileStatusBadge"][stateRole="ready"] {
     color: ${ok};
-    border-color: rgba(132, 203, 162, 0.48);
-    background: rgba(132, 203, 162, 0.14);
+    border-color: ${ok-a48};
+    background: ${ok-a14};
 }
 
 QLabel[labelRole="profileStatusBadge"][stateRole="warn"] {
     color: ${warn};
-    border-color: rgba(230, 197, 124, 0.52);
-    background: rgba(230, 197, 124, 0.16);
+    border-color: ${warn-a52};
+    background: ${warn-a16};
 }
 
 QLabel[labelRole="profileStatusBadge"][stateRole="recording"] {
     color: ${err};
-    border-color: rgba(224, 120, 108, 0.58);
-    background: rgba(224, 120, 108, 0.18);
+    border-color: ${err-a58};
+    background: ${err-a18};
 }
 
 QLabel[labelRole="profileStatusBadge"][stateRole="blocked"] {
     color: ${err};
-    border-color: rgba(224, 120, 108, 0.62);
-    background: rgba(224, 120, 108, 0.2);
+    border-color: ${err-a62};
+    background: ${err-a20};
 }
 
 QLabel[labelRole="subtle"] {
@@ -1921,18 +1921,18 @@ QWidget[panelRole="statTile"] {
 }
 
 QFrame[panelRole="statTile"][statTone="blocker"] {
-    border-color: rgba(224, 120, 108, 0.42);
-    background: rgba(224, 120, 108, 0.10);
+    border-color: ${err-a42};
+    background: ${err-a10};
 }
 
 QFrame[panelRole="statTile"][statTone="notice"] {
-    border-color: rgba(230, 197, 124, 0.42);
-    background: rgba(230, 197, 124, 0.10);
+    border-color: ${warn-a42};
+    background: ${warn-a10};
 }
 
 QFrame[panelRole="statTile"][statTone="pass"] {
-    border-color: rgba(132, 203, 162, 0.40);
-    background: rgba(132, 203, 162, 0.08);
+    border-color: ${ok-a40};
+    background: ${ok-a08};
 }
 
 /* #04: zero-count tile — neutral, no alarm colour */
@@ -1983,18 +1983,18 @@ QWidget[panelRole="issueCard"] {
 }
 
 QFrame[panelRole="issueCard"][issueTone="blocker"] {
-    border-color: rgba(224, 120, 108, 0.48);
-    background: rgba(224, 120, 108, 0.10);
+    border-color: ${err-a48};
+    background: ${err-a10};
 }
 
 QFrame[panelRole="issueCard"][issueTone="notice"] {
-    border-color: rgba(230, 197, 124, 0.48);
-    background: rgba(230, 197, 124, 0.10);
+    border-color: ${warn-a48};
+    background: ${warn-a10};
 }
 
 QFrame[panelRole="issueCard"][issueTone="pass"] {
-    border-color: rgba(132, 203, 162, 0.36);
-    background: rgba(132, 203, 162, 0.07);
+    border-color: ${ok-a36};
+    background: ${ok-a07};
 }
 
 QLabel[labelRole="issueTitle"] {
@@ -2148,16 +2148,16 @@ QFrame#pipelineStepCard[pipelineStatus="planned"] {
 }
 
 QFrame#pipelineStepCard[pipelineStatus="unavailable"] {
-    border-color: rgba(224, 120, 108, 0.48);
-    background: rgba(224, 120, 108, 0.08);
+    border-color: ${err-a48};
+    background: ${err-a08};
 }
 
 QFrame#pipelineStepCard[pipelineStatus="hotspot"] {
-    border-color: rgba(230, 197, 124, 0.48);
+    border-color: ${warn-a48};
 }
 
 QFrame#pipelineStepCard[pipelineStatus="over"] {
-    border-color: rgba(224, 120, 108, 0.55);
+    border-color: ${err-a55};
 }
 
 QLabel[labelRole="pipelineStepName"] {
@@ -2195,26 +2195,26 @@ QLabel[labelRole="pipelineStepStatus"] {
 
 QLabel[labelRole="pipelineStepStatus"][pipelineStatus="ok"] {
     color: ${ok};
-    border-color: rgba(132, 203, 162, 0.46);
-    background: rgba(132, 203, 162, 0.14);
+    border-color: ${ok-a46};
+    background: ${ok-a14};
 }
 
 QLabel[labelRole="pipelineStepStatus"][pipelineStatus="unavailable"] {
     color: ${err};
-    border-color: rgba(224, 120, 108, 0.55);
-    background: rgba(224, 120, 108, 0.16);
+    border-color: ${err-a55};
+    background: ${err-a16};
 }
 
 QLabel[labelRole="pipelineStepStatus"][pipelineStatus="hotspot"] {
     color: ${warn};
-    border-color: rgba(230, 197, 124, 0.5);
-    background: rgba(230, 197, 124, 0.15);
+    border-color: ${warn-a50};
+    background: ${warn-a15};
 }
 
 QLabel[labelRole="pipelineStepStatus"][pipelineStatus="over"] {
     color: ${err};
-    border-color: rgba(224, 120, 108, 0.55);
-    background: rgba(224, 120, 108, 0.16);
+    border-color: ${err-a55};
+    background: ${err-a16};
 }
 
 QLabel[labelRole="pipelineStepStatus"][pipelineStatus="planned"] {
@@ -2307,8 +2307,8 @@ QPushButton#resultDeleteBtn {
 
 QPushButton#resultDeleteBtn:hover {
     color: ${err};
-    border-color: rgba(224, 120, 108, 0.52);
-    background: rgba(224, 120, 108, 0.10);
+    border-color: ${err-a52};
+    background: ${err-a10};
 }
 
 QLineEdit,
@@ -2346,7 +2346,7 @@ QKeySequenceEdit:disabled {
 
 QKeySequenceEdit[role="capture"] {
     border-color: ${accent};
-    background: rgba(155, 217, 210, 0.1);
+    background: ${ac-a10};
 }
 
 QComboBox::drop-down {
@@ -2450,13 +2450,13 @@ QPushButton[role="primary"]:disabled {
 
 QPushButton[role="danger"] {
     color: ${err};
-    background: rgba(224, 120, 108, 0.12);
-    border-color: rgba(224, 120, 108, 0.58);
+    background: ${err-a12};
+    border-color: ${err-a58};
 }
 
 QPushButton[role="danger"]:hover {
-    background: rgba(224, 120, 108, 0.22);
-    border-color: rgba(224, 120, 108, 0.74);
+    background: ${err-a22};
+    border-color: ${err-a74};
 }
 
 QPushButton[role="ghost"] {
@@ -2990,8 +2990,8 @@ QLineEdit[role="pillInput"] {
 QLabel[labelRole="warnHint"] {
     font-size: 12px;
     color: ${text0};
-    background: rgba(230, 197, 124, 0.10);
-    border: 1px solid rgba(230, 197, 124, 0.42);
+    background: ${warn-a10};
+    border: 1px solid ${warn-a42};
     border-left: 3px solid ${warn};
     border-radius: ${radius-md}px;
     padding: 8px 12px;
