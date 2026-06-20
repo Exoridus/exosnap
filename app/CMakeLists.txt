@@ -339,6 +339,29 @@ if(EXOSNAP_ENABLE_CRASH_CAPTURE AND TARGET crashpad_handler)
     )
 endif()
 
+# ---- Dev convenience: stage the Qt runtime next to the build-tree exe ----
+# The build-tree exosnap.exe (and every test .exe — they share app/<config>/)
+# links against Qt DLLs that live in Qt's bin dir, not next to the exe. Without
+# them on PATH, launching raises one Windows error dialog per missing DLL and
+# tests abort with 0xC0000135 (STATUS_DLL_NOT_FOUND). windeployqt copies the Qt
+# runtime + required plugins (platforms/styles/imageformats) next to the exe so
+# launching and ctest always work with no PATH juggling. Release packaging
+# deploys separately; this is build-tree only, and POST_BUILD only fires when
+# exosnap is actually (re)linked.
+if(WIN32)
+    find_program(EXOSNAP_WINDEPLOYQT windeployqt HINTS "${_qt6_bin_dir}")
+    if(EXOSNAP_WINDEPLOYQT)
+        add_custom_command(TARGET exosnap POST_BUILD
+            COMMAND "${EXOSNAP_WINDEPLOYQT}" --no-translations --no-system-d3d-compiler --no-opengl-sw
+                "$<IF:$<CONFIG:Debug>,--debug,--release>" "$<TARGET_FILE:exosnap>"
+            COMMENT "Staging Qt runtime next to exosnap.exe (build tree)"
+            VERBATIM
+        )
+    else()
+        message(STATUS "windeployqt not found — build-tree exe will rely on Qt being on PATH.")
+    endif()
+endif()
+
 function(exosnap_add_app_test_support NAME)
     add_library(${NAME} STATIC ${ARGN})
     target_include_directories(${NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
