@@ -56,8 +56,11 @@ void ConvertToFloat32Stereo(const uint8_t* src_bytes, uint32_t src_frames, uint3
 } // namespace
 
 MixedAudioSrc::MixedAudioSrc(std::vector<std::unique_ptr<IAudioCaptureSource>> sources,
-                             std::vector<float> source_gain_multipliers)
-    : sources_(std::move(sources)), source_gain_multipliers_(std::move(source_gain_multipliers)) {
+                             std::vector<float> source_gain_multipliers, bool limiter_enabled,
+                             float limiter_ceiling_linear)
+    : sources_(std::move(sources)), source_gain_multipliers_(std::move(source_gain_multipliers)),
+      limiter_enabled_(limiter_enabled),
+      limiter_ceiling_linear_((limiter_ceiling_linear > 0.0f) ? limiter_ceiling_linear : 1.0f) {
 }
 
 bool MixedAudioSrc::Init(std::string& out_error) {
@@ -89,6 +92,16 @@ bool MixedAudioSrc::Init(std::string& out_error) {
 
     mix_buffer_.assign(static_cast<size_t>(kMixFrameCount) * kOutputChannels, 0.0f);
     scratch_buffer_.assign(static_cast<size_t>(kMixFrameCount) * kOutputChannels, 0.0f);
+
+    if (limiter_enabled_) {
+        BrickwallLimiter::Config lc;
+        lc.ceiling_linear = limiter_ceiling_linear_;
+        lc.sample_rate = kOutputSampleRate;
+        lc.channels = kOutputChannels;
+        limiter_.Configure(lc);
+        limiter_.Reset();
+    }
+
     initialized_ = true;
     return true;
 }
@@ -148,11 +161,18 @@ bool MixedAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_erro
         }
     }
 
-    for (float& s : mix_buffer_) {
-        if (s > 1.0f)
-            s = 1.0f;
-        else if (s < -1.0f)
-            s = -1.0f;
+    if (limiter_enabled_) {
+        // Brickwall limiter: smooth peak reduction to the ceiling (with a final
+        // clamp guarantee inside Process) instead of hard-clipping the mix.
+        limiter_.Process(mix_buffer_.data(), kMixFrameCount);
+    } else {
+        // Legacy behavior: hard-clip the mix to full scale.
+        for (float& s : mix_buffer_) {
+            if (s > 1.0f)
+                s = 1.0f;
+            else if (s < -1.0f)
+                s = -1.0f;
+        }
     }
 
     out_buf.bytes = reinterpret_cast<const uint8_t*>(mix_buffer_.data());

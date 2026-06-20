@@ -91,6 +91,15 @@ if(NOT EXISTS "${_nvenc_header}")
         LIBRARIES recorder_core
     )
 
+    # Audio v2 (0.6.0): brickwall limiter DSP (self-contained; no FFmpeg/NVENC).
+    exosnap_add_gtest(
+        NAME test_brickwall_limiter
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_brickwall_limiter.cpp
+                src/brickwall_limiter.cpp
+    )
+    target_include_directories(test_brickwall_limiter PRIVATE src)
+
     # test_mp4_remux_pipeline_flow: pure-logic tests; no FFmpeg runtime needed.
     exosnap_add_gtest(
         NAME test_mp4_remux_pipeline_flow
@@ -145,6 +154,8 @@ add_library(recorder_core STATIC
     src/gpu_compositor.cpp
     src/gpu_compositor.h
     src/mixed_audio_src.cpp
+    src/brickwall_limiter.cpp
+    src/brickwall_limiter.h
     src/wasapi_capture_src.cpp
     src/wasapi_loopback.cpp
     src/wasapi_loopback_src.cpp
@@ -358,6 +369,15 @@ exosnap_add_gtest(
     SOURCES tests/test_audio_gain_model.cpp
     LIBRARIES recorder_core
 )
+
+# Audio v2 (0.6.0): brickwall limiter DSP (self-contained; no FFmpeg/NVENC).
+exosnap_add_gtest(
+    NAME test_brickwall_limiter
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_brickwall_limiter.cpp
+            src/brickwall_limiter.cpp
+)
+target_include_directories(test_brickwall_limiter PRIVATE src)
 
 exosnap_add_gtest(
     NAME mixed_audio_src_tests

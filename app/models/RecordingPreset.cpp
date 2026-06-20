@@ -263,6 +263,14 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         }
     }
 
+    // Brickwall limiter (Audio v2 — 0.6.0): ceiling is a dBFS value <= 0. Reset
+    // NaN/Inf to 0 dBFS; clamp positives to 0 dBFS and an absurd floor to -60.
+    if (!std::isfinite(config.audio.limiter_ceiling_db) || config.audio.limiter_ceiling_db > 0.0f) {
+        config.audio.limiter_ceiling_db = 0.0f;
+    } else if (config.audio.limiter_ceiling_db < -60.0f) {
+        config.audio.limiter_ceiling_db = -60.0f;
+    }
+
     // Webcam: delegate to the provided sanitizer (handles NaN/Inf + clamping).
     config.webcam = SanitizeWebcamSettings(config.webcam);
 
@@ -419,6 +427,13 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
         return false;
     }
     if (a.audio.opus_complexity != b.audio.opus_complexity) {
+        return false;
+    }
+    // Brickwall limiter (Audio v2): enabled (exact) + ceiling (1e-2 dB tolerance).
+    if (a.audio.limiter_enabled != b.audio.limiter_enabled) {
+        return false;
+    }
+    if (std::abs(a.audio.limiter_ceiling_db - b.audio.limiter_ceiling_db) > 1e-2f) {
         return false;
     }
 
@@ -622,6 +637,13 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (a.audio.opus_complexity != b.audio.opus_complexity) {
+        return false;
+    }
+    // Brickwall limiter (Audio v2): enabled (exact) + ceiling (1e-2 dB tolerance).
+    if (a.audio.limiter_enabled != b.audio.limiter_enabled) {
+        return false;
+    }
+    if (std::abs(a.audio.limiter_ceiling_db - b.audio.limiter_ceiling_db) > 1e-2f) {
         return false;
     }
 

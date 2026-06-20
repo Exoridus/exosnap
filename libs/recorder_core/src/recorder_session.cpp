@@ -1,6 +1,7 @@
 #include <recorder_core/recorder_session.h>
 
 #include "audio_thread.h"
+#include "brickwall_limiter.h"
 #include "mixed_audio_src.h"
 #include "mux_thread.h"
 #include "session_internal.h"
@@ -462,7 +463,9 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
                     std::vector<float> gains;
                     inner.push_back(std::move(single_src));
                     gains.push_back(effective_gain);
-                    track_source = std::make_unique<MixedAudioSrc>(std::move(inner), std::move(gains));
+                    track_source = std::make_unique<MixedAudioSrc>(
+                        std::move(inner), std::move(gains), config.audio_limiter_enabled,
+                        LimiterCeilingDbToLinear(config.audio_limiter_ceiling_db));
                 } else {
                     track_source = std::move(single_src);
                 }
@@ -491,7 +494,9 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
                         (kind == AudioSourceKind::Mic) ? (config.mic_gain_linear * row_gain) : row_gain;
                     gains.push_back(effective_gain);
                 }
-                track_source = std::make_unique<MixedAudioSrc>(std::move(inner), std::move(gains));
+                track_source =
+                    std::make_unique<MixedAudioSrc>(std::move(inner), std::move(gains), config.audio_limiter_enabled,
+                                                    LimiterCeilingDbToLinear(config.audio_limiter_ceiling_db));
             }
 
             audioWorkers.push_back(

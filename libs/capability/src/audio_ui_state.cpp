@@ -36,6 +36,10 @@ AudioPlanResult BuildAudioPlan(const AudioUiState& state) {
     result.opus_frame_duration = state.opus_frame_duration;
     result.opus_complexity = state.opus_complexity;
 
+    // Brickwall limiter (Audio v2) — pass through directly.
+    result.limiter_enabled = state.limiter_enabled;
+    result.limiter_ceiling_db = state.limiter_ceiling_db;
+
     result.plan = recorder_core::ResolveAudioTracks(state.source_rows);
 
     const bool app_active = state.IsAppEnabled();

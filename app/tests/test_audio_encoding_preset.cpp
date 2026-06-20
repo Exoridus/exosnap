@@ -6,6 +6,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include <QFile>
 #include <QString>
 #include <QTemporaryDir>
@@ -327,6 +329,78 @@ TEST(AudioEncodingPreset, StoreLoad_MissingKeys_FallsBackToDefaults) {
     EXPECT_EQ(state.presets.front().config.audio.audio_bitrate_kbps, 160u);
     EXPECT_EQ(state.presets.front().config.audio.opus_frame_duration, OpusFrameDuration::Ms20);
     EXPECT_EQ(state.presets.front().config.audio.opus_complexity, 10);
+    // Limiter keys also omitted → enabled / 0.0 dBFS defaults.
+    EXPECT_TRUE(state.presets.front().config.audio.limiter_enabled);
+    EXPECT_FLOAT_EQ(state.presets.front().config.audio.limiter_ceiling_db, 0.0f);
+    QFile::remove(path);
+}
+
+// ===========================================================================
+// Brickwall limiter (Audio v2 — 0.6.0)
+// ===========================================================================
+
+TEST(AudioEncodingPreset, DefaultPreset_Limiter_EnabledAtZeroDb) {
+    const RecordingPreset p = MakeDefaultPreset();
+    EXPECT_TRUE(p.config.audio.limiter_enabled);
+    EXPECT_FLOAT_EQ(p.config.audio.limiter_ceiling_db, 0.0f);
+}
+
+TEST(AudioEncodingPreset, Sanitize_LimiterCeiling_PositiveClampsToZero) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.limiter_ceiling_db = 6.0f; // > 0 dBFS is invalid
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_FLOAT_EQ(sanitized.audio.limiter_ceiling_db, 0.0f);
+}
+
+TEST(AudioEncodingPreset, Sanitize_LimiterCeiling_BelowFloorClampsToMinus60) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.limiter_ceiling_db = -200.0f;
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_FLOAT_EQ(sanitized.audio.limiter_ceiling_db, -60.0f);
+}
+
+TEST(AudioEncodingPreset, Sanitize_LimiterCeiling_NonFiniteResetsToZero) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.limiter_ceiling_db = std::nanf("");
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_FLOAT_EQ(sanitized.audio.limiter_ceiling_db, 0.0f);
+}
+
+TEST(AudioEncodingPreset, NormalizedEquals_DifferentLimiterEnabled_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.limiter_enabled = !a.audio.limiter_enabled;
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+TEST(AudioEncodingPreset, NormalizedEquals_DifferentLimiterCeiling_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.limiter_ceiling_db = a.audio.limiter_ceiling_db - 3.0f;
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+TEST(AudioEncodingPreset, DirtyEquivalent_DifferentLimiterCeiling_NotEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.limiter_ceiling_db = -6.0f;
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(AudioEncodingPreset, StoreRoundTrip_Limiter) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+
+    RecordingPreset p = MakeDefaultPreset();
+    p.config.audio.limiter_enabled = false;
+    p.config.audio.limiter_ceiling_db = -3.0f;
+    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+
+    const auto state = store.Load();
+    ASSERT_FALSE(state.presets.empty());
+    const auto& loaded = state.presets.front().config.audio;
+    EXPECT_FALSE(loaded.limiter_enabled);
+    EXPECT_NEAR(loaded.limiter_ceiling_db, -3.0f, 0.01f);
     QFile::remove(path);
 }
 

@@ -2,6 +2,8 @@
 
 #include "mixed_audio_src.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -210,6 +212,40 @@ TEST(MixedAudioSrcTest, MixedAudioSrc_TwoSourcesData_SummedAndClamped) {
     for (uint32_t i = 0; i < MixedAudioSrc::kMixFrameCount * 2u; ++i) {
         EXPECT_NEAR(samples[i], 1.0f, 1e-5f) << "at index " << i;
     }
+
+    mixer.ReleaseBuffer();
+    mixer.Shutdown();
+}
+
+TEST(MixedAudioSrcTest, MixedAudioSrc_LimiterEnabled_RespectsCustomCeiling) {
+    // Two sources at 1.0 → mixed sum = 1.0 (within full scale). The legacy
+    // hard-clamp path would leave this at 1.0; with the limiter enabled at a
+    // 0.5 ceiling the output must be brought down to <= 0.5.
+    const auto src_bytes = MakeFloat32Bytes(MixedAudioSrc::kMixFrameCount, 2, 1.0f);
+
+    std::vector<std::unique_ptr<IAudioCaptureSource>> sources;
+    auto* s0 = new MockAudioCaptureSource();
+    auto* s1 = new MockAudioCaptureSource();
+    s0->SetPendingFrames(MixedAudioSrc::kMixFrameCount);
+    s0->SetData(src_bytes);
+    s1->SetPendingFrames(MixedAudioSrc::kMixFrameCount);
+    s1->SetData(src_bytes);
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(s0));
+    sources.push_back(std::unique_ptr<IAudioCaptureSource>(s1));
+
+    MixedAudioSrc mixer(std::move(sources), MakeUnityGains(2), /*limiter_enabled=*/true,
+                        /*limiter_ceiling_linear=*/0.5f);
+    std::string err;
+    ASSERT_TRUE(mixer.Init(err));
+
+    RawAudioBuffer buf{};
+    ASSERT_TRUE(mixer.AcquireBuffer(buf, err));
+    const float* samples = reinterpret_cast<const float*>(buf.bytes);
+    float max_abs = 0.0f;
+    for (uint32_t i = 0; i < MixedAudioSrc::kMixFrameCount * 2u; ++i) {
+        max_abs = std::max(max_abs, std::fabs(samples[i]));
+    }
+    EXPECT_LE(max_abs, 0.5f + 1e-5f);
 
     mixer.ReleaseBuffer();
     mixer.Shutdown();

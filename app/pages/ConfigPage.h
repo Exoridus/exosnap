@@ -19,6 +19,7 @@ class QBoxLayout;
 class QButtonGroup;
 class QCheckBox;
 class QComboBox;
+class QDoubleSpinBox;
 class QFrame;
 class QLabel;
 class QLineEdit;
@@ -452,6 +453,9 @@ class ConfigPage : public QWidget {
     QSpinBox* audio_bitrate_kbps_spin_ = nullptr;
     QComboBox* opus_frame_duration_combo_ = nullptr;
     QSpinBox* opus_complexity_spin_ = nullptr;
+    // Brickwall limiter (Audio v2 — 0.6.0).
+    ui::widgets::ExoCheckBox* limiter_check_ = nullptr;
+    QDoubleSpinBox* limiter_ceiling_spin_ = nullptr;
 
     // SETTINGS-SEARCH-R1: settings search box and match count label.
     QWidget* settings_search_pill_ = nullptr;
