@@ -229,6 +229,18 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         config.audio.mic_gain_linear = 1.0f;
     }
 
+    // Audio v2 (0.6.0): clamp per-row gain_db to [kMinGainDb, kMaxGainDb]; reset NaN/Inf.
+    for (auto& row : config.audio.source_rows) {
+        if (!std::isfinite(row.gain_db)) {
+            row.gain_db = 0.0f;
+        } else if (row.gain_db < recorder_core::kMinGainDb) {
+            row.gain_db = recorder_core::kMinGainDb;
+        } else if (row.gain_db > recorder_core::kMaxGainDb) {
+            row.gain_db = recorder_core::kMaxGainDb;
+        }
+        // muted is bool — no sanitization needed.
+    }
+
     // Audio encoding params (ADR 0019):
     // audio_bitrate_kbps: 0 is valid (auto default); non-zero clamped to broadest safe range.
     // Codec-specific clamping ([32,510] Opus / [64,320] AAC) happens in the engine.
@@ -421,6 +433,22 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
             return false;
         }
     }
+    // Audio v2 (0.6.0): compare per-row gain_db and muted.
+    {
+        if (a.audio.source_rows.size() != b.audio.source_rows.size()) {
+            return false;
+        }
+        for (std::size_t i = 0; i < a.audio.source_rows.size(); ++i) {
+            const auto& ra = a.audio.source_rows[i];
+            const auto& rb = b.audio.source_rows[i];
+            if (ra.muted != rb.muted) {
+                return false;
+            }
+            if (std::abs(ra.gain_db - rb.gain_db) > 1e-2f) {
+                return false;
+            }
+        }
+    }
 
     // --- Webcam ---
     constexpr float kPipTol = 1e-3f;
@@ -606,6 +634,22 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         }
         if (EnabledSourceKinds(a.audio.source_rows) != EnabledSourceKinds(b.audio.source_rows)) {
             return false;
+        }
+    }
+    // Audio v2 (0.6.0): compare per-row gain_db and muted.
+    {
+        if (a.audio.source_rows.size() != b.audio.source_rows.size()) {
+            return false;
+        }
+        for (std::size_t i = 0; i < a.audio.source_rows.size(); ++i) {
+            const auto& ra = a.audio.source_rows[i];
+            const auto& rb = b.audio.source_rows[i];
+            if (ra.muted != rb.muted) {
+                return false;
+            }
+            if (std::abs(ra.gain_db - rb.gain_db) > 1e-2f) {
+                return false;
+            }
         }
     }
 

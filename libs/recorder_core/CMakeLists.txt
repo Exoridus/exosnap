@@ -83,6 +83,14 @@ if(NOT EXISTS "${_nvenc_header}")
     )
     target_include_directories(test_mic_meter_service PRIVATE src)
 
+    # Audio v2 (0.6.0): GainDbToLinear unit tests + per-row gain propagation.
+    exosnap_add_gtest(
+        NAME test_audio_gain_model
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_audio_gain_model.cpp
+        LIBRARIES recorder_core
+    )
+
     # test_mp4_remux_pipeline_flow: pure-logic tests; no FFmpeg runtime needed.
     exosnap_add_gtest(
         NAME test_mp4_remux_pipeline_flow
@@ -342,6 +350,14 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_mic_meter_service PRIVATE src)
+
+# Audio v2 (0.6.0): GainDbToLinear unit tests + per-row gain propagation.
+exosnap_add_gtest(
+    NAME test_audio_gain_model
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_audio_gain_model.cpp
+    LIBRARIES recorder_core
+)
 
 exosnap_add_gtest(
     NAME mixed_audio_src_tests
