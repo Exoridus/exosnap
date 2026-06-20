@@ -505,6 +505,9 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     // Microphone high-pass filter (Audio v2 — 0.6.0).
     aud_tbl.emplace("mic_hpf_enabled", aud.mic_hpf_enabled);
     aud_tbl.emplace("mic_hpf_cutoff_hz", static_cast<double>(aud.mic_hpf_cutoff_hz));
+    // Microphone noise gate (Audio v2 — 0.6.0).
+    aud_tbl.emplace("mic_gate_enabled", aud.mic_gate_enabled);
+    aud_tbl.emplace("mic_gate_threshold_db", static_cast<double>(aud.mic_gate_threshold_db));
 
     // audio sources as array-of-tables
     toml::array sources_arr;
@@ -741,6 +744,12 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
     {
         aud.mic_hpf_enabled = TomlBool(tbl["audio"]["mic_hpf_enabled"], false);
         aud.mic_hpf_cutoff_hz = static_cast<float>(TomlFloat(tbl["audio"]["mic_hpf_cutoff_hz"], 80.0));
+    }
+    // Microphone noise gate (Audio v2 — 0.6.0). Older presets default to disabled
+    // / -45 dB (no behavior change vs ungated mic capture).
+    {
+        aud.mic_gate_enabled = TomlBool(tbl["audio"]["mic_gate_enabled"], false);
+        aud.mic_gate_threshold_db = static_cast<float>(TomlFloat(tbl["audio"]["mic_gate_threshold_db"], -45.0));
     }
     // Audio source rows — array-of-tables [[audio.sources]]
     {

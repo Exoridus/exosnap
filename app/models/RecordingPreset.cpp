@@ -281,6 +281,16 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         config.audio.mic_hpf_cutoff_hz = 1000.0f;
     }
 
+    // Microphone noise gate (Audio v2 — 0.6.0): threshold in dBFS. Reset NaN/Inf
+    // to -45 dB; clamp to the usable [-80, 0] dB range.
+    if (!std::isfinite(config.audio.mic_gate_threshold_db)) {
+        config.audio.mic_gate_threshold_db = -45.0f;
+    } else if (config.audio.mic_gate_threshold_db < -80.0f) {
+        config.audio.mic_gate_threshold_db = -80.0f;
+    } else if (config.audio.mic_gate_threshold_db > 0.0f) {
+        config.audio.mic_gate_threshold_db = 0.0f;
+    }
+
     // Webcam: delegate to the provided sanitizer (handles NaN/Inf + clamping).
     config.webcam = SanitizeWebcamSettings(config.webcam);
 
@@ -451,6 +461,13 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
         return false;
     }
     if (std::abs(a.audio.mic_hpf_cutoff_hz - b.audio.mic_hpf_cutoff_hz) > 1e-2f) {
+        return false;
+    }
+    // Mic noise gate (Audio v2): enabled (exact) + threshold (1e-2 dB tolerance).
+    if (a.audio.mic_gate_enabled != b.audio.mic_gate_enabled) {
+        return false;
+    }
+    if (std::abs(a.audio.mic_gate_threshold_db - b.audio.mic_gate_threshold_db) > 1e-2f) {
         return false;
     }
 
@@ -668,6 +685,13 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (std::abs(a.audio.mic_hpf_cutoff_hz - b.audio.mic_hpf_cutoff_hz) > 1e-2f) {
+        return false;
+    }
+    // Mic noise gate (Audio v2): enabled (exact) + threshold (1e-2 dB tolerance).
+    if (a.audio.mic_gate_enabled != b.audio.mic_gate_enabled) {
+        return false;
+    }
+    if (std::abs(a.audio.mic_gate_threshold_db - b.audio.mic_gate_threshold_db) > 1e-2f) {
         return false;
     }
 

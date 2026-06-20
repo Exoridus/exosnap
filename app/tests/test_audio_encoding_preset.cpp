@@ -335,6 +335,9 @@ TEST(AudioEncodingPreset, StoreLoad_MissingKeys_FallsBackToDefaults) {
     // Mic HPF keys also omitted → disabled / 80 Hz defaults.
     EXPECT_FALSE(state.presets.front().config.audio.mic_hpf_enabled);
     EXPECT_FLOAT_EQ(state.presets.front().config.audio.mic_hpf_cutoff_hz, 80.0f);
+    // Mic gate keys also omitted → disabled / -45 dB defaults.
+    EXPECT_FALSE(state.presets.front().config.audio.mic_gate_enabled);
+    EXPECT_FLOAT_EQ(state.presets.front().config.audio.mic_gate_threshold_db, -45.0f);
     QFile::remove(path);
 }
 
@@ -473,6 +476,75 @@ TEST(AudioEncodingPreset, StoreRoundTrip_MicHpf) {
     const auto& loaded = state.presets.front().config.audio;
     EXPECT_TRUE(loaded.mic_hpf_enabled);
     EXPECT_NEAR(loaded.mic_hpf_cutoff_hz, 120.0f, 0.01f);
+    QFile::remove(path);
+}
+
+// ===========================================================================
+// Microphone noise gate (Audio v2 — 0.6.0)
+// ===========================================================================
+
+TEST(AudioEncodingPreset, DefaultPreset_MicGate_DisabledAtMinus45Db) {
+    const RecordingPreset p = MakeDefaultPreset();
+    EXPECT_FALSE(p.config.audio.mic_gate_enabled);
+    EXPECT_FLOAT_EQ(p.config.audio.mic_gate_threshold_db, -45.0f);
+}
+
+TEST(AudioEncodingPreset, Sanitize_MicGateThreshold_AboveMaxClampsTo0) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.mic_gate_threshold_db = 12.0f;
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_FLOAT_EQ(sanitized.audio.mic_gate_threshold_db, 0.0f);
+}
+
+TEST(AudioEncodingPreset, Sanitize_MicGateThreshold_BelowMinClampsToMinus80) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.mic_gate_threshold_db = -120.0f;
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_FLOAT_EQ(sanitized.audio.mic_gate_threshold_db, -80.0f);
+}
+
+TEST(AudioEncodingPreset, Sanitize_MicGateThreshold_NonFiniteResetsToMinus45) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.mic_gate_threshold_db = std::nanf("");
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_FLOAT_EQ(sanitized.audio.mic_gate_threshold_db, -45.0f);
+}
+
+TEST(AudioEncodingPreset, NormalizedEquals_DifferentMicGateEnabled_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.mic_gate_enabled = !a.audio.mic_gate_enabled;
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+TEST(AudioEncodingPreset, NormalizedEquals_DifferentMicGateThreshold_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.mic_gate_threshold_db = a.audio.mic_gate_threshold_db + 10.0f;
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+TEST(AudioEncodingPreset, DirtyEquivalent_DifferentMicGateThreshold_NotEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.mic_gate_threshold_db = -30.0f;
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(AudioEncodingPreset, StoreRoundTrip_MicGate) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+
+    RecordingPreset p = MakeDefaultPreset();
+    p.config.audio.mic_gate_enabled = true;
+    p.config.audio.mic_gate_threshold_db = -30.0f;
+    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+
+    const auto state = store.Load();
+    ASSERT_FALSE(state.presets.empty());
+    const auto& loaded = state.presets.front().config.audio;
+    EXPECT_TRUE(loaded.mic_gate_enabled);
+    EXPECT_NEAR(loaded.mic_gate_threshold_db, -30.0f, 0.01f);
     QFile::remove(path);
 }
 
