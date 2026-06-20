@@ -2,6 +2,7 @@
 
 #include <recorder_core/interfaces/IAudioCaptureSource.h>
 
+#include "automatic_gain_control.h"
 #include "high_pass_filter.h"
 #include "noise_gate.h"
 
@@ -27,10 +28,13 @@ struct MicDspConfig {
     bool gate_enabled = false;
     float gate_threshold_db = -45.0f;
 
+    bool agc_enabled = false;
+    float agc_target_db = -18.0f;
+
     // True when at least one DSP stage is enabled. When false the decorator is a
     // no-op and the caller should not bother wrapping the mic source.
     [[nodiscard]] bool AnyEnabled() const {
-        return hpf_enabled || gate_enabled;
+        return hpf_enabled || gate_enabled || agc_enabled;
     }
 };
 
@@ -43,8 +47,9 @@ struct MicDspConfig {
 // decorator always emits interleaved Float32 (Int16 inner sources are converted
 // up), preserving the inner channel count and sample rate.
 //
-// Stages run in a fixed order (high-pass filter, then noise gate). The class is
-// not thread-safe; one source is processed on one thread (the audio thread).
+// Stages run in a fixed order (high-pass filter, then noise gate, then AGC).
+// The class is not thread-safe; one source is processed on one thread (the audio
+// thread).
 class MicDspAudioSrc final : public IAudioCaptureSource {
   public:
     MicDspAudioSrc(std::unique_ptr<IAudioCaptureSource> inner, const MicDspConfig& cfg);
@@ -67,6 +72,7 @@ class MicDspAudioSrc final : public IAudioCaptureSource {
 
     HighPassFilter hpf_;
     NoiseGate gate_;
+    AutomaticGainControl agc_;
 
     std::vector<float> scratch_buffer_; // interleaved Float32, valid until ReleaseBuffer
     uint32_t channels_ = 2;

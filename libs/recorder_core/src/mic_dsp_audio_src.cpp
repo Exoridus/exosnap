@@ -62,6 +62,13 @@ bool MicDspAudioSrc::Init(std::string& out_error) {
     gate_.Configure(gc);
     gate_.Reset();
 
+    AutomaticGainControl::Config ac;
+    ac.target_db = cfg_.agc_target_db;
+    ac.sample_rate = sample_rate_;
+    ac.channels = channels_;
+    agc_.Configure(ac);
+    agc_.Reset();
+
     initialized_ = true;
     return true;
 }
@@ -93,13 +100,17 @@ bool MicDspAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_err
     ConvertToFloat32(src_buf.bytes, src_buf.num_frames, channels_, inner_->SampleFormat(), scratch_buffer_.data());
 
     // Run the enabled DSP stages in order: high-pass filter first, then the
-    // noise gate. HPF before the gate so low-frequency rumble does not hold the
-    // gate open.
+    // noise gate, then AGC. HPF before the gate so low-frequency rumble does not
+    // hold the gate open; AGC last so it normalizes the already-cleaned signal
+    // (the gate has removed the noise bed, so the AGC won't pump it up).
     if (cfg_.hpf_enabled) {
         hpf_.Process(scratch_buffer_.data(), src_buf.num_frames);
     }
     if (cfg_.gate_enabled) {
         gate_.Process(scratch_buffer_.data(), src_buf.num_frames);
+    }
+    if (cfg_.agc_enabled) {
+        agc_.Process(scratch_buffer_.data(), src_buf.num_frames);
     }
 
     out_buf.bytes = reinterpret_cast<const uint8_t*>(scratch_buffer_.data());

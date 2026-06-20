@@ -508,6 +508,9 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     // Microphone noise gate (Audio v2 — 0.6.0).
     aud_tbl.emplace("mic_gate_enabled", aud.mic_gate_enabled);
     aud_tbl.emplace("mic_gate_threshold_db", static_cast<double>(aud.mic_gate_threshold_db));
+    // Microphone automatic gain control (Audio v2 — 0.6.0).
+    aud_tbl.emplace("mic_agc_enabled", aud.mic_agc_enabled);
+    aud_tbl.emplace("mic_agc_target_db", static_cast<double>(aud.mic_agc_target_db));
 
     // audio sources as array-of-tables
     toml::array sources_arr;
@@ -750,6 +753,12 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
     {
         aud.mic_gate_enabled = TomlBool(tbl["audio"]["mic_gate_enabled"], false);
         aud.mic_gate_threshold_db = static_cast<float>(TomlFloat(tbl["audio"]["mic_gate_threshold_db"], -45.0));
+    }
+    // Microphone automatic gain control (Audio v2 — 0.6.0). Older presets default
+    // to disabled / -18 dB (no behavior change vs un-AGC'd mic capture).
+    {
+        aud.mic_agc_enabled = TomlBool(tbl["audio"]["mic_agc_enabled"], false);
+        aud.mic_agc_target_db = static_cast<float>(TomlFloat(tbl["audio"]["mic_agc_target_db"], -18.0));
     }
     // Audio source rows — array-of-tables [[audio.sources]]
     {

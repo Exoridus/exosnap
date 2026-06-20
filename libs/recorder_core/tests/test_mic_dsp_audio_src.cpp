@@ -275,6 +275,86 @@ TEST(MicDspAudioSrcTest, HpfThenGateChainAttenuatesLowFreqRumble) {
 }
 
 // ---------------------------------------------------------------------------
+// AnyEnabled() — AGC alone enables the chain
+// ---------------------------------------------------------------------------
+
+TEST(MicDspAudioSrcTest, AnyEnabled_AgcAloneEnablesChain) {
+    MicDspConfig cfg;
+    EXPECT_FALSE(cfg.AnyEnabled());
+    cfg.agc_enabled = true;
+    EXPECT_TRUE(cfg.AnyEnabled());
+}
+
+// ---------------------------------------------------------------------------
+// AGC enabled boosts a quiet (above-floor) input toward the target.
+// ---------------------------------------------------------------------------
+
+TEST(MicDspAudioSrcTest, AgcBoostsQuietInputWhenEnabled) {
+    auto mock = std::make_unique<MockAudioCaptureSource>(2, AudioSampleFormat::Float32);
+    auto* mock_ptr = mock.get();
+    const uint32_t frames = 96000; // 2 s — time for the slow attack to converge
+    mock_ptr->SetPendingFrames(frames);
+    // 0.0158 ≈ -36 dBFS: above the noise floor, ~18 dB below the -18 dB target.
+    const float input = 0.0158f;
+    mock_ptr->SetData(MakeFloat32Bytes(frames, 2, input));
+
+    MicDspConfig cfg;
+    cfg.agc_enabled = true;
+    cfg.agc_target_db = -18.0f;
+    MicDspAudioSrc src(std::move(mock), cfg);
+    std::string err;
+    ASSERT_TRUE(src.Init(err)) << err;
+
+    RawAudioBuffer out{};
+    ASSERT_TRUE(src.AcquireBuffer(out, err)) << err;
+    ASSERT_NE(out.bytes, nullptr);
+
+    // The makeup gain pulls the quiet input up: the tail is well above the input.
+    const float* samples = reinterpret_cast<const float*>(out.bytes);
+    float tail = 0.0f;
+    for (uint32_t i = (frames * 2 - 480); i < frames * 2; ++i) {
+        tail = std::max(tail, std::fabs(samples[i]));
+    }
+    EXPECT_GT(tail, input * 2.0f);
+}
+
+// ---------------------------------------------------------------------------
+// Full chain HPF + gate + AGC all enabled runs without blowup.
+// ---------------------------------------------------------------------------
+
+TEST(MicDspAudioSrcTest, FullChainHpfGateAgcRunsWithoutBlowup) {
+    auto mock = std::make_unique<MockAudioCaptureSource>(2, AudioSampleFormat::Float32);
+    auto* mock_ptr = mock.get();
+    const uint32_t frames = 48000;
+    mock_ptr->SetPendingFrames(frames);
+    // Moderate speech-level signal, comfortably above the gate threshold.
+    mock_ptr->SetData(MakeFloat32Bytes(frames, 2, 0.2f));
+
+    MicDspConfig cfg;
+    cfg.hpf_enabled = true;
+    cfg.hpf_cutoff_hz = 80.0f;
+    cfg.gate_enabled = true;
+    cfg.gate_threshold_db = -45.0f;
+    cfg.agc_enabled = true;
+    cfg.agc_target_db = -18.0f;
+    MicDspAudioSrc src(std::move(mock), cfg);
+    std::string err;
+    ASSERT_TRUE(src.Init(err)) << err;
+
+    RawAudioBuffer out{};
+    ASSERT_TRUE(src.AcquireBuffer(out, err)) << err;
+    ASSERT_NE(out.bytes, nullptr);
+
+    // Every output sample is finite and bounded (no NaN/Inf, no runaway gain).
+    const float* samples = reinterpret_cast<const float*>(out.bytes);
+    for (uint32_t i = 0; i < frames * 2; ++i) {
+        ASSERT_TRUE(std::isfinite(samples[i])) << "index " << i;
+        EXPECT_LE(std::fabs(samples[i]), 4.0f) << "index " << i;
+    }
+    src.ReleaseBuffer();
+}
+
+// ---------------------------------------------------------------------------
 // Output format / delegation
 // ---------------------------------------------------------------------------
 

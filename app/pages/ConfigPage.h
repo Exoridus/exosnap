@@ -462,6 +462,9 @@ class ConfigPage : public QWidget {
     // Microphone noise gate (Audio v2 — 0.6.0).
     ui::widgets::ExoCheckBox* mic_gate_check_ = nullptr;
     QDoubleSpinBox* mic_gate_threshold_spin_ = nullptr;
+    // Microphone automatic gain control (Audio v2 — 0.6.0).
+    ui::widgets::ExoCheckBox* mic_agc_check_ = nullptr;
+    QDoubleSpinBox* mic_agc_target_spin_ = nullptr;
 
     // SETTINGS-SEARCH-R1: settings search box and match count label.
     QWidget* settings_search_pill_ = nullptr;

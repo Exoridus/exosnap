@@ -417,14 +417,16 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
             std::unique_ptr<IAudioCaptureSource> mic =
                 std::make_unique<WasapiCaptureSrc>(config.mic_channel_mode, config.mic_device_id);
             // Mic-DSP chain (Audio v2 — 0.6.0): the high-pass filter is the first
-            // stage, the noise gate the second; later slices (AGC/RNNoise) extend
-            // MicDspConfig. Only wrap when a stage is enabled so unaltered capture
-            // stays untouched.
+            // stage, the noise gate the second, the AGC the third; the remaining
+            // slice (RNNoise) extends MicDspConfig. Only wrap when a stage is
+            // enabled so unaltered capture stays untouched.
             MicDspConfig dsp;
             dsp.hpf_enabled = config.mic_hpf_enabled;
             dsp.hpf_cutoff_hz = config.mic_hpf_cutoff_hz;
             dsp.gate_enabled = config.mic_gate_enabled;
             dsp.gate_threshold_db = config.mic_gate_threshold_db;
+            dsp.agc_enabled = config.mic_agc_enabled;
+            dsp.agc_target_db = config.mic_agc_target_db;
             if (dsp.AnyEnabled()) {
                 mic = std::make_unique<MicDspAudioSrc>(std::move(mic), dsp);
             }

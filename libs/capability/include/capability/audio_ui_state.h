@@ -80,6 +80,18 @@ struct AudioUiState {
     // Gate threshold in dBFS. Below this the gate closes. Default -45 dB.
     float mic_gate_threshold_db = -45.0f;
 
+    // ---------------------------------------------------------------------------
+    // Microphone automatic gain control (Audio v2 — 0.6.0)
+    // ---------------------------------------------------------------------------
+
+    // Run the mic input through an automatic gain control that tracks the level
+    // and drives it toward a target loudness. Default false (mic DSP alters
+    // captured audio, opt-in).
+    bool mic_agc_enabled = false;
+
+    // AGC target loudness in dBFS. Default -18 dB.
+    float mic_agc_target_db = -18.0f;
+
     // Convenience predicates.
     [[nodiscard]] bool IsAppEnabled() const noexcept;
     [[nodiscard]] bool IsSysEnabled() const noexcept;
@@ -110,6 +122,10 @@ struct AudioPlanResult {
     // Microphone noise gate (Audio v2 — 0.6.0) — passed through from AudioUiState.
     bool mic_gate_enabled = false;
     float mic_gate_threshold_db = -45.0f;
+
+    // Microphone automatic gain control (Audio v2 — 0.6.0) — passed through from AudioUiState.
+    bool mic_agc_enabled = false;
+    float mic_agc_target_db = -18.0f;
 };
 
 [[nodiscard]] AudioPlanResult BuildAudioPlan(const AudioUiState& state);

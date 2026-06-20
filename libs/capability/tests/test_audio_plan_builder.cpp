@@ -121,6 +121,24 @@ TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesMicGateSettings) {
     EXPECT_FLOAT_EQ(result.mic_gate_threshold_db, -30.0f);
 }
 
+TEST(AudioPlanBuilderTest, BuildAudioPlan_DefaultMicAgcDisabledAtMinus18Db) {
+    AudioUiState state;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_FALSE(result.mic_agc_enabled);
+    EXPECT_FLOAT_EQ(result.mic_agc_target_db, -18.0f);
+}
+
+TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesMicAgcSettings) {
+    AudioUiState state;
+    state.mic_agc_enabled = true;
+    state.mic_agc_target_db = -24.0f;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_TRUE(result.mic_agc_enabled);
+    EXPECT_FLOAT_EQ(result.mic_agc_target_db, -24.0f);
+}
+
 TEST(AudioPlanBuilderTest, WindowTarget_AppOnly) {
     AudioUiState state = WindowSep(1001u);
     state.source_rows = {{K::App, true, false}};

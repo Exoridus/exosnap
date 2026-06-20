@@ -548,5 +548,74 @@ TEST(AudioEncodingPreset, StoreRoundTrip_MicGate) {
     QFile::remove(path);
 }
 
+// ===========================================================================
+// Mic AGC (Audio v2 — 0.6.0)
+// ===========================================================================
+
+TEST(AudioEncodingPreset, DefaultPreset_MicAgc_DisabledAtMinus18Db) {
+    const RecordingPreset p = MakeDefaultPreset();
+    EXPECT_FALSE(p.config.audio.mic_agc_enabled);
+    EXPECT_FLOAT_EQ(p.config.audio.mic_agc_target_db, -18.0f);
+}
+
+TEST(AudioEncodingPreset, Sanitize_MicAgcTarget_AboveMaxClampsTo0) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.mic_agc_target_db = 12.0f;
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_FLOAT_EQ(sanitized.audio.mic_agc_target_db, 0.0f);
+}
+
+TEST(AudioEncodingPreset, Sanitize_MicAgcTarget_BelowMinClampsToMinus40) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.mic_agc_target_db = -120.0f;
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_FLOAT_EQ(sanitized.audio.mic_agc_target_db, -40.0f);
+}
+
+TEST(AudioEncodingPreset, Sanitize_MicAgcTarget_NonFiniteResetsToMinus18) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.mic_agc_target_db = std::nanf("");
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_FLOAT_EQ(sanitized.audio.mic_agc_target_db, -18.0f);
+}
+
+TEST(AudioEncodingPreset, NormalizedEquals_DifferentMicAgcEnabled_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.mic_agc_enabled = !a.audio.mic_agc_enabled;
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+TEST(AudioEncodingPreset, NormalizedEquals_DifferentMicAgcTarget_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.mic_agc_target_db = a.audio.mic_agc_target_db - 6.0f;
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+TEST(AudioEncodingPreset, DirtyEquivalent_DifferentMicAgcTarget_NotEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.mic_agc_target_db = -24.0f;
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(AudioEncodingPreset, StoreRoundTrip_MicAgc) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+
+    RecordingPreset p = MakeDefaultPreset();
+    p.config.audio.mic_agc_enabled = true;
+    p.config.audio.mic_agc_target_db = -24.0f;
+    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+
+    const auto state = store.Load();
+    ASSERT_FALSE(state.presets.empty());
+    const auto& loaded = state.presets.front().config.audio;
+    EXPECT_TRUE(loaded.mic_agc_enabled);
+    EXPECT_NEAR(loaded.mic_agc_target_db, -24.0f, 0.01f);
+    QFile::remove(path);
+}
+
 } // namespace
 } // namespace exosnap
