@@ -55,6 +55,14 @@ directory alongside the ExoSnap binary.
   rights. Patent licensing is the user's responsibility. Most device
   manufacturers already license the relevant AAC patents.
 
+### FLAC
+
+- **Version:** 1.4.3
+- **Project:** https://xiph.org/flac / https://github.com/xiph/flac
+- **License:** BSD 3-Clause (libFLAC)
+- **Linkage:** static
+- **Bundled license:** `licenses/flac.txt`
+
 ### libebml
 
 - **Version:** 1.4.5

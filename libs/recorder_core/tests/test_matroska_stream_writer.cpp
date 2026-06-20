@@ -193,6 +193,13 @@ std::vector<uint8_t> FakeAv1Cp() {
 std::vector<uint8_t> FakeOpusCp() {
     return {'O', 'p', 'u', 's', 'H', 'e', 'a', 'd', 0x01, 0x02, 0x00, 0x00, 0x80, 0xBB, 0x00, 0x00, 0x00, 0x00, 0x00};
 }
+// Minimal native FLAC header: "fLaC" marker + a (fake but length-correct)
+// STREAMINFO block header. The writer only checks the leading marker.
+std::vector<uint8_t> FakeFlacCp() {
+    std::vector<uint8_t> cp = {'f', 'L', 'a', 'C', 0x80, 0x00, 0x00, 0x22}; // last-block STREAMINFO, len=34
+    cp.resize(8 + 34, 0x00);
+    return cp;
+}
 
 MatroskaStreamConfig MakeConfig(const std::string& path, bool h264, bool opus) {
     MatroskaStreamConfig c;
@@ -325,6 +332,68 @@ TEST_F(StreamWriterTest, Pcm_WritesPcmCodecIdAndBitDepth) {
 
     EXPECT_TRUE(HasLevel1(d, kIdTracks));
     EXPECT_TRUE(SegmentSizeIsFinite(d));
+}
+
+// 2c. FLAC path: track header carries CodecID "A_FLAC", the native fLaC header
+//     as CodecPrivate, and BitDepth=16. Verified by scanning the rendered bytes.
+TEST_F(StreamWriterTest, Flac_WritesFlacCodecIdAndCodecPrivate) {
+    MatroskaStreamConfig c;
+    c.output_path = tmp_;
+    c.video_codec_id = "V_AV1";
+    c.video_codec_private = FakeAv1Cp();
+    c.encode_width = 1280;
+    c.encode_height = 720;
+    c.frame_rate_num = 60;
+    c.frame_rate_den = 1;
+    c.audio_codec = StreamAudioCodec::Flac;
+    c.audio_track_count = 1;
+    c.audio_tracks[0].codec_private = FakeFlacCp();
+
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(c));
+    FeedSeconds(w, 3.0, 30, 32);
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+
+    const auto d = ReadFile(tmp_);
+    ASSERT_FALSE(d.empty());
+
+    // CodecID "A_FLAC" present in the rendered container.
+    const std::string kFlacId = "A_FLAC";
+    const auto id_it = std::search(d.begin(), d.end(), kFlacId.begin(), kFlacId.end());
+    EXPECT_NE(id_it, d.end()) << "A_FLAC CodecID not found in output";
+
+    // The native "fLaC" header (CodecPrivate) must be embedded.
+    const std::string kFlacMarker = "fLaC";
+    const auto cp_it = std::search(d.begin(), d.end(), kFlacMarker.begin(), kFlacMarker.end());
+    EXPECT_NE(cp_it, d.end()) << "native fLaC header (CodecPrivate) not found in output";
+
+    // KaxAudioBitDepth (EBML id 0x6264), 1-byte size 0x81, value 16 (0x10).
+    const std::vector<uint8_t> kBitDepth16 = {0x62, 0x64, 0x81, 0x10};
+    const auto bd_it = std::search(d.begin(), d.end(), kBitDepth16.begin(), kBitDepth16.end());
+    EXPECT_NE(bd_it, d.end()) << "KaxAudioBitDepth=16 not found in output";
+
+    EXPECT_TRUE(HasLevel1(d, kIdTracks));
+    EXPECT_TRUE(SegmentSizeIsFinite(d));
+}
+
+// 2d. A FLAC CodecPrivate without the leading "fLaC" marker is rejected at Open().
+TEST_F(StreamWriterTest, Flac_MalformedCodecPrivate_Rejected) {
+    MatroskaStreamConfig c;
+    c.output_path = tmp_;
+    c.video_codec_id = "V_AV1";
+    c.video_codec_private = FakeAv1Cp();
+    c.encode_width = 1280;
+    c.encode_height = 720;
+    c.frame_rate_num = 60;
+    c.frame_rate_den = 1;
+    c.audio_codec = StreamAudioCodec::Flac;
+    c.audio_track_count = 1;
+    c.audio_tracks[0].codec_private = {0x00, 0x01, 0x02, 0x03}; // not "fLaC"
+
+    MatroskaStreamWriter w;
+    EXPECT_FALSE(w.Open(c));
+    EXPECT_TRUE(w.failed());
 }
 
 // 3. Incomplete Opus CodecPrivate is rejected at Open().

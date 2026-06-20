@@ -151,6 +151,9 @@ void MuxThread::Run() {
     case AudioCodec::Pcm:
         sw_config_template.audio_codec = StreamAudioCodec::Pcm;
         break;
+    case AudioCodec::Flac:
+        sw_config_template.audio_codec = StreamAudioCodec::Flac;
+        break;
     case AudioCodec::AacMf:
     default:
         sw_config_template.audio_codec = StreamAudioCodec::Aac;

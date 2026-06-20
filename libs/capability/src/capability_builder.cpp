@@ -34,6 +34,9 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
     caps.audio_codecs.emplace(
         AudioCodec::Pcm, SupportAnnotation{SupportLevel::Available,
                                            "Uncompressed S16LE PCM (A_PCM/INT_LIT); Matroska-only (0.6.0 Audio v2)."});
+    caps.audio_codecs.emplace(AudioCodec::Flac,
+                              SupportAnnotation{SupportLevel::Available,
+                                                "Lossless FLAC (A_FLAC) via libFLAC; Matroska-only (0.6.0 Audio v2)."});
 
     caps.chroma_modes.emplace(ChromaSubsampling::Cs420,
                               SupportAnnotation{SupportLevel::Available, "Validated chroma mode."});

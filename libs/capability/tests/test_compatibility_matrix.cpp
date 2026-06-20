@@ -27,7 +27,8 @@ TEST(CapabilityMatrixTest, AllEnumTuplesAreQueryable) {
         }
     }
 
-    EXPECT_EQ(queried, 162u);
+    // 3 containers × 3 video × 4 audio (Opus/AAC/PCM/FLAC) × 3 chroma × 2 depth.
+    EXPECT_EQ(queried, 216u);
 }
 
 TEST(CapabilityMatrixTest, MatrixRequiredPairsMatchBaseline) {

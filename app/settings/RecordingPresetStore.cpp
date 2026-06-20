@@ -79,6 +79,8 @@ QString AudioCodecToString(capability::AudioCodec v) {
         return QStringLiteral("opus");
     case capability::AudioCodec::Pcm:
         return QStringLiteral("pcm");
+    case capability::AudioCodec::Flac:
+        return QStringLiteral("flac");
     }
     return QStringLiteral("aac");
 }
@@ -91,6 +93,8 @@ std::optional<capability::AudioCodec> AudioCodecFromString(QStringView s) {
         return capability::AudioCodec::AacMf;
     if (n == QStringLiteral("pcm"))
         return capability::AudioCodec::Pcm;
+    if (n == QStringLiteral("flac"))
+        return capability::AudioCodec::Flac;
     return std::nullopt;
 }
 

@@ -190,6 +190,18 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
                 // Uncompressed 16-bit signed little-endian PCM. No CodecPrivate;
                 // the bit depth is carried in the track audio header below.
                 libebml::GetChild<libmatroska::KaxCodecID>(aud).SetValue("A_PCM/INT_LIT");
+            } else if (m_config.audio_codec == StreamAudioCodec::Flac) {
+                // Lossless FLAC. A_FLAC mandates the CodecPrivate be the native
+                // FLAC stream header (the "fLaC" marker + STREAMINFO and any
+                // leading metadata blocks) — players require it to decode.
+                if (slot.size() < 4 || slot[0] != 0x66 || slot[1] != 0x4C || slot[2] != 0x61 || slot[3] != 0x43) {
+                    Fail("FLAC CodecPrivate is missing or malformed; expected native 'fLaC' header");
+                    CloseIo();
+                    return false;
+                }
+                libebml::GetChild<libmatroska::KaxCodecID>(aud).SetValue("A_FLAC");
+                libebml::GetChild<libmatroska::KaxCodecPrivate>(aud).CopyBuffer(slot.data(),
+                                                                                static_cast<uint32_t>(slot.size()));
             } else {
                 libebml::GetChild<libmatroska::KaxCodecID>(aud).SetValue("A_AAC");
                 if (!slot.empty()) {
@@ -202,7 +214,7 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
             auto& as = libebml::GetChild<libmatroska::KaxTrackAudio>(aud);
             libebml::GetChild<libmatroska::KaxAudioSamplingFreq>(as).SetValue(48000.0);
             libebml::GetChild<libmatroska::KaxAudioChannels>(as).SetValue(2);
-            if (m_config.audio_codec == StreamAudioCodec::Pcm) {
+            if (m_config.audio_codec == StreamAudioCodec::Pcm || m_config.audio_codec == StreamAudioCodec::Flac) {
                 libebml::GetChild<libmatroska::KaxAudioBitDepth>(as).SetValue(16);
             }
             aud.SetGlobalTimecodeScale(kTimecodeScaleNs);

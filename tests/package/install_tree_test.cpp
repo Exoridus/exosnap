@@ -140,8 +140,9 @@ TEST_F(InstallTreeTest, LicensesDirExists) {
 TEST_F(InstallTreeTest, AllExpectedLicensesPresent) {
     SKIP_IF_NO_TREE();
     const std::vector<std::string> expected = {
-        "licenses/fdk-aac.txt", "licenses/libebml.txt", "licenses/libmatroska.txt", "licenses/nlohmann_json.txt",
-        "licenses/opus.txt",    "licenses/qt.txt",      "licenses/spdlog.txt",      "licenses/tomlplusplus.txt",
+        "licenses/fdk-aac.txt",     "licenses/flac.txt",          "licenses/libebml.txt",
+        "licenses/libmatroska.txt", "licenses/nlohmann_json.txt", "licenses/opus.txt",
+        "licenses/qt.txt",          "licenses/spdlog.txt",        "licenses/tomlplusplus.txt",
     };
     for (const auto& lic : expected) {
         EXPECT_TRUE(file_exists(_root, lic)) << "Missing license: " << lic;

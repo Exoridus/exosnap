@@ -68,6 +68,8 @@ QString AudioCodecToString(recorder_core::AudioCodec c) {
         return QStringLiteral("opus");
     case recorder_core::AudioCodec::Pcm:
         return QStringLiteral("pcm");
+    case recorder_core::AudioCodec::Flac:
+        return QStringLiteral("flac");
     }
     return QString();
 }
@@ -80,6 +82,8 @@ std::optional<recorder_core::AudioCodec> StringToAudioCodec(const QString& s) {
         return recorder_core::AudioCodec::Opus;
     if (lower == QStringLiteral("pcm"))
         return recorder_core::AudioCodec::Pcm;
+    if (lower == QStringLiteral("flac"))
+        return recorder_core::AudioCodec::Flac;
     return std::nullopt;
 }
 

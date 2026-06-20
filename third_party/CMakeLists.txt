@@ -95,6 +95,29 @@ _exosnap_install_license("FDK-AAC v2.0.3"
 set(BUILD_SHARED_LIBS ${_exosnap_saved_bsl} CACHE BOOL "" FORCE)
 unset(_exosnap_saved_bsl)
 
+# --- libFLAC 1.4.3 (BSD-3-Clause) ---
+# Lossless audio codec (xiph/flac). We build only the C library (libFLAC); the
+# C++ wrapper (libFLAC++), tools, examples, docs and Ogg support are disabled.
+# Native FLAC-in-MKV (A_FLAC) does not use the Ogg container.
+FetchContent_Declare(
+  flac
+  GIT_REPOSITORY https://github.com/xiph/flac.git
+  GIT_TAG        1.4.3
+)
+set(BUILD_CXXLIBS      OFF CACHE INTERNAL "")   # only libFLAC (C), not libFLAC++
+set(BUILD_PROGRAMS     OFF CACHE INTERNAL "")
+set(BUILD_EXAMPLES     OFF CACHE INTERNAL "")
+set(BUILD_TESTING      OFF CACHE INTERNAL "")
+set(BUILD_DOCS         OFF CACHE INTERNAL "")
+set(INSTALL_MANPAGES   OFF CACHE INTERNAL "")
+set(WITH_OGG           OFF CACHE INTERNAL "")   # native FLAC-in-MKV, no Ogg
+set(_exosnap_saved_bsl_flac ${BUILD_SHARED_LIBS})
+set(BUILD_SHARED_LIBS  OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(flac)
+_exosnap_install_license("libFLAC 1.4.3" "${flac_SOURCE_DIR}/COPYING.Xiph" "flac.txt")
+set(BUILD_SHARED_LIBS ${_exosnap_saved_bsl_flac} CACHE BOOL "" FORCE)
+unset(_exosnap_saved_bsl_flac)
+
 # --- libebml release-1.4.5 (LGPL 2.1) ---
 # OVERRIDE_FIND_PACKAGE redirects libmatroska's find_package(EBML) here so
 # it uses the FetchContent-built target rather than a system installation.

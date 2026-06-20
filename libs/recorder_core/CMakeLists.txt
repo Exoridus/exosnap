@@ -15,6 +15,7 @@ if(NOT EXISTS "${_nvenc_header}")
         src/audio_meter.cpp
         src/opus_audio_encoder.cpp
         src/pcm_audio_encoder.cpp
+        src/flac_audio_encoder.cpp
         src/mic_meter_service.cpp
         src/loopback_meter_service.cpp
         include/recorder_core/mp4_remuxer.h
@@ -31,6 +32,7 @@ if(NOT EXISTS "${_nvenc_header}")
         spdlog::spdlog
         nlohmann_json::nlohmann_json
         Opus::opus
+        FLAC::FLAC
         FFmpeg::mux
         mfuuid.lib
         ole32.lib
@@ -77,6 +79,16 @@ if(NOT EXISTS "${_nvenc_header}")
                 src/pcm_audio_encoder.cpp
     )
     target_include_directories(test_pcm_audio_encoder PRIVATE src include)
+
+    # Audio v2 (0.6.0): FLAC lossless encoder (links libFLAC; not pure-logic).
+    exosnap_add_gtest(
+        NAME test_flac_audio_encoder
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_flac_audio_encoder.cpp
+                src/flac_audio_encoder.cpp
+        LIBRARIES FLAC::FLAC
+    )
+    target_include_directories(test_flac_audio_encoder PRIVATE src include)
 
     exosnap_add_gtest(
         NAME test_audio_meter
@@ -220,6 +232,7 @@ add_library(recorder_core STATIC
     src/wasapi_process_loopback_src.h
     src/opus_audio_encoder.cpp
     src/pcm_audio_encoder.cpp
+    src/flac_audio_encoder.cpp
     src/session_stats_collector.cpp
     src/pipeline_diagnostics_aggregator.cpp
     src/pipeline_diagnostics_aggregator.h
@@ -251,6 +264,7 @@ target_link_libraries(recorder_core
         spdlog::spdlog
         nlohmann_json::nlohmann_json
         Opus::opus
+        FLAC::FLAC
         EBML::ebml
         Matroska::matroska
         fdk-aac
@@ -310,6 +324,16 @@ exosnap_add_gtest(
             src/pcm_audio_encoder.cpp
 )
 target_include_directories(test_pcm_audio_encoder PRIVATE src include)
+
+# Audio v2 (0.6.0): FLAC lossless encoder (links libFLAC; not pure-logic).
+exosnap_add_gtest(
+    NAME test_flac_audio_encoder
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_flac_audio_encoder.cpp
+            src/flac_audio_encoder.cpp
+    LIBRARIES FLAC::FLAC
+)
+target_include_directories(test_flac_audio_encoder PRIVATE src include)
 
 exosnap_add_gtest(
     NAME test_audio_encoding_params

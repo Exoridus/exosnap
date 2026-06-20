@@ -47,12 +47,12 @@ fs::path project_root() {
 }
 
 const std::vector<std::string> k_expected_licenses = {
-    "spdlog.txt",  "nlohmann_json.txt", "tomlplusplus.txt", "opus.txt",   "fdk-aac.txt",
-    "libebml.txt", "libmatroska.txt",   "qt.txt",           "ffmpeg.txt",
+    "spdlog.txt", "nlohmann_json.txt", "tomlplusplus.txt", "opus.txt", "fdk-aac.txt",
+    "flac.txt",   "libebml.txt",       "libmatroska.txt",  "qt.txt",   "ffmpeg.txt",
 };
 
 const std::vector<std::string> k_expected_notices_sections = {
-    "spdlog", "nlohmann/json", "toml++",     "Opus",       "FDK-AAC",        "libebml", "libmatroska",
+    "spdlog", "nlohmann/json", "toml++",     "Opus",       "FDK-AAC",        "FLAC", "libebml", "libmatroska",
     "Qt",     "FFmpeg",        "GoogleTest", "Build-only", "System/runtime",
 };
 

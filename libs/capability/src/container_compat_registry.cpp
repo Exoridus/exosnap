@@ -35,9 +35,12 @@ std::string_view ToString(ContainerCompatLevel level) noexcept {
 //   MKV  | AV1          | AAC   → Recommended  (validated M3.2 path)
 //   MKV  | AV1          | PCM   → Allowed      (uncompressed S16LE A_PCM/INT_LIT;
 //                                               Matroska-only, 0.6.0 Audio v2)
+//   MKV  | AV1          | FLAC  → Allowed      (lossless A_FLAC via libFLAC;
+//                                               Matroska-only, 0.6.0 Audio v2)
 //   MKV  | HEVC         | Opus  → Experimental (not implemented; planned)
 //   MKV  | HEVC         | AAC   → Experimental (not implemented; planned)
 //   MKV  | HEVC         | PCM   → Experimental (HEVC video not implemented)
+//   MKV  | HEVC         | FLAC  → Experimental (HEVC video not implemented)
 //   MKV  | H.264        | AAC   → Recommended  (validated MKV H.264+AAC)
 //   MKV  | H.264        | Opus  → Allowed      (Matroska carries Opus natively;
 //                                               Opus-in-MKV write path is
@@ -46,22 +49,28 @@ std::string_view ToString(ContainerCompatLevel level) noexcept {
 //                                               H.264+Opus not yet on file)
 //   MKV  | H.264        | PCM   → Allowed      (uncompressed S16LE A_PCM/INT_LIT;
 //                                               Matroska-only, 0.6.0 Audio v2)
+//   MKV  | H.264        | FLAC  → Allowed      (lossless A_FLAC via libFLAC;
+//                                               Matroska-only, 0.6.0 Audio v2)
 //
 //   MP4  | H.264        | AAC   → Recommended  (primary validated MP4 path,
 //                                               delivered via remux-on-stop ADR 0014)
 //   MP4  | H.264        | Opus  → Prohibited   (ADR 0010: Opus-in-MP4 is Prohibited)
 //   MP4  | H.264        | PCM   → Experimental (sample-entry variant unspecified;
 //                                               player matrix not on file)
+//   MP4  | H.264        | FLAC  → Experimental (FLAC-in-MP4 not specified here)
 //   MP4  | HEVC         | AAC   → Experimental (not implemented; hvc1/hev1 open)
 //   MP4  | HEVC         | Opus  → Prohibited   (Opus-in-MP4 is Prohibited)
 //   MP4  | HEVC         | PCM   → Experimental (not implemented)
+//   MP4  | HEVC         | FLAC  → Experimental (not implemented)
 //   MP4  | AV1          | AAC   → Experimental (deferred; AV1-in-MP4 not validated)
 //   MP4  | AV1          | Opus  → Prohibited   (Opus-in-MP4 is Prohibited)
 //   MP4  | AV1          | PCM   → Experimental (not implemented)
+//   MP4  | AV1          | FLAC  → Experimental (not implemented)
 //
 //   WebM | AV1          | Opus  → Recommended  (primary validated WebM path)
 //   WebM | AV1          | AAC   → Prohibited   (WebM does not carry AAC)
 //   WebM | AV1          | PCM   → Prohibited   (WebM does not carry PCM)
+//   WebM | AV1          | FLAC  → Prohibited   (WebM does not carry FLAC)
 //   WebM | HEVC         | Opus  → Prohibited   (WebM does not carry H.264/HEVC)
 //   WebM | HEVC         | AAC   → Prohibited
 //   WebM | HEVC         | PCM   → Prohibited
@@ -93,6 +102,10 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
                 return {ContainerCompatLevel::Allowed,
                         "MKV + AV1 + PCM: uncompressed 16-bit signed little-endian PCM (A_PCM/INT_LIT). "
                         "Large files; lossless audio. Matroska-only (0.6.0 Audio v2)."};
+            if (audio == AudioCodec::Flac)
+                return {ContainerCompatLevel::Allowed,
+                        "MKV + AV1 + FLAC: lossless FLAC (A_FLAC) via libFLAC. "
+                        "Smaller than PCM, still lossless. Matroska-only (0.6.0 Audio v2)."};
         }
         if (video == VideoCodec::H264Nvenc) {
             if (audio == AudioCodec::AacMf)
@@ -106,6 +119,10 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
                 return {ContainerCompatLevel::Allowed,
                         "MKV + H.264 + PCM: uncompressed 16-bit signed little-endian PCM (A_PCM/INT_LIT). "
                         "Large files; lossless audio. Matroska-only (0.6.0 Audio v2)."};
+            if (audio == AudioCodec::Flac)
+                return {ContainerCompatLevel::Allowed,
+                        "MKV + H.264 + FLAC: lossless FLAC (A_FLAC) via libFLAC. "
+                        "Smaller than PCM, still lossless. Matroska-only (0.6.0 Audio v2)."};
         }
         if (video == VideoCodec::HevcNvenc) {
             if (audio == AudioCodec::AacMf)
@@ -114,6 +131,8 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
                 return {ContainerCompatLevel::Experimental, "MKV + HEVC + Opus: planned but not yet implemented."};
             if (audio == AudioCodec::Pcm)
                 return {ContainerCompatLevel::Experimental, "MKV + HEVC + PCM: not implemented."};
+            if (audio == AudioCodec::Flac)
+                return {ContainerCompatLevel::Experimental, "MKV + HEVC + FLAC: not implemented."};
         }
         return {ContainerCompatLevel::Prohibited, "Unknown MKV combination."};
     }
@@ -133,6 +152,9 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
                 return {ContainerCompatLevel::Experimental,
                         "MP4 + H.264 + PCM: ISO-BMFF PCM sample-entry variant not yet specified; "
                         "player matrix not on file (ADR 0010)."};
+            if (audio == AudioCodec::Flac)
+                return {ContainerCompatLevel::Experimental,
+                        "MP4 + H.264 + FLAC: FLAC-in-MP4 not specified in this build (use MKV for FLAC)."};
         }
         if (video == VideoCodec::HevcNvenc) {
             if (audio == AudioCodec::AacMf)
@@ -140,6 +162,8 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
                         "MP4 + HEVC + AAC: not implemented; hvc1/hev1 codec-tag choice unresolved (ADR 0010)."};
             if (audio == AudioCodec::Pcm)
                 return {ContainerCompatLevel::Experimental, "MP4 + HEVC + PCM: not implemented."};
+            if (audio == AudioCodec::Flac)
+                return {ContainerCompatLevel::Experimental, "MP4 + HEVC + FLAC: not implemented."};
         }
         if (video == VideoCodec::Av1Nvenc) {
             if (audio == AudioCodec::AacMf)
@@ -147,6 +171,8 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
                         "MP4 + AV1 + AAC: deferred; AV1-in-MP4 container support not yet validated."};
             if (audio == AudioCodec::Pcm)
                 return {ContainerCompatLevel::Experimental, "MP4 + AV1 + PCM: not implemented."};
+            if (audio == AudioCodec::Flac)
+                return {ContainerCompatLevel::Experimental, "MP4 + AV1 + FLAC: not implemented."};
         }
         return {ContainerCompatLevel::Prohibited, "Unknown MP4 combination."};
     }
@@ -166,6 +192,8 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
                         "WebM does not support AAC. Use Opus for WebM recordings (ADR 0010)."};
             if (audio == AudioCodec::Pcm)
                 return {ContainerCompatLevel::Prohibited, "WebM does not support PCM. Use Opus for WebM recordings."};
+            if (audio == AudioCodec::Flac)
+                return {ContainerCompatLevel::Prohibited, "WebM does not support FLAC. Use Opus for WebM recordings."};
         }
         return {ContainerCompatLevel::Prohibited, "Unknown WebM combination."};
     }
@@ -230,7 +258,8 @@ void ContainerCompatRegistry::ReconcileCodecs(Container container, VideoCodec& v
     // preferring Opus → AAC → PCM for MKV/WebM, and AAC → Opus → PCM for MP4.
     // This preserves the video codec whenever possible (e.g. MKV + H264 + Opus
     // → MKV + H264 + AAC rather than falling all the way to AV1 + Opus).
-    const std::array<AudioCodec, 3> audio_candidates = {AudioCodec::AacMf, AudioCodec::Opus, AudioCodec::Pcm};
+    const std::array<AudioCodec, 4> audio_candidates = {AudioCodec::AacMf, AudioCodec::Opus, AudioCodec::Pcm,
+                                                        AudioCodec::Flac};
     for (const AudioCodec candidate_audio : audio_candidates) {
         if (candidate_audio == audio) {
             continue; // already tried (and failed at step 1)

@@ -122,8 +122,8 @@ reject it.
 
 ## Deferred
 
-- **FLAC** (lossless compressed) — the other 0.6.0 lossless codec; deferred to a
-  later slice.
+- **FLAC** (lossless compressed) — the other 0.6.0 lossless codec; delivered in
+  the following slice ([[0028-flac-audio-codec]]).
 - **Full channel / sample-format model** — arbitrary sample rate, mono/multichannel,
   and 24-/32-bit depths (`A_PCM/INT_LIT` at other bit depths, `A_PCM/FLOAT_IEEE`).
   This slice is fixed at 48 kHz / stereo / S16LE, matching the pipeline format.

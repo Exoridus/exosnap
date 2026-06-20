@@ -77,7 +77,17 @@ QString videoCodecText(VideoCodec c) {
 }
 
 QString audioCodecText(AudioCodec c) {
-    return c == AudioCodec::AacMf ? QStringLiteral("AAC") : QStringLiteral("Opus");
+    switch (c) {
+    case AudioCodec::AacMf:
+        return QStringLiteral("AAC");
+    case AudioCodec::Opus:
+        return QStringLiteral("Opus");
+    case AudioCodec::Pcm:
+        return QStringLiteral("PCM");
+    case AudioCodec::Flac:
+        return QStringLiteral("FLAC");
+    }
+    return QStringLiteral("Opus");
 }
 
 QString triggerText(DiagnosticsSplitTrigger t) {

@@ -169,6 +169,8 @@ QString audioCodecLabel(capability::AudioCodec codec) {
         return QStringLiteral("AAC");
     case capability::AudioCodec::Pcm:
         return QStringLiteral("PCM");
+    case capability::AudioCodec::Flac:
+        return QStringLiteral("FLAC");
     default:
         return QStringLiteral("AAC");
     }
@@ -204,6 +206,8 @@ QString audioCodecLabel(recorder_core::AudioCodec codec) {
         return QStringLiteral("AAC");
     case recorder_core::AudioCodec::Pcm:
         return QStringLiteral("PCM");
+    case recorder_core::AudioCodec::Flac:
+        return QStringLiteral("FLAC");
     }
     return QStringLiteral("AAC");
 }
@@ -1712,6 +1716,8 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
                 return QStringLiteral("AAC");
             case recorder_core::AudioCodec::Pcm:
                 return QStringLiteral("PCM");
+            case recorder_core::AudioCodec::Flac:
+                return QStringLiteral("FLAC");
             }
             return QStringLiteral("Opus");
         };
@@ -2617,6 +2623,9 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
             break;
         case capability::AudioCodec::Pcm:
             result.audio_codec = recorder_core::AudioCodec::Pcm;
+            break;
+        case capability::AudioCodec::Flac:
+            result.audio_codec = recorder_core::AudioCodec::Flac;
             break;
         }
         // Multi-segment split results (SPLIT-RECORDING-R1 / VR-007): segments are

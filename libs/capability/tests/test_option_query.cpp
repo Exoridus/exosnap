@@ -34,10 +34,12 @@ TEST(OptionQueryTest, MatroskaAv1AudioOptionsMatchBaseline) {
     const OptionEntry* aac = FindOptionByLabel(options, std::string(ToString(AudioCodec::AacMf)));
     const OptionEntry* opus = FindOptionByLabel(options, std::string(ToString(AudioCodec::Opus)));
     const OptionEntry* pcm = FindOptionByLabel(options, std::string(ToString(AudioCodec::Pcm)));
+    const OptionEntry* flac = FindOptionByLabel(options, std::string(ToString(AudioCodec::Flac)));
 
     ASSERT_NE(aac, nullptr);
     ASSERT_NE(opus, nullptr);
     ASSERT_NE(pcm, nullptr);
+    ASSERT_NE(flac, nullptr);
 
     EXPECT_TRUE(aac->selectable);
     EXPECT_EQ(aac->level, SupportLevel::Available);
@@ -49,6 +51,10 @@ TEST(OptionQueryTest, MatroskaAv1AudioOptionsMatchBaseline) {
     // ValidUnvalidated — selectable with a "not validated on this system" caveat.
     EXPECT_TRUE(pcm->selectable);
     EXPECT_EQ(pcm->level, SupportLevel::ValidUnvalidated);
+
+    // 0.6.0 Audio v2: MKV + AV1 + FLAC is Allowed → ValidUnvalidated, selectable.
+    EXPECT_TRUE(flac->selectable);
+    EXPECT_EQ(flac->level, SupportLevel::ValidUnvalidated);
 }
 
 TEST(OptionQueryTest, WebMAv1AudioOptionsMatchBaseline) {

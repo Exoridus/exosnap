@@ -65,6 +65,7 @@ enum class StreamAudioCodec {
     Aac,  // A_AAC
     Opus, // A_OPUS
     Pcm,  // A_PCM/INT_LIT (16-bit signed little-endian)
+    Flac, // A_FLAC (CodecPrivate = native fLaC header: marker + STREAMINFO)
 };
 
 // Per-audio-track codec private payload.
