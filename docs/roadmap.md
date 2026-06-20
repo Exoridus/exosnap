@@ -169,28 +169,39 @@ These underpin multiple versions and must not be scattered into UI `if`-chains:
 
 ## Next step
 
-**v0.4.0 — crash reporting and updates** *(in progress — implemented, pending release tag)*
+**v0.6.0 — Audio v2** *(code-complete — pending release tag)*
 
-The 0.4.0 wave is code-complete and undergoing release readiness: local-first Crashpad capture, the
-next-launch privacy-scrubbed crash dialog with Stage-0 GitHub-issue delivery, the Sentry EU SaaS DSN
-(Stage 1, consent-gated, compiled in under the official-build gate), update check with Stable/Preview
-channels, and ed25519 (Monocypher) + SHA-256 signed-manifest verification. Release plumbing — a CI
-job that validates the crash-capture ON build, crashpad_handler.exe packaged into the portable ZIP and
-MSI, and PDB symbol archiving — is in place. Deferred past 0.4.0: the immediate crash reporter
-(Crash A2), automated `sentry-cli` symbol upload (pending an auth token), and in-place auto-update
-(Update C; 0.4.0 is check + notify + manual download). The release tag is **not yet cut**.
+`0.4.0` (crash reporting + updates) and `0.5.0` (settings & media-capability: TOML config,
+profile export/import, video rate-control/bitrate, audio bitrate, split by time+size, curated
+themes) have shipped. The `0.6.0` **Audio v2** wave is now code-complete on `main` — each slice
+landed as its own CI-green PR:
 
-The 0.3.0 presence layer has shipped: capture-excluded recording and diagnostics overlays
-(ADR 0016), the tray icon with recording/paused + unread badge, notification toasts (low storage /
-saved / unexpected stop / recovery available), a class-1 countdown overlay, the capture-frame dock
-control, a refined region-selection overlay, close-to-tray, and the opt-in interactive
-quick-control pill. The notification "center" landed as a lightweight tray unread badge (no
-persistent panel) and the fullscreen/borderless/exclusive capture matrix was deferred to `0.12.x`
-(RC stabilization) as capture-engine reliability work rather than presence. The next wave is
-`0.4.0` — crash reporting (local-first Crashpad capture, privacy-scrubbed consent-gated delivery:
-Stage 0 via assisted GitHub issue, Stage 1 via automated opt-in upload to Sentry with EU data
-residency, symbol pipeline) and the update system (Stable/Preview channels, ed25519 (Monocypher
-verify) + SHA-256 signature verification, rollback).
+- **Per-track gain & mute** (#78) — per-source `gain_db` + `muted`, applied in the mixer.
+- **Brickwall limiter** (#94, ADR 0023) — replaces the mixer's naive hard-clip with a real peak
+  limiter; default on at 0 dBFS (smooths overs that previously clipped).
+- **Mic-DSP chain** — a reusable `MicDspAudioSrc` decorator applying, in order, a **high-pass
+  filter** (#95, ADR 0024), **noise gate** (#96, ADR 0025), **AGC** (#97, ADR 0026), and
+  **RNNoise** neural suppression (#100, ADR 0029). Every stage defaults OFF, so unaltered capture
+  is byte-identical when disabled.
+- **Lossless codecs** — **PCM** (`A_PCM/INT_LIT`, #98, ADR 0027) and **FLAC** (libFLAC, `A_FLAC`,
+  #99, ADR 0028) in MKV, at 48 kHz / stereo / 16-bit.
+
+Two new third-party dependencies (libFLAC, RNNoise) integrate cleanly on MSVC. The preset schema
+advanced 7 → 15 across the wave (pre-1.0: reset, no migration).
+
+**Deferred / follow-up:**
+- The **full channel/sample-format model** (arbitrary sample rate, channel count, 24/32-bit, MP4
+  PCM) is a large refactor of the hardcoded 48 kHz/stereo/F32 audio path and was **not required**
+  for the shipped PCM/FLAC — deferred to a later `0.6.x`/`0.7.0` wave.
+- The RNNoise model is fetched (SHA-verified) from `media.xiph.org` at configure time; mirroring it
+  to a project-owned release (as done for FFmpeg) is a recommended follow-up.
+- Live A/V playback verification of the new codecs is batched into the `0.6.0` consolidation round.
+- `0.6.0` release-prep (version bump, manifests, notes, tag) is maintainer-gated and not yet cut.
+
+Earlier waves for reference: the `0.3.0` presence layer shipped capture-excluded overlays
+(ADR 0016), tray icon + unread badge, notification toasts, countdown overlay, capture-frame control,
+refined region selection, and close-to-tray; the fullscreen/borderless/exclusive capture matrix was
+deferred to `0.12.x` (RC stabilization).
 
 ---
 
@@ -221,8 +232,8 @@ surface ships as a UI shell + placeholder banner in the Production Suite wave.
 
 **Settings Expert split.** The Quality card gained an Expert section (CQ · VBR · CBR rate control,
 bitrate, frame-timing — ADR 0009 mapping) hidden behind the Expert toggle. Audio likewise has an
-Expert section (mic gain slider, channel mode, bitrate, Opus complexity/frame-duration — ADR 0011
-context). The brickwall limiter is a real Expert control as of 0.6.0 (ADR 0023). v1.0-placeholder
-rows (chroma subsampling 0.7, HEVC codec 0.7, bit depth 0.7, HDR10 0.7, PCM/FLAC codecs 0.6,
-noise gate/AGC 0.6) are shown in the expert sections to communicate the roadmap without enabling
-unimplemented controls.
+context). As of the 0.6.0 Audio v2 wave the Expert audio section gained real controls for the
+brickwall limiter (ADR 0023), high-pass filter (0024), noise gate (0025), AGC (0026), and RNNoise
+(0029); PCM (0027) and FLAC (0028) are real audio-codec options in the Output card. The remaining
+v1.0-placeholder rows (chroma subsampling 0.7, HEVC codec 0.7, bit depth 0.7, HDR10 0.7) are shown
+to communicate the roadmap without enabling unimplemented controls.
