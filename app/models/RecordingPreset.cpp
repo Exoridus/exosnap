@@ -291,6 +291,16 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         config.audio.mic_gate_threshold_db = 0.0f;
     }
 
+    // Microphone automatic gain control (Audio v2 — 0.6.0): target loudness in
+    // dBFS. Reset NaN/Inf to -18 dB; clamp to the usable [-40, 0] dB range.
+    if (!std::isfinite(config.audio.mic_agc_target_db)) {
+        config.audio.mic_agc_target_db = -18.0f;
+    } else if (config.audio.mic_agc_target_db < -40.0f) {
+        config.audio.mic_agc_target_db = -40.0f;
+    } else if (config.audio.mic_agc_target_db > 0.0f) {
+        config.audio.mic_agc_target_db = 0.0f;
+    }
+
     // Webcam: delegate to the provided sanitizer (handles NaN/Inf + clamping).
     config.webcam = SanitizeWebcamSettings(config.webcam);
 
@@ -468,6 +478,13 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
         return false;
     }
     if (std::abs(a.audio.mic_gate_threshold_db - b.audio.mic_gate_threshold_db) > 1e-2f) {
+        return false;
+    }
+    // Mic AGC (Audio v2): enabled (exact) + target (1e-2 dB tolerance).
+    if (a.audio.mic_agc_enabled != b.audio.mic_agc_enabled) {
+        return false;
+    }
+    if (std::abs(a.audio.mic_agc_target_db - b.audio.mic_agc_target_db) > 1e-2f) {
         return false;
     }
 
@@ -692,6 +709,13 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (std::abs(a.audio.mic_gate_threshold_db - b.audio.mic_gate_threshold_db) > 1e-2f) {
+        return false;
+    }
+    // Mic AGC (Audio v2): enabled (exact) + target (1e-2 dB tolerance).
+    if (a.audio.mic_agc_enabled != b.audio.mic_agc_enabled) {
+        return false;
+    }
+    if (std::abs(a.audio.mic_agc_target_db - b.audio.mic_agc_target_db) > 1e-2f) {
         return false;
     }
 

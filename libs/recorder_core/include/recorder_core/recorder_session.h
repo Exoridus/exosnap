@@ -335,6 +335,20 @@ struct RecorderConfig {
     // Gate threshold in dBFS. Levels below this close the gate. Default -45 dB.
     float mic_gate_threshold_db = -45.0f;
 
+    // ---------------------------------------------------------------------------
+    // Microphone automatic gain control (Audio v2 — 0.6.0)
+    // ---------------------------------------------------------------------------
+
+    // When true, the microphone input is run through an automatic gain control
+    // (the third stage of the MicDspAudioSrc chain, after the high-pass filter
+    // and noise gate): a slowly-varying makeup gain tracks the mic level and
+    // drives it toward a target loudness (quiet talker boosted, loud attenuated).
+    // Default false: mic DSP alters captured audio, so it is opt-in.
+    bool mic_agc_enabled = false;
+
+    // AGC target loudness in dBFS. Default -18 dB.
+    float mic_agc_target_db = -18.0f;
+
     // Whether the mouse cursor is composited into the captured frames.
     // Maps to GraphicsCaptureSession.IsCursorCaptureEnabled. Default true = WGC default.
     bool capture_cursor = true;

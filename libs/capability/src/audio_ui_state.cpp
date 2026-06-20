@@ -48,6 +48,10 @@ AudioPlanResult BuildAudioPlan(const AudioUiState& state) {
     result.mic_gate_enabled = state.mic_gate_enabled;
     result.mic_gate_threshold_db = state.mic_gate_threshold_db;
 
+    // Microphone automatic gain control (Audio v2) — pass through directly.
+    result.mic_agc_enabled = state.mic_agc_enabled;
+    result.mic_agc_target_db = state.mic_agc_target_db;
+
     result.plan = recorder_core::ResolveAudioTracks(state.source_rows);
 
     const bool app_active = state.IsAppEnabled();

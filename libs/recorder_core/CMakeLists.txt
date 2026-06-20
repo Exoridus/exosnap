@@ -118,6 +118,15 @@ if(NOT EXISTS "${_nvenc_header}")
     )
     target_include_directories(test_noise_gate PRIVATE src)
 
+    # Audio v2 (0.6.0): mic automatic gain control DSP (self-contained; no FFmpeg/NVENC).
+    exosnap_add_gtest(
+        NAME test_automatic_gain_control
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_automatic_gain_control.cpp
+                src/automatic_gain_control.cpp
+    )
+    target_include_directories(test_automatic_gain_control PRIVATE src)
+
     # Audio v2 (0.6.0): MicDspAudioSrc decorator (self-contained; no FFmpeg/NVENC).
     exosnap_add_gtest(
         NAME test_mic_dsp_audio_src
@@ -126,6 +135,7 @@ if(NOT EXISTS "${_nvenc_header}")
                 src/mic_dsp_audio_src.cpp
                 src/high_pass_filter.cpp
                 src/noise_gate.cpp
+                src/automatic_gain_control.cpp
     )
     target_include_directories(test_mic_dsp_audio_src PRIVATE src include)
 
@@ -189,6 +199,8 @@ add_library(recorder_core STATIC
     src/high_pass_filter.h
     src/noise_gate.cpp
     src/noise_gate.h
+    src/automatic_gain_control.cpp
+    src/automatic_gain_control.h
     src/mic_dsp_audio_src.cpp
     src/mic_dsp_audio_src.h
     src/wasapi_capture_src.cpp
@@ -432,6 +444,15 @@ exosnap_add_gtest(
 )
 target_include_directories(test_noise_gate PRIVATE src)
 
+# Audio v2 (0.6.0): mic automatic gain control DSP (self-contained; no FFmpeg/NVENC).
+exosnap_add_gtest(
+    NAME test_automatic_gain_control
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_automatic_gain_control.cpp
+            src/automatic_gain_control.cpp
+)
+target_include_directories(test_automatic_gain_control PRIVATE src)
+
 # Audio v2 (0.6.0): MicDspAudioSrc decorator (self-contained; no FFmpeg/NVENC).
 exosnap_add_gtest(
     NAME test_mic_dsp_audio_src
@@ -440,6 +461,7 @@ exosnap_add_gtest(
             src/mic_dsp_audio_src.cpp
             src/high_pass_filter.cpp
             src/noise_gate.cpp
+            src/automatic_gain_control.cpp
 )
 target_include_directories(test_mic_dsp_audio_src PRIVATE src include)
 
