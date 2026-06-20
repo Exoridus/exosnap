@@ -465,6 +465,8 @@ class ConfigPage : public QWidget {
     // Microphone automatic gain control (Audio v2 — 0.6.0).
     ui::widgets::ExoCheckBox* mic_agc_check_ = nullptr;
     QDoubleSpinBox* mic_agc_target_spin_ = nullptr;
+    // Microphone RNNoise neural noise suppression (Audio v2 — 0.6.0). Bool only.
+    ui::widgets::ExoCheckBox* mic_rnnoise_check_ = nullptr;
 
     // SETTINGS-SEARCH-R1: settings search box and match count label.
     QWidget* settings_search_pill_ = nullptr;

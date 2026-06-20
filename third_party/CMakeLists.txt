@@ -118,6 +118,98 @@ _exosnap_install_license("libFLAC 1.4.3" "${flac_SOURCE_DIR}/COPYING.Xiph" "flac
 set(BUILD_SHARED_LIBS ${_exosnap_saved_bsl_flac} CACHE BOOL "" FORCE)
 unset(_exosnap_saved_bsl_flac)
 
+# --- RNNoise (xiph/rnnoise, BSD-3-Clause) ---
+# Neural (RNN) noise suppression for the microphone (4th stage of the mic-DSP
+# chain, after HPF -> gate -> AGC). xiph/rnnoise is an autotools project with NO
+# usable CMakeLists, so we Populate the sources and build OUR OWN static target.
+#
+# Two upstream traps, both handled here (see docs/decisions/0029-mic-rnnoise.md):
+#  1. The trained model weights are NOT committed to git on master — they are
+#     fetched by download_model.sh as a tarball keyed by `model_version`. We
+#     replicate that: download the pinned model tarball and extract it into the
+#     populated src/ so rnnoise_data.{c,h} exist before we glob.
+#  2. The git tags (v0.1.x) DO commit the model in-tree but their pitch.c /
+#     celt_lpc.c use C99 VLAs that MSVC cl.exe rejects (error C2057/C2466).
+#     master is VLA-free and compiles clean on MSVC, so we pin master.
+#
+# We curate the source list explicitly (NOT a blind src/*.c glob) to exclude the
+# four tool programs with their own main() (dump_features.c, dump_rnnoise_tables.c,
+# parse_lpcnet_weights.c provides parse_weights and IS included; write_weights.c
+# is excluded), the smaller alternate model (rnnoise_data_little.c — duplicate
+# symbols), and the whole x86/ RTCD dispatch (we use the scalar nnet_default.c
+# path; RNN_ENABLE_X86_RTCD is left undefined). The mic frame is one 480-sample
+# 48 kHz mono block per 10 ms, trivially cheap even scalar.
+FetchContent_Declare(
+  rnnoise
+  GIT_REPOSITORY https://github.com/xiph/rnnoise.git
+  GIT_TAG        70f1d256acd4b34a572f999a05c87bf00b67730d
+)
+FetchContent_MakeAvailable(rnnoise)
+
+# The model_version file IS the SHA256 of the model tarball (download_model.sh
+# validates exactly this). Read it once: it drives both the download verification
+# and the staged license label.
+file(READ "${rnnoise_SOURCE_DIR}/model_version" _rnnoise_model_hash)
+string(STRIP "${_rnnoise_model_hash}" _rnnoise_model_hash)
+
+# Trap 1: fetch + extract the pinned model weights into the populated src/ if the
+# generated rnnoise_data.c is not already present (idempotent across reconfigures).
+if(NOT EXISTS "${rnnoise_SOURCE_DIR}/src/rnnoise_data.c")
+    set(_rnnoise_model_tarball "rnnoise_data-${_rnnoise_model_hash}.tar.gz")
+    set(_rnnoise_model_url
+        "https://media.xiph.org/rnnoise/models/${_rnnoise_model_tarball}")
+    set(_rnnoise_model_dl "${rnnoise_SOURCE_DIR}/${_rnnoise_model_tarball}")
+    message(STATUS "RNNoise: downloading model weights ${_rnnoise_model_tarball}")
+    file(DOWNLOAD "${_rnnoise_model_url}" "${_rnnoise_model_dl}"
+         EXPECTED_HASH "SHA256=${_rnnoise_model_hash}"
+         STATUS _rnnoise_dl_status
+         SHOW_PROGRESS)
+    list(GET _rnnoise_dl_status 0 _rnnoise_dl_code)
+    if(NOT _rnnoise_dl_code EQUAL 0)
+        list(GET _rnnoise_dl_status 1 _rnnoise_dl_msg)
+        message(FATAL_ERROR
+            "RNNoise: model download failed (${_rnnoise_dl_code}): ${_rnnoise_dl_msg}")
+    endif()
+    file(ARCHIVE_EXTRACT INPUT "${_rnnoise_model_dl}"
+         DESTINATION "${rnnoise_SOURCE_DIR}")
+    if(NOT EXISTS "${rnnoise_SOURCE_DIR}/src/rnnoise_data.c")
+        message(FATAL_ERROR
+            "RNNoise: model extraction did not produce src/rnnoise_data.c")
+    endif()
+endif()
+
+# Curated scalar source set (see comment above). parse_lpcnet_weights.c is the
+# weight-blob parser used by rnnoise_init and has no main(); it is required.
+add_library(rnnoise STATIC
+    "${rnnoise_SOURCE_DIR}/src/denoise.c"
+    "${rnnoise_SOURCE_DIR}/src/rnn.c"
+    "${rnnoise_SOURCE_DIR}/src/pitch.c"
+    "${rnnoise_SOURCE_DIR}/src/kiss_fft.c"
+    "${rnnoise_SOURCE_DIR}/src/celt_lpc.c"
+    "${rnnoise_SOURCE_DIR}/src/nnet.c"
+    "${rnnoise_SOURCE_DIR}/src/nnet_default.c"
+    "${rnnoise_SOURCE_DIR}/src/parse_lpcnet_weights.c"
+    "${rnnoise_SOURCE_DIR}/src/rnnoise_tables.c"
+    "${rnnoise_SOURCE_DIR}/src/rnnoise_data.c"
+)
+target_include_directories(rnnoise PUBLIC "${rnnoise_SOURCE_DIR}/include")
+target_include_directories(rnnoise PRIVATE "${rnnoise_SOURCE_DIR}/src")
+# MSVC's <math.h> only defines M_PI under _USE_MATH_DEFINES (denoise.c/pitch.c
+# need it). All config.h includes are #ifdef HAVE_CONFIG_H-guarded, so we leave
+# HAVE_CONFIG_H undefined and need no generated config header.
+target_compile_definitions(rnnoise PRIVATE _USE_MATH_DEFINES)
+set_target_properties(rnnoise PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# Suppress upstream C-source warnings (this is vendored third-party code) — scope
+# the suppression to the rnnoise target only; do NOT relax warnings project-wide.
+if(MSVC)
+    target_compile_options(rnnoise PRIVATE /w)
+else()
+    target_compile_options(rnnoise PRIVATE -w)
+endif()
+add_library(RNNoise::rnnoise ALIAS rnnoise)
+_exosnap_install_license("RNNoise ${_rnnoise_model_hash}"
+    "${rnnoise_SOURCE_DIR}/COPYING" "rnnoise.txt")
+
 # --- libebml release-1.4.5 (LGPL 2.1) ---
 # OVERRIDE_FIND_PACKAGE redirects libmatroska's find_package(EBML) here so
 # it uses the FetchContent-built target rather than a system installation.

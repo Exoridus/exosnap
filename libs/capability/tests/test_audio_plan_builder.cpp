@@ -139,6 +139,21 @@ TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesMicAgcSettings) {
     EXPECT_FLOAT_EQ(result.mic_agc_target_db, -24.0f);
 }
 
+TEST(AudioPlanBuilderTest, BuildAudioPlan_DefaultMicRnnoiseDisabled) {
+    AudioUiState state;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_FALSE(result.mic_rnnoise_enabled);
+}
+
+TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesMicRnnoiseSetting) {
+    AudioUiState state;
+    state.mic_rnnoise_enabled = true;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_TRUE(result.mic_rnnoise_enabled);
+}
+
 TEST(AudioPlanBuilderTest, WindowTarget_AppOnly) {
     AudioUiState state = WindowSep(1001u);
     state.source_rows = {{K::App, true, false}};

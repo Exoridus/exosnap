@@ -753,6 +753,8 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     // Microphone automatic gain control (Audio v2).
     config.mic_agc_enabled = plan.mic_agc_enabled;
     config.mic_agc_target_db = plan.mic_agc_target_db;
+    // Microphone RNNoise neural noise suppression (Audio v2).
+    config.mic_rnnoise_enabled = plan.mic_rnnoise_enabled;
 
     if (plan.record_audio && PlanRequiresTargetPid(plan.plan) && !plan.audio_target_process_id.has_value()) {
         diagnostics::AppLog::error(QStringLiteral("record.failure"),

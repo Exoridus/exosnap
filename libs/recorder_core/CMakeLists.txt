@@ -149,6 +149,16 @@ if(NOT EXISTS "${_nvenc_header}")
     )
     target_include_directories(test_automatic_gain_control PRIVATE src)
 
+    # Audio v2 (0.6.0): RNNoise neural noise-suppression DSP (links rnnoise).
+    exosnap_add_gtest(
+        NAME test_rnnoise_denoiser
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_rnnoise_denoiser.cpp
+                src/rnnoise_denoiser.cpp
+        LIBRARIES RNNoise::rnnoise
+    )
+    target_include_directories(test_rnnoise_denoiser PRIVATE src include)
+
     # Audio v2 (0.6.0): MicDspAudioSrc decorator (self-contained; no FFmpeg/NVENC).
     exosnap_add_gtest(
         NAME test_mic_dsp_audio_src
@@ -158,6 +168,8 @@ if(NOT EXISTS "${_nvenc_header}")
                 src/high_pass_filter.cpp
                 src/noise_gate.cpp
                 src/automatic_gain_control.cpp
+                src/rnnoise_denoiser.cpp
+        LIBRARIES RNNoise::rnnoise
     )
     target_include_directories(test_mic_dsp_audio_src PRIVATE src include)
 
@@ -223,6 +235,8 @@ add_library(recorder_core STATIC
     src/noise_gate.h
     src/automatic_gain_control.cpp
     src/automatic_gain_control.h
+    src/rnnoise_denoiser.cpp
+    src/rnnoise_denoiser.h
     src/mic_dsp_audio_src.cpp
     src/mic_dsp_audio_src.h
     src/wasapi_capture_src.cpp
@@ -265,6 +279,7 @@ target_link_libraries(recorder_core
         nlohmann_json::nlohmann_json
         Opus::opus
         FLAC::FLAC
+        RNNoise::rnnoise
         EBML::ebml
         Matroska::matroska
         fdk-aac
@@ -497,6 +512,17 @@ exosnap_add_gtest(
 )
 target_include_directories(test_automatic_gain_control PRIVATE src)
 
+# Audio v2 (0.6.0): RNNoise neural noise-suppression DSP (links rnnoise; not
+# pure-logic — exercises the real RNNoise default model).
+exosnap_add_gtest(
+    NAME test_rnnoise_denoiser
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_rnnoise_denoiser.cpp
+            src/rnnoise_denoiser.cpp
+    LIBRARIES RNNoise::rnnoise
+)
+target_include_directories(test_rnnoise_denoiser PRIVATE src include)
+
 # Audio v2 (0.6.0): MicDspAudioSrc decorator (self-contained; no FFmpeg/NVENC).
 exosnap_add_gtest(
     NAME test_mic_dsp_audio_src
@@ -506,6 +532,8 @@ exosnap_add_gtest(
             src/high_pass_filter.cpp
             src/noise_gate.cpp
             src/automatic_gain_control.cpp
+            src/rnnoise_denoiser.cpp
+    LIBRARIES RNNoise::rnnoise
 )
 target_include_directories(test_mic_dsp_audio_src PRIVATE src include)
 

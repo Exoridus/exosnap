@@ -52,6 +52,9 @@ AudioPlanResult BuildAudioPlan(const AudioUiState& state) {
     result.mic_agc_enabled = state.mic_agc_enabled;
     result.mic_agc_target_db = state.mic_agc_target_db;
 
+    // Microphone RNNoise neural noise suppression (Audio v2) — pass through directly.
+    result.mic_rnnoise_enabled = state.mic_rnnoise_enabled;
+
     result.plan = recorder_core::ResolveAudioTracks(state.source_rows);
 
     const bool app_active = state.IsAppEnabled();

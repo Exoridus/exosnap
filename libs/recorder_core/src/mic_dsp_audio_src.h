@@ -5,6 +5,7 @@
 #include "automatic_gain_control.h"
 #include "high_pass_filter.h"
 #include "noise_gate.h"
+#include "rnnoise_denoiser.h"
 
 #include <cstdint>
 #include <memory>
@@ -17,10 +18,10 @@ namespace recorder_core {
 // MicDspConfig (Audio v2 — 0.6.0)
 // ---------------------------------------------------------------------------
 //
-// The single aggregate of microphone-DSP settings. Today it carries the
-// high-pass filter and the noise gate; later Audio v2 slices (AGC, RNNoise) add
-// their own enable flags and parameters here so MicDspAudioSrc stays the one
-// chain that owns all mic processing.
+// The single aggregate of microphone-DSP settings, carrying every stage of the
+// mic-DSP chain: the high-pass filter, the noise gate, the AGC, and RNNoise
+// neural noise suppression. MicDspAudioSrc stays the one chain that owns all mic
+// processing.
 struct MicDspConfig {
     bool hpf_enabled = false;
     float hpf_cutoff_hz = 80.0f;
@@ -31,10 +32,12 @@ struct MicDspConfig {
     bool agc_enabled = false;
     float agc_target_db = -18.0f;
 
+    bool rnnoise_enabled = false;
+
     // True when at least one DSP stage is enabled. When false the decorator is a
     // no-op and the caller should not bother wrapping the mic source.
     [[nodiscard]] bool AnyEnabled() const {
-        return hpf_enabled || gate_enabled || agc_enabled;
+        return hpf_enabled || gate_enabled || agc_enabled || rnnoise_enabled;
     }
 };
 
@@ -47,9 +50,9 @@ struct MicDspConfig {
 // decorator always emits interleaved Float32 (Int16 inner sources are converted
 // up), preserving the inner channel count and sample rate.
 //
-// Stages run in a fixed order (high-pass filter, then noise gate, then AGC).
-// The class is not thread-safe; one source is processed on one thread (the audio
-// thread).
+// Stages run in a fixed order (high-pass filter, then noise gate, then AGC, then
+// RNNoise neural noise suppression). The class is not thread-safe; one source is
+// processed on one thread (the audio thread).
 class MicDspAudioSrc final : public IAudioCaptureSource {
   public:
     MicDspAudioSrc(std::unique_ptr<IAudioCaptureSource> inner, const MicDspConfig& cfg);
@@ -73,6 +76,7 @@ class MicDspAudioSrc final : public IAudioCaptureSource {
     HighPassFilter hpf_;
     NoiseGate gate_;
     AutomaticGainControl agc_;
+    RnnoiseDenoiser rnnoise_;
 
     std::vector<float> scratch_buffer_; // interleaved Float32, valid until ReleaseBuffer
     uint32_t channels_ = 2;

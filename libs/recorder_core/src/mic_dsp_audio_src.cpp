@@ -69,6 +69,12 @@ bool MicDspAudioSrc::Init(std::string& out_error) {
     agc_.Configure(ac);
     agc_.Reset();
 
+    RnnoiseDenoiser::Config rc;
+    rc.sample_rate = sample_rate_;
+    rc.channels = channels_;
+    rnnoise_.Configure(rc);
+    rnnoise_.Reset();
+
     initialized_ = true;
     return true;
 }
@@ -100,9 +106,12 @@ bool MicDspAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_err
     ConvertToFloat32(src_buf.bytes, src_buf.num_frames, channels_, inner_->SampleFormat(), scratch_buffer_.data());
 
     // Run the enabled DSP stages in order: high-pass filter first, then the
-    // noise gate, then AGC. HPF before the gate so low-frequency rumble does not
-    // hold the gate open; AGC last so it normalizes the already-cleaned signal
-    // (the gate has removed the noise bed, so the AGC won't pump it up).
+    // noise gate, then AGC, then RNNoise. HPF before the gate so low-frequency
+    // rumble does not hold the gate open; AGC after the gate so it normalizes the
+    // already-cleaned signal (the gate has removed the noise bed, so the AGC
+    // won't pump it up); RNNoise last so the neural model sees a level-normalized
+    // signal and removes the residual non-stationary noise the cheaper stages
+    // leave behind.
     if (cfg_.hpf_enabled) {
         hpf_.Process(scratch_buffer_.data(), src_buf.num_frames);
     }
@@ -111,6 +120,9 @@ bool MicDspAudioSrc::AcquireBuffer(RawAudioBuffer& out_buf, std::string& out_err
     }
     if (cfg_.agc_enabled) {
         agc_.Process(scratch_buffer_.data(), src_buf.num_frames);
+    }
+    if (cfg_.rnnoise_enabled) {
+        rnnoise_.Process(scratch_buffer_.data(), src_buf.num_frames);
     }
 
     out_buf.bytes = reinterpret_cast<const uint8_t*>(scratch_buffer_.data());

@@ -120,6 +120,13 @@ TEST(MicDspAudioSrcTest, AnyEnabled_GateAloneEnablesChain) {
     EXPECT_TRUE(cfg.AnyEnabled());
 }
 
+TEST(MicDspAudioSrcTest, AnyEnabled_RnnoiseAloneEnablesChain) {
+    MicDspConfig cfg;
+    EXPECT_FALSE(cfg.AnyEnabled());
+    cfg.rnnoise_enabled = true;
+    EXPECT_TRUE(cfg.AnyEnabled());
+}
+
 // ---------------------------------------------------------------------------
 // Pass-through (DSP disabled) — output equals input within int16->float eps
 // ---------------------------------------------------------------------------
@@ -346,6 +353,41 @@ TEST(MicDspAudioSrcTest, FullChainHpfGateAgcRunsWithoutBlowup) {
     ASSERT_NE(out.bytes, nullptr);
 
     // Every output sample is finite and bounded (no NaN/Inf, no runaway gain).
+    const float* samples = reinterpret_cast<const float*>(out.bytes);
+    for (uint32_t i = 0; i < frames * 2; ++i) {
+        ASSERT_TRUE(std::isfinite(samples[i])) << "index " << i;
+        EXPECT_LE(std::fabs(samples[i]), 4.0f) << "index " << i;
+    }
+    src.ReleaseBuffer();
+}
+
+// The full mic-DSP chain with RNNoise as the 4th stage (HPF + gate + AGC +
+// RNNoise all on) runs end-to-end without blowing up; output is finite/bounded.
+TEST(MicDspAudioSrcTest, FullChainWithRnnoiseRunsWithoutBlowup) {
+    auto mock = std::make_unique<MockAudioCaptureSource>(2, AudioSampleFormat::Float32);
+    auto* mock_ptr = mock.get();
+    const uint32_t frames = 48000; // 1 s at 48 kHz — RNNoise's required rate
+    mock_ptr->SetPendingFrames(frames);
+    mock_ptr->SetData(MakeFloat32Bytes(frames, 2, 0.2f));
+
+    MicDspConfig cfg;
+    cfg.hpf_enabled = true;
+    cfg.hpf_cutoff_hz = 80.0f;
+    cfg.gate_enabled = true;
+    cfg.gate_threshold_db = -45.0f;
+    cfg.agc_enabled = true;
+    cfg.agc_target_db = -18.0f;
+    cfg.rnnoise_enabled = true;
+    ASSERT_TRUE(cfg.AnyEnabled());
+    MicDspAudioSrc src(std::move(mock), cfg);
+    std::string err;
+    ASSERT_TRUE(src.Init(err)) << err;
+
+    RawAudioBuffer out{};
+    ASSERT_TRUE(src.AcquireBuffer(out, err)) << err;
+    ASSERT_NE(out.bytes, nullptr);
+    EXPECT_EQ(out.num_frames, frames); // length preserved through the chain
+
     const float* samples = reinterpret_cast<const float*>(out.bytes);
     for (uint32_t i = 0; i < frames * 2; ++i) {
         ASSERT_TRUE(std::isfinite(samples[i])) << "index " << i;
