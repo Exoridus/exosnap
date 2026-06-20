@@ -5,12 +5,10 @@
 #include <QPainter>
 #include <QRectF>
 
-#include "../theme/ExoSnapPalette.h"
+#include "../theme/ExoSnapTheme.h"
 #include "../theme/LucideIcon.h"
 
 namespace exosnap::ui::widgets {
-
-using namespace exosnap::ui::theme;
 
 NotificationBell::NotificationBell(QWidget* parent) : QToolButton(parent) {
     setAutoRaise(true);
@@ -29,10 +27,10 @@ void NotificationBell::setUnreadCount(int count) {
 }
 
 void NotificationBell::updateIcon() {
-    const QString color = (unread_count_ > 0 || hovered_) ? QString::fromLatin1(ExoSnapPalette::kText0)
-                                                          : QString::fromLatin1(ExoSnapPalette::kText2);
+    const auto& t = exosnap::ui::theme::ActiveTheme();
+    const QString color = (unread_count_ > 0 || hovered_) ? QString::fromUtf8(t.ink) : QString::fromUtf8(t.mut);
     const qreal dpr = devicePixelRatioF();
-    setIcon(lucideIcon(QStringLiteral("bell"), color, 17, dpr));
+    setIcon(exosnap::ui::theme::lucideIcon(QStringLiteral("bell"), color, 17, dpr));
 }
 
 void NotificationBell::paintEvent(QPaintEvent* event) {
@@ -50,9 +48,9 @@ void NotificationBell::paintEvent(QPaintEvent* event) {
     const int badge_x = width() - badge_w - 1;
     const int badge_y = 2;
 
-    // Badge background (kWarn)
+    // Badge background (caution)
     p.setPen(Qt::NoPen);
-    p.setBrush(QColor(QString::fromLatin1(ExoSnapPalette::kWarn)));
+    p.setBrush(QColor(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().caution)));
     p.drawRoundedRect(QRectF(badge_x, badge_y, badge_w, badge_h), 6.5, 6.5);
 
     // Badge text

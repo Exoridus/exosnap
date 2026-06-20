@@ -697,7 +697,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         search_icon->setFixedSize(15, 15);
         search_icon->setScaledContents(true);
         search_icon->setPixmap(ui::theme::lucidePixmap(QStringLiteral("search"),
-                                                       QString::fromLatin1(ui::theme::ExoSnapPalette::kText3), 15,
+                                                       QString::fromUtf8(ui::theme::ActiveTheme().dim), 15,
                                                        search_icon->devicePixelRatioF()));
         pill_hl->addWidget(search_icon);
 

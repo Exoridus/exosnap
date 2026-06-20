@@ -1,6 +1,6 @@
 #include "AudioSourceToggle.h"
 
-#include "../theme/ExoSnapPalette.h"
+#include "../theme/ExoSnapTheme.h"
 
 #include <QByteArray>
 #include <QColor>
@@ -104,17 +104,15 @@ QSize AudioSourceToggle::minimumSizeHint() const {
 }
 
 void AudioSourceToggle::paintEvent(QPaintEvent* /*event*/) {
-    using theme::ExoSnapPalette;
-
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
 
     // Explicit circle rect: always kDiameter×kDiameter regardless of total height.
     const QRectF circle = QRectF(1.0, 1.0, kDiameter - 2.0, kDiameter - 2.0);
 
-    // ExoSnapPalette exposes accent-alpha roles as CSS rgba() strings (for QSS),
-    // which QColor cannot parse — derive the alpha variants from the accent hex.
-    const QColor accent(ExoSnapPalette::kAccent);
+    // Derive accent colour from the active theme.
+    const auto& t = exosnap::ui::theme::ActiveTheme();
+    const QColor accent(QString::fromUtf8(t.ac));
 
     QColor fill;
     QColor border;
@@ -128,7 +126,7 @@ void AudioSourceToggle::paintEvent(QPaintEvent* /*event*/) {
     } else {
         fill = QColor(255, 255, 255, 13); // subtle raise, matches hybrid "off" pill
         border = QColor(Qt::transparent);
-        icon = QColor(ExoSnapPalette::kText2);
+        icon = QColor(QString::fromUtf8(t.mut));
     }
 
     painter.setPen(border.alpha() > 0 ? QPen(border, 1.0) : Qt::NoPen);

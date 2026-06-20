@@ -2,7 +2,7 @@
 
 #include <QPainter>
 
-#include "../theme/ExoSnapPalette.h"
+#include "../theme/ExoSnapTheme.h"
 
 namespace exosnap::ui::widgets {
 
@@ -48,8 +48,9 @@ void ExoToggle::paintEvent(QPaintEvent* event) {
         track = QColor(255, 255, 255, static_cast<int>(0.05 * 255));
         thumb = QColor("#3A3A3F");
     } else if (checked) {
-        track = QColor(theme::ExoSnapPalette::kAccent);    // Studio Mint
-        thumb = QColor(theme::ExoSnapPalette::kAccentInk); // dark ink on accent fill
+        const auto& t = exosnap::ui::theme::ActiveTheme();
+        track = QColor(QString::fromUtf8(t.ac));     // primary accent
+        thumb = QColor(QString::fromUtf8(t.ac_ink)); // dark ink on accent fill
     }
 
     painter.setPen(Qt::NoPen);

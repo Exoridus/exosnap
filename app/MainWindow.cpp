@@ -945,9 +945,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         persisted_settings_.theme_id = id;
         settings_store_.Save(persisted_settings_);
         ui::theme::ReapplyTheme(*qApp, id);
-        // Repaint custom-painted widgets that read ActiveTheme().
-        if (auto* bm = findChild<QWidget*>(QStringLiteral("brandMarkWidget")))
-            bm->update();
+        // Repaint all custom-painted widgets that read ActiveTheme() directly.
+        // QSS-styled widgets are already repainted by ReapplyTheme/style-polish;
+        // QPainter widgets that call ActiveTheme() in paintEvent() need a manual kick.
+        for (QWidget* w : findChildren<QWidget*>())
+            w->update();
     });
 
     // Wire pill buttons to the existing recording actions on RecordPage.

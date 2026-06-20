@@ -1,6 +1,7 @@
 #include "StatusPill.h"
 
 #include "../theme/ExoSnapPalette.h"
+#include "../theme/ExoSnapTheme.h"
 
 #include <QFontMetrics>
 #include <QPaintEvent>
@@ -18,30 +19,58 @@ struct ToneColors {
 };
 
 ToneColors ColorsFor(StatusPill::Tone tone) {
-    using exosnap::ui::theme::ExoSnapPalette;
+    const auto& t = exosnap::ui::theme::ActiveTheme();
+    const QColor ok(QString::fromUtf8(t.success));
+    const QColor err(QString::fromUtf8(t.error));
+    const QColor warn(QString::fromUtf8(t.caution));
+    const QColor text1(exosnap::ui::theme::ThemeText1Color(t));
+    const QColor line2 = exosnap::ui::theme::ParseThemeColor(t.line2);
+    const QColor mut(QString::fromUtf8(t.mut));
+    // Info tone (azure/blue-grey) has no theme token yet — keep the static
+    // value from the dark-default palette; it stays visually neutral across themes.
+    const QColor info(exosnap::ui::theme::ExoSnapPalette::kInfo);
 
     switch (tone) {
-    case StatusPill::Tone::Ready:
-        return {QColor(ExoSnapPalette::kOk), QColor(120, 218, 149, 110), QColor(120, 218, 149, 28),
-                QColor(ExoSnapPalette::kOk)};
-    case StatusPill::Tone::Recording:
-        return {QColor(ExoSnapPalette::kErr), QColor(240, 91, 84, 122), QColor(240, 91, 84, 36),
-                QColor(ExoSnapPalette::kErr)};
-    case StatusPill::Tone::Warn:
-        return {QColor(ExoSnapPalette::kWarn), QColor(194, 150, 83, 118), QColor(194, 150, 83, 24),
-                QColor(ExoSnapPalette::kWarn)};
-    case StatusPill::Tone::Blocked:
-        return {QColor(ExoSnapPalette::kErr), QColor(240, 91, 84, 128), QColor(240, 91, 84, 42),
-                QColor(ExoSnapPalette::kErr)};
-    case StatusPill::Tone::Info:
+    case StatusPill::Tone::Ready: {
+        QColor border_ok = ok;
+        border_ok.setAlpha(110);
+        QColor bg_ok = ok;
+        bg_ok.setAlpha(28);
+        return {ok, border_ok, bg_ok, ok};
+    }
+    case StatusPill::Tone::Recording: {
+        QColor border_err = err;
+        border_err.setAlpha(122);
+        QColor bg_err = err;
+        bg_err.setAlpha(36);
+        return {err, border_err, bg_err, err};
+    }
+    case StatusPill::Tone::Warn: {
+        QColor border_warn = warn;
+        border_warn.setAlpha(118);
+        QColor bg_warn = warn;
+        bg_warn.setAlpha(24);
+        return {warn, border_warn, bg_warn, warn};
+    }
+    case StatusPill::Tone::Blocked: {
+        QColor border_blocked = err;
+        border_blocked.setAlpha(128);
+        QColor bg_blocked = err;
+        bg_blocked.setAlpha(42);
+        return {err, border_blocked, bg_blocked, err};
+    }
+    case StatusPill::Tone::Info: {
         // DF-15: azure/blue-grey accent — visually distinct from amber Warn and
         // coral Recording, used for pre-recording transitional states (Countdown, Starting).
-        return {QColor(ExoSnapPalette::kInfo), QColor(127, 190, 232, 110), QColor(127, 190, 232, 24),
-                QColor(ExoSnapPalette::kInfo)};
+        QColor border_info = info;
+        border_info.setAlpha(110);
+        QColor bg_info = info;
+        bg_info.setAlpha(24);
+        return {info, border_info, bg_info, info};
+    }
     case StatusPill::Tone::Neutral:
     default:
-        return {QColor(ExoSnapPalette::kText1), QColor(ExoSnapPalette::kLine2), QColor(50, 46, 43, 0),
-                QColor(ExoSnapPalette::kText2)};
+        return {text1, line2, QColor(0, 0, 0, 0), mut};
     }
 }
 

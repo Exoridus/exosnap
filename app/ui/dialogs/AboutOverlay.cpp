@@ -4,6 +4,7 @@
 
 #include "../brand/BrandMarkWidget.h"
 #include "../theme/ExoSnapPalette.h"
+#include "../theme/ExoSnapTheme.h"
 
 #ifndef EXOSNAP_BUILD_CONFIG
 #define EXOSNAP_BUILD_CONFIG "Unknown"
@@ -151,9 +152,9 @@ QWidget* AboutOverlay::buildCard() {
     auto* wordmark = new QLabel(card);
     wordmark->setProperty("labelRole", "aboutWordmark");
     wordmark->setTextFormat(Qt::RichText);
-    wordmark->setText(QStringLiteral("<span style=\"color:%1;\">exo</span><span style=\"color:%2;\">snap</span>")
-                          .arg(QString::fromLatin1(theme::ExoSnapPalette::kText0),
-                               QString::fromLatin1(theme::ExoSnapPalette::kAccent)));
+    wordmark->setText(
+        QStringLiteral("<span style=\"color:%1;\">exo</span><span style=\"color:%2;\">snap</span>")
+            .arg(QString::fromUtf8(theme::ActiveTheme().ink), QString::fromUtf8(theme::ActiveTheme().ac)));
 
     auto* version_line = new QLabel(QStringLiteral("Version %1 \xc2\xb7 for Windows").arg(version), card);
     version_line->setProperty("labelRole", "aboutVersionLine");
@@ -303,7 +304,7 @@ void AboutOverlay::mousePressEvent(QMouseEvent* event) {
 
 void AboutOverlay::paintEvent(QPaintEvent* /*event*/) {
     QPainter painter(this);
-    QColor backdrop(theme::ExoSnapPalette::kBg0);
+    QColor backdrop(QString::fromUtf8(theme::ActiveTheme().bg));
     backdrop.setAlpha(kBackdropAlpha);
     painter.fillRect(rect(), backdrop);
 }

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.27)
+﻿cmake_minimum_required(VERSION 3.27)
 
 #Local Qt install hint — override via Qt6_DIR or CMAKE_PREFIX_PATH.
 if(NOT Qt6_DIR)
@@ -461,6 +461,8 @@ exosnap_add_app_test_support(exosnap_source_picker_test_support
     ui/widgets/CaptureTargetCard.cpp
     ui/widgets/RegionPresetCard.cpp
     services/ThumbnailCapture.cpp
+    # THEME-SLICE-2C: SourcePickerOverlay now calls ActiveTheme() from ExoSnapTheme.cpp.
+    ui/theme/ExoSnapTheme.cpp
 )
 target_link_libraries(exosnap_source_picker_test_support PUBLIC
     Qt6::Core Qt6::Gui Qt6::Widgets d3d11.lib dxgi.lib runtimeobject.lib ole32.lib
@@ -703,6 +705,8 @@ exosnap_add_gtest(
         tests/test_global_recording_bar.cpp
         ui/chrome/GlobalRecordingBar.cpp
         ui/widgets/StatusPill.cpp
+        # THEME-SLICE-2C: StatusPill now calls ActiveTheme() from ExoSnapTheme.cpp.
+        ui/theme/ExoSnapTheme.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
 )
 target_include_directories(global_recording_bar_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -744,6 +748,8 @@ exosnap_add_gtest(
         tests/test_info_hint_icon.cpp
         ui/widgets/InfoHintIcon.cpp
         ui/theme/LucideIcon.cpp
+        # THEME-SLICE-2C: InfoHintIcon now calls ActiveTheme() from ExoSnapTheme.cpp.
+        ui/theme/ExoSnapTheme.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
 target_include_directories(info_hint_icon_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -768,6 +774,8 @@ exosnap_add_gtest(
         tests/test_notification_bell.cpp
         ui/widgets/NotificationBell.cpp
         ui/theme/LucideIcon.cpp
+        # THEME-SLICE-2C: NotificationBell now calls ActiveTheme() from ExoSnapTheme.cpp.
+        ui/theme/ExoSnapTheme.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
 target_include_directories(notification_bell_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -807,6 +815,8 @@ exosnap_add_gtest(
         tests/test_corner_capture_button.cpp
         ui/widgets/CornerCaptureButton.cpp
         ui/theme/LucideIcon.cpp
+        # THEME-SLICE-2C: CornerCaptureButton now calls ActiveTheme() from ExoSnapTheme.cpp.
+        ui/theme/ExoSnapTheme.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
 target_include_directories(corner_capture_button_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -999,6 +1009,8 @@ exosnap_add_gtest(
         models/RecordingPreset.cpp
         models/RecordingPresetRegistry.cpp
         models/OutputSettingsModel.cpp
+        # THEME-SLICE-2C: PresetManageOverlay now calls ActiveTheme() from ExoSnapTheme.cpp.
+        ui/theme/ExoSnapTheme.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
 )
 target_include_directories(preset_manage_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
@@ -1102,6 +1114,8 @@ exosnap_add_gtest(
         ui/widgets/StatusPill.cpp
         services/DxgiPreviewRenderer.cpp
         diagnostics/AppLog.cpp
+        # THEME-SLICE-2C: StatusPill now calls ActiveTheme() from ExoSnapTheme.cpp.
+        ui/theme/ExoSnapTheme.cpp
     LIBRARIES
         Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
         d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
@@ -1118,6 +1132,8 @@ exosnap_add_gtest(
         ui/widgets/TransportDock.cpp
         ui/widgets/AudioSourceToggle.cpp
         ui/widgets/CountdownSelect.cpp
+        # THEME-SLICE-2C: AudioSourceToggle now calls ActiveTheme() from ExoSnapTheme.cpp.
+        ui/theme/ExoSnapTheme.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
 )
 target_include_directories(transport_dock_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -1218,6 +1234,8 @@ exosnap_add_gtest(
         settings/RecoveryManifestStore.cpp
         services/RecoveryService.cpp
         diagnostics/AppLog.cpp
+        # THEME-SLICE-2C: RecoveryOverlay now calls ActiveTheme() from ExoSnapTheme.cpp.
+        ui/theme/ExoSnapTheme.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core FFmpeg::mux
 )
 target_include_directories(recovery_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -1375,6 +1393,8 @@ exosnap_add_gtest(
         ui/widgets/TransportDock.cpp
         ui/widgets/AudioSourceToggle.cpp
         ui/widgets/CountdownSelect.cpp
+        # THEME-SLICE-2C: AudioSourceToggle now calls ActiveTheme() from ExoSnapTheme.cpp.
+        ui/theme/ExoSnapTheme.cpp
     LIBRARIES
         exosnap_output_model_test_support
         exosnap_device_service_test_support
