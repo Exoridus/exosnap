@@ -744,7 +744,10 @@ public static class SmokeNative {
 
         # Prove the real per-user config was not modified.
         $after = Get-DirSnapshot $realConfig
-        $diff = Compare-Object -ReferenceObject $before -DifferenceObject $after
+        # @(...) guards against PowerShell unwrapping an empty snapshot to $null
+        # (happens on a clean runner where %LOCALAPPDATA%\ExoSnap does not exist),
+        # which would make Compare-Object throw "ReferenceObject is null".
+        $diff = Compare-Object -ReferenceObject @($before) -DifferenceObject @($after)
         if ($diff) {
             Add-Error "Smoke: real per-user config under '$realConfig' was modified — isolation breach"
             $smokeResult = 'failed'

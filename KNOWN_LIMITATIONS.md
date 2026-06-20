@@ -1,12 +1,12 @@
-# ExoSnap 0.4.0 — Known Limitations
+# ExoSnap 0.5.0 — Known Limitations
 
-This document describes the current support boundary of ExoSnap **0.4.0**. It is
+This document describes the current support boundary of ExoSnap **0.5.0**. It is
 factual and specific to this build. If a capability is not listed here as
 supported, do not assume it is available.
 
 ## Release status
 
-- ExoSnap 0.4.0 is a **pre-v1 Windows preview**, not a final 1.0 release.
+- ExoSnap 0.5.0 is a **pre-v1 Windows preview**, not a final 1.0 release.
 - Configuration, preset, and recording-history file schemas are **not frozen**
   and may change in incompatible ways before 1.0.0.
 - Keep your own backup copies of presets you care about during preview releases.
@@ -52,9 +52,9 @@ Supported containers:
 Supported encoders actually selectable and validated in this build:
 
 - **Video:** H.264 (NVENC) and AV1 (NVENC, where the installed GPU and driver
-  expose it). HEVC is **not** implemented in 0.4.0.
+  expose it). HEVC is **not** implemented in 0.5.0.
 - **Audio:** AAC-LC (`AAC` in the UI) and Opus. PCM and FLAC are **not**
-  implemented in 0.4.0.
+  implemented in 0.5.0.
 
 Container/codec rules:
 
@@ -158,13 +158,13 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   is deferred to 0.12.x (RC stabilization wave).
 - Tray notifications may be suppressed by Windows Focus Assist / Do Not Disturb mode.
 
-## Crash reporting and updates (0.4.0)
+## Crash reporting and updates (0.5.0)
 
 - **Crash reporting is opt-in and consent-gated.** Capture is local-first (out-of-process Crashpad).
   Nothing leaves the machine without an explicit choice on the next-launch crash dialog.
 - **Crash detection is next-launch only.** Crashes are surfaced and offered for reporting on the
   *following* launch (clean-exit marker + session sidecar). An immediate in-session crash reporter
-  (Crash A2) is deferred past 0.4.0.
+  (Crash A2) is deferred past 0.5.0.
 - **Stage 1 (automated Sentry upload) is present only in official builds.** The Sentry DSN is compiled
   in only under the official-build gate, so self-built binaries never upload. Stage 0 (assisted GitHub
   issue) is always available.
@@ -174,14 +174,14 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
 - **Update checking is notify + manual download.** Stable and Preview channels are supported. The
   client verifies a signed manifest (ed25519 via Monocypher + SHA-256) and refuses downgrades, but it
   does **not** download or install the update itself, and never restarts silently. In-place
-  auto-update (Update C) is deferred past 0.4.0.
+  auto-update (Update C) is deferred past 0.5.0.
 - **Updates are off by default for self-built binaries** and require the embedded official public key;
   no GitHub token is used by the client.
 
-## Planned beyond 0.4.0 (not in this build)
+## Planned beyond 0.5.0 (not in this build)
 
 The following are intentionally deferred and are documented here only so the
-current boundary is unambiguous. They are **not** part of 0.4.0:
+current boundary is unambiguous. They are **not** part of 0.5.0:
 in-place auto-update with restart, immediate in-session crash reporter, automated symbol upload,
 AMD and Intel hardware encoding, software encoding fallback, expanded rate-control / bitrate controls,
 PCM and FLAC audio, an expanded codec/color pipeline, and the fullscreen/exclusive capture matrix
