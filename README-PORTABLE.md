@@ -1,4 +1,4 @@
-# ExoSnap 0.4.0 — Portable Release
+# ExoSnap 0.5.0 — Portable Release
 
 Thanks for trying ExoSnap. This file is the quick-start guide for the portable
 Windows build.
@@ -11,16 +11,21 @@ multi-track audio routing, a webcam overlay, and built-in diagnostics.
 
 ## Release status
 
-This is **ExoSnap 0.4.0**, a **pre-v1 Windows preview**. It is not the final
+This is **ExoSnap 0.5.0**, a **pre-v1 Windows preview**. It is not the final
 1.0 release. Settings, presets, and recording-history file formats may change in
 incompatible ways before 1.0.0. See `KNOWN_LIMITATIONS.md` for the full current
 support boundary.
+
+New in 0.5.0 ("Settings & media-capability"): a TOML preset store with profile
+export/import, canonical video rate control (CQ / VBR / CBR) plus bitrate, audio
+bitrate and Opus controls, a redesigned Default/Expert settings surface, curated
+light/dark themes, and automatic split by size.
 
 ## System requirements
 
 - Windows 10 or 11, 64-bit (Windows 11 recommended).
 - An **NVIDIA GPU with supported NVENC** capability (RTX 20-series or newer
-  recommended) and a current NVIDIA display driver. ExoSnap 0.4.0 requires
+  recommended) and a current NVIDIA display driver. ExoSnap 0.5.0 requires
   NVIDIA NVENC for video encoding; AMD, Intel, and software encoding are not
   supported in this release.
 - Microsoft Visual C++ 2022 x64 runtime (usually already installed). If the app
@@ -29,7 +34,7 @@ support boundary.
 
 ## How to launch
 
-1. Extract the entire `ExoSnap-0.4.0-windows-x64-portable` folder from the ZIP to a
+1. Extract the entire `ExoSnap-0.5.0-windows-x64-portable` folder from the ZIP to a
    location of your choice.
 2. Run `exosnap.exe` from the extracted folder.
 
@@ -52,7 +57,7 @@ SmartScreen may warn on first launch because this build is not code-signed.
 ExoSnap stores its configuration under your local application data directory:
 
 - `%LOCALAPPDATA%\ExoSnap\settings.ini` — application settings
-- `%LOCALAPPDATA%\ExoSnap\presets.ini` — recording presets
+- `%LOCALAPPDATA%\ExoSnap\presets.toml` — recording presets
 - `%LOCALAPPDATA%\ExoSnap\recording-history.json` — recording history
 
 A best-effort startup diagnostics log is written to
@@ -68,7 +73,7 @@ Diagnostics view expose richer logging and a way to open the log folder.
   WebM uses AV1 + Opus; MKV is the flexible default.
 
 Exact availability depends on your GPU generation, driver, and the selected
-container/codec combination. HEVC, PCM, and FLAC are not implemented in 0.4.0.
+container/codec combination. HEVC, PCM, and FLAC are not implemented in 0.5.0.
 
 ## Recording split overview
 
@@ -77,7 +82,7 @@ container/codec combination. HEVC, PCM, and FLAC are not implemented in 0.4.0.
   background while recording continues. "Saved" is shown only when all remuxes
   complete. See `KNOWN_LIMITATIONS.md`.
 
-## Updates and crash reporting (0.4.0)
+## Updates and crash reporting
 
 - **Update check:** the official build checks public GitHub Releases for a newer version and notifies
   you in-app (Stable and Preview channels). It never downloads or restarts on its own — it opens the
@@ -90,10 +95,10 @@ container/codec combination. HEVC, PCM, and FLAC are not implemented in 0.4.0.
 ## Verifying your download
 
 A SHA-256 checksum is published next to the ZIP as
-`ExoSnap-0.4.0-windows-x64-portable.sha256`. To verify integrity in PowerShell:
+`ExoSnap-0.5.0-windows-x64-portable.sha256`. To verify integrity in PowerShell:
 
 ```powershell
-Get-FileHash .\ExoSnap-0.4.0-windows-x64-portable.zip -Algorithm SHA256
+Get-FileHash .\ExoSnap-0.5.0-windows-x64-portable.zip -Algorithm SHA256
 ```
 
 The printed hash must match the value in the `.sha256` file. The checksum
