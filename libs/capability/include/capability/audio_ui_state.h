@@ -47,6 +47,17 @@ struct AudioUiState {
     // Ignored when audio codec is not Opus.
     int opus_complexity = 10;
 
+    // ---------------------------------------------------------------------------
+    // Brickwall limiter (Audio v2 — 0.6.0)
+    // ---------------------------------------------------------------------------
+
+    // Peak-limit mixed/gained audio to limiter_ceiling_db instead of hard-clipping.
+    // Default true (strictly better than the previous hard clip at the ceiling).
+    bool limiter_enabled = true;
+
+    // Limiter ceiling in dBFS (<= 0). Default 0.0 keeps the previous clamp ceiling.
+    float limiter_ceiling_db = 0.0f;
+
     // Convenience predicates.
     [[nodiscard]] bool IsAppEnabled() const noexcept;
     [[nodiscard]] bool IsSysEnabled() const noexcept;
@@ -65,6 +76,10 @@ struct AudioPlanResult {
     uint32_t audio_bitrate_kbps = 160;
     recorder_core::OpusFrameDuration opus_frame_duration = recorder_core::OpusFrameDuration::Ms20;
     int opus_complexity = 10;
+
+    // Brickwall limiter (Audio v2 — 0.6.0) — passed through from AudioUiState.
+    bool limiter_enabled = true;
+    float limiter_ceiling_db = 0.0f;
 };
 
 [[nodiscard]] AudioPlanResult BuildAudioPlan(const AudioUiState& state);

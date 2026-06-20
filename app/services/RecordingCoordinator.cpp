@@ -733,6 +733,9 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.audio_bitrate_kbps = plan.audio_bitrate_kbps;
     config.opus_frame_duration = plan.opus_frame_duration;
     config.opus_complexity = plan.opus_complexity;
+    // Brickwall limiter (Audio v2).
+    config.audio_limiter_enabled = plan.limiter_enabled;
+    config.audio_limiter_ceiling_db = plan.limiter_ceiling_db;
 
     if (plan.record_audio && PlanRequiresTargetPid(plan.plan) && !plan.audio_target_process_id.has_value()) {
         diagnostics::AppLog::error(QStringLiteral("record.failure"),

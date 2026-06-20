@@ -499,6 +499,9 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     aud_tbl.emplace("audio_bitrate_kbps", static_cast<int64_t>(aud.audio_bitrate_kbps));
     aud_tbl.emplace("opus_frame_duration", OpusFrameDurationToString(aud.opus_frame_duration).toStdString());
     aud_tbl.emplace("opus_complexity", static_cast<int64_t>(aud.opus_complexity));
+    // Brickwall limiter (Audio v2 — 0.6.0).
+    aud_tbl.emplace("limiter_enabled", aud.limiter_enabled);
+    aud_tbl.emplace("limiter_ceiling_db", static_cast<double>(aud.limiter_ceiling_db));
 
     // audio sources as array-of-tables
     toml::array sources_arr;
@@ -723,6 +726,12 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
     {
         const int64_t cplx = TomlInt(tbl["audio"]["opus_complexity"], 10);
         aud.opus_complexity = (cplx >= 0 && cplx <= 10) ? static_cast<int>(cplx) : 10;
+    }
+    // Brickwall limiter (Audio v2 — 0.6.0). Older presets default to enabled /
+    // 0.0 dBFS (no behavior change vs the previous hard clip at full scale).
+    {
+        aud.limiter_enabled = TomlBool(tbl["audio"]["limiter_enabled"], true);
+        aud.limiter_ceiling_db = static_cast<float>(TomlFloat(tbl["audio"]["limiter_ceiling_db"], 0.0));
     }
     // Audio source rows — array-of-tables [[audio.sources]]
     {

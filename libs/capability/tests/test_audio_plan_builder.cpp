@@ -67,6 +67,24 @@ TEST(AudioPlanBuilderTest, BuildAudioPlan_DefaultMicGainIsUnity) {
     EXPECT_FLOAT_EQ(result.mic_gain_linear, 1.0f);
 }
 
+TEST(AudioPlanBuilderTest, BuildAudioPlan_DefaultLimiterEnabledAtZeroDb) {
+    AudioUiState state;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_TRUE(result.limiter_enabled);
+    EXPECT_FLOAT_EQ(result.limiter_ceiling_db, 0.0f);
+}
+
+TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesLimiterSettings) {
+    AudioUiState state;
+    state.limiter_enabled = false;
+    state.limiter_ceiling_db = -3.0f;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_FALSE(result.limiter_enabled);
+    EXPECT_FLOAT_EQ(result.limiter_ceiling_db, -3.0f);
+}
+
 TEST(AudioPlanBuilderTest, WindowTarget_AppOnly) {
     AudioUiState state = WindowSep(1001u);
     state.source_rows = {{K::App, true, false}};

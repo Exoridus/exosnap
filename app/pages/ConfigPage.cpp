@@ -4,6 +4,7 @@
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QEvent>
 #include <QFileDialog>
 #include <QFrame>
@@ -1486,6 +1487,44 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             aes_layout->addWidget(row);
         }
 
+        // Brickwall limiter (Audio v2 — 0.6.0)
+        {
+            auto* rule = new QFrame(audio_expert_section_);
+            rule->setFrameShape(QFrame::HLine);
+            rule->setProperty("frameRole", "sectionRuleLine");
+            aes_layout->addWidget(rule);
+
+            auto* row = new QWidget(audio_expert_section_);
+            auto* hl = new QHBoxLayout(row);
+            hl->setContentsMargins(0, 12, 0, 12);
+            hl->setSpacing(14);
+            limiter_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Brickwall limiter"), row);
+            limiter_check_->setObjectName(QStringLiteral("limiterCheck"));
+            limiter_check_->setChecked(audio_ui_state_.limiter_enabled);
+            hl->addWidget(limiter_check_, 1);
+            row->setProperty("settingsRow", true);
+            aes_layout->addWidget(row);
+
+            auto* crow = new QWidget(audio_expert_section_);
+            auto* chl = new QHBoxLayout(crow);
+            chl->setContentsMargins(0, 12, 0, 12);
+            chl->setSpacing(14);
+            auto* clbl = new QLabel(QStringLiteral("Limiter ceiling"), crow);
+            clbl->setProperty("labelRole", "settingsRowLabel");
+            chl->addWidget(clbl, 1);
+            limiter_ceiling_spin_ = new QDoubleSpinBox(crow);
+            limiter_ceiling_spin_->setObjectName(QStringLiteral("limiterCeilingSpin"));
+            limiter_ceiling_spin_->setRange(-60.0, 0.0);
+            limiter_ceiling_spin_->setSingleStep(0.5);
+            limiter_ceiling_spin_->setDecimals(1);
+            limiter_ceiling_spin_->setSuffix(QStringLiteral(" dB"));
+            limiter_ceiling_spin_->setValue(static_cast<double>(audio_ui_state_.limiter_ceiling_db));
+            limiter_ceiling_spin_->setEnabled(audio_ui_state_.limiter_enabled);
+            chl->addWidget(limiter_ceiling_spin_, 0, Qt::AlignVCenter);
+            crow->setProperty("settingsRow", true);
+            aes_layout->addWidget(crow);
+        }
+
         // Audio PlaceholderRows
         {
             auto* ph1 = new ui::widgets::PlaceholderRow(audio_expert_section_);
@@ -1494,7 +1533,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             aes_layout->addWidget(ph1);
 
             auto* ph2 = new ui::widgets::PlaceholderRow(audio_expert_section_);
-            ph2->setLabel(QStringLiteral("Noise gate \xc2\xb7 AGC \xc2\xb7 limiter"));
+            ph2->setLabel(QStringLiteral("Noise gate \xc2\xb7 AGC"));
             ph2->setVersionTag(QStringLiteral("0.6"));
             aes_layout->addWidget(ph2);
         }
@@ -2255,6 +2294,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     });
     connect(opus_complexity_spin_, &QSpinBox::valueChanged, this, [this](int val) {
         audio_ui_state_.opus_complexity = val;
+        emitCurrentAudioSettings();
+    });
+    connect(limiter_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
+        audio_ui_state_.limiter_enabled = on;
+        if (limiter_ceiling_spin_)
+            limiter_ceiling_spin_->setEnabled(on);
+        emitCurrentAudioSettings();
+    });
+    connect(limiter_ceiling_spin_, &QDoubleSpinBox::valueChanged, this, [this](double db) {
+        audio_ui_state_.limiter_ceiling_db = static_cast<float>(db);
         emitCurrentAudioSettings();
     });
 
@@ -3373,6 +3422,15 @@ void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
             const QSignalBlocker b(opus_complexity_spin_);
             opus_complexity_spin_->setValue(audio_ui_state_.opus_complexity);
         }
+        if (limiter_check_) {
+            const QSignalBlocker b(limiter_check_);
+            limiter_check_->setChecked(audio_ui_state_.limiter_enabled);
+        }
+        if (limiter_ceiling_spin_) {
+            const QSignalBlocker b(limiter_ceiling_spin_);
+            limiter_ceiling_spin_->setValue(static_cast<double>(audio_ui_state_.limiter_ceiling_db));
+            limiter_ceiling_spin_->setEnabled(audio_ui_state_.limiter_enabled);
+        }
     }
 }
 
@@ -3606,6 +3664,15 @@ void ConfigPage::updateExpertModeVisibility() {
         if (opus_complexity_spin_) {
             const QSignalBlocker b(opus_complexity_spin_);
             opus_complexity_spin_->setValue(audio_ui_state_.opus_complexity);
+        }
+        if (limiter_check_) {
+            const QSignalBlocker b(limiter_check_);
+            limiter_check_->setChecked(audio_ui_state_.limiter_enabled);
+        }
+        if (limiter_ceiling_spin_) {
+            const QSignalBlocker b(limiter_ceiling_spin_);
+            limiter_ceiling_spin_->setValue(static_cast<double>(audio_ui_state_.limiter_ceiling_db));
+            limiter_ceiling_spin_->setEnabled(audio_ui_state_.limiter_enabled);
         }
     }
     // PS-PHASE-C: Output v1.0 placeholder section.

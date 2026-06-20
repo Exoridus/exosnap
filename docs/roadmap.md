@@ -222,6 +222,7 @@ surface ships as a UI shell + placeholder banner in the Production Suite wave.
 **Settings Expert split.** The Quality card gained an Expert section (CQ · VBR · CBR rate control,
 bitrate, frame-timing — ADR 0009 mapping) hidden behind the Expert toggle. Audio likewise has an
 Expert section (mic gain slider, channel mode, bitrate, Opus complexity/frame-duration — ADR 0011
-context). v1.0-placeholder rows (chroma subsampling 0.7, HEVC codec 0.7, bit depth 0.7, HDR10 0.7,
-PCM/FLAC codecs 0.6, noise gate/AGC/limiter 0.6) are shown in the expert sections to communicate
-the roadmap without enabling unimplemented controls.
+context). The brickwall limiter is a real Expert control as of 0.6.0 (ADR 0023). v1.0-placeholder
+rows (chroma subsampling 0.7, HEVC codec 0.7, bit depth 0.7, HDR10 0.7, PCM/FLAC codecs 0.6,
+noise gate/AGC 0.6) are shown in the expert sections to communicate the roadmap without enabling
+unimplemented controls.

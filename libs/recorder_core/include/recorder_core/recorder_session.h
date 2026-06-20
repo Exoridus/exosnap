@@ -292,6 +292,22 @@ struct RecorderConfig {
     // Default 1.0f (unity gain).
     float mic_gain_linear = 1.0f;
 
+    // ---------------------------------------------------------------------------
+    // Brickwall limiter (Audio v2 — 0.6.0)
+    // ---------------------------------------------------------------------------
+
+    // When true, audio that passes through MixedAudioSrc (merged tracks, or any
+    // source with non-unity per-row gain) is peak-limited to
+    // audio_limiter_ceiling_db instead of hard-clipped. These are exactly the
+    // paths where per-track gain or summing can push the signal past full scale.
+    // Default true: strictly better than the previous hard clip at the ceiling.
+    bool audio_limiter_enabled = true;
+
+    // Limiter ceiling in dBFS (<= 0). No output sample exceeds this level.
+    // Default 0.0 dBFS keeps the previous clamp ceiling, so levels are unchanged
+    // except that overs are smoothed (attack/release) instead of hard-clipped.
+    float audio_limiter_ceiling_db = 0.0f;
+
     // Whether the mouse cursor is composited into the captured frames.
     // Maps to GraphicsCaptureSession.IsCursorCaptureEnabled. Default true = WGC default.
     bool capture_cursor = true;
