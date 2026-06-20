@@ -4,14 +4,27 @@
 #include "ExoToggle.h"
 #include "VUMeterWidget.h"
 
+#include <QAbstractButton>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPushButton>
+#include <QSlider>
 #include <QStyle>
 #include <QVBoxLayout>
 
+#include <recorder_core/audio_track_model.h>
+
+#include <cmath>
+
 namespace exosnap::ui::widgets {
 namespace {
+
+// Slider integer range for gain: -60 to +24 dB, step 0.5 dB → 169 integer steps.
+// We store tenths-of-dB (× 10) as the integer to keep QSlider simple.
+constexpr int kGainSliderMin = -600; // -60.0 dB
+constexpr int kGainSliderMax = +240; // +24.0 dB
+constexpr int kGainSliderTick = 10;  // 1.0 dB per tick
 
 QLabel* makeLabel(const QString& text, const char* role, QWidget* parent) {
     auto* label = new QLabel(text, parent);
@@ -76,6 +89,32 @@ AudioSourceRow::AudioSourceRow(const Config& config, QWidget* parent) : QWidget(
     db_label_->setFixedWidth(64);
     db_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
+    // --- Audio v2: gain slider + label + mute button ---
+    gain_slider_ = new QSlider(Qt::Horizontal, this);
+    gain_slider_->setRange(kGainSliderMin, kGainSliderMax);
+    gain_slider_->setTickInterval(kGainSliderTick);
+    gain_slider_->setValue(static_cast<int>(std::roundf(config.gain_db * 10.0f)));
+    gain_slider_->setFixedWidth(80);
+    gain_slider_->setToolTip("Gain (dB)");
+
+    gain_label_ = makeLabel("0 dB", "audioGainLabel", this);
+    gain_label_->setFixedWidth(52);
+    gain_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+    auto* mute_btn = new QPushButton("M", this);
+    mute_btn->setCheckable(true);
+    mute_btn->setChecked(config.muted);
+    mute_btn->setFixedSize(28, 28);
+    mute_btn->setToolTip("Mute");
+    mute_btn->setProperty("buttonRole", "audioMuteButton");
+    mute_button_ = mute_btn;
+
+    // Init gain label text from initial config value.
+    {
+        const float g = config.gain_db;
+        gain_label_->setText(QStringLiteral("%1 dB").arg(static_cast<double>(g), 0, 'f', 1));
+    }
+
     enabled_toggle_ = new ExoToggle(this);
     enabled_toggle_->setOn(config.enabled);
 
@@ -84,6 +123,12 @@ AudioSourceRow::AudioSourceRow(const Config& config, QWidget* parent) : QWidget(
     root->addWidget(text_col, 1);
     root->addWidget(meter_, 0, Qt::AlignVCenter);
     root->addWidget(db_label_, 0, Qt::AlignVCenter);
+    root->addWidget(makeSourceDivider(this), 0, Qt::AlignVCenter);
+
+    // Gain controls
+    root->addWidget(gain_slider_, 0, Qt::AlignVCenter);
+    root->addWidget(gain_label_, 0, Qt::AlignVCenter);
+    root->addWidget(mute_button_, 0, Qt::AlignVCenter);
     root->addWidget(makeSourceDivider(this), 0, Qt::AlignVCenter);
 
     if (config.has_merge_control) {
@@ -110,6 +155,19 @@ AudioSourceRow::AudioSourceRow(const Config& config, QWidget* parent) : QWidget(
         applyActiveState(enabled);
         emit sourceEnabledChanged(enabled);
     });
+
+    connect(gain_slider_, &QSlider::valueChanged, this, [this](int val) {
+        const float db = static_cast<float>(val) / 10.0f;
+        gain_label_->setText(QStringLiteral("%1 dB").arg(static_cast<double>(db), 0, 'f', 1));
+        emit gainDbChanged(db);
+    });
+
+    connect(mute_button_, &QAbstractButton::toggled, this, [this](bool muted) { emit mutedChanged(muted); });
+
+    if (!config.has_gain_control) {
+        gain_slider_->hide();
+        gain_label_->hide();
+    }
 
     applyActiveState(config.enabled);
 }
@@ -147,6 +205,34 @@ bool AudioSourceRow::hasMergeControl() const noexcept {
 void AudioSourceRow::setMergeControlVisible(bool visible) {
     if (merge_container_ != nullptr)
         merge_container_->setVisible(visible);
+}
+
+void AudioSourceRow::setGainControlVisible(bool visible) {
+    if (gain_slider_ != nullptr)
+        gain_slider_->setVisible(visible);
+    if (gain_label_ != nullptr)
+        gain_label_->setVisible(visible);
+}
+
+// Audio v2 — gain + mute
+
+void AudioSourceRow::setGainDb(float gain_db) {
+    const int val = static_cast<int>(std::roundf(gain_db * 10.0f));
+    gain_slider_->setValue(val);
+    // The valueChanged signal will update the label and emit gainDbChanged.
+}
+
+float AudioSourceRow::gainDb() const noexcept {
+    return static_cast<float>(gain_slider_->value()) / 10.0f;
+}
+
+void AudioSourceRow::setMuted(bool muted) {
+    mute_button_->setChecked(muted);
+    // The toggled signal will emit mutedChanged.
+}
+
+bool AudioSourceRow::isMuted() const noexcept {
+    return mute_button_->isChecked();
 }
 
 void AudioSourceRow::applyActiveState(bool active) {

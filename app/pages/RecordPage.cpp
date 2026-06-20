@@ -4369,6 +4369,24 @@ void RecordPage::onAudioRowMergeChanged(int row_index, bool merge) {
     emitAudioSettingsChanged();
 }
 
+void RecordPage::onAudioRowGainChanged(int row_index, float gain_db) {
+    if (row_index < 0 || row_index >= static_cast<int>(view_model_.audio_ui_state.source_rows.size()))
+        return;
+    view_model_.audio_ui_state.source_rows[static_cast<std::size_t>(row_index)].gain_db = gain_db;
+    view_model_.RebuildAudioPlan();
+    updateAudioTrackPreview();
+    emitAudioSettingsChanged();
+}
+
+void RecordPage::onAudioRowMutedChanged(int row_index, bool muted) {
+    if (row_index < 0 || row_index >= static_cast<int>(view_model_.audio_ui_state.source_rows.size()))
+        return;
+    view_model_.audio_ui_state.source_rows[static_cast<std::size_t>(row_index)].muted = muted;
+    view_model_.RebuildAudioPlan();
+    updateAudioTrackPreview();
+    emitAudioSettingsChanged();
+}
+
 void RecordPage::swapAudioSourceRows(int a, int b) {
     const int n = static_cast<int>(view_model_.audio_ui_state.source_rows.size());
     if (a < 0 || b < 0 || a >= n || b >= n || a == b)
@@ -4450,6 +4468,11 @@ void RecordPage::rebuildAudioRowWidgets() {
         cfg.db_value = QStringLiteral("– dB");
         cfg.has_merge_control = !is_first;
         cfg.enabled = model_row.enabled;
+        cfg.gain_db = model_row.gain_db;
+        cfg.muted = model_row.muted;
+        // Mic gain is controlled by the dedicated mic_gain_slider_; hide the
+        // per-row gain slider for Mic so there is no duplicate control.
+        cfg.has_gain_control = (model_row.kind != recorder_core::AudioSourceKind::Mic);
 
         auto* row_widget = new ui::widgets::AudioSourceRow(cfg, audio_rows_container_);
         if (!is_first) {
@@ -4467,6 +4490,10 @@ void RecordPage::rebuildAudioRowWidgets() {
             connect(row_widget, &ui::widgets::AudioSourceRow::mergeChanged, this,
                     [this, idx](bool merge) { onAudioRowMergeChanged(idx, merge); });
         }
+        connect(row_widget, &ui::widgets::AudioSourceRow::gainDbChanged, this,
+                [this, idx](float gain_db) { onAudioRowGainChanged(idx, gain_db); });
+        connect(row_widget, &ui::widgets::AudioSourceRow::mutedChanged, this,
+                [this, idx](bool muted) { onAudioRowMutedChanged(idx, muted); });
     }
 }
 

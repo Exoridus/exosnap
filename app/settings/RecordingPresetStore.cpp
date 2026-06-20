@@ -507,6 +507,9 @@ toml::table PresetToToml(const RecordingPreset& preset) {
         row_tbl.emplace("kind", AudioSourceKindToString(row.kind).toStdString());
         row_tbl.emplace("enabled", row.enabled);
         row_tbl.emplace("merge", row.merge_with_above);
+        // Audio v2 (0.6.0): per-row gain + mute.
+        row_tbl.emplace("gain_db", static_cast<double>(row.gain_db));
+        row_tbl.emplace("muted", row.muted);
         sources_arr.push_back(std::move(row_tbl));
     }
     aud_tbl.emplace("sources", std::move(sources_arr));
@@ -734,6 +737,10 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
                     row.kind = *kind;
                     row.enabled = TomlBool((*row_tbl)["enabled"], true);
                     row.merge_with_above = TomlBool((*row_tbl)["merge"], false);
+                    // Audio v2 (0.6.0): per-row gain + mute. Older presets that
+                    // lack these keys default to 0 dB / not muted (no behavior change).
+                    row.gain_db = static_cast<float>(TomlFloat((*row_tbl)["gain_db"], 0.0));
+                    row.muted = TomlBool((*row_tbl)["muted"], false);
                     aud.source_rows.push_back(row);
                 }
             }

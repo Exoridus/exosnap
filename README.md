@@ -6,7 +6,7 @@ webcam PiP overlay, crash recovery, and built-in diagnostics. Dark-mode-first Qt
 
 ## Status / current release
 
-- **Latest release:** `0.4.0` — "Crash reporting and updates".
+- **Latest release:** `0.5.0` — "Settings & media-capability".
 - **Pre-v1 notice:** settings, preset, and recording-history schemas may change incompatibly before 1.0.0.
 - **Platform:** Windows 10/11 x64 (Windows 11 is the primary target; Windows 10 is best-effort).
 - **Hardware encoder:** NVIDIA NVENC only. An NVIDIA GPU with supported NVENC capability is required.
@@ -19,21 +19,29 @@ webcam PiP overlay, crash recovery, and built-in diagnostics. Dark-mode-first Qt
   send (Stage 0 assisted GitHub issue, or Stage 1 automated upload to Sentry with EU data residency).
   See [`PRIVACY.md`](PRIVACY.md).
 
-## Features (0.4.0 crash reporting and updates wave)
+## Features (0.5.0 settings & media-capability wave)
 
-- Local-first crash capture (out-of-process Crashpad). On the next launch after a crash, a
-  privacy-scrubbed crash dialog lets you review and choose how to report — nothing is sent without
-  consent.
-- Two-stage, consent-gated crash delivery: **Stage 0** prefills an assisted GitHub issue;
-  **Stage 1** is an automated opt-in upload to Sentry (EU data residency, DPA-governed), compiled in
-  only under the official-build gate. Self-built binaries never phone home.
-- Update checking with **Stable** and **Preview** channels: notifies when a newer release is
-  available and opens the releases page (no silent auto-restart; in-place download deferred).
-- Signed update manifest: ed25519 signature (Monocypher verify) + SHA-256 package hash, with
-  downgrade/rollback protection. No GitHub token in the client; updates are off by default for
-  self-built binaries.
+- TOML preset store with profile **export/import**: presets are human-readable and shareable; the
+  nested `[[audio.sources]]` model serializes cleanly. Flat app settings stay on QSettings.
+- Canonical **video rate control** — Constant quality (CQ), Variable bitrate (VBR), Constant bitrate
+  (CBR) — mapped per encoder underneath (NVENC), plus a bitrate control. Never mislabeled as "CRF".
+- **Audio encoding** controls: bitrate plus Opus frame duration and complexity.
+- **Settings redesign** with a Default/Expert split: common controls up front, expert rate-control,
+  bitrate, frame-timing, and audio DSP placeholders behind an Expert toggle, with inline info hints
+  and search.
+- **Curated themes** (two dark, two light) replacing the free accent picker, so theme colors never
+  collide with status colors.
+- **Automatic split by size** (in addition to by time): the first limit reached wins; MP4 split
+  produces one remuxed progressive segment each.
+- Preset **manage dialog** (rename, duplicate, delete, set default).
 
 ### Carried over from earlier waves
+
+- Local-first crash capture (out-of-process Crashpad) with a next-launch, privacy-scrubbed,
+  consent-gated crash dialog; two-stage delivery (Stage 0 assisted GitHub issue, Stage 1 opt-in
+  Sentry upload with EU data residency under the official-build gate).
+- Update checking with **Stable** and **Preview** channels and a signed update manifest (ed25519 via
+  Monocypher + SHA-256, downgrade/rollback protection); updates off by default for self-built binaries.
 
 - Capture-excluded on-screen overlays (recording status, diagnostics, countdown) — visible on screen
   but excluded from the captured frame via `WDA_EXCLUDEFROMCAPTURE`.

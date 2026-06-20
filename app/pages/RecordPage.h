@@ -283,6 +283,8 @@ class RecordPage : public QWidget {
     void pushSourceDataToPicker();
     void onAudioRowEnabledChanged(int row_index, bool enabled);
     void onAudioRowMergeChanged(int row_index, bool merge);
+    void onAudioRowGainChanged(int row_index, float gain_db);
+    void onAudioRowMutedChanged(int row_index, bool muted);
     void swapAudioSourceRows(int a, int b);
     void rebuildAudioRowWidgets();
     void updateAudioRowMergeVisibility();

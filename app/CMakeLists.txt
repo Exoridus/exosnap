@@ -1201,6 +1201,26 @@ exosnap_add_gtest(
 target_include_directories(preset_export_import_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(preset_export_import_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
 
+# Audio v2 (0.6.0): per-row gain + mute preset round-trip, dirty-tracking, sanitize.
+exosnap_add_gtest(
+    NAME audio_gain_preset_tests
+    TEST_PREFIX audio_gain.
+    SOURCES tests/test_audio_gain_preset.cpp
+            settings/RecordingPresetStore.cpp
+            models/RecordingPreset.cpp
+            models/OutputSettingsModel.cpp
+    LIBRARIES exosnap_capability recorder_core Qt6::Core)
+target_include_directories(audio_gain_preset_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(audio_gain_preset_tests PRIVATE ole32.lib shell32.lib tomlplusplus::tomlplusplus)
+
+# Audio v2 (0.6.0): per-row gain/mute handler wiring tests (view-model level, headless).
+exosnap_add_gtest(
+    NAME audio_row_gain_handler_tests
+    TEST_PREFIX audio_gain_handler.
+    SOURCES tests/test_audio_row_gain_handlers.cpp
+    LIBRARIES exosnap_record_viewmodel_test_support exosnap_capability recorder_core Qt6::Core)
+target_include_directories(audio_row_gain_handler_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 # RECOVERY-MANIFEST-R1 tests
 exosnap_add_gtest(
     NAME recovery_manifest_store_tests
