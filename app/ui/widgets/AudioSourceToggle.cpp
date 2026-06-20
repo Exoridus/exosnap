@@ -117,6 +117,7 @@ void AudioSourceToggle::paintEvent(QPaintEvent* /*event*/) {
     QColor fill;
     QColor border;
     QColor icon;
+    const QColor ink(QString::fromUtf8(t.ink));
     if (on_) {
         fill = accent;
         fill.setAlphaF(0.14f); // matches kAccentDim
@@ -124,7 +125,9 @@ void AudioSourceToggle::paintEvent(QPaintEvent* /*event*/) {
         border.setAlphaF(0.42f); // matches kAccentLine
         icon = accent;
     } else {
-        fill = QColor(255, 255, 255, 13); // subtle raise, matches hybrid "off" pill
+        // Derive from ink so the pill is visible on light themes
+        // (ink ≈ white on dark → same as the old hard-white; ink ≈ dark on light → visible on paper).
+        fill = QColor::fromRgba(qRgba(ink.red(), ink.green(), ink.blue(), static_cast<int>(0.05 * 255)));
         border = QColor(Qt::transparent);
         icon = QColor(QString::fromUtf8(t.mut));
     }

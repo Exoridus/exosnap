@@ -149,17 +149,15 @@ QWidget* AboutOverlay::buildCard() {
     title_col->setContentsMargins(0, 0, 0, 0);
     title_col->setSpacing(4);
 
-    auto* wordmark = new QLabel(card);
-    wordmark->setProperty("labelRole", "aboutWordmark");
-    wordmark->setTextFormat(Qt::RichText);
-    wordmark->setText(
-        QStringLiteral("<span style=\"color:%1;\">exo</span><span style=\"color:%2;\">snap</span>")
-            .arg(QString::fromUtf8(theme::ActiveTheme().ink), QString::fromUtf8(theme::ActiveTheme().ac)));
+    wordmark_ = new QLabel(card);
+    wordmark_->setProperty("labelRole", "aboutWordmark");
+    wordmark_->setTextFormat(Qt::RichText);
+    refreshBrand();
 
     auto* version_line = new QLabel(QStringLiteral("Version %1 \xc2\xb7 for Windows").arg(version), card);
     version_line->setProperty("labelRole", "aboutVersionLine");
 
-    title_col->addWidget(wordmark);
+    title_col->addWidget(wordmark_);
     title_col->addWidget(version_line);
     header_row->addLayout(title_col, 1);
 
@@ -327,6 +325,14 @@ void AboutOverlay::showEvent(QShowEvent* event) {
 void AboutOverlay::syncGeometryToParent() {
     if (QWidget* host = parentWidget())
         setGeometry(host->rect());
+}
+
+void AboutOverlay::refreshBrand() {
+    if (wordmark_ == nullptr)
+        return;
+    const auto& t = theme::ActiveTheme();
+    wordmark_->setText(QStringLiteral("<span style=\"color:%1;\">exo</span><span style=\"color:%2;\">snap</span>")
+                           .arg(QString::fromUtf8(t.ink), QString::fromUtf8(t.ac)));
 }
 
 } // namespace exosnap::ui::dialogs

@@ -939,12 +939,22 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // ApplyExoSnapTheme already used it; called unconditionally for non-default).
     if (persisted_settings_.theme_id != QStringLiteral("dark-default")) {
         ui::theme::ReapplyTheme(*qApp, persisted_settings_.theme_id);
+        // Refresh wordmarks that baked colours at construction with the default theme.
+        if (title_bar_)
+            title_bar_->refreshBrand();
+        if (about_overlay_)
+            about_overlay_->refreshBrand();
     }
     // When the user picks a different theme, apply it live and persist.
     connect(config_page_, &ConfigPage::themeIdChanged, this, [this](const QString& id) {
         persisted_settings_.theme_id = id;
         settings_store_.Save(persisted_settings_);
         ui::theme::ReapplyTheme(*qApp, id);
+        // Re-bake wordmarks (rich-text colour baked at construction, not re-read on repaint).
+        if (title_bar_)
+            title_bar_->refreshBrand();
+        if (about_overlay_)
+            about_overlay_->refreshBrand();
         // Repaint all custom-painted widgets that read ActiveTheme() directly.
         // QSS-styled widgets are already repainted by ReapplyTheme/style-polish;
         // QPainter widgets that call ActiveTheme() in paintEvent() need a manual kick.

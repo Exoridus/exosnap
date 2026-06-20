@@ -41,14 +41,17 @@ void ExoToggle::paintEvent(QPaintEvent* event) {
     const bool checked = isChecked();
 
     // #03: on-state track = Studio Mint accent; knob = accent-ink dark on mint.
-    // Off-state: neutral dark track, muted knob. Disabled: dimmed.
-    QColor track = QColor(255, 255, 255, static_cast<int>(0.10 * 255)); // rgba(255,255,255,0.10)
-    QColor thumb = QColor("#65656A");                                   // mut (text3)
+    // Off-state: ink-tinted track so it is visible on both dark and light themes
+    //   (ink ≈ white on dark → same as the old hard-white; ink ≈ dark on light → visible on paper).
+    // Disabled: same tint at half opacity.
+    const auto& t = exosnap::ui::theme::ActiveTheme();
+    const QColor ink(QString::fromUtf8(t.ink));
+    QColor track = QColor::fromRgba(qRgba(ink.red(), ink.green(), ink.blue(), static_cast<int>(0.10 * 255)));
+    QColor thumb = QColor("#65656A"); // mut (text3)
     if (!enabled) {
-        track = QColor(255, 255, 255, static_cast<int>(0.05 * 255));
+        track = QColor::fromRgba(qRgba(ink.red(), ink.green(), ink.blue(), static_cast<int>(0.05 * 255)));
         thumb = QColor("#3A3A3F");
     } else if (checked) {
-        const auto& t = exosnap::ui::theme::ActiveTheme();
         track = QColor(QString::fromUtf8(t.ac));     // primary accent
         thumb = QColor(QString::fromUtf8(t.ac_ink)); // dark ink on accent fill
     }

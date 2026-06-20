@@ -1,6 +1,5 @@
 #include "StatusPill.h"
 
-#include "../theme/ExoSnapPalette.h"
 #include "../theme/ExoSnapTheme.h"
 
 #include <QFontMetrics>
@@ -26,9 +25,9 @@ ToneColors ColorsFor(StatusPill::Tone tone) {
     const QColor text1(exosnap::ui::theme::ThemeText1Color(t));
     const QColor line2 = exosnap::ui::theme::ParseThemeColor(t.line2);
     const QColor mut(QString::fromUtf8(t.mut));
-    // Info tone (azure/blue-grey) has no theme token yet — keep the static
-    // value from the dark-default palette; it stays visually neutral across themes.
-    const QColor info(exosnap::ui::theme::ExoSnapPalette::kInfo);
+    // Info tone: use the active accent so it matches the theme (accent is
+    // visually distinct from amber Warn and coral Recording on all four themes).
+    const QColor info(QString::fromUtf8(t.ac));
 
     switch (tone) {
     case StatusPill::Tone::Ready: {

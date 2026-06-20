@@ -43,15 +43,13 @@ OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     brand_mark_ = new ui::brand::BrandMarkWidget(brand_slot);
     brand_mark_->setFixedSize(20, 20);
 
-    auto* wordmark = new QLabel(brand_slot);
-    wordmark->setProperty("labelRole", "titlebarWordmark");
-    wordmark->setTextFormat(Qt::RichText);
-    wordmark->setText(
-        QStringLiteral("<span style=\"color:%1;\">exo</span><span style=\"color:%2;\">snap</span>")
-            .arg(QString::fromUtf8(theme::ActiveTheme().ink), QString::fromUtf8(theme::ActiveTheme().ac)));
+    wordmark_ = new QLabel(brand_slot);
+    wordmark_->setProperty("labelRole", "titlebarWordmark");
+    wordmark_->setTextFormat(Qt::RichText);
+    refreshBrand();
 
     brand_layout->addWidget(brand_mark_, 0, Qt::AlignVCenter);
-    brand_layout->addWidget(wordmark, 0, Qt::AlignVCenter);
+    brand_layout->addWidget(wordmark_, 0, Qt::AlignVCenter);
 
     // Top navigation tabs (populated via setNavItems()).
     auto* nav_container = new QWidget(this);
@@ -381,6 +379,14 @@ void OperationalTitleBar::refreshStatusChip() {
         status_pill_->setText(QStringLiteral("Ready"));
     }
     status_pill_->setVisible(true);
+}
+
+void OperationalTitleBar::refreshBrand() {
+    if (wordmark_ == nullptr)
+        return;
+    const auto& t = theme::ActiveTheme();
+    wordmark_->setText(QStringLiteral("<span style=\"color:%1;\">exo</span><span style=\"color:%2;\">snap</span>")
+                           .arg(QString::fromUtf8(t.ink), QString::fromUtf8(t.ac)));
 }
 
 } // namespace exosnap::ui::chrome

@@ -4,6 +4,7 @@
 class QFrame;
 class QEvent;
 class QKeyEvent;
+class QLabel;
 class QMouseEvent;
 class QPaintEvent;
 class QShowEvent;
@@ -39,6 +40,9 @@ class AboutOverlay : public QWidget {
         return update_panel_;
     }
 
+    // Re-bakes the two-tone wordmark rich-text from ActiveTheme(). Call after a theme switch.
+    void refreshBrand();
+
   signals:
     void closed();
     // Forwarded from UpdateSettingsPanel::checkRequested — MainWindow connects here.
@@ -60,6 +64,8 @@ class AboutOverlay : public QWidget {
 
     // Container widget (holds aboutCard QFrame + update panel).
     QWidget* card_ = nullptr;
+    // Stored to allow refreshBrand() to re-bake the rich-text wordmark on theme switch.
+    QLabel* wordmark_ = nullptr;
     // Embedded update settings panel — wired by MainWindow via updatePanel().
     UpdateSettingsPanel* update_panel_ = nullptr;
 };

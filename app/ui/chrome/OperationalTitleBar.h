@@ -65,6 +65,10 @@ class OperationalTitleBar : public QWidget {
         return bell_;
     }
 
+    // Re-bakes the two-tone wordmark rich-text from ActiveTheme(). Call after a theme switch
+    // so the "exo" colour is correct for the current (possibly persisted) theme.
+    void refreshBrand();
+
     bool isInDragArea(const QPoint& local_pos) const;
     WindowButtonHit hitTestWindowButton(const QPoint& local_pos) const;
     void resetDragCursor();
@@ -87,6 +91,7 @@ class OperationalTitleBar : public QWidget {
 
   private:
     ui::brand::BrandMarkWidget* brand_mark_ = nullptr;
+    QLabel* wordmark_ = nullptr; // stored to allow refreshBrand() to re-bake rich-text
     QHBoxLayout* nav_layout_ = nullptr;
     QButtonGroup* nav_group_ = nullptr;
     ui::widgets::StatusPill* status_pill_ = nullptr;
