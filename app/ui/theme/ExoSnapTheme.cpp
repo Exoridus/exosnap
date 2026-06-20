@@ -15,40 +15,56 @@
 #include <QVector>
 #include <QtGlobal>
 
-#include "ExoSnapAccents.h"
 #include "ExoSnapMetrics.h"
 #include "ExoSnapPalette.h"
+#include "ExoSnapThemes.h"
 
 namespace exosnap::ui::theme {
 namespace {
 
 // ---------------------------------------------------------------------------
-// Accent color derivation
+// Compile-time string comparison helper
 // ---------------------------------------------------------------------------
 
-// Resolve an accent entry by id; returns nullptr if not found.
-const ExoSnapAccent* FindAccent(const QString& accent_id) {
-    for (const auto& a : kExoSnapAccents) {
-        if (QString::fromUtf8(a.id) == accent_id)
-            return &a;
+constexpr bool CStrEqual(const char* a, const char* b) {
+    while (*a != '\0' && *a == *b) {
+        ++a;
+        ++b;
     }
-    return nullptr;
+    return *a == *b;
 }
 
-// The default accent entry (first in the curated table = Studio Mint).
-const ExoSnapAccent& DefaultAccent() {
-    return kExoSnapAccents.front();
-}
+// ---------------------------------------------------------------------------
+// Verify dark-default values match the legacy ExoSnapPalette constants
+// ---------------------------------------------------------------------------
 
-// Resolve an accent by id, falling back to the default accent when not found.
-const ExoSnapAccent& ResolveAccent(const QString& accent_id) {
-    if (const ExoSnapAccent* a = FindAccent(accent_id))
-        return *a;
-    qWarning().noquote() << "ExoSnap: unknown accent id" << accent_id << "— falling back to default.";
-    return DefaultAccent();
-}
+static_assert(CStrEqual(kExoThemes.front().id, "dark-default"), "First theme must be dark-default.");
+static_assert(CStrEqual(kExoThemes.front().bg, ExoSnapPalette::kBg0), "dark-default bg must match kBg0.");
+static_assert(CStrEqual(kExoThemes.front().surf, ExoSnapPalette::kBg1), "dark-default surf must match kBg1.");
+static_assert(CStrEqual(kExoThemes.front().surf2, ExoSnapPalette::kBg2), "dark-default surf2 must match kBg2.");
+static_assert(CStrEqual(kExoThemes.front().raise, ExoSnapPalette::kBg3), "dark-default raise must match kBg3.");
+static_assert(CStrEqual(kExoThemes.front().ink, ExoSnapPalette::kText0), "dark-default ink must match kText0.");
+static_assert(CStrEqual(kExoThemes.front().mut, ExoSnapPalette::kText2), "dark-default mut must match kText2.");
+static_assert(CStrEqual(kExoThemes.front().dim, ExoSnapPalette::kText3), "dark-default dim must match kText3.");
+static_assert(CStrEqual(kExoThemes.front().ac, ExoSnapPalette::kAccent), "dark-default ac must match kAccent.");
+static_assert(CStrEqual(kExoThemes.front().ac_ink, ExoSnapPalette::kAccentInk),
+              "dark-default ac_ink must match kAccentInk.");
+static_assert(CStrEqual(kExoThemes.front().success, ExoSnapPalette::kOk), "dark-default success must match kOk.");
+static_assert(CStrEqual(kExoThemes.front().caution, ExoSnapPalette::kWarn), "dark-default caution must match kWarn.");
+static_assert(CStrEqual(kExoThemes.front().error, ExoSnapPalette::kErr), "dark-default error must match kErr.");
+// Derived override cross-checks:
+static_assert(CStrEqual(kExoThemes.front().bg4_override, ExoSnapPalette::kBg4),
+              "dark-default bg4_override must match kBg4.");
+static_assert(CStrEqual(kExoThemes.front().line3_override, ExoSnapPalette::kLine3),
+              "dark-default line3_override must match kLine3.");
+static_assert(CStrEqual(kExoThemes.front().text1_override, ExoSnapPalette::kText1),
+              "dark-default text1_override must match kText1.");
 
-// Derived alpha token: "rgba(R, G, B, alpha)" from a hex base color.
+// ---------------------------------------------------------------------------
+// Colour math helpers
+// ---------------------------------------------------------------------------
+
+// Derived alpha token: "rgba(R, G, B, alpha)" from a QColor.
 QString RgbaToken(const QColor& base, double alpha) {
     return QStringLiteral("rgba(%1, %2, %3, %4)")
         .arg(base.red())
@@ -70,55 +86,46 @@ QColor Darken(const QColor& c, double factor) {
     return QColor(qRound(c.red() * (1.0 - f)), qRound(c.green() * (1.0 - f)), qRound(c.blue() * (1.0 - f)));
 }
 
-struct AccentTokens {
-    QString accent;         // ${accent}
-    QString accent_ink;     // ${accent-ink}
-    QString accent_dim;     // ${accent-dim}    alpha 0.14
-    QString accent_soft;    // ${accent-soft}   alpha 0.24
-    QString accent_line;    // ${accent-line}   alpha 0.42
-    QString accent_b2;      // ${accent-b2}     alpha 0.60
-    QString accent_hover;   // ${accent-hover}  slightly lighter
-    QString accent_pressed; // ${accent-pressed} slightly darker
-};
-
-AccentTokens DeriveAccentTokens(const ExoSnapAccent& accent) {
-    const QColor base(QString::fromUtf8(accent.base));
-    AccentTokens t;
-    t.accent = QString::fromUtf8(accent.base);
-    t.accent_ink = QString::fromUtf8(accent.ink);
-    t.accent_dim = RgbaToken(base, 0.14);
-    t.accent_soft = RgbaToken(base, 0.24);
-    t.accent_line = RgbaToken(base, 0.42);
-    t.accent_b2 = RgbaToken(base, 0.60);
-    t.accent_hover = Lighten(base, 0.14).name();
-    t.accent_pressed = Darken(base, 0.09).name();
-    return t;
+// Blend c1 toward c2 at `t` (0=c1, 1=c2).
+QColor Blend(const QColor& c1, const QColor& c2, double t) {
+    const double s = std::clamp(t, 0.0, 1.0);
+    return QColor(qRound(c1.red() * (1.0 - s) + c2.red() * s), qRound(c1.green() * (1.0 - s) + c2.green() * s),
+                  qRound(c1.blue() * (1.0 - s) + c2.blue() * s));
 }
 
-// Verify that the default accent derives the same values as the static palette
-// constants, so we can trust DeriveAccentTokens is consistent.
-// (Checked in debug builds only; tolerance for rounding in alpha strings.)
+// ---------------------------------------------------------------------------
+// Theme resolution
+// ---------------------------------------------------------------------------
 
-constexpr bool CStrEqual(const char* a, const char* b) {
-    while (*a != '\0' && *a == *b) {
-        ++a;
-        ++b;
+// Find a theme by id; returns nullptr if not found.
+const ExoTheme* FindTheme(const QString& theme_id) {
+    for (const auto& t : kExoThemes) {
+        if (QString::fromUtf8(t.id) == theme_id)
+            return &t;
     }
-    return *a == *b;
+    return nullptr;
 }
 
-// Keep the curated accent table and the active palette in sync at compile time.
-static_assert(CStrEqual(kDefaultAccentId, kExoSnapAccents.front().id),
-              "kDefaultAccentId must reference the first curated accent.");
-static_assert(CStrEqual(kExoSnapAccents.front().base, ExoSnapPalette::kAccent),
-              "Default curated accent base must match ExoSnapPalette::kAccent.");
-static_assert(CStrEqual(kExoSnapAccents.front().ink, ExoSnapPalette::kAccentInk),
-              "Default curated accent ink must match ExoSnapPalette::kAccentInk.");
+// Resolve a theme by id, falling back to dark-default when not found.
+const ExoTheme& ResolveTheme(const QString& theme_id) {
+    if (const ExoTheme* t = FindTheme(theme_id))
+        return *t;
+    qWarning().noquote() << "ExoSnap: unknown theme id" << theme_id << "— falling back to dark-default.";
+    return kExoThemes.front();
+}
 
-struct ThemeToken {
-    QString key;
-    QString value;
-};
+// ---------------------------------------------------------------------------
+// Active theme storage
+// ---------------------------------------------------------------------------
+
+ExoTheme& ActiveThemeStorage() {
+    static ExoTheme active = kExoThemes.front();
+    return active;
+}
+
+// ---------------------------------------------------------------------------
+// Font family helpers
+// ---------------------------------------------------------------------------
 
 struct ThemeFontFamilies {
     // D2: Segoe UI is the blessed system face for UI text (no bundled sans).
@@ -146,10 +153,8 @@ QString SelectPreferredFamily(const QStringList& discovered_families, const QStr
         if (family.compare(fallback_family, Qt::CaseInsensitive) == 0)
             return family;
     }
-
     if (!discovered_families.isEmpty())
         return discovered_families.first();
-
     return fallback_family;
 }
 
@@ -162,16 +167,12 @@ QStringList BuildFamilyStack(const QString& primary_family, const QStringList& f
 }
 
 QStringList SansFamilies(const ThemeFontFamilies& font_families) {
-    // D2: Segoe UI Variable Text / Segoe UI are the blessed 1.0 UI faces (system fonts;
-    // nothing bundled for sans). Hanken Grotesk is deferred to 1.1.
     return BuildFamilyStack(QStringLiteral("Segoe UI Variable Text"),
                             {QStringLiteral("Segoe UI"), font_families.sans_primary, QStringLiteral("system-ui"),
                              QStringLiteral("sans-serif")});
 }
 
 QStringList MonoFamilies(const ThemeFontFamilies& font_families) {
-    // D2: IBM Plex Mono is the mandatory 1.0 mono voice — bundled as Regular + Medium TTFs
-    // via QFontDatabase. Consolas is the platform fallback only; JetBrains Mono is removed.
     return BuildFamilyStack(QStringLiteral("IBM Plex Mono"),
                             {font_families.mono_primary, QStringLiteral("Consolas"), QStringLiteral("monospace")});
 }
@@ -188,43 +189,183 @@ QString CssFontFamily(const QStringList& families) {
     return escaped.join(", ");
 }
 
+// ---------------------------------------------------------------------------
+// QSS loading + token replacement
+// ---------------------------------------------------------------------------
+
+struct ThemeToken {
+    QString key;
+    QString value;
+};
+
 QString ReadThemeQss() {
     QFile file(":/theme/exosnap_dark.qss");
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         qWarning("Failed to load ExoSnap theme QSS resource.");
         return {};
     }
-
     QTextStream stream(&file);
     return stream.readAll();
 }
 
-QVector<ThemeToken> BuildTokens(const ThemeFontFamilies& font_families, const AccentTokens& at) {
+QVector<ThemeToken> BuildTokens(const ThemeFontFamilies& font_families, const ExoTheme& theme) {
+    const bool dark = (theme.kind == ThemeKind::Dark);
+
+    // Resolve colours from theme fields
+    const QColor bg4_c = theme.bg4_override ? QColor(QString::fromUtf8(theme.bg4_override))
+                                            : (dark ? Lighten(QColor(QString::fromUtf8(theme.raise)), 0.10)
+                                                    : Darken(QColor(QString::fromUtf8(theme.raise)), 0.04));
+
+    const QColor ink_c(QString::fromUtf8(theme.ink));
+    const QColor mut_c(QString::fromUtf8(theme.mut));
+    const QColor dim_c(QString::fromUtf8(theme.dim));
+    const QColor ac_c(QString::fromUtf8(theme.ac));
+    const QColor ac2_c(QString::fromUtf8(theme.ac2));
+    const QColor ok_c(QString::fromUtf8(theme.success));
+    const QColor warn_c(QString::fromUtf8(theme.caution));
+    const QColor err_c(QString::fromUtf8(theme.error));
+
+    // line3 (stronger hover border)
+    QString line3;
+    if (theme.line3_override) {
+        line3 = QString::fromUtf8(theme.line3_override);
+    } else {
+        line3 = dark ? QStringLiteral("rgba(255, 255, 255, 0.20)") : RgbaToken(ink_c, 0.24);
+    }
+
+    // text1 (body color)
+    QString text1;
+    if (theme.text1_override) {
+        text1 = QString::fromUtf8(theme.text1_override);
+    } else {
+        text1 = Blend(ink_c, mut_c, 0.42).name();
+    }
+
+    // Alpha sets
+    const double acDim = dark ? 0.14 : 0.12;
+    const double acSoft = dark ? 0.24 : 0.18;
+    const double acB1 = dark ? 0.42 : 0.34;
+    const double acB2 = dark ? 0.60 : 0.52;
+    const double ac2Dim = dark ? 0.16 : 0.13;
+    const double ac2B = dark ? 0.55 : 0.46;
+    const double sDim = dark ? 0.13 : 0.12;
+    const double sB = dark ? 0.44 : 0.42;
+    const double recDim = dark ? 0.16 : 0.13;
+
     return {
-        {"${bg0}", ExoSnapPalette::kBg0},
-        {"${bg1}", ExoSnapPalette::kBg1},
-        {"${bg2}", ExoSnapPalette::kBg2},
-        {"${bg3}", ExoSnapPalette::kBg3},
-        {"${bg4}", ExoSnapPalette::kBg4},
-        {"${line1}", ExoSnapPalette::kLine1},
-        {"${line2}", ExoSnapPalette::kLine2},
-        {"${line3}", ExoSnapPalette::kLine3},
-        {"${text0}", ExoSnapPalette::kText0},
-        {"${text1}", ExoSnapPalette::kText1},
-        {"${text2}", ExoSnapPalette::kText2},
-        {"${text3}", ExoSnapPalette::kText3},
-        {"${accent}", at.accent},
-        {"${accent-ink}", at.accent_ink},
-        {"${accent-dim}", at.accent_dim},
-        {"${accent-soft}", at.accent_soft},
-        {"${accent-line}", at.accent_line},
-        {"${accent-b2}", at.accent_b2},
-        {"${accent-hover}", at.accent_hover},
-        {"${accent-pressed}", at.accent_pressed},
-        {"${ok}", ExoSnapPalette::kOk},
-        {"${warn}", ExoSnapPalette::kWarn},
-        {"${err}", ExoSnapPalette::kErr},
-        {"${info}", ExoSnapPalette::kInfo},
+        // Backgrounds
+        {"${bg0}", QString::fromUtf8(theme.bg)},
+        {"${bg1}", QString::fromUtf8(theme.surf)},
+        {"${bg2}", QString::fromUtf8(theme.surf2)},
+        {"${bg3}", QString::fromUtf8(theme.raise)},
+        {"${bg4}", bg4_c.name()},
+        // Lines
+        {"${line1}", QString::fromUtf8(theme.line)},
+        {"${line2}", QString::fromUtf8(theme.line2)},
+        {"${line3}", line3},
+        // Text
+        {"${text0}", QString::fromUtf8(theme.ink)},
+        {"${text1}", text1},
+        {"${text2}", QString::fromUtf8(theme.mut)},
+        {"${text3}", QString::fromUtf8(theme.dim)},
+        // Primary accent
+        {"${accent}", QString::fromUtf8(theme.ac)},
+        {"${accent-ink}", QString::fromUtf8(theme.ac_ink)},
+        {"${accent-dim}", RgbaToken(ac_c, acDim)},
+        {"${accent-soft}", RgbaToken(ac_c, acSoft)},
+        {"${accent-line}", RgbaToken(ac_c, acB1)},
+        {"${accent-b2}", RgbaToken(ac_c, acB2)},
+        {"${accent-hover}", Lighten(ac_c, 0.14).name()},
+        {"${accent-pressed}", Darken(ac_c, 0.09).name()},
+        // Secondary accent
+        {"${accent2}", QString::fromUtf8(theme.ac2)},
+        {"${accent2-ink}", QString::fromUtf8(theme.ac2_ink)},
+        {"${accent2-dim}", RgbaToken(ac2_c, ac2Dim)},
+        {"${accent2-b2}", RgbaToken(ac2_c, ac2B)},
+        // Semantic
+        {"${ok}", QString::fromUtf8(theme.success)},
+        {"${warn}", QString::fromUtf8(theme.caution)},
+        {"${err}", QString::fromUtf8(theme.error)},
+        {"${info}", QString::fromUtf8(theme.ac)}, // info = accent
+        {"${ok-dim}", RgbaToken(ok_c, sDim)},
+        {"${ok-b}", RgbaToken(ok_c, sB)},
+        {"${warn-dim}", RgbaToken(warn_c, sDim)},
+        {"${warn-b}", RgbaToken(warn_c, sB)},
+        {"${err-dim}", RgbaToken(err_c, sDim)},
+        {"${err-b}", RgbaToken(err_c, sB)},
+        {"${rec-dim}", RgbaToken(err_c, recDim)},
+        // ok alpha tokens (fixed alpha, base color follows theme)
+        {"${ok-a06}", RgbaToken(ok_c, 0.06)},
+        {"${ok-a07}", RgbaToken(ok_c, 0.07)},
+        {"${ok-a08}", RgbaToken(ok_c, 0.08)},
+        {"${ok-a12}", RgbaToken(ok_c, 0.12)},
+        {"${ok-a13}", RgbaToken(ok_c, 0.13)},
+        {"${ok-a14}", RgbaToken(ok_c, 0.14)},
+        {"${ok-a20}", RgbaToken(ok_c, 0.20)},
+        {"${ok-a34}", RgbaToken(ok_c, 0.34)},
+        {"${ok-a36}", RgbaToken(ok_c, 0.36)},
+        {"${ok-a40}", RgbaToken(ok_c, 0.40)},
+        {"${ok-a42}", RgbaToken(ok_c, 0.42)},
+        {"${ok-a44}", RgbaToken(ok_c, 0.44)},
+        {"${ok-a46}", RgbaToken(ok_c, 0.46)},
+        {"${ok-a48}", RgbaToken(ok_c, 0.48)},
+        {"${ok-a52}", RgbaToken(ok_c, 0.52)},
+        {"${ok-a68}", RgbaToken(ok_c, 0.68)},
+        // warn alpha tokens (fixed alpha, base color follows theme)
+        {"${warn-a08}", RgbaToken(warn_c, 0.08)},
+        {"${warn-a10}", RgbaToken(warn_c, 0.10)},
+        {"${warn-a12}", RgbaToken(warn_c, 0.12)},
+        {"${warn-a14}", RgbaToken(warn_c, 0.14)},
+        {"${warn-a15}", RgbaToken(warn_c, 0.15)},
+        {"${warn-a16}", RgbaToken(warn_c, 0.16)},
+        {"${warn-a18}", RgbaToken(warn_c, 0.18)},
+        {"${warn-a20}", RgbaToken(warn_c, 0.20)},
+        {"${warn-a22}", RgbaToken(warn_c, 0.22)},
+        {"${warn-a24}", RgbaToken(warn_c, 0.24)},
+        {"${warn-a42}", RgbaToken(warn_c, 0.42)},
+        {"${warn-a44}", RgbaToken(warn_c, 0.44)},
+        {"${warn-a48}", RgbaToken(warn_c, 0.48)},
+        {"${warn-a50}", RgbaToken(warn_c, 0.50)},
+        {"${warn-a52}", RgbaToken(warn_c, 0.52)},
+        {"${warn-a58}", RgbaToken(warn_c, 0.58)},
+        {"${warn-a64}", RgbaToken(warn_c, 0.64)},
+        {"${warn-a68}", RgbaToken(warn_c, 0.68)},
+        // err alpha tokens (fixed alpha, base color follows theme)
+        {"${err-a08}", RgbaToken(err_c, 0.08)},
+        {"${err-a10}", RgbaToken(err_c, 0.10)},
+        {"${err-a12}", RgbaToken(err_c, 0.12)},
+        {"${err-a16}", RgbaToken(err_c, 0.16)},
+        {"${err-a18}", RgbaToken(err_c, 0.18)},
+        {"${err-a20}", RgbaToken(err_c, 0.20)},
+        {"${err-a22}", RgbaToken(err_c, 0.22)},
+        {"${err-a42}", RgbaToken(err_c, 0.42)},
+        {"${err-a48}", RgbaToken(err_c, 0.48)},
+        {"${err-a52}", RgbaToken(err_c, 0.52)},
+        {"${err-a55}", RgbaToken(err_c, 0.55)},
+        {"${err-a58}", RgbaToken(err_c, 0.58)},
+        {"${err-a60}", RgbaToken(err_c, 0.60)},
+        {"${err-a62}", RgbaToken(err_c, 0.62)},
+        {"${err-a66}", RgbaToken(err_c, 0.66)},
+        {"${err-a70}", RgbaToken(err_c, 0.70)},
+        {"${err-a74}", RgbaToken(err_c, 0.74)},
+        // accent alpha tokens (fixed alpha, base color follows theme)
+        {"${ac-a10}", RgbaToken(ac_c, 0.10)},
+        {"${ac-a12}", RgbaToken(ac_c, 0.12)},
+        {"${ac-a16}", RgbaToken(ac_c, 0.16)},
+        {"${ac-a18}", RgbaToken(ac_c, 0.18)},
+        // surface alpha tokens (chip/overlay backgrounds derived from surface colors)
+        {"${surf-a92}", RgbaToken(QColor(QString::fromUtf8(theme.surf)), 0.92)},
+        {"${surf2-a78}", RgbaToken(QColor(QString::fromUtf8(theme.surf2)), 0.78)},
+        {"${surf2-a86}", RgbaToken(QColor(QString::fromUtf8(theme.surf2)), 0.86)},
+        {"${surf2-a92}", RgbaToken(QColor(QString::fromUtf8(theme.surf2)), 0.92)},
+        // Log palette
+        {"${log-cat}", QString::fromUtf8(theme.log.cat)},
+        {"${log-info}", QString::fromUtf8(theme.log.info)},
+        {"${log-warn}", QString::fromUtf8(theme.log.warn)},
+        {"${log-error}", QString::fromUtf8(theme.log.error)},
+        {"${log-debug}", QString::fromUtf8(theme.log.debug)},
+        {"${log-time}", QString::fromUtf8(theme.log.time)},
+        // Spacing / radius / sizing
         {"${space-xs}", QString::number(ExoSnapMetrics::kSpaceXs)},
         {"${space-sm}", QString::number(ExoSnapMetrics::kSpaceSm)},
         {"${space-md}", QString::number(ExoSnapMetrics::kSpaceMd)},
@@ -256,12 +397,12 @@ QStringList FindUnresolvedThemeTokens(const QString& stylesheet) {
     return unresolved;
 }
 
-QString BuildThemeStylesheet(const ThemeFontFamilies& font_families, const AccentTokens& at) {
+QString BuildThemeStylesheet(const ThemeFontFamilies& font_families, const ExoTheme& theme) {
     QString qss = ReadThemeQss();
     if (qss.isEmpty())
         return qss;
 
-    for (const auto& token : BuildTokens(font_families, at))
+    for (const auto& token : BuildTokens(font_families, theme))
         qss.replace(token.key, token.value);
 
     const QStringList unresolved = FindUnresolvedThemeTokens(qss);
@@ -277,41 +418,43 @@ QString BuildThemeStylesheet(const ThemeFontFamilies& font_families, const Accen
     return qss;
 }
 
-// Apply the accent-dependent palette roles (highlight + link) for the active accent.
-void ApplyAccentPalette(QApplication& app, const AccentTokens& at) {
-    QPalette palette = app.palette();
-    palette.setColor(QPalette::Highlight, QColor(at.accent));
-    palette.setColor(QPalette::HighlightedText, QColor(at.accent_ink));
-    palette.setColor(QPalette::Link, QColor(at.accent));
-    app.setPalette(palette);
-}
+// ---------------------------------------------------------------------------
+// Qt palette application
+// ---------------------------------------------------------------------------
 
-// Cached font families after initial load; populated by ApplyExoSnapTheme().
-ThemeFontFamilies& CachedFontFamilies() {
-    static ThemeFontFamilies font_families;
-    return font_families;
-}
+void ApplyPalette(QApplication& app, const ExoTheme& theme) {
+    const QColor ink(QString::fromUtf8(theme.ink));
+    const QColor mut(QString::fromUtf8(theme.mut));
+    const QColor dim(QString::fromUtf8(theme.dim));
+    const QColor ac(QString::fromUtf8(theme.ac));
+    const QColor ac_ink(QString::fromUtf8(theme.ac_ink));
 
-void ApplyPalette(QApplication& app, const AccentTokens& at) {
+    // Derive text1 for ButtonText
+    const QString text1 = theme.text1_override ? QString::fromUtf8(theme.text1_override) : Blend(ink, mut, 0.42).name();
+
     QPalette palette;
-    palette.setColor(QPalette::Window, QColor(ExoSnapPalette::kBg0));
-    palette.setColor(QPalette::WindowText, QColor(ExoSnapPalette::kText0));
-    palette.setColor(QPalette::Base, QColor(ExoSnapPalette::kBg2));
-    palette.setColor(QPalette::AlternateBase, QColor(ExoSnapPalette::kBg3));
-    palette.setColor(QPalette::Text, QColor(ExoSnapPalette::kText0));
-    palette.setColor(QPalette::Button, QColor(ExoSnapPalette::kBg3));
-    palette.setColor(QPalette::ButtonText, QColor(ExoSnapPalette::kText1));
-    palette.setColor(QPalette::Highlight, QColor(at.accent));
-    palette.setColor(QPalette::HighlightedText, QColor(at.accent_ink));
-    palette.setColor(QPalette::Link, QColor(at.accent));
-    palette.setColor(QPalette::ToolTipBase, QColor(ExoSnapPalette::kBg2));
-    palette.setColor(QPalette::ToolTipText, QColor(ExoSnapPalette::kText0));
-    palette.setColor(QPalette::PlaceholderText, QColor(ExoSnapPalette::kText2));
-    palette.setColor(QPalette::Disabled, QPalette::Text, QColor(ExoSnapPalette::kText3));
-    palette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(ExoSnapPalette::kText3));
-    palette.setColor(QPalette::Disabled, QPalette::WindowText, QColor(ExoSnapPalette::kText3));
+    palette.setColor(QPalette::Window, QColor(QString::fromUtf8(theme.bg)));
+    palette.setColor(QPalette::WindowText, ink);
+    palette.setColor(QPalette::Base, QColor(QString::fromUtf8(theme.surf2)));
+    palette.setColor(QPalette::AlternateBase, QColor(QString::fromUtf8(theme.raise)));
+    palette.setColor(QPalette::Text, ink);
+    palette.setColor(QPalette::Button, QColor(QString::fromUtf8(theme.raise)));
+    palette.setColor(QPalette::ButtonText, QColor(text1));
+    palette.setColor(QPalette::Highlight, ac);
+    palette.setColor(QPalette::HighlightedText, ac_ink);
+    palette.setColor(QPalette::Link, ac);
+    palette.setColor(QPalette::ToolTipBase, QColor(QString::fromUtf8(theme.surf2)));
+    palette.setColor(QPalette::ToolTipText, ink);
+    palette.setColor(QPalette::PlaceholderText, mut);
+    palette.setColor(QPalette::Disabled, QPalette::Text, dim);
+    palette.setColor(QPalette::Disabled, QPalette::ButtonText, dim);
+    palette.setColor(QPalette::Disabled, QPalette::WindowText, dim);
     app.setPalette(palette);
 }
+
+// ---------------------------------------------------------------------------
+// Font loading
+// ---------------------------------------------------------------------------
 
 QStringList LoadFontFamiliesFromResources(const QStringList& font_resources, const QString& label) {
     QStringList discovered_families;
@@ -320,34 +463,27 @@ QStringList LoadFontFamiliesFromResources(const QStringList& font_resources, con
             qWarning().noquote() << "ExoSnap font resource missing:" << path;
             continue;
         }
-
         const int font_id = QFontDatabase::addApplicationFont(path);
         if (font_id < 0) {
             qWarning().noquote() << "Failed to load ExoSnap font resource:" << path;
             continue;
         }
-
         const QStringList families = QFontDatabase::applicationFontFamilies(font_id);
         if (families.isEmpty()) {
             qWarning().noquote() << "Loaded ExoSnap font resource without family metadata:" << path;
             continue;
         }
-
         for (const QString& family : families)
             AppendUniqueFamily(discovered_families, family);
     }
-
     if (discovered_families.isEmpty())
         qWarning().noquote() << "No usable bundled font family discovered for" << label << "fonts.";
-
     return discovered_families;
 }
 
 ThemeFontFamilies LoadBundledFonts() {
     ThemeFontFamilies font_families;
 
-    // D2: IBM Plex Mono (Regular + Medium) is the only bundled family. Segoe UI is a
-    // system font; no sans family is loaded from resources.
     const QStringList plex_families = LoadFontFamiliesFromResources(
         {QStringLiteral(":/fonts/IBMPlexMono-Regular.ttf"), QStringLiteral(":/fonts/IBMPlexMono-Medium.ttf")},
         QStringLiteral("IBM Plex Mono"));
@@ -363,26 +499,123 @@ void ApplyDefaultAppFont(QApplication& app, const ThemeFontFamilies& font_famili
     app.setFont(app_font);
 }
 
+// Cached font families after initial load; populated by ApplyExoSnapTheme().
+ThemeFontFamilies& CachedFontFamilies() {
+    static ThemeFontFamilies font_families;
+    return font_families;
+}
+
 } // namespace
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+const ExoTheme& ActiveTheme() {
+    return ActiveThemeStorage();
+}
+
+QColor ParseThemeColor(const char* css_color) {
+    if (!css_color)
+        return {};
+
+    const QString s = QString::fromUtf8(css_color).trimmed();
+
+    // Try direct QColor parse (handles #rrggbb, #rgb, named colors, etc.)
+    QColor c(s);
+    if (c.isValid())
+        return c;
+
+    // Try rgba(r, g, b, a) where a is 0..1 float
+    static const QRegularExpression kRgba(R"(rgba\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([0-9]*\.?[0-9]+)\s*\))",
+                                          QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch m = kRgba.match(s);
+    if (m.hasMatch()) {
+        const int r = m.captured(1).toInt();
+        const int g = m.captured(2).toInt();
+        const int b = m.captured(3).toInt();
+        const double a = m.captured(4).toDouble();
+        return QColor(r, g, b, qRound(a * 255.0));
+    }
+
+    return {};
+}
 
 void ApplyExoSnapTheme(QApplication& app) {
     const ThemeFontFamilies font_families = LoadBundledFonts();
     CachedFontFamilies() = font_families;
 
-    const AccentTokens at = DeriveAccentTokens(DefaultAccent());
+    const ExoTheme& theme = kExoThemes.front(); // dark-default
+    ActiveThemeStorage() = theme;
 
     app.setStyle("Fusion");
     ApplyDefaultAppFont(app, font_families);
-    ApplyPalette(app, at);
-    app.setStyleSheet(BuildThemeStylesheet(font_families, at));
+    ApplyPalette(app, theme);
+    app.setStyleSheet(BuildThemeStylesheet(font_families, theme));
+}
+
+void ReapplyTheme(QApplication& app, const QString& theme_id) {
+    const ExoTheme& theme = ResolveTheme(theme_id);
+    ActiveThemeStorage() = theme;
+
+    ApplyPalette(app, theme);
+    app.setStyleSheet(BuildThemeStylesheet(CachedFontFamilies(), theme));
 }
 
 void ReapplyAccent(QApplication& app, const QString& accent_id) {
-    const ExoSnapAccent& accent = ResolveAccent(accent_id);
-    const AccentTokens at = DeriveAccentTokens(accent);
+    // Legacy compat: map old accent ids to themes.
+    // "mint" was the default accent -> dark-default theme.
+    // All other old accent ids had no corresponding theme -> fall back to dark-default.
+    Q_UNUSED(accent_id);
+    // All old accents map to dark-default (the only dark theme that existed).
+    ReapplyTheme(app, QStringLiteral("dark-default"));
+}
 
-    ApplyAccentPalette(app, at);
-    app.setStyleSheet(BuildThemeStylesheet(CachedFontFamilies(), at));
+QString ThemeBg4Color(const ExoTheme& theme) {
+    if (theme.bg4_override)
+        return QString::fromUtf8(theme.bg4_override);
+    const QColor raise(QString::fromUtf8(theme.raise));
+    const bool dark = (theme.kind == ThemeKind::Dark);
+    const double f = dark ? 0.10 : 0.04;
+    const QColor bg4 =
+        dark ? QColor(qRound(raise.red() + (255 - raise.red()) * f), qRound(raise.green() + (255 - raise.green()) * f),
+                      qRound(raise.blue() + (255 - raise.blue()) * f))
+             : QColor(qRound(raise.red() * (1.0 - f)), qRound(raise.green() * (1.0 - f)),
+                      qRound(raise.blue() * (1.0 - f)));
+    return bg4.name();
+}
+
+QString ThemeText1Color(const ExoTheme& theme) {
+    if (theme.text1_override)
+        return QString::fromUtf8(theme.text1_override);
+    const QColor ink(QString::fromUtf8(theme.ink));
+    const QColor mut(QString::fromUtf8(theme.mut));
+    const double t = 0.42;
+    return QColor(qRound(ink.red() * (1.0 - t) + mut.red() * t), qRound(ink.green() * (1.0 - t) + mut.green() * t),
+                  qRound(ink.blue() * (1.0 - t) + mut.blue() * t))
+        .name();
+}
+
+QString ThemeAccentHover(const ExoTheme& theme) {
+    const QColor ac(QString::fromUtf8(theme.ac));
+    constexpr double f = 0.14;
+    return QColor(qRound(ac.red() + (255 - ac.red()) * f), qRound(ac.green() + (255 - ac.green()) * f),
+                  qRound(ac.blue() + (255 - ac.blue()) * f))
+        .name();
+}
+
+QString ThemeAccentPressed(const ExoTheme& theme) {
+    const QColor ac(QString::fromUtf8(theme.ac));
+    constexpr double f = 0.09;
+    return QColor(qRound(ac.red() * (1.0 - f)), qRound(ac.green() * (1.0 - f)), qRound(ac.blue() * (1.0 - f))).name();
+}
+
+QString ThemeRgba(const QColor& base, double alpha) {
+    return QStringLiteral("rgba(%1, %2, %3, %4)")
+        .arg(base.red())
+        .arg(base.green())
+        .arg(base.blue())
+        .arg(QString::number(alpha, 'f', 2));
 }
 
 } // namespace exosnap::ui::theme

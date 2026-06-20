@@ -47,6 +47,21 @@ function(exosnap_add_gtest)
     )
   endforeach()
 
+  # Stage core Qt DLLs next to the test binary so gtest discovery works without
+  # Qt on PATH on clean CI runners.  GUI tests in app/<config>/ already get full
+  # Qt deployment from the exosnap POST_BUILD; this covers the unit-test binaries
+  # that live in test-specific sub-directories.
+  foreach(_qt_target IN ITEMS Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg)
+    if(TARGET ${_qt_target})
+      add_custom_command(TARGET ${ARG_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:${_qt_target}>"
+            "$<TARGET_FILE_DIR:${ARG_NAME}>"
+        VERBATIM
+      )
+    endif()
+  endforeach()
+
   include(GoogleTest)
   if(ARG_TEST_PREFIX)
     gtest_discover_tests(${ARG_NAME} TEST_PREFIX "${ARG_TEST_PREFIX}")

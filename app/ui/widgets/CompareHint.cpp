@@ -17,6 +17,7 @@
 
 #include "../../models/SettingsCompareData.h"
 #include "../theme/ExoSnapPalette.h"
+#include "../theme/ExoSnapTheme.h"
 #include "../theme/LucideIcon.h"
 
 namespace exosnap::ui::widgets {
@@ -44,7 +45,6 @@ QLabel* makeBadge(const QString& text, const QString& color, const QString& bg, 
 
 CompareHint::CompareHint(const QString& compare_key, const QString& current_value, QWidget* parent)
     : QToolButton(parent), compare_key_(compare_key), current_value_(current_value) {
-    using P = ui::theme::ExoSnapPalette;
 
     // Flat "compareGlyph" role — same treatment as InfoHintIcon's "infoGlyph".
     setProperty("labelRole", "compareGlyph");
@@ -92,8 +92,8 @@ const QString& CompareHint::currentValue() const {
 
 void CompareHint::updateIcon(bool highlighted) {
     const qreal dpr = devicePixelRatioF();
-    const QString color = highlighted ? QString::fromLatin1(ui::theme::ExoSnapPalette::kAccent)
-                                      : QString::fromLatin1(ui::theme::ExoSnapPalette::kText3);
+    const QString color = highlighted ? QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac)
+                                      : QString::fromUtf8(exosnap::ui::theme::ActiveTheme().dim);
     setIcon(ui::theme::lucideIcon(QStringLiteral("info"), color, kGlyphSize, dpr));
 }
 
@@ -147,6 +147,7 @@ void CompareHint::onClicked() {
 
 void CompareHint::buildPopover() {
     using P = ui::theme::ExoSnapPalette;
+    const auto& t = exosnap::ui::theme::ActiveTheme();
     const auto* d = ui::compare::compareData(compare_key_);
     if (!d)
         return;
@@ -161,7 +162,7 @@ void CompareHint::buildPopover() {
     popover_->setStyleSheet(
         QStringLiteral("QWidget { background: %1; border: 1px solid %2; border-radius: 13px; }"
                        "QWidget#popoverInner { background: transparent; border: none; border-radius: 0; }")
-            .arg(QLatin1String(P::kBg2), QLatin1String(P::kLine2)));
+            .arg(QString::fromUtf8(t.surf2), QString::fromUtf8(t.line2)));
 
     // Drop shadow.
     auto* shadow = new QGraphicsDropShadowEffect(popover_);
@@ -191,9 +192,10 @@ void CompareHint::buildPopover() {
     auto* titleLabel = new QLabel(d->title, titleRow);
     titleLabel->setStyleSheet(QStringLiteral("QLabel { font-size: 13px; font-weight: 600; color: %1;"
                                              " background: transparent; border: none; border-radius: 0; }")
-                                  .arg(QLatin1String(P::kText0)));
+                                  .arg(QString::fromUtf8(t.ink)));
 
-    auto* compareBadge = makeBadge(QStringLiteral("COMPARE"), QLatin1String(P::kAccent), QLatin1String(P::kAccentDim),
+    auto* compareBadge = makeBadge(QStringLiteral("COMPARE"), QString::fromUtf8(t.ac),
+                                   exosnap::ui::theme::ThemeRgba(QColor(QString::fromUtf8(t.ac)), 0.14),
                                    QLatin1String(P::kAccentBorderStrong), titleRow);
 
     titleRowLayout->addWidget(titleLabel);
@@ -207,7 +209,7 @@ void CompareHint::buildPopover() {
         auto* subLabel = new QLabel(d->sub, header);
         subLabel->setStyleSheet(QStringLiteral("QLabel { font-size: 11px; color: %1; background: transparent;"
                                                " border: none; border-radius: 0; margin-top: 3px; }")
-                                    .arg(QLatin1String(P::kText3)));
+                                    .arg(QString::fromUtf8(t.dim)));
         subLabel->setWordWrap(true);
         headerLayout->addWidget(subLabel);
     }
@@ -219,7 +221,7 @@ void CompareHint::buildPopover() {
     sep->setFrameShape(QFrame::HLine);
     sep->setStyleSheet(
         QStringLiteral("QFrame { background: %1; border: none; border-radius: 0; min-height: 1px; max-height: 1px; }")
-            .arg(QLatin1String(P::kLine1)));
+            .arg(QString::fromUtf8(t.line)));
     outerLayout->addWidget(sep);
 
     // ── Option list (container for rows, rebuilt on setCurrentValue) ──────────
@@ -239,6 +241,7 @@ void CompareHint::buildPopover() {
 
 void CompareHint::rebuildRows() {
     using P = ui::theme::ExoSnapPalette;
+    const auto& t = exosnap::ui::theme::ActiveTheme();
     if (!popover_)
         return;
 
@@ -277,9 +280,11 @@ void CompareHint::rebuildRows() {
         row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
 
         // Row background styling
-        QString rowBg = selected ? QLatin1String(P::kAccentDim) : QStringLiteral("transparent");
-        QString rowBorderLeft = selected ? QLatin1String(P::kAccent) : QStringLiteral("transparent");
-        QString hoverBg = selected ? QLatin1String(P::kAccentDim) : QStringLiteral("rgba(255,255,255,0.04)");
+        QString rowBg = selected ? exosnap::ui::theme::ThemeRgba(QColor(QString::fromUtf8(t.ac)), 0.14)
+                                 : QStringLiteral("transparent");
+        QString rowBorderLeft = selected ? QString::fromUtf8(t.ac) : QStringLiteral("transparent");
+        QString hoverBg =
+            selected ? exosnap::ui::theme::ThemeRgba(QColor(QString::fromUtf8(t.ac)), 0.14) : QString::fromUtf8(t.line);
         row->setStyleSheet(QStringLiteral("QToolButton { background: %1;"
                                           " border: none;"
                                           " border-left: 2px solid %2;"
@@ -305,7 +310,7 @@ void CompareHint::rebuildRows() {
         if (selected) {
             const qreal dpr = devicePixelRatioF();
             auto* checkBtn = new QLabel(markerWidget);
-            checkBtn->setPixmap(ui::theme::lucidePixmap(QStringLiteral("check"), QLatin1String(P::kAccent), 14, dpr));
+            checkBtn->setPixmap(ui::theme::lucidePixmap(QStringLiteral("check"), QString::fromUtf8(t.ac), 14, dpr));
             checkBtn->setFixedSize(14, 14);
             checkBtn->setStyleSheet(QStringLiteral("QLabel { background: transparent; border: none; }"));
             markerLayout->addWidget(checkBtn);
@@ -313,7 +318,7 @@ void CompareHint::rebuildRows() {
             auto* dot = new QWidget(markerWidget);
             dot->setFixedSize(6, 6);
             dot->setStyleSheet(QStringLiteral("QWidget { background: %1; border-radius: 3px; border: none; }")
-                                   .arg(QLatin1String(P::kLine2)));
+                                   .arg(QString::fromUtf8(t.line2)));
             markerLayout->addWidget(dot);
         }
         rowLayout->addWidget(markerWidget, 0, Qt::AlignTop);
@@ -335,14 +340,15 @@ void CompareHint::rebuildRows() {
         auto* nameLabel = new QLabel(opt.value, nameRow);
         nameLabel->setStyleSheet(QStringLiteral("QLabel { font-size: 12px; font-weight: 600; color: %1;"
                                                 " background: transparent; border: none; border-radius: 0; }")
-                                     .arg(selected ? QLatin1String(P::kAccent) : QLatin1String(P::kText0)));
+                                     .arg(selected ? QString::fromUtf8(t.ac) : QString::fromUtf8(t.ink)));
 
         nameRowLayout->addWidget(nameLabel);
 
         if (opt.recommended) {
             auto* recTag =
-                makeBadge(QStringLiteral("RECOMMENDED"), QLatin1String(P::kOk),
-                          QStringLiteral("rgba(132,203,162,0.12)"), QStringLiteral("rgba(132,203,162,0.30)"), nameRow);
+                makeBadge(QStringLiteral("RECOMMENDED"), QString::fromUtf8(t.success),
+                          exosnap::ui::theme::ThemeRgba(QColor(QString::fromUtf8(t.success)), 0.12),
+                          exosnap::ui::theme::ThemeRgba(QColor(QString::fromUtf8(t.success)), 0.30), nameRow);
             nameRowLayout->addWidget(recTag);
         }
 
@@ -351,7 +357,7 @@ void CompareHint::rebuildRows() {
             tierTag->setStyleSheet(
                 QStringLiteral("QLabel { font-family: 'IBM Plex Mono', monospace; font-size: 8px;"
                                " color: %1; background: transparent; border: none; border-radius: 0; }")
-                    .arg(QLatin1String(P::kText3)));
+                    .arg(QString::fromUtf8(t.dim)));
             nameRowLayout->addWidget(tierTag);
         }
 
@@ -362,7 +368,7 @@ void CompareHint::rebuildRows() {
         auto* effectLabel = new QLabel(opt.effect, contentWidget);
         effectLabel->setStyleSheet(QStringLiteral("QLabel { font-size: 11px; color: %1;"
                                                   " background: transparent; border: none; border-radius: 0; }")
-                                       .arg(QLatin1String(P::kText2)));
+                                       .arg(QString::fromUtf8(t.mut)));
         effectLabel->setWordWrap(true);
         contentLayout->addWidget(effectLabel);
 

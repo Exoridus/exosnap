@@ -1,7 +1,8 @@
-#include "ConfigPage.h"
+﻿#include "ConfigPage.h"
 
 #include <QButtonGroup>
 #include <QCheckBox>
+#include <QColor>
 #include <QComboBox>
 #include <QEvent>
 #include <QFileDialog>
@@ -13,6 +14,9 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPaintEvent>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPointer>
 #include <QPushButton>
 #include <QResizeEvent>
@@ -37,9 +41,10 @@
 #include "../models/SettingsHintText.h"
 #include "../services/GlobalHotkeyService.h"
 #include "../services/WebcamService.h"
-#include "../ui/theme/ExoSnapAccents.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
+#include "../ui/theme/ExoSnapTheme.h"
+#include "../ui/theme/ExoSnapThemes.h"
 #include "../ui/theme/LucideIcon.h"
 #include "../ui/widgets/ComboBoxWheelFilter.h"
 #include "../ui/widgets/CompareHint.h"
@@ -142,6 +147,138 @@ class ChipFlowWidget : public QWidget {
     }
 
     QVector<QWidget*> chips_;
+};
+
+// ── ThemePreviewSwatch ────────────────────────────────────────────────────────
+// Mini UI preview painted from an ExoTheme's colour tokens.
+// Mirrors the ThemePreview component in themes.jsx (Slice 1B design).
+// Layout (116×70):
+//   title strip (h=16, surf bg): ac dot (6×6) · mut bar (22×3) · stretch · success dot (5×5)
+//   body (padding=7, surf2 rows): two bars (h=7, surf2/line), ac pill + error pill
+//   right column: ac square (10×10) + caution bar (22×6) + ac2 bar (22×6)
+class ThemePreviewSwatch : public QWidget {
+  public:
+    explicit ThemePreviewSwatch(const exosnap::ui::theme::ExoTheme& theme, QWidget* parent = nullptr)
+        : QWidget(parent), theme_(theme) {
+        setFixedSize(116, 70);
+        setAttribute(Qt::WA_NoSystemBackground, true);
+    }
+
+  protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+
+        // ExoTheme colour values may be "#rrggbb" or "rgba(r, g, b, alpha_float)".
+        // Qt 6 QColor(QString) handles "#rrggbb" but not "rgba(...)" CSS format.
+        // parseCssColor handles both.
+        const auto bg = parseCssColor(theme_.bg);
+        const auto surf = parseCssColor(theme_.surf);
+        const auto surf2 = parseCssColor(theme_.surf2);
+        const auto line = parseCssColor(theme_.line);
+        const auto mut = parseCssColor(theme_.mut);
+        const auto ac = parseCssColor(theme_.ac);
+        const auto ac2 = parseCssColor(theme_.ac2);
+        const auto success = parseCssColor(theme_.success);
+        const auto err = parseCssColor(theme_.error);
+        const auto caution = parseCssColor(theme_.caution);
+
+        const int W = width();
+        const int H = height();
+
+        // ── Outer rounded rect (bg + border) ──
+        QPainterPath outline;
+        outline.addRoundedRect(QRectF(0, 0, W, H), 9, 9);
+        p.fillPath(outline, bg);
+        p.setPen(QPen(line, 1));
+        p.drawPath(outline);
+        p.setClipPath(outline);
+
+        // ── Title strip (h=16, surf bg) ──
+        p.fillRect(0, 0, W, 16, surf);
+        p.setPen(QPen(line, 1));
+        p.drawLine(0, 16, W, 16);
+
+        // ac dot (6×6, r=3) at x=6
+        p.setPen(Qt::NoPen);
+        p.setBrush(ac);
+        p.drawEllipse(QRectF(6, 5, 6, 6));
+
+        // mut bar (22×3, r=2) at x=16
+        auto mutFill = mut;
+        mutFill.setAlphaF(0.6f);
+        p.setBrush(mutFill);
+        p.drawRoundedRect(QRectF(16, 6.5, 22, 3), 2, 2);
+
+        // success dot (5×5, r=2.5) right-aligned at x=W-11
+        p.setBrush(success);
+        p.drawEllipse(QRectF(W - 11, 5.5, 5, 5));
+
+        // ── Body (padding=7, below strip) ──
+        const int bodyY = 16 + 7; // 23
+        const int rightColW = 26;
+        const int bodyW = W - 7 - 7;                // usable body width
+        const int leftColW = bodyW - rightColW - 6; // gap=6 between left and right
+
+        // Left column: two surf2 bars
+        p.setBrush(surf2);
+        p.setPen(QPen(line, 1));
+        p.drawRoundedRect(QRectF(7, bodyY, leftColW, 7), 3, 3);
+        p.drawRoundedRect(QRectF(7, bodyY + 12, leftColW, 7), 3, 3);
+
+        // ac pill (22×9, r=5)
+        p.setBrush(ac);
+        p.setPen(Qt::NoPen);
+        p.drawRoundedRect(QRectF(7, bodyY + 24, 22, 9), 4.5, 4.5);
+
+        // error pill (16×9, r=5)
+        p.setBrush(err);
+        p.drawRoundedRect(QRectF(7 + 26, bodyY + 24, 16, 9), 4.5, 4.5);
+
+        // Right column
+        const int rightX = W - 7 - rightColW;
+
+        // ac square (10×10, r=3)
+        p.setBrush(ac);
+        p.drawRoundedRect(QRectF(rightX + 8, bodyY, 10, 10), 3, 3);
+
+        // caution bar (22×6, r=3, 85% alpha)
+        auto cautionFill = caution;
+        cautionFill.setAlphaF(0.85f);
+        p.setBrush(cautionFill);
+        p.drawRoundedRect(QRectF(rightX, bodyY + 14, 22, 6), 3, 3);
+
+        // ac2 bar (22×6, r=3, 70% alpha)
+        auto ac2Fill = ac2;
+        ac2Fill.setAlphaF(0.70f);
+        p.setBrush(ac2Fill);
+        p.drawRoundedRect(QRectF(rightX, bodyY + 24, 22, 6), 3, 3);
+    }
+
+  private:
+    // Parses "#rrggbb" or "rgba(r, g, b, alpha_float)" CSS colour strings.
+    // The ExoTheme struct uses rgba(...) for line/line2 tokens.
+    static QColor parseCssColor(const char* css) {
+        const QString s = QString::fromLatin1(css).trimmed();
+        if (s.startsWith(QLatin1Char('#'))) {
+            return QColor(s);
+        }
+        if (s.startsWith(QStringLiteral("rgba(")) && s.endsWith(QLatin1Char(')'))) {
+            const QString inner = s.mid(5, s.size() - 6);
+            const QStringList parts = inner.split(QLatin1Char(','));
+            if (parts.size() == 4) {
+                const int r = parts[0].trimmed().toInt();
+                const int g = parts[1].trimmed().toInt();
+                const int b = parts[2].trimmed().toInt();
+                const qreal a = parts[3].trimmed().toDouble();
+                return QColor(r, g, b, qRound(a * 255.0));
+            }
+        }
+        // Fallback: Qt may handle "rgb(...)" etc.
+        return QColor(s);
+    }
+
+    const exosnap::ui::theme::ExoTheme& theme_;
 };
 
 QFrame* makePanel(QWidget* parent) {
@@ -431,9 +568,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     layout->addWidget(readiness_panel_);
 
-    // ---- D6 HEADER ZONE ----
-    // Titelzeile: "Settings" | Such-Pill | Stretch | "Expert mode" | ExoToggle
-    // Unterzeile: Match-Count + Expert-Hint-Label + Expert-Warnhinweis
+    // ---- SLIM TOOLBAR (Settings 1B redesign) ----
+    // One row: [Preset] quiet label · combo · Save (dirty-gated) · Save As… · Manage · dirty hint
+    //          · stretch · (expert-only) search pill · Expert mode label + toggle
+    // Below: match-count / expert-hint / expert-warn labels
+    // No page title — the active nav tab already reads "Settings".
     {
         auto* header_zone = new QWidget(content);
         header_zone->setObjectName(QStringLiteral("settingsHeaderZone"));
@@ -441,33 +580,124 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         header_vl->setContentsMargins(0, 0, 0, 0);
         header_vl->setSpacing(8);
 
-        // Titelzeile
-        auto* title_row = new QHBoxLayout();
-        title_row->setSpacing(14);
+        // ---- Slim toolbar row ----
+        // preset_panel_ points at the toolbar so applySettingsSearch can hide it
+        // when the query does not match "preset" keywords.
+        auto* toolbar_row = new QWidget(header_zone);
+        toolbar_row->setObjectName(QStringLiteral("settingsSlimToolbar"));
+        toolbar_row->setProperty("role", "settingsToolbar");
+        // preset_panel_ intentionally left nullptr: the slim toolbar is always visible
+        // (it carries the Expert toggle/search pill that must not be hidden during search).
+        // applySettingsSearch null-checks preset_panel_ and is a no-op when it is nullptr.
 
-        auto* page_title = new QLabel(QStringLiteral("Settings"), header_zone);
-        page_title->setProperty("labelRole", "pageTitle");
-        title_row->addWidget(page_title);
+        auto* toolbar_hl = new QHBoxLayout(toolbar_row);
+        toolbar_hl->setContentsMargins(14, 8, 10, 8);
+        toolbar_hl->setSpacing(8);
 
-        // Such-Pill: Container-Widget mit Lupe + QLineEdit
-        // PS-PHASE-C: hidden by default; only visible in expert mode.
-        auto* search_pill = new QWidget(header_zone);
+        // "Preset" quiet label (visible text "Preset" kept for test assertions)
+        auto* preset_label = new QLabel(QStringLiteral("Preset"), toolbar_row);
+        preset_label->setProperty("labelRole", "presetToolbarLabel");
+        toolbar_hl->addWidget(preset_label, 0, Qt::AlignVCenter);
+
+        // Combo (stable objectNames preserved for tests)
+        profile_combo_ = new QComboBox(toolbar_row);
+        profile_combo_->setObjectName(QStringLiteral("profileCombo"));
+        profile_combo_->setAccessibleName(QStringLiteral("presetCombo"));
+        profile_combo_->setProperty("presetComboAlias", QStringLiteral("presetCombo"));
+        profile_combo_->setMinimumWidth(0);
+        profile_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        profile_combo_->setMaximumWidth(260);
+        toolbar_hl->addWidget(profile_combo_, 1, Qt::AlignVCenter);
+
+        // Default badge (inline, right of combo)
+        preset_default_badge_ = new QLabel(toolbar_row);
+        preset_default_badge_->setObjectName(QStringLiteral("presetDefaultBadge"));
+        preset_default_badge_->setProperty("labelRole", "profileStatusBadge");
+        preset_default_badge_->setAlignment(Qt::AlignCenter);
+        preset_default_badge_->setText(QStringLiteral("Default"));
+        preset_default_badge_->setVisible(false);
+        toolbar_hl->addWidget(preset_default_badge_, 0, Qt::AlignVCenter);
+
+        profile_status_label_ = new QLabel(toolbar_row);
+        profile_status_label_->setProperty("labelRole", "profileStatusBadge");
+        profile_status_label_->setAlignment(Qt::AlignCenter);
+        profile_status_label_->setVisible(false);
+        toolbar_hl->addWidget(profile_status_label_, 0, Qt::AlignVCenter);
+
+        // Save button (dirty-gated)
+        preset_save_btn_ = new QPushButton(QStringLiteral("Save"), toolbar_row);
+        preset_save_btn_->setObjectName(QStringLiteral("presetSaveButton"));
+        preset_save_btn_->setProperty("role", "ghost");
+        preset_save_btn_->setEnabled(false);
+        preset_save_btn_->setVisible(false);
+        toolbar_hl->addWidget(preset_save_btn_, 0, Qt::AlignVCenter);
+
+        // Save As... button
+        preset_save_as_btn_ = new QPushButton(QStringLiteral("Save As\xe2\x80\xa6"), toolbar_row);
+        preset_save_as_btn_->setObjectName(QStringLiteral("presetSaveAsButton"));
+        preset_save_as_btn_->setProperty("role", "ghost");
+        toolbar_hl->addWidget(preset_save_as_btn_, 0, Qt::AlignVCenter);
+
+        // Manage overflow button
+        profile_overflow_btn_ = new QToolButton(toolbar_row);
+        profile_overflow_btn_->setObjectName(QStringLiteral("presetManageButton"));
+        profile_overflow_btn_->setText(QStringLiteral("Manage presets"));
+        profile_overflow_btn_->setPopupMode(QToolButton::InstantPopup);
+        profile_overflow_btn_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+
+        auto* profile_menu = new QMenu(profile_overflow_btn_);
+        // Section 1: Save actions.
+        save_preset_action_ = profile_menu->addAction(QStringLiteral("Save preset"));
+        save_preset_as_action_ = profile_menu->addAction(QStringLiteral("Save as new preset\xe2\x80\xa6"));
+        profile_menu->addSeparator();
+        // Section 2: Preset lifecycle.
+        new_preset_action_ = profile_menu->addAction(QStringLiteral("New preset from default\xe2\x80\xa6"));
+        duplicate_preset_action_ = profile_menu->addAction(QStringLiteral("Duplicate preset"));
+        rename_preset_action_ = profile_menu->addAction(QStringLiteral("Rename preset\xe2\x80\xa6"));
+        delete_preset_action_ = profile_menu->addAction(QStringLiteral("Delete preset"));
+        profile_menu->addSeparator();
+        // Section 3: Default assignment.
+        set_default_preset_action_ = profile_menu->addAction(QStringLiteral("Set as default preset"));
+        profile_menu->addSeparator();
+        // Section 4: Reset -- two CLEARLY SEPARATE actions.
+        reset_changes_action_ = profile_menu->addAction(QStringLiteral("Reset changes"));
+        profile_menu->addSeparator();
+        // Destructive reset is separated so it cannot be confused with "Reset changes".
+        reset_to_defaults_action_ =
+            profile_menu->addAction(QStringLiteral("Reset all presets to factory defaults\xe2\x80\xa6"));
+        profile_menu->addSeparator();
+        // Section 5: Manage overlay.
+        manage_presets_action_ = profile_menu->addAction(QStringLiteral("Manage presets\xe2\x80\xa6"));
+        profile_overflow_btn_->setMenu(profile_menu);
+        toolbar_hl->addWidget(profile_overflow_btn_, 0, Qt::AlignVCenter);
+
+        // Dirty hint (inline, shown when dirty)
+        preset_dirty_indicator_ = new QLabel(toolbar_row);
+        preset_dirty_indicator_->setObjectName(QStringLiteral("presetDirtyIndicator"));
+        preset_dirty_indicator_->setProperty("labelRole", "presetDirtyIndicator");
+        preset_dirty_indicator_->setText(QStringLiteral("\xc2\xb7 Unsaved"));
+        preset_dirty_indicator_->setVisible(false);
+        toolbar_hl->addWidget(preset_dirty_indicator_, 0, Qt::AlignVCenter);
+
+        // Stretch pushes expert controls to the right
+        toolbar_hl->addStretch(1);
+
+        // Expert-only search pill (hidden until expert mode enabled)
+        auto* search_pill = new QWidget(toolbar_row);
         settings_search_pill_ = search_pill;
         search_pill->setObjectName(QStringLiteral("settingsSearchPill"));
-        search_pill->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        search_pill->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         search_pill->setFixedHeight(34);
-        search_pill->setVisible(false); // hidden until expert mode enabled
+        search_pill->setVisible(false);
         auto* pill_hl = new QHBoxLayout(search_pill);
         pill_hl->setContentsMargins(10, 6, 10, 6);
         pill_hl->setSpacing(6);
 
         auto* search_icon = new QLabel(search_pill);
-        // D6: a dim Lucide "search" glyph at the left of the pill (rendered from
-        // the icon font, not an SVG resource).
         search_icon->setFixedSize(15, 15);
         search_icon->setScaledContents(true);
         search_icon->setPixmap(ui::theme::lucidePixmap(QStringLiteral("search"),
-                                                       QString::fromLatin1(ui::theme::ExoSnapPalette::kText3), 15,
+                                                       QString::fromUtf8(ui::theme::ActiveTheme().dim), 15,
                                                        search_icon->devicePixelRatioF()));
         pill_hl->addWidget(search_icon);
 
@@ -479,29 +709,27 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         settings_search_box_->setProperty("role", "pillInput");
         settings_search_box_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         pill_hl->addWidget(settings_search_box_, 1);
+        toolbar_hl->addWidget(search_pill, 0, Qt::AlignVCenter);
 
-        title_row->addWidget(search_pill);
-        title_row->addStretch(1);
-
-        auto* expert_label = new QLabel(QStringLiteral("Expert mode"), header_zone);
+        // "Expert mode" label + toggle
+        auto* expert_label = new QLabel(QStringLiteral("Expert mode"), toolbar_row);
         expert_label->setProperty("labelRole", "muted");
-        title_row->addWidget(expert_label, 0, Qt::AlignVCenter);
+        toolbar_hl->addWidget(expert_label, 0, Qt::AlignVCenter);
 
-        expert_mode_toggle_ = new ui::widgets::ExoToggle(header_zone);
+        expert_mode_toggle_ = new ui::widgets::ExoToggle(toolbar_row);
         expert_mode_toggle_->setObjectName(QStringLiteral("expertModeToggleBtn"));
         expert_mode_toggle_->setOn(false);
-        title_row->addWidget(expert_mode_toggle_, 0, Qt::AlignVCenter);
+        toolbar_hl->addWidget(expert_mode_toggle_, 0, Qt::AlignVCenter);
 
-        header_vl->addLayout(title_row);
+        header_vl->addWidget(toolbar_row);
 
-        // Unterzeile: Match-Count
+        // Sub-row: match-count, expert-hint, expert-warn
         settings_search_count_label_ = new QLabel(header_zone);
         settings_search_count_label_->setObjectName(QStringLiteral("settingsSearchCountLabel"));
         settings_search_count_label_->setProperty("labelRole", "muted");
         settings_search_count_label_->setVisible(false);
         header_vl->addWidget(settings_search_count_label_);
 
-        // Expert-hint: "Enable Expert mode to show developer settings"
         search_expert_hint_label_ = new QLabel(header_zone);
         search_expert_hint_label_->setObjectName(QStringLiteral("searchExpertHintLabel"));
         search_expert_hint_label_->setProperty("labelRole", "muted");
@@ -509,7 +737,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         search_expert_hint_label_->setVisible(false);
         header_vl->addWidget(search_expert_hint_label_);
 
-        // Expert inline warn hint (amber, klein): sichtbar wenn Expert-Mode AN + keine Suche
         expert_warn_label_ = new QLabel(header_zone);
         expert_warn_label_->setObjectName(QStringLiteral("expertWarnLabel"));
         expert_warn_label_->setText(QStringLiteral("Expert mode reveals lower-level controls that can produce "
@@ -521,110 +748,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
         layout->addWidget(header_zone);
     }
-
-    // ---- PRESET CARD (full width, top) ----
-    // A preset is a full recording setup. The card exposes: selector, dirty indicator,
-    // default badge, Save/Save As primary actions, and a "Manage" overflow menu.
-    auto* preset_panel = makePanel(content);
-    preset_panel_ = preset_panel;
-    auto* preset_layout = new QVBoxLayout(preset_panel);
-    preset_layout->setContentsMargins(18, 16, 18, 16);
-    preset_layout->setSpacing(10);
-
-    // Card title row: "Preset" title + dirty indicator + default badge.
-    auto* preset_head = new QHBoxLayout();
-    preset_head->setSpacing(8);
-    preset_head->addWidget(makeCardTitle(QStringLiteral("Preset"), preset_panel));
-
-    preset_dirty_indicator_ = new QLabel(preset_panel);
-    preset_dirty_indicator_->setObjectName(QStringLiteral("presetDirtyIndicator"));
-    preset_dirty_indicator_->setProperty("labelRole", "presetDirtyIndicator");
-    preset_dirty_indicator_->setText(QStringLiteral("● Unsaved"));
-    preset_dirty_indicator_->setVisible(false);
-    preset_head->addWidget(preset_dirty_indicator_);
-
-    preset_head->addStretch();
-
-    preset_default_badge_ = new QLabel(preset_panel);
-    preset_default_badge_->setObjectName(QStringLiteral("presetDefaultBadge"));
-    preset_default_badge_->setProperty("labelRole", "profileStatusBadge");
-    preset_default_badge_->setAlignment(Qt::AlignCenter);
-    preset_default_badge_->setText(QStringLiteral("Default"));
-    preset_default_badge_->setVisible(false);
-    preset_head->addWidget(preset_default_badge_);
-
-    profile_status_label_ = new QLabel(preset_panel);
-    profile_status_label_->setProperty("labelRole", "profileStatusBadge");
-    profile_status_label_->setAlignment(Qt::AlignCenter);
-    profile_status_label_->setVisible(false);
-    preset_head->addWidget(profile_status_label_);
-
-    preset_layout->addLayout(preset_head);
-
-    // Selector row: combo + Save + Save As + Manage menu.
-    auto* profile_row = new QHBoxLayout();
-    profile_row->setSpacing(8);
-    profile_combo_ = new QComboBox(preset_panel);
-    // Two stable objectNames: presetCombo (new contract) and profileCombo (existing tests).
-    profile_combo_->setObjectName(QStringLiteral("profileCombo"));
-    profile_combo_->setAccessibleName(QStringLiteral("presetCombo"));
-    profile_combo_->setProperty("presetComboAlias", QStringLiteral("presetCombo"));
-    profile_combo_->setMinimumWidth(0); // Wave 2 Part C: let it shrink with the layout
-    profile_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-
-    // Primary action buttons — Save (dirty-gated) and Save As (always available).
-    preset_save_btn_ = new QPushButton(QStringLiteral("Save"), preset_panel);
-    preset_save_btn_->setObjectName(QStringLiteral("presetSaveButton"));
-    preset_save_btn_->setProperty("role", "ghost");
-    preset_save_btn_->setEnabled(false);
-    preset_save_btn_->setVisible(false);
-
-    preset_save_as_btn_ = new QPushButton(QStringLiteral("Save As…"), preset_panel);
-    preset_save_as_btn_->setObjectName(QStringLiteral("presetSaveAsButton"));
-    preset_save_as_btn_->setProperty("role", "ghost");
-
-    profile_overflow_btn_ = new QToolButton(preset_panel);
-    profile_overflow_btn_->setObjectName(QStringLiteral("presetManageButton"));
-    profile_overflow_btn_->setText(QStringLiteral("Manage presets"));
-    profile_overflow_btn_->setPopupMode(QToolButton::InstantPopup);
-    profile_overflow_btn_->setToolButtonStyle(Qt::ToolButtonTextOnly);
-
-    auto* profile_menu = new QMenu(profile_overflow_btn_);
-    // Section 1: Save actions.
-    save_preset_action_ = profile_menu->addAction(QStringLiteral("Save preset"));
-    save_preset_as_action_ = profile_menu->addAction(QStringLiteral("Save as new preset…"));
-    profile_menu->addSeparator();
-    // Section 2: Preset lifecycle.
-    new_preset_action_ = profile_menu->addAction(QStringLiteral("New preset from default…"));
-    duplicate_preset_action_ = profile_menu->addAction(QStringLiteral("Duplicate preset"));
-    rename_preset_action_ = profile_menu->addAction(QStringLiteral("Rename preset…"));
-    delete_preset_action_ = profile_menu->addAction(QStringLiteral("Delete preset"));
-    profile_menu->addSeparator();
-    // Section 3: Default assignment.
-    set_default_preset_action_ = profile_menu->addAction(QStringLiteral("Set as default preset"));
-    profile_menu->addSeparator();
-    // Section 4: Reset — two CLEARLY SEPARATE actions.
-    reset_changes_action_ = profile_menu->addAction(QStringLiteral("Reset changes"));
-    profile_menu->addSeparator();
-    // Destructive reset is separated so it cannot be confused with "Reset changes".
-    reset_to_defaults_action_ = profile_menu->addAction(QStringLiteral("Reset all presets to factory defaults…"));
-    profile_menu->addSeparator();
-    // Section 5: Manage overlay.
-    manage_presets_action_ = profile_menu->addAction(QStringLiteral("Manage presets…"));
-    profile_overflow_btn_->setMenu(profile_menu);
-
-    profile_row->addWidget(profile_combo_, 1);
-    profile_row->addWidget(preset_save_btn_);
-    profile_row->addWidget(preset_save_as_btn_);
-    profile_row->addWidget(profile_overflow_btn_);
-    preset_layout->addLayout(profile_row);
-
-    preset_layout->addWidget(
-        makeHint(QStringLiteral("A preset stores the complete recording setup: source, video, audio, webcam, countdown "
-                                "& output."),
-                 preset_panel));
-    layout->addWidget(preset_panel);
-
     // ---- TWO-COLUMN CARD GRID (D6 design: Format | Audio / Webcam | Output / Presence | Appearance) ----
     // Left column: Format & encoding, Webcam, Presence.
     // Right column: Audio, Output, Appearance.
@@ -908,7 +1031,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         makeSettingsRow(fmt_panel, QStringLiteral("Frame timing"), timing_compare_hint_, QString(), timing_segmented));
 
     // --- Capture cursor row ---
-    cursor_check_ = new QCheckBox(QStringLiteral("Capture cursor"), fmt_panel);
+    cursor_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Capture cursor"), fmt_panel);
     cursor_check_->setObjectName(QStringLiteral("captureCursorCheck"));
     cursor_check_->setChecked(video_settings_.capture_cursor);
     fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Capture cursor"),
@@ -1097,12 +1220,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // DF-12: separate_check is now an ExoToggle pill (was QCheckBox "Separate track").
     // SETTINGS-TIERS-R2: InfoHintIcon added after enabled check and after separate_check.
     auto makeSourceRowInto = [&](QVBoxLayout* target_layout, QWidget* target_parent, const QString& title,
-                                 QCheckBox*& enabled_check, ui::widgets::ExoToggle*& separate_check,
+                                 ui::widgets::ExoCheckBox*& enabled_check, ui::widgets::ExoToggle*& separate_check,
                                  QLabel*& source_label, ui::widgets::VUMeterWidget*& meter_out, QLabel*& db_label_out) {
         auto* row = new QHBoxLayout();
         row->setSpacing(8);
 
-        enabled_check = new QCheckBox(title, target_parent);
+        enabled_check = new ui::widgets::ExoCheckBox(title, target_parent);
         db_label_out = new QLabel(QStringLiteral("–"), target_parent);
         db_label_out->setProperty("labelRole", "muted");
         db_label_out->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -1771,7 +1894,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         left_layout->addStretch();
     }
 
-    // ---- APPEARANCE CARD (right column — SETTINGS-TIERS-P3) — D6: flat rows, below Output ----
+    // ---- APPEARANCE CARD (right column — THEME-SLICE-1) ----
     {
         auto* appearance_panel = makePanel(right_col);
         appearance_panel_ = appearance_panel;
@@ -1780,17 +1903,104 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         appearance_layout->setSpacing(0);
         appearance_layout->addWidget(makeCardTitle(QStringLiteral("Appearance"), appearance_panel));
 
-        accent_combo_ = new QComboBox(appearance_panel);
-        accent_combo_->setMinimumWidth(0); // Wave 2 Part C: let it shrink with the layout
-        accent_combo_->setMaximumWidth(320);
-        for (const auto& a : ui::theme::kExoSnapAccents) {
-            accent_combo_->addItem(QString::fromUtf8(a.name), QString::fromUtf8(a.id));
-        }
-        appearance_layout->addWidget(
-            makeSettingsRow(appearance_panel, QStringLiteral("Accent color"),
-                            new ui::widgets::InfoHintIcon(ui::hints::kAccent, appearance_panel), QString(),
-                            accent_combo_, /*first=*/true));
+        // Brief description
+        auto* appearance_desc = new QLabel(
+            QStringLiteral("Four curated themes \xE2\x80\x94 two dark, two light. Each is a complete colour set. "
+                           "Status colours stay on-meaning in every theme."),
+            appearance_panel);
+        appearance_desc->setWordWrap(true);
+        appearance_desc->setProperty("labelRole", "body");
+        appearance_desc->setContentsMargins(0, 4, 0, 10);
+        appearance_layout->addWidget(appearance_desc);
 
+        // Build theme picker cards
+        auto* theme_grid = new QWidget(appearance_panel);
+        theme_picker_widget_ = theme_grid;
+        auto* theme_grid_layout = new QVBoxLayout(theme_grid);
+        theme_grid_layout->setContentsMargins(0, 0, 0, 0);
+        theme_grid_layout->setSpacing(10);
+
+        theme_button_group_ = new QButtonGroup(this);
+        theme_button_group_->setExclusive(true);
+
+        auto makeGroupLabel = [&](const QString& label) -> QLabel* {
+            auto* lbl = new QLabel(label, theme_grid);
+            lbl->setProperty("labelRole", "fieldLabel");
+            return lbl;
+        };
+
+        auto makeThemeCard = [&](const ui::theme::ExoTheme& t) -> QPushButton* {
+            auto* card = new QPushButton(theme_grid);
+            card->setCheckable(true);
+            card->setAutoDefault(false);
+            card->setDefault(false);
+            card->setCursor(Qt::PointingHandCursor);
+            card->setProperty("themePickerCard", true);
+            card->setProperty("themeId", QString::fromUtf8(t.id));
+            card->setObjectName(QStringLiteral("themeCard_") + QString::fromUtf8(t.id));
+
+            auto* card_layout = new QHBoxLayout(card);
+            card_layout->setContentsMargins(10, 10, 10, 10);
+            card_layout->setSpacing(10);
+
+            // ThemePreviewSwatch: mini-UI preview painted from the theme's colour tokens
+            // (replaces flat single-colour block — fixes the two-dark-themes-look-identical problem).
+            auto* swatch = new ThemePreviewSwatch(t, card);
+
+            // Text area
+            auto* text_col = new QWidget(card);
+            auto* text_layout = new QVBoxLayout(text_col);
+            text_layout->setContentsMargins(0, 0, 0, 0);
+            text_layout->setSpacing(2);
+
+            auto* name_lbl = new QLabel(QString::fromUtf8(t.name), text_col);
+            name_lbl->setProperty("labelRole", "settingsRowLabel");
+
+            auto* intent_lbl = new QLabel(QString::fromUtf8(t.intent), text_col);
+            intent_lbl->setProperty("labelRole", "subtle");
+            intent_lbl->setWordWrap(true);
+
+            text_layout->addWidget(name_lbl);
+            text_layout->addWidget(intent_lbl);
+            text_layout->addStretch();
+
+            card_layout->addWidget(swatch, 0, Qt::AlignTop);
+            card_layout->addWidget(text_col, 1);
+
+            return card;
+        };
+
+        // Dark group
+        auto* dark_label = makeGroupLabel(QStringLiteral("Dark"));
+        theme_grid_layout->addWidget(dark_label);
+        auto* dark_row = new QWidget(theme_grid);
+        auto* dark_row_layout = new QHBoxLayout(dark_row);
+        dark_row_layout->setContentsMargins(0, 0, 0, 0);
+        dark_row_layout->setSpacing(8);
+
+        // Light group
+        auto* light_label = makeGroupLabel(QStringLiteral("Light"));
+        auto* light_row = new QWidget(theme_grid);
+        auto* light_row_layout = new QHBoxLayout(light_row);
+        light_row_layout->setContentsMargins(0, 0, 0, 0);
+        light_row_layout->setSpacing(8);
+
+        int btn_id = 0;
+        for (const auto& t : ui::theme::kExoThemes) {
+            auto* card = makeThemeCard(t);
+            theme_button_group_->addButton(card, btn_id++);
+            if (QString::fromUtf8(t.group) == QStringLiteral("Dark"))
+                dark_row_layout->addWidget(card);
+            else
+                light_row_layout->addWidget(card);
+        }
+
+        theme_grid_layout->addWidget(dark_row);
+        theme_grid_layout->addSpacing(8);
+        theme_grid_layout->addWidget(light_label);
+        theme_grid_layout->addWidget(light_row);
+
+        appearance_layout->addWidget(theme_grid);
         right_layout->addWidget(appearance_panel);
         right_layout->addStretch();
     }
@@ -1880,10 +2090,15 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(notifications_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::showNotificationsChanged);
     connect(keep_in_tray_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::keepRunningInTrayChanged);
     connect(quick_controls_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::showQuickControlsChanged);
-    connect(accent_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
-        const QString id = accent_combo_->itemData(index).toString();
-        if (!id.isEmpty())
-            emit accentIdChanged(id);
+    connect(theme_button_group_, &QButtonGroup::idClicked, this, [this](int btn_id) {
+        auto* btn = theme_button_group_->button(btn_id);
+        if (!btn)
+            return;
+        const QString id = btn->property("themeId").toString();
+        if (!id.isEmpty()) {
+            current_theme_id_ = id;
+            emit themeIdChanged(id);
+        }
     });
 
     connect(container_group_, &QButtonGroup::idClicked, this, &ConfigPage::onContainerChanged);
@@ -1915,13 +2130,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     });
     connect(custom_width_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &ConfigPage::onCustomWidthChanged);
     connect(custom_height_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &ConfigPage::onCustomHeightChanged);
-    connect(cursor_check_, &QCheckBox::toggled, this, &ConfigPage::onCursorChanged);
+    connect(cursor_check_, &QAbstractButton::toggled, this, &ConfigPage::onCursorChanged);
     connect(browse_btn_, &QPushButton::clicked, this, &ConfigPage::onBrowse);
     connect(destination_edit_, &QLineEdit::editingFinished, this, &ConfigPage::onDestinationEditingFinished);
     connect(naming_edit_, &QLineEdit::editingFinished, this, &ConfigPage::onPatternEditingFinished);
-    connect(app_enabled_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioAppToggled);
-    connect(mic_enabled_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioMicToggled);
-    connect(sys_enabled_check_, &QCheckBox::toggled, this, &ConfigPage::onAudioSysToggled);
+    connect(app_enabled_check_, &QAbstractButton::toggled, this, &ConfigPage::onAudioAppToggled);
+    connect(mic_enabled_check_, &QAbstractButton::toggled, this, &ConfigPage::onAudioMicToggled);
+    connect(sys_enabled_check_, &QAbstractButton::toggled, this, &ConfigPage::onAudioSysToggled);
     // DF-12: ExoToggle inherits QAbstractButton::toggled — same connection pattern.
     connect(app_separate_check_, &QAbstractButton::toggled, this, &ConfigPage::onAudioAppSeparateToggled);
     connect(mic_separate_check_, &QAbstractButton::toggled, this, &ConfigPage::onAudioMicSeparateToggled);
@@ -3434,7 +3649,7 @@ void ConfigPage::updateExpertModeVisibility() {
 //   Updates         → "update", "software", "version", "check", "automatic"
 //   Presence        → "presence", "overlay", "notification", "tray", "diagnostics",
 //                     "quick", "controls"
-//   Appearance      → "appearance", "accent", "color", "colour", "theme"
+//   Appearance      → "appearance", "theme", "color", "colour", "dark", "light"
 //   Developer       → "developer", "log", "logging", "nvtx", "profiling", "debug",
 //                     "expert"
 //
@@ -3487,8 +3702,8 @@ void ConfigPage::applySettingsSearch(const QString& query) {
                                       QStringLiteral("diagnostics"),  QStringLiteral("quick"),
                                       QStringLiteral("controls")};
 
-    const QStringList appearance_kws = {QStringLiteral("appearance"), QStringLiteral("accent"), QStringLiteral("color"),
-                                        QStringLiteral("colour"), QStringLiteral("theme")};
+    const QStringList appearance_kws = {QStringLiteral("appearance"), QStringLiteral("theme"), QStringLiteral("color"),
+                                        QStringLiteral("colour"),     QStringLiteral("dark"),  QStringLiteral("light")};
 
     const QStringList developer_kws = {
         QStringLiteral("developer"), QStringLiteral("log"),   QStringLiteral("logging"), QStringLiteral("nvtx"),
@@ -3682,17 +3897,21 @@ void ConfigPage::setShowQuickControls(bool show) {
     }
 }
 
-void ConfigPage::setAccentId(const QString& accent_id) {
-    if (!accent_combo_)
+void ConfigPage::setThemeId(const QString& theme_id) {
+    current_theme_id_ = theme_id;
+    if (!theme_button_group_)
         return;
-    for (int i = 0; i < accent_combo_->count(); ++i) {
-        if (accent_combo_->itemData(i).toString() == accent_id) {
-            const QSignalBlocker blocker(accent_combo_);
-            accent_combo_->setCurrentIndex(i);
+    const QSignalBlocker blocker(theme_button_group_);
+    const auto& buttons = theme_button_group_->buttons();
+    for (QAbstractButton* btn : buttons) {
+        if (btn->property("themeId").toString() == theme_id) {
+            btn->setChecked(true);
             return;
         }
     }
-    // Unknown id: leave selection unchanged (default stays selected).
+    // Unknown id: check the first button (dark-default).
+    if (!buttons.isEmpty())
+        buttons.first()->setChecked(true);
 }
 
 void ConfigPage::onAudioAppToggled() {

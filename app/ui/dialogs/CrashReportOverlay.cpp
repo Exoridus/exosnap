@@ -1,6 +1,6 @@
 #include "CrashReportOverlay.h"
 
-#include "../theme/ExoSnapPalette.h"
+#include "../theme/ExoSnapTheme.h"
 
 #include <QColor>
 #include <QEvent>
@@ -94,7 +94,7 @@ void CrashReportOverlay::mousePressEvent(QMouseEvent* event) {
 
 void CrashReportOverlay::paintEvent(QPaintEvent* /*event*/) {
     QPainter painter(this);
-    QColor backdrop(theme::ExoSnapPalette::kBg0);
+    QColor backdrop(QString::fromUtf8(theme::ActiveTheme().bg));
     backdrop.setAlpha(kBackdropAlpha);
     painter.fillRect(rect(), backdrop);
 }

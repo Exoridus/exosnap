@@ -1,6 +1,6 @@
 #include "PresetManageOverlay.h"
 
-#include "../theme/ExoSnapPalette.h"
+#include "../theme/ExoSnapTheme.h"
 
 #include <QColor>
 #include <QEvent>
@@ -355,7 +355,7 @@ void PresetManageOverlay::mousePressEvent(QMouseEvent* event) {
 
 void PresetManageOverlay::paintEvent(QPaintEvent* /*event*/) {
     QPainter painter(this);
-    QColor backdrop(theme::ExoSnapPalette::kBg0);
+    QColor backdrop(QString::fromUtf8(theme::ActiveTheme().bg));
     backdrop.setAlpha(kBackdropAlpha);
     painter.fillRect(rect(), backdrop);
 }

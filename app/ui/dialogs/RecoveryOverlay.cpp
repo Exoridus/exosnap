@@ -1,6 +1,6 @@
 #include "RecoveryOverlay.h"
 
-#include "ui/theme/ExoSnapPalette.h"
+#include "ui/theme/ExoSnapTheme.h"
 
 #include <QColor>
 #include <QEvent>
@@ -401,7 +401,7 @@ void RecoveryOverlay::mousePressEvent(QMouseEvent* event) {
 
 void RecoveryOverlay::paintEvent(QPaintEvent* /*event*/) {
     QPainter painter(this);
-    QColor backdrop(theme::ExoSnapPalette::kBg0);
+    QColor backdrop(QString::fromUtf8(theme::ActiveTheme().bg));
     backdrop.setAlpha(kBackdropAlpha);
     painter.fillRect(rect(), backdrop);
 }

@@ -2,6 +2,7 @@
 
 #include "../brand/BrandMarkWidget.h"
 #include "../theme/ExoSnapPalette.h"
+#include "../theme/ExoSnapTheme.h"
 #include "../widgets/NotificationBell.h"
 #include "../widgets/StatusPill.h"
 
@@ -42,15 +43,13 @@ OperationalTitleBar::OperationalTitleBar(QWidget* parent) : QWidget(parent) {
     brand_mark_ = new ui::brand::BrandMarkWidget(brand_slot);
     brand_mark_->setFixedSize(20, 20);
 
-    auto* wordmark = new QLabel(brand_slot);
-    wordmark->setProperty("labelRole", "titlebarWordmark");
-    wordmark->setTextFormat(Qt::RichText);
-    wordmark->setText(QStringLiteral("<span style=\"color:%1;\">exo</span><span style=\"color:%2;\">snap</span>")
-                          .arg(QString::fromLatin1(theme::ExoSnapPalette::kText0),
-                               QString::fromLatin1(theme::ExoSnapPalette::kAccent)));
+    wordmark_ = new QLabel(brand_slot);
+    wordmark_->setProperty("labelRole", "titlebarWordmark");
+    wordmark_->setTextFormat(Qt::RichText);
+    refreshBrand();
 
     brand_layout->addWidget(brand_mark_, 0, Qt::AlignVCenter);
-    brand_layout->addWidget(wordmark, 0, Qt::AlignVCenter);
+    brand_layout->addWidget(wordmark_, 0, Qt::AlignVCenter);
 
     // Top navigation tabs (populated via setNavItems()).
     auto* nav_container = new QWidget(this);
@@ -312,11 +311,14 @@ QRect OperationalTitleBar::maximizeButtonRectInWindow() const {
 void OperationalTitleBar::paintEvent(QPaintEvent* event) {
     Q_UNUSED(event);
 
+    const auto& t = theme::ActiveTheme();
     QPainter painter(this);
-    painter.fillRect(rect(), QColor(theme::ExoSnapPalette::kBg0));
+    painter.fillRect(rect(), QColor(QString::fromUtf8(t.bg)));
     // Neutral hairline separator — recording state is communicated via the status pill
     // and preview border, not the top-chrome border line.
-    painter.setPen(QPen(QColor(255, 255, 255, 18), 1.0));
+    // Use line (rgba string) parsed to QColor for theme correctness.
+    QColor hairline = theme::ParseThemeColor(t.line);
+    painter.setPen(QPen(hairline, 1.0));
     painter.drawLine(0, height() - 1, width(), height() - 1);
 }
 
@@ -377,6 +379,14 @@ void OperationalTitleBar::refreshStatusChip() {
         status_pill_->setText(QStringLiteral("Ready"));
     }
     status_pill_->setVisible(true);
+}
+
+void OperationalTitleBar::refreshBrand() {
+    if (wordmark_ == nullptr)
+        return;
+    const auto& t = theme::ActiveTheme();
+    wordmark_->setText(QStringLiteral("<span style=\"color:%1;\">exo</span><span style=\"color:%2;\">snap</span>")
+                           .arg(QString::fromUtf8(t.ink), QString::fromUtf8(t.ac)));
 }
 
 } // namespace exosnap::ui::chrome

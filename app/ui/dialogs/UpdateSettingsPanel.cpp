@@ -1,6 +1,7 @@
 #include "UpdateSettingsPanel.h"
 
 #include "../theme/ExoSnapPalette.h"
+#include "../theme/ExoSnapTheme.h"
 #include "../theme/LucideIcon.h"
 
 #include <QButtonGroup>
@@ -54,13 +55,14 @@ QWidget* makeBulletRow(const QString& text, QWidget* parent) {
 
     auto* dot = new QFrame(row);
     dot->setFixedSize(5, 5);
-    dot->setStyleSheet(QStringLiteral("background:%1; border-radius:2px;").arg(tok(ExoSnapPalette::kAccent)));
+    dot->setStyleSheet(QStringLiteral("background:%1; border-radius:2px;")
+                           .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac)));
     layout->addWidget(dot, 0, Qt::AlignTop);
 
     auto* label = new QLabel(text, row);
     label->setWordWrap(true);
-    label->setStyleSheet(
-        QStringLiteral("font-size:12.5px; color:%1; background:transparent;").arg(tok(ExoSnapPalette::kText2)));
+    label->setStyleSheet(QStringLiteral("font-size:12.5px; color:%1; background:transparent;")
+                             .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut)));
     layout->addWidget(label, 1);
     return row;
 }
@@ -71,15 +73,17 @@ QFrame* makeBanner(const QString& object_name, const QString& icon_name, const c
     auto* banner = new QFrame(parent);
     banner->setObjectName(object_name);
     banner->setStyleSheet(QStringLiteral("#%1 { background:%2; border:1px solid %3; border-radius:10px; }")
-                              .arg(object_name, rgba(tone_base, 0.13), rgba(tone_base, 0.42)));
+                              .arg(object_name,
+                                   exosnap::ui::theme::ThemeRgba(QColor(QString::fromUtf8(tone_base)), 0.13),
+                                   exosnap::ui::theme::ThemeRgba(QColor(QString::fromUtf8(tone_base)), 0.42)));
     auto* layout = new QHBoxLayout(banner);
     layout->setContentsMargins(13, 10, 13, 10);
     layout->setSpacing(10);
     layout->addWidget(makeIconLabel(icon_name, tone_base, 16, banner), 0, Qt::AlignTop);
     auto* label = new QLabel(text, banner);
     label->setWordWrap(true);
-    label->setStyleSheet(
-        QStringLiteral("font-size:12.5px; color:%1; background:transparent;").arg(tok(ExoSnapPalette::kText0)));
+    label->setStyleSheet(QStringLiteral("font-size:12.5px; color:%1; background:transparent;")
+                             .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink)));
     layout->addWidget(label, 1);
     return banner;
 }
@@ -87,7 +91,8 @@ QFrame* makeBanner(const QString& object_name, const QString& icon_name, const c
 QFrame* makeDivider(QWidget* parent) {
     auto* divider = new QFrame(parent);
     divider->setFixedHeight(1);
-    divider->setStyleSheet(QStringLiteral("background:%1; border:none;").arg(tok(ExoSnapPalette::kLine1)));
+    divider->setStyleSheet(
+        QStringLiteral("background:%1; border:none;").arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
     return divider;
 }
 
@@ -96,7 +101,8 @@ QFrame* makeDivider(QWidget* parent) {
 UpdateSettingsPanel::UpdateSettingsPanel(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("updateSettingsPanel"));
     setStyleSheet(QStringLiteral("#updateSettingsPanel { background:%1; border:1px solid %2; border-radius:14px; }")
-                      .arg(tok(ExoSnapPalette::kBg2), tok(ExoSnapPalette::kLine1)));
+                      .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().surf2),
+                           QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
 
     // Persistent "Check for updates" button (re-parented into the per-state body).
     check_button_ = new QPushButton(QStringLiteral("Check for updates"), this);
@@ -108,8 +114,11 @@ UpdateSettingsPanel::UpdateSettingsPanel(QWidget* parent) : QWidget(parent) {
             "font-size:12.5px; }"
             "QPushButton:hover { background:%4; }"
             "QPushButton:disabled { color:%5; }")
-            .arg(tok(ExoSnapPalette::kBg3), tok(ExoSnapPalette::kText0), tok(ExoSnapPalette::kLine2),
-                 tok(ExoSnapPalette::kBg4), tok(ExoSnapPalette::kText3)));
+            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().raise),
+                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink),
+                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line2),
+                 exosnap::ui::theme::ThemeBg4Color(exosnap::ui::theme::ActiveTheme()),
+                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().dim)));
     connect(check_button_, &QPushButton::clicked, this, &UpdateSettingsPanel::checkRequested);
 
     // Persistent Stable/Preview segmented control (built from two exclusive toggles —
@@ -123,8 +132,10 @@ UpdateSettingsPanel::UpdateSettingsPanel(QWidget* parent) : QWidget(parent) {
             "font-size:12px; }"
             "QPushButton:checked { background:%2; color:%3; }"
             "QPushButton:hover:!checked { color:%4; }")
-            .arg(tok(ExoSnapPalette::kText2), tok(ExoSnapPalette::kBg4), tok(ExoSnapPalette::kText0),
-                 tok(ExoSnapPalette::kText0));
+            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut),
+                 exosnap::ui::theme::ThemeBg4Color(exosnap::ui::theme::ActiveTheme()),
+                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink),
+                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink));
 
     channel_stable_ = new QPushButton(QStringLiteral("Stable"), this);
     channel_stable_->setObjectName(QStringLiteral("updateChannelStable"));
@@ -218,14 +229,15 @@ QWidget* UpdateSettingsPanel::buildHeader() {
     header_title_ = new QLabel(text_col);
     header_title_->setObjectName(QStringLiteral("updateHeaderTitle"));
     header_title_->setStyleSheet(QStringLiteral("font-size:14.5px; font-weight:600; color:%1; background:transparent;")
-                                     .arg(tok(ExoSnapPalette::kText0)));
+                                     .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink)));
     text_layout->addWidget(header_title_);
 
     header_sub_ = new QLabel(text_col);
     header_sub_->setObjectName(QStringLiteral("updateHeaderSub"));
     header_sub_->setWordWrap(true);
-    header_sub_->setStyleSheet(QStringLiteral("font-family:%1; font-size:11.5px; color:%2; background:transparent;")
-                                   .arg(QString::fromLatin1(kMono), tok(ExoSnapPalette::kText2)));
+    header_sub_->setStyleSheet(
+        QStringLiteral("font-family:%1; font-size:11.5px; color:%2; background:transparent;")
+            .arg(QString::fromLatin1(kMono), QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut)));
     text_layout->addWidget(header_sub_);
 
     layout->addWidget(text_col, 1);
@@ -236,8 +248,9 @@ QWidget* UpdateSettingsPanel::buildHeader() {
         QStringLiteral(
             "font-family:%1; font-size:11px; color:%2; background:%3; border:1px solid %4; border-radius:6px; "
             "padding:3px 9px;")
-            .arg(QString::fromLatin1(kMono), tok(ExoSnapPalette::kText3), tok(ExoSnapPalette::kBg3),
-                 tok(ExoSnapPalette::kLine1)));
+            .arg(QString::fromLatin1(kMono), QString::fromUtf8(exosnap::ui::theme::ActiveTheme().dim),
+                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().raise),
+                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
     version_pill_->setVisible(false);
     layout->addWidget(version_pill_, 0, Qt::AlignVCenter);
 
@@ -259,8 +272,8 @@ QWidget* UpdateSettingsPanel::buildChannelSelector() {
     row_layout->setSpacing(12);
 
     auto* label = new QLabel(QStringLiteral("Update channel"), row);
-    label->setStyleSheet(
-        QStringLiteral("font-size:13px; color:%1; background:transparent;").arg(tok(ExoSnapPalette::kText0)));
+    label->setStyleSheet(QStringLiteral("font-size:13px; color:%1; background:transparent;")
+                             .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink)));
     row_layout->addWidget(label, 1);
 
     // Segmented track: a rounded surface holding the two exclusive toggles.
@@ -268,7 +281,8 @@ QWidget* UpdateSettingsPanel::buildChannelSelector() {
     segmented->setObjectName(QStringLiteral("updateChannelSegmented"));
     segmented->setStyleSheet(
         QStringLiteral("#updateChannelSegmented { background:%1; border:1px solid %2; border-radius:8px; }")
-            .arg(tok(ExoSnapPalette::kBg3), tok(ExoSnapPalette::kLine1)));
+            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().raise),
+                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
     auto* seg_layout = new QHBoxLayout(segmented);
     seg_layout->setContentsMargins(3, 3, 3, 3);
     seg_layout->setSpacing(3);
@@ -289,15 +303,16 @@ QWidget* UpdateSettingsPanel::buildChannelSelector() {
                             wrap);
     hint->setObjectName(QStringLiteral("updateChannelHint"));
     hint->setWordWrap(true);
-    hint->setStyleSheet(
-        QStringLiteral("font-size:11.5px; color:%1; background:transparent;").arg(tok(ExoSnapPalette::kText3)));
+    hint->setStyleSheet(QStringLiteral("font-size:11.5px; color:%1; background:transparent;")
+                            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().dim)));
     outer->addWidget(hint);
 
     return wrap;
 }
 
 QWidget* UpdateSettingsPanel::buildRecordingBanner() {
-    return makeBanner(QStringLiteral("updateRecordingBanner"), QStringLiteral("alert-triangle"), ExoSnapPalette::kWarn,
+    return makeBanner(QStringLiteral("updateRecordingBanner"), QStringLiteral("alert-triangle"),
+                      exosnap::ui::theme::ActiveTheme().caution,
                       QStringLiteral("Update checks are paused while recording."), this);
 }
 
@@ -332,7 +347,7 @@ void UpdateSettingsPanel::rebuild() {
     HeaderSpec head;
     switch (state_) {
     case UpdateUiState::Available:
-        head = {QStringLiteral("download"), ExoSnapPalette::kInfo};
+        head = {QStringLiteral("download"), exosnap::ui::theme::ActiveTheme().ac};
         header_title_->setText(QStringLiteral("Update available"));
         header_sub_->setText(
             QStringLiteral("ExoSnap %1 · %2 channel")
@@ -340,18 +355,18 @@ void UpdateSettingsPanel::rebuild() {
                      model_.channel));
         break;
     case UpdateUiState::Checking:
-        head = {QStringLiteral("refresh-cw"), ExoSnapPalette::kInfo};
+        head = {QStringLiteral("refresh-cw"), exosnap::ui::theme::ActiveTheme().ac};
         header_title_->setText(QStringLiteral("Checking for updates…"));
         header_sub_->setText(QStringLiteral("%1 channel").arg(model_.channel));
         break;
     case UpdateUiState::Error:
-        head = {QStringLiteral("alert-triangle"), ExoSnapPalette::kWarn};
+        head = {QStringLiteral("alert-triangle"), exosnap::ui::theme::ActiveTheme().caution};
         header_title_->setText(QStringLiteral("Couldn't check for updates"));
         header_sub_->setText(QStringLiteral("%1 channel").arg(model_.channel));
         break;
     case UpdateUiState::UpToDate:
     default:
-        head = {QStringLiteral("check"), ExoSnapPalette::kOk};
+        head = {QStringLiteral("check"), exosnap::ui::theme::ActiveTheme().success};
         header_title_->setText(QStringLiteral("You're up to date"));
         header_sub_->setText(QStringLiteral("ExoSnap %1")
                                  .arg(model_.current_version.isEmpty() ? QStringLiteral("—") : model_.current_version));
@@ -359,7 +374,8 @@ void UpdateSettingsPanel::rebuild() {
     }
     header_tile_->setPixmap(theme::lucidePixmap(head.icon, tok(head.tone), 17, devicePixelRatioF()));
     header_tile_->setStyleSheet(QStringLiteral("background:%1; border:1px solid %2; border-radius:10px;")
-                                    .arg(rgba(head.tone, 0.13), rgba(head.tone, 0.42)));
+                                    .arg(exosnap::ui::theme::ThemeRgba(QColor(QString::fromUtf8(head.tone)), 0.13),
+                                         exosnap::ui::theme::ThemeRgba(QColor(QString::fromUtf8(head.tone)), 0.42)));
 
     // cur → next pill — Available only.
     if (state_ == UpdateUiState::Available && !model_.current_version.isEmpty() &&
@@ -392,22 +408,25 @@ void UpdateSettingsPanel::rebuild() {
         heading_layout->setContentsMargins(0, 0, 0, 0);
         heading_layout->setSpacing(8);
         auto* heading = new QLabel(QStringLiteral("WHAT'S NEW"), heading_row);
-        heading->setStyleSheet(QStringLiteral("font-family:%1; font-size:10px; letter-spacing:0.6px; color:%2; "
-                                              "background:transparent;")
-                                   .arg(QString::fromLatin1(kMono), tok(ExoSnapPalette::kText3)));
+        heading->setStyleSheet(
+            QStringLiteral("font-family:%1; font-size:10px; letter-spacing:0.6px; color:%2; "
+                           "background:transparent;")
+                .arg(QString::fromLatin1(kMono), QString::fromUtf8(exosnap::ui::theme::ActiveTheme().dim)));
         heading_layout->addWidget(heading, 1);
 
         auto* notes_link = new QPushButton(QStringLiteral("Release notes"), heading_row);
         notes_link->setObjectName(QStringLiteral("updateReleaseNotesLink"));
         notes_link->setCursor(Qt::PointingHandCursor);
-        notes_link->setIcon(
-            theme::lucideIcon(QStringLiteral("external-link"), tok(ExoSnapPalette::kAccent), 12, devicePixelRatioF()));
+        notes_link->setIcon(theme::lucideIcon(QStringLiteral("external-link"),
+                                              QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac), 12,
+                                              devicePixelRatioF()));
         notes_link->setIconSize(QSize(12, 12));
         notes_link->setLayoutDirection(Qt::RightToLeft); // icon trails the label
         notes_link->setStyleSheet(
             QStringLiteral("QPushButton { background:transparent; border:none; color:%1; font-size:12px; }"
                            "QPushButton:hover { color:%2; }")
-                .arg(tok(ExoSnapPalette::kAccent), tok(ExoSnapPalette::kAccentHover)));
+                .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac),
+                     exosnap::ui::theme::ThemeAccentHover(exosnap::ui::theme::ActiveTheme())));
         connect(notes_link, &QPushButton::clicked, this, &UpdateSettingsPanel::openReleaseNotesRequested);
         heading_layout->addWidget(notes_link, 0, Qt::AlignVCenter);
         wn_layout->addWidget(heading_row);
@@ -438,7 +457,8 @@ void UpdateSettingsPanel::rebuild() {
         auto* open_btn = new QPushButton(QStringLiteral("Open releases page"), actions);
         open_btn->setObjectName(QStringLiteral("updateOpenReleasesButton"));
         open_btn->setCursor(Qt::PointingHandCursor);
-        open_btn->setIcon(theme::lucideIcon(QStringLiteral("external-link"), tok(ExoSnapPalette::kAccentInk), 14,
+        open_btn->setIcon(theme::lucideIcon(QStringLiteral("external-link"),
+                                            QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac_ink), 14,
                                             devicePixelRatioF()));
         open_btn->setIconSize(QSize(14, 14));
         open_btn->setStyleSheet(
@@ -446,8 +466,10 @@ void UpdateSettingsPanel::rebuild() {
                            "font-size:12.5px; font-weight:600; }"
                            "QPushButton:hover { background:%3; }"
                            "QPushButton:pressed { background:%4; }")
-                .arg(tok(ExoSnapPalette::kAccent), tok(ExoSnapPalette::kAccentInk), tok(ExoSnapPalette::kAccentHover),
-                     tok(ExoSnapPalette::kAccentPressed)));
+                .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac),
+                     QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac_ink),
+                     exosnap::ui::theme::ThemeAccentHover(exosnap::ui::theme::ActiveTheme()),
+                     exosnap::ui::theme::ThemeAccentPressed(exosnap::ui::theme::ActiveTheme())));
         connect(open_btn, &QPushButton::clicked, this, &UpdateSettingsPanel::openReleasesPageRequested);
         actions_layout->addWidget(open_btn);
 
@@ -459,7 +481,8 @@ void UpdateSettingsPanel::rebuild() {
         later_btn->setStyleSheet(
             QStringLiteral("QPushButton { background:transparent; color:%1; border:none; font-size:12.5px; }"
                            "QPushButton:hover { color:%2; }")
-                .arg(tok(ExoSnapPalette::kText2), tok(ExoSnapPalette::kText0)));
+                .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut),
+                     QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink)));
         connect(later_btn, &QPushButton::clicked, this, &UpdateSettingsPanel::remindLaterRequested);
         actions_layout->addWidget(later_btn);
 
@@ -470,8 +493,8 @@ void UpdateSettingsPanel::rebuild() {
     case UpdateUiState::Checking: {
         auto* note = new QLabel(QStringLiteral("Contacting the update server…"), this);
         note->setWordWrap(true);
-        note->setStyleSheet(
-            QStringLiteral("font-size:12.5px; color:%1; background:transparent;").arg(tok(ExoSnapPalette::kText2)));
+        note->setStyleSheet(QStringLiteral("font-size:12.5px; color:%1; background:transparent;")
+                                .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut)));
         body_layout_->addWidget(note);
         body_layout_->addWidget(buildChannelSelector());
         break;
@@ -479,7 +502,8 @@ void UpdateSettingsPanel::rebuild() {
 
     case UpdateUiState::Error: {
         body_layout_->addWidget(makeBanner(
-            QStringLiteral("updateErrorBanner"), QStringLiteral("alert-triangle"), ExoSnapPalette::kWarn,
+            QStringLiteral("updateErrorBanner"), QStringLiteral("alert-triangle"),
+            exosnap::ui::theme::ActiveTheme().caution,
             model_.error_message.isEmpty() ? QStringLiteral("Couldn't reach the update server.") : model_.error_message,
             this));
         body_layout_->addSpacing(16);
@@ -500,8 +524,8 @@ void UpdateSettingsPanel::rebuild() {
     default: {
         if (!model_.last_checked.isEmpty()) {
             auto* checked = new QLabel(QStringLiteral("Last checked %1").arg(model_.last_checked), this);
-            checked->setStyleSheet(
-                QStringLiteral("font-size:12px; color:%1; background:transparent;").arg(tok(ExoSnapPalette::kText3)));
+            checked->setStyleSheet(QStringLiteral("font-size:12px; color:%1; background:transparent;")
+                                       .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().dim)));
             body_layout_->addWidget(checked);
             body_layout_->addSpacing(14);
         }

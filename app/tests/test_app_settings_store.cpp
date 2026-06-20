@@ -79,7 +79,7 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_WindowGeometry) {
     EXPECT_TRUE(loaded.window_geometry.maximized);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion15) {
+TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion16) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
@@ -89,8 +89,8 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion15) {
     store.Save(settings);
 
     QSettings raw_settings(settings_path, QSettings::IniFormat);
-    // Version bumped to 15: SETTINGS-TIERS-R1 adds expert_mode_enabled + per-card expander states.
-    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 15);
+    // Version bumped to 16: THEME-SLICE-1 renames accent_id -> theme_id.
+    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 16);
 }
 
 // CRASH-WIRE-R1: auto_send_crash_reports round-trip + default tests
@@ -481,54 +481,54 @@ TEST(AppSettingsStoreTest, AppSettingsStore_MissingUpdateKeys_DefaultToStableAnd
 }
 
 // ---------------------------------------------------------------------------
-// ACCENT-PICKER-R1 (0.5.0-B): accent_id round-trip + default tests
+// THEME-SLICE-1: theme_id round-trip + default tests
 // ---------------------------------------------------------------------------
 
-TEST(AppSettingsStoreTest, AppSettingsStore_DefaultAccentIdIsMint) {
+TEST(AppSettingsStoreTest, AppSettingsStore_DefaultThemeIdIsDarkDefault) {
     PersistedAppSettings settings;
-    EXPECT_EQ(settings.accent_id, QStringLiteral("mint"));
+    EXPECT_EQ(settings.theme_id, QStringLiteral("dark-default"));
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_AccentId_Azure) {
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_ThemeId_DarkIndigo) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
-    settings.accent_id = QStringLiteral("azure");
+    settings.theme_id = QStringLiteral("dark-indigo");
     store.Save(settings);
 
     const PersistedAppSettings loaded = store.Load();
-    EXPECT_EQ(loaded.accent_id, QStringLiteral("azure"));
+    EXPECT_EQ(loaded.theme_id, QStringLiteral("dark-indigo"));
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_AccentId_Violet) {
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_ThemeId_LightPaper) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
-    settings.accent_id = QStringLiteral("violet");
+    settings.theme_id = QStringLiteral("light-paper");
     store.Save(settings);
 
     const PersistedAppSettings loaded = store.Load();
-    EXPECT_EQ(loaded.accent_id, QStringLiteral("violet"));
+    EXPECT_EQ(loaded.theme_id, QStringLiteral("light-paper"));
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_AccentId_Mint) {
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_ThemeId_LightSlate) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
     AppSettingsStore store(TempSettingsPath(temp_dir));
     PersistedAppSettings settings;
-    settings.accent_id = QStringLiteral("mint");
+    settings.theme_id = QStringLiteral("light-slate");
     store.Save(settings);
 
     const PersistedAppSettings loaded = store.Load();
-    EXPECT_EQ(loaded.accent_id, QStringLiteral("mint"));
+    EXPECT_EQ(loaded.theme_id, QStringLiteral("light-slate"));
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_MissingAccentId_DefaultsToMint) {
+TEST(AppSettingsStoreTest, AppSettingsStore_MissingThemeId_DefaultsToDarkDefault) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
@@ -544,8 +544,8 @@ TEST(AppSettingsStoreTest, AppSettingsStore_MissingAccentId_DefaultsToMint) {
 
     AppSettingsStore store(settings_path);
     const PersistedAppSettings loaded = store.Load();
-    // Accent key absent: must default to "mint".
-    EXPECT_EQ(loaded.accent_id, QStringLiteral("mint"));
+    // Theme key absent: must default to "dark-default".
+    EXPECT_EQ(loaded.theme_id, QStringLiteral("dark-default"));
 }
 
 } // namespace exosnap

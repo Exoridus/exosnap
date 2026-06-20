@@ -5,7 +5,7 @@
 #include <QSize>
 #include <QToolTip>
 
-#include "../theme/ExoSnapPalette.h"
+#include "../theme/ExoSnapTheme.h"
 #include "../theme/LucideIcon.h"
 
 namespace exosnap::ui::widgets {
@@ -63,8 +63,8 @@ void InfoHintIcon::focusOutEvent(QFocusEvent* event) {
 
 void InfoHintIcon::updateIcon(bool highlighted) {
     const qreal dpr = devicePixelRatioF();
-    const QString color = highlighted ? QString::fromLatin1(ui::theme::ExoSnapPalette::kAccent)
-                                      : QString::fromLatin1(ui::theme::ExoSnapPalette::kText3);
+    const auto& t = ui::theme::ActiveTheme();
+    const QString color = highlighted ? QString::fromUtf8(t.ac) : QString::fromUtf8(t.dim);
     setIcon(ui::theme::lucideIcon(QStringLiteral("info"), color, kIconSize, dpr));
 }
 
