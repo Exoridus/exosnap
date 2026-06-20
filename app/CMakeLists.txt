@@ -779,6 +779,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_advisory_item.cpp
         ui/widgets/AdvisoryItem.cpp
+        ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
@@ -792,6 +793,7 @@ exosnap_add_gtest(
         tests/test_notification_hub_panel.cpp
         ui/chrome/NotificationHubPanel.cpp
         ui/widgets/AdvisoryItem.cpp
+        ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
@@ -827,6 +829,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_placeholder_row.cpp
         ui/widgets/PlaceholderRow.cpp
+        ui/theme/ExoSnapTheme.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
 )
 target_include_directories(placeholder_row_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -840,6 +843,7 @@ exosnap_add_gtest(
         tests/test_compare_hint.cpp
         ui/widgets/CompareHint.cpp
         models/SettingsCompareData.cpp
+        ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
@@ -979,6 +983,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_edit_export_page.cpp
         pages/EditExportPage.cpp
+        ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
@@ -1044,6 +1049,7 @@ exosnap_add_gtest(
     SOURCES
         tests/test_update_settings_panel.cpp
         ui/dialogs/UpdateSettingsPanel.cpp
+        ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )

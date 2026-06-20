@@ -29,4 +29,26 @@ QColor ParseThemeColor(const char* css_color);
 // Kept for a short transition period; callers should migrate to ReapplyTheme.
 void ReapplyAccent(QApplication& app, const QString& accent_id);
 
+// ── Derived colour helpers ─────────────────────────────────────────────────────
+// Use these in widgets that build inline stylesheets, to avoid coupling to the
+// BuildTokens() internals or to ExoSnapPalette:: static constants.
+
+// Derive bg4 (raise-hover): Lighten(raise, 0.10) for dark, Darken(raise, 0.04) for light.
+// Equivalent to the ${bg4} QSS token. Returns an HTML hex string (#rrggbb).
+QString ThemeBg4Color(const ExoTheme& theme);
+
+// Derive text1 (body text): blend(ink, mut, 0.42). Same as ${text1}.
+// Returns an HTML hex string (#rrggbb).
+QString ThemeText1Color(const ExoTheme& theme);
+
+// Derive accent hover (Lighten(ac, 0.14)). Same as ${accent-hover}.
+QString ThemeAccentHover(const ExoTheme& theme);
+
+// Derive accent pressed (Darken(ac, 0.09)). Same as ${accent-pressed}.
+QString ThemeAccentPressed(const ExoTheme& theme);
+
+// Format "rgba(r, g, b, alpha)" from a QColor base and 0..1 alpha.
+// Convenience for inline stylesheet construction in widgets.
+QString ThemeRgba(const QColor& base, double alpha);
+
 } // namespace exosnap::ui::theme

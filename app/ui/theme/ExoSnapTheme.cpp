@@ -571,4 +571,51 @@ void ReapplyAccent(QApplication& app, const QString& accent_id) {
     ReapplyTheme(app, QStringLiteral("dark-default"));
 }
 
+QString ThemeBg4Color(const ExoTheme& theme) {
+    if (theme.bg4_override)
+        return QString::fromUtf8(theme.bg4_override);
+    const QColor raise(QString::fromUtf8(theme.raise));
+    const bool dark = (theme.kind == ThemeKind::Dark);
+    const double f = dark ? 0.10 : 0.04;
+    const QColor bg4 =
+        dark ? QColor(qRound(raise.red() + (255 - raise.red()) * f), qRound(raise.green() + (255 - raise.green()) * f),
+                      qRound(raise.blue() + (255 - raise.blue()) * f))
+             : QColor(qRound(raise.red() * (1.0 - f)), qRound(raise.green() * (1.0 - f)),
+                      qRound(raise.blue() * (1.0 - f)));
+    return bg4.name();
+}
+
+QString ThemeText1Color(const ExoTheme& theme) {
+    if (theme.text1_override)
+        return QString::fromUtf8(theme.text1_override);
+    const QColor ink(QString::fromUtf8(theme.ink));
+    const QColor mut(QString::fromUtf8(theme.mut));
+    const double t = 0.42;
+    return QColor(qRound(ink.red() * (1.0 - t) + mut.red() * t), qRound(ink.green() * (1.0 - t) + mut.green() * t),
+                  qRound(ink.blue() * (1.0 - t) + mut.blue() * t))
+        .name();
+}
+
+QString ThemeAccentHover(const ExoTheme& theme) {
+    const QColor ac(QString::fromUtf8(theme.ac));
+    constexpr double f = 0.14;
+    return QColor(qRound(ac.red() + (255 - ac.red()) * f), qRound(ac.green() + (255 - ac.green()) * f),
+                  qRound(ac.blue() + (255 - ac.blue()) * f))
+        .name();
+}
+
+QString ThemeAccentPressed(const ExoTheme& theme) {
+    const QColor ac(QString::fromUtf8(theme.ac));
+    constexpr double f = 0.09;
+    return QColor(qRound(ac.red() * (1.0 - f)), qRound(ac.green() * (1.0 - f)), qRound(ac.blue() * (1.0 - f))).name();
+}
+
+QString ThemeRgba(const QColor& base, double alpha) {
+    return QStringLiteral("rgba(%1, %2, %3, %4)")
+        .arg(base.red())
+        .arg(base.green())
+        .arg(base.blue())
+        .arg(QString::number(alpha, 'f', 2));
+}
+
 } // namespace exosnap::ui::theme

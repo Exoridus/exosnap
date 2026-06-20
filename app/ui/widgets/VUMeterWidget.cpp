@@ -5,6 +5,8 @@
 
 #include <algorithm>
 
+#include "../theme/ExoSnapTheme.h"
+
 namespace exosnap::ui::widgets {
 
 VUMeterWidget::VUMeterWidget(QWidget* parent) : QWidget(parent) {
@@ -67,18 +69,25 @@ void VUMeterWidget::paintEvent(QPaintEvent* event) {
     const int segment_width = std::max(2, width_for_segments / segments_);
     const int lit_segments = static_cast<int>(level_ * static_cast<float>(segments_) + 0.5F);
 
+    // Derive segment colors from the active theme so VU meters look correct on all themes.
+    const auto& t = exosnap::ui::theme::ActiveTheme();
+    const QColor unlit(QString::fromUtf8(t.raise));      // inactive segment: raise surface
+    const QColor lit_ok(QString::fromUtf8(t.success));   // green zone
+    const QColor lit_warn(QString::fromUtf8(t.caution)); // yellow zone
+    const QColor lit_err(QString::fromUtf8(t.error));    // red zone
+
     int x = 0;
     for (int i = 0; i < segments_; ++i) {
         const bool lit = active_ && (i < lit_segments);
-        QColor color("#2a2620");
+        QColor color = unlit;
         if (lit) {
             const float ratio = static_cast<float>(i) / static_cast<float>(std::max(1, segments_ - 1));
             if (ratio >= 0.86F) {
-                color = QColor("#e26a5a");
+                color = lit_err;
             } else if (ratio >= 0.62F) {
-                color = QColor("#f1b400");
+                color = lit_warn;
             } else {
-                color = QColor("#74c08a");
+                color = lit_ok;
             }
         }
 

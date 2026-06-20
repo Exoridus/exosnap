@@ -7,6 +7,7 @@
 #include <QVBoxLayout>
 
 #include "../theme/ExoSnapPalette.h"
+#include "../theme/ExoSnapTheme.h"
 #include "../theme/LucideIcon.h"
 
 namespace exosnap::ui::widgets {
@@ -18,7 +19,8 @@ AdvisoryItem::AdvisoryItem(QWidget* parent) : QWidget(parent) {
     status_icon_label_ = new QLabel(this);
     status_icon_label_->setFixedSize(30, 30);
     status_icon_label_->setAlignment(Qt::AlignCenter);
-    status_icon_label_->setStyleSheet(QStringLiteral("background: rgba(255,255,255,0.05); border-radius: 9px;"));
+    status_icon_label_->setStyleSheet(QStringLiteral("background: %1; border-radius: 9px;")
+                                          .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
 
     // -- Title label --
     title_label_ = new QLabel(this);
@@ -27,8 +29,8 @@ AdvisoryItem::AdvisoryItem(QWidget* parent) : QWidget(parent) {
         f.setPixelSize(13);
         f.setWeight(QFont::DemiBold);
         title_label_->setFont(f);
-        title_label_->setStyleSheet(QString::fromLatin1("color: ") + QString::fromLatin1(ExoSnapPalette::kText0) +
-                                    QLatin1Char(';'));
+        title_label_->setStyleSheet(QString::fromLatin1("color: ") +
+                                    QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ink) + QLatin1Char(';'));
     }
 
     // -- Body label --
@@ -38,8 +40,8 @@ AdvisoryItem::AdvisoryItem(QWidget* parent) : QWidget(parent) {
         QFont f = body_label_->font();
         f.setPixelSize(12);
         body_label_->setFont(f);
-        body_label_->setStyleSheet(QString::fromLatin1("color: ") + QString::fromLatin1(ExoSnapPalette::kText2) +
-                                   QLatin1Char(';'));
+        body_label_->setStyleSheet(QString::fromLatin1("color: ") +
+                                   QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut) + QLatin1Char(';'));
     }
 
     // -- Time label --
@@ -50,14 +52,15 @@ AdvisoryItem::AdvisoryItem(QWidget* parent) : QWidget(parent) {
         f.setFamily(QStringLiteral("IBM Plex Mono"));
         f.setPixelSize(10);
         time_label_->setFont(f);
-        time_label_->setStyleSheet(QString::fromLatin1("color: ") + QString::fromLatin1(ExoSnapPalette::kText3) +
-                                   QLatin1Char(';'));
+        time_label_->setStyleSheet(QString::fromLatin1("color: ") +
+                                   QString::fromUtf8(exosnap::ui::theme::ActiveTheme().dim) + QLatin1Char(';'));
     }
 
     // -- Unread dot (6x6) --
     unread_dot_ = new QWidget(this);
     unread_dot_->setFixedSize(6, 6);
-    unread_dot_->setStyleSheet(QString::fromLatin1("background: ") + QString::fromLatin1(ExoSnapPalette::kOk) +
+    unread_dot_->setStyleSheet(QString::fromLatin1("background: ") +
+                               QString::fromUtf8(exosnap::ui::theme::ActiveTheme().success) +
                                QStringLiteral("; border-radius: 3px;"));
     unread_dot_->setVisible(false);
 
@@ -155,17 +158,17 @@ void AdvisoryItem::updateStatusIcon() {
 
     if (status_ == QStringLiteral("success")) {
         icon_name = QStringLiteral("check-circle");
-        icon_color = QString::fromLatin1(ExoSnapPalette::kOk);
+        icon_color = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().success);
     } else if (status_ == QStringLiteral("caution")) {
         icon_name = QStringLiteral("alert-triangle");
-        icon_color = QString::fromLatin1(ExoSnapPalette::kWarn);
+        icon_color = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().caution);
     } else if (status_ == QStringLiteral("error")) {
         icon_name = QStringLiteral("x-circle");
-        icon_color = QString::fromLatin1(ExoSnapPalette::kErr);
+        icon_color = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().error);
     } else {
         // "info" and anything else
         icon_name = QStringLiteral("info");
-        icon_color = QString::fromLatin1(ExoSnapPalette::kAccent);
+        icon_color = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac);
     }
 
     const qreal dpr = devicePixelRatioF();
@@ -177,13 +180,13 @@ void AdvisoryItem::updateUnreadDot() {
     // Dot color follows status color
     QString dot_color;
     if (status_ == QStringLiteral("success")) {
-        dot_color = QString::fromLatin1(ExoSnapPalette::kOk);
+        dot_color = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().success);
     } else if (status_ == QStringLiteral("caution")) {
-        dot_color = QString::fromLatin1(ExoSnapPalette::kWarn);
+        dot_color = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().caution);
     } else if (status_ == QStringLiteral("error")) {
-        dot_color = QString::fromLatin1(ExoSnapPalette::kErr);
+        dot_color = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().error);
     } else {
-        dot_color = QString::fromLatin1(ExoSnapPalette::kAccent);
+        dot_color = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac);
     }
     unread_dot_->setStyleSheet(QString::fromLatin1("background: ") + dot_color +
                                QStringLiteral("; border-radius: 3px;"));

@@ -5,6 +5,7 @@
 #include <QLabel>
 
 #include "../theme/ExoSnapPalette.h"
+#include "../theme/ExoSnapTheme.h"
 
 namespace exosnap::ui::widgets {
 
@@ -21,8 +22,8 @@ PlaceholderRow::PlaceholderRow(QWidget* parent) : QWidget(parent) {
         // 13.5px ≈ 10pt at 96 DPI — set via pixel size to match the spec.
         f.setPixelSize(14); // closest to 13.5px in integer pixel sizes
         label_->setFont(f);
-        label_->setStyleSheet(QString::fromLatin1("color: ") + QString::fromLatin1(ExoSnapPalette::kText3) +
-                              QLatin1Char(';'));
+        label_->setStyleSheet(
+            QStringLiteral("color: %1;").arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().dim)));
     }
 
     version_badge_ = new QLabel(this);
@@ -31,10 +32,10 @@ PlaceholderRow::PlaceholderRow(QWidget* parent) : QWidget(parent) {
         f.setFamily(QStringLiteral("IBM Plex Mono"));
         f.setPixelSize(10); // closest integer to 9.5px
         version_badge_->setFont(f);
-        version_badge_->setStyleSheet(QString::fromLatin1("color: ") + QString::fromLatin1(ExoSnapPalette::kText3) +
-                                      QString::fromLatin1("; padding: 2px 6px;"
-                                                          " border: 1px dashed rgba(255,255,255,0.12);"
-                                                          " border-radius: 5px;"));
+        version_badge_->setStyleSheet(
+            QStringLiteral("color: %1; padding: 2px 6px; border: 1px dashed %2; border-radius: 5px;")
+                .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().dim),
+                     QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line2)));
     }
 
     auto* layout = new QHBoxLayout(this);
