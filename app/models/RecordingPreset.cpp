@@ -271,6 +271,16 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         config.audio.limiter_ceiling_db = -60.0f;
     }
 
+    // Microphone high-pass filter (Audio v2 — 0.6.0): cutoff in Hz. Reset NaN/Inf
+    // to 80 Hz; clamp to the usable [20, 1000] Hz range.
+    if (!std::isfinite(config.audio.mic_hpf_cutoff_hz)) {
+        config.audio.mic_hpf_cutoff_hz = 80.0f;
+    } else if (config.audio.mic_hpf_cutoff_hz < 20.0f) {
+        config.audio.mic_hpf_cutoff_hz = 20.0f;
+    } else if (config.audio.mic_hpf_cutoff_hz > 1000.0f) {
+        config.audio.mic_hpf_cutoff_hz = 1000.0f;
+    }
+
     // Webcam: delegate to the provided sanitizer (handles NaN/Inf + clamping).
     config.webcam = SanitizeWebcamSettings(config.webcam);
 
@@ -434,6 +444,13 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
         return false;
     }
     if (std::abs(a.audio.limiter_ceiling_db - b.audio.limiter_ceiling_db) > 1e-2f) {
+        return false;
+    }
+    // Mic high-pass filter (Audio v2): enabled (exact) + cutoff (1e-2 Hz tolerance).
+    if (a.audio.mic_hpf_enabled != b.audio.mic_hpf_enabled) {
+        return false;
+    }
+    if (std::abs(a.audio.mic_hpf_cutoff_hz - b.audio.mic_hpf_cutoff_hz) > 1e-2f) {
         return false;
     }
 
@@ -644,6 +661,13 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (std::abs(a.audio.limiter_ceiling_db - b.audio.limiter_ceiling_db) > 1e-2f) {
+        return false;
+    }
+    // Mic high-pass filter (Audio v2): enabled (exact) + cutoff (1e-2 Hz tolerance).
+    if (a.audio.mic_hpf_enabled != b.audio.mic_hpf_enabled) {
+        return false;
+    }
+    if (std::abs(a.audio.mic_hpf_cutoff_hz - b.audio.mic_hpf_cutoff_hz) > 1e-2f) {
         return false;
     }
 

@@ -1525,6 +1525,44 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             aes_layout->addWidget(crow);
         }
 
+        // Microphone high-pass filter (Audio v2 — 0.6.0)
+        {
+            auto* rule = new QFrame(audio_expert_section_);
+            rule->setFrameShape(QFrame::HLine);
+            rule->setProperty("frameRole", "sectionRuleLine");
+            aes_layout->addWidget(rule);
+
+            auto* row = new QWidget(audio_expert_section_);
+            auto* hl = new QHBoxLayout(row);
+            hl->setContentsMargins(0, 12, 0, 12);
+            hl->setSpacing(14);
+            mic_hpf_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("High-pass filter"), row);
+            mic_hpf_check_->setObjectName(QStringLiteral("micHpfCheck"));
+            mic_hpf_check_->setChecked(audio_ui_state_.mic_hpf_enabled);
+            hl->addWidget(mic_hpf_check_, 1);
+            row->setProperty("settingsRow", true);
+            aes_layout->addWidget(row);
+
+            auto* crow = new QWidget(audio_expert_section_);
+            auto* chl = new QHBoxLayout(crow);
+            chl->setContentsMargins(0, 12, 0, 12);
+            chl->setSpacing(14);
+            auto* clbl = new QLabel(QStringLiteral("HPF cutoff"), crow);
+            clbl->setProperty("labelRole", "settingsRowLabel");
+            chl->addWidget(clbl, 1);
+            mic_hpf_cutoff_spin_ = new QDoubleSpinBox(crow);
+            mic_hpf_cutoff_spin_->setObjectName(QStringLiteral("micHpfCutoffSpin"));
+            mic_hpf_cutoff_spin_->setRange(20.0, 1000.0);
+            mic_hpf_cutoff_spin_->setSingleStep(5.0);
+            mic_hpf_cutoff_spin_->setDecimals(0);
+            mic_hpf_cutoff_spin_->setSuffix(QStringLiteral(" Hz"));
+            mic_hpf_cutoff_spin_->setValue(static_cast<double>(audio_ui_state_.mic_hpf_cutoff_hz));
+            mic_hpf_cutoff_spin_->setEnabled(audio_ui_state_.mic_hpf_enabled);
+            chl->addWidget(mic_hpf_cutoff_spin_, 0, Qt::AlignVCenter);
+            crow->setProperty("settingsRow", true);
+            aes_layout->addWidget(crow);
+        }
+
         // Audio PlaceholderRows
         {
             auto* ph1 = new ui::widgets::PlaceholderRow(audio_expert_section_);
@@ -2304,6 +2342,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     });
     connect(limiter_ceiling_spin_, &QDoubleSpinBox::valueChanged, this, [this](double db) {
         audio_ui_state_.limiter_ceiling_db = static_cast<float>(db);
+        emitCurrentAudioSettings();
+    });
+    connect(mic_hpf_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
+        audio_ui_state_.mic_hpf_enabled = on;
+        if (mic_hpf_cutoff_spin_)
+            mic_hpf_cutoff_spin_->setEnabled(on);
+        emitCurrentAudioSettings();
+    });
+    connect(mic_hpf_cutoff_spin_, &QDoubleSpinBox::valueChanged, this, [this](double hz) {
+        audio_ui_state_.mic_hpf_cutoff_hz = static_cast<float>(hz);
         emitCurrentAudioSettings();
     });
 
@@ -3431,6 +3479,15 @@ void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
             limiter_ceiling_spin_->setValue(static_cast<double>(audio_ui_state_.limiter_ceiling_db));
             limiter_ceiling_spin_->setEnabled(audio_ui_state_.limiter_enabled);
         }
+        if (mic_hpf_check_) {
+            const QSignalBlocker b(mic_hpf_check_);
+            mic_hpf_check_->setChecked(audio_ui_state_.mic_hpf_enabled);
+        }
+        if (mic_hpf_cutoff_spin_) {
+            const QSignalBlocker b(mic_hpf_cutoff_spin_);
+            mic_hpf_cutoff_spin_->setValue(static_cast<double>(audio_ui_state_.mic_hpf_cutoff_hz));
+            mic_hpf_cutoff_spin_->setEnabled(audio_ui_state_.mic_hpf_enabled);
+        }
     }
 }
 
@@ -3673,6 +3730,15 @@ void ConfigPage::updateExpertModeVisibility() {
             const QSignalBlocker b(limiter_ceiling_spin_);
             limiter_ceiling_spin_->setValue(static_cast<double>(audio_ui_state_.limiter_ceiling_db));
             limiter_ceiling_spin_->setEnabled(audio_ui_state_.limiter_enabled);
+        }
+        if (mic_hpf_check_) {
+            const QSignalBlocker b(mic_hpf_check_);
+            mic_hpf_check_->setChecked(audio_ui_state_.mic_hpf_enabled);
+        }
+        if (mic_hpf_cutoff_spin_) {
+            const QSignalBlocker b(mic_hpf_cutoff_spin_);
+            mic_hpf_cutoff_spin_->setValue(static_cast<double>(audio_ui_state_.mic_hpf_cutoff_hz));
+            mic_hpf_cutoff_spin_->setEnabled(audio_ui_state_.mic_hpf_enabled);
         }
     }
     // PS-PHASE-C: Output v1.0 placeholder section.

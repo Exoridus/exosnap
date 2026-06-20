@@ -2,6 +2,7 @@
 
 #include "audio_thread.h"
 #include "brickwall_limiter.h"
+#include "mic_dsp_audio_src.h"
 #include "mixed_audio_src.h"
 #include "mux_thread.h"
 #include "session_internal.h"
@@ -412,8 +413,20 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
 
     auto createAudioSource = [&](AudioSourceKind kind) -> std::unique_ptr<IAudioCaptureSource> {
         switch (kind) {
-        case AudioSourceKind::Mic:
-            return std::make_unique<WasapiCaptureSrc>(config.mic_channel_mode, config.mic_device_id);
+        case AudioSourceKind::Mic: {
+            std::unique_ptr<IAudioCaptureSource> mic =
+                std::make_unique<WasapiCaptureSrc>(config.mic_channel_mode, config.mic_device_id);
+            // Mic-DSP chain (Audio v2 — 0.6.0): the high-pass filter is the first
+            // stage; later slices (gate/AGC/RNNoise) extend MicDspConfig. Only
+            // wrap when a stage is enabled so unaltered capture stays untouched.
+            MicDspConfig dsp;
+            dsp.hpf_enabled = config.mic_hpf_enabled;
+            dsp.hpf_cutoff_hz = config.mic_hpf_cutoff_hz;
+            if (dsp.AnyEnabled()) {
+                mic = std::make_unique<MicDspAudioSrc>(std::move(mic), dsp);
+            }
+            return mic;
+        }
         case AudioSourceKind::App:
             return std::make_unique<WasapiProcessLoopbackSrc>(
                 static_cast<DWORD>(config.audio_target_process_id.value_or(0u)),

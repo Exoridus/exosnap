@@ -308,6 +308,19 @@ struct RecorderConfig {
     // except that overs are smoothed (attack/release) instead of hard-clipped.
     float audio_limiter_ceiling_db = 0.0f;
 
+    // ---------------------------------------------------------------------------
+    // Microphone high-pass filter (Audio v2 — 0.6.0)
+    // ---------------------------------------------------------------------------
+
+    // When true, the microphone input is run through a 2nd-order Butterworth
+    // high-pass filter (the first stage of the MicDspAudioSrc chain) to remove
+    // low-frequency rumble (desk thumps, HVAC hum, plosives). Default false: mic
+    // DSP alters captured audio, so it is opt-in.
+    bool mic_hpf_enabled = false;
+
+    // High-pass cutoff (−3 dB) frequency in Hz. Default 80 Hz.
+    float mic_hpf_cutoff_hz = 80.0f;
+
     // Whether the mouse cursor is composited into the captured frames.
     // Maps to GraphicsCaptureSession.IsCursorCaptureEnabled. Default true = WGC default.
     bool capture_cursor = true;
