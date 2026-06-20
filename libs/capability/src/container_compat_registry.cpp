@@ -33,17 +33,19 @@ std::string_view ToString(ContainerCompatLevel level) noexcept {
 //
 //   MKV  | AV1          | Opus  → Recommended  (primary validated path)
 //   MKV  | AV1          | AAC   → Recommended  (validated M3.2 path)
-//   MKV  | AV1          | PCM   → Experimental (not yet implemented)
+//   MKV  | AV1          | PCM   → Allowed      (uncompressed S16LE A_PCM/INT_LIT;
+//                                               Matroska-only, 0.6.0 Audio v2)
 //   MKV  | HEVC         | Opus  → Experimental (not implemented; planned)
 //   MKV  | HEVC         | AAC   → Experimental (not implemented; planned)
-//   MKV  | HEVC         | PCM   → Experimental (not implemented; planned)
+//   MKV  | HEVC         | PCM   → Experimental (HEVC video not implemented)
 //   MKV  | H.264        | AAC   → Recommended  (validated MKV H.264+AAC)
 //   MKV  | H.264        | Opus  → Allowed      (Matroska carries Opus natively;
 //                                               Opus-in-MKV write path is
 //                                               production-validated via AV1+Opus;
 //                                               dedicated player-matrix pass for
 //                                               H.264+Opus not yet on file)
-//   MKV  | H.264        | PCM   → Experimental (not implemented)
+//   MKV  | H.264        | PCM   → Allowed      (uncompressed S16LE A_PCM/INT_LIT;
+//                                               Matroska-only, 0.6.0 Audio v2)
 //
 //   MP4  | H.264        | AAC   → Recommended  (primary validated MP4 path,
 //                                               delivered via remux-on-stop ADR 0014)
@@ -88,8 +90,9 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
             if (audio == AudioCodec::AacMf)
                 return {ContainerCompatLevel::Recommended, "Validated MKV path: AV1 NVENC + AAC (M3.2)."};
             if (audio == AudioCodec::Pcm)
-                return {ContainerCompatLevel::Experimental,
-                        "MKV + AV1 + PCM: sample-entry format not yet specified; not implemented."};
+                return {ContainerCompatLevel::Allowed,
+                        "MKV + AV1 + PCM: uncompressed 16-bit signed little-endian PCM (A_PCM/INT_LIT). "
+                        "Large files; lossless audio. Matroska-only (0.6.0 Audio v2)."};
         }
         if (video == VideoCodec::H264Nvenc) {
             if (audio == AudioCodec::AacMf)
@@ -100,7 +103,9 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
                         "is production-validated (AV1+Opus). A dedicated player-matrix pass for this exact "
                         "pairing is not yet on file (ADR 0010 Allowed caveat)."};
             if (audio == AudioCodec::Pcm)
-                return {ContainerCompatLevel::Experimental, "MKV + H.264 + PCM: not implemented."};
+                return {ContainerCompatLevel::Allowed,
+                        "MKV + H.264 + PCM: uncompressed 16-bit signed little-endian PCM (A_PCM/INT_LIT). "
+                        "Large files; lossless audio. Matroska-only (0.6.0 Audio v2)."};
         }
         if (video == VideoCodec::HevcNvenc) {
             if (audio == AudioCodec::AacMf)

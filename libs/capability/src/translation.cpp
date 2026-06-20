@@ -36,17 +36,24 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
     const bool is_mkv_h264_aac = final_config.container == Container::Matroska &&
                                  final_config.video_codec == VideoCodec::H264Nvenc &&
                                  final_config.audio_codec == AudioCodec::AacMf && valid_chroma_depth;
+    const bool is_mkv_av1_pcm = final_config.container == Container::Matroska &&
+                                final_config.video_codec == VideoCodec::Av1Nvenc &&
+                                final_config.audio_codec == AudioCodec::Pcm && valid_chroma_depth;
+    const bool is_mkv_h264_pcm = final_config.container == Container::Matroska &&
+                                 final_config.video_codec == VideoCodec::H264Nvenc &&
+                                 final_config.audio_codec == AudioCodec::Pcm && valid_chroma_depth;
     const bool is_mp4_h264_aac = final_config.container == Container::Mp4 &&
                                  final_config.video_codec == VideoCodec::H264Nvenc &&
                                  final_config.audio_codec == AudioCodec::AacMf && valid_chroma_depth;
 
-    if (!is_webm_av1_opus && !is_mkv_av1_aac && !is_mkv_av1_opus && !is_mkv_h264_aac && !is_mp4_h264_aac) {
+    if (!is_webm_av1_opus && !is_mkv_av1_aac && !is_mkv_av1_opus && !is_mkv_h264_aac && !is_mkv_av1_pcm &&
+        !is_mkv_h264_pcm && !is_mp4_h264_aac) {
         ResolveResult failure = resolved;
         failure.succeeded = false;
         failure.invalidity.push_back(InvalidReason{
             "translation",
-            "Only WebM+AV1+Opus, Matroska+AV1+(AAC|Opus), Matroska+H264+AAC, or MP4+H264+AAC + 4:2:0 + 8-bit "
-            "can be translated to recorder_core."});
+            "Only WebM+AV1+Opus, Matroska+AV1+(AAC|Opus|PCM), Matroska+H264+(AAC|PCM), or MP4+H264+AAC + 4:2:0 + "
+            "8-bit can be translated to recorder_core."});
         if (validation != nullptr) {
             *validation = failure;
         }
@@ -73,6 +80,14 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
         core_config.container = recorder_core::Container::Matroska;
         core_config.video_codec = recorder_core::VideoCodec::H264Nvenc;
         core_config.audio_codec = recorder_core::AudioCodec::AacMf;
+    } else if (is_mkv_av1_pcm) {
+        core_config.container = recorder_core::Container::Matroska;
+        core_config.video_codec = recorder_core::VideoCodec::Av1Nvenc;
+        core_config.audio_codec = recorder_core::AudioCodec::Pcm;
+    } else if (is_mkv_h264_pcm) {
+        core_config.container = recorder_core::Container::Matroska;
+        core_config.video_codec = recorder_core::VideoCodec::H264Nvenc;
+        core_config.audio_codec = recorder_core::AudioCodec::Pcm;
     } else if (is_mp4_h264_aac) {
         core_config.container = recorder_core::Container::Mp4;
         core_config.video_codec = recorder_core::VideoCodec::H264Nvenc;

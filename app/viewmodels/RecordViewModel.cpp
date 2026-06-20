@@ -88,6 +88,8 @@ std::wstring AudioCodecLabel(recorder_core::AudioCodec codec) {
         return L"AAC";
     case recorder_core::AudioCodec::Opus:
         return L"Opus";
+    case recorder_core::AudioCodec::Pcm:
+        return L"PCM";
     }
     return L"Opus";
 }

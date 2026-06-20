@@ -29,8 +29,10 @@ TEST(ContainerCompatRegistry, Mkv_Av1_Aac_IsRecommended) {
     EXPECT_EQ(Level(Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf), ContainerCompatLevel::Recommended);
 }
 
-TEST(ContainerCompatRegistry, Mkv_Av1_Pcm_IsExperimental) {
-    EXPECT_EQ(Level(Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::Pcm), ContainerCompatLevel::Experimental);
+TEST(ContainerCompatRegistry, Mkv_Av1_Pcm_IsAllowed) {
+    // 0.6.0 Audio v2: uncompressed S16LE PCM (A_PCM/INT_LIT) is Matroska-only and
+    // now implemented; MKV + AV1 + PCM is Allowed.
+    EXPECT_EQ(Level(Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::Pcm), ContainerCompatLevel::Allowed);
 }
 
 TEST(ContainerCompatRegistry, Mkv_H264_Aac_IsRecommended) {
@@ -44,8 +46,9 @@ TEST(ContainerCompatRegistry, Mkv_H264_Opus_IsAllowed) {
     EXPECT_EQ(Level(Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::Opus), ContainerCompatLevel::Allowed);
 }
 
-TEST(ContainerCompatRegistry, Mkv_H264_Pcm_IsExperimental) {
-    EXPECT_EQ(Level(Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::Pcm), ContainerCompatLevel::Experimental);
+TEST(ContainerCompatRegistry, Mkv_H264_Pcm_IsAllowed) {
+    // 0.6.0 Audio v2: PCM is implemented and Matroska-only; MKV + H.264 + PCM is Allowed.
+    EXPECT_EQ(Level(Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::Pcm), ContainerCompatLevel::Allowed);
 }
 
 TEST(ContainerCompatRegistry, Mkv_Hevc_Aac_IsExperimental) {
@@ -280,13 +283,41 @@ TEST(ContainerCompatRegistry, Reconcile_Mkv_H264_Opus_Unchanged) {
     EXPECT_EQ(a, AudioCodec::Opus);
 }
 
-TEST(ContainerCompatRegistry, Reconcile_Mkv_H264_Pcm_FixesAudioToAac) {
-    // H.264 + PCM in MKV is Experimental. Reconciler tries AAC first while
-    // keeping H.264 (H.264 + AAC in MKV is Recommended), so video stays H.264
-    // and audio is promoted to AAC.
+TEST(ContainerCompatRegistry, Reconcile_Mkv_H264_Pcm_Unchanged) {
+    // 0.6.0 Audio v2: MKV + H.264 + PCM is now Allowed (a working combo), so the
+    // reconciler must leave it unchanged — no rewrite to AAC.
     VideoCodec v = VideoCodec::H264Nvenc;
     AudioCodec a = AudioCodec::Pcm;
     ContainerCompatRegistry::ReconcileCodecs(Container::Matroska, v, a);
+    EXPECT_EQ(v, VideoCodec::H264Nvenc);
+    EXPECT_EQ(a, AudioCodec::Pcm);
+}
+
+TEST(ContainerCompatRegistry, Reconcile_Mkv_Av1_Pcm_Unchanged) {
+    // MKV + AV1 + PCM is Allowed; reconciler leaves it unchanged.
+    VideoCodec v = VideoCodec::Av1Nvenc;
+    AudioCodec a = AudioCodec::Pcm;
+    ContainerCompatRegistry::ReconcileCodecs(Container::Matroska, v, a);
+    EXPECT_EQ(v, VideoCodec::Av1Nvenc);
+    EXPECT_EQ(a, AudioCodec::Pcm);
+}
+
+TEST(ContainerCompatRegistry, Reconcile_WebM_Av1_Pcm_FixesAudioToOpus) {
+    // WebM cannot carry PCM (Prohibited). Reconciler keeps AV1 and swaps audio to
+    // the WebM-preferred codec, Opus.
+    VideoCodec v = VideoCodec::Av1Nvenc;
+    AudioCodec a = AudioCodec::Pcm;
+    ContainerCompatRegistry::ReconcileCodecs(Container::WebM, v, a);
+    EXPECT_EQ(v, VideoCodec::Av1Nvenc);
+    EXPECT_EQ(a, AudioCodec::Opus);
+}
+
+TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Pcm_FixesAudioToAac) {
+    // MP4 cannot carry PCM in this build (Experimental). Reconciler keeps H.264
+    // and swaps audio to AAC.
+    VideoCodec v = VideoCodec::H264Nvenc;
+    AudioCodec a = AudioCodec::Pcm;
+    ContainerCompatRegistry::ReconcileCodecs(Container::Mp4, v, a);
     EXPECT_EQ(v, VideoCodec::H264Nvenc);
     EXPECT_EQ(a, AudioCodec::AacMf);
 }

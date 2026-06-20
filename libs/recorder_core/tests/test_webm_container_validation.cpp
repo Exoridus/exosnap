@@ -114,4 +114,55 @@ TEST(WebMContainerValidationTest, Validate_RejectsWebMH264) {
     EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
 }
 
+// --- PCM (0.6.0 Audio v2): Matroska-only A_PCM/INT_LIT ---
+
+TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaAv1Pcm) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidMatroskaConfig();
+    cfg.audio_codec = AudioCodec::Pcm;
+
+    RecorderResult result{};
+    EXPECT_TRUE(session.Validate(cfg, &result));
+    EXPECT_TRUE(result.succeeded);
+}
+
+TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaH264Pcm) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidMatroskaConfig();
+    cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.audio_codec = AudioCodec::Pcm;
+
+    RecorderResult result{};
+    EXPECT_TRUE(session.Validate(cfg, &result));
+    EXPECT_TRUE(result.succeeded);
+}
+
+TEST(WebMContainerValidationTest, Validate_RejectsWebMPcm) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidWebMConfig();
+    cfg.audio_codec = AudioCodec::Pcm;
+
+    RecorderResult result{};
+    EXPECT_FALSE(session.Validate(cfg, &result));
+    EXPECT_EQ(result.error_code, E_INVALIDARG);
+    EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
+    EXPECT_NE(result.error_detail.find("Pcm"), std::string::npos);
+}
+
+TEST(WebMContainerValidationTest, Validate_RejectsMp4Pcm) {
+    RecorderSession session;
+    RecorderConfig cfg{};
+    cfg.output_path = std::filesystem::current_path() / "test_mp4_pcm.mp4";
+    cfg.target.kind = CaptureTarget::Kind::Monitor;
+    cfg.target.native_id = 1;
+    cfg.container = Container::Mp4;
+    cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.audio_codec = AudioCodec::Pcm;
+
+    RecorderResult result{};
+    EXPECT_FALSE(session.Validate(cfg, &result));
+    EXPECT_EQ(result.error_code, E_INVALIDARG);
+    EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
+}
+
 } // namespace

@@ -181,7 +181,7 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
     if (config.container == Container::Mp4) {
         if (config.audio_codec != AudioCodec::AacMf) {
             return fail(E_INVALIDARG, ErrorPhase::Prepare,
-                        "Container::Mp4 requires AudioCodec::AacMf; Opus is not valid for MP4");
+                        "Container::Mp4 requires AudioCodec::AacMf; Opus and PCM are not valid for MP4");
         }
     } else if (config.audio_codec == AudioCodec::Opus) {
         // Opus: valid for WebM and Matroska
@@ -190,9 +190,16 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
             return fail(E_INVALIDARG, ErrorPhase::Prepare,
                         "AudioCodec::AacMf is not valid for Container::WebM; use AudioCodec::Opus");
         }
+    } else if (config.audio_codec == AudioCodec::Pcm) {
+        // PCM (A_PCM/INT_LIT): Matroska only.
+        if (config.container != Container::Matroska) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare,
+                        "AudioCodec::Pcm is only valid for Container::Matroska (MKV); "
+                        "WebM and MP4 cannot carry A_PCM/INT_LIT in this build");
+        }
     } else {
         return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                    "Unsupported audio codec; supported: AudioCodec::Opus, AudioCodec::AacMf");
+                    "Unsupported audio codec; supported: AudioCodec::Opus, AudioCodec::AacMf, AudioCodec::Pcm");
     }
 
     // Chroma: only Cs420 supported

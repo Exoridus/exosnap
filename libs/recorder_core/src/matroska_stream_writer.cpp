@@ -172,7 +172,7 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
             libebml::GetChild<libmatroska::KaxTrackFlagLacing>(aud).SetValue(0);
 
             const auto& slot = m_config.audio_tracks[i].codec_private;
-            if (m_config.audio_is_opus) {
+            if (m_config.audio_codec == StreamAudioCodec::Opus) {
                 if (slot.size() < 19) {
                     Fail("Opus CodecPrivate is incomplete; expected full 19-byte OpusHead");
                     CloseIo();
@@ -186,6 +186,10 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
                 libebml::GetChild<libmatroska::KaxCodecDelay>(aud).SetValue(codec_delay_ns);
                 libebml::GetChild<libmatroska::KaxSeekPreRoll>(aud).SetValue(80000000ULL);
                 libebml::GetChild<libmatroska::KaxTrackDefaultDuration>(aud).SetValue(20000000ULL);
+            } else if (m_config.audio_codec == StreamAudioCodec::Pcm) {
+                // Uncompressed 16-bit signed little-endian PCM. No CodecPrivate;
+                // the bit depth is carried in the track audio header below.
+                libebml::GetChild<libmatroska::KaxCodecID>(aud).SetValue("A_PCM/INT_LIT");
             } else {
                 libebml::GetChild<libmatroska::KaxCodecID>(aud).SetValue("A_AAC");
                 if (!slot.empty()) {
@@ -198,6 +202,9 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
             auto& as = libebml::GetChild<libmatroska::KaxTrackAudio>(aud);
             libebml::GetChild<libmatroska::KaxAudioSamplingFreq>(as).SetValue(48000.0);
             libebml::GetChild<libmatroska::KaxAudioChannels>(as).SetValue(2);
+            if (m_config.audio_codec == StreamAudioCodec::Pcm) {
+                libebml::GetChild<libmatroska::KaxAudioBitDepth>(as).SetValue(16);
+            }
             aud.SetGlobalTimecodeScale(kTimecodeScaleNs);
             m_track_entries.push_back(&aud);
         }

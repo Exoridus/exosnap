@@ -178,7 +178,7 @@ MatroskaStreamConfig MakeConfig(const std::string& path) {
     c.encode_height = 720;
     c.frame_rate_num = 60;
     c.frame_rate_den = 1;
-    c.audio_is_opus = false;
+    c.audio_codec = recorder_core::StreamAudioCodec::Aac;
     c.audio_track_count = 1;
     c.audio_tracks[0].codec_private = FakeAacCp();
     return c;

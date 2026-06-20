@@ -31,8 +31,9 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
         SupportAnnotation{SupportLevel::Available, "Opus encoder implemented via libopus (static); M4 Phase 3."});
     caps.audio_codecs.emplace(AudioCodec::AacMf,
                               SupportAnnotation{SupportLevel::Available, "Validated AAC-LC Media Foundation path."});
-    caps.audio_codecs.emplace(AudioCodec::Pcm,
-                              SupportAnnotation{SupportLevel::NotImplemented, "PCM path is not implemented."});
+    caps.audio_codecs.emplace(
+        AudioCodec::Pcm, SupportAnnotation{SupportLevel::Available,
+                                           "Uncompressed S16LE PCM (A_PCM/INT_LIT); Matroska-only (0.6.0 Audio v2)."});
 
     caps.chroma_modes.emplace(ChromaSubsampling::Cs420,
                               SupportAnnotation{SupportLevel::Available, "Validated chroma mode."});

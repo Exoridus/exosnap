@@ -66,6 +66,8 @@ QString AudioCodecToString(recorder_core::AudioCodec c) {
         return QStringLiteral("aac");
     case recorder_core::AudioCodec::Opus:
         return QStringLiteral("opus");
+    case recorder_core::AudioCodec::Pcm:
+        return QStringLiteral("pcm");
     }
     return QString();
 }
@@ -76,6 +78,8 @@ std::optional<recorder_core::AudioCodec> StringToAudioCodec(const QString& s) {
         return recorder_core::AudioCodec::AacMf;
     if (lower == QStringLiteral("opus"))
         return recorder_core::AudioCodec::Opus;
+    if (lower == QStringLiteral("pcm"))
+        return recorder_core::AudioCodec::Pcm;
     return std::nullopt;
 }
 

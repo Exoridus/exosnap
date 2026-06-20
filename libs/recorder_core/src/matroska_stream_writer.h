@@ -59,6 +59,14 @@ struct MuxPacket {
     std::vector<uint8_t> bytes;
 };
 
+// Audio codec discriminator for the Matroska track header. Replaces the old
+// audio_is_opus bool so PCM can be represented explicitly.
+enum class StreamAudioCodec {
+    Aac,  // A_AAC
+    Opus, // A_OPUS
+    Pcm,  // A_PCM/INT_LIT (16-bit signed little-endian)
+};
+
 // Per-audio-track codec private payload.
 struct StreamAudioTrack {
     std::vector<uint8_t> codec_private;
@@ -77,7 +85,7 @@ struct MatroskaStreamConfig {
     uint32_t frame_rate_den = 0;
 
     // Audio
-    bool audio_is_opus = false; // true => A_OPUS, false => A_AAC
+    StreamAudioCodec audio_codec = StreamAudioCodec::Aac;
     uint32_t audio_track_count = 0;
     std::array<StreamAudioTrack, 3> audio_tracks{}; // CodecPrivateData::kMaxAudioTracks
 
