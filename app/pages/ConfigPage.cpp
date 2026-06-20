@@ -2816,9 +2816,19 @@ void ConfigPage::updateVideoCodecChoices() {
 
 void ConfigPage::updateAudioCodecChoices() {
     const QSignalBlocker blocker(audio_codec_combo_);
-    if (audio_codec_combo_->count() == 0) {
+    // Rebuild the list so PCM (MKV-only) appears only when MKV is selected. The
+    // common Opus/AAC entries are always present; PCM is appended for Matroska.
+    const bool mkv = (format_settings_.container == capability::Container::Matroska);
+    const int desired = mkv ? 3 : 2;
+    const bool has_pcm = audio_codec_combo_->findData(AudioCodecToInt(capability::AudioCodec::Pcm)) >= 0;
+    if (audio_codec_combo_->count() != desired || (mkv && !has_pcm) || (!mkv && has_pcm)) {
+        audio_codec_combo_->clear();
         audio_codec_combo_->addItem(QStringLiteral("Opus"), AudioCodecToInt(capability::AudioCodec::Opus));
         audio_codec_combo_->addItem(QStringLiteral("AAC"), AudioCodecToInt(capability::AudioCodec::AacMf));
+        if (mkv) {
+            audio_codec_combo_->addItem(QStringLiteral("PCM (uncompressed)"),
+                                        AudioCodecToInt(capability::AudioCodec::Pcm));
+        }
     }
     const int aidx = audio_codec_combo_->findData(AudioCodecToInt(format_settings_.audio_codec));
     if (aidx >= 0)
@@ -2903,6 +2913,13 @@ void ConfigPage::updateCompatCallout() {
 
 void ConfigPage::onContainerChanged(int id) {
     format_settings_.container = static_cast<capability::Container>(id);
+    // PCM is MKV-only: rebuild the audio-codec list so the option appears/disappears
+    // with the container. If PCM was selected and we leave MKV, fall back to Opus.
+    if (format_settings_.container != capability::Container::Matroska &&
+        format_settings_.audio_codec == capability::AudioCodec::Pcm) {
+        format_settings_.audio_codec = capability::AudioCodec::Opus;
+    }
+    updateAudioCodecChoices();
     emitCurrentFormatSettings();
 }
 

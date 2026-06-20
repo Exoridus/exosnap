@@ -169,6 +169,23 @@ TEST(AudioEncodingPreset, StoreRoundTrip_Bitrate) {
     QFile::remove(path);
 }
 
+TEST(AudioEncodingPreset, StoreRoundTrip_AudioCodec_Pcm) {
+    // 0.6.0 Audio v2: PCM (MKV-only) must round-trip through save/load. The
+    // default preset is MKV + AV1, so MKV + AV1 + PCM is an Allowed combo and
+    // survives SanitizePresetConfig's container/codec reconciliation.
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+
+    RecordingPreset p = MakeDefaultPreset();
+    p.config.output.audio_codec = capability::AudioCodec::Pcm;
+    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+
+    const auto state = store.Load();
+    ASSERT_FALSE(state.presets.empty());
+    EXPECT_EQ(state.presets.front().config.output.audio_codec, capability::AudioCodec::Pcm);
+    QFile::remove(path);
+}
+
 TEST(AudioEncodingPreset, StoreRoundTrip_OpusFrameDuration_Ms10) {
     const QString path = UniqueTempPath();
     RecordingPresetStore store(path);

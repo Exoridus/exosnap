@@ -144,7 +144,18 @@ void MuxThread::Run() {
     sw_config_template.encode_height = encH;
     sw_config_template.frame_rate_num = m_state.config.frame_rate_num;
     sw_config_template.frame_rate_den = m_state.config.frame_rate_den;
-    sw_config_template.audio_is_opus = (m_state.config.audio_codec == AudioCodec::Opus);
+    switch (m_state.config.audio_codec) {
+    case AudioCodec::Opus:
+        sw_config_template.audio_codec = StreamAudioCodec::Opus;
+        break;
+    case AudioCodec::Pcm:
+        sw_config_template.audio_codec = StreamAudioCodec::Pcm;
+        break;
+    case AudioCodec::AacMf:
+    default:
+        sw_config_template.audio_codec = StreamAudioCodec::Aac;
+        break;
+    }
     sw_config_template.audio_track_count = track_count;
     for (uint32_t i = 0; i < track_count; ++i) {
         sw_config_template.audio_tracks[i].codec_private = audioCp[i].bytes;

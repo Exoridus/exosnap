@@ -14,6 +14,7 @@ if(NOT EXISTS "${_nvenc_header}")
         include/recorder_core/audio_meter.h
         src/audio_meter.cpp
         src/opus_audio_encoder.cpp
+        src/pcm_audio_encoder.cpp
         src/mic_meter_service.cpp
         src/loopback_meter_service.cpp
         include/recorder_core/mp4_remuxer.h
@@ -67,6 +68,15 @@ if(NOT EXISTS "${_nvenc_header}")
         LIBRARIES recorder_core
     )
     target_include_directories(test_opus_encoder PRIVATE src)
+
+    # Audio v2 (0.6.0): PCM passthrough encoder (self-contained; no FFmpeg/NVENC).
+    exosnap_add_gtest(
+        NAME test_pcm_audio_encoder
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_pcm_audio_encoder.cpp
+                src/pcm_audio_encoder.cpp
+    )
+    target_include_directories(test_pcm_audio_encoder PRIVATE src include)
 
     exosnap_add_gtest(
         NAME test_audio_meter
@@ -209,6 +219,7 @@ add_library(recorder_core STATIC
     src/wasapi_process_loopback_src.cpp
     src/wasapi_process_loopback_src.h
     src/opus_audio_encoder.cpp
+    src/pcm_audio_encoder.cpp
     src/session_stats_collector.cpp
     src/pipeline_diagnostics_aggregator.cpp
     src/pipeline_diagnostics_aggregator.h
@@ -290,6 +301,15 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_opus_encoder PRIVATE src)
+
+# Audio v2 (0.6.0): PCM passthrough encoder (self-contained; no FFmpeg/NVENC).
+exosnap_add_gtest(
+    NAME test_pcm_audio_encoder
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_pcm_audio_encoder.cpp
+            src/pcm_audio_encoder.cpp
+)
+target_include_directories(test_pcm_audio_encoder PRIVATE src include)
 
 exosnap_add_gtest(
     NAME test_audio_encoding_params

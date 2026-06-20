@@ -418,13 +418,28 @@ TEST(RecordingPreset, Reconcile_Mkv_Hevc_FallsToAv1Opus) {
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Opus);
 }
 
-TEST(RecordingPreset, Reconcile_Mkv_Pcm_ForcesAac) {
+TEST(RecordingPreset, Reconcile_Mkv_Pcm_Unchanged) {
+    // 0.6.0 Audio v2: MKV + (AV1|H.264) + PCM is now Allowed (uncompressed
+    // S16LE A_PCM/INT_LIT), so the reconciler leaves PCM in place — no rewrite to
+    // AAC. PCM is MKV-only; WebM/MP4 still reconcile it away.
     OutputSettingsModel out;
     out.container = capability::Container::Matroska;
     out.video_codec = capability::VideoCodec::H264Nvenc;
     out.audio_codec = capability::AudioCodec::Pcm;
     ReconcileContainerCodecs(out);
-    EXPECT_EQ(out.audio_codec, capability::AudioCodec::AacMf);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(out.audio_codec, capability::AudioCodec::Pcm);
+}
+
+TEST(RecordingPreset, Reconcile_WebM_Pcm_ForcesOpus) {
+    // WebM cannot carry PCM (Prohibited); reconciler swaps to the WebM-preferred Opus.
+    OutputSettingsModel out;
+    out.container = capability::Container::WebM;
+    out.video_codec = capability::VideoCodec::Av1Nvenc;
+    out.audio_codec = capability::AudioCodec::Pcm;
+    ReconcileContainerCodecs(out);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::Av1Nvenc);
+    EXPECT_EQ(out.audio_codec, capability::AudioCodec::Opus);
 }
 
 TEST(RecordingPreset, Reconcile_Mkv_Av1Opus_Unchanged) {

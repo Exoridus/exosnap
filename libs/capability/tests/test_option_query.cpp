@@ -45,8 +45,10 @@ TEST(OptionQueryTest, MatroskaAv1AudioOptionsMatchBaseline) {
     EXPECT_TRUE(opus->selectable);
     EXPECT_EQ(opus->level, SupportLevel::Available);
 
-    EXPECT_FALSE(pcm->selectable);
-    EXPECT_EQ(pcm->level, SupportLevel::NotImplemented);
+    // 0.6.0 Audio v2: MKV + AV1 + PCM is Allowed (registry) which maps to
+    // ValidUnvalidated — selectable with a "not validated on this system" caveat.
+    EXPECT_TRUE(pcm->selectable);
+    EXPECT_EQ(pcm->level, SupportLevel::ValidUnvalidated);
 }
 
 TEST(OptionQueryTest, WebMAv1AudioOptionsMatchBaseline) {

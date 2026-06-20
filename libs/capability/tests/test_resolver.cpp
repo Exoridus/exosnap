@@ -261,6 +261,42 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvAv1OpusCombo) {
     EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Opus);
 }
 
+TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvAv1PcmCombo) {
+    // 0.6.0 Audio v2: MKV + AV1 + PCM is Allowed (ValidUnvalidated) and must
+    // translate to recorder_core with audio_codec = Pcm.
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    UserRecorderConfig config;
+    config.container = Container::Matroska;
+    config.video_codec = VideoCodec::Av1Nvenc;
+    config.audio_codec = AudioCodec::Pcm;
+
+    ResolveResult validation;
+    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+
+    EXPECT_TRUE(validation.succeeded);
+    EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::Av1Nvenc);
+    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Pcm);
+}
+
+TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvH264PcmCombo) {
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    UserRecorderConfig config;
+    config.container = Container::Matroska;
+    config.video_codec = VideoCodec::H264Nvenc;
+    config.audio_codec = AudioCodec::Pcm;
+
+    ResolveResult validation;
+    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+
+    EXPECT_TRUE(validation.succeeded);
+    EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::H264Nvenc);
+    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Pcm);
+}
+
 TEST(TranslationTest, ToRecorderCoreConfigAcceptsMp4H264AacCombo) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
 

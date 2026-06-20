@@ -22,6 +22,7 @@ namespace {
 using recorder_core::MatroskaStreamConfig;
 using recorder_core::MatroskaStreamWriter;
 using recorder_core::MuxPacket;
+using recorder_core::StreamAudioCodec;
 
 constexpr uint64_t kTimescaleNs = 1000000ULL;
 
@@ -202,7 +203,7 @@ MatroskaStreamConfig MakeConfig(const std::string& path, bool h264, bool opus) {
     c.encode_height = 720;
     c.frame_rate_num = 60;
     c.frame_rate_den = 1;
-    c.audio_is_opus = opus;
+    c.audio_codec = opus ? StreamAudioCodec::Opus : StreamAudioCodec::Aac;
     c.audio_track_count = 1;
     c.audio_tracks[0].codec_private = opus ? FakeOpusCp() : FakeAacCp();
     return c;
@@ -282,6 +283,46 @@ TEST_F(StreamWriterTest, Av1Opus_ProducesCompleteContainer) {
     FeedSeconds(w, 3.0, 30, 32);
     ASSERT_TRUE(w.Finalize());
     const auto d = ReadFile(tmp_);
+    EXPECT_TRUE(HasLevel1(d, kIdTracks));
+    EXPECT_TRUE(SegmentSizeIsFinite(d));
+}
+
+// 2b. PCM path: track header carries CodecID "A_PCM/INT_LIT" and BitDepth=16,
+//     and no CodecPrivate. Verified by scanning the rendered Tracks bytes for the
+//     ASCII CodecID and the BitDepth element (id 0x6264, value 16).
+TEST_F(StreamWriterTest, Pcm_WritesPcmCodecIdAndBitDepth) {
+    MatroskaStreamConfig c;
+    c.output_path = tmp_;
+    c.video_codec_id = "V_AV1";
+    c.video_codec_private = FakeAv1Cp();
+    c.encode_width = 1280;
+    c.encode_height = 720;
+    c.frame_rate_num = 60;
+    c.frame_rate_den = 1;
+    c.audio_codec = StreamAudioCodec::Pcm;
+    c.audio_track_count = 1;
+    // PCM carries no CodecPrivate.
+    c.audio_tracks[0].codec_private = {};
+
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(c));
+    FeedSeconds(w, 3.0, 30, 32);
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+
+    const auto d = ReadFile(tmp_);
+    ASSERT_FALSE(d.empty());
+
+    // CodecID "A_PCM/INT_LIT" present in the rendered container.
+    const std::string kPcmId = "A_PCM/INT_LIT";
+    const auto id_it = std::search(d.begin(), d.end(), kPcmId.begin(), kPcmId.end());
+    EXPECT_NE(id_it, d.end()) << "A_PCM/INT_LIT CodecID not found in output";
+
+    // KaxAudioBitDepth (EBML id 0x6264), 1-byte size 0x81, value 16 (0x10).
+    const std::vector<uint8_t> kBitDepth16 = {0x62, 0x64, 0x81, 0x10};
+    const auto bd_it = std::search(d.begin(), d.end(), kBitDepth16.begin(), kBitDepth16.end());
+    EXPECT_NE(bd_it, d.end()) << "KaxAudioBitDepth=16 not found in output";
+
     EXPECT_TRUE(HasLevel1(d, kIdTracks));
     EXPECT_TRUE(SegmentSizeIsFinite(d));
 }

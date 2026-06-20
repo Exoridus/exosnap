@@ -248,8 +248,10 @@ void ApplyOutputSettingsToRecorderConfig(recorder_core::RecorderConfig& config, 
     case capability::AudioCodec::Opus:
         config.audio_codec = recorder_core::AudioCodec::Opus;
         return;
-    case capability::AudioCodec::AacMf:
     case capability::AudioCodec::Pcm:
+        config.audio_codec = recorder_core::AudioCodec::Pcm;
+        return;
+    case capability::AudioCodec::AacMf:
     default:
         config.audio_codec = recorder_core::AudioCodec::AacMf;
         return;
