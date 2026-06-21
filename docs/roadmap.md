@@ -169,34 +169,47 @@ These underpin multiple versions and must not be scattered into UI `if`-chains:
 
 ## Next step
 
-**v0.6.0 — Audio v2** *(code-complete — pending release tag)*
+**v0.7.0 — HDR and final codec matrix** *(next)*
 
-`0.4.0` (crash reporting + updates) and `0.5.0` (settings & media-capability: TOML config,
-profile export/import, video rate-control/bitrate, audio bitrate, split by time+size, curated
-themes) have shipped. The `0.6.0` **Audio v2** wave is now code-complete on `main` — each slice
-landed as its own CI-green PR:
+`0.4.0` (crash reporting + updates), `0.5.0` (settings & media-capability) and `0.6.0` (**Audio v2**)
+have shipped. `0.7.0` finalizes the video/codec matrix: HEVC/AVC/AV1, 8-/10-bit, HDR10, color
+metadata, the P010 compositor path, `hvc1`, the MKV/MP4/WebM final matrix, and Apple/NLE tests.
+
+### v0.6.0 — Audio v2 *(shipped)*
+
+The Audio v2 wave landed as CI-green PRs, then the consolidation round completed the
+channel/sample-format model and verification:
 
 - **Per-track gain & mute** (#78) — per-source `gain_db` + `muted`, applied in the mixer.
-- **Brickwall limiter** (#94, ADR 0023) — replaces the mixer's naive hard-clip with a real peak
-  limiter; default on at 0 dBFS (smooths overs that previously clipped).
+- **Brickwall limiter** (#94, ADR 0023) — a real peak limiter replacing the naive hard-clip;
+  default on at 0 dBFS.
 - **Mic-DSP chain** — a reusable `MicDspAudioSrc` decorator applying, in order, a **high-pass
   filter** (#95, ADR 0024), **noise gate** (#96, ADR 0025), **AGC** (#97, ADR 0026), and
   **RNNoise** neural suppression (#100, ADR 0029). Every stage defaults OFF, so unaltered capture
   is byte-identical when disabled.
 - **Lossless codecs** — **PCM** (`A_PCM/INT_LIT`, #98, ADR 0027) and **FLAC** (libFLAC, `A_FLAC`,
-  #99, ADR 0028) in MKV, at 48 kHz / stereo / 16-bit.
+  #99, ADR 0028) in MKV.
+- **Channel / sample-format model** (ADR 0030) — first-class `{sample_rate, channels, bit_depth}`:
+  vetted 44.1/48/96 kHz, mono/stereo, 16/24/32-bit lossless (FLAC 16/24), plus a configurable
+  **FLAC compression level**. Resampling/rematrixing happens once after the mix bus via a new
+  `OutputFormatAudioSrc` decorator (libswresample); the default 48 kHz/stereo path is a
+  byte-identical no-op. Opus is locked to 48 kHz. Stereo→mono uses an averaging (no-clip) downmix.
 
-Two new third-party dependencies (libFLAC, RNNoise) integrate cleanly on MSVC. The preset schema
-advanced 7 → 15 across the wave (pre-1.0: reset, no migration).
+Two third-party dependencies (libFLAC, RNNoise) integrate cleanly on MSVC. The preset schema
+advanced 7 → 16 across the wave (pre-1.0: reset, no migration).
 
-**Deferred / follow-up:**
-- The **full channel/sample-format model** (arbitrary sample rate, channel count, 24/32-bit, MP4
-  PCM) is a large refactor of the hardcoded 48 kHz/stereo/F32 audio path and was **not required**
-  for the shipped PCM/FLAC — deferred to a later `0.6.x`/`0.7.0` wave.
-- The RNNoise model is fetched (SHA-verified) from `media.xiph.org` at configure time; mirroring it
-  to a project-owned release (as done for FFmpeg) is a recommended follow-up.
-- Live A/V playback verification of the new codecs is batched into the `0.6.0` consolidation round.
-- `0.6.0` release-prep (version bump, manifests, notes, tag) is maintainer-gated and not yet cut.
+**Consolidation-round outcomes / notes:**
+- **MP4 PCM deferred (Experimental).** Live verification showed the project's libavformat
+  (avformat-62) writes the `ipcm` (ISO/IEC 23003-5) sample entry for PCM-in-MP4, which has limited
+  player support; per ADR 0030 it was narrowed back to Experimental (not user-selectable) rather
+  than shipped silently. MKV remains PCM/FLAC's home. The remuxer stays codec-agnostic so a future
+  wave can re-enable it with a broadly-compatible sample-entry mapping + player matrix.
+- **RNNoise model mirror.** The model tarball is now fetched from a project-owned GitHub-release
+  mirror with upstream (`media.xiph.org`) fallback; the SHA256 guards both. One maintainer-gated
+  step remains: publishing the mirror asset (`gh release upload`, documented in
+  `third_party/CMakeLists.txt`); builds stay green via the upstream fallback until then.
+- **CI discovery-timeout flake** fixed (`DISCOVERY_TIMEOUT 60` in `cmake/exosnap_testing.cmake`).
+- **Deferred to a later wave:** more-than-stereo audio (5.1/7.1), float PCM, and PCM/FLAC in MP4.
 
 Earlier waves for reference: the `0.3.0` presence layer shipped capture-excluded overlays
 (ADR 0016), tray icon + unread badge, notification toasts, countdown overlay, capture-frame control,

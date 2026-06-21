@@ -1,12 +1,12 @@
-# ExoSnap 0.5.0 — Known Limitations
+# ExoSnap 0.6.0 — Known Limitations
 
-This document describes the current support boundary of ExoSnap **0.5.0**. It is
+This document describes the current support boundary of ExoSnap **0.6.0**. It is
 factual and specific to this build. If a capability is not listed here as
 supported, do not assume it is available.
 
 ## Release status
 
-- ExoSnap 0.5.0 is a **pre-v1 Windows preview**, not a final 1.0 release.
+- ExoSnap 0.6.0 is a **pre-v1 Windows preview**, not a final 1.0 release.
 - Configuration, preset, and recording-history file schemas are **not frozen**
   and may change in incompatible ways before 1.0.0.
 - Keep your own backup copies of presets you care about during preview releases.
@@ -53,18 +53,48 @@ Supported encoders actually selectable and validated in this build:
 
 - **Video:** H.264 (NVENC) and AV1 (NVENC, where the installed GPU and driver
   expose it). HEVC is **not** implemented in 0.5.0.
-- **Audio:** AAC-LC (`AAC` in the UI) and Opus. PCM and FLAC are **not**
-  implemented in 0.5.0.
+- **Audio:** AAC-LC (`AAC` in the UI), Opus, PCM (MKV only), and FLAC (MKV only).
+  PCM and FLAC are **MKV-only** — see Container/codec rules above for why MP4 PCM
+  is deferred.
 
 Container/codec rules:
 
-- MP4 uses H.264 + AAC. Opus is not offered for MP4.
+- MP4 uses H.264 + AAC. Opus, PCM, and FLAC are not offered for MP4.
+  - **PCM in MP4 is deferred**: the project's libavformat (avformat-62) emits the
+    `ipcm` (ISO/IEC 23003-5) sample entry instead of the broadly-compatible QuickTime
+    entries (`sowt`/`in24`/`lpcm`); confirmed via `ffprobe codec_tag_string=ipcm`.
+    Windows "Films & TV", QuickTime, and many NLEs do not play `ipcm`. Use MKV for
+    PCM recordings.
 - WebM uses AV1 + Opus.
-- MKV is the flexible default container.
+- MKV is the flexible default container and the home for PCM and FLAC audio.
 
 Exact codec availability depends on your **NVIDIA GPU generation, driver
 version, the selected container, and the selected video/audio combination**.
 Invalid combinations are not offered.
+
+## Audio processing (Audio v2, 0.6.0)
+
+- **Audio format model** (ADR 0030): the output **sample rate** (44.1 / 48 / 96 kHz),
+  **channel count** (mono / stereo), and **bit depth** for the lossless codecs
+  (PCM 16/24/32-bit; FLAC 16/24-bit) are configurable. Capture itself stays at
+  48 kHz; the engine resamples/rematrixes once after the mix bus
+  (libswresample). **Opus is locked to 48 kHz** (libopus accepts only
+  8/12/16/24/48 kHz). Bit depth does not apply to the lossy codecs (Opus/AAC).
+  Stereo→mono uses an averaging downmix (no clipping). **Deferred:** more than 2
+  channels (5.1/7.1), float PCM (`A_PCM/FLOAT_IEEE`), and non-vetted sample rates.
+  - A small (~10 ms) tail of audio may be dropped at stop when recording at a
+    **non-default sample rate** (the resampler's internal buffer is not drained
+    at end-of-stream); negligible for normal recordings.
+- **Per-track gain & mute** and a **brickwall limiter** (on by default, 0 dBFS
+  ceiling) on the mixed bus.
+- **Microphone DSP chain**, each stage **off by default** (capture is byte-identical
+  when all are off): high-pass filter → noise gate → AGC → RNNoise neural noise
+  suppression. Stages are toggled individually; there is no single master switch.
+- **FLAC compression level** (0–8, default 5) is configurable; lossless at every
+  level (level only trades encode CPU vs. file size).
+- The RNNoise model weights are fetched at **configure (build) time** from a
+  project-owned mirror with upstream fallback — this affects building from source,
+  not running the released binary.
 
 ## Recording split
 
@@ -158,7 +188,7 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   is deferred to 0.12.x (RC stabilization wave).
 - Tray notifications may be suppressed by Windows Focus Assist / Do Not Disturb mode.
 
-## Crash reporting and updates (0.5.0)
+## Crash reporting and updates (0.6.0)
 
 - **Crash reporting is opt-in and consent-gated.** Capture is local-first (out-of-process Crashpad).
   Nothing leaves the machine without an explicit choice on the next-launch crash dialog.
@@ -178,11 +208,11 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
 - **Updates are off by default for self-built binaries** and require the embedded official public key;
   no GitHub token is used by the client.
 
-## Planned beyond 0.5.0 (not in this build)
+## Planned beyond 0.6.0 (not in this build)
 
 The following are intentionally deferred and are documented here only so the
-current boundary is unambiguous. They are **not** part of 0.5.0:
+current boundary is unambiguous. They are **not** part of 0.6.0:
 in-place auto-update with restart, immediate in-session crash reporter, automated symbol upload,
-AMD and Intel hardware encoding, software encoding fallback, expanded rate-control / bitrate controls,
-PCM and FLAC audio, an expanded codec/color pipeline, and the fullscreen/exclusive capture matrix
-(0.12.x).
+AMD and Intel hardware encoding, software encoding fallback, an expanded codec/color pipeline
+(HEVC, 10-bit, HDR10), more-than-stereo audio, float PCM, PCM/FLAC in MP4, and the
+fullscreen/exclusive capture matrix (0.12.x).

@@ -755,6 +755,11 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.mic_agc_target_db = plan.mic_agc_target_db;
     // Microphone RNNoise neural noise suppression (Audio v2).
     config.mic_rnnoise_enabled = plan.mic_rnnoise_enabled;
+    // Channel / sample-format model (ADR 0030 — 0.6.0).
+    config.audio_sample_rate = plan.audio_sample_rate;
+    config.audio_channels = plan.audio_channels;
+    config.audio_bit_depth = plan.audio_bit_depth;
+    config.flac_compression_level = plan.flac_compression_level;
 
     if (plan.record_audio && PlanRequiresTargetPid(plan.plan) && !plan.audio_target_process_id.has_value()) {
         diagnostics::AppLog::error(QStringLiteral("record.failure"),

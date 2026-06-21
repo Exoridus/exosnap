@@ -163,6 +163,13 @@ void MuxThread::Run() {
     for (uint32_t i = 0; i < track_count; ++i) {
         sw_config_template.audio_tracks[i].codec_private = audioCp[i].bytes;
     }
+    // Thread audio format from RecorderConfig into the stream writer config (ADR 0030).
+    // Opus is locked to 48 kHz by Validate(); all other codecs use the configured rate.
+    sw_config_template.audio_sample_rate = m_state.config.audio_sample_rate;
+    sw_config_template.audio_channels = m_state.config.audio_channels;
+    // bit_depth is written for PCM and FLAC only; for lossy codecs the field is
+    // ignored by MatroskaStreamWriter::Open() so any value is safe.
+    sw_config_template.audio_bit_depth = m_state.config.audio_bit_depth;
 
     // --- Segment state ---
     struct SegmentState {

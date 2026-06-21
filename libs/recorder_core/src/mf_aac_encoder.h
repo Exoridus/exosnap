@@ -39,7 +39,8 @@ class MfAacEncoder {
     static uint32_t ResolveBitrateKbps(uint32_t kbps) noexcept;
 
     // Enumerate, activate, configure input/output types and begin streaming.
-    // sample_rate must be 48000, channels must be 2.
+    // Uses the negotiated sample_rate and channels (ADR 0030: prior hardcoded
+    // "48000/2" constraint lifted; the MF AAC encoder accepts both).
     bool Init(uint32_t sample_rate, uint32_t channels, std::string& out_error);
 
     // Get the output media type (retained for codec-private extraction).

@@ -32,6 +32,10 @@ inline const QString kOutputFolder = QStringLiteral("Where recordings are saved"
 inline const QString kFilenamePattern = QStringLiteral("Tokens for auto-naming");
 inline const QString kSplitRecording = QStringLiteral("New file every N min / ~N GB");
 
+// ---- Expert mode toggle ----
+inline const QString kExpertMode = QStringLiteral("Expert mode reveals lower-level controls that can produce "
+                                                  "incompatible files. Enable only if you know why.");
+
 // ---- Presence / Appearance (moved from AdvancedPage in SETTINGS-TIERS-P3) ----
 inline const QString kRecordingOverlay = QStringLiteral("On-screen REC badge \xC2\xB7 excluded from capture");
 inline const QString kDiagnosticsOverlay = QStringLiteral("Live fps/drops on screen \xC2\xB7 excluded");
@@ -40,10 +44,34 @@ inline const QString kCloseToTray = QStringLiteral("Keep running when window clo
 inline const QString kNotifications = QStringLiteral("Toasts for saved / low disk / stops");
 inline const QString kAccent = QStringLiteral("App highlight color");
 
-// ---- Skipped (control does not exist in v0.5.0 UI) ----
+// ---- Audio expert (0.6.0) ----
+inline const QString kRateControlMode = QStringLiteral("CQ = constant quality \xC2\xB7 VBR/CBR needs bitrate target");
+inline const QString kVideoBitrate = QStringLiteral("Target bitrate for VBR/CBR \xC2\xB7 ignored in CQ mode");
+inline const QString kMicGain = QStringLiteral("Boost or cut the microphone level before encoding");
+inline const QString kMicChannelMode = QStringLiteral("How stereo mic inputs are mapped to the recorded channel");
+inline const QString kAudioBitrate =
+    QStringLiteral("Codec bitrate for Opus/AAC \xC2\xB7 ignored for PCM/FLAC (lossless)");
+inline const QString kOpusFrameDuration =
+    QStringLiteral("Opus packet size \xC2\xB7 20 ms default \xC2\xB7 shorter = lower latency");
+inline const QString kOpusComplexity =
+    QStringLiteral("Encoder search depth (0\xe2\x80\x93 10) \xC2\xB7 higher = better quality");
+inline const QString kAudioSampleRate = QStringLiteral("PCM sampling rate \xC2\xB7 Opus is fixed at 48\xC2\xa0kHz");
+inline const QString kAudioChannels = QStringLiteral("Stereo preserves L/R \xC2\xB7 Mono mixes both channels");
+inline const QString kAudioBitDepth =
+    QStringLiteral("PCM/FLAC word size \xC2\xB7 16-bit sufficient for most recordings");
+inline const QString kFlacCompression = QStringLiteral("FLAC compression level (0 = fastest, 8 = smallest file)");
+inline const QString kBrickwallLimiter =
+    QStringLiteral("Hard clip ceiling applied after all DSP stages \xC2\xB7 prevents digital over");
+inline const QString kHighPassFilter = QStringLiteral("HPF removes low-frequency rumble below the cutoff frequency");
+inline const QString kNoiseGate = QStringLiteral("Silences the mic when input falls below the threshold");
+inline const QString kAgc = QStringLiteral("Automatic gain control normalises mic loudness to the target level");
+inline const QString kRnnoise = QStringLiteral("Neural-network noise suppression \xC2\xB7 removes background noise");
+inline const QString kVideoCodec = QStringLiteral("Video compression codec for this recording");
+inline const QString kFrameTiming =
+    QStringLiteral("CFR = constant frame rate for editor compatibility \xC2\xB7 VFR = variable");
+
+// ---- Skipped (control does not exist in current UI) ----
 // kVideoCodecHevc        — HEVC codec (0.7 wave)
-// kRateControlCQ/VBR/CBR — rate-control mode selector (not yet wired in Settings)
-// kBitrate               — per-preset bitrate field (not yet wired)
 // kEncoderPreset         — NVENC P1–P7 (0.5 wave — no UI control yet)
 // kBitDepth              — 8/10-bit (0.7 wave)
 // kHdr10                 — HDR10 (0.7 wave)
@@ -51,13 +79,6 @@ inline const QString kAccent = QStringLiteral("App highlight color");
 // kMute                  — per-track mute (0.6 wave)
 // kAudioCodecPcm         — PCM (0.6 wave)
 // kAudioCodecFlac        — FLAC (0.6 wave)
-// kAudioBitrate          — global audio bitrate (not yet wired)
-// kOpusFrameSize         — Opus frame size (0.5 wave)
-// kOpusComplexity        — Opus complexity (0.5 wave)
-// kMicChannelMode        — mic channel mode (not yet wired)
-// kMicGain               — mic gain (not yet wired)
-// kBrickwallLimiter      — brickwall limiter (0.6 wave)
-// kHighPassFilter        — high-pass filter (0.6 wave)
 // kAutoOpenOutput        — auto-open Output page (Output-editor wave)
 // kCountdownOverlay      — countdown overlay (future wave)
 // kUpdateChannel         — update channel (0.4 wave, inside UpdateSettingsPanel, not in scope)

@@ -5,6 +5,7 @@
 #include "flac_audio_encoder.h"
 #include "mf_aac_encoder.h"
 #include "opus_audio_encoder.h"
+#include "output_format_audio_src.h"
 #include "pcm_audio_encoder.h"
 #include "recorder_core/audio_meter.h"
 #include "session_internal.h"
@@ -80,6 +81,22 @@ void AudioThread::Run() {
         if (com_inited && hr != RPC_E_CHANGED_MODE)
             CoUninitialize();
         return;
+    }
+
+    // --- Wrap source in OutputFormatAudioSrc (ADR 0030) ---
+    // Effective sample rate: Opus is locked to 48 kHz; all other codecs use
+    // the configured audio_sample_rate. Channel count and bit depth are always
+    // configurable. When target == 48000/stereo (the default), the decorator is
+    // a byte-identical passthrough — no SwrContext is created.
+    {
+        const uint32_t effective_rate =
+            (m_state.config.audio_codec == AudioCodec::Opus) ? 48000u : m_state.config.audio_sample_rate;
+        const uint32_t effective_channels = m_state.config.audio_channels;
+
+        // Wrap source_ so OutputFormatAudioSrc::Init calls the real source's Init
+        // and configures swresample if needed. After this, source_ reports the
+        // target sample_rate/channels.
+        source_ = std::make_unique<OutputFormatAudioSrc>(std::move(source_), effective_rate, effective_channels);
     }
 
     {
@@ -307,6 +324,7 @@ void AudioThread::Run() {
     if (m_state.config.audio_codec == AudioCodec::Pcm) {
         // --- PCM passthrough "encoder" init (MKV-only A_PCM/INT_LIT) ---
         PcmAudioEncoder pcmEnc;
+        pcmEnc.SetBitDepth(m_state.config.audio_bit_depth); // ADR 0030: configurable depth
         {
             std::string err;
             if (!pcmEnc.Init(kSampleRate, kChannels, err)) {
@@ -454,6 +472,9 @@ void AudioThread::Run() {
     if (m_state.config.audio_codec == AudioCodec::Flac) {
         // --- FLAC lossless encoder init (MKV-only A_FLAC via libFLAC) ---
         FlacAudioEncoder flacEnc;
+        // ADR 0030: configurable bit depth and compression level
+        flacEnc.SetBitDepth(m_state.config.audio_bit_depth);
+        flacEnc.SetCompressionLevel(m_state.config.flac_compression_level);
         {
             std::string err;
             if (!flacEnc.Init(kSampleRate, kChannels, err)) {

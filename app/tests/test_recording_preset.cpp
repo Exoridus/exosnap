@@ -419,9 +419,9 @@ TEST(RecordingPreset, Reconcile_Mkv_Hevc_FallsToAv1Opus) {
 }
 
 TEST(RecordingPreset, Reconcile_Mkv_Pcm_Unchanged) {
-    // 0.6.0 Audio v2: MKV + (AV1|H.264) + PCM is now Allowed (uncompressed
-    // S16LE A_PCM/INT_LIT), so the reconciler leaves PCM in place — no rewrite to
-    // AAC. PCM is MKV-only; WebM/MP4 still reconcile it away.
+    // 0.6.0 Audio v2: MKV + (AV1|H.264) + PCM is Allowed (uncompressed S16LE
+    // A_PCM/INT_LIT), so the reconciler leaves PCM in place — no rewrite to AAC.
+    // WebM cannot carry PCM (Prohibited); MP4 + PCM is Experimental (ADR 0030, ipcm).
     OutputSettingsModel out;
     out.container = capability::Container::Matroska;
     out.video_codec = capability::VideoCodec::H264Nvenc;
@@ -429,6 +429,41 @@ TEST(RecordingPreset, Reconcile_Mkv_Pcm_Unchanged) {
     ReconcileContainerCodecs(out);
     EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Pcm);
+}
+
+TEST(RecordingPreset, Reconcile_Mp4_Pcm_ForcesAac) {
+    // ADR 0030 (narrowed): MP4 + H.264 + PCM is back to Experimental — the reconciler
+    // must fix audio to AAC. PCM is deferred for MP4 (libavformat emits ipcm, limited
+    // player support). MP4 video is forced to H264Nvenc regardless.
+    OutputSettingsModel out;
+    out.container = capability::Container::Mp4;
+    out.video_codec = capability::VideoCodec::H264Nvenc;
+    out.audio_codec = capability::AudioCodec::Pcm;
+    ReconcileContainerCodecs(out);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(out.audio_codec, capability::AudioCodec::AacMf);
+}
+
+TEST(RecordingPreset, Reconcile_Mp4_Opus_ForcesAac) {
+    // MP4 + Opus remains Prohibited; reconciler replaces Opus with AAC.
+    OutputSettingsModel out;
+    out.container = capability::Container::Mp4;
+    out.video_codec = capability::VideoCodec::H264Nvenc;
+    out.audio_codec = capability::AudioCodec::Opus;
+    ReconcileContainerCodecs(out);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(out.audio_codec, capability::AudioCodec::AacMf);
+}
+
+TEST(RecordingPreset, Reconcile_Mp4_Flac_ForcesAac) {
+    // MP4 + FLAC remains Experimental (not selectable); reconciler fixes it to AAC.
+    OutputSettingsModel out;
+    out.container = capability::Container::Mp4;
+    out.video_codec = capability::VideoCodec::H264Nvenc;
+    out.audio_codec = capability::AudioCodec::Flac;
+    ReconcileContainerCodecs(out);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::H264Nvenc);
+    EXPECT_EQ(out.audio_codec, capability::AudioCodec::AacMf);
 }
 
 TEST(RecordingPreset, Reconcile_WebM_Pcm_ForcesOpus) {
@@ -444,7 +479,8 @@ TEST(RecordingPreset, Reconcile_WebM_Pcm_ForcesOpus) {
 
 TEST(RecordingPreset, Reconcile_Mkv_Flac_Unchanged) {
     // 0.6.0 Audio v2: MKV + (AV1|H.264) + FLAC is Allowed (lossless A_FLAC), so
-    // the reconciler leaves FLAC in place. FLAC is MKV-only; WebM/MP4 reconcile away.
+    // the reconciler leaves FLAC in place. FLAC-in-MP4 is Experimental (rejected);
+    // FLAC-in-WebM is Prohibited; both reconcile to the container's preferred audio.
     OutputSettingsModel out;
     out.container = capability::Container::Matroska;
     out.video_codec = capability::VideoCodec::H264Nvenc;

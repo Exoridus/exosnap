@@ -263,6 +263,58 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
         }
     }
 
+    // Channel / sample-format model (ADR 0030 — 0.6.0):
+    //   audio_channels: must be 1 or 2; else default to 2.
+    //   audio_sample_rate: vetted set {44100, 48000, 96000}; else default to 48000.
+    //     Opus locks to 48000 regardless of stored value.
+    //   audio_bit_depth: gated by codec.
+    //     Lossy (Opus/AAC): field is ignored; normalize to 16.
+    //     PCM: {16, 24, 32}; else default to 16.
+    //     FLAC: {16, 24}; else default to 16.
+    //   flac_compression_level: clamp [0, 8].
+    {
+        if (config.audio.audio_channels != 1u && config.audio.audio_channels != 2u) {
+            config.audio.audio_channels = 2u;
+        }
+
+        constexpr std::array<uint32_t, 3> kValidRates = {44100u, 48000u, 96000u};
+        const bool rate_ok =
+            std::find(kValidRates.begin(), kValidRates.end(), config.audio.audio_sample_rate) != kValidRates.end();
+        if (!rate_ok) {
+            config.audio.audio_sample_rate = 48000u;
+        }
+        // Opus is 48 kHz-only.
+        if (config.output.audio_codec == capability::AudioCodec::Opus) {
+            config.audio.audio_sample_rate = 48000u;
+        }
+
+        const auto codec = config.output.audio_codec;
+        if (codec == capability::AudioCodec::Pcm) {
+            constexpr std::array<uint32_t, 3> kPcmDepths = {16u, 24u, 32u};
+            const bool depth_ok =
+                std::find(kPcmDepths.begin(), kPcmDepths.end(), config.audio.audio_bit_depth) != kPcmDepths.end();
+            if (!depth_ok) {
+                config.audio.audio_bit_depth = 16u;
+            }
+        } else if (codec == capability::AudioCodec::Flac) {
+            constexpr std::array<uint32_t, 2> kFlacDepths = {16u, 24u};
+            const bool depth_ok =
+                std::find(kFlacDepths.begin(), kFlacDepths.end(), config.audio.audio_bit_depth) != kFlacDepths.end();
+            if (!depth_ok) {
+                config.audio.audio_bit_depth = 16u;
+            }
+        } else {
+            // Lossy (Opus / AAC): bit depth is internal to the codec; normalize to 16.
+            config.audio.audio_bit_depth = 16u;
+        }
+
+        if (config.audio.flac_compression_level < 0) {
+            config.audio.flac_compression_level = 0;
+        } else if (config.audio.flac_compression_level > 8) {
+            config.audio.flac_compression_level = 8;
+        }
+    }
+
     // Brickwall limiter (Audio v2 — 0.6.0): ceiling is a dBFS value <= 0. Reset
     // NaN/Inf to 0 dBFS; clamp positives to 0 dBFS and an absurd floor to -60.
     if (!std::isfinite(config.audio.limiter_ceiling_db) || config.audio.limiter_ceiling_db > 0.0f) {
@@ -489,6 +541,19 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     }
     // Mic RNNoise (Audio v2): enabled (exact); no numeric parameter.
     if (a.audio.mic_rnnoise_enabled != b.audio.mic_rnnoise_enabled) {
+        return false;
+    }
+    // Channel / sample-format model (ADR 0030 — 0.6.0): exact integer comparisons.
+    if (a.audio.audio_sample_rate != b.audio.audio_sample_rate) {
+        return false;
+    }
+    if (a.audio.audio_channels != b.audio.audio_channels) {
+        return false;
+    }
+    if (a.audio.audio_bit_depth != b.audio.audio_bit_depth) {
+        return false;
+    }
+    if (a.audio.flac_compression_level != b.audio.flac_compression_level) {
         return false;
     }
 
@@ -724,6 +789,19 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
     }
     // Mic RNNoise (Audio v2): enabled (exact); no numeric parameter.
     if (a.audio.mic_rnnoise_enabled != b.audio.mic_rnnoise_enabled) {
+        return false;
+    }
+    // Channel / sample-format model (ADR 0030 — 0.6.0): exact integer comparisons.
+    if (a.audio.audio_sample_rate != b.audio.audio_sample_rate) {
+        return false;
+    }
+    if (a.audio.audio_channels != b.audio.audio_channels) {
+        return false;
+    }
+    if (a.audio.audio_bit_depth != b.audio.audio_bit_depth) {
+        return false;
+    }
+    if (a.audio.flac_compression_level != b.audio.flac_compression_level) {
         return false;
     }
 

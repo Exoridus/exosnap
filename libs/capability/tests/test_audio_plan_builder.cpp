@@ -154,6 +154,43 @@ TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesMicRnnoiseSetting) {
     EXPECT_TRUE(result.mic_rnnoise_enabled);
 }
 
+// ---------------------------------------------------------------------------
+// Channel / sample-format model (ADR 0030 — 0.6.0)
+// ---------------------------------------------------------------------------
+
+TEST(AudioPlanBuilderTest, BuildAudioPlan_DefaultFormatModel) {
+    // Verify that the defaults from AudioUiState pass through unchanged.
+    AudioUiState state;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_EQ(result.audio_sample_rate, 48000u);
+    EXPECT_EQ(result.audio_channels, 2u);
+    EXPECT_EQ(result.audio_bit_depth, 16u);
+    EXPECT_EQ(result.flac_compression_level, 5);
+}
+
+TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesFormatModelFields) {
+    AudioUiState state;
+    state.audio_sample_rate = 44100u;
+    state.audio_channels = 1u;
+    state.audio_bit_depth = 24u;
+    state.flac_compression_level = 3;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_EQ(result.audio_sample_rate, 44100u);
+    EXPECT_EQ(result.audio_channels, 1u);
+    EXPECT_EQ(result.audio_bit_depth, 24u);
+    EXPECT_EQ(result.flac_compression_level, 3);
+}
+
+TEST(AudioPlanBuilderTest, BuildAudioPlan_PropagatesHighSampleRate) {
+    AudioUiState state;
+    state.audio_sample_rate = 96000u;
+
+    const AudioPlanResult result = BuildAudioPlan(state);
+    EXPECT_EQ(result.audio_sample_rate, 96000u);
+}
+
 TEST(AudioPlanBuilderTest, WindowTarget_AppOnly) {
     AudioUiState state = WindowSep(1001u);
     state.source_rows = {{K::App, true, false}};

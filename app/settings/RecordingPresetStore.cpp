@@ -517,6 +517,11 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     aud_tbl.emplace("mic_agc_target_db", static_cast<double>(aud.mic_agc_target_db));
     // Microphone RNNoise neural noise suppression (Audio v2 — 0.6.0). Bool only.
     aud_tbl.emplace("mic_rnnoise_enabled", aud.mic_rnnoise_enabled);
+    // Channel / sample-format model (ADR 0030 -- 0.6.0).
+    aud_tbl.emplace("audio_sample_rate", static_cast<int64_t>(aud.audio_sample_rate));
+    aud_tbl.emplace("audio_channels", static_cast<int64_t>(aud.audio_channels));
+    aud_tbl.emplace("audio_bit_depth", static_cast<int64_t>(aud.audio_bit_depth));
+    aud_tbl.emplace("flac_compression_level", static_cast<int64_t>(aud.flac_compression_level));
 
     // audio sources as array-of-tables
     toml::array sources_arr;
@@ -770,6 +775,21 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
     // presets default to disabled (no behavior change vs unsuppressed capture).
     {
         aud.mic_rnnoise_enabled = TomlBool(tbl["audio"]["mic_rnnoise_enabled"], false);
+    }
+    // Channel / sample-format model (ADR 0030 -- 0.6.0). Older presets default to
+    // 48000 Hz / stereo / 16-bit / level 5 (no behavior change vs previous fixed values).
+    {
+        const int64_t sr = TomlInt(tbl["audio"]["audio_sample_rate"], 48000);
+        aud.audio_sample_rate = (sr == 44100 || sr == 48000 || sr == 96000) ? static_cast<uint32_t>(sr) : 48000u;
+
+        const int64_t ch = TomlInt(tbl["audio"]["audio_channels"], 2);
+        aud.audio_channels = (ch == 1 || ch == 2) ? static_cast<uint32_t>(ch) : 2u;
+
+        const int64_t bd = TomlInt(tbl["audio"]["audio_bit_depth"], 16);
+        aud.audio_bit_depth = (bd == 16 || bd == 24 || bd == 32) ? static_cast<uint32_t>(bd) : 16u;
+
+        const int64_t fl = TomlInt(tbl["audio"]["flac_compression_level"], 5);
+        aud.flac_compression_level = (fl >= 0 && fl <= 8) ? static_cast<int>(fl) : 5;
     }
     // Audio source rows — array-of-tables [[audio.sources]]
     {

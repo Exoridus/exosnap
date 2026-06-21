@@ -5,13 +5,14 @@
 // PCM is not really encoded — it is a sample-format conversion. This class
 // implements the same IAudioEncoder interface as the Opus/AAC encoders so the
 // audio thread and mux path treat it identically, but instead of running a codec
-// it converts the captured interleaved Float32 PCM into interleaved 16-bit
-// signed little-endian (S16LE) samples and emits one packet per FeedFloat32
-// call. The Matroska CodecID is A_PCM/INT_LIT with KaxAudioBitDepth=16 and no
-// CodecPrivate (the format is fully described by the track header).
+// it converts the captured interleaved Float32 PCM into interleaved signed
+// little-endian samples at the configured bit depth (16, 24, or 32 bits) and
+// emits one packet per FeedFloat32 call. The Matroska CodecID is A_PCM/INT_LIT
+// with KaxAudioBitDepth set to the configured depth; there is no CodecPrivate
+// (the format is fully described by the track header).
 //
-// Float→int16 conversion clamps to [-1, 1] and rounds to nearest, matching the
-// behavior callers expect from the other encoders' float→PCM16 conversion.
+// Float→int conversion clamps to [-1, 1] and rounds to nearest. The bit depth
+// must be set via SetBitDepth() before Init(); the default is 16.
 
 #include <recorder_core/interfaces/IAudioEncoder.h>
 #include <recorder_core/packet_types.h>
@@ -27,6 +28,15 @@ class PcmAudioEncoder : public IAudioEncoder {
   public:
     PcmAudioEncoder() = default;
     ~PcmAudioEncoder() override = default;
+
+    // Set the output bit depth before Init(). Accepted values: 16, 24, 32.
+    // 16 is the default (backward-compatible). Must be called before Init().
+    void SetBitDepth(uint32_t bits) noexcept;
+
+    // Return the effective bit depth (as configured, or 16 if never set).
+    [[nodiscard]] uint32_t BitDepth() const noexcept {
+        return m_bit_depth;
+    }
 
     bool Init(uint32_t sample_rate, uint32_t channels, std::string& out_error) override;
 
@@ -45,12 +55,20 @@ class PcmAudioEncoder : public IAudioEncoder {
     // rounding to nearest. Exposed static for unit testing.
     static int16_t Float32ToS16(float sample) noexcept;
 
-    // The fixed sample format produced by this encoder.
+    // Convert one interleaved Float32 sample to a packed S24LE triple (3 bytes,
+    // little-endian). dst must point to at least 3 writable bytes.
+    static void Float32ToS24LE(float sample, uint8_t* dst) noexcept;
+
+    // Convert one interleaved Float32 sample to S32LE (4 bytes, little-endian).
+    static int32_t Float32ToS32(float sample) noexcept;
+
+    // The default bit depth (backward-compatible).
     static constexpr uint32_t kBitDepth = 16;
 
   private:
     uint32_t m_sample_rate = 0;
     uint32_t m_channels = 0;
+    uint32_t m_bit_depth = kBitDepth;
 };
 
 } // namespace recorder_core

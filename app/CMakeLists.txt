@@ -159,6 +159,10 @@ qt_add_executable(exosnap WIN32
     ui/widgets/CountdownSelect.cpp
     ui/widgets/ExoSpinBox.h
     ui/widgets/ExoSpinBox.cpp
+    ui/widgets/ExoSlider.h
+    ui/widgets/ExoSlider.cpp
+    ui/widgets/SettingsPopoverRow.h
+    ui/widgets/SettingsPopoverRow.cpp
     ui/widgets/NotificationBell.h
     ui/widgets/NotificationBell.cpp
     ui/widgets/AdvisoryItem.h
@@ -447,6 +451,10 @@ exosnap_add_app_test_support(exosnap_pages_test_support
     ui/widgets/PlaceholderRow.cpp
     # THEME-SLICE-1: ExoCheckBox now calls ActiveTheme()/ParseThemeColor() from ExoSnapTheme.cpp.
     ui/theme/ExoSnapTheme.cpp
+    # S3: ExoSlider used by ConfigPage (mic gain slider with gradient groove + ticks).
+    ui/widgets/ExoSlider.cpp
+    # S5: SettingsPopoverRow used by ConfigPage for mic post-processing / limiter / split.
+    ui/widgets/SettingsPopoverRow.cpp
 )
 target_link_libraries(exosnap_pages_test_support PUBLIC
     exosnap_device_service_test_support exosnap_output_model_test_support

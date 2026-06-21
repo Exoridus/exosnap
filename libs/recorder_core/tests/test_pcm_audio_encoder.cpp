@@ -253,4 +253,161 @@ TEST(PcmAudioEncoder, Flush_ProducesNoPackets) {
     EXPECT_TRUE(out.empty());
 }
 
+// ---------------------------------------------------------------------------
+// ADR 0030: SetBitDepth — 24-bit output
+// ---------------------------------------------------------------------------
+
+TEST(PcmAudioEncoder, SetBitDepth24_PacketSizeIs3BytesPerSample) {
+    PcmAudioEncoder enc;
+    enc.SetBitDepth(24);
+    EXPECT_EQ(enc.BitDepth(), 24u);
+    std::string err;
+    ASSERT_TRUE(enc.Init(kSampleRate, kChannels, err));
+
+    // 2 interleaved samples -> 2 * 3 bytes = 6 bytes
+    const std::vector<float> in = {1.0f, -1.0f};
+    uint64_t frames = 0;
+    std::vector<EncodedAudioPacket> out;
+    enc.FeedFloat32(in.data(), in.size(), 0, frames, kSampleRate, kChannels, out);
+
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(out[0].bytes.size(), 6u); // 2 samples * 3 bytes
+}
+
+TEST(PcmAudioEncoder, SetBitDepth24_FullScalePositiveLE) {
+    // +1.0 -> 8388607 = 0x7FFFFF, LE bytes: FF FF 7F
+    PcmAudioEncoder enc;
+    enc.SetBitDepth(24);
+    std::string err;
+    ASSERT_TRUE(enc.Init(kSampleRate, 1, err));
+
+    const std::vector<float> in = {1.0f};
+    uint64_t frames = 0;
+    std::vector<EncodedAudioPacket> out;
+    enc.FeedFloat32(in.data(), in.size(), 0, frames, kSampleRate, 1, out);
+
+    ASSERT_EQ(out.size(), 1u);
+    ASSERT_EQ(out[0].bytes.size(), 3u);
+    EXPECT_EQ(out[0].bytes[0], 0xFFu); // LSB
+    EXPECT_EQ(out[0].bytes[1], 0xFFu);
+    EXPECT_EQ(out[0].bytes[2], 0x7Fu); // MSB
+}
+
+TEST(PcmAudioEncoder, SetBitDepth24_FullScaleNegativeLE) {
+    // -1.0 -> -8388607 = 0xFF800001 as int32, but stored as 24-bit: 0x800001, LE: 01 00 80
+    PcmAudioEncoder enc;
+    enc.SetBitDepth(24);
+    std::string err;
+    ASSERT_TRUE(enc.Init(kSampleRate, 1, err));
+
+    const std::vector<float> in = {-1.0f};
+    uint64_t frames = 0;
+    std::vector<EncodedAudioPacket> out;
+    enc.FeedFloat32(in.data(), in.size(), 0, frames, kSampleRate, 1, out);
+
+    ASSERT_EQ(out.size(), 1u);
+    ASSERT_EQ(out[0].bytes.size(), 3u);
+    // -8388607 as uint24 LE: 0x800001 -> bytes 01 00 80
+    EXPECT_EQ(out[0].bytes[0], 0x01u);
+    EXPECT_EQ(out[0].bytes[1], 0x00u);
+    EXPECT_EQ(out[0].bytes[2], 0x80u);
+}
+
+// ---------------------------------------------------------------------------
+// ADR 0030: SetBitDepth — 32-bit output
+// ---------------------------------------------------------------------------
+
+TEST(PcmAudioEncoder, SetBitDepth32_PacketSizeIs4BytesPerSample) {
+    PcmAudioEncoder enc;
+    enc.SetBitDepth(32);
+    EXPECT_EQ(enc.BitDepth(), 32u);
+    std::string err;
+    ASSERT_TRUE(enc.Init(kSampleRate, kChannels, err));
+
+    // 2 interleaved samples -> 2 * 4 bytes = 8 bytes
+    const std::vector<float> in = {1.0f, -1.0f};
+    uint64_t frames = 0;
+    std::vector<EncodedAudioPacket> out;
+    enc.FeedFloat32(in.data(), in.size(), 0, frames, kSampleRate, kChannels, out);
+
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(out[0].bytes.size(), 8u); // 2 samples * 4 bytes
+}
+
+TEST(PcmAudioEncoder, SetBitDepth32_FullScalePositiveLE) {
+    // +1.0 -> 2147483647 = 0x7FFFFFFF, LE: FF FF FF 7F
+    PcmAudioEncoder enc;
+    enc.SetBitDepth(32);
+    std::string err;
+    ASSERT_TRUE(enc.Init(kSampleRate, 1, err));
+
+    const std::vector<float> in = {1.0f};
+    uint64_t frames = 0;
+    std::vector<EncodedAudioPacket> out;
+    enc.FeedFloat32(in.data(), in.size(), 0, frames, kSampleRate, 1, out);
+
+    ASSERT_EQ(out.size(), 1u);
+    ASSERT_EQ(out[0].bytes.size(), 4u);
+    EXPECT_EQ(out[0].bytes[0], 0xFFu);
+    EXPECT_EQ(out[0].bytes[1], 0xFFu);
+    EXPECT_EQ(out[0].bytes[2], 0xFFu);
+    EXPECT_EQ(out[0].bytes[3], 0x7Fu);
+}
+
+TEST(PcmAudioEncoder, SetBitDepth32_Silence_IsZero) {
+    PcmAudioEncoder enc;
+    enc.SetBitDepth(32);
+    std::string err;
+    ASSERT_TRUE(enc.Init(kSampleRate, 1, err));
+
+    const std::vector<float> in = {0.0f};
+    uint64_t frames = 0;
+    std::vector<EncodedAudioPacket> out;
+    enc.FeedFloat32(in.data(), in.size(), 0, frames, kSampleRate, 1, out);
+
+    ASSERT_EQ(out.size(), 1u);
+    ASSERT_EQ(out[0].bytes.size(), 4u);
+    for (uint8_t b : out[0].bytes) {
+        EXPECT_EQ(b, 0u);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ADR 0030: SetBitDepth — default is 16-bit (backward-compatible)
+// ---------------------------------------------------------------------------
+
+TEST(PcmAudioEncoder, DefaultBitDepth_Is16) {
+    PcmAudioEncoder enc;
+    EXPECT_EQ(enc.BitDepth(), 16u);
+}
+
+TEST(PcmAudioEncoder, SetBitDepth_Invalid_KeepsDefault) {
+    PcmAudioEncoder enc;
+    enc.SetBitDepth(8); // not accepted
+    EXPECT_EQ(enc.BitDepth(), 16u);
+    enc.SetBitDepth(0); // not accepted
+    EXPECT_EQ(enc.BitDepth(), 16u);
+}
+
+// Static helpers: Float32ToS24LE and Float32ToS32
+TEST(PcmAudioEncoder, Float32ToS24LE_Silence_IsZero) {
+    uint8_t buf[3] = {0xFF, 0xFF, 0xFF};
+    PcmAudioEncoder::Float32ToS24LE(0.0f, buf);
+    EXPECT_EQ(buf[0], 0u);
+    EXPECT_EQ(buf[1], 0u);
+    EXPECT_EQ(buf[2], 0u);
+}
+
+TEST(PcmAudioEncoder, Float32ToS32_Silence_IsZero) {
+    EXPECT_EQ(PcmAudioEncoder::Float32ToS32(0.0f), 0);
+}
+
+TEST(PcmAudioEncoder, Float32ToS32_FullScalePositive) {
+    EXPECT_EQ(PcmAudioEncoder::Float32ToS32(1.0f), INT32_MAX);
+}
+
+TEST(PcmAudioEncoder, Float32ToS32_ClampsAboveOne) {
+    EXPECT_EQ(PcmAudioEncoder::Float32ToS32(2.0f), INT32_MAX);
+}
+
 } // namespace

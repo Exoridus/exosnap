@@ -149,6 +149,10 @@ TEST(WebMContainerValidationTest, Validate_RejectsWebMPcm) {
     EXPECT_NE(result.error_detail.find("Pcm"), std::string::npos);
 }
 
+// ADR 0030 (narrowed): MP4 + H.264 + PCM is back to Experimental — Validate rejects it.
+// libavformat emits the ipcm sample entry (ISO/IEC 23003-5) which has limited player
+// support; deferred until a broadly-compatible sample-entry mapping is validated.
+// Use MKV for PCM. FLAC and Opus also remain rejected for MP4.
 TEST(WebMContainerValidationTest, Validate_RejectsMp4Pcm) {
     RecorderSession session;
     RecorderConfig cfg{};

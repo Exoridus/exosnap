@@ -152,24 +152,69 @@ FetchContent_MakeAvailable(rnnoise)
 file(READ "${rnnoise_SOURCE_DIR}/model_version" _rnnoise_model_hash)
 string(STRIP "${_rnnoise_model_hash}" _rnnoise_model_hash)
 
+# The model tarball is content-addressed by its SHA256 (model_version IS the hash),
+# so any source serving those exact bytes is equivalent and passes EXPECTED_HASH.
+# Upstream (media.xiph.org) is a hard third-party network dependency at configure
+# time. We mirror the pinned tarball to a project-owned GitHub release (the same
+# pattern as the FFmpeg build) and PREFER it, falling back to upstream so builds
+# stay green before/without the mirror asset existing.
+#
+# Maintainer (one-time, gh-gated): publish the mirror asset, then this build uses
+# it automatically. The tarball is exactly what media.xiph.org serves; its name
+# embeds the SHA256 (== the repo's model_version file):
+#   gh release create audio-assets-v1 --repo Exoridus/exosnap \
+#       --title "Audio build assets" --notes "Mirrored RNNoise model weights"
+#   gh release upload audio-assets-v1 \
+#       rnnoise_data-${_rnnoise_model_hash}.tar.gz --repo Exoridus/exosnap
+set(EXOSNAP_RNNOISE_MODEL_MIRROR_BASE
+    "https://github.com/Exoridus/exosnap/releases/download/audio-assets-v1"
+    CACHE STRING
+    "Base URL for the project-owned RNNoise model-weights mirror (tarball name appended). Empty = upstream only.")
+set(_rnnoise_model_upstream_base "https://media.xiph.org/rnnoise/models")
+
 # Trap 1: fetch + extract the pinned model weights into the populated src/ if the
 # generated rnnoise_data.c is not already present (idempotent across reconfigures).
 if(NOT EXISTS "${rnnoise_SOURCE_DIR}/src/rnnoise_data.c")
     set(_rnnoise_model_tarball "rnnoise_data-${_rnnoise_model_hash}.tar.gz")
-    set(_rnnoise_model_url
-        "https://media.xiph.org/rnnoise/models/${_rnnoise_model_tarball}")
     set(_rnnoise_model_dl "${rnnoise_SOURCE_DIR}/${_rnnoise_model_tarball}")
-    message(STATUS "RNNoise: downloading model weights ${_rnnoise_model_tarball}")
-    file(DOWNLOAD "${_rnnoise_model_url}" "${_rnnoise_model_dl}"
-         EXPECTED_HASH "SHA256=${_rnnoise_model_hash}"
-         STATUS _rnnoise_dl_status
-         SHOW_PROGRESS)
-    list(GET _rnnoise_dl_status 0 _rnnoise_dl_code)
-    if(NOT _rnnoise_dl_code EQUAL 0)
-        list(GET _rnnoise_dl_status 1 _rnnoise_dl_msg)
-        message(FATAL_ERROR
-            "RNNoise: model download failed (${_rnnoise_dl_code}): ${_rnnoise_dl_msg}")
+
+    # Ordered candidate URLs: project mirror first, upstream fallback.
+    set(_rnnoise_model_urls "")
+    if(EXOSNAP_RNNOISE_MODEL_MIRROR_BASE)
+        list(APPEND _rnnoise_model_urls
+            "${EXOSNAP_RNNOISE_MODEL_MIRROR_BASE}/${_rnnoise_model_tarball}")
     endif()
+    list(APPEND _rnnoise_model_urls
+        "${_rnnoise_model_upstream_base}/${_rnnoise_model_tarball}")
+
+    # NOTE: do NOT pass EXPECTED_HASH to file(DOWNLOAD) here — on a wrong-bytes
+    # response (e.g. a 404 page from a not-yet-published mirror) EXPECTED_HASH
+    # raises a hard FATAL_ERROR that STATUS cannot catch, which would defeat the
+    # upstream fallback. Instead download plainly, then verify the SHA256 of the
+    # downloaded bytes ourselves and fall through to the next source on mismatch.
+    set(_rnnoise_dl_ok FALSE)
+    foreach(_rnnoise_url IN LISTS _rnnoise_model_urls)
+        message(STATUS "RNNoise: fetching model weights from ${_rnnoise_url}")
+        file(DOWNLOAD "${_rnnoise_url}" "${_rnnoise_model_dl}" STATUS _rnnoise_dl_status)
+        list(GET _rnnoise_dl_status 0 _rnnoise_dl_code)
+        if(_rnnoise_dl_code EQUAL 0)
+            file(SHA256 "${_rnnoise_model_dl}" _rnnoise_actual_hash)
+            if(_rnnoise_actual_hash STREQUAL _rnnoise_model_hash)
+                set(_rnnoise_dl_ok TRUE)
+                break()
+            endif()
+            message(STATUS "RNNoise: hash mismatch from ${_rnnoise_url} "
+                           "(got ${_rnnoise_actual_hash}); trying next source")
+        else()
+            list(GET _rnnoise_dl_status 1 _rnnoise_dl_msg)
+            message(STATUS "RNNoise: source unavailable (${_rnnoise_dl_code}): ${_rnnoise_dl_msg}")
+        endif()
+    endforeach()
+    if(NOT _rnnoise_dl_ok)
+        message(FATAL_ERROR
+            "RNNoise: model download failed/hash-mismatch from all sources: ${_rnnoise_model_urls}")
+    endif()
+
     file(ARCHIVE_EXTRACT INPUT "${_rnnoise_model_dl}"
          DESTINATION "${rnnoise_SOURCE_DIR}")
     if(NOT EXISTS "${rnnoise_SOURCE_DIR}/src/rnnoise_data.c")

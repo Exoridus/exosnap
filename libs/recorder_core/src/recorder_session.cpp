@@ -179,9 +179,14 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
 
     // Audio codec
     if (config.container == Container::Mp4) {
+        // MP4 audio is AAC only. PCM is deferred (libavformat emits ipcm which has
+        // limited player support); FLAC and Opus are also rejected for MP4 (ADR 0010,
+        // ADR 0028, ADR 0030). Use MKV for PCM or FLAC.
         if (config.audio_codec != AudioCodec::AacMf) {
             return fail(E_INVALIDARG, ErrorPhase::Prepare,
-                        "Container::Mp4 requires AudioCodec::AacMf; Opus, PCM and FLAC are not valid for MP4");
+                        "Container::Mp4 requires AudioCodec::AacMf; "
+                        "PCM is deferred (ipcm sample entry, limited player support), "
+                        "Opus and FLAC are not valid for MP4");
         }
     } else if (config.audio_codec == AudioCodec::Opus) {
         // Opus: valid for WebM and Matroska
@@ -209,6 +214,41 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
                     "Unsupported audio codec; supported: AudioCodec::Opus, AudioCodec::AacMf, "
                     "AudioCodec::Pcm, AudioCodec::Flac");
     }
+
+    // ---------------------------------------------------------------------------
+    // Audio format model validation (ADR 0030)
+    // ---------------------------------------------------------------------------
+
+    // audio_channels: only mono (1) and stereo (2) are supported.
+    if (config.audio_channels != 1 && config.audio_channels != 2) {
+        return fail(E_INVALIDARG, ErrorPhase::Prepare, "audio_channels must be 1 (mono) or 2 (stereo)");
+    }
+
+    // audio_sample_rate: vetted set only.
+    if (config.audio_sample_rate != 44100 && config.audio_sample_rate != 48000 && config.audio_sample_rate != 96000) {
+        return fail(E_INVALIDARG, ErrorPhase::Prepare, "audio_sample_rate must be 44100, 48000, or 96000 Hz");
+    }
+
+    // Opus requires exactly 48000 Hz.
+    if (config.audio_codec == AudioCodec::Opus && config.audio_sample_rate != 48000) {
+        return fail(E_INVALIDARG, ErrorPhase::Prepare, "AudioCodec::Opus requires audio_sample_rate == 48000 Hz");
+    }
+
+    // audio_bit_depth: codec-gated.
+    if (config.audio_codec == AudioCodec::Pcm) {
+        if (config.audio_bit_depth != 16 && config.audio_bit_depth != 24 && config.audio_bit_depth != 32) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare, "AudioCodec::Pcm requires audio_bit_depth in {16, 24, 32}");
+        }
+    } else if (config.audio_codec == AudioCodec::Flac) {
+        if (config.audio_bit_depth != 16 && config.audio_bit_depth != 24) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare, "AudioCodec::Flac requires audio_bit_depth in {16, 24}");
+        }
+        // flac_compression_level: [0, 8]
+        if (config.flac_compression_level < 0 || config.flac_compression_level > 8) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare, "flac_compression_level must be in [0, 8]");
+        }
+    }
+    // Lossy codecs (Opus, AAC): bit_depth is not applicable; no validation needed.
 
     // Chroma: only Cs420 supported
     if (config.chroma != ChromaSubsampling::Cs420) {

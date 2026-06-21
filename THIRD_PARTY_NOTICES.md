@@ -72,9 +72,11 @@ directory alongside the ExoSnap binary.
 - **Bundled license:** `licenses/rnnoise.txt`
 - **Note:** Neural microphone noise suppression. The trained model weights are
   not committed to the upstream git tree; the build downloads the pinned model
-  tarball from `media.xiph.org` (verified by SHA256 from the repo's
-  `model_version` file) at configure time. ExoSnap builds its own static target
-  over the upstream C sources (no upstream CMake).
+  tarball (verified by SHA256 from the repo's `model_version` file) at configure
+  time. The tarball is mirrored on a project-owned GitHub release and fetched
+  from there by default, falling back to the original upstream host
+  `media.xiph.org` (same bytes, same license). ExoSnap builds its own static
+  target over the upstream C sources (no upstream CMake).
 
 ### libebml
 

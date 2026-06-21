@@ -545,4 +545,38 @@ TEST_F(StreamWriterTest, PushAfterFinalize_NoOp) {
     EXPECT_EQ(std::filesystem::file_size(tmp_), before);
 }
 
+// ADR 0030: audio_sample_rate/channels/bit_depth fields are threaded into the
+// container header. We verify the file opens cleanly with non-default values;
+// byte-level parsing of KaxAudioSamplingFreq/KaxAudioChannels/KaxAudioBitDepth
+// is deferred to the full AV-verification round (requires an EBML node walker
+// with audio-track descent).
+TEST_F(StreamWriterTest, NonDefaultAudioFormat_OpensAndFinalizes) {
+    MatroskaStreamConfig c;
+    c.output_path = tmp_;
+    c.video_codec_id = "V_AV1";
+    c.video_codec_private = FakeAv1Cp();
+    c.encode_width = 1280;
+    c.encode_height = 720;
+    c.frame_rate_num = 60;
+    c.frame_rate_den = 1;
+    c.audio_codec = StreamAudioCodec::Pcm;
+    c.audio_track_count = 1;
+    c.audio_tracks[0].codec_private = {}; // PCM has no CodecPrivate
+    // Non-default audio format (ADR 0030).
+    c.audio_sample_rate = 44100;
+    c.audio_channels = 1;
+    c.audio_bit_depth = 24;
+
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(c)) << w.error();
+    FeedSeconds(w, 2.0, 60, 16);
+    ASSERT_TRUE(w.Finalize());
+    ASSERT_FALSE(w.failed()) << w.error();
+
+    const auto d = ReadFile(tmp_);
+    ASSERT_FALSE(d.empty());
+    EXPECT_TRUE(HasLevel1(d, kIdTracks));
+    EXPECT_TRUE(SegmentSizeIsFinite(d));
+}
+
 } // namespace

@@ -35,10 +35,39 @@ TEST(Mp4ValidationTest, AcceptsMp4H264Aac) {
     EXPECT_TRUE(result.succeeded);
 }
 
+// ADR 0030 (narrowed): MP4 + PCM is back to Experimental — Validate must reject it.
+// libavformat emits ipcm (ISO/IEC 23003-5) for pcm_s16le/s24le/s32le in MP4; limited
+// player support. Deferred until a broadly-compatible sample-entry mapping is validated.
+TEST(Mp4ValidationTest, RejectsMp4H264Pcm) {
+    RecorderSession session;
+    auto cfg = MakeMp4Config();
+    cfg.audio_codec = AudioCodec::Pcm;
+    cfg.audio_bit_depth = 16;
+
+    RecorderResult result{};
+    EXPECT_FALSE(session.Validate(cfg, &result));
+    EXPECT_FALSE(result.succeeded);
+    EXPECT_FALSE(result.error_detail.empty());
+}
+
+// MP4 + Opus remains Prohibited; Validate must reject it.
 TEST(Mp4ValidationTest, RejectsMp4WithOpus) {
     RecorderSession session;
     auto cfg = MakeMp4Config();
     cfg.audio_codec = AudioCodec::Opus;
+
+    RecorderResult result{};
+    EXPECT_FALSE(session.Validate(cfg, &result));
+    EXPECT_FALSE(result.succeeded);
+    EXPECT_FALSE(result.error_detail.empty());
+}
+
+// MP4 + FLAC remains rejected (FLAC-in-MP4 is Experimental / not implemented).
+TEST(Mp4ValidationTest, RejectsMp4WithFlac) {
+    RecorderSession session;
+    auto cfg = MakeMp4Config();
+    cfg.audio_codec = AudioCodec::Flac;
+    cfg.audio_bit_depth = 16;
 
     RecorderResult result{};
     EXPECT_FALSE(session.Validate(cfg, &result));

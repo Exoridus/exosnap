@@ -1,4 +1,4 @@
-# ExoSnap 0.5.0 — Portable Release
+# ExoSnap 0.6.0 — Portable Release
 
 Thanks for trying ExoSnap. This file is the quick-start guide for the portable
 Windows build.
@@ -11,21 +11,22 @@ multi-track audio routing, a webcam overlay, and built-in diagnostics.
 
 ## Release status
 
-This is **ExoSnap 0.5.0**, a **pre-v1 Windows preview**. It is not the final
+This is **ExoSnap 0.6.0**, a **pre-v1 Windows preview**. It is not the final
 1.0 release. Settings, presets, and recording-history file formats may change in
 incompatible ways before 1.0.0. See `KNOWN_LIMITATIONS.md` for the full current
 support boundary.
 
-New in 0.5.0 ("Settings & media-capability"): a TOML preset store with profile
-export/import, canonical video rate control (CQ / VBR / CBR) plus bitrate, audio
-bitrate and Opus controls, a redesigned Default/Expert settings surface, curated
-light/dark themes, and automatic split by size.
+New in 0.6.0 ("Audio v2"): per-track gain & mute and a brickwall limiter on the
+mixed bus; an optional microphone DSP chain (high-pass filter, noise gate, AGC,
+RNNoise neural noise suppression — all off by default); lossless **PCM** and
+**FLAC** audio (MKV); and a channel/sample-format model (44.1/48/96 kHz,
+mono/stereo, 16/24/32-bit lossless, configurable FLAC compression level).
 
 ## System requirements
 
 - Windows 10 or 11, 64-bit (Windows 11 recommended).
 - An **NVIDIA GPU with supported NVENC** capability (RTX 20-series or newer
-  recommended) and a current NVIDIA display driver. ExoSnap 0.5.0 requires
+  recommended) and a current NVIDIA display driver. ExoSnap 0.6.0 requires
   NVIDIA NVENC for video encoding; AMD, Intel, and software encoding are not
   supported in this release.
 - Microsoft Visual C++ 2022 x64 runtime (usually already installed). If the app
@@ -34,7 +35,7 @@ light/dark themes, and automatic split by size.
 
 ## How to launch
 
-1. Extract the entire `ExoSnap-0.5.0-windows-x64-portable` folder from the ZIP to a
+1. Extract the entire `ExoSnap-0.6.0-windows-x64-portable` folder from the ZIP to a
    location of your choice.
 2. Run `exosnap.exe` from the extracted folder.
 
@@ -68,12 +69,14 @@ Diagnostics view expose richer logging and a way to open the log folder.
 
 - **Containers:** MKV, WebM, MP4.
 - **Video:** H.264 (NVENC) and AV1 (NVENC, where your GPU/driver expose it).
-- **Audio:** AAC-LC (`AAC`) and Opus.
-- **Container rules:** MP4 uses H.264 + AAC (Opus is not offered for MP4);
-  WebM uses AV1 + Opus; MKV is the flexible default.
+- **Audio:** AAC-LC (`AAC`), Opus, and lossless **PCM** and **FLAC** (MKV only).
+- **Container rules:** MP4 uses H.264 + AAC (Opus, PCM, and FLAC are not offered
+  for MP4); WebM uses AV1 + Opus; MKV is the flexible default and the home for
+  PCM and FLAC.
 
 Exact availability depends on your GPU generation, driver, and the selected
-container/codec combination. HEVC, PCM, and FLAC are not implemented in 0.5.0.
+container/codec combination. HEVC video is not implemented in 0.6.0; PCM and
+FLAC are MKV-only.
 
 ## Recording split overview
 
@@ -95,10 +98,10 @@ container/codec combination. HEVC, PCM, and FLAC are not implemented in 0.5.0.
 ## Verifying your download
 
 A SHA-256 checksum is published next to the ZIP as
-`ExoSnap-0.5.0-windows-x64-portable.sha256`. To verify integrity in PowerShell:
+`ExoSnap-0.6.0-windows-x64-portable.sha256`. To verify integrity in PowerShell:
 
 ```powershell
-Get-FileHash .\ExoSnap-0.5.0-windows-x64-portable.zip -Algorithm SHA256
+Get-FileHash .\ExoSnap-0.6.0-windows-x64-portable.zip -Algorithm SHA256
 ```
 
 The printed hash must match the value in the `.sha256` file. The checksum
