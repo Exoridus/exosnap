@@ -20,6 +20,7 @@
 #include "pages/ConfigPage.h"
 #include "ui/widgets/CameraPreview.h"
 #include "ui/widgets/ExoCheckBox.h"
+#include "ui/widgets/ExoToggle.h"
 #include "ui/widgets/SettingsPopoverRow.h"
 #include "ui/widgets/VUMeterWidget.h"
 #include "ui/widgets/WebcamSetupPanel.h"
@@ -499,7 +500,7 @@ TEST_F(ConfigPageTest, VideoQualityChange_EmitsVideoSettingsChanged) {
     EXPECT_TRUE(emitted);
 }
 
-TEST_F(ConfigPageTest, QualitySegmentClick_EachSegmentUpdatesModelAndSummary) {
+TEST_F(ConfigPageTest, QualitySegmentClick_EachSegmentUpdatesModel) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     VideoSettingsModel changed;
@@ -516,33 +517,22 @@ TEST_F(ConfigPageTest, QualitySegmentClick_EachSegmentUpdatesModelAndSummary) {
     ASSERT_NE(balanced_segment, nullptr);
     ASSERT_NE(high_segment, nullptr);
 
-    auto* settings_label = page.findChild<QLabel*>(QStringLiteral("qualitySettingsLabel"));
-    auto* badge_label = page.findChild<QLabel*>(QStringLiteral("qualityBadgeLabel"));
-    ASSERT_NE(settings_label, nullptr);
-    ASSERT_NE(badge_label, nullptr);
-
     // Default quality is High, so each click below is a real change and emits.
     small_segment->click();
     EXPECT_EQ(changed.quality, recorder_core::NvencQualityPreset::Small);
     EXPECT_TRUE(small_segment->isChecked());
     EXPECT_TRUE(small_segment->property("qualitySegmentSelected").toBool());
     EXPECT_FALSE(high_segment->isChecked());
-    EXPECT_TRUE(settings_label->text().contains(QStringLiteral("CQ 30")));
-    EXPECT_EQ(badge_label->text(), QStringLiteral("Smaller files"));
 
     balanced_segment->click();
     EXPECT_EQ(changed.quality, recorder_core::NvencQualityPreset::Balanced);
     EXPECT_TRUE(balanced_segment->isChecked());
     EXPECT_FALSE(small_segment->isChecked());
-    EXPECT_TRUE(settings_label->text().contains(QStringLiteral("CQ 24")));
-    EXPECT_EQ(badge_label->text(), QStringLiteral("General purpose"));
 
     high_segment->click();
     EXPECT_EQ(changed.quality, recorder_core::NvencQualityPreset::High);
     EXPECT_TRUE(high_segment->isChecked());
     EXPECT_FALSE(balanced_segment->isChecked());
-    EXPECT_TRUE(settings_label->text().contains(QStringLiteral("CQ 19")));
-    EXPECT_EQ(badge_label->text(), QStringLiteral("Sharper · larger files"));
 
     EXPECT_EQ(emit_count, 3);
 }
@@ -707,39 +697,22 @@ TEST_F(ConfigPageTest, TokenHelpToggle_HiddenByDefault) {
     EXPECT_EQ(toggle->text(), QStringLiteral("Show token reference"));
 }
 
-TEST_F(ConfigPageTest, QualityBadgeLabel_ExistsAndNotEmpty) {
+TEST_F(ConfigPageTest, QualitySegment_HasSimpleLabels) {
+    // Caption labels removed; segment labels are now "Small"/"Balanced"/"High" without CQ numbers.
     ConfigPage page(output_defaults_, video_defaults_);
 
-    auto* label = page.findChild<QLabel*>(QStringLiteral("qualityBadgeLabel"));
-    ASSERT_NE(label, nullptr);
-    EXPECT_FALSE(label->text().isEmpty());
-}
-
-TEST_F(ConfigPageTest, QualitySettingsLabel_ExistsAndNotEmpty) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    auto* label = page.findChild<QLabel*>(QStringLiteral("qualitySettingsLabel"));
-    ASSERT_NE(label, nullptr);
-    EXPECT_FALSE(label->text().isEmpty());
-}
-
-TEST_F(ConfigPageTest, QualitySettingsLabel_UpdatesOnSetVideoSettings) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    VideoSettingsModel high;
-    high.quality = recorder_core::NvencQualityPreset::High;
-    high.cfr = true;
-    high.capture_cursor = false;
-    page.setVideoSettings(high);
-
-    auto* settings_label = page.findChild<QLabel*>(QStringLiteral("qualitySettingsLabel"));
-    ASSERT_NE(settings_label, nullptr);
-    EXPECT_TRUE(settings_label->text().contains(QStringLiteral("CQ 19")));
-    EXPECT_TRUE(settings_label->text().contains(QStringLiteral("Cursor off")));
-
-    auto* badge_label = page.findChild<QLabel*>(QStringLiteral("qualityBadgeLabel"));
-    ASSERT_NE(badge_label, nullptr);
-    EXPECT_EQ(badge_label->text(), QStringLiteral("Sharper · larger files"));
+    auto* small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
+    auto* balanced_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentBalanced"));
+    auto* high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
+    ASSERT_NE(small_segment, nullptr);
+    ASSERT_NE(balanced_segment, nullptr);
+    ASSERT_NE(high_segment, nullptr);
+    EXPECT_EQ(small_segment->text(), QStringLiteral("Small"));
+    EXPECT_EQ(balanced_segment->text(), QStringLiteral("Balanced"));
+    EXPECT_EQ(high_segment->text(), QStringLiteral("High"));
+    // Caption labels are gone.
+    EXPECT_EQ(page.findChild<QLabel*>(QStringLiteral("qualityBadgeLabel")), nullptr);
+    EXPECT_EQ(page.findChild<QLabel*>(QStringLiteral("qualitySettingsLabel")), nullptr);
 }
 
 // ── SETTINGS-AUDIO-METER-R1: live mono meters in the Settings Audio card ─────
@@ -1721,20 +1694,20 @@ TEST_F(ConfigPageTest, PresenceCard_CardTitleVisible) {
     EXPECT_TRUE(HasLabelText(page, QStringLiteral("Presence"))) << "Settings must contain a Presence card title";
 }
 
-TEST_F(ConfigPageTest, PresenceCard_AllCheckboxesExist) {
+TEST_F(ConfigPageTest, PresenceCard_AllTogglesExist) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    // S4: Presence checkboxes now have short/empty labels; found by objectName.
-    EXPECT_NE(page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("overlayCheck")), nullptr)
-        << "Recording overlay ExoCheckBox missing";
-    EXPECT_NE(page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("diagnosticsOverlayCheck")), nullptr)
-        << "Diagnostics overlay ExoCheckBox missing";
-    EXPECT_NE(page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("notificationsCheck")), nullptr)
-        << "Notifications ExoCheckBox missing";
-    EXPECT_NE(page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("keepInTrayCheck")), nullptr)
-        << "Close-to-tray ExoCheckBox missing";
-    EXPECT_NE(page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("quickControlsCheck")), nullptr)
-        << "Quick controls ExoCheckBox missing";
+    // Presence rows use ExoToggle (right-aligned pill), found by objectName.
+    EXPECT_NE(page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("overlayCheck")), nullptr)
+        << "Recording overlay ExoToggle missing";
+    EXPECT_NE(page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("diagnosticsOverlayCheck")), nullptr)
+        << "Diagnostics overlay ExoToggle missing";
+    EXPECT_NE(page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("notificationsCheck")), nullptr)
+        << "Notifications ExoToggle missing";
+    EXPECT_NE(page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("keepInTrayCheck")), nullptr)
+        << "Close-to-tray ExoToggle missing";
+    EXPECT_NE(page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("quickControlsCheck")), nullptr)
+        << "Quick controls ExoToggle missing";
 }
 
 TEST_F(ConfigPageTest, PresenceCard_SetShowOverlay_UpdatesCheckState) {
@@ -1742,9 +1715,9 @@ TEST_F(ConfigPageTest, PresenceCard_SetShowOverlay_UpdatesCheckState) {
 
     page.setShowOverlay(false);
 
-    auto* cb = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("overlayCheck"));
-    ASSERT_NE(cb, nullptr) << "Recording overlay ExoCheckBox not found";
-    EXPECT_FALSE(cb->isChecked()) << "setShowOverlay(false) must uncheck the control";
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("overlayCheck"));
+    ASSERT_NE(toggle, nullptr) << "Recording overlay ExoToggle not found";
+    EXPECT_FALSE(toggle->isOn()) << "setShowOverlay(false) must turn off the toggle";
 }
 
 TEST_F(ConfigPageTest, PresenceCard_SetShowOverlay_DoesNotEmitSignal) {
@@ -1769,9 +1742,9 @@ TEST_F(ConfigPageTest, PresenceCard_ShowOverlayToggle_EmitsSignal) {
         emitted_value = show;
     });
 
-    auto* cb = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("overlayCheck"));
-    ASSERT_NE(cb, nullptr) << "Recording overlay ExoCheckBox not found";
-    cb->setChecked(false); // user toggling triggers toggled() → signal
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("overlayCheck"));
+    ASSERT_NE(toggle, nullptr) << "Recording overlay ExoToggle not found";
+    toggle->setOn(false); // user toggling triggers toggled() → signal
     EXPECT_TRUE(emitted) << "showOverlayChanged must be emitted on user toggle";
     EXPECT_FALSE(emitted_value);
 }
@@ -1781,9 +1754,9 @@ TEST_F(ConfigPageTest, PresenceCard_SetKeepRunningInTray_UpdatesCheckState) {
 
     page.setKeepRunningInTray(true);
 
-    auto* cb = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("keepInTrayCheck"));
-    ASSERT_NE(cb, nullptr) << "Close-to-tray ExoCheckBox not found";
-    EXPECT_TRUE(cb->isChecked()) << "setKeepRunningInTray(true) must check the control";
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("keepInTrayCheck"));
+    ASSERT_NE(toggle, nullptr) << "Close-to-tray ExoToggle not found";
+    EXPECT_TRUE(toggle->isOn()) << "setKeepRunningInTray(true) must turn on the toggle";
 }
 
 TEST_F(ConfigPageTest, AppearanceCard_CardTitleVisible) {

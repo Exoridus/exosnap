@@ -15,7 +15,10 @@ namespace exosnap::ui::hints {
 inline const QString kContainer = QStringLiteral("MKV safest \xC2\xB7 MP4 most compatible");
 inline const QString kVideoCodecAv1 = QStringLiteral("Best compression \xC2\xB7 newer players");
 inline const QString kVideoCodecH264 = QStringLiteral("Universal compatibility \xC2\xB7 larger files");
-inline const QString kQualityPreset = QStringLiteral("Higher = better \xC2\xB7 larger files");
+inline const QString kQualityPreset =
+    QStringLiteral("Constant-quality presets: Small \xe2\x89\x88 CQ 30 (smaller files), "
+                   "Balanced \xe2\x89\x88 CQ 24, High \xe2\x89\x88 CQ 19 (sharper, larger files). "
+                   "Lower CQ = higher quality.");
 inline const QString kFrameRate = QStringLiteral("Constant rate \xC2\xB7 editor-friendly");
 inline const QString kCaptureCursor = QStringLiteral("Show the mouse pointer");
 inline const QString kOutputResolution = QStringLiteral("Downscale to save size \xC2\xB7 re-encodes");

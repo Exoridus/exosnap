@@ -113,8 +113,15 @@ void SettingsPopoverRow::onCogClicked() {
     const QPoint global_bottom_left = cog_btn_->mapToGlobal(QPoint(0, cog_btn_->height()));
     popover_panel_->adjustSize();
 
-    // Try below the button; if off-screen push it up.
-    const QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
+    // Try below the button; if off-screen push it up. Clamp against the screen the
+    // cog button actually lives on — NOT primaryScreen() — or on a multi-monitor
+    // desktop the popover gets shoved onto the primary display.
+    const QScreen* cog_screen = cog_btn_->screen();
+    if (cog_screen == nullptr)
+        cog_screen = QGuiApplication::screenAt(global_bottom_left);
+    if (cog_screen == nullptr)
+        cog_screen = QGuiApplication::primaryScreen();
+    const QRect screen = cog_screen->availableGeometry();
     QPoint pos = global_bottom_left;
     if (pos.y() + popover_panel_->height() > screen.bottom()) {
         pos.setY(cog_btn_->mapToGlobal(QPoint(0, 0)).y() - popover_panel_->height());

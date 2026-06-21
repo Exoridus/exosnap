@@ -194,7 +194,6 @@ class ConfigPage : public QWidget {
     void onSplitSizeModeChanged(int index);
     void updateSplitSizeSelection();
     void onCursorChanged();
-    void updateQualitySummary();
     void updateQualitySegmentSelection();
     void updateFrameRateSelection();
     void updateTimingSelection();
@@ -304,12 +303,10 @@ class ConfigPage : public QWidget {
     QPushButton* quality_segment_small_ = nullptr;
     QPushButton* quality_segment_balanced_ = nullptr;
     QPushButton* quality_segment_high_ = nullptr;
-    QLabel* quality_badge_label_ = nullptr;
-    QLabel* quality_settings_label_ = nullptr;
     QButtonGroup* timing_group_ = nullptr;
     QPushButton* timing_cfr_btn_ = nullptr;
     QPushButton* timing_vfr_btn_ = nullptr;
-    ui::widgets::ExoCheckBox* cursor_check_ = nullptr;
+    ui::widgets::ExoToggle* cursor_check_ = nullptr;
 
     QLabel* audio_summary_label_ = nullptr;
 
@@ -423,11 +420,11 @@ class ConfigPage : public QWidget {
     // output_split_expander_ removed in Wave 2; split_expert_section_ replaces it.
 
     // SETTINGS-TIERS-P3: presence + appearance controls (moved from AdvancedPage).
-    ui::widgets::ExoCheckBox* overlay_check_ = nullptr;
-    ui::widgets::ExoCheckBox* diagnostics_overlay_check_ = nullptr;
-    ui::widgets::ExoCheckBox* notifications_check_ = nullptr;
-    ui::widgets::ExoCheckBox* keep_in_tray_check_ = nullptr;
-    ui::widgets::ExoCheckBox* quick_controls_check_ = nullptr;
+    ui::widgets::ExoToggle* overlay_check_ = nullptr;
+    ui::widgets::ExoToggle* diagnostics_overlay_check_ = nullptr;
+    ui::widgets::ExoToggle* notifications_check_ = nullptr;
+    ui::widgets::ExoToggle* keep_in_tray_check_ = nullptr;
+    ui::widgets::ExoToggle* quick_controls_check_ = nullptr;
     // THEME-SLICE-1: theme picker (replaces accent_combo_).
     QButtonGroup* theme_button_group_ = nullptr;
     QWidget* theme_picker_widget_ = nullptr;

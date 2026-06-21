@@ -876,38 +876,17 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         return segment;
     };
 
-    quality_segment_small_ =
-        makeQualitySegment(QStringLiteral("qualitySegmentSmall"), QStringLiteral("Small \xC2\xB7 CQ30"),
-                           recorder_core::NvencQualityPreset::Small);
-    quality_segment_balanced_ =
-        makeQualitySegment(QStringLiteral("qualitySegmentBalanced"), QStringLiteral("Balanced \xC2\xB7 CQ24"),
-                           recorder_core::NvencQualityPreset::Balanced);
-    quality_segment_high_ =
-        makeQualitySegment(QStringLiteral("qualitySegmentHigh"), QStringLiteral("High \xC2\xB7 CQ19"),
-                           recorder_core::NvencQualityPreset::High);
-
-    quality_badge_label_ = new QLabel(fmt_panel);
-    quality_badge_label_->setObjectName(QStringLiteral("qualityBadgeLabel"));
-    quality_badge_label_->setProperty("labelRole", "muted");
-
-    quality_settings_label_ = new QLabel(fmt_panel);
-    quality_settings_label_->setObjectName(QStringLiteral("qualitySettingsLabel"));
-    quality_settings_label_->setProperty("labelRole", "muted");
-
-    // Quality sub-label widget combining both badge+settings labels
-    auto* quality_sub_widget = new QWidget(fmt_panel);
-    {
-        auto* qsl = new QVBoxLayout(quality_sub_widget);
-        qsl->setContentsMargins(0, 0, 0, 0);
-        qsl->setSpacing(2);
-        qsl->addWidget(quality_badge_label_);
-        qsl->addWidget(quality_settings_label_);
-    }
+    quality_segment_small_ = makeQualitySegment(QStringLiteral("qualitySegmentSmall"), QStringLiteral("Small"),
+                                                recorder_core::NvencQualityPreset::Small);
+    quality_segment_balanced_ = makeQualitySegment(QStringLiteral("qualitySegmentBalanced"), QStringLiteral("Balanced"),
+                                                   recorder_core::NvencQualityPreset::Balanced);
+    quality_segment_high_ = makeQualitySegment(QStringLiteral("qualitySegmentHigh"), QStringLiteral("High"),
+                                               recorder_core::NvencQualityPreset::High);
 
     quality_compare_hint_ =
         new ui::widgets::CompareHint(QStringLiteral("quality"), QStringLiteral("Balanced"), fmt_panel);
 
-    // Quality row: segmented on right, compare hint in label area
+    // Quality row: segmented on right, compare hint + info-i in label area
     // Wave 2: quality_row_widget_ promoted to member so expert-mode can show/hide it.
     {
         quality_row_widget_ = new QWidget(fmt_panel);
@@ -924,12 +903,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* qhl = new QHBoxLayout(qcontent);
         qhl->setContentsMargins(0, 12, 0, 12);
         qhl->setSpacing(14);
-        // left: label + hint + sub labels
-        auto* qleft = new QWidget(qcontent);
-        auto* qll = new QVBoxLayout(qleft);
-        qll->setContentsMargins(0, 0, 0, 0);
-        qll->setSpacing(2);
-        auto* qlabel_row = new QWidget(qleft);
+        // left: label + compare hint + info-i
+        auto* qlabel_row = new QWidget(qcontent);
         auto* qlrl = new QHBoxLayout(qlabel_row);
         qlrl->setContentsMargins(0, 0, 0, 0);
         qlrl->setSpacing(4);
@@ -937,10 +912,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         qlbl->setProperty("labelRole", "settingsRowLabel");
         qlrl->addWidget(qlbl);
         qlrl->addWidget(quality_compare_hint_, 0, Qt::AlignVCenter);
+        qlrl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kQualityPreset, qlabel_row), 0, Qt::AlignVCenter);
         qlrl->addStretch();
-        qll->addWidget(qlabel_row);
-        qll->addWidget(quality_sub_widget);
-        qhl->addWidget(qleft, 1);
+        qhl->addWidget(qlabel_row, 1);
         qhl->addWidget(quality_segmented, 0, Qt::AlignVCenter);
         qvl->addWidget(qcontent);
         quality_row_widget_->setProperty("settingsRow", true);
@@ -1039,9 +1013,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         makeSettingsRow(fmt_panel, QStringLiteral("Frame timing"), timing_compare_hint_, QString(), timing_segmented));
 
     // --- Capture cursor row ---
-    cursor_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Capture cursor"), fmt_panel);
+    cursor_check_ = new ui::widgets::ExoToggle(fmt_panel);
     cursor_check_->setObjectName(QStringLiteral("captureCursorCheck"));
-    cursor_check_->setChecked(video_settings_.capture_cursor);
+    cursor_check_->setOn(video_settings_.capture_cursor);
     fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Capture cursor"),
                                           new ui::widgets::InfoHintIcon(ui::hints::kCaptureCursor, fmt_panel),
                                           QString(), cursor_check_));
@@ -2207,17 +2181,17 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         presence_layout->setSpacing(0);
         presence_layout->addWidget(makeCardTitle(QStringLiteral("Presence"), presence_panel));
 
-        overlay_check_ = new ui::widgets::ExoCheckBox(QString(), presence_panel);
+        overlay_check_ = new ui::widgets::ExoToggle(presence_panel);
         overlay_check_->setObjectName(QStringLiteral("overlayCheck"));
-        overlay_check_->setChecked(true);
+        overlay_check_->setOn(true);
         presence_layout->addWidget(
             makeSettingsRow(presence_panel, QStringLiteral("Recording overlay"),
                             new ui::widgets::InfoHintIcon(ui::hints::kRecordingOverlay, presence_panel), QString(),
                             overlay_check_, /*first=*/true));
 
-        diagnostics_overlay_check_ = new ui::widgets::ExoCheckBox(QString(), presence_panel);
+        diagnostics_overlay_check_ = new ui::widgets::ExoToggle(presence_panel);
         diagnostics_overlay_check_->setObjectName(QStringLiteral("diagnosticsOverlayCheck"));
-        diagnostics_overlay_check_->setChecked(false);
+        diagnostics_overlay_check_->setOn(false);
         presence_layout->addWidget(
             makeSettingsRow(presence_panel, QStringLiteral("Diagnostics overlay"),
                             new ui::widgets::InfoHintIcon(
@@ -2228,23 +2202,23 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                                 presence_panel),
                             QString(), diagnostics_overlay_check_));
 
-        notifications_check_ = new ui::widgets::ExoCheckBox(QString(), presence_panel);
+        notifications_check_ = new ui::widgets::ExoToggle(presence_panel);
         notifications_check_->setObjectName(QStringLiteral("notificationsCheck"));
-        notifications_check_->setChecked(true);
+        notifications_check_->setOn(true);
         presence_layout->addWidget(makeSettingsRow(
             presence_panel, QStringLiteral("Notifications"),
             new ui::widgets::InfoHintIcon(ui::hints::kNotifications, presence_panel), QString(), notifications_check_));
 
-        keep_in_tray_check_ = new ui::widgets::ExoCheckBox(QString(), presence_panel);
+        keep_in_tray_check_ = new ui::widgets::ExoToggle(presence_panel);
         keep_in_tray_check_->setObjectName(QStringLiteral("keepInTrayCheck"));
-        keep_in_tray_check_->setChecked(false);
+        keep_in_tray_check_->setOn(false);
         presence_layout->addWidget(makeSettingsRow(
             presence_panel, QStringLiteral("Tray behavior"),
             new ui::widgets::InfoHintIcon(ui::hints::kCloseToTray, presence_panel), QString(), keep_in_tray_check_));
 
-        quick_controls_check_ = new ui::widgets::ExoCheckBox(QString(), presence_panel);
+        quick_controls_check_ = new ui::widgets::ExoToggle(presence_panel);
         quick_controls_check_->setObjectName(QStringLiteral("quickControlsCheck"));
-        quick_controls_check_->setChecked(false);
+        quick_controls_check_->setOn(false);
         presence_layout->addWidget(
             makeSettingsRow(presence_panel, QStringLiteral("Quick controls"),
                             new ui::widgets::InfoHintIcon(ui::hints::kQuickControlPill, presence_panel), QString(),
@@ -2448,12 +2422,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     outer->addWidget(scroll);
 
     // SETTINGS-TIERS-P3: presence + appearance control connections.
-    connect(overlay_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::showOverlayChanged);
-    connect(diagnostics_overlay_check_, &ui::widgets::ExoCheckBox::toggled, this,
-            &ConfigPage::showDiagnosticsOverlayChanged);
-    connect(notifications_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::showNotificationsChanged);
-    connect(keep_in_tray_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::keepRunningInTrayChanged);
-    connect(quick_controls_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::showQuickControlsChanged);
+    connect(overlay_check_, &QAbstractButton::toggled, this, &ConfigPage::showOverlayChanged);
+    connect(diagnostics_overlay_check_, &QAbstractButton::toggled, this, &ConfigPage::showDiagnosticsOverlayChanged);
+    connect(notifications_check_, &QAbstractButton::toggled, this, &ConfigPage::showNotificationsChanged);
+    connect(keep_in_tray_check_, &QAbstractButton::toggled, this, &ConfigPage::keepRunningInTrayChanged);
+    connect(quick_controls_check_, &QAbstractButton::toggled, this, &ConfigPage::showQuickControlsChanged);
     connect(theme_button_group_, &QButtonGroup::idClicked, this, [this](int btn_id) {
         auto* btn = theme_button_group_->button(btn_id);
         if (!btn)
@@ -2579,7 +2552,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                 quality_combo_->setCurrentIndex(idx);
         }
         updateQualitySegmentSelection();
-        updateQualitySummary();
         emitCurrentVideoSettings();
     });
 
@@ -2800,7 +2772,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     applyAudioConfigurationState();
     updateFormatDisplay();
     updateExampleFilename();
-    updateQualitySummary();
+    updateQualitySegmentSelection();
     updateFrameRateSelection();
     updateTimingSelection();
     updateOutputResolutionSelection();
@@ -2881,7 +2853,7 @@ void ConfigPage::onQualityChanged(int index) {
     if (index < 0)
         return;
     video_settings_.quality = static_cast<recorder_core::NvencQualityPreset>(quality_combo_->itemData(index).toInt());
-    updateQualitySummary();
+    updateQualitySegmentSelection();
     emitCurrentVideoSettings();
 }
 
@@ -2907,7 +2879,7 @@ void ConfigPage::onFrameRateChanged(int index) {
         return;
     video_settings_.frame_rate_num = static_cast<uint32_t>(fps);
     video_settings_.frame_rate_den = 1;
-    updateQualitySummary();
+    updateQualitySegmentSelection();
     updateEffectiveOutputSummary();
     emitCurrentVideoSettings();
 }
@@ -2920,7 +2892,7 @@ void ConfigPage::onTimingSelected(int timing_id) {
         video_settings_.cfr = want_cfr;
     }
     updateTimingSelection();
-    updateQualitySummary();
+    updateQualitySegmentSelection();
     updateEffectiveOutputSummary();
     emitCurrentVideoSettings();
 }
@@ -3035,8 +3007,7 @@ void ConfigPage::updateSplitSizeSelection() {
 }
 
 void ConfigPage::onCursorChanged() {
-    video_settings_.capture_cursor = cursor_check_->isChecked();
-    updateQualitySummary();
+    video_settings_.capture_cursor = cursor_check_->isOn();
     emitCurrentVideoSettings();
 }
 
@@ -3277,7 +3248,7 @@ void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
     updateTimingSelection();
 
     const QSignalBlocker crb(cursor_check_);
-    cursor_check_->setChecked(settings.capture_cursor);
+    cursor_check_->setOn(settings.capture_cursor);
 
     // PS-PHASE-C: sync expert rate control + bitrate from loaded preset.
     if (rate_control_group_) {
@@ -3297,43 +3268,29 @@ void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
         bitrate_row_widget_->setVisible(expert_mode_enabled_ && needs_bitrate);
     }
 
-    updateQualitySummary();
+    updateQualitySegmentSelection();
     updateEffectiveOutputSummary();
 }
 
-void ConfigPage::updateQualitySummary() {
-    if (!quality_badge_label_ || !quality_settings_label_)
+void ConfigPage::updateQualitySegmentSelection() {
+    if (!quality_segment_group_)
         return;
 
-    switch (video_settings_.quality) {
-    case recorder_core::NvencQualityPreset::High:
-        quality_badge_label_->setText(QStringLiteral("Sharper · larger files"));
-        break;
-    case recorder_core::NvencQualityPreset::Balanced:
-        quality_badge_label_->setText(QStringLiteral("General purpose"));
-        break;
-    case recorder_core::NvencQualityPreset::Small:
-        quality_badge_label_->setText(QStringLiteral("Smaller files"));
-        break;
-    }
+    const auto sync_segment = [this](QPushButton* segment, recorder_core::NvencQualityPreset preset) {
+        if (!segment)
+            return;
 
-    const QString cq = [](recorder_core::NvencQualityPreset p) -> QString {
-        switch (p) {
-        case recorder_core::NvencQualityPreset::High:
-            return QStringLiteral("CQ 19");
-        case recorder_core::NvencQualityPreset::Balanced:
-            return QStringLiteral("CQ 24");
-        case recorder_core::NvencQualityPreset::Small:
-            return QStringLiteral("CQ 30");
-        }
-        return QStringLiteral("CQ 24");
-    }(video_settings_.quality);
+        const bool selected = video_settings_.quality == preset;
+        segment->setChecked(selected);
+        segment->setProperty("qualitySegmentSelected", selected);
+        segment->style()->unpolish(segment);
+        segment->style()->polish(segment);
+    };
 
-    const QString cfr_text = (video_settings_.cfr ? QStringLiteral("CFR ") : QStringLiteral("VFR ")) +
-                             FrameRateLabel(video_settings_.frame_rate_num, video_settings_.frame_rate_den);
-    const QString cursor_text =
-        video_settings_.capture_cursor ? QStringLiteral("Cursor on") : QStringLiteral("Cursor off");
-    quality_settings_label_->setText(cq + QStringLiteral(" · ") + cfr_text + QStringLiteral(" · ") + cursor_text);
+    const QSignalBlocker blocker(quality_segment_group_);
+    sync_segment(quality_segment_small_, recorder_core::NvencQualityPreset::Small);
+    sync_segment(quality_segment_balanced_, recorder_core::NvencQualityPreset::Balanced);
+    sync_segment(quality_segment_high_, recorder_core::NvencQualityPreset::High);
 
     if (quality_compare_hint_) {
         switch (video_settings_.quality) {
@@ -3364,29 +3321,6 @@ void ConfigPage::updateQualitySummary() {
             break;
         }
     }
-
-    updateQualitySegmentSelection();
-}
-
-void ConfigPage::updateQualitySegmentSelection() {
-    if (!quality_segment_group_)
-        return;
-
-    const auto sync_segment = [this](QPushButton* segment, recorder_core::NvencQualityPreset preset) {
-        if (!segment)
-            return;
-
-        const bool selected = video_settings_.quality == preset;
-        segment->setChecked(selected);
-        segment->setProperty("qualitySegmentSelected", selected);
-        segment->style()->unpolish(segment);
-        segment->style()->polish(segment);
-    };
-
-    const QSignalBlocker blocker(quality_segment_group_);
-    sync_segment(quality_segment_small_, recorder_core::NvencQualityPreset::Small);
-    sync_segment(quality_segment_balanced_, recorder_core::NvencQualityPreset::Balanced);
-    sync_segment(quality_segment_high_, recorder_core::NvencQualityPreset::High);
 }
 
 void ConfigPage::updateFrameRateSelection() {
@@ -4565,35 +4499,35 @@ void ConfigPage::applySettingsSearch(const QString& query) {
 void ConfigPage::setShowOverlay(bool show) {
     if (overlay_check_) {
         const QSignalBlocker blocker(overlay_check_);
-        overlay_check_->setChecked(show);
+        overlay_check_->setOn(show);
     }
 }
 
 void ConfigPage::setShowDiagnosticsOverlay(bool show) {
     if (diagnostics_overlay_check_) {
         const QSignalBlocker blocker(diagnostics_overlay_check_);
-        diagnostics_overlay_check_->setChecked(show);
+        diagnostics_overlay_check_->setOn(show);
     }
 }
 
 void ConfigPage::setShowNotifications(bool show) {
     if (notifications_check_) {
         const QSignalBlocker blocker(notifications_check_);
-        notifications_check_->setChecked(show);
+        notifications_check_->setOn(show);
     }
 }
 
 void ConfigPage::setKeepRunningInTray(bool keep) {
     if (keep_in_tray_check_) {
         const QSignalBlocker blocker(keep_in_tray_check_);
-        keep_in_tray_check_->setChecked(keep);
+        keep_in_tray_check_->setOn(keep);
     }
 }
 
 void ConfigPage::setShowQuickControls(bool show) {
     if (quick_controls_check_) {
         const QSignalBlocker blocker(quick_controls_check_);
-        quick_controls_check_->setChecked(show);
+        quick_controls_check_->setOn(show);
     }
 }
 
