@@ -48,18 +48,31 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
     const bool is_mkv_h264_flac = final_config.container == Container::Matroska &&
                                   final_config.video_codec == VideoCodec::H264Nvenc &&
                                   final_config.audio_codec == AudioCodec::Flac && valid_chroma_depth;
+    const bool is_mkv_hevc_aac = final_config.container == Container::Matroska &&
+                                 final_config.video_codec == VideoCodec::HevcNvenc &&
+                                 final_config.audio_codec == AudioCodec::AacMf && valid_chroma_depth;
+    const bool is_mkv_hevc_opus = final_config.container == Container::Matroska &&
+                                  final_config.video_codec == VideoCodec::HevcNvenc &&
+                                  final_config.audio_codec == AudioCodec::Opus && valid_chroma_depth;
+    const bool is_mkv_hevc_pcm = final_config.container == Container::Matroska &&
+                                 final_config.video_codec == VideoCodec::HevcNvenc &&
+                                 final_config.audio_codec == AudioCodec::Pcm && valid_chroma_depth;
+    const bool is_mkv_hevc_flac = final_config.container == Container::Matroska &&
+                                  final_config.video_codec == VideoCodec::HevcNvenc &&
+                                  final_config.audio_codec == AudioCodec::Flac && valid_chroma_depth;
     const bool is_mp4_h264_aac = final_config.container == Container::Mp4 &&
                                  final_config.video_codec == VideoCodec::H264Nvenc &&
                                  final_config.audio_codec == AudioCodec::AacMf && valid_chroma_depth;
 
     if (!is_webm_av1_opus && !is_mkv_av1_aac && !is_mkv_av1_opus && !is_mkv_h264_aac && !is_mkv_av1_pcm &&
-        !is_mkv_h264_pcm && !is_mkv_av1_flac && !is_mkv_h264_flac && !is_mp4_h264_aac) {
+        !is_mkv_h264_pcm && !is_mkv_av1_flac && !is_mkv_h264_flac && !is_mkv_hevc_aac && !is_mkv_hevc_opus &&
+        !is_mkv_hevc_pcm && !is_mkv_hevc_flac && !is_mp4_h264_aac) {
         ResolveResult failure = resolved;
         failure.succeeded = false;
         failure.invalidity.push_back(InvalidReason{
             "translation",
-            "Only WebM+AV1+Opus, Matroska+AV1+(AAC|Opus|PCM|FLAC), Matroska+H264+(AAC|PCM|FLAC), or MP4+H264+AAC "
-            "+ 4:2:0 + 8-bit can be translated to recorder_core."});
+            "Only WebM+AV1+Opus, Matroska+AV1+(AAC|Opus|PCM|FLAC), Matroska+H264+(AAC|PCM|FLAC), "
+            "Matroska+HEVC+(AAC|Opus|PCM|FLAC), or MP4+H264+AAC + 4:2:0 + 8-bit can be translated to recorder_core."});
         if (validation != nullptr) {
             *validation = failure;
         }
@@ -101,6 +114,22 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
     } else if (is_mkv_h264_flac) {
         core_config.container = recorder_core::Container::Matroska;
         core_config.video_codec = recorder_core::VideoCodec::H264Nvenc;
+        core_config.audio_codec = recorder_core::AudioCodec::Flac;
+    } else if (is_mkv_hevc_aac) {
+        core_config.container = recorder_core::Container::Matroska;
+        core_config.video_codec = recorder_core::VideoCodec::HevcNvenc;
+        core_config.audio_codec = recorder_core::AudioCodec::AacMf;
+    } else if (is_mkv_hevc_opus) {
+        core_config.container = recorder_core::Container::Matroska;
+        core_config.video_codec = recorder_core::VideoCodec::HevcNvenc;
+        core_config.audio_codec = recorder_core::AudioCodec::Opus;
+    } else if (is_mkv_hevc_pcm) {
+        core_config.container = recorder_core::Container::Matroska;
+        core_config.video_codec = recorder_core::VideoCodec::HevcNvenc;
+        core_config.audio_codec = recorder_core::AudioCodec::Pcm;
+    } else if (is_mkv_hevc_flac) {
+        core_config.container = recorder_core::Container::Matroska;
+        core_config.video_codec = recorder_core::VideoCodec::HevcNvenc;
         core_config.audio_codec = recorder_core::AudioCodec::Flac;
     } else if (is_mp4_h264_aac) {
         core_config.container = recorder_core::Container::Mp4;

@@ -192,6 +192,8 @@ QString videoCodecLabel(recorder_core::VideoCodec codec) {
     switch (codec) {
     case recorder_core::VideoCodec::H264Nvenc:
         return QStringLiteral("H.264");
+    case recorder_core::VideoCodec::HevcNvenc:
+        return QStringLiteral("HEVC");
     case recorder_core::VideoCodec::Av1Nvenc:
         return QStringLiteral("AV1");
     }
@@ -1705,6 +1707,8 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
                 return QStringLiteral("AV1");
             case recorder_core::VideoCodec::H264Nvenc:
                 return QStringLiteral("H.264");
+            case recorder_core::VideoCodec::HevcNvenc:
+                return QStringLiteral("HEVC");
             }
             return QStringLiteral("AV1");
         };

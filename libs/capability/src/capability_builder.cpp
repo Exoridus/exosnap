@@ -21,8 +21,9 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
     caps.video_codecs.emplace(VideoCodec::Av1Nvenc,
                               SupportAnnotation{SupportLevel::Available, "Validated NVENC AV1 path."});
     caps.video_codecs.emplace(VideoCodec::HevcNvenc,
-                              SupportAnnotation{SupportLevel::NotImplemented,
-                                                "HEVC product surface exists but runtime path is not implemented."});
+                              SupportAnnotation{SupportLevel::ValidUnvalidated,
+                                                "HEVC NVENC + Matroska V_MPEGH/ISO/HEVC implemented in 0.7.0; "
+                                                "not yet validated on recording hardware."});
     caps.video_codecs.emplace(VideoCodec::H264Nvenc,
                               SupportAnnotation{SupportLevel::Available, "Validated NVENC H.264 path."});
 
@@ -75,6 +76,7 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
         // Lower the dimension-level annotation for all NVENC codecs.
         caps.video_codecs[VideoCodec::Av1Nvenc] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
         caps.video_codecs[VideoCodec::H264Nvenc] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
+        caps.video_codecs[VideoCodec::HevcNvenc] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
 
         // Force primary combos to non-selectable via combo_override.
         const ComboKey mkv_av1_key{Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf,
@@ -119,8 +121,11 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
         }
     }
 
-    // --- Invariant D: HEVC remains NotImplemented regardless ---
-    // The static baseline already sets HevcNvenc to NotImplemented.
+    // --- HEVC (0.7.0) ---
+    // The static baseline sets HevcNvenc to ValidUnvalidated (implemented engine path,
+    // not yet validated on recording hardware). Downgrade rule A above lowers it to
+    // NotImplemented when NVENC is absent, mirroring AV1/H.264. A live GPU smoke test is
+    // required before promoting HEVC to Available.
     // H.264 is Available in the baseline and is handled by downgrade rules A and B above.
 
     return caps;

@@ -404,18 +404,15 @@ TEST(RecordingPreset, Reconcile_Mkv_H264Opus_Unchanged) {
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Opus);
 }
 
-TEST(RecordingPreset, Reconcile_Mkv_Hevc_FallsToAv1Opus) {
-    // HEVC is not implemented (Experimental in the registry; NotImplemented in
-    // CapabilitySet). No audio fallback fixes it while keeping HEVC; the
-    // reconciler falls back to the primary working path: AV1 + Opus.
-    // (Pre-v1 behaviour change from the old ad-hoc HEVC→H264 downgrade.)
+TEST(RecordingPreset, Reconcile_Mkv_Hevc_Aac_IsUnchanged) {
+    // 0.7.0: MKV + HEVC + AAC is now Allowed (implemented). Reconciler must leave it unchanged.
     OutputSettingsModel out;
     out.container = capability::Container::Matroska;
     out.video_codec = capability::VideoCodec::HevcNvenc;
     out.audio_codec = capability::AudioCodec::AacMf;
     ReconcileContainerCodecs(out);
-    EXPECT_EQ(out.video_codec, capability::VideoCodec::Av1Nvenc);
-    EXPECT_EQ(out.audio_codec, capability::AudioCodec::Opus);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::HevcNvenc);
+    EXPECT_EQ(out.audio_codec, capability::AudioCodec::AacMf);
 }
 
 TEST(RecordingPreset, Reconcile_Mkv_Pcm_Unchanged) {
@@ -543,15 +540,15 @@ TEST(RecordingPreset, Sanitize_Mkv_H264Opus_Unchanged) {
     EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::Opus);
 }
 
-TEST(RecordingPreset, Sanitize_Mkv_Hevc_FallsToAv1Opus) {
-    // HEVC is not implemented; sanitizer falls back via registry to AV1 + Opus.
+TEST(RecordingPreset, Sanitize_Mkv_Hevc_Aac_IsPreserved) {
+    // 0.7.0: MKV + HEVC + AAC is now Allowed (implemented). Sanitizer must leave it unchanged.
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.output.container = capability::Container::Matroska;
     cfg.output.video_codec = capability::VideoCodec::HevcNvenc;
     cfg.output.audio_codec = capability::AudioCodec::AacMf;
     const RecordingPresetConfig s = SanitizePresetConfig(cfg);
-    EXPECT_EQ(s.output.video_codec, capability::VideoCodec::Av1Nvenc);
-    EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::Opus);
+    EXPECT_EQ(s.output.video_codec, capability::VideoCodec::HevcNvenc);
+    EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::AacMf);
 }
 
 // ===========================================================================

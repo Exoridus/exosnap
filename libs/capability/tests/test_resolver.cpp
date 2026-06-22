@@ -367,15 +367,10 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvH264AacCombo) {
     EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::AacMf);
 }
 
-TEST(TranslationTest, ToRecorderCoreConfigRejectsHevcComboAsTranslationUnknown) {
-    // MKV + HEVC + AAC is NotImplemented in capability, so ToRecorderCoreConfig must reject it.
-    CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
-    // Force HEVC into selectable state via overrides so ValidateConfig succeeds.
-    caps.video_codecs[VideoCodec::HevcNvenc] =
-        SupportAnnotation{SupportLevel::ValidUnvalidated, "Test override for HEVC."};
-    caps.combo_overrides[ComboKey{Container::Matroska, VideoCodec::HevcNvenc, AudioCodec::AacMf,
-                                  ChromaSubsampling::Cs420, BitDepth::Bit8}] =
-        SupportAnnotation{SupportLevel::ValidUnvalidated, "Test override."};
+TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvHevcAacCombo) {
+    // 0.7.0: MKV + HEVC is ValidUnvalidated in the baseline, so ToRecorderCoreConfig
+    // must translate it to recorder_core::VideoCodec::HevcNvenc.
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
 
     UserRecorderConfig config;
     config.container = Container::Matroska;
@@ -383,10 +378,12 @@ TEST(TranslationTest, ToRecorderCoreConfigRejectsHevcComboAsTranslationUnknown) 
     config.audio_codec = AudioCodec::AacMf;
 
     ResolveResult validation;
-    EXPECT_THROW(static_cast<void>(ToRecorderCoreConfig(config, caps, &validation)), std::invalid_argument);
-    EXPECT_FALSE(validation.succeeded);
-    EXPECT_FALSE(validation.invalidity.empty());
-    EXPECT_EQ(validation.invalidity.back().field, "translation");
+    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+
+    EXPECT_TRUE(validation.succeeded);
+    EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::HevcNvenc);
+    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::AacMf);
 }
 
 } // namespace

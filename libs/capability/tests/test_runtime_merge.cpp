@@ -187,16 +187,41 @@ TEST(RuntimeMergeTest, TC6b_H264NotImplemented_WhenNvencAbsent) {
 }
 
 // -------------------------------------------------------------------------
-// TC-7: HEVC remains NotImplemented regardless of favorable runtime
+// TC-7: HEVC is ValidUnvalidated (selectable with caveat) under favorable
+// runtime (0.7.0: engine path implemented, not yet hardware-validated).
 // -------------------------------------------------------------------------
-TEST(RuntimeMergeTest, TC7_HevcRemainsNotImplemented) {
+TEST(RuntimeMergeTest, TC7_HevcValidUnvalidatedWhenNvencPresent) {
     const RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
     const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
 
     const SupportAnnotation hevc = caps.QueryVideoCodec(VideoCodec::HevcNvenc);
-    EXPECT_EQ(hevc.level, SupportLevel::NotImplemented)
-        << "HEVC must remain NotImplemented regardless of favorable runtime facts.";
-    EXPECT_FALSE(IsSelectable(hevc)) << "HEVC must not be selectable.";
+    EXPECT_EQ(hevc.level, SupportLevel::ValidUnvalidated)
+        << "HEVC must be ValidUnvalidated when NVENC is present (implemented, not hw-validated).";
+    EXPECT_TRUE(IsSelectable(hevc)) << "HEVC must be selectable (with caveat) when NVENC is present.";
+
+    // The MKV + HEVC combo must be selectable end-to-end (registry Allowed +
+    // dimension ValidUnvalidated must not be force-downgraded by the combine logic).
+    const SupportAnnotation combo = caps.QueryCombo(Container::Matroska, VideoCodec::HevcNvenc, AudioCodec::Opus,
+                                                    ChromaSubsampling::Cs420, BitDepth::Bit8);
+    EXPECT_EQ(combo.level, SupportLevel::ValidUnvalidated)
+        << "MKV+HEVC+Opus combo must be ValidUnvalidated. reason: " << combo.reason;
+    EXPECT_TRUE(IsSelectable(combo)) << "MKV+HEVC+Opus combo must be selectable.";
+}
+
+// -------------------------------------------------------------------------
+// TC-7b: HEVC is downgraded to NotImplemented when NVENC is absent, exactly
+// like AV1/H.264.
+// -------------------------------------------------------------------------
+TEST(RuntimeMergeTest, TC7b_HevcNotImplemented_WhenNvencAbsent) {
+    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    snap.nvidia.nvenc_dll_present = false;
+
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+
+    const SupportAnnotation hevc = caps.QueryVideoCodec(VideoCodec::HevcNvenc);
+    EXPECT_EQ(hevc.level, SupportLevel::NotImplemented) << "HEVC must be NotImplemented when NVENC DLL is absent.";
+    EXPECT_FALSE(IsSelectable(hevc)) << "HEVC must not be selectable when NVENC is absent.";
+    EXPECT_NE(hevc.reason.find("NVENC"), std::string::npos) << "HEVC downgrade reason must mention NVENC.";
 }
 
 // -------------------------------------------------------------------------
@@ -246,9 +271,11 @@ TEST(RuntimeMergeTest, TC9_BuildFromHardwareQueryCallable) {
     const SupportAnnotation h264 = caps.QueryVideoCodec(VideoCodec::H264Nvenc);
     (void)h264;
 
-    // HEVC must still be NotImplemented regardless of hardware.
-    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::HevcNvenc).level, SupportLevel::NotImplemented)
-        << "HEVC must remain NotImplemented even after real hardware query.";
+    // HEVC availability is now hardware-dependent (ValidUnvalidated when NVENC is
+    // present, NotImplemented when absent) — just verify it's queryable and never
+    // hard-Invalid.
+    const SupportAnnotation hevc = caps.QueryVideoCodec(VideoCodec::HevcNvenc);
+    EXPECT_FALSE(IsHardInvalid(hevc)) << "HEVC must be queryable (never hard-Invalid) after real hardware query.";
 }
 
 // -------------------------------------------------------------------------

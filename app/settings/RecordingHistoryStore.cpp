@@ -47,6 +47,8 @@ QString VideoCodecToString(recorder_core::VideoCodec c) {
         return QStringLiteral("av1");
     case recorder_core::VideoCodec::H264Nvenc:
         return QStringLiteral("h264");
+    case recorder_core::VideoCodec::HevcNvenc:
+        return QStringLiteral("hevc");
     }
     return QString();
 }
@@ -57,6 +59,8 @@ std::optional<recorder_core::VideoCodec> StringToVideoCodec(const QString& s) {
         return recorder_core::VideoCodec::Av1Nvenc;
     if (lower == QStringLiteral("h264") || lower == QStringLiteral("h264_nvenc"))
         return recorder_core::VideoCodec::H264Nvenc;
+    if (lower == QStringLiteral("hevc") || lower == QStringLiteral("hevc_nvenc") || lower == QStringLiteral("h265"))
+        return recorder_core::VideoCodec::HevcNvenc;
     return std::nullopt;
 }
 

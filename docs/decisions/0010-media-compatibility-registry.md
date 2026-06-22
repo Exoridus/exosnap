@@ -30,11 +30,17 @@ container × video-codec × audio-codec compatibility.
   blocked; a warning is surfaced in the UI. `Prohibited → Invalid`: hard block, must not
   appear in any UI picker and recording cannot start.
 
-**Pre-v1 behaviour change (HEVC):** MKV + HEVC + (any audio) previously reconciled to MKV + H264 + AAC
-(ad-hoc HEVC→H264 downgrade). Under the registry the reconciler falls through to the primary
-working path (AV1 + Opus) because no Recommended or Allowed entry exists for HEVC in any
-combination today. The old H264 downgrade was implicit; the new path is explicit and reversible
-once HEVC is implemented.
+**HEVC in MKV (0.7.0 — implemented):** MKV + HEVC + (Opus | AAC | PCM | FLAC) is classified
+`Allowed`. The engine path is complete: HEVC NVENC encode → Matroska `V_MPEGH/ISO/HEVC` with an
+`hvcC` codec-private record (ISO 14496-15 §8.3.3.1) and length-prefixed sample data. It maps to
+`ValidUnvalidated` in the CapabilitySet — user-selectable, recording not blocked, with an
+"implemented but not yet hardware-validated" warning; a live GPU smoke test on NVIDIA hardware
+gates promotion to `Recommended`/`Available`. The `HevcNvenc` video dimension is NVENC-gated:
+`CapabilityBuilder` downgrades it to `NotImplemented` when NVENC is absent, exactly like AV1/H.264.
+`ReconcileCodecs()` / `SanitizePresetConfig()` therefore **preserve** MKV + HEVC presets unchanged,
+replacing the former ad-hoc fall-through to AV1 + Opus (which existed only while no HEVC entry was
+`Allowed`). **MP4 + HEVC remains `Experimental`** pending the `hvc1` codec-tag verification (see
+the `hvc1`/`hev1` note below — a separate 0.7.0 remux slice).
 
 **Policy correction (MKV + H.264 + Opus):** This combination was initially classified
 `Prohibited` in the first registry implementation. That was incorrect: Matroska carries Opus
