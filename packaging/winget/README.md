@@ -39,7 +39,7 @@ cannot start. Do not remove the `Dependencies` block;
 
 ## Status
 
-- **0.4.0** — current manifest in this directory; to be submitted to `microsoft/winget-pkgs` for the v0.4.0 release. `InstallerSha256` and `ProductCode` are **placeholders** (all-zero SHA, null GUID) and must be filled from the official MSI build at release time — see `.workspace/release/0.4.0-release-checklist.md`.
-- **0.3.0** — earlier submission for the v0.3.0 release.
+- **0.6.0** — current manifest in this directory; ready to submit to `microsoft/winget-pkgs` for the v0.6.0 release. `InstallerSha256` (uppercase) and `ProductCode` (`{E8879CAA-…}`) are filled from the official 0.6.0 MSI build and pass `scripts/validate-winget-manifest.ps1`.
+- **0.4.0 / 0.3.0** — earlier releases; manifests superseded by 0.6.0.
 - **0.2.0** — earlier submission: https://github.com/microsoft/winget-pkgs/pull/387393
 - **0.1.0** — earlier submission: https://github.com/microsoft/winget-pkgs/pull/386449
