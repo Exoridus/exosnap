@@ -144,6 +144,9 @@ void MuxThread::Run() {
     sw_config_template.encode_height = encH;
     sw_config_template.frame_rate_num = m_state.config.frame_rate_num;
     sw_config_template.frame_rate_den = m_state.config.frame_rate_den;
+    // Color description (ADR 0032) — carried from RecorderConfig into the track's
+    // Colour element. Default SDR BT.709 limited-range.
+    sw_config_template.color = m_state.config.color;
     switch (m_state.config.audio_codec) {
     case AudioCodec::Opus:
         sw_config_template.audio_codec = StreamAudioCodec::Opus;

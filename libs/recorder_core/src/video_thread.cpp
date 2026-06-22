@@ -623,6 +623,27 @@ void VideoThread::Run() {
         background.RGBA.A = 1.0f;
         videoContext->VideoProcessorSetOutputBackgroundColor(videoProcessor.get(), FALSE, &background);
 
+        // Make the RGB->NV12 conversion deterministic (ADR 0032). Without an
+        // explicit color space the driver picks an implementation-defined
+        // matrix/range (BT.601 vs BT.709, full vs studio), so the same desktop
+        // could encode to subtly different colors on different GPUs and the
+        // container carried no color tags at all. Pin the input to full-range
+        // RGB (the desktop composite) and the NV12 output to studio-range
+        // BT.709 — the SDR HD standard the Matroska Colour element is tagged
+        // with (see color_metadata.h / RecorderConfig::color). Input and output
+        // ranges therefore agree, so there is no black-level mismatch.
+        D3D11_VIDEO_PROCESSOR_COLOR_SPACE inputColorSpace{};
+        inputColorSpace.Usage = 0;     // 0 = playback (full-precision conversion)
+        inputColorSpace.RGB_Range = 0; // 0 = full-range RGB (0-255)
+        inputColorSpace.Nominal_Range = D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255;
+        videoContext->VideoProcessorSetStreamColorSpace(videoProcessor.get(), 0, &inputColorSpace);
+
+        D3D11_VIDEO_PROCESSOR_COLOR_SPACE outputColorSpace{};
+        outputColorSpace.Usage = 0;
+        outputColorSpace.YCbCr_Matrix = 1;                                           // 1 = BT.709
+        outputColorSpace.Nominal_Range = D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235; // studio/limited
+        videoContext->VideoProcessorSetOutputColorSpace(videoProcessor.get(), &outputColorSpace);
+
         const RECT targetRect = {0, 0, static_cast<LONG>(encodeWidth), static_cast<LONG>(encodeHeight)};
         videoContext->VideoProcessorSetOutputTargetRect(videoProcessor.get(), TRUE, &targetRect);
 

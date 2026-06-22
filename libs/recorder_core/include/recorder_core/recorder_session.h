@@ -1,6 +1,7 @@
 #pragma once
 
 #include <recorder_core/audio_track_model.h>
+#include <recorder_core/color_metadata.h>
 
 #include "codec_types.h"
 #include "error_types.h"
@@ -224,6 +225,11 @@ struct RecorderConfig {
     AudioCodec audio_codec = AudioCodec::Opus;
     ChromaSubsampling chroma = ChromaSubsampling::Cs420;
     BitDepth bit_depth = BitDepth::Bit8;
+
+    // Color description for the encoded video (ADR 0032). Default SDR BT.709
+    // limited-range; written into the container and matched by the encoder-input
+    // color conversion. HDR fields stay unset until the HDR slice.
+    ColorMetadata color = ColorMetadata::Sdr709();
 
     // NVENC quality tier — maps to CQP values in the encoder (used for ConstantQuality mode).
     NvencQualityPreset nvenc_quality_preset = NvencQualityPreset::Balanced;
