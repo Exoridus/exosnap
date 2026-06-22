@@ -208,6 +208,33 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         // Clear codec_tag so the output muxer picks the correct FourCC for its
         // own container (MP4 and MKV use different tag spaces).
         out_st->codecpar->codec_tag = 0;
+
+        // Color tags — ensure the MP4 output carries a colour description (colr
+        // box + VUI signalling). avcodec_parameters_copy already copies the
+        // color_primaries / color_trc / color_space / color_range fields from
+        // the input AVCodecParameters, so if the source MKV was written with
+        // KaxVideoColour tags (ADR 0032) libavformat's Matroska demuxer will
+        // have populated them and the copy suffices. For older files or
+        // truncated containers where the demuxer returns UNSPECIFIED (0 / 2),
+        // apply the SDR Rec.709 limited-range fallback so the output MP4 is
+        // always explicitly tagged and players never have to guess.
+        if (out_st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            if (out_st->codecpar->color_primaries == AVCOL_PRI_UNSPECIFIED ||
+                out_st->codecpar->color_primaries == AVCOL_PRI_RESERVED0) {
+                out_st->codecpar->color_primaries = AVCOL_PRI_BT709;
+            }
+            if (out_st->codecpar->color_trc == AVCOL_TRC_UNSPECIFIED ||
+                out_st->codecpar->color_trc == AVCOL_TRC_RESERVED0) {
+                out_st->codecpar->color_trc = AVCOL_TRC_BT709;
+            }
+            if (out_st->codecpar->color_space == AVCOL_SPC_UNSPECIFIED ||
+                out_st->codecpar->color_space == AVCOL_SPC_RESERVED) {
+                out_st->codecpar->color_space = AVCOL_SPC_BT709;
+            }
+            if (out_st->codecpar->color_range == AVCOL_RANGE_UNSPECIFIED) {
+                out_st->codecpar->color_range = AVCOL_RANGE_MPEG;
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
