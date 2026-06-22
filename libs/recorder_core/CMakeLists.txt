@@ -16,6 +16,8 @@ if(NOT EXISTS "${_nvenc_header}")
         src/opus_audio_encoder.cpp
         src/pcm_audio_encoder.cpp
         src/flac_audio_encoder.cpp
+        src/output_format_audio_src.cpp
+        src/output_format_audio_src.h
         src/mic_meter_service.cpp
         src/loopback_meter_service.cpp
         include/recorder_core/mp4_remuxer.h
@@ -34,6 +36,7 @@ if(NOT EXISTS "${_nvenc_header}")
         Opus::opus
         FLAC::FLAC
         FFmpeg::mux
+        FFmpeg::swresample
         mfuuid.lib
         ole32.lib
         exosnap::warnings
@@ -62,6 +65,17 @@ if(NOT EXISTS "${_nvenc_header}")
         LIBRARIES recorder_core
     )
     target_include_directories(test_codec_private_readiness PRIVATE src)
+
+    # Two-phase worker shutdown wait (worker_join.h): guards against the
+    # max-recording-duration defect where the join budget started at recording
+    # START instead of STOP. Header-only logic exercised with real std::threads.
+    exosnap_add_gtest(
+        NAME test_worker_join
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_worker_join.cpp
+        LIBRARIES recorder_core
+    )
+    target_include_directories(test_worker_join PRIVATE src)
 
     exosnap_add_gtest(
         NAME test_opus_encoder
@@ -173,6 +187,16 @@ if(NOT EXISTS "${_nvenc_header}")
     )
     target_include_directories(test_mic_dsp_audio_src PRIVATE src include)
 
+    # ADR 0030 (0.6.0): OutputFormatAudioSrc resampling decorator (links swresample).
+    exosnap_add_gtest(
+        NAME test_output_format_audio_src
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_output_format_audio_src.cpp
+                src/output_format_audio_src.cpp
+        LIBRARIES FFmpeg::swresample
+    )
+    target_include_directories(test_output_format_audio_src PRIVATE src include)
+
     # test_mp4_remux_pipeline_flow: pure-logic tests; no FFmpeg runtime needed.
     exosnap_add_gtest(
         NAME test_mp4_remux_pipeline_flow
@@ -239,6 +263,8 @@ add_library(recorder_core STATIC
     src/rnnoise_denoiser.h
     src/mic_dsp_audio_src.cpp
     src/mic_dsp_audio_src.h
+    src/output_format_audio_src.cpp
+    src/output_format_audio_src.h
     src/wasapi_capture_src.cpp
     src/wasapi_loopback.cpp
     src/wasapi_loopback_src.cpp
@@ -284,6 +310,7 @@ target_link_libraries(recorder_core
         Matroska::matroska
         fdk-aac
         FFmpeg::mux
+        FFmpeg::swresample
         d3d11.lib
         d3dcompiler.lib
         dxgi.lib
@@ -322,6 +349,17 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_codec_private_readiness PRIVATE src)
+
+# Two-phase worker shutdown wait (worker_join.h): guards against the
+# max-recording-duration defect where the join budget started at recording
+# START instead of STOP. Header-only logic exercised with real std::threads.
+exosnap_add_gtest(
+    NAME test_worker_join
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_worker_join.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_worker_join PRIVATE src)
 
 exosnap_add_gtest(
     NAME test_opus_encoder
@@ -536,6 +574,16 @@ exosnap_add_gtest(
     LIBRARIES RNNoise::rnnoise
 )
 target_include_directories(test_mic_dsp_audio_src PRIVATE src include)
+
+# ADR 0030 (0.6.0): OutputFormatAudioSrc resampling decorator (links swresample).
+exosnap_add_gtest(
+    NAME test_output_format_audio_src
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_output_format_audio_src.cpp
+            src/output_format_audio_src.cpp
+    LIBRARIES FFmpeg::swresample
+)
+target_include_directories(test_output_format_audio_src PRIVATE src include)
 
 exosnap_add_gtest(
     NAME mixed_audio_src_tests

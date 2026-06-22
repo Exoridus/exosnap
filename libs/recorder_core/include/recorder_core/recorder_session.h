@@ -253,6 +253,26 @@ struct RecorderConfig {
     // Default 10 per the roadmap. Ignored when audio_codec != Opus.
     int opus_complexity = 10;
 
+    // ---------------------------------------------------------------------------
+    // Audio format model (ADR 0030 — 0.6.0)
+    // ---------------------------------------------------------------------------
+
+    // Target sample rate in Hz. Vetted set: 44100, 48000, 96000.
+    // Opus requires 48000 (enforced by Validate). Default 48000.
+    uint32_t audio_sample_rate = 48000;
+
+    // Target channel count. Vetted set: 1 (mono), 2 (stereo). Default 2.
+    uint32_t audio_channels = 2;
+
+    // Bit depth for lossless codecs (PCM, FLAC). Lossy codecs (Opus, AAC) ignore
+    // this field. PCM vetted: 16, 24, 32. FLAC vetted: 16, 24. Default 16.
+    uint32_t audio_bit_depth = 16;
+
+    // FLAC compression level [0, 8]. 0 = fastest / largest; 8 = slowest / smallest.
+    // Lossless at every level; only trades encode CPU vs. file size. Default 5.
+    // Ignored when audio_codec != Flac.
+    int flac_compression_level = 5;
+
     // Frame rate (numerator/denominator)
     uint32_t frame_rate_num = 60;
     uint32_t frame_rate_den = 1;

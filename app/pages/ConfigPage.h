@@ -39,9 +39,11 @@ class GlobalHotkeyService;
 namespace exosnap::ui::widgets {
 class CompareHint;
 class ExoCheckBox;
+class ExoSlider;
 class ExoToggle;
 class HotkeysSettingsPanel;
 class SettingsCardExpander;
+class SettingsPopoverRow;
 class VUMeterWidget;
 class WebcamSetupPanel;
 } // namespace exosnap::ui::widgets
@@ -192,7 +194,6 @@ class ConfigPage : public QWidget {
     void onSplitSizeModeChanged(int index);
     void updateSplitSizeSelection();
     void onCursorChanged();
-    void updateQualitySummary();
     void updateQualitySegmentSelection();
     void updateFrameRateSelection();
     void updateTimingSelection();
@@ -232,6 +233,8 @@ class ConfigPage : public QWidget {
     void onMicDeviceChanged(int index);
     void refreshMicDevices();
     void emitCurrentAudioSettings();
+    // Update codec-gated visibility for the four ADR 0030 audio format controls.
+    void updateAudioFormatControlVisibility();
 
     // Preset management handlers.
     void onSavePreset();
@@ -300,12 +303,10 @@ class ConfigPage : public QWidget {
     QPushButton* quality_segment_small_ = nullptr;
     QPushButton* quality_segment_balanced_ = nullptr;
     QPushButton* quality_segment_high_ = nullptr;
-    QLabel* quality_badge_label_ = nullptr;
-    QLabel* quality_settings_label_ = nullptr;
     QButtonGroup* timing_group_ = nullptr;
     QPushButton* timing_cfr_btn_ = nullptr;
     QPushButton* timing_vfr_btn_ = nullptr;
-    ui::widgets::ExoCheckBox* cursor_check_ = nullptr;
+    ui::widgets::ExoToggle* cursor_check_ = nullptr;
 
     QLabel* audio_summary_label_ = nullptr;
 
@@ -380,7 +381,6 @@ class ConfigPage : public QWidget {
     // Preset card widgets.
     QLabel* profile_status_label_ = nullptr;
     QLabel* preset_dirty_indicator_ = nullptr;
-    QLabel* preset_default_badge_ = nullptr;
     QPushButton* preset_save_btn_ = nullptr;
     QPushButton* preset_save_as_btn_ = nullptr;
     QToolButton* profile_overflow_btn_ = nullptr;
@@ -407,9 +407,6 @@ class ConfigPage : public QWidget {
     // SETTINGS-TIERS-R1 / D6: Expert mode toggle (ExoToggle in D6 header zone).
     ui::widgets::ExoToggle* expert_mode_toggle_ = nullptr;
     bool expert_mode_enabled_ = false;
-    // D6: Expert inline warn hint (amber), shown when Expert ON and no active search.
-    QLabel* expert_warn_label_ = nullptr;
-
     // Wave 2: split recording controls moved out of expander; now expert-gated section.
     QWidget* split_expert_section_ = nullptr;
 
@@ -417,16 +414,17 @@ class ConfigPage : public QWidget {
     QWidget* quality_row_widget_ = nullptr;    // the standard 3-segment quality row
     QWidget* quality_expert_widget_ = nullptr; // CQ spinbox row shown in expert mode
     QSpinBox* quality_cq_spin_ = nullptr;      // precision CQ input (range 1–51)
+    QLabel* quality_cq_tier_label_ = nullptr;  // S3: "· High / Balanced / Small / Custom" tier label
 
     // audio_separate_expander_ is null (Phase 1b); kept as no-op for compat.
     // output_split_expander_ removed in Wave 2; split_expert_section_ replaces it.
 
     // SETTINGS-TIERS-P3: presence + appearance controls (moved from AdvancedPage).
-    ui::widgets::ExoCheckBox* overlay_check_ = nullptr;
-    ui::widgets::ExoCheckBox* diagnostics_overlay_check_ = nullptr;
-    ui::widgets::ExoCheckBox* notifications_check_ = nullptr;
-    ui::widgets::ExoCheckBox* keep_in_tray_check_ = nullptr;
-    ui::widgets::ExoCheckBox* quick_controls_check_ = nullptr;
+    ui::widgets::ExoToggle* overlay_check_ = nullptr;
+    ui::widgets::ExoToggle* diagnostics_overlay_check_ = nullptr;
+    ui::widgets::ExoToggle* notifications_check_ = nullptr;
+    ui::widgets::ExoToggle* keep_in_tray_check_ = nullptr;
+    ui::widgets::ExoToggle* quick_controls_check_ = nullptr;
     // THEME-SLICE-1: theme picker (replaces accent_combo_).
     QButtonGroup* theme_button_group_ = nullptr;
     QWidget* theme_picker_widget_ = nullptr;
@@ -446,8 +444,9 @@ class ConfigPage : public QWidget {
 
     // PS-PHASE-C: Expert Audio section — mic gain, channel mode, bitrate, Opus params + placeholders.
     QWidget* audio_expert_section_ = nullptr;
-    // Mic-gain: QSlider (–12…+12 dB, step 1) + read-only dB label (Polish-R1: Slider per mockup).
-    QSlider* mic_gain_slider_ = nullptr;
+    // Mic-gain: ExoSlider (–12…+12 dB, step 1) + read-only dB label (Polish-R1: Slider per mockup).
+    // S3: upgraded from QSlider to ExoSlider for gradient groove + tick marks.
+    ui::widgets::ExoSlider* mic_gain_slider_ = nullptr;
     QLabel* mic_gain_db_label_ = nullptr;
     QComboBox* mic_channel_mode_combo_ = nullptr;
     QSpinBox* audio_bitrate_kbps_spin_ = nullptr;
@@ -467,6 +466,18 @@ class ConfigPage : public QWidget {
     QDoubleSpinBox* mic_agc_target_spin_ = nullptr;
     // Microphone RNNoise neural noise suppression (Audio v2 — 0.6.0). Bool only.
     ui::widgets::ExoCheckBox* mic_rnnoise_check_ = nullptr;
+    // S5: Collapsed mic post-processing popover row (HPF + Gate + AGC + RNNoise).
+    ui::widgets::SettingsPopoverRow* mic_post_processing_row_ = nullptr;
+
+    // Channel / sample-format model (ADR 0030 — 0.6.0).
+    QComboBox* audio_sample_rate_combo_ = nullptr;
+    QWidget* audio_sample_rate_row_ = nullptr;
+    QComboBox* audio_channels_combo_ = nullptr;
+    QWidget* audio_channels_row_ = nullptr;
+    QComboBox* audio_bit_depth_combo_ = nullptr;
+    QWidget* audio_bit_depth_row_ = nullptr;
+    QSpinBox* flac_compression_spin_ = nullptr;
+    QWidget* flac_compression_row_ = nullptr;
 
     // SETTINGS-SEARCH-R1: settings search box and match count label.
     QWidget* settings_search_pill_ = nullptr;

@@ -42,7 +42,11 @@ const QString& InfoHintIcon::hintText() const {
 void InfoHintIcon::enterEvent(QEnterEvent* event) {
     QToolButton::enterEvent(event);
     updateIcon(true);
-    QToolTip::showText(mapToGlobal(rect().center()), hint_text_, this);
+    // Hover tooltip is shown by Qt natively via setToolTip() — its internal
+    // positioning resolves the correct monitor under the cursor. The previous
+    // explicit QToolTip::showText(mapToGlobal(rect().center()), …) here computed a
+    // global point that, on a multi-monitor / mixed-DPI desktop, resolved to the
+    // wrong screen and popped the tooltip up on the edge of the primary display.
 }
 
 void InfoHintIcon::leaveEvent(QEvent* event) {

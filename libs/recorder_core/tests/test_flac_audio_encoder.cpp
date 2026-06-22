@@ -222,4 +222,84 @@ TEST(FlacAudioEncoder, Feed_MismatchedFormat_NoPacket) {
     EXPECT_EQ(frames, 0u);
 }
 
+// ---------------------------------------------------------------------------
+// ADR 0030: SetBitDepth — 24-bit
+// ---------------------------------------------------------------------------
+
+TEST(FlacAudioEncoder, SetBitDepth24_CodecPrivateStartsWithFlacMarker) {
+    FlacAudioEncoder enc;
+    enc.SetBitDepth(24);
+    EXPECT_EQ(enc.BitsPerSample(), 24u);
+    std::string err;
+    ASSERT_TRUE(enc.Init(kSampleRate, kChannels, err)) << err;
+
+    const auto cp = enc.CodecPrivateBytes();
+    ASSERT_GE(cp.size(), 42u); // fLaC marker + STREAMINFO
+    EXPECT_EQ(cp[0], kFlacMarker[0]);
+    EXPECT_EQ(cp[1], kFlacMarker[1]);
+    EXPECT_EQ(cp[2], kFlacMarker[2]);
+    EXPECT_EQ(cp[3], kFlacMarker[3]);
+}
+
+TEST(FlacAudioEncoder, SetBitDepth24_ProducesFrames) {
+    FlacAudioEncoder enc;
+    enc.SetBitDepth(24);
+    std::string err;
+    ASSERT_TRUE(enc.Init(kSampleRate, kChannels, err)) << err;
+
+    uint64_t frames = 0;
+    auto packets = EncodeSignal(enc, frames, kSampleRate, 1024, 0.5f);
+    std::vector<EncodedAudioPacket> drain;
+    enc.Flush(drain);
+    for (auto& p : drain)
+        packets.push_back(std::move(p));
+
+    ASSERT_FALSE(packets.empty()) << "FLAC-24 encoder produced no frames";
+}
+
+// ---------------------------------------------------------------------------
+// ADR 0030: SetCompressionLevel — non-default level (level 0 = fastest)
+// ---------------------------------------------------------------------------
+
+TEST(FlacAudioEncoder, SetCompressionLevel0_ProducesFrames) {
+    FlacAudioEncoder enc;
+    enc.SetCompressionLevel(0); // fastest, least compression
+    std::string err;
+    ASSERT_TRUE(enc.Init(kSampleRate, kChannels, err)) << err;
+
+    const auto cp = enc.CodecPrivateBytes();
+    ASSERT_GE(cp.size(), 4u);
+    EXPECT_EQ(cp[0], kFlacMarker[0]);
+
+    uint64_t frames = 0;
+    auto packets = EncodeSignal(enc, frames, kSampleRate / 2, 4096, 0.3f);
+    std::vector<EncodedAudioPacket> drain;
+    enc.Flush(drain);
+    for (auto& p : drain)
+        packets.push_back(std::move(p));
+
+    ASSERT_FALSE(packets.empty()) << "FLAC level-0 encoder produced no frames";
+}
+
+// ---------------------------------------------------------------------------
+// ADR 0030: Float32ToInt static helper
+// ---------------------------------------------------------------------------
+
+TEST(FlacAudioEncoder, Float32ToInt_16bit_SameAsFloat32ToS16) {
+    EXPECT_EQ(FlacAudioEncoder::Float32ToInt(1.0f, 16), FlacAudioEncoder::Float32ToS16(1.0f));
+    EXPECT_EQ(FlacAudioEncoder::Float32ToInt(-1.0f, 16), FlacAudioEncoder::Float32ToS16(-1.0f));
+    EXPECT_EQ(FlacAudioEncoder::Float32ToInt(0.0f, 16), 0);
+}
+
+TEST(FlacAudioEncoder, Float32ToInt_24bit_FullScale) {
+    EXPECT_EQ(FlacAudioEncoder::Float32ToInt(1.0f, 24), 8388607);
+    EXPECT_EQ(FlacAudioEncoder::Float32ToInt(-1.0f, 24), -8388607);
+    EXPECT_EQ(FlacAudioEncoder::Float32ToInt(0.0f, 24), 0);
+}
+
+TEST(FlacAudioEncoder, Float32ToInt_24bit_ClampsOutOfRange) {
+    EXPECT_EQ(FlacAudioEncoder::Float32ToInt(2.0f, 24), 8388607);
+    EXPECT_EQ(FlacAudioEncoder::Float32ToInt(-3.0f, 24), -8388607);
+}
+
 } // namespace

@@ -5,6 +5,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDoubleSpinBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -19,6 +20,8 @@
 #include "pages/ConfigPage.h"
 #include "ui/widgets/CameraPreview.h"
 #include "ui/widgets/ExoCheckBox.h"
+#include "ui/widgets/ExoToggle.h"
+#include "ui/widgets/SettingsPopoverRow.h"
 #include "ui/widgets/VUMeterWidget.h"
 #include "ui/widgets/WebcamSetupPanel.h"
 
@@ -497,7 +500,7 @@ TEST_F(ConfigPageTest, VideoQualityChange_EmitsVideoSettingsChanged) {
     EXPECT_TRUE(emitted);
 }
 
-TEST_F(ConfigPageTest, QualitySegmentClick_EachSegmentUpdatesModelAndSummary) {
+TEST_F(ConfigPageTest, QualitySegmentClick_EachSegmentUpdatesModel) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     VideoSettingsModel changed;
@@ -514,33 +517,22 @@ TEST_F(ConfigPageTest, QualitySegmentClick_EachSegmentUpdatesModelAndSummary) {
     ASSERT_NE(balanced_segment, nullptr);
     ASSERT_NE(high_segment, nullptr);
 
-    auto* settings_label = page.findChild<QLabel*>(QStringLiteral("qualitySettingsLabel"));
-    auto* badge_label = page.findChild<QLabel*>(QStringLiteral("qualityBadgeLabel"));
-    ASSERT_NE(settings_label, nullptr);
-    ASSERT_NE(badge_label, nullptr);
-
     // Default quality is High, so each click below is a real change and emits.
     small_segment->click();
     EXPECT_EQ(changed.quality, recorder_core::NvencQualityPreset::Small);
     EXPECT_TRUE(small_segment->isChecked());
     EXPECT_TRUE(small_segment->property("qualitySegmentSelected").toBool());
     EXPECT_FALSE(high_segment->isChecked());
-    EXPECT_TRUE(settings_label->text().contains(QStringLiteral("CQ 30")));
-    EXPECT_EQ(badge_label->text(), QStringLiteral("Smaller files"));
 
     balanced_segment->click();
     EXPECT_EQ(changed.quality, recorder_core::NvencQualityPreset::Balanced);
     EXPECT_TRUE(balanced_segment->isChecked());
     EXPECT_FALSE(small_segment->isChecked());
-    EXPECT_TRUE(settings_label->text().contains(QStringLiteral("CQ 24")));
-    EXPECT_EQ(badge_label->text(), QStringLiteral("General purpose"));
 
     high_segment->click();
     EXPECT_EQ(changed.quality, recorder_core::NvencQualityPreset::High);
     EXPECT_TRUE(high_segment->isChecked());
     EXPECT_FALSE(balanced_segment->isChecked());
-    EXPECT_TRUE(settings_label->text().contains(QStringLiteral("CQ 19")));
-    EXPECT_EQ(badge_label->text(), QStringLiteral("Sharper · larger files"));
 
     EXPECT_EQ(emit_count, 3);
 }
@@ -705,39 +697,22 @@ TEST_F(ConfigPageTest, TokenHelpToggle_HiddenByDefault) {
     EXPECT_EQ(toggle->text(), QStringLiteral("Show token reference"));
 }
 
-TEST_F(ConfigPageTest, QualityBadgeLabel_ExistsAndNotEmpty) {
+TEST_F(ConfigPageTest, QualitySegment_HasSimpleLabels) {
+    // Caption labels removed; segment labels are now "Small"/"Balanced"/"High" without CQ numbers.
     ConfigPage page(output_defaults_, video_defaults_);
 
-    auto* label = page.findChild<QLabel*>(QStringLiteral("qualityBadgeLabel"));
-    ASSERT_NE(label, nullptr);
-    EXPECT_FALSE(label->text().isEmpty());
-}
-
-TEST_F(ConfigPageTest, QualitySettingsLabel_ExistsAndNotEmpty) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    auto* label = page.findChild<QLabel*>(QStringLiteral("qualitySettingsLabel"));
-    ASSERT_NE(label, nullptr);
-    EXPECT_FALSE(label->text().isEmpty());
-}
-
-TEST_F(ConfigPageTest, QualitySettingsLabel_UpdatesOnSetVideoSettings) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    VideoSettingsModel high;
-    high.quality = recorder_core::NvencQualityPreset::High;
-    high.cfr = true;
-    high.capture_cursor = false;
-    page.setVideoSettings(high);
-
-    auto* settings_label = page.findChild<QLabel*>(QStringLiteral("qualitySettingsLabel"));
-    ASSERT_NE(settings_label, nullptr);
-    EXPECT_TRUE(settings_label->text().contains(QStringLiteral("CQ 19")));
-    EXPECT_TRUE(settings_label->text().contains(QStringLiteral("Cursor off")));
-
-    auto* badge_label = page.findChild<QLabel*>(QStringLiteral("qualityBadgeLabel"));
-    ASSERT_NE(badge_label, nullptr);
-    EXPECT_EQ(badge_label->text(), QStringLiteral("Sharper · larger files"));
+    auto* small_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentSmall"));
+    auto* balanced_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentBalanced"));
+    auto* high_segment = page.findChild<QPushButton*>(QStringLiteral("qualitySegmentHigh"));
+    ASSERT_NE(small_segment, nullptr);
+    ASSERT_NE(balanced_segment, nullptr);
+    ASSERT_NE(high_segment, nullptr);
+    EXPECT_EQ(small_segment->text(), QStringLiteral("Small"));
+    EXPECT_EQ(balanced_segment->text(), QStringLiteral("Balanced"));
+    EXPECT_EQ(high_segment->text(), QStringLiteral("High"));
+    // Caption labels are gone.
+    EXPECT_EQ(page.findChild<QLabel*>(QStringLiteral("qualityBadgeLabel")), nullptr);
+    EXPECT_EQ(page.findChild<QLabel*>(QStringLiteral("qualitySettingsLabel")), nullptr);
 }
 
 // ── SETTINGS-AUDIO-METER-R1: live mono meters in the Settings Audio card ─────
@@ -1267,9 +1242,11 @@ TEST_F(ConfigPageTest, PresetDirtyIndicator_HasStableObjectName) {
     EXPECT_NE(page.findChild<QLabel*>(QStringLiteral("presetDirtyIndicator")), nullptr);
 }
 
-TEST_F(ConfigPageTest, PresetDefaultBadge_HasStableObjectName) {
+// S1-REDESIGN: presetDefaultBadge removed (redundant — combo already shows the name).
+TEST_F(ConfigPageTest, PresetDefaultBadge_IsRemoved) {
     ConfigPage page(output_defaults_, video_defaults_);
-    EXPECT_NE(page.findChild<QLabel*>(QStringLiteral("presetDefaultBadge")), nullptr);
+    EXPECT_EQ(page.findChild<QLabel*>(QStringLiteral("presetDefaultBadge")), nullptr)
+        << "presetDefaultBadge was removed in S1-redesign; it must not exist";
 }
 
 TEST_F(ConfigPageTest, PresetManageButton_HasStableObjectName) {
@@ -1318,22 +1295,23 @@ TEST_F(ConfigPageTest, SetPresetOptions_MarkesDefaultWithStar_WhenNotSelected) {
     EXPECT_FALSE(combo->itemText(1).contains(QStringLiteral("★")));
 }
 
-TEST_F(ConfigPageTest, SetPresetOptions_ShowsDefaultBadge_WhenSelectedIsDefault) {
+// S1-REDESIGN: the two badge visibility tests below are replaced by a no-badge assertion.
+// The "default" state is now signalled only via a "★" suffix in the combo item text.
+TEST_F(ConfigPageTest, SetPresetOptions_SelectedIsDefault_NoBadgeWidget) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     ConfigPage::ProfileOption p;
     p.id = QStringLiteral("dflt");
     p.label = QStringLiteral("My Preset");
 
-    // Selected == default_id → default badge visible.
     page.setPresetOptions({p}, QStringLiteral("dflt"), QStringLiteral("dflt"), false);
 
-    auto* badge = page.findChild<QLabel*>(QStringLiteral("presetDefaultBadge"));
-    ASSERT_NE(badge, nullptr);
-    EXPECT_FALSE(badge->isHidden()) << "Default badge must be visible when selected preset is the default";
+    // Badge widget was removed in S1-redesign.
+    EXPECT_EQ(page.findChild<QLabel*>(QStringLiteral("presetDefaultBadge")), nullptr)
+        << "presetDefaultBadge must not exist (removed in S1-redesign)";
 }
 
-TEST_F(ConfigPageTest, SetPresetOptions_HidesDefaultBadge_WhenSelectedIsNotDefault) {
+TEST_F(ConfigPageTest, SetPresetOptions_SelectedIsNotDefault_NoBadgeWidget) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     ConfigPage::ProfileOption dflt;
@@ -1345,9 +1323,9 @@ TEST_F(ConfigPageTest, SetPresetOptions_HidesDefaultBadge_WhenSelectedIsNotDefau
 
     page.setPresetOptions({dflt, other}, QStringLiteral("o"), QStringLiteral("d"), false);
 
-    auto* badge = page.findChild<QLabel*>(QStringLiteral("presetDefaultBadge"));
-    ASSERT_NE(badge, nullptr);
-    EXPECT_TRUE(badge->isHidden()) << "Default badge must be hidden when selected preset is not the default";
+    // Badge widget was removed in S1-redesign.
+    EXPECT_EQ(page.findChild<QLabel*>(QStringLiteral("presetDefaultBadge")), nullptr)
+        << "presetDefaultBadge must not exist (removed in S1-redesign)";
 }
 
 TEST_F(ConfigPageTest, SetPresetOptions_DirtyTrue_ShowsDirtyIndicatorAndEnablesSave) {
@@ -1716,20 +1694,20 @@ TEST_F(ConfigPageTest, PresenceCard_CardTitleVisible) {
     EXPECT_TRUE(HasLabelText(page, QStringLiteral("Presence"))) << "Settings must contain a Presence card title";
 }
 
-TEST_F(ConfigPageTest, PresenceCard_AllCheckboxesExist) {
+TEST_F(ConfigPageTest, PresenceCard_AllTogglesExist) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    // ExoCheckBox inherits QAbstractButton (not QCheckBox), so use the typed helper.
-    EXPECT_TRUE(HasExoCheckText(page, QStringLiteral("Show on-screen status overlay during recording")))
-        << "Recording overlay ExoCheckBox missing";
-    EXPECT_TRUE(HasExoCheckText(page, QStringLiteral("Show live diagnostics on the recorded monitor during recording")))
-        << "Diagnostics overlay ExoCheckBox missing";
-    EXPECT_TRUE(HasExoCheckText(page, QStringLiteral("Show on-screen notification toasts")))
-        << "Notifications ExoCheckBox missing";
-    EXPECT_TRUE(HasExoCheckText(page, QStringLiteral("Keep running in tray when window closed")))
-        << "Close-to-tray ExoCheckBox missing";
-    EXPECT_TRUE(HasExoCheckText(page, QStringLiteral("Show quick-control pill during recording")))
-        << "Quick controls ExoCheckBox missing";
+    // Presence rows use ExoToggle (right-aligned pill), found by objectName.
+    EXPECT_NE(page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("overlayCheck")), nullptr)
+        << "Recording overlay ExoToggle missing";
+    EXPECT_NE(page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("diagnosticsOverlayCheck")), nullptr)
+        << "Diagnostics overlay ExoToggle missing";
+    EXPECT_NE(page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("notificationsCheck")), nullptr)
+        << "Notifications ExoToggle missing";
+    EXPECT_NE(page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("keepInTrayCheck")), nullptr)
+        << "Close-to-tray ExoToggle missing";
+    EXPECT_NE(page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("quickControlsCheck")), nullptr)
+        << "Quick controls ExoToggle missing";
 }
 
 TEST_F(ConfigPageTest, PresenceCard_SetShowOverlay_UpdatesCheckState) {
@@ -1737,9 +1715,9 @@ TEST_F(ConfigPageTest, PresenceCard_SetShowOverlay_UpdatesCheckState) {
 
     page.setShowOverlay(false);
 
-    auto* cb = FindExoCheck(page, QStringLiteral("Show on-screen status overlay during recording"));
-    ASSERT_NE(cb, nullptr) << "Recording overlay ExoCheckBox not found";
-    EXPECT_FALSE(cb->isChecked()) << "setShowOverlay(false) must uncheck the control";
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("overlayCheck"));
+    ASSERT_NE(toggle, nullptr) << "Recording overlay ExoToggle not found";
+    EXPECT_FALSE(toggle->isOn()) << "setShowOverlay(false) must turn off the toggle";
 }
 
 TEST_F(ConfigPageTest, PresenceCard_SetShowOverlay_DoesNotEmitSignal) {
@@ -1764,9 +1742,9 @@ TEST_F(ConfigPageTest, PresenceCard_ShowOverlayToggle_EmitsSignal) {
         emitted_value = show;
     });
 
-    auto* cb = FindExoCheck(page, QStringLiteral("Show on-screen status overlay during recording"));
-    ASSERT_NE(cb, nullptr) << "Recording overlay ExoCheckBox not found";
-    cb->setChecked(false); // user toggling triggers toggled() → signal
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("overlayCheck"));
+    ASSERT_NE(toggle, nullptr) << "Recording overlay ExoToggle not found";
+    toggle->setOn(false); // user toggling triggers toggled() → signal
     EXPECT_TRUE(emitted) << "showOverlayChanged must be emitted on user toggle";
     EXPECT_FALSE(emitted_value);
 }
@@ -1776,9 +1754,9 @@ TEST_F(ConfigPageTest, PresenceCard_SetKeepRunningInTray_UpdatesCheckState) {
 
     page.setKeepRunningInTray(true);
 
-    auto* cb = FindExoCheck(page, QStringLiteral("Keep running in tray when window closed"));
-    ASSERT_NE(cb, nullptr) << "Close-to-tray ExoCheckBox not found";
-    EXPECT_TRUE(cb->isChecked()) << "setKeepRunningInTray(true) must check the control";
+    auto* toggle = page.findChild<ui::widgets::ExoToggle*>(QStringLiteral("keepInTrayCheck"));
+    ASSERT_NE(toggle, nullptr) << "Close-to-tray ExoToggle not found";
+    EXPECT_TRUE(toggle->isOn()) << "setKeepRunningInTray(true) must turn on the toggle";
 }
 
 TEST_F(ConfigPageTest, AppearanceCard_CardTitleVisible) {
@@ -2064,6 +2042,122 @@ TEST_F(ConfigPageTest, SettingsSearch_ClearAfterDeveloperMatch_HidesHintShowsGat
     auto* dev_card = page.findChild<QWidget*>(QStringLiteral("settingsDeveloperCard"));
     ASSERT_NE(dev_card, nullptr);
     EXPECT_TRUE(dev_card->isHidden()) << "Developer card must revert to hidden state after clearing search";
+}
+
+// ── S5: SettingsPopoverRow unit tests ────────────────────────────────────────
+
+class SettingsPopoverRowTest : public ::testing::Test {
+  protected:
+    static void SetUpTestSuite() {
+        EnsureApplication();
+    }
+};
+
+TEST_F(SettingsPopoverRowTest, ConstructsWithLabel) {
+    ui::widgets::SettingsPopoverRow row(QStringLiteral("Test row"));
+    const auto labels = row.findChildren<QLabel*>();
+    bool found = false;
+    for (const auto* lbl : labels) {
+        if (lbl->text() == QStringLiteral("Test row")) {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "Row label must appear in SettingsPopoverRow";
+}
+
+TEST_F(SettingsPopoverRowTest, CogButtonExists) {
+    ui::widgets::SettingsPopoverRow row(QStringLiteral("Test row"));
+    auto* cog = row.findChild<QToolButton*>(QStringLiteral("settingsPopoverCog"));
+    ASSERT_NE(cog, nullptr) << "SettingsPopoverRow must contain a cog QToolButton";
+    EXPECT_TRUE(cog->isEnabled());
+}
+
+TEST_F(SettingsPopoverRowTest, PopoverContentLayout_AcceptsSubControl) {
+    ui::widgets::SettingsPopoverRow row(QStringLiteral("Mic post-processing"));
+    auto* layout = row.popoverContentLayout();
+    ASSERT_NE(layout, nullptr);
+
+    auto* sub_check = new QCheckBox(QStringLiteral("High-pass filter"));
+    sub_check->setObjectName(QStringLiteral("testHpfCheck"));
+    layout->addWidget(sub_check);
+
+    // The sub-control must be findable as a descendant of the row.
+    auto* found = row.findChild<QCheckBox*>(QStringLiteral("testHpfCheck"));
+    ASSERT_NE(found, nullptr) << "Sub-control added to popoverContentLayout must be a descendant of the row";
+}
+
+TEST_F(SettingsPopoverRowTest, SetStatusText_ShowsAndHidesLabel) {
+    ui::widgets::SettingsPopoverRow row(QStringLiteral("Microphone post-processing"));
+
+    row.setStatusText(QStringLiteral("High-pass \xC2\xB7 Gate"));
+    const auto labels = row.findChildren<QLabel*>();
+    bool found_status = false;
+    for (const auto* lbl : labels) {
+        // Use !isHidden() rather than isVisible(): in headless tests the row widget
+        // is never show()n, so isVisible() checks the full ancestor chain and returns
+        // false even when the label's own hidden flag is cleared.
+        if (lbl->text() == QStringLiteral("High-pass \xC2\xB7 Gate") && !lbl->isHidden()) {
+            found_status = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found_status) << "setStatusText must un-hide the status label with the given text";
+
+    // Setting empty string must hide it.
+    row.setStatusText(QString());
+    bool still_unhidden = false;
+    for (const auto* lbl : row.findChildren<QLabel*>()) {
+        if (lbl->text() == QStringLiteral("High-pass \xC2\xB7 Gate") && !lbl->isHidden()) {
+            still_unhidden = true;
+            break;
+        }
+    }
+    EXPECT_FALSE(still_unhidden) << "setStatusText(empty) must hide the status label";
+}
+
+// ── S5: ConfigPage integration — sub-controls still findable by objectName ───
+
+TEST_F(ConfigPageTest, S5_MicPostProcessing_SubControlsStillFindableByObjectName) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // All four mic DSP controls must still exist (reparented into popover, not deleted).
+    EXPECT_NE(page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micHpfCheck")), nullptr)
+        << "micHpfCheck must still exist after S5 reparenting";
+    EXPECT_NE(page.findChild<QDoubleSpinBox*>(QStringLiteral("micHpfCutoffSpin")), nullptr)
+        << "micHpfCutoffSpin must still exist after S5 reparenting";
+    EXPECT_NE(page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micGateCheck")), nullptr)
+        << "micGateCheck must still exist after S5 reparenting";
+    EXPECT_NE(page.findChild<QDoubleSpinBox*>(QStringLiteral("micGateThresholdSpin")), nullptr)
+        << "micGateThresholdSpin must still exist after S5 reparenting";
+    EXPECT_NE(page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micAgcCheck")), nullptr)
+        << "micAgcCheck must still exist after S5 reparenting";
+    EXPECT_NE(page.findChild<QDoubleSpinBox*>(QStringLiteral("micAgcTargetSpin")), nullptr)
+        << "micAgcTargetSpin must still exist after S5 reparenting";
+    EXPECT_NE(page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micRnnoiseCheck")), nullptr)
+        << "micRnnoiseCheck must still exist after S5 reparenting";
+}
+
+TEST_F(ConfigPageTest, S5_LimiterControls_StillFindableByObjectName) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    EXPECT_NE(page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("limiterCheck")), nullptr)
+        << "limiterCheck must still exist after S5 reparenting";
+    EXPECT_NE(page.findChild<QDoubleSpinBox*>(QStringLiteral("limiterCeilingSpin")), nullptr)
+        << "limiterCeilingSpin must still exist after S5 reparenting";
+}
+
+TEST_F(ConfigPageTest, S5_SplitControls_StillFindableByObjectName) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    EXPECT_NE(page.findChild<QComboBox*>(QStringLiteral("splitModeCombo")), nullptr)
+        << "splitModeCombo must still exist after S5 reparenting";
+    EXPECT_NE(page.findChild<QComboBox*>(QStringLiteral("splitSizeModeCombo")), nullptr)
+        << "splitSizeModeCombo must still exist after S5 reparenting";
+    EXPECT_NE(page.findChild<QSpinBox*>(QStringLiteral("splitCustomMinutesSpin")), nullptr)
+        << "splitCustomMinutesSpin must still exist after S5 reparenting";
+    EXPECT_NE(page.findChild<QSpinBox*>(QStringLiteral("splitCustomSizeSpin")), nullptr)
+        << "splitCustomSizeSpin must still exist after S5 reparenting";
 }
 
 } // namespace

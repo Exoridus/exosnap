@@ -212,10 +212,11 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
             }
 
             auto& as = libebml::GetChild<libmatroska::KaxTrackAudio>(aud);
-            libebml::GetChild<libmatroska::KaxAudioSamplingFreq>(as).SetValue(48000.0);
-            libebml::GetChild<libmatroska::KaxAudioChannels>(as).SetValue(2);
+            libebml::GetChild<libmatroska::KaxAudioSamplingFreq>(as).SetValue(
+                static_cast<double>(m_config.audio_sample_rate));
+            libebml::GetChild<libmatroska::KaxAudioChannels>(as).SetValue(m_config.audio_channels);
             if (m_config.audio_codec == StreamAudioCodec::Pcm || m_config.audio_codec == StreamAudioCodec::Flac) {
-                libebml::GetChild<libmatroska::KaxAudioBitDepth>(as).SetValue(16);
+                libebml::GetChild<libmatroska::KaxAudioBitDepth>(as).SetValue(m_config.audio_bit_depth);
             }
             aud.SetGlobalTimecodeScale(kTimecodeScaleNs);
             m_track_entries.push_back(&aud);

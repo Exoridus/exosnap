@@ -689,5 +689,263 @@ TEST(AudioEncodingPreset, StoreRoundTrip_MicRnnoise) {
     QFile::remove(path);
 }
 
+// ===========================================================================
+// Channel / sample-format model (ADR 0030 — 0.6.0)
+// ===========================================================================
+
+// --- Default values ---
+
+TEST(AudioEncodingPreset, DefaultPreset_FormatModel_Defaults) {
+    const RecordingPreset p = MakeDefaultPreset();
+    EXPECT_EQ(p.config.audio.audio_sample_rate, 48000u);
+    EXPECT_EQ(p.config.audio.audio_channels, 2u);
+    EXPECT_EQ(p.config.audio.audio_bit_depth, 16u);
+    EXPECT_EQ(p.config.audio.flac_compression_level, 5);
+}
+
+// --- SanitizePresetConfig ---
+
+TEST(AudioEncodingPreset, Sanitize_OpusSnapsRateTo48k) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.audio_codec = capability::AudioCodec::Opus;
+    cfg.audio.audio_sample_rate = 44100u;
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_EQ(sanitized.audio.audio_sample_rate, 48000u);
+}
+
+TEST(AudioEncodingPreset, Sanitize_PcmAllows44100) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.audio_codec = capability::AudioCodec::Pcm;
+    cfg.audio.audio_sample_rate = 44100u;
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_EQ(sanitized.audio.audio_sample_rate, 44100u);
+}
+
+TEST(AudioEncodingPreset, Sanitize_PcmAllows24Bit) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.audio_codec = capability::AudioCodec::Pcm;
+    cfg.audio.audio_bit_depth = 24u;
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_EQ(sanitized.audio.audio_bit_depth, 24u);
+}
+
+TEST(AudioEncodingPreset, Sanitize_FlacRejects32BitFallsBackTo16) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.audio_codec = capability::AudioCodec::Flac;
+    cfg.audio.audio_bit_depth = 32u; // not valid for FLAC
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_EQ(sanitized.audio.audio_bit_depth, 16u);
+}
+
+TEST(AudioEncodingPreset, Sanitize_LossyNormalizesDepthTo16) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.audio_codec = capability::AudioCodec::AacMf;
+    cfg.audio.audio_bit_depth = 24u; // ignored for lossy
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_EQ(sanitized.audio.audio_bit_depth, 16u);
+}
+
+TEST(AudioEncodingPreset, Sanitize_InvalidChannelsFallsBackTo2) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.audio_channels = 6u; // not in {1, 2}
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_EQ(sanitized.audio.audio_channels, 2u);
+}
+
+TEST(AudioEncodingPreset, Sanitize_InvalidRateFallsBackTo48k) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.audio_codec = capability::AudioCodec::Pcm;
+    cfg.audio.audio_sample_rate = 22050u; // not in vetted set
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_EQ(sanitized.audio.audio_sample_rate, 48000u);
+}
+
+TEST(AudioEncodingPreset, Sanitize_FlacLevelClampsAbove8To8) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.flac_compression_level = 99;
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_EQ(sanitized.audio.flac_compression_level, 8);
+}
+
+TEST(AudioEncodingPreset, Sanitize_FlacLevelClampsBelow0To0) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.audio.flac_compression_level = -5;
+    const auto sanitized = SanitizePresetConfig(cfg);
+    EXPECT_EQ(sanitized.audio.flac_compression_level, 0);
+}
+
+// --- NormalizedConfigEquals / ConfigDirtyEquivalent dirty-tracking ---
+
+TEST(AudioEncodingPreset, NormalizedEquals_DifferentSampleRate_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.audio_sample_rate = 44100u;
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+TEST(AudioEncodingPreset, NormalizedEquals_DifferentChannels_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.audio_channels = 1u;
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+TEST(AudioEncodingPreset, NormalizedEquals_DifferentBitDepth_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.audio_bit_depth = 24u;
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+TEST(AudioEncodingPreset, NormalizedEquals_DifferentFlacLevel_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.flac_compression_level = 2;
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+}
+
+TEST(AudioEncodingPreset, DirtyEquivalent_DifferentSampleRate_NotEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.audio_sample_rate = 96000u;
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(AudioEncodingPreset, DirtyEquivalent_DifferentChannels_NotEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.audio_channels = 1u;
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(AudioEncodingPreset, DirtyEquivalent_DifferentBitDepth_NotEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.audio_bit_depth = 24u;
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+TEST(AudioEncodingPreset, DirtyEquivalent_DifferentFlacLevel_NotEquivalent) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    RecordingPresetConfig b = a;
+    b.audio.flac_compression_level = 0;
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+// --- Store round-trip ---
+
+TEST(AudioEncodingPreset, StoreRoundTrip_FormatModelAllFourFields) {
+    const QString path = UniqueTempPath();
+    RecordingPresetStore store(path);
+
+    RecordingPreset p = MakeDefaultPreset();
+    // Use PCM so bit_depth=24 is valid.
+    p.config.output.audio_codec = capability::AudioCodec::Pcm;
+    p.config.audio.audio_sample_rate = 44100u;
+    p.config.audio.audio_channels = 1u;
+    p.config.audio.audio_bit_depth = 24u;
+    p.config.audio.flac_compression_level = 3;
+    store.Save({p}, std::string(kDefaultPresetId), std::string(kDefaultPresetId));
+
+    const auto state = store.Load();
+    ASSERT_FALSE(state.presets.empty());
+    const auto& loaded = state.presets.front().config.audio;
+    EXPECT_EQ(loaded.audio_sample_rate, 44100u);
+    EXPECT_EQ(loaded.audio_channels, 1u);
+    EXPECT_EQ(loaded.audio_bit_depth, 24u);
+    EXPECT_EQ(loaded.flac_compression_level, 3);
+    QFile::remove(path);
+}
+
+TEST(AudioEncodingPreset, StoreRoundTrip_FormatModel_DefaultsOnMissingKeys) {
+    // Write a preset TOML that omits the new format-model keys.
+    // The store must fall back to defaults: 48000/2/16/5.
+    const QString path = UniqueTempPath();
+    // Reuse the TOML fixture from StoreLoad_MissingKeys_FallsBackToDefaults but
+    // update the schema_version and verify only format-model fields.
+    const QString toml = QStringLiteral("schema_version = %1\n"
+                                        "selected_id = \"preset.default\"\n"
+                                        "default_id  = \"preset.default\"\n"
+                                        "\n"
+                                        "[[presets]]\n"
+                                        "id   = \"preset.default\"\n"
+                                        "name = \"Default\"\n"
+                                        "countdown_seconds = 0\n"
+                                        "[presets.capture]\n"
+                                        "kind = \"display\"\n"
+                                        "display_key = \"\"\n"
+                                        "window_key  = \"\"\n"
+                                        "has_region  = false\n"
+                                        "region_x = 0\n"
+                                        "region_y = 0\n"
+                                        "region_w = 0\n"
+                                        "region_h = 0\n"
+                                        "region_display_key = \"\"\n"
+                                        "[presets.output]\n"
+                                        "folder = \"\"\n"
+                                        "naming_pattern = \"\"\n"
+                                        "container = \"mkv\"\n"
+                                        "video_codec = \"av1\"\n"
+                                        "audio_codec = \"opus\"\n"
+                                        "resolution_mode = \"native\"\n"
+                                        "custom_width = 0\n"
+                                        "custom_height = 0\n"
+                                        "fit_mode = \"contain\"\n"
+                                        "split_mode = \"off\"\n"
+                                        "split_custom_minutes = 30\n"
+                                        "[presets.video]\n"
+                                        "quality = \"balanced\"\n"
+                                        "rate_control = \"cq\"\n"
+                                        "bitrate_kbps = 20000\n"
+                                        "cfr = true\n"
+                                        "capture_cursor = true\n"
+                                        "frame_rate_num = 60\n"
+                                        "frame_rate_den = 1\n"
+                                        "[presets.audio]\n"
+                                        "target_kind = \"display\"\n"
+                                        "mic_channel_mode = \"auto\"\n"
+                                        "selected_mic_device_id = \"\"\n"
+                                        "mic_gain_linear = 1.0\n"
+                                        "has_window_pid = false\n"
+                                        "window_pid = 0\n"
+                                        "# format-model keys intentionally omitted\n"
+                                        "sources = []\n"
+                                        "[presets.webcam]\n"
+                                        "enabled = false\n"
+                                        "device_id = \"\"\n"
+                                        "width = 1280\n"
+                                        "height = 720\n"
+                                        "fps = 30\n"
+                                        "overlay_x = 0.0\n"
+                                        "overlay_y = 0.0\n"
+                                        "overlay_w = 0.25\n"
+                                        "overlay_h = 0.25\n"
+                                        "overlay_user_placed = false\n"
+                                        "aspect_ratio_locked = true\n"
+                                        "mirror = false\n"
+                                        "[presets.webcam.chroma_key]\n"
+                                        "enabled = false\n"
+                                        "color_mode = \"green\"\n"
+                                        "custom_r = 0\n"
+                                        "custom_g = 255\n"
+                                        "custom_b = 0\n"
+                                        "tolerance = 0.4\n"
+                                        "softness = 0.15\n"
+                                        "spill = 0.3\n")
+                             .arg(kPresetSchemaVersion);
+
+    ASSERT_TRUE(WriteTomlString(path, toml));
+
+    RecordingPresetStore store(path);
+    const auto state = store.Load();
+    ASSERT_FALSE(state.presets.empty());
+    const auto& loaded = state.presets.front().config.audio;
+    EXPECT_EQ(loaded.audio_sample_rate, 48000u);
+    EXPECT_EQ(loaded.audio_channels, 2u);
+    EXPECT_EQ(loaded.audio_bit_depth, 16u);
+    EXPECT_EQ(loaded.flac_compression_level, 5);
+    QFile::remove(path);
+}
+
 } // namespace
 } // namespace exosnap

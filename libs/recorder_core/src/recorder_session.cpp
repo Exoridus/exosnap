@@ -12,6 +12,7 @@
 #include "wasapi_loopback_src.h"
 #include "wasapi_process_loopback_src.h"
 #include "wgc_capture.h"
+#include "worker_join.h"
 
 #include <chrono>
 #include <cstdio>
@@ -179,9 +180,14 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
 
     // Audio codec
     if (config.container == Container::Mp4) {
+        // MP4 audio is AAC only. PCM is deferred (libavformat emits ipcm which has
+        // limited player support); FLAC and Opus are also rejected for MP4 (ADR 0010,
+        // ADR 0028, ADR 0030). Use MKV for PCM or FLAC.
         if (config.audio_codec != AudioCodec::AacMf) {
             return fail(E_INVALIDARG, ErrorPhase::Prepare,
-                        "Container::Mp4 requires AudioCodec::AacMf; Opus, PCM and FLAC are not valid for MP4");
+                        "Container::Mp4 requires AudioCodec::AacMf; "
+                        "PCM is deferred (ipcm sample entry, limited player support), "
+                        "Opus and FLAC are not valid for MP4");
         }
     } else if (config.audio_codec == AudioCodec::Opus) {
         // Opus: valid for WebM and Matroska
@@ -209,6 +215,41 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
                     "Unsupported audio codec; supported: AudioCodec::Opus, AudioCodec::AacMf, "
                     "AudioCodec::Pcm, AudioCodec::Flac");
     }
+
+    // ---------------------------------------------------------------------------
+    // Audio format model validation (ADR 0030)
+    // ---------------------------------------------------------------------------
+
+    // audio_channels: only mono (1) and stereo (2) are supported.
+    if (config.audio_channels != 1 && config.audio_channels != 2) {
+        return fail(E_INVALIDARG, ErrorPhase::Prepare, "audio_channels must be 1 (mono) or 2 (stereo)");
+    }
+
+    // audio_sample_rate: vetted set only.
+    if (config.audio_sample_rate != 44100 && config.audio_sample_rate != 48000 && config.audio_sample_rate != 96000) {
+        return fail(E_INVALIDARG, ErrorPhase::Prepare, "audio_sample_rate must be 44100, 48000, or 96000 Hz");
+    }
+
+    // Opus requires exactly 48000 Hz.
+    if (config.audio_codec == AudioCodec::Opus && config.audio_sample_rate != 48000) {
+        return fail(E_INVALIDARG, ErrorPhase::Prepare, "AudioCodec::Opus requires audio_sample_rate == 48000 Hz");
+    }
+
+    // audio_bit_depth: codec-gated.
+    if (config.audio_codec == AudioCodec::Pcm) {
+        if (config.audio_bit_depth != 16 && config.audio_bit_depth != 24 && config.audio_bit_depth != 32) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare, "AudioCodec::Pcm requires audio_bit_depth in {16, 24, 32}");
+        }
+    } else if (config.audio_codec == AudioCodec::Flac) {
+        if (config.audio_bit_depth != 16 && config.audio_bit_depth != 24) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare, "AudioCodec::Flac requires audio_bit_depth in {16, 24}");
+        }
+        // flac_compression_level: [0, 8]
+        if (config.flac_compression_level < 0 || config.flac_compression_level > 8) {
+            return fail(E_INVALIDARG, ErrorPhase::Prepare, "flac_compression_level must be in [0, 8]");
+        }
+    }
+    // Lossy codecs (Opus, AAC): bit_depth is not applicable; no validation needed.
 
     // Chroma: only Cs420 supported
     if (config.chroma != ChromaSubsampling::Cs420) {
@@ -556,7 +597,13 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     videoThread.Start();
     muxThread.Start();
 
-    // Parallel join: all workers share a single 120-second budget.
+    // Two-phase cooperative shutdown (see worker_join.h):
+    //   Phase 1 — wait (unbounded) until Stop() or a fatal worker failure sets
+    //             stop_requested. Workers keep running until then, so this must
+    //             NOT consume the join budget — otherwise recordings longer than
+    //             the budget would fail with ERROR_TIMEOUT and an unfinalized file.
+    //   Phase 2 — once stopping, all workers share a single 120 s join budget to
+    //             drain their queues and finalize the container.
     //
     // IMPORTANT: NativeHandle() must be called BEFORE any Join() because the
     // handle becomes invalid once the std::thread is joined.
@@ -577,44 +624,40 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     }
 
     constexpr DWORD kParallelJoinTimeoutMs = 120000;
-    DWORD joinWait = WAIT_FAILED;
+    constexpr DWORD kStopPollIntervalMs = 100;
+
+    std::vector<bool> handleSignaled(allHandles.size(), false);
     if (!hasNullHandle) {
-        joinWait = WaitForMultipleObjects(static_cast<DWORD>(allHandles.size()), allHandles.data(), TRUE,
-                                          kParallelJoinTimeoutMs);
-        if (joinWait == WAIT_FAILED) {
-            m_impl->state.RecordFailure(HRESULT_FROM_WIN32(GetLastError()), ErrorPhase::Shutdown,
+        const WorkerJoinResult jr = WaitForWorkersThenJoin(allHandles, m_impl->state.stop_requested,
+                                                           kParallelJoinTimeoutMs, kStopPollIntervalMs);
+        if (jr.wait_failed) {
+            m_impl->state.RecordFailure(HRESULT_FROM_WIN32(jr.last_error), ErrorPhase::Shutdown,
                                         "WaitForMultipleObjects failed during thread join");
         }
+        handleSignaled = jr.signaled;
     } else {
         m_impl->state.RecordFailure(E_FAIL, ErrorPhase::Shutdown, "Thread native handle is null before join");
     }
 
+    // Join the std::thread wrappers for any worker that has actually exited, so
+    // their destructors don't detach a still-running thread. Workers that timed
+    // out remain unsignaled and are detached by their destructors (unchanged
+    // behavior on the failure path).
     bool videoJoined = false;
     std::vector<bool> audioJoined(audioWorkers.size(), false);
     bool muxJoined = false;
-
-    if (joinWait == WAIT_OBJECT_0) {
-        videoJoined = videoThread.Join(0);
-        for (size_t i = 0; i < audioWorkers.size(); ++i) {
-            audioJoined[i] = audioWorkers[i]->Join(0);
-        }
-        muxJoined = muxThread.Join(0);
-    } else {
-        videoJoined = (allHandles[0] != nullptr && WaitForSingleObject(allHandles[0], 0) == WAIT_OBJECT_0);
-        if (videoJoined) {
-            videoThread.Join(0);
+    if (!hasNullHandle) {
+        if (handleSignaled[0]) {
+            videoJoined = videoThread.Join(0);
         }
         for (size_t i = 0; i < audioWorkers.size(); ++i) {
-            const HANDLE h = allHandles[1 + i];
-            audioJoined[i] = (h != nullptr && WaitForSingleObject(h, 0) == WAIT_OBJECT_0);
-            if (audioJoined[i]) {
-                audioWorkers[i]->Join(0);
+            if (handleSignaled[1 + i]) {
+                audioJoined[i] = audioWorkers[i]->Join(0);
             }
         }
-        const HANDLE muxHandle = allHandles[1 + audioWorkers.size()];
-        muxJoined = (muxHandle != nullptr && WaitForSingleObject(muxHandle, 0) == WAIT_OBJECT_0);
-        if (muxJoined) {
-            muxThread.Join(0);
+        const size_t muxIndex = 1 + audioWorkers.size();
+        if (handleSignaled[muxIndex]) {
+            muxJoined = muxThread.Join(0);
         }
     }
 

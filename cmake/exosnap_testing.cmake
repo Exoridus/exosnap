@@ -63,9 +63,19 @@ function(exosnap_add_gtest)
   endforeach()
 
   include(GoogleTest)
+  # The post-build discovery launches the freshly-built binary to enumerate its
+  # tests. On clean/cold CI runners the first launch pays for loading the staged
+  # Qt + FFmpeg DLLs, which can exceed CTest's 5 s DISCOVERY_TIMEOUT default and
+  # produce a spurious "process terminated due to timeout" failure (observed as a
+  # transient, re-run-green flake during the 0.6.0 wave). Raise the ceiling well
+  # above any real cold-start cost; it only bounds enumeration, not test runtime.
+  set(_exosnap_discovery_timeout 60)
   if(ARG_TEST_PREFIX)
-    gtest_discover_tests(${ARG_NAME} TEST_PREFIX "${ARG_TEST_PREFIX}")
+    gtest_discover_tests(${ARG_NAME}
+      TEST_PREFIX "${ARG_TEST_PREFIX}"
+      DISCOVERY_TIMEOUT ${_exosnap_discovery_timeout})
   else()
-    gtest_discover_tests(${ARG_NAME})
+    gtest_discover_tests(${ARG_NAME}
+      DISCOVERY_TIMEOUT ${_exosnap_discovery_timeout})
   endif()
 endfunction()

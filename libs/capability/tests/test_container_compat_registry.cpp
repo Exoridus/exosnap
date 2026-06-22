@@ -98,7 +98,10 @@ TEST(ContainerCompatRegistry, Mp4_H264_Opus_IsProhibited) {
 }
 
 TEST(ContainerCompatRegistry, Mp4_H264_Pcm_IsExperimental) {
-    // PCM-in-MP4: sample-entry unspecified; player matrix not on file.
+    // ADR 0030 (narrowed): MP4 + H.264 + PCM is back to Experimental. libavformat
+    // emits the ipcm (ISO/IEC 23003-5) sample entry for pcm_s16le/s24le/s32le in
+    // MP4 (confirmed via ffprobe codec_tag_string=ipcm); ipcm has limited player
+    // support. Deferred until a broadly-compatible sample-entry mapping is validated.
     EXPECT_EQ(Level(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::Pcm), ContainerCompatLevel::Experimental);
 }
 
@@ -126,6 +129,15 @@ TEST(ContainerCompatRegistry, Mp4_Av1_Opus_IsProhibited) {
 
 TEST(ContainerCompatRegistry, Mp4_Av1_Pcm_IsExperimental) {
     EXPECT_EQ(Level(Container::Mp4, VideoCodec::Av1Nvenc, AudioCodec::Pcm), ContainerCompatLevel::Experimental);
+}
+
+// ADR 0030: MP4 + Opus is still Prohibited; MP4 + FLAC is still Experimental.
+TEST(ContainerCompatRegistry, Mp4_H264_Opus_IsStillProhibited) {
+    EXPECT_EQ(Level(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::Opus), ContainerCompatLevel::Prohibited);
+}
+
+TEST(ContainerCompatRegistry, Mp4_H264_Flac_IsStillExperimental) {
+    EXPECT_EQ(Level(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::Flac), ContainerCompatLevel::Experimental);
 }
 
 // ---------------------------------------------------------------------------
@@ -335,10 +347,28 @@ TEST(ContainerCompatRegistry, Reconcile_WebM_Av1_Pcm_FixesAudioToOpus) {
 }
 
 TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Pcm_FixesAudioToAac) {
-    // MP4 cannot carry PCM in this build (Experimental). Reconciler keeps H.264
-    // and swaps audio to AAC.
+    // ADR 0030 (narrowed): MP4 + H.264 + PCM is back to Experimental (not selectable).
+    // The reconciler must fix audio to AAC — PCM is no longer a working combo for MP4.
     VideoCodec v = VideoCodec::H264Nvenc;
     AudioCodec a = AudioCodec::Pcm;
+    ContainerCompatRegistry::ReconcileCodecs(Container::Mp4, v, a);
+    EXPECT_EQ(v, VideoCodec::H264Nvenc);
+    EXPECT_EQ(a, AudioCodec::AacMf);
+}
+
+TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Opus_FixesAudioToAac_AfterAdr0030) {
+    // MP4 + Opus remains Prohibited; the reconciler must still fix it to AAC.
+    VideoCodec v = VideoCodec::H264Nvenc;
+    AudioCodec a = AudioCodec::Opus;
+    ContainerCompatRegistry::ReconcileCodecs(Container::Mp4, v, a);
+    EXPECT_EQ(v, VideoCodec::H264Nvenc);
+    EXPECT_EQ(a, AudioCodec::AacMf);
+}
+
+TEST(ContainerCompatRegistry, Reconcile_Mp4_H264_Flac_FixesAudioToAac_AfterAdr0030) {
+    // MP4 + FLAC remains Experimental (not selectable); the reconciler fixes it to AAC.
+    VideoCodec v = VideoCodec::H264Nvenc;
+    AudioCodec a = AudioCodec::Flac;
     ContainerCompatRegistry::ReconcileCodecs(Container::Mp4, v, a);
     EXPECT_EQ(v, VideoCodec::H264Nvenc);
     EXPECT_EQ(a, AudioCodec::AacMf);

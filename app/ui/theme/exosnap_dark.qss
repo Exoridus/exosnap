@@ -76,6 +76,40 @@ QPushButton#titlebarWindowButton[windowControlRole="close"]:hover {
     color: #ffffff;
 }
 
+/* Notification bell (QToolButton in the titlebar). A stylesheet'd QToolButton
+   with no explicit rule falls back to the style's default tool-button panel —
+   a dark filled capsule inconsistent with the flat window controls beside it.
+   Keep it flat at rest with a subtle square hover, like the window buttons. */
+QToolButton#titlebarBell {
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 0;
+}
+
+QToolButton#titlebarBell:hover {
+    background: ${bg3};
+}
+
+/* S5: Settings popover cog button — flat at rest, subtle bg3 hover. */
+QToolButton#settingsPopoverCog {
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 0;
+}
+
+QToolButton#settingsPopoverCog:hover {
+    background: ${bg3};
+}
+
+/* S5: Settings popover panel — raised card anchored below the cog button. */
+QWidget#settingsPopoverPanelInner {
+    background: ${bg2};
+    border: 1px solid ${line2};
+    border-radius: 8px;
+}
+
 /* Global recording status bar */
 QWidget#globalRecordingBar {
     background: ${bg2};
@@ -2344,6 +2378,139 @@ QKeySequenceEdit:disabled {
     border: 1px solid ${line1};
 }
 
+/* S3 — Spinboxes styled identically to comboboxes in settings rows.
+   Plain QSpinBox / QDoubleSpinBox outside the ExoSpinBox widgetRole pick up
+   the same chrome as QComboBox: same height, bg, border, radius and padding.
+   The up/down buttons are rendered as a subtle stacked pair on the right,
+   separated from the text by a thin ${line2} hairline — same family as the
+   combo drop-arrow zone. */
+QSpinBox,
+QDoubleSpinBox {
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-radius: ${radius-md}px;
+    padding: 0 ${space-md}px;
+    color: ${text0};
+    min-height: ${control-height}px;
+    padding-right: 28px;
+}
+
+QSpinBox:hover,
+QDoubleSpinBox:hover {
+    border-color: ${line3};
+    background: ${bg4};
+}
+
+QSpinBox:focus,
+QDoubleSpinBox:focus {
+    border: 1px solid ${accent};
+    background: ${bg4};
+}
+
+QSpinBox:disabled,
+QDoubleSpinBox:disabled {
+    color: ${text3};
+    background: ${bg2};
+    border: 1px solid ${line1};
+}
+
+QSpinBox::up-button,
+QDoubleSpinBox::up-button {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 22px;
+    height: 14px;
+    background: transparent;
+    border: none;
+    border-left: 1px solid ${line2};
+    border-top-right-radius: ${radius-md}px;
+}
+
+QSpinBox::down-button,
+QDoubleSpinBox::down-button {
+    subcontrol-origin: padding;
+    subcontrol-position: bottom right;
+    width: 22px;
+    height: 14px;
+    background: transparent;
+    border: none;
+    border-left: 1px solid ${line2};
+    border-bottom-right-radius: ${radius-md}px;
+}
+
+QSpinBox::up-button:hover,
+QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover,
+QDoubleSpinBox::down-button:hover {
+    background: ${bg4};
+}
+
+QSpinBox::up-button:disabled,
+QDoubleSpinBox::up-button:disabled,
+QSpinBox::down-button:disabled,
+QDoubleSpinBox::down-button:disabled {
+    background: transparent;
+    border-color: ${line1};
+}
+
+QSpinBox::up-arrow,
+QDoubleSpinBox::up-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 3px solid transparent;
+    border-right: 3px solid transparent;
+    border-bottom: 4px solid ${text2};
+}
+
+QSpinBox::up-arrow:disabled,
+QDoubleSpinBox::up-arrow:disabled {
+    border-bottom-color: ${text3};
+}
+
+QSpinBox::down-arrow,
+QDoubleSpinBox::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 3px solid transparent;
+    border-right: 3px solid transparent;
+    border-top: 4px solid ${text2};
+}
+
+QSpinBox::down-arrow:disabled,
+QDoubleSpinBox::down-arrow:disabled {
+    border-top-color: ${text3};
+}
+
+/* S3 — Editable combobox: the embedded QLineEdit must inherit the same chrome.
+   Reset padding-right on the combo itself so the text doesn't run under the arrow. */
+QComboBox:editable {
+    padding-right: 34px;
+}
+
+QComboBox:editable QLineEdit {
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: ${text0};
+    min-height: 0;
+    selection-background-color: ${accent-dim};
+    selection-color: ${text0};
+}
+
+/* S3 — Uniform input-column width for settings rows.
+   All single-input controls placed at the right of a makeSettingsRow layout
+   must resolve to the same width so their left and right edges align down the
+   column.  Fixed via setFixedWidth(160) in C++; this QSS rule backs that up
+   as a minimum so the control never collapses below the declared value when
+   the layout is narrower than expected. */
+QSpinBox[settingsRowInput="true"],
+QDoubleSpinBox[settingsRowInput="true"],
+QComboBox[settingsRowInput="true"] {
+    min-width: 160px;
+}
+
 QKeySequenceEdit[role="capture"] {
     border-color: ${accent};
     background: ${ac-a10};
@@ -2516,6 +2683,28 @@ QToolButton::menu-indicator {
     height: 12px;
 }
 
+/* S1-REDESIGN: Manage-presets button styled to match QPushButton[role="ghost"]. */
+QToolButton#presetManageButton {
+    background: transparent;
+    border: 1px solid ${line2};
+    border-radius: ${radius-md}px;
+    padding: 0 ${space-lg}px;
+    color: ${text1};
+    min-height: ${control-height}px;
+    font-weight: 600;
+}
+
+QToolButton#presetManageButton:hover {
+    background: ${bg3};
+    border-color: ${line3};
+    color: ${text0};
+}
+
+QToolButton#presetManageButton::menu-indicator {
+    image: none;
+    width: 0;
+}
+
 /* InfoHint "i" glyph button: flat icon only, no button chrome. The generic
    QToolButton rule above paints a bg/border/padding box that otherwise hides
    the 15px info glyph; reset it so only the icon shows (faint at rest, mint on
@@ -2669,6 +2858,37 @@ QSlider::sub-page:horizontal:disabled {
 
 QSlider::add-page:horizontal {
     background: transparent;
+}
+
+/* S3 — ExoSlider: tick marks drawn in C++ (paintEvent override) so QSS only
+   controls groove and handle.  The ExoSlider objectName is "micGainSlider"
+   (and any future named sliders); the sub-class paints gradient fill + markers. */
+QSlider#micGainSlider::groove:horizontal {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 ${bg4}, stop:0.5 ${accent-dim}, stop:1 ${bg4});
+    border: 1px solid ${line2};
+    height: 4px;
+    border-radius: 2px;
+}
+
+QSlider#micGainSlider::sub-page:horizontal {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 ${accent-dim}, stop:1 ${accent});
+    height: 4px;
+    border-radius: 2px;
+}
+
+QSlider#micGainSlider::handle:horizontal {
+    background: ${accent};
+    border: 2px solid ${bg0};
+    width: 14px;
+    height: 14px;
+    margin: -5px 0;
+    border-radius: 7px;
+}
+
+QSlider#micGainSlider::handle:horizontal:hover {
+    background: ${accent-hover};
 }
 
 QToolTip {
@@ -3065,7 +3285,10 @@ QPushButton[themePickerCard="true"] {
     border-radius: ${radius-md}px;
     padding: 0;
     text-align: left;
-    min-height: 72px;
+    /* Tall enough for the 116x70 preview swatch plus the wrapped 3-line intent
+       text. A QPushButton does not propagate its layout's height-for-width, so
+       the card must be forced past the content height or the last line clips. */
+    min-height: 100px;
 }
 
 QPushButton[themePickerCard="true"]:hover {

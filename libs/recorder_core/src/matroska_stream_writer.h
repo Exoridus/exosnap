@@ -90,6 +90,12 @@ struct MatroskaStreamConfig {
     uint32_t audio_track_count = 0;
     std::array<StreamAudioTrack, 3> audio_tracks{}; // CodecPrivateData::kMaxAudioTracks
 
+    // Audio format (ADR 0030). These values are written into KaxTrackAudio for
+    // every audio track. bit_depth is only written for PCM and FLAC.
+    uint32_t audio_sample_rate = 48000;
+    uint32_t audio_channels = 2;
+    uint32_t audio_bit_depth = 16;
+
     // Reorder/interleave window bounds. A packet is only emitted into a cluster
     // once a packet at least window_ns newer (across all tracks) has arrived, so
     // A/V streams whose PTS interleave within this horizon get sorted correctly.

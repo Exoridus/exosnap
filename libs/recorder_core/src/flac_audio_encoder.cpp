@@ -26,17 +26,44 @@ inline FLAC__StreamEncoder* AsEnc(void* p) {
 } // namespace
 
 // ---------------------------------------------------------------------------
-// Float32ToS16
+// Float32ToInt / Float32ToS16
 // ---------------------------------------------------------------------------
 
-int32_t FlacAudioEncoder::Float32ToS16(float sample) noexcept {
+/*static*/ int32_t FlacAudioEncoder::Float32ToInt(float sample, uint32_t bits) noexcept {
+    const float clamped = std::clamp(sample, -1.0f, 1.0f);
+    if (bits == 24) {
+        // Full-scale S24: range [-8388607, 8388607].
+        const long scaled = std::lround(clamped * 8388607.0f);
+        const long bounded = std::clamp(scaled, -8388608L, 8388607L);
+        return static_cast<int32_t>(bounded);
+    }
+    // Default: 16-bit.
     // Identical mapping to the PCM path: clamp to [-1, 1], scale by 32767, round
     // to nearest. Using 32767 keeps +1.0 → +32767 and -1.0 → -32767; the
     // asymmetric -32768 is only reachable below -1.0, which is clamped away.
-    const float clamped = std::clamp(sample, -1.0f, 1.0f);
     const long scaled = std::lround(clamped * 32767.0f);
     const long bounded = std::clamp(scaled, -32768L, 32767L);
     return static_cast<int32_t>(bounded);
+}
+
+/*static*/ int32_t FlacAudioEncoder::Float32ToS16(float sample) noexcept {
+    return Float32ToInt(sample, 16);
+}
+
+// ---------------------------------------------------------------------------
+// SetBitDepth / SetCompressionLevel
+// ---------------------------------------------------------------------------
+
+void FlacAudioEncoder::SetBitDepth(uint32_t bits) noexcept {
+    if (bits == 16 || bits == 24) {
+        m_bits_per_sample = bits;
+    }
+}
+
+void FlacAudioEncoder::SetCompressionLevel(int level) noexcept {
+    if (level >= 0 && level <= 8) {
+        m_compression_level = level;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -108,9 +135,9 @@ bool FlacAudioEncoder::Init(uint32_t sample_rate, uint32_t channels, std::string
     // freshly created and uninitialized) but we surface them defensively.
     bool ok = true;
     ok = ok && FLAC__stream_encoder_set_channels(enc, channels);
-    ok = ok && FLAC__stream_encoder_set_bits_per_sample(enc, kBitsPerSample);
+    ok = ok && FLAC__stream_encoder_set_bits_per_sample(enc, m_bits_per_sample);
     ok = ok && FLAC__stream_encoder_set_sample_rate(enc, sample_rate);
-    ok = ok && FLAC__stream_encoder_set_compression_level(enc, kCompressionLevel);
+    ok = ok && FLAC__stream_encoder_set_compression_level(enc, static_cast<uint32_t>(m_compression_level));
     // Streamable subset keeps blocksize/parameters within the FLAC subset so the
     // stream is broadly playable (and valid embedded in Matroska).
     ok = ok && FLAC__stream_encoder_set_streamable_subset(enc, true);
@@ -164,10 +191,12 @@ void FlacAudioEncoder::FeedFloat32(const float* data, size_t total_float_samples
         return;
     }
 
-    // Convert interleaved Float32 → interleaved int16 (as FLAC__int32 samples).
+    // Convert interleaved Float32 → interleaved FLAC__int32 at the configured
+    // bit depth (16 or 24). libFLAC reads the integer values as bits_per_sample-wide
+    // signed integers from the interleaved scratch buffer.
     m_int_scratch.resize(total_float_samples);
     for (size_t i = 0; i < total_float_samples; ++i) {
-        m_int_scratch[i] = Float32ToS16(data[i]);
+        m_int_scratch[i] = Float32ToInt(data[i], m_bits_per_sample);
     }
 
     // process_interleaved consumes `samples` *frames* (per-channel), not the

@@ -55,6 +55,12 @@ AudioPlanResult BuildAudioPlan(const AudioUiState& state) {
     // Microphone RNNoise neural noise suppression (Audio v2) — pass through directly.
     result.mic_rnnoise_enabled = state.mic_rnnoise_enabled;
 
+    // Channel / sample-format model (ADR 0030) — pass through directly.
+    result.audio_sample_rate = state.audio_sample_rate;
+    result.audio_channels = state.audio_channels;
+    result.audio_bit_depth = state.audio_bit_depth;
+    result.flac_compression_level = state.flac_compression_level;
+
     result.plan = recorder_core::ResolveAudioTracks(state.source_rows);
 
     const bool app_active = state.IsAppEnabled();

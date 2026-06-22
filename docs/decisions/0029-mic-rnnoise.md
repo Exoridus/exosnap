@@ -58,6 +58,17 @@ the third-party CMake and called out here:
   target. The step is idempotent (skipped when `src/rnnoise_data.c` already
   exists). The 78 MB generated `rnnoise_data.c` is the network weights.
 
+  **Mirror (0.6.0 follow-up).** Because the tarball is content-addressed by its
+  SHA256, any host serving those exact bytes is equivalent. To avoid a hard
+  configure-time dependency on `media.xiph.org`, the build now tries a
+  project-owned GitHub-release mirror first (`EXOSNAP_RNNOISE_MODEL_MIRROR_BASE`,
+  default `Exoridus/exosnap` release `audio-assets-v1`) and falls back to the
+  upstream host. `EXPECTED_HASH` guards both, so a not-yet-published mirror
+  (404 page) simply fails the hash and falls through to upstream — builds stay
+  green before and after the maintainer uploads the asset. This mirrors the
+  FFmpeg-build approach. The one maintainer-gated step (publishing the release
+  asset, `gh release upload`) is documented inline in `third_party/CMakeLists.txt`.
+
   We considered the in-tree-model tags `v0.1`/`v0.1.1` (which **do** commit the
   weights and need no download), but their `pitch.c`/`celt_lpc.c` use C99
   variable-length arrays that MSVC `cl.exe` rejects (C2057/C2466). master is

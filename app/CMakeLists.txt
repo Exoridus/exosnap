@@ -159,6 +159,10 @@ qt_add_executable(exosnap WIN32
     ui/widgets/CountdownSelect.cpp
     ui/widgets/ExoSpinBox.h
     ui/widgets/ExoSpinBox.cpp
+    ui/widgets/ExoSlider.h
+    ui/widgets/ExoSlider.cpp
+    ui/widgets/SettingsPopoverRow.h
+    ui/widgets/SettingsPopoverRow.cpp
     ui/widgets/NotificationBell.h
     ui/widgets/NotificationBell.cpp
     ui/widgets/AdvisoryItem.h
@@ -360,6 +364,23 @@ if(WIN32)
     else()
         message(STATUS "windeployqt not found — build-tree exe will rely on Qt being on PATH.")
     endif()
+
+    # Deploy the FFmpeg runtime DLLs next to the exe so the build-tree exosnap.exe
+    # launches in BOTH Debug and Release. Previously these only landed in the Debug
+    # tree incidentally (the gtest targets copy them next to their binaries, which
+    # share app/Debug/); a Release build of just the exosnap target left them out,
+    # so launching app/Release/exosnap.exe aborted with 0xC0000135
+    # (STATUS_DLL_NOT_FOUND) — the app links FFmpeg::mux for MP4 remux and the audio
+    # resampler. Release packaging installs these separately (install(FILES …) in
+    # VendorFFmpeg.cmake); this is the build-tree equivalent of the Qt deploy above.
+    foreach(_exosnap_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
+        add_custom_command(TARGET exosnap POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_exosnap_ffmpeg_dll}" "$<TARGET_FILE_DIR:exosnap>"
+            COMMENT "Staging FFmpeg runtime next to exosnap.exe (build tree)"
+            VERBATIM
+        )
+    endforeach()
 endif()
 
 function(exosnap_add_app_test_support NAME)
@@ -447,6 +468,10 @@ exosnap_add_app_test_support(exosnap_pages_test_support
     ui/widgets/PlaceholderRow.cpp
     # THEME-SLICE-1: ExoCheckBox now calls ActiveTheme()/ParseThemeColor() from ExoSnapTheme.cpp.
     ui/theme/ExoSnapTheme.cpp
+    # S3: ExoSlider used by ConfigPage (mic gain slider with gradient groove + ticks).
+    ui/widgets/ExoSlider.cpp
+    # S5: SettingsPopoverRow used by ConfigPage for mic post-processing / limiter / split.
+    ui/widgets/SettingsPopoverRow.cpp
 )
 target_link_libraries(exosnap_pages_test_support PUBLIC
     exosnap_device_service_test_support exosnap_output_model_test_support

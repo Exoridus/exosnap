@@ -4,6 +4,7 @@
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
+#include <QCompleter>
 #include <QDoubleSpinBox>
 #include <QEvent>
 #include <QFileDialog>
@@ -50,11 +51,13 @@
 #include "../ui/widgets/ComboBoxWheelFilter.h"
 #include "../ui/widgets/CompareHint.h"
 #include "../ui/widgets/ExoCheckBox.h"
+#include "../ui/widgets/ExoSlider.h"
 #include "../ui/widgets/ExoToggle.h"
 #include "../ui/widgets/HotkeysSettingsPanel.h"
 #include "../ui/widgets/InfoHintIcon.h"
 #include "../ui/widgets/PlaceholderRow.h"
 #include "../ui/widgets/SettingsCardExpander.h"
+#include "../ui/widgets/SettingsPopoverRow.h"
 #include "../ui/widgets/VUMeterWidget.h"
 #include "../ui/widgets/WebcamSetupPanel.h"
 #include "../viewmodels/PresentationStateBuilder.h"
@@ -614,15 +617,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         profile_combo_->setMaximumWidth(260);
         toolbar_hl->addWidget(profile_combo_, 1, Qt::AlignVCenter);
 
-        // Default badge (inline, right of combo)
-        preset_default_badge_ = new QLabel(toolbar_row);
-        preset_default_badge_->setObjectName(QStringLiteral("presetDefaultBadge"));
-        preset_default_badge_->setProperty("labelRole", "profileStatusBadge");
-        preset_default_badge_->setAlignment(Qt::AlignCenter);
-        preset_default_badge_->setText(QStringLiteral("Default"));
-        preset_default_badge_->setVisible(false);
-        toolbar_hl->addWidget(preset_default_badge_, 0, Qt::AlignVCenter);
-
         profile_status_label_ = new QLabel(toolbar_row);
         profile_status_label_->setProperty("labelRole", "profileStatusBadge");
         profile_status_label_->setAlignment(Qt::AlignCenter);
@@ -726,9 +720,14 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         expert_mode_toggle_->setOn(false);
         toolbar_hl->addWidget(expert_mode_toggle_, 0, Qt::AlignVCenter);
 
+        // Info-i to the right of the Expert toggle (replaces the expert_warn_label_ banner).
+        auto* expert_info = new ui::widgets::InfoHintIcon(ui::hints::kExpertMode, toolbar_row);
+        expert_info->setObjectName(QStringLiteral("expertModeInfoHint"));
+        toolbar_hl->addWidget(expert_info, 0, Qt::AlignVCenter);
+
         header_vl->addWidget(toolbar_row);
 
-        // Sub-row: match-count, expert-hint, expert-warn
+        // Sub-row: match-count, expert-hint
         settings_search_count_label_ = new QLabel(header_zone);
         settings_search_count_label_->setObjectName(QStringLiteral("settingsSearchCountLabel"));
         settings_search_count_label_->setProperty("labelRole", "muted");
@@ -741,15 +740,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         search_expert_hint_label_->setWordWrap(true);
         search_expert_hint_label_->setVisible(false);
         header_vl->addWidget(search_expert_hint_label_);
-
-        expert_warn_label_ = new QLabel(header_zone);
-        expert_warn_label_->setObjectName(QStringLiteral("expertWarnLabel"));
-        expert_warn_label_->setText(QStringLiteral("Expert mode reveals lower-level controls that can produce "
-                                                   "incompatible files. Enable only if you know why."));
-        expert_warn_label_->setProperty("labelRole", "warnHint");
-        expert_warn_label_->setWordWrap(true);
-        expert_warn_label_->setVisible(false);
-        header_vl->addWidget(expert_warn_label_);
 
         layout->addWidget(header_zone);
     }
@@ -834,6 +824,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     // --- Video codec row ---
     video_codec_combo_ = new QComboBox(fmt_panel);
+    video_codec_combo_->setFixedWidth(160);
+    video_codec_combo_->setProperty("settingsRowInput", true);
     video_codec_compare_hint_ =
         new ui::widgets::CompareHint(QStringLiteral("videoCodec"), QStringLiteral("AV1"), fmt_panel);
     fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Video codec"), video_codec_compare_hint_,
@@ -841,6 +833,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     // --- Audio codec row ---
     audio_codec_combo_ = new QComboBox(fmt_panel);
+    audio_codec_combo_->setFixedWidth(160);
+    audio_codec_combo_->setProperty("settingsRowInput", true);
     audio_codec_compare_hint_ =
         new ui::widgets::CompareHint(QStringLiteral("audioCodec"), QStringLiteral("Opus"), fmt_panel);
     fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Audio codec"), audio_codec_compare_hint_,
@@ -882,38 +876,17 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         return segment;
     };
 
-    quality_segment_small_ =
-        makeQualitySegment(QStringLiteral("qualitySegmentSmall"), QStringLiteral("Small \xC2\xB7 CQ30"),
-                           recorder_core::NvencQualityPreset::Small);
-    quality_segment_balanced_ =
-        makeQualitySegment(QStringLiteral("qualitySegmentBalanced"), QStringLiteral("Balanced \xC2\xB7 CQ24"),
-                           recorder_core::NvencQualityPreset::Balanced);
-    quality_segment_high_ =
-        makeQualitySegment(QStringLiteral("qualitySegmentHigh"), QStringLiteral("High \xC2\xB7 CQ19"),
-                           recorder_core::NvencQualityPreset::High);
-
-    quality_badge_label_ = new QLabel(fmt_panel);
-    quality_badge_label_->setObjectName(QStringLiteral("qualityBadgeLabel"));
-    quality_badge_label_->setProperty("labelRole", "muted");
-
-    quality_settings_label_ = new QLabel(fmt_panel);
-    quality_settings_label_->setObjectName(QStringLiteral("qualitySettingsLabel"));
-    quality_settings_label_->setProperty("labelRole", "muted");
-
-    // Quality sub-label widget combining both badge+settings labels
-    auto* quality_sub_widget = new QWidget(fmt_panel);
-    {
-        auto* qsl = new QVBoxLayout(quality_sub_widget);
-        qsl->setContentsMargins(0, 0, 0, 0);
-        qsl->setSpacing(2);
-        qsl->addWidget(quality_badge_label_);
-        qsl->addWidget(quality_settings_label_);
-    }
+    quality_segment_small_ = makeQualitySegment(QStringLiteral("qualitySegmentSmall"), QStringLiteral("Small"),
+                                                recorder_core::NvencQualityPreset::Small);
+    quality_segment_balanced_ = makeQualitySegment(QStringLiteral("qualitySegmentBalanced"), QStringLiteral("Balanced"),
+                                                   recorder_core::NvencQualityPreset::Balanced);
+    quality_segment_high_ = makeQualitySegment(QStringLiteral("qualitySegmentHigh"), QStringLiteral("High"),
+                                               recorder_core::NvencQualityPreset::High);
 
     quality_compare_hint_ =
         new ui::widgets::CompareHint(QStringLiteral("quality"), QStringLiteral("Balanced"), fmt_panel);
 
-    // Quality row: segmented on right, compare hint in label area
+    // Quality row: segmented on right, compare hint + info-i in label area
     // Wave 2: quality_row_widget_ promoted to member so expert-mode can show/hide it.
     {
         quality_row_widget_ = new QWidget(fmt_panel);
@@ -930,12 +903,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* qhl = new QHBoxLayout(qcontent);
         qhl->setContentsMargins(0, 12, 0, 12);
         qhl->setSpacing(14);
-        // left: label + hint + sub labels
-        auto* qleft = new QWidget(qcontent);
-        auto* qll = new QVBoxLayout(qleft);
-        qll->setContentsMargins(0, 0, 0, 0);
-        qll->setSpacing(2);
-        auto* qlabel_row = new QWidget(qleft);
+        // left: label + compare hint + info-i
+        auto* qlabel_row = new QWidget(qcontent);
         auto* qlrl = new QHBoxLayout(qlabel_row);
         qlrl->setContentsMargins(0, 0, 0, 0);
         qlrl->setSpacing(4);
@@ -943,10 +912,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         qlbl->setProperty("labelRole", "settingsRowLabel");
         qlrl->addWidget(qlbl);
         qlrl->addWidget(quality_compare_hint_, 0, Qt::AlignVCenter);
+        qlrl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kQualityPreset, qlabel_row), 0, Qt::AlignVCenter);
         qlrl->addStretch();
-        qll->addWidget(qlabel_row);
-        qll->addWidget(quality_sub_widget);
-        qhl->addWidget(qleft, 1);
+        qhl->addWidget(qlabel_row, 1);
         qhl->addWidget(quality_segmented, 0, Qt::AlignVCenter);
         qvl->addWidget(qcontent);
         quality_row_widget_->setProperty("settingsRow", true);
@@ -976,10 +944,17 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         quality_cq_spin_ = new QSpinBox(qecontent);
         quality_cq_spin_->setObjectName(QStringLiteral("qualityCqSpin"));
         quality_cq_spin_->setRange(1, 51);
-        quality_cq_spin_->setSuffix(QStringLiteral(" (CQ)"));
         quality_cq_spin_->setToolTip(QStringLiteral("NVENC Constant Quality value (1=best, 51=worst). "
                                                     "Low=19 (High), 24 (Balanced), 30 (Small)."));
+        quality_cq_spin_->setFixedWidth(80);
+        quality_cq_spin_->setProperty("settingsRowInput", true);
         qehl->addWidget(quality_cq_spin_, 0, Qt::AlignVCenter);
+        // S3: CQ tier label — shows the tier name corresponding to the current CQ value.
+        quality_cq_tier_label_ = new QLabel(qecontent);
+        quality_cq_tier_label_->setObjectName(QStringLiteral("qualityCqTierLabel"));
+        quality_cq_tier_label_->setProperty("labelRole", "muted");
+        quality_cq_tier_label_->setText(QStringLiteral("\xc2\xb7 High")); // initial value
+        qehl->addWidget(quality_cq_tier_label_, 0, Qt::AlignVCenter);
         qevl->addWidget(qecontent);
         quality_expert_widget_->setProperty("settingsRow", true);
         quality_expert_widget_->setVisible(false); // hidden until expert mode is on
@@ -990,6 +965,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     frame_rate_combo_ = new QComboBox(fmt_panel);
     frame_rate_combo_->setObjectName(QStringLiteral("frameRateCombo"));
     frame_rate_combo_->setAccessibleName(QStringLiteral("Frame rate"));
+    frame_rate_combo_->setFixedWidth(160);
+    frame_rate_combo_->setProperty("settingsRowInput", true);
     for (const int fps : {24, 25, 30, 50, 60}) {
         frame_rate_combo_->addItem(QStringLiteral("%1 fps").arg(fps), fps);
     }
@@ -1036,9 +1013,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         makeSettingsRow(fmt_panel, QStringLiteral("Frame timing"), timing_compare_hint_, QString(), timing_segmented));
 
     // --- Capture cursor row ---
-    cursor_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Capture cursor"), fmt_panel);
+    cursor_check_ = new ui::widgets::ExoToggle(fmt_panel);
     cursor_check_->setObjectName(QStringLiteral("captureCursorCheck"));
-    cursor_check_->setChecked(video_settings_.capture_cursor);
+    cursor_check_->setOn(video_settings_.capture_cursor);
     fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Capture cursor"),
                                           new ui::widgets::InfoHintIcon(ui::hints::kCaptureCursor, fmt_panel),
                                           QString(), cursor_check_));
@@ -1101,7 +1078,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             rhl->setSpacing(14);
             auto* rlbl = new QLabel(QStringLiteral("Rate control"), rate_control_row_widget_);
             rlbl->setProperty("labelRole", "settingsRowLabel");
-            rhl->addWidget(rlbl, 1);
+            rhl->addWidget(rlbl, 0);
+            rhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kRateControlMode, rate_control_row_widget_), 0,
+                           Qt::AlignVCenter);
+            rhl->addStretch(1);
             rhl->addWidget(rc_segmented, 0, Qt::AlignVCenter);
             rvl->addLayout(rhl);
             rate_control_row_widget_->setProperty("settingsRow", true);
@@ -1125,46 +1105,63 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             bhl->setSpacing(14);
             auto* blbl = new QLabel(QStringLiteral("Bitrate"), bitrate_row_widget_);
             blbl->setProperty("labelRole", "settingsRowLabel");
-            bhl->addWidget(blbl, 1);
+            bhl->addWidget(blbl, 0);
+            bhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kVideoBitrate, bitrate_row_widget_), 0,
+                           Qt::AlignVCenter);
+            bhl->addStretch(1);
             bitrate_kbps_spin_ = new QSpinBox(bitrate_row_widget_);
             bitrate_kbps_spin_->setObjectName(QStringLiteral("bitrateKbpsSpin"));
             bitrate_kbps_spin_->setRange(1000, 100000);
             bitrate_kbps_spin_->setSuffix(QStringLiteral(" kbps"));
             bitrate_kbps_spin_->setValue(static_cast<int>(video_settings_.bitrate_kbps));
+            bitrate_kbps_spin_->setFixedWidth(160);
+            bitrate_kbps_spin_->setProperty("settingsRowInput", true);
             bhl->addWidget(bitrate_kbps_spin_, 0, Qt::AlignVCenter);
             bvl->addLayout(bhl);
             bitrate_row_widget_->setProperty("settingsRow", true);
         }
         fes_layout->addWidget(bitrate_row_widget_);
 
-        // --- v1.0 Format PlaceholderRows ---
+#ifndef NDEBUG
+        // --- Roadmap dummy rows (Debug only — hidden in Release builds) ---
+        // These are real, enabled controls wired to nothing, used so the roadmap
+        // layout can be designed and captured on pixels.  Gate: #ifndef NDEBUG.
         {
-            auto* ph1 = new ui::widgets::PlaceholderRow(fmt_expert_section_);
-            ph1->setLabel(QStringLiteral("Encoder preset (NVENC)"));
-            ph1->setVersionTag(QStringLiteral("0.5"));
-            fes_layout->addWidget(ph1);
+            auto* enc_preset_combo = new QComboBox(fmt_expert_section_);
+            enc_preset_combo->setObjectName(QStringLiteral("roadmapDummy_encoderPreset"));
+            enc_preset_combo->addItems({QStringLiteral("P1 — Fastest"), QStringLiteral("P2"), QStringLiteral("P3"),
+                                        QStringLiteral("P4 — Balanced"), QStringLiteral("P5"), QStringLiteral("P6"),
+                                        QStringLiteral("P7 — Slowest")});
+            enc_preset_combo->setCurrentIndex(3);
+            fes_layout->addWidget(makeSettingsRow(fmt_expert_section_, QStringLiteral("Encoder preset (NVENC)"),
+                                                  nullptr, QString(), enc_preset_combo));
 
-            auto* ph2 = new ui::widgets::PlaceholderRow(fmt_expert_section_);
-            ph2->setLabel(QStringLiteral("HEVC codec"));
-            ph2->setVersionTag(QStringLiteral("0.7"));
-            fes_layout->addWidget(ph2);
+            auto* hevc_combo = new QComboBox(fmt_expert_section_);
+            hevc_combo->setObjectName(QStringLiteral("roadmapDummy_hevcCodec"));
+            hevc_combo->addItems(
+                {QStringLiteral("AVC (H.264)"), QStringLiteral("HEVC (H.265)"), QStringLiteral("AV1")});
+            fes_layout->addWidget(
+                makeSettingsRow(fmt_expert_section_, QStringLiteral("HEVC codec"), nullptr, QString(), hevc_combo));
 
-            auto* ph3 = new ui::widgets::PlaceholderRow(fmt_expert_section_);
-            ph3->setLabel(QStringLiteral("Bit depth"));
-            ph3->setVersionTag(QStringLiteral("0.7"));
-            fes_layout->addWidget(ph3);
+            auto* bitdepth_combo = new QComboBox(fmt_expert_section_);
+            bitdepth_combo->setObjectName(QStringLiteral("roadmapDummy_bitDepth"));
+            bitdepth_combo->addItems({QStringLiteral("8-bit"), QStringLiteral("10-bit")});
+            fes_layout->addWidget(
+                makeSettingsRow(fmt_expert_section_, QStringLiteral("Bit depth"), nullptr, QString(), bitdepth_combo));
 
-            auto* ph4 = new ui::widgets::PlaceholderRow(fmt_expert_section_);
-            ph4->setLabel(QStringLiteral("HDR10 + colour metadata"));
-            ph4->setVersionTag(QStringLiteral("0.7"));
-            fes_layout->addWidget(ph4);
+            auto* hdr10_toggle = new ui::widgets::ExoToggle(fmt_expert_section_);
+            hdr10_toggle->setObjectName(QStringLiteral("roadmapDummy_hdr10"));
+            hdr10_toggle->setOn(false);
+            fes_layout->addWidget(makeSettingsRow(fmt_expert_section_, QStringLiteral("HDR10 + colour metadata"),
+                                                  nullptr, QString(), hdr10_toggle));
 
-            auto* ph5 = new ui::widgets::PlaceholderRow(fmt_expert_section_);
-            ph5->setObjectName(QStringLiteral("chromaSubsamplingPlaceholder"));
-            ph5->setLabel(QStringLiteral("Chroma subsampling (4:2:0 \xc2\xb7 4:2:2 \xc2\xb7 4:4:4)"));
-            ph5->setVersionTag(QStringLiteral("0.7"));
-            fes_layout->addWidget(ph5);
+            auto* chroma_combo = new QComboBox(fmt_expert_section_);
+            chroma_combo->setObjectName(QStringLiteral("roadmapDummy_chromaSubsampling"));
+            chroma_combo->addItems({QStringLiteral("4:2:0"), QStringLiteral("4:2:2"), QStringLiteral("4:4:4")});
+            fes_layout->addWidget(makeSettingsRow(fmt_expert_section_, QStringLiteral("Chroma subsampling"), nullptr,
+                                                  QString(), chroma_combo));
         }
+#endif // NDEBUG
 
         fmt_layout->addWidget(fmt_expert_section_);
     }
@@ -1312,6 +1309,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         mic_device_combo_->setObjectName(QStringLiteral("micDeviceCombo"));
         mic_device_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         mic_device_combo_->setMinimumWidth(0); // Wave 2 Part C: let it shrink with the layout
+        // S3: editable combo with type-to-filter autocomplete for long device name lists.
+        mic_device_combo_->setEditable(true);
+        mic_device_combo_->setInsertPolicy(QComboBox::NoInsert);
+        {
+            auto* completer = new QCompleter(mic_device_combo_->model(), mic_device_combo_);
+            completer->setFilterMode(Qt::MatchContains);
+            completer->setCompletionMode(QCompleter::PopupCompletion);
+            completer->setCaseSensitivity(Qt::CaseInsensitive);
+            mic_device_combo_->setCompleter(completer);
+        }
         mic_rl->addWidget(mic_device_combo_, 1);
         audio_rescan_btn_ = new QPushButton(mic_row); // #09: icon-only rescan button
         audio_rescan_btn_->setObjectName(QStringLiteral("audioRescanBtn"));
@@ -1360,17 +1367,22 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             hl->setSpacing(14);
             auto* lbl = new QLabel(QStringLiteral("Mic gain"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
-            hl->addWidget(lbl, 1);
+            hl->addWidget(lbl, 0);
+            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kMicGain, row), 0, Qt::AlignVCenter);
+            hl->addStretch(1);
 
             const int init_db =
                 static_cast<int>(std::roundf(20.f * std::log10f(std::max(0.001f, audio_ui_state_.mic_gain_linear))));
 
-            mic_gain_slider_ = new QSlider(Qt::Horizontal, row);
+            // S3: ExoSlider with gradient groove + tick marks at -12, -6, 0 dB (unity), 6, 12.
+            mic_gain_slider_ = new ui::widgets::ExoSlider(Qt::Horizontal, row);
             mic_gain_slider_->setObjectName(QStringLiteral("micGainSlider"));
             mic_gain_slider_->setRange(-12, 12);
             mic_gain_slider_->setSingleStep(1);
             mic_gain_slider_->setPageStep(3);
             mic_gain_slider_->setValue(init_db);
+            mic_gain_slider_->setDefaultValue(0); // 0 dB = unity gain (prominent marker)
+            mic_gain_slider_->setTickValues({-12, -6, 0, 6, 12});
             mic_gain_slider_->setFixedWidth(120);
             hl->addWidget(mic_gain_slider_, 0, Qt::AlignVCenter);
 
@@ -1399,7 +1411,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             hl->setSpacing(14);
             auto* lbl = new QLabel(QStringLiteral("Mic channel mode"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
-            hl->addWidget(lbl, 1);
+            hl->addWidget(lbl, 0);
+            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kMicChannelMode, row), 0, Qt::AlignVCenter);
+            hl->addStretch(1);
             mic_channel_mode_combo_ = new QComboBox(row);
             mic_channel_mode_combo_->setObjectName(QStringLiteral("micChannelModeCombo"));
             mic_channel_mode_combo_->addItem(QStringLiteral("Auto"),
@@ -1412,10 +1426,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                                              static_cast<int>(recorder_core::MicChannelMode::LeftToStereo));
             mic_channel_mode_combo_->addItem(QStringLiteral("R \xe2\x86\x92 Stereo"),
                                              static_cast<int>(recorder_core::MicChannelMode::RightToStereo));
+            mic_channel_mode_combo_->setFixedWidth(160);
+            mic_channel_mode_combo_->setProperty("settingsRowInput", true);
             hl->addWidget(mic_channel_mode_combo_, 0, Qt::AlignVCenter);
             row->setProperty("settingsRow", true);
             aes_layout->addWidget(row);
         }
+
+        // Capture the insertion point for the Microphone post-processing row, which is
+        // built later but must appear visually here (immediately after Mic channel mode).
+        int mic_post_insert_index = aes_layout->count();
 
         // Audio bitrate
         {
@@ -1430,12 +1450,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             hl->setSpacing(14);
             auto* lbl = new QLabel(QStringLiteral("Audio bitrate"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
-            hl->addWidget(lbl, 1);
+            hl->addWidget(lbl, 0);
+            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kAudioBitrate, row), 0, Qt::AlignVCenter);
+            hl->addStretch(1);
             audio_bitrate_kbps_spin_ = new QSpinBox(row);
             audio_bitrate_kbps_spin_->setObjectName(QStringLiteral("audioBitrateKbpsSpin"));
             audio_bitrate_kbps_spin_->setRange(32, 510);
             audio_bitrate_kbps_spin_->setSuffix(QStringLiteral(" kbps"));
             audio_bitrate_kbps_spin_->setValue(static_cast<int>(audio_ui_state_.audio_bitrate_kbps));
+            audio_bitrate_kbps_spin_->setFixedWidth(160);
+            audio_bitrate_kbps_spin_->setProperty("settingsRowInput", true);
             hl->addWidget(audio_bitrate_kbps_spin_, 0, Qt::AlignVCenter);
             row->setProperty("settingsRow", true);
             aes_layout->addWidget(row);
@@ -1454,7 +1478,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             hl->setSpacing(14);
             auto* lbl = new QLabel(QStringLiteral("Opus frame duration"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
-            hl->addWidget(lbl, 1);
+            hl->addWidget(lbl, 0);
+            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kOpusFrameDuration, row), 0, Qt::AlignVCenter);
+            hl->addStretch(1);
             opus_frame_duration_combo_ = new QComboBox(row);
             opus_frame_duration_combo_->setObjectName(QStringLiteral("opusFrameDurationCombo"));
             opus_frame_duration_combo_->addItem(QStringLiteral("20 ms"),
@@ -1463,6 +1489,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                                                 static_cast<int>(recorder_core::OpusFrameDuration::Ms10));
             opus_frame_duration_combo_->addItem(QStringLiteral("5 ms"),
                                                 static_cast<int>(recorder_core::OpusFrameDuration::Ms5));
+            opus_frame_duration_combo_->setFixedWidth(160);
+            opus_frame_duration_combo_->setProperty("settingsRowInput", true);
             hl->addWidget(opus_frame_duration_combo_, 0, Qt::AlignVCenter);
             row->setProperty("settingsRow", true);
             aes_layout->addWidget(row);
@@ -1481,42 +1509,163 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             hl->setSpacing(14);
             auto* lbl = new QLabel(QStringLiteral("Opus complexity"), row);
             lbl->setProperty("labelRole", "settingsRowLabel");
-            hl->addWidget(lbl, 1);
+            hl->addWidget(lbl, 0);
+            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kOpusComplexity, row), 0, Qt::AlignVCenter);
+            hl->addStretch(1);
             opus_complexity_spin_ = new QSpinBox(row);
             opus_complexity_spin_->setObjectName(QStringLiteral("opusComplexitySpin"));
             opus_complexity_spin_->setRange(0, 10);
             opus_complexity_spin_->setValue(audio_ui_state_.opus_complexity);
+            opus_complexity_spin_->setFixedWidth(160);
+            opus_complexity_spin_->setProperty("settingsRowInput", true);
             hl->addWidget(opus_complexity_spin_, 0, Qt::AlignVCenter);
             row->setProperty("settingsRow", true);
             aes_layout->addWidget(row);
         }
 
-        // Brickwall limiter (Audio v2 — 0.6.0)
+        // Sample rate (ADR 0030 — 0.6.0)
         {
             auto* rule = new QFrame(audio_expert_section_);
             rule->setFrameShape(QFrame::HLine);
             rule->setProperty("frameRole", "sectionRuleLine");
             aes_layout->addWidget(rule);
 
-            auto* row = new QWidget(audio_expert_section_);
-            auto* hl = new QHBoxLayout(row);
+            audio_sample_rate_row_ = new QWidget(audio_expert_section_);
+            auto* hl = new QHBoxLayout(audio_sample_rate_row_);
             hl->setContentsMargins(0, 12, 0, 12);
             hl->setSpacing(14);
-            limiter_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Brickwall limiter"), row);
+            auto* lbl = new QLabel(QStringLiteral("Sample rate"), audio_sample_rate_row_);
+            lbl->setProperty("labelRole", "settingsRowLabel");
+            hl->addWidget(lbl, 0);
+            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kAudioSampleRate, audio_sample_rate_row_), 0,
+                          Qt::AlignVCenter);
+            hl->addStretch(1);
+            audio_sample_rate_combo_ = new QComboBox(audio_sample_rate_row_);
+            audio_sample_rate_combo_->setObjectName(QStringLiteral("audioSampleRateCombo"));
+            audio_sample_rate_combo_->addItem(QStringLiteral("44100 Hz"), 44100);
+            audio_sample_rate_combo_->addItem(QStringLiteral("48000 Hz"), 48000);
+            audio_sample_rate_combo_->addItem(QStringLiteral("96000 Hz"), 96000);
+            {
+                const int idx = audio_sample_rate_combo_->findData(static_cast<int>(audio_ui_state_.audio_sample_rate));
+                audio_sample_rate_combo_->setCurrentIndex(idx >= 0 ? idx : 1 /* 48000 */);
+            }
+            audio_sample_rate_combo_->setFixedWidth(160);
+            audio_sample_rate_combo_->setProperty("settingsRowInput", true);
+            hl->addWidget(audio_sample_rate_combo_, 0, Qt::AlignVCenter);
+            audio_sample_rate_row_->setProperty("settingsRow", true);
+            aes_layout->addWidget(audio_sample_rate_row_);
+        }
+
+        // Channels (ADR 0030 — 0.6.0)
+        {
+            auto* rule = new QFrame(audio_expert_section_);
+            rule->setFrameShape(QFrame::HLine);
+            rule->setProperty("frameRole", "sectionRuleLine");
+            aes_layout->addWidget(rule);
+
+            audio_channels_row_ = new QWidget(audio_expert_section_);
+            auto* hl = new QHBoxLayout(audio_channels_row_);
+            hl->setContentsMargins(0, 12, 0, 12);
+            hl->setSpacing(14);
+            auto* lbl = new QLabel(QStringLiteral("Channels"), audio_channels_row_);
+            lbl->setProperty("labelRole", "settingsRowLabel");
+            hl->addWidget(lbl, 0);
+            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kAudioChannels, audio_channels_row_), 0,
+                          Qt::AlignVCenter);
+            hl->addStretch(1);
+            audio_channels_combo_ = new QComboBox(audio_channels_row_);
+            audio_channels_combo_->setObjectName(QStringLiteral("audioChannelsCombo"));
+            audio_channels_combo_->addItem(QStringLiteral("Stereo"), 2);
+            audio_channels_combo_->addItem(QStringLiteral("Mono"), 1);
+            {
+                const int idx = audio_channels_combo_->findData(static_cast<int>(audio_ui_state_.audio_channels));
+                audio_channels_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* Stereo */);
+            }
+            audio_channels_combo_->setFixedWidth(160);
+            audio_channels_combo_->setProperty("settingsRowInput", true);
+            hl->addWidget(audio_channels_combo_, 0, Qt::AlignVCenter);
+            audio_channels_row_->setProperty("settingsRow", true);
+            aes_layout->addWidget(audio_channels_row_);
+        }
+
+        // Bit depth (ADR 0030 — 0.6.0): visible for PCM/FLAC only
+        {
+            auto* rule = new QFrame(audio_expert_section_);
+            rule->setFrameShape(QFrame::HLine);
+            rule->setProperty("frameRole", "sectionRuleLine");
+            aes_layout->addWidget(rule);
+
+            audio_bit_depth_row_ = new QWidget(audio_expert_section_);
+            auto* hl = new QHBoxLayout(audio_bit_depth_row_);
+            hl->setContentsMargins(0, 12, 0, 12);
+            hl->setSpacing(14);
+            auto* lbl = new QLabel(QStringLiteral("Bit depth"), audio_bit_depth_row_);
+            lbl->setProperty("labelRole", "settingsRowLabel");
+            hl->addWidget(lbl, 0);
+            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kAudioBitDepth, audio_bit_depth_row_), 0,
+                          Qt::AlignVCenter);
+            hl->addStretch(1);
+            audio_bit_depth_combo_ = new QComboBox(audio_bit_depth_row_);
+            audio_bit_depth_combo_->setObjectName(QStringLiteral("audioBitDepthCombo"));
+            // Items seeded for PCM (16/24/32); rebuilt when codec changes.
+            audio_bit_depth_combo_->addItem(QStringLiteral("16-bit"), 16);
+            audio_bit_depth_combo_->addItem(QStringLiteral("24-bit"), 24);
+            audio_bit_depth_combo_->addItem(QStringLiteral("32-bit"), 32);
+            {
+                const int idx = audio_bit_depth_combo_->findData(static_cast<int>(audio_ui_state_.audio_bit_depth));
+                audio_bit_depth_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* 16 */);
+            }
+            audio_bit_depth_combo_->setFixedWidth(160);
+            audio_bit_depth_combo_->setProperty("settingsRowInput", true);
+            hl->addWidget(audio_bit_depth_combo_, 0, Qt::AlignVCenter);
+            audio_bit_depth_row_->setProperty("settingsRow", true);
+            audio_bit_depth_row_->setVisible(false); // shown only for PCM/FLAC
+            aes_layout->addWidget(audio_bit_depth_row_);
+        }
+
+        // FLAC compression level (ADR 0030 — 0.6.0): visible for FLAC only
+        {
+            auto* rule = new QFrame(audio_expert_section_);
+            rule->setFrameShape(QFrame::HLine);
+            rule->setProperty("frameRole", "sectionRuleLine");
+            aes_layout->addWidget(rule);
+
+            flac_compression_row_ = new QWidget(audio_expert_section_);
+            auto* hl = new QHBoxLayout(flac_compression_row_);
+            hl->setContentsMargins(0, 12, 0, 12);
+            hl->setSpacing(14);
+            auto* lbl = new QLabel(QStringLiteral("FLAC compression"), flac_compression_row_);
+            lbl->setProperty("labelRole", "settingsRowLabel");
+            hl->addWidget(lbl, 0);
+            hl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kFlacCompression, flac_compression_row_), 0,
+                          Qt::AlignVCenter);
+            hl->addStretch(1);
+            flac_compression_spin_ = new QSpinBox(flac_compression_row_);
+            flac_compression_spin_->setObjectName(QStringLiteral("flacCompressionLevelSpin"));
+            flac_compression_spin_->setRange(0, 8);
+            flac_compression_spin_->setValue(audio_ui_state_.flac_compression_level);
+            flac_compression_spin_->setFixedWidth(160);
+            flac_compression_spin_->setProperty("settingsRowInput", true);
+            hl->addWidget(flac_compression_spin_, 0, Qt::AlignVCenter);
+            flac_compression_row_->setProperty("settingsRow", true);
+            flac_compression_row_->setVisible(false); // shown only for FLAC
+            aes_layout->addWidget(flac_compression_row_);
+        }
+
+        // Brickwall limiter (Audio v2 — 0.6.0) — S5: collapsed into a SettingsPopoverRow.
+        {
+            auto* rule = new QFrame(audio_expert_section_);
+            rule->setFrameShape(QFrame::HLine);
+            rule->setProperty("frameRole", "sectionRuleLine");
+            aes_layout->addWidget(rule);
+
+            // Create the sub-controls first (connections are wired below in the
+            // connect() block — objectNames and pointers must survive).
+            limiter_check_ = new ui::widgets::ExoCheckBox(QString(), audio_expert_section_);
             limiter_check_->setObjectName(QStringLiteral("limiterCheck"));
             limiter_check_->setChecked(audio_ui_state_.limiter_enabled);
-            hl->addWidget(limiter_check_, 1);
-            row->setProperty("settingsRow", true);
-            aes_layout->addWidget(row);
 
-            auto* crow = new QWidget(audio_expert_section_);
-            auto* chl = new QHBoxLayout(crow);
-            chl->setContentsMargins(0, 12, 0, 12);
-            chl->setSpacing(14);
-            auto* clbl = new QLabel(QStringLiteral("Limiter ceiling"), crow);
-            clbl->setProperty("labelRole", "settingsRowLabel");
-            chl->addWidget(clbl, 1);
-            limiter_ceiling_spin_ = new QDoubleSpinBox(crow);
+            limiter_ceiling_spin_ = new QDoubleSpinBox(audio_expert_section_);
             limiter_ceiling_spin_->setObjectName(QStringLiteral("limiterCeilingSpin"));
             limiter_ceiling_spin_->setRange(-60.0, 0.0);
             limiter_ceiling_spin_->setSingleStep(0.5);
@@ -1524,37 +1673,46 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             limiter_ceiling_spin_->setSuffix(QStringLiteral(" dB"));
             limiter_ceiling_spin_->setValue(static_cast<double>(audio_ui_state_.limiter_ceiling_db));
             limiter_ceiling_spin_->setEnabled(audio_ui_state_.limiter_enabled);
-            chl->addWidget(limiter_ceiling_spin_, 0, Qt::AlignVCenter);
-            crow->setProperty("settingsRow", true);
-            aes_layout->addWidget(crow);
+            limiter_ceiling_spin_->setFixedWidth(160);
+            limiter_ceiling_spin_->setProperty("settingsRowInput", true);
+
+            auto* limiter_popover_row =
+                new ui::widgets::SettingsPopoverRow(QStringLiteral("Brickwall limiter"), audio_expert_section_);
+            limiter_popover_row->setInfoHint(ui::hints::kBrickwallLimiter);
+            // The existing checkbox becomes the primary control (enable/disable toggle).
+            limiter_popover_row->setPrimaryControl(limiter_check_);
+            limiter_popover_row->setProperty("settingsRow", true);
+            aes_layout->addWidget(limiter_popover_row);
+
+            // Ceiling spinbox goes into the popover as a labelled row.
+            auto* ceiling_row = new QWidget();
+            auto* ceiling_hl = new QHBoxLayout(ceiling_row);
+            ceiling_hl->setContentsMargins(0, 8, 0, 8);
+            ceiling_hl->setSpacing(14);
+            auto* ceiling_lbl = new QLabel(QStringLiteral("Limiter ceiling"), ceiling_row);
+            ceiling_lbl->setProperty("labelRole", "settingsRowLabel");
+            ceiling_hl->addWidget(ceiling_lbl, 1);
+            ceiling_hl->addWidget(limiter_ceiling_spin_, 0, Qt::AlignVCenter);
+            ceiling_row->setProperty("settingsRow", true);
+            limiter_popover_row->popoverContentLayout()->addWidget(ceiling_row);
         }
 
-        // Microphone high-pass filter (Audio v2 — 0.6.0)
+        // Microphone post-processing (Audio v2 — 0.6.0) — S5: 4 stage rows collapsed
+        // into a single SettingsPopoverRow. HPF → Gate → AGC → RNNoise order preserved.
+        // Constructed here but inserted at mic_post_insert_index so it appears visually
+        // immediately after the Mic channel mode row (mic source/tuning/processing grouped).
         {
             auto* rule = new QFrame(audio_expert_section_);
             rule->setFrameShape(QFrame::HLine);
             rule->setProperty("frameRole", "sectionRuleLine");
-            aes_layout->addWidget(rule);
+            aes_layout->insertWidget(mic_post_insert_index, rule);
 
-            auto* row = new QWidget(audio_expert_section_);
-            auto* hl = new QHBoxLayout(row);
-            hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
-            mic_hpf_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("High-pass filter"), row);
+            // --- Create all sub-controls (objectNames + values preserved as before). ---
+            mic_hpf_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("High-pass filter"), audio_expert_section_);
             mic_hpf_check_->setObjectName(QStringLiteral("micHpfCheck"));
             mic_hpf_check_->setChecked(audio_ui_state_.mic_hpf_enabled);
-            hl->addWidget(mic_hpf_check_, 1);
-            row->setProperty("settingsRow", true);
-            aes_layout->addWidget(row);
 
-            auto* crow = new QWidget(audio_expert_section_);
-            auto* chl = new QHBoxLayout(crow);
-            chl->setContentsMargins(0, 12, 0, 12);
-            chl->setSpacing(14);
-            auto* clbl = new QLabel(QStringLiteral("HPF cutoff"), crow);
-            clbl->setProperty("labelRole", "settingsRowLabel");
-            chl->addWidget(clbl, 1);
-            mic_hpf_cutoff_spin_ = new QDoubleSpinBox(crow);
+            mic_hpf_cutoff_spin_ = new QDoubleSpinBox(audio_expert_section_);
             mic_hpf_cutoff_spin_->setObjectName(QStringLiteral("micHpfCutoffSpin"));
             mic_hpf_cutoff_spin_->setRange(20.0, 1000.0);
             mic_hpf_cutoff_spin_->setSingleStep(5.0);
@@ -1562,37 +1720,14 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             mic_hpf_cutoff_spin_->setSuffix(QStringLiteral(" Hz"));
             mic_hpf_cutoff_spin_->setValue(static_cast<double>(audio_ui_state_.mic_hpf_cutoff_hz));
             mic_hpf_cutoff_spin_->setEnabled(audio_ui_state_.mic_hpf_enabled);
-            chl->addWidget(mic_hpf_cutoff_spin_, 0, Qt::AlignVCenter);
-            crow->setProperty("settingsRow", true);
-            aes_layout->addWidget(crow);
-        }
+            mic_hpf_cutoff_spin_->setFixedWidth(160);
+            mic_hpf_cutoff_spin_->setProperty("settingsRowInput", true);
 
-        // Microphone noise gate (Audio v2 — 0.6.0)
-        {
-            auto* rule = new QFrame(audio_expert_section_);
-            rule->setFrameShape(QFrame::HLine);
-            rule->setProperty("frameRole", "sectionRuleLine");
-            aes_layout->addWidget(rule);
-
-            auto* row = new QWidget(audio_expert_section_);
-            auto* hl = new QHBoxLayout(row);
-            hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
-            mic_gate_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Noise gate"), row);
+            mic_gate_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Noise gate"), audio_expert_section_);
             mic_gate_check_->setObjectName(QStringLiteral("micGateCheck"));
             mic_gate_check_->setChecked(audio_ui_state_.mic_gate_enabled);
-            hl->addWidget(mic_gate_check_, 1);
-            row->setProperty("settingsRow", true);
-            aes_layout->addWidget(row);
 
-            auto* trow = new QWidget(audio_expert_section_);
-            auto* thl = new QHBoxLayout(trow);
-            thl->setContentsMargins(0, 12, 0, 12);
-            thl->setSpacing(14);
-            auto* tlbl = new QLabel(QStringLiteral("Gate threshold"), trow);
-            tlbl->setProperty("labelRole", "settingsRowLabel");
-            thl->addWidget(tlbl, 1);
-            mic_gate_threshold_spin_ = new QDoubleSpinBox(trow);
+            mic_gate_threshold_spin_ = new QDoubleSpinBox(audio_expert_section_);
             mic_gate_threshold_spin_->setObjectName(QStringLiteral("micGateThresholdSpin"));
             mic_gate_threshold_spin_->setRange(-80.0, 0.0);
             mic_gate_threshold_spin_->setSingleStep(1.0);
@@ -1600,37 +1735,15 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             mic_gate_threshold_spin_->setSuffix(QStringLiteral(" dB"));
             mic_gate_threshold_spin_->setValue(static_cast<double>(audio_ui_state_.mic_gate_threshold_db));
             mic_gate_threshold_spin_->setEnabled(audio_ui_state_.mic_gate_enabled);
-            thl->addWidget(mic_gate_threshold_spin_, 0, Qt::AlignVCenter);
-            trow->setProperty("settingsRow", true);
-            aes_layout->addWidget(trow);
-        }
+            mic_gate_threshold_spin_->setFixedWidth(160);
+            mic_gate_threshold_spin_->setProperty("settingsRowInput", true);
 
-        // Microphone automatic gain control (Audio v2 — 0.6.0).
-        {
-            auto* rule = new QFrame(audio_expert_section_);
-            rule->setFrameShape(QFrame::HLine);
-            rule->setProperty("frameRole", "sectionRuleLine");
-            aes_layout->addWidget(rule);
-
-            auto* row = new QWidget(audio_expert_section_);
-            auto* hl = new QHBoxLayout(row);
-            hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
-            mic_agc_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Automatic gain control"), row);
+            mic_agc_check_ =
+                new ui::widgets::ExoCheckBox(QStringLiteral("Automatic gain control"), audio_expert_section_);
             mic_agc_check_->setObjectName(QStringLiteral("micAgcCheck"));
             mic_agc_check_->setChecked(audio_ui_state_.mic_agc_enabled);
-            hl->addWidget(mic_agc_check_, 1);
-            row->setProperty("settingsRow", true);
-            aes_layout->addWidget(row);
 
-            auto* trow = new QWidget(audio_expert_section_);
-            auto* thl = new QHBoxLayout(trow);
-            thl->setContentsMargins(0, 12, 0, 12);
-            thl->setSpacing(14);
-            auto* tlbl = new QLabel(QStringLiteral("AGC target level"), trow);
-            tlbl->setProperty("labelRole", "settingsRowLabel");
-            thl->addWidget(tlbl, 1);
-            mic_agc_target_spin_ = new QDoubleSpinBox(trow);
+            mic_agc_target_spin_ = new QDoubleSpinBox(audio_expert_section_);
             mic_agc_target_spin_->setObjectName(QStringLiteral("micAgcTargetSpin"));
             mic_agc_target_spin_->setRange(-40.0, 0.0);
             mic_agc_target_spin_->setSingleStep(1.0);
@@ -1638,38 +1751,81 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             mic_agc_target_spin_->setSuffix(QStringLiteral(" dB"));
             mic_agc_target_spin_->setValue(static_cast<double>(audio_ui_state_.mic_agc_target_db));
             mic_agc_target_spin_->setEnabled(audio_ui_state_.mic_agc_enabled);
-            thl->addWidget(mic_agc_target_spin_, 0, Qt::AlignVCenter);
-            trow->setProperty("settingsRow", true);
-            aes_layout->addWidget(trow);
-        }
+            mic_agc_target_spin_->setFixedWidth(160);
+            mic_agc_target_spin_->setProperty("settingsRowInput", true);
 
-        // Microphone RNNoise neural noise suppression (Audio v2 — 0.6.0). Bool
-        // only — RNNoise is a fixed trained model with no user parameter.
-        {
-            auto* rule = new QFrame(audio_expert_section_);
-            rule->setFrameShape(QFrame::HLine);
-            rule->setProperty("frameRole", "sectionRuleLine");
-            aes_layout->addWidget(rule);
-
-            auto* row = new QWidget(audio_expert_section_);
-            auto* hl = new QHBoxLayout(row);
-            hl->setContentsMargins(0, 12, 0, 12);
-            hl->setSpacing(14);
-            mic_rnnoise_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Noise suppression (RNNoise)"), row);
+            mic_rnnoise_check_ =
+                new ui::widgets::ExoCheckBox(QStringLiteral("Noise suppression (RNNoise)"), audio_expert_section_);
             mic_rnnoise_check_->setObjectName(QStringLiteral("micRnnoiseCheck"));
             mic_rnnoise_check_->setChecked(audio_ui_state_.mic_rnnoise_enabled);
-            hl->addWidget(mic_rnnoise_check_, 1);
-            row->setProperty("settingsRow", true);
-            aes_layout->addWidget(row);
+
+            // --- Build the popover row. ---
+            mic_post_processing_row_ = new ui::widgets::SettingsPopoverRow(QStringLiteral("Microphone post-processing"),
+                                                                           audio_expert_section_);
+            mic_post_processing_row_->setObjectName(QStringLiteral("micPostProcessingRow"));
+            mic_post_processing_row_->setInfoHint(
+                QStringLiteral("DSP stages applied to the microphone signal before encoding"));
+            mic_post_processing_row_->setProperty("settingsRow", true);
+            aes_layout->insertWidget(mic_post_insert_index + 1, mic_post_processing_row_);
+
+            // Populate the popover: HPF toggle + cutoff, Gate toggle + threshold,
+            // AGC toggle + target, RNNoise toggle (bool-only). Each sub-stage is a
+            // mini row inside the popover content panel.
+            auto* pcl = mic_post_processing_row_->popoverContentLayout();
+
+            auto makeSubRow = [](QWidget* toggle, QDoubleSpinBox* param_spin, const QString& param_label) -> QWidget* {
+                auto* container = new QWidget();
+                auto* vl = new QVBoxLayout(container);
+                vl->setContentsMargins(0, 0, 0, 0);
+                vl->setSpacing(4);
+                vl->addWidget(toggle);
+                if (param_spin) {
+                    auto* param_row = new QWidget();
+                    auto* hl = new QHBoxLayout(param_row);
+                    hl->setContentsMargins(20, 0, 0, 0); // indent under toggle
+                    hl->setSpacing(14);
+                    auto* lbl = new QLabel(param_label, param_row);
+                    lbl->setProperty("labelRole", "settingsRowLabel");
+                    hl->addWidget(lbl, 1);
+                    hl->addWidget(param_spin, 0, Qt::AlignVCenter);
+                    vl->addWidget(param_row);
+                }
+                return container;
+            };
+
+            pcl->addWidget(makeSubRow(mic_hpf_check_, mic_hpf_cutoff_spin_, QStringLiteral("HPF cutoff")));
+            pcl->addWidget(makeSubRow(mic_gate_check_, mic_gate_threshold_spin_, QStringLiteral("Gate threshold")));
+            pcl->addWidget(makeSubRow(mic_agc_check_, mic_agc_target_spin_, QStringLiteral("AGC target level")));
+            pcl->addWidget(makeSubRow(mic_rnnoise_check_, nullptr, QString()));
+
+            // Status text: list the active stages, updated whenever any stage toggles.
+            // (Defined as a lambda stored on the row widget via a QObject property — we
+            // use a plain slot wired to all four stage checkboxes.)
+            auto updateMicPostStatus = [this]() {
+                QStringList active;
+                if (mic_hpf_check_->isChecked())
+                    active << QStringLiteral("High-pass");
+                if (mic_gate_check_->isChecked())
+                    active << QStringLiteral("Gate");
+                if (mic_agc_check_->isChecked())
+                    active << QStringLiteral("AGC");
+                if (mic_rnnoise_check_->isChecked())
+                    active << QStringLiteral("RNNoise");
+                mic_post_processing_row_->setStatusText(active.isEmpty() ? QStringLiteral("Off")
+                                                                         : active.join(QStringLiteral(" \xC2\xB7 ")));
+            };
+            // Wire to the stage toggles so the status stays live.
+            connect(mic_hpf_check_, &ui::widgets::ExoCheckBox::toggled, this, updateMicPostStatus);
+            connect(mic_gate_check_, &ui::widgets::ExoCheckBox::toggled, this, updateMicPostStatus);
+            connect(mic_agc_check_, &ui::widgets::ExoCheckBox::toggled, this, updateMicPostStatus);
+            connect(mic_rnnoise_check_, &ui::widgets::ExoCheckBox::toggled, this, updateMicPostStatus);
+            // Set initial status text.
+            updateMicPostStatus();
         }
 
-        // Audio PlaceholderRows
-        {
-            auto* ph1 = new ui::widgets::PlaceholderRow(audio_expert_section_);
-            ph1->setLabel(QStringLiteral("PCM / FLAC codecs"));
-            ph1->setVersionTag(QStringLiteral("0.6"));
-            aes_layout->addWidget(ph1);
-        }
+        // (0.6.0: the former "PCM / FLAC codecs" roadmap placeholder was removed —
+        // PCM and FLAC are now real, selectable audio codecs in the codec dropdown,
+        // so advertising them as upcoming here would contradict the live control.)
 
         audio_panel_layout->addWidget(audio_expert_section_);
     }
@@ -1805,6 +1961,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // Wave 2: the SettingsCardExpander was dissolved. Split controls now live in a plain
     // QWidget that is shown/hidden by updateExpertModeVisibility() together with the
     // developer card (same expert-mode gate, no per-card expander).
+    // S5: Split controls collapsed into a SettingsPopoverRow inside the expert section.
     split_expert_section_ = new QWidget(out_panel);
     split_expert_section_->setObjectName(QStringLiteral("splitExpertSection"));
     split_expert_section_->setVisible(false); // hidden until expert mode is on
@@ -1813,11 +1970,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         split_expert_layout->setContentsMargins(0, 0, 0, 0);
         split_expert_layout->setSpacing(8);
 
-        split_expert_layout->addWidget(makeOutputSubLabelWithHint(QStringLiteral("Split recording"),
-                                                                  ui::hints::kSplitRecording, split_expert_section_));
-        auto* split_row = new QHBoxLayout();
-        split_row->setContentsMargins(0, 0, 0, 0);
-        split_row->setSpacing(8);
+        // --- Create all sub-controls first (objectNames + values preserved as before). ---
         split_mode_combo_ = new QComboBox(split_expert_section_);
         split_mode_combo_->setObjectName(QStringLiteral("splitModeCombo"));
         split_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitRecordingMode::Off));
@@ -1827,9 +1980,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         split_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitRecordingMode::Custom));
         split_mode_combo_->setToolTip(
             QStringLiteral("Automatically start a new file at the chosen interval (manual splits always work)."));
-        split_row->addWidget(split_mode_combo_, 0);
 
         split_custom_widget_ = new QWidget(split_expert_section_);
+        split_custom_widget_->setObjectName(QStringLiteral("splitCustomWidget"));
         auto* split_custom_layout = new QHBoxLayout(split_custom_widget_);
         split_custom_layout->setContentsMargins(0, 0, 0, 0);
         split_custom_layout->setSpacing(8);
@@ -1844,26 +1997,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         split_custom_layout->addWidget(split_every_label);
         split_custom_layout->addWidget(split_custom_minutes_spin_);
         split_custom_widget_->setVisible(false);
-        split_row->addWidget(split_custom_widget_, 0);
-        split_row->addStretch();
-        split_expert_layout->addLayout(split_row);
 
         split_summary_label_ = makeHint(QString(), split_expert_section_);
         split_summary_label_->setObjectName(QStringLiteral("splitSummaryLabel"));
-        split_expert_layout->addWidget(split_summary_label_);
 
-        // ---- Split recording by size (SPLIT-BY-SIZE-R1) ----
-        split_expert_layout->addWidget(makeOutputSubLabel(QStringLiteral("Split by size"), split_expert_section_));
-        auto* split_size_row = new QHBoxLayout();
-        split_size_row->setContentsMargins(0, 0, 0, 0);
-        split_size_row->setSpacing(8);
         split_size_mode_combo_ = new QComboBox(split_expert_section_);
         split_size_mode_combo_->setObjectName(QStringLiteral("splitSizeModeCombo"));
         split_size_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitSizeMode::Off));
         split_size_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitSizeMode::Custom));
         split_size_mode_combo_->setToolTip(
             QStringLiteral("Automatically start a new file when the segment reaches the chosen size."));
-        split_size_row->addWidget(split_size_mode_combo_, 0);
 
         split_size_custom_widget_ = new QWidget(split_expert_section_);
         auto* split_size_custom_layout = new QHBoxLayout(split_size_custom_widget_);
@@ -1883,31 +2026,65 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         split_size_custom_layout->addWidget(split_size_label);
         split_size_custom_layout->addWidget(split_custom_size_spin_);
         split_size_custom_widget_->setVisible(false);
-        split_size_row->addWidget(split_size_custom_widget_, 0);
-        split_size_row->addStretch();
-        split_expert_layout->addLayout(split_size_row);
+
+        // --- Build the popover row. ---
+        auto* split_popover_row =
+            new ui::widgets::SettingsPopoverRow(QStringLiteral("Automatic split"), split_expert_section_);
+        split_popover_row->setInfoHint(ui::hints::kSplitRecording);
+        split_expert_layout->addWidget(split_popover_row);
+
+        // "Split recording" sub-section inside the popover.
+        auto* pcl = split_popover_row->popoverContentLayout();
+
+        auto* time_lbl = makeOutputSubLabel(QStringLiteral("Split recording"), split_expert_section_);
+        pcl->addWidget(time_lbl);
+
+        auto* split_row = new QWidget(split_expert_section_);
+        auto* split_row_hl = new QHBoxLayout(split_row);
+        split_row_hl->setContentsMargins(0, 4, 0, 4);
+        split_row_hl->setSpacing(8);
+        split_row_hl->addWidget(split_mode_combo_, 0);
+        split_row_hl->addWidget(split_custom_widget_, 0);
+        split_row_hl->addStretch();
+        pcl->addWidget(split_row);
+        pcl->addWidget(split_summary_label_);
+
+        // "Split by size" sub-section inside the popover.
+        auto* size_lbl = makeOutputSubLabel(QStringLiteral("Split by size"), split_expert_section_);
+        pcl->addWidget(size_lbl);
+
+        auto* split_size_row = new QWidget(split_expert_section_);
+        auto* split_size_row_hl = new QHBoxLayout(split_size_row);
+        split_size_row_hl->setContentsMargins(0, 4, 0, 4);
+        split_size_row_hl->setSpacing(8);
+        split_size_row_hl->addWidget(split_size_mode_combo_, 0);
+        split_size_row_hl->addWidget(split_size_custom_widget_, 0);
+        split_size_row_hl->addStretch();
+        pcl->addWidget(split_size_row);
     }
 
     out_panel_layout->addWidget(split_expert_section_);
 
-    // PS-PHASE-C: Output v1.0 placeholder — expert-gated.
+    // PS-PHASE-C: Output v1.0 placeholder section — expert-gated.
+#ifndef NDEBUG
     {
+        // Debug builds render a real (non-wired) toggle so the roadmap can be
+        // designed and captured on pixels.  Hidden in Release builds entirely.
         auto* out_ph_section = new QWidget(out_panel);
         out_ph_section->setObjectName(QStringLiteral("outputV1PlaceholderSection"));
         out_ph_section->setVisible(false); // hidden until expert mode on
         auto* out_ph_layout = new QVBoxLayout(out_ph_section);
         out_ph_layout->setContentsMargins(0, 0, 0, 0);
         out_ph_layout->setSpacing(0);
-        auto* ph_auto_open = new ui::widgets::PlaceholderRow(out_ph_section);
-        ph_auto_open->setObjectName(QStringLiteral("autoOpenPlaceholderRow"));
-        ph_auto_open->setLabel(QStringLiteral("Auto-open after recording"));
-        ph_auto_open->setVersionTag(QStringLiteral("1.0"));
-        out_ph_layout->addWidget(ph_auto_open);
+        auto* auto_open_toggle = new ui::widgets::ExoToggle(out_ph_section);
+        auto_open_toggle->setObjectName(QStringLiteral("roadmapDummy_autoOpen"));
+        auto_open_toggle->setOn(false);
+        out_ph_layout->addWidget(makeSettingsRow(out_ph_section, QStringLiteral("Auto-open after recording"), nullptr,
+                                                 QString(), auto_open_toggle, /*first=*/true));
         out_panel_layout->addWidget(out_ph_section);
-        // Wire expert-mode visibility — we store the pointer as local; find it via objectName in
-        // updateExpertModeVisibility Instead, connect via findChild in updateExpertModeVisibility.
-        (void)out_ph_section; // stored as child of out_panel; found by objectName in updateExpertModeVisibility
+        (void)out_ph_section; // found by objectName in updateExpertModeVisibility
     }
+#endif // NDEBUG
 
     auto* output_split = new QWidget(out_panel);
     output_split_layout_ = new QHBoxLayout(output_split);
@@ -2004,17 +2181,17 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         presence_layout->setSpacing(0);
         presence_layout->addWidget(makeCardTitle(QStringLiteral("Presence"), presence_panel));
 
-        overlay_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Show on-screen status overlay during recording"),
-                                                      presence_panel);
-        overlay_check_->setChecked(true);
+        overlay_check_ = new ui::widgets::ExoToggle(presence_panel);
+        overlay_check_->setObjectName(QStringLiteral("overlayCheck"));
+        overlay_check_->setOn(true);
         presence_layout->addWidget(
             makeSettingsRow(presence_panel, QStringLiteral("Recording overlay"),
                             new ui::widgets::InfoHintIcon(ui::hints::kRecordingOverlay, presence_panel), QString(),
                             overlay_check_, /*first=*/true));
 
-        diagnostics_overlay_check_ = new ui::widgets::ExoCheckBox(
-            QStringLiteral("Show live diagnostics on the recorded monitor during recording"), presence_panel);
-        diagnostics_overlay_check_->setChecked(false);
+        diagnostics_overlay_check_ = new ui::widgets::ExoToggle(presence_panel);
+        diagnostics_overlay_check_->setObjectName(QStringLiteral("diagnosticsOverlayCheck"));
+        diagnostics_overlay_check_->setOn(false);
         presence_layout->addWidget(
             makeSettingsRow(presence_panel, QStringLiteral("Diagnostics overlay"),
                             new ui::widgets::InfoHintIcon(
@@ -2025,42 +2202,31 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                                 presence_panel),
                             QString(), diagnostics_overlay_check_));
 
-        notifications_check_ =
-            new ui::widgets::ExoCheckBox(QStringLiteral("Show on-screen notification toasts"), presence_panel);
-        notifications_check_->setChecked(true);
+        notifications_check_ = new ui::widgets::ExoToggle(presence_panel);
+        notifications_check_->setObjectName(QStringLiteral("notificationsCheck"));
+        notifications_check_->setOn(true);
         presence_layout->addWidget(makeSettingsRow(
             presence_panel, QStringLiteral("Notifications"),
             new ui::widgets::InfoHintIcon(ui::hints::kNotifications, presence_panel), QString(), notifications_check_));
 
-        keep_in_tray_check_ =
-            new ui::widgets::ExoCheckBox(QStringLiteral("Keep running in tray when window closed"), presence_panel);
-        keep_in_tray_check_->setChecked(false);
+        keep_in_tray_check_ = new ui::widgets::ExoToggle(presence_panel);
+        keep_in_tray_check_->setObjectName(QStringLiteral("keepInTrayCheck"));
+        keep_in_tray_check_->setOn(false);
         presence_layout->addWidget(makeSettingsRow(
             presence_panel, QStringLiteral("Tray behavior"),
             new ui::widgets::InfoHintIcon(ui::hints::kCloseToTray, presence_panel), QString(), keep_in_tray_check_));
 
-        quick_controls_check_ =
-            new ui::widgets::ExoCheckBox(QStringLiteral("Show quick-control pill during recording"), presence_panel);
-        quick_controls_check_->setChecked(false);
+        quick_controls_check_ = new ui::widgets::ExoToggle(presence_panel);
+        quick_controls_check_->setObjectName(QStringLiteral("quickControlsCheck"));
+        quick_controls_check_->setOn(false);
         presence_layout->addWidget(
             makeSettingsRow(presence_panel, QStringLiteral("Quick controls"),
                             new ui::widgets::InfoHintIcon(ui::hints::kQuickControlPill, presence_panel), QString(),
                             quick_controls_check_));
 
-        // PS-PHASE-C: Presence v0.6 placeholder (expert-gated).
-        {
-            auto* presence_ph_section = new QWidget(presence_panel);
-            presence_ph_section->setObjectName(QStringLiteral("presenceV1PlaceholderSection"));
-            presence_ph_section->setVisible(false);
-            auto* ppl = new QVBoxLayout(presence_ph_section);
-            ppl->setContentsMargins(0, 0, 0, 0);
-            ppl->setSpacing(0);
-            auto* ph = new ui::widgets::PlaceholderRow(presence_ph_section);
-            ph->setLabel(QStringLiteral("Per-track gain / mute"));
-            ph->setVersionTag(QStringLiteral("0.6"));
-            ppl->addWidget(ph);
-            presence_layout->addWidget(presence_ph_section);
-        }
+        // (0.6.0: the former "Per-track gain / mute" roadmap placeholder was removed —
+        // per-track gain and mute shipped in 0.6.0 and are configured in the Record
+        // view, so a dimmed "upcoming" row here is stale.)
 
         left_layout->addWidget(presence_panel);
         left_layout->addStretch();
@@ -2256,12 +2422,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     outer->addWidget(scroll);
 
     // SETTINGS-TIERS-P3: presence + appearance control connections.
-    connect(overlay_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::showOverlayChanged);
-    connect(diagnostics_overlay_check_, &ui::widgets::ExoCheckBox::toggled, this,
-            &ConfigPage::showDiagnosticsOverlayChanged);
-    connect(notifications_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::showNotificationsChanged);
-    connect(keep_in_tray_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::keepRunningInTrayChanged);
-    connect(quick_controls_check_, &ui::widgets::ExoCheckBox::toggled, this, &ConfigPage::showQuickControlsChanged);
+    connect(overlay_check_, &QAbstractButton::toggled, this, &ConfigPage::showOverlayChanged);
+    connect(diagnostics_overlay_check_, &QAbstractButton::toggled, this, &ConfigPage::showDiagnosticsOverlayChanged);
+    connect(notifications_check_, &QAbstractButton::toggled, this, &ConfigPage::showNotificationsChanged);
+    connect(keep_in_tray_check_, &QAbstractButton::toggled, this, &ConfigPage::keepRunningInTrayChanged);
+    connect(quick_controls_check_, &QAbstractButton::toggled, this, &ConfigPage::showQuickControlsChanged);
     connect(theme_button_group_, &QButtonGroup::idClicked, this, [this](int btn_id) {
         auto* btn = theme_button_group_->button(btn_id);
         if (!btn)
@@ -2370,6 +2535,15 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         } else {
             video_settings_.quality = recorder_core::NvencQualityPreset::Small;
         }
+        // S3: Update CQ tier label next to the spinbox.
+        if (quality_cq_tier_label_) {
+            const bool is_exact = (cq == 19 || cq == 24 || cq == 30);
+            const QString prefix = is_exact ? QStringLiteral("\xc2\xb7 ") : QStringLiteral("\xc2\xb7 ~");
+            const QString tier_name = (d_high <= d_balanced && d_high <= d_small) ? QStringLiteral("High")
+                                      : (d_balanced <= d_small)                   ? QStringLiteral("Balanced")
+                                                                                  : QStringLiteral("Small");
+            quality_cq_tier_label_->setText(prefix + tier_name);
+        }
         // Sync the hidden combo so onQualityChanged path stays consistent.
         if (quality_combo_) {
             const QSignalBlocker qb(quality_combo_);
@@ -2378,7 +2552,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                 quality_combo_->setCurrentIndex(idx);
         }
         updateQualitySegmentSelection();
-        updateQualitySummary();
         emitCurrentVideoSettings();
     });
 
@@ -2427,6 +2600,29 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     });
     connect(opus_complexity_spin_, &QSpinBox::valueChanged, this, [this](int val) {
         audio_ui_state_.opus_complexity = val;
+        emitCurrentAudioSettings();
+    });
+    // Channel / sample-format model (ADR 0030 — 0.6.0).
+    connect(audio_sample_rate_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+        if (idx < 0 || !audio_sample_rate_combo_)
+            return;
+        audio_ui_state_.audio_sample_rate = static_cast<uint32_t>(audio_sample_rate_combo_->itemData(idx).toInt());
+        emitCurrentAudioSettings();
+    });
+    connect(audio_channels_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+        if (idx < 0 || !audio_channels_combo_)
+            return;
+        audio_ui_state_.audio_channels = static_cast<uint32_t>(audio_channels_combo_->itemData(idx).toInt());
+        emitCurrentAudioSettings();
+    });
+    connect(audio_bit_depth_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+        if (idx < 0 || !audio_bit_depth_combo_)
+            return;
+        audio_ui_state_.audio_bit_depth = static_cast<uint32_t>(audio_bit_depth_combo_->itemData(idx).toInt());
+        emitCurrentAudioSettings();
+    });
+    connect(flac_compression_spin_, &QSpinBox::valueChanged, this, [this](int val) {
+        audio_ui_state_.flac_compression_level = val;
         emitCurrentAudioSettings();
     });
     connect(limiter_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool on) {
@@ -2576,7 +2772,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     applyAudioConfigurationState();
     updateFormatDisplay();
     updateExampleFilename();
-    updateQualitySummary();
+    updateQualitySegmentSelection();
     updateFrameRateSelection();
     updateTimingSelection();
     updateOutputResolutionSelection();
@@ -2657,7 +2853,7 @@ void ConfigPage::onQualityChanged(int index) {
     if (index < 0)
         return;
     video_settings_.quality = static_cast<recorder_core::NvencQualityPreset>(quality_combo_->itemData(index).toInt());
-    updateQualitySummary();
+    updateQualitySegmentSelection();
     emitCurrentVideoSettings();
 }
 
@@ -2683,7 +2879,7 @@ void ConfigPage::onFrameRateChanged(int index) {
         return;
     video_settings_.frame_rate_num = static_cast<uint32_t>(fps);
     video_settings_.frame_rate_den = 1;
-    updateQualitySummary();
+    updateQualitySegmentSelection();
     updateEffectiveOutputSummary();
     emitCurrentVideoSettings();
 }
@@ -2696,7 +2892,7 @@ void ConfigPage::onTimingSelected(int timing_id) {
         video_settings_.cfr = want_cfr;
     }
     updateTimingSelection();
-    updateQualitySummary();
+    updateQualitySegmentSelection();
     updateEffectiveOutputSummary();
     emitCurrentVideoSettings();
 }
@@ -2811,8 +3007,7 @@ void ConfigPage::updateSplitSizeSelection() {
 }
 
 void ConfigPage::onCursorChanged() {
-    video_settings_.capture_cursor = cursor_check_->isChecked();
-    updateQualitySummary();
+    video_settings_.capture_cursor = cursor_check_->isOn();
     emitCurrentVideoSettings();
 }
 
@@ -2859,6 +3054,9 @@ void ConfigPage::updateAudioCodecChoices() {
     const int aidx = audio_codec_combo_->findData(AudioCodecToInt(format_settings_.audio_codec));
     if (aidx >= 0)
         audio_codec_combo_->setCurrentIndex(aidx);
+
+    // ADR 0030: after rebuilding / reselecting the codec, refresh format-control visibility.
+    updateAudioFormatControlVisibility();
 }
 
 void ConfigPage::updateFormatDisplay() {
@@ -2963,6 +3161,9 @@ void ConfigPage::onAudioCodecChanged(int index) {
         return;
     format_settings_.audio_codec = IntToAudioCodec(audio_codec_combo_->itemData(index).toInt());
     emitCurrentFormatSettings();
+    // ADR 0030: update visibility of bit-depth and FLAC-level controls, and
+    // lock / unlock the sample-rate selector based on codec.
+    updateAudioFormatControlVisibility();
 }
 
 void ConfigPage::onProfileSelectionChanged(int index) {
@@ -3047,7 +3248,7 @@ void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
     updateTimingSelection();
 
     const QSignalBlocker crb(cursor_check_);
-    cursor_check_->setChecked(settings.capture_cursor);
+    cursor_check_->setOn(settings.capture_cursor);
 
     // PS-PHASE-C: sync expert rate control + bitrate from loaded preset.
     if (rate_control_group_) {
@@ -3067,43 +3268,29 @@ void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
         bitrate_row_widget_->setVisible(expert_mode_enabled_ && needs_bitrate);
     }
 
-    updateQualitySummary();
+    updateQualitySegmentSelection();
     updateEffectiveOutputSummary();
 }
 
-void ConfigPage::updateQualitySummary() {
-    if (!quality_badge_label_ || !quality_settings_label_)
+void ConfigPage::updateQualitySegmentSelection() {
+    if (!quality_segment_group_)
         return;
 
-    switch (video_settings_.quality) {
-    case recorder_core::NvencQualityPreset::High:
-        quality_badge_label_->setText(QStringLiteral("Sharper · larger files"));
-        break;
-    case recorder_core::NvencQualityPreset::Balanced:
-        quality_badge_label_->setText(QStringLiteral("General purpose"));
-        break;
-    case recorder_core::NvencQualityPreset::Small:
-        quality_badge_label_->setText(QStringLiteral("Smaller files"));
-        break;
-    }
+    const auto sync_segment = [this](QPushButton* segment, recorder_core::NvencQualityPreset preset) {
+        if (!segment)
+            return;
 
-    const QString cq = [](recorder_core::NvencQualityPreset p) -> QString {
-        switch (p) {
-        case recorder_core::NvencQualityPreset::High:
-            return QStringLiteral("CQ 19");
-        case recorder_core::NvencQualityPreset::Balanced:
-            return QStringLiteral("CQ 24");
-        case recorder_core::NvencQualityPreset::Small:
-            return QStringLiteral("CQ 30");
-        }
-        return QStringLiteral("CQ 24");
-    }(video_settings_.quality);
+        const bool selected = video_settings_.quality == preset;
+        segment->setChecked(selected);
+        segment->setProperty("qualitySegmentSelected", selected);
+        segment->style()->unpolish(segment);
+        segment->style()->polish(segment);
+    };
 
-    const QString cfr_text = (video_settings_.cfr ? QStringLiteral("CFR ") : QStringLiteral("VFR ")) +
-                             FrameRateLabel(video_settings_.frame_rate_num, video_settings_.frame_rate_den);
-    const QString cursor_text =
-        video_settings_.capture_cursor ? QStringLiteral("Cursor on") : QStringLiteral("Cursor off");
-    quality_settings_label_->setText(cq + QStringLiteral(" · ") + cfr_text + QStringLiteral(" · ") + cursor_text);
+    const QSignalBlocker blocker(quality_segment_group_);
+    sync_segment(quality_segment_small_, recorder_core::NvencQualityPreset::Small);
+    sync_segment(quality_segment_balanced_, recorder_core::NvencQualityPreset::Balanced);
+    sync_segment(quality_segment_high_, recorder_core::NvencQualityPreset::High);
 
     if (quality_compare_hint_) {
         switch (video_settings_.quality) {
@@ -3134,29 +3321,6 @@ void ConfigPage::updateQualitySummary() {
             break;
         }
     }
-
-    updateQualitySegmentSelection();
-}
-
-void ConfigPage::updateQualitySegmentSelection() {
-    if (!quality_segment_group_)
-        return;
-
-    const auto sync_segment = [this](QPushButton* segment, recorder_core::NvencQualityPreset preset) {
-        if (!segment)
-            return;
-
-        const bool selected = video_settings_.quality == preset;
-        segment->setChecked(selected);
-        segment->setProperty("qualitySegmentSelected", selected);
-        segment->style()->unpolish(segment);
-        segment->style()->polish(segment);
-    };
-
-    const QSignalBlocker blocker(quality_segment_group_);
-    sync_segment(quality_segment_small_, recorder_core::NvencQualityPreset::Small);
-    sync_segment(quality_segment_balanced_, recorder_core::NvencQualityPreset::Balanced);
-    sync_segment(quality_segment_high_, recorder_core::NvencQualityPreset::High);
 }
 
 void ConfigPage::updateFrameRateSelection() {
@@ -3396,12 +3560,7 @@ void ConfigPage::updatePresetActionState() {
         preset_dirty_indicator_->setVisible(preset_dirty_);
     }
 
-    // Default badge: shown when the selected preset IS the startup default.
-    if (preset_default_badge_) {
-        preset_default_badge_->setVisible(is_default);
-    }
-
-    // Status badge (built-in / unavailable): separate from the default badge.
+    // Status badge (built-in / unavailable): separate label in toolbar.
     if (profile_status_label_) {
         QString badge;
         if (!active_preset_is_available_) {
@@ -3411,7 +3570,6 @@ void ConfigPage::updatePresetActionState() {
             badge = QStringLiteral("Built-in preset");
             profile_status_label_->setProperty("stateRole", "ready");
         }
-        // For user presets, suppress the badge — the default badge above is enough.
         profile_status_label_->setText(badge);
         profile_status_label_->setVisible(!badge.isEmpty());
         profile_status_label_->style()->unpolish(profile_status_label_);
@@ -3651,6 +3809,31 @@ void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
             const QSignalBlocker b(mic_rnnoise_check_);
             mic_rnnoise_check_->setChecked(audio_ui_state_.mic_rnnoise_enabled);
         }
+        // Channel / sample-format model (ADR 0030 — 0.6.0).
+        if (audio_sample_rate_combo_) {
+            const QSignalBlocker b(audio_sample_rate_combo_);
+            const int idx = audio_sample_rate_combo_->findData(static_cast<int>(audio_ui_state_.audio_sample_rate));
+            if (idx >= 0)
+                audio_sample_rate_combo_->setCurrentIndex(idx);
+        }
+        if (audio_channels_combo_) {
+            const QSignalBlocker b(audio_channels_combo_);
+            const int idx = audio_channels_combo_->findData(static_cast<int>(audio_ui_state_.audio_channels));
+            if (idx >= 0)
+                audio_channels_combo_->setCurrentIndex(idx);
+        }
+        if (audio_bit_depth_combo_) {
+            const QSignalBlocker b(audio_bit_depth_combo_);
+            const int idx = audio_bit_depth_combo_->findData(static_cast<int>(audio_ui_state_.audio_bit_depth));
+            if (idx >= 0)
+                audio_bit_depth_combo_->setCurrentIndex(idx);
+        }
+        if (flac_compression_spin_) {
+            const QSignalBlocker b(flac_compression_spin_);
+            flac_compression_spin_->setValue(audio_ui_state_.flac_compression_level);
+        }
+        // Reapply codec-gated visibility after state change.
+        updateAudioFormatControlVisibility();
     }
 }
 
@@ -3737,10 +3920,131 @@ void ConfigPage::applyAudioConfigurationState() {
             audio_summary_label_->setText(
                 QStringLiteral("Audio sources are configured on the Record page. Open Record to set up sources."));
     }
+
+    // ADR 0030: update codec-gated visibility for format controls.
+    updateAudioFormatControlVisibility();
 }
 
 void ConfigPage::emitCurrentAudioSettings() {
     emit audioSettingsChanged(audio_ui_state_);
+}
+
+void ConfigPage::updateAudioFormatControlVisibility() {
+    // Called whenever the audio codec or recording-lock state changes.
+    // Controls not created yet (expert mode off during construction) are guarded
+    // by null checks.
+    if (!expert_mode_enabled_)
+        return;
+
+    const bool is_opus = (format_settings_.audio_codec == capability::AudioCodec::Opus);
+    const bool is_pcm = (format_settings_.audio_codec == capability::AudioCodec::Pcm);
+    const bool is_flac = (format_settings_.audio_codec == capability::AudioCodec::Flac);
+    const bool locked = controls_locked_;
+
+    // Sample rate: present for all codecs; disabled + tooltip for Opus.
+    if (audio_sample_rate_combo_) {
+        audio_sample_rate_combo_->setEnabled(!locked && !is_opus);
+        if (is_opus) {
+            // Snap model and combo to 48000 when Opus is active.
+            const QSignalBlocker b(audio_sample_rate_combo_);
+            const int idx = audio_sample_rate_combo_->findData(48000);
+            if (idx >= 0)
+                audio_sample_rate_combo_->setCurrentIndex(idx);
+            audio_ui_state_.audio_sample_rate = 48000u;
+            audio_sample_rate_combo_->setToolTip(QStringLiteral("Opus records at 48\xC2\xa0kHz only"));
+            audio_sample_rate_combo_->setCursor(Qt::ForbiddenCursor);
+        } else if (locked) {
+            audio_sample_rate_combo_->setToolTip(QStringLiteral("Cannot change during recording"));
+            audio_sample_rate_combo_->setCursor(Qt::ForbiddenCursor);
+        } else {
+            audio_sample_rate_combo_->setToolTip(QString());
+            audio_sample_rate_combo_->unsetCursor();
+        }
+    }
+
+    // Channels: enabled for all codecs.
+    if (audio_channels_combo_)
+        audio_channels_combo_->setEnabled(!locked);
+
+    // Bit depth: visible only for PCM or FLAC; items differ per codec.
+    if (audio_bit_depth_row_) {
+        const bool show_depth = is_pcm || is_flac;
+        audio_bit_depth_row_->setVisible(show_depth);
+        if (show_depth && audio_bit_depth_combo_) {
+            const QSignalBlocker b(audio_bit_depth_combo_);
+            // Rebuild items to match allowed set for this codec.
+            audio_bit_depth_combo_->clear();
+            audio_bit_depth_combo_->addItem(QStringLiteral("16-bit"), 16);
+            audio_bit_depth_combo_->addItem(QStringLiteral("24-bit"), 24);
+            if (is_pcm)
+                audio_bit_depth_combo_->addItem(QStringLiteral("32-bit"), 32);
+            // Restore stored value; fall back to 16-bit if not in list.
+            const int idx = audio_bit_depth_combo_->findData(static_cast<int>(audio_ui_state_.audio_bit_depth));
+            audio_bit_depth_combo_->setCurrentIndex(idx >= 0 ? idx : 0);
+            // Clamp model if stored depth is unavailable for this codec.
+            if (idx < 0)
+                audio_ui_state_.audio_bit_depth = 16u;
+            audio_bit_depth_combo_->setEnabled(!locked);
+        }
+    }
+
+    // FLAC compression level: visible only for FLAC.
+    if (flac_compression_row_) {
+        flac_compression_row_->setVisible(is_flac);
+        if (is_flac && flac_compression_spin_)
+            flac_compression_spin_->setEnabled(!locked);
+    }
+
+    // Audio bitrate: meaningful only for Opus/AAC (lossy codecs).
+    if (audio_bitrate_kbps_spin_) {
+        const bool bitrate_active = !is_pcm && !is_flac;
+        audio_bitrate_kbps_spin_->setEnabled(bitrate_active && !locked);
+        if (!bitrate_active) {
+            audio_bitrate_kbps_spin_->setToolTip(
+                QStringLiteral("Bitrate does not apply to lossless codecs (PCM/FLAC)"));
+            audio_bitrate_kbps_spin_->setCursor(Qt::ForbiddenCursor);
+        } else if (locked) {
+            audio_bitrate_kbps_spin_->setToolTip(QStringLiteral("Cannot change during recording"));
+            audio_bitrate_kbps_spin_->setCursor(Qt::ForbiddenCursor);
+        } else {
+            audio_bitrate_kbps_spin_->setToolTip(QString());
+            audio_bitrate_kbps_spin_->unsetCursor();
+        }
+    }
+
+    // Opus frame duration: meaningful only for Opus.
+    if (opus_frame_duration_combo_) {
+        const bool opus_frame_active = is_opus;
+        opus_frame_duration_combo_->setEnabled(opus_frame_active && !locked);
+        if (!opus_frame_active) {
+            opus_frame_duration_combo_->setToolTip(
+                QStringLiteral("Opus frame duration applies only when Opus codec is selected"));
+            opus_frame_duration_combo_->setCursor(Qt::ForbiddenCursor);
+        } else if (locked) {
+            opus_frame_duration_combo_->setToolTip(QStringLiteral("Cannot change during recording"));
+            opus_frame_duration_combo_->setCursor(Qt::ForbiddenCursor);
+        } else {
+            opus_frame_duration_combo_->setToolTip(QString());
+            opus_frame_duration_combo_->unsetCursor();
+        }
+    }
+
+    // Opus complexity: meaningful only for Opus.
+    if (opus_complexity_spin_) {
+        const bool opus_complexity_active = is_opus;
+        opus_complexity_spin_->setEnabled(opus_complexity_active && !locked);
+        if (!opus_complexity_active) {
+            opus_complexity_spin_->setToolTip(
+                QStringLiteral("Opus complexity applies only when Opus codec is selected"));
+            opus_complexity_spin_->setCursor(Qt::ForbiddenCursor);
+        } else if (locked) {
+            opus_complexity_spin_->setToolTip(QStringLiteral("Cannot change during recording"));
+            opus_complexity_spin_->setCursor(Qt::ForbiddenCursor);
+        } else {
+            opus_complexity_spin_->setToolTip(QString());
+            opus_complexity_spin_->unsetCursor();
+        }
+    }
 }
 
 void ConfigPage::setAudioMeterLevels(float sys01, float app01, float mic01, bool sys_active, bool app_active,
@@ -3925,6 +4229,30 @@ void ConfigPage::updateExpertModeVisibility() {
             const QSignalBlocker b(mic_rnnoise_check_);
             mic_rnnoise_check_->setChecked(audio_ui_state_.mic_rnnoise_enabled);
         }
+        // Channel / sample-format model (ADR 0030 — 0.6.0).
+        if (audio_sample_rate_combo_) {
+            const QSignalBlocker b(audio_sample_rate_combo_);
+            const int idx = audio_sample_rate_combo_->findData(static_cast<int>(audio_ui_state_.audio_sample_rate));
+            if (idx >= 0)
+                audio_sample_rate_combo_->setCurrentIndex(idx);
+        }
+        if (audio_channels_combo_) {
+            const QSignalBlocker b(audio_channels_combo_);
+            const int idx = audio_channels_combo_->findData(static_cast<int>(audio_ui_state_.audio_channels));
+            if (idx >= 0)
+                audio_channels_combo_->setCurrentIndex(idx);
+        }
+        if (audio_bit_depth_combo_) {
+            const QSignalBlocker b(audio_bit_depth_combo_);
+            const int idx = audio_bit_depth_combo_->findData(static_cast<int>(audio_ui_state_.audio_bit_depth));
+            if (idx >= 0)
+                audio_bit_depth_combo_->setCurrentIndex(idx);
+        }
+        if (flac_compression_spin_) {
+            const QSignalBlocker b(flac_compression_spin_);
+            flac_compression_spin_->setValue(audio_ui_state_.flac_compression_level);
+        }
+        updateAudioFormatControlVisibility();
     }
     // PS-PHASE-C: Output v1.0 placeholder section.
     if (auto* out_ph =
@@ -3938,11 +4266,6 @@ void ConfigPage::updateExpertModeVisibility() {
     // PS-PHASE-C: search pill only visible in expert mode.
     if (settings_search_pill_)
         settings_search_pill_->setVisible(expert_mode_enabled_);
-    // D6: Expert warn hint — visible when Expert ON and no active search.
-    if (expert_warn_label_) {
-        const bool searching = settings_search_box_ && !settings_search_box_->text().trimmed().isEmpty();
-        expert_warn_label_->setVisible(expert_mode_enabled_ && !searching);
-    }
 }
 
 // SETTINGS-SEARCH-R1: per-card live settings filter.
@@ -4066,9 +4389,6 @@ void ConfigPage::applySettingsSearch(const QString& query) {
             settings_search_count_label_->setVisible(false);
         if (search_expert_hint_label_)
             search_expert_hint_label_->setVisible(false);
-        // D6: restore expert warn hint to its visibility-gated state.
-        if (expert_warn_label_)
-            expert_warn_label_->setVisible(expert_mode_enabled_);
         return;
     }
 
@@ -4140,10 +4460,6 @@ void ConfigPage::applySettingsSearch(const QString& query) {
             search_expert_hint_label_->setVisible(false);
     }
 
-    // D6: hide expert warn hint during active search (it'd compete with hint label).
-    if (expert_warn_label_)
-        expert_warn_label_->setVisible(false);
-
     // Match count.
     int match_count = 0;
     // Count each matched card as 1.  This is intentionally coarse (per-card,
@@ -4183,35 +4499,35 @@ void ConfigPage::applySettingsSearch(const QString& query) {
 void ConfigPage::setShowOverlay(bool show) {
     if (overlay_check_) {
         const QSignalBlocker blocker(overlay_check_);
-        overlay_check_->setChecked(show);
+        overlay_check_->setOn(show);
     }
 }
 
 void ConfigPage::setShowDiagnosticsOverlay(bool show) {
     if (diagnostics_overlay_check_) {
         const QSignalBlocker blocker(diagnostics_overlay_check_);
-        diagnostics_overlay_check_->setChecked(show);
+        diagnostics_overlay_check_->setOn(show);
     }
 }
 
 void ConfigPage::setShowNotifications(bool show) {
     if (notifications_check_) {
         const QSignalBlocker blocker(notifications_check_);
-        notifications_check_->setChecked(show);
+        notifications_check_->setOn(show);
     }
 }
 
 void ConfigPage::setKeepRunningInTray(bool keep) {
     if (keep_in_tray_check_) {
         const QSignalBlocker blocker(keep_in_tray_check_);
-        keep_in_tray_check_->setChecked(keep);
+        keep_in_tray_check_->setOn(keep);
     }
 }
 
 void ConfigPage::setShowQuickControls(bool show) {
     if (quick_controls_check_) {
         const QSignalBlocker blocker(quick_controls_check_);
-        quick_controls_check_->setChecked(show);
+        quick_controls_check_->setOn(show);
     }
 }
 

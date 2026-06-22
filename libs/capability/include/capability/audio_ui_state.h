@@ -102,6 +102,25 @@ struct AudioUiState {
     // parameter — RNNoise is a fixed trained model.
     bool mic_rnnoise_enabled = false;
 
+    // ---------------------------------------------------------------------------
+    // Channel / sample-format model (ADR 0030 — 0.6.0)
+    // ---------------------------------------------------------------------------
+
+    // Output sample rate in Hz. Vetted set: 44100, 48000, 96000. Default 48000.
+    // Opus locks this to 48000 (libopus native rate).
+    uint32_t audio_sample_rate = 48000;
+
+    // Output channel count. 1 = mono, 2 = stereo (default). 5.1+ deferred.
+    uint32_t audio_channels = 2;
+
+    // Output bit depth for lossless codecs (PCM: 16/24/32; FLAC: 16/24).
+    // Ignored for lossy codecs (Opus/AAC). Default 16.
+    uint32_t audio_bit_depth = 16;
+
+    // FLAC compression level [0, 8]. Lossless at every level; only trades CPU
+    // vs. file size. Default 5.
+    int flac_compression_level = 5;
+
     // Convenience predicates.
     [[nodiscard]] bool IsAppEnabled() const noexcept;
     [[nodiscard]] bool IsSysEnabled() const noexcept;
@@ -139,6 +158,12 @@ struct AudioPlanResult {
 
     // Microphone RNNoise neural noise suppression (Audio v2 — 0.6.0) — passed through.
     bool mic_rnnoise_enabled = false;
+
+    // Channel / sample-format model (ADR 0030 — 0.6.0) — passed through from AudioUiState.
+    uint32_t audio_sample_rate = 48000;
+    uint32_t audio_channels = 2;
+    uint32_t audio_bit_depth = 16;
+    int flac_compression_level = 5;
 };
 
 [[nodiscard]] AudioPlanResult BuildAudioPlan(const AudioUiState& state);

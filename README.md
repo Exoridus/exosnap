@@ -6,7 +6,7 @@ webcam PiP overlay, crash recovery, and built-in diagnostics. Dark-mode-first Qt
 
 ## Status / current release
 
-- **Latest release:** `0.5.0` — "Settings & media-capability".
+- **Latest release:** `0.6.0` — "Audio v2".
 - **Pre-v1 notice:** settings, preset, and recording-history schemas may change incompatibly before 1.0.0.
 - **Platform:** Windows 10/11 x64 (Windows 11 is the primary target; Windows 10 is best-effort).
 - **Hardware encoder:** NVIDIA NVENC only. An NVIDIA GPU with supported NVENC capability is required.
@@ -19,7 +19,20 @@ webcam PiP overlay, crash recovery, and built-in diagnostics. Dark-mode-first Qt
   send (Stage 0 assisted GitHub issue, or Stage 1 automated upload to Sentry with EU data residency).
   See [`PRIVACY.md`](PRIVACY.md).
 
-## Features (0.5.0 settings & media-capability wave)
+## Features (0.6.0 Audio v2 wave)
+
+- **Per-track gain & mute** and a **brickwall limiter** (on by default) on the mixed audio bus, so
+  per-source levels can exceed full scale without hard clipping.
+- **Microphone DSP chain** — high-pass filter, noise gate, AGC, and **RNNoise** neural noise
+  suppression — each stage **off by default** (capture is byte-identical when disabled), toggled
+  individually.
+- **Lossless audio**: uncompressed **PCM** and compressed **FLAC** (both MKV-only), alongside Opus
+  and AAC.
+- **Channel / sample-format model** (ADR 0030): selectable output **sample rate** (44.1 / 48 / 96 kHz),
+  **mono or stereo**, and **16/24/32-bit** depth for the lossless codecs, plus a **FLAC compression
+  level** control. Opus stays at 48 kHz; capture is resampled/rematrixed once after the mix bus.
+
+### From the 0.5.0 settings & media-capability wave
 
 - TOML preset store with profile **export/import**: presets are human-readable and shareable; the
   nested `[[audio.sources]]` model serializes cleanly. Flat app settings stay on QSettings.

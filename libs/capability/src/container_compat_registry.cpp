@@ -55,8 +55,13 @@ std::string_view ToString(ContainerCompatLevel level) noexcept {
 //   MP4  | H.264        | AAC   → Recommended  (primary validated MP4 path,
 //                                               delivered via remux-on-stop ADR 0014)
 //   MP4  | H.264        | Opus  → Prohibited   (ADR 0010: Opus-in-MP4 is Prohibited)
-//   MP4  | H.264        | PCM   → Experimental (sample-entry variant unspecified;
-//                                               player matrix not on file)
+//   MP4  | H.264        | PCM   → Experimental (libavformat emits the ipcm sample entry
+//                                               (ISO/IEC 23003-5) for pcm_s16le/s24le/
+//                                               s32le in MP4; ipcm has limited player
+//                                               support — Windows Films & TV, QuickTime,
+//                                               and many NLEs do not play it; deferred
+//                                               until a broadly-compatible sample-entry
+//                                               mapping is validated; ADR 0030)
 //   MP4  | H.264        | FLAC  → Experimental (FLAC-in-MP4 not specified here)
 //   MP4  | HEVC         | AAC   → Experimental (not implemented; hvc1/hev1 open)
 //   MP4  | HEVC         | Opus  → Prohibited   (Opus-in-MP4 is Prohibited)
@@ -150,8 +155,11 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
                         "Primary validated MP4 path: H.264 NVENC + AAC via remux-on-stop (ADR 0014)."};
             if (audio == AudioCodec::Pcm)
                 return {ContainerCompatLevel::Experimental,
-                        "MP4 + H.264 + PCM: ISO-BMFF PCM sample-entry variant not yet specified; "
-                        "player matrix not on file (ADR 0010)."};
+                        "MP4 + H.264 + PCM: libavformat writes an ipcm (ISO/IEC 23003-5) sample entry "
+                        "for pcm_s16le/pcm_s24le/pcm_s32le in MP4 (confirmed via ffprobe "
+                        "codec_tag_string=ipcm). ipcm has limited player support — Windows Films & TV, "
+                        "QuickTime, and many NLEs do not play it. Deferred until a broadly-compatible "
+                        "sample-entry mapping (e.g. sowt/in24) is validated; use MKV for PCM (ADR 0030)."};
             if (audio == AudioCodec::Flac)
                 return {ContainerCompatLevel::Experimental,
                         "MP4 + H.264 + FLAC: FLAC-in-MP4 not specified in this build (use MKV for FLAC)."};

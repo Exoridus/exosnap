@@ -52,13 +52,28 @@ class FlacAudioEncoder : public IAudioEncoder {
 
     void Shutdown() override;
 
-    // Convert one interleaved Float32 sample to a signed 16-bit value in
-    // [-32767, 32767], clamping to [-1, 1] and rounding to nearest. Returned as
-    // FLAC__int32 (the sample type libFLAC consumes at bits_per_sample=16).
-    // Exposed static for unit testing; identical mapping to the PCM path.
+    // Set the output bit depth before Init(). Accepted values: 16, 24.
+    // 16 is the default (backward-compatible). Must be called before Init().
+    void SetBitDepth(uint32_t bits) noexcept;
+
+    // Set the FLAC compression level before Init(). Accepted range: [0, 8].
+    // 5 is the default. Must be called before Init().
+    void SetCompressionLevel(int level) noexcept;
+
+    // Return the effective bit depth (as configured, or 16 if never set).
+    [[nodiscard]] uint32_t BitsPerSample() const noexcept {
+        return m_bits_per_sample;
+    }
+
+    // Convert one interleaved Float32 sample to a FLAC__int32 value at the
+    // configured bit depth. Clamps to [-1, 1] and rounds to nearest.
+    // Exposed static for unit testing; bits must be 16 or 24.
+    static int32_t Float32ToInt(float sample, uint32_t bits) noexcept;
+
+    // Convenience wrappers matching the original API (16-bit only).
     static int32_t Float32ToS16(float sample) noexcept;
 
-    // The fixed sample format produced by this encoder.
+    // The default sample format constants.
     static constexpr uint32_t kBitsPerSample = 16;
     static constexpr uint32_t kCompressionLevel = 5;
 
@@ -74,6 +89,8 @@ class FlacAudioEncoder : public IAudioEncoder {
     void* m_encoder = nullptr;
     uint32_t m_sample_rate = 0;
     uint32_t m_channels = 0;
+    uint32_t m_bits_per_sample = kBitsPerSample;
+    int m_compression_level = static_cast<int>(kCompressionLevel);
 
     // True until the first audio-frame write arrives; while true, write-callback
     // bytes are header bytes and go into m_codec_private.
