@@ -2,13 +2,13 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
   <metadata>
     <id>exosnap</id>
-    <version>0.4.0</version>
+    <version>0.6.0</version>
     <packageSourceUrl>https://github.com/Exoridus/exosnap/tree/main/packaging/chocolatey</packageSourceUrl>
     <owners>Codexo</owners>
     <title>ExoSnap</title>
     <authors>Codexo</authors>
     <projectUrl>https://github.com/Exoridus/exosnap</projectUrl>
-    <iconUrl>https://cdn.jsdelivr.net/gh/Exoridus/exosnap@v0.4.0/app/assets/brand/exosnap-logo.svg</iconUrl>
+    <iconUrl>https://cdn.jsdelivr.net/gh/Exoridus/exosnap@v0.6.0/app/assets/brand/exosnap-logo.svg</iconUrl>
     <copyright>Copyright 2026 Codexo</copyright>
     <licenseUrl>https://github.com/Exoridus/exosnap/blob/main/LICENSE</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
@@ -17,13 +17,13 @@
     <bugTrackerUrl>https://github.com/Exoridus/exosnap/issues</bugTrackerUrl>
     <tags>exosnap recorder screen-capture screen-recorder nvenc av1 webm mkv mp4 webcam diagnostics</tags>
     <summary>Windows-native screen / application / region recorder with an NVIDIA NVENC pipeline, multi-track audio, and diagnostics.</summary>
-    <releaseNotes>https://github.com/Exoridus/exosnap/releases/tag/v0.4.0</releaseNotes>
+    <releaseNotes>https://github.com/Exoridus/exosnap/releases/tag/v0.6.0</releaseNotes>
     <description><![CDATA[
 ExoSnap is a Windows-native screen / application / region recorder built around a
 high-performance NVIDIA NVENC pipeline, flexible container/codec profiles,
 multi-track audio routing, a webcam overlay, and built-in diagnostics.
 
-This package downloads and installs the official ExoSnap 0.4.0 MSI from the
+This package downloads and installs the official ExoSnap 0.6.0 MSI from the
 project's GitHub Release.
 
 ## Highlights
@@ -31,24 +31,23 @@ project's GitHub Release.
 * Capture an application window, a monitor, or a screen region at CFR 60 fps.
 * NVIDIA NVENC hardware encoding: H.264 and AV1.
 * Multi-track audio (`APP`, `SYS`, `MIC`) with reorderable / mergeable layout.
-* Containers: MKV (default), WebM, MP4. Audio: AAC-LC, Opus.
+* Containers: MKV (default), WebM, MP4. Audio: AAC-LC, Opus, PCM and FLAC (PCM and FLAC are MKV-only).
 * Webcam picture-in-picture overlay, recording presets, rebindable global hotkeys.
 * Diagnostics-first: invalid recordings are blocked before start.
-* **0.4.0 new:** local-first crash capture (out-of-process Crashpad) with a
-  privacy-scrubbed, consent-gated next-launch crash report (assisted GitHub issue or
-  opt-in Sentry upload with EU data residency); update checking with Stable / Preview
-  channels (signed manifest: ed25519 + SHA-256; notify + open releases page, no silent
-  restart).
+* **0.6.0 new (Audio v2):** per-track gain &amp; mute, a brickwall limiter on the mix bus, and an
+  optional microphone DSP chain (high-pass filter, noise gate, AGC, RNNoise neural noise
+  suppression); PCM and FLAC lossless audio in MKV; and a configurable output audio format
+  model (sample rate, channel count, bit depth).
 
 ## Requirements
 
 * Windows 10/11 x64.
-* An NVIDIA GPU with supported NVENC (AMD/Intel/software encoding are not supported in 0.4.0).
+* An NVIDIA GPU with supported NVENC (AMD/Intel/software encoding are not supported in 0.6.0).
 * Microsoft Visual C++ 2022 x64 runtime.
 
 ## Pre-v1 notice
 
-ExoSnap 0.4.0 is a pre-v1 preview. Settings, preset, and recording-history file
+ExoSnap 0.6.0 is a pre-v1 preview. Settings, preset, and recording-history file
 formats are not frozen and may change incompatibly before 1.0.0.
 ]]></description>
     <!-- exosnap.exe and the shipped Qt6 DLLs link the dynamic MSVC runtime (/MD);
