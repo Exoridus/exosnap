@@ -79,18 +79,29 @@ Encoders must never be forced to present as "CRF" when they don't use it.
 | `0.5.0`  | Settings & media-capability        | TOML config, profile export/import, encoder factory, capability model, compatibility registry, Basic/Advanced/Expert settings, video rate-control/bitrate, audio bitrate, buffers, encoder presets, split time + size, themes/accent, color-pipeline ADR, audio-format ADR. |
 | `0.6.0`  | Audio v2                           | Per-track gain, mute, brickwall limiter, mic AGC, optional noise gate / high-pass / RNNoise, PCM, FLAC, channel/sample-format model. |
 | `0.7.0`  | HDR and final codec matrix         | Finalize HEVC/AVC/AV1, 8-/10-bit, HDR10, color metadata, P010 compositor path, `hvc1`, MKV/MP4/WebM final matrix, Apple + NLE tests. |
-| `0.8.0`  | Software encoding                  | x264, optional SVT-AV1, GPU→CPU readback, performance warnings, fallback policy, software capability matrix. |
-| `0.9.0`  | AMD hardware                       | Native AMF, hardware test matrix, diagnostics, fallback behavior. |
-| `0.10.0` | Intel hardware                     | Native oneVPL/QSV, allocator/surface integration, hardware test matrix, diagnostics, fallback behavior. |
-| `0.11.0` | Edit / Output / Save               | Quick Trim (stream copy), marker display, chapter export; Edit/Output/Save surface (ADR 0022) shipping as interactive shell; optional post-recording transcription deferred. |
-| `0.12.x` | RC stabilization                   | Long recordings, recovery drills, all GPU vendors, fullscreen/borderless/exclusive capture matrix (deferred from 0.3.0), A/V sync, updater, installer, signing, privacy review, compatibility matrix. |
-| `1.0.0`  | First stable release               | Only once these promises are genuinely validated. |
+| `0.8.0`  | Diagnostics as a feature           | First-class diagnostics engine (ADR 0033): `FixAction` model, pre-flight readiness gate, low-cost live monitoring (drops/drift/disk-ETA, encoder-vs-capture-vs-disk-bound classification), root-cause correlation (e.g. VRR-vs-CFR judder), incident→check catalog. Post-flight kept minimal (report card; full integrity review handed to 0.9.0). `PresentProvider` interface with PresentMon (tearing/game-present) as an opt-in, elevation-gated provider. |
+| `0.9.0`  | Edit / Output / Save               | Quick Trim (stream copy), marker display, chapter export; Edit/Output/Save surface (ADR 0022) as interactive shell; the "Review" step consumes the post-flight diagnostic report from 0.8.0. |
+| `0.10.0` | Reliability hardening (vendor-independent) | Long-recording soak, A/V-sync drift validation, recovery drills, updater/installer/signing/SmartScreen reputation, privacy review, fullscreen/borderless/exclusive capture matrix (deferred from 0.3.0). The vendor-independent half of the former `0.12.x`. |
+| `0.11.0` | Software encoding                  | x264, optional SVT-AV1, GPU→CPU readback, performance warnings, fallback policy, software capability matrix. Universal fallback + GPU-less CI enabler. |
+| `0.12.0` | AMD hardware                       | Native AMF, hardware test matrix, diagnostics provider, fallback behavior. |
+| `0.13.0` | Intel hardware                     | Native oneVPL/QSV, allocator/surface integration, hardware test matrix, diagnostics provider, fallback behavior. |
+| `1.0.0`  | First stable release (cross-vendor RC gate) | Cross-vendor matrix + quality-validation matrix (SSIM/VMAF, A/V-sync, long recordings across all vendors) — the vendor-dependent half of RC stabilization. Ships only once these promises are genuinely validated. |
 
 **Prioritization rationale:** an NVIDIA user benefits immediately from reliable recording, recovery,
 and visible status. Additional vendor support mainly widens the audience; it does not close a
-reliability gap for existing users. Software encoding stays ahead of AMD/Intel because it provides a
-universal fallback, enables GPU-less testing, eases later ARM64 work, and catches hardware-init
-failures.
+reliability gap for existing users. So reliability-and-feature work for the existing user — diagnostics
+(0.8.0), Edit/Output/Save (0.9.0), and vendor-independent hardening (0.10.0) — comes **before** the
+audience-widening vendor/encoder waves. Diagnostics leads because it is the framework every later wave
+registers its checks/fix-actions into (each new encoder/vendor multiplies failure modes), and because
+its post-flight analysis is exactly what the Edit/Output/Save "Review" step consumes. Software encoding
+stays ahead of AMD/Intel because it provides a universal fallback, enables GPU-less testing, eases
+later ARM64 work, and catches hardware-init failures.
+
+Two constraints temper this resequence: (1) **Software encoding is the GPU-less CI enabler** — deferring
+it to 0.11.0 means the encode path stays NVIDIA-hardware-gated in CI until then (mitigation: the
+diagnostics `SelfTestRunner` + a synthetic mini-encode smoke can cover part of it). (2) **The cross-vendor
+RC matrix cannot be pulled forward** — only the vendor-independent hardening can (0.10.0); the
+cross-vendor quality/compat matrix stays at the 1.0 gate by definition.
 
 ---
 
@@ -169,11 +180,42 @@ These underpin multiple versions and must not be scattered into UI `if`-chains:
 
 ## Next step
 
-**v0.7.0 — HDR and final codec matrix** *(next)*
+**v0.7.0 — HDR and final codec matrix** *(in progress)*
 
 `0.4.0` (crash reporting + updates), `0.5.0` (settings & media-capability) and `0.6.0` (**Audio v2**)
 have shipped. `0.7.0` finalizes the video/codec matrix: HEVC/AVC/AV1, 8-/10-bit, HDR10, color
 metadata, the P010 compositor path, `hvc1`, the MKV/MP4/WebM final matrix, and Apple/NLE tests.
+Color foundation (ADR 0032) and HEVC-in-MKV (ValidUnvalidated, ADR 0010) have landed; 10-bit/P010,
+HDR10, `hvc1`-in-MP4 and the Settings/preset UI remain, plus GPU/HDR verification.
+
+### v0.8.0 — Diagnostics as a feature *(next after 0.7.0; resequenced 2026-06)*
+
+Promoted ahead of Software encoding and AMD/Intel (see Prioritization rationale). Detail in **ADR 0033**.
+Scope, kept tight to avoid ballooning:
+
+1. **`FixAction` model** — `optional_fix` (today a string) becomes an executable action with a safety
+   class (`Auto` / `Assisted` / `External`), `reversible` flag, and a `changes_summary` for
+   preview/confirm. `ReconcileCodecs()` already computes "nearest valid combination" — expose it as a button.
+2. **Pre-flight readiness gate** — run all blocker+notice checks before record; green/amber/red with fixes.
+3. **Live monitoring** — O(1)/frame instrumentation taps, aggregated off-thread at ~1–4 Hz: dropped/
+   duplicated frames, A/V drift, disk-fill ETA, encoder-vs-capture-vs-disk-bound classification. No
+   per-frame image analysis on the hot path.
+4. **Root-cause correlation** — first showcase: VRR/refresh-rate vs CFR-capture judder (extends the
+   existing `checkRefreshRateMismatch` from a static config check to a live correlation using DXGI-OD
+   `LastPresentTime`/`AccumulatedFrames` + NVAPI VRR state).
+5. **Incident→check catalog** — environment/config conditions that recur per user (old driver, low disk,
+   FAT32, unsupported codec on this GPU, audio-format mismatch). Explicitly **not** runtime checks for
+   already-fixed internal bugs — those are covered by regression tests and would be dead weight.
+
+**Post-flight** is intentionally minimal here (a report card surfacing the already-accumulated live
+stats); the full post-flight integrity analysis is the natural content of the 0.9.0 Edit/Output/Save
+"Review" step and lands there.
+
+**PresentMon** (Intel, MIT; the engine behind FrameView) is the only robust source of per-game
+present-mode / tearing data and slots in as an **opt-in, elevation-gated `PresentProvider`**. The engine
+ships valuable diagnosis on the DXGI-OD/NVAPI baseline without it; PresentMon enriches the
+window/game-capture path. It is never a hard dependency, and the portable build degrades gracefully when
+not elevated. See ADR 0033 for the elevation/anti-cheat posture.
 
 ### v0.6.0 — Audio v2 *(shipped)*
 
