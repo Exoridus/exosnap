@@ -1989,6 +1989,26 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     // Reset the force-quit flag for next time (in case the window is re-shown).
     force_quit_ = false;
 
+    // The engine is finalizing the container after a stop (STOPPING): the mux
+    // thread is still draining its queues and writing Cues/Duration/SeekHead.
+    // Closing now would tear down the process mid-write and leave an unfinalized
+    // file. Block the close until finalization completes — it is normally
+    // near-instant, and the bounded join budget caps it even in the worst case.
+    // There is deliberately no "force close" option here: unlike the MP4 remux
+    // (which leaves the transient MKV intact), aborting the container finalize
+    // would corrupt the recording being written.
+    if (record_status_label_ == QStringLiteral("STOPPING")) {
+        QMessageBox msgBox(this);
+        msgBox.setWindowTitle(QStringLiteral("Finishing recording"));
+        msgBox.setText(QStringLiteral("ExoSnap is finalizing your recording and cannot be closed yet. This "
+                                      "usually takes only a moment — please try again once saving is complete."));
+        msgBox.setIcon(QMessageBox::Information);
+        msgBox.setStandardButtons(QMessageBox::Ok);
+        msgBox.exec();
+        event->ignore();
+        return;
+    }
+
     // ADR-0014: MP4 remux running after stop — ask user to wait.
     if (remuxing_active_) {
         QMessageBox msgBox(this);
