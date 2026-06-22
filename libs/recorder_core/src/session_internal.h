@@ -71,6 +71,10 @@ struct CodecPrivateData {
     std::vector<uint8_t> h264_sps_pps;
     bool h264_ready = false;
 
+    // HEVC: VPS+SPS+PPS in Annex-B (for hvcC construction in MuxThread)
+    std::vector<uint8_t> hevc_vps_sps_pps;
+    bool hevc_ready = false;
+
     static constexpr uint32_t kMaxAudioTracks = 3;
 
     std::array<AudioCodecPrivateSlot, kMaxAudioTracks> audio_codec_private{};
@@ -79,6 +83,8 @@ struct CodecPrivateData {
     [[nodiscard]] bool VideoReady(VideoCodec codec) const noexcept {
         if (codec == VideoCodec::H264Nvenc)
             return h264_ready;
+        if (codec == VideoCodec::HevcNvenc)
+            return hevc_ready;
         return av1_ready;
     }
 

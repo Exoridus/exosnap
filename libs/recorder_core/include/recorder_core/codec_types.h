@@ -11,6 +11,7 @@ enum class Container {
 enum class VideoCodec {
     Av1Nvenc,  // NVENC AV1 — primary validated codec
     H264Nvenc, // NVENC H.264 — MP4 path
+    HevcNvenc, // NVENC H.265 / HEVC — Matroska and MP4 (V_MPEGH/ISO/HEVC)
 };
 
 enum class AudioCodec {

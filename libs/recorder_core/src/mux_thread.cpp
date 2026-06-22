@@ -1,6 +1,7 @@
 #include "mux_thread.h"
 
 #include "annexb_to_avcc.h"
+#include "annexb_to_hvcc.h"
 #include "matroska_stream_writer.h"
 #include "session_internal.h"
 
@@ -114,6 +115,12 @@ void MuxThread::Run() {
                 m_state.RecordFailure(E_FAIL, ErrorPhase::Mux, "Failed to build AVCC from H.264 SPS/PPS for Matroska");
                 return;
             }
+        } else if (m_state.config.video_codec == VideoCodec::HevcNvenc) {
+            if (!annexb::BuildHvccFromAnnexBVpsSpsPps(m_state.codec_private.hevc_vps_sps_pps, video_codec_private)) {
+                m_state.RecordFailure(E_FAIL, ErrorPhase::Mux,
+                                      "Failed to build hvcC from HEVC VPS/SPS/PPS for Matroska");
+                return;
+            }
         } else {
             video_codec_private.assign(m_state.codec_private.av1_codec_private,
                                        m_state.codec_private.av1_codec_private + 4);
@@ -131,14 +138,14 @@ void MuxThread::Run() {
     }
 
     const bool is_h264 = (m_state.config.video_codec == VideoCodec::H264Nvenc);
+    const bool is_hevc = (m_state.config.video_codec == VideoCodec::HevcNvenc);
     const std::filesystem::path base_output_path = m_state.config.output_path;
 
     // Build a reusable writer config; only output_path changes per segment.
     // codec-private blobs are copied (not moved) because every segment's Tracks
     // element needs its own copy.
     MatroskaStreamConfig sw_config_template;
-    sw_config_template.video_codec_id =
-        (m_state.config.video_codec == VideoCodec::H264Nvenc) ? "V_MPEG4/ISO/AVC" : "V_AV1";
+    sw_config_template.video_codec_id = is_h264 ? "V_MPEG4/ISO/AVC" : (is_hevc ? "V_MPEGH/ISO/HEVC" : "V_AV1");
     sw_config_template.video_codec_private = video_codec_private;
     sw_config_template.encode_width = encW;
     sw_config_template.encode_height = encH;
@@ -346,6 +353,12 @@ void MuxThread::Run() {
             std::vector<uint8_t> avcc;
             if (annexb::ConvertAnnexBToAvcc(payload.bytes.data(), payload.bytes.size(), avcc))
                 mp.bytes = std::move(avcc);
+            else
+                mp.bytes = std::move(payload.bytes);
+        } else if (is_hevc) {
+            std::vector<uint8_t> hvcc_sample;
+            if (annexb::ConvertAnnexBToHevcSample(payload.bytes.data(), payload.bytes.size(), hvcc_sample))
+                mp.bytes = std::move(hvcc_sample);
             else
                 mp.bytes = std::move(payload.bytes);
         } else {

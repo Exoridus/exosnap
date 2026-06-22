@@ -1,6 +1,7 @@
 #include "video_thread.h"
 
 #include "annexb_to_avcc.h"
+#include "annexb_to_hvcc.h"
 #include "codec_private.h"
 #include "dxgi_od_capture_src.h"
 #include "gpu_compositor.h"
@@ -373,7 +374,10 @@ void VideoThread::Run() {
          << "\", target.native_id=0x" << std::hex << target.native_id << std::dec
          << ", capture.visibleContentSize=" << sourceWidthSigned << "x" << sourceHeightSigned
          << ", capture.dxgiFormat=DXGI_FORMAT_B8G8R8A8_UNORM"
-         << ", videoCodec=" << (m_state.config.video_codec == VideoCodec::H264Nvenc ? "H264_NVENC" : "AV1_NVENC")
+         << ", videoCodec="
+         << (m_state.config.video_codec == VideoCodec::H264Nvenc
+                 ? "H264_NVENC"
+                 : (m_state.config.video_codec == VideoCodec::HevcNvenc ? "HEVC_NVENC" : "AV1_NVENC"))
          << ", chroma=4:2:0, bitDepth=8, frameRate=" << m_state.config.frame_rate_num << "/"
          << m_state.config.frame_rate_den << ", nvencInputBufferFormat=NV_ENC_BUFFER_FORMAT_NV12";
 
@@ -1083,6 +1087,7 @@ void VideoThread::Run() {
     // --- Capture + encode loop ---
     bool av1CodecPrivateReady = false;
     bool h264CodecPrivateReady = false;
+    bool hevcCodecPrivateReady = false;
     uint64_t lastVideoPts = 0;
     uint64_t videoFramesCaptured = 0;
     uint64_t droppedFrames = 0;
@@ -1155,7 +1160,7 @@ void VideoThread::Run() {
                                            : 60u;
 
     // Helper lambda: push an encoded packet to premux or mux queue.
-    // Uses h264CodecPrivateReady and av1CodecPrivateReady by reference.
+    // Uses h264CodecPrivateReady, hevcCodecPrivateReady, and av1CodecPrivateReady by reference.
     auto routePacket = [&](EncodedVideoPacket pkt) -> bool {
         const size_t pkt_bytes_count = pkt.bytes.size();
         if (pkt.bytes.empty())
@@ -1171,7 +1176,19 @@ void VideoThread::Run() {
                     h264CodecPrivateReady = true;
                     m_state.premux_cv.notify_all();
                 }
-            } else if (m_state.config.video_codec != VideoCodec::H264Nvenc && !av1CodecPrivateReady) {
+            } else if (m_state.config.video_codec == VideoCodec::HevcNvenc && !hevcCodecPrivateReady) {
+                std::vector<uint8_t> vpsSpsPps;
+                if (annexb::ExtractHevcVpsSpsPps(pkt.bytes.data(), pkt.bytes.size(), vpsSpsPps)) {
+                    std::lock_guard lk(m_state.premux_mutex);
+                    m_state.codec_private.hevc_vps_sps_pps = std::move(vpsSpsPps);
+                    m_state.codec_private.hevc_ready = true;
+                    hevcCodecPrivateReady = true;
+                    m_state.premux_cv.notify_all();
+                } else {
+                    logging::log(logging::LogLevel::Warn, "video_thread",
+                                 "HEVC VPS/SPS/PPS extraction failed on keyframe");
+                }
+            } else if (m_state.config.video_codec == VideoCodec::Av1Nvenc && !av1CodecPrivateReady) {
                 char reason[256] = {};
                 uint8_t cp[4] = {};
                 if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp, reason,
@@ -1906,7 +1923,16 @@ end_encode_loop:
                         h264CodecPrivateReady = true;
                         m_state.premux_cv.notify_all();
                     }
-                } else if (m_state.config.video_codec != VideoCodec::H264Nvenc && !av1CodecPrivateReady) {
+                } else if (m_state.config.video_codec == VideoCodec::HevcNvenc && !hevcCodecPrivateReady) {
+                    std::vector<uint8_t> vpsSpsPps;
+                    if (annexb::ExtractHevcVpsSpsPps(pkt.bytes.data(), pkt.bytes.size(), vpsSpsPps)) {
+                        std::lock_guard lk(m_state.premux_mutex);
+                        m_state.codec_private.hevc_vps_sps_pps = std::move(vpsSpsPps);
+                        m_state.codec_private.hevc_ready = true;
+                        hevcCodecPrivateReady = true;
+                        m_state.premux_cv.notify_all();
+                    }
+                } else if (m_state.config.video_codec == VideoCodec::Av1Nvenc && !av1CodecPrivateReady) {
                     char reason[256] = {};
                     uint8_t cp[4] = {};
                     if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp, reason,

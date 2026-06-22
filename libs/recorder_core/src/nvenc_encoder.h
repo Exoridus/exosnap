@@ -98,6 +98,9 @@ class NvencEncoder {
     // Query H.264 GUID and NV12 format support.
     bool QueryH264Nv12Support(std::string& out_error);
 
+    // Query HEVC (H.265) GUID and NV12 format support.
+    bool QueryHevcNv12Support(std::string& out_error);
+
     // Fetch preset config and set chromaFormatIDC=1 (YUV420).
     bool FetchPresetConfig(std::string& out_error);
 

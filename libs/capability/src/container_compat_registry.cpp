@@ -37,10 +37,11 @@ std::string_view ToString(ContainerCompatLevel level) noexcept {
 //                                               Matroska-only, 0.6.0 Audio v2)
 //   MKV  | AV1          | FLAC  → Allowed      (lossless A_FLAC via libFLAC;
 //                                               Matroska-only, 0.6.0 Audio v2)
-//   MKV  | HEVC         | Opus  → Experimental (not implemented; planned)
-//   MKV  | HEVC         | AAC   → Experimental (not implemented; planned)
-//   MKV  | HEVC         | PCM   → Experimental (HEVC video not implemented)
-//   MKV  | HEVC         | FLAC  → Experimental (HEVC video not implemented)
+//   MKV  | HEVC         | Opus  → Allowed      (0.7.0: HEVC NVENC + Matroska V_MPEGH/ISO/HEVC;
+//                                               hvcC codec-private + length-prefixed samples)
+//   MKV  | HEVC         | AAC   → Allowed      (0.7.0: HEVC NVENC + Matroska V_MPEGH/ISO/HEVC)
+//   MKV  | HEVC         | PCM   → Allowed      (0.7.0: HEVC NVENC + Matroska V_MPEGH/ISO/HEVC)
+//   MKV  | HEVC         | FLAC  → Allowed      (0.7.0: HEVC NVENC + Matroska V_MPEGH/ISO/HEVC)
 //   MKV  | H.264        | AAC   → Recommended  (validated MKV H.264+AAC)
 //   MKV  | H.264        | Opus  → Allowed      (Matroska carries Opus natively;
 //                                               Opus-in-MKV write path is
@@ -89,10 +90,9 @@ std::string_view ToString(ContainerCompatLevel level) noexcept {
 //     only a dedicated player-matrix pass for this exact pairing is missing.
 //     ReconcileCodecs() now leaves H.264+Opus presets unchanged (Allowed is a
 //     working combo); no rewrite to AAC occurs any more.
-//   - HEVC entries are Experimental rather than Prohibited so that future
-//     implementation can promote them to Allowed/Recommended without a
-//     registry-schema change.  The CapabilitySet will down-grade them to
-//     NotImplemented via the dimension-level check until implemented.
+//   - MKV + HEVC entries are promoted to Allowed in 0.7.0 (hvcC codec-private +
+//     length-prefixed sample conversion implemented; V_MPEGH/ISO/HEVC codec ID).
+//     MP4 + HEVC remains Experimental (hvc1/hev1 tag choice unresolved, follow-up slice).
 // ---------------------------------------------------------------------------
 
 ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCodec video, AudioCodec audio) noexcept {
@@ -131,13 +131,21 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
         }
         if (video == VideoCodec::HevcNvenc) {
             if (audio == AudioCodec::AacMf)
-                return {ContainerCompatLevel::Experimental, "MKV + HEVC + AAC: planned but not yet implemented."};
+                return {ContainerCompatLevel::Allowed,
+                        "MKV + HEVC + AAC: HEVC NVENC with Matroska V_MPEGH/ISO/HEVC (hvcC codec-private, "
+                        "length-prefixed samples). Implemented in 0.7.0."};
             if (audio == AudioCodec::Opus)
-                return {ContainerCompatLevel::Experimental, "MKV + HEVC + Opus: planned but not yet implemented."};
+                return {ContainerCompatLevel::Allowed,
+                        "MKV + HEVC + Opus: HEVC NVENC with Matroska V_MPEGH/ISO/HEVC (hvcC codec-private, "
+                        "length-prefixed samples). Implemented in 0.7.0."};
             if (audio == AudioCodec::Pcm)
-                return {ContainerCompatLevel::Experimental, "MKV + HEVC + PCM: not implemented."};
+                return {ContainerCompatLevel::Allowed,
+                        "MKV + HEVC + PCM: HEVC NVENC with Matroska V_MPEGH/ISO/HEVC (hvcC codec-private, "
+                        "length-prefixed samples) + uncompressed PCM (A_PCM/INT_LIT). Implemented in 0.7.0."};
             if (audio == AudioCodec::Flac)
-                return {ContainerCompatLevel::Experimental, "MKV + HEVC + FLAC: not implemented."};
+                return {ContainerCompatLevel::Allowed,
+                        "MKV + HEVC + FLAC: HEVC NVENC with Matroska V_MPEGH/ISO/HEVC (hvcC codec-private, "
+                        "length-prefixed samples) + lossless FLAC (A_FLAC). Implemented in 0.7.0."};
         }
         return {ContainerCompatLevel::Prohibited, "Unknown MKV combination."};
     }
