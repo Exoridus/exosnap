@@ -66,6 +66,17 @@ if(NOT EXISTS "${_nvenc_header}")
     )
     target_include_directories(test_codec_private_readiness PRIVATE src)
 
+    # Two-phase worker shutdown wait (worker_join.h): guards against the
+    # max-recording-duration defect where the join budget started at recording
+    # START instead of STOP. Header-only logic exercised with real std::threads.
+    exosnap_add_gtest(
+        NAME test_worker_join
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_worker_join.cpp
+        LIBRARIES recorder_core
+    )
+    target_include_directories(test_worker_join PRIVATE src)
+
     exosnap_add_gtest(
         NAME test_opus_encoder
         TEST_PREFIX recorder_core.
@@ -338,6 +349,17 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_codec_private_readiness PRIVATE src)
+
+# Two-phase worker shutdown wait (worker_join.h): guards against the
+# max-recording-duration defect where the join budget started at recording
+# START instead of STOP. Header-only logic exercised with real std::threads.
+exosnap_add_gtest(
+    NAME test_worker_join
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_worker_join.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_worker_join PRIVATE src)
 
 exosnap_add_gtest(
     NAME test_opus_encoder

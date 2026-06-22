@@ -12,6 +12,7 @@
 #include "wasapi_loopback_src.h"
 #include "wasapi_process_loopback_src.h"
 #include "wgc_capture.h"
+#include "worker_join.h"
 
 #include <chrono>
 #include <cstdio>
@@ -596,7 +597,13 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     videoThread.Start();
     muxThread.Start();
 
-    // Parallel join: all workers share a single 120-second budget.
+    // Two-phase cooperative shutdown (see worker_join.h):
+    //   Phase 1 — wait (unbounded) until Stop() or a fatal worker failure sets
+    //             stop_requested. Workers keep running until then, so this must
+    //             NOT consume the join budget — otherwise recordings longer than
+    //             the budget would fail with ERROR_TIMEOUT and an unfinalized file.
+    //   Phase 2 — once stopping, all workers share a single 120 s join budget to
+    //             drain their queues and finalize the container.
     //
     // IMPORTANT: NativeHandle() must be called BEFORE any Join() because the
     // handle becomes invalid once the std::thread is joined.
@@ -617,44 +624,40 @@ RecorderResult RecorderSession::Record(const RecorderConfig& config) {
     }
 
     constexpr DWORD kParallelJoinTimeoutMs = 120000;
-    DWORD joinWait = WAIT_FAILED;
+    constexpr DWORD kStopPollIntervalMs = 100;
+
+    std::vector<bool> handleSignaled(allHandles.size(), false);
     if (!hasNullHandle) {
-        joinWait = WaitForMultipleObjects(static_cast<DWORD>(allHandles.size()), allHandles.data(), TRUE,
-                                          kParallelJoinTimeoutMs);
-        if (joinWait == WAIT_FAILED) {
-            m_impl->state.RecordFailure(HRESULT_FROM_WIN32(GetLastError()), ErrorPhase::Shutdown,
+        const WorkerJoinResult jr = WaitForWorkersThenJoin(allHandles, m_impl->state.stop_requested,
+                                                           kParallelJoinTimeoutMs, kStopPollIntervalMs);
+        if (jr.wait_failed) {
+            m_impl->state.RecordFailure(HRESULT_FROM_WIN32(jr.last_error), ErrorPhase::Shutdown,
                                         "WaitForMultipleObjects failed during thread join");
         }
+        handleSignaled = jr.signaled;
     } else {
         m_impl->state.RecordFailure(E_FAIL, ErrorPhase::Shutdown, "Thread native handle is null before join");
     }
 
+    // Join the std::thread wrappers for any worker that has actually exited, so
+    // their destructors don't detach a still-running thread. Workers that timed
+    // out remain unsignaled and are detached by their destructors (unchanged
+    // behavior on the failure path).
     bool videoJoined = false;
     std::vector<bool> audioJoined(audioWorkers.size(), false);
     bool muxJoined = false;
-
-    if (joinWait == WAIT_OBJECT_0) {
-        videoJoined = videoThread.Join(0);
-        for (size_t i = 0; i < audioWorkers.size(); ++i) {
-            audioJoined[i] = audioWorkers[i]->Join(0);
-        }
-        muxJoined = muxThread.Join(0);
-    } else {
-        videoJoined = (allHandles[0] != nullptr && WaitForSingleObject(allHandles[0], 0) == WAIT_OBJECT_0);
-        if (videoJoined) {
-            videoThread.Join(0);
+    if (!hasNullHandle) {
+        if (handleSignaled[0]) {
+            videoJoined = videoThread.Join(0);
         }
         for (size_t i = 0; i < audioWorkers.size(); ++i) {
-            const HANDLE h = allHandles[1 + i];
-            audioJoined[i] = (h != nullptr && WaitForSingleObject(h, 0) == WAIT_OBJECT_0);
-            if (audioJoined[i]) {
-                audioWorkers[i]->Join(0);
+            if (handleSignaled[1 + i]) {
+                audioJoined[i] = audioWorkers[i]->Join(0);
             }
         }
-        const HANDLE muxHandle = allHandles[1 + audioWorkers.size()];
-        muxJoined = (muxHandle != nullptr && WaitForSingleObject(muxHandle, 0) == WAIT_OBJECT_0);
-        if (muxJoined) {
-            muxThread.Join(0);
+        const size_t muxIndex = 1 + audioWorkers.size();
+        if (handleSignaled[muxIndex]) {
+            muxJoined = muxThread.Join(0);
         }
     }
 
