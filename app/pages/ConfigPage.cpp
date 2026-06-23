@@ -3026,6 +3026,12 @@ void ConfigPage::updateVideoCodecChoices() {
     if (video_codec_combo_->count() == 0) {
         video_codec_combo_->addItem(QStringLiteral("AV1"), VideoCodecToInt(capability::VideoCodec::Av1Nvenc));
         video_codec_combo_->addItem(QStringLiteral("H.264"), VideoCodecToInt(capability::VideoCodec::H264Nvenc));
+#ifndef NDEBUG
+        // The HEVC picker UI is Slice 7; this debug-only entry exposes HEVC so the
+        // 0.7.0 HEVC engine path (ValidUnvalidated) can be GPU-smoke-tested with
+        // MKV + HEVC. Release builds do not show it.
+        video_codec_combo_->addItem(QStringLiteral("HEVC (debug)"), VideoCodecToInt(capability::VideoCodec::HevcNvenc));
+#endif
     }
     const int vidx = video_codec_combo_->findData(VideoCodecToInt(format_settings_.video_codec));
     if (vidx >= 0)

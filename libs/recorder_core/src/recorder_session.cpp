@@ -171,10 +171,15 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
             return fail(E_NOTIMPL, ErrorPhase::Prepare, "Container::WebM requires VideoCodec::Av1Nvenc");
         }
     } else {
-        // Container::Matroska: AV1 and H.264 are supported
-        if (config.video_codec != VideoCodec::Av1Nvenc && config.video_codec != VideoCodec::H264Nvenc) {
+        // Container::Matroska: AV1, H.264, and HEVC are supported. HEVC NVENC is
+        // muxed as V_MPEGH/ISO/HEVC with an hvcC codec-private blob and
+        // length-prefixed samples (0.7.0; container compat registry → Allowed).
+        // MP4 + HEVC remains Experimental (hvc1/hev1 tag choice unresolved).
+        if (config.video_codec != VideoCodec::Av1Nvenc && config.video_codec != VideoCodec::H264Nvenc &&
+            config.video_codec != VideoCodec::HevcNvenc) {
             return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                        "Container::Matroska requires VideoCodec::Av1Nvenc or VideoCodec::H264Nvenc");
+                        "Container::Matroska requires VideoCodec::Av1Nvenc, VideoCodec::H264Nvenc, "
+                        "or VideoCodec::HevcNvenc");
         }
     }
 

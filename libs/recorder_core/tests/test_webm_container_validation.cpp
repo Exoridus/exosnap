@@ -220,4 +220,78 @@ TEST(WebMContainerValidationTest, Validate_RejectsMp4Flac) {
     EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
 }
 
+// --- HEVC (0.7.0): Matroska V_MPEGH/ISO/HEVC ---
+// The container compat registry lists MKV + HEVC + {Opus, AAC, PCM, FLAC} as
+// Allowed; Validate must accept these end-to-end. MP4 + HEVC stays Experimental
+// (hvc1/hev1 tag choice unresolved) and must be rejected.
+
+TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevcOpus) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidMatroskaConfig();
+    cfg.video_codec = VideoCodec::HevcNvenc;
+    cfg.audio_codec = AudioCodec::Opus;
+
+    RecorderResult result{};
+    EXPECT_TRUE(session.Validate(cfg, &result));
+    EXPECT_TRUE(result.succeeded);
+}
+
+TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevcAac) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidMatroskaConfig();
+    cfg.video_codec = VideoCodec::HevcNvenc;
+    cfg.audio_codec = AudioCodec::AacMf;
+
+    RecorderResult result{};
+    EXPECT_TRUE(session.Validate(cfg, &result));
+    EXPECT_TRUE(result.succeeded);
+}
+
+TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevcPcm) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidMatroskaConfig();
+    cfg.video_codec = VideoCodec::HevcNvenc;
+    cfg.audio_codec = AudioCodec::Pcm;
+
+    RecorderResult result{};
+    EXPECT_TRUE(session.Validate(cfg, &result));
+    EXPECT_TRUE(result.succeeded);
+}
+
+TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevcFlac) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidMatroskaConfig();
+    cfg.video_codec = VideoCodec::HevcNvenc;
+    cfg.audio_codec = AudioCodec::Flac;
+
+    RecorderResult result{};
+    EXPECT_TRUE(session.Validate(cfg, &result));
+    EXPECT_TRUE(result.succeeded);
+}
+
+TEST(WebMContainerValidationTest, Validate_RejectsMp4Hevc) {
+    RecorderSession session;
+    RecorderConfig cfg{};
+    cfg.output_path = std::filesystem::current_path() / "test_mp4_hevc.mp4";
+    cfg.target.kind = CaptureTarget::Kind::Monitor;
+    cfg.target.native_id = 1;
+    cfg.container = Container::Mp4;
+    cfg.video_codec = VideoCodec::HevcNvenc;
+    cfg.audio_codec = AudioCodec::AacMf;
+
+    RecorderResult result{};
+    EXPECT_FALSE(session.Validate(cfg, &result));
+    EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
+}
+
+TEST(WebMContainerValidationTest, Validate_RejectsWebMHevc) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidWebMConfig();
+    cfg.video_codec = VideoCodec::HevcNvenc;
+
+    RecorderResult result{};
+    EXPECT_FALSE(session.Validate(cfg, &result));
+    EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
+}
+
 } // namespace
