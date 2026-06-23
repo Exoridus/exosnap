@@ -116,6 +116,14 @@ privileged background service (which breaks the portable ZIP story), the design 
 - **Do not run elevated by default.** An elevated process loses drag-drop from the non-elevated shell
   (UIPI) and routinely running a recorder as admin is poor practice. Elevation is an on-demand
   "relaunch to unlock" path, not the default launch mode.
+- **The "Elevated mode" control is a relaunch, not an in-place change.** A process's integrity level
+  is fixed at creation, so a Settings toggle (or toggling on a feature that needs elevation) triggers a
+  self-relaunch via `ShellExecuteEx`/`runas` (UAC consent) and exits the current instance. This is
+  offered through a NotificationHub action ("This needs elevated mode — restart as administrator?")
+  rather than a blocking modal. Constraints: never relaunch during an active recording (defer the offer
+  until stop, cf. [[0012-update-security-model]]'s no-update-during-recording rule); hand off state
+  (settings + current view + a flag to re-enable the toggled feature) so the restart is seamless; handle
+  UAC decline gracefully (stay non-elevated, feature stays disabled).
 
 **Elevation is useful beyond PresentMon**, so the relaunch unlocks a coherent bundle, not a single
 feature: capturing **games/apps that themselves run elevated** (UIPI blocks a non-elevated capturer from
