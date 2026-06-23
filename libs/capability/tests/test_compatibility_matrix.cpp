@@ -118,15 +118,38 @@ TEST(CapabilityMatrixTest, MP4_UnsupportedCombos_AreNotImplementedOrInvalid) {
 TEST(CapabilityMatrixTest, ChromaAndBitDepthUnsupportedPathsAreNotImplemented) {
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
 
-    EXPECT_EQ(caps.QueryCombo(Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
-                              BitDepth::Bit10)
-                  .level,
-              SupportLevel::NotImplemented);
-
+    // 4:4:4 chroma is still not implemented for any codec.
     EXPECT_EQ(caps.QueryCombo(Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs444,
                               BitDepth::Bit8)
                   .level,
               SupportLevel::NotImplemented);
+
+    // 10-bit with H.264 is not implemented (H.264 is 8-bit only).
+    EXPECT_EQ(caps.QueryCombo(Container::Matroska, VideoCodec::H264Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
+                              BitDepth::Bit10)
+                  .level,
+              SupportLevel::NotImplemented);
+}
+
+TEST(CapabilityMatrixTest, TenBitHevcAndAv1AreValidUnvalidated) {
+    // 0.7.0 S5: 10-bit (HEVC Main10 / AV1 10-bit, P010) is implemented but not yet
+    // hardware-validated → ValidUnvalidated (selectable with a warning).
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    EXPECT_EQ(caps.QueryCombo(Container::Matroska, VideoCodec::HevcNvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
+                              BitDepth::Bit10)
+                  .level,
+              SupportLevel::ValidUnvalidated);
+
+    EXPECT_EQ(caps.QueryCombo(Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
+                              BitDepth::Bit10)
+                  .level,
+              SupportLevel::ValidUnvalidated);
+
+    EXPECT_EQ(caps.QueryCombo(Container::WebM, VideoCodec::Av1Nvenc, AudioCodec::Opus, ChromaSubsampling::Cs420,
+                              BitDepth::Bit10)
+                  .level,
+              SupportLevel::ValidUnvalidated);
 }
 
 } // namespace

@@ -186,7 +186,11 @@ These underpin multiple versions and must not be scattered into UI `if`-chains:
 have shipped. `0.7.0` finalizes the video/codec matrix: HEVC/AVC/AV1, 8-/10-bit, HDR10, color
 metadata, the P010 compositor path, `hvc1`, the MKV/MP4/WebM final matrix, and Apple/NLE tests.
 Color foundation (ADR 0032), HEVC-in-MKV and **`hvc1`-in-MP4** (both ValidUnvalidated, ADR 0010/0014)
-have landed; 10-bit/P010, HDR10 and the Settings/preset UI remain, plus GPU/HDR verification.
+have landed. **10-bit / P010** has also landed (ValidUnvalidated, GPU-verified on NVENC): the
+compositor converts BGRA → P010 for HEVC Main10 / AV1 10-bit, the hvcC parses the real SPS for its
+profile/bit-depth fields, and `ffprobe` confirms `Main 10` / `yuv420p10le` for MKV and MP4 (with 8-bit
+unaffected). 10-bit is **SDR-only** (studio BT.709); HDR transfer/primaries is the next slice. HDR10
+and the Settings/preset UI remain, plus HDR verification.
 
 ### v0.8.0 — Diagnostics as a feature *(next after 0.7.0; resequenced 2026-06)*
 

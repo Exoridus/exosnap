@@ -514,6 +514,7 @@ void VideoThread::Run() {
     NvencVideoEncoder nvenc;
     {
         nvenc.SetCodec(m_state.config.video_codec);
+        nvenc.SetBitDepth(m_state.config.bit_depth);
         nvenc.SetQualityPreset(m_state.config.nvenc_quality_preset);
         nvenc.SetRateControl(m_state.config.nvenc_rate_control, m_state.config.nvenc_bitrate_kbps);
 
@@ -534,7 +535,13 @@ void VideoThread::Run() {
         }
     }
 
-    // --- NV12 texture ring + video processor ---
+    // --- NV12 / P010 texture ring + video processor ---
+    // For 10-bit recording (HEVC Main10 / AV1 10-bit, ADR 0032 SDR BT.709) the
+    // VideoProcessor converts BGRA → P010 instead of NV12, and the encode ring +
+    // reference texture use DXGI_FORMAT_P010. The output color space stays studio
+    // BT.709 (no HDR/BT.2020 here — that is a later slice).
+    const bool tenBit = (m_state.config.bit_depth == BitDepth::Bit10);
+    const DXGI_FORMAT encodeFormat = tenBit ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
     static constexpr int32_t kSlotCount = 8;
     winrt::com_ptr<ID3D11Texture2D> nv12Textures[kSlotCount];
     winrt::com_ptr<ID3D11VideoProcessorEnumerator> videoEnum;
@@ -578,16 +585,16 @@ void VideoThread::Run() {
             desc.Height = encodeHeight;
             desc.MipLevels = 1;
             desc.ArraySize = 1;
-            desc.Format = DXGI_FORMAT_NV12;
+            desc.Format = encodeFormat; // NV12 (8-bit) or P010 (10-bit)
             desc.SampleDesc = {1, 0};
             desc.Usage = D3D11_USAGE_DEFAULT;
             desc.BindFlags = D3D11_BIND_RENDER_TARGET;
 
             hr = d3dDevice->CreateTexture2D(&desc, nullptr, nv12Textures[i].put());
             if (FAILED(hr)) {
-                char buf[80];
-                snprintf(buf, sizeof(buf), "CreateTexture2D(NV12[%d]) failed 0x%08lX", static_cast<int>(i),
-                         static_cast<unsigned long>(hr));
+                char buf[96];
+                snprintf(buf, sizeof(buf), "CreateTexture2D(%s[%d]) failed 0x%08lX", tenBit ? "P010" : "NV12",
+                         static_cast<int>(i), static_cast<unsigned long>(hr));
                 m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
                 if (com_inited)
                     CoUninitialize();
@@ -1275,6 +1282,22 @@ void VideoThread::Run() {
         if (!m_state.snapshot_requested.load())
             return;
 
+        // 10-bit (P010) snapshot is not implemented: the readback below assumes an
+        // 8-bit NV12 layout. Fail the request cleanly rather than produce garbage.
+        // The encode path is unaffected; only CaptureFrame is unavailable for 10-bit.
+        if (tenBit) {
+            SnapshotCallback pending_cb;
+            {
+                std::lock_guard lk(m_state.snapshot_callback_mutex);
+                pending_cb = std::move(m_state.snapshot_callback);
+                m_state.snapshot_callback = nullptr;
+                m_state.snapshot_requested.store(false);
+            }
+            if (pending_cb)
+                pending_cb(false, 0, 0, {}, "CaptureFrame is not supported for 10-bit recording");
+            return;
+        }
+
         // Lazily allocate the staging texture on first use.
         if (!snapshotStagingTex) {
             D3D11_TEXTURE2D_DESC sd{};
@@ -1367,7 +1390,7 @@ void VideoThread::Run() {
         // CFR path: QPC-driven scheduler — duplicate/drop to hit constant rate
         // ====================================================================
 
-        // Reference NV12 texture for frame duplication
+        // Reference encode texture for frame duplication (NV12 8-bit / P010 10-bit)
         winrt::com_ptr<ID3D11Texture2D> refNv12;
         bool refNv12Valid = false;
 
@@ -1377,7 +1400,7 @@ void VideoThread::Run() {
             refDesc.Height = encodeHeight;
             refDesc.MipLevels = 1;
             refDesc.ArraySize = 1;
-            refDesc.Format = DXGI_FORMAT_NV12;
+            refDesc.Format = encodeFormat;
             refDesc.SampleDesc = {1, 0};
             refDesc.Usage = D3D11_USAGE_DEFAULT;
             refDesc.BindFlags = 0; // only used as CopyResource source/dest

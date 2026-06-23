@@ -75,6 +75,13 @@ class NvencEncoder {
         m_codec = codec;
     }
 
+    // Set encoder bit depth before calling Open()/FetchPresetConfig(). Defaults to Bit8.
+    // Bit10 selects P010 (NV_ENC_BUFFER_FORMAT_YUV420_10BIT) input and the HEVC Main10 /
+    // AV1 10-bit profile. Only valid for HevcNvenc and Av1Nvenc (validated upstream).
+    void SetBitDepth(BitDepth depth) noexcept {
+        m_bitDepth = depth;
+    }
+
     // Set quality tier before calling FetchPresetConfig(). Defaults to Balanced.
     // Only meaningful for ConstantQuality mode.
     void SetQualityPreset(NvencQualityPreset preset) noexcept {
@@ -111,7 +118,7 @@ class NvencEncoder {
     // Create bitstream buffer.  Must be called after InitEncoder.
     bool CreateBitstreamBuffer(std::string& out_error);
 
-    // Register one slot's NV12 D3D11 texture with NVENC.
+    // Register one slot's D3D11 texture with NVENC (NV12 for 8-bit, P010 for 10-bit).
     // Must be called after InitEncoder, once per slot (0..7).
     bool RegisterSlotTexture(int32_t slot_idx, ID3D11Texture2D* texture, std::string& out_error);
 
@@ -164,6 +171,7 @@ class NvencEncoder {
     int32_t m_slotCursor = 0;
 
     VideoCodec m_codec = VideoCodec::Av1Nvenc;
+    BitDepth m_bitDepth = BitDepth::Bit8;
     NvencQualityPreset m_qualityPreset = NvencQualityPreset::Balanced;
     RateControlMode m_rateControlMode = RateControlMode::ConstantQuality;
     uint32_t m_bitrate_kbps = 20000;

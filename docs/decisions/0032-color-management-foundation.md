@@ -64,5 +64,31 @@ there is no black-level mismatch.
   `colr`/codec-specific boxes — tracked for the HDR/`hvc1` slice.
 - The model is HDR-ready: the HDR slice populates the BT.2020/PQ + mastering
   fields and adds the `MasteringMetadata` sub-element; no type changes needed.
-- 10-bit (`BitsPerChannel=10`) is representable in the model but the encode path
-  (P010, 10-bit NVENC profiles) remains a later slice.
+
+## Update — 10-bit / P010 encode path landed (0.7.0 S5)
+
+The 10-bit encode path is now implemented (ValidUnvalidated → GPU-verified on an
+RTX 5070 Ti / NVENC):
+
+- `recorder_core::BitDepth::Bit10` is a real engine value. When selected with
+  HEVC or AV1, the `VideoProcessor` converts BGRA → **P010**
+  (`DXGI_FORMAT_P010`) instead of NV12, the P010 textures are registered with
+  NVENC as `NV_ENC_BUFFER_FORMAT_YUV420_10BIT`, and the encoder uses the HEVC
+  **Main10** profile (`NV_ENC_HEVC_PROFILE_MAIN10_GUID`) / AV1 Main profile with
+  `inputBitDepth = outputBitDepth = NV_ENC_BIT_DEPTH_10`. H.264 stays 8-bit only
+  (rejected by `Validate()` with `E_NOTIMPL`).
+- The Matroska hvcC (`CodecPrivate`) now **parses the real SPS** (Exp-Golomb,
+  emulation-prevention-byte removal) for `general_profile_idc` /
+  `bit_depth_luma/chroma_minus8` / `chroma_format_idc` / level, instead of the
+  previous hardcoded 8-bit-Main constants, so a Main10 stream is tagged
+  correctly. ffprobe confirms `profile=Main 10`, `pix_fmt=yuv420p10le` for both
+  MKV and MP4 (hvc1), and an 8-bit recording still reports `profile=Main` /
+  `pix_fmt=yuv420p`.
+- **Known limitation — SDR 10-bit only.** The `VideoProcessor` output color space
+  stays studio-range BT.709 (the SDR HD standard). 10-bit here buys reduced
+  banding, not wider gamut: HDR transfer/primaries (BT.2020 / PQ / HLG, mastering
+  display + MaxCLL/MaxFALL) remain the next slice. The `ColorMetadata`
+  `BitsPerChannel` should be set to 10 by the UI/profile layer when 10-bit is
+  chosen (the model already supports it).
+- CaptureFrame (snapshot) is not implemented for 10-bit (the NV12→BGRA readback
+  assumes 8-bit); it fails cleanly and does not affect the encode path.

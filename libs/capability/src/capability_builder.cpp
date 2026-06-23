@@ -48,7 +48,10 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
 
     caps.bit_depths.emplace(BitDepth::Bit8, SupportAnnotation{SupportLevel::Available, "Validated bit depth."});
     caps.bit_depths.emplace(BitDepth::Bit10,
-                            SupportAnnotation{SupportLevel::NotImplemented, "10-bit path is not implemented."});
+                            SupportAnnotation{SupportLevel::ValidUnvalidated,
+                                              "10-bit HEVC/AV1 via NVENC Main10/P010 implemented in 0.7.0 "
+                                              "(SDR BT.709); not yet validated on recording hardware. "
+                                              "Requires HEVC or AV1; H.264 is 8-bit only."});
 
     caps.resolution_constraint.max_width = 0;
     caps.resolution_constraint.max_height = 0;
@@ -77,6 +80,10 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
         caps.video_codecs[VideoCodec::Av1Nvenc] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
         caps.video_codecs[VideoCodec::H264Nvenc] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
         caps.video_codecs[VideoCodec::HevcNvenc] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
+
+        // 10-bit requires NVENC (HEVC Main10 / AV1 10-bit). Without NVENC it cannot be
+        // produced at all, so downgrade it to NotImplemented mirroring the HEVC codec.
+        caps.bit_depths[BitDepth::Bit10] = SupportAnnotation{SupportLevel::NotImplemented, nvenc_reason};
 
         // Force primary combos to non-selectable via combo_override.
         const ComboKey mkv_av1_key{Container::Matroska, VideoCodec::Av1Nvenc, AudioCodec::AacMf,

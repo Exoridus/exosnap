@@ -62,6 +62,203 @@ static void EnumerateHevcNals(const uint8_t* data, size_t size, std::vector<Hevc
     }
 }
 
+// ---------------------------------------------------------------------------
+// HEVC SPS RBSP parser (for hvcC fixed-header fields)
+// ---------------------------------------------------------------------------
+//
+// The hvcC fixed header must reflect the real general_profile/tier/level, the
+// chroma_format_idc and the luma/chroma bit depth so a 10-bit (Main10) stream is
+// tagged correctly. These come from the SPS RBSP, which is a bit-packed
+// (non-byte-aligned) syntax using Exp-Golomb ue(v) codes. We strip
+// emulation-prevention bytes (0x00 0x00 0x03 → 0x00 0x00) and read the prefix of
+// the SPS up to bit_depth_chroma_minus8. See H.265 (ITU-T H.265) 7.3.2.2.1.
+
+struct ParsedHevcSps {
+    uint8_t profile_space = 0;          // general_profile_space (2 bits)
+    uint8_t tier_flag = 0;              // general_tier_flag (1 bit)
+    uint8_t profile_idc = 1;            // general_profile_idc (5 bits) — Main=1, Main10=2
+    uint32_t profile_compatibility = 0; // general_profile_compatibility_flags (32 bits)
+    uint8_t constraint_bytes[6] = {0};  // 6 bytes of constraint_indicator flags
+    uint8_t level_idc = 0;              // general_level_idc (8 bits)
+    uint32_t chroma_format_idc = 1;     // 1 = 4:2:0
+    uint32_t bit_depth_luma_minus8 = 0; // 0 = 8-bit, 2 = 10-bit
+    uint32_t bit_depth_chroma_minus8 = 0;
+};
+
+// Minimal MSB-first bit reader over an RBSP with emulation-prevention removal.
+class RbspBitReader {
+  public:
+    RbspBitReader(const uint8_t* data, size_t size) : data_(data), size_(size) {
+    }
+
+    bool ReadBit(uint32_t& out) {
+        if (byte_pos_ >= size_)
+            return false;
+        const uint8_t byte = data_[byte_pos_];
+        out = (byte >> (7u - bit_pos_)) & 0x1u;
+        if (++bit_pos_ == 8u) {
+            bit_pos_ = 0u;
+            ++byte_pos_;
+            // Skip the emulation_prevention_three_byte: 0x00 0x00 0x03 → the 0x03
+            // is not part of the RBSP payload. Detect when the next byte is 0x03
+            // and the two bytes before it (within the NAL) were both 0x00.
+            if (byte_pos_ >= 2u && byte_pos_ < size_ && data_[byte_pos_] == 0x03u && data_[byte_pos_ - 1u] == 0x00u &&
+                data_[byte_pos_ - 2u] == 0x00u) {
+                ++byte_pos_;
+            }
+        }
+        return true;
+    }
+
+    bool ReadBits(uint32_t count, uint32_t& out) {
+        out = 0u;
+        for (uint32_t i = 0; i < count; ++i) {
+            uint32_t bit = 0;
+            if (!ReadBit(bit))
+                return false;
+            out = (out << 1u) | bit;
+        }
+        return true;
+    }
+
+    // Exp-Golomb unsigned: count leading zero bits n, then read n more bits.
+    bool ReadUe(uint32_t& out) {
+        uint32_t zeros = 0;
+        uint32_t bit = 0;
+        while (true) {
+            if (!ReadBit(bit))
+                return false;
+            if (bit == 1u)
+                break;
+            if (++zeros > 31u)
+                return false; // malformed / out of range
+        }
+        uint32_t suffix = 0;
+        if (zeros > 0u && !ReadBits(zeros, suffix))
+            return false;
+        out = (1u << zeros) - 1u + suffix;
+        return true;
+    }
+
+  private:
+    const uint8_t* data_ = nullptr;
+    size_t size_ = 0;
+    size_t byte_pos_ = 0;
+    uint32_t bit_pos_ = 0;
+};
+
+// Parse profile_tier_level() for the general layer plus, when present, skip the
+// sub-layer PTL. Returns false on truncation. profilePresentFlag is assumed 1
+// (always the case for the SPS top-level PTL).
+static bool ParseProfileTierLevel(RbspBitReader& r, uint32_t max_sub_layers_minus1, ParsedHevcSps& out) {
+    uint32_t v = 0;
+    if (!r.ReadBits(2u, v))
+        return false;
+    out.profile_space = static_cast<uint8_t>(v);
+    if (!r.ReadBit(v))
+        return false;
+    out.tier_flag = static_cast<uint8_t>(v);
+    if (!r.ReadBits(5u, v))
+        return false;
+    out.profile_idc = static_cast<uint8_t>(v);
+    if (!r.ReadBits(32u, out.profile_compatibility))
+        return false;
+    // 48 bits of constraint flags / reserved = 6 bytes.
+    for (int i = 0; i < 6; ++i) {
+        if (!r.ReadBits(8u, v))
+            return false;
+        out.constraint_bytes[i] = static_cast<uint8_t>(v);
+    }
+    if (!r.ReadBits(8u, v))
+        return false;
+    out.level_idc = static_cast<uint8_t>(v);
+
+    // Sub-layer PTL. For NVENC HEVC output max_sub_layers_minus1 is 0, so this is
+    // usually a no-op, but parse it correctly for robustness.
+    if (max_sub_layers_minus1 > 0u) {
+        uint8_t sub_profile_present[8] = {0};
+        uint8_t sub_level_present[8] = {0};
+        for (uint32_t i = 0; i < max_sub_layers_minus1; ++i) {
+            uint32_t pp = 0, lp = 0;
+            if (!r.ReadBit(pp) || !r.ReadBit(lp))
+                return false;
+            sub_profile_present[i] = static_cast<uint8_t>(pp);
+            sub_level_present[i] = static_cast<uint8_t>(lp);
+        }
+        if (max_sub_layers_minus1 > 0u && max_sub_layers_minus1 < 8u) {
+            // reserved_zero_2bits for i in [max_sub_layers_minus1, 8)
+            for (uint32_t i = max_sub_layers_minus1; i < 8u; ++i) {
+                if (!r.ReadBits(2u, v))
+                    return false;
+            }
+        }
+        for (uint32_t i = 0; i < max_sub_layers_minus1; ++i) {
+            if (sub_profile_present[i]) {
+                // 2+1+5 + 32 + 48 = 88 bits of sub-layer profile fields
+                if (!r.ReadBits(8u, v) || !r.ReadBits(32u, v))
+                    return false;
+                for (int k = 0; k < 6; ++k) {
+                    if (!r.ReadBits(8u, v))
+                        return false;
+                }
+            }
+            if (sub_level_present[i]) {
+                if (!r.ReadBits(8u, v)) // sub_layer_level_idc
+                    return false;
+            }
+        }
+    }
+    return true;
+}
+
+// Parse the prefix of an HEVC SPS NAL (including the 2-byte NAL header) up to and
+// including bit_depth_chroma_minus8. Returns false on truncation/malformed input;
+// the caller then falls back to conservative defaults (Main 8-bit 4:2:0).
+static bool ParseHevcSps(const uint8_t* sps_nal, size_t sps_len, ParsedHevcSps& out) {
+    if (sps_nal == nullptr || sps_len < 3u)
+        return false;
+    // Skip the 2-byte NAL header; the RBSP starts at sps_nal[2].
+    RbspBitReader r(sps_nal + 2u, sps_len - 2u);
+
+    uint32_t v = 0;
+    if (!r.ReadBits(4u, v)) // sps_video_parameter_set_id
+        return false;
+    uint32_t max_sub_layers_minus1 = 0;
+    if (!r.ReadBits(3u, max_sub_layers_minus1)) // sps_max_sub_layers_minus1
+        return false;
+    if (!r.ReadBit(v)) // sps_temporal_id_nesting_flag
+        return false;
+
+    if (!ParseProfileTierLevel(r, max_sub_layers_minus1, out))
+        return false;
+
+    uint32_t sps_seq_parameter_set_id = 0;
+    if (!r.ReadUe(sps_seq_parameter_set_id))
+        return false;
+    if (!r.ReadUe(out.chroma_format_idc))
+        return false;
+    if (out.chroma_format_idc == 3u) {
+        if (!r.ReadBit(v)) // separate_colour_plane_flag
+            return false;
+    }
+    uint32_t pic_w = 0, pic_h = 0;
+    if (!r.ReadUe(pic_w) || !r.ReadUe(pic_h))
+        return false;
+    uint32_t conformance_window_flag = 0;
+    if (!r.ReadBit(conformance_window_flag))
+        return false;
+    if (conformance_window_flag) {
+        uint32_t dummy = 0;
+        if (!r.ReadUe(dummy) || !r.ReadUe(dummy) || !r.ReadUe(dummy) || !r.ReadUe(dummy))
+            return false;
+    }
+    if (!r.ReadUe(out.bit_depth_luma_minus8))
+        return false;
+    if (!r.ReadUe(out.bit_depth_chroma_minus8))
+        return false;
+    return true;
+}
+
 } // namespace
 
 bool ExtractHevcVpsSpsPps(const uint8_t* data, size_t size, std::vector<uint8_t>& out) {
@@ -155,32 +352,37 @@ bool BuildHvccFromAnnexBVpsSpsPps(const std::vector<uint8_t>& vps_sps_pps_annexb
     const uint8_t* sps_data = vps_sps_pps_annexb.data() + sps_span->payload_offset;
     const uint8_t* pps_data = vps_sps_pps_annexb.data() + pps_span->payload_offset;
 
-    // Try to extract general_level_idc from SPS RBSP.
-    // HEVC SPS RBSP starts at offset 2 (after 2-byte NAL header):
-    //   sps_video_parameter_set_id (4 bits)
-    //   sps_max_sub_layers_minus1  (3 bits)
-    //   sps_temporal_id_nesting_flag (1 bit)
-    //   profile_tier_level() — the general_level_idc is at byte offset 13 from the RBSP start
-    //     (after general_profile_space(2) + general_tier_flag(1) + general_profile_idc(5) +
-    //      general_profile_compatibility_flags(32) + general_progressive_source_flag(1) +
-    //      general_interlaced_source_flag(1) + general_non_packed_constraint_flag(1) +
-    //      general_frame_only_constraint_flag(1) + general_reserved_zero_44bits(44) =
-    //      2+1+5+32+1+1+1+1+44 = 88 bits = 11 bytes; then general_level_idc at byte 11 from start of PTL)
-    //   PTL starts at RBSP byte 2 (after NAL header + sps_video_parameter_set_id etc. byte)
-    //   Conservative: we write level_idc=0 unless we can read it cleanly.
-    uint8_t general_level_idc = 0u;
-    // RBSP starts at sps_data[2] (sps_data[0..1] = 2-byte HEVC NAL header).
-    // Byte layout in profile_tier_level (byte-aligned fields for the general_ part):
-    //   PTL offset 0: general_profile_space(2b) | general_tier_flag(1b) | general_profile_idc(5b)
-    //   PTL offset 1-4: general_profile_compatibility_flags (32 bits)
-    //   PTL offset 5: general_progressive(1b)|interlaced(1b)|non_packed(1b)|frame_only(1b)|44 reserved bits
-    //   PTL offset 5-10: 44 reserved bits span bytes 5-10 (6 bytes)
-    //   PTL offset 11: general_level_idc (8 bits)
-    // SPS RBSP: [sps_video_parameter_set_id(4b)|sps_max_sub_layers_minus1(3b)|temporal(1b)] [PTL starts byte 1]
-    // So PTL starts at sps_data[2] byte index 1 → sps_data[3].
-    // general_level_idc = sps_data[3 + 11] = sps_data[14]
-    if (sps_len >= 15u) {
-        general_level_idc = sps_data[14];
+    // Parse the SPS RBSP for the fixed-header fields that vary by profile/bit depth:
+    // general_profile/tier/level, chroma_format_idc, and the luma/chroma bit depths.
+    // These must reflect the real stream so 10-bit (Main10) is tagged correctly; a
+    // hardcoded 8-bit Main hvcC on a Main10 stream is invalid metadata. On any parse
+    // failure we fall back to the historic conservative Main-8-bit-4:2:0 constants so
+    // a malformed or unexpected SPS still yields a usable 8-bit hvcC.
+    ParsedHevcSps sps{};
+    const bool sps_parsed = ParseHevcSps(sps_data, sps_len, sps);
+
+    // Fallbacks mirror the previous hardcoded values (Main, level from byte 14 if present).
+    uint8_t profile_space = 0u;
+    uint8_t tier_flag = 0u;
+    uint8_t profile_idc = 1u; // Main
+    uint32_t profile_compatibility = 0x60000000u;
+    uint8_t constraint_bytes[6] = {0x90u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u};
+    uint8_t general_level_idc = (sps_len >= 15u) ? sps_data[14] : 0u;
+    uint32_t chroma_format_idc = 1u;       // 4:2:0
+    uint32_t bit_depth_luma_minus8 = 0u;   // 8-bit
+    uint32_t bit_depth_chroma_minus8 = 0u; // 8-bit
+
+    if (sps_parsed) {
+        profile_space = sps.profile_space;
+        tier_flag = sps.tier_flag;
+        profile_idc = sps.profile_idc;
+        profile_compatibility = sps.profile_compatibility;
+        for (int i = 0; i < 6; ++i)
+            constraint_bytes[i] = sps.constraint_bytes[i];
+        general_level_idc = sps.level_idc;
+        chroma_format_idc = sps.chroma_format_idc;
+        bit_depth_luma_minus8 = sps.bit_depth_luma_minus8;
+        bit_depth_chroma_minus8 = sps.bit_depth_chroma_minus8;
     }
 
     // ---------------------------------------------------------------------------
@@ -225,25 +427,20 @@ bool BuildHvccFromAnnexBVpsSpsPps(const std::vector<uint8_t>& vps_sps_pps_annexb
     // configurationVersion = 1
     out_hvcc.push_back(0x01u);
 
-    // general_profile_space(2b=0) + general_tier_flag(1b=0, Main) + general_profile_idc(5b=1, Main)
-    out_hvcc.push_back(0x01u);
+    // general_profile_space(2b) + general_tier_flag(1b) + general_profile_idc(5b)
+    // From SPS: Main=1 (→ 0x01), Main10=2 (→ 0x02).
+    out_hvcc.push_back(
+        static_cast<uint8_t>(((profile_space & 0x3u) << 6u) | ((tier_flag & 0x1u) << 5u) | (profile_idc & 0x1Fu)));
 
-    // general_profile_compatibility_flags (4 bytes) — Main: bit 1 set, MainStillPicture: bit 3 set
-    // = 0x60 00 00 00
-    out_hvcc.push_back(0x60u);
-    out_hvcc.push_back(0x00u);
-    out_hvcc.push_back(0x00u);
-    out_hvcc.push_back(0x00u);
+    // general_profile_compatibility_flags (4 bytes, big-endian) — from SPS.
+    out_hvcc.push_back(static_cast<uint8_t>((profile_compatibility >> 24u) & 0xFFu));
+    out_hvcc.push_back(static_cast<uint8_t>((profile_compatibility >> 16u) & 0xFFu));
+    out_hvcc.push_back(static_cast<uint8_t>((profile_compatibility >> 8u) & 0xFFu));
+    out_hvcc.push_back(static_cast<uint8_t>(profile_compatibility & 0xFFu));
 
-    // general_constraint_indicator_flags (6 bytes)
-    // progressive=1, interlaced=0, non_packed=0, frame_only=1, 44 reserved bits = 0
-    // Byte 0: 1001 0000 = 0x90
-    out_hvcc.push_back(0x90u);
-    out_hvcc.push_back(0x00u);
-    out_hvcc.push_back(0x00u);
-    out_hvcc.push_back(0x00u);
-    out_hvcc.push_back(0x00u);
-    out_hvcc.push_back(0x00u);
+    // general_constraint_indicator_flags (6 bytes) — from SPS PTL.
+    for (int i = 0; i < 6; ++i)
+        out_hvcc.push_back(constraint_bytes[i]);
 
     // general_level_idc
     out_hvcc.push_back(general_level_idc);
@@ -255,14 +452,14 @@ bool BuildHvccFromAnnexBVpsSpsPps(const std::vector<uint8_t>& vps_sps_pps_annexb
     // parallelismType: reserved(6b=0x3F) + type(2b=0) = 0xFC
     out_hvcc.push_back(0xFCu);
 
-    // chroma_format_idc: reserved(6b=0x3F) + chromaFormat(2b=1 for 4:2:0) = 0xFD
-    out_hvcc.push_back(0xFDu);
+    // chroma_format_idc: reserved(6b=0x3F) + chromaFormat(2b) — from SPS (1 = 4:2:0 → 0xFD)
+    out_hvcc.push_back(static_cast<uint8_t>(0xFCu | (chroma_format_idc & 0x3u)));
 
-    // bit_depth_luma_minus8: reserved(5b=0x1F) + value(3b=0) = 0xF8
-    out_hvcc.push_back(0xF8u);
+    // bit_depth_luma_minus8: reserved(5b=0x1F) + value(3b) — from SPS (0 = 8-bit → 0xF8, 2 = 10-bit → 0xFA)
+    out_hvcc.push_back(static_cast<uint8_t>(0xF8u | (bit_depth_luma_minus8 & 0x7u)));
 
-    // bit_depth_chroma_minus8: reserved(5b=0x1F) + value(3b=0) = 0xF8
-    out_hvcc.push_back(0xF8u);
+    // bit_depth_chroma_minus8: reserved(5b=0x1F) + value(3b) — from SPS (0 = 8-bit → 0xF8, 2 = 10-bit → 0xFA)
+    out_hvcc.push_back(static_cast<uint8_t>(0xF8u | (bit_depth_chroma_minus8 & 0x7u)));
 
     // avgFrameRate (2 bytes): 0 = unspecified
     out_hvcc.push_back(0x00u);

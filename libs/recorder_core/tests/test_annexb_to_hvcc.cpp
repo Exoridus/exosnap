@@ -21,10 +21,83 @@ namespace {
 //   PPS (type=34): header = [(34<<1)|0, 0x01] = [0x44, 0x01]
 //   AUD (type=35): header = [(35<<1)|0, 0x01] = [0x46, 0x01]
 
+// Minimal MSB-first bit writer for synthesizing a real HEVC SPS RBSP.
+class SpsBitWriter {
+  public:
+    void PutBit(uint32_t bit) {
+        cur_ = static_cast<uint8_t>((cur_ << 1u) | (bit & 0x1u));
+        if (++nbits_ == 8u) {
+            bytes_.push_back(cur_);
+            cur_ = 0;
+            nbits_ = 0;
+        }
+    }
+    void PutBits(uint32_t value, uint32_t count) {
+        for (uint32_t i = 0; i < count; ++i)
+            PutBit((value >> (count - 1u - i)) & 0x1u);
+    }
+    // Exp-Golomb ue(v): n leading zeros, a 1, then n suffix bits.
+    void PutUe(uint32_t value) {
+        const uint32_t code = value + 1u;
+        uint32_t n = 0;
+        while ((1u << (n + 1u)) <= code)
+            ++n;
+        for (uint32_t i = 0; i < n; ++i)
+            PutBit(0u);
+        for (int32_t i = static_cast<int32_t>(n); i >= 0; --i)
+            PutBit((code >> i) & 0x1u);
+    }
+    std::vector<uint8_t> Finish() {
+        // rbsp_stop_one_bit then byte alignment.
+        PutBit(1u);
+        while (nbits_ != 0u)
+            PutBit(0u);
+        return bytes_;
+    }
+
+  private:
+    std::vector<uint8_t> bytes_;
+    uint8_t cur_ = 0;
+    uint32_t nbits_ = 0;
+};
+
+// Build a real, parseable HEVC SPS NAL (2-byte header + RBSP) for the given
+// profile_idc / bit depth. profile_idc=1 (Main, 8-bit) or 2 (Main10, 10-bit).
+// level_idc is written as 0x5D and chroma_format_idc as 1 (4:2:0).
+static std::vector<uint8_t> MakeHevcSpsNal(uint8_t profile_idc, uint32_t bit_depth_minus8) {
+    SpsBitWriter w;
+    w.PutBits(0u, 4u); // sps_video_parameter_set_id
+    w.PutBits(0u, 3u); // sps_max_sub_layers_minus1
+    w.PutBit(1u);      // sps_temporal_id_nesting_flag
+
+    // profile_tier_level (general layer, 12 bytes)
+    w.PutBits(0u, 2u);                 // general_profile_space
+    w.PutBit(0u);                      // general_tier_flag
+    w.PutBits(profile_idc, 5u);        // general_profile_idc
+    w.PutBits(0x60000000u >> 0u, 32u); // general_profile_compatibility_flags (Main bit set)
+    w.PutBits(0x90u, 8u);              // constraint byte 0 (progressive+frame_only)
+    for (int i = 0; i < 5; ++i)        // constraint bytes 1-5
+        w.PutBits(0u, 8u);
+    w.PutBits(0x5Du, 8u); // general_level_idc
+
+    w.PutUe(0u);               // sps_seq_parameter_set_id
+    w.PutUe(1u);               // chroma_format_idc = 1 (4:2:0)
+    w.PutUe(1920u);            // pic_width_in_luma_samples
+    w.PutUe(1080u);            // pic_height_in_luma_samples
+    w.PutBit(0u);              // conformance_window_flag
+    w.PutUe(bit_depth_minus8); // bit_depth_luma_minus8
+    w.PutUe(bit_depth_minus8); // bit_depth_chroma_minus8
+    // (Remaining SPS syntax omitted; the parser stops after bit_depth_chroma_minus8.)
+
+    std::vector<uint8_t> rbsp = w.Finish();
+    std::vector<uint8_t> nal = {0x42, 0x01}; // SPS NAL header (type 33)
+    nal.insert(nal.end(), rbsp.begin(), rbsp.end());
+    return nal;
+}
+
 // Builds a minimal Annex-B HEVC packet with the requested NAL types.
-// Each NAL carries a 2-byte header plus a short synthetic payload.
-// The SPS payload includes 15+ bytes so BuildHvcc can extract general_level_idc
-// at byte offset 14 (value 0x5D = level 4.2).
+// VPS/PPS carry short synthetic payloads; the SPS is a real, parseable Main (8-bit,
+// 4:2:0) SPS so BuildHvcc reflects real profile/level/chroma/bit-depth values.
 static std::vector<uint8_t> MakeFakeHevcAnnexB(bool includeVps = true, bool includeSps = true, bool includePps = true,
                                                bool includeAud = false, bool includeIdr = true) {
     std::vector<uint8_t> bs;
@@ -42,25 +115,10 @@ static std::vector<uint8_t> MakeFakeHevcAnnexB(bool includeVps = true, bool incl
     }
 
     if (includeSps) {
-        // SPS (type 33): header + enough payload for general_level_idc extraction.
-        // SPS RBSP starts at sps_data[2] (after 2-byte NAL header).
-        // Byte layout inside SPS payload (indices from sps_data[0]):
-        //   [0,1]: NAL header  [0x42, 0x01]
-        //   [2]:   RBSP byte 0 (sps_video_parameter_set_id etc.)
-        //   [3]:   PTL byte 0  (general_profile_space/tier/profile_idc)
-        //   [4-7]: general_profile_compatibility_flags (4 bytes)
-        //   [8-13]: general_constraint_indicator flags (6 bytes)
-        //   [14]:  general_level_idc  <- this is what BuildHvcc reads
-        // We put 0x5D (93 = level 4.2 at 30fps, though the value is arbitrary for tests)
-        // SPS bytes: 2 header + 13 RBSP padding + 1 level_idc byte = 16 bytes
-        bs.insert(bs.end(), {0x00, 0x00, 0x00, 0x01});           // start code
-        bs.insert(bs.end(), {0x42, 0x01,                         // NAL header (SPS)
-                             0x01,                               // RBSP[0]
-                             0x04,                               // PTL[0]: profile_idc=4
-                             0x08, 0x00, 0x00, 0x00,             // profile_compat[0-3]
-                             0x90, 0x00, 0x00, 0x00, 0x00, 0x00, // constraint[0-5]
-                             0x5D,                               // general_level_idc=93
-                             0x20});                             // extra byte
+        // SPS (type 33): a real Main / 8-bit / 4:2:0 SPS with general_level_idc=0x5D.
+        const auto sps = MakeHevcSpsNal(/*profile_idc=*/1u, /*bit_depth_minus8=*/0u);
+        bs.insert(bs.end(), {0x00, 0x00, 0x00, 0x01}); // start code
+        bs.insert(bs.end(), sps.begin(), sps.end());
     }
 
     if (includePps) {
@@ -391,6 +449,88 @@ TEST(AnnexBHvccTest, BuildHvcc_BitDepthBytesAreEightBit) {
     // hvcc[18]: bit_depth_chroma_minus8 = 0xF8 (8-bit)
     EXPECT_EQ(hvcc[17], 0xF8u);
     EXPECT_EQ(hvcc[18], 0xF8u);
+}
+
+// ---------------------------------------------------------------------------
+// 10-bit (Main10) hvcC tests — S5 / 0.7.0
+// ---------------------------------------------------------------------------
+//
+// For a real Main10 (profile_idc=2, bit_depth_luma/chroma_minus8=2) SPS, the hvcC
+// fixed header must reflect those values instead of the historic hardcoded 8-bit
+// Main constants. These tests build a real 10-bit SPS and assert the parsed bytes.
+
+// Wrap a single SPS NAL in start-code-prefixed VPS+SPS+PPS the way BuildHvcc expects.
+static std::vector<uint8_t> WrapVpsSpsPps(const std::vector<uint8_t>& sps_nal) {
+    std::vector<uint8_t> bs;
+    bs.insert(bs.end(), {0x00, 0x00, 0x00, 0x01});
+    bs.insert(bs.end(), {0x40, 0x01, 0xAA, 0xBB, 0xCC}); // VPS
+    bs.insert(bs.end(), {0x00, 0x00, 0x00, 0x01});
+    bs.insert(bs.end(), sps_nal.begin(), sps_nal.end()); // SPS
+    bs.insert(bs.end(), {0x00, 0x00, 0x00, 0x01});
+    bs.insert(bs.end(), {0x44, 0x01, 0xDD, 0xEE}); // PPS
+    std::vector<uint8_t> out;
+    EXPECT_TRUE(ExtractHevcVpsSpsPps(bs.data(), bs.size(), out));
+    return out;
+}
+
+TEST(AnnexBHvccTest, BuildHvcc_Main10_ProfileIdcIsTwo) {
+    const auto sps = MakeHevcSpsNal(/*profile_idc=*/2u, /*bit_depth_minus8=*/2u);
+    const auto vps_sps_pps = WrapVpsSpsPps(sps);
+
+    std::vector<uint8_t> hvcc;
+    ASSERT_TRUE(BuildHvccFromAnnexBVpsSpsPps(vps_sps_pps, hvcc));
+
+    // hvcc[1]: general_profile_space(2b=0) + general_tier_flag(1b=0) + general_profile_idc(5b=2)
+    // = 0b00_0_00010 = 0x02
+    EXPECT_EQ(hvcc[1], 0x02u);
+}
+
+TEST(AnnexBHvccTest, BuildHvcc_Main10_BitDepthBytesAreTenBit) {
+    const auto sps = MakeHevcSpsNal(/*profile_idc=*/2u, /*bit_depth_minus8=*/2u);
+    const auto vps_sps_pps = WrapVpsSpsPps(sps);
+
+    std::vector<uint8_t> hvcc;
+    ASSERT_TRUE(BuildHvccFromAnnexBVpsSpsPps(vps_sps_pps, hvcc));
+
+    // bit_depth_luma_minus8: reserved(5b=0x1F) + value(3b=2) = 0xFA → 10-bit
+    EXPECT_EQ(hvcc[17], 0xFAu);
+    EXPECT_EQ(hvcc[18], 0xFAu);
+}
+
+TEST(AnnexBHvccTest, BuildHvcc_Main10_ChromaFormatStill4_2_0) {
+    const auto sps = MakeHevcSpsNal(/*profile_idc=*/2u, /*bit_depth_minus8=*/2u);
+    const auto vps_sps_pps = WrapVpsSpsPps(sps);
+
+    std::vector<uint8_t> hvcc;
+    ASSERT_TRUE(BuildHvccFromAnnexBVpsSpsPps(vps_sps_pps, hvcc));
+
+    // chroma_format_idc: reserved(6b) + chromaFormat(2b=1 for 4:2:0) = 0xFD
+    EXPECT_EQ(hvcc[16], 0xFDu);
+}
+
+TEST(AnnexBHvccTest, BuildHvcc_Main10_LevelIdcExtracted) {
+    const auto sps = MakeHevcSpsNal(/*profile_idc=*/2u, /*bit_depth_minus8=*/2u);
+    const auto vps_sps_pps = WrapVpsSpsPps(sps);
+
+    std::vector<uint8_t> hvcc;
+    ASSERT_TRUE(BuildHvccFromAnnexBVpsSpsPps(vps_sps_pps, hvcc));
+
+    // general_level_idc at hvcc[12] (we wrote 0x5D into the SPS).
+    EXPECT_EQ(hvcc[12], 0x5Du);
+}
+
+TEST(AnnexBHvccTest, BuildHvcc_Main8_StillReportsEightBitProfile1) {
+    // Regression guard: the real 8-bit Main SPS still yields profile_idc=1, 8-bit.
+    const auto sps = MakeHevcSpsNal(/*profile_idc=*/1u, /*bit_depth_minus8=*/0u);
+    const auto vps_sps_pps = WrapVpsSpsPps(sps);
+
+    std::vector<uint8_t> hvcc;
+    ASSERT_TRUE(BuildHvccFromAnnexBVpsSpsPps(vps_sps_pps, hvcc));
+
+    EXPECT_EQ(hvcc[1], 0x01u);  // profile_idc = 1 (Main)
+    EXPECT_EQ(hvcc[16], 0xFDu); // chroma 4:2:0
+    EXPECT_EQ(hvcc[17], 0xF8u); // bit_depth_luma_minus8 = 0 (8-bit)
+    EXPECT_EQ(hvcc[18], 0xF8u); // bit_depth_chroma_minus8 = 0 (8-bit)
 }
 
 // ---------------------------------------------------------------------------

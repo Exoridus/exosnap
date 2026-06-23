@@ -22,8 +22,15 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
     }
 
     const UserRecorderConfig& final_config = resolved.resolved_config;
-    const bool valid_chroma_depth =
-        final_config.chroma == ChromaSubsampling::Cs420 && final_config.bit_depth == BitDepth::Bit8;
+    // Chroma is fixed at 4:2:0. Bit depth is 8-bit universally; 10-bit (HEVC Main10 /
+    // AV1 10-bit P010, SDR BT.709 — ADR 0032) is valid only for HEVC and AV1, never
+    // H.264. The per-combo flags below combine this with the codec, so a 10-bit H.264
+    // request falls through to the rejection path.
+    const bool is_hevc = final_config.video_codec == VideoCodec::HevcNvenc;
+    const bool is_av1 = final_config.video_codec == VideoCodec::Av1Nvenc;
+    const bool bit_depth_ok =
+        final_config.bit_depth == BitDepth::Bit8 || (final_config.bit_depth == BitDepth::Bit10 && (is_hevc || is_av1));
+    const bool valid_chroma_depth = final_config.chroma == ChromaSubsampling::Cs420 && bit_depth_ok;
     const bool is_webm_av1_opus = final_config.container == Container::WebM &&
                                   final_config.video_codec == VideoCodec::Av1Nvenc &&
                                   final_config.audio_codec == AudioCodec::Opus && valid_chroma_depth;
@@ -72,11 +79,10 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
         !is_mkv_hevc_pcm && !is_mkv_hevc_flac && !is_mp4_h264_aac && !is_mp4_hevc_aac) {
         ResolveResult failure = resolved;
         failure.succeeded = false;
-        failure.invalidity.push_back(
-            InvalidReason{"translation",
-                          "Only WebM+AV1+Opus, Matroska+AV1+(AAC|Opus|PCM|FLAC), Matroska+H264+(AAC|PCM|FLAC), "
-                          "Matroska+HEVC+(AAC|Opus|PCM|FLAC), or MP4+(H264|HEVC)+AAC + 4:2:0 + 8-bit can be translated "
-                          "to recorder_core."});
+        failure.invalidity.push_back(InvalidReason{
+            "translation", "Only WebM+AV1+Opus, Matroska+AV1+(AAC|Opus|PCM|FLAC), Matroska+H264+(AAC|PCM|FLAC), "
+                           "Matroska+HEVC+(AAC|Opus|PCM|FLAC), or MP4+(H264|HEVC)+AAC + 4:2:0 + 8-bit "
+                           "(or 10-bit with HEVC/AV1) can be translated to recorder_core."});
         if (validation != nullptr) {
             *validation = failure;
         }
@@ -85,7 +91,8 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
 
     recorder_core::RecorderConfig core_config;
     core_config.chroma = recorder_core::ChromaSubsampling::Cs420;
-    core_config.bit_depth = recorder_core::BitDepth::Bit8;
+    core_config.bit_depth =
+        (final_config.bit_depth == BitDepth::Bit10) ? recorder_core::BitDepth::Bit10 : recorder_core::BitDepth::Bit8;
     core_config.frame_rate_num = final_config.frame_rate_num;
     core_config.frame_rate_den = final_config.frame_rate_den;
     core_config.output_width = final_config.output_width;

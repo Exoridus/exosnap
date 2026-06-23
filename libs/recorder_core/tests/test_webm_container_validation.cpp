@@ -334,4 +334,83 @@ TEST(WebMContainerValidationTest, Validate_RejectsWebMHevc) {
     EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
 }
 
+// --- 10-bit (0.7.0 S5): HEVC Main10 / AV1 10-bit via P010, SDR BT.709 ---
+// 10-bit is valid for the same containers as the 8-bit codec (HEVC: MKV/MP4;
+// AV1: MKV/WebM). H.264 is 8-bit only and must be rejected with E_NOTIMPL.
+
+using recorder_core::BitDepth;
+
+TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevc10Bit) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidMatroskaConfig();
+    cfg.video_codec = VideoCodec::HevcNvenc;
+    cfg.audio_codec = AudioCodec::AacMf;
+    cfg.bit_depth = BitDepth::Bit10;
+
+    RecorderResult result{};
+    EXPECT_TRUE(session.Validate(cfg, &result));
+    EXPECT_TRUE(result.succeeded);
+}
+
+TEST(WebMContainerValidationTest, Validate_AcceptsMp4Hevc10Bit) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeMp4HevcConfig(AudioCodec::AacMf);
+    cfg.bit_depth = BitDepth::Bit10;
+
+    RecorderResult result{};
+    EXPECT_TRUE(session.Validate(cfg, &result));
+    EXPECT_TRUE(result.succeeded);
+}
+
+TEST(WebMContainerValidationTest, Validate_AcceptsWebMAv110Bit) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidWebMConfig(); // WebM + AV1 + Opus
+    cfg.bit_depth = BitDepth::Bit10;
+
+    RecorderResult result{};
+    EXPECT_TRUE(session.Validate(cfg, &result));
+    EXPECT_TRUE(result.succeeded);
+}
+
+TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaAv110Bit) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidMatroskaConfig(); // MKV + AV1 + AAC
+    cfg.bit_depth = BitDepth::Bit10;
+
+    RecorderResult result{};
+    EXPECT_TRUE(session.Validate(cfg, &result));
+    EXPECT_TRUE(result.succeeded);
+}
+
+TEST(WebMContainerValidationTest, Validate_RejectsMkvH26410Bit) {
+    RecorderSession session;
+    RecorderConfig cfg = MakeValidMatroskaConfig();
+    cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.audio_codec = AudioCodec::AacMf;
+    cfg.bit_depth = BitDepth::Bit10;
+
+    RecorderResult result{};
+    EXPECT_FALSE(session.Validate(cfg, &result));
+    EXPECT_EQ(result.error_code, E_NOTIMPL);
+    EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
+    EXPECT_NE(result.error_detail.find("Bit10"), std::string::npos);
+}
+
+TEST(WebMContainerValidationTest, Validate_RejectsMp4H26410Bit) {
+    RecorderSession session;
+    RecorderConfig cfg{};
+    cfg.output_path = std::filesystem::current_path() / "test_mp4_h264_10bit.mp4";
+    cfg.target.kind = CaptureTarget::Kind::Monitor;
+    cfg.target.native_id = 1;
+    cfg.container = Container::Mp4;
+    cfg.video_codec = VideoCodec::H264Nvenc;
+    cfg.audio_codec = AudioCodec::AacMf;
+    cfg.bit_depth = BitDepth::Bit10;
+
+    RecorderResult result{};
+    EXPECT_FALSE(session.Validate(cfg, &result));
+    EXPECT_EQ(result.error_code, E_NOTIMPL);
+    EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
+}
+
 } // namespace

@@ -265,9 +265,18 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only ChromaSubsampling::Cs420 is supported in M3.1");
     }
 
-    // Bit depth: only Bit8 supported
-    if (config.bit_depth != BitDepth::Bit8) {
-        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only BitDepth::Bit8 is supported in M3.1");
+    // Bit depth: Bit8 is universal. Bit10 (P010 → HEVC Main10 / AV1 10-bit, SDR BT.709,
+    // ADR 0032) is valid only for HevcNvenc and Av1Nvenc — H.264 stays 8-bit only. The
+    // container constraints are identical to the 8-bit path for the same codec (already
+    // enforced above): HEVC → MKV/MP4, AV1 → MKV/WebM.
+    if (config.bit_depth != BitDepth::Bit8 && config.bit_depth != BitDepth::Bit10) {
+        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Unsupported BitDepth; supported: Bit8, Bit10");
+    }
+    if (config.bit_depth == BitDepth::Bit10 && config.video_codec != VideoCodec::HevcNvenc &&
+        config.video_codec != VideoCodec::Av1Nvenc) {
+        return fail(E_NOTIMPL, ErrorPhase::Prepare,
+                    "BitDepth::Bit10 requires VideoCodec::HevcNvenc or VideoCodec::Av1Nvenc "
+                    "(H.264 is 8-bit only)");
     }
 
     // Frame rate sanity

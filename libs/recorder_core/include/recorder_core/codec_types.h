@@ -26,7 +26,8 @@ enum class ChromaSubsampling {
 };
 
 enum class BitDepth {
-    Bit8, // 8-bit — only supported value for M3.1
+    Bit8,  // 8-bit — NV12 input, HEVC Main / AV1 Main 8-bit, H.264 High
+    Bit10, // 10-bit — P010 input, HEVC Main10 / AV1 Main 10-bit (SDR BT.709); H.264 unsupported
 };
 
 // CQP quality targets for NVENC. Maps to constQP.qpIntra / qpInterP pairs.
