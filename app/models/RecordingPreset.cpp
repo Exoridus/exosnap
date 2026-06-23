@@ -187,6 +187,21 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
     SanitizeOutputResolution(config.output.resolution);
     SanitizeSplitSettings(config.output.split);
 
+    // Video bit depth (0.7.0): 10-bit is valid only for HEVC and AV1 (HEVC Main10 /
+    // AV1 10-bit P010, SDR BT.709 — ADR 0032), never for H.264. This mirrors the
+    // static rule the capability layer enforces in translation.cpp; the resolver
+    // performs the same Bit8 fallback at record time. Reconcile here so a stored
+    // 10-bit depth that becomes invalid (e.g. after the container forces H.264 via
+    // ReconcileContainerCodecs above) is reset to 8-bit.
+    {
+        const auto codec = config.output.video_codec;
+        const bool supports_10bit =
+            codec == capability::VideoCodec::HevcNvenc || codec == capability::VideoCodec::Av1Nvenc;
+        if (config.output.bit_depth == capability::BitDepth::Bit10 && !supports_10bit) {
+            config.output.bit_depth = capability::BitDepth::Bit8;
+        }
+    }
+
     // Video: reset frame rate if degenerate (either numerator or denominator is zero).
     if (config.video.frame_rate_num == 0 || config.video.frame_rate_den == 0) {
         config.video.frame_rate_num = 60;
@@ -436,6 +451,9 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     if (a.output.video_codec != b.output.video_codec) {
         return false;
     }
+    if (a.output.bit_depth != b.output.bit_depth) {
+        return false;
+    }
     if (a.output.audio_codec != b.output.audio_codec) {
         return false;
     }
@@ -682,6 +700,9 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (a.output.video_codec != b.output.video_codec) {
+        return false;
+    }
+    if (a.output.bit_depth != b.output.bit_depth) {
         return false;
     }
     if (a.output.audio_codec != b.output.audio_codec) {

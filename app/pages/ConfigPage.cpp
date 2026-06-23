@@ -824,6 +824,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     // --- Video codec row ---
     video_codec_combo_ = new QComboBox(fmt_panel);
+    video_codec_combo_->setObjectName(QStringLiteral("videoCodecCombo"));
     video_codec_combo_->setFixedWidth(160);
     video_codec_combo_->setProperty("settingsRowInput", true);
     video_codec_compare_hint_ =
@@ -1122,10 +1123,50 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         }
         fes_layout->addWidget(bitrate_row_widget_);
 
+        // --- Video bit depth (0.7.0 — S7) ---
+        // Real, capability-gated control. 8-bit is universal; 10-bit (HEVC Main10 /
+        // AV1 10-bit P010, SDR BT.709 — ADR 0032) is selectable only when the video
+        // codec is HEVC or AV1. For H.264 the 10-bit item is disabled with a tooltip;
+        // selectability is driven by capability::QueryCombo (single source of truth)
+        // in updateVideoBitDepthControl().
+        {
+            video_bit_depth_row_ = new QWidget(fmt_expert_section_);
+            auto* dvl = new QVBoxLayout(video_bit_depth_row_);
+            dvl->setContentsMargins(0, 0, 0, 0);
+            dvl->setSpacing(0);
+            auto* drule = new QFrame(video_bit_depth_row_);
+            drule->setFrameShape(QFrame::HLine);
+            drule->setProperty("frameRole", "sectionRuleLine");
+            dvl->addWidget(drule);
+            auto* dhl = new QHBoxLayout();
+            dhl->setContentsMargins(0, 12, 0, 12);
+            dhl->setSpacing(14);
+            auto* dlbl = new QLabel(QStringLiteral("Bit depth"), video_bit_depth_row_);
+            dlbl->setProperty("labelRole", "settingsRowLabel");
+            dhl->addWidget(dlbl, 0);
+            dhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kVideoBitDepth, video_bit_depth_row_), 0,
+                           Qt::AlignVCenter);
+            dhl->addStretch(1);
+            video_bit_depth_combo_ = new QComboBox(video_bit_depth_row_);
+            video_bit_depth_combo_->setObjectName(QStringLiteral("videoBitDepthCombo"));
+            video_bit_depth_combo_->addItem(QStringLiteral("8-bit"), static_cast<int>(capability::BitDepth::Bit8));
+            video_bit_depth_combo_->addItem(QStringLiteral("10-bit"), static_cast<int>(capability::BitDepth::Bit10));
+            video_bit_depth_combo_->setFixedWidth(160);
+            video_bit_depth_combo_->setProperty("settingsRowInput", true);
+            dhl->addWidget(video_bit_depth_combo_, 0, Qt::AlignVCenter);
+            dvl->addLayout(dhl);
+            video_bit_depth_row_->setProperty("settingsRow", true);
+            fes_layout->addWidget(video_bit_depth_row_);
+        }
+
 #ifndef NDEBUG
         // --- Roadmap dummy rows (Debug only — hidden in Release builds) ---
         // These are real, enabled controls wired to nothing, used so the roadmap
         // layout can be designed and captured on pixels.  Gate: #ifndef NDEBUG.
+        // NOTE (0.7.0 — S7): the HEVC-codec and Bit-depth mockups were promoted to
+        // real controls (Video codec combo + Video bit depth row above). The rows
+        // left here are still placeholders for later waves: HDR10 (HDR slice) and
+        // chroma subsampling / encoder preset (no engine path yet).
         {
             auto* enc_preset_combo = new QComboBox(fmt_expert_section_);
             enc_preset_combo->setObjectName(QStringLiteral("roadmapDummy_encoderPreset"));
@@ -1135,19 +1176,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             enc_preset_combo->setCurrentIndex(3);
             fes_layout->addWidget(makeSettingsRow(fmt_expert_section_, QStringLiteral("Encoder preset (NVENC)"),
                                                   nullptr, QString(), enc_preset_combo));
-
-            auto* hevc_combo = new QComboBox(fmt_expert_section_);
-            hevc_combo->setObjectName(QStringLiteral("roadmapDummy_hevcCodec"));
-            hevc_combo->addItems(
-                {QStringLiteral("AVC (H.264)"), QStringLiteral("HEVC (H.265)"), QStringLiteral("AV1")});
-            fes_layout->addWidget(
-                makeSettingsRow(fmt_expert_section_, QStringLiteral("HEVC codec"), nullptr, QString(), hevc_combo));
-
-            auto* bitdepth_combo = new QComboBox(fmt_expert_section_);
-            bitdepth_combo->setObjectName(QStringLiteral("roadmapDummy_bitDepth"));
-            bitdepth_combo->addItems({QStringLiteral("8-bit"), QStringLiteral("10-bit")});
-            fes_layout->addWidget(
-                makeSettingsRow(fmt_expert_section_, QStringLiteral("Bit depth"), nullptr, QString(), bitdepth_combo));
 
             auto* hdr10_toggle = new ui::widgets::ExoToggle(fmt_expert_section_);
             hdr10_toggle->setObjectName(QStringLiteral("roadmapDummy_hdr10"));
@@ -2441,6 +2469,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(container_group_, &QButtonGroup::idClicked, this, &ConfigPage::onContainerChanged);
     connect(video_codec_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onVideoCodecChanged);
+    connect(video_bit_depth_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConfigPage::onVideoBitDepthChanged);
     connect(audio_codec_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onAudioCodecChanged);
     connect(profile_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -3026,16 +3056,66 @@ void ConfigPage::updateVideoCodecChoices() {
     if (video_codec_combo_->count() == 0) {
         video_codec_combo_->addItem(QStringLiteral("AV1"), VideoCodecToInt(capability::VideoCodec::Av1Nvenc));
         video_codec_combo_->addItem(QStringLiteral("H.264"), VideoCodecToInt(capability::VideoCodec::H264Nvenc));
-#ifndef NDEBUG
-        // The HEVC picker UI is Slice 7; this debug-only entry exposes HEVC so the
-        // 0.7.0 HEVC engine path (ValidUnvalidated) can be GPU-smoke-tested with
-        // MKV + HEVC. Release builds do not show it.
-        video_codec_combo_->addItem(QStringLiteral("HEVC (debug)"), VideoCodecToInt(capability::VideoCodec::HevcNvenc));
-#endif
+        // HEVC (0.7.0 — S3): GPU-verified end-to-end (MKV V_MPEGH/ISO/HEVC + MP4 hvc1).
+        // A normal, always-present choice; container reconcile falls back to AV1/H.264
+        // when the selected container cannot carry HEVC.
+        video_codec_combo_->addItem(QStringLiteral("HEVC"), VideoCodecToInt(capability::VideoCodec::HevcNvenc));
     }
     const int vidx = video_codec_combo_->findData(VideoCodecToInt(format_settings_.video_codec));
     if (vidx >= 0)
         video_codec_combo_->setCurrentIndex(vidx);
+
+    // Bit-depth selectability depends on the selected codec — refresh it here.
+    updateVideoBitDepthControl();
+}
+
+void ConfigPage::updateVideoBitDepthControl() {
+    if (!video_bit_depth_combo_ || !video_bit_depth_row_)
+        return;
+
+    // 10-bit (HEVC Main10 / AV1 10-bit P010, SDR BT.709 — ADR 0032) is valid only
+    // for HEVC and AV1, never H.264. This is the same fixed format rule the
+    // capability layer enforces (translation.cpp / resolver Bit8 fallback), so the
+    // UI stays the single source of truth by mirroring it rather than diverging.
+    const auto codec = format_settings_.video_codec;
+    const bool supports_10bit = codec == capability::VideoCodec::HevcNvenc || codec == capability::VideoCodec::Av1Nvenc;
+    const bool locked = controls_locked_;
+
+    // If 10-bit was selected but is no longer valid for the codec, snap the model
+    // back to 8-bit (mirrors SanitizePresetConfig / RecordingCoordinator reconcile).
+    if (!supports_10bit && format_settings_.bit_depth == capability::BitDepth::Bit10) {
+        format_settings_.bit_depth = capability::BitDepth::Bit8;
+    }
+
+    // Enable/disable the 10-bit item per codec. Disabled items use Forbidden cursor
+    // + a tooltip explaining the requirement (existing disabled-row pattern).
+    if (auto* model = qobject_cast<QStandardItemModel*>(video_bit_depth_combo_->model())) {
+        const int ten_idx = video_bit_depth_combo_->findData(static_cast<int>(capability::BitDepth::Bit10));
+        if (auto* item = (ten_idx >= 0) ? model->item(ten_idx) : nullptr) {
+            item->setEnabled(supports_10bit);
+            item->setToolTip(supports_10bit ? QString() : QStringLiteral("10-bit requires HEVC or AV1"));
+        }
+    }
+
+    // Sync the combo selection to the model (signal-blocked).
+    {
+        const QSignalBlocker b(video_bit_depth_combo_);
+        const int idx = video_bit_depth_combo_->findData(static_cast<int>(format_settings_.bit_depth));
+        video_bit_depth_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* 8-bit */);
+    }
+
+    video_bit_depth_combo_->setEnabled(!locked);
+    if (!supports_10bit) {
+        // Whole-row affordance: tooltip + forbidden cursor explain why 10-bit is out.
+        video_bit_depth_combo_->setToolTip(QStringLiteral("10-bit requires HEVC or AV1"));
+        video_bit_depth_combo_->setCursor(Qt::ForbiddenCursor);
+    } else if (locked) {
+        video_bit_depth_combo_->setToolTip(QStringLiteral("Cannot change during recording"));
+        video_bit_depth_combo_->setCursor(Qt::ForbiddenCursor);
+    } else {
+        video_bit_depth_combo_->setToolTip(QString());
+        video_bit_depth_combo_->unsetCursor();
+    }
 }
 
 void ConfigPage::updateAudioCodecChoices() {
@@ -3159,6 +3239,24 @@ void ConfigPage::onVideoCodecChanged(int index) {
     if (index < 0)
         return;
     format_settings_.video_codec = IntToVideoCodec(video_codec_combo_->itemData(index).toInt());
+    // Codec change can invalidate a 10-bit selection — refresh the bit-depth gating
+    // (also snaps the model back to 8-bit when the new codec can't carry 10-bit).
+    updateVideoBitDepthControl();
+    emitCurrentFormatSettings();
+}
+
+void ConfigPage::onVideoBitDepthChanged(int index) {
+    if (index < 0 || !video_bit_depth_combo_)
+        return;
+    const auto requested = static_cast<capability::BitDepth>(video_bit_depth_combo_->itemData(index).toInt());
+    // Guard: 10-bit is only honored for HEVC / AV1 (the disabled item should prevent
+    // this, but keep the model authoritative regardless of how the index changed).
+    const bool supports_10bit = format_settings_.video_codec == capability::VideoCodec::HevcNvenc ||
+                                format_settings_.video_codec == capability::VideoCodec::Av1Nvenc;
+    format_settings_.bit_depth = (requested == capability::BitDepth::Bit10 && supports_10bit)
+                                     ? capability::BitDepth::Bit10
+                                     : capability::BitDepth::Bit8;
+    updateVideoBitDepthControl();
     emitCurrentFormatSettings();
 }
 
@@ -3186,6 +3284,7 @@ void ConfigPage::onProfileSelectionChanged(int index) {
 void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
     format_settings_.container = settings.container;
     format_settings_.video_codec = settings.video_codec;
+    format_settings_.bit_depth = settings.bit_depth;
     format_settings_.audio_codec = settings.audio_codec;
     format_settings_.output_folder = settings.output_folder;
     format_settings_.naming_pattern = settings.naming_pattern;
@@ -4144,6 +4243,9 @@ void ConfigPage::updateExpertModeVisibility() {
     // PS-PHASE-C: fmt_expert_section (rate control, bitrate, format placeholders).
     if (fmt_expert_section_)
         fmt_expert_section_->setVisible(expert_mode_enabled_);
+    // 0.7.0 — S7: sync the video bit-depth combo + 10-bit gating when the section shows.
+    if (expert_mode_enabled_)
+        updateVideoBitDepthControl();
     if (expert_mode_enabled_ && rate_control_group_) {
         // Seed rate control selection from model.
         const QSignalBlocker b(rate_control_group_);
@@ -4787,6 +4889,8 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     mp4_radio_->setEnabled(enabled);
     video_codec_combo_->setEnabled(enabled);
     audio_codec_combo_->setEnabled(enabled);
+    // 0.7.0 — S7: bit-depth combo honours both the recording lock and codec gating.
+    updateVideoBitDepthControl();
 
     quality_combo_->setEnabled(enabled);
     frame_rate_combo_->setEnabled(enabled);

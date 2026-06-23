@@ -78,6 +78,10 @@ struct OutputSettingsModel {
     capability::Container container = capability::Container::Matroska;
     capability::VideoCodec video_codec = capability::VideoCodec::H264Nvenc;
     capability::AudioCodec audio_codec = capability::AudioCodec::AacMf;
+    // Video bit depth (0.7.0). 8-bit is the universal default; 10-bit is only
+    // valid for HEVC / AV1 (gated by capability::QueryCombo and reconciled in
+    // SanitizePresetConfig — forced back to Bit8 for H.264 / unsupported combos).
+    capability::BitDepth bit_depth = capability::BitDepth::Bit8;
     OutputResolutionSettings resolution;
     SplitRecordingSettings split;
 

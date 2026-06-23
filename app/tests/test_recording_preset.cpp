@@ -162,6 +162,88 @@ TEST(RecordingPreset, DefaultPreset_SanitizeRoundTrip) {
 }
 
 // ===========================================================================
+// SanitizePresetConfig — video bit depth (0.7.0 — S7)
+// ===========================================================================
+
+// 10-bit is invalid for H.264 → sanitize forces 8-bit.
+TEST(RecordingPreset, Sanitize_VideoBitDepth_TenBitH264_ForcesEightBit) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.container = capability::Container::Matroska;
+    cfg.output.video_codec = capability::VideoCodec::H264Nvenc;
+    cfg.output.bit_depth = capability::BitDepth::Bit10;
+
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_EQ(s.output.bit_depth, capability::BitDepth::Bit8);
+}
+
+// 10-bit is valid for HEVC → sanitize preserves it.
+TEST(RecordingPreset, Sanitize_VideoBitDepth_TenBitHevc_Preserved) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.container = capability::Container::Matroska;
+    cfg.output.video_codec = capability::VideoCodec::HevcNvenc;
+    cfg.output.audio_codec = capability::AudioCodec::Opus;
+    cfg.output.bit_depth = capability::BitDepth::Bit10;
+
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_EQ(s.output.bit_depth, capability::BitDepth::Bit10);
+}
+
+// 10-bit is valid for AV1 → sanitize preserves it.
+TEST(RecordingPreset, Sanitize_VideoBitDepth_TenBitAv1_Preserved) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.container = capability::Container::Matroska;
+    cfg.output.video_codec = capability::VideoCodec::Av1Nvenc;
+    cfg.output.bit_depth = capability::BitDepth::Bit10;
+
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_EQ(s.output.bit_depth, capability::BitDepth::Bit10);
+}
+
+// MP4 + HEVC is a valid 0.7.0 combination (hvc1 remux): the reconcile keeps HEVC
+// (only the Opus audio is forced to AAC), so 10-bit (HEVC Main10) is preserved.
+// This guards that the bit-depth reconcile keys off the *resolved* codec, not the
+// container — HEVC carries 10-bit regardless of container.
+TEST(RecordingPreset, Sanitize_VideoBitDepth_Mp4Hevc_KeepsTenBit) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.container = capability::Container::Mp4;
+    cfg.output.video_codec = capability::VideoCodec::HevcNvenc;
+    cfg.output.audio_codec = capability::AudioCodec::AacMf; // MP4 audio is AAC-only
+    cfg.output.bit_depth = capability::BitDepth::Bit10;
+
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_EQ(s.output.video_codec, capability::VideoCodec::HevcNvenc);
+    EXPECT_EQ(s.output.bit_depth, capability::BitDepth::Bit10);
+}
+
+// 8-bit is always valid and never altered by codec.
+TEST(RecordingPreset, Sanitize_VideoBitDepth_EightBit_AlwaysPreserved) {
+    for (const auto codec :
+         {capability::VideoCodec::H264Nvenc, capability::VideoCodec::HevcNvenc, capability::VideoCodec::Av1Nvenc}) {
+        RecordingPresetConfig cfg = MakeDefaultPreset().config;
+        cfg.output.container = capability::Container::Matroska;
+        cfg.output.video_codec = codec;
+        cfg.output.audio_codec = capability::AudioCodec::Opus;
+        cfg.output.bit_depth = capability::BitDepth::Bit8;
+
+        const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+        EXPECT_EQ(s.output.bit_depth, capability::BitDepth::Bit8);
+    }
+}
+
+// bit_depth participates in dirty/normalized equality.
+TEST(RecordingPreset, NormalizedEquals_BitDepthDifference_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    a.output.video_codec = capability::VideoCodec::HevcNvenc;
+    a.output.audio_codec = capability::AudioCodec::Opus;
+    a.output.bit_depth = capability::BitDepth::Bit8;
+    RecordingPresetConfig b = a;
+    b.output.bit_depth = capability::BitDepth::Bit10;
+
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+// ===========================================================================
 // SanitizePresetConfig — countdown
 // ===========================================================================
 
