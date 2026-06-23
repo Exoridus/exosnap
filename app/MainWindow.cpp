@@ -22,6 +22,7 @@
 #include "ui/dialogs/AboutOverlay.h"
 #include "ui/dialogs/CrashReportOverlay.h"
 #include "ui/dialogs/PresetManageOverlay.h"
+#include "ui/dialogs/RecordingErrorOverlay.h"
 #include "ui/dialogs/RecoveryOverlay.h"
 #include "ui/dialogs/SourcePickerOverlay.h"
 #include "ui/dialogs/UpdateSettingsPanel.h"
@@ -1380,6 +1381,51 @@ void MainWindow::openCrashReportOverlay() {
     });
 
     crash_overlay_->openOverlay();
+}
+
+void MainWindow::openRecordingErrorOverlay(ui::dialogs::RecordingErrorModel model) {
+    // Replace any overlay still on screen from a previous failed attempt.
+    if (recording_error_overlay_ != nullptr) {
+        recording_error_overlay_->closeOverlay();
+        recording_error_overlay_->deleteLater();
+        recording_error_overlay_ = nullptr;
+    }
+
+    // The "Send report" action is only meaningful in an official build with a
+    // compiled-in DSN and an active engine; self-builds never phone home.
+    model.can_send_report = crash_capture::IsActive();
+
+    recording_error_overlay_ = new ui::dialogs::RecordingErrorOverlay(model, centralWidget());
+    recording_error_overlay_->hide();
+
+    connect(recording_error_overlay_, &ui::dialogs::RecordingErrorOverlay::sendReportRequested, this, [this, model]() {
+        // Clicking Send is the explicit opt-in: grant consent (dormant w/o
+        // DSN), attach allow-listed codec context, then forward a scrubbed,
+        // non-fatal report. Paths in `detail` are stripped inside crash_capture.
+        crash_capture::GiveUserConsent();
+        crash_capture::SetEncoderContext("nvenc", model.container.toStdString(), model.video_codec.toStdString(),
+                                         model.audio_codec.toStdString());
+        crash_capture::ReportNonFatalError(model.phase.toStdString(), model.detail.toStdString());
+        diagnostics::AppLog::info(QStringLiteral("record.failure"),
+                                  QStringLiteral("user sent error report phase=%1").arg(model.phase));
+        if (recording_error_overlay_)
+            recording_error_overlay_->closeOverlay();
+    });
+
+    connect(recording_error_overlay_, &ui::dialogs::RecordingErrorOverlay::openLogsRequested, this, [this]() {
+        if (recording_error_overlay_)
+            recording_error_overlay_->closeOverlay();
+        navigateToPage(kLogsPageIndex);
+    });
+
+    connect(recording_error_overlay_, &ui::dialogs::RecordingErrorOverlay::closed, this, [this]() {
+        if (recording_error_overlay_) {
+            recording_error_overlay_->deleteLater();
+            recording_error_overlay_ = nullptr;
+        }
+    });
+
+    recording_error_overlay_->openOverlay();
 }
 
 MainWindow::~MainWindow() {
@@ -3195,18 +3241,20 @@ void MainWindow::initNotificationToasts() {
                         refreshHubUnreadBell();
                     }
                 } else {
-                    // Trigger 3: unexpected engine failure — "Recording stopped unexpectedly" (error, sticky).
-                    // Mappe spec: action "Show file" (primary).
-                    event.type = notifications::NotificationType::UnexpectedStop;
-                    event.title = QStringLiteral("Recording stopped unexpectedly");
-                    event.body = error_phase.isEmpty()
-                                     ? QStringLiteral("An error occurred during recording.")
-                                     : QStringLiteral("Disk write failed. A partial file was recovered.");
-                    event.action = notifications::NotificationAction::ShowFile;
-                    event.action_payload = output_path; // path to the partial file if available
+                    // RECORDING-ERROR-MODAL-R1: a non-disk-space failure is now surfaced
+                    // by the modal RecordingErrorOverlay (RecordPage::recordingFailed), so
+                    // we no longer enqueue a redundant "stopped unexpectedly" toast here.
+                    // The modal carries the full detail and the opt-in error report.
+                    return;
                 }
                 notification_manager_->Enqueue(std::move(event));
             });
+
+    // ── RECORDING-ERROR-MODAL-R1: modal failure dialog ──
+    // A non-disk-space recording failure opens a prominent modal with the failure
+    // detail and an opt-in error report. Independent of show_notifications.
+    connect(record_page_, &RecordPage::recordingFailed, this,
+            [this](const ui::dialogs::RecordingErrorModel& model) { openRecordingErrorOverlay(model); });
 
     // ── CAPTURE-FRAME-BUTTON-R1: "Frame saved" success toast ──
     // Triggered by RecordPage::captureFrameSaved when a frame PNG is written.

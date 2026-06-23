@@ -3182,6 +3182,30 @@ void RecordPage::initCoordinator() {
         // NOTIFY-TOASTS-R1: surface the result to MainWindow for toast enqueuing.
         emit recordingResultReady(result.succeeded, QString::fromStdWString(result.output_path),
                                   QString::fromStdWString(result.error_phase));
+
+        // RECORDING-ERROR-MODAL-R1: for any failure except the disk-space auto-stop
+        // (which has its own actionable "Storage running low" notification), surface
+        // a prominent modal with the failure detail and an opt-in error report.
+        if (!result.succeeded && result.error_phase != L"DiskSpace") {
+            ui::dialogs::RecordingErrorModel model;
+            const bool has_partial = result.output_file_bytes > 0;
+            model.title = has_partial ? QStringLiteral("Recording stopped unexpectedly")
+                                      : QStringLiteral("Recording could not start");
+            model.summary =
+                has_partial
+                    ? QStringLiteral("The recording was interrupted before it finished. A partial file may have "
+                                     "been saved to your output folder.")
+                    : QStringLiteral("ExoSnap couldn't start this recording. The details below may help identify why.");
+            model.phase = QString::fromStdWString(result.error_phase);
+            model.code = QString::fromStdWString(result.hresult_text);
+            model.detail = QString::fromStdWString(result.error_detail);
+            model.container = containerLabel(result.container);
+            model.video_codec = videoCodecLabel(result.video_codec);
+            model.audio_codec = audioCodecLabel(result.audio_codec);
+            // can_send_report is decided by MainWindow based on crash_capture availability.
+            emit recordingFailed(model);
+        }
+
         refresh();
     });
 

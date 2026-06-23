@@ -105,6 +105,10 @@ qt_add_executable(exosnap WIN32
     ui/dialogs/CrashReportPanel.cpp
     ui/dialogs/CrashReportOverlay.h
     ui/dialogs/CrashReportOverlay.cpp
+    ui/dialogs/RecordingErrorPanel.h
+    ui/dialogs/RecordingErrorPanel.cpp
+    ui/dialogs/RecordingErrorOverlay.h
+    ui/dialogs/RecordingErrorOverlay.cpp
     ui/tray/TrayPresence.h
     ui/tray/TrayPresence.cpp
     ui/widgets/SectionRuleHeader.h
@@ -1060,6 +1064,20 @@ target_include_directories(crash_report_overlay_tests PRIVATE ${CMAKE_CURRENT_SO
 set_target_properties(crash_report_overlay_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
+    NAME recording_error_overlay_tests
+    TEST_PREFIX record.
+    SOURCES
+        tests/test_recording_error_overlay.cpp
+        ui/dialogs/RecordingErrorPanel.cpp
+        ui/dialogs/RecordingErrorOverlay.cpp
+        ui/theme/LucideIcon.cpp
+        ui/theme/ExoSnapTheme.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(recording_error_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+set_target_properties(recording_error_overlay_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
     NAME crash_issue_report_tests
     TEST_PREFIX crashissue.
     SOURCES
@@ -1508,6 +1526,25 @@ exosnap_add_gtest(
 target_include_directories(crash_update_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(crash_update_visual_proof_tests PRIVATE NOMINMAX)
 set_target_properties(crash_update_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
+
+# RECORDING-ERROR-MODAL-R1: offscreen renders of the non-fatal recording-error
+# dialog. Applies the real ExoSnap theme; produces PNGs under
+# .workspace/screenshots/0.7.0/ for human visual verification.
+exosnap_add_gtest(
+    NAME recording_error_visual_proof_tests
+    TEST_PREFIX record.error.proof.
+    SOURCES
+        tests/recording_error_visual_proof.cpp
+        ui/dialogs/RecordingErrorPanel.cpp
+        ui/theme/LucideIcon.cpp
+        ui/theme/ExoSnapTheme.cpp
+        ui/theme/exosnap_theme.qrc
+        assets/fonts/exosnap_fonts.qrc
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+)
+target_include_directories(recording_error_visual_proof_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(recording_error_visual_proof_tests PRIVATE NOMINMAX)
+set_target_properties(recording_error_visual_proof_tests PROPERTIES AUTOMOC ON AUTORCC ON)
 
 # REGION-SELECTION-SKIN-R1 unit tests.
 exosnap_add_gtest(

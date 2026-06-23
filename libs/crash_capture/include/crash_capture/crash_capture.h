@@ -87,6 +87,31 @@ void RevokeUserConsent();
 void SendTestEvent(std::string_view message);
 
 // ---------------------------------------------------------------------------
+// Report a non-fatal recording error as a structured Sentry message event.
+//
+// Recording failures (unlike crashes, which Crashpad captures out-of-process)
+// are recoverable and surfaced to the user via the in-window error dialog. This
+// lets the UI forward such a failure to Sentry *only after the user explicitly
+// opts in* — the caller must call GiveUserConsent() first, exactly as the crash
+// dialog does.
+//
+// No-op unless the engine is active with a DSN (official build) AND consent has
+// been granted (sentry-native gates capture on consent internally). Self-builds
+// have no DSN and never send.
+//
+// Both arguments are scrubbed via ScrubString before they leave the process:
+// the before_send hook only covers exception/tag fields, NOT the message body,
+// so message-bearing reports must be pre-scrubbed here. `phase` and `detail`
+// may safely contain absolute paths at the call site; they are stripped.
+//   phase  — engine error phase (e.g. "Validate", "Mux", "Encode")
+//   detail — human-readable failure detail (paths/usernames stripped)
+//
+// Container/codec context rides along via the allow-listed tags previously set
+// with SetEncoderContext(); set those before calling for richer reports.
+// ---------------------------------------------------------------------------
+void ReportNonFatalError(std::string_view phase, std::string_view detail);
+
+// ---------------------------------------------------------------------------
 // Attach metadata to the current scope. Safe to call after Initialize().
 // Used by the app layer to record runtime context for crashes.
 //   key  — tag name; must appear in the allow-list in crash_scrubber.h
