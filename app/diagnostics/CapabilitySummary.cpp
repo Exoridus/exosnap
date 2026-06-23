@@ -74,6 +74,18 @@ CapabilitySummary CapabilitySummary::FromCapabilitySet(const capability::Capabil
         summary.entries.push_back({"GPU", caps.gpu_adapter_name, "info", true});
     }
 
+    // Displays — per-monitor HDR status (informational; basis for a future HDR
+    // recording gate). A high peak luminance implies an HDR-capable panel even
+    // when Windows HDR is currently off.
+    for (const auto& disp : caps.runtime.displays) {
+        std::string value = disp.hdr_active ? "HDR on" : "HDR off";
+        if (disp.bits_per_color > 0)
+            value += " \xC2\xB7 " + std::to_string(disp.bits_per_color) + "-bit";
+        if (disp.max_luminance_nits > 0.0f)
+            value += " \xC2\xB7 peak " + std::to_string(static_cast<int>(disp.max_luminance_nits)) + " nits";
+        summary.entries.push_back({disp.name.empty() ? "Display" : disp.name, value, "info", true});
+    }
+
     // NVIDIA driver
     if (caps.runtime.nvidia.nvenc_api_version > 0) {
         summary.entries.push_back(

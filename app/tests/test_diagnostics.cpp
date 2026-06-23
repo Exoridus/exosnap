@@ -79,6 +79,28 @@ TEST(CapabilitySummaryTest, FromCapabilitySet_ReportsNvenc) {
     EXPECT_TRUE(found_nvenc);
 }
 
+TEST(CapabilitySummaryTest, FromCapabilitySet_ReportsPerDisplayHdr) {
+    capability::CapabilitySet caps;
+    capability::DisplayHdrFacts disp;
+    disp.name = "\\\\.\\DISPLAY7";
+    disp.hdr_active = false;
+    disp.bits_per_color = 10;
+    disp.max_luminance_nits = 1499.0f;
+    caps.runtime.displays.push_back(disp);
+
+    auto summary = CapabilitySummary::FromCapabilitySet(caps);
+    bool found = false;
+    for (const auto& entry : summary.entries) {
+        if (entry.label == "\\\\.\\DISPLAY7") {
+            found = true;
+            EXPECT_NE(entry.value.find("HDR off"), std::string::npos);
+            EXPECT_NE(entry.value.find("10-bit"), std::string::npos);
+            EXPECT_NE(entry.value.find("1499 nits"), std::string::npos);
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
 TEST(CapabilitySummaryTest, FromCapabilitySet_ReportsVideoCodecs) {
     capability::CapabilitySet caps;
     caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};

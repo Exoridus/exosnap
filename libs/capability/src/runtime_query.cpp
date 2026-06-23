@@ -18,6 +18,7 @@
 
 // DXGI
 #include <dxgi.h>
+#include <dxgi1_6.h> // IDXGIOutput6::GetDesc1 (per-display HDR facts)
 
 // Media Foundation
 #include <mfapi.h>
@@ -35,6 +36,7 @@
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
 // NVENC API version function pointer type.
 // The function signature: NvAPI_Status NvEncodeAPIGetMaxSupportedVersion(uint32_t* version)
@@ -140,6 +142,44 @@ void ProbeAdapterName(NvidiaRuntimeFacts& nvidia) {
 
     if (!best_name.empty()) {
         nvidia.adapter_name = std::move(best_name);
+    }
+}
+
+// -------------------------------------------------------------------------
+// B2. Per-display HDR facts (IDXGIOutput6::GetDesc1)
+// -------------------------------------------------------------------------
+void ProbeDisplays(std::vector<DisplayHdrFacts>& displays) {
+    Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+        return; // non-critical; displays stays empty
+    }
+    Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+    for (UINT a = 0; factory->EnumAdapters1(a, &adapter) != DXGI_ERROR_NOT_FOUND; ++a) {
+        Microsoft::WRL::ComPtr<IDXGIOutput> output;
+        for (UINT o = 0; adapter->EnumOutputs(o, &output) != DXGI_ERROR_NOT_FOUND; ++o) {
+            Microsoft::WRL::ComPtr<IDXGIOutput6> out6;
+            if (SUCCEEDED(output.As(&out6))) {
+                DXGI_OUTPUT_DESC1 d{};
+                if (SUCCEEDED(out6->GetDesc1(&d))) {
+                    DisplayHdrFacts facts;
+                    const int len = WideCharToMultiByte(CP_UTF8, 0, d.DeviceName, -1, nullptr, 0, nullptr, nullptr);
+                    if (len > 1) {
+                        facts.name.resize(static_cast<size_t>(len - 1));
+                        WideCharToMultiByte(CP_UTF8, 0, d.DeviceName, -1, facts.name.data(), len, nullptr, nullptr);
+                    }
+                    // HDR is ON when the output is in a PQ/BT.2020 colour space.
+                    facts.hdr_active = (d.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 ||
+                                        d.ColorSpace == DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020);
+                    facts.bits_per_color = d.BitsPerColor;
+                    facts.max_luminance_nits = d.MaxLuminance;
+                    facts.min_luminance_nits = d.MinLuminance;
+                    facts.max_full_frame_nits = d.MaxFullFrameLuminance;
+                    displays.push_back(std::move(facts));
+                }
+            }
+            output.Reset();
+        }
+        adapter.Reset();
     }
 }
 
@@ -282,6 +322,7 @@ RuntimeCapabilitySnapshot CapabilityBuilder::QueryRuntimeFacts() {
     ProbeAdapterName(snapshot.nvidia);
     ProbeMfAac(snapshot.mf_aac);
     ProbeOs(snapshot.os);
+    ProbeDisplays(snapshot.displays);
 
     return snapshot;
 }
