@@ -37,6 +37,14 @@ int NotificationManager::PendingCount() const noexcept {
     return static_cast<int>(pending_queue_.size());
 }
 
+qint64 NotificationManager::ShownAtMs(uint64_t sequence) const noexcept {
+    for (int i = 0; i < visible_.size(); ++i) {
+        if (visible_[i].sequence == sequence)
+            return visible_shown_at_[i];
+    }
+    return -1;
+}
+
 // static
 int NotificationManager::DismissIntervalMs(NotificationType type) noexcept {
     switch (type) {

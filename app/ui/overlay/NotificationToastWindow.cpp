@@ -5,13 +5,19 @@
 #include "NotificationToastWindow.h"
 
 #include <QApplication>
+#include <QDateTime>
 #include <QFont>
 #include <QFontMetrics>
 #include <QGuiApplication>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QRegion>
 #include <QScreen>
 #include <QShowEvent>
+#include <QTimer>
+
+#include <algorithm>
 
 #include "notifications/NotificationManager.h"
 
@@ -286,6 +292,123 @@ int toastHeight(const notifications::NotificationEvent& event, const QFontMetric
     return h;
 }
 
+// One action button's resolved label, tone, and action tag.
+struct ButtonSpec {
+    QString label;
+    bool primary = false;
+    notifications::NotificationAction action = notifications::NotificationAction::None;
+};
+
+// Resolve the action-pill list for an event — the SINGLE source of truth shared
+// by paintEvent (rendering) and computeHitTargets (hit-testing) so the two can
+// never disagree on which pills exist or what they do.
+QVector<ButtonSpec> buttonSpecsFor(const notifications::NotificationEvent& event) {
+    using notifications::NotificationAction;
+    QVector<ButtonSpec> buttons;
+    switch (event.action) {
+    case NotificationAction::OpenFolder:
+        buttons.push_back({QStringLiteral("Open folder"), false, NotificationAction::OpenFolder});
+        break;
+    case NotificationAction::OpenRecovery:
+        buttons.push_back({QStringLiteral("Recover"), true, NotificationAction::OpenRecovery});
+        if (event.secondary_action == NotificationAction::Discard)
+            buttons.push_back({QStringLiteral("Discard"), false, NotificationAction::Discard});
+        break;
+    case NotificationAction::ChangeFolder:
+        buttons.push_back({QStringLiteral("Change folder"), true, NotificationAction::ChangeFolder});
+        if (event.secondary_action == NotificationAction::None || event.secondary_action == NotificationAction::Discard)
+            buttons.push_back({QStringLiteral("Dismiss"), false, NotificationAction::None});
+        break;
+    case NotificationAction::ShowFile:
+        buttons.push_back({QStringLiteral("Show file"), true, NotificationAction::ShowFile});
+        break;
+    case NotificationAction::OpenUpdate:
+        buttons.push_back({QStringLiteral("View update"), true, NotificationAction::OpenUpdate});
+        break;
+    case NotificationAction::Discard:
+        buttons.push_back({QStringLiteral("Discard"), false, NotificationAction::Discard});
+        break;
+    case NotificationAction::None:
+    default:
+        break;
+    }
+    return buttons;
+}
+
+// Fully resolved window-space geometry for one stacked toast at `y_offset`.
+// Both paint and hit-test derive every rect from this struct so they stay in lockstep.
+struct ToastLayout {
+    int y_offset = 0;
+    int card_h = 0;
+    bool sticky = false;
+    QRectF card_rect;    // rounded card body (FULL height incl. bar strip)
+    QRectF dismiss_rect; // top-right ✕ hit/paint rect
+    int text_x = 0;
+    int actions_y = 0;
+    QVector<ButtonSpec> buttons;  // resolved pills (label/tone/action)
+    QVector<QRectF> button_rects; // 1:1 with `buttons`
+};
+
+// Build the three toast fonts identically to paintEvent so any caller that needs
+// only the metrics (e.g. hit-testing) measures with the exact same glyph widths.
+struct ToastFonts {
+    QFont title;
+    QFont body;
+    QFont action;
+};
+
+ToastFonts makeToastFonts() {
+    ToastFonts f;
+    f.title.setFamily(QStringLiteral("Hanken Grotesk"));
+    f.title.setPixelSize(kTitlePx);
+    f.title.setWeight(QFont::DemiBold);
+    f.body.setFamily(QStringLiteral("Hanken Grotesk"));
+    f.body.setPixelSize(kBodyPx);
+    f.body.setWeight(QFont::Normal);
+    f.action.setFamily(QStringLiteral("Hanken Grotesk"));
+    f.action.setPixelSize(kActionPx);
+    f.action.setWeight(QFont::DemiBold);
+    return f;
+}
+
+ToastLayout layoutFor(const notifications::NotificationEvent& event, int y_offset, const QFontMetrics& title_fm,
+                      const QFontMetrics& body_fm, const QFontMetrics& action_fm) {
+    ToastLayout L;
+    L.y_offset = y_offset;
+    L.sticky = isSticky(event.type);
+    L.card_h = toastHeight(event, title_fm, body_fm);
+
+    // Card spans the FULL height (including the bottom bar strip) so the bar can
+    // be clipped to the card's rounded bottom corners.
+    L.card_rect = QRectF(0.0, y_offset, kToastWidth, L.card_h);
+
+    const int text_x = kPadLeft + kChipSize + kChipTextGap;
+    const int text_w = kToastWidth - text_x - kPadRight - kDismissSize - 6;
+    L.text_x = text_x;
+
+    const int text_y_top = y_offset + kPadTop;
+    const int title_y = text_y_top + (kChipSize / 2 - (kTitleH + kBodyGapTop + kBodyH) / 2);
+    const int effective_title_y = qMax(text_y_top, title_y);
+
+    const int body_lines = bodyLineCount(event.body, body_fm, text_w);
+    const int body_total_h = kBodyH * body_lines;
+    L.actions_y = effective_title_y + kTitleH + kBodyGapTop + body_total_h + kActionsGapTop;
+
+    L.dismiss_rect = QRectF(kToastWidth - kPadRight - kDismissSize, y_offset + kPadTop, kDismissSize, kDismissSize);
+
+    if (event.hasAction()) {
+        L.buttons = buttonSpecsFor(event);
+        int pill_x = text_x;
+        for (const auto& btn : L.buttons) {
+            const int label_w = action_fm.horizontalAdvance(btn.label);
+            const int pill_w = label_w + 24; // 12px each side
+            L.button_rects.push_back(QRectF(pill_x, L.actions_y, pill_w, kPillH));
+            pill_x += pill_w + kPillGapX;
+        }
+    }
+    return L;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -293,12 +416,23 @@ int toastHeight(const notifications::NotificationEvent& event, const QFontMetric
 // ---------------------------------------------------------------------------
 
 NotificationToastWindow::NotificationToastWindow(notifications::NotificationManager* manager, QWidget* parent)
-    : QWidget(parent, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::WindowTransparentForInput |
-                          Qt::NoDropShadowWindowHint),
+    : QWidget(parent, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::NoDropShadowWindowHint),
       manager_(manager) {
+    // NOTE: Qt::WindowTransparentForInput is intentionally NOT set — the toast is
+    // now interactive (✕ dismiss + action pills). Capture exclusion is provided
+    // independently by SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) in
+    // applyExclusion(); the two concerns are orthogonal. Click-through in the
+    // transparent gaps between stacked cards is achieved via setMask() (updateMask).
     setAttribute(Qt::WA_TranslucentBackground, true);
     setAttribute(Qt::WA_ShowWithoutActivating, true);
     setAttribute(Qt::WA_AlwaysStackOnTop, true);
+    setMouseTracking(true);
+
+    // ~30 fps repaint so the auto-dismiss countdown bar animates. Only runs while
+    // a non-sticky toast is visible (started in onVisibleSetChanged()).
+    repaint_timer_ = new QTimer(this);
+    repaint_timer_->setInterval(33);
+    connect(repaint_timer_, &QTimer::timeout, this, [this]() { update(); });
 
     if (manager_) {
         connect(manager_, &notifications::NotificationManager::visibleSetChanged, this,
@@ -382,16 +516,23 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
     action_font.setFamily(QStringLiteral("Hanken Grotesk"));
     action_font.setPixelSize(kActionPx);
     action_font.setWeight(QFont::DemiBold); // 600
+    const QFontMetrics action_fm(action_font);
 
     int y_offset = 0;
     for (int idx = 0; idx < events.size(); ++idx) {
         const auto& event = events[idx];
         const StatusTokens tok = tokensForType(event.type);
         const bool sticky = isSticky(event.type);
-        const int card_h = toastHeight(event, title_fm, body_fm);
+
+        // Single source of truth for this toast's geometry (shared with hit-test).
+        const ToastLayout L = layoutFor(event, y_offset, title_fm, body_fm, action_fm);
+        const int card_h = L.card_h;
 
         // ── Card background ───────────────────────────────────────────────
-        const QRectF card_rect(0.0, y_offset, kToastWidth, card_h - (sticky ? 0 : kBarH));
+        // The card now spans the FULL card_h (including the bottom bar strip) so
+        // the countdown bar, clipped to this path, follows the rounded bottom
+        // corners instead of sticking out as a square hairline.
+        const QRectF card_rect = L.card_rect;
         QPainterPath card_path;
         card_path.addRoundedRect(card_rect, kToastRadius, kToastRadius);
 
@@ -419,7 +560,7 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
 
         // ── Glyph chip (30px, borderRadius 9) ────────────────────────────
         const int chip_x = kPadLeft;
-        // Vertically center chip in content area (excluding bar)
+        // Vertically center chip in the content area (above the bar strip).
         const int content_area_h = card_h - (sticky ? 0 : kBarH) - kPadTop - kPadBottom;
         const int chip_y = y_offset + kPadTop + (content_area_h - kChipSize) / 2;
         const QRectF chip_rect(chip_x, chip_y, kChipSize, kChipSize);
@@ -437,7 +578,7 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
         drawStatusGlyph(p, event.type, glyph_cx, glyph_cy, kChipGlyphSize, tok.c);
 
         // ── Text column ───────────────────────────────────────────────────
-        const int text_x = kPadLeft + kChipSize + kChipTextGap;
+        const int text_x = L.text_x;
         const int text_w = kToastWidth - text_x - kPadRight - kDismissSize - 6;
 
         // Title row: title + optional dismiss ✕
@@ -474,58 +615,14 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
         }
 
         // ── Dismiss ✕ ─────────────────────────────────────────────────────
-        const QRectF dismiss_rect(kToastWidth - kPadRight - kDismissSize, y_offset + kPadTop, kDismissSize,
-                                  kDismissSize);
-        drawDismissX(p, dismiss_rect, kDim);
+        drawDismissX(p, L.dismiss_rect, kDim);
 
-        // ── Action pills ──────────────────────────────────────────────────
-        if (event.hasAction()) {
-            const int body_lines = bodyLineCount(event.body, body_fm, text_w);
-            const int body_total_h = kBodyH * body_lines;
-            const int actions_y = effective_title_y + kTitleH + kBodyGapTop + body_total_h + kActionsGapTop;
-
-            // Determine primary / secondary button labels from the action enum
-            struct ButtonSpec {
-                QString label;
-                bool primary;
-            };
-            QVector<ButtonSpec> buttons;
-
-            switch (event.action) {
-            case notifications::NotificationAction::OpenFolder:
-                buttons.push_back({QStringLiteral("Open folder"), false});
-                break;
-            case notifications::NotificationAction::OpenRecovery:
-                buttons.push_back({QStringLiteral("Recover"), true});
-                if (event.secondary_action == notifications::NotificationAction::Discard)
-                    buttons.push_back({QStringLiteral("Discard"), false});
-                break;
-            case notifications::NotificationAction::ChangeFolder:
-                buttons.push_back({QStringLiteral("Change folder"), true});
-                if (event.secondary_action == notifications::NotificationAction::None ||
-                    event.secondary_action == notifications::NotificationAction::Discard)
-                    buttons.push_back({QStringLiteral("Dismiss"), false});
-                break;
-            case notifications::NotificationAction::ShowFile:
-                buttons.push_back({QStringLiteral("Show file"), true});
-                break;
-            case notifications::NotificationAction::OpenUpdate:
-                buttons.push_back({QStringLiteral("View update"), true});
-                break;
-            case notifications::NotificationAction::Discard:
-                buttons.push_back({QStringLiteral("Discard"), false});
-                break;
-            case notifications::NotificationAction::None:
-            default:
-                break;
-            }
-
-            int pill_x = text_x;
+        // ── Action pills (rects come from the shared layout) ───────────────
+        if (!L.buttons.isEmpty()) {
             p.setFont(action_font);
-            for (const auto& btn : buttons) {
-                const int label_w = QFontMetrics(action_font).horizontalAdvance(btn.label);
-                const int pill_w = label_w + 24; // 12px each side
-                const QRectF pill_rect(pill_x, actions_y, pill_w, kPillH);
+            for (int b = 0; b < L.buttons.size(); ++b) {
+                const ButtonSpec& btn = L.buttons[b];
+                const QRectF pill_rect = L.button_rects[b];
                 QPainterPath pill_path;
                 pill_path.addRoundedRect(pill_rect, kPillRadius, kPillRadius);
 
@@ -542,37 +639,173 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
                     p.setPen(tok.c);
                 }
                 p.drawText(pill_rect.toRect(), Qt::AlignCenter, btn.label);
-                pill_x += pill_w + kPillGapX;
             }
         }
 
         // ── Auto-dismiss countdown bar (non-sticky only) ──────────────────
         if (!sticky) {
-            // The bar sits below the card rounded rect; we render it in the full
-            // card_h slot (bottom kBarH pixels) as a track + fill.
-            const int bar_y = y_offset + card_h - kBarH;
-            // Track (dim background)
-            const QRectF track_rect(0, bar_y, kToastWidth, kBarH);
-            QPainterPath track_path;
-            track_path.addRoundedRect(track_rect, 0, 0);
-            p.fillPath(track_path, QColor(255, 255, 255, 15));
+            // Clip everything to the rounded card path so the bar's bottom-left /
+            // bottom-right corners follow the card radius instead of sticking out
+            // as square corners past the rounded card.
+            p.save();
+            p.setClipPath(card_path);
 
-            // Fill starts at 100% (full bar) — the manager drives actual progress
-            // via dismiss; we render a static full bar for the placeholder.
-            // In the future the window will receive a progress [0..1] per toast.
-            // For now: paint the status-color bar at the full width to show the widget.
-            const QRectF fill_rect(0, bar_y, kToastWidth, kBarH);
-            p.fillPath(
-                [&]() {
-                    QPainterPath fp;
-                    fp.addRoundedRect(fill_rect, 0, 0);
-                    return fp;
-                }(),
-                tok.c);
+            const int bar_y = y_offset + card_h - kBarH;
+
+            // Track (dim background) — full width, clipped to the rounded corners.
+            const QRectF track_rect(0, bar_y, kToastWidth, kBarH);
+            p.fillRect(track_rect, QColor(255, 255, 255, 15));
+
+            // Real countdown: remaining fraction = (interval − elapsed) / interval.
+            // shrinks left-to-right as the dwell elapses. Driven by the manager's
+            // per-event shown-at timestamp + per-type dwell interval — the same
+            // numbers that schedule auto-dismiss, so the bar empties exactly when
+            // the toast disappears.
+            double remaining = 1.0;
+            const int interval = notifications::NotificationManager::DismissIntervalMs(event.type);
+            if (interval > 0) {
+                const qint64 shown_at = manager_->ShownAtMs(event.sequence);
+                if (shown_at >= 0) {
+                    const qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - shown_at;
+                    remaining = std::clamp(1.0 - static_cast<double>(elapsed) / interval, 0.0, 1.0);
+                }
+            }
+
+            const double fill_w = kToastWidth * remaining;
+            if (fill_w > 0.0) {
+                const QRectF fill_rect(0, bar_y, fill_w, kBarH);
+                p.fillRect(fill_rect, tok.c);
+            }
+            p.restore();
         }
 
         y_offset += card_h + kStackGap;
     }
+}
+
+QVector<NotificationToastWindow::ToastHit> NotificationToastWindow::computeHitTargets() const {
+    QVector<ToastHit> hits;
+    if (!manager_)
+        return hits;
+
+    const auto& events = manager_->VisibleEvents();
+    if (events.isEmpty())
+        return hits;
+
+    const ToastFonts fonts = makeToastFonts();
+    const QFontMetrics title_fm(fonts.title);
+    const QFontMetrics body_fm(fonts.body);
+    const QFontMetrics action_fm(fonts.action);
+
+    int y_offset = 0;
+    for (const auto& event : events) {
+        const ToastLayout L = layoutFor(event, y_offset, title_fm, body_fm, action_fm);
+
+        // Dismiss ✕ — slightly enlarge the hit rect for forgiving clicks.
+        ToastHit x_hit;
+        x_hit.rect = L.dismiss_rect.adjusted(-4, -4, 4, 4);
+        x_hit.sequence = event.sequence;
+        x_hit.is_dismiss = true;
+        hits.push_back(x_hit);
+
+        // Action pills.
+        for (int b = 0; b < L.buttons.size(); ++b) {
+            ToastHit pill_hit;
+            pill_hit.rect = L.button_rects[b];
+            pill_hit.sequence = event.sequence;
+            pill_hit.is_dismiss = false;
+            pill_hit.action = L.buttons[b].action;
+            hits.push_back(pill_hit);
+        }
+
+        y_offset += L.card_h + kStackGap;
+    }
+    return hits;
+}
+
+void NotificationToastWindow::mousePressEvent(QMouseEvent* event) {
+    if (event->button() != Qt::LeftButton || !manager_) {
+        QWidget::mousePressEvent(event);
+        return;
+    }
+
+    const QPointF pos = event->position();
+    // Iterate the resolved targets; first hit wins (dismiss ✕ is pushed before
+    // the pills for each toast, so it takes priority in its overlapping corner).
+    for (const ToastHit& hit : computeHitTargets()) {
+        if (!hit.rect.contains(pos))
+            continue;
+
+        if (hit.is_dismiss) {
+            manager_->Dismiss(hit.sequence);
+            event->accept();
+            return;
+        }
+
+        // Action pill: emit the dispatch signal with a copy of the owning event,
+        // then dismiss the toast. MainWindow runs the actual handler (Open folder /
+        // Show file / Recover / …) — the toast never duplicates that logic.
+        // A "Dismiss" ghost pill resolves to NotificationAction::None → just close.
+        const auto& events = manager_->VisibleEvents();
+        for (const auto& ev : events) {
+            if (ev.sequence != hit.sequence)
+                continue;
+            if (hit.action != notifications::NotificationAction::None)
+                emit actionTriggered(ev, hit.action);
+            break;
+        }
+        manager_->Dismiss(hit.sequence);
+        event->accept();
+        return;
+    }
+
+    QWidget::mousePressEvent(event);
+}
+
+void NotificationToastWindow::mouseMoveEvent(QMouseEvent* event) {
+    // Pointing-hand cursor over any clickable target; arrow elsewhere.
+    const QPointF pos = event->position();
+    bool over_target = false;
+    for (const ToastHit& hit : computeHitTargets()) {
+        if (hit.rect.contains(pos)) {
+            over_target = true;
+            break;
+        }
+    }
+    setCursor(over_target ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    QWidget::mouseMoveEvent(event);
+}
+
+void NotificationToastWindow::updateMask() {
+    // The window is one translucent top-level spanning the bounding box of the
+    // whole toast stack. Mask it to the UNION of the card rectangles so clicks in
+    // the transparent GAPS between stacked toasts fall through to the app behind —
+    // only the actual cards capture input.
+    if (!manager_) {
+        clearMask();
+        return;
+    }
+    const auto& events = manager_->VisibleEvents();
+    if (events.isEmpty()) {
+        clearMask();
+        return;
+    }
+
+    const ToastFonts fonts = makeToastFonts();
+    const QFontMetrics title_fm(fonts.title);
+    const QFontMetrics body_fm(fonts.body);
+    const QFontMetrics action_fm(fonts.action);
+
+    QRegion region;
+    int y_offset = 0;
+    for (const auto& event : events) {
+        const ToastLayout L = layoutFor(event, y_offset, title_fm, body_fm, action_fm);
+        // Inflate slightly so the soft drop-shadow + rounded edges aren't clipped
+        // to a hard rectangle that would shave a pixel off antialiased corners.
+        region += L.card_rect.toAlignedRect().adjusted(-3, -1, 3, 4);
+        y_offset += L.card_h + kStackGap;
+    }
+    setMask(region);
 }
 
 void NotificationToastWindow::applyExclusion() {
@@ -615,12 +848,17 @@ void NotificationToastWindow::updatePosition() {
     if (screen_rect.isNull() || screen_rect.isEmpty()) {
         // Fallback: top-left origin
         move(kMarginRight, kMarginBottom);
+        updateMask();
         return;
     }
 
     const int x = screen_rect.right() - hint.width() - kMarginRight;
     const int y = screen_rect.bottom() - hint.height() - kMarginBottom;
     move(x, y);
+
+    // Keep the input mask in lockstep with the rendered card stack so clicks in
+    // the gaps between toasts pass through to the app behind.
+    updateMask();
 }
 
 void NotificationToastWindow::onVisibleSetChanged() {
@@ -632,6 +870,8 @@ void NotificationToastWindow::onVisibleSetChanged() {
     const bool has_events = manager_ && !manager_->VisibleEvents().isEmpty();
 
     if (!has_events) {
+        if (repaint_timer_)
+            repaint_timer_->stop();
         hide();
         return;
     }
@@ -647,6 +887,22 @@ void NotificationToastWindow::onVisibleSetChanged() {
     update();
     show();
     raise();
+
+    // Animate the countdown bar only while at least one non-sticky toast is
+    // visible; otherwise stop the ~30 fps repaint to stay idle.
+    bool has_countdown = false;
+    for (const auto& event : manager_->VisibleEvents()) {
+        if (!isSticky(event.type)) {
+            has_countdown = true;
+            break;
+        }
+    }
+    if (repaint_timer_) {
+        if (has_countdown && !repaint_timer_->isActive())
+            repaint_timer_->start();
+        else if (!has_countdown && repaint_timer_->isActive())
+            repaint_timer_->stop();
+    }
 }
 
 } // namespace exosnap::ui::overlay

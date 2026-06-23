@@ -69,6 +69,16 @@ class NotificationManager : public QObject {
     // Returns the number of events in the pending queue (not yet visible).
     [[nodiscard]] int PendingCount() const noexcept;
 
+    // Returns the auto-dismiss interval (ms) for the given type, or 0 for sticky
+    // types. Public so the toast window can drive its countdown bar from the same
+    // per-type timings the manager uses to schedule auto-dismiss.
+    [[nodiscard]] static int DismissIntervalMs(NotificationType type) noexcept;
+
+    // Returns the qt-monotonic timestamp (ms since epoch) at which the visible
+    // event with the given sequence was promoted into a slot, or -1 if it is not
+    // currently visible. Lets the toast window compute remaining dwell fraction.
+    [[nodiscard]] qint64 ShownAtMs(uint64_t sequence) const noexcept;
+
   signals:
     // Emitted when the visible set changes. Receivers (toast window) should
     // re-render based on VisibleEvents().
@@ -79,10 +89,6 @@ class NotificationManager : public QObject {
     void actionableEventShown();
 
   private:
-    // Returns the auto-dismiss interval for the given type.
-    // Returns 0 for sticky types.
-    [[nodiscard]] static int DismissIntervalMs(NotificationType type) noexcept;
-
     // Pull events from the queue into visible slots until kMaxVisible or queue empty.
     void drainQueue();
 

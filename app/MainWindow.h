@@ -205,6 +205,10 @@ class MainWindow : public QMainWindow {
     void initNotificationToasts();
     // Gate toasts on the show_notifications setting.
     void updateNotificationToastsEnabled();
+    // Execute a toast action pill click (Open folder / Show file / Recover / …).
+    // Reuses the same destinations the hub deep-links and overlays already use.
+    void dispatchNotificationAction(const notifications::NotificationEvent& event,
+                                    notifications::NotificationAction action);
 
     // UPDATE-WIRE-R1 (ADR 0012): trigger a guarded update check. No-op (and shows
     // the paused banner) while recording / remuxing.

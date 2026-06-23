@@ -3184,6 +3184,13 @@ void MainWindow::initNotificationToasts() {
     // Destroyed explicitly in ~MainWindow().
     notification_toast_window_ = new ui::overlay::NotificationToastWindow(notification_manager_, nullptr);
 
+    // The toast is now interactive: an action-pill click routes here so the toast
+    // reuses the existing destinations (folder/reveal/recovery/about/settings)
+    // instead of duplicating action logic. The manager has already dismissed the
+    // toast by the time this fires.
+    connect(notification_toast_window_, &ui::overlay::NotificationToastWindow::actionTriggered, this,
+            &MainWindow::dispatchNotificationAction);
+
     // Populate the Settings page checkbox from the persisted setting.
     if (config_page_)
         config_page_->setShowNotifications(persisted_settings_.show_notifications);
@@ -3291,6 +3298,64 @@ void MainWindow::updateNotificationToastsEnabled() {
     // auto-hides when the manager's visible set is empty.
     if (!persisted_settings_.show_notifications && notification_toast_window_) {
         notification_toast_window_->hide();
+    }
+}
+
+void MainWindow::dispatchNotificationAction(const notifications::NotificationEvent& event,
+                                            notifications::NotificationAction action) {
+    using notifications::NotificationAction;
+    switch (action) {
+    case NotificationAction::OpenFolder: {
+        // Payload is the saved file (or folder). Open its containing folder —
+        // mirrors RecordPage::openOutputFolder's QDesktopServices folder path.
+        const QString path = event.action_payload.trimmed();
+        if (path.isEmpty())
+            return;
+        const QFileInfo info(path);
+        const QString folder = info.isDir() ? info.absoluteFilePath() : info.absolutePath();
+        if (!folder.isEmpty())
+            QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+        break;
+    }
+    case NotificationAction::ShowFile: {
+        // Reveal the partial file. Open the file directly when it exists, else its
+        // folder — same QDesktopServices reveal path the result actions already use.
+        const QString path = event.action_payload.trimmed();
+        if (path.isEmpty())
+            return;
+        const QFileInfo info(path);
+        if (info.exists() && info.isFile())
+            QDesktopServices::openUrl(QUrl::fromLocalFile(info.absoluteFilePath()));
+        else if (!info.absolutePath().isEmpty())
+            QDesktopServices::openUrl(QUrl::fromLocalFile(info.absolutePath()));
+        break;
+    }
+    case NotificationAction::ChangeFolder: {
+        // Route to Settings → Output, identical to the low-disk hub deep-link.
+        navigateToPage(kSettingsPageIndex);
+        if (config_page_)
+            config_page_->scrollToSection(QStringLiteral("settings/output"));
+        break;
+    }
+    case NotificationAction::OpenRecovery: {
+        // Reopen the recovery overlay if it still exists; otherwise land on Record.
+        if (recovery_overlay_ != nullptr)
+            recovery_overlay_->openOverlay();
+        else
+            navigateToPage(kRecordPageIndex);
+        break;
+    }
+    case NotificationAction::OpenUpdate: {
+        // The update panel lives in the About overlay (same as the hub's update-view).
+        if (about_overlay_)
+            about_overlay_->openOverlay();
+        break;
+    }
+    case NotificationAction::Discard:
+    case NotificationAction::None:
+    default:
+        // No navigation — the toast was already dismissed by the manager.
+        break;
     }
 }
 
