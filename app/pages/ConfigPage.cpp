@@ -1159,6 +1159,44 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             fes_layout->addWidget(video_bit_depth_row_);
         }
 
+        // --- Colour range (0.7.0) ---
+        // Full (0-255) is the native precision of PC/screen content and the default;
+        // Limited (16-235) is the broadcast standard, safest for editors/players that
+        // ignore the range flag. Both are ALWAYS valid for every codec/container, so
+        // this control is never capability-gated — only the recording lock disables it
+        // (see updateVideoColorRangeControl()).
+        {
+            video_color_range_row_ = new QWidget(fmt_expert_section_);
+            auto* rvl = new QVBoxLayout(video_color_range_row_);
+            rvl->setContentsMargins(0, 0, 0, 0);
+            rvl->setSpacing(0);
+            auto* rrule = new QFrame(video_color_range_row_);
+            rrule->setFrameShape(QFrame::HLine);
+            rrule->setProperty("frameRole", "sectionRuleLine");
+            rvl->addWidget(rrule);
+            auto* rhl = new QHBoxLayout();
+            rhl->setContentsMargins(0, 12, 0, 12);
+            rhl->setSpacing(14);
+            auto* rlbl = new QLabel(QStringLiteral("Colour range"), video_color_range_row_);
+            rlbl->setProperty("labelRole", "settingsRowLabel");
+            rhl->addWidget(rlbl, 0);
+            rhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kVideoColorRange, video_color_range_row_), 0,
+                           Qt::AlignVCenter);
+            rhl->addStretch(1);
+            video_color_range_combo_ = new QComboBox(video_color_range_row_);
+            video_color_range_combo_->setObjectName(QStringLiteral("videoColorRangeCombo"));
+            video_color_range_combo_->addItem(QStringLiteral("Full (PC)"),
+                                              static_cast<int>(capability::ColorRange::Full));
+            video_color_range_combo_->addItem(QStringLiteral("Limited (TV)"),
+                                              static_cast<int>(capability::ColorRange::Limited));
+            video_color_range_combo_->setFixedWidth(160);
+            video_color_range_combo_->setProperty("settingsRowInput", true);
+            rhl->addWidget(video_color_range_combo_, 0, Qt::AlignVCenter);
+            rvl->addLayout(rhl);
+            video_color_range_row_->setProperty("settingsRow", true);
+            fes_layout->addWidget(video_color_range_row_);
+        }
+
 #ifndef NDEBUG
         // --- Roadmap dummy rows (Debug only — hidden in Release builds) ---
         // These are real, enabled controls wired to nothing, used so the roadmap
@@ -2471,6 +2509,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             &ConfigPage::onVideoCodecChanged);
     connect(video_bit_depth_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onVideoBitDepthChanged);
+    connect(video_color_range_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &ConfigPage::onVideoColorRangeChanged);
     connect(audio_codec_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onAudioCodecChanged);
     connect(profile_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -3118,6 +3158,30 @@ void ConfigPage::updateVideoBitDepthControl() {
     }
 }
 
+void ConfigPage::updateVideoColorRangeControl() {
+    if (!video_color_range_combo_ || !video_color_range_row_)
+        return;
+
+    // Colour range (Full 0-255 / Limited 16-235) is ALWAYS valid for every codec and
+    // container — there is no capability gating here (unlike bit depth). Only the
+    // recording lock disables it. Keep the combo in sync with the model.
+    const bool locked = controls_locked_;
+    {
+        const QSignalBlocker b(video_color_range_combo_);
+        const int idx = video_color_range_combo_->findData(static_cast<int>(format_settings_.color_range));
+        video_color_range_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* Full */);
+    }
+
+    video_color_range_combo_->setEnabled(!locked);
+    if (locked) {
+        video_color_range_combo_->setToolTip(QStringLiteral("Cannot change during recording"));
+        video_color_range_combo_->setCursor(Qt::ForbiddenCursor);
+    } else {
+        video_color_range_combo_->setToolTip(QString());
+        video_color_range_combo_->unsetCursor();
+    }
+}
+
 void ConfigPage::updateAudioCodecChoices() {
     const QSignalBlocker blocker(audio_codec_combo_);
     // Rebuild the list so the lossless codecs (PCM + FLAC, MKV-only) appear only
@@ -3260,6 +3324,16 @@ void ConfigPage::onVideoBitDepthChanged(int index) {
     emitCurrentFormatSettings();
 }
 
+void ConfigPage::onVideoColorRangeChanged(int index) {
+    if (index < 0 || !video_color_range_combo_)
+        return;
+    // Both values are always valid — no codec/container gating. Just record the model.
+    format_settings_.color_range =
+        static_cast<capability::ColorRange>(video_color_range_combo_->itemData(index).toInt());
+    updateVideoColorRangeControl();
+    emitCurrentFormatSettings();
+}
+
 void ConfigPage::onAudioCodecChanged(int index) {
     if (index < 0)
         return;
@@ -3285,6 +3359,7 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
     format_settings_.container = settings.container;
     format_settings_.video_codec = settings.video_codec;
     format_settings_.bit_depth = settings.bit_depth;
+    format_settings_.color_range = settings.color_range;
     format_settings_.audio_codec = settings.audio_codec;
     format_settings_.output_folder = settings.output_folder;
     format_settings_.naming_pattern = settings.naming_pattern;
@@ -3307,6 +3382,7 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
 
     updateVideoCodecChoices();
     updateAudioCodecChoices();
+    updateVideoColorRangeControl();
     updateFormatDisplay();
     updateOutputResolutionSelection();
     updateCustomResolutionVisibility();
@@ -4246,6 +4322,9 @@ void ConfigPage::updateExpertModeVisibility() {
     // 0.7.0 — S7: sync the video bit-depth combo + 10-bit gating when the section shows.
     if (expert_mode_enabled_)
         updateVideoBitDepthControl();
+    // 0.7.0: sync the colour-range combo (Full/Limited) when the section shows.
+    if (expert_mode_enabled_)
+        updateVideoColorRangeControl();
     if (expert_mode_enabled_ && rate_control_group_) {
         // Seed rate control selection from model.
         const QSignalBlocker b(rate_control_group_);
@@ -4891,6 +4970,8 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     audio_codec_combo_->setEnabled(enabled);
     // 0.7.0 — S7: bit-depth combo honours both the recording lock and codec gating.
     updateVideoBitDepthControl();
+    // 0.7.0: colour-range combo honours the recording lock (never codec-gated).
+    updateVideoColorRangeControl();
 
     quality_combo_->setEnabled(enabled);
     frame_rate_combo_->setEnabled(enabled);

@@ -130,6 +130,7 @@ capability::UserRecorderConfig UserConfigFromSettings(const OutputSettingsModel&
     config.audio_codec = output.audio_codec;
     config.chroma = capability::ChromaSubsampling::Cs420;
     config.bit_depth = output.bit_depth;
+    config.color_range = output.color_range;
     config.frame_rate_num = video.frame_rate_num == 0 ? 60 : video.frame_rate_num;
     config.frame_rate_den = video.frame_rate_den == 0 ? 1 : video.frame_rate_den;
     if (const auto fixed_size = PresetOutputSize(output.resolution.mode)) {

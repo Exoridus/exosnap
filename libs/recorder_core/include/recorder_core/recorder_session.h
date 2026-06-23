@@ -227,8 +227,9 @@ struct RecorderConfig {
     BitDepth bit_depth = BitDepth::Bit8;
 
     // Color description for the encoded video (ADR 0032). Default SDR BT.709
-    // limited-range; written into the container and matched by the encoder-input
-    // color conversion. HDR fields stay unset until the HDR slice.
+    // full-range; written into the container and matched by the encoder-input
+    // color conversion (range is user-selectable — Full default / Limited). HDR
+    // fields stay unset until the HDR slice.
     ColorMetadata color = ColorMetadata::Sdr709();
 
     // NVENC quality tier — maps to CQP values in the encoder (used for ConstantQuality mode).

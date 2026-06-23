@@ -642,28 +642,33 @@ void VideoThread::Run() {
         background.RGBA.A = 1.0f;
         videoContext->VideoProcessorSetOutputBackgroundColor(videoProcessor.get(), FALSE, &background);
 
-        // Make the RGB->NV12 conversion deterministic (ADR 0032). Without an
+        // Make the RGB->NV12/P010 conversion deterministic (ADR 0032). Without an
         // explicit color space the driver picks an implementation-defined
         // matrix/range (BT.601 vs BT.709, full vs studio), so the same desktop
         // could encode to subtly different colors on different GPUs and the
         // container carried no color tags at all. Pin the input to full-range
-        // RGB (the desktop composite) and the NV12 output to studio-range
-        // BT.709 — the SDR HD standard the Matroska Colour element is tagged
-        // with (see color_metadata.h / RecorderConfig::color). Input and output
-        // ranges therefore agree, so there is no black-level mismatch.
+        // RGB (the desktop composite) and the YUV output to BT.709 with the
+        // user-selected quantization range — Full (0-255, the native precision
+        // of screen content, the default) or Limited (studio 16-235, broadcast
+        // standard). The output range here MUST match the range the container is
+        // tagged with (see color_metadata.h / RecorderConfig::color), so the same
+        // config value drives both; otherwise there is a black-level mismatch.
+        const bool fullRange = m_state.config.color.range != ColorRange::Limited;
         if (videoContext1) {
             // Preferred path: explicit DXGI colour spaces. Input is the desktop's
-            // full-range BT.709 RGB; output is studio (limited 16-235) BT.709 YUV.
+            // full-range BT.709 RGB; output is BT.709 YUV in the selected range.
             // Drivers honour the quantization range here, so the encoded NV12/P010
-            // is genuinely limited-range and matches the limited tag the container
-            // carries (ADR 0032) — no full-vs-limited mismatch, no crushed shadows.
+            // genuinely carries the chosen range and matches the container tag
+            // (ADR 0032) — no full-vs-limited mismatch, no crushed/washed levels.
             videoContext1->VideoProcessorSetStreamColorSpace1(videoProcessor.get(), 0,
                                                               DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
             videoContext1->VideoProcessorSetOutputColorSpace1(videoProcessor.get(),
-                                                              DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
+                                                              fullRange ? DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P709
+                                                                        : DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
         } else {
             // Legacy fallback (pre-Win10 / no ID3D11VideoContext1). The output
-            // Nominal_Range is widely ignored here, so the result may be full-range.
+            // Nominal_Range is widely ignored here, so the result may not honour
+            // the requested range — best effort only.
             D3D11_VIDEO_PROCESSOR_COLOR_SPACE inputColorSpace{};
             inputColorSpace.Usage = 0;     // 0 = playback (full-precision conversion)
             inputColorSpace.RGB_Range = 0; // 0 = full-range RGB (0-255)
@@ -672,8 +677,9 @@ void VideoThread::Run() {
 
             D3D11_VIDEO_PROCESSOR_COLOR_SPACE outputColorSpace{};
             outputColorSpace.Usage = 0;
-            outputColorSpace.YCbCr_Matrix = 1;                                           // 1 = BT.709
-            outputColorSpace.Nominal_Range = D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235; // studio/limited
+            outputColorSpace.YCbCr_Matrix = 1; // 1 = BT.709
+            outputColorSpace.Nominal_Range =
+                fullRange ? D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255 : D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235;
             videoContext->VideoProcessorSetOutputColorSpace(videoProcessor.get(), &outputColorSpace);
         }
 

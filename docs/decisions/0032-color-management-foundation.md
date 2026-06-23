@@ -53,6 +53,25 @@ ISO/IEC 23001-8 (CICP) code points — the same code points Matroska and MP4 sto
 Input/output ranges agree (full RGB in, studio Y'CbCr out, tagged limited), so
 there is no black-level mismatch.
 
+**Updated 2026-06 (0.7.0 — Y'CbCr range made selectable; default flipped to Full).**
+Two corrections after live verification:
+1. *Bug:* the legacy `D3D11_VIDEO_PROCESSOR_COLOR_SPACE.Nominal_Range` is ignored on
+   **output** by the NVIDIA driver, so the VideoProcessor actually emitted full-range
+   Y'CbCr (black=0/white=255) while the container was tagged limited — recordings
+   looked too dark (player expanded limited→full, crushing shadows). The conversion
+   now uses `ID3D11VideoContext1::VideoProcessorSet{Stream,Output}ColorSpace1` with
+   explicit `DXGI_COLOR_SPACE` enums, which drivers honour, so the pixels genuinely
+   match the tag (GPU-verified with a black/white pattern: 16/235 limited, 0/255 full).
+2. *Default change:* the Y'CbCr range is now a **user-selectable setting** (Full / Limited),
+   **defaulting to Full (0-255)**. The captured desktop is native full-range RGB, so
+   Full preserves precision (no banding from the 16-235 compression) and avoids a lossy
+   round-trip — the better fidelity choice for screen content. Limited remains available
+   for maximum compatibility with players/editors that ignore the range flag. The chosen
+   range drives BOTH the VideoProcessor output space AND the container `Range` tag, so
+   they always agree. Persisted in `RecordingPreset` (schema 18). This is independent of
+   any GPU/display "output dynamic range" setting, which only governs the cable signal to
+   the monitor, not the full-range desktop buffer the engine captures.
+
 ## Consequences
 
 - Recordings are now color-deterministic across GPUs and explicitly tagged;

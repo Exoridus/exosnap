@@ -62,4 +62,14 @@ std::string_view ToString(BitDepth value) noexcept {
     return "UnknownBitDepth";
 }
 
+std::string_view ToString(ColorRange value) noexcept {
+    switch (value) {
+    case ColorRange::Full:
+        return "Full";
+    case ColorRange::Limited:
+        return "Limited";
+    }
+    return "UnknownColorRange";
+}
+
 } // namespace exosnap::capability

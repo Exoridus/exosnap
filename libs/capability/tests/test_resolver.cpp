@@ -251,6 +251,36 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsDefaultMkvAv1OpusCombo) {
     EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Opus);
     EXPECT_EQ(translated.chroma, recorder_core::ChromaSubsampling::Cs420);
     EXPECT_EQ(translated.bit_depth, recorder_core::BitDepth::Bit8);
+    // 0.7.0: default colour range is Full (0-255), the native screen precision.
+    EXPECT_EQ(translated.color.range, recorder_core::ColorRange::Full);
+}
+
+// Colour range (0.7.0) is always valid for every codec/container — it is NOT part of
+// the combo allow-list and flows straight through to core_config.color.range.
+TEST(TranslationTest, ToRecorderCoreConfigMapsColorRange) {
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    // Default (Full).
+    {
+        ResolveResult validation;
+        const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(UserRecorderConfig{}, caps, &validation);
+        EXPECT_TRUE(validation.succeeded);
+        EXPECT_EQ(translated.color.range, recorder_core::ColorRange::Full);
+        // Primaries/transfer/matrix stay BT.709 SDR.
+        EXPECT_EQ(translated.color.primaries, recorder_core::ColorPrimaries::Bt709);
+        EXPECT_EQ(translated.color.transfer, recorder_core::TransferCharacteristics::Bt709);
+        EXPECT_EQ(translated.color.matrix, recorder_core::MatrixCoefficients::Bt709);
+    }
+
+    // Limited.
+    {
+        UserRecorderConfig config;
+        config.color_range = ColorRange::Limited;
+        ResolveResult validation;
+        const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+        EXPECT_TRUE(validation.succeeded);
+        EXPECT_EQ(translated.color.range, recorder_core::ColorRange::Limited);
+    }
 }
 
 TEST(TranslationTest, ToRecorderCoreConfigAcceptsWebMAv1OpusCombo) {

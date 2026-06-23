@@ -90,6 +90,25 @@ std::optional<capability::BitDepth> VideoBitDepthFromString(QStringView s) {
     return std::nullopt;
 }
 
+QString ColorRangeToString(capability::ColorRange v) {
+    switch (v) {
+    case capability::ColorRange::Full:
+        return QStringLiteral("full");
+    case capability::ColorRange::Limited:
+        return QStringLiteral("limited");
+    }
+    return QStringLiteral("full");
+}
+
+std::optional<capability::ColorRange> ColorRangeFromString(QStringView s) {
+    const QString n = s.trimmed().toString().toLower();
+    if (n == QStringLiteral("full"))
+        return capability::ColorRange::Full;
+    if (n == QStringLiteral("limited"))
+        return capability::ColorRange::Limited;
+    return std::nullopt;
+}
+
 QString AudioCodecToString(capability::AudioCodec v) {
     switch (v) {
     case capability::AudioCodec::AacMf:
@@ -486,6 +505,7 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     out_tbl.emplace("container", ContainerToString(out.container).toStdString());
     out_tbl.emplace("video_codec", VideoCodecToString(out.video_codec).toStdString());
     out_tbl.emplace("bit_depth", VideoBitDepthToString(out.bit_depth).toStdString());
+    out_tbl.emplace("color_range", ColorRangeToString(out.color_range).toStdString());
     out_tbl.emplace("audio_codec", AudioCodecToString(out.audio_codec).toStdString());
     out_tbl.emplace("resolution_mode", OutputResolutionModeToString(out.resolution.mode).toStdString());
     out_tbl.emplace("custom_width", static_cast<int64_t>(out.resolution.custom_width));
@@ -647,6 +667,11 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
         const auto bd = VideoBitDepthFromString(QString::fromStdString(TomlStr(tbl["output"]["bit_depth"])));
         if (bd.has_value())
             out.bit_depth = *bd;
+    }
+    {
+        const auto cr = ColorRangeFromString(QString::fromStdString(TomlStr(tbl["output"]["color_range"])));
+        if (cr.has_value())
+            out.color_range = *cr;
     }
     {
         const auto c = AudioCodecFromString(QString::fromStdString(TomlStr(tbl["output"]["audio_codec"])));

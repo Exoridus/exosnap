@@ -82,6 +82,10 @@ struct OutputSettingsModel {
     // valid for HEVC / AV1 (gated by capability::QueryCombo and reconciled in
     // SanitizePresetConfig — forced back to Bit8 for H.264 / unsupported combos).
     capability::BitDepth bit_depth = capability::BitDepth::Bit8;
+    // Y'CbCr quantization range (0.7.0). Full (0-255, native screen precision) by
+    // default; Limited (16-235, broadcast) is the safe choice for editors/players
+    // that ignore the range flag. Always valid for every codec/container — never gated.
+    capability::ColorRange color_range = capability::ColorRange::Full;
     OutputResolutionSettings resolution;
     SplitRecordingSettings split;
 

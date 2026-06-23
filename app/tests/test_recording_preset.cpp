@@ -243,6 +243,37 @@ TEST(RecordingPreset, NormalizedEquals_BitDepthDifference_NotEqual) {
     EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
 }
 
+// The default preset uses Full colour range (0.7.0 default), and Full is preserved
+// through sanitize regardless of codec (colour range is never capability-gated).
+TEST(RecordingPreset, Sanitize_ColorRange_DefaultIsFull_AndPreservedForAllCodecs) {
+    EXPECT_EQ(MakeDefaultPreset().config.output.color_range, capability::ColorRange::Full);
+
+    for (const auto codec :
+         {capability::VideoCodec::H264Nvenc, capability::VideoCodec::HevcNvenc, capability::VideoCodec::Av1Nvenc}) {
+        for (const auto range : {capability::ColorRange::Full, capability::ColorRange::Limited}) {
+            RecordingPresetConfig cfg = MakeDefaultPreset().config;
+            cfg.output.container = capability::Container::Matroska;
+            cfg.output.video_codec = codec;
+            cfg.output.audio_codec = capability::AudioCodec::Opus;
+            cfg.output.color_range = range;
+
+            const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+            EXPECT_EQ(s.output.color_range, range);
+        }
+    }
+}
+
+// color_range participates in dirty/normalized equality.
+TEST(RecordingPreset, NormalizedEquals_ColorRangeDifference_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    a.output.color_range = capability::ColorRange::Full;
+    RecordingPresetConfig b = a;
+    b.output.color_range = capability::ColorRange::Limited;
+
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
 // ===========================================================================
 // SanitizePresetConfig — countdown
 // ===========================================================================

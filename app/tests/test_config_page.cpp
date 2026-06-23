@@ -2258,5 +2258,43 @@ TEST_F(ConfigPageTest, S7_CodecChangeToH264_ResetsTenBitToEight) {
     EXPECT_EQ(depth->currentData().toInt(), static_cast<int>(capability::BitDepth::Bit8));
 }
 
+// Colour range (0.7.0): the combo exists with Full / Limited items and defaults to Full.
+TEST_F(ConfigPageTest, ColorRangeControl_ExistsWithFullAndLimited) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* range = page.findChild<QComboBox*>(QStringLiteral("videoColorRangeCombo"));
+    ASSERT_NE(range, nullptr);
+    EXPECT_GE(range->findData(static_cast<int>(capability::ColorRange::Full)), 0);
+    EXPECT_GE(range->findData(static_cast<int>(capability::ColorRange::Limited)), 0);
+    // Default is Full.
+    EXPECT_EQ(range->currentData().toInt(), static_cast<int>(capability::ColorRange::Full));
+}
+
+// Selecting Limited emits the colour range in the model; it is never codec-gated
+// (works for H.264, which cannot take 10-bit).
+TEST_F(ConfigPageTest, ColorRange_SelectingLimited_EmitsModel_NotGated) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    OutputSettingsModel emitted = output_defaults_;
+    QObject::connect(&page, &ConfigPage::formatSettingsChanged, &page,
+                     [&emitted](const OutputSettingsModel& s) { emitted = s; });
+
+    auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
+    auto* range = page.findChild<QComboBox*>(QStringLiteral("videoColorRangeCombo"));
+    ASSERT_NE(codec, nullptr);
+    ASSERT_NE(range, nullptr);
+
+    // Even with H.264 (no 10-bit), colour range remains fully selectable.
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    range->setCurrentIndex(range->findData(static_cast<int>(capability::ColorRange::Limited)));
+    EXPECT_EQ(emitted.color_range, capability::ColorRange::Limited);
+    EXPECT_TRUE(range->isEnabled());
+
+    // Back to Full.
+    range->setCurrentIndex(range->findData(static_cast<int>(capability::ColorRange::Full)));
+    EXPECT_EQ(emitted.color_range, capability::ColorRange::Full);
+}
+
 } // namespace
 } // namespace exosnap

@@ -1744,6 +1744,10 @@ void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings
         output_settings_.bit_depth = capability::BitDepth::Bit8;
     }
     resolved_user_config_.bit_depth = output_settings_.bit_depth;
+    // Colour range (0.7.0): always valid for every codec/container, so it flows
+    // straight through (no reconcile) to UserRecorderConfig.color_range and on to
+    // the engine's ColorMetadata.range.
+    resolved_user_config_.color_range = output_settings_.color_range;
     ApplyOutputSettingsToUserConfig(resolved_user_config_, output_settings_);
 
     // Translate the UI split policy into the engine settings applied at start.

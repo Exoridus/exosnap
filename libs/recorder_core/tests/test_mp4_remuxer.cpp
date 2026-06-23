@@ -45,6 +45,7 @@ static inline const char* av_err2str_cpp_test(int errnum) noexcept {
 namespace {
 
 using recorder_core::ColorMetadata;
+using recorder_core::ColorRange;
 using recorder_core::MatroskaStreamConfig;
 using recorder_core::MatroskaStreamWriter;
 using recorder_core::MuxPacket;
@@ -487,40 +488,65 @@ static std::string BuildTestMkvWithColor(const std::string& path, const ColorMet
 }
 
 // ---------------------------------------------------------------------------
-// Test 6: MP4 color tags — remuxed MP4 carries BT.709 limited-range color
-//         description (colr box) when the source MKV has KaxVideoColour tags.
+// Test 6: MP4 color tags — the remuxer faithfully carries the source MKV's
+//         configured Y'CbCr range end-to-end (it is config-agnostic). A
+//         full-range tagged MKV (the 0.7.0 default) yields color_range=pc
+//         (AVCOL_RANGE_JPEG) in the MP4; a limited-range MKV yields
+//         color_range=tv (AVCOL_RANGE_MPEG). Primaries/transfer/matrix stay 709.
 // ---------------------------------------------------------------------------
 TEST_F(RemuxerTest, Mp4ColorTagsFromTaggedMkv) {
-    // Build a source MKV with explicit SDR BT.709 limited-range colour tags
-    // (the same values mux_thread emits for every real recording).
-    const ColorMetadata color = ColorMetadata::Sdr709();
-    ASSERT_FALSE(BuildTestMkvWithColor(mkv_path_, color).empty()) << "Failed to build colour-tagged MKV fixture";
+    struct Case {
+        ColorRange src_range;
+        AVColorRange expected;
+        const char* label;
+    };
+    const Case cases[] = {
+        {ColorRange::Full, AVCOL_RANGE_JPEG, "full"},       // 0.7.0 default — pc
+        {ColorRange::Limited, AVCOL_RANGE_MPEG, "limited"}, // tv
+    };
 
-    const auto result = RemuxToProgressiveMp4(mkv_path_, mp4_path_);
-    ASSERT_TRUE(result.success) << "Remux failed: " << result.message;
+    for (const auto& c : cases) {
+        std::error_code ec;
+        std::filesystem::remove(mkv_path_, ec);
+        std::filesystem::remove(mp4_path_, ec);
 
-    // Re-open the output MP4 and inspect the video stream codec parameters.
-    AVFormatContext* ctx = nullptr;
-    ASSERT_EQ(avformat_open_input(&ctx, mp4_path_.c_str(), nullptr, nullptr), 0);
-    ASSERT_EQ(avformat_find_stream_info(ctx, nullptr) >= 0, true);
+        // Build a source MKV with explicit SDR BT.709 colour tags in the requested
+        // range (the same values mux_thread emits for every real recording).
+        ColorMetadata color = ColorMetadata::Sdr709();
+        color.range = c.src_range;
+        ASSERT_FALSE(BuildTestMkvWithColor(mkv_path_, color).empty())
+            << "Failed to build colour-tagged MKV fixture (" << c.label << ")";
 
-    AVStream* video_st = FindVideoStream(ctx);
-    ASSERT_NE(video_st, nullptr) << "No video stream in remuxed MP4";
+        const auto result = RemuxToProgressiveMp4(mkv_path_, mp4_path_);
+        ASSERT_TRUE(result.success) << "Remux failed (" << c.label << "): " << result.message;
 
-    // avcodec_parameters_copy propagates the color fields from the input MKV's
-    // demuxed codecpar; the mp4_remuxer additionally applies a BT.709 fallback
-    // for any UNSPECIFIED field. Either way the output must be explicitly tagged.
-    EXPECT_EQ(video_st->codecpar->color_primaries, AVCOL_PRI_BT709)
-        << "Expected AVCOL_PRI_BT709 (1) in MP4 output; got " << static_cast<int>(video_st->codecpar->color_primaries);
-    EXPECT_EQ(video_st->codecpar->color_trc, AVCOL_TRC_BT709)
-        << "Expected AVCOL_TRC_BT709 (1) in MP4 output; got " << static_cast<int>(video_st->codecpar->color_trc);
-    EXPECT_EQ(video_st->codecpar->color_space, AVCOL_SPC_BT709)
-        << "Expected AVCOL_SPC_BT709 (1) in MP4 output; got " << static_cast<int>(video_st->codecpar->color_space);
-    // AVCOL_RANGE_MPEG = 1 = limited/studio (the default SDR broadcast range).
-    EXPECT_EQ(video_st->codecpar->color_range, AVCOL_RANGE_MPEG)
-        << "Expected AVCOL_RANGE_MPEG (1) in MP4 output; got " << static_cast<int>(video_st->codecpar->color_range);
+        // Re-open the output MP4 and inspect the video stream codec parameters.
+        AVFormatContext* ctx = nullptr;
+        ASSERT_EQ(avformat_open_input(&ctx, mp4_path_.c_str(), nullptr, nullptr), 0);
+        ASSERT_EQ(avformat_find_stream_info(ctx, nullptr) >= 0, true);
 
-    avformat_close_input(&ctx);
+        AVStream* video_st = FindVideoStream(ctx);
+        ASSERT_NE(video_st, nullptr) << "No video stream in remuxed MP4 (" << c.label << ")";
+
+        // avcodec_parameters_copy propagates the color fields from the input MKV's
+        // demuxed codecpar; the mp4_remuxer additionally applies a BT.709 fallback
+        // for any UNSPECIFIED field. Either way the output must be explicitly tagged.
+        EXPECT_EQ(video_st->codecpar->color_primaries, AVCOL_PRI_BT709)
+            << "Expected AVCOL_PRI_BT709 (1) in MP4 output; got "
+            << static_cast<int>(video_st->codecpar->color_primaries);
+        EXPECT_EQ(video_st->codecpar->color_trc, AVCOL_TRC_BT709)
+            << "Expected AVCOL_TRC_BT709 (1) in MP4 output; got " << static_cast<int>(video_st->codecpar->color_trc);
+        EXPECT_EQ(video_st->codecpar->color_space, AVCOL_SPC_BT709)
+            << "Expected AVCOL_SPC_BT709 (1) in MP4 output; got " << static_cast<int>(video_st->codecpar->color_space);
+        // The configured range must survive the round-trip unchanged — the
+        // UNSPECIFIED→MPEG fallback only fires for untagged inputs, never overriding
+        // an explicit full-range tag.
+        EXPECT_EQ(video_st->codecpar->color_range, c.expected)
+            << "Range " << c.label << ": expected " << static_cast<int>(c.expected) << " in MP4 output; got "
+            << static_cast<int>(video_st->codecpar->color_range);
+
+        avformat_close_input(&ctx);
+    }
 }
 
 // ---------------------------------------------------------------------------

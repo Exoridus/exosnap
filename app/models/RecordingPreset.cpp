@@ -454,6 +454,9 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     if (a.output.bit_depth != b.output.bit_depth) {
         return false;
     }
+    if (a.output.color_range != b.output.color_range) {
+        return false;
+    }
     if (a.output.audio_codec != b.output.audio_codec) {
         return false;
     }
@@ -703,6 +706,9 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (a.output.bit_depth != b.output.bit_depth) {
+        return false;
+    }
+    if (a.output.color_range != b.output.color_range) {
         return false;
     }
     if (a.output.audio_codec != b.output.audio_codec) {

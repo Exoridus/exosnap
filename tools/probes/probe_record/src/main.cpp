@@ -11,6 +11,7 @@
 //   --vcodec  av1|h264|hevc
 //   --acodec  opus|aac|pcm|flac|none
 //   --bitdepth 8|10        encoder bit depth (default 8; 10 = HEVC Main10 / AV1 10-bit, P010)
+//   --range   full|limited Y'CbCr quantization range (default full = 0-255; limited = 16-235)
 //   --seconds <N>          recording duration (default 4)
 //   --out     <path>       output file (default: %TEMP%\probe_<combo>.<ext>)
 //
@@ -95,7 +96,7 @@ int main(int argc, char* argv[]) {
     // EnumerateTargets() and any main-thread COM use are safe.
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 
-    std::string container_s = "mkv", vcodec_s = "av1", acodec_s = "opus", out_s;
+    std::string container_s = "mkv", vcodec_s = "av1", acodec_s = "opus", out_s, range_s = "full";
     int seconds = 4;
     int bitdepth = 8;
     size_t target_idx = 0;
@@ -110,6 +111,7 @@ int main(int argc, char* argv[]) {
         else if (a == "--acodec") acodec_s = next();
         else if (a == "--seconds") seconds = std::atoi(next().c_str());
         else if (a == "--bitdepth") bitdepth = std::atoi(next().c_str());
+        else if (a == "--range") range_s = next();
         else if (a == "--target") target_idx = static_cast<size_t>(std::atoi(next().c_str()));
         else if (a == "--out") out_s = next();
         else { fprintf(stderr, "[probe_record] unknown arg: %s\n", a.c_str()); return 64; }
@@ -167,6 +169,14 @@ int main(int argc, char* argv[]) {
     cfg.audio_codec = acodec;
     cfg.record_audio = record_audio;
     cfg.bit_depth = (bitdepth == 10) ? BitDepth::Bit10 : BitDepth::Bit8;
+    if (range_s == "limited" || range_s == "tv") {
+        cfg.color.range = ColorRange::Limited;
+    } else if (range_s == "full" || range_s == "pc") {
+        cfg.color.range = ColorRange::Full; // engine default
+    } else {
+        fprintf(stderr, "[probe_record] ERROR: bad --range (use full|limited)\n");
+        return 64;
+    }
     cfg.frame_rate_num = 60;
     cfg.frame_rate_den = 1;
     cfg.cfr = true;

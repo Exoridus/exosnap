@@ -16,7 +16,7 @@ namespace exosnap {
 // ---------------------------------------------------------------------------
 // Schema version — bump when the persisted format changes incompatibly.
 // ---------------------------------------------------------------------------
-inline constexpr int kPresetSchemaVersion = 17;
+inline constexpr int kPresetSchemaVersion = 18;
 
 // Default PiP inset (bottom-right corner), as a fraction of the frame edge.
 inline constexpr float kDefaultPipInsetNorm = 0.03f;

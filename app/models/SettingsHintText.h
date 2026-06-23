@@ -72,6 +72,9 @@ inline const QString kRnnoise = QStringLiteral("Neural-network noise suppression
 inline const QString kVideoCodec = QStringLiteral("Video compression codec for this recording");
 inline const QString kVideoBitDepth =
     QStringLiteral("8-bit is universal \xC2\xB7 10-bit needs HEVC or AV1 (smoother gradients, larger files)");
+inline const QString kVideoColorRange =
+    QStringLiteral("Full = native screen precision, best for direct playback \xC2\xB7 Limited = broadcast "
+                   "standard, safest for editors/players that ignore the range flag");
 inline const QString kFrameTiming =
     QStringLiteral("CFR = constant frame rate for editor compatibility \xC2\xB7 VFR = variable");
 

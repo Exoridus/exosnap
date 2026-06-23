@@ -225,6 +225,61 @@ TEST(RecordingPresetStore, VideoBitDepthPersists_DefaultEightBit) {
 }
 
 // ===========================================================================
+// Colour range persists (0.7.0, schema 18)
+// ===========================================================================
+
+// Default preset round-trips as Full range (the 0.7.0 default).
+TEST(RecordingPresetStore, ColorRangePersists_DefaultFull) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Default range";
+    p.config = MakeDefaultPreset().config; // Full by default
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.output.color_range, capability::ColorRange::Full);
+    }
+
+    CleanupFile(path);
+}
+
+// An explicit Limited selection survives the TOML round-trip (and schema is 18).
+TEST(RecordingPresetStore, ColorRangePersists_Limited) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Limited range";
+    p.config = MakeDefaultPreset().config;
+    p.config.output.color_range = capability::ColorRange::Limited;
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.output.color_range, capability::ColorRange::Limited);
+    }
+
+    CleanupFile(path);
+}
+
+// ===========================================================================
 // Frame rate persists
 // ===========================================================================
 

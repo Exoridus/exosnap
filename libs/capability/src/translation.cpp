@@ -93,6 +93,11 @@ recorder_core::RecorderConfig ToRecorderCoreConfig(const UserRecorderConfig& con
     core_config.chroma = recorder_core::ChromaSubsampling::Cs420;
     core_config.bit_depth =
         (final_config.bit_depth == BitDepth::Bit10) ? recorder_core::BitDepth::Bit10 : recorder_core::BitDepth::Bit8;
+    // Colour range (0.7.0): always valid for every codec/container, so it is NOT
+    // part of the combo allow-list above — just carry it through to the engine.
+    // Primaries/transfer/matrix stay BT.709 SDR (the ColorMetadata defaults).
+    core_config.color.range = (final_config.color_range == ColorRange::Limited) ? recorder_core::ColorRange::Limited
+                                                                                : recorder_core::ColorRange::Full;
     core_config.frame_rate_num = final_config.frame_rate_num;
     core_config.frame_rate_den = final_config.frame_rate_den;
     core_config.output_width = final_config.output_width;
