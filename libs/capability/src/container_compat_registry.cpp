@@ -64,10 +64,11 @@ std::string_view ToString(ContainerCompatLevel level) noexcept {
 //                                               until a broadly-compatible sample-entry
 //                                               mapping is validated; ADR 0030)
 //   MP4  | H.264        | FLAC  → Experimental (FLAC-in-MP4 not specified here)
-//   MP4  | HEVC         | AAC   → Experimental (not implemented; hvc1/hev1 open)
+//   MP4  | HEVC         | AAC   → Allowed      (0.7.0: HEVC via transient MKV, remuxed to MP4 with
+//                                               the 'hvc1' sample-entry FourCC; Apple/NLE-compatible)
 //   MP4  | HEVC         | Opus  → Prohibited   (Opus-in-MP4 is Prohibited)
-//   MP4  | HEVC         | PCM   → Experimental (not implemented)
-//   MP4  | HEVC         | FLAC  → Experimental (not implemented)
+//   MP4  | HEVC         | PCM   → Experimental (MP4 audio is AAC-only)
+//   MP4  | HEVC         | FLAC  → Experimental (MP4 audio is AAC-only)
 //   MP4  | AV1          | AAC   → Experimental (deferred; AV1-in-MP4 not validated)
 //   MP4  | AV1          | Opus  → Prohibited   (Opus-in-MP4 is Prohibited)
 //   MP4  | AV1          | PCM   → Experimental (not implemented)
@@ -92,7 +93,10 @@ std::string_view ToString(ContainerCompatLevel level) noexcept {
 //     working combo); no rewrite to AAC occurs any more.
 //   - MKV + HEVC entries are promoted to Allowed in 0.7.0 (hvcC codec-private +
 //     length-prefixed sample conversion implemented; V_MPEGH/ISO/HEVC codec ID).
-//     MP4 + HEVC remains Experimental (hvc1/hev1 tag choice unresolved, follow-up slice).
+//   - MP4 + HEVC + AAC is promoted to Allowed in 0.7.0: the engine records HEVC to a
+//     transient MKV (hvcC) and the remuxer stream-copies it to MP4 with the 'hvc1'
+//     FourCC (out-of-band parameter sets) for Apple/QuickTime/NLE compatibility
+//     (ADR 0014). MP4 + HEVC + PCM/FLAC stay Experimental — MP4 audio is AAC-only.
 // ---------------------------------------------------------------------------
 
 ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCodec video, AudioCodec audio) noexcept {
@@ -174,12 +178,16 @@ ContainerCompatEntry ContainerCompatRegistry::Query(Container container, VideoCo
         }
         if (video == VideoCodec::HevcNvenc) {
             if (audio == AudioCodec::AacMf)
-                return {ContainerCompatLevel::Experimental,
-                        "MP4 + HEVC + AAC: not implemented; hvc1/hev1 codec-tag choice unresolved (ADR 0010)."};
+                return {ContainerCompatLevel::Allowed,
+                        "MP4 + HEVC + AAC: HEVC recorded to a transient MKV and remuxed to MP4 with the "
+                        "'hvc1' sample-entry FourCC (parameter sets out-of-band in hvcC) for Apple/QuickTime/"
+                        "NLE compatibility. Implemented in 0.7.0 (ADR 0010/0014)."};
             if (audio == AudioCodec::Pcm)
-                return {ContainerCompatLevel::Experimental, "MP4 + HEVC + PCM: not implemented."};
+                return {ContainerCompatLevel::Experimental,
+                        "MP4 + HEVC + PCM: not implemented (MP4 audio is AAC-only)."};
             if (audio == AudioCodec::Flac)
-                return {ContainerCompatLevel::Experimental, "MP4 + HEVC + FLAC: not implemented."};
+                return {ContainerCompatLevel::Experimental,
+                        "MP4 + HEVC + FLAC: not implemented (MP4 audio is AAC-only)."};
         }
         if (video == VideoCodec::Av1Nvenc) {
             if (audio == AudioCodec::AacMf)

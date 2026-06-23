@@ -220,10 +220,11 @@ TEST(WebMContainerValidationTest, Validate_RejectsMp4Flac) {
     EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
 }
 
-// --- HEVC (0.7.0): Matroska V_MPEGH/ISO/HEVC ---
+// --- HEVC (0.7.0): Matroska V_MPEGH/ISO/HEVC + MP4 hvc1 ---
 // The container compat registry lists MKV + HEVC + {Opus, AAC, PCM, FLAC} as
-// Allowed; Validate must accept these end-to-end. MP4 + HEVC stays Experimental
-// (hvc1/hev1 tag choice unresolved) and must be rejected.
+// Allowed; Validate must accept these end-to-end. MP4 + HEVC + AAC is also Allowed
+// (transient MKV remuxed to MP4 with the 'hvc1' FourCC); MP4 audio is AAC-only, so
+// MP4 + HEVC + {Opus, PCM, FLAC} must be rejected, and WebM + HEVC stays rejected.
 
 TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevcOpus) {
     RecorderSession session;
@@ -269,15 +270,54 @@ TEST(WebMContainerValidationTest, Validate_AcceptsMatroskaHevcFlac) {
     EXPECT_TRUE(result.succeeded);
 }
 
-TEST(WebMContainerValidationTest, Validate_RejectsMp4Hevc) {
-    RecorderSession session;
+// Helper: a minimal MP4 + HEVC config (audio codec set by the caller).
+static RecorderConfig MakeMp4HevcConfig(AudioCodec audio) {
     RecorderConfig cfg{};
     cfg.output_path = std::filesystem::current_path() / "test_mp4_hevc.mp4";
     cfg.target.kind = CaptureTarget::Kind::Monitor;
     cfg.target.native_id = 1;
     cfg.container = Container::Mp4;
     cfg.video_codec = VideoCodec::HevcNvenc;
-    cfg.audio_codec = AudioCodec::AacMf;
+    cfg.audio_codec = audio;
+    return cfg;
+}
+
+TEST(WebMContainerValidationTest, Validate_AcceptsMp4HevcAac) {
+    // 0.7.0 hvc1-in-MP4: HEVC recorded to a transient MKV, remuxed to MP4 with the
+    // 'hvc1' sample-entry FourCC. AAC is the only MP4 audio codec, so this is the
+    // sole valid MP4 + HEVC combination.
+    RecorderSession session;
+    RecorderConfig cfg = MakeMp4HevcConfig(AudioCodec::AacMf);
+
+    RecorderResult result{};
+    EXPECT_TRUE(session.Validate(cfg, &result));
+    EXPECT_TRUE(result.succeeded);
+}
+
+TEST(WebMContainerValidationTest, Validate_RejectsMp4HevcOpus) {
+    // Opus-in-MP4 is Prohibited regardless of the video codec.
+    RecorderSession session;
+    RecorderConfig cfg = MakeMp4HevcConfig(AudioCodec::Opus);
+
+    RecorderResult result{};
+    EXPECT_FALSE(session.Validate(cfg, &result));
+    EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
+}
+
+TEST(WebMContainerValidationTest, Validate_RejectsMp4HevcPcm) {
+    // MP4 audio is AAC-only; PCM (ipcm) stays Experimental.
+    RecorderSession session;
+    RecorderConfig cfg = MakeMp4HevcConfig(AudioCodec::Pcm);
+
+    RecorderResult result{};
+    EXPECT_FALSE(session.Validate(cfg, &result));
+    EXPECT_EQ(result.error_phase, ErrorPhase::Prepare);
+}
+
+TEST(WebMContainerValidationTest, Validate_RejectsMp4HevcFlac) {
+    // MP4 audio is AAC-only; FLAC-in-MP4 stays Experimental.
+    RecorderSession session;
+    RecorderConfig cfg = MakeMp4HevcConfig(AudioCodec::Flac);
 
     RecorderResult result{};
     EXPECT_FALSE(session.Validate(cfg, &result));

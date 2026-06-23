@@ -39,8 +39,20 @@ gates promotion to `Recommended`/`Available`. The `HevcNvenc` video dimension is
 `CapabilityBuilder` downgrades it to `NotImplemented` when NVENC is absent, exactly like AV1/H.264.
 `ReconcileCodecs()` / `SanitizePresetConfig()` therefore **preserve** MKV + HEVC presets unchanged,
 replacing the former ad-hoc fall-through to AV1 + Opus (which existed only while no HEVC entry was
-`Allowed`). **MP4 + HEVC remains `Experimental`** pending the `hvc1` codec-tag verification (see
-the `hvc1`/`hev1` note below — a separate 0.7.0 remux slice).
+`Allowed`).
+
+**HEVC in MP4 (0.7.0 — implemented):** MKV + HEVC `Allowed` is now joined by **MP4 + HEVC + AAC**,
+also `Allowed` (→ `ValidUnvalidated`). Because MP4 is delivered via remux-on-stop (ADR 0014), the
+engine records HEVC to the transient MKV (the `hvcC` path above) and the remuxer stream-copies it to
+MP4, setting `codec_tag = MKTAG('h','v','c','1')` on the video stream so the output carries the
+**`hvc1`** sample-entry FourCC (parameter sets out-of-band in `hvcC`) rather than libavformat's
+default **`hev1`**, which QuickTime/Apple devices and several NLEs refuse. MP4 audio stays AAC-only,
+so MP4 + HEVC + (Opus | PCM | FLAC) remain non-selectable (Opus `Prohibited`; PCM/FLAC `Experimental`).
+Like MKV + HEVC, the combo is `ValidUnvalidated` until a live GPU smoke + real-file check
+(ffprobe / Bento4 / MP4Box, incl. QuickTime playback) gates promotion to `Recommended`. Known caveat
+to verify there: NVENC is configured without `repeatSPSPPS`, so parameter sets appear in-band only
+in the first sample; strict `hvc1` forbids in-band parameter sets, but common players tolerate the
+redundancy — if the real-file check flags it, a follow-up adds an in-band-PS strip during remux.
 
 **Policy correction (MKV + H.264 + Opus):** This combination was initially classified
 `Prohibited` in the first registry implementation. That was incorrect: Matroska carries Opus
@@ -133,10 +145,11 @@ a real player matrix is validated.
 
 **`hvc1` vs `hev1` for HEVC in MP4:** These two four-character codes differ in where parameter
 sets are stored (`hvc1` = in `hvcC` box; `hev1` = in-band). Apple/QuickTime requires `hvc1` for
-hardware-accelerated playback. The correct variant must be verified on real files via `ffprobe`
-or Bento4/MP4Box in the 0.7.0 HEVC/HDR slice (via the libavformat remux path; see ADR 0014).
-The registry must not mark HEVC-in-MP4 as
-`Recommended` until this is confirmed.
+hardware-accelerated playback. **Resolved (0.7.0):** the remux path sets
+`codec_tag = MKTAG('h','v','c','1')` on the HEVC video stream (ADR 0014), so the registry now
+classifies MP4 + HEVC + AAC as `Allowed` (→ `ValidUnvalidated`). It must not be promoted to
+`Recommended` until the variant is confirmed on real files (`ffprobe` / Bento4 / MP4Box + QuickTime
+playback) on NVIDIA hardware — the same GPU-smoke gate as every other 0.7.0 HEVC combo.
 
 ### Compatibility classification
 
@@ -162,7 +175,8 @@ tested at scale) or `Allowed` (works with known caveats, warning shown in UI).
 - The UI pickers are generated from registry queries; per-page hardcoded lists are removed.
 - `RecordingPreset` reconciliation calls the registry to validate loaded presets; invalid
   combinations are corrected to the nearest allowed combination on load.
-- The `hvc1`/`hev1` and PCM-in-MP4 questions are blocking items before those combinations can
-  be marked `Recommended` or `Allowed`.
+- The `hvc1`/`hev1` question is **resolved** (0.7.0): HEVC-in-MP4 is tagged `hvc1` and marked
+  `Allowed` (→ `ValidUnvalidated`); promotion to `Recommended` still awaits real-file verification.
+  PCM-in-MP4 remains a blocking item before it can be marked `Allowed`.
 - The registry is a pure value-model component with no Qt or UI dependencies; it is testable
   without a running application.

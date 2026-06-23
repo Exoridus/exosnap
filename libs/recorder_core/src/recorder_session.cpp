@@ -163,8 +163,13 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
 
     // Video codec
     if (config.container == Container::Mp4) {
-        if (config.video_codec != VideoCodec::H264Nvenc) {
-            return fail(E_NOTIMPL, ErrorPhase::Prepare, "Container::Mp4 requires VideoCodec::H264Nvenc");
+        // MP4 video: H.264 (Recommended) or HEVC. HEVC is recorded to the transient
+        // MKV as V_MPEGH/ISO/HEVC and remuxed to MP4 with the 'hvc1' sample-entry
+        // FourCC (parameter sets out-of-band in hvcC) for Apple/QuickTime/NLE
+        // compatibility (0.7.0; container compat registry → Allowed, ADR 0010/0014).
+        if (config.video_codec != VideoCodec::H264Nvenc && config.video_codec != VideoCodec::HevcNvenc) {
+            return fail(E_NOTIMPL, ErrorPhase::Prepare,
+                        "Container::Mp4 requires VideoCodec::H264Nvenc or VideoCodec::HevcNvenc");
         }
     } else if (config.container == Container::WebM) {
         if (config.video_codec != VideoCodec::Av1Nvenc) {
@@ -174,7 +179,6 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         // Container::Matroska: AV1, H.264, and HEVC are supported. HEVC NVENC is
         // muxed as V_MPEGH/ISO/HEVC with an hvcC codec-private blob and
         // length-prefixed samples (0.7.0; container compat registry → Allowed).
-        // MP4 + HEVC remains Experimental (hvc1/hev1 tag choice unresolved).
         if (config.video_codec != VideoCodec::Av1Nvenc && config.video_codec != VideoCodec::H264Nvenc &&
             config.video_codec != VideoCodec::HevcNvenc) {
             return fail(E_NOTIMPL, ErrorPhase::Prepare,

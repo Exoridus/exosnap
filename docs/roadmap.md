@@ -185,8 +185,8 @@ These underpin multiple versions and must not be scattered into UI `if`-chains:
 `0.4.0` (crash reporting + updates), `0.5.0` (settings & media-capability) and `0.6.0` (**Audio v2**)
 have shipped. `0.7.0` finalizes the video/codec matrix: HEVC/AVC/AV1, 8-/10-bit, HDR10, color
 metadata, the P010 compositor path, `hvc1`, the MKV/MP4/WebM final matrix, and Apple/NLE tests.
-Color foundation (ADR 0032) and HEVC-in-MKV (ValidUnvalidated, ADR 0010) have landed; 10-bit/P010,
-HDR10, `hvc1`-in-MP4 and the Settings/preset UI remain, plus GPU/HDR verification.
+Color foundation (ADR 0032), HEVC-in-MKV and **`hvc1`-in-MP4** (both ValidUnvalidated, ADR 0010/0014)
+have landed; 10-bit/P010, HDR10 and the Settings/preset UI remain, plus GPU/HDR verification.
 
 ### v0.8.0 — Diagnostics as a feature *(next after 0.7.0; resequenced 2026-06)*
 

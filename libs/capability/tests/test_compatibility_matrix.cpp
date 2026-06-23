@@ -95,11 +95,12 @@ TEST(CapabilityMatrixTest, MP4_UnsupportedCombos_AreNotImplementedOrInvalid) {
                   .level,
               SupportLevel::NotImplemented);
 
-    // MP4 + HEVC + AAC: not implemented
+    // MP4 + HEVC + AAC: 0.7.0 hvc1-in-MP4 path — registry Allowed → ValidUnvalidated
+    // (selectable with caveat; Apple/NLE + GPU verification pending).
     EXPECT_EQ(caps.QueryCombo(Container::Mp4, VideoCodec::HevcNvenc, AudioCodec::AacMf, ChromaSubsampling::Cs420,
                               BitDepth::Bit8)
                   .level,
-              SupportLevel::NotImplemented);
+              SupportLevel::ValidUnvalidated);
 
     // MP4 + H.264 + Opus: invalid (Opus not valid for MP4)
     EXPECT_EQ(caps.QueryCombo(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::Opus, ChromaSubsampling::Cs420,

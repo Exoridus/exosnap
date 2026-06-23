@@ -113,9 +113,10 @@ TEST(ContainerCompatRegistry, Mp4_H264_Pcm_IsExperimental) {
     EXPECT_EQ(Level(Container::Mp4, VideoCodec::H264Nvenc, AudioCodec::Pcm), ContainerCompatLevel::Experimental);
 }
 
-TEST(ContainerCompatRegistry, Mp4_Hevc_Aac_IsExperimental) {
-    // hvc1/hev1 unresolved; not implemented.
-    EXPECT_EQ(Level(Container::Mp4, VideoCodec::HevcNvenc, AudioCodec::AacMf), ContainerCompatLevel::Experimental);
+TEST(ContainerCompatRegistry, Mp4_Hevc_Aac_IsAllowed) {
+    // 0.7.0: HEVC recorded to a transient MKV and remuxed to MP4 with the 'hvc1'
+    // sample-entry FourCC (out-of-band parameter sets) for Apple/NLE compatibility.
+    EXPECT_EQ(Level(Container::Mp4, VideoCodec::HevcNvenc, AudioCodec::AacMf), ContainerCompatLevel::Allowed);
 }
 
 TEST(ContainerCompatRegistry, Mp4_Hevc_Opus_IsProhibited) {

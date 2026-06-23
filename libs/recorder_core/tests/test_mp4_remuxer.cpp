@@ -63,6 +63,32 @@ std::vector<uint8_t> FakeH264Cp() {
     return {0x01, 0x42, 0x00, 0x1F, 0xFF, 0xE1, 0x00};
 }
 
+// Minimal structurally-valid HEVCDecoderConfigurationRecord (hvcC, ISO 14496-15).
+// configurationVersion=1 (byte 0) tells the mov muxer the extradata is already an
+// hvcC and it is copied verbatim into the hvc1 sample entry — no deep parse. The
+// 23-byte fixed header is followed by three single-NALU arrays (VPS/SPS/PPS) with
+// 2-byte stub NALs carrying the correct nal_unit_type in the header byte.
+std::vector<uint8_t> FakeHevcCp() {
+    return {
+        0x01,                                     // configurationVersion
+        0x01,                                     // profile_space(0)|tier(0)|profile_idc(1, Main)
+        0x60, 0x00, 0x00, 0x00,                   // general_profile_compatibility_flags
+        0x90, 0x00, 0x00, 0x00, 0x00, 0x00,       // general_constraint_indicator_flags (6 bytes)
+        0x5A,                                     // general_level_idc (level 9.0 — arbitrary stub)
+        0xF0, 0x00,                               // min_spatial_segmentation_idc
+        0xFC,                                     // parallelismType
+        0xFD,                                     // chroma_format_idc (4:2:0)
+        0xF8,                                     // bit_depth_luma_minus8 (8-bit)
+        0xF8,                                     // bit_depth_chroma_minus8 (8-bit)
+        0x00, 0x00,                               // avgFrameRate
+        0x0F,                                     // cfr(0)|numTemporalLayers(1)|nested(1)|lenSizeMinus1(3)
+        0x03,                                     // numOfArrays = 3
+        0xA0, 0x00, 0x01, 0x00, 0x02, 0x40, 0x01, // VPS array (nal_unit_type 32 → header 0x40)
+        0xA1, 0x00, 0x01, 0x00, 0x02, 0x42, 0x01, // SPS array (nal_unit_type 33 → header 0x42)
+        0xA2, 0x00, 0x01, 0x00, 0x02, 0x44, 0x01, // PPS array (nal_unit_type 34 → header 0x44)
+    };
+}
+
 // Valid 2-byte AudioSpecificConfig for AAC-LC 48 kHz stereo:
 //   Object type = 2 (AAC-LC)  → bits [0..4]: 00010
 //   Sampling freq index = 3 (48000 Hz) → bits [5..8]: 0011
@@ -107,6 +133,15 @@ MatroskaStreamConfig MakeConfig(const std::string& path, uint32_t audio_track_co
     for (uint32_t i = 0; i < audio_track_count; ++i) {
         c.audio_tracks[i].codec_private = ValidAacCp();
     }
+    return c;
+}
+
+// Same as MakeConfig but the video track is HEVC (V_MPEGH/ISO/HEVC + hvcC),
+// mirroring what mux_thread writes for a real HEVC recording.
+MatroskaStreamConfig MakeHevcConfig(const std::string& path) {
+    MatroskaStreamConfig c = MakeConfig(path);
+    c.video_codec_id = "V_MPEGH/ISO/HEVC";
+    c.video_codec_private = FakeHevcCp();
     return c;
 }
 
@@ -248,12 +283,25 @@ bool MoovBeforeMdat(const std::string& path) {
 // ---------------------------------------------------------------------------
 // Test fixture
 // ---------------------------------------------------------------------------
+
+// Build a temp path unique to the currently-running test. ctest runs each test
+// in its own process (a separate --gtest_filter invocation), so a fixed filename
+// collides between test processes that ctest -j schedules concurrently — both
+// open the same MKV/MP4 and race, producing flaky failures. Folding the test name
+// into the path makes them disjoint and the suite order/parallelism-independent.
+static std::string UniqueRemuxTempPath(const char* suffix) {
+    auto tmp = std::filesystem::temp_directory_path();
+    std::string name = "anon";
+    if (const ::testing::TestInfo* info = ::testing::UnitTest::GetInstance()->current_test_info())
+        name = info->name();
+    return (tmp / ("exosnap_remux_" + name + "_" + suffix)).string();
+}
+
 class RemuxerTest : public ::testing::Test {
   protected:
     void SetUp() override {
-        auto tmp = std::filesystem::temp_directory_path();
-        mkv_path_ = (tmp / "exosnap_remux_test_src.mkv").string();
-        mp4_path_ = (tmp / "exosnap_remux_test_out.mp4").string();
+        mkv_path_ = UniqueRemuxTempPath("src.mkv");
+        mp4_path_ = UniqueRemuxTempPath("out.mp4");
         std::remove(mkv_path_.c_str());
         std::remove(mp4_path_.c_str());
     }
@@ -523,15 +571,52 @@ TEST_F(RemuxerTest, Mp4ColorTagsFallbackWhenMkvUntagged) {
 }
 
 // ---------------------------------------------------------------------------
+// Test 8: HEVC-in-MP4 carries the 'hvc1' sample-entry FourCC (0.7.0, ADR 0014).
+//         A source MKV with a V_MPEGH/ISO/HEVC track (hvcC codec-private) must
+//         remux to an MP4 whose video stream is tagged 'hvc1' — NOT the libav
+//         default 'hev1', which QuickTime/Apple devices refuse. The hvc1 tag
+//         keeps parameter sets out-of-band in the hvcC box.
+// ---------------------------------------------------------------------------
+TEST_F(RemuxerTest, Mp4HevcTaggedHvc1) {
+    // Build a source MKV with a HEVC track.
+    {
+        MatroskaStreamWriter w;
+        auto cfg = MakeHevcConfig(mkv_path_);
+        ASSERT_TRUE(w.Open(cfg)) << "Failed to open HEVC MKV fixture";
+        FeedSeconds(w, 2.0, /*gop=*/60, /*payload=*/256);
+        ASSERT_TRUE(w.Finalize()) << "Failed to finalize HEVC MKV fixture";
+    }
+
+    const auto result = RemuxToProgressiveMp4(mkv_path_, mp4_path_);
+    ASSERT_TRUE(result.success) << "Remux failed: " << result.message << " (av_err=" << result.av_error_code << ")";
+
+    AVFormatContext* ctx = nullptr;
+    ASSERT_EQ(avformat_open_input(&ctx, mp4_path_.c_str(), nullptr, nullptr), 0);
+    ASSERT_GE(avformat_find_stream_info(ctx, nullptr), 0);
+
+    AVStream* video_st = FindVideoStream(ctx);
+    ASSERT_NE(video_st, nullptr) << "No video stream in remuxed MP4";
+
+    EXPECT_EQ(video_st->codecpar->codec_id, AV_CODEC_ID_HEVC) << "Remuxed video stream is not HEVC";
+
+    const unsigned hvc1 = MKTAG('h', 'v', 'c', '1');
+    const unsigned hev1 = MKTAG('h', 'e', 'v', '1');
+    EXPECT_EQ(video_st->codecpar->codec_tag, hvc1)
+        << "Expected 'hvc1' FourCC (" << hvc1 << "); got " << video_st->codecpar->codec_tag
+        << (video_st->codecpar->codec_tag == hev1 ? " ('hev1' — libav default; Apple-incompatible)" : "");
+
+    avformat_close_input(&ctx);
+}
+
+// ---------------------------------------------------------------------------
 // RemuxToMkv tests — output opens, duration plausible, streams intact, cancel.
 // ---------------------------------------------------------------------------
 
 class MkvRemuxerTest : public ::testing::Test {
   protected:
     void SetUp() override {
-        auto tmp = std::filesystem::temp_directory_path();
-        src_mkv_path_ = (tmp / "exosnap_mkv_remux_src.mkv").string();
-        out_mkv_path_ = (tmp / "exosnap_mkv_remux_out.mkv").string();
+        src_mkv_path_ = UniqueRemuxTempPath("mkvsrc.mkv");
+        out_mkv_path_ = UniqueRemuxTempPath("mkvout.mkv");
         std::remove(src_mkv_path_.c_str());
         std::remove(out_mkv_path_.c_str());
     }
