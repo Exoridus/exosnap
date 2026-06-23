@@ -246,6 +246,12 @@ void VideoThread::Run() {
     winrt::com_ptr<ID3D11DeviceContext> d3dContext;
     winrt::com_ptr<ID3D11VideoDevice> videoDevice;
     winrt::com_ptr<ID3D11VideoContext> videoContext;
+    // Optional newer interface: VideoProcessorSet{Stream,Output}ColorSpace1 takes
+    // explicit DXGI_COLOR_SPACE_TYPE enums, which drivers honour for the YUV
+    // quantization range. The legacy D3D11_VIDEO_PROCESSOR_COLOR_SPACE.Nominal_Range
+    // is widely ignored on output (NVIDIA included), so the studio-range request was
+    // silently dropped and full-range YUV was tagged as limited (washed-out / dark).
+    winrt::com_ptr<ID3D11VideoContext1> videoContext1;
 
     {
         D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
@@ -290,6 +296,8 @@ void VideoThread::Run() {
                 CoUninitialize();
             return;
         }
+        // Optional — present on all Windows 10+; failure is non-fatal (legacy path).
+        videoContext->QueryInterface(IID_PPV_ARGS(videoContext1.put()));
     }
 
     bool windowHandleValid = false;
@@ -643,17 +651,31 @@ void VideoThread::Run() {
         // BT.709 — the SDR HD standard the Matroska Colour element is tagged
         // with (see color_metadata.h / RecorderConfig::color). Input and output
         // ranges therefore agree, so there is no black-level mismatch.
-        D3D11_VIDEO_PROCESSOR_COLOR_SPACE inputColorSpace{};
-        inputColorSpace.Usage = 0;     // 0 = playback (full-precision conversion)
-        inputColorSpace.RGB_Range = 0; // 0 = full-range RGB (0-255)
-        inputColorSpace.Nominal_Range = D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255;
-        videoContext->VideoProcessorSetStreamColorSpace(videoProcessor.get(), 0, &inputColorSpace);
+        if (videoContext1) {
+            // Preferred path: explicit DXGI colour spaces. Input is the desktop's
+            // full-range BT.709 RGB; output is studio (limited 16-235) BT.709 YUV.
+            // Drivers honour the quantization range here, so the encoded NV12/P010
+            // is genuinely limited-range and matches the limited tag the container
+            // carries (ADR 0032) — no full-vs-limited mismatch, no crushed shadows.
+            videoContext1->VideoProcessorSetStreamColorSpace1(videoProcessor.get(), 0,
+                                                              DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+            videoContext1->VideoProcessorSetOutputColorSpace1(videoProcessor.get(),
+                                                              DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
+        } else {
+            // Legacy fallback (pre-Win10 / no ID3D11VideoContext1). The output
+            // Nominal_Range is widely ignored here, so the result may be full-range.
+            D3D11_VIDEO_PROCESSOR_COLOR_SPACE inputColorSpace{};
+            inputColorSpace.Usage = 0;     // 0 = playback (full-precision conversion)
+            inputColorSpace.RGB_Range = 0; // 0 = full-range RGB (0-255)
+            inputColorSpace.Nominal_Range = D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255;
+            videoContext->VideoProcessorSetStreamColorSpace(videoProcessor.get(), 0, &inputColorSpace);
 
-        D3D11_VIDEO_PROCESSOR_COLOR_SPACE outputColorSpace{};
-        outputColorSpace.Usage = 0;
-        outputColorSpace.YCbCr_Matrix = 1;                                           // 1 = BT.709
-        outputColorSpace.Nominal_Range = D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235; // studio/limited
-        videoContext->VideoProcessorSetOutputColorSpace(videoProcessor.get(), &outputColorSpace);
+            D3D11_VIDEO_PROCESSOR_COLOR_SPACE outputColorSpace{};
+            outputColorSpace.Usage = 0;
+            outputColorSpace.YCbCr_Matrix = 1;                                           // 1 = BT.709
+            outputColorSpace.Nominal_Range = D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235; // studio/limited
+            videoContext->VideoProcessorSetOutputColorSpace(videoProcessor.get(), &outputColorSpace);
+        }
 
         const RECT targetRect = {0, 0, static_cast<LONG>(encodeWidth), static_cast<LONG>(encodeHeight)};
         videoContext->VideoProcessorSetOutputTargetRect(videoProcessor.get(), TRUE, &targetRect);
