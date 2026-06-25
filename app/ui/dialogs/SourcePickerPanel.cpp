@@ -729,6 +729,12 @@ void SourcePickerPanel::rebuildOptionCardsForSection(Section section) {
                     setActiveSection(section);
                     refreshSelectionVisuals();
                     updateSummaryLabel();
+                    // A single click on a screen/window source commits immediately and
+                    // returns to the preview — no separate "Use selected source" step.
+                    // Unavailable sources fail hasValidSelection() and stay put.
+                    if (hasValidSelection()) {
+                        emit accepted();
+                    }
                 });
     }
 
@@ -823,6 +829,12 @@ void SourcePickerPanel::setActiveSection(Section section) {
 
     if (refresh_button_) {
         refresh_button_->setEnabled(section != Section::Region);
+    }
+    // Screens/Windows commit on a single card click, so the explicit
+    // "Use selected source" button is only needed for the Region section
+    // (which is a multi-step config: pick a preset / draw / defer to record).
+    if (use_button_) {
+        use_button_->setVisible(section == Section::Region);
     }
     if (section != Section::Region && isVisible()) {
         requestThumbnailsForSection(section);
