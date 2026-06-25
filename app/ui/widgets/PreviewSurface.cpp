@@ -17,6 +17,7 @@
 #include <QPainterPath>
 #include <QPen>
 #include <QResizeEvent>
+#include <QSvgRenderer>
 #include <QVBoxLayout>
 #include <QWindow>
 
@@ -1011,52 +1012,23 @@ void PreviewSurface::keyReleaseEvent(QKeyEvent* event) {
 
 void PreviewSurface::paintBrandPlaceholder(QPainter& painter, const QRectF& frame_rect) {
     const auto& t = theme::ActiveTheme();
-    const QColor accent(QString::fromUtf8(t.ac)); // Studio Mint
-    const QColor ink(QString::fromUtf8(t.ink));   // neutral light ("exo")
-    const QColor dim(QString::fromUtf8(t.dim));   // hint
+    const QColor dim(QString::fromUtf8(t.dim)); // hint
 
-    // Aperture box size scales with the panel; the lockup mirrors the title bar
-    // (aperture mark + two-tone "exosnap"), centred, with a quiet hint below.
-    const qreal A = std::clamp(frame_rect.height() * 0.11, 36.0, 56.0);
-    const qreal gap = A * 0.36;
-
-    QFont wf = font();
-    wf.setPixelSize(qRound(A * 0.84));
-    wf.setWeight(QFont::DemiBold);
-    const QFontMetricsF fm(wf);
-    const qreal exoW = fm.horizontalAdvance(QStringLiteral("exo"));
-    const qreal snapW = fm.horizontalAdvance(QStringLiteral("snap"));
-    const qreal groupW = A + gap + exoW + snapW;
-
+    // Lockup scales with the panel: the canonical aperture mark + two-tone
+    // "exosnap" wordmark, drawn from the brand SVG (single source of truth — no
+    // hand-rendered text), centred, with a quiet hint below.
+    const qreal A = std::clamp(frame_rect.height() * 0.12, 38.0, 60.0);
     const qreal cx = frame_rect.center().x();
     const qreal cy = frame_rect.center().y();
-    const qreal startX = cx - groupW / 2.0;
 
-    // Aperture: BrandMarkWidget geometry on a 32-unit design grid.
-    painter.save();
-    painter.translate(startX, cy - A / 2.0);
-    painter.scale(A / 32.0, A / 32.0);
-    const QPointF c(16.0, 16.0);
-    QColor outer = accent;
-    outer.setAlphaF(0.45f);
-    painter.setPen(QPen(outer, 1.5));
-    painter.setBrush(Qt::NoBrush);
-    painter.drawEllipse(c, 14.5, 14.5);
-    painter.setPen(QPen(accent, 1.6));
-    painter.drawEllipse(c, 6.2, 6.2);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(accent);
-    painter.drawEllipse(c, 2.4, 2.4);
-    painter.restore();
-
-    // Two-tone wordmark: "exo" neutral + "snap" accent (matches refreshBrand()).
-    painter.setFont(wf);
-    const qreal textX = startX + A + gap;
-    const qreal baseY = cy + fm.xHeight() / 2.0;
-    painter.setPen(ink);
-    painter.drawText(QPointF(textX, baseY), QStringLiteral("exo"));
-    painter.setPen(accent);
-    painter.drawText(QPointF(textX + exoW, baseY), QStringLiteral("snap"));
+    static QSvgRenderer brand_renderer(QStringLiteral(":/brand/exosnap-logo-wordmark.svg"));
+    if (brand_renderer.isValid()) {
+        const QSizeF def = brand_renderer.defaultSize();
+        const qreal aspect = (def.height() > 0.0) ? def.width() / def.height() : 4.375;
+        const qreal lock_w = A * aspect;
+        const QRectF lock_rect(cx - lock_w / 2.0, cy - A / 2.0, lock_w, A);
+        brand_renderer.render(&painter, lock_rect);
+    }
 
     // Quiet help text below the lockup (replaces the retired center text box).
     // Customisable via setPlaceholderHint(); defaults to a no-source prompt.
