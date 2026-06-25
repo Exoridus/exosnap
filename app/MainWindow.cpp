@@ -3230,7 +3230,11 @@ void MainWindow::initNotificationToasts() {
                     } else {
                         event.body = QStringLiteral("File saved to output folder");
                     }
-                    event.action = notifications::NotificationAction::OpenFolder;
+                    // Primary action: navigate to the Edit/Output page for the saved
+                    // recording. Secondary action: reveal the file in Explorer.
+                    // Both share action_payload (the output file path).
+                    event.action = notifications::NotificationAction::Edit;
+                    event.secondary_action = notifications::NotificationAction::OpenFolder;
                     event.action_payload = output_path;
                 } else if (error_phase == QStringLiteral("DiskSpace")) {
                     // Trigger 1: disk monitor hard-stop — "Storage running low" (caution, sticky).
@@ -3310,6 +3314,14 @@ void MainWindow::dispatchNotificationAction(const notifications::NotificationEve
                                             notifications::NotificationAction action) {
     using notifications::NotificationAction;
     switch (action) {
+    case NotificationAction::Edit: {
+        // Navigate to the Edit/Output page for the saved recording.
+        // Metadata fields beyond the file path are not available in the toast
+        // context; the page shows "–" for missing fields, which is acceptable.
+        const QString path = event.action_payload.trimmed();
+        navigateToEditExportPage(path, QString{}, QString{}, QString{}, QString{}, QString{}, QString{}, QString{});
+        break;
+    }
     case NotificationAction::OpenFolder: {
         // Payload is the saved file (or folder). Open its containing folder —
         // mirrors RecordPage::openOutputFolder's QDesktopServices folder path.
