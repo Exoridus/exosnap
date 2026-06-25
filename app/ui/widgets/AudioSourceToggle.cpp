@@ -6,6 +6,7 @@
 #include <QColor>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QRectF>
 #include <QSvgRenderer>
 
@@ -15,10 +16,8 @@ namespace exosnap::ui::widgets {
 namespace {
 
 constexpr int kDiameter = 42;
-// Extra pixels below the icon circle for the mono meter strip (2 gap + 3 bar).
-constexpr int kMeterGap = 2;
-constexpr int kMeterBarH = 3;
-constexpr int kTotalHeight = kDiameter + kMeterGap + kMeterBarH; // 47
+// v10: meter strip removed — the toggle is a pure 42×42 circle.
+constexpr int kTotalHeight = kDiameter; // 42
 
 // Lucide-style 24x24 stroke paths, matching the hybrid design icon set.
 QByteArray iconPathFor(const QString& key) {
@@ -136,27 +135,80 @@ void AudioSourceToggle::paintEvent(QPaintEvent* /*event*/) {
     painter.setBrush(fill);
     painter.drawEllipse(circle);
 
+    // Meter fill: vertical fill from bottom, clipped to the circle shape.
+    // Shown when meter is active and level > 0, regardless of on_ state.
+    // OFF-state: flat grey fill (shows signal present but source not captured).
+    // ON-state: zoned fill — mint 0-0.75, caution/amber 0.75-0.95, error/coral 0.95-1.0.
+    if (meter_active_ && meter_level_ > 0.0f) {
+        // Clip to the button circle so the fill never bleeds outside the border.
+        QPainterPath clip_path;
+        clip_path.addEllipse(circle);
+        painter.setClipPath(clip_path);
+        painter.setPen(Qt::NoPen);
+
+        const qreal level = static_cast<qreal>(meter_level_);
+        const qreal bottom = circle.bottom();
+
+        if (!on_) {
+            // OFF state: flat muted-grey fill.
+            const qreal total_height = circle.height() * level;
+            QColor grey(QString::fromUtf8(t.mut));
+            grey.setAlphaF(0.30f);
+            const QRectF fill_rect(circle.left(), bottom - total_height, circle.width(), total_height);
+            painter.setBrush(grey);
+            painter.drawRect(fill_rect);
+        } else {
+            // ON state: zoned fill bands stacked from bottom.
+            // Zone thresholds (as fraction of full circle height):
+            constexpr qreal kYellowThresh = 0.75; // mint below, caution above
+            constexpr qreal kRedThresh = 0.95;    // caution below, error above
+
+            const QColor caution_raw(QString::fromUtf8(t.caution));
+            const QColor error_raw(QString::fromUtf8(t.error));
+
+            // Mint zone: level 0 → min(level, 0.75)
+            if (level > 0.0) {
+                const qreal zone_top = std::min(level, kYellowThresh);
+                const qreal zone_height = circle.height() * zone_top;
+                const QRectF band(circle.left(), bottom - zone_height, circle.width(), zone_height);
+                QColor c(accent);
+                c.setAlphaF(0.30f);
+                painter.setBrush(c);
+                painter.drawRect(band);
+            }
+            // Caution/amber zone: level 0.75 → min(level, 0.95)
+            if (level > kYellowThresh) {
+                const qreal zone_bottom_frac = kYellowThresh;
+                const qreal zone_top_frac = std::min(level, kRedThresh);
+                const qreal zone_bottom_y = bottom - circle.height() * zone_bottom_frac;
+                const qreal zone_height = circle.height() * (zone_top_frac - zone_bottom_frac);
+                const QRectF band(circle.left(), zone_bottom_y - zone_height, circle.width(), zone_height);
+                QColor c(caution_raw);
+                c.setAlphaF(0.30f);
+                painter.setBrush(c);
+                painter.drawRect(band);
+            }
+            // Error/coral zone: level 0.95 → level
+            if (level > kRedThresh) {
+                const qreal zone_bottom_frac = kRedThresh;
+                const qreal zone_top_frac = level;
+                const qreal zone_bottom_y = bottom - circle.height() * zone_bottom_frac;
+                const qreal zone_height = circle.height() * (zone_top_frac - zone_bottom_frac);
+                const QRectF band(circle.left(), zone_bottom_y - zone_height, circle.width(), zone_height);
+                QColor c(error_raw);
+                c.setAlphaF(0.30f);
+                painter.setBrush(c);
+                painter.drawRect(band);
+            }
+        }
+
+        // Restore unrestricted clip so the icon is not clipped.
+        painter.setClipping(false);
+    }
+
     const QRectF icon_rect =
         circle.adjusted(circle.width() * 0.27, circle.height() * 0.27, -circle.width() * 0.27, -circle.height() * 0.27);
     paintIcon(painter, icon_key_, icon_rect, icon);
-
-    // Compact mono meter strip below the circle.
-    painter.setRenderHint(QPainter::Antialiasing, false);
-    constexpr int kInset = 2;
-    const int mY = kDiameter + kMeterGap;
-    const int mW = width() - 2 * kInset;
-    painter.fillRect(QRect(kInset, mY, mW, kMeterBarH), QColor(0x2a, 0x26, 0x20));
-    if (meter_active_ && meter_level_ > 0.0f) {
-        const float ratio = std::clamp(meter_level_, 0.0f, 1.0f);
-        QColor bar;
-        if (ratio >= 0.86f)
-            bar = QColor(0xe2, 0x6a, 0x5a);
-        else if (ratio >= 0.62f)
-            bar = QColor(0xf1, 0xb4, 0x00);
-        else
-            bar = QColor(0x74, 0xc0, 0x8a);
-        painter.fillRect(QRect(kInset, mY, static_cast<int>(mW * ratio), kMeterBarH), bar);
-    }
 }
 
 } // namespace exosnap::ui::widgets

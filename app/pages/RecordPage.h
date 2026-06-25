@@ -107,7 +107,7 @@ class RecordPage : public QWidget {
     // Returns selected_countdown_seconds_.
     [[nodiscard]] int countdownSeconds() const;
 
-    // Snaps to {0,3,5,10}; updates the CountdownSelect widget + stored field.
+    // Snaps to {0,3,5,10}; pushes the value to the dock's split button + stored field.
     // Does NOT emit recordingConfigChanged (programmatic change).
     void setCountdownSeconds(int seconds);
 
@@ -453,6 +453,11 @@ class RecordPage : public QWidget {
     float preflight_app_rms_ = 0.0f;
     uint32_t preflight_app_pid_ = 0;
     bool coordinator_needs_init_ = true;
+    // True while the Record page is the active page in the QStackedWidget.
+    // Meter services (especially mic) run when this is true even if the
+    // corresponding source toggle is off, so the dock shows a live (grey)
+    // level preview before the user enables recording.
+    bool record_page_visible_ = false;
     capability::CapabilitySet shared_runtime_caps_{};
     bool shared_runtime_caps_received_ = false;
 

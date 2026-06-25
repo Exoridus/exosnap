@@ -173,6 +173,10 @@ class ConfigPage : public QWidget {
     void setDefaultPresetRequested();
     // Emitted when the user opens the Manage presets overlay.
     void managePresetsRequested();
+    // Emitted when the user clicks Export in the preset toolbar.
+    void exportCurrentPresetRequested(const QString& path);
+    // Emitted when the user clicks Import in the preset toolbar.
+    void importPresetsRequested(const QString& path);
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
@@ -257,13 +261,6 @@ class ConfigPage : public QWidget {
     void onManagePresets();
     void updatePresetActionState();
     void updateExpertModeVisibility();
-
-    // SETTINGS-SEARCH-R1: settings search box filter.
-    // Applies case-insensitive per-card keyword filtering. Cards with no matching
-    // keyword are hidden; the Output Advanced expander is auto-opened when a setting
-    // inside it matches. The Developer card shows an "Enable Expert mode" affordance
-    // when Expert mode is OFF and a Developer keyword matches.
-    void applySettingsSearch(const QString& query);
 
     capability::AudioUiState audio_ui_state_;
     WebcamSettings webcam_settings_;
@@ -350,13 +347,7 @@ class ConfigPage : public QWidget {
     QLineEdit* destination_edit_ = nullptr;
     QPushButton* browse_btn_ = nullptr;
     QLineEdit* naming_edit_ = nullptr;
-    QButtonGroup* output_resolution_group_ = nullptr;
-    QPushButton* output_res_native_btn_ = nullptr;
-    QPushButton* output_res_4k_btn_ = nullptr;
-    QPushButton* output_res_1440_btn_ = nullptr;
-    QPushButton* output_res_1080_btn_ = nullptr;
-    QPushButton* output_res_720_btn_ = nullptr;
-    QPushButton* output_res_custom_btn_ = nullptr;
+    QComboBox* output_res_combo_ = nullptr;
     QLabel* output_effective_summary_label_ = nullptr;
 
     // Split recording widgets (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1).
@@ -391,6 +382,8 @@ class ConfigPage : public QWidget {
     QLabel* preset_dirty_indicator_ = nullptr;
     QPushButton* preset_save_btn_ = nullptr;
     QPushButton* preset_save_as_btn_ = nullptr;
+    QPushButton* preset_export_btn_ = nullptr;
+    QPushButton* preset_import_btn_ = nullptr;
     QToolButton* profile_overflow_btn_ = nullptr;
     // Preset management actions in the overflow menu.
     QAction* save_preset_action_ = nullptr;
@@ -410,7 +403,8 @@ class ConfigPage : public QWidget {
     bool controls_locked_ = false;
 
     QLabel* token_help_label_ = nullptr;
-    QPushButton* token_help_toggle_btn_ = nullptr;
+    QPushButton* token_help_toggle_btn_ = nullptr; // v10: removed — kept nullptr
+    QWidget* token_chip_flow_ = nullptr;           // v10: always visible below pattern input
 
     // SETTINGS-TIERS-R1 / D6: Expert mode toggle (ExoToggle in D6 header zone).
     ui::widgets::ExoToggle* expert_mode_toggle_ = nullptr;
@@ -440,8 +434,11 @@ class ConfigPage : public QWidget {
     // Expert-gated developer card (hidden when expert_mode_enabled_ == false).
     QWidget* developer_card_ = nullptr;
 
-    // PS-PHASE-C: Embedded hotkeys panel (full-width card, below the two-column grid).
+    // PS-PHASE-C: Embedded hotkeys panel — v10: single-width card in the LEFT column.
     ui::widgets::HotkeysSettingsPanel* hotkeys_settings_panel_ = nullptr;
+    QWidget* hotkeys_panel_ = nullptr; // card wrapper (for search filtering + scrollToSection)
+    // Updates card (right column, between Presence and Appearance).
+    QWidget* updates_panel_ = nullptr;
 
     // v10 split: the old "Format & encoding" mega-card is split into
     // "Container & codecs" (fmt_panel_) and "Quality & timing" (quality_panel_).
@@ -456,11 +453,6 @@ class ConfigPage : public QWidget {
     QWidget* quality_rate_section_ = nullptr;
     // v10: Output "Saves to …\path" resolved footer (mirrors the Quality footer).
     QLabel* output_saves_to_label_ = nullptr;
-    // v10: one full-width theme preview below the compact selector (Appearance).
-    // Stored as QWidget* because ThemePreviewSwatch lives in an anonymous namespace
-    // in the .cpp; the concrete type is only used there.
-    QWidget* appearance_preview_swatch_ = nullptr;
-
     // PS-PHASE-C: Expert Format section — rate control (CQ/VBR/CBR) + bitrate + placeholders.
     QWidget* fmt_expert_section_ = nullptr; // container for rate control, bitrate, and Format placeholders
     QWidget* rate_control_row_widget_ = nullptr;
@@ -511,16 +503,7 @@ class ConfigPage : public QWidget {
     QSpinBox* flac_compression_spin_ = nullptr;
     QWidget* flac_compression_row_ = nullptr;
 
-    // SETTINGS-SEARCH-R1: settings search box and match count label.
-    QWidget* settings_search_pill_ = nullptr;
-    QLineEdit* settings_search_box_ = nullptr;
-    QLabel* settings_search_count_label_ = nullptr;
-    // "Enable Expert mode to show" hint shown when a Developer card keyword matches
-    // but Expert mode is off. Parented to the same container as the search box.
-    QLabel* search_expert_hint_label_ = nullptr;
-
-    // Card panel pointers needed for search filtering.
-    // (developer_card_ is already above; remaining cards are stored here.)
+    // Card panel pointers (developer_card_ is already above; remaining cards are stored here).
     QWidget* preset_panel_ = nullptr;
     QWidget* columns_widget_ = nullptr; // two-column host for fmt+audio panels
     QWidget* fmt_panel_ = nullptr;

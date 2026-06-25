@@ -479,14 +479,20 @@ void DiagnosticsPage::setReadinessState(const QString& state) {
         w->style()->unpolish(w);
         w->style()->polish(w);
     };
-    const bool tinted =
+    // v10 verdict mapping:
+    //   clear  → banner neutral (no stateRole), pill green ("ready")
+    //   issues → banner amber ("warn"),         pill amber ("warn")
+    //   blocked → banner red ("blocked"),       pill red ("blocked")
+    // "ready" must NOT tint the banner — the banner stays neutral in all-clear state.
+    const bool panel_tinted = state == QStringLiteral("warn") || state == QStringLiteral("blocked");
+    const bool pill_tinted =
         state == QStringLiteral("ready") || state == QStringLiteral("warn") || state == QStringLiteral("blocked");
     if (readiness_panel_) {
-        readiness_panel_->setProperty("stateRole", tinted ? QVariant(state) : QVariant());
+        readiness_panel_->setProperty("stateRole", panel_tinted ? QVariant(state) : QVariant());
         repolish(readiness_panel_);
     }
     if (status_pill_) {
-        status_pill_->setProperty("stateRole", tinted ? QVariant(state) : QVariant());
+        status_pill_->setProperty("stateRole", pill_tinted ? QVariant(state) : QVariant());
         repolish(status_pill_);
     }
 }
@@ -787,24 +793,20 @@ void DiagnosticsPage::refreshOverview() {
                                              profile_validation_.succeeded, output_filesystem_name_);
     auto recs = engine.Generate();
 
-    diagnostics::DiagnosticChecklist combined;
-    for (const auto& r : cap_summary_.entries) {
-        diagnostics::DiagnosticResult dr;
-        dr.id = "cap." + r.label;
-        dr.group = diagnostics::DiagnosticGroup::CapabilityProbe;
-        dr.severity = r.available ? diagnostics::DiagnosticSeverity::Pass : diagnostics::DiagnosticSeverity::Notice;
-        dr.title = r.label;
-        dr.summary = r.value;
-        dr.current_value = r.status;
-        dr.timestamp = QDateTime::currentSecsSinceEpoch();
-        combined.results.push_back(std::move(dr));
-    }
-    for (auto& r : recs.results) {
-        combined.results.push_back(r);
-    }
-
-    int blockers = 0, notices = 0, passes = 0;
-    for (const auto& r : combined.results) {
+    // Verdict counts come ONLY from the RecommendationEngine (real diagnosed issues).
+    // The capability matrix (cap_summary_) is informational only — unavailable /
+    // not-implemented entries are feature facts, not diagnostic issues.  Un-instrumented
+    // pipeline stages (Source Capture, Frame Queue, Compositor) appear in the "Not
+    // measured" tile and never trigger amber coloring.
+    //
+    // Profile-validation invalidity cards are rendered in the Recommendations section
+    // by refreshTopIssues; the corresponding rec.006 / rec.003 / rec.004 entries in
+    // recs.results capture the same conditions, so no double-counting is needed here.
+    //
+    // v10 suite-diag.jsx: amber appears only for actually-diagnosed problems (dropped
+    // frames, slow disk); red only when something blocks recording.
+    int blockers = 0, notices = 0;
+    for (const auto& r : recs.results) {
         switch (r.severity) {
         case diagnostics::DiagnosticSeverity::Blocker:
             ++blockers;
@@ -813,52 +815,74 @@ void DiagnosticsPage::refreshOverview() {
             ++notices;
             break;
         case diagnostics::DiagnosticSeverity::Pass:
-            ++passes;
             break;
         }
     }
 
+    // Cap-summary passes: capability entries that are positively available.
+    int cap_passes = 0;
+    for (const auto& r : cap_summary_.entries) {
+        if (r.available)
+            ++cap_passes;
+    }
+
+    // Planned (un-instrumented) pipeline stages — always 3 in the current pipeline
+    // (Source Capture, Frame Queue, Compositor). Shown in the middle tile as neutral.
+    constexpr int kPlannedStages = 3;
+
+    // v10 verdict:
+    //   blocked  → red  "CAN'T RECORD · N BLOCKER(S)"
+    //   issues   → amber "ATTENTION · N ISSUE(S)"
+    //   clear    → green READY pill, neutral banner
     if (blockers > 0) {
-        // #10: proper pluralization
-        const QString blocker_word = (blockers == 1) ? QStringLiteral("blocker") : QStringLiteral("blockers");
-        status_pill_->setText(QStringLiteral("BLOCKED \xc2\xb7 %1").arg(blockers));
+        const QString blocker_word = (blockers == 1) ? QStringLiteral("BLOCKER") : QStringLiteral("BLOCKERS");
+        status_pill_->setText(QStringLiteral("CAN'T RECORD \xc2\xb7 %1 %2").arg(blockers).arg(blocker_word));
         setReadinessState(QStringLiteral("blocked"));
-        summary_label_->setText(QStringLiteral("%1 %2 must be resolved before recording. See Top Issues below.")
+        const QString bw = (blockers == 1) ? QStringLiteral("blocker") : QStringLiteral("blockers");
+        summary_label_->setText(QStringLiteral("%1 %2 must be resolved before recording. See Recommendations below.")
                                     .arg(blockers)
-                                    .arg(blocker_word));
+                                    .arg(bw));
     } else if (notices > 0) {
-        // #10: proper pluralization
-        const QString notice_word = (notices == 1) ? QStringLiteral("NOTICE") : QStringLiteral("NOTICES");
-        const QString item_word = (notices == 1) ? QStringLiteral("item") : QStringLiteral("items");
-        status_pill_->setText(QStringLiteral("READY \xc2\xb7 %1 %2").arg(notices).arg(notice_word));
+        const QString issue_word = (notices == 1) ? QStringLiteral("ISSUE") : QStringLiteral("ISSUES");
+        status_pill_->setText(QStringLiteral("ATTENTION \xc2\xb7 %1 %2").arg(notices).arg(issue_word));
         setReadinessState(QStringLiteral("warn"));
-        summary_label_->setText(QStringLiteral("No blockers \xe2\x80\x94 you can record now. %1 %2 could be better.")
-                                    .arg(notices)
-                                    .arg(item_word));
+        const QString iw = (notices == 1) ? QStringLiteral("issue") : QStringLiteral("issues");
+        summary_label_->setText(
+            QStringLiteral("You can record, but %1 %2 could affect the result. See Recommendations below.")
+                .arg(notices)
+                .arg(iw));
     } else {
         status_pill_->setText(QStringLiteral("READY"));
         setReadinessState(QStringLiteral("ready"));
-        summary_label_->setText(QStringLiteral("All checks passed. This machine is set up to record well."));
+        summary_label_->setText(QStringLiteral("Everything checks out \xe2\x80\x94 you're ready to record."));
     }
 
     last_check_label_->setText(QStringLiteral("Last check: %1")
                                    .arg(QDateTime::currentDateTime().toString(QStringLiteral("dd MMM yyyy, hh:mm"))));
 
+    // Stat tiles:
+    //   Left  (blocker): count of real blockers — red when > 0, neutral when 0.
+    //   Middle:
+    //     clear   → "Not measured" (planned stages), neutral (zero tone).
+    //     issues/blocked → "Issues", count of rec notices, amber when > 0.
+    //   Right (pass): capability availability passes — always green-tinted.
     blocker_count_->setText(QString::number(blockers));
-    notice_count_->setText(QString::number(notices));
-    pass_count_->setText(QString::number(passes));
+    pass_count_->setText(QString::number(cap_passes));
 
-    // #04: Tint tiles conditionally — count==0 → neutral (no alarm colour at zero).
-    const auto setTileActive = [](QFrame* tile, QLabel* num, const char* active_tone, bool active) {
+    // #04: Tint tiles conditionally — count==0 or neutral → zero tone (no alarm colour).
+    const auto setTileActive = [](QFrame* tile, QLabel* num, const char* active_tone, bool active,
+                                  const QString* label_override = nullptr) {
         if (!tile || !num)
             return;
         const QString tone = active ? QString::fromLatin1(active_tone) : QStringLiteral("zero");
         tile->setProperty("statTone", tone);
         num->setProperty("statTone", tone);
-        // Also update the sibling statTileLabel so it dims at zero.
+        // Also update the sibling statTileLabel so it dims/tints correctly.
         for (auto* lbl : tile->findChildren<QLabel*>()) {
             if (lbl->property("labelRole").toString() == QLatin1String("statTileLabel")) {
                 lbl->setProperty("statTone", tone);
+                if (label_override)
+                    lbl->setText(*label_override);
                 lbl->style()->unpolish(lbl);
                 lbl->style()->polish(lbl);
                 lbl->update();
@@ -871,10 +895,23 @@ void DiagnosticsPage::refreshOverview() {
         tile->update();
         num->update();
     };
+
     setTileActive(blocker_tile_, blocker_count_, "blocker", blockers > 0);
-    setTileActive(notice_tile_, notice_count_, "notice", notices > 0);
-    // Pass tile: always neutral (green tint is fine at any count)
-    setTileActive(pass_tile_, pass_count_, "pass", passes > 0);
+
+    // Middle tile: "Not measured" (neutral) in clear state; "Issues" (amber) otherwise.
+    if (blockers == 0 && notices == 0) {
+        // All-clear: show planned-stage count, neutral tone, "Not measured" label.
+        notice_count_->setText(QString::number(kPlannedStages));
+        const QString not_measured_label = QStringLiteral("Not measured");
+        setTileActive(notice_tile_, notice_count_, "notice", /*active=*/false, &not_measured_label);
+    } else {
+        notice_count_->setText(QString::number(notices));
+        const QString issues_label = QStringLiteral("Issues");
+        setTileActive(notice_tile_, notice_count_, "notice", notices > 0, &issues_label);
+    }
+
+    // Pass tile: green when passes > 0.
+    setTileActive(pass_tile_, pass_count_, "pass", cap_passes > 0);
 
     refreshTopIssues(recs, notices, blockers);
 }

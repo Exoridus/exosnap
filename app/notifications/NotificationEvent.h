@@ -32,6 +32,7 @@ enum class NotificationAction : uint8_t {
     ShowFile,     // show / reveal the partial file (UnexpectedStop type)
     Discard,      // discard recovery session (secondary button on RecoveryAvailable)
     OpenUpdate,   // navigate to Settings → Software updates card (UpdateAvailable type)
+    Edit,         // navigate to the Edit/Output page for the saved recording (primary on Saved type)
 };
 
 // ---------------------------------------------------------------------------

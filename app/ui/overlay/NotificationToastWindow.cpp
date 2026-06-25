@@ -309,6 +309,11 @@ QVector<ButtonSpec> buttonSpecsFor(const notifications::NotificationEvent& event
     case NotificationAction::OpenFolder:
         buttons.push_back({QStringLiteral("Open folder"), false, NotificationAction::OpenFolder});
         break;
+    case NotificationAction::Edit:
+        buttons.push_back({QStringLiteral("Edit"), true, NotificationAction::Edit});
+        if (event.secondary_action == NotificationAction::OpenFolder)
+            buttons.push_back({QStringLiteral("Show in folder"), false, NotificationAction::OpenFolder});
+        break;
     case NotificationAction::OpenRecovery:
         buttons.push_back({QStringLiteral("Recover"), true, NotificationAction::OpenRecovery});
         if (event.secondary_action == NotificationAction::Discard)

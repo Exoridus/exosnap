@@ -84,6 +84,7 @@ class LogsPage : public QWidget {
     void updateStatusLabel(const QString& feedback = {});
     [[nodiscard]] bool matchesActiveFilters(const diagnostics::LogEntry& entry) const;
     [[nodiscard]] QTextCharFormat formatForSeverity(diagnostics::LogSeverity severity) const;
+    [[nodiscard]] QTextCharFormat formatForCategory() const;
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void setSyntheticEntriesForVisualTest(QVector<diagnostics::LogEntry> entries);

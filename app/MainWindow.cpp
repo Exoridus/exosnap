@@ -4,6 +4,7 @@
 #include "models/RecordingPreset.h"
 #include "notifications/NotificationEvent.h"
 #include "notifications/NotificationManager.h"
+#include "pages/AboutPage.h"
 #include "pages/ConfigPage.h"
 #include "pages/DiagnosticsPage.h"
 #include "pages/EditExportPage.h"
@@ -157,6 +158,7 @@ enum class SidebarIcon {
     Logs = 7,
     Advanced = 8,
     Setup = 9,
+    About = 10,
 };
 
 enum class ResizeZone {
@@ -179,7 +181,7 @@ struct PageDescriptor {
     SidebarIcon icon;
 };
 
-constexpr std::array<PageDescriptor, 7> kPageDescriptors = {{
+constexpr std::array<PageDescriptor, 8> kPageDescriptors = {{
     {"Record", "Operational view — target, readiness, and live runtime.", "", true, SidebarIcon::Record},
     {"Settings", "Unified recording configuration — format, sources, and output.", "", true, SidebarIcon::Setup},
     {"Hotkeys", "Global command access for recording operations.", "GLOBAL SHORTCUTS", true, SidebarIcon::Hotkeys},
@@ -188,6 +190,7 @@ constexpr std::array<PageDescriptor, 7> kPageDescriptors = {{
     {"Logs", "Runtime events and recording diagnostics.", "SESSION EVENTS", true, SidebarIcon::Logs},
     {"Webcam", "Webcam device and capture settings.", "", false, SidebarIcon::Webcam},
     {"Output", "Recording preset management — create, export, and import presets.", "", false, SidebarIcon::Output},
+    {"About", "Application identity, build metadata, and links.", "", true, SidebarIcon::About},
 }};
 
 constexpr int pageIndexForIcon(SidebarIcon icon) {
@@ -204,6 +207,7 @@ constexpr int kDiagnosticsPageIndex = pageIndexForIcon(SidebarIcon::Diagnostics)
 constexpr int kWebcamPageIndex = pageIndexForIcon(SidebarIcon::Webcam);
 constexpr int kLogsPageIndex = pageIndexForIcon(SidebarIcon::Logs);
 constexpr int kOutputPageIndex = pageIndexForIcon(SidebarIcon::Output);
+constexpr int kAboutPageIndex = pageIndexForIcon(SidebarIcon::About);
 static_assert(kRecordPageIndex >= 0, "Record page must exist in kPageDescriptors.");
 static_assert(kSettingsPageIndex >= 0, "Settings page must exist in kPageDescriptors.");
 static_assert(kHotkeysPageIndex >= 0, "Hotkeys page must exist in kPageDescriptors.");
@@ -211,6 +215,7 @@ static_assert(kDiagnosticsPageIndex >= 0, "Diagnostics page must exist in kPageD
 static_assert(kWebcamPageIndex >= 0, "Webcam page must exist in kPageDescriptors.");
 static_assert(kLogsPageIndex >= 0, "Logs page must exist in kPageDescriptors.");
 static_assert(kOutputPageIndex >= 0, "Output page must exist in kPageDescriptors.");
+static_assert(kAboutPageIndex >= 0, "About page must exist in kPageDescriptors.");
 
 // UPDATE-WIRE-R1: map between the persisted/UI channel string ("Stable"|"Preview")
 // and the engine enum. Unknown values fall back to Stable.
@@ -505,6 +510,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     stack_->addWidget(webcam_page_);
     output_page_ = new OutputPage(output_settings_, stack_);
     stack_->addWidget(output_page_);
+    // AboutPage must occupy the stack slot that matches kAboutPageIndex (it is a
+    // routed nav page in kPageDescriptors), so it is added before EditExportPage.
+    about_page_ = new pages::AboutPage(stack_);
+    stack_->addWidget(about_page_);
+    // EditExportPage is a non-nav page reached programmatically (navigateToEditExportPage);
+    // it lives at the tail of the stack, past all kPageDescriptors slots.
     edit_export_page_ = new EditExportPage(stack_);
     stack_->addWidget(edit_export_page_);
     connect(edit_export_page_, &EditExportPage::backRequested, this, [this]() { navigateToPage(kRecordPageIndex); });
@@ -538,17 +549,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
 
     main_layout->addWidget(stack_, 1);
 
-    // In-window About surface — a translucent backdrop + centered card overlaid on the
-    // whole window content area.  Parented to the central widget (not the page stack)
-    // so the overlay subtree is accessible via UI Automation regardless of which
-    // QStackedWidget page is current (DF-A11Y: QAccessibleStackedWidget only exposes
-    // the current page child; parenting to central widget sidesteps this).  The overlay
-    // covers the full central area including the title bar — per design the nav must
-    // not be clickable while a modal overlay is open.  syncGeometryToParent() and the
-    // resize event filter both use parentWidget(), so they work correctly with the new
-    // parent.  raise() in openOverlay() / showEvent() ensures the overlay sits above
-    // the title bar widget in paint order.
-    about_overlay_ = new ui::dialogs::AboutOverlay(central);
+    // AboutOverlay is now a thin compatibility shim — it holds the hidden
+    // UpdateSettingsPanel so MainWindow update-service wiring compiles unchanged.
+    // The visible About surface is AboutPage, which lives in the nav stack.
+    about_overlay_ = new ui::dialogs::AboutOverlay(this);
     about_overlay_->hide();
 
     // Preset manage overlay — in-window, same pattern as About.
@@ -574,9 +578,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
             [this](const QString& target) {
                 notification_hub_->hide();
                 if (target == QStringLiteral("update-view") || target == QStringLiteral("about")) {
-                    // Update panel lives in About overlay now.
-                    if (about_overlay_)
-                        about_overlay_->openOverlay();
+                    // About is now a nav page; Settings hosts the update panel.
+                    navigateToPage(kAboutPageIndex);
                 } else if (target == QStringLiteral("recovery-view")) {
                     // Recovery overlay (if still open) or just navigate to Record.
                     navigateToPage(kRecordPageIndex);
@@ -593,19 +596,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
 
     // PS-PHASE-B: Hotkeys removed from primary nav (6→5 items); HotkeysPage stays in
     // the stack at kHotkeysPageIndex and remains reachable via programmatic navigation.
+    // About is now a real embedded nav page (no overlay).
     title_bar_->setNavItems({
         {QStringLiteral("Record"), kRecordPageIndex},
         {QStringLiteral("Settings"), kSettingsPageIndex},
         {QStringLiteral("Diagnostics"), kDiagnosticsPageIndex},
         {QStringLiteral("Logs"), kLogsPageIndex},
-        {QStringLiteral("About"), -1},
+        {QStringLiteral("About"), kAboutPageIndex},
     });
 
     connect(title_bar_, &ui::chrome::OperationalTitleBar::navPageRequested, this, &MainWindow::navigateToPage);
-    connect(title_bar_, &ui::chrome::OperationalTitleBar::aboutRequested, this, [this]() {
-        if (about_overlay_)
-            about_overlay_->openOverlay();
-    });
     connect(title_bar_, &ui::chrome::OperationalTitleBar::minimizeRequested, this, &QWidget::showMinimized);
     connect(title_bar_, &ui::chrome::OperationalTitleBar::maximizeRestoreRequested, this, [this]() {
         if (isFullScreen()) {
@@ -759,6 +759,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(config_page_, &ConfigPage::resetToDefaultsRequested, this, &MainWindow::onResetToDefaults);
     connect(config_page_, &ConfigPage::setDefaultPresetRequested, this, &MainWindow::onSetDefaultPreset);
     connect(config_page_, &ConfigPage::managePresetsRequested, this, &MainWindow::openPresetManageOverlay);
+    connect(config_page_, &ConfigPage::exportCurrentPresetRequested, this, &MainWindow::onExportSelectedProfile);
+    connect(config_page_, &ConfigPage::importPresetsRequested, this, &MainWindow::onImportProfiles);
 
     // Wire preset manage overlay signals to the same handlers the overflow menu uses.
     connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::duplicatePresetRequested, this,
@@ -943,8 +945,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         // Refresh wordmarks that baked colours at construction with the default theme.
         if (title_bar_)
             title_bar_->refreshBrand();
-        if (about_overlay_)
-            about_overlay_->refreshBrand();
+        if (about_page_)
+            about_page_->refreshBrand();
     }
     // When the user picks a different theme, apply it live and persist.
     connect(config_page_, &ConfigPage::themeIdChanged, this, [this](const QString& id) {
@@ -954,8 +956,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         // Re-bake wordmarks (rich-text colour baked at construction, not re-read on repaint).
         if (title_bar_)
             title_bar_->refreshBrand();
-        if (about_overlay_)
-            about_overlay_->refreshBrand();
+        if (about_page_)
+            about_page_->refreshBrand();
         // Repaint all custom-painted widgets that read ActiveTheme() directly.
         // QSS-styled widgets are already repainted by ReapplyTheme/style-polish;
         // QPainter widgets that call ActiveTheme() in paintEvent() need a manual kick.
@@ -1001,7 +1003,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
                     &WebcamDeviceNotifier::rescan);
     }
 
-    // ---- About overlay → Software updates panel (PS-PHASE-E: moved from ConfigPage) ----
+    // ---- Update panel (PS-PHASE-E: kept as hidden wiring via AboutOverlay shim) ----
+    // The visible About surface (AboutPage) shows no update status.
+    // The UpdateSettingsPanel lives in Settings (ConfigPage's updates card).
+    // AboutOverlay is a thin shim that holds the panel for wiring compatibility.
     if (about_overlay_) {
         auto* update_panel = about_overlay_->updatePanel();
         // Seed the panel from the persisted channel + current version.
@@ -1010,6 +1015,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         seed.channel = persisted_settings_.update_channel;
         update_panel->setModel(seed);
         update_panel->setState(ui::dialogs::UpdateUiState::UpToDate);
+        // Seed the channel hint in the AboutPage metadata table.
+        if (about_page_)
+            about_page_->setChannelHint(persisted_settings_.update_channel);
 
         connect(about_overlay_, &ui::dialogs::AboutOverlay::checkForUpdatesRequested, this,
                 &MainWindow::triggerUpdateCheck);
@@ -1019,6 +1027,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
             settings_store_.Save(persisted_settings_);
             if (update_service_)
                 update_service_->SetChannel(UpdateChannelFromString(channel));
+            // Keep channel metadata row in AboutPage in sync.
+            if (about_page_)
+                about_page_->setChannelHint(channel);
             // Channel applies immediately: re-check on the new channel (guarded).
             triggerUpdateCheck();
         });
@@ -2177,8 +2188,6 @@ void MainWindow::navigateToPage(int index) {
 
     // Any page switch cleanly dismisses inline overlays so they never linger
     // over an unrelated page.
-    if (about_overlay_)
-        about_overlay_->closeOverlay();
     if (source_picker_overlay_)
         source_picker_overlay_->closeOverlay();
 
@@ -2580,8 +2589,6 @@ ui::dialogs::SourcePickerPanel::SourceOption VisualWindowOption() {
 } // namespace
 
 void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
-    if (about_overlay_)
-        about_overlay_->closeOverlay();
     if (source_picker_overlay_)
         source_picker_overlay_->closeOverlay();
 
@@ -2632,9 +2639,7 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
         setCurrentPage(kLogsPageIndex);
         break;
     case visual::VisualPage::About:
-        setCurrentPage(kRecordPageIndex);
-        if (about_overlay_)
-            about_overlay_->openOverlay();
+        setCurrentPage(kAboutPageIndex);
         break;
     case visual::VisualPage::EditExport:
         applyVisualEditExportScenario(scenario);
@@ -3225,7 +3230,11 @@ void MainWindow::initNotificationToasts() {
                     } else {
                         event.body = QStringLiteral("File saved to output folder");
                     }
-                    event.action = notifications::NotificationAction::OpenFolder;
+                    // Primary action: navigate to the Edit/Output page for the saved
+                    // recording. Secondary action: reveal the file in Explorer.
+                    // Both share action_payload (the output file path).
+                    event.action = notifications::NotificationAction::Edit;
+                    event.secondary_action = notifications::NotificationAction::OpenFolder;
                     event.action_payload = output_path;
                 } else if (error_phase == QStringLiteral("DiskSpace")) {
                     // Trigger 1: disk monitor hard-stop — "Storage running low" (caution, sticky).
@@ -3305,6 +3314,14 @@ void MainWindow::dispatchNotificationAction(const notifications::NotificationEve
                                             notifications::NotificationAction action) {
     using notifications::NotificationAction;
     switch (action) {
+    case NotificationAction::Edit: {
+        // Navigate to the Edit/Output page for the saved recording.
+        // Metadata fields beyond the file path are not available in the toast
+        // context; the page shows "–" for missing fields, which is acceptable.
+        const QString path = event.action_payload.trimmed();
+        navigateToEditExportPage(path, QString{}, QString{}, QString{}, QString{}, QString{}, QString{}, QString{});
+        break;
+    }
     case NotificationAction::OpenFolder: {
         // Payload is the saved file (or folder). Open its containing folder —
         // mirrors RecordPage::openOutputFolder's QDesktopServices folder path.
@@ -3346,9 +3363,8 @@ void MainWindow::dispatchNotificationAction(const notifications::NotificationEve
         break;
     }
     case NotificationAction::OpenUpdate: {
-        // The update panel lives in the About overlay (same as the hub's update-view).
-        if (about_overlay_)
-            about_overlay_->openOverlay();
+        // Navigate to Settings which hosts the updates panel.
+        navigateToPage(kSettingsPageIndex);
         break;
     }
     case NotificationAction::Discard:
@@ -3377,7 +3393,7 @@ void MainWindow::triggerUpdateCheck() {
     if (update_service_ == nullptr)
         return;
 
-    // PS-PHASE-E: update panel is in AboutOverlay, not ConfigPage.
+    // Update panel is held by the AboutOverlay shim; Settings hosts the visible panel.
     auto* update_panel = about_overlay_ ? about_overlay_->updatePanel() : nullptr;
 
     // App-layer recording guard: never contact the update server while a recording
@@ -3396,7 +3412,7 @@ void MainWindow::triggerUpdateCheck() {
 }
 
 void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) {
-    // PS-PHASE-E: update panel is in AboutOverlay.
+    // Update panel is held by the AboutOverlay shim; drive its state here.
     auto* update_panel = about_overlay_ ? about_overlay_->updatePanel() : nullptr;
 
     const QString current_version = QString::fromLatin1(exosnap::build::kVersion);

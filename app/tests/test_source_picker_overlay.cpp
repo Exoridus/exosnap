@@ -10,6 +10,7 @@
 
 #include "ui/dialogs/SourcePickerOverlay.h"
 #include "ui/dialogs/SourcePickerPanel.h"
+#include "ui/widgets/CaptureTargetCard.h"
 
 namespace exosnap {
 namespace {
@@ -147,6 +148,63 @@ TEST_F(SourcePickerOverlayTest, UseSelectedSource_EmitsSourceSelectedThenClosed)
     EXPECT_EQ(captured_result.section, ui::dialogs::SourcePickerPanel::Section::Screens);
     EXPECT_EQ(captured_result.target_index, 1);
     EXPECT_TRUE(overlay.isHidden());
+}
+
+TEST_F(SourcePickerOverlayTest, ClickingScreenCard_CommitsImmediatelyAndCloses) {
+    QWidget host;
+    host.resize(1280, 820);
+    ui::dialogs::SourcePickerOverlay overlay(&host);
+
+    ui::dialogs::SourcePickerPanel::SourceOption screen;
+    screen.target_index = 3;
+    screen.title = QStringLiteral("Display 3");
+    screen.detail = QStringLiteral("1920 × 1080");
+    screen.primary = true;
+    overlay.setScreenOptions({screen});
+    overlay.setCurrentSection(ui::dialogs::SourcePickerPanel::Section::Screens, 3);
+    overlay.openOverlay();
+
+    bool selected_fired = false;
+    bool closed_fired = false;
+    ui::dialogs::SourcePickerPanel::SelectionResult captured_result;
+    QObject::connect(&overlay, &ui::dialogs::SourcePickerOverlay::sourceSelected,
+                     [&](ui::dialogs::SourcePickerPanel::SelectionResult r) {
+                         selected_fired = true;
+                         captured_result = r;
+                     });
+    QObject::connect(&overlay, &ui::dialogs::SourcePickerOverlay::closed, [&]() { closed_fired = true; });
+
+    // A single click on a screen card commits and returns — no "Use" step.
+    const auto cards = overlay.findChildren<ui::widgets::CaptureTargetCard*>();
+    ASSERT_FALSE(cards.isEmpty());
+    emit cards.first()->clicked();
+
+    EXPECT_TRUE(selected_fired);
+    EXPECT_TRUE(closed_fired);
+    EXPECT_TRUE(captured_result.valid);
+    EXPECT_EQ(captured_result.section, ui::dialogs::SourcePickerPanel::Section::Screens);
+    EXPECT_EQ(captured_result.target_index, 3);
+    EXPECT_TRUE(overlay.isHidden());
+}
+
+TEST_F(SourcePickerOverlayTest, UseButtonHiddenForScreens_VisibleForRegion) {
+    QWidget host;
+    host.resize(1280, 820);
+    ui::dialogs::SourcePickerOverlay overlay(&host);
+    overlay.openOverlay();
+
+    auto* use = overlay.findChild<QPushButton*>(QStringLiteral("sourcePickerUseButton"));
+    ASSERT_NE(use, nullptr);
+
+    // Screens/Windows commit on click → no explicit Use button.
+    // (isHidden() reflects the explicit setVisible(false) regardless of whether
+    // the un-shown host makes the whole overlay non-visible in a headless test.)
+    overlay.setCurrentSection(ui::dialogs::SourcePickerPanel::Section::Screens, -1);
+    EXPECT_TRUE(use->isHidden());
+
+    // Region is a multi-step config → the Use button is shown.
+    overlay.setCurrentSection(ui::dialogs::SourcePickerPanel::Section::Region, -1);
+    EXPECT_FALSE(use->isHidden());
 }
 
 TEST_F(SourcePickerOverlayTest, SetScreenOptions_ForwardedToEmbeddedDialog) {

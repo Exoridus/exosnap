@@ -159,8 +159,6 @@ qt_add_executable(exosnap WIN32
     ui/widgets/AudioSourceRow.cpp
     ui/widgets/AudioSourceToggle.h
     ui/widgets/AudioSourceToggle.cpp
-    ui/widgets/CountdownSelect.h
-    ui/widgets/CountdownSelect.cpp
     ui/widgets/ExoSpinBox.h
     ui/widgets/ExoSpinBox.cpp
     ui/widgets/ExoSlider.h
@@ -194,6 +192,8 @@ qt_add_executable(exosnap WIN32
     notifications/NotificationManager.cpp
     MainWindow.h
     MainWindow.cpp
+    pages/AboutPage.h
+    pages/AboutPage.cpp
     pages/RecordPage.h
     pages/RecordPage.cpp
     pages/ConfigPage.h
@@ -1008,9 +1008,10 @@ exosnap_add_gtest(
     TEST_PREFIX about.
     SOURCES
         tests/test_about_overlay.cpp
+        pages/AboutPage.cpp
         ui/dialogs/AboutOverlay.cpp
         ui/brand/BrandMarkWidget.cpp
-        # PS-PHASE-E: AboutOverlay now embeds UpdateSettingsPanel.
+        # AboutOverlay keeps a hidden UpdateSettingsPanel for MainWindow wiring.
         ui/dialogs/UpdateSettingsPanel.cpp
         ui/theme/LucideIcon.cpp
         # THEME-SLICE-1: BrandMarkWidget now calls ActiveTheme() from ExoSnapTheme.cpp.
@@ -1182,7 +1183,6 @@ exosnap_add_gtest(
         tests/test_transport_dock.cpp
         ui/widgets/TransportDock.cpp
         ui/widgets/AudioSourceToggle.cpp
-        ui/widgets/CountdownSelect.cpp
         # THEME-SLICE-2C: AudioSourceToggle now calls ActiveTheme() from ExoSnapTheme.cpp.
         ui/theme/ExoSnapTheme.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
@@ -1450,9 +1450,9 @@ target_include_directories(notification_manager_tests PRIVATE ${CMAKE_CURRENT_SO
 set_target_properties(notification_manager_tests PROPERTIES AUTOMOC ON)
 
 # CAPTURE-FRAME-DOCK-BUTTON-R1 tests
-# TransportDock, AudioSourceToggle, CountdownSelect included so tests 11-13
-# (dock button seams/visibility/click) can exercise the live widget without
-# requiring the full RecordPage.
+# TransportDock and AudioSourceToggle included so tests 11-13 (dock button
+# seams/visibility/click) can exercise the live widget without requiring the
+# full RecordPage.  CountdownSelect removed: replaced by split-button + QMenu.
 exosnap_add_gtest(
     NAME capture_frame_button_tests
     TEST_PREFIX capture.frame.button.
@@ -1463,7 +1463,6 @@ exosnap_add_gtest(
         notifications/NotificationManager.cpp
         ui/widgets/TransportDock.cpp
         ui/widgets/AudioSourceToggle.cpp
-        ui/widgets/CountdownSelect.cpp
         # THEME-SLICE-2C: AudioSourceToggle now calls ActiveTheme() from ExoSnapTheme.cpp.
         ui/theme/ExoSnapTheme.cpp
     LIBRARIES

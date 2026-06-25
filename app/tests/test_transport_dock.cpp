@@ -2,8 +2,8 @@
 
 #include <QAbstractButton>
 #include <QApplication>
-#include <QComboBox>
 #include <QCoreApplication>
+#include <QFrame>
 #include <QLabel>
 #include <QList>
 #include <QPushButton>
@@ -92,20 +92,22 @@ TEST_F(TransportDockTest, PausedState_ShowsResumeAndStop) {
     EXPECT_FALSE(ButtonVisible(dock, "recordDockRecord"));
 }
 
-TEST_F(TransportDockTest, CompletedState_ShowsRecordAgainAndResultInfo) {
+TEST_F(TransportDockTest, CompletedState_ReturnsToReadyLayout) {
+    // v10: Completed is no longer a distinct dock state. The dock stays in the
+    // Ready layout so the user can immediately start a new recording.
+    // The result is surfaced by the NotificationManager toast, not by the dock.
     TransportDock dock;
     dock.setState(TransportDock::State::Completed);
-    dock.setCompletedInfo(QStringLiteral("clip.mkv"), QStringLiteral("128 MB"), true);
 
-    EXPECT_TRUE(ButtonVisible(dock, "recordDockRecordAgain"));
-    EXPECT_TRUE(ButtonVisible(dock, "recordDockFilename"));
-    EXPECT_TRUE(ButtonVisible(dock, "recordDockOpenFolder"));
-    EXPECT_FALSE(ButtonVisible(dock, "recordDockRecord"));
+    // Ready layout: Record split pill visible, no stop/pause/resume.
+    EXPECT_TRUE(ButtonVisible(dock, "recordDockRecord"));
+    EXPECT_FALSE(ButtonVisible(dock, "recordDockRecordAgain"));
     EXPECT_FALSE(ButtonVisible(dock, "recordDockStop"));
-    // Source toggles give way to result info in the completed state.
+    EXPECT_FALSE(ButtonVisible(dock, "recordDockPause"));
+    // Source toggles always visible in v10 (no completed_row_ swap).
     auto* system_toggle = Toggle(dock, QStringLiteral("system"));
     ASSERT_NE(system_toggle, nullptr);
-    EXPECT_FALSE(system_toggle->isVisibleTo(&dock));
+    EXPECT_TRUE(system_toggle->isVisibleTo(&dock));
 }
 
 TEST_F(TransportDockTest, NoKioskStartLabel) {
@@ -307,62 +309,82 @@ TEST_F(TransportDockTest, Timer_ReadyResetsToZero) {
     EXPECT_EQ(timer->text(), QStringLiteral("00:00:00"));
 }
 
-// ── Countdown selector (HYBRID-RECORD-FIDELITY-R2 Part D) ───────────────────
+// ── Split Record + countdown menu (v10-overlays R2) ─────────────────────────
+// The standalone CountdownSelect dropdown is replaced by a split pill button:
+// left face = "Record" (starts immediately); right chevron = opens a QMenu
+// with "Start in 3/5/10 seconds". Tests verify the new widget model; the
+// underlying intentions (available delays, lock during active session) are
+// preserved.
 
-TEST_F(TransportDockTest, Countdown_PresentInReadyState) {
+TEST_F(TransportDockTest, Countdown_ChevronPresentInReadyState) {
+    // In Ready state the split container and its chevron half are both visible
+    // and enabled.  countdownSeconds() defaults to 0 (no delay pre-selected).
     TransportDock dock;
     dock.setState(TransportDock::State::Ready);
-    auto* countdown = dock.findChild<QComboBox*>(QStringLiteral("recordCountdownSelect"));
-    ASSERT_NE(countdown, nullptr);
-    EXPECT_TRUE(countdown->isVisibleTo(&dock));
-    EXPECT_TRUE(countdown->isEnabled());
+
+    auto* container = dock.findChild<QFrame*>(QStringLiteral("recordSplitContainer"));
+    auto* chevron = dock.findChild<QPushButton*>(QStringLiteral("recordDockChevron"));
+    ASSERT_NE(container, nullptr);
+    ASSERT_NE(chevron, nullptr);
+    EXPECT_TRUE(container->isVisibleTo(&dock));
+    EXPECT_TRUE(chevron->isEnabled());
     EXPECT_EQ(dock.countdownSeconds(), 0);
 }
 
 TEST_F(TransportDockTest, Countdown_CanSelectSupportedDelays) {
+    // setCountdownSeconds / countdownSeconds provide the preset round-trip for
+    // 3 s, 5 s, and 10 s — all three values the chevron menu exposes.
     TransportDock dock;
     dock.setState(TransportDock::State::Ready);
 
-    int signal_count = 0;
-    int emitted_seconds = -1;
-    QObject::connect(&dock, &TransportDock::countdownSecondsChanged, &dock, [&](int seconds) {
-        ++signal_count;
-        emitted_seconds = seconds;
-    });
     dock.setCountdownSeconds(3);
-
     EXPECT_EQ(dock.countdownSeconds(), 3);
-    EXPECT_EQ(signal_count, 1);
-    EXPECT_EQ(emitted_seconds, 3);
+
+    dock.setCountdownSeconds(5);
+    EXPECT_EQ(dock.countdownSeconds(), 5);
+
+    dock.setCountdownSeconds(10);
+    EXPECT_EQ(dock.countdownSeconds(), 10);
+
+    // Reset to no-delay round-trips correctly.
+    dock.setCountdownSeconds(0);
+    EXPECT_EQ(dock.countdownSeconds(), 0);
 }
 
-TEST_F(TransportDockTest, Countdown_StateShowsCancelAndLocksSelector) {
+TEST_F(TransportDockTest, Countdown_StateShowsCancelAndLocksChevron) {
+    // When the dock is in Countdown state the record face shows "Cancel" with
+    // stop styling, and the chevron is disabled so the delay cannot be changed
+    // while a countdown is running.
     TransportDock dock;
     dock.setCountdownSeconds(3);
     dock.setState(TransportDock::State::Countdown);
 
-    auto* countdown = dock.findChild<QComboBox*>(QStringLiteral("recordCountdownSelect"));
+    auto* container = dock.findChild<QFrame*>(QStringLiteral("recordSplitContainer"));
+    auto* chevron = dock.findChild<QPushButton*>(QStringLiteral("recordDockChevron"));
     auto* record = dock.findChild<QPushButton*>(QStringLiteral("recordDockRecord"));
-    ASSERT_NE(countdown, nullptr);
+    ASSERT_NE(container, nullptr);
+    ASSERT_NE(chevron, nullptr);
     ASSERT_NE(record, nullptr);
 
-    EXPECT_TRUE(countdown->isVisibleTo(&dock));
-    EXPECT_FALSE(countdown->isEnabled());
+    EXPECT_TRUE(container->isVisibleTo(&dock));
+    EXPECT_FALSE(chevron->isEnabled());
     EXPECT_EQ(dock.countdownSeconds(), 3);
     EXPECT_EQ(record->text(), QStringLiteral("Cancel"));
     EXPECT_EQ(record->property("dockAction").toString(), QStringLiteral("stop"));
 }
 
-TEST_F(TransportDockTest, Countdown_HiddenDuringRecordingAndPaused) {
+TEST_F(TransportDockTest, Countdown_ContainerHiddenDuringRecordingAndPaused) {
+    // The split Record button (container) is hidden while a recording is active
+    // or paused — the Pause/Stop and Resume/Stop controls take over instead.
     TransportDock dock;
 
     dock.setState(TransportDock::State::Recording);
-    auto* countdown = dock.findChild<QComboBox*>(QStringLiteral("recordCountdownSelect"));
-    ASSERT_NE(countdown, nullptr);
-    EXPECT_FALSE(countdown->isVisibleTo(&dock));
+    auto* container = dock.findChild<QFrame*>(QStringLiteral("recordSplitContainer"));
+    ASSERT_NE(container, nullptr);
+    EXPECT_FALSE(container->isVisibleTo(&dock));
 
     dock.setState(TransportDock::State::Paused);
-    EXPECT_FALSE(countdown->isVisibleTo(&dock));
+    EXPECT_FALSE(container->isVisibleTo(&dock));
 }
 
 // ── Dock icon keys and tooltips (HYBRID-RECORD-FIDELITY-R2 Part E) ────────────
@@ -393,11 +415,11 @@ TEST_F(TransportDockTest, DockToggle_WebcamTooltip) {
 }
 
 TEST_F(TransportDockTest, DockToggle_AppAudioTooltip) {
-    // The app toggle must read as "Application audio" — the icon key drives the window SVG path.
+    // The app toggle tooltip reads "App audio" (v10 user spec); the icon key still drives the window SVG path.
     TransportDock dock;
     auto* toggle = Toggle(dock, QStringLiteral("app"));
     ASSERT_NE(toggle, nullptr);
-    EXPECT_EQ(toggle->toolTip(), QStringLiteral("Application audio"));
+    EXPECT_EQ(toggle->toolTip(), QStringLiteral("App audio"));
     EXPECT_EQ(toggle->property("sourceKey").toString(), QStringLiteral("app"));
 }
 

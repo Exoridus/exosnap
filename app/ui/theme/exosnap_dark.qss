@@ -632,6 +632,10 @@ QWidget#recordPreviewSurfaceHost[recordState="paused"] {
     border-color: ${warn-a64};
 }
 
+QWidget#recordPreviewSurfaceHost[recordState="countdown"] {
+    border-color: ${warn-a64};
+}
+
 QWidget#recordPreviewSurfaceHost[recordState="warn"] {
     border-color: ${warn-a52};
 }
@@ -2309,7 +2313,16 @@ QLabel[labelRole="pipelineStepStatus"][pipelineStatus="planned"] {
     background: ${bg3};
 }
 
-/* Logs — raw viewer surface */
+/* Logs — raw viewer surface.
+   Inline text colours for the four log columns (timestamp / level / category / message)
+   are applied by LogsPage::insertEntry() via QTextCharFormat, using the ExoLogPalette
+   tokens from the active theme:
+     ${log-time}  — quietest column (dim)
+     ${log-info}  — INFO level
+     ${log-warn}  — WARNING level (caution-amber)
+     ${log-error} — ERROR level (coral)
+     ${log-debug} — DEBUG level (quiet, low-emphasis)
+     ${log-cat}   — category column — NEVER ${accent}, decoupled from primary accent */
 QPlainTextEdit#logViewer {
     background: ${bg0};
     color: ${text1};
@@ -3047,12 +3060,13 @@ QPushButton#recordDockOpenFolder {
 }
 
 /* Capture-frame dock button — round 44×44 icon-only button.
+   v10 CapDockBtn: idle = rgba(255,255,255,0.05) fill + 1px line2 border (full circle).
    Hover shows accent-dim fill + accent-line border per suite-record.jsx
-   CaptureFrameStudy. Fixed size and border-radius enforced in C++. */
+   CaptureFrameStudy. Fixed size (44×44) and border-radius (22px) enforced in C++. */
 QPushButton[dockAction="captureFrame"] {
     border-radius: 22px;
     padding: 0;
-    background: transparent;
+    background: rgba(255, 255, 255, 0.05);
     border: 1px solid ${line2};
 }
 
@@ -3073,6 +3087,29 @@ QPushButton[dockAction="captureFrame"]:disabled {
 
 QPushButton[dockAction="captureFrame"]:focus {
     border-color: ${accent};
+}
+
+/* v10 icon-only dock action buttons (Add marker / Split) — same 44×44 round
+   treatment as capture-frame but neutral accent on hover (not accent-dim). */
+QPushButton[dockAction="iconAction"] {
+    border-radius: 22px;
+    padding: 0;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid ${line2};
+}
+
+QPushButton[dockAction="iconAction"]:hover {
+    background: rgba(255, 255, 255, 0.10);
+    border-color: ${line2};
+}
+
+QPushButton[dockAction="iconAction"]:pressed {
+    background: rgba(255, 255, 255, 0.16);
+}
+
+QPushButton[dockAction="iconAction"]:disabled {
+    border-color: ${line1};
+    opacity: 0.38;
 }
 
 QPushButton[dockAction="record"],
@@ -3154,19 +3191,89 @@ QLabel[labelRole="recordDockSize"] {
     color: ${text2};
 }
 
-/* Countdown select — compact recording-delay control. */
-QComboBox#recordCountdownSelect {
-    background: ${bg2};
-    border: 1px solid ${line1};
-    border-radius: ${radius-sm}px;
-    padding: 4px 8px;
-    color: ${text2};
-    min-width: 56px;
-    max-width: 96px;
+/* v10 Split Record button — pill container clips both halves via border-radius.
+   The container background and border define the pill outline; individual child
+   buttons carry no border-radius so they read as a single fused control.
+   containerAction="record" → mint pill; containerAction="stop" → coral (Cancel). */
+QFrame#recordSplitContainer {
+    background: ${accent};
+    border: 1px solid ${accent};
+    border-radius: 999px;
+    min-height: 46px;
 }
 
-QComboBox#recordCountdownSelect:disabled {
-    color: ${text3};
+QFrame#recordSplitContainer[containerAction="stop"] {
+    background: ${err};
+    border-color: ${err};
+}
+
+/* Record face — occupies the left portion of the pill; no individual radius. */
+QPushButton#recordDockRecord[splitRole="face"] {
+    border-radius: 0;
+    border: none;
+    background: transparent;
+    padding: 0 18px 0 22px;
+    min-height: 46px;
+}
+
+QPushButton#recordDockRecord[splitRole="face"]:hover {
+    background: rgba(0, 0, 0, 0.10);
+}
+
+QPushButton#recordDockRecord[splitRole="face"]:pressed {
+    background: rgba(0, 0, 0, 0.18);
+}
+
+QPushButton#recordDockRecord[splitRole="face"]:disabled {
+    background: transparent;
+}
+
+/* Thin divider between the two pill halves. */
+QFrame#recordSplitDivider {
+    background: rgba(0, 0, 0, 0.20);
+    border: none;
+    margin: 8px 0;
+}
+
+/* Chevron half — right portion of the pill; no individual radius. */
+QPushButton#recordDockChevron {
+    border-radius: 0;
+    border: none;
+    background: transparent;
+    padding: 0 12px;
+    min-height: 46px;
+}
+
+QPushButton#recordDockChevron:hover {
+    background: rgba(0, 0, 0, 0.12);
+}
+
+QPushButton#recordDockChevron:pressed {
+    background: rgba(0, 0, 0, 0.20);
+}
+
+QPushButton#recordDockChevron:disabled {
+    background: transparent;
+    opacity: 0.45;
+}
+
+/* Countdown context menu — minimal dark popup matching the dock surface. */
+QMenu#recordCountdownMenu {
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-radius: ${radius-md}px;
+    padding: 4px;
+}
+
+QMenu#recordCountdownMenu::item {
+    padding: 9px 12px;
+    border-radius: ${radius-sm}px;
+    font-size: 13px;
+    color: ${text0};
+}
+
+QMenu#recordCountdownMenu::item:selected {
+    background: ${accent-soft};
 }
 
 /* ---------------------------------------------------------------------------
@@ -3230,32 +3337,12 @@ QPushButton[dockAction="stop"]:focus {
 /* ── D6 Settings header zone ─────────────────────────────────────────────────
    settingsHeaderZone  — header container (title row + sub-row).
    pageTitle           — "Settings" label, large bold.
-   settingsSearchPill  — rounded pill wrapping search box + optional icon.
-   pillInput           — the QLineEdit inside the search pill (frameless).
-   warnHint            — amber inline warning label (Expert mode on, no search). */
+   warnHint            — amber inline warning label (Expert mode). */
 
 QLabel[labelRole="pageTitle"] {
     font-size: 22px;
     font-weight: 700;
     color: ${text0};
-}
-
-QWidget#settingsSearchPill {
-    background: ${bg2};
-    border: 1px solid ${line2};
-    border-radius: 999px;
-}
-
-QWidget#settingsSearchPill[focused="true"] {
-    border-color: ${accent};
-}
-
-QLineEdit[role="pillInput"] {
-    background: transparent;
-    border: none;
-    min-height: 0;
-    max-height: none;
-    font-size: 13px;
 }
 
 /* Expert warn hint: amber background + border, similar to the compat callout */
@@ -3337,10 +3424,11 @@ QPushButton[themePickerCard="true"] {
     border-radius: ${radius-md}px;
     padding: 0;
     text-align: left;
-    /* Tall enough for the 116x70 preview swatch plus the wrapped 3-line intent
-       text. A QPushButton does not propagate its layout's height-for-width, so
-       the card must be forced past the content height or the last line clips. */
-    min-height: 100px;
+    /* Each card holds a per-theme preview swatch plus the theme name below it.
+       A QPushButton's sizeHint ignores its child layout, so the card height is
+       forced in code (ConfigPage makeThemeOption: setMinimumHeight) to keep the
+       name clear of the swatch; this floor is a backstop. */
+    min-height: 130px;
 }
 
 QPushButton[themePickerCard="true"]:hover {

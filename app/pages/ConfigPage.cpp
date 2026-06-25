@@ -187,6 +187,21 @@ class ThemePreviewSwatch : public QWidget {
         update();
     }
 
+    // Embed the swatch inside a clickable theme card: reserve a fixed preview
+    // height (a QPushButton does NOT honour a child layout's height-for-width, so
+    // height cannot be derived from width) and paint the 116×70 mini-UI scaled to
+    // FIT the widget, centred — never clipped, whatever the card width becomes.
+    void setCardFill(bool fill) {
+        card_fill_ = fill;
+        if (fill) {
+            setMinimumWidth(0);
+            setMaximumWidth(QWIDGETSIZE_MAX);
+            setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            setFixedHeight(82);
+        }
+        update();
+    }
+
   protected:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
@@ -211,7 +226,17 @@ class ThemePreviewSwatch : public QWidget {
         // height (keeping the designed proportions) and centre horizontally.
         int W = width();
         int H = height();
-        if (full_width_) {
+        if (card_fill_) {
+            // Scale the 116×70 mini-UI to FIT the widget (keeping aspect) and
+            // centre it — never clips, whatever the card width turns out to be.
+            const qreal scale = qMin(static_cast<qreal>(W) / 116.0, static_cast<qreal>(H) / 70.0);
+            const qreal scaledW = 116.0 * scale;
+            const qreal scaledH = 70.0 * scale;
+            p.translate((W - scaledW) / 2.0, (H - scaledH) / 2.0);
+            p.scale(scale, scale);
+            W = 116;
+            H = 70;
+        } else if (full_width_) {
             constexpr qreal kDesignW = 116.0;
             constexpr qreal kDesignH = 70.0;
             const qreal scale = qMax(1.0, static_cast<qreal>(H) / kDesignH);
@@ -317,21 +342,13 @@ class ThemePreviewSwatch : public QWidget {
 
     const exosnap::ui::theme::ExoTheme* theme_;
     bool full_width_ = false;
+    bool card_fill_ = false;
 };
 
 QFrame* makePanel(QWidget* parent) {
     auto* panel = new QFrame(parent);
     panel->setProperty("panelRole", "panel");
     return panel;
-}
-
-// Look up an ExoTheme by id (falls back to the first theme for unknown ids).
-const exosnap::ui::theme::ExoTheme& ThemeById(const QString& id) {
-    for (const auto& t : exosnap::ui::theme::kExoThemes) {
-        if (QString::fromUtf8(t.id) == id)
-            return t;
-    }
-    return exosnap::ui::theme::kExoThemes[0];
 }
 
 // Card title: 15/600 per the design system "Section/card title" role.
@@ -621,8 +638,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     // ---- SLIM TOOLBAR (Settings 1B redesign) ----
     // One row: [Preset] quiet label · combo · Save (dirty-gated) · Save As… · Manage · dirty hint
-    //          · stretch · (expert-only) search pill · Expert mode label + toggle
-    // Below: match-count / expert-hint / expert-warn labels
+    //          · stretch · Expert mode label + toggle
     // No page title — the active nav tab already reads "Settings".
     {
         auto* header_zone = new QWidget(content);
@@ -632,14 +648,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         header_vl->setSpacing(8);
 
         // ---- Slim toolbar row ----
-        // preset_panel_ points at the toolbar so applySettingsSearch can hide it
-        // when the query does not match "preset" keywords.
         auto* toolbar_row = new QWidget(header_zone);
         toolbar_row->setObjectName(QStringLiteral("settingsSlimToolbar"));
         toolbar_row->setProperty("role", "settingsToolbar");
-        // preset_panel_ intentionally left nullptr: the slim toolbar is always visible
-        // (it carries the Expert toggle/search pill that must not be hidden during search).
-        // applySettingsSearch null-checks preset_panel_ and is a no-op when it is nullptr.
 
         auto* toolbar_hl = new QHBoxLayout(toolbar_row);
         toolbar_hl->setContentsMargins(14, 8, 10, 8);
@@ -679,6 +690,18 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         preset_save_as_btn_->setObjectName(QStringLiteral("presetSaveAsButton"));
         preset_save_as_btn_->setProperty("role", "ghost");
         toolbar_hl->addWidget(preset_save_as_btn_, 0, Qt::AlignVCenter);
+
+        // Export button (v10)
+        preset_export_btn_ = new QPushButton(QStringLiteral("Export"), toolbar_row);
+        preset_export_btn_->setObjectName(QStringLiteral("presetExportButton"));
+        preset_export_btn_->setProperty("role", "ghost");
+        toolbar_hl->addWidget(preset_export_btn_, 0, Qt::AlignVCenter);
+
+        // Import button (v10)
+        preset_import_btn_ = new QPushButton(QStringLiteral("Import"), toolbar_row);
+        preset_import_btn_->setObjectName(QStringLiteral("presetImportButton"));
+        preset_import_btn_->setProperty("role", "ghost");
+        toolbar_hl->addWidget(preset_import_btn_, 0, Qt::AlignVCenter);
 
         // Manage overflow button
         profile_overflow_btn_ = new QToolButton(toolbar_row);
@@ -724,35 +747,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         // Stretch pushes expert controls to the right
         toolbar_hl->addStretch(1);
 
-        // Expert-only search pill (hidden until expert mode enabled)
-        auto* search_pill = new QWidget(toolbar_row);
-        settings_search_pill_ = search_pill;
-        search_pill->setObjectName(QStringLiteral("settingsSearchPill"));
-        search_pill->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-        search_pill->setFixedHeight(34);
-        search_pill->setVisible(false);
-        auto* pill_hl = new QHBoxLayout(search_pill);
-        pill_hl->setContentsMargins(10, 6, 10, 6);
-        pill_hl->setSpacing(6);
-
-        auto* search_icon = new QLabel(search_pill);
-        search_icon->setFixedSize(15, 15);
-        search_icon->setScaledContents(true);
-        search_icon->setPixmap(ui::theme::lucidePixmap(QStringLiteral("search"),
-                                                       QString::fromUtf8(ui::theme::ActiveTheme().dim), 15,
-                                                       search_icon->devicePixelRatioF()));
-        pill_hl->addWidget(search_icon);
-
-        settings_search_box_ = new QLineEdit(search_pill);
-        settings_search_box_->setObjectName(QStringLiteral("settingsSearchBox"));
-        settings_search_box_->setPlaceholderText(QStringLiteral("Search settings\xe2\x80\xa6"));
-        settings_search_box_->setClearButtonEnabled(true);
-        settings_search_box_->setFrame(false);
-        settings_search_box_->setProperty("role", "pillInput");
-        settings_search_box_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        pill_hl->addWidget(settings_search_box_, 1);
-        toolbar_hl->addWidget(search_pill, 0, Qt::AlignVCenter);
-
         // "Expert mode" label + toggle
         auto* expert_label = new QLabel(QStringLiteral("Expert mode"), toolbar_row);
         expert_label->setProperty("labelRole", "muted");
@@ -770,30 +764,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
         header_vl->addWidget(toolbar_row);
 
-        // Sub-row: match-count, expert-hint
-        settings_search_count_label_ = new QLabel(header_zone);
-        settings_search_count_label_->setObjectName(QStringLiteral("settingsSearchCountLabel"));
-        settings_search_count_label_->setProperty("labelRole", "muted");
-        settings_search_count_label_->setVisible(false);
-        header_vl->addWidget(settings_search_count_label_);
-
-        search_expert_hint_label_ = new QLabel(header_zone);
-        search_expert_hint_label_->setObjectName(QStringLiteral("searchExpertHintLabel"));
-        search_expert_hint_label_->setProperty("labelRole", "muted");
-        search_expert_hint_label_->setWordWrap(true);
-        search_expert_hint_label_->setVisible(false);
-        header_vl->addWidget(search_expert_hint_label_);
-
         layout->addWidget(header_zone);
     }
-    // ---- TWO-COLUMN CARD GRID (D6 design: Format | Audio / Webcam | Output / Presence | Appearance) ----
-    // Left column: Format & encoding, Webcam, Presence.
-    // Right column: Audio, Output, Appearance.
+    // ---- TWO-COLUMN CARD GRID (v10 masonry, fixed-column placement) ----
+    // Left column:  Container & codecs · Quality & timing · Audio · Hotkeys · Developer(Expert).
+    // Right column: Output · Webcam · Presence · Updates · Appearance.
     // On narrow viewports updateResponsiveLayout() flips both columns to a single stacked column.
-    // Updates card is placed full-width below the grid; Developer is full-width below that
-    // (expert-gated). The six main cards are individually visibility-controlled by
-    // applySettingsSearch so the grid host (columns_widget_) is only hidden when all six are
-    // hidden (cosmetic gap limitation is acceptable — see applySettingsSearch).
     auto* columns = new QWidget(content);
     columns_widget_ = columns;
     columns_layout_ = new QHBoxLayout(columns);
@@ -1374,11 +1350,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     // v10 (Delta 5): stable two-column placement, priority-ordered, identical in
     // Default and Expert (Expert only adds rows in place + reveals Developer).
-    //   Left  : Container & codecs · Quality & timing · Audio
-    //   Right : Output · Webcam · Presence · Hotkeys · Appearance · (Developer, Expert)
-    // Left cards are added in build order here; right cards are parented to right_col
-    // but added to right_layout in one explicit, target-ordered block after they are
-    // all built (see the consolidation block below the Developer card).
+    //   Left  : Container & codecs · Quality & timing · Audio · Hotkeys · Developer(Expert)
+    //   Right : Output · Webcam · Presence · Updates · Appearance
+    // Left cards Container/Quality/Audio are added in build order here; Hotkeys and
+    // Developer are appended in the consolidation block (they are built later).
+    // Right cards are parented to right_col but added to right_layout in one explicit,
+    // target-ordered block (see the consolidation block after the Updates card).
     left_layout->addWidget(fmt_panel);
     left_layout->addWidget(quality_panel);
 
@@ -2011,7 +1988,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     audio_summary_label_->setVisible(false);
     audio_panel_layout->addWidget(audio_summary_label_);
     left_layout->addWidget(audio_panel);
-    left_layout->addStretch();
 
     // ---- WEBCAM CARD (right column — v10) ----
     auto* webcam_panel = makePanel(right_col);
@@ -2051,42 +2027,15 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         rll->addStretch();
         out_panel_layout->addWidget(res_label_row);
     }
-    auto* out_res_segmented = new QWidget(out_panel);
-    out_res_segmented->setObjectName(QStringLiteral("outputResSegmented"));
-    auto* out_res_layout = new QHBoxLayout(out_res_segmented);
-    out_res_layout->setContentsMargins(3, 3, 3, 3);
-    out_res_layout->setSpacing(0);
-    output_resolution_group_ = new QButtonGroup(this);
-    output_resolution_group_->setExclusive(true);
-    auto makeOutputResolutionSegment = [&](const QString& object_name, const QString& label,
-                                           OutputResolutionMode mode) -> QPushButton* {
-        auto* seg = new QPushButton(label, out_res_segmented);
-        seg->setObjectName(object_name);
-        seg->setAccessibleName(label);
-        seg->setCheckable(true);
-        seg->setAutoDefault(false);
-        seg->setDefault(false);
-        seg->setCursor(Qt::PointingHandCursor);
-        seg->setProperty("qualitySegment", true);
-        seg->setProperty("qualitySegmentSelected", false);
-        seg->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        output_resolution_group_->addButton(seg, static_cast<int>(mode));
-        out_res_layout->addWidget(seg);
-        return seg;
-    };
-    output_res_native_btn_ = makeOutputResolutionSegment(QStringLiteral("outputResNativeButton"),
-                                                         QStringLiteral("Native"), OutputResolutionMode::Native);
-    output_res_4k_btn_ = makeOutputResolutionSegment(QStringLiteral("outputRes4kButton"), QStringLiteral("4K"),
-                                                     OutputResolutionMode::UHD2160);
-    output_res_1440_btn_ = makeOutputResolutionSegment(QStringLiteral("outputRes1440Button"), QStringLiteral("1440p"),
-                                                       OutputResolutionMode::QHD1440);
-    output_res_1080_btn_ = makeOutputResolutionSegment(QStringLiteral("outputRes1080Button"), QStringLiteral("1080p"),
-                                                       OutputResolutionMode::FHD1080);
-    output_res_720_btn_ = makeOutputResolutionSegment(QStringLiteral("outputRes720Button"), QStringLiteral("720p"),
-                                                      OutputResolutionMode::HD720);
-    output_res_custom_btn_ = makeOutputResolutionSegment(QStringLiteral("outputResCustomButton"),
-                                                         QStringLiteral("Custom"), OutputResolutionMode::Custom);
-    out_panel_layout->addWidget(out_res_segmented);
+    output_res_combo_ = new QComboBox(out_panel);
+    output_res_combo_->setObjectName(QStringLiteral("outputResCombo"));
+    output_res_combo_->addItem(QStringLiteral("Native"), static_cast<int>(OutputResolutionMode::Native));
+    output_res_combo_->addItem(QStringLiteral("4K"), static_cast<int>(OutputResolutionMode::UHD2160));
+    output_res_combo_->addItem(QStringLiteral("1440p"), static_cast<int>(OutputResolutionMode::QHD1440));
+    output_res_combo_->addItem(QStringLiteral("1080p"), static_cast<int>(OutputResolutionMode::FHD1080));
+    output_res_combo_->addItem(QStringLiteral("720p"), static_cast<int>(OutputResolutionMode::HD720));
+    output_res_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(OutputResolutionMode::Custom));
+    out_panel_layout->addWidget(output_res_combo_);
 
     // Custom resolution width/height fields (CUSTOM-OUTPUT-RESOLUTION-R1).
     custom_resolution_widget_ = new QWidget(out_panel);
@@ -2272,6 +2221,26 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     naming_edit_->setPlaceholderText(QStringLiteral("{datetime}_{app}_{title}"));
     output_fields_layout->addWidget(naming_edit_);
 
+    // v10 (Task #4): token chips are ALWAYS VISIBLE below the pattern input.
+    // ChipFlowWidget wraps naturally at any width. No toggle button needed.
+    // Only tokens the FilenameBuilder actually resolves are shown.
+    {
+        const QStringList token_chips = {QStringLiteral("{datetime}"), QStringLiteral("{date}"),
+                                         QStringLiteral("{time}"),     QStringLiteral("{app}"),
+                                         QStringLiteral("{title}"),    QStringLiteral("{target}"),
+                                         QStringLiteral("{profile}"),  QStringLiteral("{container}")};
+        auto* chip_flow = new ChipFlowWidget(output_fields);
+        chip_flow->setObjectName(QStringLiteral("tokenChipFlow"));
+        token_chip_flow_ = chip_flow;
+        for (const QString& token : token_chips) {
+            auto* chip = new QLabel(token, chip_flow);
+            chip->setProperty("labelRole", "tokenChip");
+            chip_flow->addChip(chip);
+        }
+        // Always visible — no toggle.
+        output_fields_layout->addWidget(chip_flow);
+    }
+
     pattern_validation_label_ = makeHint(QString(), output_fields);
     pattern_validation_label_->setVisible(false);
     output_fields_layout->addWidget(pattern_validation_label_);
@@ -2280,47 +2249,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_fields_layout->addWidget(example_filename_label_);
     output_fields_layout->addStretch();
 
-    auto* output_help = new QWidget(output_split);
-    auto* output_help_layout = new QVBoxLayout(output_help);
-    output_help_layout->setContentsMargins(0, 0, 0, 0);
-    output_help_layout->setSpacing(8);
-
-    output_help_layout->addWidget(makeOutputSubLabel(QStringLiteral("Filename tokens"), output_help));
-
-    // Compact chips of the most common real tokens; the full reference stays behind the toggle.
-    // Only tokens the FilenameBuilder actually resolves are shown (e.g. {target}/{profile}).
-    // D6 wave-2: replaced fixed "4 per row" QHBoxLayouts with a ChipFlowWidget so chips
-    // wrap naturally at any available width without overflow or clipping.
-    const QStringList token_chips = {QStringLiteral("{datetime}"), QStringLiteral("{date}"),
-                                     QStringLiteral("{time}"),     QStringLiteral("{app}"),
-                                     QStringLiteral("{title}"),    QStringLiteral("{target}"),
-                                     QStringLiteral("{profile}"),  QStringLiteral("{container}")};
-    auto* chip_flow = new ChipFlowWidget(output_help);
-    for (const QString& token : token_chips) {
-        auto* chip = new QLabel(token, chip_flow);
-        chip->setProperty("labelRole", "tokenChip");
-        chip_flow->addChip(chip);
-    }
-    output_help_layout->addWidget(chip_flow);
-
-    token_help_toggle_btn_ = new QPushButton(QStringLiteral("Show token reference"), output_help);
-    token_help_toggle_btn_->setObjectName(QStringLiteral("tokenHelpToggle"));
-    token_help_toggle_btn_->setProperty("role", "ghost");
-    output_help_layout->addWidget(token_help_toggle_btn_, 0, Qt::AlignLeft);
-
-    token_help_label_ = makeHint(
-        QStringLiteral("Tokens: {datetime}, {date}, {time}, {timestamp}, {YYYY}, {YY}, {MM}, {DD}, {hh}, {mm}, {ss}, "
-                       "{app}, {title}, {process}, {target}, {profile}, {container}, {video}, {audio}"),
-        output_help);
-    token_help_label_->setVisible(false);
-    output_help_layout->addWidget(token_help_label_);
-
-    output_help_layout->addWidget(
-        makeHint(QStringLiteral("Tokens auto-fill names from the date, app, and capture target."), output_help));
-    output_help_layout->addStretch();
-
-    output_split_layout_->addWidget(output_fields, 3);
-    output_split_layout_->addWidget(output_help, 2);
+    // v10 (Task #4): output_help panel removed — chips are now in output_fields.
+    // The split layout keeps output_fields full-width; output_split_layout_ is still
+    // used by updateResponsiveLayout() to flip between horizontal/vertical direction.
+    output_split_layout_->addWidget(output_fields, 1);
     out_panel_layout->addWidget(output_split);
 
     // v10 (Delta 3): "Open editor when finished" — a real row in the Output card,
@@ -2447,9 +2379,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             return lbl;
         };
 
-        // v10 (Delta 4): compact selector option — a small swatch DOT + theme name,
-        // grouped Dark / Light. The four options remain checkable QPushButtons carrying
-        // the themePickerCard + themeId properties (test seam) and feed theme_button_group_.
+        // Theme option = a clickable PREVIEW card: a per-theme mini-UI swatch with
+        // the theme name + accent dot below it. The four cards remain checkable
+        // QPushButtons carrying the themePickerCard + themeId properties (test seam)
+        // and feed theme_button_group_. Selecting one applies the theme live; the
+        // checked card is marked via the themePickerCard:checked QSS rule.
         auto makeThemeOption = [&](const ui::theme::ExoTheme& t) -> QPushButton* {
             auto* card = new QPushButton(theme_grid);
             card->setCheckable(true);
@@ -2461,25 +2395,40 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             card->setProperty("themeId", QString::fromUtf8(t.id));
             card->setObjectName(QStringLiteral("themeCard_") + QString::fromUtf8(t.id));
             card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            // A QPushButton's sizeHint ignores its child layout, so force enough
+            // height for the 82px swatch + spacing + name row + margins; otherwise
+            // the name overlaps the swatch (see themePickerCard QSS note).
+            card->setMinimumHeight(130);
 
-            auto* card_layout = new QHBoxLayout(card);
-            card_layout->setContentsMargins(11, 9, 11, 9);
-            card_layout->setSpacing(9);
+            auto* card_layout = new QVBoxLayout(card);
+            card_layout->setContentsMargins(10, 10, 10, 9);
+            card_layout->setSpacing(8);
 
-            // Small swatch dot painted in the theme's accent colour.
-            auto* dot = new QLabel(card);
-            dot->setFixedSize(12, 12);
-            {
-                const QString ac = QString::fromUtf8(t.ac);
-                dot->setStyleSheet(
-                    QStringLiteral("border-radius:6px; background:%1; border:1px solid rgba(255,255,255,0.18);")
-                        .arg(ac));
-            }
-            auto* name_lbl = new QLabel(QString::fromUtf8(t.name), card);
+            // Per-theme preview swatch — fills the card width, fixed aspect.
+            // Transparent for mouse events so the whole card stays the click target.
+            auto* swatch = new ThemePreviewSwatch(t, card);
+            swatch->setCardFill(true);
+            swatch->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+            card_layout->addWidget(swatch);
+
+            // Name row: accent dot + theme name, centred under the swatch.
+            auto* name_row = new QWidget(card);
+            name_row->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+            auto* name_layout = new QHBoxLayout(name_row);
+            name_layout->setContentsMargins(0, 0, 0, 0);
+            name_layout->setSpacing(8);
+            name_layout->addStretch(1);
+            auto* dot = new QLabel(name_row);
+            dot->setFixedSize(10, 10);
+            dot->setStyleSheet(
+                QStringLiteral("border-radius:5px; background:%1; border:1px solid rgba(255,255,255,0.18);")
+                    .arg(QString::fromUtf8(t.ac)));
+            auto* name_lbl = new QLabel(QString::fromUtf8(t.name), name_row);
             name_lbl->setProperty("labelRole", "settingsRowLabel");
-
-            card_layout->addWidget(dot, 0, Qt::AlignVCenter);
-            card_layout->addWidget(name_lbl, 1, Qt::AlignVCenter);
+            name_layout->addWidget(dot, 0, Qt::AlignVCenter);
+            name_layout->addWidget(name_lbl, 0, Qt::AlignVCenter);
+            name_layout->addStretch(1);
+            card_layout->addWidget(name_row);
             return card;
         };
 
@@ -2515,53 +2464,30 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
         appearance_layout->addWidget(theme_grid);
 
-        // v10 (Delta 4): ONE large preview spanning the full card width, showing the
-        // SELECTED theme. Updated on selection via setThemeId() / the button-group
-        // idClicked handler. Seeded to the currently-selected theme.
-        {
-            const ui::theme::ExoTheme* initial = &ui::theme::kExoThemes[0];
-            for (const auto& t : ui::theme::kExoThemes) {
-                if (QString::fromUtf8(t.id) == current_theme_id_) {
-                    initial = &t;
-                    break;
-                }
-            }
-            auto* preview = new ThemePreviewSwatch(*initial, appearance_panel);
-            preview->setObjectName(QStringLiteral("appearancePreviewSwatch"));
-            preview->setFullWidth(true);
-            preview->setMinimumHeight(120);
-            appearance_preview_swatch_ = preview;
-            auto* preview_holder = new QWidget(appearance_panel);
-            auto* ph_layout = new QVBoxLayout(preview_holder);
-            ph_layout->setContentsMargins(0, 12, 0, 2);
-            ph_layout->setSpacing(0);
-            ph_layout->addWidget(preview);
-            appearance_layout->addWidget(preview_holder);
-        }
-
         // appearance_panel added to right_layout in the consolidation block below.
     }
 
-    // ---- PS-PHASE-C: HOTKEYS CARD (right column — v10, single-width) ----
-    QWidget* hotkeys_panel = nullptr;
+    // ---- PS-PHASE-C: HOTKEYS CARD (LEFT column — v10, single-width) ----
+    // v10 masonry: Hotkeys belongs to left column (below Audio).
     {
-        hotkeys_panel = makePanel(right_col);
-        hotkeys_panel->setObjectName(QStringLiteral("settingsHotkeysCard"));
-        auto* hotkeys_panel_layout = new QVBoxLayout(hotkeys_panel);
+        hotkeys_panel_ = makePanel(left_col);
+        hotkeys_panel_->setObjectName(QStringLiteral("settingsHotkeysCard"));
+        auto* hotkeys_panel_layout = new QVBoxLayout(hotkeys_panel_);
         hotkeys_panel_layout->setContentsMargins(18, 16, 18, 18);
         hotkeys_panel_layout->setSpacing(10);
-        hotkeys_panel_layout->addWidget(makeCardTitle(QStringLiteral("Hotkeys"), hotkeys_panel));
+        hotkeys_panel_layout->addWidget(makeCardTitle(QStringLiteral("Hotkeys"), hotkeys_panel_));
 
-        hotkeys_settings_panel_ = new ui::widgets::HotkeysSettingsPanel(hotkeys_panel);
+        hotkeys_settings_panel_ = new ui::widgets::HotkeysSettingsPanel(hotkeys_panel_);
         hotkeys_settings_panel_->setObjectName(QStringLiteral("settingsHotkeysPanel"));
         hotkeys_panel_layout->addWidget(hotkeys_settings_panel_);
-        // hotkeys_panel added to right_layout in the consolidation block below.
+        // hotkeys_panel_ added to left_layout in the consolidation block below.
     }
 
-    // ---- DEVELOPER CARD (Expert-gated, right column — v10, single-width) ----
+    // ---- DEVELOPER CARD (Expert-gated, LEFT column — v10, single-width) ----
+    // v10 masonry: Developer belongs to left column (after Hotkeys, expert-gated).
     // UI-only debug stubs (log level, NVTX). No persistence — local variables only.
     {
-        developer_card_ = makePanel(right_col);
+        developer_card_ = makePanel(left_col);
         developer_card_->setObjectName(QStringLiteral("settingsDeveloperCard"));
         auto* dev_layout = new QVBoxLayout(developer_card_);
         dev_layout->setContentsMargins(18, 14, 18, 14);
@@ -2601,20 +2527,69 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         }
 
         developer_card_->setVisible(expert_mode_enabled_);
-        // developer_card_ added to right_layout in the consolidation block below.
+        // developer_card_ added to left_layout in the consolidation block below.
     }
 
-    // ---- v10 (Delta 5): RIGHT-COLUMN CONSOLIDATION (stable, priority order) ----
-    // All right-column cards are added here in their fixed target order so the
-    // layout is identical between Default and Expert — Expert only reveals rows in
-    // place and shows the (already-placed) Developer card. Order:
-    //   Output · Webcam · Presence · Hotkeys · Appearance · Developer.
+    // ---- UPDATES CARD (right column, between Presence and Appearance) ----
+    // v10 masonry: Updates lives in the right column. The full update service is not
+    // wired through ConfigPage; controls are stubs that preserve the real shape so the
+    // layout is stable and future wiring is a drop-in.
+    {
+        updates_panel_ = makePanel(right_col);
+        updates_panel_->setObjectName(QStringLiteral("settingsUpdatesCard"));
+        auto* updates_layout = new QVBoxLayout(updates_panel_);
+        updates_layout->setContentsMargins(18, 14, 18, 14);
+        updates_layout->setSpacing(0);
+        updates_layout->addWidget(makeCardTitle(QStringLiteral("Updates"), updates_panel_));
+
+        // Row 1: Update channel combo (Stable / Preview).
+        {
+            auto* channel_combo = new QComboBox(updates_panel_);
+            channel_combo->setObjectName(QStringLiteral("updatesChannelCombo"));
+            channel_combo->addItem(QStringLiteral("Stable"));
+            channel_combo->addItem(QStringLiteral("Preview"));
+            updates_layout->addWidget(makeSettingsRow(
+                updates_panel_, QStringLiteral("Update channel"),
+                new ui::widgets::InfoHintIcon(
+                    QStringLiteral("Stable ships tested releases; Preview delivers release candidates earlier."),
+                    updates_panel_),
+                QString(), channel_combo, /*first=*/true));
+        }
+
+        // Row 2: Automatic updates toggle.
+        {
+            auto* auto_check_toggle = new ui::widgets::ExoToggle(updates_panel_);
+            auto_check_toggle->setObjectName(QStringLiteral("updatesAutoCheckToggle"));
+            auto_check_toggle->setOn(true);
+            updates_layout->addWidget(makeSettingsRow(
+                updates_panel_, QStringLiteral("Automatic updates"),
+                new ui::widgets::InfoHintIcon(
+                    QStringLiteral("Check in the background and install after recording stops."), updates_panel_),
+                QString(), auto_check_toggle));
+        }
+
+        // Status / action row — stub label; real UpdateControl wired in a later wave.
+        auto* status_lbl = makeHint(QStringLiteral("\xe2\x9c\x93 Up to date"), updates_panel_);
+        status_lbl->setObjectName(QStringLiteral("updatesStatusLabel"));
+        status_lbl->setContentsMargins(0, 10, 0, 0);
+        updates_layout->addWidget(status_lbl);
+
+        // updates_panel_ added to right_layout in the consolidation block below.
+    }
+
+    // ---- v10 (Delta 5): COLUMN CONSOLIDATION (stable, priority order) ----
+    // Left column: Container & codecs · Quality & timing · Audio · Hotkeys · Developer(Expert).
+    // Right column: Output · Webcam · Presence · Updates · Appearance.
+    // Expert only reveals rows in place / shows Developer card — nothing teleports sideways.
+    left_layout->addWidget(hotkeys_panel_);
+    left_layout->addWidget(developer_card_);
+    left_layout->addStretch();
+
     right_layout->addWidget(out_panel);
     right_layout->addWidget(webcam_panel);
     right_layout->addWidget(presence_panel_);
-    right_layout->addWidget(hotkeys_panel);
+    right_layout->addWidget(updates_panel_);
     right_layout->addWidget(appearance_panel_);
-    right_layout->addWidget(developer_card_);
     right_layout->addStretch();
 
     layout->addStretch();
@@ -2646,9 +2621,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         const QString id = btn->property("themeId").toString();
         if (!id.isEmpty()) {
             current_theme_id_ = id;
-            // v10 (Delta 4): update the full-width preview to the selected theme.
-            if (appearance_preview_swatch_)
-                static_cast<ThemePreviewSwatch*>(appearance_preview_swatch_)->setTheme(ThemeById(id));
             emit themeIdChanged(id);
         }
     });
@@ -2680,7 +2652,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(frame_rate_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onFrameRateChanged);
     connect(timing_group_, &QButtonGroup::idClicked, this, &ConfigPage::onTimingSelected);
-    connect(output_resolution_group_, &QButtonGroup::idClicked, this, &ConfigPage::onOutputResolutionSelected);
+    connect(output_res_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (index < 0)
+            return;
+        onOutputResolutionSelected(output_res_combo_->itemData(index).toInt());
+    });
     connect(split_mode_combo_, &QComboBox::currentIndexChanged, this, &ConfigPage::onSplitModeChanged);
     connect(split_custom_minutes_spin_, &QSpinBox::valueChanged, this, [this](int minutes) {
         format_settings_.split.custom_minutes = static_cast<uint32_t>(minutes);
@@ -2730,13 +2706,20 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // Preset management connections — primary action buttons.
     connect(preset_save_btn_, &QPushButton::clicked, this, &ConfigPage::onSavePreset);
     connect(preset_save_as_btn_, &QPushButton::clicked, this, &ConfigPage::onSavePresetAs);
-    connect(view_details_btn_, &QPushButton::clicked, this, &ConfigPage::diagnosticsRequested);
-    connect(token_help_toggle_btn_, &QPushButton::clicked, this, [this]() {
-        const bool now_visible = !token_help_label_->isVisible();
-        token_help_label_->setVisible(now_visible);
-        token_help_toggle_btn_->setText(now_visible ? QStringLiteral("Hide token reference")
-                                                    : QStringLiteral("Show token reference"));
+    connect(preset_export_btn_, &QPushButton::clicked, this, [this]() {
+        const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export Preset"), QString(),
+                                                          QStringLiteral("TOML files (*.toml)"));
+        if (!path.isEmpty())
+            emit exportCurrentPresetRequested(path);
     });
+    connect(preset_import_btn_, &QPushButton::clicked, this, [this]() {
+        const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Import Presets"), QString(),
+                                                          QStringLiteral("TOML files (*.toml)"));
+        if (!path.isEmpty())
+            emit importPresetsRequested(path);
+    });
+    connect(view_details_btn_, &QPushButton::clicked, this, &ConfigPage::diagnosticsRequested);
+    // token_help_toggle_btn_ removed (v10: token chips are permanently visible).
 
     // D6: ExoToggle replaces QPushButton for Expert-Mode.
     connect(expert_mode_toggle_, &QAbstractButton::clicked, this, [this]() {
@@ -2900,15 +2883,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         emitCurrentAudioSettings();
     });
 
-    // SETTINGS-SEARCH-R1: live search filter wired to textChanged.
-    connect(settings_search_box_, &QLineEdit::textChanged, this, &ConfigPage::applySettingsSearch);
-
-    // Search pill focus indicator: install an event filter on the QLineEdit so we
-    // can set a "focused" dynamic property on the pill when focus enters/leaves.
-    // (Qt QSS does not support :focus-within; a dynamic property + repolish is the
-    // standard Qt workaround.)
-    settings_search_box_->installEventFilter(this);
-
     // audio_separate_expander_ is null (removed in Phase 1b); audioSeparateExpanderChanged
     // is kept in the header for backward compatibility but is never emitted.
 
@@ -3022,15 +2996,6 @@ void ConfigPage::resizeEvent(QResizeEvent* event) {
 }
 
 bool ConfigPage::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == settings_search_box_ && settings_search_pill_) {
-        const auto t = event->type();
-        if (t == QEvent::FocusIn || t == QEvent::FocusOut) {
-            const bool focused = (t == QEvent::FocusIn);
-            settings_search_pill_->setProperty("focused", focused);
-            settings_search_pill_->style()->unpolish(settings_search_pill_);
-            settings_search_pill_->style()->polish(settings_search_pill_);
-        }
-    }
     return QWidget::eventFilter(watched, event);
 }
 
@@ -3713,26 +3678,15 @@ void ConfigPage::updateTimingSelection() {
 }
 
 void ConfigPage::updateOutputResolutionSelection() {
-    if (!output_resolution_group_)
+    if (!output_res_combo_)
         return;
 
-    auto sync_segment = [this](QPushButton* segment, OutputResolutionMode mode) {
-        if (!segment)
-            return;
-        const bool selected = format_settings_.resolution.mode == mode;
-        segment->setChecked(selected);
-        segment->setProperty("qualitySegmentSelected", selected);
-        segment->style()->unpolish(segment);
-        segment->style()->polish(segment);
-    };
-
-    const QSignalBlocker blocker(output_resolution_group_);
-    sync_segment(output_res_native_btn_, OutputResolutionMode::Native);
-    sync_segment(output_res_4k_btn_, OutputResolutionMode::UHD2160);
-    sync_segment(output_res_1440_btn_, OutputResolutionMode::QHD1440);
-    sync_segment(output_res_1080_btn_, OutputResolutionMode::FHD1080);
-    sync_segment(output_res_720_btn_, OutputResolutionMode::HD720);
-    sync_segment(output_res_custom_btn_, OutputResolutionMode::Custom);
+    {
+        const QSignalBlocker blocker(output_res_combo_);
+        const int idx = output_res_combo_->findData(static_cast<int>(format_settings_.resolution.mode));
+        if (idx >= 0 && output_res_combo_->currentIndex() != idx)
+            output_res_combo_->setCurrentIndex(idx);
+    }
 
     // D6 Task C: keep resolution CompareHint highlighted row in sync.
     if (resolution_compare_hint_) {
@@ -4624,240 +4578,6 @@ void ConfigPage::updateExpertModeVisibility() {
                             ? presence_panel_->findChild<QWidget*>(QStringLiteral("presenceV1PlaceholderSection"))
                             : nullptr)
         pres_ph->setVisible(expert_mode_enabled_);
-    // PS-PHASE-C: search pill only visible in expert mode.
-    if (settings_search_pill_)
-        settings_search_pill_->setVisible(expert_mode_enabled_);
-}
-
-// SETTINGS-SEARCH-R1: per-card live settings filter.
-//
-// Filtering strategy: per-card (whole cards are shown/hidden as a unit).
-// Rationale: ConfigPage builds all rows as anonymous widgets inlined in layouts;
-// there are no addressable per-row QWidget pointers stored in member variables.
-// Refactoring every row into a named container would restructure the entire
-// constructor — per-card filtering is the correct pragmatic choice here.
-//
-// Cards and their searchable keyword sets:
-//   Preset          → "preset", "profile", "save", "manage"
-//   Format&Encoding → "container", "codec", "quality", "frame rate", "fps", "timing",
-//                     "cfr", "vfr", "cursor", "mkv", "mp4", "webm", "h264", "h.264",
-//                     "av1", "hevc", "aac", "opus", "pcm", "format", "encoding"
-//   Audio           → "audio", "microphone", "mic", "system", "computer", "separate",
-//                     "track"
-//   Webcam          → "webcam", "camera", "mirror", "pip", "overlay"
-//   Output          → "output", "resolution", "destination", "folder", "filename",
-//                     "pattern", "split", "recording", "4k", "1080", "1440", "720",
-//                     "native", "custom"
-//   Updates         → "update", "software", "version", "check", "automatic"
-//   Presence        → "presence", "overlay", "notification", "tray", "diagnostics",
-//                     "quick", "controls"
-//   Appearance      → "appearance", "theme", "color", "colour", "dark", "light"
-//   Developer       → "developer", "log", "logging", "nvtx", "profiling", "debug",
-//                     "expert"
-//
-// Auto-open: when a keyword inside the Output Advanced expander content matches
-//   ("split", "recording"), the expander is forced open.
-// Expert-tier: when a Developer keyword matches and Expert mode is OFF, an inline
-//   "Enable Expert mode to show developer settings" hint is shown instead of
-//   hiding silently.
-
-void ConfigPage::applySettingsSearch(const QString& query) {
-    const QString q = query.trimmed().toLower();
-    const bool searching = !q.isEmpty();
-
-    // Keyword table: each entry maps a card widget to the list of search terms.
-    // The search checks whether ANY term in the list contains the query string.
-    struct CardEntry {
-        QWidget* card;
-        QStringList keywords;
-        bool is_expander_gated = false; // true → also check expander content
-        bool is_developer_card = false; // true → expert-mode affordance path
-    };
-
-    const QStringList preset_kws = {QStringLiteral("preset"), QStringLiteral("profile"), QStringLiteral("save"),
-                                    QStringLiteral("manage")};
-
-    const QStringList fmt_kws = {QStringLiteral("container"),  QStringLiteral("codec"),  QStringLiteral("quality"),
-                                 QStringLiteral("frame rate"), QStringLiteral("fps"),    QStringLiteral("timing"),
-                                 QStringLiteral("cfr"),        QStringLiteral("vfr"),    QStringLiteral("cursor"),
-                                 QStringLiteral("mkv"),        QStringLiteral("mp4"),    QStringLiteral("webm"),
-                                 QStringLiteral("h264"),       QStringLiteral("h.264"),  QStringLiteral("av1"),
-                                 QStringLiteral("hevc"),       QStringLiteral("aac"),    QStringLiteral("opus"),
-                                 QStringLiteral("pcm"),        QStringLiteral("format"), QStringLiteral("encoding")};
-
-    const QStringList audio_kws = {QStringLiteral("audio"),  QStringLiteral("microphone"), QStringLiteral("mic"),
-                                   QStringLiteral("system"), QStringLiteral("computer"),   QStringLiteral("separate"),
-                                   QStringLiteral("track")};
-
-    const QStringList webcam_kws = {QStringLiteral("webcam"), QStringLiteral("camera"), QStringLiteral("mirror"),
-                                    QStringLiteral("pip"), QStringLiteral("overlay")};
-
-    const QStringList output_kws = {
-        QStringLiteral("output"), QStringLiteral("resolution"), QStringLiteral("destination"),
-        QStringLiteral("folder"), QStringLiteral("filename"),   QStringLiteral("pattern"),
-        QStringLiteral("split"),  QStringLiteral("recording"),  QStringLiteral("4k"),
-        QStringLiteral("1080"),   QStringLiteral("1440"),       QStringLiteral("720"),
-        QStringLiteral("native"), QStringLiteral("custom")};
-
-    const QStringList presence_kws = {QStringLiteral("presence"),     QStringLiteral("overlay"),
-                                      QStringLiteral("notification"), QStringLiteral("tray"),
-                                      QStringLiteral("diagnostics"),  QStringLiteral("quick"),
-                                      QStringLiteral("controls")};
-
-    const QStringList appearance_kws = {QStringLiteral("appearance"), QStringLiteral("theme"), QStringLiteral("color"),
-                                        QStringLiteral("colour"),     QStringLiteral("dark"),  QStringLiteral("light")};
-
-    const QStringList developer_kws = {
-        QStringLiteral("developer"), QStringLiteral("log"),   QStringLiteral("logging"), QStringLiteral("nvtx"),
-        QStringLiteral("profiling"), QStringLiteral("debug"), QStringLiteral("expert")};
-
-    // Output Advanced expander keywords (subset of output_kws).
-    // These trigger expander auto-open regardless of which output keyword matched.
-    const QStringList expander_trigger_kws = {QStringLiteral("split"), QStringLiteral("recording")};
-
-    auto kwMatch = [&](const QStringList& keywords) -> bool {
-        for (const auto& kw : keywords) {
-            if (kw.contains(q) || q.contains(kw))
-                return true;
-        }
-        return false;
-    };
-
-    if (!searching) {
-        // Empty query: restore all cards to visible.
-        if (preset_panel_)
-            preset_panel_->setVisible(true);
-        if (columns_widget_)
-            columns_widget_->setVisible(true);
-        if (fmt_panel_)
-            fmt_panel_->setVisible(true);
-        if (quality_panel_)
-            quality_panel_->setVisible(true);
-        if (audio_panel_)
-            audio_panel_->setVisible(true);
-        if (webcam_panel_)
-            webcam_panel_->setVisible(true);
-        if (out_panel_)
-            out_panel_->setVisible(true);
-        if (presence_panel_)
-            presence_panel_->setVisible(true);
-        if (appearance_panel_)
-            appearance_panel_->setVisible(true);
-        // Developer card: restore to expert-mode-gated state.
-        if (developer_card_)
-            developer_card_->setVisible(expert_mode_enabled_);
-        // Wave 2: output_split_expander_ dissolved — no expander restore needed.
-
-        if (settings_search_count_label_)
-            settings_search_count_label_->setVisible(false);
-        if (search_expert_hint_label_)
-            search_expert_hint_label_->setVisible(false);
-        return;
-    }
-
-    // Active search: compute matches and adjust visibility.
-    const bool preset_match = kwMatch(preset_kws);
-    const bool fmt_match = kwMatch(fmt_kws);
-    const bool audio_match = kwMatch(audio_kws);
-    const bool webcam_match = kwMatch(webcam_kws);
-    const bool output_match = kwMatch(output_kws);
-    const bool presence_match = kwMatch(presence_kws);
-    const bool appearance_match = kwMatch(appearance_kws);
-    const bool developer_match = kwMatch(developer_kws);
-    // Output expander auto-open: matches if any expander-specific keyword matches
-    // OR the general output card already matched (expander is part of Output).
-    const bool expander_trigger = kwMatch(expander_trigger_kws);
-
-    // Apply card visibility.
-    if (preset_panel_)
-        preset_panel_->setVisible(preset_match);
-
-    // D6: all 6 grid cards (fmt, audio, webcam, output, presence, appearance) live in
-    // columns_widget_. Hide the host only when all six are hidden to avoid an empty gap.
-    // Cosmetic: when only some cards are hidden, the remaining card in each column expands
-    // vertically to fill the gap — this is an accepted limitation per the D6 brief.
-    const bool any_column_visible =
-        fmt_match || audio_match || webcam_match || output_match || presence_match || appearance_match;
-    if (columns_widget_)
-        columns_widget_->setVisible(any_column_visible);
-    if (fmt_panel_)
-        fmt_panel_->setVisible(fmt_match);
-    // v10: the Quality & timing card shares the Format/Encoding keyword set.
-    if (quality_panel_)
-        quality_panel_->setVisible(fmt_match);
-    if (audio_panel_)
-        audio_panel_->setVisible(audio_match);
-
-    if (webcam_panel_)
-        webcam_panel_->setVisible(webcam_match);
-    if (out_panel_)
-        out_panel_->setVisible(output_match);
-    if (presence_panel_)
-        presence_panel_->setVisible(presence_match);
-    if (appearance_panel_)
-        appearance_panel_->setVisible(appearance_match);
-
-    // Wave 2: output_split_expander_ dissolved — no expander auto-open needed.
-    // Split controls are part of the Output card and visible when expert mode is on.
-    (void)expander_trigger; // still declared; suppress unused-variable warning
-
-    // Developer card: expert-mode affordance.
-    if (developer_match) {
-        if (expert_mode_enabled_) {
-            // Expert mode is on → show the card normally.
-            if (developer_card_)
-                developer_card_->setVisible(true);
-            if (search_expert_hint_label_)
-                search_expert_hint_label_->setVisible(false);
-        } else {
-            // Expert mode is off → show an inline affordance, not the card.
-            if (developer_card_)
-                developer_card_->setVisible(false);
-            if (search_expert_hint_label_) {
-                search_expert_hint_label_->setText(QStringLiteral("Enable Expert mode to show developer settings."));
-                search_expert_hint_label_->setVisible(true);
-            }
-        }
-    } else {
-        // No developer match → keep developer card in its normal gated state.
-        if (developer_card_)
-            developer_card_->setVisible(expert_mode_enabled_);
-        if (search_expert_hint_label_)
-            search_expert_hint_label_->setVisible(false);
-    }
-
-    // Match count.
-    int match_count = 0;
-    // Count each matched card as 1.  This is intentionally coarse (per-card,
-    // not per-row) to match the filtering granularity.
-    if (preset_match)
-        ++match_count;
-    if (fmt_match)
-        ++match_count;
-    if (audio_match)
-        ++match_count;
-    if (webcam_match)
-        ++match_count;
-    if (output_match)
-        ++match_count;
-    if (presence_match)
-        ++match_count;
-    if (appearance_match)
-        ++match_count;
-    if (developer_match)
-        ++match_count;
-
-    if (settings_search_count_label_) {
-        if (match_count == 0) {
-            settings_search_count_label_->setText(QStringLiteral("No matches"));
-        } else {
-            settings_search_count_label_->setText(
-                QStringLiteral("%1 %2")
-                    .arg(match_count)
-                    .arg(match_count == 1 ? QStringLiteral("section") : QStringLiteral("sections")));
-        }
-        settings_search_count_label_->setVisible(true);
-    }
 }
 
 // SETTINGS-TIERS-P3: presence + appearance setters (moved from AdvancedPage).
@@ -4899,9 +4619,6 @@ void ConfigPage::setShowQuickControls(bool show) {
 
 void ConfigPage::setThemeId(const QString& theme_id) {
     current_theme_id_ = theme_id;
-    // v10 (Delta 4): keep the full-width preview in sync with the selected theme.
-    if (appearance_preview_swatch_)
-        static_cast<ThemePreviewSwatch*>(appearance_preview_swatch_)->setTheme(ThemeById(theme_id));
     if (!theme_button_group_)
         return;
     const QSignalBlocker blocker(theme_button_group_);
@@ -5164,11 +4881,8 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     quality_segment_high_->setEnabled(enabled);
     updateTimingSelection();
     cursor_check_->setEnabled(enabled);
-    output_res_native_btn_->setEnabled(enabled);
-    output_res_4k_btn_->setEnabled(enabled);
-    output_res_1440_btn_->setEnabled(enabled);
-    output_res_1080_btn_->setEnabled(enabled);
-    output_res_720_btn_->setEnabled(enabled);
+    if (output_res_combo_)
+        output_res_combo_->setEnabled(enabled);
 
     if (webcam_setup_panel_)
         webcam_setup_panel_->setControlsLocked(locked);
@@ -5234,6 +4948,8 @@ void ConfigPage::scrollToSection(const QString& section_target) {
         target_widget = appearance_panel_;
     else if (section_target == QStringLiteral("settings/hotkeys"))
         target_widget = hotkeys_settings_panel_;
+    else if (section_target == QStringLiteral("settings/updates"))
+        target_widget = updates_panel_;
 
     if (target_widget)
         scroll_area_->ensureWidgetVisible(target_widget);

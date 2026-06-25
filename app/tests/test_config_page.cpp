@@ -231,13 +231,10 @@ TEST_F(ConfigPageTest, HybridCardTitles_AreVisible) {
 TEST_F(ConfigPageTest, OutputResolution_IsFunctional) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    auto* segmented = page.findChild<QWidget*>(QStringLiteral("outputResSegmented"));
-    ASSERT_NE(segmented, nullptr);
-
-    const auto segments = segmented->findChildren<QPushButton*>();
-    ASSERT_GE(segments.size(), 5);
-    for (const auto* seg : segments)
-        EXPECT_TRUE(seg->isEnabled()) << "Output resolution segment must be interactive: " << seg->text().toStdString();
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("outputResCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_TRUE(combo->isEnabled()) << "Output resolution combo must be interactive";
+    EXPECT_GE(combo->count(), 5);
 
     OutputSettingsModel changed;
     bool emitted = false;
@@ -246,9 +243,9 @@ TEST_F(ConfigPageTest, OutputResolution_IsFunctional) {
         changed = settings;
     });
 
-    auto* res1080 = page.findChild<QPushButton*>(QStringLiteral("outputRes1080Button"));
-    ASSERT_NE(res1080, nullptr);
-    res1080->click();
+    const int idx1080 = combo->findData(static_cast<int>(OutputResolutionMode::FHD1080));
+    ASSERT_GE(idx1080, 0);
+    combo->setCurrentIndex(idx1080);
     EXPECT_TRUE(emitted);
     EXPECT_EQ(changed.resolution.mode, OutputResolutionMode::FHD1080);
 }
@@ -306,12 +303,14 @@ TEST_F(ConfigPageTest, OutputEffectiveSummaryReflectsFormatControls) {
     auto* summary = page.findChild<QLabel*>(QStringLiteral("outputEffectiveSummaryLabel"));
     ASSERT_NE(summary, nullptr);
 
-    auto* res720 = page.findChild<QPushButton*>(QStringLiteral("outputRes720Button"));
+    auto* res_combo = page.findChild<QComboBox*>(QStringLiteral("outputResCombo"));
     auto* frame_rate = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
-    ASSERT_NE(res720, nullptr);
+    ASSERT_NE(res_combo, nullptr);
     ASSERT_NE(frame_rate, nullptr);
 
-    res720->click();
+    const int idx720 = res_combo->findData(static_cast<int>(OutputResolutionMode::HD720));
+    ASSERT_GE(idx720, 0);
+    res_combo->setCurrentIndex(idx720);
     const int idx24 = frame_rate->findData(24);
     ASSERT_GE(idx24, 0);
     frame_rate->setCurrentIndex(idx24);
@@ -321,6 +320,7 @@ TEST_F(ConfigPageTest, OutputEffectiveSummaryReflectsFormatControls) {
 }
 
 TEST_F(ConfigPageTest, FilenameTokenChips_AreShown) {
+    // v10 (Task #4): token chips must be permanently present (not hidden behind a toggle).
     ConfigPage page(output_defaults_, video_defaults_);
 
     int chip_count = 0;
@@ -330,6 +330,23 @@ TEST_F(ConfigPageTest, FilenameTokenChips_AreShown) {
             ++chip_count;
     }
     EXPECT_GE(chip_count, 4) << "Output card should expose compact filename token chips";
+    // All expected token chips must be present.
+    EXPECT_EQ(chip_count, 8)
+        << "Expected 8 token chips ({datetime},{date},{time},{app},{title},{target},{profile},{container})";
+}
+
+TEST_F(ConfigPageTest, FilenameTokenChips_AlwaysVisible) {
+    // v10 (Task #4): token chips are permanently visible — no toggle needed.
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // The token chip flow widget must not be explicitly hidden right after construction.
+    auto* chip_flow = page.findChild<QWidget*>(QStringLiteral("tokenChipFlow"));
+    ASSERT_NE(chip_flow, nullptr) << "tokenChipFlow widget must exist";
+    EXPECT_FALSE(chip_flow->isHidden()) << "Token chips must be permanently visible (no toggle)";
+
+    // The old tokenHelpToggle button must not exist.
+    auto* old_toggle = page.findChild<QPushButton*>(QStringLiteral("tokenHelpToggle"));
+    EXPECT_EQ(old_toggle, nullptr) << "tokenHelpToggle button must not exist in v10";
 }
 
 TEST_F(ConfigPageTest, BuiltInAndModifiedStates_UsePresetCopy) {
@@ -589,7 +606,7 @@ TEST_F(ConfigPageTest, SetRecordingControlsLocked_DisablesKeyControls) {
     auto* timing_cfr = page.findChild<QPushButton*>(QStringLiteral("timingCfrButton"));
     ASSERT_NE(timing_cfr, nullptr);
     EXPECT_FALSE(timing_cfr->isEnabled());
-    auto* output_res = page.findChild<QPushButton*>(QStringLiteral("outputRes1080Button"));
+    auto* output_res = page.findChild<QComboBox*>(QStringLiteral("outputResCombo"));
     ASSERT_NE(output_res, nullptr);
     EXPECT_FALSE(output_res->isEnabled());
 
@@ -695,12 +712,21 @@ TEST_F(ConfigPageTest, MicSourceLabel_DoesNotSaySelectDeviceOnRecordPage) {
     }
 }
 
-TEST_F(ConfigPageTest, TokenHelpToggle_HiddenByDefault) {
+TEST_F(ConfigPageTest, UpdatesCard_IsPresent) {
+    // v10 (Task #5): Updates card must be present in the right column.
     ConfigPage page(output_defaults_, video_defaults_);
 
-    auto* toggle = page.findChild<QPushButton*>(QStringLiteral("tokenHelpToggle"));
-    ASSERT_NE(toggle, nullptr);
-    EXPECT_EQ(toggle->text(), QStringLiteral("Show token reference"));
+    auto* updates_card = page.findChild<QWidget*>(QStringLiteral("settingsUpdatesCard"));
+    ASSERT_NE(updates_card, nullptr) << "settingsUpdatesCard must exist";
+    EXPECT_FALSE(updates_card->isHidden()) << "Updates card must not be explicitly hidden by default";
+
+    // Update channel combo and auto-check toggle must be present.
+    auto* channel_combo = page.findChild<QComboBox*>(QStringLiteral("updatesChannelCombo"));
+    ASSERT_NE(channel_combo, nullptr) << "updatesChannelCombo must exist";
+    EXPECT_GE(channel_combo->count(), 2) << "Channel combo needs at least Stable/Preview";
+
+    auto* auto_toggle = page.findChild<QWidget*>(QStringLiteral("updatesAutoCheckToggle"));
+    EXPECT_NE(auto_toggle, nullptr) << "updatesAutoCheckToggle must exist";
 }
 
 TEST_F(ConfigPageTest, QualitySegment_HasSimpleLabels) {
@@ -1835,220 +1861,6 @@ TEST_F(ConfigPageTest, DeveloperCard_VisibleWhenExpertModeEnabled) {
     auto* card = page.findChild<QWidget*>(QStringLiteral("settingsDeveloperCard"));
     ASSERT_NE(card, nullptr) << "settingsDeveloperCard widget not found";
     EXPECT_FALSE(card->isHidden()) << "Developer card must not be hidden when expert mode is on";
-}
-
-// ── SETTINGS-SEARCH-R1: settings search box filter ───────────────────────────
-
-TEST_F(ConfigPageTest, SettingsSearch_BoxExists_WithStableObjectName) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    auto* box = page.findChild<QLineEdit*>(QStringLiteral("settingsSearchBox"));
-    ASSERT_NE(box, nullptr) << "Settings must contain a search QLineEdit (objectName settingsSearchBox)";
-    EXPECT_EQ(box->text(), QString()) << "Search box must be empty on construction";
-}
-
-TEST_F(ConfigPageTest, SettingsSearch_CountLabelExists) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    auto* label = page.findChild<QLabel*>(QStringLiteral("settingsSearchCountLabel"));
-    ASSERT_NE(label, nullptr) << "Settings must contain a match count label";
-    // Count label is hidden when query is empty.
-    EXPECT_TRUE(label->isHidden()) << "Match count label must be hidden when search box is empty";
-}
-
-TEST_F(ConfigPageTest, SettingsSearch_EmptyQuery_AllCardsVisible) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    auto* box = page.findChild<QLineEdit*>(QStringLiteral("settingsSearchBox"));
-    ASSERT_NE(box, nullptr);
-
-    // Type something, then clear — must restore all cards.
-    box->setText(QStringLiteral("audio"));
-    box->clear();
-
-    // Cards verified by presence of their card titles (visible QLabel).
-    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Preset")));
-    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Container & codecs")));
-    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Quality & timing")));
-    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Audio")));
-    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Webcam")));
-    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Output")));
-    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Presence")));
-    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Appearance")));
-}
-
-TEST_F(ConfigPageTest, SettingsSearch_AudioQuery_ShowsAudioHidesFmtAndWebcam) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    auto* box = page.findChild<QLineEdit*>(QStringLiteral("settingsSearchBox"));
-    ASSERT_NE(box, nullptr);
-    box->setText(QStringLiteral("microphone"));
-
-    // "Microphone" is an audio keyword → Audio card stays.
-    // "Format & encoding" and "Webcam" must be hidden.
-    // The containerSegmented widget lives in the Format & encoding card; if the card
-    // is hidden, isHidden() is true for the card itself (not necessarily its descendants).
-    // We instead check visibility of the audio panel by finding the VU meter which is
-    // audio-only, and the container segmented which is format-only.
-    auto* audio_meter = page.findChild<ui::widgets::VUMeterWidget*>(QStringLiteral("settingsAudioSysMeter"));
-    ASSERT_NE(audio_meter, nullptr);
-    // Audio meter's top-level-card ancestor is the audio panel; confirm it is not hidden.
-    // Walk up until we find a widget whose parent is visible but the widget itself has a
-    // known card title sibling.  The easiest stable check: the audio panel widget
-    // that is a sibling of the meter IS visible (meter itself may not be mapped yet).
-    // We simply verify that a search for "microphone" does not hide the audio panel's
-    // direct parent by checking the frame's hidden state up the hierarchy.
-    QWidget* w = audio_meter->parentWidget();
-    bool audio_card_visible = false;
-    while (w) {
-        // The audio panel has a panelRole property.
-        if (w->property("panelRole").toString() == QStringLiteral("panel")) {
-            audio_card_visible = !w->isHidden();
-            break;
-        }
-        w = w->parentWidget();
-    }
-    EXPECT_TRUE(audio_card_visible) << "Audio card must remain visible when query matches audio keywords";
-
-    // Format & encoding card must be hidden.
-    QWidget* container_seg = page.findChild<QWidget*>(QStringLiteral("containerSegmented"));
-    ASSERT_NE(container_seg, nullptr);
-    QWidget* fmt_card = container_seg->parentWidget();
-    bool fmt_card_hidden = false;
-    while (fmt_card) {
-        if (fmt_card->property("panelRole").toString() == QStringLiteral("panel")) {
-            fmt_card_hidden = fmt_card->isHidden();
-            break;
-        }
-        fmt_card = fmt_card->parentWidget();
-    }
-    EXPECT_TRUE(fmt_card_hidden) << "Format & encoding card must be hidden when query is 'microphone'";
-}
-
-TEST_F(ConfigPageTest, SettingsSearch_MatchCountLabel_ShowsAfterTyping) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    auto* box = page.findChild<QLineEdit*>(QStringLiteral("settingsSearchBox"));
-    ASSERT_NE(box, nullptr);
-    box->setText(QStringLiteral("audio"));
-
-    auto* label = page.findChild<QLabel*>(QStringLiteral("settingsSearchCountLabel"));
-    ASSERT_NE(label, nullptr);
-    EXPECT_FALSE(label->isHidden()) << "Match count label must appear when query is non-empty";
-    EXPECT_FALSE(label->text().isEmpty()) << "Match count label must not be empty during search";
-}
-
-TEST_F(ConfigPageTest, SettingsSearch_NoMatch_CountLabelSaysNoMatches) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    auto* box = page.findChild<QLineEdit*>(QStringLiteral("settingsSearchBox"));
-    ASSERT_NE(box, nullptr);
-    box->setText(QStringLiteral("zzzzunlikelysearchterm99999"));
-
-    auto* label = page.findChild<QLabel*>(QStringLiteral("settingsSearchCountLabel"));
-    ASSERT_NE(label, nullptr);
-    EXPECT_EQ(label->text(), QStringLiteral("No matches"))
-        << "No-match query must show 'No matches' in the count label";
-}
-
-// Wave 2: the per-card Output "Advanced" expander was dissolved. Split controls are now
-// expert-gated and live inside the Output card (objectName "splitExpertSection"). Searching
-// must therefore respect the expert gate rather than auto-opening a (no-longer-existing)
-// expander.
-TEST_F(ConfigPageTest, SettingsSearch_SplitQuery_ExpertOn_KeepsSplitControlsVisible) {
-    ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
-
-    auto* split = page.findChild<QWidget*>(QStringLiteral("splitExpertSection"));
-    ASSERT_NE(split, nullptr);
-    ASSERT_FALSE(split->isHidden()) << "Split controls must be visible once Expert mode is on";
-
-    auto* box = page.findChild<QLineEdit*>(QStringLiteral("settingsSearchBox"));
-    ASSERT_NE(box, nullptr);
-    box->setText(QStringLiteral("split"));
-
-    // 'split' matches the Output card; with Expert on, the split controls stay visible.
-    EXPECT_FALSE(split->isHidden()) << "Searching 'split' with Expert on must keep the split controls visible";
-}
-
-TEST_F(ConfigPageTest, SettingsSearch_SplitQuery_ExpertOff_SplitStaysHidden) {
-    ConfigPage page(output_defaults_, video_defaults_);
-    ASSERT_FALSE(page.expertModeEnabled());
-
-    auto* split = page.findChild<QWidget*>(QStringLiteral("splitExpertSection"));
-    ASSERT_NE(split, nullptr);
-    ASSERT_TRUE(split->isHidden()) << "Split controls start hidden when Expert mode is off";
-
-    auto* box = page.findChild<QLineEdit*>(QStringLiteral("settingsSearchBox"));
-    ASSERT_NE(box, nullptr);
-    box->setText(QStringLiteral("split"));
-
-    // Split is expert-gated: a search must NOT reveal it without Expert mode.
-    EXPECT_TRUE(split->isHidden())
-        << "Searching 'split' must not reveal expert-gated split controls when Expert is off";
-}
-
-TEST_F(ConfigPageTest, SettingsSearch_DeveloperKeyword_ExpertOff_ShowsHint) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    // Expert mode is off by default.
-    ASSERT_FALSE(page.expertModeEnabled());
-
-    auto* box = page.findChild<QLineEdit*>(QStringLiteral("settingsSearchBox"));
-    ASSERT_NE(box, nullptr);
-    box->setText(QStringLiteral("developer"));
-
-    // Developer card must stay hidden (Expert mode off).
-    auto* dev_card = page.findChild<QWidget*>(QStringLiteral("settingsDeveloperCard"));
-    ASSERT_NE(dev_card, nullptr);
-    EXPECT_TRUE(dev_card->isHidden()) << "Developer card must remain hidden when Expert mode is off during search";
-
-    // Expert hint label must appear.
-    auto* hint = page.findChild<QLabel*>(QStringLiteral("searchExpertHintLabel"));
-    ASSERT_NE(hint, nullptr);
-    EXPECT_FALSE(hint->isHidden())
-        << "Expert hint label must appear when a Developer keyword matches but Expert is off";
-    EXPECT_FALSE(hint->text().isEmpty()) << "Expert hint label must have non-empty text";
-}
-
-TEST_F(ConfigPageTest, SettingsSearch_DeveloperKeyword_ExpertOn_ShowsCard) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    page.setExpertModeEnabled(true);
-
-    auto* box = page.findChild<QLineEdit*>(QStringLiteral("settingsSearchBox"));
-    ASSERT_NE(box, nullptr);
-    box->setText(QStringLiteral("developer"));
-
-    auto* dev_card = page.findChild<QWidget*>(QStringLiteral("settingsDeveloperCard"));
-    ASSERT_NE(dev_card, nullptr);
-    EXPECT_FALSE(dev_card->isHidden()) << "Developer card must be visible when Expert mode is on and keyword matches";
-
-    auto* hint = page.findChild<QLabel*>(QStringLiteral("searchExpertHintLabel"));
-    ASSERT_NE(hint, nullptr);
-    EXPECT_TRUE(hint->isHidden()) << "Expert hint must be hidden when Expert mode is already on";
-}
-
-TEST_F(ConfigPageTest, SettingsSearch_ClearAfterDeveloperMatch_HidesHintShowsGatedState) {
-    ConfigPage page(output_defaults_, video_defaults_);
-
-    auto* box = page.findChild<QLineEdit*>(QStringLiteral("settingsSearchBox"));
-    ASSERT_NE(box, nullptr);
-    box->setText(QStringLiteral("developer"));
-
-    // Expert hint visible while searching.
-    auto* hint = page.findChild<QLabel*>(QStringLiteral("searchExpertHintLabel"));
-    ASSERT_NE(hint, nullptr);
-    ASSERT_FALSE(hint->isHidden());
-
-    box->clear();
-
-    EXPECT_TRUE(hint->isHidden()) << "Expert hint must hide after clearing the search box";
-
-    // Developer card must return to gated state (hidden because Expert is off).
-    auto* dev_card = page.findChild<QWidget*>(QStringLiteral("settingsDeveloperCard"));
-    ASSERT_NE(dev_card, nullptr);
-    EXPECT_TRUE(dev_card->isHidden()) << "Developer card must revert to hidden state after clearing search";
 }
 
 // ── S5: SettingsPopoverRow unit tests ────────────────────────────────────────

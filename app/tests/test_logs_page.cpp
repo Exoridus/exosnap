@@ -105,6 +105,7 @@ TEST_F(LogsPageTest, ContainedViewerAndCoreActionsExist) {
     EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("logClearBtn")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logCopyBtn")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logExportBtn")), nullptr);
+    // All / Info / Issues filter buttons must all be present.
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logFilterAllBtn")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logFilterInfoBtn")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logFilterIssuesBtn")), nullptr);
@@ -271,6 +272,7 @@ TEST_F(LogsPageTest, ExportUsesCompleteHistoryAndDeterministicUtf8Formatting) {
     AppLog::warning(QStringLiteral("Webcam"), QStringLiteral("device disconnected"));
     ProcessEvents();
     LogsPage page;
+    // Info filter: only the Info entry is visible (1 of 2), proving export uses full history.
     page.setSeverityFilter(LogsPage::SeverityFilter::Info);
     ASSERT_EQ(page.visibleEntryCount(), 1);
 

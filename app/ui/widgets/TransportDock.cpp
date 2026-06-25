@@ -1,15 +1,18 @@
 #include "TransportDock.h"
 
 #include "AudioSourceToggle.h"
-#include "CountdownSelect.h"
 
 #include "../theme/ExoSnapTheme.h"
 
+#include <QAction>
 #include <QByteArray>
+#include <QEvent>
+#include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
+#include <QMenu>
 #include <QPainter>
 #include <QPixmap>
 #include <QPushButton>
@@ -17,6 +20,7 @@
 #include <QString>
 #include <QStyle>
 #include <QSvgRenderer>
+#include <QTimer>
 
 namespace exosnap::ui::widgets {
 namespace {
@@ -88,6 +92,41 @@ void setStyledProperty(QWidget* widget, const char* name, const QString& value) 
     widget->style()->unpolish(widget);
     widget->style()->polish(widget);
     widget->update();
+}
+
+// Build a 44×44 round icon-only button for a dock action (flag / scissors / etc.).
+// The SVG path is rendered at 18px into a transparent pixmap; QSS on dockAction
+// drives the background/border (same treatment as the capture-frame button).
+QPushButton* makeIconActionButton(const QString& object_name, const QString& dock_action, const char* svg_path_d,
+                                  const QString& tooltip, QWidget* parent) {
+    QByteArray svg;
+    svg.reserve(400);
+    svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'"
+               " stroke='#C8C8C4' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'>"
+               "<path d='");
+    svg.append(svg_path_d);
+    svg.append("'/></svg>");
+
+    QSvgRenderer renderer(svg);
+    constexpr int kBtn = 44;
+    constexpr int kGlyph = 18;
+    QPixmap pix(kGlyph, kGlyph);
+    pix.fill(Qt::transparent);
+    {
+        QPainter p(&pix);
+        renderer.render(&p, QRectF(0, 0, kGlyph, kGlyph));
+    }
+
+    auto* btn = new QPushButton(parent);
+    btn->setObjectName(object_name);
+    btn->setProperty("dockAction", dock_action);
+    btn->setCursor(Qt::PointingHandCursor);
+    btn->setFixedSize(kBtn, kBtn);
+    btn->setIcon(QIcon(pix));
+    btn->setIconSize(QSize(kGlyph, kGlyph));
+    btn->setToolTip(tooltip);
+    btn->setAccessibleName(tooltip);
+    return btn;
 }
 
 // Build a 44×44 round image icon button for the dock's capture-frame action.
@@ -163,11 +202,11 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     webcam_toggle_ = new AudioSourceToggle(QStringLiteral("webcam"), QStringLiteral("webcam"), toggles_row_);
     webcam_toggle_->setToolTip(QStringLiteral("Webcam"));
     app_toggle_ = new AudioSourceToggle(QStringLiteral("app"), QStringLiteral("app"), toggles_row_);
-    app_toggle_->setToolTip(QStringLiteral("Application audio"));
+    app_toggle_->setToolTip(QStringLiteral("App audio"));
     toggles_layout->addWidget(system_toggle_);
+    toggles_layout->addWidget(app_toggle_);
     toggles_layout->addWidget(mic_toggle_);
     toggles_layout->addWidget(webcam_toggle_);
-    toggles_layout->addWidget(app_toggle_);
 
     completed_row_ = new QWidget(left_zone);
     auto* completed_layout = new QHBoxLayout(completed_row_);
@@ -215,13 +254,61 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     auto* action_layout = new QHBoxLayout(action_row_);
     action_layout->setContentsMargins(0, 0, 0, 0);
     action_layout->setSpacing(10);
-    countdown_ = new CountdownSelect(action_row_);
+
+    // v10 split Record button: pill-shaped container with a main "Record" face
+    // and a chevron face that opens the countdown menu (3 / 5 / 10 s).
+    // Container clips both parts to a single pill via QSS overflow:hidden + radius.
+    record_split_container_ = new QFrame(action_row_);
+    record_split_container_->setObjectName(QStringLiteral("recordSplitContainer"));
+    {
+        auto* split_layout = new QHBoxLayout(record_split_container_);
+        split_layout->setContentsMargins(0, 0, 0, 0);
+        split_layout->setSpacing(0);
+
+        record_btn_ = makeActionButton(QStringLiteral("recordDockRecord"), QStringLiteral("record"),
+                                       QStringLiteral("Record"), 0, record_split_container_);
+        record_btn_->setMinimumWidth(116);
+        record_btn_->setMinimumHeight(46);
+        // Remove individual border-radius so the container clips both halves.
+        record_btn_->setProperty("splitRole", QStringLiteral("face"));
+
+        // Thin vertical separator between the two halves — styled via QSS.
+        auto* divider = new QFrame(record_split_container_);
+        divider->setObjectName(QStringLiteral("recordSplitDivider"));
+        divider->setFrameShape(QFrame::VLine);
+        divider->setFixedWidth(1);
+
+        // Chevron half — opens the countdown QMenu above the dock.
+        record_chevron_btn_ = new QPushButton(record_split_container_);
+        record_chevron_btn_->setObjectName(QStringLiteral("recordDockChevron"));
+        record_chevron_btn_->setProperty("dockAction", QStringLiteral("record"));
+        record_chevron_btn_->setProperty("splitRole", QStringLiteral("chevron"));
+        record_chevron_btn_->setCursor(Qt::PointingHandCursor);
+        record_chevron_btn_->setFixedWidth(40);
+        record_chevron_btn_->setMinimumHeight(46);
+        record_chevron_btn_->setToolTip(QStringLiteral("Start with a countdown"));
+        record_chevron_btn_->setAccessibleName(QStringLiteral("Countdown options"));
+
+        // Render a small chevron-down glyph for the button icon.
+        {
+            constexpr auto kChevronBody = "<polyline points='6 9 12 15 18 9'/>";
+            constexpr int kPx = 15;
+            const auto& th = exosnap::ui::theme::ActiveTheme();
+            const QString ink = QString::fromUtf8(th.ac_ink);
+            QPixmap pix = renderGlyph(TransportGlyph{kChevronBody}, ink, kPx);
+            record_chevron_btn_->setIcon(QIcon(pix));
+            record_chevron_btn_->setIconSize(QSize(kPx, kPx));
+        }
+
+        split_layout->addWidget(record_btn_);
+        split_layout->addWidget(divider);
+        split_layout->addWidget(record_chevron_btn_);
+    }
+
     pause_btn_ = makeActionButton(QStringLiteral("recordDockPause"), QStringLiteral("ghost"), QStringLiteral("Pause"),
                                   104, action_row_);
     resume_btn_ = makeActionButton(QStringLiteral("recordDockResume"), QStringLiteral("resume"),
                                    QStringLiteral("Resume"), 104, action_row_);
-    record_btn_ = makeActionButton(QStringLiteral("recordDockRecord"), QStringLiteral("record"),
-                                   QStringLiteral("Record"), 156, action_row_);
     record_again_btn_ = makeActionButton(QStringLiteral("recordDockRecordAgain"), QStringLiteral("record"),
                                          QStringLiteral("Record again"), 156, action_row_);
     stop_btn_ = makeActionButton(QStringLiteral("recordDockStop"), QStringLiteral("stop"), QStringLiteral("Stop"), 104,
@@ -232,6 +319,8 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     //   record / resume / record-again → mint fill → accent-ink (dark) glyph
     //   stop                           → error/coral fill → #1A0D0B (matches QSS text)
     //   pause                          → ghost/transparent → secondary text (text2 = mut)
+    // NOTE: record_btn_ glyph already set above (chevron icon baked at same time).
+    // Re-bake record glyph here so it aligns with the other transport glyphs.
     const auto& glyph_theme = exosnap::ui::theme::ActiveTheme();
     const QString accent_ink = QString::fromUtf8(glyph_theme.ac_ink);
     const QString ghost_text = QString::fromUtf8(glyph_theme.mut); // ${text2}
@@ -247,23 +336,32 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     // removed preview-corner overlay button.  Styled via dockAction="captureFrame".
     capture_frame_btn_ = makeCaptureFrameButton(action_row_);
 
-    add_marker_btn_ = makeActionButton(QStringLiteral("recordDockAddMarker"), QStringLiteral("utility"),
-                                       QStringLiteral("Add marker"), 0, action_row_);
-    add_marker_btn_->setToolTip(QStringLiteral("Mark a notable moment on the recording timeline"));
+    // v10: Add marker → icon-only 44×44 round button (flag icon), "iconAction" dockAction.
+    // Lucide flag: M4 15s3-5 0-9.5C5.8 4.8 9 3 12 3s6.2 1.8 7.5 6c-3.3 4-5 7-7.5 7s-4.2-3-8-1z
+    // Simplified straight-flag path (clean at small sizes): M4 15 L4 3 L15 7 L4 11
+    constexpr auto kFlagPath = "M4 15V3l11 4L4 11"
+                               "M4 3v18"; // vertical pole
+    add_marker_btn_ = makeIconActionButton(QStringLiteral("recordDockAddMarker"), QStringLiteral("iconAction"),
+                                           kFlagPath, QStringLiteral("Add marker"), action_row_);
 
-    // Split recording — secondary (utility) action, never destructive styling.
-    split_btn_ = makeActionButton(QStringLiteral("recordDockSplit"), QStringLiteral("utility"),
-                                  QStringLiteral("Split recording"), 0, action_row_);
-    split_btn_->setToolTip(QStringLiteral("Split recording"));
+    // v10: Split → icon-only 44×44 round button (scissors icon), "iconAction" dockAction.
+    // Lucide scissors path:
+    constexpr auto kScissorsPath = "M6 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"
+                                   "M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"
+                                   "M20 4L8.12 15.88"
+                                   "M14.47 14.48L20 20"
+                                   "M8.12 8.12L12 12";
+    split_btn_ = makeIconActionButton(QStringLiteral("recordDockSplit"), QStringLiteral("iconAction"), kScissorsPath,
+                                      QStringLiteral("Split recording"), action_row_);
 
     // Fixed layout order; visibility per state keeps the right edge stable.
+    // record_btn_ is a child of record_split_container_, not added directly here.
     action_layout->addWidget(capture_frame_btn_);
     action_layout->addWidget(add_marker_btn_);
     action_layout->addWidget(split_btn_);
-    action_layout->addWidget(countdown_);
     action_layout->addWidget(pause_btn_);
     action_layout->addWidget(resume_btn_);
-    action_layout->addWidget(record_btn_);
+    action_layout->addWidget(record_split_container_);
     action_layout->addWidget(record_again_btn_);
     action_layout->addWidget(stop_btn_);
     grid->addWidget(action_row_, 0, 2, Qt::AlignRight | Qt::AlignVCenter);
@@ -287,7 +385,20 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
             [this]() { emit sourceToggleClicked(QStringLiteral("webcam")); });
     connect(app_toggle_, &AudioSourceToggle::clicked, this,
             [this]() { emit sourceToggleClicked(QStringLiteral("app")); });
-    connect(countdown_, &CountdownSelect::selectedSecondsChanged, this, &TransportDock::countdownSecondsChanged);
+
+    // Chevron button: hover-triggered countdown menu (v10 spec).
+    // The menu opens when the cursor enters the chevron; a short leave-delay
+    // prevents accidental dismiss when the user moves toward the menu items.
+    // Clicking a menu item starts the recording with the chosen countdown delay.
+    chevron_leave_timer_ = new QTimer(this);
+    chevron_leave_timer_->setSingleShot(true);
+    chevron_leave_timer_->setInterval(300); // ms — generous enough for mouse travel
+    connect(chevron_leave_timer_, &QTimer::timeout, this, [this]() {
+        if (chevron_menu_ && !chevron_menu_->underMouse()) {
+            chevron_menu_->close();
+        }
+    });
+    record_chevron_btn_->installEventFilter(this);
 
     applyState();
 }
@@ -311,45 +422,99 @@ void TransportDock::applyState() {
     const bool countdown = state_ == State::Countdown;
     const bool recording = state_ == State::Recording;
     const bool paused = state_ == State::Paused;
+    // Saving and Completed are kept in the enum for API compatibility but the
+    // dock now treats them both as Ready (v10: no separate saved/saving panel).
     const bool saving = state_ == State::Saving;
     const bool completed = state_ == State::Completed;
+    const bool show_ready = ready || saving || completed;
 
-    toggles_row_->setVisible(!completed && !saving);
-    completed_row_->setVisible(completed || saving);
+    // v10: left zone always shows the source toggles (no completed_row_ in active layout).
+    toggles_row_->setVisible(true);
+    completed_row_->setVisible(false);
 
-    countdown_->setVisible(ready || countdown);
-    countdown_->setInteractive(ready && primary_enabled_);
-    record_btn_->setVisible(ready || countdown);
+    // The split container (record face + chevron) is shown in Ready/Saving/Completed
+    // and Countdown states. In Countdown the record face becomes "Cancel"
+    // (stop-styled) and the chevron is disabled so the user cannot change the delay.
+    record_split_container_->setVisible(show_ready || countdown);
+    record_chevron_btn_->setEnabled(show_ready && primary_enabled_);
     pause_btn_->setVisible(recording);
     resume_btn_->setVisible(paused);
     stop_btn_->setVisible(recording || paused);
-    // In Saving state show "Record Again" disabled — so the user knows they can
-    // record again once the save is done; we re-enable when saving finishes.
-    record_again_btn_->setVisible(completed || saving);
-    record_again_btn_->setEnabled(completed && primary_enabled_);
-    capture_frame_btn_->setVisible(ready || recording || paused);
-    capture_frame_btn_->setEnabled(ready || recording || paused);
+    // v10: record_again_btn_ never shown (completed state → Ready, not a distinct layout).
+    record_again_btn_->setVisible(false);
+    record_again_btn_->setEnabled(false);
+    // Capture-frame: shown in ready/recording/paused; disabled while saving/blocked.
+    capture_frame_btn_->setVisible(show_ready || recording || paused);
+    capture_frame_btn_->setEnabled((ready || recording || paused) && primary_enabled_);
     add_marker_btn_->setVisible(recording || paused);
     add_marker_btn_->setEnabled(recording || paused);
     // Split: visible only with an active session; disabled mid-transition.
     split_btn_->setVisible(recording || paused);
     split_btn_->setEnabled((recording || paused) && split_enabled_);
 
+    // In Countdown state the Record face becomes "Cancel" (stop-styled container);
+    // also propagate the dockAction to the container so QSS can restyle the pill.
     record_btn_->setText(countdown ? QStringLiteral("Cancel") : QStringLiteral("Record"));
     setStyledProperty(record_btn_, "dockAction", countdown ? QStringLiteral("stop") : QStringLiteral("record"));
+    setStyledProperty(record_split_container_, "containerAction",
+                      countdown ? QStringLiteral("stop") : QStringLiteral("record"));
 
     record_btn_->setEnabled(primary_enabled_);
     pause_btn_->setEnabled(primary_enabled_);
     resume_btn_->setEnabled(primary_enabled_);
     stop_btn_->setEnabled(primary_enabled_);
 
-    const char* state_name = ready       ? "ready"
-                             : countdown ? "countdown"
-                             : recording ? "recording"
-                             : paused    ? "paused"
-                             : saving    ? "saving"
-                                         : "completed";
+    const char* state_name = show_ready ? "ready" : countdown ? "countdown" : recording ? "recording" : "paused";
     setStyledProperty(this, "dockState", QString::fromLatin1(state_name));
+}
+
+bool TransportDock::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == record_chevron_btn_) {
+        if (event->type() == QEvent::Enter) {
+            // Stop any pending close and open the menu if enabled and not already open.
+            chevron_leave_timer_->stop();
+            if (record_chevron_btn_->isEnabled() && (!chevron_menu_ || !chevron_menu_->isVisible())) {
+                openChevronMenu();
+            }
+        } else if (event->type() == QEvent::Leave) {
+            // Delay close so the cursor has time to travel into the menu.
+            chevron_leave_timer_->start();
+        }
+    }
+    return QFrame::eventFilter(watched, event);
+}
+
+void TransportDock::openChevronMenu() {
+    auto* menu = new QMenu(this);
+    menu->setObjectName(QStringLiteral("recordCountdownMenu"));
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    chevron_menu_ = menu;
+    connect(menu, &QObject::destroyed, this, [this]() { chevron_menu_ = nullptr; });
+
+    // Stop the leave-timer when the mouse enters the menu so it does not close.
+    connect(menu, &QMenu::aboutToHide, this, [this]() { chevron_leave_timer_->stop(); });
+
+    struct {
+        const char* label;
+        int seconds;
+    } delays[] = {
+        {"Start in 3 seconds", 3},
+        {"Start in 5 seconds", 5},
+        {"Start in 10 seconds", 10},
+    };
+    for (const auto& d : delays) {
+        QAction* action = menu->addAction(QString::fromLatin1(d.label));
+        action->setObjectName(QStringLiteral("recordCountdownAction_%1s").arg(d.seconds));
+        action->setProperty("countdownSeconds", d.seconds);
+        connect(action, &QAction::triggered, this, [this, seconds = d.seconds]() {
+            selected_countdown_seconds_ = seconds;
+            emit countdownSecondsChanged(seconds);
+        });
+    }
+
+    // Pop up above the chevron button.
+    const QPoint pos = record_chevron_btn_->mapToGlobal(QPoint(0, 0));
+    menu->popup(QPoint(pos.x(), pos.y() - menu->sizeHint().height() - 4));
 }
 
 void TransportDock::setSavingProgress(float /*fraction*/) {
@@ -367,12 +532,13 @@ void TransportDock::setTimerRole(const QString& role) {
 }
 
 int TransportDock::countdownSeconds() const {
-    return countdown_ ? countdown_->selectedSeconds() : 0;
+    return selected_countdown_seconds_;
 }
 
 void TransportDock::setCountdownSeconds(int seconds) {
-    if (countdown_)
-        countdown_->setSelectedSeconds(seconds);
+    // Callers (RecordPage::setCountdownSeconds) already snap to {0,3,5,10}.
+    // Store verbatim — the dock is a display/round-trip store, not the policy owner.
+    selected_countdown_seconds_ = seconds;
 }
 
 void TransportDock::setToggleState(const QString& key, bool on, bool interactive) {

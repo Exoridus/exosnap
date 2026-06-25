@@ -76,6 +76,10 @@ class RecordPage;
 class UpdateService;
 class WebcamPage;
 
+namespace pages {
+class AboutPage;
+} // namespace pages
+
 namespace update {
 struct UpdateCheckResult;
 } // namespace update
@@ -267,6 +271,7 @@ class MainWindow : public QMainWindow {
     WebcamPage* webcam_page_ = nullptr;
     HotkeysPage* hotkeys_page_ = nullptr;
     EditExportPage* edit_export_page_ = nullptr;
+    pages::AboutPage* about_page_ = nullptr;
 
     // Device notifiers (owned; started after capability probe; stopped first in ~MainWindow).
     AudioDeviceNotifier audio_notifier_;

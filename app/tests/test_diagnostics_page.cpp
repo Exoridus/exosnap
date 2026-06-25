@@ -108,7 +108,8 @@ TEST_F(DiagnosticsPageTest, RunCheckUpdatesStatusToReady) {
     run->click();
 
     // With the validated baseline and a supported configuration there are no
-    // blockers, so the readiness pill reports READY (possibly with notices).
+    // blockers and no diagnosed issues, so the readiness pill reports exactly READY
+    // (#6: capability-matrix unavailability does not trigger amber notices).
     bool found_ready = false;
     for (auto* label : page.findChildren<QLabel*>())
         if (label->text().contains(QStringLiteral("READY")))
@@ -179,16 +180,26 @@ TEST_F(DiagnosticsPageTest, VerdictBlockerTileIsLabelledBlockers) {
     EXPECT_TRUE(found) << "Blocker stat tile must be labelled 'Blockers'";
 }
 
-TEST_F(DiagnosticsPageTest, VerdictIssueTileIsLabelledIssues) {
-    // suite-diag.jsx names the amber middle tile "Issues" (not "Notices").
+TEST_F(DiagnosticsPageTest, VerdictIssueTileIsLabelledIssuesOrNotMeasured) {
+    // suite-diag.jsx: middle stat tile is dynamic —
+    //   clear verdict  → "Not measured" (neutral, shows planned stage count)
+    //   issues/blocked → "Issues" (amber, shows diagnosed issue count)
+    // Before data is loaded the tile is initialised with its construction-time label.
+
+    // After a clear verdict the tile must read "Not measured".
     DiagnosticsPage page;
-    const QList<QLabel*> labels = page.findChildren<QLabel*>();
-    bool found = false;
-    for (auto* lbl : labels)
+    LoadData(page);
+
+    QPushButton* run = FindButton(page, QStringLiteral("Run Check"));
+    ASSERT_NE(run, nullptr);
+    run->click();
+
+    bool found_not_measured = false;
+    for (auto* lbl : page.findChildren<QLabel*>())
         if (lbl->property("labelRole").toString() == QLatin1String("statTileLabel") &&
-            lbl->text() == QStringLiteral("Issues"))
-            found = true;
-    EXPECT_TRUE(found) << "Notice/amber stat tile must be labelled 'Issues' (suite-diag.jsx design)";
+            lbl->text() == QStringLiteral("Not measured"))
+            found_not_measured = true;
+    EXPECT_TRUE(found_not_measured) << "Middle tile must read 'Not measured' in clear verdict (suite-diag.jsx)";
 }
 
 TEST_F(DiagnosticsPageTest, VerdictPassTileIsLabelledPasses) {
@@ -200,6 +211,70 @@ TEST_F(DiagnosticsPageTest, VerdictPassTileIsLabelledPasses) {
             lbl->text() == QStringLiteral("Passes"))
             found = true;
     EXPECT_TRUE(found) << "Pass stat tile must be labelled 'Passes'";
+}
+
+// ---- v10 verdict logic (#6): capability matrix unavailability is NOT amber ----
+
+TEST_F(DiagnosticsPageTest, VerdictClearNoBannerAmber) {
+    // Validated baseline with a supported config → no real diagnosed issues →
+    // the readiness panel must NOT carry stateRole="warn" or stateRole="blocked".
+    // Un-instrumented pipeline stages and unavailable-but-unselected capabilities
+    // must not trigger amber coloring. (suite-diag.jsx: "calm when fine")
+    DiagnosticsPage page;
+    LoadData(page);
+
+    QPushButton* run = FindButton(page, QStringLiteral("Run Check"));
+    ASSERT_NE(run, nullptr);
+    run->click();
+
+    // The readiness panel must have no stateRole set (neutral) — NOT "warn" or "blocked".
+    bool panel_is_amber = false;
+    for (auto* frame : page.findChildren<QFrame*>()) {
+        if (frame->property("panelRole").toString() == QLatin1String("readinessBanner")) {
+            const QString role = frame->property("stateRole").toString();
+            if (role == QLatin1String("warn") || role == QLatin1String("blocked"))
+                panel_is_amber = true;
+        }
+    }
+    EXPECT_FALSE(panel_is_amber)
+        << "Readiness banner must not be amber/red in a clear all-pass verdict (#6: no false alarm)";
+}
+
+TEST_F(DiagnosticsPageTest, VerdictClearPillTextIsJustReady) {
+    // In clear state the pill must read exactly "READY" with no notice suffix
+    // (old code produced "READY · N NOTICES" which was wrong per v10).
+    DiagnosticsPage page;
+    LoadData(page);
+
+    QPushButton* run = FindButton(page, QStringLiteral("Run Check"));
+    ASSERT_NE(run, nullptr);
+    run->click();
+
+    bool pill_exact_ready = false;
+    for (auto* lbl : page.findChildren<QLabel*>()) {
+        if (lbl->property("labelRole").toString() == QLatin1String("profileStatusBadge") &&
+            lbl->text() == QStringLiteral("READY"))
+            pill_exact_ready = true;
+    }
+    EXPECT_TRUE(pill_exact_ready) << "Status pill must read exactly 'READY' (no notice count) in a clear verdict";
+}
+
+TEST_F(DiagnosticsPageTest, VerdictClearMiddleTileShowsPlannedStageCount) {
+    // In clear state, middle tile shows kPlannedStages (3) with neutral tone.
+    DiagnosticsPage page;
+    LoadData(page);
+
+    QPushButton* run = FindButton(page, QStringLiteral("Run Check"));
+    ASSERT_NE(run, nullptr);
+    run->click();
+
+    bool found_neutral_middle = false;
+    for (auto* lbl : page.findChildren<QLabel*>()) {
+        if (lbl->property("labelRole").toString() == QLatin1String("statTileNum") &&
+            lbl->property("statTone").toString() == QLatin1String("zero") && lbl->text().toInt() == 3)
+            found_neutral_middle = true;
+    }
+    EXPECT_TRUE(found_neutral_middle) << "Middle tile must show 3 (planned stages) with neutral tone in clear verdict";
 }
 
 TEST_F(DiagnosticsPageTest, VerdictLastCheckLabelUpdatesAfterRunCheck) {

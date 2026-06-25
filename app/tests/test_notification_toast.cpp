@@ -480,6 +480,89 @@ TEST_F(NotificationToastTest, HitTargets_DismissCenter_DismissesThatSequence) {
     EXPECT_NE(mgr.VisibleEvents()[0].sequence, target_seq);
 }
 
+// ── Edit action (EDIT-QUICK-ACTION-R1) ────────────────────────────────────────
+
+// A "Recording saved" toast built with Edit+OpenFolder actions exposes exactly
+// one ✕ target, one primary "Edit" pill, and one secondary "Show in folder" pill.
+TEST_F(NotificationToastTest, HitTargets_SavedWithEditAction_HasDismissEditAndShowInFolder) {
+    NotificationManager mgr;
+    NotificationEvent e;
+    e.type = NotificationType::Saved;
+    e.title = QStringLiteral("Recording saved");
+    e.body = QStringLiteral("file.mkv");
+    e.action = NotificationAction::Edit;
+    e.secondary_action = NotificationAction::OpenFolder;
+    e.action_payload = QStringLiteral("C:/Videos/file.mkv");
+    mgr.Enqueue(e);
+
+    NotificationToastWindow window(&mgr, nullptr);
+    const auto hits = window.computeHitTargets();
+
+    int dismiss_count = 0;
+    int edit_count = 0;
+    int open_folder_count = 0;
+    for (const auto& h : hits) {
+        if (h.is_dismiss) {
+            ++dismiss_count;
+        } else if (h.action == NotificationAction::Edit) {
+            ++edit_count;
+        } else if (h.action == NotificationAction::OpenFolder) {
+            ++open_folder_count;
+        }
+    }
+    EXPECT_EQ(dismiss_count, 1);
+    EXPECT_EQ(edit_count, 1) << "Expected exactly one Edit pill";
+    EXPECT_EQ(open_folder_count, 1) << "Expected exactly one Show-in-folder pill";
+    EXPECT_EQ(hits.size(), 3) << "Expected dismiss + Edit + Show-in-folder = 3 targets";
+}
+
+// Edit pill must be marked primary (accent fill) and Show-in-folder secondary (ghost).
+// We verify pill ordering: Edit first (leftmost), Show-in-folder second.
+TEST_F(NotificationToastTest, HitTargets_EditPill_IsLeftOfShowInFolderPill) {
+    NotificationManager mgr;
+    NotificationEvent e;
+    e.type = NotificationType::Saved;
+    e.title = QStringLiteral("Recording saved");
+    e.body = QStringLiteral("session.mkv");
+    e.action = NotificationAction::Edit;
+    e.secondary_action = NotificationAction::OpenFolder;
+    e.action_payload = QStringLiteral("C:/Videos/session.mkv");
+    mgr.Enqueue(e);
+
+    NotificationToastWindow window(&mgr, nullptr);
+    const auto hits = window.computeHitTargets();
+
+    qreal edit_x = -1.0;
+    qreal show_x = -1.0;
+    for (const auto& h : hits) {
+        if (!h.is_dismiss) {
+            if (h.action == NotificationAction::Edit)
+                edit_x = h.rect.left();
+            else if (h.action == NotificationAction::OpenFolder)
+                show_x = h.rect.left();
+        }
+    }
+    EXPECT_GE(edit_x, 0.0) << "Edit pill not found";
+    EXPECT_GE(show_x, 0.0) << "Show-in-folder pill not found";
+    EXPECT_LT(edit_x, show_x) << "Edit pill must be to the left of Show-in-folder pill";
+}
+
+// Rendering an Edit+OpenFolder Saved toast must not crash.
+TEST_F(NotificationToastTest, PaintEvent_SavedWithEditAction_DoesNotCrash) {
+    NotificationManager mgr;
+    NotificationEvent e;
+    e.type = NotificationType::Saved;
+    e.title = QStringLiteral("Recording saved");
+    e.body = QStringLiteral("exosnap_2026-06-25_01.mkv · 245 MB");
+    e.action = NotificationAction::Edit;
+    e.secondary_action = NotificationAction::OpenFolder;
+    e.action_payload = QStringLiteral("C:/Videos/exosnap_2026-06-25_01.mkv");
+    mgr.Enqueue(e);
+
+    NotificationToastWindow window(&mgr, nullptr);
+    EXPECT_NO_FATAL_FAILURE(window.grab());
+}
+
 // The manager exposes the per-event shown-at timestamp the toast uses to drive
 // the countdown bar; it is >= 0 for a visible event and -1 for an unknown one.
 TEST_F(NotificationToastTest, Manager_ShownAtMs_TracksVisibleEvent) {
