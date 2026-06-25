@@ -2,7 +2,6 @@
 
 #include <QAction>
 #include <QApplication>
-#include <QCheckBox>
 #include <QCoreApplication>
 #include <QDialog>
 #include <QFrame>
@@ -13,6 +12,7 @@
 
 #include "ui/dialogs/CrashReportOverlay.h"
 #include "ui/dialogs/CrashReportPanel.h"
+#include "ui/widgets/ExoCheckBox.h"
 
 namespace exosnap {
 namespace {
@@ -76,7 +76,7 @@ TEST_F(CrashReportTest, OverlayRendersInWindowNotAsNativeDialog) {
 
 TEST_F(CrashReportTest, AutoSendOptInDefaultsUnchecked) {
     ui::dialogs::CrashReportPanel panel(SampleModel());
-    auto* check = panel.findChild<QCheckBox*>(QStringLiteral("crashAutoSendCheck"));
+    auto* check = panel.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("crashAutoSendCheck"));
     ASSERT_NE(check, nullptr);
     EXPECT_FALSE(check->isChecked());
     EXPECT_FALSE(panel.autoSendChecked());
@@ -126,7 +126,7 @@ TEST_F(CrashReportTest, RestartButtonEmitsRestartRequested) {
 
 TEST_F(CrashReportTest, AutoSendToggleEmitsToggledTrue) {
     ui::dialogs::CrashReportPanel panel(SampleModel());
-    auto* check = panel.findChild<QCheckBox*>(QStringLiteral("crashAutoSendCheck"));
+    auto* check = panel.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("crashAutoSendCheck"));
     ASSERT_NE(check, nullptr);
 
     int count = 0;
