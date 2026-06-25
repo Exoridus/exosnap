@@ -1012,6 +1012,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         seed.channel = persisted_settings_.update_channel;
         update_panel->setModel(seed);
         update_panel->setState(ui::dialogs::UpdateUiState::UpToDate);
+        // v10: seed the visible channel hint in the metadata table.
+        about_overlay_->setChannelHint(persisted_settings_.update_channel);
 
         connect(about_overlay_, &ui::dialogs::AboutOverlay::checkForUpdatesRequested, this,
                 &MainWindow::triggerUpdateCheck);
@@ -1021,6 +1023,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
             settings_store_.Save(persisted_settings_);
             if (update_service_)
                 update_service_->SetChannel(UpdateChannelFromString(channel));
+            // v10: keep channel metadata row in sync.
+            about_overlay_->setChannelHint(channel);
             // Channel applies immediately: re-check on the new channel (guarded).
             triggerUpdateCheck();
         });
@@ -3387,6 +3391,9 @@ void MainWindow::triggerUpdateCheck() {
     if (recording_active_ || remuxing_active_) {
         if (update_panel)
             update_panel->setRecordingActive(true);
+        // v10: surface paused state in the quiet status line.
+        if (about_overlay_)
+            about_overlay_->setUpdateStatusText(QStringLiteral("Update check paused while recording."));
         diagnostics::AppLog::info(QStringLiteral("update"),
                                   QStringLiteral("Update check skipped — recording/finalizing in progress"));
         return;
@@ -3394,6 +3401,9 @@ void MainWindow::triggerUpdateCheck() {
 
     if (update_panel)
         update_panel->setState(ui::dialogs::UpdateUiState::Checking);
+    // v10: show a transient "checking" hint in the quiet status line.
+    if (about_overlay_)
+        about_overlay_->setUpdateStatusText(QStringLiteral("Checking for updates\xe2\x80\xa6"));
     update_service_->RequestUpdateCheck();
 }
 
@@ -3430,6 +3440,9 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
             update_panel->setModel(model);
             update_panel->setState(ui::dialogs::UpdateUiState::Error);
         }
+        // v10: surface error as a quiet one-liner (no full error panel in About).
+        if (about_overlay_)
+            about_overlay_->setUpdateStatusText(QStringLiteral("Update check failed \xe2\x80\x94 try again later."));
         diagnostics::AppLog::warning(QStringLiteral("update"),
                                      QStringLiteral("Update check failed: %1").arg(model.error_message));
         return;
@@ -3439,6 +3452,14 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
         update_panel->setModel(model);
         update_panel->setState(result.update_available ? ui::dialogs::UpdateUiState::Available
                                                        : ui::dialogs::UpdateUiState::UpToDate);
+    }
+    // v10: update the quiet status line in About with the current state.
+    if (about_overlay_) {
+        if (result.update_available && !available_version.isEmpty())
+            about_overlay_->setUpdateStatusText(
+                QStringLiteral("Update available \xe2\x80\x94 %1").arg(available_version));
+        else
+            about_overlay_->setUpdateStatusText(QStringLiteral("Up to date."));
     }
 
     diagnostics::AppLog::info(

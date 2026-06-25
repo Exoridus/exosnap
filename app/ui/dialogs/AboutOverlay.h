@@ -24,8 +24,14 @@ namespace exosnap::ui::dialogs {
 // openOverlay(); it dismisses on Escape, on a backdrop click, or via the Close
 // action, emitting closed() each time it is dismissed.
 //
-// PS-PHASE-E: The overlay now hosts the UpdateSettingsPanel below the info card.
-// MainWindow wires the update panel via updatePanel() instead of findChild on ConfigPage.
+// v10: About is minimal — identity card + facts table + actions. The full update
+// control (channel selector, check button) lives in Settings. About shows only a
+// quiet one-line update status row inside the info card.
+//
+// The UpdateSettingsPanel is kept as a hidden internal object so that MainWindow's
+// existing update-service wiring (setState / setModel / setRecordingActive) continues
+// to work without changes. Use setUpdateStatusText() to push a visible status line,
+// and setChannelHint() to surface the active channel in the metadata table.
 class AboutOverlay : public QWidget {
     Q_OBJECT
   public:
@@ -35,10 +41,19 @@ class AboutOverlay : public QWidget {
     void closeOverlay();
     bool isOpen() const noexcept;
 
-    // Returns the embedded update settings panel (never null after construction).
+    // Returns the hidden update settings panel (never null after construction).
+    // MainWindow uses this to drive update state without holding a separate reference.
     UpdateSettingsPanel* updatePanel() const {
         return update_panel_;
     }
+
+    // Sets the quiet one-line update status text shown at the bottom of the info card.
+    // Pass an empty string to hide the row entirely.
+    void setUpdateStatusText(const QString& text);
+
+    // Sets the channel string shown in the Channel metadata row (e.g. "Stable", "Preview").
+    // Call whenever the persisted channel changes.
+    void setChannelHint(const QString& channel);
 
     // Re-bakes the two-tone wordmark rich-text from ActiveTheme(). Call after a theme switch.
     void refreshBrand();
@@ -57,16 +72,18 @@ class AboutOverlay : public QWidget {
 
   private:
     void syncGeometryToParent();
-    // Builds and returns the container widget (holds the aboutCard QFrame +
-    // the UpdateSettingsPanel). card_ points to this container; the inner QFrame
-    // keeps the objectName "aboutCard" for tests.
-    QWidget* buildCard();
+    // Builds and returns the info card QFrame (objectName "aboutCard").
+    QFrame* buildCard();
 
-    // Container widget (holds aboutCard QFrame + update panel).
-    QWidget* card_ = nullptr;
+    // The centered info card.
+    QFrame* card_ = nullptr;
     // Stored to allow refreshBrand() to re-bake the rich-text wordmark on theme switch.
     QLabel* wordmark_ = nullptr;
-    // Embedded update settings panel — wired by MainWindow via updatePanel().
+    // Channel value shown in the metadata table — updated via setChannelHint().
+    QLabel* channel_value_ = nullptr;
+    // Quiet one-line update status at the bottom of the info card — updated via setUpdateStatusText().
+    QLabel* update_status_line_ = nullptr;
+    // Hidden update settings panel — kept for MainWindow wiring compatibility only; never shown.
     UpdateSettingsPanel* update_panel_ = nullptr;
 };
 

@@ -36,9 +36,13 @@ constexpr const char* kAppAuthor = "Exoridus";
 constexpr const char* kGitHubUrl = "https://github.com/Exoridus/exosnap";
 // Author profile URL — derivable from the repo owner in kGitHubUrl, not invented.
 constexpr const char* kAuthorProfileUrl = "https://github.com/Exoridus";
+constexpr const char* kReleasesUrl = "https://github.com/Exoridus/exosnap/releases";
 constexpr const char* kAppDescription =
     "A calm, preview-first screen recorder with a high-performance GPU pipeline, multi-track audio "
     "routing, and diagnostics when you need them.";
+
+// Default channel shown in the metadata table until MainWindow calls setChannelHint().
+constexpr const char* kDefaultChannel = "Stable";
 
 // Backdrop tint behind the card — matches the Hybrid prototype Modal dim
 // (rgba(8,8,10,0.62)). No native window, so nothing dims the OS taskbar.
@@ -85,6 +89,34 @@ QWidget* makeMetaRow(const QString& key, const QString& value, const QString& va
     return row;
 }
 
+// Like makeMetaRow but returns the value QLabel so callers can update it later.
+// The outer QWidget is added to `parent_layout`; the inner QLabel is returned.
+QLabel* makeMetaRowDynamic(const QString& key, const QString& initial_value, const QString& value_object_name,
+                           QWidget* parent, QVBoxLayout* parent_layout) {
+    auto* row = new QWidget(parent);
+    row->setObjectName("aboutMetaRow");
+    auto* layout = new QHBoxLayout(row);
+    layout->setContentsMargins(0, 6, 0, 6);
+    layout->setSpacing(12);
+    row->setMinimumHeight(28);
+
+    auto* key_label = new QLabel(key, row);
+    key_label->setProperty("labelRole", "aboutMetaKey");
+    key_label->setFixedWidth(96);
+
+    auto* value_label = new QLabel(initial_value, row);
+    value_label->setObjectName(value_object_name);
+    value_label->setProperty("labelRole", "aboutMetaValue");
+    value_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    value_label->setCursor(Qt::IBeamCursor);
+
+    layout->addWidget(key_label);
+    layout->addWidget(value_label, 1);
+
+    parent_layout->addWidget(row);
+    return value_label;
+}
+
 } // namespace
 
 AboutOverlay::AboutOverlay(QWidget* parent) : QWidget(parent) {
@@ -92,9 +124,17 @@ AboutOverlay::AboutOverlay(QWidget* parent) : QWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
     setVisible(false);
 
+    // Hidden update settings panel — kept for MainWindow wiring compatibility only.
+    // MainWindow calls updatePanel()->setState/setModel/setRecordingActive; this is
+    // a no-op visually since the panel is never added to any visible layout.
+    update_panel_ = new UpdateSettingsPanel(this);
+    update_panel_->setObjectName(QStringLiteral("aboutUpdatePanel"));
+    update_panel_->hide();
+    connect(update_panel_, &UpdateSettingsPanel::checkRequested, this, &AboutOverlay::checkForUpdatesRequested);
+
     card_ = buildCard();
 
-    // Center the container (aboutCard + update panel) over the backdrop.
+    // Center the card over the backdrop.
     // The surrounding stretch is the dimmed, click-to-dismiss region.
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(30, 30, 30, 30);
@@ -106,35 +146,21 @@ AboutOverlay::AboutOverlay(QWidget* parent) : QWidget(parent) {
         parent->installEventFilter(this);
 }
 
-QWidget* AboutOverlay::buildCard() {
-    // PS-PHASE-E: card_ is now a plain QWidget container holding:
-    //   1. The aboutCard QFrame (info card — same as before, width 480)
-    //   2. 14px spacing
-    //   3. The UpdateSettingsPanel (width 480)
-    // The container uses QSizePolicy(Fixed, Preferred) so backdrop clicks outside it dismiss.
-
-    auto* container = new QWidget(this);
-    container->setObjectName(QStringLiteral("aboutContainer"));
-    container->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
-    container->setFixedWidth(480);
-
-    auto* container_layout = new QVBoxLayout(container);
-    container_layout->setContentsMargins(0, 0, 0, 0);
-    container_layout->setSpacing(0);
-
-    // ── About info card (QFrame "aboutCard") ─────────────────────────────────────────────────
-    auto* card = new QFrame(container);
-    card->setObjectName("aboutCard");
-
-    auto* main_layout = new QVBoxLayout(card);
-    main_layout->setContentsMargins(28, 26, 28, 22);
-    main_layout->setSpacing(0);
-
+QFrame* AboutOverlay::buildCard() {
     const QString version = QString::fromLatin1(build::kVersion);
     const QString build_config = QString::fromLatin1(EXOSNAP_BUILD_CONFIG);
     const QString commit = QString::fromLatin1(build::kGitCommit);
     const QString author = QString::fromLatin1(kAppAuthor);
-    const QString qt_version = QString::fromLatin1(QT_VERSION_STR);
+    const QString channel = QString::fromLatin1(kDefaultChannel);
+
+    // ── About info card ──────────────────────────────────────────────────────────────
+    auto* card = new QFrame(this);
+    card->setObjectName("aboutCard");
+    card->setFixedWidth(480);
+
+    auto* main_layout = new QVBoxLayout(card);
+    main_layout->setContentsMargins(28, 26, 28, 22);
+    main_layout->setSpacing(0);
 
     // ── Header: aperture mark + two-tone wordmark + version line ──────────────────────────────
     auto* header_row = new QHBoxLayout();
@@ -179,7 +205,8 @@ QWidget* AboutOverlay::buildCard() {
     main_layout->addWidget(desc_label);
     main_layout->addSpacing(18);
 
-    // ── Metadata table (real build metadata only) ─────────────────────────────────────────────
+    // ── Metadata table ────────────────────────────────────────────────────────────────────────
+    // Rows: Version / Build / Commit / Channel / Author  (v10: QT row removed, Channel added)
     auto* meta_panel = new QFrame(card);
     meta_panel->setProperty("panelRole", "note");
     auto* meta_layout = new QVBoxLayout(meta_panel);
@@ -199,15 +226,27 @@ QWidget* AboutOverlay::buildCard() {
     meta_layout->addWidget(
         makeMetaRow(QStringLiteral("COMMIT"), commit, QStringLiteral("aboutValueCommit"), meta_panel, commit_url));
     meta_layout->addWidget(makeHairline(meta_panel));
+    // Channel row — dynamic, updated via setChannelHint().
+    channel_value_ = makeMetaRowDynamic(QStringLiteral("CHANNEL"), channel, QStringLiteral("aboutValueChannel"),
+                                        meta_panel, meta_layout);
+    meta_layout->addWidget(makeHairline(meta_panel));
     meta_layout->addWidget(makeMetaRow(QStringLiteral("AUTHOR"), author, QStringLiteral("aboutValueAuthor"), meta_panel,
                                        QString::fromLatin1(kAuthorProfileUrl)));
-    meta_layout->addWidget(makeHairline(meta_panel));
-    meta_layout->addWidget(makeMetaRow(QStringLiteral("QT"), qt_version, QStringLiteral("aboutValueQt"), meta_panel));
 
     main_layout->addWidget(meta_panel);
-    main_layout->addSpacing(18);
+    main_layout->addSpacing(14);
 
-    // ── Actions: GitHub (configured) · Copy details ───────────────────────────────────────────
+    // ── Quiet update status line ──────────────────────────────────────────────────────────────
+    // A single dim line; updated via setUpdateStatusText(). Hidden when empty.
+    update_status_line_ = new QLabel(card);
+    update_status_line_->setObjectName(QStringLiteral("aboutUpdateStatusLine"));
+    update_status_line_->setProperty("labelRole", "aboutUpdateStatus");
+    update_status_line_->setWordWrap(false);
+    update_status_line_->setVisible(false); // hidden until setUpdateStatusText() provides a value
+    main_layout->addWidget(update_status_line_);
+    main_layout->addSpacing(4);
+
+    // ── Actions: GitHub · Copy details · Release notes ────────────────────────────────────────
     // No primary Close button — dismiss via × (top-right), Escape, or backdrop click.
     auto* github_btn = new QPushButton(QStringLiteral("GitHub"), card);
     github_btn->setObjectName(QStringLiteral("aboutGitHubButton"));
@@ -221,43 +260,48 @@ QWidget* AboutOverlay::buildCard() {
     copy_btn->setObjectName(QStringLiteral("aboutCopyButton"));
     copy_btn->setProperty("role", "ghost");
     copy_btn->setCursor(Qt::PointingHandCursor);
-    connect(copy_btn, &QPushButton::clicked, this, [version, build_config, commit, author, qt_version]() {
-        const QString details = QStringLiteral("ExoSnap\nVersion: %1\nBuild: %2\nCommit: %3\nAuthor: %4\nQt: %5")
-                                    .arg(version, build_config, commit, author, qt_version);
+    connect(copy_btn, &QPushButton::clicked, this, [this, version, build_config, commit, author]() {
+        const QString ch = channel_value_ ? channel_value_->text() : QStringLiteral("Stable");
+        const QString details = QStringLiteral("ExoSnap\nVersion: %1\nBuild: %2\nCommit: %3\nChannel: %4\nAuthor: %5")
+                                    .arg(version, build_config, commit, ch, author);
         QGuiApplication::clipboard()->setText(details);
     });
+
+    auto* release_notes_btn = new QPushButton(QStringLiteral("Release notes"), card);
+    release_notes_btn->setObjectName(QStringLiteral("aboutReleaseNotesButton"));
+    release_notes_btn->setProperty("role", "quiet");
+    release_notes_btn->setCursor(Qt::PointingHandCursor);
+    connect(release_notes_btn, &QPushButton::clicked, this,
+            []() { QDesktopServices::openUrl(QUrl(QString::fromLatin1(kReleasesUrl))); });
 
     auto* btn_row = new QHBoxLayout();
     btn_row->setContentsMargins(0, 0, 0, 0);
     btn_row->setSpacing(10);
     btn_row->addWidget(github_btn);
     btn_row->addWidget(copy_btn);
+    btn_row->addWidget(release_notes_btn);
     btn_row->addStretch(1);
     main_layout->addLayout(btn_row);
 
-    // ── Assemble container ────────────────────────────────────────────────────────────────────
-    container_layout->addWidget(card);
-    container_layout->addSpacing(10);
+    return card;
+}
 
-    // ── Software updates panel — wrapped in its own card frame so it shares the same
-    //    visual material as the info card above (no bare update controls rendered on the scrim).
-    //    (PS-PHASE-E: moved from ConfigPage Settings; card wrapper added in Polish-R1.)
-    auto* update_card = new QFrame(container);
-    update_card->setObjectName(QStringLiteral("aboutUpdateCard"));
+void AboutOverlay::setUpdateStatusText(const QString& text) {
+    if (update_status_line_ == nullptr)
+        return;
+    if (text.isEmpty()) {
+        update_status_line_->clear();
+        update_status_line_->setVisible(false);
+    } else {
+        update_status_line_->setText(text);
+        update_status_line_->setVisible(true);
+    }
+}
 
-    auto* update_card_layout = new QVBoxLayout(update_card);
-    update_card_layout->setContentsMargins(0, 0, 0, 0);
-    update_card_layout->setSpacing(0);
-
-    update_panel_ = new UpdateSettingsPanel(update_card);
-    update_panel_->setObjectName(QStringLiteral("aboutUpdatePanel"));
-    // Forward the panel's checkRequested signal so MainWindow can connect to the overlay.
-    connect(update_panel_, &UpdateSettingsPanel::checkRequested, this, &AboutOverlay::checkForUpdatesRequested);
-
-    update_card_layout->addWidget(update_panel_);
-    container_layout->addWidget(update_card);
-
-    return container;
+void AboutOverlay::setChannelHint(const QString& channel) {
+    if (channel_value_ == nullptr || channel.isEmpty())
+        return;
+    channel_value_->setText(channel);
 }
 
 void AboutOverlay::openOverlay() {

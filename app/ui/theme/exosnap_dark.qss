@@ -3168,19 +3168,89 @@ QLabel[labelRole="recordDockSize"] {
     color: ${text2};
 }
 
-/* Countdown select — compact recording-delay control. */
-QComboBox#recordCountdownSelect {
-    background: ${bg2};
-    border: 1px solid ${line1};
-    border-radius: ${radius-sm}px;
-    padding: 4px 8px;
-    color: ${text2};
-    min-width: 56px;
-    max-width: 96px;
+/* v10 Split Record button — pill container clips both halves via border-radius.
+   The container background and border define the pill outline; individual child
+   buttons carry no border-radius so they read as a single fused control.
+   containerAction="record" → mint pill; containerAction="stop" → coral (Cancel). */
+QFrame#recordSplitContainer {
+    background: ${accent};
+    border: 1px solid ${accent};
+    border-radius: 999px;
+    min-height: 46px;
 }
 
-QComboBox#recordCountdownSelect:disabled {
-    color: ${text3};
+QFrame#recordSplitContainer[containerAction="stop"] {
+    background: ${err};
+    border-color: ${err};
+}
+
+/* Record face — occupies the left portion of the pill; no individual radius. */
+QPushButton#recordDockRecord[splitRole="face"] {
+    border-radius: 0;
+    border: none;
+    background: transparent;
+    padding: 0 18px 0 22px;
+    min-height: 46px;
+}
+
+QPushButton#recordDockRecord[splitRole="face"]:hover {
+    background: rgba(0, 0, 0, 0.10);
+}
+
+QPushButton#recordDockRecord[splitRole="face"]:pressed {
+    background: rgba(0, 0, 0, 0.18);
+}
+
+QPushButton#recordDockRecord[splitRole="face"]:disabled {
+    background: transparent;
+}
+
+/* Thin divider between the two pill halves. */
+QFrame#recordSplitDivider {
+    background: rgba(0, 0, 0, 0.20);
+    border: none;
+    margin: 8px 0;
+}
+
+/* Chevron half — right portion of the pill; no individual radius. */
+QPushButton#recordDockChevron {
+    border-radius: 0;
+    border: none;
+    background: transparent;
+    padding: 0 12px;
+    min-height: 46px;
+}
+
+QPushButton#recordDockChevron:hover {
+    background: rgba(0, 0, 0, 0.12);
+}
+
+QPushButton#recordDockChevron:pressed {
+    background: rgba(0, 0, 0, 0.20);
+}
+
+QPushButton#recordDockChevron:disabled {
+    background: transparent;
+    opacity: 0.45;
+}
+
+/* Countdown context menu — minimal dark popup matching the dock surface. */
+QMenu#recordCountdownMenu {
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-radius: ${radius-md}px;
+    padding: 4px;
+}
+
+QMenu#recordCountdownMenu::item {
+    padding: 9px 12px;
+    border-radius: ${radius-sm}px;
+    font-size: 13px;
+    color: ${text0};
+}
+
+QMenu#recordCountdownMenu::item:selected {
+    background: ${accent-soft};
 }
 
 /* ---------------------------------------------------------------------------

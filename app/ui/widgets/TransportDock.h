@@ -11,7 +11,6 @@ class QWidget;
 namespace exosnap::ui::widgets {
 
 class AudioSourceToggle;
-class CountdownSelect;
 
 // Stable bottom transport dock for the Record page (hybrid v3 direction).
 //
@@ -41,6 +40,10 @@ class TransportDock : public QFrame {
     void setTimerText(const QString& text);
     void setTimerRole(const QString& role); // idle | countdown | recording | paused | done | blocked
 
+    // Returns the last countdown delay chosen via the split-button menu (0 = off).
+    // Preset round-trip: setCountdownSeconds snaps to {0,3,5,10} and remembers the
+    // value; countdownSeconds() returns it. The dock does NOT store a 0 default in
+    // the menu (off = just pressing Record directly).
     [[nodiscard]] int countdownSeconds() const;
     void setCountdownSeconds(int seconds);
 
@@ -76,6 +79,9 @@ class TransportDock : public QFrame {
     void addMarkerClicked();
     void splitClicked();
     void sourceToggleClicked(const QString& key);
+    // Emitted when the user selects a countdown delay from the chevron menu.
+    // seconds: 3, 5, or 10. (There is no "Off" menu item — pressing the Record
+    // face directly always starts immediately.)
     void countdownSecondsChanged(int seconds);
 
   private:
@@ -98,7 +104,11 @@ class TransportDock : public QFrame {
     QLabel* timer_label_ = nullptr;
 
     QWidget* action_row_ = nullptr;
-    CountdownSelect* countdown_ = nullptr;
+    // v10 split Record button: a QFrame container holding record_btn_ + a 1px
+    // divider + record_chevron_btn_.  The container clips to pill shape via QSS.
+    QFrame* record_split_container_ = nullptr;
+    QPushButton* record_chevron_btn_ = nullptr;
+    int selected_countdown_seconds_ = 0; // last delay chosen via chevron menu
     QPushButton* record_btn_ = nullptr;
     QPushButton* pause_btn_ = nullptr;
     QPushButton* resume_btn_ = nullptr;

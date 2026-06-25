@@ -107,7 +107,7 @@ class RecordPage : public QWidget {
     // Returns selected_countdown_seconds_.
     [[nodiscard]] int countdownSeconds() const;
 
-    // Snaps to {0,3,5,10}; updates the CountdownSelect widget + stored field.
+    // Snaps to {0,3,5,10}; pushes the value to the dock's split button + stored field.
     // Does NOT emit recordingConfigChanged (programmatic change).
     void setCountdownSeconds(int seconds);
 

@@ -79,42 +79,99 @@ TEST_F(AboutOverlayTest, GitHubButtonUsesConfiguredRepositoryUrl) {
     EXPECT_EQ(github->property("url").toString(), QStringLiteral("https://github.com/Exoridus/exosnap"));
 }
 
-TEST_F(AboutOverlayTest, InfoCardHasNoPrimaryReleaseNotesButton) {
+// v10: About card has three ghost/quiet action buttons (GitHub, Copy details, Release notes).
+// None may carry the primary role — dismissal is via × (top-right), Escape, or backdrop click.
+TEST_F(AboutOverlayTest, InfoCardHasNoReleaseNotesButtonWithPrimaryRole) {
     ui::dialogs::AboutOverlay overlay;
 
-    // The info card (QFrame "aboutCard") must not offer a standalone Release notes action —
-    // Copy details / GitHub / × dismiss are the real actions on the card itself.
-    // NOTE: The embedded UpdateSettingsPanel may have its own release-notes affordance in the
-    // "Available" state; this test intentionally scopes only to the aboutCard QFrame.
     auto* card = overlay.findChild<QFrame*>(QStringLiteral("aboutCard"));
     ASSERT_NE(card, nullptr);
-    for (auto* btn : card->findChildren<QPushButton*>())
-        EXPECT_FALSE(btn->text().contains(QStringLiteral("Release"), Qt::CaseInsensitive));
+
+    // The Release notes button is present but must not carry the primary role.
+    auto* release_btn = overlay.findChild<QPushButton*>(QStringLiteral("aboutReleaseNotesButton"));
+    ASSERT_NE(release_btn, nullptr);
+    EXPECT_NE(release_btn->property("role").toString(), QStringLiteral("primary"));
 
     EXPECT_NE(overlay.findChild<QPushButton*>(QStringLiteral("aboutCopyButton")), nullptr);
     EXPECT_NE(overlay.findChild<QPushButton*>(QStringLiteral("aboutCloseButton")), nullptr);
 }
 
+TEST_F(AboutOverlayTest, ReleaseNotesButtonPresent) {
+    ui::dialogs::AboutOverlay overlay;
+
+    // v10: Release notes button is part of the info card's action row.
+    auto* release_btn = overlay.findChild<QPushButton*>(QStringLiteral("aboutReleaseNotesButton"));
+    ASSERT_NE(release_btn, nullptr);
+    EXPECT_EQ(release_btn->text(), QStringLiteral("Release notes"));
+}
+
 TEST_F(AboutOverlayTest, EmbeddedUpdatePanelPresent) {
     ui::dialogs::AboutOverlay overlay;
 
-    // PS-PHASE-E: the overlay now embeds an UpdateSettingsPanel below the info card.
+    // The overlay keeps an UpdateSettingsPanel for MainWindow update-service wiring;
+    // it is hidden from view but must be accessible via updatePanel().
     auto* panel = overlay.updatePanel();
     ASSERT_NE(panel, nullptr);
 
     // The panel is also findable via object hierarchy.
     auto* found = overlay.findChild<ui::dialogs::UpdateSettingsPanel*>(QStringLiteral("aboutUpdatePanel"));
     EXPECT_EQ(found, panel);
+
+    // The panel must not be visible — it is an internal wiring node only.
+    EXPECT_FALSE(panel->isVisible());
 }
 
-TEST_F(AboutOverlayTest, QtVersionRowPresent) {
+// v10: Channel row replaces the old QT row in the metadata table.
+TEST_F(AboutOverlayTest, ChannelRowPresent) {
     ui::dialogs::AboutOverlay overlay;
 
-    // PS-PHASE-E: a QT row showing QT_VERSION_STR is now part of the metadata table.
+    // A CHANNEL row must be present and non-empty.
+    auto* channel_label = overlay.findChild<QLabel*>(QStringLiteral("aboutValueChannel"));
+    ASSERT_NE(channel_label, nullptr);
+    EXPECT_FALSE(channel_label->text().isEmpty());
+
+    // Default value is "Stable" (no MainWindow seed yet).
+    EXPECT_EQ(channel_label->text(), QStringLiteral("Stable"));
+}
+
+// v10: QT row must not appear — it was replaced by the Channel row.
+TEST_F(AboutOverlayTest, QtVersionRowAbsent) {
+    ui::dialogs::AboutOverlay overlay;
+
     auto* qt_label = overlay.findChild<QLabel*>(QStringLiteral("aboutValueQt"));
-    ASSERT_NE(qt_label, nullptr);
-    EXPECT_FALSE(qt_label->text().isEmpty());
-    EXPECT_TRUE(qt_label->text().contains(QLatin1Char('.')));
+    EXPECT_EQ(qt_label, nullptr);
+}
+
+TEST_F(AboutOverlayTest, SetChannelHintUpdatesChannelRow) {
+    ui::dialogs::AboutOverlay overlay;
+
+    overlay.setChannelHint(QStringLiteral("Preview"));
+    auto* channel_label = overlay.findChild<QLabel*>(QStringLiteral("aboutValueChannel"));
+    ASSERT_NE(channel_label, nullptr);
+    EXPECT_EQ(channel_label->text(), QStringLiteral("Preview"));
+}
+
+TEST_F(AboutOverlayTest, UpdateStatusLineHiddenByDefault) {
+    ui::dialogs::AboutOverlay overlay;
+
+    auto* status_line = overlay.findChild<QLabel*>(QStringLiteral("aboutUpdateStatusLine"));
+    ASSERT_NE(status_line, nullptr);
+    // Before any setUpdateStatusText() call the line must be hidden.
+    EXPECT_TRUE(status_line->isHidden());
+}
+
+TEST_F(AboutOverlayTest, SetUpdateStatusTextShowsAndHidesLine) {
+    ui::dialogs::AboutOverlay overlay;
+
+    auto* status_line = overlay.findChild<QLabel*>(QStringLiteral("aboutUpdateStatusLine"));
+    ASSERT_NE(status_line, nullptr);
+
+    overlay.setUpdateStatusText(QStringLiteral("Up to date."));
+    EXPECT_FALSE(status_line->isHidden());
+    EXPECT_EQ(status_line->text(), QStringLiteral("Up to date."));
+
+    overlay.setUpdateStatusText(QString());
+    EXPECT_TRUE(status_line->isHidden());
 }
 
 TEST_F(AboutOverlayTest, DismissButtonIsXSymbol) {
