@@ -30,6 +30,7 @@ class LogsPage : public QWidget {
   public:
     enum class SeverityFilter {
         All,
+        Info,
         Issues,
     };
 

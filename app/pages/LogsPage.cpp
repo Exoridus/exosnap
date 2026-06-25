@@ -51,6 +51,8 @@ QString filterName(LogsPage::SeverityFilter filter) {
     switch (filter) {
     case LogsPage::SeverityFilter::All:
         return QStringLiteral("All");
+    case LogsPage::SeverityFilter::Info:
+        return QStringLiteral("Info");
     case LogsPage::SeverityFilter::Issues:
         return QStringLiteral("Issues");
     }
@@ -142,8 +144,7 @@ LogsPage::SeverityFilter filterFromVisual(visual::VisualLogFilter filter) {
     case visual::VisualLogFilter::All:
         return LogsPage::SeverityFilter::All;
     case visual::VisualLogFilter::Info:
-        // Info filter removed in v10 — fall through to All.
-        return LogsPage::SeverityFilter::All;
+        return LogsPage::SeverityFilter::Info;
     case visual::VisualLogFilter::Issues:
         return LogsPage::SeverityFilter::Issues;
     }
@@ -190,10 +191,13 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     severity_group_ = new QButtonGroup(this);
     severity_group_->setExclusive(true);
     auto* all_btn = makeFilterButton(QStringLiteral("logFilterAllBtn"), QStringLiteral("All"), segmented);
+    auto* info_btn = makeFilterButton(QStringLiteral("logFilterInfoBtn"), QStringLiteral("Info"), segmented);
     auto* issues_btn = makeFilterButton(QStringLiteral("logFilterIssuesBtn"), QStringLiteral("Issues"), segmented);
     severity_group_->addButton(all_btn, static_cast<int>(SeverityFilter::All));
+    severity_group_->addButton(info_btn, static_cast<int>(SeverityFilter::Info));
     severity_group_->addButton(issues_btn, static_cast<int>(SeverityFilter::Issues));
     segmented_layout->addWidget(all_btn);
+    segmented_layout->addWidget(info_btn);
     segmented_layout->addWidget(issues_btn);
     left_layout->addWidget(segmented, 0);
 
@@ -577,7 +581,7 @@ void LogsPage::insertEntry(const LogEntry& entry) {
     const QTextCharFormat sev_format = formatForSeverity(entry.severity);
     const QTextCharFormat cat_format = formatForCategory();
 
-    // Timestamp — quietest column (log-time / dim).
+    // Timestamp — quietest column (log-time / dim).  Fixed width: 23 chars.
     {
         const ui::theme::ExoTheme& theme = ui::theme::ActiveTheme();
         QColor ts_color = ui::theme::ParseThemeColor(theme.log.time);
@@ -591,10 +595,13 @@ void LogsPage::insertEntry(const LogEntry& entry) {
         cursor.insertText(entry.timestamp.toString(QStringLiteral("yyyy-MM-ddTHH:mm:ss.zzz")));
     }
 
-    // Level — coloured by severity.
+    // Level — coloured by severity.  Padded to [WARNING] width (9 chars) so the
+    // category column always starts on the same character position.
     {
+        // WARNING is the widest label (7 chars); pad all labels to 7 inside the brackets.
+        const QString label = AppLog::severityLabel(entry.severity).leftJustified(7, QLatin1Char(' '));
         cursor.setCharFormat(sev_format);
-        cursor.insertText(QStringLiteral(" [") + AppLog::severityLabel(entry.severity) + QStringLiteral("]"));
+        cursor.insertText(QStringLiteral(" [") + label + QStringLiteral("]"));
     }
 
     // Category — dedicated log-cat colour, visually decoupled from level and accent.
@@ -675,6 +682,10 @@ void LogsPage::updateStatusLabel(const QString& feedback) {
 bool LogsPage::matchesActiveFilters(const LogEntry& entry) const {
     switch (filter_) {
     case SeverityFilter::All:
+        break;
+    case SeverityFilter::Info:
+        if (entry.severity != LogSeverity::Info)
+            return false;
         break;
     case SeverityFilter::Issues:
         if (!isIssueSeverity(entry.severity))
