@@ -4,9 +4,9 @@
 #include "../theme/ExoSnapPalette.h"
 #include "../theme/ExoSnapTheme.h"
 #include "../theme/LucideIcon.h"
+#include "../widgets/ExoCheckBox.h"
 
 #include <QAction>
-#include <QCheckBox>
 #include <QColor>
 #include <QFrame>
 #include <QGridLayout>
@@ -188,18 +188,12 @@ CrashReportPanel::CrashReportPanel(const CrashReportModel& model, QWidget* paren
     body_layout->addWidget(divider);
     body_layout->addSpacing(14);
 
-    auto_send_check_ = new QCheckBox(QStringLiteral("Send reports automatically next time"), body);
+    // Canonical checkbox (mint fill + accent-ink tick) — ExoCheckBox custom-paints,
+    // so no per-widget indicator stylesheet is needed.
+    auto_send_check_ = new widgets::ExoCheckBox(QStringLiteral("Send reports automatically next time"), body);
     auto_send_check_->setObjectName(QStringLiteral("crashAutoSendCheck"));
     auto_send_check_->setChecked(false); // opt-in · default OFF
-    auto_send_check_->setCursor(Qt::PointingHandCursor);
-    auto_send_check_->setStyleSheet(
-        QStringLiteral("QCheckBox { font-size:12.5px; color:%1; spacing:10px; background:transparent; }"
-                       "QCheckBox::indicator { width:17px; height:17px; border-radius:5px; border:1px solid %2; }"
-                       "QCheckBox::indicator:checked { background:%3; border:1px solid %3; }")
-            .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line2),
-                 QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac)));
-    connect(auto_send_check_, &QCheckBox::toggled, this, &CrashReportPanel::autoSendToggled);
+    connect(auto_send_check_, &widgets::ExoCheckBox::toggled, this, &CrashReportPanel::autoSendToggled);
     body_layout->addWidget(auto_send_check_);
 
     body_layout->addSpacing(16);

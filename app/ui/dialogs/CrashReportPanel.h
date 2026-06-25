@@ -4,11 +4,14 @@
 #include <QStringList>
 #include <QWidget>
 
-class QCheckBox;
 class QFrame;
 class QLabel;
 class QMenu;
 class QPushButton;
+
+namespace exosnap::ui::widgets {
+class ExoCheckBox;
+}
 
 namespace exosnap::ui::dialogs {
 
@@ -73,7 +76,7 @@ class CrashReportPanel : public QWidget {
     QPushButton* details_toggle_ = nullptr;
     QLabel* details_chevron_ = nullptr;
     QFrame* scrubbed_report_ = nullptr;
-    QCheckBox* auto_send_check_ = nullptr;
+    widgets::ExoCheckBox* auto_send_check_ = nullptr;
     QPushButton* overflow_button_ = nullptr;
     QMenu* overflow_menu_ = nullptr;
     bool details_expanded_ = false;

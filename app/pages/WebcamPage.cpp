@@ -3,13 +3,13 @@
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/widgets/CameraPreview.h"
 #include "../ui/widgets/ComboBoxWheelFilter.h"
+#include "../ui/widgets/ExoCheckBox.h"
 #include "../ui/widgets/ExoToggle.h"
 #include "../ui/widgets/SectionRuleHeader.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 #include "../visual_tests/VisualScenario.h"
 #endif
 
-#include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
 #include <QFrame>
@@ -184,7 +184,7 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
         addSliderRow(QStringLiteral("Width"), size_w_slider_, size_w_label_, 25);
         addSliderRow(QStringLiteral("Height"), size_h_slider_, size_h_label_, 25);
 
-        aspect_lock_check_ = new QCheckBox(QStringLiteral("Lock aspect ratio"), content);
+        aspect_lock_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Lock aspect ratio"), content);
         aspect_lock_check_->setChecked(true);
         aspect_lock_check_->hide();
         // not added to layout
@@ -320,7 +320,7 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
     wireSlider(pos_y_slider_, pos_y_label_);
     wireSlider(size_w_slider_, size_w_label_);
     wireSlider(size_h_slider_, size_h_label_);
-    connect(aspect_lock_check_, &QCheckBox::toggled, this, [this](bool locked) {
+    connect(aspect_lock_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool locked) {
         if (!suppress_signals_) {
             current_settings_ = collectSettings();
             current_settings_.aspect_ratio_locked = locked;

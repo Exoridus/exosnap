@@ -3,6 +3,8 @@
 #include "AudioSourceToggle.h"
 #include "CountdownSelect.h"
 
+#include "../theme/ExoSnapTheme.h"
+
 #include <QByteArray>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -12,11 +14,52 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QSize>
+#include <QString>
 #include <QStyle>
 #include <QSvgRenderer>
 
 namespace exosnap::ui::widgets {
 namespace {
+
+// Glyph rendered ahead of a transport-button label. The design system shows each
+// transport action as [thin/hollow glyph] + [label]; the SVG bodies below are all
+// fill:none / round-stroke so they read as crisp outlines on the button fill.
+struct TransportGlyph {
+    const char* body; // SVG element(s) inside a 0 0 24 24 viewBox (no <svg> wrapper)
+};
+
+// Hollow circle — record / record-again (mint button, accent-ink glyph).
+constexpr TransportGlyph kRecordGlyph{"<circle cx='12' cy='12' r='6.5'/>"};
+// Two slim vertical bars — pause (ghost button, secondary-text glyph).
+constexpr TransportGlyph kPauseGlyph{"<line x1='9' y1='7.5' x2='9' y2='16.5'/>"
+                                     "<line x1='15' y1='7.5' x2='15' y2='16.5'/>"};
+// Hollow rounded square — stop (error button, dark glyph).
+constexpr TransportGlyph kStopGlyph{"<rect x='6.5' y='6.5' width='11' height='11' rx='2' ry='2'/>"};
+// Hollow play triangle — resume (mint button, accent-ink glyph).
+constexpr TransportGlyph kResumeGlyph{"<path d='M9 7.5 L17 12 L9 16.5 Z'/>"};
+
+// Build a transparent QPixmap of the given glyph stroked in `color`, matching the
+// makeCaptureFrameButton recipe (fill none, round caps/joins, ~1.7 stroke). Baked
+// at construction; TransportDock has no theme-refresh hook so the colours are
+// captured from the active theme once, like the capture-frame button.
+QPixmap renderGlyph(const TransportGlyph& glyph, const QString& color, int glyph_px) {
+    QByteArray svg;
+    svg.reserve(256);
+    svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='");
+    svg.append(color.toUtf8());
+    svg.append("' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'>");
+    svg.append(glyph.body);
+    svg.append("</svg>");
+
+    QSvgRenderer renderer(svg);
+    QPixmap pix(glyph_px, glyph_px);
+    pix.fill(Qt::transparent);
+    {
+        QPainter p(&pix);
+        renderer.render(&p, QRectF(0, 0, glyph_px, glyph_px));
+    }
+    return pix;
+}
 
 QPushButton* makeActionButton(const QString& object_name, const QString& dock_action, const QString& text,
                               int min_width, QWidget* parent) {
@@ -28,6 +71,14 @@ QPushButton* makeActionButton(const QString& object_name, const QString& dock_ac
     if (min_width > 0)
         button->setMinimumWidth(min_width);
     return button;
+}
+
+// Attach a thin/hollow transport glyph (icon-left, before the existing text label)
+// to a transport button. `color` must contrast the button's QSS background.
+void setTransportGlyph(QPushButton* button, const TransportGlyph& glyph, const QString& color) {
+    constexpr int kGlyphPx = 17; // ~glyph size matched to the ~13–14px button label
+    button->setIcon(QIcon(renderGlyph(glyph, color, kGlyphPx)));
+    button->setIconSize(QSize(kGlyphPx, kGlyphPx));
 }
 
 void setStyledProperty(QWidget* widget, const char* name, const QString& value) {
@@ -175,6 +226,22 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
                                          QStringLiteral("Record again"), 156, action_row_);
     stop_btn_ = makeActionButton(QStringLiteral("recordDockStop"), QStringLiteral("stop"), QStringLiteral("Stop"), 104,
                                  action_row_);
+
+    // DESIGN-SYNC-R1: thin/hollow transport glyphs ahead of each label. Colours are
+    // baked from the active theme to contrast each button's QSS fill:
+    //   record / resume / record-again → mint fill → accent-ink (dark) glyph
+    //   stop                           → error/coral fill → #1A0D0B (matches QSS text)
+    //   pause                          → ghost/transparent → secondary text (text2 = mut)
+    const auto& glyph_theme = exosnap::ui::theme::ActiveTheme();
+    const QString accent_ink = QString::fromUtf8(glyph_theme.ac_ink);
+    const QString ghost_text = QString::fromUtf8(glyph_theme.mut); // ${text2}
+    const QString stop_ink = QStringLiteral("#1A0D0B");            // matches dockAction="stop" text
+    setTransportGlyph(record_btn_, kRecordGlyph, accent_ink);
+    setTransportGlyph(record_again_btn_, kRecordGlyph, accent_ink);
+    setTransportGlyph(resume_btn_, kResumeGlyph, accent_ink);
+    setTransportGlyph(pause_btn_, kPauseGlyph, ghost_text);
+    setTransportGlyph(stop_btn_, kStopGlyph, stop_ink);
+
     // CAPTURE-FRAME-DOCK-BUTTON-R1: round 44×44 icon-only camera button on the right
     // side of the dock, replacing the old text "Capture frame" button and the
     // removed preview-corner overlay button.  Styled via dockAction="captureFrame".

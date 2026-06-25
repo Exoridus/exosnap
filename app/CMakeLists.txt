@@ -489,6 +489,8 @@ exosnap_add_app_test_support(exosnap_source_picker_test_support
     ui/widgets/RegionGeometry.cpp
     ui/widgets/CaptureTargetCard.cpp
     ui/widgets/RegionPresetCard.cpp
+    # DESIGN-SYNC-R1: SourcePickerPanel's "Select region…" checkbox is now ExoCheckBox.
+    ui/widgets/ExoCheckBox.cpp
     services/ThumbnailCapture.cpp
     # THEME-SLICE-2C: SourcePickerOverlay now calls ActiveTheme() from ExoSnapTheme.cpp.
     ui/theme/ExoSnapTheme.cpp
@@ -991,6 +993,10 @@ exosnap_add_gtest(
         pages/LogsPage.cpp
         diagnostics/AppLog.cpp
         ui/widgets/SectionRuleHeader.cpp
+        # DESIGN-SYNC-R1: LogsPage's "Auto-scroll" checkbox is now ExoCheckBox, which
+        # calls ActiveTheme()/ParseThemeColor() from ExoSnapTheme.cpp.
+        ui/widgets/ExoCheckBox.cpp
+        ui/theme/ExoSnapTheme.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
 )
 target_include_directories(logs_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -1058,6 +1064,8 @@ exosnap_add_gtest(
         ui/theme/LucideIcon.cpp
         # THEME-SLICE-1: BrandMarkWidget now calls ActiveTheme() from ExoSnapTheme.cpp.
         ui/theme/ExoSnapTheme.cpp
+        # DESIGN-SYNC-R1: CrashReportPanel's auto-send checkbox is now ExoCheckBox.
+        ui/widgets/ExoCheckBox.cpp
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
 )
 target_include_directories(crash_report_overlay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
@@ -1519,6 +1527,8 @@ exosnap_add_gtest(
         ui/brand/BrandMarkWidget.cpp
         ui/theme/LucideIcon.cpp
         ui/theme/ExoSnapTheme.cpp
+        # DESIGN-SYNC-R1: CrashReportPanel's auto-send checkbox is now ExoCheckBox.
+        ui/widgets/ExoCheckBox.cpp
         ui/theme/exosnap_theme.qrc
         assets/fonts/exosnap_fonts.qrc
     LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg

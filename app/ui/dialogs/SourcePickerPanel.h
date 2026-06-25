@@ -7,7 +7,6 @@
 #include <memory>
 #include <vector>
 
-class QCheckBox;
 class QGridLayout;
 class QHideEvent;
 class QLabel;
@@ -26,6 +25,7 @@ class ThumbnailCapture;
 
 namespace exosnap::ui::widgets {
 class CaptureTargetCard;
+class ExoCheckBox;
 class RegionPresetCard;
 } // namespace exosnap::ui::widgets
 
@@ -185,7 +185,7 @@ class SourcePickerPanel : public QWidget {
     SectionGrid screens_grid_;
     SectionGrid windows_grid_;
     QLabel* region_summary_value_label_ = nullptr;
-    QCheckBox* region_select_on_record_check_ = nullptr;
+    widgets::ExoCheckBox* region_select_on_record_check_ = nullptr;
 
     struct RegionPresetEntry {
         ui::widgets::RegionPresetCard* card = nullptr;

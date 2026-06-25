@@ -2,10 +2,10 @@
 
 #include "../../services/ThumbnailCapture.h"
 #include "../widgets/CaptureTargetCard.h"
+#include "../widgets/ExoCheckBox.h"
 #include "../widgets/RegionGeometry.h"
 #include "../widgets/RegionPresetCard.h"
 
-#include <QCheckBox>
 #include <QEvent>
 #include <QFrame>
 #include <QGridLayout>
@@ -320,7 +320,7 @@ SourcePickerPanel::SourcePickerPanel(QWidget* parent) : QWidget(parent) {
     region_action_row->setContentsMargins(0, 0, 0, 0);
     region_action_row->setSpacing(10);
     region_select_on_record_check_ =
-        new QCheckBox(QStringLiteral("Select region when recording starts"), region_controls);
+        new widgets::ExoCheckBox(QStringLiteral("Select region when recording starts"), region_controls);
     region_select_on_record_check_->setObjectName("sourcePickerRegionSelectOnRecord");
     region_select_on_record_check_->setChecked(true);
     pick_region_now_button_ = new QPushButton(QStringLiteral("Pick region now..."), region_controls);

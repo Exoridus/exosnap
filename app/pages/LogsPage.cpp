@@ -1,7 +1,6 @@
 #include "LogsPage.h"
 
 #include <QButtonGroup>
-#include <QCheckBox>
 #include <QClipboard>
 #include <QColor>
 #include <QDesktopServices>
@@ -29,6 +28,7 @@
 #include <QVBoxLayout>
 
 #include "../ui/theme/ExoSnapMetrics.h"
+#include "../ui/widgets/ExoCheckBox.h"
 #include "../ui/widgets/SectionRuleHeader.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 #include "../visual_tests/VisualScenario.h"
@@ -206,7 +206,7 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     search_edit_->setClearButtonEnabled(true);
     left_layout->addWidget(search_edit_, 1);
 
-    auto_scroll_check_ = new QCheckBox(QStringLiteral("Auto-scroll"), left_cluster);
+    auto_scroll_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Auto-scroll"), left_cluster);
     auto_scroll_check_->setObjectName(QStringLiteral("logAutoScrollToggle"));
     auto_scroll_check_->setChecked(true);
     left_layout->addWidget(auto_scroll_check_, 0);
@@ -290,7 +290,7 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     connect(severity_group_, &QButtonGroup::idClicked, this, &LogsPage::onFilterClicked);
     connect(search_edit_, &QLineEdit::textChanged, this, &LogsPage::onSearchTextChanged);
     connect(search_debounce_timer_, &QTimer::timeout, this, &LogsPage::applyPendingSearch);
-    connect(auto_scroll_check_, &QCheckBox::toggled, this, [this](bool enabled) {
+    connect(auto_scroll_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool enabled) {
         if (enabled && log_viewer_)
             log_viewer_->verticalScrollBar()->setValue(log_viewer_->verticalScrollBar()->maximum());
     });
