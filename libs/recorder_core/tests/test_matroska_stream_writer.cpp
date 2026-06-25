@@ -559,9 +559,10 @@ TEST_F(StreamWriterTest, EmptySession_FinalizesValidContainer) {
     EXPECT_EQ(CountCuePoints(d), 0);
 }
 
-// Color metadata (ADR 0032): the video track carries an SDR BT.709 limited-range
-// 8-bit Colour element by default, so the file is no longer color-ambiguous and
-// no HDR sub-elements are emitted.
+// Color metadata (ADR 0032): the video track carries an SDR BT.709 full-range
+// 8-bit Colour element by default (Full is the PC/screen-content default for
+// 0.7.0), so the file is no longer color-ambiguous and no HDR sub-elements are
+// emitted.
 TEST_F(StreamWriterTest, WritesBt709ColourElementByDefault) {
     MatroskaStreamWriter w;
     ASSERT_TRUE(w.Open(MakeConfig(tmp_, /*h264=*/false, /*opus=*/true)));
@@ -585,7 +586,7 @@ TEST_F(StreamWriterTest, WritesBt709ColourElementByDefault) {
     EXPECT_EQ(ReadUInt(d, *primaries), 1u); // BT.709
     EXPECT_EQ(ReadUInt(d, *transfer), 1u);  // BT.709
     EXPECT_EQ(ReadUInt(d, *matrix), 1u);    // BT.709
-    EXPECT_EQ(ReadUInt(d, *range), 1u);     // limited / studio range
+    EXPECT_EQ(ReadUInt(d, *range), 2u);     // full range (PC default for 0.7.0)
     EXPECT_EQ(ReadUInt(d, *bits), 8u);
     EXPECT_EQ(FindColourChild(colour, 0x55BCULL), nullptr) << "MaxCLL must be absent for SDR";
     EXPECT_EQ(FindColourChild(colour, 0x55BDULL), nullptr) << "MaxFALL must be absent for SDR";
