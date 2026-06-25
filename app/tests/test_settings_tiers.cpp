@@ -340,24 +340,6 @@ TEST_F(SettingsTiersTest, ConfigPage_HotkeysCard_ActiveRowsExist) {
     }
 }
 
-TEST_F(SettingsTiersTest, ConfigPage_SearchPill_HiddenInDefaultMode) {
-    // The search pill must be hidden when expert mode is off.
-    ConfigPage page(output_defaults_, video_defaults_);
-    ASSERT_FALSE(page.expertModeEnabled());
-    auto* pill = page.findChild<QWidget*>(QStringLiteral("settingsSearchPill"));
-    ASSERT_NE(pill, nullptr);
-    EXPECT_TRUE(pill->isHidden());
-}
-
-TEST_F(SettingsTiersTest, ConfigPage_SearchPill_VisibleInExpertMode) {
-    // The search pill must become visible when expert mode is enabled.
-    ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
-    auto* pill = page.findChild<QWidget*>(QStringLiteral("settingsSearchPill"));
-    ASSERT_NE(pill, nullptr);
-    EXPECT_FALSE(pill->isHidden());
-}
-
 TEST_F(SettingsTiersTest, ConfigPage_FmtExpertSection_HiddenByDefault) {
     ConfigPage page(output_defaults_, video_defaults_);
     auto* section = page.findChild<QWidget*>(QStringLiteral("fmtExpertSection"));
