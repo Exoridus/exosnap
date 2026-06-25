@@ -1160,7 +1160,7 @@ exosnap_add_gtest(
         # THEME-SLICE-2C: StatusPill now calls ActiveTheme() from ExoSnapTheme.cpp.
         ui/theme/ExoSnapTheme.cpp
     LIBRARIES
-        Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
         d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
 )
 target_include_directories(preview_surface_webcam_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
