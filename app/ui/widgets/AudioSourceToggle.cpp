@@ -6,6 +6,7 @@
 #include <QColor>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QRectF>
 #include <QSvgRenderer>
 
@@ -134,13 +135,32 @@ void AudioSourceToggle::paintEvent(QPaintEvent* /*event*/) {
     painter.setBrush(fill);
     painter.drawEllipse(circle);
 
+    // Meter fill: vertical fill from bottom, clipped to the circle shape.
+    // Shown only when the toggle is on and a live meter level is present.
+    if (on_ && meter_active_ && meter_level_ > 0.0f) {
+        // Build a clip path matching the button circle so the fill never bleeds
+        // outside the rounded border.
+        QPainterPath clip_path;
+        clip_path.addEllipse(circle);
+        painter.setClipPath(clip_path);
+
+        // Fill height proportional to level, growing from the bottom of the circle.
+        const qreal fill_height = circle.height() * static_cast<qreal>(meter_level_);
+        const QRectF fill_rect(circle.left(), circle.bottom() - fill_height, circle.width(), fill_height);
+
+        QColor meter_fill(accent);
+        meter_fill.setAlphaF(0.30f); // 30 % — visible but never overpowers the icon
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(meter_fill);
+        painter.drawRect(fill_rect);
+
+        // Restore unrestricted clip so the icon is not clipped.
+        painter.setClipping(false);
+    }
+
     const QRectF icon_rect =
         circle.adjusted(circle.width() * 0.27, circle.height() * 0.27, -circle.width() * 0.27, -circle.height() * 0.27);
     paintIcon(painter, icon_key_, icon_rect, icon);
-    // v10: meter strip removed — icon circle is the full widget surface.
-    // setMeterLevel / setMeterActive are kept for API compatibility but have no
-    // visual effect. The level data continues to update the internal fields so
-    // callers that read them back (tests) are not broken.
 }
 
 } // namespace exosnap::ui::widgets
