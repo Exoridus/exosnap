@@ -28,6 +28,7 @@
 #include <QVBoxLayout>
 
 #include "../ui/theme/ExoSnapMetrics.h"
+#include "../ui/theme/ExoSnapTheme.h"
 #include "../ui/widgets/ExoCheckBox.h"
 #include "../ui/widgets/SectionRuleHeader.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
@@ -50,8 +51,6 @@ QString filterName(LogsPage::SeverityFilter filter) {
     switch (filter) {
     case LogsPage::SeverityFilter::All:
         return QStringLiteral("All");
-    case LogsPage::SeverityFilter::Info:
-        return QStringLiteral("Info");
     case LogsPage::SeverityFilter::Issues:
         return QStringLiteral("Issues");
     }
@@ -143,7 +142,8 @@ LogsPage::SeverityFilter filterFromVisual(visual::VisualLogFilter filter) {
     case visual::VisualLogFilter::All:
         return LogsPage::SeverityFilter::All;
     case visual::VisualLogFilter::Info:
-        return LogsPage::SeverityFilter::Info;
+        // Info filter removed in v10 — fall through to All.
+        return LogsPage::SeverityFilter::All;
     case visual::VisualLogFilter::Issues:
         return LogsPage::SeverityFilter::Issues;
     }
@@ -190,13 +190,10 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     severity_group_ = new QButtonGroup(this);
     severity_group_->setExclusive(true);
     auto* all_btn = makeFilterButton(QStringLiteral("logFilterAllBtn"), QStringLiteral("All"), segmented);
-    auto* info_btn = makeFilterButton(QStringLiteral("logFilterInfoBtn"), QStringLiteral("Info"), segmented);
     auto* issues_btn = makeFilterButton(QStringLiteral("logFilterIssuesBtn"), QStringLiteral("Issues"), segmented);
     severity_group_->addButton(all_btn, static_cast<int>(SeverityFilter::All));
-    severity_group_->addButton(info_btn, static_cast<int>(SeverityFilter::Info));
     severity_group_->addButton(issues_btn, static_cast<int>(SeverityFilter::Issues));
     segmented_layout->addWidget(all_btn);
-    segmented_layout->addWidget(info_btn);
     segmented_layout->addWidget(issues_btn);
     left_layout->addWidget(segmented, 0);
 
@@ -575,9 +572,53 @@ void LogsPage::insertEntry(const LogEntry& entry) {
     block_format.setProperty(kSeverityBlockProperty, AppLog::severityKey(entry.severity));
     cursor.setBlockFormat(block_format);
 
-    QTextCharFormat char_format = formatForSeverity(entry.severity);
-    cursor.setCharFormat(char_format);
-    cursor.insertText(AppLog::formatEntry(entry));
+    // Render each column with its own colour so level and category read as distinct
+    // visual lanes, matching the v10 LogPalette (log-time / level / log-cat / message).
+    const QTextCharFormat sev_format = formatForSeverity(entry.severity);
+    const QTextCharFormat cat_format = formatForCategory();
+
+    // Timestamp — quietest column (log-time / dim).
+    {
+        const ui::theme::ExoTheme& theme = ui::theme::ActiveTheme();
+        QColor ts_color = ui::theme::ParseThemeColor(theme.log.time);
+        if (!ts_color.isValid())
+            ts_color = QColor(QStringLiteral("#65656A"));
+        QTextCharFormat ts_format;
+        ts_format.setFontFamilies(sev_format.fontFamilies().toStringList());
+        ts_format.setProperty(kSeverityTextProperty, AppLog::severityKey(entry.severity));
+        ts_format.setForeground(ts_color);
+        cursor.setCharFormat(ts_format);
+        cursor.insertText(entry.timestamp.toString(QStringLiteral("yyyy-MM-ddTHH:mm:ss.zzz")));
+    }
+
+    // Level — coloured by severity.
+    {
+        cursor.setCharFormat(sev_format);
+        cursor.insertText(QStringLiteral(" [") + AppLog::severityLabel(entry.severity) + QStringLiteral("]"));
+    }
+
+    // Category — dedicated log-cat colour, visually decoupled from level and accent.
+    {
+        const QString category = entry.category.trimmed();
+        if (!category.isEmpty()) {
+            cursor.setCharFormat(cat_format);
+            cursor.insertText(QStringLiteral(" [") + category + QStringLiteral("]"));
+        }
+    }
+
+    // Message — primary ink (theme.ink / text0).
+    {
+        const ui::theme::ExoTheme& theme = ui::theme::ActiveTheme();
+        QColor ink_color = QColor(QString::fromUtf8(theme.ink));
+        if (!ink_color.isValid())
+            ink_color = QColor(QStringLiteral("#F1F1EF"));
+        QTextCharFormat msg_fmt;
+        msg_fmt.setFontFamilies(sev_format.fontFamilies().toStringList());
+        msg_fmt.setProperty(kSeverityTextProperty, AppLog::severityKey(entry.severity));
+        msg_fmt.setForeground(ink_color);
+        cursor.setCharFormat(msg_fmt);
+        cursor.insertText(QStringLiteral(" ") + entry.message.trimmed());
+    }
 }
 
 void LogsPage::replaceDocumentFromVisibleEntries() {
@@ -635,10 +676,6 @@ bool LogsPage::matchesActiveFilters(const LogEntry& entry) const {
     switch (filter_) {
     case SeverityFilter::All:
         break;
-    case SeverityFilter::Info:
-        if (entry.severity != LogSeverity::Info)
-            return false;
-        break;
     case SeverityFilter::Issues:
         if (!isIssueSeverity(entry.severity))
             return false;
@@ -657,21 +694,38 @@ QTextCharFormat LogsPage::formatForSeverity(LogSeverity severity) const {
     format.setFontFamilies({QStringLiteral("IBM Plex Mono")});
     format.setProperty(kSeverityTextProperty, AppLog::severityKey(severity));
 
-    QColor color(QStringLiteral("#D7DDE8"));
+    // Level colours from the active log palette (theme-tuned, same semantic hues as v10).
+    const ui::theme::ExoTheme& theme = ui::theme::ActiveTheme();
+    QColor color = ui::theme::ParseThemeColor(theme.log.info);
     switch (severity) {
     case LogSeverity::Debug:
-        color = QColor(QStringLiteral("#7D8594"));
+        color = ui::theme::ParseThemeColor(theme.log.debug);
         break;
     case LogSeverity::Info:
-        color = QColor(QStringLiteral("#D7DDE8"));
+        color = ui::theme::ParseThemeColor(theme.log.info);
         break;
     case LogSeverity::Warning:
-        color = QColor(QStringLiteral("#E6C57C"));
+        color = ui::theme::ParseThemeColor(theme.log.warn);
         break;
     case LogSeverity::Error:
-        color = QColor(QStringLiteral("#E0786C"));
+        color = ui::theme::ParseThemeColor(theme.log.error);
         break;
     }
+    if (!color.isValid())
+        color = QColor(QStringLiteral("#C5C5C3"));
+    format.setForeground(color);
+    return format;
+}
+
+QTextCharFormat LogsPage::formatForCategory() const {
+    QTextCharFormat format;
+    format.setFontFamilies({QStringLiteral("IBM Plex Mono")});
+    // Category column uses the dedicated log-cat palette token — visually decoupled
+    // from the primary accent (v10 LogPalette rule: "never var(--ac)").
+    const ui::theme::ExoTheme& theme = ui::theme::ActiveTheme();
+    QColor color = ui::theme::ParseThemeColor(theme.log.cat);
+    if (!color.isValid())
+        color = QColor(QStringLiteral("#7FB7D9"));
     format.setForeground(color);
     return format;
 }

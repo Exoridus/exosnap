@@ -2313,7 +2313,16 @@ QLabel[labelRole="pipelineStepStatus"][pipelineStatus="planned"] {
     background: ${bg3};
 }
 
-/* Logs — raw viewer surface */
+/* Logs — raw viewer surface.
+   Inline text colours for the four log columns (timestamp / level / category / message)
+   are applied by LogsPage::insertEntry() via QTextCharFormat, using the ExoLogPalette
+   tokens from the active theme:
+     ${log-time}  — quietest column (dim)
+     ${log-info}  — INFO level
+     ${log-warn}  — WARNING level (caution-amber)
+     ${log-error} — ERROR level (coral)
+     ${log-debug} — DEBUG level (quiet, low-emphasis)
+     ${log-cat}   — category column — NEVER ${accent}, decoupled from primary accent */
 QPlainTextEdit#logViewer {
     background: ${bg0};
     color: ${text1};

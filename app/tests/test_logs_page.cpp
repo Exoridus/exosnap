@@ -105,8 +105,9 @@ TEST_F(LogsPageTest, ContainedViewerAndCoreActionsExist) {
     EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("logClearBtn")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logCopyBtn")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logExportBtn")), nullptr);
+    // v10: only All and Issues filter buttons — Info removed.
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logFilterAllBtn")), nullptr);
-    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logFilterInfoBtn")), nullptr);
+    EXPECT_EQ(page.findChild<QPushButton*>(QStringLiteral("logFilterInfoBtn")), nullptr);
     EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("logFilterIssuesBtn")), nullptr);
     // D3: footer folder link present
     auto* folder_lnk = page.findChild<QLabel*>(QStringLiteral("logFolderLink"));
@@ -191,18 +192,14 @@ TEST_F(LogsPageTest, ClearResetsBufferAndLoggingAfterClearWorks) {
     EXPECT_EQ(history.front().message, QStringLiteral("after"));
 }
 
-TEST_F(LogsPageTest, FiltersImplementAllInfoAndIssuesSemantics) {
+TEST_F(LogsPageTest, FiltersImplementAllAndIssuesSemantics) {
     SeedAllLevels();
     ProcessEvents();
     LogsPage page;
 
+    // v10: All and Issues only — Info filter removed.
     page.setSeverityFilter(LogsPage::SeverityFilter::All);
     EXPECT_EQ(page.visibleEntryCount(), 4);
-
-    page.setSeverityFilter(LogsPage::SeverityFilter::Info);
-    ASSERT_EQ(page.visibleEntryCount(), 1);
-    EXPECT_TRUE(page.copyText().contains(QStringLiteral("[INFO]")));
-    EXPECT_FALSE(page.copyText().contains(QStringLiteral("[DEBUG]")));
 
     page.setSeverityFilter(LogsPage::SeverityFilter::Issues);
     EXPECT_EQ(page.visibleEntryCount(), 2);
@@ -254,7 +251,8 @@ TEST_F(LogsPageTest, CopyButtonWritesVisibleEntriesToClipboard) {
     SeedAllLevels();
     ProcessEvents();
     LogsPage page;
-    page.setSeverityFilter(LogsPage::SeverityFilter::Info);
+    // v10: Info filter removed; use Issues filter to get a non-trivial visible subset.
+    page.setSeverityFilter(LogsPage::SeverityFilter::Issues);
 
     auto* copy = page.findChild<QPushButton*>(QStringLiteral("logCopyBtn"));
     ASSERT_NE(copy, nullptr);
@@ -271,7 +269,8 @@ TEST_F(LogsPageTest, ExportUsesCompleteHistoryAndDeterministicUtf8Formatting) {
     AppLog::warning(QStringLiteral("Webcam"), QStringLiteral("device disconnected"));
     ProcessEvents();
     LogsPage page;
-    page.setSeverityFilter(LogsPage::SeverityFilter::Info);
+    // v10: Info filter removed; use Issues so visible < total, proving export uses full history.
+    page.setSeverityFilter(LogsPage::SeverityFilter::Issues);
     ASSERT_EQ(page.visibleEntryCount(), 1);
 
     QTemporaryDir dir;
