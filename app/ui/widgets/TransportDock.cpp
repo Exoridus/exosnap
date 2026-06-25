@@ -204,9 +204,9 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     app_toggle_ = new AudioSourceToggle(QStringLiteral("app"), QStringLiteral("app"), toggles_row_);
     app_toggle_->setToolTip(QStringLiteral("App audio"));
     toggles_layout->addWidget(system_toggle_);
+    toggles_layout->addWidget(app_toggle_);
     toggles_layout->addWidget(mic_toggle_);
     toggles_layout->addWidget(webcam_toggle_);
-    toggles_layout->addWidget(app_toggle_);
 
     completed_row_ = new QWidget(left_zone);
     auto* completed_layout = new QHBoxLayout(completed_row_);

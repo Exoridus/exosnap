@@ -136,23 +136,71 @@ void AudioSourceToggle::paintEvent(QPaintEvent* /*event*/) {
     painter.drawEllipse(circle);
 
     // Meter fill: vertical fill from bottom, clipped to the circle shape.
-    // Shown only when the toggle is on and a live meter level is present.
-    if (on_ && meter_active_ && meter_level_ > 0.0f) {
-        // Build a clip path matching the button circle so the fill never bleeds
-        // outside the rounded border.
+    // Shown when meter is active and level > 0, regardless of on_ state.
+    // OFF-state: flat grey fill (shows signal present but source not captured).
+    // ON-state: zoned fill — mint 0-0.75, caution/amber 0.75-0.95, error/coral 0.95-1.0.
+    if (meter_active_ && meter_level_ > 0.0f) {
+        // Clip to the button circle so the fill never bleeds outside the border.
         QPainterPath clip_path;
         clip_path.addEllipse(circle);
         painter.setClipPath(clip_path);
-
-        // Fill height proportional to level, growing from the bottom of the circle.
-        const qreal fill_height = circle.height() * static_cast<qreal>(meter_level_);
-        const QRectF fill_rect(circle.left(), circle.bottom() - fill_height, circle.width(), fill_height);
-
-        QColor meter_fill(accent);
-        meter_fill.setAlphaF(0.30f); // 30 % — visible but never overpowers the icon
         painter.setPen(Qt::NoPen);
-        painter.setBrush(meter_fill);
-        painter.drawRect(fill_rect);
+
+        const qreal level = static_cast<qreal>(meter_level_);
+        const qreal bottom = circle.bottom();
+
+        if (!on_) {
+            // OFF state: flat muted-grey fill.
+            const qreal total_height = circle.height() * level;
+            QColor grey(QString::fromUtf8(t.mut));
+            grey.setAlphaF(0.30f);
+            const QRectF fill_rect(circle.left(), bottom - total_height, circle.width(), total_height);
+            painter.setBrush(grey);
+            painter.drawRect(fill_rect);
+        } else {
+            // ON state: zoned fill bands stacked from bottom.
+            // Zone thresholds (as fraction of full circle height):
+            constexpr qreal kYellowThresh = 0.75; // mint below, caution above
+            constexpr qreal kRedThresh = 0.95;    // caution below, error above
+
+            const QColor caution_raw(QString::fromUtf8(t.caution));
+            const QColor error_raw(QString::fromUtf8(t.error));
+
+            // Mint zone: level 0 → min(level, 0.75)
+            if (level > 0.0) {
+                const qreal zone_top = std::min(level, kYellowThresh);
+                const qreal zone_height = circle.height() * zone_top;
+                const QRectF band(circle.left(), bottom - zone_height, circle.width(), zone_height);
+                QColor c(accent);
+                c.setAlphaF(0.30f);
+                painter.setBrush(c);
+                painter.drawRect(band);
+            }
+            // Caution/amber zone: level 0.75 → min(level, 0.95)
+            if (level > kYellowThresh) {
+                const qreal zone_bottom_frac = kYellowThresh;
+                const qreal zone_top_frac = std::min(level, kRedThresh);
+                const qreal zone_bottom_y = bottom - circle.height() * zone_bottom_frac;
+                const qreal zone_height = circle.height() * (zone_top_frac - zone_bottom_frac);
+                const QRectF band(circle.left(), zone_bottom_y - zone_height, circle.width(), zone_height);
+                QColor c(caution_raw);
+                c.setAlphaF(0.30f);
+                painter.setBrush(c);
+                painter.drawRect(band);
+            }
+            // Error/coral zone: level 0.95 → level
+            if (level > kRedThresh) {
+                const qreal zone_bottom_frac = kRedThresh;
+                const qreal zone_top_frac = level;
+                const qreal zone_bottom_y = bottom - circle.height() * zone_bottom_frac;
+                const qreal zone_height = circle.height() * (zone_top_frac - zone_bottom_frac);
+                const QRectF band(circle.left(), zone_bottom_y - zone_height, circle.width(), zone_height);
+                QColor c(error_raw);
+                c.setAlphaF(0.30f);
+                painter.setBrush(c);
+                painter.drawRect(band);
+            }
+        }
 
         // Restore unrestricted clip so the icon is not clipped.
         painter.setClipping(false);
