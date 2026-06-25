@@ -214,15 +214,18 @@ TEST_F(ConfigPageTest, HybridCardTitles_AreVisible) {
     ConfigPage page(output_defaults_, video_defaults_);
 
     // The hybrid Settings IA splits the old combined card into discrete compact cards.
+    // v10 further splits "Format & encoding" into "Container & codecs" + "Quality & timing".
     EXPECT_TRUE(HasLabelText(page, QStringLiteral("Preset")));
-    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Format & encoding")));
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Container & codecs")));
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Quality & timing")));
     EXPECT_TRUE(HasLabelText(page, QStringLiteral("Audio")));
     EXPECT_TRUE(HasLabelText(page, QStringLiteral("Webcam")));
     EXPECT_TRUE(HasLabelText(page, QStringLiteral("Output")));
 
-    // The old combined "Preset & Format" card title is gone after the hybrid IA split.
+    // The old combined "Preset & Format" / "Format & encoding" card titles are gone.
     EXPECT_FALSE(HasLabelText(page, QStringLiteral("Preset & Format")));
     EXPECT_FALSE(HasLabelText(page, QStringLiteral("Profile & Format")));
+    EXPECT_FALSE(HasLabelText(page, QStringLiteral("Format & encoding")));
 }
 
 TEST_F(ConfigPageTest, OutputResolution_IsFunctional) {
@@ -1865,7 +1868,8 @@ TEST_F(ConfigPageTest, SettingsSearch_EmptyQuery_AllCardsVisible) {
 
     // Cards verified by presence of their card titles (visible QLabel).
     EXPECT_TRUE(HasLabelText(page, QStringLiteral("Preset")));
-    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Format & encoding")));
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Container & codecs")));
+    EXPECT_TRUE(HasLabelText(page, QStringLiteral("Quality & timing")));
     EXPECT_TRUE(HasLabelText(page, QStringLiteral("Audio")));
     EXPECT_TRUE(HasLabelText(page, QStringLiteral("Webcam")));
     EXPECT_TRUE(HasLabelText(page, QStringLiteral("Output")));

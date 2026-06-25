@@ -443,6 +443,24 @@ class ConfigPage : public QWidget {
     // PS-PHASE-C: Embedded hotkeys panel (full-width card, below the two-column grid).
     ui::widgets::HotkeysSettingsPanel* hotkeys_settings_panel_ = nullptr;
 
+    // v10 split: the old "Format & encoding" mega-card is split into
+    // "Container & codecs" (fmt_panel_) and "Quality & timing" (quality_panel_).
+    QWidget* quality_panel_ = nullptr; // "Quality & timing" card host
+    // v10: Default Quality presentation is a single "Balanced · CQ 24" dropdown.
+    // quality_combo_ stays the hidden model seam; quality_preset_combo_ is the
+    // visible Default control mirroring it. quality_segment_group_ is preserved
+    // (hidden) as a test seam.
+    QComboBox* quality_preset_combo_ = nullptr;
+    QWidget* quality_preset_row_widget_ = nullptr; // visible Default dropdown row
+    // v10: rate-control + bitrate moved into the Quality & timing card (expert).
+    QWidget* quality_rate_section_ = nullptr;
+    // v10: Output "Saves to …\path" resolved footer (mirrors the Quality footer).
+    QLabel* output_saves_to_label_ = nullptr;
+    // v10: one full-width theme preview below the compact selector (Appearance).
+    // Stored as QWidget* because ThemePreviewSwatch lives in an anonymous namespace
+    // in the .cpp; the concrete type is only used there.
+    QWidget* appearance_preview_swatch_ = nullptr;
+
     // PS-PHASE-C: Expert Format section — rate control (CQ/VBR/CBR) + bitrate + placeholders.
     QWidget* fmt_expert_section_ = nullptr; // container for rate control, bitrate, and Format placeholders
     QWidget* rate_control_row_widget_ = nullptr;

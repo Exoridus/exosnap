@@ -15,9 +15,14 @@ class GlobalHotkeyService;
 
 namespace exosnap::ui::widgets {
 
-// PS-PHASE-C: Compact embedded hotkeys panel for the Settings page.
-// Shows the five active (rebindable) hotkeys without page chrome, scroll area,
-// or planned-actions section.  Designed to be hosted inside a Settings card.
+// PS-PHASE-C / v10: Compact embedded hotkeys panel for the Settings page.
+// Shows the five active (rebindable) hotkeys as single-line rows:
+//   [ action label ] ······ ⟨ state-slot ⟩  [×]  [ Set ]
+// The state-slot is one fixed-position chip that morphs by state (bound chord /
+// "Press keys…" / "Not set" / amber conflict chip). The borderless quiet × clears
+// the binding; the bordered primary enters capture (Set/Change) and becomes a
+// full-width Cancel while capturing. There is no per-row Reset — the card header
+// carries a single "Reset all".
 class HotkeysSettingsPanel : public QWidget {
     Q_OBJECT
   public:
@@ -34,28 +39,36 @@ class HotkeysSettingsPanel : public QWidget {
 
     void buildRow(int index, const QString& action, const QKeySequence& default_binding, QVBoxLayout* parent_layout,
                   QWidget* parent_widget);
-    void updateBindingChips(int index);
+    // Repaints the fixed-position state-slot for the given row from its current
+    // binding / capture / conflict state.
+    void updateSlot(int index);
     void enterCapture(int index);
     void commitCapture(int index, const QKeySequence& seq);
     void cancelCapture(int index);
     void resetAll();
-    void resetRow(int index);
-    void showRowError(int index, const QString& message);
-    void clearRowError(int index);
+    void showRowConflict(int index, const QKeySequence& attempted, const QString& message);
+    void clearRowConflict(int index);
     void refreshRowButtons(int index);
 
+    enum class SlotState { Bound, Unset, Capturing, Conflict };
+
     struct RowWidgets {
-        QWidget* binding_chips = nullptr;
-        QHBoxLayout* binding_layout = nullptr;
-        QPushButton* set_btn = nullptr;
-        QPushButton* unset_btn = nullptr;
-        QPushButton* reset_btn = nullptr;
-        QLabel* error_label = nullptr;
-        QWidget* normal_container = nullptr;
-        QWidget* capture_container = nullptr;
+        // The single fixed-position state-slot (holds the chord chip / hint chip).
+        QWidget* slot = nullptr;
+        QHBoxLayout* slot_layout = nullptr;
+        // Right control cluster.
+        QWidget* controls = nullptr;
+        QPushButton* unset_btn = nullptr;  // borderless quiet ×
+        QPushButton* set_btn = nullptr;    // bordered primary (Set / Change)
+        QPushButton* cancel_btn = nullptr; // full-width Cancel (capturing)
+        // Hidden capture edit (drives the OS key capture).
         QKeySequenceEdit* capture_edit = nullptr;
         QKeySequence current_binding;
         QKeySequence default_binding;
+        // Conflict state (set on a rejected TrySetBinding; shown amber in the slot).
+        bool conflict = false;
+        QKeySequence conflict_binding;
+        QString conflict_tooltip;
     };
 
     std::array<RowWidgets, kActiveActionCount> rows_{};
