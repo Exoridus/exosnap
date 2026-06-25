@@ -1613,7 +1613,10 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     root->setSpacing(10);
     root->addWidget(preview_column_, 1);
     root->addWidget(result_details_panel_, 0);
-    root->addWidget(recent_section_, 0);
+    // v10: Recent recordings section removed from the visible layout — the
+    // finished state returns to Ready and a toast carries the result.
+    // recent_section_ is kept constructed (history_store_ still writes to it)
+    // but never added to the root layout so it is invisible.
     root->addWidget(capture_frame_status_label_, 0);
     root->addWidget(marker_feedback_label_, 0);
     root->addWidget(transport_dock_, 0);
@@ -5311,11 +5314,13 @@ void RecordPage::updateTransportDock() {
         dock_state = TransportDock::State::Recording;
         primary_enabled = false;
     } else if (saving) {
-        // ADR-0014: remux in progress — use Saving dock state, all actions disabled.
-        dock_state = TransportDock::State::Saving;
+        // ADR-0014: remux in progress — keep Ready layout, all actions disabled.
+        // v10: no separate Saving dock state; timer shows "Saving…" while blocked.
+        dock_state = TransportDock::State::Ready;
         primary_enabled = false;
     } else if (completed_success) {
-        dock_state = TransportDock::State::Completed;
+        // v10: return to Ready after success — toast carries the result.
+        dock_state = TransportDock::State::Ready;
         primary_enabled = view_model_.CanStart();
     }
     transport_dock_->setState(dock_state);
@@ -5351,31 +5356,12 @@ void RecordPage::updateTransportDock() {
     // Webcam is configured in Settings; here it is an honest read-only status pill.
     transport_dock_->setToggleState(QStringLiteral("webcam"), current_webcam_settings_.enabled, false);
 
-    if (saving) {
-        // ADR-0014: show a "Saving…" placeholder in the completed row left zone.
-        // The file name is the expected output (not yet written); size is pending.
-        const QString path =
-            coordinator_ ? QString::fromStdWString(coordinator_->CurrentOutputPath().wstring()).trimmed() : QString();
-        const QString file_name = path.isEmpty() ? QStringLiteral("Saving MP4…") : QFileInfo(path).fileName();
-        transport_dock_->setCompletedInfo(file_name, QStringLiteral("Saving…"), false);
-        hideResultDetailsPanel();
-    } else if (completed_success) {
-        const QString path = QString::fromStdWString(view_model_.result_output_path).trimmed();
-        const QString file_name = path.isEmpty() ? QStringLiteral("Recording saved") : QFileInfo(path).fileName();
-        const QString size_text =
-            view_model_.result_output_file_bytes > 0
-                ? QString::fromStdWString(RecordViewModel::FormatBytes(view_model_.result_output_file_bytes))
-                : QString();
-        transport_dock_->setCompletedInfo(file_name, size_text, !path.isEmpty());
-
-        // Update result details panel
-        updateResultDetailsPanel();
-    } else {
-        hideResultDetailsPanel();
-    }
-
-    // Update recent recordings section
-    updateRecentRecordingsSection();
+    // v10: no Completed dock state. The dock always returns to Ready after a
+    // recording finishes; the result is surfaced via the NotificationManager
+    // toast (wired in MainWindow::initNotificationToasts via recordingResultReady).
+    // The result-details panel is kept for the legacy host but not shown in the
+    // preview-first layout.
+    hideResultDetailsPanel();
 }
 
 void RecordPage::onDockSourceToggle(const QString& key) {

@@ -274,11 +274,14 @@ TEST_F(CaptureFrameButtonTest, DockButton_VisibilityByState) {
     dock.setState(ui::widgets::TransportDock::State::Paused);
     EXPECT_TRUE(btn->isVisibleTo(&dock)) << "button must be visible while Paused";
 
+    // v10: Saving/Completed map to a Ready-layout dock (no separate saved/saving mode).
+    // The capture-frame button remains visible but is disabled while saving/blocked.
     dock.setState(ui::widgets::TransportDock::State::Saving);
-    EXPECT_FALSE(btn->isVisibleTo(&dock)) << "button must be hidden during Saving";
+    EXPECT_TRUE(btn->isVisibleTo(&dock)) << "button visible in Saving (disabled, not hidden)";
+    EXPECT_FALSE(btn->isEnabled()) << "button disabled during Saving";
 
     dock.setState(ui::widgets::TransportDock::State::Completed);
-    EXPECT_FALSE(btn->isVisibleTo(&dock)) << "button must be hidden in Completed state";
+    EXPECT_TRUE(btn->isVisibleTo(&dock)) << "button visible in Completed (Ready layout)";
 }
 
 // ── Test 13: Dock button click emits captureFrameClicked signal ──────────────

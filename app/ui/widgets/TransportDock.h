@@ -5,7 +5,9 @@
 
 class QHBoxLayout;
 class QLabel;
+class QMenu;
 class QPushButton;
+class QTimer;
 class QWidget;
 
 namespace exosnap::ui::widgets {
@@ -84,8 +86,12 @@ class TransportDock : public QFrame {
     // face directly always starts immediately.)
     void countdownSecondsChanged(int seconds);
 
+  protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
   private:
     void applyState();
+    void openChevronMenu();
 
     State state_ = State::Ready;
     bool primary_enabled_ = true;
@@ -118,6 +124,11 @@ class TransportDock : public QFrame {
     QPushButton* add_marker_btn_ = nullptr;
     QPushButton* split_btn_ = nullptr;
     bool split_enabled_ = true;
+
+    // Hover-triggered countdown menu (v10): opens on chevron enter, stays open
+    // while the cursor is inside the chevron or the menu. Closed on leave.
+    QMenu* chevron_menu_ = nullptr;         // non-owning while open (WA_DeleteOnClose)
+    QTimer* chevron_leave_timer_ = nullptr; // short delay before closing on leave
 };
 
 } // namespace exosnap::ui::widgets

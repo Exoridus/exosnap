@@ -3089,6 +3089,29 @@ QPushButton[dockAction="captureFrame"]:focus {
     border-color: ${accent};
 }
 
+/* v10 icon-only dock action buttons (Add marker / Split) — same 44×44 round
+   treatment as capture-frame but neutral accent on hover (not accent-dim). */
+QPushButton[dockAction="iconAction"] {
+    border-radius: 22px;
+    padding: 0;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid ${line2};
+}
+
+QPushButton[dockAction="iconAction"]:hover {
+    background: rgba(255, 255, 255, 0.10);
+    border-color: ${line2};
+}
+
+QPushButton[dockAction="iconAction"]:pressed {
+    background: rgba(255, 255, 255, 0.16);
+}
+
+QPushButton[dockAction="iconAction"]:disabled {
+    border-color: ${line1};
+    opacity: 0.38;
+}
+
 QPushButton[dockAction="record"],
 QPushButton[dockAction="resume"] {
     color: ${accent-ink};

@@ -92,20 +92,22 @@ TEST_F(TransportDockTest, PausedState_ShowsResumeAndStop) {
     EXPECT_FALSE(ButtonVisible(dock, "recordDockRecord"));
 }
 
-TEST_F(TransportDockTest, CompletedState_ShowsRecordAgainAndResultInfo) {
+TEST_F(TransportDockTest, CompletedState_ReturnsToReadyLayout) {
+    // v10: Completed is no longer a distinct dock state. The dock stays in the
+    // Ready layout so the user can immediately start a new recording.
+    // The result is surfaced by the NotificationManager toast, not by the dock.
     TransportDock dock;
     dock.setState(TransportDock::State::Completed);
-    dock.setCompletedInfo(QStringLiteral("clip.mkv"), QStringLiteral("128 MB"), true);
 
-    EXPECT_TRUE(ButtonVisible(dock, "recordDockRecordAgain"));
-    EXPECT_TRUE(ButtonVisible(dock, "recordDockFilename"));
-    EXPECT_TRUE(ButtonVisible(dock, "recordDockOpenFolder"));
-    EXPECT_FALSE(ButtonVisible(dock, "recordDockRecord"));
+    // Ready layout: Record split pill visible, no stop/pause/resume.
+    EXPECT_TRUE(ButtonVisible(dock, "recordDockRecord"));
+    EXPECT_FALSE(ButtonVisible(dock, "recordDockRecordAgain"));
     EXPECT_FALSE(ButtonVisible(dock, "recordDockStop"));
-    // Source toggles give way to result info in the completed state.
+    EXPECT_FALSE(ButtonVisible(dock, "recordDockPause"));
+    // Source toggles always visible in v10 (no completed_row_ swap).
     auto* system_toggle = Toggle(dock, QStringLiteral("system"));
     ASSERT_NE(system_toggle, nullptr);
-    EXPECT_FALSE(system_toggle->isVisibleTo(&dock));
+    EXPECT_TRUE(system_toggle->isVisibleTo(&dock));
 }
 
 TEST_F(TransportDockTest, NoKioskStartLabel) {
@@ -413,11 +415,11 @@ TEST_F(TransportDockTest, DockToggle_WebcamTooltip) {
 }
 
 TEST_F(TransportDockTest, DockToggle_AppAudioTooltip) {
-    // The app toggle must read as "Application audio" — the icon key drives the window SVG path.
+    // The app toggle tooltip reads "App audio" (v10 user spec); the icon key still drives the window SVG path.
     TransportDock dock;
     auto* toggle = Toggle(dock, QStringLiteral("app"));
     ASSERT_NE(toggle, nullptr);
-    EXPECT_EQ(toggle->toolTip(), QStringLiteral("Application audio"));
+    EXPECT_EQ(toggle->toolTip(), QStringLiteral("App audio"));
     EXPECT_EQ(toggle->property("sourceKey").toString(), QStringLiteral("app"));
 }
 

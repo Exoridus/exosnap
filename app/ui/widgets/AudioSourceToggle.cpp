@@ -15,10 +15,8 @@ namespace exosnap::ui::widgets {
 namespace {
 
 constexpr int kDiameter = 42;
-// Extra pixels below the icon circle for the mono meter strip (2 gap + 3 bar).
-constexpr int kMeterGap = 2;
-constexpr int kMeterBarH = 3;
-constexpr int kTotalHeight = kDiameter + kMeterGap + kMeterBarH; // 47
+// v10: meter strip removed — the toggle is a pure 42×42 circle.
+constexpr int kTotalHeight = kDiameter; // 42
 
 // Lucide-style 24x24 stroke paths, matching the hybrid design icon set.
 QByteArray iconPathFor(const QString& key) {
@@ -139,24 +137,10 @@ void AudioSourceToggle::paintEvent(QPaintEvent* /*event*/) {
     const QRectF icon_rect =
         circle.adjusted(circle.width() * 0.27, circle.height() * 0.27, -circle.width() * 0.27, -circle.height() * 0.27);
     paintIcon(painter, icon_key_, icon_rect, icon);
-
-    // Compact mono meter strip below the circle.
-    painter.setRenderHint(QPainter::Antialiasing, false);
-    constexpr int kInset = 2;
-    const int mY = kDiameter + kMeterGap;
-    const int mW = width() - 2 * kInset;
-    painter.fillRect(QRect(kInset, mY, mW, kMeterBarH), QColor(0x2a, 0x26, 0x20));
-    if (meter_active_ && meter_level_ > 0.0f) {
-        const float ratio = std::clamp(meter_level_, 0.0f, 1.0f);
-        QColor bar;
-        if (ratio >= 0.86f)
-            bar = QColor(0xe2, 0x6a, 0x5a);
-        else if (ratio >= 0.62f)
-            bar = QColor(0xf1, 0xb4, 0x00);
-        else
-            bar = QColor(0x74, 0xc0, 0x8a);
-        painter.fillRect(QRect(kInset, mY, static_cast<int>(mW * ratio), kMeterBarH), bar);
-    }
+    // v10: meter strip removed — icon circle is the full widget surface.
+    // setMeterLevel / setMeterActive are kept for API compatibility but have no
+    // visual effect. The level data continues to update the internal fields so
+    // callers that read them back (tests) are not broken.
 }
 
 } // namespace exosnap::ui::widgets
