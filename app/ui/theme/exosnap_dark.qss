@@ -3444,10 +3444,11 @@ QPushButton[themePickerCard="true"] {
     border-radius: ${radius-md}px;
     padding: 0;
     text-align: left;
-    /* Tall enough for the 116x70 preview swatch plus the wrapped 3-line intent
-       text. A QPushButton does not propagate its layout's height-for-width, so
-       the card must be forced past the content height or the last line clips. */
-    min-height: 100px;
+    /* Each card holds a per-theme preview swatch plus the theme name below it.
+       A QPushButton's sizeHint ignores its child layout, so the card height is
+       forced in code (ConfigPage makeThemeOption: setMinimumHeight) to keep the
+       name clear of the swatch; this floor is a backstop. */
+    min-height: 130px;
 }
 
 QPushButton[themePickerCard="true"]:hover {

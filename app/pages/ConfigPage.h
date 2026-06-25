@@ -453,11 +453,6 @@ class ConfigPage : public QWidget {
     QWidget* quality_rate_section_ = nullptr;
     // v10: Output "Saves to …\path" resolved footer (mirrors the Quality footer).
     QLabel* output_saves_to_label_ = nullptr;
-    // v10: one full-width theme preview below the compact selector (Appearance).
-    // Stored as QWidget* because ThemePreviewSwatch lives in an anonymous namespace
-    // in the .cpp; the concrete type is only used there.
-    QWidget* appearance_preview_swatch_ = nullptr;
-
     // PS-PHASE-C: Expert Format section — rate control (CQ/VBR/CBR) + bitrate + placeholders.
     QWidget* fmt_expert_section_ = nullptr; // container for rate control, bitrate, and Format placeholders
     QWidget* rate_control_row_widget_ = nullptr;

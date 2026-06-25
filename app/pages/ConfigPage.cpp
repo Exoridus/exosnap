@@ -187,6 +187,21 @@ class ThemePreviewSwatch : public QWidget {
         update();
     }
 
+    // Embed the swatch inside a clickable theme card: reserve a fixed preview
+    // height (a QPushButton does NOT honour a child layout's height-for-width, so
+    // height cannot be derived from width) and paint the 116×70 mini-UI scaled to
+    // FIT the widget, centred — never clipped, whatever the card width becomes.
+    void setCardFill(bool fill) {
+        card_fill_ = fill;
+        if (fill) {
+            setMinimumWidth(0);
+            setMaximumWidth(QWIDGETSIZE_MAX);
+            setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            setFixedHeight(82);
+        }
+        update();
+    }
+
   protected:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
@@ -211,7 +226,17 @@ class ThemePreviewSwatch : public QWidget {
         // height (keeping the designed proportions) and centre horizontally.
         int W = width();
         int H = height();
-        if (full_width_) {
+        if (card_fill_) {
+            // Scale the 116×70 mini-UI to FIT the widget (keeping aspect) and
+            // centre it — never clips, whatever the card width turns out to be.
+            const qreal scale = qMin(static_cast<qreal>(W) / 116.0, static_cast<qreal>(H) / 70.0);
+            const qreal scaledW = 116.0 * scale;
+            const qreal scaledH = 70.0 * scale;
+            p.translate((W - scaledW) / 2.0, (H - scaledH) / 2.0);
+            p.scale(scale, scale);
+            W = 116;
+            H = 70;
+        } else if (full_width_) {
             constexpr qreal kDesignW = 116.0;
             constexpr qreal kDesignH = 70.0;
             const qreal scale = qMax(1.0, static_cast<qreal>(H) / kDesignH);
@@ -317,21 +342,13 @@ class ThemePreviewSwatch : public QWidget {
 
     const exosnap::ui::theme::ExoTheme* theme_;
     bool full_width_ = false;
+    bool card_fill_ = false;
 };
 
 QFrame* makePanel(QWidget* parent) {
     auto* panel = new QFrame(parent);
     panel->setProperty("panelRole", "panel");
     return panel;
-}
-
-// Look up an ExoTheme by id (falls back to the first theme for unknown ids).
-const exosnap::ui::theme::ExoTheme& ThemeById(const QString& id) {
-    for (const auto& t : exosnap::ui::theme::kExoThemes) {
-        if (QString::fromUtf8(t.id) == id)
-            return t;
-    }
-    return exosnap::ui::theme::kExoThemes[0];
 }
 
 // Card title: 15/600 per the design system "Section/card title" role.
@@ -2362,9 +2379,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             return lbl;
         };
 
-        // v10 (Delta 4): compact selector option — a small swatch DOT + theme name,
-        // grouped Dark / Light. The four options remain checkable QPushButtons carrying
-        // the themePickerCard + themeId properties (test seam) and feed theme_button_group_.
+        // Theme option = a clickable PREVIEW card: a per-theme mini-UI swatch with
+        // the theme name + accent dot below it. The four cards remain checkable
+        // QPushButtons carrying the themePickerCard + themeId properties (test seam)
+        // and feed theme_button_group_. Selecting one applies the theme live; the
+        // checked card is marked via the themePickerCard:checked QSS rule.
         auto makeThemeOption = [&](const ui::theme::ExoTheme& t) -> QPushButton* {
             auto* card = new QPushButton(theme_grid);
             card->setCheckable(true);
@@ -2376,25 +2395,40 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             card->setProperty("themeId", QString::fromUtf8(t.id));
             card->setObjectName(QStringLiteral("themeCard_") + QString::fromUtf8(t.id));
             card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            // A QPushButton's sizeHint ignores its child layout, so force enough
+            // height for the 82px swatch + spacing + name row + margins; otherwise
+            // the name overlaps the swatch (see themePickerCard QSS note).
+            card->setMinimumHeight(130);
 
-            auto* card_layout = new QHBoxLayout(card);
-            card_layout->setContentsMargins(11, 9, 11, 9);
-            card_layout->setSpacing(9);
+            auto* card_layout = new QVBoxLayout(card);
+            card_layout->setContentsMargins(10, 10, 10, 9);
+            card_layout->setSpacing(8);
 
-            // Small swatch dot painted in the theme's accent colour.
-            auto* dot = new QLabel(card);
-            dot->setFixedSize(12, 12);
-            {
-                const QString ac = QString::fromUtf8(t.ac);
-                dot->setStyleSheet(
-                    QStringLiteral("border-radius:6px; background:%1; border:1px solid rgba(255,255,255,0.18);")
-                        .arg(ac));
-            }
-            auto* name_lbl = new QLabel(QString::fromUtf8(t.name), card);
+            // Per-theme preview swatch — fills the card width, fixed aspect.
+            // Transparent for mouse events so the whole card stays the click target.
+            auto* swatch = new ThemePreviewSwatch(t, card);
+            swatch->setCardFill(true);
+            swatch->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+            card_layout->addWidget(swatch);
+
+            // Name row: accent dot + theme name, centred under the swatch.
+            auto* name_row = new QWidget(card);
+            name_row->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+            auto* name_layout = new QHBoxLayout(name_row);
+            name_layout->setContentsMargins(0, 0, 0, 0);
+            name_layout->setSpacing(8);
+            name_layout->addStretch(1);
+            auto* dot = new QLabel(name_row);
+            dot->setFixedSize(10, 10);
+            dot->setStyleSheet(
+                QStringLiteral("border-radius:5px; background:%1; border:1px solid rgba(255,255,255,0.18);")
+                    .arg(QString::fromUtf8(t.ac)));
+            auto* name_lbl = new QLabel(QString::fromUtf8(t.name), name_row);
             name_lbl->setProperty("labelRole", "settingsRowLabel");
-
-            card_layout->addWidget(dot, 0, Qt::AlignVCenter);
-            card_layout->addWidget(name_lbl, 1, Qt::AlignVCenter);
+            name_layout->addWidget(dot, 0, Qt::AlignVCenter);
+            name_layout->addWidget(name_lbl, 0, Qt::AlignVCenter);
+            name_layout->addStretch(1);
+            card_layout->addWidget(name_row);
             return card;
         };
 
@@ -2429,30 +2463,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         theme_grid_layout->addWidget(light_row);
 
         appearance_layout->addWidget(theme_grid);
-
-        // v10 (Delta 4): ONE large preview spanning the full card width, showing the
-        // SELECTED theme. Updated on selection via setThemeId() / the button-group
-        // idClicked handler. Seeded to the currently-selected theme.
-        {
-            const ui::theme::ExoTheme* initial = &ui::theme::kExoThemes[0];
-            for (const auto& t : ui::theme::kExoThemes) {
-                if (QString::fromUtf8(t.id) == current_theme_id_) {
-                    initial = &t;
-                    break;
-                }
-            }
-            auto* preview = new ThemePreviewSwatch(*initial, appearance_panel);
-            preview->setObjectName(QStringLiteral("appearancePreviewSwatch"));
-            preview->setFullWidth(true);
-            preview->setMinimumHeight(120);
-            appearance_preview_swatch_ = preview;
-            auto* preview_holder = new QWidget(appearance_panel);
-            auto* ph_layout = new QVBoxLayout(preview_holder);
-            ph_layout->setContentsMargins(0, 12, 0, 2);
-            ph_layout->setSpacing(0);
-            ph_layout->addWidget(preview);
-            appearance_layout->addWidget(preview_holder);
-        }
 
         // appearance_panel added to right_layout in the consolidation block below.
     }
@@ -2611,9 +2621,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         const QString id = btn->property("themeId").toString();
         if (!id.isEmpty()) {
             current_theme_id_ = id;
-            // v10 (Delta 4): update the full-width preview to the selected theme.
-            if (appearance_preview_swatch_)
-                static_cast<ThemePreviewSwatch*>(appearance_preview_swatch_)->setTheme(ThemeById(id));
             emit themeIdChanged(id);
         }
     });
@@ -4612,9 +4619,6 @@ void ConfigPage::setShowQuickControls(bool show) {
 
 void ConfigPage::setThemeId(const QString& theme_id) {
     current_theme_id_ = theme_id;
-    // v10 (Delta 4): keep the full-width preview in sync with the selected theme.
-    if (appearance_preview_swatch_)
-        static_cast<ThemePreviewSwatch*>(appearance_preview_swatch_)->setTheme(ThemeById(theme_id));
     if (!theme_button_group_)
         return;
     const QSignalBlocker blocker(theme_button_group_);
