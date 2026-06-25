@@ -410,8 +410,8 @@ class ConfigPage : public QWidget {
     bool controls_locked_ = false;
 
     QLabel* token_help_label_ = nullptr;
-    QPushButton* token_help_toggle_btn_ = nullptr;
-    QWidget* token_chip_flow_ = nullptr; // v10: collapsed by default
+    QPushButton* token_help_toggle_btn_ = nullptr; // v10: removed — kept nullptr
+    QWidget* token_chip_flow_ = nullptr;           // v10: always visible below pattern input
 
     // SETTINGS-TIERS-R1 / D6: Expert mode toggle (ExoToggle in D6 header zone).
     ui::widgets::ExoToggle* expert_mode_toggle_ = nullptr;
@@ -441,8 +441,11 @@ class ConfigPage : public QWidget {
     // Expert-gated developer card (hidden when expert_mode_enabled_ == false).
     QWidget* developer_card_ = nullptr;
 
-    // PS-PHASE-C: Embedded hotkeys panel (full-width card, below the two-column grid).
+    // PS-PHASE-C: Embedded hotkeys panel — v10: single-width card in the LEFT column.
     ui::widgets::HotkeysSettingsPanel* hotkeys_settings_panel_ = nullptr;
+    QWidget* hotkeys_panel_ = nullptr; // card wrapper (for search filtering + scrollToSection)
+    // Updates card (right column, between Presence and Appearance).
+    QWidget* updates_panel_ = nullptr;
 
     // v10 split: the old "Format & encoding" mega-card is split into
     // "Container & codecs" (fmt_panel_) and "Quality & timing" (quality_panel_).

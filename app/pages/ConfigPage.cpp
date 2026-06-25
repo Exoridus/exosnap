@@ -798,14 +798,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
         layout->addWidget(header_zone);
     }
-    // ---- TWO-COLUMN CARD GRID (D6 design: Format | Audio / Webcam | Output / Presence | Appearance) ----
-    // Left column: Format & encoding, Webcam, Presence.
-    // Right column: Audio, Output, Appearance.
+    // ---- TWO-COLUMN CARD GRID (v10 masonry, fixed-column placement) ----
+    // Left column:  Container & codecs · Quality & timing · Audio · Hotkeys · Developer(Expert).
+    // Right column: Output · Webcam · Presence · Updates · Appearance.
     // On narrow viewports updateResponsiveLayout() flips both columns to a single stacked column.
-    // Updates card is placed full-width below the grid; Developer is full-width below that
-    // (expert-gated). The six main cards are individually visibility-controlled by
-    // applySettingsSearch so the grid host (columns_widget_) is only hidden when all six are
-    // hidden (cosmetic gap limitation is acceptable — see applySettingsSearch).
+    // Cards are individually visibility-controlled by applySettingsSearch; columns_widget_ is
+    // hidden only when all cards in both columns are hidden to avoid an empty gap.
     auto* columns = new QWidget(content);
     columns_widget_ = columns;
     columns_layout_ = new QHBoxLayout(columns);
@@ -1386,11 +1384,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     // v10 (Delta 5): stable two-column placement, priority-ordered, identical in
     // Default and Expert (Expert only adds rows in place + reveals Developer).
-    //   Left  : Container & codecs · Quality & timing · Audio
-    //   Right : Output · Webcam · Presence · Hotkeys · Appearance · (Developer, Expert)
-    // Left cards are added in build order here; right cards are parented to right_col
-    // but added to right_layout in one explicit, target-ordered block after they are
-    // all built (see the consolidation block below the Developer card).
+    //   Left  : Container & codecs · Quality & timing · Audio · Hotkeys · Developer(Expert)
+    //   Right : Output · Webcam · Presence · Updates · Appearance
+    // Left cards Container/Quality/Audio are added in build order here; Hotkeys and
+    // Developer are appended in the consolidation block (they are built later).
+    // Right cards are parented to right_col but added to right_layout in one explicit,
+    // target-ordered block (see the consolidation block after the Updates card).
     left_layout->addWidget(fmt_panel);
     left_layout->addWidget(quality_panel);
 
@@ -2023,7 +2022,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     audio_summary_label_->setVisible(false);
     audio_panel_layout->addWidget(audio_summary_label_);
     left_layout->addWidget(audio_panel);
-    left_layout->addStretch();
 
     // ---- WEBCAM CARD (right column — v10) ----
     auto* webcam_panel = makePanel(right_col);
@@ -2257,6 +2255,26 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     naming_edit_->setPlaceholderText(QStringLiteral("{datetime}_{app}_{title}"));
     output_fields_layout->addWidget(naming_edit_);
 
+    // v10 (Task #4): token chips are ALWAYS VISIBLE below the pattern input.
+    // ChipFlowWidget wraps naturally at any width. No toggle button needed.
+    // Only tokens the FilenameBuilder actually resolves are shown.
+    {
+        const QStringList token_chips = {QStringLiteral("{datetime}"), QStringLiteral("{date}"),
+                                         QStringLiteral("{time}"),     QStringLiteral("{app}"),
+                                         QStringLiteral("{title}"),    QStringLiteral("{target}"),
+                                         QStringLiteral("{profile}"),  QStringLiteral("{container}")};
+        auto* chip_flow = new ChipFlowWidget(output_fields);
+        chip_flow->setObjectName(QStringLiteral("tokenChipFlow"));
+        token_chip_flow_ = chip_flow;
+        for (const QString& token : token_chips) {
+            auto* chip = new QLabel(token, chip_flow);
+            chip->setProperty("labelRole", "tokenChip");
+            chip_flow->addChip(chip);
+        }
+        // Always visible — no toggle.
+        output_fields_layout->addWidget(chip_flow);
+    }
+
     pattern_validation_label_ = makeHint(QString(), output_fields);
     pattern_validation_label_->setVisible(false);
     output_fields_layout->addWidget(pattern_validation_label_);
@@ -2265,49 +2283,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_fields_layout->addWidget(example_filename_label_);
     output_fields_layout->addStretch();
 
-    auto* output_help = new QWidget(output_split);
-    auto* output_help_layout = new QVBoxLayout(output_help);
-    output_help_layout->setContentsMargins(0, 0, 0, 0);
-    output_help_layout->setSpacing(8);
-
-    output_help_layout->addWidget(makeOutputSubLabel(QStringLiteral("Filename tokens"), output_help));
-
-    // Compact chips of the most common real tokens; the full reference stays behind the toggle.
-    // Only tokens the FilenameBuilder actually resolves are shown (e.g. {target}/{profile}).
-    // D6 wave-2: replaced fixed "4 per row" QHBoxLayouts with a ChipFlowWidget so chips
-    // wrap naturally at any available width without overflow or clipping.
-    const QStringList token_chips = {QStringLiteral("{datetime}"), QStringLiteral("{date}"),
-                                     QStringLiteral("{time}"),     QStringLiteral("{app}"),
-                                     QStringLiteral("{title}"),    QStringLiteral("{target}"),
-                                     QStringLiteral("{profile}"),  QStringLiteral("{container}")};
-    auto* chip_flow = new ChipFlowWidget(output_help);
-    token_chip_flow_ = chip_flow;
-    for (const QString& token : token_chips) {
-        auto* chip = new QLabel(token, chip_flow);
-        chip->setProperty("labelRole", "tokenChip");
-        chip_flow->addChip(chip);
-    }
-    chip_flow->setVisible(false); // v10: collapsed by default, shown on demand
-    output_help_layout->addWidget(chip_flow);
-
-    token_help_toggle_btn_ = new QPushButton(QStringLiteral("Edit tokens"), output_help);
-    token_help_toggle_btn_->setObjectName(QStringLiteral("tokenHelpToggle"));
-    token_help_toggle_btn_->setProperty("role", "ghost");
-    output_help_layout->addWidget(token_help_toggle_btn_, 0, Qt::AlignLeft);
-
-    token_help_label_ = makeHint(
-        QStringLiteral("Tokens: {datetime}, {date}, {time}, {timestamp}, {YYYY}, {YY}, {MM}, {DD}, {hh}, {mm}, {ss}, "
-                       "{app}, {title}, {process}, {target}, {profile}, {container}, {video}, {audio}"),
-        output_help);
-    token_help_label_->setVisible(false);
-    output_help_layout->addWidget(token_help_label_);
-
-    output_help_layout->addWidget(
-        makeHint(QStringLiteral("Tokens auto-fill names from the date, app, and capture target."), output_help));
-    output_help_layout->addStretch();
-
-    output_split_layout_->addWidget(output_fields, 3);
-    output_split_layout_->addWidget(output_help, 2);
+    // v10 (Task #4): output_help panel removed — chips are now in output_fields.
+    // The split layout keeps output_fields full-width; output_split_layout_ is still
+    // used by updateResponsiveLayout() to flip between horizontal/vertical direction.
+    output_split_layout_->addWidget(output_fields, 1);
     out_panel_layout->addWidget(output_split);
 
     // v10 (Delta 3): "Open editor when finished" — a real row in the Output card,
@@ -2529,26 +2508,27 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         // appearance_panel added to right_layout in the consolidation block below.
     }
 
-    // ---- PS-PHASE-C: HOTKEYS CARD (right column — v10, single-width) ----
-    QWidget* hotkeys_panel = nullptr;
+    // ---- PS-PHASE-C: HOTKEYS CARD (LEFT column — v10, single-width) ----
+    // v10 masonry: Hotkeys belongs to left column (below Audio).
     {
-        hotkeys_panel = makePanel(right_col);
-        hotkeys_panel->setObjectName(QStringLiteral("settingsHotkeysCard"));
-        auto* hotkeys_panel_layout = new QVBoxLayout(hotkeys_panel);
+        hotkeys_panel_ = makePanel(left_col);
+        hotkeys_panel_->setObjectName(QStringLiteral("settingsHotkeysCard"));
+        auto* hotkeys_panel_layout = new QVBoxLayout(hotkeys_panel_);
         hotkeys_panel_layout->setContentsMargins(18, 16, 18, 18);
         hotkeys_panel_layout->setSpacing(10);
-        hotkeys_panel_layout->addWidget(makeCardTitle(QStringLiteral("Hotkeys"), hotkeys_panel));
+        hotkeys_panel_layout->addWidget(makeCardTitle(QStringLiteral("Hotkeys"), hotkeys_panel_));
 
-        hotkeys_settings_panel_ = new ui::widgets::HotkeysSettingsPanel(hotkeys_panel);
+        hotkeys_settings_panel_ = new ui::widgets::HotkeysSettingsPanel(hotkeys_panel_);
         hotkeys_settings_panel_->setObjectName(QStringLiteral("settingsHotkeysPanel"));
         hotkeys_panel_layout->addWidget(hotkeys_settings_panel_);
-        // hotkeys_panel added to right_layout in the consolidation block below.
+        // hotkeys_panel_ added to left_layout in the consolidation block below.
     }
 
-    // ---- DEVELOPER CARD (Expert-gated, right column — v10, single-width) ----
+    // ---- DEVELOPER CARD (Expert-gated, LEFT column — v10, single-width) ----
+    // v10 masonry: Developer belongs to left column (after Hotkeys, expert-gated).
     // UI-only debug stubs (log level, NVTX). No persistence — local variables only.
     {
-        developer_card_ = makePanel(right_col);
+        developer_card_ = makePanel(left_col);
         developer_card_->setObjectName(QStringLiteral("settingsDeveloperCard"));
         auto* dev_layout = new QVBoxLayout(developer_card_);
         dev_layout->setContentsMargins(18, 14, 18, 14);
@@ -2588,20 +2568,69 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         }
 
         developer_card_->setVisible(expert_mode_enabled_);
-        // developer_card_ added to right_layout in the consolidation block below.
+        // developer_card_ added to left_layout in the consolidation block below.
     }
 
-    // ---- v10 (Delta 5): RIGHT-COLUMN CONSOLIDATION (stable, priority order) ----
-    // All right-column cards are added here in their fixed target order so the
-    // layout is identical between Default and Expert — Expert only reveals rows in
-    // place and shows the (already-placed) Developer card. Order:
-    //   Output · Webcam · Presence · Hotkeys · Appearance · Developer.
+    // ---- UPDATES CARD (right column, between Presence and Appearance) ----
+    // v10 masonry: Updates lives in the right column. The full update service is not
+    // wired through ConfigPage; controls are stubs that preserve the real shape so the
+    // layout is stable and future wiring is a drop-in.
+    {
+        updates_panel_ = makePanel(right_col);
+        updates_panel_->setObjectName(QStringLiteral("settingsUpdatesCard"));
+        auto* updates_layout = new QVBoxLayout(updates_panel_);
+        updates_layout->setContentsMargins(18, 14, 18, 14);
+        updates_layout->setSpacing(0);
+        updates_layout->addWidget(makeCardTitle(QStringLiteral("Updates"), updates_panel_));
+
+        // Row 1: Update channel combo (Stable / Preview).
+        {
+            auto* channel_combo = new QComboBox(updates_panel_);
+            channel_combo->setObjectName(QStringLiteral("updatesChannelCombo"));
+            channel_combo->addItem(QStringLiteral("Stable"));
+            channel_combo->addItem(QStringLiteral("Preview"));
+            updates_layout->addWidget(makeSettingsRow(
+                updates_panel_, QStringLiteral("Update channel"),
+                new ui::widgets::InfoHintIcon(
+                    QStringLiteral("Stable ships tested releases; Preview delivers release candidates earlier."),
+                    updates_panel_),
+                QString(), channel_combo, /*first=*/true));
+        }
+
+        // Row 2: Automatic updates toggle.
+        {
+            auto* auto_check_toggle = new ui::widgets::ExoToggle(updates_panel_);
+            auto_check_toggle->setObjectName(QStringLiteral("updatesAutoCheckToggle"));
+            auto_check_toggle->setOn(true);
+            updates_layout->addWidget(makeSettingsRow(
+                updates_panel_, QStringLiteral("Automatic updates"),
+                new ui::widgets::InfoHintIcon(
+                    QStringLiteral("Check in the background and install after recording stops."), updates_panel_),
+                QString(), auto_check_toggle));
+        }
+
+        // Status / action row — stub label; real UpdateControl wired in a later wave.
+        auto* status_lbl = makeHint(QStringLiteral("\xe2\x9c\x93 Up to date"), updates_panel_);
+        status_lbl->setObjectName(QStringLiteral("updatesStatusLabel"));
+        status_lbl->setContentsMargins(0, 10, 0, 0);
+        updates_layout->addWidget(status_lbl);
+
+        // updates_panel_ added to right_layout in the consolidation block below.
+    }
+
+    // ---- v10 (Delta 5): COLUMN CONSOLIDATION (stable, priority order) ----
+    // Left column: Container & codecs · Quality & timing · Audio · Hotkeys · Developer(Expert).
+    // Right column: Output · Webcam · Presence · Updates · Appearance.
+    // Expert only reveals rows in place / shows Developer card — nothing teleports sideways.
+    left_layout->addWidget(hotkeys_panel_);
+    left_layout->addWidget(developer_card_);
+    left_layout->addStretch();
+
     right_layout->addWidget(out_panel);
     right_layout->addWidget(webcam_panel);
     right_layout->addWidget(presence_panel_);
-    right_layout->addWidget(hotkeys_panel);
+    right_layout->addWidget(updates_panel_);
     right_layout->addWidget(appearance_panel_);
-    right_layout->addWidget(developer_card_);
     right_layout->addStretch();
 
     layout->addStretch();
@@ -2734,13 +2763,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             emit importPresetsRequested(path);
     });
     connect(view_details_btn_, &QPushButton::clicked, this, &ConfigPage::diagnosticsRequested);
-    connect(token_help_toggle_btn_, &QPushButton::clicked, this, [this]() {
-        const bool now_visible = !token_help_label_->isVisible();
-        token_help_label_->setVisible(now_visible);
-        if (token_chip_flow_)
-            token_chip_flow_->setVisible(now_visible);
-        token_help_toggle_btn_->setText(now_visible ? QStringLiteral("Hide tokens") : QStringLiteral("Edit tokens"));
-    });
+    // token_help_toggle_btn_ removed (v10: token chips are permanently visible).
 
     // D6: ExoToggle replaces QPushButton for Expert-Mode.
     connect(expert_mode_toggle_, &QAbstractButton::clicked, this, [this]() {
@@ -4728,12 +4751,16 @@ void ConfigPage::applySettingsSearch(const QString& query) {
             quality_panel_->setVisible(true);
         if (audio_panel_)
             audio_panel_->setVisible(true);
+        if (hotkeys_panel_)
+            hotkeys_panel_->setVisible(true);
         if (webcam_panel_)
             webcam_panel_->setVisible(true);
         if (out_panel_)
             out_panel_->setVisible(true);
         if (presence_panel_)
             presence_panel_->setVisible(true);
+        if (updates_panel_)
+            updates_panel_->setVisible(true);
         if (appearance_panel_)
             appearance_panel_->setVisible(true);
         // Developer card: restore to expert-mode-gated state.
@@ -4760,17 +4787,25 @@ void ConfigPage::applySettingsSearch(const QString& query) {
     // Output expander auto-open: matches if any expander-specific keyword matches
     // OR the general output card already matched (expander is part of Output).
     const bool expander_trigger = kwMatch(expander_trigger_kws);
+    // Updates and Hotkeys keyword sets.
+    const QStringList updates_kws = {QStringLiteral("update"), QStringLiteral("software"),  QStringLiteral("version"),
+                                     QStringLiteral("check"),  QStringLiteral("automatic"), QStringLiteral("channel"),
+                                     QStringLiteral("stable"), QStringLiteral("preview")};
+    const QStringList hotkeys_kws = {
+        QStringLiteral("hotkey"),  QStringLiteral("shortcut"),  QStringLiteral("keybind"), QStringLiteral("keyboard"),
+        QStringLiteral("binding"), QStringLiteral("recording"), QStringLiteral("pause"),   QStringLiteral("resume"),
+        QStringLiteral("capture"), QStringLiteral("marker"),    QStringLiteral("split"),   QStringLiteral("frame")};
+    const bool updates_match = kwMatch(updates_kws);
+    const bool hotkeys_match = kwMatch(hotkeys_kws);
 
     // Apply card visibility.
     if (preset_panel_)
         preset_panel_->setVisible(preset_match);
 
-    // D6: all 6 grid cards (fmt, audio, webcam, output, presence, appearance) live in
-    // columns_widget_. Hide the host only when all six are hidden to avoid an empty gap.
-    // Cosmetic: when only some cards are hidden, the remaining card in each column expands
-    // vertically to fill the gap — this is an accepted limitation per the D6 brief.
-    const bool any_column_visible =
-        fmt_match || audio_match || webcam_match || output_match || presence_match || appearance_match;
+    // v10: all grid cards (left + right column) live in columns_widget_.
+    // Hide the host only when ALL cards are hidden to avoid an empty gap.
+    const bool any_column_visible = fmt_match || audio_match || hotkeys_match || webcam_match || output_match ||
+                                    presence_match || updates_match || appearance_match;
     if (columns_widget_)
         columns_widget_->setVisible(any_column_visible);
     if (fmt_panel_)
@@ -4780,6 +4815,8 @@ void ConfigPage::applySettingsSearch(const QString& query) {
         quality_panel_->setVisible(fmt_match);
     if (audio_panel_)
         audio_panel_->setVisible(audio_match);
+    if (hotkeys_panel_)
+        hotkeys_panel_->setVisible(hotkeys_match);
 
     if (webcam_panel_)
         webcam_panel_->setVisible(webcam_match);
@@ -4787,6 +4824,8 @@ void ConfigPage::applySettingsSearch(const QString& query) {
         out_panel_->setVisible(output_match);
     if (presence_panel_)
         presence_panel_->setVisible(presence_match);
+    if (updates_panel_)
+        updates_panel_->setVisible(updates_match);
     if (appearance_panel_)
         appearance_panel_->setVisible(appearance_match);
 
@@ -5224,6 +5263,8 @@ void ConfigPage::scrollToSection(const QString& section_target) {
         target_widget = appearance_panel_;
     else if (section_target == QStringLiteral("settings/hotkeys"))
         target_widget = hotkeys_settings_panel_;
+    else if (section_target == QStringLiteral("settings/updates"))
+        target_widget = updates_panel_;
 
     if (target_widget)
         scroll_area_->ensureWidgetVisible(target_widget);

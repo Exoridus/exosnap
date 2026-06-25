@@ -320,6 +320,7 @@ TEST_F(ConfigPageTest, OutputEffectiveSummaryReflectsFormatControls) {
 }
 
 TEST_F(ConfigPageTest, FilenameTokenChips_AreShown) {
+    // v10 (Task #4): token chips must be permanently present (not hidden behind a toggle).
     ConfigPage page(output_defaults_, video_defaults_);
 
     int chip_count = 0;
@@ -329,6 +330,23 @@ TEST_F(ConfigPageTest, FilenameTokenChips_AreShown) {
             ++chip_count;
     }
     EXPECT_GE(chip_count, 4) << "Output card should expose compact filename token chips";
+    // All expected token chips must be present.
+    EXPECT_EQ(chip_count, 8)
+        << "Expected 8 token chips ({datetime},{date},{time},{app},{title},{target},{profile},{container})";
+}
+
+TEST_F(ConfigPageTest, FilenameTokenChips_AlwaysVisible) {
+    // v10 (Task #4): token chips are permanently visible — no toggle needed.
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    // The token chip flow widget must not be explicitly hidden right after construction.
+    auto* chip_flow = page.findChild<QWidget*>(QStringLiteral("tokenChipFlow"));
+    ASSERT_NE(chip_flow, nullptr) << "tokenChipFlow widget must exist";
+    EXPECT_FALSE(chip_flow->isHidden()) << "Token chips must be permanently visible (no toggle)";
+
+    // The old tokenHelpToggle button must not exist.
+    auto* old_toggle = page.findChild<QPushButton*>(QStringLiteral("tokenHelpToggle"));
+    EXPECT_EQ(old_toggle, nullptr) << "tokenHelpToggle button must not exist in v10";
 }
 
 TEST_F(ConfigPageTest, BuiltInAndModifiedStates_UsePresetCopy) {
@@ -694,12 +712,21 @@ TEST_F(ConfigPageTest, MicSourceLabel_DoesNotSaySelectDeviceOnRecordPage) {
     }
 }
 
-TEST_F(ConfigPageTest, TokenHelpToggle_HiddenByDefault) {
+TEST_F(ConfigPageTest, UpdatesCard_IsPresent) {
+    // v10 (Task #5): Updates card must be present in the right column.
     ConfigPage page(output_defaults_, video_defaults_);
 
-    auto* toggle = page.findChild<QPushButton*>(QStringLiteral("tokenHelpToggle"));
-    ASSERT_NE(toggle, nullptr);
-    EXPECT_EQ(toggle->text(), QStringLiteral("Edit tokens"));
+    auto* updates_card = page.findChild<QWidget*>(QStringLiteral("settingsUpdatesCard"));
+    ASSERT_NE(updates_card, nullptr) << "settingsUpdatesCard must exist";
+    EXPECT_FALSE(updates_card->isHidden()) << "Updates card must not be explicitly hidden by default";
+
+    // Update channel combo and auto-check toggle must be present.
+    auto* channel_combo = page.findChild<QComboBox*>(QStringLiteral("updatesChannelCombo"));
+    ASSERT_NE(channel_combo, nullptr) << "updatesChannelCombo must exist";
+    EXPECT_GE(channel_combo->count(), 2) << "Channel combo needs at least Stable/Preview";
+
+    auto* auto_toggle = page.findChild<QWidget*>(QStringLiteral("updatesAutoCheckToggle"));
+    EXPECT_NE(auto_toggle, nullptr) << "updatesAutoCheckToggle must exist";
 }
 
 TEST_F(ConfigPageTest, QualitySegment_HasSimpleLabels) {
