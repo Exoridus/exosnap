@@ -34,10 +34,11 @@ class OperationalTitleBarTest : public ::testing::Test {
 
     // Page indices mirror the MainWindow page stack ordering used in production.
     // Hotkeys is at stack index 2 but no longer appears in the primary nav (PS-PHASE-B).
+    // About is at stack index 7 (a real nav page, not an overlay).
     static QVector<ui::chrome::OperationalTitleBar::NavItem> DefaultNavItems() {
         return {
             {QStringLiteral("Record"), 0}, {QStringLiteral("Settings"), 1}, {QStringLiteral("Diagnostics"), 3},
-            {QStringLiteral("Logs"), 4},   {QStringLiteral("About"), -1},
+            {QStringLiteral("Logs"), 4},   {QStringLiteral("About"), 7},
         };
     }
 
@@ -83,11 +84,11 @@ TEST_F(OperationalTitleBarTest, TopNav_AboutIsActionNotCheckablePage) {
             about = tab;
     }
 
-    // PS-PHASE-B: four routed pages are checkable tabs (Record/Settings/Diagnostics/Logs);
-    // About opens an in-window overlay and must not be checkable.
-    EXPECT_EQ(checkable_count, 4);
+    // v10: About is now a real embedded nav page (page_index=7, not -1).
+    // All five nav items are checkable tabs.
+    EXPECT_EQ(checkable_count, 5);
     ASSERT_NE(about, nullptr);
-    EXPECT_FALSE(about->isCheckable());
+    EXPECT_TRUE(about->isCheckable());
 }
 
 TEST_F(OperationalTitleBarTest, SetActivePage_HighlightsMatchingTab) {

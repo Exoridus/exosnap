@@ -192,6 +192,8 @@ qt_add_executable(exosnap WIN32
     notifications/NotificationManager.cpp
     MainWindow.h
     MainWindow.cpp
+    pages/AboutPage.h
+    pages/AboutPage.cpp
     pages/RecordPage.h
     pages/RecordPage.cpp
     pages/ConfigPage.h
@@ -1006,6 +1008,7 @@ exosnap_add_gtest(
     TEST_PREFIX about.
     SOURCES
         tests/test_about_overlay.cpp
+        pages/AboutPage.cpp
         ui/dialogs/AboutOverlay.cpp
         ui/brand/BrandMarkWidget.cpp
         # AboutOverlay keeps a hidden UpdateSettingsPanel for MainWindow wiring.
