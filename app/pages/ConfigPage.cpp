@@ -163,9 +163,28 @@ class ChipFlowWidget : public QWidget {
 class ThemePreviewSwatch : public QWidget {
   public:
     explicit ThemePreviewSwatch(const exosnap::ui::theme::ExoTheme& theme, QWidget* parent = nullptr)
-        : QWidget(parent), theme_(theme) {
+        : QWidget(parent), theme_(&theme) {
         setFixedSize(116, 70);
         setAttribute(Qt::WA_NoSystemBackground, true);
+    }
+
+    // Switch the theme this swatch renders (used by the full-width Appearance
+    // preview, which re-renders the selected theme on selection change).
+    void setTheme(const exosnap::ui::theme::ExoTheme& theme) {
+        theme_ = &theme;
+        update();
+    }
+
+    // Expand the swatch into a full-width preview (used below the theme selector).
+    // Drops the fixed size and scales the painted mini-UI to the available width.
+    void setFullWidth(bool full) {
+        full_width_ = full;
+        if (full) {
+            setMinimumSize(0, 96);
+            setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+            setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        }
+        update();
     }
 
   protected:
@@ -176,19 +195,33 @@ class ThemePreviewSwatch : public QWidget {
         // ExoTheme colour values may be "#rrggbb" or "rgba(r, g, b, alpha_float)".
         // Qt 6 QColor(QString) handles "#rrggbb" but not "rgba(...)" CSS format.
         // parseCssColor handles both.
-        const auto bg = parseCssColor(theme_.bg);
-        const auto surf = parseCssColor(theme_.surf);
-        const auto surf2 = parseCssColor(theme_.surf2);
-        const auto line = parseCssColor(theme_.line);
-        const auto mut = parseCssColor(theme_.mut);
-        const auto ac = parseCssColor(theme_.ac);
-        const auto ac2 = parseCssColor(theme_.ac2);
-        const auto success = parseCssColor(theme_.success);
-        const auto err = parseCssColor(theme_.error);
-        const auto caution = parseCssColor(theme_.caution);
+        const auto bg = parseCssColor(theme_->bg);
+        const auto surf = parseCssColor(theme_->surf);
+        const auto surf2 = parseCssColor(theme_->surf2);
+        const auto line = parseCssColor(theme_->line);
+        const auto mut = parseCssColor(theme_->mut);
+        const auto ac = parseCssColor(theme_->ac);
+        const auto ac2 = parseCssColor(theme_->ac2);
+        const auto success = parseCssColor(theme_->success);
+        const auto err = parseCssColor(theme_->error);
+        const auto caution = parseCssColor(theme_->caution);
 
-        const int W = width();
-        const int H = height();
+        // The mini-UI is designed against a 116×70 canvas. In full-width mode the
+        // widget is wider/taller, so scale the painter uniformly to the available
+        // height (keeping the designed proportions) and centre horizontally.
+        int W = width();
+        int H = height();
+        if (full_width_) {
+            constexpr qreal kDesignW = 116.0;
+            constexpr qreal kDesignH = 70.0;
+            const qreal scale = qMax(1.0, static_cast<qreal>(H) / kDesignH);
+            const qreal scaledW = kDesignW * scale;
+            const qreal offX = (W - scaledW) / 2.0;
+            p.translate(offX, 0);
+            p.scale(scale, scale);
+            W = static_cast<int>(kDesignW);
+            H = static_cast<int>(kDesignH);
+        }
 
         // ── Outer rounded rect (bg + border) ──
         QPainterPath outline;
@@ -282,13 +315,23 @@ class ThemePreviewSwatch : public QWidget {
         return QColor(s);
     }
 
-    const exosnap::ui::theme::ExoTheme& theme_;
+    const exosnap::ui::theme::ExoTheme* theme_;
+    bool full_width_ = false;
 };
 
 QFrame* makePanel(QWidget* parent) {
     auto* panel = new QFrame(parent);
     panel->setProperty("panelRole", "panel");
     return panel;
+}
+
+// Look up an ExoTheme by id (falls back to the first theme for unknown ids).
+const exosnap::ui::theme::ExoTheme& ThemeById(const QString& id) {
+    for (const auto& t : exosnap::ui::theme::kExoThemes) {
+        if (QString::fromUtf8(t.id) == id)
+            return t;
+    }
+    return exosnap::ui::theme::kExoThemes[0];
 }
 
 // Card title: 15/600 per the design system "Section/card title" role.
@@ -777,7 +820,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* fmt_layout = new QVBoxLayout(fmt_panel);
     fmt_layout->setContentsMargins(18, 16, 18, 18);
     fmt_layout->setSpacing(0);
-    fmt_layout->addWidget(makeCardTitle(QStringLiteral("Format & encoding"), fmt_panel));
+    fmt_layout->addWidget(makeCardTitle(QStringLiteral("Container & codecs"), fmt_panel));
 
     // format_display_label_ kept for backward compat (hidden)
     format_display_label_ = new QLabel(fmt_panel);
@@ -841,19 +884,37 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Audio codec"), audio_codec_compare_hint_,
                                           QString(), audio_codec_combo_));
 
+    // ---- v10: QUALITY & TIMING CARD (left column, below Container & codecs) ----
+    // The old "Format & encoding" mega-card is split here. From this point on,
+    // Quality / Rate control / Frame rate / Frame timing / Capture cursor rows are
+    // built into quality_panel (the second card) rather than fmt_panel. All widget
+    // pointers, objectNames, CompareHints and signal wiring are preserved verbatim.
+    auto* quality_panel = makePanel(left_col);
+    quality_panel_ = quality_panel;
+    auto* quality_layout = new QVBoxLayout(quality_panel);
+    quality_layout->setContentsMargins(18, 16, 18, 18);
+    quality_layout->setSpacing(0);
+    quality_layout->addWidget(makeCardTitle(QStringLiteral("Quality & timing"), quality_panel));
+
     // --- Quality row ---
     // Hidden combo is the single model-change emitter (existing test seam).
-    quality_combo_ = new QComboBox(fmt_panel);
+    quality_combo_ = new QComboBox(quality_panel);
     quality_combo_->setObjectName(QStringLiteral("videoQualityCombo"));
     quality_combo_->addItem(QStringLiteral("High Quality"), static_cast<int>(recorder_core::NvencQualityPreset::High));
     quality_combo_->addItem(QStringLiteral("Balanced"), static_cast<int>(recorder_core::NvencQualityPreset::Balanced));
     quality_combo_->addItem(QStringLiteral("Small"), static_cast<int>(recorder_core::NvencQualityPreset::Small));
     quality_combo_->setVisible(false);
     quality_combo_->setFocusPolicy(Qt::NoFocus);
-    fmt_layout->addWidget(quality_combo_);
+    quality_layout->addWidget(quality_combo_);
 
-    auto* quality_segmented = new QWidget(fmt_panel);
+    // v10: the Small/Balanced/High segmented control is preserved as a hidden test
+    // seam (clicks + checked-state still drive the model), but the visible Default
+    // presentation is a single "Balanced · CQ 24" dropdown (quality_preset_combo_)
+    // built below. The segmented control is created here and added hidden so its
+    // objectNames + qualitySegmentSelected property survive for tests.
+    auto* quality_segmented = new QWidget(quality_panel);
     quality_segmented->setObjectName(QStringLiteral("qualitySegmented"));
+    quality_segmented->setVisible(false);
     auto* quality_segmented_layout = new QHBoxLayout(quality_segmented);
     quality_segmented_layout->setContentsMargins(3, 3, 3, 3);
     quality_segmented_layout->setSpacing(0);
@@ -885,26 +946,38 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                                                recorder_core::NvencQualityPreset::High);
 
     quality_compare_hint_ =
-        new ui::widgets::CompareHint(QStringLiteral("quality"), QStringLiteral("Balanced"), fmt_panel);
+        new ui::widgets::CompareHint(QStringLiteral("quality"), QStringLiteral("Balanced"), quality_panel);
+    // Hidden segmented control still needs to live in a layout so its widgets are
+    // laid out / discoverable; park it (hidden) in the quality card.
+    quality_layout->addWidget(quality_segmented);
 
-    // Quality row: segmented on right, compare hint + info-i in label area
-    // Wave 2: quality_row_widget_ promoted to member so expert-mode can show/hide it.
+    // v10: Default Quality presentation — a single dropdown "Balanced · CQ 24".
+    // It mirrors the hidden quality_combo_ model seam: choosing an item drives the
+    // same NvencQualityPreset path (onQualityPresetComboChanged → quality_combo_).
     {
-        quality_row_widget_ = new QWidget(fmt_panel);
-        auto* qvl = new QVBoxLayout(quality_row_widget_);
+        quality_preset_combo_ = new QComboBox(quality_panel);
+        quality_preset_combo_->setObjectName(QStringLiteral("qualityPresetCombo"));
+        quality_preset_combo_->addItem(QStringLiteral("Small \xc2\xb7 CQ 30"),
+                                       static_cast<int>(recorder_core::NvencQualityPreset::Small));
+        quality_preset_combo_->addItem(QStringLiteral("Balanced \xc2\xb7 CQ 24"),
+                                       static_cast<int>(recorder_core::NvencQualityPreset::Balanced));
+        quality_preset_combo_->addItem(QStringLiteral("High \xc2\xb7 CQ 19"),
+                                       static_cast<int>(recorder_core::NvencQualityPreset::High));
+        quality_preset_combo_->setFixedWidth(160);
+        quality_preset_combo_->setProperty("settingsRowInput", true);
+
+        quality_preset_row_widget_ = new QWidget(quality_panel);
+        auto* qvl = new QVBoxLayout(quality_preset_row_widget_);
         qvl->setContentsMargins(0, 0, 0, 0);
         qvl->setSpacing(0);
-        // hairline
-        auto* qrule = new QFrame(quality_row_widget_);
+        auto* qrule = new QFrame(quality_preset_row_widget_);
         qrule->setFrameShape(QFrame::HLine);
         qrule->setProperty("frameRole", "sectionRuleLine");
         qvl->addWidget(qrule);
-        // content
-        auto* qcontent = new QWidget(quality_row_widget_);
+        auto* qcontent = new QWidget(quality_preset_row_widget_);
         auto* qhl = new QHBoxLayout(qcontent);
         qhl->setContentsMargins(0, 12, 0, 12);
         qhl->setSpacing(14);
-        // left: label + compare hint + info-i
         auto* qlabel_row = new QWidget(qcontent);
         auto* qlrl = new QHBoxLayout(qlabel_row);
         qlrl->setContentsMargins(0, 0, 0, 0);
@@ -916,15 +989,18 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         qlrl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kQualityPreset, qlabel_row), 0, Qt::AlignVCenter);
         qlrl->addStretch();
         qhl->addWidget(qlabel_row, 1);
-        qhl->addWidget(quality_segmented, 0, Qt::AlignVCenter);
+        qhl->addWidget(quality_preset_combo_, 0, Qt::AlignVCenter);
         qvl->addWidget(qcontent);
-        quality_row_widget_->setProperty("settingsRow", true);
-        fmt_layout->addWidget(quality_row_widget_);
+        quality_preset_row_widget_->setProperty("settingsRow", true);
+        quality_layout->addWidget(quality_preset_row_widget_);
     }
+
+    // quality_row_widget_ retained as a member but no longer the visible Default
+    // presentation (kept null-safe; nothing references it after the v10 split).
 
     // Wave 2 Part B: CQ precision spinbox row — shown in expert mode, hidden otherwise.
     {
-        quality_expert_widget_ = new QWidget(fmt_panel);
+        quality_expert_widget_ = new QWidget(quality_panel);
         quality_expert_widget_->setObjectName(QStringLiteral("qualityExpertWidget"));
         auto* qevl = new QVBoxLayout(quality_expert_widget_);
         qevl->setContentsMargins(0, 0, 0, 0);
@@ -959,11 +1035,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         qevl->addWidget(qecontent);
         quality_expert_widget_->setProperty("settingsRow", true);
         quality_expert_widget_->setVisible(false); // hidden until expert mode is on
-        fmt_layout->addWidget(quality_expert_widget_);
+        quality_layout->addWidget(quality_expert_widget_);
     }
 
-    // --- Frame rate row ---
-    frame_rate_combo_ = new QComboBox(fmt_panel);
+    // --- Frame rate row (Quality & timing card) ---
+    frame_rate_combo_ = new QComboBox(quality_panel);
     frame_rate_combo_->setObjectName(QStringLiteral("frameRateCombo"));
     frame_rate_combo_->setAccessibleName(QStringLiteral("Frame rate"));
     frame_rate_combo_->setFixedWidth(160);
@@ -979,12 +1055,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         }
     }
 
-    fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Frame rate"),
-                                          new ui::widgets::InfoHintIcon(ui::hints::kFrameRate, fmt_panel), QString(),
-                                          frame_rate_combo_));
+    quality_layout->addWidget(makeSettingsRow(quality_panel, QStringLiteral("Frame rate"),
+                                              new ui::widgets::InfoHintIcon(ui::hints::kFrameRate, quality_panel),
+                                              QString(), frame_rate_combo_));
 
-    // --- Frame timing row ---
-    auto* timing_segmented = new QWidget(fmt_panel);
+    // --- Frame timing row (Quality & timing card) ---
+    auto* timing_segmented = new QWidget(quality_panel);
     timing_segmented->setObjectName(QStringLiteral("timingSegmented"));
     auto* timing_segmented_layout = new QHBoxLayout(timing_segmented);
     timing_segmented_layout->setContentsMargins(3, 3, 3, 3);
@@ -1009,23 +1085,35 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     timing_cfr_btn_ = makeTimingSegment(QStringLiteral("timingCfrButton"), QStringLiteral("CFR"), 1);
     timing_vfr_btn_ = makeTimingSegment(QStringLiteral("timingVfrButton"), QStringLiteral("VFR"), 0);
 
-    timing_compare_hint_ = new ui::widgets::CompareHint(QStringLiteral("timing"), QStringLiteral("CFR"), fmt_panel);
-    fmt_layout->addWidget(
-        makeSettingsRow(fmt_panel, QStringLiteral("Frame timing"), timing_compare_hint_, QString(), timing_segmented));
+    timing_compare_hint_ = new ui::widgets::CompareHint(QStringLiteral("timing"), QStringLiteral("CFR"), quality_panel);
+    quality_layout->addWidget(makeSettingsRow(quality_panel, QStringLiteral("Frame timing"), timing_compare_hint_,
+                                              QString(), timing_segmented));
 
-    // --- Capture cursor row ---
-    cursor_check_ = new ui::widgets::ExoToggle(fmt_panel);
+    // --- Capture cursor row (Quality & timing card) ---
+    cursor_check_ = new ui::widgets::ExoToggle(quality_panel);
     cursor_check_->setObjectName(QStringLiteral("captureCursorCheck"));
     cursor_check_->setOn(video_settings_.capture_cursor);
-    fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Capture cursor"),
-                                          new ui::widgets::InfoHintIcon(ui::hints::kCaptureCursor, fmt_panel),
-                                          QString(), cursor_check_));
+    quality_layout->addWidget(makeSettingsRow(quality_panel, QStringLiteral("Capture cursor"),
+                                              new ui::widgets::InfoHintIcon(ui::hints::kCaptureCursor, quality_panel),
+                                              QString(), cursor_check_));
 
-    // --- PS-PHASE-C: Expert Format section — rate control, bitrate, v1.0 placeholders ---
+    // --- PS-PHASE-C / v10: Expert sections (split across two cards) ---
+    // v10 places Rate control + Bitrate in the Quality & timing card, and Bit depth +
+    // Colour range (+ roadmap dummies) in the Container & codecs card. Two expert
+    // containers carry these; both are gated on expert_mode_enabled_.
     // Shown only when expert_mode_enabled_ == true. rate_control is the active row;
     // quality_expert_widget_ (existing CQ spinbox) stays visible when rate=CQ and hidden
     // when rate=VBR/CBR (reusing existing logic). bitrate_row is shown for VBR/CBR.
     {
+        // Quality & timing expert section (Rate control + Bitrate).
+        quality_rate_section_ = new QWidget(quality_panel);
+        quality_rate_section_->setObjectName(QStringLiteral("qualityRateSection"));
+        quality_rate_section_->setVisible(false);
+        auto* qrs_layout = new QVBoxLayout(quality_rate_section_);
+        qrs_layout->setContentsMargins(0, 0, 0, 0);
+        qrs_layout->setSpacing(0);
+
+        // Container & codecs expert section (Bit depth + Colour range + roadmap).
         fmt_expert_section_ = new QWidget(fmt_panel);
         fmt_expert_section_->setObjectName(QStringLiteral("fmtExpertSection"));
         fmt_expert_section_->setVisible(false); // hidden until expert mode on
@@ -1033,8 +1121,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         fes_layout->setContentsMargins(0, 0, 0, 0);
         fes_layout->setSpacing(0);
 
-        // --- Rate control segmented (CQ / VBR / CBR) ---
-        auto* rc_segmented = new QWidget(fmt_expert_section_);
+        // --- Rate control segmented (CQ / VBR / CBR) — Quality card ---
+        auto* rc_segmented = new QWidget(quality_rate_section_);
         rc_segmented->setObjectName(QStringLiteral("rateControlSegmented"));
         auto* rc_segmented_layout = new QHBoxLayout(rc_segmented);
         rc_segmented_layout->setContentsMargins(3, 3, 3, 3);
@@ -1065,7 +1153,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         makeRcSegment(QStringLiteral("rateControlCbrButton"), QStringLiteral("CBR"),
                       recorder_core::RateControlMode::ConstantBitrate);
 
-        rate_control_row_widget_ = new QWidget(fmt_expert_section_);
+        rate_control_row_widget_ = new QWidget(quality_rate_section_);
         {
             auto* rvl = new QVBoxLayout(rate_control_row_widget_);
             rvl->setContentsMargins(0, 0, 0, 0);
@@ -1087,10 +1175,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             rvl->addLayout(rhl);
             rate_control_row_widget_->setProperty("settingsRow", true);
         }
-        fes_layout->addWidget(rate_control_row_widget_);
+        qrs_layout->addWidget(rate_control_row_widget_);
 
-        // --- Bitrate spinbox (VBR / CBR only) ---
-        bitrate_row_widget_ = new QWidget(fmt_expert_section_);
+        // --- Bitrate spinbox (VBR / CBR only) — Quality card ---
+        bitrate_row_widget_ = new QWidget(quality_rate_section_);
         bitrate_row_widget_->setObjectName(QStringLiteral("bitrateRowWidget"));
         bitrate_row_widget_->setVisible(false);
         {
@@ -1121,7 +1209,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             bvl->addLayout(bhl);
             bitrate_row_widget_->setProperty("settingsRow", true);
         }
-        fes_layout->addWidget(bitrate_row_widget_);
+        qrs_layout->addWidget(bitrate_row_widget_);
 
         // --- Video bit depth (0.7.0 — S7) ---
         // Real, capability-gated control. 8-bit is universal; 10-bit (HEVC Main10 /
@@ -1229,7 +1317,15 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         }
 #endif // NDEBUG
 
+        // Container & codecs expert rows (Bit depth, Colour range, roadmap) append
+        // to the codecs card; the Quality card's rate section is inserted just before
+        // the CQ spinbox row so the expert order reads Rate control → CQ → Frame rate.
         fmt_layout->addWidget(fmt_expert_section_);
+        const int cq_index = quality_layout->indexOf(quality_expert_widget_);
+        if (cq_index >= 0)
+            quality_layout->insertWidget(cq_index, quality_rate_section_);
+        else
+            quality_layout->addWidget(quality_rate_section_);
     }
 
     // --- Compat callout (D6: replaces format_display_label_ visually) ---
@@ -1262,22 +1358,32 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     compat_callout_widget_->setVisible(false);
     fmt_layout->addWidget(compat_callout_widget_);
 
-    compat_ok_label_ = new QLabel(fmt_panel);
+    // v10: the "✓ Current format: …" footer belongs to the Quality & timing card
+    // (it summarises the resolved encode), mirroring the suite-settings.jsx footer.
+    compat_ok_label_ = new QLabel(quality_panel);
     compat_ok_label_->setObjectName(QStringLiteral("compatOkLabel"));
     compat_ok_label_->setProperty("labelRole", "muted");
-    fmt_layout->addWidget(compat_ok_label_);
 
-    fmt_layout->addWidget(
-        makeHint(QStringLiteral("VFR is available for MKV/WebM. MP4 uses CFR for editor compatibility."), fmt_panel));
+    quality_layout->addWidget(makeHint(
+        QStringLiteral("VFR is available for MKV/WebM. MP4 uses CFR for editor compatibility."), quality_panel));
+    quality_layout->addWidget(compat_ok_label_);
 
     // Pre-fill codec combos (D6: free choice, fills once)
     updateVideoCodecChoices();
     updateAudioCodecChoices();
 
+    // v10 (Delta 5): stable two-column placement, priority-ordered, identical in
+    // Default and Expert (Expert only adds rows in place + reveals Developer).
+    //   Left  : Container & codecs · Quality & timing · Audio
+    //   Right : Output · Webcam · Presence · Hotkeys · Appearance · (Developer, Expert)
+    // Left cards are added in build order here; right cards are parented to right_col
+    // but added to right_layout in one explicit, target-ordered block after they are
+    // all built (see the consolidation block below the Developer card).
     left_layout->addWidget(fmt_panel);
+    left_layout->addWidget(quality_panel);
 
-    // ---- AUDIO CARD (right column) ----
-    auto* audio_panel = makePanel(right_col);
+    // ---- AUDIO CARD (left column — v10) ----
+    auto* audio_panel = makePanel(left_col);
     audio_panel_ = audio_panel;
     auto* audio_panel_layout = new QVBoxLayout(audio_panel);
     audio_panel_layout->setContentsMargins(18, 16, 18, 18);
@@ -1904,10 +2010,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     audio_summary_label_->setWordWrap(true);
     audio_summary_label_->setVisible(false);
     audio_panel_layout->addWidget(audio_summary_label_);
-    right_layout->addWidget(audio_panel);
+    left_layout->addWidget(audio_panel);
+    left_layout->addStretch();
 
-    // ---- WEBCAM CARD (left column — D6: in 2-column grid below Format) ----
-    auto* webcam_panel = makePanel(left_col);
+    // ---- WEBCAM CARD (right column — v10) ----
+    auto* webcam_panel = makePanel(right_col);
     webcam_panel_ = webcam_panel;
     auto* webcam_panel_layout = new QVBoxLayout(webcam_panel);
     webcam_panel_layout->setContentsMargins(18, 16, 18, 18);
@@ -1917,9 +2024,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     webcam_setup_panel_ = new ui::widgets::WebcamSetupPanel(webcam_panel);
     webcam_setup_panel_->setObjectName(QStringLiteral("settingsWebcamSetupPanel"));
     webcam_panel_layout->addWidget(webcam_setup_panel_);
-    left_layout->addWidget(webcam_panel);
+    // webcam_panel added to right_layout in the consolidation block below.
 
-    // ---- OUTPUT CARD (right column — D6: in 2-column grid below Audio) ----
+    // ---- OUTPUT CARD (right column — v10) ----
     auto* out_panel = makePanel(right_col);
     out_panel_ = out_panel;
     auto* out_panel_layout = new QVBoxLayout(out_panel);
@@ -2131,27 +2238,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     out_panel_layout->addWidget(split_expert_section_);
 
-    // PS-PHASE-C: Output v1.0 placeholder section — expert-gated.
-#ifndef NDEBUG
-    {
-        // Debug builds render a real (non-wired) toggle so the roadmap can be
-        // designed and captured on pixels.  Hidden in Release builds entirely.
-        auto* out_ph_section = new QWidget(out_panel);
-        out_ph_section->setObjectName(QStringLiteral("outputV1PlaceholderSection"));
-        out_ph_section->setVisible(false); // hidden until expert mode on
-        auto* out_ph_layout = new QVBoxLayout(out_ph_section);
-        out_ph_layout->setContentsMargins(0, 0, 0, 0);
-        out_ph_layout->setSpacing(0);
-        auto* auto_open_toggle = new ui::widgets::ExoToggle(out_ph_section);
-        auto_open_toggle->setObjectName(QStringLiteral("roadmapDummy_autoOpen"));
-        auto_open_toggle->setOn(false);
-        out_ph_layout->addWidget(makeSettingsRow(out_ph_section, QStringLiteral("Auto-open after recording"), nullptr,
-                                                 QString(), auto_open_toggle, /*first=*/true));
-        out_panel_layout->addWidget(out_ph_section);
-        (void)out_ph_section; // found by objectName in updateExpertModeVisibility
-    }
-#endif // NDEBUG
-
     auto* output_split = new QWidget(out_panel);
     output_split_layout_ = new QHBoxLayout(output_split);
     output_split_layout_->setContentsMargins(0, 0, 0, 0);
@@ -2236,11 +2322,40 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     output_split_layout_->addWidget(output_fields, 3);
     output_split_layout_->addWidget(output_help, 2);
     out_panel_layout->addWidget(output_split);
-    right_layout->addWidget(out_panel);
+
+    // v10 (Delta 3): "Open editor when finished" — a real row in the Output card,
+    // off by default. No engine setting backs this yet, so per ADR 0031 it is a
+    // debug-only roadmap dummy (compiled out of Release) rather than inventing
+    // engine behaviour.
+#ifndef NDEBUG
+    {
+        auto* open_editor_toggle = new ui::widgets::ExoToggle(out_panel);
+        open_editor_toggle->setObjectName(QStringLiteral("roadmapDummy_openEditor"));
+        open_editor_toggle->setOn(false);
+        out_panel_layout->addWidget(makeSettingsRow(
+            out_panel, QStringLiteral("Open editor when finished"),
+            new ui::widgets::InfoHintIcon(
+                QStringLiteral("When a recording stops it opens straight in Edit, preloaded with the clip. "
+                               "Off: a notification offers Edit and Show-in-folder instead."),
+                out_panel),
+            QStringLiteral("On \xe2\x80\x94 jumps to Edit \xc2\xb7 Off \xe2\x80\x94 notify only"), open_editor_toggle));
+    }
+#endif // NDEBUG
+
+    // v10 (Delta 2): resolved "Saves to …\path" footer — mirrors the Quality &
+    // timing card's "✓ Current format" footer. Shows the destination folder +
+    // filename pattern + container resolved into a concrete example path. Updated by
+    // updateExampleFilename() whenever folder / pattern / container change.
+    output_saves_to_label_ = new QLabel(out_panel);
+    output_saves_to_label_->setObjectName(QStringLiteral("outputSavesToLabel"));
+    output_saves_to_label_->setProperty("labelRole", "muted");
+    output_saves_to_label_->setWordWrap(true);
+    out_panel_layout->addWidget(output_saves_to_label_);
+    // out_panel added to right_layout in the consolidation block below.
 
     // ---- PRESENCE CARD (left column — SETTINGS-TIERS-P3) — D6: flat rows, below Webcam ----
     {
-        auto* presence_panel = makePanel(left_col);
+        auto* presence_panel = makePanel(right_col);
         presence_panel_ = presence_panel;
         auto* presence_layout = new QVBoxLayout(presence_panel);
         presence_layout->setContentsMargins(18, 14, 18, 14);
@@ -2294,8 +2409,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         // per-track gain and mute shipped in 0.6.0 and are configured in the Record
         // view, so a dimmed "upcoming" row here is stale.)
 
-        left_layout->addWidget(presence_panel);
-        left_layout->addStretch();
+        // presence_panel added to right_layout in the consolidation block below.
     }
 
     // ---- APPEARANCE CARD (right column — THEME-SLICE-1) ----
@@ -2333,44 +2447,39 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             return lbl;
         };
 
-        auto makeThemeCard = [&](const ui::theme::ExoTheme& t) -> QPushButton* {
+        // v10 (Delta 4): compact selector option — a small swatch DOT + theme name,
+        // grouped Dark / Light. The four options remain checkable QPushButtons carrying
+        // the themePickerCard + themeId properties (test seam) and feed theme_button_group_.
+        auto makeThemeOption = [&](const ui::theme::ExoTheme& t) -> QPushButton* {
             auto* card = new QPushButton(theme_grid);
             card->setCheckable(true);
             card->setAutoDefault(false);
             card->setDefault(false);
             card->setCursor(Qt::PointingHandCursor);
             card->setProperty("themePickerCard", true);
+            card->setProperty("themeOption", true);
             card->setProperty("themeId", QString::fromUtf8(t.id));
             card->setObjectName(QStringLiteral("themeCard_") + QString::fromUtf8(t.id));
+            card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
             auto* card_layout = new QHBoxLayout(card);
-            card_layout->setContentsMargins(10, 10, 10, 10);
-            card_layout->setSpacing(10);
+            card_layout->setContentsMargins(11, 9, 11, 9);
+            card_layout->setSpacing(9);
 
-            // ThemePreviewSwatch: mini-UI preview painted from the theme's colour tokens
-            // (replaces flat single-colour block — fixes the two-dark-themes-look-identical problem).
-            auto* swatch = new ThemePreviewSwatch(t, card);
-
-            // Text area
-            auto* text_col = new QWidget(card);
-            auto* text_layout = new QVBoxLayout(text_col);
-            text_layout->setContentsMargins(0, 0, 0, 0);
-            text_layout->setSpacing(2);
-
-            auto* name_lbl = new QLabel(QString::fromUtf8(t.name), text_col);
+            // Small swatch dot painted in the theme's accent colour.
+            auto* dot = new QLabel(card);
+            dot->setFixedSize(12, 12);
+            {
+                const QString ac = QString::fromUtf8(t.ac);
+                dot->setStyleSheet(
+                    QStringLiteral("border-radius:6px; background:%1; border:1px solid rgba(255,255,255,0.18);")
+                        .arg(ac));
+            }
+            auto* name_lbl = new QLabel(QString::fromUtf8(t.name), card);
             name_lbl->setProperty("labelRole", "settingsRowLabel");
 
-            auto* intent_lbl = new QLabel(QString::fromUtf8(t.intent), text_col);
-            intent_lbl->setProperty("labelRole", "subtle");
-            intent_lbl->setWordWrap(true);
-
-            text_layout->addWidget(name_lbl);
-            text_layout->addWidget(intent_lbl);
-            text_layout->addStretch();
-
-            card_layout->addWidget(swatch, 0, Qt::AlignTop);
-            card_layout->addWidget(text_col, 1);
-
+            card_layout->addWidget(dot, 0, Qt::AlignVCenter);
+            card_layout->addWidget(name_lbl, 1, Qt::AlignVCenter);
             return card;
         };
 
@@ -2391,7 +2500,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
         int btn_id = 0;
         for (const auto& t : ui::theme::kExoThemes) {
-            auto* card = makeThemeCard(t);
+            auto* card = makeThemeOption(t);
             theme_button_group_->addButton(card, btn_id++);
             if (QString::fromUtf8(t.group) == QStringLiteral("Dark"))
                 dark_row_layout->addWidget(card);
@@ -2400,18 +2509,43 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         }
 
         theme_grid_layout->addWidget(dark_row);
-        theme_grid_layout->addSpacing(8);
+        theme_grid_layout->addSpacing(6);
         theme_grid_layout->addWidget(light_label);
         theme_grid_layout->addWidget(light_row);
 
         appearance_layout->addWidget(theme_grid);
-        right_layout->addWidget(appearance_panel);
-        right_layout->addStretch();
+
+        // v10 (Delta 4): ONE large preview spanning the full card width, showing the
+        // SELECTED theme. Updated on selection via setThemeId() / the button-group
+        // idClicked handler. Seeded to the currently-selected theme.
+        {
+            const ui::theme::ExoTheme* initial = &ui::theme::kExoThemes[0];
+            for (const auto& t : ui::theme::kExoThemes) {
+                if (QString::fromUtf8(t.id) == current_theme_id_) {
+                    initial = &t;
+                    break;
+                }
+            }
+            auto* preview = new ThemePreviewSwatch(*initial, appearance_panel);
+            preview->setObjectName(QStringLiteral("appearancePreviewSwatch"));
+            preview->setFullWidth(true);
+            preview->setMinimumHeight(120);
+            appearance_preview_swatch_ = preview;
+            auto* preview_holder = new QWidget(appearance_panel);
+            auto* ph_layout = new QVBoxLayout(preview_holder);
+            ph_layout->setContentsMargins(0, 12, 0, 2);
+            ph_layout->setSpacing(0);
+            ph_layout->addWidget(preview);
+            appearance_layout->addWidget(preview_holder);
+        }
+
+        // appearance_panel added to right_layout in the consolidation block below.
     }
 
-    // ---- PS-PHASE-C: HOTKEYS CARD (full width, below the two-column grid) ----
+    // ---- PS-PHASE-C: HOTKEYS CARD (right column — v10, single-width) ----
+    QWidget* hotkeys_panel = nullptr;
     {
-        auto* hotkeys_panel = makePanel(content);
+        hotkeys_panel = makePanel(right_col);
         hotkeys_panel->setObjectName(QStringLiteral("settingsHotkeysCard"));
         auto* hotkeys_panel_layout = new QVBoxLayout(hotkeys_panel);
         hotkeys_panel_layout->setContentsMargins(18, 16, 18, 18);
@@ -2421,14 +2555,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         hotkeys_settings_panel_ = new ui::widgets::HotkeysSettingsPanel(hotkeys_panel);
         hotkeys_settings_panel_->setObjectName(QStringLiteral("settingsHotkeysPanel"));
         hotkeys_panel_layout->addWidget(hotkeys_settings_panel_);
-
-        layout->addWidget(hotkeys_panel);
+        // hotkeys_panel added to right_layout in the consolidation block below.
     }
 
-    // ---- DEVELOPER CARD (Expert-gated, full width — SETTINGS-TIERS-P3) ----
+    // ---- DEVELOPER CARD (Expert-gated, right column — v10, single-width) ----
     // UI-only debug stubs (log level, NVTX). No persistence — local variables only.
     {
-        developer_card_ = makePanel(content);
+        developer_card_ = makePanel(right_col);
         developer_card_->setObjectName(QStringLiteral("settingsDeveloperCard"));
         auto* dev_layout = new QVBoxLayout(developer_card_);
         dev_layout->setContentsMargins(18, 14, 18, 14);
@@ -2468,8 +2601,21 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         }
 
         developer_card_->setVisible(expert_mode_enabled_);
-        layout->addWidget(developer_card_);
+        // developer_card_ added to right_layout in the consolidation block below.
     }
+
+    // ---- v10 (Delta 5): RIGHT-COLUMN CONSOLIDATION (stable, priority order) ----
+    // All right-column cards are added here in their fixed target order so the
+    // layout is identical between Default and Expert — Expert only reveals rows in
+    // place and shows the (already-placed) Developer card. Order:
+    //   Output · Webcam · Presence · Hotkeys · Appearance · Developer.
+    right_layout->addWidget(out_panel);
+    right_layout->addWidget(webcam_panel);
+    right_layout->addWidget(presence_panel_);
+    right_layout->addWidget(hotkeys_panel);
+    right_layout->addWidget(appearance_panel_);
+    right_layout->addWidget(developer_card_);
+    right_layout->addStretch();
 
     layout->addStretch();
 
@@ -2500,6 +2646,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         const QString id = btn->property("themeId").toString();
         if (!id.isEmpty()) {
             current_theme_id_ = id;
+            // v10 (Delta 4): update the full-width preview to the selected theme.
+            if (appearance_preview_swatch_)
+                static_cast<ThemePreviewSwatch*>(appearance_preview_swatch_)->setTheme(ThemeById(id));
             emit themeIdChanged(id);
         }
     });
@@ -2517,6 +2666,17 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             &ConfigPage::onProfileSelectionChanged);
     connect(quality_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ConfigPage::onQualityChanged);
     connect(quality_segment_group_, &QButtonGroup::idClicked, this, &ConfigPage::onQualitySegmentSelected);
+    // v10: the visible Default dropdown drives the same model seam (quality_combo_).
+    if (quality_preset_combo_) {
+        connect(quality_preset_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+            if (index < 0 || !quality_combo_)
+                return;
+            const int preset_id = quality_preset_combo_->itemData(index).toInt();
+            const int seam_index = quality_combo_->findData(preset_id);
+            if (seam_index >= 0 && quality_combo_->currentIndex() != seam_index)
+                quality_combo_->setCurrentIndex(seam_index);
+        });
+    }
     connect(frame_rate_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onFrameRateChanged);
     connect(timing_group_, &QButtonGroup::idClicked, this, &ConfigPage::onTimingSelected);
@@ -3473,6 +3633,14 @@ void ConfigPage::updateQualitySegmentSelection() {
     sync_segment(quality_segment_balanced_, recorder_core::NvencQualityPreset::Balanced);
     sync_segment(quality_segment_high_, recorder_core::NvencQualityPreset::High);
 
+    // v10: keep the visible Default dropdown in sync with the model preset.
+    if (quality_preset_combo_) {
+        const QSignalBlocker b(quality_preset_combo_);
+        const int idx = quality_preset_combo_->findData(static_cast<int>(video_settings_.quality));
+        if (idx >= 0)
+            quality_preset_combo_->setCurrentIndex(idx);
+    }
+
     if (quality_compare_hint_) {
         switch (video_settings_.quality) {
         case recorder_core::NvencQualityPreset::High:
@@ -3907,14 +4075,19 @@ void ConfigPage::updateOutputValidationState() {
 }
 
 void ConfigPage::updateExampleFilename() {
-    if (!example_filename_label_)
-        return;
-
     const auto output_path =
         BuildOutputPath(format_settings_.output_folder, format_settings_.naming_pattern, format_settings_.container,
                         std::time(nullptr), ExamplePreviewContext(active_profile_name_, format_settings_));
-    example_filename_label_->setText(QStringLiteral("Example: ") +
-                                     QString::fromStdWString(output_path.filename().wstring()));
+    if (example_filename_label_) {
+        example_filename_label_->setText(QStringLiteral("Example: ") +
+                                         QString::fromStdWString(output_path.filename().wstring()));
+    }
+
+    // v10 (Delta 2): resolved "Saves to …\full\path.ext" footer.
+    if (output_saves_to_label_) {
+        output_saves_to_label_->setText(QStringLiteral("\xe2\x9c\x93 Saves to  ") +
+                                        QString::fromStdWString(output_path.wstring()));
+    }
 }
 
 void ConfigPage::setAudioUiState(const capability::AudioUiState& state) {
@@ -4292,9 +4465,14 @@ void ConfigPage::updateExpertModeVisibility() {
     // Wave 2 Part A: split recording section is now expert-gated (was behind expander).
     if (split_expert_section_)
         split_expert_section_->setVisible(expert_mode_enabled_);
-    // Wave 2 Part B: quality CQ spinbox row shown in expert mode; segment row hidden.
+    // v10: Default shows the "Balanced · CQ 24" dropdown; Expert hides it and reveals
+    // Rate control + CQ spinbox. quality_row_widget_ is retired (kept null-safe).
     if (quality_row_widget_)
         quality_row_widget_->setVisible(!expert_mode_enabled_);
+    if (quality_preset_row_widget_)
+        quality_preset_row_widget_->setVisible(!expert_mode_enabled_);
+    if (quality_rate_section_)
+        quality_rate_section_->setVisible(expert_mode_enabled_);
     if (quality_expert_widget_) {
         // In expert mode: CQ spinbox visible when rate=CQ, hidden when VBR/CBR.
         // Default: same as before (visible when expert on).
@@ -4441,10 +4619,6 @@ void ConfigPage::updateExpertModeVisibility() {
         }
         updateAudioFormatControlVisibility();
     }
-    // PS-PHASE-C: Output v1.0 placeholder section.
-    if (auto* out_ph =
-            out_panel_ ? out_panel_->findChild<QWidget*>(QStringLiteral("outputV1PlaceholderSection")) : nullptr)
-        out_ph->setVisible(expert_mode_enabled_);
     // PS-PHASE-C: Presence v0.6 placeholder section.
     if (auto* pres_ph = presence_panel_
                             ? presence_panel_->findChild<QWidget*>(QStringLiteral("presenceV1PlaceholderSection"))
@@ -4557,6 +4731,8 @@ void ConfigPage::applySettingsSearch(const QString& query) {
             columns_widget_->setVisible(true);
         if (fmt_panel_)
             fmt_panel_->setVisible(true);
+        if (quality_panel_)
+            quality_panel_->setVisible(true);
         if (audio_panel_)
             audio_panel_->setVisible(true);
         if (webcam_panel_)
@@ -4606,6 +4782,9 @@ void ConfigPage::applySettingsSearch(const QString& query) {
         columns_widget_->setVisible(any_column_visible);
     if (fmt_panel_)
         fmt_panel_->setVisible(fmt_match);
+    // v10: the Quality & timing card shares the Format/Encoding keyword set.
+    if (quality_panel_)
+        quality_panel_->setVisible(fmt_match);
     if (audio_panel_)
         audio_panel_->setVisible(audio_match);
 
@@ -4720,6 +4899,9 @@ void ConfigPage::setShowQuickControls(bool show) {
 
 void ConfigPage::setThemeId(const QString& theme_id) {
     current_theme_id_ = theme_id;
+    // v10 (Delta 4): keep the full-width preview in sync with the selected theme.
+    if (appearance_preview_swatch_)
+        static_cast<ThemePreviewSwatch*>(appearance_preview_swatch_)->setTheme(ThemeById(theme_id));
     if (!theme_button_group_)
         return;
     const QSignalBlocker blocker(theme_button_group_);
@@ -4974,6 +5156,8 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     updateVideoColorRangeControl();
 
     quality_combo_->setEnabled(enabled);
+    if (quality_preset_combo_)
+        quality_preset_combo_->setEnabled(enabled);
     frame_rate_combo_->setEnabled(enabled);
     quality_segment_small_->setEnabled(enabled);
     quality_segment_balanced_->setEnabled(enabled);
