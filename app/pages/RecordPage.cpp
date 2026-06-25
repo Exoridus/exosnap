@@ -726,6 +726,14 @@ void RecordPage::showEvent(QShowEvent* event) {
         updatePreviewHeightClamp();
         updatePreviewContextChips();
     });
+
+    // Start meter monitoring so the dock toggles show a live (grey) level even
+    // when the source is off. Mic monitoring is privacy-gated to page visibility.
+    record_page_visible_ = true;
+    syncMicMeterService();
+    syncSysMeterService();
+    syncAppMeterService();
+    updateAudioMeterLevels();
 }
 
 void RecordPage::hideEvent(QHideEvent* event) {
@@ -735,6 +743,16 @@ void RecordPage::hideEvent(QHideEvent* event) {
         preview_surface_->cancelWebcamInteraction();
         preview_surface_->setWebcamSelected(false);
     }
+
+    // Stop meter services that are gated to page visibility. Mic monitoring in
+    // particular must stop here so the Windows microphone-in-use indicator
+    // disappears when the user navigates away from the Record page.
+    record_page_visible_ = false;
+    syncMicMeterService();
+    syncSysMeterService();
+    syncAppMeterService();
+    updateAudioMeterLevels();
+
     QWidget::hideEvent(event);
 }
 
@@ -4835,7 +4853,13 @@ void RecordPage::syncMicMeterService() {
     const bool transition_busy = view_model_.state == UiRecordingState::Preparing ||
                                  view_model_.state == UiRecordingState::Stopping ||
                                  view_model_.state == UiRecordingState::Saving;
-    const bool should_run = view_model_.audio_ui_state.IsMicEnabled() && !transition_busy;
+    // Mic monitoring runs whenever the Record page is visible (even when the mic
+    // toggle is off) so the dock shows a live grey level preview. This keeps the
+    // Windows microphone-in-use indicator visible only while the user is on this
+    // page. A mic device must be selected for monitoring to make sense.
+    const bool mic_device_available = view_model_.audio_ui_state.selected_mic_device_id.has_value();
+    const bool should_run =
+        (view_model_.audio_ui_state.IsMicEnabled() || record_page_visible_) && mic_device_available && !transition_busy;
 
     if (!should_run) {
         coordinator_->StopMicMeter();
@@ -4857,7 +4881,9 @@ void RecordPage::syncSysMeterService() {
     const bool transition_busy = view_model_.state == UiRecordingState::Preparing ||
                                  view_model_.state == UiRecordingState::Stopping ||
                                  view_model_.state == UiRecordingState::Saving;
-    const bool should_run = view_model_.audio_active_sys && !transition_busy;
+    // System audio is passive loopback — no OS privacy indicator. Run the meter
+    // whenever the page is visible so the dock always has a live level to show.
+    const bool should_run = (view_model_.audio_active_sys || record_page_visible_) && !transition_busy;
 
     if (!should_run) {
         coordinator_->StopSysMeter();
@@ -4877,8 +4903,13 @@ void RecordPage::syncAppMeterService() {
                                  view_model_.state == UiRecordingState::Stopping ||
                                  view_model_.state == UiRecordingState::Saving;
 
+    // App audio is passive loopback — no OS privacy indicator. Run the meter
+    // whenever the page is visible (and a Window target with a known PID is
+    // selected), so the dock shows a live grey level even when app audio is off.
+    const bool try_app_meter = (view_model_.audio_active_app || record_page_visible_) && !transition_busy;
+
     uint32_t target_pid = 0;
-    if (!transition_busy && view_model_.audio_active_app && view_model_.selected_target_index >= 0 &&
+    if (try_app_meter && view_model_.selected_target_index >= 0 &&
         view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {
         const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
         if (target.kind == recorder_core::CaptureTarget::Kind::Window && target.native_id != 0) {
@@ -6155,21 +6186,19 @@ void RecordPage::updateAudioMeterLevels() {
         return std::clamp((db + 60.0f) / 60.0f, 0.0f, 1.0f);
     };
 
+    // --- Settings-card meters (coupled to on/off state — unchanged behaviour) ---
+    // These drive the VUMeterWidget strips inside the Settings Audio card.
     const bool sys_meter_live =
         coordinator_ != nullptr && coordinator_->IsSysMeterRunning() && view_model_.audio_active_sys;
     const float sys_rms = sys_meter_live ? preflight_sys_rms_ : (recording_live ? view_model_.audio_rms_sys : 0.0f);
     const bool sys_show = sys_meter_live || (recording_live && view_model_.audio_active_sys);
     applyMeter(sys_meter_, sys_db_label_, sys_rms, sys_show);
-    if (transport_dock_)
-        transport_dock_->setMeterLevel(QStringLiteral("system"), dockLevel(sys_rms, sys_show));
 
     const bool app_meter_live =
         coordinator_ != nullptr && coordinator_->IsAppMeterRunning() && view_model_.audio_active_app;
     const float app_rms = app_meter_live ? preflight_app_rms_ : (recording_live ? view_model_.audio_rms_app : 0.0f);
     const bool app_show = app_meter_live || (recording_live && view_model_.audio_active_app);
     applyMeter(app_meter_, app_db_label_, app_rms, app_show);
-    if (transport_dock_)
-        transport_dock_->setMeterLevel(QStringLiteral("app"), dockLevel(app_rms, app_show));
 
     const bool mic_meter_live = coordinator_ != nullptr && coordinator_->IsMicMeterRunning() &&
                                 view_model_.audio_ui_state.IsMicEnabled() && view_model_.audio_active_mic;
@@ -6178,8 +6207,32 @@ void RecordPage::updateAudioMeterLevels() {
                               : (recording_live ? view_model_.audio_rms_mic : 0.0f);
     const bool mic_show = mic_meter_live || (recording_live && view_model_.audio_active_mic);
     applyMeter(mic_meter_, mic_db_label_, mic_rms, mic_show);
+
+    // --- Dock toggle meters (decoupled from on/off — show grey level when off) ---
+    // The dock AudioSourceToggle already colours the bar grey when on_=false; we
+    // just need to supply the signal amplitude even while the toggle is off.
+    // Dock-sys: running whenever the meter service is active (page visible or active)
+    const bool sys_dock_live = coordinator_ != nullptr && coordinator_->IsSysMeterRunning();
+    const float sys_dock_rms = sys_dock_live ? preflight_sys_rms_ : (recording_live ? view_model_.audio_rms_sys : 0.0f);
+    const bool sys_dock_show = sys_dock_live || (recording_live && view_model_.audio_active_sys);
     if (transport_dock_)
-        transport_dock_->setMeterLevel(QStringLiteral("mic"), dockLevel(mic_rms, mic_show));
+        transport_dock_->setMeterLevel(QStringLiteral("system"), dockLevel(sys_dock_rms, sys_dock_show));
+
+    // Dock-app: same — service running implies a valid PID was found
+    const bool app_dock_live = coordinator_ != nullptr && coordinator_->IsAppMeterRunning();
+    const float app_dock_rms = app_dock_live ? preflight_app_rms_ : (recording_live ? view_model_.audio_rms_app : 0.0f);
+    const bool app_dock_show = app_dock_live || (recording_live && view_model_.audio_active_app);
+    if (transport_dock_)
+        transport_dock_->setMeterLevel(QStringLiteral("app"), dockLevel(app_dock_rms, app_dock_show));
+
+    // Dock-mic: service running implies a mic device is available and page is visible
+    const bool mic_dock_live = coordinator_ != nullptr && coordinator_->IsMicMeterRunning();
+    const float mic_dock_rms =
+        mic_dock_live ? std::clamp(preflight_mic_rms_ * view_model_.audio_ui_state.mic_gain_linear, 0.0f, 1.0f)
+                      : (recording_live ? view_model_.audio_rms_mic : 0.0f);
+    const bool mic_dock_show = mic_dock_live || (recording_live && view_model_.audio_active_mic);
+    if (transport_dock_)
+        transport_dock_->setMeterLevel(QStringLiteral("mic"), dockLevel(mic_dock_rms, mic_dock_show));
 
     emit audioMeterLevelsUpdated(dockLevel(sys_rms, sys_show), dockLevel(app_rms, app_show),
                                  dockLevel(mic_rms, mic_show), sys_show, app_show, mic_show);
