@@ -632,6 +632,10 @@ QWidget#recordPreviewSurfaceHost[recordState="paused"] {
     border-color: ${warn-a64};
 }
 
+QWidget#recordPreviewSurfaceHost[recordState="countdown"] {
+    border-color: ${warn-a64};
+}
+
 QWidget#recordPreviewSurfaceHost[recordState="warn"] {
     border-color: ${warn-a52};
 }
@@ -3047,12 +3051,13 @@ QPushButton#recordDockOpenFolder {
 }
 
 /* Capture-frame dock button — round 44×44 icon-only button.
+   v10 CapDockBtn: idle = rgba(255,255,255,0.05) fill + 1px line2 border (full circle).
    Hover shows accent-dim fill + accent-line border per suite-record.jsx
-   CaptureFrameStudy. Fixed size and border-radius enforced in C++. */
+   CaptureFrameStudy. Fixed size (44×44) and border-radius (22px) enforced in C++. */
 QPushButton[dockAction="captureFrame"] {
     border-radius: 22px;
     padding: 0;
-    background: transparent;
+    background: rgba(255, 255, 255, 0.05);
     border: 1px solid ${line2};
 }
 

@@ -5190,6 +5190,7 @@ void RecordPage::refresh() {
                                 (blocked || failed)                               ? QStringLiteral("blocked")
                                 : active_recording                                ? QStringLiteral("recording")
                                 : (view_model_.state == UiRecordingState::Paused) ? QStringLiteral("paused")
+                                : countdown                                       ? QStringLiteral("countdown")
                                 : completed_success                               ? QStringLiteral("done")
                                 : (checking || starting || stopping)              ? QStringLiteral("warn")
                                                                                   : QStringLiteral("ready"));
