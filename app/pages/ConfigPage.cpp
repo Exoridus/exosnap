@@ -680,6 +680,18 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         preset_save_as_btn_->setProperty("role", "ghost");
         toolbar_hl->addWidget(preset_save_as_btn_, 0, Qt::AlignVCenter);
 
+        // Export button (v10)
+        preset_export_btn_ = new QPushButton(QStringLiteral("Export"), toolbar_row);
+        preset_export_btn_->setObjectName(QStringLiteral("presetExportButton"));
+        preset_export_btn_->setProperty("role", "ghost");
+        toolbar_hl->addWidget(preset_export_btn_, 0, Qt::AlignVCenter);
+
+        // Import button (v10)
+        preset_import_btn_ = new QPushButton(QStringLiteral("Import"), toolbar_row);
+        preset_import_btn_->setObjectName(QStringLiteral("presetImportButton"));
+        preset_import_btn_->setProperty("role", "ghost");
+        toolbar_hl->addWidget(preset_import_btn_, 0, Qt::AlignVCenter);
+
         // Manage overflow button
         profile_overflow_btn_ = new QToolButton(toolbar_row);
         profile_overflow_btn_->setObjectName(QStringLiteral("presetManageButton"));
@@ -2051,42 +2063,15 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         rll->addStretch();
         out_panel_layout->addWidget(res_label_row);
     }
-    auto* out_res_segmented = new QWidget(out_panel);
-    out_res_segmented->setObjectName(QStringLiteral("outputResSegmented"));
-    auto* out_res_layout = new QHBoxLayout(out_res_segmented);
-    out_res_layout->setContentsMargins(3, 3, 3, 3);
-    out_res_layout->setSpacing(0);
-    output_resolution_group_ = new QButtonGroup(this);
-    output_resolution_group_->setExclusive(true);
-    auto makeOutputResolutionSegment = [&](const QString& object_name, const QString& label,
-                                           OutputResolutionMode mode) -> QPushButton* {
-        auto* seg = new QPushButton(label, out_res_segmented);
-        seg->setObjectName(object_name);
-        seg->setAccessibleName(label);
-        seg->setCheckable(true);
-        seg->setAutoDefault(false);
-        seg->setDefault(false);
-        seg->setCursor(Qt::PointingHandCursor);
-        seg->setProperty("qualitySegment", true);
-        seg->setProperty("qualitySegmentSelected", false);
-        seg->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        output_resolution_group_->addButton(seg, static_cast<int>(mode));
-        out_res_layout->addWidget(seg);
-        return seg;
-    };
-    output_res_native_btn_ = makeOutputResolutionSegment(QStringLiteral("outputResNativeButton"),
-                                                         QStringLiteral("Native"), OutputResolutionMode::Native);
-    output_res_4k_btn_ = makeOutputResolutionSegment(QStringLiteral("outputRes4kButton"), QStringLiteral("4K"),
-                                                     OutputResolutionMode::UHD2160);
-    output_res_1440_btn_ = makeOutputResolutionSegment(QStringLiteral("outputRes1440Button"), QStringLiteral("1440p"),
-                                                       OutputResolutionMode::QHD1440);
-    output_res_1080_btn_ = makeOutputResolutionSegment(QStringLiteral("outputRes1080Button"), QStringLiteral("1080p"),
-                                                       OutputResolutionMode::FHD1080);
-    output_res_720_btn_ = makeOutputResolutionSegment(QStringLiteral("outputRes720Button"), QStringLiteral("720p"),
-                                                      OutputResolutionMode::HD720);
-    output_res_custom_btn_ = makeOutputResolutionSegment(QStringLiteral("outputResCustomButton"),
-                                                         QStringLiteral("Custom"), OutputResolutionMode::Custom);
-    out_panel_layout->addWidget(out_res_segmented);
+    output_res_combo_ = new QComboBox(out_panel);
+    output_res_combo_->setObjectName(QStringLiteral("outputResCombo"));
+    output_res_combo_->addItem(QStringLiteral("Native"), static_cast<int>(OutputResolutionMode::Native));
+    output_res_combo_->addItem(QStringLiteral("4K"), static_cast<int>(OutputResolutionMode::UHD2160));
+    output_res_combo_->addItem(QStringLiteral("1440p"), static_cast<int>(OutputResolutionMode::QHD1440));
+    output_res_combo_->addItem(QStringLiteral("1080p"), static_cast<int>(OutputResolutionMode::FHD1080));
+    output_res_combo_->addItem(QStringLiteral("720p"), static_cast<int>(OutputResolutionMode::HD720));
+    output_res_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(OutputResolutionMode::Custom));
+    out_panel_layout->addWidget(output_res_combo_);
 
     // Custom resolution width/height fields (CUSTOM-OUTPUT-RESOLUTION-R1).
     custom_resolution_widget_ = new QWidget(out_panel);
@@ -2296,14 +2281,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                                      QStringLiteral("{title}"),    QStringLiteral("{target}"),
                                      QStringLiteral("{profile}"),  QStringLiteral("{container}")};
     auto* chip_flow = new ChipFlowWidget(output_help);
+    token_chip_flow_ = chip_flow;
     for (const QString& token : token_chips) {
         auto* chip = new QLabel(token, chip_flow);
         chip->setProperty("labelRole", "tokenChip");
         chip_flow->addChip(chip);
     }
+    chip_flow->setVisible(false); // v10: collapsed by default, shown on demand
     output_help_layout->addWidget(chip_flow);
 
-    token_help_toggle_btn_ = new QPushButton(QStringLiteral("Show token reference"), output_help);
+    token_help_toggle_btn_ = new QPushButton(QStringLiteral("Edit tokens"), output_help);
     token_help_toggle_btn_->setObjectName(QStringLiteral("tokenHelpToggle"));
     token_help_toggle_btn_->setProperty("role", "ghost");
     output_help_layout->addWidget(token_help_toggle_btn_, 0, Qt::AlignLeft);
@@ -2680,7 +2667,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(frame_rate_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onFrameRateChanged);
     connect(timing_group_, &QButtonGroup::idClicked, this, &ConfigPage::onTimingSelected);
-    connect(output_resolution_group_, &QButtonGroup::idClicked, this, &ConfigPage::onOutputResolutionSelected);
+    connect(output_res_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (index < 0)
+            return;
+        onOutputResolutionSelected(output_res_combo_->itemData(index).toInt());
+    });
     connect(split_mode_combo_, &QComboBox::currentIndexChanged, this, &ConfigPage::onSplitModeChanged);
     connect(split_custom_minutes_spin_, &QSpinBox::valueChanged, this, [this](int minutes) {
         format_settings_.split.custom_minutes = static_cast<uint32_t>(minutes);
@@ -2730,12 +2721,25 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // Preset management connections — primary action buttons.
     connect(preset_save_btn_, &QPushButton::clicked, this, &ConfigPage::onSavePreset);
     connect(preset_save_as_btn_, &QPushButton::clicked, this, &ConfigPage::onSavePresetAs);
+    connect(preset_export_btn_, &QPushButton::clicked, this, [this]() {
+        const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export Preset"), QString(),
+                                                          QStringLiteral("TOML files (*.toml)"));
+        if (!path.isEmpty())
+            emit exportCurrentPresetRequested(path);
+    });
+    connect(preset_import_btn_, &QPushButton::clicked, this, [this]() {
+        const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Import Presets"), QString(),
+                                                          QStringLiteral("TOML files (*.toml)"));
+        if (!path.isEmpty())
+            emit importPresetsRequested(path);
+    });
     connect(view_details_btn_, &QPushButton::clicked, this, &ConfigPage::diagnosticsRequested);
     connect(token_help_toggle_btn_, &QPushButton::clicked, this, [this]() {
         const bool now_visible = !token_help_label_->isVisible();
         token_help_label_->setVisible(now_visible);
-        token_help_toggle_btn_->setText(now_visible ? QStringLiteral("Hide token reference")
-                                                    : QStringLiteral("Show token reference"));
+        if (token_chip_flow_)
+            token_chip_flow_->setVisible(now_visible);
+        token_help_toggle_btn_->setText(now_visible ? QStringLiteral("Hide tokens") : QStringLiteral("Edit tokens"));
     });
 
     // D6: ExoToggle replaces QPushButton for Expert-Mode.
@@ -3713,26 +3717,15 @@ void ConfigPage::updateTimingSelection() {
 }
 
 void ConfigPage::updateOutputResolutionSelection() {
-    if (!output_resolution_group_)
+    if (!output_res_combo_)
         return;
 
-    auto sync_segment = [this](QPushButton* segment, OutputResolutionMode mode) {
-        if (!segment)
-            return;
-        const bool selected = format_settings_.resolution.mode == mode;
-        segment->setChecked(selected);
-        segment->setProperty("qualitySegmentSelected", selected);
-        segment->style()->unpolish(segment);
-        segment->style()->polish(segment);
-    };
-
-    const QSignalBlocker blocker(output_resolution_group_);
-    sync_segment(output_res_native_btn_, OutputResolutionMode::Native);
-    sync_segment(output_res_4k_btn_, OutputResolutionMode::UHD2160);
-    sync_segment(output_res_1440_btn_, OutputResolutionMode::QHD1440);
-    sync_segment(output_res_1080_btn_, OutputResolutionMode::FHD1080);
-    sync_segment(output_res_720_btn_, OutputResolutionMode::HD720);
-    sync_segment(output_res_custom_btn_, OutputResolutionMode::Custom);
+    {
+        const QSignalBlocker blocker(output_res_combo_);
+        const int idx = output_res_combo_->findData(static_cast<int>(format_settings_.resolution.mode));
+        if (idx >= 0 && output_res_combo_->currentIndex() != idx)
+            output_res_combo_->setCurrentIndex(idx);
+    }
 
     // D6 Task C: keep resolution CompareHint highlighted row in sync.
     if (resolution_compare_hint_) {
@@ -5164,11 +5157,8 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     quality_segment_high_->setEnabled(enabled);
     updateTimingSelection();
     cursor_check_->setEnabled(enabled);
-    output_res_native_btn_->setEnabled(enabled);
-    output_res_4k_btn_->setEnabled(enabled);
-    output_res_1440_btn_->setEnabled(enabled);
-    output_res_1080_btn_->setEnabled(enabled);
-    output_res_720_btn_->setEnabled(enabled);
+    if (output_res_combo_)
+        output_res_combo_->setEnabled(enabled);
 
     if (webcam_setup_panel_)
         webcam_setup_panel_->setControlsLocked(locked);

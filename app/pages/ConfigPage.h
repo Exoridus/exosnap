@@ -173,6 +173,10 @@ class ConfigPage : public QWidget {
     void setDefaultPresetRequested();
     // Emitted when the user opens the Manage presets overlay.
     void managePresetsRequested();
+    // Emitted when the user clicks Export in the preset toolbar.
+    void exportCurrentPresetRequested(const QString& path);
+    // Emitted when the user clicks Import in the preset toolbar.
+    void importPresetsRequested(const QString& path);
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
@@ -350,13 +354,7 @@ class ConfigPage : public QWidget {
     QLineEdit* destination_edit_ = nullptr;
     QPushButton* browse_btn_ = nullptr;
     QLineEdit* naming_edit_ = nullptr;
-    QButtonGroup* output_resolution_group_ = nullptr;
-    QPushButton* output_res_native_btn_ = nullptr;
-    QPushButton* output_res_4k_btn_ = nullptr;
-    QPushButton* output_res_1440_btn_ = nullptr;
-    QPushButton* output_res_1080_btn_ = nullptr;
-    QPushButton* output_res_720_btn_ = nullptr;
-    QPushButton* output_res_custom_btn_ = nullptr;
+    QComboBox* output_res_combo_ = nullptr;
     QLabel* output_effective_summary_label_ = nullptr;
 
     // Split recording widgets (SPLIT-RECORDING-R1 / SPLIT-BY-SIZE-R1).
@@ -391,6 +389,8 @@ class ConfigPage : public QWidget {
     QLabel* preset_dirty_indicator_ = nullptr;
     QPushButton* preset_save_btn_ = nullptr;
     QPushButton* preset_save_as_btn_ = nullptr;
+    QPushButton* preset_export_btn_ = nullptr;
+    QPushButton* preset_import_btn_ = nullptr;
     QToolButton* profile_overflow_btn_ = nullptr;
     // Preset management actions in the overflow menu.
     QAction* save_preset_action_ = nullptr;
@@ -411,6 +411,7 @@ class ConfigPage : public QWidget {
 
     QLabel* token_help_label_ = nullptr;
     QPushButton* token_help_toggle_btn_ = nullptr;
+    QWidget* token_chip_flow_ = nullptr; // v10: collapsed by default
 
     // SETTINGS-TIERS-R1 / D6: Expert mode toggle (ExoToggle in D6 header zone).
     ui::widgets::ExoToggle* expert_mode_toggle_ = nullptr;

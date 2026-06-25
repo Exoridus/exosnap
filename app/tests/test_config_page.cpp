@@ -231,13 +231,10 @@ TEST_F(ConfigPageTest, HybridCardTitles_AreVisible) {
 TEST_F(ConfigPageTest, OutputResolution_IsFunctional) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    auto* segmented = page.findChild<QWidget*>(QStringLiteral("outputResSegmented"));
-    ASSERT_NE(segmented, nullptr);
-
-    const auto segments = segmented->findChildren<QPushButton*>();
-    ASSERT_GE(segments.size(), 5);
-    for (const auto* seg : segments)
-        EXPECT_TRUE(seg->isEnabled()) << "Output resolution segment must be interactive: " << seg->text().toStdString();
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("outputResCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_TRUE(combo->isEnabled()) << "Output resolution combo must be interactive";
+    EXPECT_GE(combo->count(), 5);
 
     OutputSettingsModel changed;
     bool emitted = false;
@@ -246,9 +243,9 @@ TEST_F(ConfigPageTest, OutputResolution_IsFunctional) {
         changed = settings;
     });
 
-    auto* res1080 = page.findChild<QPushButton*>(QStringLiteral("outputRes1080Button"));
-    ASSERT_NE(res1080, nullptr);
-    res1080->click();
+    const int idx1080 = combo->findData(static_cast<int>(OutputResolutionMode::FHD1080));
+    ASSERT_GE(idx1080, 0);
+    combo->setCurrentIndex(idx1080);
     EXPECT_TRUE(emitted);
     EXPECT_EQ(changed.resolution.mode, OutputResolutionMode::FHD1080);
 }
@@ -306,12 +303,14 @@ TEST_F(ConfigPageTest, OutputEffectiveSummaryReflectsFormatControls) {
     auto* summary = page.findChild<QLabel*>(QStringLiteral("outputEffectiveSummaryLabel"));
     ASSERT_NE(summary, nullptr);
 
-    auto* res720 = page.findChild<QPushButton*>(QStringLiteral("outputRes720Button"));
+    auto* res_combo = page.findChild<QComboBox*>(QStringLiteral("outputResCombo"));
     auto* frame_rate = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
-    ASSERT_NE(res720, nullptr);
+    ASSERT_NE(res_combo, nullptr);
     ASSERT_NE(frame_rate, nullptr);
 
-    res720->click();
+    const int idx720 = res_combo->findData(static_cast<int>(OutputResolutionMode::HD720));
+    ASSERT_GE(idx720, 0);
+    res_combo->setCurrentIndex(idx720);
     const int idx24 = frame_rate->findData(24);
     ASSERT_GE(idx24, 0);
     frame_rate->setCurrentIndex(idx24);
@@ -589,7 +588,7 @@ TEST_F(ConfigPageTest, SetRecordingControlsLocked_DisablesKeyControls) {
     auto* timing_cfr = page.findChild<QPushButton*>(QStringLiteral("timingCfrButton"));
     ASSERT_NE(timing_cfr, nullptr);
     EXPECT_FALSE(timing_cfr->isEnabled());
-    auto* output_res = page.findChild<QPushButton*>(QStringLiteral("outputRes1080Button"));
+    auto* output_res = page.findChild<QComboBox*>(QStringLiteral("outputResCombo"));
     ASSERT_NE(output_res, nullptr);
     EXPECT_FALSE(output_res->isEnabled());
 
@@ -700,7 +699,7 @@ TEST_F(ConfigPageTest, TokenHelpToggle_HiddenByDefault) {
 
     auto* toggle = page.findChild<QPushButton*>(QStringLiteral("tokenHelpToggle"));
     ASSERT_NE(toggle, nullptr);
-    EXPECT_EQ(toggle->text(), QStringLiteral("Show token reference"));
+    EXPECT_EQ(toggle->text(), QStringLiteral("Edit tokens"));
 }
 
 TEST_F(ConfigPageTest, QualitySegment_HasSimpleLabels) {
