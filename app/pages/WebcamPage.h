@@ -8,7 +8,6 @@
 #include <QShowEvent>
 #include <QWidget>
 
-class QCheckBox;
 class QComboBox;
 class QLabel;
 class QPushButton;
@@ -25,6 +24,7 @@ enum class VisualWebcamState;
 
 namespace ui::widgets {
 class CameraPreview;
+class ExoCheckBox;
 class ExoToggle;
 class SectionRuleHeader;
 } // namespace ui::widgets
@@ -99,7 +99,7 @@ class WebcamPage : public QWidget {
     QLabel* pos_y_label_ = nullptr;
     QLabel* size_w_label_ = nullptr;
     QLabel* size_h_label_ = nullptr;
-    QCheckBox* aspect_lock_check_ = nullptr;
+    ui::widgets::ExoCheckBox* aspect_lock_check_ = nullptr;
 
     // Chroma key
     ui::widgets::ExoToggle* chroma_toggle_ = nullptr;

@@ -6,7 +6,6 @@
 #include <QWidget>
 
 class QButtonGroup;
-class QCheckBox;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
@@ -14,6 +13,10 @@ class QPushButton;
 class QTimer;
 
 namespace exosnap {
+
+namespace ui::widgets {
+class ExoCheckBox;
+}
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 namespace visual {
@@ -89,7 +92,7 @@ class LogsPage : public QWidget {
     QPlainTextEdit* log_viewer_ = nullptr;
     QButtonGroup* severity_group_ = nullptr;
     QLineEdit* search_edit_ = nullptr;
-    QCheckBox* auto_scroll_check_ = nullptr;
+    ui::widgets::ExoCheckBox* auto_scroll_check_ = nullptr;
     // refresh_btn_, open_folder_btn_, clear_btn_ removed (D3: cut from toolbar).
     QPushButton* copy_btn_ = nullptr;
     QPushButton* export_btn_ = nullptr;
