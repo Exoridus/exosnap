@@ -128,7 +128,8 @@ ExoTheme& ActiveThemeStorage() {
 // ---------------------------------------------------------------------------
 
 struct ThemeFontFamilies {
-    // D2: Segoe UI is the blessed system face for UI text (no bundled sans).
+    // Hanken Grotesk is the design-system UI face (bundled, OFL); LoadBundledFonts
+    // sets this to the loaded family, falling back to Segoe UI if it fails to load.
     // IBM Plex Mono is bundled (Regular + Medium) for the mandatory mono voice.
     QString sans_primary = QStringLiteral("Segoe UI");
     QString mono_primary = QStringLiteral("IBM Plex Mono");
@@ -167,9 +168,11 @@ QStringList BuildFamilyStack(const QString& primary_family, const QStringList& f
 }
 
 QStringList SansFamilies(const ThemeFontFamilies& font_families) {
-    return BuildFamilyStack(QStringLiteral("Segoe UI Variable Text"),
-                            {QStringLiteral("Segoe UI"), font_families.sans_primary, QStringLiteral("system-ui"),
-                             QStringLiteral("sans-serif")});
+    // Hanken Grotesk (bundled, design-system UI face) leads; Segoe UI is the
+    // system fallback if the bundled font ever fails to load.
+    return BuildFamilyStack(font_families.sans_primary,
+                            {QStringLiteral("Segoe UI Variable Text"), QStringLiteral("Segoe UI"),
+                             QStringLiteral("system-ui"), QStringLiteral("sans-serif")});
 }
 
 QStringList MonoFamilies(const ThemeFontFamilies& font_families) {
@@ -489,6 +492,15 @@ ThemeFontFamilies LoadBundledFonts() {
         QStringLiteral("IBM Plex Mono"));
 
     font_families.mono_primary = SelectPreferredFamily(plex_families, font_families.mono_primary);
+
+    // Hanken Grotesk — the design-system UI face (OFL, bundled). Regular/Medium/
+    // SemiBold/Bold cover the weights the UI uses (body, DemiBold titles, brand).
+    const QStringList hanken_families = LoadFontFamiliesFromResources(
+        {QStringLiteral(":/fonts/HankenGrotesk-Regular.ttf"), QStringLiteral(":/fonts/HankenGrotesk-Medium.ttf"),
+         QStringLiteral(":/fonts/HankenGrotesk-SemiBold.ttf"), QStringLiteral(":/fonts/HankenGrotesk-Bold.ttf")},
+        QStringLiteral("Hanken Grotesk"));
+
+    font_families.sans_primary = SelectPreferredFamily(hanken_families, font_families.sans_primary);
     return font_families;
 }
 
