@@ -1,6 +1,7 @@
 #include "video_thread.h"
 
 #include "annexb_to_avcc.h"
+#include "annexb_to_hvcc.h"
 #include "codec_private.h"
 #include "dxgi_od_capture_src.h"
 #include "gpu_compositor.h"
@@ -245,6 +246,12 @@ void VideoThread::Run() {
     winrt::com_ptr<ID3D11DeviceContext> d3dContext;
     winrt::com_ptr<ID3D11VideoDevice> videoDevice;
     winrt::com_ptr<ID3D11VideoContext> videoContext;
+    // Optional newer interface: VideoProcessorSet{Stream,Output}ColorSpace1 takes
+    // explicit DXGI_COLOR_SPACE_TYPE enums, which drivers honour for the YUV
+    // quantization range. The legacy D3D11_VIDEO_PROCESSOR_COLOR_SPACE.Nominal_Range
+    // is widely ignored on output (NVIDIA included), so the studio-range request was
+    // silently dropped and full-range YUV was tagged as limited (washed-out / dark).
+    winrt::com_ptr<ID3D11VideoContext1> videoContext1;
 
     {
         D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
@@ -289,6 +296,8 @@ void VideoThread::Run() {
                 CoUninitialize();
             return;
         }
+        // Optional — present on all Windows 10+; failure is non-fatal (legacy path).
+        videoContext->QueryInterface(IID_PPV_ARGS(videoContext1.put()));
     }
 
     bool windowHandleValid = false;
@@ -373,7 +382,10 @@ void VideoThread::Run() {
          << "\", target.native_id=0x" << std::hex << target.native_id << std::dec
          << ", capture.visibleContentSize=" << sourceWidthSigned << "x" << sourceHeightSigned
          << ", capture.dxgiFormat=DXGI_FORMAT_B8G8R8A8_UNORM"
-         << ", videoCodec=" << (m_state.config.video_codec == VideoCodec::H264Nvenc ? "H264_NVENC" : "AV1_NVENC")
+         << ", videoCodec="
+         << (m_state.config.video_codec == VideoCodec::H264Nvenc
+                 ? "H264_NVENC"
+                 : (m_state.config.video_codec == VideoCodec::HevcNvenc ? "HEVC_NVENC" : "AV1_NVENC"))
          << ", chroma=4:2:0, bitDepth=8, frameRate=" << m_state.config.frame_rate_num << "/"
          << m_state.config.frame_rate_den << ", nvencInputBufferFormat=NV_ENC_BUFFER_FORMAT_NV12";
 
@@ -510,6 +522,7 @@ void VideoThread::Run() {
     NvencVideoEncoder nvenc;
     {
         nvenc.SetCodec(m_state.config.video_codec);
+        nvenc.SetBitDepth(m_state.config.bit_depth);
         nvenc.SetQualityPreset(m_state.config.nvenc_quality_preset);
         nvenc.SetRateControl(m_state.config.nvenc_rate_control, m_state.config.nvenc_bitrate_kbps);
 
@@ -530,7 +543,13 @@ void VideoThread::Run() {
         }
     }
 
-    // --- NV12 texture ring + video processor ---
+    // --- NV12 / P010 texture ring + video processor ---
+    // For 10-bit recording (HEVC Main10 / AV1 10-bit, ADR 0032 SDR BT.709) the
+    // VideoProcessor converts BGRA → P010 instead of NV12, and the encode ring +
+    // reference texture use DXGI_FORMAT_P010. The output color space stays studio
+    // BT.709 (no HDR/BT.2020 here — that is a later slice).
+    const bool tenBit = (m_state.config.bit_depth == BitDepth::Bit10);
+    const DXGI_FORMAT encodeFormat = tenBit ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
     static constexpr int32_t kSlotCount = 8;
     winrt::com_ptr<ID3D11Texture2D> nv12Textures[kSlotCount];
     winrt::com_ptr<ID3D11VideoProcessorEnumerator> videoEnum;
@@ -574,16 +593,16 @@ void VideoThread::Run() {
             desc.Height = encodeHeight;
             desc.MipLevels = 1;
             desc.ArraySize = 1;
-            desc.Format = DXGI_FORMAT_NV12;
+            desc.Format = encodeFormat; // NV12 (8-bit) or P010 (10-bit)
             desc.SampleDesc = {1, 0};
             desc.Usage = D3D11_USAGE_DEFAULT;
             desc.BindFlags = D3D11_BIND_RENDER_TARGET;
 
             hr = d3dDevice->CreateTexture2D(&desc, nullptr, nv12Textures[i].put());
             if (FAILED(hr)) {
-                char buf[80];
-                snprintf(buf, sizeof(buf), "CreateTexture2D(NV12[%d]) failed 0x%08lX", static_cast<int>(i),
-                         static_cast<unsigned long>(hr));
+                char buf[96];
+                snprintf(buf, sizeof(buf), "CreateTexture2D(%s[%d]) failed 0x%08lX", tenBit ? "P010" : "NV12",
+                         static_cast<int>(i), static_cast<unsigned long>(hr));
                 m_state.RecordFailure(hr, ErrorPhase::Prepare, buf);
                 if (com_inited)
                     CoUninitialize();
@@ -622,6 +641,47 @@ void VideoThread::Run() {
         D3D11_VIDEO_COLOR background{};
         background.RGBA.A = 1.0f;
         videoContext->VideoProcessorSetOutputBackgroundColor(videoProcessor.get(), FALSE, &background);
+
+        // Make the RGB->NV12/P010 conversion deterministic (ADR 0032). Without an
+        // explicit color space the driver picks an implementation-defined
+        // matrix/range (BT.601 vs BT.709, full vs studio), so the same desktop
+        // could encode to subtly different colors on different GPUs and the
+        // container carried no color tags at all. Pin the input to full-range
+        // RGB (the desktop composite) and the YUV output to BT.709 with the
+        // user-selected quantization range — Full (0-255, the native precision
+        // of screen content, the default) or Limited (studio 16-235, broadcast
+        // standard). The output range here MUST match the range the container is
+        // tagged with (see color_metadata.h / RecorderConfig::color), so the same
+        // config value drives both; otherwise there is a black-level mismatch.
+        const bool fullRange = m_state.config.color.range != ColorRange::Limited;
+        if (videoContext1) {
+            // Preferred path: explicit DXGI colour spaces. Input is the desktop's
+            // full-range BT.709 RGB; output is BT.709 YUV in the selected range.
+            // Drivers honour the quantization range here, so the encoded NV12/P010
+            // genuinely carries the chosen range and matches the container tag
+            // (ADR 0032) — no full-vs-limited mismatch, no crushed/washed levels.
+            videoContext1->VideoProcessorSetStreamColorSpace1(videoProcessor.get(), 0,
+                                                              DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+            videoContext1->VideoProcessorSetOutputColorSpace1(videoProcessor.get(),
+                                                              fullRange ? DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P709
+                                                                        : DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
+        } else {
+            // Legacy fallback (pre-Win10 / no ID3D11VideoContext1). The output
+            // Nominal_Range is widely ignored here, so the result may not honour
+            // the requested range — best effort only.
+            D3D11_VIDEO_PROCESSOR_COLOR_SPACE inputColorSpace{};
+            inputColorSpace.Usage = 0;     // 0 = playback (full-precision conversion)
+            inputColorSpace.RGB_Range = 0; // 0 = full-range RGB (0-255)
+            inputColorSpace.Nominal_Range = D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255;
+            videoContext->VideoProcessorSetStreamColorSpace(videoProcessor.get(), 0, &inputColorSpace);
+
+            D3D11_VIDEO_PROCESSOR_COLOR_SPACE outputColorSpace{};
+            outputColorSpace.Usage = 0;
+            outputColorSpace.YCbCr_Matrix = 1; // 1 = BT.709
+            outputColorSpace.Nominal_Range =
+                fullRange ? D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255 : D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235;
+            videoContext->VideoProcessorSetOutputColorSpace(videoProcessor.get(), &outputColorSpace);
+        }
 
         const RECT targetRect = {0, 0, static_cast<LONG>(encodeWidth), static_cast<LONG>(encodeHeight)};
         videoContext->VideoProcessorSetOutputTargetRect(videoProcessor.get(), TRUE, &targetRect);
@@ -1062,6 +1122,7 @@ void VideoThread::Run() {
     // --- Capture + encode loop ---
     bool av1CodecPrivateReady = false;
     bool h264CodecPrivateReady = false;
+    bool hevcCodecPrivateReady = false;
     uint64_t lastVideoPts = 0;
     uint64_t videoFramesCaptured = 0;
     uint64_t droppedFrames = 0;
@@ -1134,7 +1195,7 @@ void VideoThread::Run() {
                                            : 60u;
 
     // Helper lambda: push an encoded packet to premux or mux queue.
-    // Uses h264CodecPrivateReady and av1CodecPrivateReady by reference.
+    // Uses h264CodecPrivateReady, hevcCodecPrivateReady, and av1CodecPrivateReady by reference.
     auto routePacket = [&](EncodedVideoPacket pkt) -> bool {
         const size_t pkt_bytes_count = pkt.bytes.size();
         if (pkt.bytes.empty())
@@ -1150,7 +1211,19 @@ void VideoThread::Run() {
                     h264CodecPrivateReady = true;
                     m_state.premux_cv.notify_all();
                 }
-            } else if (m_state.config.video_codec != VideoCodec::H264Nvenc && !av1CodecPrivateReady) {
+            } else if (m_state.config.video_codec == VideoCodec::HevcNvenc && !hevcCodecPrivateReady) {
+                std::vector<uint8_t> vpsSpsPps;
+                if (annexb::ExtractHevcVpsSpsPps(pkt.bytes.data(), pkt.bytes.size(), vpsSpsPps)) {
+                    std::lock_guard lk(m_state.premux_mutex);
+                    m_state.codec_private.hevc_vps_sps_pps = std::move(vpsSpsPps);
+                    m_state.codec_private.hevc_ready = true;
+                    hevcCodecPrivateReady = true;
+                    m_state.premux_cv.notify_all();
+                } else {
+                    logging::log(logging::LogLevel::Warn, "video_thread",
+                                 "HEVC VPS/SPS/PPS extraction failed on keyframe");
+                }
+            } else if (m_state.config.video_codec == VideoCodec::Av1Nvenc && !av1CodecPrivateReady) {
                 char reason[256] = {};
                 uint8_t cp[4] = {};
                 if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp, reason,
@@ -1236,6 +1309,22 @@ void VideoThread::Run() {
     auto performSnapshotIfRequested = [&](int32_t slot_idx) {
         if (!m_state.snapshot_requested.load())
             return;
+
+        // 10-bit (P010) snapshot is not implemented: the readback below assumes an
+        // 8-bit NV12 layout. Fail the request cleanly rather than produce garbage.
+        // The encode path is unaffected; only CaptureFrame is unavailable for 10-bit.
+        if (tenBit) {
+            SnapshotCallback pending_cb;
+            {
+                std::lock_guard lk(m_state.snapshot_callback_mutex);
+                pending_cb = std::move(m_state.snapshot_callback);
+                m_state.snapshot_callback = nullptr;
+                m_state.snapshot_requested.store(false);
+            }
+            if (pending_cb)
+                pending_cb(false, 0, 0, {}, "CaptureFrame is not supported for 10-bit recording");
+            return;
+        }
 
         // Lazily allocate the staging texture on first use.
         if (!snapshotStagingTex) {
@@ -1329,7 +1418,7 @@ void VideoThread::Run() {
         // CFR path: QPC-driven scheduler — duplicate/drop to hit constant rate
         // ====================================================================
 
-        // Reference NV12 texture for frame duplication
+        // Reference encode texture for frame duplication (NV12 8-bit / P010 10-bit)
         winrt::com_ptr<ID3D11Texture2D> refNv12;
         bool refNv12Valid = false;
 
@@ -1339,7 +1428,7 @@ void VideoThread::Run() {
             refDesc.Height = encodeHeight;
             refDesc.MipLevels = 1;
             refDesc.ArraySize = 1;
-            refDesc.Format = DXGI_FORMAT_NV12;
+            refDesc.Format = encodeFormat;
             refDesc.SampleDesc = {1, 0};
             refDesc.Usage = D3D11_USAGE_DEFAULT;
             refDesc.BindFlags = 0; // only used as CopyResource source/dest
@@ -1885,7 +1974,16 @@ end_encode_loop:
                         h264CodecPrivateReady = true;
                         m_state.premux_cv.notify_all();
                     }
-                } else if (m_state.config.video_codec != VideoCodec::H264Nvenc && !av1CodecPrivateReady) {
+                } else if (m_state.config.video_codec == VideoCodec::HevcNvenc && !hevcCodecPrivateReady) {
+                    std::vector<uint8_t> vpsSpsPps;
+                    if (annexb::ExtractHevcVpsSpsPps(pkt.bytes.data(), pkt.bytes.size(), vpsSpsPps)) {
+                        std::lock_guard lk(m_state.premux_mutex);
+                        m_state.codec_private.hevc_vps_sps_pps = std::move(vpsSpsPps);
+                        m_state.codec_private.hevc_ready = true;
+                        hevcCodecPrivateReady = true;
+                        m_state.premux_cv.notify_all();
+                    }
+                } else if (m_state.config.video_codec == VideoCodec::Av1Nvenc && !av1CodecPrivateReady) {
                     char reason[256] = {};
                     uint8_t cp[4] = {};
                     if (codec_private::DeriveAv1CodecPrivate(pkt.bytes.data(), pkt.bytes.size(), cp, reason,

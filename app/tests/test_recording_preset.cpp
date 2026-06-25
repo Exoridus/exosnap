@@ -162,6 +162,119 @@ TEST(RecordingPreset, DefaultPreset_SanitizeRoundTrip) {
 }
 
 // ===========================================================================
+// SanitizePresetConfig — video bit depth (0.7.0 — S7)
+// ===========================================================================
+
+// 10-bit is invalid for H.264 → sanitize forces 8-bit.
+TEST(RecordingPreset, Sanitize_VideoBitDepth_TenBitH264_ForcesEightBit) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.container = capability::Container::Matroska;
+    cfg.output.video_codec = capability::VideoCodec::H264Nvenc;
+    cfg.output.bit_depth = capability::BitDepth::Bit10;
+
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_EQ(s.output.bit_depth, capability::BitDepth::Bit8);
+}
+
+// 10-bit is valid for HEVC → sanitize preserves it.
+TEST(RecordingPreset, Sanitize_VideoBitDepth_TenBitHevc_Preserved) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.container = capability::Container::Matroska;
+    cfg.output.video_codec = capability::VideoCodec::HevcNvenc;
+    cfg.output.audio_codec = capability::AudioCodec::Opus;
+    cfg.output.bit_depth = capability::BitDepth::Bit10;
+
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_EQ(s.output.bit_depth, capability::BitDepth::Bit10);
+}
+
+// 10-bit is valid for AV1 → sanitize preserves it.
+TEST(RecordingPreset, Sanitize_VideoBitDepth_TenBitAv1_Preserved) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.container = capability::Container::Matroska;
+    cfg.output.video_codec = capability::VideoCodec::Av1Nvenc;
+    cfg.output.bit_depth = capability::BitDepth::Bit10;
+
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_EQ(s.output.bit_depth, capability::BitDepth::Bit10);
+}
+
+// MP4 + HEVC is a valid 0.7.0 combination (hvc1 remux): the reconcile keeps HEVC
+// (only the Opus audio is forced to AAC), so 10-bit (HEVC Main10) is preserved.
+// This guards that the bit-depth reconcile keys off the *resolved* codec, not the
+// container — HEVC carries 10-bit regardless of container.
+TEST(RecordingPreset, Sanitize_VideoBitDepth_Mp4Hevc_KeepsTenBit) {
+    RecordingPresetConfig cfg = MakeDefaultPreset().config;
+    cfg.output.container = capability::Container::Mp4;
+    cfg.output.video_codec = capability::VideoCodec::HevcNvenc;
+    cfg.output.audio_codec = capability::AudioCodec::AacMf; // MP4 audio is AAC-only
+    cfg.output.bit_depth = capability::BitDepth::Bit10;
+
+    const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+    EXPECT_EQ(s.output.video_codec, capability::VideoCodec::HevcNvenc);
+    EXPECT_EQ(s.output.bit_depth, capability::BitDepth::Bit10);
+}
+
+// 8-bit is always valid and never altered by codec.
+TEST(RecordingPreset, Sanitize_VideoBitDepth_EightBit_AlwaysPreserved) {
+    for (const auto codec :
+         {capability::VideoCodec::H264Nvenc, capability::VideoCodec::HevcNvenc, capability::VideoCodec::Av1Nvenc}) {
+        RecordingPresetConfig cfg = MakeDefaultPreset().config;
+        cfg.output.container = capability::Container::Matroska;
+        cfg.output.video_codec = codec;
+        cfg.output.audio_codec = capability::AudioCodec::Opus;
+        cfg.output.bit_depth = capability::BitDepth::Bit8;
+
+        const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+        EXPECT_EQ(s.output.bit_depth, capability::BitDepth::Bit8);
+    }
+}
+
+// bit_depth participates in dirty/normalized equality.
+TEST(RecordingPreset, NormalizedEquals_BitDepthDifference_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    a.output.video_codec = capability::VideoCodec::HevcNvenc;
+    a.output.audio_codec = capability::AudioCodec::Opus;
+    a.output.bit_depth = capability::BitDepth::Bit8;
+    RecordingPresetConfig b = a;
+    b.output.bit_depth = capability::BitDepth::Bit10;
+
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+// The default preset uses Full colour range (0.7.0 default), and Full is preserved
+// through sanitize regardless of codec (colour range is never capability-gated).
+TEST(RecordingPreset, Sanitize_ColorRange_DefaultIsFull_AndPreservedForAllCodecs) {
+    EXPECT_EQ(MakeDefaultPreset().config.output.color_range, capability::ColorRange::Full);
+
+    for (const auto codec :
+         {capability::VideoCodec::H264Nvenc, capability::VideoCodec::HevcNvenc, capability::VideoCodec::Av1Nvenc}) {
+        for (const auto range : {capability::ColorRange::Full, capability::ColorRange::Limited}) {
+            RecordingPresetConfig cfg = MakeDefaultPreset().config;
+            cfg.output.container = capability::Container::Matroska;
+            cfg.output.video_codec = codec;
+            cfg.output.audio_codec = capability::AudioCodec::Opus;
+            cfg.output.color_range = range;
+
+            const RecordingPresetConfig s = SanitizePresetConfig(cfg);
+            EXPECT_EQ(s.output.color_range, range);
+        }
+    }
+}
+
+// color_range participates in dirty/normalized equality.
+TEST(RecordingPreset, NormalizedEquals_ColorRangeDifference_NotEqual) {
+    RecordingPresetConfig a = MakeDefaultPreset().config;
+    a.output.color_range = capability::ColorRange::Full;
+    RecordingPresetConfig b = a;
+    b.output.color_range = capability::ColorRange::Limited;
+
+    EXPECT_FALSE(NormalizedConfigEquals(a, b));
+    EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
+}
+
+// ===========================================================================
 // SanitizePresetConfig — countdown
 // ===========================================================================
 
@@ -404,18 +517,15 @@ TEST(RecordingPreset, Reconcile_Mkv_H264Opus_Unchanged) {
     EXPECT_EQ(out.audio_codec, capability::AudioCodec::Opus);
 }
 
-TEST(RecordingPreset, Reconcile_Mkv_Hevc_FallsToAv1Opus) {
-    // HEVC is not implemented (Experimental in the registry; NotImplemented in
-    // CapabilitySet). No audio fallback fixes it while keeping HEVC; the
-    // reconciler falls back to the primary working path: AV1 + Opus.
-    // (Pre-v1 behaviour change from the old ad-hoc HEVC→H264 downgrade.)
+TEST(RecordingPreset, Reconcile_Mkv_Hevc_Aac_IsUnchanged) {
+    // 0.7.0: MKV + HEVC + AAC is now Allowed (implemented). Reconciler must leave it unchanged.
     OutputSettingsModel out;
     out.container = capability::Container::Matroska;
     out.video_codec = capability::VideoCodec::HevcNvenc;
     out.audio_codec = capability::AudioCodec::AacMf;
     ReconcileContainerCodecs(out);
-    EXPECT_EQ(out.video_codec, capability::VideoCodec::Av1Nvenc);
-    EXPECT_EQ(out.audio_codec, capability::AudioCodec::Opus);
+    EXPECT_EQ(out.video_codec, capability::VideoCodec::HevcNvenc);
+    EXPECT_EQ(out.audio_codec, capability::AudioCodec::AacMf);
 }
 
 TEST(RecordingPreset, Reconcile_Mkv_Pcm_Unchanged) {
@@ -543,15 +653,15 @@ TEST(RecordingPreset, Sanitize_Mkv_H264Opus_Unchanged) {
     EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::Opus);
 }
 
-TEST(RecordingPreset, Sanitize_Mkv_Hevc_FallsToAv1Opus) {
-    // HEVC is not implemented; sanitizer falls back via registry to AV1 + Opus.
+TEST(RecordingPreset, Sanitize_Mkv_Hevc_Aac_IsPreserved) {
+    // 0.7.0: MKV + HEVC + AAC is now Allowed (implemented). Sanitizer must leave it unchanged.
     RecordingPresetConfig cfg = MakeDefaultPreset().config;
     cfg.output.container = capability::Container::Matroska;
     cfg.output.video_codec = capability::VideoCodec::HevcNvenc;
     cfg.output.audio_codec = capability::AudioCodec::AacMf;
     const RecordingPresetConfig s = SanitizePresetConfig(cfg);
-    EXPECT_EQ(s.output.video_codec, capability::VideoCodec::Av1Nvenc);
-    EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::Opus);
+    EXPECT_EQ(s.output.video_codec, capability::VideoCodec::HevcNvenc);
+    EXPECT_EQ(s.output.audio_codec, capability::AudioCodec::AacMf);
 }
 
 // ===========================================================================

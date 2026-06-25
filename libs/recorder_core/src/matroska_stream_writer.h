@@ -25,6 +25,8 @@
 // queue draining, codec-private readiness, A/V epoch alignment, and Annex-B ->
 // AVCC conversion, then feeds packets here one at a time.
 
+#include <recorder_core/color_metadata.h>
+
 #include <array>
 #include <cstdint>
 #include <deque>
@@ -84,6 +86,10 @@ struct MatroskaStreamConfig {
     uint32_t encode_height = 0;
     uint32_t frame_rate_num = 0;
     uint32_t frame_rate_den = 0;
+
+    // Color description written into the video track's Colour element (ADR 0032).
+    // Defaults to SDR BT.709 limited-range 8-bit.
+    ColorMetadata color;
 
     // Audio
     StreamAudioCodec audio_codec = StreamAudioCodec::Aac;

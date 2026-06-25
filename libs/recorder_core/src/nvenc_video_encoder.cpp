@@ -7,8 +7,14 @@ bool NvencVideoEncoder::Open(void* gpu_context, std::string& out_error) {
     auto* device = static_cast<ID3D11Device*>(gpu_context);
     if (!m_nvenc.Open(device, out_error))
         return false;
-    const bool ok = (m_codec == VideoCodec::H264Nvenc) ? m_nvenc.QueryH264Nv12Support(out_error)
-                                                       : m_nvenc.QueryAv1Nv12Support(out_error);
+    bool ok = false;
+    if (m_codec == VideoCodec::H264Nvenc) {
+        ok = m_nvenc.QueryH264Nv12Support(out_error);
+    } else if (m_codec == VideoCodec::HevcNvenc) {
+        ok = m_nvenc.QueryHevcNv12Support(out_error);
+    } else {
+        ok = m_nvenc.QueryAv1Nv12Support(out_error);
+    }
     return ok;
 }
 

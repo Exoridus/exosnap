@@ -2,5 +2,9 @@
     <qresource prefix="/fonts">
         <file>IBMPlexMono-Regular.ttf</file>
         <file>IBMPlexMono-Medium.ttf</file>
+        <file>HankenGrotesk-Regular.ttf</file>
+        <file>HankenGrotesk-Medium.ttf</file>
+        <file>HankenGrotesk-SemiBold.ttf</file>
+        <file>HankenGrotesk-Bold.ttf</file>
     </qresource>
 </RCC>

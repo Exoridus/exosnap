@@ -166,6 +166,120 @@ TEST(RecordingPresetStore, RoundTrip_3Presets_AllFieldsPreserved) {
 }
 
 // ===========================================================================
+// Video bit depth persists (0.7.0 — S7, schema 17)
+// ===========================================================================
+
+TEST(RecordingPresetStore, VideoBitDepthPersists_HevcTenBit) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "HEVC 10-bit";
+    p.config = MakeDefaultPreset().config;
+    // 10-bit is only valid for HEVC/AV1 — use MKV + HEVC so sanitize keeps it.
+    p.config.output.container = capability::Container::Matroska;
+    p.config.output.video_codec = capability::VideoCodec::HevcNvenc;
+    p.config.output.audio_codec = capability::AudioCodec::Opus;
+    p.config.output.bit_depth = capability::BitDepth::Bit10;
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.output.bit_depth, capability::BitDepth::Bit10);
+        EXPECT_EQ(state.presets[0].config.output.video_codec, capability::VideoCodec::HevcNvenc);
+    }
+
+    CleanupFile(path);
+}
+
+// Default preset (and any non-HEVC/AV1 codec) round-trips as 8-bit.
+TEST(RecordingPresetStore, VideoBitDepthPersists_DefaultEightBit) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Default depth";
+    p.config = MakeDefaultPreset().config; // AV1, Bit8 by default
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.output.bit_depth, capability::BitDepth::Bit8);
+    }
+
+    CleanupFile(path);
+}
+
+// ===========================================================================
+// Colour range persists (0.7.0, schema 18)
+// ===========================================================================
+
+// Default preset round-trips as Full range (the 0.7.0 default).
+TEST(RecordingPresetStore, ColorRangePersists_DefaultFull) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Default range";
+    p.config = MakeDefaultPreset().config; // Full by default
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.output.color_range, capability::ColorRange::Full);
+    }
+
+    CleanupFile(path);
+}
+
+// An explicit Limited selection survives the TOML round-trip (and schema is 18).
+TEST(RecordingPresetStore, ColorRangePersists_Limited) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Limited range";
+    p.config = MakeDefaultPreset().config;
+    p.config.output.color_range = capability::ColorRange::Limited;
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.output.color_range, capability::ColorRange::Limited);
+    }
+
+    CleanupFile(path);
+}
+
+// ===========================================================================
 // Frame rate persists
 // ===========================================================================
 

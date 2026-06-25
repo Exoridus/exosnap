@@ -29,6 +29,9 @@
 // Full include required: SourcePickerDialog::SelectionResult is used in private slot signature.
 #include "../ui/dialogs/SourcePickerDialog.h"
 
+// Full include required: RecordingErrorModel is passed by value in the recordingFailed signal.
+#include "../ui/dialogs/RecordingErrorPanel.h"
+
 class QAbstractButton;
 class QComboBox;
 class QBoxLayout;
@@ -167,6 +170,14 @@ class RecordPage : public QWidget {
     // error_phase: engine error phase string (non-empty on failure; "DiskSpace" for
     //   disk-monitor auto-stop, other values for engine failures).
     void recordingResultReady(bool succeeded, const QString& output_path, const QString& error_phase);
+
+    // RECORDING-ERROR-MODAL-R1: emitted on a recording FAILURE that is not the
+    // disk-space auto-stop (which has its own actionable "Storage running low"
+    // notification). MainWindow shows a modal RecordingErrorOverlay. Carries the
+    // full failure detail so the dialog can render phase/code/detail and offer an
+    // opt-in Sentry report. Independent of the show_notifications toast setting —
+    // a failed recording always warrants a prominent, dismissible dialog.
+    void recordingFailed(const ui::dialogs::RecordingErrorModel& model);
 
     // CAPTURE-FRAME-BUTTON-R1: emitted on a successful frame capture so MainWindow
     // can enqueue a "Frame saved" success toast.

@@ -182,6 +182,8 @@ class ConfigPage : public QWidget {
     void updateResponsiveLayout();
     void onContainerChanged(int id);
     void onVideoCodecChanged(int index);
+    void onVideoBitDepthChanged(int index);
+    void onVideoColorRangeChanged(int index);
     void onAudioCodecChanged(int index);
     void onProfileSelectionChanged(int index);
     void onQualityChanged(int index);
@@ -210,6 +212,12 @@ class ConfigPage : public QWidget {
     void emitCurrentVideoSettings();
     void reconcileContainerCodecRules();
     void updateVideoCodecChoices();
+    // Syncs the video bit-depth combo to the model and capability-gates the 10-bit
+    // item (selectable only for HEVC / AV1). Single source of truth: caps QueryCombo.
+    void updateVideoBitDepthControl();
+    // Syncs the colour-range combo to the model. NOT capability-gated — both Full
+    // and Limited are always valid; only the recording lock disables it.
+    void updateVideoColorRangeControl();
     void updateAudioCodecChoices();
     void updateFormatDisplay();
     void updateCompatCallout();
@@ -441,6 +449,12 @@ class ConfigPage : public QWidget {
     QButtonGroup* rate_control_group_ = nullptr;
     QWidget* bitrate_row_widget_ = nullptr;
     QSpinBox* bitrate_kbps_spin_ = nullptr;
+    // Video bit depth (0.7.0 — S7): 8-bit / 10-bit selector, capability-gated.
+    QWidget* video_bit_depth_row_ = nullptr;
+    QComboBox* video_bit_depth_combo_ = nullptr;
+    // Colour range (0.7.0): Full (PC) / Limited (TV) selector. Never gated.
+    QWidget* video_color_range_row_ = nullptr;
+    QComboBox* video_color_range_combo_ = nullptr;
 
     // PS-PHASE-C: Expert Audio section — mic gain, channel mode, bitrate, Opus params + placeholders.
     QWidget* audio_expert_section_ = nullptr;

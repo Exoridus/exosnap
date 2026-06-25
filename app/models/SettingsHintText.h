@@ -70,13 +70,16 @@ inline const QString kNoiseGate = QStringLiteral("Silences the mic when input fa
 inline const QString kAgc = QStringLiteral("Automatic gain control normalises mic loudness to the target level");
 inline const QString kRnnoise = QStringLiteral("Neural-network noise suppression \xC2\xB7 removes background noise");
 inline const QString kVideoCodec = QStringLiteral("Video compression codec for this recording");
+inline const QString kVideoBitDepth =
+    QStringLiteral("8-bit is universal \xC2\xB7 10-bit needs HEVC or AV1 (smoother gradients, larger files)");
+inline const QString kVideoColorRange =
+    QStringLiteral("Full = native screen precision, best for direct playback \xC2\xB7 Limited = broadcast "
+                   "standard, safest for editors/players that ignore the range flag");
 inline const QString kFrameTiming =
     QStringLiteral("CFR = constant frame rate for editor compatibility \xC2\xB7 VFR = variable");
 
 // ---- Skipped (control does not exist in current UI) ----
-// kVideoCodecHevc        — HEVC codec (0.7 wave)
 // kEncoderPreset         — NVENC P1–P7 (0.5 wave — no UI control yet)
-// kBitDepth              — 8/10-bit (0.7 wave)
 // kHdr10                 — HDR10 (0.7 wave)
 // kPerTrackGain          — per-track gain (0.6 wave)
 // kMute                  — per-track mute (0.6 wave)

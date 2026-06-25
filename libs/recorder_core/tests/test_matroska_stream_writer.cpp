@@ -201,6 +201,46 @@ std::vector<uint8_t> FakeFlacCp() {
     return cp;
 }
 
+// Read an unsigned big-endian EBML integer from a node's data bytes.
+uint64_t ReadUInt(const std::vector<uint8_t>& d, const EbmlNode& n) {
+    uint64_t v = 0;
+    for (uint64_t i = 0; i < n.data_size; ++i)
+        v = (v << 8) | d[n.data_off + static_cast<size_t>(i)];
+    return v;
+}
+
+// Navigate Segment -> Tracks -> first video TrackEntry -> Video -> Colour and
+// return the Colour element's children. Empty if any level is missing.
+std::vector<EbmlNode> VideoColourChildren(const std::vector<uint8_t>& d) {
+    constexpr uint64_t kIdTrackEntry = 0xAEULL;
+    constexpr uint64_t kIdTrackVideo = 0xE0ULL;
+    constexpr uint64_t kIdColour = 0x55B0ULL;
+    for (const auto& seg : SegmentChildren(d)) {
+        if (seg.id != kIdTracks)
+            continue;
+        for (const auto& te : ParseChildren(d, seg.data_off, seg.data_off + seg.data_size)) {
+            if (te.id != kIdTrackEntry)
+                continue;
+            for (const auto& tc : ParseChildren(d, te.data_off, te.data_off + te.data_size)) {
+                if (tc.id != kIdTrackVideo)
+                    continue;
+                for (const auto& vc : ParseChildren(d, tc.data_off, tc.data_off + tc.data_size)) {
+                    if (vc.id == kIdColour)
+                        return ParseChildren(d, vc.data_off, vc.data_off + vc.data_size);
+                }
+            }
+        }
+    }
+    return {};
+}
+
+const EbmlNode* FindColourChild(const std::vector<EbmlNode>& colour, uint64_t id) {
+    for (const auto& c : colour)
+        if (c.id == id)
+            return &c;
+    return nullptr;
+}
+
 MatroskaStreamConfig MakeConfig(const std::string& path, bool h264, bool opus) {
     MatroskaStreamConfig c;
     c.output_path = path;
@@ -517,6 +557,83 @@ TEST_F(StreamWriterTest, EmptySession_FinalizesValidContainer) {
     EXPECT_TRUE(HasLevel1(d, kIdTracks));
     EXPECT_TRUE(SegmentSizeIsFinite(d));
     EXPECT_EQ(CountCuePoints(d), 0);
+}
+
+// Color metadata (ADR 0032): the video track carries an SDR BT.709 full-range
+// 8-bit Colour element by default (Full is the PC/screen-content default for
+// 0.7.0), so the file is no longer color-ambiguous and no HDR sub-elements are
+// emitted.
+TEST_F(StreamWriterTest, WritesBt709ColourElementByDefault) {
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(MakeConfig(tmp_, /*h264=*/false, /*opus=*/true)));
+    FeedSeconds(w, 1.0, 30, 64);
+    ASSERT_TRUE(w.Finalize());
+
+    const auto d = ReadFile(tmp_);
+    const auto colour = VideoColourChildren(d);
+    ASSERT_FALSE(colour.empty()) << "video track has no Colour element";
+
+    const EbmlNode* primaries = FindColourChild(colour, 0x55BBULL);
+    const EbmlNode* transfer = FindColourChild(colour, 0x55BAULL);
+    const EbmlNode* matrix = FindColourChild(colour, 0x55B1ULL);
+    const EbmlNode* range = FindColourChild(colour, 0x55B9ULL);
+    const EbmlNode* bits = FindColourChild(colour, 0x55B2ULL);
+    ASSERT_NE(primaries, nullptr);
+    ASSERT_NE(transfer, nullptr);
+    ASSERT_NE(matrix, nullptr);
+    ASSERT_NE(range, nullptr);
+    ASSERT_NE(bits, nullptr);
+    EXPECT_EQ(ReadUInt(d, *primaries), 1u); // BT.709
+    EXPECT_EQ(ReadUInt(d, *transfer), 1u);  // BT.709
+    EXPECT_EQ(ReadUInt(d, *matrix), 1u);    // BT.709
+    EXPECT_EQ(ReadUInt(d, *range), 2u);     // full range (PC default for 0.7.0)
+    EXPECT_EQ(ReadUInt(d, *bits), 8u);
+    EXPECT_EQ(FindColourChild(colour, 0x55BCULL), nullptr) << "MaxCLL must be absent for SDR";
+    EXPECT_EQ(FindColourChild(colour, 0x55BDULL), nullptr) << "MaxFALL must be absent for SDR";
+}
+
+// Non-default color values (including HDR10 light levels) round-trip into the
+// Colour element — the model is ready for the HDR slice.
+TEST_F(StreamWriterTest, WritesConfiguredColourValuesIncludingHdr) {
+    auto cfg = MakeConfig(tmp_, /*h264=*/false, /*opus=*/true);
+    cfg.color.primaries = recorder_core::ColorPrimaries::Bt2020;
+    cfg.color.transfer = recorder_core::TransferCharacteristics::SmpteSt2084;
+    cfg.color.matrix = recorder_core::MatrixCoefficients::Bt2020Ncl;
+    cfg.color.range = recorder_core::ColorRange::Full;
+    cfg.color.bits_per_channel = 10;
+    cfg.color.hdr = true;
+    cfg.color.max_content_light_level = 1000;
+    cfg.color.max_frame_average_light_level = 400;
+
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(cfg));
+    FeedSeconds(w, 1.0, 30, 64);
+    ASSERT_TRUE(w.Finalize());
+
+    const auto d = ReadFile(tmp_);
+    const auto colour = VideoColourChildren(d);
+    ASSERT_FALSE(colour.empty());
+    const EbmlNode* primaries = FindColourChild(colour, 0x55BBULL);
+    const EbmlNode* transfer = FindColourChild(colour, 0x55BAULL);
+    const EbmlNode* matrix = FindColourChild(colour, 0x55B1ULL);
+    const EbmlNode* range = FindColourChild(colour, 0x55B9ULL);
+    const EbmlNode* bits = FindColourChild(colour, 0x55B2ULL);
+    const EbmlNode* maxcll = FindColourChild(colour, 0x55BCULL);
+    const EbmlNode* maxfall = FindColourChild(colour, 0x55BDULL);
+    ASSERT_NE(primaries, nullptr);
+    ASSERT_NE(transfer, nullptr);
+    ASSERT_NE(matrix, nullptr);
+    ASSERT_NE(range, nullptr);
+    ASSERT_NE(bits, nullptr);
+    ASSERT_NE(maxcll, nullptr);
+    ASSERT_NE(maxfall, nullptr);
+    EXPECT_EQ(ReadUInt(d, *primaries), 9u); // BT.2020
+    EXPECT_EQ(ReadUInt(d, *transfer), 16u); // PQ (SMPTE ST 2084)
+    EXPECT_EQ(ReadUInt(d, *matrix), 9u);    // BT.2020 NCL
+    EXPECT_EQ(ReadUInt(d, *range), 2u);     // full range
+    EXPECT_EQ(ReadUInt(d, *bits), 10u);
+    EXPECT_EQ(ReadUInt(d, *maxcll), 1000u);
+    EXPECT_EQ(ReadUInt(d, *maxfall), 400u);
 }
 
 // 9. Multi-cluster: a long recording splits into multiple clusters (2 s rule).

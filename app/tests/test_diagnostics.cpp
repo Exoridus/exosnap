@@ -79,6 +79,28 @@ TEST(CapabilitySummaryTest, FromCapabilitySet_ReportsNvenc) {
     EXPECT_TRUE(found_nvenc);
 }
 
+TEST(CapabilitySummaryTest, FromCapabilitySet_ReportsPerDisplayHdr) {
+    capability::CapabilitySet caps;
+    capability::DisplayHdrFacts disp;
+    disp.name = "\\\\.\\DISPLAY7";
+    disp.hdr_active = false;
+    disp.bits_per_color = 10;
+    disp.max_luminance_nits = 1499.0f;
+    caps.runtime.displays.push_back(disp);
+
+    auto summary = CapabilitySummary::FromCapabilitySet(caps);
+    bool found = false;
+    for (const auto& entry : summary.entries) {
+        if (entry.label == "\\\\.\\DISPLAY7") {
+            found = true;
+            EXPECT_NE(entry.value.find("HDR off"), std::string::npos);
+            EXPECT_NE(entry.value.find("10-bit"), std::string::npos);
+            EXPECT_NE(entry.value.find("1499 nits"), std::string::npos);
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
 TEST(CapabilitySummaryTest, FromCapabilitySet_ReportsVideoCodecs) {
     capability::CapabilitySet caps;
     caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};
@@ -244,6 +266,22 @@ TEST(ConfigSummaryTest, UserConfigFromSettings_UsesActiveOutputSelection) {
     EXPECT_EQ(config.bit_depth, capability::BitDepth::Bit8);
     EXPECT_EQ(config.frame_rate_num, 60u);
     EXPECT_EQ(config.frame_rate_den, 1u);
+}
+
+// 0.7.0 — S7: the selected video bit depth flows into UserRecorderConfig.bit_depth
+// (was hardcoded to Bit8 before this slice).
+TEST(ConfigSummaryTest, UserConfigFromSettings_UsesSelectedVideoBitDepth) {
+    OutputSettingsModel output;
+    output.container = capability::Container::Matroska;
+    output.video_codec = capability::VideoCodec::HevcNvenc;
+    output.audio_codec = capability::AudioCodec::Opus;
+    output.bit_depth = capability::BitDepth::Bit10;
+
+    VideoSettingsModel video;
+
+    const capability::UserRecorderConfig config = UserConfigFromSettings(output, video);
+    EXPECT_EQ(config.video_codec, capability::VideoCodec::HevcNvenc);
+    EXPECT_EQ(config.bit_depth, capability::BitDepth::Bit10);
 }
 
 TEST(ConfigSummaryTest, UserConfigFromSettings_MapsMp4H264AacProfileSelection) {

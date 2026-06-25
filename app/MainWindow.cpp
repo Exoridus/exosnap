@@ -22,6 +22,7 @@
 #include "ui/dialogs/AboutOverlay.h"
 #include "ui/dialogs/CrashReportOverlay.h"
 #include "ui/dialogs/PresetManageOverlay.h"
+#include "ui/dialogs/RecordingErrorOverlay.h"
 #include "ui/dialogs/RecoveryOverlay.h"
 #include "ui/dialogs/SourcePickerOverlay.h"
 #include "ui/dialogs/UpdateSettingsPanel.h"
@@ -1380,6 +1381,51 @@ void MainWindow::openCrashReportOverlay() {
     });
 
     crash_overlay_->openOverlay();
+}
+
+void MainWindow::openRecordingErrorOverlay(ui::dialogs::RecordingErrorModel model) {
+    // Replace any overlay still on screen from a previous failed attempt.
+    if (recording_error_overlay_ != nullptr) {
+        recording_error_overlay_->closeOverlay();
+        recording_error_overlay_->deleteLater();
+        recording_error_overlay_ = nullptr;
+    }
+
+    // The "Send report" action is only meaningful in an official build with a
+    // compiled-in DSN and an active engine; self-builds never phone home.
+    model.can_send_report = crash_capture::IsActive();
+
+    recording_error_overlay_ = new ui::dialogs::RecordingErrorOverlay(model, centralWidget());
+    recording_error_overlay_->hide();
+
+    connect(recording_error_overlay_, &ui::dialogs::RecordingErrorOverlay::sendReportRequested, this, [this, model]() {
+        // Clicking Send is the explicit opt-in: grant consent (dormant w/o
+        // DSN), attach allow-listed codec context, then forward a scrubbed,
+        // non-fatal report. Paths in `detail` are stripped inside crash_capture.
+        crash_capture::GiveUserConsent();
+        crash_capture::SetEncoderContext("nvenc", model.container.toStdString(), model.video_codec.toStdString(),
+                                         model.audio_codec.toStdString());
+        crash_capture::ReportNonFatalError(model.phase.toStdString(), model.detail.toStdString());
+        diagnostics::AppLog::info(QStringLiteral("record.failure"),
+                                  QStringLiteral("user sent error report phase=%1").arg(model.phase));
+        if (recording_error_overlay_)
+            recording_error_overlay_->closeOverlay();
+    });
+
+    connect(recording_error_overlay_, &ui::dialogs::RecordingErrorOverlay::openLogsRequested, this, [this]() {
+        if (recording_error_overlay_)
+            recording_error_overlay_->closeOverlay();
+        navigateToPage(kLogsPageIndex);
+    });
+
+    connect(recording_error_overlay_, &ui::dialogs::RecordingErrorOverlay::closed, this, [this]() {
+        if (recording_error_overlay_) {
+            recording_error_overlay_->deleteLater();
+            recording_error_overlay_ = nullptr;
+        }
+    });
+
+    recording_error_overlay_->openOverlay();
 }
 
 MainWindow::~MainWindow() {
@@ -3138,6 +3184,13 @@ void MainWindow::initNotificationToasts() {
     // Destroyed explicitly in ~MainWindow().
     notification_toast_window_ = new ui::overlay::NotificationToastWindow(notification_manager_, nullptr);
 
+    // The toast is now interactive: an action-pill click routes here so the toast
+    // reuses the existing destinations (folder/reveal/recovery/about/settings)
+    // instead of duplicating action logic. The manager has already dismissed the
+    // toast by the time this fires.
+    connect(notification_toast_window_, &ui::overlay::NotificationToastWindow::actionTriggered, this,
+            &MainWindow::dispatchNotificationAction);
+
     // Populate the Settings page checkbox from the persisted setting.
     if (config_page_)
         config_page_->setShowNotifications(persisted_settings_.show_notifications);
@@ -3195,18 +3248,20 @@ void MainWindow::initNotificationToasts() {
                         refreshHubUnreadBell();
                     }
                 } else {
-                    // Trigger 3: unexpected engine failure — "Recording stopped unexpectedly" (error, sticky).
-                    // Mappe spec: action "Show file" (primary).
-                    event.type = notifications::NotificationType::UnexpectedStop;
-                    event.title = QStringLiteral("Recording stopped unexpectedly");
-                    event.body = error_phase.isEmpty()
-                                     ? QStringLiteral("An error occurred during recording.")
-                                     : QStringLiteral("Disk write failed. A partial file was recovered.");
-                    event.action = notifications::NotificationAction::ShowFile;
-                    event.action_payload = output_path; // path to the partial file if available
+                    // RECORDING-ERROR-MODAL-R1: a non-disk-space failure is now surfaced
+                    // by the modal RecordingErrorOverlay (RecordPage::recordingFailed), so
+                    // we no longer enqueue a redundant "stopped unexpectedly" toast here.
+                    // The modal carries the full detail and the opt-in error report.
+                    return;
                 }
                 notification_manager_->Enqueue(std::move(event));
             });
+
+    // ── RECORDING-ERROR-MODAL-R1: modal failure dialog ──
+    // A non-disk-space recording failure opens a prominent modal with the failure
+    // detail and an opt-in error report. Independent of show_notifications.
+    connect(record_page_, &RecordPage::recordingFailed, this,
+            [this](const ui::dialogs::RecordingErrorModel& model) { openRecordingErrorOverlay(model); });
 
     // ── CAPTURE-FRAME-BUTTON-R1: "Frame saved" success toast ──
     // Triggered by RecordPage::captureFrameSaved when a frame PNG is written.
@@ -3243,6 +3298,64 @@ void MainWindow::updateNotificationToastsEnabled() {
     // auto-hides when the manager's visible set is empty.
     if (!persisted_settings_.show_notifications && notification_toast_window_) {
         notification_toast_window_->hide();
+    }
+}
+
+void MainWindow::dispatchNotificationAction(const notifications::NotificationEvent& event,
+                                            notifications::NotificationAction action) {
+    using notifications::NotificationAction;
+    switch (action) {
+    case NotificationAction::OpenFolder: {
+        // Payload is the saved file (or folder). Open its containing folder —
+        // mirrors RecordPage::openOutputFolder's QDesktopServices folder path.
+        const QString path = event.action_payload.trimmed();
+        if (path.isEmpty())
+            return;
+        const QFileInfo info(path);
+        const QString folder = info.isDir() ? info.absoluteFilePath() : info.absolutePath();
+        if (!folder.isEmpty())
+            QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+        break;
+    }
+    case NotificationAction::ShowFile: {
+        // Reveal the partial file. Open the file directly when it exists, else its
+        // folder — same QDesktopServices reveal path the result actions already use.
+        const QString path = event.action_payload.trimmed();
+        if (path.isEmpty())
+            return;
+        const QFileInfo info(path);
+        if (info.exists() && info.isFile())
+            QDesktopServices::openUrl(QUrl::fromLocalFile(info.absoluteFilePath()));
+        else if (!info.absolutePath().isEmpty())
+            QDesktopServices::openUrl(QUrl::fromLocalFile(info.absolutePath()));
+        break;
+    }
+    case NotificationAction::ChangeFolder: {
+        // Route to Settings → Output, identical to the low-disk hub deep-link.
+        navigateToPage(kSettingsPageIndex);
+        if (config_page_)
+            config_page_->scrollToSection(QStringLiteral("settings/output"));
+        break;
+    }
+    case NotificationAction::OpenRecovery: {
+        // Reopen the recovery overlay if it still exists; otherwise land on Record.
+        if (recovery_overlay_ != nullptr)
+            recovery_overlay_->openOverlay();
+        else
+            navigateToPage(kRecordPageIndex);
+        break;
+    }
+    case NotificationAction::OpenUpdate: {
+        // The update panel lives in the About overlay (same as the hub's update-view).
+        if (about_overlay_)
+            about_overlay_->openOverlay();
+        break;
+    }
+    case NotificationAction::Discard:
+    case NotificationAction::None:
+    default:
+        // No navigation — the toast was already dismissed by the manager.
+        break;
     }
 }
 

@@ -1734,6 +1734,20 @@ void RecordingCoordinator::SetOutputSettings(const OutputSettingsModel& settings
     resolved_user_config_.container = output_settings_.container;
     resolved_user_config_.video_codec = output_settings_.video_codec;
     resolved_user_config_.audio_codec = output_settings_.audio_codec;
+    // Video bit depth (0.7.0): flows to UserRecorderConfig.bit_depth so the engine
+    // tags 10-bit (HEVC Main10 / AV1 10-bit P010) when selected. ReconcileContainerCodecs
+    // above may have forced H.264 for the container; reset to 8-bit when the resolved
+    // codec cannot carry 10-bit (the resolver applies the same Bit8 fallback).
+    if (output_settings_.bit_depth == capability::BitDepth::Bit10 &&
+        output_settings_.video_codec != capability::VideoCodec::HevcNvenc &&
+        output_settings_.video_codec != capability::VideoCodec::Av1Nvenc) {
+        output_settings_.bit_depth = capability::BitDepth::Bit8;
+    }
+    resolved_user_config_.bit_depth = output_settings_.bit_depth;
+    // Colour range (0.7.0): always valid for every codec/container, so it flows
+    // straight through (no reconcile) to UserRecorderConfig.color_range and on to
+    // the engine's ColorMetadata.range.
+    resolved_user_config_.color_range = output_settings_.color_range;
     ApplyOutputSettingsToUserConfig(resolved_user_config_, output_settings_);
 
     // Translate the UI split policy into the engine settings applied at start.

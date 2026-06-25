@@ -158,6 +158,35 @@ bool MatroskaStreamWriter::Open(const MatroskaStreamConfig& config) {
                                               static_cast<uint64_t>(m_config.frame_rate_num);
                 libebml::GetChild<libmatroska::KaxTrackDefaultDuration>(vid).SetValue(frame_dur_ns);
             }
+
+            // Colour description (ADR 0032). Written for every recording so the
+            // file is no longer color-ambiguous; the values match the BT.709
+            // limited-range conversion the VideoProcessor performs in
+            // video_thread.cpp. HDR sub-elements are emitted only when set.
+            {
+                auto& colour = libebml::GetChild<libmatroska::KaxVideoColour>(vs);
+                libebml::GetChild<libmatroska::KaxVideoColourPrimaries>(colour).SetValue(
+                    static_cast<uint64_t>(m_config.color.primaries));
+                libebml::GetChild<libmatroska::KaxVideoColourTransferCharacter>(colour).SetValue(
+                    static_cast<uint64_t>(m_config.color.transfer));
+                libebml::GetChild<libmatroska::KaxVideoColourMatrix>(colour).SetValue(
+                    static_cast<uint64_t>(m_config.color.matrix));
+                libebml::GetChild<libmatroska::KaxVideoColourRange>(colour).SetValue(
+                    static_cast<uint64_t>(m_config.color.range));
+                libebml::GetChild<libmatroska::KaxVideoBitsPerChannel>(colour).SetValue(
+                    static_cast<uint64_t>(m_config.color.bits_per_channel));
+                if (m_config.color.hdr) {
+                    if (m_config.color.max_content_light_level > 0) {
+                        libebml::GetChild<libmatroska::KaxVideoColourMaxCLL>(colour).SetValue(
+                            static_cast<uint64_t>(m_config.color.max_content_light_level));
+                    }
+                    if (m_config.color.max_frame_average_light_level > 0) {
+                        libebml::GetChild<libmatroska::KaxVideoColourMaxFALL>(colour).SetValue(
+                            static_cast<uint64_t>(m_config.color.max_frame_average_light_level));
+                    }
+                }
+            }
+
             vid.SetGlobalTimecodeScale(kTimecodeScaleNs);
             m_track_entries.push_back(&vid);
         }

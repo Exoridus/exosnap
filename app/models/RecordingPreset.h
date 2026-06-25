@@ -16,7 +16,7 @@ namespace exosnap {
 // ---------------------------------------------------------------------------
 // Schema version — bump when the persisted format changes incompatibly.
 // ---------------------------------------------------------------------------
-inline constexpr int kPresetSchemaVersion = 16;
+inline constexpr int kPresetSchemaVersion = 18;
 
 // Default PiP inset (bottom-right corner), as a fraction of the frame edge.
 inline constexpr float kDefaultPipInsetNorm = 0.03f;
@@ -94,13 +94,11 @@ struct RecordingPreset {
 
 // Reconciles the codec fields of `output` to be valid for its container.
 // Rules (delegated to ContainerCompatRegistry::ReconcileCodecs, ADR 0010):
-//   MP4  → video forced to H264Nvenc (AV1/HEVC not supported);
-//           audio forced to AacMf; PCM is deferred for MP4 (libavformat emits
-//           ipcm, limited player support — ADR 0030); Opus/FLAC Prohibited →
-//           forced to AAC.
-//   WebM → Av1Nvenc + Opus (forced); AAC/PCM/FLAC Prohibited in WebM.
-//   MKV  → AV1/H.264 + Opus/AAC/PCM/FLAC all Allowed or Recommended;
-//           HEVC is Experimental (not selectable) → falls back to AV1 + Opus.
+//   MP4  → H.264 (Recommended) or HEVC (Allowed via hvc1 remux, 0.7.0) kept;
+//           AV1 is deferred → falls back. Audio forced to AacMf (Opus/PCM/FLAC
+//           Prohibited or deferred in MP4 — ADR 0010/0030).
+//   WebM → Av1Nvenc + Opus (forced); AAC/PCM/FLAC and H.264/HEVC Prohibited.
+//   MKV  → AV1/H.264/HEVC + Opus/AAC/PCM/FLAC all Allowed or Recommended.
 void ReconcileContainerCodecs(OutputSettingsModel& output);
 
 // ---------------------------------------------------------------------------

@@ -78,8 +78,14 @@ SupportAnnotation StaticMatrixAnnotation(Container c, VideoCodec v, AudioCodec a
         return base;
     }
 
-    if (cs != ChromaSubsampling::Cs420 || bd != BitDepth::Bit8) {
-        return {SupportLevel::NotImplemented, "Only 4:2:0 / 8-bit is implemented for current validated paths."};
+    if (cs != ChromaSubsampling::Cs420) {
+        return {SupportLevel::NotImplemented, "Only 4:2:0 chroma is implemented for current validated paths."};
+    }
+
+    // 8-bit is universal. 10-bit (HEVC Main10 / AV1 10-bit, P010, SDR BT.709 — 0.7.0 S5)
+    // is implemented only for the NVENC HEVC and AV1 codecs; H.264 stays 8-bit only.
+    if (bd == BitDepth::Bit10 && v != VideoCodec::HevcNvenc && v != VideoCodec::Av1Nvenc) {
+        return {SupportLevel::NotImplemented, "10-bit requires the HEVC or AV1 codec; H.264 is 8-bit only."};
     }
 
     return base;

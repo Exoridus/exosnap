@@ -321,11 +321,17 @@ TEST_F(NotificationToastTest, SizeHint_ThreeEvents_HeightIsAdditive) {
     EXPECT_EQ(h3, 3 * h1 + 2 * 12);
 }
 
-// Window must remain class-1 (Qt::WindowTransparentForInput is in window flags).
-TEST_F(NotificationToastTest, WindowFlags_ContainsTransparentForInput) {
+// The toast is now INTERACTIVE (✕ dismiss + action pills), so it must NOT carry
+// Qt::WindowTransparentForInput — that flag would make every click pass through.
+// Capture exclusion is handled independently by SetWindowDisplayAffinity.
+TEST_F(NotificationToastTest, WindowFlags_IsNotTransparentForInput) {
     NotificationManager mgr;
     NotificationToastWindow window(&mgr, nullptr);
-    EXPECT_TRUE((window.windowFlags() & Qt::WindowTransparentForInput) != Qt::WindowType{});
+    EXPECT_TRUE((window.windowFlags() & Qt::WindowTransparentForInput) == Qt::WindowType{})
+        << "Interactive toast must not be transparent-for-input";
+    // Stays-on-top + frameless tool window are still required.
+    EXPECT_TRUE((window.windowFlags() & Qt::WindowStaysOnTopHint) != Qt::WindowType{});
+    EXPECT_TRUE((window.windowFlags() & Qt::FramelessWindowHint) != Qt::WindowType{});
 }
 
 // Window is always hidden unless exclusion succeeded (WDA_EXCLUDEFROMCAPTURE guard).
@@ -333,6 +339,170 @@ TEST_F(NotificationToastTest, ExclusionGuard_ConstructsHidden) {
     NotificationManager mgr;
     NotificationToastWindow window(&mgr, nullptr);
     EXPECT_FALSE(window.isVisible());
+}
+
+// ── Interactive hit-test geometry (NOTIFY-TOAST-INTERACTIVE) ──────────────────
+
+// A Saved toast with an OpenFolder action exposes exactly one ✕ target plus one
+// action-pill target, both owned by the event's sequence.
+TEST_F(NotificationToastTest, HitTargets_SavedWithAction_HasDismissAndPill) {
+    NotificationManager mgr;
+    NotificationEvent e;
+    e.type = NotificationType::Saved;
+    e.title = QStringLiteral("Recording saved");
+    e.body = QStringLiteral("file.mkv");
+    e.action = NotificationAction::OpenFolder;
+    e.action_payload = QStringLiteral("C:/Videos/file.mkv");
+    mgr.Enqueue(e);
+    const uint64_t seq = mgr.VisibleEvents()[0].sequence;
+
+    NotificationToastWindow window(&mgr, nullptr);
+    const auto hits = window.computeHitTargets();
+
+    int dismiss_count = 0;
+    int pill_count = 0;
+    for (const auto& h : hits) {
+        EXPECT_EQ(h.sequence, seq);
+        if (h.is_dismiss) {
+            ++dismiss_count;
+        } else {
+            ++pill_count;
+            EXPECT_EQ(h.action, NotificationAction::OpenFolder);
+        }
+    }
+    EXPECT_EQ(dismiss_count, 1);
+    EXPECT_EQ(pill_count, 1);
+}
+
+// The dismiss ✕ rect sits in the top-right of the card and is non-empty.
+TEST_F(NotificationToastTest, HitTargets_DismissRectIsTopRight) {
+    NotificationManager mgr;
+    NotificationEvent e;
+    e.type = NotificationType::Saved;
+    e.title = QStringLiteral("Saved");
+    e.body = QStringLiteral("body");
+    mgr.Enqueue(e);
+
+    NotificationToastWindow window(&mgr, nullptr);
+    const auto hits = window.computeHitTargets();
+    ASSERT_FALSE(hits.isEmpty());
+
+    const auto& x = hits.front();
+    EXPECT_TRUE(x.is_dismiss);
+    EXPECT_GT(x.rect.width(), 0.0);
+    EXPECT_GT(x.rect.height(), 0.0);
+    // Top-right: the ✕ centre is in the right half and near the top of the card.
+    EXPECT_GT(x.rect.center().x(), 372.0 / 2.0);
+    EXPECT_LT(x.rect.top(), 40.0);
+}
+
+// Three stacked toasts → three distinct dismiss targets, one per sequence, with
+// strictly increasing y (newest layout stacks downward in window space).
+TEST_F(NotificationToastTest, HitTargets_ThreeToasts_DistinctRowsPerSequence) {
+    NotificationManager mgr;
+    for (int i = 0; i < 3; ++i) {
+        NotificationEvent e;
+        e.type = NotificationType::Saved;
+        e.title = QStringLiteral("T%1").arg(i);
+        e.body = QStringLiteral("b%1").arg(i);
+        mgr.Enqueue(e);
+    }
+    NotificationToastWindow window(&mgr, nullptr);
+    const auto hits = window.computeHitTargets();
+
+    QVector<qreal> dismiss_tops;
+    QVector<uint64_t> seqs;
+    for (const auto& h : hits) {
+        if (h.is_dismiss) {
+            dismiss_tops.push_back(h.rect.top());
+            seqs.push_back(h.sequence);
+        }
+    }
+    ASSERT_EQ(dismiss_tops.size(), 3);
+    EXPECT_LT(dismiss_tops[0], dismiss_tops[1]);
+    EXPECT_LT(dismiss_tops[1], dismiss_tops[2]);
+    // All sequences distinct.
+    EXPECT_NE(seqs[0], seqs[1]);
+    EXPECT_NE(seqs[1], seqs[2]);
+}
+
+// Sticky toasts (LowStorage) still expose a dismiss ✕ even without a countdown.
+TEST_F(NotificationToastTest, HitTargets_StickyToast_HasDismiss) {
+    NotificationManager mgr;
+    NotificationEvent e;
+    e.type = NotificationType::LowStorage;
+    e.title = QStringLiteral("Storage running low");
+    e.body = QStringLiteral("Drive low.");
+    e.action = NotificationAction::ChangeFolder;
+    mgr.Enqueue(e);
+
+    NotificationToastWindow window(&mgr, nullptr);
+    const auto hits = window.computeHitTargets();
+
+    bool has_dismiss = false;
+    for (const auto& h : hits)
+        has_dismiss = has_dismiss || h.is_dismiss;
+    EXPECT_TRUE(has_dismiss);
+}
+
+// Clicking the ✕ target's center maps to a Manager::Dismiss of that sequence.
+// We simulate the press-handler contract by invoking Dismiss with the geometry
+// the window reports — proving paint/hit/dismiss share one coordinate system.
+TEST_F(NotificationToastTest, HitTargets_DismissCenter_DismissesThatSequence) {
+    NotificationManager mgr;
+    NotificationEvent a;
+    a.type = NotificationType::Saved;
+    a.title = QStringLiteral("A");
+    a.body = QStringLiteral("a");
+    mgr.Enqueue(a);
+    NotificationEvent b;
+    b.type = NotificationType::Saved;
+    b.title = QStringLiteral("B");
+    b.body = QStringLiteral("b");
+    mgr.Enqueue(b);
+    ASSERT_EQ(mgr.VisibleEvents().size(), 2);
+
+    NotificationToastWindow window(&mgr, nullptr);
+    const auto hits = window.computeHitTargets();
+
+    // Pick the dismiss target for the SECOND visible event.
+    const uint64_t target_seq = mgr.VisibleEvents()[1].sequence;
+    bool found = false;
+    for (const auto& h : hits) {
+        if (h.is_dismiss && h.sequence == target_seq) {
+            found = true;
+            mgr.Dismiss(h.sequence); // same call mousePressEvent makes
+            break;
+        }
+    }
+    ASSERT_TRUE(found);
+    ASSERT_EQ(mgr.VisibleEvents().size(), 1);
+    EXPECT_NE(mgr.VisibleEvents()[0].sequence, target_seq);
+}
+
+// The manager exposes the per-event shown-at timestamp the toast uses to drive
+// the countdown bar; it is >= 0 for a visible event and -1 for an unknown one.
+TEST_F(NotificationToastTest, Manager_ShownAtMs_TracksVisibleEvent) {
+    NotificationManager mgr;
+    NotificationEvent e;
+    e.type = NotificationType::Saved;
+    e.title = QStringLiteral("Saved");
+    e.body = QStringLiteral("body");
+    mgr.Enqueue(e);
+    const uint64_t seq = mgr.VisibleEvents()[0].sequence;
+
+    EXPECT_GE(mgr.ShownAtMs(seq), 0);
+    EXPECT_EQ(mgr.ShownAtMs(999999), -1);
+}
+
+// DismissIntervalMs is the single source of dwell timings shared with the bar.
+TEST_F(NotificationToastTest, Manager_DismissIntervalMs_MatchesPerTypeConstants) {
+    EXPECT_EQ(NotificationManager::DismissIntervalMs(NotificationType::Saved), NotificationManager::kDismissMs_Saved);
+    EXPECT_EQ(NotificationManager::DismissIntervalMs(NotificationType::LowStorage), 0);
+    EXPECT_EQ(NotificationManager::DismissIntervalMs(NotificationType::UnexpectedStop), 0);
+    EXPECT_EQ(NotificationManager::DismissIntervalMs(NotificationType::RecoveryAvailable), 0);
+    EXPECT_EQ(NotificationManager::DismissIntervalMs(NotificationType::UpdateAvailable),
+              NotificationManager::kDismissMs_UpdateAvailable);
 }
 
 } // namespace

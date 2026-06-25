@@ -21,6 +21,10 @@ the next-launch path is the sole surface. **Symbol upload via `sentry-cli` (Cras
 pending a Sentry auth token; in the interim, release PDBs are archived as CI artifacts for
 offline symbolication.
 
+**Updated 2026-06 (0.7.0 — non-fatal recording-error reporting):** The same consent-gated,
+scrubbed pipeline is extended to **non-fatal recording failures** (a failed Record attempt, not a
+process crash). See *Non-fatal recording errors reuse the crash pipeline* below.
+
 ## Context
 
 ExoSnap is a native C++/Qt application doing real-time capture, encode, and mux. The defects
@@ -202,6 +206,37 @@ is the **offline** symbolication path and ships in 0.4.0. **Automated `sentry-cl
 the Sentry org/project `exosnap` (so server-side minidump symbolication "just works") is deferred
 (Crash C)** — it needs a Sentry auth token provisioned as a CI secret. A `TODO(Crash-C)` in the
 release workflow marks the exact insertion point.
+
+### Non-fatal recording errors reuse the crash pipeline
+
+A *recording failure* (validation rejects the config, the encoder/muxer aborts mid-session) is
+recoverable and the process is still alive to draw its own UI — so it is **not** a Crashpad crash.
+But the same privacy machinery applies, so it reuses this architecture rather than inventing a
+parallel one:
+
+- **Surface — in-window modal, not a toast.** A failed Record attempt opens a modal
+  `RecordingErrorOverlay` (a scrim + centered card parented to the central widget, mirroring the
+  crash overlay / AboutOverlay; no native OS dialog). It shows a plain warning, the failure
+  **phase / HRESULT / detail**, and the container/codec in play. This replaces the prior
+  fire-and-forget "stopped unexpectedly" toast for engine failures, which was easy to miss or
+  mistake for the (coral) recording chrome. The **disk-space auto-stop keeps its own actionable
+  "Storage running low" notification** and is *not* routed to this modal — it is a user-actionable
+  condition, not a defect.
+- **Report API — `crash_capture::ReportNonFatalError(phase, detail)`.** A new UI-agnostic entry
+  point emits a structured Sentry **message event** (`SENTRY_LEVEL_ERROR`, logger
+  `recording.failure`). Because the `before_send` hook scrubs exception/tag fields but **not** the
+  message body, this function **pre-scrubs both arguments via `ScrubString`** before they leave the
+  process — a path leaking through `detail` (e.g. "output directory does not exist: C:\Users\…")
+  would otherwise upload raw. Container/codec context rides along as the existing allow-listed tags
+  (`SetEncoderContext`).
+- **Same gates.** No-op without a compiled-in DSN (`EXOSNAP_OFFICIAL_BUILD`) and without consent;
+  sentry-native suppresses capture until `GiveUserConsent()`. The modal's **"Send report" action is
+  hidden entirely when `crash_capture::IsActive()` is false** (every self-build), so the opt-in is
+  never offered where it cannot function. The user clicking Send *is* the per-report opt-in, exactly
+  as in the crash dialog.
+
+This keeps one privacy story (allow-list, scrub-before-send, consent gate, official-build gate) for
+both fatal and non-fatal diagnostics.
 
 ### Official-build gating
 

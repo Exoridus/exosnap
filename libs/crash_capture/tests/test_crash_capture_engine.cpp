@@ -246,6 +246,27 @@ TEST_F(CrashEngineLifecycleTest, SetEncoderContextDoesNotCrash) {
     EXPECT_NO_FATAL_FAILURE(SetEncoderContext("nvenc", "mkv", "av1", "opus"));
 }
 
+TEST_F(CrashEngineLifecycleTest, ReportNonFatalErrorDoesNotCrashBeforeInit) {
+    Shutdown();
+    // Reporting before Initialize() must be a safe no-op (no DSN, no consent).
+    EXPECT_NO_FATAL_FAILURE(ReportNonFatalError("Validate", "Container::Matroska requires VideoCodec"));
+}
+
+TEST_F(CrashEngineLifecycleTest, ReportNonFatalErrorWithPathLikeDetailDoesNotCrash) {
+    CrashCaptureConfig cfg;
+    cfg.crash_dir = crash_dir_;
+    cfg.handler_exe_path = ResolveHandlerExePath();
+    cfg.app_version = "0.4.0";
+    Initialize(cfg);
+
+    // A path-bearing detail must be accepted and scrubbed internally (the message
+    // body is pre-scrubbed before any upload). Without sentry-native linked this
+    // is a no-op, but it must never crash regardless of the argument content.
+    EXPECT_NO_FATAL_FAILURE(
+        ReportNonFatalError("Prepare", "output directory does not exist: C:\\Users\\Alice\\Videos\\ExoSnap"));
+    EXPECT_NO_FATAL_FAILURE(ReportNonFatalError("", ""));
+}
+
 // ---------------------------------------------------------------------------
 // Session context + clean-exit detection
 // ---------------------------------------------------------------------------

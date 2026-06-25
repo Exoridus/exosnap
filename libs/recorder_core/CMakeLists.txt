@@ -205,6 +205,15 @@ if(NOT EXISTS "${_nvenc_header}")
         LIBRARIES recorder_core
     )
 
+    # 0.7.0 HEVC: hvcC builder — pure-logic, no GPU or NVENC needed.
+    exosnap_add_gtest(
+        NAME test_annexb_to_hvcc
+        TEST_PREFIX recorder_core.
+        SOURCES tests/test_annexb_to_hvcc.cpp
+                src/annexb_to_hvcc.cpp
+    )
+    target_include_directories(test_annexb_to_hvcc PRIVATE src)
+
     add_executable(test_mp4_remuxer tests/test_mp4_remuxer.cpp)
     target_link_libraries(test_mp4_remuxer PRIVATE
         GTest::gtest_main
@@ -282,6 +291,7 @@ add_library(recorder_core STATIC
     src/mux_thread.cpp
     src/matroska_stream_writer.cpp
     src/annexb_to_avcc.cpp
+    src/annexb_to_hvcc.cpp
     src/audio_track_model.cpp
     src/mic_meter_service.cpp
     src/loopback_meter_service.cpp
@@ -475,6 +485,15 @@ exosnap_add_gtest(
     LIBRARIES recorder_core
 )
 target_include_directories(test_annexb_to_avcc PRIVATE src)
+
+# 0.7.0 HEVC: hvcC (HEVCDecoderConfigurationRecord) builder from Annex-B VPS/SPS/PPS.
+exosnap_add_gtest(
+    NAME test_annexb_to_hvcc
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_annexb_to_hvcc.cpp
+            src/annexb_to_hvcc.cpp
+)
+target_include_directories(test_annexb_to_hvcc PRIVATE src)
 
 exosnap_add_gtest(
     NAME test_audio_source_semantics

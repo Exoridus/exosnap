@@ -76,6 +76,8 @@ std::wstring VideoCodecLabel(recorder_core::VideoCodec codec) {
     switch (codec) {
     case recorder_core::VideoCodec::H264Nvenc:
         return L"H.264";
+    case recorder_core::VideoCodec::HevcNvenc:
+        return L"HEVC";
     case recorder_core::VideoCodec::Av1Nvenc:
         return L"AV1";
     }

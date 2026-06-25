@@ -291,6 +291,24 @@ void SendTestEvent(std::string_view message) {
 #endif
 }
 
+void ReportNonFatalError(std::string_view phase, std::string_view detail) {
+#if EXOSNAP_SENTRY_AVAILABLE
+    if (s_initialized) {
+        // Pre-scrub: before_send covers exception/tags but not the message body,
+        // so a path leaking through `detail` would otherwise be uploaded raw.
+        const std::string safe_phase = ScrubString(phase);
+        const std::string safe_detail = ScrubString(detail);
+        const std::string msg = "recording failed [" + safe_phase + "]: " + safe_detail;
+        // sentry-native suppresses capture until consent is given, so this is a
+        // no-op unless the caller has already opted the user in.
+        sentry_capture_event(sentry_value_new_message_event(SENTRY_LEVEL_ERROR, "recording.failure", msg.c_str()));
+    }
+#else
+    (void)phase;
+    (void)detail;
+#endif
+}
+
 // ---------------------------------------------------------------------------
 // SetTag
 // ---------------------------------------------------------------------------

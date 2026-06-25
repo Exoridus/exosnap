@@ -163,18 +163,27 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
 
     // Video codec
     if (config.container == Container::Mp4) {
-        if (config.video_codec != VideoCodec::H264Nvenc) {
-            return fail(E_NOTIMPL, ErrorPhase::Prepare, "Container::Mp4 requires VideoCodec::H264Nvenc");
+        // MP4 video: H.264 (Recommended) or HEVC. HEVC is recorded to the transient
+        // MKV as V_MPEGH/ISO/HEVC and remuxed to MP4 with the 'hvc1' sample-entry
+        // FourCC (parameter sets out-of-band in hvcC) for Apple/QuickTime/NLE
+        // compatibility (0.7.0; container compat registry → Allowed, ADR 0010/0014).
+        if (config.video_codec != VideoCodec::H264Nvenc && config.video_codec != VideoCodec::HevcNvenc) {
+            return fail(E_NOTIMPL, ErrorPhase::Prepare,
+                        "Container::Mp4 requires VideoCodec::H264Nvenc or VideoCodec::HevcNvenc");
         }
     } else if (config.container == Container::WebM) {
         if (config.video_codec != VideoCodec::Av1Nvenc) {
             return fail(E_NOTIMPL, ErrorPhase::Prepare, "Container::WebM requires VideoCodec::Av1Nvenc");
         }
     } else {
-        // Container::Matroska: AV1 and H.264 are supported
-        if (config.video_codec != VideoCodec::Av1Nvenc && config.video_codec != VideoCodec::H264Nvenc) {
+        // Container::Matroska: AV1, H.264, and HEVC are supported. HEVC NVENC is
+        // muxed as V_MPEGH/ISO/HEVC with an hvcC codec-private blob and
+        // length-prefixed samples (0.7.0; container compat registry → Allowed).
+        if (config.video_codec != VideoCodec::Av1Nvenc && config.video_codec != VideoCodec::H264Nvenc &&
+            config.video_codec != VideoCodec::HevcNvenc) {
             return fail(E_NOTIMPL, ErrorPhase::Prepare,
-                        "Container::Matroska requires VideoCodec::Av1Nvenc or VideoCodec::H264Nvenc");
+                        "Container::Matroska requires VideoCodec::Av1Nvenc, VideoCodec::H264Nvenc, "
+                        "or VideoCodec::HevcNvenc");
         }
     }
 
@@ -256,9 +265,18 @@ bool RecorderSession::Validate(const RecorderConfig& config, RecorderResult* out
         return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only ChromaSubsampling::Cs420 is supported in M3.1");
     }
 
-    // Bit depth: only Bit8 supported
-    if (config.bit_depth != BitDepth::Bit8) {
-        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Only BitDepth::Bit8 is supported in M3.1");
+    // Bit depth: Bit8 is universal. Bit10 (P010 → HEVC Main10 / AV1 10-bit, SDR BT.709,
+    // ADR 0032) is valid only for HevcNvenc and Av1Nvenc — H.264 stays 8-bit only. The
+    // container constraints are identical to the 8-bit path for the same codec (already
+    // enforced above): HEVC → MKV/MP4, AV1 → MKV/WebM.
+    if (config.bit_depth != BitDepth::Bit8 && config.bit_depth != BitDepth::Bit10) {
+        return fail(E_NOTIMPL, ErrorPhase::Prepare, "Unsupported BitDepth; supported: Bit8, Bit10");
+    }
+    if (config.bit_depth == BitDepth::Bit10 && config.video_codec != VideoCodec::HevcNvenc &&
+        config.video_codec != VideoCodec::Av1Nvenc) {
+        return fail(E_NOTIMPL, ErrorPhase::Prepare,
+                    "BitDepth::Bit10 requires VideoCodec::HevcNvenc or VideoCodec::Av1Nvenc "
+                    "(H.264 is 8-bit only)");
     }
 
     // Frame rate sanity

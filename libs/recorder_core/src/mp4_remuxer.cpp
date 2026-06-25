@@ -41,6 +41,7 @@ static inline const char* av_err2str_cpp(int errnum) noexcept {
 #include <filesystem>
 #include <span>
 #include <string>
+#include <string_view>
 
 namespace recorder_core {
 
@@ -187,6 +188,10 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
 
     AVFormatContext* const out_ctx = out_guard.ctx;
 
+    // 'hvc1'-vs-'hev1' codec-tag selection (below) applies only to the ISOBMFF
+    // (MP4) muxer; the Matroska muxer maps tracks by CodecID and ignores it.
+    const bool out_is_mp4 = opts.format_name != nullptr && std::string_view(opts.format_name) == "mp4";
+
     // -----------------------------------------------------------------------
     // 3. Map all input streams to output streams (stream-copy)
     // -----------------------------------------------------------------------
@@ -208,6 +213,46 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
         // Clear codec_tag so the output muxer picks the correct FourCC for its
         // own container (MP4 and MKV use different tag spaces).
         out_st->codecpar->codec_tag = 0;
+
+        // HEVC-in-MP4: request the 'hvc1' sample-entry FourCC. With codec_tag=0
+        // libavformat's mov muxer defaults to 'hev1', which permits in-band
+        // parameter sets but is refused by QuickTime / Apple devices and several
+        // NLEs. 'hvc1' carries the parameter sets out-of-band in the hvcC box —
+        // exactly how the transient MKV already stores them (hvcC codec-private),
+        // so a plain stream-copy yields a conformant Apple-compatible file
+        // (ADR 0010 / ADR 0014). MKV output ignores codec_tag (it maps tracks by
+        // CodecID string), so this is gated to the MP4 muxer only.
+        if (out_is_mp4 && out_st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+            out_st->codecpar->codec_id == AV_CODEC_ID_HEVC) {
+            out_st->codecpar->codec_tag = MKTAG('h', 'v', 'c', '1');
+        }
+
+        // Color tags — ensure the MP4 output carries a colour description (colr
+        // box + VUI signalling). avcodec_parameters_copy already copies the
+        // color_primaries / color_trc / color_space / color_range fields from
+        // the input AVCodecParameters, so if the source MKV was written with
+        // KaxVideoColour tags (ADR 0032) libavformat's Matroska demuxer will
+        // have populated them and the copy suffices. For older files or
+        // truncated containers where the demuxer returns UNSPECIFIED (0 / 2),
+        // apply the SDR Rec.709 limited-range fallback so the output MP4 is
+        // always explicitly tagged and players never have to guess.
+        if (out_st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            if (out_st->codecpar->color_primaries == AVCOL_PRI_UNSPECIFIED ||
+                out_st->codecpar->color_primaries == AVCOL_PRI_RESERVED0) {
+                out_st->codecpar->color_primaries = AVCOL_PRI_BT709;
+            }
+            if (out_st->codecpar->color_trc == AVCOL_TRC_UNSPECIFIED ||
+                out_st->codecpar->color_trc == AVCOL_TRC_RESERVED0) {
+                out_st->codecpar->color_trc = AVCOL_TRC_BT709;
+            }
+            if (out_st->codecpar->color_space == AVCOL_SPC_UNSPECIFIED ||
+                out_st->codecpar->color_space == AVCOL_SPC_RESERVED) {
+                out_st->codecpar->color_space = AVCOL_SPC_BT709;
+            }
+            if (out_st->codecpar->color_range == AVCOL_RANGE_UNSPECIFIED) {
+                out_st->codecpar->color_range = AVCOL_RANGE_MPEG;
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

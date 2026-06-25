@@ -60,15 +60,37 @@ bool QueryEncodeCap(NV_ENCODE_API_FUNCTION_LIST& funcs, void* encoder, GUID code
     return true;
 }
 
-std::string BuildInitDiagString(const NV_ENC_INITIALIZE_PARAMS& p, const NV_ENC_CONFIG& cfg, bool isH264,
-                                bool have_caps, int w_min, int w_max, int h_min, int h_max) {
+// Required NVENC input buffer format for a given bit depth.
+// 8-bit → NV12; 10-bit → P010 (semi-planar 16-bit, MSB-aligned 10-bit data).
+static NV_ENC_BUFFER_FORMAT RequiredInputFormat(BitDepth depth) noexcept {
+    return (depth == BitDepth::Bit10) ? NV_ENC_BUFFER_FORMAT_YUV420_10BIT : NV_ENC_BUFFER_FORMAT_NV12;
+}
+
+static const char* BufferFormatName(NV_ENC_BUFFER_FORMAT fmt) noexcept {
+    return (fmt == NV_ENC_BUFFER_FORMAT_YUV420_10BIT) ? "NV_ENC_BUFFER_FORMAT_YUV420_10BIT"
+                                                      : "NV_ENC_BUFFER_FORMAT_NV12";
+}
+
+// Codec label for init diagnostics (0=AV1, 1=H264, 2=HEVC)
+static const char* CodecLabel(int codec_index) noexcept {
+    if (codec_index == 1)
+        return "H264";
+    if (codec_index == 2)
+        return "HEVC";
+    return "AV1";
+}
+
+std::string BuildInitDiagString(const NV_ENC_INITIALIZE_PARAMS& p, const NV_ENC_CONFIG& cfg, int codec_index,
+                                bool have_caps, int w_min, int w_max, int h_min, int h_max, BitDepth bit_depth) {
+    const bool isH264 = (codec_index == 1);
+    const bool isHevc = (codec_index == 2);
     std::ostringstream oss;
     oss << "encodeGUID=" << GuidDebugString(p.encodeGUID) << ", presetGUID=" << GuidDebugString(p.presetGUID)
-        << ", tuningInfo=" << TuningInfoName(p.tuningInfo) << ", encodeWidth=" << p.encodeWidth
-        << ", encodeHeight=" << p.encodeHeight << ", darWidth=" << p.darWidth << ", darHeight=" << p.darHeight
-        << ", maxEncodeWidth=" << p.maxEncodeWidth << ", maxEncodeHeight=" << p.maxEncodeHeight
-        << ", frameRateNum=" << p.frameRateNum << ", frameRateDen=" << p.frameRateDen
-        << ", bufferFormat=NV_ENC_BUFFER_FORMAT_NV12"
+        << ", profileGUID=" << GuidDebugString(cfg.profileGUID) << ", tuningInfo=" << TuningInfoName(p.tuningInfo)
+        << ", encodeWidth=" << p.encodeWidth << ", encodeHeight=" << p.encodeHeight << ", darWidth=" << p.darWidth
+        << ", darHeight=" << p.darHeight << ", maxEncodeWidth=" << p.maxEncodeWidth
+        << ", maxEncodeHeight=" << p.maxEncodeHeight << ", frameRateNum=" << p.frameRateNum
+        << ", frameRateDen=" << p.frameRateDen << ", bufferFormat=" << BufferFormatName(RequiredInputFormat(bit_depth))
         << ", enablePTD=" << static_cast<int>(p.enablePTD)
         << ", rateControlMode=" << static_cast<uint32_t>(cfg.rcParams.rateControlMode)
         << ", gopLength=" << cfg.gopLength << ", frameIntervalP=" << cfg.frameIntervalP;
@@ -77,6 +99,11 @@ std::string BuildInitDiagString(const NV_ENC_INITIALIZE_PARAMS& p, const NV_ENC_
         const auto& h264 = cfg.encodeCodecConfig.h264Config;
         oss << ", h264.idrPeriod=" << h264.idrPeriod
             << ", h264.chromaFormatIDC=" << static_cast<unsigned>(h264.chromaFormatIDC);
+    } else if (isHevc) {
+        const auto& hevc = cfg.encodeCodecConfig.hevcConfig;
+        oss << ", hevc.idrPeriod=" << hevc.idrPeriod
+            << ", hevc.chromaFormatIDC=" << static_cast<unsigned>(hevc.chromaFormatIDC) << ", hevc.level=" << hevc.level
+            << ", hevc.tier=" << hevc.tier;
     } else {
         const auto& av1 = cfg.encodeCodecConfig.av1Config;
         oss << ", av1.idrPeriod=" << av1.idrPeriod
@@ -84,12 +111,13 @@ std::string BuildInitDiagString(const NV_ENC_INITIALIZE_PARAMS& p, const NV_ENC_
             << ", av1.tier=" << av1.tier;
     }
 
-    const char* capsPrefix = isH264 ? ", h264Caps." : ", av1Caps.";
+    const char* label = CodecLabel(codec_index);
+    const std::string capsPrefix = std::string(", ") + label + "Caps.";
     if (have_caps) {
         oss << capsPrefix << "widthMin=" << w_min << capsPrefix << "widthMax=" << w_max << capsPrefix
             << "heightMin=" << h_min << capsPrefix << "heightMax=" << h_max;
     } else {
-        oss << (isH264 ? ", h264Caps=unavailable" : ", av1Caps=unavailable");
+        oss << ", " << label << "Caps=unavailable";
     }
 
     return oss.str();
@@ -261,15 +289,16 @@ bool NvencEncoder::QueryAv1Nv12Support(std::string& out_error) {
         return false;
     }
 
-    bool nv12Found = false;
+    const NV_ENC_BUFFER_FORMAT wantFmt = RequiredInputFormat(m_bitDepth);
+    bool fmtFound = false;
     for (uint32_t i = 0; i < got; ++i) {
-        if (fmts[i] == NV_ENC_BUFFER_FORMAT_NV12) {
-            nv12Found = true;
+        if (fmts[i] == wantFmt) {
+            fmtFound = true;
             break;
         }
     }
-    if (!nv12Found) {
-        out_error = "NV_ENC_BUFFER_FORMAT_NV12 not in AV1 input formats";
+    if (!fmtFound) {
+        out_error = std::string(BufferFormatName(wantFmt)) + " not in AV1 input formats";
         return false;
     }
     return true;
@@ -330,6 +359,67 @@ bool NvencEncoder::QueryH264Nv12Support(std::string& out_error) {
     }
     if (!nv12Found) {
         out_error = "NV_ENC_BUFFER_FORMAT_NV12 not in H264 input formats";
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// QueryHevcNv12Support
+// ---------------------------------------------------------------------------
+
+bool NvencEncoder::QueryHevcNv12Support(std::string& out_error) {
+    uint32_t count = 0;
+    NVENCSTATUS st = m_funcs.nvEncGetEncodeGUIDCount(m_encoder, &count);
+    if (st != NV_ENC_SUCCESS || count == 0) {
+        out_error = std::string("nvEncGetEncodeGUIDCount: ") + NvencStatusName(st);
+        return false;
+    }
+
+    std::vector<GUID> guids(count);
+    uint32_t got = 0;
+    st = m_funcs.nvEncGetEncodeGUIDs(m_encoder, guids.data(), count, &got);
+    if (st != NV_ENC_SUCCESS) {
+        out_error = std::string("nvEncGetEncodeGUIDs: ") + NvencStatusName(st);
+        return false;
+    }
+
+    bool hevcFound = false;
+    for (uint32_t i = 0; i < got; ++i) {
+        if (IsEqualGUID(guids[i], NV_ENC_CODEC_HEVC_GUID) != 0) {
+            hevcFound = true;
+            break;
+        }
+    }
+    if (!hevcFound) {
+        out_error = "NV_ENC_CODEC_HEVC_GUID not found (Kepler / GTX 600+ required)";
+        return false;
+    }
+
+    count = 0;
+    st = m_funcs.nvEncGetInputFormatCount(m_encoder, NV_ENC_CODEC_HEVC_GUID, &count);
+    if (st != NV_ENC_SUCCESS || count == 0) {
+        out_error = std::string("nvEncGetInputFormatCount(HEVC): ") + NvencStatusName(st);
+        return false;
+    }
+
+    std::vector<NV_ENC_BUFFER_FORMAT> fmts(count);
+    st = m_funcs.nvEncGetInputFormats(m_encoder, NV_ENC_CODEC_HEVC_GUID, fmts.data(), count, &got);
+    if (st != NV_ENC_SUCCESS) {
+        out_error = std::string("nvEncGetInputFormats(HEVC): ") + NvencStatusName(st);
+        return false;
+    }
+
+    const NV_ENC_BUFFER_FORMAT wantFmt = RequiredInputFormat(m_bitDepth);
+    bool fmtFound = false;
+    for (uint32_t i = 0; i < got; ++i) {
+        if (fmts[i] == wantFmt) {
+            fmtFound = true;
+            break;
+        }
+    }
+    if (!fmtFound) {
+        out_error = std::string(BufferFormatName(wantFmt)) + " not in HEVC input formats";
         return false;
     }
     return true;
@@ -414,8 +504,16 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
 
     // AV1 with P6 preset has internal pipeline depth causing NEED_MORE_INPUT on every frame
     // even when lookahead is disabled. P4 avoids this and produces frames synchronously.
-    const GUID codecGuid = (m_codec == VideoCodec::H264Nvenc) ? NV_ENC_CODEC_H264_GUID : NV_ENC_CODEC_AV1_GUID;
-    if (m_codec != VideoCodec::H264Nvenc) {
+    // HEVC uses P4 as well (same pipeline-depth concern applies for higher presets).
+    GUID codecGuid = NV_ENC_CODEC_AV1_GUID;
+    if (m_codec == VideoCodec::H264Nvenc) {
+        codecGuid = NV_ENC_CODEC_H264_GUID;
+        // m_presetGuid stays at P6 (set in member initializer) for H.264
+    } else if (m_codec == VideoCodec::HevcNvenc) {
+        codecGuid = NV_ENC_CODEC_HEVC_GUID;
+        m_presetGuid = NV_ENC_PRESET_P4_GUID;
+    } else {
+        // AV1: use P4
         m_presetGuid = NV_ENC_PRESET_P4_GUID;
     }
     NVENCSTATUS st =
@@ -428,10 +526,29 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
     std::memcpy(&m_encodeConfig, &m_presetConfig.presetCfg, sizeof(NV_ENC_CONFIG));
     m_encodeConfig.version = NV_ENC_CONFIG_VER;
 
+    // 10-bit (P010 input → Main10 / AV1 10-bit) selects the appropriate codec profile
+    // and per-codec input/output bit-depth fields. NV_ENC_BIT_DEPTH_8 is the default
+    // (left implicit by the preset) for the 8-bit path, so we only set fields for 10-bit.
+    // H.264 never reaches here for 10-bit — it is rejected upstream in Validate().
+    const bool tenBit = (m_bitDepth == BitDepth::Bit10);
+    const NV_ENC_BIT_DEPTH nvBitDepth = tenBit ? NV_ENC_BIT_DEPTH_10 : NV_ENC_BIT_DEPTH_8;
+
     if (m_codec == VideoCodec::H264Nvenc) {
         m_encodeConfig.encodeCodecConfig.h264Config.chromaFormatIDC = 1; // YUV420/NV12
+    } else if (m_codec == VideoCodec::HevcNvenc) {
+        m_encodeConfig.encodeCodecConfig.hevcConfig.chromaFormatIDC = 1; // YUV420/NV12 or P010
+        m_encodeConfig.encodeCodecConfig.hevcConfig.inputBitDepth = nvBitDepth;
+        m_encodeConfig.encodeCodecConfig.hevcConfig.outputBitDepth = nvBitDepth;
+        if (tenBit)
+            m_encodeConfig.profileGUID = NV_ENC_HEVC_PROFILE_MAIN10_GUID;
     } else {
-        m_encodeConfig.encodeCodecConfig.av1Config.chromaFormatIDC = 1; // YUV420/NV12
+        m_encodeConfig.encodeCodecConfig.av1Config.chromaFormatIDC = 1; // YUV420/NV12 or P010
+        m_encodeConfig.encodeCodecConfig.av1Config.inputBitDepth = nvBitDepth;
+        m_encodeConfig.encodeCodecConfig.av1Config.outputBitDepth = nvBitDepth;
+        // AV1 uses a single Main profile GUID for both 8- and 10-bit; the bit depth is
+        // signaled by the input/output bit-depth fields above, not a distinct profile.
+        if (tenBit)
+            m_encodeConfig.profileGUID = NV_ENC_AV1_PROFILE_MAIN_GUID;
     }
 
     // Apply canonical rate-control via the pure, testable ComputeNvencRcParams helper.
@@ -466,12 +583,20 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
     m_encodeConfig.gopLength = kGopFrames;
     if (m_codec == VideoCodec::H264Nvenc) {
         m_encodeConfig.encodeCodecConfig.h264Config.idrPeriod = kGopFrames;
+    } else if (m_codec == VideoCodec::HevcNvenc) {
+        m_encodeConfig.encodeCodecConfig.hevcConfig.idrPeriod = kGopFrames;
     } else {
         m_encodeConfig.encodeCodecConfig.av1Config.idrPeriod = kGopFrames;
     }
 
-    const GUID codecGuid = (m_codec == VideoCodec::H264Nvenc) ? NV_ENC_CODEC_H264_GUID : NV_ENC_CODEC_AV1_GUID;
-    const bool isH264 = (m_codec == VideoCodec::H264Nvenc);
+    GUID codecGuid = NV_ENC_CODEC_AV1_GUID;
+    if (m_codec == VideoCodec::H264Nvenc)
+        codecGuid = NV_ENC_CODEC_H264_GUID;
+    else if (m_codec == VideoCodec::HevcNvenc)
+        codecGuid = NV_ENC_CODEC_HEVC_GUID;
+
+    // codec_index: 0=AV1, 1=H264, 2=HEVC — used in diag string and error messages
+    const int codec_index = (m_codec == VideoCodec::H264Nvenc) ? 1 : (m_codec == VideoCodec::HevcNvenc) ? 2 : 0;
 
     int capWidthMin = -1;
     int capWidthMax = -1;
@@ -512,12 +637,12 @@ bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_r
     const bool heightInRange =
         !haveCaps || (height >= static_cast<uint32_t>(capHeightMin) && height <= static_cast<uint32_t>(capHeightMax));
 
-    const std::string initDiag =
-        BuildInitDiagString(p, m_encodeConfig, isH264, haveCaps, capWidthMin, capWidthMax, capHeightMin, capHeightMax);
+    const std::string initDiag = BuildInitDiagString(p, m_encodeConfig, codec_index, haveCaps, capWidthMin, capWidthMax,
+                                                     capHeightMin, capHeightMax, m_bitDepth);
 
     if (!evenWidth || !evenHeight || !widthInRange || !heightInRange) {
         std::ostringstream oss;
-        oss << "NVENC " << (isH264 ? "H264" : "AV1")
+        oss << "NVENC " << CodecLabel(codec_index)
             << " init dimension sanity failed: evenWidth=" << (evenWidth ? "true" : "false")
             << ", evenHeight=" << (evenHeight ? "true" : "false")
             << ", widthInRange=" << (widthInRange ? "true" : "false")
@@ -581,7 +706,9 @@ bool NvencEncoder::RegisterSlotTexture(int32_t slot_idx, ID3D11Texture2D* textur
     reg.pitch = 0;
     reg.subResourceIndex = 0;
     reg.resourceToRegister = texture;
-    reg.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
+    // 8-bit registers the NV12 D3D11 texture; 10-bit registers the P010 texture as
+    // NV_ENC_BUFFER_FORMAT_YUV420_10BIT (both are semi-planar 4:2:0, P010 being 16 bpc).
+    reg.bufferFormat = RequiredInputFormat(m_bitDepth);
     reg.bufferUsage = NV_ENC_INPUT_IMAGE;
 
     NVENCSTATUS st = m_funcs.nvEncRegisterResource(m_encoder, &reg);

@@ -11,6 +11,11 @@ enum class VideoCodec { Av1Nvenc, HevcNvenc, H264Nvenc };
 enum class AudioCodec { Opus, AacMf, Pcm, Flac };
 enum class ChromaSubsampling { Cs420, Cs422, Cs444 };
 enum class BitDepth { Bit8, Bit10 };
+// Y'CbCr quantization range tagged on the video track (0.7.0). Full (0-255) is the
+// native precision of PC/screen content and the default; Limited (16-235) is the
+// broadcast standard, safest for editors/players that ignore the range flag. Always
+// valid for every codec/container — never capability-gated.
+enum class ColorRange { Full, Limited };
 
 struct ResolutionConstraint {
     uint32_t max_width = 0;
@@ -38,10 +43,15 @@ constexpr auto AllBitDepths() noexcept -> std::array<BitDepth, 2> {
     return {BitDepth::Bit8, BitDepth::Bit10};
 }
 
+constexpr auto AllColorRanges() noexcept -> std::array<ColorRange, 2> {
+    return {ColorRange::Full, ColorRange::Limited};
+}
+
 std::string_view ToString(Container value) noexcept;
 std::string_view ToString(VideoCodec value) noexcept;
 std::string_view ToString(AudioCodec value) noexcept;
 std::string_view ToString(ChromaSubsampling value) noexcept;
 std::string_view ToString(BitDepth value) noexcept;
+std::string_view ToString(ColorRange value) noexcept;
 
 } // namespace exosnap::capability

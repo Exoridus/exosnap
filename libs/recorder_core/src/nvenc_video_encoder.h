@@ -17,6 +17,11 @@ class NvencVideoEncoder : public IVideoEncoder {
         m_nvenc.SetCodec(codec);
     }
 
+    // Set encoder bit depth (8 or 10) before Open()/Configure().
+    void SetBitDepth(BitDepth depth) noexcept {
+        m_nvenc.SetBitDepth(depth);
+    }
+
     void SetQualityPreset(NvencQualityPreset preset) noexcept {
         m_nvenc.SetQualityPreset(preset);
     }

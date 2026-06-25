@@ -36,6 +36,7 @@
 #include <QPixmap>
 #include <QSize>
 #include <QString>
+#include <QThread>
 #include <QWidget>
 
 #include "notifications/NotificationEvent.h"
@@ -163,6 +164,34 @@ TEST_F(OverlayVisualProofTest, Toast_Success) {
 
     const bool saved = grabAndSave(toast, QStringLiteral("toast-success.png"));
     EXPECT_TRUE(saved) << "Failed to save toast-success.png";
+    toast.hide();
+}
+
+// NOTIFY-TOAST-INTERACTIVE: proves the auto-dismiss countdown bar is a REAL
+// shrinking bar (not a static placeholder) AND that it is clipped to the card's
+// rounded bottom corners. We age the Saved toast (5 s dwell) by ~2.5 s so the bar
+// renders at ~50% width; the right edge of the green fill therefore sits mid-card
+// while both bottom corners stay rounded.
+TEST_F(OverlayVisualProofTest, Toast_CountdownBarPartial) {
+    NotificationManager mgr;
+    NotificationEvent e;
+    e.type = NotificationType::Saved;
+    e.title = QStringLiteral("Recording saved");
+    e.body = QStringLiteral("exosnap_2026-06-11_02.mkv \xC2\xB7 179 MB");
+    e.action = NotificationAction::OpenFolder;
+    mgr.Enqueue(e);
+
+    NotificationToastWindow toast(&mgr, nullptr);
+    toast.resize(toast.sizeHint());
+    toast.show();
+    QCoreApplication::processEvents();
+
+    // Age the toast ~half its 5 s dwell so the bar is partially drained.
+    QThread::msleep(2500);
+    QCoreApplication::processEvents();
+
+    const bool saved = grabAndSave(toast, QStringLiteral("toast-countdown-partial.png"));
+    EXPECT_TRUE(saved) << "Failed to save toast-countdown-partial.png";
     toast.hide();
 }
 

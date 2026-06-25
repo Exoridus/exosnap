@@ -71,6 +71,44 @@ std::optional<capability::VideoCodec> VideoCodecFromString(QStringView s) {
     return std::nullopt;
 }
 
+QString VideoBitDepthToString(capability::BitDepth v) {
+    switch (v) {
+    case capability::BitDepth::Bit8:
+        return QStringLiteral("8");
+    case capability::BitDepth::Bit10:
+        return QStringLiteral("10");
+    }
+    return QStringLiteral("8");
+}
+
+std::optional<capability::BitDepth> VideoBitDepthFromString(QStringView s) {
+    const QString n = s.trimmed().toString().toLower();
+    if (n == QStringLiteral("8"))
+        return capability::BitDepth::Bit8;
+    if (n == QStringLiteral("10"))
+        return capability::BitDepth::Bit10;
+    return std::nullopt;
+}
+
+QString ColorRangeToString(capability::ColorRange v) {
+    switch (v) {
+    case capability::ColorRange::Full:
+        return QStringLiteral("full");
+    case capability::ColorRange::Limited:
+        return QStringLiteral("limited");
+    }
+    return QStringLiteral("full");
+}
+
+std::optional<capability::ColorRange> ColorRangeFromString(QStringView s) {
+    const QString n = s.trimmed().toString().toLower();
+    if (n == QStringLiteral("full"))
+        return capability::ColorRange::Full;
+    if (n == QStringLiteral("limited"))
+        return capability::ColorRange::Limited;
+    return std::nullopt;
+}
+
 QString AudioCodecToString(capability::AudioCodec v) {
     switch (v) {
     case capability::AudioCodec::AacMf:
@@ -466,6 +504,8 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     out_tbl.emplace("naming_pattern", QString::fromStdWString(out.naming_pattern).toStdString());
     out_tbl.emplace("container", ContainerToString(out.container).toStdString());
     out_tbl.emplace("video_codec", VideoCodecToString(out.video_codec).toStdString());
+    out_tbl.emplace("bit_depth", VideoBitDepthToString(out.bit_depth).toStdString());
+    out_tbl.emplace("color_range", ColorRangeToString(out.color_range).toStdString());
     out_tbl.emplace("audio_codec", AudioCodecToString(out.audio_codec).toStdString());
     out_tbl.emplace("resolution_mode", OutputResolutionModeToString(out.resolution.mode).toStdString());
     out_tbl.emplace("custom_width", static_cast<int64_t>(out.resolution.custom_width));
@@ -622,6 +662,16 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
         const auto c = VideoCodecFromString(QString::fromStdString(TomlStr(tbl["output"]["video_codec"])));
         if (c.has_value())
             out.video_codec = *c;
+    }
+    {
+        const auto bd = VideoBitDepthFromString(QString::fromStdString(TomlStr(tbl["output"]["bit_depth"])));
+        if (bd.has_value())
+            out.bit_depth = *bd;
+    }
+    {
+        const auto cr = ColorRangeFromString(QString::fromStdString(TomlStr(tbl["output"]["color_range"])));
+        if (cr.has_value())
+            out.color_range = *cr;
     }
     {
         const auto c = AudioCodecFromString(QString::fromStdString(TomlStr(tbl["output"]["audio_codec"])));

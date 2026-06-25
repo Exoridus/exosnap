@@ -54,6 +54,8 @@ class CrashReportOverlay;
 class PresetManageOverlay;
 class RecoveryOverlay;
 class SourcePickerOverlay;
+class RecordingErrorOverlay;
+struct RecordingErrorModel;
 } // namespace ui::dialogs
 
 namespace ui::overlay {
@@ -180,6 +182,10 @@ class MainWindow : public QMainWindow {
     // the user is never double-prompted.
     void checkAndShowCrashReportOverlay();
     void openCrashReportOverlay();
+    // RECORDING-ERROR-MODAL-R1: show the modal recording-failure dialog. Decides
+    // can_send_report from crash_capture availability and wires the report/logs
+    // actions. Replaces any existing error overlay.
+    void openRecordingErrorOverlay(ui::dialogs::RecordingErrorModel model);
     // Build the live session context (version + output context) for the sidecar.
     [[nodiscard]] crash_capture::SessionContext currentSessionContext() const;
     // Push the current context to the crash engine + session sidecar. Cheap.
@@ -199,6 +205,10 @@ class MainWindow : public QMainWindow {
     void initNotificationToasts();
     // Gate toasts on the show_notifications setting.
     void updateNotificationToastsEnabled();
+    // Execute a toast action pill click (Open folder / Show file / Recover / …).
+    // Reuses the same destinations the hub deep-links and overlays already use.
+    void dispatchNotificationAction(const notifications::NotificationEvent& event,
+                                    notifications::NotificationAction action);
 
     // UPDATE-WIRE-R1 (ADR 0012): trigger a guarded update check. No-op (and shows
     // the paused banner) while recording / remuxing.
@@ -231,6 +241,7 @@ class MainWindow : public QMainWindow {
     ui::dialogs::RecoveryOverlay* recovery_overlay_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
     ui::dialogs::CrashReportOverlay* crash_overlay_ = nullptr;
+    ui::dialogs::RecordingErrorOverlay* recording_error_overlay_ = nullptr;
     ui::overlay::CountdownOverlayWindow* countdown_overlay_ = nullptr;
     ui::overlay::RecordingOverlayWindow* recording_overlay_ = nullptr;
     ui::overlay::DiagnosticsOverlayWindow* diagnostics_overlay_ = nullptr;

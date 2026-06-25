@@ -111,11 +111,16 @@ replaces it.
   classification for Opus-in-MP4 is `Prohibited`). Presets or user selections that combine
   Opus audio with MP4 output are rejected by the compatibility registry before recording begins.
 
-- **HEVC in MP4 — `hvc1`/`hev1`:** libavformat defaults to `hev1` for HEVC in MP4. For Apple
-  compatibility, the remux path must set `codec_tag = MKTAG('h','v','c','1')` on the video
-  stream before `avformat_write_header()`. This is a zero-cost metadata-only change. The
-  `hvc1` tag must be verified on real files at the 0.7.0 HEVC/HDR slice; the remux path is
-  where this verification and configuration happen.
+- **HEVC in MP4 — `hvc1`/`hev1` (implemented, 0.7.0):** libavformat defaults to `hev1` for HEVC
+  in MP4. For Apple compatibility, `RemuxStreamCopy` now sets
+  `codec_tag = MKTAG('h','v','c','1')` on the HEVC video stream (gated to the MP4 muxer; the
+  Matroska muxer maps tracks by CodecID and ignores `codec_tag`). This is a zero-cost,
+  metadata-only change applied before `avformat_write_header()`. Because the transient MKV already
+  stores parameter sets out-of-band in `hvcC`, the plain stream-copy yields a conformant `hvc1`
+  file. A unit test (`RemuxerTest.Mp4HevcTaggedHvc1`) builds a `V_MPEGH/ISO/HEVC` MKV, remuxes it,
+  and asserts the output video stream is tagged `hvc1` (not `hev1`). Real-file verification
+  (`ffprobe` / Bento4 + QuickTime playback) on NVIDIA hardware remains the GPU-smoke gate before
+  the registry promotes MP4 + HEVC + AAC beyond `ValidUnvalidated` (ADR 0010).
 
 - **Crash recovery:** Recovery at startup operates on MKV artefacts. The recovery UI (0.2.0)
   offers: finalize/keep as MKV, or export to MP4 via remux.

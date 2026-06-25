@@ -141,16 +141,57 @@ TEST(SettingsResolverTest, ExplicitAudioChangeToOpusUnderMp4FailsWithoutFallback
     EXPECT_FALSE(result.invalidity.empty());
 }
 
-TEST(SettingsResolverTest, ExplicitBitDepthChangeToTenBitFailsWithoutFallback) {
+TEST(SettingsResolverTest, ExplicitBitDepthChangeToTenBitSucceedsForAv1WithWarning) {
+    // 0.7.0 S5: 10-bit is implemented (ValidUnvalidated) for AV1/HEVC. The default
+    // config is MKV + AV1 + Opus, so requesting 10-bit succeeds with a warning and no
+    // bit-depth fallback.
     const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
     const SettingsResolver resolver(caps);
 
     const ResolveResult result =
         resolver.ResolveChange(UserRecorderConfig{}, RequestedChange::ForBitDepth(BitDepth::Bit10));
 
+    EXPECT_TRUE(result.succeeded);
+    EXPECT_EQ(result.resolved_config.bit_depth, BitDepth::Bit10);
+    EXPECT_FALSE(HasAdjustmentField(result, "bit_depth"));
+    EXPECT_FALSE(result.warnings.empty());
+}
+
+TEST(SettingsResolverTest, ExplicitBitDepthChangeToTenBitRejectedForH264) {
+    // H.264 is 8-bit only. An explicit 10-bit change on an H.264 config is not
+    // selectable, so the direct ResolveChange path rejects it (no silent fallback;
+    // the profile-validation path in ValidateConfig is what applies fallbacks).
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+    const SettingsResolver resolver(caps);
+
+    UserRecorderConfig current{};
+    current.container = Container::Matroska;
+    current.video_codec = VideoCodec::H264Nvenc;
+    current.audio_codec = AudioCodec::AacMf;
+
+    const ResolveResult result = resolver.ResolveChange(current, RequestedChange::ForBitDepth(BitDepth::Bit10));
+
     EXPECT_FALSE(result.succeeded);
-    EXPECT_TRUE(result.adjustments.empty());
     EXPECT_FALSE(result.invalidity.empty());
+}
+
+TEST(SettingsResolverTest, ValidateConfigFallsBackTenBitToEightBitForH264) {
+    // The profile-validation path DOES auto-adjust: an H.264 + 10-bit profile-like
+    // config is brought back to 8-bit.
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+    const SettingsResolver resolver(caps);
+
+    UserRecorderConfig profile_config{};
+    profile_config.container = Container::Matroska;
+    profile_config.video_codec = VideoCodec::H264Nvenc;
+    profile_config.audio_codec = AudioCodec::AacMf;
+    profile_config.bit_depth = BitDepth::Bit10;
+
+    const ResolveResult result = resolver.ValidateConfig(profile_config);
+
+    EXPECT_TRUE(result.succeeded);
+    EXPECT_EQ(result.resolved_config.bit_depth, BitDepth::Bit8);
+    EXPECT_TRUE(HasAdjustmentField(result, "bit_depth"));
 }
 
 TEST(SettingsResolverTest, VideoCodecValidUnvalidatedCanSucceedWithWarning) {
@@ -181,8 +222,8 @@ TEST(SettingsResolverTest, ValidateConfigAppliesAllowedFallbacksForProfileLikeIn
     profile_config.container = Container::WebM;
     profile_config.video_codec = VideoCodec::Av1Nvenc; // explicit AV1 for WebM
     profile_config.audio_codec = AudioCodec::AacMf;    // invalid for WebM — should be adjusted to Opus
-    profile_config.chroma = ChromaSubsampling::Cs444;
-    profile_config.bit_depth = BitDepth::Bit10;
+    profile_config.chroma = ChromaSubsampling::Cs444;  // unsupported — should be adjusted to Cs420
+    profile_config.bit_depth = BitDepth::Bit10;        // valid for AV1 once chroma is 4:2:0 — kept
 
     const SettingsResolver resolver(caps);
     const ResolveResult result = resolver.ValidateConfig(profile_config);
@@ -191,10 +232,11 @@ TEST(SettingsResolverTest, ValidateConfigAppliesAllowedFallbacksForProfileLikeIn
     EXPECT_EQ(result.resolved_config.container, Container::WebM);
     EXPECT_EQ(result.resolved_config.audio_codec, AudioCodec::Opus);
     EXPECT_EQ(result.resolved_config.chroma, ChromaSubsampling::Cs420);
-    EXPECT_EQ(result.resolved_config.bit_depth, BitDepth::Bit8);
+    // 0.7.0 S5: 10-bit is valid for AV1 with 4:2:0, so the bit depth is retained (no fallback).
+    EXPECT_EQ(result.resolved_config.bit_depth, BitDepth::Bit10);
     EXPECT_TRUE(HasAdjustmentField(result, "audio_codec"));
     EXPECT_TRUE(HasAdjustmentField(result, "chroma"));
-    EXPECT_TRUE(HasAdjustmentField(result, "bit_depth"));
+    EXPECT_FALSE(HasAdjustmentField(result, "bit_depth"));
 }
 
 TEST(TranslationTest, ToRecorderCoreConfigAcceptsDefaultMkvAv1OpusCombo) {
@@ -209,6 +251,36 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsDefaultMkvAv1OpusCombo) {
     EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::Opus);
     EXPECT_EQ(translated.chroma, recorder_core::ChromaSubsampling::Cs420);
     EXPECT_EQ(translated.bit_depth, recorder_core::BitDepth::Bit8);
+    // 0.7.0: default colour range is Full (0-255), the native screen precision.
+    EXPECT_EQ(translated.color.range, recorder_core::ColorRange::Full);
+}
+
+// Colour range (0.7.0) is always valid for every codec/container — it is NOT part of
+// the combo allow-list and flows straight through to core_config.color.range.
+TEST(TranslationTest, ToRecorderCoreConfigMapsColorRange) {
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    // Default (Full).
+    {
+        ResolveResult validation;
+        const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(UserRecorderConfig{}, caps, &validation);
+        EXPECT_TRUE(validation.succeeded);
+        EXPECT_EQ(translated.color.range, recorder_core::ColorRange::Full);
+        // Primaries/transfer/matrix stay BT.709 SDR.
+        EXPECT_EQ(translated.color.primaries, recorder_core::ColorPrimaries::Bt709);
+        EXPECT_EQ(translated.color.transfer, recorder_core::TransferCharacteristics::Bt709);
+        EXPECT_EQ(translated.color.matrix, recorder_core::MatrixCoefficients::Bt709);
+    }
+
+    // Limited.
+    {
+        UserRecorderConfig config;
+        config.color_range = ColorRange::Limited;
+        ResolveResult validation;
+        const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+        EXPECT_TRUE(validation.succeeded);
+        EXPECT_EQ(translated.color.range, recorder_core::ColorRange::Limited);
+    }
 }
 
 TEST(TranslationTest, ToRecorderCoreConfigAcceptsWebMAv1OpusCombo) {
@@ -367,15 +439,10 @@ TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvH264AacCombo) {
     EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::AacMf);
 }
 
-TEST(TranslationTest, ToRecorderCoreConfigRejectsHevcComboAsTranslationUnknown) {
-    // MKV + HEVC + AAC is NotImplemented in capability, so ToRecorderCoreConfig must reject it.
-    CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
-    // Force HEVC into selectable state via overrides so ValidateConfig succeeds.
-    caps.video_codecs[VideoCodec::HevcNvenc] =
-        SupportAnnotation{SupportLevel::ValidUnvalidated, "Test override for HEVC."};
-    caps.combo_overrides[ComboKey{Container::Matroska, VideoCodec::HevcNvenc, AudioCodec::AacMf,
-                                  ChromaSubsampling::Cs420, BitDepth::Bit8}] =
-        SupportAnnotation{SupportLevel::ValidUnvalidated, "Test override."};
+TEST(TranslationTest, ToRecorderCoreConfigAcceptsMkvHevcAacCombo) {
+    // 0.7.0: MKV + HEVC is ValidUnvalidated in the baseline, so ToRecorderCoreConfig
+    // must translate it to recorder_core::VideoCodec::HevcNvenc.
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
 
     UserRecorderConfig config;
     config.container = Container::Matroska;
@@ -383,10 +450,12 @@ TEST(TranslationTest, ToRecorderCoreConfigRejectsHevcComboAsTranslationUnknown) 
     config.audio_codec = AudioCodec::AacMf;
 
     ResolveResult validation;
-    EXPECT_THROW(static_cast<void>(ToRecorderCoreConfig(config, caps, &validation)), std::invalid_argument);
-    EXPECT_FALSE(validation.succeeded);
-    EXPECT_FALSE(validation.invalidity.empty());
-    EXPECT_EQ(validation.invalidity.back().field, "translation");
+    const recorder_core::RecorderConfig translated = ToRecorderCoreConfig(config, caps, &validation);
+
+    EXPECT_TRUE(validation.succeeded);
+    EXPECT_EQ(translated.container, recorder_core::Container::Matroska);
+    EXPECT_EQ(translated.video_codec, recorder_core::VideoCodec::HevcNvenc);
+    EXPECT_EQ(translated.audio_codec, recorder_core::AudioCodec::AacMf);
 }
 
 } // namespace

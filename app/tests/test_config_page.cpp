@@ -12,7 +12,10 @@
 #include <QObject>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QStandardItemModel>
 #include <QToolButton>
+
+#include <capability/config_types.h>
 
 #include "models/OutputSettingsModel.h"
 #include "models/VideoSettingsModel.h"
@@ -2158,6 +2161,139 @@ TEST_F(ConfigPageTest, S5_SplitControls_StillFindableByObjectName) {
         << "splitCustomMinutesSpin must still exist after S5 reparenting";
     EXPECT_NE(page.findChild<QSpinBox*>(QStringLiteral("splitCustomSizeSpin")), nullptr)
         << "splitCustomSizeSpin must still exist after S5 reparenting";
+}
+
+// ---------------------------------------------------------------------------
+// 0.7.0 — S7: HEVC un-gating + video bit-depth control
+// ---------------------------------------------------------------------------
+
+// HEVC must be a normal, always-present codec choice (not behind a debug gate or
+// labelled "(debug)"). GPU-verified end-to-end in S3.
+TEST_F(ConfigPageTest, S7_VideoCodecCombo_IncludesHevcNonDebug) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
+    ASSERT_NE(combo, nullptr);
+
+    const int hevc_idx = combo->findData(static_cast<int>(capability::VideoCodec::HevcNvenc));
+    ASSERT_GE(hevc_idx, 0) << "HEVC must be present in the video codec list";
+    EXPECT_EQ(combo->itemText(hevc_idx), QStringLiteral("HEVC"))
+        << "HEVC entry must be labelled \"HEVC\" (no \"(debug)\" suffix)";
+
+    // AV1 and H.264 must also still be present.
+    EXPECT_GE(combo->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)), 0);
+    EXPECT_GE(combo->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)), 0);
+}
+
+// The superseded roadmap mockups for HEVC codec + bit depth must be gone; the real
+// video bit-depth combo exists with 8-bit / 10-bit items.
+TEST_F(ConfigPageTest, S7_VideoBitDepthControl_ExistsAndMockupsRemoved) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    EXPECT_EQ(page.findChild<QComboBox*>(QStringLiteral("roadmapDummy_hevcCodec")), nullptr)
+        << "the HEVC-codec mockup row is superseded by the real codec combo";
+    EXPECT_EQ(page.findChild<QComboBox*>(QStringLiteral("roadmapDummy_bitDepth")), nullptr)
+        << "the bit-depth mockup row is superseded by the real bit-depth combo";
+
+    auto* depth = page.findChild<QComboBox*>(QStringLiteral("videoBitDepthCombo"));
+    ASSERT_NE(depth, nullptr);
+    EXPECT_GE(depth->findData(static_cast<int>(capability::BitDepth::Bit8)), 0);
+    EXPECT_GE(depth->findData(static_cast<int>(capability::BitDepth::Bit10)), 0);
+}
+
+// 10-bit is selectable only for HEVC / AV1; for H.264 the 10-bit item is disabled.
+TEST_F(ConfigPageTest, S7_TenBit_DisabledForH264_EnabledForHevcAv1) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
+    auto* depth = page.findChild<QComboBox*>(QStringLiteral("videoBitDepthCombo"));
+    ASSERT_NE(codec, nullptr);
+    ASSERT_NE(depth, nullptr);
+
+    const auto ten_item_enabled = [&]() -> bool {
+        auto* model = qobject_cast<QStandardItemModel*>(depth->model());
+        EXPECT_NE(model, nullptr);
+        const int ten = depth->findData(static_cast<int>(capability::BitDepth::Bit10));
+        EXPECT_GE(ten, 0);
+        return model->item(ten)->isEnabled();
+    };
+
+    // Select H.264 → 10-bit disabled.
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    EXPECT_FALSE(ten_item_enabled());
+
+    // Select HEVC → 10-bit enabled.
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::HevcNvenc)));
+    EXPECT_TRUE(ten_item_enabled());
+
+    // Select AV1 → 10-bit enabled.
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::Av1Nvenc)));
+    EXPECT_TRUE(ten_item_enabled());
+}
+
+// Switching the codec from HEVC (10-bit) to H.264 snaps the bit depth back to 8-bit
+// in the emitted model (mirrors the capability / reconcile fallback).
+TEST_F(ConfigPageTest, S7_CodecChangeToH264_ResetsTenBitToEight) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    OutputSettingsModel emitted;
+    QObject::connect(&page, &ConfigPage::formatSettingsChanged, &page,
+                     [&emitted](const OutputSettingsModel& s) { emitted = s; });
+
+    auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
+    auto* depth = page.findChild<QComboBox*>(QStringLiteral("videoBitDepthCombo"));
+    ASSERT_NE(codec, nullptr);
+    ASSERT_NE(depth, nullptr);
+
+    // HEVC + 10-bit.
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::HevcNvenc)));
+    depth->setCurrentIndex(depth->findData(static_cast<int>(capability::BitDepth::Bit10)));
+    EXPECT_EQ(emitted.bit_depth, capability::BitDepth::Bit10);
+
+    // Switch to H.264 → bit depth must reset to 8-bit.
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    EXPECT_EQ(emitted.bit_depth, capability::BitDepth::Bit8);
+    EXPECT_EQ(depth->currentData().toInt(), static_cast<int>(capability::BitDepth::Bit8));
+}
+
+// Colour range (0.7.0): the combo exists with Full / Limited items and defaults to Full.
+TEST_F(ConfigPageTest, ColorRangeControl_ExistsWithFullAndLimited) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* range = page.findChild<QComboBox*>(QStringLiteral("videoColorRangeCombo"));
+    ASSERT_NE(range, nullptr);
+    EXPECT_GE(range->findData(static_cast<int>(capability::ColorRange::Full)), 0);
+    EXPECT_GE(range->findData(static_cast<int>(capability::ColorRange::Limited)), 0);
+    // Default is Full.
+    EXPECT_EQ(range->currentData().toInt(), static_cast<int>(capability::ColorRange::Full));
+}
+
+// Selecting Limited emits the colour range in the model; it is never codec-gated
+// (works for H.264, which cannot take 10-bit).
+TEST_F(ConfigPageTest, ColorRange_SelectingLimited_EmitsModel_NotGated) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    OutputSettingsModel emitted = output_defaults_;
+    QObject::connect(&page, &ConfigPage::formatSettingsChanged, &page,
+                     [&emitted](const OutputSettingsModel& s) { emitted = s; });
+
+    auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
+    auto* range = page.findChild<QComboBox*>(QStringLiteral("videoColorRangeCombo"));
+    ASSERT_NE(codec, nullptr);
+    ASSERT_NE(range, nullptr);
+
+    // Even with H.264 (no 10-bit), colour range remains fully selectable.
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    range->setCurrentIndex(range->findData(static_cast<int>(capability::ColorRange::Limited)));
+    EXPECT_EQ(emitted.color_range, capability::ColorRange::Limited);
+    EXPECT_TRUE(range->isEnabled());
+
+    // Back to Full.
+    range->setCurrentIndex(range->findData(static_cast<int>(capability::ColorRange::Full)));
+    EXPECT_EQ(emitted.color_range, capability::ColorRange::Full);
 }
 
 } // namespace

@@ -52,7 +52,21 @@ class Mp4SplitRemuxTest : public ::testing::Test {
 static QString UniqueTempStorePath() {
     const QString temp = QDir::tempPath();
     static int s_counter = 0;
-    return QDir(temp).filePath(QStringLiteral("exosnap_mp4split_test_%1.json").arg(++s_counter));
+    // Fold the current test name into the filename. ctest runs each test in its own
+    // process (a separate --gtest_filter invocation), which resets s_counter to 0,
+    // so a bare counter collides across tests on the same shared file. Then delete
+    // any residue from a prior crashed/aborted run before handing the path out:
+    // RecoveryManifestStore loads pre-existing entries on construction, so a stale
+    // file would silently accumulate entries and fail size assertions
+    // (Harness-History-Pollution). A clean slate per call makes the suite
+    // order- and history-independent.
+    QString test_name = QStringLiteral("anon");
+    if (const ::testing::TestInfo* info = ::testing::UnitTest::GetInstance()->current_test_info())
+        test_name = QString::fromLatin1(info->name());
+    const QString path =
+        QDir(temp).filePath(QStringLiteral("exosnap_mp4split_test_%1_%2.json").arg(test_name).arg(++s_counter));
+    QFile::remove(path);
+    return path;
 }
 
 static RecoveryManifestEntry MakeManifestEntry(const QString& id, const QString& artefact, const QString& container,
