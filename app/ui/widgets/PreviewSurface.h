@@ -66,6 +66,9 @@ class PreviewSurface : public QWidget {
     void setTopMetaText(const QString& text);
     void setCenterTitle(const QString& text);
     void setCenterSubtitle(const QString& text);
+    // Help text shown under the branded empty-state placeholder (no live preview).
+    // Empty => the default "No source selected — choose one to preview" prompt.
+    void setPlaceholderHint(const QString& text);
     void setBottomLeftText(const QString& text);
     void setBottomRightText(const QString& text);
     void setFrameTone(FrameTone tone);
@@ -148,8 +151,13 @@ class PreviewSurface : public QWidget {
     // Push current overlay video + placement + chrome state to the DXGI renderer so
     // the live preview composites the PiP itself (the native child HWND occludes Qt).
     void syncWebcamOverlayToDxgi();
+    // Branded capture-safe fallback drawn in the preview when there is no live
+    // frame and no DXGI preview (no source / source unavailable). Mirrors the
+    // title-bar lockup: aperture mark + two-tone "exosnap".
+    void paintBrandPlaceholder(QPainter& painter, const QRectF& frame_rect);
 
     QImage current_frame_;
+    QString placeholder_hint_;
     QImage webcam_frame_;
     bool webcam_enabled_ = false;
     bool aspect_ratio_locked_ = true;

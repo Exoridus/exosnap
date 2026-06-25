@@ -2,10 +2,13 @@
 
 #include "../../diagnostics/AppLog.h"
 #include "../../services/DxgiPreviewRenderer.h"
+#include "../theme/ExoSnapTheme.h"
 #include "StatusPill.h"
 
 #include <QApplication>
 #include <QCursor>
+#include <QFont>
+#include <QFontMetricsF>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
@@ -189,6 +192,9 @@ PreviewSurface::PreviewSurface(QWidget* parent) : QWidget(parent) {
 
     center_layout->addWidget(center_title_label_, 0, Qt::AlignCenter);
     center_layout->addWidget(center_subtitle_label_, 0, Qt::AlignCenter);
+    // Superseded by the branded empty-state placeholder (paintBrandPlaceholder);
+    // kept for the setCenter* API but never shown so the two don't overlap.
+    center_box_->setVisible(false);
 
     bottom_row_ = new QWidget(this);
     bottom_row_->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -244,7 +250,9 @@ void PreviewSurface::setRecording(bool recording) {
 
 void PreviewSurface::setLiveFrame(QImage frame) {
     current_frame_ = std::move(frame);
-    center_box_->setVisible(current_frame_.isNull());
+    // The empty state is now the branded placeholder (painted in paintEvent); the
+    // legacy center text box stays hidden so the two never overlap.
+    center_box_->setVisible(false);
     update();
 }
 
@@ -362,6 +370,13 @@ void PreviewSurface::setCenterTitle(const QString& text) {
 
 void PreviewSurface::setCenterSubtitle(const QString& text) {
     center_subtitle_label_->setText(text);
+}
+
+void PreviewSurface::setPlaceholderHint(const QString& text) {
+    if (placeholder_hint_ == text)
+        return;
+    placeholder_hint_ = text;
+    update();
 }
 
 void PreviewSurface::setBottomLeftText(const QString& text) {
@@ -994,6 +1009,68 @@ void PreviewSurface::keyReleaseEvent(QKeyEvent* event) {
 // paintEvent
 // ---------------------------------------------------------------------------
 
+void PreviewSurface::paintBrandPlaceholder(QPainter& painter, const QRectF& frame_rect) {
+    const auto& t = theme::ActiveTheme();
+    const QColor accent(QString::fromUtf8(t.ac)); // Studio Mint
+    const QColor ink(QString::fromUtf8(t.ink));   // neutral light ("exo")
+    const QColor dim(QString::fromUtf8(t.dim));   // hint
+
+    // Aperture box size scales with the panel; the lockup mirrors the title bar
+    // (aperture mark + two-tone "exosnap"), centred, with a quiet hint below.
+    const qreal A = std::clamp(frame_rect.height() * 0.11, 36.0, 56.0);
+    const qreal gap = A * 0.36;
+
+    QFont wf = font();
+    wf.setPixelSize(qRound(A * 0.84));
+    wf.setWeight(QFont::DemiBold);
+    const QFontMetricsF fm(wf);
+    const qreal exoW = fm.horizontalAdvance(QStringLiteral("exo"));
+    const qreal snapW = fm.horizontalAdvance(QStringLiteral("snap"));
+    const qreal groupW = A + gap + exoW + snapW;
+
+    const qreal cx = frame_rect.center().x();
+    const qreal cy = frame_rect.center().y();
+    const qreal startX = cx - groupW / 2.0;
+
+    // Aperture: BrandMarkWidget geometry on a 32-unit design grid.
+    painter.save();
+    painter.translate(startX, cy - A / 2.0);
+    painter.scale(A / 32.0, A / 32.0);
+    const QPointF c(16.0, 16.0);
+    QColor outer = accent;
+    outer.setAlphaF(0.45f);
+    painter.setPen(QPen(outer, 1.5));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawEllipse(c, 14.5, 14.5);
+    painter.setPen(QPen(accent, 1.6));
+    painter.drawEllipse(c, 6.2, 6.2);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(accent);
+    painter.drawEllipse(c, 2.4, 2.4);
+    painter.restore();
+
+    // Two-tone wordmark: "exo" neutral + "snap" accent (matches refreshBrand()).
+    painter.setFont(wf);
+    const qreal textX = startX + A + gap;
+    const qreal baseY = cy + fm.xHeight() / 2.0;
+    painter.setPen(ink);
+    painter.drawText(QPointF(textX, baseY), QStringLiteral("exo"));
+    painter.setPen(accent);
+    painter.drawText(QPointF(textX + exoW, baseY), QStringLiteral("snap"));
+
+    // Quiet help text below the lockup (replaces the retired center text box).
+    // Customisable via setPlaceholderHint(); defaults to a no-source prompt.
+    const QString hint = placeholder_hint_.isEmpty()
+                             ? QStringLiteral("No source selected \xE2\x80\x94 choose one to preview")
+                             : placeholder_hint_;
+    QFont hf = font();
+    hf.setPixelSize(qRound(std::clamp(A * 0.30, 12.0, 16.0)));
+    painter.setFont(hf);
+    const QFontMetricsF hfm(hf);
+    painter.setPen(dim);
+    painter.drawText(QPointF(cx - hfm.horizontalAdvance(hint) / 2.0, cy + A / 2.0 + A * 0.70), hint);
+}
+
 void PreviewSurface::paintEvent(QPaintEvent* event) {
     Q_UNUSED(event);
 
@@ -1028,11 +1105,13 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
                               current_frame_);
             painter.restore();
         } else {
+            // No live frame and no DXGI preview (no source / source unavailable):
+            // show the branded capture-safe placeholder instead of a blank panel.
             painter.save();
-            painter.setClipRect(rect().adjusted(1, 1, -1, -1));
-            painter.setPen(QPen(QColor(255, 255, 255, 6), 1.0));
-            for (int x = -height(); x < width() + height(); x += 12)
-                painter.drawLine(x, height(), x + height(), 0);
+            QPainterPath clip;
+            clip.addRoundedRect(frame_rect, 5.0, 5.0);
+            painter.setClipPath(clip);
+            paintBrandPlaceholder(painter, frame_rect);
             painter.restore();
         }
     }
