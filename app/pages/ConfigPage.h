@@ -262,13 +262,6 @@ class ConfigPage : public QWidget {
     void updatePresetActionState();
     void updateExpertModeVisibility();
 
-    // SETTINGS-SEARCH-R1: settings search box filter.
-    // Applies case-insensitive per-card keyword filtering. Cards with no matching
-    // keyword are hidden; the Output Advanced expander is auto-opened when a setting
-    // inside it matches. The Developer card shows an "Enable Expert mode" affordance
-    // when Expert mode is OFF and a Developer keyword matches.
-    void applySettingsSearch(const QString& query);
-
     capability::AudioUiState audio_ui_state_;
     WebcamSettings webcam_settings_;
 
@@ -515,16 +508,7 @@ class ConfigPage : public QWidget {
     QSpinBox* flac_compression_spin_ = nullptr;
     QWidget* flac_compression_row_ = nullptr;
 
-    // SETTINGS-SEARCH-R1: settings search box and match count label.
-    QWidget* settings_search_pill_ = nullptr;
-    QLineEdit* settings_search_box_ = nullptr;
-    QLabel* settings_search_count_label_ = nullptr;
-    // "Enable Expert mode to show" hint shown when a Developer card keyword matches
-    // but Expert mode is off. Parented to the same container as the search box.
-    QLabel* search_expert_hint_label_ = nullptr;
-
-    // Card panel pointers needed for search filtering.
-    // (developer_card_ is already above; remaining cards are stored here.)
+    // Card panel pointers (developer_card_ is already above; remaining cards are stored here).
     QWidget* preset_panel_ = nullptr;
     QWidget* columns_widget_ = nullptr; // two-column host for fmt+audio panels
     QWidget* fmt_panel_ = nullptr;

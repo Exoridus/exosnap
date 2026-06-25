@@ -621,8 +621,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     // ---- SLIM TOOLBAR (Settings 1B redesign) ----
     // One row: [Preset] quiet label · combo · Save (dirty-gated) · Save As… · Manage · dirty hint
-    //          · stretch · (expert-only) search pill · Expert mode label + toggle
-    // Below: match-count / expert-hint / expert-warn labels
+    //          · stretch · Expert mode label + toggle
     // No page title — the active nav tab already reads "Settings".
     {
         auto* header_zone = new QWidget(content);
@@ -632,14 +631,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         header_vl->setSpacing(8);
 
         // ---- Slim toolbar row ----
-        // preset_panel_ points at the toolbar so applySettingsSearch can hide it
-        // when the query does not match "preset" keywords.
         auto* toolbar_row = new QWidget(header_zone);
         toolbar_row->setObjectName(QStringLiteral("settingsSlimToolbar"));
         toolbar_row->setProperty("role", "settingsToolbar");
-        // preset_panel_ intentionally left nullptr: the slim toolbar is always visible
-        // (it carries the Expert toggle/search pill that must not be hidden during search).
-        // applySettingsSearch null-checks preset_panel_ and is a no-op when it is nullptr.
 
         auto* toolbar_hl = new QHBoxLayout(toolbar_row);
         toolbar_hl->setContentsMargins(14, 8, 10, 8);
@@ -736,35 +730,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         // Stretch pushes expert controls to the right
         toolbar_hl->addStretch(1);
 
-        // Expert-only search pill (hidden until expert mode enabled)
-        auto* search_pill = new QWidget(toolbar_row);
-        settings_search_pill_ = search_pill;
-        search_pill->setObjectName(QStringLiteral("settingsSearchPill"));
-        search_pill->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-        search_pill->setFixedHeight(34);
-        search_pill->setVisible(false);
-        auto* pill_hl = new QHBoxLayout(search_pill);
-        pill_hl->setContentsMargins(10, 6, 10, 6);
-        pill_hl->setSpacing(6);
-
-        auto* search_icon = new QLabel(search_pill);
-        search_icon->setFixedSize(15, 15);
-        search_icon->setScaledContents(true);
-        search_icon->setPixmap(ui::theme::lucidePixmap(QStringLiteral("search"),
-                                                       QString::fromUtf8(ui::theme::ActiveTheme().dim), 15,
-                                                       search_icon->devicePixelRatioF()));
-        pill_hl->addWidget(search_icon);
-
-        settings_search_box_ = new QLineEdit(search_pill);
-        settings_search_box_->setObjectName(QStringLiteral("settingsSearchBox"));
-        settings_search_box_->setPlaceholderText(QStringLiteral("Search settings\xe2\x80\xa6"));
-        settings_search_box_->setClearButtonEnabled(true);
-        settings_search_box_->setFrame(false);
-        settings_search_box_->setProperty("role", "pillInput");
-        settings_search_box_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        pill_hl->addWidget(settings_search_box_, 1);
-        toolbar_hl->addWidget(search_pill, 0, Qt::AlignVCenter);
-
         // "Expert mode" label + toggle
         auto* expert_label = new QLabel(QStringLiteral("Expert mode"), toolbar_row);
         expert_label->setProperty("labelRole", "muted");
@@ -782,28 +747,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
         header_vl->addWidget(toolbar_row);
 
-        // Sub-row: match-count, expert-hint
-        settings_search_count_label_ = new QLabel(header_zone);
-        settings_search_count_label_->setObjectName(QStringLiteral("settingsSearchCountLabel"));
-        settings_search_count_label_->setProperty("labelRole", "muted");
-        settings_search_count_label_->setVisible(false);
-        header_vl->addWidget(settings_search_count_label_);
-
-        search_expert_hint_label_ = new QLabel(header_zone);
-        search_expert_hint_label_->setObjectName(QStringLiteral("searchExpertHintLabel"));
-        search_expert_hint_label_->setProperty("labelRole", "muted");
-        search_expert_hint_label_->setWordWrap(true);
-        search_expert_hint_label_->setVisible(false);
-        header_vl->addWidget(search_expert_hint_label_);
-
         layout->addWidget(header_zone);
     }
     // ---- TWO-COLUMN CARD GRID (v10 masonry, fixed-column placement) ----
     // Left column:  Container & codecs · Quality & timing · Audio · Hotkeys · Developer(Expert).
     // Right column: Output · Webcam · Presence · Updates · Appearance.
     // On narrow viewports updateResponsiveLayout() flips both columns to a single stacked column.
-    // Cards are individually visibility-controlled by applySettingsSearch; columns_widget_ is
-    // hidden only when all cards in both columns are hidden to avoid an empty gap.
     auto* columns = new QWidget(content);
     columns_widget_ = columns;
     columns_layout_ = new QHBoxLayout(columns);
@@ -2927,15 +2876,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         emitCurrentAudioSettings();
     });
 
-    // SETTINGS-SEARCH-R1: live search filter wired to textChanged.
-    connect(settings_search_box_, &QLineEdit::textChanged, this, &ConfigPage::applySettingsSearch);
-
-    // Search pill focus indicator: install an event filter on the QLineEdit so we
-    // can set a "focused" dynamic property on the pill when focus enters/leaves.
-    // (Qt QSS does not support :focus-within; a dynamic property + repolish is the
-    // standard Qt workaround.)
-    settings_search_box_->installEventFilter(this);
-
     // audio_separate_expander_ is null (removed in Phase 1b); audioSeparateExpanderChanged
     // is kept in the header for backward compatibility but is never emitted.
 
@@ -3049,15 +2989,6 @@ void ConfigPage::resizeEvent(QResizeEvent* event) {
 }
 
 bool ConfigPage::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == settings_search_box_ && settings_search_pill_) {
-        const auto t = event->type();
-        if (t == QEvent::FocusIn || t == QEvent::FocusOut) {
-            const bool focused = (t == QEvent::FocusIn);
-            settings_search_pill_->setProperty("focused", focused);
-            settings_search_pill_->style()->unpolish(settings_search_pill_);
-            settings_search_pill_->style()->polish(settings_search_pill_);
-        }
-    }
     return QWidget::eventFilter(watched, event);
 }
 
@@ -4640,256 +4571,6 @@ void ConfigPage::updateExpertModeVisibility() {
                             ? presence_panel_->findChild<QWidget*>(QStringLiteral("presenceV1PlaceholderSection"))
                             : nullptr)
         pres_ph->setVisible(expert_mode_enabled_);
-    // PS-PHASE-C: search pill only visible in expert mode.
-    if (settings_search_pill_)
-        settings_search_pill_->setVisible(expert_mode_enabled_);
-}
-
-// SETTINGS-SEARCH-R1: per-card live settings filter.
-//
-// Filtering strategy: per-card (whole cards are shown/hidden as a unit).
-// Rationale: ConfigPage builds all rows as anonymous widgets inlined in layouts;
-// there are no addressable per-row QWidget pointers stored in member variables.
-// Refactoring every row into a named container would restructure the entire
-// constructor — per-card filtering is the correct pragmatic choice here.
-//
-// Cards and their searchable keyword sets:
-//   Preset          → "preset", "profile", "save", "manage"
-//   Format&Encoding → "container", "codec", "quality", "frame rate", "fps", "timing",
-//                     "cfr", "vfr", "cursor", "mkv", "mp4", "webm", "h264", "h.264",
-//                     "av1", "hevc", "aac", "opus", "pcm", "format", "encoding"
-//   Audio           → "audio", "microphone", "mic", "system", "computer", "separate",
-//                     "track"
-//   Webcam          → "webcam", "camera", "mirror", "pip", "overlay"
-//   Output          → "output", "resolution", "destination", "folder", "filename",
-//                     "pattern", "split", "recording", "4k", "1080", "1440", "720",
-//                     "native", "custom"
-//   Updates         → "update", "software", "version", "check", "automatic"
-//   Presence        → "presence", "overlay", "notification", "tray", "diagnostics",
-//                     "quick", "controls"
-//   Appearance      → "appearance", "theme", "color", "colour", "dark", "light"
-//   Developer       → "developer", "log", "logging", "nvtx", "profiling", "debug",
-//                     "expert"
-//
-// Auto-open: when a keyword inside the Output Advanced expander content matches
-//   ("split", "recording"), the expander is forced open.
-// Expert-tier: when a Developer keyword matches and Expert mode is OFF, an inline
-//   "Enable Expert mode to show developer settings" hint is shown instead of
-//   hiding silently.
-
-void ConfigPage::applySettingsSearch(const QString& query) {
-    const QString q = query.trimmed().toLower();
-    const bool searching = !q.isEmpty();
-
-    // Keyword table: each entry maps a card widget to the list of search terms.
-    // The search checks whether ANY term in the list contains the query string.
-    struct CardEntry {
-        QWidget* card;
-        QStringList keywords;
-        bool is_expander_gated = false; // true → also check expander content
-        bool is_developer_card = false; // true → expert-mode affordance path
-    };
-
-    const QStringList preset_kws = {QStringLiteral("preset"), QStringLiteral("profile"), QStringLiteral("save"),
-                                    QStringLiteral("manage")};
-
-    const QStringList fmt_kws = {QStringLiteral("container"),  QStringLiteral("codec"),  QStringLiteral("quality"),
-                                 QStringLiteral("frame rate"), QStringLiteral("fps"),    QStringLiteral("timing"),
-                                 QStringLiteral("cfr"),        QStringLiteral("vfr"),    QStringLiteral("cursor"),
-                                 QStringLiteral("mkv"),        QStringLiteral("mp4"),    QStringLiteral("webm"),
-                                 QStringLiteral("h264"),       QStringLiteral("h.264"),  QStringLiteral("av1"),
-                                 QStringLiteral("hevc"),       QStringLiteral("aac"),    QStringLiteral("opus"),
-                                 QStringLiteral("pcm"),        QStringLiteral("format"), QStringLiteral("encoding")};
-
-    const QStringList audio_kws = {QStringLiteral("audio"),  QStringLiteral("microphone"), QStringLiteral("mic"),
-                                   QStringLiteral("system"), QStringLiteral("computer"),   QStringLiteral("separate"),
-                                   QStringLiteral("track")};
-
-    const QStringList webcam_kws = {QStringLiteral("webcam"), QStringLiteral("camera"), QStringLiteral("mirror"),
-                                    QStringLiteral("pip"), QStringLiteral("overlay")};
-
-    const QStringList output_kws = {
-        QStringLiteral("output"), QStringLiteral("resolution"), QStringLiteral("destination"),
-        QStringLiteral("folder"), QStringLiteral("filename"),   QStringLiteral("pattern"),
-        QStringLiteral("split"),  QStringLiteral("recording"),  QStringLiteral("4k"),
-        QStringLiteral("1080"),   QStringLiteral("1440"),       QStringLiteral("720"),
-        QStringLiteral("native"), QStringLiteral("custom")};
-
-    const QStringList presence_kws = {QStringLiteral("presence"),     QStringLiteral("overlay"),
-                                      QStringLiteral("notification"), QStringLiteral("tray"),
-                                      QStringLiteral("diagnostics"),  QStringLiteral("quick"),
-                                      QStringLiteral("controls")};
-
-    const QStringList appearance_kws = {QStringLiteral("appearance"), QStringLiteral("theme"), QStringLiteral("color"),
-                                        QStringLiteral("colour"),     QStringLiteral("dark"),  QStringLiteral("light")};
-
-    const QStringList developer_kws = {
-        QStringLiteral("developer"), QStringLiteral("log"),   QStringLiteral("logging"), QStringLiteral("nvtx"),
-        QStringLiteral("profiling"), QStringLiteral("debug"), QStringLiteral("expert")};
-
-    // Output Advanced expander keywords (subset of output_kws).
-    // These trigger expander auto-open regardless of which output keyword matched.
-    const QStringList expander_trigger_kws = {QStringLiteral("split"), QStringLiteral("recording")};
-
-    auto kwMatch = [&](const QStringList& keywords) -> bool {
-        for (const auto& kw : keywords) {
-            if (kw.contains(q) || q.contains(kw))
-                return true;
-        }
-        return false;
-    };
-
-    if (!searching) {
-        // Empty query: restore all cards to visible.
-        if (preset_panel_)
-            preset_panel_->setVisible(true);
-        if (columns_widget_)
-            columns_widget_->setVisible(true);
-        if (fmt_panel_)
-            fmt_panel_->setVisible(true);
-        if (quality_panel_)
-            quality_panel_->setVisible(true);
-        if (audio_panel_)
-            audio_panel_->setVisible(true);
-        if (hotkeys_panel_)
-            hotkeys_panel_->setVisible(true);
-        if (webcam_panel_)
-            webcam_panel_->setVisible(true);
-        if (out_panel_)
-            out_panel_->setVisible(true);
-        if (presence_panel_)
-            presence_panel_->setVisible(true);
-        if (updates_panel_)
-            updates_panel_->setVisible(true);
-        if (appearance_panel_)
-            appearance_panel_->setVisible(true);
-        // Developer card: restore to expert-mode-gated state.
-        if (developer_card_)
-            developer_card_->setVisible(expert_mode_enabled_);
-        // Wave 2: output_split_expander_ dissolved — no expander restore needed.
-
-        if (settings_search_count_label_)
-            settings_search_count_label_->setVisible(false);
-        if (search_expert_hint_label_)
-            search_expert_hint_label_->setVisible(false);
-        return;
-    }
-
-    // Active search: compute matches and adjust visibility.
-    const bool preset_match = kwMatch(preset_kws);
-    const bool fmt_match = kwMatch(fmt_kws);
-    const bool audio_match = kwMatch(audio_kws);
-    const bool webcam_match = kwMatch(webcam_kws);
-    const bool output_match = kwMatch(output_kws);
-    const bool presence_match = kwMatch(presence_kws);
-    const bool appearance_match = kwMatch(appearance_kws);
-    const bool developer_match = kwMatch(developer_kws);
-    // Output expander auto-open: matches if any expander-specific keyword matches
-    // OR the general output card already matched (expander is part of Output).
-    const bool expander_trigger = kwMatch(expander_trigger_kws);
-    // Updates and Hotkeys keyword sets.
-    const QStringList updates_kws = {QStringLiteral("update"), QStringLiteral("software"),  QStringLiteral("version"),
-                                     QStringLiteral("check"),  QStringLiteral("automatic"), QStringLiteral("channel"),
-                                     QStringLiteral("stable"), QStringLiteral("preview")};
-    const QStringList hotkeys_kws = {
-        QStringLiteral("hotkey"),  QStringLiteral("shortcut"),  QStringLiteral("keybind"), QStringLiteral("keyboard"),
-        QStringLiteral("binding"), QStringLiteral("recording"), QStringLiteral("pause"),   QStringLiteral("resume"),
-        QStringLiteral("capture"), QStringLiteral("marker"),    QStringLiteral("split"),   QStringLiteral("frame")};
-    const bool updates_match = kwMatch(updates_kws);
-    const bool hotkeys_match = kwMatch(hotkeys_kws);
-
-    // Apply card visibility.
-    if (preset_panel_)
-        preset_panel_->setVisible(preset_match);
-
-    // v10: all grid cards (left + right column) live in columns_widget_.
-    // Hide the host only when ALL cards are hidden to avoid an empty gap.
-    const bool any_column_visible = fmt_match || audio_match || hotkeys_match || webcam_match || output_match ||
-                                    presence_match || updates_match || appearance_match;
-    if (columns_widget_)
-        columns_widget_->setVisible(any_column_visible);
-    if (fmt_panel_)
-        fmt_panel_->setVisible(fmt_match);
-    // v10: the Quality & timing card shares the Format/Encoding keyword set.
-    if (quality_panel_)
-        quality_panel_->setVisible(fmt_match);
-    if (audio_panel_)
-        audio_panel_->setVisible(audio_match);
-    if (hotkeys_panel_)
-        hotkeys_panel_->setVisible(hotkeys_match);
-
-    if (webcam_panel_)
-        webcam_panel_->setVisible(webcam_match);
-    if (out_panel_)
-        out_panel_->setVisible(output_match);
-    if (presence_panel_)
-        presence_panel_->setVisible(presence_match);
-    if (updates_panel_)
-        updates_panel_->setVisible(updates_match);
-    if (appearance_panel_)
-        appearance_panel_->setVisible(appearance_match);
-
-    // Wave 2: output_split_expander_ dissolved — no expander auto-open needed.
-    // Split controls are part of the Output card and visible when expert mode is on.
-    (void)expander_trigger; // still declared; suppress unused-variable warning
-
-    // Developer card: expert-mode affordance.
-    if (developer_match) {
-        if (expert_mode_enabled_) {
-            // Expert mode is on → show the card normally.
-            if (developer_card_)
-                developer_card_->setVisible(true);
-            if (search_expert_hint_label_)
-                search_expert_hint_label_->setVisible(false);
-        } else {
-            // Expert mode is off → show an inline affordance, not the card.
-            if (developer_card_)
-                developer_card_->setVisible(false);
-            if (search_expert_hint_label_) {
-                search_expert_hint_label_->setText(QStringLiteral("Enable Expert mode to show developer settings."));
-                search_expert_hint_label_->setVisible(true);
-            }
-        }
-    } else {
-        // No developer match → keep developer card in its normal gated state.
-        if (developer_card_)
-            developer_card_->setVisible(expert_mode_enabled_);
-        if (search_expert_hint_label_)
-            search_expert_hint_label_->setVisible(false);
-    }
-
-    // Match count.
-    int match_count = 0;
-    // Count each matched card as 1.  This is intentionally coarse (per-card,
-    // not per-row) to match the filtering granularity.
-    if (preset_match)
-        ++match_count;
-    if (fmt_match)
-        ++match_count;
-    if (audio_match)
-        ++match_count;
-    if (webcam_match)
-        ++match_count;
-    if (output_match)
-        ++match_count;
-    if (presence_match)
-        ++match_count;
-    if (appearance_match)
-        ++match_count;
-    if (developer_match)
-        ++match_count;
-
-    if (settings_search_count_label_) {
-        if (match_count == 0) {
-            settings_search_count_label_->setText(QStringLiteral("No matches"));
-        } else {
-            settings_search_count_label_->setText(
-                QStringLiteral("%1 %2")
-                    .arg(match_count)
-                    .arg(match_count == 1 ? QStringLiteral("section") : QStringLiteral("sections")));
-        }
-        settings_search_count_label_->setVisible(true);
-    }
 }
 
 // SETTINGS-TIERS-P3: presence + appearance setters (moved from AdvancedPage).
