@@ -15,8 +15,7 @@ uint64_t NowTimestamp() {
 
 DiagnosticResult MakeResult(const std::string& id, DiagnosticGroup group, DiagnosticSeverity sev,
                             const std::string& title, const std::string& summary, const std::string& detail = "",
-                            const std::string& current_value = "", const std::string& recommendation = "",
-                            const std::string& optional_fix = "") {
+                            const std::string& current_value = "", const std::string& recommendation = "") {
     DiagnosticResult r;
     r.id = id;
     r.group = group;
@@ -26,7 +25,7 @@ DiagnosticResult MakeResult(const std::string& id, DiagnosticGroup group, Diagno
     r.detail = detail;
     r.current_value = current_value;
     r.recommendation = recommendation;
-    r.optional_fix = optional_fix;
+    // fix_action is intentionally left as std::nullopt — self-tests never provide a FixAction.
     r.timestamp = NowTimestamp();
     return r;
 }
@@ -43,7 +42,7 @@ DiagnosticChecklist SelfTestRunner::Run() const {
             all_pass = false;
         DiagnosticResult r = MakeResult("st." + id, DiagnosticGroup::SelfTest, sev, "Self-test: " + st.category,
                                         st.passed ? "PASS" : "WARN", st.detail, st.passed ? "OK" : "Warning",
-                                        st.passed ? "" : "Investigate " + st.category + " availability.", "");
+                                        st.passed ? "" : "Investigate " + st.category + " availability.");
         checklist.results.push_back(std::move(r));
     };
 

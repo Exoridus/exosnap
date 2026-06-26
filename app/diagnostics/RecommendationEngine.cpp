@@ -17,8 +17,7 @@ uint64_t NowTimestamp() {
 
 DiagnosticResult MakeResult(const std::string& id, DiagnosticGroup group, DiagnosticSeverity sev,
                             const std::string& title, const std::string& summary, const std::string& detail = "",
-                            const std::string& current_value = "", const std::string& recommendation = "",
-                            const std::string& optional_fix = "") {
+                            const std::string& current_value = "", const std::string& recommendation = "") {
     DiagnosticResult r;
     r.id = id;
     r.group = group;
@@ -28,7 +27,6 @@ DiagnosticResult MakeResult(const std::string& id, DiagnosticGroup group, Diagno
     r.detail = detail;
     r.current_value = current_value;
     r.recommendation = recommendation;
-    r.optional_fix = optional_fix;
     r.timestamp = NowTimestamp();
     return r;
 }
@@ -57,14 +55,22 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
 
 void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checklist) const {
     if (monitor_refresh_rate_ >= 120 && config_.frame_rate_num == 60 && config_.frame_rate_den == 1) {
-        DiagnosticResult r = MakeResult(
-            "rec.001", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice, "Refresh rate / FPS mismatch",
-            "144+ Hz monitor detected with 60 fps recording.",
-            "Your monitor runs at " + std::to_string(monitor_refresh_rate_) +
-                " Hz but recording is set to 60 fps. This can cause uneven frame pacing.",
-            std::to_string(monitor_refresh_rate_) + " Hz monitor, " + std::to_string(config_.frame_rate_num) +
-                " fps recording",
-            "Cap your game at 60 or 120 fps for smoother pacing.", "Use in-game or driver-level frame rate limiter.");
+        DiagnosticResult r =
+            MakeResult("rec.001", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+                       "Refresh rate / FPS mismatch", "144+ Hz monitor detected with 60 fps recording.",
+                       "Your monitor runs at " + std::to_string(monitor_refresh_rate_) +
+                           " Hz but recording is set to 60 fps. This can cause uneven frame pacing.",
+                       std::to_string(monitor_refresh_rate_) + " Hz monitor, " +
+                           std::to_string(config_.frame_rate_num) + " fps recording",
+                       "Cap your game at 60 or 120 fps for smoother pacing.");
+        FixAction fa;
+        fa.id = "fix.fps.cap";
+        fa.label = "Set recording FPS to match monitor";
+        fa.safety = FixAction::Safety::Assisted;
+        fa.reversible = true;
+        fa.changes_summary =
+            "Opens Video settings to adjust the recording frame rate to better match your monitor's refresh rate.";
+        r.fix_action = fa;
         checklist.has_notice = true;
         checklist.results.push_back(std::move(r));
     }
@@ -78,8 +84,15 @@ void RecommendationEngine::checkMp4CrashResilience(DiagnosticChecklist& checklis
                        "MP4 recordings may become unreadable if the app or system crashes during recording.",
                        "MP4 containers require finalization to write the moov atom. If recording is interrupted, "
                        "the file may be unrecoverable.",
-                       "Container: MP4", "Consider switching to MKV for long or critical recordings.",
-                       "Switch container to MKV in Output settings.");
+                       "Container: MP4", "Consider switching to MKV for long or critical recordings.");
+        FixAction fa;
+        fa.id = "fix.container.mkv";
+        fa.label = "Switch to MKV";
+        fa.safety = FixAction::Safety::Assisted;
+        fa.reversible = true;
+        fa.changes_summary =
+            "Opens Output settings to change the recording container to MKV for better crash resilience.";
+        r.fix_action = fa;
         checklist.has_notice = true;
         checklist.results.push_back(std::move(r));
     }
@@ -93,8 +106,14 @@ void RecommendationEngine::checkCodecAvailability(DiagnosticChecklist& checklist
             "rec.003", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
             "Selected video codec is unavailable", "The selected video codec is not available on this system.",
             "Codec: " + std::string(capability::ToString(config_.video_codec)) + ". Reason: " + v_ann.reason,
-            "Unavailable", "Switch to " + fallback + " which is available.",
-            "Change video codec in Format & Encoding settings.");
+            "Unavailable", "Switch to " + fallback + " which is available.");
+        FixAction fa;
+        fa.id = "fix.codec.video.default";
+        fa.label = "Switch to H.264 (NVENC)";
+        fa.safety = FixAction::Safety::Auto;
+        fa.reversible = true;
+        fa.changes_summary = "Switches the video codec to H.264 (NVENC), which is available on this system.";
+        r.fix_action = fa;
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
     }
@@ -106,8 +125,14 @@ void RecommendationEngine::checkCodecAvailability(DiagnosticChecklist& checklist
             "rec.004", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
             "Selected audio codec is unavailable", "The selected audio codec is not available on this system.",
             "Codec: " + std::string(capability::ToString(config_.audio_codec)) + ". Reason: " + a_ann.reason,
-            "Unavailable", "Switch to " + fallback + " which is available.",
-            "Change audio codec in Format & Encoding settings.");
+            "Unavailable", "Switch to " + fallback + " which is available.");
+        FixAction fa;
+        fa.id = "fix.codec.audio.default";
+        fa.label = "Switch to AAC";
+        fa.safety = FixAction::Safety::Auto;
+        fa.reversible = true;
+        fa.changes_summary = "Switches the audio codec to AAC, which is available on this system.";
+        r.fix_action = fa;
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
     }
@@ -132,8 +157,14 @@ void RecommendationEngine::checkOutputDriveSpace(DiagnosticChecklist& checklist)
                                             "At least 500 MB must be available before recording can begin. "
                                             "Free up disk space or switch to a different output drive.",
                                         free_gb_str + " GB free",
-                                        "Free up disk space or change the output folder to a drive with more space.",
-                                        "Clear temporary files or change output folder in Output settings.");
+                                        "Free up disk space or change the output folder to a drive with more space.");
+        FixAction fa;
+        fa.id = "fix.output.change_folder";
+        fa.label = "Change output folder";
+        fa.safety = FixAction::Safety::Assisted;
+        fa.reversible = true;
+        fa.changes_summary = "Opens Output settings to select an output folder on a drive with more free space.";
+        r.fix_action = fa;
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
         return;
@@ -147,8 +178,14 @@ void RecommendationEngine::checkOutputDriveSpace(DiagnosticChecklist& checklist)
                        "Free space: " + free_gb_str +
                            " GB. "
                            "Recording may stop automatically if space runs out during a session.",
-                       free_gb_str + " GB free", "Free up disk space or switch to a different output drive.",
-                       "Clear temporary files or change output folder in Output settings.");
+                       free_gb_str + " GB free", "Free up disk space or switch to a different output drive.");
+        FixAction fa;
+        fa.id = "fix.output.change_folder";
+        fa.label = "Change output folder";
+        fa.safety = FixAction::Safety::Assisted;
+        fa.reversible = true;
+        fa.changes_summary = "Opens Output settings to select an output folder on a drive with more free space.";
+        r.fix_action = fa;
         checklist.has_notice = true;
         checklist.results.push_back(std::move(r));
     }
@@ -181,8 +218,15 @@ void RecommendationEngine::checkOutputFilesystem(DiagnosticChecklist& checklist)
         "The configured output folder is on a FAT32 volume. A single recording file cannot exceed 4,294,967,295 bytes "
         "(~4 GiB). High-bitrate or long recordings will be cut off once the limit is reached.",
         "Filesystem: FAT32",
-        "Move the output folder to an NTFS or exFAT volume to remove the 4 GiB per-file restriction.",
-        "Change the output folder in Output settings to a drive formatted with NTFS or exFAT.");
+        "Move the output folder to an NTFS or exFAT volume to remove the 4 GiB per-file restriction.");
+    FixAction fa;
+    fa.id = "fix.output.fat32_folder";
+    fa.label = "Change output folder";
+    fa.safety = FixAction::Safety::Assisted;
+    fa.reversible = true;
+    fa.changes_summary =
+        "Opens Output settings to move the output folder to an NTFS or exFAT volume (no 4 GiB file size limit).";
+    r.fix_action = fa;
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
 }
@@ -194,8 +238,14 @@ void RecommendationEngine::checkProfileSupport(DiagnosticChecklist& checklist) c
             "Recording profile is not supported",
             "The current recording profile cannot be used with available hardware.",
             "Your selected profile requires codecs or features not available on this system.", "Profile: unsupported",
-            "Select an available profile or adjust settings to match available capabilities.",
-            "Choose a different profile in Output settings.");
+            "Select an available profile or adjust settings to match available capabilities.");
+        FixAction fa;
+        fa.id = "fix.profile.select";
+        fa.label = "Choose a supported profile";
+        fa.safety = FixAction::Safety::Assisted;
+        fa.reversible = true;
+        fa.changes_summary = "Opens Settings to select a recording profile supported by your hardware.";
+        r.fix_action = fa;
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
     }
