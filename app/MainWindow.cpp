@@ -994,6 +994,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     if (config_page_) {
         // Route Settings audio Rescan through the audio notifier.
         connect(config_page_, &ConfigPage::audioRescanRequested, &audio_notifier_, &AudioDeviceNotifier::rescan);
+
+        // ADR 0034 Phase A: drive the visible Updates card from UpdateService.
+        config_page_->setAutoUpdateCheck(persisted_settings_.check_updates_on_start);
+        connect(config_page_, &ConfigPage::checkForUpdatesRequested, this, [this]() {
+            manual_update_check_ = true; // user-initiated → result updates the card, no toast
+            triggerUpdateCheck();
+        });
+        connect(config_page_, &ConfigPage::updatePrimaryActionRequested, this, [this]() {
+            // Phase A hands off to the releases page; Phase B starts the in-app download.
+            const QString url = last_update_releases_url_.isEmpty()
+                                    ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
+                                    : last_update_releases_url_;
+            QDesktopServices::openUrl(QUrl(url));
+        });
+        connect(config_page_, &ConfigPage::autoUpdateCheckToggled, this, [this](bool enabled) {
+            persisted_settings_.check_updates_on_start = enabled;
+            settings_store_.Save(persisted_settings_);
+        });
         // Route Settings webcam panel Rescan through the webcam notifier.
         // The WebcamSetupPanel is embedded in ConfigPage; access via findChild.
         auto* setup_panel = config_page_->findChild<exosnap::ui::widgets::WebcamSetupPanel*>(
@@ -3363,8 +3381,10 @@ void MainWindow::dispatchNotificationAction(const notifications::NotificationEve
         break;
     }
     case NotificationAction::OpenUpdate: {
-        // Navigate to Settings which hosts the updates panel.
+        // Navigate to Settings and scroll to the updates card (ADR 0034).
         navigateToPage(kSettingsPageIndex);
+        if (config_page_)
+            config_page_->scrollToSection(QStringLiteral("settings/updates"));
         break;
     }
     case NotificationAction::Discard:
@@ -3408,6 +3428,8 @@ void MainWindow::triggerUpdateCheck() {
 
     if (update_panel)
         update_panel->setState(ui::dialogs::UpdateUiState::Checking);
+    if (config_page_)
+        config_page_->setUpdateStatus(QStringLiteral("checking"), QString(), QString());
     update_service_->RequestUpdateCheck();
 }
 
@@ -3444,8 +3466,11 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
             update_panel->setModel(model);
             update_panel->setState(ui::dialogs::UpdateUiState::Error);
         }
+        if (config_page_)
+            config_page_->setUpdateStatus(QStringLiteral("error"), QString(), QString(), model.error_message);
         diagnostics::AppLog::warning(QStringLiteral("update"),
                                      QStringLiteral("Update check failed: %1").arg(model.error_message));
+        manual_update_check_ = false;
         return;
     }
 
@@ -3454,6 +3479,11 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
         update_panel->setState(result.update_available ? ui::dialogs::UpdateUiState::Available
                                                        : ui::dialogs::UpdateUiState::UpToDate);
     }
+    if (config_page_) {
+        config_page_->setUpdateStatus(result.update_available ? QStringLiteral("available")
+                                                              : QStringLiteral("uptodate"),
+                                      available_version, model.last_checked);
+    }
 
     diagnostics::AppLog::info(
         QStringLiteral("update"),
@@ -3461,26 +3491,26 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
             ? QStringLiteral("Update available: %1 → %2 (%3)").arg(current_version, available_version, channel)
             : QStringLiteral("Up to date (%1, %2)").arg(current_version, channel));
 
-    // Notify-on-available: timed info toast + hub advisory.
-    // (Toast action pills are visual-only today — the toast is capture-excluded /
-    // transparent-for-input — but OpenUpdate carries the intent to open About once
-    // toast actions become interactive.)
-    // PS-PHASE-E: hub advisory update-available → deep-link "update-view" → open About overlay.
+    // Notify-on-available: hub advisory (persistent) + a transient toast.
+    // ADR 0034: the advisory deep-links to the Settings updates card.
     if (notification_hub_) {
         // Always clear stale advisory first (handles: up-to-date after was-available).
         notification_hub_->removeAdvisoryById(QStringLiteral("update-available"));
         if (result.update_available) {
             notification_hub_->addAdvisory(QStringLiteral("update-available"), QStringLiteral("info"),
                                            QStringLiteral("Update available \xe2\x80\x94 %1").arg(available_version),
-                                           QStringLiteral("Signature verified. Open About to download."),
-                                           QStringLiteral("now"), /*unread=*/true, QStringLiteral("update-view"),
-                                           QStringLiteral("View in About"),
-                                           /*is_deep_link=*/false);
+                                           QStringLiteral("Signature verified. Open Settings to update."),
+                                           QStringLiteral("now"), /*unread=*/true, QStringLiteral("settings/updates"),
+                                           QStringLiteral("Open in Settings"),
+                                           /*is_deep_link=*/true);
             refreshHubUnreadBell();
         }
     }
 
-    if (result.update_available && persisted_settings_.show_notifications && notification_manager_) {
+    // Transient toast only on an *automatic* check — a manual check already has the
+    // user looking at the Settings card, so a popup would be redundant (ADR 0034).
+    if (result.update_available && !manual_update_check_ && persisted_settings_.show_notifications &&
+        notification_manager_) {
         notifications::NotificationEvent event;
         event.type = notifications::NotificationType::UpdateAvailable;
         event.title = QStringLiteral("Update available — %1").arg(available_version);
@@ -3489,6 +3519,8 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
         event.secondary_action = notifications::NotificationAction::None;
         notification_manager_->Enqueue(std::move(event));
     }
+
+    manual_update_check_ = false;
 }
 
 void MainWindow::navigateToEditExportPage(const QString& file_path, const QString& duration, const QString& size,

@@ -260,6 +260,9 @@ class MainWindow : public QMainWindow {
     UpdateService* update_service_ = nullptr;
     // Last update check's releases-page URL (for the panel's "Open releases" / notes link).
     QString last_update_releases_url_;
+    // ADR 0034 Phase A: true while a user-initiated check is in flight, so an
+    // available result updates the Settings card but does NOT also raise a toast.
+    bool manual_update_check_ = false;
     // Last known monitor rect from RecordPage for overlay positioning.
     QRect recording_monitor_rect_;
     QStackedWidget* stack_ = nullptr;

@@ -125,6 +125,16 @@ class ConfigPage : public QWidget {
     void setShowQuickControls(bool show);
     void setThemeId(const QString& theme_id);
 
+    // Drives the visible Updates card (ADR 0034 Phase A). state is one of
+    // "checking" | "uptodate" | "available" | "error". When "available",
+    // available_version fills the "Update to vX.Y" action; on "error", detail
+    // is shown. last_checked is a human string ("Just now" / "Never").
+    void setUpdateStatus(const QString& state, const QString& available_version, const QString& last_checked,
+                         const QString& detail = QString());
+    // Seeds the "Check for updates automatically" toggle from persisted settings
+    // (no signal emitted).
+    void setAutoUpdateCheck(bool on);
+
     // Reactive device-change handlers (driven by MainWindow from the three notifiers).
     // These preserve selection state and never emit settings-changed or dirty the preset.
     void onAudioDevicesChanged(const exosnap::AudioDeviceSnapshot& snap);
@@ -152,6 +162,16 @@ class ConfigPage : public QWidget {
     // reactive path share the same canonical refresh, with no duplicate
     // enumeration and no duplicate devices.
     void audioRescanRequested();
+
+    // ---- Updates card signals (ADR 0034 Phase A) ----
+    // Manual "Check for updates" press; MainWindow flags this as a user-initiated
+    // check so the resulting available-state does NOT also raise a notification.
+    void checkForUpdatesRequested();
+    // Primary action while an update is available ("Update to vX.Y"). Phase A
+    // hands off to the releases page; Phase B starts the in-app download.
+    void updatePrimaryActionRequested();
+    // "Check for updates automatically" toggle changed.
+    void autoUpdateCheckToggled(bool enabled);
 
     // SETTINGS-TIERS-P3: presence + appearance signals (moved from AdvancedPage).
     void showOverlayChanged(bool show);
@@ -441,6 +461,11 @@ class ConfigPage : public QWidget {
     QWidget* hotkeys_panel_ = nullptr; // card wrapper (for search filtering + scrollToSection)
     // Updates card (right column, between Presence and Appearance).
     QWidget* updates_panel_ = nullptr;
+    // ADR 0034 Phase A: live Updates-card controls.
+    ui::widgets::ExoToggle* updates_auto_toggle_ = nullptr;
+    QLabel* updates_status_label_ = nullptr;
+    QPushButton* updates_action_btn_ = nullptr;
+    QString updates_available_version_; // last advertised "vX.Y" (Available state)
 
     // v10 split: the old "Format & encoding" mega-card is split into
     // "Container & codecs" (fmt_panel_) and "Quality & timing" (quality_panel_).

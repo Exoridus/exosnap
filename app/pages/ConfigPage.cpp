@@ -2669,25 +2669,39 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         updates_layout->setSpacing(0);
         updates_layout->addWidget(makeCardTitle(QStringLiteral("Updates"), updates_panel_, QStringLiteral("download")));
 
-        // Auto-check toggle. We notify on a new release; we never auto-install
-        // (no Update-channel control — Stable is the only published channel).
-        {
-            auto* auto_check_toggle = new ui::widgets::ExoToggle(updates_panel_);
-            auto_check_toggle->setObjectName(QStringLiteral("updatesAutoCheckToggle"));
-            auto_check_toggle->setOn(true);
-            updates_layout->addWidget(makeSettingsRow(
-                updates_panel_, QStringLiteral("Check for updates automatically"),
-                new ui::widgets::InfoHintIcon(
-                    QStringLiteral("Check in the background and notify you when a new version is available."),
-                    updates_panel_),
-                QString(), auto_check_toggle, /*first=*/true));
-        }
+        // Auto-check toggle (ADR 0034). We notify on a new release; we never
+        // auto-install (no Update-channel control — Stable is the only channel).
+        updates_auto_toggle_ = new ui::widgets::ExoToggle(updates_panel_);
+        updates_auto_toggle_->setObjectName(QStringLiteral("updatesAutoCheckToggle"));
+        updates_auto_toggle_->setOn(true);
+        updates_layout->addWidget(makeSettingsRow(
+            updates_panel_, QStringLiteral("Check for updates automatically"),
+            new ui::widgets::InfoHintIcon(
+                QStringLiteral("Check in the background and notify you when a new version is available."),
+                updates_panel_),
+            QString(), updates_auto_toggle_, /*first=*/true));
+        connect(updates_auto_toggle_, &ui::widgets::ExoToggle::toggled, this, &ConfigPage::autoUpdateCheckToggled);
 
-        // Status / action row — stub label; real UpdateControl wired in a later wave.
-        auto* status_lbl = makeHint(QStringLiteral("\xe2\x9c\x93 Up to date"), updates_panel_);
-        status_lbl->setObjectName(QStringLiteral("updatesStatusLabel"));
-        status_lbl->setContentsMargins(0, 10, 0, 0);
-        updates_layout->addWidget(status_lbl);
+        // Status + primary action (ADR 0034 Phase A): status text left, the
+        // "Check for updates" / "Update to vX.Y" button right.
+        auto* updates_action_row = new QWidget(updates_panel_);
+        auto* updates_action_layout = new QHBoxLayout(updates_action_row);
+        updates_action_layout->setContentsMargins(0, 10, 0, 0);
+        updates_action_layout->setSpacing(8);
+        updates_status_label_ = makeHint(QStringLiteral("\xe2\x9c\x93 Up to date"), updates_action_row);
+        updates_status_label_->setObjectName(QStringLiteral("updatesStatusLabel"));
+        updates_action_layout->addWidget(updates_status_label_, 1, Qt::AlignVCenter);
+        updates_action_btn_ = new QPushButton(QStringLiteral("Check for updates"), updates_action_row);
+        updates_action_btn_->setObjectName(QStringLiteral("updatesActionButton"));
+        updates_action_btn_->setCursor(Qt::PointingHandCursor);
+        updates_action_layout->addWidget(updates_action_btn_, 0, Qt::AlignVCenter);
+        updates_layout->addWidget(updates_action_row);
+        connect(updates_action_btn_, &QPushButton::clicked, this, [this]() {
+            if (updates_available_version_.isEmpty())
+                emit checkForUpdatesRequested();
+            else
+                emit updatePrimaryActionRequested();
+        });
 
         // updates_panel_ added to right_layout in the consolidation block below.
     }
@@ -5050,6 +5064,41 @@ void ConfigPage::setHotkeyService(GlobalHotkeyService* service) {
 void ConfigPage::setHotkeyEditingLocked(bool locked) {
     if (hotkeys_settings_panel_)
         hotkeys_settings_panel_->setEditingLocked(locked);
+}
+
+void ConfigPage::setAutoUpdateCheck(bool on) {
+    if (updates_auto_toggle_) {
+        QSignalBlocker block(updates_auto_toggle_);
+        updates_auto_toggle_->setOn(on);
+    }
+}
+
+// ADR 0034 Phase A: render the live Updates-card state. Driven by MainWindow
+// from UpdateService results.
+void ConfigPage::setUpdateStatus(const QString& state, const QString& available_version, const QString& last_checked,
+                                 const QString& detail) {
+    if (!updates_status_label_ || !updates_action_btn_)
+        return;
+    updates_available_version_ = (state == QStringLiteral("available")) ? available_version : QString();
+
+    if (state == QStringLiteral("checking")) {
+        updates_status_label_->setText(QStringLiteral("Checking for updates\xe2\x80\xa6"));
+        updates_action_btn_->setText(QStringLiteral("Check for updates"));
+        updates_action_btn_->setEnabled(false);
+    } else if (state == QStringLiteral("available")) {
+        updates_status_label_->setText(QStringLiteral("Update available \xe2\x80\x94 %1").arg(available_version));
+        updates_action_btn_->setText(QStringLiteral("Update to %1").arg(available_version));
+        updates_action_btn_->setEnabled(true);
+    } else if (state == QStringLiteral("error")) {
+        updates_status_label_->setText(detail.isEmpty() ? QStringLiteral("Couldn't check for updates") : detail);
+        updates_action_btn_->setText(QStringLiteral("Retry"));
+        updates_action_btn_->setEnabled(true);
+    } else { // "uptodate"
+        const QString suffix = last_checked.isEmpty() ? QString() : QStringLiteral(" \xc2\xb7 %1").arg(last_checked);
+        updates_status_label_->setText(QStringLiteral("\xe2\x9c\x93 Up to date%1").arg(suffix));
+        updates_action_btn_->setText(QStringLiteral("Check for updates"));
+        updates_action_btn_->setEnabled(true);
+    }
 }
 
 // PS-PHASE-E: deep-link target support — scroll Settings to the named section.
