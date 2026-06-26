@@ -84,8 +84,10 @@ the install dir). The frontend is identical; only the swap agent differs.
 - **Bricking risk is real.** A faulty swap can leave a broken install. Mitigations are mandatory:
   atomic staging, keep-old-until-healthy rollback, post-start health-check, and a manual recovery
   path (re-download). The swapper must be tiny, dependency-free, and heavily tested.
-- **MSI in-place upgrade requires a stable `UpgradeCode`** across versions (each release currently
-  ships its own ProductCode). Must be verified/fixed in packaging before Phase B MSI works.
+- **MSI in-place upgrade requires a stable `UpgradeCode`** across versions. **Verified ready:**
+  `packaging/msi/Package.wxs` already uses a permanent `UpgradeCode`
+  (`8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D`) with a per-build auto-generated `ProductCode` (`*`) — the
+  correct major-upgrade setup for in-place MSI replacement. No packaging change needed for Phase B MSI.
 - **Two unavoidable non-in-app moments:** the UAC prompt (MSI only) and the brief window where the app
   is closed during the swap (both). The transition is kept short and branded; graceful SmartScreen/UAC
   handling is acceptable per product.
