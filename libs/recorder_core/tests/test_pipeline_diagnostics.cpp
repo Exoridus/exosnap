@@ -559,4 +559,97 @@ TEST(PipelineDiagnostics, SplitTriggerMapping) {
     EXPECT_EQ(ToDiagnosticsSplitTrigger(SplitTriggerSource::AutomaticSize), DiagnosticsSplitTrigger::AutomaticSize);
 }
 
+// ---------------------------------------------------------------------------
+// A/V drift (v0.8.0-C)
+// ---------------------------------------------------------------------------
+
+TEST(PipelineDiagnostics, AvDriftInitiallyZeroAndUnavailable) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_DOUBLE_EQ(s.av_drift_ms, 0.0);
+    EXPECT_EQ(s.av_drift_availability, MetricAvailability::Unavailable);
+}
+
+TEST(PipelineDiagnostics, AvDriftComputedFromPtsInputs) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    // audio PTS = 120 ms, video PTS = 100 ms => drift = +20 ms (audio leads)
+    agg.OnVideoPts(100.0);
+    agg.OnAudioPts(120.0);
+    const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
+    EXPECT_DOUBLE_EQ(s.av_drift_ms, 20.0);
+    EXPECT_EQ(s.av_drift_availability, MetricAvailability::Available);
+}
+
+TEST(PipelineDiagnostics, AvDriftUnavailableIfOnlyOneStreamHasPts) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnVideoPts(100.0); // only video; no audio PTS yet
+    const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
+    EXPECT_EQ(s.av_drift_availability, MetricAvailability::Unavailable);
+}
+
+TEST(PipelineDiagnostics, AvDriftResetClearsState) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnVideoPts(100.0);
+    agg.OnAudioPts(120.0);
+    // After Reset, both "have" flags must clear.
+    agg.Reset(2, MakeConfig());
+    const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(s.av_drift_availability, MetricAvailability::Unavailable);
+    EXPECT_DOUBLE_EQ(s.av_drift_ms, 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// Disk-fill ETA (v0.8.0-C)
+// ---------------------------------------------------------------------------
+
+TEST(PipelineDiagnostics, DiskFillEtaUnavailableWithNoThroughputOrNoFreeBytes) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    auto stats = MakeStats();
+
+    // No throughput, no free bytes -> -1
+    const auto s1 = agg.BuildSnapshot(At(0), stats, DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_LT(s1.disk_fill_eta_seconds, 0.0);
+
+    // Free bytes known but throughput still zero (no baseline yet) -> -1
+    agg.UpdateFreeDiskBytes(1024u * 1024u * 1024u); // 1 GiB
+    const auto s2 = agg.BuildSnapshot(At(200), stats, DiagnosticsLifecycle::Recording, 0.2);
+    EXPECT_LT(s2.disk_fill_eta_seconds, 0.0);
+}
+
+TEST(PipelineDiagnostics, DiskFillEtaComputedCorrectly) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    auto stats = MakeStats();
+
+    // Establish baseline
+    (void)agg.BuildSnapshot(At(0), stats, DiagnosticsLifecycle::Recording, 0.0);
+
+    // Write 100 MiB over 1 second => 100 MiB/s throughput.
+    // Free space = 1000 MiB => ETA = 1000 / 100 = 10 seconds.
+    agg.OnDiskWrite(At(500), 1.0, 100u * 1024u * 1024u);
+    agg.UpdateFreeDiskBytes(1000u * 1024u * 1024u);
+    const auto s = agg.BuildSnapshot(At(1000), stats, DiagnosticsLifecycle::Recording, 1.0);
+    EXPECT_NEAR(s.disk_fill_eta_seconds, 10.0, 0.1);
+}
+
+TEST(PipelineDiagnostics, DiskFillEtaUnavailableWhenFreeBytesZero) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    auto stats = MakeStats();
+
+    // Establish baseline
+    (void)agg.BuildSnapshot(At(0), stats, DiagnosticsLifecycle::Recording, 0.0);
+
+    // throughput is positive but free bytes == 0 -> -1
+    agg.OnDiskWrite(At(500), 1.0, 50u * 1024u * 1024u);
+    agg.UpdateFreeDiskBytes(0u);
+    const auto s = agg.BuildSnapshot(At(1000), stats, DiagnosticsLifecycle::Recording, 1.0);
+    EXPECT_LT(s.disk_fill_eta_seconds, 0.0);
+}
+
 } // namespace

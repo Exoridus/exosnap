@@ -125,6 +125,14 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     sustain_disk_ = 0;
     last_dropped_total_ = 0;
     last_audio_disc_ = 0;
+
+    latest_video_pts_ms_ = 0.0;
+    latest_audio_pts_ms_ = 0.0;
+    have_video_pts_ = false;
+    have_audio_pts_ = false;
+
+    free_bytes_ = 0;
+    free_bytes_known_ = false;
 }
 
 void PipelineDiagnosticsAggregator::SetThresholds(const DiagnosticsThresholds& thresholds) {
@@ -284,6 +292,24 @@ void PipelineDiagnosticsAggregator::SetSplitPending(bool pending) noexcept {
     split_pending_ = pending;
 }
 
+void PipelineDiagnosticsAggregator::OnVideoPts(double ms) noexcept {
+    std::lock_guard lk(mutex_);
+    latest_video_pts_ms_ = ms;
+    have_video_pts_ = true;
+}
+
+void PipelineDiagnosticsAggregator::OnAudioPts(double ms) noexcept {
+    std::lock_guard lk(mutex_);
+    latest_audio_pts_ms_ = ms;
+    have_audio_pts_ = true;
+}
+
+void PipelineDiagnosticsAggregator::UpdateFreeDiskBytes(uint64_t free_bytes) noexcept {
+    std::lock_guard lk(mutex_);
+    free_bytes_ = free_bytes;
+    free_bytes_known_ = true;
+}
+
 // ---- publish --------------------------------------------------------------
 
 RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_point now, const SessionStats& stats,
@@ -437,6 +463,28 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
         sp.seconds_until_auto_split = std::max(0.0, cfg_.auto_split_seconds - since);
     } else {
         sp.seconds_until_auto_split = -1.0;
+    }
+
+    // ---- A/V drift ----
+    // Computed from the most-recent PTS received from each encoder output path.
+    // Positive = audio leads video; negative = video leads audio.
+    // Marked Unavailable until both streams have produced at least one packet.
+    if (have_video_pts_ && have_audio_pts_) {
+        s.av_drift_ms = latest_audio_pts_ms_ - latest_video_pts_ms_;
+        s.av_drift_availability = MetricAvailability::Available;
+    } else {
+        s.av_drift_ms = 0.0;
+        s.av_drift_availability = MetricAvailability::Unavailable;
+    }
+
+    // ---- Disk-fill ETA ----
+    // throughput is the interval MiB/s already computed above.
+    // free_bytes_ is polled externally via UpdateFreeDiskBytes at ~5 Hz.
+    if (throughput > 0.001 && free_bytes_known_ && free_bytes_ > 0) {
+        const double free_mib = static_cast<double>(free_bytes_) / (1024.0 * 1024.0);
+        s.disk_fill_eta_seconds = free_mib / throughput;
+    } else {
+        s.disk_fill_eta_seconds = -1.0;
     }
 
     // ---- Classification ----
