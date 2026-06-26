@@ -1753,6 +1753,13 @@ const QVector<VisualScenario> kEditExportScenarios = {
      .edit_export_container = QStringLiteral("MKV")},
 };
 
+// About surface (State Spec "About · Notification Hub"). The About page is pure
+// identity + facts + links; update status surfaces as a Hub advisory, not on the
+// page, so a single page scenario covers it.
+const QVector<VisualScenario> kAboutScenarios = {
+    {.id = QStringLiteral("about-page"), .title = QStringLiteral("About / Page"), .page = VisualPage::About},
+};
+
 const QVector<VisualScenario>& VisualScenarioRegistry() {
     static QVector<VisualScenario> merged;
     if (merged.isEmpty()) {
@@ -1764,6 +1771,7 @@ const QVector<VisualScenario>& VisualScenarioRegistry() {
         merged.append(kSplitRecordingScenarios);
         merged.append(kPolishR1Scenarios);
         merged.append(kEditExportScenarios);
+        merged.append(kAboutScenarios);
     }
     return merged;
 }
