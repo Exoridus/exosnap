@@ -1918,6 +1918,41 @@ QLabel[labelRole="cardTitle"] {
     color: ${text0};
 }
 
+/* v10: per-card glyph chip to the left of the card title. */
+QLabel#cardGlyphChip {
+    background: ${accent-dim};
+    border: 1px solid ${accent-b2};
+    border-radius: 8px;
+}
+
+/* v10 P3: "Expert mode" header label tints to accent while expert mode is on. */
+QLabel#expertModeLabel[expertOn="true"] {
+    color: ${accent};
+}
+
+/* v10 P2: amber warning banner above the Settings card grid (expert mode only). */
+QWidget#expertWarnBanner {
+    background: ${warn-dim};
+    border: 1px solid ${warn-b};
+    border-left: 3px solid ${warn};
+    border-radius: 11px;
+    padding: 11px 15px;
+}
+
+QLabel#expertWarnBannerText {
+    color: ${warn};
+    font-size: 12.5px;
+    font-weight: 500;
+}
+
+/* v10 P3: expert-only rows (Bit depth, Colour range) carry a left accent edge. */
+QWidget[expertEdge="true"] {
+    border-left: 2px solid ${accent-b2};
+    border-top-left-radius: 2px;
+    border-bottom-left-radius: 2px;
+    padding-left: 10px;
+}
+
 QLabel[labelRole="fieldLabel"] {
     font-family: ${font-mono};
     font-size: 11px;

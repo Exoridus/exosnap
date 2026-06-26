@@ -408,6 +408,8 @@ class ConfigPage : public QWidget {
 
     // SETTINGS-TIERS-R1 / D6: Expert mode toggle (ExoToggle in D6 header zone).
     ui::widgets::ExoToggle* expert_mode_toggle_ = nullptr;
+    QLabel* expert_mode_label_ = nullptr;   // "Expert mode" label (mut -> accent when on)
+    QWidget* expert_warn_banner_ = nullptr; // amber banner above grid, visible only in expert mode
     bool expert_mode_enabled_ = false;
     // Wave 2: split recording controls moved out of expander; now expert-gated section.
     QWidget* split_expert_section_ = nullptr;

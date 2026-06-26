@@ -30,6 +30,7 @@
 #include <QStandardItemModel>
 #include <QStringList>
 #include <QStyle>
+#include <QSvgRenderer>
 #include <QTimer>
 #include <QToolButton>
 #include <QToolTip>
@@ -351,11 +352,96 @@ QFrame* makePanel(QWidget* parent) {
     return panel;
 }
 
+// Lucide-style 24x24 stroke path data for the per-card glyph chips (v10 design set).
+// Path data mirrors shared.jsx ICON_PATHS — kept local so this file owns its glyphs
+// (LucideIcon.cpp lacks film/gauge/speaker/activity/keyboard/palette).
+QByteArray cardGlyphPathFor(const QString& key) {
+    if (key == QLatin1String("film"))
+        return QByteArrayLiteral("M3 4h18v16H3zM3 9h18M3 14h18M8 4v16M16 4v16");
+    if (key == QLatin1String("gauge"))
+        return QByteArrayLiteral("M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM13.4 10.6L17 7M4.5 18a9 9 0 1 1 15 0");
+    if (key == QLatin1String("speaker"))
+        return QByteArrayLiteral("M11 5L6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13");
+    if (key == QLatin1String("folder"))
+        return QByteArrayLiteral("M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z");
+    if (key == QLatin1String("camera"))
+        return QByteArrayLiteral("M3 7h3l2-2h8l2 2h3v12H3zM12 17a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7");
+    if (key == QLatin1String("activity"))
+        return QByteArrayLiteral("M3 12h4l3 8 4-16 3 8h4");
+    if (key == QLatin1String("keyboard"))
+        return QByteArrayLiteral("M3 6h18v12H3zM7 10h.01M11 10h.01M15 10h.01M7 14h10");
+    if (key == QLatin1String("download"))
+        return QByteArrayLiteral("M12 4v11M7 11l5 5 5-5M5 20h14");
+    if (key == QLatin1String("palette"))
+        return QByteArrayLiteral(
+            "M12 3a9 9 0 1 0 0 18c1.1 0 1.7-1 1.4-2-.4-1.2.5-2 1.6-2H18a3 3 0 0 0 "
+            "3-3c0-4.4-4-8-9-8zM7.5 11a1 1 0 1 0 0-.01M12 8a1 1 0 1 0 0-.01M16 11a1 1 0 1 0 0-.01");
+    if (key == QLatin1String("bug"))
+        return QByteArrayLiteral("M8 6a4 4 0 0 1 8 0M6 10h12v4a6 6 0 0 1-12 0zM6 13H3M21 13h-3M5 7L4 6M19 7l1-1M5 "
+                                 "19l-1 1M19 19l1 1");
+    return {};
+}
+
+// Renders a card glyph into a HiDPI-crisp tinted pixmap (same inline-SVG technique as
+// AudioSourceToggle::paintIcon — stroke=color, width 1.7, round caps/joins, fill:none).
+QPixmap cardGlyphPixmap(const QString& key, const QColor& color, int size, qreal dpr) {
+    if (dpr <= 0.0)
+        dpr = 1.0;
+    if (size <= 0)
+        size = 1;
+    const int phys = static_cast<int>(static_cast<qreal>(size) * dpr + 0.5);
+    QPixmap pix(phys, phys);
+    pix.fill(Qt::transparent);
+    pix.setDevicePixelRatio(dpr);
+    const QByteArray path = cardGlyphPathFor(key);
+    if (path.isEmpty())
+        return pix;
+    QByteArray svg;
+    svg.reserve(path.size() + 220);
+    svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='");
+    svg.append(color.name(QColor::HexRgb).toUtf8());
+    svg.append("' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='");
+    svg.append(path);
+    svg.append("'/></svg>");
+    QSvgRenderer renderer(svg);
+    if (!renderer.isValid())
+        return pix;
+    QPainter painter(&pix);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    renderer.render(&painter, QRectF(0, 0, size, size));
+    return pix;
+}
+
 // Card title: 15/600 per the design system "Section/card title" role.
-QLabel* makeCardTitle(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
+// v10: when `icon_key` is non-empty the title gains a 28x28 glyph chip on its left
+// (bg --ac-dim, border --ac-b2, 15px --ac stroke icon). Styling is QSS-driven via the
+// `cardGlyphChip` object name; the icon is tinted to the active theme's accent.
+QWidget* makeCardTitle(const QString& text, QWidget* parent, const QString& icon_key = QString()) {
+    if (icon_key.isEmpty()) {
+        auto* l = new QLabel(text, parent);
+        l->setProperty("labelRole", "cardTitle");
+        return l;
+    }
+    auto* row = new QWidget(parent);
+    row->setProperty("cardTitleRow", true);
+    auto* hl = new QHBoxLayout(row);
+    hl->setContentsMargins(0, 0, 0, 0);
+    hl->setSpacing(10);
+
+    auto* chip = new QLabel(row);
+    chip->setObjectName(QStringLiteral("cardGlyphChip"));
+    chip->setFixedSize(28, 28);
+    chip->setAlignment(Qt::AlignCenter);
+    const QColor accent(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac));
+    chip->setPixmap(cardGlyphPixmap(icon_key, accent, 15, chip->devicePixelRatioF()));
+    hl->addWidget(chip, 0, Qt::AlignVCenter);
+
+    auto* l = new QLabel(text, row);
     l->setProperty("labelRole", "cardTitle");
-    return l;
+    hl->addWidget(l, 0, Qt::AlignVCenter);
+    hl->addStretch(1);
+    return row;
 }
 
 // Mono uppercase "eyebrow" label that sits directly above a form control.
@@ -747,10 +833,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         // Stretch pushes expert controls to the right
         toolbar_hl->addStretch(1);
 
-        // "Expert mode" label + toggle
-        auto* expert_label = new QLabel(QStringLiteral("Expert mode"), toolbar_row);
-        expert_label->setProperty("labelRole", "muted");
-        toolbar_hl->addWidget(expert_label, 0, Qt::AlignVCenter);
+        // "Expert mode" label + toggle. The label tints from muted to accent when expert
+        // mode is on (P3: dynamic `expertOn` property + QSS, repolished in updateExpertModeVisibility()).
+        expert_mode_label_ = new QLabel(QStringLiteral("Expert mode"), toolbar_row);
+        expert_mode_label_->setObjectName(QStringLiteral("expertModeLabel"));
+        expert_mode_label_->setProperty("labelRole", "muted");
+        expert_mode_label_->setProperty("expertOn", false);
+        toolbar_hl->addWidget(expert_mode_label_, 0, Qt::AlignVCenter);
 
         expert_mode_toggle_ = new ui::widgets::ExoToggle(toolbar_row);
         expert_mode_toggle_->setObjectName(QStringLiteral("expertModeToggleBtn"));
@@ -766,6 +855,38 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
         layout->addWidget(header_zone);
     }
+
+    // ---- EXPERT WARNING BANNER (P2) ----
+    // Amber banner above the card grid, visible only in expert mode. Re-introduces the
+    // old expert_warn_label_ banner that was downgraded to an inline InfoHint icon; the
+    // InfoHint by the toggle stays for in-place help, the banner restores the prominent
+    // "files may not play everywhere" caution.
+    {
+        expert_warn_banner_ = new QWidget(content);
+        expert_warn_banner_->setObjectName(QStringLiteral("expertWarnBanner"));
+        auto* ewb_hl = new QHBoxLayout(expert_warn_banner_);
+        ewb_hl->setContentsMargins(0, 0, 0, 0); // padding comes from QSS (11/15)
+        ewb_hl->setSpacing(10);
+
+        auto* ewb_icon = new QLabel(expert_warn_banner_);
+        ewb_icon->setObjectName(QStringLiteral("expertWarnBannerIcon"));
+        ewb_icon->setFixedSize(15, 15);
+        ewb_icon->setAlignment(Qt::AlignCenter);
+        ewb_icon->setPixmap(ui::theme::lucidePixmap(QStringLiteral("alert-triangle"),
+                                                    QString::fromUtf8(ui::theme::ActiveTheme().caution), 15,
+                                                    expert_warn_banner_->devicePixelRatioF()));
+        ewb_hl->addWidget(ewb_icon, 0, Qt::AlignVCenter);
+
+        auto* ewb_text = new QLabel(QStringLiteral("Expert settings can produce files that won't play everywhere."),
+                                    expert_warn_banner_);
+        ewb_text->setObjectName(QStringLiteral("expertWarnBannerText"));
+        ewb_text->setWordWrap(true);
+        ewb_hl->addWidget(ewb_text, 1);
+
+        expert_warn_banner_->setVisible(expert_mode_enabled_);
+        layout->addWidget(expert_warn_banner_);
+    }
+
     // ---- TWO-COLUMN CARD GRID (v10 masonry, fixed-column placement) ----
     // Left column:  Container & codecs · Quality & timing · Audio · Hotkeys · Developer(Expert).
     // Right column: Output · Webcam · Presence · Updates · Appearance.
@@ -796,7 +917,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* fmt_layout = new QVBoxLayout(fmt_panel);
     fmt_layout->setContentsMargins(18, 16, 18, 18);
     fmt_layout->setSpacing(0);
-    fmt_layout->addWidget(makeCardTitle(QStringLiteral("Container & codecs"), fmt_panel));
+    fmt_layout->addWidget(makeCardTitle(QStringLiteral("Container & codecs"), fmt_panel, QStringLiteral("film")));
 
     // format_display_label_ kept for backward compat (hidden)
     format_display_label_ = new QLabel(fmt_panel);
@@ -870,7 +991,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* quality_layout = new QVBoxLayout(quality_panel);
     quality_layout->setContentsMargins(18, 16, 18, 18);
     quality_layout->setSpacing(0);
-    quality_layout->addWidget(makeCardTitle(QStringLiteral("Quality & timing"), quality_panel));
+    quality_layout->addWidget(
+        makeCardTitle(QStringLiteral("Quality & timing"), quality_panel, QStringLiteral("gauge")));
 
     // --- Quality row ---
     // Hidden combo is the single model-change emitter (existing test seam).
@@ -1220,6 +1342,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             dhl->addWidget(video_bit_depth_combo_, 0, Qt::AlignVCenter);
             dvl->addLayout(dhl);
             video_bit_depth_row_->setProperty("settingsRow", true);
+            video_bit_depth_row_->setProperty("expertEdge", true); // P3: left accent edge
             fes_layout->addWidget(video_bit_depth_row_);
         }
 
@@ -1258,6 +1381,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             rhl->addWidget(video_color_range_combo_, 0, Qt::AlignVCenter);
             rvl->addLayout(rhl);
             video_color_range_row_->setProperty("settingsRow", true);
+            video_color_range_row_->setProperty("expertEdge", true); // P3: left accent edge
             fes_layout->addWidget(video_color_range_row_);
         }
 
@@ -1365,7 +1489,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* audio_panel_layout = new QVBoxLayout(audio_panel);
     audio_panel_layout->setContentsMargins(18, 16, 18, 18);
     audio_panel_layout->setSpacing(10);
-    audio_panel_layout->addWidget(makeCardTitle(QStringLiteral("Audio"), audio_panel));
+    audio_panel_layout->addWidget(makeCardTitle(QStringLiteral("Audio"), audio_panel, QStringLiteral("speaker")));
 
     // Helper: build a source row directly into a given layout+parent.
     // DF-12: separate_check is now an ExoToggle pill (was QCheckBox "Separate track").
@@ -1995,7 +2119,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* webcam_panel_layout = new QVBoxLayout(webcam_panel);
     webcam_panel_layout->setContentsMargins(18, 16, 18, 18);
     webcam_panel_layout->setSpacing(10);
-    webcam_panel_layout->addWidget(makeCardTitle(QStringLiteral("Webcam"), webcam_panel));
+    webcam_panel_layout->addWidget(makeCardTitle(QStringLiteral("Webcam"), webcam_panel, QStringLiteral("camera")));
 
     webcam_setup_panel_ = new ui::widgets::WebcamSetupPanel(webcam_panel);
     webcam_setup_panel_->setObjectName(QStringLiteral("settingsWebcamSetupPanel"));
@@ -2008,7 +2132,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* out_panel_layout = new QVBoxLayout(out_panel);
     out_panel_layout->setContentsMargins(18, 16, 18, 18);
     out_panel_layout->setSpacing(12);
-    out_panel_layout->addWidget(makeCardTitle(QStringLiteral("Output"), out_panel));
+    out_panel_layout->addWidget(makeCardTitle(QStringLiteral("Output"), out_panel, QStringLiteral("folder")));
 
     // D6: CompareHint for Output resolution (replaces plain InfoHintIcon).
     resolution_compare_hint_ =
@@ -2292,7 +2416,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* presence_layout = new QVBoxLayout(presence_panel);
         presence_layout->setContentsMargins(18, 14, 18, 14);
         presence_layout->setSpacing(0);
-        presence_layout->addWidget(makeCardTitle(QStringLiteral("Presence"), presence_panel));
+        presence_layout->addWidget(
+            makeCardTitle(QStringLiteral("Presence"), presence_panel, QStringLiteral("activity")));
 
         overlay_check_ = new ui::widgets::ExoToggle(presence_panel);
         overlay_check_->setObjectName(QStringLiteral("overlayCheck"));
@@ -2351,7 +2476,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* appearance_layout = new QVBoxLayout(appearance_panel);
         appearance_layout->setContentsMargins(18, 14, 18, 14);
         appearance_layout->setSpacing(0);
-        appearance_layout->addWidget(makeCardTitle(QStringLiteral("Appearance"), appearance_panel));
+        appearance_layout->addWidget(
+            makeCardTitle(QStringLiteral("Appearance"), appearance_panel, QStringLiteral("palette")));
 
         // Brief description
         auto* appearance_desc = new QLabel(
@@ -2475,7 +2601,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* hotkeys_panel_layout = new QVBoxLayout(hotkeys_panel_);
         hotkeys_panel_layout->setContentsMargins(18, 16, 18, 18);
         hotkeys_panel_layout->setSpacing(10);
-        hotkeys_panel_layout->addWidget(makeCardTitle(QStringLiteral("Hotkeys"), hotkeys_panel_));
+        hotkeys_panel_layout->addWidget(
+            makeCardTitle(QStringLiteral("Hotkeys"), hotkeys_panel_, QStringLiteral("keyboard")));
 
         hotkeys_settings_panel_ = new ui::widgets::HotkeysSettingsPanel(hotkeys_panel_);
         hotkeys_settings_panel_->setObjectName(QStringLiteral("settingsHotkeysPanel"));
@@ -2492,7 +2619,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* dev_layout = new QVBoxLayout(developer_card_);
         dev_layout->setContentsMargins(18, 14, 18, 14);
         dev_layout->setSpacing(M::kSpaceSm);
-        dev_layout->addWidget(makeCardTitle(QStringLiteral("Developer"), developer_card_));
+        dev_layout->addWidget(makeCardTitle(QStringLiteral("Developer"), developer_card_, QStringLiteral("bug")));
         dev_layout->addWidget(
             makeHint(QStringLiteral("Expert debug controls — not persisted between sessions."), developer_card_));
 
@@ -2540,7 +2667,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* updates_layout = new QVBoxLayout(updates_panel_);
         updates_layout->setContentsMargins(18, 14, 18, 14);
         updates_layout->setSpacing(0);
-        updates_layout->addWidget(makeCardTitle(QStringLiteral("Updates"), updates_panel_));
+        updates_layout->addWidget(makeCardTitle(QStringLiteral("Updates"), updates_panel_, QStringLiteral("download")));
 
         // Row 1: Update channel combo (Stable / Preview).
         {
@@ -4413,6 +4540,15 @@ bool ConfigPage::audioSeparateExpanderExpanded() const noexcept {
 }
 
 void ConfigPage::updateExpertModeVisibility() {
+    // P2: amber warning banner above the grid follows the expert gate.
+    if (expert_warn_banner_)
+        expert_warn_banner_->setVisible(expert_mode_enabled_);
+    // P3: "Expert mode" label tints to accent when on (QSS repolish on property change).
+    if (expert_mode_label_) {
+        expert_mode_label_->setProperty("expertOn", expert_mode_enabled_);
+        expert_mode_label_->style()->unpolish(expert_mode_label_);
+        expert_mode_label_->style()->polish(expert_mode_label_);
+    }
     // SETTINGS-TIERS-P3: show/hide the expert-gated Developer card.
     if (developer_card_)
         developer_card_->setVisible(expert_mode_enabled_);
