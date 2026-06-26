@@ -1913,8 +1913,8 @@ QLabel[labelRole="section"] {
 }
 
 QLabel[labelRole="cardTitle"] {
-    font-size: 15px;
-    font-weight: 600;
+    font-size: 14.5px;
+    font-weight: 700;
     color: ${text0};
 }
 
@@ -2081,7 +2081,7 @@ QFrame[panelRole="statTile"],
 QWidget[panelRole="statTile"] {
     background: ${bg3};
     border: 1px solid ${line2};
-    border-radius: ${radius-md}px;
+    border-radius: 12px;
 }
 
 QFrame[panelRole="statTile"][statTone="blocker"] {
@@ -2107,7 +2107,7 @@ QFrame[panelRole="statTile"][statTone="zero"] {
 
 QLabel[labelRole="statTileNum"] {
     font-family: ${font-mono};
-    font-size: 26px;
+    font-size: 30px;
     font-weight: 600;
     color: ${text0};
 }
@@ -2302,7 +2302,7 @@ QLabel[labelRole="pipelineCaption"] {
 QFrame#pipelineStepCard {
     background: ${bg2};
     border: 1px solid ${line2};
-    border-radius: ${radius-lg}px;
+    border-radius: 11px;
 }
 
 QFrame#pipelineStepCard[pipelineStatus="planned"] {
@@ -2404,7 +2404,7 @@ QPlainTextEdit#logViewer {
     border-radius: ${radius-md}px;
     padding: 12px 14px;
     font-family: ${font-mono};
-    font-size: 12.5px;
+    font-size: 11.5px;
     selection-background-color: ${accent-dim};
     selection-color: ${text0};
 }
@@ -2415,9 +2415,9 @@ QPlainTextEdit#logViewer:focus {
 
 QLabel[labelRole="logStatus"] {
     font-family: ${font-mono};
-    font-size: 11px;
+    font-size: 11.5px;
     letter-spacing: 0.02em;
-    color: ${text2};
+    color: ${text3};
 }
 
 /* D3: Logs toolbar ghost-sm buttons (Copy, Export) — h32, pill radius.
@@ -2445,12 +2445,11 @@ QPushButton[logToolbarGhost="true"]:disabled {
     border-color: ${line1};
 }
 
-/* D3: Logs footer folder link — mono 12, accent color, underline */
+/* D3: Logs footer folder link — mono 12, accent color, no underline */
 QLabel[labelRole="logFolderLink"] {
     font-family: ${font-mono};
     font-size: 12px;
     color: ${accent};
-    text-decoration: underline;
 }
 
 QLabel[labelRole="logFolderLink"]:hover {
@@ -2842,6 +2841,20 @@ QToolButton#presetManageButton:hover {
 QToolButton#presetManageButton::menu-indicator {
     image: none;
     width: 0;
+}
+
+/* v10: Preset toolbar "Preset" caption — mono uppercase micro-label, dim. */
+QLabel[labelRole="presetToolbarLabel"] {
+    font-family: ${font-mono};
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: ${text3};
+}
+
+/* v10: "· Unsaved" dirty indicator — amber/caution, matches videoRailUnsaved. */
+QLabel[labelRole="presetDirtyIndicator"] {
+    color: ${warn};
 }
 
 /* InfoHint "i" glyph button: flat icon only, no button chrome. The generic
