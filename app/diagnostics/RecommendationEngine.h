@@ -27,6 +27,8 @@ class RecommendationEngine {
     void checkOutputDriveSpace(DiagnosticChecklist& checklist) const;
     void checkOutputFilesystem(DiagnosticChecklist& checklist) const;
     void checkProfileSupport(DiagnosticChecklist& checklist) const;
+    void checkAudioContainerCompat(DiagnosticChecklist& checklist) const;
+    void checkVideoBitDepthContainerCompat(DiagnosticChecklist& checklist) const;
 
     const capability::CapabilitySet& caps_;
     const capability::UserRecorderConfig& config_;

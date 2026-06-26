@@ -46,6 +46,9 @@ class DiagnosticsPage : public QWidget {
 
   signals:
     void navigateToLogsRequested();
+    // v0.8.0-D: FixAction routing — MainWindow wires these in a later wave.
+    void applyFixActionRequested(const QString& fix_id, const QString& changes_summary);
+    void openAssistedFixRequested(const QString& fix_id);
 
   private slots:
     void onRunCheck();

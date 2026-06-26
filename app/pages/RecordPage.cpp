@@ -1,6 +1,7 @@
 #include "RecordPage.h"
 
 #include "../diagnostics/AppLog.h"
+#include "../diagnostics/RecommendationEngine.h"
 #include "../models/RecordingPreset.h"
 #include "../ui/dialogs/SourcePickerDialog.h"
 #include "../ui/dialogs/SourcePickerOverlay.h"
@@ -1543,6 +1544,44 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     result_markers_label_->setVisible(false);
     result_details_outer->addWidget(result_markers_label_);
 
+    // v0.8.0-D: Pipeline stats row (frame drop %, A/V drift, health badge)
+    auto* report_card_stats_row_ = new QWidget(result_details_panel_);
+    report_card_stats_row_->setObjectName(QStringLiteral("reportCardStatsRow"));
+    auto* stats_row_layout = new QHBoxLayout(report_card_stats_row_);
+    stats_row_layout->setContentsMargins(0, 0, 0, 0);
+    stats_row_layout->setSpacing(12);
+
+    auto* rcs_drop_label = new QLabel(result_details_panel_);
+    rcs_drop_label->setObjectName(QStringLiteral("reportCardDropLabel"));
+    rcs_drop_label->setProperty("labelRole", "resultMetadata");
+    rcs_drop_label->setVisible(false);
+
+    auto* rcs_drift_label = new QLabel(result_details_panel_);
+    rcs_drift_label->setObjectName(QStringLiteral("reportCardDriftLabel"));
+    rcs_drift_label->setProperty("labelRole", "resultMetadata");
+    rcs_drift_label->setVisible(false);
+
+    auto* rcs_health_label = new QLabel(result_details_panel_);
+    rcs_health_label->setObjectName(QStringLiteral("reportCardHealthLabel"));
+    rcs_health_label->setProperty("labelRole", "subtle");
+    rcs_health_label->setVisible(false);
+
+    stats_row_layout->addWidget(rcs_drop_label);
+    stats_row_layout->addWidget(rcs_drift_label);
+    stats_row_layout->addWidget(rcs_health_label);
+    stats_row_layout->addStretch(1);
+
+    // Dismiss button (\xc3\x97) for the whole result details panel
+    report_card_dismiss_btn_ = new QPushButton(QStringLiteral("\xc3\x97"), result_details_panel_);
+    report_card_dismiss_btn_->setProperty("role", "ghost");
+    report_card_dismiss_btn_->setObjectName(QStringLiteral("reportCardDismissBtn"));
+    report_card_dismiss_btn_->setFixedSize(24, 24);
+    report_card_dismiss_btn_->setToolTip(QStringLiteral("Dismiss result"));
+    stats_row_layout->addWidget(report_card_dismiss_btn_, 0, Qt::AlignRight | Qt::AlignVCenter);
+
+    report_card_stats_row_->setVisible(false);
+    result_details_outer->addWidget(report_card_stats_row_);
+
     // --- Inline rename overlay ---
     rename_overlay_ = new QFrame(result_details_panel_);
     rename_overlay_->setObjectName(QStringLiteral("renameOverlay"));
@@ -1606,6 +1645,33 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     recent_section_layout->addWidget(recent_header_label_);
     recent_section_layout->addWidget(recent_items_container_);
 
+    // v0.8.0-D: Pre-flight ReadinessGate — compact status widget above the transport dock
+    readiness_gate_panel_ = new QFrame(this);
+    readiness_gate_panel_->setProperty("panelRole", "readinessGate");
+    readiness_gate_panel_->setVisible(false);
+    auto* rg_layout = new QHBoxLayout(readiness_gate_panel_);
+    rg_layout->setContentsMargins(10, 6, 10, 6);
+    rg_layout->setSpacing(8);
+
+    auto* rg_text_col = new QVBoxLayout();
+    rg_text_col->setSpacing(2);
+
+    readiness_gate_status_label_ = new QLabel(QStringLiteral("Checking capabilities..."), readiness_gate_panel_);
+    readiness_gate_status_label_->setProperty("labelRole", "readinessGateStatus");
+    rg_text_col->addWidget(readiness_gate_status_label_);
+
+    readiness_gate_detail_label_ = new QLabel(QStringLiteral(""), readiness_gate_panel_);
+    readiness_gate_detail_label_->setProperty("labelRole", "readinessGateDetail");
+    readiness_gate_detail_label_->setWordWrap(true);
+    readiness_gate_detail_label_->setVisible(false);
+    rg_text_col->addWidget(readiness_gate_detail_label_);
+
+    rg_layout->addLayout(rg_text_col, 1);
+
+    readiness_gate_details_btn_ = new QPushButton(QStringLiteral("View details \xe2\x86\x92"), readiness_gate_panel_);
+    readiness_gate_details_btn_->setProperty("role", "ghost");
+    rg_layout->addWidget(readiness_gate_details_btn_, 0, Qt::AlignVCenter);
+
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
                              ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
@@ -1631,6 +1697,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     root->setSpacing(10);
     root->addWidget(preview_column_, 1);
     root->addWidget(result_details_panel_, 0);
+    root->addWidget(readiness_gate_panel_, 0);
     // v10: Recent recordings section removed from the visible layout — the
     // finished state returns to Ready and a toast carries the result.
     // recent_section_ is kept constructed (history_store_ still writes to it)
@@ -1677,6 +1744,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(destination_settings_btn_, &QPushButton::clicked, this, [this]() { emit navigateToOutputPage(); });
     connect(readiness_diagnostics_btn_, &QPushButton::clicked, this, [this]() { emit navigateToDiagnosticsPage(); });
     connect(rail_diagnostics_btn_, &QPushButton::clicked, this, [this]() { emit navigateToDiagnosticsPage(); });
+    connect(readiness_gate_details_btn_, &QPushButton::clicked, this, [this]() { emit navigateToDiagnosticsPage(); });
     connect(result_open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
     connect(result_record_again_btn_, &QPushButton::clicked, this, [this]() {
         if (view_model_.CanStart() && interaction_mode_ == InteractionMode::None) {
@@ -1686,6 +1754,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
             onStart();
         }
     });
+    connect(report_card_dismiss_btn_, &QPushButton::clicked, this, [this]() { hideResultDetailsPanel(); });
     connect(result_edit_export_btn_, &QPushButton::clicked, this, [this]() {
         const QString path = QString::fromStdWString(view_model_.result_output_path);
         const double dur_sec = view_model_.result_elapsed_seconds;
@@ -2048,6 +2117,7 @@ void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
         view_model_.capability_status_text = coordinator_->CapabilityStatusText();
         syncCoordinatorTargetContext();
     }
+    updateRecReadiness();
     refresh();
     diagnostics::AppLog::info(
         QStringLiteral("output"),
@@ -2085,6 +2155,7 @@ void RecordPage::setActiveProfileName(const std::string& profile_name) {
 void RecordPage::setRuntimeCapabilities(const capability::CapabilitySet& caps) {
     shared_runtime_caps_ = caps;
     shared_runtime_caps_received_ = true;
+    updateRecReadiness();
 }
 
 // ---------------------------------------------------------------------------
@@ -2322,6 +2393,7 @@ void RecordPage::setVideoSettings(const VideoSettingsModel& settings) {
         view_model_.capability_status_text = coordinator_->CapabilityStatusText();
     }
     setOutputSettingsSummary(current_output_settings_);
+    updateRecReadiness();
     refresh();
 }
 
@@ -3135,6 +3207,11 @@ void RecordPage::initCoordinator() {
                 // Fresh start.
                 wall_elapsed_before_pause_ms_ = 0;
                 recording_wall_clock_.start();
+                // Reset post-flight report card stats for the new recording.
+                peak_av_drift_ms_ = 0.0;
+                av_drift_ever_available_ = false;
+                last_pipeline_health_ = recorder_core::PipelineHealth::Idle;
+                last_completed_snapshot_ = {};
             }
             if (ui_clock_timer_ && !ui_clock_timer_->isActive())
                 ui_clock_timer_->start();
@@ -3169,8 +3246,24 @@ void RecordPage::initCoordinator() {
         view_model_.UpdateStats(stats);
         updateStatsDisplay();
     });
-    coordinator_->SetDiagnosticsCallback(
-        [this](const recorder_core::RecordingDiagnosticsSnapshot& snapshot) { emit diagnosticsUpdated(snapshot); });
+    coordinator_->SetDiagnosticsCallback([this](const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+        emit diagnosticsUpdated(snapshot);
+        // Accumulate A/V drift peak during Recording lifecycle
+        if (snapshot.lifecycle == recorder_core::DiagnosticsLifecycle::Recording) {
+            if (snapshot.av_drift_availability == recorder_core::MetricAvailability::Available) {
+                av_drift_ever_available_ = true;
+                const double abs_drift = std::abs(snapshot.av_drift_ms);
+                if (abs_drift > peak_av_drift_ms_)
+                    peak_av_drift_ms_ = abs_drift;
+            }
+            last_pipeline_health_ = snapshot.health;
+        }
+        // Capture final snapshot when pipeline completes
+        if (snapshot.lifecycle == recorder_core::DiagnosticsLifecycle::Completed) {
+            last_completed_snapshot_ = snapshot;
+            last_pipeline_health_ = snapshot.health;
+        }
+    });
     coordinator_->SetMicMeterUpdatedCallback([this](float rms_linear) {
         preflight_mic_rms_ = std::clamp(rms_linear, 0.0f, 1.0f);
         updateAudioMeterLevels();
@@ -5290,6 +5383,7 @@ void RecordPage::refresh() {
     updateSourceChip();
     updatePreviewContextChips();
     updateReadinessRows();
+    updateReadinessGate();
     updateAudioControls();
     updateAudioTrackPreview();
     syncMicMeterService();
@@ -5799,6 +5893,104 @@ void RecordPage::updateReadinessRows() {
                                 rows[i].hard_blocked ? "blocked" : (rows[i].ok ? "ready" : "muted"));
         row_widgets.detail->setText(rows[i].detail);
     }
+}
+
+void RecordPage::updateRecReadiness() {
+    // Quick synchronous check using current config. No disk-space check (0 = skip).
+    if (!shared_runtime_caps_received_)
+        return;
+    capability::UserRecorderConfig config;
+    config.container = current_container_;
+    config.video_codec = current_video_codec_;
+    config.audio_codec = current_audio_codec_;
+    // frame_rate_num/den: use defaults (60/1); monitor_refresh_rate: not available here → 0
+    // is_profile_supported: derived from coordinator if available, else true (safe default)
+    const bool profile_supported = true;
+    diagnostics::RecommendationEngine engine(shared_runtime_caps_, config, 0, 0, profile_supported);
+    rec_checklist_ = engine.Generate();
+    rec_checklist_valid_ = true;
+}
+
+void RecordPage::updateReadinessGate() {
+    if (!readiness_gate_panel_ || !readiness_gate_status_label_ || !readiness_gate_detail_label_ ||
+        !readiness_gate_details_btn_)
+        return;
+
+    const UiRecordingState s = view_model_.state;
+    const bool recording =
+        (s == UiRecordingState::Recording || s == UiRecordingState::Paused || s == UiRecordingState::Stopping ||
+         s == UiRecordingState::Saving || s == UiRecordingState::Countdown || s == UiRecordingState::Preparing ||
+         s == UiRecordingState::ArmedFromRecovery || s == UiRecordingState::RegionSelecting);
+    const bool completed = (s == UiRecordingState::Completed);
+
+    // Hide during active recording and after completing (result panel takes over)
+    if (recording || completed) {
+        readiness_gate_panel_->setVisible(false);
+        return;
+    }
+
+    readiness_gate_panel_->setVisible(true);
+
+    const bool blocked = (s == UiRecordingState::Blocked);
+    const bool checking = (s == UiRecordingState::LoadingCapabilities);
+
+    QString status_text;
+    QString detail_text;
+    QString state_role;
+
+    if (checking) {
+        status_text = QStringLiteral("Checking capabilities\xe2\x80\xa6");
+        state_role = QStringLiteral("muted");
+    } else if (blocked) {
+        status_text = QStringLiteral("Recording blocked");
+        // Pull first blocker title from coordinator capability text
+        const QString cap_text = QString::fromStdWString(view_model_.capability_status_text).trimmed();
+        const QStringList lines = cap_text.split(QChar('\n'), Qt::SkipEmptyParts);
+        if (!lines.isEmpty())
+            detail_text = lines.first().trimmed();
+        state_role = QStringLiteral("blocked");
+    } else if (rec_checklist_valid_ && rec_checklist_.has_blocker) {
+        // Recommendation engine found a container/codec blocker (rec.009/010)
+        status_text = QStringLiteral("Recording blocked");
+        for (const auto& r : rec_checklist_.results) {
+            if (r.severity == diagnostics::DiagnosticSeverity::Blocker) {
+                detail_text = QString::fromStdString(r.title);
+                break;
+            }
+        }
+        state_role = QStringLiteral("blocked");
+    } else if (rec_checklist_valid_ && rec_checklist_.has_notice) {
+        const int notice_count = static_cast<int>(std::count_if(
+            rec_checklist_.results.begin(), rec_checklist_.results.end(), [](const diagnostics::DiagnosticResult& r) {
+                return r.severity == diagnostics::DiagnosticSeverity::Notice;
+            }));
+        status_text = notice_count == 1 ? QStringLiteral("1 warning") : QStringLiteral("%1 warnings").arg(notice_count);
+        for (const auto& r : rec_checklist_.results) {
+            if (r.severity == diagnostics::DiagnosticSeverity::Notice) {
+                detail_text = QString::fromStdString(r.title);
+                break;
+            }
+        }
+        state_role = QStringLiteral("warn");
+    } else {
+        status_text = QStringLiteral("Ready to record");
+        state_role = QStringLiteral("ready");
+    }
+
+    readiness_gate_status_label_->setText(status_text);
+
+    const bool has_detail = !detail_text.isEmpty();
+    readiness_gate_detail_label_->setText(detail_text);
+    readiness_gate_detail_label_->setVisible(has_detail);
+
+    // Apply stateRole to panel + status label for QSS color-coding
+    const auto repolish = [](QWidget* w, const QString& role) {
+        w->setProperty("stateRole", role.isEmpty() ? QVariant() : QVariant(role));
+        w->style()->unpolish(w);
+        w->style()->polish(w);
+    };
+    repolish(readiness_gate_panel_, state_role);
+    repolish(readiness_gate_status_label_, state_role);
 }
 
 void RecordPage::updateSourceChip() {
@@ -6370,6 +6562,90 @@ void RecordPage::updateResultDetailsPanel() {
             rename_overlay_->setVisible(false);
         if (delete_confirm_overlay_)
             delete_confirm_overlay_->setVisible(false);
+    }
+
+    updateReportCard();
+}
+
+void RecordPage::updateReportCard() {
+    auto* panel = findChild<QFrame*>(QStringLiteral("resultDetailsPanel"));
+    if (!panel)
+        return;
+
+    auto* stats_row = panel->findChild<QWidget*>(QStringLiteral("reportCardStatsRow"));
+    auto* drop_label = panel->findChild<QLabel*>(QStringLiteral("reportCardDropLabel"));
+    auto* drift_label = panel->findChild<QLabel*>(QStringLiteral("reportCardDriftLabel"));
+    auto* health_label = panel->findChild<QLabel*>(QStringLiteral("reportCardHealthLabel"));
+
+    const auto& snap = last_completed_snapshot_;
+    const bool has_snap = snap.valid || snap.session_generation > 0;
+
+    if (!has_snap || !stats_row) {
+        if (stats_row)
+            stats_row->setVisible(false);
+        return;
+    }
+    stats_row->setVisible(true);
+
+    // Frame drop %
+    if (drop_label) {
+        const uint64_t dropped = snap.capture.frames_dropped_total();
+        const uint64_t emitted = (std::max)(static_cast<uint64_t>(1), snap.capture.frames_emitted);
+        const double drop_pct = static_cast<double>(dropped) * 100.0 / static_cast<double>(emitted);
+        if (dropped == 0) {
+            drop_label->setText(QStringLiteral("No frames dropped"));
+        } else {
+            drop_label->setText(QStringLiteral("%1% frames dropped").arg(drop_pct, 0, 'f', 1));
+        }
+        drop_label->setVisible(true);
+    }
+
+    // Peak A/V drift
+    if (drift_label) {
+        if (av_drift_ever_available_) {
+            drift_label->setText(QStringLiteral("Peak A/V drift: \xc2\xb1%1 ms").arg(peak_av_drift_ms_, 0, 'f', 0));
+        } else {
+            drift_label->setText(QStringLiteral("A/V drift: unavailable"));
+        }
+        drift_label->setVisible(true);
+    }
+
+    // Pipeline health badge
+    if (health_label) {
+        const QString health_text = [&]() -> QString {
+            switch (last_pipeline_health_) {
+            case recorder_core::PipelineHealth::Good:
+                return QStringLiteral("Pipeline: Good");
+            case recorder_core::PipelineHealth::Warning:
+                return QStringLiteral("Pipeline: Warning");
+            case recorder_core::PipelineHealth::Critical:
+                return QStringLiteral("Pipeline: Critical");
+            case recorder_core::PipelineHealth::Unavailable:
+                return QStringLiteral("Pipeline: Unavailable");
+            default:
+                return {};
+            }
+        }();
+
+        if (health_text.isEmpty()) {
+            health_label->setVisible(false);
+        } else {
+            health_label->setText(health_text);
+            const QString role = [&]() -> QString {
+                switch (last_pipeline_health_) {
+                case recorder_core::PipelineHealth::Good:
+                    return QStringLiteral("statusGood");
+                case recorder_core::PipelineHealth::Warning:
+                    return QStringLiteral("statusWarn");
+                case recorder_core::PipelineHealth::Critical:
+                    return QStringLiteral("statusBad");
+                default:
+                    return QStringLiteral("subtle");
+                }
+            }();
+            setStyledStringProperty(health_label, "labelRole", role);
+            health_label->setVisible(true);
+        }
     }
 }
 

@@ -563,6 +563,56 @@ QLabel[labelRole="railReadiness"][stateRole="muted"] {
     color: ${text2};
 }
 
+/* v0.8.0-D: Pre-flight ReadinessGate (compact widget in main Record layout) */
+QFrame[panelRole="readinessGate"] {
+    border: 1px solid ${line2};
+    border-radius: ${radius-md}px;
+    background: ${bg2};
+}
+
+QFrame[panelRole="readinessGate"][stateRole="ready"] {
+    background: ${ok-a08};
+    border-color: ${ok-b};
+}
+
+QFrame[panelRole="readinessGate"][stateRole="warn"] {
+    background: ${warn-a08};
+    border-color: ${warn-b};
+}
+
+QFrame[panelRole="readinessGate"][stateRole="blocked"] {
+    background: ${err-a08};
+    border-color: ${err-b};
+}
+
+QLabel[labelRole="readinessGateStatus"] {
+    font-size: 12px;
+    font-weight: 600;
+    color: ${text1};
+}
+
+QLabel[labelRole="readinessGateStatus"][stateRole="ready"] {
+    color: ${ok};
+}
+
+QLabel[labelRole="readinessGateStatus"][stateRole="warn"] {
+    color: ${warn};
+}
+
+QLabel[labelRole="readinessGateStatus"][stateRole="blocked"] {
+    color: ${err};
+}
+
+QLabel[labelRole="readinessGateDetail"] {
+    font-size: 11px;
+    color: ${text2};
+}
+
+/* v0.8.0-D: statusWarn for Pipeline health Warning state */
+QLabel[labelRole="statusWarn"] {
+    color: ${warn};
+}
+
 QLabel[labelRole="railStats"] {
     font-family: ${font-mono};
     font-size: 10.5px;
