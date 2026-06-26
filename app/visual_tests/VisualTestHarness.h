@@ -20,8 +20,9 @@ struct VisualTestOptions {
     QString manifest_path;
     bool maximize = false;
     bool exit_after_capture = false;
-    int window_width = 0;  // 0 = harness default
-    int window_height = 0; // 0 = harness default
+    int window_width = 0;    // 0 = harness default
+    int window_height = 0;   // 0 = harness default
+    int target_display = -1; // -1 = auto (capture mode prefers a non-primary screen)
 };
 
 bool HasVisualTestRequest(const QStringList& args);
