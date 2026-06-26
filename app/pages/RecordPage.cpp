@@ -5859,6 +5859,8 @@ void RecordPage::updateReadinessRows() {
 
         readiness_summary_label_->setText(summary_text);
         setStyledStringProperty(readiness_summary_label_, "stateRole", summary_state);
+        // Propagate stateRole to the container panel so QSS state-tint rules apply.
+        setStyledStringProperty(readiness_panel_, "stateRole", summary_state);
     }
     if (readiness_diagnostics_btn_) {
         readiness_diagnostics_btn_->setVisible(true);

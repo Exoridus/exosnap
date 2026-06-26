@@ -646,10 +646,28 @@ QLabel[labelRole="railStatValue"] {
     color: ${text0};
 }
 
-/* Readiness strip below the preview: a quiet hairline-bordered strip, not a filled card. */
+/* Readiness strip below the preview: a quiet hairline-bordered strip with semantic state tinting.
+   stateRole is propagated from RecordPage::updateReadinessRows() so the panel background and
+   border change with the summary state. radius-sm (8px) keeps it inline — not a pill card. */
 QFrame#recordReadinessPanel {
     background: transparent;
     border: 1px solid ${line1};
+    border-radius: ${radius-sm}px;
+}
+
+QFrame#recordReadinessPanel[stateRole="ready"] {
+    background: ${ok-a08};
+    border-color: ${ok-a42};
+}
+
+QFrame#recordReadinessPanel[stateRole="warn"] {
+    background: ${warn-a08};
+    border-color: ${warn-a42};
+}
+
+QFrame#recordReadinessPanel[stateRole="blocked"] {
+    background: ${err-a10};
+    border-color: ${err-a48};
 }
 
 QWidget#recordSourceRow {
@@ -3494,4 +3512,106 @@ QPushButton[themePickerCard="true"]:checked {
 QPushButton[themePickerCard="true"]:focus {
     border-color: ${accent};
     outline: none;
+}
+
+/* ── Notification Hub Panel ─────────────────────────────────────────────────
+   NotificationHubPanel paints its own backdrop in paintEvent (bg1 fill + line2
+   border); set background: transparent so the custom paint shows through.
+   Child widgets below style the header, empty state, dividers and action buttons. */
+QFrame#notificationHubPanel {
+    background: transparent;
+    border: none;
+}
+
+QWidget#hubHeader {
+    background: transparent;
+}
+
+QLabel#hubTitle {
+    font-family: ${font-sans};
+    font-size: 13.5px;
+    font-weight: 600;
+    color: ${text0};
+}
+
+/* "Mark all read" — accent-tinted interactive label. No cursor property: Qt
+   QSS does not support cursor and logs an "Unknown property" warning per polish. */
+QLabel#hubMarkAllRead {
+    font-size: 12px;
+    font-weight: 500;
+    color: ${accent};
+}
+
+QFrame#hubHeaderDivider {
+    background: ${line1};
+    border: none;
+    min-height: 1px;
+    max-height: 1px;
+}
+
+QWidget#hubScrollContent {
+    background: transparent;
+}
+
+QWidget#hubEmptyState {
+    background: transparent;
+}
+
+/* Empty-state icon container — rounded surface to distinguish the glyph. */
+QWidget#hubEmptyIcon {
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-radius: 10px;
+}
+
+QLabel#hubEmptyTitle {
+    font-family: ${font-sans};
+    font-size: 13.5px;
+    font-weight: 600;
+    color: ${text0};
+}
+
+QLabel#hubEmptyBody {
+    font-size: 12.5px;
+    color: ${text2};
+}
+
+/* Per-item divider between advisory rows. */
+QFrame#hubItemDivider {
+    background: ${line1};
+    border: none;
+    min-height: 1px;
+    max-height: 1px;
+}
+
+/* ── Advisory action buttons (notification hub item actions) ─────────────────
+   Ghost style: transparent background, subtle line2 border, accent text.
+   Hover accent-dims the background and sharpens the border to accent-b2.
+   No cursor property — Qt QSS does not support it. */
+QPushButton[advisoryAction="true"] {
+    background: transparent;
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    color: ${accent};
+    font-size: 12px;
+    font-weight: 600;
+    min-height: 26px;
+    padding: 0 10px;
+}
+
+QPushButton[advisoryAction="true"]:hover {
+    background: ${ac-a10};
+    border-color: ${accent-b2};
+    color: ${accent};
+}
+
+QPushButton[advisoryAction="true"]:pressed {
+    background: ${ac-a12};
+    border-color: ${accent-b2};
+}
+
+QPushButton[advisoryAction="true"]:disabled {
+    color: ${text3};
+    background: transparent;
+    border-color: ${line1};
 }
