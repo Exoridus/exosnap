@@ -1760,6 +1760,21 @@ const QVector<VisualScenario> kAboutScenarios = {
     {.id = QStringLiteral("about-page"), .title = QStringLiteral("About / Page"), .page = VisualPage::About},
 };
 
+// Updates card (ADR 0034 Phase A), scrolled into view for below-the-fold capture.
+const QVector<VisualScenario> kUpdatesScenarios = {
+    {.id = QStringLiteral("settings-updates-uptodate"),
+     .title = QStringLiteral("Settings / Updates / Up to date"),
+     .page = VisualPage::Settings,
+     .scroll_target = QStringLiteral("settings/updates"),
+     .settings_update_state = QStringLiteral("uptodate")},
+    {.id = QStringLiteral("settings-updates-available"),
+     .title = QStringLiteral("Settings / Updates / Available"),
+     .page = VisualPage::Settings,
+     .scroll_target = QStringLiteral("settings/updates"),
+     .settings_update_state = QStringLiteral("available"),
+     .settings_update_version = QStringLiteral("0.9.0")},
+};
+
 const QVector<VisualScenario>& VisualScenarioRegistry() {
     static QVector<VisualScenario> merged;
     if (merged.isEmpty()) {
@@ -1772,6 +1787,7 @@ const QVector<VisualScenario>& VisualScenarioRegistry() {
         merged.append(kPolishR1Scenarios);
         merged.append(kEditExportScenarios);
         merged.append(kAboutScenarios);
+        merged.append(kUpdatesScenarios);
     }
     return merged;
 }

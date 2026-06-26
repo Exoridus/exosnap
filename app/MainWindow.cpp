@@ -2748,6 +2748,23 @@ void MainWindow::applyVisualSettingsScenario(const visual::VisualScenario& scena
     config_page_->setExpertModeEnabled(scenario.settings_expert_mode);
     config_page_->setOutputSplitExpanderExpanded(scenario.settings_advanced_expanded);
 
+    // ADR 0034: drive the Updates-card state and/or scroll to a section so
+    // below-the-fold cards are captured. Deferred (40 ms) so it runs after layout
+    // + preset reflow but before the harness grab at t=120 ms.
+    if (!scenario.settings_update_state.isEmpty() || !scenario.scroll_target.isEmpty()) {
+        const QString upd_state = scenario.settings_update_state;
+        const QString upd_version = scenario.settings_update_version;
+        const QString scroll_to = scenario.scroll_target;
+        QTimer::singleShot(40, this, [this, upd_state, upd_version, scroll_to]() {
+            if (!config_page_)
+                return;
+            if (!upd_state.isEmpty())
+                config_page_->setUpdateStatus(upd_state, upd_version, QStringLiteral("Just now"));
+            if (!scroll_to.isEmpty())
+                config_page_->scrollToSection(scroll_to);
+        });
+    }
+
     // Webcam-card scenarios (mirror off/on, unavailable) drive the embedded panel
     // deterministically without opening a real camera.
     if (scenario.webcam_state != visual::VisualWebcamState::None) {
