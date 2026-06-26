@@ -53,6 +53,9 @@ class TransportDock : public QFrame {
     // controls whether the user may click it now (read-only status otherwise).
     void setToggleState(const QString& key, bool on, bool interactive);
 
+    // Show or hide an individual source toggle (e.g. App toggle in Display mode).
+    void setToggleVisible(const QString& key, bool visible);
+
     // Completed (result) left-zone content.
     void setCompletedInfo(const QString& filename, const QString& size_text, bool has_file);
 

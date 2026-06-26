@@ -76,6 +76,9 @@
 #endif
 #include <dwmapi.h>
 #include <windows.h>
+#include <winver.h>
+
+#include <vector>
 
 namespace exosnap {
 namespace {
@@ -405,6 +408,7 @@ struct WindowPresentation {
     RECT window_rect{};
     QString title;
     QString process_label;
+    QString friendly_name; // FileDescription from PE version resource, or prettified .exe name
     QString class_name;
 };
 
@@ -475,6 +479,82 @@ QString QueryWindowProcessLabel(HWND hwnd) {
 
     CloseHandle(process);
     return process_name;
+}
+
+// Returns the process "FileDescription" from its PE version resource, matching
+// what Task Manager shows in the Description column.
+// Falls back to a prettified .exe name (e.g. "chrome.exe" → "Chrome").
+QString QueryProcessFriendlyName(HWND hwnd) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == 0)
+        return {};
+
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!process)
+        return {};
+
+    std::wstring path_buf(MAX_PATH, L'\0');
+    DWORD path_size = static_cast<DWORD>(path_buf.size());
+    const bool got_path = QueryFullProcessImageNameW(process, 0, path_buf.data(), &path_size) != FALSE && path_size > 0;
+    CloseHandle(process);
+    if (!got_path)
+        return {};
+
+    const std::wstring exe_path(path_buf.data(), path_size);
+
+    DWORD dummy = 0;
+    const DWORD info_size = GetFileVersionInfoSizeW(exe_path.c_str(), &dummy);
+    if (info_size == 0)
+        return {};
+
+    std::vector<BYTE> info_buf(info_size);
+    if (!GetFileVersionInfoW(exe_path.c_str(), 0, info_size, info_buf.data()))
+        return {};
+
+    struct LangCodepage {
+        WORD language;
+        WORD code_page;
+    };
+    LangCodepage* translations = nullptr;
+    UINT trans_len = 0;
+    if (!VerQueryValueW(info_buf.data(), L"\\VarFileInfo\\Translation", reinterpret_cast<LPVOID*>(&translations),
+                        &trans_len) ||
+        trans_len == 0) {
+        return {};
+    }
+
+    wchar_t sub_block[64];
+    swprintf_s(sub_block, L"\\StringFileInfo\\%04X%04X\\FileDescription", translations[0].language,
+               translations[0].code_page);
+
+    WCHAR* desc = nullptr;
+    UINT desc_len = 0;
+    if (!VerQueryValueW(info_buf.data(), sub_block, reinterpret_cast<LPVOID*>(&desc), &desc_len) || desc_len == 0 ||
+        desc == nullptr) {
+        return {};
+    }
+
+    return QString::fromWCharArray(desc).trimmed();
+}
+
+// Maps each active display's DeviceName (e.g. L"\\.\DISPLAY6") to a stable
+// sequential 1-based index by iterating EnumDisplayDevices in its enumeration
+// order.  After plug/unplug cycles the internal names may skip numbers
+// ("DISPLAY1", "DISPLAY6") — this re-sequences them to 1, 2, 3...
+std::unordered_map<std::wstring, int> BuildDisplaySequenceMap() {
+    std::unordered_map<std::wstring, int> map;
+    int seq = 1;
+    DISPLAY_DEVICEW dd{};
+    dd.cb = sizeof(dd);
+    for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &dd, 0); ++i) {
+        if (dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) {
+            map[dd.DeviceName] = seq++;
+        }
+        dd = {};
+        dd.cb = sizeof(dd);
+    }
+    return map;
 }
 
 QString QueryWindowTitle(HWND hwnd) {
@@ -578,6 +658,8 @@ WindowPresentation QueryWindowPresentation(uintptr_t native_id) {
 
     meta.title = QueryWindowTitle(hwnd);
     meta.process_label = QueryWindowProcessLabel(hwnd);
+    const QString pe_name = QueryProcessFriendlyName(hwnd);
+    meta.friendly_name = !pe_name.isEmpty() ? pe_name : meta.process_label;
     meta.class_name = QueryWindowClassName(hwnd);
     return meta;
 }
@@ -4018,6 +4100,9 @@ void RecordPage::pushSourceDataToPicker() {
     // the main window, so GetAncestor(..., GA_ROOT) == self_hwnd covers it).
     const HWND self_hwnd = reinterpret_cast<HWND>(window()->effectiveWinId());
 
+    // Build DeviceName → sequential index map once for all monitor options.
+    const auto display_seq_map = BuildDisplaySequenceMap();
+
     for (std::size_t i = 0; i < monitor_target_indices_.size(); ++i) {
         const int target_index = monitor_target_indices_[i];
         if (target_index < 0 || target_index >= static_cast<int>(view_model_.targets.size())) {
@@ -4028,7 +4113,20 @@ void RecordPage::pushSourceDataToPicker() {
         ui::dialogs::SourcePickerDialog::SourceOption option;
         option.target_index = target_index;
         option.native_id = target.native_id;
-        option.title = displayLabelFromTarget(target);
+        {
+            // Look up the sequential display number via the DeviceName from EnumDisplayDevices.
+            // Falls back to DXGI order (i+1) if the HMONITOR isn't in the map.
+            int display_num = static_cast<int>(i) + 1;
+            MONITORINFOEXW mie{};
+            mie.cbSize = sizeof(mie);
+            const auto hmon = reinterpret_cast<HMONITOR>(target.native_id);
+            if (GetMonitorInfoW(hmon, &mie)) {
+                const auto it = display_seq_map.find(mie.szDevice);
+                if (it != display_seq_map.end())
+                    display_num = it->second;
+            }
+            option.title = QStringLiteral("Display %1").arg(display_num);
+        }
         option.detail = BuildScreenOptionDetail(screen_meta);
         option.primary = screen_meta.available ? screen_meta.primary : (i == 0);
         if (!screen_meta.available) {
@@ -4125,6 +4223,7 @@ void RecordPage::pushSourceDataToPicker() {
             candidate.option.target_index = target_index;
             candidate.option.native_id = target.native_id;
             candidate.option.title = title;
+            candidate.option.short_name = window_meta.friendly_name;
             candidate.option.detail = BuildWindowOptionDetail(window_meta);
             candidate.is_foreground = GetAncestor(hwnd, GA_ROOT) == foreground_hwnd;
             default_window_candidates.push_back(candidate);
@@ -5476,10 +5575,17 @@ void RecordPage::updateTransportDock() {
                                     toggles_interactive);
     transport_dock_->setToggleState(QStringLiteral("mic"), view_model_.audio_ui_state.IsMicEnabled(),
                                     toggles_interactive);
+    // App toggle is only relevant in Window-capture mode; hide it in Display/Region.
+    const bool has_app_source =
+        std::any_of(view_model_.audio_ui_state.source_rows.begin(), view_model_.audio_ui_state.source_rows.end(),
+                    [](const auto& r) { return r.kind == recorder_core::AudioSourceKind::App; });
+    transport_dock_->setToggleVisible(QStringLiteral("app"), has_app_source);
     transport_dock_->setToggleState(QStringLiteral("app"), view_model_.audio_ui_state.IsAppEnabled(),
                                     toggles_interactive);
-    // Webcam is configured in Settings; here it is an honest read-only status pill.
-    transport_dock_->setToggleState(QStringLiteral("webcam"), current_webcam_settings_.enabled, false);
+    // Webcam overlay is live-mutable via coordinator->SetWebcamSettings(), so it
+    // stays interactive during recording. Only block during transient states.
+    const bool webcam_interactive = !(blocked || failed);
+    transport_dock_->setToggleState(QStringLiteral("webcam"), current_webcam_settings_.enabled, webcam_interactive);
 
     // v10: no Completed dock state. The dock always returns to Ready after a
     // recording finishes; the result is surfaced via the NotificationManager
@@ -5490,9 +5596,20 @@ void RecordPage::updateTransportDock() {
 }
 
 void RecordPage::onDockSourceToggle(const QString& key) {
-    if (isSourceSelectionLocked()) {
-        return; // source is locked while recording — toggles are status-only.
+    // Webcam overlay is live-mutable during recording via UpdateWebcamOverlay.
+    if (key == QLatin1String("webcam")) {
+        WebcamSettings s = current_webcam_settings_;
+        s.enabled = !s.enabled;
+        setWebcamSettings(s);
+        emit webcamSettingsChanged(current_webcam_settings_);
+        refresh(); // update dock toggle visual state
+        return;
     }
+
+    if (isSourceSelectionLocked()) {
+        return; // audio sources are locked while recording — toggles are status-only.
+    }
+
     auto& rows = view_model_.audio_ui_state.source_rows;
     bool changed = false;
     for (auto& row : rows) {

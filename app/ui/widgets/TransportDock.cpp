@@ -557,6 +557,20 @@ void TransportDock::setToggleState(const QString& key, bool on, bool interactive
     toggle->setInteractive(interactive);
 }
 
+void TransportDock::setToggleVisible(const QString& key, bool visible) {
+    AudioSourceToggle* toggle = nullptr;
+    if (key == QLatin1String("system"))
+        toggle = system_toggle_;
+    else if (key == QLatin1String("mic"))
+        toggle = mic_toggle_;
+    else if (key == QLatin1String("webcam"))
+        toggle = webcam_toggle_;
+    else if (key == QLatin1String("app"))
+        toggle = app_toggle_;
+    if (toggle)
+        toggle->setVisible(visible);
+}
+
 void TransportDock::setCompletedInfo(const QString& filename, const QString& size_text, bool has_file) {
     filename_link_->setText(filename);
     filename_link_->setToolTip(filename);

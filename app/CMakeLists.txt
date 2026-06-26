@@ -322,7 +322,7 @@ target_link_libraries(exosnap PRIVATE
     recorder_core exosnap::capability exosnap::warnings FFmpeg::mux exosnap::crash_capture
     exosnap::update
     tomlplusplus::tomlplusplus
-    d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
+    d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib Version.lib
     mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib
 )
 
