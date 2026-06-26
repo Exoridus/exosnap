@@ -10,6 +10,7 @@
 #include "../models/VideoSettingsModel.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
+#include "../ui/theme/LucideIcon.h"
 #include "../ui/widgets/LivePipelinePanel.h"
 #include "../ui/widgets/PipelineFlow.h"
 #include "../ui/widgets/PipelineStepCard.h"
@@ -126,8 +127,16 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     status_pill_ = new QLabel(QStringLiteral("NOT CHECKED"), readiness_panel_);
     status_pill_->setProperty("labelRole", "profileStatusBadge");
     status_pill_->setAlignment(Qt::AlignCenter);
+    // Leading state icon (check-circle / alert-triangle / x-circle), tinted per state.
+    // Hidden until a check has run (checking/neutral states show no icon).
+    readiness_icon_ = new QLabel(readiness_panel_);
+    readiness_icon_->setFixedSize(14, 14);
+    readiness_icon_->setAlignment(Qt::AlignCenter);
+    readiness_icon_->setVisible(false);
     auto* pill_row = new QHBoxLayout();
     pill_row->setContentsMargins(0, 0, 0, 0);
+    pill_row->setSpacing(M::kSpaceXs);
+    pill_row->addWidget(readiness_icon_, 0, Qt::AlignVCenter);
     pill_row->addWidget(status_pill_);
     pill_row->addStretch();
     head_text->addLayout(pill_row);
@@ -494,6 +503,32 @@ void DiagnosticsPage::setReadinessState(const QString& state) {
     if (status_pill_) {
         status_pill_->setProperty("stateRole", pill_tinted ? QVariant(state) : QVariant());
         repolish(status_pill_);
+    }
+    // Leading state icon: check-circle (ready) / alert-triangle (warn) / x-circle
+    // (blocked), tinted from the canonical semantic palette tokens. checking/neutral
+    // show no icon.
+    if (readiness_icon_) {
+        using Pal = ui::theme::ExoSnapPalette;
+        QString icon_name;
+        QString icon_color;
+        if (state == QStringLiteral("ready")) {
+            icon_name = QStringLiteral("check-circle");
+            icon_color = QString::fromUtf8(Pal::kOk);
+        } else if (state == QStringLiteral("warn")) {
+            icon_name = QStringLiteral("alert-triangle");
+            icon_color = QString::fromUtf8(Pal::kWarn);
+        } else if (state == QStringLiteral("blocked")) {
+            icon_name = QStringLiteral("x-circle");
+            icon_color = QString::fromUtf8(Pal::kErr);
+        }
+        if (icon_name.isEmpty()) {
+            readiness_icon_->clear();
+            readiness_icon_->setVisible(false);
+        } else {
+            const qreal dpr = readiness_icon_->devicePixelRatioF();
+            readiness_icon_->setPixmap(ui::theme::lucidePixmap(icon_name, icon_color, 14, dpr));
+            readiness_icon_->setVisible(true);
+        }
     }
 }
 

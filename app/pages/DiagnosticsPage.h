@@ -76,6 +76,7 @@ class DiagnosticsPage : public QWidget {
 
     // Readiness / status
     QFrame* readiness_panel_ = nullptr;
+    QLabel* readiness_icon_ = nullptr;
     QLabel* status_pill_ = nullptr;
     QLabel* last_check_label_ = nullptr;
     QLabel* summary_label_ = nullptr;
