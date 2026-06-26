@@ -7,6 +7,8 @@
 #include <recorder_core/audio_input_device.h>
 #include <vector>
 
+#include "../diagnostics/DiagnosticResult.h"
+
 #include "../models/OutputSettingsModel.h"
 #include "../models/RecordingPreset.h"
 #include "../models/VideoSettingsModel.h"
@@ -271,6 +273,8 @@ class RecordPage : public QWidget {
     void onDockFilenameActivated();
     void updateTargetCards();
     void updateReadinessRows();
+    void updateRecReadiness();  // runs RecommendationEngine, caches rec_checklist_
+    void updateReadinessGate(); // updates readiness_gate_panel_ from state + rec_checklist_
     void updateResponsiveLayout();
     void updateAudioMeterLevels();
     void updateAudioControls();
@@ -541,6 +545,15 @@ class RecordPage : public QWidget {
     // widgets programmatically.  Prevents recordingConfigChanged() from being
     // emitted for these non-user changes.
     bool applying_external_config_ = false;
+
+    // v0.8.0-D: Pre-flight readiness gate
+    QFrame* readiness_gate_panel_ = nullptr;
+    QLabel* readiness_gate_status_label_ = nullptr;
+    QLabel* readiness_gate_detail_label_ = nullptr;
+    QPushButton* readiness_gate_details_btn_ = nullptr;
+    // Cached recommendation checklist (quick sync; refreshed on settings/caps change)
+    diagnostics::DiagnosticChecklist rec_checklist_;
+    bool rec_checklist_valid_ = false;
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     bool visual_test_mode_ = false;

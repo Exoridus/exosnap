@@ -1,6 +1,7 @@
 #include "RecordPage.h"
 
 #include "../diagnostics/AppLog.h"
+#include "../diagnostics/RecommendationEngine.h"
 #include "../models/RecordingPreset.h"
 #include "../ui/dialogs/SourcePickerDialog.h"
 #include "../ui/dialogs/SourcePickerOverlay.h"
@@ -1606,6 +1607,33 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     recent_section_layout->addWidget(recent_header_label_);
     recent_section_layout->addWidget(recent_items_container_);
 
+    // v0.8.0-D: Pre-flight ReadinessGate — compact status widget above the transport dock
+    readiness_gate_panel_ = new QFrame(this);
+    readiness_gate_panel_->setProperty("panelRole", "readinessGate");
+    readiness_gate_panel_->setVisible(false);
+    auto* rg_layout = new QHBoxLayout(readiness_gate_panel_);
+    rg_layout->setContentsMargins(10, 6, 10, 6);
+    rg_layout->setSpacing(8);
+
+    auto* rg_text_col = new QVBoxLayout();
+    rg_text_col->setSpacing(2);
+
+    readiness_gate_status_label_ = new QLabel(QStringLiteral("Checking capabilities..."), readiness_gate_panel_);
+    readiness_gate_status_label_->setProperty("labelRole", "readinessGateStatus");
+    rg_text_col->addWidget(readiness_gate_status_label_);
+
+    readiness_gate_detail_label_ = new QLabel(QStringLiteral(""), readiness_gate_panel_);
+    readiness_gate_detail_label_->setProperty("labelRole", "readinessGateDetail");
+    readiness_gate_detail_label_->setWordWrap(true);
+    readiness_gate_detail_label_->setVisible(false);
+    rg_text_col->addWidget(readiness_gate_detail_label_);
+
+    rg_layout->addLayout(rg_text_col, 1);
+
+    readiness_gate_details_btn_ = new QPushButton(QStringLiteral("View details \xe2\x86\x92"), readiness_gate_panel_);
+    readiness_gate_details_btn_->setProperty("role", "ghost");
+    rg_layout->addWidget(readiness_gate_details_btn_, 0, Qt::AlignVCenter);
+
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
                              ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
@@ -1631,6 +1659,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     root->setSpacing(10);
     root->addWidget(preview_column_, 1);
     root->addWidget(result_details_panel_, 0);
+    root->addWidget(readiness_gate_panel_, 0);
     // v10: Recent recordings section removed from the visible layout — the
     // finished state returns to Ready and a toast carries the result.
     // recent_section_ is kept constructed (history_store_ still writes to it)
@@ -1677,6 +1706,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(destination_settings_btn_, &QPushButton::clicked, this, [this]() { emit navigateToOutputPage(); });
     connect(readiness_diagnostics_btn_, &QPushButton::clicked, this, [this]() { emit navigateToDiagnosticsPage(); });
     connect(rail_diagnostics_btn_, &QPushButton::clicked, this, [this]() { emit navigateToDiagnosticsPage(); });
+    connect(readiness_gate_details_btn_, &QPushButton::clicked, this, [this]() { emit navigateToDiagnosticsPage(); });
     connect(result_open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
     connect(result_record_again_btn_, &QPushButton::clicked, this, [this]() {
         if (view_model_.CanStart() && interaction_mode_ == InteractionMode::None) {
@@ -2048,6 +2078,7 @@ void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
         view_model_.capability_status_text = coordinator_->CapabilityStatusText();
         syncCoordinatorTargetContext();
     }
+    updateRecReadiness();
     refresh();
     diagnostics::AppLog::info(
         QStringLiteral("output"),
@@ -2085,6 +2116,7 @@ void RecordPage::setActiveProfileName(const std::string& profile_name) {
 void RecordPage::setRuntimeCapabilities(const capability::CapabilitySet& caps) {
     shared_runtime_caps_ = caps;
     shared_runtime_caps_received_ = true;
+    updateRecReadiness();
 }
 
 // ---------------------------------------------------------------------------
@@ -2322,6 +2354,7 @@ void RecordPage::setVideoSettings(const VideoSettingsModel& settings) {
         view_model_.capability_status_text = coordinator_->CapabilityStatusText();
     }
     setOutputSettingsSummary(current_output_settings_);
+    updateRecReadiness();
     refresh();
 }
 
@@ -5290,6 +5323,7 @@ void RecordPage::refresh() {
     updateSourceChip();
     updatePreviewContextChips();
     updateReadinessRows();
+    updateReadinessGate();
     updateAudioControls();
     updateAudioTrackPreview();
     syncMicMeterService();
@@ -5799,6 +5833,103 @@ void RecordPage::updateReadinessRows() {
                                 rows[i].hard_blocked ? "blocked" : (rows[i].ok ? "ready" : "muted"));
         row_widgets.detail->setText(rows[i].detail);
     }
+}
+
+void RecordPage::updateRecReadiness() {
+    // Quick synchronous check using current config. No disk-space check (0 = skip).
+    if (!shared_runtime_caps_received_)
+        return;
+    capability::UserRecorderConfig config;
+    config.container = current_container_;
+    config.video_codec = current_video_codec_;
+    config.audio_codec = current_audio_codec_;
+    // frame_rate_num/den: use defaults (60/1); monitor_refresh_rate: not available here → 0
+    // is_profile_supported: derived from coordinator if available, else true (safe default)
+    const bool profile_supported = true;
+    diagnostics::RecommendationEngine engine(shared_runtime_caps_, config, 0, 0, profile_supported);
+    rec_checklist_ = engine.Generate();
+    rec_checklist_valid_ = true;
+}
+
+void RecordPage::updateReadinessGate() {
+    if (!readiness_gate_panel_ || !readiness_gate_status_label_ || !readiness_gate_detail_label_ ||
+        !readiness_gate_details_btn_)
+        return;
+
+    const UiRecordingState s = view_model_.state;
+    const bool recording =
+        (s == UiRecordingState::Recording || s == UiRecordingState::Paused || s == UiRecordingState::Stopping ||
+         s == UiRecordingState::Saving || s == UiRecordingState::Countdown || s == UiRecordingState::Preparing);
+    const bool completed = (s == UiRecordingState::Completed);
+
+    // Hide during active recording and after completing (result panel takes over)
+    if (recording || completed) {
+        readiness_gate_panel_->setVisible(false);
+        return;
+    }
+
+    readiness_gate_panel_->setVisible(true);
+
+    const bool blocked = (s == UiRecordingState::Blocked);
+    const bool checking = (s == UiRecordingState::LoadingCapabilities);
+
+    QString status_text;
+    QString detail_text;
+    QString state_role;
+
+    if (checking) {
+        status_text = QStringLiteral("Checking capabilities\xe2\x80\xa6");
+        state_role = QStringLiteral("muted");
+    } else if (blocked) {
+        status_text = QStringLiteral("Recording blocked");
+        // Pull first blocker title from coordinator capability text
+        const QString cap_text = QString::fromStdWString(view_model_.capability_status_text).trimmed();
+        const QStringList lines = cap_text.split(QChar('\n'), Qt::SkipEmptyParts);
+        if (!lines.isEmpty())
+            detail_text = lines.first().trimmed();
+        state_role = QStringLiteral("blocked");
+    } else if (rec_checklist_valid_ && rec_checklist_.has_blocker) {
+        // Recommendation engine found a container/codec blocker (rec.009/010)
+        status_text = QStringLiteral("Recording blocked");
+        for (const auto& r : rec_checklist_.results) {
+            if (r.severity == diagnostics::DiagnosticSeverity::Blocker) {
+                detail_text = QString::fromStdString(r.title);
+                break;
+            }
+        }
+        state_role = QStringLiteral("blocked");
+    } else if (rec_checklist_valid_ && rec_checklist_.has_notice) {
+        const int notice_count = static_cast<int>(std::count_if(
+            rec_checklist_.results.begin(), rec_checklist_.results.end(), [](const diagnostics::DiagnosticResult& r) {
+                return r.severity == diagnostics::DiagnosticSeverity::Notice;
+            }));
+        status_text = notice_count == 1 ? QStringLiteral("1 warning") : QStringLiteral("%1 warnings").arg(notice_count);
+        for (const auto& r : rec_checklist_.results) {
+            if (r.severity == diagnostics::DiagnosticSeverity::Notice) {
+                detail_text = QString::fromStdString(r.title);
+                break;
+            }
+        }
+        state_role = QStringLiteral("warn");
+    } else {
+        status_text = QStringLiteral("Ready to record");
+        state_role = QStringLiteral("ready");
+    }
+
+    readiness_gate_status_label_->setText(status_text);
+
+    const bool has_detail = !detail_text.isEmpty();
+    readiness_gate_detail_label_->setText(detail_text);
+    readiness_gate_detail_label_->setVisible(has_detail);
+
+    // Apply stateRole to panel + status label for QSS color-coding
+    const auto repolish = [](QWidget* w, const QString& role) {
+        w->setProperty("stateRole", role.isEmpty() ? QVariant() : QVariant(role));
+        w->style()->unpolish(w);
+        w->style()->polish(w);
+    };
+    repolish(readiness_gate_panel_, state_role);
+    repolish(readiness_gate_status_label_, state_role);
 }
 
 void RecordPage::updateSourceChip() {
