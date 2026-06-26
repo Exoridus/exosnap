@@ -2669,30 +2669,18 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         updates_layout->setSpacing(0);
         updates_layout->addWidget(makeCardTitle(QStringLiteral("Updates"), updates_panel_, QStringLiteral("download")));
 
-        // Row 1: Update channel combo (Stable / Preview).
-        {
-            auto* channel_combo = new QComboBox(updates_panel_);
-            channel_combo->setObjectName(QStringLiteral("updatesChannelCombo"));
-            channel_combo->addItem(QStringLiteral("Stable"));
-            channel_combo->addItem(QStringLiteral("Preview"));
-            updates_layout->addWidget(makeSettingsRow(
-                updates_panel_, QStringLiteral("Update channel"),
-                new ui::widgets::InfoHintIcon(
-                    QStringLiteral("Stable ships tested releases; Preview delivers release candidates earlier."),
-                    updates_panel_),
-                QString(), channel_combo, /*first=*/true));
-        }
-
-        // Row 2: Automatic updates toggle.
+        // Auto-check toggle. We notify on a new release; we never auto-install
+        // (no Update-channel control — Stable is the only published channel).
         {
             auto* auto_check_toggle = new ui::widgets::ExoToggle(updates_panel_);
             auto_check_toggle->setObjectName(QStringLiteral("updatesAutoCheckToggle"));
             auto_check_toggle->setOn(true);
             updates_layout->addWidget(makeSettingsRow(
-                updates_panel_, QStringLiteral("Automatic updates"),
+                updates_panel_, QStringLiteral("Check for updates automatically"),
                 new ui::widgets::InfoHintIcon(
-                    QStringLiteral("Check in the background and install after recording stops."), updates_panel_),
-                QString(), auto_check_toggle));
+                    QStringLiteral("Check in the background and notify you when a new version is available."),
+                    updates_panel_),
+                QString(), auto_check_toggle, /*first=*/true));
         }
 
         // Status / action row — stub label; real UpdateControl wired in a later wave.
