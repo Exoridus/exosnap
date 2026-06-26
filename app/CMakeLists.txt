@@ -431,6 +431,7 @@ exosnap_add_app_test_support(exosnap_diagnostics_test_support
 )
 target_link_libraries(exosnap_diagnostics_test_support PUBLIC
     exosnap_output_model_test_support exosnap_capability recorder_core
+    dxgi.lib mmdevapi.lib
 )
 
 exosnap_add_app_test_support(exosnap_device_service_test_support

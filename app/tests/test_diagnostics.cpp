@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <filesystem>
+
 #include "diagnostics/CapabilitySummary.h"
 #include "diagnostics/ConfigSummary.h"
 #include "diagnostics/DiagnosticResult.h"
@@ -684,38 +686,62 @@ TEST(BlockedScenarioTest, ActiveOutputConfig_Av1NvencUnavailable_ValidateFails_V
 TEST(SelfTestTest, SelfTest_Run_ReturnsAllResults) {
     SelfTestRunner runner;
     auto checklist = runner.Run();
+    // Always returns exactly 5 results; pass/fail mix is hardware-dependent.
     EXPECT_EQ(checklist.results.size(), 5u);
-    EXPECT_TRUE(checklist.has_notice);
 }
 
-TEST(SelfTestTest, SelfTest_CaptureAvailable) {
+// Integration smoke: verify the probe runs without crashing and returns a coherent result.
+// DXGI is available on any DirectX-capable Windows system, so pass is expected,
+// but the assertion is on structure rather than hardware outcome.
+TEST(SelfTestTest, SelfTest_CaptureAvailable_Smoke) {
     auto result = SelfTestRunner::CheckCaptureAvailability();
-    EXPECT_FALSE(result.passed);
     EXPECT_EQ(result.category, "Capture");
+    EXPECT_FALSE(result.detail.empty());
 }
 
-TEST(SelfTestTest, SelfTest_EncoderAvailable) {
+// Encoder probe depends on NVENC hardware; do not assert passed=true/false here.
+TEST(SelfTestTest, SelfTest_EncoderAvailable_Smoke) {
     auto result = SelfTestRunner::CheckEncoderAvailability();
-    EXPECT_FALSE(result.passed);
     EXPECT_EQ(result.category, "Encoder");
+    EXPECT_FALSE(result.detail.empty());
 }
 
-TEST(SelfTestTest, SelfTest_MuxerAvailable) {
+// Muxer probe writes to the OS temp directory, which is always writable.
+TEST(SelfTestTest, SelfTest_MuxerAvailable_PassesOnWritableTemp) {
     auto result = SelfTestRunner::CheckMuxerAvailability();
-    EXPECT_FALSE(result.passed);
+    EXPECT_TRUE(result.passed);
     EXPECT_EQ(result.category, "Muxer");
 }
 
-TEST(SelfTestTest, SelfTest_OutputPathWritable) {
+// Output path probe with empty path falls back to the temp directory (always writable).
+TEST(SelfTestTest, SelfTest_OutputPathWritable_EmptyPath_Passes) {
     auto result = SelfTestRunner::CheckOutputPathWritable("");
     EXPECT_TRUE(result.passed);
     EXPECT_EQ(result.category, "Output Path");
 }
 
-TEST(SelfTestTest, SelfTest_AudioDeviceAvailable) {
-    auto result = SelfTestRunner::CheckAudioDeviceAvailability();
+// Output path probe with an explicit, known-writable temp directory.
+TEST(SelfTestTest, SelfTest_OutputPath_ValidTempPath_Passes) {
+    std::string tmp = std::filesystem::temp_directory_path().string();
+    auto result = SelfTestRunner::CheckOutputPathWritable(tmp);
+    EXPECT_TRUE(result.passed);
+    EXPECT_EQ(result.category, "Output Path");
+    EXPECT_NE(result.detail.find("Output path is writable"), std::string::npos);
+}
+
+// Output path probe with a path that cannot exist — must fail gracefully, never throw.
+TEST(SelfTestTest, SelfTest_OutputPath_InvalidPath_FailsGracefully) {
+    auto result = SelfTestRunner::CheckOutputPathWritable("Z:\\nonexistent\\xyzzy\\selftest\\abc");
     EXPECT_FALSE(result.passed);
+    EXPECT_EQ(result.category, "Output Path");
+    EXPECT_FALSE(result.detail.empty());
+}
+
+// Audio device probe is hardware-dependent; just verify it returns a coherent result.
+TEST(SelfTestTest, SelfTest_AudioDeviceAvailable_Smoke) {
+    auto result = SelfTestRunner::CheckAudioDeviceAvailability();
     EXPECT_EQ(result.category, "Audio Devices");
+    EXPECT_FALSE(result.detail.empty());
 }
 
 // --- Display name helper tests ---
