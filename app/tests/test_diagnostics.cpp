@@ -429,6 +429,36 @@ TEST(RecommendationEngineTest, Generate_Mp4_Warns) {
     EXPECT_TRUE(found_mp4_warning);
 }
 
+TEST(RecommendationEngineTest, Generate_Mp4_HasFixAction_Assisted) {
+    // rec.002 must carry a typed FixAction with Safety::Assisted — the UI will offer
+    // a one-click path that opens Output settings (user still performs the last step).
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::AacMf] = {capability::SupportLevel::Available, ""};
+    caps.containers[capability::Container::Mp4] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Mp4;
+    config.video_codec = capability::VideoCodec::H264Nvenc;
+    config.audio_codec = capability::AudioCodec::AacMf;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.002") {
+            found = true;
+            EXPECT_TRUE(r.fix_action.has_value());
+            EXPECT_EQ(r.fix_action->id, "fix.container.mkv");
+            EXPECT_EQ(r.fix_action->safety, FixAction::Safety::Assisted);
+            EXPECT_TRUE(r.fix_action->reversible);
+            EXPECT_FALSE(r.fix_action->changes_summary.empty());
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
 TEST(RecommendationEngineTest, Generate_RefreshRateMismatch) {
     capability::CapabilitySet caps;
     caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
