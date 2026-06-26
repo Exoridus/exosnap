@@ -288,6 +288,7 @@ class RecordPage : public QWidget {
     void updateDestinationMeta();
     void updateResultDetailsPanel();
     void hideResultDetailsPanel();
+    void updateReportCard(); // populates pipeline stats in resultDetailsPanel
     void updateRecentRecordingsSection();
     void syncTargetSelectionToCombo(int target_index);
     // When allow_fallback is false the reactive path gets no silent switch:
@@ -554,6 +555,14 @@ class RecordPage : public QWidget {
     // Cached recommendation checklist (quick sync; refreshed on settings/caps change)
     diagnostics::DiagnosticChecklist rec_checklist_;
     bool rec_checklist_valid_ = false;
+
+    // v0.8.0-D: Post-flight report card — pipeline stats accumulated during recording
+    double peak_av_drift_ms_ = 0.0;
+    bool av_drift_ever_available_ = false;
+    recorder_core::PipelineHealth last_pipeline_health_ = recorder_core::PipelineHealth::Idle;
+    recorder_core::RecordingDiagnosticsSnapshot last_completed_snapshot_;
+    // Report card dismiss button (inside resultDetailsPanel)
+    QPushButton* report_card_dismiss_btn_ = nullptr;
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     bool visual_test_mode_ = false;
