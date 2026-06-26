@@ -658,6 +658,49 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         refreshDiagnosticsData();
     });
 
+    // ---- FixAction routing (ADR 0033 / v0.8.0) ----
+    // Auto fixes apply a settings change directly after a confirm; Assisted fixes
+    // navigate to the relevant Settings section so the user finishes the change.
+    if (diagnostics_page_) {
+        connect(diagnostics_page_, &DiagnosticsPage::applyFixActionRequested, this,
+                [this](const QString& fix_id, const QString& changes_summary) {
+                    const QString body = changes_summary.isEmpty()
+                                             ? QStringLiteral("Apply this fix to your recording settings?")
+                                             : changes_summary;
+                    if (QMessageBox::question(this, QStringLiteral("Apply fix"), body) != QMessageBox::Yes)
+                        return;
+                    if (fix_id == QStringLiteral("fix.codec.video.default"))
+                        output_settings_.video_codec = capability::VideoCodec::H264Nvenc;
+                    else if (fix_id == QStringLiteral("fix.codec.audio.default"))
+                        output_settings_.audio_codec = capability::AudioCodec::AacMf;
+                    else
+                        return; // unknown auto fix — no-op
+                    // Propagate like a user-driven format change.
+                    if (config_page_)
+                        config_page_->setOutputSettings(output_settings_);
+                    if (record_page_)
+                        record_page_->setOutputSettings(output_settings_);
+                    if (config_page_)
+                        config_page_->setPresetDirty(preset_registry_.IsSelectedDirty(captureLiveConfig()));
+                    refreshCrashSessionContext();
+                    refreshDiagnosticsData();
+                    diagnostics::AppLog::info(QStringLiteral("diagnostics"),
+                                              QStringLiteral("Applied fix %1").arg(fix_id));
+                });
+        connect(diagnostics_page_, &DiagnosticsPage::openAssistedFixRequested, this, [this](const QString& fix_id) {
+            navigateToPage(kSettingsPageIndex);
+            if (!config_page_)
+                return;
+            if (fix_id == QStringLiteral("fix.output.change_folder") ||
+                fix_id == QStringLiteral("fix.output.fat32_folder"))
+                config_page_->scrollToSection(QStringLiteral("settings/output"));
+            else // fix.container.mkv / fix.fps.cap / fix.profile.select → format/quality area
+                config_page_->scrollToSection(QStringLiteral("settings/format"));
+            diagnostics::AppLog::info(QStringLiteral("diagnostics"),
+                                      QStringLiteral("Opened assisted fix %1").arg(fix_id));
+        });
+    }
+
     // ---- Preset selected (combo changed) ----
     connect(config_page_, &ConfigPage::presetSelected, this, [this](const QString& id) { onPresetSelected(id); });
 
