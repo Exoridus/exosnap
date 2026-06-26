@@ -681,7 +681,8 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
     constexpr int kMaxIssues = 6;
 
     const auto add_issue_card = [&](diagnostics::DiagnosticSeverity severity, const QString& title,
-                                    const QString& summary, const QString& action, const QString& detail) {
+                                    const QString& summary, const QString& action, const QString& detail,
+                                    const diagnostics::FixAction* fix = nullptr) {
         if (issue_count >= kMaxIssues)
             return;
 
@@ -722,6 +723,33 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
             card_layout->addWidget(action_label);
         }
 
+        if (fix != nullptr) {
+            if (fix->safety == diagnostics::FixAction::Safety::Auto) {
+                auto* fix_btn = new QPushButton(QString::fromStdString(fix->label), card);
+                fix_btn->setProperty("role", "ghost");
+                fix_btn->setObjectName(QStringLiteral("issueFixBtn"));
+                const QString fix_id = QString::fromStdString(fix->id);
+                const QString changes = QString::fromStdString(fix->changes_summary);
+                connect(fix_btn, &QPushButton::clicked, this,
+                        [this, fix_id, changes]() { emit applyFixActionRequested(fix_id, changes); });
+                card_layout->addWidget(fix_btn);
+            } else if (fix->safety == diagnostics::FixAction::Safety::Assisted) {
+                auto* fix_btn =
+                    new QPushButton(QString::fromStdString(fix->label) + QStringLiteral(" \xe2\x86\x92"), card);
+                fix_btn->setProperty("role", "ghost");
+                fix_btn->setObjectName(QStringLiteral("issueFixBtn"));
+                const QString fix_id = QString::fromStdString(fix->id);
+                connect(fix_btn, &QPushButton::clicked, this,
+                        [this, fix_id]() { emit openAssistedFixRequested(fix_id); });
+                card_layout->addWidget(fix_btn);
+            } else if (fix->safety == diagnostics::FixAction::Safety::External) {
+                auto* fix_label = new QLabel(QString::fromStdString(fix->label), card);
+                fix_label->setProperty("labelRole", "issueMeta");
+                fix_label->setWordWrap(true);
+                card_layout->addWidget(fix_label);
+            }
+        }
+
         overview_issues_layout_->addWidget(card);
         ++issue_count;
     };
@@ -744,7 +772,8 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
         if (result.severity != diagnostics::DiagnosticSeverity::Blocker)
             continue;
         add_issue_card(result.severity, QString::fromStdString(result.title), QString::fromStdString(result.summary),
-                       QString::fromStdString(result.recommendation), QString::fromStdString(result.detail));
+                       QString::fromStdString(result.recommendation), QString::fromStdString(result.detail),
+                       result.fix_action.has_value() ? &result.fix_action.value() : nullptr);
     }
 
     for (const auto& warning : profile_validation_.warnings) {
@@ -765,7 +794,8 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
         if (result.severity == diagnostics::DiagnosticSeverity::Blocker)
             continue;
         add_issue_card(result.severity, QString::fromStdString(result.title), QString::fromStdString(result.summary),
-                       QString::fromStdString(result.recommendation), QString::fromStdString(result.detail));
+                       QString::fromStdString(result.recommendation), QString::fromStdString(result.detail),
+                       result.fix_action.has_value() ? &result.fix_action.value() : nullptr);
     }
 
     if (issue_count == 0) {
