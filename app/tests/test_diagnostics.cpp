@@ -528,6 +528,157 @@ TEST(RecommendationEngineTest, Generate_CodecUnavailable_Blocker) {
     EXPECT_TRUE(found_blocker);
 }
 
+TEST(RecommendationEngineTest, Generate_Rec009_FlacMp4_Blocker) {
+    capability::CapabilitySet caps;
+    caps.audio_codecs[capability::AudioCodec::Flac] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Mp4;
+    config.video_codec = capability::VideoCodec::H264Nvenc;
+    config.audio_codec = capability::AudioCodec::Flac;
+
+    RecommendationEngine engine(caps, config, 0, 10ULL * 1024 * 1024 * 1024, true);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.009") {
+            found = true;
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Blocker);
+            ASSERT_TRUE(r.fix_action.has_value());
+            EXPECT_EQ(r.fix_action->id, "fix.audio.flac_to_mkv");
+            EXPECT_EQ(r.fix_action->safety, FixAction::Safety::Assisted);
+            EXPECT_TRUE(r.fix_action->reversible);
+            EXPECT_FALSE(r.fix_action->changes_summary.empty());
+        }
+    }
+    EXPECT_TRUE(found);
+    EXPECT_TRUE(checklist.has_blocker);
+}
+
+TEST(RecommendationEngineTest, Generate_Rec009_OpusMp4_Notice) {
+    capability::CapabilitySet caps;
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.containers[capability::Container::Mp4] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Mp4;
+    config.video_codec = capability::VideoCodec::H264Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.009") {
+            found = true;
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Notice);
+            ASSERT_TRUE(r.fix_action.has_value());
+            EXPECT_EQ(r.fix_action->id, "fix.audio.opus_to_aac");
+            EXPECT_EQ(r.fix_action->safety, FixAction::Safety::Auto);
+            EXPECT_TRUE(r.fix_action->reversible);
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST(RecommendationEngineTest, Generate_Rec009_OpusMkv_NoFire) {
+    capability::CapabilitySet caps;
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Matroska;
+    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    auto checklist = engine.Generate();
+
+    for (const auto& r : checklist.results) {
+        EXPECT_NE(r.id, "rec.009") << "rec.009 must not fire for Opus+MKV";
+    }
+}
+
+TEST(RecommendationEngineTest, Generate_Rec010_HevcWebm_Blocker) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::HevcNvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::WebM;
+    config.video_codec = capability::VideoCodec::HevcNvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    RecommendationEngine engine(caps, config, 0, 10ULL * 1024 * 1024 * 1024, true);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.010") {
+            found = true;
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Blocker);
+            ASSERT_TRUE(r.fix_action.has_value());
+            EXPECT_EQ(r.fix_action->id, "fix.video.hevc_webm");
+            EXPECT_EQ(r.fix_action->safety, FixAction::Safety::Assisted);
+            EXPECT_TRUE(r.fix_action->reversible);
+            EXPECT_FALSE(r.fix_action->changes_summary.empty());
+        }
+    }
+    EXPECT_TRUE(found);
+    EXPECT_TRUE(checklist.has_blocker);
+}
+
+TEST(RecommendationEngineTest, Generate_Rec010_H264Webm_Blocker) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::WebM;
+    config.video_codec = capability::VideoCodec::H264Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    RecommendationEngine engine(caps, config, 0, 10ULL * 1024 * 1024 * 1024, true);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.010") {
+            found = true;
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Blocker);
+            ASSERT_TRUE(r.fix_action.has_value());
+            EXPECT_EQ(r.fix_action->id, "fix.video.h264_webm");
+            EXPECT_EQ(r.fix_action->safety, FixAction::Safety::Assisted);
+            EXPECT_TRUE(r.fix_action->reversible);
+            EXPECT_FALSE(r.fix_action->changes_summary.empty());
+        }
+    }
+    EXPECT_TRUE(found);
+    EXPECT_TRUE(checklist.has_blocker);
+}
+
+TEST(RecommendationEngineTest, Generate_Rec010_Av1Webm_NoFire) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::WebM;
+    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    auto checklist = engine.Generate();
+
+    for (const auto& r : checklist.results) {
+        EXPECT_NE(r.id, "rec.010") << "rec.010 must not fire for AV1+WebM";
+    }
+}
+
 TEST(RecommendationEngineTest, Generate_LowDiskSpace_Warns) {
     capability::CapabilitySet caps;
     caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
@@ -569,13 +720,15 @@ TEST(RecommendationEngineTest, Generate_UnsupportedProfile_Blocker) {
 
 TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
     auto codes = RecommendationEngine::GetAllRecommendationCodes();
-    // FILESYSTEM-CHECKS-R1 added rec.008 (FAT32 Notice) — expect 8 codes now.
-    EXPECT_EQ(codes.size(), 8u);
+    // v0.8.0-D added rec.009 (audio/container compat) and rec.010 (video/container compat) — expect 10 codes now.
+    EXPECT_EQ(codes.size(), 10u);
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.001"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.005"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.006"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.007"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.008"), codes.end());
+    EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.009"), codes.end());
+    EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.010"), codes.end());
 }
 
 // ─── REC-R10: Active output config → ValidateConfig wiring ───────────────────

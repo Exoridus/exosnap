@@ -50,6 +50,8 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
     checkOutputDriveSpace(checklist);
     checkOutputFilesystem(checklist);
     checkProfileSupport(checklist);
+    checkAudioContainerCompat(checklist);
+    checkVideoBitDepthContainerCompat(checklist);
     return checklist;
 }
 
@@ -251,8 +253,94 @@ void RecommendationEngine::checkProfileSupport(DiagnosticChecklist& checklist) c
     }
 }
 
+void RecommendationEngine::checkAudioContainerCompat(DiagnosticChecklist& checklist) const {
+    if (config_.audio_codec == capability::AudioCodec::Flac && config_.container == capability::Container::Mp4) {
+        DiagnosticResult r = MakeResult(
+            "rec.009", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, "FLAC is not supported in MP4",
+            "FLAC audio cannot be muxed into an MP4 container. Switch to MKV or change the audio "
+            "codec to AAC.",
+            "FLAC audio cannot be muxed into an MP4 container. Switch to MKV or change the audio "
+            "codec to AAC.",
+            "Audio: FLAC, Container: MP4", "Switch the container to MKV or select a different audio codec.");
+        FixAction fa;
+        fa.id = "fix.audio.flac_to_mkv";
+        fa.label = "Switch container to MKV";
+        fa.safety = FixAction::Safety::Assisted;
+        fa.reversible = true;
+        fa.changes_summary =
+            "Opens Output settings to change the recording container to MKV, which supports FLAC audio.";
+        r.fix_action = fa;
+        checklist.has_blocker = true;
+        checklist.results.push_back(std::move(r));
+        return;
+    }
+
+    if (config_.audio_codec == capability::AudioCodec::Opus && config_.container == capability::Container::Mp4) {
+        DiagnosticResult r =
+            MakeResult("rec.009", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+                       "Opus in MP4 has limited player compatibility",
+                       "Opus audio in MP4 is not widely supported. AAC is the recommended audio codec for MP4.",
+                       "Opus audio in MP4 is not widely supported. AAC is the recommended audio codec for MP4.",
+                       "Audio: Opus, Container: MP4",
+                       "Switch the audio codec to AAC for better compatibility with MP4 containers.");
+        FixAction fa;
+        fa.id = "fix.audio.opus_to_aac";
+        fa.label = "Switch audio codec to AAC";
+        fa.safety = FixAction::Safety::Auto;
+        fa.reversible = true;
+        fa.changes_summary = "Switches the audio codec to AAC for better compatibility with MP4 containers.";
+        r.fix_action = fa;
+        checklist.has_notice = true;
+        checklist.results.push_back(std::move(r));
+    }
+}
+
+void RecommendationEngine::checkVideoBitDepthContainerCompat(DiagnosticChecklist& checklist) const {
+    if (config_.video_codec == capability::VideoCodec::HevcNvenc && config_.container == capability::Container::WebM) {
+        DiagnosticResult r = MakeResult(
+            "rec.010", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, "HEVC is not supported in WebM",
+            "WebM only supports AV1 and VP9 video codecs. HEVC (H.265) cannot be muxed into a "
+            "WebM container.",
+            "WebM only supports AV1 and VP9 video codecs. HEVC (H.265) cannot be muxed into a "
+            "WebM container.",
+            "Video: HEVC, Container: WebM", "Switch the container to MKV, which supports HEVC video.");
+        FixAction fa;
+        fa.id = "fix.video.hevc_webm";
+        fa.label = "Switch container to MKV";
+        fa.safety = FixAction::Safety::Assisted;
+        fa.reversible = true;
+        fa.changes_summary =
+            "Opens Output settings to change the recording container to MKV, which supports HEVC video.";
+        r.fix_action = fa;
+        checklist.has_blocker = true;
+        checklist.results.push_back(std::move(r));
+        return;
+    }
+
+    if (config_.video_codec == capability::VideoCodec::H264Nvenc && config_.container == capability::Container::WebM) {
+        DiagnosticResult r = MakeResult(
+            "rec.010", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker, "H.264 is not supported in WebM",
+            "WebM only supports AV1 and VP9 video codecs. H.264 cannot be muxed into a WebM "
+            "container.",
+            "WebM only supports AV1 and VP9 video codecs. H.264 cannot be muxed into a WebM "
+            "container.",
+            "Video: H.264, Container: WebM", "Switch the container to MKV, which supports H.264 video.");
+        FixAction fa;
+        fa.id = "fix.video.h264_webm";
+        fa.label = "Switch container to MKV";
+        fa.safety = FixAction::Safety::Assisted;
+        fa.reversible = true;
+        fa.changes_summary =
+            "Opens Output settings to change the recording container to MKV, which supports H.264 video.";
+        r.fix_action = fa;
+        checklist.has_blocker = true;
+        checklist.results.push_back(std::move(r));
+    }
+}
+
 std::vector<std::string> RecommendationEngine::GetAllRecommendationCodes() {
-    return {"rec.001", "rec.002", "rec.003", "rec.004", "rec.005", "rec.006", "rec.007", "rec.008"};
+    return {"rec.001", "rec.002", "rec.003", "rec.004", "rec.005",
+            "rec.006", "rec.007", "rec.008", "rec.009", "rec.010"};
 }
 
 } // namespace exosnap::diagnostics
