@@ -178,6 +178,11 @@ class PipelineDiagnosticsAggregator {
     void OnMuxFailure() noexcept;
     void OnReorderWindow(uint32_t packets, uint32_t peak_packets, uint64_t bytes, uint64_t peak_bytes) noexcept;
     void SetSplitPending(bool pending) noexcept;
+    // PTS inputs for A/V drift (video: VideoThread after encode; audio: AudioThread after encode)
+    void OnVideoPts(double ms) noexcept;
+    void OnAudioPts(double ms) noexcept;
+    // Free-space poll for disk-fill ETA (called from the stats collector at ~5 Hz)
+    void UpdateFreeDiskBytes(uint64_t free_bytes) noexcept;
 
     // ---- collector-thread publish -----------------------------------------
     [[nodiscard]] RecordingDiagnosticsSnapshot BuildSnapshot(time_point now, const SessionStats& stats,
@@ -262,6 +267,17 @@ class PipelineDiagnosticsAggregator {
     int sustain_disk_ = 0;
     uint64_t last_dropped_total_ = 0;
     uint64_t last_audio_disc_ = 0;
+
+    // A/V drift: latest PTS (ms) received from each encoder output path.
+    // Protected by mutex_. Set to true once the first packet arrives per session.
+    double latest_video_pts_ms_ = 0.0;
+    double latest_audio_pts_ms_ = 0.0;
+    bool have_video_pts_ = false;
+    bool have_audio_pts_ = false;
+
+    // Disk-fill ETA: free bytes on the output drive, polled externally at ~5 Hz.
+    uint64_t free_bytes_ = 0;
+    bool free_bytes_known_ = false;
 };
 
 } // namespace recorder_core

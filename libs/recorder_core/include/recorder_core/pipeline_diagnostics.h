@@ -203,6 +203,15 @@ struct RecordingDiagnosticsSnapshot {
     DiskDiagnostics disk;
     SplitDiagnostics split;
 
+    // A/V synchronization drift measured from stream PTS.
+    // Positive = audio leads video; negative = video leads audio.
+    double av_drift_ms = 0.0;
+    MetricAvailability av_drift_availability = MetricAvailability::Unavailable;
+
+    // Estimated seconds until the output drive fills at current sustained throughput.
+    // Negative means unavailable (throughput unknown or free space not provided).
+    double disk_fill_eta_seconds = -1.0;
+
     PipelineBottleneck bottleneck = PipelineBottleneck::None;
     std::string bottleneck_reason;
     PipelineHealth health = PipelineHealth::Idle;
