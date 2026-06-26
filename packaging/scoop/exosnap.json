@@ -1,20 +1,20 @@
 {
-    "version": "0.6.0",
+    "version": "0.7.0",
     "description": "Windows-native screen / application / region recorder with an NVIDIA NVENC pipeline, multi-track audio, webcam overlay, diagnostics overlays, tray notifications, crash recovery, and update checks.",
     "homepage": "https://github.com/Exoridus/exosnap",
     "license": "GPL-3.0-or-later",
     "depends": "extras/vcredist2022",
     "notes": [
-        "ExoSnap 0.6.0 is a pre-v1 preview. Settings/preset/history formats may change before 1.0.0.",
+        "ExoSnap 0.7.0 is a pre-v1 preview. Settings/preset/history formats may change before 1.0.0.",
         "Requires an NVIDIA GPU with supported NVENC and the Microsoft Visual C++ 2022 x64 runtime.",
         "Update checking and crash reporting are opt-in/consent-gated; recordings and settings stay local.",
         "Settings are stored under %LOCALAPPDATA%\\ExoSnap and are preserved across updates and uninstall."
     ],
     "architecture": {
         "64bit": {
-            "url": "https://github.com/Exoridus/exosnap/releases/download/v0.6.0/ExoSnap-0.6.0-windows-x64-portable.zip",
-            "hash": "e5bafabc51d1ef95f75e163564cc47d736a83b8774bb1bc91ca29163a7d5abee",
-            "extract_dir": "ExoSnap-0.6.0-windows-x64-portable"
+            "url": "https://github.com/Exoridus/exosnap/releases/download/v0.7.0/ExoSnap-0.7.0-windows-x64-portable.zip",
+            "hash": "0ef4698a12a4b744f17f620cc7c52c631a485804833362a26712ce4471e6315c",
+            "extract_dir": "ExoSnap-0.7.0-windows-x64-portable"
         }
     },
     "shortcuts": [
