@@ -1,12 +1,12 @@
-# ExoSnap 0.6.0 — Known Limitations
+# ExoSnap 0.7.0 — Known Limitations
 
-This document describes the current support boundary of ExoSnap **0.6.0**. It is
+This document describes the current support boundary of ExoSnap **0.7.0**. It is
 factual and specific to this build. If a capability is not listed here as
 supported, do not assume it is available.
 
 ## Release status
 
-- ExoSnap 0.6.0 is a **pre-v1 Windows preview**, not a final 1.0 release.
+- ExoSnap 0.7.0 is a **pre-v1 Windows preview**, not a final 1.0 release.
 - Configuration, preset, and recording-history file schemas are **not frozen**
   and may change in incompatible ways before 1.0.0.
 - Keep your own backup copies of presets you care about during preview releases.
@@ -49,17 +49,21 @@ Supported containers:
 | WebM      | Supported  |
 | MP4       | Supported (normal recording) |
 
-Supported encoders actually selectable and validated in this build:
+Supported encoders actually selectable in this build:
 
-- **Video:** H.264 (NVENC) and AV1 (NVENC, where the installed GPU and driver
-  expose it). HEVC is **not** implemented in 0.5.0.
+- **Video:** H.264 (NVENC), AV1 (NVENC, where the installed GPU and driver
+  expose it), and HEVC (NVENC). HEVC is available in MKV and MP4 (`hvc1` sample
+  entry). **HEVC, hvc1, and 10-bit encoder paths are functional end-to-end but
+  have not yet been validated across the full range of NVIDIA GPU generations
+  under live recording conditions (ValidUnvalidated).** Use H.264 or AV1 if you
+  encounter issues.
 - **Audio:** AAC-LC (`AAC` in the UI), Opus, PCM (MKV only), and FLAC (MKV only).
   PCM and FLAC are **MKV-only** — see Container/codec rules above for why MP4 PCM
   is deferred.
 
 Container/codec rules:
 
-- MP4 uses H.264 + AAC. Opus, PCM, and FLAC are not offered for MP4.
+- MP4 uses H.264 or HEVC (`hvc1`) + AAC. Opus, PCM, and FLAC are not offered for MP4.
   - **PCM in MP4 is deferred**: the project's libavformat (avformat-62) emits the
     `ipcm` (ISO/IEC 23003-5) sample entry instead of the broadly-compatible QuickTime
     entries (`sowt`/`in24`/`lpcm`); confirmed via `ffprobe codec_tag_string=ipcm`.
@@ -71,6 +75,19 @@ Container/codec rules:
 Exact codec availability depends on your **NVIDIA GPU generation, driver
 version, the selected container, and the selected video/audio combination**.
 Invalid combinations are not offered.
+
+## Video color pipeline (0.7.0)
+
+- **BT.709 color metadata** is written to all MKV and MP4 outputs.
+- **Y'CbCr color range** is selectable per preset: Full (default) or Limited.
+- **10-bit video output (P010)** is available for HEVC Main10 and AV1 in 10-bit
+  mode. This is **SDR-only**: no HDR10 transfer curve (PQ/HLG), no HDR metadata,
+  and no wide color gamut. The 10-bit path increases color precision in SDR
+  workflows that support it. See "Planned beyond 0.7.0" for true HDR.
+- 4:2:0 chroma subsampling only. 4:2:2 and 4:4:4 are not available.
+- **No HDR10 output** in this build. Displays that are HDR-capable are identified
+  in Diagnostics, but recording does not use the HDR pipeline. Content is captured
+  and encoded in SDR (BT.709) regardless of the display's HDR state.
 
 ## Audio processing (Audio v2, 0.6.0)
 
@@ -127,8 +144,6 @@ Invalid combinations are not offered.
 - For MKV/WebM split recordings, segments that were already finalized before an
   interruption remain usable; an interrupted **active** segment may not be
   recoverable.
-- MP4 does not guarantee `hvc1`/Apple-style HEVC compatibility; HEVC is
-  not implemented.
 
 ## Disk space and filesystem
 
@@ -162,7 +177,10 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   launch. An MSI installer is provided in addition to the portable ZIP.
 - No Replay Buffer.
 - No built-in editor, trimming, or Quick Trim.
-- No HDR10 / 10-bit pipeline (8-bit 4:2:0 only).
+- **No HDR10 output.** 10-bit video (HEVC Main10, AV1 10-bit) is available in SDR
+  only. True HDR recording (PQ/HLG transfer, HDR10 metadata) is planned for a
+  future release.
+- No 4:2:2 or 4:4:4 chroma subsampling (4:2:0 only).
 - No multi-vendor hardware-encoder matrix (NVIDIA only — see above).
 - Stable display identity uses the GDI device name (for example `\\.\DISPLAY1`),
   which can be reassigned on a monitor topology change. A saved Region or Display
@@ -194,7 +212,7 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
   Nothing leaves the machine without an explicit choice on the next-launch crash dialog.
 - **Crash detection is next-launch only.** Crashes are surfaced and offered for reporting on the
   *following* launch (clean-exit marker + session sidecar). An immediate in-session crash reporter
-  (Crash A2) is deferred past 0.5.0.
+  (Crash A2) is deferred.
 - **Stage 1 (automated Sentry upload) is present only in official builds.** The Sentry DSN is compiled
   in only under the official-build gate, so self-built binaries never upload. Stage 0 (assisted GitHub
   issue) is always available.
@@ -204,15 +222,15 @@ ExoSnap detects the filesystem of the output volume and warns about known limita
 - **Update checking is notify + manual download.** Stable and Preview channels are supported. The
   client verifies a signed manifest (ed25519 via Monocypher + SHA-256) and refuses downgrades, but it
   does **not** download or install the update itself, and never restarts silently. In-place
-  auto-update (Update C) is deferred past 0.5.0.
+  auto-update (Update C) is deferred.
 - **Updates are off by default for self-built binaries** and require the embedded official public key;
   no GitHub token is used by the client.
 
-## Planned beyond 0.6.0 (not in this build)
+## Planned beyond 0.7.0 (not in this build)
 
 The following are intentionally deferred and are documented here only so the
-current boundary is unambiguous. They are **not** part of 0.6.0:
+current boundary is unambiguous. They are **not** part of 0.7.0:
 in-place auto-update with restart, immediate in-session crash reporter, automated symbol upload,
-AMD and Intel hardware encoding, software encoding fallback, an expanded codec/color pipeline
-(HEVC, 10-bit, HDR10), more-than-stereo audio, float PCM, PCM/FLAC in MP4, and the
-fullscreen/exclusive capture matrix (0.12.x).
+AMD and Intel hardware encoding, software encoding fallback, true HDR10 recording (PQ/HLG transfer
+curve, HDR10/HLG metadata, wide color gamut), 4:2:2/4:4:4 chroma subsampling, more-than-stereo
+audio, float PCM, PCM/FLAC in MP4, and the fullscreen/exclusive capture matrix (0.12.x).

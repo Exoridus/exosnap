@@ -1,4 +1,4 @@
-# ExoSnap 0.6.0 — Portable Release
+# ExoSnap 0.7.0 — Portable Release
 
 Thanks for trying ExoSnap. This file is the quick-start guide for the portable
 Windows build.
@@ -11,22 +11,25 @@ multi-track audio routing, a webcam overlay, and built-in diagnostics.
 
 ## Release status
 
-This is **ExoSnap 0.6.0**, a **pre-v1 Windows preview**. It is not the final
+This is **ExoSnap 0.7.0**, a **pre-v1 Windows preview**. It is not the final
 1.0 release. Settings, presets, and recording-history file formats may change in
 incompatible ways before 1.0.0. See `KNOWN_LIMITATIONS.md` for the full current
 support boundary.
 
-New in 0.6.0 ("Audio v2"): per-track gain & mute and a brickwall limiter on the
-mixed bus; an optional microphone DSP chain (high-pass filter, noise gate, AGC,
-RNNoise neural noise suppression — all off by default); lossless **PCM** and
-**FLAC** audio (MKV); and a channel/sample-format model (44.1/48/96 kHz,
-mono/stereo, 16/24/32-bit lossless, configurable FLAC compression level).
+New in 0.7.0: **HEVC** video (NVENC) in MKV and MP4 (`hvc1` sample entry);
+**10-bit** output (P010) for HEVC Main10 and AV1 — SDR at higher precision, no
+HDR transfer; **BT.709** color metadata on every MKV/MP4 plus a selectable
+Y'CbCr **color range** (Full/Limited); a modal **recording-error dialog** with an
+opt-in report; and a **v10 design pass** across the whole app, including a theme
+picker with four live preview cards and single-click source selection. HEVC,
+`hvc1`, and 10-bit encoder paths are functional but not yet validated across all
+NVIDIA GPU generations — use H.264 or AV1 if you hit issues.
 
 ## System requirements
 
 - Windows 10 or 11, 64-bit (Windows 11 recommended).
 - An **NVIDIA GPU with supported NVENC** capability (RTX 20-series or newer
-  recommended) and a current NVIDIA display driver. ExoSnap 0.6.0 requires
+  recommended) and a current NVIDIA display driver. ExoSnap 0.7.0 requires
   NVIDIA NVENC for video encoding; AMD, Intel, and software encoding are not
   supported in this release.
 - Microsoft Visual C++ 2022 x64 runtime (usually already installed). If the app
@@ -35,7 +38,7 @@ mono/stereo, 16/24/32-bit lossless, configurable FLAC compression level).
 
 ## How to launch
 
-1. Extract the entire `ExoSnap-0.6.0-windows-x64-portable` folder from the ZIP to a
+1. Extract the entire `ExoSnap-0.7.0-windows-x64-portable` folder from the ZIP to a
    location of your choice.
 2. Run `exosnap.exe` from the extracted folder.
 
@@ -68,15 +71,16 @@ Diagnostics view expose richer logging and a way to open the log folder.
 ## Supported output overview
 
 - **Containers:** MKV, WebM, MP4.
-- **Video:** H.264 (NVENC) and AV1 (NVENC, where your GPU/driver expose it).
+- **Video:** H.264 (NVENC), AV1 (NVENC, where your GPU/driver expose it), and
+  HEVC (NVENC), including a 10-bit (P010) SDR path for HEVC Main10 and AV1.
 - **Audio:** AAC-LC (`AAC`), Opus, and lossless **PCM** and **FLAC** (MKV only).
-- **Container rules:** MP4 uses H.264 + AAC (Opus, PCM, and FLAC are not offered
-  for MP4); WebM uses AV1 + Opus; MKV is the flexible default and the home for
-  PCM and FLAC.
+- **Container rules:** MP4 uses H.264 or HEVC (`hvc1`) + AAC (Opus, PCM, and FLAC
+  are not offered for MP4); WebM uses AV1 + Opus; MKV is the flexible default and
+  the home for PCM and FLAC.
 
 Exact availability depends on your GPU generation, driver, and the selected
-container/codec combination. HEVC video is not implemented in 0.6.0; PCM and
-FLAC are MKV-only.
+container/codec combination. 10-bit output is SDR only (no HDR10); PCM and FLAC
+are MKV-only.
 
 ## Recording split overview
 
@@ -98,10 +102,10 @@ FLAC are MKV-only.
 ## Verifying your download
 
 A SHA-256 checksum is published next to the ZIP as
-`ExoSnap-0.6.0-windows-x64-portable.sha256`. To verify integrity in PowerShell:
+`ExoSnap-0.7.0-windows-x64-portable.sha256`. To verify integrity in PowerShell:
 
 ```powershell
-Get-FileHash .\ExoSnap-0.6.0-windows-x64-portable.zip -Algorithm SHA256
+Get-FileHash .\ExoSnap-0.7.0-windows-x64-portable.zip -Algorithm SHA256
 ```
 
 The printed hash must match the value in the `.sha256` file. The checksum
