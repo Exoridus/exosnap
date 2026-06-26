@@ -3581,3 +3581,97 @@ QPushButton#issueFixBtn {
     padding-top: 6px;
     margin-top: 4px;
 }
+
+/* ── Notification Hub Panel (v10: restored — State Spec "About · Notification Hub") ──
+   NotificationHubPanel paints its own backdrop in paintEvent (bg1 fill + line2
+   border); set background: transparent so the custom paint shows through. */
+QFrame#notificationHubPanel {
+    background: transparent;
+    border: none;
+}
+
+QWidget#hubHeader {
+    background: transparent;
+}
+
+QLabel#hubTitle {
+    font-family: ${font-sans};
+    font-size: 13.5px;
+    font-weight: 600;
+    color: ${text0};
+}
+
+QLabel#hubMarkAllRead {
+    font-size: 12px;
+    font-weight: 500;
+    color: ${accent};
+}
+
+QFrame#hubHeaderDivider {
+    background: ${line1};
+    border: none;
+    min-height: 1px;
+    max-height: 1px;
+}
+
+QWidget#hubScrollContent {
+    background: transparent;
+}
+
+QWidget#hubEmptyState {
+    background: transparent;
+}
+
+QWidget#hubEmptyIcon {
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-radius: 10px;
+}
+
+QLabel#hubEmptyTitle {
+    font-family: ${font-sans};
+    font-size: 13.5px;
+    font-weight: 600;
+    color: ${text0};
+}
+
+QLabel#hubEmptyBody {
+    font-size: 12.5px;
+    color: ${text2};
+}
+
+QFrame#hubItemDivider {
+    background: ${line1};
+    border: none;
+    min-height: 1px;
+    max-height: 1px;
+}
+
+/* Advisory action buttons — ghost: transparent bg, line2 border, accent text. */
+QPushButton[advisoryAction="true"] {
+    background: transparent;
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    color: ${accent};
+    font-size: 12px;
+    font-weight: 600;
+    min-height: 26px;
+    padding: 0 10px;
+}
+
+QPushButton[advisoryAction="true"]:hover {
+    background: ${ac-a10};
+    border-color: ${accent-b2};
+    color: ${accent};
+}
+
+QPushButton[advisoryAction="true"]:pressed {
+    background: ${ac-a12};
+    border-color: ${accent-b2};
+}
+
+QPushButton[advisoryAction="true"]:disabled {
+    color: ${text3};
+    background: transparent;
+    border-color: ${line1};
+}
