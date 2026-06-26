@@ -3675,3 +3675,32 @@ QPushButton[advisoryAction="true"]:disabled {
     background: transparent;
     border-color: ${line1};
 }
+
+/* ── Settings Updates card action button (ADR 0034 Phase A) ──
+   Ghost while checking/up-to-date; accent CTA when an update is available. */
+QPushButton#updatesActionButton {
+    background: transparent;
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    color: ${text0};
+    font-size: 12px;
+    font-weight: 600;
+    min-height: 28px;
+    padding: 0 12px;
+}
+
+QPushButton#updatesActionButton:hover {
+    border-color: ${accent-b2};
+    color: ${accent};
+}
+
+QPushButton#updatesActionButton[updatesCta="true"] {
+    background: ${accent-dim};
+    border-color: ${accent-b2};
+    color: ${accent};
+}
+
+QPushButton#updatesActionButton:disabled {
+    color: ${text3};
+    border-color: ${line1};
+}

@@ -5099,6 +5099,11 @@ void ConfigPage::setUpdateStatus(const QString& state, const QString& available_
         updates_action_btn_->setText(QStringLiteral("Check for updates"));
         updates_action_btn_->setEnabled(true);
     }
+
+    // Accent CTA styling only in the available state (QSS [updatesCta="true"]).
+    updates_action_btn_->setProperty("updatesCta", state == QStringLiteral("available"));
+    updates_action_btn_->style()->unpolish(updates_action_btn_);
+    updates_action_btn_->style()->polish(updates_action_btn_);
 }
 
 // PS-PHASE-E: deep-link target support — scroll Settings to the named section.
