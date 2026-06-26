@@ -7,6 +7,8 @@ class QPushButton;
 class QFrame;
 class QProgressBar;
 class QScrollArea;
+class QEvent;
+class QObject;
 
 namespace exosnap {
 
@@ -47,6 +49,9 @@ class EditExportPage : public QWidget {
     void onOpenFolderClicked();
     void onRevealFileClicked();
     void onRetryExportClicked();
+
+  protected:
+    bool eventFilter(QObject* obj, QEvent* event) override;
 
   private:
     void buildUi();
@@ -109,6 +114,7 @@ class EditExportPage : public QWidget {
 
     // Done/Failed-Panel
     QWidget* result_panel_ = nullptr;
+    QLabel* result_icon_label_ = nullptr;
     QLabel* result_title_label_ = nullptr;
     QLabel* result_detail_label_ = nullptr;
     QPushButton* result_open_folder_btn_ = nullptr;
