@@ -461,11 +461,14 @@ void DiagnosticsPage::updatePipelineCards(const recorder_core::RecordingDiagnost
     const double budget_ms = (s.capture.target_fps > 0.0) ? 1000.0 / s.capture.target_fps : (1000.0 / 60.0);
 
     // Drop delta over the publish interval (problem drops only; coalesce is benign).
+    // Compute problem_drops FIRST so that on a generation change we can seed
+    // cards_last_problem_drops_ to the current cumulative value — making the first
+    // delta 0 and preventing a warm-up false-positive "Over" on the Source Capture card.
+    const uint64_t problem_drops = s.capture.frames_dropped_cfr + s.capture.frames_dropped_backpressure;
     if (s.session_generation != cards_last_generation_) {
         cards_last_generation_ = s.session_generation;
-        cards_last_problem_drops_ = 0;
+        cards_last_problem_drops_ = problem_drops; // seed so first delta is 0
     }
-    const uint64_t problem_drops = s.capture.frames_dropped_cfr + s.capture.frames_dropped_backpressure;
     const uint32_t capture_recent_drops = (problem_drops > cards_last_problem_drops_)
                                               ? static_cast<uint32_t>(problem_drops - cards_last_problem_drops_)
                                               : 0;
@@ -504,7 +507,12 @@ void DiagnosticsPage::updatePipelineCards(const recorder_core::RecordingDiagnost
     enc.is_duration_stage = true;
     enc.can_bottleneck = true;
     enc.avg_ms = s.video_encoder.average_ms;
-    enc.recent_drops = (s.video_encoder.backlog >= 2) ? 1u : 0u; // NEED_MORE_INPUT shedding proxy
+    // backlog = frames_submitted − encoded_packets = NVENC lookahead/B-frame/async fill
+    // depth, which is naturally ≥2 in healthy AV1/NVENC steady state. Treating backlog
+    // as a shedding proxy causes a perpetual false "Over" on every healthy recording.
+    // The genuine encoder bottleneck signal is the submit→ready latency exceeding the
+    // frame budget, already captured by the duration path (is_duration_stage=true,
+    // avg_ms > budget_ms → Bottleneck). enc.recent_drops stays 0 (default).
 
     StageSignals mux{};
     mux.id = StageId::Muxer;
@@ -570,12 +578,18 @@ void DiagnosticsPage::updatePipelineCards(const recorder_core::RecordingDiagnost
                              ((s.compositor.vpblt_availability == MetricAvailability::Available)
                                   ? QString::number(s.compositor.vpblt_average_ms, 'f', 2) + QStringLiteral(" ms")
                                   : dash);
+    // Gate the displayed number on the VALUE's own availability (> 0.0), not just the
+    // stage's resolver availability — avoids "0.0 ms" when the stage is alive but has
+    // no sample yet. comp.available (= s.compositor.active) is kept for the resolver.
     pipeline_flow_->setStepLive(2, to_status(health_of(StageId::Compositor)), QString(), QStringLiteral("GPU"),
-                                ms(s.compositor.average_ms, s.compositor.active), comp_tip);
+                                ms(s.compositor.average_ms, s.compositor.average_ms > 0.0), comp_tip);
 
     // ---- Card 3: Encoder ----
+    // Gate the displayed number on average_ms > 0.0 (value has been sampled), not on
+    // enc.available (which can be true as soon as frames_encoded > 0 with avg still 0.0).
+    // enc.available is kept for the resolver (health classification still sees the stage live).
     pipeline_flow_->setStepLive(3, to_status(health_of(StageId::Encoder)), QString(), QStringLiteral("GPU (NVENC)"),
-                                ms(s.video_encoder.average_ms, enc.available),
+                                ms(s.video_encoder.average_ms, s.video_encoder.average_ms > 0.0),
                                 QStringLiteral("CPU submit\xe2\x86\x92ready latency (peak ") +
                                     QString::number(s.video_encoder.peak_ms, 'f', 1) + QStringLiteral(" ms)"));
 

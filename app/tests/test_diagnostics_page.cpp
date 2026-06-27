@@ -504,6 +504,41 @@ TEST_F(DiagnosticsPageTest, CaptureCardBottleneckShownAsOver) {
     EXPECT_EQ(flow->card(3)->status(), PipelineStepCard::Status::Over);
 }
 
+TEST_F(DiagnosticsPageTest, EncoderHealthyBacklogDoesNotTriggerOver) {
+    // Regression for FIX 1: NVENC steady-state backlog (naturally ≥2) must NOT be
+    // treated as a shedding proxy. A healthy encoder with backlog=4 and latency well
+    // under budget must NOT show Over on the Encoder card.
+    DiagnosticsPage page;
+    LoadData(page);
+    auto s = MakeRecordingSnapshot();
+    s.video_encoder.backlog = 4;      // steady-state NVENC pipeline depth
+    s.video_encoder.average_ms = 2.0; // well under the 16.7 ms budget at 60 fps
+    s.video_encoder.frames_encoded = 700;
+    page.applyLiveDiagnostics(s);
+
+    auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
+    ASSERT_NE(flow, nullptr);
+    EXPECT_NE(flow->card(3)->status(), PipelineStepCard::Status::Over)
+        << "Healthy encoder with steady-state NVENC backlog must not show Over (FIX 1 regression)";
+}
+
+TEST_F(DiagnosticsPageTest, EncoderSecondaryNumberDashWhenNoSampleYet) {
+    // Regression for FIX 2: when frames_encoded > 0 but average_ms == 0.0 (no latency
+    // sample accumulated yet), the Encoder secondary number must show the dash (kDash),
+    // not "0.0 ms". enc.available is true (stage is live), but the VALUE is not ready.
+    DiagnosticsPage page;
+    LoadData(page);
+    auto s = MakeRecordingSnapshot();
+    s.video_encoder.frames_encoded = 10; // stage is alive
+    s.video_encoder.average_ms = 0.0;    // no latency sample yet
+    page.applyLiveDiagnostics(s);
+
+    auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
+    ASSERT_NE(flow, nullptr);
+    EXPECT_EQ(flow->card(3)->secondaryNumber(), kDash)
+        << "Encoder secondary number must be dash when average_ms == 0.0 (FIX 2 honesty)";
+}
+
 TEST_F(DiagnosticsPageTest, MuxNumberDashWhenUnavailable) {
     DiagnosticsPage page;
     LoadData(page);
