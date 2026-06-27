@@ -720,13 +720,16 @@ TEST_F(ConfigPageTest, UpdatesCard_IsPresent) {
     ASSERT_NE(updates_card, nullptr) << "settingsUpdatesCard must exist";
     EXPECT_FALSE(updates_card->isHidden()) << "Updates card must not be explicitly hidden by default";
 
-    // Update channel combo and auto-check toggle must be present.
-    auto* channel_combo = page.findChild<QComboBox*>(QStringLiteral("updatesChannelCombo"));
-    ASSERT_NE(channel_combo, nullptr) << "updatesChannelCombo must exist";
-    EXPECT_GE(channel_combo->count(), 2) << "Channel combo needs at least Stable/Preview";
-
+    // ADR 0034: the slim card has an auto-check toggle + a status action button
+    // (the unplanned Update-channel combo was removed).
     auto* auto_toggle = page.findChild<QWidget*>(QStringLiteral("updatesAutoCheckToggle"));
     EXPECT_NE(auto_toggle, nullptr) << "updatesAutoCheckToggle must exist";
+
+    auto* action_btn = page.findChild<QPushButton*>(QStringLiteral("updatesActionButton"));
+    EXPECT_NE(action_btn, nullptr) << "updatesActionButton must exist";
+
+    auto* channel_combo = page.findChild<QComboBox*>(QStringLiteral("updatesChannelCombo"));
+    EXPECT_EQ(channel_combo, nullptr) << "Update-channel combo must be gone (slim card)";
 }
 
 TEST_F(ConfigPageTest, QualitySegment_HasSimpleLabels) {

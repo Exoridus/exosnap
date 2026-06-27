@@ -251,8 +251,8 @@ TEST(FilesystemChecksRecommendationTest, Fat32_Plus_HardDiskStop_Fat32RemainsNot
 
 TEST(FilesystemChecksRecommendationTest, GetAllRecommendationCodes_IncludesRec008) {
     const auto codes = RecommendationEngine::GetAllRecommendationCodes();
-    // FILESYSTEM-CHECKS-R1 added rec.008 — expect 8 codes now.
-    EXPECT_EQ(codes.size(), 8u);
+    // rec.001–rec.008 + the 0.8.0 incident catalog rec.009/rec.010 → 10 codes.
+    EXPECT_EQ(codes.size(), 10u);
     const bool has_rec008 = std::find(codes.begin(), codes.end(), "rec.008") != codes.end();
     EXPECT_TRUE(has_rec008);
 }

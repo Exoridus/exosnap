@@ -998,7 +998,9 @@ exosnap_add_gtest(
         # calls ActiveTheme()/ParseThemeColor() from ExoSnapTheme.cpp.
         ui/widgets/ExoCheckBox.cpp
         ui/theme/ExoSnapTheme.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+        # v10: LogsPage's search field uses lucideIcon() (Lucide glyph renderer).
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
 )
 target_include_directories(logs_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(logs_page_tests PRIVATE EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
@@ -1213,7 +1215,9 @@ exosnap_add_gtest(
         ui/widgets/PipelineFlow.cpp
         ui/widgets/PipelineStepCard.cpp
         ui/widgets/LivePipelinePanel.cpp
-    LIBRARIES exosnap_diagnostics_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+        # v10: DiagnosticsPage's readiness chip uses lucidePixmap() (Lucide glyph renderer).
+        ui/theme/LucideIcon.cpp
+    LIBRARIES exosnap_diagnostics_test_support Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
 )
 target_include_directories(diagnostics_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(diagnostics_page_tests PROPERTIES AUTOMOC ON)

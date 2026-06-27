@@ -150,7 +150,7 @@ TEST_F(SourcePickerOverlayTest, UseSelectedSource_EmitsSourceSelectedThenClosed)
     EXPECT_TRUE(overlay.isHidden());
 }
 
-TEST_F(SourcePickerOverlayTest, ClickingScreenCard_CommitsImmediatelyAndCloses) {
+TEST_F(SourcePickerOverlayTest, ClickingScreenCard_SelectsThenUseButtonCommits) {
     QWidget host;
     host.resize(1280, 820);
     ui::dialogs::SourcePickerOverlay overlay(&host);
@@ -174,10 +174,17 @@ TEST_F(SourcePickerOverlayTest, ClickingScreenCard_CommitsImmediatelyAndCloses) 
                      });
     QObject::connect(&overlay, &ui::dialogs::SourcePickerOverlay::closed, [&]() { closed_fired = true; });
 
-    // A single click on a screen card commits and returns — no "Use" step.
+    // Click selects the card — it does NOT commit or close (restored click-to-select).
     const auto cards = overlay.findChildren<ui::widgets::CaptureTargetCard*>();
     ASSERT_FALSE(cards.isEmpty());
     emit cards.first()->clicked();
+    EXPECT_FALSE(selected_fired) << "clicking a card selects, it does not commit";
+    EXPECT_FALSE(closed_fired);
+
+    // The Use button confirms the selection and closes.
+    auto* use = overlay.findChild<QPushButton*>(QStringLiteral("sourcePickerUseButton"));
+    ASSERT_NE(use, nullptr);
+    emit use->clicked();
 
     EXPECT_TRUE(selected_fired);
     EXPECT_TRUE(closed_fired);
@@ -187,7 +194,7 @@ TEST_F(SourcePickerOverlayTest, ClickingScreenCard_CommitsImmediatelyAndCloses) 
     EXPECT_TRUE(overlay.isHidden());
 }
 
-TEST_F(SourcePickerOverlayTest, UseButtonHiddenForScreens_VisibleForRegion) {
+TEST_F(SourcePickerOverlayTest, UseButtonVisibleForAllSections) {
     QWidget host;
     host.resize(1280, 820);
     ui::dialogs::SourcePickerOverlay overlay(&host);
@@ -196,13 +203,11 @@ TEST_F(SourcePickerOverlayTest, UseButtonHiddenForScreens_VisibleForRegion) {
     auto* use = overlay.findChild<QPushButton*>(QStringLiteral("sourcePickerUseButton"));
     ASSERT_NE(use, nullptr);
 
-    // Screens/Windows commit on click → no explicit Use button.
-    // (isHidden() reflects the explicit setVisible(false) regardless of whether
-    // the un-shown host makes the whole overlay non-visible in a headless test.)
+    // The Use button is the single confirm affordance for every section now
+    // (click selects, the Use button commits) — visible for Screens and Region alike.
     overlay.setCurrentSection(ui::dialogs::SourcePickerPanel::Section::Screens, -1);
-    EXPECT_TRUE(use->isHidden());
+    EXPECT_FALSE(use->isHidden());
 
-    // Region is a multi-step config → the Use button is shown.
     overlay.setCurrentSection(ui::dialogs::SourcePickerPanel::Section::Region, -1);
     EXPECT_FALSE(use->isHidden());
 }
