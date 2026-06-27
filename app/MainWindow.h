@@ -174,6 +174,16 @@ class MainWindow : public QMainWindow {
                                   const QString& resolution, const QString& fps, const QString& video_codec,
                                   const QString& audio_codec, const QString& container);
 
+    // ---- Staged post-show page hydration ----
+    // Builds deferred pages one-per-event-loop-tick so the UI remains responsive.
+    // Called from a singleShot(0) in the ctor tail — separate from the caps-probe lambda
+    // so page construction does not delay the hardware probe.
+    void hydrateSecondaryPages();
+    // Builds LogsPage, replacing the cheap placeholder reserved at kLogsPageIndex.
+    void buildLogsPage();
+    // Builds EditExportPage (index 8, past kPageDescriptors) with its back-connection.
+    void buildEditExportPage();
+
     // ---- Preset system (Stage 2) ----
 
     // Assemble the current live config from all sources.
@@ -307,6 +317,7 @@ class MainWindow : public QMainWindow {
     OutputPage* output_page_ = nullptr;
     DiagnosticsPage* diagnostics_page_ = nullptr;
     LogsPage* logs_page_ = nullptr;
+    QWidget* logs_placeholder_ = nullptr; // cheap slot-reservation until buildLogsPage()
     WebcamPage* webcam_page_ = nullptr;
     HotkeysPage* hotkeys_page_ = nullptr;
     EditExportPage* edit_export_page_ = nullptr;

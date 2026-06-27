@@ -529,8 +529,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     stack_->addWidget(config_page_);
     stack_->addWidget(hotkeys_page_);
     stack_->addWidget(diagnostics_page_);
-    logs_page_ = new LogsPage(stack_);
-    stack_->addWidget(logs_page_);
+    // Deferred: logs_page_ is built by buildLogsPage() after show().
+    // A cheap placeholder holds index kLogsPageIndex so webcam_page_ etc. get
+    // the correct subsequent indices without any re-numbering.
+    logs_placeholder_ = new QWidget(stack_);
+    stack_->addWidget(logs_placeholder_);
     stack_->addWidget(webcam_page_);
     output_page_ = new OutputPage(output_settings_, stack_);
     stack_->addWidget(output_page_);
@@ -540,9 +543,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     stack_->addWidget(about_page_);
     // EditExportPage is a non-nav page reached programmatically (navigateToEditExportPage);
     // it lives at the tail of the stack, past all kPageDescriptors slots.
-    edit_export_page_ = new EditExportPage(stack_);
-    stack_->addWidget(edit_export_page_);
-    connect(edit_export_page_, &EditExportPage::backRequested, this, [this]() { navigateToPage(kRecordPageIndex); });
+    // Deferred: built by buildEditExportPage() after show() — no placeholder needed
+    // because it is accessed only via setCurrentWidget(), not setCurrentIndex().
     // Inject the recovery manifest store before the coordinator is initialized.
     record_page_->setRecoveryManifestStore(&recovery_manifest_store_);
     record_page_->setOutputSettings(output_settings_);
@@ -1255,6 +1257,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         if (persisted_settings_.check_updates_on_start && !recording_active_ && !remuxing_active_)
             triggerUpdateCheck();
     });
+
+    // PERF-B1: staged post-show page hydration — separate singleShot so deferred page
+    // construction does not add latency to the capability probe or recovery checks above.
+    QTimer::singleShot(0, this, [this]() { hydrateSecondaryPages(); });
 }
 
 void MainWindow::onRuntimeCapsReady(capability::CapabilitySet caps) {
@@ -2356,6 +2362,10 @@ void MainWindow::navigateToPage(int index) {
 void MainWindow::setCurrentPage(int index) {
     if (index < 0 || index >= static_cast<int>(kPageDescriptors.size()))
         return;
+
+    // Ensure deferred pages are built before they are shown for the first time.
+    if (index == kLogsPageIndex && !logs_page_)
+        buildLogsPage();
 
     stack_->setCurrentIndex(index);
 
@@ -3787,7 +3797,7 @@ void MainWindow::navigateToEditExportPage(const QString& file_path, const QStrin
                                           const QString& resolution, const QString& fps, const QString& video_codec,
                                           const QString& audio_codec, const QString& container) {
     if (!edit_export_page_)
-        return;
+        buildEditExportPage();
     edit_export_page_->setRecordingInfo(file_path, duration, size, resolution, fps, video_codec, audio_codec,
                                         container);
     edit_export_page_->setPhase(EditExportPage::Phase::Review);
@@ -3798,7 +3808,7 @@ void MainWindow::navigateToEditExportPage(const QString& file_path, const QStrin
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& scenario) {
     if (!edit_export_page_)
-        return;
+        buildEditExportPage();
     edit_export_page_->setRecordingInfo(scenario.edit_export_file_path, scenario.edit_export_duration,
                                         scenario.edit_export_size, scenario.edit_export_resolution,
                                         scenario.edit_export_fps, scenario.edit_export_video_codec,
@@ -3819,5 +3829,39 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
     title_bar_->setActivePage(kRecordPageIndex);
 }
 #endif
+
+// ---- Staged post-show page hydration (PERF-B1) ----
+
+void MainWindow::hydrateSecondaryPages() {
+    // Build one deferred page per event-loop tick so the UI can paint and respond
+    // between constructors. LogsPage first (it replaces the index-4 placeholder);
+    // EditExportPage second (tail slot, no placeholder needed).
+    buildLogsPage();
+    QTimer::singleShot(0, this, [this]() { buildEditExportPage(); });
+}
+
+void MainWindow::buildLogsPage() {
+    if (logs_page_)
+        return; // already built (e.g. by an early navigation)
+    logs_page_ = new LogsPage(stack_);
+    if (logs_placeholder_) {
+        // Replace the placeholder in-place so kLogsPageIndex stays valid for all
+        // widgets already past it in the stack (webcam=5, output=6, about=7).
+        const int idx = stack_->indexOf(logs_placeholder_);
+        stack_->insertWidget(idx, logs_page_);
+        logs_placeholder_->deleteLater();
+        logs_placeholder_ = nullptr;
+    } else {
+        stack_->addWidget(logs_page_);
+    }
+}
+
+void MainWindow::buildEditExportPage() {
+    if (edit_export_page_)
+        return; // already built (e.g. by navigateToEditExportPage or visual harness)
+    edit_export_page_ = new EditExportPage(stack_);
+    stack_->addWidget(edit_export_page_);
+    connect(edit_export_page_, &EditExportPage::backRequested, this, [this]() { navigateToPage(kRecordPageIndex); });
+}
 
 } // namespace exosnap
