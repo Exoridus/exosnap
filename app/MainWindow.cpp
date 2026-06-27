@@ -437,6 +437,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
 
     // ---- Load reduced AppSettingsStore (hotkeys + window geometry only) ----
     persisted_settings_ = settings_store_.Load();
+    // ADR 0033: sync the present provider opt-in from the persisted setting now
+    // that the settings store has been loaded. The provider was constructed with
+    // opt_in=false; SetOptIn kicks off the ETW session when elevation allows it.
+    present_provider_.SetOptIn(persisted_settings_.present_diagnostics_optin);
     initHotkeyService();
 
     // ---- Update engine bridge (UPDATE-WIRE-R1 · ADR 0012) ----
@@ -510,6 +514,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     hotkeys_page_->setService(hotkey_service_);
     config_page_->setHotkeyService(hotkey_service_);
     diagnostics_page_ = new DiagnosticsPage(stack_);
+    diagnostics_page_->setPresentProvider(&present_provider_);
     webcam_page_ = new WebcamPage(stack_);
     webcam_page_->applySettings(live_webcam_);
     stack_->addWidget(record_page_);
@@ -3425,6 +3430,9 @@ void MainWindow::onPresentDiagnosticsOptInToggled(bool enabled) {
     // so the elevated instance can activate the provider (ADR 0033).
     persisted_settings_.present_diagnostics_optin = enabled;
     settings_store_.Save(persisted_settings_);
+
+    // Start or stop the ETW session to match the new opt-in state.
+    present_provider_.SetOptIn(enabled);
 
     if (!notification_hub_)
         return;

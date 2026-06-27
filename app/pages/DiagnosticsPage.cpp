@@ -40,6 +40,21 @@ using M = ui::theme::ExoSnapMetrics;
 
 namespace {
 
+// Translate the app-layer diagnostics::PresentMode to the recorder_core mirror.
+// Both enums have identical members; a switch avoids coupling on integer values.
+static recorder_core::PresentMode ToSnapshotMode(diagnostics::PresentMode m) noexcept {
+    switch (m) {
+    case diagnostics::PresentMode::Composed:
+        return recorder_core::PresentMode::Composed;
+    case diagnostics::PresentMode::IndependentFlip:
+        return recorder_core::PresentMode::IndependentFlip;
+    case diagnostics::PresentMode::ExclusiveFullscreen:
+        return recorder_core::PresentMode::ExclusiveFullscreen;
+    default:
+        return recorder_core::PresentMode::Unknown;
+    }
+}
+
 QString severityClass(diagnostics::DiagnosticSeverity sev) {
     switch (sev) {
     case diagnostics::DiagnosticSeverity::Pass:
@@ -382,16 +397,31 @@ void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, c
     refreshPipeline();
 }
 
+void DiagnosticsPage::setPresentProvider(diagnostics::IPresentProvider* provider) noexcept {
+    present_provider_ = provider;
+}
+
 void DiagnosticsPage::applyLiveDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
-    // Retain the latest snapshot so the next overview refresh (Run check / data set) can
-    // correlate live present-pacing with the refresh/FPS recommendation. The live numbers
-    // themselves render at ~5 Hz via the panel below; we deliberately do not rebuild the
-    // (heavier) overview UI on every frame.
+    // Copy first, then overlay present-mode data so both the panel and the next
+    // RecommendationEngine run (refreshOverview) see the augmented snapshot.
     last_live_snapshot_ = snapshot;
+
+    // PresentMon present-mode overlay (ADR 0033). Mirrors the disk/fs provider
+    // pattern: the engine leaves these Unavailable; we fill them from the injected
+    // provider (elevation + opt-in + ETW session gated). Null → Unavailable (em-dash).
+    if (present_provider_ != nullptr) {
+        const diagnostics::PresentSample ps = present_provider_->Sample();
+        if (ps.available) {
+            last_live_snapshot_.capture.source_present_mode = ToSnapshotMode(ps.mode);
+            last_live_snapshot_.capture.source_tearing = ps.tearing;
+            last_live_snapshot_.capture.present_mode_availability = recorder_core::MetricAvailability::Available;
+        }
+    }
+
     if (live_pipeline_panel_ == nullptr) {
         return;
     }
-    live_pipeline_panel_->applySnapshot(snapshot);
+    live_pipeline_panel_->applySnapshot(last_live_snapshot_);
 }
 
 // --- Helpers ---
@@ -871,12 +901,23 @@ void DiagnosticsPage::refreshOverview() {
     const uint32_t monitor_refresh_hz = 0;
 
     // Feed the latest valid live snapshot so the engine can correlate measured present-pacing
-    // (VRR/CFR judder) with the refresh/FPS recommendation.
+    // (VRR/CFR judder) with the refresh/FPS recommendation. The snapshot already carries the
+    // present-mode overlay applied in applyLiveDiagnostics.
     const recorder_core::RecordingDiagnosticsSnapshot* live =
         last_live_snapshot_.valid ? &last_live_snapshot_ : nullptr;
 
+    // Present-mode sample for rec.009 / exclusive-fullscreen correlation (ADR 0033).
+    const diagnostics::PresentSample* present_ptr = nullptr;
+    diagnostics::PresentSample present_sample;
+    if (present_provider_ != nullptr) {
+        present_sample = present_provider_->Sample();
+        if (present_sample.available) {
+            present_ptr = &present_sample;
+        }
+    }
+
     diagnostics::RecommendationEngine engine(caps_, active_user_config_, monitor_refresh_hz, output_drive_free_bytes_,
-                                             profile_validation_.succeeded, output_filesystem_name_, live);
+                                             profile_validation_.succeeded, output_filesystem_name_, live, present_ptr);
     auto recs = engine.Generate();
 
     // Verdict counts come ONLY from the RecommendationEngine (real diagnosed issues).

@@ -431,5 +431,44 @@ TEST_F(DiagnosticsPageTest, LiveDiagnosticsBottleneckStatusRendered) {
     EXPECT_TRUE(status.contains(QStringLiteral("Warning")));
 }
 
+// ---- Present-mode provider bridge (ADR 0033) ------------------------------------
+
+class StubPresent final : public exosnap::diagnostics::IPresentProvider {
+  public:
+    exosnap::diagnostics::PresentSample Sample() const override {
+        exosnap::diagnostics::PresentSample s;
+        s.available = true;
+        s.mode = exosnap::diagnostics::PresentMode::IndependentFlip;
+        s.tearing = true;
+        return s;
+    }
+    bool IsAvailable() const override {
+        return true;
+    }
+};
+
+TEST_F(DiagnosticsPageTest, PresentProvider_InjectedModeAppearsInLivePanel) {
+    DiagnosticsPage page;
+    StubPresent stub;
+    page.setPresentProvider(&stub);
+
+    page.applyLiveDiagnostics(MakeRecordingSnapshot());
+
+    auto* label = page.findChild<QLabel*>(QStringLiteral("liveCapturePresentMode"));
+    ASSERT_NE(label, nullptr) << "liveCapturePresentMode label not found";
+    EXPECT_TRUE(label->text().contains(QStringLiteral("Independent flip")))
+        << "Expected 'Independent flip' in label, got: " << label->text().toStdString();
+}
+
+TEST_F(DiagnosticsPageTest, PresentProvider_NullProviderKeepsUnavailable) {
+    DiagnosticsPage page;
+    // No provider — present_mode_availability stays Unavailable → em-dash.
+    page.applyLiveDiagnostics(MakeRecordingSnapshot());
+
+    auto* label = page.findChild<QLabel*>(QStringLiteral("liveCapturePresentMode"));
+    ASSERT_NE(label, nullptr) << "liveCapturePresentMode label not found";
+    EXPECT_FALSE(label->text().contains(QStringLiteral("Independent flip")));
+}
+
 } // namespace
 } // namespace exosnap

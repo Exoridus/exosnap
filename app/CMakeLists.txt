@@ -1273,6 +1273,11 @@ exosnap_add_gtest(
         ui/widgets/LivePipelinePanel.cpp
         # v10: DiagnosticsPage's readiness chip uses lucidePixmap() (Lucide glyph renderer).
         ui/theme/LucideIcon.cpp
+        # ADR 0033: present-mode provider bridge. No EXOSNAP_HAS_PRESENTMON define →
+        # PresentMonEtwSession compiles the graceful no-op stub branch (no ETW dep).
+        diagnostics/PresentMonProvider.cpp
+        diagnostics/PresentMonEtwSession.cpp
+        diagnostics/PresentModeMapping.cpp
     LIBRARIES exosnap_diagnostics_test_support Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
 )
 target_include_directories(diagnostics_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

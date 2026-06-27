@@ -7,6 +7,7 @@
 
 #include "../diagnostics/CapabilitySummary.h"
 #include "../diagnostics/ConfigSummary.h"
+#include "../diagnostics/PresentProvider.h"
 #include "../diagnostics/RecommendationEngine.h"
 
 #include <cstdint>
@@ -43,6 +44,12 @@ class DiagnosticsPage : public QWidget {
     // Live recording-pipeline telemetry, delivered on the UI thread (~5 Hz while
     // recording, plus one final frozen snapshot). Safe to call when idle.
     void applyLiveDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+
+    // ADR 0033: inject the present/tearing diagnostics provider (borrowed, nullable).
+    // When set, applyLiveDiagnostics overlays the present mode from Sample() onto the
+    // snapshot before rendering and correlation, mirroring the disk/fs provider pattern.
+    // Null (default) leaves present_mode_availability = Unavailable.
+    void setPresentProvider(diagnostics::IPresentProvider* provider) noexcept;
 
   signals:
     void navigateToLogsRequested();
@@ -137,8 +144,11 @@ class DiagnosticsPage : public QWidget {
 
     // Last live pipeline snapshot (fed by applyLiveDiagnostics). Consumed by refreshOverview's
     // RecommendationEngine for the VRR/CFR judder correlation (v0.8.0 / ADR 0033). Only valid
-    // snapshots are forwarded to the engine.
+    // snapshots are forwarded to the engine. Present-mode overlay is applied before storage.
     recorder_core::RecordingDiagnosticsSnapshot last_live_snapshot_{};
+
+    // ADR 0033: borrowed present/tearing provider (null = feature disabled / not elevated).
+    diagnostics::IPresentProvider* present_provider_ = nullptr;
 };
 
 } // namespace exosnap
