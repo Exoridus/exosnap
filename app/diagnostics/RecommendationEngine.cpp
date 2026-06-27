@@ -136,6 +136,23 @@ void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checkli
                        "Cap your game at 60 or 120 fps for smoother pacing.");
     }
 
+    // Present-mode attribution (PresentMon, ADR 0033): when available, name *how* the source
+    // presents so the diagnosis reads as a root cause, not just a number.
+    if (present_.has_value()) {
+        switch (present_->mode) {
+        case PresentMode::IndependentFlip:
+            r.detail += " The source is presenting via independent flip (variable-rate "
+                        "flip-model), which the fixed CFR cadence cannot phase-match.";
+            break;
+        case PresentMode::ExclusiveFullscreen:
+            r.detail += " The source is in exclusive fullscreen; its present cadence is "
+                        "independent of the desktop refresh.";
+            break;
+        default:
+            break;
+        }
+    }
+
     FixAction fa;
     fa.id = "fix.fps.cap";
     fa.label = "Set recording FPS to match monitor";

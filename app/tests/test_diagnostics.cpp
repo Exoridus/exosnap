@@ -1200,5 +1200,29 @@ TEST(RecommendationEngineTest, ComposedPresentRaisesNoExclusiveCheck) {
                              [](const DiagnosticResult& r) { return r.id == "rec.present.exclusive"; }));
 }
 
+TEST(RecommendationEngineTest, JudderDetailNamesPresentModeAttribution) {
+    using namespace exosnap::diagnostics;
+    recorder_core::RecordingDiagnosticsSnapshot snap;
+    snap.valid = true;
+    snap.video_encoder.cfr = true;
+    snap.capture.present_cadence_availability = recorder_core::MetricAvailability::Available;
+    snap.capture.source_present_jitter_ms = 6.0; // > kJitterMs
+    snap.capture.source_coalesce_ratio = 2.0;    // > kCoalesceRatio
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+    PresentSample present;
+    present.available = true;
+    present.mode = PresentMode::IndependentFlip;
+
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", &snap, &present);
+    const DiagnosticChecklist list = engine.Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.001"; });
+    ASSERT_NE(it, list.results.end());
+    EXPECT_NE(it->detail.find("independent flip"), std::string::npos);
+}
+
 } // namespace
 } // namespace exosnap::diagnostics
