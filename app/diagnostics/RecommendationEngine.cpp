@@ -68,6 +68,7 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
     checkProfileSupport(checklist);
     checkAudioContainerCompat(checklist);
     checkVideoBitDepthContainerCompat(checklist);
+    checkDpcLatency(checklist);
     return checklist;
 }
 
@@ -449,6 +450,32 @@ void RecommendationEngine::checkExclusiveFullscreen(DiagnosticChecklist& checkli
     fa.reversible = true;
     fa.changes_summary = "Opens guidance for switching the captured game to borderless fullscreen (the app cannot "
                          "change another application's display mode for you).";
+    r.fix_action = fa;
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
+}
+
+void RecommendationEngine::checkDpcLatency(DiagnosticChecklist& checklist) const {
+    constexpr double kDpcThresholdUs = 1000.0; // 1 ms sustained DPC = audible/stutter risk
+    if (!dpc_.has_value() || !dpc_->available || dpc_->max_latency_us <= kDpcThresholdUs) {
+        return;
+    }
+    const std::string driver = dpc_->worst_driver.empty() ? "an unidentified kernel driver" : dpc_->worst_driver;
+    const std::string max_str = std::to_string(static_cast<long>(dpc_->max_latency_us));
+    DiagnosticResult r = MakeResult(
+        "rec.dpc.latency", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+        "High kernel DPC/ISR latency detected",
+        "Kernel driver latency can cause recording stutter even when the game feels smooth.",
+        "Peak DPC latency reached " + max_str + " us, attributed to " + driver +
+            ". High DPC latency causes recording stutter/audio crackle even when the game itself "
+            "feels smooth.",
+        "Max DPC: " + max_str + " us", "Update or roll back " + driver + " (GPU/audio/network/chipset driver).");
+    FixAction fa;
+    fa.id = "fix.dpc.driver";
+    fa.label = "Driver latency guidance";
+    fa.safety = FixAction::Safety::External; // app cannot change kernel drivers
+    fa.reversible = false;
+    fa.changes_summary = "Shows which driver to update/roll back; the app cannot change it for you.";
     r.fix_action = fa;
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));

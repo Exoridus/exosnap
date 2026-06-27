@@ -1224,5 +1224,32 @@ TEST(RecommendationEngineTest, JudderDetailNamesPresentModeAttribution) {
     EXPECT_NE(it->detail.find("independent flip"), std::string::npos);
 }
 
+TEST(RecommendationEngineTest, HighDpcLatencyNamesDriverExternalFix) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    DpcLatencyReading dpc{/*max*/ 2500.0, /*avg*/ 180.0, "nvlddmkm.sys", /*available*/ true};
+    engine.SetDpcLatency(dpc);
+    const DiagnosticChecklist list = engine.Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.dpc.latency"; });
+    ASSERT_NE(it, list.results.end());
+    EXPECT_NE(it->detail.find("nvlddmkm.sys"), std::string::npos);
+    ASSERT_TRUE(it->fix_action.has_value());
+    EXPECT_EQ(it->fix_action->safety, FixAction::Safety::External);
+}
+
+TEST(RecommendationEngineTest, LowDpcLatencyRaisesNothing) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    engine.SetDpcLatency({200.0, 60.0, "", true});
+    const DiagnosticChecklist list = engine.Generate();
+    EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.dpc.latency"; }));
+}
+
 } // namespace
 } // namespace exosnap::diagnostics

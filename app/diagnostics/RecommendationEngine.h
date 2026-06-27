@@ -13,6 +13,13 @@
 
 namespace exosnap::diagnostics {
 
+struct DpcLatencyReading {
+    double max_latency_us = 0.0;
+    double avg_latency_us = 0.0;
+    std::string worst_driver;
+    bool available = false;
+};
+
 class RecommendationEngine {
   public:
     RecommendationEngine(const capability::CapabilitySet& caps, const capability::UserRecorderConfig& config,
@@ -22,6 +29,10 @@ class RecommendationEngine {
                          const PresentSample* present = nullptr);
 
     DiagnosticChecklist Generate() const;
+
+    void SetDpcLatency(DpcLatencyReading reading) {
+        dpc_ = std::move(reading);
+    }
 
     static std::vector<std::string> GetAllRecommendationCodes();
 
@@ -35,6 +46,7 @@ class RecommendationEngine {
     void checkAudioContainerCompat(DiagnosticChecklist& checklist) const;
     void checkVideoBitDepthContainerCompat(DiagnosticChecklist& checklist) const;
     void checkExclusiveFullscreen(DiagnosticChecklist& checklist) const;
+    void checkDpcLatency(DiagnosticChecklist& checklist) const;
 
     const capability::CapabilitySet& caps_;
     const capability::UserRecorderConfig& config_;
@@ -54,6 +66,10 @@ class RecommendationEngine {
     // Present-mode observation (v0.8.0 / ADR 0033). Available only when the present provider
     // is active (elevation + ETW session open). Empty when not available.
     std::optional<PresentSample> present_;
+
+    // DPC/ISR latency reading. Populated via SetDpcLatency() before Generate().
+    // Empty when not yet measured.
+    std::optional<DpcLatencyReading> dpc_;
 
     // rec.007: hard-stop blocker threshold (500 MB).
     // rec.005: soft warning threshold (2 GB).
