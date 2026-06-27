@@ -4,6 +4,7 @@
 #include <capability/capability_set.h>
 #include <capability/resolver.h>
 #include <recorder_core/pipeline_diagnostics.h>
+#include <recorder_core/pipeline_health.h>
 
 #include "../diagnostics/CapabilitySummary.h"
 #include "../diagnostics/ConfigSummary.h"
@@ -11,6 +12,7 @@
 #include "../diagnostics/PresentProvider.h"
 #include "../diagnostics/RecommendationEngine.h"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 
@@ -73,6 +75,7 @@ class DiagnosticsPage : public QWidget {
     void refreshCapabilities();
     void refreshConfiguration();
     void refreshPipeline();
+    void updatePipelineCards(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
     void refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations, int total_notices,
                           int total_blockers);
     void setReadinessState(const QString& state);
@@ -152,6 +155,11 @@ class DiagnosticsPage : public QWidget {
     // RecommendationEngine for the VRR/CFR judder correlation (v0.8.0 / ADR 0033). Only valid
     // snapshots are forwarded to the engine. Present-mode overlay is applied before storage.
     recorder_core::RecordingDiagnosticsSnapshot last_live_snapshot_{};
+
+    // Capture-card live wiring (0.8.0): 2 Hz apply throttle + drop-delta tracking.
+    std::chrono::steady_clock::time_point last_cards_applied_{};
+    uint64_t cards_last_generation_ = 0;
+    uint64_t cards_last_problem_drops_ = 0;
 
     // ADR 0033: borrowed present/tearing provider (null = feature disabled / not elevated).
     diagnostics::IPresentProvider* present_provider_ = nullptr;

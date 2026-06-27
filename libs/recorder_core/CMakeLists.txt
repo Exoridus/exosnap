@@ -287,6 +287,8 @@ add_library(recorder_core STATIC
     src/pipeline_diagnostics_aggregator.cpp
     src/pipeline_diagnostics_aggregator.h
     include/recorder_core/pipeline_diagnostics.h
+    include/recorder_core/pipeline_health.h
+    src/pipeline_health.cpp
     src/video_thread.cpp
     src/audio_thread.cpp
     src/mux_thread.cpp

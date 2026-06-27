@@ -3076,6 +3076,16 @@ recorder_core::RecordingDiagnosticsSnapshot makeLiveDiagnosticsSnapshot(const QS
     s.disk.output_target = "C:";
     s.disk.latency_availability = MetricAvailability::Available;
 
+    s.capture.acquire_average_ms = 0.6;
+    s.capture.acquire_peak_ms = 1.2;
+    s.capture.acquire_availability = MetricAvailability::Available;
+    s.compositor.vpblt_average_ms = 0.4;
+    s.compositor.vpblt_peak_ms = 0.9;
+    s.compositor.vpblt_availability = MetricAvailability::Available;
+    s.mux.process_average_ms = 0.5;
+    s.mux.process_peak_ms = 1.1;
+    s.mux.process_availability = MetricAvailability::Available;
+
     s.split.split_supported = true;
     s.split.current_segment = 1;
     s.split.completed_segments = 0;
@@ -3086,8 +3096,8 @@ recorder_core::RecordingDiagnosticsSnapshot makeLiveDiagnosticsSnapshot(const QS
     s.health = PipelineHealth::Good;
 
     if (kind == QStringLiteral("encoder")) {
-        s.video_encoder.average_ms = 9.2;
-        s.video_encoder.peak_ms = 14.0;
+        s.video_encoder.average_ms = 20.0; // over the 16.7 ms budget → Bottleneck
+        s.video_encoder.peak_ms = 24.0;
         s.video_encoder.backlog = 6;
         s.video_encoder.frames_encoded = 2440;
         s.video_queue.current_depth = 5;

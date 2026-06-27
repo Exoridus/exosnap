@@ -470,5 +470,68 @@ TEST_F(DiagnosticsPageTest, PresentProvider_NullProviderKeepsUnavailable) {
     EXPECT_FALSE(label->text().contains(QStringLiteral("Independent flip")));
 }
 
+TEST_F(DiagnosticsPageTest, CaptureCardsLiveDuringRecording) {
+    DiagnosticsPage page;
+    LoadData(page);
+    auto s = MakeRecordingSnapshot();
+    s.video_encoder.average_ms = 2.1;
+    s.mux.process_average_ms = 0.5;
+    s.mux.process_availability = recorder_core::MetricAvailability::Available;
+    s.disk.average_write_ms = 0.8;
+    page.applyLiveDiagnostics(s);
+
+    auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
+    ASSERT_NE(flow, nullptr);
+    // Healthy recording → no card alarmed (no Over).
+    for (int i = 0; i < flow->stepCount(); ++i)
+        EXPECT_NE(flow->card(i)->status(), PipelineStepCard::Status::Over) << i;
+    // Capture card shows the fps number; Encoder shows ms.
+    EXPECT_TRUE(flow->card(0)->secondaryNumber().contains(QStringLiteral("fps")));
+    EXPECT_TRUE(flow->card(3)->secondaryNumber().contains(QStringLiteral("ms")));
+    EXPECT_EQ(flow->card(3)->resourceTag(), QStringLiteral("GPU (NVENC)"));
+}
+
+TEST_F(DiagnosticsPageTest, CaptureCardBottleneckShownAsOver) {
+    DiagnosticsPage page;
+    LoadData(page);
+    auto s = MakeRecordingSnapshot();
+    s.video_encoder.average_ms = 22.0; // way over the 16.7 ms budget
+    s.video_encoder.backlog = 6;
+    page.applyLiveDiagnostics(s);
+
+    auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
+    ASSERT_NE(flow, nullptr);
+    EXPECT_EQ(flow->card(3)->status(), PipelineStepCard::Status::Over);
+}
+
+TEST_F(DiagnosticsPageTest, MuxNumberDashWhenUnavailable) {
+    DiagnosticsPage page;
+    LoadData(page);
+    auto s = MakeRecordingSnapshot();
+    s.mux.process_availability = recorder_core::MetricAvailability::Unavailable;
+    page.applyLiveDiagnostics(s);
+
+    auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
+    ASSERT_NE(flow, nullptr);
+    EXPECT_EQ(flow->card(4)->secondaryNumber(), kDash);
+}
+
+TEST_F(DiagnosticsPageTest, IdleAfterRecordingRestoresStaticCards) {
+    DiagnosticsPage page;
+    LoadData(page);
+    page.applyLiveDiagnostics(MakeRecordingSnapshot());
+
+    recorder_core::RecordingDiagnosticsSnapshot idle;
+    idle.lifecycle = recorder_core::DiagnosticsLifecycle::Idle;
+    idle.valid = false;
+    page.applyLiveDiagnostics(idle);
+
+    auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
+    ASSERT_NE(flow, nullptr);
+    // Idle restores static readiness: probe-less cards Planned, probed cards Ok.
+    EXPECT_EQ(flow->card(0)->status(), PipelineStepCard::Status::Planned);
+    EXPECT_EQ(flow->card(3)->status(), PipelineStepCard::Status::Ok);
+}
+
 } // namespace
 } // namespace exosnap
