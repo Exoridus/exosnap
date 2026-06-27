@@ -84,6 +84,13 @@ install(CODE "
   endforeach()
 ")
 
+# ADR 0033: present & tearing diagnostics (PresentMon ETW). This slice ships only the
+# verifiable shell — the stub provider degrades to Unavailable and compiles regardless.
+# The flag gates the in-process ETW consumer vendored in third_party/CMakeLists.txt;
+# it must be declared BEFORE add_subdirectory(third_party) so the guarded FetchContent
+# block there can see the value on a clean configure (before the option lands in cache).
+option(EXOSNAP_WITH_PRESENTMON "Build the PresentMon ETW present-diagnostics provider" ON)
+
 # third_party must come before static analysis so its targets are not analyzed.
 add_subdirectory(third_party)
 
@@ -134,8 +141,7 @@ if(EXOSNAP_BUILD_PROBES)
     add_subdirectory(tools/probes)
 endif()
 
-# ADR 0033: present & tearing diagnostics (PresentMon ETW). This slice ships only the
-# verifiable shell — the stub provider degrades to Unavailable and compiles regardless.
-# The flag will gate the (later-vendored) in-process ETW consumer behind an #if block;
-# it is wired here so the build switch exists from the foundation slice onward.
-option(EXOSNAP_WITH_PRESENTMON "Build the PresentMon ETW present-diagnostics provider" ON)
+if(EXOSNAP_WITH_PRESENTMON)
+    target_link_libraries(exosnap PRIVATE PresentMon::consumer)
+    target_compile_definitions(exosnap PRIVATE EXOSNAP_HAS_PRESENTMON=1)
+endif()
