@@ -504,6 +504,28 @@ TEST_F(DiagnosticsPageTest, CaptureCardBottleneckShownAsOver) {
     EXPECT_EQ(flow->card(3)->status(), PipelineStepCard::Status::Over);
 }
 
+TEST_F(DiagnosticsPageTest, LiveCardStatusSurvivesStaticRefresh) {
+    // Regression for the static-refresh clobber: a live recording snapshot drives the
+    // Encoder card to Over; a subsequent setDiagnosticData() static refresh (mirroring
+    // MainWindow's QTimer::singleShot(0) → refreshDiagnosticsData() bootstrap) must NOT
+    // reset the card back to its static readiness status. The live state must survive.
+    DiagnosticsPage page;
+    LoadData(page);
+    auto s = MakeRecordingSnapshot();
+    s.video_encoder.average_ms = 22.0; // way over the 16.7 ms budget → Over
+    page.applyLiveDiagnostics(s);
+
+    auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
+    ASSERT_NE(flow, nullptr);
+    ASSERT_EQ(flow->card(3)->status(), PipelineStepCard::Status::Over);
+
+    // Static refresh while the recording is still live (last_live_snapshot_ valid).
+    LoadData(page);
+
+    EXPECT_EQ(flow->card(3)->status(), PipelineStepCard::Status::Over)
+        << "Static refresh must not clobber live Over status during an active recording";
+}
+
 TEST_F(DiagnosticsPageTest, EncoderHealthyBacklogDoesNotTriggerOver) {
     // Regression for FIX 1: NVENC steady-state backlog (naturally ≥2) must NOT be
     // treated as a shedding proxy. A healthy encoder with backlog=4 and latency well

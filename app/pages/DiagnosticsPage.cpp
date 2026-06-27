@@ -395,6 +395,19 @@ void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, c
     refreshCapabilities();
     refreshConfiguration();
     refreshPipeline();
+
+    // refreshPipeline() above resets the CAPTURE PIPELINE cards to their static readiness
+    // state. If a live recording snapshot is active, re-apply the live card state directly
+    // (bypassing the 2 Hz throttle in updatePipelineCards) so a static refresh — e.g. the
+    // QTimer::singleShot(0) bootstrap refreshDiagnosticsData() in MainWindow, or any other
+    // setDiagnosticData() call mid-recording — can never leave the cards showing stale
+    // static status while the recording is live.
+    const bool live_recording =
+        last_live_snapshot_.valid && (last_live_snapshot_.lifecycle == recorder_core::DiagnosticsLifecycle::Recording ||
+                                      last_live_snapshot_.lifecycle == recorder_core::DiagnosticsLifecycle::Paused);
+    if (live_recording) {
+        renderPipelineCards(last_live_snapshot_);
+    }
 }
 
 void DiagnosticsPage::setPresentProvider(diagnostics::IPresentProvider* provider) noexcept {
@@ -431,12 +444,6 @@ void DiagnosticsPage::applyLiveDiagnostics(const recorder_core::RecordingDiagnos
 }
 
 void DiagnosticsPage::updatePipelineCards(const recorder_core::RecordingDiagnosticsSnapshot& s) {
-    using recorder_core::MetricAvailability;
-    using recorder_core::StageHealth;
-    using recorder_core::StageId;
-    using recorder_core::StageSignals;
-    using Status = ui::widgets::PipelineStepCard::Status;
-
     if (!pipeline_flow_)
         return;
 
@@ -456,6 +463,19 @@ void DiagnosticsPage::updatePipelineCards(const recorder_core::RecordingDiagnost
         return;
     }
     last_cards_applied_ = now;
+
+    renderPipelineCards(s);
+}
+
+void DiagnosticsPage::renderPipelineCards(const recorder_core::RecordingDiagnosticsSnapshot& s) {
+    using recorder_core::MetricAvailability;
+    using recorder_core::StageHealth;
+    using recorder_core::StageId;
+    using recorder_core::StageSignals;
+    using Status = ui::widgets::PipelineStepCard::Status;
+
+    if (!pipeline_flow_)
+        return;
 
     const QString dash = QString::fromUtf8("\xE2\x80\x94");
     const double budget_ms = (s.capture.target_fps > 0.0) ? 1000.0 / s.capture.target_fps : (1000.0 / 60.0);

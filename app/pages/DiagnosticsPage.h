@@ -76,6 +76,10 @@ class DiagnosticsPage : public QWidget {
     void refreshConfiguration();
     void refreshPipeline();
     void updatePipelineCards(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+    // Render core: build signals → ResolvePipelineHealth → setStepLive. No idle-check,
+    // no 2 Hz throttle. Called by updatePipelineCards (after its guards) and directly by
+    // setDiagnosticData to restore live card state after a static refreshPipeline().
+    void renderPipelineCards(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
     void refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations, int total_notices,
                           int total_blockers);
     void setReadinessState(const QString& state);
