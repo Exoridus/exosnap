@@ -2468,9 +2468,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         present_diag_check_ = new ui::widgets::ExoToggle(presence_panel);
         present_diag_check_->setObjectName(QStringLiteral("presentDiagnosticsToggle"));
         present_diag_check_->setOn(false);
-        presence_layout->addWidget(makeSettingsRow(presence_panel, QStringLiteral("Present & tearing diagnostics"),
-                                                   nullptr, QStringLiteral("Needs administrator"),
-                                                   present_diag_check_));
+        presence_layout->addWidget(makeSettingsRow(presence_panel,
+                                                   QStringLiteral("Present, tearing & latency diagnostics"), nullptr,
+                                                   QStringLiteral("Needs administrator"), present_diag_check_));
 
         // (0.6.0: the former "Per-track gain / mute" roadmap placeholder was removed —
         // per-track gain and mute shipped in 0.6.0 and are configured in the Record

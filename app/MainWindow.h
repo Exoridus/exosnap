@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 
+#include "diagnostics/DpcLatencyProvider.h"
 #include "diagnostics/ElevationProvider.h"
 #include "diagnostics/PresentMonProvider.h"
 #include "models/OutputSettingsModel.h"
@@ -363,6 +364,10 @@ class MainWindow : public QMainWindow {
     // opt_in=false; SetOptIn() is called after persisted_settings_ is loaded.
     // Must be declared after elevation_provider_ (initialization order dependency).
     diagnostics::PresentMonProvider present_provider_{elevation_provider_, false};
+    // ADR 0033: kernel DPC/ISR latency provider. Shares the present-diagnostics opt-in
+    // gate (elevation + opt-in). Started/stopped alongside present_provider_; its reading
+    // is fed to the DiagnosticsPage which forwards it into RecommendationEngine.
+    diagnostics::DpcLatencyProvider dpc_provider_;
 };
 
 } // namespace exosnap

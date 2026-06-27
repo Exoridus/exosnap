@@ -441,6 +441,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // that the settings store has been loaded. The provider was constructed with
     // opt_in=false; SetOptIn kicks off the ETW session when elevation allows it.
     present_provider_.SetOptIn(persisted_settings_.present_diagnostics_optin);
+    // ADR 0033: the kernel DPC/ISR provider shares the present opt-in gate but has no
+    // internal elevation check, so apply (opt-in && elevation) here — mirroring
+    // PresentMonProvider::GateOpen(). Graceful: Start() returns false when ETW can't open.
+    if (persisted_settings_.present_diagnostics_optin && elevation_provider_.IsElevated()) {
+        [[maybe_unused]] const bool dpc_started = dpc_provider_.Start();
+    }
     initHotkeyService();
 
     // ---- Update engine bridge (UPDATE-WIRE-R1 · ADR 0012) ----
@@ -515,6 +521,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     config_page_->setHotkeyService(hotkey_service_);
     diagnostics_page_ = new DiagnosticsPage(stack_);
     diagnostics_page_->setPresentProvider(&present_provider_);
+    diagnostics_page_->setDpcProvider(&dpc_provider_);
     webcam_page_ = new WebcamPage(stack_);
     webcam_page_->applySettings(live_webcam_);
     stack_->addWidget(record_page_);
@@ -3433,6 +3440,12 @@ void MainWindow::onPresentDiagnosticsOptInToggled(bool enabled) {
 
     // Start or stop the ETW session to match the new opt-in state.
     present_provider_.SetOptIn(enabled);
+    // Keep the kernel DPC/ISR session in lockstep with the same gate (opt-in && elevation).
+    if (enabled && elevation_provider_.IsElevated()) {
+        [[maybe_unused]] const bool dpc_started = dpc_provider_.Start();
+    } else {
+        dpc_provider_.Stop();
+    }
 
     if (!notification_hub_)
         return;

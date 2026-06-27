@@ -7,6 +7,7 @@
 
 #include "../diagnostics/CapabilitySummary.h"
 #include "../diagnostics/ConfigSummary.h"
+#include "../diagnostics/DpcLatencyProvider.h"
 #include "../diagnostics/PresentProvider.h"
 #include "../diagnostics/RecommendationEngine.h"
 
@@ -50,6 +51,11 @@ class DiagnosticsPage : public QWidget {
     // snapshot before rendering and correlation, mirroring the disk/fs provider pattern.
     // Null (default) leaves present_mode_availability = Unavailable.
     void setPresentProvider(diagnostics::IPresentProvider* provider) noexcept;
+
+    // ADR 0033: inject the kernel DPC/ISR latency provider (borrowed, nullable).
+    // When set, refreshOverview samples Read() and forwards it into the
+    // RecommendationEngine via SetDpcLatency. Null (default) leaves the DPC check inert.
+    void setDpcProvider(diagnostics::DpcLatencyProvider* provider) noexcept;
 
   signals:
     void navigateToLogsRequested();
@@ -149,6 +155,9 @@ class DiagnosticsPage : public QWidget {
 
     // ADR 0033: borrowed present/tearing provider (null = feature disabled / not elevated).
     diagnostics::IPresentProvider* present_provider_ = nullptr;
+
+    // ADR 0033: borrowed kernel DPC/ISR latency provider (null = disabled / not elevated).
+    diagnostics::DpcLatencyProvider* dpc_provider_ = nullptr;
 };
 
 } // namespace exosnap

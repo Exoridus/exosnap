@@ -401,6 +401,10 @@ void DiagnosticsPage::setPresentProvider(diagnostics::IPresentProvider* provider
     present_provider_ = provider;
 }
 
+void DiagnosticsPage::setDpcProvider(diagnostics::DpcLatencyProvider* provider) noexcept {
+    dpc_provider_ = provider;
+}
+
 void DiagnosticsPage::applyLiveDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
     // Copy first, then overlay present-mode data so both the panel and the next
     // RecommendationEngine run (refreshOverview) see the augmented snapshot.
@@ -918,6 +922,14 @@ void DiagnosticsPage::refreshOverview() {
 
     diagnostics::RecommendationEngine engine(caps_, active_user_config_, monitor_refresh_hz, output_drive_free_bytes_,
                                              profile_validation_.succeeded, output_filesystem_name_, live, present_ptr);
+
+    // Kernel DPC/ISR latency feed for rec.dpc.latency (ADR 0033). Sampled live from the
+    // borrowed provider; Unavailable (default reading) when not elevated / opt-in off,
+    // which keeps the check inert. Mirrors the present-provider sampling above.
+    if (dpc_provider_ != nullptr) {
+        engine.SetDpcLatency(dpc_provider_->Read());
+    }
+
     auto recs = engine.Generate();
 
     // Verdict counts come ONLY from the RecommendationEngine (real diagnosed issues).

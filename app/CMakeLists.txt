@@ -285,6 +285,8 @@ qt_add_executable(exosnap WIN32
     diagnostics/PresentMonEtwSession.cpp
     diagnostics/PresentMonProvider.h
     diagnostics/PresentMonProvider.cpp
+    diagnostics/DpcLatencyProvider.h
+    diagnostics/DpcLatencyProvider.cpp
     diagnostics/DiskSpaceThresholds.h
     diagnostics/FilesystemProvider.h
     diagnostics/FilesystemProvider.cpp
@@ -1278,6 +1280,9 @@ exosnap_add_gtest(
         diagnostics/PresentMonProvider.cpp
         diagnostics/PresentMonEtwSession.cpp
         diagnostics/PresentModeMapping.cpp
+        # ADR 0033: DPC/ISR latency provider. Same no-op stub branch (no ETW dep) since
+        # EXOSNAP_HAS_PRESENTMON is not defined here; DiagnosticsPage samples Read().
+        diagnostics/DpcLatencyProvider.cpp
     LIBRARIES exosnap_diagnostics_test_support Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
 )
 target_include_directories(diagnostics_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
