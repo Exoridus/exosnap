@@ -524,6 +524,7 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     vid_tbl.emplace("rate_control", RateControlModeToString(vid.rate_control).toStdString());
     vid_tbl.emplace("bitrate_kbps", static_cast<int64_t>(vid.bitrate_kbps));
     vid_tbl.emplace("cfr", vid.cfr);
+    vid_tbl.emplace("frame_pacing", static_cast<int64_t>(static_cast<int>(vid.frame_pacing)));
     vid_tbl.emplace("capture_cursor", vid.capture_cursor);
     vid_tbl.emplace("frame_rate_num", static_cast<int64_t>(vid.frame_rate_num));
     vid_tbl.emplace("frame_rate_den", static_cast<int64_t>(vid.frame_rate_den));
@@ -744,6 +745,8 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
             vid.frame_rate_den = static_cast<uint32_t>(den);
         }
     }
+    // CFR frame pacing (ADR 0035). Default 0 = Smooth; out-of-range clamped by SanitizePresetConfig.
+    vid.frame_pacing = static_cast<recorder_core::FramePacingMode>(TomlInt(tbl["video"]["frame_pacing"], 0));
 
     // --- Audio ---
     auto& aud = preset.config.audio;
