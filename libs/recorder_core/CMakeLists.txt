@@ -704,3 +704,12 @@ exosnap_add_gtest(
             src/frame_pacing.cpp
 )
 target_include_directories(frame_pacing_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# Capture-card live wiring (0.8.0): pure stage-health resolver (no D3D/NVENC/Qt).
+exosnap_add_gtest(
+    NAME pipeline_health_tests
+    TEST_PREFIX pipeline_health.
+    SOURCES tests/test_pipeline_health.cpp
+            src/pipeline_health.cpp
+)
+target_include_directories(pipeline_health_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
