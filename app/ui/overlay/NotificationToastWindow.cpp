@@ -330,6 +330,13 @@ QVector<ButtonSpec> buttonSpecsFor(const notifications::NotificationEvent& event
     case NotificationAction::OpenUpdate:
         buttons.push_back({QStringLiteral("View update"), true, NotificationAction::OpenUpdate});
         break;
+    case NotificationAction::RelaunchElevated:
+        // ELEVATION-FOUNDATION-R1 (ADR 0033): "Restart as admin" unlocks the
+        // elevation-gated diagnostics bundle. Optional "Not now" dismiss.
+        buttons.push_back({QStringLiteral("Restart as admin"), true, NotificationAction::RelaunchElevated});
+        if (event.secondary_action == NotificationAction::None)
+            buttons.push_back({QStringLiteral("Not now"), false, NotificationAction::None});
+        break;
     case NotificationAction::Discard:
         buttons.push_back({QStringLiteral("Discard"), false, NotificationAction::Discard});
         break;

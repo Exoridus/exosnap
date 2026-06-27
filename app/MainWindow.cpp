@@ -14,6 +14,7 @@
 #include "pages/RecordPage.h"
 #include "pages/WebcamPage.h"
 #include "services/CrashIssueReport.h"
+#include "services/ElevatedRelaunch.h"
 #include "services/GlobalHotkeyService.h"
 #include "services/UpdateService.h"
 #include "ui/WindowGeometryPolicy.h"
@@ -216,6 +217,16 @@ static_assert(kWebcamPageIndex >= 0, "Webcam page must exist in kPageDescriptors
 static_assert(kLogsPageIndex >= 0, "Logs page must exist in kPageDescriptors.");
 static_assert(kOutputPageIndex >= 0, "Output page must exist in kPageDescriptors.");
 static_assert(kAboutPageIndex >= 0, "About page must exist in kPageDescriptors.");
+
+// ELEVATION-FOUNDATION-R1: map a nav label (kPageDescriptors nav_label) to its
+// page index for the elevated-relaunch handoff. Returns -1 when unknown.
+int pageIndexForNavLabel(const QString& label) {
+    for (std::size_t i = 0; i < kPageDescriptors.size(); ++i) {
+        if (label.compare(QString::fromUtf8(kPageDescriptors[i].nav_label), Qt::CaseInsensitive) == 0)
+            return static_cast<int>(i);
+    }
+    return -1;
+}
 
 // UPDATE-WIRE-R1: map between the persisted/UI channel string ("Stable"|"Preview")
 // and the engine enum. Unknown values fall back to Stable.
@@ -3453,11 +3464,62 @@ void MainWindow::dispatchNotificationAction(const notifications::NotificationEve
             config_page_->scrollToSection(QStringLiteral("settings/updates"));
         break;
     }
+    case NotificationAction::RelaunchElevated: {
+        // ELEVATION-FOUNDATION-R1 (ADR 0033): relaunch as administrator to unlock
+        // elevation-gated diagnostics. Recording guard: never relaunch during an
+        // active recording or remux — defer the offer until the session stops
+        // (mirrors the no-update-during-recording rule, ADR 0012).
+        if (recording_active_ || remuxing_active_) {
+            diagnostics::AppLog::info(QStringLiteral("diagnostics"),
+                                      QStringLiteral("Elevated relaunch deferred: a recording/remux is active."));
+            break;
+        }
+        // The relaunch unlocks the present-diagnostics opt-in, so re-enable it in
+        // the elevated instance via the handoff arg. The opt-in is only persisted
+        // there (after UAC succeeds), so a decline leaves the current state intact.
+        reenable_present_diag_on_relaunch_ = true;
+        elevated_relaunch_requested_ = true;
+        diagnostics::AppLog::info(QStringLiteral("diagnostics"),
+                                  QStringLiteral("User accepted relaunch as administrator."));
+        qApp->quit();
+        break;
+    }
     case NotificationAction::Discard:
     case NotificationAction::None:
     default:
         // No navigation — the toast was already dismissed by the manager.
         break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ELEVATION-FOUNDATION-R1 (ADR 0033): elevated self-relaunch handoff
+// ---------------------------------------------------------------------------
+
+QStringList MainWindow::elevatedRelaunchArgs() const {
+    services::RelaunchHandoff handoff;
+    if (stack_ != nullptr) {
+        const int index = stack_->currentIndex();
+        if (index >= 0 && index < static_cast<int>(kPageDescriptors.size()))
+            handoff.page_name = QString::fromUtf8(kPageDescriptors[static_cast<std::size_t>(index)].nav_label);
+    }
+    handoff.reenable_present_diag = reenable_present_diag_on_relaunch_;
+    return services::BuildRelaunchArgs(handoff);
+}
+
+void MainWindow::applyStartupRelaunchHandoff(const QString& page_name, bool reenable_present_diag) {
+    // Land on the handed-off page, if it resolves to a real nav target.
+    const int index = pageIndexForNavLabel(page_name);
+    if (index >= 0)
+        navigateToPage(index);
+
+    // The relaunch succeeded (we are running), so it is now safe to persist the
+    // present-diagnostics opt-in the user toggled before the restart.
+    if (reenable_present_diag && !persisted_settings_.present_diagnostics_optin) {
+        persisted_settings_.present_diagnostics_optin = true;
+        settings_store_.Save(persisted_settings_);
+        diagnostics::AppLog::info(QStringLiteral("diagnostics"),
+                                  QStringLiteral("Present-diagnostics opt-in re-enabled after elevated relaunch."));
     }
 }
 

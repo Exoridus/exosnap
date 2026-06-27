@@ -11,6 +11,7 @@
 #include "ExoSnapBuildInfo.h" // exosnap::build::kVersion
 #include "MainWindow.h"
 #include "exosnap_resource.h"
+#include "services/ElevatedRelaunch.h"
 #include "ui/theme/ExoSnapTheme.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
 #include "visual_tests/VisualTestHarness.h"
@@ -177,7 +178,14 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
+    // ELEVATION-FOUNDATION-R1 (ADR 0033): parse the elevated-relaunch handoff
+    // from our own argv (set by a prior `runas` self-relaunch). Pure parse; the
+    // window applies it (navigate + re-enable opt-in) once constructed.
+    const exosnap::services::RelaunchHandoff startup_handoff =
+        exosnap::services::ParseRelaunchArgs(QCoreApplication::arguments());
+
     exosnap::MainWindow win;
+    win.applyStartupRelaunchHandoff(startup_handoff.page_name, startup_handoff.reenable_present_diag);
     if (!app_icon.isNull()) {
         win.setWindowIcon(app_icon);
         const QList<QSize> sizes = win.windowIcon().availableSizes();
@@ -237,6 +245,23 @@ int main(int argc, char* argv[]) {
             hMutex = nullptr;
         }
         QProcess::startDetached(QApplication::applicationFilePath(), {});
+    } else if (win.elevatedRelaunchRequested()) {
+        // ELEVATION-FOUNDATION-R1 (ADR 0033): relaunch elevated via ShellExecuteEx
+        // ("runas", UAC). Reuse the same single-instance mutex release so the new
+        // elevated process can acquire it. A UAC decline (UserDeclined) is a
+        // normal, graceful outcome — stay non-elevated, no retry loop.
+        if (hMutex != nullptr) {
+            ReleaseMutex(hMutex);
+            CloseHandle(hMutex);
+            hMutex = nullptr;
+        }
+        const exosnap::services::RelaunchResult relaunch_result =
+            exosnap::services::RelaunchAsAdmin(QApplication::applicationFilePath(), win.elevatedRelaunchArgs());
+        if (relaunch_result == exosnap::services::RelaunchResult::UserDeclined) {
+            qInfo().noquote() << "Elevated relaunch cancelled by user (UAC declined).";
+        } else if (relaunch_result == exosnap::services::RelaunchResult::Failed) {
+            qWarning().noquote() << "Elevated relaunch failed (ShellExecuteEx).";
+        }
     }
 #endif
 

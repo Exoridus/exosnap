@@ -10,9 +10,9 @@
 namespace exosnap {
 namespace {
 
-// Bump to 16: THEME-SLICE-1 renames accent_id -> theme_id; no migration.
-// Pre-1.0: stale accent_id key in persisted data is simply ignored.
-constexpr int kSettingsVersionCurrent = 16;
+// Bump to 17: ELEVATION-FOUNDATION-R1 adds present_diagnostics_optin (ADR 0033).
+// Pre-1.0: no migration; missing key defaults to false.
+constexpr int kSettingsVersionCurrent = 17;
 
 } // namespace
 
@@ -107,6 +107,12 @@ PersistedAppSettings AppSettingsStore::Load() const {
         settings.value(QStringLiteral("audio_separate_expander_expanded"), false).toBool();
     settings.endGroup();
 
+    settings.beginGroup(QStringLiteral("diagnostics"));
+    // ELEVATION-FOUNDATION-R1 (ADR 0033): present-diagnostics opt-in (default OFF).
+    // Pre-1.0: no migration; missing key defaults to false.
+    persisted.present_diagnostics_optin = settings.value(QStringLiteral("present_diagnostics_optin"), false).toBool();
+    settings.endGroup();
+
     return persisted;
 }
 
@@ -188,6 +194,11 @@ void AppSettingsStore::Save(const PersistedAppSettings& settings_snapshot) const
                       settings_snapshot.output_split_expander_expanded);
     settings.setValue(QStringLiteral("audio_separate_expander_expanded"),
                       settings_snapshot.audio_separate_expander_expanded);
+    settings.endGroup();
+
+    settings.beginGroup(QStringLiteral("diagnostics"));
+    // ELEVATION-FOUNDATION-R1 (ADR 0033): present-diagnostics opt-in.
+    settings.setValue(QStringLiteral("present_diagnostics_optin"), settings_snapshot.present_diagnostics_optin);
     settings.endGroup();
 
     settings.sync();

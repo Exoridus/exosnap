@@ -127,8 +127,8 @@ TEST(AppSettingsTiersStoreTest, SettingsVersion_BumpedTo16) {
     store.Save(settings);
 
     QSettings raw(path, QSettings::IniFormat);
-    // THEME-SLICE-1: version bumped from 15 → 16 (accent_id renamed to theme_id).
-    EXPECT_EQ(raw.value(QStringLiteral("settings_version")).toInt(), 16);
+    // ELEVATION-FOUNDATION-R1: version bumped 16 → 17 (present_diagnostics_optin).
+    EXPECT_EQ(raw.value(QStringLiteral("settings_version")).toInt(), 17);
 }
 
 TEST(AppSettingsTiersStoreTest, MissingSettingsTiersGroup_DefaultsToFalse) {

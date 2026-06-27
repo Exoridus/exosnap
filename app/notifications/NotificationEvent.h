@@ -25,14 +25,15 @@ enum class NotificationType : uint8_t {
 // needed at this scope. No heavy command pattern — callers dispatch based on
 // the tag and call the appropriate service directly.
 enum class NotificationAction : uint8_t {
-    None,         // no action button
-    OpenFolder,   // open the output folder in Explorer (Saved type)
-    OpenRecovery, // route to the existing recovery flow/overlay (RecoveryAvailable type)
-    ChangeFolder, // change output folder (LowStorage type)
-    ShowFile,     // show / reveal the partial file (UnexpectedStop type)
-    Discard,      // discard recovery session (secondary button on RecoveryAvailable)
-    OpenUpdate,   // navigate to Settings → Software updates card (UpdateAvailable type)
-    Edit,         // navigate to the Edit/Output page for the saved recording (primary on Saved type)
+    None,             // no action button
+    OpenFolder,       // open the output folder in Explorer (Saved type)
+    OpenRecovery,     // route to the existing recovery flow/overlay (RecoveryAvailable type)
+    ChangeFolder,     // change output folder (LowStorage type)
+    ShowFile,         // show / reveal the partial file (UnexpectedStop type)
+    Discard,          // discard recovery session (secondary button on RecoveryAvailable)
+    OpenUpdate,       // navigate to Settings → Software updates card (UpdateAvailable type)
+    Edit,             // navigate to the Edit/Output page for the saved recording (primary on Saved type)
+    RelaunchElevated, // relaunch ExoSnap as administrator to unlock elevation-gated diagnostics (ADR 0033)
 };
 
 // ---------------------------------------------------------------------------

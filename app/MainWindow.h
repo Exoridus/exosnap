@@ -4,6 +4,7 @@
 #include <QRect>
 #include <QStackedWidget>
 #include <QString>
+#include <QStringList>
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -95,6 +96,23 @@ class MainWindow : public QMainWindow {
     [[nodiscard]] bool relaunchRequested() const noexcept {
         return relaunch_requested_;
     }
+
+    // ELEVATION-FOUNDATION-R1 (ADR 0033): true when the user accepted the
+    // "relaunch as administrator" offer. main() reads this after app.exec() and
+    // relaunches elevated (ShellExecuteEx/runas) instead of detached, reusing the
+    // single-instance mutex release. Never set while a recording/remux is active.
+    [[nodiscard]] bool elevatedRelaunchRequested() const noexcept {
+        return elevated_relaunch_requested_;
+    }
+
+    // Builds the handoff argv for the elevated relaunch (current nav page + a flag
+    // to re-enable the feature whose opt-in triggered the relaunch).
+    [[nodiscard]] QStringList elevatedRelaunchArgs() const;
+
+    // Startup handoff (set by main() from parsed argv BEFORE show): land on the
+    // named nav page and, if requested, re-enable + persist the present-diagnostics
+    // opt-in (only applied once the elevated instance is actually running).
+    void applyStartupRelaunchHandoff(const QString& page_name, bool reenable_present_diag);
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void applyVisualScenario(const visual::VisualScenario& scenario);
@@ -326,6 +344,12 @@ class MainWindow : public QMainWindow {
     std::string crash_dir_;
     std::optional<crash_capture::SessionContext> pending_crash_;
     bool relaunch_requested_ = false;
+
+    // ELEVATION-FOUNDATION-R1 (ADR 0033): elevated self-relaunch handoff state.
+    bool elevated_relaunch_requested_ = false;
+    // When true, elevatedRelaunchArgs() emits the re-enable flag so the elevated
+    // instance turns the present-diagnostics opt-in back on after restart.
+    bool reenable_present_diag_on_relaunch_ = false;
 };
 
 } // namespace exosnap

@@ -75,6 +75,13 @@ struct PersistedAppSettings {
     // SETTINGS-TIERS-R1: per-card expander expanded states (default collapsed).
     bool output_split_expander_expanded = false;
     bool audio_separate_expander_expanded = false;
+
+    // ELEVATION-FOUNDATION-R1 (ADR 0033): opt-in for elevation-gated present /
+    // tearing diagnostics (PresentMon ETW). Default OFF. The later PresentMon
+    // slice gates its provider on this flag AND the runtime elevation state;
+    // turning it on while non-elevated offers the "relaunch as administrator"
+    // path. Persisted so the choice survives the self-relaunch.
+    bool present_diagnostics_optin = false;
 };
 
 class AppSettingsStore {

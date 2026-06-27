@@ -238,6 +238,8 @@ qt_add_executable(exosnap WIN32
     services/CrashIssueReport.cpp
     services/UpdateService.h
     services/UpdateService.cpp
+    services/ElevatedRelaunch.h
+    services/ElevatedRelaunch.cpp
     models/WebcamSettings.h
     models/SettingsCompareData.h
     models/SettingsCompareData.cpp
@@ -274,6 +276,8 @@ qt_add_executable(exosnap WIN32
     diagnostics/ConfigSummary.cpp
     diagnostics/DiskSpaceProvider.h
     diagnostics/DiskSpaceProvider.cpp
+    diagnostics/ElevationProvider.h
+    diagnostics/ElevationProvider.cpp
     diagnostics/DiskSpaceThresholds.h
     diagnostics/FilesystemProvider.h
     diagnostics/FilesystemProvider.cpp
@@ -324,6 +328,9 @@ target_link_libraries(exosnap PRIVATE
     tomlplusplus::tomlplusplus
     d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib Version.lib
     mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib
+    # ELEVATION-FOUNDATION-R1 (ADR 0033): ShellExecuteExW (Shell32) + token APIs
+    # OpenProcessToken/GetTokenInformation (Advapi32).
+    Shell32.lib Advapi32.lib
 )
 
 target_include_directories(exosnap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
@@ -916,6 +923,19 @@ exosnap_add_gtest(
 target_include_directories(settings_tiers_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(settings_tiers_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(settings_tiers_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
+
+# ELEVATION-FOUNDATION-R1 (ADR 0033): elevation provider stub + relaunch handoff
+# arg builder/parser + RelaunchResult contract. Pure logic; no Win32 invocation.
+exosnap_add_gtest(
+    NAME elevation_tests
+    TEST_PREFIX elevation.
+    SOURCES
+        tests/test_elevation.cpp
+        services/ElevatedRelaunch.cpp
+    LIBRARIES Qt6::Core Shell32.lib
+)
+target_include_directories(elevation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(elevation_tests PRIVATE NOMINMAX)
 
 exosnap_add_gtest(
     NAME source_picker_dialog_tests
