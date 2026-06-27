@@ -1,9 +1,9 @@
 #pragma once
 
-#include "PresentModeMapping.h"
 #include "PresentProvider.h"
 
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <thread>
 
@@ -31,8 +31,7 @@ class PresentMonEtwSession {
     }
 
   private:
-    void ConsumeLoop();                              // runs ProcessTrace (blocking) on worker_
-    void OnPresentCompleted(const RawPresentEvent&); // called from the decoder
+    void ConsumeLoop(); // runs ProcessTrace (blocking) on worker_
 
     std::atomic<bool> open_{false};
     std::atomic<unsigned long> target_pid_{0};
@@ -41,7 +40,10 @@ class PresentMonEtwSession {
     mutable PresentSample latest_;          // guarded by sample_mutex_
     mutable uint64_t last_present_qpc_ = 0; // reader-side drain state (Latest())
     mutable int64_t qpc_freq_ = 0;
-    void* impl_ = nullptr; // opaque SessionImpl* (PMTraceConsumer + TraceSession)
+    // Opaque SessionImpl (PMTraceConsumer + TraceSession). shared_ptr<void> keeps the
+    // header PresentMon-free; all access is guarded by sample_mutex_. Snapshotting the
+    // pointer under the lock keeps SessionImpl alive across a concurrent Stop().
+    std::shared_ptr<void> impl_;
 };
 
 } // namespace exosnap::diagnostics
