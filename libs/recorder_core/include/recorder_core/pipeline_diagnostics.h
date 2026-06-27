@@ -115,6 +115,13 @@ struct CaptureDiagnostics {
     bool source_tearing = false;
     MetricAvailability present_mode_availability = MetricAvailability::Unavailable;
 
+    // Acquire+copy CPU duration (Source Capture card). steady_clock bracket around the
+    // backend acquire/drain; NOT GPU time. Unavailable until the first sample this session.
+    double acquire_latest_ms = 0.0;
+    double acquire_average_ms = 0.0;
+    double acquire_peak_ms = 0.0;
+    MetricAvailability acquire_availability = MetricAvailability::Unavailable;
+
     [[nodiscard]] uint64_t frames_dropped_total() const noexcept {
         return frames_dropped_coalesced + frames_dropped_cfr + frames_dropped_backpressure;
     }
@@ -128,6 +135,13 @@ struct CompositorDiagnostics {
     uint64_t frames_composed = 0;
     // CPU command-submission time, NOT GPU execution time. GPU execution timing is
     // Unavailable (no timestamp-query infrastructure; no synchronous readback allowed).
+
+    // VideoProcessorBlt (BGRA->NV12) CPU submission duration, folded into the Compositor
+    // card. steady_clock bracket around VideoProcessorBlt; NOT GPU execution time.
+    double vpblt_latest_ms = 0.0;
+    double vpblt_average_ms = 0.0;
+    double vpblt_peak_ms = 0.0;
+    MetricAvailability vpblt_availability = MetricAvailability::Unavailable;
 };
 
 struct EncoderDiagnostics {
@@ -187,6 +201,13 @@ struct MuxDiagnostics {
     uint64_t reorder_bytes = 0;
     uint64_t reorder_bytes_peak = 0;
     MetricAvailability availability = MetricAvailability::Available; // Unavailable for MP4
+
+    // Mux drain-loop CPU processing duration (Muxer card). steady_clock bracket around
+    // the per-iteration queue drain; Unavailable until the first batch is processed.
+    double process_latest_ms = 0.0;
+    double process_average_ms = 0.0;
+    double process_peak_ms = 0.0;
+    MetricAvailability process_availability = MetricAvailability::Unavailable;
 };
 
 struct DiskDiagnostics {
