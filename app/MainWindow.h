@@ -181,6 +181,10 @@ class MainWindow : public QMainWindow {
     void hydrateSecondaryPages();
     // Builds LogsPage, replacing the cheap placeholder reserved at kLogsPageIndex.
     void buildLogsPage();
+    // Builds HotkeysPage, replacing the cheap placeholder reserved at kHotkeysPageIndex.
+    void buildHotkeysPage();
+    // Builds AboutPage, replacing the cheap placeholder reserved at kAboutPageIndex.
+    void buildAboutPage();
     // Builds EditExportPage (index 8, past kPageDescriptors) with its back-connection.
     void buildEditExportPage();
 
@@ -320,8 +324,10 @@ class MainWindow : public QMainWindow {
     QWidget* logs_placeholder_ = nullptr; // cheap slot-reservation until buildLogsPage()
     WebcamPage* webcam_page_ = nullptr;
     HotkeysPage* hotkeys_page_ = nullptr;
+    QWidget* hotkeys_placeholder_ = nullptr; // cheap slot-reservation until buildHotkeysPage()
     EditExportPage* edit_export_page_ = nullptr;
     pages::AboutPage* about_page_ = nullptr;
+    QWidget* about_placeholder_ = nullptr; // cheap slot-reservation until buildAboutPage()
 
     // Device notifiers (owned; started after capability probe; stopped first in ~MainWindow).
     AudioDeviceNotifier audio_notifier_;

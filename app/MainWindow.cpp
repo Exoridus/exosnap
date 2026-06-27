@@ -517,8 +517,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     stack_->setObjectName("mainStack");
     record_page_ = new RecordPage(stack_);
     config_page_ = new ConfigPage(output_settings_, video_settings_, stack_);
-    hotkeys_page_ = new HotkeysPage(stack_);
-    hotkeys_page_->setService(hotkey_service_);
+    // Deferred: hotkeys_page_ is built by buildHotkeysPage() after show().
+    // A cheap placeholder holds index kHotkeysPageIndex so diagnostics_page_ etc. get
+    // the correct subsequent indices without any re-numbering.
+    hotkeys_placeholder_ = new QWidget(stack_);
     config_page_->setHotkeyService(hotkey_service_);
     diagnostics_page_ = new DiagnosticsPage(stack_);
     diagnostics_page_->setPresentProvider(&present_provider_);
@@ -527,7 +529,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     webcam_page_->applySettings(live_webcam_);
     stack_->addWidget(record_page_);
     stack_->addWidget(config_page_);
-    stack_->addWidget(hotkeys_page_);
+    stack_->addWidget(hotkeys_placeholder_);
     stack_->addWidget(diagnostics_page_);
     // Deferred: logs_page_ is built by buildLogsPage() after show().
     // A cheap placeholder holds index kLogsPageIndex so webcam_page_ etc. get
@@ -537,10 +539,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     stack_->addWidget(webcam_page_);
     output_page_ = new OutputPage(output_settings_, stack_);
     stack_->addWidget(output_page_);
-    // AboutPage must occupy the stack slot that matches kAboutPageIndex (it is a
-    // routed nav page in kPageDescriptors), so it is added before EditExportPage.
-    about_page_ = new pages::AboutPage(stack_);
-    stack_->addWidget(about_page_);
+    // Deferred: about_page_ is built by buildAboutPage() after show().
+    // A cheap placeholder holds index kAboutPageIndex so EditExportPage gets
+    // the correct subsequent index without re-numbering.
+    about_placeholder_ = new QWidget(stack_);
+    stack_->addWidget(about_placeholder_);
     // EditExportPage is a non-nav page reached programmatically (navigateToEditExportPage);
     // it lives at the tail of the stack, past all kPageDescriptors slots.
     // Deferred: built by buildEditExportPage() after show() — no placeholder needed
@@ -1033,10 +1036,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     if (persisted_settings_.theme_id != QStringLiteral("dark-default")) {
         ui::theme::ReapplyTheme(*qApp, persisted_settings_.theme_id);
         // Refresh wordmarks that baked colours at construction with the default theme.
+        // about_page_ is deferred: buildAboutPage() applies refreshBrand() when the
+        // non-default theme is active, so no call is needed here.
         if (title_bar_)
             title_bar_->refreshBrand();
-        if (about_page_)
-            about_page_->refreshBrand();
     }
     // When the user picks a different theme, apply it live and persist.
     connect(config_page_, &ConfigPage::themeIdChanged, this, [this](const QString& id) {
@@ -1131,9 +1134,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         seed.channel = persisted_settings_.update_channel;
         update_panel->setModel(seed);
         update_panel->setState(ui::dialogs::UpdateUiState::UpToDate);
-        // Seed the channel hint in the AboutPage metadata table.
-        if (about_page_)
-            about_page_->setChannelHint(persisted_settings_.update_channel);
+        // about_page_ is deferred: buildAboutPage() calls setChannelHint() with the
+        // persisted channel when about_overlay_ is present, so no call is needed here.
 
         connect(about_overlay_, &ui::dialogs::AboutOverlay::checkForUpdatesRequested, this,
                 &MainWindow::triggerUpdateCheck);
@@ -2364,8 +2366,12 @@ void MainWindow::setCurrentPage(int index) {
         return;
 
     // Ensure deferred pages are built before they are shown for the first time.
+    if (index == kHotkeysPageIndex && !hotkeys_page_)
+        buildHotkeysPage();
     if (index == kLogsPageIndex && !logs_page_)
         buildLogsPage();
+    if (index == kAboutPageIndex && !about_page_)
+        buildAboutPage();
 
     stack_->setCurrentIndex(index);
 
@@ -2801,8 +2807,9 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
         setCurrentPage(kDiagnosticsPageIndex);
         break;
     case visual::VisualPage::Logs:
-        if (logs_page_)
-            logs_page_->applyVisualScenario(scenario);
+        if (!logs_page_)
+            buildLogsPage();
+        logs_page_->applyVisualScenario(scenario);
         setCurrentPage(kLogsPageIndex);
         break;
     case visual::VisualPage::About:
@@ -3212,7 +3219,7 @@ void MainWindow::applyVisualDiagnosticsScenario(const visual::VisualScenario& sc
 
 void MainWindow::applyVisualHotkeysScenario(const visual::VisualScenario& scenario) {
     if (!hotkeys_page_)
-        return;
+        buildHotkeysPage();
 
     // Apply custom bindings (non-persistent: bypass service to avoid Win32 registration).
     if (!scenario.hk_custom_binding_0.isEmpty() || !scenario.hk_custom_binding_1.isEmpty()) {
@@ -3834,10 +3841,16 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
 
 void MainWindow::hydrateSecondaryPages() {
     // Build one deferred page per event-loop tick so the UI can paint and respond
-    // between constructors. LogsPage first (it replaces the index-4 placeholder);
-    // EditExportPage second (tail slot, no placeholder needed).
-    buildLogsPage();
-    QTimer::singleShot(0, this, [this]() { buildEditExportPage(); });
+    // between constructors. HotkeysPage first (index 2), LogsPage second (index 4),
+    // AboutPage third (index 7), EditExportPage last (tail slot, no placeholder needed).
+    buildHotkeysPage();
+    QTimer::singleShot(0, this, [this]() {
+        buildLogsPage();
+        QTimer::singleShot(0, this, [this]() {
+            buildAboutPage();
+            QTimer::singleShot(0, this, [this]() { buildEditExportPage(); });
+        });
+    });
 }
 
 void MainWindow::buildLogsPage() {
@@ -3854,6 +3867,46 @@ void MainWindow::buildLogsPage() {
     } else {
         stack_->addWidget(logs_page_);
     }
+}
+
+void MainWindow::buildHotkeysPage() {
+    if (hotkeys_page_)
+        return; // already built (e.g. by an early navigation)
+    hotkeys_page_ = new HotkeysPage(stack_);
+    hotkeys_page_->setService(hotkey_service_);
+    if (hotkeys_placeholder_) {
+        // Replace the placeholder in-place so kHotkeysPageIndex stays valid for all
+        // widgets already past it in the stack (diagnostics=3, logs=4, webcam=5, …).
+        const int idx = stack_->indexOf(hotkeys_placeholder_);
+        stack_->insertWidget(idx, hotkeys_page_);
+        hotkeys_placeholder_->deleteLater();
+        hotkeys_placeholder_ = nullptr;
+    } else {
+        stack_->addWidget(hotkeys_page_);
+    }
+}
+
+void MainWindow::buildAboutPage() {
+    if (about_page_)
+        return; // already built (e.g. by an early navigation)
+    about_page_ = new pages::AboutPage(stack_);
+    if (about_placeholder_) {
+        // Replace the placeholder in-place so kAboutPageIndex stays valid; EditExportPage
+        // lives past the kPageDescriptors slots and is unaffected.
+        const int idx = stack_->indexOf(about_placeholder_);
+        stack_->insertWidget(idx, about_page_);
+        about_placeholder_->deleteLater();
+        about_placeholder_ = nullptr;
+    } else {
+        stack_->addWidget(about_page_);
+    }
+    // Apply conditional initial state that would have run in the ctor. Preserves the
+    // exact original conditions: non-default-theme refreshBrand, and channel hint when
+    // about_overlay_ is present (the shim that owns persisted_settings_.update_channel).
+    if (persisted_settings_.theme_id != QStringLiteral("dark-default"))
+        about_page_->refreshBrand();
+    if (about_overlay_)
+        about_page_->setChannelHint(persisted_settings_.update_channel);
 }
 
 void MainWindow::buildEditExportPage() {
