@@ -123,6 +123,9 @@ class ConfigPage : public QWidget {
     void setShowNotifications(bool show);
     void setKeepRunningInTray(bool keep);
     void setShowQuickControls(bool show);
+    // ADR 0033: seeds the "Present & tearing diagnostics" opt-in toggle from
+    // persisted settings (no signal emitted).
+    void setPresentDiagnosticsOptIn(bool on);
     void setThemeId(const QString& theme_id);
 
     // Drives the visible Updates card (ADR 0034 Phase A). state is one of
@@ -179,6 +182,8 @@ class ConfigPage : public QWidget {
     void showNotificationsChanged(bool show);
     void keepRunningInTrayChanged(bool keep);
     void showQuickControlsChanged(bool show);
+    // ADR 0033: emitted when the user toggles the present-diagnostics opt-in.
+    void presentDiagnosticsOptInToggled(bool enabled);
     void themeIdChanged(const QString& theme_id);
 
     // ---- Preset management signals ----
@@ -449,6 +454,8 @@ class ConfigPage : public QWidget {
     ui::widgets::ExoToggle* notifications_check_ = nullptr;
     ui::widgets::ExoToggle* keep_in_tray_check_ = nullptr;
     ui::widgets::ExoToggle* quick_controls_check_ = nullptr;
+    // ADR 0033: present & tearing diagnostics opt-in (elevation-gated).
+    ui::widgets::ExoToggle* present_diag_check_ = nullptr;
     // THEME-SLICE-1: theme picker (replaces accent_combo_).
     QButtonGroup* theme_button_group_ = nullptr;
     QWidget* theme_picker_widget_ = nullptr;

@@ -2462,6 +2462,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                             new ui::widgets::InfoHintIcon(ui::hints::kQuickControlPill, presence_panel), QString(),
                             quick_controls_check_));
 
+        // ADR 0033: present & tearing diagnostics opt-in. Elevation-gated — turning
+        // it on while non-elevated raises a hub advisory offering "restart as
+        // administrator" (handled in MainWindow). Sub-hint flags the requirement.
+        present_diag_check_ = new ui::widgets::ExoToggle(presence_panel);
+        present_diag_check_->setObjectName(QStringLiteral("presentDiagnosticsToggle"));
+        present_diag_check_->setOn(false);
+        presence_layout->addWidget(makeSettingsRow(presence_panel, QStringLiteral("Present & tearing diagnostics"),
+                                                   nullptr, QStringLiteral("Needs administrator"),
+                                                   present_diag_check_));
+
         // (0.6.0: the former "Per-track gain / mute" roadmap placeholder was removed —
         // per-track gain and mute shipped in 0.6.0 and are configured in the Record
         // view, so a dimmed "upcoming" row here is stale.)
@@ -2743,6 +2753,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(notifications_check_, &QAbstractButton::toggled, this, &ConfigPage::showNotificationsChanged);
     connect(keep_in_tray_check_, &QAbstractButton::toggled, this, &ConfigPage::keepRunningInTrayChanged);
     connect(quick_controls_check_, &QAbstractButton::toggled, this, &ConfigPage::showQuickControlsChanged);
+    connect(present_diag_check_, &QAbstractButton::toggled, this, &ConfigPage::presentDiagnosticsOptInToggled);
     connect(theme_button_group_, &QButtonGroup::idClicked, this, [this](int btn_id) {
         auto* btn = theme_button_group_->button(btn_id);
         if (!btn)
@@ -4752,6 +4763,13 @@ void ConfigPage::setShowQuickControls(bool show) {
     if (quick_controls_check_) {
         const QSignalBlocker blocker(quick_controls_check_);
         quick_controls_check_->setOn(show);
+    }
+}
+
+void ConfigPage::setPresentDiagnosticsOptIn(bool on) {
+    if (present_diag_check_) {
+        const QSignalBlocker blocker(present_diag_check_);
+        present_diag_check_->setOn(on);
     }
 }
 

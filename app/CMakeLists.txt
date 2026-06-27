@@ -278,6 +278,9 @@ qt_add_executable(exosnap WIN32
     diagnostics/DiskSpaceProvider.cpp
     diagnostics/ElevationProvider.h
     diagnostics/ElevationProvider.cpp
+    diagnostics/PresentProvider.h
+    diagnostics/PresentMonProvider.h
+    diagnostics/PresentMonProvider.cpp
     diagnostics/DiskSpaceThresholds.h
     diagnostics/FilesystemProvider.h
     diagnostics/FilesystemProvider.cpp
@@ -936,6 +939,19 @@ exosnap_add_gtest(
 )
 target_include_directories(elevation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(elevation_tests PRIVATE NOMINMAX)
+
+# ADR 0033: present-diagnostics provider shell. The stub provider gates on
+# elevation && opt-in and degrades to Unavailable (no ETW consumer in this slice).
+# Pure logic; no Win32 invocation (the stub IElevationProvider is injected).
+exosnap_add_gtest(
+    NAME present_provider_tests
+    TEST_PREFIX present.
+    SOURCES
+        tests/test_present_provider.cpp
+        diagnostics/PresentMonProvider.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(present_provider_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME source_picker_dialog_tests

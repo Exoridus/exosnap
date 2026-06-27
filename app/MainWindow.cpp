@@ -588,6 +588,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(notification_hub_, &ui::chrome::NotificationHubPanel::deepLinkRequested, this,
             [this](const QString& target) {
                 notification_hub_->hide();
+                if (target == QStringLiteral("present-needs-admin")) {
+                    // ADR 0033: the present-diagnostics advisory action relaunches as
+                    // administrator (recording guard lives in dispatchNotificationAction).
+                    dispatchNotificationAction(notifications::NotificationEvent{},
+                                               notifications::NotificationAction::RelaunchElevated);
+                    return;
+                }
                 if (target == QStringLiteral("update-view") || target == QStringLiteral("about")) {
                     // About is now a nav page; Settings hosts the update panel.
                     navigateToPage(kAboutPageIndex);
@@ -1066,6 +1073,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
             persisted_settings_.check_updates_on_start = enabled;
             settings_store_.Save(persisted_settings_);
         });
+
+        // ADR 0033: present & tearing diagnostics opt-in (elevation-gated). Seed the
+        // toggle, then persist on change. Turning it on while non-elevated raises a
+        // hub advisory offering "restart as administrator"; turning it off (or being
+        // already elevated) removes the advisory.
+        config_page_->setPresentDiagnosticsOptIn(persisted_settings_.present_diagnostics_optin);
+        connect(config_page_, &ConfigPage::presentDiagnosticsOptInToggled, this,
+                &MainWindow::onPresentDiagnosticsOptInToggled);
         // Route Settings webcam panel Rescan through the webcam notifier.
         // The WebcamSetupPanel is embedded in ConfigPage; access via findChild.
         auto* setup_panel = config_page_->findChild<exosnap::ui::widgets::WebcamSetupPanel*>(
@@ -3402,6 +3417,34 @@ void MainWindow::updateNotificationToastsEnabled() {
     // auto-hides when the manager's visible set is empty.
     if (!persisted_settings_.show_notifications && notification_toast_window_) {
         notification_toast_window_->hide();
+    }
+}
+
+void MainWindow::onPresentDiagnosticsOptInToggled(bool enabled) {
+    // Persist the opt-in regardless of elevation: the flag survives the self-relaunch
+    // so the elevated instance can activate the provider (ADR 0033).
+    persisted_settings_.present_diagnostics_optin = enabled;
+    settings_store_.Save(persisted_settings_);
+
+    if (!notification_hub_)
+        return;
+
+    static const QString kAdvisoryId = QStringLiteral("present-needs-admin");
+    if (enabled && !elevation_provider_.IsElevated()) {
+        // Offer the elevated relaunch. The advisory's deep-link target IS the advisory
+        // id; the deepLinkRequested handler routes it to RelaunchElevated (which carries
+        // the recording guard).
+        notification_hub_->addAdvisory(kAdvisoryId, QStringLiteral("info"),
+                                       QStringLiteral("Present diagnostics need administrator"),
+                                       QStringLiteral("Restart ExoSnap as administrator to enable present & tearing "
+                                                      "diagnostics."),
+                                       QStringLiteral("now"), /*unread=*/true, kAdvisoryId,
+                                       QStringLiteral("Restart as administrator"), /*is_deep_link=*/true);
+        refreshHubUnreadBell();
+    } else {
+        // Off, or already elevated — no advisory needed.
+        notification_hub_->removeAdvisoryById(kAdvisoryId);
+        refreshHubUnreadBell();
     }
 }
 

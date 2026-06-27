@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 
+#include "diagnostics/ElevationProvider.h"
 #include "models/OutputSettingsModel.h"
 #include "models/RecordingPreset.h"
 #include "models/RecordingPresetRegistry.h"
@@ -232,6 +233,11 @@ class MainWindow : public QMainWindow {
     void dispatchNotificationAction(const notifications::NotificationEvent& event,
                                     notifications::NotificationAction action);
 
+    // ADR 0033: react to the present-diagnostics opt-in toggle — persist the choice
+    // and raise/remove the "needs administrator" hub advisory based on the runtime
+    // elevation state.
+    void onPresentDiagnosticsOptInToggled(bool enabled);
+
     // UPDATE-WIRE-R1 (ADR 0012): trigger a guarded update check. No-op (and shows
     // the paused banner) while recording / remuxing.
     void triggerUpdateCheck();
@@ -350,6 +356,8 @@ class MainWindow : public QMainWindow {
     // When true, elevatedRelaunchArgs() emits the re-enable flag so the elevated
     // instance turns the present-diagnostics opt-in back on after restart.
     bool reenable_present_diag_on_relaunch_ = false;
+    // Runtime elevation state source for the present-diagnostics opt-in gate.
+    diagnostics::Win32ElevationProvider elevation_provider_;
 };
 
 } // namespace exosnap

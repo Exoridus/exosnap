@@ -65,6 +65,16 @@ enum class CaptureSourceType : uint8_t {
     Region,
 };
 
+// Presentation mode of the captured source (present/tearing diagnostics, ADR 0033).
+// Mirror of app::diagnostics::PresentMode, kept local so this recorder_core header
+// does not depend on the app-layer PresentProvider.h (layering: app → core only).
+enum class PresentMode : uint8_t {
+    Unknown,
+    Composed,
+    IndependentFlip,
+    ExclusiveFullscreen,
+};
+
 // Mirror of SplitTriggerSource for the snapshot (kept local to avoid a heavy
 // include cycle with recorder_session.h). None == no split has occurred yet.
 enum class DiagnosticsSplitTrigger : uint8_t {
@@ -97,6 +107,13 @@ struct CaptureDiagnostics {
     double source_present_jitter_ms = 0.0;   // peak-minus-average present interval (irregular-pacing proxy)
     double source_coalesce_ratio = 1.0;      // mean AccumulatedFrames per acquire (>1 == presents coalesced)
     MetricAvailability present_cadence_availability = MetricAvailability::Unavailable;
+
+    // Present mode + tearing (PresentMon ETW present-diagnostics, ADR 0033). Elevation-
+    // and opt-in-gated; Unavailable until the in-process PresentMon consumer is vendored
+    // and a real present has been observed (never a fabricated Composed/zero).
+    PresentMode source_present_mode = PresentMode::Unknown;
+    bool source_tearing = false;
+    MetricAvailability present_mode_availability = MetricAvailability::Unavailable;
 
     [[nodiscard]] uint64_t frames_dropped_total() const noexcept {
         return frames_dropped_coalesced + frames_dropped_cfr + frames_dropped_backpressure;

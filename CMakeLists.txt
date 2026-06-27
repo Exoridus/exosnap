@@ -133,3 +133,9 @@ option(EXOSNAP_BUILD_PROBES "Build ExoSnap developer probe executables" OFF)
 if(EXOSNAP_BUILD_PROBES)
     add_subdirectory(tools/probes)
 endif()
+
+# ADR 0033: present & tearing diagnostics (PresentMon ETW). This slice ships only the
+# verifiable shell — the stub provider degrades to Unavailable and compiles regardless.
+# The flag will gate the (later-vendored) in-process ETW consumer behind an #if block;
+# it is wired here so the build switch exists from the foundation slice onward.
+option(EXOSNAP_WITH_PRESENTMON "Build the PresentMon ETW present-diagnostics provider" ON)
