@@ -187,6 +187,12 @@ class MainWindow : public QMainWindow {
     void buildAboutPage();
     // Builds EditExportPage (index 8, past kPageDescriptors) with its back-connection.
     void buildEditExportPage();
+    // Builds WebcamPage, replacing the cheap placeholder reserved at kWebcamPageIndex.
+    // Ends with applySettings(live_webcam_) to replay preset-applied state.
+    void buildWebcamPage();
+    // Builds OutputPage, replacing the cheap placeholder reserved at kOutputPageIndex.
+    // Ends with refreshPresetUi() so the freshly-built page gets its profile options.
+    void buildOutputPage();
 
     // ---- Preset system (Stage 2) ----
 
@@ -323,11 +329,13 @@ class MainWindow : public QMainWindow {
     LogsPage* logs_page_ = nullptr;
     QWidget* logs_placeholder_ = nullptr; // cheap slot-reservation until buildLogsPage()
     WebcamPage* webcam_page_ = nullptr;
+    QWidget* webcam_placeholder_ = nullptr; // cheap slot-reservation until buildWebcamPage()
     HotkeysPage* hotkeys_page_ = nullptr;
     QWidget* hotkeys_placeholder_ = nullptr; // cheap slot-reservation until buildHotkeysPage()
     EditExportPage* edit_export_page_ = nullptr;
     pages::AboutPage* about_page_ = nullptr;
-    QWidget* about_placeholder_ = nullptr; // cheap slot-reservation until buildAboutPage()
+    QWidget* about_placeholder_ = nullptr;  // cheap slot-reservation until buildAboutPage()
+    QWidget* output_placeholder_ = nullptr; // cheap slot-reservation until buildOutputPage()
 
     // Device notifiers (owned; started after capability probe; stopped first in ~MainWindow).
     AudioDeviceNotifier audio_notifier_;
