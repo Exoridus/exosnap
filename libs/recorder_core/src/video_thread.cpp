@@ -1473,9 +1473,9 @@ void VideoThread::Run() {
             const uint32_t outFps = (m_state.config.frame_rate_den > 0)
                                         ? (m_state.config.frame_rate_num / m_state.config.frame_rate_den)
                                         : 0u;
-            // Monitor refresh is not surfaced to this thread; pass 0 so the helper
-            // falls back to a safe ring of 8 (covers up to 8x source-over-output).
-            const size_t ringN = ComputePacingRingSize(0u, outFps);
+            // Use the actual refresh rate from the OD descriptor (available after odSrc.Open()).
+            // Non-fatal: if 0, ComputePacingRingSize falls back to a safe ring of 8.
+            const size_t ringN = ComputePacingRingSize(odSrc.RefreshRateHz(), outFps);
             D3D11_TEXTURE2D_DESC ringDesc{};
             odCapturedTex->GetDesc(&ringDesc); // mirror the OD capture texture exactly
             captureRing.resize(ringN);
