@@ -401,7 +401,9 @@ git commit -m "feat(diagnostics): exclusive-fullscreen killer check + borderless
 - Consumes: `present_` (Task 3), `live_present_jitter_ms_` / `live_coalesce_ratio_` (existing).
 - Produces: when live judder fires **and** `present_->mode` is `IndependentFlip`/`ExclusiveFullscreen`, the existing VRR/CFR `DiagnosticResult` detail names the present mode as attribution (no new id; enriches the existing `rec.fps.*` result).
 
-- [ ] **Step 1: Write the failing test** in `test_diagnostics.cpp`: build a snapshot with `present_cadence_availability == Available`, `source_present_jitter_ms` above `kJitterMs (4.0)`, CFR true, plus a `PresentSample{IndependentFlip, available}`. Assert the VRR result's `detail` contains the substring `"independent flip"`.
+> **Real names (verified against `RecommendationEngine.cpp`):** the refresh/judder result id is **`rec.001`** (NOT `rec.fps`). The engine method is **`Generate()`** (not `Run()`); the checklist vector is **`results`** (not `items`). The detail is built into a local `std::string detail` then stored in `r.detail` via `MakeResult(...)` at the end of the live-judder arm; the if/else closes, then a `FixAction fa` block runs before `checklist.results.push_back(std::move(r))`. Confirm against the file before editing.
+
+- [ ] **Step 1: Write the failing test** in `test_diagnostics.cpp`: build a snapshot with `present_cadence_availability == Available`, `source_present_jitter_ms` above `kJitterMs (4.0)`, CFR true, plus a `PresentSample{IndependentFlip, available}`. Assert the `rec.001` result's `detail` contains the substring `"independent flip"`.
 
 ```cpp
 TEST(RecommendationEngineTest, JudderDetailNamesPresentModeAttribution) {
@@ -417,10 +419,10 @@ TEST(RecommendationEngineTest, JudderDetailNamesPresentModeAttribution) {
     PresentSample present; present.available = true; present.mode = PresentMode::IndependentFlip;
 
     RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", &snap, &present);
-    const DiagnosticChecklist list = engine.Run();
-    const auto it = std::find_if(list.items.begin(), list.items.end(),
-        [](const DiagnosticResult& r){ return r.id.rfind("rec.fps", 0) == 0; });
-    ASSERT_NE(it, list.items.end());
+    const DiagnosticChecklist list = engine.Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+        [](const DiagnosticResult& r){ return r.id == "rec.001"; });
+    ASSERT_NE(it, list.results.end());
     EXPECT_NE(it->detail.find("independent flip"), std::string::npos);
 }
 ```
@@ -430,7 +432,7 @@ TEST(RecommendationEngineTest, JudderDetailNamesPresentModeAttribution) {
 Run: `cmake --build build/windows-x64-debug --target diagnostics_tests` then `ctest --test-dir build/windows-x64-debug -R "diagnostics\.RecommendationEngineTest.JudderDetail" -j6`
 Expected: FAIL (`detail` lacks the attribution string).
 
-- [ ] **Step 3: Append attribution** at the end of `checkRefreshRateMismatch`, inside the `if (live_judder) { … }` arm that builds the result, before pushing it:
+- [ ] **Step 3: Append attribution** after the `if (live_judder) { … } else { … }` block builds `r` (i.e. after the `else` closes, ~line 137) and **before** the `FixAction fa;` block (~line 139), so it enriches `r.detail` in both arms:
 
 ```cpp
 // Present-mode attribution (PresentMon, ADR 0033): when available, name *how* the source
@@ -898,10 +900,10 @@ TEST(RecommendationEngineTest, HighDpcLatencyNamesDriverExternalFix) {
     RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
     DpcLatencyReading dpc{/*max*/2500.0, /*avg*/180.0, "nvlddmkm.sys", /*available*/true};
     engine.SetDpcLatency(dpc);
-    const DiagnosticChecklist list = engine.Run();
-    const auto it = std::find_if(list.items.begin(), list.items.end(),
+    const DiagnosticChecklist list = engine.Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
         [](const DiagnosticResult& r){ return r.id == "rec.dpc.latency"; });
-    ASSERT_NE(it, list.items.end());
+    ASSERT_NE(it, list.results.end());
     EXPECT_NE(it->detail.find("nvlddmkm.sys"), std::string::npos);
     ASSERT_TRUE(it->fix_action.has_value());
     EXPECT_EQ(it->fix_action->safety, FixAction::Safety::External);
@@ -912,8 +914,8 @@ TEST(RecommendationEngineTest, LowDpcLatencyRaisesNothing) {
     capability::CapabilitySet caps; capability::UserRecorderConfig config;
     RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
     engine.SetDpcLatency({200.0, 60.0, "", true});
-    const DiagnosticChecklist list = engine.Run();
-    EXPECT_TRUE(std::none_of(list.items.begin(), list.items.end(),
+    const DiagnosticChecklist list = engine.Generate();
+    EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
         [](const DiagnosticResult& r){ return r.id == "rec.dpc.latency"; }));
 }
 ```
@@ -923,7 +925,7 @@ TEST(RecommendationEngineTest, LowDpcLatencyRaisesNothing) {
 Run: `cmake --build build/windows-x64-debug --target diagnostics_tests`
 Expected: FAIL — no `DpcLatencyReading` / `SetDpcLatency`.
 
-- [ ] **Step 3: Add `DpcLatencyReading` + `SetDpcLatency` + `checkDpcLatency`** to `RecommendationEngine.h/.cpp`. Store `std::optional<DpcLatencyReading> dpc_;`, call `checkDpcLatency` from `Run()`:
+- [ ] **Step 3: Add `DpcLatencyReading` + `SetDpcLatency` + `checkDpcLatency`** to `RecommendationEngine.h/.cpp`. Store `std::optional<DpcLatencyReading> dpc_;`, call `checkDpcLatency` from `Generate()`. Use the existing `MakeResult(id, group, severity, title, summary, detail, current_value, recommendation)` helper + `DiagnosticSeverity::Notice` + `checklist.has_notice` + `checklist.results.push_back` (match the file's pattern; do NOT hand-build the result or invent a `Severity::Warning` — the enum is `DiagnosticSeverity{Pass,Notice,Blocker}`):
 
 ```cpp
 void RecommendationEngine::checkDpcLatency(DiagnosticChecklist& checklist) const {
@@ -931,18 +933,18 @@ void RecommendationEngine::checkDpcLatency(DiagnosticChecklist& checklist) const
     if (!dpc_.has_value() || !dpc_->available || dpc_->max_latency_us <= kDpcThresholdUs) {
         return;
     }
-    DiagnosticResult r;
-    r.id = "rec.dpc.latency";
-    r.severity = Severity::Warning;
-    r.summary = "High kernel DPC/ISR latency detected";
     const std::string driver = dpc_->worst_driver.empty() ? "an unidentified kernel driver"
                                                            : dpc_->worst_driver;
-    r.detail = "Peak DPC latency reached " + std::to_string(static_cast<long>(dpc_->max_latency_us)) +
-               " us, attributed to " + driver +
-               ". High DPC latency causes recording stutter/audio crackle even when the game itself "
-               "feels smooth.";
-    r.current_value = "Max DPC: " + std::to_string(static_cast<long>(dpc_->max_latency_us)) + " us";
-    r.recommendation = "Update or roll back " + driver + " (GPU/audio/network/chipset driver).";
+    const std::string max_str = std::to_string(static_cast<long>(dpc_->max_latency_us));
+    DiagnosticResult r = MakeResult(
+        "rec.dpc.latency", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+        "High kernel DPC/ISR latency detected",
+        "Kernel driver latency can cause recording stutter even when the game feels smooth.",
+        "Peak DPC latency reached " + max_str + " us, attributed to " + driver +
+            ". High DPC latency causes recording stutter/audio crackle even when the game itself "
+            "feels smooth.",
+        "Max DPC: " + max_str + " us",
+        "Update or roll back " + driver + " (GPU/audio/network/chipset driver).");
     FixAction fa;
     fa.id = "fix.dpc.driver";
     fa.label = "Driver latency guidance";
@@ -950,7 +952,8 @@ void RecommendationEngine::checkDpcLatency(DiagnosticChecklist& checklist) const
     fa.reversible = false;
     fa.changes_summary = "Shows which driver to update/roll back; the app cannot change it for you.";
     r.fix_action = fa;
-    checklist.items.push_back(r);
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
 }
 ```
 
