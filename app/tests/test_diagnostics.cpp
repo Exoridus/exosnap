@@ -1167,5 +1167,38 @@ TEST(BlockedScenarioTest, RecommendationEngine_H264NvencUnavailable_ProducesVide
     EXPECT_TRUE(checklist.has_blocker);
 }
 
+TEST(RecommendationEngineTest, ExclusiveFullscreenRaisesBorderlessFixAction) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    PresentSample present;
+    present.available = true;
+    present.mode = PresentMode::ExclusiveFullscreen;
+
+    RecommendationEngine engine(caps, config, /*monitor_refresh_rate=*/0,
+                                /*output_drive_free_bytes=*/0, /*is_profile_supported=*/true,
+                                /*output_filesystem_name=*/"NTFS",
+                                /*live_snapshot=*/nullptr, /*present=*/&present);
+    const DiagnosticChecklist list = engine.Generate();
+
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.present.exclusive"; });
+    ASSERT_NE(it, list.results.end());
+    ASSERT_TRUE(it->fix_action.has_value());
+    EXPECT_EQ(it->fix_action->id, "fix.present.borderless");
+    EXPECT_EQ(it->fix_action->safety, FixAction::Safety::Assisted);
+}
+
+TEST(RecommendationEngineTest, ComposedPresentRaisesNoExclusiveCheck) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    PresentSample present;
+    present.available = true;
+    present.mode = PresentMode::Composed;
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, &present);
+    const DiagnosticChecklist list = engine.Generate();
+    EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.present.exclusive"; }));
+}
+
 } // namespace
 } // namespace exosnap::diagnostics

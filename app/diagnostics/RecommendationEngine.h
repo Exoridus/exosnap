@@ -1,11 +1,13 @@
 #pragma once
 
 #include "DiagnosticResult.h"
+#include "PresentProvider.h"
 
 #include <capability/capability_set.h>
 #include <capability/user_config.h>
 #include <recorder_core/pipeline_diagnostics.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -16,7 +18,8 @@ class RecommendationEngine {
     RecommendationEngine(const capability::CapabilitySet& caps, const capability::UserRecorderConfig& config,
                          uint32_t monitor_refresh_rate = 0, uint64_t output_drive_free_bytes = 0,
                          bool is_profile_supported = true, std::string output_filesystem_name = {},
-                         const recorder_core::RecordingDiagnosticsSnapshot* live_snapshot = nullptr);
+                         const recorder_core::RecordingDiagnosticsSnapshot* live_snapshot = nullptr,
+                         const PresentSample* present = nullptr);
 
     DiagnosticChecklist Generate() const;
 
@@ -31,6 +34,7 @@ class RecommendationEngine {
     void checkProfileSupport(DiagnosticChecklist& checklist) const;
     void checkAudioContainerCompat(DiagnosticChecklist& checklist) const;
     void checkVideoBitDepthContainerCompat(DiagnosticChecklist& checklist) const;
+    void checkExclusiveFullscreen(DiagnosticChecklist& checklist) const;
 
     const capability::CapabilitySet& caps_;
     const capability::UserRecorderConfig& config_;
@@ -46,6 +50,10 @@ class RecommendationEngine {
     bool live_cfr_ = true;
     double live_present_jitter_ms_ = 0.0;
     double live_coalesce_ratio_ = 1.0;
+
+    // Present-mode observation (v0.8.0 / ADR 0033). Available only when the present provider
+    // is active (elevation + ETW session open). Empty when not available.
+    std::optional<PresentSample> present_;
 
     // rec.007: hard-stop blocker threshold (500 MB).
     // rec.005: soft warning threshold (2 GB).

@@ -37,7 +37,8 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
                                            const capability::UserRecorderConfig& config, uint32_t monitor_refresh_rate,
                                            uint64_t output_drive_free_bytes, bool is_profile_supported,
                                            std::string output_filesystem_name,
-                                           const recorder_core::RecordingDiagnosticsSnapshot* live_snapshot)
+                                           const recorder_core::RecordingDiagnosticsSnapshot* live_snapshot,
+                                           const PresentSample* present)
     : caps_(caps), config_(config), monitor_refresh_rate_(monitor_refresh_rate),
       output_drive_free_bytes_(output_drive_free_bytes), is_profile_supported_(is_profile_supported),
       output_filesystem_name_(std::move(output_filesystem_name)) {
@@ -50,11 +51,16 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
         live_present_jitter_ms_ = live_snapshot->capture.source_present_jitter_ms;
         live_coalesce_ratio_ = live_snapshot->capture.source_coalesce_ratio;
     }
+    // Consume the optional present-mode sample only when the provider has a real observation.
+    if (present != nullptr && present->available) {
+        present_ = *present;
+    }
 }
 
 DiagnosticChecklist RecommendationEngine::Generate() const {
     DiagnosticChecklist checklist;
     checkRefreshRateMismatch(checklist);
+    checkExclusiveFullscreen(checklist);
     checkMp4CrashResilience(checklist);
     checkCodecAvailability(checklist);
     checkOutputDriveSpace(checklist);
@@ -400,6 +406,35 @@ void RecommendationEngine::checkVideoBitDepthContainerCompat(DiagnosticChecklist
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
     }
+}
+
+void RecommendationEngine::checkExclusiveFullscreen(DiagnosticChecklist& checklist) const {
+    if (!present_.has_value() || present_->mode != PresentMode::ExclusiveFullscreen) {
+        return;
+    }
+    DiagnosticResult r;
+    r.id = "rec.present.exclusive";
+    r.group = DiagnosticGroup::Recommendation;
+    r.severity = DiagnosticSeverity::Notice;
+    r.title = "Captured source is in exclusive fullscreen";
+    r.summary = "Captured source is in exclusive fullscreen";
+    r.detail = "The source presents in legacy exclusive fullscreen. Desktop/window capture often records "
+               "a black frame in this mode. Switch the game to borderless (windowed-fullscreen) so the "
+               "compositor can present it for capture.";
+    r.current_value = "Present mode: Exclusive fullscreen";
+    r.recommendation = "Set the game to Borderless / Windowed Fullscreen.";
+    r.timestamp = NowTimestamp();
+
+    FixAction fa;
+    fa.id = "fix.present.borderless";
+    fa.label = "How to switch to borderless";
+    fa.safety = FixAction::Safety::Assisted; // app cannot flip a foreign game's display mode
+    fa.reversible = true;
+    fa.changes_summary = "Opens guidance for switching the captured game to borderless fullscreen (the app cannot "
+                         "change another application's display mode for you).";
+    r.fix_action = fa;
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
 }
 
 std::vector<std::string> RecommendationEngine::GetAllRecommendationCodes() {
