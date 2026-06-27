@@ -15,7 +15,8 @@ These apply to **every** task. Exact values, copied from ADR 0033 / the locked b
 - **Build env:** VS-tree generator at `build/windows-x64-debug` (Ninja tree does not reconfigure under VS 2026). Qt bin (`C:\Qt\6.9.0\msvc2022_64\bin`) must be on `PATH` for any render/visual-test step.
 - **Verification before commit:** full build (`cmake --build build/windows-x64-debug` — **no** `--target`, so Page/Widget test targets build) **and** `ctest --test-dir build/windows-x64-debug -j6`. New deps must be added to the SOURCES/LIBRARIES of every test target that compiles diagnostics sources directly (`present_provider_tests` `app/CMakeLists.txt:946`, `diagnostics_page_tests` `app/CMakeLists.txt:1244`, `exosnap_diagnostics_test_support` `app/CMakeLists.txt:433`).
 - **Feature flag:** `EXOSNAP_WITH_PRESENTMON` (already `option(... ON)` at `CMakeLists.txt:141`) gates the vendored lib; it sets `EXOSNAP_HAS_PRESENTMON=1` on the consuming targets. **The provider source must compile and pass its gating tests when `EXOSNAP_HAS_PRESENTMON` is undefined** (graceful: always `available=false`).
-- **PresentMon pin:** fixed release tag/SHA via `FetchContent` — **never** a rolling `latest` (BtbN-pin lesson). License registered via `_exosnap_install_license("PresentMon (MIT)" …)`. Static lib built with `/w` (MSVC) over only the `PresentData/` sources.
+- **PresentMon pin:** `v1.10.0` (SHA `2ce1158783e570539119f577d894252b395cadca`) via `FetchContent` — **never** a rolling `latest` (BtbN-pin lesson). v1.10.0 is the last 1.x line whose `PresentData` exposes the simple embeddable API (`TraceSession::Start` + `PMTraceConsumer::DequeuePresentEvents`); 2.x refactored into the IntelPresentMon middleware and is **not** the target. License registered via `_exosnap_install_license("PresentMon (MIT)" …)` from `LICENSE.txt`. Static lib built with `/w` (MSVC) over only the `PresentData/*.cpp` sources.
+- **Verified PresentMon API (v1.10.0, do not re-guess):** `PresentData/PresentMonTraceConsumer.hpp` — `enum class PresentMode { Hardware_Legacy_Flip=1, Hardware_Legacy_Copy_To_Front_Buffer=2, Hardware_Independent_Flip=3, Composed_Flip=4, Composed_Copy_GPU_GDI=5, Composed_Copy_CPU_GDI=6, Hardware_Composed_Independent_Flip=8 }` (no 7). `struct PresentEvent { uint64_t PresentStartTime; uint32_t ProcessId; uint64_t ScreenTime; int32_t SyncInterval; uint64_t Hwnd; PresentMode PresentMode; bool SupportsTearing; … }`. `struct PMTraceConsumer` default-constructs with `mTrackDisplay=true, mTrackGPU=false, mTrackInput=false` (exactly what we want) and exposes thread-safe `void DequeuePresentEvents(std::vector<std::shared_ptr<PresentEvent>>&)`. `struct TraceSession { ULONG Start(PMTraceConsumer*, MRTraceConsumer* /*nullptr*/, wchar_t const* etlPath /*nullptr=realtime*/, wchar_t const* sessionName); void Stop(); LARGE_INTEGER mTimestampFrequency; TRACEHANDLE mTraceHandle; static ULONG StopNamedSession(wchar_t const*); }` — `Start` opens the realtime session, enables the providers, and calls `OpenTrace` itself; the consumer only needs draining.
 - **Elevation gate (verbatim):** the provider is available **iff** `present_diagnostics_optin && IElevationProvider::IsElevated() && session_open`. Only the already-built relaunch-as-admin path unlocks it (no "Performance Log Users" UI).
 - **Signal-source policy:** DXGI-OD remains authoritative for **monitor** present cadence (unprivileged). PresentMon fills the **WGC/window/game** gap and provides present-mode + tearing universally as *attribution*. Never double-count cadence; never couple the monitor judder diagnosis to elevation.
 - **Sentinel honesty:** when the provider is not active or no present has been observed, fields stay `MetricAvailability::Unavailable` and the UI shows the em-dash (`kDash`). **Never fabricate a `Composed`/zero present.**
@@ -64,7 +65,7 @@ if(EXOSNAP_WITH_PRESENTMON)
     FetchContent_Declare(
         presentmon
         GIT_REPOSITORY https://github.com/GameTechDev/PresentMon.git
-        GIT_TAG        v1.10.0   # PIN: last 1.x; simplest PresentData subset. See ADR 0033.
+        GIT_TAG        2ce1158783e570539119f577d894252b395cadca   # == v1.10.0 (pinned by SHA). See ADR 0033.
         GIT_SHALLOW    TRUE
     )
     FetchContent_MakeAvailable(presentmon)
@@ -100,7 +101,7 @@ endif()
 - [ ] **Step 3: Verify the lib fetches and compiles**
 
 Run: `cmake --build build/windows-x64-debug --target presentmon_consumer`
-Expected: configures (clones PresentMon at `v1.10.0`), compiles the `PresentData/*.cpp` set, produces `presentmon_consumer.lib`. If the glob is empty or a source needs an upstream define, the build error names it — adjust the pin or add a `target_compile_definitions(presentmon_consumer PRIVATE …)` and re-run. Record the resolved tag + the actual source-file list in the ADR (Task 11).
+Expected: configures (clones PresentMon at SHA `2ce1158…`), compiles the `PresentData/*.cpp` set — verified to be exactly `Debug.cpp GpuTrace.cpp MixedRealityTraceConsumer.cpp PresentMonTraceConsumer.cpp TraceConsumer.cpp TraceSession.cpp` (the glob picks these up; `GpuTrace`/`MixedReality` compile but stay unused since we keep `mTrackGPU=false` and pass `mrConsumer=nullptr` — acceptable, no extra runtime cost). The `.cpp` files include `ETW/*.h` headers relative to `PresentData/`, which the `PUBLIC` include dir covers. Produces `presentmon_consumer.lib`. If a source needs an upstream define, the build error names it — add `target_compile_definitions(presentmon_consumer PRIVATE …)` and re-run.
 
 - [ ] **Step 4: Commit**
 
@@ -149,7 +150,12 @@ TEST(PresentModeMapping, ComposedFlipMapsToComposed) {
 }
 
 TEST(PresentModeMapping, IndependentFlipMapsThrough) {
-    RawPresentEvent ev{3, 1, false, 8.3, true};
+    RawPresentEvent ev{3, 1, false, 8.3, true};   // Hardware_Independent_Flip
+    EXPECT_EQ(MapPresentEvent(ev).mode, PresentMode::IndependentFlip);
+}
+
+TEST(PresentModeMapping, HardwareComposedIndependentFlipIsIndependentFlip) {
+    RawPresentEvent ev{8, 1, false, 8.3, true};   // Hardware_Composed_Independent_Flip
     EXPECT_EQ(MapPresentEvent(ev).mode, PresentMode::IndependentFlip);
 }
 
@@ -221,21 +227,22 @@ struct RawPresentEvent {
 namespace exosnap::diagnostics {
 
 namespace {
-// PresentMon PresentData PresentMode enum (PresentData/PresentMonTraceConsumer.hpp):
-//   1 Hardware_Legacy_Flip, 2 Hardware_Legacy_Copy_To_Front_Buffer  -> exclusive fullscreen
-//   3 Hardware_Independent_Flip, 4 Hardware_Composed_Independent_Flip -> independent flip
-//   5 Composed_Flip, 6 Composed_Copy_GPU_GDI, 7 Composed_Copy_CPU_GDI -> composed
+// PresentMon PresentData PresentMode enum (VERIFIED, PresentData/PresentMonTraceConsumer.hpp@v1.10.0):
+//   1 Hardware_Legacy_Flip, 2 Hardware_Legacy_Copy_To_Front_Buffer       -> exclusive fullscreen
+//   3 Hardware_Independent_Flip, 8 Hardware_Composed_Independent_Flip     -> independent flip
+//   4 Composed_Flip, 5 Composed_Copy_GPU_GDI, 6 Composed_Copy_CPU_GDI     -> composed
+//   (there is no code 7; 0 == Unknown)
 PresentMode ClassifyMode(int code) {
     switch (code) {
         case 1:
         case 2:
             return PresentMode::ExclusiveFullscreen;
         case 3:
-        case 4:
+        case 8:
             return PresentMode::IndependentFlip;
+        case 4:
         case 5:
         case 6:
-        case 7:
             return PresentMode::Composed;
         default:
             return PresentMode::Unknown;
@@ -468,7 +475,7 @@ git commit -m "feat(diagnostics): present-mode attribution in VRR/CFR judder cor
 - Produces: `class PresentMonEtwSession` with `bool Start();` (opens session + spawns consumer thread; returns false on failure — e.g. `ERROR_ACCESS_DENIED` when not elevated), `void Stop();`, `PresentSample Latest() const;` (mutex-guarded snapshot), `bool IsOpen() const;`. Optional `void SetTargetProcessId(unsigned long pid);` to scope reporting to the captured window's process (0 = dominant non-composed presenter).
 - Consumes: `presentmon_consumer` (`PresentData/PresentMonTraceConsumer.hpp`), `MapPresentEvent` (Task 2).
 
-> **This task is ETW I/O — not headless-verifiable.** It is `#ifdef EXOSNAP_HAS_PRESENTMON`-guarded; the whole file compiles to an empty TU otherwise. No unit test; verified by compile/link (Step 3) and the dev-machine game pass (Task 11). The code below is the real-shaped skeleton; adapt the consumer-callback wiring to the exact `PresentData` API of the pinned tag (the PresentMon `PMTraceConsumer`/`PresentEvent` types).
+> **This task is ETW I/O — not headless-verifiable.** It is `#ifdef EXOSNAP_HAS_PRESENTMON`-guarded; the whole file compiles to an empty TU otherwise. No unit test; verified by compile/link (Step 3) and the dev-machine game pass (Task 11). The code below uses the **verified** v1.10.0 `PresentData` API (see Global Constraints) — `TraceSession::Start` does the session open + provider enable + `OpenTrace`; we only run `ProcessTrace` on a worker and drain `DequeuePresentEvents`. No hand-rolled `StartTrace`/`EnableTraceEx2`.
 
 - [ ] **Step 1: Write `PresentMonEtwSession.h`:**
 
@@ -508,8 +515,10 @@ class PresentMonEtwSession {
     std::atomic<unsigned long> target_pid_{0};
     std::thread worker_;
     mutable std::mutex sample_mutex_;
-    PresentSample latest_;                 // guarded by sample_mutex_
-    void* impl_ = nullptr;                 // opaque: TRACEHANDLE + session props + consumer
+    mutable PresentSample latest_;          // guarded by sample_mutex_
+    mutable uint64_t last_present_qpc_ = 0;  // reader-side drain state (Latest())
+    mutable int64_t qpc_freq_ = 0;
+    void* impl_ = nullptr;                   // opaque SessionImpl* (PMTraceConsumer + TraceSession)
 };
 
 } // namespace exosnap::diagnostics
@@ -526,65 +535,46 @@ class PresentMonEtwSession {
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <evntrace.h>
-#include <evntcons.h>
-// PresentMon PresentData consumer (pinned tag):
+#include <vector>
+// Vendored PresentMon PresentData (pinned v1.10.0):
+#include "TraceSession.hpp"
 #include "PresentMonTraceConsumer.hpp"
 
 namespace exosnap::diagnostics {
 
 namespace {
 constexpr wchar_t kSessionName[] = L"ExoSnapPresentMon";
+
+// Build a RawPresentEvent from a completed PresentEvent + the prior present's QPC and
+// the session's QPC frequency. interval_ms is the inter-present gap; 0 for the first.
+RawPresentEvent ToRaw(const PresentEvent& pe, uint64_t prev_qpc, int64_t qpc_freq) {
+    RawPresentEvent ev;
+    ev.valid = true;
+    ev.present_mode_code = static_cast<int>(pe.PresentMode);
+    ev.sync_interval = pe.SyncInterval;
+    ev.tearing_flag = pe.SupportsTearing;
+    ev.interval_ms = (prev_qpc != 0 && pe.PresentStartTime > prev_qpc && qpc_freq != 0)
+        ? static_cast<double>(pe.PresentStartTime - prev_qpc) * 1000.0 / static_cast<double>(qpc_freq)
+        : 0.0;
+    return ev;
+}
+
 struct SessionImpl {
-    TRACEHANDLE session = 0;
-    TRACEHANDLE consumer = 0;
-    std::vector<unsigned char> props_storage;
-    EVENT_TRACE_PROPERTIES* props = nullptr;
-    PMTraceConsumer pm;   // PresentMon's stateful present assembler
+    PMTraceConsumer pm;        // default ctor: mTrackDisplay=true, mTrackGPU/Input=false
+    TraceSession session;      // PresentMon's session helper (open + enable + OpenTrace)
 };
 } // namespace
 
 PresentMonEtwSession::PresentMonEtwSession() = default;
 
 bool PresentMonEtwSession::Start() {
-    if (open_.load()) return true;
+    if (open_.load(std::memory_order_acquire)) return true;
     auto* s = new SessionImpl();
-
-    const size_t name_bytes = sizeof(kSessionName);
-    s->props_storage.resize(sizeof(EVENT_TRACE_PROPERTIES) + name_bytes);
-    s->props = reinterpret_cast<EVENT_TRACE_PROPERTIES*>(s->props_storage.data());
-    s->props->Wnode.BufferSize = static_cast<ULONG>(s->props_storage.size());
-    s->props->Wnode.ClientContext = 1;  // QPC
-    s->props->Wnode.Flags = WNODE_FLAG_TRACED_GUID;
-    s->props->LogFileMode = EVENT_TRACE_REAL_TIME_MODE;
-    s->props->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
-
-    ULONG st = ::StartTraceW(&s->session, kSessionName, s->props);
-    if (st == ERROR_ALREADY_EXISTS) {
-        ::ControlTraceW(0, kSessionName, s->props, EVENT_TRACE_CONTROL_STOP);
-        st = ::StartTraceW(&s->session, kSessionName, s->props);
-    }
-    if (st != ERROR_SUCCESS) {            // ERROR_ACCESS_DENIED when not elevated -> graceful
-        delete s;
-        return false;
-    }
-    // Enable the present providers PresentMon needs (DXGKrnl, DWM, Win32k, DXGI).
-    // PresentMon exposes the exact GUID/level/keyword set via EnableProvidersForPMConsumer
-    // (or enumerate from the pinned tag's headers); enable each via EnableTraceEx2 here.
-    // ... EnableTraceEx2(s->session, &GUID_DxgKrnl, ...) etc. ...
-
-    EVENT_TRACE_LOGFILEW log{};
-    log.LoggerName = const_cast<wchar_t*>(kSessionName);
-    log.ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD;
-    log.Context = s;
-    log.EventRecordCallback = [](EVENT_RECORD* rec) {
-        auto* self = static_cast<SessionImpl*>(rec->UserContext);
-        self->pm.ProcessEventRecord(rec);   // decode into completed presents
-        // Drain assembled presents; for each, build RawPresentEvent and forward.
-        // (Pull completed presents from self->pm per the pinned API; mapping below.)
-    };
-    s->consumer = ::OpenTraceW(&log);
-    if (s->consumer == INVALID_PROCESSTRACE_HANDLE) {
-        ::ControlTraceW(s->session, kSessionName, s->props, EVENT_TRACE_CONTROL_STOP);
+    // A stale session from a previous crashed instance would block Start; clear it first.
+    TraceSession::StopNamedSession(kSessionName);
+    // realtime: etlPath=nullptr; no WinMR: mrConsumer=nullptr.
+    const ULONG st = s->session.Start(&s->pm, nullptr, nullptr, kSessionName);
+    if (st != ERROR_SUCCESS) {   // ERROR_ACCESS_DENIED when not elevated -> graceful degrade
         delete s;
         return false;
     }
@@ -596,7 +586,9 @@ bool PresentMonEtwSession::Start() {
 
 void PresentMonEtwSession::ConsumeLoop() {
     auto* s = static_cast<SessionImpl*>(impl_);
-    ::ProcessTrace(&s->consumer, 1, nullptr, nullptr);  // blocks until Stop()
+    // ProcessTrace blocks, routing events into s->pm (TraceSession set up the callback),
+    // until Stop() calls TraceSession::Stop() -> CloseTrace.
+    ::ProcessTrace(&s->session.mTraceHandle, 1, nullptr, nullptr);
 }
 
 void PresentMonEtwSession::OnPresentCompleted(const RawPresentEvent& ev) {
@@ -606,6 +598,23 @@ void PresentMonEtwSession::OnPresentCompleted(const RawPresentEvent& ev) {
 }
 
 PresentSample PresentMonEtwSession::Latest() const {
+    auto* s = static_cast<SessionImpl*>(impl_);
+    if (s != nullptr) {
+        // Drain on the reader side (DequeuePresentEvents is thread-safe). Keep the most
+        // recent present that matches the target PID filter (0 = any non-composed-dominant).
+        std::vector<std::shared_ptr<PresentEvent>> presents;
+        s->pm.DequeuePresentEvents(presents);
+        const unsigned long want_pid = target_pid_.load(std::memory_order_relaxed);
+        for (const auto& p : presents) {
+            if (want_pid != 0 && p->ProcessId != want_pid) continue;
+            const RawPresentEvent raw = ToRaw(*p, last_present_qpc_, qpc_freq_);
+            last_present_qpc_ = p->PresentStartTime;
+            const PresentSample mapped = MapPresentEvent(raw);
+            std::lock_guard lk(sample_mutex_);
+            latest_ = mapped;
+        }
+        qpc_freq_ = s->session.mTimestampFrequency.QuadPart;
+    }
     std::lock_guard lk(sample_mutex_);
     return latest_;
 }
@@ -613,9 +622,8 @@ PresentSample PresentMonEtwSession::Latest() const {
 void PresentMonEtwSession::Stop() {
     if (!open_.exchange(false)) return;
     auto* s = static_cast<SessionImpl*>(impl_);
-    ::CloseTrace(s->consumer);            // unblocks ProcessTrace
+    s->session.Stop();                    // CloseTrace -> unblocks ProcessTrace
     if (worker_.joinable()) worker_.join();
-    ::ControlTraceW(s->session, kSessionName, s->props, EVENT_TRACE_CONTROL_STOP);
     delete s;
     impl_ = nullptr;
 }
@@ -636,6 +644,8 @@ PresentSample PresentMonEtwSession::Latest() const { return PresentSample{}; }
 
 #endif
 ```
+
+> **Note on `Latest()` draining + threading:** `DequeuePresentEvents` is thread-safe, so draining on the reader (UI ~1–4 Hz) side keeps the worker thread doing only `ProcessTrace`. `Latest()` is therefore non-`const` in effect — make `last_present_qpc_`/`qpc_freq_`/`latest_` mutable members (add `uint64_t last_present_qpc_=0; int64_t qpc_freq_=0;` mutable to the header) or move the drain into `ConsumeLoop` with a periodic timer. The header in Step 1 already marks `latest_` mutable via the `mutable std::mutex`; add the two mutable QPC members alongside it. Pick the reader-drain shown here (simplest; no second thread).
 
 - [ ] **Step 3: Add the source** to the `exosnap` target in `app/CMakeLists.txt` (the main app sources list) and verify it links in both flag states:
 
