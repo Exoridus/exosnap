@@ -1511,6 +1511,7 @@ void VideoThread::Run() {
             if (useOdCapture) {
                 // DXGI OD: drain all available frames. Newest-at-tick copies into
                 // odCapturedTex; phase-correct copies into the present-QPC ring.
+                const auto acq_t0 = std::chrono::steady_clock::now();
                 while (true) {
                     ID3D11Texture2D* rawTex = nullptr;
                     DXGI_OUTDUPL_FRAME_INFO info{};
@@ -1584,8 +1585,14 @@ void VideoThread::Run() {
                         odCapturedTexValid = true;
                     }
                 }
+                if (!m_state.pause_requested.load()) {
+                    const auto acq_t1 = std::chrono::steady_clock::now();
+                    m_state.diagnostics.OnAcquireLatency(
+                        acq_t1, std::chrono::duration<double, std::milli>(acq_t1 - acq_t0).count());
+                }
             } else {
                 // WGC: drain frame pool — keep latest (always drain, even when paused)
+                const auto acq_t0 = std::chrono::steady_clock::now();
                 try {
                     while (true) {
                         auto frame = framePool.TryGetNextFrame();
@@ -1619,6 +1626,11 @@ void VideoThread::Run() {
                         }
                     }
                 } catch (...) {
+                }
+                if (!m_state.pause_requested.load()) {
+                    const auto acq_t1 = std::chrono::steady_clock::now();
+                    m_state.diagnostics.OnAcquireLatency(
+                        acq_t1, std::chrono::duration<double, std::milli>(acq_t1 - acq_t0).count());
                 }
             }
 
@@ -1763,8 +1775,12 @@ void VideoThread::Run() {
                         stream.Enable = TRUE;
                         stream.pInputSurface = inputView.get();
 
+                        const auto vp_t0 = std::chrono::steady_clock::now();
                         hr = videoContext->VideoProcessorBlt(videoProcessor.get(), videoOutputViews[slot].get(), 0, 1,
                                                              &stream);
+                        const auto vp_t1 = std::chrono::steady_clock::now();
+                        m_state.diagnostics.OnVpbltSubmit(
+                            vp_t1, std::chrono::duration<double, std::milli>(vp_t1 - vp_t0).count());
                         inputView = nullptr;
 
                         if (SUCCEEDED(hr)) {
@@ -2027,8 +2043,12 @@ void VideoThread::Run() {
                         stream.Enable = TRUE;
                         stream.pInputSurface = inputView.get();
 
+                        const auto vp_t0 = std::chrono::steady_clock::now();
                         hr = videoContext->VideoProcessorBlt(videoProcessor.get(), videoOutputViews[slot].get(), 0, 1,
                                                              &stream);
+                        const auto vp_t1 = std::chrono::steady_clock::now();
+                        m_state.diagnostics.OnVpbltSubmit(
+                            vp_t1, std::chrono::duration<double, std::milli>(vp_t1 - vp_t0).count());
 
                         inputView = nullptr;
                         latestTex = nullptr;
