@@ -104,5 +104,36 @@ TEST_F(PipelineFlowTest, CardsCarryNoFakeLiveMetrics) {
     }
 }
 
+TEST_F(PipelineFlowTest, SetStepLivePopulatesResourceNumberAndTooltip) {
+    PipelineFlow flow;
+    flow.setStepLive(3, PipelineStepCard::Status::Over, QStringLiteral("Encoder can't keep up with 60 fps"),
+                     QStringLiteral("GPU (NVENC)"), QStringLiteral("9.2 ms"),
+                     QStringLiteral("peak 14.0 ms · CPU submit (GPU execution time not measured)"));
+    auto* card = flow.card(3);
+    ASSERT_NE(card, nullptr);
+    EXPECT_EQ(card->status(), PipelineStepCard::Status::Over);
+    EXPECT_EQ(card->statusText(), QStringLiteral("Over"));
+    EXPECT_EQ(card->resourceTag(), QStringLiteral("GPU (NVENC)"));
+    EXPECT_EQ(card->secondaryNumber(), QStringLiteral("9.2 ms"));
+    EXPECT_TRUE(card->toolTip().contains(QStringLiteral("peak 14.0 ms")));
+
+    auto* resource = card->findChild<QLabel*>(QStringLiteral("pipelineStepResource"));
+    auto* number = card->findChild<QLabel*>(QStringLiteral("pipelineStepNumber"));
+    ASSERT_NE(resource, nullptr);
+    ASSERT_NE(number, nullptr);
+    EXPECT_EQ(resource->text(), QStringLiteral("GPU (NVENC)"));
+    EXPECT_EQ(number->text(), QStringLiteral("9.2 ms"));
+}
+
+TEST_F(PipelineFlowTest, SetStepLiveDashWhenNumberUnavailable) {
+    PipelineFlow flow;
+    const QString dash = QString::fromUtf8("\xE2\x80\x94");
+    flow.setStepLive(2, PipelineStepCard::Status::Ok, QStringLiteral("Compositor idle (no overlay)"),
+                     QStringLiteral("GPU"), dash, QString());
+    auto* card = flow.card(2);
+    ASSERT_NE(card, nullptr);
+    EXPECT_EQ(card->secondaryNumber(), dash);
+}
+
 } // namespace
 } // namespace exosnap

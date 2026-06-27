@@ -50,4 +50,15 @@ void PipelineFlow::setStepStatus(int index, PipelineStepCard::Status status, con
     }
 }
 
+void PipelineFlow::setStepLive(int index, PipelineStepCard::Status status, const QString& note,
+                               const QString& resourceTag, const QString& secondaryNumber, const QString& tooltip) {
+    if (auto* step = card(index)) {
+        step->setStatus(status);
+        step->setNote(note);
+        step->setResourceTag(resourceTag);
+        step->setSecondaryNumber(secondaryNumber);
+        step->setToolTip(tooltip);
+    }
+}
+
 } // namespace exosnap::ui::widgets
