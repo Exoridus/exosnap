@@ -89,6 +89,15 @@ struct CaptureDiagnostics {
     CaptureSourceType source_type = CaptureSourceType::Unknown;
     bool source_loss = false;
 
+    // Present cadence (VRR/CFR judder correlation, v0.8.0 / ADR 0033). DXGI Output
+    // Duplication only: derived from DXGI_OUTDUPL_FRAME_INFO.LastPresentTime (QPC) deltas
+    // and AccumulatedFrames. Unavailable for WGC (Window/Region) capture, which exposes no
+    // present timestamp, and during warm-up / before enough samples accumulate.
+    double source_present_interval_ms = 0.0; // mean inter-present interval over the rolling window
+    double source_present_jitter_ms = 0.0;   // peak-minus-average present interval (irregular-pacing proxy)
+    double source_coalesce_ratio = 1.0;      // mean AccumulatedFrames per acquire (>1 == presents coalesced)
+    MetricAvailability present_cadence_availability = MetricAvailability::Unavailable;
+
     [[nodiscard]] uint64_t frames_dropped_total() const noexcept {
         return frames_dropped_coalesced + frames_dropped_cfr + frames_dropped_backpressure;
     }

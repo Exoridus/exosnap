@@ -22,9 +22,11 @@
 
 #include <QDateTime>
 #include <QFrame>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QScreen>
 #include <QScrollArea>
 #include <QStyle>
 #include <QToolButton>
@@ -381,6 +383,11 @@ void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, c
 }
 
 void DiagnosticsPage::applyLiveDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+    // Retain the latest snapshot so the next overview refresh (Run check / data set) can
+    // correlate live present-pacing with the refresh/FPS recommendation. The live numbers
+    // themselves render at ~5 Hz via the panel below; we deliberately do not rebuild the
+    // (heavier) overview UI on every frame.
+    last_live_snapshot_ = snapshot;
     if (live_pipeline_panel_ == nullptr) {
         return;
     }
@@ -854,8 +861,22 @@ void DiagnosticsPage::refreshOverview() {
     if (!data_ready_)
         return;
 
-    diagnostics::RecommendationEngine engine(caps_, active_user_config_, 0, output_drive_free_bytes_,
-                                             profile_validation_.succeeded, output_filesystem_name_);
+    // The static refresh/FPS-mismatch heuristic needs the CAPTURE-TARGET monitor's
+    // refresh, not the UI screen — pulling screen()->refreshRate() here is both
+    // non-deterministic (test-machine dependent) and semantically wrong. Until the
+    // capture-target refresh is threaded through setDiagnosticData, the static arm
+    // stays inert (its pre-existing state). The live present-jitter arm below is the
+    // real, target-accurate judder detector and needs no monitor refresh.
+    // TODO(v0.8.0 follow-up): thread the capture-target monitor refresh into setDiagnosticData.
+    const uint32_t monitor_refresh_hz = 0;
+
+    // Feed the latest valid live snapshot so the engine can correlate measured present-pacing
+    // (VRR/CFR judder) with the refresh/FPS recommendation.
+    const recorder_core::RecordingDiagnosticsSnapshot* live =
+        last_live_snapshot_.valid ? &last_live_snapshot_ : nullptr;
+
+    diagnostics::RecommendationEngine engine(caps_, active_user_config_, monitor_refresh_hz, output_drive_free_bytes_,
+                                             profile_validation_.succeeded, output_filesystem_name_, live);
     auto recs = engine.Generate();
 
     // Verdict counts come ONLY from the RecommendationEngine (real diagnosed issues).

@@ -134,6 +134,11 @@ class DiagnosticsPage : public QWidget {
 
     // Filesystem-check data (FILESYSTEM-CHECKS-R1)
     std::string output_filesystem_name_; // e.g. "FAT32", "NTFS"; empty = not queried
+
+    // Last live pipeline snapshot (fed by applyLiveDiagnostics). Consumed by refreshOverview's
+    // RecommendationEngine for the VRR/CFR judder correlation (v0.8.0 / ADR 0033). Only valid
+    // snapshots are forwarded to the engine.
+    recorder_core::RecordingDiagnosticsSnapshot last_live_snapshot_{};
 };
 
 } // namespace exosnap

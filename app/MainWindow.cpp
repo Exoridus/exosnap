@@ -2959,6 +2959,12 @@ recorder_core::RecordingDiagnosticsSnapshot makeLiveDiagnosticsSnapshot(const QS
     s.capture.frame_interval_ms = 1000.0 / 60.0;
     s.capture.interval_observed = MetricAvailability::Unavailable;
     s.capture.source_type = CaptureSourceType::Display;
+    // Present cadence (VRR/CFR judder correlation): high-refresh source feeding a 60 fps CFR
+    // capture — visible jitter and >1 coalescing, the showcase case for ADR 0033.
+    s.capture.source_present_interval_ms = 8.4;
+    s.capture.source_present_jitter_ms = 6.2;
+    s.capture.source_coalesce_ratio = 2.1;
+    s.capture.present_cadence_availability = MetricAvailability::Available;
 
     s.compositor.active = true;
     s.compositor.latest_ms = 1.3;

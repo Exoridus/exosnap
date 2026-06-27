@@ -73,6 +73,10 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     interval_observed_ = false;
     interval_window_.Clear();
 
+    present_observed_ = false;
+    present_interval_window_.Clear();
+    present_coalesce_window_.Clear();
+
     compositor_window_.Clear();
     frames_composed_ = 0;
     compositor_active_ = false;
@@ -171,6 +175,17 @@ void PipelineDiagnosticsAggregator::OnObservedFrameInterval(time_point now, doub
     std::lock_guard lk(mutex_);
     interval_observed_ = true;
     interval_window_.Add(now, ms);
+}
+
+void PipelineDiagnosticsAggregator::OnSourcePresentInterval(time_point now, double interval_ms,
+                                                            uint32_t accumulated_frames) noexcept {
+    std::lock_guard lk(mutex_);
+    present_observed_ = true;
+    present_interval_window_.Add(now, interval_ms);
+    // AccumulatedFrames can be 0 for cursor-only updates; clamp to >=1 so the coalescing
+    // average reflects "presents per acquire" without being dragged toward zero.
+    const double frames = accumulated_frames > 0 ? static_cast<double>(accumulated_frames) : 1.0;
+    present_coalesce_window_.Add(now, frames);
 }
 
 void PipelineDiagnosticsAggregator::OnCompositorSubmit(time_point now, double ms, bool pass_ran) noexcept {
@@ -354,6 +369,22 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     } else {
         cap.frame_interval_ms = (cap.target_fps > 0.0) ? 1000.0 / cap.target_fps : 0.0;
         cap.interval_observed = MetricAvailability::Unavailable;
+    }
+
+    // ---- Present cadence (VRR/CFR judder correlation) ----
+    // DXGI OD only (present_observed_ stays false for WGC). Gated by warm-up and a minimum
+    // sample count so brief scheduler/QPC jitter at session start is not mis-read as judder.
+    // The 2 s rolling window naturally expires stale spikes. Default stays Unavailable.
+    constexpr std::size_t kMinPresentSamples = 8;
+    if (present_observed_ && elapsed_seconds >= thresholds_.warmup_seconds) {
+        const RollingTimeWindow::Aggregate pres = present_interval_window_.Compute(now);
+        const RollingTimeWindow::Aggregate coal = present_coalesce_window_.Compute(now);
+        if (pres.count >= kMinPresentSamples) {
+            cap.source_present_interval_ms = pres.average;
+            cap.source_present_jitter_ms = (pres.peak > pres.average) ? (pres.peak - pres.average) : 0.0;
+            cap.source_coalesce_ratio = (coal.count > 0) ? coal.average : 1.0;
+            cap.present_cadence_availability = MetricAvailability::Available;
+        }
     }
 
     // ---- Compositor (CPU submission timing only) ----

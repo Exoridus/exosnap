@@ -36,10 +36,20 @@ DiagnosticResult MakeResult(const std::string& id, DiagnosticGroup group, Diagno
 RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps,
                                            const capability::UserRecorderConfig& config, uint32_t monitor_refresh_rate,
                                            uint64_t output_drive_free_bytes, bool is_profile_supported,
-                                           std::string output_filesystem_name)
+                                           std::string output_filesystem_name,
+                                           const recorder_core::RecordingDiagnosticsSnapshot* live_snapshot)
     : caps_(caps), config_(config), monitor_refresh_rate_(monitor_refresh_rate),
       output_drive_free_bytes_(output_drive_free_bytes), is_profile_supported_(is_profile_supported),
       output_filesystem_name_(std::move(output_filesystem_name)) {
+    // Consume the optional live snapshot only when it carries a real present-cadence
+    // measurement (DXGI OD path, past warm-up). Everything else stays neutral.
+    if (live_snapshot != nullptr && live_snapshot->valid &&
+        live_snapshot->capture.present_cadence_availability == recorder_core::MetricAvailability::Available) {
+        live_present_available_ = true;
+        live_cfr_ = live_snapshot->video_encoder.cfr;
+        live_present_jitter_ms_ = live_snapshot->capture.source_present_jitter_ms;
+        live_coalesce_ratio_ = live_snapshot->capture.source_coalesce_ratio;
+    }
 }
 
 DiagnosticChecklist RecommendationEngine::Generate() const {
@@ -56,26 +66,80 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
 }
 
 void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checklist) const {
-    if (monitor_refresh_rate_ >= 120 && config_.frame_rate_num == 60 && config_.frame_rate_den == 1) {
-        DiagnosticResult r =
-            MakeResult("rec.001", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-                       "Refresh rate / FPS mismatch", "144+ Hz monitor detected with 60 fps recording.",
-                       "Your monitor runs at " + std::to_string(monitor_refresh_rate_) +
-                           " Hz but recording is set to 60 fps. This can cause uneven frame pacing.",
-                       std::to_string(monitor_refresh_rate_) + " Hz monitor, " +
-                           std::to_string(config_.frame_rate_num) + " fps recording",
-                       "Cap your game at 60 or 120 fps for smoother pacing.");
-        FixAction fa;
-        fa.id = "fix.fps.cap";
-        fa.label = "Set recording FPS to match monitor";
-        fa.safety = FixAction::Safety::Assisted;
-        fa.reversible = true;
-        fa.changes_summary =
-            "Opens Video settings to adjust the recording frame rate to better match your monitor's refresh rate.";
-        r.fix_action = fa;
-        checklist.has_notice = true;
-        checklist.results.push_back(std::move(r));
+    // Static heuristic: a high-refresh monitor paired with a 60 fps capture is a common
+    // source of uneven pacing. monitor_refresh_rate_ == 0 means "unknown" and suppresses
+    // the static arm (the live arm below can still fire on its own).
+    const bool static_mismatch =
+        monitor_refresh_rate_ >= 120 && config_.frame_rate_num == 60 && config_.frame_rate_den == 1;
+
+    // Live correlation (v0.8.0 / ADR 0033): during CFR capture, measured present-time jitter
+    // or sustained coalescing is direct evidence that the source presents at a rate (or with
+    // a variability, e.g. VRR) that the fixed capture cadence cannot follow smoothly.
+    //
+    // Thresholds are deliberately conservative and empirically calibratable:
+    //   kJitterMs = 4.0 ms — peak-minus-average present interval. Normal scheduler/QPC
+    //                        sampling noise over the 2 s window stays well under this even at
+    //                        120 Hz (~8.3 ms nominal interval); a sustained >4 ms spread
+    //                        signals irregular present pacing (judder), not measurement noise.
+    //   kCoalesceRatio = 1.5 — mean desktop updates coalesced per acquire. >1.5 means the
+    //                        source consistently presents faster than the CFR sampling rate
+    //                        (1.5 rather than 1.0 to ignore the occasional double-update).
+    constexpr double kJitterMs = 4.0;
+    constexpr double kCoalesceRatio = 1.5;
+    const bool live_judder = live_present_available_ && live_cfr_ &&
+                             (live_present_jitter_ms_ > kJitterMs || live_coalesce_ratio_ > kCoalesceRatio);
+
+    if (!static_mismatch && !live_judder) {
+        return;
     }
+
+    const std::string refresh_str =
+        monitor_refresh_rate_ > 0 ? std::to_string(monitor_refresh_rate_) + " Hz" : std::string("High-refresh");
+
+    DiagnosticResult r;
+    if (live_judder) {
+        // Higher-confidence diagnosis backed by live present-pacing measurement.
+        const std::string jitter_str = std::to_string(live_present_jitter_ms_).substr(0, 4);
+        const std::string coalesce_str = std::to_string(live_coalesce_ratio_).substr(0, 4);
+        std::string detail = "Live capture telemetry shows ";
+        bool wrote = false;
+        if (live_present_jitter_ms_ > kJitterMs) {
+            detail += "present-time jitter of " + jitter_str + " ms";
+            wrote = true;
+        }
+        if (live_coalesce_ratio_ > kCoalesceRatio) {
+            if (wrote)
+                detail += " and ";
+            detail += "sustained frame coalescing (" + coalesce_str + " source updates per captured frame)";
+        }
+        detail += " during constant-frame-rate recording. This indicates the source presents with "
+                  "variable / refresh-driven timing (e.g. VRR) that the fixed capture rate cannot follow "
+                  "smoothly, producing judder.";
+        r = MakeResult("rec.001", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+                       "VRR / refresh-induced judder detected",
+                       "Live present-pacing measurements indicate uneven frame delivery from the source.", detail,
+                       "Measured present jitter " + jitter_str + " ms during CFR capture",
+                       "Cap your game's frame rate (e.g. 60 or 120 fps) or disable VRR while recording for "
+                       "smoother pacing.");
+    } else {
+        r = MakeResult("rec.001", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+                       "Refresh rate / FPS mismatch", "144+ Hz monitor detected with 60 fps recording.",
+                       "Your monitor runs at " + refresh_str +
+                           " but recording is set to 60 fps. This can cause uneven frame pacing.",
+                       refresh_str + " monitor, " + std::to_string(config_.frame_rate_num) + " fps recording",
+                       "Cap your game at 60 or 120 fps for smoother pacing.");
+    }
+
+    FixAction fa;
+    fa.id = "fix.fps.cap";
+    fa.label = "Set recording FPS to match monitor";
+    fa.safety = FixAction::Safety::Assisted;
+    fa.reversible = true;
+    fa.changes_summary =
+        "Opens Video settings to adjust the recording frame rate to better match your monitor's refresh rate.";
+    r.fix_action = fa;
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
 }
 
 void RecommendationEngine::checkMp4CrashResilience(DiagnosticChecklist& checklist) const {

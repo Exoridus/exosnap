@@ -173,6 +173,7 @@ LivePipelinePanel::LivePipelinePanel(QWidget* parent) : QWidget(parent) {
     addRow(capture, QStringLiteral("liveCaptureFps"), QStringLiteral("Frame rate"));
     addRow(capture, QStringLiteral("liveCaptureSource"), QStringLiteral("Source"));
     addRow(capture, QStringLiteral("liveCaptureInterval"), QStringLiteral("Frame interval"));
+    addRow(capture, QStringLiteral("liveCapturePresent"), QStringLiteral("Present cadence"));
     addRow(capture, QStringLiteral("liveCaptureFrames"), QStringLiteral("Frames"));
     addRow(capture, QStringLiteral("liveCaptureDrops"), QStringLiteral("Drops"));
 
@@ -296,6 +297,15 @@ void LivePipelinePanel::applySnapshot(const RecordingDiagnosticsSnapshot& s) {
     setValue(QStringLiteral("liveCaptureInterval"), cap.interval_observed == MetricAvailability::Available
                                                         ? fmtMs(cap.frame_interval_ms) + QStringLiteral(" (observed)")
                                                         : fmtMs(cap.frame_interval_ms) + QStringLiteral(" (target)"));
+    // Present cadence (VRR/CFR judder correlation). DXGI OD only; neutral em-dash otherwise.
+    if (cap.present_cadence_availability == MetricAvailability::Available) {
+        setValue(QStringLiteral("liveCapturePresent"),
+                 QStringLiteral("%1 interval · %2 jitter · ×%3 coalesce")
+                     .arg(fmtMs(cap.source_present_interval_ms), fmtMs(cap.source_present_jitter_ms))
+                     .arg(QString::number(cap.source_coalesce_ratio, 'f', 2)));
+    } else {
+        setValue(QStringLiteral("liveCapturePresent"), QString::fromUtf8(kDash));
+    }
     setValue(QStringLiteral("liveCaptureFrames"), QStringLiteral("captured %1 · emitted %2 · dup %3")
                                                       .arg(cap.frames_captured)
                                                       .arg(cap.frames_emitted)

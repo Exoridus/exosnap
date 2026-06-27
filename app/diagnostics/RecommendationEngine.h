@@ -4,6 +4,7 @@
 
 #include <capability/capability_set.h>
 #include <capability/user_config.h>
+#include <recorder_core/pipeline_diagnostics.h>
 
 #include <string>
 #include <vector>
@@ -14,7 +15,8 @@ class RecommendationEngine {
   public:
     RecommendationEngine(const capability::CapabilitySet& caps, const capability::UserRecorderConfig& config,
                          uint32_t monitor_refresh_rate = 0, uint64_t output_drive_free_bytes = 0,
-                         bool is_profile_supported = true, std::string output_filesystem_name = {});
+                         bool is_profile_supported = true, std::string output_filesystem_name = {},
+                         const recorder_core::RecordingDiagnosticsSnapshot* live_snapshot = nullptr);
 
     DiagnosticChecklist Generate() const;
 
@@ -36,6 +38,14 @@ class RecommendationEngine {
     uint64_t output_drive_free_bytes_;
     bool is_profile_supported_;
     std::string output_filesystem_name_; // e.g. "FAT32", "NTFS"; empty = not queried
+
+    // Live present-cadence correlation (v0.8.0 / ADR 0033). Extracted from an optional live
+    // RecordingDiagnosticsSnapshot; all false/neutral when no live measurement is available
+    // (e.g. idle, or WGC capture which has no present timestamp).
+    bool live_present_available_ = false;
+    bool live_cfr_ = true;
+    double live_present_jitter_ms_ = 0.0;
+    double live_coalesce_ratio_ = 1.0;
 
     // rec.007: hard-stop blocker threshold (500 MB).
     // rec.005: soft warning threshold (2 GB).

@@ -1451,6 +1451,9 @@ void VideoThread::Run() {
 
         winrt::com_ptr<ID3D11Texture2D> pendingWgcTex;
 
+        // Present-cadence tap state (DXGI OD only): previous frame's LastPresentTime (QPC).
+        uint64_t cfrLastPresentQpc = 0;
+
         while (!m_state.stop_requested.load()) {
             if (!useOdCapture) {
                 MSG msg{};
@@ -1495,6 +1498,20 @@ void VideoThread::Run() {
                     const bool diag_recording = !m_state.pause_requested.load();
                     if (diag_recording)
                         m_state.diagnostics.OnFrameCaptured();
+                    // Present-cadence tap (VRR/CFR judder correlation). DXGI OD exposes the
+                    // source's last present timestamp (QPC) plus the coalesced-update count.
+                    // O(1): derive the inter-present delta and hand raw numbers to the
+                    // aggregator. Skip null/non-advancing presents — never fabricate a value.
+                    if (diag_recording && info.LastPresentTime.QuadPart != 0 && qpcFreq != 0) {
+                        const auto presentQpc = static_cast<uint64_t>(info.LastPresentTime.QuadPart);
+                        if (cfrLastPresentQpc != 0 && presentQpc > cfrLastPresentQpc) {
+                            const double intervalMs = static_cast<double>(presentQpc - cfrLastPresentQpc) * 1000.0 /
+                                                      static_cast<double>(qpcFreq);
+                            m_state.diagnostics.OnSourcePresentInterval(std::chrono::steady_clock::now(), intervalMs,
+                                                                        info.AccumulatedFrames);
+                        }
+                        cfrLastPresentQpc = presentQpc;
+                    }
                     if (odCapturedTexValid) {
                         ++droppedFrames;
                         if (diag_recording)
@@ -1703,6 +1720,9 @@ void VideoThread::Run() {
         bool vfr_was_paused = false;
         uint64_t vfr_pause_start_100ns = 0;
 
+        // Present-cadence tap state (DXGI OD only): previous frame's LastPresentTime (QPC).
+        uint64_t vfrLastPresentQpc = 0;
+
         while (!m_state.stop_requested.load()) {
             if (!useOdCapture) {
                 MSG msg{};
@@ -1758,6 +1778,17 @@ void VideoThread::Run() {
                     const bool diag_recording = !m_state.pause_requested.load();
                     if (diag_recording)
                         m_state.diagnostics.OnFrameCaptured();
+                    // Present-cadence tap (VRR/CFR judder correlation), mirroring the CFR path.
+                    if (diag_recording && info.LastPresentTime.QuadPart != 0 && qpcFreq != 0) {
+                        const auto presentQpc = static_cast<uint64_t>(info.LastPresentTime.QuadPart);
+                        if (vfrLastPresentQpc != 0 && presentQpc > vfrLastPresentQpc) {
+                            const double intervalMs = static_cast<double>(presentQpc - vfrLastPresentQpc) * 1000.0 /
+                                                      static_cast<double>(qpcFreq);
+                            m_state.diagnostics.OnSourcePresentInterval(std::chrono::steady_clock::now(), intervalMs,
+                                                                        info.AccumulatedFrames);
+                        }
+                        vfrLastPresentQpc = presentQpc;
+                    }
                     if (odCapturedTexValid) {
                         ++droppedFrames;
                         if (diag_recording)

@@ -172,6 +172,63 @@ TEST(PipelineDiagnostics, ObservedIntervalMarkedAvailableOnVfr) {
     EXPECT_NEAR(s.capture.frame_interval_ms, 17.0, 0.01);
 }
 
+// ---------------------------------------------------------------------------
+// Present cadence (VRR/CFR judder correlation, v0.8.0 / ADR 0033)
+// ---------------------------------------------------------------------------
+
+TEST(PipelineDiagnostics, PresentCadenceUnavailableWithoutSamples) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(s.capture.present_cadence_availability, MetricAvailability::Unavailable);
+}
+
+TEST(PipelineDiagnostics, PresentCadenceAvailableAndJitterDerived) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    // >= 8 present intervals within the 2 s window: mostly ~8 ms (≈120 Hz) with one spike.
+    for (int i = 0; i < 12; ++i) {
+        const double iv = (i == 6) ? 20.0 : 8.0;
+        agg.OnSourcePresentInterval(At(i * 8), iv, 1);
+    }
+    const auto s = agg.BuildSnapshot(At(120), MakeStats(), DiagnosticsLifecycle::Recording, 2.0);
+    EXPECT_EQ(s.capture.present_cadence_availability, MetricAvailability::Available);
+    // avg = (11*8 + 20)/12 = 9.0; peak = 20 → jitter = 11 ms (> 4 ms threshold).
+    EXPECT_NEAR(s.capture.source_present_interval_ms, 9.0, 0.001);
+    EXPECT_GT(s.capture.source_present_jitter_ms, 4.0);
+    EXPECT_NEAR(s.capture.source_coalesce_ratio, 1.0, 0.001);
+}
+
+TEST(PipelineDiagnostics, PresentCadenceGatedByWarmup) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    for (int i = 0; i < 12; ++i)
+        agg.OnSourcePresentInterval(At(i * 8), 8.0, 2);
+    // elapsed below warmup_seconds (default 1.0) → Unavailable despite enough samples.
+    const auto s = agg.BuildSnapshot(At(96), MakeStats(), DiagnosticsLifecycle::Recording, 0.5);
+    EXPECT_EQ(s.capture.present_cadence_availability, MetricAvailability::Unavailable);
+}
+
+TEST(PipelineDiagnostics, PresentCoalesceRatioAveraged) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    for (int i = 0; i < 12; ++i)
+        agg.OnSourcePresentInterval(At(i * 8), 8.0, 2); // 2 coalesced updates per acquire
+    const auto s = agg.BuildSnapshot(At(120), MakeStats(), DiagnosticsLifecycle::Recording, 2.0);
+    EXPECT_EQ(s.capture.present_cadence_availability, MetricAvailability::Available);
+    EXPECT_NEAR(s.capture.source_coalesce_ratio, 2.0, 0.001);
+}
+
+TEST(PipelineDiagnostics, PresentCadenceResetClearsState) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    for (int i = 0; i < 12; ++i)
+        agg.OnSourcePresentInterval(At(i * 8), 8.0, 1);
+    agg.Reset(2, MakeConfig());
+    const auto s = agg.BuildSnapshot(At(120), MakeStats(), DiagnosticsLifecycle::Recording, 2.0);
+    EXPECT_EQ(s.capture.present_cadence_availability, MetricAvailability::Unavailable);
+}
+
 TEST(PipelineDiagnostics, PauseDoesNotCreateFalseDrops) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());

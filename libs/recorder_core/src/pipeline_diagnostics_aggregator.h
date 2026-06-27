@@ -156,6 +156,9 @@ class PipelineDiagnosticsAggregator {
     void OnFrameDroppedCfr() noexcept;                                // scheduled tick produced no frame
     void OnFrameDroppedBackpressure() noexcept;                       // encoder input slots all in flight
     void OnObservedFrameInterval(time_point now, double ms) noexcept; // VFR only
+    // Present cadence (DXGI OD only): inter-present interval (ms) from LastPresentTime QPC
+    // deltas plus the coalesced-update count (AccumulatedFrames). O(1), allocation-free.
+    void OnSourcePresentInterval(time_point now, double interval_ms, uint32_t accumulated_frames) noexcept;
     // Compositor (VideoThread) — CPU submission time only
     void OnCompositorSubmit(time_point now, double ms, bool pass_ran) noexcept;
     // Encoder (VideoThread)
@@ -206,6 +209,11 @@ class PipelineDiagnosticsAggregator {
     uint64_t dropped_backpressure_ = 0;
     bool interval_observed_ = false;
     RollingTimeWindow interval_window_{256, std::chrono::milliseconds(2000)};
+
+    // Present cadence (DXGI OD only): inter-present interval and coalescing proxy windows.
+    bool present_observed_ = false;
+    RollingTimeWindow present_interval_window_{256, std::chrono::milliseconds(2000)};
+    RollingTimeWindow present_coalesce_window_{256, std::chrono::milliseconds(2000)};
 
     // Compositor
     RollingTimeWindow compositor_window_{256, std::chrono::milliseconds(2000)};

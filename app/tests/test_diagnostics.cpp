@@ -505,6 +505,123 @@ TEST(RecommendationEngineTest, Generate_RefreshRateMatch_NoWarn) {
     EXPECT_FALSE(found_mismatch);
 }
 
+// --- Live present-cadence correlation (v0.8.0 / ADR 0033) ---
+
+namespace {
+recorder_core::RecordingDiagnosticsSnapshot MakeJudderSnapshot(bool cfr, double jitter_ms, double coalesce_ratio) {
+    recorder_core::RecordingDiagnosticsSnapshot live;
+    live.valid = true;
+    live.video_encoder.cfr = cfr;
+    live.capture.present_cadence_availability = recorder_core::MetricAvailability::Available;
+    live.capture.source_present_jitter_ms = jitter_ms;
+    live.capture.source_coalesce_ratio = coalesce_ratio;
+    return live;
+}
+} // namespace
+
+TEST(RecommendationEngineTest, Generate_LiveJitter_HighConfidenceJudder) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+
+    // monitor_refresh = 0 (unknown) → static arm suppressed; the live judder arm fires alone.
+    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
+    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.001") {
+            found = true;
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Notice);
+            EXPECT_NE(r.title.find("judder"), std::string::npos);
+            ASSERT_TRUE(r.fix_action.has_value());
+            EXPECT_EQ(r.fix_action->id, "fix.fps.cap");
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST(RecommendationEngineTest, Generate_LiveCoalesce_HighConfidenceJudder) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+
+    // Low jitter but sustained coalescing (> 1.5) → judder arm fires.
+    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/1.0, /*coalesce_ratio=*/2.0);
+    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results)
+        if (r.id == "rec.001")
+            found = true;
+    EXPECT_TRUE(found);
+}
+
+TEST(RecommendationEngineTest, Generate_LiveJudder_VfrDoesNotFire) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+
+    // VFR capture: present jitter is expected and not a CFR-judder signal. monitor=0 → no
+    // static arm either, so rec.001 must not appear.
+    const auto live = MakeJudderSnapshot(/*cfr=*/false, /*jitter_ms=*/9.0, /*coalesce_ratio=*/3.0);
+    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    auto checklist = engine.Generate();
+
+    for (const auto& r : checklist.results)
+        EXPECT_NE(r.id, "rec.001");
+}
+
+TEST(RecommendationEngineTest, Generate_LiveBelowThreshold_DoesNotFire) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+
+    // CFR but within conservative thresholds (jitter <= 4 ms, coalesce <= 1.5) → no diagnosis.
+    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/2.0, /*coalesce_ratio=*/1.1);
+    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    auto checklist = engine.Generate();
+
+    for (const auto& r : checklist.results)
+        EXPECT_NE(r.id, "rec.001");
+}
+
+TEST(RecommendationEngineTest, Generate_StaticMismatchStillFiresWithoutLive) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+
+    // 144 Hz monitor, no live snapshot → original static heuristic wording (no "judder").
+    RecommendationEngine engine(caps, config, 144, 0, true, "", nullptr);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.001") {
+            found = true;
+            EXPECT_EQ(r.title.find("judder"), std::string::npos);
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
 TEST(RecommendationEngineTest, Generate_CodecUnavailable_Blocker) {
     capability::CapabilitySet caps;
     caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Invalid, "NVENC not found"};
