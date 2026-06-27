@@ -1224,8 +1224,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         // QueuedConnection when the probe completes; it also starts the device
         // notifiers (which must follow caps so the first snapshot has context).
         QThread* worker = QThread::create([this]() {
-            capability::CapabilitySet caps = capability::CapabilityBuilder::BuildFromHardwareQuery();
-            QMetaObject::invokeMethod(this, [this, caps]() { onRuntimeCapsReady(caps); }, Qt::QueuedConnection);
+            // Exception barrier: QueryRuntimeFacts() allocates and has no top-level
+            // noexcept guarantee, so an escaped throw here would abort the QThread and
+            // std::terminate the app. Catch it and post the failure to the UI thread so
+            // coordinator init resolves (to a failure state) instead of hanging armed.
+            try {
+                capability::CapabilitySet caps = capability::CapabilityBuilder::BuildFromHardwareQuery();
+                QMetaObject::invokeMethod(this, [this, caps]() { onRuntimeCapsReady(caps); }, Qt::QueuedConnection);
+            } catch (const std::exception& ex) {
+                const QString reason = QString::fromUtf8(ex.what());
+                QMetaObject::invokeMethod(
+                    this, [this, reason]() { onRuntimeCapsFailed(reason); }, Qt::QueuedConnection);
+            } catch (...) {
+                QMetaObject::invokeMethod(
+                    this, [this]() { onRuntimeCapsFailed(QStringLiteral("Unknown error")); }, Qt::QueuedConnection);
+            }
         });
         connect(worker, &QThread::finished, worker, &QObject::deleteLater);
         worker->start();
@@ -1249,14 +1262,31 @@ void MainWindow::onRuntimeCapsReady(capability::CapabilitySet caps) {
     runtime_caps_ready_ = true;
     diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("capabilities probed (async)"));
     if (record_page_)
-        record_page_->setRuntimeCapabilities(runtime_caps_); // re-arms coordinator init (A1 gate)
+        record_page_->setRuntimeCapabilities(runtime_caps_); // delivers caps to coordinator (A1 gate)
     refreshPresetUi();
     refreshDiagnosticsData();
+    startDeviceNotifiers();
+}
 
-    // Start the device notifiers after caps land so the first snapshotChanged
-    // emission has the correct runtime context (preserving the original ordering).
-    // rescan() seeds the initial availability state synchronously so pages know
-    // the device state without waiting for a native event.
+void MainWindow::onRuntimeCapsFailed(const QString& reason) {
+    // The async HW probe threw. Mark the probe as resolved (it completed, just failed)
+    // so nothing waits on it forever, drive the Record page into its capability-failure
+    // state, and still bring up the rest of the UI (device notifiers) so navigation works.
+    runtime_caps_ready_ = true;
+    diagnostics::AppLog::error(QStringLiteral("window"),
+                               QStringLiteral("capability probe failed (async): %1").arg(reason));
+    if (record_page_)
+        record_page_->setRuntimeCapabilitiesFailed(reason);
+    refreshPresetUi();
+    refreshDiagnosticsData();
+    startDeviceNotifiers();
+}
+
+void MainWindow::startDeviceNotifiers() {
+    // Start the device notifiers after the capability probe resolves so the first
+    // snapshotChanged emission has the correct runtime context (preserving the original
+    // ordering). rescan() seeds the initial availability state synchronously so pages
+    // know the device state without waiting for a native event.
     audio_notifier_.start();
     audio_notifier_.rescan();
     webcam_notifier_.start();

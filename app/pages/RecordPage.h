@@ -88,6 +88,9 @@ class RecordPage : public QWidget {
     void setActiveProfileName(const std::string& profile_name);
     void applyPersistedAudioSettings(const capability::AudioUiState& state);
     void setRuntimeCapabilities(const capability::CapabilitySet& caps);
+    // Called on the UI thread when the async capability probe FAILED (threw). Drives
+    // the coordinator into its capability-failure state so init never hangs armed.
+    void setRuntimeCapabilitiesFailed(const QString& reason);
     void rebroadcastChromeState();
     void restoreRecordingHistory();
 
@@ -265,6 +268,11 @@ class RecordPage : public QWidget {
     void hideEvent(QHideEvent* event) override;
     void ensureCoordinatorInit();
     void initCoordinator();
+    // Resolve+validate shared_runtime_caps_ and hand them to the coordinator
+    // (OnCapabilitiesReady), catching probe/resolver failures. Used both from
+    // initCoordinator (when caps are already present) and from the deferred
+    // delivery in setRuntimeCapabilities() (when the async probe lands later).
+    void deliverCapabilitiesToCoordinator();
     void refresh();
     void updateStatsDisplay();
     void updateResultDisplay();
@@ -464,7 +472,18 @@ class RecordPage : public QWidget {
     // level preview before the user enables recording.
     bool record_page_visible_ = false;
     capability::CapabilitySet shared_runtime_caps_{};
+    // True once VALID runtime caps have been delivered to the coordinator (success).
+    // Stays false if the async probe fails — updateRecReadiness() / the recommendation
+    // engine key off this, so they must only see genuinely-resolved caps.
     bool shared_runtime_caps_received_ = false;
+    // True when initCoordinator() built the coordinator before the async capability
+    // probe resolved. Cleared on BOTH success (caps delivered) and failure. Gates the
+    // early-start latch below: a Record click is latched only while this is true.
+    bool coordinator_awaiting_caps_ = false;
+    // Latched intent for a recording start requested before caps resolved; replayed
+    // from the caps-delivery path (setRuntimeCapabilities) so the click is never dropped.
+    bool start_requested_awaiting_caps_ = false;
+    std::optional<recorder_core::CaptureRegion> pending_start_crop_region_{};
 
     // Rail dashboard controls
     QWidget* audio_settings_panel_ = nullptr;

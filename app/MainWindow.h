@@ -161,8 +161,15 @@ class MainWindow : public QMainWindow {
     void initHotkeyService();
     void refreshDiagnosticsData();
     // Called on the UI thread when the async capability probe completes.
-    // Sets runtime_caps_, starts device notifiers, and re-arms coordinator init.
+    // Sets runtime_caps_, delivers them to the Record page, and starts device notifiers.
     void onRuntimeCapsReady(capability::CapabilitySet caps);
+    // Called on the UI thread when the async capability probe FAILED (threw in the
+    // worker). Drives the Record page into its capability-failure state so coordinator
+    // init never hangs armed, then starts device notifiers so the rest of the UI works.
+    void onRuntimeCapsFailed(const QString& reason);
+    // Start + seed (rescan) the audio/webcam/display device notifiers. Shared by the
+    // caps-ready and caps-failed paths so the ordering (notifiers after probe) holds.
+    void startDeviceNotifiers();
     void navigateToEditExportPage(const QString& file_path, const QString& duration, const QString& size,
                                   const QString& resolution, const QString& fps, const QString& video_codec,
                                   const QString& audio_codec, const QString& container);
