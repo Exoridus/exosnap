@@ -312,7 +312,7 @@ QVector<ButtonSpec> buttonSpecsFor(const notifications::NotificationEvent& event
     QVector<ButtonSpec> buttons;
     switch (event.action) {
     case NotificationAction::OpenFolder:
-        buttons.push_back({QStringLiteral("Open folder"), false, NotificationAction::OpenFolder});
+        buttons.push_back({QStringLiteral("Open folder"), true, NotificationAction::OpenFolder});
         break;
     case NotificationAction::Edit:
         buttons.push_back({QStringLiteral("Edit"), true, NotificationAction::Edit});
