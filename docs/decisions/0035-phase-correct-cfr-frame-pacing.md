@@ -9,6 +9,43 @@ tapped per frame in `libs/recorder_core/src/video_thread.cpp`). Candidate placem
 follow or `0.10.0` (reliability hardening) — it is a capture-engine reliability feature, not a
 vendor feature. Relates to [[0033-diagnostics-engine-and-fixaction.md]].
 
+Status flips to Accepted at 0.8.0 release-mechanics.
+
+## Delivered (feat/0.8.0-diagnostics, slice 2)
+
+Implemented in six tasks committed to `feat/0.8.0-diagnostics`. Summary of what was built:
+
+**Pure-logic seam (`frame_pacing.h` / `frame_pacing.cpp`).**
+`ComputePacingRingSize(monitor_refresh_hz, output_fps)` implements the adaptive formula
+`clamp(ceil(refresh/fps) + 2, 4, 12)` with a fallback of **8** when either input is zero.
+`SelectFrameForSlot(ring_present_qpc, slot_qpc, last_emitted_present_qpc, mode)` returns a
+`PacingDecision` (ring index + `newly_dropped` + `is_duplicate`) — pure stateless logic,
+fully unit-tested in `test_frame_pacing.cpp`.
+
+**GPU ring wired in the DXGI-OD CFR path (`video_thread.cpp`).**
+The ring is only built when `useOdCapture && cfr_pacing_mode == Smooth`. Ring allocation failure
+is non-fatal: it disables phase-correct for the session and falls back to the single-texture
+newest-at-tick path. GPU runtime smoothness has been dev-recording-verified by the user against
+a 144 Hz VRR source → 60 fps MKV output.
+
+**Known limitation — ring always sizes to fallback 8.** Monitor refresh rate is not surfaced
+to the video thread at this time; `ComputePacingRingSize` is always called with
+`monitor_refresh_hz = 0`, so the ring is always 8 textures regardless of source framerate.
+The formula and the `monitor_refresh_hz` parameter are correct and in place; wiring the actual
+refresh value is a follow-up (safe headroom: 8 covers up to 8× source-over-output).
+
+**User control.** Expert Video settings section gains a "Frame pacing" select:
+`Smooth (phase-correct)` / `Newest (lowest latency)`. Default `Smooth`. Persisted in preset
+schema (schema version bumped to **19**; pre-1.0 reset, no migration).
+
+**Diagnostics FixAction.** `RecommendationEngine` emits a second result `rec.pacing.smooth`
+with a `fix.frame_pacing.smooth` Auto FixAction when judder is detected and the current mode is
+`Newest`. When mode is already `Smooth`, the result is suppressed. `MainWindow` handles
+`fix.frame_pacing.smooth` to flip the setting.
+
+**Scope boundary.** DXGI-OD (monitor capture) only. WGC (window/region capture) has no
+`LastPresentTime` and continues to use newest-at-tick in all modes.
+
 ## Context
 
 A high-refresh and/or VRR (G-Sync/FreeSync) source presents at a **variable, non-60-aligned**
