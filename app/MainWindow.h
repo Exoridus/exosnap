@@ -160,6 +160,9 @@ class MainWindow : public QMainWindow {
     void refreshPresetUi();
     void initHotkeyService();
     void refreshDiagnosticsData();
+    // Called on the UI thread when the async capability probe completes.
+    // Sets runtime_caps_, starts device notifiers, and re-arms coordinator init.
+    void onRuntimeCapsReady(capability::CapabilitySet caps);
     void navigateToEditExportPage(const QString& file_path, const QString& duration, const QString& size,
                                   const QString& resolution, const QString& fps, const QString& video_codec,
                                   const QString& audio_codec, const QString& container);

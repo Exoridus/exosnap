@@ -87,6 +87,7 @@
 #include <QSysInfo>
 #include <QSystemTrayIcon>
 #include <QTextStream>
+#include <QThread>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -1218,25 +1219,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     qApp->installEventFilter(this);
 
     QTimer::singleShot(0, this, [this]() {
-        runtime_caps_ = capability::CapabilityBuilder::BuildFromHardwareQuery();
-        runtime_caps_ready_ = true;
-        diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("capabilities probed"));
-        if (record_page_)
-            record_page_->setRuntimeCapabilities(runtime_caps_);
-        refreshPresetUi();
-        refreshDiagnosticsData();
-
-        // Start the device notifiers after the capability probe so the first
-        // snapshotChanged emission has the correct runtime context.
-        // rescan() seeds the initial availability state synchronously so pages
-        // know the device state without waiting for a native event.
-        audio_notifier_.start();
-        audio_notifier_.rescan();
-        webcam_notifier_.start();
-        webcam_notifier_.rescan();
-        display_notifier_.start();
-        display_notifier_.rescan();
-        diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("device notifiers started"));
+        // Run the hardware capability probe on a worker thread so tick-0 does not
+        // stall the UI. onRuntimeCapsReady() is invoked on the main thread via
+        // QueuedConnection when the probe completes; it also starts the device
+        // notifiers (which must follow caps so the first snapshot has context).
+        QThread* worker = QThread::create([this]() {
+            capability::CapabilitySet caps = capability::CapabilityBuilder::BuildFromHardwareQuery();
+            QMetaObject::invokeMethod(this, [this, caps]() { onRuntimeCapsReady(caps); }, Qt::QueuedConnection);
+        });
+        connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+        worker->start();
 
         // Startup crash-recovery: show the overlay if interrupted recordings exist.
         checkAndShowRecoveryOverlay();
@@ -1250,6 +1242,28 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         if (persisted_settings_.check_updates_on_start && !recording_active_ && !remuxing_active_)
             triggerUpdateCheck();
     });
+}
+
+void MainWindow::onRuntimeCapsReady(capability::CapabilitySet caps) {
+    runtime_caps_ = std::move(caps);
+    runtime_caps_ready_ = true;
+    diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("capabilities probed (async)"));
+    if (record_page_)
+        record_page_->setRuntimeCapabilities(runtime_caps_); // re-arms coordinator init (A1 gate)
+    refreshPresetUi();
+    refreshDiagnosticsData();
+
+    // Start the device notifiers after caps land so the first snapshotChanged
+    // emission has the correct runtime context (preserving the original ordering).
+    // rescan() seeds the initial availability state synchronously so pages know
+    // the device state without waiting for a native event.
+    audio_notifier_.start();
+    audio_notifier_.rescan();
+    webcam_notifier_.start();
+    webcam_notifier_.rescan();
+    display_notifier_.start();
+    display_notifier_.rescan();
+    diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("device notifiers started"));
 }
 
 void MainWindow::checkAndShowRecoveryOverlay() {
