@@ -20,9 +20,6 @@ namespace exosnap::diagnostics {
 namespace {
 constexpr wchar_t kSessionName[] = L"ExoSnapDpcLatency";
 
-// 1 ms; above this a single DPC/ISR is a stutter/crackle risk (matches the engine
-// threshold in checkDpcLatency). Used only to keep the worst-routine attribution.
-
 // --- Well-known kernel trace GUIDs (defined locally to avoid pulling in INITGUID,
 //     which would materialise every DEFINE_GUID in the SDK headers in this TU) --------
 //
