@@ -14,151 +14,151 @@ The Diagnostics page has two pipeline surfaces today:
   refreshed at `:1064-1102`. Cards 0–2 (Capture/Queue/Compositor) are hardcoded
   `Status::Planned` with "…not instrumented yet." notes (`:1071-1073`); cards 3–5 reflect only
   static capability checks (encoder/container/output-path). **These cards never show live numbers.**
-- **"LIVE PIPELINE"** — `ui::widgets::LivePipelinePanel`, already live at ~5 Hz, showing avg/peak
-  for compositor & encoder, fps, present cadence, frame/drop counts. **This panel is NOT the
-  target of this work** (it stays as-is).
+- **"LIVE PIPELINE"** — `ui::widgets::LivePipelinePanel`, already live at ~5 Hz with avg/peak for
+  compositor & encoder, fps, present cadence, frame/drop counts. **NOT the target of this work**
+  (it stays as-is).
 
 Engine-side, `PipelineDiagnosticsAggregator` already measures **compositor submit**, **encode
-latency**, and **disk write** as `RollingTimeWindow`s. **Acquire/Capture** and the
-**VideoProcessorBlt color conversion** are not measured. The `RecordingDiagnosticsSnapshot`
-(`libs/recorder_core/include/recorder_core/pipeline_diagnostics.h:216`) is published via
-`DiagnosticsCallback` (`:248`) by `SessionStatsCollector::Run()`
+latency**, **disk write** (each a `RollingTimeWindow`), plus the full `CaptureDiagnostics`
+counters/rates (actual/target fps, frame interval, captured/emitted/dropped/duplicated). The
+`RecordingDiagnosticsSnapshot` (`libs/recorder_core/include/recorder_core/pipeline_diagnostics.h:216`)
+is published via `DiagnosticsCallback` (`:248`) by `SessionStatsCollector::Run()`
 (`libs/recorder_core/src/session_stats_collector.cpp:25-27`, ~5 Hz / 198 ms).
 
 ## Goal
 
 Make the six "CAPTURE PIPELINE" step cards **live during recording** so an inexperienced user can
-see, at a glance, **which steps a recording goes through, how long each takes, and which resource
-(CPU/GPU) each uses**. Clarity over depth. A step is flagged only when it is a *real* bottleneck
-(it breaches the per-frame budget). Outside recording the cards show the static readiness/capability
-status (as today, minus the "not instrumented" notes).
+see, at a glance, **which steps a recording goes through, whether each step is keeping up, what
+resource (CPU/GPU) it uses, and roughly how long it takes**. Clarity over precision.
 
-Non-goals: changing the LIVE PIPELINE panel; per-frame UI; GPU memory/utilization counters;
-NVML/NVAPI; surfacing this anywhere but the Diagnostics PipelineFlow cards.
+**Design centre: health-first.** Each card's primary signal is a **status** — *healthy / working
+hard / bottleneck* — derived from data the pipeline **already collects** (fps-vs-target, drop
+counters, queue depth, existing latency windows, low-disk). A secondary number ("how long / how
+much") is shown where we already have it cheaply. This keeps the feature **unobtrusive**: no new
+GPU work, no GPU→CPU syncs, no per-frame hot-path cost — only negligible CPU `QueryPerformanceCounter`
+brackets and counter reads. Precise per-stage GPU microsecond timing (D3D11 timestamp queries) is
+**explicitly deferred** to an optional follow-up (see end) — it adds hot-path complexity and, due to
+GPU DVFS, noisy numbers that don't serve this audience.
+
+Non-goals (v1): GPU timestamp queries / precise GPU execution-time; changing the LIVE PIPELINE
+panel; GPU utilization/VRAM (NVML/NVAPI); per-frame UI.
 
 ## Card Model
 
-Each card = one pipeline step. Card face shows: step name, **avg duration in ms** (the headline
-number), and a **CPU/GPU resource tag**. Peak goes in the tooltip.
+Each card = one pipeline step, showing three things: a **status chip** (Healthy / Busy /
+Bottleneck), a **CPU/GPU resource tag** (what resource the step uses), and one **secondary number**
+(the meaningful "how much/how long" we already have). Status is the headline; the number is detail.
 
-| # | Card | Measures | Resource | Source |
-|---|------|----------|----------|--------|
-| 0 | Source Capture | Acquire + CopyResource duration | CPU | NEW `acquire_window_` (CPU QPC) |
-| 1 | Frame Queue | Frame/packet queue **depth + backpressure** (a count, not a duration) | — | NEW queue-depth gauge; **excluded from bottleneck** |
-| 2 | Compositor | Composite **+ VPBlt color-convert** | GPU | NEW `compositor_gpu_window_` + `vpblt_gpu_window_` (D3D11 GPU timestamp); CPU-submit `compositor_window_` kept as fallback |
-| 3 | Encoder | NVENC encode latency (submit → bitstream-ready) | GPU (NVENC) | existing `encode_window_` (CPU-observed; see Measurement — D3D11 timestamps do NOT apply to NVENC) |
-| 4 | Muxer | Mux/interleave processing | CPU | NEW `mux_window_` (CPU QPC), distinct from disk write |
-| 5 | Disk | Filesystem write/flush | CPU | existing `write_window_` (CPU QPC) |
+| # | Card | Status driven by (existing signals) | Resource | Secondary number |
+|---|------|-------------------------------------|----------|------------------|
+| 0 | Source Capture | `actual_fps` vs `target_fps`, capture/coalesce drops | CPU | actual fps (and acquire ms — NEW cheap CPU QPC) |
+| 1 | Frame Queue | backpressure drops, queue depth trend | — | queue depth (e.g. "2 / N") |
+| 2 | Compositor | existing `compositor_window_` avg + active/inactive | GPU* | compositor submit avg ms (+ VPBlt submit ms — NEW cheap CPU QPC) |
+| 3 | Encoder | existing `encode_window_` avg, output fps, encoder drops / NEED_MORE_INPUT | GPU (NVENC) | encode latency avg ms |
+| 4 | Muxer | mux throughput / queue not backing up | CPU | mux processing avg ms (NEW cheap CPU QPC) |
+| 5 | Disk | existing `write_window_` avg, low-disk guard | CPU | write avg ms |
 
-Frame Queue is backed by the **real frame/packet queue** that already exists between the encode and
-mux threads (`m_state.mux_queue`) plus the existing backpressure drop counters — it shows current
-(and peak) queue depth as a simple health indicator ("flowing" vs "backing up"), never a duration,
-and is never a bottleneck candidate (a parallel buffer, not a serial per-frame cost). The exact
-queue handle and depth accessor are pinned in the implementation plan; the card must not invent a
-queue that doesn't exist — if no meaningful depth is available it shows a neutral "—".
+\* Compositor/Encoder run on the GPU, but their numbers are **CPU-observed** (submit / submit→ready
+latency). The card's tag shows the true resource; the tooltip notes the number is "CPU submit
+(GPU execution time not measured in this view)". This is honest and matches how the existing LIVE
+PIPELINE panel already reports compositor/encoder.
+
+Frame Queue is backed by the **real frame/packet queue** between the encode and mux threads
+(`m_state.mux_queue`) plus existing backpressure counters — a health indicator, never a duration,
+never a bottleneck candidate. If no meaningful depth is available it shows a neutral "—". The exact
+queue handle/accessor is pinned in the plan; the card must not invent a queue that doesn't exist.
 
 ## Measurement & Data Flow
 
-**Hybrid, sampled, low-overhead** (recording is the use case; 0.5 s card refresh is acceptable, so
-we trade temporal granularity for near-zero hot-path cost):
+Reuse first; add only negligible CPU instrumentation:
 
-- **True GPU stages (Compositor incl. VPBlt) — D3D11 timestamps:** a new `GpuTimestampSampler`
-  (in `recorder_core`) wrapping D3D11 timestamp queries — one `D3D11_QUERY_TIMESTAMP_DISJOINT` per
-  sampled frame plus `D3D11_QUERY_TIMESTAMP` begin/end pairs around the composite shader pass and
-  the `VideoProcessorBlt`. A small ring (2–3 frame slots) defers readback so `GetData` never stalls
-  the pipeline (read a slot 2–3 frames old; skip if `S_FALSE`/not ready). Duration ms =
-  `(end - begin) / disjoint.Frequency * 1000`, **discarded when `disjoint.Disjoint == TRUE` or
-  `Frequency == 0`** (see Reliability below). This is the only component that uses D3D11 timestamps.
-- **Encoder (NVENC) — CPU-observed submit→ready latency, NOT D3D11 timestamps:** NVENC runs on a
-  dedicated encoder ASIC driven through the NVENC API, *not* the D3D11 command stream, so a D3D11
-  timestamp query around the encode call measures nothing meaningful. The honest, GPU-relevant
-  number is the latency from `EncodeFrame` submit to bitstream-ready — exactly what the existing
-  `encode_window_` (`OnEncodeLatency`) already captures. The Encoder card is tagged "GPU (NVENC)"
-  but its number is CPU-observed by construction; no timestamp query is added for it.
-- **CPU stages (Acquire, Muxer, Disk):** plain QPC start/stop, also only on sampled frames.
-- **Sampling:** measure roughly every Nth frame so ~5–10 samples/s reach the rolling windows
-  (e.g. `N = max(1, target_fps / 8)`). Non-sampled frames carry zero query/timing overhead.
-- **Aggregation:** all durations feed `RollingTimeWindow`s in `PipelineDiagnosticsAggregator`.
-  New windows: `acquire_window_` (CPU), `compositor_gpu_window_` + `vpblt_gpu_window_` (GPU),
-  `mux_window_` (CPU). Reused as-is: `encode_window_` (Encoder card), `write_window_` (Disk card),
-  and `compositor_window_` (existing CPU-submit — kept as the Compositor card's fallback and for the
-  untouched LIVE PIPELINE panel). New fields land in `CaptureDiagnostics`
-  (`pipeline_diagnostics.h:88`) and the relevant per-stage diagnostic structs, each guarded by a
-  `MetricAvailability` flag plus a "measured via GPU timestamp vs CPU submit" marker for the GPU
-  stages.
+- **Reused as-is (no new cost):** `CaptureDiagnostics` fps/interval/drop/dup counters;
+  `compositor_window_`, `encode_window_`, `write_window_` rolling averages; low-disk state. These
+  already flow in `RecordingDiagnosticsSnapshot`.
+- **New, negligible CPU `QueryPerformanceCounter` brackets** (no GPU work, no sync): acquire+copy
+  duration (Source Capture), `VideoProcessorBlt` submit duration (folded into Compositor), mux
+  processing duration (Muxer). Each feeds a new `RollingTimeWindow` (`acquire_window_`,
+  `vpblt_window_`, `mux_window_`) in `PipelineDiagnosticsAggregator`. A QPC bracket around a call is
+  a few nanoseconds — safe to run every frame; no sampling machinery needed.
+- **New queue-depth gauge:** read the existing `mux_queue` depth (and a peak) into the snapshot.
+- **New snapshot fields:** the three durations (avg/peak/latest), queue depth, and per-stage
+  `StageHealth` inputs land in `CaptureDiagnostics` / the relevant per-stage structs, each guarded by
+  a `MetricAvailability` flag (e.g. acquire shape differs for WGC vs DXGI-OD; compositor inactive
+  when no overlay).
 - **Transport:** the existing `DiagnosticsCallback` (~5 Hz). **The UI throttles applying to the
-  cards to 2 Hz (0.5 s)** — a timestamp/last-applied guard in the page's apply path, independent of
-  the LIVE PIPELINE panel which keeps its current cadence.
+  cards to 2 Hz (0.5 s)** via a last-applied timestamp guard in the page's apply path — independent
+  of the LIVE PIPELINE panel, which keeps its cadence.
 
-## Bottleneck — pure resolver
+## Health & Bottleneck — pure resolver
 
-A free, unit-testable function decides bottleneck status; the UI only renders the verdict:
+A free, unit-testable function classifies each stage and picks the bottleneck; the UI only renders
+the verdict:
 
 ```cpp
-// frame_budget_ms = 1000.0 / target_fps. A duration stage is a bottleneck when its average
-// exceeds the per-frame budget — i.e. it cannot sustain the target rate. Non-duration stages
-// (Frame Queue) and unavailable stages are never bottlenecks.
-struct StageTiming { StageId id; double avg_ms; bool is_duration_stage; bool available; };
-struct BottleneckVerdict { /* per-stage is_bottleneck flag */ };
-BottleneckVerdict ResolvePipelineBottleneck(std::span<const StageTiming> stages,
+enum class StageHealth { Healthy, Busy, Bottleneck };
+
+// Per-stage inputs distilled from the snapshot (fps ratio, drop deltas, latency vs budget,
+// queue trend), plus the frame budget (1000/target_fps). A stage is:
+//  - Bottleneck: it cannot keep up — e.g. a duration stage whose avg exceeds the frame budget,
+//    OR a stage shedding frames (capture coalesce / encoder NEED_MORE_INPUT / backpressure) over
+//    the window, OR disk write breaching budget / low-disk.
+//  - Busy: working hard but keeping up (near budget) — informational, no alarm.
+//  - Healthy: comfortably within budget, no drops.
+// Frame Queue is a depth/health indicator and is never classified Bottleneck.
+struct StageSignals { StageId id; double avg_ms; double fps_ratio; uint32_t recent_drops;
+                      bool is_duration_stage; bool available; /* ... */ };
+struct PipelineHealthVerdict { /* per-stage StageHealth + the primary bottleneck id, if any */ };
+PipelineHealthVerdict ResolvePipelineHealth(std::span<const StageSignals> stages,
                                             double frame_budget_ms);
 ```
 
-When all stages are within budget, no card is highlighted (the "only real bottleneck" decision).
-When a stage breaches budget, its card gets a warning color (amber/coral) and a plain-language
-hint, e.g. "Encoder can't keep up with 60 fps."
+Per the "only real bottleneck" decision: when every stage is keeping up, **no card is alarmed**
+(cards read Healthy/Busy). Only a stage that genuinely can't keep up turns Bottleneck (warning
+color + plain-language hint, e.g. "Encoder can't keep up with 60 fps"). "Busy" is a calm middle
+state, not an alarm.
 
 ## States & Fallback
 
-- **Idle (not recording):** cards show the static readiness/capability status (as today, without the
+- **Idle (not recording):** cards show the static readiness/capability status (as today, minus the
   "not instrumented yet" notes).
-- **Recording:** live avg durations + resource tags, bottleneck highlight only on budget breach.
-- **GPU timestamp unreliable** (`disjoint.Disjoint == TRUE`, `Frequency == 0`, query unsupported,
-  or `DXGI_ERROR_DEVICE_REMOVED`): the affected GPU card falls back to its CPU-submit measurement
-  (compositor/encode already have CPU-submit windows) and the tooltip marks it "CPU submit (GPU time
-  unavailable)". A single disjoint sample is simply dropped (keep the last good average); only a
-  persistent disjoint condition flips the card to the CPU-submit label. **Never crash, never show a
-  fabricated number.**
-
-### When is a GPU timestamp "unreliable"?
-
-The D3D11 disjoint query reports `Disjoint == TRUE` when the GPU clock frequency was **not constant**
-across the begin/end window, so the tick delta can't be converted to a trustworthy time. In a
-recording-while-gaming scenario the dominant cause is **GPU DVFS / boost-clock changes under
-variable game load** — exactly when the GPU ramps clocks up/down, which is common during gameplay.
-Other causes: the GPU transitioning out of an idle/clock-gated state; a TDR/device reset
-(`DXGI_ERROR_DEVICE_REMOVED`); `Frequency == 0`; and drivers/feature levels (or WARP/software
-adapters) where timestamp queries aren't reliably supported. (`GetData` returning `S_FALSE` is *not*
-unreliability — the sample just isn't ready yet; defer the read.) Because disjoint samples are
-expected intermittently, the design **discards** them rather than treating them as errors, and only
-a *sustained* disjoint/unsupported condition switches the card to the CPU-submit fallback label.
-
-## Testing
-
-- **Pure:** `ResolvePipelineBottleneck` — within-budget → none; one/multiple over-budget; Frame
-  Queue excluded; unavailable/partial data; empty input.
-- **Aggregator:** new rolling windows produce correct avg/peak from fed samples.
-- **UI:** `PipelineFlow` card reflects snapshot fields (avg ms, resource tag, bottleneck highlight,
-  idle↔live transition, CPU-submit fallback marker).
-- **GPU sampler hot-path:** dev-machine-verified by a real recording (not headless), as with the CFR
-  pacer — confirm cards populate, durations are plausible, no stutter introduced, disjoint samples
-  are dropped gracefully.
+- **Recording:** live status chips + resource tags + secondary numbers; bottleneck only when a
+  stage can't keep up.
+- **Metric unavailable** (e.g. compositor inactive with no overlay; acquire metric n/a for a capture
+  mode): the card shows its status from the signals that *are* available and renders the missing
+  number as "—". Never crash, never fabricate a number.
 
 ## File / Component Map
 
 | File | Change |
 |------|--------|
-| `libs/recorder_core/src/gpu_timestamp_sampler.{h,cpp}` | NEW — sampled D3D11 timestamp ring for the composite pass + VPBlt only (NOT NVENC) |
-| `libs/recorder_core/include/recorder_core/pipeline_bottleneck.{h}` + `src/.cpp` | NEW — pure `ResolvePipelineBottleneck` + `StageTiming`/`BottleneckVerdict` |
-| `libs/recorder_core/include/recorder_core/pipeline_diagnostics.h` | New `CaptureDiagnostics`/stage fields (acquire/vpblt/mux avg+peak+latest, queue depth, availability + GPU/CPU-source markers) |
-| `libs/recorder_core/src/pipeline_diagnostics_aggregator.{h,cpp}` | New `acquire_window_`, `compositor_gpu_window_`, `vpblt_gpu_window_`, `mux_window_`; `OnAcquireLatency`/`OnCompositeGpu`/`OnVpbltGpu`/`OnMuxLatency`; queue-depth gauge |
-| `libs/recorder_core/src/video_thread.cpp` | QPC around Acquire; `GpuTimestampSampler` around Composite + VPBlt only; sampling cadence (encode keeps existing CPU-observed window) |
-| `libs/recorder_core/src/mux_thread.cpp` | QPC around mux processing (distinct from existing disk-write tap) |
-| `app/pages/DiagnosticsPage.cpp` | Light up PipelineFlow cards 0–5 from the live snapshot; 2 Hz throttle; idle↔live; bottleneck render |
-| `app/ui/widgets/PipelineFlow.{h,cpp}` | Card face: avg ms + CPU/GPU tag + bottleneck color + tooltip(peak/fallback) |
-| tests | `ResolvePipelineBottleneck`, aggregator windows, PipelineFlow card |
+| `libs/recorder_core/include/recorder_core/pipeline_health.h` + `src/pipeline_health.cpp` | NEW — pure `StageHealth`/`StageSignals`/`PipelineHealthVerdict` + `ResolvePipelineHealth` |
+| `libs/recorder_core/include/recorder_core/pipeline_diagnostics.h` | New fields: acquire/vpblt/mux avg+peak+latest, queue depth+peak, per-stage availability; (no GPU-timing fields) |
+| `libs/recorder_core/src/pipeline_diagnostics_aggregator.{h,cpp}` | New `acquire_window_`, `vpblt_window_`, `mux_window_`; `OnAcquireLatency`/`OnVpbltSubmit`/`OnMuxLatency`; queue-depth gauge |
+| `libs/recorder_core/src/video_thread.cpp` | Cheap QPC around Acquire and around `VideoProcessorBlt` submit (no GPU queries) |
+| `libs/recorder_core/src/mux_thread.cpp` | Cheap QPC around mux processing; expose `mux_queue` depth |
+| `app/pages/DiagnosticsPage.cpp` | Light up PipelineFlow cards 0–5 from the live snapshot via `ResolvePipelineHealth`; 2 Hz throttle; idle↔live |
+| `app/ui/widgets/PipelineFlow.{h,cpp}` | Card face: status chip + CPU/GPU tag + secondary number + tooltip (peak / CPU-submit note) |
+| tests | `ResolvePipelineHealth`, aggregator windows, PipelineFlow card |
 
-## Open follow-ups (out of scope here)
+## Testing
 
-- True GPU utilization/VRAM (NVML/NVAPI) — capability-gated, later.
-- Acquire latency for WGC vs DXGI-OD has different shapes; both measured, availability-flagged.
+- **Pure:** `ResolvePipelineHealth` — all-healthy → no bottleneck; one/multiple stages over budget;
+  drop-driven bottleneck (capture coalesce, encoder NEED_MORE_INPUT, backpressure); disk
+  budget/low-disk; Frame Queue never Bottleneck; unavailable/partial inputs; empty.
+- **Aggregator:** new rolling windows + queue gauge produce correct avg/peak/depth from fed samples.
+- **UI:** `PipelineFlow` card reflects snapshot (status chip, resource tag, secondary number,
+  bottleneck highlight, idle↔live transition, "—" when unavailable).
+- No dev-machine GPU verification needed in v1 (no GPU timestamp queries); a real recording is a nice
+  sanity check that the cards populate and statuses are plausible.
+
+## Optional follow-up (deferred, out of scope here)
+
+- **Precise per-stage GPU timing** via a `GpuTimestampSampler` (D3D11 `TIMESTAMP_DISJOINT` +
+  `TIMESTAMP` begin/end around the composite pass and `VideoProcessorBlt`, sampled ~8/s,
+  `GetData` with `DONOTFLUSH`, deferred 2–3-frame readback so it never stalls). It would add a true
+  GPU-ms number to Compositor. Caveat that motivated deferral: the disjoint query reports
+  `Disjoint == TRUE` whenever the GPU clock changed across the window — common under gaming DVFS —
+  so samples are intermittently discarded; only a sustained disjoint/unsupported condition would
+  flip to a CPU-submit label. NVENC encode is **not** measurable this way (separate ASIC, not on the
+  D3D11 timeline) — it stays CPU-observed regardless.
+- True GPU utilization / VRAM (NVML/NVAPI) — capability-gated, later.
