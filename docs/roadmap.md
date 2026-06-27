@@ -211,6 +211,8 @@ Scope, kept tight to avoid ballooning:
    FAT32, unsupported codec on this GPU, audio-format mismatch). Explicitly **not** runtime checks for
    already-fixed internal bugs — those are covered by regression tests and would be dead weight.
 
+- **Capture-card live wiring (health-first v1):** the six CAPTURE PIPELINE cards show live status (Healthy/Busy/Bottleneck) + CPU/GPU tag + one secondary number during recording, via a pure `ResolvePipelineHealth` resolver and cheap CPU timing brackets (no GPU timestamp queries).
+
 **Post-flight** is intentionally minimal here (a report card surfacing the already-accumulated live
 stats); the full post-flight integrity analysis is the natural content of the 0.9.0 Edit/Output/Save
 "Review" step and lands there.

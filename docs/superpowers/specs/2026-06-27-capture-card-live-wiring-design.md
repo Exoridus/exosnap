@@ -1,7 +1,7 @@
 # Capture-Card Live Wiring — Design
 
 **Date:** 2026-06-27
-**Status:** Approved (brainstorming). Next: implementation plan (writing-plans).
+**Status:** Delivered (0.8.0 Diagnostics wave). Implemented per docs/superpowers/plans/2026-06-27-capture-card-live-wiring.md.
 **Wave:** 0.8.0 Diagnostics (follows ADR 0033 diagnostics engine; sibling of the CFR pacing slice).
 **Branch:** feat/0.8.0-diagnostics
 
