@@ -253,6 +253,7 @@ add_library(recorder_core STATIC
     src/audio_meter.cpp
     src/wgc_capture.cpp
     src/dxgi_od_capture_src.cpp
+    src/frame_pacing.cpp
     src/nvenc_encoder.cpp
     src/nvenc_video_encoder.cpp
     src/mf_aac_encoder.cpp

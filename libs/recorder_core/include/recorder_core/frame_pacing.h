@@ -17,11 +17,16 @@ enum class FramePacingMode : uint8_t {
 [[nodiscard]] std::size_t ComputePacingRingSize(uint32_t monitor_refresh_hz, uint32_t output_fps);
 
 // Result of SelectFrameForSlot: which ring entry to encode (or duplicate) for a CFR slot.
+// NOTE: this header is included from Qt translation units (via recorder_session.h),
+// where `emit` is a macro. Guard the field name so the struct stays Qt-safe.
+#pragma push_macro("emit")
+#undef emit
 struct PacingDecision {
     bool emit = false;          // true → encode ring[index]; false → duplicate previous slot
     std::size_t index = 0;      // valid iff emit
     uint32_t newly_dropped = 0; // fresh entries strictly older than the chosen one (skipped)
 };
+#pragma pop_macro("emit")
 
 // ring_present_qpc: present-time QPC of each LIVE ring entry, ASCENDING capture order.
 // slot_qpc: ideal present time of this output slot. last_emitted_present_qpc: present time
