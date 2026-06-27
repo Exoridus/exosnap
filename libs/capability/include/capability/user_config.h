@@ -2,6 +2,8 @@
 
 #include "config_types.h"
 
+#include <recorder_core/frame_pacing.h>
+
 #include <cstdint>
 
 namespace exosnap::capability {
@@ -18,6 +20,8 @@ struct UserRecorderConfig {
     uint32_t output_height = 0;
     uint32_t frame_rate_num = 60;
     uint32_t frame_rate_den = 1;
+    // CFR frame pacing mode (ADR 0035). Smooth = phase-correct (default); Newest = lowest-latency.
+    recorder_core::FramePacingMode frame_pacing = recorder_core::FramePacingMode::Smooth;
 };
 
 } // namespace exosnap::capability

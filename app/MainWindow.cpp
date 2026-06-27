@@ -699,6 +699,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
                                              : changes_summary;
                     if (QMessageBox::question(this, QStringLiteral("Apply fix"), body) != QMessageBox::Yes)
                         return;
+                    if (fix_id == QStringLiteral("fix.frame_pacing.smooth")) {
+                        // Video-settings-only fix: switch pacing mode, propagate, refresh UI.
+                        video_settings_.frame_pacing = recorder_core::FramePacingMode::Smooth;
+                        if (config_page_)
+                            config_page_->setVideoSettings(video_settings_);
+                        if (record_page_)
+                            record_page_->setVideoSettings(video_settings_);
+                        if (config_page_)
+                            config_page_->setPresetDirty(preset_registry_.IsSelectedDirty(captureLiveConfig()));
+                        refreshDiagnosticsData();
+                        diagnostics::AppLog::info(QStringLiteral("diagnostics"),
+                                                  QStringLiteral("Applied fix %1").arg(fix_id));
+                        return;
+                    }
                     if (fix_id == QStringLiteral("fix.codec.video.default"))
                         output_settings_.video_codec = capability::VideoCodec::H264Nvenc;
                     else if (fix_id == QStringLiteral("fix.codec.audio.default"))

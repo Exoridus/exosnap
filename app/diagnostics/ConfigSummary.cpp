@@ -133,6 +133,7 @@ capability::UserRecorderConfig UserConfigFromSettings(const OutputSettingsModel&
     config.color_range = output.color_range;
     config.frame_rate_num = video.frame_rate_num == 0 ? 60 : video.frame_rate_num;
     config.frame_rate_den = video.frame_rate_den == 0 ? 1 : video.frame_rate_den;
+    config.frame_pacing = video.frame_pacing;
     if (const auto fixed_size = PresetOutputSize(output.resolution.mode)) {
         config.output_width = fixed_size->width;
         config.output_height = fixed_size->height;

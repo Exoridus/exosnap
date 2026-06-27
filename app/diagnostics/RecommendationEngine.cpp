@@ -164,6 +164,29 @@ void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checkli
     r.fix_action = fa;
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
+
+    // ADR 0035 / Task 6: when judder fires AND the user is on Newest pacing, offer a second
+    // result (one primary fix_action per result) to switch to Smooth (phase-correct) pacing.
+    // Smooth is the default and already eliminates this class of judder, so no fix is needed
+    // when the user is already on Smooth.
+    if (config_.frame_pacing == recorder_core::FramePacingMode::Newest) {
+        DiagnosticResult pr = MakeResult(
+            "rec.pacing.smooth", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+            "Smooth frame pacing recommended", "Phase-correct pacing removes judder from high-refresh / VRR sources.",
+            "Your recording uses Newest frame pacing; the measured judder is exactly what "
+            "Smooth (phase-correct) pacing fixes.",
+            "Frame pacing: Newest", "Switch to Smooth frame pacing in Advanced Video settings.");
+        FixAction pfa;
+        pfa.id = "fix.frame_pacing.smooth";
+        pfa.label = "Switch to Smooth pacing";
+        pfa.safety = FixAction::Safety::Auto; // safe, reversible, config-only
+        pfa.reversible = true;
+        pfa.changes_summary =
+            "Sets video frame pacing to Smooth (phase-correct). Reversible in Advanced Video settings.";
+        pr.fix_action = pfa;
+        checklist.has_notice = true;
+        checklist.results.push_back(std::move(pr));
+    }
 }
 
 void RecommendationEngine::checkMp4CrashResilience(DiagnosticChecklist& checklist) const {
