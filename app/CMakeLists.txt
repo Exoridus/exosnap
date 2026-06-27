@@ -953,6 +953,18 @@ exosnap_add_gtest(
 )
 target_include_directories(present_provider_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
+# Task 2: Pure PresentMon present-mode mapping. Maps raw present events (POD) to our
+# diagnostics::PresentSample. No Win32/ETW headers; unit-testable in isolation.
+exosnap_add_gtest(
+    NAME present_mapping_tests
+    TEST_PREFIX present_mapping.
+    SOURCES
+        tests/test_present_mode_mapping.cpp
+        diagnostics/PresentModeMapping.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(present_mapping_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 exosnap_add_gtest(
     NAME source_picker_dialog_tests
     TEST_PREFIX source.
