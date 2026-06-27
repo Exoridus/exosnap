@@ -22,7 +22,6 @@
 #include "../visual_tests/VisualScenario.h"
 #endif
 
-#include <capability/capability_builder.h>
 #include <capability/resolver.h>
 #include <capability/user_config.h>
 #include <recorder_core/audio_input_device.h>
@@ -2237,6 +2236,9 @@ void RecordPage::setActiveProfileName(const std::string& profile_name) {
 void RecordPage::setRuntimeCapabilities(const capability::CapabilitySet& caps) {
     shared_runtime_caps_ = caps;
     shared_runtime_caps_received_ = true;
+    // If coordinator init was deferred because caps weren't ready yet, trigger it now.
+    if (coordinator_needs_init_)
+        ensureCoordinatorInit();
     updateRecReadiness();
 }
 
@@ -3216,6 +3218,11 @@ void RecordPage::startPreviewIfIdle() {
 }
 
 void RecordPage::ensureCoordinatorInit() {
+    // Do not proceed until runtime capabilities have been received; leave
+    // coordinator_needs_init_ armed so the re-arm in setRuntimeCapabilities()
+    // triggers this again when caps land.
+    if (coordinator_needs_init_ && !shared_runtime_caps_received_)
+        return;
     if (coordinator_needs_init_) {
         coordinator_needs_init_ = false;
         initCoordinator();
@@ -3254,16 +3261,12 @@ void RecordPage::initCoordinator() {
     coordinator_->SetWebcamSettings(current_webcam_settings_);
 
     try {
-        if (shared_runtime_caps_received_) {
-            capability::SettingsResolver resolver(shared_runtime_caps_);
-            const auto validation = resolver.ValidateConfig(primaryRecorderConfig());
-            coordinator_->OnCapabilitiesReady(shared_runtime_caps_, validation);
-        } else {
-            const auto caps = capability::CapabilityBuilder::BuildFromHardwareQuery();
-            capability::SettingsResolver resolver(caps);
-            const auto validation = resolver.ValidateConfig(primaryRecorderConfig());
-            coordinator_->OnCapabilitiesReady(caps, validation);
-        }
+        // Caps gate in ensureCoordinatorInit() guarantees we only reach here when
+        // shared_runtime_caps_received_ is true; the sync fallback probe is gone.
+        Q_ASSERT(shared_runtime_caps_received_);
+        capability::SettingsResolver resolver(shared_runtime_caps_);
+        const auto validation = resolver.ValidateConfig(primaryRecorderConfig());
+        coordinator_->OnCapabilitiesReady(shared_runtime_caps_, validation);
     } catch (const std::exception& ex) {
         coordinator_->OnCapabilityFailure(L"Capability check failed.");
         diagnostics::AppLog::error(
