@@ -694,3 +694,12 @@ include(GoogleTest)
 # DLL copies above are registered before discovery, so the build-time
 # discovery run finds them. PRE_TEST must not be used (see exosnap_testing.cmake).
 gtest_discover_tests(test_mp4_remuxer TEST_PREFIX "recorder_core.")
+
+# ADR 0035 (0.8.0): phase-correct CFR pacing ring-size helper (pure; no D3D/NVENC).
+exosnap_add_gtest(
+    NAME frame_pacing_tests
+    TEST_PREFIX frame_pacing.
+    SOURCES tests/test_frame_pacing.cpp
+            src/frame_pacing.cpp
+)
+target_include_directories(frame_pacing_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
