@@ -279,6 +279,10 @@ qt_add_executable(exosnap WIN32
     diagnostics/ElevationProvider.h
     diagnostics/ElevationProvider.cpp
     diagnostics/PresentProvider.h
+    diagnostics/PresentModeMapping.h
+    diagnostics/PresentModeMapping.cpp
+    diagnostics/PresentMonEtwSession.h
+    diagnostics/PresentMonEtwSession.cpp
     diagnostics/PresentMonProvider.h
     diagnostics/PresentMonProvider.cpp
     diagnostics/DiskSpaceThresholds.h
