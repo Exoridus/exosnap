@@ -1385,6 +1385,44 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             fes_layout->addWidget(video_color_range_row_);
         }
 
+        // --- Frame pacing (ADR 0035 Slice 2) ---
+        // Smooth = phase-correct present-time-nearest selection (default, the recording
+        // use case). Newest = lowest-latency newest-at-tick (WGC fallback behaviour).
+        // Both are always valid — no codec/container gating. Only the recording lock
+        // disables it (see updateFramePacingControl()).
+        {
+            frame_pacing_row_ = new QWidget(fmt_expert_section_);
+            auto* pvl = new QVBoxLayout(frame_pacing_row_);
+            pvl->setContentsMargins(0, 0, 0, 0);
+            pvl->setSpacing(0);
+            auto* prule = new QFrame(frame_pacing_row_);
+            prule->setFrameShape(QFrame::HLine);
+            prule->setProperty("frameRole", "sectionRuleLine");
+            pvl->addWidget(prule);
+            auto* phl = new QHBoxLayout();
+            phl->setContentsMargins(0, 12, 0, 12);
+            phl->setSpacing(14);
+            auto* plbl = new QLabel(QStringLiteral("Frame pacing"), frame_pacing_row_);
+            plbl->setProperty("labelRole", "settingsRowLabel");
+            phl->addWidget(plbl, 0);
+            phl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kFramePacing, frame_pacing_row_), 0,
+                           Qt::AlignVCenter);
+            phl->addStretch(1);
+            frame_pacing_combo_ = new QComboBox(frame_pacing_row_);
+            frame_pacing_combo_->setObjectName(QStringLiteral("framePacingSelect"));
+            frame_pacing_combo_->addItem(QStringLiteral("Smooth (phase-correct)"),
+                                         static_cast<int>(recorder_core::FramePacingMode::Smooth));
+            frame_pacing_combo_->addItem(QStringLiteral("Newest (lowest latency)"),
+                                         static_cast<int>(recorder_core::FramePacingMode::Newest));
+            frame_pacing_combo_->setFixedWidth(160);
+            frame_pacing_combo_->setProperty("settingsRowInput", true);
+            phl->addWidget(frame_pacing_combo_, 0, Qt::AlignVCenter);
+            pvl->addLayout(phl);
+            frame_pacing_row_->setProperty("settingsRow", true);
+            frame_pacing_row_->setProperty("expertEdge", true); // P3: left accent edge
+            fes_layout->addWidget(frame_pacing_row_);
+        }
+
 #ifndef NDEBUG
         // --- Roadmap dummy rows (Debug only — hidden in Release builds) ---
         // These are real, enabled controls wired to nothing, used so the roadmap
@@ -2772,6 +2810,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             &ConfigPage::onVideoBitDepthChanged);
     connect(video_color_range_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onVideoColorRangeChanged);
+    connect(frame_pacing_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+        if (idx < 0 || !frame_pacing_combo_)
+            return;
+        video_settings_.frame_pacing =
+            static_cast<recorder_core::FramePacingMode>(frame_pacing_combo_->itemData(idx).toInt());
+        emitCurrentVideoSettings();
+    });
     connect(audio_codec_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onAudioCodecChanged);
     connect(profile_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -3447,6 +3492,29 @@ void ConfigPage::updateVideoColorRangeControl() {
     }
 }
 
+void ConfigPage::updateFramePacingControl() {
+    if (!frame_pacing_combo_ || !frame_pacing_row_)
+        return;
+
+    // Frame pacing is ALWAYS valid for every codec and container — no capability
+    // gating here. Only the recording lock disables it.
+    const bool locked = controls_locked_;
+    {
+        const QSignalBlocker b(frame_pacing_combo_);
+        const int idx = frame_pacing_combo_->findData(static_cast<int>(video_settings_.frame_pacing));
+        frame_pacing_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* Smooth */);
+    }
+
+    frame_pacing_combo_->setEnabled(!locked);
+    if (locked) {
+        frame_pacing_combo_->setToolTip(QStringLiteral("Cannot change during recording"));
+        frame_pacing_combo_->setCursor(Qt::ForbiddenCursor);
+    } else {
+        frame_pacing_combo_->setToolTip(QString());
+        frame_pacing_combo_->unsetCursor();
+    }
+}
+
 void ConfigPage::updateAudioCodecChoices() {
     const QSignalBlocker blocker(audio_codec_combo_);
     // Rebuild the list so the lossless codecs (PCM + FLAC, MKV-only) appear only
@@ -3712,6 +3780,13 @@ void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
         const bool needs_bitrate = (settings.rate_control == recorder_core::RateControlMode::VariableBitrate ||
                                     settings.rate_control == recorder_core::RateControlMode::ConstantBitrate);
         bitrate_row_widget_->setVisible(expert_mode_enabled_ && needs_bitrate);
+    }
+
+    // ADR 0035 Slice 2: sync frame-pacing combo from loaded preset.
+    if (frame_pacing_combo_) {
+        const QSignalBlocker pb(frame_pacing_combo_);
+        const int idx = frame_pacing_combo_->findData(static_cast<int>(settings.frame_pacing));
+        frame_pacing_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* Smooth */);
     }
 
     updateQualitySegmentSelection();
@@ -5027,6 +5102,8 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     updateVideoBitDepthControl();
     // 0.7.0: colour-range combo honours the recording lock (never codec-gated).
     updateVideoColorRangeControl();
+    // ADR 0035 Slice 2: frame-pacing combo honours the recording lock (never codec-gated).
+    updateFramePacingControl();
 
     quality_combo_->setEnabled(enabled);
     if (quality_preset_combo_)
