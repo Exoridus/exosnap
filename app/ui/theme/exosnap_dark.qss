@@ -1817,20 +1817,6 @@ QLabel[labelRole="previewMeta"] {
     color: ${text2};
 }
 
-QLabel[labelRole="previewCenterTitle"] {
-    font-family: ${font-mono};
-    font-size: 13px;
-    letter-spacing: 0.12em;
-    color: ${text2};
-}
-
-QLabel[labelRole="previewCenterSubtitle"] {
-    font-family: ${font-mono};
-    font-size: 14px;
-    letter-spacing: 0.14em;
-    color: ${text2};
-}
-
 QLabel[labelRole="previewBottomText"] {
     font-family: ${font-mono};
     font-size: 11px;

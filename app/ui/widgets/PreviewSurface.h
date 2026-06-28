@@ -22,8 +22,6 @@ class DxgiPreviewRenderer;
 
 namespace exosnap::ui::widgets {
 
-class StatusPill;
-
 class PreviewSurface : public QWidget {
     Q_OBJECT
   public:
@@ -62,18 +60,13 @@ class PreviewSurface : public QWidget {
     [[nodiscard]] bool isDxgiPreviewActive() const noexcept;
     void repositionDxgiPreview();
 
-    void setStatusText(const QString& text);
     void setTopMetaText(const QString& text);
-    void setCenterTitle(const QString& text);
-    void setCenterSubtitle(const QString& text);
     // Help text shown under the branded empty-state placeholder (no live preview).
     // Empty => the default "No source selected — choose one to preview" prompt.
     void setPlaceholderHint(const QString& text);
     void setBottomLeftText(const QString& text);
     void setBottomRightText(const QString& text);
     void setFrameTone(FrameTone tone);
-
-    StatusPill* statusPill() const noexcept;
 
     void setWebcamFrame(QImage frame);
     void setWebcamOverlayEnabled(bool enabled);
@@ -174,14 +167,10 @@ class PreviewSurface : public QWidget {
     QRectF pre_interaction_rect_;
     bool drag_modifier_toggle_held_ = false;
 
-    StatusPill* status_pill_ = nullptr;
     QLabel* top_meta_label_ = nullptr;
-    QLabel* center_title_label_ = nullptr;
-    QLabel* center_subtitle_label_ = nullptr;
     QLabel* bottom_left_label_ = nullptr;
     QLabel* bottom_right_label_ = nullptr;
     QWidget* top_row_ = nullptr;
-    QWidget* center_box_ = nullptr;
     QWidget* bottom_row_ = nullptr;
     bool recording_ = false;
     FrameTone frame_tone_ = FrameTone::Ready;

@@ -2581,8 +2581,6 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
         test_frame.fill(QColor(28, 37, 46));
         preview_surface_->setLiveFrame(test_frame);
         preview_surface_->setTopMetaText(QStringLiteral("VISUAL TEST TARGET"));
-        preview_surface_->setCenterTitle(QStringLiteral("Visual test preview"));
-        preview_surface_->setCenterSubtitle(QStringLiteral("Synthetic deterministic frame"));
         preview_surface_->setBottomLeftText(QStringLiteral("Display 1 · 2560x1440"));
         preview_surface_->setBottomRightText(QStringLiteral("Native · 60 fps CFR · AV1 · Opus · WEBM"));
         preview_surface_->setFrameTone(ui::widgets::PreviewSurface::FrameTone::Ready);
@@ -2702,8 +2700,6 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
         setInteractionMode(InteractionMode::Countdown);
         if (preview_surface_) {
             preview_surface_->setFrameTone(ui::widgets::PreviewSurface::FrameTone::Warn);
-            preview_surface_->setCenterTitle(QString::number((std::max)(1, scenario.countdown_remaining)));
-            preview_surface_->setCenterSubtitle(QStringLiteral("Visual test countdown state"));
         }
         break;
     case visual::VisualRecordState::Recording:
@@ -2712,16 +2708,12 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
         view_model_.SetState(UiRecordingState::Recording);
         if (preview_surface_) {
             preview_surface_->setFrameTone(ui::widgets::PreviewSurface::FrameTone::Recording);
-            preview_surface_->setCenterTitle(QStringLiteral("Recording"));
-            preview_surface_->setCenterSubtitle(QStringLiteral("Visual test technical recording view"));
         }
         break;
     case visual::VisualRecordState::Paused:
         view_model_.SetState(UiRecordingState::Paused);
         if (preview_surface_) {
             preview_surface_->setFrameTone(ui::widgets::PreviewSurface::FrameTone::Warn);
-            preview_surface_->setCenterTitle(QStringLiteral("Paused"));
-            preview_surface_->setCenterSubtitle(QStringLiteral("Visual test recording state is frozen"));
         }
         break;
     case visual::VisualRecordState::Completed: {
@@ -2824,10 +2816,6 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
             }
         }
 
-        if (preview_surface_) {
-            preview_surface_->setCenterTitle(QStringLiteral("Recording saved"));
-            preview_surface_->setCenterSubtitle(scenario.result_file_name);
-        }
         break;
     }
     case visual::VisualRecordState::Ready:
@@ -5416,21 +5404,12 @@ void RecordPage::refresh() {
     output_path_label_->setText(QString::fromStdWString(view_model_.output_path_display));
 
     preview_surface_->setRecording(recording);
-    preview_surface_->setStatusText(status_text);
-    preview_surface_->statusPill()->setDotVisible(recording || checking || starting);
-    preview_surface_->statusPill()->setTone((blocked || failed) ? ui::widgets::StatusPill::Tone::Blocked
-                                            : active_recording  ? ui::widgets::StatusPill::Tone::Recording
-                                            : (paused || checking || starting || stopping)
-                                                ? ui::widgets::StatusPill::Tone::Warn
-                                                : ui::widgets::StatusPill::Tone::Ready);
     preview_surface_->setFrameTone((blocked || failed) ? ui::widgets::PreviewSurface::FrameTone::Blocked
                                    : active_recording  ? ui::widgets::PreviewSurface::FrameTone::Recording
                                    : (paused || checking || starting || stopping)
                                        ? ui::widgets::PreviewSurface::FrameTone::Warn
                                        : ui::widgets::PreviewSurface::FrameTone::Ready);
     QString target_desc = QStringLiteral("No target selected");
-    const bool has_selected_target = view_model_.selected_target_index >= 0 &&
-                                     view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
     if (view_model_.selected_target_index >= 0 &&
         view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {
         const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
@@ -5441,31 +5420,6 @@ void RecordPage::refresh() {
     } else {
         capture_header_->setMeta("NO TARGET");
         preview_surface_->setTopMetaText(QStringLiteral(""));
-    }
-
-    if (countdown) {
-        preview_surface_->setCenterTitle(QString::number((std::max)(1, countdown_remaining_seconds_)));
-        preview_surface_->setCenterSubtitle(QStringLiteral("Recording starts when countdown reaches zero"));
-    } else if (recording) {
-        if (paused) {
-            preview_surface_->setCenterTitle(QStringLiteral("PAUSED"));
-        } else if (stopping) {
-            preview_surface_->setCenterTitle(QStringLiteral("STOPPING"));
-        } else {
-            preview_surface_->setCenterTitle(QStringLiteral("REC"));
-        }
-        preview_surface_->setCenterSubtitle(target_desc);
-    } else if (blocked || failed) {
-        preview_surface_->setCenterTitle(failed ? QStringLiteral("ERROR") : QStringLiteral("BLOCKED"));
-        const QString blocker_text = QString::fromStdWString(view_model_.capability_status_text).trimmed();
-        preview_surface_->setCenterSubtitle(blocker_text.isEmpty() ? QStringLiteral("Check diagnostics for details")
-                                                                   : blocker_text);
-    } else {
-        const bool preview_live = preview_service_ && preview_service_->IsRunning();
-        preview_surface_->setCenterTitle(has_selected_target ? target_desc : QStringLiteral("NO TARGET"));
-        preview_surface_->setCenterSubtitle(
-            has_selected_target ? (preview_live ? QString{} : QStringLiteral("Static — preview unavailable in alpha"))
-                                : QStringLiteral("Select a capture source above"));
     }
 
     updateTargetCards();

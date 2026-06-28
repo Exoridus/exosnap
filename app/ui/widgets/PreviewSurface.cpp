@@ -3,7 +3,6 @@
 #include "../../diagnostics/AppLog.h"
 #include "../../services/DxgiPreviewRenderer.h"
 #include "../theme/ExoSnapTheme.h"
-#include "StatusPill.h"
 
 #include <QApplication>
 #include <QCursor>
@@ -166,42 +165,15 @@ PreviewSurface::PreviewSurface(QWidget* parent) : QWidget(parent) {
     top_layout->setContentsMargins(0, 0, 0, 0);
     top_layout->setSpacing(8);
 
-    status_pill_ = new StatusPill(top_row_);
-    status_pill_->setTone(StatusPill::Tone::Ready);
-    status_pill_->setText("READY");
     // DESIGN-FIDELITY: the live recording status lives in the title bar + meta strip,
     // NOT over the preview (suite-record.jsx:198 "live status moved OFF the preview
-    // surface"). Keep the widget for the statusPill() API but never show it so the
-    // preview stays clean — this also removes the stray "Checking" chip the probe drew.
-    status_pill_->setVisible(false);
-
+    // surface"), so the preview carries no status pill.
     top_meta_label_ = new QLabel("NO TARGET", top_row_);
     top_meta_label_->setObjectName("previewTopMetaLabel");
     top_meta_label_->setProperty("labelRole", "previewMeta");
 
-    top_layout->addWidget(status_pill_, 0, Qt::AlignVCenter);
     top_layout->addWidget(top_meta_label_, 0, Qt::AlignVCenter);
     top_layout->addStretch(1);
-
-    center_box_ = new QWidget(this);
-    center_box_->setAttribute(Qt::WA_TransparentForMouseEvents);
-    auto* center_layout = new QVBoxLayout(center_box_);
-    center_layout->setContentsMargins(0, 0, 0, 0);
-    center_layout->setSpacing(6);
-    center_layout->setAlignment(Qt::AlignCenter);
-
-    center_title_label_ = new QLabel("SELECTED TARGET", center_box_);
-    center_title_label_->setProperty("labelRole", "previewCenterTitle");
-    center_title_label_->setAlignment(Qt::AlignCenter);
-    center_subtitle_label_ = new QLabel("Preview not live in this alpha", center_box_);
-    center_subtitle_label_->setProperty("labelRole", "previewCenterSubtitle");
-    center_subtitle_label_->setAlignment(Qt::AlignCenter);
-
-    center_layout->addWidget(center_title_label_, 0, Qt::AlignCenter);
-    center_layout->addWidget(center_subtitle_label_, 0, Qt::AlignCenter);
-    // Superseded by the branded empty-state placeholder (paintBrandPlaceholder);
-    // kept for the setCenter* API but never shown so the two don't overlap.
-    center_box_->setVisible(false);
 
     bottom_row_ = new QWidget(this);
     bottom_row_->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -251,15 +223,11 @@ void PreviewSurface::setRecording(bool recording) {
     if (recording_ == recording)
         return;
     recording_ = recording;
-    center_box_->setVisible(current_frame_.isNull());
     update();
 }
 
 void PreviewSurface::setLiveFrame(QImage frame) {
     current_frame_ = std::move(frame);
-    // The empty state is now the branded placeholder (painted in paintEvent); the
-    // legacy center text box stays hidden so the two never overlap.
-    center_box_->setVisible(false);
     update();
 }
 
@@ -310,7 +278,6 @@ bool PreviewSurface::tryStartDxgiPreview(const recorder_core::CaptureTarget& tar
     applyDxgiPreviewResize();
     dxgi_active_ = true;
     current_frame_ = QImage{};
-    center_box_->setVisible(false);
     // The native child HWND occludes Qt painting, so push the current overlay
     // (video + placement + chrome) to the renderer to composite it WYSIWYG.
     syncWebcamOverlayToDxgi();
@@ -362,21 +329,9 @@ QRectF PreviewSurface::displayedFrameRectForSource(int srcW, int srcH) const {
     return {dx, dy, dw, dh};
 }
 
-void PreviewSurface::setStatusText(const QString& text) {
-    status_pill_->setText(text);
-}
-
 void PreviewSurface::setTopMetaText(const QString& text) {
     top_meta_full_ = text;
     applyOverlayTextElision();
-}
-
-void PreviewSurface::setCenterTitle(const QString& text) {
-    center_title_label_->setText(text);
-}
-
-void PreviewSurface::setCenterSubtitle(const QString& text) {
-    center_subtitle_label_->setText(text);
 }
 
 void PreviewSurface::setPlaceholderHint(const QString& text) {
@@ -420,7 +375,7 @@ void PreviewSurface::applyOverlayTextElision() {
     bottom_left_label_->setText(left);
     bottom_left_label_->setVisible(rows_usable && !left.trimmed().isEmpty());
 
-    const int meta_avail = row_width - status_pill_->sizeHint().width() - kSpacing;
+    const int meta_avail = row_width - kSpacing;
     const QString meta =
         top_meta_label_->fontMetrics().elidedText(top_meta_full_, Qt::ElideRight, std::max(0, meta_avail));
     top_meta_label_->setText(meta);
@@ -444,10 +399,6 @@ void PreviewSurface::setCountdownState(bool active, int remaining_seconds, int d
     countdown_remaining_ = remaining_seconds;
     countdown_duration_ = duration_seconds > 0 ? duration_seconds : 1;
     update();
-}
-
-StatusPill* PreviewSurface::statusPill() const noexcept {
-    return status_pill_;
 }
 
 // ---------------------------------------------------------------------------
@@ -1248,7 +1199,6 @@ void PreviewSurface::resizeEvent(QResizeEvent* event) {
     const int bottom_height = 24;
 
     top_row_->setGeometry(pad_x, pad_top, width() - (pad_x * 2), top_height);
-    center_box_->setGeometry(0, (height() - 90) / 2, width(), 90);
     bottom_row_->setGeometry(pad_x, height() - pad_bottom - bottom_height, width() - (pad_x * 2), bottom_height);
 
     applyOverlayTextElision();
