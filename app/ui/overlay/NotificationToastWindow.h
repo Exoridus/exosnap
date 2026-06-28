@@ -15,27 +15,32 @@ class NotificationManager;
 namespace exosnap::ui::overlay {
 
 // ---------------------------------------------------------------------------
-// NotificationToastWindow — NOTIFY-TOASTS-R1
+// NotificationToastWindow — NOTIFY-SKIN-R1
 // ---------------------------------------------------------------------------
 // Class-1 on-screen-only top-level window for transient notification toasts.
 // Mirrors RecordingOverlayWindow for all mandatory class-1 properties:
-//   - Qt::WindowTransparentForInput (click-through)
-//   - SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
+//   - WDA_EXCLUDEFROMCAPTURE (capture exclusion, not click-through)
 //   - If exclusion fails → hide and stay hidden for the session
 //
 // Placement: bottom-right corner of the PRIMARY display (not the recorded
 // monitor). Notifications are app-level events per ADR 0016.
 //
-// Visual: PLACEHOLDER QPainter pill stack. Final anatomy from NOTIFY-DESIGN-R1.
-// Each toast shows a status-colored leading dot, title, and body line.
-// Toasts stack vertically; the manager drives which events are visible.
-//
-// VISUAL PLACEHOLDER — final anatomy from NOTIFY-DESIGN-R1
+// Geometry note: the window is kCardWidth + 2*kShadowMargin wide and
+// kShadowMargin + stack_height + kShadowMargin tall. The card itself is
+// kCardWidth wide and sits at x = kShadowMargin inside the window. All
+// hit-test rects and the paint rects share the same window-space origin so
+// clicks can never drift off the visible buttons.
 //
 class NotificationToastWindow : public QWidget {
     Q_OBJECT
 
   public:
+    // ── Public geometry constants (exposed for tests and callers) ─────────
+    // The toast card itself is always kCardWidth px wide. The surrounding
+    // window is wider by 2 * kShadowMargin to accommodate the soft shadow.
+    static constexpr int kCardWidth = 372;   // px — toast card width
+    static constexpr int kShadowMargin = 20; // px — window padding for soft shadow penumbra
+
     explicit NotificationToastWindow(notifications::NotificationManager* manager, QWidget* parent = nullptr);
 
     // Returns true if SetWindowDisplayAffinity succeeded.
@@ -71,6 +76,7 @@ class NotificationToastWindow : public QWidget {
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
+    void leaveEvent(QEvent* event) override;
 
   private:
     void applyExclusion();
@@ -81,6 +87,11 @@ class NotificationToastWindow : public QWidget {
     notifications::NotificationManager* manager_ = nullptr; // non-owning
     bool excluded_ = false;
     bool exclusion_attempted_ = false;
+
+    // Index into computeHitTargets() for the currently hovered element, or -1.
+    // Updated in mouseMoveEvent / leaveEvent; read in paintEvent to draw hover
+    // feedback (pill lightening, × circle, secondary border brightening).
+    int hovered_target_ = -1;
 
     // ~30 fps repaint while non-sticky toasts are visible, so the countdown bar
     // animates smoothly. Stopped whenever only sticky toasts (or none) remain.

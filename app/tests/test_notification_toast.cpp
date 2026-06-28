@@ -210,7 +210,8 @@ TEST_F(NotificationToastTest, DismissAll_WindowHides) {
 
 // ── Skinned anatomy tests (NOTIFY-SKIN-R1) ────────────────────────────────────
 
-// The spec mandates 372px width.
+// The toast card is kCardWidth (372px) wide. The window is wider by 2 * kShadowMargin
+// on each side to accommodate the soft shadow penumbra.
 TEST_F(NotificationToastTest, SizeHint_Width_Is372px) {
     NotificationManager mgr;
     NotificationEvent e;
@@ -221,7 +222,8 @@ TEST_F(NotificationToastTest, SizeHint_Width_Is372px) {
     mgr.Enqueue(e);
 
     NotificationToastWindow window(&mgr, nullptr);
-    EXPECT_EQ(window.sizeHint().width(), 372);
+    const int expected_w = NotificationToastWindow::kCardWidth + 2 * NotificationToastWindow::kShadowMargin;
+    EXPECT_EQ(window.sizeHint().width(), expected_w);
 }
 
 // Non-sticky (Saved) must have positive height (includes countdown bar).
@@ -292,6 +294,9 @@ TEST_F(NotificationToastTest, PaintEvent_AllFourTypes_WithActions_NoFatalFailure
 }
 
 // Three stacked toasts must each contribute height separated by 12px gaps.
+// The window adds 2 * kShadowMargin once (top + bottom), shared across the stack.
+// So: h_n = 2*M + n*card_h + (n-1)*gap  where M = kShadowMargin.
+// Derived: h3 = 3*(h1 - 2*M) + 2*gap + 2*M  →  h3 = 3*h1 - 4*M + 2*gap.
 TEST_F(NotificationToastTest, SizeHint_ThreeEvents_HeightIsAdditive) {
     NotificationManager mgr;
     for (int i = 0; i < 3; ++i) {
@@ -317,8 +322,12 @@ TEST_F(NotificationToastTest, SizeHint_ThreeEvents_HeightIsAdditive) {
     NotificationToastWindow w1(&mgr1, nullptr);
     const int h1 = w1.sizeHint().height();
 
-    // 3-stack = 3 * single + 2 * gap(12)
-    EXPECT_EQ(h3, 3 * h1 + 2 * 12);
+    // With shadow margin M shared at window level:
+    //   h1 = 2*M + card_h
+    //   h3 = 2*M + 3*card_h + 2*gap  = 3*h1 - 4*M + 2*gap
+    const int M = NotificationToastWindow::kShadowMargin;
+    const int gap = 12;
+    EXPECT_EQ(h3, 3 * h1 - 4 * M + 2 * gap);
 }
 
 // The toast is now INTERACTIVE (✕ dismiss + action pills), so it must NOT carry
