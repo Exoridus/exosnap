@@ -518,17 +518,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     record_page_ = new RecordPage(stack_);
     config_page_ = new ConfigPage(output_settings_, video_settings_, stack_);
     // Deferred: hotkeys_page_ is built by buildHotkeysPage() after show().
-    // A cheap placeholder holds index kHotkeysPageIndex so diagnostics_page_ etc. get
-    // the correct subsequent indices without any re-numbering.
+    // A cheap placeholder holds index kHotkeysPageIndex so the diagnostics slot and
+    // subsequent pages get the correct indices without any re-numbering.
     hotkeys_placeholder_ = new QWidget(stack_);
     config_page_->setHotkeyService(hotkey_service_);
-    diagnostics_page_ = new DiagnosticsPage(stack_);
-    diagnostics_page_->setPresentProvider(&present_provider_);
-    diagnostics_page_->setDpcProvider(&dpc_provider_);
+    // Deferred: diagnostics_page_ is built by buildDiagnosticsPage() after show().
+    // A cheap placeholder holds index kDiagnosticsPageIndex so logs_page_ etc. get
+    // the correct subsequent indices without any re-numbering.
+    diagnostics_placeholder_ = new QWidget(stack_);
     stack_->addWidget(record_page_);
     stack_->addWidget(config_page_);
     stack_->addWidget(hotkeys_placeholder_);
-    stack_->addWidget(diagnostics_page_);
+    stack_->addWidget(diagnostics_placeholder_);
     // Deferred: logs_page_ is built by buildLogsPage() after show().
     // A cheap placeholder holds index kLogsPageIndex so webcam_page_ etc. get
     // the correct subsequent indices without any re-numbering.
@@ -700,61 +701,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     });
 
     // ---- FixAction routing (ADR 0033 / v0.8.0) ----
-    // Auto fixes apply a settings change directly after a confirm; Assisted fixes
-    // navigate to the relevant Settings section so the user finishes the change.
-    if (diagnostics_page_) {
-        connect(diagnostics_page_, &DiagnosticsPage::applyFixActionRequested, this,
-                [this](const QString& fix_id, const QString& changes_summary) {
-                    const QString body = changes_summary.isEmpty()
-                                             ? QStringLiteral("Apply this fix to your recording settings?")
-                                             : changes_summary;
-                    if (QMessageBox::question(this, QStringLiteral("Apply fix"), body) != QMessageBox::Yes)
-                        return;
-                    if (fix_id == QStringLiteral("fix.frame_pacing.smooth")) {
-                        // Video-settings-only fix: switch pacing mode, propagate, refresh UI.
-                        video_settings_.frame_pacing = recorder_core::FramePacingMode::Smooth;
-                        if (config_page_)
-                            config_page_->setVideoSettings(video_settings_);
-                        if (record_page_)
-                            record_page_->setVideoSettings(video_settings_);
-                        if (config_page_)
-                            config_page_->setPresetDirty(preset_registry_.IsSelectedDirty(captureLiveConfig()));
-                        refreshDiagnosticsData();
-                        diagnostics::AppLog::info(QStringLiteral("diagnostics"),
-                                                  QStringLiteral("Applied fix %1").arg(fix_id));
-                        return;
-                    }
-                    if (fix_id == QStringLiteral("fix.codec.video.default"))
-                        output_settings_.video_codec = capability::VideoCodec::H264Nvenc;
-                    else if (fix_id == QStringLiteral("fix.codec.audio.default"))
-                        output_settings_.audio_codec = capability::AudioCodec::AacMf;
-                    else
-                        return; // unknown auto fix — no-op
-                    // Propagate like a user-driven format change.
-                    if (config_page_)
-                        config_page_->setOutputSettings(output_settings_);
-                    if (record_page_)
-                        record_page_->setOutputSettings(output_settings_);
-                    if (config_page_)
-                        config_page_->setPresetDirty(preset_registry_.IsSelectedDirty(captureLiveConfig()));
-                    refreshCrashSessionContext();
-                    refreshDiagnosticsData();
-                    diagnostics::AppLog::info(QStringLiteral("diagnostics"),
-                                              QStringLiteral("Applied fix %1").arg(fix_id));
-                });
-        connect(diagnostics_page_, &DiagnosticsPage::openAssistedFixRequested, this, [this](const QString& fix_id) {
-            navigateToPage(kSettingsPageIndex);
-            if (!config_page_)
-                return;
-            if (fix_id == QStringLiteral("fix.output.change_folder") ||
-                fix_id == QStringLiteral("fix.output.fat32_folder"))
-                config_page_->scrollToSection(QStringLiteral("settings/output"));
-            else // fix.container.mkv / fix.fps.cap / fix.profile.select → format/quality area
-                config_page_->scrollToSection(QStringLiteral("settings/format"));
-            diagnostics::AppLog::info(QStringLiteral("diagnostics"),
-                                      QStringLiteral("Opened assisted fix %1").arg(fix_id));
-        });
-    }
+    // NOTE: diagnostics_page_ is deferred — these connects are wired in buildDiagnosticsPage().
 
     // ---- Preset selected (combo changed) ----
     connect(config_page_, &ConfigPage::presetSelected, this, [this](const QString& id) { onPresetSelected(id); });
@@ -886,11 +833,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         refreshDiagnosticsData();
         navigateToPage(kDiagnosticsPageIndex);
     });
-    connect(diagnostics_page_, &DiagnosticsPage::navigateToLogsRequested, this,
-            [this]() { navigateToPage(kLogsPageIndex); });
-    // Route live recording-pipeline diagnostics from the Record page's coordinator to
-    // the Diagnostics page (same UI thread; direct connection).
-    connect(record_page_, &RecordPage::diagnosticsUpdated, diagnostics_page_, &DiagnosticsPage::applyLiveDiagnostics);
+    // NOTE: diagnostics_page_ navigateToLogsRequested and diagnosticsUpdated (direct connect)
+    // are wired in buildDiagnosticsPage() after deferred construction.
     connect(config_page_, &ConfigPage::webcamDetailsRequested, this, [this]() { navigateToPage(kWebcamPageIndex); });
     // NOTE: webcam_page_ backToSettingsRequested and OutputPage signals are wired in
     // buildWebcamPage() / buildOutputPage() after deferred construction.
@@ -2342,6 +2286,8 @@ void MainWindow::setCurrentPage(int index) {
     // Ensure deferred pages are built before they are shown for the first time.
     if (index == kHotkeysPageIndex && !hotkeys_page_)
         buildHotkeysPage();
+    if (index == kDiagnosticsPageIndex && !diagnostics_page_)
+        buildDiagnosticsPage();
     if (index == kLogsPageIndex && !logs_page_)
         buildLogsPage();
     if (index == kWebcamPageIndex && !webcam_page_)
@@ -2783,6 +2729,8 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
         applyVisualHotkeysScenario(scenario);
         break;
     case visual::VisualPage::Diagnostics:
+        if (!diagnostics_page_)
+            buildDiagnosticsPage();
         applyVisualDiagnosticsScenario(scenario);
         setCurrentPage(kDiagnosticsPageIndex);
         break;
@@ -3821,21 +3769,24 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
 
 void MainWindow::hydrateSecondaryPages() {
     // Build one deferred page per event-loop tick so the UI can paint and respond
-    // between constructors. Order: HotkeysPage (index 2), LogsPage (index 4),
-    // AboutPage (index 7), EditExportPage (tail slot), WebcamPage (index 5),
-    // OutputPage (index 6). Webcam/Output come last because their fan-out replay
-    // (applySettings / refreshPresetUi) is cheap but depends on stable live_webcam_
-    // and the preset registry, both of which are settled before the ctor exits.
+    // between constructors. Order: HotkeysPage (index 2), DiagnosticsPage (index 3),
+    // LogsPage (index 4), AboutPage (index 7), EditExportPage (tail slot),
+    // WebcamPage (index 5), OutputPage (index 6). Webcam/Output come last because
+    // their fan-out replay (applySettings / refreshPresetUi) is cheap but depends on
+    // stable live_webcam_ and the preset registry, both settled before the ctor exits.
     buildHotkeysPage();
     QTimer::singleShot(0, this, [this]() {
-        buildLogsPage();
+        buildDiagnosticsPage();
         QTimer::singleShot(0, this, [this]() {
-            buildAboutPage();
+            buildLogsPage();
             QTimer::singleShot(0, this, [this]() {
-                buildEditExportPage();
+                buildAboutPage();
                 QTimer::singleShot(0, this, [this]() {
-                    buildWebcamPage();
-                    QTimer::singleShot(0, this, [this]() { buildOutputPage(); });
+                    buildEditExportPage();
+                    QTimer::singleShot(0, this, [this]() {
+                        buildWebcamPage();
+                        QTimer::singleShot(0, this, [this]() { buildOutputPage(); });
+                    });
                 });
             });
         });
@@ -3873,6 +3824,85 @@ void MainWindow::buildHotkeysPage() {
     } else {
         stack_->addWidget(hotkeys_page_);
     }
+}
+
+void MainWindow::buildDiagnosticsPage() {
+    if (diagnostics_page_)
+        return; // already built (e.g. by an early navigation or visual harness)
+    diagnostics_page_ = new DiagnosticsPage(stack_);
+    diagnostics_page_->setPresentProvider(&present_provider_);
+    diagnostics_page_->setDpcProvider(&dpc_provider_);
+    if (diagnostics_placeholder_) {
+        // Replace the placeholder in-place so kDiagnosticsPageIndex stays valid for all
+        // widgets already past it in the stack (logs=4, webcam=5, output=6, about=7).
+        const int idx = stack_->indexOf(diagnostics_placeholder_);
+        stack_->insertWidget(idx, diagnostics_page_);
+        diagnostics_placeholder_->deleteLater();
+        diagnostics_placeholder_ = nullptr;
+    } else {
+        stack_->addWidget(diagnostics_page_);
+    }
+    // ---- FixAction routing (ADR 0033 / v0.8.0) ----
+    // Auto fixes apply a settings change directly after a confirm; Assisted fixes
+    // navigate to the relevant Settings section so the user finishes the change.
+    connect(diagnostics_page_, &DiagnosticsPage::applyFixActionRequested, this,
+            [this](const QString& fix_id, const QString& changes_summary) {
+                const QString body = changes_summary.isEmpty()
+                                         ? QStringLiteral("Apply this fix to your recording settings?")
+                                         : changes_summary;
+                if (QMessageBox::question(this, QStringLiteral("Apply fix"), body) != QMessageBox::Yes)
+                    return;
+                if (fix_id == QStringLiteral("fix.frame_pacing.smooth")) {
+                    // Video-settings-only fix: switch pacing mode, propagate, refresh UI.
+                    video_settings_.frame_pacing = recorder_core::FramePacingMode::Smooth;
+                    if (config_page_)
+                        config_page_->setVideoSettings(video_settings_);
+                    if (record_page_)
+                        record_page_->setVideoSettings(video_settings_);
+                    if (config_page_)
+                        config_page_->setPresetDirty(preset_registry_.IsSelectedDirty(captureLiveConfig()));
+                    refreshDiagnosticsData();
+                    diagnostics::AppLog::info(QStringLiteral("diagnostics"),
+                                              QStringLiteral("Applied fix %1").arg(fix_id));
+                    return;
+                }
+                if (fix_id == QStringLiteral("fix.codec.video.default"))
+                    output_settings_.video_codec = capability::VideoCodec::H264Nvenc;
+                else if (fix_id == QStringLiteral("fix.codec.audio.default"))
+                    output_settings_.audio_codec = capability::AudioCodec::AacMf;
+                else
+                    return; // unknown auto fix — no-op
+                // Propagate like a user-driven format change.
+                if (config_page_)
+                    config_page_->setOutputSettings(output_settings_);
+                if (record_page_)
+                    record_page_->setOutputSettings(output_settings_);
+                if (config_page_)
+                    config_page_->setPresetDirty(preset_registry_.IsSelectedDirty(captureLiveConfig()));
+                refreshCrashSessionContext();
+                refreshDiagnosticsData();
+                diagnostics::AppLog::info(QStringLiteral("diagnostics"), QStringLiteral("Applied fix %1").arg(fix_id));
+            });
+    connect(diagnostics_page_, &DiagnosticsPage::openAssistedFixRequested, this, [this](const QString& fix_id) {
+        navigateToPage(kSettingsPageIndex);
+        if (!config_page_)
+            return;
+        if (fix_id == QStringLiteral("fix.output.change_folder") || fix_id == QStringLiteral("fix.output.fat32_folder"))
+            config_page_->scrollToSection(QStringLiteral("settings/output"));
+        else // fix.container.mkv / fix.fps.cap / fix.profile.select → format/quality area
+            config_page_->scrollToSection(QStringLiteral("settings/format"));
+        diagnostics::AppLog::info(QStringLiteral("diagnostics"), QStringLiteral("Opened assisted fix %1").arg(fix_id));
+    });
+    connect(diagnostics_page_, &DiagnosticsPage::navigateToLogsRequested, this,
+            [this]() { navigateToPage(kLogsPageIndex); });
+    // Route live recording-pipeline diagnostics from the Record page's coordinator to
+    // the Diagnostics page (same UI thread; direct connection).
+    // CRITICAL: record_page_ is built unconditionally in the ctor and is always valid here.
+    connect(record_page_, &RecordPage::diagnosticsUpdated, diagnostics_page_, &DiagnosticsPage::applyLiveDiagnostics);
+    // Fan-out replay: deliver current static diagnostic data to the freshly-built page.
+    // refreshDiagnosticsData() self-guards on runtime_caps_ready_, so this is a no-op until
+    // the caps probe completes — the caps-ready path will call refreshDiagnosticsData() again.
+    refreshDiagnosticsData();
 }
 
 void MainWindow::buildAboutPage() {

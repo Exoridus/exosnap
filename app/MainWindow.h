@@ -183,6 +183,10 @@ class MainWindow : public QMainWindow {
     void buildLogsPage();
     // Builds HotkeysPage, replacing the cheap placeholder reserved at kHotkeysPageIndex.
     void buildHotkeysPage();
+    // Builds DiagnosticsPage, replacing the cheap placeholder reserved at kDiagnosticsPageIndex.
+    // Wires fix-action signals and the critical record_page_→diagnostics_page_ direct connect,
+    // then ends with refreshDiagnosticsData() to deliver current data to the freshly-built page.
+    void buildDiagnosticsPage();
     // Builds AboutPage, replacing the cheap placeholder reserved at kAboutPageIndex.
     void buildAboutPage();
     // Builds EditExportPage (index 8, past kPageDescriptors) with its back-connection.
@@ -326,6 +330,7 @@ class MainWindow : public QMainWindow {
     ConfigPage* config_page_ = nullptr;
     OutputPage* output_page_ = nullptr;
     DiagnosticsPage* diagnostics_page_ = nullptr;
+    QWidget* diagnostics_placeholder_ = nullptr; // cheap slot-reservation until buildDiagnosticsPage()
     LogsPage* logs_page_ = nullptr;
     QWidget* logs_placeholder_ = nullptr; // cheap slot-reservation until buildLogsPage()
     WebcamPage* webcam_page_ = nullptr;
