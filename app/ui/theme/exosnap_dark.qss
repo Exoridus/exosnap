@@ -3123,7 +3123,6 @@ QLabel[labelRole="recordDockTimer"][timerState="countdown"] {
    never rounded). A true pill therefore needs a deterministic height and a
    radius of exactly half of it. */
 QPushButton#recordDockRecord,
-QPushButton#recordDockRecordAgain,
 QPushButton#recordDockResume,
 QPushButton#recordDockStop,
 QPushButton#recordDockPause {
@@ -3133,14 +3132,6 @@ QPushButton#recordDockPause {
     font-size: 13.5px;
     font-weight: 600;
     padding: 0 18px;
-}
-
-/* Open folder — icon-only 38×38 ghost button, radius-10 (DF-04).
-   Fixed size is enforced in C++ (setFixedSize); QSS pins the border-radius and
-   removes text padding so only the folder icon is visible. */
-QPushButton#recordDockOpenFolder {
-    border-radius: 10px;
-    padding: 0;
 }
 
 /* Capture-frame dock button — round 44×44 icon-only button.
@@ -3247,32 +3238,6 @@ QPushButton[dockAction="ghost"]:hover {
 QPushButton[dockAction="ghost"]:disabled {
     color: ${text3};
     border-color: ${line1};
-}
-
-/* Completed (result) zone. */
-QPushButton#recordDockFilename {
-    color: ${accent};
-    background: transparent;
-    border: none;
-    text-align: left;
-    font-family: ${font-mono};
-    font-size: 13px;
-    padding: 0;
-}
-
-QPushButton#recordDockFilename:hover {
-    color: ${accent-hover};
-    text-decoration: underline;
-}
-
-QPushButton#recordDockFilename:disabled {
-    color: ${text2};
-}
-
-QLabel[labelRole="recordDockSize"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    color: ${text2};
 }
 
 /* v10 Split Record button — pill container clips both halves via border-radius.

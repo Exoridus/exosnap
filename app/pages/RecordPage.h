@@ -278,7 +278,6 @@ class RecordPage : public QWidget {
     void updateResultDisplay();
     void updateTransportDock();
     void onDockSourceToggle(const QString& key);
-    void onDockFilenameActivated();
     void updateTargetCards();
     void updateReadinessRows();
     void updateRecReadiness(); // runs RecommendationEngine, caches rec_checklist_

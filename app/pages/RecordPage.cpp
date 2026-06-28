@@ -1860,14 +1860,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
         if (view_model_.CanStart() && interaction_mode_ == InteractionMode::None)
             onStart();
     });
-    connect(transport_dock_, &ui::widgets::TransportDock::recordAgainClicked, this, [this]() {
-        if (view_model_.CanStart() && interaction_mode_ == InteractionMode::None) {
-            view_model_.ClearCompletedResult();
-            view_model_.SetState(UiRecordingState::Ready);
-            refresh();
-            onStart();
-        }
-    });
     connect(transport_dock_, &ui::widgets::TransportDock::stopClicked, this, [this]() {
         if (view_model_.CanStop())
             onStop();
@@ -1880,8 +1872,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
         if (view_model_.CanResume())
             onResume();
     });
-    connect(transport_dock_, &ui::widgets::TransportDock::openFolderClicked, this, &RecordPage::openOutputFolder);
-    connect(transport_dock_, &ui::widgets::TransportDock::filenameClicked, this, &RecordPage::onDockFilenameActivated);
     connect(transport_dock_, &ui::widgets::TransportDock::captureFrameClicked, this, &RecordPage::onHotkeyCaptureFrame);
     connect(transport_dock_, &ui::widgets::TransportDock::addMarkerClicked, this, &RecordPage::onDockAddMarker);
     connect(transport_dock_, &ui::widgets::TransportDock::splitClicked, this, &RecordPage::onDockSplit);
@@ -5581,15 +5571,6 @@ void RecordPage::onDockSourceToggle(const QString& key) {
     syncAppMeterService();
     emitAudioSettingsChanged();
     refresh();
-}
-
-void RecordPage::onDockFilenameActivated() {
-    const QString path = QString::fromStdWString(view_model_.result_output_path).trimmed();
-    if (path.isEmpty()) {
-        openOutputFolder();
-        return;
-    }
-    QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 }
 
 void RecordPage::updateStatsDisplay() {

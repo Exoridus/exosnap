@@ -215,36 +215,7 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     toggles_layout->addWidget(mic_toggle_);    // mic
     toggles_layout->addWidget(webcam_toggle_); // webcam
 
-    completed_row_ = new QWidget(left_zone);
-    auto* completed_layout = new QHBoxLayout(completed_row_);
-    completed_layout->setContentsMargins(0, 0, 0, 0);
-    completed_layout->setSpacing(10);
-    filename_link_ = new QPushButton(completed_row_);
-    filename_link_->setObjectName(QStringLiteral("recordDockFilename"));
-    filename_link_->setCursor(Qt::PointingHandCursor);
-    filename_link_->setFlat(true);
-    // Icon-only 38×38 folder button (DF-04): no text label, fixed size, radius-10 via QSS.
-    // Tooltip and accessible name "Open folder" are preserved for UIA/capture tooling.
-    open_folder_btn_ = new QPushButton(completed_row_);
-    open_folder_btn_->setObjectName(QStringLiteral("recordDockOpenFolder"));
-    open_folder_btn_->setProperty("dockAction", QStringLiteral("ghost"));
-    open_folder_btn_->setCursor(Qt::PointingHandCursor);
-    open_folder_btn_->setToolTip(QStringLiteral("Open folder"));
-    open_folder_btn_->setAccessibleName(QStringLiteral("Open folder"));
-    open_folder_btn_->setIcon(QIcon(QStringLiteral(":/theme/icons/folder.svg")));
-    open_folder_btn_->setIconSize(QSize(18, 18));
-    open_folder_btn_->setFixedSize(38, 38);
-    // D4: size_label_ is still a member for API compatibility but hidden — bar owns size.
-    size_label_ = new QLabel(completed_row_);
-    size_label_->setProperty("labelRole", QStringLiteral("recordDockSize"));
-    size_label_->setVisible(false); // D4: size readout removed from dock; metadata bar owns it
-    completed_layout->addWidget(filename_link_);
-    completed_layout->addWidget(open_folder_btn_);
-    // size_label_ not added to layout (D4)
-    completed_row_->setVisible(false);
-
     left_layout->addWidget(toggles_row_);
-    left_layout->addWidget(completed_row_);
     left_layout->addStretch(1);
     grid->addWidget(left_zone, 0, 0, Qt::AlignLeft | Qt::AlignVCenter);
 
@@ -316,8 +287,6 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
                                   104, action_row_);
     resume_btn_ = makeActionButton(QStringLiteral("recordDockResume"), QStringLiteral("resume"),
                                    QStringLiteral("Resume"), 104, action_row_);
-    record_again_btn_ = makeActionButton(QStringLiteral("recordDockRecordAgain"), QStringLiteral("record"),
-                                         QStringLiteral("Record again"), 156, action_row_);
     stop_btn_ = makeActionButton(QStringLiteral("recordDockStop"), QStringLiteral("stop"), QStringLiteral("Stop"), 104,
                                  action_row_);
 
@@ -333,7 +302,6 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     const QString ghost_text = QString::fromUtf8(glyph_theme.mut); // ${text2}
     const QString stop_ink = QStringLiteral("#1A0D0B");            // matches dockAction="stop" text
     setTransportGlyph(record_btn_, kRecordGlyph, accent_ink);
-    setTransportGlyph(record_again_btn_, kRecordGlyph, accent_ink);
     setTransportGlyph(resume_btn_, kResumeGlyph, accent_ink);
     setTransportGlyph(pause_btn_, kPauseGlyph, ghost_text);
     setTransportGlyph(stop_btn_, kStopGlyph, stop_ink);
@@ -369,7 +337,6 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     action_layout->addWidget(pause_btn_);
     action_layout->addWidget(resume_btn_);
     action_layout->addWidget(record_split_container_);
-    action_layout->addWidget(record_again_btn_);
     action_layout->addWidget(stop_btn_);
     grid->addWidget(action_row_, 0, 2, Qt::AlignRight | Qt::AlignVCenter);
 
@@ -377,9 +344,6 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     connect(stop_btn_, &QPushButton::clicked, this, &TransportDock::stopClicked);
     connect(pause_btn_, &QPushButton::clicked, this, &TransportDock::pauseClicked);
     connect(resume_btn_, &QPushButton::clicked, this, &TransportDock::resumeClicked);
-    connect(record_again_btn_, &QPushButton::clicked, this, &TransportDock::recordAgainClicked);
-    connect(open_folder_btn_, &QPushButton::clicked, this, &TransportDock::openFolderClicked);
-    connect(filename_link_, &QPushButton::clicked, this, &TransportDock::filenameClicked);
     connect(capture_frame_btn_, &QPushButton::clicked, this, &TransportDock::captureFrameClicked);
     connect(add_marker_btn_, &QPushButton::clicked, this, &TransportDock::addMarkerClicked);
     connect(split_btn_, &QPushButton::clicked, this, &TransportDock::splitClicked);
@@ -435,9 +399,8 @@ void TransportDock::applyState() {
     const bool completed = state_ == State::Completed;
     const bool show_ready = ready || saving || completed;
 
-    // v10: left zone always shows the source toggles (no completed_row_ in active layout).
+    // v10: left zone always shows the source toggles.
     toggles_row_->setVisible(true);
-    completed_row_->setVisible(false);
 
     // The split container (record face + chevron) is shown in Ready/Saving/Completed
     // and Countdown states. In Countdown the record face becomes "Cancel"
@@ -447,9 +410,6 @@ void TransportDock::applyState() {
     pause_btn_->setVisible(recording);
     resume_btn_->setVisible(paused);
     stop_btn_->setVisible(recording || paused);
-    // v10: record_again_btn_ never shown (completed state → Ready, not a distinct layout).
-    record_again_btn_->setVisible(false);
-    record_again_btn_->setEnabled(false);
     // Capture-frame: shown in ready/recording/paused; disabled while saving/blocked.
     capture_frame_btn_->setVisible(show_ready || recording || paused);
     capture_frame_btn_->setEnabled((ready || recording || paused) && primary_enabled_);
@@ -576,16 +536,6 @@ void TransportDock::setToggleVisible(const QString& key, bool visible) {
         toggle = app_toggle_;
     if (toggle)
         toggle->setVisible(visible);
-}
-
-void TransportDock::setCompletedInfo(const QString& filename, const QString& size_text, bool has_file) {
-    filename_link_->setText(filename);
-    filename_link_->setToolTip(filename);
-    filename_link_->setEnabled(has_file);
-    open_folder_btn_->setEnabled(has_file);
-    // D4: size readout removed from dock; metadata bar owns size. Store for API compat only.
-    size_label_->setText(size_text);
-    size_label_->setVisible(false); // always hidden
 }
 
 void TransportDock::setSplitEnabled(bool enabled) {
