@@ -3986,10 +3986,6 @@ void RecordPage::updateStatsDisplay() {
     const bool paused = (view_model_.state == UiRecordingState::Paused);
     const bool countdown = (view_model_.state == UiRecordingState::Countdown);
     const bool recording = active_recording || paused || (view_model_.state == UiRecordingState::Stopping);
-    const bool blocked = (view_model_.state == UiRecordingState::Blocked);
-    const bool failed = (view_model_.state == UiRecordingState::Failed);
-    const bool completed_success =
-        (view_model_.state == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
 
     const QString timer_text = buildTimerText(recording || countdown);
 
