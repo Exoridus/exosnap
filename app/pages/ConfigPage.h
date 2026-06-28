@@ -308,10 +308,8 @@ class ConfigPage : public QWidget {
     QBoxLayout* columns_layout_ = nullptr;      // host for the two-column card grid
     QBoxLayout* output_split_layout_ = nullptr; // inner field/help split inside Output card
 
-    QButtonGroup* container_group_ = nullptr;
-    QPushButton* mkv_radio_ = nullptr;
-    QPushButton* webm_radio_ = nullptr;
-    QPushButton* mp4_radio_ = nullptr;
+    // v10/Canon: Container is a dropdown (SSelect), not a segmented button group.
+    QComboBox* container_combo_ = nullptr;
     QComboBox* video_codec_combo_ = nullptr;
     QComboBox* audio_codec_combo_ = nullptr;
     QComboBox* profile_combo_ = nullptr;
@@ -335,9 +333,8 @@ class ConfigPage : public QWidget {
     QPushButton* quality_segment_small_ = nullptr;
     QPushButton* quality_segment_balanced_ = nullptr;
     QPushButton* quality_segment_high_ = nullptr;
-    QButtonGroup* timing_group_ = nullptr;
-    QPushButton* timing_cfr_btn_ = nullptr;
-    QPushButton* timing_vfr_btn_ = nullptr;
+    // v10/Canon: Frame timing is a dropdown (SSelect), not a segmented button group.
+    QComboBox* timing_combo_ = nullptr;
     ui::widgets::ExoToggle* cursor_check_ = nullptr;
 
     QLabel* audio_summary_label_ = nullptr;
@@ -491,7 +488,8 @@ class ConfigPage : public QWidget {
     // PS-PHASE-C: Expert Format section — rate control (CQ/VBR/CBR) + bitrate + placeholders.
     QWidget* fmt_expert_section_ = nullptr; // container for rate control, bitrate, and Format placeholders
     QWidget* rate_control_row_widget_ = nullptr;
-    QButtonGroup* rate_control_group_ = nullptr;
+    // v10/Canon: Rate control is a dropdown (SSelect), not a segmented button group.
+    QComboBox* rate_control_combo_ = nullptr;
     QWidget* bitrate_row_widget_ = nullptr;
     QSpinBox* bitrate_kbps_spin_ = nullptr;
     // Video bit depth (0.7.0 — S7): 8-bit / 10-bit selector, capability-gated.

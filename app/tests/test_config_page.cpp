@@ -121,14 +121,14 @@ TEST_F(ConfigPageTest, ProfileComboExists) {
     EXPECT_NE(combo, nullptr);
 }
 
-TEST_F(ConfigPageTest, ContainerSegmentedControlExists) {
+TEST_F(ConfigPageTest, ContainerComboExists) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    auto* segmented = page.findChild<QWidget*>(QStringLiteral("containerSegmented"));
-    ASSERT_NE(segmented, nullptr);
-    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("containerMkvButton")), nullptr);
-    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("containerWebmButton")), nullptr);
-    EXPECT_NE(page.findChild<QPushButton*>(QStringLiteral("containerMp4Button")), nullptr);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("containerCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_GE(combo->findData(static_cast<int>(capability::Container::Matroska)), 0);
+    EXPECT_GE(combo->findData(static_cast<int>(capability::Container::WebM)), 0);
+    EXPECT_GE(combo->findData(static_cast<int>(capability::Container::Mp4)), 0);
 }
 
 TEST_F(ConfigPageTest, VideoQualityComboExists) {
@@ -273,28 +273,33 @@ TEST_F(ConfigPageTest, FrameRateControl_UsesRealValues) {
     EXPECT_EQ(changed.frame_rate_den, 1u);
 }
 
-TEST_F(ConfigPageTest, TimingSegments_MapToVideoSettingsAndMp4DisablesVfr) {
+TEST_F(ConfigPageTest, TimingCombo_MapsToVideoSettingsAndMp4DisablesVfr) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    auto* vfr = page.findChild<QPushButton*>(QStringLiteral("timingVfrButton"));
-    auto* cfr = page.findChild<QPushButton*>(QStringLiteral("timingCfrButton"));
-    ASSERT_NE(vfr, nullptr);
-    ASSERT_NE(cfr, nullptr);
+    auto* timing = page.findChild<QComboBox*>(QStringLiteral("timingCombo"));
+    auto* container = page.findChild<QComboBox*>(QStringLiteral("containerCombo"));
+    ASSERT_NE(timing, nullptr);
+    ASSERT_NE(container, nullptr);
 
     VideoSettingsModel changed;
     QObject::connect(&page, &ConfigPage::videoSettingsChanged,
                      [&](const VideoSettingsModel& settings) { changed = settings; });
 
-    vfr->click();
+    // Select VFR (itemData 0).
+    const int vfr_idx = timing->findData(0);
+    ASSERT_GE(vfr_idx, 0);
+    timing->setCurrentIndex(vfr_idx);
     EXPECT_FALSE(changed.cfr);
-    EXPECT_TRUE(vfr->isChecked());
+    EXPECT_EQ(timing->currentData().toInt(), 0);
 
-    auto* mp4 = page.findChild<QPushButton*>(QStringLiteral("containerMp4Button"));
-    ASSERT_NE(mp4, nullptr);
-    mp4->click();
+    // Switching to MP4 forces CFR and disables the VFR item.
+    container->setCurrentIndex(container->findData(static_cast<int>(capability::Container::Mp4)));
     EXPECT_TRUE(changed.cfr);
-    EXPECT_TRUE(cfr->isChecked());
-    EXPECT_FALSE(vfr->isEnabled());
+    EXPECT_EQ(timing->currentData().toInt(), 1);
+
+    auto* model = qobject_cast<QStandardItemModel*>(timing->model());
+    ASSERT_NE(model, nullptr);
+    EXPECT_FALSE(model->item(timing->findData(0))->isEnabled());
 }
 
 TEST_F(ConfigPageTest, OutputEffectiveSummaryReflectsFormatControls) {
@@ -603,9 +608,9 @@ TEST_F(ConfigPageTest, SetRecordingControlsLocked_DisablesKeyControls) {
     auto* frame_rate = page.findChild<QComboBox*>(QStringLiteral("frameRateCombo"));
     ASSERT_NE(frame_rate, nullptr);
     EXPECT_FALSE(frame_rate->isEnabled());
-    auto* timing_cfr = page.findChild<QPushButton*>(QStringLiteral("timingCfrButton"));
-    ASSERT_NE(timing_cfr, nullptr);
-    EXPECT_FALSE(timing_cfr->isEnabled());
+    auto* timing_combo = page.findChild<QComboBox*>(QStringLiteral("timingCombo"));
+    ASSERT_NE(timing_combo, nullptr);
+    EXPECT_FALSE(timing_combo->isEnabled());
     auto* output_res = page.findChild<QComboBox*>(QStringLiteral("outputResCombo"));
     ASSERT_NE(output_res, nullptr);
     EXPECT_FALSE(output_res->isEnabled());
@@ -1633,16 +1638,14 @@ TEST_F(ConfigPageTest, SplitModeSurvivesContainerRoundTripThroughMp4) {
     EXPECT_TRUE(combo->isEnabled());
     EXPECT_EQ(combo->currentData().toInt(), static_cast<int>(SplitRecordingMode::Every15Min));
 
-    auto* mp4_btn = page.findChild<QPushButton*>(QStringLiteral("containerMp4Button"));
-    ASSERT_NE(mp4_btn, nullptr);
-    mp4_btn->click();
+    auto* container = page.findChild<QComboBox*>(QStringLiteral("containerCombo"));
+    ASSERT_NE(container, nullptr);
+    container->setCurrentIndex(container->findData(static_cast<int>(capability::Container::Mp4)));
     EXPECT_FALSE(combo->isEnabled());
     // The configured mode is preserved while MP4 is selected (not reset to Off).
     EXPECT_EQ(combo->currentData().toInt(), static_cast<int>(SplitRecordingMode::Every15Min));
 
-    auto* mkv_btn = page.findChild<QPushButton*>(QStringLiteral("containerMkvButton"));
-    ASSERT_NE(mkv_btn, nullptr);
-    mkv_btn->click();
+    container->setCurrentIndex(container->findData(static_cast<int>(capability::Container::Matroska)));
     EXPECT_TRUE(combo->isEnabled());
     EXPECT_EQ(combo->currentData().toInt(), static_cast<int>(SplitRecordingMode::Every15Min));
 }

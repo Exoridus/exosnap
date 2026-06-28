@@ -920,41 +920,20 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     fmt_layout->addWidget(makeCardTitle(QStringLiteral("Container & codecs"), fmt_panel, QStringLiteral("film")));
 
     // --- Container row ---
-    container_group_ = new QButtonGroup(this);
-    container_group_->setExclusive(true);
-    auto* container_segmented = new QWidget(fmt_panel);
-    container_segmented->setObjectName(QStringLiteral("containerSegmented"));
-    auto* container_row_layout = new QHBoxLayout();
-    container_row_layout->setContentsMargins(3, 3, 3, 3);
-    container_row_layout->setSpacing(0);
-    container_segmented->setLayout(container_row_layout);
-    auto makeContainerSegment = [&](const QString& object_name, const QString& label,
-                                    capability::Container container) -> QPushButton* {
-        auto* segment = new QPushButton(label, container_segmented);
-        segment->setObjectName(object_name);
-        segment->setAccessibleName(label);
-        segment->setCheckable(true);
-        segment->setAutoDefault(false);
-        segment->setDefault(false);
-        segment->setCursor(Qt::PointingHandCursor);
-        segment->setProperty("qualitySegment", true);
-        segment->setProperty("qualitySegmentSelected", false);
-        segment->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        container_group_->addButton(segment, static_cast<int>(container));
-        container_row_layout->addWidget(segment);
-        return segment;
-    };
-    mkv_radio_ = makeContainerSegment(QStringLiteral("containerMkvButton"), QStringLiteral("MKV"),
-                                      capability::Container::Matroska);
-    webm_radio_ = makeContainerSegment(QStringLiteral("containerWebmButton"), QStringLiteral("WebM"),
-                                       capability::Container::WebM);
-    mp4_radio_ =
-        makeContainerSegment(QStringLiteral("containerMp4Button"), QStringLiteral("MP4"), capability::Container::Mp4);
+    // v10/Canon (SSelect): a compact dropdown, not a full-width segmented group.
+    // itemData carries the capability::Container enum consumed by onContainerChanged.
+    container_combo_ = new QComboBox(fmt_panel);
+    container_combo_->setObjectName(QStringLiteral("containerCombo"));
+    container_combo_->addItem(QStringLiteral("MKV"), static_cast<int>(capability::Container::Matroska));
+    container_combo_->addItem(QStringLiteral("WebM"), static_cast<int>(capability::Container::WebM));
+    container_combo_->addItem(QStringLiteral("MP4"), static_cast<int>(capability::Container::Mp4));
+    container_combo_->setFixedWidth(160);
+    container_combo_->setProperty("settingsRowInput", true);
 
     container_compare_hint_ =
         new ui::widgets::CompareHint(QStringLiteral("container"), QStringLiteral("MKV"), fmt_panel);
     fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Container"), container_compare_hint_, QString(),
-                                          container_segmented, /*first=*/true));
+                                          container_combo_, /*first=*/true));
 
     // --- Video codec row ---
     video_codec_combo_ = new QComboBox(fmt_panel);
@@ -1149,34 +1128,19 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                                               QString(), frame_rate_combo_));
 
     // --- Frame timing row (Quality & timing card) ---
-    auto* timing_segmented = new QWidget(quality_panel);
-    timing_segmented->setObjectName(QStringLiteral("timingSegmented"));
-    auto* timing_segmented_layout = new QHBoxLayout(timing_segmented);
-    timing_segmented_layout->setContentsMargins(3, 3, 3, 3);
-    timing_segmented_layout->setSpacing(0);
-    timing_group_ = new QButtonGroup(this);
-    timing_group_->setExclusive(true);
-    auto makeTimingSegment = [&](const QString& object_name, const QString& label, int id) -> QPushButton* {
-        auto* segment = new QPushButton(label, timing_segmented);
-        segment->setObjectName(object_name);
-        segment->setAccessibleName(label);
-        segment->setCheckable(true);
-        segment->setAutoDefault(false);
-        segment->setDefault(false);
-        segment->setCursor(Qt::PointingHandCursor);
-        segment->setProperty("qualitySegment", true);
-        segment->setProperty("qualitySegmentSelected", false);
-        segment->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        timing_group_->addButton(segment, id);
-        timing_segmented_layout->addWidget(segment);
-        return segment;
-    };
-    timing_cfr_btn_ = makeTimingSegment(QStringLiteral("timingCfrButton"), QStringLiteral("CFR"), 1);
-    timing_vfr_btn_ = makeTimingSegment(QStringLiteral("timingVfrButton"), QStringLiteral("VFR"), 0);
+    // v10/Canon (SSelect): a compact dropdown, not a full-width segmented group.
+    // itemData carries the timing id (1 = CFR, 0 = VFR) consumed by onTimingSelected;
+    // updateTimingSelection() disables the VFR item when the container can't carry it.
+    timing_combo_ = new QComboBox(quality_panel);
+    timing_combo_->setObjectName(QStringLiteral("timingCombo"));
+    timing_combo_->addItem(QStringLiteral("CFR"), 1);
+    timing_combo_->addItem(QStringLiteral("VFR"), 0);
+    timing_combo_->setFixedWidth(160);
+    timing_combo_->setProperty("settingsRowInput", true);
 
     timing_compare_hint_ = new ui::widgets::CompareHint(QStringLiteral("timing"), QStringLiteral("CFR"), quality_panel);
-    quality_layout->addWidget(makeSettingsRow(quality_panel, QStringLiteral("Frame timing"), timing_compare_hint_,
-                                              QString(), timing_segmented));
+    quality_layout->addWidget(
+        makeSettingsRow(quality_panel, QStringLiteral("Frame timing"), timing_compare_hint_, QString(), timing_combo_));
 
     // --- Capture cursor row (Quality & timing card) ---
     cursor_check_ = new ui::widgets::ExoToggle(quality_panel);
@@ -1210,37 +1174,19 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         fes_layout->setContentsMargins(0, 0, 0, 0);
         fes_layout->setSpacing(0);
 
-        // --- Rate control segmented (CQ / VBR / CBR) — Quality card ---
-        auto* rc_segmented = new QWidget(quality_rate_section_);
-        rc_segmented->setObjectName(QStringLiteral("rateControlSegmented"));
-        auto* rc_segmented_layout = new QHBoxLayout(rc_segmented);
-        rc_segmented_layout->setContentsMargins(3, 3, 3, 3);
-        rc_segmented_layout->setSpacing(0);
-
-        rate_control_group_ = new QButtonGroup(this);
-        rate_control_group_->setExclusive(true);
-
-        auto makeRcSegment = [&](const QString& object_name, const QString& label,
-                                 recorder_core::RateControlMode mode) -> QPushButton* {
-            auto* seg = new QPushButton(label, rc_segmented);
-            seg->setObjectName(object_name);
-            seg->setCheckable(true);
-            seg->setAutoDefault(false);
-            seg->setDefault(false);
-            seg->setCursor(Qt::PointingHandCursor);
-            seg->setProperty("qualitySegment", true);
-            seg->setProperty("qualitySegmentSelected", false);
-            seg->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-            rate_control_group_->addButton(seg, static_cast<int>(mode));
-            rc_segmented_layout->addWidget(seg);
-            return seg;
-        };
-        makeRcSegment(QStringLiteral("rateControlCqButton"), QStringLiteral("CQ"),
-                      recorder_core::RateControlMode::ConstantQuality);
-        makeRcSegment(QStringLiteral("rateControlVbrButton"), QStringLiteral("VBR"),
-                      recorder_core::RateControlMode::VariableBitrate);
-        makeRcSegment(QStringLiteral("rateControlCbrButton"), QStringLiteral("CBR"),
-                      recorder_core::RateControlMode::ConstantBitrate);
+        // --- Rate control dropdown (CQ / VBR / CBR) — Quality card ---
+        // v10/Canon (SSelect): a compact dropdown, not a full-width segmented group.
+        // itemData carries the recorder_core::RateControlMode enum.
+        rate_control_combo_ = new QComboBox(quality_rate_section_);
+        rate_control_combo_->setObjectName(QStringLiteral("rateControlCombo"));
+        rate_control_combo_->addItem(QStringLiteral("CQ"),
+                                     static_cast<int>(recorder_core::RateControlMode::ConstantQuality));
+        rate_control_combo_->addItem(QStringLiteral("VBR"),
+                                     static_cast<int>(recorder_core::RateControlMode::VariableBitrate));
+        rate_control_combo_->addItem(QStringLiteral("CBR"),
+                                     static_cast<int>(recorder_core::RateControlMode::ConstantBitrate));
+        rate_control_combo_->setFixedWidth(160);
+        rate_control_combo_->setProperty("settingsRowInput", true);
 
         rate_control_row_widget_ = new QWidget(quality_rate_section_);
         {
@@ -1260,7 +1206,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             rhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kRateControlMode, rate_control_row_widget_), 0,
                            Qt::AlignVCenter);
             rhl->addStretch(1);
-            rhl->addWidget(rc_segmented, 0, Qt::AlignVCenter);
+            rhl->addWidget(rate_control_combo_, 0, Qt::AlignVCenter);
             rvl->addLayout(rhl);
             rate_control_row_widget_->setProperty("settingsRow", true);
         }
@@ -2793,7 +2739,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         }
     });
 
-    connect(container_group_, &QButtonGroup::idClicked, this, &ConfigPage::onContainerChanged);
+    connect(container_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (index < 0 || !container_combo_)
+            return;
+        onContainerChanged(container_combo_->itemData(index).toInt());
+    });
     connect(video_codec_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onVideoCodecChanged);
     connect(video_bit_depth_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -2826,7 +2776,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     }
     connect(frame_rate_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onFrameRateChanged);
-    connect(timing_group_, &QButtonGroup::idClicked, this, &ConfigPage::onTimingSelected);
+    connect(timing_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (index < 0 || !timing_combo_)
+            return;
+        onTimingSelected(timing_combo_->itemData(index).toInt());
+    });
     connect(output_res_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (index < 0)
             return;
@@ -2943,9 +2897,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         emitCurrentVideoSettings();
     });
 
-    // PS-PHASE-C: Rate control segmented — updates video_settings_.rate_control.
-    connect(rate_control_group_, &QButtonGroup::idClicked, this, [this](int id) {
-        video_settings_.rate_control = static_cast<recorder_core::RateControlMode>(id);
+    // PS-PHASE-C: Rate control dropdown — updates video_settings_.rate_control.
+    connect(rate_control_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (index < 0 || !rate_control_combo_)
+            return;
+        video_settings_.rate_control =
+            static_cast<recorder_core::RateControlMode>(rate_control_combo_->itemData(index).toInt());
         const bool rate_is_cq = (video_settings_.rate_control == recorder_core::RateControlMode::ConstantQuality);
         const bool needs_bitrate = !rate_is_cq;
         if (quality_expert_widget_)
@@ -3580,20 +3537,13 @@ void ConfigPage::updateCompatCallout() {
         compat_ok_label_->setText(QStringLiteral("\xe2\x9c\x93 Current format: ") + summary);
     }
 
-    // Container segment sync (was in updateFormatDisplay)
-    const auto sync_container = [this](QPushButton* segment, capability::Container container) {
-        if (!segment)
-            return;
-        const bool selected = format_settings_.container == container;
-        segment->setChecked(selected);
-        segment->setProperty("qualitySegmentSelected", selected);
-        segment->style()->unpolish(segment);
-        segment->style()->polish(segment);
-    };
-    const QSignalBlocker blocker(container_group_);
-    sync_container(mkv_radio_, capability::Container::Matroska);
-    sync_container(webm_radio_, capability::Container::WebM);
-    sync_container(mp4_radio_, capability::Container::Mp4);
+    // Container combo sync (was in updateFormatDisplay)
+    if (container_combo_) {
+        const QSignalBlocker blocker(container_combo_);
+        const int idx = container_combo_->findData(static_cast<int>(format_settings_.container));
+        if (idx >= 0 && container_combo_->currentIndex() != idx)
+            container_combo_->setCurrentIndex(idx);
+    }
 
     // CompareHint value sync
     if (container_compare_hint_)
@@ -3691,13 +3641,12 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
         stashed_custom_height_ = settings.resolution.custom_height;
     }
 
-    const QSignalBlocker blocker(container_group_);
-    if (settings.container == capability::Container::Matroska)
-        mkv_radio_->setChecked(true);
-    else if (settings.container == capability::Container::WebM)
-        webm_radio_->setChecked(true);
-    else
-        mp4_radio_->setChecked(true);
+    if (container_combo_) {
+        const QSignalBlocker blocker(container_combo_);
+        const int idx = container_combo_->findData(static_cast<int>(settings.container));
+        if (idx >= 0)
+            container_combo_->setCurrentIndex(idx);
+    }
 
     updateVideoCodecChoices();
     updateAudioCodecChoices();
@@ -3751,12 +3700,11 @@ void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
     cursor_check_->setOn(settings.capture_cursor);
 
     // PS-PHASE-C: sync expert rate control + bitrate from loaded preset.
-    if (rate_control_group_) {
-        auto* btn = rate_control_group_->button(static_cast<int>(settings.rate_control));
-        if (btn) {
-            const QSignalBlocker rb(rate_control_group_);
-            btn->setChecked(true);
-        }
+    if (rate_control_combo_) {
+        const QSignalBlocker rb(rate_control_combo_);
+        const int idx = rate_control_combo_->findData(static_cast<int>(settings.rate_control));
+        if (idx >= 0)
+            rate_control_combo_->setCurrentIndex(idx);
     }
     if (bitrate_kbps_spin_) {
         const QSignalBlocker bb(bitrate_kbps_spin_);
@@ -3850,7 +3798,7 @@ void ConfigPage::updateFrameRateSelection() {
 }
 
 void ConfigPage::updateTimingSelection() {
-    if (!timing_group_)
+    if (!timing_combo_)
         return;
 
     const bool vfr_available = format_settings_.container != capability::Container::Mp4;
@@ -3858,21 +3806,23 @@ void ConfigPage::updateTimingSelection() {
         video_settings_.cfr = true;
     }
 
-    auto sync_segment = [this](QPushButton* segment, bool selected, bool enabled, const QString& unavailable_reason) {
-        if (!segment)
-            return;
-        segment->setChecked(selected);
-        segment->setEnabled(enabled && !controls_locked_);
-        segment->setToolTip(enabled ? QString() : unavailable_reason);
-        segment->setProperty("qualitySegmentSelected", selected);
-        segment->style()->unpolish(segment);
-        segment->style()->polish(segment);
-    };
-
-    const QSignalBlocker blocker(timing_group_);
-    sync_segment(timing_cfr_btn_, video_settings_.cfr, true, QString());
-    sync_segment(timing_vfr_btn_, !video_settings_.cfr, vfr_available,
-                 QStringLiteral("VFR is not available for MP4 in the current mux path."));
+    {
+        const QSignalBlocker blocker(timing_combo_);
+        // Disable the VFR item (data 0) when the container can't carry VFR (MP4).
+        if (auto* model = qobject_cast<QStandardItemModel*>(timing_combo_->model())) {
+            const int vfr_idx = timing_combo_->findData(0);
+            if (auto* item = (vfr_idx >= 0) ? model->item(vfr_idx) : nullptr) {
+                item->setEnabled(vfr_available);
+                item->setToolTip(vfr_available
+                                     ? QString()
+                                     : QStringLiteral("VFR is not available for MP4 in the current mux path."));
+            }
+        }
+        const int idx = timing_combo_->findData(video_settings_.cfr ? 1 : 0);
+        if (idx >= 0 && timing_combo_->currentIndex() != idx)
+            timing_combo_->setCurrentIndex(idx);
+        timing_combo_->setEnabled(!controls_locked_);
+    }
 
     if (timing_compare_hint_)
         timing_compare_hint_->setCurrentValue(video_settings_.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
@@ -4665,13 +4615,13 @@ void ConfigPage::updateExpertModeVisibility() {
     // 0.7.0: sync the colour-range combo (Full/Limited) when the section shows.
     if (expert_mode_enabled_)
         updateVideoColorRangeControl();
-    if (expert_mode_enabled_ && rate_control_group_) {
+    if (expert_mode_enabled_ && rate_control_combo_) {
         // Seed rate control selection from model.
-        const QSignalBlocker b(rate_control_group_);
-        auto* btn = rate_control_group_->button(static_cast<int>(video_settings_.rate_control));
-        if (btn) {
-            btn->setProperty("qualitySegmentSelected", true);
-            btn->setChecked(true);
+        {
+            const QSignalBlocker b(rate_control_combo_);
+            const int idx = rate_control_combo_->findData(static_cast<int>(video_settings_.rate_control));
+            if (idx >= 0)
+                rate_control_combo_->setCurrentIndex(idx);
         }
         // Update bitrate visibility.
         const bool needs_bitrate = (video_settings_.rate_control == recorder_core::RateControlMode::VariableBitrate ||
@@ -5077,9 +5027,8 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     if (preset_save_as_btn_)
         preset_save_as_btn_->setEnabled(enabled);
     profile_overflow_btn_->setEnabled(enabled);
-    mkv_radio_->setEnabled(enabled);
-    webm_radio_->setEnabled(enabled);
-    mp4_radio_->setEnabled(enabled);
+    if (container_combo_)
+        container_combo_->setEnabled(enabled);
     video_codec_combo_->setEnabled(enabled);
     audio_codec_combo_->setEnabled(enabled);
     // 0.7.0 — S7: bit-depth combo honours both the recording lock and codec gating.
