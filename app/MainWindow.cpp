@@ -516,18 +516,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     stack_ = new QStackedWidget(central);
     stack_->setObjectName("mainStack");
     record_page_ = new RecordPage(stack_);
-    config_page_ = new ConfigPage(output_settings_, video_settings_, stack_);
+    // Deferred: config_page_ is built by buildConfigPage() after show().
+    // A cheap placeholder holds index kSettingsPageIndex so hotkeys_placeholder_ and
+    // all subsequent pages get the correct indices without any re-numbering.
+    config_placeholder_ = new QWidget(stack_);
     // Deferred: hotkeys_page_ is built by buildHotkeysPage() after show().
     // A cheap placeholder holds index kHotkeysPageIndex so the diagnostics slot and
     // subsequent pages get the correct indices without any re-numbering.
     hotkeys_placeholder_ = new QWidget(stack_);
-    config_page_->setHotkeyService(hotkey_service_);
     // Deferred: diagnostics_page_ is built by buildDiagnosticsPage() after show().
     // A cheap placeholder holds index kDiagnosticsPageIndex so logs_page_ etc. get
     // the correct subsequent indices without any re-numbering.
     diagnostics_placeholder_ = new QWidget(stack_);
     stack_->addWidget(record_page_);
-    stack_->addWidget(config_page_);
+    stack_->addWidget(config_placeholder_); // config page is deferred
     stack_->addWidget(hotkeys_placeholder_);
     stack_->addWidget(diagnostics_placeholder_);
     // Deferred: logs_page_ is built by buildLogsPage() after show().
@@ -562,25 +564,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     record_page_->applyPersistedAudioSettings(live_audio_);
     record_page_->setCountdownSeconds(startup_cfg.countdown_seconds);
     record_page_->restoreRecordingHistory();
-    config_page_->setAudioUiState(live_audio_);
-    config_page_->setWebcamSettings(live_webcam_);
-
-    // SETTINGS-TIERS-R1: expert mode toggle + per-card expander state.
-    config_page_->setExpertModeEnabled(persisted_settings_.expert_mode_enabled);
-    config_page_->setOutputSplitExpanderExpanded(persisted_settings_.output_split_expander_expanded);
-    config_page_->setAudioSeparateExpanderExpanded(persisted_settings_.audio_separate_expander_expanded);
-    connect(config_page_, &ConfigPage::expertModeChanged, this, [this](bool enabled) {
-        persisted_settings_.expert_mode_enabled = enabled;
-        settings_store_.Save(persisted_settings_);
-    });
-    connect(config_page_, &ConfigPage::outputSplitExpanderChanged, this, [this](bool expanded) {
-        persisted_settings_.output_split_expander_expanded = expanded;
-        settings_store_.Save(persisted_settings_);
-    });
-    connect(config_page_, &ConfigPage::audioSeparateExpanderChanged, this, [this](bool expanded) {
-        persisted_settings_.audio_separate_expander_expanded = expanded;
-        settings_store_.Save(persisted_settings_);
-    });
+    // NOTE: config_page_ initial setters and signal connects are wired in buildConfigPage().
 
     main_layout->addWidget(stack_, 1);
 
@@ -681,55 +665,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(record_page_, &RecordPage::navigateToDiagnosticsPage, this,
             [this]() { navigateToPage(kDiagnosticsPageIndex); });
     connect(record_page_, &RecordPage::editExportRequested, this, &MainWindow::navigateToEditExportPage);
-    // ---- Format settings changed (from ConfigPage) ----
-    connect(config_page_, &ConfigPage::formatSettingsChanged, this, [this](const OutputSettingsModel& settings) {
-        if (applying_preset_)
-            return;
-        output_settings_.container = settings.container;
-        output_settings_.video_codec = settings.video_codec;
-        output_settings_.audio_codec = settings.audio_codec;
-        output_settings_.output_folder = settings.output_folder;
-        output_settings_.naming_pattern = settings.naming_pattern;
-        output_settings_.resolution = settings.resolution;
-        record_page_->setOutputSettings(output_settings_);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
-        // CRASH-WIRE-R1: container/codec context changed — refresh the sidecar.
-        refreshCrashSessionContext();
-        refreshDiagnosticsData();
-    });
+    // NOTE: config_page_ format/preset/video/audio/webcam signal connects are wired in buildConfigPage().
 
     // ---- FixAction routing (ADR 0033 / v0.8.0) ----
     // NOTE: diagnostics_page_ is deferred — these connects are wired in buildDiagnosticsPage().
-
-    // ---- Preset selected (combo changed) ----
-    connect(config_page_, &ConfigPage::presetSelected, this, [this](const QString& id) { onPresetSelected(id); });
-
-    // ---- Video settings changed ----
-    connect(config_page_, &ConfigPage::videoSettingsChanged, this, [this](const VideoSettingsModel& settings) {
-        if (applying_preset_)
-            return;
-        video_settings_ = settings;
-        record_page_->setVideoSettings(settings);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
-        refreshDiagnosticsData();
-    });
-
-    // ---- Audio settings changed (from ConfigPage) ----
-    connect(config_page_, &ConfigPage::audioSettingsChanged, this, [this](const capability::AudioUiState& state) {
-        if (applying_preset_)
-            return;
-        live_audio_ = state;
-        if (record_page_)
-            record_page_->applyPersistedAudioSettings(state);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
-        refreshDiagnosticsData();
-    });
 
     // ---- Audio settings changed (from RecordPage) ----
     connect(record_page_, &RecordPage::audioSettingsChanged, this, [this](const capability::AudioUiState& state) {
@@ -753,19 +692,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
             config_page_->setPresetDirty(dirty);
     });
 
-    // ---- Webcam settings changed (from ConfigPage embedded panel) ----
     // NOTE: webcam_page_ settingsChanged is wired in buildWebcamPage() after deferred construction.
-    connect(config_page_, &ConfigPage::webcamSettingsChanged, this, [this](const WebcamSettings& settings) {
-        if (applying_preset_)
-            return;
-        live_webcam_ = settings;
-        record_page_->setWebcamSettings(settings);
-        if (webcam_page_)
-            webcam_page_->applySettings(settings);
-        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
-        if (config_page_)
-            config_page_->setPresetDirty(dirty);
-    });
+    // NOTE: config_page_ webcamSettingsChanged connect is wired in buildConfigPage().
 
     // ---- PiP placement confirmed in the Record preview ----
     connect(record_page_, &RecordPage::webcamSettingsChanged, this, [this](const WebcamSettings& settings) {
@@ -781,19 +709,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
             config_page_->setPresetDirty(dirty);
     });
 
-    // ---- Preset management operations ----
-    connect(config_page_, &ConfigPage::savePresetRequested, this, &MainWindow::onSavePreset);
-    connect(config_page_, &ConfigPage::savePresetAsRequested, this, &MainWindow::onSavePresetAs);
-    connect(config_page_, &ConfigPage::newPresetRequested, this, &MainWindow::onNewPreset);
-    connect(config_page_, &ConfigPage::duplicatePresetRequested, this, &MainWindow::onDuplicatePreset);
-    connect(config_page_, &ConfigPage::renamePresetRequested, this, &MainWindow::onRenamePreset);
-    connect(config_page_, &ConfigPage::deletePresetRequested, this, &MainWindow::onDeletePreset);
-    connect(config_page_, &ConfigPage::resetChangesRequested, this, &MainWindow::onResetChanges);
-    connect(config_page_, &ConfigPage::resetToDefaultsRequested, this, &MainWindow::onResetToDefaults);
-    connect(config_page_, &ConfigPage::setDefaultPresetRequested, this, &MainWindow::onSetDefaultPreset);
-    connect(config_page_, &ConfigPage::managePresetsRequested, this, &MainWindow::openPresetManageOverlay);
-    connect(config_page_, &ConfigPage::exportCurrentPresetRequested, this, &MainWindow::onExportSelectedProfile);
-    connect(config_page_, &ConfigPage::importPresetsRequested, this, &MainWindow::onImportProfiles);
+    // NOTE: config_page_ preset-management connects are wired in buildConfigPage().
 
     // Wire preset manage overlay signals to the same handlers the overflow menu uses.
     connect(preset_manage_overlay_, &ui::dialogs::PresetManageOverlay::duplicatePresetRequested, this,
@@ -820,7 +736,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(this, &MainWindow::addMarkerRequested, record_page_, &RecordPage::onHotkeyAddMarker);
     connect(this, &MainWindow::splitRecordingRequested, record_page_, &RecordPage::onHotkeySplitRecording);
     connect(hotkey_service_, &GlobalHotkeyService::bindingChanged, this, &MainWindow::onHotkeyServiceBindingChanged);
-    connect(record_page_, &RecordPage::audioMeterLevelsUpdated, config_page_, &ConfigPage::setAudioMeterLevels);
+    // NOTE: record_page_→config_page_ audioMeterLevelsUpdated direct connect is wired in buildConfigPage()
+    // after config_page_ is built, so the receiver pointer is always valid when the connect is made.
 
     // Re-apply the selected preset once the deferred coordinator init completes.
     // initCoordinator() resets audio rows and enumerates targets, clobbering the
@@ -829,13 +746,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(record_page_, &RecordPage::coordinatorInitialized, this,
             [this]() { applyPresetConfig(preset_registry_.SelectedSavedConfig()); });
 
-    connect(config_page_, &ConfigPage::diagnosticsRequested, this, [this]() {
-        refreshDiagnosticsData();
-        navigateToPage(kDiagnosticsPageIndex);
-    });
+    // NOTE: config_page_ diagnosticsRequested + webcamDetailsRequested connects wired in buildConfigPage().
     // NOTE: diagnostics_page_ navigateToLogsRequested and diagnosticsUpdated (direct connect)
     // are wired in buildDiagnosticsPage() after deferred construction.
-    connect(config_page_, &ConfigPage::webcamDetailsRequested, this, [this]() { navigateToPage(kWebcamPageIndex); });
     // NOTE: webcam_page_ backToSettingsRequested and OutputPage signals are wired in
     // buildWebcamPage() / buildOutputPage() after deferred construction.
 
@@ -847,15 +760,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // ---- Recording overlay (RECORDING-OVERLAY-R1) ----
     // Overlay window is top-level (no Qt parent) so it is not clipped by MainWindow.
     recording_overlay_ = new ui::overlay::RecordingOverlayWindow(nullptr);
-    // Populate the Settings page checkbox from the persisted setting.
-    if (config_page_)
-        config_page_->setShowOverlay(persisted_settings_.show_recording_overlay);
-    // When the user toggles the overlay checkbox, persist the change and update live state.
-    connect(config_page_, &ConfigPage::showOverlayChanged, this, [this](bool show) {
-        persisted_settings_.show_recording_overlay = show;
-        settings_store_.Save(persisted_settings_);
-        updateRecordingOverlay();
-    });
+    // NOTE: config_page_->setShowOverlay + showOverlayChanged connect are wired in buildConfigPage().
     // When the recorded monitor geometry changes (target switch / recording start), update position.
     connect(record_page_, &RecordPage::recordingMonitorGeometryChanged, this, [this](const QRect& rect) {
         recording_monitor_rect_ = rect;
@@ -870,15 +775,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // ---- Diagnostics overlay (DIAGNOSTICS-OVERLAY-R1) ----
     // Top-level (no Qt parent) like RecordingOverlayWindow; bottom-right corner.
     diagnostics_overlay_ = new ui::overlay::DiagnosticsOverlayWindow(nullptr);
-    // Populate the Settings page checkbox from the persisted setting.
-    if (config_page_)
-        config_page_->setShowDiagnosticsOverlay(persisted_settings_.show_diagnostics_overlay);
-    // When the user toggles the diagnostics overlay checkbox, persist and update live state.
-    connect(config_page_, &ConfigPage::showDiagnosticsOverlayChanged, this, [this](bool show) {
-        persisted_settings_.show_diagnostics_overlay = show;
-        settings_store_.Save(persisted_settings_);
-        updateDiagnosticsOverlay();
-    });
+    // NOTE: config_page_->setShowDiagnosticsOverlay + showDiagnosticsOverlayChanged connect
+    // are wired in buildConfigPage().
     // Feed the diagnostics overlay from chromeRuntimeMetricsChanged (~4–30 Hz stats cadence).
     connect(record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
             [this](const QString& /*elapsed*/, const QString& bitrate_text, const QString& drop_text,
@@ -923,34 +821,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     initNotificationToasts();
 
     // ---- Close-to-tray toggle (TRAY-CLOSE-TO-TRAY-R1) ----
-    if (config_page_)
-        config_page_->setKeepRunningInTray(persisted_settings_.keep_running_in_tray);
-    connect(config_page_, &ConfigPage::keepRunningInTrayChanged, this, [this](bool keep) {
-        persisted_settings_.keep_running_in_tray = keep;
-        settings_store_.Save(persisted_settings_);
-    });
+    // NOTE: config_page_ setKeepRunningInTray + keepRunningInTrayChanged connect wired in buildConfigPage().
 
     // ---- Quick-control pill (QUICK-PILL-R1) ----
     // Top-level window (no Qt parent) so it is not clipped by MainWindow.
     // Interactive + capture-excluded: does NOT carry Qt::WindowTransparentForInput.
     quick_control_pill_ = new ui::overlay::QuickControlPillWindow(nullptr);
-    // Populate the Settings page checkbox from the persisted setting.
-    if (config_page_)
-        config_page_->setShowQuickControls(persisted_settings_.show_quick_controls);
+    // NOTE: config_page_ setShowQuickControls + showQuickControlsChanged connect wired in buildConfigPage().
     // Propagate persisted setting to the pill immediately.
     quick_control_pill_->setShowQuickControls(persisted_settings_.show_quick_controls);
-    // When the user toggles the quick controls checkbox, persist and update live state.
-    connect(config_page_, &ConfigPage::showQuickControlsChanged, this, [this](bool show) {
-        persisted_settings_.show_quick_controls = show;
-        settings_store_.Save(persisted_settings_);
-        if (quick_control_pill_)
-            quick_control_pill_->setShowQuickControls(show);
-        updateQuickControlPill();
-    });
     // ---- Theme picker (THEME-SLICE-1) ----
-    // Populate the Settings page theme picker from persisted setting.
-    if (config_page_)
-        config_page_->setThemeId(persisted_settings_.theme_id);
+    // NOTE: config_page_ setThemeId + themeIdChanged connect wired in buildConfigPage().
     // Apply the persisted theme on startup (no-op if dark-default since
     // ApplyExoSnapTheme already used it; called unconditionally for non-default).
     if (persisted_settings_.theme_id != QStringLiteral("dark-default")) {
@@ -961,22 +842,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
         if (title_bar_)
             title_bar_->refreshBrand();
     }
-    // When the user picks a different theme, apply it live and persist.
-    connect(config_page_, &ConfigPage::themeIdChanged, this, [this](const QString& id) {
-        persisted_settings_.theme_id = id;
-        settings_store_.Save(persisted_settings_);
-        ui::theme::ReapplyTheme(*qApp, id);
-        // Re-bake wordmarks (rich-text colour baked at construction, not re-read on repaint).
-        if (title_bar_)
-            title_bar_->refreshBrand();
-        if (about_page_)
-            about_page_->refreshBrand();
-        // Repaint all custom-painted widgets that read ActiveTheme() directly.
-        // QSS-styled widgets are already repainted by ReapplyTheme/style-polish;
-        // QPainter widgets that call ActiveTheme() in paintEvent() need a manual kick.
-        for (QWidget* w : findChildren<QWidget*>())
-            w->update();
-    });
+    // NOTE: config_page_ themeIdChanged connect is wired in buildConfigPage().
 
     // Wire pill buttons to the existing recording actions on RecordPage.
     connect(quick_control_pill_, &ui::overlay::QuickControlPillWindow::pauseResumeRequested, record_page_,
@@ -1002,43 +868,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(&display_notifier_, &DisplayDeviceNotifier::snapshotChanged, this, &MainWindow::onDisplaysChanged);
 
     // NOTE: webcam_page_ rescanRequested is wired in buildWebcamPage() after deferred construction.
-    if (config_page_) {
-        // Route Settings audio Rescan through the audio notifier.
-        connect(config_page_, &ConfigPage::audioRescanRequested, &audio_notifier_, &AudioDeviceNotifier::rescan);
-
-        // ADR 0034 Phase A: drive the visible Updates card from UpdateService.
-        config_page_->setAutoUpdateCheck(persisted_settings_.check_updates_on_start);
-        connect(config_page_, &ConfigPage::checkForUpdatesRequested, this, [this]() {
-            manual_update_check_ = true; // user-initiated → result updates the card, no toast
-            triggerUpdateCheck();
-        });
-        connect(config_page_, &ConfigPage::updatePrimaryActionRequested, this, [this]() {
-            // Phase A hands off to the releases page; Phase B starts the in-app download.
-            const QString url = last_update_releases_url_.isEmpty()
-                                    ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
-                                    : last_update_releases_url_;
-            QDesktopServices::openUrl(QUrl(url));
-        });
-        connect(config_page_, &ConfigPage::autoUpdateCheckToggled, this, [this](bool enabled) {
-            persisted_settings_.check_updates_on_start = enabled;
-            settings_store_.Save(persisted_settings_);
-        });
-
-        // ADR 0033: present & tearing diagnostics opt-in (elevation-gated). Seed the
-        // toggle, then persist on change. Turning it on while non-elevated raises a
-        // hub advisory offering "restart as administrator"; turning it off (or being
-        // already elevated) removes the advisory.
-        config_page_->setPresentDiagnosticsOptIn(persisted_settings_.present_diagnostics_optin);
-        connect(config_page_, &ConfigPage::presentDiagnosticsOptInToggled, this,
-                &MainWindow::onPresentDiagnosticsOptInToggled);
-        // Route Settings webcam panel Rescan through the webcam notifier.
-        // The WebcamSetupPanel is embedded in ConfigPage; access via findChild.
-        auto* setup_panel = config_page_->findChild<exosnap::ui::widgets::WebcamSetupPanel*>(
-            QStringLiteral("settingsWebcamSetupPanel"));
-        if (setup_panel)
-            connect(setup_panel, &exosnap::ui::widgets::WebcamSetupPanel::rescanRequested, &webcam_notifier_,
-                    &WebcamDeviceNotifier::rescan);
-    }
+    // NOTE: config_page_ audioRescanRequested, update-card setters/connects, presentDiagnosticsOptIn,
+    // and WebcamSetupPanel rescanRequested are all wired in buildConfigPage().
 
     // ---- Update panel (PS-PHASE-E: kept as hidden wiring via AboutOverlay shim) ----
     // The visible About surface (AboutPage) shows no update status.
@@ -2284,6 +2115,8 @@ void MainWindow::setCurrentPage(int index) {
         return;
 
     // Ensure deferred pages are built before they are shown for the first time.
+    if (index == kSettingsPageIndex && !config_page_)
+        buildConfigPage();
     if (index == kHotkeysPageIndex && !hotkeys_page_)
         buildHotkeysPage();
     if (index == kDiagnosticsPageIndex && !diagnostics_page_)
@@ -3331,16 +3164,8 @@ void MainWindow::initNotificationToasts() {
     connect(notification_toast_window_, &ui::overlay::NotificationToastWindow::actionTriggered, this,
             &MainWindow::dispatchNotificationAction);
 
-    // Populate the Settings page checkbox from the persisted setting.
-    if (config_page_)
-        config_page_->setShowNotifications(persisted_settings_.show_notifications);
-
-    // When the user toggles the notifications checkbox, persist and apply.
-    connect(config_page_, &ConfigPage::showNotificationsChanged, this, [this](bool show) {
-        persisted_settings_.show_notifications = show;
-        settings_store_.Save(persisted_settings_);
-        updateNotificationToastsEnabled();
-    });
+    // NOTE: config_page_ setShowNotifications + showNotificationsChanged connect are
+    // wired in buildConfigPage() (config_page_ does not exist yet at this call site).
 
     // ── Trigger 1 + 2 + 3: recording result ready (Saved / LowStorage / UnexpectedStop) ──
     // Hooked into RecordPage::recordingResultReady emitted from the SetResultReadyCallback.
@@ -3769,28 +3594,252 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
 
 void MainWindow::hydrateSecondaryPages() {
     // Build one deferred page per event-loop tick so the UI can paint and respond
-    // between constructors. Order: HotkeysPage (index 2), DiagnosticsPage (index 3),
-    // LogsPage (index 4), AboutPage (index 7), EditExportPage (tail slot),
-    // WebcamPage (index 5), OutputPage (index 6). Webcam/Output come last because
-    // their fan-out replay (applySettings / refreshPresetUi) is cheap but depends on
-    // stable live_webcam_ and the preset registry, both settled before the ctor exits.
-    buildHotkeysPage();
+    // between constructors. Order: ConfigPage (index 1) first — it is the heaviest
+    // and the second nav item users commonly visit; then HotkeysPage (index 2),
+    // DiagnosticsPage (index 3), LogsPage (index 4), AboutPage (index 7),
+    // EditExportPage (tail slot), WebcamPage (index 5), OutputPage (index 6).
+    // Webcam/Output come last because their fan-out replay depends on stable
+    // live_webcam_ and the preset registry, both settled before the ctor exits.
+    buildConfigPage();
     QTimer::singleShot(0, this, [this]() {
-        buildDiagnosticsPage();
+        buildHotkeysPage();
         QTimer::singleShot(0, this, [this]() {
-            buildLogsPage();
+            buildDiagnosticsPage();
             QTimer::singleShot(0, this, [this]() {
-                buildAboutPage();
+                buildLogsPage();
                 QTimer::singleShot(0, this, [this]() {
-                    buildEditExportPage();
+                    buildAboutPage();
                     QTimer::singleShot(0, this, [this]() {
-                        buildWebcamPage();
-                        QTimer::singleShot(0, this, [this]() { buildOutputPage(); });
+                        buildEditExportPage();
+                        QTimer::singleShot(0, this, [this]() {
+                            buildWebcamPage();
+                            QTimer::singleShot(0, this, [this]() { buildOutputPage(); });
+                        });
                     });
                 });
             });
         });
     });
+}
+
+void MainWindow::buildConfigPage() {
+    if (config_page_)
+        return; // already built (e.g. by an early navigation or visual harness)
+    config_page_ = new ConfigPage(output_settings_, video_settings_, stack_);
+    config_page_->setHotkeyService(hotkey_service_);
+    if (config_placeholder_) {
+        // Replace the placeholder in-place so kSettingsPageIndex stays valid for all
+        // widgets already past it in the stack (hotkeys=2, diagnostics=3, logs=4, …).
+        const int idx = stack_->indexOf(config_placeholder_);
+        stack_->insertWidget(idx, config_page_);
+        config_placeholder_->deleteLater();
+        config_placeholder_ = nullptr;
+    } else {
+        stack_->addWidget(config_page_);
+    }
+
+    // ---- Initial setters (previously in ctor) ----
+    config_page_->setAudioUiState(live_audio_);
+    config_page_->setWebcamSettings(live_webcam_);
+
+    // SETTINGS-TIERS-R1: expert mode toggle + per-card expander state.
+    config_page_->setExpertModeEnabled(persisted_settings_.expert_mode_enabled);
+    config_page_->setOutputSplitExpanderExpanded(persisted_settings_.output_split_expander_expanded);
+    config_page_->setAudioSeparateExpanderExpanded(persisted_settings_.audio_separate_expander_expanded);
+    connect(config_page_, &ConfigPage::expertModeChanged, this, [this](bool enabled) {
+        persisted_settings_.expert_mode_enabled = enabled;
+        settings_store_.Save(persisted_settings_);
+    });
+    connect(config_page_, &ConfigPage::outputSplitExpanderChanged, this, [this](bool expanded) {
+        persisted_settings_.output_split_expander_expanded = expanded;
+        settings_store_.Save(persisted_settings_);
+    });
+    connect(config_page_, &ConfigPage::audioSeparateExpanderChanged, this, [this](bool expanded) {
+        persisted_settings_.audio_separate_expander_expanded = expanded;
+        settings_store_.Save(persisted_settings_);
+    });
+
+    // ---- Format / preset / video / audio / webcam signal connects ----
+    connect(config_page_, &ConfigPage::formatSettingsChanged, this, [this](const OutputSettingsModel& settings) {
+        if (applying_preset_)
+            return;
+        output_settings_.container = settings.container;
+        output_settings_.video_codec = settings.video_codec;
+        output_settings_.audio_codec = settings.audio_codec;
+        output_settings_.output_folder = settings.output_folder;
+        output_settings_.naming_pattern = settings.naming_pattern;
+        output_settings_.resolution = settings.resolution;
+        record_page_->setOutputSettings(output_settings_);
+        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+        if (config_page_)
+            config_page_->setPresetDirty(dirty);
+        // CRASH-WIRE-R1: container/codec context changed — refresh the sidecar.
+        refreshCrashSessionContext();
+        refreshDiagnosticsData();
+    });
+    connect(config_page_, &ConfigPage::presetSelected, this, [this](const QString& id) { onPresetSelected(id); });
+    connect(config_page_, &ConfigPage::videoSettingsChanged, this, [this](const VideoSettingsModel& settings) {
+        if (applying_preset_)
+            return;
+        video_settings_ = settings;
+        record_page_->setVideoSettings(settings);
+        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+        if (config_page_)
+            config_page_->setPresetDirty(dirty);
+        refreshDiagnosticsData();
+    });
+    connect(config_page_, &ConfigPage::audioSettingsChanged, this, [this](const capability::AudioUiState& state) {
+        if (applying_preset_)
+            return;
+        live_audio_ = state;
+        if (record_page_)
+            record_page_->applyPersistedAudioSettings(state);
+        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+        if (config_page_)
+            config_page_->setPresetDirty(dirty);
+        refreshDiagnosticsData();
+    });
+    connect(config_page_, &ConfigPage::webcamSettingsChanged, this, [this](const WebcamSettings& settings) {
+        if (applying_preset_)
+            return;
+        live_webcam_ = settings;
+        record_page_->setWebcamSettings(settings);
+        if (webcam_page_)
+            webcam_page_->applySettings(settings);
+        const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
+        if (config_page_)
+            config_page_->setPresetDirty(dirty);
+    });
+
+    // ---- Preset management operations ----
+    connect(config_page_, &ConfigPage::savePresetRequested, this, &MainWindow::onSavePreset);
+    connect(config_page_, &ConfigPage::savePresetAsRequested, this, &MainWindow::onSavePresetAs);
+    connect(config_page_, &ConfigPage::newPresetRequested, this, &MainWindow::onNewPreset);
+    connect(config_page_, &ConfigPage::duplicatePresetRequested, this, &MainWindow::onDuplicatePreset);
+    connect(config_page_, &ConfigPage::renamePresetRequested, this, &MainWindow::onRenamePreset);
+    connect(config_page_, &ConfigPage::deletePresetRequested, this, &MainWindow::onDeletePreset);
+    connect(config_page_, &ConfigPage::resetChangesRequested, this, &MainWindow::onResetChanges);
+    connect(config_page_, &ConfigPage::resetToDefaultsRequested, this, &MainWindow::onResetToDefaults);
+    connect(config_page_, &ConfigPage::setDefaultPresetRequested, this, &MainWindow::onSetDefaultPreset);
+    connect(config_page_, &ConfigPage::managePresetsRequested, this, &MainWindow::openPresetManageOverlay);
+    connect(config_page_, &ConfigPage::exportCurrentPresetRequested, this, &MainWindow::onExportSelectedProfile);
+    connect(config_page_, &ConfigPage::importPresetsRequested, this, &MainWindow::onImportProfiles);
+
+    // ---- CRITICAL: direct connect (record_page_ → config_page_) ----
+    // This must live in buildConfigPage() so the receiver pointer is valid when the
+    // connection is made. The live audio-meter feed into Settings would be silently
+    // lost if this were attempted before config_page_ exists.
+    // CRITICAL: record_page_ is built unconditionally in the ctor and is always valid here.
+    connect(record_page_, &RecordPage::audioMeterLevelsUpdated, config_page_, &ConfigPage::setAudioMeterLevels);
+
+    // ---- Navigation connects ----
+    connect(config_page_, &ConfigPage::diagnosticsRequested, this, [this]() {
+        refreshDiagnosticsData();
+        navigateToPage(kDiagnosticsPageIndex);
+    });
+    connect(config_page_, &ConfigPage::webcamDetailsRequested, this, [this]() { navigateToPage(kWebcamPageIndex); });
+
+    // ---- Overlay / tray / quick-controls / theme setters + connects ----
+    config_page_->setShowOverlay(persisted_settings_.show_recording_overlay);
+    connect(config_page_, &ConfigPage::showOverlayChanged, this, [this](bool show) {
+        persisted_settings_.show_recording_overlay = show;
+        settings_store_.Save(persisted_settings_);
+        updateRecordingOverlay();
+    });
+    config_page_->setShowDiagnosticsOverlay(persisted_settings_.show_diagnostics_overlay);
+    connect(config_page_, &ConfigPage::showDiagnosticsOverlayChanged, this, [this](bool show) {
+        persisted_settings_.show_diagnostics_overlay = show;
+        settings_store_.Save(persisted_settings_);
+        updateDiagnosticsOverlay();
+    });
+    config_page_->setKeepRunningInTray(persisted_settings_.keep_running_in_tray);
+    connect(config_page_, &ConfigPage::keepRunningInTrayChanged, this, [this](bool keep) {
+        persisted_settings_.keep_running_in_tray = keep;
+        settings_store_.Save(persisted_settings_);
+    });
+    config_page_->setShowQuickControls(persisted_settings_.show_quick_controls);
+    connect(config_page_, &ConfigPage::showQuickControlsChanged, this, [this](bool show) {
+        persisted_settings_.show_quick_controls = show;
+        settings_store_.Save(persisted_settings_);
+        if (quick_control_pill_)
+            quick_control_pill_->setShowQuickControls(show);
+        updateQuickControlPill();
+    });
+    config_page_->setThemeId(persisted_settings_.theme_id);
+    connect(config_page_, &ConfigPage::themeIdChanged, this, [this](const QString& id) {
+        persisted_settings_.theme_id = id;
+        settings_store_.Save(persisted_settings_);
+        ui::theme::ReapplyTheme(*qApp, id);
+        if (title_bar_)
+            title_bar_->refreshBrand();
+        if (about_page_)
+            about_page_->refreshBrand();
+        for (QWidget* w : findChildren<QWidget*>())
+            w->update();
+    });
+
+    // ---- Audio rescan, update card, present-diagnostics opt-in, webcam-panel rescan ----
+    connect(config_page_, &ConfigPage::audioRescanRequested, &audio_notifier_, &AudioDeviceNotifier::rescan);
+    config_page_->setAutoUpdateCheck(persisted_settings_.check_updates_on_start);
+    connect(config_page_, &ConfigPage::checkForUpdatesRequested, this, [this]() {
+        manual_update_check_ = true;
+        triggerUpdateCheck();
+    });
+    connect(config_page_, &ConfigPage::updatePrimaryActionRequested, this, [this]() {
+        const QString url = last_update_releases_url_.isEmpty()
+                                ? QStringLiteral("https://github.com/Exoridus/exosnap/releases")
+                                : last_update_releases_url_;
+        QDesktopServices::openUrl(QUrl(url));
+    });
+    connect(config_page_, &ConfigPage::autoUpdateCheckToggled, this, [this](bool enabled) {
+        persisted_settings_.check_updates_on_start = enabled;
+        settings_store_.Save(persisted_settings_);
+    });
+    config_page_->setPresentDiagnosticsOptIn(persisted_settings_.present_diagnostics_optin);
+    connect(config_page_, &ConfigPage::presentDiagnosticsOptInToggled, this,
+            &MainWindow::onPresentDiagnosticsOptInToggled);
+    // Route Settings webcam panel Rescan through the webcam notifier.
+    // The WebcamSetupPanel is embedded in ConfigPage; access via findChild.
+    auto* setup_panel =
+        config_page_->findChild<exosnap::ui::widgets::WebcamSetupPanel*>(QStringLiteral("settingsWebcamSetupPanel"));
+    if (setup_panel)
+        connect(setup_panel, &exosnap::ui::widgets::WebcamSetupPanel::rescanRequested, &webcam_notifier_,
+                &WebcamDeviceNotifier::rescan);
+
+    // ---- Notification toasts wiring (moved from initNotificationToasts()) ----
+    // initNotificationToasts() runs before buildConfigPage() so config_page_ was null there.
+    config_page_->setShowNotifications(persisted_settings_.show_notifications);
+    connect(config_page_, &ConfigPage::showNotificationsChanged, this, [this](bool show) {
+        persisted_settings_.show_notifications = show;
+        settings_store_.Save(persisted_settings_);
+        updateNotificationToastsEnabled();
+    });
+
+    // ---- Fan-out replay ----
+    // applyPresetConfig delivers the full preset-applied config (output/video/audio/webcam/
+    // folder/name) to the freshly-built page. refreshPresetUi delivers preset combo options
+    // + active profile name + dirty flag. Both are safe regardless of runtime_caps_ready_
+    // because they only update UI from in-memory state (same as what a ctor call would do).
+    applyPresetConfig(preset_registry_.SelectedSavedConfig());
+    refreshPresetUi();
+
+    // Chrome-state replay: deliver the current readiness + lock status that was last set by
+    // onRecordChromeStateChanged. record_status_label_ is settled by the time buildConfigPage()
+    // runs (rebroadcastChromeState() fired during ctor). Empty label → treat as READY.
+    {
+        const QString status = record_status_label_.isEmpty() ? QStringLiteral("READY") : record_status_label_;
+        const QString config_status = (status == QStringLiteral("SAVED")) ? QStringLiteral("READY") : status;
+        config_page_->setReadinessStatus(config_status);
+        const bool locked = (status == QStringLiteral("REC") || status == QStringLiteral("PAUSED") ||
+                             status == QStringLiteral("STOPPING") || status == QStringLiteral("CHECKING") ||
+                             status == QStringLiteral("STARTING") || status == QStringLiteral("COUNTDOWN"));
+        config_page_->setRecordingControlsLocked(locked);
+        if (hotkeys_page_) {
+            const bool hk_locked = (status == QStringLiteral("REC") || status == QStringLiteral("PAUSED") ||
+                                    status == QStringLiteral("STOPPING") || status == QStringLiteral("COUNTDOWN"));
+            config_page_->setHotkeyEditingLocked(hk_locked);
+        }
+    }
 }
 
 void MainWindow::buildLogsPage() {

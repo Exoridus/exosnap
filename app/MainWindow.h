@@ -197,6 +197,10 @@ class MainWindow : public QMainWindow {
     // Builds OutputPage, replacing the cheap placeholder reserved at kOutputPageIndex.
     // Ends with refreshPresetUi() so the freshly-built page gets its profile options.
     void buildOutputPage();
+    // Builds ConfigPage (Settings), replacing the cheap placeholder reserved at kSettingsPageIndex.
+    // Ends with applyPresetConfig() + refreshPresetUi() + chrome-state replay so the freshly-built
+    // page has correct settings, preset list, and readiness/lock status on first open.
+    void buildConfigPage();
 
     // ---- Preset system (Stage 2) ----
 
@@ -328,6 +332,7 @@ class MainWindow : public QMainWindow {
     QStackedWidget* stack_ = nullptr;
     RecordPage* record_page_ = nullptr;
     ConfigPage* config_page_ = nullptr;
+    QWidget* config_placeholder_ = nullptr; // cheap slot-reservation until buildConfigPage()
     OutputPage* output_page_ = nullptr;
     DiagnosticsPage* diagnostics_page_ = nullptr;
     QWidget* diagnostics_placeholder_ = nullptr; // cheap slot-reservation until buildDiagnosticsPage()
