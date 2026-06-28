@@ -18,6 +18,12 @@
 #include <algorithm>
 #include <cstdio>
 
+// High-resolution waitable timer flag (Windows 10 1803+). Define defensively in
+// case the configured SDK headers predate it.
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+
 namespace exosnap {
 namespace {
 
@@ -787,7 +793,21 @@ void DxgiPreviewRenderer::RenderThreadProc(const recorder_core::CaptureTarget& t
     diagnostics::AppLog::debug(QStringLiteral("dxgi-preview"),
                                QStringLiteral("render thread running interval=%1ms").arg(frame_interval_ms));
 
-    ULONGLONG lastFrameMs = 0;
+    // Fixed-cadence frame pacing via a high-resolution waitable timer. The old
+    // Sleep(1) busy-poll depended on the ~15 ms system timer granularity, so the
+    // present interval wobbled (roughly 1-31 ms instead of a steady 16 ms). On a
+    // VRR display that wobble makes the monitor continuously re-negotiate its
+    // refresh rate, visible as subtle brightness pulsing — worse while a
+    // translucent overlay (e.g. the notification hub) composites over the
+    // preview. A precise per-frame wait keeps the cadence steady without raising
+    // the global timer resolution.
+    HANDLE frameTimer =
+        CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    LARGE_INTEGER qpcFreq{};
+    QueryPerformanceFrequency(&qpcFreq);
+    LARGE_INTEGER nextDeadline{};
+    QueryPerformanceCounter(&nextDeadline);
+    const LONGLONG intervalTicks = static_cast<LONGLONG>(frame_interval_ms) * qpcFreq.QuadPart / 1000;
 
     while (!stop_token.stop_requested() && !sourceLost_.load()) {
         if (resizeRequested_.load()) {
@@ -797,16 +817,33 @@ void DxgiPreviewRenderer::RenderThreadProc(const recorder_core::CaptureTarget& t
             resizeRequested_.store(false);
         }
 
-        const ULONGLONG now = GetTickCount64();
-        if (now - lastFrameMs < frame_interval_ms) {
-            Sleep(1);
-            continue;
-        }
-
         PollAndProcessFrames();
         RenderFrame();
-        lastFrameMs = now;
+
+        nextDeadline.QuadPart += intervalTicks;
+        LARGE_INTEGER nowTick{};
+        QueryPerformanceCounter(&nowTick);
+        const LONGLONG remaining = nextDeadline.QuadPart - nowTick.QuadPart;
+        if (remaining <= 0) {
+            // Render took longer than one interval — resync rather than bursting
+            // catch-up frames.
+            nextDeadline = nowTick;
+            continue;
+        }
+        if (frameTimer) {
+            LARGE_INTEGER due{};
+            due.QuadPart = -(remaining * 10000000LL / qpcFreq.QuadPart); // relative, 100 ns units
+            if (SetWaitableTimer(frameTimer, &due, 0, nullptr, nullptr, FALSE))
+                WaitForSingleObject(frameTimer, frame_interval_ms + 100);
+            else
+                Sleep(static_cast<DWORD>(remaining * 1000 / qpcFreq.QuadPart));
+        } else {
+            Sleep(static_cast<DWORD>(remaining * 1000 / qpcFreq.QuadPart));
+        }
     }
+
+    if (frameTimer)
+        CloseHandle(frameTimer);
 
     if (sourceLost_.load())
         diagnostics::AppLog::warning(QStringLiteral("dxgi-preview"), QStringLiteral("capture source lost"));
