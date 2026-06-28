@@ -81,10 +81,6 @@
 namespace exosnap {
 namespace {
 
-// Record rail sizing (UX-RECOVERY-A): a fixed desktop-width rail, never a kiosk slab.
-constexpr int kRecordRailWidth = 320;
-constexpr int kRecordHeroButtonHeight = 48;
-
 QFrame* makePanel(QWidget* parent, const char* role = "panel") {
     auto* panel = new QFrame(parent);
     panel->setProperty("panelRole", role);
@@ -948,137 +944,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     // flash overlay were removed because they were occluded by the DXGI native HWND.
     cockpit_split_layout_->addWidget(preview_column_, 7);
 
-    auto* rail_column = new QWidget(cockpit_row);
-    rail_column->setObjectName("recordRailColumn");
-    auto* rail_layout = new QVBoxLayout(rail_column);
-    rail_layout->setContentsMargins(0, 0, 0, 0);
-    rail_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
-    rail_column->setFixedWidth(kRecordRailWidth);
-
-    rail_control_panel_ = makePanel(rail_column);
-    rail_control_panel_->setObjectName("recordControlPanel");
-    setStyledStringProperty(rail_control_panel_, "stateRole", "ready");
-    auto* control_layout = new QVBoxLayout(rail_control_panel_);
-    control_layout->setContentsMargins(16, 16, 16, 16);
-    control_layout->setSpacing(10);
-
-    auto* control_head = new QHBoxLayout();
-    control_head->setContentsMargins(0, 0, 0, 0);
-    control_head->setSpacing(8);
-    control_state_label_ = makeLabel("READY", "recordControlState", rail_control_panel_);
-    auto* hotkey_label = makeLabel("ALT+F9", "recordHotkeyBadge", rail_control_panel_);
-    hotkey_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    control_head->addWidget(control_state_label_);
-    control_head->addStretch(1);
-    control_head->addWidget(hotkey_label);
-    control_layout->addLayout(control_head);
-
-    timer_label_ = makeLabel("00:00:00", "recordTimer", rail_control_panel_);
-    timer_label_->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
-    timer_label_->setProperty("timerState", "idle");
-    control_layout->addWidget(timer_label_);
-
-    hero_action_btn_ = new QPushButton(QStringLiteral("Start Recording"), rail_control_panel_);
-    hero_action_btn_->setObjectName("recordHeroBtn");
-    hero_action_btn_->setMinimumHeight(kRecordHeroButtonHeight);
-    hero_action_btn_->setEnabled(false);
-    setStyledStringProperty(hero_action_btn_, "heroRole", "muted");
-    control_layout->addWidget(hero_action_btn_);
-
-    secondary_action_btn_ = new QPushButton(QStringLiteral("Pause"), rail_control_panel_);
-    secondary_action_btn_->setProperty("role", "ghost");
-    secondary_action_btn_->setProperty("actionRole", "transport");
-    secondary_action_btn_->setVisible(false);
-    control_layout->addWidget(secondary_action_btn_);
-
-    rail_summary_label_ = makeLabel(QStringLiteral("PRESET AV1 OPUS MKV"), "railSummary", rail_control_panel_);
-    rail_summary_label_->setWordWrap(false);
-    rail_summary_label_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    control_layout->addWidget(rail_summary_label_);
-
-    rail_source_status_panel_ = new QWidget(rail_control_panel_);
-    rail_source_status_panel_->setObjectName("recordRailSourceStatusPanel");
-    auto* rail_source_layout = new QGridLayout(rail_source_status_panel_);
-    rail_source_layout->setContentsMargins(0, 0, 0, 0);
-    rail_source_layout->setHorizontalSpacing(6);
-    rail_source_layout->setVerticalSpacing(6);
-    rail_source_layout->setColumnStretch(0, 1);
-    rail_source_layout->setColumnStretch(1, 1);
-
-    auto makeRailSourceChip = [&](const QString& text) {
-        auto* label = makeLabel(text, "recordRailSourceChip", rail_source_status_panel_);
-        setStyledStringProperty(label, "stateRole", "muted");
-        return label;
-    };
-
-    rail_sys_audio_chip_ = makeRailSourceChip(QStringLiteral("System audio"));
-    rail_app_audio_chip_ = makeRailSourceChip(QStringLiteral("App audio"));
-    rail_mic_chip_ = makeRailSourceChip(QStringLiteral("Mic off"));
-    rail_webcam_chip_ = makeRailSourceChip(QStringLiteral("Webcam off"));
-    rail_source_layout->addWidget(rail_sys_audio_chip_, 0, 0);
-    rail_source_layout->addWidget(rail_app_audio_chip_, 0, 1);
-    rail_source_layout->addWidget(rail_mic_chip_, 1, 0);
-    rail_source_layout->addWidget(rail_webcam_chip_, 1, 1);
-    control_layout->addWidget(rail_source_status_panel_);
-
-    rail_source_status_summary_label_ = makeLabel(QStringLiteral("System off · App off · Mic off · Webcam off"),
-                                                  "railSourceSummary", rail_control_panel_);
-    rail_source_status_summary_label_->setWordWrap(true);
-    rail_source_status_summary_label_->setVisible(false);
-    control_layout->addWidget(rail_source_status_summary_label_);
-
-    rail_readiness_label_ = makeLabel(QStringLiteral("Checking capabilities..."), "railReadiness", rail_control_panel_);
-    rail_readiness_label_->setWordWrap(true);
-    control_layout->addWidget(rail_readiness_label_);
-
-    rail_stats_grid_ = new QFrame(rail_control_panel_);
-    rail_stats_grid_->setObjectName("recordRailStatsGrid");
-    auto* rail_stats_layout = new QGridLayout(rail_stats_grid_);
-    rail_stats_layout->setContentsMargins(0, 0, 0, 0);
-    rail_stats_layout->setHorizontalSpacing(0);
-    rail_stats_layout->setVerticalSpacing(0);
-    rail_stats_layout->setColumnStretch(0, 1);
-    rail_stats_layout->setColumnStretch(1, 1);
-
-    auto makeRailStat = [&](const QString& key, QLabel** value_out) {
-        auto* cell = new QFrame(rail_stats_grid_);
-        cell->setProperty("panelRole", "recordRailStatCell");
-        auto* cell_layout = new QVBoxLayout(cell);
-        cell_layout->setContentsMargins(10, 8, 10, 8);
-        cell_layout->setSpacing(2);
-        auto* key_label = makeLabel(key, "railStatKey", cell);
-        auto* value_label = makeLabel(QStringLiteral("—"), "railStatValue", cell);
-        cell_layout->addWidget(key_label);
-        cell_layout->addWidget(value_label);
-        *value_out = value_label;
-        return cell;
-    };
-
-    rail_stats_layout->addWidget(makeRailStat(QStringLiteral("FILE SIZE"), &rail_size_value_label_), 0, 0);
-    rail_stats_layout->addWidget(makeRailStat(QStringLiteral("DROPPED FRAMES"), &rail_drop_value_label_), 0, 1);
-    rail_fps_stat_cell_ = makeRailStat(QStringLiteral("OUTPUT FPS"), &rail_fps_value_label_);
-    rail_stats_layout->addWidget(rail_fps_stat_cell_, 1, 0, 1, 2);
-    rail_stats_grid_->setVisible(false);
-    control_layout->addWidget(rail_stats_grid_);
-
-    rail_stats_label_ = makeLabel(QStringLiteral(""), "railStats", rail_control_panel_);
-    rail_stats_label_->setWordWrap(true);
-    rail_stats_label_->setVisible(false);
-    control_layout->addWidget(rail_stats_label_);
-
-    rail_diagnostics_btn_ = new QPushButton(QStringLiteral("Open Diagnostics →"), rail_control_panel_);
-    rail_diagnostics_btn_->setObjectName("recordOpenDiagnosticsButton");
-    rail_diagnostics_btn_->setProperty("role", "ghost");
-    rail_diagnostics_btn_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    rail_diagnostics_btn_->setMinimumHeight(32);
-    rail_diagnostics_btn_->setVisible(false);
-    control_layout->addWidget(rail_diagnostics_btn_);
-
-    rail_layout->addWidget(rail_control_panel_);
-    rail_layout->addStretch(1);
-
-    cockpit_split_layout_->addWidget(rail_column, 3);
-
     capture_header_ = new ui::widgets::SectionRuleHeader("CAPTURE TARGET", content);
     capture_header_->setMeta(QStringLiteral("DISPLAY1 · 2560×1440 · %1")
                                  .arg(frameRateLabel(current_frame_rate_num_, current_frame_rate_den_)));
@@ -1675,7 +1540,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
             &RecordPage::onOpusComplexityChanged);
     connect(open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
     connect(destination_settings_btn_, &QPushButton::clicked, this, [this]() { emit navigateToOutputPage(); });
-    connect(rail_diagnostics_btn_, &QPushButton::clicked, this, [this]() { emit navigateToDiagnosticsPage(); });
     connect(result_open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
     connect(result_record_again_btn_, &QPushButton::clicked, this, [this]() {
         if (view_model_.CanStart() && interaction_mode_ == InteractionMode::None) {
@@ -1748,33 +1612,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
         };
         emit editExportRequested(path, duration, size, resolution, fps, videoStr(view_model_.result_video_codec),
                                  audioStr(view_model_.result_audio_codec), containerStr(view_model_.result_container));
-    });
-
-    connect(hero_action_btn_, &QPushButton::clicked, this, [this]() {
-        if (isCountdownActive())
-            cancelCountdown();
-        else if (view_model_.CanStart() && interaction_mode_ == InteractionMode::None)
-            onStart();
-        else if (view_model_.CanResume())
-            onResume();
-        else if (view_model_.CanStop())
-            onStop();
-    });
-    connect(secondary_action_btn_, &QPushButton::clicked, this, [this]() {
-        const QString action_role = secondary_action_btn_->property("actionRole").toString();
-        if (action_role == QStringLiteral("diagnostics")) {
-            emit navigateToDiagnosticsPage();
-            return;
-        }
-        if (action_role == QStringLiteral("openFolder")) {
-            openOutputFolder();
-            return;
-        }
-
-        if (view_model_.CanPause())
-            onPause();
-        else if (view_model_.CanStop())
-            onStop();
     });
 
     // Hybrid transport dock (HYBRID-PORT-R2) drives the same recording actions.
@@ -2344,7 +2181,6 @@ void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& sta
     syncSysMeterService();
     syncAppMeterService();
     updateAudioMeterLevels();
-    updateRailSourceStatusChips();
 }
 
 void RecordPage::setVideoSettings(const VideoSettingsModel& settings) {
@@ -2391,7 +2227,6 @@ void RecordPage::setWebcamSettings(const WebcamSettings& settings) {
     }
     updateWebcamOverlay();
     syncWebcamPreviewCapture();
-    updateRailSourceStatusChips();
 }
 
 void RecordPage::updateWebcamOverlay() {
@@ -2426,7 +2261,6 @@ void RecordPage::onWebcamOverlayMoved(QRectF rect_norm) {
 
     if (coordinator_)
         coordinator_->SetWebcamSettings(current_webcam_settings_);
-    updateRailSourceStatusChips();
     // Persist + propagate (MainWindow saves and updates the Settings/Webcam pages).
     emit webcamSettingsChanged(current_webcam_settings_);
 }
@@ -4805,7 +4639,6 @@ void RecordPage::emitAudioSettingsChanged() {
                                    .arg(view_model_.audio_ui_state.IsMicEnabled() ? 1 : 0)
                                    .arg(static_cast<int>(view_model_.audio_ui_state.source_rows.size()))
                                    .arg(view_model_.audio_ui_state.mic_gain_linear, 0, 'f', 2));
-    updateRailSourceStatusChips();
     emit audioSettingsChanged(view_model_.audio_ui_state);
 }
 
@@ -5261,41 +5094,10 @@ void RecordPage::refresh() {
                            view_model_.state == UiRecordingState::RegionSelecting);
     const bool stopping = (view_model_.state == UiRecordingState::Stopping);
 
-    const QString status_text = stateDisplay(view_model_.state);
     const bool failed = (view_model_.state == UiRecordingState::Failed);
     const bool active_recording = (view_model_.state == UiRecordingState::Recording);
     const bool completed_success =
         (view_model_.state == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
-    const QString control_status_text = blocked                                           ? QStringLiteral("BLOCKED")
-                                        : failed                                          ? QStringLiteral("ERROR")
-                                        : active_recording                                ? QStringLiteral("RECORDING")
-                                        : (view_model_.state == UiRecordingState::Paused) ? QStringLiteral("PAUSED")
-                                        : completed_success                               ? QStringLiteral("SAVED")
-                                                                                          : status_text;
-    control_state_label_->setText(control_status_text);
-
-    QString control_state_role = QStringLiteral("muted");
-    if (blocked || failed) {
-        control_state_role = QStringLiteral("blocked");
-    } else if (active_recording) {
-        control_state_role = QStringLiteral("recording");
-    } else if (view_model_.state == UiRecordingState::Paused || countdown) {
-        control_state_role = QStringLiteral("warn");
-    } else if (completed_success) {
-        control_state_role = QStringLiteral("done");
-    } else if (status_text == QStringLiteral("READY")) {
-        control_state_role = QStringLiteral("ready");
-    }
-    setStyledStringProperty(control_state_label_, "stateRole", control_state_role);
-    if (rail_control_panel_) {
-        setStyledStringProperty(rail_control_panel_, "stateRole",
-                                (blocked || failed)                               ? QStringLiteral("blocked")
-                                : active_recording                                ? QStringLiteral("recording")
-                                : (view_model_.state == UiRecordingState::Paused) ? QStringLiteral("paused")
-                                : completed_success                               ? QStringLiteral("done")
-                                : (checking || starting || stopping)              ? QStringLiteral("warn")
-                                                                                  : QStringLiteral("ready"));
-    }
     if (preview_surface_host_) {
         setStyledStringProperty(preview_surface_host_, "recordState",
                                 (blocked || failed)                               ? QStringLiteral("blocked")
@@ -5342,7 +5144,6 @@ void RecordPage::refresh() {
     updateResultDisplay();
     updateDestinationMeta();
     updateOpenFolderButtonState();
-    updateHeroButton();
     updateTransportDock();
 
     // Webcam PiP enable/mirror/aspect + state-driven edit lock, and the idle
@@ -5499,14 +5300,6 @@ void RecordPage::updateStatsDisplay() {
         (view_model_.state == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
 
     const QString timer_text = buildTimerText(recording || countdown);
-    timer_label_->setText(timer_text);
-    setStyledStringProperty(timer_label_, "timerState",
-                            active_recording      ? QStringLiteral("recording")
-                            : paused              ? QStringLiteral("paused")
-                            : countdown           ? QStringLiteral("countdown")
-                            : completed_success   ? QStringLiteral("done")
-                            : (blocked || failed) ? QStringLiteral("blocked")
-                                                  : QStringLiteral("idle"));
 
     preview_surface_->setBottomLeftText(buildPreviewBottomLeftText(recording));
     preview_surface_->setBottomRightText(buildPreviewBottomRightText(recording));
@@ -5526,69 +5319,6 @@ void RecordPage::updateStatsDisplay() {
             : QStringLiteral("-");
     const double drift_ms = (recording && view_model_.live_stats_available) ? view_model_.av_drift_ms : 0.0;
     emit chromeRuntimeMetricsChanged(timer_text, bitrate_text, drop_text, size_text, drift_ms);
-
-    const bool show_live_grid = (active_recording || paused) && view_model_.live_stats_available;
-    if (rail_stats_grid_) {
-        rail_stats_grid_->setVisible(show_live_grid);
-    }
-    if (show_live_grid && rail_size_value_label_ && rail_drop_value_label_ && rail_fps_value_label_) {
-        const uint64_t total_bytes = view_model_.video_bytes + view_model_.audio_bytes;
-        const QString total_size = QString::fromStdWString(RecordViewModel::FormatBytes(total_bytes));
-        const QString dropped = QString::number(view_model_.dropped_frames);
-        QString output_fps = QStringLiteral("—");
-        const bool fps_live = active_recording && view_model_.elapsed_seconds > 0.0 && view_model_.frames_captured > 0;
-        if (view_model_.elapsed_seconds > 0.0 && view_model_.frames_captured > 0) {
-            const double fps = static_cast<double>(view_model_.frames_captured) / view_model_.elapsed_seconds;
-            output_fps = QStringLiteral("%1").arg(fps, 0, 'f', 1);
-        }
-        rail_size_value_label_->setText(total_size);
-        rail_drop_value_label_->setText(dropped);
-        rail_fps_value_label_->setText(output_fps);
-        if (rail_fps_stat_cell_) {
-            rail_fps_stat_cell_->setVisible(fps_live);
-        }
-    }
-
-    if (rail_stats_label_) {
-        if (blocked || failed) {
-            const QString capability_text = QString::fromStdWString(view_model_.capability_status_text).trimmed();
-            QStringList blockers = blockerLinesFromText(capability_text);
-            if (blockers.isEmpty()) {
-                blockers.push_back(QStringLiteral("Resolve diagnostics blockers before recording."));
-            }
-            if (blockers.size() > 3) {
-                blockers = blockers.mid(0, 3);
-                blockers.push_back(QStringLiteral("See Diagnostics for full details."));
-            }
-            rail_stats_label_->setText(blockers.join(QStringLiteral("\n")));
-            rail_stats_label_->setVisible(true);
-        } else if (completed_success) {
-            const QString out_path = QString::fromStdWString(view_model_.result_output_path).trimmed();
-            const QString file_name =
-                out_path.isEmpty() ? QStringLiteral("Saved recording") : QFileInfo(out_path).fileName();
-            const QString file_size =
-                view_model_.result_output_file_bytes > 0
-                    ? QString::fromStdWString(RecordViewModel::FormatBytes(view_model_.result_output_file_bytes))
-                    : QStringLiteral("—");
-            const QString duration = clockFromSeconds(view_model_.result_elapsed_seconds);
-            const QString output_line =
-                (view_model_.result_output_width > 0 && view_model_.result_output_height > 0)
-                    ? QStringLiteral("%1×%2").arg(view_model_.result_output_width).arg(view_model_.result_output_height)
-                    : resolutionLabel(current_output_resolution_);
-            const QString timing_line =
-                frameRateLabel(view_model_.result_frame_rate_num, view_model_.result_frame_rate_den) +
-                QStringLiteral(" ") + (view_model_.result_cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
-            const QString codec_line = QStringLiteral("%1 · %2 · %3 · %4 · %5")
-                                           .arg(output_line, timing_line, containerLabel(view_model_.result_container),
-                                                videoCodecLabel(view_model_.result_video_codec),
-                                                audioCodecLabel(view_model_.result_audio_codec));
-            rail_stats_label_->setText(
-                QStringLiteral("%1\nDURATION %2   SIZE %3\n%4").arg(file_name, duration, file_size, codec_line));
-            rail_stats_label_->setVisible(true);
-        } else {
-            rail_stats_label_->setVisible(false);
-        }
-    }
 
     updateAudioMeterLevels();
 
@@ -5838,208 +5568,11 @@ void RecordPage::updateSourceChip() {
     }
 }
 
-void RecordPage::updateRailSourceStatusChips() {
-    if (!rail_sys_audio_chip_ || !rail_app_audio_chip_ || !rail_mic_chip_ || !rail_webcam_chip_) {
-        return;
-    }
-
-    auto setChipState = [](QLabel* chip, const QString& enabled_text, const QString& disabled_text, bool enabled) {
-        if (!chip) {
-            return;
-        }
-        const QString text = enabled ? enabled_text : disabled_text;
-        chip->setText(text);
-        chip->setToolTip(text);
-        setStyledStringProperty(chip, "stateRole", enabled ? QStringLiteral("ready") : QStringLiteral("muted"));
-    };
-
-    const bool sys_enabled = view_model_.audio_ui_state.IsSysEnabled();
-    const bool app_enabled = view_model_.audio_ui_state.IsAppEnabled();
-    const bool mic_enabled = view_model_.audio_ui_state.IsMicEnabled();
-    const bool webcam_enabled = current_webcam_settings_.enabled;
-
-    const QString sys_text = sys_enabled ? QStringLiteral("System audio") : QStringLiteral("System off");
-    const QString app_text = app_enabled ? QStringLiteral("App audio") : QStringLiteral("App off");
-    const QString mic_text = mic_enabled ? QStringLiteral("Mic") : QStringLiteral("Mic off");
-    const QString webcam_text = webcam_enabled ? QStringLiteral("Webcam") : QStringLiteral("Webcam off");
-
-    setChipState(rail_sys_audio_chip_, QStringLiteral("System audio"), QStringLiteral("System off"), sys_enabled);
-    setChipState(rail_app_audio_chip_, QStringLiteral("App audio"), QStringLiteral("App off"), app_enabled);
-    setChipState(rail_mic_chip_, QStringLiteral("Mic"), QStringLiteral("Mic off"), mic_enabled);
-    setChipState(rail_webcam_chip_, QStringLiteral("Webcam"), QStringLiteral("Webcam off"), webcam_enabled);
-
-    if (rail_source_status_panel_) {
-        setStyledStringProperty(rail_source_status_panel_, "sourceLocked",
-                                isSourceSelectionLocked() ? QStringLiteral("true") : QStringLiteral("false"));
-    }
-    if (rail_source_status_summary_label_) {
-        const QString summary = QStringLiteral("%1 · %2 · %3 · %4").arg(sys_text, app_text, mic_text, webcam_text);
-        rail_source_status_summary_label_->setText(summary);
-        rail_source_status_summary_label_->setToolTip(summary);
-    }
-}
-
 bool RecordPage::isSourceSelectionLocked() const {
     return interaction_mode_ != InteractionMode::None || view_model_.state == UiRecordingState::Countdown ||
            view_model_.state == UiRecordingState::Preparing || view_model_.state == UiRecordingState::RegionSelecting ||
            view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
            view_model_.state == UiRecordingState::Stopping || view_model_.state == UiRecordingState::Saving;
-}
-
-void RecordPage::updateHeroButton() {
-    if (!hero_action_btn_)
-        return;
-
-    const bool can_start = view_model_.CanStart();
-    const bool can_stop = view_model_.CanStop();
-    const bool can_pause = view_model_.CanPause();
-    const bool can_resume = view_model_.CanResume();
-    const bool countdown = (view_model_.state == UiRecordingState::Countdown);
-    const bool blocked = (view_model_.state == UiRecordingState::Blocked);
-    const bool failed = (view_model_.state == UiRecordingState::Failed);
-    const bool completed_success =
-        (view_model_.state == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
-    const bool stopping = (view_model_.state == UiRecordingState::Stopping);
-    const bool preparing = (countdown || view_model_.state == UiRecordingState::Preparing ||
-                            view_model_.state == UiRecordingState::RegionSelecting);
-    const bool is_recording =
-        (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
-         view_model_.state == UiRecordingState::Stopping);
-
-    if (completed_success && can_start) {
-        hero_action_btn_->setText(QStringLiteral("Record Again"));
-        hero_action_btn_->setEnabled(true);
-        setStyledStringProperty(hero_action_btn_, "heroRole", "start");
-    } else if (can_start && interaction_mode_ == InteractionMode::None) {
-        hero_action_btn_->setText(QStringLiteral("Start Recording"));
-        hero_action_btn_->setEnabled(true);
-        setStyledStringProperty(hero_action_btn_, "heroRole", "start");
-    } else if (countdown) {
-        hero_action_btn_->setText(QStringLiteral("Cancel"));
-        hero_action_btn_->setEnabled(true);
-        setStyledStringProperty(hero_action_btn_, "heroRole", "stop");
-    } else if (can_resume) {
-        hero_action_btn_->setText(QStringLiteral("Resume"));
-        hero_action_btn_->setEnabled(true);
-        setStyledStringProperty(hero_action_btn_, "heroRole", "resume");
-    } else if (can_stop) {
-        hero_action_btn_->setText(QStringLiteral("Stop Recording"));
-        hero_action_btn_->setEnabled(true);
-        setStyledStringProperty(hero_action_btn_, "heroRole", "stop");
-    } else if (preparing) {
-        hero_action_btn_->setText(QStringLiteral("Starting..."));
-        hero_action_btn_->setEnabled(false);
-        setStyledStringProperty(hero_action_btn_, "heroRole", "muted");
-    } else if (stopping) {
-        hero_action_btn_->setText(QStringLiteral("Stopping..."));
-        hero_action_btn_->setEnabled(false);
-        setStyledStringProperty(hero_action_btn_, "heroRole", "muted");
-    } else if (blocked || failed) {
-        hero_action_btn_->setText(QStringLiteral("Start Recording"));
-        hero_action_btn_->setEnabled(false);
-        setStyledStringProperty(hero_action_btn_, "heroRole", "blocked");
-    } else {
-        hero_action_btn_->setText(QStringLiteral("Start Recording"));
-        hero_action_btn_->setEnabled(false);
-        setStyledStringProperty(hero_action_btn_, "heroRole", "muted");
-    }
-
-    if (secondary_action_btn_) {
-        secondary_action_btn_->setProperty("actionRole", "transport");
-        if (can_pause) {
-            secondary_action_btn_->setText(QStringLiteral("Pause"));
-            secondary_action_btn_->setEnabled(true);
-            secondary_action_btn_->setVisible(true);
-        } else if (can_resume && can_stop) {
-            secondary_action_btn_->setText(QStringLiteral("Stop"));
-            secondary_action_btn_->setEnabled(true);
-            secondary_action_btn_->setVisible(true);
-        } else if (completed_success) {
-            const QString path = QString::fromStdWString(view_model_.result_output_path).trimmed();
-            secondary_action_btn_->setText(QStringLiteral("Open Folder"));
-            secondary_action_btn_->setEnabled(!path.isEmpty() || !last_output_folder_.empty());
-            secondary_action_btn_->setVisible(true);
-            secondary_action_btn_->setProperty("actionRole", "openFolder");
-        } else {
-            secondary_action_btn_->setVisible(false);
-        }
-    }
-
-    const bool has_selected_target = view_model_.selected_target_index >= 0 &&
-                                     view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
-    QString target_summary = QStringLiteral("No source");
-    if (view_model_.capture_mode == CaptureMode::Region) {
-        target_summary = QStringLiteral("Region");
-    } else if (has_selected_target) {
-        const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
-        target_summary = (target.kind == recorder_core::CaptureTarget::Kind::Window) ? windowLabelFromTarget(target)
-                                                                                     : displayLabelFromTarget(target);
-    }
-
-    QString profile_summary = QString::fromStdWString(active_profile_name_).trimmed();
-    if (profile_summary.isEmpty()) {
-        profile_summary = QStringLiteral("Preset");
-    }
-    profile_summary.replace(QLatin1Char('_'), QLatin1Char(' '));
-
-    if (rail_summary_label_) {
-        const QString summary =
-            QStringLiteral("%1 · %2 · %3 · %4")
-                .arg(target_summary, videoCodecLabel(current_video_codec_),
-                     frameRateLabel(current_frame_rate_num_, current_frame_rate_den_), profile_summary);
-        rail_summary_label_->setText(summary);
-        rail_summary_label_->setToolTip(summary);
-    }
-
-    if (rail_readiness_label_) {
-        if (countdown) {
-            rail_readiness_label_->setText(QStringLiteral("Countdown running. Recording starts at zero."));
-            setStyledStringProperty(rail_readiness_label_, "stateRole", "warn");
-        } else if (view_model_.state == UiRecordingState::Paused) {
-            rail_readiness_label_->setText(QStringLiteral("Paused. Source remains locked until you resume or stop."));
-            setStyledStringProperty(rail_readiness_label_, "stateRole", "warn");
-        } else if (is_recording && has_selected_target) {
-            rail_readiness_label_->setText(QStringLiteral("Source locked while recording."));
-            setStyledStringProperty(rail_readiness_label_, "stateRole", "warn");
-        } else if (blocked) {
-            rail_readiness_label_->setText(QStringLiteral("Blocked. Resolve diagnostics issues to start recording."));
-            setStyledStringProperty(rail_readiness_label_, "stateRole", "blocked");
-        } else if (failed) {
-            rail_readiness_label_->setText(QStringLiteral("Recording error. Review result details and diagnostics."));
-            setStyledStringProperty(rail_readiness_label_, "stateRole", "blocked");
-        } else if (completed_success) {
-            rail_readiness_label_->setText(QStringLiteral("Saved recording details are ready."));
-            setStyledStringProperty(rail_readiness_label_, "stateRole", "ready");
-        } else if (view_model_.state == UiRecordingState::LoadingCapabilities) {
-            rail_readiness_label_->setText(QStringLiteral("Checking capabilities..."));
-            setStyledStringProperty(rail_readiness_label_, "stateRole", "muted");
-        } else if (!has_selected_target) {
-            rail_readiness_label_->setText(QStringLiteral("Select a source, then start recording."));
-            setStyledStringProperty(rail_readiness_label_, "stateRole", "warn");
-        } else {
-            rail_readiness_label_->setText(QStringLiteral("Ready to record"));
-            setStyledStringProperty(rail_readiness_label_, "stateRole", "ready");
-        }
-    }
-
-    if (rail_diagnostics_btn_) {
-        rail_diagnostics_btn_->setVisible(blocked || failed);
-    }
-
-    updateRailSourceStatusChips();
-    const bool show_source_chips = !(blocked || failed || completed_success) && !is_recording;
-    const bool show_source_summary = !(blocked || failed || completed_success) && is_recording;
-    if (rail_source_status_panel_) {
-        rail_source_status_panel_->setVisible(show_source_chips);
-    }
-    if (rail_source_status_summary_label_) {
-        rail_source_status_summary_label_->setVisible(show_source_summary);
-    }
-
-    if (audio_settings_header_)
-        audio_settings_header_->setVisible(!is_recording);
-    if (audio_settings_panel_)
-        audio_settings_panel_->setVisible(!is_recording);
 }
 
 void RecordPage::updateAudioMeterLevels() {

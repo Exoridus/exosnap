@@ -276,8 +276,6 @@ class RecordPage : public QWidget {
     void updateAudioControls();
     void updateAudioControlsVisibility();
     void updateAudioTrackPreview();
-    void updateHeroButton();
-    void updateRailSourceStatusChips();
     void updateSourceChip();
     void updateOpenFolderButtonState();
     void updateDestinationMeta();
@@ -362,8 +360,6 @@ class RecordPage : public QWidget {
     QPushButton* target_refresh_btn_ = nullptr;
     QLabel* target_picker_note_label_ = nullptr;
     ui::widgets::PreviewSurface* preview_surface_ = nullptr;
-    QLabel* control_state_label_ = nullptr;
-    QLabel* timer_label_ = nullptr;
     ui::widgets::SectionRuleHeader* capture_header_ = nullptr;
     QWidget* source_row_ = nullptr;
     QFrame* source_chip_panel_ = nullptr;
@@ -459,27 +455,8 @@ class RecordPage : public QWidget {
     bool start_requested_awaiting_caps_ = false;
     std::optional<recorder_core::CaptureRegion> pending_start_crop_region_{};
 
-    // Rail dashboard controls
     QWidget* audio_settings_panel_ = nullptr;
     QFrame* destination_panel_ = nullptr;
-    QPushButton* hero_action_btn_ = nullptr;
-    QPushButton* secondary_action_btn_ = nullptr;
-    QPushButton* rail_diagnostics_btn_ = nullptr;
-    QFrame* rail_control_panel_ = nullptr;
-    QFrame* rail_stats_grid_ = nullptr;
-    QWidget* rail_source_status_panel_ = nullptr;
-    QLabel* rail_source_status_summary_label_ = nullptr;
-    QLabel* rail_sys_audio_chip_ = nullptr;
-    QLabel* rail_app_audio_chip_ = nullptr;
-    QLabel* rail_mic_chip_ = nullptr;
-    QLabel* rail_webcam_chip_ = nullptr;
-    QLabel* rail_size_value_label_ = nullptr;
-    QLabel* rail_drop_value_label_ = nullptr;
-    QFrame* rail_fps_stat_cell_ = nullptr;
-    QLabel* rail_fps_value_label_ = nullptr;
-    QLabel* rail_readiness_label_ = nullptr;
-    QLabel* rail_summary_label_ = nullptr;
-    QLabel* rail_stats_label_ = nullptr;
     QPushButton* result_open_folder_btn_ = nullptr;
     QPushButton* result_record_again_btn_ = nullptr;
     QPushButton* result_copy_path_btn_ = nullptr;
