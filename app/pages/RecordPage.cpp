@@ -872,7 +872,6 @@ void RecordPage::updateResponsiveLayout() {
 }
 
 RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
-    diagnostics::AppLog::info(QStringLiteral("rp-timing"), QStringLiteral("ctor start"));
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
@@ -1172,8 +1171,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     region_options_panel_->setVisible(false);
     layout->addWidget(region_options_panel_);
 
-    diagnostics::AppLog::info(QStringLiteral("rp-timing"),
-                              QStringLiteral("section-A (preview/source/cockpit/rail) done"));
     target_combo_ = new QComboBox(content);
     target_combo_->setVisible(false);
     target_combo_->setEnabled(false);
@@ -1244,7 +1241,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     readiness_layout->addWidget(readiness_rows_container_);
     layout->addWidget(readiness_panel_);
 
-    diagnostics::AppLog::info(QStringLiteral("rp-timing"), QStringLiteral("B1a (readiness panel done)"));
     audio_settings_header_ = new ui::widgets::SectionRuleHeader("AUDIO SETTINGS", content);
     audio_settings_header_->setMeta("OUTPUT · INPUT · TRACK PREVIEW");
     layout->addWidget(audio_settings_header_);
@@ -1375,7 +1371,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 
     layout->addWidget(audio_settings_panel);
 
-    diagnostics::AppLog::info(QStringLiteral("rp-timing"), QStringLiteral("B1b (audio settings combos done)"));
     audio_header_ = new ui::widgets::SectionRuleHeader("AUDIO ACTIVITY", content);
     audio_header_->setMeta("LIVE · RMS");
     layout->addWidget(audio_header_);
@@ -1421,7 +1416,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     addAudioRow("SYS", "Other system audio", &sys_meter_, &sys_db_label_);
     layout->addWidget(audio_panel);
 
-    diagnostics::AppLog::info(QStringLiteral("rp-timing"), QStringLiteral("B1c (audio activity/VU done)"));
     destination_header_ = new ui::widgets::SectionRuleHeader("DESTINATION", content);
     destination_header_->setMeta("MKV · AV1 · OPUS");
     layout->addWidget(destination_header_);
@@ -1511,7 +1505,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     layout->insertWidget(5, result_panel_);
 
     layout->addStretch(1);
-    diagnostics::AppLog::info(QStringLiteral("rp-timing"), QStringLiteral("B1c2 (pre legacy host + setWidget)"));
 
     // Hybrid v3 (HYBRID-PORT-R2): the visible Record page is preview-first with a
     // stable bottom transport dock. The legacy sections (right rail, audio
@@ -1533,12 +1526,8 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     legacy_host_layout->setContentsMargins(0, 0, 0, 0);
     legacy_host_layout->addWidget(scroll); // reparents scroll from `this` into the hidden host
     scroll->setWidget(content);            // content lands in a hidden subtree -> layout deferred
-    diagnostics::AppLog::info(QStringLiteral("rp-timing"), QStringLiteral("B1c3 (post setWidget into hidden host)"));
 
-    diagnostics::AppLog::info(QStringLiteral("rp-timing"),
-                              QStringLiteral("section-B1 (combos/audio/VU done, pre-TransportDock)"));
     transport_dock_ = new ui::widgets::TransportDock(this);
-    diagnostics::AppLog::info(QStringLiteral("rp-timing"), QStringLiteral("section-B2 (TransportDock built)"));
 
     // --- Result details panel (shown on Completed success) ---
     auto* result_details_panel_ = new QFrame(this);
@@ -1691,53 +1680,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     delete_layout->addWidget(delete_confirm_no_btn_);
     result_details_outer->addWidget(delete_confirm_overlay_);
 
-    // --- Recent recordings section ---
-    recent_section_ = new QFrame(this);
-    recent_section_->setObjectName(QStringLiteral("recentRecordingsSection"));
-    recent_section_->setProperty("panelRole", "recentRecordings");
-    recent_section_->setVisible(false);
-    auto* recent_section_layout = new QVBoxLayout(recent_section_);
-    recent_section_layout->setContentsMargins(4, 6, 4, 6);
-    recent_section_layout->setSpacing(4);
-    recent_header_label_ = new QLabel(QStringLiteral("Recent recordings"), recent_section_);
-    recent_header_label_->setObjectName(QStringLiteral("recentHeaderLabel"));
-    recent_header_label_->setProperty("labelRole", "recentHeader");
-    auto* recent_items_container_ = new QWidget(recent_section_);
-    recent_items_layout_ = new QVBoxLayout(recent_items_container_);
-    recent_items_layout_->setContentsMargins(0, 0, 0, 0);
-    recent_items_layout_->setSpacing(2);
-    recent_section_layout->addWidget(recent_header_label_);
-    recent_section_layout->addWidget(recent_items_container_);
-
-    // v0.8.0-D: Pre-flight ReadinessGate — compact status widget above the transport dock
-    diagnostics::AppLog::info(QStringLiteral("rp-timing"),
-                              QStringLiteral("section-B (combos/readiness panel/rows) done"));
-    readiness_gate_panel_ = new QFrame(this);
-    readiness_gate_panel_->setProperty("panelRole", "readinessGate");
-    readiness_gate_panel_->setVisible(false);
-    auto* rg_layout = new QHBoxLayout(readiness_gate_panel_);
-    rg_layout->setContentsMargins(10, 6, 10, 6);
-    rg_layout->setSpacing(8);
-
-    auto* rg_text_col = new QVBoxLayout();
-    rg_text_col->setSpacing(2);
-
-    readiness_gate_status_label_ = new QLabel(QStringLiteral("Checking capabilities..."), readiness_gate_panel_);
-    readiness_gate_status_label_->setProperty("labelRole", "readinessGateStatus");
-    rg_text_col->addWidget(readiness_gate_status_label_);
-
-    readiness_gate_detail_label_ = new QLabel(QStringLiteral(""), readiness_gate_panel_);
-    readiness_gate_detail_label_->setProperty("labelRole", "readinessGateDetail");
-    readiness_gate_detail_label_->setWordWrap(true);
-    readiness_gate_detail_label_->setVisible(false);
-    rg_text_col->addWidget(readiness_gate_detail_label_);
-
-    rg_layout->addLayout(rg_text_col, 1);
-
-    readiness_gate_details_btn_ = new QPushButton(QStringLiteral("View details \xe2\x86\x92"), readiness_gate_panel_);
-    readiness_gate_details_btn_->setProperty("role", "ghost");
-    rg_layout->addWidget(readiness_gate_details_btn_, 0, Qt::AlignVCenter);
-
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
                              ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
@@ -1763,14 +1705,9 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     root->setSpacing(10);
     root->addWidget(preview_column_, 1);
     root->addWidget(result_details_panel_, 0);
-    // readiness_gate_panel_ is NOT added to the visible layout (user request): the
-    // "Checking capabilities…" gate row is removed. The Record button still disables
-    // on blockers and Diagnostics carries the detail. Kept constructed so its update
-    // logic and pointers stay valid (mirrors recent_section_ below).
-    // v10: Recent recordings section removed from the visible layout — the
-    // finished state returns to Ready and a toast carries the result.
-    // recent_section_ is kept constructed (history_store_ still writes to it)
-    // but never added to the root layout so it is invisible.
+    // The pre-flight readiness gate + recent-recordings list are not part of the v10
+    // layout: blockers disable the Record button and Diagnostics carries the detail;
+    // the finished state returns to Ready with a result toast.
     root->addWidget(capture_frame_status_label_, 0);
     root->addWidget(marker_feedback_label_, 0);
     root->addWidget(transport_dock_, 0);
@@ -1813,7 +1750,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(destination_settings_btn_, &QPushButton::clicked, this, [this]() { emit navigateToOutputPage(); });
     connect(readiness_diagnostics_btn_, &QPushButton::clicked, this, [this]() { emit navigateToDiagnosticsPage(); });
     connect(rail_diagnostics_btn_, &QPushButton::clicked, this, [this]() { emit navigateToDiagnosticsPage(); });
-    connect(readiness_gate_details_btn_, &QPushButton::clicked, this, [this]() { emit navigateToDiagnosticsPage(); });
     connect(result_open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
     connect(result_record_again_btn_, &QPushButton::clicked, this, [this]() {
         if (view_model_.CanStart() && interaction_mode_ == InteractionMode::None) {
@@ -5536,7 +5472,6 @@ void RecordPage::refresh() {
     rebuildTargetPicker();
     updateSourceChip();
     updateReadinessRows();
-    updateReadinessGate();
     updateAudioControls();
     updateAudioTrackPreview();
     syncMicMeterService();
@@ -6082,92 +6017,6 @@ void RecordPage::updateRecReadiness() {
     diagnostics::RecommendationEngine engine(shared_runtime_caps_, config, 0, 0, profile_supported);
     rec_checklist_ = engine.Generate();
     rec_checklist_valid_ = true;
-}
-
-void RecordPage::updateReadinessGate() {
-    if (!readiness_gate_panel_ || !readiness_gate_status_label_ || !readiness_gate_detail_label_ ||
-        !readiness_gate_details_btn_)
-        return;
-
-    const UiRecordingState s = view_model_.state;
-    const bool recording =
-        (s == UiRecordingState::Recording || s == UiRecordingState::Paused || s == UiRecordingState::Stopping ||
-         s == UiRecordingState::Saving || s == UiRecordingState::Countdown || s == UiRecordingState::Preparing ||
-         s == UiRecordingState::ArmedFromRecovery || s == UiRecordingState::RegionSelecting);
-    const bool completed = (s == UiRecordingState::Completed);
-
-    // The readiness gate row was removed from the visible layout (user request), so the
-    // panel has NO layout slot. Calling setVisible(true) would float it at (0,0) — the
-    // top-left "Checking… / View details" ghost element. Keep it permanently hidden; the
-    // state/text updates below stay as harmless no-ops on the hidden panel so any
-    // remaining callers and pointers keep working.
-    readiness_gate_panel_->setVisible(false);
-
-    // Hide during active recording and after completing (result panel takes over)
-    if (recording || completed) {
-        return;
-    }
-
-    const bool blocked = (s == UiRecordingState::Blocked);
-    const bool checking = (s == UiRecordingState::LoadingCapabilities);
-
-    QString status_text;
-    QString detail_text;
-    QString state_role;
-
-    if (checking) {
-        status_text = QStringLiteral("Checking capabilities\xe2\x80\xa6");
-        state_role = QStringLiteral("muted");
-    } else if (blocked) {
-        status_text = QStringLiteral("Recording blocked");
-        // Pull first blocker title from coordinator capability text
-        const QString cap_text = QString::fromStdWString(view_model_.capability_status_text).trimmed();
-        const QStringList lines = cap_text.split(QChar('\n'), Qt::SkipEmptyParts);
-        if (!lines.isEmpty())
-            detail_text = lines.first().trimmed();
-        state_role = QStringLiteral("blocked");
-    } else if (rec_checklist_valid_ && rec_checklist_.has_blocker) {
-        // Recommendation engine found a container/codec blocker (rec.009/010)
-        status_text = QStringLiteral("Recording blocked");
-        for (const auto& r : rec_checklist_.results) {
-            if (r.severity == diagnostics::DiagnosticSeverity::Blocker) {
-                detail_text = QString::fromStdString(r.title);
-                break;
-            }
-        }
-        state_role = QStringLiteral("blocked");
-    } else if (rec_checklist_valid_ && rec_checklist_.has_notice) {
-        const int notice_count = static_cast<int>(std::count_if(
-            rec_checklist_.results.begin(), rec_checklist_.results.end(), [](const diagnostics::DiagnosticResult& r) {
-                return r.severity == diagnostics::DiagnosticSeverity::Notice;
-            }));
-        status_text = notice_count == 1 ? QStringLiteral("1 warning") : QStringLiteral("%1 warnings").arg(notice_count);
-        for (const auto& r : rec_checklist_.results) {
-            if (r.severity == diagnostics::DiagnosticSeverity::Notice) {
-                detail_text = QString::fromStdString(r.title);
-                break;
-            }
-        }
-        state_role = QStringLiteral("warn");
-    } else {
-        status_text = QStringLiteral("Ready to record");
-        state_role = QStringLiteral("ready");
-    }
-
-    readiness_gate_status_label_->setText(status_text);
-
-    const bool has_detail = !detail_text.isEmpty();
-    readiness_gate_detail_label_->setText(detail_text);
-    readiness_gate_detail_label_->setVisible(has_detail);
-
-    // Apply stateRole to panel + status label for QSS color-coding
-    const auto repolish = [](QWidget* w, const QString& role) {
-        w->setProperty("stateRole", role.isEmpty() ? QVariant() : QVariant(role));
-        w->style()->unpolish(w);
-        w->style()->polish(w);
-    };
-    repolish(readiness_gate_panel_, state_role);
-    repolish(readiness_gate_status_label_, state_role);
 }
 
 void RecordPage::updateSourceChip() {
@@ -6778,77 +6627,6 @@ void RecordPage::hideResultDetailsPanel() {
         rename_overlay_->setVisible(false);
     if (delete_confirm_overlay_)
         delete_confirm_overlay_->setVisible(false);
-}
-
-void RecordPage::updateRecentRecordingsSection() {
-    if (!recent_section_ || !recent_items_layout_)
-        return;
-
-    if (!view_model_.HasRecentRecordings()) {
-        recent_section_->setVisible(false);
-        return;
-    }
-
-    // Recent Recordings removed from the Record page (user request): the section has no
-    // layout slot, so setVisible(true) would float it at (0,0) top-left. Keep it hidden.
-    // History is still tracked in the view-model / store; it is just not shown here.
-    recent_section_->setVisible(false);
-
-    // Remove old items
-    QLayoutItem* child;
-    while ((child = recent_items_layout_->takeAt(0)) != nullptr) {
-        if (child->widget())
-            child->widget()->deleteLater();
-        delete child;
-    }
-
-    // Add each recent recording
-    int index = 0;
-    for (const auto& rec : view_model_.recent_recordings) {
-        auto* row = new QWidget(recent_section_);
-        row->setObjectName(QStringLiteral("recentItemRow_%1").arg(index));
-        auto* row_layout = new QHBoxLayout(row);
-        row_layout->setContentsMargins(4, 2, 4, 2);
-        row_layout->setSpacing(6);
-
-        // Filename button — #02: min-width 280px, ElideMiddle, padding 8/12, mono 12.
-        // Year start and .mkv extension must survive elision.
-        auto* name_btn = new QPushButton(row);
-        name_btn->setObjectName(QStringLiteral("recentItemName_%1").arg(index));
-        name_btn->setProperty("role", "ghost");
-        name_btn->setProperty("recentItemChip", true);
-        name_btn->setCursor(Qt::PointingHandCursor);
-        name_btn->setMinimumWidth(280);
-        // Elide using the button's own font metrics at its actual minimum width.
-        // Reserve 24px for horizontal padding so elide and display widths match.
-        const int elide_width = std::max(280, name_btn->minimumWidth()) - 24;
-        const QFontMetrics fm(name_btn->font());
-        const QString elided = fm.elidedText(rec.fileName(), Qt::ElideMiddle, elide_width);
-        name_btn->setText(elided);
-        const QString full_path = rec.fileExists() ? rec.file_path : QStringLiteral("File missing: ") + rec.file_path;
-        name_btn->setToolTip(full_path);
-        name_btn->setEnabled(rec.fileExists());
-        const int name_idx = index;
-        QObject::connect(name_btn, &QPushButton::clicked, this, [this, name_idx]() { onRecentItemOpen(name_idx); });
-
-        // Size + duration info — D4: history rows own name + size · duration; no Folder button
-        const QString size_text =
-            rec.file_size_bytes > 0
-                ? QString::fromStdWString(RecordViewModel::FormatBytes(static_cast<uint64_t>(rec.file_size_bytes)))
-                : QStringLiteral("—");
-        const QString duration = clockFromSeconds(rec.duration_seconds);
-        auto* info_label = new QLabel(QStringLiteral("%1 · %2").arg(size_text, duration), row);
-        info_label->setObjectName(QStringLiteral("recentItemInfo_%1").arg(index));
-        info_label->setProperty("labelRole", "recentItemInfo");
-
-        // D4: per-row "Folder" button removed — the dock's folder icon covers the latest file.
-
-        row_layout->addWidget(name_btn);
-        row_layout->addWidget(info_label, 1);
-
-        recent_items_layout_->addWidget(row);
-        ++index;
-    }
 }
 
 // ---------------------------------------------------------------------------

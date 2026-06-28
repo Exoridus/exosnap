@@ -281,8 +281,7 @@ class RecordPage : public QWidget {
     void onDockFilenameActivated();
     void updateTargetCards();
     void updateReadinessRows();
-    void updateRecReadiness();  // runs RecommendationEngine, caches rec_checklist_
-    void updateReadinessGate(); // updates readiness_gate_panel_ from state + rec_checklist_
+    void updateRecReadiness(); // runs RecommendationEngine, caches rec_checklist_
     void updateResponsiveLayout();
     void updateAudioMeterLevels();
     void updateAudioControls();
@@ -296,7 +295,6 @@ class RecordPage : public QWidget {
     void updateResultDetailsPanel();
     void hideResultDetailsPanel();
     void updateReportCard(); // populates pipeline stats in resultDetailsPanel
-    void updateRecentRecordingsSection();
     void syncTargetSelectionToCombo(int target_index);
     // When allow_fallback is false the reactive path gets no silent switch:
     // a vanished target becomes unresolved (selected_target_index = -1) instead
@@ -519,11 +517,6 @@ class RecordPage : public QWidget {
     QPushButton* delete_confirm_yes_btn_ = nullptr;
     QPushButton* delete_confirm_no_btn_ = nullptr;
 
-    // Recent recordings section
-    QWidget* recent_section_ = nullptr;
-    QLabel* recent_header_label_ = nullptr;
-    QVBoxLayout* recent_items_layout_ = nullptr;
-
     // Hybrid v3 preview-first chrome (HYBRID-PORT-R2).
     ui::widgets::TransportDock* transport_dock_ = nullptr;
     QWidget* legacy_host_ = nullptr;
@@ -561,10 +554,6 @@ class RecordPage : public QWidget {
     bool applying_external_config_ = false;
 
     // v0.8.0-D: Pre-flight readiness gate
-    QFrame* readiness_gate_panel_ = nullptr;
-    QLabel* readiness_gate_status_label_ = nullptr;
-    QLabel* readiness_gate_detail_label_ = nullptr;
-    QPushButton* readiness_gate_details_btn_ = nullptr;
     // Cached recommendation checklist (quick sync; refreshed on settings/caps change)
     diagnostics::DiagnosticChecklist rec_checklist_;
     bool rec_checklist_valid_ = false;
