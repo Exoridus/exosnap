@@ -1,6 +1,7 @@
 #include "CompareHint.h"
 
 #include <QApplication>
+#include <QCursor>
 #include <QEnterEvent>
 #include <QFocusEvent>
 #include <QFrame>
@@ -11,6 +12,7 @@
 #include <QPainter>
 #include <QScreen>
 #include <QSize>
+#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -67,6 +69,23 @@ CompareHint::CompareHint(const QString& compare_key, const QString& current_valu
 
     // Click toggles pin state.
     connect(this, &QToolButton::clicked, this, &CompareHint::onClicked);
+
+    // Hover debounce: showing the Qt::Popup fires a synthetic leave on this button,
+    // and the cursor often travels into the popover; deferring the hide decision to
+    // this timer (which checks the real cursor position against both the button and
+    // the popover) stops the show/hide flicker.
+    hover_timer_ = new QTimer(this);
+    hover_timer_->setSingleShot(true);
+    hover_timer_->setInterval(140);
+    connect(hover_timer_, &QTimer::timeout, this, [this]() {
+        if (popover_pinned_)
+            return;
+        const QPoint gp = QCursor::pos();
+        const bool over_button = QRect(mapToGlobal(QPoint(0, 0)), size()).contains(gp);
+        const bool over_popover = popover_ && popover_->isVisible() && popover_->geometry().contains(gp);
+        if (!over_button && !over_popover)
+            hidePopover();
+    });
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -101,6 +120,8 @@ void CompareHint::updateIcon(bool highlighted) {
 
 void CompareHint::enterEvent(QEnterEvent* event) {
     QToolButton::enterEvent(event);
+    if (hover_timer_)
+        hover_timer_->stop();
     popover_hovered_ = true;
     updateIcon(true);
     if (ui::compare::compareData(compare_key_))
@@ -111,8 +132,11 @@ void CompareHint::leaveEvent(QEvent* event) {
     QToolButton::leaveEvent(event);
     popover_hovered_ = false;
     updateIcon(popover_pinned_ || (popover_ && popover_->isVisible()));
-    if (!popover_pinned_)
-        hidePopover();
+    // Defer the hide: the cursor may be moving into the popover, and opening the
+    // popover itself fires a synthetic leave here. The hover timer hides only once
+    // the cursor has truly left both the button and the popover.
+    if (!popover_pinned_ && hover_timer_)
+        hover_timer_->start();
 }
 
 void CompareHint::focusInEvent(QFocusEvent* event) {
@@ -127,6 +151,21 @@ void CompareHint::focusOutEvent(QFocusEvent* event) {
     updateIcon(false);
     if (!popover_pinned_)
         hidePopover();
+}
+
+bool CompareHint::eventFilter(QObject* watched, QEvent* event) {
+    // Keep the popover open while the cursor is inside it; restart the hide timer
+    // when the cursor leaves it (mirrors the button's enter/leave debounce).
+    if (watched == popover_) {
+        if (event->type() == QEvent::Enter) {
+            if (hover_timer_)
+                hover_timer_->stop();
+        } else if (event->type() == QEvent::Leave) {
+            if (!popover_pinned_ && hover_timer_)
+                hover_timer_->start();
+        }
+    }
+    return QToolButton::eventFilter(watched, event);
 }
 
 // ── Slots ─────────────────────────────────────────────────────────────────────
@@ -156,6 +195,7 @@ void CompareHint::buildPopover() {
     popover_ = new QWidget(nullptr, Qt::Popup | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
     popover_->setFixedWidth(kPopoverWidth);
     popover_->setAttribute(Qt::WA_TranslucentBackground, false);
+    popover_->installEventFilter(this); // track hover enter/leave for the debounce
 
     // Outer frame styling via setStyleSheet (inline, not via QSS role, because the
     // popover is a top-level window and does not inherit the app stylesheet).
@@ -428,8 +468,13 @@ void CompareHint::repositionPopover() {
     int x = glyphCenterX - popW / 2;
     int y = glyphGlobal.y() + height() + 6;
 
-    // Flip above if not enough room below (use primary screen geometry).
-    QScreen* screen = QApplication::primaryScreen();
+    // Flip/clamp within the screen the glyph is actually on — not always the primary
+    // monitor (that placed the popover on monitor 1 when the window was on monitor 2).
+    QScreen* screen = this->screen();
+    if (!screen)
+        screen = QGuiApplication::screenAt(glyphGlobal);
+    if (!screen)
+        screen = QApplication::primaryScreen();
     if (screen) {
         const QRect avail = screen->availableGeometry();
         if (y + popH > avail.bottom())
