@@ -262,14 +262,11 @@ class RecordPage : public QWidget {
     void deliverCapabilitiesToCoordinator();
     void refresh();
     void updateStatsDisplay();
-    void updateResultDisplay();
     void updateTransportDock();
     void onDockSourceToggle(const QString& key);
     void updateResponsiveLayout();
     void updateAudioMeterLevels();
     void updateSourceChip();
-    void updateOpenFolderButtonState();
-    void updateDestinationMeta();
     void updateResultDetailsPanel();
     void hideResultDetailsPanel();
     void updateReportCard(); // populates pipeline stats in resultDetailsPanel
@@ -337,26 +334,6 @@ class RecordPage : public QWidget {
     QPushButton* change_source_btn_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
     ui::widgets::RegionSelectionOverlay* region_overlay_ = nullptr;
-    ui::widgets::VUMeterWidget* app_meter_ = nullptr;
-    ui::widgets::VUMeterWidget* mic_meter_ = nullptr;
-    ui::widgets::VUMeterWidget* sys_meter_ = nullptr;
-    QLabel* app_db_label_ = nullptr;
-    QLabel* mic_db_label_ = nullptr;
-    QLabel* sys_db_label_ = nullptr;
-    ui::widgets::SectionRuleHeader* destination_header_ = nullptr;
-    QLabel* output_path_label_ = nullptr;
-    QLabel* output_meta_label_ = nullptr;
-    QPushButton* open_folder_btn_ = nullptr;
-    QPushButton* destination_settings_btn_ = nullptr;
-    QFrame* result_panel_ = nullptr;
-    QLabel* result_title_label_ = nullptr;
-    QLabel* result_message_label_ = nullptr;
-    QLabel* result_action_label_ = nullptr;
-    QLabel* result_file_label_ = nullptr;
-    QLabel* result_stats_label_ = nullptr;
-    QLabel* result_path_label_ = nullptr;
-    QLabel* result_technical_label_ = nullptr;
-    QFrame* result_technical_separator_ = nullptr;
     std::filesystem::path last_output_folder_;
     OutputSettingsModel current_output_settings_;
     capability::Container current_container_ = capability::Container::Matroska;
@@ -392,9 +369,6 @@ class RecordPage : public QWidget {
     bool start_requested_awaiting_caps_ = false;
     std::optional<recorder_core::CaptureRegion> pending_start_crop_region_{};
 
-    QFrame* destination_panel_ = nullptr;
-    QPushButton* result_open_folder_btn_ = nullptr;
-    QPushButton* result_record_again_btn_ = nullptr;
     QPushButton* result_copy_path_btn_ = nullptr;
     QPushButton* result_rename_btn_ = nullptr;
     QPushButton* result_delete_btn_ = nullptr;

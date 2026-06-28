@@ -848,143 +848,9 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     // flash overlay were removed because they were occluded by the DXGI native HWND.
     cockpit_split_layout_->addWidget(preview_column_, 7);
 
-    auto* audio_panel = makePanel(content);
-    auto* audio_layout = new QVBoxLayout(audio_panel);
-    audio_layout->setContentsMargins(0, 0, 0, 0);
-    audio_layout->setSpacing(0);
-
-    auto addAudioRow = [&](const QString& tag, const QString& title, ui::widgets::VUMeterWidget** meter_out,
-                           QLabel** db_label_out) {
-        auto* row = new QWidget(audio_panel);
-        row->setObjectName("audioActivityRow");
-        row->setProperty("firstRow", (*meter_out == nullptr));
-        auto* row_layout = new QHBoxLayout(row);
-        row_layout->setContentsMargins(14, 9, 14, 9);
-        row_layout->setSpacing(12);
-
-        auto* tag_label = makeLabel(tag, "audioTag", row);
-        tag_label->setFixedWidth(44);
-        row_layout->addWidget(tag_label);
-
-        auto* title_label = makeLabel(title, "audioRowTitle", row);
-        row_layout->addWidget(title_label, 1);
-
-        auto* meter = new ui::widgets::VUMeterWidget(row);
-        meter->setSegmentCount(24);
-        row_layout->addWidget(meter, 1);
-
-        auto* db_label = makeLabel("– dB", "audioDb", row);
-        db_label->setFixedWidth(118);
-        db_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        row_layout->addWidget(db_label);
-
-        audio_layout->addWidget(row);
-
-        *meter_out = meter;
-        *db_label_out = db_label;
-    };
-
-    addAudioRow("APP", "Selected application audio", &app_meter_, &app_db_label_);
-    addAudioRow("MIC", "Microphone input", &mic_meter_, &mic_db_label_);
-    addAudioRow("SYS", "Other system audio", &sys_meter_, &sys_db_label_);
-    layout->addWidget(audio_panel);
-
-    destination_header_ = new ui::widgets::SectionRuleHeader("DESTINATION", content);
-    destination_header_->setMeta("MKV · AV1 · OPUS");
-    layout->addWidget(destination_header_);
-
-    destination_panel_ = makePanel(content);
-    auto* destination_panel = destination_panel_;
-    auto* destination_layout = new QHBoxLayout(destination_panel);
-    destination_layout->setContentsMargins(14, 12, 14, 12);
-    destination_layout->setSpacing(10);
-
-    auto* dest_left = new QWidget(destination_panel);
-    auto* dest_left_layout = new QVBoxLayout(dest_left);
-    dest_left_layout->setContentsMargins(0, 0, 0, 0);
-    dest_left_layout->setSpacing(2);
-    output_path_label_ = makeLabel("--", "destinationPath", dest_left);
-    output_meta_label_ = makeLabel("No file saved yet — configure in Output settings.", "destinationMeta", dest_left);
-    output_meta_label_->setWordWrap(true);
-    dest_left_layout->addWidget(output_path_label_);
-    dest_left_layout->addWidget(output_meta_label_);
-
-    auto* dest_buttons = new QWidget(destination_panel);
-    auto* dest_buttons_layout = new QHBoxLayout(dest_buttons);
-    dest_buttons_layout->setContentsMargins(0, 0, 0, 0);
-    dest_buttons_layout->setSpacing(6);
-    open_folder_btn_ = new QPushButton("Open Folder", dest_buttons);
-    open_folder_btn_->setProperty("role", "ghost");
-    open_folder_btn_->setEnabled(false);
-    destination_settings_btn_ = new QPushButton("Settings", dest_buttons);
-    destination_settings_btn_->setProperty("role", "ghost");
-    destination_settings_btn_->setEnabled(true);
-    dest_buttons_layout->addWidget(open_folder_btn_);
-    dest_buttons_layout->addWidget(destination_settings_btn_);
-
-    destination_layout->addWidget(dest_left, 1);
-    destination_layout->addWidget(dest_buttons, 0, Qt::AlignRight | Qt::AlignVCenter);
-    layout->addWidget(destination_panel);
-
-    result_panel_ = makePanel(content, "resultPanel");
-    auto* result_layout = new QVBoxLayout(result_panel_);
-    result_layout->setContentsMargins(14, 12, 14, 12);
-    result_layout->setSpacing(7);
-    result_title_label_ = makeLabel("", "resultTitleOk", result_panel_);
-    result_message_label_ = makeLabel("", "resultUserMessage", result_panel_);
-    result_action_label_ = makeLabel("", "resultActionHint", result_panel_);
-    result_file_label_ = makeLabel("", "resultFile", result_panel_);
-    result_stats_label_ = makeLabel("", "resultStats", result_panel_);
-    result_path_label_ = makeLabel("", "resultPath", result_panel_);
-    auto* result_actions_row = new QWidget(result_panel_);
-    auto* result_actions_layout = new QHBoxLayout(result_actions_row);
-    result_actions_layout->setContentsMargins(0, 2, 0, 0);
-    result_actions_layout->setSpacing(8);
-    result_open_folder_btn_ = new QPushButton("Open Folder", result_actions_row);
-    result_open_folder_btn_->setProperty("role", "ghost");
-    result_record_again_btn_ = new QPushButton("Record Again", result_actions_row);
-    result_record_again_btn_->setProperty("role", "ghost");
-    auto* result_edit_export_btn_ = new QPushButton("Edit & export", result_actions_row);
-    result_edit_export_btn_->setProperty("role", "ghost");
-    result_edit_export_btn_->setObjectName(QStringLiteral("resultEditExportBtn"));
-    result_actions_layout->addWidget(result_open_folder_btn_);
-    result_actions_layout->addWidget(result_record_again_btn_);
-    result_actions_layout->addWidget(result_edit_export_btn_);
-    result_actions_layout->addStretch(1);
-    result_technical_separator_ = new QFrame(result_panel_);
-    result_technical_separator_->setFrameShape(QFrame::NoFrame);
-    result_technical_separator_->setFixedHeight(1);
-    result_technical_separator_->setProperty("frameRole", "resultTechnicalSeparator");
-    result_technical_label_ = makeLabel("", "resultTechnical", result_panel_);
-    result_message_label_->setWordWrap(true);
-    result_action_label_->setWordWrap(true);
-    result_file_label_->setWordWrap(false);
-    result_path_label_->setWordWrap(true);
-    result_technical_label_->setWordWrap(true);
-    result_layout->addWidget(result_title_label_);
-    result_layout->addWidget(result_message_label_);
-    result_layout->addWidget(result_action_label_);
-    result_layout->addWidget(result_file_label_);
-    result_layout->addWidget(result_stats_label_);
-    result_layout->addWidget(result_path_label_);
-    result_layout->addWidget(result_actions_row);
-    result_layout->addWidget(result_technical_separator_);
-    result_layout->addWidget(result_technical_label_);
-    result_technical_separator_->setVisible(false);
-    result_technical_label_->setVisible(false);
-    result_open_folder_btn_->setVisible(false);
-    result_record_again_btn_->setVisible(false);
-    result_panel_->setVisible(false);
-    layout->insertWidget(5, result_panel_);
-
-    layout->addStretch(1);
-
-    // Hybrid v3 (HYBRID-PORT-R2): the visible Record page is preview-first with a
-    // stable bottom transport dock. The legacy sections (right rail, audio
-    // settings, destination, readiness, target pickers, result panel) are kept
-    // constructed but parked off-screen in `legacy_host_` so every existing
-    // pointer used by refresh()/updateStats()/updateResult() stays valid and no
-    // engine wiring changes. These sections migrate into Settings in R3.
+    // Hybrid v3 (HYBRID-PORT-R2): the legacy sections (right rail, audio
+    // settings, destination, readiness, target pickers, result panel) have been
+    // removed; the legacy_host_ scroll still exists as a minimal container.
     cockpit_split_layout_->removeWidget(preview_column_);
     preview_column_->setParent(nullptr);
 
@@ -1188,82 +1054,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     updatePreviewHeightClamp();
 
     connect(change_source_btn_, &QPushButton::clicked, this, &RecordPage::onOpenSourcePicker);
-    connect(open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
-    connect(destination_settings_btn_, &QPushButton::clicked, this, [this]() { emit navigateToOutputPage(); });
-    connect(result_open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
-    connect(result_record_again_btn_, &QPushButton::clicked, this, [this]() {
-        if (view_model_.CanStart() && interaction_mode_ == InteractionMode::None) {
-            view_model_.ClearCompletedResult();
-            view_model_.SetState(UiRecordingState::Ready);
-            refresh();
-            onStart();
-        }
-    });
     connect(report_card_dismiss_btn_, &QPushButton::clicked, this, [this]() { hideResultDetailsPanel(); });
-    connect(result_edit_export_btn_, &QPushButton::clicked, this, [this]() {
-        const QString path = QString::fromStdWString(view_model_.result_output_path);
-        const double dur_sec = view_model_.result_elapsed_seconds;
-        const int h = static_cast<int>(dur_sec) / 3600;
-        const int m = (static_cast<int>(dur_sec) % 3600) / 60;
-        const int s = static_cast<int>(dur_sec) % 60;
-        const QString duration = QStringLiteral("%1:%2:%3")
-                                     .arg(h, 2, 10, QLatin1Char('0'))
-                                     .arg(m, 2, 10, QLatin1Char('0'))
-                                     .arg(s, 2, 10, QLatin1Char('0'));
-        const uint64_t bytes = view_model_.result_output_file_bytes;
-        QString size;
-        if (bytes >= 1024ULL * 1024ULL * 1024ULL)
-            size = QStringLiteral("%1 GB").arg(bytes / (1024.0 * 1024.0 * 1024.0), 0, 'f', 1);
-        else
-            size = QStringLiteral("%1 MB").arg(bytes / (1024.0 * 1024.0), 0, 'f', 0);
-        const QString resolution =
-            QStringLiteral("%1 \xd7 %2").arg(view_model_.result_output_width).arg(view_model_.result_output_height);
-        const uint32_t fps_num = view_model_.result_frame_rate_num;
-        const uint32_t fps_den = view_model_.result_frame_rate_den;
-        const QString fps = QStringLiteral("%1 fps%2")
-                                .arg(fps_den > 0 ? fps_num / fps_den : fps_num)
-                                .arg(view_model_.result_cfr ? QStringLiteral(" CFR") : QStringLiteral(" VFR"));
-        // Container/codec labels
-        const auto containerStr = [](recorder_core::Container c) -> QString {
-            switch (c) {
-            case recorder_core::Container::WebM:
-                return QStringLiteral("WebM");
-            case recorder_core::Container::Matroska:
-                return QStringLiteral("MKV");
-            case recorder_core::Container::Mp4:
-                return QStringLiteral("MP4");
-            default:
-                return QStringLiteral("MKV");
-            }
-        };
-        const auto videoStr = [](recorder_core::VideoCodec vc) -> QString {
-            switch (vc) {
-            case recorder_core::VideoCodec::Av1Nvenc:
-                return QStringLiteral("AV1");
-            case recorder_core::VideoCodec::H264Nvenc:
-                return QStringLiteral("H.264");
-            case recorder_core::VideoCodec::HevcNvenc:
-                return QStringLiteral("HEVC");
-            }
-            return QStringLiteral("AV1");
-        };
-        const auto audioStr = [](recorder_core::AudioCodec ac) -> QString {
-            switch (ac) {
-            case recorder_core::AudioCodec::Opus:
-                return QStringLiteral("Opus");
-            case recorder_core::AudioCodec::AacMf:
-                return QStringLiteral("AAC");
-            case recorder_core::AudioCodec::Pcm:
-                return QStringLiteral("PCM");
-            case recorder_core::AudioCodec::Flac:
-                return QStringLiteral("FLAC");
-            }
-            return QStringLiteral("Opus");
-        };
-        emit editExportRequested(path, duration, size, resolution, fps, videoStr(view_model_.result_video_codec),
-                                 audioStr(view_model_.result_audio_codec), containerStr(view_model_.result_container));
-    });
-
     // Hybrid transport dock (HYBRID-PORT-R2) drives the same recording actions.
     connect(transport_dock_, &ui::widgets::TransportDock::recordClicked, this, [this]() {
         if (isCountdownActive()) {
@@ -1512,8 +1303,6 @@ void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
     last_output_folder_ = settings.output_folder;
     if (!settings.output_folder.empty()) {
         view_model_.output_path_display = settings.output_folder.wstring();
-        if (output_path_label_)
-            output_path_label_->setText(QString::fromStdWString(view_model_.output_path_display));
     }
     setOutputSettingsSummary(settings);
     if (coordinator_) {
@@ -2243,16 +2032,6 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
         preview_surface_->setWebcamSelected(scenario.webcam_pip_selected);
     updateAudioMeterLevels();
 
-    auto markMeter = [](QLabel* label, const QString& text) {
-        if (!label)
-            return;
-        label->setText(QStringLiteral("TEST ") + text);
-        label->setToolTip(QStringLiteral("Deterministic visual-test meter value"));
-    };
-    markMeter(app_db_label_, QStringLiteral("-18 dB"));
-    markMeter(mic_db_label_, QStringLiteral("-12 dB"));
-    markMeter(sys_db_label_, QStringLiteral("-22 dB"));
-
     emitAudioSettingsChanged();
     emitChromeState();
 }
@@ -2278,17 +2057,9 @@ void RecordPage::setOutputSettingsSummary(const OutputSettingsModel& settings) {
     const QString output = resolutionLabel(settings.resolution);
     const QString preset_summary = QStringLiteral("%1 · %2 · %3 · %4").arg(target, video, timing, profile_summary);
 
-    if (destination_header_) {
-        destination_header_->setMeta(output + QStringLiteral(" · ") + timing + QStringLiteral(" · ") + container +
-                                     QStringLiteral(" · ") + video + QStringLiteral(" · ") + audio);
-    }
     if (rail_summary_label_) {
         rail_summary_label_->setText(preset_summary);
         rail_summary_label_->setToolTip(preset_summary);
-    }
-    if (output_meta_label_) {
-        output_meta_label_->setText(
-            QStringLiteral("Output: %1 · %2 · %3 · %4 · %5").arg(output, timing, video, audio, container));
     }
 }
 
@@ -2365,47 +2136,6 @@ void RecordPage::onRecentItemOpenFolder(int history_index) {
         return;
 
     QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
-}
-
-void RecordPage::updateOpenFolderButtonState() {
-    if (!open_folder_btn_ && !result_open_folder_btn_) {
-        return;
-    }
-
-    const bool has_result_path = !QString::fromStdWString(view_model_.result_output_path).trimmed().isEmpty();
-    const bool has_output_folder = !last_output_folder_.empty();
-    const bool can_open = has_result_path || has_output_folder;
-    if (open_folder_btn_) {
-        open_folder_btn_->setEnabled(can_open);
-    }
-    if (result_open_folder_btn_) {
-        result_open_folder_btn_->setEnabled(can_open);
-    }
-
-    QString tooltip;
-    if (has_result_path) {
-        tooltip = QStringLiteral("Open folder: ") + QString::fromStdWString(view_model_.result_output_path);
-    } else if (has_output_folder) {
-        tooltip = QStringLiteral("Open folder: ") + QString::fromStdWString(last_output_folder_.wstring());
-    } else {
-        tooltip = {};
-    }
-
-    if (open_folder_btn_) {
-        open_folder_btn_->setToolTip(tooltip);
-    }
-    if (result_open_folder_btn_) {
-        result_open_folder_btn_->setToolTip(tooltip);
-    }
-}
-
-void RecordPage::updateDestinationMeta() {
-    if (!output_meta_label_)
-        return;
-
-    if (view_model_.HasResult() && view_model_.last_succeeded && !view_model_.result_destination_text.empty()) {
-        output_meta_label_->setText(QString::fromStdWString(view_model_.result_destination_text));
-    }
 }
 
 void RecordPage::startPreviewIfIdle() {
@@ -4184,8 +3914,6 @@ void RecordPage::refresh() {
                                                                                   : QStringLiteral("ready"));
     }
 
-    output_path_label_->setText(QString::fromStdWString(view_model_.output_path_display));
-
     preview_surface_->setRecording(recording);
     preview_surface_->setFrameTone((blocked || failed) ? ui::widgets::PreviewSurface::FrameTone::Blocked
                                    : active_recording  ? ui::widgets::PreviewSurface::FrameTone::Recording
@@ -4201,9 +3929,6 @@ void RecordPage::refresh() {
     updateAudioMeterLevels();
     updateStatsDisplay();
 
-    updateResultDisplay();
-    updateDestinationMeta();
-    updateOpenFolderButtonState();
     updateTransportDock();
 
     // Webcam PiP enable/mirror/aspect + state-driven edit lock, and the idle
@@ -4391,92 +4116,6 @@ void RecordPage::updateStatsDisplay() {
     }
 }
 
-void RecordPage::updateResultDisplay() {
-    if (!result_panel_ || !view_model_.HasResult()) {
-        if (result_panel_) {
-            result_panel_->setVisible(false);
-        }
-        return;
-    }
-
-    result_panel_->setVisible(true);
-
-    setStyledStringProperty(result_panel_, "resultKind", view_model_.last_succeeded ? "success" : "error");
-    setStyledStringProperty(result_title_label_, "labelRole",
-                            view_model_.last_succeeded ? "resultTitleOk" : "resultTitleErr");
-
-    const QString path = QString::fromStdWString(view_model_.result_output_path).trimmed();
-    if (view_model_.last_succeeded) {
-        const QString file_name = path.isEmpty() ? QString{} : QFileInfo(path).fileName();
-        const QString file_size =
-            view_model_.result_output_file_bytes > 0
-                ? QString::fromStdWString(RecordViewModel::FormatBytes(view_model_.result_output_file_bytes))
-                : QStringLiteral("—");
-        const QString duration = clockFromSeconds(view_model_.result_elapsed_seconds);
-        QString summary_line = QStringLiteral("Recording complete · %1 · %2").arg(duration, file_size);
-        if (!file_name.isEmpty()) {
-            summary_line += QStringLiteral(" · %1").arg(file_name);
-        }
-        result_title_label_->setText(summary_line);
-        result_title_label_->setVisible(true);
-        result_message_label_->setVisible(false);
-        result_action_label_->setVisible(false);
-        result_file_label_->setVisible(false);
-        result_stats_label_->setVisible(false);
-        result_path_label_->setVisible(false);
-    } else {
-        result_title_label_->setText(QString::fromStdWString(view_model_.result_user_title));
-        result_title_label_->setVisible(!view_model_.result_user_title.empty());
-        result_message_label_->setText(QString::fromStdWString(view_model_.result_user_message));
-        result_message_label_->setVisible(!view_model_.result_user_message.empty());
-        result_action_label_->setText(QString::fromStdWString(view_model_.result_action_hint));
-        result_action_label_->setVisible(!view_model_.result_action_hint.empty());
-        result_stats_label_->setVisible(false);
-        result_path_label_->setText(path.isEmpty() ? QString{} : QStringLiteral("Path: ") + path);
-        result_path_label_->setVisible(!path.isEmpty());
-        if (result_file_label_) {
-            result_file_label_->setVisible(false);
-        }
-    }
-
-    const QString phase = QString::fromStdWString(view_model_.result_error_phase).trimmed();
-    const QString hr = QString::fromStdWString(view_model_.result_hresult_text).trimmed();
-    const QString detail = QString::fromStdWString(view_model_.result_error_detail).trimmed();
-
-    QString technical;
-    if (!phase.isEmpty()) {
-        technical += QStringLiteral("Phase: ") + phase;
-    }
-    if (!hr.isEmpty()) {
-        technical += (technical.isEmpty() ? QString{} : QStringLiteral("  ·  "));
-        technical += QStringLiteral("HRESULT: ") + hr;
-    }
-    if (!detail.isEmpty()) {
-        const QString short_detail = detail.length() > 120 ? detail.left(120) + QStringLiteral("…") : detail;
-        technical += technical.isEmpty() ? QString{} : QStringLiteral("\n");
-        technical += short_detail;
-    }
-
-    result_technical_label_->setText(technical);
-    result_technical_label_->setVisible(!technical.isEmpty());
-    if (result_technical_separator_) {
-        result_technical_separator_->setVisible(!technical.isEmpty());
-    }
-
-    if (result_open_folder_btn_) {
-        result_open_folder_btn_->setVisible(false);
-    }
-    if (result_record_again_btn_) {
-        result_record_again_btn_->setVisible(false);
-    }
-    if (result_open_folder_btn_ && result_open_folder_btn_->parentWidget()) {
-        result_open_folder_btn_->parentWidget()->setVisible(false);
-    }
-
-    result_panel_->style()->unpolish(result_panel_);
-    result_panel_->style()->polish(result_panel_);
-}
-
 void RecordPage::updateSourceChip() {
     if (!source_name_label_ || !change_source_btn_) {
         return;
@@ -4582,25 +4221,7 @@ void RecordPage::updateAudioMeterLevels() {
                                 view_model_.state == UiRecordingState::Paused ||
                                 view_model_.state == UiRecordingState::Stopping;
 
-    auto applyMeter = [](ui::widgets::VUMeterWidget* meter, QLabel* db_label, float rms, bool show_level) {
-        if (!meter || !db_label) {
-            return;
-        }
-
-        meter->setActive(show_level);
-
-        if (show_level) {
-            const float db = rms > 0.0f ? (std::max)(-60.0f, 20.0f * std::log10(rms)) : -60.0f;
-            const float meter01 = std::clamp((db + 60.0f) / 60.0f, 0.0f, 1.0f);
-            meter->setLevel(meter01);
-            db_label->setText(QString::number(static_cast<int>(std::round(db))) + QStringLiteral(" dB"));
-        } else {
-            meter->setLevel(0.0f);
-            db_label->setText(QStringLiteral("– dB"));
-        }
-    };
-
-    // Converts RMS to 0..1 for the dock meter strip, using the same dB scale as applyMeter.
+    // Converts RMS to 0..1 for the dock meter strip.
     auto dockLevel = [](float rms, bool show) -> float {
         if (!show || rms <= 0.0f)
             return 0.0f;
@@ -4608,19 +4229,16 @@ void RecordPage::updateAudioMeterLevels() {
         return std::clamp((db + 60.0f) / 60.0f, 0.0f, 1.0f);
     };
 
-    // --- Settings-card meters (coupled to on/off state — unchanged behaviour) ---
-    // These drive the VUMeterWidget strips inside the Settings Audio card.
+    // Compute RMS levels for audioMeterLevelsUpdated signal.
     const bool sys_meter_live =
         coordinator_ != nullptr && coordinator_->IsSysMeterRunning() && view_model_.audio_active_sys;
     const float sys_rms = sys_meter_live ? preflight_sys_rms_ : (recording_live ? view_model_.audio_rms_sys : 0.0f);
     const bool sys_show = sys_meter_live || (recording_live && view_model_.audio_active_sys);
-    applyMeter(sys_meter_, sys_db_label_, sys_rms, sys_show);
 
     const bool app_meter_live =
         coordinator_ != nullptr && coordinator_->IsAppMeterRunning() && view_model_.audio_active_app;
     const float app_rms = app_meter_live ? preflight_app_rms_ : (recording_live ? view_model_.audio_rms_app : 0.0f);
     const bool app_show = app_meter_live || (recording_live && view_model_.audio_active_app);
-    applyMeter(app_meter_, app_db_label_, app_rms, app_show);
 
     const bool mic_meter_live = coordinator_ != nullptr && coordinator_->IsMicMeterRunning() &&
                                 view_model_.audio_ui_state.IsMicEnabled() && view_model_.audio_active_mic;
@@ -4628,7 +4246,6 @@ void RecordPage::updateAudioMeterLevels() {
                               ? std::clamp(preflight_mic_rms_ * view_model_.audio_ui_state.mic_gain_linear, 0.0f, 1.0f)
                               : (recording_live ? view_model_.audio_rms_mic : 0.0f);
     const bool mic_show = mic_meter_live || (recording_live && view_model_.audio_active_mic);
-    applyMeter(mic_meter_, mic_db_label_, mic_rms, mic_show);
 
     // --- Dock toggle meters (decoupled from on/off — show grey level when off) ---
     // The dock AudioSourceToggle already colours the bar grey when on_=false; we
