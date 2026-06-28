@@ -34,6 +34,12 @@ class RecommendationEngine {
         dpc_ = std::move(reading);
     }
 
+    // Output-folder writability is probed by the caller (DiagnosticsPage runs the actual
+    // I/O probe) so the engine stays pure; it just emits the blocker when this is false.
+    void SetOutputPathWritable(bool writable) {
+        output_path_writable_ = writable;
+    }
+
     static std::vector<std::string> GetAllRecommendationCodes();
 
   private:
@@ -54,6 +60,7 @@ class RecommendationEngine {
     uint64_t output_drive_free_bytes_;
     bool is_profile_supported_;
     std::string output_filesystem_name_; // e.g. "FAT32", "NTFS"; empty = not queried
+    bool output_path_writable_ = true;   // false => emit the not-writable blocker (set by caller)
 
     // Live present-cadence correlation (v0.8.0 / ADR 0033). Extracted from an optional live
     // RecordingDiagnosticsSnapshot; all false/neutral when no live measurement is available

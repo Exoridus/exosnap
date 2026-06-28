@@ -127,6 +127,10 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     layout->setContentsMargins(M::kSpaceXl, M::kSpaceXl, M::kSpaceXl, M::kSpaceXl);
     layout->setSpacing(M::kSpaceLg);
 
+    // DESIGN-FIDELITY: no page title/subtitle. The newest Mappe (suite-diag.jsx) starts
+    // the Diagnostics surface directly with the readiness banner — the older
+    // hybrid-pages.jsx "PageHead" (title + subtitle) is not part of the current design.
+
     // ── A: Readiness / action header ──────────────────────────────────────────
     // A troubleshooting summary: a plain-language verdict plus the primary actions,
     // tinted by overall state, with three count tiles below.
@@ -166,7 +170,10 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     auto* btn_row = new QHBoxLayout();
     btn_row->setSpacing(M::kSpaceSm);
     run_check_btn_ = new QPushButton(QStringLiteral("Run Check"), readiness_panel_);
+    // DESIGN-FIDELITY: suite-diag.jsx:94 — the readiness action is a PRIMARY size-sm
+    // button (Run check), with Export report as the ghost size-sm beside it.
     run_check_btn_->setProperty("role", "primary");
+    run_check_btn_->setProperty("size", "sm");
     export_report_btn_ = new QPushButton(QStringLiteral("Export Report"), readiness_panel_);
     export_report_btn_->setProperty("role", "ghost");
     export_report_btn_->setEnabled(false);
@@ -1127,6 +1134,11 @@ void DiagnosticsPage::refreshOverview() {
     if (dpc_provider_ != nullptr) {
         engine.SetDpcLatency(dpc_provider_->Read());
     }
+
+    // Output-folder writability: run the same probe the Disk pipeline card uses, but feed
+    // the result into the engine so a non-writable folder is counted as a blocker in the
+    // verdict header (red container) instead of only appearing on the Disk card.
+    engine.SetOutputPathWritable(diagnostics::SelfTestRunner::CheckOutputPathWritable(settings_path_).passed);
 
     auto recs = engine.Generate();
 

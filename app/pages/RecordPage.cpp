@@ -235,18 +235,6 @@ QString resolutionLabel(const OutputResolutionSettings& resolution) {
     return QString::fromWCharArray(OutputResolutionModeName(resolution.mode));
 }
 
-QString profileLabelFromName(const std::wstring& active_profile_name) {
-    if (active_profile_name.empty()) {
-        return QStringLiteral("PRESET");
-    }
-    QString profile = QString::fromStdWString(active_profile_name).trimmed();
-    if (profile.isEmpty()) {
-        return QStringLiteral("PRESET");
-    }
-    profile.replace(QLatin1Char('_'), QLatin1Char(' '));
-    return profile.toUpper();
-}
-
 QString toClock(const std::wstring& elapsed_text) {
     const QString text = QString::fromStdWString(elapsed_text);
     const QStringList parts = text.split(':');
@@ -777,14 +765,22 @@ void RecordPage::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     updateResponsiveLayout();
     updatePreviewHeightClamp();
-    updatePreviewContextChips();
 }
 
 void RecordPage::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
-    if (visual_test_mode_)
+    if (visual_test_mode_) {
+        // The coordinator/meter init below is correctly skipped for a static screenshot,
+        // but the preview must still be sized to fill its host — otherwise the empty-state
+        // surface keeps its small default size and renders as a stray centered "card".
+        // Clamp now (host already has its harness geometry) and once more deferred so a
+        // late layout pass can't leave it small before the grab.
+        updateResponsiveLayout();
+        updatePreviewHeightClamp();
+        QTimer::singleShot(0, this, [this]() { updatePreviewHeightClamp(); });
         return;
+    }
 #endif
     // On the very first show the coordinator (and therefore the preview surface) has
     // never been initialised.  Deferring by a single event-loop tick (delay=0) is not
@@ -806,7 +802,6 @@ void RecordPage::showEvent(QShowEvent* event) {
     QTimer::singleShot(0, this, [this]() {
         updateResponsiveLayout();
         updatePreviewHeightClamp();
-        updatePreviewContextChips();
     });
 
     // Start meter monitoring so the dock toggles show a live (grey) level even
@@ -877,6 +872,7 @@ void RecordPage::updateResponsiveLayout() {
 }
 
 RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
+    diagnostics::AppLog::info(QStringLiteral("rp-timing"), QStringLiteral("ctor start"));
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
@@ -921,18 +917,11 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     source_chip_layout->setContentsMargins(11, 5, 11, 5);
     source_chip_layout->setSpacing(6);
 
-    source_kind_label_ = makeLabel("SCREEN", "recordSourceKind", source_chip_panel_);
     source_name_label_ = makeLabel("No source selected", "recordSourceName", source_chip_panel_);
     source_name_label_->setWordWrap(false);
     source_name_label_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    source_meta_label_ = makeLabel("Choose a source to preview and record.", "recordSourceMeta", source_chip_panel_);
-    source_meta_label_->setWordWrap(false);
-    source_kind_label_->setVisible(false);
-    source_meta_label_->setVisible(false);
 
-    source_chip_layout->addWidget(source_kind_label_);
     source_chip_layout->addWidget(source_name_label_, 1);
-    source_chip_layout->addWidget(source_meta_label_);
     source_chip_panel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
 
     source_lock_label_ = makeLabel("Source locked", "recordSourceLock", source_row_);
@@ -943,30 +932,10 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     change_source_btn_->setProperty("role", "ghost");
     change_source_btn_->setEnabled(false);
 
-    source_preset_label_ = makeLabel("PRESET · AV1 · OPUS · MKV", "recordPresetSummary", source_row_);
-    source_preset_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    source_preset_label_->setWordWrap(false);
-    source_preset_label_->setVisible(false);
-
     source_row_layout->addWidget(source_chip_panel_, 1);
     source_row_layout->addWidget(source_lock_label_, 0, Qt::AlignVCenter);
     source_row_layout->addWidget(change_source_btn_, 0, Qt::AlignVCenter);
     preview_column_layout->addWidget(source_row_);
-
-    preview_context_row_ = new QWidget(preview_column_);
-    preview_context_row_->setObjectName("recordPreviewContextRow");
-    auto* preview_context_layout = new QHBoxLayout(preview_context_row_);
-    preview_context_layout->setContentsMargins(0, 0, 0, 0);
-    preview_context_layout->setSpacing(8);
-    preview_source_chip_label_ = makeLabel("No source selected", "recordPreviewSourceChip", preview_context_row_);
-    setStyledStringProperty(preview_source_chip_label_, "stateRole", "muted");
-    preview_context_layout->addWidget(preview_source_chip_label_, 0, Qt::AlignLeft | Qt::AlignVCenter);
-    preview_context_layout->addStretch(1);
-    // Vestigial pre-R2A duplicate of the source chip — its only child label is
-    // always hidden, so the whole row is collapsed to remove a dead gap above the
-    // preview. Kept constructed so updatePreviewContextChips() pointers stay valid.
-    preview_context_row_->setVisible(false);
-    preview_column_layout->addWidget(preview_context_row_);
 
     preview_surface_host_ = new QWidget(preview_column_);
     preview_surface_host_->setObjectName("recordPreviewSurfaceHost");
@@ -1203,6 +1172,8 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     region_options_panel_->setVisible(false);
     layout->addWidget(region_options_panel_);
 
+    diagnostics::AppLog::info(QStringLiteral("rp-timing"),
+                              QStringLiteral("section-A (preview/source/cockpit/rail) done"));
     target_combo_ = new QComboBox(content);
     target_combo_->setVisible(false);
     target_combo_->setEnabled(false);
@@ -1273,6 +1244,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     readiness_layout->addWidget(readiness_rows_container_);
     layout->addWidget(readiness_panel_);
 
+    diagnostics::AppLog::info(QStringLiteral("rp-timing"), QStringLiteral("B1a (readiness panel done)"));
     audio_settings_header_ = new ui::widgets::SectionRuleHeader("AUDIO SETTINGS", content);
     audio_settings_header_->setMeta("OUTPUT · INPUT · TRACK PREVIEW");
     layout->addWidget(audio_settings_header_);
@@ -1403,6 +1375,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
 
     layout->addWidget(audio_settings_panel);
 
+    diagnostics::AppLog::info(QStringLiteral("rp-timing"), QStringLiteral("B1b (audio settings combos done)"));
     audio_header_ = new ui::widgets::SectionRuleHeader("AUDIO ACTIVITY", content);
     audio_header_->setMeta("LIVE · RMS");
     layout->addWidget(audio_header_);
@@ -1448,6 +1421,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     addAudioRow("SYS", "Other system audio", &sys_meter_, &sys_db_label_);
     layout->addWidget(audio_panel);
 
+    diagnostics::AppLog::info(QStringLiteral("rp-timing"), QStringLiteral("B1c (audio activity/VU done)"));
     destination_header_ = new ui::widgets::SectionRuleHeader("DESTINATION", content);
     destination_header_->setMeta("MKV · AV1 · OPUS");
     layout->addWidget(destination_header_);
@@ -1537,7 +1511,7 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     layout->insertWidget(5, result_panel_);
 
     layout->addStretch(1);
-    scroll->setWidget(content);
+    diagnostics::AppLog::info(QStringLiteral("rp-timing"), QStringLiteral("B1c2 (pre legacy host + setWidget)"));
 
     // Hybrid v3 (HYBRID-PORT-R2): the visible Record page is preview-first with a
     // stable bottom transport dock. The legacy sections (right rail, audio
@@ -1548,14 +1522,23 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     cockpit_split_layout_->removeWidget(preview_column_);
     preview_column_->setParent(nullptr);
 
+    // PERF: create the legacy host HIDDEN and reparent the scroll into it BEFORE
+    // calling scroll->setWidget(content). Populating an already-hidden subtree lets
+    // Qt defer the initial layout/style pass over the hundreds of never-visible
+    // legacy widgets — that pass was ~800ms of ctor time (startup profiling).
     legacy_host_ = new QWidget(this);
     legacy_host_->setObjectName(QStringLiteral("recordLegacyHost"));
+    legacy_host_->setVisible(false);
     auto* legacy_host_layout = new QVBoxLayout(legacy_host_);
     legacy_host_layout->setContentsMargins(0, 0, 0, 0);
-    legacy_host_layout->addWidget(scroll);
-    legacy_host_->setVisible(false);
+    legacy_host_layout->addWidget(scroll); // reparents scroll from `this` into the hidden host
+    scroll->setWidget(content);            // content lands in a hidden subtree -> layout deferred
+    diagnostics::AppLog::info(QStringLiteral("rp-timing"), QStringLiteral("B1c3 (post setWidget into hidden host)"));
 
+    diagnostics::AppLog::info(QStringLiteral("rp-timing"),
+                              QStringLiteral("section-B1 (combos/audio/VU done, pre-TransportDock)"));
     transport_dock_ = new ui::widgets::TransportDock(this);
+    diagnostics::AppLog::info(QStringLiteral("rp-timing"), QStringLiteral("section-B2 (TransportDock built)"));
 
     // --- Result details panel (shown on Completed success) ---
     auto* result_details_panel_ = new QFrame(this);
@@ -1727,6 +1710,8 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     recent_section_layout->addWidget(recent_items_container_);
 
     // v0.8.0-D: Pre-flight ReadinessGate — compact status widget above the transport dock
+    diagnostics::AppLog::info(QStringLiteral("rp-timing"),
+                              QStringLiteral("section-B (combos/readiness panel/rows) done"));
     readiness_gate_panel_ = new QFrame(this);
     readiness_gate_panel_->setProperty("panelRole", "readinessGate");
     readiness_gate_panel_->setVisible(false);
@@ -1778,7 +1763,10 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     root->setSpacing(10);
     root->addWidget(preview_column_, 1);
     root->addWidget(result_details_panel_, 0);
-    root->addWidget(readiness_gate_panel_, 0);
+    // readiness_gate_panel_ is NOT added to the visible layout (user request): the
+    // "Checking capabilities…" gate row is removed. The Record button still disables
+    // on blockers and Diagnostics carries the detail. Kept constructed so its update
+    // logic and pointers stay valid (mirrors recent_section_ below).
     // v10: Recent recordings section removed from the visible layout — the
     // finished state returns to Ready and a toast carries the result.
     // recent_section_ is kept constructed (history_store_ still writes to it)
@@ -2207,7 +2195,6 @@ void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
 
 void RecordPage::setActiveProfileName(const std::string& profile_name) {
     active_profile_name_ = std::wstring(profile_name.begin(), profile_name.end());
-    const QString profile = profileLabelFromName(active_profile_name_);
     const bool has_selected_target = view_model_.selected_target_index >= 0 &&
                                      view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
     const QString target =
@@ -2222,10 +2209,6 @@ void RecordPage::setActiveProfileName(const std::string& profile_name) {
     const QString summary = QStringLiteral("%1 · %2 · %3 · %4")
                                 .arg(target, videoCodecLabel(current_video_codec_),
                                      frameRateLabel(current_frame_rate_num_, current_frame_rate_den_), profile_summary);
-    if (source_preset_label_) {
-        source_preset_label_->setText(profile);
-        source_preset_label_->setToolTip(profile);
-    }
     if (rail_summary_label_) {
         rail_summary_label_->setText(summary);
         rail_summary_label_->setToolTip(summary);
@@ -2992,7 +2975,6 @@ void RecordPage::setOutputSettingsSummary(const OutputSettingsModel& settings) {
     const QString container = containerLabel(settings.container);
     const QString video = videoCodecLabel(settings.video_codec);
     const QString audio = audioCodecLabel(settings.audio_codec);
-    const QString profile = profileLabelFromName(active_profile_name_);
     const bool has_selected_target = view_model_.selected_target_index >= 0 &&
                                      view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
     const QString target =
@@ -3012,10 +2994,6 @@ void RecordPage::setOutputSettingsSummary(const OutputSettingsModel& settings) {
     if (destination_header_) {
         destination_header_->setMeta(output + QStringLiteral(" · ") + timing + QStringLiteral(" · ") + container +
                                      QStringLiteral(" · ") + video + QStringLiteral(" · ") + audio);
-    }
-    if (source_preset_label_) {
-        source_preset_label_->setText(profile);
-        source_preset_label_->setToolTip(profile);
     }
     if (rail_summary_label_) {
         rail_summary_label_->setText(preset_summary);
@@ -5557,7 +5535,6 @@ void RecordPage::refresh() {
     updateTargetCards();
     rebuildTargetPicker();
     updateSourceChip();
-    updatePreviewContextChips();
     updateReadinessRows();
     updateReadinessGate();
     updateAudioControls();
@@ -6119,13 +6096,17 @@ void RecordPage::updateReadinessGate() {
          s == UiRecordingState::ArmedFromRecovery || s == UiRecordingState::RegionSelecting);
     const bool completed = (s == UiRecordingState::Completed);
 
+    // The readiness gate row was removed from the visible layout (user request), so the
+    // panel has NO layout slot. Calling setVisible(true) would float it at (0,0) — the
+    // top-left "Checking… / View details" ghost element. Keep it permanently hidden; the
+    // state/text updates below stay as harmless no-ops on the hidden panel so any
+    // remaining callers and pointers keep working.
+    readiness_gate_panel_->setVisible(false);
+
     // Hide during active recording and after completing (result panel takes over)
     if (recording || completed) {
-        readiness_gate_panel_->setVisible(false);
         return;
     }
-
-    readiness_gate_panel_->setVisible(true);
 
     const bool blocked = (s == UiRecordingState::Blocked);
     const bool checking = (s == UiRecordingState::LoadingCapabilities);
@@ -6260,16 +6241,6 @@ void RecordPage::updateSourceChip() {
 
     source_name_label_->setText(compact_elided);
     source_name_label_->setToolTip(compact_source);
-    if (source_kind_label_) {
-        source_kind_label_->setText(source_kind);
-        source_kind_label_->setVisible(false);
-    }
-    if (source_meta_label_) {
-        source_meta_label_->setText(source_meta);
-        source_meta_label_->setToolTip(source_meta);
-        source_meta_label_->setVisible(false);
-    }
-
     source_lock_label_->setVisible(locked);
     source_lock_label_->setText(locked ? QStringLiteral("Source locked") : QString{});
     source_lock_label_->setToolTip(locked ? QStringLiteral("Source remains locked while recording or paused.")
@@ -6290,53 +6261,6 @@ void RecordPage::updateSourceChip() {
     } else {
         change_source_btn_->setToolTip(QStringLiteral("Choose a screen, window, or region source."));
     }
-}
-
-void RecordPage::updatePreviewContextChips() {
-    if (!preview_source_chip_label_) {
-        return;
-    }
-
-    const bool has_selection = view_model_.selected_target_index >= 0 &&
-                               view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
-    const bool locked = isSourceSelectionLocked();
-    const bool blocked = (view_model_.state == UiRecordingState::Blocked);
-    const bool failed = (view_model_.state == UiRecordingState::Failed);
-    QString source_text = QStringLiteral("No source selected");
-    if (view_model_.capture_mode == CaptureMode::Region) {
-        if (view_model_.has_region && view_model_.region.IsValid()) {
-            source_text = QStringLiteral("Region · %1×%2").arg(view_model_.region.width).arg(view_model_.region.height);
-        } else if (view_model_.select_on_record) {
-            source_text = QStringLiteral("Region · select on start");
-        } else {
-            source_text = QStringLiteral("Region");
-        }
-    } else if (has_selection) {
-        const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
-        if (target.kind == recorder_core::CaptureTarget::Kind::Window) {
-            source_text = windowLabelFromTarget(target);
-        } else {
-            source_text = displayLabelFromTarget(target);
-            const QRegularExpression resolution_expr(QStringLiteral("(\\d{3,5})\\s*[x×]\\s*(\\d{3,5})"));
-            const QRegularExpressionMatch match = resolution_expr.match(QString::fromStdString(target.description));
-            if (match.hasMatch()) {
-                source_text += QStringLiteral(" · %1×%2").arg(match.captured(1), match.captured(2));
-            }
-        }
-    }
-
-    const int chip_width =
-        (preview_context_row_ && preview_context_row_->width() > 0) ? preview_context_row_->width() - 124 : 520;
-    const QString source_elided =
-        preview_source_chip_label_->fontMetrics().elidedText(source_text, Qt::ElideRight, (std::max)(180, chip_width));
-    preview_source_chip_label_->setText(source_elided);
-    preview_source_chip_label_->setToolTip(source_text);
-    setStyledStringProperty(preview_source_chip_label_, "stateRole",
-                            blocked || failed ? QStringLiteral("blocked")
-                            : locked          ? QStringLiteral("warn")
-                            : has_selection   ? QStringLiteral("ready")
-                                              : QStringLiteral("muted"));
-    preview_source_chip_label_->setVisible(false);
 }
 
 void RecordPage::updateRailSourceStatusChips() {
@@ -6865,7 +6789,10 @@ void RecordPage::updateRecentRecordingsSection() {
         return;
     }
 
-    recent_section_->setVisible(true);
+    // Recent Recordings removed from the Record page (user request): the section has no
+    // layout slot, so setVisible(true) would float it at (0,0) top-left. Keep it hidden.
+    // History is still tracked in the view-model / store; it is just not shown here.
+    recent_section_->setVisible(false);
 
     // Remove old items
     QLayoutItem* child;

@@ -204,18 +204,33 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     segmented_layout->addWidget(issues_btn);
     left_layout->addWidget(segmented, 0);
 
-    search_edit_ = new QLineEdit(left_cluster);
+    // DESIGN-FIDELITY: suite-diag.jsx:174 — the search field is a pill with a leading
+    // 14px magnifier then the input. QLineEdit::addAction(LeadingPosition) mis-positions
+    // its icon under the page's heavy QSS (it rendered clipped at the field's bottom-left),
+    // so compose the pill explicitly: an icon QLabel + a frameless QLineEdit inside a
+    // styled container. The layout then centres the icon trivially.
+    auto* search_container = new QWidget(left_cluster);
+    search_container->setObjectName(QStringLiteral("logSearchContainer"));
+    auto* search_layout = new QHBoxLayout(search_container);
+    search_layout->setContentsMargins(14, 0, 12, 0);
+    search_layout->setSpacing(8);
+
+    auto* search_icon = new QLabel(search_container);
+    search_icon->setObjectName(QStringLiteral("logSearchIcon"));
+    search_icon->setPixmap(ui::theme::lucidePixmap(QStringLiteral("search"),
+                                                   QString::fromUtf8(ui::theme::ExoSnapPalette::kText2), 14,
+                                                   search_container->devicePixelRatioF()));
+    search_icon->setFixedSize(14, 14);
+    search_icon->setScaledContents(true);
+
+    search_edit_ = new QLineEdit(search_container);
     search_edit_->setObjectName(QStringLiteral("logSearchEdit"));
     search_edit_->setPlaceholderText(QStringLiteral("Search category or message"));
     search_edit_->setClearButtonEnabled(true);
-    // Leading magnifier glyph so the field reads as a search affordance (v10).
-    // No bundled search.svg asset exists; the shared Lucide "search" path is rendered
-    // through QSvgRenderer and tinted to the muted-ink token.
-    search_edit_->addAction(ui::theme::lucideIcon(QStringLiteral("search"),
-                                                  QString::fromUtf8(ui::theme::ExoSnapPalette::kText2), 14,
-                                                  search_edit_->devicePixelRatioF()),
-                            QLineEdit::LeadingPosition);
-    left_layout->addWidget(search_edit_, 1);
+
+    search_layout->addWidget(search_icon, 0, Qt::AlignVCenter);
+    search_layout->addWidget(search_edit_, 1);
+    left_layout->addWidget(search_container, 1);
 
     auto_scroll_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Auto-scroll"), left_cluster);
     auto_scroll_check_->setObjectName(QStringLiteral("logAutoScrollToggle"));

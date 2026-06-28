@@ -3498,8 +3498,15 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
         }
         if (config_page_)
             config_page_->setUpdateStatus(QStringLiteral("error"), QString(), QString(), model.error_message);
-        diagnostics::AppLog::warning(QStringLiteral("update"),
-                                     QStringLiteral("Update check failed: %1").arg(model.error_message));
+        // "Update checking disabled (unofficial build)" is an expected condition for
+        // self/unofficial builds, not a failure — log it at info level so it doesn't
+        // surface as a warning in the Logs view.
+        if (model.error_message.contains(QStringLiteral("disabled"), Qt::CaseInsensitive))
+            diagnostics::AppLog::info(QStringLiteral("update"),
+                                      QStringLiteral("Update check skipped: %1").arg(model.error_message));
+        else
+            diagnostics::AppLog::warning(QStringLiteral("update"),
+                                         QStringLiteral("Update check failed: %1").arg(model.error_message));
         manual_update_check_ = false;
         return;
     }

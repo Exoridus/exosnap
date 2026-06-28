@@ -919,12 +919,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     fmt_layout->setSpacing(0);
     fmt_layout->addWidget(makeCardTitle(QStringLiteral("Container & codecs"), fmt_panel, QStringLiteral("film")));
 
-    // format_display_label_ kept for backward compat (hidden)
-    format_display_label_ = new QLabel(fmt_panel);
-    format_display_label_->setProperty("labelRole", "muted");
-    format_display_label_->setVisible(false);
-    fmt_layout->addWidget(format_display_label_);
-
     // --- Container row ---
     container_group_ = new QButtonGroup(this);
     container_group_->setExclusive(true);
@@ -1092,9 +1086,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         quality_preset_row_widget_->setProperty("settingsRow", true);
         quality_layout->addWidget(quality_preset_row_widget_);
     }
-
-    // quality_row_widget_ retained as a member but no longer the visible Default
-    // presentation (kept null-safe; nothing references it after the v10 split).
 
     // Wave 2 Part B: CQ precision spinbox row — shown in expert mode, hidden otherwise.
     {
@@ -3566,10 +3557,6 @@ void ConfigPage::updateCompatCallout() {
                             QStringLiteral(" \xC2\xB7 ") +
                             (video_settings_.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
 
-    if (format_display_label_) {
-        format_display_label_->setText(QStringLiteral("Current format: ") + summary);
-    }
-
     if (compat_callout_widget_)
         compat_callout_widget_->setVisible(compat_bad);
     if (compat_ok_label_)
@@ -4644,9 +4631,7 @@ void ConfigPage::updateExpertModeVisibility() {
     if (split_expert_section_)
         split_expert_section_->setVisible(expert_mode_enabled_);
     // v10: Default shows the "Balanced · CQ 24" dropdown; Expert hides it and reveals
-    // Rate control + CQ spinbox. quality_row_widget_ is retired (kept null-safe).
-    if (quality_row_widget_)
-        quality_row_widget_->setVisible(!expert_mode_enabled_);
+    // Rate control + CQ spinbox.
     if (quality_preset_row_widget_)
         quality_preset_row_widget_->setVisible(!expert_mode_enabled_);
     if (quality_rate_section_)

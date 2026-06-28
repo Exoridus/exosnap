@@ -407,6 +407,35 @@ TEST(RecommendationEngineTest, Generate_EmptyNoFlag) {
     EXPECT_TRUE(checklist.results.empty());
 }
 
+TEST(RecommendationEngineTest, Generate_OutputNotWritable_Blocks) {
+    // #7 blocker propagation: a non-writable output folder must surface as a COUNTED
+    // Blocker (rec.output.writable) so the Diagnostics verdict header reflects it (red),
+    // not just the pipeline Disk card.
+    capability::CapabilitySet caps;
+    caps.containers[capability::Container::Matroska] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Matroska;
+    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    engine.SetOutputPathWritable(false);
+    auto checklist = engine.Generate();
+
+    EXPECT_TRUE(checklist.has_blocker);
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.output.writable") {
+            EXPECT_EQ(r.severity, diagnostics::DiagnosticSeverity::Blocker);
+            found = true;
+        }
+    }
+    EXPECT_TRUE(found) << "Expected rec.output.writable blocker when the output folder is not writable";
+}
+
 TEST(RecommendationEngineTest, Generate_Mp4_Warns) {
     capability::CapabilitySet caps;
     caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};

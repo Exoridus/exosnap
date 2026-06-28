@@ -188,8 +188,11 @@ QWidget[panelRole="compactRow"] {
 /* Settings readiness banner: neutral while checking, tinted when ready/blocked. */
 QFrame[panelRole="readinessBanner"],
 QWidget[panelRole="readinessBanner"] {
-    background: ${bg3};
-    border: 1px solid ${line2};
+    /* DESIGN-FIDELITY: State-Spec "Diagnostics · All clear" — the summary box is calm in
+       the neutral/clear state: transparent bg + faint --line border, NOT an elevated
+       --raise card. Tinted warn/blocked states override below. */
+    background: transparent;
+    border: 1px solid ${line1};
     border-radius: ${radius-lg}px;
 }
 
@@ -219,7 +222,11 @@ QWidget#logSeveritySegmented {
 
 QPushButton[qualitySegment="true"] {
     min-height: 32px;
-    padding: 0 12px;
+    /* DESIGN-FIDELITY: Segmented sm cell = 6px 12px padding (symmetric → vertically
+       centred). "text-align: center center" was invalid (Qt parses a single alignment
+       token and dropped the property); a valid "center" keeps QPushButton's default
+       vertical centring. */
+    padding: 6px 12px;
     background: transparent;
     border: none;
     border-radius: ${radius-sm}px;
@@ -1032,17 +1039,6 @@ QLabel[labelRole="captureCardTitle"] {
     font-size: 14px;
     font-weight: 600;
     color: ${text0};
-}
-
-QLabel[labelRole="captureCardSelectedChip"] {
-    font-family: ${font-mono};
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    color: ${accent-ink};
-    border: 1px solid ${accent};
-    border-radius: ${radius-sm}px;
-    padding: 1px 6px;
-    background: ${accent};
 }
 
 QLabel[labelRole="captureCardCheckBadge"] {
@@ -2529,6 +2525,28 @@ QKeySequenceEdit {
     min-height: ${control-height}px;
 }
 
+/* DESIGN-FIDELITY: suite-diag.jsx:174 — the Logs search is a composed pill: a styled
+   container (logSearchContainer) holds a leading 14px magnifier (logSearchIcon) and a
+   frameless input (logSearchEdit). The container owns the pill outline; the input is
+   transparent so the icon and text share one centred row. */
+QWidget#logSearchContainer {
+    background: ${bg2};
+    border: 1px solid ${line2};
+    border-radius: 18px;
+    min-height: ${control-height}px;
+}
+QWidget#logSearchContainer:hover {
+    border-color: ${line3};
+}
+QLineEdit#logSearchEdit,
+QLineEdit#logSearchEdit:hover,
+QLineEdit#logSearchEdit:focus {
+    background: transparent;
+    border: none;
+    padding: 0;
+    min-height: 0;
+}
+
 QLineEdit:hover,
 QComboBox:hover,
 QKeySequenceEdit:hover {
@@ -3117,14 +3135,16 @@ QLabel[labelRole="detailBreadcrumb"] {
 QFrame#recordTransportDock {
     background: ${bg1};
     border: 1px solid ${line1};
-    border-radius: ${radius-lg}px;
+    /* DESIGN-FIDELITY: State-Spec "Dock-Container" border-radius = 18px (not radius-lg/14). */
+    border-radius: 18px;
 }
 
 /* Center duration — monospace, tabular, always centered. */
 QLabel[labelRole="recordDockTimer"] {
     font-family: ${font-mono};
     font-size: 30px;
-    font-weight: 600;
+    /* DESIGN-FIDELITY: State-Spec timer = 30px weight 500 (idle/recording/paused). */
+    font-weight: 500;
     letter-spacing: 0.04em;
     color: ${text2};
 }
@@ -3145,11 +3165,12 @@ QLabel[labelRole="recordDockTimer"][timerState="blocked"] {
     color: ${err};
 }
 
-/* Countdown digit — same font/weight/size as the recording timecode so the
-   pre-roll digit reads as the primary focus signal (DF-03). */
+/* DESIGN-FIDELITY: State-Spec "Countdown" counter = 34px weight 600 in --caution —
+   larger than the 30px/500 timecode so the pre-roll digit reads as the focus signal.
+   (Supersedes the earlier DF-03 "same size as the timer" decision.) */
 QLabel[labelRole="recordDockTimer"][timerState="countdown"] {
     font-family: ${font-mono};
-    font-size: 30px;
+    font-size: 34px;
     font-weight: 600;
     letter-spacing: 0.04em;
     color: ${warn};
@@ -3320,7 +3341,9 @@ QLabel[labelRole="recordDockSize"] {
 QFrame#recordSplitContainer {
     background: ${accent};
     border: 1px solid ${accent};
-    border-radius: 999px;
+    /* Pill: Qt does not clamp an oversized radius to height/2, so 999px renders
+       squared-off — use the exact half-height (46/2) for a true pill. */
+    border-radius: 23px;
     min-height: 46px;
 }
 
@@ -3331,7 +3354,12 @@ QFrame#recordSplitContainer[containerAction="stop"] {
 
 /* Record face — occupies the left portion of the pill; no individual radius. */
 QPushButton#recordDockRecord[splitRole="face"] {
-    border-radius: 0;
+    /* Left half of the pill: round the outer (left) corners so the hover/pressed
+       background stays pill-shaped; inner (right) corners stay square at the divider. */
+    border-top-left-radius: 23px;
+    border-bottom-left-radius: 23px;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
     border: none;
     background: transparent;
     padding: 0 18px 0 22px;
@@ -3359,7 +3387,11 @@ QFrame#recordSplitDivider {
 
 /* Chevron half — right portion of the pill; no individual radius. */
 QPushButton#recordDockChevron {
-    border-radius: 0;
+    /* Right half of the pill: round the outer (right) corners; inner (left) stay square. */
+    border-top-right-radius: 23px;
+    border-bottom-right-radius: 23px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
     border: none;
     background: transparent;
     padding: 0 12px;

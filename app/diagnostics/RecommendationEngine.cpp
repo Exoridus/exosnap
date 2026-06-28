@@ -252,6 +252,29 @@ void RecommendationEngine::checkCodecAvailability(DiagnosticChecklist& checklist
 }
 
 void RecommendationEngine::checkOutputDriveSpace(DiagnosticChecklist& checklist) const {
+    if (!output_path_writable_) {
+        // Output folder cannot be written to — a hard blocker (the muxer can't produce a
+        // file). Surfaced here as a COUNTED blocker so the Diagnostics header reflects it
+        // (red container + Blockers count). Previously this only showed on the pipeline
+        // Disk card and never propagated up to the verdict.
+        DiagnosticResult r =
+            MakeResult("rec.output.writable", DiagnosticGroup::Recommendation, DiagnosticSeverity::Blocker,
+                       "Output folder is not writable",
+                       "Recording cannot start — the selected output folder cannot be written to.",
+                       "The writability probe failed to create a file in the output folder. Choose a different "
+                       "folder or fix the folder's permissions.",
+                       "Not writable", "Change the output folder to a writable location.");
+        FixAction fa;
+        fa.id = "fix.output.change_folder";
+        fa.label = "Change output folder";
+        fa.safety = FixAction::Safety::Assisted;
+        fa.reversible = true;
+        fa.changes_summary = "Opens Output settings to select a writable output folder.";
+        r.fix_action = fa;
+        checklist.has_blocker = true;
+        checklist.results.push_back(std::move(r));
+    }
+
     if (output_drive_free_bytes_ == 0) {
         // 0 means "not queried" — skip to avoid false positives.
         return;

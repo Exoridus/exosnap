@@ -289,7 +289,6 @@ class RecordPage : public QWidget {
     void updateAudioControlsVisibility();
     void updateAudioTrackPreview();
     void updateHeroButton();
-    void updatePreviewContextChips();
     void updateRailSourceStatusChips();
     void updateSourceChip();
     void updateOpenFolderButtonState();
@@ -370,8 +369,6 @@ class RecordPage : public QWidget {
     QComboBox* target_combo_ = nullptr;
     QBoxLayout* cockpit_split_layout_ = nullptr;
     QWidget* preview_column_ = nullptr;
-    QWidget* preview_context_row_ = nullptr;
-    QLabel* preview_source_chip_label_ = nullptr;
     QWidget* preview_surface_host_ = nullptr;
     QFrame* target_picker_panel_ = nullptr;
     QLabel* target_picker_kind_label_ = nullptr;
@@ -384,10 +381,7 @@ class RecordPage : public QWidget {
     ui::widgets::SectionRuleHeader* capture_header_ = nullptr;
     QWidget* source_row_ = nullptr;
     QFrame* source_chip_panel_ = nullptr;
-    QLabel* source_kind_label_ = nullptr;
     QLabel* source_name_label_ = nullptr;
-    QLabel* source_meta_label_ = nullptr;
-    QLabel* source_preset_label_ = nullptr;
     QLabel* source_lock_label_ = nullptr;
     QPushButton* change_source_btn_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;

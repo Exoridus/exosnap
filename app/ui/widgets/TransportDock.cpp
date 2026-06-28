@@ -99,17 +99,20 @@ void setStyledProperty(QWidget* widget, const char* name, const QString& value) 
 // drives the background/border (same treatment as the capture-frame button).
 QPushButton* makeIconActionButton(const QString& object_name, const QString& dock_action, const char* svg_path_d,
                                   const QString& tooltip, QWidget* parent) {
+    // DESIGN-FIDELITY: suite-record.jsx:87 IconActionBtn — glyph is 19px in HT.mut
+    // (was a brighter hard-coded #C8C8C4 at 18px).
+    const QString icon_color = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut);
     QByteArray svg;
     svg.reserve(400);
-    svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'"
-               " stroke='#C8C8C4' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'>"
-               "<path d='");
+    svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='");
+    svg.append(icon_color.toUtf8());
+    svg.append("' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='");
     svg.append(svg_path_d);
     svg.append("'/></svg>");
 
     QSvgRenderer renderer(svg);
     constexpr int kBtn = 44;
-    constexpr int kGlyph = 18;
+    constexpr int kGlyph = 19;
     QPixmap pix(kGlyph, kGlyph);
     pix.fill(Qt::transparent);
     {
@@ -139,12 +142,13 @@ QPushButton* makeCaptureFrameButton(QWidget* parent) {
     // camera glyph used by AudioSourceToggle for the "webcam" key.
     constexpr auto kCameraPath = "M21 15a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2z";
 
-    // Build an SVG at a neutral color; QSS will tint via the object-name rule.
+    // DESIGN-FIDELITY: suite-record.jsx:39 CapDockBtn — camera glyph 19px in HT.mut.
+    const QString icon_color = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut);
     QByteArray svg;
     svg.reserve(400);
-    svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'"
-               " stroke='#C8C8C4' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'>"
-               "<path d='");
+    svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='");
+    svg.append(icon_color.toUtf8());
+    svg.append("' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='");
     svg.append(kCameraPath);
     svg.append("'/></svg>");
 
@@ -175,7 +179,8 @@ QPushButton* makeCaptureFrameButton(QWidget* parent) {
 TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     setObjectName(QStringLiteral("recordTransportDock"));
     setProperty("dockState", QStringLiteral("ready"));
-    setMinimumHeight(74);
+    // DESIGN-FIDELITY: State-Spec "Dock-Container" min-height = 72px.
+    setMinimumHeight(72);
 
     auto* grid = new QGridLayout(this);
     grid->setContentsMargins(18, 12, 18, 12);
@@ -194,7 +199,7 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     toggles_row_ = new QWidget(left_zone);
     auto* toggles_layout = new QHBoxLayout(toggles_row_);
     toggles_layout->setContentsMargins(0, 0, 0, 0);
-    toggles_layout->setSpacing(10);
+    toggles_layout->setSpacing(9); // State-Spec: Source-Toggle gap 9px
     system_toggle_ = new AudioSourceToggle(QStringLiteral("system"), QStringLiteral("system"), toggles_row_);
     system_toggle_->setToolTip(QStringLiteral("System audio"));
     mic_toggle_ = new AudioSourceToggle(QStringLiteral("mic"), QStringLiteral("mic"), toggles_row_);
@@ -203,10 +208,12 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     webcam_toggle_->setToolTip(QStringLiteral("Webcam"));
     app_toggle_ = new AudioSourceToggle(QStringLiteral("app"), QStringLiteral("app"), toggles_row_);
     app_toggle_->setToolTip(QStringLiteral("App audio"));
-    toggles_layout->addWidget(system_toggle_);
-    toggles_layout->addWidget(app_toggle_);
-    toggles_layout->addWidget(mic_toggle_);
-    toggles_layout->addWidget(webcam_toggle_);
+    // DESIGN-FIDELITY: toggle order is speaker → app → mic → webcam, per the
+    // newest Mappe (suite-record.jsx:164-167 / :264-267, text "SYS → APP → MIC → CAM").
+    toggles_layout->addWidget(system_toggle_); // speaker (System audio)
+    toggles_layout->addWidget(app_toggle_);    // app
+    toggles_layout->addWidget(mic_toggle_);    // mic
+    toggles_layout->addWidget(webcam_toggle_); // webcam
 
     completed_row_ = new QWidget(left_zone);
     auto* completed_layout = new QHBoxLayout(completed_row_);
@@ -253,7 +260,7 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     action_row_ = new QWidget(this);
     auto* action_layout = new QHBoxLayout(action_row_);
     action_layout->setContentsMargins(0, 0, 0, 0);
-    action_layout->setSpacing(10);
+    action_layout->setSpacing(9); // State-Spec: right action cluster gap 9px
 
     // v10 split Record button: pill-shaped container with a main "Record" face
     // and a chevron face that opens the countdown menu (3 / 5 / 10 s).

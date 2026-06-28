@@ -315,7 +315,6 @@ class ConfigPage : public QWidget {
     QComboBox* video_codec_combo_ = nullptr;
     QComboBox* audio_codec_combo_ = nullptr;
     QComboBox* profile_combo_ = nullptr;
-    QLabel* format_display_label_ = nullptr;
 
     // D6: CompareHint pointers for setCurrentValue sync
     ui::widgets::CompareHint* container_compare_hint_ = nullptr;
@@ -325,7 +324,7 @@ class ConfigPage : public QWidget {
     ui::widgets::CompareHint* timing_compare_hint_ = nullptr;
     ui::widgets::CompareHint* resolution_compare_hint_ = nullptr;
 
-    // D6: compat callout widgets (replaces format_display_label_ visually)
+    // D6: compat callout widgets (the visible format summary + warning)
     QFrame* compat_callout_widget_ = nullptr;
     QLabel* callout_text_ = nullptr;
     QLabel* compat_ok_label_ = nullptr;
@@ -442,8 +441,7 @@ class ConfigPage : public QWidget {
     // Wave 2: split recording controls moved out of expander; now expert-gated section.
     QWidget* split_expert_section_ = nullptr;
 
-    // Wave 2: Part B — Quality row widget (promoted from local var) and CQ precision spinbox.
-    QWidget* quality_row_widget_ = nullptr;    // the standard 3-segment quality row
+    // Wave 2: Part B — CQ precision spinbox row.
     QWidget* quality_expert_widget_ = nullptr; // CQ spinbox row shown in expert mode
     QSpinBox* quality_cq_spin_ = nullptr;      // precision CQ input (range 1–51)
     QLabel* quality_cq_tier_label_ = nullptr;  // S3: "· High / Balanced / Small / Custom" tier label

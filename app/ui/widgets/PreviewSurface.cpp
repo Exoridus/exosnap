@@ -16,6 +16,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
+#include <QRadialGradient>
 #include <QResizeEvent>
 #include <QSvgRenderer>
 #include <QVBoxLayout>
@@ -168,6 +169,11 @@ PreviewSurface::PreviewSurface(QWidget* parent) : QWidget(parent) {
     status_pill_ = new StatusPill(top_row_);
     status_pill_->setTone(StatusPill::Tone::Ready);
     status_pill_->setText("READY");
+    // DESIGN-FIDELITY: the live recording status lives in the title bar + meta strip,
+    // NOT over the preview (suite-record.jsx:198 "live status moved OFF the preview
+    // surface"). Keep the widget for the statusPill() API but never show it so the
+    // preview stays clean — this also removes the stray "Checking" chip the probe drew.
+    status_pill_->setVisible(false);
 
     top_meta_label_ = new QLabel("NO TARGET", top_row_);
     top_meta_label_->setObjectName("previewTopMetaLabel");
@@ -1056,11 +1062,17 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
         painter.setPen(Qt::NoPen);
         painter.drawRoundedRect(frame_rect, 5.0, 5.0);
     } else {
-        QLinearGradient bg_grad(frame_rect.topLeft(), frame_rect.bottomRight());
-        bg_grad.setColorAt(0.0, QColor("#181612"));
-        bg_grad.setColorAt(1.0, QColor("#0e0d0b"));
-        painter.setBrush(bg_grad);
-        painter.setPen(QPen(QColor("#353330"), 1.0));
+        // DESIGN-FIDELITY: suite-record.jsx:23 PreviewEmpty — a quiet near-black radial
+        // vignette (NOT a flat fill, and no warm/amber cast):
+        //   radial-gradient(120% 130% at 50% 40%, #131316 0%, #0C0C0E 58%, #08080A 100%).
+        // Border stays neutral HT.line ≈ rgba(255,255,255,0.07).
+        QRadialGradient empty_bg(QPointF(0.5, 0.4), 1.2, QPointF(0.5, 0.4));
+        empty_bg.setCoordinateMode(QGradient::ObjectBoundingMode);
+        empty_bg.setColorAt(0.0, QColor(0x13, 0x13, 0x16));
+        empty_bg.setColorAt(0.58, QColor(0x0C, 0x0C, 0x0E));
+        empty_bg.setColorAt(1.0, QColor(0x08, 0x08, 0x0A));
+        painter.setBrush(empty_bg);
+        painter.setPen(QPen(QColor(255, 255, 255, 18), 1.0));
         painter.drawRoundedRect(frame_rect, 5.0, 5.0);
 
         if (!current_frame_.isNull()) {
@@ -1221,17 +1233,9 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
         painter.restore();
     }
 
-    painter.setPen(QPen(tone_color, (tone_recording || tone_warn || tone_blocked) ? 1.8 : 1.2));
-    const int inset = 15;
-    const int len = 20;
-    painter.drawLine(inset, inset, inset + len, inset);
-    painter.drawLine(inset, inset, inset, inset + len);
-    painter.drawLine(width() - inset, inset, width() - inset - len, inset);
-    painter.drawLine(width() - inset, inset, width() - inset, inset + len);
-    painter.drawLine(inset, height() - inset, inset + len, height() - inset);
-    painter.drawLine(inset, height() - inset, inset, height() - inset - len);
-    painter.drawLine(width() - inset, height() - inset, width() - inset - len, height() - inset);
-    painter.drawLine(width() - inset, height() - inset, width() - inset, height() - inset - len);
+    // DESIGN-FIDELITY: corner brackets removed. The design-system preview is a plain
+    // rounded frame (border-radius 18, 1px border) — no corner brackets. The tone color
+    // is still expressed via the frame glow above (recording/warn/blocked).
 }
 
 void PreviewSurface::resizeEvent(QResizeEvent* event) {

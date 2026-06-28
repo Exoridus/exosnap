@@ -126,10 +126,12 @@ void AudioSourceToggle::paintEvent(QPaintEvent* /*event*/) {
 
     QColor fill, border, icon_color;
     if (on_) {
+        // suite-record.jsx:108-111 SourceToggle on-state:
+        //   background var(--ac-dim) = accent @ acDim(0.14); border var(--ac-b2) = accent @ acB2(0.60).
         fill = accent;
         fill.setAlphaF(0.14f);
         border = accent;
-        border.setAlphaF(0.42f);
+        border.setAlphaF(0.60f);
         icon_color = accent;
     } else {
         fill = QColor::fromRgba(qRgba(ink.red(), ink.green(), ink.blue(), static_cast<int>(0.05 * 255)));
@@ -211,8 +213,10 @@ void AudioSourceToggle::paintEvent(QPaintEvent* /*event*/) {
         painter.setClipping(false);
     }
 
-    const QRectF icon_rect =
-        circle.adjusted(circle.width() * 0.27, circle.height() * 0.27, -circle.width() * 0.27, -circle.height() * 0.27);
+    // DESIGN-FIDELITY: glyph is round(size*0.45)=19px (hybrid-shared.jsx). For the 40px
+    // circle that is inset (40-19)/2/40 = 0.2625 (was 0.27 → 18.4px).
+    const QRectF icon_rect = circle.adjusted(circle.width() * 0.2625, circle.height() * 0.2625,
+                                             -circle.width() * 0.2625, -circle.height() * 0.2625);
     paintIcon(painter, icon_key_, icon_rect, icon_color);
 }
 
