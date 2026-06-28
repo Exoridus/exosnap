@@ -579,25 +579,6 @@ QLabel#compatOkLabel {
     color: ${ok};
 }
 
-QLabel[labelRole="audioSettingsGroupTitle"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.14em;
-    color: ${text2};
-}
-
-QLabel[labelRole="audioSettingsRowLabel"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    color: ${text2};
-    min-width: 92px;
-}
-
-QLabel[labelRole="audioSettingsNote"] {
-    font-size: 11.5px;
-    color: ${text2};
-}
 
 /* D6: Settings quiet-row left-side label — normal case, no mono/uppercase.
    Used in Format, Output, Presence, Appearance, and Webcam settings rows. */
@@ -783,93 +764,6 @@ QWidget#audioSourceRow[active="false"] QLabel[labelRole="audioDbValue"] {
     color: ${text3};
 }
 
-QFrame#resultingTracksPanel,
-QWidget#resultingTracksPanel,
-QFrame#audioEncodingPanel,
-QWidget#audioEncodingPanel {
-    background: ${bg2};
-    border: 1px solid ${line1};
-    border-radius: ${radius-md}px;
-}
-
-QWidget#audioTrackRow {
-    background: transparent;
-    border-top: 1px solid ${line1};
-}
-
-QWidget#audioTrackRow[firstRow="true"] {
-    border-top: none;
-}
-
-QWidget#audioTrackPreviewRow {
-    background: transparent;
-    border-top: 1px solid ${line1};
-}
-
-QWidget#audioTrackPreviewRow[firstRow="true"] {
-    border-top: none;
-}
-
-QLabel[labelRole="audioTrackIndex"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.04em;
-    color: ${text2};
-}
-
-QLabel[labelRole="audioTrackName"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.08em;
-    font-weight: 600;
-    color: ${text1};
-}
-
-QLabel[labelRole="audioTrackPreviewTag"] {
-    font-family: ${font-mono};
-    font-size: 11.5px;
-    letter-spacing: 0.14em;
-    font-weight: 600;
-    color: ${text1};
-    border: 1px solid ${line2};
-    border-radius: ${radius-sm}px;
-    background: transparent;
-    padding: 3px 7px;
-}
-
-QLabel[labelRole="audioTrackMeta"] {
-    font-family: ${font-mono};
-    font-size: 11.5px;
-    letter-spacing: 0.04em;
-    color: ${text2};
-}
-
-QLabel[labelRole="audioKvKey"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.06em;
-    color: ${text2};
-}
-
-QLabel[labelRole="audioKvValue"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.02em;
-    color: ${text0};
-}
-
-QLabel[labelRole="audioKvValueAccent"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.02em;
-    color: ${text1};
-    font-weight: 600;
-}
-
-QLabel[labelRole="audioEncodingNote"] {
-    font-size: 11.5px;
-    color: ${text2};
-}
 
 QWidget#codecCard {
     background: ${bg2};

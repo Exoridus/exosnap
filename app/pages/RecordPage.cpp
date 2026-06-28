@@ -6,10 +6,6 @@
 #include "../ui/dialogs/SourcePickerOverlay.h"
 #include "../ui/dialogs/SourcePickerWindowRules.h"
 #include "../ui/theme/ExoSnapMetrics.h"
-#include "../ui/widgets/AudioSourceRow.h"
-#include "../ui/widgets/CaptureTargetCard.h"
-#include "../ui/widgets/ComboBoxWheelFilter.h"
-#include "../ui/widgets/ExoCheckBox.h"
 #include "../ui/widgets/PreviewSurface.h"
 #include "../ui/widgets/RegionGeometry.h"
 #include "../ui/widgets/RegionSelectionOverlay.h"
@@ -288,20 +284,6 @@ QString checkGlyph(bool ok, bool blocked) {
     return "·";
 }
 
-int LinearToSliderDb(float gain_linear) {
-    if (gain_linear <= 0.0f)
-        return 0;
-    const int db = static_cast<int>(std::round(20.0f * std::log10f(gain_linear)));
-    return std::clamp(db, 0, 24);
-}
-
-float SliderDbToLinear(int db) {
-    return std::pow(10.0f, static_cast<float>(db) / 20.0f);
-}
-
-// Mic gain persistence was moved to RecordingPresetStore.
-// This function is intentionally removed (no-op replacement kept for reference only).
-
 QString displayLabelFromTarget(const recorder_core::CaptureTarget& target) {
     return QString::fromStdString(RecordViewModel::DisplayLabelFromTarget(target.description));
 }
@@ -324,41 +306,6 @@ capability::UserRecorderConfig primaryRecorderConfig() {
     config.frame_rate_num = 60;
     config.frame_rate_den = 1;
     return config;
-}
-
-std::vector<std::string> BuildMicDeviceLabels(const std::vector<recorder_core::AudioInputDeviceInfo>& devices) {
-    std::vector<std::string> base_names;
-    base_names.reserve(devices.size());
-
-    std::unordered_map<std::string, int> base_counts;
-    for (const auto& dev : devices) {
-        const std::string base_name = dev.display_name.empty() ? dev.device_id : dev.display_name;
-        base_names.push_back(base_name);
-        ++base_counts[base_name];
-    }
-
-    std::unordered_map<std::string, int> base_seen;
-    std::vector<std::string> labels;
-    labels.reserve(devices.size());
-
-    for (std::size_t i = 0; i < devices.size(); ++i) {
-        const auto& dev = devices[i];
-        const std::string& base_name = base_names[i];
-
-        std::string label = base_name;
-        if (base_counts[base_name] > 1) {
-            const int dedup_index = ++base_seen[base_name];
-            label += " [" + std::to_string(dedup_index) + "]";
-        }
-
-        if (dev.is_default) {
-            label += " (Default)";
-        }
-
-        labels.push_back(std::move(label));
-    }
-
-    return labels;
 }
 
 struct MinimumCaptureSize {
@@ -710,40 +657,6 @@ WindowEligibility ClassifyWindowForPicker(const WindowPresentation& meta, const 
 } // namespace
 
 bool RecordPage::eventFilter(QObject* watched, QEvent* event) {
-    // Grip-area drag on AudioSourceRow widgets (leftmost 36px).
-    if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseMove ||
-        event->type() == QEvent::MouseButtonRelease) {
-        auto* mouse = static_cast<QMouseEvent*>(event);
-        for (int i = 0; i < static_cast<int>(audio_source_rows_.size()); ++i) {
-            if (audio_source_rows_[static_cast<std::size_t>(i)] != watched)
-                continue;
-
-            if (event->type() == QEvent::MouseButtonPress) {
-                if (mouse->position().x() <= 36) {
-                    drag_source_index_ = i;
-                    drag_start_y_ = mouse->globalPosition().y();
-                    return true;
-                }
-            } else if (event->type() == QEvent::MouseMove && drag_source_index_ == i) {
-                const int delta = mouse->globalPosition().y() - drag_start_y_;
-                const int row_height = audio_source_rows_[0]->height();
-                if (row_height > 0 && (delta > row_height / 2 || delta < -(row_height / 2))) {
-                    const int direction = delta > 0 ? 1 : -1;
-                    const int target = drag_source_index_ + direction;
-                    if (target >= 0 && target < static_cast<int>(audio_source_rows_.size())) {
-                        swapAudioSourceRows(drag_source_index_, target);
-                        drag_source_index_ = target;
-                        drag_start_y_ = mouse->globalPosition().y();
-                    }
-                }
-                return true;
-            } else if (event->type() == QEvent::MouseButtonRelease && drag_source_index_ == i) {
-                drag_source_index_ = -1;
-                return true;
-            }
-            break;
-        }
-    }
     return QWidget::eventFilter(watched, event);
 }
 
@@ -934,140 +847,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     // dock (right side, round icon button).  The preview-corner button and shutter
     // flash overlay were removed because they were occluded by the DXGI native HWND.
     cockpit_split_layout_->addWidget(preview_column_, 7);
-
-    audio_settings_header_ = new ui::widgets::SectionRuleHeader("AUDIO SETTINGS", content);
-    audio_settings_header_->setMeta("OUTPUT · INPUT · TRACK PREVIEW");
-    layout->addWidget(audio_settings_header_);
-
-    audio_settings_panel_ = makePanel(content);
-    auto* audio_settings_panel = audio_settings_panel_;
-    auto* audio_settings_layout = new QVBoxLayout(audio_settings_panel);
-    audio_settings_layout->setContentsMargins(14, 12, 14, 12);
-    audio_settings_layout->setSpacing(10);
-
-    audio_settings_layout->addWidget(makeLabel("Audio Sources", "audioSettingsGroupTitle", audio_settings_panel));
-    audio_rows_container_ = new QWidget(audio_settings_panel);
-    audio_rows_layout_ = new QVBoxLayout(audio_rows_container_);
-    audio_rows_layout_->setContentsMargins(0, 0, 0, 0);
-    audio_rows_layout_->setSpacing(4);
-    audio_settings_layout->addWidget(audio_rows_container_);
-
-    mic_device_row_ = new QWidget(audio_settings_panel);
-    auto* mic_device_row_layout = new QHBoxLayout(mic_device_row_);
-    mic_device_row_layout->setContentsMargins(0, 0, 0, 0);
-    mic_device_row_layout->setSpacing(10);
-    mic_device_row_layout->addWidget(makeLabel("Input Device", "audioSettingsRowLabel", mic_device_row_));
-    mic_device_combo_ = new QComboBox(mic_device_row_);
-    mic_device_combo_->setMaximumWidth(520);
-    mic_device_row_layout->addWidget(mic_device_combo_, 1);
-    mic_refresh_btn_ = new QPushButton("Refresh", mic_device_row_);
-    mic_refresh_btn_->setProperty("role", "ghost");
-    mic_device_row_layout->addWidget(mic_refresh_btn_);
-    populateMicDeviceCombo();
-    audio_settings_layout->addWidget(mic_device_row_);
-    mic_device_note_label_ = makeLabel("", "audioSettingsNote", audio_settings_panel);
-    mic_device_note_label_->setProperty("labelRole", "audioSettingsNote");
-    mic_device_note_label_->setWordWrap(true);
-    mic_device_note_label_->setVisible(false);
-    audio_settings_layout->addWidget(mic_device_note_label_);
-
-    mic_channel_row_ = new QWidget(audio_settings_panel);
-    auto* mic_channel_row_layout = new QHBoxLayout(mic_channel_row_);
-    mic_channel_row_layout->setContentsMargins(0, 0, 0, 0);
-    mic_channel_row_layout->setSpacing(10);
-    mic_channel_row_layout->addWidget(makeLabel("Channel", "audioSettingsRowLabel", mic_channel_row_));
-    mic_channel_combo_ = new QComboBox(mic_channel_row_);
-    mic_channel_combo_->setMaximumWidth(320);
-    mic_channel_combo_->addItem("Auto");
-    mic_channel_combo_->addItem("Preserve Stereo");
-    mic_channel_combo_->addItem("Mono Mix");
-    mic_channel_combo_->addItem("Left to Stereo");
-    mic_channel_combo_->addItem("Right to Stereo");
-    mic_channel_row_layout->addWidget(mic_channel_combo_, 1);
-    audio_settings_layout->addWidget(mic_channel_row_);
-
-    mic_gain_row_ = new QWidget(audio_settings_panel);
-    auto* mic_gain_row_layout = new QHBoxLayout(mic_gain_row_);
-    mic_gain_row_layout->setContentsMargins(0, 0, 0, 0);
-    mic_gain_row_layout->setSpacing(10);
-    mic_gain_row_layout->addWidget(makeLabel("Gain", "audioSettingsRowLabel", mic_gain_row_));
-    mic_gain_slider_ = new QSlider(Qt::Horizontal, mic_gain_row_);
-    mic_gain_slider_->setRange(0, 24);
-    mic_gain_slider_->setSingleStep(1);
-    mic_gain_slider_->setPageStep(3);
-    mic_gain_slider_->setTickInterval(6);
-    mic_gain_slider_->setTickPosition(QSlider::TicksBelow);
-    mic_gain_slider_->setValue(0);
-    mic_gain_row_layout->addWidget(mic_gain_slider_, 1);
-    mic_gain_value_label_ = makeLabel("0 dB", "audioSettingsRowLabel", mic_gain_row_);
-    mic_gain_value_label_->setFixedWidth(54);
-    mic_gain_value_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    mic_gain_row_layout->addWidget(mic_gain_value_label_);
-    audio_settings_layout->addWidget(mic_gain_row_);
-
-    // --- Audio encoding params (ADR 0019) ---
-    audio_bitrate_row_ = new QWidget(audio_settings_panel);
-    auto* audio_bitrate_row_layout = new QHBoxLayout(audio_bitrate_row_);
-    audio_bitrate_row_layout->setContentsMargins(0, 0, 0, 0);
-    audio_bitrate_row_layout->setSpacing(10);
-    audio_bitrate_row_layout->addWidget(makeLabel("Bitrate", "audioSettingsRowLabel", audio_bitrate_row_));
-    audio_bitrate_spin_ = new QSpinBox(audio_bitrate_row_);
-    audio_bitrate_spin_->setRange(32, 510);
-    audio_bitrate_spin_->setSingleStep(16);
-    audio_bitrate_spin_->setValue(160);
-    audio_bitrate_spin_->setSuffix(QStringLiteral(" kbps"));
-    audio_bitrate_spin_->setObjectName(QStringLiteral("audioSettingsSpinBox"));
-    audio_bitrate_row_layout->addWidget(audio_bitrate_spin_);
-    audio_bitrate_row_layout->addStretch(1);
-    audio_settings_layout->addWidget(audio_bitrate_row_);
-
-    opus_frame_duration_row_ = new QWidget(audio_settings_panel);
-    auto* opus_frame_duration_row_layout = new QHBoxLayout(opus_frame_duration_row_);
-    opus_frame_duration_row_layout->setContentsMargins(0, 0, 0, 0);
-    opus_frame_duration_row_layout->setSpacing(10);
-    opus_frame_duration_row_layout->addWidget(
-        makeLabel("Frame size", "audioSettingsRowLabel", opus_frame_duration_row_));
-    opus_frame_duration_combo_ = new QComboBox(opus_frame_duration_row_);
-    opus_frame_duration_combo_->addItem(QStringLiteral("20 ms (default)"),
-                                        QVariant::fromValue(static_cast<int>(recorder_core::OpusFrameDuration::Ms20)));
-    opus_frame_duration_combo_->addItem(QStringLiteral("10 ms"),
-                                        QVariant::fromValue(static_cast<int>(recorder_core::OpusFrameDuration::Ms10)));
-    opus_frame_duration_combo_->addItem(QStringLiteral("5 ms"),
-                                        QVariant::fromValue(static_cast<int>(recorder_core::OpusFrameDuration::Ms5)));
-    opus_frame_duration_combo_->addItem(QStringLiteral("2.5 ms"),
-                                        QVariant::fromValue(static_cast<int>(recorder_core::OpusFrameDuration::Ms2_5)));
-    opus_frame_duration_combo_->setObjectName(QStringLiteral("audioSettingsCombo"));
-    opus_frame_duration_row_layout->addWidget(opus_frame_duration_combo_, 1);
-    audio_settings_layout->addWidget(opus_frame_duration_row_);
-
-    opus_complexity_row_ = new QWidget(audio_settings_panel);
-    auto* opus_complexity_row_layout = new QHBoxLayout(opus_complexity_row_);
-    opus_complexity_row_layout->setContentsMargins(0, 0, 0, 0);
-    opus_complexity_row_layout->setSpacing(10);
-    opus_complexity_row_layout->addWidget(makeLabel("Complexity", "audioSettingsRowLabel", opus_complexity_row_));
-    opus_complexity_spin_ = new QSpinBox(opus_complexity_row_);
-    opus_complexity_spin_->setRange(0, 10);
-    opus_complexity_spin_->setSingleStep(1);
-    opus_complexity_spin_->setValue(10);
-    opus_complexity_spin_->setObjectName(QStringLiteral("audioSettingsSpinBox"));
-    opus_complexity_row_layout->addWidget(opus_complexity_spin_);
-    opus_complexity_row_layout->addStretch(1);
-    audio_settings_layout->addWidget(opus_complexity_row_);
-
-    audio_settings_layout->addSpacing(6);
-    audio_settings_layout->addWidget(makeLabel("Resulting Tracks", "audioSettingsGroupTitle", audio_settings_panel));
-    track_preview_panel_ = makePanel(audio_settings_panel);
-    track_preview_panel_->setObjectName("resultingTracksPanel");
-    track_preview_layout_ = new QVBoxLayout(track_preview_panel_);
-    track_preview_layout_->setContentsMargins(0, 0, 0, 0);
-    track_preview_layout_->setSpacing(0);
-    audio_settings_layout->addWidget(track_preview_panel_);
-
-    layout->addWidget(audio_settings_panel);
-
-    audio_header_ = new ui::widgets::SectionRuleHeader("AUDIO ACTIVITY", content);
-    audio_header_->setMeta("LIVE · RMS");
-    layout->addWidget(audio_header_);
 
     auto* audio_panel = makePanel(content);
     auto* audio_layout = new QVBoxLayout(audio_panel);
@@ -1406,24 +1185,9 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     root->addWidget(marker_feedback_label_, 0);
     root->addWidget(transport_dock_, 0);
 
-    auto* combo_wheel_filter = new ui::widgets::ComboBoxWheelFilter(this);
-    combo_wheel_filter->installOn(mic_device_combo_);
-    combo_wheel_filter->installOn(mic_channel_combo_);
-
     updatePreviewHeightClamp();
 
     connect(change_source_btn_, &QPushButton::clicked, this, &RecordPage::onOpenSourcePicker);
-    connect(mic_refresh_btn_, &QPushButton::clicked, this, &RecordPage::populateMicDeviceCombo);
-    connect(mic_device_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &RecordPage::onMicDeviceChanged);
-    connect(mic_channel_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &RecordPage::onMicChannelChanged);
-    connect(mic_gain_slider_, &QSlider::valueChanged, this, &RecordPage::onMicGainChanged);
-    connect(audio_bitrate_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &RecordPage::onAudioBitrateChanged);
-    connect(opus_frame_duration_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &RecordPage::onOpusFrameDurationChanged);
-    connect(opus_complexity_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this,
-            &RecordPage::onOpusComplexityChanged);
     connect(open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
     connect(destination_settings_btn_, &QPushButton::clicked, this, [this]() { emit navigateToOutputPage(); });
     connect(result_open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
@@ -1974,11 +1738,7 @@ void RecordPage::applyCapturePolicy(const PresetCaptureTarget& cap) {
         // selected, which is the correct "unresolved" UX).
         const capability::CaptureTargetKind kind_for_audio =
             want_window ? capability::CaptureTargetKind::Window : capability::CaptureTargetKind::Display;
-        const bool kind_changed = (view_model_.audio_ui_state.target_kind != kind_for_audio);
         view_model_.ApplyTargetKindPreservingAudio(kind_for_audio);
-        if (kind_changed) {
-            rebuildAudioRowWidgets();
-        }
         startPreviewIfIdle();
     }
 
@@ -2053,10 +1813,6 @@ void RecordPage::applyPersistedAudioSettings(const capability::AudioUiState& sta
 
     populateMicDeviceCombo();
     view_model_.RebuildAudioPlan();
-    rebuildAudioRowWidgets();
-    updateAudioRowMergeVisibility();
-    updateAudioControlsVisibility();
-    updateAudioTrackPreview();
     syncMicMeterService();
     syncSysMeterService();
     syncAppMeterService();
@@ -2262,10 +2018,6 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
     view_model_.audio_ui_state.selected_mic_device_id = std::string("visual-test-mic");
     view_model_.audio_ui_state.mic_gain_linear = 1.0f;
     view_model_.RebuildAudioPlan();
-    rebuildAudioRowWidgets();
-    updateAudioRowMergeVisibility();
-    updateAudioControlsVisibility();
-    updateAudioTrackPreview();
 
     view_model_.ResetStats();
     view_model_.capability_status_text = L"Visual test fixture: diagnostic blockers clear.";
@@ -2803,7 +2555,6 @@ void RecordPage::initCoordinator() {
     if (recovery_manifest_store_ != nullptr)
         coordinator_->SetRecoveryManifestStore(recovery_manifest_store_);
     view_model_.ApplyTargetKind(capability::CaptureTargetKind::Display);
-    rebuildAudioRowWidgets();
 
     preview_service_ = std::make_unique<PreviewService>();
     QPointer<ui::widgets::PreviewSurface> safeSurface = preview_surface_;
@@ -3132,7 +2883,6 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
 
     view_model_.ApplyTargetKindPreservingAudio(new_kind);
     if (kind_changed) {
-        rebuildAudioRowWidgets();
         emitAudioSettingsChanged();
     }
     syncCoordinatorTargetContext();
@@ -4083,199 +3833,25 @@ void RecordPage::doStartRecording(std::optional<recorder_core::CaptureRegion> cr
                                  crop_region);
 }
 
-void RecordPage::onAudioRowEnabledChanged(int row_index, bool enabled) {
-    if (row_index < 0 || row_index >= static_cast<int>(view_model_.audio_ui_state.source_rows.size()))
-        return;
-    view_model_.audio_ui_state.source_rows[static_cast<std::size_t>(row_index)].enabled = enabled;
-    view_model_.RebuildAudioPlan();
-    updateAudioControlsVisibility();
-    updateAudioTrackPreview();
-    syncMicMeterService();
-    syncSysMeterService();
-    syncAppMeterService();
-    updateAudioMeterLevels();
-    emitAudioSettingsChanged();
-}
-
-void RecordPage::onAudioRowMergeChanged(int row_index, bool merge) {
-    if (row_index < 0 || row_index >= static_cast<int>(view_model_.audio_ui_state.source_rows.size()))
-        return;
-    view_model_.audio_ui_state.source_rows[static_cast<std::size_t>(row_index)].merge_with_above = merge;
-    view_model_.RebuildAudioPlan();
-    updateAudioTrackPreview();
-    emitAudioSettingsChanged();
-}
-
-void RecordPage::onAudioRowGainChanged(int row_index, float gain_db) {
-    if (row_index < 0 || row_index >= static_cast<int>(view_model_.audio_ui_state.source_rows.size()))
-        return;
-    view_model_.audio_ui_state.source_rows[static_cast<std::size_t>(row_index)].gain_db = gain_db;
-    view_model_.RebuildAudioPlan();
-    updateAudioTrackPreview();
-    emitAudioSettingsChanged();
-}
-
-void RecordPage::onAudioRowMutedChanged(int row_index, bool muted) {
-    if (row_index < 0 || row_index >= static_cast<int>(view_model_.audio_ui_state.source_rows.size()))
-        return;
-    view_model_.audio_ui_state.source_rows[static_cast<std::size_t>(row_index)].muted = muted;
-    view_model_.RebuildAudioPlan();
-    updateAudioTrackPreview();
-    emitAudioSettingsChanged();
-}
-
-void RecordPage::swapAudioSourceRows(int a, int b) {
-    const int n = static_cast<int>(view_model_.audio_ui_state.source_rows.size());
-    if (a < 0 || b < 0 || a >= n || b >= n || a == b)
-        return;
-
-    std::swap(view_model_.audio_ui_state.source_rows[static_cast<std::size_t>(a)],
-              view_model_.audio_ui_state.source_rows[static_cast<std::size_t>(b)]);
-
-    rebuildAudioRowWidgets();
-    view_model_.RebuildAudioPlan();
-    updateAudioRowMergeVisibility();
-    updateAudioControlsVisibility();
-    updateAudioTrackPreview();
-    emitAudioSettingsChanged();
-}
-
-void RecordPage::rebuildAudioRowWidgets() {
-    // Remove all existing row widgets from the layout.
-    while (audio_rows_layout_->count() > 0) {
-        QLayoutItem* item = audio_rows_layout_->takeAt(0);
-        delete item;
-    }
-    for (auto* row : audio_source_rows_)
-        row->deleteLater();
-    audio_source_rows_.clear();
-
-    const auto& rows = view_model_.audio_ui_state.source_rows;
-
-    auto tagForKind = [](recorder_core::AudioSourceKind k) -> QString {
-        switch (k) {
-        case recorder_core::AudioSourceKind::App:
-            return QStringLiteral("APP");
-        case recorder_core::AudioSourceKind::Mic:
-            return QStringLiteral("MIC");
-        case recorder_core::AudioSourceKind::Sys:
-            return QStringLiteral("SYS");
-        case recorder_core::AudioSourceKind::SystemOutput:
-            return QStringLiteral("OUT");
-        }
-        return QStringLiteral("?");
-    };
-
-    auto titleForKind = [](recorder_core::AudioSourceKind k) -> QString {
-        switch (k) {
-        case recorder_core::AudioSourceKind::App:
-            return QStringLiteral("Application Audio");
-        case recorder_core::AudioSourceKind::Mic:
-            return QStringLiteral("Microphone");
-        case recorder_core::AudioSourceKind::Sys:
-            return QStringLiteral("Other System Audio");
-        case recorder_core::AudioSourceKind::SystemOutput:
-            return QStringLiteral("System Output");
-        }
-        return QStringLiteral("Unknown");
-    };
-
-    auto subtitleForKind = [](recorder_core::AudioSourceKind k) -> QString {
-        switch (k) {
-        case recorder_core::AudioSourceKind::App:
-            return QStringLiteral("Selected window audio");
-        case recorder_core::AudioSourceKind::Mic:
-            return QStringLiteral("Microphone input");
-        case recorder_core::AudioSourceKind::Sys:
-            return QStringLiteral("Other system sources");
-        case recorder_core::AudioSourceKind::SystemOutput:
-            return QStringLiteral("Full system loopback");
-        }
-        return {};
-    };
-
-    for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
-        const auto& model_row = rows[static_cast<std::size_t>(i)];
-        const bool is_first = (i == 0);
-
-        ui::widgets::AudioSourceRow::Config cfg;
-        cfg.tag = tagForKind(model_row.kind);
-        cfg.title = titleForKind(model_row.kind);
-        cfg.subtitle = subtitleForKind(model_row.kind);
-        cfg.db_value = QStringLiteral("– dB");
-        cfg.has_merge_control = !is_first;
-        cfg.enabled = model_row.enabled;
-        cfg.gain_db = model_row.gain_db;
-        cfg.muted = model_row.muted;
-        // Mic gain is controlled by the dedicated mic_gain_slider_; hide the
-        // per-row gain slider for Mic so there is no duplicate control.
-        cfg.has_gain_control = (model_row.kind != recorder_core::AudioSourceKind::Mic);
-
-        auto* row_widget = new ui::widgets::AudioSourceRow(cfg, audio_rows_container_);
-        if (!is_first) {
-            row_widget->setMergeChecked(model_row.merge_with_above);
-        }
-        row_widget->installEventFilter(this);
-
-        audio_rows_layout_->addWidget(row_widget);
-        audio_source_rows_.push_back(row_widget);
-
-        const int idx = i;
-        connect(row_widget, &ui::widgets::AudioSourceRow::sourceEnabledChanged, this,
-                [this, idx](bool enabled) { onAudioRowEnabledChanged(idx, enabled); });
-        if (!is_first) {
-            connect(row_widget, &ui::widgets::AudioSourceRow::mergeChanged, this,
-                    [this, idx](bool merge) { onAudioRowMergeChanged(idx, merge); });
-        }
-        connect(row_widget, &ui::widgets::AudioSourceRow::gainDbChanged, this,
-                [this, idx](float gain_db) { onAudioRowGainChanged(idx, gain_db); });
-        connect(row_widget, &ui::widgets::AudioSourceRow::mutedChanged, this,
-                [this, idx](bool muted) { onAudioRowMutedChanged(idx, muted); });
-    }
-}
-
-void RecordPage::updateAudioRowMergeVisibility() {
-    const bool mkv = (current_container_ == capability::Container::Matroska);
-    const bool busy = isSourceSelectionLocked();
-
-    for (int i = 1; i < static_cast<int>(audio_source_rows_.size()); ++i) {
-        auto* w = audio_source_rows_[static_cast<std::size_t>(i)];
-        w->setMergeControlVisible(mkv && !busy);
-    }
-}
-
 void RecordPage::populateMicDeviceCombo() {
-    if (!mic_device_combo_) {
-        return;
-    }
-
     // MUST-FIX A: preserve the configured stable ID.  If the id is present in the
     // new enumeration, restore the selection as before.  If the id is ABSENT, do
-    // NOT silently reset to Default — keep the stored id unchanged, append an
-    // "(unavailable)" placeholder, select it, and stop the mic meter safely.
+    // NOT silently reset to Default — keep the stored id unchanged and stop the
+    // mic meter safely.
     const auto previous_id = view_model_.audio_ui_state.selected_mic_device_id;
 
-    QSignalBlocker blocker(mic_device_combo_);
-
-    mic_device_combo_->clear();
     mic_devices_.clear();
-
-    mic_device_combo_->addItem("System Default Microphone");
     mic_devices_.push_back({});
 
     const auto devices = recorder_core::EnumerateAudioInputDevices();
-    const auto labels = BuildMicDeviceLabels(devices);
-    for (std::size_t i = 0; i < devices.size() && i < labels.size(); ++i) {
-        mic_device_combo_->addItem(QString::fromStdString(labels[i]));
+    for (std::size_t i = 0; i < devices.size(); ++i) {
         mic_devices_.push_back(devices[i]);
     }
 
-    int restore_index = 0;
     bool found = false;
     if (previous_id.has_value()) {
         for (int i = 1; i < static_cast<int>(mic_devices_.size()); ++i) {
             if (mic_devices_[static_cast<std::size_t>(i)].device_id == *previous_id) {
-                restore_index = i;
                 found = true;
                 break;
             }
@@ -4283,12 +3859,8 @@ void RecordPage::populateMicDeviceCombo() {
     }
 
     if (!found && previous_id.has_value()) {
-        // Configured device is absent: append a placeholder, keep stored id unchanged,
+        // Configured device is absent: keep stored id unchanged,
         // stop the mic meter so no stale capture runs.  Do NOT overwrite selected_mic_device_id.
-        const QString placeholder = QString::fromStdString(*previous_id) + QStringLiteral(" (unavailable)");
-        mic_device_combo_->addItem(placeholder);
-        restore_index = mic_device_combo_->count() - 1;
-        // Do NOT update view_model_.audio_ui_state.selected_mic_device_id.
         if (coordinator_) {
             coordinator_->StopMicMeter();
             preflight_mic_rms_ = 0.0f;
@@ -4296,97 +3868,15 @@ void RecordPage::populateMicDeviceCombo() {
         diagnostics::AppLog::warning(
             QStringLiteral("audio"),
             QStringLiteral("Selected mic device disconnected: %1").arg(QString::fromStdString(*previous_id)));
-    } else if (found) {
-        const auto& selected = mic_devices_[static_cast<std::size_t>(restore_index)];
-        view_model_.audio_ui_state.selected_mic_device_id =
-            selected.device_id.empty() ? std::nullopt : std::optional<std::string>(selected.device_id);
-    } else {
-        // No previous id (semantic Default): stay at index 0.
+    } else if (!previous_id.has_value()) {
+        // No previous id (semantic Default): stay at Default.
         view_model_.audio_ui_state.selected_mic_device_id = std::nullopt;
     }
 
-    mic_device_combo_->setCurrentIndex(restore_index);
-
     view_model_.RebuildAudioPlan();
-    updateMicDeviceNoteLabel();
     syncMicMeterService();
     syncSysMeterService();
     syncAppMeterService();
-}
-
-void RecordPage::onMicDeviceChanged(int index) {
-    if (index <= 0 || index >= static_cast<int>(mic_devices_.size())) {
-        view_model_.audio_ui_state.selected_mic_device_id = std::nullopt;
-    } else {
-        const auto& dev = mic_devices_[static_cast<std::size_t>(index)];
-        view_model_.audio_ui_state.selected_mic_device_id =
-            dev.device_id.empty() ? std::nullopt : std::optional<std::string>(dev.device_id);
-    }
-
-    view_model_.RebuildAudioPlan();
-    updateMicDeviceNoteLabel();
-    updateAudioTrackPreview();
-    syncMicMeterService();
-    syncSysMeterService();
-    syncAppMeterService();
-    emitAudioSettingsChanged();
-}
-
-void RecordPage::onMicChannelChanged(int index) {
-    static constexpr recorder_core::MicChannelMode kModes[] = {
-        recorder_core::MicChannelMode::Auto,          recorder_core::MicChannelMode::PreserveStereo,
-        recorder_core::MicChannelMode::MonoMix,       recorder_core::MicChannelMode::LeftToStereo,
-        recorder_core::MicChannelMode::RightToStereo,
-    };
-
-    if (index >= 0 && index < static_cast<int>(std::size(kModes))) {
-        view_model_.audio_ui_state.mic_channel_mode = kModes[static_cast<std::size_t>(index)];
-    }
-
-    view_model_.RebuildAudioPlan();
-    updateAudioTrackPreview();
-    syncMicMeterService();
-    syncSysMeterService();
-    syncAppMeterService();
-    emitAudioSettingsChanged();
-}
-
-void RecordPage::onMicGainChanged(int db_value) {
-    view_model_.audio_ui_state.mic_gain_linear = SliderDbToLinear(db_value);
-    if (mic_gain_value_label_) {
-        mic_gain_value_label_->setText(db_value == 0 ? QStringLiteral("0 dB") : QStringLiteral("+%1 dB").arg(db_value));
-    }
-    view_model_.RebuildAudioPlan();
-    updateAudioTrackPreview();
-    syncMicMeterService();
-    syncSysMeterService();
-    syncAppMeterService();
-    updateAudioMeterLevels();
-    emitAudioSettingsChanged();
-}
-
-void RecordPage::onAudioBitrateChanged(int kbps) {
-    view_model_.audio_ui_state.audio_bitrate_kbps = static_cast<uint32_t>(kbps);
-    view_model_.RebuildAudioPlan();
-    emitAudioSettingsChanged();
-}
-
-void RecordPage::onOpusFrameDurationChanged(int index) {
-    if (!opus_frame_duration_combo_)
-        return;
-    const QVariant item_data = opus_frame_duration_combo_->itemData(index);
-    if (item_data.isValid()) {
-        view_model_.audio_ui_state.opus_frame_duration =
-            static_cast<recorder_core::OpusFrameDuration>(item_data.toInt());
-    }
-    view_model_.RebuildAudioPlan();
-    emitAudioSettingsChanged();
-}
-
-void RecordPage::onOpusComplexityChanged(int value) {
-    view_model_.audio_ui_state.opus_complexity = value;
-    view_model_.RebuildAudioPlan();
-    emitAudioSettingsChanged();
 }
 
 void RecordPage::emitAudioSettingsChanged() {
@@ -4398,125 +3888,6 @@ void RecordPage::emitAudioSettingsChanged() {
                                    .arg(static_cast<int>(view_model_.audio_ui_state.source_rows.size()))
                                    .arg(view_model_.audio_ui_state.mic_gain_linear, 0, 'f', 2));
     emit audioSettingsChanged(view_model_.audio_ui_state);
-}
-
-void RecordPage::updateAudioControls() {
-    if (!mic_channel_combo_ || !mic_gain_slider_) {
-        return;
-    }
-
-    QSignalBlocker b1(mic_channel_combo_);
-    QSignalBlocker b2(mic_gain_slider_);
-
-    const auto mode = view_model_.audio_ui_state.mic_channel_mode;
-    int channel_index = 0;
-    switch (mode) {
-    case recorder_core::MicChannelMode::PreserveStereo:
-        channel_index = 1;
-        break;
-    case recorder_core::MicChannelMode::MonoMix:
-        channel_index = 2;
-        break;
-    case recorder_core::MicChannelMode::LeftToStereo:
-        channel_index = 3;
-        break;
-    case recorder_core::MicChannelMode::RightToStereo:
-        channel_index = 4;
-        break;
-    default:
-        channel_index = 0;
-        break;
-    }
-    mic_channel_combo_->setCurrentIndex(channel_index);
-
-    const int db = LinearToSliderDb(view_model_.audio_ui_state.mic_gain_linear);
-    mic_gain_slider_->setValue(db);
-    if (mic_gain_value_label_) {
-        mic_gain_value_label_->setText(db == 0 ? QStringLiteral("0 dB") : QStringLiteral("+%1 dB").arg(db));
-    }
-
-    // Audio encoding params (ADR 0019).
-    if (audio_bitrate_spin_) {
-        QSignalBlocker b_br(audio_bitrate_spin_);
-        audio_bitrate_spin_->setValue(static_cast<int>(view_model_.audio_ui_state.audio_bitrate_kbps));
-    }
-    if (opus_frame_duration_combo_) {
-        QSignalBlocker b_fd(opus_frame_duration_combo_);
-        const int target = static_cast<int>(view_model_.audio_ui_state.opus_frame_duration);
-        for (int i = 0; i < opus_frame_duration_combo_->count(); ++i) {
-            if (opus_frame_duration_combo_->itemData(i).toInt() == target) {
-                opus_frame_duration_combo_->setCurrentIndex(i);
-                break;
-            }
-        }
-    }
-    if (opus_complexity_spin_) {
-        QSignalBlocker b_cx(opus_complexity_spin_);
-        opus_complexity_spin_->setValue(view_model_.audio_ui_state.opus_complexity);
-    }
-
-    updateAudioControlsVisibility();
-}
-
-void RecordPage::updateAudioControlsVisibility() {
-    const bool mic = view_model_.audio_ui_state.IsMicEnabled();
-    const bool busy = isSourceSelectionLocked();
-
-    // Disable row widgets while recording.
-    for (auto* row : audio_source_rows_)
-        row->setEnabled(!busy);
-
-    updateAudioRowMergeVisibility();
-
-    mic_device_row_->setVisible(mic);
-    mic_channel_row_->setVisible(mic);
-    mic_gain_row_->setVisible(mic);
-
-    mic_device_combo_->setEnabled(!busy);
-    mic_channel_combo_->setEnabled(!busy);
-    mic_gain_slider_->setEnabled(!busy);
-    if (mic_refresh_btn_) {
-        mic_refresh_btn_->setEnabled(!busy);
-    }
-    // Audio encoding params — disable during recording.
-    if (audio_bitrate_spin_)
-        audio_bitrate_spin_->setEnabled(!busy);
-    if (opus_frame_duration_combo_)
-        opus_frame_duration_combo_->setEnabled(!busy);
-    if (opus_complexity_spin_)
-        opus_complexity_spin_->setEnabled(!busy);
-    updateMicDeviceNoteLabel();
-}
-
-void RecordPage::updateMicDeviceNoteLabel() {
-    if (!mic_device_note_label_ || !mic_device_combo_ || !mic_device_row_) {
-        return;
-    }
-
-    const bool mic_on = view_model_.audio_ui_state.IsMicEnabled();
-    const bool show_note = mic_on && mic_device_row_->isVisible() && mic_device_combo_->currentIndex() == 0;
-    if (!show_note) {
-        mic_device_note_label_->setVisible(false);
-        return;
-    }
-
-    QString default_name;
-    for (std::size_t i = 1; i < mic_devices_.size(); ++i) {
-        const auto& dev = mic_devices_[i];
-        if (!dev.is_default) {
-            continue;
-        }
-        const std::string fallback = dev.display_name.empty() ? dev.device_id : dev.display_name;
-        default_name = QString::fromStdString(fallback);
-        break;
-    }
-
-    if (!default_name.isEmpty()) {
-        mic_device_note_label_->setText(QStringLiteral("→ Currently: %1").arg(default_name));
-    } else {
-        mic_device_note_label_->setText(QStringLiteral("→ Follows the Windows default input device"));
-    }
-    mic_device_note_label_->setVisible(true);
 }
 
 void RecordPage::syncMicMeterService() {
@@ -4612,60 +3983,6 @@ void RecordPage::syncAppMeterService() {
         preflight_app_pid_ = 0;
     } else {
         preflight_app_pid_ = target_pid;
-    }
-}
-
-void RecordPage::updateAudioTrackPreview() {
-    if (!track_preview_layout_) {
-        return;
-    }
-
-    const auto sourceTag = [](const std::string& source_key) {
-        if (source_key == "app")
-            return QStringLiteral("APP");
-        if (source_key == "sys")
-            return QStringLiteral("SYS");
-        if (source_key == "mic")
-            return QStringLiteral("MIC");
-        if (source_key == "system_output")
-            return QStringLiteral("OUT");
-        return QString::fromStdString(source_key).toUpper();
-    };
-
-    QLayoutItem* item = nullptr;
-    while ((item = track_preview_layout_->takeAt(0)) != nullptr) {
-        if (QWidget* widget = item->widget()) {
-            widget->deleteLater();
-        }
-        delete item;
-    }
-
-    if (view_model_.audio_track_preview.empty()) {
-        auto* label = makeLabel("No audio tracks will be recorded.", "audioTrackPreviewEmpty", track_preview_panel_);
-        label->setContentsMargins(14, 10, 14, 10);
-        track_preview_layout_->addWidget(label);
-        return;
-    }
-
-    bool first = true;
-    for (const auto& preview_item : view_model_.audio_track_preview) {
-        auto* row = new QWidget(track_preview_panel_);
-        row->setObjectName("audioTrackPreviewRow");
-        row->setProperty("firstRow", first);
-        first = false;
-
-        auto* rl = new QHBoxLayout(row);
-        rl->setContentsMargins(14, 8, 14, 8);
-        rl->setSpacing(10);
-
-        auto* idx = makeLabel(sourceTag(preview_item.source_key), "audioTrackPreviewTag", row);
-        idx->setFixedWidth(44);
-        rl->addWidget(idx);
-
-        rl->addWidget(makeLabel(QString::fromStdString(preview_item.display_label), "audioTrackName", row));
-        rl->addStretch(1);
-
-        track_preview_layout_->addWidget(row);
     }
 }
 
@@ -4878,8 +4195,6 @@ void RecordPage::refresh() {
     preview_surface_->setTopMetaText(QStringLiteral(""));
 
     updateSourceChip();
-    updateAudioControls();
-    updateAudioTrackPreview();
     syncMicMeterService();
     syncSysMeterService();
     syncAppMeterService();
@@ -5023,10 +4338,6 @@ void RecordPage::onDockSourceToggle(const QString& key) {
     }
 
     view_model_.RebuildAudioPlan();
-    if (!audio_source_rows_.empty()) {
-        rebuildAudioRowWidgets(); // keep the (hidden) legacy rows in sync
-    }
-    updateAudioTrackPreview();
     syncMicMeterService();
     syncSysMeterService();
     syncAppMeterService();

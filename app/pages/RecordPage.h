@@ -62,9 +62,6 @@ struct VisualScenario;
 #endif
 
 namespace ui::widgets {
-class AudioSourceRow;
-class CaptureTargetCard;
-class ExoCheckBox;
 class PreviewSurface;
 class SectionRuleHeader;
 class TransportDock;
@@ -270,9 +267,6 @@ class RecordPage : public QWidget {
     void onDockSourceToggle(const QString& key);
     void updateResponsiveLayout();
     void updateAudioMeterLevels();
-    void updateAudioControls();
-    void updateAudioControlsVisibility();
-    void updateAudioTrackPreview();
     void updateSourceChip();
     void updateOpenFolderButtonState();
     void updateDestinationMeta();
@@ -285,19 +279,6 @@ class RecordPage : public QWidget {
     // of auto-picking the next monitor/window.
     void enumerateTargets(bool preserve_current_selection, bool allow_fallback_to_other_target = true);
     void pushSourceDataToPicker();
-    void onAudioRowEnabledChanged(int row_index, bool enabled);
-    void onAudioRowMergeChanged(int row_index, bool merge);
-    void onAudioRowGainChanged(int row_index, float gain_db);
-    void onAudioRowMutedChanged(int row_index, bool muted);
-    void swapAudioSourceRows(int a, int b);
-    void rebuildAudioRowWidgets();
-    void updateAudioRowMergeVisibility();
-    void onMicDeviceChanged(int index);
-    void onMicChannelChanged(int index);
-    void onMicGainChanged(int db_value);
-    void onAudioBitrateChanged(int kbps);
-    void onOpusFrameDurationChanged(int index);
-    void onOpusComplexityChanged(int value);
     void openOutputFolder();
     void onCopyFilePath();
     void onRenameFile();
@@ -306,7 +287,6 @@ class RecordPage : public QWidget {
     void onRecentItemOpenFolder(int history_index);
     void setOutputSettingsSummary(const OutputSettingsModel& settings);
     void populateMicDeviceCombo();
-    void updateMicDeviceNoteLabel();
     void syncMicMeterService();
     void syncSysMeterService();
     void syncAppMeterService();
@@ -357,31 +337,6 @@ class RecordPage : public QWidget {
     QPushButton* change_source_btn_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
     ui::widgets::RegionSelectionOverlay* region_overlay_ = nullptr;
-    ui::widgets::SectionRuleHeader* audio_settings_header_ = nullptr;
-    QWidget* audio_rows_container_ = nullptr;
-    QVBoxLayout* audio_rows_layout_ = nullptr;
-    std::vector<ui::widgets::AudioSourceRow*> audio_source_rows_;
-    int drag_source_index_ = -1;
-    int drag_start_y_ = 0;
-    QWidget* mic_device_row_ = nullptr;
-    QComboBox* mic_device_combo_ = nullptr;
-    QPushButton* mic_refresh_btn_ = nullptr;
-    QLabel* mic_device_note_label_ = nullptr;
-    QWidget* mic_channel_row_ = nullptr;
-    QComboBox* mic_channel_combo_ = nullptr;
-    QWidget* mic_gain_row_ = nullptr;
-    QSlider* mic_gain_slider_ = nullptr;
-    QLabel* mic_gain_value_label_ = nullptr;
-    // Audio encoding params (ADR 0019).
-    QWidget* audio_bitrate_row_ = nullptr;
-    QSpinBox* audio_bitrate_spin_ = nullptr;
-    QWidget* opus_frame_duration_row_ = nullptr;
-    QComboBox* opus_frame_duration_combo_ = nullptr;
-    QWidget* opus_complexity_row_ = nullptr;
-    QSpinBox* opus_complexity_spin_ = nullptr;
-    QFrame* track_preview_panel_ = nullptr;
-    QVBoxLayout* track_preview_layout_ = nullptr;
-    ui::widgets::SectionRuleHeader* audio_header_ = nullptr;
     ui::widgets::VUMeterWidget* app_meter_ = nullptr;
     ui::widgets::VUMeterWidget* mic_meter_ = nullptr;
     ui::widgets::VUMeterWidget* sys_meter_ = nullptr;
@@ -437,7 +392,6 @@ class RecordPage : public QWidget {
     bool start_requested_awaiting_caps_ = false;
     std::optional<recorder_core::CaptureRegion> pending_start_crop_region_{};
 
-    QWidget* audio_settings_panel_ = nullptr;
     QFrame* destination_panel_ = nullptr;
     QPushButton* result_open_folder_btn_ = nullptr;
     QPushButton* result_record_again_btn_ = nullptr;
