@@ -1,7 +1,6 @@
 #include "RecordPage.h"
 
 #include "../diagnostics/AppLog.h"
-#include "../diagnostics/RecommendationEngine.h"
 #include "../models/RecordingPreset.h"
 #include "../ui/dialogs/SourcePickerDialog.h"
 #include "../ui/dialogs/SourcePickerOverlay.h"
@@ -882,12 +881,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
                                ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
     layout->setSpacing(18);
 
-    capability_label_ = makeLabel("", "recordCapabilityBanner", content);
-    capability_label_->setWordWrap(true);
-    capability_label_->setProperty("panelRole", "note");
-    capability_label_->setVisible(false);
-    layout->addWidget(capability_label_);
-
     auto* cockpit_row = new QWidget(content);
     cockpit_split_layout_ = new QBoxLayout(QBoxLayout::LeftToRight, cockpit_row);
     cockpit_split_layout_->setContentsMargins(0, 0, 0, 0);
@@ -1174,72 +1167,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     target_combo_ = new QComboBox(content);
     target_combo_->setVisible(false);
     target_combo_->setEnabled(false);
-
-    readiness_header_ = new ui::widgets::SectionRuleHeader("READINESS", content);
-    readiness_header_->setMeta("ALL CLEAR");
-    layout->addWidget(readiness_header_);
-
-    readiness_panel_ = makePanel(content);
-    readiness_panel_->setObjectName("recordReadinessPanel");
-    auto* readiness_layout = new QVBoxLayout(readiness_panel_);
-    readiness_layout->setContentsMargins(14, 10, 14, 10);
-    readiness_layout->setSpacing(8);
-
-    readiness_summary_label_ = makeLabel("Checking capabilities...", "readinessSummary", readiness_panel_);
-    readiness_summary_label_->setWordWrap(true);
-    setStyledStringProperty(readiness_summary_label_, "stateRole", "muted");
-    readiness_layout->addWidget(readiness_summary_label_);
-
-    auto* readiness_actions = new QWidget(readiness_panel_);
-    readiness_actions->setObjectName("readinessCompactActions");
-    auto* readiness_actions_layout = new QHBoxLayout(readiness_actions);
-    readiness_actions_layout->setContentsMargins(0, 0, 0, 0);
-    readiness_actions_layout->setSpacing(8);
-    readiness_actions_layout->addStretch(1);
-    readiness_diagnostics_btn_ = new QPushButton(QStringLiteral("Diagnostics →"), readiness_actions);
-    readiness_diagnostics_btn_->setObjectName("readinessDiagnosticsBtn");
-    readiness_diagnostics_btn_->setProperty("role", "ghost");
-    readiness_actions_layout->addWidget(readiness_diagnostics_btn_);
-    readiness_layout->addWidget(readiness_actions);
-
-    readiness_rule_ = new QFrame(readiness_panel_);
-    readiness_rule_->setFrameShape(QFrame::NoFrame);
-    readiness_rule_->setFixedHeight(1);
-    readiness_rule_->setProperty("frameRole", "sectionRuleLine");
-    readiness_layout->addWidget(readiness_rule_);
-
-    readiness_rows_container_ = new QWidget(readiness_panel_);
-    auto* readiness_rows_layout = new QVBoxLayout(readiness_rows_container_);
-    readiness_rows_layout->setContentsMargins(0, 0, 0, 0);
-    readiness_rows_layout->setSpacing(0);
-
-    for (const QString& title :
-         {QString("NVENC AV1 encoder"), QString("Display capture"), QString("Audio loopback (APP)"),
-          QString("Output destination"), QString("Session state")}) {
-        auto* row = new QWidget(readiness_rows_container_);
-        row->setObjectName("readinessRow");
-        row->setProperty("firstRow", readiness_rows_.empty());
-        auto* row_layout = new QHBoxLayout(row);
-        row_layout->setContentsMargins(4, 6, 4, 6);
-        row_layout->setSpacing(10);
-
-        auto* icon = makeLabel("·", "readinessGlyph", row);
-        icon->setFixedWidth(12);
-        auto* row_title = makeLabel(title, "readinessTitle", row);
-        auto* detail = makeLabel("", "readinessDetail", row);
-        detail->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        detail->setWordWrap(false);
-
-        row_layout->addWidget(icon);
-        row_layout->addWidget(row_title);
-        row_layout->addStretch(1);
-        row_layout->addWidget(detail, 0, Qt::AlignRight | Qt::AlignVCenter);
-        readiness_rows_layout->addWidget(row);
-
-        readiness_rows_.push_back({icon, row_title, detail});
-    }
-    readiness_layout->addWidget(readiness_rows_container_);
-    layout->addWidget(readiness_panel_);
 
     audio_settings_header_ = new ui::widgets::SectionRuleHeader("AUDIO SETTINGS", content);
     audio_settings_header_->setMeta("OUTPUT · INPUT · TRACK PREVIEW");
@@ -1748,7 +1675,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
             &RecordPage::onOpusComplexityChanged);
     connect(open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
     connect(destination_settings_btn_, &QPushButton::clicked, this, [this]() { emit navigateToOutputPage(); });
-    connect(readiness_diagnostics_btn_, &QPushButton::clicked, this, [this]() { emit navigateToDiagnosticsPage(); });
     connect(rail_diagnostics_btn_, &QPushButton::clicked, this, [this]() { emit navigateToDiagnosticsPage(); });
     connect(result_open_folder_btn_, &QPushButton::clicked, this, &RecordPage::openOutputFolder);
     connect(result_record_again_btn_, &QPushButton::clicked, this, [this]() {
@@ -2112,7 +2038,6 @@ void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
         view_model_.capability_status_text = coordinator_->CapabilityStatusText();
         syncCoordinatorTargetContext();
     }
-    updateRecReadiness();
     refresh();
     diagnostics::AppLog::info(
         QStringLiteral("output"),
@@ -2168,15 +2093,13 @@ void RecordPage::setRuntimeCapabilities(const capability::CapabilitySet& caps) {
                                   QStringLiteral("replaying recording start latched before caps were ready"));
         doStartRecording(crop_region);
     }
-
-    updateRecReadiness();
 }
 
 void RecordPage::setRuntimeCapabilitiesFailed(const QString& reason) {
     // The async HW probe threw. Resolve the coordinator into its capability-failure
     // state so init never hangs armed and the Record button is not permanently dead.
     // shared_runtime_caps_received_ stays false: there are no valid caps to validate
-    // against, so updateRecReadiness()/the recommendation engine correctly stay quiet.
+    // against (no recommendation engine run on a failed probe).
     diagnostics::AppLog::error(QStringLiteral("record.failure"),
                                QStringLiteral("phase=Init category=CapabilityProbe detail=\"%1\"").arg(reason));
 
@@ -2435,7 +2358,6 @@ void RecordPage::setVideoSettings(const VideoSettingsModel& settings) {
         view_model_.capability_status_text = coordinator_->CapabilityStatusText();
     }
     setOutputSettingsSummary(current_output_settings_);
-    updateRecReadiness();
     refresh();
 }
 
@@ -3161,8 +3083,8 @@ void RecordPage::startPreviewIfIdle() {
 void RecordPage::ensureCoordinatorInit() {
     // NOTE: construction is caps-INDEPENDENT. initCoordinator() builds the coordinator,
     // wires callbacks, and enumerates targets regardless of whether runtime caps have
-    // arrived — the rest of RecordPage relies on coordinator_ != null (e.g. refresh() ->
-    // updateReadinessRows() dereferences it). Only the OnCapabilitiesReady step inside
+    // arrived — the rest of RecordPage relies on coordinator_ != null (refresh() etc.
+    // dereference it). Only the OnCapabilitiesReady step inside
     // initCoordinator() is gated on caps; see initCoordinator() / deliverCapabilitiesToCoordinator().
     if (coordinator_needs_init_) {
         coordinator_needs_init_ = false;
@@ -5339,12 +5261,6 @@ void RecordPage::refresh() {
                            view_model_.state == UiRecordingState::RegionSelecting);
     const bool stopping = (view_model_.state == UiRecordingState::Stopping);
 
-    capability_label_->setText(capability_text);
-    capability_label_->setVisible((blocked || checking) && !capability_text.isEmpty());
-    if (capability_label_->isVisible()) {
-        setStyledStringProperty(capability_label_, "panelRole", blocked ? "blocker" : "note");
-    }
-
     const QString status_text = stateDisplay(view_model_.state);
     const bool failed = (view_model_.state == UiRecordingState::Failed);
     const bool active_recording = (view_model_.state == UiRecordingState::Recording);
@@ -5415,7 +5331,6 @@ void RecordPage::refresh() {
     updateTargetCards();
     rebuildTargetPicker();
     updateSourceChip();
-    updateReadinessRows();
     updateAudioControls();
     updateAudioTrackPreview();
     syncMicMeterService();
@@ -5828,130 +5743,6 @@ void RecordPage::updateTargetCards() {
     } else {
         window_card_->setSubtitle("No capturable windows");
     }
-}
-
-void RecordPage::updateReadinessRows() {
-    if (readiness_rows_.size() < 5)
-        return;
-
-    const bool is_window_target = view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window;
-    readiness_rows_[2].title->setText(is_window_target ? "Audio loopback (APP)" : "Audio loopback (SYS)");
-    readiness_rows_[0].title->setText(QString::fromStdWString(coordinator_->ResolvedVideoCodecLabel()));
-
-    const bool blocked = (view_model_.state == UiRecordingState::Blocked);
-    const bool checking = (view_model_.state == UiRecordingState::LoadingCapabilities);
-    const bool failed = (view_model_.state == UiRecordingState::Failed);
-    const bool completed_success =
-        (view_model_.state == UiRecordingState::Completed) && view_model_.HasResult() && view_model_.last_succeeded;
-    const bool live =
-        (view_model_.state == UiRecordingState::Recording || view_model_.state == UiRecordingState::Paused ||
-         view_model_.state == UiRecordingState::Stopping);
-    readiness_header_->setMeta(checking ? "CHECKING"
-                                        : (failed ? "ERROR" : (blocked ? "BLOCKERS PRESENT" : "ALL CLEAR")));
-
-    const QString target_detail =
-        (view_model_.selected_target_index >= 0 &&
-         view_model_.selected_target_index < static_cast<int>(view_model_.targets.size()))
-            ? normalizedTargetLabel(view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)])
-            : QString("No target selected");
-
-    const QString output_detail = QString::fromStdWString(view_model_.output_path_display);
-    const QString session_state = QString::fromStdWString(view_model_.state_text);
-    const QString capability_text = QString::fromStdWString(view_model_.capability_status_text).trimmed();
-    const QStringList blockers = blockerLinesFromText(capability_text);
-
-    const bool encoder_ok = !blocked && !checking && !failed;
-    const bool target_ok = !target_detail.isEmpty() && target_detail != "No target selected";
-    const bool output_ok = !output_detail.isEmpty() && output_detail != "--";
-    const bool show_detail_rows = checking;
-
-    if (readiness_summary_label_) {
-        QString summary_text;
-        QString summary_state = QStringLiteral("muted");
-        if (checking) {
-            summary_text = QStringLiteral("Checking capability probes and output readiness...");
-        } else if (blocked) {
-            summary_text = blockers.isEmpty() ? QStringLiteral("Blocked — resolve diagnostics before recording.")
-                                              : blockers.first();
-            summary_state = QStringLiteral("blocked");
-        } else if (failed) {
-            summary_text = QStringLiteral("Last recording ended with an error. Review result details and logs.");
-            summary_state = QStringLiteral("blocked");
-        } else if (live) {
-            summary_text = QStringLiteral("Capturing %1  ·  output %2  ·  target locked")
-                               .arg(target_detail, output_detail.isEmpty() ? QStringLiteral("—") : output_detail);
-            summary_state = QStringLiteral("warn");
-        } else if (completed_success) {
-            summary_text = QStringLiteral("Recording saved. Start again when ready.");
-            summary_state = QStringLiteral("ready");
-        } else if (!target_ok) {
-            summary_text = QStringLiteral("Select a source to start recording.");
-            summary_state = QStringLiteral("warn");
-        } else if (!output_ok) {
-            summary_text = QStringLiteral("Select a valid output destination before recording.");
-            summary_state = QStringLiteral("warn");
-        } else if (!encoder_ok) {
-            summary_text = QStringLiteral("Encoder capability is not ready yet.");
-            summary_state = QStringLiteral("warn");
-        } else {
-            summary_text = QStringLiteral("Ready to record. Encoder, target path, and output destination are clear.");
-            summary_state = QStringLiteral("ready");
-        }
-
-        readiness_summary_label_->setText(summary_text);
-        setStyledStringProperty(readiness_summary_label_, "stateRole", summary_state);
-        // Propagate stateRole to the container panel so QSS state-tint rules apply.
-        setStyledStringProperty(readiness_panel_, "stateRole", summary_state);
-    }
-    if (readiness_diagnostics_btn_) {
-        readiness_diagnostics_btn_->setVisible(true);
-        readiness_diagnostics_btn_->setText((blocked || failed) ? QStringLiteral("Open Diagnostics →")
-                                                                : QStringLiteral("Diagnostics →"));
-    }
-    if (readiness_rule_) {
-        readiness_rule_->setVisible(show_detail_rows);
-    }
-    if (readiness_rows_container_) {
-        readiness_rows_container_->setVisible(show_detail_rows);
-    }
-
-    const struct RowData {
-        bool ok;
-        bool hard_blocked;
-        QString detail;
-    } rows[] = {
-        {encoder_ok, blocked || failed,
-         checking ? QString("Checking capabilities...")
-                  : ((blocked || failed) ? capability_text : QString("Available"))},
-        {target_ok, false, target_detail},
-        {true, false, QString("WASAPI loopback path available")},
-        {output_ok, false, output_detail},
-        {!blocked && !checking && !failed, blocked || failed, session_state},
-    };
-
-    for (int i = 0; i < 5; ++i) {
-        auto& row_widgets = readiness_rows_[static_cast<std::size_t>(i)];
-        row_widgets.icon->setText(checkGlyph(rows[i].ok, rows[i].hard_blocked));
-        setStyledStringProperty(row_widgets.icon, "stateRole",
-                                rows[i].hard_blocked ? "blocked" : (rows[i].ok ? "ready" : "muted"));
-        row_widgets.detail->setText(rows[i].detail);
-    }
-}
-
-void RecordPage::updateRecReadiness() {
-    // Quick synchronous check using current config. No disk-space check (0 = skip).
-    if (!shared_runtime_caps_received_)
-        return;
-    capability::UserRecorderConfig config;
-    config.container = current_container_;
-    config.video_codec = current_video_codec_;
-    config.audio_codec = current_audio_codec_;
-    // frame_rate_num/den: use defaults (60/1); monitor_refresh_rate: not available here → 0
-    // is_profile_supported: derived from coordinator if available, else true (safe default)
-    const bool profile_supported = true;
-    diagnostics::RecommendationEngine engine(shared_runtime_caps_, config, 0, 0, profile_supported);
-    rec_checklist_ = engine.Generate();
-    rec_checklist_valid_ = true;
 }
 
 void RecordPage::updateSourceChip() {

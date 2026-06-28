@@ -265,11 +265,6 @@ QPushButton[qualitySegment="true"][qualitySegmentSelected="true"]:disabled {
 }
 
 /* Record page */
-QLabel[labelRole="recordCapabilityBanner"] {
-    font-size: 13px;
-    color: ${text1};
-}
-
 QFrame#recordControlPanel {
     background: ${bg2};
     border-color: ${line3};
@@ -608,29 +603,7 @@ QLabel[labelRole="railStatValue"] {
     color: ${text0};
 }
 
-/* Readiness strip below the preview: a quiet hairline-bordered strip with semantic state tinting.
-   stateRole is propagated from RecordPage::updateReadinessRows() so the panel background and
-   border change with the summary state. radius-sm (8px) keeps it inline — not a pill card. */
-QFrame#recordReadinessPanel {
-    background: transparent;
-    border: 1px solid ${line1};
-    border-radius: ${radius-sm}px;
-}
 
-QFrame#recordReadinessPanel[stateRole="ready"] {
-    background: ${ok-a08};
-    border-color: ${ok-a42};
-}
-
-QFrame#recordReadinessPanel[stateRole="warn"] {
-    background: ${warn-a08};
-    border-color: ${warn-a42};
-}
-
-QFrame#recordReadinessPanel[stateRole="blocked"] {
-    background: ${err-a10};
-    border-color: ${err-a48};
-}
 
 QWidget#recordSourceRow {
     background: transparent;
@@ -1363,67 +1336,6 @@ QWidget#codecCard[selected="true"] QLabel[labelRole="codecCardTag"] {
 QLabel[labelRole="codecCardDesc"] {
     font-size: 12px;
     color: ${text2};
-}
-
-QWidget#readinessRow {
-    background: transparent;
-    border-top: 1px solid ${line1};
-}
-
-QWidget#readinessRow[firstRow="true"] {
-    border-top: none;
-}
-
-QLabel[labelRole="readinessGlyph"] {
-    font-family: ${font-mono};
-    font-size: 14px;
-    color: ${text2};
-}
-
-QLabel[labelRole="readinessGlyph"][stateRole="ready"] {
-    color: ${ok};
-}
-
-QLabel[labelRole="readinessGlyph"][stateRole="blocked"] {
-    color: ${err};
-}
-
-QLabel[labelRole="readinessTitle"] {
-    font-size: 13.5px;
-    color: ${text0};
-}
-
-QLabel[labelRole="readinessDetail"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    color: ${text2};
-}
-
-QLabel[labelRole="readinessSummary"] {
-    font-size: 12.5px;
-    color: ${text1};
-}
-
-QLabel[labelRole="readinessSummary"][stateRole="ready"] {
-    color: ${ok};
-}
-
-QLabel[labelRole="readinessSummary"][stateRole="warn"] {
-    color: ${warn};
-}
-
-QLabel[labelRole="readinessSummary"][stateRole="blocked"] {
-    color: ${err};
-}
-
-QWidget#readinessCompactActions {
-    background: transparent;
-}
-
-QPushButton#readinessDiagnosticsBtn {
-    min-height: 28px;
-    padding: 0 10px;
 }
 
 QWidget#audioActivityRow {

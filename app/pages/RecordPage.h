@@ -7,8 +7,6 @@
 #include <recorder_core/audio_input_device.h>
 #include <vector>
 
-#include "../diagnostics/DiagnosticResult.h"
-
 #include "../models/OutputSettingsModel.h"
 #include "../models/RecordingPreset.h"
 #include "../models/VideoSettingsModel.h"
@@ -256,12 +254,6 @@ class RecordPage : public QWidget {
     QRect selectedMonitorRect() const;
     QRect currentRegionRect() const;
 
-    struct ReadinessRow {
-        QLabel* icon = nullptr;
-        QLabel* title = nullptr;
-        QLabel* detail = nullptr;
-    };
-
     bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
@@ -279,8 +271,6 @@ class RecordPage : public QWidget {
     void updateTransportDock();
     void onDockSourceToggle(const QString& key);
     void updateTargetCards();
-    void updateReadinessRows();
-    void updateRecReadiness(); // runs RecommendationEngine, caches rec_checklist_
     void updateResponsiveLayout();
     void updateAudioMeterLevels();
     void updateAudioControls();
@@ -362,7 +352,6 @@ class RecordPage : public QWidget {
     // Injected by MainWindow before first show; forwarded to the coordinator.
     RecoveryManifestStore* recovery_manifest_store_ = nullptr;
 
-    QLabel* capability_label_ = nullptr;
     QComboBox* target_combo_ = nullptr;
     QBoxLayout* cockpit_split_layout_ = nullptr;
     QWidget* preview_column_ = nullptr;
@@ -390,12 +379,6 @@ class RecordPage : public QWidget {
     QWidget* region_options_panel_ = nullptr;
     ui::widgets::RegionSelectionOverlay* region_overlay_ = nullptr;
     ui::widgets::ExoCheckBox* select_on_record_check_ = nullptr;
-    ui::widgets::SectionRuleHeader* readiness_header_ = nullptr;
-    QFrame* readiness_panel_ = nullptr;
-    QFrame* readiness_rule_ = nullptr;
-    QWidget* readiness_rows_container_ = nullptr;
-    QPushButton* readiness_diagnostics_btn_ = nullptr;
-    std::vector<ReadinessRow> readiness_rows_;
     ui::widgets::SectionRuleHeader* audio_settings_header_ = nullptr;
     QWidget* audio_rows_container_ = nullptr;
     QVBoxLayout* audio_rows_layout_ = nullptr;
@@ -464,8 +447,8 @@ class RecordPage : public QWidget {
     bool record_page_visible_ = false;
     capability::CapabilitySet shared_runtime_caps_{};
     // True once VALID runtime caps have been delivered to the coordinator (success).
-    // Stays false if the async probe fails — updateRecReadiness() / the recommendation
-    // engine key off this, so they must only see genuinely-resolved caps.
+    // Stays false if the async probe fails so capability-gated logic never runs
+    // against an unresolved probe result.
     bool shared_runtime_caps_received_ = false;
     // True when initCoordinator() built the coordinator before the async capability
     // probe resolved. Cleared on BOTH success (caps delivered) and failure. Gates the
@@ -497,7 +480,6 @@ class RecordPage : public QWidget {
     QLabel* rail_readiness_label_ = nullptr;
     QLabel* rail_summary_label_ = nullptr;
     QLabel* rail_stats_label_ = nullptr;
-    QLabel* readiness_summary_label_ = nullptr;
     QPushButton* result_open_folder_btn_ = nullptr;
     QPushButton* result_record_again_btn_ = nullptr;
     QPushButton* result_copy_path_btn_ = nullptr;
@@ -551,11 +533,6 @@ class RecordPage : public QWidget {
     // widgets programmatically.  Prevents recordingConfigChanged() from being
     // emitted for these non-user changes.
     bool applying_external_config_ = false;
-
-    // v0.8.0-D: Pre-flight readiness gate
-    // Cached recommendation checklist (quick sync; refreshed on settings/caps change)
-    diagnostics::DiagnosticChecklist rec_checklist_;
-    bool rec_checklist_valid_ = false;
 
     // v0.8.0-D: Post-flight report card — pipeline stats accumulated during recording
     double peak_av_drift_ms_ = 0.0;
