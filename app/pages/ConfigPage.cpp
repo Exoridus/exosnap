@@ -1629,13 +1629,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         audio_rescan_btn_->setFixedWidth(36);
         audio_rescan_btn_->setCursor(Qt::PointingHandCursor);
         {
-            const QIcon rescan_icon(QStringLiteral(":/theme/icons/rescan.svg"));
-            if (!rescan_icon.isNull()) {
-                audio_rescan_btn_->setIcon(rescan_icon);
-                audio_rescan_btn_->setIconSize(QSize(14, 14));
-            } else {
-                audio_rescan_btn_->setText(QStringLiteral("\xe2\x86\xba"));
-            }
+            // Themed lucide glyph in HT.mut — the previous currentColor SVG inherited
+            // the lighter ghost-button text colour (suite-settings.jsx:65 wants mut).
+            const qreal dpr = audio_rescan_btn_->devicePixelRatioF();
+            audio_rescan_btn_->setIcon(ui::theme::lucideIcon(QStringLiteral("refresh-cw"),
+                                                             QString::fromUtf8(ui::theme::ActiveTheme().mut), 14, dpr));
+            audio_rescan_btn_->setIconSize(QSize(14, 14));
         }
         mic_rl->addWidget(audio_rescan_btn_);
         audio_panel_layout->addWidget(mic_row);
