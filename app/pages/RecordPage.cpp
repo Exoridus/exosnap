@@ -2976,7 +2976,9 @@ void RecordPage::onSelectRegionTarget() {
     {
         const bool kind_changed = (view_model_.audio_ui_state.target_kind != capability::CaptureTargetKind::Display);
         view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
-        view_model_.select_on_record = true;
+        // select_on_record is owned by the caller (set from the source-picker selection
+        // before this call) — don't override it here, or unchecking "select on record"
+        // in the picker would be silently ignored.
         diagnostics::AppLog::info(QStringLiteral("target"), QStringLiteral("region mode selected"));
         if (kind_changed)
             emitAudioSettingsChanged();
