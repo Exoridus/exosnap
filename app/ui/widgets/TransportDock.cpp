@@ -138,19 +138,19 @@ QPushButton* makeIconActionButton(const QString& object_name, const QString& doc
 // State (idle/hover/pressed/disabled) is styled via QSS on the
 // "dockAction=captureFrame" property — no manual painting required.
 QPushButton* makeCaptureFrameButton(QWidget* parent) {
-    // Lucide "image" icon — rectangular frame with mountain + sun, distinct from the
-    // camera glyph used by AudioSourceToggle for the "webcam" key.
-    constexpr auto kCameraPath = "M21 15a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2z";
-
-    // DESIGN-FIDELITY: suite-record.jsx:39 CapDockBtn — camera glyph 19px in HT.mut.
+    // DESIGN-FIDELITY: suite-record.jsx:39 CapDockBtn — the still-frame snapshot uses
+    // the Lucide "camera" glyph (body + lens), 19px in HT.mut. It is distinct from the
+    // webcam source toggle's "webcam" icon, so no need to swap in the "image" glyph.
     const QString icon_color = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut);
     QByteArray svg;
     svg.reserve(400);
     svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='");
     svg.append(icon_color.toUtf8());
-    svg.append("' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='");
-    svg.append(kCameraPath);
-    svg.append("'/></svg>");
+    svg.append("' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'>");
+    svg.append(
+        "<path d='M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z'/>");
+    svg.append("<circle cx='12' cy='13' r='3'/>");
+    svg.append("</svg>");
 
     QSvgRenderer renderer(svg);
     constexpr int kBtn = 44;
