@@ -160,9 +160,47 @@ class MainWindow : public QMainWindow {
     void refreshPresetUi();
     void initHotkeyService();
     void refreshDiagnosticsData();
+    // Called on the UI thread when the async capability probe completes.
+    // Sets runtime_caps_, delivers them to the Record page, and starts device notifiers.
+    void onRuntimeCapsReady(capability::CapabilitySet caps);
+    // Called on the UI thread when the async capability probe FAILED (threw in the
+    // worker). Drives the Record page into its capability-failure state so coordinator
+    // init never hangs armed, then starts device notifiers so the rest of the UI works.
+    void onRuntimeCapsFailed(const QString& reason);
+    // Start + seed (rescan) the audio/webcam/display device notifiers. Shared by the
+    // caps-ready and caps-failed paths so the ordering (notifiers after probe) holds.
+    void startDeviceNotifiers();
     void navigateToEditExportPage(const QString& file_path, const QString& duration, const QString& size,
                                   const QString& resolution, const QString& fps, const QString& video_codec,
                                   const QString& audio_codec, const QString& container);
+
+    // ---- Staged post-show page hydration ----
+    // Builds deferred pages one-per-event-loop-tick so the UI remains responsive.
+    // Called from a singleShot(0) in the ctor tail — separate from the caps-probe lambda
+    // so page construction does not delay the hardware probe.
+    void hydrateSecondaryPages();
+    // Builds LogsPage, replacing the cheap placeholder reserved at kLogsPageIndex.
+    void buildLogsPage();
+    // Builds HotkeysPage, replacing the cheap placeholder reserved at kHotkeysPageIndex.
+    void buildHotkeysPage();
+    // Builds DiagnosticsPage, replacing the cheap placeholder reserved at kDiagnosticsPageIndex.
+    // Wires fix-action signals and the critical record_page_→diagnostics_page_ direct connect,
+    // then ends with refreshDiagnosticsData() to deliver current data to the freshly-built page.
+    void buildDiagnosticsPage();
+    // Builds AboutPage, replacing the cheap placeholder reserved at kAboutPageIndex.
+    void buildAboutPage();
+    // Builds EditExportPage (index 8, past kPageDescriptors) with its back-connection.
+    void buildEditExportPage();
+    // Builds WebcamPage, replacing the cheap placeholder reserved at kWebcamPageIndex.
+    // Ends with applySettings(live_webcam_) to replay preset-applied state.
+    void buildWebcamPage();
+    // Builds OutputPage, replacing the cheap placeholder reserved at kOutputPageIndex.
+    // Ends with refreshPresetUi() so the freshly-built page gets its profile options.
+    void buildOutputPage();
+    // Builds ConfigPage (Settings), replacing the cheap placeholder reserved at kSettingsPageIndex.
+    // Ends with applyPresetConfig() + refreshPresetUi() + chrome-state replay so the freshly-built
+    // page has correct settings, preset list, and readiness/lock status on first open.
+    void buildConfigPage();
 
     // ---- Preset system (Stage 2) ----
 
@@ -294,13 +332,20 @@ class MainWindow : public QMainWindow {
     QStackedWidget* stack_ = nullptr;
     RecordPage* record_page_ = nullptr;
     ConfigPage* config_page_ = nullptr;
+    QWidget* config_placeholder_ = nullptr; // cheap slot-reservation until buildConfigPage()
     OutputPage* output_page_ = nullptr;
     DiagnosticsPage* diagnostics_page_ = nullptr;
+    QWidget* diagnostics_placeholder_ = nullptr; // cheap slot-reservation until buildDiagnosticsPage()
     LogsPage* logs_page_ = nullptr;
+    QWidget* logs_placeholder_ = nullptr; // cheap slot-reservation until buildLogsPage()
     WebcamPage* webcam_page_ = nullptr;
+    QWidget* webcam_placeholder_ = nullptr; // cheap slot-reservation until buildWebcamPage()
     HotkeysPage* hotkeys_page_ = nullptr;
+    QWidget* hotkeys_placeholder_ = nullptr; // cheap slot-reservation until buildHotkeysPage()
     EditExportPage* edit_export_page_ = nullptr;
     pages::AboutPage* about_page_ = nullptr;
+    QWidget* about_placeholder_ = nullptr;  // cheap slot-reservation until buildAboutPage()
+    QWidget* output_placeholder_ = nullptr; // cheap slot-reservation until buildOutputPage()
 
     // Device notifiers (owned; started after capability probe; stopped first in ~MainWindow).
     AudioDeviceNotifier audio_notifier_;

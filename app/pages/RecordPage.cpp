@@ -22,7 +22,6 @@
 #include "../visual_tests/VisualScenario.h"
 #endif
 
-#include <capability/capability_builder.h>
 #include <capability/resolver.h>
 #include <capability/user_config.h>
 #include <recorder_core/audio_input_device.h>
@@ -2237,7 +2236,59 @@ void RecordPage::setActiveProfileName(const std::string& profile_name) {
 void RecordPage::setRuntimeCapabilities(const capability::CapabilitySet& caps) {
     shared_runtime_caps_ = caps;
     shared_runtime_caps_received_ = true;
+
+    if (coordinator_needs_init_) {
+        // Coordinator not built yet (unusual — it is normally constructed during
+        // MainWindow ctor). Build it now; initCoordinator() delivers caps directly
+        // because shared_runtime_caps_received_ is true.
+        ensureCoordinatorInit();
+    } else if (coordinator_awaiting_caps_) {
+        // Coordinator was built before the async probe landed — deliver now.
+        deliverCapabilitiesToCoordinator();
+        coordinator_awaiting_caps_ = false;
+    }
+
+    // Replay a recording start that the user requested before caps resolved, so the
+    // click is never silently dropped (the coordinator's StartRecording no-ops while
+    // !has_caps_). Now that caps are delivered, the replay proceeds normally.
+    if (start_requested_awaiting_caps_) {
+        start_requested_awaiting_caps_ = false;
+        const auto crop_region = pending_start_crop_region_;
+        pending_start_crop_region_.reset();
+        diagnostics::AppLog::info(QStringLiteral("record"),
+                                  QStringLiteral("replaying recording start latched before caps were ready"));
+        doStartRecording(crop_region);
+    }
+
     updateRecReadiness();
+}
+
+void RecordPage::setRuntimeCapabilitiesFailed(const QString& reason) {
+    // The async HW probe threw. Resolve the coordinator into its capability-failure
+    // state so init never hangs armed and the Record button is not permanently dead.
+    // shared_runtime_caps_received_ stays false: there are no valid caps to validate
+    // against, so updateRecReadiness()/the recommendation engine correctly stay quiet.
+    diagnostics::AppLog::error(QStringLiteral("record.failure"),
+                               QStringLiteral("phase=Init category=CapabilityProbe detail=\"%1\"").arg(reason));
+
+    // Coordinator is normally already built (MainWindow ctor); build it if not so
+    // OnCapabilityFailure has a target.
+    if (coordinator_needs_init_)
+        ensureCoordinatorInit();
+    if (coordinator_)
+        coordinator_->OnCapabilityFailure(L"Capability check failed.");
+
+    // Clear the awaiting/latch flags: caps are resolved (to failure), so a Record
+    // click must not stay latched forever, and any pending start cannot proceed.
+    coordinator_awaiting_caps_ = false;
+    start_requested_awaiting_caps_ = false;
+    pending_start_crop_region_.reset();
+
+    if (coordinator_) {
+        view_model_.SetState(coordinator_->State());
+        view_model_.capability_status_text = coordinator_->CapabilityStatusText();
+    }
+    refresh();
 }
 
 // ---------------------------------------------------------------------------
@@ -3216,6 +3267,11 @@ void RecordPage::startPreviewIfIdle() {
 }
 
 void RecordPage::ensureCoordinatorInit() {
+    // NOTE: construction is caps-INDEPENDENT. initCoordinator() builds the coordinator,
+    // wires callbacks, and enumerates targets regardless of whether runtime caps have
+    // arrived — the rest of RecordPage relies on coordinator_ != null (e.g. refresh() ->
+    // updateReadinessRows() dereferences it). Only the OnCapabilitiesReady step inside
+    // initCoordinator() is gated on caps; see initCoordinator() / deliverCapabilitiesToCoordinator().
     if (coordinator_needs_init_) {
         coordinator_needs_init_ = false;
         initCoordinator();
@@ -3253,28 +3309,14 @@ void RecordPage::initCoordinator() {
     });
     coordinator_->SetWebcamSettings(current_webcam_settings_);
 
-    try {
-        if (shared_runtime_caps_received_) {
-            capability::SettingsResolver resolver(shared_runtime_caps_);
-            const auto validation = resolver.ValidateConfig(primaryRecorderConfig());
-            coordinator_->OnCapabilitiesReady(shared_runtime_caps_, validation);
-        } else {
-            const auto caps = capability::CapabilityBuilder::BuildFromHardwareQuery();
-            capability::SettingsResolver resolver(caps);
-            const auto validation = resolver.ValidateConfig(primaryRecorderConfig());
-            coordinator_->OnCapabilitiesReady(caps, validation);
-        }
-    } catch (const std::exception& ex) {
-        coordinator_->OnCapabilityFailure(L"Capability check failed.");
-        diagnostics::AppLog::error(
-            QStringLiteral("record.failure"),
-            QStringLiteral("phase=Init category=CapabilityCheck detail=\"%1\"").arg(QString::fromUtf8(ex.what())));
-        qWarning() << "Capability check failed:" << ex.what();
-    } catch (...) {
-        coordinator_->OnCapabilityFailure(L"Capability check failed.");
-        diagnostics::AppLog::error(QStringLiteral("record.failure"),
-                                   QStringLiteral("phase=Init category=CapabilityCheck detail=\"Unknown error\""));
-        qWarning() << "Capability check failed with unknown error.";
+    // Deliver capabilities only when they are already available. When the async HW
+    // probe hasn't landed yet, latch coordinator_awaiting_caps_ and deliver later from
+    // setRuntimeCapabilities(); the synchronous fallback probe has been removed. The
+    // coordinator stays in LoadingCapabilities until OnCapabilitiesReady/Failure runs.
+    if (shared_runtime_caps_received_) {
+        deliverCapabilitiesToCoordinator();
+    } else {
+        coordinator_awaiting_caps_ = true;
     }
 
     coordinator_->SetStateChangedCallback([this](UiRecordingState state) {
@@ -3434,6 +3476,27 @@ void RecordPage::initCoordinator() {
     // MainWindow connects to this to re-apply the selected preset so that
     // the audio/capture state from before deferred init is restored.
     emit coordinatorInitialized();
+}
+
+void RecordPage::deliverCapabilitiesToCoordinator() {
+    if (!coordinator_)
+        return;
+    try {
+        capability::SettingsResolver resolver(shared_runtime_caps_);
+        const auto validation = resolver.ValidateConfig(primaryRecorderConfig());
+        coordinator_->OnCapabilitiesReady(shared_runtime_caps_, validation);
+    } catch (const std::exception& ex) {
+        coordinator_->OnCapabilityFailure(L"Capability check failed.");
+        diagnostics::AppLog::error(
+            QStringLiteral("record.failure"),
+            QStringLiteral("phase=Init category=CapabilityCheck detail=\"%1\"").arg(QString::fromUtf8(ex.what())));
+        qWarning() << "Capability check failed:" << ex.what();
+    } catch (...) {
+        coordinator_->OnCapabilityFailure(L"Capability check failed.");
+        diagnostics::AppLog::error(QStringLiteral("record.failure"),
+                                   QStringLiteral("phase=Init category=CapabilityCheck detail=\"Unknown error\""));
+        qWarning() << "Capability check failed with unknown error.";
+    }
 }
 
 void RecordPage::enumerateTargets(bool preserve_current_selection, bool allow_fallback_to_other_target) {
@@ -4567,6 +4630,20 @@ void RecordPage::onRegionCancelled() {
 }
 
 void RecordPage::doStartRecording(std::optional<recorder_core::CaptureRegion> crop_region) {
+    // If the async capability probe hasn't resolved yet, the coordinator's
+    // StartRecording() would silently no-op (!has_caps_). Latch the start intent and
+    // replay it from setRuntimeCapabilities() once caps land, so the click is never
+    // dropped. Gated on coordinator_awaiting_caps_ (true only while the probe is in
+    // flight; cleared on both success and failure) — NOT on shared_runtime_caps_received_,
+    // which would latch forever after a probe failure and leave Record permanently dead.
+    if (coordinator_awaiting_caps_) {
+        start_requested_awaiting_caps_ = true;
+        pending_start_crop_region_ = crop_region;
+        diagnostics::AppLog::info(QStringLiteral("record"),
+                                  QStringLiteral("start requested before caps ready — latched for replay"));
+        return;
+    }
+
     const int idx = view_model_.selected_target_index;
     if (idx < 0 || idx >= static_cast<int>(view_model_.targets.size()))
         return;
