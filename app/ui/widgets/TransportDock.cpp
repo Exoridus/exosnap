@@ -365,7 +365,11 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     chevron_leave_timer_->setSingleShot(true);
     chevron_leave_timer_->setInterval(300); // ms — generous enough for mouse travel
     connect(chevron_leave_timer_, &QTimer::timeout, this, [this]() {
-        if (chevron_menu_ && !chevron_menu_->underMouse()) {
+        // Close only when the cursor is over neither the menu nor the chevron. The
+        // menu pops up ABOVE the chevron, so opening it fires a native mouse-leave on
+        // the chevron immediately; without also checking the chevron the menu would
+        // close-then-reopen in a loop while the cursor simply rests on the chevron.
+        if (chevron_menu_ && !chevron_menu_->underMouse() && !record_chevron_btn_->underMouse()) {
             chevron_menu_->close();
         }
     });
