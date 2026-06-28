@@ -37,7 +37,8 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
                                            const capability::UserRecorderConfig& config, uint32_t monitor_refresh_rate,
                                            uint64_t output_drive_free_bytes, bool is_profile_supported,
                                            std::string output_filesystem_name,
-                                           const recorder_core::RecordingDiagnosticsSnapshot* live_snapshot)
+                                           const recorder_core::RecordingDiagnosticsSnapshot* live_snapshot,
+                                           const PresentSample* present)
     : caps_(caps), config_(config), monitor_refresh_rate_(monitor_refresh_rate),
       output_drive_free_bytes_(output_drive_free_bytes), is_profile_supported_(is_profile_supported),
       output_filesystem_name_(std::move(output_filesystem_name)) {
@@ -50,11 +51,16 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
         live_present_jitter_ms_ = live_snapshot->capture.source_present_jitter_ms;
         live_coalesce_ratio_ = live_snapshot->capture.source_coalesce_ratio;
     }
+    // Consume the optional present-mode sample only when the provider has a real observation.
+    if (present != nullptr && present->available) {
+        present_ = *present;
+    }
 }
 
 DiagnosticChecklist RecommendationEngine::Generate() const {
     DiagnosticChecklist checklist;
     checkRefreshRateMismatch(checklist);
+    checkExclusiveFullscreen(checklist);
     checkMp4CrashResilience(checklist);
     checkCodecAvailability(checklist);
     checkOutputDriveSpace(checklist);
@@ -62,6 +68,7 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
     checkProfileSupport(checklist);
     checkAudioContainerCompat(checklist);
     checkVideoBitDepthContainerCompat(checklist);
+    checkDpcLatency(checklist);
     return checklist;
 }
 
@@ -130,6 +137,23 @@ void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checkli
                        "Cap your game at 60 or 120 fps for smoother pacing.");
     }
 
+    // Present-mode attribution (PresentMon, ADR 0033): when available, name *how* the source
+    // presents so the diagnosis reads as a root cause, not just a number.
+    if (present_.has_value()) {
+        switch (present_->mode) {
+        case PresentMode::IndependentFlip:
+            r.detail += " The source is presenting via independent flip (variable-rate "
+                        "flip-model), which the fixed CFR cadence cannot phase-match.";
+            break;
+        case PresentMode::ExclusiveFullscreen:
+            r.detail += " The source is in exclusive fullscreen; its present cadence is "
+                        "independent of the desktop refresh.";
+            break;
+        default:
+            break;
+        }
+    }
+
     FixAction fa;
     fa.id = "fix.fps.cap";
     fa.label = "Set recording FPS to match monitor";
@@ -140,6 +164,29 @@ void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checkli
     r.fix_action = fa;
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
+
+    // ADR 0035 / Task 6: when judder fires AND the user is on Newest pacing, offer a second
+    // result (one primary fix_action per result) to switch to Smooth (phase-correct) pacing.
+    // Smooth is the default and already eliminates this class of judder, so no fix is needed
+    // when the user is already on Smooth.
+    if (config_.frame_pacing == recorder_core::FramePacingMode::Newest) {
+        DiagnosticResult pr = MakeResult(
+            "rec.pacing.smooth", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+            "Smooth frame pacing recommended", "Phase-correct pacing removes judder from high-refresh / VRR sources.",
+            "Your recording uses Newest frame pacing; the measured judder is exactly what "
+            "Smooth (phase-correct) pacing fixes.",
+            "Frame pacing: Newest", "Switch to Smooth frame pacing in Advanced Video settings.");
+        FixAction pfa;
+        pfa.id = "fix.frame_pacing.smooth";
+        pfa.label = "Switch to Smooth pacing";
+        pfa.safety = FixAction::Safety::Auto; // safe, reversible, config-only
+        pfa.reversible = true;
+        pfa.changes_summary =
+            "Sets video frame pacing to Smooth (phase-correct). Reversible in Advanced Video settings.";
+        pr.fix_action = pfa;
+        checklist.has_notice = true;
+        checklist.results.push_back(std::move(pr));
+    }
 }
 
 void RecommendationEngine::checkMp4CrashResilience(DiagnosticChecklist& checklist) const {
@@ -400,6 +447,61 @@ void RecommendationEngine::checkVideoBitDepthContainerCompat(DiagnosticChecklist
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
     }
+}
+
+void RecommendationEngine::checkExclusiveFullscreen(DiagnosticChecklist& checklist) const {
+    if (!present_.has_value() || present_->mode != PresentMode::ExclusiveFullscreen) {
+        return;
+    }
+    DiagnosticResult r;
+    r.id = "rec.present.exclusive";
+    r.group = DiagnosticGroup::Recommendation;
+    r.severity = DiagnosticSeverity::Notice;
+    r.title = "Captured source is in exclusive fullscreen";
+    r.summary = "Captured source is in exclusive fullscreen";
+    r.detail = "The source presents in legacy exclusive fullscreen. Desktop/window capture often records "
+               "a black frame in this mode. Switch the game to borderless (windowed-fullscreen) so the "
+               "compositor can present it for capture.";
+    r.current_value = "Present mode: Exclusive fullscreen";
+    r.recommendation = "Set the game to Borderless / Windowed Fullscreen.";
+    r.timestamp = NowTimestamp();
+
+    FixAction fa;
+    fa.id = "fix.present.borderless";
+    fa.label = "How to switch to borderless";
+    fa.safety = FixAction::Safety::Assisted; // app cannot flip a foreign game's display mode
+    fa.reversible = true;
+    fa.changes_summary = "Opens guidance for switching the captured game to borderless fullscreen (the app cannot "
+                         "change another application's display mode for you).";
+    r.fix_action = fa;
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
+}
+
+void RecommendationEngine::checkDpcLatency(DiagnosticChecklist& checklist) const {
+    constexpr double kDpcThresholdUs = 1000.0; // 1 ms sustained DPC = audible/stutter risk
+    if (!dpc_.has_value() || !dpc_->available || dpc_->max_latency_us <= kDpcThresholdUs) {
+        return;
+    }
+    const std::string driver = dpc_->worst_driver.empty() ? "an unidentified kernel driver" : dpc_->worst_driver;
+    const std::string max_str = std::to_string(static_cast<long>(dpc_->max_latency_us));
+    DiagnosticResult r = MakeResult(
+        "rec.dpc.latency", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+        "High kernel DPC/ISR latency detected",
+        "Kernel driver latency can cause recording stutter even when the game feels smooth.",
+        "Peak DPC latency reached " + max_str + " us, attributed to " + driver +
+            ". High DPC latency causes recording stutter/audio crackle even when the game itself "
+            "feels smooth.",
+        "Max DPC: " + max_str + " us", "Update or roll back " + driver + " (GPU/audio/network/chipset driver).");
+    FixAction fa;
+    fa.id = "fix.dpc.driver";
+    fa.label = "Driver latency guidance";
+    fa.safety = FixAction::Safety::External; // app cannot change kernel drivers
+    fa.reversible = false;
+    fa.changes_summary = "Shows which driver to update/roll back; the app cannot change it for you.";
+    r.fix_action = fa;
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
 }
 
 std::vector<std::string> RecommendationEngine::GetAllRecommendationCodes() {

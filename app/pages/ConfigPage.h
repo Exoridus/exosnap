@@ -247,6 +247,9 @@ class ConfigPage : public QWidget {
     // Syncs the colour-range combo to the model. NOT capability-gated — both Full
     // and Limited are always valid; only the recording lock disables it.
     void updateVideoColorRangeControl();
+    // Syncs the frame-pacing combo to the model. Not capability-gated — both modes
+    // are always valid; only the recording lock disables it.
+    void updateFramePacingControl();
     void updateAudioCodecChoices();
     void updateFormatDisplay();
     void updateCompatCallout();
@@ -499,6 +502,9 @@ class ConfigPage : public QWidget {
     // Colour range (0.7.0): Full (PC) / Limited (TV) selector. Never gated.
     QWidget* video_color_range_row_ = nullptr;
     QComboBox* video_color_range_combo_ = nullptr;
+    // Frame pacing (ADR 0035 Slice 2): Smooth / Newest selector. Never gated.
+    QWidget* frame_pacing_row_ = nullptr;
+    QComboBox* frame_pacing_combo_ = nullptr;
 
     // PS-PHASE-C: Expert Audio section — mic gain, channel mode, bitrate, Opus params + placeholders.
     QWidget* audio_expert_section_ = nullptr;

@@ -163,3 +163,43 @@ project's standing posture (no injection; info + opt-out rather than auto-disabl
   report card here, with full integrity review deferred to the 0.9.0 Review step.
 - **Per-frame image-quality analysis (SSIM/VMAF) live.** Rejected on the hot path; belongs to an offline
   quality-validation matrix (1.0 gate), not live diagnostics.
+
+## Delivered — Slice 1: in-process ETW consumer (2026-06-27)
+
+The `PresentProvider` shell (committed `fccdc8a`) is now backed by a real in-process ETW consumer,
+plus the elevation-gated DPC/ISR latency check. Status stays **Proposed**; the Proposed→Accepted flip
+happens in the separate 0.8.0 release-mechanics step (after the phase-correct CFR-pacing slice, ADR 0035).
+
+- **PresentMon vendoring.** `EXOSNAP_WITH_PRESENTMON` (default ON) FetchContent-vendors Intel PresentMon
+  pinned to **v1.10.0** (SHA `2ce1158783e570539119f577d894252b395cadca`) — chosen over 2.x because its
+  `PresentData` exposes the simple embeddable API (`TraceSession::Start` + `PMTraceConsumer::DequeuePresentEvents`);
+  2.x refactored into the IntelPresentMon middleware. A `presentmon_consumer` STATIC lib builds only the
+  `PresentData/*.cpp` subset (`Debug/GpuTrace/MixedRealityTraceConsumer/PresentMonTraceConsumer/TraceConsumer/TraceSession`)
+  with `/w`; license staged as `presentmon.txt` (MIT). `GpuTrace`/`MixedReality` compile but stay unused
+  (`mTrackGPU=false`, `mrConsumer=nullptr`). The whole real path is `#ifdef EXOSNAP_HAS_PRESENTMON`-guarded
+  with a no-op `#else`, so the OFF build and the Qt-only test targets link without the dependency.
+- **Present-mode pipeline.** `PresentMonProvider` (app-layer) owns a `PresentMonEtwSession` that opens a
+  realtime ETW session via PresentMon's `TraceSession`, runs `ProcessTrace` on a worker, and maps completed
+  presents to `{Composed, IndependentFlip, ExclusiveFullscreen}` + tearing + present-interval. Available iff
+  `present_diagnostics_optin && IsElevated() && session_open`; degrades to a neutral em-dash otherwise (never a
+  fabricated present). `DiagnosticsPage` overlays the sample onto the live snapshot (the same app-layer pattern
+  as the disk/filesystem providers), feeding both the live panel and the `RecommendationEngine`.
+- **Signal-source policy.** DXGI-OD stays authoritative for **monitor** present cadence (unprivileged — the
+  VRR/CFR judder diagnosis works without elevation). PresentMon fills the **window/game (WGC)** gap and adds
+  present-mode/tearing as *attribution* universally; it is never made the primary cadence source for monitor
+  capture (avoids dual-path + elevation-coupling for no gain).
+- **Killer check.** Exclusive-fullscreen detection raises an **Assisted** `FixAction` ("switch the game to
+  borderless") — the "black capture" fix.
+- **DPC/ISR latency (minimal).** A separate kernel system-trace session (`DpcLatencyProvider`, same threading
+  pattern, same elevation gate) measures max/avg DPC+ISR latency and best-effort-attributes the worst kernel
+  driver (via `Image_Load` ranges; unresolved → "an unidentified kernel driver"). Over 1 ms → an **External**
+  `FixAction` (driver guidance). LatencyMon-style history was deliberately deferred.
+- **No schema bump.** The existing `present_diagnostics_optin` (settings schema 17) gates the whole ETW bundle
+  (present + tearing + DPC); the toggle copy was relabelled "Present, tearing & latency diagnostics" (UI string
+  only, no persisted field added).
+- **Verification boundary (honest).** Compile/link (both flag states), graceful-`Unavailable` (non-elevated →
+  em-dash), and every pure mapping/correlation/threshold function are headless-verified (full build clean,
+  ctest 2728/2728). **Live present-mode/tearing/DPC data + driver attribution require elevation and a running
+  game and are dev-machine-verified**, not headless. Dev-verify items: PresentMon present-mode/tearing/exclusive
+  detection with a real game; the borderless `FixAction` firing on an exclusive-fullscreen title; DPC decode
+  (PerfInfo opcode band, latency formula, `Image_Load` path-scan, named-system-logger flag delivery).

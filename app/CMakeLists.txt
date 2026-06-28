@@ -279,8 +279,14 @@ qt_add_executable(exosnap WIN32
     diagnostics/ElevationProvider.h
     diagnostics/ElevationProvider.cpp
     diagnostics/PresentProvider.h
+    diagnostics/PresentModeMapping.h
+    diagnostics/PresentModeMapping.cpp
+    diagnostics/PresentMonEtwSession.h
+    diagnostics/PresentMonEtwSession.cpp
     diagnostics/PresentMonProvider.h
     diagnostics/PresentMonProvider.cpp
+    diagnostics/DpcLatencyProvider.h
+    diagnostics/DpcLatencyProvider.cpp
     diagnostics/DiskSpaceThresholds.h
     diagnostics/FilesystemProvider.h
     diagnostics/FilesystemProvider.cpp
@@ -940,18 +946,34 @@ exosnap_add_gtest(
 target_include_directories(elevation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(elevation_tests PRIVATE NOMINMAX)
 
-# ADR 0033: present-diagnostics provider shell. The stub provider gates on
-# elevation && opt-in and degrades to Unavailable (no ETW consumer in this slice).
-# Pure logic; no Win32 invocation (the stub IElevationProvider is injected).
+# ADR 0033: present-diagnostics provider. PresentMonProvider owns a
+# PresentMonEtwSession and gates on elevation && opt-in before starting it.
+# EXOSNAP_HAS_PRESENTMON is intentionally NOT defined here so the no-op session
+# is used, keeping this target Qt-only (no ETW dep) while the gate logic is
+# fully covered.
 exosnap_add_gtest(
     NAME present_provider_tests
     TEST_PREFIX present.
     SOURCES
         tests/test_present_provider.cpp
         diagnostics/PresentMonProvider.cpp
+        diagnostics/PresentMonEtwSession.cpp
+        diagnostics/PresentModeMapping.cpp
     LIBRARIES Qt6::Core
 )
 target_include_directories(present_provider_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Pure PresentMon present-mode mapping. Maps raw present events (POD) to our
+# diagnostics::PresentSample. No Win32/ETW headers; unit-testable in isolation.
+exosnap_add_gtest(
+    NAME present_mapping_tests
+    TEST_PREFIX present_mapping.
+    SOURCES
+        tests/test_present_mode_mapping.cpp
+        diagnostics/PresentModeMapping.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(present_mapping_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME source_picker_dialog_tests
@@ -1253,6 +1275,14 @@ exosnap_add_gtest(
         ui/widgets/LivePipelinePanel.cpp
         # v10: DiagnosticsPage's readiness chip uses lucidePixmap() (Lucide glyph renderer).
         ui/theme/LucideIcon.cpp
+        # ADR 0033: present-mode provider bridge. No EXOSNAP_HAS_PRESENTMON define →
+        # PresentMonEtwSession compiles the graceful no-op stub branch (no ETW dep).
+        diagnostics/PresentMonProvider.cpp
+        diagnostics/PresentMonEtwSession.cpp
+        diagnostics/PresentModeMapping.cpp
+        # ADR 0033: DPC/ISR latency provider. Same no-op stub branch (no ETW dep) since
+        # EXOSNAP_HAS_PRESENTMON is not defined here; DiagnosticsPage samples Read().
+        diagnostics/DpcLatencyProvider.cpp
     LIBRARIES exosnap_diagnostics_test_support Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
 )
 target_include_directories(diagnostics_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

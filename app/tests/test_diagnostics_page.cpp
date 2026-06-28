@@ -431,5 +431,164 @@ TEST_F(DiagnosticsPageTest, LiveDiagnosticsBottleneckStatusRendered) {
     EXPECT_TRUE(status.contains(QStringLiteral("Warning")));
 }
 
+// ---- Present-mode provider bridge (ADR 0033) ------------------------------------
+
+class StubPresent final : public exosnap::diagnostics::IPresentProvider {
+  public:
+    exosnap::diagnostics::PresentSample Sample() const override {
+        exosnap::diagnostics::PresentSample s;
+        s.available = true;
+        s.mode = exosnap::diagnostics::PresentMode::IndependentFlip;
+        s.tearing = true;
+        return s;
+    }
+    bool IsAvailable() const override {
+        return true;
+    }
+};
+
+TEST_F(DiagnosticsPageTest, PresentProvider_InjectedModeAppearsInLivePanel) {
+    DiagnosticsPage page;
+    StubPresent stub;
+    page.setPresentProvider(&stub);
+
+    page.applyLiveDiagnostics(MakeRecordingSnapshot());
+
+    auto* label = page.findChild<QLabel*>(QStringLiteral("liveCapturePresentMode"));
+    ASSERT_NE(label, nullptr) << "liveCapturePresentMode label not found";
+    EXPECT_TRUE(label->text().contains(QStringLiteral("Independent flip")))
+        << "Expected 'Independent flip' in label, got: " << label->text().toStdString();
+}
+
+TEST_F(DiagnosticsPageTest, PresentProvider_NullProviderKeepsUnavailable) {
+    DiagnosticsPage page;
+    // No provider — present_mode_availability stays Unavailable → em-dash.
+    page.applyLiveDiagnostics(MakeRecordingSnapshot());
+
+    auto* label = page.findChild<QLabel*>(QStringLiteral("liveCapturePresentMode"));
+    ASSERT_NE(label, nullptr) << "liveCapturePresentMode label not found";
+    EXPECT_FALSE(label->text().contains(QStringLiteral("Independent flip")));
+}
+
+TEST_F(DiagnosticsPageTest, CaptureCardsLiveDuringRecording) {
+    DiagnosticsPage page;
+    LoadData(page);
+    auto s = MakeRecordingSnapshot();
+    s.video_encoder.average_ms = 2.1;
+    s.mux.process_average_ms = 0.5;
+    s.mux.process_availability = recorder_core::MetricAvailability::Available;
+    s.disk.average_write_ms = 0.8;
+    page.applyLiveDiagnostics(s);
+
+    auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
+    ASSERT_NE(flow, nullptr);
+    // Healthy recording → no card alarmed (no Over).
+    for (int i = 0; i < flow->stepCount(); ++i)
+        EXPECT_NE(flow->card(i)->status(), PipelineStepCard::Status::Over) << i;
+    // Capture card shows the fps number; Encoder shows ms.
+    EXPECT_TRUE(flow->card(0)->secondaryNumber().contains(QStringLiteral("fps")));
+    EXPECT_TRUE(flow->card(3)->secondaryNumber().contains(QStringLiteral("ms")));
+    EXPECT_EQ(flow->card(3)->resourceTag(), QStringLiteral("GPU (NVENC)"));
+}
+
+TEST_F(DiagnosticsPageTest, CaptureCardBottleneckShownAsOver) {
+    DiagnosticsPage page;
+    LoadData(page);
+    auto s = MakeRecordingSnapshot();
+    s.video_encoder.average_ms = 22.0; // way over the 16.7 ms budget
+    s.video_encoder.backlog = 6;
+    page.applyLiveDiagnostics(s);
+
+    auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
+    ASSERT_NE(flow, nullptr);
+    EXPECT_EQ(flow->card(3)->status(), PipelineStepCard::Status::Over);
+}
+
+TEST_F(DiagnosticsPageTest, LiveCardStatusSurvivesStaticRefresh) {
+    // Regression for the static-refresh clobber: a live recording snapshot drives the
+    // Encoder card to Over; a subsequent setDiagnosticData() static refresh (mirroring
+    // MainWindow's QTimer::singleShot(0) → refreshDiagnosticsData() bootstrap) must NOT
+    // reset the card back to its static readiness status. The live state must survive.
+    DiagnosticsPage page;
+    LoadData(page);
+    auto s = MakeRecordingSnapshot();
+    s.video_encoder.average_ms = 22.0; // way over the 16.7 ms budget → Over
+    page.applyLiveDiagnostics(s);
+
+    auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
+    ASSERT_NE(flow, nullptr);
+    ASSERT_EQ(flow->card(3)->status(), PipelineStepCard::Status::Over);
+
+    // Static refresh while the recording is still live (last_live_snapshot_ valid).
+    LoadData(page);
+
+    EXPECT_EQ(flow->card(3)->status(), PipelineStepCard::Status::Over)
+        << "Static refresh must not clobber live Over status during an active recording";
+}
+
+TEST_F(DiagnosticsPageTest, EncoderHealthyBacklogDoesNotTriggerOver) {
+    // Regression for FIX 1: NVENC steady-state backlog (naturally ≥2) must NOT be
+    // treated as a shedding proxy. A healthy encoder with backlog=4 and latency well
+    // under budget must NOT show Over on the Encoder card.
+    DiagnosticsPage page;
+    LoadData(page);
+    auto s = MakeRecordingSnapshot();
+    s.video_encoder.backlog = 4;      // steady-state NVENC pipeline depth
+    s.video_encoder.average_ms = 2.0; // well under the 16.7 ms budget at 60 fps
+    s.video_encoder.frames_encoded = 700;
+    page.applyLiveDiagnostics(s);
+
+    auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
+    ASSERT_NE(flow, nullptr);
+    EXPECT_NE(flow->card(3)->status(), PipelineStepCard::Status::Over)
+        << "Healthy encoder with steady-state NVENC backlog must not show Over (FIX 1 regression)";
+}
+
+TEST_F(DiagnosticsPageTest, EncoderSecondaryNumberDashWhenNoSampleYet) {
+    // Regression for FIX 2: when frames_encoded > 0 but average_ms == 0.0 (no latency
+    // sample accumulated yet), the Encoder secondary number must show the dash (kDash),
+    // not "0.0 ms". enc.available is true (stage is live), but the VALUE is not ready.
+    DiagnosticsPage page;
+    LoadData(page);
+    auto s = MakeRecordingSnapshot();
+    s.video_encoder.frames_encoded = 10; // stage is alive
+    s.video_encoder.average_ms = 0.0;    // no latency sample yet
+    page.applyLiveDiagnostics(s);
+
+    auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
+    ASSERT_NE(flow, nullptr);
+    EXPECT_EQ(flow->card(3)->secondaryNumber(), kDash)
+        << "Encoder secondary number must be dash when average_ms == 0.0 (FIX 2 honesty)";
+}
+
+TEST_F(DiagnosticsPageTest, MuxNumberDashWhenUnavailable) {
+    DiagnosticsPage page;
+    LoadData(page);
+    auto s = MakeRecordingSnapshot();
+    s.mux.process_availability = recorder_core::MetricAvailability::Unavailable;
+    page.applyLiveDiagnostics(s);
+
+    auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
+    ASSERT_NE(flow, nullptr);
+    EXPECT_EQ(flow->card(4)->secondaryNumber(), kDash);
+}
+
+TEST_F(DiagnosticsPageTest, IdleAfterRecordingRestoresStaticCards) {
+    DiagnosticsPage page;
+    LoadData(page);
+    page.applyLiveDiagnostics(MakeRecordingSnapshot());
+
+    recorder_core::RecordingDiagnosticsSnapshot idle;
+    idle.lifecycle = recorder_core::DiagnosticsLifecycle::Idle;
+    idle.valid = false;
+    page.applyLiveDiagnostics(idle);
+
+    auto* flow = page.findChild<PipelineFlow*>(QStringLiteral("pipelineFlow"));
+    ASSERT_NE(flow, nullptr);
+    // Idle restores static readiness: probe-less cards Planned, probed cards Ok.
+    EXPECT_EQ(flow->card(0)->status(), PipelineStepCard::Status::Planned);
+    EXPECT_EQ(flow->card(3)->status(), PipelineStepCard::Status::Ok);
+}
+
 } // namespace
 } // namespace exosnap

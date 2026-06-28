@@ -337,6 +337,50 @@ if(_ebml_build_dir AND _ebml_src_dir AND EXISTS "${_ebml_build_dir}/ebml_export.
     )
 endif()
 
+# ---- PresentMon ETW present-diagnostics consumer (MIT) — ADR 0033 -----------
+# In-process ETW consumer subset (PresentData/ only — NOT the tool repo's main()s).
+# Pinned to a fixed release tag (never a rolling latest — BtbN-pin lesson).
+if(EXOSNAP_WITH_PRESENTMON)
+    FetchContent_Declare(
+        presentmon
+        GIT_REPOSITORY https://github.com/GameTechDev/PresentMon.git
+        GIT_TAG        2ce1158783e570539119f577d894252b395cadca   # == v1.10.0 (pinned by SHA). See ADR 0033.
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(presentmon)
+
+    # Vendored subset: the PresentData ETW consumer translation units only.
+    file(GLOB _presentmon_consumer_sources CONFIGURE_DEPENDS
+        "${presentmon_SOURCE_DIR}/PresentData/*.cpp")
+    add_library(presentmon_consumer STATIC ${_presentmon_consumer_sources})
+    target_include_directories(presentmon_consumer PUBLIC "${presentmon_SOURCE_DIR}/PresentData")
+    set_target_properties(presentmon_consumer PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    if(MSVC)
+        target_compile_options(presentmon_consumer PRIVATE /w)
+    else()
+        target_compile_options(presentmon_consumer PRIVATE -w)
+    endif()
+    # PresentMon's CharacterSet=Unicode project property adds UNICODE/_UNICODE implicitly;
+    # without them EVENT_TRACE_LOGFILE maps to the ANSI variant, clashing with the
+    # explicitly-typed EVENT_TRACE_LOGFILEW in TraceSession.cpp.
+    # PRESENTMON_ENABLE_DEBUG_TRACE=0 disables the verbose-debug-trace path in Debug.cpp
+    # that passes const wchar_t* into std::initializer_list<void*> — not valid in strict
+    # C++ without the permissive cast the upstream MSVC project relies on; we never need
+    # the trace output (it prints to stdout) since we run without a console window.
+    target_compile_definitions(presentmon_consumer PRIVATE
+        UNICODE _UNICODE
+        PRESENTMON_ENABLE_DEBUG_TRACE=0
+        WIN32_LEAN_AND_MEAN
+        _WIN32_WINNT=0x0601
+        NTDDI_VERSION=0x06010000
+    )
+    # PresentData consumes ETW/TDH directly.
+    target_link_libraries(presentmon_consumer PUBLIC tdh advapi32)
+    add_library(PresentMon::consumer ALIAS presentmon_consumer)
+    _exosnap_install_license("PresentMon (MIT)"
+        "${presentmon_SOURCE_DIR}/LICENSE.txt" "presentmon.txt")
+endif()
+
 # ---------------------------------------------------------------------------
 # Install all staged third-party license files into the install tree.
 # Each shipped dependency registered via _exosnap_install_license above.

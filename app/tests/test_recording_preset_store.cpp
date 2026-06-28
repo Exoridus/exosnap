@@ -1075,6 +1075,41 @@ TEST(RecordingPresetStore, OldSchemaVersion_Load_ReturnsReset) {
 }
 
 // ===========================================================================
+// Frame pacing — default Smooth + Newest round-trip (ADR 0035, schema 19)
+// ===========================================================================
+
+TEST(RecordingPresetStore, FramePacingRoundtrips) {
+    using recorder_core::FramePacingMode;
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Pacing Test";
+    p.config = MakeDefaultPreset().config;
+
+    // Default must be Smooth.
+    EXPECT_EQ(p.config.video.frame_pacing, FramePacingMode::Smooth);
+
+    // Set Newest and verify it survives a save → load roundtrip.
+    p.config.video.frame_pacing = FramePacingMode::Newest;
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.video.frame_pacing, FramePacingMode::Newest);
+    }
+
+    CleanupFile(path);
+}
+
+// ===========================================================================
 // Chroma key — color mode + spill round-trip
 // ===========================================================================
 

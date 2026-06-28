@@ -437,6 +437,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
 
     // ---- Load reduced AppSettingsStore (hotkeys + window geometry only) ----
     persisted_settings_ = settings_store_.Load();
+    // ADR 0033: sync the present provider opt-in from the persisted setting now
+    // that the settings store has been loaded. The provider was constructed with
+    // opt_in=false; SetOptIn kicks off the ETW session when elevation allows it.
+    present_provider_.SetOptIn(persisted_settings_.present_diagnostics_optin);
+    // ADR 0033: the kernel DPC/ISR provider shares the present opt-in gate but has no
+    // internal elevation check, so apply (opt-in && elevation) here — mirroring
+    // PresentMonProvider::GateOpen(). Graceful: Start() returns false when ETW can't open.
+    if (persisted_settings_.present_diagnostics_optin && elevation_provider_.IsElevated()) {
+        [[maybe_unused]] const bool dpc_started = dpc_provider_.Start();
+    }
     initHotkeyService();
 
     // ---- Update engine bridge (UPDATE-WIRE-R1 · ADR 0012) ----
@@ -510,6 +520,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     hotkeys_page_->setService(hotkey_service_);
     config_page_->setHotkeyService(hotkey_service_);
     diagnostics_page_ = new DiagnosticsPage(stack_);
+    diagnostics_page_->setPresentProvider(&present_provider_);
+    diagnostics_page_->setDpcProvider(&dpc_provider_);
     webcam_page_ = new WebcamPage(stack_);
     webcam_page_->applySettings(live_webcam_);
     stack_->addWidget(record_page_);
@@ -687,6 +699,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
                                              : changes_summary;
                     if (QMessageBox::question(this, QStringLiteral("Apply fix"), body) != QMessageBox::Yes)
                         return;
+                    if (fix_id == QStringLiteral("fix.frame_pacing.smooth")) {
+                        // Video-settings-only fix: switch pacing mode, propagate, refresh UI.
+                        video_settings_.frame_pacing = recorder_core::FramePacingMode::Smooth;
+                        if (config_page_)
+                            config_page_->setVideoSettings(video_settings_);
+                        if (record_page_)
+                            record_page_->setVideoSettings(video_settings_);
+                        if (config_page_)
+                            config_page_->setPresetDirty(preset_registry_.IsSelectedDirty(captureLiveConfig()));
+                        refreshDiagnosticsData();
+                        diagnostics::AppLog::info(QStringLiteral("diagnostics"),
+                                                  QStringLiteral("Applied fix %1").arg(fix_id));
+                        return;
+                    }
                     if (fix_id == QStringLiteral("fix.codec.video.default"))
                         output_settings_.video_codec = capability::VideoCodec::H264Nvenc;
                     else if (fix_id == QStringLiteral("fix.codec.audio.default"))
@@ -3050,6 +3076,16 @@ recorder_core::RecordingDiagnosticsSnapshot makeLiveDiagnosticsSnapshot(const QS
     s.disk.output_target = "C:";
     s.disk.latency_availability = MetricAvailability::Available;
 
+    s.capture.acquire_average_ms = 0.6;
+    s.capture.acquire_peak_ms = 1.2;
+    s.capture.acquire_availability = MetricAvailability::Available;
+    s.compositor.vpblt_average_ms = 0.4;
+    s.compositor.vpblt_peak_ms = 0.9;
+    s.compositor.vpblt_availability = MetricAvailability::Available;
+    s.mux.process_average_ms = 0.5;
+    s.mux.process_peak_ms = 1.1;
+    s.mux.process_availability = MetricAvailability::Available;
+
     s.split.split_supported = true;
     s.split.current_segment = 1;
     s.split.completed_segments = 0;
@@ -3060,8 +3096,8 @@ recorder_core::RecordingDiagnosticsSnapshot makeLiveDiagnosticsSnapshot(const QS
     s.health = PipelineHealth::Good;
 
     if (kind == QStringLiteral("encoder")) {
-        s.video_encoder.average_ms = 9.2;
-        s.video_encoder.peak_ms = 14.0;
+        s.video_encoder.average_ms = 20.0; // over the 16.7 ms budget → Bottleneck
+        s.video_encoder.peak_ms = 24.0;
         s.video_encoder.backlog = 6;
         s.video_encoder.frames_encoded = 2440;
         s.video_queue.current_depth = 5;
@@ -3425,6 +3461,15 @@ void MainWindow::onPresentDiagnosticsOptInToggled(bool enabled) {
     // so the elevated instance can activate the provider (ADR 0033).
     persisted_settings_.present_diagnostics_optin = enabled;
     settings_store_.Save(persisted_settings_);
+
+    // Start or stop the ETW session to match the new opt-in state.
+    present_provider_.SetOptIn(enabled);
+    // Keep the kernel DPC/ISR session in lockstep with the same gate (opt-in && elevation).
+    if (enabled && elevation_provider_.IsElevated()) {
+        [[maybe_unused]] const bool dpc_started = dpc_provider_.Start();
+    } else {
+        dpc_provider_.Stop();
+    }
 
     if (!notification_hub_)
         return;

@@ -1167,5 +1167,138 @@ TEST(BlockedScenarioTest, RecommendationEngine_H264NvencUnavailable_ProducesVide
     EXPECT_TRUE(checklist.has_blocker);
 }
 
+TEST(RecommendationEngineTest, ExclusiveFullscreenRaisesBorderlessFixAction) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    PresentSample present;
+    present.available = true;
+    present.mode = PresentMode::ExclusiveFullscreen;
+
+    RecommendationEngine engine(caps, config, /*monitor_refresh_rate=*/0,
+                                /*output_drive_free_bytes=*/0, /*is_profile_supported=*/true,
+                                /*output_filesystem_name=*/"NTFS",
+                                /*live_snapshot=*/nullptr, /*present=*/&present);
+    const DiagnosticChecklist list = engine.Generate();
+
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.present.exclusive"; });
+    ASSERT_NE(it, list.results.end());
+    ASSERT_TRUE(it->fix_action.has_value());
+    EXPECT_EQ(it->fix_action->id, "fix.present.borderless");
+    EXPECT_EQ(it->fix_action->safety, FixAction::Safety::Assisted);
+}
+
+TEST(RecommendationEngineTest, ComposedPresentRaisesNoExclusiveCheck) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    PresentSample present;
+    present.available = true;
+    present.mode = PresentMode::Composed;
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, &present);
+    const DiagnosticChecklist list = engine.Generate();
+    EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.present.exclusive"; }));
+}
+
+TEST(RecommendationEngineTest, JudderDetailNamesPresentModeAttribution) {
+    using namespace exosnap::diagnostics;
+    recorder_core::RecordingDiagnosticsSnapshot snap;
+    snap.valid = true;
+    snap.video_encoder.cfr = true;
+    snap.capture.present_cadence_availability = recorder_core::MetricAvailability::Available;
+    snap.capture.source_present_jitter_ms = 6.0; // > kJitterMs
+    snap.capture.source_coalesce_ratio = 2.0;    // > kCoalesceRatio
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+    PresentSample present;
+    present.available = true;
+    present.mode = PresentMode::IndependentFlip;
+
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", &snap, &present);
+    const DiagnosticChecklist list = engine.Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.001"; });
+    ASSERT_NE(it, list.results.end());
+    EXPECT_NE(it->detail.find("independent flip"), std::string::npos);
+}
+
+TEST(RecommendationEngineTest, HighDpcLatencyNamesDriverExternalFix) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    DpcLatencyReading dpc{/*max*/ 2500.0, /*avg*/ 180.0, "nvlddmkm.sys", /*available*/ true};
+    engine.SetDpcLatency(dpc);
+    const DiagnosticChecklist list = engine.Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.dpc.latency"; });
+    ASSERT_NE(it, list.results.end());
+    EXPECT_NE(it->detail.find("nvlddmkm.sys"), std::string::npos);
+    ASSERT_TRUE(it->fix_action.has_value());
+    EXPECT_EQ(it->fix_action->safety, FixAction::Safety::External);
+}
+
+TEST(RecommendationEngineTest, LowDpcLatencyRaisesNothing) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    engine.SetDpcLatency({200.0, 60.0, "", true});
+    const DiagnosticChecklist list = engine.Generate();
+    EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.dpc.latency"; }));
+}
+
+// --- ADR 0035: Smooth pacing Auto FixAction when judder fires + Newest pacing ---
+
+TEST(RecommendationEngineTest, JudderInNewestOffersSmoothPacingAutoFix) {
+    // Live judder + config.frame_pacing = Newest → rec.pacing.smooth result
+    // with fix_action id=="fix.frame_pacing.smooth", safety==Auto.
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+    config.frame_pacing = recorder_core::FramePacingMode::Newest; // triggers the pacing result
+
+    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
+    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    const auto checklist = engine.Generate();
+
+    const auto it = std::find_if(checklist.results.begin(), checklist.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.pacing.smooth"; });
+    ASSERT_NE(it, checklist.results.end()) << "rec.pacing.smooth must be emitted for judder+Newest";
+    ASSERT_TRUE(it->fix_action.has_value());
+    EXPECT_EQ(it->fix_action->id, "fix.frame_pacing.smooth");
+    EXPECT_EQ(it->fix_action->safety, FixAction::Safety::Auto);
+    EXPECT_TRUE(it->fix_action->reversible);
+    EXPECT_FALSE(it->fix_action->changes_summary.empty());
+}
+
+TEST(RecommendationEngineTest, JudderInSmoothOffersNoPacingFix) {
+    // Live judder + config.frame_pacing = Smooth → NO rec.pacing.smooth result
+    // (pacing is already correct — nothing to fix).
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+    config.frame_pacing = recorder_core::FramePacingMode::Smooth; // already correct — no fix offered
+
+    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
+    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    const auto checklist = engine.Generate();
+
+    EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(), [](const DiagnosticResult& r) {
+        return r.id == "rec.pacing.smooth";
+    })) << "rec.pacing.smooth must NOT be emitted when pacing is already Smooth";
+}
+
 } // namespace
 } // namespace exosnap::diagnostics

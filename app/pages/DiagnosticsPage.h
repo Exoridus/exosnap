@@ -4,11 +4,15 @@
 #include <capability/capability_set.h>
 #include <capability/resolver.h>
 #include <recorder_core/pipeline_diagnostics.h>
+#include <recorder_core/pipeline_health.h>
 
 #include "../diagnostics/CapabilitySummary.h"
 #include "../diagnostics/ConfigSummary.h"
+#include "../diagnostics/DpcLatencyProvider.h"
+#include "../diagnostics/PresentProvider.h"
 #include "../diagnostics/RecommendationEngine.h"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 
@@ -44,6 +48,17 @@ class DiagnosticsPage : public QWidget {
     // recording, plus one final frozen snapshot). Safe to call when idle.
     void applyLiveDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
 
+    // ADR 0033: inject the present/tearing diagnostics provider (borrowed, nullable).
+    // When set, applyLiveDiagnostics overlays the present mode from Sample() onto the
+    // snapshot before rendering and correlation, mirroring the disk/fs provider pattern.
+    // Null (default) leaves present_mode_availability = Unavailable.
+    void setPresentProvider(diagnostics::IPresentProvider* provider) noexcept;
+
+    // ADR 0033: inject the kernel DPC/ISR latency provider (borrowed, nullable).
+    // When set, refreshOverview samples Read() and forwards it into the
+    // RecommendationEngine via SetDpcLatency. Null (default) leaves the DPC check inert.
+    void setDpcProvider(diagnostics::DpcLatencyProvider* provider) noexcept;
+
   signals:
     void navigateToLogsRequested();
     // v0.8.0-D: FixAction routing — MainWindow wires these in a later wave.
@@ -60,6 +75,11 @@ class DiagnosticsPage : public QWidget {
     void refreshCapabilities();
     void refreshConfiguration();
     void refreshPipeline();
+    void updatePipelineCards(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
+    // Render core: build signals → ResolvePipelineHealth → setStepLive. No idle-check,
+    // no 2 Hz throttle. Called by updatePipelineCards (after its guards) and directly by
+    // setDiagnosticData to restore live card state after a static refreshPipeline().
+    void renderPipelineCards(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
     void refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations, int total_notices,
                           int total_blockers);
     void setReadinessState(const QString& state);
@@ -137,8 +157,19 @@ class DiagnosticsPage : public QWidget {
 
     // Last live pipeline snapshot (fed by applyLiveDiagnostics). Consumed by refreshOverview's
     // RecommendationEngine for the VRR/CFR judder correlation (v0.8.0 / ADR 0033). Only valid
-    // snapshots are forwarded to the engine.
+    // snapshots are forwarded to the engine. Present-mode overlay is applied before storage.
     recorder_core::RecordingDiagnosticsSnapshot last_live_snapshot_{};
+
+    // Capture-card live wiring (0.8.0): 2 Hz apply throttle + drop-delta tracking.
+    std::chrono::steady_clock::time_point last_cards_applied_{};
+    uint64_t cards_last_generation_ = 0;
+    uint64_t cards_last_problem_drops_ = 0;
+
+    // ADR 0033: borrowed present/tearing provider (null = feature disabled / not elevated).
+    diagnostics::IPresentProvider* present_provider_ = nullptr;
+
+    // ADR 0033: borrowed kernel DPC/ISR latency provider (null = disabled / not elevated).
+    diagnostics::DpcLatencyProvider* dpc_provider_ = nullptr;
 };
 
 } // namespace exosnap

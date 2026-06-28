@@ -77,11 +77,22 @@ PipelineStepCard::PipelineStepCard(QWidget* parent) : QFrame(parent) {
     status_label_->setAlignment(Qt::AlignCenter);
     status_label_->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
 
+    resource_label_ = new QLabel(this);
+    resource_label_->setObjectName(QStringLiteral("pipelineStepResource"));
+    resource_label_->setProperty("labelRole", "pipelineStepResource");
+
+    number_label_ = new QLabel(this);
+    number_label_->setObjectName(QStringLiteral("pipelineStepNumber"));
+    number_label_->setProperty("labelRole", "pipelineStepNumber");
+    number_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
     auto* pill_row = new QHBoxLayout();
     pill_row->setContentsMargins(0, 0, 0, 0);
-    pill_row->setSpacing(0);
+    pill_row->setSpacing(6);
     pill_row->addWidget(status_label_, 0, Qt::AlignLeft);
+    pill_row->addWidget(resource_label_, 0, Qt::AlignLeft);
     pill_row->addStretch(1);
+    pill_row->addWidget(number_label_, 0, Qt::AlignRight);
     root->addLayout(pill_row);
 }
 
@@ -111,6 +122,24 @@ void PipelineStepCard::setNote(const QString& note) {
 
 QString PipelineStepCard::note() const {
     return note_label_ ? note_label_->text() : QString{};
+}
+
+void PipelineStepCard::setResourceTag(const QString& tag) {
+    if (resource_label_)
+        resource_label_->setText(tag);
+}
+
+QString PipelineStepCard::resourceTag() const {
+    return resource_label_ ? resource_label_->text() : QString{};
+}
+
+void PipelineStepCard::setSecondaryNumber(const QString& number) {
+    if (number_label_)
+        number_label_->setText(number);
+}
+
+QString PipelineStepCard::secondaryNumber() const {
+    return number_label_ ? number_label_->text() : QString{};
 }
 
 QString PipelineStepCard::statusText() const {

@@ -689,6 +689,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.frame_rate_num = video_settings_.frame_rate_num;
     config.frame_rate_den = video_settings_.frame_rate_den;
     config.cfr = video_settings_.cfr;
+    config.cfr_pacing_mode = video_settings_.frame_pacing;
     if (config.container == recorder_core::Container::Mp4 && !config.cfr) {
         diagnostics::AppLog::warning(
             QStringLiteral("record.reconcile"),

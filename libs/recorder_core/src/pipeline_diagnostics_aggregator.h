@@ -161,6 +161,10 @@ class PipelineDiagnosticsAggregator {
     void OnSourcePresentInterval(time_point now, double interval_ms, uint32_t accumulated_frames) noexcept;
     // Compositor (VideoThread) — CPU submission time only
     void OnCompositorSubmit(time_point now, double ms, bool pass_ran) noexcept;
+    // Capture-card live wiring (0.8.0): cheap CPU-timing brackets (steady_clock).
+    void OnAcquireLatency(time_point now, double ms) noexcept; // acquire+copy (Source Capture)
+    void OnVpbltSubmit(time_point now, double ms) noexcept;    // VideoProcessorBlt (Compositor)
+    void OnMuxLatency(time_point now, double ms) noexcept;     // mux drain loop (Muxer)
     // Encoder (VideoThread)
     void OnEncodeSubmitted() noexcept;
     void OnEncodeLatency(time_point now, double ms) noexcept;
@@ -215,10 +219,16 @@ class PipelineDiagnosticsAggregator {
     RollingTimeWindow present_interval_window_{256, std::chrono::milliseconds(2000)};
     RollingTimeWindow present_coalesce_window_{256, std::chrono::milliseconds(2000)};
 
+    // Capture-card live wiring (0.8.0). Each is a steady_clock CPU-timing window.
+    bool acquire_observed_ = false;
+    RollingTimeWindow acquire_window_{256, std::chrono::milliseconds(2000)};
+
     // Compositor
     RollingTimeWindow compositor_window_{256, std::chrono::milliseconds(2000)};
     uint64_t frames_composed_ = 0;
     bool compositor_active_ = false;
+    bool vpblt_observed_ = false;
+    RollingTimeWindow vpblt_window_{256, std::chrono::milliseconds(2000)};
 
     // Encoder
     uint64_t frames_submitted_ = 0;
@@ -242,6 +252,8 @@ class PipelineDiagnosticsAggregator {
     uint64_t mux_packets_ = 0;
     uint64_t disk_bytes_written_ = 0;
     RollingTimeWindow write_window_{256, std::chrono::milliseconds(2000)};
+    bool mux_process_observed_ = false;
+    RollingTimeWindow mux_window_{256, std::chrono::milliseconds(2000)};
     uint32_t segment_index_ = 0;
     uint32_t segment_count_ = 0;
     uint64_t finalizations_ = 0;

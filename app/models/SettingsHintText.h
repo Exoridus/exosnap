@@ -77,6 +77,8 @@ inline const QString kVideoColorRange =
                    "standard, safest for editors/players that ignore the range flag");
 inline const QString kFrameTiming =
     QStringLiteral("CFR = constant frame rate for editor compatibility \xC2\xB7 VFR = variable");
+inline const QString kFramePacing =
+    QStringLiteral("Smooth removes judder from high-refresh/VRR sources; Newest minimises latency");
 
 // ---- Skipped (control does not exist in current UI) ----
 // kEncoderPreset         — NVENC P1–P7 (0.5 wave — no UI control yet)

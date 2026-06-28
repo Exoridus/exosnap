@@ -35,6 +35,12 @@ class PipelineStepCard : public QFrame {
     void setNote(const QString& note);
     QString note() const;
 
+    void setResourceTag(const QString& tag);
+    QString resourceTag() const;
+
+    void setSecondaryNumber(const QString& number);
+    QString secondaryNumber() const;
+
     // The honest status pill label ("OK" / "Hotspot" / "Over" / "Planned" / "Unavailable").
     QString statusText() const;
 
@@ -44,6 +50,8 @@ class PipelineStepCard : public QFrame {
     QLabel* name_label_ = nullptr;
     QLabel* status_label_ = nullptr;
     QLabel* note_label_ = nullptr;
+    QLabel* resource_label_ = nullptr;
+    QLabel* number_label_ = nullptr;
     Status status_ = Status::Planned;
     QString step_name_;
 };

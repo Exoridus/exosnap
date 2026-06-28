@@ -2115,5 +2115,40 @@ TEST_F(ConfigPageTest, ColorRange_SelectingLimited_EmitsModel_NotGated) {
     EXPECT_EQ(emitted.color_range, capability::ColorRange::Full);
 }
 
+// ── ADR 0035 Slice 2: Frame pacing select (Smooth / Newest) ─────────────────
+
+TEST_F(ConfigPageTest, FramePacingSelectReflectsAndSetsModel) {
+    // framePacingSelect must exist in the Expert Video (fmt_expert_section_).
+    ConfigPage page(output_defaults_, video_defaults_);
+    auto* sel = page.findChild<QComboBox*>(QStringLiteral("framePacingSelect"));
+    ASSERT_NE(sel, nullptr) << "framePacingSelect must exist in Expert Video";
+
+    // Default model has Smooth; control must reflect that.
+    EXPECT_EQ(sel->currentData().toInt(), static_cast<int>(recorder_core::FramePacingMode::Smooth));
+
+    // Apply model with Newest → control updates without emitting.
+    VideoSettingsModel newest_model = video_defaults_;
+    newest_model.frame_pacing = recorder_core::FramePacingMode::Newest;
+    int emit_count = 0;
+    QObject::connect(&page, &ConfigPage::videoSettingsChanged,
+                     [&emit_count](const VideoSettingsModel&) { ++emit_count; });
+    page.setVideoSettings(newest_model);
+    EXPECT_EQ(sel->currentData().toInt(), static_cast<int>(recorder_core::FramePacingMode::Newest));
+    EXPECT_EQ(emit_count, 0) << "setVideoSettings must not emit videoSettingsChanged";
+
+    // Toggle back to Smooth via the combo → videoSettingsChanged emits Smooth.
+    VideoSettingsModel emitted;
+    bool emitted_flag = false;
+    QObject::connect(&page, &ConfigPage::videoSettingsChanged, [&](const VideoSettingsModel& s) {
+        emitted = s;
+        emitted_flag = true;
+    });
+    const int smooth_idx = sel->findData(static_cast<int>(recorder_core::FramePacingMode::Smooth));
+    ASSERT_GE(smooth_idx, 0);
+    sel->setCurrentIndex(smooth_idx);
+    EXPECT_TRUE(emitted_flag);
+    EXPECT_EQ(emitted.frame_pacing, recorder_core::FramePacingMode::Smooth);
+}
+
 } // namespace
 } // namespace exosnap

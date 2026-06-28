@@ -9,7 +9,9 @@
 #include <cstdint>
 #include <memory>
 
+#include "diagnostics/DpcLatencyProvider.h"
 #include "diagnostics/ElevationProvider.h"
+#include "diagnostics/PresentMonProvider.h"
 #include "models/OutputSettingsModel.h"
 #include "models/RecordingPreset.h"
 #include "models/RecordingPresetRegistry.h"
@@ -358,6 +360,14 @@ class MainWindow : public QMainWindow {
     bool reenable_present_diag_on_relaunch_ = false;
     // Runtime elevation state source for the present-diagnostics opt-in gate.
     diagnostics::Win32ElevationProvider elevation_provider_;
+    // ADR 0033: PresentMon-backed present/tearing diagnostics provider. Initialized
+    // opt_in=false; SetOptIn() is called after persisted_settings_ is loaded.
+    // Must be declared after elevation_provider_ (initialization order dependency).
+    diagnostics::PresentMonProvider present_provider_{elevation_provider_, false};
+    // ADR 0033: kernel DPC/ISR latency provider. Shares the present-diagnostics opt-in
+    // gate (elevation + opt-in). Started/stopped alongside present_provider_; its reading
+    // is fed to the DiagnosticsPage which forwards it into RecommendationEngine.
+    diagnostics::DpcLatencyProvider dpc_provider_;
 };
 
 } // namespace exosnap
