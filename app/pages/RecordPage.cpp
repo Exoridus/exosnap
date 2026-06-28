@@ -9,7 +9,6 @@
 #include "../ui/widgets/PreviewSurface.h"
 #include "../ui/widgets/RegionGeometry.h"
 #include "../ui/widgets/RegionSelectionOverlay.h"
-#include "../ui/widgets/SectionRuleHeader.h"
 #include "../ui/widgets/StatusPill.h"
 #include "../ui/widgets/TransportDock.h"
 #include "../ui/widgets/VUMeterWidget.h"
@@ -22,16 +21,12 @@
 #include <recorder_core/audio_input_device.h>
 
 #include <QAbstractButton>
-#include <QAbstractItemView>
 #include <QApplication>
-#include <QBoxLayout>
 #include <QByteArray>
 #include <QClipboard>
 #include <QColor>
-#include <QComboBox>
 #include <QDebug>
 #include <QDesktopServices>
-#include <QDialog>
 #include <QDir>
 #include <QEvent>
 #include <QFileInfo>
@@ -45,12 +40,9 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QResizeEvent>
-#include <QScrollArea>
 #include <QShortcut>
 #include <QShowEvent>
 #include <QSignalBlocker>
-#include <QSlider>
-#include <QSpinBox>
 #include <QStyle>
 #include <QTimer>
 #include <QUrl>
@@ -771,23 +763,7 @@ void RecordPage::updateResponsiveLayout() {
 }
 
 RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
-    auto* scroll = new QScrollArea(this);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-
-    auto* content = new QWidget();
-    auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl,
-                               ui::theme::ExoSnapMetrics::kSpaceXl, ui::theme::ExoSnapMetrics::kSpaceXl);
-    layout->setSpacing(18);
-
-    auto* cockpit_row = new QWidget(content);
-    cockpit_split_layout_ = new QBoxLayout(QBoxLayout::LeftToRight, cockpit_row);
-    cockpit_split_layout_->setContentsMargins(0, 0, 0, 0);
-    cockpit_split_layout_->setSpacing(ui::theme::ExoSnapMetrics::kSpaceMd);
-    layout->addWidget(cockpit_row);
-
-    preview_column_ = new QWidget(cockpit_row);
+    preview_column_ = new QWidget();
     preview_column_->setObjectName("recordPreviewColumn");
     auto* preview_column_layout = new QVBoxLayout(preview_column_);
     preview_column_layout->setContentsMargins(0, 0, 0, 0);
@@ -842,29 +818,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     preview_surface_host_layout->addWidget(preview_surface_, 0, Qt::AlignHCenter | Qt::AlignVCenter);
     preview_surface_host_layout->addStretch(1);
     preview_column_layout->addWidget(preview_surface_host_, 1);
-
-    // CAPTURE-FRAME-DOCK-BUTTON-R1: the capture-frame action is now on the transport
-    // dock (right side, round icon button).  The preview-corner button and shutter
-    // flash overlay were removed because they were occluded by the DXGI native HWND.
-    cockpit_split_layout_->addWidget(preview_column_, 7);
-
-    // Hybrid v3 (HYBRID-PORT-R2): the legacy sections (right rail, audio
-    // settings, destination, readiness, target pickers, result panel) have been
-    // removed; the legacy_host_ scroll still exists as a minimal container.
-    cockpit_split_layout_->removeWidget(preview_column_);
-    preview_column_->setParent(nullptr);
-
-    // PERF: create the legacy host HIDDEN and reparent the scroll into it BEFORE
-    // calling scroll->setWidget(content). Populating an already-hidden subtree lets
-    // Qt defer the initial layout/style pass over the hundreds of never-visible
-    // legacy widgets — that pass was ~800ms of ctor time (startup profiling).
-    legacy_host_ = new QWidget(this);
-    legacy_host_->setObjectName(QStringLiteral("recordLegacyHost"));
-    legacy_host_->setVisible(false);
-    auto* legacy_host_layout = new QVBoxLayout(legacy_host_);
-    legacy_host_layout->setContentsMargins(0, 0, 0, 0);
-    legacy_host_layout->addWidget(scroll); // reparents scroll from `this` into the hidden host
-    scroll->setWidget(content);            // content lands in a hidden subtree -> layout deferred
 
     transport_dock_ = new ui::widgets::TransportDock(this);
 

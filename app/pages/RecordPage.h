@@ -33,15 +33,11 @@
 #include "../ui/dialogs/RecordingErrorPanel.h"
 
 class QAbstractButton;
-class QComboBox;
-class QBoxLayout;
 class QFrame;
 class QLabel;
 class QLineEdit;
 class QPushButton;
 class QResizeEvent;
-class QSlider;
-class QSpinBox;
 class QTimer;
 class QVBoxLayout;
 
@@ -63,7 +59,6 @@ struct VisualScenario;
 
 namespace ui::widgets {
 class PreviewSurface;
-class SectionRuleHeader;
 class TransportDock;
 class VUMeterWidget;
 } // namespace ui::widgets
@@ -323,7 +318,6 @@ class RecordPage : public QWidget {
     // Injected by MainWindow before first show; forwarded to the coordinator.
     RecoveryManifestStore* recovery_manifest_store_ = nullptr;
 
-    QBoxLayout* cockpit_split_layout_ = nullptr;
     QWidget* preview_column_ = nullptr;
     QWidget* preview_surface_host_ = nullptr;
     ui::widgets::PreviewSurface* preview_surface_ = nullptr;
@@ -387,7 +381,6 @@ class RecordPage : public QWidget {
 
     // Hybrid v3 preview-first chrome (HYBRID-PORT-R2).
     ui::widgets::TransportDock* transport_dock_ = nullptr;
-    QWidget* legacy_host_ = nullptr;
     QLabel* capture_frame_status_label_ = nullptr;
     QTimer* capture_frame_status_timer_ = nullptr;
 
