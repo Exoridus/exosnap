@@ -91,6 +91,17 @@ QToolButton#titlebarBell:hover {
     background: ${bg3};
 }
 
+/* VG-2: hub open state — accent-dim background + accent-b2 border ring. */
+QToolButton#titlebarBell[hubOpen="true"] {
+    background: ${accent-dim};
+    border: 1px solid ${accent-b2};
+}
+
+QToolButton#titlebarBell[hubOpen="true"]:hover {
+    background: ${accent-soft};
+    border: 1px solid ${accent-b2};
+}
+
 /* S5: Settings popover cog button — flat at rest, subtle bg3 hover. */
 QToolButton#settingsPopoverCog {
     background: transparent;
@@ -2785,15 +2796,15 @@ QWidget#hubHeader {
 
 QLabel#hubTitle {
     font-family: ${font-sans};
-    font-size: 13.5px;
-    font-weight: 600;
+    font-size: 14px;
+    font-weight: 700;
     color: ${text0};
 }
 
 QLabel#hubMarkAllRead {
     font-size: 12px;
     font-weight: 500;
-    color: ${accent};
+    color: ${text3};
 }
 
 QFrame#hubHeaderDivider {
@@ -2812,15 +2823,15 @@ QWidget#hubEmptyState {
 }
 
 QWidget#hubEmptyIcon {
-    background: ${bg3};
-    border: 1px solid ${line2};
-    border-radius: 10px;
+    background: ${bg2};
+    border: none;
+    border-radius: 22px;
 }
 
 QLabel#hubEmptyTitle {
     font-family: ${font-sans};
     font-size: 13.5px;
-    font-weight: 600;
+    font-weight: 500;
     color: ${text0};
 }
 
@@ -2834,6 +2845,12 @@ QFrame#hubItemDivider {
     border: none;
     min-height: 1px;
     max-height: 1px;
+    margin: 2px 12px;
+}
+
+/* VG-6: advisory item unread background — set via setProperty("advisoryUnread", true). */
+QWidget[advisoryUnread="true"] {
+    background: rgba(255, 255, 255, 6);
 }
 
 /* Advisory action buttons — ghost: transparent bg, line2 border, accent text. */

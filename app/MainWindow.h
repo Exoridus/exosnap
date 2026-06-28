@@ -320,6 +320,10 @@ class MainWindow : public QMainWindow {
     ui::overlay::NotificationToastWindow* notification_toast_window_ = nullptr;
     // PS-PHASE-B: notification hub panel (top-level popup, no Qt parent).
     ui::chrome::NotificationHubPanel* notification_hub_ = nullptr;
+    // Set when a press on the bell dismisses the open hub (Qt::Popup auto-closes on
+    // mouse-DOWN) so the bell's ensuing clicked() (on release) closes rather than
+    // re-opens it — i.e. a clean single-click toggle.
+    bool hub_just_dismissed_ = false;
     // UPDATE-WIRE-R1 (ADR 0012): Qt bridge to the update engine (owned by this).
     UpdateService* update_service_ = nullptr;
     // Last update check's releases-page URL (for the panel's "Open releases" / notes link).

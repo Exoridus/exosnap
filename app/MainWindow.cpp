@@ -1383,6 +1383,12 @@ MainWindow::~MainWindow() {
 void MainWindow::toggleNotificationHub() {
     if (!notification_hub_)
         return;
+    if (hub_just_dismissed_) {
+        // This very click already closed the hub via the popup auto-dismiss;
+        // swallow the toggle so a single click just closes it.
+        hub_just_dismissed_ = false;
+        return;
+    }
     if (notification_hub_->isVisible()) {
         notification_hub_->hide();
         return;
@@ -1395,6 +1401,7 @@ void MainWindow::toggleNotificationHub() {
     notification_hub_->anchorToPoint(bell_bottom_right + QPoint(0, 4));
     notification_hub_->show();
     notification_hub_->raise();
+    title_bar_->bellWidget()->setHubOpen(true);
 }
 
 void MainWindow::updateRecordingOverlay() {
@@ -1851,6 +1858,23 @@ bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintpt
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    // A press outside an open Qt::Popup hub closes it (Qt auto-dismiss on
+    // mouse-DOWN). If that press lands on the bell, flag it so the bell's
+    // clicked() (fired on mouse-UP) does not immediately re-open the hub —
+    // giving a clean single-click toggle instead of close-then-reopen.
+    if (event->type() == QEvent::MouseButtonPress && notification_hub_ && notification_hub_->isVisible()) {
+        auto* press = static_cast<QMouseEvent*>(event);
+        if (press->button() == Qt::LeftButton && title_bar_ && title_bar_->bellWidget()) {
+            auto* bell = title_bar_->bellWidget();
+            // Any left-press while the popup hub is open dismisses it — reflect that
+            // on the bell's open-state at once (covers clicking the bell and away).
+            bell->setHubOpen(false);
+            const QRect bell_rect(bell->mapToGlobal(QPoint(0, 0)), bell->size());
+            if (bell_rect.contains(press->globalPosition().toPoint()))
+                hub_just_dismissed_ = true; // bell's clicked() (on release) must not re-open
+        }
+    }
+
     // Intercept mouse presses for the resize border zones.  All zones are
     // HTCLIENT so Qt generates regular QMouseEvents — handle resize here.
     if (event->type() == QEvent::MouseButtonPress && isVisible() && !isMaximized()) {

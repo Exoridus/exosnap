@@ -18,6 +18,13 @@ class NotificationBell : public QToolButton {
         return unread_count_;
     }
 
+    // VG-2: open/closed hub state — drives the QSS [hubOpen="true"] rule.
+    // Call this from wherever the hub panel is shown/hidden (e.g. MainWindow::toggleNotificationHub).
+    void setHubOpen(bool open);
+    bool hubOpen() const {
+        return hub_open_;
+    }
+
   protected:
     void paintEvent(QPaintEvent* event) override;
     void enterEvent(QEnterEvent* event) override;
@@ -29,6 +36,7 @@ class NotificationBell : public QToolButton {
 
     int unread_count_ = 0;
     bool hovered_ = false;
+    bool hub_open_ = false;
 };
 
 } // namespace exosnap::ui::widgets

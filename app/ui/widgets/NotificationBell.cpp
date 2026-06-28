@@ -3,7 +3,9 @@
 #include <QEnterEvent>
 #include <QFont>
 #include <QPainter>
+#include <QPen>
 #include <QRectF>
+#include <QStyle>
 
 #include "../theme/ExoSnapTheme.h"
 #include "../theme/LucideIcon.h"
@@ -26,9 +28,20 @@ void NotificationBell::setUnreadCount(int count) {
     update();
 }
 
+void NotificationBell::setHubOpen(bool open) {
+    if (hub_open_ == open)
+        return;
+    hub_open_ = open;
+    setProperty("hubOpen", open);
+    style()->unpolish(this);
+    style()->polish(this);
+    updateIcon();
+}
+
 void NotificationBell::updateIcon() {
     const auto& t = exosnap::ui::theme::ActiveTheme();
-    const QString color = (unread_count_ > 0 || hovered_) ? QString::fromUtf8(t.ink) : QString::fromUtf8(t.mut);
+    const QString color =
+        (unread_count_ > 0 || hovered_ || hub_open_) ? QString::fromUtf8(t.ink) : QString::fromUtf8(t.mut);
     const qreal dpr = devicePixelRatioF();
     setIcon(exosnap::ui::theme::lucideIcon(QStringLiteral("bell"), color, 17, dpr));
 }
@@ -48,8 +61,9 @@ void NotificationBell::paintEvent(QPaintEvent* event) {
     const int badge_x = width() - badge_w - 1;
     const int badge_y = 2;
 
-    // Badge background (caution)
-    p.setPen(Qt::NoPen);
+    // Badge background (caution) + bg-colored outline ring (VG-12: visual separation from icon)
+    const QColor badge_border_c(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().bg));
+    p.setPen(QPen(badge_border_c, 1.5));
     p.setBrush(QColor(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().caution)));
     p.drawRoundedRect(QRectF(badge_x, badge_y, badge_w, badge_h), 6.5, 6.5);
 
