@@ -710,15 +710,6 @@ WindowEligibility ClassifyWindowForPicker(const WindowPresentation& meta, const 
 } // namespace
 
 bool RecordPage::eventFilter(QObject* watched, QEvent* event) {
-    // Refresh target list when the target picker combo popup opens.
-    if (target_picker_combo_ && watched == target_picker_combo_->view() && event->type() == QEvent::Show) {
-        const bool busy = isSourceSelectionLocked();
-        if (!busy) {
-            enumerateTargets(true);
-        }
-        return false;
-    }
-
     // Grip-area drag on AudioSourceRow widgets (leftmost 36px).
     if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseMove ||
         event->type() == QEvent::MouseButtonRelease) {
@@ -943,95 +934,6 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     // dock (right side, round icon button).  The preview-corner button and shutter
     // flash overlay were removed because they were occluded by the DXGI native HWND.
     cockpit_split_layout_->addWidget(preview_column_, 7);
-
-    capture_header_ = new ui::widgets::SectionRuleHeader("CAPTURE TARGET", content);
-    capture_header_->setMeta(QStringLiteral("DISPLAY1 · 2560×1440 · %1")
-                                 .arg(frameRateLabel(current_frame_rate_num_, current_frame_rate_den_)));
-    capture_header_->setVisible(false);
-
-    auto* cards_row = new QWidget(content);
-    auto* cards_layout = new QHBoxLayout(cards_row);
-    cards_layout->setContentsMargins(0, 0, 0, 0);
-    cards_layout->setSpacing(ui::theme::ExoSnapMetrics::kSpaceSm);
-    monitor_card_ = new ui::widgets::CaptureTargetCard(cards_row);
-    monitor_card_->setTitle("Monitor");
-    window_card_ = new ui::widgets::CaptureTargetCard(cards_row);
-    window_card_->setTitle("Window");
-    region_card_ = new ui::widgets::CaptureTargetCard(cards_row);
-    region_card_->setTitle("Region");
-    region_card_->setSubtitle("Crop area");
-    cards_layout->addWidget(monitor_card_, 1);
-    cards_layout->addWidget(window_card_, 1);
-    cards_layout->addWidget(region_card_, 1);
-    monitor_card_->setAccessibleName("Monitor target");
-    window_card_->setAccessibleName("Window target");
-    region_card_->setAccessibleName("Region target");
-    QWidget::setTabOrder(monitor_card_, window_card_);
-    QWidget::setTabOrder(window_card_, region_card_);
-    cards_row->setVisible(false);
-    layout->addWidget(cards_row);
-
-    target_picker_panel_ = makePanel(content);
-    target_picker_panel_->setObjectName("captureTargetPickerPanel");
-    auto* target_picker_layout = new QVBoxLayout(target_picker_panel_);
-    target_picker_layout->setContentsMargins(14, 12, 14, 12);
-    target_picker_layout->setSpacing(8);
-
-    auto* target_picker_row = new QWidget(target_picker_panel_);
-    auto* target_picker_row_layout = new QHBoxLayout(target_picker_row);
-    target_picker_row_layout->setContentsMargins(0, 0, 0, 0);
-    target_picker_row_layout->setSpacing(10);
-    target_picker_kind_label_ = makeLabel("Display", "captureTargetPickerLabel", target_picker_row);
-    target_picker_combo_ = new QComboBox(target_picker_row);
-    target_picker_combo_->setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
-    target_picker_combo_->setMinimumWidth(260);
-    target_picker_combo_->setMaximumWidth(620);
-    target_picker_combo_->view()->installEventFilter(this);
-    target_refresh_btn_ = new QPushButton("Refresh", target_picker_row);
-    target_refresh_btn_->setProperty("role", "ghost");
-    target_picker_row_layout->addWidget(target_picker_kind_label_);
-    target_picker_row_layout->addWidget(target_picker_combo_, 1);
-    target_picker_row_layout->addWidget(target_refresh_btn_);
-    target_picker_layout->addWidget(target_picker_row);
-
-    target_picker_note_label_ = makeLabel("", "captureTargetPickerNote", target_picker_panel_);
-    target_picker_note_label_->setWordWrap(true);
-    target_picker_note_label_->setVisible(false);
-    target_picker_layout->addWidget(target_picker_note_label_);
-    target_picker_panel_->setVisible(false);
-    layout->addWidget(target_picker_panel_);
-
-    // Region capture options panel (visible only in Region mode)
-    region_options_panel_ = makePanel(content);
-    region_options_panel_->setObjectName("regionOptionsPanel");
-    auto* region_options_layout = new QVBoxLayout(region_options_panel_);
-    region_options_layout->setContentsMargins(14, 12, 14, 12);
-    region_options_layout->setSpacing(10);
-
-    auto* region_row1 = new QWidget(region_options_panel_);
-    auto* region_row1_layout = new QHBoxLayout(region_row1);
-    region_row1_layout->setContentsMargins(0, 0, 0, 0);
-    region_row1_layout->setSpacing(10);
-    region_summary_label_ = makeLabel("No region defined", "captureTargetPickerNote", region_row1);
-    region_summary_label_->setWordWrap(false);
-    region_pick_btn_ = new QPushButton("Pick Region", region_row1);
-    region_pick_btn_->setProperty("role", "ghost");
-    region_row1_layout->addWidget(region_summary_label_, 1);
-    region_row1_layout->addWidget(region_pick_btn_);
-    region_options_layout->addWidget(region_row1);
-
-    select_on_record_check_ =
-        new ui::widgets::ExoCheckBox("Select region when recording starts", region_options_panel_);
-    select_on_record_check_->setCheckable(true);
-    select_on_record_check_->setChecked(true);
-    region_options_layout->addWidget(select_on_record_check_);
-
-    region_options_panel_->setVisible(false);
-    layout->addWidget(region_options_panel_);
-
-    target_combo_ = new QComboBox(content);
-    target_combo_->setVisible(false);
-    target_combo_->setEnabled(false);
 
     audio_settings_header_ = new ui::widgets::SectionRuleHeader("AUDIO SETTINGS", content);
     audio_settings_header_->setMeta("OUTPUT · INPUT · TRACK PREVIEW");
@@ -1505,28 +1407,12 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     root->addWidget(transport_dock_, 0);
 
     auto* combo_wheel_filter = new ui::widgets::ComboBoxWheelFilter(this);
-    combo_wheel_filter->installOn(target_picker_combo_);
     combo_wheel_filter->installOn(mic_device_combo_);
     combo_wheel_filter->installOn(mic_channel_combo_);
 
     updatePreviewHeightClamp();
 
-    connect(monitor_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectMonitorTarget);
-    connect(window_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectWindowTarget);
-    connect(region_card_, &ui::widgets::CaptureTargetCard::clicked, this, &RecordPage::onSelectRegionTarget);
     connect(change_source_btn_, &QPushButton::clicked, this, &RecordPage::onOpenSourcePicker);
-    connect(region_pick_btn_, &QPushButton::clicked, this, [this]() {
-        if (isSourceSelectionLocked())
-            return;
-        ensureRegionOverlay();
-        setInteractionMode(InteractionMode::RegionSelecting);
-        region_overlay_->activateForSelection(selectedMonitorRect(), currentRegionRect());
-    });
-    connect(select_on_record_check_, &QAbstractButton::toggled, this,
-            [this](bool checked) { view_model_.select_on_record = checked; });
-    connect(target_picker_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            &RecordPage::onTargetPickerChanged);
-    connect(target_refresh_btn_, &QPushButton::clicked, this, &RecordPage::onRefreshTargets);
     connect(mic_refresh_btn_, &QPushButton::clicked, this, &RecordPage::populateMicDeviceCombo);
     connect(mic_device_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &RecordPage::onMicDeviceChanged);
@@ -2066,10 +1952,6 @@ void RecordPage::applyCapturePolicy(const PresetCaptureTarget& cap) {
             view_model_.has_region = true;
             view_model_.region = cap.region;
             view_model_.select_on_record = false;
-            if (select_on_record_check_) {
-                QSignalBlocker b(select_on_record_check_);
-                select_on_record_check_->setChecked(false);
-            }
         }
         // Region mode: do NOT clear region — preserve it for future re-enumeration.
     } else {
@@ -2097,8 +1979,6 @@ void RecordPage::applyCapturePolicy(const PresetCaptureTarget& cap) {
         if (kind_changed) {
             rebuildAudioRowWidgets();
         }
-        updateTargetCards();
-        rebuildTargetPicker();
         startPreviewIfIdle();
     }
 
@@ -2369,21 +2249,6 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
         region.height = scenario.region_height;
         view_model_.has_region = region.IsValid();
         view_model_.region = region;
-    }
-
-    if (target_combo_) {
-        QSignalBlocker blocker(target_combo_);
-        target_combo_->clear();
-        target_combo_->addItem(QStringLiteral("[Monitor] Visual Test Display 1"), 0);
-        target_combo_->addItem(QStringLiteral("[Window] Visual Test Window"), 1);
-        target_combo_->setCurrentIndex(0);
-    }
-    if (target_picker_combo_) {
-        QSignalBlocker blocker(target_picker_combo_);
-        target_picker_combo_->clear();
-        target_picker_combo_->addItem(QStringLiteral("[Monitor] Visual Test Display 1"), 0);
-        target_picker_combo_->addItem(QStringLiteral("[Window] Visual Test Window"), 1);
-        target_picker_combo_->setCurrentIndex(0);
     }
 
     using K = recorder_core::AudioSourceKind;
@@ -3159,7 +3024,6 @@ void RecordPage::enumerateTargets(bool preserve_current_selection, bool allow_fa
 
     view_model_.targets = coordinator_->EnumerateTargets();
     view_model_.target_display_names.clear();
-    target_combo_->clear();
 
     monitor_target_indices_.clear();
     window_target_indices_.clear();
@@ -3181,7 +3045,6 @@ void RecordPage::enumerateTargets(bool preserve_current_selection, bool allow_fa
         const QString prefix = monitor ? QStringLiteral("[Monitor] ") : QStringLiteral("[Window] ");
         const QString label = prefix + normalizedTargetLabel(target);
         view_model_.target_display_names.push_back(label.toStdWString());
-        target_combo_->addItem(label);
     }
 
     window_target_indices_ = RecordViewModel::SortWindowTargetIndices(view_model_.targets, window_target_indices_);
@@ -3226,14 +3089,11 @@ void RecordPage::enumerateTargets(bool preserve_current_selection, bool allow_fa
     }
 
     view_model_.selected_target_index = -1;
-    target_combo_->setCurrentIndex(-1);
 
     if (resolved_selection >= 0) {
         syncTargetSelectionToCombo(resolved_selection);
     } else {
         view_model_.ApplyTargetKindPreservingAudio(previous_kind);
-        updateTargetCards();
-        rebuildTargetPicker();
     }
 
     syncCoordinatorTargetContext();
@@ -3244,58 +3104,12 @@ void RecordPage::enumerateTargets(bool preserve_current_selection, bool allow_fa
                                                              .arg(static_cast<int>(window_target_indices_.size())));
 }
 
-void RecordPage::rebuildTargetPicker() {
-    if (!target_picker_kind_label_ || !target_picker_combo_ || !target_refresh_btn_ || !target_picker_note_label_) {
-        return;
-    }
-
-    const bool busy = isSourceSelectionLocked();
-
-    const bool window_mode = view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window;
-    const auto& active_indices = window_mode ? window_target_indices_ : monitor_target_indices_;
-    const bool region_mode = (view_model_.capture_mode == CaptureMode::Region);
-    target_picker_kind_label_->setText(
-        window_mode ? QStringLiteral("Window")
-                    : (region_mode ? QStringLiteral("Source Display") : QStringLiteral("Display")));
-
-    QSignalBlocker picker_blocker(target_picker_combo_);
-    target_picker_combo_->clear();
-    for (const int target_index : active_indices) {
-        if (target_index < 0 || target_index >= static_cast<int>(view_model_.targets.size())) {
-            continue;
-        }
-        const auto& target = view_model_.targets[static_cast<std::size_t>(target_index)];
-        const QString label = window_mode ? windowLabelFromTarget(target) : displayLabelFromTarget(target);
-        target_picker_combo_->addItem(label, target_index);
-    }
-
-    const int selected_item = target_picker_combo_->findData(view_model_.selected_target_index);
-    if (selected_item >= 0) {
-        target_picker_combo_->setCurrentIndex(selected_item);
-    } else if (target_picker_combo_->count() > 0) {
-        target_picker_combo_->setCurrentIndex(0);
-    }
-
-    QString note;
-    if (active_indices.empty()) {
-        note = window_mode ? QStringLiteral("No capturable windows found. Open a window and press Refresh.")
-                           : QStringLiteral("No displays detected. Connect a display and press Refresh.");
-    }
-
-    target_picker_combo_->setEnabled(!busy && !active_indices.empty());
-    target_refresh_btn_->setEnabled(!busy);
-    target_picker_note_label_->setText(note);
-    target_picker_note_label_->setVisible(!note.isEmpty());
-}
-
 void RecordPage::syncTargetSelectionToCombo(int target_index) {
     if (target_index < 0 || target_index >= static_cast<int>(view_model_.targets.size())) {
         return;
     }
 
     if (target_index == view_model_.selected_target_index) {
-        updateTargetCards();
-        rebuildTargetPicker();
         // The capture_mode may have changed (e.g. Region → Display) even though the underlying
         // monitor index is the same.  Always restart the preview so stale crop state is cleared.
         startPreviewIfIdle();
@@ -3309,7 +3123,6 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
     const bool kind_changed = (new_kind != view_model_.audio_ui_state.target_kind);
 
     view_model_.selected_target_index = target_index;
-    target_combo_->setCurrentIndex(target_index);
 
     if (target.kind == recorder_core::CaptureTarget::Kind::Window) {
         window_target_index_ = target_index;
@@ -3329,8 +3142,6 @@ void RecordPage::syncTargetSelectionToCombo(int target_index) {
                                   .arg(normalizedTargetLabel(target))
                                   .arg(kind_changed ? QStringLiteral("yes") : QStringLiteral("no")));
 
-    updateTargetCards();
-    rebuildTargetPicker();
     startPreviewIfIdle();
 }
 
@@ -3678,13 +3489,10 @@ void RecordPage::onSelectMonitorTarget() {
         const bool kind_changed = (view_model_.audio_ui_state.target_kind != capability::CaptureTargetKind::Display);
         view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
         view_model_.selected_target_index = -1;
-        target_combo_->setCurrentIndex(-1);
         diagnostics::AppLog::warning(QStringLiteral("target"),
                                      QStringLiteral("monitor mode selected with no display targets"));
         if (kind_changed)
             emitAudioSettingsChanged();
-        updateTargetCards();
-        rebuildTargetPicker();
         refresh();
         return;
     }
@@ -3705,13 +3513,10 @@ void RecordPage::onSelectWindowTarget() {
         const bool kind_changed = (view_model_.audio_ui_state.target_kind != capability::CaptureTargetKind::Window);
         view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Window);
         view_model_.selected_target_index = -1;
-        target_combo_->setCurrentIndex(-1);
         diagnostics::AppLog::warning(QStringLiteral("target"),
                                      QStringLiteral("window mode selected with no window targets"));
         if (kind_changed)
             emitAudioSettingsChanged();
-        updateTargetCards();
-        rebuildTargetPicker();
         refresh();
         return;
     }
@@ -3738,13 +3543,11 @@ void RecordPage::onSelectRegionTarget() {
     {
         const bool kind_changed = (view_model_.audio_ui_state.target_kind != capability::CaptureTargetKind::Display);
         view_model_.ApplyTargetKindPreservingAudio(capability::CaptureTargetKind::Display);
-        view_model_.select_on_record = select_on_record_check_ ? select_on_record_check_->isChecked() : true;
+        view_model_.select_on_record = true;
         diagnostics::AppLog::info(QStringLiteral("target"), QStringLiteral("region mode selected"));
         if (kind_changed)
             emitAudioSettingsChanged();
     }
-    updateTargetCards();
-    rebuildTargetPicker();
     refresh();
 }
 
@@ -4103,21 +3906,12 @@ void RecordPage::onSourcePickerAccepted(ui::dialogs::SourcePickerDialog::Selecti
             view_model_.has_region = true;
             view_model_.region = region;
             view_model_.select_on_record = false;
-            if (select_on_record_check_) {
-                select_on_record_check_->setChecked(false);
-            }
-            if (region_summary_label_) {
-                region_summary_label_->setText(
-                    QString("%1, %2  —  %3 × %4").arg(region.x).arg(region.y).arg(region.width).arg(region.height));
-            }
             diagnostics::AppLog::info(QStringLiteral("target"),
                                       QStringLiteral("region preset applied: %1 x %2 at %3,%4")
                                           .arg(region.width)
                                           .arg(region.height)
                                           .arg(region.x)
                                           .arg(region.y));
-            updateTargetCards();
-            rebuildTargetPicker();
             // Restart the preview now that capture_mode and region are both set —
             // startPreviewIfIdle inside syncTargetSelectionToCombo ran before the
             // region was stored and would have seen CaptureMode::Monitor.
@@ -4126,9 +3920,6 @@ void RecordPage::onSourcePickerAccepted(ui::dialogs::SourcePickerDialog::Selecti
             return;
         }
 
-        if (select_on_record_check_) {
-            select_on_record_check_->setChecked(selection.select_on_record);
-        }
         view_model_.select_on_record = selection.select_on_record;
         onSelectRegionTarget();
         if (selection.pick_region_now) {
@@ -4235,20 +4026,10 @@ void RecordPage::onRegionSelected(QRect region_virtual_screen) {
                                               .arg(view_model_.selected_target_index));
                 view_model_.selected_target_index = target_idx;
                 monitor_target_index_ = target_idx;
-                if (target_combo_) {
-                    QSignalBlocker blocker(target_combo_);
-                    target_combo_->setCurrentIndex(target_idx);
-                }
-                rebuildTargetPicker();
                 syncCoordinatorTargetContext();
             }
             break;
         }
-    }
-
-    if (region_summary_label_) {
-        region_summary_label_->setText(
-            QString("%1, %2  —  %3 × %4").arg(region.x).arg(region.y).arg(region.width).arg(region.height));
     }
 
     // If we were in RegionSelecting (triggered from onStart), proceed to record.
@@ -4300,29 +4081,6 @@ void RecordPage::doStartRecording(std::optional<recorder_core::CaptureRegion> cr
     syncCoordinatorTargetContext();
     coordinator_->StartRecording(view_model_.targets[static_cast<std::size_t>(idx)], view_model_.audio_ui_state,
                                  crop_region);
-}
-
-void RecordPage::onTargetPickerChanged(int index) {
-    if (index < 0 || !target_picker_combo_) {
-        return;
-    }
-
-    bool ok = false;
-    const int target_index = target_picker_combo_->itemData(index).toInt(&ok);
-    if (!ok) {
-        return;
-    }
-
-    syncTargetSelectionToCombo(target_index);
-    if (!applying_external_config_)
-        emit recordingConfigChanged();
-    refresh();
-}
-
-void RecordPage::onRefreshTargets() {
-    diagnostics::AppLog::info(QStringLiteral("target"), QStringLiteral("refresh requested"));
-    enumerateTargets(true);
-    refresh();
 }
 
 void RecordPage::onAudioRowEnabledChanged(int row_index, bool enabled) {
@@ -5117,21 +4875,8 @@ void RecordPage::refresh() {
                                    : (paused || checking || starting || stopping)
                                        ? ui::widgets::PreviewSurface::FrameTone::Warn
                                        : ui::widgets::PreviewSurface::FrameTone::Ready);
-    QString target_desc = QStringLiteral("No target selected");
-    if (view_model_.selected_target_index >= 0 &&
-        view_model_.selected_target_index < static_cast<int>(view_model_.targets.size())) {
-        const auto& target = view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)];
-        target_desc = normalizedTargetLabel(target);
-        capture_header_->setMeta(QStringLiteral("%1 · %2").arg(
-            target_desc, frameRateLabel(current_frame_rate_num_, current_frame_rate_den_)));
-        preview_surface_->setTopMetaText(QStringLiteral(""));
-    } else {
-        capture_header_->setMeta("NO TARGET");
-        preview_surface_->setTopMetaText(QStringLiteral(""));
-    }
+    preview_surface_->setTopMetaText(QStringLiteral(""));
 
-    updateTargetCards();
-    rebuildTargetPicker();
     updateSourceChip();
     updateAudioControls();
     updateAudioTrackPreview();
@@ -5419,60 +5164,6 @@ void RecordPage::updateResultDisplay() {
 
     result_panel_->style()->unpolish(result_panel_);
     result_panel_->style()->polish(result_panel_);
-}
-
-void RecordPage::updateTargetCards() {
-    const int current = view_model_.selected_target_index;
-    const bool recording = isSourceSelectionLocked();
-    const bool has_selected_target = current >= 0 && current < static_cast<int>(view_model_.targets.size());
-    const bool selected_monitor = has_selected_target && view_model_.targets[static_cast<std::size_t>(current)].kind ==
-                                                             recorder_core::CaptureTarget::Kind::Monitor;
-    const bool selected_window = has_selected_target && view_model_.targets[static_cast<std::size_t>(current)].kind ==
-                                                            recorder_core::CaptureTarget::Kind::Window;
-    const bool monitor_mode = view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Display;
-    const bool window_mode = view_model_.audio_ui_state.target_kind == capability::CaptureTargetKind::Window;
-
-    const bool region_mode = (view_model_.capture_mode == CaptureMode::Region);
-    const bool any_monitor_selected =
-        !recording && !region_mode && (selected_monitor || (!has_selected_target && monitor_mode));
-    const bool window_selected =
-        !recording && !region_mode && (selected_window || (!has_selected_target && window_mode));
-
-    monitor_card_->setSelected(any_monitor_selected);
-    window_card_->setSelected(window_selected);
-    if (region_card_)
-        region_card_->setSelected(!recording && region_mode);
-
-    // Region controls are surfaced in the source picker dialog in this slice.
-    if (region_options_panel_)
-        region_options_panel_->setVisible(false);
-
-    // Subtitle for the monitor card: use the currently active monitor target
-    const int active_monitor_idx = monitor_target_index_;
-    if (active_monitor_idx >= 0 && active_monitor_idx < static_cast<int>(view_model_.targets.size())) {
-        const QString display_name =
-            displayLabelFromTarget(view_model_.targets[static_cast<std::size_t>(active_monitor_idx)]);
-        const QString suffix =
-            monitor_target_indices_.size() > 1
-                ? QStringLiteral("  [%1/%2]")
-                      .arg(static_cast<int>(std::find(monitor_target_indices_.begin(), monitor_target_indices_.end(),
-                                                      active_monitor_idx) -
-                                            monitor_target_indices_.begin()) +
-                           1)
-                      .arg(static_cast<int>(monitor_target_indices_.size()))
-                : QString{};
-        monitor_card_->setSubtitle(display_name + suffix);
-    } else {
-        monitor_card_->setSubtitle("No display detected");
-    }
-
-    const int active_window_idx = window_target_index_;
-    if (active_window_idx >= 0 && active_window_idx < static_cast<int>(view_model_.targets.size())) {
-        window_card_->setSubtitle(
-            windowLabelFromTarget(view_model_.targets[static_cast<std::size_t>(active_window_idx)]));
-    } else {
-        window_card_->setSubtitle("No capturable windows");
-    }
 }
 
 void RecordPage::updateSourceChip() {

@@ -232,8 +232,6 @@ class RecordPage : public QWidget {
     void onSelectRegionTarget();
     void onOpenSourcePicker();
     void onSourcePickerAccepted(ui::dialogs::SourcePickerDialog::SelectionResult result);
-    void onTargetPickerChanged(int index);
-    void onRefreshTargets();
     void onRegionSelected(QRect region_virtual_screen);
     void onRegionCancelled();
     void onSourceDataRequested();
@@ -270,7 +268,6 @@ class RecordPage : public QWidget {
     void updateResultDisplay();
     void updateTransportDock();
     void onDockSourceToggle(const QString& key);
-    void updateTargetCards();
     void updateResponsiveLayout();
     void updateAudioMeterLevels();
     void updateAudioControls();
@@ -287,7 +284,6 @@ class RecordPage : public QWidget {
     // a vanished target becomes unresolved (selected_target_index = -1) instead
     // of auto-picking the next monitor/window.
     void enumerateTargets(bool preserve_current_selection, bool allow_fallback_to_other_target = true);
-    void rebuildTargetPicker();
     void pushSourceDataToPicker();
     void onAudioRowEnabledChanged(int row_index, bool enabled);
     void onAudioRowMergeChanged(int row_index, bool merge);
@@ -350,31 +346,17 @@ class RecordPage : public QWidget {
     // Injected by MainWindow before first show; forwarded to the coordinator.
     RecoveryManifestStore* recovery_manifest_store_ = nullptr;
 
-    QComboBox* target_combo_ = nullptr;
     QBoxLayout* cockpit_split_layout_ = nullptr;
     QWidget* preview_column_ = nullptr;
     QWidget* preview_surface_host_ = nullptr;
-    QFrame* target_picker_panel_ = nullptr;
-    QLabel* target_picker_kind_label_ = nullptr;
-    QComboBox* target_picker_combo_ = nullptr;
-    QPushButton* target_refresh_btn_ = nullptr;
-    QLabel* target_picker_note_label_ = nullptr;
     ui::widgets::PreviewSurface* preview_surface_ = nullptr;
-    ui::widgets::SectionRuleHeader* capture_header_ = nullptr;
     QWidget* source_row_ = nullptr;
     QFrame* source_chip_panel_ = nullptr;
     QLabel* source_name_label_ = nullptr;
     QLabel* source_lock_label_ = nullptr;
     QPushButton* change_source_btn_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
-    ui::widgets::CaptureTargetCard* monitor_card_ = nullptr;
-    ui::widgets::CaptureTargetCard* window_card_ = nullptr;
-    ui::widgets::CaptureTargetCard* region_card_ = nullptr;
-    QPushButton* region_pick_btn_ = nullptr;
-    QLabel* region_summary_label_ = nullptr;
-    QWidget* region_options_panel_ = nullptr;
     ui::widgets::RegionSelectionOverlay* region_overlay_ = nullptr;
-    ui::widgets::ExoCheckBox* select_on_record_check_ = nullptr;
     ui::widgets::SectionRuleHeader* audio_settings_header_ = nullptr;
     QWidget* audio_rows_container_ = nullptr;
     QVBoxLayout* audio_rows_layout_ = nullptr;
