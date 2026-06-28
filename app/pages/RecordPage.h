@@ -277,7 +277,6 @@ class RecordPage : public QWidget {
     void onDeleteFile();
     void onRecentItemOpen(int history_index);
     void onRecentItemOpenFolder(int history_index);
-    void setOutputSettingsSummary(const OutputSettingsModel& settings);
     void populateMicDeviceCombo();
     void syncMicMeterService();
     void syncSysMeterService();

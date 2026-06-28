@@ -1257,7 +1257,6 @@ void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
     if (!settings.output_folder.empty()) {
         view_model_.output_path_display = settings.output_folder.wstring();
     }
-    setOutputSettingsSummary(settings);
     if (coordinator_) {
         coordinator_->SetOutputSettings(settings);
         coordinator_->RevalidateCapabilities();
@@ -1274,25 +1273,9 @@ void RecordPage::setOutputSettings(const OutputSettingsModel& settings) {
 }
 
 void RecordPage::setActiveProfileName(const std::string& profile_name) {
+    // The rail summary label was removed (v10); retain only the live side effects
+    // (stored profile name + coordinator target-context sync).
     active_profile_name_ = std::wstring(profile_name.begin(), profile_name.end());
-    const bool has_selected_target = view_model_.selected_target_index >= 0 &&
-                                     view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
-    const QString target =
-        has_selected_target
-            ? normalizedTargetLabel(view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)])
-            : QStringLiteral("No source");
-    QString profile_summary = QString::fromStdWString(active_profile_name_).trimmed();
-    if (profile_summary.isEmpty()) {
-        profile_summary = QStringLiteral("Preset");
-    }
-    profile_summary.replace(QLatin1Char('_'), QLatin1Char(' '));
-    const QString summary = QStringLiteral("%1 · %2 · %3 · %4")
-                                .arg(target, videoCodecLabel(current_video_codec_),
-                                     frameRateLabel(current_frame_rate_num_, current_frame_rate_den_), profile_summary);
-    if (rail_summary_label_) {
-        rail_summary_label_->setText(summary);
-        rail_summary_label_->setToolTip(summary);
-    }
     syncCoordinatorTargetContext();
 }
 
@@ -1571,7 +1554,6 @@ void RecordPage::setVideoSettings(const VideoSettingsModel& settings) {
         view_model_.SetState(coordinator_->State());
         view_model_.capability_status_text = coordinator_->CapabilityStatusText();
     }
-    setOutputSettingsSummary(current_output_settings_);
     refresh();
 }
 
@@ -1989,32 +1971,6 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
     emitChromeState();
 }
 #endif
-
-void RecordPage::setOutputSettingsSummary(const OutputSettingsModel& settings) {
-    const QString container = containerLabel(settings.container);
-    const QString video = videoCodecLabel(settings.video_codec);
-    const QString audio = audioCodecLabel(settings.audio_codec);
-    const bool has_selected_target = view_model_.selected_target_index >= 0 &&
-                                     view_model_.selected_target_index < static_cast<int>(view_model_.targets.size());
-    const QString target =
-        has_selected_target
-            ? normalizedTargetLabel(view_model_.targets[static_cast<std::size_t>(view_model_.selected_target_index)])
-            : QStringLiteral("No source");
-    QString profile_summary = QString::fromStdWString(active_profile_name_).trimmed();
-    if (profile_summary.isEmpty()) {
-        profile_summary = QStringLiteral("Preset");
-    }
-    profile_summary.replace(QLatin1Char('_'), QLatin1Char(' '));
-    const QString timing = frameRateLabel(current_frame_rate_num_, current_frame_rate_den_) + QStringLiteral(" · ") +
-                           (current_cfr_ ? QStringLiteral("CFR") : QStringLiteral("VFR"));
-    const QString output = resolutionLabel(settings.resolution);
-    const QString preset_summary = QStringLiteral("%1 · %2 · %3 · %4").arg(target, video, timing, profile_summary);
-
-    if (rail_summary_label_) {
-        rail_summary_label_->setText(preset_summary);
-        rail_summary_label_->setToolTip(preset_summary);
-    }
-}
 
 void RecordPage::openOutputFolder() {
     const QString result_path = QString::fromStdWString(view_model_.result_output_path).trimmed();
