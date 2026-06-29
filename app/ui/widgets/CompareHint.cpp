@@ -70,19 +70,25 @@ CompareHint::CompareHint(const QString& compare_key, const QString& current_valu
     // Click toggles pin state.
     connect(this, &QToolButton::clicked, this, &CompareHint::onClicked);
 
-    // Hover debounce: showing the Qt::Popup fires a synthetic leave on this button,
-    // and the cursor often travels into the popover; deferring the hide decision to
-    // this timer (which checks the real cursor position against both the button and
-    // the popover) stops the show/hide flicker.
+    // Hover-out via polling, not leave events. The popover is a Qt::Popup, which grabs the
+    // mouse the instant it shows — after that this button no longer receives reliable
+    // enter/leave events, so a single leave-driven hide would leave the popover stuck open
+    // whenever the cursor drifts away without passing back through the button. Instead a
+    // repeating timer (started in showPopover, stopped in hidePopover) polls the real cursor
+    // position against the button and the popover and hides once the cursor has left both.
     hover_timer_ = new QTimer(this);
-    hover_timer_->setSingleShot(true);
-    hover_timer_->setInterval(140);
+    hover_timer_->setSingleShot(false);
+    hover_timer_->setInterval(120); // ms — poll cadence while the popover is open
     connect(hover_timer_, &QTimer::timeout, this, [this]() {
-        if (popover_pinned_)
+        if (!popover_ || !popover_->isVisible()) {
+            hover_timer_->stop();
             return;
+        }
+        if (popover_pinned_ || hasFocus())
+            return; // pinned or keyboard-focused: closed by click / focus-out, not hover-out
         const QPoint gp = QCursor::pos();
         const bool over_button = QRect(mapToGlobal(QPoint(0, 0)), size()).contains(gp);
-        const bool over_popover = popover_ && popover_->isVisible() && popover_->geometry().contains(gp);
+        const bool over_popover = popover_->geometry().contains(gp);
         if (!over_button && !over_popover)
             hidePopover();
     });
@@ -120,23 +126,19 @@ void CompareHint::updateIcon(bool highlighted) {
 
 void CompareHint::enterEvent(QEnterEvent* event) {
     QToolButton::enterEvent(event);
-    if (hover_timer_)
-        hover_timer_->stop();
     popover_hovered_ = true;
     updateIcon(true);
     if (ui::compare::compareData(compare_key_))
-        showPopover();
+        showPopover(); // starts the hover poll timer
 }
 
 void CompareHint::leaveEvent(QEvent* event) {
     QToolButton::leaveEvent(event);
     popover_hovered_ = false;
     updateIcon(popover_pinned_ || (popover_ && popover_->isVisible()));
-    // Defer the hide: the cursor may be moving into the popover, and opening the
-    // popover itself fires a synthetic leave here. The hover timer hides only once
-    // the cursor has truly left both the button and the popover.
-    if (!popover_pinned_ && hover_timer_)
-        hover_timer_->start();
+    // No hide here: the poll timer (running while the popover is open) detects the
+    // cursor leaving both the button and the popover. Hiding on the bare leave would
+    // fight the popover's mouse grab — the very leave it synthesises when it opens.
 }
 
 void CompareHint::focusInEvent(QFocusEvent* event) {
@@ -151,21 +153,6 @@ void CompareHint::focusOutEvent(QFocusEvent* event) {
     updateIcon(false);
     if (!popover_pinned_)
         hidePopover();
-}
-
-bool CompareHint::eventFilter(QObject* watched, QEvent* event) {
-    // Keep the popover open while the cursor is inside it; restart the hide timer
-    // when the cursor leaves it (mirrors the button's enter/leave debounce).
-    if (watched == popover_) {
-        if (event->type() == QEvent::Enter) {
-            if (hover_timer_)
-                hover_timer_->stop();
-        } else if (event->type() == QEvent::Leave) {
-            if (!popover_pinned_ && hover_timer_)
-                hover_timer_->start();
-        }
-    }
-    return QToolButton::eventFilter(watched, event);
 }
 
 // ── Slots ─────────────────────────────────────────────────────────────────────
@@ -195,7 +182,6 @@ void CompareHint::buildPopover() {
     popover_ = new QWidget(nullptr, Qt::Popup | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
     popover_->setFixedWidth(kPopoverWidth);
     popover_->setAttribute(Qt::WA_TranslucentBackground, false);
-    popover_->installEventFilter(this); // track hover enter/leave for the debounce
 
     // Outer frame styling via setStyleSheet (inline, not via QSS role, because the
     // popover is a top-level window and does not inherit the app stylesheet).
@@ -444,9 +430,13 @@ void CompareHint::showPopover() {
     popover_->show();
     popover_->raise();
     updateIcon(true);
+    if (hover_timer_)
+        hover_timer_->start(); // poll the cursor while open so hover-out closes it
 }
 
 void CompareHint::hidePopover() {
+    if (hover_timer_)
+        hover_timer_->stop();
     if (popover_)
         popover_->hide();
     if (!popover_hovered_ && !popover_pinned_)
@@ -459,13 +449,16 @@ void CompareHint::repositionPopover() {
 
     popover_->adjustSize();
 
-    // Anchor: horizontally centered under the glyph button, with a 6px gap.
+    // Anchor: the popover's top-left corner hangs off the glyph's bottom-left, with a 6px
+    // gap — a tooltip-style corner anchor rather than a centred dropdown (which read as a
+    // floating panel detached from the i). A small inset lets the glyph sit just inside the
+    // popover's leading edge instead of dead-flush with it.
+    constexpr int kCornerInset = 6; // px the popover's left edge sits left of the glyph
     const QPoint glyphGlobal = mapToGlobal(QPoint(0, 0));
-    const int glyphCenterX = glyphGlobal.x() + width() / 2;
     const int popW = popover_->width();
     const int popH = popover_->height();
 
-    int x = glyphCenterX - popW / 2;
+    int x = glyphGlobal.x() - kCornerInset;
     int y = glyphGlobal.y() + height() + 6;
 
     // Flip/clamp within the screen the glyph is actually on — not always the primary

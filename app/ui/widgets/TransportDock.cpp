@@ -6,6 +6,7 @@
 
 #include <QAction>
 #include <QByteArray>
+#include <QCursor>
 #include <QEvent>
 #include <QFrame>
 #include <QGridLayout>
@@ -15,7 +16,9 @@
 #include <QMenu>
 #include <QPainter>
 #include <QPixmap>
+#include <QPoint>
 #include <QPushButton>
+#include <QRect>
 #include <QSize>
 #include <QString>
 #include <QStyle>
@@ -361,17 +364,28 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     // The menu opens when the cursor enters the chevron; a short leave-delay
     // prevents accidental dismiss when the user moves toward the menu items.
     // Clicking a menu item starts the recording with the chosen countdown delay.
+    // Poll the real cursor position while the menu is open (started in openChevronMenu,
+    // stopped on aboutToHide). The menu pops up ABOVE the chevron and, being a Qt::Popup,
+    // grabs the mouse the instant it opens — which fires a synthetic mouse-leave on the
+    // chevron and then starves it of further enter/leave updates. underMouse() is therefore
+    // UNRELIABLE here (it reports false even while the cursor rests on the chevron); a
+    // single-shot leave timer would close the menu, the chevron would re-fire Enter, and the
+    // menu would reopen — looping. Polling QCursor::pos() against the real geometry of both
+    // the chevron and the menu closes only when the cursor has truly left both.
     chevron_leave_timer_ = new QTimer(this);
-    chevron_leave_timer_->setSingleShot(true);
-    chevron_leave_timer_->setInterval(300); // ms — generous enough for mouse travel
+    chevron_leave_timer_->setSingleShot(false);
+    chevron_leave_timer_->setInterval(120); // ms — poll cadence while the menu is open
     connect(chevron_leave_timer_, &QTimer::timeout, this, [this]() {
-        // Close only when the cursor is over neither the menu nor the chevron. The
-        // menu pops up ABOVE the chevron, so opening it fires a native mouse-leave on
-        // the chevron immediately; without also checking the chevron the menu would
-        // close-then-reopen in a loop while the cursor simply rests on the chevron.
-        if (chevron_menu_ && !chevron_menu_->underMouse() && !record_chevron_btn_->underMouse()) {
-            chevron_menu_->close();
+        if (!chevron_menu_) {
+            chevron_leave_timer_->stop();
+            return;
         }
+        const QPoint gp = QCursor::pos();
+        const bool over_chevron =
+            QRect(record_chevron_btn_->mapToGlobal(QPoint(0, 0)), record_chevron_btn_->size()).contains(gp);
+        const bool over_menu = chevron_menu_->isVisible() && chevron_menu_->geometry().contains(gp);
+        if (!over_chevron && !over_menu)
+            chevron_menu_->close();
     });
     record_chevron_btn_->installEventFilter(this);
 
@@ -442,14 +456,14 @@ void TransportDock::applyState() {
 bool TransportDock::eventFilter(QObject* watched, QEvent* event) {
     if (watched == record_chevron_btn_) {
         if (event->type() == QEvent::Enter) {
-            // Stop any pending close and open the menu if enabled and not already open.
-            chevron_leave_timer_->stop();
+            // Open the menu if enabled and not already open; openChevronMenu starts the
+            // poll timer that handles closing. We deliberately do NOT close on Leave here:
+            // the menu grabs the mouse and fires a synthetic leave the instant it opens, so
+            // a leave-driven close would loop. The poll timer closes once the cursor truly
+            // leaves both the chevron and the menu.
             if (record_chevron_btn_->isEnabled() && (!chevron_menu_ || !chevron_menu_->isVisible())) {
                 openChevronMenu();
             }
-        } else if (event->type() == QEvent::Leave) {
-            // Delay close so the cursor has time to travel into the menu.
-            chevron_leave_timer_->start();
         }
     }
     return QFrame::eventFilter(watched, event);
@@ -462,7 +476,7 @@ void TransportDock::openChevronMenu() {
     chevron_menu_ = menu;
     connect(menu, &QObject::destroyed, this, [this]() { chevron_menu_ = nullptr; });
 
-    // Stop the leave-timer when the mouse enters the menu so it does not close.
+    // Stop polling once the menu is closing (item chosen, Esc, or outside click).
     connect(menu, &QMenu::aboutToHide, this, [this]() { chevron_leave_timer_->stop(); });
 
     struct {
@@ -486,6 +500,10 @@ void TransportDock::openChevronMenu() {
     // Pop up above the chevron button.
     const QPoint pos = record_chevron_btn_->mapToGlobal(QPoint(0, 0));
     menu->popup(QPoint(pos.x(), pos.y() - menu->sizeHint().height() - 4));
+
+    // Start polling the cursor so the menu closes once the cursor leaves both it and the
+    // chevron (the menu's mouse grab makes the chevron's own leave events unreliable).
+    chevron_leave_timer_->start();
 }
 
 void TransportDock::setSavingProgress(float /*fraction*/) {

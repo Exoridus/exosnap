@@ -46,7 +46,6 @@ class CompareHint : public QToolButton {
     void leaveEvent(QEvent* event) override;
     void focusInEvent(QFocusEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;
-    bool eventFilter(QObject* watched, QEvent* event) override;
 
   private slots:
     void onClicked();
@@ -64,7 +63,7 @@ class CompareHint : public QToolButton {
     QWidget* popover_ = nullptr; // owned, frameless popup
     bool popover_pinned_ = false;
     bool popover_hovered_ = false;
-    QTimer* hover_timer_ = nullptr; // debounces hover-out so the popover does not flicker
+    QTimer* hover_timer_ = nullptr; // polls the cursor while open; hides on true hover-out
 };
 
 } // namespace exosnap::ui::widgets
