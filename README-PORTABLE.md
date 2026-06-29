@@ -1,4 +1,4 @@
-# ExoSnap 0.7.0 — Portable Release
+# ExoSnap 0.8.0 — Portable Release
 
 Thanks for trying ExoSnap. This file is the quick-start guide for the portable
 Windows build.
@@ -11,25 +11,25 @@ multi-track audio routing, a webcam overlay, and built-in diagnostics.
 
 ## Release status
 
-This is **ExoSnap 0.7.0**, a **pre-v1 Windows preview**. It is not the final
+This is **ExoSnap 0.8.0**, a **pre-v1 Windows preview**. It is not the final
 1.0 release. Settings, presets, and recording-history file formats may change in
 incompatible ways before 1.0.0. See `KNOWN_LIMITATIONS.md` for the full current
 support boundary.
 
-New in 0.7.0: **HEVC** video (NVENC) in MKV and MP4 (`hvc1` sample entry);
-**10-bit** output (P010) for HEVC Main10 and AV1 — SDR at higher precision, no
-HDR transfer; **BT.709** color metadata on every MKV/MP4 plus a selectable
-Y'CbCr **color range** (Full/Limited); a modal **recording-error dialog** with an
-opt-in report; and a **v10 design pass** across the whole app, including a theme
-picker with four live preview cards and single-click source selection. HEVC,
-`hvc1`, and 10-bit encoder paths are functional but not yet validated across all
-NVIDIA GPU generations — use H.264 or AV1 if you hit issues.
+New in 0.8.0: **diagnostics as a feature** — a typed **`FixAction`** model
+(Auto / Assisted / External) so each detected issue carries its safest remedy; a
+**pre-flight readiness gate** that catches blockers before recording starts;
+**live pipeline monitoring** (frame drops, A/V drift, disk-fill ETA) with
+root-cause correlation such as VRR-vs-CFR judder; a **post-flight report card**;
+an opt-in, elevation-gated **PresentMon** provider; and consent-gated **in-app
+update** checks. Plus settings polish: reliable hover popovers, corner-anchored
+compare hints, and a de-nested Hotkeys card.
 
 ## System requirements
 
 - Windows 10 or 11, 64-bit (Windows 11 recommended).
 - An **NVIDIA GPU with supported NVENC** capability (RTX 20-series or newer
-  recommended) and a current NVIDIA display driver. ExoSnap 0.7.0 requires
+  recommended) and a current NVIDIA display driver. ExoSnap 0.8.0 requires
   NVIDIA NVENC for video encoding; AMD, Intel, and software encoding are not
   supported in this release.
 - Microsoft Visual C++ 2022 x64 runtime (usually already installed). If the app
@@ -38,7 +38,7 @@ NVIDIA GPU generations — use H.264 or AV1 if you hit issues.
 
 ## How to launch
 
-1. Extract the entire `ExoSnap-0.7.0-windows-x64-portable` folder from the ZIP to a
+1. Extract the entire `ExoSnap-0.8.0-windows-x64-portable` folder from the ZIP to a
    location of your choice.
 2. Run `exosnap.exe` from the extracted folder.
 
@@ -102,10 +102,10 @@ are MKV-only.
 ## Verifying your download
 
 A SHA-256 checksum is published next to the ZIP as
-`ExoSnap-0.7.0-windows-x64-portable.sha256`. To verify integrity in PowerShell:
+`ExoSnap-0.8.0-windows-x64-portable.sha256`. To verify integrity in PowerShell:
 
 ```powershell
-Get-FileHash .\ExoSnap-0.7.0-windows-x64-portable.zip -Algorithm SHA256
+Get-FileHash .\ExoSnap-0.8.0-windows-x64-portable.zip -Algorithm SHA256
 ```
 
 The printed hash must match the value in the `.sha256` file. The checksum

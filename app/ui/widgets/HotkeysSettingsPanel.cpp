@@ -37,28 +37,20 @@ constexpr int kClusterSpacing = 6;
 } // namespace
 
 HotkeysSettingsPanel::HotkeysSettingsPanel(QWidget* parent) : QWidget(parent) {
+    // No frame of our own — the embedding card is the only frame (canon: no
+    // card-in-card). The rows go straight into this widget's layout, separated by
+    // the same hairline rule the other settings cards use.
     auto* root_layout = new QVBoxLayout(this);
     root_layout->setContentsMargins(0, 0, 0, 0);
-    root_layout->setSpacing(M::kSpaceSm);
+    root_layout->setSpacing(0);
 
-    // Header row: "Reset all" button aligned to the right.
-    auto* header_row = new QHBoxLayout();
-    header_row->setContentsMargins(0, 0, 0, 0);
-    header_row->setSpacing(M::kSpaceSm);
-    header_row->addStretch(1);
-
-    reset_all_btn_ = new QPushButton(QStringLiteral("Reset all to defaults"), this);
+    // "Reset all": created + wired here (it owns the editing-lock enable state) but
+    // intentionally NOT added to a layout — the embedding card reparents it into its
+    // header via resetAllButton() so it reads as a header badge, not a stray row.
+    reset_all_btn_ = new QPushButton(QStringLiteral("Reset all"), this);
     reset_all_btn_->setObjectName(QStringLiteral("settingsHkResetAllBtn"));
     reset_all_btn_->setProperty("role", "ghost");
-    header_row->addWidget(reset_all_btn_, 0, Qt::AlignVCenter);
-    root_layout->addLayout(header_row);
-
-    // Active hotkeys panel (panel-styled frame, same as HotkeysPage active panel).
-    auto* panel = new QFrame(this);
-    panel->setProperty("panelRole", "panel");
-    auto* panel_layout = new QVBoxLayout(panel);
-    panel_layout->setContentsMargins(0, 0, 0, 0);
-    panel_layout->setSpacing(0);
+    reset_all_btn_->setCursor(Qt::PointingHandCursor);
 
     // Active actions table (indices 0-4 matching GlobalHotkeyService HotkeyAction enum).
     const struct {
@@ -74,10 +66,9 @@ HotkeysSettingsPanel::HotkeysSettingsPanel(QWidget* parent) : QWidget(parent) {
 
     for (int i = 0; i < kActiveActionCount; ++i) {
         if (i > 0)
-            panel_layout->addWidget(makePanelRowSeparator(panel));
-        buildRow(i, QString::fromUtf8(kActiveActions[i].action), kActiveActions[i].binding, panel_layout, panel);
+            root_layout->addWidget(makePanelRowSeparator(this));
+        buildRow(i, QString::fromUtf8(kActiveActions[i].action), kActiveActions[i].binding, root_layout, this);
     }
-    root_layout->addWidget(panel);
 
     connect(reset_all_btn_, &QPushButton::clicked, this, &HotkeysSettingsPanel::resetAll);
 }
@@ -125,8 +116,10 @@ void HotkeysSettingsPanel::buildRow(int index, const QString& action, const QKey
     row_frame->setProperty("rowRole", "hotkeyRow");
 
     // Single-line row: action label | fixed state-slot | fixed control cluster.
+    // No horizontal padding — the embedding card supplies it (canon: rows are
+    // flush to the card's content edge, separated only by hairlines).
     auto* row_layout = new QHBoxLayout(row_frame);
-    row_layout->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
+    row_layout->setContentsMargins(0, M::kSpaceMd, 0, M::kSpaceMd);
     row_layout->setSpacing(M::kSpaceMd);
 
     auto* action_label = new QLabel(action, row_frame);

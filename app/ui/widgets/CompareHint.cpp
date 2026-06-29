@@ -1,6 +1,7 @@
 #include "CompareHint.h"
 
 #include <QApplication>
+#include <QCursor>
 #include <QEnterEvent>
 #include <QFocusEvent>
 #include <QFrame>
@@ -11,6 +12,7 @@
 #include <QPainter>
 #include <QScreen>
 #include <QSize>
+#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -67,6 +69,29 @@ CompareHint::CompareHint(const QString& compare_key, const QString& current_valu
 
     // Click toggles pin state.
     connect(this, &QToolButton::clicked, this, &CompareHint::onClicked);
+
+    // Hover-out via polling, not leave events. The popover is a Qt::Popup, which grabs the
+    // mouse the instant it shows — after that this button no longer receives reliable
+    // enter/leave events, so a single leave-driven hide would leave the popover stuck open
+    // whenever the cursor drifts away without passing back through the button. Instead a
+    // repeating timer (started in showPopover, stopped in hidePopover) polls the real cursor
+    // position against the button and the popover and hides once the cursor has left both.
+    hover_timer_ = new QTimer(this);
+    hover_timer_->setSingleShot(false);
+    hover_timer_->setInterval(120); // ms — poll cadence while the popover is open
+    connect(hover_timer_, &QTimer::timeout, this, [this]() {
+        if (!popover_ || !popover_->isVisible()) {
+            hover_timer_->stop();
+            return;
+        }
+        if (popover_pinned_ || hasFocus())
+            return; // pinned or keyboard-focused: closed by click / focus-out, not hover-out
+        const QPoint gp = QCursor::pos();
+        const bool over_button = QRect(mapToGlobal(QPoint(0, 0)), size()).contains(gp);
+        const bool over_popover = popover_->geometry().contains(gp);
+        if (!over_button && !over_popover)
+            hidePopover();
+    });
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -104,15 +129,16 @@ void CompareHint::enterEvent(QEnterEvent* event) {
     popover_hovered_ = true;
     updateIcon(true);
     if (ui::compare::compareData(compare_key_))
-        showPopover();
+        showPopover(); // starts the hover poll timer
 }
 
 void CompareHint::leaveEvent(QEvent* event) {
     QToolButton::leaveEvent(event);
     popover_hovered_ = false;
     updateIcon(popover_pinned_ || (popover_ && popover_->isVisible()));
-    if (!popover_pinned_)
-        hidePopover();
+    // No hide here: the poll timer (running while the popover is open) detects the
+    // cursor leaving both the button and the popover. Hiding on the bare leave would
+    // fight the popover's mouse grab — the very leave it synthesises when it opens.
 }
 
 void CompareHint::focusInEvent(QFocusEvent* event) {
@@ -404,9 +430,13 @@ void CompareHint::showPopover() {
     popover_->show();
     popover_->raise();
     updateIcon(true);
+    if (hover_timer_)
+        hover_timer_->start(); // poll the cursor while open so hover-out closes it
 }
 
 void CompareHint::hidePopover() {
+    if (hover_timer_)
+        hover_timer_->stop();
     if (popover_)
         popover_->hide();
     if (!popover_hovered_ && !popover_pinned_)
@@ -419,17 +449,25 @@ void CompareHint::repositionPopover() {
 
     popover_->adjustSize();
 
-    // Anchor: horizontally centered under the glyph button, with a 6px gap.
+    // Anchor: the popover's top-left corner hangs off the glyph's bottom-left, with a 6px
+    // gap — a tooltip-style corner anchor rather than a centred dropdown (which read as a
+    // floating panel detached from the i). A small inset lets the glyph sit just inside the
+    // popover's leading edge instead of dead-flush with it.
+    constexpr int kCornerInset = 6; // px the popover's left edge sits left of the glyph
     const QPoint glyphGlobal = mapToGlobal(QPoint(0, 0));
-    const int glyphCenterX = glyphGlobal.x() + width() / 2;
     const int popW = popover_->width();
     const int popH = popover_->height();
 
-    int x = glyphCenterX - popW / 2;
+    int x = glyphGlobal.x() - kCornerInset;
     int y = glyphGlobal.y() + height() + 6;
 
-    // Flip above if not enough room below (use primary screen geometry).
-    QScreen* screen = QApplication::primaryScreen();
+    // Flip/clamp within the screen the glyph is actually on — not always the primary
+    // monitor (that placed the popover on monitor 1 when the window was on monitor 2).
+    QScreen* screen = this->screen();
+    if (!screen)
+        screen = QGuiApplication::screenAt(glyphGlobal);
+    if (!screen)
+        screen = QApplication::primaryScreen();
     if (screen) {
         const QRect avail = screen->availableGeometry();
         if (y + popH > avail.bottom())

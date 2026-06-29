@@ -8,6 +8,7 @@
 #include "nvenc_video_encoder.h"
 #include "session_internal.h"
 
+#include <recorder_core/frame_pacing.h>
 #include <recorder_core/logging/logging.h>
 #include <recorder_core/packet_types.h>
 #include <recorder_core/webcam_placement.h>
@@ -1451,6 +1452,46 @@ void VideoThread::Run() {
 
         winrt::com_ptr<ID3D11Texture2D> pendingWgcTex;
 
+        // Present-cadence tap state (DXGI OD only): previous frame's LastPresentTime (QPC).
+        uint64_t cfrLastPresentQpc = 0;
+
+        // --- Phase-correct CFR pacing (DXGI-OD + Smooth mode only, ADR 0035) ---
+        // Ring of captured BGRA frames keyed by their source present-QPC. Each CFR
+        // slot then encodes the frame whose present time is nearest the slot's ideal
+        // present time, instead of newest-at-tick. WGC capture and Newest mode keep
+        // the single-texture (odCapturedTex / pendingWgcTex) path verbatim.
+        struct CaptureRingEntry {
+            winrt::com_ptr<ID3D11Texture2D> tex;
+            uint64_t presentQpc = 0; // raw QPC of source present; 0 == empty / consumed slot
+        };
+        std::vector<CaptureRingEntry> captureRing;
+        size_t ringHead = 0;                // next physical slot to overwrite (round-robin)
+        uint64_t lastEmittedPresentQpc = 0; // present-QPC of the last frame handed to the encoder
+        bool phaseRingHasFrame = false;     // true once any live entry exists since last reset
+        bool usePhaseCorrect = useOdCapture && m_state.config.cfr_pacing_mode == FramePacingMode::Smooth;
+        if (usePhaseCorrect) {
+            const uint32_t outFps = (m_state.config.frame_rate_den > 0)
+                                        ? (m_state.config.frame_rate_num / m_state.config.frame_rate_den)
+                                        : 0u;
+            // Use the actual refresh rate from the OD descriptor (available after odSrc.Open()).
+            // Non-fatal: if 0, ComputePacingRingSize falls back to a safe ring of 8.
+            const size_t ringN = ComputePacingRingSize(odSrc.RefreshRateHz(), outFps);
+            D3D11_TEXTURE2D_DESC ringDesc{};
+            odCapturedTex->GetDesc(&ringDesc); // mirror the OD capture texture exactly
+            captureRing.resize(ringN);
+            for (auto& entry : captureRing) {
+                HRESULT ringHr = d3dDevice->CreateTexture2D(&ringDesc, nullptr, entry.tex.put());
+                if (FAILED(ringHr)) {
+                    // Non-fatal: disable phase-correct for the session and fall back to
+                    // the single-texture newest-at-tick path. Recording must never fail
+                    // because the pacing ring could not be allocated.
+                    captureRing.clear();
+                    usePhaseCorrect = false;
+                    break;
+                }
+            }
+        }
+
         while (!m_state.stop_requested.load()) {
             if (!useOdCapture) {
                 MSG msg{};
@@ -1468,7 +1509,9 @@ void VideoThread::Run() {
             }
 
             if (useOdCapture) {
-                // DXGI OD: drain all available frames, copy each to odCapturedTex, keep newest.
+                // DXGI OD: drain all available frames. Newest-at-tick copies into
+                // odCapturedTex; phase-correct copies into the present-QPC ring.
+                const auto acq_t0 = std::chrono::steady_clock::now();
                 while (true) {
                     ID3D11Texture2D* rawTex = nullptr;
                     DXGI_OUTDUPL_FRAME_INFO info{};
@@ -1478,7 +1521,34 @@ void VideoThread::Run() {
                             sourceLost = true;
                         break;
                     }
-                    d3dContext->CopyResource(odCapturedTex.get(), rawTex);
+                    // Only count capture/coalesce while actively recording — frames the
+                    // backend produces during pause are intentionally discarded, not drops.
+                    const bool diag_recording = !m_state.pause_requested.load();
+                    if (usePhaseCorrect) {
+                        // Round-robin write into the ring keyed by source present-QPC.
+                        CaptureRingEntry& entry = captureRing[ringHead];
+                        // Evicting a fresh, never-emitted frame is a genuine drop.
+                        if (entry.presentQpc != 0 && entry.presentQpc > lastEmittedPresentQpc) {
+                            ++droppedFrames;
+                            if (diag_recording)
+                                m_state.diagnostics.OnFrameDroppedCoalesced();
+                        }
+                        d3dContext->CopyResource(entry.tex.get(), rawTex);
+                        uint64_t entryPresentQpc = static_cast<uint64_t>(info.LastPresentTime.QuadPart);
+                        if (entryPresentQpc == 0) {
+                            // No source present timestamp this acquire; stamp with the
+                            // current QPC (same clock domain) so the frame stays
+                            // selectable and monotonic and is never lost.
+                            LARGE_INTEGER nowQpc;
+                            QueryPerformanceCounter(&nowQpc);
+                            entryPresentQpc = static_cast<uint64_t>(nowQpc.QuadPart);
+                        }
+                        entry.presentQpc = entryPresentQpc;
+                        ringHead = (ringHead + 1) % captureRing.size();
+                        phaseRingHasFrame = true;
+                    } else {
+                        d3dContext->CopyResource(odCapturedTex.get(), rawTex);
+                    }
                     rawTex->Release();
                     if (info.PointerShapeBufferSize > 0 && m_state.config.capture_cursor) {
                         if (odSrc.GetFramePointerShape(&odCursorShapeInfo, odCursorBitmap))
@@ -1490,20 +1560,39 @@ void VideoThread::Run() {
                         odCursorPosY = info.PointerPosition.Position.y;
                     }
                     odSrc.ReleaseFrame();
-                    // Only count capture/coalesce while actively recording — frames the
-                    // backend produces during pause are intentionally discarded, not drops.
-                    const bool diag_recording = !m_state.pause_requested.load();
                     if (diag_recording)
                         m_state.diagnostics.OnFrameCaptured();
-                    if (odCapturedTexValid) {
-                        ++droppedFrames;
-                        if (diag_recording)
-                            m_state.diagnostics.OnFrameDroppedCoalesced();
+                    // Present-cadence tap (VRR/CFR judder correlation). DXGI OD exposes the
+                    // source's last present timestamp (QPC) plus the coalesced-update count.
+                    // O(1): derive the inter-present delta and hand raw numbers to the
+                    // aggregator. Skip null/non-advancing presents — never fabricate a value.
+                    if (diag_recording && info.LastPresentTime.QuadPart != 0 && qpcFreq != 0) {
+                        const auto presentQpc = static_cast<uint64_t>(info.LastPresentTime.QuadPart);
+                        if (cfrLastPresentQpc != 0 && presentQpc > cfrLastPresentQpc) {
+                            const double intervalMs = static_cast<double>(presentQpc - cfrLastPresentQpc) * 1000.0 /
+                                                      static_cast<double>(qpcFreq);
+                            m_state.diagnostics.OnSourcePresentInterval(std::chrono::steady_clock::now(), intervalMs,
+                                                                        info.AccumulatedFrames);
+                        }
+                        cfrLastPresentQpc = presentQpc;
                     }
-                    odCapturedTexValid = true;
+                    if (!usePhaseCorrect) {
+                        if (odCapturedTexValid) {
+                            ++droppedFrames;
+                            if (diag_recording)
+                                m_state.diagnostics.OnFrameDroppedCoalesced();
+                        }
+                        odCapturedTexValid = true;
+                    }
+                }
+                if (!m_state.pause_requested.load()) {
+                    const auto acq_t1 = std::chrono::steady_clock::now();
+                    m_state.diagnostics.OnAcquireLatency(
+                        acq_t1, std::chrono::duration<double, std::milli>(acq_t1 - acq_t0).count());
                 }
             } else {
                 // WGC: drain frame pool — keep latest (always drain, even when paused)
+                const auto acq_t0 = std::chrono::steady_clock::now();
                 try {
                     while (true) {
                         auto frame = framePool.TryGetNextFrame();
@@ -1538,6 +1627,11 @@ void VideoThread::Run() {
                     }
                 } catch (...) {
                 }
+                if (!m_state.pause_requested.load()) {
+                    const auto acq_t1 = std::chrono::steady_clock::now();
+                    m_state.diagnostics.OnAcquireLatency(
+                        acq_t1, std::chrono::duration<double, std::milli>(acq_t1 - acq_t0).count());
+                }
             }
 
             // Pause: discard frames and track paused duration for epoch adjustment on resume
@@ -1549,6 +1643,13 @@ void VideoThread::Run() {
                 }
                 pendingWgcTex = nullptr;
                 odCapturedTexValid = false;
+                if (usePhaseCorrect) {
+                    // Discard frames captured during pause; the epoch shifts on resume.
+                    for (auto& entry : captureRing)
+                        entry.presentQpc = 0;
+                    ringHead = 0;
+                    phaseRingHasFrame = false;
+                }
                 Sleep(1);
                 continue;
             }
@@ -1558,7 +1659,8 @@ void VideoThread::Run() {
             }
 
             // Set epoch on first frame arrival (OD or WGC)
-            const bool hasNewFrame = useOdCapture ? odCapturedTexValid : (pendingWgcTex != nullptr);
+            const bool odHasFrame = usePhaseCorrect ? phaseRingHasFrame : odCapturedTexValid;
+            const bool hasNewFrame = useOdCapture ? odHasFrame : (pendingWgcTex != nullptr);
             if (!videoEpochSet && hasNewFrame) {
                 epochQpc100ns = Qpc100ns(qpcFreq);
                 videoEpochSet = true;
@@ -1591,8 +1693,55 @@ void VideoThread::Run() {
                 bool frameWritten = false;
 
                 // Determine source texture for this tick
-                ID3D11Texture2D* rawSourceTex =
-                    useOdCapture ? (odCapturedTexValid ? odCapturedTex.get() : nullptr) : pendingWgcTex.get();
+                ID3D11Texture2D* rawSourceTex = nullptr;
+                if (usePhaseCorrect) {
+                    // Linearise the round-robin ring to ascending (oldest -> newest)
+                    // present order; ringHead points at the oldest physical slot.
+                    std::vector<uint64_t> presentQpcsAscending;
+                    std::vector<size_t> liveIndexToRingSlot;
+                    const size_t ringN = captureRing.size();
+                    presentQpcsAscending.reserve(ringN);
+                    liveIndexToRingSlot.reserve(ringN);
+                    for (size_t i = 0; i < ringN; ++i) {
+                        const size_t phys = (ringHead + i) % ringN;
+                        if (captureRing[phys].presentQpc != 0) {
+                            presentQpcsAscending.push_back(captureRing[phys].presentQpc);
+                            liveIndexToRingSlot.push_back(phys);
+                        }
+                    }
+                    // slotQpc: this tick's ideal present time in the raw-QPC present-time
+                    // domain (same clock as info.LastPresentTime). The epoch is tracked
+                    // in 100ns; convert epoch + relative offset back to QPC ticks.
+                    const uint64_t slotRel100ns = cfr_frame_idx * frame_interval_100ns;
+                    const uint64_t epochRawQpc =
+                        (epochQpc100ns / 10000000ULL) * qpcFreq + (epochQpc100ns % 10000000ULL) * qpcFreq / 10000000ULL;
+                    const uint64_t slotRelRawQpc =
+                        (slotRel100ns / 10000000ULL) * qpcFreq + (slotRel100ns % 10000000ULL) * qpcFreq / 10000000ULL;
+                    const uint64_t slotQpc = epochRawQpc + slotRelRawQpc;
+
+                    const PacingDecision dec = SelectFrameForSlot(presentQpcsAscending, slotQpc, lastEmittedPresentQpc,
+                                                                  FramePacingMode::Smooth);
+                    // Fresh entries older than the chosen one were skipped: real drops.
+                    droppedFrames += dec.newly_dropped;
+                    for (uint32_t d = 0; d < dec.newly_dropped; ++d)
+                        m_state.diagnostics.OnFrameDroppedCoalesced();
+                    if (dec.emit) {
+                        rawSourceTex = captureRing[liveIndexToRingSlot[dec.index]].tex.get();
+                        lastEmittedPresentQpc = presentQpcsAscending[dec.index];
+                        // Consume the emitted entry and every skipped/older one so they
+                        // are not re-selected or counted again as eviction drops.
+                        for (auto& entry : captureRing) {
+                            if (entry.presentQpc != 0 && entry.presentQpc <= lastEmittedPresentQpc)
+                                entry.presentQpc = 0;
+                        }
+                    } else {
+                        // No fresh frame near this slot -> existing duplicate / CFR-skip path.
+                        rawSourceTex = nullptr;
+                    }
+                } else {
+                    rawSourceTex =
+                        useOdCapture ? (odCapturedTexValid ? odCapturedTex.get() : nullptr) : pendingWgcTex.get();
+                }
 
                 if (rawSourceTex != nullptr) {
                     const WebcamOverlayLive overlay = m_state.SnapshotWebcamOverlay();
@@ -1626,8 +1775,12 @@ void VideoThread::Run() {
                         stream.Enable = TRUE;
                         stream.pInputSurface = inputView.get();
 
+                        const auto vp_t0 = std::chrono::steady_clock::now();
                         hr = videoContext->VideoProcessorBlt(videoProcessor.get(), videoOutputViews[slot].get(), 0, 1,
                                                              &stream);
+                        const auto vp_t1 = std::chrono::steady_clock::now();
+                        m_state.diagnostics.OnVpbltSubmit(
+                            vp_t1, std::chrono::duration<double, std::milli>(vp_t1 - vp_t0).count());
                         inputView = nullptr;
 
                         if (SUCCEEDED(hr)) {
@@ -1703,6 +1856,9 @@ void VideoThread::Run() {
         bool vfr_was_paused = false;
         uint64_t vfr_pause_start_100ns = 0;
 
+        // Present-cadence tap state (DXGI OD only): previous frame's LastPresentTime (QPC).
+        uint64_t vfrLastPresentQpc = 0;
+
         while (!m_state.stop_requested.load()) {
             if (!useOdCapture) {
                 MSG msg{};
@@ -1758,6 +1914,17 @@ void VideoThread::Run() {
                     const bool diag_recording = !m_state.pause_requested.load();
                     if (diag_recording)
                         m_state.diagnostics.OnFrameCaptured();
+                    // Present-cadence tap (VRR/CFR judder correlation), mirroring the CFR path.
+                    if (diag_recording && info.LastPresentTime.QuadPart != 0 && qpcFreq != 0) {
+                        const auto presentQpc = static_cast<uint64_t>(info.LastPresentTime.QuadPart);
+                        if (vfrLastPresentQpc != 0 && presentQpc > vfrLastPresentQpc) {
+                            const double intervalMs = static_cast<double>(presentQpc - vfrLastPresentQpc) * 1000.0 /
+                                                      static_cast<double>(qpcFreq);
+                            m_state.diagnostics.OnSourcePresentInterval(std::chrono::steady_clock::now(), intervalMs,
+                                                                        info.AccumulatedFrames);
+                        }
+                        vfrLastPresentQpc = presentQpc;
+                    }
                     if (odCapturedTexValid) {
                         ++droppedFrames;
                         if (diag_recording)
@@ -1876,8 +2043,12 @@ void VideoThread::Run() {
                         stream.Enable = TRUE;
                         stream.pInputSurface = inputView.get();
 
+                        const auto vp_t0 = std::chrono::steady_clock::now();
                         hr = videoContext->VideoProcessorBlt(videoProcessor.get(), videoOutputViews[slot].get(), 0, 1,
                                                              &stream);
+                        const auto vp_t1 = std::chrono::steady_clock::now();
+                        m_state.diagnostics.OnVpbltSubmit(
+                            vp_t1, std::chrono::duration<double, std::milli>(vp_t1 - vp_t0).count());
 
                         inputView = nullptr;
                         latestTex = nullptr;

@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFont>
 #include <QFrame>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -28,7 +29,9 @@
 #include <QVBoxLayout>
 
 #include "../ui/theme/ExoSnapMetrics.h"
+#include "../ui/theme/ExoSnapPalette.h"
 #include "../ui/theme/ExoSnapTheme.h"
+#include "../ui/theme/LucideIcon.h"
 #include "../ui/widgets/ExoCheckBox.h"
 #include "../ui/widgets/SectionRuleHeader.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
@@ -201,11 +204,33 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     segmented_layout->addWidget(issues_btn);
     left_layout->addWidget(segmented, 0);
 
-    search_edit_ = new QLineEdit(left_cluster);
+    // DESIGN-FIDELITY: suite-diag.jsx:174 — the search field is a pill with a leading
+    // 14px magnifier then the input. QLineEdit::addAction(LeadingPosition) mis-positions
+    // its icon under the page's heavy QSS (it rendered clipped at the field's bottom-left),
+    // so compose the pill explicitly: an icon QLabel + a frameless QLineEdit inside a
+    // styled container. The layout then centres the icon trivially.
+    auto* search_container = new QWidget(left_cluster);
+    search_container->setObjectName(QStringLiteral("logSearchContainer"));
+    auto* search_layout = new QHBoxLayout(search_container);
+    search_layout->setContentsMargins(14, 0, 12, 0);
+    search_layout->setSpacing(8);
+
+    auto* search_icon = new QLabel(search_container);
+    search_icon->setObjectName(QStringLiteral("logSearchIcon"));
+    search_icon->setPixmap(ui::theme::lucidePixmap(QStringLiteral("search"),
+                                                   QString::fromUtf8(ui::theme::ExoSnapPalette::kText2), 14,
+                                                   search_container->devicePixelRatioF()));
+    search_icon->setFixedSize(14, 14);
+    search_icon->setScaledContents(true);
+
+    search_edit_ = new QLineEdit(search_container);
     search_edit_->setObjectName(QStringLiteral("logSearchEdit"));
     search_edit_->setPlaceholderText(QStringLiteral("Search category or message"));
     search_edit_->setClearButtonEnabled(true);
-    left_layout->addWidget(search_edit_, 1);
+
+    search_layout->addWidget(search_icon, 0, Qt::AlignVCenter);
+    search_layout->addWidget(search_edit_, 1);
+    left_layout->addWidget(search_container, 1);
 
     auto_scroll_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Auto-scroll"), left_cluster);
     auto_scroll_check_->setObjectName(QStringLiteral("logAutoScrollToggle"));
@@ -266,7 +291,7 @@ LogsPage::LogsPage(QWidget* parent) : QWidget(parent) {
     folder_link_->setTextInteractionFlags(Qt::TextBrowserInteraction);
     folder_link_->setOpenExternalLinks(false);
     folder_link_->setCursor(Qt::PointingHandCursor);
-    folder_link_->setText(QStringLiteral("%LOCALAPPDATA%\\ExoSnap\\logs"));
+    folder_link_->setText(QStringLiteral("%LOCALAPPDATA%\\ExoSnap\\logs."));
     footnote_row->addWidget(folder_link_, 0);
     footnote_row->addStretch(1);
 
@@ -595,12 +620,18 @@ void LogsPage::insertEntry(const LogEntry& entry) {
         cursor.insertText(entry.timestamp.toString(QStringLiteral("yyyy-MM-ddTHH:mm:ss.zzz")));
     }
 
-    // Level — coloured by severity.  Padded to [WARNING] width (9 chars) so the
-    // category column always starts on the same character position.
+    // Level — coloured by severity, rendered a touch smaller than the message so it
+    // reads as a quieter secondary lane (v10: level ~10px vs the ~11.5px message base).
+    // Padded to [WARNING] width (7 chars) so the category column always starts on the
+    // same character position (~64px lane).
     {
         // WARNING is the widest label (7 chars); pad all labels to 7 inside the brackets.
         const QString label = AppLog::severityLabel(entry.severity).leftJustified(7, QLatin1Char(' '));
-        cursor.setCharFormat(sev_format);
+        QTextCharFormat level_format = sev_format;
+        QFont level_font(QStringLiteral("IBM Plex Mono"));
+        level_font.setPixelSize(10);
+        level_format.setFont(level_font, QTextCharFormat::FontPropertiesSpecifiedOnly);
+        cursor.setCharFormat(level_format);
         cursor.insertText(QStringLiteral(" [") + label + QStringLiteral("]"));
     }
 
@@ -657,7 +688,9 @@ void LogsPage::updateActionState() {
             const QFileInfo fi(path);
             const QString display = fi.dir().dirName() + QStringLiteral("/") + fi.fileName();
             const QString elided = folder_link_->fontMetrics().elidedText(display, Qt::ElideMiddle, 320);
-            folder_link_->setText(QStringLiteral("<a href='folder'>%1</a>").arg(elided));
+            // Trailing full stop sits outside the <a> anchor so it ends the sentence
+            // without becoming part of the clickable link.
+            folder_link_->setText(QStringLiteral("<a href='folder'>%1</a>.").arg(elided));
             folder_link_->setToolTip(path);
         }
     }
@@ -670,12 +703,12 @@ void LogsPage::updateStatusLabel(const QString& feedback) {
     const QString search_part =
         search_query_.isEmpty() ? QStringLiteral("no search") : QStringLiteral("search \"%1\"").arg(search_query_);
     // #11: Show only filename + parent dir in status; full path in footer link tooltip.
-    QString text = QStringLiteral("Showing %1 of %2 entries | %3 | %4")
+    QString text = QStringLiteral("Showing %1 of %2 entries \xc2\xb7 %3 \xc2\xb7 %4") // " · " middle dot
                        .arg(visible_entries_.size())
                        .arg(entries_.size())
                        .arg(activeFilterName(), search_part);
     if (!feedback.isEmpty())
-        text += QStringLiteral(" | %1").arg(feedback);
+        text += QStringLiteral(" \xc2\xb7 %1").arg(feedback); // " · " middle dot
     status_label_->setText(text);
 }
 

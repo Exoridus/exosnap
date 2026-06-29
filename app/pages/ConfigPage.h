@@ -123,7 +123,20 @@ class ConfigPage : public QWidget {
     void setShowNotifications(bool show);
     void setKeepRunningInTray(bool keep);
     void setShowQuickControls(bool show);
+    // ADR 0033: seeds the "Present & tearing diagnostics" opt-in toggle from
+    // persisted settings (no signal emitted).
+    void setPresentDiagnosticsOptIn(bool on);
     void setThemeId(const QString& theme_id);
+
+    // Drives the visible Updates card (ADR 0034 Phase A). state is one of
+    // "checking" | "uptodate" | "available" | "error". When "available",
+    // available_version fills the "Update to vX.Y" action; on "error", detail
+    // is shown. last_checked is a human string ("Just now" / "Never").
+    void setUpdateStatus(const QString& state, const QString& available_version, const QString& last_checked,
+                         const QString& detail = QString());
+    // Seeds the "Check for updates automatically" toggle from persisted settings
+    // (no signal emitted).
+    void setAutoUpdateCheck(bool on);
 
     // Reactive device-change handlers (driven by MainWindow from the three notifiers).
     // These preserve selection state and never emit settings-changed or dirty the preset.
@@ -153,12 +166,24 @@ class ConfigPage : public QWidget {
     // enumeration and no duplicate devices.
     void audioRescanRequested();
 
+    // ---- Updates card signals (ADR 0034 Phase A) ----
+    // Manual "Check for updates" press; MainWindow flags this as a user-initiated
+    // check so the resulting available-state does NOT also raise a notification.
+    void checkForUpdatesRequested();
+    // Primary action while an update is available ("Update to vX.Y"). Phase A
+    // hands off to the releases page; Phase B starts the in-app download.
+    void updatePrimaryActionRequested();
+    // "Check for updates automatically" toggle changed.
+    void autoUpdateCheckToggled(bool enabled);
+
     // SETTINGS-TIERS-P3: presence + appearance signals (moved from AdvancedPage).
     void showOverlayChanged(bool show);
     void showDiagnosticsOverlayChanged(bool show);
     void showNotificationsChanged(bool show);
     void keepRunningInTrayChanged(bool keep);
     void showQuickControlsChanged(bool show);
+    // ADR 0033: emitted when the user toggles the present-diagnostics opt-in.
+    void presentDiagnosticsOptInToggled(bool enabled);
     void themeIdChanged(const QString& theme_id);
 
     // ---- Preset management signals ----
@@ -222,6 +247,9 @@ class ConfigPage : public QWidget {
     // Syncs the colour-range combo to the model. NOT capability-gated — both Full
     // and Limited are always valid; only the recording lock disables it.
     void updateVideoColorRangeControl();
+    // Syncs the frame-pacing combo to the model. Not capability-gated — both modes
+    // are always valid; only the recording lock disables it.
+    void updateFramePacingControl();
     void updateAudioCodecChoices();
     void updateFormatDisplay();
     void updateCompatCallout();
@@ -280,14 +308,11 @@ class ConfigPage : public QWidget {
     QBoxLayout* columns_layout_ = nullptr;      // host for the two-column card grid
     QBoxLayout* output_split_layout_ = nullptr; // inner field/help split inside Output card
 
-    QButtonGroup* container_group_ = nullptr;
-    QPushButton* mkv_radio_ = nullptr;
-    QPushButton* webm_radio_ = nullptr;
-    QPushButton* mp4_radio_ = nullptr;
+    // v10/Canon: Container is a dropdown (SSelect), not a segmented button group.
+    QComboBox* container_combo_ = nullptr;
     QComboBox* video_codec_combo_ = nullptr;
     QComboBox* audio_codec_combo_ = nullptr;
     QComboBox* profile_combo_ = nullptr;
-    QLabel* format_display_label_ = nullptr;
 
     // D6: CompareHint pointers for setCurrentValue sync
     ui::widgets::CompareHint* container_compare_hint_ = nullptr;
@@ -297,7 +322,7 @@ class ConfigPage : public QWidget {
     ui::widgets::CompareHint* timing_compare_hint_ = nullptr;
     ui::widgets::CompareHint* resolution_compare_hint_ = nullptr;
 
-    // D6: compat callout widgets (replaces format_display_label_ visually)
+    // D6: compat callout widgets (the visible format summary + warning)
     QFrame* compat_callout_widget_ = nullptr;
     QLabel* callout_text_ = nullptr;
     QLabel* compat_ok_label_ = nullptr;
@@ -308,9 +333,8 @@ class ConfigPage : public QWidget {
     QPushButton* quality_segment_small_ = nullptr;
     QPushButton* quality_segment_balanced_ = nullptr;
     QPushButton* quality_segment_high_ = nullptr;
-    QButtonGroup* timing_group_ = nullptr;
-    QPushButton* timing_cfr_btn_ = nullptr;
-    QPushButton* timing_vfr_btn_ = nullptr;
+    // v10/Canon: Frame timing is a dropdown (SSelect), not a segmented button group.
+    QComboBox* timing_combo_ = nullptr;
     ui::widgets::ExoToggle* cursor_check_ = nullptr;
 
     QLabel* audio_summary_label_ = nullptr;
@@ -408,12 +432,13 @@ class ConfigPage : public QWidget {
 
     // SETTINGS-TIERS-R1 / D6: Expert mode toggle (ExoToggle in D6 header zone).
     ui::widgets::ExoToggle* expert_mode_toggle_ = nullptr;
+    QLabel* expert_mode_label_ = nullptr;   // "Expert mode" label (mut -> accent when on)
+    QWidget* expert_warn_banner_ = nullptr; // amber banner above grid, visible only in expert mode
     bool expert_mode_enabled_ = false;
     // Wave 2: split recording controls moved out of expander; now expert-gated section.
     QWidget* split_expert_section_ = nullptr;
 
-    // Wave 2: Part B — Quality row widget (promoted from local var) and CQ precision spinbox.
-    QWidget* quality_row_widget_ = nullptr;    // the standard 3-segment quality row
+    // Wave 2: Part B — CQ precision spinbox row.
     QWidget* quality_expert_widget_ = nullptr; // CQ spinbox row shown in expert mode
     QSpinBox* quality_cq_spin_ = nullptr;      // precision CQ input (range 1–51)
     QLabel* quality_cq_tier_label_ = nullptr;  // S3: "· High / Balanced / Small / Custom" tier label
@@ -427,6 +452,8 @@ class ConfigPage : public QWidget {
     ui::widgets::ExoToggle* notifications_check_ = nullptr;
     ui::widgets::ExoToggle* keep_in_tray_check_ = nullptr;
     ui::widgets::ExoToggle* quick_controls_check_ = nullptr;
+    // ADR 0033: present & tearing diagnostics opt-in (elevation-gated).
+    ui::widgets::ExoToggle* present_diag_check_ = nullptr;
     // THEME-SLICE-1: theme picker (replaces accent_combo_).
     QButtonGroup* theme_button_group_ = nullptr;
     QWidget* theme_picker_widget_ = nullptr;
@@ -439,6 +466,11 @@ class ConfigPage : public QWidget {
     QWidget* hotkeys_panel_ = nullptr; // card wrapper (for search filtering + scrollToSection)
     // Updates card (right column, between Presence and Appearance).
     QWidget* updates_panel_ = nullptr;
+    // ADR 0034 Phase A: live Updates-card controls.
+    ui::widgets::ExoToggle* updates_auto_toggle_ = nullptr;
+    QLabel* updates_status_label_ = nullptr;
+    QPushButton* updates_action_btn_ = nullptr;
+    QString updates_available_version_; // last advertised "vX.Y" (Available state)
 
     // v10 split: the old "Format & encoding" mega-card is split into
     // "Container & codecs" (fmt_panel_) and "Quality & timing" (quality_panel_).
@@ -456,7 +488,8 @@ class ConfigPage : public QWidget {
     // PS-PHASE-C: Expert Format section — rate control (CQ/VBR/CBR) + bitrate + placeholders.
     QWidget* fmt_expert_section_ = nullptr; // container for rate control, bitrate, and Format placeholders
     QWidget* rate_control_row_widget_ = nullptr;
-    QButtonGroup* rate_control_group_ = nullptr;
+    // v10/Canon: Rate control is a dropdown (SSelect), not a segmented button group.
+    QComboBox* rate_control_combo_ = nullptr;
     QWidget* bitrate_row_widget_ = nullptr;
     QSpinBox* bitrate_kbps_spin_ = nullptr;
     // Video bit depth (0.7.0 — S7): 8-bit / 10-bit selector, capability-gated.
@@ -465,6 +498,9 @@ class ConfigPage : public QWidget {
     // Colour range (0.7.0): Full (PC) / Limited (TV) selector. Never gated.
     QWidget* video_color_range_row_ = nullptr;
     QComboBox* video_color_range_combo_ = nullptr;
+    // Frame pacing (ADR 0035 Slice 2): Smooth / Newest selector. Never gated.
+    QWidget* frame_pacing_row_ = nullptr;
+    QComboBox* frame_pacing_combo_ = nullptr;
 
     // PS-PHASE-C: Expert Audio section — mic gain, channel mode, bitrate, Opus params + placeholders.
     QWidget* audio_expert_section_ = nullptr;

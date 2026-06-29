@@ -73,9 +73,18 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     interval_observed_ = false;
     interval_window_.Clear();
 
+    present_observed_ = false;
+    present_interval_window_.Clear();
+    present_coalesce_window_.Clear();
+
+    acquire_observed_ = false;
+    acquire_window_.Clear();
+
     compositor_window_.Clear();
     frames_composed_ = 0;
     compositor_active_ = false;
+    vpblt_observed_ = false;
+    vpblt_window_.Clear();
 
     frames_submitted_ = 0;
     forced_keyframes_ = 0;
@@ -95,6 +104,8 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     mux_packets_ = 0;
     disk_bytes_written_ = 0;
     write_window_.Clear();
+    mux_process_observed_ = false;
+    mux_window_.Clear();
     segment_index_ = 0;
     segment_count_ = 0;
     finalizations_ = 0;
@@ -125,6 +136,14 @@ void PipelineDiagnosticsAggregator::Reset(uint64_t generation, const Diagnostics
     sustain_disk_ = 0;
     last_dropped_total_ = 0;
     last_audio_disc_ = 0;
+
+    latest_video_pts_ms_ = 0.0;
+    latest_audio_pts_ms_ = 0.0;
+    have_video_pts_ = false;
+    have_audio_pts_ = false;
+
+    free_bytes_ = 0;
+    free_bytes_known_ = false;
 }
 
 void PipelineDiagnosticsAggregator::SetThresholds(const DiagnosticsThresholds& thresholds) {
@@ -165,6 +184,17 @@ void PipelineDiagnosticsAggregator::OnObservedFrameInterval(time_point now, doub
     interval_window_.Add(now, ms);
 }
 
+void PipelineDiagnosticsAggregator::OnSourcePresentInterval(time_point now, double interval_ms,
+                                                            uint32_t accumulated_frames) noexcept {
+    std::lock_guard lk(mutex_);
+    present_observed_ = true;
+    present_interval_window_.Add(now, interval_ms);
+    // AccumulatedFrames can be 0 for cursor-only updates; clamp to >=1 so the coalescing
+    // average reflects "presents per acquire" without being dragged toward zero.
+    const double frames = accumulated_frames > 0 ? static_cast<double>(accumulated_frames) : 1.0;
+    present_coalesce_window_.Add(now, frames);
+}
+
 void PipelineDiagnosticsAggregator::OnCompositorSubmit(time_point now, double ms, bool pass_ran) noexcept {
     std::lock_guard lk(mutex_);
     compositor_active_ = pass_ran;
@@ -172,6 +202,24 @@ void PipelineDiagnosticsAggregator::OnCompositorSubmit(time_point now, double ms
         ++frames_composed_;
         compositor_window_.Add(now, ms);
     }
+}
+
+void PipelineDiagnosticsAggregator::OnAcquireLatency(time_point now, double ms) noexcept {
+    std::lock_guard lk(mutex_);
+    acquire_observed_ = true;
+    acquire_window_.Add(now, ms);
+}
+
+void PipelineDiagnosticsAggregator::OnVpbltSubmit(time_point now, double ms) noexcept {
+    std::lock_guard lk(mutex_);
+    vpblt_observed_ = true;
+    vpblt_window_.Add(now, ms);
+}
+
+void PipelineDiagnosticsAggregator::OnMuxLatency(time_point now, double ms) noexcept {
+    std::lock_guard lk(mutex_);
+    mux_process_observed_ = true;
+    mux_window_.Add(now, ms);
 }
 
 void PipelineDiagnosticsAggregator::OnEncodeSubmitted() noexcept {
@@ -284,6 +332,24 @@ void PipelineDiagnosticsAggregator::SetSplitPending(bool pending) noexcept {
     split_pending_ = pending;
 }
 
+void PipelineDiagnosticsAggregator::OnVideoPts(double ms) noexcept {
+    std::lock_guard lk(mutex_);
+    latest_video_pts_ms_ = ms;
+    have_video_pts_ = true;
+}
+
+void PipelineDiagnosticsAggregator::OnAudioPts(double ms) noexcept {
+    std::lock_guard lk(mutex_);
+    latest_audio_pts_ms_ = ms;
+    have_audio_pts_ = true;
+}
+
+void PipelineDiagnosticsAggregator::UpdateFreeDiskBytes(uint64_t free_bytes) noexcept {
+    std::lock_guard lk(mutex_);
+    free_bytes_ = free_bytes;
+    free_bytes_known_ = true;
+}
+
 // ---- publish --------------------------------------------------------------
 
 RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_point now, const SessionStats& stats,
@@ -330,6 +396,30 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
         cap.interval_observed = MetricAvailability::Unavailable;
     }
 
+    if (acquire_observed_) {
+        const RollingTimeWindow::Aggregate a = acquire_window_.Compute(now);
+        cap.acquire_latest_ms = a.latest;
+        cap.acquire_average_ms = a.average;
+        cap.acquire_peak_ms = a.peak;
+        cap.acquire_availability = (a.count > 0) ? MetricAvailability::Available : MetricAvailability::Unavailable;
+    }
+
+    // ---- Present cadence (VRR/CFR judder correlation) ----
+    // DXGI OD only (present_observed_ stays false for WGC). Gated by warm-up and a minimum
+    // sample count so brief scheduler/QPC jitter at session start is not mis-read as judder.
+    // The 2 s rolling window naturally expires stale spikes. Default stays Unavailable.
+    constexpr std::size_t kMinPresentSamples = 8;
+    if (present_observed_ && elapsed_seconds >= thresholds_.warmup_seconds) {
+        const RollingTimeWindow::Aggregate pres = present_interval_window_.Compute(now);
+        const RollingTimeWindow::Aggregate coal = present_coalesce_window_.Compute(now);
+        if (pres.count >= kMinPresentSamples) {
+            cap.source_present_interval_ms = pres.average;
+            cap.source_present_jitter_ms = (pres.peak > pres.average) ? (pres.peak - pres.average) : 0.0;
+            cap.source_coalesce_ratio = (coal.count > 0) ? coal.average : 1.0;
+            cap.present_cadence_availability = MetricAvailability::Available;
+        }
+    }
+
     // ---- Compositor (CPU submission timing only) ----
     const RollingTimeWindow::Aggregate comp = compositor_window_.Compute(now);
     s.compositor.active = compositor_active_;
@@ -337,6 +427,15 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     s.compositor.average_ms = comp.average;
     s.compositor.peak_ms = comp.peak;
     s.compositor.frames_composed = frames_composed_;
+
+    if (vpblt_observed_) {
+        const RollingTimeWindow::Aggregate vp = vpblt_window_.Compute(now);
+        s.compositor.vpblt_latest_ms = vp.latest;
+        s.compositor.vpblt_average_ms = vp.average;
+        s.compositor.vpblt_peak_ms = vp.peak;
+        s.compositor.vpblt_availability =
+            (vp.count > 0) ? MetricAvailability::Available : MetricAvailability::Unavailable;
+    }
 
     // ---- Encoder ----
     EncoderDiagnostics& enc = s.video_encoder;
@@ -408,6 +507,14 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
     // The reorder window / segment concept only exists for the streaming Matroska writer.
     mux.availability = cfg_.split_supported ? MetricAvailability::Available : MetricAvailability::Unavailable;
 
+    if (mux_process_observed_) {
+        const RollingTimeWindow::Aggregate mp = mux_window_.Compute(now);
+        mux.process_latest_ms = mp.latest;
+        mux.process_average_ms = mp.average;
+        mux.process_peak_ms = mp.peak;
+        mux.process_availability = (mp.count > 0) ? MetricAvailability::Available : MetricAvailability::Unavailable;
+    }
+
     DiskDiagnostics& disk = s.disk;
     disk.bytes_written = disk_bytes_written_;
     disk.throughput_mib_s = throughput;
@@ -437,6 +544,28 @@ RecordingDiagnosticsSnapshot PipelineDiagnosticsAggregator::BuildSnapshot(time_p
         sp.seconds_until_auto_split = std::max(0.0, cfg_.auto_split_seconds - since);
     } else {
         sp.seconds_until_auto_split = -1.0;
+    }
+
+    // ---- A/V drift ----
+    // Computed from the most-recent PTS received from each encoder output path.
+    // Positive = audio leads video; negative = video leads audio.
+    // Marked Unavailable until both streams have produced at least one packet.
+    if (have_video_pts_ && have_audio_pts_) {
+        s.av_drift_ms = latest_audio_pts_ms_ - latest_video_pts_ms_;
+        s.av_drift_availability = MetricAvailability::Available;
+    } else {
+        s.av_drift_ms = 0.0;
+        s.av_drift_availability = MetricAvailability::Unavailable;
+    }
+
+    // ---- Disk-fill ETA ----
+    // throughput is the interval MiB/s already computed above.
+    // free_bytes_ is polled externally via UpdateFreeDiskBytes at ~5 Hz.
+    if (throughput > 0.001 && free_bytes_known_ && free_bytes_ > 0) {
+        const double free_mib = static_cast<double>(free_bytes_) / (1024.0 * 1024.0);
+        s.disk_fill_eta_seconds = free_mib / throughput;
+    } else {
+        s.disk_fill_eta_seconds = -1.0;
     }
 
     // ---- Classification ----

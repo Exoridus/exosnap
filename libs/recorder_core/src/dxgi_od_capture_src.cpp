@@ -114,6 +114,9 @@ bool DxgiOdCaptureSrc::Open(ID3D11Device* device, HMONITOR hmonitor, std::string
     m_width = desc.ModeDesc.Width;
     m_height = desc.ModeDesc.Height;
     m_format = desc.ModeDesc.Format;
+    m_refresh_rate_hz = (desc.ModeDesc.RefreshRate.Denominator > 0)
+                            ? (desc.ModeDesc.RefreshRate.Numerator / desc.ModeDesc.RefreshRate.Denominator)
+                            : 0u;
     m_frame_held = false;
     return true;
 }
@@ -126,6 +129,7 @@ void DxgiOdCaptureSrc::Close() {
     m_duplication = nullptr;
     m_width = 0;
     m_height = 0;
+    m_refresh_rate_hz = 0;
 }
 
 bool DxgiOdCaptureSrc::TryAcquireFrame(uint32_t timeout_ms, ID3D11Texture2D** out_texture,

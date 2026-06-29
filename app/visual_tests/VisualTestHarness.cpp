@@ -10,6 +10,7 @@
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
+#include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -144,6 +145,17 @@ bool ParseVisualTestOptions(const QStringList& args, VisualTestOptions* out, QSt
             if (!ok_w || !ok_h || parsed.window_width <= 0 || parsed.window_height <= 0) {
                 if (error)
                     *error = QStringLiteral("--visual-test-window-size requires WIDTHxHEIGHT");
+                return false;
+            }
+        } else if (arg == QStringLiteral("--visual-test-display")) {
+            QString index_text;
+            if (!require_value(&index_text))
+                return false;
+            bool ok = false;
+            parsed.target_display = index_text.toInt(&ok);
+            if (!ok || parsed.target_display < 0) {
+                if (error)
+                    *error = QStringLiteral("--visual-test-display requires a non-negative screen index");
                 return false;
             }
         } else if (arg == QStringLiteral("--visual-test-exit")) {
@@ -457,6 +469,33 @@ int RunVisualTest(QApplication& app, MainWindow& window, const VisualTestOptions
 
     const int target_w = options.window_width > 0 ? options.window_width : 1280;
     const int target_h = options.window_height > 0 ? options.window_height : 820;
+
+    // Pick the screen the capture window appears on. Explicit --visual-test-display
+    // wins; otherwise capture mode (grab + exit) prefers a NON-primary screen so an
+    // on-screen game / work on the primary display is never covered.
+    QScreen* target_screen = nullptr;
+    {
+        const QList<QScreen*> screens = QGuiApplication::screens();
+        if (options.target_display >= 0 && options.target_display < screens.size()) {
+            target_screen = screens.at(options.target_display);
+        } else if (options.exit_after_capture) {
+            QScreen* const primary = QGuiApplication::primaryScreen();
+            for (QScreen* s : screens) {
+                if (s != primary) {
+                    target_screen = s;
+                    break;
+                }
+            }
+        }
+        if (target_screen == nullptr)
+            target_screen = QGuiApplication::primaryScreen();
+    }
+
+    // Capture mode never steals keyboard focus or raises over other windows.
+    const bool passive = options.exit_after_capture;
+    if (passive)
+        window.setAttribute(Qt::WA_ShowWithoutActivating, true);
+
     window.resize(target_w, target_h);
     window.applyVisualScenario(*scenario);
     if (options.maximize)
@@ -469,14 +508,16 @@ int RunVisualTest(QApplication& app, MainWindow& window, const VisualTestOptions
     // or on which monitor the window was last used on.
     if (!options.maximize) {
         QPoint origin(0, 0);
-        if (const QScreen* primary = QGuiApplication::primaryScreen())
-            origin = primary->availableGeometry().topLeft();
+        if (target_screen)
+            origin = target_screen->availableGeometry().topLeft();
         window.move(origin);
         window.resize(target_w, target_h);
     }
 
-    window.raise();
-    window.activateWindow();
+    if (!passive) {
+        window.raise();
+        window.activateWindow();
+    }
 
     if (!options.exit_after_capture)
         return app.exec();

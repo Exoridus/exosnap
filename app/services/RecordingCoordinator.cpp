@@ -488,12 +488,17 @@ void RecordingCoordinator::OnCapabilitiesReady(const exosnap::capability::Capabi
     validation_result_ = validation;
     resolved_user_config_ = validation.resolved_config;
     if (validation.succeeded) {
-        state_ = UiRecordingState::Ready;
         capability_status_text_ = BuildCapabilityStatusText(validation.resolved_config);
+        // Use PostStateChange (not a bare state_ assignment) so the UI's state-changed
+        // callback fires. Without this the Record page stays stuck on "Checking…" forever
+        // once the async HW probe lands — view_model_.state is only ever updated via this
+        // callback (there is no pull). Regression introduced when the synchronous fallback
+        // probe was removed in the fast-startup wave.
+        PostStateChange(UiRecordingState::Ready);
     } else {
-        state_ = UiRecordingState::Blocked;
         capability_status_text_ =
             validation.invalidity.empty() ? L"Recording unavailable" : ToWide(validation.invalidity.front().message);
+        PostStateChange(UiRecordingState::Blocked);
     }
 }
 
@@ -502,8 +507,8 @@ void RecordingCoordinator::OnCapabilityFailure(std::wstring message) {
         QStringLiteral("record.failure"),
         QStringLiteral("phase=Init category=CapabilityCheck detail=\"%1\"").arg(QString::fromStdWString(message)));
     has_caps_ = false;
-    state_ = UiRecordingState::Blocked;
     capability_status_text_ = std::move(message);
+    PostStateChange(UiRecordingState::Blocked); // notify the UI (see OnCapabilitiesReady)
 }
 
 void RecordingCoordinator::RevalidateCapabilities() {
@@ -689,6 +694,7 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.frame_rate_num = video_settings_.frame_rate_num;
     config.frame_rate_den = video_settings_.frame_rate_den;
     config.cfr = video_settings_.cfr;
+    config.cfr_pacing_mode = video_settings_.frame_pacing;
     if (config.container == recorder_core::Container::Mp4 && !config.cfr) {
         diagnostics::AppLog::warning(
             QStringLiteral("record.reconcile"),

@@ -69,7 +69,6 @@ TEST_F(TransportDockTest, ReadyState_ShowsRecordAction) {
     EXPECT_FALSE(ButtonVisible(dock, "recordDockStop"));
     EXPECT_FALSE(ButtonVisible(dock, "recordDockPause"));
     EXPECT_FALSE(ButtonVisible(dock, "recordDockResume"));
-    EXPECT_FALSE(ButtonVisible(dock, "recordDockRecordAgain"));
 }
 
 TEST_F(TransportDockTest, RecordingState_ShowsPauseAndStop) {
@@ -101,10 +100,9 @@ TEST_F(TransportDockTest, CompletedState_ReturnsToReadyLayout) {
 
     // Ready layout: Record split pill visible, no stop/pause/resume.
     EXPECT_TRUE(ButtonVisible(dock, "recordDockRecord"));
-    EXPECT_FALSE(ButtonVisible(dock, "recordDockRecordAgain"));
     EXPECT_FALSE(ButtonVisible(dock, "recordDockStop"));
     EXPECT_FALSE(ButtonVisible(dock, "recordDockPause"));
-    // Source toggles always visible in v10 (no completed_row_ swap).
+    // Source toggles always visible in v10 (no result row to swap in).
     auto* system_toggle = Toggle(dock, QStringLiteral("system"));
     ASSERT_NE(system_toggle, nullptr);
     EXPECT_TRUE(system_toggle->isVisibleTo(&dock));
@@ -429,29 +427,6 @@ TEST_F(TransportDockTest, DockToggle_FourSourcesPresent) {
     EXPECT_NE(Toggle(dock, QStringLiteral("mic")), nullptr);
     EXPECT_NE(Toggle(dock, QStringLiteral("webcam")), nullptr);
     EXPECT_NE(Toggle(dock, QStringLiteral("app")), nullptr);
-}
-
-// ── Open Folder icon-only button (DF-04) ─────────────────────────────────────
-
-TEST_F(TransportDockTest, OpenFolder_IsIconOnlyFixedSize38x38) {
-    TransportDock dock;
-    auto* btn = Button(dock, "recordDockOpenFolder");
-    ASSERT_NE(btn, nullptr);
-    // Icon-only: no text label (DF-04).
-    EXPECT_TRUE(btn->text().isEmpty());
-    // Fixed 38×38 as specified by the design (DF-04).
-    EXPECT_EQ(btn->width(), 38);
-    EXPECT_EQ(btn->height(), 38);
-}
-
-TEST_F(TransportDockTest, OpenFolder_AccessibleNameAndTooltipPreserved) {
-    // UIA tooling and screen readers rely on the accessible name "Open folder"
-    // (DF-04: MUST keep tooltip and accessible name even when text is removed).
-    TransportDock dock;
-    auto* btn = Button(dock, "recordDockOpenFolder");
-    ASSERT_NE(btn, nullptr);
-    EXPECT_EQ(btn->toolTip(), QStringLiteral("Open folder"));
-    EXPECT_EQ(btn->accessibleName(), QStringLiteral("Open folder"));
 }
 
 } // namespace

@@ -10,6 +10,7 @@
 #include "../models/VideoSettingsModel.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
+#include "../ui/theme/LucideIcon.h"
 #include "../ui/widgets/LivePipelinePanel.h"
 #include "../ui/widgets/PipelineFlow.h"
 #include "../ui/widgets/PipelineStepCard.h"
@@ -21,9 +22,11 @@
 
 #include <QDateTime>
 #include <QFrame>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QScreen>
 #include <QScrollArea>
 #include <QStyle>
 #include <QToolButton>
@@ -36,6 +39,21 @@ namespace exosnap {
 using M = ui::theme::ExoSnapMetrics;
 
 namespace {
+
+// Translate the app-layer diagnostics::PresentMode to the recorder_core mirror.
+// Both enums have identical members; a switch avoids coupling on integer values.
+static recorder_core::PresentMode ToSnapshotMode(diagnostics::PresentMode m) noexcept {
+    switch (m) {
+    case diagnostics::PresentMode::Composed:
+        return recorder_core::PresentMode::Composed;
+    case diagnostics::PresentMode::IndependentFlip:
+        return recorder_core::PresentMode::IndependentFlip;
+    case diagnostics::PresentMode::ExclusiveFullscreen:
+        return recorder_core::PresentMode::ExclusiveFullscreen;
+    default:
+        return recorder_core::PresentMode::Unknown;
+    }
+}
 
 QString severityClass(diagnostics::DiagnosticSeverity sev) {
     switch (sev) {
@@ -109,6 +127,10 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     layout->setContentsMargins(M::kSpaceXl, M::kSpaceXl, M::kSpaceXl, M::kSpaceXl);
     layout->setSpacing(M::kSpaceLg);
 
+    // DESIGN-FIDELITY: no page title/subtitle. The newest Mappe (suite-diag.jsx) starts
+    // the Diagnostics surface directly with the readiness banner — the older
+    // hybrid-pages.jsx "PageHead" (title + subtitle) is not part of the current design.
+
     // ── A: Readiness / action header ──────────────────────────────────────────
     // A troubleshooting summary: a plain-language verdict plus the primary actions,
     // tinted by overall state, with three count tiles below.
@@ -126,8 +148,16 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     status_pill_ = new QLabel(QStringLiteral("NOT CHECKED"), readiness_panel_);
     status_pill_->setProperty("labelRole", "profileStatusBadge");
     status_pill_->setAlignment(Qt::AlignCenter);
+    // Leading state icon (check-circle / alert-triangle / x-circle), tinted per state.
+    // Hidden until a check has run (checking/neutral states show no icon).
+    readiness_icon_ = new QLabel(readiness_panel_);
+    readiness_icon_->setFixedSize(14, 14);
+    readiness_icon_->setAlignment(Qt::AlignCenter);
+    readiness_icon_->setVisible(false);
     auto* pill_row = new QHBoxLayout();
     pill_row->setContentsMargins(0, 0, 0, 0);
+    pill_row->setSpacing(M::kSpaceXs);
+    pill_row->addWidget(readiness_icon_, 0, Qt::AlignVCenter);
     pill_row->addWidget(status_pill_);
     pill_row->addStretch();
     head_text->addLayout(pill_row);
@@ -140,7 +170,10 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     auto* btn_row = new QHBoxLayout();
     btn_row->setSpacing(M::kSpaceSm);
     run_check_btn_ = new QPushButton(QStringLiteral("Run Check"), readiness_panel_);
+    // DESIGN-FIDELITY: suite-diag.jsx:94 — the readiness action is a PRIMARY size-sm
+    // button (Run check), with Export report as the ghost size-sm beside it.
     run_check_btn_->setProperty("role", "primary");
+    run_check_btn_->setProperty("size", "sm");
     export_report_btn_ = new QPushButton(QStringLiteral("Export Report"), readiness_panel_);
     export_report_btn_->setProperty("role", "ghost");
     export_report_btn_->setEnabled(false);
@@ -369,13 +402,235 @@ void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, c
     refreshCapabilities();
     refreshConfiguration();
     refreshPipeline();
+
+    // refreshPipeline() above resets the CAPTURE PIPELINE cards to their static readiness
+    // state. If a live recording snapshot is active, re-apply the live card state directly
+    // (bypassing the 2 Hz throttle in updatePipelineCards) so a static refresh — e.g. the
+    // QTimer::singleShot(0) bootstrap refreshDiagnosticsData() in MainWindow, or any other
+    // setDiagnosticData() call mid-recording — can never leave the cards showing stale
+    // static status while the recording is live.
+    const bool live_recording =
+        last_live_snapshot_.valid && (last_live_snapshot_.lifecycle == recorder_core::DiagnosticsLifecycle::Recording ||
+                                      last_live_snapshot_.lifecycle == recorder_core::DiagnosticsLifecycle::Paused);
+    if (live_recording) {
+        renderPipelineCards(last_live_snapshot_);
+    }
+}
+
+void DiagnosticsPage::setPresentProvider(diagnostics::IPresentProvider* provider) noexcept {
+    present_provider_ = provider;
+}
+
+void DiagnosticsPage::setDpcProvider(diagnostics::DpcLatencyProvider* provider) noexcept {
+    dpc_provider_ = provider;
 }
 
 void DiagnosticsPage::applyLiveDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+    // Copy first, then overlay present-mode data so both the panel and the next
+    // RecommendationEngine run (refreshOverview) see the augmented snapshot.
+    last_live_snapshot_ = snapshot;
+
+    // PresentMon present-mode overlay (ADR 0033). Mirrors the disk/fs provider
+    // pattern: the engine leaves these Unavailable; we fill them from the injected
+    // provider (elevation + opt-in + ETW session gated). Null → Unavailable (em-dash).
+    if (present_provider_ != nullptr) {
+        const diagnostics::PresentSample ps = present_provider_->Sample();
+        if (ps.available) {
+            last_live_snapshot_.capture.source_present_mode = ToSnapshotMode(ps.mode);
+            last_live_snapshot_.capture.source_tearing = ps.tearing;
+            last_live_snapshot_.capture.present_mode_availability = recorder_core::MetricAvailability::Available;
+        }
+    }
+
+    updatePipelineCards(last_live_snapshot_);
+
     if (live_pipeline_panel_ == nullptr) {
         return;
     }
-    live_pipeline_panel_->applySnapshot(snapshot);
+    live_pipeline_panel_->applySnapshot(last_live_snapshot_);
+}
+
+void DiagnosticsPage::updatePipelineCards(const recorder_core::RecordingDiagnosticsSnapshot& s) {
+    if (!pipeline_flow_)
+        return;
+
+    const bool recording = s.valid && (s.lifecycle == recorder_core::DiagnosticsLifecycle::Recording ||
+                                       s.lifecycle == recorder_core::DiagnosticsLifecycle::Paused);
+    if (!recording) {
+        // Idle / stopping / completed → restore the static readiness cards.
+        refreshPipeline();
+        last_cards_applied_ = {};
+        return;
+    }
+
+    // 2 Hz throttle (0.5 s), independent of the LIVE PIPELINE panel cadence.
+    const auto now = std::chrono::steady_clock::now();
+    if (last_cards_applied_ != std::chrono::steady_clock::time_point{} &&
+        (now - last_cards_applied_) < std::chrono::milliseconds(500)) {
+        return;
+    }
+    last_cards_applied_ = now;
+
+    renderPipelineCards(s);
+}
+
+void DiagnosticsPage::renderPipelineCards(const recorder_core::RecordingDiagnosticsSnapshot& s) {
+    using recorder_core::MetricAvailability;
+    using recorder_core::StageHealth;
+    using recorder_core::StageId;
+    using recorder_core::StageSignals;
+    using Status = ui::widgets::PipelineStepCard::Status;
+
+    if (!pipeline_flow_)
+        return;
+
+    const QString dash = QString::fromUtf8("\xE2\x80\x94");
+    const double budget_ms = (s.capture.target_fps > 0.0) ? 1000.0 / s.capture.target_fps : (1000.0 / 60.0);
+
+    // Drop delta over the publish interval (problem drops only; coalesce is benign).
+    // Compute problem_drops FIRST so that on a generation change we can seed
+    // cards_last_problem_drops_ to the current cumulative value — making the first
+    // delta 0 and preventing a warm-up false-positive "Over" on the Source Capture card.
+    const uint64_t problem_drops = s.capture.frames_dropped_cfr + s.capture.frames_dropped_backpressure;
+    if (s.session_generation != cards_last_generation_) {
+        cards_last_generation_ = s.session_generation;
+        cards_last_problem_drops_ = problem_drops; // seed so first delta is 0
+    }
+    const uint32_t capture_recent_drops = (problem_drops > cards_last_problem_drops_)
+                                              ? static_cast<uint32_t>(problem_drops - cards_last_problem_drops_)
+                                              : 0;
+    cards_last_problem_drops_ = problem_drops;
+
+    // ---- Build per-stage signals (distilled from the snapshot) ----
+    constexpr uint32_t kQueueBusyDepth = 8; // mirrors DiagnosticsThresholds::mux_queue_warn
+    constexpr double kDiskBudgetMs = 8.0;   // mirrors DiagnosticsThresholds::disk_write_ms_warn
+
+    StageSignals capture{};
+    capture.id = StageId::SourceCapture;
+    capture.available = s.capture.target_fps > 0.0 && s.capture.actual_fps > 0.0;
+    capture.is_duration_stage = false;
+    capture.can_bottleneck = true;
+    capture.fps_ratio = (s.capture.target_fps > 0.0) ? s.capture.actual_fps / s.capture.target_fps : 1.0;
+    capture.recent_drops = capture_recent_drops;
+
+    StageSignals queue{};
+    queue.id = StageId::FrameQueue;
+    queue.available = true;
+    queue.is_duration_stage = false;
+    queue.can_bottleneck = false;
+    queue.queue_depth = s.video_queue.current_depth;
+    queue.queue_busy_threshold = kQueueBusyDepth;
+
+    StageSignals comp{};
+    comp.id = StageId::Compositor;
+    comp.available = s.compositor.active;
+    comp.is_duration_stage = true;
+    comp.can_bottleneck = true;
+    comp.avg_ms = s.compositor.average_ms;
+
+    StageSignals enc{};
+    enc.id = StageId::Encoder;
+    enc.available = s.video_encoder.average_ms > 0.0 || s.video_encoder.frames_encoded > 0;
+    enc.is_duration_stage = true;
+    enc.can_bottleneck = true;
+    enc.avg_ms = s.video_encoder.average_ms;
+    // backlog = frames_submitted − encoded_packets = NVENC lookahead/B-frame/async fill
+    // depth, which is naturally ≥2 in healthy AV1/NVENC steady state. Treating backlog
+    // as a shedding proxy causes a perpetual false "Over" on every healthy recording.
+    // The genuine encoder bottleneck signal is the submit→ready latency exceeding the
+    // frame budget, already captured by the duration path (is_duration_stage=true,
+    // avg_ms > budget_ms → Bottleneck). enc.recent_drops stays 0 (default).
+
+    StageSignals mux{};
+    mux.id = StageId::Muxer;
+    mux.available = s.mux.process_availability == MetricAvailability::Available;
+    mux.is_duration_stage = true;
+    mux.can_bottleneck = true;
+    mux.avg_ms = s.mux.process_average_ms;
+
+    StageSignals disk{};
+    disk.id = StageId::Disk;
+    disk.available = s.disk.latency_availability == MetricAvailability::Available;
+    disk.is_duration_stage = true;
+    disk.can_bottleneck = true;
+    disk.avg_ms = s.disk.average_write_ms;
+    disk.budget_ms = kDiskBudgetMs;
+
+    const StageSignals stages[] = {capture, queue, comp, enc, mux, disk};
+    const recorder_core::PipelineHealthVerdict verdict = recorder_core::ResolvePipelineHealth(stages, budget_ms);
+
+    auto to_status = [](StageHealth h) -> Status {
+        switch (h) {
+        case StageHealth::Healthy:
+            return Status::Ok;
+        case StageHealth::Busy:
+            return Status::Hotspot;
+        case StageHealth::Bottleneck:
+            return Status::Over;
+        }
+        return Status::Ok;
+    };
+    auto health_of = [&](StageId id) -> StageHealth {
+        for (const auto& sv : verdict.per_stage)
+            if (sv.id == id)
+                return sv.health;
+        return StageHealth::Healthy;
+    };
+
+    auto ms = [&](double v, bool avail) { return avail ? QString::number(v, 'f', 1) + QStringLiteral(" ms") : dash; };
+
+    // ---- Card 0: Source Capture ----
+    const bool cap_num = s.capture.target_fps > 0.0;
+    const QString cap_number = cap_num ? QString::number(s.capture.actual_fps, 'f', 1) + QStringLiteral(" / ") +
+                                             QString::number(s.capture.target_fps, 'f', 1) + QStringLiteral(" fps")
+                                       : dash;
+    const QString cap_tip = (s.capture.acquire_availability == MetricAvailability::Available)
+                                ? QStringLiteral("Acquire ") + QString::number(s.capture.acquire_average_ms, 'f', 2) +
+                                      QStringLiteral(" ms (CPU)")
+                                : QStringLiteral("Acquire timing unavailable for this capture mode");
+    pipeline_flow_->setStepLive(0, to_status(health_of(StageId::SourceCapture)), QString(), QStringLiteral("CPU"),
+                                cap_number, cap_tip);
+
+    // ---- Card 1: Frame Queue ----
+    const QString q_number = s.video_queue.bounded && s.video_queue.capacity > 0
+                                 ? QString::number(s.video_queue.current_depth) + QStringLiteral(" / ") +
+                                       QString::number(s.video_queue.capacity)
+                                 : QString::number(s.video_queue.current_depth);
+    pipeline_flow_->setStepLive(1, to_status(health_of(StageId::FrameQueue)), QString(), dash, q_number,
+                                QStringLiteral("Frames waiting between encode and mux (peak ") +
+                                    QString::number(s.video_queue.peak_depth) + QStringLiteral(")"));
+
+    // ---- Card 2: Compositor ----
+    const QString comp_tip = QStringLiteral("CPU submit (GPU execution time not measured in this view). VPBlt ") +
+                             ((s.compositor.vpblt_availability == MetricAvailability::Available)
+                                  ? QString::number(s.compositor.vpblt_average_ms, 'f', 2) + QStringLiteral(" ms")
+                                  : dash);
+    // Gate the displayed number on the VALUE's own availability (> 0.0), not just the
+    // stage's resolver availability — avoids "0.0 ms" when the stage is alive but has
+    // no sample yet. comp.available (= s.compositor.active) is kept for the resolver.
+    pipeline_flow_->setStepLive(2, to_status(health_of(StageId::Compositor)), QString(), QStringLiteral("GPU"),
+                                ms(s.compositor.average_ms, s.compositor.average_ms > 0.0), comp_tip);
+
+    // ---- Card 3: Encoder ----
+    // Gate the displayed number on average_ms > 0.0 (value has been sampled), not on
+    // enc.available (which can be true as soon as frames_encoded > 0 with avg still 0.0).
+    // enc.available is kept for the resolver (health classification still sees the stage live).
+    pipeline_flow_->setStepLive(3, to_status(health_of(StageId::Encoder)), QString(), QStringLiteral("GPU (NVENC)"),
+                                ms(s.video_encoder.average_ms, s.video_encoder.average_ms > 0.0),
+                                QStringLiteral("CPU submit\xe2\x86\x92ready latency (peak ") +
+                                    QString::number(s.video_encoder.peak_ms, 'f', 1) + QStringLiteral(" ms)"));
+
+    // ---- Card 4: Muxer ----
+    pipeline_flow_->setStepLive(4, to_status(health_of(StageId::Muxer)), QString(), QStringLiteral("CPU"),
+                                ms(s.mux.process_average_ms, mux.available),
+                                QStringLiteral("Mux drain processing (peak ") +
+                                    QString::number(s.mux.process_peak_ms, 'f', 2) + QStringLiteral(" ms)"));
+
+    // ---- Card 5: Disk ----
+    pipeline_flow_->setStepLive(5, to_status(health_of(StageId::Disk)), QString(), QStringLiteral("CPU"),
+                                ms(s.disk.average_write_ms, disk.available),
+                                QStringLiteral("Filesystem write-call latency (peak ") +
+                                    QString::number(s.disk.peak_write_ms, 'f', 1) + QStringLiteral(" ms)"));
 }
 
 // --- Helpers ---
@@ -494,6 +749,32 @@ void DiagnosticsPage::setReadinessState(const QString& state) {
     if (status_pill_) {
         status_pill_->setProperty("stateRole", pill_tinted ? QVariant(state) : QVariant());
         repolish(status_pill_);
+    }
+    // Leading state icon: check-circle (ready) / alert-triangle (warn) / x-circle
+    // (blocked), tinted from the canonical semantic palette tokens. checking/neutral
+    // show no icon.
+    if (readiness_icon_) {
+        using Pal = ui::theme::ExoSnapPalette;
+        QString icon_name;
+        QString icon_color;
+        if (state == QStringLiteral("ready")) {
+            icon_name = QStringLiteral("check-circle");
+            icon_color = QString::fromUtf8(Pal::kOk);
+        } else if (state == QStringLiteral("warn")) {
+            icon_name = QStringLiteral("alert-triangle");
+            icon_color = QString::fromUtf8(Pal::kWarn);
+        } else if (state == QStringLiteral("blocked")) {
+            icon_name = QStringLiteral("x-circle");
+            icon_color = QString::fromUtf8(Pal::kErr);
+        }
+        if (icon_name.isEmpty()) {
+            readiness_icon_->clear();
+            readiness_icon_->setVisible(false);
+        } else {
+            const qreal dpr = readiness_icon_->devicePixelRatioF();
+            readiness_icon_->setPixmap(ui::theme::lucidePixmap(icon_name, icon_color, 14, dpr));
+            readiness_icon_->setVisible(true);
+        }
     }
 }
 
@@ -681,7 +962,8 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
     constexpr int kMaxIssues = 6;
 
     const auto add_issue_card = [&](diagnostics::DiagnosticSeverity severity, const QString& title,
-                                    const QString& summary, const QString& action, const QString& detail) {
+                                    const QString& summary, const QString& action, const QString& detail,
+                                    const diagnostics::FixAction* fix = nullptr) {
         if (issue_count >= kMaxIssues)
             return;
 
@@ -722,6 +1004,33 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
             card_layout->addWidget(action_label);
         }
 
+        if (fix != nullptr) {
+            if (fix->safety == diagnostics::FixAction::Safety::Auto) {
+                auto* fix_btn = new QPushButton(QString::fromStdString(fix->label), card);
+                fix_btn->setProperty("role", "ghost");
+                fix_btn->setObjectName(QStringLiteral("issueFixBtn"));
+                const QString fix_id = QString::fromStdString(fix->id);
+                const QString changes = QString::fromStdString(fix->changes_summary);
+                connect(fix_btn, &QPushButton::clicked, this,
+                        [this, fix_id, changes]() { emit applyFixActionRequested(fix_id, changes); });
+                card_layout->addWidget(fix_btn);
+            } else if (fix->safety == diagnostics::FixAction::Safety::Assisted) {
+                auto* fix_btn =
+                    new QPushButton(QString::fromStdString(fix->label) + QStringLiteral(" \xe2\x86\x92"), card);
+                fix_btn->setProperty("role", "ghost");
+                fix_btn->setObjectName(QStringLiteral("issueFixBtn"));
+                const QString fix_id = QString::fromStdString(fix->id);
+                connect(fix_btn, &QPushButton::clicked, this,
+                        [this, fix_id]() { emit openAssistedFixRequested(fix_id); });
+                card_layout->addWidget(fix_btn);
+            } else if (fix->safety == diagnostics::FixAction::Safety::External) {
+                auto* fix_label = new QLabel(QString::fromStdString(fix->label), card);
+                fix_label->setProperty("labelRole", "issueMeta");
+                fix_label->setWordWrap(true);
+                card_layout->addWidget(fix_label);
+            }
+        }
+
         overview_issues_layout_->addWidget(card);
         ++issue_count;
     };
@@ -744,7 +1053,8 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
         if (result.severity != diagnostics::DiagnosticSeverity::Blocker)
             continue;
         add_issue_card(result.severity, QString::fromStdString(result.title), QString::fromStdString(result.summary),
-                       QString::fromStdString(result.recommendation), QString::fromStdString(result.detail));
+                       QString::fromStdString(result.recommendation), QString::fromStdString(result.detail),
+                       result.fix_action.has_value() ? &result.fix_action.value() : nullptr);
     }
 
     for (const auto& warning : profile_validation_.warnings) {
@@ -765,7 +1075,8 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
         if (result.severity == diagnostics::DiagnosticSeverity::Blocker)
             continue;
         add_issue_card(result.severity, QString::fromStdString(result.title), QString::fromStdString(result.summary),
-                       QString::fromStdString(result.recommendation), QString::fromStdString(result.detail));
+                       QString::fromStdString(result.recommendation), QString::fromStdString(result.detail),
+                       result.fix_action.has_value() ? &result.fix_action.value() : nullptr);
     }
 
     if (issue_count == 0) {
@@ -789,8 +1100,46 @@ void DiagnosticsPage::refreshOverview() {
     if (!data_ready_)
         return;
 
-    diagnostics::RecommendationEngine engine(caps_, active_user_config_, 0, output_drive_free_bytes_,
-                                             profile_validation_.succeeded, output_filesystem_name_);
+    // The static refresh/FPS-mismatch heuristic needs the CAPTURE-TARGET monitor's
+    // refresh, not the UI screen — pulling screen()->refreshRate() here is both
+    // non-deterministic (test-machine dependent) and semantically wrong. Until the
+    // capture-target refresh is threaded through setDiagnosticData, the static arm
+    // stays inert (its pre-existing state). The live present-jitter arm below is the
+    // real, target-accurate judder detector and needs no monitor refresh.
+    // TODO(v0.8.0 follow-up): thread the capture-target monitor refresh into setDiagnosticData.
+    const uint32_t monitor_refresh_hz = 0;
+
+    // Feed the latest valid live snapshot so the engine can correlate measured present-pacing
+    // (VRR/CFR judder) with the refresh/FPS recommendation. The snapshot already carries the
+    // present-mode overlay applied in applyLiveDiagnostics.
+    const recorder_core::RecordingDiagnosticsSnapshot* live =
+        last_live_snapshot_.valid ? &last_live_snapshot_ : nullptr;
+
+    // Present-mode sample for rec.009 / exclusive-fullscreen correlation (ADR 0033).
+    const diagnostics::PresentSample* present_ptr = nullptr;
+    diagnostics::PresentSample present_sample;
+    if (present_provider_ != nullptr) {
+        present_sample = present_provider_->Sample();
+        if (present_sample.available) {
+            present_ptr = &present_sample;
+        }
+    }
+
+    diagnostics::RecommendationEngine engine(caps_, active_user_config_, monitor_refresh_hz, output_drive_free_bytes_,
+                                             profile_validation_.succeeded, output_filesystem_name_, live, present_ptr);
+
+    // Kernel DPC/ISR latency feed for rec.dpc.latency (ADR 0033). Sampled live from the
+    // borrowed provider; Unavailable (default reading) when not elevated / opt-in off,
+    // which keeps the check inert. Mirrors the present-provider sampling above.
+    if (dpc_provider_ != nullptr) {
+        engine.SetDpcLatency(dpc_provider_->Read());
+    }
+
+    // Output-folder writability: run the same probe the Disk pipeline card uses, but feed
+    // the result into the engine so a non-writable folder is counted as a blocker in the
+    // verdict header (red container) instead of only appearing on the Disk card.
+    engine.SetOutputPathWritable(diagnostics::SelfTestRunner::CheckOutputPathWritable(settings_path_).passed);
+
     auto recs = engine.Generate();
 
     // Verdict counts come ONLY from the RecommendationEngine (real diagnosed issues).
@@ -928,10 +1277,10 @@ void DiagnosticsPage::refreshPipeline() {
 
     using Status = ui::widgets::PipelineStepCard::Status;
 
-    // Internal stages without a runtime probe: honestly Planned, never faked.
-    pipeline_flow_->setStepStatus(0, Status::Planned, QStringLiteral("Capture frame timing is not instrumented yet."));
-    pipeline_flow_->setStepStatus(1, Status::Planned, QStringLiteral("Frame-queue depth is not instrumented yet."));
-    pipeline_flow_->setStepStatus(2, Status::Planned, QStringLiteral("Compositor timing is not instrumented yet."));
+    // Internal stages: live per-frame telemetry is shown during recording.
+    pipeline_flow_->setStepStatus(0, Status::Planned, QStringLiteral("Live during recording."));
+    pipeline_flow_->setStepStatus(1, Status::Planned, QStringLiteral("Live during recording."));
+    pipeline_flow_->setStepStatus(2, Status::Planned, QStringLiteral("Live during recording."));
 
     if (!data_ready_) {
         pipeline_flow_->setStepStatus(3, Status::Planned, QStringLiteral("Run a check to probe the encoder."));

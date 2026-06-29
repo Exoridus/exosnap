@@ -37,6 +37,11 @@ class DxgiOdCaptureSrc {
     DXGI_FORMAT Format() const noexcept {
         return m_format;
     }
+    // Refresh rate of the duplicated output in Hz (integer; 0 if unknown).
+    // Available after Open() succeeds; derived from DXGI_OUTDUPL_DESC.ModeDesc.RefreshRate.
+    uint32_t RefreshRateHz() const noexcept {
+        return m_refresh_rate_hz;
+    }
 
     // Non-blocking (timeout_ms=0) or timed acquire.
     // On success: returns true; *out_texture is borrowed until ReleaseFrame().
@@ -61,6 +66,7 @@ class DxgiOdCaptureSrc {
     winrt::com_ptr<IDXGIOutputDuplication> m_duplication;
     uint32_t m_width = 0;
     uint32_t m_height = 0;
+    uint32_t m_refresh_rate_hz = 0;
     DXGI_FORMAT m_format = DXGI_FORMAT_B8G8R8A8_UNORM;
     bool m_frame_held = false;
 };

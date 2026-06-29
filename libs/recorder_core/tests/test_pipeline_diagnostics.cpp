@@ -172,6 +172,63 @@ TEST(PipelineDiagnostics, ObservedIntervalMarkedAvailableOnVfr) {
     EXPECT_NEAR(s.capture.frame_interval_ms, 17.0, 0.01);
 }
 
+// ---------------------------------------------------------------------------
+// Present cadence (VRR/CFR judder correlation, v0.8.0 / ADR 0033)
+// ---------------------------------------------------------------------------
+
+TEST(PipelineDiagnostics, PresentCadenceUnavailableWithoutSamples) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(s.capture.present_cadence_availability, MetricAvailability::Unavailable);
+}
+
+TEST(PipelineDiagnostics, PresentCadenceAvailableAndJitterDerived) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    // >= 8 present intervals within the 2 s window: mostly ~8 ms (≈120 Hz) with one spike.
+    for (int i = 0; i < 12; ++i) {
+        const double iv = (i == 6) ? 20.0 : 8.0;
+        agg.OnSourcePresentInterval(At(i * 8), iv, 1);
+    }
+    const auto s = agg.BuildSnapshot(At(120), MakeStats(), DiagnosticsLifecycle::Recording, 2.0);
+    EXPECT_EQ(s.capture.present_cadence_availability, MetricAvailability::Available);
+    // avg = (11*8 + 20)/12 = 9.0; peak = 20 → jitter = 11 ms (> 4 ms threshold).
+    EXPECT_NEAR(s.capture.source_present_interval_ms, 9.0, 0.001);
+    EXPECT_GT(s.capture.source_present_jitter_ms, 4.0);
+    EXPECT_NEAR(s.capture.source_coalesce_ratio, 1.0, 0.001);
+}
+
+TEST(PipelineDiagnostics, PresentCadenceGatedByWarmup) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    for (int i = 0; i < 12; ++i)
+        agg.OnSourcePresentInterval(At(i * 8), 8.0, 2);
+    // elapsed below warmup_seconds (default 1.0) → Unavailable despite enough samples.
+    const auto s = agg.BuildSnapshot(At(96), MakeStats(), DiagnosticsLifecycle::Recording, 0.5);
+    EXPECT_EQ(s.capture.present_cadence_availability, MetricAvailability::Unavailable);
+}
+
+TEST(PipelineDiagnostics, PresentCoalesceRatioAveraged) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    for (int i = 0; i < 12; ++i)
+        agg.OnSourcePresentInterval(At(i * 8), 8.0, 2); // 2 coalesced updates per acquire
+    const auto s = agg.BuildSnapshot(At(120), MakeStats(), DiagnosticsLifecycle::Recording, 2.0);
+    EXPECT_EQ(s.capture.present_cadence_availability, MetricAvailability::Available);
+    EXPECT_NEAR(s.capture.source_coalesce_ratio, 2.0, 0.001);
+}
+
+TEST(PipelineDiagnostics, PresentCadenceResetClearsState) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    for (int i = 0; i < 12; ++i)
+        agg.OnSourcePresentInterval(At(i * 8), 8.0, 1);
+    agg.Reset(2, MakeConfig());
+    const auto s = agg.BuildSnapshot(At(120), MakeStats(), DiagnosticsLifecycle::Recording, 2.0);
+    EXPECT_EQ(s.capture.present_cadence_availability, MetricAvailability::Unavailable);
+}
+
 TEST(PipelineDiagnostics, PauseDoesNotCreateFalseDrops) {
     PipelineDiagnosticsAggregator agg;
     agg.Reset(1, MakeConfig());
@@ -557,6 +614,155 @@ TEST(PipelineDiagnostics, SplitTriggerMapping) {
     EXPECT_EQ(ToDiagnosticsSplitTrigger(SplitTriggerSource::AutomaticDuration),
               DiagnosticsSplitTrigger::AutomaticDuration);
     EXPECT_EQ(ToDiagnosticsSplitTrigger(SplitTriggerSource::AutomaticSize), DiagnosticsSplitTrigger::AutomaticSize);
+}
+
+// ---------------------------------------------------------------------------
+// A/V drift (v0.8.0-C)
+// ---------------------------------------------------------------------------
+
+TEST(PipelineDiagnostics, AvDriftInitiallyZeroAndUnavailable) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_DOUBLE_EQ(s.av_drift_ms, 0.0);
+    EXPECT_EQ(s.av_drift_availability, MetricAvailability::Unavailable);
+}
+
+TEST(PipelineDiagnostics, AvDriftComputedFromPtsInputs) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    // audio PTS = 120 ms, video PTS = 100 ms => drift = +20 ms (audio leads)
+    agg.OnVideoPts(100.0);
+    agg.OnAudioPts(120.0);
+    const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
+    EXPECT_DOUBLE_EQ(s.av_drift_ms, 20.0);
+    EXPECT_EQ(s.av_drift_availability, MetricAvailability::Available);
+}
+
+TEST(PipelineDiagnostics, AvDriftUnavailableIfOnlyOneStreamHasPts) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnVideoPts(100.0); // only video; no audio PTS yet
+    const auto s = agg.BuildSnapshot(At(50), MakeStats(), DiagnosticsLifecycle::Recording, 0.05);
+    EXPECT_EQ(s.av_drift_availability, MetricAvailability::Unavailable);
+}
+
+TEST(PipelineDiagnostics, AvDriftResetClearsState) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnVideoPts(100.0);
+    agg.OnAudioPts(120.0);
+    // After Reset, both "have" flags must clear.
+    agg.Reset(2, MakeConfig());
+    const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(s.av_drift_availability, MetricAvailability::Unavailable);
+    EXPECT_DOUBLE_EQ(s.av_drift_ms, 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// Disk-fill ETA (v0.8.0-C)
+// ---------------------------------------------------------------------------
+
+TEST(PipelineDiagnostics, DiskFillEtaUnavailableWithNoThroughputOrNoFreeBytes) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    auto stats = MakeStats();
+
+    // No throughput, no free bytes -> -1
+    const auto s1 = agg.BuildSnapshot(At(0), stats, DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_LT(s1.disk_fill_eta_seconds, 0.0);
+
+    // Free bytes known but throughput still zero (no baseline yet) -> -1
+    agg.UpdateFreeDiskBytes(1024u * 1024u * 1024u); // 1 GiB
+    const auto s2 = agg.BuildSnapshot(At(200), stats, DiagnosticsLifecycle::Recording, 0.2);
+    EXPECT_LT(s2.disk_fill_eta_seconds, 0.0);
+}
+
+TEST(PipelineDiagnostics, DiskFillEtaComputedCorrectly) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    auto stats = MakeStats();
+
+    // Establish baseline
+    (void)agg.BuildSnapshot(At(0), stats, DiagnosticsLifecycle::Recording, 0.0);
+
+    // Write 100 MiB over 1 second => 100 MiB/s throughput.
+    // Free space = 1000 MiB => ETA = 1000 / 100 = 10 seconds.
+    agg.OnDiskWrite(At(500), 1.0, 100u * 1024u * 1024u);
+    agg.UpdateFreeDiskBytes(1000u * 1024u * 1024u);
+    const auto s = agg.BuildSnapshot(At(1000), stats, DiagnosticsLifecycle::Recording, 1.0);
+    EXPECT_NEAR(s.disk_fill_eta_seconds, 10.0, 0.1);
+}
+
+TEST(PipelineDiagnostics, DiskFillEtaUnavailableWhenFreeBytesZero) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    auto stats = MakeStats();
+
+    // Establish baseline
+    (void)agg.BuildSnapshot(At(0), stats, DiagnosticsLifecycle::Recording, 0.0);
+
+    // throughput is positive but free bytes == 0 -> -1
+    agg.OnDiskWrite(At(500), 1.0, 50u * 1024u * 1024u);
+    agg.UpdateFreeDiskBytes(0u);
+    const auto s = agg.BuildSnapshot(At(1000), stats, DiagnosticsLifecycle::Recording, 1.0);
+    EXPECT_LT(s.disk_fill_eta_seconds, 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// Capture-card live wiring: acquire / vpblt / mux-process CPU-timing windows
+// ---------------------------------------------------------------------------
+
+TEST(CaptureCardWiring, AcquireWindowAverageAndPeak) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnAcquireLatency(At(0), 1.0);
+    agg.OnAcquireLatency(At(10), 3.0);
+    agg.OnAcquireLatency(At(20), 2.0);
+    const auto s = agg.BuildSnapshot(At(30), MakeStats(), DiagnosticsLifecycle::Recording, 0.03);
+    EXPECT_EQ(s.capture.acquire_availability, MetricAvailability::Available);
+    EXPECT_DOUBLE_EQ(s.capture.acquire_average_ms, 2.0);
+    EXPECT_DOUBLE_EQ(s.capture.acquire_peak_ms, 3.0);
+    EXPECT_DOUBLE_EQ(s.capture.acquire_latest_ms, 2.0);
+}
+
+TEST(CaptureCardWiring, AcquireUnavailableWhenNoSamples) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(s.capture.acquire_availability, MetricAvailability::Unavailable);
+    EXPECT_DOUBLE_EQ(s.capture.acquire_average_ms, 0.0);
+}
+
+TEST(CaptureCardWiring, VpbltWindowFoldsIntoCompositor) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnVpbltSubmit(At(0), 0.4);
+    agg.OnVpbltSubmit(At(16), 0.6);
+    const auto s = agg.BuildSnapshot(At(20), MakeStats(), DiagnosticsLifecycle::Recording, 0.02);
+    EXPECT_EQ(s.compositor.vpblt_availability, MetricAvailability::Available);
+    EXPECT_DOUBLE_EQ(s.compositor.vpblt_average_ms, 0.5);
+    EXPECT_DOUBLE_EQ(s.compositor.vpblt_peak_ms, 0.6);
+}
+
+TEST(CaptureCardWiring, MuxProcessWindow) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnMuxLatency(At(0), 0.2);
+    agg.OnMuxLatency(At(5), 0.8);
+    const auto s = agg.BuildSnapshot(At(10), MakeStats(), DiagnosticsLifecycle::Recording, 0.01);
+    EXPECT_EQ(s.mux.process_availability, MetricAvailability::Available);
+    EXPECT_DOUBLE_EQ(s.mux.process_average_ms, 0.5);
+    EXPECT_DOUBLE_EQ(s.mux.process_peak_ms, 0.8);
+}
+
+TEST(CaptureCardWiring, ResetClearsNewWindows) {
+    PipelineDiagnosticsAggregator agg;
+    agg.Reset(1, MakeConfig());
+    agg.OnAcquireLatency(At(0), 5.0);
+    agg.Reset(2, MakeConfig()); // new session
+    const auto s = agg.BuildSnapshot(At(0), MakeStats(), DiagnosticsLifecycle::Recording, 0.0);
+    EXPECT_EQ(s.capture.acquire_availability, MetricAvailability::Unavailable);
 }
 
 } // namespace

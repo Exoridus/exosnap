@@ -29,6 +29,10 @@ class PipelineFlow : public QWidget {
 
     void setStepStatus(int index, PipelineStepCard::Status status, const QString& note);
 
+    // Live card face: status + note + resource tag + one secondary number + tooltip.
+    void setStepLive(int index, PipelineStepCard::Status status, const QString& note, const QString& resourceTag,
+                     const QString& secondaryNumber, const QString& tooltip);
+
   private:
     QVector<PipelineStepCard*> cards_;
 };

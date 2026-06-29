@@ -91,6 +91,17 @@ QToolButton#titlebarBell:hover {
     background: ${bg3};
 }
 
+/* VG-2: hub open state — accent-dim background + accent-b2 border ring. */
+QToolButton#titlebarBell[hubOpen="true"] {
+    background: ${accent-dim};
+    border: 1px solid ${accent-b2};
+}
+
+QToolButton#titlebarBell[hubOpen="true"]:hover {
+    background: ${accent-soft};
+    border: 1px solid ${accent-b2};
+}
+
 /* S5: Settings popover cog button — flat at rest, subtle bg3 hover. */
 QToolButton#settingsPopoverCog {
     background: transparent;
@@ -188,8 +199,11 @@ QWidget[panelRole="compactRow"] {
 /* Settings readiness banner: neutral while checking, tinted when ready/blocked. */
 QFrame[panelRole="readinessBanner"],
 QWidget[panelRole="readinessBanner"] {
-    background: ${bg3};
-    border: 1px solid ${line2};
+    /* DESIGN-FIDELITY: State-Spec "Diagnostics · All clear" — the summary box is calm in
+       the neutral/clear state: transparent bg + faint --line border, NOT an elevated
+       --raise card. Tinted warn/blocked states override below. */
+    background: transparent;
+    border: 1px solid ${line1};
     border-radius: ${radius-lg}px;
 }
 
@@ -219,7 +233,11 @@ QWidget#logSeveritySegmented {
 
 QPushButton[qualitySegment="true"] {
     min-height: 32px;
-    padding: 0 12px;
+    /* DESIGN-FIDELITY: Segmented sm cell = 6px 12px padding (symmetric → vertically
+       centred). "text-align: center center" was invalid (Qt parses a single alignment
+       token and dropped the property); a valid "center" keeps QPushButton's default
+       vertical centring. */
+    padding: 6px 12px;
     background: transparent;
     border: none;
     border-radius: ${radius-sm}px;
@@ -255,81 +273,6 @@ QPushButton[qualitySegment="true"]:checked:disabled,
 QPushButton[qualitySegment="true"][qualitySegmentSelected="true"]:disabled {
     background: ${bg3};
     color: ${text3};
-}
-
-/* Record page */
-QLabel[labelRole="recordCapabilityBanner"] {
-    font-size: 13px;
-    color: ${text1};
-}
-
-QFrame#recordControlPanel {
-    background: ${bg2};
-    border-color: ${line3};
-}
-
-QFrame#recordControlPanel[stateRole="ready"] {
-    background: ${ok-a06};
-    border-color: ${ok-a34};
-}
-
-QFrame#recordControlPanel[stateRole="recording"] {
-    background: ${err-a08};
-    border-color: ${err-a42};
-}
-
-QFrame#recordControlPanel[stateRole="paused"] {
-    background: ${warn-a08};
-    border-color: ${warn-a42};
-}
-
-QFrame#recordControlPanel[stateRole="done"] {
-    background: ${ok-a08};
-    border-color: ${ok-a42};
-}
-
-QFrame#recordControlPanel[stateRole="blocked"] {
-    background: ${err-a08};
-    border-color: ${err-a42};
-}
-
-QLabel[labelRole="recordControlState"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.1em;
-    font-weight: 600;
-    color: ${text2};
-}
-
-QLabel[labelRole="recordControlState"][stateRole="ready"] {
-    color: ${ok};
-}
-
-QLabel[labelRole="recordControlState"][stateRole="recording"] {
-    color: ${err};
-}
-
-QLabel[labelRole="recordControlState"][stateRole="warn"] {
-    color: ${warn};
-}
-
-QLabel[labelRole="recordControlState"][stateRole="done"] {
-    color: ${ok};
-}
-
-QLabel[labelRole="recordControlState"][stateRole="blocked"] {
-    color: ${err};
-}
-
-QLabel[labelRole="recordHotkeyBadge"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    color: ${text1};
-    border: 1px solid ${line2};
-    border-radius: ${radius-sm}px;
-    padding: 4px 8px;
-    background: ${bg1};
 }
 
 /* Hotkeys page — keycap chips + table rows (HYBRID-PORT-R6) */
@@ -422,184 +365,9 @@ QPushButton[role="quietIcon"]:disabled {
     background: transparent;
 }
 
-QLabel[labelRole="recordTimer"] {
-    font-family: ${font-mono};
-    font-size: 40px;
-    letter-spacing: 0.04em;
-    color: ${text2};
-    font-weight: 600;
-}
-
-QLabel[labelRole="recordTimer"][timerState="recording"] {
-    color: ${err};
-}
-
-QLabel[labelRole="recordTimer"][timerState="paused"] {
+/* v0.8.0-D: statusWarn for Pipeline health Warning state */
+QLabel[labelRole="statusWarn"] {
     color: ${warn};
-}
-
-QLabel[labelRole="recordTimer"][timerState="done"] {
-    color: ${ok};
-}
-
-QLabel[labelRole="recordTimer"][timerState="blocked"] {
-    color: ${err};
-}
-
-QPushButton#recordHeroBtn {
-    min-height: 48px;
-    font-size: 13px;
-    font-weight: 600;
-    border-radius: 8px;
-}
-
-QPushButton#recordHeroBtn[heroRole="start"] {
-    color: #0d150f;
-    background: ${ok};
-    border-color: ${ok};
-}
-
-QPushButton#recordHeroBtn[heroRole="start"]:hover {
-    background: #97D7AF;
-    border-color: #97D7AF;
-}
-
-QPushButton#recordHeroBtn[heroRole="stop"] {
-    color: #1A0D0B;
-    border-color: ${err};
-    background: ${err};
-}
-
-QPushButton#recordHeroBtn[heroRole="stop"]:hover {
-    background: #EC8A7E;
-    border-color: ${err};
-}
-
-QPushButton#recordHeroBtn[heroRole="resume"] {
-    color: ${ok};
-    border-color: ${ok-a52};
-    background: ${ok-a12};
-}
-
-QPushButton#recordHeroBtn[heroRole="resume"]:hover {
-    background: ${ok-a20};
-    border-color: ${ok-a68};
-}
-
-QPushButton#recordHeroBtn[heroRole="blocked"],
-QPushButton#recordHeroBtn[heroRole="muted"] {
-    color: ${text3};
-    border-color: ${line1};
-    background: ${bg2};
-}
-
-QLabel[labelRole="railSummary"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    color: ${text2};
-}
-
-QWidget#recordRailSourceStatusPanel {
-    border: 1px solid ${line1};
-    border-radius: ${radius-sm}px;
-    background: ${surf2-a78};
-    padding: 6px;
-}
-
-QWidget#recordRailSourceStatusPanel[sourceLocked="true"] {
-    border-color: ${warn-a44};
-    background: ${surf2-a86};
-}
-
-QLabel[labelRole="railSourceSummary"] {
-    font-family: ${font-mono};
-    font-size: 10.5px;
-    letter-spacing: 0.04em;
-    color: ${text2};
-}
-
-QLabel[labelRole="recordRailSourceChip"] {
-    font-family: ${font-mono};
-    font-size: 10px;
-    letter-spacing: 0.06em;
-    color: ${text2};
-    border: 1px solid ${line2};
-    border-radius: ${radius-sm}px;
-    background: ${bg3};
-    padding: 8px 9px;
-}
-
-QLabel[labelRole="recordRailSourceChip"][stateRole="ready"] {
-    color: ${ok};
-    border-color: ${ok-a46};
-    background: ${ok-a14};
-}
-
-QLabel[labelRole="recordRailSourceChip"][stateRole="muted"] {
-    color: ${text3};
-    border-color: ${line1};
-    background: ${bg2};
-}
-
-QLabel[labelRole="railReadiness"] {
-    font-size: 12px;
-    color: ${text1};
-}
-
-QLabel[labelRole="railReadiness"][stateRole="ready"] {
-    color: ${ok};
-}
-
-QLabel[labelRole="railReadiness"][stateRole="warn"] {
-    color: ${warn};
-}
-
-QLabel[labelRole="railReadiness"][stateRole="blocked"] {
-    color: ${err};
-}
-
-QLabel[labelRole="railReadiness"][stateRole="muted"] {
-    color: ${text2};
-}
-
-QLabel[labelRole="railStats"] {
-    font-family: ${font-mono};
-    font-size: 10.5px;
-    letter-spacing: 0.04em;
-    color: ${text2};
-}
-
-QFrame#recordRailStatsGrid {
-    border: 1px solid ${line2};
-    border-radius: ${radius-sm}px;
-    background: ${bg1};
-}
-
-QFrame[panelRole="recordRailStatCell"] {
-    border: none;
-    border-top: 1px solid ${line1};
-    border-left: 1px solid ${line1};
-}
-
-QLabel[labelRole="railStatKey"] {
-    font-family: ${font-mono};
-    font-size: 9.5px;
-    letter-spacing: 0.12em;
-    color: ${text3};
-}
-
-QLabel[labelRole="railStatValue"] {
-    font-family: ${font-mono};
-    font-size: 26px;
-    font-weight: 600;
-    color: ${text0};
-}
-
-/* Readiness strip below the preview: a quiet hairline-bordered strip, not a filled card. */
-QFrame#recordReadinessPanel {
-    background: transparent;
-    border: 1px solid ${line1};
 }
 
 QWidget#recordSourceRow {
@@ -753,10 +521,6 @@ QWidget#captureShutterFlash {
     border-radius: ${radius-md}px;
 }
 
-QPushButton#recordOpenDiagnosticsButton {
-    min-height: 34px;
-}
-
 /* ── Settings D6: CompareHint glyph button ───────────────────────────────────
    Same flat "infoGlyph" treatment as InfoHintIcon: no border, no background,
    18×18 touch target. Color is driven by the icon rendered in C++
@@ -826,215 +590,12 @@ QLabel#compatOkLabel {
     color: ${ok};
 }
 
-QLabel[labelRole="audioSettingsGroupTitle"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.14em;
-    color: ${text2};
-}
-
-QLabel[labelRole="audioSettingsRowLabel"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    color: ${text2};
-    min-width: 92px;
-}
-
-QLabel[labelRole="audioSettingsNote"] {
-    font-size: 11.5px;
-    color: ${text2};
-}
 
 /* D6: Settings quiet-row left-side label — normal case, no mono/uppercase.
    Used in Format, Output, Presence, Appearance, and Webcam settings rows. */
 QLabel[labelRole="settingsRowLabel"] {
     font-size: 13px;
     color: ${text1};
-}
-
-QWidget#captureTargetCard {
-    background: ${bg2};
-    border: 1px solid ${line2};
-    border-radius: ${radius-lg}px;
-}
-
-QWidget#captureTargetCard:hover {
-    background: ${bg3};
-    border-color: ${line3};
-}
-
-QWidget#captureTargetCard[selected="true"] {
-    background: ${ac-a12};
-    border-color: ${accent};
-}
-
-QWidget#captureTargetCard[captureCardTone="warning"] {
-    border-color: ${warn-a58};
-    background: ${warn-a12};
-}
-
-QWidget#captureTargetCard[captureCardTone="warning"]:hover {
-    border-color: ${warn};
-    background: ${warn-a20};
-}
-
-QWidget#captureTargetCard[captureCardTone="warning"][selected="true"] {
-    border-color: ${warn};
-    background: ${warn-a24};
-}
-
-QWidget#captureTargetCard:disabled {
-    background: ${bg1};
-    border-color: ${line1};
-    color: ${text3};
-}
-
-QWidget#captureTargetCard[unavailable="true"] {
-    background: ${warn-a08};
-    border-color: ${warn-a42};
-}
-
-QWidget#captureTargetCard[captureCardState="minimized"] {
-    border-style: dashed;
-}
-
-QWidget#captureTargetCard[captureCardState="too-small"] {
-    border-color: ${warn-a68};
-}
-
-QWidget#captureTargetCard:focus {
-    border-color: ${accent};
-    background: ${ac-a16};
-}
-
-QFrame#captureCardThumbnailSurface {
-    background: ${bg3};
-    border: 1px solid ${line2};
-    border-radius: ${radius-md}px;
-}
-
-QFrame#captureCardThumbnailSurface[thumbnailState="ready"] {
-    border-color: ${line2};
-}
-
-QFrame#captureCardThumbnailSurface[thumbnailState="loading"] {
-    background: ${surf2-a92};
-}
-
-QFrame#captureCardThumbnailSurface[thumbnailState="failed"] {
-    border-color: ${warn};
-    background: ${warn-a16};
-}
-
-QFrame#captureCardThumbnailSurface[thumbnailState="unavailable"] {
-    border-color: ${warn};
-    background: ${warn-a18};
-}
-
-QLabel[labelRole="captureCardThumbnail"] {
-    background: transparent;
-    border: none;
-}
-
-QLabel[labelRole="captureCardThumbnailState"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.05em;
-    color: ${text2};
-}
-
-QFrame#captureCardThumbnailSurface[thumbnailState="failed"] QLabel[labelRole="captureCardThumbnailState"],
-QFrame#captureCardThumbnailSurface[thumbnailState="unavailable"] QLabel[labelRole="captureCardThumbnailState"] {
-    color: ${warn};
-}
-
-QLabel[labelRole="captureCardHelp"] {
-    font-size: 11px;
-    color: ${text2};
-}
-
-QWidget#captureTargetCard[captureCardState="minimized"] QLabel[labelRole="captureCardHelp"],
-QWidget#captureTargetCard[captureCardState="too-small"] QLabel[labelRole="captureCardHelp"],
-QWidget#captureTargetCard[captureCardState="unavailable"] QLabel[labelRole="captureCardHelp"] {
-    color: ${warn};
-}
-
-QLabel[labelRole="captureCardTitle"] {
-    font-size: 14px;
-    font-weight: 600;
-    color: ${text0};
-}
-
-QLabel[labelRole="captureCardSelectedChip"] {
-    font-family: ${font-mono};
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    color: ${accent-ink};
-    border: 1px solid ${accent};
-    border-radius: ${radius-sm}px;
-    padding: 1px 6px;
-    background: ${accent};
-}
-
-QLabel[labelRole="captureCardCheckBadge"] {
-    background: ${accent};
-    color: ${accent-ink};
-    border: none;
-    border-radius: 11px;
-    font-size: 13px;
-    font-weight: 700;
-}
-
-QLabel[labelRole="captureCardStatus"] {
-    font-family: ${font-mono};
-    font-size: 10.5px;
-    letter-spacing: 0.06em;
-    color: ${text2};
-    border: 1px solid ${line2};
-    border-radius: ${radius-sm}px;
-    padding: 2px 6px;
-    background: transparent;
-}
-
-QWidget#captureTargetCard[selected="true"] QLabel[labelRole="captureCardStatus"] {
-    color: ${accent};
-    border-color: ${accent-b2};
-    background: ${ac-a18};
-}
-
-QWidget#captureTargetCard[captureCardTone="warning"] QLabel[labelRole="captureCardStatus"] {
-    color: ${warn};
-    border-color: ${warn};
-    background: ${warn-a20};
-}
-
-QWidget#captureTargetCard[captureCardState="too-small"] QLabel[labelRole="captureCardStatus"],
-QWidget#captureTargetCard[captureCardState="minimized"] QLabel[labelRole="captureCardStatus"],
-QWidget#captureTargetCard[captureCardState="unavailable"] QLabel[labelRole="captureCardStatus"] {
-    color: ${warn};
-    border-color: ${warn-a68};
-    background: ${warn-a22};
-}
-
-QLabel[labelRole="captureCardSubtitle"] {
-    font-family: ${font-mono};
-    font-size: 11.5px;
-    letter-spacing: 0.02em;
-    color: ${text2};
-}
-
-QLabel[labelRole="captureTargetPickerLabel"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.1em;
-    color: ${text2};
-    min-width: 70px;
-}
-
-QLabel[labelRole="captureTargetPickerNote"] {
-    font-size: 11.5px;
-    color: ${text2};
 }
 
 /* Video page */
@@ -1214,93 +775,6 @@ QWidget#audioSourceRow[active="false"] QLabel[labelRole="audioDbValue"] {
     color: ${text3};
 }
 
-QFrame#resultingTracksPanel,
-QWidget#resultingTracksPanel,
-QFrame#audioEncodingPanel,
-QWidget#audioEncodingPanel {
-    background: ${bg2};
-    border: 1px solid ${line1};
-    border-radius: ${radius-md}px;
-}
-
-QWidget#audioTrackRow {
-    background: transparent;
-    border-top: 1px solid ${line1};
-}
-
-QWidget#audioTrackRow[firstRow="true"] {
-    border-top: none;
-}
-
-QWidget#audioTrackPreviewRow {
-    background: transparent;
-    border-top: 1px solid ${line1};
-}
-
-QWidget#audioTrackPreviewRow[firstRow="true"] {
-    border-top: none;
-}
-
-QLabel[labelRole="audioTrackIndex"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.04em;
-    color: ${text2};
-}
-
-QLabel[labelRole="audioTrackName"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.08em;
-    font-weight: 600;
-    color: ${text1};
-}
-
-QLabel[labelRole="audioTrackPreviewTag"] {
-    font-family: ${font-mono};
-    font-size: 11.5px;
-    letter-spacing: 0.14em;
-    font-weight: 600;
-    color: ${text1};
-    border: 1px solid ${line2};
-    border-radius: ${radius-sm}px;
-    background: transparent;
-    padding: 3px 7px;
-}
-
-QLabel[labelRole="audioTrackMeta"] {
-    font-family: ${font-mono};
-    font-size: 11.5px;
-    letter-spacing: 0.04em;
-    color: ${text2};
-}
-
-QLabel[labelRole="audioKvKey"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.06em;
-    color: ${text2};
-}
-
-QLabel[labelRole="audioKvValue"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.02em;
-    color: ${text0};
-}
-
-QLabel[labelRole="audioKvValueAccent"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.02em;
-    color: ${text1};
-    font-weight: 600;
-}
-
-QLabel[labelRole="audioEncodingNote"] {
-    font-size: 11.5px;
-    color: ${text2};
-}
 
 QWidget#codecCard {
     background: ${bg2};
@@ -1346,200 +820,7 @@ QLabel[labelRole="codecCardDesc"] {
     color: ${text2};
 }
 
-QWidget#readinessRow {
-    background: transparent;
-    border-top: 1px solid ${line1};
-}
 
-QWidget#readinessRow[firstRow="true"] {
-    border-top: none;
-}
-
-QLabel[labelRole="readinessGlyph"] {
-    font-family: ${font-mono};
-    font-size: 14px;
-    color: ${text2};
-}
-
-QLabel[labelRole="readinessGlyph"][stateRole="ready"] {
-    color: ${ok};
-}
-
-QLabel[labelRole="readinessGlyph"][stateRole="blocked"] {
-    color: ${err};
-}
-
-QLabel[labelRole="readinessTitle"] {
-    font-size: 13.5px;
-    color: ${text0};
-}
-
-QLabel[labelRole="readinessDetail"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    color: ${text2};
-}
-
-QLabel[labelRole="readinessSummary"] {
-    font-size: 12.5px;
-    color: ${text1};
-}
-
-QLabel[labelRole="readinessSummary"][stateRole="ready"] {
-    color: ${ok};
-}
-
-QLabel[labelRole="readinessSummary"][stateRole="warn"] {
-    color: ${warn};
-}
-
-QLabel[labelRole="readinessSummary"][stateRole="blocked"] {
-    color: ${err};
-}
-
-QWidget#readinessCompactActions {
-    background: transparent;
-}
-
-QPushButton#readinessDiagnosticsBtn {
-    min-height: 28px;
-    padding: 0 10px;
-}
-
-QWidget#audioActivityRow {
-    border-top: 1px solid ${line1};
-    background: transparent;
-}
-
-QWidget#audioActivityRow[firstRow="true"] {
-    border-top: none;
-}
-
-QLabel[labelRole="audioTag"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    letter-spacing: 0.14em;
-    color: ${text1};
-    border: 1px solid ${line2};
-    border-radius: ${radius-sm}px;
-    background: transparent;
-    padding: 4px 8px;
-}
-
-QLabel[labelRole="audioRowTitle"] {
-    font-size: 13px;
-    color: ${text0};
-}
-
-QLabel[labelRole="audioDb"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    color: ${text2};
-}
-
-QLabel[labelRole="destinationPath"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    color: ${text0};
-}
-
-QLabel[labelRole="destinationMeta"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    color: ${text2};
-}
-
-QFrame[panelRole="resultPanel"] {
-    background: ${bg2};
-    border: 1px solid ${line2};
-    border-radius: ${radius-md}px;
-}
-
-QLabel[labelRole="resultStatus"] {
-    font-size: 13px;
-    font-weight: 600;
-    color: ${text0};
-}
-
-QLabel[labelRole="resultStatusOk"] {
-    font-size: 13px;
-    font-weight: 600;
-    color: ${ok};
-}
-
-QLabel[labelRole="resultStatusErr"] {
-    font-size: 13px;
-    font-weight: 600;
-    color: ${err};
-}
-
-QLabel[labelRole="resultDetail"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    color: ${text2};
-}
-
-QFrame[panelRole="resultPanel"][resultKind="success"] {
-    border-color: ${ok};
-}
-
-QFrame[panelRole="resultPanel"][resultKind="error"] {
-    border-color: ${err};
-}
-
-QLabel[labelRole="resultTitleOk"] {
-    font-size: 13px;
-    font-weight: 600;
-    color: ${ok};
-}
-
-QLabel[labelRole="resultTitleErr"] {
-    font-size: 13px;
-    font-weight: 600;
-    color: ${err};
-}
-
-QLabel[labelRole="resultUserMessage"] {
-    font-size: 12px;
-    color: ${text1};
-}
-
-QLabel[labelRole="resultActionHint"] {
-    font-size: 11px;
-    color: ${text2};
-}
-
-QLabel[labelRole="resultFile"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    color: ${text0};
-}
-
-QLabel[labelRole="resultStats"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    color: ${text1};
-}
-
-QLabel[labelRole="resultPath"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    color: ${text2};
-}
-
-QFrame[frameRole="resultTechnicalSeparator"] {
-    background: ${line2};
-    border: none;
-    min-height: 1px;
-    max-height: 1px;
-}
-
-QLabel[labelRole="resultTechnical"] {
-    font-family: ${font-mono};
-    font-size: 10px;
-    color: ${text3};
-}
 
 /* In-window About surface: the #aboutOverlay backdrop dim is painted in code
    (a plain non-opaque QWidget) so it composites over the page beneath; only the
@@ -1798,20 +1079,6 @@ QLabel[labelRole="previewMeta"] {
     color: ${text2};
 }
 
-QLabel[labelRole="previewCenterTitle"] {
-    font-family: ${font-mono};
-    font-size: 13px;
-    letter-spacing: 0.12em;
-    color: ${text2};
-}
-
-QLabel[labelRole="previewCenterSubtitle"] {
-    font-family: ${font-mono};
-    font-size: 14px;
-    letter-spacing: 0.14em;
-    color: ${text2};
-}
-
 QLabel[labelRole="previewBottomText"] {
     font-family: ${font-mono};
     font-size: 11px;
@@ -1845,9 +1112,44 @@ QLabel[labelRole="section"] {
 }
 
 QLabel[labelRole="cardTitle"] {
-    font-size: 15px;
-    font-weight: 600;
+    font-size: 14.5px;
+    font-weight: 700;
     color: ${text0};
+}
+
+/* v10: per-card glyph chip to the left of the card title. */
+QLabel#cardGlyphChip {
+    background: ${accent-dim};
+    border: 1px solid ${accent-b2};
+    border-radius: 8px;
+}
+
+/* v10 P3: "Expert mode" header label tints to accent while expert mode is on. */
+QLabel#expertModeLabel[expertOn="true"] {
+    color: ${accent};
+}
+
+/* v10 P2: amber warning banner above the Settings card grid (expert mode only). */
+QWidget#expertWarnBanner {
+    background: ${warn-dim};
+    border: 1px solid ${warn-b};
+    border-left: 3px solid ${warn};
+    border-radius: 11px;
+    padding: 11px 15px;
+}
+
+QLabel#expertWarnBannerText {
+    color: ${warn};
+    font-size: 12.5px;
+    font-weight: 500;
+}
+
+/* v10 P3: expert-only rows (Bit depth, Colour range) carry a left accent edge. */
+QWidget[expertEdge="true"] {
+    border-left: 2px solid ${accent-b2};
+    border-top-left-radius: 2px;
+    border-bottom-left-radius: 2px;
+    padding-left: 10px;
 }
 
 QLabel[labelRole="fieldLabel"] {
@@ -1981,6 +1283,12 @@ QLabel[labelRole="resultSegments"] {
     color: ${text1};
 }
 
+/* v0.8.0-D: Report card stats labels (frame drop %, A/V drift). */
+QLabel[labelRole="resultMetadata"] {
+    font-size: 12px;
+    color: ${text2};
+}
+
 QLabel[labelRole="resultSegments"][missingFile="true"],
 QLabel[labelRole="resultMetadata"][missingFile="true"] {
     color: ${err};
@@ -2007,7 +1315,7 @@ QFrame[panelRole="statTile"],
 QWidget[panelRole="statTile"] {
     background: ${bg3};
     border: 1px solid ${line2};
-    border-radius: ${radius-md}px;
+    border-radius: 12px;
 }
 
 QFrame[panelRole="statTile"][statTone="blocker"] {
@@ -2033,7 +1341,7 @@ QFrame[panelRole="statTile"][statTone="zero"] {
 
 QLabel[labelRole="statTileNum"] {
     font-family: ${font-mono};
-    font-size: 26px;
+    font-size: 30px;
     font-weight: 600;
     color: ${text0};
 }
@@ -2228,7 +1536,7 @@ QLabel[labelRole="pipelineCaption"] {
 QFrame#pipelineStepCard {
     background: ${bg2};
     border: 1px solid ${line2};
-    border-radius: ${radius-lg}px;
+    border-radius: 11px;
 }
 
 QFrame#pipelineStepCard[pipelineStatus="planned"] {
@@ -2330,7 +1638,7 @@ QPlainTextEdit#logViewer {
     border-radius: ${radius-md}px;
     padding: 12px 14px;
     font-family: ${font-mono};
-    font-size: 12.5px;
+    font-size: 11.5px;
     selection-background-color: ${accent-dim};
     selection-color: ${text0};
 }
@@ -2341,9 +1649,9 @@ QPlainTextEdit#logViewer:focus {
 
 QLabel[labelRole="logStatus"] {
     font-family: ${font-mono};
-    font-size: 11px;
+    font-size: 11.5px;
     letter-spacing: 0.02em;
-    color: ${text2};
+    color: ${text3};
 }
 
 /* D3: Logs toolbar ghost-sm buttons (Copy, Export) — h32, pill radius.
@@ -2371,12 +1679,11 @@ QPushButton[logToolbarGhost="true"]:disabled {
     border-color: ${line1};
 }
 
-/* D3: Logs footer folder link — mono 12, accent color, underline */
+/* D3: Logs footer folder link — mono 12, accent color, no underline */
 QLabel[labelRole="logFolderLink"] {
     font-family: ${font-mono};
     font-size: 12px;
     color: ${accent};
-    text-decoration: underline;
 }
 
 QLabel[labelRole="logFolderLink"]:hover {
@@ -2419,6 +1726,28 @@ QKeySequenceEdit {
     padding: 0 ${space-md}px;
     color: ${text0};
     min-height: ${control-height}px;
+}
+
+/* DESIGN-FIDELITY: suite-diag.jsx:174 — the Logs search is a composed pill: a styled
+   container (logSearchContainer) holds a leading 14px magnifier (logSearchIcon) and a
+   frameless input (logSearchEdit). The container owns the pill outline; the input is
+   transparent so the icon and text share one centred row. */
+QWidget#logSearchContainer {
+    background: ${bg2};
+    border: 1px solid ${line2};
+    border-radius: 18px;
+    min-height: ${control-height}px;
+}
+QWidget#logSearchContainer:hover {
+    border-color: ${line3};
+}
+QLineEdit#logSearchEdit,
+QLineEdit#logSearchEdit:hover,
+QLineEdit#logSearchEdit:focus {
+    background: transparent;
+    border: none;
+    padding: 0;
+    min-height: 0;
 }
 
 QLineEdit:hover,
@@ -2770,6 +2099,20 @@ QToolButton#presetManageButton::menu-indicator {
     width: 0;
 }
 
+/* v10: Preset toolbar "Preset" caption — mono uppercase micro-label, dim. */
+QLabel[labelRole="presetToolbarLabel"] {
+    font-family: ${font-mono};
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: ${text3};
+}
+
+/* v10: "· Unsaved" dirty indicator — amber/caution, matches videoRailUnsaved. */
+QLabel[labelRole="presetDirtyIndicator"] {
+    color: ${warn};
+}
+
 /* InfoHint "i" glyph button: flat icon only, no button chrome. The generic
    QToolButton rule above paints a bg/border/padding box that otherwise hides
    the 15px info glyph; reset it so only the icon shows (faint at rest, mint on
@@ -2995,14 +2338,16 @@ QLabel[labelRole="detailBreadcrumb"] {
 QFrame#recordTransportDock {
     background: ${bg1};
     border: 1px solid ${line1};
-    border-radius: ${radius-lg}px;
+    /* DESIGN-FIDELITY: State-Spec "Dock-Container" border-radius = 18px (not radius-lg/14). */
+    border-radius: 18px;
 }
 
 /* Center duration — monospace, tabular, always centered. */
 QLabel[labelRole="recordDockTimer"] {
     font-family: ${font-mono};
     font-size: 30px;
-    font-weight: 600;
+    /* DESIGN-FIDELITY: State-Spec timer = 30px weight 500 (idle/recording/paused). */
+    font-weight: 500;
     letter-spacing: 0.04em;
     color: ${text2};
 }
@@ -3023,11 +2368,12 @@ QLabel[labelRole="recordDockTimer"][timerState="blocked"] {
     color: ${err};
 }
 
-/* Countdown digit — same font/weight/size as the recording timecode so the
-   pre-roll digit reads as the primary focus signal (DF-03). */
+/* DESIGN-FIDELITY: State-Spec "Countdown" counter = 34px weight 600 in --caution —
+   larger than the 30px/500 timecode so the pre-roll digit reads as the focus signal.
+   (Supersedes the earlier DF-03 "same size as the timer" decision.) */
 QLabel[labelRole="recordDockTimer"][timerState="countdown"] {
     font-family: ${font-mono};
-    font-size: 30px;
+    font-size: 34px;
     font-weight: 600;
     letter-spacing: 0.04em;
     color: ${warn};
@@ -3039,7 +2385,6 @@ QLabel[labelRole="recordDockTimer"][timerState="countdown"] {
    never rounded). A true pill therefore needs a deterministic height and a
    radius of exactly half of it. */
 QPushButton#recordDockRecord,
-QPushButton#recordDockRecordAgain,
 QPushButton#recordDockResume,
 QPushButton#recordDockStop,
 QPushButton#recordDockPause {
@@ -3049,14 +2394,6 @@ QPushButton#recordDockPause {
     font-size: 13.5px;
     font-weight: 600;
     padding: 0 18px;
-}
-
-/* Open folder — icon-only 38×38 ghost button, radius-10 (DF-04).
-   Fixed size is enforced in C++ (setFixedSize); QSS pins the border-radius and
-   removes text padding so only the folder icon is visible. */
-QPushButton#recordDockOpenFolder {
-    border-radius: 10px;
-    padding: 0;
 }
 
 /* Capture-frame dock button — round 44×44 icon-only button.
@@ -3165,32 +2502,6 @@ QPushButton[dockAction="ghost"]:disabled {
     border-color: ${line1};
 }
 
-/* Completed (result) zone. */
-QPushButton#recordDockFilename {
-    color: ${accent};
-    background: transparent;
-    border: none;
-    text-align: left;
-    font-family: ${font-mono};
-    font-size: 13px;
-    padding: 0;
-}
-
-QPushButton#recordDockFilename:hover {
-    color: ${accent-hover};
-    text-decoration: underline;
-}
-
-QPushButton#recordDockFilename:disabled {
-    color: ${text2};
-}
-
-QLabel[labelRole="recordDockSize"] {
-    font-family: ${font-mono};
-    font-size: 12px;
-    color: ${text2};
-}
-
 /* v10 Split Record button — pill container clips both halves via border-radius.
    The container background and border define the pill outline; individual child
    buttons carry no border-radius so they read as a single fused control.
@@ -3198,7 +2509,9 @@ QLabel[labelRole="recordDockSize"] {
 QFrame#recordSplitContainer {
     background: ${accent};
     border: 1px solid ${accent};
-    border-radius: 999px;
+    /* Pill: Qt does not clamp an oversized radius to height/2, so 999px renders
+       squared-off — use the exact half-height (46/2) for a true pill. */
+    border-radius: 23px;
     min-height: 46px;
 }
 
@@ -3209,7 +2522,12 @@ QFrame#recordSplitContainer[containerAction="stop"] {
 
 /* Record face — occupies the left portion of the pill; no individual radius. */
 QPushButton#recordDockRecord[splitRole="face"] {
-    border-radius: 0;
+    /* Left half of the pill: round the outer (left) corners so the hover/pressed
+       background stays pill-shaped; inner (right) corners stay square at the divider. */
+    border-top-left-radius: 23px;
+    border-bottom-left-radius: 23px;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
     border: none;
     background: transparent;
     padding: 0 18px 0 22px;
@@ -3237,7 +2555,11 @@ QFrame#recordSplitDivider {
 
 /* Chevron half — right portion of the pill; no individual radius. */
 QPushButton#recordDockChevron {
-    border-radius: 0;
+    /* Right half of the pill: round the outer (right) corners; inner (left) stay square. */
+    border-top-right-radius: 23px;
+    border-bottom-right-radius: 23px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
     border: none;
     background: transparent;
     padding: 0 12px;
@@ -3444,4 +2766,147 @@ QPushButton[themePickerCard="true"]:checked {
 QPushButton[themePickerCard="true"]:focus {
     border-color: ${accent};
     outline: none;
+}
+
+/* v0.8.0-D: DiagnosticsPage FixAction inline buttons — compact ghost in issue rows. */
+QPushButton#issueFixBtn {
+    font-size: 12px;
+    padding: 4px 10px;
+    min-height: 24px;
+}
+
+/* v0.8.0-D: Report card stats row — subtle top separator. */
+#reportCardStatsRow {
+    border-top: 1px solid ${line1};
+    padding-top: 6px;
+    margin-top: 4px;
+}
+
+/* ── Notification Hub Panel (v10: restored — State Spec "About · Notification Hub") ──
+   NotificationHubPanel paints its own backdrop in paintEvent (bg1 fill + line2
+   border); set background: transparent so the custom paint shows through. */
+QFrame#notificationHubPanel {
+    background: transparent;
+    border: none;
+}
+
+QWidget#hubHeader {
+    background: transparent;
+}
+
+QLabel#hubTitle {
+    font-family: ${font-sans};
+    font-size: 14px;
+    font-weight: 700;
+    color: ${text0};
+}
+
+QLabel#hubMarkAllRead {
+    font-size: 12px;
+    font-weight: 500;
+    color: ${text3};
+}
+
+QFrame#hubHeaderDivider {
+    background: ${line1};
+    border: none;
+    min-height: 1px;
+    max-height: 1px;
+}
+
+QWidget#hubScrollContent {
+    background: transparent;
+}
+
+QWidget#hubEmptyState {
+    background: transparent;
+}
+
+QWidget#hubEmptyIcon {
+    background: ${bg2};
+    border: none;
+    border-radius: 22px;
+}
+
+QLabel#hubEmptyTitle {
+    font-family: ${font-sans};
+    font-size: 13.5px;
+    font-weight: 500;
+    color: ${text0};
+}
+
+QLabel#hubEmptyBody {
+    font-size: 12.5px;
+    color: ${text2};
+}
+
+QFrame#hubItemDivider {
+    background: ${line1};
+    border: none;
+    min-height: 1px;
+    max-height: 1px;
+    margin: 2px 12px;
+}
+
+/* VG-6: advisory item unread background — set via setProperty("advisoryUnread", true). */
+QWidget[advisoryUnread="true"] {
+    background: rgba(255, 255, 255, 6);
+}
+
+/* Advisory action buttons — ghost: transparent bg, line2 border, accent text. */
+QPushButton[advisoryAction="true"] {
+    background: transparent;
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    color: ${accent};
+    font-size: 12px;
+    font-weight: 600;
+    min-height: 26px;
+    padding: 0 10px;
+}
+
+QPushButton[advisoryAction="true"]:hover {
+    background: ${ac-a10};
+    border-color: ${accent-b2};
+    color: ${accent};
+}
+
+QPushButton[advisoryAction="true"]:pressed {
+    background: ${ac-a12};
+    border-color: ${accent-b2};
+}
+
+QPushButton[advisoryAction="true"]:disabled {
+    color: ${text3};
+    background: transparent;
+    border-color: ${line1};
+}
+
+/* ── Settings Updates card action button (ADR 0034 Phase A) ──
+   Ghost while checking/up-to-date; accent CTA when an update is available. */
+QPushButton#updatesActionButton {
+    background: transparent;
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    color: ${text0};
+    font-size: 12px;
+    font-weight: 600;
+    min-height: 28px;
+    padding: 0 12px;
+}
+
+QPushButton#updatesActionButton:hover {
+    border-color: ${accent-b2};
+    color: ${accent};
+}
+
+QPushButton#updatesActionButton[updatesCta="true"] {
+    background: ${accent-dim};
+    border-color: ${accent-b2};
+    color: ${accent};
+}
+
+QPushButton#updatesActionButton:disabled {
+    color: ${text3};
+    border-color: ${line1};
 }

@@ -4,6 +4,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QStyle>
 #include <QVBoxLayout>
 
 #include "../theme/ExoSnapPalette.h"
@@ -16,11 +17,10 @@ using namespace exosnap::ui::theme;
 
 AdvisoryItem::AdvisoryItem(QWidget* parent) : QWidget(parent) {
     // -- Status icon label (fixed 30x30) --
+    // Background/border are set per-severity in updateStatusIcon() (VG-8).
     status_icon_label_ = new QLabel(this);
     status_icon_label_->setFixedSize(30, 30);
     status_icon_label_->setAlignment(Qt::AlignCenter);
-    status_icon_label_->setStyleSheet(QStringLiteral("background: %1; border-radius: 9px;")
-                                          .arg(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().line)));
 
     // -- Title label --
     title_label_ = new QLabel(this);
@@ -44,9 +44,9 @@ AdvisoryItem::AdvisoryItem(QWidget* parent) : QWidget(parent) {
                                    QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut) + QLatin1Char(';'));
     }
 
-    // -- Time label --
+    // -- Time label (inline in title row, VG-5) --
     time_label_ = new QLabel(this);
-    time_label_->setAlignment(Qt::AlignRight | Qt::AlignTop);
+    time_label_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     {
         QFont f;
         f.setFamily(QStringLiteral("IBM Plex Mono"));
@@ -64,20 +64,20 @@ AdvisoryItem::AdvisoryItem(QWidget* parent) : QWidget(parent) {
                                QStringLiteral("; border-radius: 3px;"));
     unread_dot_->setVisible(false);
 
-    // -- Text VBox (title + body) --
+    // -- Title row: [dot] [title] [time] inline (VG-5) --
+    auto* title_row = new QHBoxLayout;
+    title_row->setContentsMargins(0, 0, 0, 0);
+    title_row->setSpacing(8);
+    title_row->addWidget(unread_dot_, 0, Qt::AlignVCenter);
+    title_row->addWidget(title_label_, 1);
+    title_row->addWidget(time_label_, 0, Qt::AlignVCenter);
+
+    // -- Text VBox (title row + body) --
     auto* text_box = new QVBoxLayout;
     text_box->setContentsMargins(0, 0, 0, 0);
     text_box->setSpacing(2);
-    text_box->addWidget(title_label_);
+    text_box->addLayout(title_row);
     text_box->addWidget(body_label_);
-
-    // -- Right VBox (time + dot) --
-    auto* right_box = new QVBoxLayout;
-    right_box->setContentsMargins(0, 0, 0, 0);
-    right_box->setSpacing(4);
-    right_box->addWidget(time_label_);
-    right_box->addWidget(unread_dot_, 0, Qt::AlignRight);
-    right_box->addStretch();
 
     // -- Row 1 --
     auto* row1 = new QHBoxLayout;
@@ -85,7 +85,6 @@ AdvisoryItem::AdvisoryItem(QWidget* parent) : QWidget(parent) {
     row1->setSpacing(10);
     row1->addWidget(status_icon_label_, 0, Qt::AlignTop);
     row1->addLayout(text_box, 1);
-    row1->addLayout(right_box, 0);
 
     // -- Actions container (row 2, optional) --
     actions_container_ = new QWidget(this);
@@ -97,7 +96,7 @@ AdvisoryItem::AdvisoryItem(QWidget* parent) : QWidget(parent) {
 
     // -- Main VBox --
     auto* main_layout = new QVBoxLayout(this);
-    main_layout->setContentsMargins(0, 0, 0, 0);
+    main_layout->setContentsMargins(15, 13, 15, 13); // VG-6: padding 13px 15px
     main_layout->setSpacing(8);
     main_layout->addLayout(row1);
     main_layout->addWidget(actions_container_);
@@ -129,6 +128,10 @@ void AdvisoryItem::setUnread(bool unread) {
     if (unread_ == unread)
         return;
     unread_ = unread;
+    // VG-6: drive the [advisoryUnread="true"] QSS rule for the subtle unread background.
+    setProperty("advisoryUnread", unread_);
+    style()->unpolish(this);
+    style()->polish(this);
     updateUnreadDot();
 }
 
@@ -153,23 +156,48 @@ void AdvisoryItem::addAction(const QString& id, const QString& label, bool isDee
 }
 
 void AdvisoryItem::updateStatusIcon() {
+    // VG-8: severity-based icon bg (dim) and border (b) per Canon STATUS map.
+    const auto& t = exosnap::ui::theme::ActiveTheme();
+    const bool dark = (t.kind == exosnap::ui::theme::ThemeKind::Dark);
+    const double s_dim = dark ? 0.13 : 0.12;
+    const double s_b = dark ? 0.44 : 0.42;
+    const double ac_dim = dark ? 0.14 : 0.12;
+    const double ac_b2 = dark ? 0.60 : 0.52;
+
     QString icon_name;
     QString icon_color;
+    QString bg_color;
+    QString border_color;
 
     if (status_ == QStringLiteral("success")) {
         icon_name = QStringLiteral("check-circle");
-        icon_color = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().success);
+        icon_color = QString::fromUtf8(t.success);
+        const QColor base = exosnap::ui::theme::ParseThemeColor(t.success);
+        bg_color = exosnap::ui::theme::ThemeRgba(base, s_dim);
+        border_color = exosnap::ui::theme::ThemeRgba(base, s_b);
     } else if (status_ == QStringLiteral("caution")) {
         icon_name = QStringLiteral("alert-triangle");
-        icon_color = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().caution);
+        icon_color = QString::fromUtf8(t.caution);
+        const QColor base = exosnap::ui::theme::ParseThemeColor(t.caution);
+        bg_color = exosnap::ui::theme::ThemeRgba(base, s_dim);
+        border_color = exosnap::ui::theme::ThemeRgba(base, s_b);
     } else if (status_ == QStringLiteral("error")) {
         icon_name = QStringLiteral("x-circle");
-        icon_color = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().error);
+        icon_color = QString::fromUtf8(t.error);
+        const QColor base = exosnap::ui::theme::ParseThemeColor(t.error);
+        bg_color = exosnap::ui::theme::ThemeRgba(base, s_dim);
+        border_color = exosnap::ui::theme::ThemeRgba(base, s_b);
     } else {
         // "info" and anything else
         icon_name = QStringLiteral("info");
-        icon_color = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac);
+        icon_color = QString::fromUtf8(t.ac);
+        const QColor base = exosnap::ui::theme::ParseThemeColor(t.ac);
+        bg_color = exosnap::ui::theme::ThemeRgba(base, ac_dim);
+        border_color = exosnap::ui::theme::ThemeRgba(base, ac_b2);
     }
+
+    status_icon_label_->setStyleSheet(
+        QStringLiteral("background: %1; border: 1px solid %2; border-radius: 9px;").arg(bg_color, border_color));
 
     const qreal dpr = devicePixelRatioF();
     const QPixmap px = lucidePixmap(icon_name, icon_color, 18, dpr);

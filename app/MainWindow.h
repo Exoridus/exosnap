@@ -4,10 +4,14 @@
 #include <QRect>
 #include <QStackedWidget>
 #include <QString>
+#include <QStringList>
 #include <array>
 #include <cstdint>
 #include <memory>
 
+#include "diagnostics/DpcLatencyProvider.h"
+#include "diagnostics/ElevationProvider.h"
+#include "diagnostics/PresentMonProvider.h"
 #include "models/OutputSettingsModel.h"
 #include "models/RecordingPreset.h"
 #include "models/RecordingPresetRegistry.h"
@@ -96,6 +100,23 @@ class MainWindow : public QMainWindow {
         return relaunch_requested_;
     }
 
+    // ELEVATION-FOUNDATION-R1 (ADR 0033): true when the user accepted the
+    // "relaunch as administrator" offer. main() reads this after app.exec() and
+    // relaunches elevated (ShellExecuteEx/runas) instead of detached, reusing the
+    // single-instance mutex release. Never set while a recording/remux is active.
+    [[nodiscard]] bool elevatedRelaunchRequested() const noexcept {
+        return elevated_relaunch_requested_;
+    }
+
+    // Builds the handoff argv for the elevated relaunch (current nav page + a flag
+    // to re-enable the feature whose opt-in triggered the relaunch).
+    [[nodiscard]] QStringList elevatedRelaunchArgs() const;
+
+    // Startup handoff (set by main() from parsed argv BEFORE show): land on the
+    // named nav page and, if requested, re-enable + persist the present-diagnostics
+    // opt-in (only applied once the elevated instance is actually running).
+    void applyStartupRelaunchHandoff(const QString& page_name, bool reenable_present_diag);
+
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     void applyVisualScenario(const visual::VisualScenario& scenario);
 #endif
@@ -139,9 +160,47 @@ class MainWindow : public QMainWindow {
     void refreshPresetUi();
     void initHotkeyService();
     void refreshDiagnosticsData();
+    // Called on the UI thread when the async capability probe completes.
+    // Sets runtime_caps_, delivers them to the Record page, and starts device notifiers.
+    void onRuntimeCapsReady(capability::CapabilitySet caps);
+    // Called on the UI thread when the async capability probe FAILED (threw in the
+    // worker). Drives the Record page into its capability-failure state so coordinator
+    // init never hangs armed, then starts device notifiers so the rest of the UI works.
+    void onRuntimeCapsFailed(const QString& reason);
+    // Start + seed (rescan) the audio/webcam/display device notifiers. Shared by the
+    // caps-ready and caps-failed paths so the ordering (notifiers after probe) holds.
+    void startDeviceNotifiers();
     void navigateToEditExportPage(const QString& file_path, const QString& duration, const QString& size,
                                   const QString& resolution, const QString& fps, const QString& video_codec,
                                   const QString& audio_codec, const QString& container);
+
+    // ---- Staged post-show page hydration ----
+    // Builds deferred pages one-per-event-loop-tick so the UI remains responsive.
+    // Called from a singleShot(0) in the ctor tail — separate from the caps-probe lambda
+    // so page construction does not delay the hardware probe.
+    void hydrateSecondaryPages();
+    // Builds LogsPage, replacing the cheap placeholder reserved at kLogsPageIndex.
+    void buildLogsPage();
+    // Builds HotkeysPage, replacing the cheap placeholder reserved at kHotkeysPageIndex.
+    void buildHotkeysPage();
+    // Builds DiagnosticsPage, replacing the cheap placeholder reserved at kDiagnosticsPageIndex.
+    // Wires fix-action signals and the critical record_page_→diagnostics_page_ direct connect,
+    // then ends with refreshDiagnosticsData() to deliver current data to the freshly-built page.
+    void buildDiagnosticsPage();
+    // Builds AboutPage, replacing the cheap placeholder reserved at kAboutPageIndex.
+    void buildAboutPage();
+    // Builds EditExportPage (index 8, past kPageDescriptors) with its back-connection.
+    void buildEditExportPage();
+    // Builds WebcamPage, replacing the cheap placeholder reserved at kWebcamPageIndex.
+    // Ends with applySettings(live_webcam_) to replay preset-applied state.
+    void buildWebcamPage();
+    // Builds OutputPage, replacing the cheap placeholder reserved at kOutputPageIndex.
+    // Ends with refreshPresetUi() so the freshly-built page gets its profile options.
+    void buildOutputPage();
+    // Builds ConfigPage (Settings), replacing the cheap placeholder reserved at kSettingsPageIndex.
+    // Ends with applyPresetConfig() + refreshPresetUi() + chrome-state replay so the freshly-built
+    // page has correct settings, preset list, and readiness/lock status on first open.
+    void buildConfigPage();
 
     // ---- Preset system (Stage 2) ----
 
@@ -214,6 +273,11 @@ class MainWindow : public QMainWindow {
     void dispatchNotificationAction(const notifications::NotificationEvent& event,
                                     notifications::NotificationAction action);
 
+    // ADR 0033: react to the present-diagnostics opt-in toggle — persist the choice
+    // and raise/remove the "needs administrator" hub advisory based on the runtime
+    // elevation state.
+    void onPresentDiagnosticsOptInToggled(bool enabled);
+
     // UPDATE-WIRE-R1 (ADR 0012): trigger a guarded update check. No-op (and shows
     // the paused banner) while recording / remuxing.
     void triggerUpdateCheck();
@@ -256,22 +320,36 @@ class MainWindow : public QMainWindow {
     ui::overlay::NotificationToastWindow* notification_toast_window_ = nullptr;
     // PS-PHASE-B: notification hub panel (top-level popup, no Qt parent).
     ui::chrome::NotificationHubPanel* notification_hub_ = nullptr;
+    // Set when a press on the bell dismisses the open hub (Qt::Popup auto-closes on
+    // mouse-DOWN) so the bell's ensuing clicked() (on release) closes rather than
+    // re-opens it — i.e. a clean single-click toggle.
+    bool hub_just_dismissed_ = false;
     // UPDATE-WIRE-R1 (ADR 0012): Qt bridge to the update engine (owned by this).
     UpdateService* update_service_ = nullptr;
     // Last update check's releases-page URL (for the panel's "Open releases" / notes link).
     QString last_update_releases_url_;
+    // ADR 0034 Phase A: true while a user-initiated check is in flight, so an
+    // available result updates the Settings card but does NOT also raise a toast.
+    bool manual_update_check_ = false;
     // Last known monitor rect from RecordPage for overlay positioning.
     QRect recording_monitor_rect_;
     QStackedWidget* stack_ = nullptr;
     RecordPage* record_page_ = nullptr;
     ConfigPage* config_page_ = nullptr;
+    QWidget* config_placeholder_ = nullptr; // cheap slot-reservation until buildConfigPage()
     OutputPage* output_page_ = nullptr;
     DiagnosticsPage* diagnostics_page_ = nullptr;
+    QWidget* diagnostics_placeholder_ = nullptr; // cheap slot-reservation until buildDiagnosticsPage()
     LogsPage* logs_page_ = nullptr;
+    QWidget* logs_placeholder_ = nullptr; // cheap slot-reservation until buildLogsPage()
     WebcamPage* webcam_page_ = nullptr;
+    QWidget* webcam_placeholder_ = nullptr; // cheap slot-reservation until buildWebcamPage()
     HotkeysPage* hotkeys_page_ = nullptr;
+    QWidget* hotkeys_placeholder_ = nullptr; // cheap slot-reservation until buildHotkeysPage()
     EditExportPage* edit_export_page_ = nullptr;
     pages::AboutPage* about_page_ = nullptr;
+    QWidget* about_placeholder_ = nullptr;  // cheap slot-reservation until buildAboutPage()
+    QWidget* output_placeholder_ = nullptr; // cheap slot-reservation until buildOutputPage()
 
     // Device notifiers (owned; started after capability probe; stopped first in ~MainWindow).
     AudioDeviceNotifier audio_notifier_;
@@ -323,6 +401,22 @@ class MainWindow : public QMainWindow {
     std::string crash_dir_;
     std::optional<crash_capture::SessionContext> pending_crash_;
     bool relaunch_requested_ = false;
+
+    // ELEVATION-FOUNDATION-R1 (ADR 0033): elevated self-relaunch handoff state.
+    bool elevated_relaunch_requested_ = false;
+    // When true, elevatedRelaunchArgs() emits the re-enable flag so the elevated
+    // instance turns the present-diagnostics opt-in back on after restart.
+    bool reenable_present_diag_on_relaunch_ = false;
+    // Runtime elevation state source for the present-diagnostics opt-in gate.
+    diagnostics::Win32ElevationProvider elevation_provider_;
+    // ADR 0033: PresentMon-backed present/tearing diagnostics provider. Initialized
+    // opt_in=false; SetOptIn() is called after persisted_settings_ is loaded.
+    // Must be declared after elevation_provider_ (initialization order dependency).
+    diagnostics::PresentMonProvider present_provider_{elevation_provider_, false};
+    // ADR 0033: kernel DPC/ISR latency provider. Shares the present-diagnostics opt-in
+    // gate (elevation + opt-in). Started/stopped alongside present_provider_; its reading
+    // is fed to the DiagnosticsPage which forwards it into RecommendationEngine.
+    diagnostics::DpcLatencyProvider dpc_provider_;
 };
 
 } // namespace exosnap

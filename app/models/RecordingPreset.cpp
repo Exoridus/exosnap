@@ -109,6 +109,7 @@ RecordingPreset MakeDefaultPreset() {
     // Video
     preset.config.video.quality = recorder_core::NvencQualityPreset::High;
     preset.config.video.cfr = true;
+    preset.config.video.frame_pacing = recorder_core::FramePacingMode::Smooth;
     preset.config.video.capture_cursor = true;
     preset.config.video.frame_rate_num = 60;
     preset.config.video.frame_rate_den = 1;
@@ -219,6 +220,13 @@ RecordingPresetConfig SanitizePresetConfig(RecordingPresetConfig config) {
     }
     if (config.output.container == capability::Container::Mp4 && !config.video.cfr) {
         config.video.cfr = true;
+    }
+    // Video: frame_pacing (ADR 0035) — clamp unknown integer values to Smooth.
+    {
+        const int fp = static_cast<int>(config.video.frame_pacing);
+        if (fp < 0 || fp > 1) {
+            config.video.frame_pacing = recorder_core::FramePacingMode::Smooth;
+        }
     }
     // Video: rate_control — default to ConstantQuality if an unknown value slips through.
     using RC = recorder_core::RateControlMode;
@@ -495,6 +503,9 @@ bool NormalizedConfigEquals(const RecordingPresetConfig& a, const RecordingPrese
     if (a.video.cfr != b.video.cfr) {
         return false;
     }
+    if (a.video.frame_pacing != b.video.frame_pacing) {
+        return false;
+    }
     if (a.video.capture_cursor != b.video.capture_cursor) {
         return false;
     }
@@ -747,6 +758,9 @@ bool ConfigDirtyEquivalent(const RecordingPresetConfig& a, const RecordingPreset
         return false;
     }
     if (a.video.cfr != b.video.cfr) {
+        return false;
+    }
+    if (a.video.frame_pacing != b.video.frame_pacing) {
         return false;
     }
     if (a.video.capture_cursor != b.video.capture_cursor) {

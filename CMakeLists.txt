@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.27)
 # Canonical version source of truth for the whole project. Every other version
 # form (application metadata, Windows VERSIONINFO, About surface, release
 # artifact name) is derived from PROJECT_VERSION — do not duplicate it elsewhere.
-project(exosnap VERSION 0.7.0 LANGUAGES C CXX)
+project(exosnap VERSION 0.8.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -84,6 +84,13 @@ install(CODE "
   endforeach()
 ")
 
+# ADR 0033: present & tearing diagnostics (PresentMon ETW). This slice ships only the
+# verifiable shell — the stub provider degrades to Unavailable and compiles regardless.
+# The flag gates the in-process ETW consumer vendored in third_party/CMakeLists.txt;
+# it must be declared BEFORE add_subdirectory(third_party) so the guarded FetchContent
+# block there can see the value on a clean configure (before the option lands in cache).
+option(EXOSNAP_WITH_PRESENTMON "Build the PresentMon ETW present-diagnostics provider" ON)
+
 # third_party must come before static analysis so its targets are not analyzed.
 add_subdirectory(third_party)
 
@@ -132,4 +139,9 @@ add_subdirectory(tests)
 option(EXOSNAP_BUILD_PROBES "Build ExoSnap developer probe executables" OFF)
 if(EXOSNAP_BUILD_PROBES)
     add_subdirectory(tools/probes)
+endif()
+
+if(EXOSNAP_WITH_PRESENTMON)
+    target_link_libraries(exosnap PRIVATE PresentMon::consumer)
+    target_compile_definitions(exosnap PRIVATE EXOSNAP_HAS_PRESENTMON=1)
 endif()

@@ -4,13 +4,22 @@
 #include "../ui/theme/ExoSnapPalette.h"
 #include "../ui/theme/ExoSnapTheme.h"
 
+#include <QByteArray>
+#include <QColor>
+#include <QEvent>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
+#include <QPainter>
+#include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRectF>
 #include <QScrollArea>
+#include <QSize>
 #include <QStyle>
+#include <QSvgRenderer>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -20,6 +29,79 @@ namespace exosnap {
 using P = ui::theme::ExoSnapPalette;
 using M = ui::theme::ExoSnapMetrics;
 using namespace exosnap::ui::theme;
+
+namespace {
+
+// Lucide-style 24x24 stroke paths (subset shared with shared.jsx ICON_PATHS).
+QByteArray editIconPathFor(const QString& key) {
+    if (key == QLatin1String("chevLeft"))
+        return QByteArrayLiteral("M14 5l-5 5 5 5");
+    if (key == QLatin1String("play"))
+        return QByteArrayLiteral("M6 4l14 8-14 8V4z");
+    if (key == QLatin1String("checkCircle"))
+        return QByteArrayLiteral("M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM8 12l3 3 5-6");
+    if (key == QLatin1String("error"))
+        return QByteArrayLiteral("M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM15 9l-6 6M9 9l6 6");
+    return {};
+}
+
+// Render an icon to a crisp (2x) transparent pixmap, using the same QSvgRenderer
+// stroke technique as AudioSourceToggle (fill:none, stroke:color, round caps).
+QPixmap renderEditIcon(const QString& key, int px, const QColor& color) {
+    const QByteArray path = editIconPathFor(key);
+    if (path.isEmpty())
+        return {};
+    QByteArray svg;
+    svg.reserve(256);
+    svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='");
+    svg.append(color.name(QColor::HexRgb).toUtf8());
+    svg.append("' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='");
+    svg.append(path);
+    svg.append("'/></svg>");
+    QSvgRenderer renderer(svg);
+
+    constexpr qreal kDpr = 2.0;
+    QPixmap pm(static_cast<int>(px * kDpr), static_cast<int>(px * kDpr));
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    renderer.render(&p, QRectF(0, 0, px * kDpr, px * kDpr));
+    p.end();
+    pm.setDevicePixelRatio(kDpr);
+    return pm;
+}
+
+QColor themeColor(const char* css) {
+    return QColor(QString::fromUtf8(css));
+}
+
+// Derived alpha tokens (mirrors BuildTokens() in ExoSnapTheme.cpp).
+QString acDimToken() {
+    const auto& t = ActiveTheme();
+    return ThemeRgba(themeColor(t.ac), t.kind == ThemeKind::Dark ? 0.14 : 0.12);
+}
+QString acB2Token() {
+    const auto& t = ActiveTheme();
+    return ThemeRgba(themeColor(t.ac), t.kind == ThemeKind::Dark ? 0.60 : 0.52);
+}
+QString okDimToken() {
+    const auto& t = ActiveTheme();
+    return ThemeRgba(themeColor(t.success), t.kind == ThemeKind::Dark ? 0.13 : 0.12);
+}
+QString okBToken() {
+    const auto& t = ActiveTheme();
+    return ThemeRgba(themeColor(t.success), t.kind == ThemeKind::Dark ? 0.44 : 0.42);
+}
+QString errDimToken() {
+    const auto& t = ActiveTheme();
+    return ThemeRgba(themeColor(t.error), t.kind == ThemeKind::Dark ? 0.13 : 0.12);
+}
+QString errBToken() {
+    const auto& t = ActiveTheme();
+    return ThemeRgba(themeColor(t.error), t.kind == ThemeKind::Dark ? 0.44 : 0.42);
+}
+
+} // namespace
 
 EditExportPage::EditExportPage(QWidget* parent) : QWidget(parent) {
     buildUi();
@@ -44,20 +126,31 @@ void EditExportPage::buildUi() {
     mode_bar_layout->setContentsMargins(M::kSpaceMd, 0, M::kSpaceMd, 0);
     mode_bar_layout->setSpacing(M::kSpaceSm);
 
-    back_btn_ = new QPushButton(QStringLiteral("←"), mode_bar);
+    back_btn_ = new QPushButton(mode_bar);
     back_btn_->setObjectName(QStringLiteral("editExportBackBtn"));
     back_btn_->setFixedSize(32, 32);
-    back_btn_->setProperty("role", "ghost");
     back_btn_->setToolTip(QStringLiteral("Back to Record"));
+    back_btn_->setCursor(Qt::PointingHandCursor);
+    back_btn_->setIcon(QIcon(renderEditIcon(QStringLiteral("chevLeft"), 16, themeColor(ActiveTheme().mut))));
+    back_btn_->setIconSize(QSize(16, 16));
+    back_btn_->setStyleSheet(QStringLiteral("QPushButton#editExportBackBtn {"
+                                            "background:%1;"
+                                            "border: 1px solid %2;"
+                                            "border-radius: 9px;"
+                                            "}"
+                                            "QPushButton#editExportBackBtn:hover { background:%3; }")
+                                 .arg(ActiveTheme().surf2, ActiveTheme().line2, ActiveTheme().raise));
 
     title_label_ = new QLabel(QStringLiteral("Edit & export"), mode_bar);
     title_label_->setObjectName(QStringLiteral("editExportTitle"));
     title_label_->setStyleSheet(
-        QStringLiteral("QLabel { color:%1; font-weight:600; font-size:14px; }").arg(ActiveTheme().ink));
+        QStringLiteral("QLabel { color:%1; font-weight:700; font-size:16px; }").arg(ActiveTheme().ink));
 
     filename_label_ = new QLabel(this);
     filename_label_->setObjectName(QStringLiteral("editExportFilename"));
-    filename_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(ActiveTheme().mut));
+    filename_label_->setStyleSheet(
+        QStringLiteral("QLabel { color:%1; font-family:'IBM Plex Mono','Consolas',monospace; font-size:12.5px; }")
+            .arg(ActiveTheme().ac));
     filename_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
 
     mode_bar_layout->addWidget(back_btn_);
@@ -156,23 +249,34 @@ void EditExportPage::buildUi() {
     // Player Frame
     player_frame_ = new QFrame(left_widget);
     player_frame_->setObjectName(QStringLiteral("editExportPlayer"));
-    player_frame_->setMinimumHeight(220);
+    player_frame_->setMinimumHeight(180);
+    // Enforce a 16:9 aspect ratio via eventFilter (Qt widgets have no native
+    // height-for-width without a subclass).
+    player_frame_->installEventFilter(this);
     player_frame_->setStyleSheet(QStringLiteral("QFrame#editExportPlayer {"
                                                 "background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
                                                 "stop:0 #1a1a1e, stop:1 #0e0e10);"
                                                 "border: 1px solid %1;"
                                                 "border-radius: %2px;"
                                                 "}")
-                                     .arg(ActiveTheme().line2)
+                                     .arg(ActiveTheme().line)
                                      .arg(M::kRadiusLg));
 
     auto* player_layout = new QVBoxLayout(player_frame_);
     player_layout->setAlignment(Qt::AlignCenter);
 
-    player_icon_label_ = new QLabel(QStringLiteral("▶"), player_frame_);
+    // 60px circular play button (stroke play-glyph 24px) instead of a text ▶.
+    player_icon_label_ = new QLabel(player_frame_);
     player_icon_label_->setObjectName(QStringLiteral("editExportPlayerIcon"));
+    player_icon_label_->setFixedSize(60, 60);
     player_icon_label_->setAlignment(Qt::AlignCenter);
-    player_icon_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:36px; }").arg(ActiveTheme().dim));
+    player_icon_label_->setPixmap(renderEditIcon(QStringLiteral("play"), 24, themeColor(ActiveTheme().ink)));
+    player_icon_label_->setStyleSheet(QStringLiteral("QLabel#editExportPlayerIcon {"
+                                                     "background: rgba(14, 14, 16, 0.7);"
+                                                     "border: 1px solid %1;"
+                                                     "border-radius: 30px;"
+                                                     "}")
+                                          .arg(ActiveTheme().line2));
 
     auto* player_sub = new QLabel(QStringLiteral("Preview playback — coming in 0.11"), player_frame_);
     player_sub->setAlignment(Qt::AlignCenter);
@@ -184,7 +288,7 @@ void EditExportPage::buildUi() {
     player_meta_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:10px; }").arg(ActiveTheme().dim));
 
     player_layout->addStretch();
-    player_layout->addWidget(player_icon_label_);
+    player_layout->addWidget(player_icon_label_, 0, Qt::AlignHCenter);
     player_layout->addWidget(player_sub);
     player_layout->addStretch();
     player_layout->addWidget(player_meta_label_);
@@ -228,15 +332,15 @@ void EditExportPage::buildUi() {
     // Timeline
     timeline_frame_ = new QFrame(left_widget);
     timeline_frame_->setObjectName(QStringLiteral("editTimeline"));
-    timeline_frame_->setFixedHeight(56);
+    timeline_frame_->setFixedHeight(52);
     timeline_frame_->setEnabled(false);
     timeline_frame_->setStyleSheet(QStringLiteral("QFrame#editTimeline {"
                                                   "background:%1;"
                                                   "border: 1px solid %2;"
                                                   "border-radius: %3px;"
                                                   "}")
-                                       .arg(ActiveTheme().raise, ActiveTheme().line)
-                                       .arg(M::kRadiusSm));
+                                       .arg(ActiveTheme().surf2, ActiveTheme().line)
+                                       .arg(M::kRadiusMd));
 
     auto* timeline_layout = new QVBoxLayout(timeline_frame_);
     timeline_layout->setContentsMargins(M::kSpaceSm, 4, M::kSpaceSm, 4);
@@ -253,7 +357,8 @@ void EditExportPage::buildUi() {
         // Varying heights to simulate waveform
         const int height = 6 + ((i * 7 + 3) % 16);
         bar->setFixedHeight(height);
-        bar->setStyleSheet(QStringLiteral("QFrame { background: %1; border-radius: 1px; }").arg(ActiveTheme().line2));
+        bar->setStyleSheet(QStringLiteral("QFrame { background: %1; border-radius: 1px; }")
+                               .arg(ThemeRgba(themeColor(ActiveTheme().ac), 0.35)));
         waveform_layout->addWidget(bar);
     }
     waveform_layout->addStretch();
@@ -298,7 +403,7 @@ void EditExportPage::buildUi() {
                                                       "border: 1px solid %2;"
                                                       "border-radius: %3px;"
                                                       "}")
-                                           .arg(ActiveTheme().raise, ActiveTheme().ac)
+                                           .arg(acDimToken(), acB2Token())
                                            .arg(M::kRadiusMd)
                                      : QStringLiteral("QFrame {"
                                                       "background:%1;"
@@ -316,6 +421,29 @@ void EditExportPage::buildUi() {
         auto* top_layout = new QHBoxLayout(top_row);
         top_layout->setContentsMargins(0, 0, 0, 0);
         top_layout->setSpacing(M::kSpaceSm);
+
+        // Radio indicator: 16×16 ring with an 8px inner dot when selected.
+        auto* radio = new QLabel(top_row);
+        radio->setObjectName(QStringLiteral("editOutputRadio"));
+        radio->setFixedSize(16, 16);
+        radio->setStyleSheet(QStringLiteral("QLabel#editOutputRadio {"
+                                            "border: 1px solid %1;"
+                                            "border-radius: 8px;"
+                                            "background: transparent;"
+                                            "}")
+                                 .arg(selected ? ActiveTheme().ac : ActiveTheme().line2));
+        auto* radio_layout = new QVBoxLayout(radio);
+        radio_layout->setContentsMargins(0, 0, 0, 0);
+        radio_layout->setAlignment(Qt::AlignCenter);
+        if (selected) {
+            auto* dot = new QLabel(radio);
+            dot->setObjectName(QStringLiteral("editOutputRadioDot"));
+            dot->setFixedSize(8, 8);
+            dot->setStyleSheet(QStringLiteral("QLabel#editOutputRadioDot { background:%1; border-radius:4px; }")
+                                   .arg(ActiveTheme().ac));
+            radio_layout->addWidget(dot);
+        }
+        top_layout->addWidget(radio);
 
         auto* title_lbl = new QLabel(title, top_row);
         title_lbl->setStyleSheet(
@@ -424,9 +552,17 @@ void EditExportPage::buildUi() {
     // Result Panel (Done / Failed)
     result_panel_ = new QWidget(left_widget);
     result_panel_->setObjectName(QStringLiteral("editExportResultPanel"));
+    result_panel_->setAttribute(Qt::WA_StyledBackground, true);
     auto* result_layout = new QVBoxLayout(result_panel_);
-    result_layout->setContentsMargins(0, 0, 0, 0);
+    result_layout->setContentsMargins(M::kSpaceMd, M::kSpaceMd, M::kSpaceMd, M::kSpaceMd);
     result_layout->setSpacing(M::kSpaceSm);
+
+    // Status badge — 72×72 circle hosting a 34px check/error glyph (set per phase).
+    result_icon_label_ = new QLabel(result_panel_);
+    result_icon_label_->setObjectName(QStringLiteral("editExportResultIcon"));
+    result_icon_label_->setFixedSize(72, 72);
+    result_icon_label_->setAlignment(Qt::AlignCenter);
+    result_layout->addWidget(result_icon_label_, 0, Qt::AlignLeft);
 
     result_title_label_ = new QLabel(result_panel_);
     result_title_label_->setObjectName(QStringLiteral("editExportResultTitle"));
@@ -665,11 +801,11 @@ void EditExportPage::refreshPhase() {
 
     switch (phase_) {
     case Phase::Review:
-        primary_action_btn_->setText(QStringLiteral("Go to Output"));
+        primary_action_btn_->setText(QStringLiteral("Save & export"));
         primary_action_btn_->setProperty("role", "ghost");
         break;
     case Phase::Edit:
-        primary_action_btn_->setText(QStringLiteral("Go to Output"));
+        primary_action_btn_->setText(QStringLiteral("Save & export"));
         primary_action_btn_->setProperty("role", "ghost");
         break;
     case Phase::Output:
@@ -687,6 +823,23 @@ void EditExportPage::refreshPhase() {
         primary_action_btn_->setProperty("role", "primary");
         secondary_action_btn_->setText(QStringLiteral("Open folder"));
         secondary_action_btn_->show();
+        if (result_panel_)
+            result_panel_->setStyleSheet(QStringLiteral("QWidget#editExportResultPanel {"
+                                                        "background:%1;"
+                                                        "border: 1px solid %2;"
+                                                        "border-radius: 13px;"
+                                                        "}")
+                                             .arg(okDimToken(), okBToken()));
+        if (result_icon_label_) {
+            result_icon_label_->setPixmap(
+                renderEditIcon(QStringLiteral("checkCircle"), 34, themeColor(ActiveTheme().success)));
+            result_icon_label_->setStyleSheet(QStringLiteral("QLabel#editExportResultIcon {"
+                                                             "background:%1;"
+                                                             "border: 1px solid %2;"
+                                                             "border-radius: 36px;"
+                                                             "}")
+                                                  .arg(okDimToken(), okBToken()));
+        }
         if (result_title_label_) {
             result_title_label_->setText(QStringLiteral("Export complete"));
             result_title_label_->setStyleSheet(
@@ -698,6 +851,22 @@ void EditExportPage::refreshPhase() {
     case Phase::Failed:
         primary_action_btn_->setText(QStringLiteral("Retry export"));
         primary_action_btn_->setProperty("role", "primary");
+        if (result_panel_)
+            result_panel_->setStyleSheet(QStringLiteral("QWidget#editExportResultPanel {"
+                                                        "background:%1;"
+                                                        "border: 1px solid %2;"
+                                                        "border-radius: 13px;"
+                                                        "}")
+                                             .arg(errDimToken(), errBToken()));
+        if (result_icon_label_) {
+            result_icon_label_->setPixmap(renderEditIcon(QStringLiteral("error"), 34, themeColor(ActiveTheme().error)));
+            result_icon_label_->setStyleSheet(QStringLiteral("QLabel#editExportResultIcon {"
+                                                             "background:%1;"
+                                                             "border: 1px solid %2;"
+                                                             "border-radius: 36px;"
+                                                             "}")
+                                                  .arg(errDimToken(), errBToken()));
+        }
         if (result_title_label_) {
             result_title_label_->setText(QStringLiteral("Export failed"));
             result_title_label_->setStyleSheet(
@@ -713,6 +882,17 @@ void EditExportPage::refreshPhase() {
         primary_action_btn_->style()->unpolish(primary_action_btn_);
         primary_action_btn_->style()->polish(primary_action_btn_);
     }
+}
+
+bool EditExportPage::eventFilter(QObject* obj, QEvent* event) {
+    // Keep the player area at a strict 16:9 ratio relative to its current width.
+    if (obj == player_frame_ && event->type() == QEvent::Resize) {
+        const int w = player_frame_->width();
+        const int target = qRound(w * 9.0 / 16.0);
+        if (target > 0 && player_frame_->height() != target)
+            player_frame_->setFixedHeight(target);
+    }
+    return QWidget::eventFilter(obj, event);
 }
 
 // ---- Slots ----

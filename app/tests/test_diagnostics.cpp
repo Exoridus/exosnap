@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <filesystem>
+
 #include "diagnostics/CapabilitySummary.h"
 #include "diagnostics/ConfigSummary.h"
 #include "diagnostics/DiagnosticResult.h"
@@ -405,6 +407,35 @@ TEST(RecommendationEngineTest, Generate_EmptyNoFlag) {
     EXPECT_TRUE(checklist.results.empty());
 }
 
+TEST(RecommendationEngineTest, Generate_OutputNotWritable_Blocks) {
+    // #7 blocker propagation: a non-writable output folder must surface as a COUNTED
+    // Blocker (rec.output.writable) so the Diagnostics verdict header reflects it (red),
+    // not just the pipeline Disk card.
+    capability::CapabilitySet caps;
+    caps.containers[capability::Container::Matroska] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Matroska;
+    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    engine.SetOutputPathWritable(false);
+    auto checklist = engine.Generate();
+
+    EXPECT_TRUE(checklist.has_blocker);
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.output.writable") {
+            EXPECT_EQ(r.severity, diagnostics::DiagnosticSeverity::Blocker);
+            found = true;
+        }
+    }
+    EXPECT_TRUE(found) << "Expected rec.output.writable blocker when the output folder is not writable";
+}
+
 TEST(RecommendationEngineTest, Generate_Mp4_Warns) {
     capability::CapabilitySet caps;
     caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};
@@ -427,6 +458,36 @@ TEST(RecommendationEngineTest, Generate_Mp4_Warns) {
         }
     }
     EXPECT_TRUE(found_mp4_warning);
+}
+
+TEST(RecommendationEngineTest, Generate_Mp4_HasFixAction_Assisted) {
+    // rec.002 must carry a typed FixAction with Safety::Assisted — the UI will offer
+    // a one-click path that opens Output settings (user still performs the last step).
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::AacMf] = {capability::SupportLevel::Available, ""};
+    caps.containers[capability::Container::Mp4] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Mp4;
+    config.video_codec = capability::VideoCodec::H264Nvenc;
+    config.audio_codec = capability::AudioCodec::AacMf;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.002") {
+            found = true;
+            EXPECT_TRUE(r.fix_action.has_value());
+            EXPECT_EQ(r.fix_action->id, "fix.container.mkv");
+            EXPECT_EQ(r.fix_action->safety, FixAction::Safety::Assisted);
+            EXPECT_TRUE(r.fix_action->reversible);
+            EXPECT_FALSE(r.fix_action->changes_summary.empty());
+        }
+    }
+    EXPECT_TRUE(found);
 }
 
 TEST(RecommendationEngineTest, Generate_RefreshRateMismatch) {
@@ -473,6 +534,123 @@ TEST(RecommendationEngineTest, Generate_RefreshRateMatch_NoWarn) {
     EXPECT_FALSE(found_mismatch);
 }
 
+// --- Live present-cadence correlation (v0.8.0 / ADR 0033) ---
+
+namespace {
+recorder_core::RecordingDiagnosticsSnapshot MakeJudderSnapshot(bool cfr, double jitter_ms, double coalesce_ratio) {
+    recorder_core::RecordingDiagnosticsSnapshot live;
+    live.valid = true;
+    live.video_encoder.cfr = cfr;
+    live.capture.present_cadence_availability = recorder_core::MetricAvailability::Available;
+    live.capture.source_present_jitter_ms = jitter_ms;
+    live.capture.source_coalesce_ratio = coalesce_ratio;
+    return live;
+}
+} // namespace
+
+TEST(RecommendationEngineTest, Generate_LiveJitter_HighConfidenceJudder) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+
+    // monitor_refresh = 0 (unknown) → static arm suppressed; the live judder arm fires alone.
+    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
+    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.001") {
+            found = true;
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Notice);
+            EXPECT_NE(r.title.find("judder"), std::string::npos);
+            ASSERT_TRUE(r.fix_action.has_value());
+            EXPECT_EQ(r.fix_action->id, "fix.fps.cap");
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST(RecommendationEngineTest, Generate_LiveCoalesce_HighConfidenceJudder) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+
+    // Low jitter but sustained coalescing (> 1.5) → judder arm fires.
+    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/1.0, /*coalesce_ratio=*/2.0);
+    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results)
+        if (r.id == "rec.001")
+            found = true;
+    EXPECT_TRUE(found);
+}
+
+TEST(RecommendationEngineTest, Generate_LiveJudder_VfrDoesNotFire) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+
+    // VFR capture: present jitter is expected and not a CFR-judder signal. monitor=0 → no
+    // static arm either, so rec.001 must not appear.
+    const auto live = MakeJudderSnapshot(/*cfr=*/false, /*jitter_ms=*/9.0, /*coalesce_ratio=*/3.0);
+    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    auto checklist = engine.Generate();
+
+    for (const auto& r : checklist.results)
+        EXPECT_NE(r.id, "rec.001");
+}
+
+TEST(RecommendationEngineTest, Generate_LiveBelowThreshold_DoesNotFire) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+
+    // CFR but within conservative thresholds (jitter <= 4 ms, coalesce <= 1.5) → no diagnosis.
+    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/2.0, /*coalesce_ratio=*/1.1);
+    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    auto checklist = engine.Generate();
+
+    for (const auto& r : checklist.results)
+        EXPECT_NE(r.id, "rec.001");
+}
+
+TEST(RecommendationEngineTest, Generate_StaticMismatchStillFiresWithoutLive) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+
+    // 144 Hz monitor, no live snapshot → original static heuristic wording (no "judder").
+    RecommendationEngine engine(caps, config, 144, 0, true, "", nullptr);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.001") {
+            found = true;
+            EXPECT_EQ(r.title.find("judder"), std::string::npos);
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
 TEST(RecommendationEngineTest, Generate_CodecUnavailable_Blocker) {
     capability::CapabilitySet caps;
     caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Invalid, "NVENC not found"};
@@ -494,6 +672,157 @@ TEST(RecommendationEngineTest, Generate_CodecUnavailable_Blocker) {
         }
     }
     EXPECT_TRUE(found_blocker);
+}
+
+TEST(RecommendationEngineTest, Generate_Rec009_FlacMp4_Blocker) {
+    capability::CapabilitySet caps;
+    caps.audio_codecs[capability::AudioCodec::Flac] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Mp4;
+    config.video_codec = capability::VideoCodec::H264Nvenc;
+    config.audio_codec = capability::AudioCodec::Flac;
+
+    RecommendationEngine engine(caps, config, 0, 10ULL * 1024 * 1024 * 1024, true);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.009") {
+            found = true;
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Blocker);
+            ASSERT_TRUE(r.fix_action.has_value());
+            EXPECT_EQ(r.fix_action->id, "fix.audio.flac_to_mkv");
+            EXPECT_EQ(r.fix_action->safety, FixAction::Safety::Assisted);
+            EXPECT_TRUE(r.fix_action->reversible);
+            EXPECT_FALSE(r.fix_action->changes_summary.empty());
+        }
+    }
+    EXPECT_TRUE(found);
+    EXPECT_TRUE(checklist.has_blocker);
+}
+
+TEST(RecommendationEngineTest, Generate_Rec009_OpusMp4_Notice) {
+    capability::CapabilitySet caps;
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.containers[capability::Container::Mp4] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Mp4;
+    config.video_codec = capability::VideoCodec::H264Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.009") {
+            found = true;
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Notice);
+            ASSERT_TRUE(r.fix_action.has_value());
+            EXPECT_EQ(r.fix_action->id, "fix.audio.opus_to_aac");
+            EXPECT_EQ(r.fix_action->safety, FixAction::Safety::Auto);
+            EXPECT_TRUE(r.fix_action->reversible);
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST(RecommendationEngineTest, Generate_Rec009_OpusMkv_NoFire) {
+    capability::CapabilitySet caps;
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Matroska;
+    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    auto checklist = engine.Generate();
+
+    for (const auto& r : checklist.results) {
+        EXPECT_NE(r.id, "rec.009") << "rec.009 must not fire for Opus+MKV";
+    }
+}
+
+TEST(RecommendationEngineTest, Generate_Rec010_HevcWebm_Blocker) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::HevcNvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::WebM;
+    config.video_codec = capability::VideoCodec::HevcNvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    RecommendationEngine engine(caps, config, 0, 10ULL * 1024 * 1024 * 1024, true);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.010") {
+            found = true;
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Blocker);
+            ASSERT_TRUE(r.fix_action.has_value());
+            EXPECT_EQ(r.fix_action->id, "fix.video.hevc_webm");
+            EXPECT_EQ(r.fix_action->safety, FixAction::Safety::Assisted);
+            EXPECT_TRUE(r.fix_action->reversible);
+            EXPECT_FALSE(r.fix_action->changes_summary.empty());
+        }
+    }
+    EXPECT_TRUE(found);
+    EXPECT_TRUE(checklist.has_blocker);
+}
+
+TEST(RecommendationEngineTest, Generate_Rec010_H264Webm_Blocker) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::WebM;
+    config.video_codec = capability::VideoCodec::H264Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    RecommendationEngine engine(caps, config, 0, 10ULL * 1024 * 1024 * 1024, true);
+    auto checklist = engine.Generate();
+
+    bool found = false;
+    for (const auto& r : checklist.results) {
+        if (r.id == "rec.010") {
+            found = true;
+            EXPECT_EQ(r.severity, DiagnosticSeverity::Blocker);
+            ASSERT_TRUE(r.fix_action.has_value());
+            EXPECT_EQ(r.fix_action->id, "fix.video.h264_webm");
+            EXPECT_EQ(r.fix_action->safety, FixAction::Safety::Assisted);
+            EXPECT_TRUE(r.fix_action->reversible);
+            EXPECT_FALSE(r.fix_action->changes_summary.empty());
+        }
+    }
+    EXPECT_TRUE(found);
+    EXPECT_TRUE(checklist.has_blocker);
+}
+
+TEST(RecommendationEngineTest, Generate_Rec010_Av1Webm_NoFire) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::WebM;
+    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    auto checklist = engine.Generate();
+
+    for (const auto& r : checklist.results) {
+        EXPECT_NE(r.id, "rec.010") << "rec.010 must not fire for AV1+WebM";
+    }
 }
 
 TEST(RecommendationEngineTest, Generate_LowDiskSpace_Warns) {
@@ -537,13 +866,15 @@ TEST(RecommendationEngineTest, Generate_UnsupportedProfile_Blocker) {
 
 TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
     auto codes = RecommendationEngine::GetAllRecommendationCodes();
-    // FILESYSTEM-CHECKS-R1 added rec.008 (FAT32 Notice) — expect 8 codes now.
-    EXPECT_EQ(codes.size(), 8u);
+    // v0.8.0-D added rec.009 (audio/container compat) and rec.010 (video/container compat) — expect 10 codes now.
+    EXPECT_EQ(codes.size(), 10u);
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.001"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.005"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.006"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.007"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.008"), codes.end());
+    EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.009"), codes.end());
+    EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.010"), codes.end());
 }
 
 // ─── REC-R10: Active output config → ValidateConfig wiring ───────────────────
@@ -654,38 +985,62 @@ TEST(BlockedScenarioTest, ActiveOutputConfig_Av1NvencUnavailable_ValidateFails_V
 TEST(SelfTestTest, SelfTest_Run_ReturnsAllResults) {
     SelfTestRunner runner;
     auto checklist = runner.Run();
+    // Always returns exactly 5 results; pass/fail mix is hardware-dependent.
     EXPECT_EQ(checklist.results.size(), 5u);
-    EXPECT_TRUE(checklist.has_notice);
 }
 
-TEST(SelfTestTest, SelfTest_CaptureAvailable) {
+// Integration smoke: verify the probe runs without crashing and returns a coherent result.
+// DXGI is available on any DirectX-capable Windows system, so pass is expected,
+// but the assertion is on structure rather than hardware outcome.
+TEST(SelfTestTest, SelfTest_CaptureAvailable_Smoke) {
     auto result = SelfTestRunner::CheckCaptureAvailability();
-    EXPECT_FALSE(result.passed);
     EXPECT_EQ(result.category, "Capture");
+    EXPECT_FALSE(result.detail.empty());
 }
 
-TEST(SelfTestTest, SelfTest_EncoderAvailable) {
+// Encoder probe depends on NVENC hardware; do not assert passed=true/false here.
+TEST(SelfTestTest, SelfTest_EncoderAvailable_Smoke) {
     auto result = SelfTestRunner::CheckEncoderAvailability();
-    EXPECT_FALSE(result.passed);
     EXPECT_EQ(result.category, "Encoder");
+    EXPECT_FALSE(result.detail.empty());
 }
 
-TEST(SelfTestTest, SelfTest_MuxerAvailable) {
+// Muxer probe writes to the OS temp directory, which is always writable.
+TEST(SelfTestTest, SelfTest_MuxerAvailable_PassesOnWritableTemp) {
     auto result = SelfTestRunner::CheckMuxerAvailability();
-    EXPECT_FALSE(result.passed);
+    EXPECT_TRUE(result.passed);
     EXPECT_EQ(result.category, "Muxer");
 }
 
-TEST(SelfTestTest, SelfTest_OutputPathWritable) {
+// Output path probe with empty path falls back to the temp directory (always writable).
+TEST(SelfTestTest, SelfTest_OutputPathWritable_EmptyPath_Passes) {
     auto result = SelfTestRunner::CheckOutputPathWritable("");
     EXPECT_TRUE(result.passed);
     EXPECT_EQ(result.category, "Output Path");
 }
 
-TEST(SelfTestTest, SelfTest_AudioDeviceAvailable) {
-    auto result = SelfTestRunner::CheckAudioDeviceAvailability();
+// Output path probe with an explicit, known-writable temp directory.
+TEST(SelfTestTest, SelfTest_OutputPath_ValidTempPath_Passes) {
+    std::string tmp = std::filesystem::temp_directory_path().string();
+    auto result = SelfTestRunner::CheckOutputPathWritable(tmp);
+    EXPECT_TRUE(result.passed);
+    EXPECT_EQ(result.category, "Output Path");
+    EXPECT_NE(result.detail.find("Output path is writable"), std::string::npos);
+}
+
+// Output path probe with a path that cannot exist — must fail gracefully, never throw.
+TEST(SelfTestTest, SelfTest_OutputPath_InvalidPath_FailsGracefully) {
+    auto result = SelfTestRunner::CheckOutputPathWritable("Z:\\nonexistent\\xyzzy\\selftest\\abc");
     EXPECT_FALSE(result.passed);
+    EXPECT_EQ(result.category, "Output Path");
+    EXPECT_FALSE(result.detail.empty());
+}
+
+// Audio device probe is hardware-dependent; just verify it returns a coherent result.
+TEST(SelfTestTest, SelfTest_AudioDeviceAvailable_Smoke) {
+    auto result = SelfTestRunner::CheckAudioDeviceAvailability();
     EXPECT_EQ(result.category, "Audio Devices");
+    EXPECT_FALSE(result.detail.empty());
 }
 
 // --- Display name helper tests ---
@@ -839,6 +1194,139 @@ TEST(BlockedScenarioTest, RecommendationEngine_H264NvencUnavailable_ProducesVide
     }
     EXPECT_TRUE(found_rec003);
     EXPECT_TRUE(checklist.has_blocker);
+}
+
+TEST(RecommendationEngineTest, ExclusiveFullscreenRaisesBorderlessFixAction) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    PresentSample present;
+    present.available = true;
+    present.mode = PresentMode::ExclusiveFullscreen;
+
+    RecommendationEngine engine(caps, config, /*monitor_refresh_rate=*/0,
+                                /*output_drive_free_bytes=*/0, /*is_profile_supported=*/true,
+                                /*output_filesystem_name=*/"NTFS",
+                                /*live_snapshot=*/nullptr, /*present=*/&present);
+    const DiagnosticChecklist list = engine.Generate();
+
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.present.exclusive"; });
+    ASSERT_NE(it, list.results.end());
+    ASSERT_TRUE(it->fix_action.has_value());
+    EXPECT_EQ(it->fix_action->id, "fix.present.borderless");
+    EXPECT_EQ(it->fix_action->safety, FixAction::Safety::Assisted);
+}
+
+TEST(RecommendationEngineTest, ComposedPresentRaisesNoExclusiveCheck) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    PresentSample present;
+    present.available = true;
+    present.mode = PresentMode::Composed;
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, &present);
+    const DiagnosticChecklist list = engine.Generate();
+    EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.present.exclusive"; }));
+}
+
+TEST(RecommendationEngineTest, JudderDetailNamesPresentModeAttribution) {
+    using namespace exosnap::diagnostics;
+    recorder_core::RecordingDiagnosticsSnapshot snap;
+    snap.valid = true;
+    snap.video_encoder.cfr = true;
+    snap.capture.present_cadence_availability = recorder_core::MetricAvailability::Available;
+    snap.capture.source_present_jitter_ms = 6.0; // > kJitterMs
+    snap.capture.source_coalesce_ratio = 2.0;    // > kCoalesceRatio
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+    PresentSample present;
+    present.available = true;
+    present.mode = PresentMode::IndependentFlip;
+
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", &snap, &present);
+    const DiagnosticChecklist list = engine.Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.001"; });
+    ASSERT_NE(it, list.results.end());
+    EXPECT_NE(it->detail.find("independent flip"), std::string::npos);
+}
+
+TEST(RecommendationEngineTest, HighDpcLatencyNamesDriverExternalFix) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    DpcLatencyReading dpc{/*max*/ 2500.0, /*avg*/ 180.0, "nvlddmkm.sys", /*available*/ true};
+    engine.SetDpcLatency(dpc);
+    const DiagnosticChecklist list = engine.Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.dpc.latency"; });
+    ASSERT_NE(it, list.results.end());
+    EXPECT_NE(it->detail.find("nvlddmkm.sys"), std::string::npos);
+    ASSERT_TRUE(it->fix_action.has_value());
+    EXPECT_EQ(it->fix_action->safety, FixAction::Safety::External);
+}
+
+TEST(RecommendationEngineTest, LowDpcLatencyRaisesNothing) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, nullptr);
+    engine.SetDpcLatency({200.0, 60.0, "", true});
+    const DiagnosticChecklist list = engine.Generate();
+    EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.dpc.latency"; }));
+}
+
+// --- ADR 0035: Smooth pacing Auto FixAction when judder fires + Newest pacing ---
+
+TEST(RecommendationEngineTest, JudderInNewestOffersSmoothPacingAutoFix) {
+    // Live judder + config.frame_pacing = Newest → rec.pacing.smooth result
+    // with fix_action id=="fix.frame_pacing.smooth", safety==Auto.
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+    config.frame_pacing = recorder_core::FramePacingMode::Newest; // triggers the pacing result
+
+    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
+    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    const auto checklist = engine.Generate();
+
+    const auto it = std::find_if(checklist.results.begin(), checklist.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.pacing.smooth"; });
+    ASSERT_NE(it, checklist.results.end()) << "rec.pacing.smooth must be emitted for judder+Newest";
+    ASSERT_TRUE(it->fix_action.has_value());
+    EXPECT_EQ(it->fix_action->id, "fix.frame_pacing.smooth");
+    EXPECT_EQ(it->fix_action->safety, FixAction::Safety::Auto);
+    EXPECT_TRUE(it->fix_action->reversible);
+    EXPECT_FALSE(it->fix_action->changes_summary.empty());
+}
+
+TEST(RecommendationEngineTest, JudderInSmoothOffersNoPacingFix) {
+    // Live judder + config.frame_pacing = Smooth → NO rec.pacing.smooth result
+    // (pacing is already correct — nothing to fix).
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.frame_rate_num = 60;
+    config.frame_rate_den = 1;
+    config.frame_pacing = recorder_core::FramePacingMode::Smooth; // already correct — no fix offered
+
+    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/9.0, /*coalesce_ratio=*/1.0);
+    RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
+    const auto checklist = engine.Generate();
+
+    EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(), [](const DiagnosticResult& r) {
+        return r.id == "rec.pacing.smooth";
+    })) << "rec.pacing.smooth must NOT be emitted when pacing is already Smooth";
 }
 
 } // namespace

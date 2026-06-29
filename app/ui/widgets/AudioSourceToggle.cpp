@@ -11,6 +11,7 @@
 #include <QSvgRenderer>
 
 #include <algorithm>
+#include <cmath>
 
 namespace exosnap::ui::widgets {
 namespace {
@@ -18,6 +19,17 @@ namespace {
 constexpr int kDiameter = 42;
 // v10: meter strip removed — the toggle is a pure 42×42 circle.
 constexpr int kTotalHeight = kDiameter; // 42
+
+// dBFS zone break points and their corresponding visual fill fractions.
+// Piecewise-linear mapping gives the caution/error zones more visual real estate:
+//   Mint  : -60 → -9  dBFS maps to 0.00 → 0.70  (70 % of height)
+//   Amber :  -9 → -3  dBFS maps to 0.70 → 0.85  (15 % of height)
+//   Coral :  -3 →  0  dBFS maps to 0.85 → 1.00  (15 % of height)
+constexpr qreal kFloorDb = -60.0;
+constexpr qreal kAmberDb = -9.0;
+constexpr qreal kCoralDb = -3.0;
+constexpr qreal kMintEnd = 0.70;
+constexpr qreal kAmberEnd = 0.90;
 
 // Lucide-style 24x24 stroke paths, matching the hybrid design icon set.
 QByteArray iconPathFor(const QString& key) {
@@ -106,29 +118,25 @@ void AudioSourceToggle::paintEvent(QPaintEvent* /*event*/) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
 
-    // Explicit circle rect: always kDiameter×kDiameter regardless of total height.
     const QRectF circle = QRectF(1.0, 1.0, kDiameter - 2.0, kDiameter - 2.0);
 
-    // Derive accent colour from the active theme.
     const auto& t = exosnap::ui::theme::ActiveTheme();
     const QColor accent(QString::fromUtf8(t.ac));
-
-    QColor fill;
-    QColor border;
-    QColor icon;
     const QColor ink(QString::fromUtf8(t.ink));
+
+    QColor fill, border, icon_color;
     if (on_) {
+        // suite-record.jsx:108-111 SourceToggle on-state:
+        //   background var(--ac-dim) = accent @ acDim(0.14); border var(--ac-b2) = accent @ acB2(0.60).
         fill = accent;
-        fill.setAlphaF(0.14f); // matches kAccentDim
+        fill.setAlphaF(0.14f);
         border = accent;
-        border.setAlphaF(0.42f); // matches kAccentLine
-        icon = accent;
+        border.setAlphaF(0.60f);
+        icon_color = accent;
     } else {
-        // Derive from ink so the pill is visible on light themes
-        // (ink ≈ white on dark → same as the old hard-white; ink ≈ dark on light → visible on paper).
         fill = QColor::fromRgba(qRgba(ink.red(), ink.green(), ink.blue(), static_cast<int>(0.05 * 255)));
         border = QColor(Qt::transparent);
-        icon = QColor(QString::fromUtf8(t.mut));
+        icon_color = QColor(QString::fromUtf8(t.mut));
     }
 
     painter.setPen(border.alpha() > 0 ? QPen(border, 1.0) : Qt::NoPen);
@@ -136,79 +144,80 @@ void AudioSourceToggle::paintEvent(QPaintEvent* /*event*/) {
     painter.drawEllipse(circle);
 
     // Meter fill: vertical fill from bottom, clipped to the circle shape.
-    // Shown when meter is active and level > 0, regardless of on_ state.
-    // OFF-state: flat grey fill (shows signal present but source not captured).
-    // ON-state: zoned fill — mint 0-0.75, caution/amber 0.75-0.95, error/coral 0.95-1.0.
+    // Level is mapped from linear amplitude → dBFS → visual fill fraction so
+    // that normal speech (~-18 dBFS) fills roughly 70% of the circle height.
+    // Zone thresholds correspond to -9 dBFS (amber) and -3 dBFS (coral).
     if (meter_active_ && meter_level_ > 0.0f) {
-        // Clip to the button circle so the fill never bleeds outside the border.
+        // meter_level_ is pre-mapped by dockLevel() as (dBFS + 60) / 60 → undo to get real dBFS.
+        const qreal db = static_cast<qreal>(meter_level_) * 60.0 - 60.0;
+        if (db < kFloorDb)
+            return; // below noise gate — paint nothing
+
+        // Piecewise-linear dBFS → visual fill fraction.
+        qreal level;
+        if (db <= kAmberDb)
+            level = (db - kFloorDb) / (kAmberDb - kFloorDb) * kMintEnd;
+        else if (db <= kCoralDb)
+            level = kMintEnd + (db - kAmberDb) / (kCoralDb - kAmberDb) * (kAmberEnd - kMintEnd);
+        else
+            level = kAmberEnd + (db - kCoralDb) / (0.0 - kCoralDb) * (1.0 - kAmberEnd);
+
         QPainterPath clip_path;
         clip_path.addEllipse(circle);
         painter.setClipPath(clip_path);
         painter.setPen(Qt::NoPen);
 
-        const qreal level = static_cast<qreal>(meter_level_);
         const qreal bottom = circle.bottom();
 
         if (!on_) {
-            // OFF state: flat muted-grey fill.
+            // OFF state: flat muted-grey fill (signal present but not captured).
             const qreal total_height = circle.height() * level;
             QColor grey(QString::fromUtf8(t.mut));
             grey.setAlphaF(0.30f);
-            const QRectF fill_rect(circle.left(), bottom - total_height, circle.width(), total_height);
             painter.setBrush(grey);
-            painter.drawRect(fill_rect);
+            painter.drawRect(QRectF(circle.left(), bottom - total_height, circle.width(), total_height));
         } else {
-            // ON state: zoned fill bands stacked from bottom.
-            // Zone thresholds (as fraction of full circle height):
-            constexpr qreal kYellowThresh = 0.75; // mint below, caution above
-            constexpr qreal kRedThresh = 0.95;    // caution below, error above
-
             const QColor caution_raw(QString::fromUtf8(t.caution));
             const QColor error_raw(QString::fromUtf8(t.error));
 
-            // Mint zone: level 0 → min(level, 0.75)
-            if (level > 0.0) {
-                const qreal zone_top = std::min(level, kYellowThresh);
-                const qreal zone_height = circle.height() * zone_top;
-                const QRectF band(circle.left(), bottom - zone_height, circle.width(), zone_height);
+            // Mint zone: 0 → min(level, kMintEnd)
+            {
+                const qreal zone_top = std::min(level, kMintEnd);
+                const qreal h = circle.height() * zone_top;
                 QColor c(accent);
                 c.setAlphaF(0.30f);
                 painter.setBrush(c);
-                painter.drawRect(band);
+                painter.drawRect(QRectF(circle.left(), bottom - h, circle.width(), h));
             }
-            // Caution/amber zone: level 0.75 → min(level, 0.95)
-            if (level > kYellowThresh) {
-                const qreal zone_bottom_frac = kYellowThresh;
-                const qreal zone_top_frac = std::min(level, kRedThresh);
-                const qreal zone_bottom_y = bottom - circle.height() * zone_bottom_frac;
-                const qreal zone_height = circle.height() * (zone_top_frac - zone_bottom_frac);
-                const QRectF band(circle.left(), zone_bottom_y - zone_height, circle.width(), zone_height);
+            // Amber zone: kMintEnd → min(level, kAmberEnd)
+            if (level > kMintEnd) {
+                const qreal zone_top = std::min(level, kAmberEnd);
+                const qreal y_bottom = bottom - circle.height() * kMintEnd;
+                const qreal h = circle.height() * (zone_top - kMintEnd);
                 QColor c(caution_raw);
                 c.setAlphaF(0.30f);
                 painter.setBrush(c);
-                painter.drawRect(band);
+                painter.drawRect(QRectF(circle.left(), y_bottom - h, circle.width(), h));
             }
-            // Error/coral zone: level 0.95 → level
-            if (level > kRedThresh) {
-                const qreal zone_bottom_frac = kRedThresh;
-                const qreal zone_top_frac = level;
-                const qreal zone_bottom_y = bottom - circle.height() * zone_bottom_frac;
-                const qreal zone_height = circle.height() * (zone_top_frac - zone_bottom_frac);
-                const QRectF band(circle.left(), zone_bottom_y - zone_height, circle.width(), zone_height);
+            // Coral zone: kAmberEnd → level
+            if (level > kAmberEnd) {
+                const qreal y_bottom = bottom - circle.height() * kAmberEnd;
+                const qreal h = circle.height() * (level - kAmberEnd);
                 QColor c(error_raw);
                 c.setAlphaF(0.30f);
                 painter.setBrush(c);
-                painter.drawRect(band);
+                painter.drawRect(QRectF(circle.left(), y_bottom - h, circle.width(), h));
             }
         }
 
-        // Restore unrestricted clip so the icon is not clipped.
         painter.setClipping(false);
     }
 
-    const QRectF icon_rect =
-        circle.adjusted(circle.width() * 0.27, circle.height() * 0.27, -circle.width() * 0.27, -circle.height() * 0.27);
-    paintIcon(painter, icon_key_, icon_rect, icon);
+    // DESIGN-FIDELITY: glyph is round(size*0.45)=19px (hybrid-shared.jsx). For the 40px
+    // circle that is inset (40-19)/2/40 = 0.2625 (was 0.27 → 18.4px).
+    const QRectF icon_rect = circle.adjusted(circle.width() * 0.2625, circle.height() * 0.2625,
+                                             -circle.width() * 0.2625, -circle.height() * 0.2625);
+    paintIcon(painter, icon_key_, icon_rect, icon_color);
 }
 
 } // namespace exosnap::ui::widgets

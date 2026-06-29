@@ -6,6 +6,7 @@
 
 #include <QAction>
 #include <QByteArray>
+#include <QCursor>
 #include <QEvent>
 #include <QFrame>
 #include <QGridLayout>
@@ -15,7 +16,9 @@
 #include <QMenu>
 #include <QPainter>
 #include <QPixmap>
+#include <QPoint>
 #include <QPushButton>
+#include <QRect>
 #include <QSize>
 #include <QString>
 #include <QStyle>
@@ -99,17 +102,20 @@ void setStyledProperty(QWidget* widget, const char* name, const QString& value) 
 // drives the background/border (same treatment as the capture-frame button).
 QPushButton* makeIconActionButton(const QString& object_name, const QString& dock_action, const char* svg_path_d,
                                   const QString& tooltip, QWidget* parent) {
+    // DESIGN-FIDELITY: suite-record.jsx:87 IconActionBtn — glyph is 19px in HT.mut
+    // (was a brighter hard-coded #C8C8C4 at 18px).
+    const QString icon_color = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut);
     QByteArray svg;
     svg.reserve(400);
-    svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'"
-               " stroke='#C8C8C4' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'>"
-               "<path d='");
+    svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='");
+    svg.append(icon_color.toUtf8());
+    svg.append("' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='");
     svg.append(svg_path_d);
     svg.append("'/></svg>");
 
     QSvgRenderer renderer(svg);
     constexpr int kBtn = 44;
-    constexpr int kGlyph = 18;
+    constexpr int kGlyph = 19;
     QPixmap pix(kGlyph, kGlyph);
     pix.fill(Qt::transparent);
     {
@@ -135,18 +141,19 @@ QPushButton* makeIconActionButton(const QString& object_name, const QString& doc
 // State (idle/hover/pressed/disabled) is styled via QSS on the
 // "dockAction=captureFrame" property — no manual painting required.
 QPushButton* makeCaptureFrameButton(QWidget* parent) {
-    // Lucide "image" icon — rectangular frame with mountain + sun, distinct from the
-    // camera glyph used by AudioSourceToggle for the "webcam" key.
-    constexpr auto kCameraPath = "M21 15a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2z";
-
-    // Build an SVG at a neutral color; QSS will tint via the object-name rule.
+    // DESIGN-FIDELITY: suite-record.jsx:39 CapDockBtn — the still-frame snapshot uses
+    // the Lucide "camera" glyph (body + lens), 19px in HT.mut. It is distinct from the
+    // webcam source toggle's "webcam" icon, so no need to swap in the "image" glyph.
+    const QString icon_color = QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut);
     QByteArray svg;
     svg.reserve(400);
-    svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'"
-               " stroke='#C8C8C4' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'>"
-               "<path d='");
-    svg.append(kCameraPath);
-    svg.append("'/></svg>");
+    svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='");
+    svg.append(icon_color.toUtf8());
+    svg.append("' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'>");
+    svg.append(
+        "<path d='M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z'/>");
+    svg.append("<circle cx='12' cy='13' r='3'/>");
+    svg.append("</svg>");
 
     QSvgRenderer renderer(svg);
     constexpr int kBtn = 44;
@@ -175,7 +182,8 @@ QPushButton* makeCaptureFrameButton(QWidget* parent) {
 TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     setObjectName(QStringLiteral("recordTransportDock"));
     setProperty("dockState", QStringLiteral("ready"));
-    setMinimumHeight(74);
+    // DESIGN-FIDELITY: State-Spec "Dock-Container" min-height = 72px.
+    setMinimumHeight(72);
 
     auto* grid = new QGridLayout(this);
     grid->setContentsMargins(18, 12, 18, 12);
@@ -194,7 +202,7 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     toggles_row_ = new QWidget(left_zone);
     auto* toggles_layout = new QHBoxLayout(toggles_row_);
     toggles_layout->setContentsMargins(0, 0, 0, 0);
-    toggles_layout->setSpacing(10);
+    toggles_layout->setSpacing(9); // State-Spec: Source-Toggle gap 9px
     system_toggle_ = new AudioSourceToggle(QStringLiteral("system"), QStringLiteral("system"), toggles_row_);
     system_toggle_->setToolTip(QStringLiteral("System audio"));
     mic_toggle_ = new AudioSourceToggle(QStringLiteral("mic"), QStringLiteral("mic"), toggles_row_);
@@ -203,41 +211,14 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     webcam_toggle_->setToolTip(QStringLiteral("Webcam"));
     app_toggle_ = new AudioSourceToggle(QStringLiteral("app"), QStringLiteral("app"), toggles_row_);
     app_toggle_->setToolTip(QStringLiteral("App audio"));
-    toggles_layout->addWidget(system_toggle_);
-    toggles_layout->addWidget(app_toggle_);
-    toggles_layout->addWidget(mic_toggle_);
-    toggles_layout->addWidget(webcam_toggle_);
-
-    completed_row_ = new QWidget(left_zone);
-    auto* completed_layout = new QHBoxLayout(completed_row_);
-    completed_layout->setContentsMargins(0, 0, 0, 0);
-    completed_layout->setSpacing(10);
-    filename_link_ = new QPushButton(completed_row_);
-    filename_link_->setObjectName(QStringLiteral("recordDockFilename"));
-    filename_link_->setCursor(Qt::PointingHandCursor);
-    filename_link_->setFlat(true);
-    // Icon-only 38×38 folder button (DF-04): no text label, fixed size, radius-10 via QSS.
-    // Tooltip and accessible name "Open folder" are preserved for UIA/capture tooling.
-    open_folder_btn_ = new QPushButton(completed_row_);
-    open_folder_btn_->setObjectName(QStringLiteral("recordDockOpenFolder"));
-    open_folder_btn_->setProperty("dockAction", QStringLiteral("ghost"));
-    open_folder_btn_->setCursor(Qt::PointingHandCursor);
-    open_folder_btn_->setToolTip(QStringLiteral("Open folder"));
-    open_folder_btn_->setAccessibleName(QStringLiteral("Open folder"));
-    open_folder_btn_->setIcon(QIcon(QStringLiteral(":/theme/icons/folder.svg")));
-    open_folder_btn_->setIconSize(QSize(18, 18));
-    open_folder_btn_->setFixedSize(38, 38);
-    // D4: size_label_ is still a member for API compatibility but hidden — bar owns size.
-    size_label_ = new QLabel(completed_row_);
-    size_label_->setProperty("labelRole", QStringLiteral("recordDockSize"));
-    size_label_->setVisible(false); // D4: size readout removed from dock; metadata bar owns it
-    completed_layout->addWidget(filename_link_);
-    completed_layout->addWidget(open_folder_btn_);
-    // size_label_ not added to layout (D4)
-    completed_row_->setVisible(false);
+    // DESIGN-FIDELITY: toggle order is speaker → app → mic → webcam, per the
+    // newest Mappe (suite-record.jsx:164-167 / :264-267, text "SYS → APP → MIC → CAM").
+    toggles_layout->addWidget(system_toggle_); // speaker (System audio)
+    toggles_layout->addWidget(app_toggle_);    // app
+    toggles_layout->addWidget(mic_toggle_);    // mic
+    toggles_layout->addWidget(webcam_toggle_); // webcam
 
     left_layout->addWidget(toggles_row_);
-    left_layout->addWidget(completed_row_);
     left_layout->addStretch(1);
     grid->addWidget(left_zone, 0, 0, Qt::AlignLeft | Qt::AlignVCenter);
 
@@ -253,7 +234,7 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     action_row_ = new QWidget(this);
     auto* action_layout = new QHBoxLayout(action_row_);
     action_layout->setContentsMargins(0, 0, 0, 0);
-    action_layout->setSpacing(10);
+    action_layout->setSpacing(9); // State-Spec: right action cluster gap 9px
 
     // v10 split Record button: pill-shaped container with a main "Record" face
     // and a chevron face that opens the countdown menu (3 / 5 / 10 s).
@@ -309,8 +290,6 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
                                   104, action_row_);
     resume_btn_ = makeActionButton(QStringLiteral("recordDockResume"), QStringLiteral("resume"),
                                    QStringLiteral("Resume"), 104, action_row_);
-    record_again_btn_ = makeActionButton(QStringLiteral("recordDockRecordAgain"), QStringLiteral("record"),
-                                         QStringLiteral("Record again"), 156, action_row_);
     stop_btn_ = makeActionButton(QStringLiteral("recordDockStop"), QStringLiteral("stop"), QStringLiteral("Stop"), 104,
                                  action_row_);
 
@@ -326,7 +305,6 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     const QString ghost_text = QString::fromUtf8(glyph_theme.mut); // ${text2}
     const QString stop_ink = QStringLiteral("#1A0D0B");            // matches dockAction="stop" text
     setTransportGlyph(record_btn_, kRecordGlyph, accent_ink);
-    setTransportGlyph(record_again_btn_, kRecordGlyph, accent_ink);
     setTransportGlyph(resume_btn_, kResumeGlyph, accent_ink);
     setTransportGlyph(pause_btn_, kPauseGlyph, ghost_text);
     setTransportGlyph(stop_btn_, kStopGlyph, stop_ink);
@@ -362,7 +340,6 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     action_layout->addWidget(pause_btn_);
     action_layout->addWidget(resume_btn_);
     action_layout->addWidget(record_split_container_);
-    action_layout->addWidget(record_again_btn_);
     action_layout->addWidget(stop_btn_);
     grid->addWidget(action_row_, 0, 2, Qt::AlignRight | Qt::AlignVCenter);
 
@@ -370,9 +347,6 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     connect(stop_btn_, &QPushButton::clicked, this, &TransportDock::stopClicked);
     connect(pause_btn_, &QPushButton::clicked, this, &TransportDock::pauseClicked);
     connect(resume_btn_, &QPushButton::clicked, this, &TransportDock::resumeClicked);
-    connect(record_again_btn_, &QPushButton::clicked, this, &TransportDock::recordAgainClicked);
-    connect(open_folder_btn_, &QPushButton::clicked, this, &TransportDock::openFolderClicked);
-    connect(filename_link_, &QPushButton::clicked, this, &TransportDock::filenameClicked);
     connect(capture_frame_btn_, &QPushButton::clicked, this, &TransportDock::captureFrameClicked);
     connect(add_marker_btn_, &QPushButton::clicked, this, &TransportDock::addMarkerClicked);
     connect(split_btn_, &QPushButton::clicked, this, &TransportDock::splitClicked);
@@ -390,13 +364,28 @@ TransportDock::TransportDock(QWidget* parent) : QFrame(parent) {
     // The menu opens when the cursor enters the chevron; a short leave-delay
     // prevents accidental dismiss when the user moves toward the menu items.
     // Clicking a menu item starts the recording with the chosen countdown delay.
+    // Poll the real cursor position while the menu is open (started in openChevronMenu,
+    // stopped on aboutToHide). The menu pops up ABOVE the chevron and, being a Qt::Popup,
+    // grabs the mouse the instant it opens — which fires a synthetic mouse-leave on the
+    // chevron and then starves it of further enter/leave updates. underMouse() is therefore
+    // UNRELIABLE here (it reports false even while the cursor rests on the chevron); a
+    // single-shot leave timer would close the menu, the chevron would re-fire Enter, and the
+    // menu would reopen — looping. Polling QCursor::pos() against the real geometry of both
+    // the chevron and the menu closes only when the cursor has truly left both.
     chevron_leave_timer_ = new QTimer(this);
-    chevron_leave_timer_->setSingleShot(true);
-    chevron_leave_timer_->setInterval(300); // ms — generous enough for mouse travel
+    chevron_leave_timer_->setSingleShot(false);
+    chevron_leave_timer_->setInterval(120); // ms — poll cadence while the menu is open
     connect(chevron_leave_timer_, &QTimer::timeout, this, [this]() {
-        if (chevron_menu_ && !chevron_menu_->underMouse()) {
-            chevron_menu_->close();
+        if (!chevron_menu_) {
+            chevron_leave_timer_->stop();
+            return;
         }
+        const QPoint gp = QCursor::pos();
+        const bool over_chevron =
+            QRect(record_chevron_btn_->mapToGlobal(QPoint(0, 0)), record_chevron_btn_->size()).contains(gp);
+        const bool over_menu = chevron_menu_->isVisible() && chevron_menu_->geometry().contains(gp);
+        if (!over_chevron && !over_menu)
+            chevron_menu_->close();
     });
     record_chevron_btn_->installEventFilter(this);
 
@@ -428,9 +417,8 @@ void TransportDock::applyState() {
     const bool completed = state_ == State::Completed;
     const bool show_ready = ready || saving || completed;
 
-    // v10: left zone always shows the source toggles (no completed_row_ in active layout).
+    // v10: left zone always shows the source toggles.
     toggles_row_->setVisible(true);
-    completed_row_->setVisible(false);
 
     // The split container (record face + chevron) is shown in Ready/Saving/Completed
     // and Countdown states. In Countdown the record face becomes "Cancel"
@@ -440,9 +428,6 @@ void TransportDock::applyState() {
     pause_btn_->setVisible(recording);
     resume_btn_->setVisible(paused);
     stop_btn_->setVisible(recording || paused);
-    // v10: record_again_btn_ never shown (completed state → Ready, not a distinct layout).
-    record_again_btn_->setVisible(false);
-    record_again_btn_->setEnabled(false);
     // Capture-frame: shown in ready/recording/paused; disabled while saving/blocked.
     capture_frame_btn_->setVisible(show_ready || recording || paused);
     capture_frame_btn_->setEnabled((ready || recording || paused) && primary_enabled_);
@@ -471,14 +456,14 @@ void TransportDock::applyState() {
 bool TransportDock::eventFilter(QObject* watched, QEvent* event) {
     if (watched == record_chevron_btn_) {
         if (event->type() == QEvent::Enter) {
-            // Stop any pending close and open the menu if enabled and not already open.
-            chevron_leave_timer_->stop();
+            // Open the menu if enabled and not already open; openChevronMenu starts the
+            // poll timer that handles closing. We deliberately do NOT close on Leave here:
+            // the menu grabs the mouse and fires a synthetic leave the instant it opens, so
+            // a leave-driven close would loop. The poll timer closes once the cursor truly
+            // leaves both the chevron and the menu.
             if (record_chevron_btn_->isEnabled() && (!chevron_menu_ || !chevron_menu_->isVisible())) {
                 openChevronMenu();
             }
-        } else if (event->type() == QEvent::Leave) {
-            // Delay close so the cursor has time to travel into the menu.
-            chevron_leave_timer_->start();
         }
     }
     return QFrame::eventFilter(watched, event);
@@ -491,7 +476,7 @@ void TransportDock::openChevronMenu() {
     chevron_menu_ = menu;
     connect(menu, &QObject::destroyed, this, [this]() { chevron_menu_ = nullptr; });
 
-    // Stop the leave-timer when the mouse enters the menu so it does not close.
+    // Stop polling once the menu is closing (item chosen, Esc, or outside click).
     connect(menu, &QMenu::aboutToHide, this, [this]() { chevron_leave_timer_->stop(); });
 
     struct {
@@ -515,6 +500,10 @@ void TransportDock::openChevronMenu() {
     // Pop up above the chevron button.
     const QPoint pos = record_chevron_btn_->mapToGlobal(QPoint(0, 0));
     menu->popup(QPoint(pos.x(), pos.y() - menu->sizeHint().height() - 4));
+
+    // Start polling the cursor so the menu closes once the cursor leaves both it and the
+    // chevron (the menu's mouse grab makes the chevron's own leave events unreliable).
+    chevron_leave_timer_->start();
 }
 
 void TransportDock::setSavingProgress(float /*fraction*/) {
@@ -557,14 +546,18 @@ void TransportDock::setToggleState(const QString& key, bool on, bool interactive
     toggle->setInteractive(interactive);
 }
 
-void TransportDock::setCompletedInfo(const QString& filename, const QString& size_text, bool has_file) {
-    filename_link_->setText(filename);
-    filename_link_->setToolTip(filename);
-    filename_link_->setEnabled(has_file);
-    open_folder_btn_->setEnabled(has_file);
-    // D4: size readout removed from dock; metadata bar owns size. Store for API compat only.
-    size_label_->setText(size_text);
-    size_label_->setVisible(false); // always hidden
+void TransportDock::setToggleVisible(const QString& key, bool visible) {
+    AudioSourceToggle* toggle = nullptr;
+    if (key == QLatin1String("system"))
+        toggle = system_toggle_;
+    else if (key == QLatin1String("mic"))
+        toggle = mic_toggle_;
+    else if (key == QLatin1String("webcam"))
+        toggle = webcam_toggle_;
+    else if (key == QLatin1String("app"))
+        toggle = app_toggle_;
+    if (toggle)
+        toggle->setVisible(visible);
 }
 
 void TransportDock::setSplitEnabled(bool enabled) {

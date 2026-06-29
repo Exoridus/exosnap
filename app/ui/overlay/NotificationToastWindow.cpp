@@ -49,7 +49,9 @@ constexpr QColor kDim{0x65, 0x65, 0x6A, 255}; // dismiss / mono labels
 
 // ── Accent (Studio Mint) ──────────────────────────────────────────────────
 constexpr QColor kAccent{0x9B, 0xD9, 0xD2, 255};    // #9BD9D2
-constexpr QColor kAccentInk{0x08, 0x13, 0x0F, 255}; // #08130F — text on primary action
+constexpr QColor kAccentInk{0x08, 0x13, 0x0F, 255}; // #08130F — text on mint accent
+// Dark ink for tonal primary buttons (v10: button fill = tone color, not always mint)
+constexpr QColor kButtonInk{0x0E, 0x0E, 0x10, 255}; // #0E0E10 — legible on all light tones
 
 // ── Status palettes ───────────────────────────────────────────────────────
 // success: color #84CBA2, dim rgba(132,203,162,0.13), border rgba(132,203,162,0.45)
@@ -74,11 +76,14 @@ constexpr QColor kInfoB{155, 217, 210, 153};  // 0.60 * 255 ≈ 153
 
 // ── Geometry ──────────────────────────────────────────────────────────────
 // Toast card width = 372px (ToastAnatomy spec).
-constexpr int kToastWidth = 372;
-constexpr int kToastRadius = 14;  // borderRadius: 14 in mappe-kit Toast
-constexpr int kStackGap = 12;     // gap between stacked toasts
-constexpr int kMarginRight = 20;  // anchor from screen right edge
-constexpr int kMarginBottom = 20; // anchor from screen bottom edge
+// The WINDOW is kToastWidth + 2 * kShadowMargin wide; the card sits at
+// x = kShadowMargin inside the window. (kShadowMargin == public constant.)
+constexpr int kToastWidth = NotificationToastWindow::kCardWidth;      // 372
+constexpr int kShadowMargin = NotificationToastWindow::kShadowMargin; // 20
+constexpr int kToastRadius = 14;                                      // borderRadius: 14 in mappe-kit Toast
+constexpr int kStackGap = 12;                                         // gap between stacked toasts
+constexpr int kMarginRight = 20;                                      // anchor from screen right edge
+constexpr int kMarginBottom = 20;                                     // anchor from screen bottom edge
 
 // ── Card interior ─────────────────────────────────────────────────────────
 // Padding: "14px 15px 14px 16px" (top, right, bottom, left)
@@ -99,9 +104,9 @@ constexpr int kChipTextGap = 12;
 constexpr int kDismissSize = 18;
 
 // Action pill geometry
-constexpr int kPillH = 28;       // approximate: "6px 12px" padding = ~28px tall
-constexpr int kPillRadius = 999; // borderRadius: 999 → fully rounded
-constexpr int kPillGapX = 8;     // gap between pills
+constexpr int kPillH = 28;      // approximate: "6px 12px" padding = ~28px tall
+constexpr int kPillRadius = 10; // v10: borderRadius 10 (was 999 fully-round)
+constexpr int kPillGapX = 8;    // gap between pills
 
 // Progress bar (auto-dismiss countdown)
 constexpr int kBarH = 3; // "height: 3" — bottom hairline
@@ -307,7 +312,7 @@ QVector<ButtonSpec> buttonSpecsFor(const notifications::NotificationEvent& event
     QVector<ButtonSpec> buttons;
     switch (event.action) {
     case NotificationAction::OpenFolder:
-        buttons.push_back({QStringLiteral("Open folder"), false, NotificationAction::OpenFolder});
+        buttons.push_back({QStringLiteral("Open folder"), true, NotificationAction::OpenFolder});
         break;
     case NotificationAction::Edit:
         buttons.push_back({QStringLiteral("Edit"), true, NotificationAction::Edit});
@@ -329,6 +334,13 @@ QVector<ButtonSpec> buttonSpecsFor(const notifications::NotificationEvent& event
         break;
     case NotificationAction::OpenUpdate:
         buttons.push_back({QStringLiteral("View update"), true, NotificationAction::OpenUpdate});
+        break;
+    case NotificationAction::RelaunchElevated:
+        // ELEVATION-FOUNDATION-R1 (ADR 0033): "Restart as admin" unlocks the
+        // elevation-gated diagnostics bundle. Optional "Not now" dismiss.
+        buttons.push_back({QStringLiteral("Restart as admin"), true, NotificationAction::RelaunchElevated});
+        if (event.secondary_action == NotificationAction::None)
+            buttons.push_back({QStringLiteral("Not now"), false, NotificationAction::None});
         break;
     case NotificationAction::Discard:
         buttons.push_back({QStringLiteral("Discard"), false, NotificationAction::Discard});
@@ -383,27 +395,32 @@ ToastLayout layoutFor(const notifications::NotificationEvent& event, int y_offse
     L.sticky = isSticky(event.type);
     L.card_h = toastHeight(event, title_fm, body_fm);
 
-    // Card spans the FULL height (including the bottom bar strip) so the bar can
-    // be clipped to the card's rounded bottom corners.
-    L.card_rect = QRectF(0.0, y_offset, kToastWidth, L.card_h);
+    // Card sits at x = kShadowMargin inside the window (the window is wider by
+    // 2 * kShadowMargin to accommodate the soft shadow penumbra on all sides).
+    // y_offset is already in window-space (callers start at kShadowMargin and
+    // increment by card_h + kStackGap between cards — no extra margin between cards).
+    L.card_rect = QRectF(kShadowMargin, y_offset, kToastWidth, L.card_h);
 
-    const int text_x = kPadLeft + kChipSize + kChipTextGap;
-    const int text_w = kToastWidth - text_x - kPadRight - kDismissSize - 6;
-    L.text_x = text_x;
+    // card-local offsets (unchanged from spec):
+    const int card_text_x = kPadLeft + kChipSize + kChipTextGap; // = kTextX, card-relative
+    // window-space text x:
+    L.text_x = kShadowMargin + card_text_x;
 
     const int text_y_top = y_offset + kPadTop;
     const int title_y = text_y_top + (kChipSize / 2 - (kTitleH + kBodyGapTop + kBodyH) / 2);
     const int effective_title_y = qMax(text_y_top, title_y);
 
-    const int body_lines = bodyLineCount(event.body, body_fm, text_w);
+    const int body_lines = bodyLineCount(event.body, body_fm, kTextW);
     const int body_total_h = kBodyH * body_lines;
     L.actions_y = effective_title_y + kTitleH + kBodyGapTop + body_total_h + kActionsGapTop;
 
-    L.dismiss_rect = QRectF(kToastWidth - kPadRight - kDismissSize, y_offset + kPadTop, kDismissSize, kDismissSize);
+    // Dismiss ✕ — window-space rect (card right edge = kShadowMargin + kToastWidth)
+    L.dismiss_rect =
+        QRectF(kShadowMargin + kToastWidth - kPadRight - kDismissSize, y_offset + kPadTop, kDismissSize, kDismissSize);
 
     if (event.hasAction()) {
         L.buttons = buttonSpecsFor(event);
-        int pill_x = text_x;
+        int pill_x = L.text_x; // window-space pill start
         for (const auto& btn : L.buttons) {
             const int label_w = action_fm.horizontalAdvance(btn.label);
             const int pill_w = label_w + 24; // 12px each side
@@ -475,7 +492,8 @@ QSize NotificationToastWindow::sizeHint() const {
         if (i < n - 1)
             total_h += kStackGap;
     }
-    return QSize(kToastWidth, total_h);
+    // Add shadow margin on all sides so the soft penumbra is visible and masked.
+    return QSize(kToastWidth + 2 * kShadowMargin, total_h + 2 * kShadowMargin);
 }
 
 QSize NotificationToastWindow::minimumSizeHint() const {
@@ -523,7 +541,14 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
     action_font.setWeight(QFont::DemiBold); // 600
     const QFontMetrics action_fm(action_font);
 
-    int y_offset = 0;
+    // Pre-compute all hit targets once so paintEvent and hover-check share the
+    // same index ordering (dismiss first, then pills, for each toast in order).
+    const QVector<ToastHit> all_hits = computeHitTargets();
+    int hit_idx = 0; // running cursor into all_hits during paint
+
+    // y_offset starts at kShadowMargin so the card rect has room for the soft
+    // shadow penumbra above and to the left of the first card.
+    int y_offset = kShadowMargin;
     for (int idx = 0; idx < events.size(); ++idx) {
         const auto& event = events[idx];
         const StatusTokens tok = tokensForType(event.type);
@@ -533,24 +558,36 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
         const ToastLayout L = layoutFor(event, y_offset, title_fm, body_fm, action_fm);
         const int card_h = L.card_h;
 
+        // ── Soft drop shadow ─────────────────────────────────────────────
+        // Approximates box-shadow: 0 18px 48px rgba(0,0,0,0.5) with 9 concentric
+        // rounded-rects. Each layer is ~2.5 px larger outward with alpha that
+        // decays from 0.09 (innermost) to 0.01 (outermost). Painted outside-in so
+        // inner layers accumulate on top — giving a ~0.45 cumulative alpha at the
+        // card edge and near-zero at the penumbra boundary ~20 px out.
+        // The window is sized with kShadowMargin padding so none is clipped.
+        {
+            static const float kLayerAlpha[] = {0.01f, 0.02f, 0.03f, 0.04f, 0.05f, 0.06f, 0.07f, 0.08f, 0.09f};
+            constexpr int kNLayers = 9;
+            constexpr float kMaxExpand = 20.0f; // total penumbra radius
+            constexpr float kOffsetY = 10.0f;   // downward shadow bias
+            const QRectF& card_rect_ref = L.card_rect;
+            for (int s = 0; s < kNLayers; ++s) {
+                // Outermost (s=0) → large + faint; innermost (s=8) → small + darker.
+                const float t = float(kNLayers - 1 - s) / float(kNLayers - 1); // 1 at s=0, 0 at s=8
+                const float expand = kMaxExpand * t;
+                const float shift_y = kOffsetY * t;
+                const QRectF sr = card_rect_ref.adjusted(-expand, -expand + shift_y, expand, expand + shift_y);
+                QPainterPath sp;
+                sp.addRoundedRect(sr, kToastRadius + expand, kToastRadius + expand);
+                p.fillPath(sp, QColor(0, 0, 0, static_cast<int>(kLayerAlpha[s] * 255)));
+            }
+        }
+
         // ── Card background ───────────────────────────────────────────────
-        // The card now spans the FULL card_h (including the bottom bar strip) so
-        // the countdown bar, clipped to this path, follows the rounded bottom
-        // corners instead of sticking out as a square hairline.
         const QRectF card_rect = L.card_rect;
         QPainterPath card_path;
         card_path.addRoundedRect(card_rect, kToastRadius, kToastRadius);
 
-        // Drop shadow — approximate with a slightly offset semi-transparent fill
-        // (Qt's QWidget has no native shadow; we paint a simple blur-offset approximation)
-        // box-shadow: 0 18px 48px rgba(0,0,0,0.5) — handled by WA_TranslucentBackground
-        // For a crisp shadow we use an expanded rect behind the card.
-        const QRectF shadow_rect = card_rect.adjusted(-2, 4, 2, 18);
-        QPainterPath shadow_path;
-        shadow_path.addRoundedRect(shadow_rect, kToastRadius + 2, kToastRadius + 2);
-        p.fillPath(shadow_path, QColor(0, 0, 0, 64));
-
-        // Card fill
         p.fillPath(card_path, kCardBg);
 
         // Card border: line2 = rgba(255,255,255,0.12)
@@ -564,8 +601,7 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
         p.restore();
 
         // ── Glyph chip (30px, borderRadius 9) ────────────────────────────
-        const int chip_x = kPadLeft;
-        // Vertically center chip in the content area (above the bar strip).
+        const int chip_x = kShadowMargin + kPadLeft;
         const int content_area_h = card_h - (sticky ? 0 : kBarH) - kPadTop - kPadBottom;
         const int chip_y = y_offset + kPadTop + (content_area_h - kChipSize) / 2;
         const QRectF chip_rect(chip_x, chip_y, kChipSize, kChipSize);
@@ -577,31 +613,25 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
         chip_border.setWidthF(1.0);
         p.strokePath(chip_path, chip_border);
 
-        // Status glyph centered in chip
         const int glyph_cx = chip_x + kChipSize / 2;
         const int glyph_cy = chip_y + kChipSize / 2;
         drawStatusGlyph(p, event.type, glyph_cx, glyph_cy, kChipGlyphSize, tok.c);
 
         // ── Text column ───────────────────────────────────────────────────
-        const int text_x = L.text_x;
-        const int text_w = kToastWidth - text_x - kPadRight - kDismissSize - 6;
+        const int text_x = L.text_x; // window-space
+        // Text width is card-relative (card is always kToastWidth wide).
+        const int text_w = kTextW;
 
-        // Title row: title + optional dismiss ✕
         int text_y_top = y_offset + kPadTop;
-        // Vertically align title to the top of the content area (matches spec's flex column)
         const int title_y = text_y_top + (kChipSize / 2 - (kTitleH + kBodyGapTop + kBodyH) / 2);
-
-        // Clamp to padTop to avoid painting above the card
         const int effective_title_y = qMax(text_y_top, title_y);
 
-        // Title
         p.setFont(title_font);
         p.setPen(kInk);
         const QRect title_rect(text_x, effective_title_y, text_w, kTitleH);
         p.drawText(title_rect, Qt::AlignVCenter | Qt::AlignLeft,
                    title_fm.elidedText(event.title, Qt::ElideRight, text_w));
 
-        // Body: word-wrap up to 2 lines; elide only if it still overflows after 2 lines.
         p.setFont(body_font);
         p.setPen(kMut);
         {
@@ -609,18 +639,30 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
             const int body_total_h = kBodyH * body_lines;
             const QRect body_rect(text_x, effective_title_y + kTitleH + kBodyGapTop, text_w, body_total_h);
             if (body_lines > 1) {
-                // Word-wrap: let Qt break lines naturally within the rect.
-                // If the text still doesn't fit after wrapping, elide the last line.
                 p.drawText(body_rect, Qt::AlignTop | Qt::AlignLeft | Qt::TextWordWrap, event.body);
             } else {
-                // Single line: elide if it overflows.
                 p.drawText(body_rect, Qt::AlignVCenter | Qt::AlignLeft,
                            body_fm.elidedText(event.body, Qt::ElideRight, text_w));
             }
         }
 
         // ── Dismiss ✕ ─────────────────────────────────────────────────────
-        drawDismissX(p, L.dismiss_rect, kDim);
+        // v10: dismiss uses kMut (more legible than kDim).
+        // On hover: subtle circular background + brighter glyph.
+        {
+            const bool x_hovered = (hovered_target_ == hit_idx);
+            ++hit_idx; // dismiss always occupies one hit slot
+            if (x_hovered) {
+                // Subtle hover circle behind the ✕
+                const QRectF hover_circle = L.dismiss_rect.adjusted(-5, -5, 5, 5);
+                QPainterPath cp;
+                cp.addEllipse(hover_circle);
+                p.fillPath(cp, QColor(255, 255, 255, 20));
+                drawDismissX(p, L.dismiss_rect, kMut.lighter(150));
+            } else {
+                drawDismissX(p, L.dismiss_rect, kMut);
+            }
+        }
 
         // ── Action pills (rects come from the shared layout) ───────────────
         if (!L.buttons.isEmpty()) {
@@ -631,14 +673,21 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
                 QPainterPath pill_path;
                 pill_path.addRoundedRect(pill_rect, kPillRadius, kPillRadius);
 
+                const bool pill_hovered = (hovered_target_ == hit_idx);
+                ++hit_idx;
+
                 if (btn.primary) {
-                    // Primary: accent fill, accent-ink text
-                    p.fillPath(pill_path, kAccent);
-                    p.setPen(kAccentInk);
+                    // v10: primary fill = tone color (not always mint), dark ink for contrast.
+                    QColor fill = tok.c;
+                    if (pill_hovered)
+                        fill = fill.lighter(112); // subtle brighten on hover
+                    p.fillPath(pill_path, fill);
+                    p.setPen(kButtonInk);
                 } else {
-                    // Ghost: transparent fill, status-color border
+                    // Ghost: transparent fill, tone-color border.
+                    // On hover: border brightens from dim tok.b → full tok.c.
                     p.fillPath(pill_path, Qt::transparent);
-                    QPen ghost_border(tok.b);
+                    QPen ghost_border(pill_hovered ? tok.c : tok.b);
                     ghost_border.setWidthF(1.0);
                     p.strokePath(pill_path, ghost_border);
                     p.setPen(tok.c);
@@ -649,23 +698,15 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
 
         // ── Auto-dismiss countdown bar (non-sticky only) ──────────────────
         if (!sticky) {
-            // Clip everything to the rounded card path so the bar's bottom-left /
-            // bottom-right corners follow the card radius instead of sticking out
-            // as square corners past the rounded card.
             p.save();
             p.setClipPath(card_path);
 
             const int bar_y = y_offset + card_h - kBarH;
 
-            // Track (dim background) — full width, clipped to the rounded corners.
-            const QRectF track_rect(0, bar_y, kToastWidth, kBarH);
+            // Track background — card-width, starting at card left edge.
+            const QRectF track_rect(kShadowMargin, bar_y, kToastWidth, kBarH);
             p.fillRect(track_rect, QColor(255, 255, 255, 15));
 
-            // Real countdown: remaining fraction = (interval − elapsed) / interval.
-            // shrinks left-to-right as the dwell elapses. Driven by the manager's
-            // per-event shown-at timestamp + per-type dwell interval — the same
-            // numbers that schedule auto-dismiss, so the bar empties exactly when
-            // the toast disappears.
             double remaining = 1.0;
             const int interval = notifications::NotificationManager::DismissIntervalMs(event.type);
             if (interval > 0) {
@@ -678,7 +719,7 @@ void NotificationToastWindow::paintEvent(QPaintEvent* /*event*/) {
 
             const double fill_w = kToastWidth * remaining;
             if (fill_w > 0.0) {
-                const QRectF fill_rect(0, bar_y, fill_w, kBarH);
+                const QRectF fill_rect(kShadowMargin, bar_y, fill_w, kBarH);
                 p.fillRect(fill_rect, tok.c);
             }
             p.restore();
@@ -702,7 +743,8 @@ QVector<NotificationToastWindow::ToastHit> NotificationToastWindow::computeHitTa
     const QFontMetrics body_fm(fonts.body);
     const QFontMetrics action_fm(fonts.action);
 
-    int y_offset = 0;
+    // Must start at kShadowMargin to stay in lockstep with paintEvent and updateMask.
+    int y_offset = kShadowMargin;
     for (const auto& event : events) {
         const ToastLayout L = layoutFor(event, y_offset, title_fm, body_fm, action_fm);
 
@@ -768,17 +810,31 @@ void NotificationToastWindow::mousePressEvent(QMouseEvent* event) {
 }
 
 void NotificationToastWindow::mouseMoveEvent(QMouseEvent* event) {
-    // Pointing-hand cursor over any clickable target; arrow elsewhere.
+    // Track which hit target is under the cursor and repaint when it changes so
+    // hover feedback (pill lighten / × circle / secondary border brighten) is live.
     const QPointF pos = event->position();
-    bool over_target = false;
-    for (const ToastHit& hit : computeHitTargets()) {
-        if (hit.rect.contains(pos)) {
-            over_target = true;
+    const auto hits = computeHitTargets();
+    int new_hovered = -1;
+    for (int i = 0; i < hits.size(); ++i) {
+        if (hits[i].rect.contains(pos)) {
+            new_hovered = i;
             break;
         }
     }
-    setCursor(over_target ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    if (new_hovered != hovered_target_) {
+        hovered_target_ = new_hovered;
+        update();
+    }
+    setCursor(new_hovered >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
     QWidget::mouseMoveEvent(event);
+}
+
+void NotificationToastWindow::leaveEvent(QEvent* event) {
+    if (hovered_target_ != -1) {
+        hovered_target_ = -1;
+        update();
+    }
+    QWidget::leaveEvent(event);
 }
 
 void NotificationToastWindow::updateMask() {
@@ -802,12 +858,15 @@ void NotificationToastWindow::updateMask() {
     const QFontMetrics action_fm(fonts.action);
 
     QRegion region;
-    int y_offset = 0;
+    // Start at kShadowMargin — same as paintEvent and computeHitTargets.
+    int y_offset = kShadowMargin;
     for (const auto& event : events) {
         const ToastLayout L = layoutFor(event, y_offset, title_fm, body_fm, action_fm);
-        // Inflate slightly so the soft drop-shadow + rounded edges aren't clipped
-        // to a hard rectangle that would shave a pixel off antialiased corners.
-        region += L.card_rect.toAlignedRect().adjusted(-3, -1, 3, 4);
+        // Expand the mask to cover the soft shadow penumbra so those semi-transparent
+        // pixels are composited (not hidden). The shadow extends kShadowMargin to the
+        // left/right, ~(kShadowMargin - 10) above, and ~(kShadowMargin + 18) below.
+        region += L.card_rect.toAlignedRect().adjusted(-kShadowMargin, -(kShadowMargin - 10), kShadowMargin,
+                                                       kShadowMargin + 18);
         y_offset += L.card_h + kStackGap;
     }
     setMask(region);

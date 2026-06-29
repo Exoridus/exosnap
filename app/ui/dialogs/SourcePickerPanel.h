@@ -71,6 +71,7 @@ class SourcePickerPanel : public QWidget {
         int target_index = -1;
         uintptr_t native_id = 0;
         QString title;
+        QString short_name; // compact label for "Use <X>" button (empty = use title)
         QString detail;
         bool primary = false;
         QString status_badge;

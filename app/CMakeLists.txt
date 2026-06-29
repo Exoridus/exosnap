@@ -238,6 +238,8 @@ qt_add_executable(exosnap WIN32
     services/CrashIssueReport.cpp
     services/UpdateService.h
     services/UpdateService.cpp
+    services/ElevatedRelaunch.h
+    services/ElevatedRelaunch.cpp
     models/WebcamSettings.h
     models/SettingsCompareData.h
     models/SettingsCompareData.cpp
@@ -274,6 +276,17 @@ qt_add_executable(exosnap WIN32
     diagnostics/ConfigSummary.cpp
     diagnostics/DiskSpaceProvider.h
     diagnostics/DiskSpaceProvider.cpp
+    diagnostics/ElevationProvider.h
+    diagnostics/ElevationProvider.cpp
+    diagnostics/PresentProvider.h
+    diagnostics/PresentModeMapping.h
+    diagnostics/PresentModeMapping.cpp
+    diagnostics/PresentMonEtwSession.h
+    diagnostics/PresentMonEtwSession.cpp
+    diagnostics/PresentMonProvider.h
+    diagnostics/PresentMonProvider.cpp
+    diagnostics/DpcLatencyProvider.h
+    diagnostics/DpcLatencyProvider.cpp
     diagnostics/DiskSpaceThresholds.h
     diagnostics/FilesystemProvider.h
     diagnostics/FilesystemProvider.cpp
@@ -322,8 +335,11 @@ target_link_libraries(exosnap PRIVATE
     recorder_core exosnap::capability exosnap::warnings FFmpeg::mux exosnap::crash_capture
     exosnap::update
     tomlplusplus::tomlplusplus
-    d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib
+    d3d11.lib dxgi.lib d3dcompiler.lib runtimeobject.lib ole32.lib Version.lib
     mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib
+    # ELEVATION-FOUNDATION-R1 (ADR 0033): ShellExecuteExW (Shell32) + token APIs
+    # OpenProcessToken/GetTokenInformation (Advapi32).
+    Shell32.lib Advapi32.lib
 )
 
 target_include_directories(exosnap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
@@ -431,6 +447,7 @@ exosnap_add_app_test_support(exosnap_diagnostics_test_support
 )
 target_link_libraries(exosnap_diagnostics_test_support PUBLIC
     exosnap_output_model_test_support exosnap_capability recorder_core
+    dxgi.lib mmdevapi.lib
 )
 
 exosnap_add_app_test_support(exosnap_device_service_test_support
@@ -916,6 +933,48 @@ target_include_directories(settings_tiers_tests PRIVATE ${CMAKE_CURRENT_SOURCE_D
 set_target_properties(settings_tiers_tests PROPERTIES AUTOMOC ON)
 target_link_libraries(settings_tiers_tests PRIVATE mfplat.lib mf.lib mfuuid.lib mfreadwrite.lib ole32.lib)
 
+# ELEVATION-FOUNDATION-R1 (ADR 0033): elevation provider stub + relaunch handoff
+# arg builder/parser + RelaunchResult contract. Pure logic; no Win32 invocation.
+exosnap_add_gtest(
+    NAME elevation_tests
+    TEST_PREFIX elevation.
+    SOURCES
+        tests/test_elevation.cpp
+        services/ElevatedRelaunch.cpp
+    LIBRARIES Qt6::Core Shell32.lib
+)
+target_include_directories(elevation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(elevation_tests PRIVATE NOMINMAX)
+
+# ADR 0033: present-diagnostics provider. PresentMonProvider owns a
+# PresentMonEtwSession and gates on elevation && opt-in before starting it.
+# EXOSNAP_HAS_PRESENTMON is intentionally NOT defined here so the no-op session
+# is used, keeping this target Qt-only (no ETW dep) while the gate logic is
+# fully covered.
+exosnap_add_gtest(
+    NAME present_provider_tests
+    TEST_PREFIX present.
+    SOURCES
+        tests/test_present_provider.cpp
+        diagnostics/PresentMonProvider.cpp
+        diagnostics/PresentMonEtwSession.cpp
+        diagnostics/PresentModeMapping.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(present_provider_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Pure PresentMon present-mode mapping. Maps raw present events (POD) to our
+# diagnostics::PresentSample. No Win32/ETW headers; unit-testable in isolation.
+exosnap_add_gtest(
+    NAME present_mapping_tests
+    TEST_PREFIX present_mapping.
+    SOURCES
+        tests/test_present_mode_mapping.cpp
+        diagnostics/PresentModeMapping.cpp
+    LIBRARIES Qt6::Core
+)
+target_include_directories(present_mapping_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 exosnap_add_gtest(
     NAME source_picker_dialog_tests
     TEST_PREFIX source.
@@ -997,7 +1056,9 @@ exosnap_add_gtest(
         # calls ActiveTheme()/ParseThemeColor() from ExoSnapTheme.cpp.
         ui/widgets/ExoCheckBox.cpp
         ui/theme/ExoSnapTheme.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+        # v10: LogsPage's search field uses lucideIcon() (Lucide glyph renderer).
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
 )
 target_include_directories(logs_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(logs_page_tests PRIVATE EXOSNAP_ENABLE_VISUAL_TEST_HARNESS=1)
@@ -1212,7 +1273,17 @@ exosnap_add_gtest(
         ui/widgets/PipelineFlow.cpp
         ui/widgets/PipelineStepCard.cpp
         ui/widgets/LivePipelinePanel.cpp
-    LIBRARIES exosnap_diagnostics_test_support Qt6::Core Qt6::Gui Qt6::Widgets exosnap_capability recorder_core
+        # v10: DiagnosticsPage's readiness chip uses lucidePixmap() (Lucide glyph renderer).
+        ui/theme/LucideIcon.cpp
+        # ADR 0033: present-mode provider bridge. No EXOSNAP_HAS_PRESENTMON define →
+        # PresentMonEtwSession compiles the graceful no-op stub branch (no ETW dep).
+        diagnostics/PresentMonProvider.cpp
+        diagnostics/PresentMonEtwSession.cpp
+        diagnostics/PresentModeMapping.cpp
+        # ADR 0033: DPC/ISR latency provider. Same no-op stub branch (no ETW dep) since
+        # EXOSNAP_HAS_PRESENTMON is not defined here; DiagnosticsPage samples Read().
+        diagnostics/DpcLatencyProvider.cpp
+    LIBRARIES exosnap_diagnostics_test_support Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
 )
 target_include_directories(diagnostics_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(diagnostics_page_tests PROPERTIES AUTOMOC ON)

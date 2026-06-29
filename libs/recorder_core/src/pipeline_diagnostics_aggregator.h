@@ -156,8 +156,15 @@ class PipelineDiagnosticsAggregator {
     void OnFrameDroppedCfr() noexcept;                                // scheduled tick produced no frame
     void OnFrameDroppedBackpressure() noexcept;                       // encoder input slots all in flight
     void OnObservedFrameInterval(time_point now, double ms) noexcept; // VFR only
+    // Present cadence (DXGI OD only): inter-present interval (ms) from LastPresentTime QPC
+    // deltas plus the coalesced-update count (AccumulatedFrames). O(1), allocation-free.
+    void OnSourcePresentInterval(time_point now, double interval_ms, uint32_t accumulated_frames) noexcept;
     // Compositor (VideoThread) — CPU submission time only
     void OnCompositorSubmit(time_point now, double ms, bool pass_ran) noexcept;
+    // Capture-card live wiring (0.8.0): cheap CPU-timing brackets (steady_clock).
+    void OnAcquireLatency(time_point now, double ms) noexcept; // acquire+copy (Source Capture)
+    void OnVpbltSubmit(time_point now, double ms) noexcept;    // VideoProcessorBlt (Compositor)
+    void OnMuxLatency(time_point now, double ms) noexcept;     // mux drain loop (Muxer)
     // Encoder (VideoThread)
     void OnEncodeSubmitted() noexcept;
     void OnEncodeLatency(time_point now, double ms) noexcept;
@@ -178,6 +185,11 @@ class PipelineDiagnosticsAggregator {
     void OnMuxFailure() noexcept;
     void OnReorderWindow(uint32_t packets, uint32_t peak_packets, uint64_t bytes, uint64_t peak_bytes) noexcept;
     void SetSplitPending(bool pending) noexcept;
+    // PTS inputs for A/V drift (video: VideoThread after encode; audio: AudioThread after encode)
+    void OnVideoPts(double ms) noexcept;
+    void OnAudioPts(double ms) noexcept;
+    // Free-space poll for disk-fill ETA (called from the stats collector at ~5 Hz)
+    void UpdateFreeDiskBytes(uint64_t free_bytes) noexcept;
 
     // ---- collector-thread publish -----------------------------------------
     [[nodiscard]] RecordingDiagnosticsSnapshot BuildSnapshot(time_point now, const SessionStats& stats,
@@ -202,10 +214,21 @@ class PipelineDiagnosticsAggregator {
     bool interval_observed_ = false;
     RollingTimeWindow interval_window_{256, std::chrono::milliseconds(2000)};
 
+    // Present cadence (DXGI OD only): inter-present interval and coalescing proxy windows.
+    bool present_observed_ = false;
+    RollingTimeWindow present_interval_window_{256, std::chrono::milliseconds(2000)};
+    RollingTimeWindow present_coalesce_window_{256, std::chrono::milliseconds(2000)};
+
+    // Capture-card live wiring (0.8.0). Each is a steady_clock CPU-timing window.
+    bool acquire_observed_ = false;
+    RollingTimeWindow acquire_window_{256, std::chrono::milliseconds(2000)};
+
     // Compositor
     RollingTimeWindow compositor_window_{256, std::chrono::milliseconds(2000)};
     uint64_t frames_composed_ = 0;
     bool compositor_active_ = false;
+    bool vpblt_observed_ = false;
+    RollingTimeWindow vpblt_window_{256, std::chrono::milliseconds(2000)};
 
     // Encoder
     uint64_t frames_submitted_ = 0;
@@ -229,6 +252,8 @@ class PipelineDiagnosticsAggregator {
     uint64_t mux_packets_ = 0;
     uint64_t disk_bytes_written_ = 0;
     RollingTimeWindow write_window_{256, std::chrono::milliseconds(2000)};
+    bool mux_process_observed_ = false;
+    RollingTimeWindow mux_window_{256, std::chrono::milliseconds(2000)};
     uint32_t segment_index_ = 0;
     uint32_t segment_count_ = 0;
     uint64_t finalizations_ = 0;
@@ -262,6 +287,17 @@ class PipelineDiagnosticsAggregator {
     int sustain_disk_ = 0;
     uint64_t last_dropped_total_ = 0;
     uint64_t last_audio_disc_ = 0;
+
+    // A/V drift: latest PTS (ms) received from each encoder output path.
+    // Protected by mutex_. Set to true once the first packet arrives per session.
+    double latest_video_pts_ms_ = 0.0;
+    double latest_audio_pts_ms_ = 0.0;
+    bool have_video_pts_ = false;
+    bool have_audio_pts_ = false;
+
+    // Disk-fill ETA: free bytes on the output drive, polled externally at ~5 Hz.
+    uint64_t free_bytes_ = 0;
+    bool free_bytes_known_ = false;
 };
 
 } // namespace recorder_core

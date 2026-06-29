@@ -729,12 +729,7 @@ void SourcePickerPanel::rebuildOptionCardsForSection(Section section) {
                     setActiveSection(section);
                     refreshSelectionVisuals();
                     updateSummaryLabel();
-                    // A single click on a screen/window source commits immediately and
-                    // returns to the preview — no separate "Use selected source" step.
-                    // Unavailable sources fail hasValidSelection() and stay put.
-                    if (hasValidSelection()) {
-                        emit accepted();
-                    }
+                    // Click = select only. Confirmation happens via the Use button.
                 });
     }
 
@@ -830,11 +825,8 @@ void SourcePickerPanel::setActiveSection(Section section) {
     if (refresh_button_) {
         refresh_button_->setEnabled(section != Section::Region);
     }
-    // Screens/Windows commit on a single card click, so the explicit
-    // "Use selected source" button is only needed for the Region section
-    // (which is a multi-step config: pick a preset / draw / defer to record).
     if (use_button_) {
-        use_button_->setVisible(section == Section::Region);
+        use_button_->setVisible(true);
     }
     if (section != Section::Region && isVisible()) {
         requestThumbnailsForSection(section);
@@ -1017,7 +1009,14 @@ void SourcePickerPanel::updateSummaryLabel() {
     if (!findOption(selected_section_, selected_target_index_, &option)) {
         summary_label_->setText(selected_section_ == Section::Windows ? QStringLiteral("Choose a window source")
                                                                       : QStringLiteral("Choose a screen source"));
+        if (use_button_)
+            use_button_->setText(QStringLiteral("Use selected source"));
         return;
+    }
+    if (use_button_) {
+        const QString btn_name = !option.short_name.isEmpty() ? option.short_name : option.title;
+        use_button_->setText(option.selectable ? QStringLiteral("Use %1").arg(btn_name)
+                                               : QStringLiteral("Use selected source"));
     }
     if (!option.selectable) {
         QString summary = option.validation_summary.trimmed();

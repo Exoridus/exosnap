@@ -356,7 +356,9 @@ void OperationalTitleBar::refreshStatusChip() {
         status_pill_->setDotVisible(true);
         status_pill_->setText(QStringLiteral("Countdown"));
     } else if (status.contains(QStringLiteral("CHECK"))) {
-        status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
+        // Capability probe in progress — a transitional state like Starting/Countdown,
+        // so it shares the accent Info tone rather than reading as an amber caution.
+        status_pill_->setTone(ui::widgets::StatusPill::Tone::Info);
         status_pill_->setDotVisible(true);
         status_pill_->setText(QStringLiteral("Checking"));
     } else if (status.contains(QStringLiteral("ERROR"))) {

@@ -53,8 +53,8 @@ class TransportDock : public QFrame {
     // controls whether the user may click it now (read-only status otherwise).
     void setToggleState(const QString& key, bool on, bool interactive);
 
-    // Completed (result) left-zone content.
-    void setCompletedInfo(const QString& filename, const QString& size_text, bool has_file);
+    // Show or hide an individual source toggle (e.g. App toggle in Display mode).
+    void setToggleVisible(const QString& key, bool visible);
 
     // Live audio meter for source toggles. key: "system" | "mic" | "app".
     // level01: 0.0 = silence/inactive, 1.0 = peak. Webcam has no audio meter.
@@ -74,9 +74,6 @@ class TransportDock : public QFrame {
     void stopClicked();
     void pauseClicked();
     void resumeClicked();
-    void recordAgainClicked();
-    void openFolderClicked();
-    void filenameClicked();
     void captureFrameClicked();
     void addMarkerClicked();
     void splitClicked();
@@ -102,11 +99,6 @@ class TransportDock : public QFrame {
     AudioSourceToggle* webcam_toggle_ = nullptr;
     AudioSourceToggle* app_toggle_ = nullptr;
 
-    QWidget* completed_row_ = nullptr;
-    QPushButton* filename_link_ = nullptr;
-    QPushButton* open_folder_btn_ = nullptr;
-    QLabel* size_label_ = nullptr;
-
     QLabel* timer_label_ = nullptr;
 
     QWidget* action_row_ = nullptr;
@@ -119,7 +111,6 @@ class TransportDock : public QFrame {
     QPushButton* pause_btn_ = nullptr;
     QPushButton* resume_btn_ = nullptr;
     QPushButton* stop_btn_ = nullptr;
-    QPushButton* record_again_btn_ = nullptr;
     QPushButton* capture_frame_btn_ = nullptr;
     QPushButton* add_marker_btn_ = nullptr;
     QPushButton* split_btn_ = nullptr;

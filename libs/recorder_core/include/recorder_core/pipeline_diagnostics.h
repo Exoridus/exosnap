@@ -65,6 +65,16 @@ enum class CaptureSourceType : uint8_t {
     Region,
 };
 
+// Presentation mode of the captured source (present/tearing diagnostics, ADR 0033).
+// Mirror of app::diagnostics::PresentMode, kept local so this recorder_core header
+// does not depend on the app-layer PresentProvider.h (layering: app → core only).
+enum class PresentMode : uint8_t {
+    Unknown,
+    Composed,
+    IndependentFlip,
+    ExclusiveFullscreen,
+};
+
 // Mirror of SplitTriggerSource for the snapshot (kept local to avoid a heavy
 // include cycle with recorder_session.h). None == no split has occurred yet.
 enum class DiagnosticsSplitTrigger : uint8_t {
@@ -89,6 +99,29 @@ struct CaptureDiagnostics {
     CaptureSourceType source_type = CaptureSourceType::Unknown;
     bool source_loss = false;
 
+    // Present cadence (VRR/CFR judder correlation, v0.8.0 / ADR 0033). DXGI Output
+    // Duplication only: derived from DXGI_OUTDUPL_FRAME_INFO.LastPresentTime (QPC) deltas
+    // and AccumulatedFrames. Unavailable for WGC (Window/Region) capture, which exposes no
+    // present timestamp, and during warm-up / before enough samples accumulate.
+    double source_present_interval_ms = 0.0; // mean inter-present interval over the rolling window
+    double source_present_jitter_ms = 0.0;   // peak-minus-average present interval (irregular-pacing proxy)
+    double source_coalesce_ratio = 1.0;      // mean AccumulatedFrames per acquire (>1 == presents coalesced)
+    MetricAvailability present_cadence_availability = MetricAvailability::Unavailable;
+
+    // Present mode + tearing (PresentMon ETW present-diagnostics, ADR 0033). Elevation-
+    // and opt-in-gated; Unavailable until the in-process PresentMon consumer is vendored
+    // and a real present has been observed (never a fabricated Composed/zero).
+    PresentMode source_present_mode = PresentMode::Unknown;
+    bool source_tearing = false;
+    MetricAvailability present_mode_availability = MetricAvailability::Unavailable;
+
+    // Acquire+copy CPU duration (Source Capture card). steady_clock bracket around the
+    // backend acquire/drain; NOT GPU time. Unavailable until the first sample this session.
+    double acquire_latest_ms = 0.0;
+    double acquire_average_ms = 0.0;
+    double acquire_peak_ms = 0.0;
+    MetricAvailability acquire_availability = MetricAvailability::Unavailable;
+
     [[nodiscard]] uint64_t frames_dropped_total() const noexcept {
         return frames_dropped_coalesced + frames_dropped_cfr + frames_dropped_backpressure;
     }
@@ -102,6 +135,13 @@ struct CompositorDiagnostics {
     uint64_t frames_composed = 0;
     // CPU command-submission time, NOT GPU execution time. GPU execution timing is
     // Unavailable (no timestamp-query infrastructure; no synchronous readback allowed).
+
+    // VideoProcessorBlt (BGRA->NV12) CPU submission duration, folded into the Compositor
+    // card. steady_clock bracket around VideoProcessorBlt; NOT GPU execution time.
+    double vpblt_latest_ms = 0.0;
+    double vpblt_average_ms = 0.0;
+    double vpblt_peak_ms = 0.0;
+    MetricAvailability vpblt_availability = MetricAvailability::Unavailable;
 };
 
 struct EncoderDiagnostics {
@@ -161,6 +201,13 @@ struct MuxDiagnostics {
     uint64_t reorder_bytes = 0;
     uint64_t reorder_bytes_peak = 0;
     MetricAvailability availability = MetricAvailability::Available; // Unavailable for MP4
+
+    // Mux drain-loop CPU processing duration (Muxer card). steady_clock bracket around
+    // the per-iteration queue drain; Unavailable until the first batch is processed.
+    double process_latest_ms = 0.0;
+    double process_average_ms = 0.0;
+    double process_peak_ms = 0.0;
+    MetricAvailability process_availability = MetricAvailability::Unavailable;
 };
 
 struct DiskDiagnostics {
@@ -202,6 +249,15 @@ struct RecordingDiagnosticsSnapshot {
     MuxDiagnostics mux;
     DiskDiagnostics disk;
     SplitDiagnostics split;
+
+    // A/V synchronization drift measured from stream PTS.
+    // Positive = audio leads video; negative = video leads audio.
+    double av_drift_ms = 0.0;
+    MetricAvailability av_drift_availability = MetricAvailability::Unavailable;
+
+    // Estimated seconds until the output drive fills at current sustained throughput.
+    // Negative means unavailable (throughput unknown or free space not provided).
+    double disk_fill_eta_seconds = -1.0;
 
     PipelineBottleneck bottleneck = PipelineBottleneck::None;
     std::string bottleneck_reason;

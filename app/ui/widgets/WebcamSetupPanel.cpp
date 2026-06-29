@@ -4,6 +4,9 @@
 #include "ComboBoxWheelFilter.h"
 #include "ExoToggle.h"
 
+#include "../theme/ExoSnapTheme.h"
+#include "../theme/LucideIcon.h"
+
 #include <QComboBox>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -92,14 +95,12 @@ WebcamSetupPanel::WebcamSetupPanel(QWidget* parent) : QWidget(parent) {
     rescan_btn_->setFixedWidth(36);
     rescan_btn_->setCursor(Qt::PointingHandCursor);
     {
-        const QIcon icon(QStringLiteral(":/theme/icons/rescan.svg"));
-        if (!icon.isNull()) {
-            rescan_btn_->setIcon(icon);
-            rescan_btn_->setIconSize(QSize(14, 14));
-        } else {
-            // Fallback text if SVG not found.
-            rescan_btn_->setText(QStringLiteral("\xe2\x86\xba"));
-        }
+        // Themed lucide glyph in HT.mut — the previous currentColor SVG inherited the
+        // lighter ghost-button text colour.
+        const qreal dpr = rescan_btn_->devicePixelRatioF();
+        rescan_btn_->setIcon(exosnap::ui::theme::lucideIcon(
+            QStringLiteral("refresh-cw"), QString::fromUtf8(exosnap::ui::theme::ActiveTheme().mut), 14, dpr));
+        rescan_btn_->setIconSize(QSize(14, 14));
     }
     dr->addWidget(rescan_btn_);
     right_layout->addWidget(device_row);

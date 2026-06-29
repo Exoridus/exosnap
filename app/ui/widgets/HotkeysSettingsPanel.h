@@ -21,8 +21,12 @@ namespace exosnap::ui::widgets {
 // The state-slot is one fixed-position chip that morphs by state (bound chord /
 // "Press keys…" / "Not set" / amber conflict chip). The borderless quiet × clears
 // the binding; the bordered primary enters capture (Set/Change) and becomes a
-// full-width Cancel while capturing. There is no per-row Reset — the card header
-// carries a single "Reset all".
+// full-width Cancel while capturing.
+//
+// Per canon (suite-settings.jsx): the rows live DIRECTLY in the embedding card —
+// this widget paints NO frame of its own (no card-in-card). The single "Reset all"
+// is created + wired here but placed by the embedding card in its header via
+// resetAllButton(); call it after construction and add it to the card title row.
 class HotkeysSettingsPanel : public QWidget {
     Q_OBJECT
   public:
@@ -33,6 +37,13 @@ class HotkeysSettingsPanel : public QWidget {
 
     // Lock / unlock editing while recording is active.
     void setEditingLocked(bool locked);
+
+    // The "Reset all" button — owned + wired here, but placed by the embedding card
+    // in its header (canon: card header carries the single Reset all). Reparent it
+    // into the card title row after constructing the panel.
+    [[nodiscard]] QPushButton* resetAllButton() const {
+        return reset_all_btn_;
+    }
 
   private:
     static constexpr int kActiveActionCount = 5;

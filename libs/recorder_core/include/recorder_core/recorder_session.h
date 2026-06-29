@@ -5,6 +5,7 @@
 
 #include "codec_types.h"
 #include "error_types.h"
+#include "frame_pacing.h"
 #include "output_geometry.h"
 #include "pipeline_diagnostics.h"
 #include "session_stats.h"
@@ -287,6 +288,10 @@ struct RecorderConfig {
     // When true: CFR scheduler (duplicate/drop frames to hit constant rate).
     // When false: VFR passthrough (WGC timestamps used directly as PTS).
     bool cfr = true;
+
+    // CFR frame pacing (ADR 0035). Smooth = phase-correct selection; Newest = newest-at-tick.
+    // Ignored for VFR and for WGC capture (no LastPresentTime → newest-at-tick).
+    FramePacingMode cfr_pacing_mode = FramePacingMode::Smooth;
 
     // Requested encoded output size. 0x0 means Native: the selected source
     // dimensions are frozen at session start (after Region crop, when present).

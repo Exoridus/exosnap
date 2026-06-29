@@ -2,6 +2,8 @@
 
 #include <QToolButton>
 
+class QTimer;
+
 namespace exosnap::ui::widgets {
 
 // Settings-Redesign D6: CompareHint — the multi-option sibling of InfoHintIcon.
@@ -61,6 +63,7 @@ class CompareHint : public QToolButton {
     QWidget* popover_ = nullptr; // owned, frameless popup
     bool popover_pinned_ = false;
     bool popover_hovered_ = false;
+    QTimer* hover_timer_ = nullptr; // polls the cursor while open; hides on true hover-out
 };
 
 } // namespace exosnap::ui::widgets

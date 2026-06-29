@@ -30,6 +30,7 @@
 #include <QStandardItemModel>
 #include <QStringList>
 #include <QStyle>
+#include <QSvgRenderer>
 #include <QTimer>
 #include <QToolButton>
 #include <QToolTip>
@@ -351,11 +352,104 @@ QFrame* makePanel(QWidget* parent) {
     return panel;
 }
 
+// Lucide-style 24x24 stroke path data for the per-card glyph chips (v10 design set).
+// Path data mirrors shared.jsx ICON_PATHS — kept local so this file owns its glyphs
+// (LucideIcon.cpp lacks film/gauge/speaker/activity/keyboard/palette).
+QByteArray cardGlyphPathFor(const QString& key) {
+    if (key == QLatin1String("film"))
+        return QByteArrayLiteral("M3 4h18v16H3zM3 9h18M3 14h18M8 4v16M16 4v16");
+    if (key == QLatin1String("gauge"))
+        return QByteArrayLiteral("M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM13.4 10.6L17 7M4.5 18a9 9 0 1 1 15 0");
+    if (key == QLatin1String("speaker"))
+        return QByteArrayLiteral("M11 5L6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13");
+    if (key == QLatin1String("folder"))
+        return QByteArrayLiteral("M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z");
+    if (key == QLatin1String("camera"))
+        return QByteArrayLiteral("M3 7h3l2-2h8l2 2h3v12H3zM12 17a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7");
+    if (key == QLatin1String("activity"))
+        return QByteArrayLiteral("M3 12h4l3 8 4-16 3 8h4");
+    if (key == QLatin1String("keyboard"))
+        return QByteArrayLiteral("M3 6h18v12H3zM7 10h.01M11 10h.01M15 10h.01M7 14h10");
+    if (key == QLatin1String("download"))
+        return QByteArrayLiteral("M12 4v11M7 11l5 5 5-5M5 20h14");
+    if (key == QLatin1String("palette"))
+        return QByteArrayLiteral(
+            "M12 3a9 9 0 1 0 0 18c1.1 0 1.7-1 1.4-2-.4-1.2.5-2 1.6-2H18a3 3 0 0 0 "
+            "3-3c0-4.4-4-8-9-8zM7.5 11a1 1 0 1 0 0-.01M12 8a1 1 0 1 0 0-.01M16 11a1 1 0 1 0 0-.01");
+    if (key == QLatin1String("bug"))
+        return QByteArrayLiteral("M8 6a4 4 0 0 1 8 0M6 10h12v4a6 6 0 0 1-12 0zM6 13H3M21 13h-3M5 7L4 6M19 7l1-1M5 "
+                                 "19l-1 1M19 19l1 1");
+    return {};
+}
+
+// Renders a card glyph into a HiDPI-crisp tinted pixmap (same inline-SVG technique as
+// AudioSourceToggle::paintIcon — stroke=color, width 1.7, round caps/joins, fill:none).
+QPixmap cardGlyphPixmap(const QString& key, const QColor& color, int size, qreal dpr) {
+    if (dpr <= 0.0)
+        dpr = 1.0;
+    if (size <= 0)
+        size = 1;
+    const int phys = static_cast<int>(static_cast<qreal>(size) * dpr + 0.5);
+    QPixmap pix(phys, phys);
+    pix.fill(Qt::transparent);
+    pix.setDevicePixelRatio(dpr);
+    const QByteArray path = cardGlyphPathFor(key);
+    if (path.isEmpty())
+        return pix;
+    QByteArray svg;
+    svg.reserve(path.size() + 220);
+    svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='");
+    svg.append(color.name(QColor::HexRgb).toUtf8());
+    svg.append("' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='");
+    svg.append(path);
+    svg.append("'/></svg>");
+    QSvgRenderer renderer(svg);
+    if (!renderer.isValid())
+        return pix;
+    QPainter painter(&pix);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    renderer.render(&painter, QRectF(0, 0, size, size));
+    return pix;
+}
+
 // Card title: 15/600 per the design system "Section/card title" role.
-QLabel* makeCardTitle(const QString& text, QWidget* parent) {
-    auto* l = new QLabel(text, parent);
+// v10: when `icon_key` is non-empty the title gains a 28x28 glyph chip on its left
+// (bg --ac-dim, border --ac-b2, 15px --ac stroke icon). Styling is QSS-driven via the
+// `cardGlyphChip` object name; the icon is tinted to the active theme's accent.
+// `trailing`, when given, is placed flush-right in the title row as a header badge
+// (e.g. the Hotkeys card's "Reset all"). It is reparented into the row.
+QWidget* makeCardTitle(const QString& text, QWidget* parent, const QString& icon_key = QString(),
+                       QWidget* trailing = nullptr) {
+    if (icon_key.isEmpty() && trailing == nullptr) {
+        auto* l = new QLabel(text, parent);
+        l->setProperty("labelRole", "cardTitle");
+        return l;
+    }
+    auto* row = new QWidget(parent);
+    row->setProperty("cardTitleRow", true);
+    auto* hl = new QHBoxLayout(row);
+    hl->setContentsMargins(0, 0, 0, 0);
+    hl->setSpacing(10);
+
+    if (!icon_key.isEmpty()) {
+        auto* chip = new QLabel(row);
+        chip->setObjectName(QStringLiteral("cardGlyphChip"));
+        chip->setFixedSize(28, 28);
+        chip->setAlignment(Qt::AlignCenter);
+        const QColor accent(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac));
+        chip->setPixmap(cardGlyphPixmap(icon_key, accent, 15, chip->devicePixelRatioF()));
+        hl->addWidget(chip, 0, Qt::AlignVCenter);
+    }
+
+    auto* l = new QLabel(text, row);
     l->setProperty("labelRole", "cardTitle");
-    return l;
+    hl->addWidget(l, 0, Qt::AlignVCenter);
+    hl->addStretch(1);
+
+    if (trailing != nullptr)
+        hl->addWidget(trailing, 0, Qt::AlignVCenter); // reparents into the title row
+    return row;
 }
 
 // Mono uppercase "eyebrow" label that sits directly above a form control.
@@ -747,10 +841,13 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         // Stretch pushes expert controls to the right
         toolbar_hl->addStretch(1);
 
-        // "Expert mode" label + toggle
-        auto* expert_label = new QLabel(QStringLiteral("Expert mode"), toolbar_row);
-        expert_label->setProperty("labelRole", "muted");
-        toolbar_hl->addWidget(expert_label, 0, Qt::AlignVCenter);
+        // "Expert mode" label + toggle. The label tints from muted to accent when expert
+        // mode is on (P3: dynamic `expertOn` property + QSS, repolished in updateExpertModeVisibility()).
+        expert_mode_label_ = new QLabel(QStringLiteral("Expert mode"), toolbar_row);
+        expert_mode_label_->setObjectName(QStringLiteral("expertModeLabel"));
+        expert_mode_label_->setProperty("labelRole", "muted");
+        expert_mode_label_->setProperty("expertOn", false);
+        toolbar_hl->addWidget(expert_mode_label_, 0, Qt::AlignVCenter);
 
         expert_mode_toggle_ = new ui::widgets::ExoToggle(toolbar_row);
         expert_mode_toggle_->setObjectName(QStringLiteral("expertModeToggleBtn"));
@@ -766,6 +863,38 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
         layout->addWidget(header_zone);
     }
+
+    // ---- EXPERT WARNING BANNER (P2) ----
+    // Amber banner above the card grid, visible only in expert mode. Re-introduces the
+    // old expert_warn_label_ banner that was downgraded to an inline InfoHint icon; the
+    // InfoHint by the toggle stays for in-place help, the banner restores the prominent
+    // "files may not play everywhere" caution.
+    {
+        expert_warn_banner_ = new QWidget(content);
+        expert_warn_banner_->setObjectName(QStringLiteral("expertWarnBanner"));
+        auto* ewb_hl = new QHBoxLayout(expert_warn_banner_);
+        ewb_hl->setContentsMargins(0, 0, 0, 0); // padding comes from QSS (11/15)
+        ewb_hl->setSpacing(10);
+
+        auto* ewb_icon = new QLabel(expert_warn_banner_);
+        ewb_icon->setObjectName(QStringLiteral("expertWarnBannerIcon"));
+        ewb_icon->setFixedSize(15, 15);
+        ewb_icon->setAlignment(Qt::AlignCenter);
+        ewb_icon->setPixmap(ui::theme::lucidePixmap(QStringLiteral("alert-triangle"),
+                                                    QString::fromUtf8(ui::theme::ActiveTheme().caution), 15,
+                                                    expert_warn_banner_->devicePixelRatioF()));
+        ewb_hl->addWidget(ewb_icon, 0, Qt::AlignVCenter);
+
+        auto* ewb_text = new QLabel(QStringLiteral("Expert settings can produce files that won't play everywhere."),
+                                    expert_warn_banner_);
+        ewb_text->setObjectName(QStringLiteral("expertWarnBannerText"));
+        ewb_text->setWordWrap(true);
+        ewb_hl->addWidget(ewb_text, 1);
+
+        expert_warn_banner_->setVisible(expert_mode_enabled_);
+        layout->addWidget(expert_warn_banner_);
+    }
+
     // ---- TWO-COLUMN CARD GRID (v10 masonry, fixed-column placement) ----
     // Left column:  Container & codecs · Quality & timing · Audio · Hotkeys · Developer(Expert).
     // Right column: Output · Webcam · Presence · Updates · Appearance.
@@ -796,50 +925,23 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* fmt_layout = new QVBoxLayout(fmt_panel);
     fmt_layout->setContentsMargins(18, 16, 18, 18);
     fmt_layout->setSpacing(0);
-    fmt_layout->addWidget(makeCardTitle(QStringLiteral("Container & codecs"), fmt_panel));
-
-    // format_display_label_ kept for backward compat (hidden)
-    format_display_label_ = new QLabel(fmt_panel);
-    format_display_label_->setProperty("labelRole", "muted");
-    format_display_label_->setVisible(false);
-    fmt_layout->addWidget(format_display_label_);
+    fmt_layout->addWidget(makeCardTitle(QStringLiteral("Container & codecs"), fmt_panel, QStringLiteral("film")));
 
     // --- Container row ---
-    container_group_ = new QButtonGroup(this);
-    container_group_->setExclusive(true);
-    auto* container_segmented = new QWidget(fmt_panel);
-    container_segmented->setObjectName(QStringLiteral("containerSegmented"));
-    auto* container_row_layout = new QHBoxLayout();
-    container_row_layout->setContentsMargins(3, 3, 3, 3);
-    container_row_layout->setSpacing(0);
-    container_segmented->setLayout(container_row_layout);
-    auto makeContainerSegment = [&](const QString& object_name, const QString& label,
-                                    capability::Container container) -> QPushButton* {
-        auto* segment = new QPushButton(label, container_segmented);
-        segment->setObjectName(object_name);
-        segment->setAccessibleName(label);
-        segment->setCheckable(true);
-        segment->setAutoDefault(false);
-        segment->setDefault(false);
-        segment->setCursor(Qt::PointingHandCursor);
-        segment->setProperty("qualitySegment", true);
-        segment->setProperty("qualitySegmentSelected", false);
-        segment->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        container_group_->addButton(segment, static_cast<int>(container));
-        container_row_layout->addWidget(segment);
-        return segment;
-    };
-    mkv_radio_ = makeContainerSegment(QStringLiteral("containerMkvButton"), QStringLiteral("MKV"),
-                                      capability::Container::Matroska);
-    webm_radio_ = makeContainerSegment(QStringLiteral("containerWebmButton"), QStringLiteral("WebM"),
-                                       capability::Container::WebM);
-    mp4_radio_ =
-        makeContainerSegment(QStringLiteral("containerMp4Button"), QStringLiteral("MP4"), capability::Container::Mp4);
+    // v10/Canon (SSelect): a compact dropdown, not a full-width segmented group.
+    // itemData carries the capability::Container enum consumed by onContainerChanged.
+    container_combo_ = new QComboBox(fmt_panel);
+    container_combo_->setObjectName(QStringLiteral("containerCombo"));
+    container_combo_->addItem(QStringLiteral("MKV"), static_cast<int>(capability::Container::Matroska));
+    container_combo_->addItem(QStringLiteral("WebM"), static_cast<int>(capability::Container::WebM));
+    container_combo_->addItem(QStringLiteral("MP4"), static_cast<int>(capability::Container::Mp4));
+    container_combo_->setFixedWidth(160);
+    container_combo_->setProperty("settingsRowInput", true);
 
     container_compare_hint_ =
         new ui::widgets::CompareHint(QStringLiteral("container"), QStringLiteral("MKV"), fmt_panel);
     fmt_layout->addWidget(makeSettingsRow(fmt_panel, QStringLiteral("Container"), container_compare_hint_, QString(),
-                                          container_segmented, /*first=*/true));
+                                          container_combo_, /*first=*/true));
 
     // --- Video codec row ---
     video_codec_combo_ = new QComboBox(fmt_panel);
@@ -870,7 +972,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* quality_layout = new QVBoxLayout(quality_panel);
     quality_layout->setContentsMargins(18, 16, 18, 18);
     quality_layout->setSpacing(0);
-    quality_layout->addWidget(makeCardTitle(QStringLiteral("Quality & timing"), quality_panel));
+    quality_layout->addWidget(
+        makeCardTitle(QStringLiteral("Quality & timing"), quality_panel, QStringLiteral("gauge")));
 
     // --- Quality row ---
     // Hidden combo is the single model-change emitter (existing test seam).
@@ -961,8 +1064,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* qlbl = new QLabel(QStringLiteral("Quality"), qlabel_row);
         qlbl->setProperty("labelRole", "settingsRowLabel");
         qlrl->addWidget(qlbl);
+        // Single info affordance per row: the CompareHint IS the info-i here (it explains
+        // every quality tier in its popover), so no extra InfoHintIcon beside it — two
+        // identical "i" glyphs on one row read as a bug.
         qlrl->addWidget(quality_compare_hint_, 0, Qt::AlignVCenter);
-        qlrl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kQualityPreset, qlabel_row), 0, Qt::AlignVCenter);
         qlrl->addStretch();
         qhl->addWidget(qlabel_row, 1);
         qhl->addWidget(quality_preset_combo_, 0, Qt::AlignVCenter);
@@ -970,9 +1075,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         quality_preset_row_widget_->setProperty("settingsRow", true);
         quality_layout->addWidget(quality_preset_row_widget_);
     }
-
-    // quality_row_widget_ retained as a member but no longer the visible Default
-    // presentation (kept null-safe; nothing references it after the v10 split).
 
     // Wave 2 Part B: CQ precision spinbox row — shown in expert mode, hidden otherwise.
     {
@@ -1036,34 +1138,19 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                                               QString(), frame_rate_combo_));
 
     // --- Frame timing row (Quality & timing card) ---
-    auto* timing_segmented = new QWidget(quality_panel);
-    timing_segmented->setObjectName(QStringLiteral("timingSegmented"));
-    auto* timing_segmented_layout = new QHBoxLayout(timing_segmented);
-    timing_segmented_layout->setContentsMargins(3, 3, 3, 3);
-    timing_segmented_layout->setSpacing(0);
-    timing_group_ = new QButtonGroup(this);
-    timing_group_->setExclusive(true);
-    auto makeTimingSegment = [&](const QString& object_name, const QString& label, int id) -> QPushButton* {
-        auto* segment = new QPushButton(label, timing_segmented);
-        segment->setObjectName(object_name);
-        segment->setAccessibleName(label);
-        segment->setCheckable(true);
-        segment->setAutoDefault(false);
-        segment->setDefault(false);
-        segment->setCursor(Qt::PointingHandCursor);
-        segment->setProperty("qualitySegment", true);
-        segment->setProperty("qualitySegmentSelected", false);
-        segment->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        timing_group_->addButton(segment, id);
-        timing_segmented_layout->addWidget(segment);
-        return segment;
-    };
-    timing_cfr_btn_ = makeTimingSegment(QStringLiteral("timingCfrButton"), QStringLiteral("CFR"), 1);
-    timing_vfr_btn_ = makeTimingSegment(QStringLiteral("timingVfrButton"), QStringLiteral("VFR"), 0);
+    // v10/Canon (SSelect): a compact dropdown, not a full-width segmented group.
+    // itemData carries the timing id (1 = CFR, 0 = VFR) consumed by onTimingSelected;
+    // updateTimingSelection() disables the VFR item when the container can't carry it.
+    timing_combo_ = new QComboBox(quality_panel);
+    timing_combo_->setObjectName(QStringLiteral("timingCombo"));
+    timing_combo_->addItem(QStringLiteral("CFR"), 1);
+    timing_combo_->addItem(QStringLiteral("VFR"), 0);
+    timing_combo_->setFixedWidth(160);
+    timing_combo_->setProperty("settingsRowInput", true);
 
     timing_compare_hint_ = new ui::widgets::CompareHint(QStringLiteral("timing"), QStringLiteral("CFR"), quality_panel);
-    quality_layout->addWidget(makeSettingsRow(quality_panel, QStringLiteral("Frame timing"), timing_compare_hint_,
-                                              QString(), timing_segmented));
+    quality_layout->addWidget(
+        makeSettingsRow(quality_panel, QStringLiteral("Frame timing"), timing_compare_hint_, QString(), timing_combo_));
 
     // --- Capture cursor row (Quality & timing card) ---
     cursor_check_ = new ui::widgets::ExoToggle(quality_panel);
@@ -1097,37 +1184,19 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         fes_layout->setContentsMargins(0, 0, 0, 0);
         fes_layout->setSpacing(0);
 
-        // --- Rate control segmented (CQ / VBR / CBR) — Quality card ---
-        auto* rc_segmented = new QWidget(quality_rate_section_);
-        rc_segmented->setObjectName(QStringLiteral("rateControlSegmented"));
-        auto* rc_segmented_layout = new QHBoxLayout(rc_segmented);
-        rc_segmented_layout->setContentsMargins(3, 3, 3, 3);
-        rc_segmented_layout->setSpacing(0);
-
-        rate_control_group_ = new QButtonGroup(this);
-        rate_control_group_->setExclusive(true);
-
-        auto makeRcSegment = [&](const QString& object_name, const QString& label,
-                                 recorder_core::RateControlMode mode) -> QPushButton* {
-            auto* seg = new QPushButton(label, rc_segmented);
-            seg->setObjectName(object_name);
-            seg->setCheckable(true);
-            seg->setAutoDefault(false);
-            seg->setDefault(false);
-            seg->setCursor(Qt::PointingHandCursor);
-            seg->setProperty("qualitySegment", true);
-            seg->setProperty("qualitySegmentSelected", false);
-            seg->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-            rate_control_group_->addButton(seg, static_cast<int>(mode));
-            rc_segmented_layout->addWidget(seg);
-            return seg;
-        };
-        makeRcSegment(QStringLiteral("rateControlCqButton"), QStringLiteral("CQ"),
-                      recorder_core::RateControlMode::ConstantQuality);
-        makeRcSegment(QStringLiteral("rateControlVbrButton"), QStringLiteral("VBR"),
-                      recorder_core::RateControlMode::VariableBitrate);
-        makeRcSegment(QStringLiteral("rateControlCbrButton"), QStringLiteral("CBR"),
-                      recorder_core::RateControlMode::ConstantBitrate);
+        // --- Rate control dropdown (CQ / VBR / CBR) — Quality card ---
+        // v10/Canon (SSelect): a compact dropdown, not a full-width segmented group.
+        // itemData carries the recorder_core::RateControlMode enum.
+        rate_control_combo_ = new QComboBox(quality_rate_section_);
+        rate_control_combo_->setObjectName(QStringLiteral("rateControlCombo"));
+        rate_control_combo_->addItem(QStringLiteral("CQ"),
+                                     static_cast<int>(recorder_core::RateControlMode::ConstantQuality));
+        rate_control_combo_->addItem(QStringLiteral("VBR"),
+                                     static_cast<int>(recorder_core::RateControlMode::VariableBitrate));
+        rate_control_combo_->addItem(QStringLiteral("CBR"),
+                                     static_cast<int>(recorder_core::RateControlMode::ConstantBitrate));
+        rate_control_combo_->setFixedWidth(160);
+        rate_control_combo_->setProperty("settingsRowInput", true);
 
         rate_control_row_widget_ = new QWidget(quality_rate_section_);
         {
@@ -1147,7 +1216,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             rhl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kRateControlMode, rate_control_row_widget_), 0,
                            Qt::AlignVCenter);
             rhl->addStretch(1);
-            rhl->addWidget(rc_segmented, 0, Qt::AlignVCenter);
+            rhl->addWidget(rate_control_combo_, 0, Qt::AlignVCenter);
             rvl->addLayout(rhl);
             rate_control_row_widget_->setProperty("settingsRow", true);
         }
@@ -1220,6 +1289,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             dhl->addWidget(video_bit_depth_combo_, 0, Qt::AlignVCenter);
             dvl->addLayout(dhl);
             video_bit_depth_row_->setProperty("settingsRow", true);
+            video_bit_depth_row_->setProperty("expertEdge", true); // P3: left accent edge
             fes_layout->addWidget(video_bit_depth_row_);
         }
 
@@ -1258,7 +1328,46 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             rhl->addWidget(video_color_range_combo_, 0, Qt::AlignVCenter);
             rvl->addLayout(rhl);
             video_color_range_row_->setProperty("settingsRow", true);
+            video_color_range_row_->setProperty("expertEdge", true); // P3: left accent edge
             fes_layout->addWidget(video_color_range_row_);
+        }
+
+        // --- Frame pacing (ADR 0035 Slice 2) ---
+        // Smooth = phase-correct present-time-nearest selection (default, the recording
+        // use case). Newest = lowest-latency newest-at-tick (WGC fallback behaviour).
+        // Both are always valid — no codec/container gating. Only the recording lock
+        // disables it (see updateFramePacingControl()).
+        {
+            frame_pacing_row_ = new QWidget(fmt_expert_section_);
+            auto* pvl = new QVBoxLayout(frame_pacing_row_);
+            pvl->setContentsMargins(0, 0, 0, 0);
+            pvl->setSpacing(0);
+            auto* prule = new QFrame(frame_pacing_row_);
+            prule->setFrameShape(QFrame::HLine);
+            prule->setProperty("frameRole", "sectionRuleLine");
+            pvl->addWidget(prule);
+            auto* phl = new QHBoxLayout();
+            phl->setContentsMargins(0, 12, 0, 12);
+            phl->setSpacing(14);
+            auto* plbl = new QLabel(QStringLiteral("Frame pacing"), frame_pacing_row_);
+            plbl->setProperty("labelRole", "settingsRowLabel");
+            phl->addWidget(plbl, 0);
+            phl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kFramePacing, frame_pacing_row_), 0,
+                           Qt::AlignVCenter);
+            phl->addStretch(1);
+            frame_pacing_combo_ = new QComboBox(frame_pacing_row_);
+            frame_pacing_combo_->setObjectName(QStringLiteral("framePacingSelect"));
+            frame_pacing_combo_->addItem(QStringLiteral("Smooth (phase-correct)"),
+                                         static_cast<int>(recorder_core::FramePacingMode::Smooth));
+            frame_pacing_combo_->addItem(QStringLiteral("Newest (lowest latency)"),
+                                         static_cast<int>(recorder_core::FramePacingMode::Newest));
+            frame_pacing_combo_->setFixedWidth(160);
+            frame_pacing_combo_->setProperty("settingsRowInput", true);
+            phl->addWidget(frame_pacing_combo_, 0, Qt::AlignVCenter);
+            pvl->addLayout(phl);
+            frame_pacing_row_->setProperty("settingsRow", true);
+            frame_pacing_row_->setProperty("expertEdge", true); // P3: left accent edge
+            fes_layout->addWidget(frame_pacing_row_);
         }
 
 #ifndef NDEBUG
@@ -1365,7 +1474,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* audio_panel_layout = new QVBoxLayout(audio_panel);
     audio_panel_layout->setContentsMargins(18, 16, 18, 18);
     audio_panel_layout->setSpacing(10);
-    audio_panel_layout->addWidget(makeCardTitle(QStringLiteral("Audio"), audio_panel));
+    audio_panel_layout->addWidget(makeCardTitle(QStringLiteral("Audio"), audio_panel, QStringLiteral("speaker")));
 
     // Helper: build a source row directly into a given layout+parent.
     // DF-12: separate_check is now an ExoToggle pill (was QCheckBox "Separate track").
@@ -1476,13 +1585,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         audio_rescan_btn_->setFixedWidth(36);
         audio_rescan_btn_->setCursor(Qt::PointingHandCursor);
         {
-            const QIcon rescan_icon(QStringLiteral(":/theme/icons/rescan.svg"));
-            if (!rescan_icon.isNull()) {
-                audio_rescan_btn_->setIcon(rescan_icon);
-                audio_rescan_btn_->setIconSize(QSize(14, 14));
-            } else {
-                audio_rescan_btn_->setText(QStringLiteral("\xe2\x86\xba"));
-            }
+            // Themed lucide glyph in HT.mut — the previous currentColor SVG inherited
+            // the lighter ghost-button text colour (suite-settings.jsx:65 wants mut).
+            const qreal dpr = audio_rescan_btn_->devicePixelRatioF();
+            audio_rescan_btn_->setIcon(ui::theme::lucideIcon(QStringLiteral("refresh-cw"),
+                                                             QString::fromUtf8(ui::theme::ActiveTheme().mut), 14, dpr));
+            audio_rescan_btn_->setIconSize(QSize(14, 14));
         }
         mic_rl->addWidget(audio_rescan_btn_);
         audio_panel_layout->addWidget(mic_row);
@@ -1995,7 +2103,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* webcam_panel_layout = new QVBoxLayout(webcam_panel);
     webcam_panel_layout->setContentsMargins(18, 16, 18, 18);
     webcam_panel_layout->setSpacing(10);
-    webcam_panel_layout->addWidget(makeCardTitle(QStringLiteral("Webcam"), webcam_panel));
+    webcam_panel_layout->addWidget(makeCardTitle(QStringLiteral("Webcam"), webcam_panel, QStringLiteral("camera")));
 
     webcam_setup_panel_ = new ui::widgets::WebcamSetupPanel(webcam_panel);
     webcam_setup_panel_->setObjectName(QStringLiteral("settingsWebcamSetupPanel"));
@@ -2008,7 +2116,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     auto* out_panel_layout = new QVBoxLayout(out_panel);
     out_panel_layout->setContentsMargins(18, 16, 18, 18);
     out_panel_layout->setSpacing(12);
-    out_panel_layout->addWidget(makeCardTitle(QStringLiteral("Output"), out_panel));
+    out_panel_layout->addWidget(makeCardTitle(QStringLiteral("Output"), out_panel, QStringLiteral("folder")));
 
     // D6: CompareHint for Output resolution (replaces plain InfoHintIcon).
     resolution_compare_hint_ =
@@ -2292,7 +2400,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* presence_layout = new QVBoxLayout(presence_panel);
         presence_layout->setContentsMargins(18, 14, 18, 14);
         presence_layout->setSpacing(0);
-        presence_layout->addWidget(makeCardTitle(QStringLiteral("Presence"), presence_panel));
+        presence_layout->addWidget(
+            makeCardTitle(QStringLiteral("Presence"), presence_panel, QStringLiteral("activity")));
 
         overlay_check_ = new ui::widgets::ExoToggle(presence_panel);
         overlay_check_->setObjectName(QStringLiteral("overlayCheck"));
@@ -2337,6 +2446,16 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
                             new ui::widgets::InfoHintIcon(ui::hints::kQuickControlPill, presence_panel), QString(),
                             quick_controls_check_));
 
+        // ADR 0033: present & tearing diagnostics opt-in. Elevation-gated — turning
+        // it on while non-elevated raises a hub advisory offering "restart as
+        // administrator" (handled in MainWindow). Sub-hint flags the requirement.
+        present_diag_check_ = new ui::widgets::ExoToggle(presence_panel);
+        present_diag_check_->setObjectName(QStringLiteral("presentDiagnosticsToggle"));
+        present_diag_check_->setOn(false);
+        presence_layout->addWidget(makeSettingsRow(presence_panel,
+                                                   QStringLiteral("Present, tearing & latency diagnostics"), nullptr,
+                                                   QStringLiteral("Needs administrator"), present_diag_check_));
+
         // (0.6.0: the former "Per-track gain / mute" roadmap placeholder was removed —
         // per-track gain and mute shipped in 0.6.0 and are configured in the Record
         // view, so a dimmed "upcoming" row here is stale.)
@@ -2351,7 +2470,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* appearance_layout = new QVBoxLayout(appearance_panel);
         appearance_layout->setContentsMargins(18, 14, 18, 14);
         appearance_layout->setSpacing(0);
-        appearance_layout->addWidget(makeCardTitle(QStringLiteral("Appearance"), appearance_panel));
+        appearance_layout->addWidget(
+            makeCardTitle(QStringLiteral("Appearance"), appearance_panel, QStringLiteral("palette")));
 
         // Brief description
         auto* appearance_desc = new QLabel(
@@ -2475,10 +2595,14 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* hotkeys_panel_layout = new QVBoxLayout(hotkeys_panel_);
         hotkeys_panel_layout->setContentsMargins(18, 16, 18, 18);
         hotkeys_panel_layout->setSpacing(10);
-        hotkeys_panel_layout->addWidget(makeCardTitle(QStringLiteral("Hotkeys"), hotkeys_panel_));
 
+        // Panel built first so its wired "Reset all" can be hoisted into the card title
+        // row as a header badge — canon has no stray reset row and no card-in-card frame.
         hotkeys_settings_panel_ = new ui::widgets::HotkeysSettingsPanel(hotkeys_panel_);
         hotkeys_settings_panel_->setObjectName(QStringLiteral("settingsHotkeysPanel"));
+        hotkeys_panel_layout->addWidget(makeCardTitle(QStringLiteral("Hotkeys"), hotkeys_panel_,
+                                                      QStringLiteral("keyboard"),
+                                                      hotkeys_settings_panel_->resetAllButton()));
         hotkeys_panel_layout->addWidget(hotkeys_settings_panel_);
         // hotkeys_panel_ added to left_layout in the consolidation block below.
     }
@@ -2492,7 +2616,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* dev_layout = new QVBoxLayout(developer_card_);
         dev_layout->setContentsMargins(18, 14, 18, 14);
         dev_layout->setSpacing(M::kSpaceSm);
-        dev_layout->addWidget(makeCardTitle(QStringLiteral("Developer"), developer_card_));
+        dev_layout->addWidget(makeCardTitle(QStringLiteral("Developer"), developer_card_, QStringLiteral("bug")));
         dev_layout->addWidget(
             makeHint(QStringLiteral("Expert debug controls — not persisted between sessions."), developer_card_));
 
@@ -2540,39 +2664,41 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* updates_layout = new QVBoxLayout(updates_panel_);
         updates_layout->setContentsMargins(18, 14, 18, 14);
         updates_layout->setSpacing(0);
-        updates_layout->addWidget(makeCardTitle(QStringLiteral("Updates"), updates_panel_));
+        updates_layout->addWidget(makeCardTitle(QStringLiteral("Updates"), updates_panel_, QStringLiteral("download")));
 
-        // Row 1: Update channel combo (Stable / Preview).
-        {
-            auto* channel_combo = new QComboBox(updates_panel_);
-            channel_combo->setObjectName(QStringLiteral("updatesChannelCombo"));
-            channel_combo->addItem(QStringLiteral("Stable"));
-            channel_combo->addItem(QStringLiteral("Preview"));
-            updates_layout->addWidget(makeSettingsRow(
-                updates_panel_, QStringLiteral("Update channel"),
-                new ui::widgets::InfoHintIcon(
-                    QStringLiteral("Stable ships tested releases; Preview delivers release candidates earlier."),
-                    updates_panel_),
-                QString(), channel_combo, /*first=*/true));
-        }
+        // Auto-check toggle (ADR 0034). We notify on a new release; we never
+        // auto-install (no Update-channel control — Stable is the only channel).
+        updates_auto_toggle_ = new ui::widgets::ExoToggle(updates_panel_);
+        updates_auto_toggle_->setObjectName(QStringLiteral("updatesAutoCheckToggle"));
+        updates_auto_toggle_->setOn(true);
+        updates_layout->addWidget(makeSettingsRow(
+            updates_panel_, QStringLiteral("Check for updates automatically"),
+            new ui::widgets::InfoHintIcon(
+                QStringLiteral("Check in the background and notify you when a new version is available."),
+                updates_panel_),
+            QString(), updates_auto_toggle_, /*first=*/true));
+        connect(updates_auto_toggle_, &ui::widgets::ExoToggle::toggled, this, &ConfigPage::autoUpdateCheckToggled);
 
-        // Row 2: Automatic updates toggle.
-        {
-            auto* auto_check_toggle = new ui::widgets::ExoToggle(updates_panel_);
-            auto_check_toggle->setObjectName(QStringLiteral("updatesAutoCheckToggle"));
-            auto_check_toggle->setOn(true);
-            updates_layout->addWidget(makeSettingsRow(
-                updates_panel_, QStringLiteral("Automatic updates"),
-                new ui::widgets::InfoHintIcon(
-                    QStringLiteral("Check in the background and install after recording stops."), updates_panel_),
-                QString(), auto_check_toggle));
-        }
-
-        // Status / action row — stub label; real UpdateControl wired in a later wave.
-        auto* status_lbl = makeHint(QStringLiteral("\xe2\x9c\x93 Up to date"), updates_panel_);
-        status_lbl->setObjectName(QStringLiteral("updatesStatusLabel"));
-        status_lbl->setContentsMargins(0, 10, 0, 0);
-        updates_layout->addWidget(status_lbl);
+        // Status + primary action (ADR 0034 Phase A): status text left, the
+        // "Check for updates" / "Update to vX.Y" button right.
+        auto* updates_action_row = new QWidget(updates_panel_);
+        auto* updates_action_layout = new QHBoxLayout(updates_action_row);
+        updates_action_layout->setContentsMargins(0, 10, 0, 0);
+        updates_action_layout->setSpacing(8);
+        updates_status_label_ = makeHint(QStringLiteral("\xe2\x9c\x93 Up to date"), updates_action_row);
+        updates_status_label_->setObjectName(QStringLiteral("updatesStatusLabel"));
+        updates_action_layout->addWidget(updates_status_label_, 1, Qt::AlignVCenter);
+        updates_action_btn_ = new QPushButton(QStringLiteral("Check for updates"), updates_action_row);
+        updates_action_btn_->setObjectName(QStringLiteral("updatesActionButton"));
+        updates_action_btn_->setCursor(Qt::PointingHandCursor);
+        updates_action_layout->addWidget(updates_action_btn_, 0, Qt::AlignVCenter);
+        updates_layout->addWidget(updates_action_row);
+        connect(updates_action_btn_, &QPushButton::clicked, this, [this]() {
+            if (updates_available_version_.isEmpty())
+                emit checkForUpdatesRequested();
+            else
+                emit updatePrimaryActionRequested();
+        });
 
         // updates_panel_ added to right_layout in the consolidation block below.
     }
@@ -2614,6 +2740,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     connect(notifications_check_, &QAbstractButton::toggled, this, &ConfigPage::showNotificationsChanged);
     connect(keep_in_tray_check_, &QAbstractButton::toggled, this, &ConfigPage::keepRunningInTrayChanged);
     connect(quick_controls_check_, &QAbstractButton::toggled, this, &ConfigPage::showQuickControlsChanged);
+    connect(present_diag_check_, &QAbstractButton::toggled, this, &ConfigPage::presentDiagnosticsOptInToggled);
     connect(theme_button_group_, &QButtonGroup::idClicked, this, [this](int btn_id) {
         auto* btn = theme_button_group_->button(btn_id);
         if (!btn)
@@ -2625,13 +2752,24 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         }
     });
 
-    connect(container_group_, &QButtonGroup::idClicked, this, &ConfigPage::onContainerChanged);
+    connect(container_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (index < 0 || !container_combo_)
+            return;
+        onContainerChanged(container_combo_->itemData(index).toInt());
+    });
     connect(video_codec_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onVideoCodecChanged);
     connect(video_bit_depth_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onVideoBitDepthChanged);
     connect(video_color_range_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onVideoColorRangeChanged);
+    connect(frame_pacing_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+        if (idx < 0 || !frame_pacing_combo_)
+            return;
+        video_settings_.frame_pacing =
+            static_cast<recorder_core::FramePacingMode>(frame_pacing_combo_->itemData(idx).toInt());
+        emitCurrentVideoSettings();
+    });
     connect(audio_codec_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onAudioCodecChanged);
     connect(profile_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -2651,7 +2789,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     }
     connect(frame_rate_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onFrameRateChanged);
-    connect(timing_group_, &QButtonGroup::idClicked, this, &ConfigPage::onTimingSelected);
+    connect(timing_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (index < 0 || !timing_combo_)
+            return;
+        onTimingSelected(timing_combo_->itemData(index).toInt());
+    });
     connect(output_res_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (index < 0)
             return;
@@ -2768,9 +2910,12 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         emitCurrentVideoSettings();
     });
 
-    // PS-PHASE-C: Rate control segmented — updates video_settings_.rate_control.
-    connect(rate_control_group_, &QButtonGroup::idClicked, this, [this](int id) {
-        video_settings_.rate_control = static_cast<recorder_core::RateControlMode>(id);
+    // PS-PHASE-C: Rate control dropdown — updates video_settings_.rate_control.
+    connect(rate_control_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (index < 0 || !rate_control_combo_)
+            return;
+        video_settings_.rate_control =
+            static_cast<recorder_core::RateControlMode>(rate_control_combo_->itemData(index).toInt());
         const bool rate_is_cq = (video_settings_.rate_control == recorder_core::RateControlMode::ConstantQuality);
         const bool needs_bitrate = !rate_is_cq;
         if (quality_expert_widget_)
@@ -3307,6 +3452,29 @@ void ConfigPage::updateVideoColorRangeControl() {
     }
 }
 
+void ConfigPage::updateFramePacingControl() {
+    if (!frame_pacing_combo_ || !frame_pacing_row_)
+        return;
+
+    // Frame pacing is ALWAYS valid for every codec and container — no capability
+    // gating here. Only the recording lock disables it.
+    const bool locked = controls_locked_;
+    {
+        const QSignalBlocker b(frame_pacing_combo_);
+        const int idx = frame_pacing_combo_->findData(static_cast<int>(video_settings_.frame_pacing));
+        frame_pacing_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* Smooth */);
+    }
+
+    frame_pacing_combo_->setEnabled(!locked);
+    if (locked) {
+        frame_pacing_combo_->setToolTip(QStringLiteral("Cannot change during recording"));
+        frame_pacing_combo_->setCursor(Qt::ForbiddenCursor);
+    } else {
+        frame_pacing_combo_->setToolTip(QString());
+        frame_pacing_combo_->unsetCursor();
+    }
+}
+
 void ConfigPage::updateAudioCodecChoices() {
     const QSignalBlocker blocker(audio_codec_combo_);
     // Rebuild the list so the lossless codecs (PCM + FLAC, MKV-only) appear only
@@ -3358,10 +3526,6 @@ void ConfigPage::updateCompatCallout() {
                             QStringLiteral(" \xC2\xB7 ") +
                             (video_settings_.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
 
-    if (format_display_label_) {
-        format_display_label_->setText(QStringLiteral("Current format: ") + summary);
-    }
-
     if (compat_callout_widget_)
         compat_callout_widget_->setVisible(compat_bad);
     if (compat_ok_label_)
@@ -3386,20 +3550,13 @@ void ConfigPage::updateCompatCallout() {
         compat_ok_label_->setText(QStringLiteral("\xe2\x9c\x93 Current format: ") + summary);
     }
 
-    // Container segment sync (was in updateFormatDisplay)
-    const auto sync_container = [this](QPushButton* segment, capability::Container container) {
-        if (!segment)
-            return;
-        const bool selected = format_settings_.container == container;
-        segment->setChecked(selected);
-        segment->setProperty("qualitySegmentSelected", selected);
-        segment->style()->unpolish(segment);
-        segment->style()->polish(segment);
-    };
-    const QSignalBlocker blocker(container_group_);
-    sync_container(mkv_radio_, capability::Container::Matroska);
-    sync_container(webm_radio_, capability::Container::WebM);
-    sync_container(mp4_radio_, capability::Container::Mp4);
+    // Container combo sync (was in updateFormatDisplay)
+    if (container_combo_) {
+        const QSignalBlocker blocker(container_combo_);
+        const int idx = container_combo_->findData(static_cast<int>(format_settings_.container));
+        if (idx >= 0 && container_combo_->currentIndex() != idx)
+            container_combo_->setCurrentIndex(idx);
+    }
 
     // CompareHint value sync
     if (container_compare_hint_)
@@ -3497,13 +3654,12 @@ void ConfigPage::setOutputSettings(const OutputSettingsModel& settings) {
         stashed_custom_height_ = settings.resolution.custom_height;
     }
 
-    const QSignalBlocker blocker(container_group_);
-    if (settings.container == capability::Container::Matroska)
-        mkv_radio_->setChecked(true);
-    else if (settings.container == capability::Container::WebM)
-        webm_radio_->setChecked(true);
-    else
-        mp4_radio_->setChecked(true);
+    if (container_combo_) {
+        const QSignalBlocker blocker(container_combo_);
+        const int idx = container_combo_->findData(static_cast<int>(settings.container));
+        if (idx >= 0)
+            container_combo_->setCurrentIndex(idx);
+    }
 
     updateVideoCodecChoices();
     updateAudioCodecChoices();
@@ -3557,12 +3713,11 @@ void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
     cursor_check_->setOn(settings.capture_cursor);
 
     // PS-PHASE-C: sync expert rate control + bitrate from loaded preset.
-    if (rate_control_group_) {
-        auto* btn = rate_control_group_->button(static_cast<int>(settings.rate_control));
-        if (btn) {
-            const QSignalBlocker rb(rate_control_group_);
-            btn->setChecked(true);
-        }
+    if (rate_control_combo_) {
+        const QSignalBlocker rb(rate_control_combo_);
+        const int idx = rate_control_combo_->findData(static_cast<int>(settings.rate_control));
+        if (idx >= 0)
+            rate_control_combo_->setCurrentIndex(idx);
     }
     if (bitrate_kbps_spin_) {
         const QSignalBlocker bb(bitrate_kbps_spin_);
@@ -3572,6 +3727,13 @@ void ConfigPage::setVideoSettings(const VideoSettingsModel& settings) {
         const bool needs_bitrate = (settings.rate_control == recorder_core::RateControlMode::VariableBitrate ||
                                     settings.rate_control == recorder_core::RateControlMode::ConstantBitrate);
         bitrate_row_widget_->setVisible(expert_mode_enabled_ && needs_bitrate);
+    }
+
+    // ADR 0035 Slice 2: sync frame-pacing combo from loaded preset.
+    if (frame_pacing_combo_) {
+        const QSignalBlocker pb(frame_pacing_combo_);
+        const int idx = frame_pacing_combo_->findData(static_cast<int>(settings.frame_pacing));
+        frame_pacing_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* Smooth */);
     }
 
     updateQualitySegmentSelection();
@@ -3649,7 +3811,7 @@ void ConfigPage::updateFrameRateSelection() {
 }
 
 void ConfigPage::updateTimingSelection() {
-    if (!timing_group_)
+    if (!timing_combo_)
         return;
 
     const bool vfr_available = format_settings_.container != capability::Container::Mp4;
@@ -3657,21 +3819,23 @@ void ConfigPage::updateTimingSelection() {
         video_settings_.cfr = true;
     }
 
-    auto sync_segment = [this](QPushButton* segment, bool selected, bool enabled, const QString& unavailable_reason) {
-        if (!segment)
-            return;
-        segment->setChecked(selected);
-        segment->setEnabled(enabled && !controls_locked_);
-        segment->setToolTip(enabled ? QString() : unavailable_reason);
-        segment->setProperty("qualitySegmentSelected", selected);
-        segment->style()->unpolish(segment);
-        segment->style()->polish(segment);
-    };
-
-    const QSignalBlocker blocker(timing_group_);
-    sync_segment(timing_cfr_btn_, video_settings_.cfr, true, QString());
-    sync_segment(timing_vfr_btn_, !video_settings_.cfr, vfr_available,
-                 QStringLiteral("VFR is not available for MP4 in the current mux path."));
+    {
+        const QSignalBlocker blocker(timing_combo_);
+        // Disable the VFR item (data 0) when the container can't carry VFR (MP4).
+        if (auto* model = qobject_cast<QStandardItemModel*>(timing_combo_->model())) {
+            const int vfr_idx = timing_combo_->findData(0);
+            if (auto* item = (vfr_idx >= 0) ? model->item(vfr_idx) : nullptr) {
+                item->setEnabled(vfr_available);
+                item->setToolTip(vfr_available
+                                     ? QString()
+                                     : QStringLiteral("VFR is not available for MP4 in the current mux path."));
+            }
+        }
+        const int idx = timing_combo_->findData(video_settings_.cfr ? 1 : 0);
+        if (idx >= 0 && timing_combo_->currentIndex() != idx)
+            timing_combo_->setCurrentIndex(idx);
+        timing_combo_->setEnabled(!controls_locked_);
+    }
 
     if (timing_compare_hint_)
         timing_compare_hint_->setCurrentValue(video_settings_.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
@@ -4413,6 +4577,15 @@ bool ConfigPage::audioSeparateExpanderExpanded() const noexcept {
 }
 
 void ConfigPage::updateExpertModeVisibility() {
+    // P2: amber warning banner above the grid follows the expert gate.
+    if (expert_warn_banner_)
+        expert_warn_banner_->setVisible(expert_mode_enabled_);
+    // P3: "Expert mode" label tints to accent when on (QSS repolish on property change).
+    if (expert_mode_label_) {
+        expert_mode_label_->setProperty("expertOn", expert_mode_enabled_);
+        expert_mode_label_->style()->unpolish(expert_mode_label_);
+        expert_mode_label_->style()->polish(expert_mode_label_);
+    }
     // SETTINGS-TIERS-P3: show/hide the expert-gated Developer card.
     if (developer_card_)
         developer_card_->setVisible(expert_mode_enabled_);
@@ -4420,9 +4593,7 @@ void ConfigPage::updateExpertModeVisibility() {
     if (split_expert_section_)
         split_expert_section_->setVisible(expert_mode_enabled_);
     // v10: Default shows the "Balanced · CQ 24" dropdown; Expert hides it and reveals
-    // Rate control + CQ spinbox. quality_row_widget_ is retired (kept null-safe).
-    if (quality_row_widget_)
-        quality_row_widget_->setVisible(!expert_mode_enabled_);
+    // Rate control + CQ spinbox.
     if (quality_preset_row_widget_)
         quality_preset_row_widget_->setVisible(!expert_mode_enabled_);
     if (quality_rate_section_)
@@ -4457,13 +4628,13 @@ void ConfigPage::updateExpertModeVisibility() {
     // 0.7.0: sync the colour-range combo (Full/Limited) when the section shows.
     if (expert_mode_enabled_)
         updateVideoColorRangeControl();
-    if (expert_mode_enabled_ && rate_control_group_) {
+    if (expert_mode_enabled_ && rate_control_combo_) {
         // Seed rate control selection from model.
-        const QSignalBlocker b(rate_control_group_);
-        auto* btn = rate_control_group_->button(static_cast<int>(video_settings_.rate_control));
-        if (btn) {
-            btn->setProperty("qualitySegmentSelected", true);
-            btn->setChecked(true);
+        {
+            const QSignalBlocker b(rate_control_combo_);
+            const int idx = rate_control_combo_->findData(static_cast<int>(video_settings_.rate_control));
+            if (idx >= 0)
+                rate_control_combo_->setCurrentIndex(idx);
         }
         // Update bitrate visibility.
         const bool needs_bitrate = (video_settings_.rate_control == recorder_core::RateControlMode::VariableBitrate ||
@@ -4614,6 +4785,13 @@ void ConfigPage::setShowQuickControls(bool show) {
     if (quick_controls_check_) {
         const QSignalBlocker blocker(quick_controls_check_);
         quick_controls_check_->setOn(show);
+    }
+}
+
+void ConfigPage::setPresentDiagnosticsOptIn(bool on) {
+    if (present_diag_check_) {
+        const QSignalBlocker blocker(present_diag_check_);
+        present_diag_check_->setOn(on);
     }
 }
 
@@ -4862,15 +5040,16 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     if (preset_save_as_btn_)
         preset_save_as_btn_->setEnabled(enabled);
     profile_overflow_btn_->setEnabled(enabled);
-    mkv_radio_->setEnabled(enabled);
-    webm_radio_->setEnabled(enabled);
-    mp4_radio_->setEnabled(enabled);
+    if (container_combo_)
+        container_combo_->setEnabled(enabled);
     video_codec_combo_->setEnabled(enabled);
     audio_codec_combo_->setEnabled(enabled);
     // 0.7.0 — S7: bit-depth combo honours both the recording lock and codec gating.
     updateVideoBitDepthControl();
     // 0.7.0: colour-range combo honours the recording lock (never codec-gated).
     updateVideoColorRangeControl();
+    // ADR 0035 Slice 2: frame-pacing combo honours the recording lock (never codec-gated).
+    updateFramePacingControl();
 
     quality_combo_->setEnabled(enabled);
     if (quality_preset_combo_)
@@ -4926,6 +5105,46 @@ void ConfigPage::setHotkeyService(GlobalHotkeyService* service) {
 void ConfigPage::setHotkeyEditingLocked(bool locked) {
     if (hotkeys_settings_panel_)
         hotkeys_settings_panel_->setEditingLocked(locked);
+}
+
+void ConfigPage::setAutoUpdateCheck(bool on) {
+    if (updates_auto_toggle_) {
+        QSignalBlocker block(updates_auto_toggle_);
+        updates_auto_toggle_->setOn(on);
+    }
+}
+
+// ADR 0034 Phase A: render the live Updates-card state. Driven by MainWindow
+// from UpdateService results.
+void ConfigPage::setUpdateStatus(const QString& state, const QString& available_version, const QString& last_checked,
+                                 const QString& detail) {
+    if (!updates_status_label_ || !updates_action_btn_)
+        return;
+    updates_available_version_ = (state == QStringLiteral("available")) ? available_version : QString();
+
+    if (state == QStringLiteral("checking")) {
+        updates_status_label_->setText(QStringLiteral("Checking for updates\xe2\x80\xa6"));
+        updates_action_btn_->setText(QStringLiteral("Check for updates"));
+        updates_action_btn_->setEnabled(false);
+    } else if (state == QStringLiteral("available")) {
+        updates_status_label_->setText(QStringLiteral("Update available \xe2\x80\x94 %1").arg(available_version));
+        updates_action_btn_->setText(QStringLiteral("Update to %1").arg(available_version));
+        updates_action_btn_->setEnabled(true);
+    } else if (state == QStringLiteral("error")) {
+        updates_status_label_->setText(detail.isEmpty() ? QStringLiteral("Couldn't check for updates") : detail);
+        updates_action_btn_->setText(QStringLiteral("Retry"));
+        updates_action_btn_->setEnabled(true);
+    } else { // "uptodate"
+        const QString suffix = last_checked.isEmpty() ? QString() : QStringLiteral(" \xc2\xb7 %1").arg(last_checked);
+        updates_status_label_->setText(QStringLiteral("\xe2\x9c\x93 Up to date%1").arg(suffix));
+        updates_action_btn_->setText(QStringLiteral("Check for updates"));
+        updates_action_btn_->setEnabled(true);
+    }
+
+    // Accent CTA styling only in the available state (QSS [updatesCta="true"]).
+    updates_action_btn_->setProperty("updatesCta", state == QStringLiteral("available"));
+    updates_action_btn_->style()->unpolish(updates_action_btn_);
+    updates_action_btn_->style()->polish(updates_action_btn_);
 }
 
 // PS-PHASE-E: deep-link target support — scroll Settings to the named section.

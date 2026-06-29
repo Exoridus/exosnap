@@ -127,8 +127,8 @@ TEST(AppSettingsTiersStoreTest, SettingsVersion_BumpedTo16) {
     store.Save(settings);
 
     QSettings raw(path, QSettings::IniFormat);
-    // THEME-SLICE-1: version bumped from 15 → 16 (accent_id renamed to theme_id).
-    EXPECT_EQ(raw.value(QStringLiteral("settings_version")).toInt(), 16);
+    // ELEVATION-FOUNDATION-R1: version bumped 16 → 17 (present_diagnostics_optin).
+    EXPECT_EQ(raw.value(QStringLiteral("settings_version")).toInt(), 17);
 }
 
 TEST(AppSettingsTiersStoreTest, MissingSettingsTiersGroup_DefaultsToFalse) {
@@ -355,14 +355,13 @@ TEST_F(SettingsTiersTest, ConfigPage_FmtExpertSection_VisibleInExpertMode) {
     EXPECT_FALSE(section->isHidden());
 }
 
-TEST_F(SettingsTiersTest, ConfigPage_RateControlSegmented_Exists) {
+TEST_F(SettingsTiersTest, ConfigPage_RateControlCombo_Exists) {
     ConfigPage page(output_defaults_, video_defaults_);
-    auto* cq_btn = page.findChild<QPushButton*>(QStringLiteral("rateControlCqButton"));
-    ASSERT_NE(cq_btn, nullptr);
-    auto* vbr_btn = page.findChild<QPushButton*>(QStringLiteral("rateControlVbrButton"));
-    ASSERT_NE(vbr_btn, nullptr);
-    auto* cbr_btn = page.findChild<QPushButton*>(QStringLiteral("rateControlCbrButton"));
-    ASSERT_NE(cbr_btn, nullptr);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("rateControlCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_GE(combo->findData(static_cast<int>(recorder_core::RateControlMode::ConstantQuality)), 0);
+    EXPECT_GE(combo->findData(static_cast<int>(recorder_core::RateControlMode::VariableBitrate)), 0);
+    EXPECT_GE(combo->findData(static_cast<int>(recorder_core::RateControlMode::ConstantBitrate)), 0);
 }
 
 TEST_F(SettingsTiersTest, ConfigPage_AudioExpertSection_HiddenByDefault) {

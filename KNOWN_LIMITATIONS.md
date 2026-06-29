@@ -1,12 +1,12 @@
-# ExoSnap 0.7.0 — Known Limitations
+# ExoSnap 0.8.0 — Known Limitations
 
-This document describes the current support boundary of ExoSnap **0.7.0**. It is
+This document describes the current support boundary of ExoSnap **0.8.0**. It is
 factual and specific to this build. If a capability is not listed here as
 supported, do not assume it is available.
 
 ## Release status
 
-- ExoSnap 0.7.0 is a **pre-v1 Windows preview**, not a final 1.0 release.
+- ExoSnap 0.8.0 is a **pre-v1 Windows preview**, not a final 1.0 release.
 - Configuration, preset, and recording-history file schemas are **not frozen**
   and may change in incompatible ways before 1.0.0.
 - Keep your own backup copies of presets you care about during preview releases.

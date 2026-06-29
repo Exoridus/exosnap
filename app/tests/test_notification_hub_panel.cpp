@@ -95,9 +95,11 @@ TEST_F(NotificationHubPanelTest, DeepLink_EmitsSignal) {
     EXPECT_EQ(deep_count, 1);
 }
 
-TEST_F(NotificationHubPanelTest, Width_Is380) {
+TEST_F(NotificationHubPanelTest, Width_VisiblePanelIs380PlusShadowMargin) {
     ui::chrome::NotificationHubPanel panel;
-    EXPECT_EQ(panel.width(), 380);
+    // Canon visible width is 380px; the outer popup adds a 4px painted drop-shadow
+    // margin on each side (VG-1), so the widget itself measures 388px.
+    EXPECT_EQ(panel.width(), 388);
 }
 
 TEST_F(NotificationHubPanelTest, HubTitle_IsNotifications) {

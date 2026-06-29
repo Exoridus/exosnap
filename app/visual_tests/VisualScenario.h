@@ -247,6 +247,17 @@ struct VisualScenario {
     bool settings_expert_mode = false;       // Expert mode ON → Developer card revealed
     bool settings_advanced_expanded = false; // Output card "Advanced" expander open
 
+    // Scroll the active page's scroll area to a named section before capture, so
+    // below-the-fold cards (e.g. the Updates card) are visible in the grab.
+    // Same vocabulary as ConfigPage::scrollToSection ("settings/updates" etc.).
+    QString scroll_target;
+
+    // Drive the Settings Updates card state (ADR 0034): "uptodate" | "checking" |
+    // "available" | "error". With "available", settings_update_version fills the
+    // "Update to vX.Y" action. Empty = leave the card at its default.
+    QString settings_update_state;
+    QString settings_update_version;
+
     // --- EditExport scenarios (PHASE-G-EDIT-EXPORT-R1) ---
     QString edit_export_phase;
     QString edit_export_file_path;

@@ -33,15 +33,11 @@
 #include "../ui/dialogs/RecordingErrorPanel.h"
 
 class QAbstractButton;
-class QComboBox;
-class QBoxLayout;
 class QFrame;
 class QLabel;
 class QLineEdit;
 class QPushButton;
 class QResizeEvent;
-class QSlider;
-class QSpinBox;
 class QTimer;
 class QVBoxLayout;
 
@@ -62,11 +58,7 @@ struct VisualScenario;
 #endif
 
 namespace ui::widgets {
-class AudioSourceRow;
-class CaptureTargetCard;
-class ExoCheckBox;
 class PreviewSurface;
-class SectionRuleHeader;
 class TransportDock;
 class VUMeterWidget;
 } // namespace ui::widgets
@@ -86,6 +78,9 @@ class RecordPage : public QWidget {
     void setActiveProfileName(const std::string& profile_name);
     void applyPersistedAudioSettings(const capability::AudioUiState& state);
     void setRuntimeCapabilities(const capability::CapabilitySet& caps);
+    // Called on the UI thread when the async capability probe FAILED (threw). Drives
+    // the coordinator into its capability-failure state so init never hangs armed.
+    void setRuntimeCapabilitiesFailed(const QString& reason);
     void rebroadcastChromeState();
     void restoreRecordingHistory();
 
@@ -229,8 +224,6 @@ class RecordPage : public QWidget {
     void onSelectRegionTarget();
     void onOpenSourcePicker();
     void onSourcePickerAccepted(ui::dialogs::SourcePickerDialog::SelectionResult result);
-    void onTargetPickerChanged(int index);
-    void onRefreshTargets();
     void onRegionSelected(QRect region_virtual_screen);
     void onRegionCancelled();
     void onSourceDataRequested();
@@ -251,69 +244,40 @@ class RecordPage : public QWidget {
     QRect selectedMonitorRect() const;
     QRect currentRegionRect() const;
 
-    struct ReadinessRow {
-        QLabel* icon = nullptr;
-        QLabel* title = nullptr;
-        QLabel* detail = nullptr;
-    };
-
     bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
     void ensureCoordinatorInit();
     void initCoordinator();
+    // Resolve+validate shared_runtime_caps_ and hand them to the coordinator
+    // (OnCapabilitiesReady), catching probe/resolver failures. Used both from
+    // initCoordinator (when caps are already present) and from the deferred
+    // delivery in setRuntimeCapabilities() (when the async probe lands later).
+    void deliverCapabilitiesToCoordinator();
     void refresh();
     void updateStatsDisplay();
-    void updateResultDisplay();
     void updateTransportDock();
     void onDockSourceToggle(const QString& key);
-    void onDockFilenameActivated();
-    void updateTargetCards();
-    void updateReadinessRows();
     void updateResponsiveLayout();
     void updateAudioMeterLevels();
-    void updateAudioControls();
-    void updateAudioControlsVisibility();
-    void updateAudioTrackPreview();
-    void updateHeroButton();
-    void updatePreviewContextChips();
-    void updateRailSourceStatusChips();
     void updateSourceChip();
-    void updateOpenFolderButtonState();
-    void updateDestinationMeta();
     void updateResultDetailsPanel();
     void hideResultDetailsPanel();
-    void updateRecentRecordingsSection();
+    void updateReportCard(); // populates pipeline stats in resultDetailsPanel
     void syncTargetSelectionToCombo(int target_index);
     // When allow_fallback is false the reactive path gets no silent switch:
     // a vanished target becomes unresolved (selected_target_index = -1) instead
     // of auto-picking the next monitor/window.
     void enumerateTargets(bool preserve_current_selection, bool allow_fallback_to_other_target = true);
-    void rebuildTargetPicker();
     void pushSourceDataToPicker();
-    void onAudioRowEnabledChanged(int row_index, bool enabled);
-    void onAudioRowMergeChanged(int row_index, bool merge);
-    void onAudioRowGainChanged(int row_index, float gain_db);
-    void onAudioRowMutedChanged(int row_index, bool muted);
-    void swapAudioSourceRows(int a, int b);
-    void rebuildAudioRowWidgets();
-    void updateAudioRowMergeVisibility();
-    void onMicDeviceChanged(int index);
-    void onMicChannelChanged(int index);
-    void onMicGainChanged(int db_value);
-    void onAudioBitrateChanged(int kbps);
-    void onOpusFrameDurationChanged(int index);
-    void onOpusComplexityChanged(int value);
     void openOutputFolder();
     void onCopyFilePath();
     void onRenameFile();
     void onDeleteFile();
     void onRecentItemOpen(int history_index);
     void onRecentItemOpenFolder(int history_index);
-    void setOutputSettingsSummary(const OutputSettingsModel& settings);
     void populateMicDeviceCombo();
-    void updateMicDeviceNoteLabel();
     void syncMicMeterService();
     void syncSysMeterService();
     void syncAppMeterService();
@@ -353,90 +317,16 @@ class RecordPage : public QWidget {
     // Injected by MainWindow before first show; forwarded to the coordinator.
     RecoveryManifestStore* recovery_manifest_store_ = nullptr;
 
-    QLabel* capability_label_ = nullptr;
-    QComboBox* target_combo_ = nullptr;
-    QBoxLayout* cockpit_split_layout_ = nullptr;
     QWidget* preview_column_ = nullptr;
-    QWidget* preview_context_row_ = nullptr;
-    QLabel* preview_source_chip_label_ = nullptr;
     QWidget* preview_surface_host_ = nullptr;
-    QFrame* target_picker_panel_ = nullptr;
-    QLabel* target_picker_kind_label_ = nullptr;
-    QComboBox* target_picker_combo_ = nullptr;
-    QPushButton* target_refresh_btn_ = nullptr;
-    QLabel* target_picker_note_label_ = nullptr;
     ui::widgets::PreviewSurface* preview_surface_ = nullptr;
-    QLabel* control_state_label_ = nullptr;
-    QLabel* timer_label_ = nullptr;
-    ui::widgets::SectionRuleHeader* capture_header_ = nullptr;
     QWidget* source_row_ = nullptr;
     QFrame* source_chip_panel_ = nullptr;
-    QLabel* source_kind_label_ = nullptr;
     QLabel* source_name_label_ = nullptr;
-    QLabel* source_meta_label_ = nullptr;
-    QLabel* source_preset_label_ = nullptr;
     QLabel* source_lock_label_ = nullptr;
     QPushButton* change_source_btn_ = nullptr;
     ui::dialogs::SourcePickerOverlay* source_picker_overlay_ = nullptr;
-    ui::widgets::CaptureTargetCard* monitor_card_ = nullptr;
-    ui::widgets::CaptureTargetCard* window_card_ = nullptr;
-    ui::widgets::CaptureTargetCard* region_card_ = nullptr;
-    QPushButton* region_pick_btn_ = nullptr;
-    QLabel* region_summary_label_ = nullptr;
-    QWidget* region_options_panel_ = nullptr;
     ui::widgets::RegionSelectionOverlay* region_overlay_ = nullptr;
-    ui::widgets::ExoCheckBox* select_on_record_check_ = nullptr;
-    ui::widgets::SectionRuleHeader* readiness_header_ = nullptr;
-    QFrame* readiness_panel_ = nullptr;
-    QFrame* readiness_rule_ = nullptr;
-    QWidget* readiness_rows_container_ = nullptr;
-    QPushButton* readiness_diagnostics_btn_ = nullptr;
-    std::vector<ReadinessRow> readiness_rows_;
-    ui::widgets::SectionRuleHeader* audio_settings_header_ = nullptr;
-    QWidget* audio_rows_container_ = nullptr;
-    QVBoxLayout* audio_rows_layout_ = nullptr;
-    std::vector<ui::widgets::AudioSourceRow*> audio_source_rows_;
-    int drag_source_index_ = -1;
-    int drag_start_y_ = 0;
-    QWidget* mic_device_row_ = nullptr;
-    QComboBox* mic_device_combo_ = nullptr;
-    QPushButton* mic_refresh_btn_ = nullptr;
-    QLabel* mic_device_note_label_ = nullptr;
-    QWidget* mic_channel_row_ = nullptr;
-    QComboBox* mic_channel_combo_ = nullptr;
-    QWidget* mic_gain_row_ = nullptr;
-    QSlider* mic_gain_slider_ = nullptr;
-    QLabel* mic_gain_value_label_ = nullptr;
-    // Audio encoding params (ADR 0019).
-    QWidget* audio_bitrate_row_ = nullptr;
-    QSpinBox* audio_bitrate_spin_ = nullptr;
-    QWidget* opus_frame_duration_row_ = nullptr;
-    QComboBox* opus_frame_duration_combo_ = nullptr;
-    QWidget* opus_complexity_row_ = nullptr;
-    QSpinBox* opus_complexity_spin_ = nullptr;
-    QFrame* track_preview_panel_ = nullptr;
-    QVBoxLayout* track_preview_layout_ = nullptr;
-    ui::widgets::SectionRuleHeader* audio_header_ = nullptr;
-    ui::widgets::VUMeterWidget* app_meter_ = nullptr;
-    ui::widgets::VUMeterWidget* mic_meter_ = nullptr;
-    ui::widgets::VUMeterWidget* sys_meter_ = nullptr;
-    QLabel* app_db_label_ = nullptr;
-    QLabel* mic_db_label_ = nullptr;
-    QLabel* sys_db_label_ = nullptr;
-    ui::widgets::SectionRuleHeader* destination_header_ = nullptr;
-    QLabel* output_path_label_ = nullptr;
-    QLabel* output_meta_label_ = nullptr;
-    QPushButton* open_folder_btn_ = nullptr;
-    QPushButton* destination_settings_btn_ = nullptr;
-    QFrame* result_panel_ = nullptr;
-    QLabel* result_title_label_ = nullptr;
-    QLabel* result_message_label_ = nullptr;
-    QLabel* result_action_label_ = nullptr;
-    QLabel* result_file_label_ = nullptr;
-    QLabel* result_stats_label_ = nullptr;
-    QLabel* result_path_label_ = nullptr;
-    QLabel* result_technical_label_ = nullptr;
-    QFrame* result_technical_separator_ = nullptr;
     std::filesystem::path last_output_folder_;
     OutputSettingsModel current_output_settings_;
     capability::Container current_container_ = capability::Container::Matroska;
@@ -459,32 +349,19 @@ class RecordPage : public QWidget {
     // level preview before the user enables recording.
     bool record_page_visible_ = false;
     capability::CapabilitySet shared_runtime_caps_{};
+    // True once VALID runtime caps have been delivered to the coordinator (success).
+    // Stays false if the async probe fails so capability-gated logic never runs
+    // against an unresolved probe result.
     bool shared_runtime_caps_received_ = false;
+    // True when initCoordinator() built the coordinator before the async capability
+    // probe resolved. Cleared on BOTH success (caps delivered) and failure. Gates the
+    // early-start latch below: a Record click is latched only while this is true.
+    bool coordinator_awaiting_caps_ = false;
+    // Latched intent for a recording start requested before caps resolved; replayed
+    // from the caps-delivery path (setRuntimeCapabilities) so the click is never dropped.
+    bool start_requested_awaiting_caps_ = false;
+    std::optional<recorder_core::CaptureRegion> pending_start_crop_region_{};
 
-    // Rail dashboard controls
-    QWidget* audio_settings_panel_ = nullptr;
-    QFrame* destination_panel_ = nullptr;
-    QPushButton* hero_action_btn_ = nullptr;
-    QPushButton* secondary_action_btn_ = nullptr;
-    QPushButton* rail_diagnostics_btn_ = nullptr;
-    QFrame* rail_control_panel_ = nullptr;
-    QFrame* rail_stats_grid_ = nullptr;
-    QWidget* rail_source_status_panel_ = nullptr;
-    QLabel* rail_source_status_summary_label_ = nullptr;
-    QLabel* rail_sys_audio_chip_ = nullptr;
-    QLabel* rail_app_audio_chip_ = nullptr;
-    QLabel* rail_mic_chip_ = nullptr;
-    QLabel* rail_webcam_chip_ = nullptr;
-    QLabel* rail_size_value_label_ = nullptr;
-    QLabel* rail_drop_value_label_ = nullptr;
-    QFrame* rail_fps_stat_cell_ = nullptr;
-    QLabel* rail_fps_value_label_ = nullptr;
-    QLabel* rail_readiness_label_ = nullptr;
-    QLabel* rail_summary_label_ = nullptr;
-    QLabel* rail_stats_label_ = nullptr;
-    QLabel* readiness_summary_label_ = nullptr;
-    QPushButton* result_open_folder_btn_ = nullptr;
-    QPushButton* result_record_again_btn_ = nullptr;
     QPushButton* result_copy_path_btn_ = nullptr;
     QPushButton* result_rename_btn_ = nullptr;
     QPushButton* result_delete_btn_ = nullptr;
@@ -501,14 +378,8 @@ class RecordPage : public QWidget {
     QPushButton* delete_confirm_yes_btn_ = nullptr;
     QPushButton* delete_confirm_no_btn_ = nullptr;
 
-    // Recent recordings section
-    QWidget* recent_section_ = nullptr;
-    QLabel* recent_header_label_ = nullptr;
-    QVBoxLayout* recent_items_layout_ = nullptr;
-
     // Hybrid v3 preview-first chrome (HYBRID-PORT-R2).
     ui::widgets::TransportDock* transport_dock_ = nullptr;
-    QWidget* legacy_host_ = nullptr;
     QLabel* capture_frame_status_label_ = nullptr;
     QTimer* capture_frame_status_timer_ = nullptr;
 
@@ -541,6 +412,14 @@ class RecordPage : public QWidget {
     // widgets programmatically.  Prevents recordingConfigChanged() from being
     // emitted for these non-user changes.
     bool applying_external_config_ = false;
+
+    // v0.8.0-D: Post-flight report card — pipeline stats accumulated during recording
+    double peak_av_drift_ms_ = 0.0;
+    bool av_drift_ever_available_ = false;
+    recorder_core::PipelineHealth last_pipeline_health_ = recorder_core::PipelineHealth::Idle;
+    recorder_core::RecordingDiagnosticsSnapshot last_completed_snapshot_;
+    // Report card dismiss button (inside resultDetailsPanel)
+    QPushButton* report_card_dismiss_btn_ = nullptr;
 
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     bool visual_test_mode_ = false;

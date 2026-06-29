@@ -253,6 +253,7 @@ add_library(recorder_core STATIC
     src/audio_meter.cpp
     src/wgc_capture.cpp
     src/dxgi_od_capture_src.cpp
+    src/frame_pacing.cpp
     src/nvenc_encoder.cpp
     src/nvenc_video_encoder.cpp
     src/mf_aac_encoder.cpp
@@ -286,6 +287,8 @@ add_library(recorder_core STATIC
     src/pipeline_diagnostics_aggregator.cpp
     src/pipeline_diagnostics_aggregator.h
     include/recorder_core/pipeline_diagnostics.h
+    include/recorder_core/pipeline_health.h
+    src/pipeline_health.cpp
     src/video_thread.cpp
     src/audio_thread.cpp
     src/mux_thread.cpp
@@ -694,3 +697,21 @@ include(GoogleTest)
 # DLL copies above are registered before discovery, so the build-time
 # discovery run finds them. PRE_TEST must not be used (see exosnap_testing.cmake).
 gtest_discover_tests(test_mp4_remuxer TEST_PREFIX "recorder_core.")
+
+# ADR 0035 (0.8.0): phase-correct CFR pacing ring-size helper (pure; no D3D/NVENC).
+exosnap_add_gtest(
+    NAME frame_pacing_tests
+    TEST_PREFIX frame_pacing.
+    SOURCES tests/test_frame_pacing.cpp
+            src/frame_pacing.cpp
+)
+target_include_directories(frame_pacing_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# Capture-card live wiring (0.8.0): pure stage-health resolver (no D3D/NVENC/Qt).
+exosnap_add_gtest(
+    NAME pipeline_health_tests
+    TEST_PREFIX pipeline_health.
+    SOURCES tests/test_pipeline_health.cpp
+            src/pipeline_health.cpp
+)
+target_include_directories(pipeline_health_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

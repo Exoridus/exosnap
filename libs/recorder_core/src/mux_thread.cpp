@@ -522,6 +522,8 @@ void MuxThread::Run() {
         if (m_state.HasFailure())
             break;
 
+        const auto mux_t0 = std::chrono::steady_clock::now();
+        bool processed_any = false;
         while (!m_state.mux_queue.empty()) {
             MuxItem item = std::move(m_state.mux_queue.front());
             m_state.mux_queue.pop_front();
@@ -529,8 +531,14 @@ void MuxThread::Run() {
             std::visit([&](auto&& payload) { handle_payload(std::move(payload), videoEos, audioEosReceived); },
                        item.payload);
             lk.lock();
+            processed_any = true;
         }
         lk.unlock();
+        if (processed_any) {
+            const auto mux_t1 = std::chrono::steady_clock::now();
+            m_state.diagnostics.OnMuxLatency(mux_t1,
+                                             std::chrono::duration<double, std::milli>(mux_t1 - mux_t0).count());
+        }
         m_state.diagnostics.OnVideoQueueDepth(mux_queue_depth);
         sample_mux_diagnostics();
     }

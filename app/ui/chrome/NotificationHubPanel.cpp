@@ -20,15 +20,26 @@ namespace exosnap::ui::chrome {
 using P = ui::theme::ExoSnapPalette;
 using M = ui::theme::ExoSnapMetrics;
 
+// VG-1: Painted drop-shadow margins.  The outer popup is kShadowSide px wider
+// on each side and kShadowBottom px taller at the bottom so the concentric
+// shadow layers have room to paint without clipping.
+static constexpr int kShadowSide = 4;
+static constexpr int kShadowTop = 2;
+static constexpr int kShadowBottom = 18;
+static constexpr int kShadowYOff = 8; // vertical shadow shift
+
 NotificationHubPanel::NotificationHubPanel(QWidget* parent) : QFrame(parent) {
     setObjectName("notificationHubPanel");
     setWindowFlags(Qt::Popup | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
     setAttribute(Qt::WA_TranslucentBackground);
-    setFixedWidth(380);
+    // VG-1: outer frame is kShadowSide px wider on each side to accommodate the
+    // painted shadow; content visually remains 380 px wide.
+    setFixedWidth(380 + 2 * kShadowSide);
     setFrameShape(QFrame::NoFrame);
 
     auto* root_layout = new QVBoxLayout(this);
-    root_layout->setContentsMargins(0, 0, 0, 0);
+    // VG-1: margins carve out space for the painted shadow layers.
+    root_layout->setContentsMargins(kShadowSide, kShadowTop, kShadowSide, kShadowBottom);
     root_layout->setSpacing(0);
 
     // Header
@@ -120,8 +131,8 @@ NotificationHubPanel::NotificationHubPanel(QWidget* parent) : QFrame(parent) {
     root_layout->addWidget(header_divider);
     root_layout->addWidget(scroll_);
 
-    setMinimumHeight(80);
-    setMaximumHeight(520);
+    setMinimumHeight(80 + kShadowTop + kShadowBottom);
+    setMaximumHeight(520 + kShadowTop + kShadowBottom);
 
     refreshEmptyState();
 }
@@ -131,14 +142,29 @@ void NotificationHubPanel::paintEvent(QPaintEvent* event) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
 
+    // VG-1: content rect is the full widget rect inset by the shadow margins.
+    const QRectF content_rect = QRectF(rect()).adjusted(kShadowSide, kShadowTop, -kShadowSide, -kShadowBottom);
+
+    // Painted drop-shadow: 10 concentric layers painted outer-first.
+    // Quadratic alpha fall-off; max alpha kept low for the dark DXGI background.
+    static constexpr int kSteps = 10;
+    for (int i = 1; i <= kSteps; ++i) {
+        const double t = static_cast<double>(i) / kSteps;                 // 0→far … 1→close
+        const int grow = (kSteps - i + 1) * 2;                            // 20px far … 2px close
+        const int alpha = static_cast<int>(28.0 * (1.0 - t) * (1.0 - t)); // ~25 max
+        const double y_shift = kShadowYOff * (1.0 - t);
+        const QRectF shadow_rect =
+            content_rect.adjusted(-grow / 2.0, -grow / 2.0 + y_shift, grow / 2.0, grow / 2.0 + kShadowYOff);
+        QPainterPath shadow_path;
+        shadow_path.addRoundedRect(shadow_rect, M::kRadiusLg + grow / 4.0, M::kRadiusLg + grow / 4.0);
+        p.fillPath(shadow_path, QColor(0, 0, 0, alpha));
+    }
+
+    // Content surface: bg1 fill + subtle white border.
     QPainterPath path;
-    path.addRoundedRect(rect(), M::kRadiusLg, M::kRadiusLg);
-
-    // Fill
+    path.addRoundedRect(content_rect, M::kRadiusLg, M::kRadiusLg);
     p.fillPath(path, QColor(P::kBg1));
-
-    // Border — ~kLine2 (rgba(255,255,255,0.12))
-    p.setPen(QPen(QColor(255, 255, 255, 31), 1.0));
+    p.setPen(QPen(QColor(255, 255, 255, 31), 1.0)); // ~line2 (rgba 255,255,255,0.12)
     p.drawPath(path);
 }
 
@@ -307,8 +333,10 @@ void NotificationHubPanel::setDemoAdvisories(bool enabled) {
 }
 
 void NotificationHubPanel::anchorToPoint(const QPoint& globalPos) {
-    // Place so our top-right corner is at globalPos.
-    move(globalPos.x() - width(), globalPos.y());
+    // VG-1: Place so the CONTENT FRAME's top-right corner is at globalPos.
+    // The outer popup is kShadowSide px wider on the right and kShadowTop px
+    // taller at the top, so offset accordingly.
+    move(globalPos.x() - width() + kShadowSide, globalPos.y() - kShadowTop);
 }
 
 void NotificationHubPanel::refreshEmptyState() {

@@ -79,7 +79,23 @@ TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_WindowGeometry) {
     EXPECT_TRUE(loaded.window_geometry.maximized);
 }
 
-TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion16) {
+TEST(AppSettingsStoreTest, AppSettingsStore_SaveAndLoad_PresentDiagnosticsOptIn) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(TempSettingsPath(temp_dir));
+
+    // Default is OFF.
+    EXPECT_FALSE(store.Load().present_diagnostics_optin);
+
+    PersistedAppSettings settings;
+    settings.present_diagnostics_optin = true;
+    store.Save(settings);
+
+    EXPECT_TRUE(store.Load().present_diagnostics_optin);
+}
+
+TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString settings_path = TempSettingsPath(temp_dir);
@@ -89,8 +105,8 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion16) {
     store.Save(settings);
 
     QSettings raw_settings(settings_path, QSettings::IniFormat);
-    // Version bumped to 16: THEME-SLICE-1 renames accent_id -> theme_id.
-    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 16);
+    // Version bumped to 17: ELEVATION-FOUNDATION-R1 adds present_diagnostics_optin.
+    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 17);
 }
 
 // CRASH-WIRE-R1: auto_send_crash_reports round-trip + default tests
