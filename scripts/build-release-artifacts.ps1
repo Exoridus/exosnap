@@ -144,6 +144,10 @@ $WindowsSystemDllAllowlist = @(
     'dwrite.dll', 'd2d1.dll', 'windowscodecs.dll',
     'mf.dll', 'mfplat.dll', 'mfreadwrite.dll', 'mfcore.dll',
     'propsys.dll', 'avrt.dll', 'ksuser.dll', 'audioses.dll', 'mmdevapi.dll',
+    # Diagnostics / ETW tracing (PresentMon present-event consumer, 0.8.0): tdh.dll
+    # is the Event Trace Decode Helper (TdhGetEventInformation / TdhFormatProperty),
+    # a Windows system DLL present on every Win10/11 install — not bundled.
+    'tdh.dll',
     # Misc
     'winmm.dll', 'version.dll'
 )
