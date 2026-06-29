@@ -180,7 +180,7 @@ These underpin multiple versions and must not be scattered into UI `if`-chains:
 
 ## Next step
 
-**v0.7.0 — HDR and final codec matrix** *(in progress)*
+**v0.7.0 — HDR and final codec matrix** *(shipped)*
 
 `0.4.0` (crash reporting + updates), `0.5.0` (settings & media-capability) and `0.6.0` (**Audio v2**)
 have shipped. `0.7.0` finalizes the video/codec matrix: HEVC/AVC/AV1, 8-/10-bit, HDR10, color
@@ -192,7 +192,7 @@ profile/bit-depth fields, and `ffprobe` confirms `Main 10` / `yuv420p10le` for M
 unaffected). 10-bit is **SDR-only** (studio BT.709); HDR transfer/primaries is the next slice. HDR10
 and the Settings/preset UI remain, plus HDR verification.
 
-### v0.8.0 — Diagnostics as a feature *(next after 0.7.0; resequenced 2026-06)*
+### v0.8.0 — Diagnostics as a feature *(shipped 2026-06)*
 
 Promoted ahead of Software encoding and AMD/Intel (see Prioritization rationale). Detail in **ADR 0033**.
 Scope, kept tight to avoid ballooning:

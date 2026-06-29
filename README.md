@@ -6,7 +6,7 @@ webcam PiP overlay, crash recovery, and built-in diagnostics. Dark-mode-first Qt
 
 ## Status / current release
 
-- **Latest release:** `0.7.0` — "Codec & color".
+- **Latest release:** `0.8.0` — "Diagnostics as a feature".
 - **Pre-v1 notice:** settings, preset, and recording-history schemas may change incompatibly before 1.0.0.
 - **Platform:** Windows 10/11 x64 (Windows 11 is the primary target; Windows 10 is best-effort).
 - **Hardware encoder:** NVIDIA NVENC only. An NVIDIA GPU with supported NVENC capability is required.
@@ -19,15 +19,28 @@ webcam PiP overlay, crash recovery, and built-in diagnostics. Dark-mode-first Qt
   send (Stage 0 assisted GitHub issue, or Stage 1 automated upload to Sentry with EU data residency).
   See [`PRIVACY.md`](PRIVACY.md).
 
-## Features (0.7.0 — codec & color wave)
+## Features (0.8.0 — diagnostics wave)
+
+- **Diagnostics as a feature** — a first-class diagnostics engine with a typed **`FixAction`** model
+  (Auto / Assisted / External) so each detected issue carries the safest concrete remedy.
+- **Pre-flight readiness gate** — surfaces notices and hard blockers before a recording starts, so a
+  misconfigured capture is caught up front rather than failing mid-record.
+- **Live pipeline monitoring** — frame drops, A/V drift, and disk-fill ETA at low cost, with
+  encoder-vs-capture-vs-disk-bound classification and root-cause correlation (e.g. VRR-vs-CFR judder).
+- **Post-flight report card** — frame-drop %, peak A/V drift, and pipeline health after each recording.
+- **`PresentProvider` with PresentMon** — an opt-in, elevation-gated provider for tearing/game-present
+  observation feeding the judder correlation.
+- **In-app updates** — the Settings Updates card is wired to the consent-gated GitHub-Releases flow.
+- **Settings polish** — reliable hover popovers (info-i and the countdown chevron), corner-anchored
+  compare hints, and a de-nested Hotkeys card in line with the v10 canon.
+
+### From the 0.7.0 codec & color wave
 
 - **HEVC video** (NVENC) in MKV and MP4 (`hvc1` sample entry), alongside H.264 and AV1.
 - **10-bit output** (P010) for HEVC Main10 and AV1 — SDR at higher precision (no HDR transfer curve).
 - **BT.709 color metadata** on every MKV/MP4 output, plus a selectable Y'CbCr **color range**
   (Full/Limited). Per-display HDR capability is surfaced in Diagnostics.
 - **Recording-error dialog** — a modal failure report with an opt-in, privacy-scrubbed GitHub issue.
-- **v10 design pass** across Record / Settings / Diagnostics / Logs / About: split Record button,
-  in-toggle audio level fill, embedded About page, filterable Logs, neutral-by-default Diagnostics.
 - **Theme picker** as four live preview cards (two dark, two light); **single-click** source
   selection commits and returns straight to the preview.
 
