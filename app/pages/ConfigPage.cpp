@@ -417,8 +417,11 @@ QPixmap cardGlyphPixmap(const QString& key, const QColor& color, int size, qreal
 // v10: when `icon_key` is non-empty the title gains a 28x28 glyph chip on its left
 // (bg --ac-dim, border --ac-b2, 15px --ac stroke icon). Styling is QSS-driven via the
 // `cardGlyphChip` object name; the icon is tinted to the active theme's accent.
-QWidget* makeCardTitle(const QString& text, QWidget* parent, const QString& icon_key = QString()) {
-    if (icon_key.isEmpty()) {
+// `trailing`, when given, is placed flush-right in the title row as a header badge
+// (e.g. the Hotkeys card's "Reset all"). It is reparented into the row.
+QWidget* makeCardTitle(const QString& text, QWidget* parent, const QString& icon_key = QString(),
+                       QWidget* trailing = nullptr) {
+    if (icon_key.isEmpty() && trailing == nullptr) {
         auto* l = new QLabel(text, parent);
         l->setProperty("labelRole", "cardTitle");
         return l;
@@ -429,18 +432,23 @@ QWidget* makeCardTitle(const QString& text, QWidget* parent, const QString& icon
     hl->setContentsMargins(0, 0, 0, 0);
     hl->setSpacing(10);
 
-    auto* chip = new QLabel(row);
-    chip->setObjectName(QStringLiteral("cardGlyphChip"));
-    chip->setFixedSize(28, 28);
-    chip->setAlignment(Qt::AlignCenter);
-    const QColor accent(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac));
-    chip->setPixmap(cardGlyphPixmap(icon_key, accent, 15, chip->devicePixelRatioF()));
-    hl->addWidget(chip, 0, Qt::AlignVCenter);
+    if (!icon_key.isEmpty()) {
+        auto* chip = new QLabel(row);
+        chip->setObjectName(QStringLiteral("cardGlyphChip"));
+        chip->setFixedSize(28, 28);
+        chip->setAlignment(Qt::AlignCenter);
+        const QColor accent(QString::fromUtf8(exosnap::ui::theme::ActiveTheme().ac));
+        chip->setPixmap(cardGlyphPixmap(icon_key, accent, 15, chip->devicePixelRatioF()));
+        hl->addWidget(chip, 0, Qt::AlignVCenter);
+    }
 
     auto* l = new QLabel(text, row);
     l->setProperty("labelRole", "cardTitle");
     hl->addWidget(l, 0, Qt::AlignVCenter);
     hl->addStretch(1);
+
+    if (trailing != nullptr)
+        hl->addWidget(trailing, 0, Qt::AlignVCenter); // reparents into the title row
     return row;
 }
 
@@ -1056,8 +1064,10 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* qlbl = new QLabel(QStringLiteral("Quality"), qlabel_row);
         qlbl->setProperty("labelRole", "settingsRowLabel");
         qlrl->addWidget(qlbl);
+        // Single info affordance per row: the CompareHint IS the info-i here (it explains
+        // every quality tier in its popover), so no extra InfoHintIcon beside it — two
+        // identical "i" glyphs on one row read as a bug.
         qlrl->addWidget(quality_compare_hint_, 0, Qt::AlignVCenter);
-        qlrl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kQualityPreset, qlabel_row), 0, Qt::AlignVCenter);
         qlrl->addStretch();
         qhl->addWidget(qlabel_row, 1);
         qhl->addWidget(quality_preset_combo_, 0, Qt::AlignVCenter);
@@ -2585,11 +2595,14 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         auto* hotkeys_panel_layout = new QVBoxLayout(hotkeys_panel_);
         hotkeys_panel_layout->setContentsMargins(18, 16, 18, 18);
         hotkeys_panel_layout->setSpacing(10);
-        hotkeys_panel_layout->addWidget(
-            makeCardTitle(QStringLiteral("Hotkeys"), hotkeys_panel_, QStringLiteral("keyboard")));
 
+        // Panel built first so its wired "Reset all" can be hoisted into the card title
+        // row as a header badge — canon has no stray reset row and no card-in-card frame.
         hotkeys_settings_panel_ = new ui::widgets::HotkeysSettingsPanel(hotkeys_panel_);
         hotkeys_settings_panel_->setObjectName(QStringLiteral("settingsHotkeysPanel"));
+        hotkeys_panel_layout->addWidget(makeCardTitle(QStringLiteral("Hotkeys"), hotkeys_panel_,
+                                                      QStringLiteral("keyboard"),
+                                                      hotkeys_settings_panel_->resetAllButton()));
         hotkeys_panel_layout->addWidget(hotkeys_settings_panel_);
         // hotkeys_panel_ added to left_layout in the consolidation block below.
     }
