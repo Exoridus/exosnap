@@ -649,16 +649,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     });
     connect(title_bar_, &ui::chrome::OperationalTitleBar::closeRequested, this, &QWidget::close);
     connect(record_page_, &RecordPage::chromeStateChanged, this, &MainWindow::onRecordChromeStateChanged);
-    // DF-11: wire drop count from recording stats into the titlebar Recording pill.
     connect(record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
-            [this](const QString& elapsed, const QString& /*bitrate*/, const QString& drop_text,
+            [this](const QString& elapsed, const QString& /*bitrate*/, const QString& /*drop_text*/,
                    const QString& /*size*/, double /*av_drift_ms*/) {
-                if (title_bar_) {
-                    bool ok = false;
-                    const int drops = drop_text.toInt(&ok);
-                    title_bar_->setRecordingDropCount(ok ? drops : 0);
-                }
-                // RECORDING-OVERLAY-R1: keep the overlay elapsed text in sync.
+                // RECORDING-OVERLAY-R1: keep the overlay elapsed text in sync. (The live
+                // drop count is intentionally NOT shown in the title pill — it is dominated
+                // by benign CFR downsampling; real drops are surfaced post-recording.)
                 if (recording_overlay_ && recording_overlay_->isVisible())
                     recording_overlay_->updateElapsed(elapsed);
             });
