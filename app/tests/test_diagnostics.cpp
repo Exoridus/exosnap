@@ -838,6 +838,73 @@ TEST(RecommendationEngineTest, Generate_UnsupportedProfile_Blocker) {
     EXPECT_TRUE(found_blocker);
 }
 
+// --- rec.profile.codec: recommend the best GPU-supported codec ---
+
+TEST(RecommendationEngineTest, RecProfileCodec_H264WithAv1Available_FiresNamingAv1) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::HevcNvenc] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Matroska;
+    config.video_codec = capability::VideoCodec::H264Nvenc; // worse than the available AV1
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    const auto checklist = engine.Generate();
+
+    const auto it = std::find_if(checklist.results.begin(), checklist.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.profile.codec"; });
+    ASSERT_NE(it, checklist.results.end())
+        << "rec.profile.codec must fire when AV1 is available but H.264 is configured";
+    EXPECT_EQ(it->severity, DiagnosticSeverity::Notice);
+    ASSERT_TRUE(it->fix_action.has_value());
+    EXPECT_EQ(it->fix_action->id, "fix.profile.codec.best");
+    EXPECT_EQ(it->fix_action->safety, FixAction::Safety::Auto);
+    EXPECT_TRUE(it->fix_action->reversible);
+    EXPECT_NE(it->fix_action->label.find("AV1"), std::string::npos) << "fix label must name the recommended AV1 codec";
+    EXPECT_TRUE(checklist.has_notice);
+}
+
+TEST(RecommendationEngineTest, RecProfileCodec_AlreadyBestAv1_DoesNotFire) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::HevcNvenc] = {capability::SupportLevel::Available, ""};
+    caps.video_codecs[capability::VideoCodec::H264Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Matroska;
+    config.video_codec = capability::VideoCodec::Av1Nvenc; // already the best
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    const auto checklist = engine.Generate();
+
+    EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(), [](const DiagnosticResult& r) {
+        return r.id == "rec.profile.codec";
+    })) << "rec.profile.codec must stay silent when the configured codec is already the best";
+}
+
+TEST(RecommendationEngineTest, RecProfileCodec_WebmAv1OnlyConfiguredAv1_DoesNotFire) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::WebM;
+    config.video_codec = capability::VideoCodec::Av1Nvenc; // best & only valid WebM codec
+    config.audio_codec = capability::AudioCodec::Opus;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    const auto checklist = engine.Generate();
+
+    EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.profile.codec"; }));
+}
+
 TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
     auto codes = RecommendationEngine::GetAllRecommendationCodes();
     // v0.8.0-D added rec.009 (audio/container compat) and rec.010 (video/container compat) — expect 10 codes now.
