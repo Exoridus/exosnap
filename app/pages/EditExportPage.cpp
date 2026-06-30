@@ -13,14 +13,9 @@
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QEvent>
-#include <QFile>
-#include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QIcon>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QLabel>
 #include <QPainter>
 #include <QPixmap>
@@ -28,7 +23,6 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRectF>
-#include <QSaveFile>
 #include <QScrollArea>
 #include <QSize>
 #include <QStyle>
@@ -38,6 +32,8 @@
 #include <QWidget>
 
 #include <algorithm>
+
+#include "../models/MarkerSidecar.h"
 
 namespace exosnap {
 
@@ -1068,52 +1064,30 @@ void EditExportPage::onAddMarkerClicked() {
 
 void EditExportPage::loadMarkers() {
     markers_.clear();
+    // Canonical source: the existing "<media>.markers.json" sidecar written by
+    // RecordingCoordinator (on AddMarker / on stop). Once that file exists it is
+    // authoritative — read it via the shared serializer (models/MarkerSidecar.h).
     if (!ctx_.marker_sidecar_path.isEmpty()) {
-        QFile f(ctx_.marker_sidecar_path);
-        if (f.open(QIODevice::ReadOnly)) {
-            const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
-            const QJsonArray arr = doc.object().value(QStringLiteral("markers")).toArray();
-            for (const auto& v : arr) {
-                const QJsonObject obj = v.toObject();
-                RecordingMarker marker;
-                marker.time_ms = static_cast<uint64_t>(obj.value(QStringLiteral("timeMs")).toDouble());
-                const QString type_str = obj.value(QStringLiteral("type")).toString();
-                if (type_str == QStringLiteral("cut"))
-                    marker.type = RecordingMarkerType::Cut;
-                else if (type_str == QStringLiteral("highlight"))
-                    marker.type = RecordingMarkerType::Highlight;
-                else
-                    marker.type = RecordingMarkerType::General;
-                marker.label = obj.value(QStringLiteral("label")).toString().toStdString();
-                markers_.push_back(marker);
-            }
+        const std::filesystem::path sidecar(ctx_.marker_sidecar_path.toStdWString());
+        std::error_code ec;
+        if (std::filesystem::exists(sidecar, ec)) {
+            markers_ = ReadMarkerSidecar(sidecar);
             return;
         }
     }
-    // Fallback: use markers pre-loaded from the recording session.
+    // No sidecar on disk: fall back to the markers carried in the result.
     markers_ = ctx_.markers;
 }
 
 void EditExportPage::saveMarkers() {
     if (ctx_.marker_sidecar_path.isEmpty())
         return;
-    QJsonArray arr;
-    for (const auto& m : markers_) {
-        QJsonObject obj;
-        obj[QStringLiteral("timeMs")] = static_cast<qint64>(m.time_ms);
-        obj[QStringLiteral("type")] = QString::fromLatin1(RecordingMarkerTypeToString(m.type));
-        obj[QStringLiteral("label")] = QString::fromStdString(m.label);
-        arr.append(obj);
-    }
-    QJsonObject root;
-    root[QStringLiteral("version")] = 1;
-    root[QStringLiteral("timebase")] = QStringLiteral("milliseconds");
-    root[QStringLiteral("markers")] = arr;
-    QSaveFile file(ctx_.marker_sidecar_path);
-    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-        file.commit();
-    }
+    // Write back to the SAME path + format the coordinator uses (one writer).
+    const std::filesystem::path sidecar(ctx_.marker_sidecar_path.toStdWString());
+    QString media;
+    if (!ctx_.output_path.isEmpty())
+        media = QString::fromStdWString(std::filesystem::path(ctx_.output_path.toStdWString()).filename().wstring());
+    WriteMarkerSidecar(sidecar, markers_, media);
 }
 
 // ---- Real stream-copy export ----

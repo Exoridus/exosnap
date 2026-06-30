@@ -89,24 +89,39 @@ resulting `TrimRange` is passed to the trimmed overloads of `RemuxToProgressiveM
 
 Trim is keyframe-accurate and lossless: no decoding occurs.
 
-### Marker sidecar
+### Marker sidecar — single canonical format and writer
 
-Recording markers are persisted as a JSON sidecar file (`<stem>.markers.json`) alongside the
+Recording markers are persisted as a JSON sidecar file (`<media>.markers.json`) alongside the
 output file. The format is:
 
 ```json
 {
   "version": 1,
+  "media": "<media filename>",
   "timebase": "milliseconds",
+  "segmentIndex": 0,
   "markers": [
     { "timeMs": 1234, "type": "general|cut|highlight", "label": "..." }
   ]
 }
 ```
 
-Markers are never written as container chapters (no metadata change to the video file). The sidecar
-is read by `EditExportPage::loadMarkers()` on entry to the edit surface and written by
-`saveMarkers()` on each `onAddMarkerClicked()` call. The sidecar path is `EditContext::marker_sidecar_path`.
+(`media` is omitted when empty; `segmentIndex` is present only for per-segment split sidecars.)
+
+There is exactly **one** serializer and **one** path convention, shared by both the engine-side
+producer and the edit-surface consumer. The (de)serialization lives in `app/models/MarkerSidecar.h`
+(`WriteMarkerSidecar` / `ReadMarkerSidecar` / `SerializeMarkerSidecar` / `ParseMarkerSidecar`).
+
+- `RecordingCoordinator` is the in-recording producer: it accumulates markers via `AddMarker()`
+  (dropped during capture by the `AddMarker` hotkey or the transport-dock button), writes the
+  sidecar on every `AddMarker()`, again on stop for single-file recordings, and per segment
+  (partitioned + rebased to segment-local time) for split recordings — all through the shared writer.
+- `EditExportPage` is the consumer/editor: `loadMarkers()` reads the existing sidecar at
+  `EditContext::marker_sidecar_path` (authoritative once present; falls back to the markers carried
+  in the result), and `saveMarkers()` writes back to the **same** path and format via the shared
+  writer when the user adds/edits a marker. Trim cut points snap to these markers (within 50 ms).
+
+Markers are never written as container chapters (no metadata change to the video file).
 
 ### IA decision: mode, not tab
 

@@ -32,6 +32,7 @@
 
 #include "../diagnostics/AppLog.h"
 #include "../models/FilenameBuilder.h"
+#include "../models/MarkerSidecar.h"
 #include "../models/OutputPathValidator.h"
 #include "../models/RecordingPreset.h"
 #include "../settings/RecoveryManifestStore.h"
@@ -2267,35 +2268,13 @@ void RecordingCoordinator::WriteMarkerSidecar() {
         snapshot = markers_;
     }
 
-    QJsonArray markers_array;
-    for (const auto& m : snapshot) {
-        QJsonObject obj;
-        obj[QStringLiteral("timeMs")] = static_cast<qint64>(m.time_ms);
-        obj[QStringLiteral("type")] = QString::fromLatin1(RecordingMarkerTypeToString(m.type));
-        obj[QStringLiteral("label")] = QString::fromStdString(m.label);
-        markers_array.append(obj);
-    }
-
-    QJsonObject root;
-    root[QStringLiteral("version")] = 1;
-    root[QStringLiteral("media")] = QString::fromStdWString(current_output_path_.filename().wstring());
-    root[QStringLiteral("timebase")] = QStringLiteral("milliseconds");
-    root[QStringLiteral("markers")] = markers_array;
-
-    QJsonDocument doc(root);
-    const QString sidecar_qstr = QString::fromStdWString(sidecar_path.wstring());
-
-    QSaveFile file(sidecar_qstr);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        diagnostics::AppLog::warning(QStringLiteral("marker"),
-                                     QStringLiteral("sidecar write open failed: %1").arg(sidecar_qstr));
-        return;
-    }
-
-    file.write(doc.toJson(QJsonDocument::Indented));
-    if (!file.commit()) {
-        diagnostics::AppLog::warning(QStringLiteral("marker"),
-                                     QStringLiteral("sidecar write commit failed: %1").arg(sidecar_qstr));
+    // Delegate to the canonical serializer (models/MarkerSidecar.h) so the edit
+    // surface and the coordinator produce one identical format at one path.
+    const QString media = QString::fromStdWString(current_output_path_.filename().wstring());
+    if (!exosnap::WriteMarkerSidecar(sidecar_path, snapshot, media)) {
+        diagnostics::AppLog::warning(
+            QStringLiteral("marker"),
+            QStringLiteral("sidecar write failed: %1").arg(QString::fromStdWString(sidecar_path.wstring())));
     }
 }
 
@@ -2319,42 +2298,22 @@ void RecordingCoordinator::WriteSegmentMarkerSidecar(const recorder_core::Comple
     if (local.empty())
         return;
 
-    QJsonArray markers_array;
-    for (const auto& m : local) {
-        QJsonObject obj;
-        obj[QStringLiteral("timeMs")] = static_cast<qint64>(m.time_ms);
-        obj[QStringLiteral("type")] = QString::fromLatin1(RecordingMarkerTypeToString(m.type));
-        obj[QStringLiteral("label")] = QString::fromStdString(m.label);
-        markers_array.append(obj);
-    }
-
     auto sidecar_path = segment.path;
     sidecar_path.replace_extension(L".markers.json");
 
-    QJsonObject root;
-    root[QStringLiteral("version")] = 1;
-    root[QStringLiteral("media")] = QString::fromStdWString(segment.path.filename().wstring());
-    root[QStringLiteral("timebase")] = QStringLiteral("milliseconds");
-    root[QStringLiteral("segmentIndex")] = static_cast<int>(segment.index);
-    root[QStringLiteral("markers")] = markers_array;
-
+    // Same canonical serializer, with the per-segment index field set.
+    const QString media = QString::fromStdWString(segment.path.filename().wstring());
     const QString sidecar_qstr = QString::fromStdWString(sidecar_path.wstring());
-    QSaveFile file(sidecar_qstr);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    if (exosnap::WriteMarkerSidecar(sidecar_path, local, media, static_cast<int>(segment.index))) {
+        diagnostics::AppLog::info(QStringLiteral("marker"),
+                                  QStringLiteral("segment sidecar markers=%1 index=%2 path=%3")
+                                      .arg(local.size())
+                                      .arg(segment.index)
+                                      .arg(sidecar_qstr));
+    } else {
         diagnostics::AppLog::warning(QStringLiteral("marker"),
-                                     QStringLiteral("segment sidecar open failed: %1").arg(sidecar_qstr));
-        return;
+                                     QStringLiteral("segment sidecar write failed: %1").arg(sidecar_qstr));
     }
-    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-    if (!file.commit()) {
-        diagnostics::AppLog::warning(QStringLiteral("marker"),
-                                     QStringLiteral("segment sidecar commit failed: %1").arg(sidecar_qstr));
-        return;
-    }
-    diagnostics::AppLog::info(QStringLiteral("marker"), QStringLiteral("segment sidecar markers=%1 index=%2 path=%3")
-                                                            .arg(local.size())
-                                                            .arg(segment.index)
-                                                            .arg(sidecar_qstr));
 }
 
 } // namespace exosnap

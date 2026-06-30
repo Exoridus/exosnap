@@ -1,90 +1,37 @@
-// test_edit_context.cpp — tests for the marker sidecar JSON round-trip.
+// test_edit_context.cpp — tests for the canonical marker-sidecar serialization.
 //
-// Replicates the write/read logic from EditExportPage::saveMarkers() /
-// loadMarkers() without pulling in a Qt widget (no QApplication needed).
-//
-// Format: JSON object with "version", "timebase", "markers" array.
-// Each marker: { "timeMs": <uint64>, "type": "general|cut|highlight", "label": "" }
+// Exercises the SHARED functions in models/MarkerSidecar.h that both
+// RecordingCoordinator (write on AddMarker / on stop / per segment) and
+// EditExportPage (load + write-back in the edit surface) use. There is exactly
+// one format and one writer; these tests validate that single implementation.
 
 #include <gtest/gtest.h>
 
-#include <QFile>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QTemporaryDir>
 
+#include <filesystem>
+
+#include "../models/MarkerSidecar.h"
 #include "../models/RecordingMarker.h"
 
 namespace {
 
-// ---- Minimal sidecar writer/reader (mirrors EditExportPage logic) ----
-
-struct SidecarFixture {
-    QTemporaryDir tmp;
-    QString path;
-
-    SidecarFixture() : path(tmp.path() + QStringLiteral("/test.markers.json")) {
-    }
-
-    bool write(const std::vector<exosnap::RecordingMarker>& markers) {
-        QJsonArray arr;
-        for (const auto& m : markers) {
-            QJsonObject obj;
-            obj[QStringLiteral("timeMs")] = static_cast<qint64>(m.time_ms);
-            obj[QStringLiteral("type")] = QString::fromLatin1(exosnap::RecordingMarkerTypeToString(m.type));
-            obj[QStringLiteral("label")] = QString::fromStdString(m.label);
-            arr.append(obj);
-        }
-        QJsonObject root;
-        root[QStringLiteral("version")] = 1;
-        root[QStringLiteral("timebase")] = QStringLiteral("milliseconds");
-        root[QStringLiteral("markers")] = arr;
-        QFile f(path);
-        if (!f.open(QIODevice::WriteOnly))
-            return false;
-        f.write(QJsonDocument(root).toJson());
-        return true;
-    }
-
-    std::vector<exosnap::RecordingMarker> read() {
-        QFile f(path);
-        if (!f.open(QIODevice::ReadOnly))
-            return {};
-        const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
-        const QJsonArray arr = doc.object().value(QStringLiteral("markers")).toArray();
-        std::vector<exosnap::RecordingMarker> out;
-        for (const auto& v : arr) {
-            const QJsonObject obj = v.toObject();
-            exosnap::RecordingMarker m;
-            m.time_ms = static_cast<uint64_t>(obj.value(QStringLiteral("timeMs")).toDouble());
-            const QString t = obj.value(QStringLiteral("type")).toString();
-            if (t == QStringLiteral("cut"))
-                m.type = exosnap::RecordingMarkerType::Cut;
-            else if (t == QStringLiteral("highlight"))
-                m.type = exosnap::RecordingMarkerType::Highlight;
-            else
-                m.type = exosnap::RecordingMarkerType::General;
-            m.label = obj.value(QStringLiteral("label")).toString().toStdString();
-            out.push_back(m);
-        }
-        return out;
-    }
-};
+std::filesystem::path SidecarPath(const QTemporaryDir& dir) {
+    return std::filesystem::path(dir.path().toStdWString()) / L"test.markers.json";
+}
 
 } // namespace
 
-// ---- Tests ----
-
 TEST(MarkerSidecarTest, RoundTrip) {
-    SidecarFixture fx;
+    QTemporaryDir dir;
+    const auto path = SidecarPath(dir);
     std::vector<exosnap::RecordingMarker> markers = {
         {1000, exosnap::RecordingMarkerType::General, "Start"},
         {5000, exosnap::RecordingMarkerType::Cut, "Cut here"},
         {9999, exosnap::RecordingMarkerType::Highlight, "Clip"},
     };
-    ASSERT_TRUE(fx.write(markers));
-    const auto loaded = fx.read();
+    ASSERT_TRUE(exosnap::WriteMarkerSidecar(path, markers, QStringLiteral("clip.mp4")));
+    const auto loaded = exosnap::ReadMarkerSidecar(path);
     ASSERT_EQ(loaded.size(), markers.size());
     for (size_t i = 0; i < markers.size(); ++i) {
         EXPECT_EQ(loaded[i].time_ms, markers[i].time_ms);
@@ -94,27 +41,35 @@ TEST(MarkerSidecarTest, RoundTrip) {
 }
 
 TEST(MarkerSidecarTest, EmptyMarkersWriteReadEmpty) {
-    SidecarFixture fx;
-    ASSERT_TRUE(fx.write({}));
-    EXPECT_TRUE(fx.read().empty());
+    QTemporaryDir dir;
+    const auto path = SidecarPath(dir);
+    ASSERT_TRUE(exosnap::WriteMarkerSidecar(path, {}));
+    EXPECT_TRUE(exosnap::ReadMarkerSidecar(path).empty());
 }
 
 TEST(MarkerSidecarTest, MissingFileReturnsEmpty) {
-    SidecarFixture fx;
+    QTemporaryDir dir;
     // Never wrote — read must return empty, not crash.
-    EXPECT_TRUE(fx.read().empty());
+    EXPECT_TRUE(exosnap::ReadMarkerSidecar(SidecarPath(dir)).empty());
+}
+
+TEST(MarkerSidecarTest, EmptyPathIsNoop) {
+    // Empty path must not write and must read as empty.
+    EXPECT_FALSE(exosnap::WriteMarkerSidecar(std::filesystem::path{}, {}));
+    EXPECT_TRUE(exosnap::ReadMarkerSidecar(std::filesystem::path{}).empty());
 }
 
 TEST(MarkerSidecarTest, TypeStringsRoundTrip) {
     using T = exosnap::RecordingMarkerType;
-    SidecarFixture fx;
+    QTemporaryDir dir;
+    const auto path = SidecarPath(dir);
     std::vector<exosnap::RecordingMarker> markers = {
         {0, T::General, "g"},
         {100, T::Cut, "c"},
         {200, T::Highlight, "h"},
     };
-    ASSERT_TRUE(fx.write(markers));
-    const auto loaded = fx.read();
+    ASSERT_TRUE(exosnap::WriteMarkerSidecar(path, markers));
+    const auto loaded = exosnap::ReadMarkerSidecar(path);
     ASSERT_EQ(loaded.size(), 3u);
     EXPECT_EQ(loaded[0].type, T::General);
     EXPECT_EQ(loaded[1].type, T::Cut);
@@ -122,14 +77,36 @@ TEST(MarkerSidecarTest, TypeStringsRoundTrip) {
 }
 
 TEST(MarkerSidecarTest, LargeTimestamp) {
-    SidecarFixture fx;
+    QTemporaryDir dir;
+    const auto path = SidecarPath(dir);
     // Ensure uint64 timestamps survive the qint64/double JSON round-trip.
     // Largest safe integer for JSON double: 2^53 - 1 = 9007199254740991 ms
     // (~285 000 years), well above any realistic recording duration.
     const uint64_t big = 9007199254740991ULL;
     std::vector<exosnap::RecordingMarker> markers = {{big, exosnap::RecordingMarkerType::General, "end"}};
-    ASSERT_TRUE(fx.write(markers));
-    const auto loaded = fx.read();
+    ASSERT_TRUE(exosnap::WriteMarkerSidecar(path, markers));
+    const auto loaded = exosnap::ReadMarkerSidecar(path);
     ASSERT_EQ(loaded.size(), 1u);
     EXPECT_EQ(loaded[0].time_ms, big);
+}
+
+TEST(MarkerSidecarTest, SerializeOmitsEmptyMediaIncludesSegmentIndex) {
+    // media empty => no "media" key; segment_index set => "segmentIndex" present.
+    const auto doc = exosnap::SerializeMarkerSidecar({{0, exosnap::RecordingMarkerType::General, "m"}}, QString{},
+                                                     /*segment_index=*/2);
+    const auto root = doc.object();
+    EXPECT_FALSE(root.contains(QStringLiteral("media")));
+    ASSERT_TRUE(root.contains(QStringLiteral("segmentIndex")));
+    EXPECT_EQ(root.value(QStringLiteral("segmentIndex")).toInt(), 2);
+    EXPECT_EQ(root.value(QStringLiteral("version")).toInt(), 1);
+    EXPECT_EQ(root.value(QStringLiteral("timebase")).toString(), QStringLiteral("milliseconds"));
+}
+
+TEST(MarkerSidecarTest, CoordinatorFormatHasMediaNoSegmentIndex) {
+    // The single-file coordinator path passes a media name and no segment index.
+    const auto doc = exosnap::SerializeMarkerSidecar({{0, exosnap::RecordingMarkerType::General, "m"}},
+                                                     QStringLiteral("rec.mkv"), std::nullopt);
+    const auto root = doc.object();
+    EXPECT_EQ(root.value(QStringLiteral("media")).toString(), QStringLiteral("rec.mkv"));
+    EXPECT_FALSE(root.contains(QStringLiteral("segmentIndex")));
 }
