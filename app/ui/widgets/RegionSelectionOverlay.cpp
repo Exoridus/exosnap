@@ -82,9 +82,6 @@ static constexpr int kHandleBorder = 2;
 // Readout font size in points.
 static constexpr int kReadoutFontPt = 9; // ~11 px on a 96-dpi screen (Qt uses points)
 
-// Aspect snap threshold percent.
-static constexpr int kSnapThresholdPct = 5;
-
 // ── QSS-styled buttons ───────────────────────────────────────────────────────
 // Buttons are styled via QSS loaded by the global theme; we also apply a
 // minimal inline style so the buttons look correct even without QSS.
@@ -485,43 +482,6 @@ void RegionSelectionOverlay::paintReadout(QPainter& p, const QRect& sel) const {
     p.drawText(bg, Qt::AlignCenter, text);
 }
 
-void RegionSelectionOverlay::paintAspectHint(QPainter& p, const QRect& sel, const QString& hint_label) const {
-    if (hint_label.isEmpty()) {
-        return;
-    }
-    // Subtle label shown just to the right of the readout area, in dim accent color.
-    QFont font(QStringLiteral("IBM Plex Mono"));
-    font.setPointSize(kReadoutFontPt - 1);
-    p.setFont(font);
-
-    const int padH = 6;
-    const int padV = 2;
-    const QFontMetrics fm(font);
-    const int tw = fm.horizontalAdvance(hint_label);
-    const int th = fm.height();
-    const int bw = tw + padH * 2;
-    const int bh = th + padV * 2;
-
-    // Position above the rect, to the right of the readout.
-    const int gap = 6;
-    const int by = std::max(rect().top() + 4, sel.top() - bh - gap);
-    const int bx = std::clamp(sel.right() - bw, rect().left() + 4, rect().right() - bw - 4);
-
-    const QRect bg(bx, by, bw, bh);
-
-    // Subtle: semi-transparent accent background.
-    QColor hintBg(kAccent);
-    hintBg.setAlpha(30);
-    p.setPen(Qt::NoPen);
-    p.setBrush(hintBg);
-    p.drawRoundedRect(bg, 4, 4);
-
-    QColor hintText(kAccent);
-    hintText.setAlpha(200);
-    p.setPen(hintText);
-    p.drawText(bg, Qt::AlignCenter, hint_label);
-}
-
 void RegionSelectionOverlay::paintInstruction(QPainter& p) const {
     const QRect monitor = monitorRectLocal();
     p.setPen(QColor(255, 255, 255, 180));
@@ -548,17 +508,6 @@ void RegionSelectionOverlay::paintEvent(QPaintEvent*) {
 
         // Live readout.
         paintReadout(p, sel);
-
-        // Aspect hint (separate label when snapping is near but not yet exact).
-        const QString hint = nearestPresetLabel(sel.width(), sel.height(), kSnapThresholdPct);
-        // Only show the hint when the readout doesn't already contain the ratio.
-        // (If formatReadout included it, the hint would be redundant.)
-        // Since formatReadout already includes it when near, paint the hint only
-        // when the selection is very close (within 1 %) but the readout isn't a
-        // perfect match — skip here to avoid double-display; the readout is enough.
-        // We still call paintAspectHint as a hook for a potential "snap!" indicator.
-        // For now emit no separate hint (it's baked into the readout).
-        Q_UNUSED(hint);
 
         // "Too small" rejection hint.
         if (sel.width() < kMinDimension || sel.height() < kMinDimension) {

@@ -86,7 +86,6 @@ class QuickControlPillWindow : public QWidget {
     [[nodiscard]] QRect pauseResumeButtonRect() const;
     [[nodiscard]] QRect stopButtonRect() const;
     [[nodiscard]] QRect captureFrameButtonRect() const;
-    void paintButton(QPainter& p, const QRect& r, int icon_id, bool rec_style) const;
 
     bool show_quick_controls_ = false;
     bool recording_active_ = false;
@@ -97,7 +96,6 @@ class QuickControlPillWindow : public QWidget {
 
     // Drag state
     bool dragging_ = false;
-    QPoint drag_start_local_;  // widget-local position where drag started
     QPoint drag_start_global_; // global screen position where drag started
 };
 

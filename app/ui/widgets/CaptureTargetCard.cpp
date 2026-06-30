@@ -91,7 +91,6 @@ CaptureTargetCard::CaptureTargetCard(QWidget* parent) : QFrame(parent) {
     title_label_ = new QLabel(this);
     title_label_->setProperty("labelRole", "captureCardTitle");
     title_text_ = QStringLiteral("Monitor");
-    title_label_->setText(title_text_);
     title_label_->setWordWrap(true);
     title_label_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     title_label_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
@@ -99,7 +98,6 @@ CaptureTargetCard::CaptureTargetCard(QWidget* parent) : QFrame(parent) {
 
     status_label_ = new QLabel(this);
     status_label_->setProperty("labelRole", "captureCardStatus");
-    status_label_->setText(QStringLiteral("Screen"));
     status_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     status_label_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     status_label_->installEventFilter(this);
@@ -185,7 +183,6 @@ void CaptureTargetCard::setThumbnail(const QPixmap& pixmap) {
         setThumbnailPlaceholder();
         return;
     }
-    has_thumbnail_ = true;
     thumbnail_label_->setPixmap(
         pixmap.scaled(kThumbnailWidth, kThumbnailHeight, Qt::KeepAspectRatio, Qt::SmoothTransformation));
     setThumbnailState(ThumbnailState::Ready, {});

@@ -44,13 +44,6 @@ class AdvisoryItem : public QWidget {
     QWidget* unread_dot_{nullptr};
     QWidget* actions_container_{nullptr};
     QHBoxLayout* actions_layout_{nullptr};
-
-    struct ActionEntry {
-        QString id;
-        QString label;
-        bool is_deep_link;
-    };
-    QVector<ActionEntry> actions_;
 };
 
 } // namespace exosnap::ui::widgets

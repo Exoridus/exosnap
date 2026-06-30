@@ -171,8 +171,6 @@ qt_add_executable(exosnap WIN32
     ui/widgets/AdvisoryItem.cpp
     ui/widgets/CornerCaptureButton.h
     ui/widgets/CornerCaptureButton.cpp
-    ui/widgets/KeyCap.h
-    ui/widgets/KeyCap.cpp
     ui/widgets/PlaceholderRow.h
     ui/widgets/PlaceholderRow.cpp
     ui/widgets/TransportDock.h
@@ -885,17 +883,6 @@ exosnap_add_gtest(
 )
 target_include_directories(corner_capture_button_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(corner_capture_button_tests PROPERTIES AUTOMOC ON)
-
-exosnap_add_gtest(
-    NAME key_cap_tests
-    TEST_PREFIX suite.
-    SOURCES
-        tests/test_key_cap.cpp
-        ui/widgets/KeyCap.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets
-)
-target_include_directories(key_cap_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(key_cap_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME placeholder_row_tests

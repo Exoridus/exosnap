@@ -56,8 +56,6 @@
 #include "../ui/widgets/ExoToggle.h"
 #include "../ui/widgets/HotkeysSettingsPanel.h"
 #include "../ui/widgets/InfoHintIcon.h"
-#include "../ui/widgets/PlaceholderRow.h"
-#include "../ui/widgets/SettingsCardExpander.h"
 #include "../ui/widgets/SettingsPopoverRow.h"
 #include "../ui/widgets/VUMeterWidget.h"
 #include "../ui/widgets/WebcamSetupPanel.h"
@@ -900,7 +898,6 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // Right column: Output · Webcam · Presence · Updates · Appearance.
     // On narrow viewports updateResponsiveLayout() flips both columns to a single stacked column.
     auto* columns = new QWidget(content);
-    columns_widget_ = columns;
     columns_layout_ = new QHBoxLayout(columns);
     columns_layout_->setContentsMargins(0, 0, 0, 0);
     columns_layout_->setSpacing(18);

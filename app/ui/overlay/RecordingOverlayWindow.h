@@ -60,7 +60,6 @@ class RecordingOverlayWindow : public QWidget {
   private:
     void applyExclusion();
     void updatePosition();
-    void applyState();
 
     OverlayState state_ = OverlayState::Recording;
     QString elapsed_text_;

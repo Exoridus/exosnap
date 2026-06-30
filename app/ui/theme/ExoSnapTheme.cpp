@@ -574,15 +574,6 @@ void ReapplyTheme(QApplication& app, const QString& theme_id) {
     app.setStyleSheet(BuildThemeStylesheet(CachedFontFamilies(), theme));
 }
 
-void ReapplyAccent(QApplication& app, const QString& accent_id) {
-    // Legacy compat: map old accent ids to themes.
-    // "mint" was the default accent -> dark-default theme.
-    // All other old accent ids had no corresponding theme -> fall back to dark-default.
-    Q_UNUSED(accent_id);
-    // All old accents map to dark-default (the only dark theme that existed).
-    ReapplyTheme(app, QStringLiteral("dark-default"));
-}
-
 QString ThemeBg4Color(const ExoTheme& theme) {
     if (theme.bg4_override)
         return QString::fromUtf8(theme.bg4_override);

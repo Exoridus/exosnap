@@ -72,7 +72,6 @@ void RecordingOverlayWindow::showRecording(const QString& elapsed_text) {
     }
 
     updatePosition();
-    applyState();
     update();
     show();
     raise();
@@ -95,7 +94,6 @@ void RecordingOverlayWindow::showPaused(const QString& elapsed_text) {
     blink_on_ = true;
 
     updatePosition();
-    applyState();
     update();
     show();
     raise();
@@ -252,10 +250,6 @@ void RecordingOverlayWindow::updatePosition() {
     const int x = target_rect.right() - hint.width() - kMarginRight;
     const int y = target_rect.top() + kMarginTop;
     move(x, y);
-}
-
-void RecordingOverlayWindow::applyState() {
-    // Nothing extra needed — paintEvent handles state-driven rendering.
 }
 
 } // namespace exosnap::ui::overlay

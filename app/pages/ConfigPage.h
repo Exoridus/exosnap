@@ -42,7 +42,6 @@ class ExoCheckBox;
 class ExoSlider;
 class ExoToggle;
 class HotkeysSettingsPanel;
-class SettingsCardExpander;
 class SettingsPopoverRow;
 class VUMeterWidget;
 class WebcamSetupPanel;
@@ -426,9 +425,7 @@ class ConfigPage : public QWidget {
     QLabel* lock_note_label_ = nullptr;
     bool controls_locked_ = false;
 
-    QLabel* token_help_label_ = nullptr;
-    QPushButton* token_help_toggle_btn_ = nullptr; // v10: removed — kept nullptr
-    QWidget* token_chip_flow_ = nullptr;           // v10: always visible below pattern input
+    QWidget* token_chip_flow_ = nullptr; // v10: always visible below pattern input
 
     // SETTINGS-TIERS-R1 / D6: Expert mode toggle (ExoToggle in D6 header zone).
     ui::widgets::ExoToggle* expert_mode_toggle_ = nullptr;
@@ -542,8 +539,6 @@ class ConfigPage : public QWidget {
     QWidget* flac_compression_row_ = nullptr;
 
     // Card panel pointers (developer_card_ is already above; remaining cards are stored here).
-    QWidget* preset_panel_ = nullptr;
-    QWidget* columns_widget_ = nullptr; // two-column host for fmt+audio panels
     QWidget* fmt_panel_ = nullptr;
     QWidget* audio_panel_ = nullptr;
     QWidget* webcam_panel_ = nullptr;
