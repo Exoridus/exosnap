@@ -43,6 +43,14 @@ with a `fix.frame_pacing.smooth` Auto FixAction when judder is detected and the 
 `Newest`. When mode is already `Smooth`, the result is suppressed. `MainWindow` handles
 `fix.frame_pacing.smooth` to flip the setting.
 
+**Follow-up — `rec.001` retired its static arm.** Because Smooth pacing (the default) already
+absorbs the common high-refresh / VRR → CFR case, the refresh-mismatch check no longer warns on
+the *static* config (e.g. "144 Hz + 60 fps") — that would just nag on a setup that records fine.
+`rec.001` now fires **only on measured residual present-time jitter** (`> 8 ms`, raised from 4 ms
+since the resampler absorbs moderate jitter), i.e. judder the resampler could not hide. Sustained
+coalescing was also dropped as a trigger (it is normal for high-refresh sources and is exactly what
+the resampler handles).
+
 **Scope boundary.** DXGI-OD (monitor capture) only. WGC (window/region capture) has no
 `LastPresentTime` and continues to use newest-at-tick in all modes.
 
