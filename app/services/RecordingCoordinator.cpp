@@ -1484,6 +1484,10 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
         current_manifest_id_.clear();
     }
 
+    // 0.9.0 S1: for MKV recordings the output file IS the edit master.
+    if (result.succeeded)
+        ui_result.mkv_master_path = output_path.wstring();
+
     PostResult(std::move(ui_result));
     PostStateChange(result.succeeded ? UiRecordingState::Completed : UiRecordingState::Failed);
     // is_recording_ is already false here; restore the idle preview capture if the
@@ -1521,13 +1525,38 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
         is_remuxing_.store(false);
 
         if (remux_result.success) {
-            // Delete the transient MKV.
+            // Retain the transient MKV as the edit master by renaming it to .edit.mkv.
+            // The companion file lives alongside the final MP4 for the edit surface.
+            std::filesystem::path edit_master = transient_mkv;
+            edit_master.replace_extension(L".edit.mkv");
             std::error_code ec;
-            std::filesystem::remove(transient_mkv, ec);
+            std::filesystem::rename(transient_mkv, edit_master, ec);
             if (ec) {
+                // Rename failed (e.g. cross-device); fall back to copy+delete.
+                std::error_code copy_ec;
+                std::filesystem::copy_file(transient_mkv, edit_master,
+                                           std::filesystem::copy_options::overwrite_existing, copy_ec);
+                if (!copy_ec) {
+                    std::error_code del_ec;
+                    std::filesystem::remove(transient_mkv, del_ec);
+                    ec = del_ec; // report deletion error if any, clear on success
+                }
+            }
+            if (!ec) {
+                mkv_master_path_ = edit_master;
+                final_result.mkv_master_path = edit_master.wstring();
+                diagnostics::AppLog::info(
+                    QStringLiteral("remux"),
+                    QStringLiteral("edit master retained: \"%1\"").arg(QString::fromStdWString(edit_master.wstring())));
+            } else {
+                // Retention failed — edit surface degrades gracefully (no master path).
+                mkv_master_path_.clear();
                 diagnostics::AppLog::warning(QStringLiteral("remux"),
-                                             QStringLiteral("transient MKV removal failed: %1")
+                                             QStringLiteral("edit master retention failed: %1")
                                                  .arg(QString::fromStdWString(ToWide(ec.message()))));
+                // Best-effort cleanup of the original transient path.
+                std::error_code del_ec;
+                std::filesystem::remove(transient_mkv, del_ec);
             }
 
             // Update file size to reflect the final MP4.

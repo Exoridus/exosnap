@@ -87,6 +87,12 @@ struct UiRecordingResult {
     std::vector<RecordingMarker> markers;
     std::wstring marker_sidecar_path;
 
+    // Path to the canonical MKV edit master (0.9.0 S1 — Edit/Output/Save):
+    //   - For MKV recordings: same as output_path (the file IS the master).
+    //   - For MP4 recordings (single-file): the companion .edit.mkv retained after remux.
+    //   - Empty for split sessions, failed recordings, or when retention failed.
+    std::wstring mkv_master_path;
+
     // Multi-segment split results (SPLIT-RECORDING-R1). Empty for a legacy
     // single-file recording (the scalar output_path/file fields describe it).
     std::vector<CompletedRecordingSegment> segments;
