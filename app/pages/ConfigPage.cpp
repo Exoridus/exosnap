@@ -858,6 +858,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
 
     auto* left_col = new QWidget(columns);
     auto* left_layout = new QVBoxLayout(left_col);
+    left_col_ = left_col; // stashed for the lazy developer-card build
     left_layout->setContentsMargins(0, 0, 0, 0);
     left_layout->setSpacing(18);
 
@@ -2012,52 +2013,8 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
         // hotkeys_panel_ added to left_layout in the consolidation block below.
     }
 
-    // ---- DEVELOPER CARD (Expert-gated, LEFT column — v10, single-width) ----
-    // v10 masonry: Developer belongs to left column (after Hotkeys, expert-gated).
-    // UI-only debug stubs (log level, NVTX). No persistence — local variables only.
-    {
-        developer_card_ = makePanel(left_col);
-        developer_card_->setObjectName(QStringLiteral("settingsDeveloperCard"));
-        auto* dev_layout = new QVBoxLayout(developer_card_);
-        dev_layout->setContentsMargins(18, 14, 18, 14);
-        dev_layout->setSpacing(M::kSpaceSm);
-        dev_layout->addWidget(makeCardTitle(QStringLiteral("Developer"), developer_card_, QStringLiteral("bug")));
-        dev_layout->addWidget(
-            makeHint(QStringLiteral("Expert debug controls — not persisted between sessions."), developer_card_));
-
-        // Log level (UI stub — not wired to any backend)
-        {
-            auto* row = new QFrame(developer_card_);
-            row->setProperty("panelRole", "compactRow");
-            auto* rl = new QVBoxLayout(row);
-            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-            rl->setSpacing(M::kSpaceXs);
-            rl->addWidget(makeFieldLabel(QStringLiteral("Developer logging level"), row));
-            auto* log_level_combo = new QComboBox(row);
-            log_level_combo->setMinimumWidth(220);
-            log_level_combo->setMaximumWidth(320);
-            log_level_combo->addItems({"Off", "Error", "Warning", "Info", "Debug", "Trace"});
-            log_level_combo->setCurrentIndex(3);
-            rl->addWidget(log_level_combo);
-            dev_layout->addWidget(row);
-        }
-
-        // NVTX profiling markers (UI stub — not wired to any backend)
-        {
-            auto* row = new QFrame(developer_card_);
-            row->setProperty("panelRole", "compactRow");
-            auto* rl = new QVBoxLayout(row);
-            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-            rl->setSpacing(M::kSpaceXs);
-            rl->addWidget(makeFieldLabel(QStringLiteral("Profiling"), row));
-            auto* nvtx_check = new ui::widgets::ExoCheckBox(QStringLiteral("Enable NVTX / profiling markers"), row);
-            rl->addWidget(nvtx_check);
-            dev_layout->addWidget(row);
-        }
-
-        developer_card_->setVisible(expert_mode_enabled_);
-        // developer_card_ added to left_layout in the consolidation block below.
-    }
+    // Developer card (expert-gated, UI-only stubs) is built lazily on first
+    // expert-enable — see buildDeveloperCard().
 
     // ---- UPDATES CARD (right column, between Presence and Appearance) ----
     // v10 masonry: Updates lives in the right column. The full update service is not
@@ -2113,7 +2070,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // Right column: Output · Webcam · Presence · Updates · Appearance.
     // Expert only reveals rows in place / shows Developer card — nothing teleports sideways.
     left_layout->addWidget(hotkeys_panel_);
-    left_layout->addWidget(developer_card_);
+    developer_insert_index_ = left_layout->count(); // slot for the lazy developer card
     left_layout->addStretch();
 
     right_layout->addWidget(out_panel);
@@ -4605,7 +4562,64 @@ void ConfigPage::buildSplitExpertSection() {
     updateSplitSelection();
 }
 
+// Startup-perf: the Developer card (expert-gated, UI-only stubs) is built on
+// first expert-enable instead of eagerly-then-hidden.
+void ConfigPage::buildDeveloperCard() {
+    if (developer_card_built_)
+        return;
+    developer_card_built_ = true;
+    QWidget* left_col = left_col_; // alias: moved construction references it
+    {
+        developer_card_ = makePanel(left_col);
+        developer_card_->setObjectName(QStringLiteral("settingsDeveloperCard"));
+        auto* dev_layout = new QVBoxLayout(developer_card_);
+        dev_layout->setContentsMargins(18, 14, 18, 14);
+        dev_layout->setSpacing(M::kSpaceSm);
+        dev_layout->addWidget(makeCardTitle(QStringLiteral("Developer"), developer_card_, QStringLiteral("bug")));
+        dev_layout->addWidget(
+            makeHint(QStringLiteral("Expert debug controls — not persisted between sessions."), developer_card_));
+
+        // Log level (UI stub — not wired to any backend)
+        {
+            auto* row = new QFrame(developer_card_);
+            row->setProperty("panelRole", "compactRow");
+            auto* rl = new QVBoxLayout(row);
+            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+            rl->setSpacing(M::kSpaceXs);
+            rl->addWidget(makeFieldLabel(QStringLiteral("Developer logging level"), row));
+            auto* log_level_combo = new QComboBox(row);
+            log_level_combo->setMinimumWidth(220);
+            log_level_combo->setMaximumWidth(320);
+            log_level_combo->addItems({"Off", "Error", "Warning", "Info", "Debug", "Trace"});
+            log_level_combo->setCurrentIndex(3);
+            rl->addWidget(log_level_combo);
+            dev_layout->addWidget(row);
+        }
+
+        // NVTX profiling markers (UI stub — not wired to any backend)
+        {
+            auto* row = new QFrame(developer_card_);
+            row->setProperty("panelRole", "compactRow");
+            auto* rl = new QVBoxLayout(row);
+            rl->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+            rl->setSpacing(M::kSpaceXs);
+            rl->addWidget(makeFieldLabel(QStringLiteral("Profiling"), row));
+            auto* nvtx_check = new ui::widgets::ExoCheckBox(QStringLiteral("Enable NVTX / profiling markers"), row);
+            rl->addWidget(nvtx_check);
+            dev_layout->addWidget(row);
+        }
+
+        developer_card_->setVisible(expert_mode_enabled_);
+    }
+    if (auto* left_layout = qobject_cast<QVBoxLayout*>(left_col_->layout())) {
+        left_layout->insertWidget(developer_insert_index_, developer_card_);
+    }
+}
+
 void ConfigPage::updateExpertModeVisibility() {
+    if (expert_mode_enabled_ && !developer_card_built_) {
+        buildDeveloperCard();
+    }
     if (expert_mode_enabled_ && !split_expert_built_) {
         buildSplitExpertSection();
     }

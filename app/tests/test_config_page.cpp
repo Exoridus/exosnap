@@ -1860,10 +1860,10 @@ TEST_F(ConfigPageTest, AdvancedDetailsButton_IsGone) {
 TEST_F(ConfigPageTest, DeveloperCard_HiddenByDefault) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    // Expert mode is off by default; the Developer card must be explicitly hidden.
+    // Expert mode off by default; the Developer card is built lazily on first
+    // expert-enable, so by default it doesn't exist yet (which still means not shown).
     auto* card = page.findChild<QWidget*>(QStringLiteral("settingsDeveloperCard"));
-    ASSERT_NE(card, nullptr) << "settingsDeveloperCard widget not found";
-    EXPECT_TRUE(card->isHidden()) << "Developer card must be hidden when expert mode is off";
+    EXPECT_TRUE(card == nullptr || card->isHidden());
 }
 
 TEST_F(ConfigPageTest, DeveloperCard_VisibleWhenExpertModeEnabled) {

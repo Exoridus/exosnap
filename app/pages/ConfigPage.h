@@ -292,6 +292,7 @@ class ConfigPage : public QWidget {
     // (eager-then-hidden cost kept off the default ConfigPage construction path).
     void buildAudioExpertSection();
     void buildSplitExpertSection();
+    void buildDeveloperCard();
 
     capability::AudioUiState audio_ui_state_;
     WebcamSettings webcam_settings_;
@@ -462,8 +463,12 @@ class ConfigPage : public QWidget {
     QButtonGroup* theme_button_group_ = nullptr;
     QWidget* theme_picker_widget_ = nullptr;
     QString current_theme_id_ = QStringLiteral("dark-default");
-    // Expert-gated developer card (hidden when expert_mode_enabled_ == false).
+    // Expert-gated developer card — lazily built on first expert-enable (see
+    // buildDeveloperCard). left_col_ + insert index let the lazy build place it.
     QWidget* developer_card_ = nullptr;
+    bool developer_card_built_ = false;
+    int developer_insert_index_ = -1;
+    QWidget* left_col_ = nullptr;
 
     // PS-PHASE-C: Embedded hotkeys panel — v10: single-width card in the LEFT column.
     ui::widgets::HotkeysSettingsPanel* hotkeys_settings_panel_ = nullptr;
