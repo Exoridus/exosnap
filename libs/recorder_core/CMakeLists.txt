@@ -235,6 +235,24 @@ if(NOT EXISTS "${_nvenc_header}")
     # discovery run finds them. PRE_TEST must not be used (see exosnap_testing.cmake).
     gtest_discover_tests(test_mp4_remuxer TEST_PREFIX "recorder_core.")
 
+    # 0.9.0 S1: TrimRange stream-copy + ExtractKeyframeTimestamps tests.
+    add_executable(test_remux_trim tests/test_remux_trim.cpp)
+    target_link_libraries(test_remux_trim PRIVATE
+        GTest::gtest_main
+        exosnap::warnings
+        recorder_core EBML::ebml Matroska::matroska FFmpeg::mux
+    )
+    target_include_directories(test_remux_trim PRIVATE src)
+    foreach(_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
+        add_custom_command(TARGET test_remux_trim POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_ffmpeg_dll}"
+                "$<TARGET_FILE_DIR:test_remux_trim>"
+            VERBATIM
+        )
+    endforeach()
+    gtest_discover_tests(test_remux_trim TEST_PREFIX "recorder_core.")
+
     return()
 endif()
 
@@ -697,6 +715,24 @@ include(GoogleTest)
 # DLL copies above are registered before discovery, so the build-time
 # discovery run finds them. PRE_TEST must not be used (see exosnap_testing.cmake).
 gtest_discover_tests(test_mp4_remuxer TEST_PREFIX "recorder_core.")
+
+# 0.9.0 S1: TrimRange stream-copy + ExtractKeyframeTimestamps tests.
+add_executable(test_remux_trim tests/test_remux_trim.cpp)
+target_link_libraries(test_remux_trim PRIVATE
+    GTest::gtest_main
+    exosnap::warnings
+    recorder_core EBML::ebml Matroska::matroska FFmpeg::mux
+)
+target_include_directories(test_remux_trim PRIVATE src)
+foreach(_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
+    add_custom_command(TARGET test_remux_trim POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_ffmpeg_dll}"
+            "$<TARGET_FILE_DIR:test_remux_trim>"
+        VERBATIM
+    )
+endforeach()
+gtest_discover_tests(test_remux_trim TEST_PREFIX "recorder_core.")
 
 # ADR 0035 (0.8.0): phase-correct CFR pacing ring-size helper (pure; no D3D/NVENC).
 exosnap_add_gtest(

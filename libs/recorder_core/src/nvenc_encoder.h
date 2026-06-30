@@ -95,6 +95,13 @@ class NvencEncoder {
         m_bitrate_kbps = bitrate_kbps;
     }
 
+    // Set keyframe interval in seconds. Must be called before InitEncoder().
+    // Controls gopLength and idrPeriod: gopLength = round(secs * fps).
+    // Default 2.0 s matches the pre-0.9.0 hardcoded value.
+    void SetKeyframeIntervalSecs(float secs) noexcept {
+        m_keyframeIntervalSecs = (secs > 0.0f) ? secs : 2.0f;
+    }
+
     // Load nvEncodeAPI64.dll and open a D3D11 encode session.
     // device must remain valid for the lifetime of this encoder.
     bool Open(ID3D11Device* device, std::string& out_error);
@@ -175,6 +182,7 @@ class NvencEncoder {
     NvencQualityPreset m_qualityPreset = NvencQualityPreset::Balanced;
     RateControlMode m_rateControlMode = RateControlMode::ConstantQuality;
     uint32_t m_bitrate_kbps = 20000;
+    float m_keyframeIntervalSecs = 2.0f; // default 2 s — matches pre-0.9.0 hardcoded value
 
     // P6 for H.264 (synchronous), P4 for AV1 (P6 AV1 has internal pipeline depth
     // that causes NV_ENC_ERR_NEED_MORE_INPUT on every frame even with lookahead disabled).

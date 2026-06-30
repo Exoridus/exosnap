@@ -293,6 +293,13 @@ struct RecorderConfig {
     // Ignored for VFR and for WGC capture (no LastPresentTime → newest-at-tick).
     FramePacingMode cfr_pacing_mode = FramePacingMode::Smooth;
 
+    // Keyframe interval in seconds. Controls NVENC gopLength/idrPeriod.
+    // gopLength = round(keyframe_interval_secs * frame_rate_num / frame_rate_den).
+    // Valid values: 0.5, 1.0, 2.0. Default 2.0 matches the pre-0.9.0 hardcoded value.
+    // Shorter intervals improve Quick Trim accuracy at a minor file-size cost (~1–2 %).
+    // Info-i: shown in Advanced → Video as the "Keyframe interval" setting.
+    float keyframe_interval_secs = 2.0f;
+
     // Requested encoded output size. 0x0 means Native: the selected source
     // dimensions are frozen at session start (after Region crop, when present).
     // Non-zero values are exact encoder dimensions and must be even.

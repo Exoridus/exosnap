@@ -576,10 +576,14 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
 
 bool NvencEncoder::InitEncoder(uint32_t width, uint32_t height, uint32_t frame_rate_num, uint32_t frame_rate_den,
                                std::string& out_error) {
-    // 2-second keyframe interval — recording-friendly default.
-    const uint32_t kGopFrames = (frame_rate_den > 0 && frame_rate_num > 0)
-                                    ? static_cast<uint32_t>((2ull * frame_rate_num) / frame_rate_den)
-                                    : 120u;
+    // Keyframe interval: gopLength = round(interval_secs * fps).
+    // m_keyframeIntervalSecs defaults to 2.0 (pre-0.9.0 hardcoded behaviour).
+    const uint32_t kGopFrames =
+        (frame_rate_den > 0 && frame_rate_num > 0)
+            ? static_cast<uint32_t>(m_keyframeIntervalSecs * static_cast<float>(frame_rate_num) /
+                                        static_cast<float>(frame_rate_den) +
+                                    0.5f)
+            : 120u;
     m_encodeConfig.gopLength = kGopFrames;
     if (m_codec == VideoCodec::H264Nvenc) {
         m_encodeConfig.encodeCodecConfig.h264Config.idrPeriod = kGopFrames;

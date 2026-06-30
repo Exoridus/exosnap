@@ -18,7 +18,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <string>
+#include <vector>
 
 namespace recorder_core {
 
@@ -53,6 +55,49 @@ using RemuxProgressCallback = std::function<bool(float progress)>;
 inline RemuxProgressCallback RemuxNoopCallback() {
     return [](float) -> bool { return true; };
 }
+
+// ---------------------------------------------------------------------------
+// TrimRange — optional start/end boundary for stream-copy remux operations.
+//
+// Both fields use the same unit as libavformat's AVFormatContext::duration:
+// microseconds at AV_TIME_BASE (1,000,000 ticks per second).
+//
+// Sentinel: std::numeric_limits<int64_t>::min() (== AV_NOPTS_VALUE == INT64_MIN)
+// means "no boundary" — the remux proceeds from the beginning / to the end.
+//
+// Trim is keyframe-accurate:
+//   - start snaps backward to the nearest keyframe at or before start_us.
+//   - all video packets with pts_us < end_us are copied (packets past end_us stop
+//     the copy loop); other streams follow the video boundary.
+// ---------------------------------------------------------------------------
+struct TrimRange {
+    static constexpr int64_t kNoTimestamp = std::numeric_limits<int64_t>::min();
+
+    int64_t start_us = kNoTimestamp; ///< kNoTimestamp = from the beginning
+    int64_t end_us = kNoTimestamp;   ///< kNoTimestamp = to the end
+
+    [[nodiscard]] bool HasStart() const noexcept {
+        return start_us != kNoTimestamp;
+    }
+    [[nodiscard]] bool HasEnd() const noexcept {
+        return end_us != kNoTimestamp;
+    }
+};
+
+// Trimmed overloads: re-remux only the segment [tr.start_us, tr.end_us).
+// When tr.HasStart() and tr.HasEnd() are both false, behaviour is identical
+// to the no-TrimRange overloads below.
+RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
+                                  RemuxProgressCallback progress_cb, TrimRange tr);
+
+RemuxResult RemuxToMkv(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
+                       RemuxProgressCallback progress_cb, TrimRange tr);
+
+// Scan `input_path` for all video keyframe PTS values and return them sorted
+// in ascending order (microseconds at AV_TIME_BASE). The file is read without
+// decoding (av_read_frame + key-frame flag only). Returns an empty vector on
+// open failure or when the file has no video stream.
+std::vector<int64_t> ExtractKeyframeTimestamps(const std::filesystem::path& input_path);
 
 // Remux `input_path` (any container readable by libavformat, e.g. MKV) to
 // `output_path` as a progressive MP4 with moov before mdat (+faststart).

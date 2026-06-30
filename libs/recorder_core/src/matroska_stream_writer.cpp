@@ -398,13 +398,16 @@ bool MatroskaStreamWriter::FlushCluster() {
         if (pos_after > pos_before) {
             m_bytes_written += pos_after - pos_before;
         }
-        const uint64_t cluster_pos = m_cluster->GetPosition();
+        // CueClusterPosition must be relative to the Segment data start (Matroska spec
+        // §8.1.6.1): relative = absolute - Segment_element_start - Segment_head_bytes.
+        const uint64_t cluster_abs = m_cluster->GetPosition();
+        const uint64_t cluster_rel = m_segment->GetRelativePosition(cluster_abs);
         for (const uint64_t cue_ms : m_pending_cue_ms) {
             auto& point = libebml::AddNewChild<libmatroska::KaxCuePoint>(*m_cues);
             libebml::GetChild<libmatroska::KaxCueTime>(point).SetValue(cue_ms);
             auto& tp = libebml::AddNewChild<libmatroska::KaxCueTrackPositions>(point);
             libebml::GetChild<libmatroska::KaxCueTrack>(tp).SetValue(1);
-            libebml::GetChild<libmatroska::KaxCueClusterPosition>(tp).SetValue(cluster_pos);
+            libebml::GetChild<libmatroska::KaxCueClusterPosition>(tp).SetValue(cluster_rel);
         }
         m_pending_cue_ms.clear();
     } catch (const std::exception& ex) {
