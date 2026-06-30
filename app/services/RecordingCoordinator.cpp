@@ -695,6 +695,18 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.frame_rate_den = video_settings_.frame_rate_den;
     config.cfr = video_settings_.cfr;
     config.cfr_pacing_mode = video_settings_.frame_pacing;
+    // Map keyframe interval mode to seconds for NVENC GOP configuration.
+    switch (video_settings_.keyframe_interval) {
+    case KeyframeIntervalMode::Seconds2:
+        config.keyframe_interval_secs = 2.0f;
+        break;
+    case KeyframeIntervalMode::Seconds1:
+        config.keyframe_interval_secs = 1.0f;
+        break;
+    case KeyframeIntervalMode::Seconds0_5:
+        config.keyframe_interval_secs = 0.5f;
+        break;
+    }
     if (config.container == recorder_core::Container::Mp4 && !config.cfr) {
         diagnostics::AppLog::warning(
             QStringLiteral("record.reconcile"),

@@ -1370,6 +1370,39 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             fes_layout->addWidget(frame_pacing_row_);
         }
 
+        // --- Keyframe interval (0.9.0 S1 Quick Trim) ---
+        {
+            auto* ki_row = new QWidget(fmt_expert_section_);
+            auto* kivl = new QVBoxLayout(ki_row);
+            kivl->setContentsMargins(0, 0, 0, 0);
+            kivl->setSpacing(0);
+            auto* kirule = new QFrame(ki_row);
+            kirule->setFrameShape(QFrame::HLine);
+            kirule->setProperty("settingsDivider", true);
+            kivl->addWidget(kirule);
+            auto* kihl = new QHBoxLayout();
+            kihl->setContentsMargins(12, 6, 12, 6);
+            kihl->setSpacing(6);
+            auto* kilbl = new QLabel(QStringLiteral("Keyframe interval"), ki_row);
+            kilbl->setProperty("settingsLabel", true);
+            kihl->addWidget(kilbl, 1);
+            kihl->addWidget(new ui::widgets::InfoHintIcon(ui::hints::kKeyframeInterval, ki_row), 0, Qt::AlignVCenter);
+            keyframe_interval_combo_ = new QComboBox(ki_row);
+            keyframe_interval_combo_->setObjectName(QStringLiteral("keyframeIntervalSelect"));
+            keyframe_interval_combo_->addItem(QStringLiteral("2 s (default)"),
+                                              static_cast<int>(KeyframeIntervalMode::Seconds2));
+            keyframe_interval_combo_->addItem(QStringLiteral("1 s"), static_cast<int>(KeyframeIntervalMode::Seconds1));
+            keyframe_interval_combo_->addItem(QStringLiteral("0.5 s"),
+                                              static_cast<int>(KeyframeIntervalMode::Seconds0_5));
+            keyframe_interval_combo_->setFixedWidth(160);
+            keyframe_interval_combo_->setProperty("settingsRowInput", true);
+            kihl->addWidget(keyframe_interval_combo_, 0, Qt::AlignVCenter);
+            kivl->addLayout(kihl);
+            ki_row->setProperty("settingsRow", true);
+            ki_row->setProperty("expertEdge", true);
+            fes_layout->addWidget(ki_row);
+        }
+
 #ifndef NDEBUG
         // --- Roadmap dummy rows (Debug only — hidden in Release builds) ---
         // These are real, enabled controls wired to nothing, used so the roadmap
@@ -2770,6 +2803,15 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             static_cast<recorder_core::FramePacingMode>(frame_pacing_combo_->itemData(idx).toInt());
         emitCurrentVideoSettings();
     });
+    if (keyframe_interval_combo_) {
+        connect(keyframe_interval_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+            if (idx < 0 || !keyframe_interval_combo_)
+                return;
+            video_settings_.keyframe_interval =
+                static_cast<KeyframeIntervalMode>(keyframe_interval_combo_->itemData(idx).toInt());
+            emitCurrentVideoSettings();
+        });
+    }
     connect(audio_codec_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigPage::onAudioCodecChanged);
     connect(profile_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -5050,6 +5092,20 @@ void ConfigPage::setRecordingControlsLocked(bool locked) {
     updateVideoColorRangeControl();
     // ADR 0035 Slice 2: frame-pacing combo honours the recording lock (never codec-gated).
     updateFramePacingControl();
+    // 0.9.0 S1: keyframe interval combo honours the recording lock.
+    if (keyframe_interval_combo_) {
+        {
+            const QSignalBlocker b(keyframe_interval_combo_);
+            const int idx = keyframe_interval_combo_->findData(static_cast<int>(video_settings_.keyframe_interval));
+            keyframe_interval_combo_->setCurrentIndex(idx >= 0 ? idx : 0 /* 2 s */);
+        }
+        keyframe_interval_combo_->setEnabled(enabled);
+        keyframe_interval_combo_->setToolTip(!enabled ? QStringLiteral("Cannot change during recording") : QString());
+        if (!enabled)
+            keyframe_interval_combo_->setCursor(Qt::ForbiddenCursor);
+        else
+            keyframe_interval_combo_->unsetCursor();
+    }
 
     quality_combo_->setEnabled(enabled);
     if (quality_preset_combo_)

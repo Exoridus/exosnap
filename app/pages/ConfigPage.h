@@ -501,6 +501,8 @@ class ConfigPage : public QWidget {
     // Frame pacing (ADR 0035 Slice 2): Smooth / Newest selector. Never gated.
     QWidget* frame_pacing_row_ = nullptr;
     QComboBox* frame_pacing_combo_ = nullptr;
+    // Keyframe interval (0.9.0 S1): 2 s / 1 s / 0.5 s. Expert only.
+    QComboBox* keyframe_interval_combo_ = nullptr;
 
     // PS-PHASE-C: Expert Audio section — mic gain, channel mode, bitrate, Opus params + placeholders.
     QWidget* audio_expert_section_ = nullptr;
