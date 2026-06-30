@@ -2,13 +2,13 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
   <metadata>
     <id>exosnap</id>
-    <version>0.7.0</version>
+    <version>0.8.1</version>
     <packageSourceUrl>https://github.com/Exoridus/exosnap/tree/main/packaging/chocolatey</packageSourceUrl>
     <owners>Codexo</owners>
     <title>ExoSnap</title>
     <authors>Codexo</authors>
     <projectUrl>https://github.com/Exoridus/exosnap</projectUrl>
-    <iconUrl>https://cdn.jsdelivr.net/gh/Exoridus/exosnap@v0.7.0/app/assets/brand/exosnap-logo.svg</iconUrl>
+    <iconUrl>https://cdn.jsdelivr.net/gh/Exoridus/exosnap@v0.8.1/app/assets/brand/exosnap-logo.svg</iconUrl>
     <copyright>Copyright 2026 Codexo</copyright>
     <licenseUrl>https://github.com/Exoridus/exosnap/blob/main/LICENSE</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
@@ -17,13 +17,13 @@
     <bugTrackerUrl>https://github.com/Exoridus/exosnap/issues</bugTrackerUrl>
     <tags>exosnap recorder screen-capture screen-recorder nvenc av1 webm mkv mp4 webcam diagnostics</tags>
     <summary>Windows-native screen / application / region recorder with an NVIDIA NVENC pipeline, multi-track audio, and diagnostics.</summary>
-    <releaseNotes>https://github.com/Exoridus/exosnap/releases/tag/v0.7.0</releaseNotes>
+    <releaseNotes>https://github.com/Exoridus/exosnap/releases/tag/v0.8.1</releaseNotes>
     <description><![CDATA[
 ExoSnap is a Windows-native screen / application / region recorder built around a
 high-performance NVIDIA NVENC pipeline, flexible container/codec profiles,
 multi-track audio routing, a webcam overlay, and built-in diagnostics.
 
-This package downloads and installs the official ExoSnap 0.7.0 MSI from the
+This package downloads and installs the official ExoSnap 0.8.1 MSI from the
 project's GitHub Release.
 
 ## Highlights
@@ -34,20 +34,22 @@ project's GitHub Release.
 * Containers: MKV (default), WebM, MP4. Audio: AAC-LC, Opus, PCM and FLAC (PCM and FLAC are MKV-only).
 * Webcam picture-in-picture overlay, recording presets, rebindable global hotkeys.
 * Diagnostics-first: invalid recordings are blocked before start.
-* **0.7.0 new:** HEVC video (NVENC) in MKV and MP4 (`hvc1`); 10-bit P010 output for HEVC Main10
-  and AV1 (SDR, no HDR transfer); BT.709 color metadata plus a selectable Y'CbCr color range
-  (Full/Limited); a modal recording-error dialog with an opt-in report; and a full v10 design
-  pass across the app, including a 4-card theme picker and single-click source selection.
+* **0.8 diagnostics:** a typed FixAction model (Auto/Assisted/External), a pre-flight readiness
+  gate that blocks misconfigured captures before start, live pipeline monitoring (frame drops,
+  A/V drift, disk-fill ETA), VRR-vs-CFR judder correlation, a post-flight report card, and
+  consent-gated in-app updates.
+* **0.8.1:** packaging-only fix — the MSI now ships the previously missing FFmpeg runtime DLLs,
+  so the installed app launches correctly (earlier MSI/Chocolatey installs crashed on start).
 
 ## Requirements
 
 * Windows 10/11 x64.
-* An NVIDIA GPU with supported NVENC (AMD/Intel/software encoding are not supported in 0.7.0).
+* An NVIDIA GPU with supported NVENC (AMD/Intel/software encoding are not supported in 0.8.1).
 * Microsoft Visual C++ 2022 x64 runtime.
 
 ## Pre-v1 notice
 
-ExoSnap 0.7.0 is a pre-v1 preview. Settings, preset, and recording-history file
+ExoSnap 0.8.1 is a pre-v1 preview. Settings, preset, and recording-history file
 formats are not frozen and may change incompatibly before 1.0.0.
 ]]></description>
     <!-- exosnap.exe and the shipped Qt6 DLLs link the dynamic MSVC runtime (/MD);
