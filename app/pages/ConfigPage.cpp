@@ -1696,108 +1696,9 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     // QWidget that is shown/hidden by updateExpertModeVisibility() together with the
     // developer card (same expert-mode gate, no per-card expander).
     // S5: Split controls collapsed into a SettingsPopoverRow inside the expert section.
-    split_expert_section_ = new QWidget(out_panel);
-    split_expert_section_->setObjectName(QStringLiteral("splitExpertSection"));
-    split_expert_section_->setVisible(false); // hidden until expert mode is on
-    {
-        auto* split_expert_layout = new QVBoxLayout(split_expert_section_);
-        split_expert_layout->setContentsMargins(0, 0, 0, 0);
-        split_expert_layout->setSpacing(8);
-
-        // --- Create all sub-controls first (objectNames + values preserved as before). ---
-        split_mode_combo_ = new QComboBox(split_expert_section_);
-        split_mode_combo_->setObjectName(QStringLiteral("splitModeCombo"));
-        split_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitRecordingMode::Off));
-        split_mode_combo_->addItem(QStringLiteral("Every 15 min"), static_cast<int>(SplitRecordingMode::Every15Min));
-        split_mode_combo_->addItem(QStringLiteral("Every 30 min"), static_cast<int>(SplitRecordingMode::Every30Min));
-        split_mode_combo_->addItem(QStringLiteral("Every 60 min"), static_cast<int>(SplitRecordingMode::Every60Min));
-        split_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitRecordingMode::Custom));
-        split_mode_combo_->setToolTip(
-            QStringLiteral("Automatically start a new file at the chosen interval (manual splits always work)."));
-
-        split_custom_widget_ = new QWidget(split_expert_section_);
-        split_custom_widget_->setObjectName(QStringLiteral("splitCustomWidget"));
-        auto* split_custom_layout = new QHBoxLayout(split_custom_widget_);
-        split_custom_layout->setContentsMargins(0, 0, 0, 0);
-        split_custom_layout->setSpacing(8);
-        auto* split_every_label = new QLabel(QStringLiteral("Every"), split_custom_widget_);
-        split_every_label->setProperty("labelRole", "settingsRowLabel");
-        split_custom_minutes_spin_ = new QSpinBox(split_custom_widget_);
-        split_custom_minutes_spin_->setObjectName(QStringLiteral("splitCustomMinutesSpin"));
-        split_custom_minutes_spin_->setRange(static_cast<int>(SplitRecordingSettings::kMinMinutes),
-                                             static_cast<int>(SplitRecordingSettings::kMaxMinutes));
-        split_custom_minutes_spin_->setSuffix(QStringLiteral(" min"));
-        split_custom_minutes_spin_->setToolTip(QStringLiteral("Custom split interval (1 min – 24 h)"));
-        split_custom_layout->addWidget(split_every_label);
-        split_custom_layout->addWidget(split_custom_minutes_spin_);
-        split_custom_widget_->setVisible(false);
-
-        split_summary_label_ = makeHint(QString(), split_expert_section_);
-        split_summary_label_->setObjectName(QStringLiteral("splitSummaryLabel"));
-
-        split_size_mode_combo_ = new QComboBox(split_expert_section_);
-        split_size_mode_combo_->setObjectName(QStringLiteral("splitSizeModeCombo"));
-        split_size_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitSizeMode::Off));
-        split_size_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitSizeMode::Custom));
-        split_size_mode_combo_->setToolTip(
-            QStringLiteral("Automatically start a new file when the segment reaches the chosen size."));
-
-        split_size_custom_widget_ = new QWidget(split_expert_section_);
-        auto* split_size_custom_layout = new QHBoxLayout(split_size_custom_widget_);
-        split_size_custom_layout->setContentsMargins(0, 0, 0, 0);
-        split_size_custom_layout->setSpacing(8);
-        auto* split_size_label = new QLabel(QStringLiteral("Every"), split_size_custom_widget_);
-        split_size_label->setProperty("labelRole", "settingsRowLabel");
-        split_custom_size_spin_ = new QSpinBox(split_expert_section_);
-        split_custom_size_spin_->setObjectName(QStringLiteral("splitCustomSizeSpin"));
-        // kMaxSizeMb = 1024*1024 = 1048576 which fits in int (< 2147483647).
-        split_custom_size_spin_->setRange(static_cast<int>(SplitRecordingSettings::kMinSizeMb),
-                                          static_cast<int>(SplitRecordingSettings::kMaxSizeMb));
-        split_custom_size_spin_->setSuffix(QStringLiteral(" MB"));
-        split_custom_size_spin_->setToolTip(
-            QStringLiteral("Split segment size in MiB (50 MiB – 1 TiB). Whichever limit (time or size) "
-                           "is reached first triggers the split."));
-        split_size_custom_layout->addWidget(split_size_label);
-        split_size_custom_layout->addWidget(split_custom_size_spin_);
-        split_size_custom_widget_->setVisible(false);
-
-        // --- Build the popover row. ---
-        auto* split_popover_row =
-            new ui::widgets::SettingsPopoverRow(QStringLiteral("Automatic split"), split_expert_section_);
-        split_popover_row->setInfoHint(ui::hints::kSplitRecording);
-        split_expert_layout->addWidget(split_popover_row);
-
-        // "Split recording" sub-section inside the popover.
-        auto* pcl = split_popover_row->popoverContentLayout();
-
-        auto* time_lbl = makeOutputSubLabel(QStringLiteral("Split recording"), split_expert_section_);
-        pcl->addWidget(time_lbl);
-
-        auto* split_row = new QWidget(split_expert_section_);
-        auto* split_row_hl = new QHBoxLayout(split_row);
-        split_row_hl->setContentsMargins(0, 4, 0, 4);
-        split_row_hl->setSpacing(8);
-        split_row_hl->addWidget(split_mode_combo_, 0);
-        split_row_hl->addWidget(split_custom_widget_, 0);
-        split_row_hl->addStretch();
-        pcl->addWidget(split_row);
-        pcl->addWidget(split_summary_label_);
-
-        // "Split by size" sub-section inside the popover.
-        auto* size_lbl = makeOutputSubLabel(QStringLiteral("Split by size"), split_expert_section_);
-        pcl->addWidget(size_lbl);
-
-        auto* split_size_row = new QWidget(split_expert_section_);
-        auto* split_size_row_hl = new QHBoxLayout(split_size_row);
-        split_size_row_hl->setContentsMargins(0, 4, 0, 4);
-        split_size_row_hl->setSpacing(8);
-        split_size_row_hl->addWidget(split_size_mode_combo_, 0);
-        split_size_row_hl->addWidget(split_size_custom_widget_, 0);
-        split_size_row_hl->addStretch();
-        pcl->addWidget(split_size_row);
-    }
-
-    out_panel_layout->addWidget(split_expert_section_);
+    // Split recording (expert-gated) — built lazily on first expert-enable.
+    // Record the slot so the lazy build inserts it before the output-split field.
+    split_expert_insert_index_ = out_panel_layout->count();
 
     auto* output_split = new QWidget(out_panel);
     output_split_layout_ = new QHBoxLayout(output_split);
@@ -2312,20 +2213,7 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
             return;
         onOutputResolutionSelected(output_res_combo_->itemData(index).toInt());
     });
-    connect(split_mode_combo_, &QComboBox::currentIndexChanged, this, &ConfigPage::onSplitModeChanged);
-    connect(split_custom_minutes_spin_, &QSpinBox::valueChanged, this, [this](int minutes) {
-        format_settings_.split.custom_minutes = static_cast<uint32_t>(minutes);
-        SanitizeSplitSettings(format_settings_.split);
-        updateSplitSelection();
-        emitCurrentFormatSettings();
-    });
-    connect(split_size_mode_combo_, &QComboBox::currentIndexChanged, this, &ConfigPage::onSplitSizeModeChanged);
-    connect(split_custom_size_spin_, &QSpinBox::valueChanged, this, [this](int size_mb) {
-        format_settings_.split.custom_size_mb = static_cast<uint32_t>(size_mb);
-        SanitizeSplitSettings(format_settings_.split);
-        updateSplitSizeSelection();
-        emitCurrentFormatSettings();
-    });
+    // Split connects live in buildSplitExpertSection() (lazy build).
     connect(custom_width_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &ConfigPage::onCustomWidthChanged);
     connect(custom_height_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this, &ConfigPage::onCustomHeightChanged);
     connect(cursor_check_, &QAbstractButton::toggled, this, &ConfigPage::onCursorChanged);
@@ -4588,7 +4476,139 @@ void ConfigPage::buildAudioExpertSection() {
     });
 }
 
+// Startup-perf: the split-recording expert subtree is built on first expert-enable.
+void ConfigPage::buildSplitExpertSection() {
+    if (split_expert_built_)
+        return;
+    split_expert_built_ = true;
+    QWidget* out_panel = out_panel_; // alias: moved construction references it
+    split_expert_section_ = new QWidget(out_panel);
+    split_expert_section_->setObjectName(QStringLiteral("splitExpertSection"));
+    split_expert_section_->setVisible(false); // hidden until expert mode is on
+    {
+        auto* split_expert_layout = new QVBoxLayout(split_expert_section_);
+        split_expert_layout->setContentsMargins(0, 0, 0, 0);
+        split_expert_layout->setSpacing(8);
+
+        // --- Create all sub-controls first (objectNames + values preserved as before). ---
+        split_mode_combo_ = new QComboBox(split_expert_section_);
+        split_mode_combo_->setObjectName(QStringLiteral("splitModeCombo"));
+        split_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitRecordingMode::Off));
+        split_mode_combo_->addItem(QStringLiteral("Every 15 min"), static_cast<int>(SplitRecordingMode::Every15Min));
+        split_mode_combo_->addItem(QStringLiteral("Every 30 min"), static_cast<int>(SplitRecordingMode::Every30Min));
+        split_mode_combo_->addItem(QStringLiteral("Every 60 min"), static_cast<int>(SplitRecordingMode::Every60Min));
+        split_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitRecordingMode::Custom));
+        split_mode_combo_->setToolTip(
+            QStringLiteral("Automatically start a new file at the chosen interval (manual splits always work)."));
+
+        split_custom_widget_ = new QWidget(split_expert_section_);
+        split_custom_widget_->setObjectName(QStringLiteral("splitCustomWidget"));
+        auto* split_custom_layout = new QHBoxLayout(split_custom_widget_);
+        split_custom_layout->setContentsMargins(0, 0, 0, 0);
+        split_custom_layout->setSpacing(8);
+        auto* split_every_label = new QLabel(QStringLiteral("Every"), split_custom_widget_);
+        split_every_label->setProperty("labelRole", "settingsRowLabel");
+        split_custom_minutes_spin_ = new QSpinBox(split_custom_widget_);
+        split_custom_minutes_spin_->setObjectName(QStringLiteral("splitCustomMinutesSpin"));
+        split_custom_minutes_spin_->setRange(static_cast<int>(SplitRecordingSettings::kMinMinutes),
+                                             static_cast<int>(SplitRecordingSettings::kMaxMinutes));
+        split_custom_minutes_spin_->setSuffix(QStringLiteral(" min"));
+        split_custom_minutes_spin_->setToolTip(QStringLiteral("Custom split interval (1 min – 24 h)"));
+        split_custom_layout->addWidget(split_every_label);
+        split_custom_layout->addWidget(split_custom_minutes_spin_);
+        split_custom_widget_->setVisible(false);
+
+        split_summary_label_ = makeHint(QString(), split_expert_section_);
+        split_summary_label_->setObjectName(QStringLiteral("splitSummaryLabel"));
+
+        split_size_mode_combo_ = new QComboBox(split_expert_section_);
+        split_size_mode_combo_->setObjectName(QStringLiteral("splitSizeModeCombo"));
+        split_size_mode_combo_->addItem(QStringLiteral("Off"), static_cast<int>(SplitSizeMode::Off));
+        split_size_mode_combo_->addItem(QStringLiteral("Custom"), static_cast<int>(SplitSizeMode::Custom));
+        split_size_mode_combo_->setToolTip(
+            QStringLiteral("Automatically start a new file when the segment reaches the chosen size."));
+
+        split_size_custom_widget_ = new QWidget(split_expert_section_);
+        auto* split_size_custom_layout = new QHBoxLayout(split_size_custom_widget_);
+        split_size_custom_layout->setContentsMargins(0, 0, 0, 0);
+        split_size_custom_layout->setSpacing(8);
+        auto* split_size_label = new QLabel(QStringLiteral("Every"), split_size_custom_widget_);
+        split_size_label->setProperty("labelRole", "settingsRowLabel");
+        split_custom_size_spin_ = new QSpinBox(split_expert_section_);
+        split_custom_size_spin_->setObjectName(QStringLiteral("splitCustomSizeSpin"));
+        // kMaxSizeMb = 1024*1024 = 1048576 which fits in int (< 2147483647).
+        split_custom_size_spin_->setRange(static_cast<int>(SplitRecordingSettings::kMinSizeMb),
+                                          static_cast<int>(SplitRecordingSettings::kMaxSizeMb));
+        split_custom_size_spin_->setSuffix(QStringLiteral(" MB"));
+        split_custom_size_spin_->setToolTip(
+            QStringLiteral("Split segment size in MiB (50 MiB – 1 TiB). Whichever limit (time or size) "
+                           "is reached first triggers the split."));
+        split_size_custom_layout->addWidget(split_size_label);
+        split_size_custom_layout->addWidget(split_custom_size_spin_);
+        split_size_custom_widget_->setVisible(false);
+
+        // --- Build the popover row. ---
+        auto* split_popover_row =
+            new ui::widgets::SettingsPopoverRow(QStringLiteral("Automatic split"), split_expert_section_);
+        split_popover_row->setInfoHint(ui::hints::kSplitRecording);
+        split_expert_layout->addWidget(split_popover_row);
+
+        // "Split recording" sub-section inside the popover.
+        auto* pcl = split_popover_row->popoverContentLayout();
+
+        auto* time_lbl = makeOutputSubLabel(QStringLiteral("Split recording"), split_expert_section_);
+        pcl->addWidget(time_lbl);
+
+        auto* split_row = new QWidget(split_expert_section_);
+        auto* split_row_hl = new QHBoxLayout(split_row);
+        split_row_hl->setContentsMargins(0, 4, 0, 4);
+        split_row_hl->setSpacing(8);
+        split_row_hl->addWidget(split_mode_combo_, 0);
+        split_row_hl->addWidget(split_custom_widget_, 0);
+        split_row_hl->addStretch();
+        pcl->addWidget(split_row);
+        pcl->addWidget(split_summary_label_);
+
+        // "Split by size" sub-section inside the popover.
+        auto* size_lbl = makeOutputSubLabel(QStringLiteral("Split by size"), split_expert_section_);
+        pcl->addWidget(size_lbl);
+
+        auto* split_size_row = new QWidget(split_expert_section_);
+        auto* split_size_row_hl = new QHBoxLayout(split_size_row);
+        split_size_row_hl->setContentsMargins(0, 4, 0, 4);
+        split_size_row_hl->setSpacing(8);
+        split_size_row_hl->addWidget(split_size_mode_combo_, 0);
+        split_size_row_hl->addWidget(split_size_custom_widget_, 0);
+        split_size_row_hl->addStretch();
+        pcl->addWidget(split_size_row);
+    }
+    if (auto* out_panel_layout = qobject_cast<QVBoxLayout*>(out_panel_->layout())) {
+        out_panel_layout->insertWidget(split_expert_insert_index_, split_expert_section_);
+    }
+
+    connect(split_mode_combo_, &QComboBox::currentIndexChanged, this, &ConfigPage::onSplitModeChanged);
+    connect(split_custom_minutes_spin_, &QSpinBox::valueChanged, this, [this](int minutes) {
+        format_settings_.split.custom_minutes = static_cast<uint32_t>(minutes);
+        SanitizeSplitSettings(format_settings_.split);
+        updateSplitSelection();
+        emitCurrentFormatSettings();
+    });
+    connect(split_size_mode_combo_, &QComboBox::currentIndexChanged, this, &ConfigPage::onSplitSizeModeChanged);
+    connect(split_custom_size_spin_, &QSpinBox::valueChanged, this, [this](int size_mb) {
+        format_settings_.split.custom_size_mb = static_cast<uint32_t>(size_mb);
+        SanitizeSplitSettings(format_settings_.split);
+        updateSplitSizeSelection();
+        emitCurrentFormatSettings();
+    });
+
+    // Seed the freshly built split controls from the current settings.
+    updateSplitSelection();
+}
+
 void ConfigPage::updateExpertModeVisibility() {
+    if (expert_mode_enabled_ && !split_expert_built_) {
+        buildSplitExpertSection();
+    }
     // startup-perf: lazily build the heavy audio expert subtree the first time
     // expert mode turns on, before the re-seed block below repopulates it.
     if (expert_mode_enabled_ && !audio_expert_built_) {

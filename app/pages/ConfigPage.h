@@ -291,6 +291,7 @@ class ConfigPage : public QWidget {
     // Startup-perf: builds the heavy Expert audio subtree on first expert-enable
     // (eager-then-hidden cost kept off the default ConfigPage construction path).
     void buildAudioExpertSection();
+    void buildSplitExpertSection();
 
     capability::AudioUiState audio_ui_state_;
     WebcamSettings webcam_settings_;
@@ -436,7 +437,10 @@ class ConfigPage : public QWidget {
     QWidget* expert_warn_banner_ = nullptr; // amber banner above grid, visible only in expert mode
     bool expert_mode_enabled_ = false;
     // Wave 2: split recording controls moved out of expander; now expert-gated section.
+    // Lazily built on first expert-enable (see buildSplitExpertSection).
     QWidget* split_expert_section_ = nullptr;
+    bool split_expert_built_ = false;
+    int split_expert_insert_index_ = -1;
 
     // Wave 2: Part B — CQ precision spinbox row.
     QWidget* quality_expert_widget_ = nullptr; // CQ spinbox row shown in expert mode
