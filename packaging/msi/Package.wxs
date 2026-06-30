@@ -7,15 +7,21 @@
     UpgradeCode: 8988DAFC-3AE4-4788-BA6D-62E3F73C7A7D (permanent — ADR 0034, NEVER CHANGE)
     ProductCode is auto-generated per build (*).
 
-    Files are auto-harvested from the pruned CMake install staging tree ($(var.StagingDir)).
-    The previous hand-maintained <Component>/<File> list has been eliminated; all binaries,
-    DLLs, plugins/, and licenses/ are picked up automatically — including any FFmpeg DLLs
-    (avformat-62, avcodec-62, avutil-60, swresample-6), dxcompiler.dll, dxil.dll,
-    D3Dcompiler_47.dll, and crashpad_handler.exe (when present) — so the MSI never drifts
-    from the portable ZIP contents again.
+    File list is NOT hand-maintained here. The release script
+    (scripts/build-release-artifacts.ps1) generates a companion WXS fragment
+    (_harvest.wxs) from the pruned CMake install staging tree and passes both
+    files to `wix build`. The fragment defines:
+      - the subdirectory hierarchy (plugins/, licenses/, …) under INSTALLFOLDER
+      - one <Component>/<File> per staged file
+      - a master <ComponentGroup Id="StagingFiles"> that this Feature references
 
-    The build script passes -d StagingDir=<pruned staging tree root>, which is the same
-    source used for the portable ZIP (already audited and pruned by the release script).
+    This means the MSI and the portable ZIP are always derived from the same
+    source (the cmake install staging tree), so FFmpeg DLLs, dxcompiler.dll,
+    dxil.dll, and any future runtime DLL added by a cmake install rule are
+    automatically included in both artifacts — no per-file maintenance needed.
+
+    The build script also runs a post-build MSI content assertion (msiexec /a
+    extraction) to catch any drift before a release can ship.
 
     User data is NOT installed or removed by this MSI.
   -->
@@ -33,22 +39,13 @@
 
     <Media Id="1" Cabinet="exosnap.cab" EmbedCab="yes" />
 
-    <!-- Directory skeleton: %ProgramFiles%\Codexo\ExoSnap\ -->
+    <!-- Install-root directory skeleton.
+         Subdirectories (plugins/, licenses/, …) are defined by _harvest.wxs. -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="ManufacturerFolder" Name="Codexo">
         <Directory Id="INSTALLFOLDER" Name="ExoSnap" />
       </Directory>
     </StandardDirectory>
-
-    <!--
-      Auto-harvest: every file in the pruned CMake staging tree is installed into
-      INSTALLFOLDER, preserving the relative directory structure (plugins/, licenses/).
-      WiX v4 <Files> creates one Component per file with auto-generated stable GUIDs.
-      No per-file maintenance needed; new runtime DLLs are included automatically.
-    -->
-    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
-      <Files Include="$(var.StagingDir)\**" />
-    </ComponentGroup>
 
     <!-- Start Menu shortcut (all-users, per-machine) — stable Guid per ADR 0034 -->
     <StandardDirectory Id="ProgramMenuFolder">
@@ -74,14 +71,16 @@
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPNOREPAIR" Value="0" />
 
-    <!-- Feature tree -->
+    <!-- Feature tree.
+         StagingFiles is the master ComponentGroup defined in _harvest.wxs;
+         it aggregates every file in the pruned cmake staging tree. -->
     <Feature Id="MainFeature"
              Title="ExoSnap"
              Level="1"
              ConfigurableDirectory="INSTALLFOLDER"
              Display="expand"
              Description="ExoSnap recording application">
-      <ComponentGroupRef Id="AppFiles" />
+      <ComponentGroupRef Id="StagingFiles" />
       <ComponentRef Id="StartMenuShortcut" />
     </Feature>
 

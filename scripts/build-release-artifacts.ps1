@@ -250,6 +250,157 @@ function Test-RuntimeDependencies {
 
 # Run a native command with a lightweight elapsed-seconds heartbeat so long
 # build/install steps visibly progress. Streams output; throws on nonzero exit.
+# ---------------------------------------------------------------------------
+# MSI harvest-fragment generator
+#
+# WiX v4 does not support the <Files> glob element (that is a WiX v5 feature),
+# and WiX v4's CLI has no harvest sub-command. Instead, the release script
+# generates a WXS fragment at build time from the pruned staging tree and passes
+# it alongside Package.wxs to `wix build`.
+#
+# The generated fragment contains:
+#   - A <DirectoryRef Id="INSTALLFOLDER"> block that defines the subdirectory
+#     hierarchy (plugins/, licenses/, …) exactly as they appear in the staging tree
+#   - One <ComponentGroup Id="StagingFiles_<dir>"> per staging subdirectory,
+#     each containing one <Component>/<File> per file in that directory
+#   - A master <ComponentGroup Id="StagingFiles"> that aggregates all per-dir
+#     groups via <ComponentGroupRef> elements — this is the ID referenced from
+#     Package.wxs's <Feature>
+#
+# Result: the MSI and the portable ZIP are always derived from the same source
+# (the pruned cmake --install staging tree). FFmpeg DLLs, dxcompiler.dll,
+# dxil.dll, crashpad_handler.exe (when present), and any future runtime DLL
+# added by a cmake install rule are automatically included in both artifacts.
+# ---------------------------------------------------------------------------
+function New-WixHarvestFragment {
+    param(
+        [string]$StagingRoot,   # Pruned staging tree root (the directory to harvest)
+        [string]$OutputPath     # Path for the generated .wxs fragment
+    )
+
+    # Convert a relative file/directory path to a valid WiX element ID.
+    # WiX IDs: letters, digits, underscores, dots; must not start with a digit.
+    function local:To-WixId([string]$Path) {
+        $id = $Path -replace '[^A-Za-z0-9_.]', '_'
+        if ($id -match '^\d') { $id = "_$id" }
+        return $id
+    }
+
+    # Recursive helper: emit <Directory> elements for direct children of $ParentRel,
+    # then recurse into each child. Returns an array of XML line strings.
+    function local:Get-DirXmlLines([string]$ParentRel, [hashtable]$ChildMap, [int]$Depth) {
+        $result = [System.Collections.Generic.List[string]]::new()
+        if (-not $ChildMap.ContainsKey($ParentRel)) { return $result }
+        $ind = '      ' + ('  ' * $Depth)
+        foreach ($childRel in ($ChildMap[$ParentRel] | Sort-Object)) {
+            $dirName = [System.IO.Path]::GetFileName($childRel)
+            $dirId   = 'dir_' + (To-WixId $childRel)
+            $result.Add("$ind<Directory Id=`"$dirId`" Name=`"$dirName`">") | Out-Null
+            foreach ($line in (Get-DirXmlLines $childRel $ChildMap ($Depth + 1))) {
+                $result.Add($line) | Out-Null
+            }
+            $result.Add("$ind</Directory>") | Out-Null
+        }
+        return $result
+    }
+
+    # Enumerate all files, sorted by relative path for determinism.
+    $allFiles = Get-ChildItem -LiteralPath $StagingRoot -Recurse -File |
+        Sort-Object { $_.FullName.Substring($StagingRoot.Length + 1) }
+
+    # Group files by relative directory path. '' = staging root.
+    $filesByDir = [System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]]::new([StringComparer]::OrdinalIgnoreCase)
+    # allDirRels: all unique non-root directories in the staging tree
+    $allDirRels = [System.Collections.Generic.SortedSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($f in $allFiles) {
+        $relPath = $f.FullName.Substring($StagingRoot.Length + 1)
+        $dirRel  = [System.IO.Path]::GetDirectoryName($relPath)
+        if ($null -eq $dirRel -or $dirRel -eq '') { $dirRel = '' }
+
+        if (-not $filesByDir.ContainsKey($dirRel)) {
+            $filesByDir[$dirRel] = [System.Collections.Generic.List[string]]::new()
+        }
+        $filesByDir[$dirRel].Add($f.FullName) | Out-Null
+
+        # Register all ancestor directories so the hierarchy is complete.
+        $d = $dirRel
+        while ($d -ne '') {
+            $allDirRels.Add($d) | Out-Null
+            $d = [System.IO.Path]::GetDirectoryName($d)
+            if ($null -eq $d) { $d = '' }
+        }
+    }
+
+    # Build parent -> direct-children map (key '' = INSTALLFOLDER).
+    $childMap = [System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]]::new([StringComparer]::OrdinalIgnoreCase)
+    $childMap[''] = [System.Collections.Generic.List[string]]::new()
+    foreach ($d in $allDirRels) {
+        $parent = [System.IO.Path]::GetDirectoryName($d)
+        if ($null -eq $parent) { $parent = '' }
+        # Only add as child if it is a direct child (no extra separator in suffix)
+        $suffix = if ($parent -eq '') { $d } else { $d.Substring($parent.Length + 1) }
+        if ($suffix -notmatch '\\') {
+            if (-not $childMap.ContainsKey($parent)) {
+                $childMap[$parent] = [System.Collections.Generic.List[string]]::new()
+            }
+            $childMap[$parent].Add($d) | Out-Null
+        }
+    }
+
+    # Build the fragment XML line by line.
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add('<?xml version="1.0" encoding="utf-8"?>') | Out-Null
+    $lines.Add('<!-- AUTO-GENERATED by build-release-artifacts.ps1 — DO NOT EDIT BY HAND -->') | Out-Null
+    $lines.Add('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">') | Out-Null
+    $lines.Add('  <Fragment>') | Out-Null
+
+    # ---- 1. Subdirectory definitions (nested under INSTALLFOLDER) ----
+    $dirXml = Get-DirXmlLines '' $childMap 0
+    if ($dirXml.Count -gt 0) {
+        $lines.Add('    <!-- Subdirectory hierarchy: plugins/, licenses/, ... -->') | Out-Null
+        $lines.Add('    <DirectoryRef Id="INSTALLFOLDER">') | Out-Null
+        foreach ($l in $dirXml) { $lines.Add($l) | Out-Null }
+        $lines.Add('    </DirectoryRef>') | Out-Null
+    }
+
+    # ---- 2. Per-directory component groups ----
+    $groupIds = [System.Collections.Generic.List[string]]::new()
+    foreach ($dirRel in ($filesByDir.Keys | Sort-Object)) {
+        $isRoot  = ($dirRel -eq '')
+        $dirId   = if ($isRoot) { 'INSTALLFOLDER' } else { 'dir_' + (To-WixId $dirRel) }
+        $suffix  = if ($isRoot) { 'root' } else { To-WixId $dirRel }
+        $groupId = "StagingFiles_$suffix"
+        $groupIds.Add($groupId) | Out-Null
+
+        $lines.Add("    <ComponentGroup Id=`"$groupId`" Directory=`"$dirId`">") | Out-Null
+        foreach ($fullPath in $filesByDir[$dirRel]) {
+            $relPath = $fullPath.Substring($StagingRoot.Length + 1)
+            $compId  = 'comp_' + (To-WixId $relPath)
+            # XML-escape the source path (backslash is fine in XML; escape only & < > ")
+            $srcAttr = $fullPath -replace '&', '&amp;' -replace '"', '&quot;'
+            $lines.Add("      <Component Id=`"$compId`" Guid=`"*`">") | Out-Null
+            $lines.Add("        <File Source=`"$srcAttr`" KeyPath=`"yes`" />") | Out-Null
+            $lines.Add("      </Component>") | Out-Null
+        }
+        $lines.Add("    </ComponentGroup>") | Out-Null
+    }
+
+    # ---- 3. Master component group (referenced from Package.wxs Feature) ----
+    $lines.Add('    <!-- Master group: aggregates all per-directory groups -->') | Out-Null
+    $lines.Add('    <ComponentGroup Id="StagingFiles">') | Out-Null
+    foreach ($gid in $groupIds) {
+        $lines.Add("      <ComponentGroupRef Id=`"$gid`" />") | Out-Null
+    }
+    $lines.Add('    </ComponentGroup>') | Out-Null
+
+    $lines.Add('  </Fragment>') | Out-Null
+    $lines.Add('</Wix>') | Out-Null
+
+    ($lines -join "`n") | Set-Content -LiteralPath $OutputPath -Encoding utf8NoBOM
+    Write-Host "  Generated harvest fragment: $($allFiles.Count) files in $($filesByDir.Count) directories → $OutputPath"
+}
+
 function Invoke-Heartbeat {
     param([string]$Name, [string]$FilePath, [string[]]$Arguments)
 
@@ -507,16 +658,23 @@ if (-not $SkipMsi) {
         }
         else {
             try {
-                # StagingDir is the pruned CMake install tree (same source as the portable ZIP).
-                # The WXS uses <Files Include="$(var.StagingDir)\**"> to auto-harvest everything,
-                # so no IncludeCrashpad conditional is needed — crashpad_handler.exe is included
-                # iff it is present in the staging tree, just like in the portable ZIP.
+                # Generate _harvest.wxs from the pruned CMake install staging tree.
+                # WiX v4 has no built-in harvest command and does not support the
+                # <Files> glob element (that is a WiX v5 feature), so we generate a
+                # standard WXS fragment here at script runtime and pass it alongside
+                # Package.wxs to `wix build`.  This ensures the MSI and the portable
+                # ZIP are always derived from the same source (the staging tree), so
+                # FFmpeg DLLs, dxcompiler.dll, dxil.dll, and any future runtime DLL
+                # added by a cmake install rule are automatically included in both.
+                $harvestWxsPath = Join-Path $ReleaseDir '_harvest.wxs'
+                New-WixHarvestFragment -StagingRoot $PackageRoot -OutputPath $harvestWxsPath
+
                 $msiArgs = @(
                     'build', '-arch', 'x64',
                     '-o', $MsiPath,
-                    '-d', "StagingDir=$PackageRoot",
                     '-d', "ProductVersion=$Version",
-                    $wxsPath
+                    $wxsPath,
+                    $harvestWxsPath
                 )
                 Invoke-Heartbeat -Name 'wix build' -FilePath 'wix' -Arguments $msiArgs
 
