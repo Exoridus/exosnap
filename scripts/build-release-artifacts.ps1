@@ -507,16 +507,15 @@ if (-not $SkipMsi) {
         }
         else {
             try {
-                # IncludeCrashpad mirrors the staging tree: only emit the
-                # crashpad_handler.exe component when the ON build produced it,
-                # so `wix build` never references a missing source file.
-                $includeCrashpadValue = if ($IncludeCrashpad) { 'yes' } else { 'no' }
+                # StagingDir is the pruned CMake install tree (same source as the portable ZIP).
+                # The WXS uses <Files Include="$(var.StagingDir)\**"> to auto-harvest everything,
+                # so no IncludeCrashpad conditional is needed — crashpad_handler.exe is included
+                # iff it is present in the staging tree, just like in the portable ZIP.
                 $msiArgs = @(
                     'build', '-arch', 'x64',
                     '-o', $MsiPath,
                     '-d', "StagingDir=$PackageRoot",
                     '-d', "ProductVersion=$Version",
-                    '-d', "IncludeCrashpad=$includeCrashpadValue",
                     $wxsPath
                 )
                 Invoke-Heartbeat -Name 'wix build' -FilePath 'wix' -Arguments $msiArgs
@@ -526,6 +525,60 @@ if (-not $SkipMsi) {
                     Set-Content -LiteralPath $MsiShaPath -Value "$msiSha  $MsiPackageName.msi" -NoNewline -Encoding ascii
                     Write-Host "  MSI SHA-256: $msiSha"
                     $msiBuilt = $true
+
+                    # -----------------------------------------------------------------------
+                    # Defense-in-depth: assert MSI contains every staging binary.
+                    #
+                    # Administratively extract the built MSI into a temp dir and verify that
+                    # every *.exe and *.dll under the staging tree is present in the MSI.
+                    # Any staging binary absent from the MSI fails the release build.
+                    # -----------------------------------------------------------------------
+                    Write-Step "Asserting MSI content matches staging tree (msiexec /a extraction)"
+                    $msiExtractDir = Join-Path ([System.IO.Path]::GetTempPath()) ("exosnap-msi-verify-$PID")
+                    try {
+                        New-Item -ItemType Directory -Path $msiExtractDir -Force | Out-Null
+
+                        # msiexec /a performs an administrative install (no UAC, no registry
+                        # changes) that unpacks all MSI files into TARGETDIR, preserving the
+                        # relative directory structure.
+                        $extractArgs = "/a `"$MsiPath`" /qn TARGETDIR=`"$msiExtractDir`""
+                        $extractProc = Start-Process msiexec.exe -ArgumentList $extractArgs -Wait -PassThru -NoNewWindow
+                        if ($extractProc.ExitCode -ne 0) {
+                            Add-Error "MSI content assertion: msiexec /a extraction failed (exit $($extractProc.ExitCode)) — cannot verify MSI contents"
+                        }
+                        else {
+                            # Collect all *.dll and *.exe in the staging tree (by name).
+                            $stagingBinaries = Get-ChildItem -LiteralPath $PackageRoot -Recurse -Include '*.dll', '*.exe'
+
+                            # Collect all files extracted from the MSI (any depth) into a name set.
+                            $extractedNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+                            Get-ChildItem -LiteralPath $msiExtractDir -Recurse -File |
+                                ForEach-Object { [void]$extractedNames.Add($_.Name) }
+
+                            $missingCount = 0
+                            foreach ($bin in $stagingBinaries) {
+                                if (-not $extractedNames.Contains($bin.Name)) {
+                                    Add-Error "MSI content assertion FAILED: staging binary not in MSI: $($bin.FullName.Substring($PackageRoot.Length + 1))"
+                                    $missingCount++
+                                }
+                            }
+
+                            if ($missingCount -eq 0) {
+                                Write-Host "  MSI content assertion PASSED: all $($stagingBinaries.Count) staging binaries present in extracted MSI."
+
+                                # Print DLL evidence for release log visibility.
+                                Write-Host "  Extracted DLLs:"
+                                Get-ChildItem -LiteralPath $msiExtractDir -Recurse -Filter '*.dll' |
+                                    Sort-Object Name |
+                                    ForEach-Object { Write-Host "    $($_.Name)" }
+                            }
+                        }
+                    }
+                    finally {
+                        if (Test-Path -LiteralPath $msiExtractDir) {
+                            Remove-Item -LiteralPath $msiExtractDir -Recurse -Force -ErrorAction SilentlyContinue
+                        }
+                    }
                 }
                 else {
                     Add-Error "MSI: build did not produce output file"
