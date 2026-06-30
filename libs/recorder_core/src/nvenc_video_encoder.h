@@ -31,6 +31,15 @@ class NvencVideoEncoder : public IVideoEncoder {
         m_nvenc.SetRateControl(mode, bitrate_kbps);
     }
 
+    // Set keyframe interval in seconds before Configure().
+    // Controls gopLength and idrPeriod: gopLength = round(secs * fps).
+    // Default 2.0 s — matches the pre-0.9.0 hardcoded value.
+    // NOTE: video_thread.cpp must call this BEFORE Configure() for the value to take effect.
+    // The setter is wired here; the actual call is in video_thread.cpp (one line).
+    void SetKeyframeIntervalSecs(float secs) noexcept {
+        m_nvenc.SetKeyframeIntervalSecs(secs);
+    }
+
     bool Open(void* gpu_context, std::string& out_error) override;
     bool Configure(uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den,
                    std::string& out_error) override;

@@ -79,6 +79,15 @@ inline const QString kFrameTiming =
     QStringLiteral("CFR = constant frame rate for editor compatibility \xC2\xB7 VFR = variable");
 inline const QString kFramePacing =
     QStringLiteral("Smooth removes judder from high-refresh/VRR sources; Newest minimises latency");
+inline const QString kKeyframeInterval = QStringLiteral(
+    "Keyframe interval controls trim accuracy: "
+    "2\xC2\xA0s\xC2\xA0=\xC2\xA0"
+    "default (lower file size, 2-second trim grid) \xC2\xB7 "
+    "1\xC2\xA0s\xC2\xA0=\xC2\xA0"
+    "1-second trim grid \xC2\xB7 "
+    "0.5\xC2\xA0s\xC2\xA0=\xC2\xA0"
+    "finest trim accuracy (slightly larger files). "
+    "Shorter intervals produce more frequent keyframes \xe2\x80\x94 required for precise Quick Trim cuts.");
 
 // ---- Skipped (control does not exist in current UI) ----
 // kEncoderPreset         — NVENC P1–P7 (0.5 wave — no UI control yet)

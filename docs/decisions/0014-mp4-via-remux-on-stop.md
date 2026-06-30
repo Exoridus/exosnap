@@ -60,9 +60,12 @@ When the user selects MP4 as the output container, ExoSnap:
 1. Records to a transient MKV file (same recording path as for MKV output).
 2. On clean stop: remuxes the transient MKV to a progressive MP4 (faststart layout) via
    libavformat stream-copy. The remux runs as a background job with progress feedback to the UI.
-3. On remux success: deletes the transient MKV.
-4. On remux failure: retains the transient MKV and surfaces the error to the user (the MKV is
-   a valid, playable file).
+3. On remux success: **renames** the transient MKV to `<stem>.edit.mkv` (edit master companion
+   file) instead of deleting it. This companion file is the source for subsequent trim/remux
+   operations from the Edit/Export surface (ADR 0022). It is retained on disk alongside the MP4
+   output until the user explicitly removes it.
+4. On remux failure: retains the transient MKV under its original name and surfaces the error to
+   the user (the MKV is a valid, playable file).
 
 ### libavformat as remux and trim engine
 

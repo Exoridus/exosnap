@@ -36,12 +36,14 @@ static inline const char* av_err2str_cpp(int errnum) noexcept {
 #include "recorder_core/logging/logging.h"
 #include "recorder_core/mp4_remuxer.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <filesystem>
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace recorder_core {
 
@@ -124,8 +126,9 @@ struct RemuxOptions {
 
 // Generic internal stream-copy remux. Both RemuxToProgressiveMp4 and
 // RemuxToMkv delegate here. opts.format_name must not be nullptr.
+// tr is optional: TrimRange{} (both kNoTimestamp) means no trim.
 static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
-                                   RemuxProgressCallback progress_cb, const RemuxOptions& opts) {
+                                   RemuxProgressCallback progress_cb, const RemuxOptions& opts, TrimRange tr = {}) {
     const std::string in_str = input_path.string();
     const std::string out_str = output_path.string();
 
@@ -288,6 +291,31 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
     }
 
     // -----------------------------------------------------------------------
+    // 5b. Trim: seek to keyframe at/before start_us, identify video stream.
+    // -----------------------------------------------------------------------
+    // Find the first video stream index — needed for seek targeting and for
+    // the end-trim PTS comparison in the packet loop.
+    int video_stream_idx = -1;
+    for (unsigned i = 0; i < in_ctx->nb_streams; ++i) {
+        if (in_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            video_stream_idx = static_cast<int>(i);
+            break;
+        }
+    }
+
+    if (tr.HasStart()) {
+        // Seek to the keyframe at or before start_us.
+        // AVSEEK_FLAG_BACKWARD ensures we snap to the nearest preceding keyframe
+        // so the output starts on a clean keyframe boundary.
+        const int seek_ret = av_seek_frame(in_ctx, video_stream_idx, tr.start_us, AVSEEK_FLAG_BACKWARD);
+        if (seek_ret < 0) {
+            // Non-fatal: if seek fails, continue from the beginning.
+            std::string msg = std::string("av_seek_frame (trim start) failed: ") + av_err2str(seek_ret);
+            LogWarn(msg.c_str());
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // 6. Packet loop: stream-copy all packets
     // -----------------------------------------------------------------------
     PacketGuard pkt_guard{av_packet_alloc()};
@@ -298,6 +326,12 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
     AVPacket* const pkt = pkt_guard.pkt;
 
     bool cancelled = false;
+
+    // When trimming from the start: we might land on the keyframe just before
+    // start_us (due to AVSEEK_FLAG_BACKWARD). Non-keyframe video packets before
+    // start_us are skipped; keyframe packets at or after start_us are accepted.
+    // We track whether we have seen the first accepted keyframe yet.
+    bool trim_start_locked = !tr.HasStart(); // true = past the start boundary
 
     while (true) {
         int ret = av_read_frame(in_ctx, pkt);
@@ -319,6 +353,42 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
 
         AVStream* const in_st = in_ctx->streams[si];
         AVStream* const out_st = out_ctx->streams[si];
+
+        // ---------------------------------------------------------------
+        // Trim: start boundary — skip packets until we lock onto a keyframe.
+        // ---------------------------------------------------------------
+        if (!trim_start_locked && si == video_stream_idx) {
+            // We only accept video packets that are keyframes.
+            // Once we accept one, all subsequent packets (video + audio) pass.
+            if (pkt->pts != AV_NOPTS_VALUE) {
+                const int64_t pts_us = av_rescale_q(pkt->pts, in_st->time_base, {1, AV_TIME_BASE});
+                if ((pkt->flags & AV_PKT_FLAG_KEY) && pts_us >= tr.start_us - 1000000LL) {
+                    // Found the first keyframe at or after trim start — lock.
+                    trim_start_locked = true;
+                } else {
+                    av_packet_unref(pkt);
+                    continue;
+                }
+            } else {
+                av_packet_unref(pkt);
+                continue;
+            }
+        } else if (!trim_start_locked) {
+            // Audio/other streams before we've locked onto start keyframe: skip.
+            av_packet_unref(pkt);
+            continue;
+        }
+
+        // ---------------------------------------------------------------
+        // Trim: end boundary — stop when the video PTS exceeds end_us.
+        // ---------------------------------------------------------------
+        if (tr.HasEnd() && si == video_stream_idx && pkt->pts != AV_NOPTS_VALUE) {
+            const int64_t pts_us = av_rescale_q(pkt->pts, in_st->time_base, {1, AV_TIME_BASE});
+            if (pts_us >= tr.end_us) {
+                av_packet_unref(pkt);
+                break; // Past the end boundary — stop the copy loop.
+            }
+        }
 
         // Rescale timestamps from the input stream's time base to the output
         // stream's time base.
@@ -403,22 +473,100 @@ static RemuxResult RemuxStreamCopy(const std::filesystem::path& input_path, cons
 
 RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
                                   RemuxProgressCallback progress_cb) {
+    return RemuxToProgressiveMp4(input_path, output_path, std::move(progress_cb), TrimRange{});
+}
+
+RemuxResult RemuxToProgressiveMp4(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
+                                  RemuxProgressCallback progress_cb, TrimRange tr) {
     // movflags=+faststart: two-pass write that moves moov before mdat.
     static const char* const kMp4Opts[] = {"movflags", "+faststart", nullptr};
     RemuxOptions opts;
     opts.format_name = "mp4";
     opts.extra_opts = kMp4Opts;
-    return RemuxStreamCopy(input_path, output_path, std::move(progress_cb), opts);
+    return RemuxStreamCopy(input_path, output_path, std::move(progress_cb), opts, tr);
 }
 
 RemuxResult RemuxToMkv(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
                        RemuxProgressCallback progress_cb) {
+    return RemuxToMkv(input_path, output_path, std::move(progress_cb), TrimRange{});
+}
+
+RemuxResult RemuxToMkv(const std::filesystem::path& input_path, const std::filesystem::path& output_path,
+                       RemuxProgressCallback progress_cb, TrimRange tr) {
     // The matroska muxer writes Cues, SeekHead, and Duration at trailer time.
     // No extra options needed: libavformat defaults are correct for recovery MKV.
     RemuxOptions opts;
     opts.format_name = "matroska";
     opts.extra_opts = nullptr;
-    return RemuxStreamCopy(input_path, output_path, std::move(progress_cb), opts);
+    return RemuxStreamCopy(input_path, output_path, std::move(progress_cb), opts, tr);
+}
+
+std::vector<int64_t> ExtractKeyframeTimestamps(const std::filesystem::path& input_path) {
+    // Strategy: open the file, call avformat_find_stream_info (which reads the Matroska
+    // Cues track and populates the per-stream index), then read index entries for the
+    // video stream that are flagged AVINDEX_KEYFRAME.
+    //
+    // We use index entries (from Cues) rather than per-packet AV_PKT_FLAG_KEY because
+    // the H.264 / AV1 bitstream parsers can override the packet keyframe flag based on
+    // payload content.  Index entries come from the Cues track written by
+    // MatroskaStreamWriter and are reliable regardless of payload content.
+    //
+    // Log noise from codec probing of test fixtures (e.g. "Invalid NAL unit size") is
+    // suppressed during avformat_find_stream_info.
+
+    const std::string in_str = input_path.string();
+
+    AVFormatContext* ctx = nullptr;
+    if (avformat_open_input(&ctx, in_str.c_str(), nullptr, nullptr) < 0)
+        return {};
+    struct CtxGuard {
+        AVFormatContext* c;
+        ~CtxGuard() {
+            if (c)
+                avformat_close_input(&c);
+        }
+    } g{ctx};
+
+    // Suppress codec-probe noise (fake H.264/AV1 stubs generate "Invalid NAL" etc.)
+    const int saved_log = av_log_get_level();
+    av_log_set_level(AV_LOG_QUIET);
+    avformat_find_stream_info(ctx, nullptr); // initialises codec params
+
+    // FFmpeg's Matroska demuxer loads Cues lazily on the first seek.  Trigger that
+    // load now so avformat_index_get_entries_count returns the full keyframe list.
+    avformat_seek_file(ctx, -1, INT64_MIN, 0, INT64_MAX, 0);
+    av_log_set_level(saved_log);
+
+    // Find the first video stream.
+    int vs_idx = -1;
+    for (unsigned i = 0; i < ctx->nb_streams; ++i) {
+        if (ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            vs_idx = static_cast<int>(i);
+            break;
+        }
+    }
+    if (vs_idx < 0)
+        return {};
+
+    AVStream* const vs = ctx->streams[vs_idx];
+    const AVRational vs_tb = vs->time_base;
+    const int n_idx = avformat_index_get_entries_count(vs);
+
+    std::vector<int64_t> keyframes;
+    keyframes.reserve(static_cast<size_t>(n_idx));
+
+    for (int i = 0; i < n_idx; ++i) {
+        const AVIndexEntry* ie = avformat_index_get_entry(vs, i);
+        if (!ie)
+            break;
+        if (ie->flags & AVINDEX_KEYFRAME) {
+            const int64_t ts_us = av_rescale_q(ie->timestamp, vs_tb, {1, AV_TIME_BASE});
+            keyframes.push_back(ts_us);
+        }
+    }
+
+    std::sort(keyframes.begin(), keyframes.end());
+    return keyframes;
 }
 
 } // namespace recorder_core

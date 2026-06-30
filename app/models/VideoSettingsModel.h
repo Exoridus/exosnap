@@ -5,6 +5,14 @@
 
 namespace exosnap {
 
+// How frequently the encoder inserts an IDR (keyframe).  Shorter intervals
+// allow finer trim points in Quick Trim but slightly increase file size.
+enum class KeyframeIntervalMode {
+    Seconds2,   // 2 s — default; smaller GOP, slightly smaller files
+    Seconds1,   // 1 s — 1-second trim grid
+    Seconds0_5, // 0.5 s — finest trim accuracy, slightly larger files
+};
+
 struct VideoSettingsModel {
     recorder_core::NvencQualityPreset quality = recorder_core::NvencQualityPreset::Balanced;
     recorder_core::RateControlMode rate_control = recorder_core::RateControlMode::ConstantQuality;
@@ -14,6 +22,7 @@ struct VideoSettingsModel {
     bool capture_cursor = true;
     uint32_t frame_rate_num = 60;
     uint32_t frame_rate_den = 1;
+    KeyframeIntervalMode keyframe_interval = KeyframeIntervalMode::Seconds2; // default 2 s
 
     static VideoSettingsModel Defaults() {
         return {};

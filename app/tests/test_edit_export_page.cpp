@@ -118,10 +118,12 @@ TEST_F(EditExportPageTest, BackButtonTriggersSignal) {
     EXPECT_EQ(signal_count, 1);
 }
 
-TEST_F(EditExportPageTest, PlaceholderBannerPresent) {
+TEST_F(EditExportPageTest, PlaceholderBannerRemoved) {
+    // The 0.11 placeholder banner was removed in 0.9.0 when the real engine shipped.
+    // Verify it is no longer present in the widget tree.
     EditExportPage page;
     auto* banner = page.findChild<QFrame*>(QStringLiteral("editExportPlaceholderBanner"));
-    EXPECT_NE(banner, nullptr);
+    EXPECT_EQ(banner, nullptr);
 }
 
 TEST_F(EditExportPageTest, NavRemainsUnaffected) {

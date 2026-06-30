@@ -32,6 +32,9 @@
 // Full include required: RecordingErrorModel is passed by value in the recordingFailed signal.
 #include "../ui/dialogs/RecordingErrorPanel.h"
 
+// Full include required: EditContext is passed by value in the editExportRequested signal.
+#include "EditExportPage.h"
+
 class QAbstractButton;
 class QFrame;
 class QLabel;
@@ -186,10 +189,8 @@ class RecordPage : public QWidget {
     // When active=false both second values are 0.
     void countdownStateChanged(bool active, int remaining_seconds, int duration_seconds);
 
-    // PHASE-G-EDIT-EXPORT-R1: emitted when the user wants to edit/export a recording.
-    void editExportRequested(const QString& file_path, const QString& duration, const QString& size,
-                             const QString& resolution, const QString& fps, const QString& video_codec,
-                             const QString& audio_codec, const QString& container);
+    // PHASE-G-EDIT-EXPORT-R1: emitted when the user clicks Edit in the post-stop result row.
+    void editExportRequested(const exosnap::EditContext& ctx);
 
   public slots:
     void onHotkeyToggle();
@@ -365,6 +366,7 @@ class RecordPage : public QWidget {
     QPushButton* result_copy_path_btn_ = nullptr;
     QPushButton* result_rename_btn_ = nullptr;
     QPushButton* result_delete_btn_ = nullptr;
+    QPushButton* result_edit_btn_ = nullptr;
 
     // Inline rename overlay
     QWidget* rename_overlay_ = nullptr;

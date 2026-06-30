@@ -2,15 +2,14 @@
 
 ## Status
 
-Accepted — UI shell implemented in Production Suite wave (feat/production-suite-redesign).
-Engine implementation (Quick Trim, stream-copy remux, chapter export) deferred to 0.11.
+Accepted — UI shell implemented in Production Suite wave; engine implemented in 0.9.0 wave
+(Review post-flight report, Edit keyframe-accurate trim, Output real stream-copy export).
 
 ## Context
 
-After a recording stops, users need to decide what to do with the captured file: keep the MKV as-is,
-remux it to MP4 (stream-copy, no quality loss — ADR 0014), or re-encode to H.264+AAC (quality cost,
-wider compatibility). They may also want to review the recording and optionally trim it before
-exporting.
+After a recording stops, users need to decide what to do with the captured file: keep the MKV
+as-is, remux it to MP4 (stream-copy, no quality loss — ADR 0014), or review and optionally trim
+it before exporting.
 
 Several surface-shape options were considered:
 
@@ -32,40 +31,105 @@ phases stepped by a top stepper bar:
 Review → Edit → Output
 ```
 
-- **Review**: video player placeholder (0.11), timeline with waveform simulation, duration / size /
-  codec / container detail rail on the right.
-- **Edit**: Trim / Marker / Split Chapter controls (all disabled until 0.11 engine ships).
-- **Output**: three format cards (Keep MKV / Remux to MP4 / Re-encode H.264+AAC), destination row.
-  After clicking Export: Exporting phase (progress bar) → Done or Failed result panel.
+- **Review**: post-flight report (frame-drop %, peak A/V drift, pipeline health) populated from
+  `RecordingDiagnosticsSnapshot` and peak-drift tracking in `RecordPage`. Video player
+  placeholder (deferred to 0.11). Duration / size / codec / container detail rail on the right.
+- **Edit**: Trim / Marker controls (keyframe-accurate; spin-box dialog snaps to nearest keyframe
+  and nearest marker within 50 ms). Split Chapter button deferred to 0.11.
+- **Output**: container combo (MKV / MP4, both stream-copy / lossless) + save-mode combo
+  (new file = `<name>_edit.<ext>` / overwrite original = atomic rename). After clicking Export:
+  Exporting phase (real progress bar from `RemuxProgressCallback`) → Done or Failed result panel.
 
 ### Format / cost model
 
-| Option            | Mechanism    | Quality   | Speed    |
-|-------------------|-------------|-----------|----------|
-| Keep MKV          | no-op        | lossless  | instant  |
-| Remux to MP4      | stream-copy  | lossless  | instant  |
-| Re-encode H.264+AAC | transcode  | quality cost | ~3 min (estimate) |
+All export paths are stream-copy only. Re-encode is explicitly out of scope for the MVP.
 
-Stream-copy options use libavformat (ADR 0014 path). Re-encode uses the encoder factory (ADR
-0006/0011). The default selection is "Keep MKV" — the lowest-friction, zero-risk path.
+| Option       | Mechanism    | Quality   | Speed    |
+|--------------|-------------|-----------|----------|
+| MKV          | stream-copy  | lossless  | instant  |
+| MP4          | stream-copy  | lossless  | instant  |
+
+Stream-copy uses `RemuxToMkv` / `RemuxToProgressiveMp4` (ADR 0014 path, libavformat).
+
+### MKV edit master retention
+
+When the recording output is MP4 (remux-on-stop path), `RecordingCoordinator` renames the
+transient MKV to `<stem>.edit.mkv` instead of deleting it on remux success. This companion file
+is the edit master: it is used as the `input_path` for all subsequent trim/remux operations from
+`EditExportPage`. The path is forwarded to the UI as `UiRecordingResult::mkv_master_path` and
+stored in `EditContext::mkv_master_path`.
+
+For recordings where MKV is the primary output, `mkv_master_path` equals `output_path`.
+
+The `.edit.mkv` file is not surfaced to the user in the file browser (it is a companion file,
+not a final output). It remains on disk until the user explicitly deletes the recording or it is
+cleaned up by a future management UI.
+
+### Keyframe interval setting
+
+A "Keyframe interval" selector is exposed in Settings → Advanced → Video:
+
+| Value | GOP / IDR period | Trim grid |
+|-------|-----------------|-----------|
+| 2 s (default) | 120 frames at 60 fps | 2-second accuracy |
+| 1 s            | 60 frames            | 1-second accuracy |
+| 0.5 s          | 30 frames            | 0.5-second accuracy |
+
+The setting maps to `RecorderConfig::keyframe_interval_secs` → `SetKeyframeIntervalSecs()` on
+the NVENC encoder. Shorter intervals increase file size slightly and are recommended for users
+who clip frequently.
+
+### Trim implementation
+
+Trim uses `ExtractKeyframeTimestamps` to load all video keyframe PTS values from the MKV master,
+then snaps user-entered start/end seconds to the nearest keyframe at or before the requested
+time. An additional snap to the nearest marker within 50 ms is applied if any markers exist. The
+resulting `TrimRange` is passed to the trimmed overloads of `RemuxToProgressiveMp4` /
+`RemuxToMkv`.
+
+Trim is keyframe-accurate and lossless: no decoding occurs.
+
+### Marker sidecar — single canonical format and writer
+
+Recording markers are persisted as a JSON sidecar file (`<media>.markers.json`) alongside the
+output file. The format is:
+
+```json
+{
+  "version": 1,
+  "media": "<media filename>",
+  "timebase": "milliseconds",
+  "segmentIndex": 0,
+  "markers": [
+    { "timeMs": 1234, "type": "general|cut|highlight", "label": "..." }
+  ]
+}
+```
+
+(`media` is omitted when empty; `segmentIndex` is present only for per-segment split sidecars.)
+
+There is exactly **one** serializer and **one** path convention, shared by both the engine-side
+producer and the edit-surface consumer. The (de)serialization lives in `app/models/MarkerSidecar.h`
+(`WriteMarkerSidecar` / `ReadMarkerSidecar` / `SerializeMarkerSidecar` / `ParseMarkerSidecar`).
+
+- `RecordingCoordinator` is the in-recording producer: it accumulates markers via `AddMarker()`
+  (dropped during capture by the `AddMarker` hotkey or the transport-dock button), writes the
+  sidecar on every `AddMarker()`, again on stop for single-file recordings, and per segment
+  (partitioned + rebased to segment-local time) for split recordings — all through the shared writer.
+- `EditExportPage` is the consumer/editor: `loadMarkers()` reads the existing sidecar at
+  `EditContext::marker_sidecar_path` (authoritative once present; falls back to the markers carried
+  in the result), and `saveMarkers()` writes back to the **same** path and format via the shared
+  writer when the user adds/edits a marker. Trim cut points snap to these markers (within 50 ms).
+
+Markers are never written as container chapters (no metadata change to the video file).
 
 ### IA decision: mode, not tab
 
 The surface is a mode (stack replacement), not a new nav tab. Rationale:
 - Keeps top-level nav at 5 items (Record · Settings · Diagnostics · Logs · About).
 - The edit workflow is linear and transient — users enter it, decide, and leave.
-- Adding a persistent tab implies the surface is always accessible, which is premature before the
-  engine ships.
+- Adding a persistent tab implies the surface is always accessible, which is premature.
 - Back returns cleanly to Record without polluting the nav history.
-
-### Placeholder strategy
-
-The 0.11 engine (Quick Trim, stream-copy segment remux, chapters) is not shipped in this wave.
-The surface renders a dashed amber banner:
-> "Editing & export tools arrive in 0.11 — this surface is a preview."
-
-Edit controls (Trim / Add Marker / Split Chapter / timeline / player) are disabled. The Output
-panel is functional: selecting a format card and clicking Export runs a stub 1.5 s timer.
 
 ### Phase stepper
 
@@ -74,23 +138,25 @@ The three-step stepper (Review / Edit / Output) dynamically highlights the curre
 - Edit phase → "Edit" highlighted.
 - Output / Exporting / Done / Failed → "Output" highlighted.
 
-This communicates progress without a modal wizard.
+### Entry points
+
+- **Post-stop "Edit" button**: appears in RecordPage result panel when a single-file successful
+  recording exists. Builds a full `EditContext` (file metadata, diagnostics snapshot, markers, MKV
+  master path) and emits `editExportRequested(const EditContext&)`.
+- **Notification toast "Open" link**: builds a minimal `EditContext` (output path only, no
+  diagnostics) and navigates directly to Review phase.
 
 ## Consequences
 
-- `EditExportPage` is a pure UI shell; no engine coupling until 0.11.
+- `EditExportPage` couples to `recorder_core` (for `mp4_remuxer.h`, `pipeline_diagnostics.h`).
+  The `edit_export_page_tests` CMake target therefore links `recorder_core`.
+- Export runs on a `std::thread`; results are marshalled back to the UI thread via
+  `QMetaObject::invokeMethod(..., Qt::QueuedConnection)`.
+- Atomic overwrite: write to `.tmp`, then `std::filesystem::rename` temp → final.
 - The main window stack (`QStackedWidget`) gains `EditExportPage` as an additional page,
   alongside Record, Settings, Diagnostics, Logs, About.
-- No new engine API in this wave; the export stub emits `exportCompleted(path)` after a timer.
-- `setRecordingInfo()` is the handoff API: MainWindow calls it on recording stop, passing
-  file path + duration + size + codec metadata from the session.
-- The surface must not emit `navPageRequested` — it only emits `backRequested` and
-  `exportCompleted`.
-- Post-0.11: the stub timer and placeholder banner are replaced; `EditExportPage` gains a
-  `setEngineAdapter()` call or equivalent injection point. The three format cards become
-  interactive with real cost estimates and progress reporting.
 
 ## Forward
 
-- 0.11: Quick Trim engine, real player (QMediaPlayer or custom D3D11 preview), chapter export.
+- 0.11: video preview playback (QMediaPlayer or custom D3D11), Split Chapter button.
 - Post-1.0: transcription (optional, capability-gated), batch export, GIF/WebP export.

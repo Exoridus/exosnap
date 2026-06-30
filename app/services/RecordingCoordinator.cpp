@@ -32,6 +32,7 @@
 
 #include "../diagnostics/AppLog.h"
 #include "../models/FilenameBuilder.h"
+#include "../models/MarkerSidecar.h"
 #include "../models/OutputPathValidator.h"
 #include "../models/RecordingPreset.h"
 #include "../settings/RecoveryManifestStore.h"
@@ -695,6 +696,18 @@ bool RecordingCoordinator::StartRecording(const recorder_core::CaptureTarget& ta
     config.frame_rate_den = video_settings_.frame_rate_den;
     config.cfr = video_settings_.cfr;
     config.cfr_pacing_mode = video_settings_.frame_pacing;
+    // Map keyframe interval mode to seconds for NVENC GOP configuration.
+    switch (video_settings_.keyframe_interval) {
+    case KeyframeIntervalMode::Seconds2:
+        config.keyframe_interval_secs = 2.0f;
+        break;
+    case KeyframeIntervalMode::Seconds1:
+        config.keyframe_interval_secs = 1.0f;
+        break;
+    case KeyframeIntervalMode::Seconds0_5:
+        config.keyframe_interval_secs = 0.5f;
+        break;
+    }
     if (config.container == recorder_core::Container::Mp4 && !config.cfr) {
         diagnostics::AppLog::warning(
             QStringLiteral("record.reconcile"),
@@ -1472,6 +1485,10 @@ void RecordingCoordinator::RecordingThreadProc(const recorder_core::RecorderConf
         current_manifest_id_.clear();
     }
 
+    // 0.9.0 S1: for MKV recordings the output file IS the edit master.
+    if (result.succeeded)
+        ui_result.mkv_master_path = output_path.wstring();
+
     PostResult(std::move(ui_result));
     PostStateChange(result.succeeded ? UiRecordingState::Completed : UiRecordingState::Failed);
     // is_recording_ is already false here; restore the idle preview capture if the
@@ -1509,13 +1526,38 @@ void RecordingCoordinator::RunRemuxJob(const std::filesystem::path& transient_mk
         is_remuxing_.store(false);
 
         if (remux_result.success) {
-            // Delete the transient MKV.
+            // Retain the transient MKV as the edit master by renaming it to .edit.mkv.
+            // The companion file lives alongside the final MP4 for the edit surface.
+            std::filesystem::path edit_master = transient_mkv;
+            edit_master.replace_extension(L".edit.mkv");
             std::error_code ec;
-            std::filesystem::remove(transient_mkv, ec);
+            std::filesystem::rename(transient_mkv, edit_master, ec);
             if (ec) {
+                // Rename failed (e.g. cross-device); fall back to copy+delete.
+                std::error_code copy_ec;
+                std::filesystem::copy_file(transient_mkv, edit_master,
+                                           std::filesystem::copy_options::overwrite_existing, copy_ec);
+                if (!copy_ec) {
+                    std::error_code del_ec;
+                    std::filesystem::remove(transient_mkv, del_ec);
+                    ec = del_ec; // report deletion error if any, clear on success
+                }
+            }
+            if (!ec) {
+                mkv_master_path_ = edit_master;
+                final_result.mkv_master_path = edit_master.wstring();
+                diagnostics::AppLog::info(
+                    QStringLiteral("remux"),
+                    QStringLiteral("edit master retained: \"%1\"").arg(QString::fromStdWString(edit_master.wstring())));
+            } else {
+                // Retention failed — edit surface degrades gracefully (no master path).
+                mkv_master_path_.clear();
                 diagnostics::AppLog::warning(QStringLiteral("remux"),
-                                             QStringLiteral("transient MKV removal failed: %1")
+                                             QStringLiteral("edit master retention failed: %1")
                                                  .arg(QString::fromStdWString(ToWide(ec.message()))));
+                // Best-effort cleanup of the original transient path.
+                std::error_code del_ec;
+                std::filesystem::remove(transient_mkv, del_ec);
             }
 
             // Update file size to reflect the final MP4.
@@ -2226,35 +2268,13 @@ void RecordingCoordinator::WriteMarkerSidecar() {
         snapshot = markers_;
     }
 
-    QJsonArray markers_array;
-    for (const auto& m : snapshot) {
-        QJsonObject obj;
-        obj[QStringLiteral("timeMs")] = static_cast<qint64>(m.time_ms);
-        obj[QStringLiteral("type")] = QString::fromLatin1(RecordingMarkerTypeToString(m.type));
-        obj[QStringLiteral("label")] = QString::fromStdString(m.label);
-        markers_array.append(obj);
-    }
-
-    QJsonObject root;
-    root[QStringLiteral("version")] = 1;
-    root[QStringLiteral("media")] = QString::fromStdWString(current_output_path_.filename().wstring());
-    root[QStringLiteral("timebase")] = QStringLiteral("milliseconds");
-    root[QStringLiteral("markers")] = markers_array;
-
-    QJsonDocument doc(root);
-    const QString sidecar_qstr = QString::fromStdWString(sidecar_path.wstring());
-
-    QSaveFile file(sidecar_qstr);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        diagnostics::AppLog::warning(QStringLiteral("marker"),
-                                     QStringLiteral("sidecar write open failed: %1").arg(sidecar_qstr));
-        return;
-    }
-
-    file.write(doc.toJson(QJsonDocument::Indented));
-    if (!file.commit()) {
-        diagnostics::AppLog::warning(QStringLiteral("marker"),
-                                     QStringLiteral("sidecar write commit failed: %1").arg(sidecar_qstr));
+    // Delegate to the canonical serializer (models/MarkerSidecar.h) so the edit
+    // surface and the coordinator produce one identical format at one path.
+    const QString media = QString::fromStdWString(current_output_path_.filename().wstring());
+    if (!exosnap::WriteMarkerSidecar(sidecar_path, snapshot, media)) {
+        diagnostics::AppLog::warning(
+            QStringLiteral("marker"),
+            QStringLiteral("sidecar write failed: %1").arg(QString::fromStdWString(sidecar_path.wstring())));
     }
 }
 
@@ -2278,42 +2298,22 @@ void RecordingCoordinator::WriteSegmentMarkerSidecar(const recorder_core::Comple
     if (local.empty())
         return;
 
-    QJsonArray markers_array;
-    for (const auto& m : local) {
-        QJsonObject obj;
-        obj[QStringLiteral("timeMs")] = static_cast<qint64>(m.time_ms);
-        obj[QStringLiteral("type")] = QString::fromLatin1(RecordingMarkerTypeToString(m.type));
-        obj[QStringLiteral("label")] = QString::fromStdString(m.label);
-        markers_array.append(obj);
-    }
-
     auto sidecar_path = segment.path;
     sidecar_path.replace_extension(L".markers.json");
 
-    QJsonObject root;
-    root[QStringLiteral("version")] = 1;
-    root[QStringLiteral("media")] = QString::fromStdWString(segment.path.filename().wstring());
-    root[QStringLiteral("timebase")] = QStringLiteral("milliseconds");
-    root[QStringLiteral("segmentIndex")] = static_cast<int>(segment.index);
-    root[QStringLiteral("markers")] = markers_array;
-
+    // Same canonical serializer, with the per-segment index field set.
+    const QString media = QString::fromStdWString(segment.path.filename().wstring());
     const QString sidecar_qstr = QString::fromStdWString(sidecar_path.wstring());
-    QSaveFile file(sidecar_qstr);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    if (exosnap::WriteMarkerSidecar(sidecar_path, local, media, static_cast<int>(segment.index))) {
+        diagnostics::AppLog::info(QStringLiteral("marker"),
+                                  QStringLiteral("segment sidecar markers=%1 index=%2 path=%3")
+                                      .arg(local.size())
+                                      .arg(segment.index)
+                                      .arg(sidecar_qstr));
+    } else {
         diagnostics::AppLog::warning(QStringLiteral("marker"),
-                                     QStringLiteral("segment sidecar open failed: %1").arg(sidecar_qstr));
-        return;
+                                     QStringLiteral("segment sidecar write failed: %1").arg(sidecar_qstr));
     }
-    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-    if (!file.commit()) {
-        diagnostics::AppLog::warning(QStringLiteral("marker"),
-                                     QStringLiteral("segment sidecar commit failed: %1").arg(sidecar_qstr));
-        return;
-    }
-    diagnostics::AppLog::info(QStringLiteral("marker"), QStringLiteral("segment sidecar markers=%1 index=%2 path=%3")
-                                                            .arg(local.size())
-                                                            .arg(segment.index)
-                                                            .arg(sidecar_qstr));
 }
 
 } // namespace exosnap

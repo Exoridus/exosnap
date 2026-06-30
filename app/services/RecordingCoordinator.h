@@ -321,6 +321,11 @@ class RecordingCoordinator {
     // Transient MKV path and final MP4 path for the current (or last) remux job.
     std::filesystem::path transient_mkv_path_;
     std::filesystem::path final_mp4_path_;
+    // 0.9.0 S1: path of the retained edit master MKV for the last completed session.
+    //   - MP4 sessions: the .edit.mkv companion retained after successful remux.
+    //   - MKV sessions: empty (the output file IS the master; reported directly in UiRecordingResult).
+    //   - Empty on failure, split sessions, or when retention failed.
+    std::filesystem::path mkv_master_path_;
     RemuxProgressCallback on_remux_progress_;
     void PostRemuxProgress(float fraction);
     void RunRemuxJob(const std::filesystem::path& transient_mkv, const std::filesystem::path& final_mp4,
