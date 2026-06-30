@@ -41,9 +41,18 @@ struct OsRuntimeFacts {
     std::string failure_detail;
 };
 
+// S4: Media Foundation webcam probe facts.
+// Available = mfplat.dll is loadable on this system.
+// Absent on Windows-N without the Media Feature Pack.
+struct MfWebcamRuntimeFacts {
+    bool available = false;
+    std::string failure_detail; // populated only when unavailable
+};
+
 struct RuntimeCapabilitySnapshot {
     NvidiaRuntimeFacts nvidia;
     MfAacRuntimeFacts mf_aac;
+    MfWebcamRuntimeFacts mf_webcam; // S4: webcam MF probe
     OsRuntimeFacts os;
     std::vector<DisplayHdrFacts> displays;
 };

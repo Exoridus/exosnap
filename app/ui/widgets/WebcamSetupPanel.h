@@ -43,6 +43,11 @@ class WebcamSetupPanel : public QWidget {
     // Enable and mirror remain live-editable.
     void setControlsLocked(bool locked);
 
+    // S4: Call once when the capability probe reports mfplat.dll is absent.
+    // Shows an inline notice and permanently disables all controls. No-op when
+    // unavailable is false.
+    void setMfUnavailable(bool unavailable);
+
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     // Deterministic visual-test state: suppresses real capture and injects a
     // synthetic frame (available) or an honest unavailable placeholder, plus the
@@ -83,6 +88,7 @@ class WebcamSetupPanel : public QWidget {
     bool suppress_signals_ = false;
     bool preview_frame_seen_ = false;
     bool visual_test_mode_ = false;
+    bool mf_unavailable_ = false; // S4: set when mfplat.dll is absent at runtime
 
     CameraPreview* camera_preview_ = nullptr;
     ExoToggle* enable_toggle_ = nullptr;

@@ -178,6 +178,8 @@ WebcamSetupPanel::~WebcamSetupPanel() {
 
 void WebcamSetupPanel::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
+    if (mf_unavailable_)
+        return; // S4: MF absent — no preview attempt
     startPreview();
 }
 
@@ -220,11 +222,40 @@ void WebcamSetupPanel::applySettings(const WebcamSettings& settings) {
 }
 
 void WebcamSetupPanel::setControlsLocked(bool locked) {
+    if (mf_unavailable_)
+        return; // S4: MF absent — controls are already permanently disabled
     device_combo_->setEnabled(!locked);
     resolution_combo_->setEnabled(!locked);
     rescan_btn_->setEnabled(!locked);
     enable_toggle_->setEnabled(true);
     mirror_toggle_->setEnabled(true);
+}
+
+// S4: Gate the entire panel when mfplat.dll is absent at runtime.
+void WebcamSetupPanel::setMfUnavailable(bool unavailable) {
+    if (!unavailable)
+        return;
+    mf_unavailable_ = true;
+    stopPreview();
+
+    // Disable all controls.
+    if (enable_toggle_)
+        enable_toggle_->setEnabled(false);
+    if (device_combo_)
+        device_combo_->setEnabled(false);
+    if (resolution_combo_)
+        resolution_combo_->setEnabled(false);
+    if (rescan_btn_)
+        rescan_btn_->setEnabled(false);
+    if (mirror_toggle_)
+        mirror_toggle_->setEnabled(false);
+
+    // Show a placeholder in the preview area.
+    if (camera_preview_) {
+        camera_preview_->clearFrame();
+        camera_preview_->setPlaceholderText(
+            QStringLiteral("Webcam unavailable\nInstall the Windows Media Feature Pack to enable."));
+    }
 }
 
 void WebcamSetupPanel::onEnableToggled(bool enabled) {

@@ -184,10 +184,52 @@ void ProbeDisplays(std::vector<DisplayHdrFacts>& displays) {
 }
 
 // -------------------------------------------------------------------------
+// C0. Media Foundation presence pre-check (shared by C and Cw below)
+// -------------------------------------------------------------------------
+
+// Check whether mfplat.dll is loadable without triggering a delay-load
+// exception. This is safe to call regardless of delay-load state.
+static bool IsMfPlatPresent() noexcept {
+    HMODULE h = LoadLibraryW(L"mfplat.dll");
+    if (h) {
+        FreeLibrary(h);
+        return true;
+    }
+    return false;
+}
+
+// -------------------------------------------------------------------------
+// Cw. Media Foundation webcam probe (S4)
+// -------------------------------------------------------------------------
+
+void ProbeMfWebcam(MfWebcamRuntimeFacts& mf_webcam) {
+    // Webcam capture requires IMFSourceReader (mfreadwrite.dll) which itself
+    // depends on mfplat.dll. A LoadLibraryW probe on mfplat.dll is sufficient:
+    // if it is absent the entire Media Foundation stack is absent (Windows-N
+    // without the Media Feature Pack).
+    if (IsMfPlatPresent()) {
+        mf_webcam.available = true;
+    } else {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "LoadLibraryW(mfplat.dll) failed, GetLastError=%lu",
+                      static_cast<unsigned long>(GetLastError()));
+        mf_webcam.failure_detail = buf;
+        mf_webcam.available = false;
+    }
+}
+
+// -------------------------------------------------------------------------
 // C. Media Foundation AAC runtime query
 // -------------------------------------------------------------------------
 
 void ProbeMfAac(MfAacRuntimeFacts& mf_aac) {
+    // Pre-check: if mfplat.dll is absent we must not attempt any MF API call —
+    // the delay-load stub would raise a VcppException (SEH) instead of returning
+    // a graceful HRESULT. Return early with the same "unavailable" result.
+    if (!IsMfPlatPresent()) {
+        mf_aac.failure_detail = "mfplat.dll not found — Media Foundation not installed on this system.";
+        return;
+    }
     // Initialize COM on this thread in a multi-threaded apartment.
     //
     // CoInitializeEx return value semantics:
@@ -320,7 +362,8 @@ RuntimeCapabilitySnapshot CapabilityBuilder::QueryRuntimeFacts() {
     // Probes are independent; each writes only to its own sub-struct.
     ProbeNvidia(snapshot.nvidia);
     ProbeAdapterName(snapshot.nvidia);
-    ProbeMfAac(snapshot.mf_aac);
+    ProbeMfWebcam(snapshot.mf_webcam); // S4: webcam MF presence probe (safe, LoadLibraryW-based)
+    ProbeMfAac(snapshot.mf_aac);       // guarded internally by IsMfPlatPresent()
     ProbeOs(snapshot.os);
     ProbeDisplays(snapshot.displays);
 

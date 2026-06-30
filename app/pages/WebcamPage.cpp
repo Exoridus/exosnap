@@ -363,6 +363,8 @@ void WebcamPage::showEvent(QShowEvent* event) {
     if (visual_test_mode_)
         return;
 #endif
+    if (mf_unavailable_)
+        return; // S4: MF absent — no preview attempt
     // Setup preview runs whenever the page is open and a camera is available —
     // independent of the "Include webcam in recording" toggle.
     startPreview();
@@ -445,7 +447,80 @@ void WebcamPage::applySettings(const WebcamSettings& settings) {
         startPreview();
 }
 
+// S4: Called once when the capability probe determines mfplat.dll is absent.
+void WebcamPage::setMfUnavailable(bool unavailable) {
+    if (!unavailable)
+        return;
+    mf_unavailable_ = true;
+    stopPreview();
+
+    // Show an inline notice at the top of the scroll content.
+    if (!mf_notice_label_) {
+        // Insert a notice label as the first child of the scroll area's content widget.
+        // The notice is injected into the top-level content layout (first position).
+        auto* content = findChild<QWidget*>();
+        if (content) {
+            auto* outer_layout = qobject_cast<QVBoxLayout*>(content->layout());
+            // Walk up to find the scroll content widget that has a QVBoxLayout.
+            // We look for the first QVBoxLayout child that contains our controls.
+            QVBoxLayout* target_layout = nullptr;
+            for (auto* child_widget : content->findChildren<QWidget*>()) {
+                if (auto* vbl = qobject_cast<QVBoxLayout*>(child_widget->layout())) {
+                    if (vbl->count() > 1) {
+                        target_layout = vbl;
+                        break;
+                    }
+                }
+            }
+            if (!target_layout && outer_layout)
+                target_layout = outer_layout;
+            if (target_layout) {
+                mf_notice_label_ =
+                    new QLabel(QStringLiteral("Webcam capture is not available on this edition of Windows.\n"
+                                              "Install the Windows Media Feature Pack to enable webcam support."),
+                               this);
+                mf_notice_label_->setProperty("labelRole", "mfNotice");
+                mf_notice_label_->setWordWrap(true);
+                mf_notice_label_->setObjectName(QStringLiteral("webcamMfNoticeLabel"));
+                target_layout->insertWidget(0, mf_notice_label_);
+            }
+        }
+    }
+
+    // Disable all interactive controls.
+    if (enable_toggle_)
+        enable_toggle_->setEnabled(false);
+    if (device_combo_)
+        device_combo_->setEnabled(false);
+    if (resolution_combo_)
+        resolution_combo_->setEnabled(false);
+    if (refresh_btn_)
+        refresh_btn_->setEnabled(false);
+    if (chroma_toggle_)
+        chroma_toggle_->setEnabled(false);
+    if (chroma_green_btn_)
+        chroma_green_btn_->setEnabled(false);
+    if (chroma_blue_btn_)
+        chroma_blue_btn_->setEnabled(false);
+    if (chroma_magenta_btn_)
+        chroma_magenta_btn_->setEnabled(false);
+    if (chroma_custom_btn_)
+        chroma_custom_btn_->setEnabled(false);
+    if (tolerance_slider_)
+        tolerance_slider_->setEnabled(false);
+    if (softness_slider_)
+        softness_slider_->setEnabled(false);
+    if (spill_slider_)
+        spill_slider_->setEnabled(false);
+    if (camera_preview_) {
+        camera_preview_->clearFrame();
+        camera_preview_->setPlaceholderText(QStringLiteral("Webcam unavailable — Media Feature Pack not installed."));
+    }
+}
+
 void WebcamPage::setRecordingControlsLocked(bool locked) {
+    if (mf_unavailable_)
+        return; // MF absent: controls are already permanently disabled
     device_combo_->setEnabled(!locked);
     resolution_combo_->setEnabled(!locked);
     refresh_btn_->setEnabled(!locked);

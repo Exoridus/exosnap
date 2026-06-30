@@ -195,5 +195,58 @@ TEST_F(WebcamPageTest, SettingsChanged_EmittedOnToleranceSliderChange) {
     EXPECT_GE(count, 1);
 }
 
+// -----------------------------------------------------------------------
+// S4: MF-absent gate tests
+// -----------------------------------------------------------------------
+
+TEST_F(WebcamPageTest, SetMfUnavailable_DisablesEnableToggle) {
+    WebcamPage page;
+    page.setMfUnavailable(true);
+
+    // The enable toggle must be disabled.
+    for (auto* child : page.findChildren<QWidget*>()) {
+        const QString name = child->objectName();
+        if (name.isEmpty())
+            continue;
+        // ExoToggle has no fixed objectName in WebcamPage; look by type name.
+        if (QString::fromLatin1(child->metaObject()->className()).contains(QStringLiteral("ExoToggle"))) {
+            EXPECT_FALSE(child->isEnabled()) << "ExoToggle must be disabled when MF is unavailable";
+        }
+    }
+}
+
+TEST_F(WebcamPageTest, SetMfUnavailable_DisablesDeviceCombo) {
+    WebcamPage page;
+    page.setMfUnavailable(true);
+
+    for (auto* combo : page.findChildren<QComboBox*>()) {
+        EXPECT_FALSE(combo->isEnabled()) << "QComboBox must be disabled when MF is unavailable. name="
+                                         << combo->objectName().toStdString();
+    }
+}
+
+TEST_F(WebcamPageTest, SetMfUnavailable_ShowsNoticeLabel) {
+    WebcamPage page;
+    page.setMfUnavailable(true);
+
+    // A notice label with object name "webcamMfNoticeLabel" must be present.
+    auto* notice = page.findChild<QLabel*>(QStringLiteral("webcamMfNoticeLabel"));
+    EXPECT_NE(notice, nullptr) << "webcamMfNoticeLabel must be inserted when MF is unavailable";
+    if (notice)
+        EXPECT_TRUE(notice->text().contains(QStringLiteral("Media Feature Pack"), Qt::CaseInsensitive))
+            << "Notice must mention Media Feature Pack. text=" << notice->text().toStdString();
+}
+
+TEST_F(WebcamPageTest, SetMfUnavailable_SetRecordingControlsLockedNoOp) {
+    // After setMfUnavailable the controls must remain disabled even if
+    // setRecordingControlsLocked(false) is called — MF gate wins.
+    WebcamPage page;
+    page.setMfUnavailable(true);
+    page.setRecordingControlsLocked(false); // must be a no-op
+
+    for (auto* combo : page.findChildren<QComboBox*>())
+        EXPECT_FALSE(combo->isEnabled()) << "Combo must stay disabled after setMfUnavailable+unlock";
+}
+
 } // namespace
 } // namespace exosnap

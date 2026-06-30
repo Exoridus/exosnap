@@ -37,10 +37,18 @@ class WebcamService : public recorder_core::WebcamFrameProvider {
     WebcamService(const WebcamService&) = delete;
     WebcamService& operator=(const WebcamService&) = delete;
 
+    // Returns true if Media Foundation (mfplat.dll) is present on this system.
+    // Safe to call at any time; uses LoadLibraryW and caches the result.
+    // When false, all other methods return safe empty results / false without
+    // touching any MF entry point.
+    static bool IsMfPresent() noexcept;
+
     // Enumerate available webcam devices (main thread only, one-shot).
+    // Returns empty when IsMfPresent() is false.
     static std::vector<WebcamDeviceInfo> EnumerateDevices();
 
     // Enumerate supported formats for a given device id.
+    // Returns empty when IsMfPresent() is false.
     static std::vector<WebcamFormat> EnumerateFormats(const std::string& device_id);
 
     // Set callback invoked on main thread with each new QImage frame.

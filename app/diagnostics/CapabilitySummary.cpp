@@ -98,6 +98,16 @@ CapabilitySummary CapabilitySummary::FromCapabilitySet(const capability::Capabil
     summary.entries.push_back({"NVENC Available", caps.nvenc_dll_present ? "Yes" : "No",
                                caps.nvenc_dll_present ? "available" : "unavailable", caps.nvenc_dll_present});
 
+    // Webcam (Media Foundation) — S4: mfplat.dll presence probe
+    {
+        const bool wc_ok = caps.mf_webcam_available;
+        const std::string wc_detail =
+            wc_ok ? "Yes"
+                  : (!caps.runtime.mf_webcam.failure_detail.empty() ? caps.runtime.mf_webcam.failure_detail
+                                                                    : "No — Media Feature Pack not installed");
+        summary.entries.push_back({"Webcam (MF)", wc_detail, wc_ok ? "available" : "unavailable", wc_ok});
+    }
+
     // Video codecs
     for (const auto& v :
          {capability::VideoCodec::H264Nvenc, capability::VideoCodec::HevcNvenc, capability::VideoCodec::Av1Nvenc}) {

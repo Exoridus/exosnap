@@ -37,6 +37,12 @@ class WebcamPage : public QWidget {
 
     void applySettings(const WebcamSettings& settings);
     void setRecordingControlsLocked(bool locked);
+
+    // S4: Call once after the capability probe resolves when Media Foundation is
+    // absent (Windows-N without the Media Feature Pack). Shows an inline notice
+    // and disables all webcam controls.  No-op when unavailable is false.
+    void setMfUnavailable(bool unavailable);
+
     // Reactive device refresh: preserve the configured device_id across the new
     // snapshot.  Never emits settingsChanged.
     void onWebcamDevicesChanged(const exosnap::WebcamDeviceSnapshot& snap);
@@ -116,6 +122,8 @@ class WebcamPage : public QWidget {
 
     WebcamSettings current_settings_;
     bool suppress_signals_ = false;
+    bool mf_unavailable_ = false;       // S4: set when mfplat.dll is absent at runtime
+    QLabel* mf_notice_label_ = nullptr; // S4: shown when MF is absent
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
     bool visual_test_mode_ = false;
 #endif
