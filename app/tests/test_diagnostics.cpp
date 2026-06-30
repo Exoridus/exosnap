@@ -1229,6 +1229,114 @@ TEST(RecommendationEngineTest, ComposedPresentRaisesNoExclusiveCheck) {
                              [](const DiagnosticResult& r) { return r.id == "rec.present.exclusive"; }));
 }
 
+TEST(RecommendationEngineTest, HighDiscardRatioRaisesDiscardedNotice) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    PresentSample present;
+    present.available = true;
+    present.mode = PresentMode::Composed;
+    present.present_count = 1000;
+    present.discarded_count = 100; // 10% > 5% threshold
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, &present);
+    const DiagnosticChecklist list = engine.Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.present.discarded"; });
+    ASSERT_NE(it, list.results.end());
+    ASSERT_TRUE(it->fix_action.has_value());
+    EXPECT_EQ(it->fix_action->id, "fix.present.discarded");
+}
+
+TEST(RecommendationEngineTest, LowDiscardRatioAndTinySampleRaiseNoDiscardedNotice) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    // Below-threshold ratio with a large sample.
+    PresentSample low;
+    low.available = true;
+    low.mode = PresentMode::Composed;
+    low.present_count = 1000;
+    low.discarded_count = 10; // 1% < 5%
+    const DiagnosticChecklist low_list =
+        RecommendationEngine(caps, config, 0, 0, true, "NTFS", nullptr, &low).Generate();
+    EXPECT_TRUE(std::none_of(low_list.results.begin(), low_list.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.present.discarded"; }));
+    // High ratio but below the minimum-sample gate must also stay silent.
+    PresentSample tiny;
+    tiny.available = true;
+    tiny.mode = PresentMode::Composed;
+    tiny.present_count = 50; // < kMinSamples (200)
+    tiny.discarded_count = 40;
+    const DiagnosticChecklist list = RecommendationEngine(caps, config, 0, 0, true, "NTFS", nullptr, &tiny).Generate();
+    EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.present.discarded"; }));
+}
+
+TEST(RecommendationEngineTest, RepeatedModeFlipsRaiseModeFlipNotice) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    PresentSample present;
+    present.available = true;
+    present.mode = PresentMode::Composed;
+    present.mode_flip_count = 6; // >= threshold (5)
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, &present);
+    const DiagnosticChecklist list = engine.Generate();
+    EXPECT_TRUE(std::any_of(list.results.begin(), list.results.end(),
+                            [](const DiagnosticResult& r) { return r.id == "rec.present.modeflip"; }));
+}
+
+TEST(RecommendationEngineTest, FewModeFlipsRaiseNoModeFlipNotice) {
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    PresentSample present;
+    present.available = true;
+    present.mode = PresentMode::Composed;
+    present.mode_flip_count = 2; // < threshold
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", nullptr, &present);
+    const DiagnosticChecklist list = engine.Generate();
+    EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.present.modeflip"; }));
+}
+
+TEST(RecommendationEngineTest, HighDiskWriteLatencyRaisesWriteStallNotice) {
+    using namespace exosnap::diagnostics;
+    recorder_core::RecordingDiagnosticsSnapshot snap;
+    snap.valid = true;
+    snap.disk.latency_availability = recorder_core::MetricAvailability::Available;
+    snap.disk.peak_write_ms = 150.0; // > 100 ms threshold
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    RecommendationEngine engine(caps, config, 0, 0, true, "NTFS", &snap, nullptr);
+    const DiagnosticChecklist list = engine.Generate();
+    const auto it = std::find_if(list.results.begin(), list.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.disk.writestall"; });
+    ASSERT_NE(it, list.results.end());
+    ASSERT_TRUE(it->fix_action.has_value());
+    EXPECT_EQ(it->fix_action->id, "fix.disk.writestall");
+}
+
+TEST(RecommendationEngineTest, LowOrUnavailableDiskWriteRaisesNoWriteStallNotice) {
+    using namespace exosnap::diagnostics;
+    capability::CapabilitySet caps;
+    capability::UserRecorderConfig config;
+    // Below threshold, available.
+    recorder_core::RecordingDiagnosticsSnapshot low;
+    low.valid = true;
+    low.disk.latency_availability = recorder_core::MetricAvailability::Available;
+    low.disk.peak_write_ms = 20.0;
+    const DiagnosticChecklist low_list =
+        RecommendationEngine(caps, config, 0, 0, true, "NTFS", &low, nullptr).Generate();
+    EXPECT_TRUE(std::none_of(low_list.results.begin(), low_list.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.disk.writestall"; }));
+    // High latency but Unavailable (e.g. MP4 remux) must stay silent.
+    recorder_core::RecordingDiagnosticsSnapshot unavail;
+    unavail.valid = true;
+    unavail.disk.latency_availability = recorder_core::MetricAvailability::Unavailable;
+    unavail.disk.peak_write_ms = 500.0;
+    const DiagnosticChecklist list =
+        RecommendationEngine(caps, config, 0, 0, true, "NTFS", &unavail, nullptr).Generate();
+    EXPECT_TRUE(std::none_of(list.results.begin(), list.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.disk.writestall"; }));
+}
+
 TEST(RecommendationEngineTest, JudderDetailNamesPresentModeAttribution) {
     using namespace exosnap::diagnostics;
     recorder_core::RecordingDiagnosticsSnapshot snap;

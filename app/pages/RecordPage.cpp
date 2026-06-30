@@ -1307,6 +1307,22 @@ PresetCaptureTarget RecordPage::currentCapturePolicy() const {
     return cap;
 }
 
+uint32_t RecordPage::selectedTargetWindowPid() const {
+    const int idx = view_model_.selected_target_index;
+    if (idx < 0 || idx >= static_cast<int>(view_model_.targets.size())) {
+        return 0;
+    }
+    const auto& target = view_model_.targets[static_cast<std::size_t>(idx)];
+    if (target.kind != recorder_core::CaptureTarget::Kind::Window || target.native_id == 0) {
+        return 0; // Monitor / Region: no single owning process -> global attribution.
+    }
+    DWORD pid = 0;
+    if (::GetWindowThreadProcessId(reinterpret_cast<HWND>(target.native_id), &pid) != 0) {
+        return static_cast<uint32_t>(pid);
+    }
+    return 0;
+}
+
 void RecordPage::applyCapturePolicy(const PresetCaptureTarget& cap) {
     applying_external_config_ = true;
     // ---- RAII clear of the flag on all exit paths ----

@@ -29,6 +29,13 @@ class PresentMonProvider final : public IPresentProvider {
     // Updates the opt-in and starts/stops the ETW session to match the gate.
     void SetOptIn(bool opt_in);
 
+    // Scope present attribution to the recorded target's process (0 == global / any).
+    // Set to the captured window's PID on record-start (Window targets only) so present-
+    // mode/discard/flip stats reflect the recorded source, not whatever last presented.
+    void SetTargetProcessId(unsigned long pid) {
+        session_.SetTargetProcessId(pid);
+    }
+
   private:
     const IElevationProvider& elevation_;
     bool opt_in_;

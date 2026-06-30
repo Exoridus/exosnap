@@ -56,6 +56,12 @@ bool PresentMonEtwSession::Start() {
     // interval against the previous session's QPC epoch.
     last_present_qpc_ = 0;
     qpc_freq_ = 0;
+    // Fresh accounting per session so a Stop()->Start() cycle does not carry over a prior
+    // session's discarded/flip totals.
+    present_count_ = 0;
+    discarded_count_ = 0;
+    mode_flip_count_ = 0;
+    last_mode_ = PresentMode::Unknown;
     {
         std::lock_guard lk(sample_mutex_);
         impl_ = s; // shared_ptr<SessionImpl> -> shared_ptr<void>
@@ -104,7 +110,20 @@ PresentSample PresentMonEtwSession::Latest() const {
                 continue;
             const RawPresentEvent raw = ToRaw(*p, last_present_qpc_, qpc_freq_);
             last_present_qpc_ = p->PresentStartTime;
-            const PresentSample mapped = MapPresentEvent(raw);
+            PresentSample mapped = MapPresentEvent(raw);
+            // ADR 0033 extra-checks: accumulate session-cumulative aggregates. Count flips on
+            // the CLASSIFIED mode so sub-variant changes (e.g. Composed_Flip -> Composed_Copy)
+            // do not register as a present-mode flip.
+            ++present_count_;
+            if (p->FinalState == PresentResult::Discarded)
+                ++discarded_count_;
+            if (last_mode_ != PresentMode::Unknown && mapped.mode != PresentMode::Unknown && mapped.mode != last_mode_)
+                ++mode_flip_count_;
+            if (mapped.mode != PresentMode::Unknown)
+                last_mode_ = mapped.mode;
+            mapped.present_count = static_cast<uint32_t>(present_count_);
+            mapped.discarded_count = static_cast<uint32_t>(discarded_count_);
+            mapped.mode_flip_count = static_cast<uint32_t>(mode_flip_count_);
             std::lock_guard lk(sample_mutex_);
             latest_ = mapped;
         }

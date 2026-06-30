@@ -55,12 +55,21 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
     if (present != nullptr && present->available) {
         present_ = *present;
     }
+    // Consume live disk-write latency only when the writer reports it (streaming Matroska;
+    // the MP4 post-stop remux marks it Unavailable rather than a fake zero).
+    if (live_snapshot != nullptr && live_snapshot->valid &&
+        live_snapshot->disk.latency_availability == recorder_core::MetricAvailability::Available) {
+        live_disk_write_available_ = true;
+        live_disk_peak_write_ms_ = live_snapshot->disk.peak_write_ms;
+    }
 }
 
 DiagnosticChecklist RecommendationEngine::Generate() const {
     DiagnosticChecklist checklist;
     checkRefreshRateMismatch(checklist);
     checkExclusiveFullscreen(checklist);
+    checkDiscardedPresents(checklist);
+    checkPresentModeFlips(checklist);
     checkMp4CrashResilience(checklist);
     checkCodecAvailability(checklist);
     checkOutputDriveSpace(checklist);
@@ -69,6 +78,7 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
     checkAudioContainerCompat(checklist);
     checkVideoBitDepthContainerCompat(checklist);
     checkDpcLatency(checklist);
+    checkDiskWriteStall(checklist);
     return checklist;
 }
 
@@ -522,6 +532,99 @@ void RecommendationEngine::checkDpcLatency(DiagnosticChecklist& checklist) const
     fa.safety = FixAction::Safety::External; // app cannot change kernel drivers
     fa.reversible = false;
     fa.changes_summary = "Shows which driver to update/roll back; the app cannot change it for you.";
+    r.fix_action = fa;
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
+}
+
+void RecommendationEngine::checkDiscardedPresents(DiagnosticChecklist& checklist) const {
+    // The desktop compositor (DWM) discarded a notable share of the source's presents.
+    // Discarded presents never reach capture, so the recording looks choppier than the game.
+    constexpr uint32_t kMinSamples = 200;           // ignore warm-up / tiny samples
+    constexpr double kDiscardRatioThreshold = 0.05; // 5% discarded sustained
+    if (!present_.has_value() || present_->present_count < kMinSamples) {
+        return;
+    }
+    const double ratio = static_cast<double>(present_->discarded_count) / static_cast<double>(present_->present_count);
+    if (ratio < kDiscardRatioThreshold) {
+        return;
+    }
+    const std::string pct = std::to_string(static_cast<long>(ratio * 100.0 + 0.5));
+    DiagnosticResult r = MakeResult(
+        "rec.present.discarded", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+        "Compositor is discarding presents",
+        "The desktop compositor dropped a notable share of the source's frames before capture.",
+        "About " + pct +
+            "% of the captured source's presents were discarded by the compositor (DWM). "
+            "Discarded presents never reach capture, so the recording can look choppier than the game. This "
+            "usually means the source presents faster than the display refresh, or an overlay forces recomposition.",
+        "Discarded presents: " + pct + "%",
+        "Cap the source frame rate to the display refresh, or enable V-Sync in the captured app.");
+    FixAction fa;
+    fa.id = "fix.present.discarded";
+    fa.label = "Reduce discarded presents";
+    fa.safety = FixAction::Safety::Assisted; // app cannot change a foreign source's pacing
+    fa.reversible = true;
+    fa.changes_summary = "Opens guidance for capping the source frame rate / enabling V-Sync so fewer presents "
+                         "are discarded by the compositor.";
+    r.fix_action = fa;
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
+}
+
+void RecommendationEngine::checkPresentModeFlips(DiagnosticChecklist& checklist) const {
+    // The source repeatedly switched presentation mode (composed / independent-flip / exclusive).
+    // A one-off enter/exit is benign; repeated flipping causes momentary capture hitches.
+    constexpr uint32_t kFlipThreshold = 5;
+    if (!present_.has_value() || present_->mode_flip_count < kFlipThreshold) {
+        return;
+    }
+    const std::string n = std::to_string(present_->mode_flip_count);
+    DiagnosticResult r = MakeResult(
+        "rec.present.modeflip", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+        "Captured source keeps changing present mode",
+        "The source repeatedly switched presentation mode, which can cause capture hitches.",
+        "The captured source changed presentation mode " + n +
+            " times this session (e.g. flipping between "
+            "composed, independent-flip and exclusive fullscreen). Frequent mode changes can momentarily stutter "
+            "or drop capture. A toggling overlay, alt-tabbing, or a borderless/fullscreen toggle is the usual cause.",
+        "Present-mode changes: " + n,
+        "Keep the captured app in one stable presentation mode (e.g. consistent borderless fullscreen).");
+    FixAction fa;
+    fa.id = "fix.present.modeflip";
+    fa.label = "Stabilize present mode";
+    fa.safety = FixAction::Safety::Assisted;
+    fa.reversible = true;
+    fa.changes_summary = "Opens guidance for keeping the captured source in a single stable presentation mode.";
+    r.fix_action = fa;
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
+}
+
+void RecommendationEngine::checkDiskWriteStall(DiagnosticChecklist& checklist) const {
+    // A single buffered write of the recording blocked long enough to risk backing up the
+    // encoder output queue and dropping frames. Streaming Matroska only (MP4 is post-stop remux).
+    constexpr double kWriteStallMs = 100.0;
+    if (!live_disk_write_available_ || live_disk_peak_write_ms_ <= kWriteStallMs) {
+        return;
+    }
+    const std::string ms = std::to_string(static_cast<long>(live_disk_peak_write_ms_));
+    DiagnosticResult r = MakeResult(
+        "rec.disk.writestall", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+        "Disk write stalls detected", "Writing the recording to disk stalled, which can drop frames at high bitrates.",
+        "A single write of the recording to disk took up to " + ms +
+            " ms. When disk writes stall longer than "
+            "the encoder can buffer, the mux queue backs up and frames can be dropped. A slow or busy drive, "
+            "antivirus scanning the output, or a network/USB target is the usual cause.",
+        "Peak disk write: " + ms + " ms",
+        "Record to a fast local drive (SSD), or exclude the output folder from real-time antivirus scanning.");
+    FixAction fa;
+    fa.id = "fix.disk.writestall";
+    fa.label = "Reduce disk write stalls";
+    fa.safety = FixAction::Safety::Assisted;
+    fa.reversible = true;
+    fa.changes_summary = "Opens guidance for choosing a faster output drive / excluding the output folder from "
+                         "antivirus scanning.";
     r.fix_action = fa;
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));

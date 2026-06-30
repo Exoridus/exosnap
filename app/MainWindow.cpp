@@ -1670,6 +1670,12 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
         // DROP-NOTIFY: start a fresh per-recording backpressure-drop accounting so a
         // prior recording's drops can never leak into this one's "frames dropped" toast.
         last_backpressure_drops_ = 0;
+        // ADR 0033 extra-checks: scope present diagnostics to the recorded window's process
+        // (0 for Monitor/Region = global), so discard/flip/mode stats reflect the captured
+        // source rather than whatever last presented.
+        present_provider_.SetTargetProcessId(record_page_ ? record_page_->selectedTargetWindowPid() : 0);
+    } else if (!recording && was_recording) {
+        present_provider_.SetTargetProcessId(0); // back to global attribution when idle
     }
     // ADR-0014: track remux-on-stop phase separately so closeEvent can guard it.
     remuxing_active_ = (record_status_label_ == QStringLiteral("SAVING"));
