@@ -288,6 +288,9 @@ class ConfigPage : public QWidget {
     void onManagePresets();
     void updatePresetActionState();
     void updateExpertModeVisibility();
+    // Startup-perf: builds the heavy Expert audio subtree on first expert-enable
+    // (eager-then-hidden cost kept off the default ConfigPage construction path).
+    void buildAudioExpertSection();
 
     capability::AudioUiState audio_ui_state_;
     WebcamSettings webcam_settings_;
@@ -502,7 +505,11 @@ class ConfigPage : public QWidget {
     QComboBox* keyframe_interval_combo_ = nullptr;
 
     // PS-PHASE-C: Expert Audio section — mic gain, channel mode, bitrate, Opus params + placeholders.
+    // Lazily built on first expert-enable (see buildAudioExpertSection); built_ guards
+    // against rebuilds, insert_index_ records its slot in the audio panel layout.
     QWidget* audio_expert_section_ = nullptr;
+    bool audio_expert_built_ = false;
+    int audio_expert_insert_index_ = -1;
     // Mic-gain: ExoSlider (–12…+12 dB, step 1) + read-only dB label (Polish-R1: Slider per mockup).
     // S3: upgraded from QSlider to ExoSlider for gradient groove + tick marks.
     ui::widgets::ExoSlider* mic_gain_slider_ = nullptr;

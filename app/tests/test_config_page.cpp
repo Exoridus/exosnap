@@ -1945,6 +1945,7 @@ TEST_F(SettingsPopoverRowTest, SetStatusText_ShowsAndHidesLabel) {
 
 TEST_F(ConfigPageTest, S5_MicPostProcessing_SubControlsStillFindableByObjectName) {
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // audio-expert subtree is built lazily on first enable
 
     // All four mic DSP controls must still exist (reparented into popover, not deleted).
     EXPECT_NE(page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micHpfCheck")), nullptr)
@@ -1965,6 +1966,7 @@ TEST_F(ConfigPageTest, S5_MicPostProcessing_SubControlsStillFindableByObjectName
 
 TEST_F(ConfigPageTest, S5_LimiterControls_StillFindableByObjectName) {
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // audio-expert subtree is built lazily on first enable
 
     EXPECT_NE(page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("limiterCheck")), nullptr)
         << "limiterCheck must still exist after S5 reparenting";
