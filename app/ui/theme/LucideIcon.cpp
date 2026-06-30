@@ -168,37 +168,50 @@ QPixmap lucidePixmap(const QString& name, const QString& color, int size, qreal 
     if (size <= 0)
         size = 1;
 
+    // PERF: cache rendered icons. lucidePixmap() is called dozens of times per page
+    // build (e.g. the same "info" hint icon ~33× while ConfigPage constructs) and each
+    // call parses an SVG document + rasterises it. Keying on every output-affecting input
+    // makes repeat requests free. GUI-thread only (QPixmap/QSvgRenderer/QPainter require
+    // the GUI thread), so no lock is needed.
+    static QHash<QString, QPixmap> cache;
+    const QString key = name + QLatin1Char('|') + color + QLatin1Char('|') + QString::number(size) + QLatin1Char('|') +
+                        QString::number(dpr, 'g', 4);
+    if (const auto cached = cache.constFind(key); cached != cache.constEnd())
+        return *cached;
+
     const int phys = static_cast<int>(static_cast<qreal>(size) * dpr + 0.5);
     QPixmap pix(phys, phys);
     pix.fill(Qt::transparent);
     pix.setDevicePixelRatio(dpr);
 
     const auto it = iconTable().constFind(name);
-    if (it == iconTable().constEnd())
-        return pix; // unknown name -> transparent pixmap at the requested logical size
+    if (it != iconTable().constEnd()) {
+        // Build the wrapping SVG. Stroke set matches the canonical Lucide style and
+        // TransportDock's inline approach: viewBox 0 0 24 24, fill:none, stroke-width 1.7,
+        // round caps/joins. The "%1" placeholders in the inner markup are filled with the
+        // tint colour (a stroke for stroked icons, a fill for inherently-filled ones).
+        const QString inner = QString::fromLatin1(it->inner).arg(color);
 
-    // Build the wrapping SVG. Stroke set matches the canonical Lucide style and
-    // TransportDock's inline approach: viewBox 0 0 24 24, fill:none, stroke-width 1.7,
-    // round caps/joins. The "%1" placeholders in the inner markup are filled with the
-    // tint colour (a stroke for stroked icons, a fill for inherently-filled ones).
-    const QString inner = QString::fromLatin1(it->inner).arg(color);
+        QByteArray svg;
+        svg.reserve(inner.size() + 220);
+        svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke-width='1.7' "
+                   "stroke-linecap='round' stroke-linejoin='round'>");
+        svg.append(inner.toUtf8());
+        svg.append("</svg>");
 
-    QByteArray svg;
-    svg.reserve(inner.size() + 220);
-    svg.append("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke-width='1.7' "
-               "stroke-linecap='round' stroke-linejoin='round'>");
-    svg.append(inner.toUtf8());
-    svg.append("</svg>");
-
-    QSvgRenderer renderer(svg);
-    if (!renderer.isValid())
-        return pix;
-
-    QPainter painter(&pix);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    // Render into the logical-size rect; the painter is scaled by the pixmap's DPR.
-    renderer.render(&painter, QRectF(0, 0, size, size));
+        QSvgRenderer renderer(svg);
+        if (renderer.isValid()) {
+            QPainter painter(&pix);
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            // Render into the logical-size rect; the painter is scaled by the pixmap's DPR.
+            renderer.render(&painter, QRectF(0, 0, size, size));
+        }
+        // invalid SVG falls through with the transparent pixmap (cached below).
+    }
+    // Cache every outcome (rendered, unknown-name, or invalid-SVG) — each is a
+    // deterministic result for this key, so repeats never re-do the work.
+    cache.insert(key, pix);
     return pix;
 }
 
