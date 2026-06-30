@@ -98,7 +98,18 @@ jobs:
           }
           cmake @cfgArgs
 
-      - name: Build canonical release artifacts
+      # RELEASE GATE: runs build-release-artifacts.ps1 without -SkipSmoke or -SkipMsi.
+      # This means the full validation pipeline runs:
+      #   - cmake --install staging + presence/absence/leak/metadata audit
+      #   - dumpbin /dependents runtime-dependency audit (no UNRESOLVED imports)
+      #   - WiX harvest + wix build → MSI
+      #   - MSI content assertion (msiexec /a extract + all staging binaries present)
+      #   - MSI smoke (launch from extracted MSI; fail on STATUS_DLL_NOT_FOUND/dialog)
+      #   - Portable ZIP smoke (launch from extracted ZIP; fail on hard errors)
+      # A nonzero exit fails this job and blocks the release push.
+      # -SkipConfigure is passed because cmake was configured in the step above;
+      # the important gates (-SkipSmoke, -SkipMsi, -SkipBuild) are all OFF.
+      - name: Build and validate release artifacts (release gate)
         run: pwsh -NonInteractive -File scripts/build-release-artifacts.ps1 -SkipConfigure
         shell: pwsh
 

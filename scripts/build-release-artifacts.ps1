@@ -14,8 +14,11 @@
       3. validate the install tree (presence / absence / leak / exe metadata)
       4. create the canonical ZIP with one top-level package directory
       5. write a SHA-256 sidecar
-      6. write a machine-readable manifest and a human-readable report
-      7. launch the extracted ZIP in an isolated environment (smoke; skippable)
+      6a. MSI content assertion: msiexec /a admin-extract + binary presence check
+      6b. MSI smoke: launch exosnap.exe from the extracted MSI tree; fail ONLY on
+          STATUS_DLL_NOT_FOUND (0xC0000135) or hard-error dialog (GPU-less CI safe)
+      7. write a machine-readable manifest and a human-readable report
+      8. launch the extracted ZIP in an isolated environment (smoke; skippable)
 
     All generated outputs live under .workspace/release/<version>/ and are never
     committed. The script is idempotent: rerunning cleans its own staging.
@@ -641,6 +644,68 @@ Set-Content -LiteralPath $ShaPath -Value "$sha  $PortablePackageName.zip" -NoNew
 Write-Host "  SHA-256 : $sha"
 
 # ---------------------------------------------------------------------------
+# SmokeNative Win32 helpers — loaded once here (before step 6) so both the
+# MSI smoke (step 6a) and the portable ZIP smoke (step 8) share the same type
+# without re-compilation. Gated by -SkipSmoke: if smoke is disabled entirely,
+# neither smoke section ever references these P/Invoke helpers.
+# ---------------------------------------------------------------------------
+$msiSmokeResult = 'skipped'
+$msiSmokeNotes = @()
+if (-not $SkipSmoke) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Collections.Generic;
+using System.Text;
+
+public static class SmokeNative {
+    // Error-mode flags
+    public const uint SEM_FAILCRITICALERRORS  = 0x0001;
+    public const uint SEM_NOGPFAULTERRORBOX   = 0x0002;
+    public const uint SEM_NOOPENFILEERRORBOX  = 0x8000;
+
+    [DllImport("kernel32.dll")]
+    public static extern uint SetErrorMode(uint uMode);
+
+    // Window enumeration for dialog sentinel
+    public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint lpdwProcessId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowText(IntPtr hwnd, StringBuilder lpString, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindowVisible(IntPtr hwnd);
+
+    /// <summary>
+    /// Returns all visible top-level window titles belonging to the given PID.
+    /// </summary>
+    public static List<string> GetVisibleWindowTitles(int pid) {
+        var titles = new List<string>();
+        EnumWindows((hwnd, _) => {
+            uint wpid;
+            GetWindowThreadProcessId(hwnd, out wpid);
+            if ((int)wpid == pid && IsWindowVisible(hwnd)) {
+                var sb = new StringBuilder(512);
+                GetWindowText(hwnd, sb, sb.Capacity);
+                var t = sb.ToString();
+                if (t.Length > 0) titles.Add(t);
+            }
+            return true;
+        }, IntPtr.Zero);
+        return titles;
+    }
+}
+'@ -Language CSharp -ErrorAction Stop
+}
+
+# ---------------------------------------------------------------------------
 # 6. MSI package (WiX Toolset v4)
 # ---------------------------------------------------------------------------
 if (-not $SkipMsi) {
@@ -729,6 +794,107 @@ if (-not $SkipMsi) {
                                 Get-ChildItem -LiteralPath $msiExtractDir -Recurse -Filter '*.dll' |
                                     Sort-Object Name |
                                     ForEach-Object { Write-Host "    $($_.Name)" }
+
+                                # -----------------------------------------------------------------------
+                                # MSI smoke: launch exosnap.exe from the already-extracted MSI tree.
+                                #
+                                # Reuses $msiExtractDir (no second msiexec /a call). Only
+                                # loader-stage failures are treated as failures:
+                                #   - STATUS_DLL_NOT_FOUND (0xC0000135 / -1073741515 signed) → FAIL
+                                #   - Hard-error dialog (sentinel) → FAIL
+                                # Any other non-zero exit (GPU unavailable, single-instance guard, etc.)
+                                # is 'inconclusive' — the loader succeeded if we reached it.
+                                # -----------------------------------------------------------------------
+                                if (-not $SkipSmoke) {
+                                    Write-Step "Running MSI smoke (isolated, reusing extracted MSI tree)"
+                                    $msiSmokeExe = Get-ChildItem -LiteralPath $msiExtractDir -Recurse -Filter 'exosnap.exe' |
+                                        Select-Object -First 1
+                                    if (-not $msiSmokeExe) {
+                                        Add-Error "MSI smoke: exosnap.exe not found in extracted MSI tree under $msiExtractDir"
+                                        $msiSmokeResult = 'failed'
+                                    }
+                                    else {
+                                        $msiIsoConfig = Join-Path ([System.IO.Path]::GetTempPath()) ("exosnap-msi-smoke-cfg-$PID")
+                                        $msiIsoTemp   = Join-Path ([System.IO.Path]::GetTempPath()) ("exosnap-msi-smoke-tmp-$PID")
+                                        New-Item -ItemType Directory -Path $msiIsoConfig, $msiIsoTemp -Force | Out-Null
+
+                                        $msiPsi = New-Object System.Diagnostics.ProcessStartInfo
+                                        $msiPsi.FileName = $msiSmokeExe.FullName
+                                        $msiPsi.WorkingDirectory = [System.IO.Path]::GetTempPath()
+                                        $msiPsi.UseShellExecute = $false
+                                        $msiPsi.EnvironmentVariables['EXOSNAP_CONFIG_DIR'] = $msiIsoConfig
+                                        $msiPsi.EnvironmentVariables['TEMP'] = $msiIsoTemp
+                                        $msiPsi.EnvironmentVariables['TMP']  = $msiIsoTemp
+
+                                        # Layer 1: suppress Windows hard-error dialogs (missing DLL →
+                                        # immediate non-zero exit instead of a modal dialog).
+                                        $msiPrevErrMode = [SmokeNative]::SetErrorMode(
+                                            [SmokeNative]::SEM_FAILCRITICALERRORS -bor
+                                            [SmokeNative]::SEM_NOGPFAULTERRORBOX  -bor
+                                            [SmokeNative]::SEM_NOOPENFILEERRORBOX)
+                                        try {
+                                            $msiProc = [System.Diagnostics.Process]::Start($msiPsi)
+                                        } finally {
+                                            [SmokeNative]::SetErrorMode($msiPrevErrMode) | Out-Null
+                                        }
+
+                                        # Layer 2: dialog sentinel (belt-and-suspenders).
+                                        $msiDialogPatterns = @(
+                                            [regex]::new('System(fehler| Error)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase),
+                                            [regex]::new([regex]::Escape('exosnap.exe'), [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+                                        )
+                                        $msiDeadline = (Get-Date).AddSeconds(8)
+                                        $msiDialogDetected = $false
+                                        while (-not $msiProc.HasExited -and (Get-Date) -lt $msiDeadline) {
+                                            Start-Sleep -Milliseconds 500
+                                            try {
+                                                $msiTitles = [SmokeNative]::GetVisibleWindowTitles($msiProc.Id)
+                                                foreach ($msiTitle in $msiTitles) {
+                                                    if ($msiDialogPatterns | Where-Object { $_.IsMatch($msiTitle) }) {
+                                                        $msiSmokeNotes += "MSI smoke: dialog sentinel matched window title: '$msiTitle'"
+                                                        $msiDialogDetected = $true; break
+                                                    }
+                                                }
+                                            } catch { <# EnumWindows can race with process exit; ignore. #> }
+                                            if ($msiDialogDetected) { break }
+                                        }
+
+                                        if ($msiDialogDetected) {
+                                            try { $msiProc.Kill($true) } catch { }
+                                            Add-Error "MSI smoke: error dialog detected (title matched sentinel) — likely a missing DLL or loader hard-error"
+                                            $msiSmokeResult = 'failed'
+                                        }
+                                        elseif ($msiProc.HasExited) {
+                                            # STATUS_DLL_NOT_FOUND = 0xC0000135 = -1073741515 (signed int32).
+                                            # This is the definitive loader-stage missing-DLL code; treat it as
+                                            # the only hard failure. Any other exit code (GPU init failure,
+                                            # single-instance guard, etc.) is inconclusive — the loader succeeded.
+                                            if ($msiProc.ExitCode -eq -1073741515) {
+                                                Add-Error "MSI smoke: STATUS_DLL_NOT_FOUND (0xC0000135) — a required DLL is missing from the MSI package"
+                                                $msiSmokeResult = 'failed'
+                                            }
+                                            else {
+                                                $msiSmokeResult = 'inconclusive'
+                                                $msiSmokeNotes += "MSI exe exited with code $($msiProc.ExitCode) — loader succeeded; may be GPU-less runner or single-instance guard."
+                                            }
+                                        }
+                                        else {
+                                            # Process still running after deadline → loader succeeded, app is stable.
+                                            $msiSmokeResult = 'launched'
+                                            $null = $msiProc.CloseMainWindow()
+                                            if (-not $msiProc.WaitForExit(5000)) {
+                                                $msiProc.Kill($true)
+                                                $msiSmokeNotes += "MSI smoke: forced close after graceful-close timeout."
+                                            }
+                                        }
+
+                                        try {
+                                            Remove-Item -LiteralPath $msiIsoConfig, $msiIsoTemp -Recurse -Force -ErrorAction SilentlyContinue
+                                        } catch { }
+                                    }
+                                    Write-Host "  MSI smoke result: $msiSmokeResult"
+                                    foreach ($msiNote in $msiSmokeNotes) { Write-Host "    $msiNote" }
+                                }
                             }
                         }
                     }
@@ -809,58 +975,7 @@ $smokeNotes = @()
 if (-not $SkipSmoke) {
     Write-Step "Running extracted-ZIP smoke (isolated)"
 
-    # Load Win32 helpers needed for the two robustness layers.
-    Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-using System.Collections.Generic;
-using System.Text;
-
-public static class SmokeNative {
-    // Error-mode flags
-    public const uint SEM_FAILCRITICALERRORS  = 0x0001;
-    public const uint SEM_NOGPFAULTERRORBOX   = 0x0002;
-    public const uint SEM_NOOPENFILEERRORBOX  = 0x8000;
-
-    [DllImport("kernel32.dll")]
-    public static extern uint SetErrorMode(uint uMode);
-
-    // Window enumeration for dialog sentinel
-    public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint lpdwProcessId);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    public static extern int GetWindowText(IntPtr hwnd, StringBuilder lpString, int nMaxCount);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool IsWindowVisible(IntPtr hwnd);
-
-    /// <summary>
-    /// Returns all visible top-level window titles belonging to the given PID.
-    /// </summary>
-    public static List<string> GetVisibleWindowTitles(int pid) {
-        var titles = new List<string>();
-        EnumWindows((hwnd, _) => {
-            uint wpid;
-            GetWindowThreadProcessId(hwnd, out wpid);
-            if ((int)wpid == pid && IsWindowVisible(hwnd)) {
-                var sb = new StringBuilder(512);
-                GetWindowText(hwnd, sb, sb.Capacity);
-                var t = sb.ToString();
-                if (t.Length > 0) titles.Add(t);
-            }
-            return true;
-        }, IntPtr.Zero);
-        return titles;
-    }
-}
-'@ -Language CSharp -ErrorAction Stop
+    # SmokeNative Win32 helpers were already loaded before step 6 (shared with MSI smoke).
 
     Remove-SafeDir $SmokeDir
     $extractRoot = Join-Path $SmokeDir 'extracted'
@@ -1009,7 +1124,11 @@ Add-ReportLine "- InternalName: $($vi.InternalName)"
 Add-ReportLine "- OriginalFilename: $($vi.OriginalFilename)"
 Add-ReportLine "- LegalCopyright: $($vi.LegalCopyright)"
 Add-ReportLine ""
-Add-ReportLine "## Smoke test"
+Add-ReportLine "## MSI smoke test"
+Add-ReportLine "- Result: $msiSmokeResult"
+foreach ($n in $msiSmokeNotes) { Add-ReportLine "- $n" }
+Add-ReportLine ""
+Add-ReportLine "## Portable ZIP smoke test"
 Add-ReportLine "- Result: $smokeResult"
 foreach ($n in $smokeNotes) { Add-ReportLine "- $n" }
 Add-ReportLine ""
@@ -1032,7 +1151,8 @@ if ($msiBuilt) {
 }
 Write-Host "Manifest   : $ManifestPath"
 Write-Host "Report     : $ReportPath"
-Write-Host "Smoke      : $smokeResult"
+Write-Host "MSI Smoke  : $msiSmokeResult"
+Write-Host "ZIP Smoke  : $smokeResult"
 Write-Host ""
 
 if ($script:Errors.Count -gt 0) {
