@@ -17,6 +17,7 @@
 #include "models/RecordingPresetRegistry.h"
 #include "models/VideoSettingsModel.h"
 #include "notifications/NotificationManager.h"
+#include "pages/EditExportPage.h"
 #include "services/AudioDeviceNotifier.h"
 #include "services/DisplayDeviceNotifier.h"
 #include "services/GlobalHotkeyService.h"
@@ -170,9 +171,7 @@ class MainWindow : public QMainWindow {
     // Start + seed (rescan) the audio/webcam/display device notifiers. Shared by the
     // caps-ready and caps-failed paths so the ordering (notifiers after probe) holds.
     void startDeviceNotifiers();
-    void navigateToEditExportPage(const QString& file_path, const QString& duration, const QString& size,
-                                  const QString& resolution, const QString& fps, const QString& video_codec,
-                                  const QString& audio_codec, const QString& container);
+    void navigateToEditExportPage(const EditContext& ctx);
 
     // ---- Staged post-show page hydration ----
     // Builds deferred pages one-per-event-loop-tick so the UI remains responsive.

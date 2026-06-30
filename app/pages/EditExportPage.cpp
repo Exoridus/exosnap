@@ -699,6 +699,12 @@ void EditExportPage::buildUi() {
     refreshPhase();
 }
 
+void EditExportPage::setEditContext(const EditContext& ctx) {
+    ctx_ = ctx;
+    setRecordingInfo(ctx_.output_path, ctx_.duration, ctx_.size, ctx_.resolution, ctx_.fps, ctx_.video_codec,
+                     ctx_.audio_codec, ctx_.container);
+}
+
 void EditExportPage::setRecordingInfo(const QString& file_path, const QString& duration, const QString& size,
                                       const QString& resolution, const QString& fps, const QString& video_codec,
                                       const QString& audio_codec, const QString& container) {

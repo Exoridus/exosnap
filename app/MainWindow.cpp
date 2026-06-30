@@ -664,7 +664,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     connect(record_page_, &RecordPage::navigateToOutputPage, this, [this]() { navigateToPage(kOutputPageIndex); });
     connect(record_page_, &RecordPage::navigateToDiagnosticsPage, this,
             [this]() { navigateToPage(kDiagnosticsPageIndex); });
-    connect(record_page_, &RecordPage::editExportRequested, this, &MainWindow::navigateToEditExportPage);
+    connect(record_page_, &RecordPage::editExportRequested, this,
+            [this](const exosnap::EditContext& ctx) { navigateToEditExportPage(ctx); });
     // NOTE: config_page_ format/preset/video/audio/webcam signal connects are wired in buildConfigPage().
 
     // ---- FixAction routing (ADR 0033 / v0.8.0) ----
@@ -3340,7 +3341,10 @@ void MainWindow::dispatchNotificationAction(const notifications::NotificationEve
         // Metadata fields beyond the file path are not available in the toast
         // context; the page shows "–" for missing fields, which is acceptable.
         const QString path = event.action_payload.trimmed();
-        navigateToEditExportPage(path, QString{}, QString{}, QString{}, QString{}, QString{}, QString{}, QString{});
+        exosnap::EditContext toast_ctx;
+        toast_ctx.output_path = path;
+        toast_ctx.mkv_master_path = path; // best-effort fallback (may not be correct for MP4)
+        navigateToEditExportPage(toast_ctx);
         break;
     }
     case NotificationAction::OpenFolder: {
@@ -3584,13 +3588,10 @@ void MainWindow::onUpdateCheckComplete(const update::UpdateCheckResult& result) 
     manual_update_check_ = false;
 }
 
-void MainWindow::navigateToEditExportPage(const QString& file_path, const QString& duration, const QString& size,
-                                          const QString& resolution, const QString& fps, const QString& video_codec,
-                                          const QString& audio_codec, const QString& container) {
+void MainWindow::navigateToEditExportPage(const EditContext& ctx) {
     if (!edit_export_page_)
         buildEditExportPage();
-    edit_export_page_->setRecordingInfo(file_path, duration, size, resolution, fps, video_codec, audio_codec,
-                                        container);
+    edit_export_page_->setEditContext(ctx);
     edit_export_page_->setPhase(EditExportPage::Phase::Review);
     title_bar_->setActivePage(kRecordPageIndex);
     stack_->setCurrentWidget(edit_export_page_);

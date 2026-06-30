@@ -863,9 +863,17 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     result_delete_btn_->setProperty("role", "ghost");
     result_delete_btn_->setCursor(Qt::PointingHandCursor);
 
+    // 0.9.0 S1: Edit button — opens EditExportPage with full context.
+    result_edit_btn_ = new QPushButton(QStringLiteral("Edit"), result_actions_widget_);
+    result_edit_btn_->setObjectName(QStringLiteral("resultEditBtn"));
+    result_edit_btn_->setProperty("role", "ghost");
+    result_edit_btn_->setCursor(Qt::PointingHandCursor);
+    result_edit_btn_->setToolTip(QStringLiteral("Trim and export this recording"));
+
     result_actions_layout_->addWidget(result_copy_path_btn_);
     result_actions_layout_->addWidget(result_rename_btn_);
     result_actions_layout_->addWidget(result_delete_btn_);
+    result_actions_layout_->addWidget(result_edit_btn_);
     result_actions_layout_->addStretch(1);
 
     result_details_layout->addWidget(result_meta_label_, 1);
@@ -1043,6 +1051,33 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     connect(result_copy_path_btn_, &QPushButton::clicked, this, &RecordPage::onCopyFilePath);
     connect(result_rename_btn_, &QPushButton::clicked, this, &RecordPage::onRenameFile);
     connect(result_delete_btn_, &QPushButton::clicked, this, &RecordPage::onDeleteFile);
+
+    // 0.9.0 S1: Edit button — build EditContext from the last completed result and navigate.
+    connect(result_edit_btn_, &QPushButton::clicked, this, [this]() {
+        const auto& vm = view_model_;
+        if (!vm.last_succeeded)
+            return;
+        EditContext ctx;
+        ctx.output_path = QString::fromStdWString(vm.result_output_path);
+        ctx.mkv_master_path = QString::fromStdWString(vm.result_mkv_master_path);
+        ctx.duration = QString::fromStdWString(RecordViewModel::FormatElapsed(vm.result_elapsed_seconds));
+        ctx.size = vm.result_output_file_bytes > 0
+                       ? QString::fromStdWString(RecordViewModel::FormatBytes(vm.result_output_file_bytes))
+                       : QString{};
+        if (vm.result_output_width > 0 && vm.result_output_height > 0)
+            ctx.resolution = QStringLiteral("%1x%2").arg(vm.result_output_width).arg(vm.result_output_height);
+        ctx.fps = frameRateLabel(vm.result_frame_rate_num, vm.result_frame_rate_den) + QStringLiteral(" ") +
+                  (vm.result_cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
+        ctx.video_codec = videoCodecLabel(vm.result_video_codec);
+        ctx.audio_codec = audioCodecLabel(vm.result_audio_codec);
+        ctx.container = containerLabel(vm.result_container);
+        ctx.peak_av_drift_ms = peak_av_drift_ms_;
+        ctx.av_drift_available = av_drift_ever_available_;
+        ctx.completed_snapshot = last_completed_snapshot_;
+        ctx.markers = vm.result_markers;
+        ctx.marker_sidecar_path = QString::fromStdWString(vm.result_marker_sidecar_path);
+        emit editExportRequested(ctx);
+    });
     connect(rename_cancel_btn_, &QPushButton::clicked, this, [this]() {
         rename_overlay_->setVisible(false);
         rename_error_label_->setVisible(false);
@@ -4309,6 +4344,9 @@ void RecordPage::updateResultDetailsPanel() {
         result_rename_btn_->setEnabled(rec.fileExists());
     if (result_delete_btn_)
         result_delete_btn_->setEnabled(rec.fileExists());
+    // Edit button: enabled for single-file results (split sessions have no single MKV master).
+    if (result_edit_btn_)
+        result_edit_btn_->setEnabled(rec.fileExists() && !rec.isMultiSegment());
 
     // Hide overlays if file is missing
     if (!rec.fileExists()) {

@@ -1,6 +1,10 @@
 #pragma once
 #include <QString>
 #include <QWidget>
+#include <vector>
+
+#include "../models/RecordingMarker.h"
+#include <recorder_core/pipeline_diagnostics.h>
 
 class QLabel;
 class QPushButton;
@@ -11,6 +15,30 @@ class QEvent;
 class QObject;
 
 namespace exosnap {
+
+// Context passed to EditExportPage when opening the edit surface.
+// Contains everything needed for the Review, Edit, and Output phases.
+struct EditContext {
+    // File metadata (from the completed recording result)
+    QString output_path;     // final output (MP4 or MKV)
+    QString mkv_master_path; // edit master (MKV); same as output for MKV recordings
+    QString duration;        // human-readable duration (e.g. "1:23")
+    QString size;            // human-readable file size (e.g. "142 MB")
+    QString resolution;      // e.g. "1920x1080"
+    QString fps;             // e.g. "60 fps CFR"
+    QString video_codec;     // e.g. "AV1 (NVENC)"
+    QString audio_codec;     // e.g. "Opus"
+    QString container;       // e.g. "MKV" or "MP4"
+
+    // Post-flight data (from RecordPage diagnostics tracking)
+    double peak_av_drift_ms = 0.0;
+    bool av_drift_available = false;
+    recorder_core::RecordingDiagnosticsSnapshot completed_snapshot;
+
+    // Markers pre-loaded from the recording session (fallback if sidecar cannot be read)
+    std::vector<RecordingMarker> markers;
+    QString marker_sidecar_path; // companion .markers.json path
+};
 
 // Edit/Export-Surface — Phase G (UI-Shell, Placeholder-Character).
 // The real Trim/Export engine arrives in 0.11.
@@ -28,6 +56,10 @@ class EditExportPage : public QWidget {
 
     explicit EditExportPage(QWidget* parent = nullptr);
 
+    // Primary entry point: full context from the completed recording session.
+    void setEditContext(const EditContext& ctx);
+
+    // Legacy shim: partial data from the notification toast (no master path or diagnostics).
     void setRecordingInfo(const QString& file_path, const QString& duration, const QString& size,
                           const QString& resolution, const QString& fps, const QString& video_codec,
                           const QString& audio_codec, const QString& container);
@@ -58,6 +90,9 @@ class EditExportPage : public QWidget {
     void refreshPhase();
 
     Phase phase_ = Phase::Review;
+
+    // Full context set by setEditContext (primary path).
+    EditContext ctx_;
 
     QString file_path_;
     QString duration_;

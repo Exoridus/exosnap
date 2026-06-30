@@ -142,6 +142,11 @@ class RecordViewModel {
     recorder_core::Container result_container = recorder_core::Container::WebM;
     recorder_core::VideoCodec result_video_codec = recorder_core::VideoCodec::Av1Nvenc;
     recorder_core::AudioCodec result_audio_codec = recorder_core::AudioCodec::Opus;
+    // 0.9.0 S1: edit master path (empty for split sessions / failures)
+    std::wstring result_mkv_master_path;
+    // Markers and sidecar path from the completed recording session
+    std::vector<RecordingMarker> result_markers;
+    std::wstring result_marker_sidecar_path;
 
     // Live stats fields
     std::wstring elapsed_text = L"0:00";

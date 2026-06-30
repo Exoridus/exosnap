@@ -449,6 +449,9 @@ void RecordViewModel::SetResult(const UiRecordingResult& result) {
     result_container = result.container;
     result_video_codec = result.video_codec;
     result_audio_codec = result.audio_codec;
+    result_mkv_master_path = result.mkv_master_path;
+    result_markers = result.markers;
+    result_marker_sidecar_path = result.marker_sidecar_path;
 
     const auto msg = exosnap::diagnostics::MapErrorToUserMessage(result);
     result_user_title = msg.title;
