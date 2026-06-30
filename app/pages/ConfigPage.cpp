@@ -44,6 +44,7 @@
 #include "../models/SettingsHintText.h"
 #include "../services/GlobalHotkeyService.h"
 #include "../services/WebcamService.h"
+#include "../ui/CodecLabels.h"
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
 #include "../ui/theme/ExoSnapTheme.h"
@@ -575,61 +576,14 @@ QWidget* makeOutputSubLabelWithHint(const QString& text, const QString& hint_tex
     return row;
 }
 
-QString VideoCodecLabel(capability::VideoCodec codec) {
-    switch (codec) {
-    case capability::VideoCodec::H264Nvenc:
-        return QStringLiteral("H.264");
-    case capability::VideoCodec::HevcNvenc:
-        return QStringLiteral("HEVC");
-    case capability::VideoCodec::Av1Nvenc:
-        return QStringLiteral("AV1");
-    }
-    return QStringLiteral("H.264");
-}
-
-QString AudioCodecLabel(capability::AudioCodec codec) {
-    switch (codec) {
-    case capability::AudioCodec::AacMf:
-        return QStringLiteral("AAC");
-    case capability::AudioCodec::Opus:
-        return QStringLiteral("Opus");
-    case capability::AudioCodec::Pcm:
-        return QStringLiteral("PCM");
-    case capability::AudioCodec::Flac:
-        return QStringLiteral("FLAC");
-    }
-    return QStringLiteral("AAC");
-}
-
-QString ContainerLabel(capability::Container container) {
-    switch (container) {
-    case capability::Container::Matroska:
-        return QStringLiteral("MKV");
-    case capability::Container::Mp4:
-        return QStringLiteral("MP4");
-    case capability::Container::WebM:
-        return QStringLiteral("WebM");
-    }
-    return QStringLiteral("MKV");
-}
-
-QString ResolutionLabel(const OutputResolutionSettings& resolution) {
-    if (resolution.mode == OutputResolutionMode::Custom && resolution.custom_width > 0 &&
-        resolution.custom_height > 0) {
-        return QStringLiteral("%1×%2").arg(resolution.custom_width).arg(resolution.custom_height);
-    }
-    return QString::fromWCharArray(OutputResolutionModeName(resolution.mode));
-}
-
-QString FrameRateLabel(uint32_t numerator, uint32_t denominator) {
-    if (numerator == 0 || denominator == 0) {
-        return QStringLiteral("60 fps");
-    }
-    if (denominator == 1) {
-        return QStringLiteral("%1 fps").arg(numerator);
-    }
-    return QStringLiteral("%1/%2 fps").arg(numerator).arg(denominator);
-}
+// Codec/container/frame-rate/resolution labels live in the shared canon header
+// (app/ui/CodecLabels.h) — single source of truth so ConfigPage and RecordPage
+// can never drift apart on casing again.
+using exosnap::ui::audioCodecLabel;
+using exosnap::ui::containerLabel;
+using exosnap::ui::frameRateLabel;
+using exosnap::ui::resolutionLabel;
+using exosnap::ui::videoCodecLabel;
 
 int VideoCodecToInt(capability::VideoCodec codec) {
     return static_cast<int>(codec);
@@ -3559,9 +3513,9 @@ void ConfigPage::updateCompatCallout() {
     }
     const bool compat_bad = video_bad || audio_bad;
 
-    const QString summary = ContainerLabel(c) + QStringLiteral(" \xC2\xB7 ") + VideoCodecLabel(v) +
-                            QStringLiteral(" \xC2\xB7 ") + AudioCodecLabel(a) + QStringLiteral(" \xC2\xB7 ") +
-                            FrameRateLabel(video_settings_.frame_rate_num, video_settings_.frame_rate_den) +
+    const QString summary = containerLabel(c) + QStringLiteral(" \xC2\xB7 ") + videoCodecLabel(v) +
+                            QStringLiteral(" \xC2\xB7 ") + audioCodecLabel(a) + QStringLiteral(" \xC2\xB7 ") +
+                            frameRateLabel(video_settings_.frame_rate_num, video_settings_.frame_rate_den) +
                             QStringLiteral(" \xC2\xB7 ") +
                             (video_settings_.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"));
 
@@ -3573,16 +3527,16 @@ void ConfigPage::updateCompatCallout() {
     if (compat_bad && callout_text_) {
         QStringList bad_parts;
         if (video_bad)
-            bad_parts << VideoCodecLabel(v);
+            bad_parts << videoCodecLabel(v);
         if (audio_bad)
-            bad_parts << AudioCodecLabel(a);
+            bad_parts << audioCodecLabel(a);
         const QString bad_str = bad_parts.join(QStringLiteral(" + "));
         QString hint;
         if (c == capability::Container::WebM)
             hint = QStringLiteral("WebM supports AV1 + Opus only.");
         else if (c == capability::Container::Mp4)
             hint = QStringLiteral("MP4 supports H.264 + AAC only.");
-        callout_text_->setText(ContainerLabel(c) + QStringLiteral(" can't hold ") + bad_str + QStringLiteral(". ") +
+        callout_text_->setText(containerLabel(c) + QStringLiteral(" can't hold ") + bad_str + QStringLiteral(". ") +
                                hint);
     }
     if (!compat_bad && compat_ok_label_) {
@@ -3599,11 +3553,11 @@ void ConfigPage::updateCompatCallout() {
 
     // CompareHint value sync
     if (container_compare_hint_)
-        container_compare_hint_->setCurrentValue(ContainerLabel(format_settings_.container));
+        container_compare_hint_->setCurrentValue(containerLabel(format_settings_.container));
     if (video_codec_compare_hint_)
-        video_codec_compare_hint_->setCurrentValue(VideoCodecLabel(format_settings_.video_codec));
+        video_codec_compare_hint_->setCurrentValue(videoCodecLabel(format_settings_.video_codec));
     if (audio_codec_compare_hint_)
-        audio_codec_compare_hint_->setCurrentValue(AudioCodecLabel(format_settings_.audio_codec));
+        audio_codec_compare_hint_->setCurrentValue(audioCodecLabel(format_settings_.audio_codec));
 }
 
 void ConfigPage::onContainerChanged(int id) {
@@ -3996,11 +3950,11 @@ void ConfigPage::updateEffectiveOutputSummary() {
 
     const QString summary =
         QStringLiteral("Output: %1 · %2 · %3 · %4 · %5 · %6")
-            .arg(ResolutionLabel(format_settings_.resolution),
-                 FrameRateLabel(video_settings_.frame_rate_num, video_settings_.frame_rate_den),
+            .arg(resolutionLabel(format_settings_.resolution),
+                 frameRateLabel(video_settings_.frame_rate_num, video_settings_.frame_rate_den),
                  video_settings_.cfr ? QStringLiteral("CFR") : QStringLiteral("VFR"),
-                 VideoCodecLabel(format_settings_.video_codec), AudioCodecLabel(format_settings_.audio_codec),
-                 ContainerLabel(format_settings_.container));
+                 videoCodecLabel(format_settings_.video_codec), audioCodecLabel(format_settings_.audio_codec),
+                 containerLabel(format_settings_.container));
     output_effective_summary_label_->setText(summary);
 }
 

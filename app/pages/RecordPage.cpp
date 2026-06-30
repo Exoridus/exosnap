@@ -3,6 +3,7 @@
 #include "../diagnostics/AppLog.h"
 #include "../diagnostics/StartupClock.h"
 #include "../models/RecordingPreset.h"
+#include "../ui/CodecLabels.h"
 #include "../ui/dialogs/SourcePickerDialog.h"
 #include "../ui/dialogs/SourcePickerOverlay.h"
 #include "../ui/dialogs/SourcePickerWindowRules.h"
@@ -122,102 +123,14 @@ QString stateDisplay(UiRecordingState state) {
     }
 }
 
-QString containerLabel(capability::Container container) {
-    switch (container) {
-    case capability::Container::Matroska:
-        return QStringLiteral("MKV");
-    case capability::Container::Mp4:
-        return QStringLiteral("MP4");
-    case capability::Container::WebM:
-        return QStringLiteral("WEBM");
-    default:
-        return QStringLiteral("MKV");
-    }
-}
-
-QString videoCodecLabel(capability::VideoCodec codec) {
-    switch (codec) {
-    case capability::VideoCodec::H264Nvenc:
-        return QStringLiteral("H.264");
-    case capability::VideoCodec::HevcNvenc:
-        return QStringLiteral("HEVC");
-    case capability::VideoCodec::Av1Nvenc:
-        return QStringLiteral("AV1");
-    default:
-        return QStringLiteral("AV1");
-    }
-}
-
-QString audioCodecLabel(capability::AudioCodec codec) {
-    switch (codec) {
-    case capability::AudioCodec::Opus:
-        return QStringLiteral("Opus"); // D4: display casing — never OPUS
-    case capability::AudioCodec::AacMf:
-        return QStringLiteral("AAC");
-    case capability::AudioCodec::Pcm:
-        return QStringLiteral("PCM");
-    case capability::AudioCodec::Flac:
-        return QStringLiteral("FLAC");
-    default:
-        return QStringLiteral("AAC");
-    }
-}
-
-QString containerLabel(recorder_core::Container container) {
-    switch (container) {
-    case recorder_core::Container::Matroska:
-        return QStringLiteral("MKV");
-    case recorder_core::Container::Mp4:
-        return QStringLiteral("MP4");
-    case recorder_core::Container::WebM:
-        return QStringLiteral("WEBM");
-    }
-    return QStringLiteral("MKV");
-}
-
-QString videoCodecLabel(recorder_core::VideoCodec codec) {
-    switch (codec) {
-    case recorder_core::VideoCodec::H264Nvenc:
-        return QStringLiteral("H.264");
-    case recorder_core::VideoCodec::HevcNvenc:
-        return QStringLiteral("HEVC");
-    case recorder_core::VideoCodec::Av1Nvenc:
-        return QStringLiteral("AV1");
-    }
-    return QStringLiteral("AV1");
-}
-
-QString audioCodecLabel(recorder_core::AudioCodec codec) {
-    switch (codec) {
-    case recorder_core::AudioCodec::Opus:
-        return QStringLiteral("Opus"); // D4: display casing — never OPUS
-    case recorder_core::AudioCodec::AacMf:
-        return QStringLiteral("AAC");
-    case recorder_core::AudioCodec::Pcm:
-        return QStringLiteral("PCM");
-    case recorder_core::AudioCodec::Flac:
-        return QStringLiteral("FLAC");
-    }
-    return QStringLiteral("AAC");
-}
-
-QString frameRateLabel(uint32_t numerator, uint32_t denominator) {
-    if (numerator == 0 || denominator == 0) {
-        return QStringLiteral("60 fps");
-    }
-    if (denominator == 1) {
-        return QStringLiteral("%1 fps").arg(numerator);
-    }
-    return QStringLiteral("%1/%2 fps").arg(numerator).arg(denominator);
-}
-
-QString resolutionLabel(const OutputResolutionSettings& resolution) {
-    if (resolution.mode == OutputResolutionMode::Custom && resolution.custom_width > 0 &&
-        resolution.custom_height > 0) {
-        return QStringLiteral("%1×%2").arg(resolution.custom_width).arg(resolution.custom_height);
-    }
-    return QString::fromWCharArray(OutputResolutionModeName(resolution.mode));
-}
+// Codec/container/frame-rate/resolution labels: shared canon header
+// (app/ui/CodecLabels.h). Both enum-family overloads (capability:: and
+// recorder_core::) live there — single source of truth, canonical casing.
+using exosnap::ui::audioCodecLabel;
+using exosnap::ui::containerLabel;
+using exosnap::ui::frameRateLabel;
+using exosnap::ui::resolutionLabel;
+using exosnap::ui::videoCodecLabel;
 
 QString toClock(const std::wstring& elapsed_text) {
     const QString text = QString::fromStdWString(elapsed_text);
@@ -1706,7 +1619,7 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
         preview_surface_->setLiveFrame(test_frame);
         preview_surface_->setTopMetaText(QStringLiteral("VISUAL TEST TARGET"));
         preview_surface_->setBottomLeftText(QStringLiteral("Display 1 · 2560x1440"));
-        preview_surface_->setBottomRightText(QStringLiteral("Native · 60 fps CFR · AV1 · Opus · WEBM"));
+        preview_surface_->setBottomRightText(QStringLiteral("Native · 60 fps CFR · AV1 · Opus · WebM"));
         preview_surface_->setFrameTone(ui::widgets::PreviewSurface::FrameTone::Ready);
     }
 

@@ -169,6 +169,7 @@ qt_add_executable(exosnap WIN32
     ui/widgets/NotificationBell.cpp
     ui/widgets/AdvisoryItem.h
     ui/widgets/AdvisoryItem.cpp
+    ui/CodecLabels.h
     ui/widgets/CornerCaptureButton.h
     ui/widgets/CornerCaptureButton.cpp
     ui/widgets/PlaceholderRow.h
@@ -883,6 +884,15 @@ exosnap_add_gtest(
 )
 target_include_directories(corner_capture_button_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(corner_capture_button_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME codec_labels_tests
+    TEST_PREFIX suite.
+    SOURCES
+        tests/test_codec_labels.cpp
+    LIBRARIES exosnap_capability recorder_core Qt6::Core
+)
+target_include_directories(codec_labels_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME placeholder_row_tests
