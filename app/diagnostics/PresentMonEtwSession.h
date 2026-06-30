@@ -40,6 +40,12 @@ class PresentMonEtwSession {
     mutable PresentSample latest_;          // guarded by sample_mutex_
     mutable uint64_t last_present_qpc_ = 0; // reader-side drain state (Latest())
     mutable int64_t qpc_freq_ = 0;
+    // ADR 0033 extra-checks: session-cumulative present aggregates, accumulated on the
+    // reader side across the drain (same single-threaded Latest() access as last_present_qpc_).
+    mutable uint64_t present_count_ = 0;
+    mutable uint64_t discarded_count_ = 0;
+    mutable uint64_t mode_flip_count_ = 0;
+    mutable PresentMode last_mode_ = PresentMode::Unknown;
     // Opaque SessionImpl (PMTraceConsumer + TraceSession). shared_ptr<void> keeps the
     // header PresentMon-free; all access is guarded by sample_mutex_. Snapshotting the
     // pointer under the lock keeps SessionImpl alive across a concurrent Stop().

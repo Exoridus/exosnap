@@ -93,6 +93,11 @@ class RecordPage : public QWidget {
     // Never stores raw platform handles; keys are description-based.
     [[nodiscard]] PresetCaptureTarget currentCapturePolicy() const;
 
+    // Process id of the currently selected capture target, for scoping present
+    // diagnostics. Returns the window's PID for a Window target, else 0 (Monitor /
+    // Region = no single owning process → global attribution). ADR 0033 extra-checks.
+    [[nodiscard]] uint32_t selectedTargetWindowPid() const;
+
     // Apply a saved capture policy:
     //   - Empty key     → no stored preference: auto-pick primary/first target (OK).
     //   - Non-empty key, match found  → select it.

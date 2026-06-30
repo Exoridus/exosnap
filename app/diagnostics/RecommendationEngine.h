@@ -52,7 +52,10 @@ class RecommendationEngine {
     void checkAudioContainerCompat(DiagnosticChecklist& checklist) const;
     void checkVideoBitDepthContainerCompat(DiagnosticChecklist& checklist) const;
     void checkExclusiveFullscreen(DiagnosticChecklist& checklist) const;
+    void checkDiscardedPresents(DiagnosticChecklist& checklist) const;
+    void checkPresentModeFlips(DiagnosticChecklist& checklist) const;
     void checkDpcLatency(DiagnosticChecklist& checklist) const;
+    void checkDiskWriteStall(DiagnosticChecklist& checklist) const;
 
     const capability::CapabilitySet& caps_;
     const capability::UserRecorderConfig& config_;
@@ -69,6 +72,11 @@ class RecommendationEngine {
     bool live_cfr_ = true;
     double live_present_jitter_ms_ = 0.0;
     double live_coalesce_ratio_ = 1.0;
+
+    // Live disk-write latency (ADR 0033 extra-checks). Extracted from the live snapshot's
+    // DiskDiagnostics; available only for the streaming Matroska writer (MP4 remux is post-stop).
+    bool live_disk_write_available_ = false;
+    double live_disk_peak_write_ms_ = 0.0;
 
     // Present-mode observation (v0.8.0 / ADR 0033). Available only when the present provider
     // is active (elevation + ETW session open). Empty when not available.
