@@ -9,6 +9,7 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QString>
+#include <QTemporaryDir>
 
 #include <capability/audio_ui_state.h>
 #include <recorder_core/audio_track_model.h>
@@ -29,8 +30,10 @@ namespace {
 static int s_counter = 0;
 
 QString UniqueTempPath() {
-    const QString temp_dir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
-    return QDir(temp_dir).filePath(QStringLiteral("exosnap_gain_test_%1.ini").arg(++s_counter));
+    // Unique temp dir per test process (gtest_discover_tests = one process per
+    // test); a shared fixed name races under ctest -j.
+    static QTemporaryDir s_dir;
+    return s_dir.filePath(QStringLiteral("exosnap_gain_test_%1.ini").arg(++s_counter));
 }
 
 void CleanupFile(const QString& path) {
