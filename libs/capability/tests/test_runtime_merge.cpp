@@ -20,6 +20,7 @@ RuntimeCapabilitySnapshot MakeFavorableSnapshot() {
     snap.nvidia.adapter_name = "NVIDIA GeForce RTX 9999 (synthetic)";
     snap.mf_aac.mftenum_found = true;
     snap.mf_aac.clsid_instantiable = false; // mftenum_found alone is sufficient
+    snap.mf_webcam.available = true;        // S4: MF present in favorable snapshot
     snap.os.build_number = 26100u;
     snap.os.version_string = "10.0.26100";
     return snap;
@@ -318,6 +319,55 @@ TEST(RuntimeMergeTest, TC11_AacDowngradeReason_IsUserFacing) {
     EXPECT_EQ(aac.reason.find("CLSID_AACMFTEncoder"), std::string::npos) << "reason: " << aac.reason;
     // Must be actionable and mention AAC.
     EXPECT_NE(aac.reason.find("AAC"), std::string::npos) << "reason: " << aac.reason;
+}
+
+// -------------------------------------------------------------------------
+// S4: MF webcam capability gate tests
+// -------------------------------------------------------------------------
+
+// TC-S4-1: mf_webcam_available is true in the static validated baseline.
+TEST(RuntimeMergeTest, TC_S4_1_MfWebcamAvailable_TrueInBaseline) {
+    const CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+    EXPECT_TRUE(caps.mf_webcam_available) << "mf_webcam_available must be true in the static validated baseline.";
+}
+
+// TC-S4-2: mf_webcam_available propagates from the runtime snapshot (present).
+TEST(RuntimeMergeTest, TC_S4_2_MfWebcamAvailable_PropagatesFromSnapshot_Present) {
+    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    snap.mf_webcam.available = true;
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+    EXPECT_TRUE(caps.mf_webcam_available)
+        << "mf_webcam_available must be true when snapshot.mf_webcam.available is true.";
+}
+
+// TC-S4-3: mf_webcam_available propagates from the runtime snapshot (absent / Windows-N).
+TEST(RuntimeMergeTest, TC_S4_3_MfWebcamAvailable_PropagatesFromSnapshot_Absent) {
+    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    snap.mf_webcam.available = false;
+    snap.mf_webcam.failure_detail = "LoadLibraryW(mfplat.dll) failed, GetLastError=2";
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+    EXPECT_FALSE(caps.mf_webcam_available)
+        << "mf_webcam_available must be false when snapshot.mf_webcam.available is false.";
+}
+
+// TC-S4-4: mf_webcam.available is preserved in the CapabilitySet runtime field.
+TEST(RuntimeMergeTest, TC_S4_4_MfWebcamAvailable_PreservedInRuntimeField) {
+    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    snap.mf_webcam.available = false;
+    snap.mf_webcam.failure_detail = "synthetic-absent";
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+    EXPECT_FALSE(caps.runtime.mf_webcam.available);
+    EXPECT_EQ(caps.runtime.mf_webcam.failure_detail, "synthetic-absent");
+}
+
+// TC-S4-5: BuildFromHardwareQuery includes a mf_webcam probe result (no-throw).
+TEST(RuntimeMergeTest, TC_S4_5_BuildFromHardwareQuery_MfWebcamProbed) {
+    CapabilitySet caps;
+    ASSERT_NO_THROW(caps = CapabilityBuilder::BuildFromHardwareQuery());
+    // On a normal Windows install mf_webcam_available is true; on Windows-N it
+    // is false.  Either way the field must be coherent with the runtime snapshot.
+    EXPECT_EQ(caps.mf_webcam_available, caps.runtime.mf_webcam.available)
+        << "caps.mf_webcam_available must mirror caps.runtime.mf_webcam.available.";
 }
 
 } // namespace

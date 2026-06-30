@@ -10,6 +10,7 @@ CapabilitySet CapabilityBuilder::BuildStaticValidatedBaseline() {
     caps.gpu_adapter_name = "validated-baseline-static";
     caps.nvenc_dll_present = true;
     caps.mf_aac_available = true;
+    caps.mf_webcam_available = true; // S4: baseline assumes MF present
 
     caps.containers.emplace(Container::Matroska,
                             SupportAnnotation{SupportLevel::Available, "Primary validated container."});
@@ -68,6 +69,7 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
     caps.gpu_adapter_name = snapshot.nvidia.adapter_name;
     caps.nvenc_dll_present = snapshot.nvidia.nvenc_dll_present;
     caps.mf_aac_available = snapshot.mf_aac.available();
+    caps.mf_webcam_available = snapshot.mf_webcam.available; // S4: gate webcam UI
 
     // --- Downgrade rule A: missing NVENC blocks AV1 path ---
     // NVENC is required when the DLL is not present or API version is not valid.

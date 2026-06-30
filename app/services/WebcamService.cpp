@@ -14,10 +14,11 @@
 #include <algorithm>
 #include <cassert>
 
-#pragma comment(lib, "mfplat.lib")
-#pragma comment(lib, "mf.lib")
-#pragma comment(lib, "mfuuid.lib")
-#pragma comment(lib, "mfreadwrite.lib")
+// MF libs are listed in CMakeLists.txt target_link_libraries and in the
+// exosnap_device_service_test_support support target; no redundant pragmas here.
+// /DELAYLOAD:mfplat.dll, /DELAYLOAD:mf.dll, /DELAYLOAD:mfreadwrite.dll are set
+// on the exosnap exe target so MF DLLs are not loaded until first use. The
+// IsMfPresent() probe below must be called before any MF entry point.
 
 namespace exosnap {
 
@@ -220,6 +221,27 @@ std::optional<ReaderContext> OpenReader(const std::string& device_id, int want_w
 } // namespace
 
 // ---------------------------------------------------------------------------
+// S4: MF presence probe (once-per-process, cached)
+// ---------------------------------------------------------------------------
+
+// static
+bool WebcamService::IsMfPresent() noexcept {
+    // Probe mfplat.dll via LoadLibraryW — safe even with /DELAYLOAD because we
+    // never call a delay-loaded symbol here (LoadLibraryW is a kernel32 export).
+    // The result is cached: a Windows-N machine without the Media Feature Pack
+    // will always return false; a normal Windows install always returns true.
+    static const bool s_present = []() noexcept -> bool {
+        HMODULE h = LoadLibraryW(L"mfplat.dll");
+        if (h) {
+            FreeLibrary(h);
+            return true;
+        }
+        return false;
+    }();
+    return s_present;
+}
+
+// ---------------------------------------------------------------------------
 // WebcamService public API
 // ---------------------------------------------------------------------------
 
@@ -228,6 +250,8 @@ WebcamService::~WebcamService() {
 }
 
 std::vector<WebcamDeviceInfo> WebcamService::EnumerateDevices() {
+    if (!IsMfPresent())
+        return {};
     MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
 
     winrt::com_ptr<IMFAttributes> attrs;
@@ -265,6 +289,8 @@ std::vector<WebcamDeviceInfo> WebcamService::EnumerateDevices() {
 }
 
 std::vector<WebcamFormat> WebcamService::EnumerateFormats(const std::string& device_id) {
+    if (!IsMfPresent())
+        return {};
     MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
 
     winrt::com_ptr<IMFAttributes> attrs;
@@ -384,6 +410,10 @@ bool WebcamService::TryGetFrame(int& out_width, int& out_height, std::vector<uin
 }
 
 void WebcamService::ThreadMain(const std::string& device_id, int width, int height, int fps, std::stop_token stop) {
+    if (!IsMfPresent()) {
+        running_.store(false);
+        return;
+    }
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
 

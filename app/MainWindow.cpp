@@ -1023,6 +1023,17 @@ void MainWindow::onRuntimeCapsReady(capability::CapabilitySet caps) {
     refreshPresetUi();
     refreshDiagnosticsData();
     startDeviceNotifiers();
+
+    // S4: Gate webcam UI when MF is absent (Windows-N without the Media Feature Pack).
+    // WebcamPage is lazily built; if it already exists apply now; if not, buildWebcamPage()
+    // and buildConfigPage() will apply the gate when each page is first constructed.
+    if (!runtime_caps_.mf_webcam_available) {
+        diagnostics::AppLog::warning(QStringLiteral("window"),
+                                     QStringLiteral("mfplat.dll absent — webcam UI disabled (Windows-N)"));
+        if (webcam_page_)
+            webcam_page_->setMfUnavailable(true);
+        // config_page_ / WebcamSetupPanel: gate is applied in buildConfigPage().
+    }
 }
 
 void MainWindow::onRuntimeCapsFailed(const QString& reason) {
@@ -3833,9 +3844,13 @@ void MainWindow::buildConfigPage() {
     // The WebcamSetupPanel is embedded in ConfigPage; access via findChild.
     auto* setup_panel =
         config_page_->findChild<exosnap::ui::widgets::WebcamSetupPanel*>(QStringLiteral("settingsWebcamSetupPanel"));
-    if (setup_panel)
+    if (setup_panel) {
         connect(setup_panel, &exosnap::ui::widgets::WebcamSetupPanel::rescanRequested, &webcam_notifier_,
                 &WebcamDeviceNotifier::rescan);
+        // S4: Apply MF-absent gate if the capability probe already resolved.
+        if (runtime_caps_ready_ && !runtime_caps_.mf_webcam_available)
+            setup_panel->setMfUnavailable(true);
+    }
 
     // ---- Notification toasts wiring (moved from initNotificationToasts()) ----
     // initNotificationToasts() runs before buildConfigPage() so config_page_ was null there.
@@ -4049,6 +4064,10 @@ void MainWindow::buildWebcamPage() {
     // from cfg2.webcam *before* the if(webcam_page_) guard — so live_webcam_ is the
     // correct, settled value at this point regardless of when buildWebcamPage() runs.
     webcam_page_->applySettings(live_webcam_);
+
+    // S4: Apply MF-absent gate if the capability probe already resolved.
+    if (runtime_caps_ready_ && !runtime_caps_.mf_webcam_available)
+        webcam_page_->setMfUnavailable(true);
 }
 
 void MainWindow::buildOutputPage() {

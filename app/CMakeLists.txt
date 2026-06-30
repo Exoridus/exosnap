@@ -342,6 +342,22 @@ target_link_libraries(exosnap PRIVATE
     Shell32.lib Advapi32.lib
 )
 
+# S4: Delay-load Media Foundation DLLs so the app runs on Windows-N without the
+# Media Feature Pack. /DELAYLOAD converts the static import-table entry to a
+# demand-load binding: mfplat.dll / mf.dll / mfreadwrite.dll are NOT loaded at
+# process startup. WebcamService::IsMfPresent() probes availability via a safe
+# LoadLibraryW call before any MF entry point is invoked, so the delay-load
+# failure hook (__delayLoadHelper2 raising VcppException) is never reached.
+# delayimp.lib provides __delayLoadHelper2 (required by the MSVC delay-load stub).
+if(MSVC)
+    target_link_options(exosnap PRIVATE
+        /DELAYLOAD:mfplat.dll
+        /DELAYLOAD:mf.dll
+        /DELAYLOAD:mfreadwrite.dll
+    )
+    target_link_libraries(exosnap PRIVATE delayimp.lib)
+endif()
+
 target_include_directories(exosnap PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
 # Stage crashpad_handler.exe next to exosnap.exe so the runtime lookup
