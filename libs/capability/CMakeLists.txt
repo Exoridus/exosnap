@@ -2,6 +2,7 @@ add_library(exosnap_capability STATIC
   src/config_types.cpp
   src/container_compat_registry.cpp
   src/capability_set.cpp
+  src/codec_selection.cpp
   src/capability_builder.cpp
   src/runtime_query.cpp
   src/resolver.cpp
@@ -30,6 +31,13 @@ exosnap_add_gtest(
   NAME container_compat_registry_tests
   TEST_PREFIX capability.
   SOURCES tests/test_container_compat_registry.cpp
+  LIBRARIES exosnap_capability
+)
+
+exosnap_add_gtest(
+  NAME capability_codec_selection_tests
+  TEST_PREFIX capability.
+  SOURCES tests/test_codec_selection.cpp
   LIBRARIES exosnap_capability
 )
 
