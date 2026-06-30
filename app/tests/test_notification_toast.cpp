@@ -261,8 +261,8 @@ TEST_F(NotificationToastTest, SizeHint_LowStorage_StickyNoBar) {
     // LowStorage is sticky, no 3px bar at the bottom
 }
 
-// Render all 4 types with actions — must not crash.
-TEST_F(NotificationToastTest, PaintEvent_AllFourTypes_WithActions_NoFatalFailure) {
+// Render every notification type with actions — must not crash.
+TEST_F(NotificationToastTest, PaintEvent_AllTypes_WithActions_NoFatalFailure) {
     const struct {
         NotificationType type;
         NotificationAction action;
@@ -277,6 +277,8 @@ TEST_F(NotificationToastTest, PaintEvent_AllFourTypes_WithActions_NoFatalFailure
          "Disk write failed at 04:12. A partial file was recovered."},
         {NotificationType::RecoveryAvailable, NotificationAction::OpenRecovery, "Recover last session?",
          "A recording from 14:02 wasn't finalized."},
+        {NotificationType::FramesDropped, NotificationAction::OpenDiagnostics, "Frames dropped",
+         "42 frames were dropped because the encoder couldn't keep up."},
     };
 
     for (const auto& c : cases) {
@@ -595,6 +597,8 @@ TEST_F(NotificationToastTest, Manager_DismissIntervalMs_MatchesPerTypeConstants)
     EXPECT_EQ(NotificationManager::DismissIntervalMs(NotificationType::RecoveryAvailable), 0);
     EXPECT_EQ(NotificationManager::DismissIntervalMs(NotificationType::UpdateAvailable),
               NotificationManager::kDismissMs_UpdateAvailable);
+    EXPECT_EQ(NotificationManager::DismissIntervalMs(NotificationType::FramesDropped),
+              NotificationManager::kDismissMs_FramesDropped);
 }
 
 } // namespace

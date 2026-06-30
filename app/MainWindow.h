@@ -400,6 +400,11 @@ class MainWindow : public QMainWindow {
     capability::CapabilitySet runtime_caps_;
     bool runtime_caps_ready_ = false;
     QString record_status_label_ = QStringLiteral("READY");
+    // DROP-NOTIFY: latest encoder-backpressure drop count observed on the live
+    // diagnostics stream during the current recording (teed in initNotificationToasts).
+    // Read on the result-ready edge to decide whether to raise a "frames dropped"
+    // toast; reset to 0 on the recording-start edge.
+    uint64_t last_backpressure_drops_ = 0;
 
     // CRASH-WIRE-R1 (ADR 0017): crash-capture session lifecycle.
     std::string crash_dir_;
