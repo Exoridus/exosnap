@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include <capability/codec_selection.h>
 #include <capability/config_types.h>
 #include <recorder_core/codec_types.h>
 
@@ -47,15 +48,10 @@ inline QString containerLabel(recorder_core::Container container) {
 }
 
 inline QString videoCodecLabel(capability::VideoCodec codec) {
-    switch (codec) {
-    case capability::VideoCodec::H264Nvenc:
-        return QStringLiteral("H.264");
-    case capability::VideoCodec::HevcNvenc:
-        return QStringLiteral("HEVC");
-    case capability::VideoCodec::Av1Nvenc:
-        return QStringLiteral("AV1");
-    }
-    return QStringLiteral("AV1");
+    // Delegate to the pure (non-Qt) spelling canon so the engine/diagnostics layer
+    // and the UI can never drift (feedback_codec_naming_canon).
+    const std::string_view label = capability::VisibleVideoCodecLabel(codec);
+    return QString::fromUtf8(label.data(), static_cast<int>(label.size()));
 }
 
 inline QString videoCodecLabel(recorder_core::VideoCodec codec) {

@@ -41,17 +41,19 @@ class DiagnosticsPageTest : public ::testing::Test {
         EnsureApplication();
     }
 
-    // Loads a validated baseline + the default MKV/H.264/AAC selection (which the
-    // baseline supports), so the active configuration has no blockers.
+    // Loads a validated baseline + the product-default MKV/AV1/Opus selection, which the
+    // baseline fully supports (Recommended path), so the active configuration has no
+    // blockers AND no recommendations (AV1 is already the best GPU-supported codec, so
+    // rec.profile.codec stays silent — see RecommendationEngine::checkRecommendedCodec).
     static void LoadData(DiagnosticsPage& page) {
         capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
         OutputSettingsModel output;
         output.container = capability::Container::Matroska;
-        output.video_codec = capability::VideoCodec::H264Nvenc;
-        output.audio_codec = capability::AudioCodec::AacMf;
+        output.video_codec = capability::VideoCodec::Av1Nvenc;
+        output.audio_codec = capability::AudioCodec::Opus;
         VideoSettingsModel video;
         capability::AudioUiState audio;
-        page.setDiagnosticData(caps, output, video, audio, "MKV H.264 AAC", "Start/Stop: Alt+F9", "", true);
+        page.setDiagnosticData(caps, output, video, audio, "MKV AV1 Opus", "Start/Stop: Alt+F9", "", true);
     }
 
     static QPushButton* FindButton(const DiagnosticsPage& page, const QString& text) {

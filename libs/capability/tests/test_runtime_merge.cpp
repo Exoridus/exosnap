@@ -370,5 +370,87 @@ TEST(RuntimeMergeTest, TC_S4_5_BuildFromHardwareQuery_MfWebcamProbed) {
         << "caps.mf_webcam_available must mirror caps.runtime.mf_webcam.available.";
 }
 
+// -------------------------------------------------------------------------
+// Per-GPU NVENC codec-GUID refinement (ApplyNvencCodecSupport, pure)
+// -------------------------------------------------------------------------
+
+// Probed with AV1 unsupported (pre-Ada GPU) but HEVC/H264 supported:
+// AV1 -> NotImplemented; HEVC/H264 keep their baseline annotations.
+TEST(NvencCodecSupportTest, ProbedAv1Unsupported_DowngradesOnlyAv1) {
+    CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    NvidiaRuntimeFacts facts;
+    facts.nvenc_dll_present = true;
+    facts.nvenc_api_version_valid = true;
+    facts.nvenc_codec_probed = true;
+    facts.nvenc_av1 = false; // GPU cannot do AV1
+    facts.nvenc_hevc = true;
+    facts.nvenc_h264 = true;
+
+    ApplyNvencCodecSupport(caps, facts);
+
+    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::Av1Nvenc).level, SupportLevel::NotImplemented);
+    EXPECT_FALSE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Av1Nvenc)));
+    // HEVC stays ValidUnvalidated, H264 stays Available (baseline unchanged).
+    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::HevcNvenc).level, SupportLevel::ValidUnvalidated);
+    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::H264Nvenc).level, SupportLevel::Available);
+    // The downgrade reason is user-facing and names the requirement.
+    EXPECT_NE(caps.QueryVideoCodec(VideoCodec::Av1Nvenc).reason.find("AV1"), std::string::npos);
+}
+
+// Probe did not run -> no change at all (graceful degrade keeps the baseline).
+TEST(NvencCodecSupportTest, NotProbed_LeavesBaselineUntouched) {
+    CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    NvidiaRuntimeFacts facts;
+    facts.nvenc_dll_present = true;
+    facts.nvenc_api_version_valid = true;
+    facts.nvenc_codec_probed = false; // never probed
+    facts.nvenc_av1 = false;          // ignored because not probed
+    facts.nvenc_hevc = false;
+    facts.nvenc_h264 = false;
+
+    ApplyNvencCodecSupport(caps, facts);
+
+    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::Av1Nvenc).level, SupportLevel::Available);
+    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::HevcNvenc).level, SupportLevel::ValidUnvalidated);
+    EXPECT_EQ(caps.QueryVideoCodec(VideoCodec::H264Nvenc).level, SupportLevel::Available);
+}
+
+// All codecs supported -> nothing downgraded.
+TEST(NvencCodecSupportTest, ProbedAllSupported_NoDowngrade) {
+    CapabilitySet caps = CapabilityBuilder::BuildStaticValidatedBaseline();
+
+    NvidiaRuntimeFacts facts;
+    facts.nvenc_codec_probed = true;
+    facts.nvenc_av1 = true;
+    facts.nvenc_hevc = true;
+    facts.nvenc_h264 = true;
+
+    ApplyNvencCodecSupport(caps, facts);
+
+    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Av1Nvenc)));
+    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::HevcNvenc)));
+    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::H264Nvenc)));
+}
+
+// BuildEffectiveCapabilities wires the probe through end-to-end: a favorable
+// snapshot that additionally reports AV1-unsupported via a real probe must yield
+// AV1 NotImplemented while the M3.2 prerequisites otherwise hold.
+TEST(NvencCodecSupportTest, BuildEffective_HonorsProbeFlags) {
+    RuntimeCapabilitySnapshot snap = MakeFavorableSnapshot();
+    snap.nvidia.nvenc_codec_probed = true;
+    snap.nvidia.nvenc_av1 = false; // GPU does not encode AV1
+    snap.nvidia.nvenc_hevc = true;
+    snap.nvidia.nvenc_h264 = true;
+
+    const CapabilitySet caps = CapabilityBuilder::BuildEffectiveCapabilities(snap);
+
+    EXPECT_FALSE(IsSelectable(caps.QueryVideoCodec(VideoCodec::Av1Nvenc)))
+        << "AV1 must be downgraded when the GPU probe reports it unsupported.";
+    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::HevcNvenc)));
+    EXPECT_TRUE(IsSelectable(caps.QueryVideoCodec(VideoCodec::H264Nvenc)));
+}
+
 } // namespace
 } // namespace exosnap::capability

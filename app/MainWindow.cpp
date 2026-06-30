@@ -49,6 +49,7 @@
 #include "ExoSnapBuildInfo.h" // exosnap::build::kVersion / kGitCommit
 
 #include <capability/capability_builder.h>
+#include <capability/codec_selection.h>
 #include <capability/config_types.h>
 #include <capability/resolver.h>
 #include <capability/user_config.h>
@@ -4002,44 +4003,61 @@ void MainWindow::buildDiagnosticsPage() {
     // ---- FixAction routing (ADR 0033 / v0.8.0) ----
     // Auto fixes apply a settings change directly after a confirm; Assisted fixes
     // navigate to the relevant Settings section so the user finishes the change.
-    connect(diagnostics_page_, &DiagnosticsPage::applyFixActionRequested, this,
-            [this](const QString& fix_id, const QString& changes_summary) {
-                const QString body = changes_summary.isEmpty()
-                                         ? QStringLiteral("Apply this fix to your recording settings?")
-                                         : changes_summary;
-                if (QMessageBox::question(this, QStringLiteral("Apply fix"), body) != QMessageBox::Yes)
-                    return;
-                if (fix_id == QStringLiteral("fix.frame_pacing.smooth")) {
-                    // Video-settings-only fix: switch pacing mode, propagate, refresh UI.
-                    video_settings_.frame_pacing = recorder_core::FramePacingMode::Smooth;
-                    if (config_page_)
-                        config_page_->setVideoSettings(video_settings_);
-                    if (record_page_)
-                        record_page_->setVideoSettings(video_settings_);
-                    if (config_page_)
-                        config_page_->setPresetDirty(preset_registry_.IsSelectedDirty(captureLiveConfig()));
-                    refreshDiagnosticsData();
-                    diagnostics::AppLog::info(QStringLiteral("diagnostics"),
-                                              QStringLiteral("Applied fix %1").arg(fix_id));
-                    return;
-                }
-                if (fix_id == QStringLiteral("fix.codec.video.default"))
-                    output_settings_.video_codec = capability::VideoCodec::H264Nvenc;
-                else if (fix_id == QStringLiteral("fix.codec.audio.default"))
-                    output_settings_.audio_codec = capability::AudioCodec::AacMf;
-                else
-                    return; // unknown auto fix — no-op
-                // Propagate like a user-driven format change.
+    connect(
+        diagnostics_page_, &DiagnosticsPage::applyFixActionRequested, this,
+        [this](const QString& fix_id, const QString& changes_summary) {
+            const QString body = changes_summary.isEmpty()
+                                     ? QStringLiteral("Apply this fix to your recording settings?")
+                                     : changes_summary;
+            if (QMessageBox::question(this, QStringLiteral("Apply fix"), body) != QMessageBox::Yes)
+                return;
+            if (fix_id == QStringLiteral("fix.frame_pacing.smooth")) {
+                // Video-settings-only fix: switch pacing mode, propagate, refresh UI.
+                video_settings_.frame_pacing = recorder_core::FramePacingMode::Smooth;
                 if (config_page_)
-                    config_page_->setOutputSettings(output_settings_);
+                    config_page_->setVideoSettings(video_settings_);
                 if (record_page_)
-                    record_page_->setOutputSettings(output_settings_);
+                    record_page_->setVideoSettings(video_settings_);
                 if (config_page_)
                     config_page_->setPresetDirty(preset_registry_.IsSelectedDirty(captureLiveConfig()));
-                refreshCrashSessionContext();
                 refreshDiagnosticsData();
                 diagnostics::AppLog::info(QStringLiteral("diagnostics"), QStringLiteral("Applied fix %1").arg(fix_id));
-            });
+                return;
+            }
+            if (fix_id == QStringLiteral("fix.codec.video.default")) {
+                // rec.003: the configured video codec is unavailable. Fall back to the best
+                // codec this GPU + container actually supports (not a blind H.264), keeping
+                // H.264 only as the last-resort default.
+                output_settings_.video_codec =
+                    capability::BestAvailableVideoCodec(runtime_caps_, output_settings_.container)
+                        .value_or(capability::VideoCodec::H264Nvenc);
+            } else if (fix_id == QStringLiteral("fix.profile.codec.best")) {
+                // rec.profile.codec: switch to the recommended best GPU-supported codec
+                // (shared resolver — identical pick to the recommendation), then reconcile
+                // the audio codec for the resulting container.
+                if (const auto best = capability::BestAvailableVideoCodec(runtime_caps_, output_settings_.container))
+                    output_settings_.video_codec = *best;
+                ReconcileContainerCodecs(output_settings_);
+            } else if (fix_id == QStringLiteral("fix.codec.audio.default")) {
+                output_settings_.audio_codec = capability::AudioCodec::AacMf;
+            } else if (fix_id == QStringLiteral("fix.audio.opus_to_aac")) {
+                // rec.009 Notice (Opus-in-MP4): switch audio to AAC and reconcile.
+                output_settings_.audio_codec = capability::AudioCodec::AacMf;
+                ReconcileContainerCodecs(output_settings_);
+            } else {
+                return; // unknown auto fix — no-op
+            }
+            // Propagate like a user-driven format change.
+            if (config_page_)
+                config_page_->setOutputSettings(output_settings_);
+            if (record_page_)
+                record_page_->setOutputSettings(output_settings_);
+            if (config_page_)
+                config_page_->setPresetDirty(preset_registry_.IsSelectedDirty(captureLiveConfig()));
+            refreshCrashSessionContext();
+            refreshDiagnosticsData();
+            diagnostics::AppLog::info(QStringLiteral("diagnostics"), QStringLiteral("Applied fix %1").arg(fix_id));
+        });
     connect(diagnostics_page_, &DiagnosticsPage::openAssistedFixRequested, this, [this](const QString& fix_id) {
         navigateToPage(kSettingsPageIndex);
         if (!config_page_)

@@ -23,6 +23,16 @@ struct NvidiaRuntimeFacts {
     uint32_t nvenc_api_version = 0;
     std::string adapter_name;
     std::string failure_detail;
+
+    // Per-GPU NVENC codec-GUID probe (Recommended-Codec / truthful detection).
+    // nvenc_codec_probed is true only when a real NVENC session was opened and its
+    // EncodeGUIDs enumerated successfully; the per-codec flags are then authoritative.
+    // When false (no DLL / no device / no session — i.e. headless CI or a probe
+    // failure) the per-codec flags are meaningless and the static baseline is kept.
+    bool nvenc_codec_probed = false;
+    bool nvenc_av1 = false;
+    bool nvenc_hevc = false;
+    bool nvenc_h264 = false;
 };
 
 struct MfAacRuntimeFacts {

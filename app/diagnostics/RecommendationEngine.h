@@ -46,6 +46,7 @@ class RecommendationEngine {
     void checkRefreshRateMismatch(DiagnosticChecklist& checklist) const;
     void checkMp4CrashResilience(DiagnosticChecklist& checklist) const;
     void checkCodecAvailability(DiagnosticChecklist& checklist) const;
+    void checkRecommendedCodec(DiagnosticChecklist& checklist) const;
     void checkOutputDriveSpace(DiagnosticChecklist& checklist) const;
     void checkOutputFilesystem(DiagnosticChecklist& checklist) const;
     void checkProfileSupport(DiagnosticChecklist& checklist) const;

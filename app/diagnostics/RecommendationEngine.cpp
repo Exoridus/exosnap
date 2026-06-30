@@ -2,9 +2,11 @@
 
 #include "DiskSpaceThresholds.h"
 
+#include <capability/codec_selection.h>
 #include <capability/support_level.h>
 
 #include <chrono>
+#include <string>
 
 namespace exosnap::diagnostics {
 
@@ -71,6 +73,7 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
     checkPresentModeFlips(checklist);
     checkMp4CrashResilience(checklist);
     checkCodecAvailability(checklist);
+    checkRecommendedCodec(checklist);
     checkOutputDriveSpace(checklist);
     checkOutputFilesystem(checklist);
     checkProfileSupport(checklist);
@@ -225,6 +228,54 @@ void RecommendationEngine::checkCodecAvailability(DiagnosticChecklist& checklist
         checklist.has_blocker = true;
         checklist.results.push_back(std::move(r));
     }
+}
+
+void RecommendationEngine::checkRecommendedCodec(DiagnosticChecklist& checklist) const {
+    // Capability-truthful "use the best codec your GPU supports" recommendation.
+    // Shares the ONE resolver (BestAvailableVideoCodec) with the MainWindow FixAction
+    // handler so the recommended codec can never drift from the applied one.
+    const std::optional<capability::VideoCodec> best = capability::BestAvailableVideoCodec(caps_, config_.container);
+    if (!best.has_value()) {
+        return; // nothing GPU-supported + container-valid — the availability checks own this case
+    }
+
+    // Quality/efficiency rank (best first). Only recommend a STRICTLY better codec, so the
+    // default (AV1 on a modern GPU) stays silent.
+    const auto rank = [](capability::VideoCodec v) -> int {
+        switch (v) {
+        case capability::VideoCodec::Av1Nvenc:
+            return 0;
+        case capability::VideoCodec::HevcNvenc:
+            return 1;
+        case capability::VideoCodec::H264Nvenc:
+            return 2;
+        }
+        return 99;
+    };
+    if (*best == config_.video_codec || rank(*best) >= rank(config_.video_codec)) {
+        return;
+    }
+
+    const std::string best_label(capability::VisibleVideoCodecLabel(*best));
+    const std::string current_label(capability::VisibleVideoCodecLabel(config_.video_codec));
+
+    DiagnosticResult r = MakeResult(
+        "rec.profile.codec", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
+        "A better GPU-supported codec is available",
+        "Your GPU supports " + best_label + ", which encodes with better quality and efficiency than " + current_label +
+            " at the same bitrate.",
+        "This GPU can hardware-encode " + best_label + " for the current container, but the profile is set to " +
+            current_label + ". " + best_label + " produces smaller files at equal quality.",
+        "Video codec: " + current_label, "Switch the video codec to " + best_label + ".");
+    FixAction fa;
+    fa.id = "fix.profile.codec.best";
+    fa.label = "Switch to " + best_label;
+    fa.safety = FixAction::Safety::Auto; // config-only, reversible
+    fa.reversible = true;
+    fa.changes_summary = "Video codec: " + current_label + " -> " + best_label;
+    r.fix_action = fa;
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
 }
 
 void RecommendationEngine::checkOutputDriveSpace(DiagnosticChecklist& checklist) const {
