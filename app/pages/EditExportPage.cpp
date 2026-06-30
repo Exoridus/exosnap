@@ -6,23 +6,38 @@
 
 #include <QByteArray>
 #include <QColor>
+#include <QComboBox>
+#include <QDesktopServices>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDir>
+#include <QDoubleSpinBox>
 #include <QEvent>
+#include <QFile>
+#include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QPainter>
 #include <QPixmap>
+#include <QProcess>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRectF>
+#include <QSaveFile>
 #include <QScrollArea>
 #include <QSize>
 #include <QStyle>
 #include <QSvgRenderer>
-#include <QTimer>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
+
+#include <algorithm>
 
 namespace exosnap {
 
@@ -105,6 +120,12 @@ QString errBToken() {
 
 EditExportPage::EditExportPage(QWidget* parent) : QWidget(parent) {
     buildUi();
+}
+
+EditExportPage::~EditExportPage() {
+    export_cancel_.store(true);
+    if (export_thread_.joinable())
+        export_thread_.join();
 }
 
 void EditExportPage::buildUi() {
@@ -204,31 +225,6 @@ void EditExportPage::buildUi() {
 
     root_layout->addWidget(stepper_widget_);
 
-    // ---- 0.11 Placeholder Banner ----
-    placeholder_banner_ = new QFrame(this);
-    placeholder_banner_->setObjectName(QStringLiteral("editExportPlaceholderBanner"));
-    placeholder_banner_->setStyleSheet(QStringLiteral("QFrame#editExportPlaceholderBanner {"
-                                                      "background: %1;"
-                                                      "border: 1px dashed %2;"
-                                                      "border-radius: %3px;"
-                                                      "margin: %4px;"
-                                                      "}")
-                                           .arg(ThemeRgba(QColor(QString::fromUtf8(ActiveTheme().caution)), 0.10),
-                                                ThemeRgba(QColor(QString::fromUtf8(ActiveTheme().caution)), 0.40))
-                                           .arg(M::kRadiusSm)
-                                           .arg(M::kSpaceMd));
-
-    auto* banner_layout = new QHBoxLayout(placeholder_banner_);
-    banner_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-
-    auto* banner_label = new QLabel(
-        QStringLiteral("Editing & export tools arrive in 0.11 — this surface is a preview."), placeholder_banner_);
-    banner_label->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(ActiveTheme().caution));
-    banner_label->setWordWrap(true);
-    banner_layout->addWidget(banner_label);
-
-    root_layout->addWidget(placeholder_banner_);
-
     // ---- Main Content Area (splitter-like HBox) ----
     auto* content_area = new QWidget(this);
     auto* content_layout = new QHBoxLayout(content_area);
@@ -294,6 +290,32 @@ void EditExportPage::buildUi() {
     player_layout->addWidget(player_meta_label_);
 
     left_layout->addWidget(player_frame_);
+
+    // Review Panel (post-flight report, shown only in Review phase)
+    review_panel_ = new QWidget(left_widget);
+    review_panel_->setObjectName(QStringLiteral("editExportReviewPanel"));
+    auto* review_layout = new QVBoxLayout(review_panel_);
+    review_layout->setContentsMargins(0, 0, 0, 0);
+    review_layout->setSpacing(M::kSpaceSm);
+
+    auto* review_title = new QLabel(QStringLiteral("Post-recording report"), review_panel_);
+    review_title->setStyleSheet(
+        QStringLiteral("QLabel { color:%1; font-weight:600; font-size:12px; }").arg(ActiveTheme().ink));
+
+    review_drop_label_ = new QLabel(QStringLiteral("Frame drops: \xe2\x80\x93"), review_panel_);
+    review_drop_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(ActiveTheme().mut));
+
+    review_drift_label_ = new QLabel(QStringLiteral("Peak A/V drift: \xe2\x80\x93"), review_panel_);
+    review_drift_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(ActiveTheme().mut));
+
+    review_health_label_ = new QLabel(QStringLiteral("Pipeline health: \xe2\x80\x93"), review_panel_);
+    review_health_label_->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(ActiveTheme().mut));
+
+    review_layout->addWidget(review_title);
+    review_layout->addWidget(review_drop_label_);
+    review_layout->addWidget(review_drift_label_);
+    review_layout->addWidget(review_health_label_);
+    left_layout->addWidget(review_panel_);
 
     // Edit Controls
     edit_controls_ = new QWidget(left_widget);
@@ -382,7 +404,7 @@ void EditExportPage::buildUi() {
 
     left_layout->addWidget(timeline_frame_);
 
-    // Output Panel (3 option cards)
+    // Output Panel (container + save-mode selectors)
     output_panel_ = new QWidget(left_widget);
     output_panel_->setObjectName(QStringLiteral("editExportOutputPanel"));
     auto* output_panel_layout = new QVBoxLayout(output_panel_);
@@ -394,102 +416,31 @@ void EditExportPage::buildUi() {
         QStringLiteral("QLabel { color:%1; font-weight:600; font-size:12px; }").arg(ActiveTheme().ink));
     output_panel_layout->addWidget(output_title);
 
-    const auto makeOutputCard = [&](const QString& title, const QString& badge, const QString& badge_color,
-                                    const QString& detail, bool selected) -> QFrame* {
-        auto* card = new QFrame(output_panel_);
-        card->setProperty("selected", selected);
-        card->setStyleSheet(selected ? QStringLiteral("QFrame {"
-                                                      "background:%1;"
-                                                      "border: 1px solid %2;"
-                                                      "border-radius: %3px;"
-                                                      "}")
-                                           .arg(acDimToken(), acB2Token())
-                                           .arg(M::kRadiusMd)
-                                     : QStringLiteral("QFrame {"
-                                                      "background:%1;"
-                                                      "border: 1px solid %2;"
-                                                      "border-radius: %3px;"
-                                                      "}")
-                                           .arg(ActiveTheme().surf2, ActiveTheme().line)
-                                           .arg(M::kRadiusMd));
+    // Container selection (stream-copy only — no re-encode per ADR-0014)
+    auto* container_lbl = new QLabel(QStringLiteral("Container:"), output_panel_);
+    container_lbl->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(ActiveTheme().mut));
+    output_panel_layout->addWidget(container_lbl);
 
-        auto* card_layout = new QVBoxLayout(card);
-        card_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-        card_layout->setSpacing(4);
+    output_container_combo_ = new QComboBox(output_panel_);
+    output_container_combo_->setObjectName(QStringLiteral("outputContainerCombo"));
+    output_container_combo_->addItem(QStringLiteral("MKV  \xe2\x80\x93  stream-copy, lossless"), QStringLiteral("mkv"));
+    output_container_combo_->addItem(QStringLiteral("MP4  \xe2\x80\x93  stream-copy, lossless (ADR\xc2\xa0"
+                                                    "0014)"),
+                                     QStringLiteral("mp4"));
+    output_panel_layout->addWidget(output_container_combo_);
 
-        auto* top_row = new QWidget(card);
-        auto* top_layout = new QHBoxLayout(top_row);
-        top_layout->setContentsMargins(0, 0, 0, 0);
-        top_layout->setSpacing(M::kSpaceSm);
+    // Save mode: new file or overwrite original
+    auto* savemode_lbl = new QLabel(QStringLiteral("Save:"), output_panel_);
+    savemode_lbl->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:12px; }").arg(ActiveTheme().mut));
+    output_panel_layout->addWidget(savemode_lbl);
 
-        // Radio indicator: 16×16 ring with an 8px inner dot when selected.
-        auto* radio = new QLabel(top_row);
-        radio->setObjectName(QStringLiteral("editOutputRadio"));
-        radio->setFixedSize(16, 16);
-        radio->setStyleSheet(QStringLiteral("QLabel#editOutputRadio {"
-                                            "border: 1px solid %1;"
-                                            "border-radius: 8px;"
-                                            "background: transparent;"
-                                            "}")
-                                 .arg(selected ? ActiveTheme().ac : ActiveTheme().line2));
-        auto* radio_layout = new QVBoxLayout(radio);
-        radio_layout->setContentsMargins(0, 0, 0, 0);
-        radio_layout->setAlignment(Qt::AlignCenter);
-        if (selected) {
-            auto* dot = new QLabel(radio);
-            dot->setObjectName(QStringLiteral("editOutputRadioDot"));
-            dot->setFixedSize(8, 8);
-            dot->setStyleSheet(QStringLiteral("QLabel#editOutputRadioDot { background:%1; border-radius:4px; }")
-                                   .arg(ActiveTheme().ac));
-            radio_layout->addWidget(dot);
-        }
-        top_layout->addWidget(radio);
-
-        auto* title_lbl = new QLabel(title, top_row);
-        title_lbl->setStyleSheet(
-            QStringLiteral("QLabel { color:%1; font-weight:600; font-size:12px; }").arg(ActiveTheme().ink));
-
-        auto* badge_lbl = new QLabel(badge, top_row);
-        badge_lbl->setStyleSheet(QStringLiteral("QLabel {"
-                                                "color:%1;"
-                                                "background: rgba(%2, 0.15);"
-                                                "border: 1px solid rgba(%2, 0.35);"
-                                                "border-radius: 3px;"
-                                                "padding: 1px 5px;"
-                                                "font-size: 10px;"
-                                                "}")
-                                     .arg(badge_color, badge_color));
-
-        top_layout->addWidget(title_lbl);
-        top_layout->addWidget(badge_lbl);
-        top_layout->addStretch();
-
-        auto* detail_lbl = new QLabel(detail, card);
-        detail_lbl->setStyleSheet(QStringLiteral("QLabel { color:%1; font-size:11px; }").arg(ActiveTheme().mut));
-
-        card_layout->addWidget(top_row);
-        card_layout->addWidget(detail_lbl);
-        return card;
-    };
-
-    output_opt_keep_mkv_ = makeOutputCard(QStringLiteral("Keep MKV"), QStringLiteral("stream-copy"),
-                                          QString::fromLatin1(ActiveTheme().success),
-                                          QStringLiteral("Stream-copy \xc2\xb7 instant \xc2\xb7 lossless"), true);
-    output_opt_keep_mkv_->setObjectName(QStringLiteral("editOutputOptKeepMkv"));
-
-    output_opt_remux_mp4_ = makeOutputCard(
-        QStringLiteral("Remux to MP4"), QStringLiteral("stream-copy"), QString::fromLatin1(ActiveTheme().success),
-        QStringLiteral("Stream-copy AV1+Opus \xe2\x86\x92 MP4 \xc2\xb7 instant \xc2\xb7 lossless (ADR 0014)"), false);
-    output_opt_remux_mp4_->setObjectName(QStringLiteral("editOutputOptRemuxMp4"));
-
-    output_opt_reencode_ = makeOutputCard(QStringLiteral("MP4 \xc2\xb7 H.264 + AAC"), QStringLiteral("re-encode"),
-                                          QString::fromLatin1(ActiveTheme().caution),
-                                          QStringLiteral("Re-encode \xc2\xb7 ~3 min \xc2\xb7 quality cost"), false);
-    output_opt_reencode_->setObjectName(QStringLiteral("editOutputOptReencode"));
-
-    output_panel_layout->addWidget(output_opt_keep_mkv_);
-    output_panel_layout->addWidget(output_opt_remux_mp4_);
-    output_panel_layout->addWidget(output_opt_reencode_);
+    output_save_mode_combo_ = new QComboBox(output_panel_);
+    output_save_mode_combo_->setObjectName(QStringLiteral("outputSaveModeCombo"));
+    output_save_mode_combo_->addItem(QStringLiteral("Save as new file  (\xe2\x80\x9c<name>_edit.<ext>\xe2\x80\x9d)"),
+                                     QStringLiteral("new"));
+    output_save_mode_combo_->addItem(QStringLiteral("Overwrite original  (atomic replace)"),
+                                     QStringLiteral("overwrite"));
+    output_panel_layout->addWidget(output_save_mode_combo_);
 
     // Destination row
     auto* dest_row = new QWidget(output_panel_);
@@ -671,6 +622,8 @@ void EditExportPage::buildUi() {
     root_layout->addWidget(content_area, 1);
 
     // Wire signals
+    connect(trim_btn_, &QPushButton::clicked, this, &EditExportPage::onTrimClicked);
+    connect(add_marker_btn_, &QPushButton::clicked, this, &EditExportPage::onAddMarkerClicked);
     connect(back_btn_, &QPushButton::clicked, this, &EditExportPage::onBackClicked);
     connect(primary_action_btn_, &QPushButton::clicked, this, [this]() {
         switch (phase_) {
@@ -703,6 +656,67 @@ void EditExportPage::setEditContext(const EditContext& ctx) {
     ctx_ = ctx;
     setRecordingInfo(ctx_.output_path, ctx_.duration, ctx_.size, ctx_.resolution, ctx_.fps, ctx_.video_codec,
                      ctx_.audio_codec, ctx_.container);
+
+    // --- Populate review panel ---
+    const auto& snap = ctx_.completed_snapshot;
+    const bool has_snap = snap.valid || snap.session_generation > 0;
+
+    if (review_drop_label_) {
+        const uint64_t total_dropped = snap.capture.frames_dropped_total();
+        const uint64_t total_frames = snap.capture.frames_emitted + total_dropped;
+        if (has_snap && total_frames > 0) {
+            const double pct = 100.0 * static_cast<double>(total_dropped) / static_cast<double>(total_frames);
+            review_drop_label_->setText(QStringLiteral("Frame drops: %1%").arg(pct, 0, 'f', 1));
+        } else {
+            review_drop_label_->setText(QStringLiteral("Frame drops: \xe2\x80\x93"));
+        }
+    }
+
+    if (review_drift_label_) {
+        if (ctx_.av_drift_available) {
+            review_drift_label_->setText(
+                QStringLiteral("Peak A/V drift: \xc2\xb1%1\xc2\xa0ms").arg(ctx_.peak_av_drift_ms, 0, 'f', 0));
+        } else {
+            review_drift_label_->setText(QStringLiteral("A/V drift: unavailable"));
+        }
+    }
+
+    if (review_health_label_) {
+        if (has_snap) {
+            const char* health_str = "Unknown";
+            switch (snap.health) {
+            case recorder_core::PipelineHealth::Good:
+                health_str = "Good";
+                break;
+            case recorder_core::PipelineHealth::Warning:
+                health_str = "Warning";
+                break;
+            case recorder_core::PipelineHealth::Critical:
+                health_str = "Critical";
+                break;
+            case recorder_core::PipelineHealth::Unavailable:
+                health_str = "Unavailable";
+                break;
+            default:
+                break;
+            }
+            review_health_label_->setText(QStringLiteral("Pipeline health: %1").arg(QLatin1String(health_str)));
+        } else {
+            review_health_label_->setText(QStringLiteral("Pipeline health: \xe2\x80\x93"));
+        }
+    }
+
+    // --- Load keyframe timestamps from MKV master (background is fine; fast for short clips) ---
+    keyframe_timestamps_.clear();
+    trim_start_us_ = recorder_core::TrimRange::kNoTimestamp;
+    trim_end_us_ = recorder_core::TrimRange::kNoTimestamp;
+    if (!ctx_.mkv_master_path.isEmpty()) {
+        keyframe_timestamps_ =
+            recorder_core::ExtractKeyframeTimestamps(std::filesystem::path(ctx_.mkv_master_path.toStdWString()));
+    }
+
+    // --- Load markers from sidecar (falls back to session markers) ---
+    loadMarkers();
 }
 
 void EditExportPage::setRecordingInfo(const QString& file_path, const QString& duration, const QString& size,
@@ -779,13 +793,16 @@ void EditExportPage::refreshPhase() {
         stepper_output_lbl_->setStyleSheet(stepStyle(step_output));
 
     // ---- Show/hide panels ----
+    const bool show_review_panel = (phase_ == Phase::Review);
     const bool show_player = (phase_ == Phase::Review || phase_ == Phase::Edit);
-    const bool show_edit = (phase_ == Phase::Review || phase_ == Phase::Edit);
-    const bool show_timeline = (phase_ == Phase::Review || phase_ == Phase::Edit);
+    const bool show_edit = (phase_ == Phase::Edit);
+    const bool show_timeline = (phase_ == Phase::Edit);
     const bool show_output = (phase_ == Phase::Output);
     const bool show_exporting = (phase_ == Phase::Exporting);
     const bool show_result = (phase_ == Phase::Done || phase_ == Phase::Failed);
 
+    if (review_panel_)
+        review_panel_->setVisible(show_review_panel);
     if (player_frame_)
         player_frame_->setVisible(show_player);
     if (edit_controls_)
@@ -799,6 +816,12 @@ void EditExportPage::refreshPhase() {
     if (result_panel_)
         result_panel_->setVisible(show_result);
 
+    // Enable trim/marker buttons only in Edit phase
+    if (trim_btn_)
+        trim_btn_->setEnabled(phase_ == Phase::Edit);
+    if (add_marker_btn_)
+        add_marker_btn_->setEnabled(phase_ == Phase::Edit);
+
     // Update primary/secondary buttons
     if (!primary_action_btn_ || !secondary_action_btn_)
         return;
@@ -807,11 +830,11 @@ void EditExportPage::refreshPhase() {
 
     switch (phase_) {
     case Phase::Review:
-        primary_action_btn_->setText(QStringLiteral("Save & export"));
+        primary_action_btn_->setText(QStringLiteral("Continue to output"));
         primary_action_btn_->setProperty("role", "ghost");
         break;
     case Phase::Edit:
-        primary_action_btn_->setText(QStringLiteral("Save & export"));
+        primary_action_btn_->setText(QStringLiteral("Continue to output"));
         primary_action_btn_->setProperty("role", "ghost");
         break;
     case Phase::Output:
@@ -908,23 +931,12 @@ void EditExportPage::onBackClicked() {
 }
 
 void EditExportPage::onExportClicked() {
-    setPhase(Phase::Exporting);
-
-    // Demo: after 1500ms switch to Done
-    if (!export_demo_timer_) {
-        export_demo_timer_ = new QTimer(this);
-        export_demo_timer_->setSingleShot(true);
-        connect(export_demo_timer_, &QTimer::timeout, this, [this]() {
-            setPhase(Phase::Done);
-            emit exportCompleted(QStringLiteral("Sprint-demo.mp4"));
-        });
-    }
-    export_demo_timer_->start(1500);
+    runExport();
 }
 
 void EditExportPage::onCancelExportClicked() {
-    if (export_demo_timer_)
-        export_demo_timer_->stop();
+    export_cancel_.store(true);
+    // The background thread will detect the cancel and stop; we snap back to Output immediately.
     setPhase(Phase::Output);
 }
 
@@ -933,24 +945,278 @@ void EditExportPage::onDoneClicked() {
 }
 
 void EditExportPage::onOpenFolderClicked() {
-    // Stub — engine not wired yet
+    const QString folder = QString::fromStdWString(export_output_path_.parent_path().wstring());
+    if (!folder.isEmpty())
+        QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
 }
 
 void EditExportPage::onRevealFileClicked() {
-    // Stub — engine not wired yet
+    const QString path = QString::fromStdWString(export_output_path_.wstring());
+    if (!path.isEmpty()) {
+        // On Windows, use "explorer /select,<path>" to highlight the file in Explorer.
+        QProcess::startDetached(QStringLiteral("explorer"),
+                                {QStringLiteral("/select,"), QDir::toNativeSeparators(path)});
+    }
 }
 
 void EditExportPage::onRetryExportClicked() {
-    setPhase(Phase::Exporting);
-    if (!export_demo_timer_) {
-        export_demo_timer_ = new QTimer(this);
-        export_demo_timer_->setSingleShot(true);
-        connect(export_demo_timer_, &QTimer::timeout, this, [this]() {
-            setPhase(Phase::Done);
-            emit exportCompleted(QStringLiteral("Sprint-demo.mp4"));
-        });
+    runExport();
+}
+
+// ---- New slots ----
+
+void EditExportPage::onTrimClicked() {
+    // Simple trim dialog: two spin boxes for start/end seconds.
+    // Cut points snap to the nearest keyframe (keyframe-accurate trim).
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("Set trim points"));
+    auto* layout = new QVBoxLayout(&dlg);
+
+    constexpr double kNoTrim = 0.0;
+    const double current_start =
+        trim_start_us_ != recorder_core::TrimRange::kNoTimestamp ? trim_start_us_ / 1e6 : kNoTrim;
+    const double current_end = trim_end_us_ != recorder_core::TrimRange::kNoTimestamp ? trim_end_us_ / 1e6 : kNoTrim;
+
+    auto* start_spin = new QDoubleSpinBox(&dlg);
+    start_spin->setPrefix(QStringLiteral("Start:\xc2\xa0"));
+    start_spin->setSuffix(QStringLiteral("\xc2\xa0s"));
+    start_spin->setDecimals(2);
+    start_spin->setMinimum(0.0);
+    start_spin->setMaximum(1e6);
+    start_spin->setValue(current_start);
+
+    auto* end_spin = new QDoubleSpinBox(&dlg);
+    end_spin->setPrefix(QStringLiteral("End:\xc2\xa0"));
+    end_spin->setSuffix(QStringLiteral("\xc2\xa0s  (0 = no end trim)"));
+    end_spin->setDecimals(2);
+    end_spin->setMinimum(0.0);
+    end_spin->setMaximum(1e6);
+    end_spin->setValue(current_end);
+
+    auto* note =
+        new QLabel(QStringLiteral("Trim is keyframe-accurate: cut points snap to the nearest keyframe."), &dlg);
+    note->setWordWrap(true);
+
+    auto* btns = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    layout->addWidget(start_spin);
+    layout->addWidget(end_spin);
+    layout->addWidget(note);
+    layout->addWidget(btns);
+
+    connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+
+    const double start_s = start_spin->value();
+    const double end_s = end_spin->value();
+
+    // Snap to nearest keyframe at or before the requested time.
+    auto snapToKeyframe = [&](double secs) -> int64_t {
+        const int64_t us = static_cast<int64_t>(secs * 1e6);
+        if (keyframe_timestamps_.empty())
+            return us;
+        auto it = std::upper_bound(keyframe_timestamps_.begin(), keyframe_timestamps_.end(), us);
+        if (it != keyframe_timestamps_.begin())
+            --it;
+        return *it;
+    };
+
+    // Snap to the nearest marker if within 50 ms.
+    auto snapToMarker = [&](int64_t us) -> int64_t {
+        for (const auto& m : markers_) {
+            const int64_t m_us = static_cast<int64_t>(m.time_ms) * 1000LL;
+            if (std::abs(m_us - us) <= 50000LL)
+                return m_us;
+        }
+        return us;
+    };
+
+    trim_start_us_ = (start_s > 0.0) ? snapToMarker(snapToKeyframe(start_s)) : recorder_core::TrimRange::kNoTimestamp;
+    trim_end_us_ = (end_s > 0.0) ? snapToMarker(snapToKeyframe(end_s)) : recorder_core::TrimRange::kNoTimestamp;
+
+    // Update timeline labels.
+    auto formatUs = [](int64_t us) -> QString {
+        if (us == recorder_core::TrimRange::kNoTimestamp)
+            return QStringLiteral("\xe2\x80\x93");
+        const int64_t secs = us / 1000000LL;
+        const int m2 = static_cast<int>(secs / 60);
+        const int s2 = static_cast<int>(secs % 60);
+        return QStringLiteral("%1:%2").arg(m2).arg(s2, 2, 10, QLatin1Char('0'));
+    };
+    if (timeline_in_label_)
+        timeline_in_label_->setText(QStringLiteral("In %1").arg(formatUs(trim_start_us_)));
+    if (timeline_out_label_)
+        timeline_out_label_->setText(QStringLiteral("Out %1").arg(formatUs(trim_end_us_)));
+}
+
+void EditExportPage::onAddMarkerClicked() {
+    // Without a live playhead, add a marker at the trim-start position or 0.
+    const uint64_t time_ms = trim_start_us_ != recorder_core::TrimRange::kNoTimestamp
+                                 ? static_cast<uint64_t>(trim_start_us_ / 1000LL)
+                                 : 0ULL;
+    RecordingMarker m;
+    m.time_ms = time_ms;
+    m.type = RecordingMarkerType::General;
+    m.label = "Marker";
+    markers_.push_back(m);
+    saveMarkers();
+}
+
+// ---- Marker sidecar I/O ----
+
+void EditExportPage::loadMarkers() {
+    markers_.clear();
+    if (!ctx_.marker_sidecar_path.isEmpty()) {
+        QFile f(ctx_.marker_sidecar_path);
+        if (f.open(QIODevice::ReadOnly)) {
+            const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
+            const QJsonArray arr = doc.object().value(QStringLiteral("markers")).toArray();
+            for (const auto& v : arr) {
+                const QJsonObject obj = v.toObject();
+                RecordingMarker marker;
+                marker.time_ms = static_cast<uint64_t>(obj.value(QStringLiteral("timeMs")).toDouble());
+                const QString type_str = obj.value(QStringLiteral("type")).toString();
+                if (type_str == QStringLiteral("cut"))
+                    marker.type = RecordingMarkerType::Cut;
+                else if (type_str == QStringLiteral("highlight"))
+                    marker.type = RecordingMarkerType::Highlight;
+                else
+                    marker.type = RecordingMarkerType::General;
+                marker.label = obj.value(QStringLiteral("label")).toString().toStdString();
+                markers_.push_back(marker);
+            }
+            return;
+        }
     }
-    export_demo_timer_->start(1500);
+    // Fallback: use markers pre-loaded from the recording session.
+    markers_ = ctx_.markers;
+}
+
+void EditExportPage::saveMarkers() {
+    if (ctx_.marker_sidecar_path.isEmpty())
+        return;
+    QJsonArray arr;
+    for (const auto& m : markers_) {
+        QJsonObject obj;
+        obj[QStringLiteral("timeMs")] = static_cast<qint64>(m.time_ms);
+        obj[QStringLiteral("type")] = QString::fromLatin1(RecordingMarkerTypeToString(m.type));
+        obj[QStringLiteral("label")] = QString::fromStdString(m.label);
+        arr.append(obj);
+    }
+    QJsonObject root;
+    root[QStringLiteral("version")] = 1;
+    root[QStringLiteral("timebase")] = QStringLiteral("milliseconds");
+    root[QStringLiteral("markers")] = arr;
+    QSaveFile file(ctx_.marker_sidecar_path);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+        file.commit();
+    }
+}
+
+// ---- Real stream-copy export ----
+
+void EditExportPage::runExport() {
+    setPhase(Phase::Exporting);
+
+    const QString container_key =
+        output_container_combo_ ? output_container_combo_->currentData().toString() : QStringLiteral("mkv");
+    const bool overwrite =
+        output_save_mode_combo_ && output_save_mode_combo_->currentData().toString() == QStringLiteral("overwrite");
+    const bool to_mp4 = (container_key == QStringLiteral("mp4"));
+
+    if (ctx_.mkv_master_path.isEmpty()) {
+        setPhase(Phase::Failed);
+        if (result_detail_label_)
+            result_detail_label_->setText(QStringLiteral("No edit master available for export."));
+        return;
+    }
+
+    const std::filesystem::path master(ctx_.mkv_master_path.toStdWString());
+
+    // Derive the output path.
+    std::filesystem::path output_path;
+    if (overwrite) {
+        output_path = std::filesystem::path(ctx_.output_path.toStdWString());
+    } else {
+        std::filesystem::path base(ctx_.output_path.toStdWString());
+        const std::wstring ext = to_mp4 ? L".mp4" : L".mkv";
+        output_path = base.parent_path() / (base.stem().wstring() + L"_edit" + ext);
+    }
+
+    recorder_core::TrimRange tr;
+    tr.start_us = trim_start_us_;
+    tr.end_us = trim_end_us_;
+
+    export_output_path_ = output_path;
+
+    if (export_thread_.joinable())
+        export_thread_.join();
+    export_cancel_.store(false);
+
+    export_thread_ = std::thread([this, master, output_path, to_mp4, tr, overwrite]() {
+        std::filesystem::path temp_output = output_path;
+        temp_output += L".tmp";
+
+        auto progress_cb = [this](float fraction) -> bool {
+            if (export_cancel_.load())
+                return false;
+            QMetaObject::invokeMethod(
+                this,
+                [this, fraction]() {
+                    if (exporting_bar_)
+                        exporting_bar_->setValue(static_cast<int>(fraction * 100.0f));
+                },
+                Qt::QueuedConnection);
+            return true;
+        };
+
+        recorder_core::RemuxResult res;
+        if (to_mp4)
+            res = recorder_core::RemuxToProgressiveMp4(master, temp_output, progress_cb, tr);
+        else
+            res = recorder_core::RemuxToMkv(master, temp_output, progress_cb, tr);
+
+        bool ok = res.success;
+        std::string err_msg = res.message;
+
+        if (ok) {
+            // Atomic replace: rename temp → final (same volume = atomic on Windows NTFS).
+            std::error_code ec;
+            std::filesystem::rename(temp_output, output_path, ec);
+            if (ec) {
+                ok = false;
+                err_msg = "Failed to save output file: " + ec.message();
+                std::error_code del_ec;
+                std::filesystem::remove(temp_output, del_ec);
+            }
+        } else {
+            // Clean up failed / cancelled temp file.
+            std::error_code del_ec;
+            std::filesystem::remove(temp_output, del_ec);
+        }
+
+        QMetaObject::invokeMethod(
+            this,
+            [this, ok, err_msg, output_path]() {
+                export_output_path_ = output_path;
+                if (ok) {
+                    setPhase(Phase::Done);
+                    if (result_detail_label_) {
+                        result_detail_label_->setText(QString::fromStdWString(output_path.filename().wstring()) +
+                                                      QStringLiteral(" \xc2\xb7 stream-copy \xc2\xb7 lossless"));
+                    }
+                    emit exportCompleted(QString::fromStdWString(output_path.wstring()));
+                } else {
+                    setPhase(Phase::Failed);
+                    if (result_detail_label_)
+                        result_detail_label_->setText(QString::fromStdString(err_msg));
+                }
+            },
+            Qt::QueuedConnection);
+    });
 }
 
 } // namespace exosnap

@@ -1092,10 +1092,18 @@ exosnap_add_gtest(
         pages/EditExportPage.cpp
         ui/theme/ExoSnapTheme.cpp
         ui/theme/LucideIcon.cpp
-    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg recorder_core
 )
 target_include_directories(edit_export_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(edit_export_page_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME test_edit_context
+    TEST_PREFIX edit_context.
+    SOURCES tests/test_edit_context.cpp
+    LIBRARIES Qt6::Core Qt6::Gui
+)
+target_include_directories(test_edit_context PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 exosnap_add_gtest(
     NAME preset_manage_overlay_tests

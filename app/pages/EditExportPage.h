@@ -1,11 +1,17 @@
 #pragma once
 #include <QString>
 #include <QWidget>
+#include <atomic>
+#include <cstdint>
+#include <filesystem>
+#include <thread>
 #include <vector>
 
 #include "../models/RecordingMarker.h"
+#include <recorder_core/mp4_remuxer.h>
 #include <recorder_core/pipeline_diagnostics.h>
 
+class QComboBox;
 class QLabel;
 class QPushButton;
 class QFrame;
@@ -40,21 +46,22 @@ struct EditContext {
     QString marker_sidecar_path; // companion .markers.json path
 };
 
-// Edit/Export-Surface — Phase G (UI-Shell, Placeholder-Character).
-// The real Trim/Export engine arrives in 0.11.
+// Edit/Export-Surface: Review (post-flight report), Edit (keyframe-accurate trim),
+// Output (container/save-mode choice), and real stream-copy export via mp4_remuxer.
 class EditExportPage : public QWidget {
     Q_OBJECT
   public:
     enum class Phase {
-        Review,    // View, no editing
-        Edit,      // Trim + Marker (disabled)
-        Output,    // Format choice (disabled)
-        Exporting, // Export running (stub)
+        Review,    // Post-flight report; read-only
+        Edit,      // Trim handles + marker placement
+        Output,    // Container / save-mode choice
+        Exporting, // Real stream-copy export running
         Done,      // Export complete
         Failed,    // Export failed
     };
 
     explicit EditExportPage(QWidget* parent = nullptr);
+    ~EditExportPage() override;
 
     // Primary entry point: full context from the completed recording session.
     void setEditContext(const EditContext& ctx);
@@ -81,6 +88,8 @@ class EditExportPage : public QWidget {
     void onOpenFolderClicked();
     void onRevealFileClicked();
     void onRetryExportClicked();
+    void onTrimClicked();
+    void onAddMarkerClicked();
 
   protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
@@ -88,6 +97,9 @@ class EditExportPage : public QWidget {
   private:
     void buildUi();
     void refreshPhase();
+    void loadMarkers();
+    void saveMarkers();
+    void runExport();
 
     Phase phase_ = Phase::Review;
 
@@ -102,6 +114,27 @@ class EditExportPage : public QWidget {
     QString video_codec_;
     QString audio_codec_;
     QString container_;
+
+    // Review Panel (post-flight report)
+    QWidget* review_panel_ = nullptr;
+    QLabel* review_drop_label_ = nullptr;
+    QLabel* review_drift_label_ = nullptr;
+    QLabel* review_health_label_ = nullptr;
+
+    // Output combos (container + save mode)
+    QComboBox* output_container_combo_ = nullptr;
+    QComboBox* output_save_mode_combo_ = nullptr;
+
+    // Trim state
+    std::vector<int64_t> keyframe_timestamps_; // sorted keyframe PTS in microseconds
+    std::vector<RecordingMarker> markers_;
+    int64_t trim_start_us_ = recorder_core::TrimRange::kNoTimestamp;
+    int64_t trim_end_us_ = recorder_core::TrimRange::kNoTimestamp;
+
+    // Export thread + output path tracking
+    std::thread export_thread_;
+    std::atomic<bool> export_cancel_{false};
+    std::filesystem::path export_output_path_;
 
     // Mode-Bar
     QPushButton* back_btn_ = nullptr;
@@ -135,9 +168,6 @@ class EditExportPage : public QWidget {
 
     // Output-Panel
     QWidget* output_panel_ = nullptr;
-    QFrame* output_opt_keep_mkv_ = nullptr;
-    QFrame* output_opt_remux_mp4_ = nullptr;
-    QFrame* output_opt_reencode_ = nullptr;
     QLabel* dest_folder_label_ = nullptr;
     QPushButton* browse_dest_btn_ = nullptr;
 
@@ -164,12 +194,6 @@ class EditExportPage : public QWidget {
     QLabel* fact_video_val_ = nullptr;
     QLabel* fact_audio_val_ = nullptr;
     QLabel* fact_container_val_ = nullptr;
-
-    // 0.11-Placeholder-Banner
-    QFrame* placeholder_banner_ = nullptr;
-
-    // Demo timer for export simulation
-    class QTimer* export_demo_timer_ = nullptr;
 };
 
 } // namespace exosnap
