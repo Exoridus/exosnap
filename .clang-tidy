@@ -28,6 +28,14 @@
 #   cppcoreguidelines-pro-type-vararg              required for printf-style output in the CLI harness
 #   cppcoreguidelines-non-private-member-variables-in-classes / -avoid-non-const-global-variables /
 #   cppcoreguidelines-macro-usage                 design taste; case-by-case, not a hard rule
+#
+# Advisory / non-blocking checks (PHASE B — enabled below, excluded from WarningsAsErrors):
+#   misc-include-cleaner         surfaces unused #includes; heavy Qt false-positives (moc headers)
+#   misc-unused-using-decls      stale using declarations; Qt meta-object slots cause false-positives
+#   misc-unused-parameters       unused parameters (ADVISORY: Qt signal/slot/callback signatures)
+#   misc-unused-alias-decls      stale type aliases
+#   readability-redundant-declaration  duplicate forward declarations
+# All five are informational only — do NOT promote to blocking without a human triage pass.
 Checks: >
   bugprone-*,
   cppcoreguidelines-*,
@@ -55,7 +63,12 @@ Checks: >
   -cppcoreguidelines-pro-type-vararg,
   -cppcoreguidelines-non-private-member-variables-in-classes,
   -cppcoreguidelines-avoid-non-const-global-variables,
-  -cppcoreguidelines-macro-usage
+  -cppcoreguidelines-macro-usage,
+  misc-include-cleaner,
+  misc-unused-using-decls,
+  misc-unused-parameters,
+  misc-unused-alias-decls,
+  readability-redundant-declaration
 
 # clang-tidy parses with the clang frontend in MSVC-compat mode. Two args make it
 # parse this codebase cleanly:
@@ -72,6 +85,15 @@ ExtraArgs:
   - '-fcxx-exceptions'
   - '-D_XM_NO_INTRINSICS_'
 
-WarningsAsErrors: '*'
+# Advisory checks are excluded from WarningsAsErrors so they surface as warnings
+# (informational) without failing the build. Promote them individually after a
+# human triage pass that filters Qt meta-object / moc false-positives.
+WarningsAsErrors: >
+  *,
+  -misc-include-cleaner,
+  -misc-unused-using-decls,
+  -misc-unused-parameters,
+  -misc-unused-alias-decls,
+  -readability-redundant-declaration
 HeaderFilterRegex: '^(?!.*third_party/).*'
 FormatStyle: file

@@ -14,8 +14,11 @@
       3. validate the install tree (presence / absence / leak / exe metadata)
       4. create the canonical ZIP with one top-level package directory
       5. write a SHA-256 sidecar
-      6. write a machine-readable manifest and a human-readable report
-      7. launch the extracted ZIP in an isolated environment (smoke; skippable)
+      6a. MSI content assertion: msiexec /a admin-extract + binary presence check
+      6b. MSI smoke: launch exosnap.exe from the extracted MSI tree; fail ONLY on
+          STATUS_DLL_NOT_FOUND (0xC0000135) or hard-error dialog (GPU-less CI safe)
+      7. write a machine-readable manifest and a human-readable report
+      8. launch the extracted ZIP in an isolated environment (smoke; skippable)
 
     All generated outputs live under .workspace/release/<version>/ and are never
     committed. The script is idempotent: rerunning cleans its own staging.
@@ -250,6 +253,157 @@ function Test-RuntimeDependencies {
 
 # Run a native command with a lightweight elapsed-seconds heartbeat so long
 # build/install steps visibly progress. Streams output; throws on nonzero exit.
+# ---------------------------------------------------------------------------
+# MSI harvest-fragment generator
+#
+# WiX v4 does not support the <Files> glob element (that is a WiX v5 feature),
+# and WiX v4's CLI has no harvest sub-command. Instead, the release script
+# generates a WXS fragment at build time from the pruned staging tree and passes
+# it alongside Package.wxs to `wix build`.
+#
+# The generated fragment contains:
+#   - A <DirectoryRef Id="INSTALLFOLDER"> block that defines the subdirectory
+#     hierarchy (plugins/, licenses/, …) exactly as they appear in the staging tree
+#   - One <ComponentGroup Id="StagingFiles_<dir>"> per staging subdirectory,
+#     each containing one <Component>/<File> per file in that directory
+#   - A master <ComponentGroup Id="StagingFiles"> that aggregates all per-dir
+#     groups via <ComponentGroupRef> elements — this is the ID referenced from
+#     Package.wxs's <Feature>
+#
+# Result: the MSI and the portable ZIP are always derived from the same source
+# (the pruned cmake --install staging tree). FFmpeg DLLs, dxcompiler.dll,
+# dxil.dll, crashpad_handler.exe (when present), and any future runtime DLL
+# added by a cmake install rule are automatically included in both artifacts.
+# ---------------------------------------------------------------------------
+function New-WixHarvestFragment {
+    param(
+        [string]$StagingRoot,   # Pruned staging tree root (the directory to harvest)
+        [string]$OutputPath     # Path for the generated .wxs fragment
+    )
+
+    # Convert a relative file/directory path to a valid WiX element ID.
+    # WiX IDs: letters, digits, underscores, dots; must not start with a digit.
+    function local:To-WixId([string]$Path) {
+        $id = $Path -replace '[^A-Za-z0-9_.]', '_'
+        if ($id -match '^\d') { $id = "_$id" }
+        return $id
+    }
+
+    # Recursive helper: emit <Directory> elements for direct children of $ParentRel,
+    # then recurse into each child. Returns an array of XML line strings.
+    function local:Get-DirXmlLines([string]$ParentRel, [hashtable]$ChildMap, [int]$Depth) {
+        $result = [System.Collections.Generic.List[string]]::new()
+        if (-not $ChildMap.ContainsKey($ParentRel)) { return $result }
+        $ind = '      ' + ('  ' * $Depth)
+        foreach ($childRel in ($ChildMap[$ParentRel] | Sort-Object)) {
+            $dirName = [System.IO.Path]::GetFileName($childRel)
+            $dirId   = 'dir_' + (To-WixId $childRel)
+            $result.Add("$ind<Directory Id=`"$dirId`" Name=`"$dirName`">") | Out-Null
+            foreach ($line in (Get-DirXmlLines $childRel $ChildMap ($Depth + 1))) {
+                $result.Add($line) | Out-Null
+            }
+            $result.Add("$ind</Directory>") | Out-Null
+        }
+        return $result
+    }
+
+    # Enumerate all files, sorted by relative path for determinism.
+    $allFiles = Get-ChildItem -LiteralPath $StagingRoot -Recurse -File |
+        Sort-Object { $_.FullName.Substring($StagingRoot.Length + 1) }
+
+    # Group files by relative directory path. '' = staging root.
+    $filesByDir = [System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]]::new([StringComparer]::OrdinalIgnoreCase)
+    # allDirRels: all unique non-root directories in the staging tree
+    $allDirRels = [System.Collections.Generic.SortedSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($f in $allFiles) {
+        $relPath = $f.FullName.Substring($StagingRoot.Length + 1)
+        $dirRel  = [System.IO.Path]::GetDirectoryName($relPath)
+        if ($null -eq $dirRel -or $dirRel -eq '') { $dirRel = '' }
+
+        if (-not $filesByDir.ContainsKey($dirRel)) {
+            $filesByDir[$dirRel] = [System.Collections.Generic.List[string]]::new()
+        }
+        $filesByDir[$dirRel].Add($f.FullName) | Out-Null
+
+        # Register all ancestor directories so the hierarchy is complete.
+        $d = $dirRel
+        while ($d -ne '') {
+            $allDirRels.Add($d) | Out-Null
+            $d = [System.IO.Path]::GetDirectoryName($d)
+            if ($null -eq $d) { $d = '' }
+        }
+    }
+
+    # Build parent -> direct-children map (key '' = INSTALLFOLDER).
+    $childMap = [System.Collections.Generic.Dictionary[string, System.Collections.Generic.List[string]]]::new([StringComparer]::OrdinalIgnoreCase)
+    $childMap[''] = [System.Collections.Generic.List[string]]::new()
+    foreach ($d in $allDirRels) {
+        $parent = [System.IO.Path]::GetDirectoryName($d)
+        if ($null -eq $parent) { $parent = '' }
+        # Only add as child if it is a direct child (no extra separator in suffix)
+        $suffix = if ($parent -eq '') { $d } else { $d.Substring($parent.Length + 1) }
+        if ($suffix -notmatch '\\') {
+            if (-not $childMap.ContainsKey($parent)) {
+                $childMap[$parent] = [System.Collections.Generic.List[string]]::new()
+            }
+            $childMap[$parent].Add($d) | Out-Null
+        }
+    }
+
+    # Build the fragment XML line by line.
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add('<?xml version="1.0" encoding="utf-8"?>') | Out-Null
+    $lines.Add('<!-- AUTO-GENERATED by build-release-artifacts.ps1 — DO NOT EDIT BY HAND -->') | Out-Null
+    $lines.Add('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">') | Out-Null
+    $lines.Add('  <Fragment>') | Out-Null
+
+    # ---- 1. Subdirectory definitions (nested under INSTALLFOLDER) ----
+    $dirXml = Get-DirXmlLines '' $childMap 0
+    if ($dirXml.Count -gt 0) {
+        $lines.Add('    <!-- Subdirectory hierarchy: plugins/, licenses/, ... -->') | Out-Null
+        $lines.Add('    <DirectoryRef Id="INSTALLFOLDER">') | Out-Null
+        foreach ($l in $dirXml) { $lines.Add($l) | Out-Null }
+        $lines.Add('    </DirectoryRef>') | Out-Null
+    }
+
+    # ---- 2. Per-directory component groups ----
+    $groupIds = [System.Collections.Generic.List[string]]::new()
+    foreach ($dirRel in ($filesByDir.Keys | Sort-Object)) {
+        $isRoot  = ($dirRel -eq '')
+        $dirId   = if ($isRoot) { 'INSTALLFOLDER' } else { 'dir_' + (To-WixId $dirRel) }
+        $suffix  = if ($isRoot) { 'root' } else { To-WixId $dirRel }
+        $groupId = "StagingFiles_$suffix"
+        $groupIds.Add($groupId) | Out-Null
+
+        $lines.Add("    <ComponentGroup Id=`"$groupId`" Directory=`"$dirId`">") | Out-Null
+        foreach ($fullPath in $filesByDir[$dirRel]) {
+            $relPath = $fullPath.Substring($StagingRoot.Length + 1)
+            $compId  = 'comp_' + (To-WixId $relPath)
+            # XML-escape the source path (backslash is fine in XML; escape only & < > ")
+            $srcAttr = $fullPath -replace '&', '&amp;' -replace '"', '&quot;'
+            $lines.Add("      <Component Id=`"$compId`" Guid=`"*`">") | Out-Null
+            $lines.Add("        <File Source=`"$srcAttr`" KeyPath=`"yes`" />") | Out-Null
+            $lines.Add("      </Component>") | Out-Null
+        }
+        $lines.Add("    </ComponentGroup>") | Out-Null
+    }
+
+    # ---- 3. Master component group (referenced from Package.wxs Feature) ----
+    $lines.Add('    <!-- Master group: aggregates all per-directory groups -->') | Out-Null
+    $lines.Add('    <ComponentGroup Id="StagingFiles">') | Out-Null
+    foreach ($gid in $groupIds) {
+        $lines.Add("      <ComponentGroupRef Id=`"$gid`" />") | Out-Null
+    }
+    $lines.Add('    </ComponentGroup>') | Out-Null
+
+    $lines.Add('  </Fragment>') | Out-Null
+    $lines.Add('</Wix>') | Out-Null
+
+    ($lines -join "`n") | Set-Content -LiteralPath $OutputPath -Encoding utf8NoBOM
+    Write-Host "  Generated harvest fragment: $($allFiles.Count) files in $($filesByDir.Count) directories → $OutputPath"
+}
+
 function Invoke-Heartbeat {
     param([string]$Name, [string]$FilePath, [string[]]$Arguments)
 
@@ -490,6 +644,68 @@ Set-Content -LiteralPath $ShaPath -Value "$sha  $PortablePackageName.zip" -NoNew
 Write-Host "  SHA-256 : $sha"
 
 # ---------------------------------------------------------------------------
+# SmokeNative Win32 helpers — loaded once here (before step 6) so both the
+# MSI smoke (step 6a) and the portable ZIP smoke (step 8) share the same type
+# without re-compilation. Gated by -SkipSmoke: if smoke is disabled entirely,
+# neither smoke section ever references these P/Invoke helpers.
+# ---------------------------------------------------------------------------
+$msiSmokeResult = 'skipped'
+$msiSmokeNotes = @()
+if (-not $SkipSmoke) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Collections.Generic;
+using System.Text;
+
+public static class SmokeNative {
+    // Error-mode flags
+    public const uint SEM_FAILCRITICALERRORS  = 0x0001;
+    public const uint SEM_NOGPFAULTERRORBOX   = 0x0002;
+    public const uint SEM_NOOPENFILEERRORBOX  = 0x8000;
+
+    [DllImport("kernel32.dll")]
+    public static extern uint SetErrorMode(uint uMode);
+
+    // Window enumeration for dialog sentinel
+    public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint lpdwProcessId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowText(IntPtr hwnd, StringBuilder lpString, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindowVisible(IntPtr hwnd);
+
+    /// <summary>
+    /// Returns all visible top-level window titles belonging to the given PID.
+    /// </summary>
+    public static List<string> GetVisibleWindowTitles(int pid) {
+        var titles = new List<string>();
+        EnumWindows((hwnd, _) => {
+            uint wpid;
+            GetWindowThreadProcessId(hwnd, out wpid);
+            if ((int)wpid == pid && IsWindowVisible(hwnd)) {
+                var sb = new StringBuilder(512);
+                GetWindowText(hwnd, sb, sb.Capacity);
+                var t = sb.ToString();
+                if (t.Length > 0) titles.Add(t);
+            }
+            return true;
+        }, IntPtr.Zero);
+        return titles;
+    }
+}
+'@ -Language CSharp -ErrorAction Stop
+}
+
+# ---------------------------------------------------------------------------
 # 6. MSI package (WiX Toolset v4)
 # ---------------------------------------------------------------------------
 if (-not $SkipMsi) {
@@ -507,17 +723,23 @@ if (-not $SkipMsi) {
         }
         else {
             try {
-                # IncludeCrashpad mirrors the staging tree: only emit the
-                # crashpad_handler.exe component when the ON build produced it,
-                # so `wix build` never references a missing source file.
-                $includeCrashpadValue = if ($IncludeCrashpad) { 'yes' } else { 'no' }
+                # Generate _harvest.wxs from the pruned CMake install staging tree.
+                # WiX v4 has no built-in harvest command and does not support the
+                # <Files> glob element (that is a WiX v5 feature), so we generate a
+                # standard WXS fragment here at script runtime and pass it alongside
+                # Package.wxs to `wix build`.  This ensures the MSI and the portable
+                # ZIP are always derived from the same source (the staging tree), so
+                # FFmpeg DLLs, dxcompiler.dll, dxil.dll, and any future runtime DLL
+                # added by a cmake install rule are automatically included in both.
+                $harvestWxsPath = Join-Path $ReleaseDir '_harvest.wxs'
+                New-WixHarvestFragment -StagingRoot $PackageRoot -OutputPath $harvestWxsPath
+
                 $msiArgs = @(
                     'build', '-arch', 'x64',
                     '-o', $MsiPath,
-                    '-d', "StagingDir=$PackageRoot",
                     '-d', "ProductVersion=$Version",
-                    '-d', "IncludeCrashpad=$includeCrashpadValue",
-                    $wxsPath
+                    $wxsPath,
+                    $harvestWxsPath
                 )
                 Invoke-Heartbeat -Name 'wix build' -FilePath 'wix' -Arguments $msiArgs
 
@@ -526,6 +748,161 @@ if (-not $SkipMsi) {
                     Set-Content -LiteralPath $MsiShaPath -Value "$msiSha  $MsiPackageName.msi" -NoNewline -Encoding ascii
                     Write-Host "  MSI SHA-256: $msiSha"
                     $msiBuilt = $true
+
+                    # -----------------------------------------------------------------------
+                    # Defense-in-depth: assert MSI contains every staging binary.
+                    #
+                    # Administratively extract the built MSI into a temp dir and verify that
+                    # every *.exe and *.dll under the staging tree is present in the MSI.
+                    # Any staging binary absent from the MSI fails the release build.
+                    # -----------------------------------------------------------------------
+                    Write-Step "Asserting MSI content matches staging tree (msiexec /a extraction)"
+                    $msiExtractDir = Join-Path ([System.IO.Path]::GetTempPath()) ("exosnap-msi-verify-$PID")
+                    try {
+                        New-Item -ItemType Directory -Path $msiExtractDir -Force | Out-Null
+
+                        # msiexec /a performs an administrative install (no UAC, no registry
+                        # changes) that unpacks all MSI files into TARGETDIR, preserving the
+                        # relative directory structure.
+                        $extractArgs = "/a `"$MsiPath`" /qn TARGETDIR=`"$msiExtractDir`""
+                        $extractProc = Start-Process msiexec.exe -ArgumentList $extractArgs -Wait -PassThru -NoNewWindow
+                        if ($extractProc.ExitCode -ne 0) {
+                            Add-Error "MSI content assertion: msiexec /a extraction failed (exit $($extractProc.ExitCode)) — cannot verify MSI contents"
+                        }
+                        else {
+                            # Collect all *.dll and *.exe in the staging tree (by name).
+                            $stagingBinaries = Get-ChildItem -LiteralPath $PackageRoot -Recurse -Include '*.dll', '*.exe'
+
+                            # Collect all files extracted from the MSI (any depth) into a name set.
+                            $extractedNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+                            Get-ChildItem -LiteralPath $msiExtractDir -Recurse -File |
+                                ForEach-Object { [void]$extractedNames.Add($_.Name) }
+
+                            $missingCount = 0
+                            foreach ($bin in $stagingBinaries) {
+                                if (-not $extractedNames.Contains($bin.Name)) {
+                                    Add-Error "MSI content assertion FAILED: staging binary not in MSI: $($bin.FullName.Substring($PackageRoot.Length + 1))"
+                                    $missingCount++
+                                }
+                            }
+
+                            if ($missingCount -eq 0) {
+                                Write-Host "  MSI content assertion PASSED: all $($stagingBinaries.Count) staging binaries present in extracted MSI."
+
+                                # Print DLL evidence for release log visibility.
+                                Write-Host "  Extracted DLLs:"
+                                Get-ChildItem -LiteralPath $msiExtractDir -Recurse -Filter '*.dll' |
+                                    Sort-Object Name |
+                                    ForEach-Object { Write-Host "    $($_.Name)" }
+
+                                # -----------------------------------------------------------------------
+                                # MSI smoke: launch exosnap.exe from the already-extracted MSI tree.
+                                #
+                                # Reuses $msiExtractDir (no second msiexec /a call). Only
+                                # loader-stage failures are treated as failures:
+                                #   - STATUS_DLL_NOT_FOUND (0xC0000135 / -1073741515 signed) → FAIL
+                                #   - Hard-error dialog (sentinel) → FAIL
+                                # Any other non-zero exit (GPU unavailable, single-instance guard, etc.)
+                                # is 'inconclusive' — the loader succeeded if we reached it.
+                                # -----------------------------------------------------------------------
+                                if (-not $SkipSmoke) {
+                                    Write-Step "Running MSI smoke (isolated, reusing extracted MSI tree)"
+                                    $msiSmokeExe = Get-ChildItem -LiteralPath $msiExtractDir -Recurse -Filter 'exosnap.exe' |
+                                        Select-Object -First 1
+                                    if (-not $msiSmokeExe) {
+                                        Add-Error "MSI smoke: exosnap.exe not found in extracted MSI tree under $msiExtractDir"
+                                        $msiSmokeResult = 'failed'
+                                    }
+                                    else {
+                                        $msiIsoConfig = Join-Path ([System.IO.Path]::GetTempPath()) ("exosnap-msi-smoke-cfg-$PID")
+                                        $msiIsoTemp   = Join-Path ([System.IO.Path]::GetTempPath()) ("exosnap-msi-smoke-tmp-$PID")
+                                        New-Item -ItemType Directory -Path $msiIsoConfig, $msiIsoTemp -Force | Out-Null
+
+                                        $msiPsi = New-Object System.Diagnostics.ProcessStartInfo
+                                        $msiPsi.FileName = $msiSmokeExe.FullName
+                                        $msiPsi.WorkingDirectory = [System.IO.Path]::GetTempPath()
+                                        $msiPsi.UseShellExecute = $false
+                                        $msiPsi.EnvironmentVariables['EXOSNAP_CONFIG_DIR'] = $msiIsoConfig
+                                        $msiPsi.EnvironmentVariables['TEMP'] = $msiIsoTemp
+                                        $msiPsi.EnvironmentVariables['TMP']  = $msiIsoTemp
+
+                                        # Layer 1: suppress Windows hard-error dialogs (missing DLL →
+                                        # immediate non-zero exit instead of a modal dialog).
+                                        $msiPrevErrMode = [SmokeNative]::SetErrorMode(
+                                            [SmokeNative]::SEM_FAILCRITICALERRORS -bor
+                                            [SmokeNative]::SEM_NOGPFAULTERRORBOX  -bor
+                                            [SmokeNative]::SEM_NOOPENFILEERRORBOX)
+                                        try {
+                                            $msiProc = [System.Diagnostics.Process]::Start($msiPsi)
+                                        } finally {
+                                            [SmokeNative]::SetErrorMode($msiPrevErrMode) | Out-Null
+                                        }
+
+                                        # Layer 2: dialog sentinel (belt-and-suspenders).
+                                        $msiDialogPatterns = @(
+                                            [regex]::new('System(fehler| Error)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase),
+                                            [regex]::new([regex]::Escape('exosnap.exe'), [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+                                        )
+                                        $msiDeadline = (Get-Date).AddSeconds(8)
+                                        $msiDialogDetected = $false
+                                        while (-not $msiProc.HasExited -and (Get-Date) -lt $msiDeadline) {
+                                            Start-Sleep -Milliseconds 500
+                                            try {
+                                                $msiTitles = [SmokeNative]::GetVisibleWindowTitles($msiProc.Id)
+                                                foreach ($msiTitle in $msiTitles) {
+                                                    if ($msiDialogPatterns | Where-Object { $_.IsMatch($msiTitle) }) {
+                                                        $msiSmokeNotes += "MSI smoke: dialog sentinel matched window title: '$msiTitle'"
+                                                        $msiDialogDetected = $true; break
+                                                    }
+                                                }
+                                            } catch { <# EnumWindows can race with process exit; ignore. #> }
+                                            if ($msiDialogDetected) { break }
+                                        }
+
+                                        if ($msiDialogDetected) {
+                                            try { $msiProc.Kill($true) } catch { }
+                                            Add-Error "MSI smoke: error dialog detected (title matched sentinel) — likely a missing DLL or loader hard-error"
+                                            $msiSmokeResult = 'failed'
+                                        }
+                                        elseif ($msiProc.HasExited) {
+                                            # STATUS_DLL_NOT_FOUND = 0xC0000135 = -1073741515 (signed int32).
+                                            # This is the definitive loader-stage missing-DLL code; treat it as
+                                            # the only hard failure. Any other exit code (GPU init failure,
+                                            # single-instance guard, etc.) is inconclusive — the loader succeeded.
+                                            if ($msiProc.ExitCode -eq -1073741515) {
+                                                Add-Error "MSI smoke: STATUS_DLL_NOT_FOUND (0xC0000135) — a required DLL is missing from the MSI package"
+                                                $msiSmokeResult = 'failed'
+                                            }
+                                            else {
+                                                $msiSmokeResult = 'inconclusive'
+                                                $msiSmokeNotes += "MSI exe exited with code $($msiProc.ExitCode) — loader succeeded; may be GPU-less runner or single-instance guard."
+                                            }
+                                        }
+                                        else {
+                                            # Process still running after deadline → loader succeeded, app is stable.
+                                            $msiSmokeResult = 'launched'
+                                            $null = $msiProc.CloseMainWindow()
+                                            if (-not $msiProc.WaitForExit(5000)) {
+                                                $msiProc.Kill($true)
+                                                $msiSmokeNotes += "MSI smoke: forced close after graceful-close timeout."
+                                            }
+                                        }
+
+                                        try {
+                                            Remove-Item -LiteralPath $msiIsoConfig, $msiIsoTemp -Recurse -Force -ErrorAction SilentlyContinue
+                                        } catch { }
+                                    }
+                                    Write-Host "  MSI smoke result: $msiSmokeResult"
+                                    foreach ($msiNote in $msiSmokeNotes) { Write-Host "    $msiNote" }
+                                }
+                            }
+                        }
+                    }
+                    finally {
+                        if (Test-Path -LiteralPath $msiExtractDir) {
+                            Remove-Item -LiteralPath $msiExtractDir -Recurse -Force -ErrorAction SilentlyContinue
+                        }
+                    }
                 }
                 else {
                     Add-Error "MSI: build did not produce output file"
@@ -598,58 +975,7 @@ $smokeNotes = @()
 if (-not $SkipSmoke) {
     Write-Step "Running extracted-ZIP smoke (isolated)"
 
-    # Load Win32 helpers needed for the two robustness layers.
-    Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-using System.Collections.Generic;
-using System.Text;
-
-public static class SmokeNative {
-    // Error-mode flags
-    public const uint SEM_FAILCRITICALERRORS  = 0x0001;
-    public const uint SEM_NOGPFAULTERRORBOX   = 0x0002;
-    public const uint SEM_NOOPENFILEERRORBOX  = 0x8000;
-
-    [DllImport("kernel32.dll")]
-    public static extern uint SetErrorMode(uint uMode);
-
-    // Window enumeration for dialog sentinel
-    public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint lpdwProcessId);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    public static extern int GetWindowText(IntPtr hwnd, StringBuilder lpString, int nMaxCount);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool IsWindowVisible(IntPtr hwnd);
-
-    /// <summary>
-    /// Returns all visible top-level window titles belonging to the given PID.
-    /// </summary>
-    public static List<string> GetVisibleWindowTitles(int pid) {
-        var titles = new List<string>();
-        EnumWindows((hwnd, _) => {
-            uint wpid;
-            GetWindowThreadProcessId(hwnd, out wpid);
-            if ((int)wpid == pid && IsWindowVisible(hwnd)) {
-                var sb = new StringBuilder(512);
-                GetWindowText(hwnd, sb, sb.Capacity);
-                var t = sb.ToString();
-                if (t.Length > 0) titles.Add(t);
-            }
-            return true;
-        }, IntPtr.Zero);
-        return titles;
-    }
-}
-'@ -Language CSharp -ErrorAction Stop
+    # SmokeNative Win32 helpers were already loaded before step 6 (shared with MSI smoke).
 
     Remove-SafeDir $SmokeDir
     $extractRoot = Join-Path $SmokeDir 'extracted'
@@ -798,7 +1124,11 @@ Add-ReportLine "- InternalName: $($vi.InternalName)"
 Add-ReportLine "- OriginalFilename: $($vi.OriginalFilename)"
 Add-ReportLine "- LegalCopyright: $($vi.LegalCopyright)"
 Add-ReportLine ""
-Add-ReportLine "## Smoke test"
+Add-ReportLine "## MSI smoke test"
+Add-ReportLine "- Result: $msiSmokeResult"
+foreach ($n in $msiSmokeNotes) { Add-ReportLine "- $n" }
+Add-ReportLine ""
+Add-ReportLine "## Portable ZIP smoke test"
 Add-ReportLine "- Result: $smokeResult"
 foreach ($n in $smokeNotes) { Add-ReportLine "- $n" }
 Add-ReportLine ""
@@ -821,7 +1151,8 @@ if ($msiBuilt) {
 }
 Write-Host "Manifest   : $ManifestPath"
 Write-Host "Report     : $ReportPath"
-Write-Host "Smoke      : $smokeResult"
+Write-Host "MSI Smoke  : $msiSmokeResult"
+Write-Host "ZIP Smoke  : $smokeResult"
 Write-Host ""
 
 if ($script:Errors.Count -gt 0) {

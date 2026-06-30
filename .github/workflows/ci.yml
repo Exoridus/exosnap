@@ -41,6 +41,122 @@ jobs:
       - name: Validate WinGet manifest
         run: pwsh -NonInteractive -File scripts/validate-winget-manifest.ps1
 
+      - name: Validate MSI harvest config
+        # Cheap regex check (no build, no WiX required). Asserts Package.wxs
+        # is metadata-only and references StagingFiles — prevents anyone from
+        # reverting to a hand-maintained file list that silently omits DLLs.
+        run: pwsh -NonInteractive -File scripts/validate-msi-harvest.ps1
+
+  # ---------------------------------------------------------------------------
+  # Advisory unused-code / import checks (PHASE B — NEVER blocks the PR)
+  #
+  # Surfaces stale functions, unused includes, and redundant declarations for
+  # human review. Heavy Qt false-positive risk: Qt signals/slots invoked via
+  # QMetaObject / connect() string form, moc-generated headers. Do NOT promote
+  # any finding to blocking without a triage pass that filters Qt noise.
+  #
+  # Uses: clang-tidy misc-include-cleaner / misc-unused-* /
+  #       readability-redundant-declaration  (advisory only, not in WarningsAsErrors)
+  #     + cppcheck --enable=unusedFunction (whole-program, no --error-exitcode)
+  # ---------------------------------------------------------------------------
+  advisory-unused-checks:
+    name: advisory-unused-checks
+    runs-on: windows-2022
+    continue-on-error: true  # NEVER block the PR — informational only
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.9.0'
+          arch: 'win64_msvc2022_64'
+          archives: 'qtbase qtsvg'
+          cache: true
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      # Configure the Ninja debug preset with CMAKE_EXPORT_COMPILE_COMMANDS=ON
+      # (already set in CMakePresets.json for windows-x64-ninja-debug).
+      # compile_commands.json is required by misc-include-cleaner.
+      - name: Configure (windows-x64-ninja-debug)
+        run: cmake --preset windows-x64-ninja-debug -DEXOSNAP_USE_SCCACHE=ON
+
+      - name: Build (windows-x64-ninja-debug)
+        run: cmake --build --preset windows-x64-ninja-debug
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+      # clang-tidy advisory pass: misc-include-cleaner, misc-unused-*, readability-redundant-declaration.
+      # These checks are in .clang-tidy Checks but excluded from WarningsAsErrors, so they
+      # produce warnings (exit 0) not errors. The step is informational.
+      - name: clang-tidy advisory checks
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $clangTidy = Get-ChildItem -LiteralPath "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022" `
+            -Recurse -Filter 'clang-tidy.exe' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '\\Llvm\\x64\\bin\\' } |
+            Select-Object -ExpandProperty FullName -First 1
+          if (-not $clangTidy) {
+            Write-Host "clang-tidy not found in VS LLVM; falling back to PATH"
+            $clangTidy = (Get-Command clang-tidy -ErrorAction SilentlyContinue)?.Source
+          }
+          if (-not $clangTidy) {
+            Write-Host "::warning::clang-tidy not available — advisory unused-code check skipped"
+            exit 0
+          }
+          $srcFiles = @(git ls-files -- 'libs/' 'app/' 'tests/' | Where-Object { $_ -match '\.(cpp|h)$' })
+          if (-not $srcFiles) { Write-Host "No tracked C++ source files found."; exit 0 }
+          Write-Host "Running advisory clang-tidy on $($srcFiles.Count) source files..."
+          # Run with -p pointing at the Ninja debug compile_commands.json.
+          # WarningsAsErrors in .clang-tidy excludes misc-* and readability-redundant-declaration
+          # so only the advisory checks produce warnings (not errors) — exit code stays 0.
+          & $clangTidy -p build/windows-x64-ninja-debug @srcFiles 2>&1 |
+            Tee-Object -Variable tidyOutput | Out-String | Write-Host
+          $advisoryCounts = @($tidyOutput -join "`n" | Select-String -Pattern '(misc-include-cleaner|misc-unused-using-decls|misc-unused-parameters|misc-unused-alias-decls|readability-redundant-declaration)' -AllMatches).Matches.Count
+          Write-Host "::notice::clang-tidy advisory findings: $advisoryCounts (misc-include-cleaner / misc-unused-* / readability-redundant-declaration)"
+
+      # cppcheck --enable=unusedFunction: whole-program, no --error-exitcode.
+      - name: cppcheck unusedFunction (advisory)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $cppcheck = Get-ChildItem -LiteralPath "${env:ProgramFiles}\Cppcheck" `
+            -Filter 'cppcheck.exe' -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName -First 1
+          if (-not $cppcheck) { $cppcheck = (Get-Command cppcheck -ErrorAction SilentlyContinue)?.Source }
+          if (-not $cppcheck) {
+            # Install cppcheck via winget if not present on the runner
+            winget install --id Cppcheck.Cppcheck --silent --accept-source-agreements --accept-package-agreements 2>&1 | Out-Null
+            $cppcheck = Get-ChildItem -LiteralPath "${env:ProgramFiles}\Cppcheck" `
+              -Filter 'cppcheck.exe' -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty FullName -First 1
+          }
+          if (-not $cppcheck) {
+            Write-Host "::warning::cppcheck not available — advisory unusedFunction check skipped"
+            exit 0
+          }
+          Write-Host "Running cppcheck --enable=unusedFunction (advisory, no --error-exitcode)..."
+          $findings = & $cppcheck `
+            --enable=unusedFunction --std=c++20 --inline-suppr `
+            --suppressions-list=.cppcheck-suppress --library=windows --library=qt -q `
+            -I libs/recorder_core/include -I libs/capability/include -I libs/recorder_facade/include `
+            -i libs/update/third_party libs app 2>&1 |
+            Where-Object { $_ -match '\(unusedFunction\)' }
+          $count = @($findings).Count
+          Write-Host "::notice::cppcheck unusedFunction candidates: $count (advisory — review Qt slots/callbacks before acting)"
+          if ($count -gt 0) {
+            $findings | Select-Object -First 40 | ForEach-Object { Write-Host "  $_" }
+            if ($count -gt 40) { Write-Host "  ... ($($count - 40) more)" }
+          }
+
   build-test:
     # The job name is kept stable (windows-x64-debug / -release) so the required
     # status checks keep matching; the Ninja preset is selected via matrix.preset.

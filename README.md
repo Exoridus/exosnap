@@ -6,7 +6,7 @@ webcam PiP overlay, crash recovery, and built-in diagnostics. Dark-mode-first Qt
 
 ## Status / current release
 
-- **Latest release:** `0.8.0` — "Diagnostics as a feature".
+- **Latest release:** `0.8.1` — "Diagnostics as a feature + robust MSI packaging".
 - **Pre-v1 notice:** settings, preset, and recording-history schemas may change incompatibly before 1.0.0.
 - **Platform:** Windows 10/11 x64 (Windows 11 is the primary target; Windows 10 is best-effort).
 - **Hardware encoder:** NVIDIA NVENC only. An NVIDIA GPU with supported NVENC capability is required.
@@ -19,7 +19,7 @@ webcam PiP overlay, crash recovery, and built-in diagnostics. Dark-mode-first Qt
   send (Stage 0 assisted GitHub issue, or Stage 1 automated upload to Sentry with EU data residency).
   See [`PRIVACY.md`](PRIVACY.md).
 
-## Features (0.8.0 — diagnostics wave)
+## Features (0.8.1 — diagnostics wave + robust MSI packaging)
 
 - **Diagnostics as a feature** — a first-class diagnostics engine with a typed **`FixAction`** model
   (Auto / Assisted / External) so each detected issue carries the safest concrete remedy.

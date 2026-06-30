@@ -211,6 +211,65 @@ if ($cppcheck) {
         'libs',
         'app'
     )
+
+    # -----------------------------------------------------------------------
+    # Advisory: cppcheck --enable=unusedFunction (whole-program, non-blocking)
+    #
+    # unusedFunction requires a whole-program pass and is NOT combined with the
+    # per-check run above. It surfaces functions never called from anywhere in
+    # the analyzed translation units. High false-positive risk:
+    #   - Qt slots invoked via QMetaObject::invokeMethod / connect() string form
+    #   - Public API functions only called from tests
+    #   - Callbacks registered via Windows APIs
+    # Review candidates manually before removing. --error-exitcode is NOT set so
+    # this pass never fails the script.
+    # -----------------------------------------------------------------------
+    Write-Host ""
+    Write-Host "cppcheck unusedFunction (ADVISORY — non-blocking)..." -NoNewline
+    $unusedArgs = @(
+        '--enable=unusedFunction',
+        '--std=c++20',
+        '--inline-suppr',
+        '--suppressions-list=.cppcheck-suppress',
+        '--library=windows',
+        '--library=qt',
+        '-q',
+        '-I', 'libs/recorder_core/include',
+        '-I', 'libs/capability/include',
+        '-I', 'libs/recorder_facade/include',
+        '-i', 'libs/update/third_party',
+        'libs',
+        'app'
+    )
+    $unusedLogPath = Join-Path ([System.IO.Path]::GetTempPath()) "exosnap-cppcheck-unused-$PID.log"
+    $unusedErrPath = "$unusedLogPath.err"
+    try {
+        $unusedProc = Start-Process -FilePath $cppcheck -ArgumentList $unusedArgs -WorkingDirectory $repoRoot `
+            -NoNewWindow -PassThru -RedirectStandardOutput $unusedLogPath -RedirectStandardError $unusedErrPath
+        $unusedProc.WaitForExit()
+
+        # cppcheck emits findings to stderr; collect and count them.
+        $unusedFindings = @()
+        if (Test-Path -LiteralPath $unusedErrPath -PathType Leaf) {
+            $unusedFindings = @(Get-Content -LiteralPath $unusedErrPath -ErrorAction SilentlyContinue |
+                Where-Object { $_ -match '\(unusedFunction\)' })
+        }
+        $unusedCount = $unusedFindings.Count
+        Write-Host " $unusedCount candidate(s)"
+        if ($unusedCount -gt 0) {
+            Write-Host "  [ADVISORY] Review before removing — Qt slots/callbacks are expected false-positives."
+            # Cap console output; full details available by re-running with --enable=unusedFunction manually.
+            $unusedFindings | Select-Object -First 20 | ForEach-Object { Write-Host "    $_" }
+            if ($unusedCount -gt 20) { Write-Host "    ... ($($unusedCount - 20) more; run cppcheck --enable=unusedFunction manually for the full list)" }
+        }
+    }
+    catch {
+        Write-Host ""
+        Write-Host "  cppcheck unusedFunction: advisory pass could not run — $_"
+    }
+    finally {
+        Remove-Item -LiteralPath $unusedLogPath, $unusedErrPath -Force -ErrorAction SilentlyContinue
+    }
 }
 else {
     Write-Host "cppcheck: SKIP (not installed; install with: winget install Cppcheck.Cppcheck)"
