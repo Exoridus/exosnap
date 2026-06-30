@@ -137,7 +137,43 @@ CapabilitySet CapabilityBuilder::BuildEffectiveCapabilities(const RuntimeCapabil
     // required before promoting HEVC to Available.
     // H.264 is Available in the baseline and is handled by downgrade rules A and B above.
 
+    // --- Per-GPU NVENC codec-GUID refinement (truthful detection) ---
+    // Runs AFTER the DLL-presence gate: when NVENC is absent, rule A already set every
+    // codec to NotImplemented and nvenc_codec_probed is false, so this is a no-op. When a
+    // real session probe ran, it downgrades codecs this specific GPU generation cannot
+    // encode (e.g. AV1 on pre-Ada hardware) that the static baseline optimistically
+    // advertised.
+    ApplyNvencCodecSupport(caps, snapshot.nvidia);
+
     return caps;
+}
+
+void ApplyNvencCodecSupport(CapabilitySet& caps, const NvidiaRuntimeFacts& facts) {
+    // Only a real, successful per-GPU probe is authoritative. Without it the static
+    // baseline (or the NVENC DLL-presence gate) stands — never regress to "no codecs".
+    if (!facts.nvenc_codec_probed) {
+        return;
+    }
+
+    auto downgrade_if_unsupported = [&caps](VideoCodec codec, bool supported, const std::string& reason) {
+        if (supported) {
+            return; // GPU encodes this codec — keep the baseline annotation.
+        }
+        // Preserve a stricter existing annotation (e.g. NotImplemented from the DLL gate)
+        // rather than overwriting it; only downgrade when the codec is still selectable.
+        const auto it = caps.video_codecs.find(codec);
+        if (it == caps.video_codecs.end() || IsSelectable(it->second.level)) {
+            caps.video_codecs[codec] = SupportAnnotation{SupportLevel::NotImplemented, reason};
+        }
+    };
+
+    downgrade_if_unsupported(VideoCodec::Av1Nvenc, facts.nvenc_av1,
+                             "This GPU does not support AV1 NVENC encoding "
+                             "(NVIDIA Ada Lovelace / RTX 40 series or newer is required).");
+    downgrade_if_unsupported(VideoCodec::HevcNvenc, facts.nvenc_hevc,
+                             "This GPU does not support HEVC (H.265) NVENC encoding.");
+    downgrade_if_unsupported(VideoCodec::H264Nvenc, facts.nvenc_h264,
+                             "This GPU does not support H.264 NVENC encoding.");
 }
 
 CapabilitySet CapabilityBuilder::BuildFromHardwareQuery() {
