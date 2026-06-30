@@ -35,6 +35,7 @@
 #include <string>
 
 class QShowEvent;
+class QPaintEvent;
 
 namespace exosnap {
 
@@ -143,6 +144,8 @@ class MainWindow : public QMainWindow {
 
   private:
     void showEvent(QShowEvent* event) override;
+    // PERF-MEASURE: logs the start→first-paint latency once, on the first real paint.
+    void paintEvent(QPaintEvent* event) override;
     bool nativeEvent(const QByteArray& event_type, void* message, qintptr* result) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
     void changeEvent(QEvent* event) override;
@@ -391,6 +394,8 @@ class MainWindow : public QMainWindow {
     bool syncing_preset_ui_ = false;
     bool applying_preset_ = false;
     bool geometry_restored_ = false;
+    // PERF-MEASURE: one-shot guard so first-paint latency is logged exactly once.
+    bool first_paint_logged_ = false;
     bool pre_fullscreen_maximized_ = false;
     capability::CapabilitySet runtime_caps_;
     bool runtime_caps_ready_ = false;

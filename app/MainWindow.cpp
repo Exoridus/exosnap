@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include "diagnostics/AppLog.h"
+#include "diagnostics/StartupClock.h"
 #include "models/RecordingPreset.h"
 #include "notifications/NotificationEvent.h"
 #include "notifications/NotificationManager.h"
@@ -1524,6 +1525,18 @@ void MainWindow::showEvent(QShowEvent* event) {
     // Sync the tray "Show/Hide window" label after the window becomes visible.
     if (tray_presence_)
         tray_presence_->setWindowVisible(true);
+}
+
+void MainWindow::paintEvent(QPaintEvent* event) {
+    QMainWindow::paintEvent(event);
+    // PERF-MEASURE: the first real paint = "window interactive". Log start→first-paint
+    // once; the DXGI "preview-live" marker is the second data point (preview ~150 ms
+    // after showEvent). Benchmark with EXOSNAP_CONFIG_DIR isolated to an empty temp.
+    if (!first_paint_logged_) {
+        first_paint_logged_ = true;
+        diagnostics::AppLog::info(QStringLiteral("perf"),
+                                  QStringLiteral("first-paint %1 ms").arg(diagnostics::StartupClock().elapsed()));
+    }
 }
 
 void MainWindow::applyRuntimeWindowIcon() {
