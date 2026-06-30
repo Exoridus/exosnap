@@ -15,6 +15,11 @@ add_library(exosnap::capability ALIAS exosnap_capability)
 
 target_include_directories(exosnap_capability PUBLIC include)
 
+# NVENC vendor header (third_party/nvidia/nvEncodeAPI.h) enables the per-GPU codec-GUID
+# probe in runtime_query.cpp. The probe is __has_include-guarded, so a tree without the
+# header still builds (degrades to nvenc_codec_probed=false).
+target_include_directories(exosnap_capability PRIVATE "${CMAKE_SOURCE_DIR}/third_party/nvidia")
+
 target_link_libraries(exosnap_capability
   PUBLIC
     recorder_core
@@ -24,6 +29,7 @@ target_link_libraries(exosnap_capability
     mfplat
     mfuuid
     dxgi
+    d3d11
     ole32
 )
 

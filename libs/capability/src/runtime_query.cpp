@@ -3,12 +3,18 @@
 // Implements CapabilityBuilder::QueryRuntimeFacts().
 //
 // Probes performed:
-//   A. NVENC: LoadLibraryW("nvEncodeAPI64.dll"), NvEncodeAPIGetMaxSupportedVersion
-//   B. DXGI:  IDXGIFactory -> EnumAdapters -> adapter description string
-//   C. Media Foundation AAC: MFTEnumEx + direct CLSID_AACMFTEncoder instantiation
-//   D. OS: RtlGetVersion via ntdll.dll
+//   A.  NVENC presence: LoadLibraryW("nvEncodeAPI64.dll"), NvEncodeAPIGetMaxSupportedVersion
+//   A2. NVENC per-GPU codec GUIDs: open a frameless NVENC session on an NVIDIA D3D11
+//       device and enumerate EncodeGUIDs (best-effort, dev-verify-only — see below)
+//   B.  DXGI:  IDXGIFactory -> EnumAdapters -> adapter description string
+//   C.  Media Foundation AAC: MFTEnumEx + direct CLSID_AACMFTEncoder instantiation
+//   D.  OS: RtlGetVersion via ntdll.dll
 //
-// No NVENC sessions, no D3D11 devices, no codec GUID enumeration, no frame encoding.
+// Probe A2 opens a real NVENC session (no frames are ever encoded). It is best-effort:
+// any failure (no NVENC DLL, no NVIDIA device, no session, header missing in a headless
+// build) leaves nvenc_codec_probed=false so the static baseline stands and headless CI
+// never regresses to "no codecs". Its live per-codec result requires a physical NVIDIA
+// GPU and therefore cannot be verified headlessly.
 
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
@@ -30,6 +36,16 @@
 
 // RtlGetVersion structure (available via ntdll without requiring WDK)
 #include <winternl.h>
+
+// NVENC per-GPU codec-GUID probe (A2). Guarded so a headless build without the vendor
+// header (third_party/nvidia/nvEncodeAPI.h) still compiles and degrades gracefully.
+#if __has_include(<nvEncodeAPI.h>)
+#include <d3d11.h>
+#include <nvEncodeAPI.h>
+#define EXOSNAP_CAPABILITY_HAVE_NVENC 1
+#else
+#define EXOSNAP_CAPABILITY_HAVE_NVENC 0
+#endif
 
 #include <capability/capability_builder.h>
 #include <capability/runtime_snapshot.h>
@@ -94,6 +110,122 @@ void ProbeNvidia(NvidiaRuntimeFacts& nvidia) {
 
     FreeLibrary(nvenc_module);
 }
+
+// -------------------------------------------------------------------------
+// A2. NVENC per-GPU codec-GUID probe (best-effort; dev-verify-only)
+// -------------------------------------------------------------------------
+
+#if EXOSNAP_CAPABILITY_HAVE_NVENC
+
+// Create a D3D11 device on the first NVIDIA adapter (PCI vendor 0x10DE). Returns
+// nullptr when there is no NVIDIA adapter or device creation fails. Best-effort.
+Microsoft::WRL::ComPtr<ID3D11Device> CreateNvidiaD3D11Device() {
+    using Microsoft::WRL::ComPtr;
+
+    ComPtr<IDXGIFactory1> factory;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+        return nullptr;
+    }
+
+    ComPtr<IDXGIAdapter1> adapter;
+    for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
+        DXGI_ADAPTER_DESC1 desc{};
+        if (FAILED(adapter->GetDesc1(&desc)) || desc.VendorId != 0x10DEu) {
+            adapter.Reset();
+            continue;
+        }
+        ComPtr<ID3D11Device> device;
+        const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
+        // DRIVER_TYPE_UNKNOWN is required when an explicit adapter is supplied.
+        const HRESULT hr = D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, levels,
+                                             ARRAYSIZE(levels), D3D11_SDK_VERSION, &device, nullptr, nullptr);
+        adapter.Reset();
+        if (SUCCEEDED(hr) && device) {
+            return device;
+        }
+    }
+    return nullptr;
+}
+
+void ProbeNvencCodecs(NvidiaRuntimeFacts& nvidia) {
+    // No point opening a session if the lightweight presence probe already failed.
+    if (!nvidia.nvenc_dll_present || !nvidia.nvenc_api_version_valid) {
+        return;
+    }
+
+    Microsoft::WRL::ComPtr<ID3D11Device> device = CreateNvidiaD3D11Device();
+    if (!device) {
+        return; // no NVIDIA D3D11 device — keep nvenc_codec_probed = false
+    }
+
+    HMODULE dll = LoadLibraryW(L"nvEncodeAPI64.dll");
+    if (!dll) {
+        return;
+    }
+
+    using CreateInstance_t = NVENCSTATUS(NVENCAPI*)(NV_ENCODE_API_FUNCTION_LIST*);
+    auto pCreate = reinterpret_cast<CreateInstance_t>(GetProcAddress(dll, "NvEncodeAPICreateInstance"));
+    if (!pCreate) {
+        FreeLibrary(dll);
+        return;
+    }
+
+    NV_ENCODE_API_FUNCTION_LIST funcs{};
+    funcs.version = NV_ENCODE_API_FUNCTION_LIST_VER;
+    if (pCreate(&funcs) != NV_ENC_SUCCESS || funcs.nvEncOpenEncodeSessionEx == nullptr ||
+        funcs.nvEncGetEncodeGUIDCount == nullptr || funcs.nvEncGetEncodeGUIDs == nullptr) {
+        FreeLibrary(dll);
+        return;
+    }
+
+    NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS params{};
+    params.version = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
+    params.deviceType = NV_ENC_DEVICE_TYPE_DIRECTX;
+    params.device = device.Get();
+    params.apiVersion = NVENCAPI_VERSION;
+
+    void* encoder = nullptr;
+    if (funcs.nvEncOpenEncodeSessionEx(&params, &encoder) != NV_ENC_SUCCESS || encoder == nullptr) {
+        if (encoder != nullptr && funcs.nvEncDestroyEncoder != nullptr) {
+            funcs.nvEncDestroyEncoder(encoder);
+        }
+        FreeLibrary(dll);
+        return;
+    }
+
+    uint32_t count = 0;
+    if (funcs.nvEncGetEncodeGUIDCount(encoder, &count) == NV_ENC_SUCCESS && count > 0) {
+        std::vector<GUID> guids(count);
+        uint32_t got = 0;
+        if (funcs.nvEncGetEncodeGUIDs(encoder, guids.data(), count, &got) == NV_ENC_SUCCESS) {
+            for (uint32_t i = 0; i < got; ++i) {
+                if (IsEqualGUID(guids[i], NV_ENC_CODEC_AV1_GUID) != 0) {
+                    nvidia.nvenc_av1 = true;
+                } else if (IsEqualGUID(guids[i], NV_ENC_CODEC_HEVC_GUID) != 0) {
+                    nvidia.nvenc_hevc = true;
+                } else if (IsEqualGUID(guids[i], NV_ENC_CODEC_H264_GUID) != 0) {
+                    nvidia.nvenc_h264 = true;
+                }
+            }
+            // Only now is the per-codec result authoritative.
+            nvidia.nvenc_codec_probed = true;
+        }
+    }
+
+    if (funcs.nvEncDestroyEncoder != nullptr) {
+        funcs.nvEncDestroyEncoder(encoder);
+    }
+    FreeLibrary(dll);
+}
+
+#else // EXOSNAP_CAPABILITY_HAVE_NVENC
+
+// Headless / no-vendor-header build: probe is unavailable. Leaves nvenc_codec_probed
+// false so the static baseline stands.
+void ProbeNvencCodecs(NvidiaRuntimeFacts&) {
+}
+
+#endif // EXOSNAP_CAPABILITY_HAVE_NVENC
 
 // -------------------------------------------------------------------------
 // B. DXGI adapter name discovery
@@ -361,6 +493,7 @@ RuntimeCapabilitySnapshot CapabilityBuilder::QueryRuntimeFacts() {
 
     // Probes are independent; each writes only to its own sub-struct.
     ProbeNvidia(snapshot.nvidia);
+    ProbeNvencCodecs(snapshot.nvidia); // A2: per-GPU codec GUIDs (best-effort; needs a real NVIDIA GPU)
     ProbeAdapterName(snapshot.nvidia);
     ProbeMfWebcam(snapshot.mf_webcam); // S4: webcam MF presence probe (safe, LoadLibraryW-based)
     ProbeMfAac(snapshot.mf_aac);       // guarded internally by IsMfPlatPresent()
