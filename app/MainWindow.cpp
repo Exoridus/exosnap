@@ -1011,9 +1011,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
             triggerUpdateCheck();
     });
 
-    // PERF-B1: staged post-show page hydration — separate singleShot so deferred page
-    // construction does not add latency to the capability probe or recovery checks above.
-    QTimer::singleShot(0, this, [this]() { hydrateSecondaryPages(); });
+    // PERF-B1: the deferred pages are hydrated AFTER the first paint (scheduled from
+    // MainWindow::paintEvent), not on the first event-loop tick. The first hydrate tick
+    // builds ConfigPage (~1.5 s under the global QSS) synchronously; a ctor-time
+    // singleShot(0) would run that BEFORE the first paint, blocking the window from
+    // appearing. Triggering hydrate post-paint lets the window appear first (~1.25 s).
 }
 
 void MainWindow::onRuntimeCapsReady(capability::CapabilitySet caps) {
@@ -1536,6 +1538,10 @@ void MainWindow::paintEvent(QPaintEvent* event) {
         first_paint_logged_ = true;
         diagnostics::AppLog::info(QStringLiteral("perf"),
                                   QStringLiteral("first-paint %1 ms").arg(diagnostics::StartupClock().elapsed()));
+        // PERF: hydrate the deferred secondary pages only AFTER the first paint, so a
+        // heavy page build (ConfigPage ~1.6 s under the global QSS) never blocks the
+        // window from first appearing.
+        QTimer::singleShot(0, this, [this]() { hydrateSecondaryPages(); });
     }
 }
 
