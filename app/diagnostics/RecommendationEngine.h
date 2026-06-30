@@ -71,7 +71,6 @@ class RecommendationEngine {
     bool live_present_available_ = false;
     bool live_cfr_ = true;
     double live_present_jitter_ms_ = 0.0;
-    double live_coalesce_ratio_ = 1.0;
 
     // Live disk-write latency (ADR 0033 extra-checks). Extracted from the live snapshot's
     // DiskDiagnostics; available only for the streaming Matroska writer (MP4 remux is post-stop).

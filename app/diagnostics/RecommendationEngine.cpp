@@ -49,7 +49,6 @@ RecommendationEngine::RecommendationEngine(const capability::CapabilitySet& caps
         live_present_available_ = true;
         live_cfr_ = live_snapshot->video_encoder.cfr;
         live_present_jitter_ms_ = live_snapshot->capture.source_present_jitter_ms;
-        live_coalesce_ratio_ = live_snapshot->capture.source_coalesce_ratio;
     }
     // Consume the optional present-mode sample only when the provider has a real observation.
     if (present != nullptr && present->available) {
@@ -83,69 +82,36 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
 }
 
 void RecommendationEngine::checkRefreshRateMismatch(DiagnosticChecklist& checklist) const {
-    // Static heuristic: a high-refresh monitor paired with a 60 fps capture is a common
-    // source of uneven pacing. monitor_refresh_rate_ == 0 means "unknown" and suppresses
-    // the static arm (the live arm below can still fire on its own).
-    const bool static_mismatch =
-        monitor_refresh_rate_ >= 120 && config_.frame_rate_num == 60 && config_.frame_rate_den == 1;
-
-    // Live correlation (v0.8.0 / ADR 0033): during CFR capture, measured present-time jitter
-    // or sustained coalescing is direct evidence that the source presents at a rate (or with
-    // a variability, e.g. VRR) that the fixed capture cadence cannot follow smoothly.
+    // Measured-symptom only — NO static config nag. The Smooth phase-correct frame selection
+    // (default pacing, ADR 0035) already absorbs the common high-refresh / VRR → CFR case, so
+    // a static "144 Hz + 60 fps" warning would just nag on a setup that records fine. We fire
+    // ONLY on measured residual present-time jitter: irregular source delivery that even
+    // best-frame selection at a fixed output rate cannot fully smooth. Sustained coalescing
+    // (source presenting faster than the CFR tick) is NORMAL for high-refresh sources and is
+    // exactly what the resampler handles — so it is no longer a trigger either.
     //
-    // Thresholds are deliberately conservative and empirically calibratable:
-    //   kJitterMs = 4.0 ms — peak-minus-average present interval. Normal scheduler/QPC
-    //                        sampling noise over the 2 s window stays well under this even at
-    //                        120 Hz (~8.3 ms nominal interval); a sustained >4 ms spread
-    //                        signals irregular present pacing (judder), not measurement noise.
-    //   kCoalesceRatio = 1.5 — mean desktop updates coalesced per acquire. >1.5 means the
-    //                        source consistently presents faster than the CFR sampling rate
-    //                        (1.5 rather than 1.0 to ignore the occasional double-update).
-    constexpr double kJitterMs = 4.0;
-    constexpr double kCoalesceRatio = 1.5;
-    const bool live_judder = live_present_available_ && live_cfr_ &&
-                             (live_present_jitter_ms_ > kJitterMs || live_coalesce_ratio_ > kCoalesceRatio);
-
-    if (!static_mismatch && !live_judder) {
+    //   kJitterMs = 8.0 ms — peak-minus-average present interval. Raised from the
+    //     pre-resampler 4 ms: the resampler absorbs moderate jitter, so only a sustained
+    //     spread approaching half a 60 fps output interval (~8.3 ms) signals judder it could
+    //     not hide. Conservative + empirically calibratable.
+    constexpr double kJitterMs = 8.0;
+    const bool live_judder = live_present_available_ && live_cfr_ && live_present_jitter_ms_ > kJitterMs;
+    if (!live_judder) {
         return;
     }
 
-    const std::string refresh_str =
-        monitor_refresh_rate_ > 0 ? std::to_string(monitor_refresh_rate_) + " Hz" : std::string("High-refresh");
-
-    DiagnosticResult r;
-    if (live_judder) {
-        // Higher-confidence diagnosis backed by live present-pacing measurement.
-        const std::string jitter_str = std::to_string(live_present_jitter_ms_).substr(0, 4);
-        const std::string coalesce_str = std::to_string(live_coalesce_ratio_).substr(0, 4);
-        std::string detail = "Live capture telemetry shows ";
-        bool wrote = false;
-        if (live_present_jitter_ms_ > kJitterMs) {
-            detail += "present-time jitter of " + jitter_str + " ms";
-            wrote = true;
-        }
-        if (live_coalesce_ratio_ > kCoalesceRatio) {
-            if (wrote)
-                detail += " and ";
-            detail += "sustained frame coalescing (" + coalesce_str + " source updates per captured frame)";
-        }
-        detail += " during constant-frame-rate recording. This indicates the source presents with "
-                  "variable / refresh-driven timing (e.g. VRR) that the fixed capture rate cannot follow "
-                  "smoothly, producing judder.";
-        r = MakeResult("rec.001", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-                       "VRR / refresh-induced judder detected",
-                       "Live present-pacing measurements indicate uneven frame delivery from the source.", detail,
-                       "Measured present jitter " + jitter_str + " ms during CFR capture",
-                       "Cap your game's frame rate (e.g. 60 or 120 fps) or disable VRR while recording for "
-                       "smoother pacing.");
-    } else {
-        r = MakeResult("rec.001", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice,
-                       "Refresh rate / FPS mismatch", "144+ Hz monitor detected with 60 fps recording.",
-                       "Your monitor runs at " + refresh_str +
-                           " but recording is set to 60 fps. This can cause uneven frame pacing.",
-                       refresh_str + " monitor, " + std::to_string(config_.frame_rate_num) + " fps recording",
-                       "Cap your game at 60 or 120 fps for smoother pacing.");
-    }
+    const std::string jitter_str = std::to_string(live_present_jitter_ms_).substr(0, 4);
+    const std::string detail =
+        "Live capture telemetry shows present-time jitter of " + jitter_str +
+        " ms during constant-frame-rate recording. The source presents with variable / refresh-driven "
+        "timing (e.g. VRR) irregular enough that even phase-correct frame selection cannot fully smooth "
+        "it at a fixed output rate, producing residual judder.";
+    DiagnosticResult r = MakeResult(
+        "rec.001", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice, "VRR / refresh-induced judder detected",
+        "Live present-pacing measurements indicate uneven frame delivery from the source.", detail,
+        "Measured present jitter " + jitter_str + " ms during CFR capture",
+        "Cap your game's frame rate (e.g. 60 or 120 fps) or disable VRR while recording for "
+        "smoother pacing.");
 
     // Present-mode attribution (PresentMon, ADR 0033): when available, name *how* the source
     // presents so the diagnosis reads as a root cause, not just a number.

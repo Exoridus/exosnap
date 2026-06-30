@@ -490,7 +490,7 @@ TEST(RecommendationEngineTest, Generate_Mp4_HasFixAction_Assisted) {
     EXPECT_TRUE(found);
 }
 
-TEST(RecommendationEngineTest, Generate_RefreshRateMismatch) {
+TEST(RecommendationEngineTest, Generate_StaticRefreshMismatch_NoLongerWarns) {
     capability::CapabilitySet caps;
     caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
     caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
@@ -499,18 +499,14 @@ TEST(RecommendationEngineTest, Generate_RefreshRateMismatch) {
     config.frame_rate_num = 60;
     config.frame_rate_den = 1;
 
-    // 144 Hz monitor + 60 fps = warn
+    // 144 Hz monitor + 60 fps, no live measurement. The Smooth phase-correct resampler (default)
+    // handles this case, so the old static "mismatch" warning no longer fires — rec.001 is now a
+    // measured-judder-only check.
     RecommendationEngine engine(caps, config, 144, 0, true);
     auto checklist = engine.Generate();
 
-    bool found_mismatch = false;
-    for (const auto& r : checklist.results) {
-        if (r.id == "rec.001") {
-            found_mismatch = true;
-            EXPECT_EQ(r.severity, DiagnosticSeverity::Notice);
-        }
-    }
-    EXPECT_TRUE(found_mismatch);
+    EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.001"; }));
 }
 
 TEST(RecommendationEngineTest, Generate_RefreshRateMatch_NoWarn) {
@@ -574,7 +570,7 @@ TEST(RecommendationEngineTest, Generate_LiveJitter_HighConfidenceJudder) {
     EXPECT_TRUE(found);
 }
 
-TEST(RecommendationEngineTest, Generate_LiveCoalesce_HighConfidenceJudder) {
+TEST(RecommendationEngineTest, Generate_LiveCoalesceAlone_NoLongerFires) {
     capability::CapabilitySet caps;
     caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
     caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
@@ -582,16 +578,15 @@ TEST(RecommendationEngineTest, Generate_LiveCoalesce_HighConfidenceJudder) {
     config.frame_rate_num = 60;
     config.frame_rate_den = 1;
 
-    // Low jitter but sustained coalescing (> 1.5) → judder arm fires.
-    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/1.0, /*coalesce_ratio=*/2.0);
+    // High coalescing with low jitter is NORMAL for a high-refresh source (it presents faster
+    // than the CFR tick) and is exactly what the Smooth resampler handles — no longer a judder
+    // trigger. Only measured present-time jitter fires rec.001 now.
+    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/1.0, /*coalesce_ratio=*/2.5);
     RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
     auto checklist = engine.Generate();
 
-    bool found = false;
-    for (const auto& r : checklist.results)
-        if (r.id == "rec.001")
-            found = true;
-    EXPECT_TRUE(found);
+    EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(),
+                             [](const DiagnosticResult& r) { return r.id == "rec.001"; }));
 }
 
 TEST(RecommendationEngineTest, Generate_LiveJudder_VfrDoesNotFire) {
@@ -620,35 +615,14 @@ TEST(RecommendationEngineTest, Generate_LiveBelowThreshold_DoesNotFire) {
     config.frame_rate_num = 60;
     config.frame_rate_den = 1;
 
-    // CFR but within conservative thresholds (jitter <= 4 ms, coalesce <= 1.5) → no diagnosis.
-    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/2.0, /*coalesce_ratio=*/1.1);
+    // CFR with sub-threshold jitter (<= 8 ms) → no diagnosis: the Smooth resampler absorbs
+    // moderate jitter, so 7 ms is below the raised bar. Coalescing is no longer a trigger.
+    const auto live = MakeJudderSnapshot(/*cfr=*/true, /*jitter_ms=*/7.0, /*coalesce_ratio=*/2.5);
     RecommendationEngine engine(caps, config, 0, 0, true, "", &live);
     auto checklist = engine.Generate();
 
     for (const auto& r : checklist.results)
         EXPECT_NE(r.id, "rec.001");
-}
-
-TEST(RecommendationEngineTest, Generate_StaticMismatchStillFiresWithoutLive) {
-    capability::CapabilitySet caps;
-    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
-    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
-    capability::UserRecorderConfig config;
-    config.frame_rate_num = 60;
-    config.frame_rate_den = 1;
-
-    // 144 Hz monitor, no live snapshot → original static heuristic wording (no "judder").
-    RecommendationEngine engine(caps, config, 144, 0, true, "", nullptr);
-    auto checklist = engine.Generate();
-
-    bool found = false;
-    for (const auto& r : checklist.results) {
-        if (r.id == "rec.001") {
-            found = true;
-            EXPECT_EQ(r.title.find("judder"), std::string::npos);
-        }
-    }
-    EXPECT_TRUE(found);
 }
 
 TEST(RecommendationEngineTest, Generate_CodecUnavailable_Blocker) {
@@ -1343,8 +1317,8 @@ TEST(RecommendationEngineTest, JudderDetailNamesPresentModeAttribution) {
     snap.valid = true;
     snap.video_encoder.cfr = true;
     snap.capture.present_cadence_availability = recorder_core::MetricAvailability::Available;
-    snap.capture.source_present_jitter_ms = 6.0; // > kJitterMs
-    snap.capture.source_coalesce_ratio = 2.0;    // > kCoalesceRatio
+    snap.capture.source_present_jitter_ms = 9.0; // > kJitterMs (8 ms)
+    snap.capture.source_coalesce_ratio = 2.0;    // no longer a trigger; present here but ignored
     capability::CapabilitySet caps;
     capability::UserRecorderConfig config;
     config.frame_rate_num = 60;
