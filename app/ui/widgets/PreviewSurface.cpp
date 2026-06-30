@@ -204,7 +204,9 @@ PreviewSurface::~PreviewSurface() {
 }
 
 bool PreviewSurface::hasHeightForWidth() const {
-    return true;
+    // PREVIEW-PANEL: the surface fills the host (no 16:9 widget aspect lock); live
+    // content letterboxes inside it. heightForWidth() is retained but unused.
+    return false;
 }
 
 int PreviewSurface::heightForWidth(int width) const {
@@ -1007,11 +1009,16 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
     painter.setRenderHint(QPainter::Antialiasing, true);
 
     const QRectF frame_rect = rect().adjusted(0.5, 0.5, -0.5, -0.5);
+    // PREVIEW-PANEL: the host (recordPreviewSurfaceHost) is the single rounded panel
+    // (bg + state-coloured 1px border + radius-md=10). The surface fills it and draws
+    // ONLY content (no own border) clipped to the host's inner radius (10 − 1px ≈ 9),
+    // so there is no nested-panel seam.
+    constexpr qreal kPanelRadius = 9.0;
 
     if (dxgi_active_) {
         painter.setBrush(QColor(0, 0, 0));
         painter.setPen(Qt::NoPen);
-        painter.drawRoundedRect(frame_rect, 5.0, 5.0);
+        painter.drawRoundedRect(frame_rect, kPanelRadius, kPanelRadius);
     } else {
         // DESIGN-FIDELITY: suite-record.jsx:23 PreviewEmpty — a quiet near-black radial
         // vignette (NOT a flat fill, and no warm/amber cast):
@@ -1023,13 +1030,13 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
         empty_bg.setColorAt(0.58, QColor(0x0C, 0x0C, 0x0E));
         empty_bg.setColorAt(1.0, QColor(0x08, 0x08, 0x0A));
         painter.setBrush(empty_bg);
-        painter.setPen(QPen(QColor(255, 255, 255, 18), 1.0));
-        painter.drawRoundedRect(frame_rect, 5.0, 5.0);
+        painter.setPen(Qt::NoPen); // the host draws the single panel border
+        painter.drawRoundedRect(frame_rect, kPanelRadius, kPanelRadius);
 
         if (!current_frame_.isNull()) {
             painter.save();
             QPainterPath clipPath;
-            clipPath.addRoundedRect(frame_rect, 5.0, 5.0);
+            clipPath.addRoundedRect(frame_rect, kPanelRadius, kPanelRadius);
             painter.setClipPath(clipPath);
 
             // Draw through the same contain-fit rect used for PiP hit-testing and
@@ -1044,7 +1051,7 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
             // show the branded capture-safe placeholder instead of a blank panel.
             painter.save();
             QPainterPath clip;
-            clip.addRoundedRect(frame_rect, 5.0, 5.0);
+            clip.addRoundedRect(frame_rect, kPanelRadius, kPanelRadius);
             painter.setClipPath(clip);
             paintBrandPlaceholder(painter, frame_rect);
             painter.restore();
@@ -1070,7 +1077,7 @@ void PreviewSurface::paintEvent(QPaintEvent* event) {
         glow.setAlpha(tone_recording ? 68 : 44);
         painter.setPen(QPen(glow, tone_recording ? 2.0 : 1.5));
         painter.setBrush(Qt::NoBrush);
-        painter.drawRoundedRect(frame_rect.adjusted(0.8, 0.8, -0.8, -0.8), 5.0, 5.0);
+        painter.drawRoundedRect(frame_rect.adjusted(0.8, 0.8, -0.8, -0.8), kPanelRadius, kPanelRadius);
         painter.restore();
     }
 

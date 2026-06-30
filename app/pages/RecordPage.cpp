@@ -1,6 +1,7 @@
 #include "RecordPage.h"
 
 #include "../diagnostics/AppLog.h"
+#include "../diagnostics/StartupClock.h"
 #include "../models/RecordingPreset.h"
 #include "../ui/dialogs/SourcePickerDialog.h"
 #include "../ui/dialogs/SourcePickerOverlay.h"
@@ -729,29 +730,10 @@ void RecordPage::updatePreviewHeightClamp() {
         return;
     }
 
-    // Preview-first (HYBRID-PORT-R2): the surface is the largest 16:9 rectangle
-    // that fits the available host area. No rail width is reserved any more — the
-    // preview owns the page width above the bottom transport dock.
-    const int avail_width = (std::max)(200, preview_surface_host_->width() - 2);
-    const int avail_height = (std::max)(120, preview_surface_host_->height() - 2);
-
-    int frame_width = avail_width;
-    int frame_height = static_cast<int>((static_cast<double>(frame_width) * 9.0) / 16.0);
-    if (frame_height > avail_height) {
-        frame_height = avail_height;
-        frame_width = static_cast<int>((static_cast<double>(frame_height) * 16.0) / 9.0);
-    }
-
-    frame_width = (std::max)(200, frame_width);
-    frame_height = (std::max)(120, frame_height);
-
-    const QSize target_size(frame_width, frame_height);
-    if (preview_surface_->minimumSize() != target_size || preview_surface_->maximumSize() != target_size) {
-        preview_surface_->setMinimumSize(target_size);
-        preview_surface_->setMaximumSize(target_size);
-        preview_surface_->updateGeometry();
-    }
-
+    // PREVIEW-PANEL: the surface fills the host (single full-area panel, canon
+    // suite-record.jsx:209) — no 16:9 widget clamp. Live content letterboxes INSIDE
+    // the surface via the DXGI child-HWND placement / displayedFrameRect. Only keep
+    // the active DXGI child rect in sync when the host resizes.
     if (preview_surface_->isDxgiPreviewActive()) {
         preview_surface_->repositionDxgiPreview();
     }
@@ -811,12 +793,13 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     auto* preview_surface_host_layout = new QHBoxLayout(preview_surface_host_);
     preview_surface_host_layout->setContentsMargins(1, 1, 1, 1);
     preview_surface_host_layout->setSpacing(0);
-    preview_surface_host_layout->addStretch(1);
     preview_surface_ = new ui::widgets::PreviewSurface(preview_surface_host_);
     connect(preview_surface_, &ui::widgets::PreviewSurface::webcamOverlayMoved, this,
             &RecordPage::onWebcamOverlayMoved);
-    preview_surface_host_layout->addWidget(preview_surface_, 0, Qt::AlignHCenter | Qt::AlignVCenter);
-    preview_surface_host_layout->addStretch(1);
+    // PREVIEW-PANEL (canon suite-record.jsx:209): the surface fills the host so the
+    // host is the single rounded panel. No 16:9 widget clamp / centering stretches —
+    // live content letterboxes INSIDE the surface; the placeholder fills the panel.
+    preview_surface_host_layout->addWidget(preview_surface_, 1);
     preview_column_layout->addWidget(preview_surface_host_, 1);
 
     transport_dock_ = new ui::widgets::TransportDock(this);
@@ -2198,6 +2181,11 @@ void RecordPage::startPreviewIfIdle() {
         preview_surface_->tryStartDxgiPreview(target, cfg.frame_rate_num, cfg.frame_rate_den, crop_box)) {
         last_preview_key_ = active_key;
         diagnostics::AppLog::debug(QStringLiteral("record"), QStringLiteral("DXGI preview started for target"));
+        // PERF-MEASURE: second baseline data point — "preview live" vs. the MainWindow
+        // first-paint marker ("window interactive"). Logged once per preview start; the
+        // first one after launch is the cold start→preview-live latency.
+        diagnostics::AppLog::info(QStringLiteral("perf"),
+                                  QStringLiteral("preview-live %1 ms").arg(diagnostics::StartupClock().elapsed()));
         return;
     }
 
