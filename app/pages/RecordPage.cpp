@@ -1,7 +1,9 @@
 #include "RecordPage.h"
 
 #include "../diagnostics/AppLog.h"
+#include "../diagnostics/StartupClock.h"
 #include "../models/RecordingPreset.h"
+#include "../ui/CodecLabels.h"
 #include "../ui/dialogs/SourcePickerDialog.h"
 #include "../ui/dialogs/SourcePickerOverlay.h"
 #include "../ui/dialogs/SourcePickerWindowRules.h"
@@ -121,102 +123,14 @@ QString stateDisplay(UiRecordingState state) {
     }
 }
 
-QString containerLabel(capability::Container container) {
-    switch (container) {
-    case capability::Container::Matroska:
-        return QStringLiteral("MKV");
-    case capability::Container::Mp4:
-        return QStringLiteral("MP4");
-    case capability::Container::WebM:
-        return QStringLiteral("WEBM");
-    default:
-        return QStringLiteral("MKV");
-    }
-}
-
-QString videoCodecLabel(capability::VideoCodec codec) {
-    switch (codec) {
-    case capability::VideoCodec::H264Nvenc:
-        return QStringLiteral("H.264");
-    case capability::VideoCodec::HevcNvenc:
-        return QStringLiteral("HEVC");
-    case capability::VideoCodec::Av1Nvenc:
-        return QStringLiteral("AV1");
-    default:
-        return QStringLiteral("AV1");
-    }
-}
-
-QString audioCodecLabel(capability::AudioCodec codec) {
-    switch (codec) {
-    case capability::AudioCodec::Opus:
-        return QStringLiteral("Opus"); // D4: display casing — never OPUS
-    case capability::AudioCodec::AacMf:
-        return QStringLiteral("AAC");
-    case capability::AudioCodec::Pcm:
-        return QStringLiteral("PCM");
-    case capability::AudioCodec::Flac:
-        return QStringLiteral("FLAC");
-    default:
-        return QStringLiteral("AAC");
-    }
-}
-
-QString containerLabel(recorder_core::Container container) {
-    switch (container) {
-    case recorder_core::Container::Matroska:
-        return QStringLiteral("MKV");
-    case recorder_core::Container::Mp4:
-        return QStringLiteral("MP4");
-    case recorder_core::Container::WebM:
-        return QStringLiteral("WEBM");
-    }
-    return QStringLiteral("MKV");
-}
-
-QString videoCodecLabel(recorder_core::VideoCodec codec) {
-    switch (codec) {
-    case recorder_core::VideoCodec::H264Nvenc:
-        return QStringLiteral("H.264");
-    case recorder_core::VideoCodec::HevcNvenc:
-        return QStringLiteral("HEVC");
-    case recorder_core::VideoCodec::Av1Nvenc:
-        return QStringLiteral("AV1");
-    }
-    return QStringLiteral("AV1");
-}
-
-QString audioCodecLabel(recorder_core::AudioCodec codec) {
-    switch (codec) {
-    case recorder_core::AudioCodec::Opus:
-        return QStringLiteral("Opus"); // D4: display casing — never OPUS
-    case recorder_core::AudioCodec::AacMf:
-        return QStringLiteral("AAC");
-    case recorder_core::AudioCodec::Pcm:
-        return QStringLiteral("PCM");
-    case recorder_core::AudioCodec::Flac:
-        return QStringLiteral("FLAC");
-    }
-    return QStringLiteral("AAC");
-}
-
-QString frameRateLabel(uint32_t numerator, uint32_t denominator) {
-    if (numerator == 0 || denominator == 0) {
-        return QStringLiteral("60 fps");
-    }
-    if (denominator == 1) {
-        return QStringLiteral("%1 fps").arg(numerator);
-    }
-    return QStringLiteral("%1/%2 fps").arg(numerator).arg(denominator);
-}
-
-QString resolutionLabel(const OutputResolutionSettings& resolution) {
-    if (resolution.mode == OutputResolutionMode::Custom && resolution.custom_width > 0 &&
-        resolution.custom_height > 0) {
-        return QStringLiteral("%1×%2").arg(resolution.custom_width).arg(resolution.custom_height);
-    }
-    return QString::fromWCharArray(OutputResolutionModeName(resolution.mode));
-}
+// Codec/container/frame-rate/resolution labels: shared canon header
+// (app/ui/CodecLabels.h). Both enum-family overloads (capability:: and
+// recorder_core::) live there — single source of truth, canonical casing.
+using exosnap::ui::audioCodecLabel;
+using exosnap::ui::containerLabel;
+using exosnap::ui::frameRateLabel;
+using exosnap::ui::resolutionLabel;
+using exosnap::ui::videoCodecLabel;
 
 QString toClock(const std::wstring& elapsed_text) {
     const QString text = QString::fromStdWString(elapsed_text);
@@ -729,29 +643,10 @@ void RecordPage::updatePreviewHeightClamp() {
         return;
     }
 
-    // Preview-first (HYBRID-PORT-R2): the surface is the largest 16:9 rectangle
-    // that fits the available host area. No rail width is reserved any more — the
-    // preview owns the page width above the bottom transport dock.
-    const int avail_width = (std::max)(200, preview_surface_host_->width() - 2);
-    const int avail_height = (std::max)(120, preview_surface_host_->height() - 2);
-
-    int frame_width = avail_width;
-    int frame_height = static_cast<int>((static_cast<double>(frame_width) * 9.0) / 16.0);
-    if (frame_height > avail_height) {
-        frame_height = avail_height;
-        frame_width = static_cast<int>((static_cast<double>(frame_height) * 16.0) / 9.0);
-    }
-
-    frame_width = (std::max)(200, frame_width);
-    frame_height = (std::max)(120, frame_height);
-
-    const QSize target_size(frame_width, frame_height);
-    if (preview_surface_->minimumSize() != target_size || preview_surface_->maximumSize() != target_size) {
-        preview_surface_->setMinimumSize(target_size);
-        preview_surface_->setMaximumSize(target_size);
-        preview_surface_->updateGeometry();
-    }
-
+    // PREVIEW-PANEL: the surface fills the host (single full-area panel, canon
+    // suite-record.jsx:209) — no 16:9 widget clamp. Live content letterboxes INSIDE
+    // the surface via the DXGI child-HWND placement / displayedFrameRect. Only keep
+    // the active DXGI child rect in sync when the host resizes.
     if (preview_surface_->isDxgiPreviewActive()) {
         preview_surface_->repositionDxgiPreview();
     }
@@ -811,12 +706,13 @@ RecordPage::RecordPage(QWidget* parent) : QWidget(parent) {
     auto* preview_surface_host_layout = new QHBoxLayout(preview_surface_host_);
     preview_surface_host_layout->setContentsMargins(1, 1, 1, 1);
     preview_surface_host_layout->setSpacing(0);
-    preview_surface_host_layout->addStretch(1);
     preview_surface_ = new ui::widgets::PreviewSurface(preview_surface_host_);
     connect(preview_surface_, &ui::widgets::PreviewSurface::webcamOverlayMoved, this,
             &RecordPage::onWebcamOverlayMoved);
-    preview_surface_host_layout->addWidget(preview_surface_, 0, Qt::AlignHCenter | Qt::AlignVCenter);
-    preview_surface_host_layout->addStretch(1);
+    // PREVIEW-PANEL (canon suite-record.jsx:209): the surface fills the host so the
+    // host is the single rounded panel. No 16:9 widget clamp / centering stretches —
+    // live content letterboxes INSIDE the surface; the placeholder fills the panel.
+    preview_surface_host_layout->addWidget(preview_surface_, 1);
     preview_column_layout->addWidget(preview_surface_host_, 1);
 
     transport_dock_ = new ui::widgets::TransportDock(this);
@@ -1723,7 +1619,7 @@ void RecordPage::applyVisualScenario(const visual::VisualScenario& scenario) {
         preview_surface_->setLiveFrame(test_frame);
         preview_surface_->setTopMetaText(QStringLiteral("VISUAL TEST TARGET"));
         preview_surface_->setBottomLeftText(QStringLiteral("Display 1 · 2560x1440"));
-        preview_surface_->setBottomRightText(QStringLiteral("Native · 60 fps CFR · AV1 · Opus · WEBM"));
+        preview_surface_->setBottomRightText(QStringLiteral("Native · 60 fps CFR · AV1 · Opus · WebM"));
         preview_surface_->setFrameTone(ui::widgets::PreviewSurface::FrameTone::Ready);
     }
 
@@ -2198,6 +2094,11 @@ void RecordPage::startPreviewIfIdle() {
         preview_surface_->tryStartDxgiPreview(target, cfg.frame_rate_num, cfg.frame_rate_den, crop_box)) {
         last_preview_key_ = active_key;
         diagnostics::AppLog::debug(QStringLiteral("record"), QStringLiteral("DXGI preview started for target"));
+        // PERF-MEASURE: second baseline data point — "preview live" vs. the MainWindow
+        // first-paint marker ("window interactive"). Logged once per preview start; the
+        // first one after launch is the cold start→preview-live latency.
+        diagnostics::AppLog::info(QStringLiteral("perf"),
+                                  QStringLiteral("preview-live %1 ms").arg(diagnostics::StartupClock().elapsed()));
         return;
     }
 

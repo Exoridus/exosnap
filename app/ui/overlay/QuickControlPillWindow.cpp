@@ -37,7 +37,6 @@ namespace {
 // ── Design-system tokens (Mappe QuickPill) ───────────────────────────────────
 constexpr QColor kPillBg{12, 12, 14, 204};       // rgba(12,12,14,0.8)
 constexpr QColor kPillBorder{255, 255, 255, 41}; // rgba(255,255,255,0.16)
-constexpr QColor kPillRadius = {};               // placeholder; radius is an int below
 constexpr int kRadius = 16;
 constexpr int kPadding = 8;
 
@@ -319,7 +318,6 @@ void QuickControlPillWindow::mousePressEvent(QMouseEvent* event) {
     if (gr.contains(local)) {
         // Grip area: begin drag tracking.
         dragging_ = true;
-        drag_start_local_ = local;
         drag_start_global_ = event->globalPosition().toPoint();
         setCursor(Qt::ClosedHandCursor);
         event->accept();

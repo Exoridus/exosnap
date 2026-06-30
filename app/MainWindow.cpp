@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include "diagnostics/AppLog.h"
+#include "diagnostics/StartupClock.h"
 #include "models/RecordingPreset.h"
 #include "notifications/NotificationEvent.h"
 #include "notifications/NotificationManager.h"
@@ -648,16 +649,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     });
     connect(title_bar_, &ui::chrome::OperationalTitleBar::closeRequested, this, &QWidget::close);
     connect(record_page_, &RecordPage::chromeStateChanged, this, &MainWindow::onRecordChromeStateChanged);
-    // DF-11: wire drop count from recording stats into the titlebar Recording pill.
     connect(record_page_, &RecordPage::chromeRuntimeMetricsChanged, this,
-            [this](const QString& elapsed, const QString& /*bitrate*/, const QString& drop_text,
+            [this](const QString& elapsed, const QString& /*bitrate*/, const QString& /*drop_text*/,
                    const QString& /*size*/, double /*av_drift_ms*/) {
-                if (title_bar_) {
-                    bool ok = false;
-                    const int drops = drop_text.toInt(&ok);
-                    title_bar_->setRecordingDropCount(ok ? drops : 0);
-                }
-                // RECORDING-OVERLAY-R1: keep the overlay elapsed text in sync.
+                // RECORDING-OVERLAY-R1: keep the overlay elapsed text in sync. (The live
+                // drop count is intentionally NOT shown in the title pill — it is dominated
+                // by benign CFR downsampling; real drops are surfaced post-recording.)
                 if (recording_overlay_ && recording_overlay_->isVisible())
                     recording_overlay_->updateElapsed(elapsed);
             });
@@ -1010,9 +1007,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
             triggerUpdateCheck();
     });
 
-    // PERF-B1: staged post-show page hydration — separate singleShot so deferred page
-    // construction does not add latency to the capability probe or recovery checks above.
-    QTimer::singleShot(0, this, [this]() { hydrateSecondaryPages(); });
+    // PERF-B1: the deferred pages are hydrated AFTER the first paint (scheduled from
+    // MainWindow::paintEvent), not on the first event-loop tick. The first hydrate tick
+    // builds ConfigPage (~1.5 s under the global QSS) synchronously; a ctor-time
+    // singleShot(0) would run that BEFORE the first paint, blocking the window from
+    // appearing. Triggering hydrate post-paint lets the window appear first (~1.25 s).
 }
 
 void MainWindow::onRuntimeCapsReady(capability::CapabilitySet caps) {
@@ -1526,6 +1525,22 @@ void MainWindow::showEvent(QShowEvent* event) {
         tray_presence_->setWindowVisible(true);
 }
 
+void MainWindow::paintEvent(QPaintEvent* event) {
+    QMainWindow::paintEvent(event);
+    // PERF-MEASURE: the first real paint = "window interactive". Log start→first-paint
+    // once; the DXGI "preview-live" marker is the second data point (preview ~150 ms
+    // after showEvent). Benchmark with EXOSNAP_CONFIG_DIR isolated to an empty temp.
+    if (!first_paint_logged_) {
+        first_paint_logged_ = true;
+        diagnostics::AppLog::info(QStringLiteral("perf"),
+                                  QStringLiteral("first-paint %1 ms").arg(diagnostics::StartupClock().elapsed()));
+        // PERF: hydrate the deferred secondary pages only AFTER the first paint, so a
+        // heavy page build (ConfigPage ~1.6 s under the global QSS) never blocks the
+        // window from first appearing.
+        QTimer::singleShot(0, this, [this]() { hydrateSecondaryPages(); });
+    }
+}
+
 void MainWindow::applyRuntimeWindowIcon() {
     QIcon runtime_icon = windowIcon();
     if (runtime_icon.isNull())
@@ -1650,8 +1665,12 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
 
     // CRASH-WIRE-R1: refresh crash context on the recording-start edge so a crash
     // mid-recording carries the live encoder/output context.
-    if (recording && !was_recording)
+    if (recording && !was_recording) {
         refreshCrashSessionContext();
+        // DROP-NOTIFY: start a fresh per-recording backpressure-drop accounting so a
+        // prior recording's drops can never leak into this one's "frames dropped" toast.
+        last_backpressure_drops_ = 0;
+    }
     // ADR-0014: track remux-on-stop phase separately so closeEvent can guard it.
     remuxing_active_ = (record_status_label_ == QStringLiteral("SAVING"));
     if (record_status_label_.isEmpty())
@@ -3205,61 +3224,90 @@ void MainWindow::initNotificationToasts() {
 
     // ── Trigger 1 + 2 + 3: recording result ready (Saved / LowStorage / UnexpectedStop) ──
     // Hooked into RecordPage::recordingResultReady emitted from the SetResultReadyCallback.
-    connect(record_page_, &RecordPage::recordingResultReady, this,
-            [this](bool succeeded, const QString& output_path, const QString& error_phase) {
-                if (!persisted_settings_.show_notifications || !notification_manager_)
-                    return;
+    connect(
+        record_page_, &RecordPage::recordingResultReady, this,
+        [this](bool succeeded, const QString& output_path, const QString& error_phase) {
+            if (!persisted_settings_.show_notifications || !notification_manager_)
+                return;
 
-                notifications::NotificationEvent event;
-                if (succeeded) {
-                    // Trigger 2: recording saved successfully.
-                    event.type = notifications::NotificationType::Saved;
-                    event.title = QStringLiteral("Recording saved");
-                    // Prefer the filename; fall back to a generic body.
-                    if (!output_path.isEmpty()) {
-                        const QString name =
-                            output_path.contains(QLatin1Char('/')) || output_path.contains(QLatin1Char('\\'))
-                                ? output_path.mid(
-                                      output_path.lastIndexOf(QRegularExpression(QStringLiteral("[/\\\\]"))) + 1)
-                                : output_path;
-                        event.body = name.isEmpty() ? QStringLiteral("File saved to output folder") : name;
-                    } else {
-                        event.body = QStringLiteral("File saved to output folder");
-                    }
-                    // Primary action: navigate to the Edit/Output page for the saved
-                    // recording. Secondary action: reveal the file in Explorer.
-                    // Both share action_payload (the output file path).
-                    event.action = notifications::NotificationAction::Edit;
-                    event.secondary_action = notifications::NotificationAction::OpenFolder;
-                    event.action_payload = output_path;
-                } else if (error_phase == QStringLiteral("DiskSpace")) {
-                    // Trigger 1: disk monitor hard-stop — "Storage running low" (caution, sticky).
-                    // Mappe spec: action "Change folder" (primary) + "Dismiss".
-                    event.type = notifications::NotificationType::LowStorage;
-                    event.title = QStringLiteral("Storage running low");
-                    event.body = QStringLiteral("Recording stopped — output drive is critically low on disk space.");
-                    event.action = notifications::NotificationAction::ChangeFolder;
-                    event.secondary_action = notifications::NotificationAction::None; // Dismiss shown by ghost pill
-                    // PS-PHASE-E: also add a hub advisory for low-disk.
-                    if (notification_hub_) {
-                        notification_hub_->removeAdvisoryById(QStringLiteral("low-disk"));
-                        notification_hub_->addAdvisory(
-                            QStringLiteral("low-disk"), QStringLiteral("caution"),
-                            QStringLiteral("Storage running low"),
-                            QStringLiteral("Recording stopped — output drive is critically low on disk space."),
-                            QStringLiteral("now"), /*unread=*/true, QStringLiteral("settings/output"),
-                            QStringLiteral("Change folder"),
-                            /*is_deep_link=*/true);
-                        refreshHubUnreadBell();
-                    }
+            notifications::NotificationEvent event;
+            if (succeeded) {
+                // Trigger 2: recording saved successfully.
+                event.type = notifications::NotificationType::Saved;
+                event.title = QStringLiteral("Recording saved");
+                // Prefer the filename; fall back to a generic body.
+                if (!output_path.isEmpty()) {
+                    const QString name =
+                        output_path.contains(QLatin1Char('/')) || output_path.contains(QLatin1Char('\\'))
+                            ? output_path.mid(output_path.lastIndexOf(QRegularExpression(QStringLiteral("[/\\\\]"))) +
+                                              1)
+                            : output_path;
+                    event.body = name.isEmpty() ? QStringLiteral("File saved to output folder") : name;
                 } else {
-                    // RECORDING-ERROR-MODAL-R1: a non-disk-space failure is now surfaced
-                    // by the modal RecordingErrorOverlay (RecordPage::recordingFailed), so
-                    // we no longer enqueue a redundant "stopped unexpectedly" toast here.
-                    // The modal carries the full detail and the opt-in error report.
-                    return;
+                    event.body = QStringLiteral("File saved to output folder");
                 }
-                notification_manager_->Enqueue(std::move(event));
+                // Primary action: navigate to the Edit/Output page for the saved
+                // recording. Secondary action: reveal the file in Explorer.
+                // Both share action_payload (the output file path).
+                event.action = notifications::NotificationAction::Edit;
+                event.secondary_action = notifications::NotificationAction::OpenFolder;
+                event.action_payload = output_path;
+            } else if (error_phase == QStringLiteral("DiskSpace")) {
+                // Trigger 1: disk monitor hard-stop — "Storage running low" (caution, sticky).
+                // Mappe spec: action "Change folder" (primary) + "Dismiss".
+                event.type = notifications::NotificationType::LowStorage;
+                event.title = QStringLiteral("Storage running low");
+                event.body = QStringLiteral("Recording stopped — output drive is critically low on disk space.");
+                event.action = notifications::NotificationAction::ChangeFolder;
+                event.secondary_action = notifications::NotificationAction::None; // Dismiss shown by ghost pill
+                // PS-PHASE-E: also add a hub advisory for low-disk.
+                if (notification_hub_) {
+                    notification_hub_->removeAdvisoryById(QStringLiteral("low-disk"));
+                    notification_hub_->addAdvisory(
+                        QStringLiteral("low-disk"), QStringLiteral("caution"), QStringLiteral("Storage running low"),
+                        QStringLiteral("Recording stopped — output drive is critically low on disk space."),
+                        QStringLiteral("now"), /*unread=*/true, QStringLiteral("settings/output"),
+                        QStringLiteral("Change folder"),
+                        /*is_deep_link=*/true);
+                    refreshHubUnreadBell();
+                }
+            } else {
+                // RECORDING-ERROR-MODAL-R1: a non-disk-space failure is now surfaced
+                // by the modal RecordingErrorOverlay (RecordPage::recordingFailed), so
+                // we no longer enqueue a redundant "stopped unexpectedly" toast here.
+                // The modal carries the full detail and the opt-in error report.
+                return;
+            }
+            notification_manager_->Enqueue(std::move(event));
+
+            // DROP-NOTIFY: on a successful save, raise a separate caution toast when
+            // REAL frame drops occurred — encoder backpressure only. Benign drops
+            // (capture coalescing / intentional CFR downsampling) are excluded by
+            // design, so this fires only when the encoder genuinely fell behind. The
+            // toast links to the Diagnostics page, which renders the full per-stage
+            // breakdown. A separate event (not folded into "Recording saved") because
+            // that toast's two action slots — Edit + Show in folder — are both taken.
+            if (succeeded && last_backpressure_drops_ > 0) {
+                notifications::NotificationEvent drop_event;
+                drop_event.type = notifications::NotificationType::FramesDropped;
+                drop_event.title = QStringLiteral("Frames dropped");
+                drop_event.body = last_backpressure_drops_ == 1
+                                      ? QStringLiteral("1 frame was dropped because the encoder couldn't keep up.")
+                                      : QStringLiteral("%1 frames were dropped because the encoder couldn't keep up.")
+                                            .arg(last_backpressure_drops_);
+                drop_event.action = notifications::NotificationAction::OpenDiagnostics;
+                notification_manager_->Enqueue(std::move(drop_event));
+            }
+        });
+
+    // DROP-NOTIFY: tee the live diagnostics stream to track the running encoder-
+    // backpressure drop count. This is independent of the (lazy) DiagnosticsPage, which
+    // owns its OWN direct connect — so drop tracking works even if the user never opens
+    // that page. The count is monotonic within a recording and reset on the start edge;
+    // the result-ready handler above reads it to decide whether to raise the toast.
+    connect(record_page_, &RecordPage::diagnosticsUpdated, this,
+            [this](const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
+                last_backpressure_drops_ = snapshot.capture.frames_dropped_backpressure;
             });
 
     // ── RECORDING-ERROR-MODAL-R1: modal failure dialog ──
@@ -3403,6 +3451,13 @@ void MainWindow::dispatchNotificationAction(const notifications::NotificationEve
         navigateToPage(kSettingsPageIndex);
         if (config_page_)
             config_page_->scrollToSection(QStringLiteral("settings/updates"));
+        break;
+    }
+    case NotificationAction::OpenDiagnostics: {
+        // DROP-NOTIFY: jump to the Diagnostics page, where the per-stage frame-drop
+        // breakdown (coalesce / cfr / backpressure) is rendered live. The page builds
+        // lazily on first navigation, so navigateToPage is self-sufficient here.
+        navigateToPage(kDiagnosticsPageIndex);
         break;
     }
     case NotificationAction::RelaunchElevated: {

@@ -25,10 +25,6 @@ const ExoTheme& ActiveTheme();
 // Returns an invalid QColor if parsing fails.
 QColor ParseThemeColor(const char* css_color);
 
-// Legacy compat shim: ReapplyAccent -> ReapplyTheme (maps old accent ids to themes).
-// Kept for a short transition period; callers should migrate to ReapplyTheme.
-void ReapplyAccent(QApplication& app, const QString& accent_id);
-
 // ── Derived colour helpers ─────────────────────────────────────────────────────
 // Use these in widgets that build inline stylesheets, to avoid coupling to the
 // BuildTokens() internals or to ExoSnapPalette:: static constants.

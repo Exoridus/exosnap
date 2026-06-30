@@ -107,7 +107,6 @@ class RegionSelectionOverlay : public QWidget {
     void paintScrimAndSelection(QPainter& p, const QRect& sel) const;
     void paintCornerHandles(QPainter& p, const QRect& sel) const;
     void paintReadout(QPainter& p, const QRect& sel) const;
-    void paintAspectHint(QPainter& p, const QRect& sel, const QString& hint_label) const;
     void paintInstruction(QPainter& p) const;
 
     QPoint drag_start_;

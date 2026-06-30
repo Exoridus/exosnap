@@ -42,7 +42,6 @@ class ExoCheckBox;
 class ExoSlider;
 class ExoToggle;
 class HotkeysSettingsPanel;
-class SettingsCardExpander;
 class SettingsPopoverRow;
 class VUMeterWidget;
 class WebcamSetupPanel;
@@ -289,6 +288,11 @@ class ConfigPage : public QWidget {
     void onManagePresets();
     void updatePresetActionState();
     void updateExpertModeVisibility();
+    // Startup-perf: builds the heavy Expert audio subtree on first expert-enable
+    // (eager-then-hidden cost kept off the default ConfigPage construction path).
+    void buildAudioExpertSection();
+    void buildSplitExpertSection();
+    void buildDeveloperCard();
 
     capability::AudioUiState audio_ui_state_;
     WebcamSettings webcam_settings_;
@@ -426,9 +430,7 @@ class ConfigPage : public QWidget {
     QLabel* lock_note_label_ = nullptr;
     bool controls_locked_ = false;
 
-    QLabel* token_help_label_ = nullptr;
-    QPushButton* token_help_toggle_btn_ = nullptr; // v10: removed — kept nullptr
-    QWidget* token_chip_flow_ = nullptr;           // v10: always visible below pattern input
+    QWidget* token_chip_flow_ = nullptr; // v10: always visible below pattern input
 
     // SETTINGS-TIERS-R1 / D6: Expert mode toggle (ExoToggle in D6 header zone).
     ui::widgets::ExoToggle* expert_mode_toggle_ = nullptr;
@@ -436,7 +438,10 @@ class ConfigPage : public QWidget {
     QWidget* expert_warn_banner_ = nullptr; // amber banner above grid, visible only in expert mode
     bool expert_mode_enabled_ = false;
     // Wave 2: split recording controls moved out of expander; now expert-gated section.
+    // Lazily built on first expert-enable (see buildSplitExpertSection).
     QWidget* split_expert_section_ = nullptr;
+    bool split_expert_built_ = false;
+    int split_expert_insert_index_ = -1;
 
     // Wave 2: Part B — CQ precision spinbox row.
     QWidget* quality_expert_widget_ = nullptr; // CQ spinbox row shown in expert mode
@@ -458,8 +463,12 @@ class ConfigPage : public QWidget {
     QButtonGroup* theme_button_group_ = nullptr;
     QWidget* theme_picker_widget_ = nullptr;
     QString current_theme_id_ = QStringLiteral("dark-default");
-    // Expert-gated developer card (hidden when expert_mode_enabled_ == false).
+    // Expert-gated developer card — lazily built on first expert-enable (see
+    // buildDeveloperCard). left_col_ + insert index let the lazy build place it.
     QWidget* developer_card_ = nullptr;
+    bool developer_card_built_ = false;
+    int developer_insert_index_ = -1;
+    QWidget* left_col_ = nullptr;
 
     // PS-PHASE-C: Embedded hotkeys panel — v10: single-width card in the LEFT column.
     ui::widgets::HotkeysSettingsPanel* hotkeys_settings_panel_ = nullptr;
@@ -505,7 +514,11 @@ class ConfigPage : public QWidget {
     QComboBox* keyframe_interval_combo_ = nullptr;
 
     // PS-PHASE-C: Expert Audio section — mic gain, channel mode, bitrate, Opus params + placeholders.
+    // Lazily built on first expert-enable (see buildAudioExpertSection); built_ guards
+    // against rebuilds, insert_index_ records its slot in the audio panel layout.
     QWidget* audio_expert_section_ = nullptr;
+    bool audio_expert_built_ = false;
+    int audio_expert_insert_index_ = -1;
     // Mic-gain: ExoSlider (–12…+12 dB, step 1) + read-only dB label (Polish-R1: Slider per mockup).
     // S3: upgraded from QSlider to ExoSlider for gradient groove + tick marks.
     ui::widgets::ExoSlider* mic_gain_slider_ = nullptr;
@@ -542,8 +555,6 @@ class ConfigPage : public QWidget {
     QWidget* flac_compression_row_ = nullptr;
 
     // Card panel pointers (developer_card_ is already above; remaining cards are stored here).
-    QWidget* preset_panel_ = nullptr;
-    QWidget* columns_widget_ = nullptr; // two-column host for fmt+audio panels
     QWidget* fmt_panel_ = nullptr;
     QWidget* audio_panel_ = nullptr;
     QWidget* webcam_panel_ = nullptr;

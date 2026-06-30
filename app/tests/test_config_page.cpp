@@ -1613,6 +1613,7 @@ TEST_F(ConfigPageTest, Mp4DisablesAutomaticSplitControlsWithHonestSummary) {
     settings.split.mode = SplitRecordingMode::Every30Min;
 
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitModeCombo"));
@@ -1631,6 +1632,7 @@ TEST_F(ConfigPageTest, SplitModeSurvivesContainerRoundTripThroughMp4) {
     settings.split.mode = SplitRecordingMode::Every15Min;
 
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitModeCombo"));
@@ -1657,6 +1659,7 @@ TEST_F(ConfigPageTest, Mp4HidesCustomSplitIntervalEditor) {
     settings.split.custom_minutes = 45;
 
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* spin = page.findChild<QSpinBox*>(QStringLiteral("splitCustomMinutesSpin"));
@@ -1672,6 +1675,7 @@ TEST_F(ConfigPageTest, Mp4HidesCustomSplitIntervalEditor) {
 
 TEST_F(ConfigPageTest, SplitSizeModeCombo_ExistsWithOffAndCustomItems) {
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
 
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitSizeModeCombo"));
     ASSERT_NE(combo, nullptr);
@@ -1685,6 +1689,7 @@ TEST_F(ConfigPageTest, SplitSizeMode_Off_HidesCustomSizeSpin) {
     settings.split.size_mode = SplitSizeMode::Off;
 
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* spin = page.findChild<QSpinBox*>(QStringLiteral("splitCustomSizeSpin"));
@@ -1701,6 +1706,7 @@ TEST_F(ConfigPageTest, SplitSizeMode_Custom_ShowsCustomSizeSpin) {
     settings.split.custom_size_mb = 512;
 
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* spin = page.findChild<QSpinBox*>(QStringLiteral("splitCustomSizeSpin"));
@@ -1717,6 +1723,7 @@ TEST_F(ConfigPageTest, Mp4_DisablesSplitSizeCombo) {
     settings.split.custom_size_mb = 1024;
 
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
     page.setOutputSettings(settings);
 
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("splitSizeModeCombo"));
@@ -1853,10 +1860,10 @@ TEST_F(ConfigPageTest, AdvancedDetailsButton_IsGone) {
 TEST_F(ConfigPageTest, DeveloperCard_HiddenByDefault) {
     ConfigPage page(output_defaults_, video_defaults_);
 
-    // Expert mode is off by default; the Developer card must be explicitly hidden.
+    // Expert mode off by default; the Developer card is built lazily on first
+    // expert-enable, so by default it doesn't exist yet (which still means not shown).
     auto* card = page.findChild<QWidget*>(QStringLiteral("settingsDeveloperCard"));
-    ASSERT_NE(card, nullptr) << "settingsDeveloperCard widget not found";
-    EXPECT_TRUE(card->isHidden()) << "Developer card must be hidden when expert mode is off";
+    EXPECT_TRUE(card == nullptr || card->isHidden());
 }
 
 TEST_F(ConfigPageTest, DeveloperCard_VisibleWhenExpertModeEnabled) {
@@ -1945,6 +1952,7 @@ TEST_F(SettingsPopoverRowTest, SetStatusText_ShowsAndHidesLabel) {
 
 TEST_F(ConfigPageTest, S5_MicPostProcessing_SubControlsStillFindableByObjectName) {
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // audio-expert subtree is built lazily on first enable
 
     // All four mic DSP controls must still exist (reparented into popover, not deleted).
     EXPECT_NE(page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("micHpfCheck")), nullptr)
@@ -1965,6 +1973,7 @@ TEST_F(ConfigPageTest, S5_MicPostProcessing_SubControlsStillFindableByObjectName
 
 TEST_F(ConfigPageTest, S5_LimiterControls_StillFindableByObjectName) {
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // audio-expert subtree is built lazily on first enable
 
     EXPECT_NE(page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("limiterCheck")), nullptr)
         << "limiterCheck must still exist after S5 reparenting";
@@ -1974,6 +1983,7 @@ TEST_F(ConfigPageTest, S5_LimiterControls_StillFindableByObjectName) {
 
 TEST_F(ConfigPageTest, S5_SplitControls_StillFindableByObjectName) {
     ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // split controls are lazily built on expert-enable
 
     EXPECT_NE(page.findChild<QComboBox*>(QStringLiteral("splitModeCombo")), nullptr)
         << "splitModeCombo must still exist after S5 reparenting";

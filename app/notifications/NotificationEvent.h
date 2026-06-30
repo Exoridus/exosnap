@@ -16,6 +16,7 @@ enum class NotificationType : uint8_t {
     UnexpectedStop,    // recording stopped due to engine error (non-disk failure)
     RecoveryAvailable, // startup scan found recoverable sessions
     UpdateAvailable,   // a newer release exists on the active channel (ADR 0012)
+    FramesDropped,     // encoder backpressure dropped real frames during recording (DROP-NOTIFY)
 };
 
 // ---------------------------------------------------------------------------
@@ -34,6 +35,7 @@ enum class NotificationAction : uint8_t {
     OpenUpdate,       // navigate to Settings → Software updates card (UpdateAvailable type)
     Edit,             // navigate to the Edit/Output page for the saved recording (primary on Saved type)
     RelaunchElevated, // relaunch ExoSnap as administrator to unlock elevation-gated diagnostics (ADR 0033)
+    OpenDiagnostics,  // navigate to the Diagnostics page for the frame-drop breakdown (FramesDropped type)
 };
 
 // ---------------------------------------------------------------------------

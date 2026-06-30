@@ -52,6 +52,10 @@ class NotificationManager : public QObject {
     // info / "Update available" — auto-dismiss 8 s (non-urgent; the card stays in Settings).
     // NOLINTNEXTLINE(readability-identifier-naming)
     static constexpr int kDismissMs_UpdateAvailable = 8000;
+    // caution / "Frames dropped" — auto-dismiss 8 s (informational; the full per-stage
+    // drop breakdown lives on the Diagnostics page, not in the toast). DROP-NOTIFY.
+    // NOLINTNEXTLINE(readability-identifier-naming)
+    static constexpr int kDismissMs_FramesDropped = 8000;
 
     explicit NotificationManager(QObject* parent = nullptr);
 

@@ -74,6 +74,11 @@ excerpt), `recommendation`, and a `FixAction` button when present.
 - **Post-flight** — intentionally minimal in this wave: a report card surfacing the already-accumulated
   live stats (drop %, achieved vs target FPS/bitrate, max drift, file valid). The **full** post-flight
   integrity analysis is the content of the 0.9.0 Edit/Output/Save "Review" step and lands there.
+  In addition, when a recording finished with **real** frame drops — encoder backpressure only; benign
+  capture-coalescing and intentional CFR-downsampling drops are excluded by design — a separate caution
+  notification toast ("Frames dropped") is raised alongside the "Recording saved" toast, with a
+  "View diagnostics" action that deep-links to the Diagnostics page where the per-stage drop breakdown
+  (coalesce / cfr / backpressure) is rendered.
 
 ### Three-level detection
 

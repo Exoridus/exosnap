@@ -180,14 +180,6 @@ QWidget[panelRole="note"] {
     padding: ${space-sm}px ${space-md}px;
 }
 
-QFrame[panelRole="blocker"],
-QWidget[panelRole="blocker"] {
-    background: ${err-a12};
-    border: 1px solid ${err-a48};
-    border-radius: ${radius-lg}px;
-    padding: ${space-sm}px ${space-md}px;
-}
-
 QFrame[panelRole="compactRow"],
 QWidget[panelRole="compactRow"] {
     background: ${bg3};
@@ -224,7 +216,6 @@ QFrame[panelRole="readinessBanner"][stateRole="blocked"] {
 
 /* Settings - segmented controls (capture quality + output resolution) */
 QWidget#qualitySegmented,
-QWidget#outputResSegmented,
 QWidget#logSeveritySegmented {
     background: ${bg2};
     border: 1px solid ${line2};
@@ -378,10 +369,6 @@ QWidget#recordSourceRow[sourceLocked="true"] {
     background: transparent;
 }
 
-QWidget#recordPreviewContextRow {
-    background: transparent;
-}
-
 QWidget#recordPreviewSurfaceHost {
     background: #0A0A0B;
     border: 1px solid ${line2};
@@ -416,47 +403,6 @@ QWidget#recordPreviewSurfaceHost[recordState="done"] {
     border-color: ${ok-a44};
 }
 
-QLabel[labelRole="recordPreviewSourceChip"] {
-    font-family: ${font-mono};
-    font-size: 10.5px;
-    letter-spacing: 0.05em;
-    color: ${text2};
-    border: 1px solid ${line2};
-    border-radius: ${radius-sm}px;
-    background: ${surf-a92};
-    padding: 4px 8px;
-}
-
-QLabel[labelRole="recordPreviewSourceChip"][stateRole="ready"] {
-    color: ${ok};
-    border-color: ${ok-a44};
-    background: ${ok-a12};
-}
-
-QLabel[labelRole="recordPreviewSourceChip"][stateRole="recording"] {
-    color: ${err};
-    border-color: ${err-a58};
-    background: ${err-a16};
-}
-
-QLabel[labelRole="recordPreviewSourceChip"][stateRole="warn"] {
-    color: ${warn};
-    border-color: ${warn-a50};
-    background: ${warn-a15};
-}
-
-QLabel[labelRole="recordPreviewSourceChip"][stateRole="blocked"] {
-    color: ${err};
-    border-color: ${err-a60};
-    background: ${err-a18};
-}
-
-QLabel[labelRole="recordPreviewSourceChip"][stateRole="muted"] {
-    color: ${text3};
-    border-color: ${line1};
-    background: ${bg2};
-}
-
 /* DF-07: Source row chrome removed — borderless, transparent, reads as preview
    context header without competing with the preview surface border. */
 QFrame#recordSourceChip {
@@ -470,32 +416,11 @@ QFrame#recordSourceChip[sourceLocked="true"] {
     border: none;
 }
 
-QLabel[labelRole="recordSourceKind"] {
-    font-family: ${font-mono};
-    font-size: 9px;
-    letter-spacing: 0.1em;
-    color: ${text3};
-}
-
 QLabel[labelRole="recordSourceName"] {
     font-family: ${font-mono};
     font-size: 10.5px;
     letter-spacing: 0.05em;
     color: ${text1};
-}
-
-QLabel[labelRole="recordSourceMeta"] {
-    font-family: ${font-mono};
-    font-size: 10px;
-    letter-spacing: 0.04em;
-    color: ${text2};
-}
-
-QLabel[labelRole="recordPresetSummary"] {
-    font-family: ${font-mono};
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    color: ${text3};
 }
 
 QLabel[labelRole="recordSourceLock"] {
@@ -513,12 +438,6 @@ QPushButton#recordChangeSourceButton {
     min-height: 30px;
     min-width: 118px;
     padding: 0 12px;
-}
-
-/* CAPTURE-FRAME-BUTTON-R1: 120ms shutter-flash overlay on a successful capture. */
-QWidget#captureShutterFlash {
-    background: rgba(255, 255, 255, 0.55);
-    border-radius: ${radius-md}px;
 }
 
 /* ── Settings D6: CompareHint glyph button ───────────────────────────────────
@@ -598,92 +517,12 @@ QLabel[labelRole="settingsRowLabel"] {
     color: ${text1};
 }
 
-/* Video page */
-QWidget#videoEffectiveRail {
-    background: ${bg2};
-    border-left: 1px solid ${line1};
-}
-
-QLabel[labelRole="videoFpsValue"] {
-    font-family: ${font-mono};
-    font-size: 48px;
-    font-weight: 500;
-    color: ${text0};
-    letter-spacing: 0.08em;
-}
-
-QLabel[labelRole="videoFpsUnit"] {
-    font-size: 18px;
-    color: ${text2};
-}
-
-QLabel[labelRole="videoFpsNote"] {
-    font-size: 12px;
-    color: ${text2};
-}
-
-QLabel[labelRole="videoFramePill"] {
-    font-family: ${font-mono};
-    font-size: 10.5px;
-    letter-spacing: 0.12em;
-    color: ${text1};
-    border: 1px solid ${line2};
-    border-radius: ${radius-sm}px;
-    background: ${bg3};
-    padding: 4px 10px;
-}
-
-QLabel[labelRole="videoResolutionValue"] {
-    font-family: ${font-mono};
-    font-size: 11.5px;
-    letter-spacing: 0.04em;
-    color: ${text2};
-}
-
-QLabel[labelRole="videoQualityDetail"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.04em;
-    color: ${text2};
-}
-
-QLabel[labelRole="videoRailHead"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    letter-spacing: 0.14em;
-    color: ${text2};
-}
-
-QLabel[labelRole="videoRailUnsaved"] {
-    font-family: ${font-mono};
-    font-size: 10.5px;
-    letter-spacing: 0.08em;
-    color: ${warn};
-}
-
+/* Webcam page — key/value row label (videoKvKey reused by WebcamPage) */
 QLabel[labelRole="videoKvKey"] {
     font-family: ${font-mono};
     font-size: 11px;
     color: ${text2};
     letter-spacing: 0.04em;
-}
-
-QLabel[labelRole="videoKvValue"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    color: ${text0};
-}
-
-QLabel[labelRole="videoKvValueAccent"] {
-    font-family: ${font-mono};
-    font-size: 11px;
-    color: ${text1};
-    font-weight: 500;
-}
-
-QLabel[labelRole="videoCompatNote"] {
-    font-size: 11.5px;
-    color: ${text2};
 }
 
 /* Audio page */
@@ -831,13 +670,6 @@ QFrame#aboutCard {
     border-radius: ${radius-lg}px;
 }
 
-/* Update-panel card: same surface/border as the info card, forms one visual unit. */
-QFrame#aboutUpdateCard {
-    background: ${bg1};
-    border: 1px solid ${line2};
-    border-radius: ${radius-lg}px;
-}
-
 QLabel[labelRole="aboutAppName"] {
     font-size: 22px;
     font-weight: 600;
@@ -880,26 +712,6 @@ QLabel[labelRole="aboutVersionLine"] {
     font-size: 12px;
     letter-spacing: 0.04em;
     color: ${text3};
-}
-
-/* Compact × dismiss button — top-right of the About card header. No border, no fill; reveals
-   a subtle bg3 hover tint so it reads as interactive without dominating the card. */
-QPushButton#aboutCloseButton {
-    background: transparent;
-    border: none;
-    color: ${text3};
-    font-size: 18px;
-    padding: 0;
-    min-width: 28px;
-    min-height: 28px;
-    max-width: 28px;
-    max-height: 28px;
-    border-radius: 14px;
-}
-
-QPushButton#aboutCloseButton:hover {
-    background: ${bg3};
-    color: ${text1};
 }
 
 /* Matches both the legacy native QDialog and the embedded Qt::Widget overlay variant. */
@@ -1878,11 +1690,7 @@ QDoubleSpinBox::down-arrow:disabled {
 }
 
 /* S3 — Editable combobox: the embedded QLineEdit must inherit the same chrome.
-   Reset padding-right on the combo itself so the text doesn't run under the arrow. */
-QComboBox:editable {
-    padding-right: 34px;
-}
-
+   (padding-right comes from the base QComboBox rule below.) */
 QComboBox:editable QLineEdit {
     background: transparent;
     border: none;

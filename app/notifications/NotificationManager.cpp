@@ -58,6 +58,8 @@ int NotificationManager::DismissIntervalMs(NotificationType type) noexcept {
         return kDismissMs_RecoveryAvailable; // sticky
     case NotificationType::UpdateAvailable:
         return kDismissMs_UpdateAvailable; // timed (8 s)
+    case NotificationType::FramesDropped:
+        return kDismissMs_FramesDropped; // timed (8 s)
     }
     return kDismissMs_Saved;
 }

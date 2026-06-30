@@ -136,8 +136,6 @@ void AdvisoryItem::setUnread(bool unread) {
 }
 
 void AdvisoryItem::addAction(const QString& id, const QString& label, bool isDeepLink) {
-    actions_.append({id, label, isDeepLink});
-
     const QString display_label = isDeepLink ? label + QStringLiteral(" ›") : label;
     auto* btn = new QPushButton(display_label, actions_container_);
     btn->setFlat(true);

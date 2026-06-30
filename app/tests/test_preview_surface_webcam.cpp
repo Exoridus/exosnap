@@ -256,7 +256,7 @@ TEST_F(PreviewSurfaceWebcamTest, OverlayTextFitsAtComfortableWidth) {
     auto* right = surface_->findChild<QLabel*>(QStringLiteral("previewBottomRightLabel"));
     ASSERT_NE(right, nullptr);
 
-    const QString text = QStringLiteral("Native · 60 fps CFR · AV1 · OPUS · WEBM");
+    const QString text = QStringLiteral("Native · 60 fps CFR · AV1 · Opus · WebM");
     surface_->setBottomRightText(text);
     EXPECT_TRUE(right->isVisibleTo(surface_.get()));
     EXPECT_EQ(right->text(), text); // no elision needed at 800 px
@@ -271,7 +271,7 @@ TEST_F(PreviewSurfaceWebcamTest, OverlayTextElidesInsteadOfClipping) {
     surface_->resize(360, 203);
     // Long enough to require elision at 360 px regardless of the test font.
     const QString long_right =
-        QStringLiteral("Native · 60 fps CFR · AV1 · OPUS · WEBM · SIZE 51.0 MB · BITRATE 5.2 Mb/s · DRIFT 2 ms");
+        QStringLiteral("Native · 60 fps CFR · AV1 · Opus · WebM · SIZE 51.0 MB · BITRATE 5.2 Mb/s · DRIFT 2 ms");
     surface_->setBottomLeftText(QStringLiteral("FRAME 16.67 ms · BITRATE 5.2 Mb/s · DROP 0 · DRIFT 2 ms"));
     surface_->setBottomRightText(long_right);
 
@@ -292,7 +292,7 @@ TEST_F(PreviewSurfaceWebcamTest, OverlayRowsHideBelowMinimumWidth) {
     ASSERT_NE(meta, nullptr);
 
     surface_->resize(180, 120);
-    surface_->setBottomRightText(QStringLiteral("Native · 60 fps CFR · AV1 · OPUS · WEBM"));
+    surface_->setBottomRightText(QStringLiteral("Native · 60 fps CFR · AV1 · Opus · WebM"));
     surface_->setTopMetaText(QStringLiteral("VISUAL TEST TARGET"));
 
     EXPECT_FALSE(right->isVisibleTo(surface_.get()));
@@ -300,7 +300,7 @@ TEST_F(PreviewSurfaceWebcamTest, OverlayRowsHideBelowMinimumWidth) {
 
     // Growing back restores the texts (no stale hidden state).
     surface_->resize(800, 450);
-    surface_->setBottomRightText(QStringLiteral("Native · 60 fps CFR · AV1 · OPUS · WEBM"));
+    surface_->setBottomRightText(QStringLiteral("Native · 60 fps CFR · AV1 · Opus · WebM"));
     EXPECT_TRUE(right->isVisibleTo(surface_.get()));
 }
 

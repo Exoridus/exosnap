@@ -169,8 +169,6 @@ void OperationalTitleBar::setRecordingActive(bool recording) {
     if (recording_active_ == recording)
         return;
     recording_active_ = recording;
-    if (!recording_active_)
-        recording_drop_count_ = 0; // DF-11: reset drop count when recording stops
     setProperty("recording", recording_active_);
     if (brand_mark_ != nullptr)
         brand_mark_->setRecording(recording_active_);
@@ -187,13 +185,6 @@ bool OperationalTitleBar::isRecordingActive() const noexcept {
 void OperationalTitleBar::setStatusLabel(const QString& status_text) {
     const QString normalized = status_text.trimmed().toUpper();
     status_label_ = normalized.isEmpty() ? QStringLiteral("READY") : normalized;
-    refreshStatusChip();
-}
-
-void OperationalTitleBar::setRecordingDropCount(int drops) {
-    if (recording_drop_count_ == drops)
-        return;
-    recording_drop_count_ = drops;
     refreshStatusChip();
 }
 
@@ -332,11 +323,10 @@ void OperationalTitleBar::refreshStatusChip() {
     if (status.contains(QStringLiteral("REC"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Recording);
         status_pill_->setDotVisible(true);
-        // DF-11: show dropped frame count inline when any frames have been dropped.
-        const QString rec_text = recording_drop_count_ > 0
-                                     ? QStringLiteral("Recording · %1↓").arg(recording_drop_count_)
-                                     : QStringLiteral("Recording");
-        status_pill_->setText(rec_text);
+        // The live pill stays clean: "Recording". A live frame-drop count is dominated by
+        // benign CFR downsampling (e.g. a 144 Hz source captured at 60 fps drops ~84/s by
+        // design) and reads as a fault; real drops are surfaced after the recording instead.
+        status_pill_->setText(QStringLiteral("Recording"));
     } else if (status.contains(QStringLiteral("PAUSED"))) {
         status_pill_->setTone(ui::widgets::StatusPill::Tone::Warn);
         status_pill_->setDotVisible(true);

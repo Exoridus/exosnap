@@ -10,6 +10,7 @@
 
 #include "ExoSnapBuildInfo.h" // exosnap::build::kVersion
 #include "MainWindow.h"
+#include "diagnostics/StartupClock.h"
 #include "exosnap_resource.h"
 #include "services/ElevatedRelaunch.h"
 #include "ui/theme/ExoSnapTheme.h"
@@ -90,6 +91,10 @@ void ApplyNativeWindowIcons(QWidget& window) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    // PERF-MEASURE: start the process-global startup clock before anything else so
+    // first-paint / preview-live milestones measure true start→milestone latency.
+    exosnap::diagnostics::StartupClock().start();
+
     QApplication app(argc, argv);
     app.setApplicationName("ExoSnap");
 

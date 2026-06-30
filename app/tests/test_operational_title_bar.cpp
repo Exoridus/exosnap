@@ -263,50 +263,18 @@ TEST_F(OperationalTitleBarTest, RecordingBorder_NeutralAfterSaved) {
     EXPECT_FALSE(bar.isRecordingActive());
 }
 
-// ── DF-11: Recording pill drop-frame telemetry ───────────────────────────────
+// ── Recording pill stays a plain "Recording" label ───────────────────────────
+// The live dropped-frame count (DF-11) was removed: it was dominated by benign CFR
+// downsampling (e.g. a 144 Hz source captured at 60 fps) and read as a fault. Real
+// drops are surfaced after the recording instead.
 
-TEST_F(OperationalTitleBarTest, RecordingPill_ShowsZeroDropsAsPlainLabel) {
+TEST_F(OperationalTitleBarTest, RecordingPill_IsPlainRecordingLabel) {
     ui::chrome::OperationalTitleBar bar;
     bar.setNavItems(DefaultNavItems());
 
     auto* pill = bar.findChild<ui::widgets::StatusPill*>(QStringLiteral("titlebarStatusChip"));
     ASSERT_NE(pill, nullptr);
 
-    bar.setRecordingActive(true);
-    bar.setStatusLabel(QStringLiteral("REC"));
-    bar.setRecordingDropCount(0);
-    // No drops: pill reads "Recording" without any suffix.
-    EXPECT_EQ(pill->text(), QStringLiteral("Recording"));
-}
-
-TEST_F(OperationalTitleBarTest, RecordingPill_ShowsDropCountWhenNonZero) {
-    ui::chrome::OperationalTitleBar bar;
-    bar.setNavItems(DefaultNavItems());
-
-    auto* pill = bar.findChild<ui::widgets::StatusPill*>(QStringLiteral("titlebarStatusChip"));
-    ASSERT_NE(pill, nullptr);
-
-    bar.setRecordingActive(true);
-    bar.setStatusLabel(QStringLiteral("REC"));
-    bar.setRecordingDropCount(3);
-    EXPECT_EQ(pill->text(), QStringLiteral("Recording · 3↓"));
-}
-
-TEST_F(OperationalTitleBarTest, RecordingPill_DropCountResetOnRecordingStop) {
-    ui::chrome::OperationalTitleBar bar;
-    bar.setNavItems(DefaultNavItems());
-
-    auto* pill = bar.findChild<ui::widgets::StatusPill*>(QStringLiteral("titlebarStatusChip"));
-    ASSERT_NE(pill, nullptr);
-
-    bar.setRecordingActive(true);
-    bar.setStatusLabel(QStringLiteral("REC"));
-    bar.setRecordingDropCount(5);
-    EXPECT_EQ(pill->text(), QStringLiteral("Recording · 5↓"));
-
-    // After stopping, drop count resets; the next Recording session starts clean.
-    bar.setRecordingActive(false);
-    bar.setStatusLabel(QStringLiteral("READY"));
     bar.setRecordingActive(true);
     bar.setStatusLabel(QStringLiteral("REC"));
     EXPECT_EQ(pill->text(), QStringLiteral("Recording"));
