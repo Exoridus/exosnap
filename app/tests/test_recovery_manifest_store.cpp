@@ -19,9 +19,11 @@ namespace {
 // =============================================================================
 
 QString UniqueTempStorePath() {
-    const QString temp = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    // Unique temp dir per test process (gtest_discover_tests = one process per
+    // test); a shared fixed name races under ctest -j.
+    static QTemporaryDir s_dir;
     static int s_counter = 0;
-    return QDir(temp).filePath(QStringLiteral("exosnap_recovery_test_%1.json").arg(++s_counter));
+    return s_dir.filePath(QStringLiteral("exosnap_recovery_test_%1.json").arg(++s_counter));
 }
 
 RecoveryManifestEntry MakeEntry(const QString& id = QStringLiteral("test-id"),

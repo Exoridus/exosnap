@@ -17,9 +17,11 @@ namespace {
 // =============================================================================
 
 QString UniqueTempPath(const QString& suffix = QStringLiteral(".json")) {
-    const QString temp = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    // Unique temp dir per test process (gtest_discover_tests = one process per
+    // test); a shared fixed name races under ctest -j.
+    static QTemporaryDir s_dir;
     static int s_counter = 0;
-    return QDir(temp).filePath(QStringLiteral("exosnap_svc_test_%1%2").arg(++s_counter).arg(suffix));
+    return s_dir.filePath(QStringLiteral("exosnap_svc_test_%1%2").arg(++s_counter).arg(suffix));
 }
 
 // Write minimal valid bytes to path so QFileInfo::exists returns true.

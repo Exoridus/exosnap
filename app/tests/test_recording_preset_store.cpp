@@ -28,9 +28,11 @@ namespace {
 // Returns a unique temp file path under QStandardPaths::TempLocation.
 // Each call returns a different filename so tests never share state.
 QString UniqueTempPath() {
-    const QString temp_dir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    // Unique temp dir per test process (gtest_discover_tests = one process per
+    // test); a shared fixed name races under ctest -j.
+    static QTemporaryDir s_dir;
     static int s_counter = 0;
-    return QDir(temp_dir).filePath(QStringLiteral("exosnap_test_presets_%1.toml").arg(++s_counter));
+    return s_dir.filePath(QStringLiteral("exosnap_test_presets_%1.toml").arg(++s_counter));
 }
 
 // Write a TOML string to a file (UTF-8, no BOM).

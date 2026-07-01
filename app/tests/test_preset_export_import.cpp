@@ -11,6 +11,7 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QString>
+#include <QTemporaryDir>
 #include <QTextStream>
 #include <QVector>
 
@@ -35,8 +36,10 @@ namespace {
 static int s_counter = 0;
 
 QString UniqueTempPath(const char* suffix = ".toml") {
-    const QString temp_dir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
-    return QDir(temp_dir).filePath(QStringLiteral("exosnap_export_import_test_%1%2").arg(++s_counter).arg(suffix));
+    // Unique temp dir per test process (gtest_discover_tests = one process per
+    // test); a shared fixed name races under ctest -j.
+    static QTemporaryDir s_dir;
+    return s_dir.filePath(QStringLiteral("exosnap_export_import_test_%1%2").arg(++s_counter).arg(suffix));
 }
 
 // Write a TOML string to a file (UTF-8).
