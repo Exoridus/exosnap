@@ -51,7 +51,12 @@ function(exosnap_add_gtest)
   string(MAKE_C_IDENTIFIER "${CMAKE_CURRENT_BINARY_DIR}" _exosnap_dir_key)
   set(_exosnap_stage_target "exosnap_stage_runtime_dlls_${_exosnap_dir_key}")
   if(NOT TARGET ${_exosnap_stage_target})
-    set(_exosnap_stage_commands "")
+    # The stage target can run before MSBuild creates the per-config output
+    # directory; `cmake -E copy_if_different` into a missing directory then
+    # creates a FILE with the config's name (e.g. "Debug") which blocks the
+    # real directory and fails the build with MSB3191. Create it first.
+    set(_exosnap_stage_commands
+      COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${ARG_NAME}>")
     foreach(_ffmpeg_dll IN LISTS EXOSNAP_FFMPEG_DLLS)
       list(APPEND _exosnap_stage_commands
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
