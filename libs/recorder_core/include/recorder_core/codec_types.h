@@ -37,6 +37,23 @@ enum class NvencQualityPreset {
     Small,    // qpIntra=30, qpInterP=32 — smaller files, lower quality
 };
 
+// NVENC encoder speed/quality preset (SDK presets P1-P7). P1 is fastest with the
+// lowest quality/highest throughput; P7 is slowest with the best quality. This is
+// independent of NvencQualityPreset (which only tunes CQP QP values) and of
+// RateControlMode (which selects CQP/VBR/CBR) — the preset instead selects the
+// NVENC internal encoding pipeline/algorithm tradeoff. Applies uniformly across
+// all three NVENC codecs (H.264, HEVC, AV1); never capability-gated. Default P4
+// (balanced) — matches the pre-existing hardcoded engine behavior for AV1/HEVC.
+enum class NvencPreset {
+    P1, // fastest, lowest quality
+    P2,
+    P3,
+    P4, // balanced — default
+    P5,
+    P6,
+    P7, // slowest, best quality
+};
+
 // Canonical rate-control modes (ADR 0009). Encoders map from this model to
 // their native parameters internally. The UI never uses per-vendor terminology.
 enum class RateControlMode {

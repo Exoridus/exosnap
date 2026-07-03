@@ -26,6 +26,12 @@ class NvencVideoEncoder : public IVideoEncoder {
         m_nvenc.SetQualityPreset(preset);
     }
 
+    // Set the NVENC speed/quality preset (P1..P7) before Open()/Configure().
+    // Defaults to P4. Applies uniformly for every codec — see NvencPresetToGuid.
+    void SetPreset(NvencPreset preset) noexcept {
+        m_nvenc.SetPreset(preset);
+    }
+
     // Set canonical rate-control mode and target bitrate before Configure().
     void SetRateControl(RateControlMode mode, uint32_t bitrate_kbps) noexcept {
         m_nvenc.SetRateControl(mode, bitrate_kbps);

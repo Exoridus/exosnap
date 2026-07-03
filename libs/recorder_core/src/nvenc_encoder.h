@@ -41,6 +41,14 @@ const char* NvencStatusName(NVENCSTATUS st) noexcept;
 void ApplyColorMetadataToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, const ColorMetadata& color) noexcept;
 
 // ---------------------------------------------------------------------------
+// NvencPresetToGuid — pure, testable mapping from the canonical NvencPreset
+// (P1..P7) to the NVENC SDK preset GUID. No GPU/NVENC session required.
+// Applies uniformly across codecs — the caller passes the resulting GUID to
+// nvEncGetEncodePresetConfigEx regardless of which codec GUID is also passed.
+// ---------------------------------------------------------------------------
+GUID NvencPresetToGuid(NvencPreset preset) noexcept;
+
+// ---------------------------------------------------------------------------
 // RcParams — pure value type for NVENC rate-control parameters.
 // Used by ComputeNvencRcParams (testable without GPU).
 // ---------------------------------------------------------------------------
@@ -102,6 +110,13 @@ class NvencEncoder {
     // Only meaningful for ConstantQuality mode.
     void SetQualityPreset(NvencQualityPreset preset) noexcept {
         m_qualityPreset = preset;
+    }
+
+    // Set the NVENC speed/quality preset (P1..P7) before calling
+    // FetchPresetConfig(). Defaults to P4. Applies uniformly for every codec —
+    // see NvencPresetToGuid.
+    void SetPreset(NvencPreset preset) noexcept {
+        m_preset = preset;
     }
 
     // Set canonical rate-control mode and target bitrate (kbps).
@@ -211,9 +226,16 @@ class NvencEncoder {
     ColorMetadata m_color = ColorMetadata::Sdr709();
     float m_keyframeIntervalSecs = 2.0f; // default 2 s — matches pre-0.9.0 hardcoded value
 
-    // P6 for H.264 (synchronous), P4 for AV1 (P6 AV1 has internal pipeline depth
-    // that causes NV_ENC_ERR_NEED_MORE_INPUT on every frame even with lookahead disabled).
-    GUID m_presetGuid = NV_ENC_PRESET_P6_GUID;
+    // NVENC speed/quality preset (P1..P7), user-selectable expert setting.
+    // Default P4 — matches the previous hardcoded engine default (P6 AV1/HEVC
+    // has internal pipeline depth that causes NV_ENC_ERR_NEED_MORE_INPUT on every
+    // frame even with lookahead disabled; EncodeFrame already buffers/drains this
+    // case via m_pendingPts/m_pendingSlots, so higher presets are not fatal, but
+    // they increase encode latency and 8-slot input-ring pressure).
+    NvencPreset m_preset = NvencPreset::P4;
+    // Resolved via NvencPresetToGuid(m_preset) in FetchPresetConfig(); the member
+    // initializer here is only the value before FetchPresetConfig() first runs.
+    GUID m_presetGuid = NV_ENC_PRESET_P4_GUID;
     const NV_ENC_TUNING_INFO m_tuningInfo = NV_ENC_TUNING_INFO_HIGH_QUALITY;
 
     // Pending PTS FIFO — one entry per submitted frame not yet returned as output
