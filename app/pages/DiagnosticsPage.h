@@ -81,10 +81,8 @@ class DiagnosticsPage : public QWidget {
     // source of truth). Guarded by the no-op check in setExpertModeEnabled.
     void expertModeChanged(bool enabled);
 
-    // Hardware capability facts moved to the Device page (parallel redesign slice).
-    // The Expert environment row emits this so the host can navigate there. NOTE:
-    // NOT wired in MainWindow yet — the redesign orchestrator connects it at merge
-    // once the Device page exists.
+    // Hardware capability facts moved to the Device page. The Expert environment
+    // row emits this; MainWindow routes it to kDevicePageIndex.
     void openDevicePageRequested();
 
   private slots:

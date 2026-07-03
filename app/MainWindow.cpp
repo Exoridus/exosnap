@@ -4144,6 +4144,9 @@ void MainWindow::buildDiagnosticsPage() {
     });
     connect(diagnostics_page_, &DiagnosticsPage::navigateToLogsRequested, this,
             [this]() { navigateToPage(kLogsPageIndex); });
+    // Capability facts moved to the Device page; the Expert environment row links there.
+    connect(diagnostics_page_, &DiagnosticsPage::openDevicePageRequested, this,
+            [this]() { navigateToPage(kDevicePageIndex); });
     // Route live recording-pipeline diagnostics from the Record page's coordinator to
     // the Diagnostics page (same UI thread; direct connection).
     // CRITICAL: record_page_ is built unconditionally in the ctor and is always valid here.
