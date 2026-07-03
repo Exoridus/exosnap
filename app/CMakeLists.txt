@@ -135,6 +135,10 @@ qt_add_executable(exosnap WIN32
     ui/widgets/PipelineFlow.cpp
     ui/widgets/LivePipelinePanel.h
     ui/widgets/LivePipelinePanel.cpp
+    ui/widgets/TipChip.h
+    ui/widgets/TipChip.cpp
+    ui/widgets/ElevationLock.h
+    ui/widgets/ElevationLock.cpp
     ui/widgets/CodecCard.h
     ui/widgets/CodecCard.cpp
     ui/widgets/VUMeterWidget.h
@@ -1294,6 +1298,11 @@ exosnap_add_gtest(
         ui/widgets/PipelineFlow.cpp
         ui/widgets/PipelineStepCard.cpp
         ui/widgets/LivePipelinePanel.cpp
+        ui/widgets/TipChip.cpp
+        ui/widgets/ElevationLock.cpp
+        # Diagnostics redesign: Expert toggle mirrors Settings (ExoToggle → ActiveTheme()).
+        ui/widgets/ExoToggle.cpp
+        ui/theme/ExoSnapTheme.cpp
         # v10: DiagnosticsPage's readiness chip uses lucidePixmap() (Lucide glyph renderer).
         ui/theme/LucideIcon.cpp
         # ADR 0033: present-mode provider bridge. No EXOSNAP_HAS_PRESENTMON define →

@@ -29,11 +29,20 @@ namespace ui::widgets {
 class PipelineFlow;
 class SectionRuleHeader;
 class LivePipelinePanel;
+class ExoToggle;
+class TipChip;
+class ElevationLock;
 } // namespace ui::widgets
 
 struct OutputSettingsModel;
 struct VideoSettingsModel;
 
+// Diagnostics surface (suite-diag2.jsx end-state). A Simple default view — compact
+// verdict + four readiness tiles + any Tier-1 blocker / Tier-2 measured problem +
+// one bundled Tier-3 tip chip — with an Expert toggle that reveals the full flat
+// taxonomy beneath the SAME verdict + tiles: ② Pre-flight → ③ Live → ④ Post-flight,
+// plus the elevation unlock. Capability facts moved to the Device tab, so the old
+// capability matrix is gone (see openDevicePageRequested).
 class DiagnosticsPage : public QWidget {
     Q_OBJECT
   public:
@@ -49,21 +58,34 @@ class DiagnosticsPage : public QWidget {
     void applyLiveDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
 
     // ADR 0033: inject the present/tearing diagnostics provider (borrowed, nullable).
-    // When set, applyLiveDiagnostics overlays the present mode from Sample() onto the
-    // snapshot before rendering and correlation, mirroring the disk/fs provider pattern.
-    // Null (default) leaves present_mode_availability = Unavailable.
     void setPresentProvider(diagnostics::IPresentProvider* provider) noexcept;
 
     // ADR 0033: inject the kernel DPC/ISR latency provider (borrowed, nullable).
-    // When set, refreshOverview samples Read() and forwards it into the
-    // RecommendationEngine via SetDpcLatency. Null (default) leaves the DPC check inert.
     void setDpcProvider(diagnostics::DpcLatencyProvider* provider) noexcept;
+
+    // Consumes the single global Expert mode (AppSettingsStore::expert_mode_enabled).
+    // Mirrors ConfigPage::setExpertModeEnabled — the toolbar toggle and this setter
+    // read/write the SAME persisted value (MainWindow keeps both pages in sync). No
+    // second state. No-ops when unchanged, so cross-page sync can't loop.
+    void setExpertModeEnabled(bool enabled);
+    [[nodiscard]] bool isExpertModeEnabled() const noexcept;
 
   signals:
     void navigateToLogsRequested();
     // v0.8.0-D: FixAction routing — MainWindow wires these in a later wave.
     void applyFixActionRequested(const QString& fix_id, const QString& changes_summary);
     void openAssistedFixRequested(const QString& fix_id);
+
+    // Emitted when the toolbar Expert toggle flips. MainWindow persists this into
+    // AppSettingsStore::expert_mode_enabled and mirrors it onto ConfigPage (single
+    // source of truth). Guarded by the no-op check in setExpertModeEnabled.
+    void expertModeChanged(bool enabled);
+
+    // Hardware capability facts moved to the Device page (parallel redesign slice).
+    // The Expert environment row emits this so the host can navigate there. NOTE:
+    // NOT wired in MainWindow yet — the redesign orchestrator connects it at merge
+    // once the Device page exists.
+    void openDevicePageRequested();
 
   private slots:
     void onRunCheck();
@@ -72,29 +94,36 @@ class DiagnosticsPage : public QWidget {
   private:
     void refreshOverview();
     void refreshSelfTest();
-    void refreshCapabilities();
     void refreshConfiguration();
     void refreshPipeline();
     void updatePipelineCards(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
-    // Render core: build signals → ResolvePipelineHealth → setStepLive. No idle-check,
-    // no 2 Hz throttle. Called by updatePipelineCards (after its guards) and directly by
-    // setDiagnosticData to restore live card state after a static refreshPipeline().
     void renderPipelineCards(const recorder_core::RecordingDiagnosticsSnapshot& snapshot);
-    void refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations, int total_notices,
-                          int total_blockers);
+
+    // Splits engine results into Tier-1 blockers / Tier-2 measured problems (issue
+    // cards) and Tier-3 optimisations (bundled into the tip chip).
+    void refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations);
+
+    void refreshReadinessTiles(int blockers, int notices, int cap_passes);
     void setReadinessState(const QString& state);
+    void applyExpertVisibility();
 
     QLabel* makeSubLabel(const QString& text, QWidget* parent);
     QFrame* makePanel(QWidget* parent);
     QWidget* makeInfoRow(const QString& label, const QString& value, const QString& status, QWidget* parent,
                          bool first_row);
-
-    // Builds a collapsible "Technical details" section (disclosure head + hidden body).
-    // Returns the body widget the caller fills; the body starts collapsed.
     QWidget* makeCollapsibleSection(const QString& title, const QString& subtitle, QWidget* parent,
                                     QToolButton*& out_toggle);
 
-    // Readiness / status
+    // Builds one wide readiness tile (title · value · sub, optional trailing check).
+    QFrame* makeReadinessTile(const QString& object_name, const QString& title, QLabel*& out_value, QLabel*& out_sub,
+                              QLabel*& out_icon);
+
+    // ── Toolbar (Expert toggle mirrors Settings) ───────────────────────────────
+    ui::widgets::ExoToggle* expert_toggle_ = nullptr;
+    QLabel* expert_mode_label_ = nullptr;
+    QLabel* mode_caption_ = nullptr;
+
+    // ── Verdict banner (kept: readinessBanner + status pill + last-check) ───────
     QFrame* readiness_panel_ = nullptr;
     QLabel* readiness_icon_ = nullptr;
     QLabel* status_pill_ = nullptr;
@@ -102,73 +131,69 @@ class DiagnosticsPage : public QWidget {
     QLabel* summary_label_ = nullptr;
     QPushButton* run_check_btn_ = nullptr;
     QPushButton* export_report_btn_ = nullptr;
-    QFrame* blocker_tile_ = nullptr;
-    QFrame* notice_tile_ = nullptr;
-    QFrame* pass_tile_ = nullptr;
-    QLabel* blocker_count_ = nullptr;
-    QLabel* notice_count_ = nullptr;
-    QLabel* pass_count_ = nullptr;
 
-    // Capture pipeline (the page's visual center)
-    ui::widgets::PipelineFlow* pipeline_flow_ = nullptr;
+    // ── Four readiness tiles (Readiness · Encoder · Disk · Display) ─────────────
+    QFrame* readiness_tile_ = nullptr;
+    QLabel* readiness_tile_value_ = nullptr;
+    QLabel* readiness_tile_sub_ = nullptr;
+    QLabel* readiness_tile_icon_ = nullptr;
+    QLabel* encoder_tile_value_ = nullptr;
+    QLabel* encoder_tile_sub_ = nullptr;
+    QLabel* disk_tile_value_ = nullptr;
+    QLabel* disk_tile_sub_ = nullptr;
+    QLabel* display_tile_value_ = nullptr;
+    QLabel* display_tile_sub_ = nullptr;
 
-    // Live pipeline telemetry panel (fed by applyLiveDiagnostics).
-    ui::widgets::LivePipelinePanel* live_pipeline_panel_ = nullptr;
-
-    // Top Issues / recommendations
+    // ── Worst-first cards (shared: visible in both Simple + Expert) ─────────────
     QVBoxLayout* overview_issues_layout_ = nullptr;
     QWidget* issues_parent_ = nullptr;
+    ui::widgets::TipChip* tip_chip_ = nullptr;
 
-    // Capability matrix (visible, secondary real-probe table)
-    QVBoxLayout* capabilities_layout_ = nullptr;
-    QWidget* capabilities_content_ = nullptr;
-    ui::widgets::SectionRuleHeader* capabilities_header_ = nullptr;
+    // ── Expert-only container (phases + elevation) ─────────────────────────────
+    QWidget* expert_container_ = nullptr;
 
-    // Configuration (collapsible body)
+    // Capture pipeline (Phase ③ health cards) — always constructed so live wiring +
+    // tests work regardless of view; hidden in Simple.
+    ui::widgets::PipelineFlow* pipeline_flow_ = nullptr;
+    ui::widgets::LivePipelinePanel* live_pipeline_panel_ = nullptr;
+
+    // Active configuration (collapsible reference, Expert).
     QVBoxLayout* config_layout_ = nullptr;
     QWidget* config_content_ = nullptr;
     QToolButton* config_toggle_ = nullptr;
 
-    // Self-test
+    // Self-test (Expert · Pre-flight).
     QVBoxLayout* selftest_layout_ = nullptr;
     QWidget* selftest_content_ = nullptr;
     QPushButton* selftest_run_btn_ = nullptr;
     QLabel* selftest_status_label_ = nullptr;
 
-    // Injected data
+    ui::widgets::ElevationLock* elevation_lock_ = nullptr;
+
+    // ── Injected data ──────────────────────────────────────────────────────────
     capability::CapabilitySet caps_;
     diagnostics::CapabilitySummary cap_summary_;
     diagnostics::ConfigSummary config_summary_;
-    diagnostics::ConfigSummary config_raw_;
     std::string profile_name_;
     std::string hotkeys_summary_;
     std::string settings_path_;
     bool hotkeys_ok_ = false;
     bool data_ready_ = false;
+    bool expert_mode_enabled_ = false;
     capability::UserRecorderConfig active_user_config_{};
     capability::ResolveResult profile_validation_;
 
-    // Disk-space guard data (LOW-DISK-GUARD-R1)
     std::filesystem::path output_folder_;
     uint64_t output_drive_free_bytes_ = 0;
+    std::string output_filesystem_name_;
 
-    // Filesystem-check data (FILESYSTEM-CHECKS-R1)
-    std::string output_filesystem_name_; // e.g. "FAT32", "NTFS"; empty = not queried
-
-    // Last live pipeline snapshot (fed by applyLiveDiagnostics). Consumed by refreshOverview's
-    // RecommendationEngine for the VRR/CFR judder correlation (v0.8.0 / ADR 0033). Only valid
-    // snapshots are forwarded to the engine. Present-mode overlay is applied before storage.
     recorder_core::RecordingDiagnosticsSnapshot last_live_snapshot_{};
 
-    // Capture-card live wiring (0.8.0): 2 Hz apply throttle + drop-delta tracking.
     std::chrono::steady_clock::time_point last_cards_applied_{};
     uint64_t cards_last_generation_ = 0;
     uint64_t cards_last_problem_drops_ = 0;
 
-    // ADR 0033: borrowed present/tearing provider (null = feature disabled / not elevated).
     diagnostics::IPresentProvider* present_provider_ = nullptr;
-
-    // ADR 0033: borrowed kernel DPC/ISR latency provider (null = disabled / not elevated).
     diagnostics::DpcLatencyProvider* dpc_provider_ = nullptr;
 };
 

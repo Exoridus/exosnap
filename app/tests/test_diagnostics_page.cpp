@@ -1,11 +1,14 @@
 #include <gtest/gtest.h>
 
+#include <QAbstractButton>
 #include <QApplication>
 #include <QCoreApplication>
+#include <QFrame>
 #include <QLabel>
 #include <QList>
 #include <QPushButton>
 #include <QString>
+#include <QToolButton>
 #include <QWidget>
 
 #include "pages/DiagnosticsPage.h"
@@ -60,6 +63,29 @@ class DiagnosticsPageTest : public ::testing::Test {
         for (auto* button : page.findChildren<QPushButton*>())
             if (button->text() == text)
                 return button;
+        return nullptr;
+    }
+
+    // Reads the value label inside a named readiness tile (Readiness/Encoder/Disk/Display).
+    static QString TileValue(const DiagnosticsPage& page, const QString& tile_object_name) {
+        auto* tile = page.findChild<QFrame*>(tile_object_name);
+        if (!tile)
+            return QString();
+        for (auto* lbl : tile->findChildren<QLabel*>())
+            if (lbl->property("labelRole").toString() == QLatin1String("readinessTileValue"))
+                return lbl->text();
+        return QString();
+    }
+
+    static QString TileTone(const DiagnosticsPage& page, const QString& tile_object_name) {
+        auto* tile = page.findChild<QFrame*>(tile_object_name);
+        return tile ? tile->property("tileTone").toString() : QString();
+    }
+
+    static QToolButton* FindCollapseHead(const DiagnosticsPage& page, const QString& text_fragment) {
+        for (auto* tb : page.findChildren<QToolButton*>())
+            if (tb->property("role").toString() == QLatin1String("collapseHead") && tb->text().contains(text_fragment))
+                return tb;
         return nullptr;
     }
 };
@@ -129,9 +155,9 @@ TEST_F(DiagnosticsPageTest, ExportReportStaysDisabledHonestly) {
 
 // ---- Phase D: Readiness verdicts (suite-diag.jsx clear/issues/blocked) ------
 
-TEST_F(DiagnosticsPageTest, VerdictClearShowsReadyPillAndPassCount) {
+TEST_F(DiagnosticsPageTest, VerdictClearShowsReadyPillAndPassTileTone) {
     // Validated baseline with a supported config → no blockers, no notices from
-    // the recommendation engine → "clear" state (READY pill).
+    // the recommendation engine → "clear" state (READY pill + pass-toned Readiness tile).
     DiagnosticsPage page;
     LoadData(page);
 
@@ -139,7 +165,6 @@ TEST_F(DiagnosticsPageTest, VerdictClearShowsReadyPillAndPassCount) {
     ASSERT_NE(run, nullptr);
     run->click();
 
-    // The status pill must contain READY.
     bool has_ready_pill = false;
     for (auto* lbl : page.findChildren<QLabel*>())
         if (lbl->property("labelRole").toString() == QLatin1String("profileStatusBadge") &&
@@ -147,13 +172,10 @@ TEST_F(DiagnosticsPageTest, VerdictClearShowsReadyPillAndPassCount) {
             has_ready_pill = true;
     EXPECT_TRUE(has_ready_pill) << "Expected READY in status pill for a clean baseline config";
 
-    // Pass tile count must be > 0 (capability entries all pass on the static baseline).
-    bool pass_tile_nonzero = false;
-    for (auto* lbl : page.findChildren<QLabel*>())
-        if (lbl->property("labelRole").toString() == QLatin1String("statTileNum") &&
-            lbl->property("statTone").toString() == QLatin1String("pass") && lbl->text().toInt() > 0)
-            pass_tile_nonzero = true;
-    EXPECT_TRUE(pass_tile_nonzero) << "Expected pass tile count > 0 after run check";
+    // The Readiness tile is pass-toned and shows an "N / M checks passed" value.
+    EXPECT_EQ(TileTone(page, QStringLiteral("readinessTileReadiness")), QStringLiteral("pass"));
+    EXPECT_TRUE(TileValue(page, QStringLiteral("readinessTileReadiness")).contains(QStringLiteral("/")))
+        << "Readiness tile should show an N / M checks value in the clear verdict";
 }
 
 TEST_F(DiagnosticsPageTest, VerdictPipelineStagesAllPresent) {
@@ -171,48 +193,36 @@ TEST_F(DiagnosticsPageTest, VerdictPipelineStagesAllPresent) {
     EXPECT_EQ(flow->card(5)->stepName(), QStringLiteral("Disk"));
 }
 
-TEST_F(DiagnosticsPageTest, VerdictBlockerTileIsLabelledBlockers) {
+TEST_F(DiagnosticsPageTest, FourReadinessTilesPresent) {
+    // suite-diag2.jsx ReadinessGrid: exactly four wide tiles — Readiness · Encoder ·
+    // Disk · Display — replace the old three blocker/issue/pass stat tiles.
     DiagnosticsPage page;
-    const QList<QLabel*> labels = page.findChildren<QLabel*>();
-    bool found = false;
-    for (auto* lbl : labels)
-        if (lbl->property("labelRole").toString() == QLatin1String("statTileLabel") &&
-            lbl->text() == QStringLiteral("Blockers"))
-            found = true;
-    EXPECT_TRUE(found) << "Blocker stat tile must be labelled 'Blockers'";
+    for (const char* name :
+         {"readinessTileReadiness", "readinessTileEncoder", "readinessTileDisk", "readinessTileDisplay"}) {
+        auto* tile = page.findChild<QFrame*>(QString::fromLatin1(name));
+        EXPECT_NE(tile, nullptr) << "Missing readiness tile: " << name;
+        if (tile)
+            EXPECT_EQ(tile->property("panelRole").toString(), QStringLiteral("readinessTile"));
+    }
+    // The old three-tile labels must be gone.
+    for (auto* lbl : page.findChildren<QLabel*>())
+        EXPECT_NE(lbl->property("labelRole").toString(), QLatin1String("statTileLabel"))
+            << "Old stat-tile labels must be removed by the redesign";
 }
 
-TEST_F(DiagnosticsPageTest, VerdictIssueTileIsLabelledIssuesOrNotMeasured) {
-    // suite-diag.jsx: middle stat tile is dynamic —
-    //   clear verdict  → "Not measured" (neutral, shows planned stage count)
-    //   issues/blocked → "Issues" (amber, shows diagnosed issue count)
-    // Before data is loaded the tile is initialised with its construction-time label.
-
-    // After a clear verdict the tile must read "Not measured".
+TEST_F(DiagnosticsPageTest, ReadinessTilesPopulateAfterData) {
     DiagnosticsPage page;
     LoadData(page);
-
     QPushButton* run = FindButton(page, QStringLiteral("Run Check"));
     ASSERT_NE(run, nullptr);
     run->click();
 
-    bool found_not_measured = false;
-    for (auto* lbl : page.findChildren<QLabel*>())
-        if (lbl->property("labelRole").toString() == QLatin1String("statTileLabel") &&
-            lbl->text() == QStringLiteral("Not measured"))
-            found_not_measured = true;
-    EXPECT_TRUE(found_not_measured) << "Middle tile must read 'Not measured' in clear verdict (suite-diag.jsx)";
-}
-
-TEST_F(DiagnosticsPageTest, VerdictPassTileIsLabelledPasses) {
-    DiagnosticsPage page;
-    const QList<QLabel*> labels = page.findChildren<QLabel*>();
-    bool found = false;
-    for (auto* lbl : labels)
-        if (lbl->property("labelRole").toString() == QLatin1String("statTileLabel") &&
-            lbl->text() == QStringLiteral("Passes"))
-            found = true;
-    EXPECT_TRUE(found) << "Pass stat tile must be labelled 'Passes'";
+    const QString dash = QString::fromUtf8("\xe2\x80\x94");
+    // Encoder tile reflects the active video codec (AV1 baseline in LoadData).
+    EXPECT_TRUE(TileValue(page, QStringLiteral("readinessTileEncoder")).contains(QStringLiteral("AV1")))
+        << "Encoder tile should show the active video codec";
+    // Display tile shows a resolution (× glyph), never the em-dash, once a screen exists.
+    EXPECT_NE(TileValue(page, QStringLiteral("readinessTileDisplay")), dash);
 }
 
 // ---- v10 verdict logic (#6): capability matrix unavailability is NOT amber ----
@@ -261,22 +271,86 @@ TEST_F(DiagnosticsPageTest, VerdictClearPillTextIsJustReady) {
     EXPECT_TRUE(pill_exact_ready) << "Status pill must read exactly 'READY' (no notice count) in a clear verdict";
 }
 
-TEST_F(DiagnosticsPageTest, VerdictClearMiddleTileShowsPlannedStageCount) {
-    // In clear state, middle tile shows kPlannedStages (3) with neutral tone.
+// ---- Simple / Expert redesign (suite-diag2.jsx) ------------------------------
+
+TEST_F(DiagnosticsPageTest, ExpertContainerHiddenInSimpleShownInExpert) {
+    // The full taxonomy (② Pre-flight → ③ Live → ④ Post-flight + elevation) lives in
+    // the Expert-only container; Simple shows only verdict + tiles + worst-first cards.
+    DiagnosticsPage page;
+    auto* expert = page.findChild<QWidget*>(QStringLiteral("diagExpertContainer"));
+    ASSERT_NE(expert, nullptr);
+    EXPECT_FALSE(page.isExpertModeEnabled());
+    EXPECT_TRUE(expert->isHidden()) << "Expert container must be hidden in Simple (default) view";
+
+    page.setExpertModeEnabled(true);
+    EXPECT_TRUE(page.isExpertModeEnabled());
+    EXPECT_FALSE(expert->isHidden()) << "Expert container must be revealed in Expert view";
+
+    page.setExpertModeEnabled(false);
+    EXPECT_TRUE(expert->isHidden());
+}
+
+TEST_F(DiagnosticsPageTest, ExpertToggleEmitsExactlyOnUserFlip) {
+    // The toolbar toggle emits expertModeChanged; the external setter (MainWindow sync)
+    // must NOT re-emit, so cross-page sync can't loop.
+    DiagnosticsPage page;
+    int emits = 0;
+    QObject::connect(&page, &DiagnosticsPage::expertModeChanged, &page, [&emits](bool) { ++emits; });
+
+    page.setExpertModeEnabled(true); // external sync → no emit
+    EXPECT_EQ(emits, 0);
+
+    auto* toggle = page.findChild<QAbstractButton*>(QStringLiteral("diagExpertModeToggleBtn"));
+    ASSERT_NE(toggle, nullptr);
+    toggle->click(); // user flip (true → false) → exactly one emit
+    EXPECT_EQ(emits, 1);
+}
+
+TEST_F(DiagnosticsPageTest, DeviceLinkEmitsOpenDeviceRequest) {
+    // Capability facts moved to the Device page; the Environment row links there.
+    DiagnosticsPage page;
+    int emits = 0;
+    QObject::connect(&page, &DiagnosticsPage::openDevicePageRequested, &page, [&emits]() { ++emits; });
+    auto* btn = page.findChild<QPushButton*>(QStringLiteral("openDeviceBtn"));
+    ASSERT_NE(btn, nullptr);
+    btn->click();
+    EXPECT_EQ(emits, 1);
+}
+
+TEST_F(DiagnosticsPageTest, NoCapabilityMatrixSectionRemains) {
+    // The capability matrix is removed (it now lives on the Device page). No section
+    // header should carry the old "CAPABILITY MATRIX" title.
     DiagnosticsPage page;
     LoadData(page);
+    for (auto* lbl : page.findChildren<QLabel*>())
+        EXPECT_FALSE(lbl->text().contains(QStringLiteral("CAPABILITY MATRIX"), Qt::CaseInsensitive))
+            << "Capability matrix must be removed from Diagnostics";
+}
 
-    QPushButton* run = FindButton(page, QStringLiteral("Run Check"));
-    ASSERT_NE(run, nullptr);
-    run->click();
+TEST_F(DiagnosticsPageTest, ActiveConfigAccordionTogglesBody) {
+    // makeCollapsibleSection is the reusable accordion primitive: clicking the head
+    // reveals the body. Active configuration starts collapsed.
+    DiagnosticsPage page;
+    LoadData(page);
+    auto* body = page.findChild<QWidget*>(QStringLiteral("diagActiveConfigBody"));
+    ASSERT_NE(body, nullptr);
+    EXPECT_TRUE(body->isHidden()) << "Active configuration must start collapsed";
 
-    bool found_neutral_middle = false;
-    for (auto* lbl : page.findChildren<QLabel*>()) {
-        if (lbl->property("labelRole").toString() == QLatin1String("statTileNum") &&
-            lbl->property("statTone").toString() == QLatin1String("zero") && lbl->text().toInt() == 3)
-            found_neutral_middle = true;
-    }
-    EXPECT_TRUE(found_neutral_middle) << "Middle tile must show 3 (planned stages) with neutral tone in clear verdict";
+    auto* head = FindCollapseHead(page, QStringLiteral("Active configuration"));
+    ASSERT_NE(head, nullptr);
+    head->click();
+    EXPECT_FALSE(body->isHidden()) << "Clicking the accordion head must reveal the body";
+    head->click();
+    EXPECT_TRUE(body->isHidden()) << "Clicking again must collapse the body";
+}
+
+TEST_F(DiagnosticsPageTest, ElevationRestartStaysDisabledHonestly) {
+    // The self-relaunch flow is a later slice; until then the button must be
+    // disabled (planned), never a live-looking control that silently no-ops.
+    DiagnosticsPage page;
+    auto* btn = page.findChild<QPushButton*>(QStringLiteral("elevationRestartBtn"));
+    ASSERT_NE(btn, nullptr);
+    EXPECT_FALSE(btn->isEnabled());
 }
 
 TEST_F(DiagnosticsPageTest, VerdictLastCheckLabelUpdatesAfterRunCheck) {
@@ -590,6 +664,131 @@ TEST_F(DiagnosticsPageTest, IdleAfterRecordingRestoresStaticCards) {
     // Idle restores static readiness: probe-less cards Planned, probed cards Ok.
     EXPECT_EQ(flow->card(0)->status(), PipelineStepCard::Status::Planned);
     EXPECT_EQ(flow->card(3)->status(), PipelineStepCard::Status::Ok);
+}
+
+// ---- Tier split: verdict counts only blockers + Tier-2, never Tier-3 tips -----
+
+TEST_F(DiagnosticsPageTest, TipsOnlyConfigStaysReadyWithTipChipAndNoCards) {
+    // MKV + H.264 + AAC on the AV1-capable baseline fires exactly one Tier-3
+    // optimisation (rec.profile.codec "a better codec is available") and nothing else
+    // (the combo is Recommended, so no validation-warning card either). Per
+    // suite-diag2.jsx scenario 'ready': tips present AND chip = READY/success — a
+    // tip must never turn the verdict amber or claim issue cards that don't exist.
+    DiagnosticsPage page;
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    OutputSettingsModel output;
+    output.container = capability::Container::Matroska;
+    output.video_codec = capability::VideoCodec::H264Nvenc; // AV1 available → tip fires
+    output.audio_codec = capability::AudioCodec::AacMf;
+    VideoSettingsModel video;
+    capability::AudioUiState audio;
+    page.setDiagnosticData(caps, output, video, audio, "MKV H264 AAC", "Start/Stop: Alt+F9", "", true);
+
+    QPushButton* run = FindButton(page, QStringLiteral("Run Check"));
+    ASSERT_NE(run, nullptr);
+    run->click();
+
+    // Verdict: READY (tips-only is the calm ready state, not ATTENTION).
+    bool pill_ready = false;
+    for (auto* lbl : page.findChildren<QLabel*>())
+        if (lbl->property("labelRole").toString() == QLatin1String("profileStatusBadge") &&
+            lbl->text() == QStringLiteral("READY"))
+            pill_ready = true;
+    EXPECT_TRUE(pill_ready) << "Tips-only config must stay READY (Tier-3 never alarms the verdict)";
+
+    // Readiness tile: pass tone, not amber.
+    EXPECT_EQ(TileTone(page, QStringLiteral("readinessTileReadiness")), QStringLiteral("pass"))
+        << "Readiness tile must not be amber for optimisation tips";
+
+    // The tip is bundled in the chip…
+    auto* chip = page.findChild<QWidget*>(QStringLiteral("diagTipChip"));
+    ASSERT_NE(chip, nullptr);
+    EXPECT_FALSE(chip->isHidden()) << "Tip chip must be visible when tips exist";
+
+    // …and there are NO issue cards ("See the cards below" over a void is the bug).
+    int visible_cards = 0;
+    for (auto* frame : page.findChildren<QFrame*>())
+        if (frame->property("panelRole").toString() == QLatin1String("issueCard"))
+            ++visible_cards;
+    EXPECT_EQ(visible_cards, 0) << "Tier-3 tips must not render issue cards";
+}
+
+TEST_F(DiagnosticsPageTest, BlockerShowsCardInSimpleViewAndBlocksVerdict) {
+    // MP4 + FLAC is a hard container incompatibility → Tier-1 blocker. The card must
+    // be visible in the Simple (default, expert=false) view and the verdict must gate.
+    DiagnosticsPage page;
+    EXPECT_FALSE(page.isExpertModeEnabled());
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    OutputSettingsModel output;
+    output.container = capability::Container::Mp4;
+    output.audio_codec = capability::AudioCodec::Flac; // rec.009 Blocker
+    output.video_codec = capability::VideoCodec::Av1Nvenc;
+    VideoSettingsModel video;
+    capability::AudioUiState audio;
+    page.setDiagnosticData(caps, output, video, audio, "MP4 AV1 FLAC", "Start/Stop: Alt+F9", "", true);
+
+    QPushButton* run = FindButton(page, QStringLiteral("Run Check"));
+    ASSERT_NE(run, nullptr);
+    run->click();
+
+    bool pill_blocked = false;
+    for (auto* lbl : page.findChildren<QLabel*>())
+        if (lbl->property("labelRole").toString() == QLatin1String("profileStatusBadge") &&
+            lbl->text().contains(QStringLiteral("CAN'T RECORD")))
+            pill_blocked = true;
+    EXPECT_TRUE(pill_blocked) << "A blocker must gate the verdict (CAN'T RECORD)";
+
+    bool blocker_card_visible = false;
+    for (auto* frame : page.findChildren<QFrame*>())
+        if (frame->property("panelRole").toString() == QLatin1String("issueCard") &&
+            frame->property("issueTone").toString() == QLatin1String("blocker"))
+            blocker_card_visible = true;
+    EXPECT_TRUE(blocker_card_visible) << "Tier-1 blocker card must be visible in the Simple view";
+}
+
+TEST_F(DiagnosticsPageTest, MeasuredJudderNoticeIsCardNotTip) {
+    // rec.001 fires only on MEASURED present jitter (Tier-2). It must render as an
+    // issue card, never disappear into the Tier-3 tip chip.
+    DiagnosticsPage page;
+    LoadData(page);
+
+    auto s = MakeRecordingSnapshot();
+    s.capture.present_cadence_availability = recorder_core::MetricAvailability::Available;
+    s.capture.source_present_jitter_ms = 11.4; // over the 8 ms judder limit
+    s.video_encoder.cfr = true;
+    page.applyLiveDiagnostics(s);
+
+    QPushButton* run = FindButton(page, QStringLiteral("Run Check"));
+    ASSERT_NE(run, nullptr);
+    run->click();
+
+    // The measured problem earns a Tier-2 card…
+    bool judder_card = false;
+    for (auto* frame : page.findChildren<QFrame*>()) {
+        if (frame->property("panelRole").toString() != QLatin1String("issueCard"))
+            continue;
+        for (auto* lbl : frame->findChildren<QLabel*>())
+            if (lbl->text().contains(QStringLiteral("judder"), Qt::CaseInsensitive))
+                judder_card = true;
+    }
+    EXPECT_TRUE(judder_card) << "Measured judder (rec.001) must render as an issue card";
+
+    // …and does NOT hide in the tip chip.
+    auto* chip = page.findChild<QWidget*>(QStringLiteral("diagTipChip"));
+    ASSERT_NE(chip, nullptr);
+    bool judder_in_chip = false;
+    for (auto* lbl : chip->findChildren<QLabel*>())
+        if (lbl->text().contains(QStringLiteral("rec.001")))
+            judder_in_chip = true;
+    EXPECT_FALSE(judder_in_chip) << "A measured Tier-2 problem must never be bundled as a tip";
+
+    // Verdict reflects the measured problem (amber), which is correct for Tier-2.
+    bool pill_attention = false;
+    for (auto* lbl : page.findChildren<QLabel*>())
+        if (lbl->property("labelRole").toString() == QLatin1String("profileStatusBadge") &&
+            lbl->text().contains(QStringLiteral("ATTENTION")))
+            pill_attention = true;
+    EXPECT_TRUE(pill_attention) << "A Tier-2 measured problem must turn the verdict amber";
 }
 
 } // namespace

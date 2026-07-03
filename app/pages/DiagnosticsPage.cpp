@@ -11,10 +11,13 @@
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/theme/ExoSnapPalette.h"
 #include "../ui/theme/LucideIcon.h"
+#include "../ui/widgets/ElevationLock.h"
+#include "../ui/widgets/ExoToggle.h"
 #include "../ui/widgets/LivePipelinePanel.h"
 #include "../ui/widgets/PipelineFlow.h"
 #include "../ui/widgets/PipelineStepCard.h"
 #include "../ui/widgets/SectionRuleHeader.h"
+#include "../ui/widgets/TipChip.h"
 #include <capability/audio_ui_state.h>
 #include <capability/resolver.h>
 #include <capability/support_level.h>
@@ -22,6 +25,7 @@
 
 #include <QDateTime>
 #include <QFrame>
+#include <QGridLayout>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -33,15 +37,15 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <cmath>
 
 namespace exosnap {
 
 using M = ui::theme::ExoSnapMetrics;
+using Pal = ui::theme::ExoSnapPalette;
 
 namespace {
 
-// Translate the app-layer diagnostics::PresentMode to the recorder_core mirror.
-// Both enums have identical members; a switch avoids coupling on integer values.
 static recorder_core::PresentMode ToSnapshotMode(diagnostics::PresentMode m) noexcept {
     switch (m) {
     case diagnostics::PresentMode::Composed:
@@ -70,16 +74,15 @@ QString severityClass(diagnostics::DiagnosticSeverity sev) {
 QString severityIcon(diagnostics::DiagnosticSeverity sev) {
     switch (sev) {
     case diagnostics::DiagnosticSeverity::Pass:
-        return QString::fromUtf8("\xe2\x9c\x93"); // checkmark
+        return QString::fromUtf8("\xe2\x9c\x93");
     case diagnostics::DiagnosticSeverity::Notice:
-        return QString::fromUtf8("\xe2\x9a\xa0"); // warning
+        return QString::fromUtf8("\xe2\x9a\xa0");
     case diagnostics::DiagnosticSeverity::Blocker:
-        return QString::fromUtf8("\xe2\x9c\x97"); // cross
+        return QString::fromUtf8("\xe2\x9c\x97");
     }
     return QStringLiteral("?");
 }
 
-// Issue-card tone maps onto the QSS issueTone / statTone tints.
 QString severityTone(diagnostics::DiagnosticSeverity sev) {
     switch (sev) {
     case diagnostics::DiagnosticSeverity::Pass:
@@ -90,11 +93,6 @@ QString severityTone(diagnostics::DiagnosticSeverity sev) {
         return QStringLiteral("blocker");
     }
     return QStringLiteral("pass");
-}
-
-QString collapseGlyph(bool open) {
-    return open ? QString::fromUtf8("\xe2\x96\xbe  ")  // ▾
-                : QString::fromUtf8("\xe2\x96\xb8  "); // ▸
 }
 
 QFrame* makeHorizontalRule(QWidget* parent) {
@@ -110,13 +108,74 @@ QLabel* makeTableHeader(const QString& text, QWidget* parent) {
     return l;
 }
 
+// Tier-3 optimisation catalog (diag-model.jsx): capability/config-based "better,
+// but it runs" recommendations that bundle into the quiet tip chip instead of
+// alarming as a measured problem. Everything else Notice = a measured/environment
+// issue that earns its own card. Curated by id — all engine results share the
+// Recommendation group, so the group can't distinguish tiers.
+bool isOptimisationTip(const std::string& id) {
+    return id == "rec.002"              // MKV survives a crash better than MP4
+           || id == "rec.profile.codec" // GPU can record a better codec
+           || id == "rec.009"           // Opus in MP4 won't play everywhere
+           || id == "rec.008";          // FAT32 4 GB single-file limit
+}
+
+int fixKind(const diagnostics::FixAction& fa) {
+    switch (fa.safety) {
+    case diagnostics::FixAction::Safety::Auto:
+        return 0;
+    case diagnostics::FixAction::Safety::Assisted:
+        return 1;
+    case diagnostics::FixAction::Safety::External:
+        return 2;
+    }
+    return 1;
+}
+
+QString humanBytes(uint64_t bytes) {
+    const double gb = static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0);
+    if (gb >= 1024.0)
+        return QString::number(gb / 1024.0, 'f', 1) + QStringLiteral(" TB");
+    if (gb >= 10.0)
+        return QString::number(gb, 'f', 0) + QStringLiteral(" GB");
+    return QString::number(gb, 'f', 1) + QStringLiteral(" GB");
+}
+
 } // namespace
 
 DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
+    const QString dash = QString::fromUtf8("\xe2\x80\x94");
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
+
+    // ── Slim toolbar — Expert toggle mirrors Settings (suite-diag2.jsx:411) ──────
+    auto* toolbar = new QWidget(this);
+    toolbar->setObjectName(QStringLiteral("diagToolbar"));
+    auto* tl = new QHBoxLayout(toolbar);
+    tl->setContentsMargins(M::kSpaceXl, M::kSpaceSm, M::kSpaceXl, M::kSpaceSm);
+    tl->setSpacing(M::kSpaceMd);
+    auto* toolbar_kicker = new QLabel(QStringLiteral("DIAGNOSTICS"), toolbar);
+    toolbar_kicker->setProperty("labelRole", "toolbarKicker");
+    tl->addWidget(toolbar_kicker);
+    mode_caption_ = new QLabel(QStringLiteral("\xc2\xb7 Simple"), toolbar);
+    mode_caption_->setProperty("labelRole", "subtle");
+    tl->addWidget(mode_caption_);
+    tl->addStretch(1);
+    expert_mode_label_ = new QLabel(QStringLiteral("Expert mode"), toolbar);
+    expert_mode_label_->setObjectName(QStringLiteral("diagExpertModeLabel"));
+    expert_mode_label_->setProperty("labelRole", "muted");
+    expert_mode_label_->setProperty("expertOn", false);
+    tl->addWidget(expert_mode_label_, 0, Qt::AlignVCenter);
+    expert_toggle_ = new ui::widgets::ExoToggle(toolbar);
+    expert_toggle_->setObjectName(QStringLiteral("diagExpertModeToggleBtn"));
+    expert_toggle_->setOn(false);
+    tl->addWidget(expert_toggle_, 0, Qt::AlignVCenter);
+    root->addWidget(toolbar);
+
+    auto* toolbar_rule = makeHorizontalRule(this);
+    root->addWidget(toolbar_rule);
 
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
@@ -127,13 +186,7 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     layout->setContentsMargins(M::kSpaceXl, M::kSpaceXl, M::kSpaceXl, M::kSpaceXl);
     layout->setSpacing(M::kSpaceLg);
 
-    // DESIGN-FIDELITY: no page title/subtitle. The newest Mappe (suite-diag.jsx) starts
-    // the Diagnostics surface directly with the readiness banner — the older
-    // hybrid-pages.jsx "PageHead" (title + subtitle) is not part of the current design.
-
-    // ── A: Readiness / action header ──────────────────────────────────────────
-    // A troubleshooting summary: a plain-language verdict plus the primary actions,
-    // tinted by overall state, with three count tiles below.
+    // ── Verdict banner (kept: readinessBanner + status pill + last-check) ────────
     readiness_panel_ = makePanel(content);
     readiness_panel_->setProperty("panelRole", "readinessBanner");
     auto* rl = new QVBoxLayout(readiness_panel_);
@@ -142,14 +195,11 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
 
     auto* head_row = new QHBoxLayout();
     head_row->setSpacing(M::kSpaceMd);
-
     auto* head_text = new QVBoxLayout();
     head_text->setSpacing(M::kSpaceXs);
     status_pill_ = new QLabel(QStringLiteral("NOT CHECKED"), readiness_panel_);
     status_pill_->setProperty("labelRole", "profileStatusBadge");
     status_pill_->setAlignment(Qt::AlignCenter);
-    // Leading state icon (check-circle / alert-triangle / x-circle), tinted per state.
-    // Hidden until a check has run (checking/neutral states show no icon).
     readiness_icon_ = new QLabel(readiness_panel_);
     readiness_icon_->setFixedSize(14, 14);
     readiness_icon_->setAlignment(Qt::AlignCenter);
@@ -161,7 +211,6 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     pill_row->addWidget(status_pill_);
     pill_row->addStretch();
     head_text->addLayout(pill_row);
-
     last_check_label_ = new QLabel(QStringLiteral("Last check: \xe2\x80\x94"), readiness_panel_);
     last_check_label_->setProperty("labelRole", "subtle");
     head_text->addWidget(last_check_label_);
@@ -170,8 +219,6 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     auto* btn_row = new QHBoxLayout();
     btn_row->setSpacing(M::kSpaceSm);
     run_check_btn_ = new QPushButton(QStringLiteral("Run Check"), readiness_panel_);
-    // DESIGN-FIDELITY: suite-diag.jsx:94 — the readiness action is a PRIMARY size-sm
-    // button (Run check), with Export report as the ghost size-sm beside it.
     run_check_btn_->setProperty("role", "primary");
     run_check_btn_->setProperty("size", "sm");
     export_report_btn_ = new QPushButton(QStringLiteral("Export Report"), readiness_panel_);
@@ -188,140 +235,160 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     summary_label_->setProperty("labelRole", "body");
     summary_label_->setWordWrap(true);
     rl->addWidget(summary_label_);
-
-    // Count tiles
-    auto* tiles_row = new QHBoxLayout();
-    tiles_row->setSpacing(M::kSpaceMd);
-
-    const auto makeStatTile = [&](const char* tone, const QString& tile_label, QFrame*& out_tile, QLabel*& out_num) {
-        out_tile = new QFrame(readiness_panel_);
-        out_tile->setProperty("panelRole", "statTile");
-        out_tile->setProperty("statTone", tone);
-        auto* tl = new QVBoxLayout(out_tile);
-        tl->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
-        tl->setSpacing(2);
-        out_num = new QLabel(QStringLiteral("0"), out_tile);
-        out_num->setProperty("labelRole", "statTileNum");
-        out_num->setProperty("statTone", tone);
-        auto* lbl = new QLabel(tile_label, out_tile);
-        lbl->setProperty("labelRole", "statTileLabel");
-        tl->addWidget(out_num);
-        tl->addWidget(lbl);
-        tiles_row->addWidget(out_tile, 1);
-    };
-
-    makeStatTile("blocker", QStringLiteral("Blockers"), blocker_tile_, blocker_count_);
-    makeStatTile("notice", QStringLiteral("Issues"), notice_tile_, notice_count_);
-    makeStatTile("pass", QStringLiteral("Passes"), pass_tile_, pass_count_);
-    rl->addSpacing(M::kSpaceXs);
-    rl->addLayout(tiles_row);
     layout->addWidget(readiness_panel_);
 
-    // ── B: Capture pipeline (the page's visual center) ─────────────────────────
-    // Per-stage readiness from real capability checks. The static flow shows which
-    // stages are available; live per-frame telemetry is rendered in the LIVE PIPELINE
-    // section below. No stage card shows fabricated latency / queue / throughput.
-    auto* pipeline_header = new ui::widgets::SectionRuleHeader(QStringLiteral("CAPTURE PIPELINE"), content);
-    pipeline_header->setMeta(QStringLiteral("Static checks"));
-    layout->addWidget(pipeline_header);
-    layout->addWidget(makeSubLabel(
-        QStringLiteral("Per-stage availability for the active recording configuration. Live per-frame latency, queue "
-                       "depth, drops and throughput are shown in the Live pipeline section below while recording."),
-        content));
+    // ── Four readiness tiles (the designed calm that replaces the old void) ──────
+    auto* tiles_host = new QWidget(content);
+    auto* tiles_grid = new QGridLayout(tiles_host);
+    tiles_grid->setContentsMargins(0, 0, 0, 0);
+    tiles_grid->setHorizontalSpacing(M::kSpaceMd);
+    tiles_grid->setVerticalSpacing(M::kSpaceMd);
+    readiness_tile_ = makeReadinessTile(QStringLiteral("readinessTileReadiness"), QStringLiteral("Readiness"),
+                                        readiness_tile_value_, readiness_tile_sub_, readiness_tile_icon_);
+    QLabel* enc_icon = nullptr;
+    auto* encoder_tile = makeReadinessTile(QStringLiteral("readinessTileEncoder"), QStringLiteral("Encoder"),
+                                           encoder_tile_value_, encoder_tile_sub_, enc_icon);
+    QLabel* disk_icon = nullptr;
+    auto* disk_tile = makeReadinessTile(QStringLiteral("readinessTileDisk"), QStringLiteral("Disk"), disk_tile_value_,
+                                        disk_tile_sub_, disk_icon);
+    QLabel* disp_icon = nullptr;
+    auto* display_tile = makeReadinessTile(QStringLiteral("readinessTileDisplay"), QStringLiteral("Display"),
+                                           display_tile_value_, display_tile_sub_, disp_icon);
+    // Row 0 holds all four on wide windows; the grid naturally wraps nothing, but the
+    // four equal columns collapse gracefully within the 900 px content cap. (A 2×2
+    // fallback on very narrow windows is acceptable per the mockup intent.)
+    tiles_grid->addWidget(readiness_tile_, 0, 0);
+    tiles_grid->addWidget(encoder_tile, 0, 1);
+    tiles_grid->addWidget(disk_tile, 0, 2);
+    tiles_grid->addWidget(display_tile, 0, 3);
+    for (int c = 0; c < 4; ++c)
+        tiles_grid->setColumnStretch(c, 1);
+    layout->addWidget(tiles_host);
 
-    pipeline_flow_ = new ui::widgets::PipelineFlow(content);
-    layout->addWidget(pipeline_flow_);
-
-    auto* pipeline_caption =
-        new QLabel(QStringLiteral("Stage status reflects static availability checks. Live timing is below."), content);
-    pipeline_caption->setProperty("labelRole", "pipelineCaption");
-    pipeline_caption->setWordWrap(true);
-    layout->addWidget(pipeline_caption);
-
-    // ── B2: Live pipeline telemetry (real runtime metrics while recording) ──────
-    auto* live_header = new ui::widgets::SectionRuleHeader(QStringLiteral("LIVE PIPELINE"), content);
-    live_header->setMeta(QStringLiteral("Live telemetry"));
-    layout->addWidget(live_header);
-    layout->addWidget(makeSubLabel(
-        QStringLiteral("Real low-overhead runtime metrics for the active recording, updated ~5×/second. Metrics that "
-                       "cannot be measured are shown as Unavailable, never as zero."),
-        content));
-    live_pipeline_panel_ = new ui::widgets::LivePipelinePanel(content);
-    layout->addWidget(live_pipeline_panel_);
-
-    // ── C: Recommendations (actionable cards based on real detected issues) ─────
-    auto* issues_header = new ui::widgets::SectionRuleHeader(QStringLiteral("RECOMMENDATIONS"), content);
-    layout->addWidget(issues_header);
-    layout->addWidget(makeSubLabel(
-        QStringLiteral("Highest-priority blockers and notices for the current recording configuration."), content));
-
+    // ── Worst-first cards (shared: Simple + Expert) ─────────────────────────────
     issues_parent_ = new QWidget(content);
     overview_issues_layout_ = new QVBoxLayout(issues_parent_);
     overview_issues_layout_->setContentsMargins(0, 0, 0, 0);
     overview_issues_layout_->setSpacing(M::kSpaceSm);
-    overview_issues_layout_->addWidget(
-        makeSubLabel(QStringLiteral("Run a system check to populate issue details."), issues_parent_));
     layout->addWidget(issues_parent_);
 
-    // ── D: Capability matrix (real probes, visible but secondary) ──────────────
-    capabilities_header_ = new ui::widgets::SectionRuleHeader(QStringLiteral("CAPABILITY MATRIX"), content);
-    capabilities_header_->setMeta(QStringLiteral("Real probes"));
-    layout->addWidget(capabilities_header_);
-    layout->addWidget(makeSubLabel(
-        QStringLiteral("Encoders, muxers and audio paths probed on this machine. Unavailable items are simply not "
-                       "selectable — they never block a recording."),
-        content));
+    tip_chip_ = new ui::widgets::TipChip(content);
+    connect(tip_chip_, &ui::widgets::TipChip::applyFixRequested, this, &DiagnosticsPage::applyFixActionRequested);
+    connect(tip_chip_, &ui::widgets::TipChip::assistedFixRequested, this, &DiagnosticsPage::openAssistedFixRequested);
+    layout->addWidget(tip_chip_);
 
-    auto* cap_panel = makePanel(content);
-    auto* cap_panel_layout = new QVBoxLayout(cap_panel);
-    cap_panel_layout->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
-    cap_panel_layout->setSpacing(0);
-    capabilities_content_ = new QWidget(cap_panel);
-    capabilities_layout_ = new QVBoxLayout(capabilities_content_);
-    capabilities_layout_->setContentsMargins(0, 0, 0, 0);
-    capabilities_layout_->setSpacing(0);
-    capabilities_layout_->addWidget(
-        makeSubLabel(QStringLiteral("Run a system check to populate this list."), capabilities_content_));
-    cap_panel_layout->addWidget(capabilities_content_);
-    layout->addWidget(cap_panel);
+    // ── Expert-only container (phases + elevation) ──────────────────────────────
+    expert_container_ = new QWidget(content);
+    expert_container_->setObjectName(QStringLiteral("diagExpertContainer"));
+    auto* ex = new QVBoxLayout(expert_container_);
+    ex->setContentsMargins(0, 0, 0, 0);
+    ex->setSpacing(M::kSpaceLg);
 
-    // ── E: Active configuration (collapsed reference) ──────────────────────────
+    // Environment — audio + elevation baseline; capabilities now live on Device.
+    auto* env_header = new ui::widgets::SectionRuleHeader(QStringLiteral("ENVIRONMENT"), expert_container_);
+    ex->addWidget(env_header);
+    auto* env_panel = makePanel(expert_container_);
+    auto* env_l = new QVBoxLayout(env_panel);
+    env_l->setContentsMargins(M::kSpaceMd, M::kSpaceSm, M::kSpaceMd, M::kSpaceSm);
+    env_l->setSpacing(M::kSpaceXs);
+    env_l->addWidget(makeInfoRow(
+        QStringLiteral("Elevation"),
+        QStringLiteral("Standard \xe2\x80\x94 DXGI / NVAPI baseline \xc2\xb7 monitor judder still measured"), QString(),
+        env_panel, true));
+    auto* device_row = new QWidget(env_panel);
+    auto* dr = new QHBoxLayout(device_row);
+    dr->setContentsMargins(M::kSpaceSm, M::kSpaceSm, M::kSpaceSm, M::kSpaceSm);
+    dr->setSpacing(M::kSpaceMd);
+    auto* device_hint =
+        new QLabel(QStringLiteral("Hardware capabilities (GPU, codecs, displays, audio devices)"), device_row);
+    device_hint->setProperty("labelRole", "subtitle");
+    device_hint->setWordWrap(true);
+    dr->addWidget(device_hint, 1);
+    auto* open_device_btn = new QPushButton(QStringLiteral("Device \xe2\x86\x92"), device_row);
+    open_device_btn->setObjectName(QStringLiteral("openDeviceBtn"));
+    open_device_btn->setProperty("role", "ghost");
+    connect(open_device_btn, &QPushButton::clicked, this, &DiagnosticsPage::openDevicePageRequested);
+    dr->addWidget(open_device_btn, 0, Qt::AlignVCenter);
+    env_l->addWidget(device_row);
+    ex->addWidget(env_panel);
+
+    // ② Pre-flight & Readiness — self-test lives here.
+    {
+        QToolButton* pre_toggle = nullptr;
+        auto* pre_body = makeCollapsibleSection(
+            QStringLiteral("2 \xc2\xb7 Pre-flight & Readiness"),
+            QStringLiteral("Tier-1 gates the start · Tier-3 informs. Self-test validates core pipeline components."),
+            expert_container_, pre_toggle);
+        selftest_content_ = new QWidget(pre_body);
+        selftest_layout_ = new QVBoxLayout(selftest_content_);
+        selftest_layout_->setContentsMargins(0, 0, 0, 0);
+        selftest_layout_->setSpacing(M::kSpaceSm);
+        auto* selftest_action_row = new QHBoxLayout();
+        selftest_action_row->setSpacing(M::kSpaceMd);
+        selftest_status_label_ = new QLabel(QStringLiteral("Status: Not run"), selftest_content_);
+        selftest_status_label_->setProperty("labelRole", "body");
+        selftest_run_btn_ = new QPushButton(QStringLiteral("Run Self-Test"), selftest_content_);
+        selftest_run_btn_->setProperty("role", "ghost");
+        selftest_run_btn_->setMaximumWidth(200);
+        selftest_action_row->addWidget(selftest_status_label_, 1);
+        selftest_action_row->addWidget(selftest_run_btn_, 0);
+        selftest_layout_->addLayout(selftest_action_row);
+        selftest_layout_->addWidget(
+            makeSubLabel(QStringLiteral("Run a system check or click Run Self-Test."), selftest_content_));
+        pre_body->layout()->addWidget(selftest_content_);
+        pre_toggle->setChecked(true);
+        ex->addWidget(pre_toggle->parentWidget());
+    }
+
+    // ③ Live — telemetry + six pipeline health cards (only meaningful while recording).
+    {
+        QToolButton* live_toggle = nullptr;
+        auto* live_body = makeCollapsibleSection(
+            QStringLiteral("3 \xc2\xb7 Live pipeline"),
+            QStringLiteral("Low-overhead runtime metrics for the active recording (~5×/s). Unmeasured values are "
+                           "shown as Unavailable, never zero."),
+            expert_container_, live_toggle);
+        live_pipeline_panel_ = new ui::widgets::LivePipelinePanel(live_body);
+        live_body->layout()->addWidget(live_pipeline_panel_);
+        pipeline_flow_ = new ui::widgets::PipelineFlow(live_body);
+        live_body->layout()->addWidget(pipeline_flow_);
+        live_toggle->setChecked(true);
+        ex->addWidget(live_toggle->parentWidget());
+    }
+
+    // ④ Post-flight & Review — honest placeholder until a report card lands.
+    {
+        QToolButton* post_toggle = nullptr;
+        auto* post_body = makeCollapsibleSection(
+            QStringLiteral("4 \xc2\xb7 Post-flight & Review"),
+            QStringLiteral("After Stop: drop-%, max drift, achieved vs target and file validity, then a bridge to the "
+                           "Edit overlay."),
+            expert_container_, post_toggle);
+        post_body->layout()->addWidget(
+            makeSubLabel(QStringLiteral("The report card appears here after a recording finishes."), post_body));
+        ex->addWidget(post_toggle->parentWidget());
+    }
+
+    // Active configuration (collapsed reference).
     config_content_ = makeCollapsibleSection(QStringLiteral("Active configuration"),
                                              QStringLiteral("Recording settings as currently configured in the app."),
-                                             content, config_toggle_);
+                                             expert_container_, config_toggle_);
+    config_content_->setObjectName(QStringLiteral("diagActiveConfigBody"));
     config_layout_ = static_cast<QVBoxLayout*>(config_content_->layout());
     config_layout_->addWidget(
         makeSubLabel(QStringLiteral("Run a system check to populate this list."), config_content_));
-    layout->addWidget(config_toggle_->parentWidget());
+    ex->addWidget(config_toggle_->parentWidget());
 
-    // ── D: Self-Test ──────────────────────────────────────────────────────────
-    auto* selftest_header = new ui::widgets::SectionRuleHeader(QStringLiteral("SELF-TEST"), content);
-    layout->addWidget(selftest_header);
-    layout->addWidget(makeSubLabel(
-        QStringLiteral("Validates core recording pipeline components without starting a full recording."), content));
+    // Elevation unlock (opt-in · Tier-4 depth).
+    auto* elev_header = new ui::widgets::SectionRuleHeader(QStringLiteral("ELEVATED DIAGNOSTICS"), expert_container_);
+    elev_header->setMeta(QStringLiteral("Opt-in · relaunch as admin"));
+    ex->addWidget(elev_header);
+    elevation_lock_ = new ui::widgets::ElevationLock(expert_container_);
+    ex->addWidget(elevation_lock_);
 
-    selftest_content_ = new QWidget(content);
-    selftest_layout_ = new QVBoxLayout(selftest_content_);
-    selftest_layout_->setContentsMargins(0, 0, 0, 0);
-    selftest_layout_->setSpacing(M::kSpaceSm);
+    layout->addWidget(expert_container_);
 
-    auto* selftest_action_row = new QHBoxLayout();
-    selftest_action_row->setSpacing(M::kSpaceMd);
-    selftest_status_label_ = new QLabel(QStringLiteral("Status: Not run"), selftest_content_);
-    selftest_status_label_->setProperty("labelRole", "body");
-    selftest_run_btn_ = new QPushButton(QStringLiteral("Run Self-Test"), selftest_content_);
-    selftest_run_btn_->setProperty("role", "ghost");
-    selftest_run_btn_->setMaximumWidth(200);
-    selftest_action_row->addWidget(selftest_status_label_, 1);
-    selftest_action_row->addWidget(selftest_run_btn_, 0);
-    selftest_layout_->addLayout(selftest_action_row); // item 0
-
-    selftest_layout_->addWidget( // item 1
-        makeSubLabel(QStringLiteral("Run a system check or click Run Self-Test."), selftest_content_));
-
-    layout->addWidget(selftest_content_);
-
-    // ── F: Logs redirect ───────────────────────────────────────────────────────
+    // ── Logs redirect (shared, subtle, bottom) ──────────────────────────────────
     auto* logs_card = makePanel(content);
     logs_card->setProperty("panelRole", "note");
     auto* ll = new QHBoxLayout(logs_card);
@@ -342,7 +409,7 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
 
     layout->addStretch();
 
-    content->setMaximumWidth(1320);
+    content->setMaximumWidth(920);
     {
         auto* centering_host = new QWidget();
         auto* ch = new QHBoxLayout(centering_host);
@@ -358,10 +425,57 @@ DiagnosticsPage::DiagnosticsPage(QWidget* parent) : QWidget(parent) {
     connect(export_report_btn_, &QPushButton::clicked, this, &DiagnosticsPage::onExportReport);
     connect(selftest_run_btn_, &QPushButton::clicked, this, &DiagnosticsPage::onRunCheck);
     connect(go_logs_btn, &QPushButton::clicked, this, &DiagnosticsPage::navigateToLogsRequested);
+    connect(expert_toggle_, &QAbstractButton::toggled, this, [this](bool on) {
+        if (expert_mode_enabled_ == on)
+            return;
+        expert_mode_enabled_ = on;
+        applyExpertVisibility();
+        emit expertModeChanged(on);
+    });
 
-    // Seed the pipeline with honest "run a check" placeholders (no fake metrics).
+    // Seed static state.
+    refreshReadinessTiles(0, 0, 0);
     refreshPipeline();
+    applyExpertVisibility();
 }
+
+// ── Expert mode (single global state) ───────────────────────────────────────────
+
+void DiagnosticsPage::setExpertModeEnabled(bool enabled) {
+    if (expert_mode_enabled_ == enabled)
+        return;
+    expert_mode_enabled_ = enabled;
+    if (expert_toggle_) {
+        const QSignalBlocker b(expert_toggle_);
+        expert_toggle_->setOn(enabled);
+    }
+    applyExpertVisibility();
+    // No emit: external sync from MainWindow/ConfigPage — the toggle path emits.
+}
+
+bool DiagnosticsPage::isExpertModeEnabled() const noexcept {
+    return expert_mode_enabled_;
+}
+
+void DiagnosticsPage::applyExpertVisibility() {
+    if (expert_container_)
+        expert_container_->setVisible(expert_mode_enabled_);
+    if (export_report_btn_)
+        export_report_btn_->setVisible(expert_mode_enabled_);
+    // suite-diag2.jsx: tips are bundled (collapsed) in Simple, listed open in Expert.
+    if (tip_chip_)
+        tip_chip_->setDefaultOpen(expert_mode_enabled_);
+    if (mode_caption_)
+        mode_caption_->setText(expert_mode_enabled_ ? QStringLiteral("\xc2\xb7 Expert \xe2\x80\x94 full taxonomy")
+                                                    : QStringLiteral("\xc2\xb7 Simple"));
+    if (expert_mode_label_) {
+        expert_mode_label_->setProperty("expertOn", expert_mode_enabled_);
+        expert_mode_label_->style()->unpolish(expert_mode_label_);
+        expert_mode_label_->style()->polish(expert_mode_label_);
+    }
+}
+
+// ── Data injection ──────────────────────────────────────────────────────────────
 
 void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, const OutputSettingsModel& output,
                                         const VideoSettingsModel& video, const capability::AudioUiState& audio,
@@ -374,16 +488,10 @@ void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, c
     hotkeys_ok_ = hotkeys_ok;
     output_folder_ = output.output_folder;
 
-    // Query free space on the output drive so rec.005 / rec.007 actually fire.
-    // The Win32 provider returns 0 on failure, which suppresses the checks (safe
-    // default; better than a false positive when the path is not yet reachable).
     {
         diagnostics::Win32DiskSpaceProvider provider;
         output_drive_free_bytes_ = provider.FreeBytesForPath(output_folder_);
     }
-
-    // Query the filesystem name so rec.008 (FAT32 limit) fires when appropriate.
-    // An empty string suppresses the check — safe default on failure.
     {
         diagnostics::Win32FilesystemProvider provider;
         output_filesystem_name_ = provider.FilesystemNameForPath(output_folder_);
@@ -399,16 +507,9 @@ void DiagnosticsPage::setDiagnosticData(const capability::CapabilitySet& caps, c
 
     refreshOverview();
     refreshSelfTest();
-    refreshCapabilities();
     refreshConfiguration();
     refreshPipeline();
 
-    // refreshPipeline() above resets the CAPTURE PIPELINE cards to their static readiness
-    // state. If a live recording snapshot is active, re-apply the live card state directly
-    // (bypassing the 2 Hz throttle in updatePipelineCards) so a static refresh — e.g. the
-    // QTimer::singleShot(0) bootstrap refreshDiagnosticsData() in MainWindow, or any other
-    // setDiagnosticData() call mid-recording — can never leave the cards showing stale
-    // static status while the recording is live.
     const bool live_recording =
         last_live_snapshot_.valid && (last_live_snapshot_.lifecycle == recorder_core::DiagnosticsLifecycle::Recording ||
                                       last_live_snapshot_.lifecycle == recorder_core::DiagnosticsLifecycle::Paused);
@@ -426,13 +527,8 @@ void DiagnosticsPage::setDpcProvider(diagnostics::DpcLatencyProvider* provider) 
 }
 
 void DiagnosticsPage::applyLiveDiagnostics(const recorder_core::RecordingDiagnosticsSnapshot& snapshot) {
-    // Copy first, then overlay present-mode data so both the panel and the next
-    // RecommendationEngine run (refreshOverview) see the augmented snapshot.
     last_live_snapshot_ = snapshot;
 
-    // PresentMon present-mode overlay (ADR 0033). Mirrors the disk/fs provider
-    // pattern: the engine leaves these Unavailable; we fill them from the injected
-    // provider (elevation + opt-in + ETW session gated). Null → Unavailable (em-dash).
     if (present_provider_ != nullptr) {
         const diagnostics::PresentSample ps = present_provider_->Sample();
         if (ps.available) {
@@ -457,13 +553,11 @@ void DiagnosticsPage::updatePipelineCards(const recorder_core::RecordingDiagnost
     const bool recording = s.valid && (s.lifecycle == recorder_core::DiagnosticsLifecycle::Recording ||
                                        s.lifecycle == recorder_core::DiagnosticsLifecycle::Paused);
     if (!recording) {
-        // Idle / stopping / completed → restore the static readiness cards.
         refreshPipeline();
         last_cards_applied_ = {};
         return;
     }
 
-    // 2 Hz throttle (0.5 s), independent of the LIVE PIPELINE panel cadence.
     const auto now = std::chrono::steady_clock::now();
     if (last_cards_applied_ != std::chrono::steady_clock::time_point{} &&
         (now - last_cards_applied_) < std::chrono::milliseconds(500)) {
@@ -487,23 +581,18 @@ void DiagnosticsPage::renderPipelineCards(const recorder_core::RecordingDiagnost
     const QString dash = QString::fromUtf8("\xE2\x80\x94");
     const double budget_ms = (s.capture.target_fps > 0.0) ? 1000.0 / s.capture.target_fps : (1000.0 / 60.0);
 
-    // Drop delta over the publish interval (problem drops only; coalesce is benign).
-    // Compute problem_drops FIRST so that on a generation change we can seed
-    // cards_last_problem_drops_ to the current cumulative value — making the first
-    // delta 0 and preventing a warm-up false-positive "Over" on the Source Capture card.
     const uint64_t problem_drops = s.capture.frames_dropped_cfr + s.capture.frames_dropped_backpressure;
     if (s.session_generation != cards_last_generation_) {
         cards_last_generation_ = s.session_generation;
-        cards_last_problem_drops_ = problem_drops; // seed so first delta is 0
+        cards_last_problem_drops_ = problem_drops;
     }
     const uint32_t capture_recent_drops = (problem_drops > cards_last_problem_drops_)
                                               ? static_cast<uint32_t>(problem_drops - cards_last_problem_drops_)
                                               : 0;
     cards_last_problem_drops_ = problem_drops;
 
-    // ---- Build per-stage signals (distilled from the snapshot) ----
-    constexpr uint32_t kQueueBusyDepth = 8; // mirrors DiagnosticsThresholds::mux_queue_warn
-    constexpr double kDiskBudgetMs = 8.0;   // mirrors DiagnosticsThresholds::disk_write_ms_warn
+    constexpr uint32_t kQueueBusyDepth = 8;
+    constexpr double kDiskBudgetMs = 8.0;
 
     StageSignals capture{};
     capture.id = StageId::SourceCapture;
@@ -534,12 +623,6 @@ void DiagnosticsPage::renderPipelineCards(const recorder_core::RecordingDiagnost
     enc.is_duration_stage = true;
     enc.can_bottleneck = true;
     enc.avg_ms = s.video_encoder.average_ms;
-    // backlog = frames_submitted − encoded_packets = NVENC lookahead/B-frame/async fill
-    // depth, which is naturally ≥2 in healthy AV1/NVENC steady state. Treating backlog
-    // as a shedding proxy causes a perpetual false "Over" on every healthy recording.
-    // The genuine encoder bottleneck signal is the submit→ready latency exceeding the
-    // frame budget, already captured by the duration path (is_duration_stage=true,
-    // avg_ms > budget_ms → Bottleneck). enc.recent_drops stays 0 (default).
 
     StageSignals mux{};
     mux.id = StageId::Muxer;
@@ -579,7 +662,6 @@ void DiagnosticsPage::renderPipelineCards(const recorder_core::RecordingDiagnost
 
     auto ms = [&](double v, bool avail) { return avail ? QString::number(v, 'f', 1) + QStringLiteral(" ms") : dash; };
 
-    // ---- Card 0: Source Capture ----
     const bool cap_num = s.capture.target_fps > 0.0;
     const QString cap_number = cap_num ? QString::number(s.capture.actual_fps, 'f', 1) + QStringLiteral(" / ") +
                                              QString::number(s.capture.target_fps, 'f', 1) + QStringLiteral(" fps")
@@ -591,7 +673,6 @@ void DiagnosticsPage::renderPipelineCards(const recorder_core::RecordingDiagnost
     pipeline_flow_->setStepLive(0, to_status(health_of(StageId::SourceCapture)), QString(), QStringLiteral("CPU"),
                                 cap_number, cap_tip);
 
-    // ---- Card 1: Frame Queue ----
     const QString q_number = s.video_queue.bounded && s.video_queue.capacity > 0
                                  ? QString::number(s.video_queue.current_depth) + QStringLiteral(" / ") +
                                        QString::number(s.video_queue.capacity)
@@ -600,40 +681,30 @@ void DiagnosticsPage::renderPipelineCards(const recorder_core::RecordingDiagnost
                                 QStringLiteral("Frames waiting between encode and mux (peak ") +
                                     QString::number(s.video_queue.peak_depth) + QStringLiteral(")"));
 
-    // ---- Card 2: Compositor ----
     const QString comp_tip = QStringLiteral("CPU submit (GPU execution time not measured in this view). VPBlt ") +
                              ((s.compositor.vpblt_availability == MetricAvailability::Available)
                                   ? QString::number(s.compositor.vpblt_average_ms, 'f', 2) + QStringLiteral(" ms")
                                   : dash);
-    // Gate the displayed number on the VALUE's own availability (> 0.0), not just the
-    // stage's resolver availability — avoids "0.0 ms" when the stage is alive but has
-    // no sample yet. comp.available (= s.compositor.active) is kept for the resolver.
     pipeline_flow_->setStepLive(2, to_status(health_of(StageId::Compositor)), QString(), QStringLiteral("GPU"),
                                 ms(s.compositor.average_ms, s.compositor.average_ms > 0.0), comp_tip);
 
-    // ---- Card 3: Encoder ----
-    // Gate the displayed number on average_ms > 0.0 (value has been sampled), not on
-    // enc.available (which can be true as soon as frames_encoded > 0 with avg still 0.0).
-    // enc.available is kept for the resolver (health classification still sees the stage live).
     pipeline_flow_->setStepLive(3, to_status(health_of(StageId::Encoder)), QString(), QStringLiteral("GPU (NVENC)"),
                                 ms(s.video_encoder.average_ms, s.video_encoder.average_ms > 0.0),
                                 QStringLiteral("CPU submit\xe2\x86\x92ready latency (peak ") +
                                     QString::number(s.video_encoder.peak_ms, 'f', 1) + QStringLiteral(" ms)"));
 
-    // ---- Card 4: Muxer ----
     pipeline_flow_->setStepLive(4, to_status(health_of(StageId::Muxer)), QString(), QStringLiteral("CPU"),
                                 ms(s.mux.process_average_ms, mux.available),
                                 QStringLiteral("Mux drain processing (peak ") +
                                     QString::number(s.mux.process_peak_ms, 'f', 2) + QStringLiteral(" ms)"));
 
-    // ---- Card 5: Disk ----
     pipeline_flow_->setStepLive(5, to_status(health_of(StageId::Disk)), QString(), QStringLiteral("CPU"),
                                 ms(s.disk.average_write_ms, disk.available),
                                 QStringLiteral("Filesystem write-call latency (peak ") +
                                     QString::number(s.disk.peak_write_ms, 'f', 1) + QStringLiteral(" ms)"));
 }
 
-// --- Helpers ---
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 QLabel* DiagnosticsPage::makeSubLabel(const QString& text, QWidget* parent) {
     auto* l = new QLabel(text, parent);
@@ -648,6 +719,39 @@ QFrame* DiagnosticsPage::makePanel(QWidget* parent) {
     return panel;
 }
 
+QFrame* DiagnosticsPage::makeReadinessTile(const QString& object_name, const QString& title, QLabel*& out_value,
+                                           QLabel*& out_sub, QLabel*& out_icon) {
+    auto* tile = new QFrame();
+    tile->setObjectName(object_name);
+    tile->setProperty("panelRole", "readinessTile");
+    tile->setProperty("tileTone", "neutral");
+    auto* tlay = new QVBoxLayout(tile);
+    tlay->setContentsMargins(M::kSpaceLg, M::kSpaceMd, M::kSpaceLg, M::kSpaceMd);
+    tlay->setSpacing(M::kSpaceXs);
+
+    auto* top = new QHBoxLayout();
+    top->setSpacing(M::kSpaceSm);
+    auto* title_label = new QLabel(title.toUpper(), tile);
+    title_label->setProperty("labelRole", "readinessTileTitle");
+    top->addWidget(title_label, 1);
+    out_icon = new QLabel(tile);
+    out_icon->setFixedSize(14, 14);
+    out_icon->setVisible(false);
+    top->addWidget(out_icon, 0, Qt::AlignVCenter);
+    tlay->addLayout(top);
+
+    out_value = new QLabel(QString::fromUtf8("\xe2\x80\x94"), tile);
+    out_value->setProperty("labelRole", "readinessTileValue");
+    tlay->addWidget(out_value);
+
+    out_sub = new QLabel(QString(), tile);
+    out_sub->setProperty("labelRole", "readinessTileSub");
+    out_sub->setWordWrap(true);
+    tlay->addWidget(out_sub);
+
+    return tile;
+}
+
 QWidget* DiagnosticsPage::makeCollapsibleSection(const QString& title, const QString& subtitle, QWidget* parent,
                                                  QToolButton*& out_toggle) {
     auto* wrap = new QWidget(parent);
@@ -657,12 +761,18 @@ QWidget* DiagnosticsPage::makeCollapsibleSection(const QString& title, const QSt
 
     auto* toggle = new QToolButton(wrap);
     toggle->setProperty("role", "collapseHead");
-    toggle->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     toggle->setCheckable(true);
     toggle->setChecked(false);
     toggle->setCursor(Qt::PointingHandCursor);
     toggle->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    toggle->setText(collapseGlyph(false) + title);
+    // Escape '&' so QToolButton doesn't eat it as a mnemonic ("A & B" → "A B" w/ shortcut).
+    QString safe_title = title;
+    safe_title.replace(QLatin1Char('&'), QLatin1String("&&"));
+    toggle->setText(safe_title);
+    const qreal dpr = toggle->devicePixelRatioF();
+    toggle->setIcon(
+        QIcon(ui::theme::lucidePixmap(QStringLiteral("chevron-right"), QString::fromUtf8(Pal::kText2), 14, dpr)));
     wl->addWidget(toggle);
 
     auto* body = new QWidget(wrap);
@@ -671,7 +781,6 @@ QWidget* DiagnosticsPage::makeCollapsibleSection(const QString& title, const QSt
     body_layout->setContentsMargins(M::kSpaceXs, M::kSpaceSm, M::kSpaceXs, M::kSpaceSm);
     body_layout->setSpacing(M::kSpaceXs);
 
-    // #14: subtitle goes inside the collapsible body, not outside it.
     if (!subtitle.trimmed().isEmpty()) {
         auto* sub = new QLabel(subtitle, body);
         sub->setProperty("labelRole", "collapseSub");
@@ -683,8 +792,10 @@ QWidget* DiagnosticsPage::makeCollapsibleSection(const QString& title, const QSt
 
     connect(toggle, &QToolButton::toggled, this, [toggle, body](bool on) {
         body->setVisible(on);
-        // Preserve the label (incl. any count suffix); only flip the 3-char glyph prefix.
-        toggle->setText(collapseGlyph(on) + toggle->text().mid(3));
+        const qreal dpr = toggle->devicePixelRatioF();
+        toggle->setIcon(
+            QIcon(ui::theme::lucidePixmap(on ? QStringLiteral("chevron-down") : QStringLiteral("chevron-right"),
+                                          QString::fromUtf8(Pal::kText2), 14, dpr)));
     });
 
     out_toggle = toggle;
@@ -734,11 +845,6 @@ void DiagnosticsPage::setReadinessState(const QString& state) {
         w->style()->unpolish(w);
         w->style()->polish(w);
     };
-    // v10 verdict mapping:
-    //   clear  → banner neutral (no stateRole), pill green ("ready")
-    //   issues → banner amber ("warn"),         pill amber ("warn")
-    //   blocked → banner red ("blocked"),       pill red ("blocked")
-    // "ready" must NOT tint the banner — the banner stays neutral in all-clear state.
     const bool panel_tinted = state == QStringLiteral("warn") || state == QStringLiteral("blocked");
     const bool pill_tinted =
         state == QStringLiteral("ready") || state == QStringLiteral("warn") || state == QStringLiteral("blocked");
@@ -750,11 +856,7 @@ void DiagnosticsPage::setReadinessState(const QString& state) {
         status_pill_->setProperty("stateRole", pill_tinted ? QVariant(state) : QVariant());
         repolish(status_pill_);
     }
-    // Leading state icon: check-circle (ready) / alert-triangle (warn) / x-circle
-    // (blocked), tinted from the canonical semantic palette tokens. checking/neutral
-    // show no icon.
     if (readiness_icon_) {
-        using Pal = ui::theme::ExoSnapPalette;
         QString icon_name;
         QString icon_color;
         if (state == QStringLiteral("ready")) {
@@ -798,48 +900,10 @@ void DiagnosticsPage::onRunCheck() {
 }
 
 void DiagnosticsPage::onExportReport() {
-    // Disabled/planned: report export is not wired yet (button stays disabled).
+    // Disabled/planned: report export is not wired yet.
 }
 
-// --- Capabilities refresh ---
-
-void DiagnosticsPage::refreshCapabilities() {
-    if (!capabilities_layout_ || !capabilities_content_ || !data_ready_)
-        return;
-
-    QLayoutItem* child = nullptr;
-    while ((child = capabilities_layout_->takeAt(0)) != nullptr) {
-        delete child->widget();
-        delete child;
-    }
-
-    auto* header_row = new QWidget(capabilities_content_);
-    auto* header_layout = new QHBoxLayout(header_row);
-    header_layout->setContentsMargins(M::kSpaceSm, 0, M::kSpaceSm, 0);
-    header_layout->setSpacing(M::kSpaceMd);
-    auto* h1 = makeTableHeader(QStringLiteral("Feature"), header_row);
-    h1->setMinimumWidth(180);
-    auto* h2 = makeTableHeader(QStringLiteral("Detected Value"), header_row);
-    auto* h3 = makeTableHeader(QStringLiteral("Status"), header_row);
-    header_layout->addWidget(h1);
-    header_layout->addWidget(h2, 1);
-    header_layout->addWidget(h3);
-    capabilities_layout_->addWidget(header_row);
-    capabilities_layout_->addWidget(makeHorizontalRule(capabilities_content_));
-
-    bool first = true;
-    for (const auto& entry : cap_summary_.entries) {
-        capabilities_layout_->addWidget(
-            makeInfoRow(QString::fromStdString(entry.label), QString::fromStdString(entry.value),
-                        QString::fromStdString(entry.status), capabilities_content_, first));
-        first = false;
-    }
-
-    if (capabilities_header_)
-        capabilities_header_->setMeta(QStringLiteral("%1 checks").arg(cap_summary_.entries.size()));
-}
-
-// --- Configuration refresh ---
+// ── Configuration refresh (Expert reference table) ──────────────────────────────
 
 void DiagnosticsPage::refreshConfiguration() {
     if (!config_layout_ || !config_content_ || !data_ready_)
@@ -869,18 +933,14 @@ void DiagnosticsPage::refreshConfiguration() {
                                               QString(), config_content_, first));
         first = false;
     }
-
-    if (config_toggle_)
-        config_toggle_->setText(collapseGlyph(config_toggle_->isChecked()) + QStringLiteral("Active configuration"));
 }
 
-// --- Self-Test refresh ---
+// ── Self-Test refresh (Expert · Pre-flight) ─────────────────────────────────────
 
 void DiagnosticsPage::refreshSelfTest() {
     if (!selftest_layout_ || !selftest_content_)
         return;
 
-    // Preserve the first two items (action row, hint); remove dynamic result rows.
     while (selftest_layout_->count() > 2) {
         QLayoutItem* child = selftest_layout_->takeAt(selftest_layout_->count() - 1);
         if (child->widget())
@@ -891,7 +951,6 @@ void DiagnosticsPage::refreshSelfTest() {
     diagnostics::SelfTestRunner runner;
     auto checklist = runner.Run();
 
-    // Detect whether all non-passing results are scaffold probes not yet implemented.
     bool all_not_executed = true;
     for (const auto& r : checklist.results) {
         if (r.severity != diagnostics::DiagnosticSeverity::Pass &&
@@ -945,10 +1004,9 @@ void DiagnosticsPage::refreshSelfTest() {
     }
 }
 
-// --- Top Issues ---
+// ── Worst-first cards + Tier-3 tip bundle ───────────────────────────────────────
 
-void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations, int total_notices,
-                                       int total_blockers) {
+void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& recommendations) {
     if (!overview_issues_layout_)
         return;
 
@@ -1035,6 +1093,7 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
         ++issue_count;
     };
 
+    // Tier-1 blockers first: profile invalidity, then engine blockers.
     if (!profile_validation_.succeeded) {
         for (const auto& invalid : profile_validation_.invalidity) {
             const QString field_display = QString::fromStdString(diagnostics::InvalidFieldDisplayName(invalid.field));
@@ -1071,51 +1130,130 @@ void DiagnosticsPage::refreshTopIssues(const diagnostics::DiagnosticChecklist& r
                        QStringLiteral("If the app just launched, this can clear once startup completes."));
     }
 
+    // Tier-2 measured/environment notices become cards; Tier-3 optimisations bundle
+    // into the quiet tip chip.
+    QVector<ui::widgets::TipChip::Tip> tips;
     for (const auto& result : ordered_recommendations) {
-        if (result.severity == diagnostics::DiagnosticSeverity::Blocker)
+        if (result.severity != diagnostics::DiagnosticSeverity::Notice)
             continue;
+        if (isOptimisationTip(result.id)) {
+            ui::widgets::TipChip::Tip tip;
+            tip.id = QString::fromStdString(result.id);
+            tip.summary = QString::fromStdString(result.title);
+            if (result.fix_action.has_value()) {
+                const auto& fa = result.fix_action.value();
+                tip.fix_label = QString::fromStdString(fa.label);
+                tip.fix_kind = fixKind(fa);
+                tip.fix_id = QString::fromStdString(fa.id);
+                tip.changes = QString::fromStdString(fa.changes_summary);
+            }
+            tips.push_back(tip);
+            continue;
+        }
         add_issue_card(result.severity, QString::fromStdString(result.title), QString::fromStdString(result.summary),
                        QString::fromStdString(result.recommendation), QString::fromStdString(result.detail),
                        result.fix_action.has_value() ? &result.fix_action.value() : nullptr);
     }
 
-    if (issue_count == 0) {
-        if (total_blockers == 0 && total_notices > 0) {
-            overview_issues_layout_->addWidget(makeSubLabel(
-                QStringLiteral("No blockers. %1 informational notice(s) are listed in the capability matrix below "
-                               "and do not block the active recording configuration.")
-                    .arg(total_notices),
-                issues_parent_));
-        } else {
-            overview_issues_layout_->addWidget(
-                makeSubLabel(QStringLiteral("No blockers or notices detected in the active recording configuration."),
-                             issues_parent_));
-        }
+    if (tip_chip_)
+        tip_chip_->setTips(tips);
+
+    // Calm by design: no empty-state text when clean — the verdict + tiles carry it.
+    issues_parent_->setVisible(issue_count > 0);
+}
+
+// ── Readiness tiles ─────────────────────────────────────────────────────────────
+
+void DiagnosticsPage::refreshReadinessTiles(int blockers, int notices, int cap_passes) {
+    const QString dash = QString::fromUtf8("\xe2\x80\x94");
+
+    const auto setTone = [](QFrame* tile, const char* tone) {
+        if (!tile)
+            return;
+        tile->setProperty("tileTone", tone);
+        tile->style()->unpolish(tile);
+        tile->style()->polish(tile);
+    };
+
+    // Tile 1 — Readiness.
+    const int total = cap_passes + blockers + notices;
+    if (blockers > 0) {
+        readiness_tile_value_->setText(QStringLiteral("Action needed"));
+        readiness_tile_sub_->setText(blockers == 1
+                                         ? QStringLiteral("1 blocker \xc2\xb7 recording is blocked")
+                                         : QStringLiteral("%1 blockers \xc2\xb7 recording is blocked").arg(blockers));
+        readiness_tile_icon_->setVisible(false);
+        setTone(readiness_tile_, "blocker");
+    } else if (notices > 0) {
+        readiness_tile_value_->setText(QStringLiteral("%1 / %2").arg(cap_passes).arg(total));
+        readiness_tile_sub_->setText(notices == 1 ? QStringLiteral("checks pass \xc2\xb7 1 issue")
+                                                  : QStringLiteral("checks pass \xc2\xb7 %1 issues").arg(notices));
+        readiness_tile_icon_->setVisible(false);
+        setTone(readiness_tile_, "notice");
+    } else if (data_ready_) {
+        readiness_tile_value_->setText(QStringLiteral("%1 / %2").arg(cap_passes).arg(total));
+        readiness_tile_sub_->setText(QStringLiteral("checks passed"));
+        readiness_tile_icon_->setPixmap(ui::theme::lucidePixmap(QStringLiteral("check-circle"),
+                                                                QString::fromUtf8(Pal::kOk), 14,
+                                                                readiness_tile_icon_->devicePixelRatioF()));
+        readiness_tile_icon_->setVisible(true);
+        setTone(readiness_tile_, "pass");
+    } else {
+        readiness_tile_value_->setText(dash);
+        readiness_tile_sub_->setText(QStringLiteral("run a check"));
+        readiness_tile_icon_->setVisible(false);
+        setTone(readiness_tile_, "neutral");
+    }
+
+    // Tile 2 — Encoder (active codec + container; honest config facts).
+    if (data_ready_) {
+        encoder_tile_value_->setText(
+            QString::fromStdString(diagnostics::VideoCodecDisplayName(active_user_config_.video_codec)));
+        encoder_tile_sub_->setText(
+            QString::fromStdString(diagnostics::AudioCodecDisplayName(active_user_config_.audio_codec)) +
+            QStringLiteral(" \xc2\xb7 ") +
+            QString::fromStdString(diagnostics::ContainerDisplayName(active_user_config_.container)));
+    } else {
+        encoder_tile_value_->setText(dash);
+        encoder_tile_sub_->setText(QStringLiteral("active codec"));
+    }
+
+    // Tile 3 — Disk (free space on the output drive).
+    if (data_ready_ && output_drive_free_bytes_ > 0) {
+        disk_tile_value_->setText(humanBytes(output_drive_free_bytes_));
+        QString drive = QString::fromStdString(output_folder_.root_name().string());
+        if (drive.isEmpty())
+            drive = QString::fromStdString(output_folder_.string());
+        disk_tile_sub_->setText(drive.isEmpty() ? QStringLiteral("free \xc2\xb7 output drive")
+                                                : QStringLiteral("free \xc2\xb7 %1").arg(drive));
+    } else {
+        disk_tile_value_->setText(dash);
+        disk_tile_sub_->setText(QStringLiteral("output drive"));
+    }
+
+    // Tile 4 — Display (current screen resolution + refresh; honest static fact).
+    if (QScreen* screen = QGuiApplication::primaryScreen()) {
+        const QSize px = screen->size();
+        display_tile_value_->setText(QStringLiteral("%1 \xc3\x97 %2").arg(px.width()).arg(px.height()));
+        display_tile_sub_->setText(
+            QStringLiteral("%1 Hz \xc2\xb7 primary display").arg(QString::number(std::lround(screen->refreshRate()))));
+    } else {
+        display_tile_value_->setText(dash);
+        display_tile_sub_->setText(QStringLiteral("display"));
     }
 }
 
-// --- Overview refresh ---
+// ── Overview refresh ────────────────────────────────────────────────────────────
 
 void DiagnosticsPage::refreshOverview() {
     if (!data_ready_)
         return;
 
-    // The static refresh/FPS-mismatch heuristic needs the CAPTURE-TARGET monitor's
-    // refresh, not the UI screen — pulling screen()->refreshRate() here is both
-    // non-deterministic (test-machine dependent) and semantically wrong. Until the
-    // capture-target refresh is threaded through setDiagnosticData, the static arm
-    // stays inert (its pre-existing state). The live present-jitter arm below is the
-    // real, target-accurate judder detector and needs no monitor refresh.
-    // TODO(v0.8.0 follow-up): thread the capture-target monitor refresh into setDiagnosticData.
     const uint32_t monitor_refresh_hz = 0;
 
-    // Feed the latest valid live snapshot so the engine can correlate measured present-pacing
-    // (VRR/CFR judder) with the refresh/FPS recommendation. The snapshot already carries the
-    // present-mode overlay applied in applyLiveDiagnostics.
     const recorder_core::RecordingDiagnosticsSnapshot* live =
         last_live_snapshot_.valid ? &last_live_snapshot_ : nullptr;
 
-    // Present-mode sample for rec.009 / exclusive-fullscreen correlation (ADR 0033).
     const diagnostics::PresentSample* present_ptr = nullptr;
     diagnostics::PresentSample present_sample;
     if (present_provider_ != nullptr) {
@@ -1128,77 +1266,54 @@ void DiagnosticsPage::refreshOverview() {
     diagnostics::RecommendationEngine engine(caps_, active_user_config_, monitor_refresh_hz, output_drive_free_bytes_,
                                              profile_validation_.succeeded, output_filesystem_name_, live, present_ptr);
 
-    // Kernel DPC/ISR latency feed for rec.dpc.latency (ADR 0033). Sampled live from the
-    // borrowed provider; Unavailable (default reading) when not elevated / opt-in off,
-    // which keeps the check inert. Mirrors the present-provider sampling above.
     if (dpc_provider_ != nullptr) {
         engine.SetDpcLatency(dpc_provider_->Read());
     }
 
-    // Output-folder writability: run the same probe the Disk pipeline card uses, but feed
-    // the result into the engine so a non-writable folder is counted as a blocker in the
-    // verdict header (red container) instead of only appearing on the Disk card.
     engine.SetOutputPathWritable(diagnostics::SelfTestRunner::CheckOutputPathWritable(settings_path_).passed);
 
     auto recs = engine.Generate();
 
-    // Verdict counts come ONLY from the RecommendationEngine (real diagnosed issues).
-    // The capability matrix (cap_summary_) is informational only — unavailable /
-    // not-implemented entries are feature facts, not diagnostic issues.  Un-instrumented
-    // pipeline stages (Source Capture, Frame Queue, Compositor) appear in the "Not
-    // measured" tile and never trigger amber coloring.
-    //
-    // Profile-validation invalidity cards are rendered in the Recommendations section
-    // by refreshTopIssues; the corresponding rec.006 / rec.003 / rec.004 entries in
-    // recs.results capture the same conditions, so no double-counting is needed here.
-    //
-    // v10 suite-diag.jsx: amber appears only for actually-diagnosed problems (dropped
-    // frames, slow disk); red only when something blocks recording.
-    int blockers = 0, notices = 0;
+    // Honesty rail: the verdict counts ONLY Tier-1 blockers and Tier-2 measured /
+    // environment problems. Tier-3 optimisation tips ("better, but it runs" — bundled
+    // into the quiet tip chip by refreshTopIssues) must never turn the verdict amber
+    // or promise cards that don't exist (suite-diag2.jsx 'ready': tips + READY).
+    int blockers = 0, tier2_notices = 0;
     for (const auto& r : recs.results) {
         switch (r.severity) {
         case diagnostics::DiagnosticSeverity::Blocker:
             ++blockers;
             break;
         case diagnostics::DiagnosticSeverity::Notice:
-            ++notices;
+            if (!isOptimisationTip(r.id))
+                ++tier2_notices;
             break;
         case diagnostics::DiagnosticSeverity::Pass:
             break;
         }
     }
 
-    // Cap-summary passes: capability entries that are positively available.
     int cap_passes = 0;
     for (const auto& r : cap_summary_.entries) {
         if (r.available)
             ++cap_passes;
     }
 
-    // Planned (un-instrumented) pipeline stages — always 3 in the current pipeline
-    // (Source Capture, Frame Queue, Compositor). Shown in the middle tile as neutral.
-    constexpr int kPlannedStages = 3;
-
-    // v10 verdict:
-    //   blocked  → red  "CAN'T RECORD · N BLOCKER(S)"
-    //   issues   → amber "ATTENTION · N ISSUE(S)"
-    //   clear    → green READY pill, neutral banner
     if (blockers > 0) {
         const QString blocker_word = (blockers == 1) ? QStringLiteral("BLOCKER") : QStringLiteral("BLOCKERS");
         status_pill_->setText(QStringLiteral("CAN'T RECORD \xc2\xb7 %1 %2").arg(blockers).arg(blocker_word));
         setReadinessState(QStringLiteral("blocked"));
         const QString bw = (blockers == 1) ? QStringLiteral("blocker") : QStringLiteral("blockers");
-        summary_label_->setText(QStringLiteral("%1 %2 must be resolved before recording. See Recommendations below.")
-                                    .arg(blockers)
-                                    .arg(bw));
-    } else if (notices > 0) {
-        const QString issue_word = (notices == 1) ? QStringLiteral("ISSUE") : QStringLiteral("ISSUES");
-        status_pill_->setText(QStringLiteral("ATTENTION \xc2\xb7 %1 %2").arg(notices).arg(issue_word));
-        setReadinessState(QStringLiteral("warn"));
-        const QString iw = (notices == 1) ? QStringLiteral("issue") : QStringLiteral("issues");
         summary_label_->setText(
-            QStringLiteral("You can record, but %1 %2 could affect the result. See Recommendations below.")
-                .arg(notices)
+            QStringLiteral("%1 %2 must be resolved before recording. See the cards below.").arg(blockers).arg(bw));
+    } else if (tier2_notices > 0) {
+        const QString issue_word = (tier2_notices == 1) ? QStringLiteral("ISSUE") : QStringLiteral("ISSUES");
+        status_pill_->setText(QStringLiteral("ATTENTION \xc2\xb7 %1 %2").arg(tier2_notices).arg(issue_word));
+        setReadinessState(QStringLiteral("warn"));
+        const QString iw = (tier2_notices == 1) ? QStringLiteral("issue") : QStringLiteral("issues");
+        summary_label_->setText(
+            QStringLiteral("You can record, but %1 %2 could affect the result. See the cards below.")
+                .arg(tier2_notices)
                 .arg(iw));
     } else {
         status_pill_->setText(QStringLiteral("READY"));
@@ -1209,75 +1324,18 @@ void DiagnosticsPage::refreshOverview() {
     last_check_label_->setText(QStringLiteral("Last check: %1")
                                    .arg(QDateTime::currentDateTime().toString(QStringLiteral("dd MMM yyyy, hh:mm"))));
 
-    // Stat tiles:
-    //   Left  (blocker): count of real blockers — red when > 0, neutral when 0.
-    //   Middle:
-    //     clear   → "Not measured" (planned stages), neutral (zero tone).
-    //     issues/blocked → "Issues", count of rec notices, amber when > 0.
-    //   Right (pass): capability availability passes — always green-tinted.
-    blocker_count_->setText(QString::number(blockers));
-    pass_count_->setText(QString::number(cap_passes));
-
-    // #04: Tint tiles conditionally — count==0 or neutral → zero tone (no alarm colour).
-    const auto setTileActive = [](QFrame* tile, QLabel* num, const char* active_tone, bool active,
-                                  const QString* label_override = nullptr) {
-        if (!tile || !num)
-            return;
-        const QString tone = active ? QString::fromLatin1(active_tone) : QStringLiteral("zero");
-        tile->setProperty("statTone", tone);
-        num->setProperty("statTone", tone);
-        // Also update the sibling statTileLabel so it dims/tints correctly.
-        for (auto* lbl : tile->findChildren<QLabel*>()) {
-            if (lbl->property("labelRole").toString() == QLatin1String("statTileLabel")) {
-                lbl->setProperty("statTone", tone);
-                if (label_override)
-                    lbl->setText(*label_override);
-                lbl->style()->unpolish(lbl);
-                lbl->style()->polish(lbl);
-                lbl->update();
-            }
-        }
-        tile->style()->unpolish(tile);
-        tile->style()->polish(tile);
-        num->style()->unpolish(num);
-        num->style()->polish(num);
-        tile->update();
-        num->update();
-    };
-
-    setTileActive(blocker_tile_, blocker_count_, "blocker", blockers > 0);
-
-    // Middle tile: "Not measured" (neutral) in clear state; "Issues" (amber) otherwise.
-    if (blockers == 0 && notices == 0) {
-        // All-clear: show planned-stage count, neutral tone, "Not measured" label.
-        notice_count_->setText(QString::number(kPlannedStages));
-        const QString not_measured_label = QStringLiteral("Not measured");
-        setTileActive(notice_tile_, notice_count_, "notice", /*active=*/false, &not_measured_label);
-    } else {
-        notice_count_->setText(QString::number(notices));
-        const QString issues_label = QStringLiteral("Issues");
-        setTileActive(notice_tile_, notice_count_, "notice", notices > 0, &issues_label);
-    }
-
-    // Pass tile: green when passes > 0.
-    setTileActive(pass_tile_, pass_count_, "pass", cap_passes > 0);
-
-    refreshTopIssues(recs, notices, blockers);
+    refreshReadinessTiles(blockers, tier2_notices, cap_passes);
+    refreshTopIssues(recs);
 }
 
-// --- Pipeline refresh ---
-//
-// Maps the canonical capture-pipeline steps onto real capability probes where
-// one exists (Encoder/Muxer/Disk) and leaves probe-less internal stages
-// (Source Capture/Frame Queue/Compositor) honestly Planned. No live per-frame
-// timing exists yet, so no step ever shows fabricated latency/queue/throughput.
+// ── Pipeline refresh (static readiness) ─────────────────────────────────────────
+
 void DiagnosticsPage::refreshPipeline() {
     if (!pipeline_flow_)
         return;
 
     using Status = ui::widgets::PipelineStepCard::Status;
 
-    // Internal stages: live per-frame telemetry is shown during recording.
     pipeline_flow_->setStepStatus(0, Status::Planned, QStringLiteral("Live during recording."));
     pipeline_flow_->setStepStatus(1, Status::Planned, QStringLiteral("Live during recording."));
     pipeline_flow_->setStepStatus(2, Status::Planned, QStringLiteral("Live during recording."));
@@ -1289,21 +1347,18 @@ void DiagnosticsPage::refreshPipeline() {
         return;
     }
 
-    // Encoder — real video-codec selectability for the active configuration.
     const bool encoder_ok = capability::IsSelectable(caps_.QueryVideoCodec(active_user_config_.video_codec).level);
     pipeline_flow_->setStepStatus(
         3, encoder_ok ? Status::Ok : Status::Unavailable,
         encoder_ok ? QStringLiteral("Selected video encoder is available. Live encoder load is not measured.")
                    : QStringLiteral("Selected video codec is not available on this system."));
 
-    // Muxer — real container selectability.
     const bool muxer_ok = capability::IsSelectable(caps_.QueryContainer(active_user_config_.container).level);
     pipeline_flow_->setStepStatus(
         4, muxer_ok ? Status::Ok : Status::Unavailable,
         muxer_ok ? QStringLiteral("Selected container muxer is available. Write throughput is not measured.")
                  : QStringLiteral("Selected container is not available on this system."));
 
-    // Disk — real temp-directory writability probe (no live throughput).
     const bool disk_ok = diagnostics::SelfTestRunner::CheckOutputPathWritable(settings_path_).passed;
     pipeline_flow_->setStepStatus(5, disk_ok ? Status::Ok : Status::Unavailable,
                                   disk_ok

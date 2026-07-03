@@ -1122,68 +1122,6 @@ QLabel[stateRole="blocked"] {
     color: ${err};
 }
 
-/* Diagnostics — readiness stat tiles */
-QFrame[panelRole="statTile"],
-QWidget[panelRole="statTile"] {
-    background: ${bg3};
-    border: 1px solid ${line2};
-    border-radius: 12px;
-}
-
-QFrame[panelRole="statTile"][statTone="blocker"] {
-    border-color: ${err-a42};
-    background: ${err-a10};
-}
-
-QFrame[panelRole="statTile"][statTone="notice"] {
-    border-color: ${warn-a42};
-    background: ${warn-a10};
-}
-
-QFrame[panelRole="statTile"][statTone="pass"] {
-    border-color: ${ok-a40};
-    background: ${ok-a08};
-}
-
-/* #04: zero-count tile — neutral, no alarm colour */
-QFrame[panelRole="statTile"][statTone="zero"] {
-    border-color: ${line2};
-    background: ${bg2};
-}
-
-QLabel[labelRole="statTileNum"] {
-    font-family: ${font-mono};
-    font-size: 30px;
-    font-weight: 600;
-    color: ${text0};
-}
-
-QLabel[labelRole="statTileNum"][statTone="blocker"] {
-    color: ${err};
-}
-
-QLabel[labelRole="statTileNum"][statTone="notice"] {
-    color: ${warn};
-}
-
-QLabel[labelRole="statTileNum"][statTone="pass"] {
-    color: ${ok};
-}
-
-/* #04: zero-count numeral + label — dim */
-QLabel[labelRole="statTileNum"][statTone="zero"] {
-    color: ${text3};
-}
-
-QLabel[labelRole="statTileLabel"] {
-    font-size: 12.5px;
-    color: ${text2};
-}
-
-QLabel[labelRole="statTileLabel"][statTone="zero"] {
-    color: ${text3};
-}
-
 /* Diagnostics — issue / recommendation cards */
 QFrame[panelRole="issueCard"],
 QWidget[panelRole="issueCard"] {
@@ -2717,4 +2655,108 @@ QPushButton#updatesActionButton[updatesCta="true"] {
 QPushButton#updatesActionButton:disabled {
     color: ${text3};
     border-color: ${line1};
+}
+
+/* ============================================================================
+   Diagnostics redesign (suite-diag2.jsx) — additive selectors. Kept at file end
+   per parallel-agent QSS convention; only new roles, no edits to shared rules.
+   ============================================================================ */
+
+/* Slim toolbar hosting the Expert toggle (mirrors Settings). */
+QWidget#diagToolbar {
+    background: ${bg0};
+}
+
+QLabel[labelRole="toolbarKicker"] {
+    font-family: ${font-mono};
+    font-size: 10px;
+    font-weight: 600;
+    color: ${text3};
+}
+
+/* "Expert mode" toolbar label tints to accent while expert mode is on. */
+QLabel#diagExpertModeLabel {
+    font-size: 12.5px;
+    color: ${text2};
+}
+QLabel#diagExpertModeLabel[expertOn="true"] {
+    color: ${accent};
+}
+
+/* Four wide readiness tiles (Readiness · Encoder · Disk · Display). */
+QFrame[panelRole="readinessTile"] {
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-radius: 14px;
+}
+QFrame[panelRole="readinessTile"][tileTone="blocker"] {
+    border-color: ${err-a42};
+    background: ${err-a10};
+}
+QFrame[panelRole="readinessTile"][tileTone="notice"] {
+    border-color: ${warn-a42};
+    background: ${warn-a10};
+}
+QFrame[panelRole="readinessTile"][tileTone="pass"] {
+    border-color: ${ok-a40};
+    background: ${ok-a08};
+}
+
+QLabel[labelRole="readinessTileTitle"] {
+    font-family: ${font-mono};
+    font-size: 10px;
+    font-weight: 600;
+    color: ${text3};
+}
+QLabel[labelRole="readinessTileValue"] {
+    font-size: 22px;
+    font-weight: 700;
+    color: ${text0};
+}
+QLabel[labelRole="readinessTileSub"] {
+    font-family: ${font-mono};
+    font-size: 11px;
+    color: ${text2};
+}
+
+/* Tier-3 tip chip — quiet mint counter that expands the optimisation list. */
+QToolButton[role="tipChipHead"] {
+    background: ${accent-dim};
+    border: 1px solid ${accent-b2};
+    border-radius: 14px;
+    padding: 8px 14px;
+    color: ${accent};
+    font-family: ${font-sans};
+    font-size: 13px;
+    font-weight: 600;
+    text-align: left;
+}
+QToolButton[role="tipChipHead"]:hover {
+    background: ${accent-dim};
+    border-color: ${accent};
+}
+QLabel[labelRole="tipSummary"] {
+    font-size: 13px;
+    color: ${text0};
+}
+QLabel[labelRole="tipId"] {
+    font-family: ${font-mono};
+    font-size: 9.5px;
+    color: ${text3};
+}
+
+/* Elevation unlock — dashed opt-in card. */
+QWidget[panelRole="elevationLock"] {
+    background: ${bg2};
+    border: 1px dashed ${line3};
+    border-radius: 14px;
+}
+QLabel[labelRole="elevationBadge"] {
+    font-family: ${font-mono};
+    font-size: 9px;
+    font-weight: 600;
+    color: ${text3};
+    border: 1px solid ${line2};
+    border-radius: 5px;
+    padding: 2px 7px;
 }

@@ -459,6 +459,10 @@ const QVector<VisualScenario> kScenarios = {
      .webcam_chroma_color_mode = QStringLiteral("green")},
 
     {QStringLiteral("diagnostics"), QStringLiteral("Diagnostics"), VisualPage::Diagnostics},
+    {.id = QStringLiteral("diagnostics-expert"),
+     .title = QStringLiteral("Diagnostics — expert (full taxonomy)"),
+     .page = VisualPage::Diagnostics,
+     .settings_expert_mode = true},
     {.id = QStringLiteral("diagnostics-idle"),
      .title = QStringLiteral("Diagnostics — idle"),
      .page = VisualPage::Diagnostics,

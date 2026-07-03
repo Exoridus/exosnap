@@ -3035,6 +3035,11 @@ void MainWindow::applyVisualDiagnosticsScenario(const visual::VisualScenario& sc
         caps, output, video, VisualAudioStateForSettings(visual::VisualSettingsTarget::Window),
         "Visual Test WebM AV1 Opus", "Start/Stop: Alt+F9", "visual-test-settings.json", true);
 
+    // The live pipeline + full taxonomy are Expert-gated; recording scenarios need
+    // Expert on to render Phase ③. The plain "diagnostics" scenario stays Simple, unless
+    // the scenario explicitly requests Expert via settings_expert_mode.
+    diagnostics_page_->setExpertModeEnabled(!scenario.diag_live.isEmpty() || scenario.settings_expert_mode);
+
     if (!scenario.diag_live.isEmpty()) {
         diagnostics_page_->applyLiveDiagnostics(makeLiveDiagnosticsSnapshot(scenario.diag_live));
     }
@@ -3754,6 +3759,9 @@ void MainWindow::buildConfigPage() {
     connect(config_page_, &ConfigPage::expertModeChanged, this, [this](bool enabled) {
         persisted_settings_.expert_mode_enabled = enabled;
         settings_store_.Save(persisted_settings_);
+        // Single global Expert state: mirror onto the Diagnostics page (no-op guarded).
+        if (diagnostics_page_)
+            diagnostics_page_->setExpertModeEnabled(enabled);
     });
     connect(config_page_, &ConfigPage::outputSplitExpanderChanged, this, [this](bool expanded) {
         persisted_settings_.output_split_expander_expanded = expanded;
@@ -3990,6 +3998,14 @@ void MainWindow::buildDiagnosticsPage() {
     diagnostics_page_ = new DiagnosticsPage(stack_);
     diagnostics_page_->setPresentProvider(&present_provider_);
     diagnostics_page_->setDpcProvider(&dpc_provider_);
+    // Single global Expert state, shared with Settings (AppSettingsStore::expert_mode_enabled).
+    diagnostics_page_->setExpertModeEnabled(persisted_settings_.expert_mode_enabled);
+    connect(diagnostics_page_, &DiagnosticsPage::expertModeChanged, this, [this](bool enabled) {
+        persisted_settings_.expert_mode_enabled = enabled;
+        settings_store_.Save(persisted_settings_);
+        if (config_page_)
+            config_page_->setExpertModeEnabled(enabled);
+    });
     if (diagnostics_placeholder_) {
         // Replace the placeholder in-place so kDiagnosticsPageIndex stays valid for all
         // widgets already past it in the stack (logs=4, webcam=5, output=6, about=7).

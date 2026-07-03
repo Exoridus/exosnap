@@ -208,3 +208,47 @@ happens in the separate 0.8.0 release-mechanics step (after the phase-correct CF
   game and are dev-machine-verified**, not headless. Dev-verify items: PresentMon present-mode/tearing/exclusive
   detection with a real game; the borderless `FixAction` firing on an exclusive-fullscreen title; DPC decode
   (PerfInfo opcode band, latency formula, `Image_Load` path-scan, named-system-logger flag delivery).
+
+## Delivered — Slice: Diagnostics surface redesign (Simple / Expert end-state, 2026-07-03)
+
+`DiagnosticsPage` was rebuilt to the `suite-diag2.jsx` end-state: one surface with a **Simple**
+default view and an **Expert** toggle that reveals depth rather than a second mode.
+
+- **Simple (default).** A compact verdict (kept: `readinessBanner` + status pill + last-check) over
+  **exactly four wide readiness tiles** — Readiness · Encoder · Disk · Display (`suite-diag2.jsx`
+  `ReadinessGrid`) — then any Tier-1 blocker / Tier-2 measured-problem card, then one bundled Tier-3
+  **tip chip**. No live telemetry, no capability matrix, no self-test/config in Simple. The filled,
+  calm ready-state replaces the old hollow banner-over-void. Tile values are honest facts from data
+  already on hand (active codec/container, free bytes on the output drive, primary-screen resolution/Hz);
+  no new measurement paths were added.
+- **Expert (toggle).** The SAME verdict + tiles, then the flat taxonomy beneath them via the existing
+  `collapseHead` accordion primitive: **② Pre-flight** (self-test) → **③ Live** (the live telemetry
+  panel + six pipeline health cards, previously always-on, now Expert-gated) → **④ Post-flight**
+  (placeholder until the Edit/Review report card lands), plus an **Environment** row and the
+  opt-in **ElevationLock** card. Max one border level; no card-in-card.
+- **Tiering split.** Engine `Notice` results are split into Tier-3 optimisations (capability/config
+  "better, but it runs" — `rec.002`/`rec.profile.codec`/`rec.009`/`rec.008`) that bundle into the quiet
+  mint tip chip, versus Tier-2 measured/environment problems that earn a card. Blockers (Tier-1) are
+  always shown in both views (recording-start gate, unchanged).
+- **Capability matrix removed.** Hardware capability facts move to the new **Device** page (parallel
+  slice). Diagnostics keeps only the live, changeable readiness; a new `openDevicePageRequested()` signal
+  + an Environment link row replace the old `CAPABILITY MATRIX` section. (Signal intentionally unwired in
+  `MainWindow` — the redesign orchestrator connects it once the Device page merges.)
+- **Expert toggle = single global state.** The toolbar toggle reads/writes the same
+  `AppSettingsStore::expert_mode_enabled` as Settings; `MainWindow` mirrors changes between `ConfigPage`
+  and `DiagnosticsPage` (no second state; sync is no-op-guarded so it can't loop).
+- **New widgets.** `ui::widgets::TipChip` (Tier-3 bundle) and `ui::widgets::ElevationLock`. Issue/blocker
+  cards continue to reuse the in-page `EntryCard`-equivalent builder. QSS additions (`readinessTile*`,
+  `tipChipHead`, `elevationLock`, `diagToolbar`) are token-driven and appended at file end.
+- **Verification.** `diagnostics_page_tests` rebuilt to the new structure (32/32, headless via
+  `QT_QPA_PLATFORM=offscreen`). New coverage: four readiness tiles, Expert-container gating, single
+  emit on user flip vs silent external sync, Device-link signal, capability-matrix removal, accordion
+  open/close. Live/present-provider/capture-card tests are unchanged and still green (the live widgets
+  are always constructed, only visibility is Expert-gated).
+- **Deliberate fidelity gaps (deferred).** The mockup's RECORDING/REVIEW verdict-chip states (compact
+  recording status in Simple, post-flight report card) are not implemented yet — the verdict currently
+  renders the pre-flight states only; the visual harness likewise has no Simple-while-recording scenario.
+  The ElevationLock "Restart as Admin" button and the Export Report button are honestly disabled
+  (planned) until their flows land. Tier-3 classification is a curated id list in `DiagnosticsPage`
+  (`isOptimisationTip`) — moving tiering into the engine model is a candidate follow-up. The verdict
+  counts only Tier-1 + Tier-2; Tier-3 tips never turn it amber (tips-only = READY).
