@@ -73,6 +73,7 @@ class RecordingOverlayWindow;
 } // namespace ui::overlay
 
 class ConfigPage;
+class DevicePage;
 class DiagnosticsPage;
 class EditExportPage;
 class HotkeysPage;
@@ -191,7 +192,12 @@ class MainWindow : public QMainWindow {
     void buildDiagnosticsPage();
     // Builds AboutPage, replacing the cheap placeholder reserved at kAboutPageIndex.
     void buildAboutPage();
-    // Builds EditExportPage (index 8, past kPageDescriptors) with its back-connection.
+    // Builds DevicePage, replacing the cheap placeholder reserved at kDevicePageIndex.
+    // Does NOT scan adapters (the page scans asynchronously on its first showEvent);
+    // delivers the current runtime CapabilitySet if the async probe already completed.
+    void buildDevicePage();
+    // Builds EditExportPage (tail slot, past all kPageDescriptors indices) with its
+    // back-connection.
     void buildEditExportPage();
     // Builds WebcamPage, replacing the cheap placeholder reserved at kWebcamPageIndex.
     // Ends with applySettings(live_webcam_) to replay preset-applied state.
@@ -352,6 +358,8 @@ class MainWindow : public QMainWindow {
     pages::AboutPage* about_page_ = nullptr;
     QWidget* about_placeholder_ = nullptr;  // cheap slot-reservation until buildAboutPage()
     QWidget* output_placeholder_ = nullptr; // cheap slot-reservation until buildOutputPage()
+    DevicePage* device_page_ = nullptr;
+    QWidget* device_placeholder_ = nullptr; // cheap slot-reservation until buildDevicePage()
 
     // Device notifiers (owned; started after capability probe; stopped first in ~MainWindow).
     AudioDeviceNotifier audio_notifier_;

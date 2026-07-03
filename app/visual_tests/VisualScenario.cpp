@@ -1779,6 +1779,18 @@ const QVector<VisualScenario> kUpdatesScenarios = {
      .settings_update_version = QStringLiteral("0.9.0")},
 };
 
+// Device surface (suite-device.jsx). Both scenarios inject DETERMINISTIC fake
+// adapters through DevicePage::setAdaptersForTest (applied by MainWindow's
+// applyVisualScenario) — no live DXGI enumeration and no NVENC probe, so the
+// screenshots are stable on any machine, including CI without a GPU.
+const QVector<VisualScenario> kDevicePageScenarios = {
+    {.id = QStringLiteral("device-page"), .title = QStringLiteral("Device / Adapters"), .page = VisualPage::Device},
+    {.id = QStringLiteral("device-empty"),
+     .title = QStringLiteral("Device / No adapters"),
+     .page = VisualPage::Device,
+     .device_empty_adapters = true},
+};
+
 const QVector<VisualScenario>& VisualScenarioRegistry() {
     static QVector<VisualScenario> merged;
     if (merged.isEmpty()) {
@@ -1792,6 +1804,7 @@ const QVector<VisualScenario>& VisualScenarioRegistry() {
         merged.append(kEditExportScenarios);
         merged.append(kAboutScenarios);
         merged.append(kUpdatesScenarios);
+        merged.append(kDevicePageScenarios);
     }
     return merged;
 }
@@ -1913,6 +1926,8 @@ QString ToString(VisualPage page) {
         return QStringLiteral("about");
     case VisualPage::EditExport:
         return QStringLiteral("edit-export");
+    case VisualPage::Device:
+        return QStringLiteral("device");
     }
     return QStringLiteral("unknown");
 }

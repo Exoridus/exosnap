@@ -143,6 +143,15 @@ const QHash<QString, LucideEntry>& iconTable() {
          {"<path stroke='%1' d='M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z'/>"
           "<circle cx='12' cy='13' r='3' stroke='%1'/>",
           false}},
+        // cpu (Device page — adapter selector + capability matrix header)
+        {QStringLiteral("cpu"),
+         {"<rect width='16' height='16' x='4' y='4' rx='2' stroke='%1'/>"
+          "<rect width='6' height='6' x='9' y='9' rx='1' stroke='%1'/>"
+          "<path stroke='%1' d='M15 2v2'/><path stroke='%1' d='M15 20v2'/>"
+          "<path stroke='%1' d='M2 15h2'/><path stroke='%1' d='M2 9h2'/>"
+          "<path stroke='%1' d='M20 15h2'/><path stroke='%1' d='M20 9h2'/>"
+          "<path stroke='%1' d='M9 2v2'/><path stroke='%1' d='M9 20v2'/>",
+          false}},
         // settings (gear / cogwheel — Lucide settings icon)
         {QStringLiteral("settings"),
          {"<path stroke='%1' d='M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 "

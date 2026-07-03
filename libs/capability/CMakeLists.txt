@@ -9,6 +9,8 @@ add_library(exosnap_capability STATIC
   src/option_query.cpp
   src/translation.cpp
   src/audio_ui_state.cpp
+  src/adapter_enum.cpp
+  src/adapter_capability.cpp
 )
 
 add_library(exosnap::capability ALIAS exosnap_capability)
@@ -86,5 +88,19 @@ exosnap_add_gtest(
   NAME audio_ui_state_tests
   TEST_PREFIX capability.
   SOURCES tests/test_audio_ui_state.cpp
+  LIBRARIES exosnap_capability
+)
+
+exosnap_add_gtest(
+  NAME capability_adapter_enum_tests
+  TEST_PREFIX capability.
+  SOURCES tests/test_adapter_enum.cpp
+  LIBRARIES exosnap_capability
+)
+
+exosnap_add_gtest(
+  NAME capability_adapter_capability_tests
+  TEST_PREFIX capability.
+  SOURCES tests/test_adapter_capability.cpp
   LIBRARIES exosnap_capability
 )

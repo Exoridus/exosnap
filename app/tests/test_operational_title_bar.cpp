@@ -32,13 +32,14 @@ class OperationalTitleBarTest : public ::testing::Test {
         EnsureApplication();
     }
 
-    // Page indices mirror the MainWindow page stack ordering used in production.
-    // Hotkeys is at stack index 2 but no longer appears in the primary nav (PS-PHASE-B).
-    // About is at stack index 7 (a real nav page, not an overlay).
+    // Page indices mirror the MainWindow page stack ordering used in production
+    // (kPageDescriptors): Record=0, Device=1, Settings=2, Hotkeys=3 (in the stack
+    // but not in the primary nav — PS-PHASE-B), Diagnostics=4, Logs=5, Webcam=6,
+    // Output=7 (sub-pages, not in the nav), About=8.
     static QVector<ui::chrome::OperationalTitleBar::NavItem> DefaultNavItems() {
         return {
-            {QStringLiteral("Record"), 0}, {QStringLiteral("Settings"), 1}, {QStringLiteral("Diagnostics"), 3},
-            {QStringLiteral("Logs"), 4},   {QStringLiteral("About"), 7},
+            {QStringLiteral("Record"), 0},      {QStringLiteral("Device"), 1}, {QStringLiteral("Settings"), 2},
+            {QStringLiteral("Diagnostics"), 4}, {QStringLiteral("Logs"), 5},   {QStringLiteral("About"), 8},
         };
     }
 
@@ -56,8 +57,8 @@ TEST_F(OperationalTitleBarTest, TopNav_ContainsRequiredTabsInOrder) {
     for (const QPushButton* tab : tabs)
         labels << tab->text();
 
-    const QStringList expected = {QStringLiteral("Record"), QStringLiteral("Settings"), QStringLiteral("Diagnostics"),
-                                  QStringLiteral("Logs"), QStringLiteral("About")};
+    const QStringList expected = {QStringLiteral("Record"),      QStringLiteral("Device"), QStringLiteral("Settings"),
+                                  QStringLiteral("Diagnostics"), QStringLiteral("Logs"),   QStringLiteral("About")};
     EXPECT_EQ(labels, expected);
 }
 
@@ -84,9 +85,9 @@ TEST_F(OperationalTitleBarTest, TopNav_AboutIsActionNotCheckablePage) {
             about = tab;
     }
 
-    // v10: About is now a real embedded nav page (page_index=7, not -1).
-    // All five nav items are checkable tabs.
-    EXPECT_EQ(checkable_count, 5);
+    // v10: About is now a real embedded nav page (page_index=8, not -1).
+    // All six nav items are checkable tabs.
+    EXPECT_EQ(checkable_count, 6);
     ASSERT_NE(about, nullptr);
     EXPECT_TRUE(about->isCheckable());
 }
@@ -95,7 +96,7 @@ TEST_F(OperationalTitleBarTest, SetActivePage_HighlightsMatchingTab) {
     ui::chrome::OperationalTitleBar bar;
     bar.setNavItems(DefaultNavItems());
 
-    bar.setActivePage(3); // Diagnostics
+    bar.setActivePage(4); // Diagnostics
     for (const QPushButton* tab : NavTabs(bar)) {
         if (!tab->isCheckable())
             continue;
@@ -296,10 +297,10 @@ TEST_F(OperationalTitleBarTest, StatusPill_StartingUsesInfoTone) {
 
 // ── PS-PHASE-B: 5-item nav + notification bell ───────────────────────────────
 
-TEST_F(OperationalTitleBarTest, TopNav_HasFiveItems) {
+TEST_F(OperationalTitleBarTest, TopNav_HasSixItems) {
     ui::chrome::OperationalTitleBar bar;
     bar.setNavItems(DefaultNavItems());
-    EXPECT_EQ(NavTabs(bar).size(), 5);
+    EXPECT_EQ(NavTabs(bar).size(), 6);
 }
 
 TEST_F(OperationalTitleBarTest, TopNav_DoesNotContainHotkeys) {

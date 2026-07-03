@@ -7,6 +7,7 @@
 #include "notifications/NotificationManager.h"
 #include "pages/AboutPage.h"
 #include "pages/ConfigPage.h"
+#include "pages/DevicePage.h"
 #include "pages/DiagnosticsPage.h"
 #include "pages/EditExportPage.h"
 #include "pages/HotkeysPage.h"
@@ -163,6 +164,7 @@ enum class SidebarIcon {
     Advanced = 8,
     Setup = 9,
     About = 10,
+    Device = 11,
 };
 
 enum class ResizeZone {
@@ -185,8 +187,9 @@ struct PageDescriptor {
     SidebarIcon icon;
 };
 
-constexpr std::array<PageDescriptor, 8> kPageDescriptors = {{
+constexpr std::array<PageDescriptor, 9> kPageDescriptors = {{
     {"Record", "Operational view — target, readiness, and live runtime.", "", true, SidebarIcon::Record},
+    {"Device", "Encoder adapters and per-GPU capability matrix.", "", true, SidebarIcon::Device},
     {"Settings", "Unified recording configuration — format, sources, and output.", "", true, SidebarIcon::Setup},
     {"Hotkeys", "Global command access for recording operations.", "GLOBAL SHORTCUTS", true, SidebarIcon::Hotkeys},
     {"Diagnostics", "Capability checks, blockers, and system readiness.", "BLOCKER-FIRST", true,
@@ -212,6 +215,7 @@ constexpr int kWebcamPageIndex = pageIndexForIcon(SidebarIcon::Webcam);
 constexpr int kLogsPageIndex = pageIndexForIcon(SidebarIcon::Logs);
 constexpr int kOutputPageIndex = pageIndexForIcon(SidebarIcon::Output);
 constexpr int kAboutPageIndex = pageIndexForIcon(SidebarIcon::About);
+constexpr int kDevicePageIndex = pageIndexForIcon(SidebarIcon::Device);
 static_assert(kRecordPageIndex >= 0, "Record page must exist in kPageDescriptors.");
 static_assert(kSettingsPageIndex >= 0, "Settings page must exist in kPageDescriptors.");
 static_assert(kHotkeysPageIndex >= 0, "Hotkeys page must exist in kPageDescriptors.");
@@ -220,6 +224,7 @@ static_assert(kWebcamPageIndex >= 0, "Webcam page must exist in kPageDescriptors
 static_assert(kLogsPageIndex >= 0, "Logs page must exist in kPageDescriptors.");
 static_assert(kOutputPageIndex >= 0, "Output page must exist in kPageDescriptors.");
 static_assert(kAboutPageIndex >= 0, "About page must exist in kPageDescriptors.");
+static_assert(kDevicePageIndex >= 0, "Device page must exist in kPageDescriptors.");
 
 // ELEVATION-FOUNDATION-R1: map a nav label (kPageDescriptors nav_label) to its
 // page index for the elevated-relaunch handoff. Returns -1 when unknown.
@@ -518,6 +523,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     stack_ = new QStackedWidget(central);
     stack_->setObjectName("mainStack");
     record_page_ = new RecordPage(stack_);
+    // Deferred: device_page_ is built by buildDevicePage() after show().
+    // A cheap placeholder holds index kDevicePageIndex so config_placeholder_ and
+    // all subsequent pages get the correct indices without any re-numbering.
+    device_placeholder_ = new QWidget(stack_);
     // Deferred: config_page_ is built by buildConfigPage() after show().
     // A cheap placeholder holds index kSettingsPageIndex so hotkeys_placeholder_ and
     // all subsequent pages get the correct indices without any re-numbering.
@@ -531,6 +540,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // the correct subsequent indices without any re-numbering.
     diagnostics_placeholder_ = new QWidget(stack_);
     stack_->addWidget(record_page_);
+    stack_->addWidget(device_placeholder_); // device page is deferred
     stack_->addWidget(config_placeholder_); // config page is deferred
     stack_->addWidget(hotkeys_placeholder_);
     stack_->addWidget(diagnostics_placeholder_);
@@ -627,6 +637,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
     // About is now a real embedded nav page (no overlay).
     title_bar_->setNavItems({
         {QStringLiteral("Record"), kRecordPageIndex},
+        {QStringLiteral("Device"), kDevicePageIndex},
         {QStringLiteral("Settings"), kSettingsPageIndex},
         {QStringLiteral("Diagnostics"), kDiagnosticsPageIndex},
         {QStringLiteral("Logs"), kLogsPageIndex},
@@ -1021,6 +1032,8 @@ void MainWindow::onRuntimeCapsReady(capability::CapabilitySet caps) {
     diagnostics::AppLog::info(QStringLiteral("window"), QStringLiteral("capabilities probed (async)"));
     if (record_page_)
         record_page_->setRuntimeCapabilities(runtime_caps_); // delivers caps to coordinator (A1 gate)
+    if (device_page_)
+        device_page_->setCapabilitySet(runtime_caps_); // static bit-depth/rate-control facts for the matrix
     refreshPresetUi();
     refreshDiagnosticsData();
     startDeviceNotifiers();
@@ -2177,6 +2190,8 @@ void MainWindow::setCurrentPage(int index) {
         return;
 
     // Ensure deferred pages are built before they are shown for the first time.
+    if (index == kDevicePageIndex && !device_page_)
+        buildDevicePage();
     if (index == kSettingsPageIndex && !config_page_)
         buildConfigPage();
     if (index == kHotkeysPageIndex && !hotkeys_page_)
@@ -2638,6 +2653,46 @@ void MainWindow::applyVisualScenario(const visual::VisualScenario& scenario) {
     case visual::VisualPage::About:
         setCurrentPage(kAboutPageIndex);
         break;
+    case visual::VisualPage::Device: {
+        if (!device_page_)
+            buildDevicePage();
+        // Deterministic fake adapters through the test seam — no live DXGI
+        // enumeration and no NVENC probe, so the capture is machine-independent.
+        std::vector<capability::AdapterInfo> adapters;
+        std::vector<capability::AdapterEncoderCapability> caps;
+        if (!scenario.device_empty_adapters) {
+            capability::AdapterInfo dgpu;
+            dgpu.name = "GeForce RTX 4070";
+            dgpu.vendor = capability::AdapterVendor::Nvidia;
+            dgpu.kind = capability::AdapterKind::Discrete;
+            dgpu.luid = 0x4070;
+            dgpu.dedicated_video_memory_bytes = 12ull * 1024 * 1024 * 1024;
+            capability::AdapterEncoderCapability dgpu_cap;
+            dgpu_cap.probed = true;
+            dgpu_cap.backend_label = "NVENC";
+            dgpu_cap.provenance = "probed via NVENC encode GUIDs";
+            dgpu_cap.h264 = true;
+            dgpu_cap.hevc = true;
+            dgpu_cap.av1 = true;
+
+            capability::AdapterInfo igpu;
+            igpu.name = "UHD Graphics 770";
+            igpu.vendor = capability::AdapterVendor::Intel;
+            igpu.kind = capability::AdapterKind::Integrated;
+            igpu.luid = 0x770;
+            igpu.shared_system_memory_bytes = 16ull * 1024 * 1024 * 1024;
+            capability::AdapterEncoderCapability igpu_cap;
+            igpu_cap.probed = false;
+            igpu_cap.provenance =
+                "encoder backend not yet supported (no AMD/AMF, Intel/QSV, or software encoder is wired in this build)";
+
+            adapters = {dgpu, igpu};
+            caps = {dgpu_cap, igpu_cap};
+        }
+        device_page_->setAdaptersForTest(std::move(adapters), std::move(caps));
+        setCurrentPage(kDevicePageIndex);
+        break;
+    }
     case visual::VisualPage::EditExport:
         applyVisualEditExportScenario(scenario);
         break;
@@ -3704,26 +3759,29 @@ void MainWindow::applyVisualEditExportScenario(const visual::VisualScenario& sce
 
 void MainWindow::hydrateSecondaryPages() {
     // Build one deferred page per event-loop tick so the UI can paint and respond
-    // between constructors. Order: ConfigPage (index 1) first — it is the heaviest
-    // and the second nav item users commonly visit; then HotkeysPage (index 2),
-    // DiagnosticsPage (index 3), LogsPage (index 4), AboutPage (index 7),
-    // EditExportPage (tail slot), WebcamPage (index 5), OutputPage (index 6).
+    // between constructors. Order: ConfigPage first — it is the heaviest and the
+    // most commonly visited item; then DevicePage (adapter enumeration + probe is
+    // cheap for the common 1-2 adapter case), HotkeysPage, DiagnosticsPage,
+    // LogsPage, AboutPage, EditExportPage (tail slot), WebcamPage, OutputPage.
     // Webcam/Output come last because their fan-out replay depends on stable
     // live_webcam_ and the preset registry, both settled before the ctor exits.
     buildConfigPage();
     QTimer::singleShot(0, this, [this]() {
-        buildHotkeysPage();
+        buildDevicePage();
         QTimer::singleShot(0, this, [this]() {
-            buildDiagnosticsPage();
+            buildHotkeysPage();
             QTimer::singleShot(0, this, [this]() {
-                buildLogsPage();
+                buildDiagnosticsPage();
                 QTimer::singleShot(0, this, [this]() {
-                    buildAboutPage();
+                    buildLogsPage();
                     QTimer::singleShot(0, this, [this]() {
-                        buildEditExportPage();
+                        buildAboutPage();
                         QTimer::singleShot(0, this, [this]() {
-                            buildWebcamPage();
-                            QTimer::singleShot(0, this, [this]() { buildOutputPage(); });
+                            buildEditExportPage();
+                            QTimer::singleShot(0, this, [this]() {
+                                buildWebcamPage();
+                                QTimer::singleShot(0, this, [this]() { buildOutputPage(); });
+                            });
                         });
                     });
                 });
@@ -4117,6 +4175,31 @@ void MainWindow::buildAboutPage() {
         about_page_->refreshBrand();
     if (about_overlay_)
         about_page_->setChannelHint(persisted_settings_.update_channel);
+}
+
+void MainWindow::buildDevicePage() {
+    if (device_page_)
+        return; // already built (e.g. by an early navigation)
+    device_page_ = new DevicePage(stack_);
+    if (device_placeholder_) {
+        // Replace the placeholder in-place so kDevicePageIndex stays valid for all
+        // widgets already past it in the stack (settings=2, hotkeys=3, ... about=8).
+        const int idx = stack_->indexOf(device_placeholder_);
+        stack_->insertWidget(idx, device_page_);
+        device_placeholder_->deleteLater();
+        device_placeholder_ = nullptr;
+    } else {
+        stack_->addWidget(device_page_);
+    }
+    // Static bit-depth/rate-control facts for the capability-matrix feature rows
+    // (additive to the per-adapter probe; see DevicePage.h). Only meaningful once
+    // the async runtime probe has completed — harmless no-op default otherwise.
+    if (runtime_caps_ready_)
+        device_page_->setCapabilitySet(runtime_caps_);
+    // PERF: NO adapter scan here — buildDevicePage runs in the post-paint
+    // hydration tick, which must stay cheap. DevicePage scans on its first
+    // showEvent (first real navigation to the page), on a worker thread.
+    connect(device_page_, &DevicePage::openSettingsRequested, this, [this]() { navigateToPage(kSettingsPageIndex); });
 }
 
 void MainWindow::buildEditExportPage() {

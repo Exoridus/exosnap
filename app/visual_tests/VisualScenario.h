@@ -19,6 +19,7 @@ enum class VisualPage {
     Logs,
     About,
     EditExport,
+    Device,
 };
 
 enum class VisualRecordState {
@@ -268,6 +269,12 @@ struct VisualScenario {
     QString edit_export_video_codec;
     QString edit_export_audio_codec;
     QString edit_export_container;
+
+    // --- Device page scenarios (feat/device-tab) ---
+    // Device scenarios always inject deterministic fake adapters (via
+    // DevicePage::setAdaptersForTest); with device_empty_adapters=true the
+    // injection is an empty list, rendering the honest empty state.
+    bool device_empty_adapters = false;
 };
 
 const QVector<VisualScenario>& VisualScenarioRegistry();

@@ -2760,3 +2760,137 @@ QLabel[labelRole="elevationBadge"] {
     border-radius: 5px;
     padding: 2px 7px;
 }
+
+/* ── Device page (feat/device-tab): encoder-adapter selector cards ────────── */
+QFrame#deviceAdapterCard {
+    background: ${bg2};
+    border: 1px solid ${line2};
+    border-radius: ${radius-lg}px;
+}
+
+QFrame#deviceAdapterCard:hover {
+    background: ${bg3};
+    border-color: ${line3};
+}
+
+QFrame#deviceAdapterCard[selected="true"] {
+    background: ${ac-a12};
+    border-color: ${accent};
+}
+
+QFrame#deviceAdapterCard:focus {
+    border-color: ${accent};
+}
+
+QLabel#deviceAdapterCardAvatar {
+    background: ${bg3};
+    border: 1px solid ${line2};
+    border-radius: ${radius-md}px;
+}
+
+QFrame#deviceAdapterCard[selected="true"] QLabel#deviceAdapterCardAvatar {
+    background: ${ac-a16};
+    border-color: ${accent-b2};
+}
+
+QLabel[labelRole="deviceAdapterCardTitle"] {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: ${text0};
+}
+
+QLabel[labelRole="deviceAdapterCardKind"] {
+    font-family: ${font-mono};
+    font-size: 9px;
+    letter-spacing: 0.05em;
+    color: ${text2};
+    border: 1px solid ${line2};
+    border-radius: ${radius-sm}px;
+    padding: 1px 6px;
+}
+
+QLabel[labelRole="deviceAdapterCardBackend"] {
+    font-family: ${font-mono};
+    font-size: 11px;
+    color: ${text2};
+}
+
+QLabel[labelRole="deviceAdapterCardActiveBadge"] {
+    font-family: ${font-mono};
+    font-size: 9px;
+    letter-spacing: 0.05em;
+    color: ${ok};
+    background: ${ok-a12};
+    border: 1px solid ${ok-a48};
+    border-radius: ${radius-sm}px;
+    padding: 2px 8px;
+}
+
+/* Device page — capability matrix card (selected adapter) */
+QLabel#deviceMatrixAvatar {
+    background: ${accent-dim};
+    border: 1px solid ${accent-b2};
+    border-radius: ${radius-md}px;
+}
+
+QLabel[labelRole="deviceMatrixTitle"] {
+    font-size: 16px;
+    font-weight: 700;
+    color: ${text0};
+}
+
+QLabel[labelRole="deviceStateBadgeActive"] {
+    font-family: ${font-mono};
+    font-size: 9px;
+    letter-spacing: 0.05em;
+    color: ${ok};
+    background: ${ok-a12};
+    border: 1px solid ${ok-a48};
+    border-radius: ${radius-sm}px;
+    padding: 2px 8px;
+}
+
+QLabel[labelRole="deviceStateBadgePlanned"] {
+    font-family: ${font-mono};
+    font-size: 9px;
+    letter-spacing: 0.05em;
+    color: ${warn};
+    background: transparent;
+    border: 1px dashed ${warn-a48};
+    border-radius: ${radius-sm}px;
+    padding: 2px 8px;
+}
+
+/* Device page — codec support chips (pill, not a nested card) */
+QFrame#deviceCodecChip {
+    border-radius: ${radius-sm}px;
+}
+
+QFrame#deviceCodecChip[chipState="available"] {
+    background: ${ok-a12};
+    border: 1px solid ${ok-a48};
+}
+
+QFrame#deviceCodecChip[chipState="unavailable"] {
+    background: transparent;
+    border: 1px solid ${line2};
+}
+
+QLabel[labelRole="deviceCodecChipTextAvailable"] {
+    font-family: ${font-mono};
+    font-size: 12.5px;
+    color: ${text0};
+}
+
+QLabel[labelRole="deviceCodecChipTextUnavailable"] {
+    font-family: ${font-mono};
+    font-size: 12.5px;
+    color: ${text2};
+}
+
+/* Device page — "this adapter drives Settings" banner */
+QFrame[panelRole="accentNote"] {
+    background: ${accent-dim};
+    border: 1px solid ${accent-b2};
+    border-radius: ${radius-lg}px;
+}

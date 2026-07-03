@@ -129,6 +129,8 @@ qt_add_executable(exosnap WIN32
     ui/widgets/CaptureTargetCard.cpp
     ui/widgets/RegionPresetCard.h
     ui/widgets/RegionPresetCard.cpp
+    ui/widgets/DeviceAdapterCard.h
+    ui/widgets/DeviceAdapterCard.cpp
     ui/widgets/PipelineStepCard.h
     ui/widgets/PipelineStepCard.cpp
     ui/widgets/PipelineFlow.h
@@ -197,6 +199,8 @@ qt_add_executable(exosnap WIN32
     MainWindow.cpp
     pages/AboutPage.h
     pages/AboutPage.cpp
+    pages/DevicePage.h
+    pages/DevicePage.cpp
     pages/RecordPage.h
     pages/RecordPage.cpp
     pages/ConfigPage.h
@@ -1317,6 +1321,21 @@ exosnap_add_gtest(
 )
 target_include_directories(diagnostics_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(diagnostics_page_tests PROPERTIES AUTOMOC ON)
+
+exosnap_add_gtest(
+    NAME device_page_tests
+    TEST_PREFIX device.
+    SOURCES
+        tests/test_device_page.cpp
+        pages/DevicePage.cpp
+        ui/widgets/DeviceAdapterCard.cpp
+        ui/widgets/SectionRuleHeader.cpp
+        # DevicePage's adapter avatar + codec-chip icons use lucidePixmap() (Lucide glyph renderer).
+        ui/theme/LucideIcon.cpp
+    LIBRARIES Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg exosnap_capability recorder_core
+)
+target_include_directories(device_page_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(device_page_tests PROPERTIES AUTOMOC ON)
 
 exosnap_add_gtest(
     NAME recording_preset_registry_tests

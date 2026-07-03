@@ -275,6 +275,17 @@ a full-width card inside Settings (below the two-column grid). The IA is:
 `Record · Settings · Diagnostics · Logs · About`. Settings sections: Video · Audio · Output · Webcam
 · Hotkeys · Advanced (expert-only, collapsible via SettingsCardExpander).
 
+**Top-level navigation: 5 → 6 items (Device tab, UI-redesign port).** A new `Device` nav item was
+added between Record and Settings: `Record · Device · Settings · Diagnostics · Logs · About`. It
+hosts the encoder-capability facts that used to sit at the top of Diagnostics — an adapter selector
+(one card per DXGI adapter, iGPU/dGPU) and a per-adapter capability matrix (codec support, provenance)
+for whichever adapter is selected. Not-yet-wired encoder backends (AMD/AMF, Intel/QSV, software
+x264/SVT-AV1) are shown as honest greyed "planned" rows — no fabricated probes. Backend: additive
+`capability::EnumerateAdapters()` / `capability::ProbeAdapterEncoderCapability()` (libs/capability);
+the existing single-resolved `CapabilitySet` that still drives Settings/Diagnostics/Record is
+unchanged. Diagnostics keeps only the live, changeable environment (disk/display/audio/elevation)
+as readiness cards; the static "Capability Matrix" section there is unaffected by this slice.
+
 **Update-check UI → About overlay.** The UpdateSettingsPanel was moved from the Settings page into
 the About overlay (PS-PHASE-E). It is no longer reachable from Settings. ADR 0012 (update security
 model) is unchanged; only the UI placement changed.
