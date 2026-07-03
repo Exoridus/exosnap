@@ -1,6 +1,7 @@
 #pragma once
 
 #include <capability/config_types.h>
+#include <recorder_core/codec_types.h>
 #include <recorder_core/output_geometry.h>
 
 #include <cstdint>
@@ -91,6 +92,11 @@ struct OutputSettingsModel {
     // remains available as an opt-in for pipelines known to honour the range
     // flag. Always valid for every codec/container — never gated.
     capability::ColorRange color_range = capability::ColorRange::Limited;
+    // NVENC encoder speed/quality preset (P1 fastest/lowest quality .. P7
+    // slowest/best quality). Applies uniformly to all three NVENC codecs; never
+    // capability-gated. Default P4 (balanced) — matches the previous hardcoded
+    // engine default. Takes effect from the next recording (not applied live).
+    recorder_core::NvencPreset nvenc_preset = recorder_core::NvencPreset::P4;
     OutputResolutionSettings resolution;
     SplitRecordingSettings split;
 

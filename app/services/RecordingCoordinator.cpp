@@ -231,6 +231,9 @@ static bool PlanRequiresTargetPid(const recorder_core::AudioTrackPlan& plan) {
 }
 
 void ApplyOutputSettingsToRecorderConfig(recorder_core::RecorderConfig& config, const OutputSettingsModel& settings) {
+    // OutputSettingsModel::nvenc_preset already uses recorder_core::NvencPreset
+    // directly (no capability:: mirror type exists for it), so this is a plain copy.
+    config.nvenc_preset = settings.nvenc_preset;
     config.output_width = 0;
     config.output_height = 0;
     config.output_fit = settings.resolution.fit;

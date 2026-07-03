@@ -1036,6 +1036,49 @@ TEST(SplitSizeSettingsTest, MergeFormatSelection_CarriesSplitSettings) {
     EXPECT_EQ(split.size_bytes, 777ull * 1024ull * 1024ull);
 }
 
+// NVENC-PRESET-R1: the NVENC encoder speed/quality preset (P1..P7) is a real
+// expert setting, default P4 (balanced) — matches the previous hardcoded
+// engine default so a fresh install is byte-for-byte unaffected.
+TEST(OutputSettingsTest, Defaults_NvencPresetIsP4) {
+    const OutputSettingsModel defaults = OutputSettingsModel::Defaults();
+    EXPECT_EQ(defaults.nvenc_preset, recorder_core::NvencPreset::P4);
+}
+
+// Red-proof (same class of bug as MergeFormatSelection_CarriesSplitSettings):
+// without the `.nvenc_preset` line in MergeFormatSelection, a live edit of the
+// Container & codecs card's "Encoder preset (NVENC)" combo would reach
+// ConfigPage::format_settings_ and be emitted via formatSettingsChanged, but
+// never reach output_settings_ — the recording would silently keep using the
+// OLD preset. Delete the `.nvenc_preset` line in MergeFormatSelection to watch
+// this test fail.
+TEST(OutputSettingsTest, MergeFormatSelection_CarriesNvencPreset) {
+    OutputSettingsModel live = OutputSettingsModel::Defaults();
+    live.nvenc_preset = recorder_core::NvencPreset::P4;
+
+    OutputSettingsModel incoming = live;
+    incoming.nvenc_preset = recorder_core::NvencPreset::P7;
+
+    MergeFormatSelection(live, incoming);
+
+    EXPECT_EQ(live.nvenc_preset, recorder_core::NvencPreset::P7)
+        << "MergeFormatSelection must carry a live encoder-preset edit into output_settings_";
+}
+
+// Verifies the last-mile wiring from OutputSettingsModel into the engine's
+// RecorderConfig (RecordingCoordinator.cpp, ApplyOutputSettingsToRecorderConfig).
+// Without this line the combo could be wired end-to-end through the UI and
+// still never reach the NVENC encoder at recording start.
+TEST(OutputSettingsTest, ApplyOutputSettingsToRecorderConfig_CarriesNvencPreset) {
+    recorder_core::RecorderConfig config{};
+    config.nvenc_preset = recorder_core::NvencPreset::P4;
+
+    OutputSettingsModel settings = OutputSettingsModel::Defaults();
+    settings.nvenc_preset = recorder_core::NvencPreset::P1;
+
+    ApplyOutputSettingsToRecorderConfig(config, settings);
+    EXPECT_EQ(config.nvenc_preset, recorder_core::NvencPreset::P1);
+}
+
 // ── EXOSNAP_OUTPUT_DIR override (DF-HISTORY) ─────────────────────────────────
 //
 // When EXOSNAP_OUTPUT_DIR is set to a non-empty path, EffectiveOutputFolder()
