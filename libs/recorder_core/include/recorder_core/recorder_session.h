@@ -279,8 +279,9 @@ struct RecorderConfig {
 
     // NVENC speed/quality preset (P1 fastest/lowest quality .. P7 slowest/best
     // quality). Applies uniformly to all three NVENC codecs; never capability-
-    // gated. Default P4 (balanced) — matches the previous hardcoded engine
-    // default for AV1/HEVC.
+    // gated. Default P4 (balanced) — matches the prior hardcoded AV1/HEVC
+    // default; H.264 previously used P6 (visible default change, expert-
+    // overridable — see ADR 0039).
     NvencPreset nvenc_preset = NvencPreset::P4;
 
     // Target bitrate in kbps — used for VariableBitrate and ConstantBitrate modes.

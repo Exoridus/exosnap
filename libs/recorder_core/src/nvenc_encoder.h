@@ -227,11 +227,12 @@ class NvencEncoder {
     float m_keyframeIntervalSecs = 2.0f; // default 2 s — matches pre-0.9.0 hardcoded value
 
     // NVENC speed/quality preset (P1..P7), user-selectable expert setting.
-    // Default P4 — matches the previous hardcoded engine default (P6 AV1/HEVC
-    // has internal pipeline depth that causes NV_ENC_ERR_NEED_MORE_INPUT on every
-    // frame even with lookahead disabled; EncodeFrame already buffers/drains this
-    // case via m_pendingPts/m_pendingSlots, so higher presets are not fatal, but
-    // they increase encode latency and 8-slot input-ring pressure).
+    // Default P4 — matches the prior hardcoded AV1/HEVC default; H.264 previously
+    // used P6 (visible default change, expert-overridable — see ADR 0039). P6 on
+    // AV1/HEVC has internal pipeline depth that causes NV_ENC_ERR_NEED_MORE_INPUT
+    // on every frame even with lookahead disabled; EncodeFrame already buffers/
+    // drains this case via m_pendingPts/m_pendingSlots, so higher presets are not
+    // fatal, but they increase encode latency and 8-slot input-ring pressure.
     NvencPreset m_preset = NvencPreset::P4;
     // Resolved via NvencPresetToGuid(m_preset) in FetchPresetConfig(); the member
     // initializer here is only the value before FetchPresetConfig() first runs.

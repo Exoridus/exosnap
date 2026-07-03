@@ -43,7 +43,8 @@ enum class NvencQualityPreset {
 // RateControlMode (which selects CQP/VBR/CBR) — the preset instead selects the
 // NVENC internal encoding pipeline/algorithm tradeoff. Applies uniformly across
 // all three NVENC codecs (H.264, HEVC, AV1); never capability-gated. Default P4
-// (balanced) — matches the pre-existing hardcoded engine behavior for AV1/HEVC.
+// (balanced) — matches the prior hardcoded AV1/HEVC default; H.264 previously
+// used P6 (visible default change, expert-overridable — see ADR 0039).
 enum class NvencPreset {
     P1, // fastest, lowest quality
     P2,

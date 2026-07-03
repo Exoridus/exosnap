@@ -447,6 +447,26 @@ TEST(RecordingPresetStore, NvencPresetMissingKey_DefaultsToP4) {
     CleanupFile(path);
 }
 
+// A present-but-invalid value ("p9" — not a real NVENC preset) falls back to the
+// struct default (P4) without resetting the store, same as every other unknown
+// enum string in the loader.
+TEST(RecordingPresetStore, NvencPresetInvalidValue_DefaultsToP4_NoReset) {
+    const QString path = UniqueTempPath();
+    QString toml = MakeSinglePresetToml(20, QStringLiteral("limited"));
+    toml.replace(QStringLiteral("color_range = \"limited\"\n"),
+                 QStringLiteral("color_range = \"limited\"\nnvenc_preset = \"p9\"\n"));
+    ASSERT_TRUE(toml.contains(QStringLiteral("nvenc_preset = \"p9\"")));
+    ASSERT_TRUE(WriteTomlString(path, toml));
+
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+    EXPECT_FALSE(state.was_reset);
+    ASSERT_EQ(state.presets.size(), 1u);
+    EXPECT_EQ(state.presets[0].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+
+    CleanupFile(path);
+}
+
 // A schema-19 file with the materialized old default ("full") loads WITHOUT a
 // reset (user presets preserved) and the colour range is migrated to Limited.
 TEST(RecordingPresetStore, MigrationV19_MaterializedFullBecomesLimited) {
