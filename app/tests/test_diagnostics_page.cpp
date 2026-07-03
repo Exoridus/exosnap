@@ -153,6 +153,60 @@ TEST_F(DiagnosticsPageTest, ExportReportStaysDisabledHonestly) {
     EXPECT_FALSE(export_btn->isEnabled());
 }
 
+// ---- SETTINGS-HONESTY-R1: Phase ④ "Open last report" link ------------------
+//
+// The former static placeholder ("The report card appears here after a recording
+// finishes.") never got populated -- the real post-flight report lives on the Edit
+// overlay's Review step. These pin the precise wording plus the honest gate: the
+// link only becomes enabled once MainWindow tells the page a completed recording
+// actually exists (mirrors RecordPage::hasCompletedRecording()).
+
+TEST_F(DiagnosticsPageTest, PostFlightPlaceholder_PointsToEditReviewStep) {
+    DiagnosticsPage page;
+    bool found = false;
+    for (auto* lbl : page.findChildren<QLabel*>()) {
+        if (lbl->text().contains(QStringLiteral("Edit view's Review step"))) {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found);
+    // The old, never-populated copy must not linger anywhere.
+    for (auto* lbl : page.findChildren<QLabel*>())
+        EXPECT_FALSE(lbl->text() == QStringLiteral("The report card appears here after a recording finishes."));
+}
+
+TEST_F(DiagnosticsPageTest, OpenLastReportLink_DisabledByDefault) {
+    DiagnosticsPage page;
+    QPushButton* btn = FindButton(page, QStringLiteral("Open last report"));
+    ASSERT_NE(btn, nullptr);
+    EXPECT_FALSE(btn->isEnabled());
+}
+
+TEST_F(DiagnosticsPageTest, SetHasLastRecording_TogglesLinkEnabledState) {
+    DiagnosticsPage page;
+    QPushButton* btn = FindButton(page, QStringLiteral("Open last report"));
+    ASSERT_NE(btn, nullptr);
+
+    page.setHasLastRecording(true);
+    EXPECT_TRUE(btn->isEnabled());
+
+    page.setHasLastRecording(false);
+    EXPECT_FALSE(btn->isEnabled());
+}
+
+TEST_F(DiagnosticsPageTest, OpenLastReportLink_ClickEmitsSignalWhenEnabled) {
+    DiagnosticsPage page;
+    page.setHasLastRecording(true);
+    QPushButton* btn = FindButton(page, QStringLiteral("Open last report"));
+    ASSERT_NE(btn, nullptr);
+
+    int count = 0;
+    QObject::connect(&page, &DiagnosticsPage::openLastReportRequested, [&]() { ++count; });
+    btn->click();
+    EXPECT_EQ(count, 1);
+}
+
 // ---- Phase D: Readiness verdicts (suite-diag.jsx clear/issues/blocked) ------
 
 TEST_F(DiagnosticsPageTest, VerdictClearShowsReadyPillAndPassTileTone) {

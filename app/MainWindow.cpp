@@ -1809,6 +1809,11 @@ void MainWindow::onRecordChromeStateChanged(bool recording, const QString& statu
     updateDiagnosticsOverlay();
     // QUICK-PILL-R1: update interactive quick-control pill visibility/state.
     updateQuickControlPill();
+
+    // SETTINGS-HONESTY-R1: keep Diagnostics Phase ④'s "Open last report" link's
+    // enabled state in sync with whether a completed recording actually exists.
+    if (diagnostics_page_ && record_page_)
+        diagnostics_page_->setHasLastRecording(record_page_->hasCompletedRecording());
 }
 
 bool MainWindow::nativeEvent(const QByteArray& event_type, void* message, qintptr* result) {
@@ -4305,6 +4310,17 @@ void MainWindow::buildDiagnosticsPage() {
     // Capability facts moved to the Device page; the Expert environment row links there.
     connect(diagnostics_page_, &DiagnosticsPage::openDevicePageRequested, this,
             [this]() { navigateToPage(kDevicePageIndex); });
+    // SETTINGS-HONESTY-R1: Phase ④'s "Open last report" link routes to the REAL
+    // post-flight report on the Edit overlay's Review step (EditExportPage) instead
+    // of duplicating it in Diagnostics. Guarded the same way the result Edit button
+    // is: only meaningful once a recording has completed.
+    connect(diagnostics_page_, &DiagnosticsPage::openLastReportRequested, this, [this]() {
+        if (!record_page_ || !record_page_->hasCompletedRecording())
+            return;
+        navigateToEditExportPage(record_page_->currentEditContext());
+    });
+    // Seed the initial gate state (record_page_ is always valid; see above).
+    diagnostics_page_->setHasLastRecording(record_page_->hasCompletedRecording());
     // Route live recording-pipeline diagnostics from the Record page's coordinator to
     // the Diagnostics page (same UI thread; direct connection).
     // CRITICAL: record_page_ is built unconditionally in the ctor and is always valid here.
