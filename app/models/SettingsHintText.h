@@ -90,9 +90,11 @@ inline const QString kKeyframeInterval = QStringLiteral(
     "0.5\xC2\xA0s\xC2\xA0=\xC2\xA0"
     "finest trim accuracy (slightly larger files). "
     "Shorter intervals produce more frequent keyframes \xe2\x80\x94 required for precise Quick Trim cuts.");
+inline const QString kEncoderPreset = QStringLiteral(
+    "NVENC speed/quality tradeoff: P1 = fastest / lowest quality \xC2\xB7 P7 = slowest / best quality \xC2\xB7 "
+    "default P4 (balanced). Applies from the next recording.");
 
 // ---- Skipped (control does not exist in current UI) ----
-// kEncoderPreset         — NVENC P1–P7 (0.5 wave — no UI control yet)
 // kHdr10                 — HDR10 (0.7 wave)
 // kPerTrackGain          — per-track gain (0.6 wave)
 // kMute                  — per-track mute (0.6 wave)

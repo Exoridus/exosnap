@@ -220,6 +220,7 @@ class ConfigPage : public QWidget {
     void onVideoCodecChanged(int index);
     void onVideoBitDepthChanged(int index);
     void onVideoColorRangeChanged(int index);
+    void onVideoEncoderPresetChanged(int index);
     void onAudioCodecChanged(int index);
     void onProfileSelectionChanged(int index);
     void onQualityChanged(int index);
@@ -254,6 +255,10 @@ class ConfigPage : public QWidget {
     // Syncs the colour-range combo to the model. NOT capability-gated — both Full
     // and Limited are always valid; only the recording lock disables it.
     void updateVideoColorRangeControl();
+    // Syncs the NVENC encoder-preset (P1..P7) combo to the model. NOT capability-
+    // gated — every preset is valid for every codec; only the recording lock
+    // disables it.
+    void updateVideoEncoderPresetControl();
     // Syncs the frame-pacing combo to the model. Not capability-gated — both modes
     // are always valid; only the recording lock disables it.
     void updateFramePacingControl();
@@ -521,6 +526,10 @@ class ConfigPage : public QWidget {
     // Colour range (0.7.0): Full (PC) / Limited (TV) selector. Never gated.
     QWidget* video_color_range_row_ = nullptr;
     QComboBox* video_color_range_combo_ = nullptr;
+    // Encoder preset (NVENC P1..P7): speed/quality tradeoff. Never gated —
+    // valid for every codec (H.264/HEVC/AV1) and every container.
+    QWidget* video_encoder_preset_row_ = nullptr;
+    QComboBox* video_encoder_preset_combo_ = nullptr;
     // Frame pacing (ADR 0035 Slice 2): Smooth / Newest selector. Never gated.
     QWidget* frame_pacing_row_ = nullptr;
     QComboBox* frame_pacing_combo_ = nullptr;

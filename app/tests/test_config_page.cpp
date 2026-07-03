@@ -2131,6 +2131,53 @@ TEST_F(ConfigPageTest, ColorRange_SelectingLimited_EmitsModel_NotGated) {
     EXPECT_EQ(emitted.color_range, capability::ColorRange::Full);
 }
 
+// NVENC-PRESET-R1: the encoder-preset combo exists with all seven P1..P7 items
+// and defaults to P4 (balanced) — replaces the Debug-only roadmapDummy_encoderPreset.
+TEST_F(ConfigPageTest, EncoderPresetControl_ExistsWithAllSevenPresets_DefaultsToP4) {
+    ConfigPage page(output_defaults_, video_defaults_);
+
+    auto* preset = page.findChild<QComboBox*>(QStringLiteral("videoEncoderPresetCombo"));
+    ASSERT_NE(preset, nullptr);
+    EXPECT_GE(preset->findData(static_cast<int>(recorder_core::NvencPreset::P1)), 0);
+    EXPECT_GE(preset->findData(static_cast<int>(recorder_core::NvencPreset::P2)), 0);
+    EXPECT_GE(preset->findData(static_cast<int>(recorder_core::NvencPreset::P3)), 0);
+    EXPECT_GE(preset->findData(static_cast<int>(recorder_core::NvencPreset::P4)), 0);
+    EXPECT_GE(preset->findData(static_cast<int>(recorder_core::NvencPreset::P5)), 0);
+    EXPECT_GE(preset->findData(static_cast<int>(recorder_core::NvencPreset::P6)), 0);
+    EXPECT_GE(preset->findData(static_cast<int>(recorder_core::NvencPreset::P7)), 0);
+    // Default is P4.
+    EXPECT_EQ(preset->currentData().toInt(), static_cast<int>(recorder_core::NvencPreset::P4));
+
+    // Debug dummy row (roadmapDummy_encoderPreset) must be gone — this is now a real control.
+    EXPECT_EQ(page.findChild<QComboBox*>(QStringLiteral("roadmapDummy_encoderPreset")), nullptr);
+}
+
+// Selecting a preset emits the model; it is never codec-gated (works for H.264,
+// which previously hardcoded P6 with no user control).
+TEST_F(ConfigPageTest, EncoderPreset_SelectingP7_EmitsModel_NotGated) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    OutputSettingsModel emitted = output_defaults_;
+    QObject::connect(&page, &ConfigPage::formatSettingsChanged, &page,
+                     [&emitted](const OutputSettingsModel& s) { emitted = s; });
+
+    auto* codec = page.findChild<QComboBox*>(QStringLiteral("videoCodecCombo"));
+    auto* preset = page.findChild<QComboBox*>(QStringLiteral("videoEncoderPresetCombo"));
+    ASSERT_NE(codec, nullptr);
+    ASSERT_NE(preset, nullptr);
+
+    // Even with H.264 (previously hardcoded to P6), the preset remains fully selectable.
+    codec->setCurrentIndex(codec->findData(static_cast<int>(capability::VideoCodec::H264Nvenc)));
+    preset->setCurrentIndex(preset->findData(static_cast<int>(recorder_core::NvencPreset::P7)));
+    EXPECT_EQ(emitted.nvenc_preset, recorder_core::NvencPreset::P7);
+    EXPECT_TRUE(preset->isEnabled());
+
+    // Back to P1.
+    preset->setCurrentIndex(preset->findData(static_cast<int>(recorder_core::NvencPreset::P1)));
+    EXPECT_EQ(emitted.nvenc_preset, recorder_core::NvencPreset::P1);
+}
+
 // ── ADR 0035 Slice 2: Frame pacing select (Smooth / Newest) ─────────────────
 
 TEST_F(ConfigPageTest, FramePacingSelectReflectsAndSetsModel) {
