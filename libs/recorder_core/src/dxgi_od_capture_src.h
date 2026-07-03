@@ -75,4 +75,26 @@ class DxgiOdCaptureSrc {
 // Returns true and sets *out_adapter on success.
 bool FindAdapterForMonitor(HMONITOR hmonitor, IDXGIAdapter1** out_adapter, std::string& out_error);
 
+// ---------------------------------------------------------------------------
+// OD capture-format support policy
+// ---------------------------------------------------------------------------
+// The desktop framebuffer duplicated by IDXGIOutputDuplication is not always
+// BGRA8: a 10 bpc SDR desktop (e.g. NVIDIA "Output color depth: 10 bpc")
+// composites to R10G10B10A2, and an HDR/Advanced-Color desktop to FP16.
+// DXGI_OUTDUPL_DESC.ModeDesc.Format describes the *desktop* surface; the
+// frames AcquireNextFrame actually delivers may differ (measured: the legacy
+// DuplicateOutput API reports an FP16 ModeDesc on an Advanced-Color desktop
+// but hands out BGRA8 compatibility frames). Format decisions must therefore
+// be made from the acquired frame's texture desc, never from ModeDesc alone.
+
+// True for the frame formats the recording pipeline supports as OD input:
+// BGRA8 (8-bit SDR desktop) and R10G10B10A2 (10 bpc SDR desktop). The D3D11
+// VideoProcessor converts both to NV12/P010. HDR/FP16 is intentionally NOT
+// supported here (HDR capture is a separate pipeline — ADR 0032 scope note).
+bool IsSupportedOdCaptureFormat(DXGI_FORMAT format) noexcept;
+
+// Short human-readable name for the formats OD capture can plausibly see.
+// Unknown values render as "DXGI_FORMAT(<n>)" into fallback_buf.
+const char* OdCaptureFormatName(DXGI_FORMAT format, char* fallback_buf, size_t fallback_len) noexcept;
+
 } // namespace recorder_core

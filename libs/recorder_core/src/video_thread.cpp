@@ -32,6 +32,7 @@
 #include <cstdio>
 #include <cstring>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <vector>
 
@@ -381,12 +382,19 @@ void VideoThread::Run() {
     const int32_t sourceHeightSigned =
         useOdCapture ? static_cast<int32_t>(odSrc.Height()) : static_cast<int32_t>(item.Size().Height);
 
+    // OD: the desktop's declared mode format (frames may still arrive in a
+    // different format — negotiated from the first acquired frame, see below).
+    // WGC: the frame pool is explicitly created as BGRA8.
+    char formatNameBuf[32];
+    const char* preInitFormatName = useOdCapture
+                                        ? OdCaptureFormatName(odSrc.Format(), formatNameBuf, sizeof(formatNameBuf))
+                                        : "B8G8R8A8_UNORM (8-bit SDR)";
+
     std::ostringstream diag;
     diag << "target.kind=" << TargetKindName(target.kind) << ", target.description=\"" << target.description
          << "\", target.native_id=0x" << std::hex << target.native_id << std::dec
          << ", capture.visibleContentSize=" << sourceWidthSigned << "x" << sourceHeightSigned
-         << ", capture.dxgiFormat=DXGI_FORMAT_B8G8R8A8_UNORM"
-         << ", videoCodec="
+         << ", capture.modeDescFormat=" << preInitFormatName << ", videoCodec="
          << (m_state.config.video_codec == VideoCodec::H264Nvenc
                  ? "H264_NVENC"
                  : (m_state.config.video_codec == VideoCodec::HevcNvenc ? "HEVC_NVENC" : "AV1_NVENC"))
@@ -557,7 +565,7 @@ void VideoThread::Run() {
 
     // --- NV12 / P010 texture ring + video processor ---
     // For 10-bit recording (HEVC Main10 / AV1 10-bit, ADR 0032 SDR BT.709) the
-    // VideoProcessor converts BGRA → P010 instead of NV12, and the encode ring +
+    // VideoProcessor converts RGB → P010 instead of NV12, and the encode ring +
     // reference texture use DXGI_FORMAT_P010. The output color space stays studio
     // BT.709 (no HDR/BT.2020 here — that is a later slice).
     const bool tenBit = (m_state.config.bit_depth == BitDepth::Bit10);
@@ -648,7 +656,7 @@ void VideoThread::Run() {
     }
 
     // Apply source crop, contain-fit destination, and black letterbox bars once.
-    // VideoProcessorBlt handles BGRA->NV12 conversion and GPU scaling.
+    // VideoProcessorBlt handles RGB->NV12/P010 conversion and GPU scaling.
     {
         D3D11_VIDEO_COLOR background{};
         background.RGBA.A = 1.0f;
@@ -715,10 +723,21 @@ void VideoThread::Run() {
     }
 
     // --- DXGI OD captured frame texture + cursor resources ---
-    // odCapturedTex: persistent BGRA texture we CopyResource into after each DXGI OD acquire.
+    // odCapturedTex: persistent texture we CopyResource into after each DXGI OD acquire.
     // DXGI OD textures are owned by the duplication interface and must be released before the
     // next AcquireNextFrame, so we always copy to this texture first.
+    //
+    // Format negotiation: the desktop framebuffer is BGRA8 on an 8-bit SDR
+    // desktop but R10G10B10A2 on a 10 bpc SDR desktop (e.g. NVIDIA "Output
+    // color depth: 10 bpc"). DXGI_OUTDUPL_DESC.ModeDesc.Format is NOT reliable
+    // for this decision (measured: FP16 ModeDesc with BGRA8 frames on an
+    // Advanced-Color desktop), so odCapturedTex is created lazily from the
+    // FIRST acquired frame's actual texture desc. CopyResource silently does
+    // nothing on format mismatch, which previously starved the encoder and
+    // surfaced minutes later as an opaque mux timeout — an unsupported format
+    // is now an explicit ErrorPhase::VideoCapture failure instead.
     winrt::com_ptr<ID3D11Texture2D> odCapturedTex;
+    DXGI_FORMAT odFrameFormat = DXGI_FORMAT_UNKNOWN; // set when odCapturedTex is created
     bool odCapturedTexValid = false;
     bool odCursorShapeValid = false;
     bool odCursorVisible = false;
@@ -731,34 +750,131 @@ void VideoThread::Run() {
     Win32CursorBitmap wgcCursorBitmap;
     std::vector<uint8_t> wgcCursorUploadBgra;
 
-    if (useOdCapture) {
-        {
-            D3D11_TEXTURE2D_DESC desc{};
-            desc.Width = sourceWidth;
-            desc.Height = sourceHeight;
-            desc.MipLevels = 1;
-            desc.ArraySize = 1;
-            desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-            desc.SampleDesc = {1, 0};
-            desc.Usage = D3D11_USAGE_DEFAULT;
-            desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+    // Validate an acquired OD frame; on the FIRST frame, negotiate the session
+    // capture format and create odCapturedTex to match it. Cheap on the
+    // steady-state path (one CPU-side GetDesc + compare per acquire).
+    //
+    //   Ok    — frame matches the negotiated format; safe to CopyResource.
+    //   Skip  — foreign-format frame interleaved into the stream (measured on
+    //           a 10 bpc SDR desktop: the legacy duplication delivers a BGRA8
+    //           stream with occasional FP16 frames). The caller releases the
+    //           frame and continues; the negotiated stream keeps feeding the
+    //           encoder and CFR duplication bridges the gap.
+    //   Fatal — first frame in an unsupported format, or a size change. An
+    //           explicit ErrorPhase::VideoCapture failure has been recorded
+    //           (previously this starved the encoder silently and surfaced as
+    //           an opaque "codec private data" mux error at stop).
+    enum class OdFrameCheck { Ok, Skip, Fatal };
+    bool odForeignFrameLogged = false;
+    auto checkOdFrame = [&](ID3D11Texture2D* rawTex) -> OdFrameCheck {
+        D3D11_TEXTURE2D_DESC rawDesc{};
+        rawTex->GetDesc(&rawDesc);
 
-            HRESULT odHr = d3dDevice->CreateTexture2D(&desc, nullptr, odCapturedTex.put());
-            if (FAILED(odHr)) {
-                char buf[80];
-                snprintf(buf, sizeof(buf), "CreateTexture2D(odCapturedTex) failed 0x%08lX",
-                         static_cast<unsigned long>(odHr));
-                m_state.RecordFailure(odHr, ErrorPhase::Prepare, buf);
-                if (com_inited)
-                    CoUninitialize();
-                return;
+        if (odCapturedTex != nullptr) {
+            if (rawDesc.Format == odFrameFormat && rawDesc.Width == sourceWidth && rawDesc.Height == sourceHeight) {
+                return OdFrameCheck::Ok;
+            }
+            if (rawDesc.Width != sourceWidth || rawDesc.Height != sourceHeight) {
+                std::ostringstream err;
+                err << "DXGI OD: capture frame size changed during session to " << rawDesc.Width << "x"
+                    << rawDesc.Height << " (expected " << sourceWidth << "x" << sourceHeight
+                    << "); restart recording to reconfigure";
+                m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
+                return OdFrameCheck::Fatal;
+            }
+            if (!odForeignFrameLogged) {
+                odForeignFrameLogged = true;
+                char fmtBuf[32];
+                char negBuf[32];
+                const logging::LogField fields[] = {
+                    {"frameFormat", OdCaptureFormatName(rawDesc.Format, fmtBuf, sizeof(fmtBuf))},
+                    {"negotiatedFormat", OdCaptureFormatName(odFrameFormat, negBuf, sizeof(negBuf))}};
+                logging::log(logging::LogLevel::Warn, "video_thread",
+                             "DXGI OD delivered a frame in a foreign format; skipping such frames this session",
+                             std::span<const logging::LogField>(fields, std::size(fields)));
+            }
+            // Frames discarded during pause are intentional, not drops (same
+            // convention as the drain loops' diag_recording gating).
+            if (!m_state.pause_requested.load()) {
+                m_state.diagnostics.OnFrameDroppedCoalesced();
+            }
+            return OdFrameCheck::Skip;
+        }
+
+        if (!IsSupportedOdCaptureFormat(rawDesc.Format)) {
+            char fmtBuf[32];
+            std::ostringstream err;
+            err << "DXGI OD: unsupported desktop capture format "
+                << OdCaptureFormatName(rawDesc.Format, fmtBuf, sizeof(fmtBuf))
+                << "; supported: B8G8R8A8_UNORM (8-bit SDR), R10G10B10A2_UNORM (10 bpc SDR). "
+                << "HDR desktops are not supported for monitor capture yet; preInit={" << diag.str() << "}";
+            m_state.RecordFailure(static_cast<int32_t>(DXGI_ERROR_UNSUPPORTED), ErrorPhase::VideoCapture, err.str());
+            return OdFrameCheck::Fatal;
+        }
+        if (rawDesc.Width != sourceWidth || rawDesc.Height != sourceHeight) {
+            std::ostringstream err;
+            err << "DXGI OD: capture frame size " << rawDesc.Width << "x" << rawDesc.Height
+                << " does not match duplicated output " << sourceWidth << "x" << sourceHeight << "; preInit={"
+                << diag.str() << "}";
+            m_state.RecordFailure(E_INVALIDARG, ErrorPhase::VideoCapture, err.str());
+            return OdFrameCheck::Fatal;
+        }
+
+        // The negotiated format must also be a supported VideoProcessor INPUT
+        // on this driver, or every CreateVideoProcessorInputView would fail
+        // per tick without a recorded failure — silent starvation again, just
+        // one stage later. Checked once here; fatal with the format named.
+        {
+            UINT formatSupport = 0;
+            const HRESULT supHr = videoEnum->CheckVideoProcessorFormat(rawDesc.Format, &formatSupport);
+            if (FAILED(supHr) || (formatSupport & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT) == 0) {
+                char fmtBuf[32];
+                std::ostringstream err;
+                err << "DXGI OD: capture format " << OdCaptureFormatName(rawDesc.Format, fmtBuf, sizeof(fmtBuf))
+                    << " is not a supported VideoProcessor input on this driver (CheckVideoProcessorFormat hr=0x"
+                    << std::hex << static_cast<unsigned long>(supHr) << ", support=0x" << formatSupport << std::dec
+                    << "); preInit={" << diag.str() << "}";
+                m_state.RecordFailure(static_cast<int32_t>(DXGI_ERROR_UNSUPPORTED), ErrorPhase::VideoCapture,
+                                      err.str());
+                return OdFrameCheck::Fatal;
             }
         }
-    }
+
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = sourceWidth;
+        desc.Height = sourceHeight;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = rawDesc.Format; // negotiated from the actual frame, not ModeDesc
+        desc.SampleDesc = {1, 0};
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+
+        HRESULT odHr = d3dDevice->CreateTexture2D(&desc, nullptr, odCapturedTex.put());
+        if (FAILED(odHr)) {
+            char buf[80];
+            snprintf(buf, sizeof(buf), "CreateTexture2D(odCapturedTex) failed 0x%08lX",
+                     static_cast<unsigned long>(odHr));
+            m_state.RecordFailure(odHr, ErrorPhase::Prepare, buf);
+            return OdFrameCheck::Fatal;
+        }
+        odFrameFormat = rawDesc.Format;
+
+        char fmtBuf[32];
+        char modeBuf[32];
+        const logging::LogField fields[] = {
+            {"frameFormat", OdCaptureFormatName(odFrameFormat, fmtBuf, sizeof(fmtBuf))},
+            {"modeDescFormat", OdCaptureFormatName(odSrc.Format(), modeBuf, sizeof(modeBuf))}};
+        logging::log(logging::LogLevel::Info, "video_thread", "DXGI OD capture format negotiated",
+                     std::span<const logging::LogField>(fields, std::size(fields)));
+        return OdFrameCheck::Ok;
+    };
 
     // --- GPU compositing resources ---
     // OD and WGC compositing operate in source coordinates. VideoProcessorBlt then
-    // applies crop, contain-fit scaling, letterbox background, and BGRA->NV12.
+    // applies crop, contain-fit scaling, letterbox background, and RGB->NV12/P010.
+    // For OD the compositor's render target must match the negotiated capture
+    // format, so Init is deferred until after the first frame (see below).
     const bool webcamProviderAvailable = (m_state.config.webcam.frame_provider != nullptr);
     const bool needsGpuCompositor = webcamProviderAvailable || m_state.config.capture_cursor;
     const uint32_t compositorWidth = sourceWidth;
@@ -766,16 +882,6 @@ void VideoThread::Run() {
 
     GpuCompositor gpuCompositor;
     bool gpuCompositorReady = false;
-    if (needsGpuCompositor) {
-        std::string compErr;
-        if (!gpuCompositor.Init(d3dDevice.get(), d3dContext.get(), compositorWidth, compositorHeight, compErr)) {
-            m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "GPU compositor init: " + compErr);
-            if (com_inited)
-                CoUninitialize();
-            return;
-        }
-        gpuCompositorReady = true;
-    }
 
     std::vector<uint8_t> camBgra;
     auto webcamRectFor = [&](const WebcamOverlayLive& overlay) {
@@ -1048,6 +1154,13 @@ void VideoThread::Run() {
         }
     } // end if (!useOdCapture) — WGC session init
 
+    // First WGC frame captured by the wait loop below. WGC (like OD) only
+    // delivers further frames when the source repaints, so the first frame
+    // must be kept and seeded into the encode loop — discarding it starved a
+    // fully static window into the opaque "codec private data" mux error
+    // (same failure family as the OD phase-correct seed, measured live).
+    winrt::com_ptr<ID3D11Texture2D> seedWgcTex;
+
     // --- Wait for first frame (5 s timeout) ---
     {
         LARGE_INTEGER freq{}, tStart{}, tNow{};
@@ -1100,6 +1213,22 @@ void VideoThread::Run() {
                 DXGI_OUTDUPL_FRAME_INFO info{};
                 HRESULT odHr = S_OK;
                 if (odSrc.TryAcquireFrame(16, &rawTex, &info, &odHr)) {
+                    // Negotiate the capture format from the first real frame
+                    // (creates odCapturedTex). Unsupported format => explicit
+                    // failure here instead of a silent mux timeout later.
+                    const OdFrameCheck check = checkOdFrame(rawTex);
+                    if (check == OdFrameCheck::Fatal) {
+                        rawTex->Release();
+                        odSrc.ReleaseFrame();
+                        if (com_inited)
+                            CoUninitialize();
+                        return;
+                    }
+                    if (check == OdFrameCheck::Skip) {
+                        rawTex->Release();
+                        odSrc.ReleaseFrame();
+                        continue;
+                    }
                     d3dContext->CopyResource(odCapturedTex.get(), rawTex);
                     rawTex->Release();
                     if (info.PointerShapeBufferSize > 0 && m_state.config.capture_cursor) {
@@ -1125,6 +1254,24 @@ void VideoThread::Run() {
                 try {
                     auto frame = framePool.TryGetNextFrame();
                     if (frame != nullptr) {
+                        // Keep the texture as the encode-loop seed (see
+                        // seedWgcTex above). Same borrow pattern as the drain
+                        // loops: the texture outlives the frame object. Only a
+                        // frame matching the configured capture size may seed
+                        // the encoder (mirrors the drain loop's size check);
+                        // on mismatch the drain loop reports the honest
+                        // size-changed failure on the next frame.
+                        auto surface = frame.Surface();
+                        auto access =
+                            surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+                        winrt::com_ptr<ID3D11Texture2D> tex;
+                        if (SUCCEEDED(access->GetInterface(IID_PPV_ARGS(tex.put())))) {
+                            D3D11_TEXTURE2D_DESC frameDesc{};
+                            tex->GetDesc(&frameDesc);
+                            if (frameDesc.Width == sourceWidth && frameDesc.Height == sourceHeight) {
+                                seedWgcTex = tex;
+                            }
+                        }
                         gotFirst = true;
                     } else {
                         Sleep(1);
@@ -1134,6 +1281,30 @@ void VideoThread::Run() {
                 }
             }
         }
+    }
+
+    // --- GPU compositor init (deferred until the capture format is known) ---
+    // WGC frames are always BGRA8 (frame pool format); OD frames use the format
+    // negotiated from the first acquired frame above. If stop was requested
+    // before the first OD frame arrived the format is unknown — skip init; the
+    // encode loop below will not run.
+    if (needsGpuCompositor && (!useOdCapture || odCapturedTex != nullptr)) {
+        const DXGI_FORMAT compositorFormat = useOdCapture ? odFrameFormat : DXGI_FORMAT_B8G8R8A8_UNORM;
+        std::string compErr;
+        if (!gpuCompositor.Init(d3dDevice.get(), d3dContext.get(), compositorWidth, compositorHeight, compErr,
+                                compositorFormat)) {
+            m_state.RecordFailure(E_FAIL, ErrorPhase::Prepare, "GPU compositor init: " + compErr);
+            if (!useOdCapture) {
+                if (captureSession != nullptr)
+                    captureSession.Close();
+                if (framePool != nullptr)
+                    framePool.Close();
+            }
+            if (com_inited)
+                CoUninitialize();
+            return;
+        }
+        gpuCompositorReady = true;
     }
 
     // --- Capture + encode loop ---
@@ -1548,13 +1719,15 @@ void VideoThread::Run() {
         bool cfr_was_paused = false;
         uint64_t cfr_pause_start_100ns = 0;
 
-        winrt::com_ptr<ID3D11Texture2D> pendingWgcTex;
+        // Seed the first WGC frame from the wait loop so a static window still
+        // encodes from t=0 (WGC only delivers frames on repaint).
+        winrt::com_ptr<ID3D11Texture2D> pendingWgcTex = std::move(seedWgcTex);
 
         // Present-cadence tap state (DXGI OD only): previous frame's LastPresentTime (QPC).
         uint64_t cfrLastPresentQpc = 0;
 
         // --- Phase-correct CFR pacing (DXGI-OD + Smooth mode only, ADR 0035) ---
-        // Ring of captured BGRA frames keyed by their source present-QPC. Each CFR
+        // Ring of captured frames (negotiated capture format) keyed by their source present-QPC. Each CFR
         // slot then encodes the frame whose present time is nearest the slot's ideal
         // present time, instead of newest-at-tick. WGC capture and Newest mode keep
         // the single-texture (odCapturedTex / pendingWgcTex) path verbatim.
@@ -1566,7 +1739,10 @@ void VideoThread::Run() {
         size_t ringHead = 0;                // next physical slot to overwrite (round-robin)
         uint64_t lastEmittedPresentQpc = 0; // present-QPC of the last frame handed to the encoder
         bool phaseRingHasFrame = false;     // true once any live entry exists since last reset
-        bool usePhaseCorrect = useOdCapture && m_state.config.cfr_pacing_mode == FramePacingMode::Smooth;
+        // odCapturedTex is null only if stop was requested before the first OD
+        // frame arrived (lazy format negotiation) — no ring needed then.
+        bool usePhaseCorrect =
+            useOdCapture && odCapturedTex != nullptr && m_state.config.cfr_pacing_mode == FramePacingMode::Smooth;
         if (usePhaseCorrect) {
             const uint32_t outFps = (m_state.config.frame_rate_den > 0)
                                         ? (m_state.config.frame_rate_num / m_state.config.frame_rate_den)
@@ -1618,6 +1794,18 @@ void VideoThread::Run() {
                         if (odHr == DXGI_ERROR_ACCESS_LOST)
                             sourceLost = true;
                         break;
+                    }
+                    // Format guard: skip foreign-format frames; fatal on size
+                    // change (explicit failure, not a silent CopyResource no-op).
+                    {
+                        const OdFrameCheck check = checkOdFrame(rawTex);
+                        if (check != OdFrameCheck::Ok) {
+                            rawTex->Release();
+                            odSrc.ReleaseFrame();
+                            if (check == OdFrameCheck::Fatal)
+                                break; // RecordFailure has set stop_requested
+                            continue;  // Skip: try the next frame
+                        }
                     }
                     // Only count capture/coalesce while actively recording — frames the
                     // backend produces during pause are intentionally discarded, not drops.
@@ -1756,8 +1944,14 @@ void VideoThread::Run() {
                 cfr_was_paused = false;
             }
 
-            // Set epoch on first frame arrival (OD or WGC)
-            const bool odHasFrame = usePhaseCorrect ? phaseRingHasFrame : odCapturedTexValid;
+            // Set epoch on first frame arrival (OD or WGC). In phase-correct
+            // mode the first frame lives in odCapturedTex (seeded by the
+            // wait-for-first-frame loop), NOT in the present-QPC ring — it must
+            // still open the epoch, otherwise a monitor that stays static after
+            // the first frame never encodes anything and the session dies
+            // minutes later as an opaque "codec private data" mux error
+            // (measured live on a 10 bpc SDR desktop, fix/od-10bit-desktop).
+            const bool odHasFrame = usePhaseCorrect ? (phaseRingHasFrame || odCapturedTexValid) : odCapturedTexValid;
             const bool hasNewFrame = useOdCapture ? odHasFrame : (pendingWgcTex != nullptr);
             if (!videoEpochSet && hasNewFrame) {
                 epochQpc100ns = Qpc100ns(qpcFreq);
@@ -1836,6 +2030,14 @@ void VideoThread::Run() {
                         // No fresh frame near this slot -> existing duplicate / CFR-skip path.
                         rawSourceTex = nullptr;
                     }
+                    // Seed: until a reference NV12 exists (session start) the
+                    // ring may be empty while odCapturedTex already holds the
+                    // first frame from the wait loop — use it so a static
+                    // desktop encodes real content from t=0 instead of
+                    // silently dropping every tick.
+                    if (rawSourceTex == nullptr && !refNv12Valid && odCapturedTexValid) {
+                        rawSourceTex = odCapturedTex.get();
+                    }
                 } else {
                     rawSourceTex =
                         useOdCapture ? (odCapturedTexValid ? odCapturedTex.get() : nullptr) : pendingWgcTex.get();
@@ -1859,7 +2061,7 @@ void VideoThread::Run() {
                         pendingWgcTex = nullptr;
                     }
 
-                    // Convert BGRA frame to NV12 via VideoProcessorBlt
+                    // Convert RGB frame to NV12/P010 via VideoProcessorBlt
                     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
                     ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
                     ivDesc.Texture2D.MipSlice = 0;
@@ -1991,6 +2193,18 @@ void VideoThread::Run() {
                             sourceLost = true;
                         break;
                     }
+                    // Format guard: skip foreign-format frames; fatal on size
+                    // change (explicit failure, not a silent CopyResource no-op).
+                    {
+                        const OdFrameCheck check = checkOdFrame(rawTex);
+                        if (check != OdFrameCheck::Ok) {
+                            rawTex->Release();
+                            odSrc.ReleaseFrame();
+                            if (check == OdFrameCheck::Fatal)
+                                break; // RecordFailure has set stop_requested
+                            continue;  // Skip: try the next frame
+                        }
+                    }
                     d3dContext->CopyResource(odCapturedTex.get(), rawTex);
                     rawTex->Release();
                     if (info.PointerShapeBufferSize > 0 && m_state.config.capture_cursor) {
@@ -2075,6 +2289,13 @@ void VideoThread::Run() {
                     }
                 } catch (...) {
                 }
+                // Seed the first WGC frame from the wait loop so a static
+                // window still encodes at least one real frame (WGC only
+                // delivers frames on repaint).
+                if (latestTex == nullptr && seedWgcTex != nullptr) {
+                    latestTex = std::move(seedWgcTex);
+                    latestFrameTicks100ns = static_cast<int64_t>(Qpc100ns(qpcFreq));
+                }
             }
 
             // Pause: discard frames and track paused duration for epoch adjustment on resume
@@ -2129,7 +2350,7 @@ void VideoThread::Run() {
                         odCapturedTexValid = false;
                     }
 
-                    // BGRA -> NV12 via VideoProcessorBlt into the selected slot's view
+                    // RGB -> NV12/P010 via VideoProcessorBlt into the selected slot's view
                     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivDesc{};
                     ivDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
                     ivDesc.Texture2D.MipSlice = 0;

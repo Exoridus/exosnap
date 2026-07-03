@@ -26,7 +26,14 @@ class GpuCompositor {
         float spill_reduction = 0.30f;
     };
 
-    bool Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, std::string& err);
+    // render_format: format of the composite render target. Must match the
+    // capture source's frame format (BeginFrame copies the background via
+    // CopyResource, which requires identical formats). BGRA8 for WGC and
+    // 8-bit SDR OD capture; R10G10B10A2 for a 10 bpc SDR desktop. The overlay
+    // shader samples normalized floats and writes through the RTV, so it is
+    // format-agnostic; webcam/cursor upload textures stay BGRA8 regardless.
+    bool Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, std::string& err,
+              DXGI_FORMAT render_format = DXGI_FORMAT_B8G8R8A8_UNORM);
     bool BeginFrame(ID3D11Texture2D* background, std::string& err);
 
     bool DrawWebcam(const uint8_t* bgra, int width, int height, const WebcamPixelRect& rect, bool mirror,
@@ -60,6 +67,7 @@ class GpuCompositor {
     ID3D11DeviceContext* context_ = nullptr;
     UINT width_ = 0;
     UINT height_ = 0;
+    DXGI_FORMAT render_format_ = DXGI_FORMAT_B8G8R8A8_UNORM;
 
     winrt::com_ptr<ID3D11Texture2D> composite_tex_;
     winrt::com_ptr<ID3D11RenderTargetView> composite_rtv_;

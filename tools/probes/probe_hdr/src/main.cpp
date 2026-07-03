@@ -39,8 +39,7 @@ const char* ColorSpaceName(DXGI_COLOR_SPACE_TYPE cs) {
 }
 
 bool IsHdrColorSpace(DXGI_COLOR_SPACE_TYPE cs) {
-    return cs == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 ||
-           cs == DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020;
+    return cs == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 || cs == DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020;
 }
 
 void DumpDisplays() {
@@ -63,8 +62,7 @@ void DumpDisplays() {
             DXGI_OUTPUT_DESC1 d{};
             if (SUCCEEDED(out6->GetDesc1(&d))) {
                 printf("  display \"%ls\":\n", d.DeviceName);
-                printf("    colorSpace      = %d  %s\n", static_cast<int>(d.ColorSpace),
-                       ColorSpaceName(d.ColorSpace));
+                printf("    colorSpace      = %d  %s\n", static_cast<int>(d.ColorSpace), ColorSpaceName(d.ColorSpace));
                 printf("    HDR mode        = %s\n", IsHdrColorSpace(d.ColorSpace) ? "ON" : "off (SDR)");
                 printf("    bitsPerColor    = %u\n", d.BitsPerColor);
                 printf("    luminance       = min %.4f / max %.1f / maxFullFrame %.1f nits\n",
@@ -86,9 +84,8 @@ void CheckConversion(ID3D11VideoProcessorEnumerator1* en1, const char* label, DX
                      DXGI_COLOR_SPACE_TYPE inCS, DXGI_FORMAT outFmt, DXGI_COLOR_SPACE_TYPE outCS) {
     BOOL supported = FALSE;
     const HRESULT hr = en1->CheckVideoProcessorFormatConversion(inFmt, inCS, outFmt, outCS, &supported);
-    printf("  [%-3s %s] %-46s -> %s\n", label,
-           SUCCEEDED(hr) ? (supported ? "SUPPORTED" : "  no     ") : " ERROR   ", ColorSpaceName(inCS),
-           ColorSpaceName(outCS));
+    printf("  [%-3s %s] %-46s -> %s\n", label, SUCCEEDED(hr) ? (supported ? "SUPPORTED" : "  no     ") : " ERROR   ",
+           ColorSpaceName(inCS), ColorSpaceName(outCS));
 }
 
 void CheckVideoProcessor() {
@@ -97,8 +94,8 @@ void CheckVideoProcessor() {
     ComPtr<ID3D11DeviceContext> ctx;
     const D3D_FEATURE_LEVEL fls[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
     const UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
-    if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, fls, 2, D3D11_SDK_VERSION,
-                                 &dev, nullptr, &ctx))) {
+    if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, fls, 2, D3D11_SDK_VERSION, &dev,
+                                 nullptr, &ctx))) {
         printf("  D3D11CreateDevice failed\n");
         return;
     }
@@ -141,6 +138,20 @@ void CheckVideoProcessor() {
     // 10-bit RGB input variant.
     CheckConversion(en1.Get(), "HDR", DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
                     DXGI_FORMAT_P010, DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_LEFT_P2020);
+
+    // 10 bpc SDR desktop (fix/od-10bit-desktop): DWM composes SDR at 10 bit /
+    // FP16 scRGB. Can the VP convert those SDR sources to the SDR encode
+    // formats directly (gamma + matrix + range)?
+    CheckConversion(en1.Get(), "sdr", DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+                    DXGI_FORMAT_NV12, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
+    CheckConversion(en1.Get(), "sdr", DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+                    DXGI_FORMAT_P010, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
+    CheckConversion(en1.Get(), "sdr", DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
+                    DXGI_FORMAT_NV12, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
+    CheckConversion(en1.Get(), "sdr", DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
+                    DXGI_FORMAT_NV12, DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P709);
+    CheckConversion(en1.Get(), "sdr", DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709,
+                    DXGI_FORMAT_P010, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
 }
 
 } // namespace

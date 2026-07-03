@@ -115,10 +115,14 @@ void SetHResultError(std::string& err, const char* what, HRESULT hr) {
 
 } // namespace
 
-bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height,
-                         std::string& err) {
+bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UINT width, UINT height, std::string& err,
+                         DXGI_FORMAT render_format) {
     if (device == nullptr || context == nullptr || width == 0 || height == 0) {
         err = "GpuCompositor::Init invalid arguments";
+        return false;
+    }
+    if (render_format != DXGI_FORMAT_B8G8R8A8_UNORM && render_format != DXGI_FORMAT_R10G10B10A2_UNORM) {
+        err = "GpuCompositor::Init unsupported render format";
         return false;
     }
 
@@ -126,6 +130,7 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
     context_ = context;
     width_ = width;
     height_ = height;
+    render_format_ = render_format;
 
     winrt::com_ptr<ID3DBlob> vs_blob;
     winrt::com_ptr<ID3DBlob> ps_blob;
@@ -164,7 +169,7 @@ bool GpuCompositor::Init(ID3D11Device* device, ID3D11DeviceContext* context, UIN
     tex_desc.Height = height_;
     tex_desc.MipLevels = 1;
     tex_desc.ArraySize = 1;
-    tex_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    tex_desc.Format = render_format_; // matches the capture source's frame format
     tex_desc.SampleDesc.Count = 1;
     tex_desc.Usage = D3D11_USAGE_DEFAULT;
     tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET;
@@ -233,7 +238,7 @@ bool GpuCompositor::BeginFrame(ID3D11Texture2D* background, std::string& err) {
 
     D3D11_TEXTURE2D_DESC desc{};
     background->GetDesc(&desc);
-    if (desc.Width != width_ || desc.Height != height_ || desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM) {
+    if (desc.Width != width_ || desc.Height != height_ || desc.Format != render_format_) {
         err = "GpuCompositor::BeginFrame background dimensions/format mismatch";
         return false;
     }

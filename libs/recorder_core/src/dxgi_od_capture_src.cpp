@@ -1,6 +1,9 @@
 #include "dxgi_od_capture_src.h"
 
+#include <dxgi1_5.h>
+
 #include <cstdio>
+#include <iterator>
 
 namespace recorder_core {
 
@@ -91,20 +94,36 @@ bool DxgiOdCaptureSrc::Open(ID3D11Device* device, HMONITOR hmonitor, std::string
         return false;
     }
 
-    // QI to IDXGIOutput1 for DuplicateOutput
-    winrt::com_ptr<IDXGIOutput1> output1 = matchedOutput.as<IDXGIOutput1>();
-    if (!output1) {
-        out_error = "IDXGIOutput1 not supported (requires DXGI 1.2 / Windows 8+)";
-        return false;
+    // Prefer IDXGIOutput5::DuplicateOutput1 (Win10 1703+): declaring the
+    // supported SDR formats lets DXGI hand us the desktop's native surface —
+    // BGRA8 on an 8-bit desktop, R10G10B10A2 on a 10 bpc SDR desktop — instead
+    // of relying on the legacy API's implicit 8-bit-only behavior. On desktops
+    // whose format is not in the list (e.g. FP16 HDR/Advanced Color),
+    // DuplicateOutput1 fails and we fall back to the legacy API below, which
+    // provides a tone-mapped BGRA8 compatibility surface.
+    winrt::com_ptr<IDXGIOutputDuplication> duplication;
+    HRESULT dup1Hr = E_NOINTERFACE;
+    if (winrt::com_ptr<IDXGIOutput5> output5 = matchedOutput.try_as<IDXGIOutput5>()) {
+        static constexpr DXGI_FORMAT kSupportedFormats[] = {DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM};
+        dup1Hr = output5->DuplicateOutput1(device, 0, static_cast<UINT>(std::size(kSupportedFormats)),
+                                           kSupportedFormats, duplication.put());
     }
 
-    winrt::com_ptr<IDXGIOutputDuplication> duplication;
-    hr = output1->DuplicateOutput(device, duplication.put());
-    if (FAILED(hr)) {
-        char buf[96];
-        snprintf(buf, sizeof(buf), "DuplicateOutput failed 0x%08lX", static_cast<unsigned long>(hr));
-        out_error = buf;
-        return false;
+    if (!duplication) {
+        // Legacy fallback (BGRA8-only; DXGI converts HDR desktops to SDR).
+        winrt::com_ptr<IDXGIOutput1> output1 = matchedOutput.try_as<IDXGIOutput1>();
+        if (!output1) {
+            out_error = "IDXGIOutput1 not supported (requires DXGI 1.2 / Windows 8+)";
+            return false;
+        }
+        hr = output1->DuplicateOutput(device, duplication.put());
+        if (FAILED(hr)) {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "DuplicateOutput failed 0x%08lX (DuplicateOutput1: 0x%08lX)",
+                     static_cast<unsigned long>(hr), static_cast<unsigned long>(dup1Hr));
+            out_error = buf;
+            return false;
+        }
     }
 
     DXGI_OUTDUPL_DESC desc{};
@@ -172,6 +191,31 @@ void DxgiOdCaptureSrc::ReleaseFrame() {
     if (m_frame_held && m_duplication) {
         m_duplication->ReleaseFrame();
         m_frame_held = false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OD capture-format support policy (see header for rationale)
+// ---------------------------------------------------------------------------
+
+bool IsSupportedOdCaptureFormat(DXGI_FORMAT format) noexcept {
+    return format == DXGI_FORMAT_B8G8R8A8_UNORM || format == DXGI_FORMAT_R10G10B10A2_UNORM;
+}
+
+const char* OdCaptureFormatName(DXGI_FORMAT format, char* fallback_buf, size_t fallback_len) noexcept {
+    switch (format) {
+    case DXGI_FORMAT_B8G8R8A8_UNORM:
+        return "B8G8R8A8_UNORM (8-bit SDR)";
+    case DXGI_FORMAT_R10G10B10A2_UNORM:
+        return "R10G10B10A2_UNORM (10 bpc SDR)";
+    case DXGI_FORMAT_R16G16B16A16_FLOAT:
+        return "R16G16B16A16_FLOAT (HDR/Advanced Color)";
+    default:
+        if (fallback_buf != nullptr && fallback_len > 0) {
+            snprintf(fallback_buf, fallback_len, "DXGI_FORMAT(%u)", static_cast<unsigned>(format));
+            return fallback_buf;
+        }
+        return "DXGI_FORMAT(?)";
     }
 }
 
