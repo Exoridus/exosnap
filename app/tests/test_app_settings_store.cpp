@@ -105,8 +105,8 @@ TEST(AppSettingsStoreTest, AppSettingsStore_Save_WritesSettingsVersion) {
     store.Save(settings);
 
     QSettings raw_settings(settings_path, QSettings::IniFormat);
-    // Version bumped to 17: ELEVATION-FOUNDATION-R1 adds present_diagnostics_optin.
-    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 17);
+    // Version bumped to 18: SETTINGS-HONESTY-R1 adds developer_log_level.
+    EXPECT_EQ(raw_settings.value(QStringLiteral("settings_version")).toInt(), 18);
 }
 
 // CRASH-WIRE-R1: auto_send_crash_reports round-trip + default tests

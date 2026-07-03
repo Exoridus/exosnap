@@ -92,8 +92,9 @@ class DiagnosticsPage : public QWidget {
 
     // SETTINGS-HONESTY-R1: Phase ④'s "Open last report" link. The real post-flight
     // report lives on the Edit overlay's Review step (EditExportPage); this button
-    // never duplicates it, only routes there. MainWindow only connects this when a
-    // completed recording exists to open (see setHasLastRecording).
+    // never duplicates it, only routes there. The button itself is disabled unless
+    // a completed recording exists to open (see setHasLastRecording); MainWindow's
+    // handler re-checks the same gate before routing.
     void openLastReportRequested();
 
   private slots:
