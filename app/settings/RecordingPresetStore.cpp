@@ -159,6 +159,45 @@ std::optional<recorder_core::NvencQualityPreset> NvencQualityPresetFromString(QS
     return std::nullopt;
 }
 
+QString NvencPresetToString(recorder_core::NvencPreset v) {
+    switch (v) {
+    case recorder_core::NvencPreset::P1:
+        return QStringLiteral("p1");
+    case recorder_core::NvencPreset::P2:
+        return QStringLiteral("p2");
+    case recorder_core::NvencPreset::P3:
+        return QStringLiteral("p3");
+    case recorder_core::NvencPreset::P4:
+        return QStringLiteral("p4");
+    case recorder_core::NvencPreset::P5:
+        return QStringLiteral("p5");
+    case recorder_core::NvencPreset::P6:
+        return QStringLiteral("p6");
+    case recorder_core::NvencPreset::P7:
+        return QStringLiteral("p7");
+    }
+    return QStringLiteral("p4");
+}
+
+std::optional<recorder_core::NvencPreset> NvencPresetFromString(QStringView s) {
+    const QString n = s.trimmed().toString().toLower();
+    if (n == QStringLiteral("p1"))
+        return recorder_core::NvencPreset::P1;
+    if (n == QStringLiteral("p2"))
+        return recorder_core::NvencPreset::P2;
+    if (n == QStringLiteral("p3"))
+        return recorder_core::NvencPreset::P3;
+    if (n == QStringLiteral("p4"))
+        return recorder_core::NvencPreset::P4;
+    if (n == QStringLiteral("p5"))
+        return recorder_core::NvencPreset::P5;
+    if (n == QStringLiteral("p6"))
+        return recorder_core::NvencPreset::P6;
+    if (n == QStringLiteral("p7"))
+        return recorder_core::NvencPreset::P7;
+    return std::nullopt;
+}
+
 QString RateControlModeToString(recorder_core::RateControlMode v) {
     switch (v) {
     case recorder_core::RateControlMode::ConstantQuality:
@@ -506,6 +545,7 @@ toml::table PresetToToml(const RecordingPreset& preset) {
     out_tbl.emplace("video_codec", VideoCodecToString(out.video_codec).toStdString());
     out_tbl.emplace("bit_depth", VideoBitDepthToString(out.bit_depth).toStdString());
     out_tbl.emplace("color_range", ColorRangeToString(out.color_range).toStdString());
+    out_tbl.emplace("nvenc_preset", NvencPresetToString(out.nvenc_preset).toStdString());
     out_tbl.emplace("audio_codec", AudioCodecToString(out.audio_codec).toStdString());
     out_tbl.emplace("resolution_mode", OutputResolutionModeToString(out.resolution.mode).toStdString());
     out_tbl.emplace("custom_width", static_cast<int64_t>(out.resolution.custom_width));
@@ -673,6 +713,13 @@ std::optional<RecordingPreset> PresetFromToml(const toml::table& tbl) {
         const auto cr = ColorRangeFromString(QString::fromStdString(TomlStr(tbl["output"]["color_range"])));
         if (cr.has_value())
             out.color_range = *cr;
+    }
+    {
+        // NVENC-PRESET-R1: additive field — missing key (older preset files) leaves
+        // out.nvenc_preset at its struct default (P4). No schema bump needed.
+        const auto np = NvencPresetFromString(QString::fromStdString(TomlStr(tbl["output"]["nvenc_preset"])));
+        if (np.has_value())
+            out.nvenc_preset = *np;
     }
     {
         const auto c = AudioCodecFromString(QString::fromStdString(TomlStr(tbl["output"]["audio_codec"])));

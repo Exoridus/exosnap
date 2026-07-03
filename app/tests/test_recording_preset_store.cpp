@@ -283,6 +283,60 @@ TEST(RecordingPresetStore, ColorRangePersists_Full) {
 }
 
 // ===========================================================================
+// NVENC encoder preset (P1..P7) persists (NVENC-PRESET-R1). Additive field —
+// schema stays 20; a preset file missing the key loads the struct default (P4).
+// ===========================================================================
+
+TEST(RecordingPresetStore, NvencPresetPersists_DefaultP4) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Default preset";
+    p.config = MakeDefaultPreset().config; // P4 by default
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+    }
+
+    CleanupFile(path);
+}
+
+TEST(RecordingPresetStore, NvencPresetPersists_P7) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "P7 preset";
+    p.config = MakeDefaultPreset().config;
+    p.config.output.nvenc_preset = recorder_core::NvencPreset::P7;
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.output.nvenc_preset, recorder_core::NvencPreset::P7);
+    }
+
+    CleanupFile(path);
+}
+
+// ===========================================================================
 // Schema v19 -> v20 colour-range migration (fix/color-range-signaling)
 //
 // Under schema <=19 "full" was the MATERIALIZED old code default, not an
@@ -374,6 +428,24 @@ QString MakeSinglePresetToml(int schema_version, const QString& color_range) {
 }
 
 } // namespace
+
+// NVENC-PRESET-R1 additive-load proof: MakeSinglePresetToml() writes a schema-20
+// preset file that never had an "nvenc_preset" key (it predates this feature, same
+// as it never had a "bit_depth" key). Loading it must NOT reset the store and must
+// leave the field at its struct default (P4) — proving the additive-TOML contract
+// ("missing key -> P4, no schema bump") holds against the real Load() code path.
+TEST(RecordingPresetStore, NvencPresetMissingKey_DefaultsToP4) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(20, QStringLiteral("limited"))));
+
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+    EXPECT_FALSE(state.was_reset);
+    ASSERT_EQ(state.presets.size(), 1u);
+    EXPECT_EQ(state.presets[0].config.output.nvenc_preset, recorder_core::NvencPreset::P4);
+
+    CleanupFile(path);
+}
 
 // A schema-19 file with the materialized old default ("full") loads WITHOUT a
 // reset (user presets preserved) and the colour range is migrated to Limited.
