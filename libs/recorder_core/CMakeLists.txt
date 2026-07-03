@@ -308,6 +308,11 @@ add_library(recorder_core STATIC
     include/recorder_core/pipeline_health.h
     src/pipeline_health.cpp
     src/video_thread.cpp
+    src/yuv_to_bgra.h
+    src/yuv_to_bgra.cpp
+    src/preview_publish_gate.h
+    src/preview_staging_ring.h
+    src/preview_staging_ring.cpp
     src/audio_thread.cpp
     src/mux_thread.cpp
     src/matroska_stream_writer.cpp
@@ -649,6 +654,49 @@ exosnap_add_gtest(
 )
 target_include_directories(test_gpu_compositor PRIVATE src)
 target_compile_definitions(test_gpu_compositor PRIVATE NOMINMAX)
+
+# Strand 3 slice 1 (WYSIWYG preview): pure NV12/P010 -> BGRA color-conversion
+# math. Self-contained (no D3D11/NVENC) -- also the bugfix validation for the
+# pre-existing hard-coded-BT.601 snapshot conversion.
+exosnap_add_gtest(
+    NAME test_yuv_to_bgra
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_yuv_to_bgra.cpp
+            src/yuv_to_bgra.cpp
+)
+target_include_directories(test_yuv_to_bgra PRIVATE src include)
+
+# Strand 3 slice 1: conversion micro-benchmark (prints ms/frame at 1080p/4K;
+# asserts nothing about time -- CI-safe, numbers go to the engineering record).
+exosnap_add_gtest(
+    NAME test_yuv_to_bgra_bench
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_yuv_to_bgra_bench.cpp
+            src/yuv_to_bgra.cpp
+)
+target_include_directories(test_yuv_to_bgra_bench PRIVATE src include)
+
+# Strand 3 slice 1: pure throttle/dirty state machine for the live preview
+# tap. Header-only logic; no clock/D3D11/threads needed to test it.
+exosnap_add_gtest(
+    NAME test_preview_publish_gate
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_preview_publish_gate.cpp
+)
+target_include_directories(test_preview_publish_gate PRIVATE src)
+
+# Strand 3 slice 1: two-slot staging-texture ring that lets VideoThread read
+# back composed frames without Map() stalling on the newest, possibly
+# in-flight copy. WARP-backed (see test_gpu_compositor above), deterministic.
+exosnap_add_gtest(
+    NAME test_preview_staging_ring
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_preview_staging_ring.cpp
+            src/preview_staging_ring.cpp
+    LIBRARIES d3d11.lib dxgi.lib
+)
+target_include_directories(test_preview_staging_ring PRIVATE src)
+target_compile_definitions(test_preview_staging_ring PRIVATE NOMINMAX)
 
 exosnap_add_gtest(
     NAME test_matroska_mux_structure

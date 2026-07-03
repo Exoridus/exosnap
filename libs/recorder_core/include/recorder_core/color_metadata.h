@@ -37,6 +37,11 @@ enum class TransferCharacteristics : uint8_t {
 enum class MatrixCoefficients : uint8_t {
     Bt709 = 1,       // Y'CbCr from BT.709 primaries — SDR default
     Unspecified = 2, //
+    Bt601 = 6,       // Y'CbCr from BT.601/SMPTE-170M primaries (legacy SD; not
+                     // produced by the encoder, but a recognized CICP value —
+                     // the shared YUV->BGRA conversion helper supports it so
+                     // callers reading foreign/legacy color metadata convert
+                     // correctly too).
     Bt2020Ncl = 9,   // BT.2020 non-constant luminance (later slice)
 };
 

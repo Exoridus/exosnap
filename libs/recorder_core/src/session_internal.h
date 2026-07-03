@@ -212,6 +212,11 @@ struct SessionState {
     PipelineDiagnosticsAggregator diagnostics;
     DiagnosticsCallback diagnostics_callback;
 
+    // Live WYSIWYG preview-frame callback (set before Record(); see
+    // RecorderSession::SetPreviewFrameCallback). VideoThread reads this once
+    // per composed frame; unset == disabled at zero cost (plain bool check).
+    PreviewFrameCallback preview_frame_callback;
+
     // Record config captured at Record() time
     RecorderConfig config;
 

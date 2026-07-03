@@ -6,7 +6,10 @@
 #include "dxgi_od_capture_src.h"
 #include "gpu_compositor.h"
 #include "nvenc_video_encoder.h"
+#include "preview_publish_gate.h"
+#include "preview_staging_ring.h"
 #include "session_internal.h"
+#include "yuv_to_bgra.h"
 
 #include <recorder_core/frame_pacing.h>
 #include <recorder_core/logging/logging.h>
@@ -1311,30 +1314,15 @@ void VideoThread::Run() {
         if (!m_state.snapshot_requested.load())
             return;
 
-        // 10-bit (P010) snapshot is not implemented: the readback below assumes an
-        // 8-bit NV12 layout. Fail the request cleanly rather than produce garbage.
-        // The encode path is unaffected; only CaptureFrame is unavailable for 10-bit.
-        if (tenBit) {
-            SnapshotCallback pending_cb;
-            {
-                std::lock_guard lk(m_state.snapshot_callback_mutex);
-                pending_cb = std::move(m_state.snapshot_callback);
-                m_state.snapshot_callback = nullptr;
-                m_state.snapshot_requested.store(false);
-            }
-            if (pending_cb)
-                pending_cb(false, 0, 0, {}, "CaptureFrame is not supported for 10-bit recording");
-            return;
-        }
-
-        // Lazily allocate the staging texture on first use.
+        // Lazily allocate the staging texture on first use. Matches encodeFormat
+        // (NV12 for 8-bit, P010 for 10-bit) so both bit depths can snapshot.
         if (!snapshotStagingTex) {
             D3D11_TEXTURE2D_DESC sd{};
             sd.Width = encodeWidth;
             sd.Height = encodeHeight;
             sd.MipLevels = 1;
             sd.ArraySize = 1;
-            sd.Format = DXGI_FORMAT_NV12;
+            sd.Format = encodeFormat;
             sd.SampleDesc = {1, 0};
             sd.Usage = D3D11_USAGE_STAGING;
             sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
@@ -1357,7 +1345,7 @@ void VideoThread::Run() {
             }
         }
 
-        // Copy the final NV12 encode-ready frame to the staging texture.
+        // Copy the final NV12/P010 encode-ready frame to the staging texture.
         d3dContext->CopyResource(snapshotStagingTex.get(), nv12Textures[slot_idx].get());
 
         // Map for CPU read (synchronization point — stalls until GPU copy completes).
@@ -1380,38 +1368,135 @@ void VideoThread::Run() {
             return;
         }
 
-        // NV12 layout:
-        //   Plane Y:  rows 0 .. height-1, each row = RowPitch bytes, 1 byte per pixel
+        // NV12/P010 layout:
+        //   Plane Y:  rows 0 .. height-1, each row = RowPitch bytes
         //   Plane UV: rows height .. height+height/2-1, interleaved U V, same RowPitch
         const auto* y_plane = static_cast<const uint8_t*>(mapped.pData);
         const auto* uv_plane = y_plane + static_cast<size_t>(mapped.RowPitch) * encodeHeight;
-        const uint32_t y_pitch = mapped.RowPitch;
-        const uint32_t uv_pitch = mapped.RowPitch;
 
         std::vector<uint8_t> bgra;
         bgra.resize(static_cast<size_t>(encodeWidth) * encodeHeight * 4u);
 
-        // BT.601 limited-range (studio swing) YUV → full-range RGB → BGRA
-        for (uint32_t row = 0; row < encodeHeight; ++row) {
-            const uint8_t* y_row = y_plane + static_cast<size_t>(row) * y_pitch;
-            const uint8_t* uv_row = uv_plane + static_cast<size_t>(row / 2u) * uv_pitch;
-            uint8_t* out_row = bgra.data() + static_cast<size_t>(row) * encodeWidth * 4u;
-            for (uint32_t col = 0; col < encodeWidth; ++col) {
-                const int y_val = static_cast<int>(y_row[col]) - 16;
-                const int u_val = static_cast<int>(uv_row[col & ~1u]) - 128;
-                const int v_val = static_cast<int>(uv_row[(col & ~1u) + 1u]) - 128;
-                auto clamp255 = [](int v) -> uint8_t { return static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v); };
-                out_row[col * 4u + 0u] = clamp255((298 * y_val + 516 * u_val + 128) >> 8);               // B
-                out_row[col * 4u + 1u] = clamp255((298 * y_val - 100 * u_val - 208 * v_val + 128) >> 8); // G
-                out_row[col * 4u + 2u] = clamp255((298 * y_val + 409 * v_val + 128) >> 8);               // R
-                out_row[col * 4u + 3u] = 255u;                                                           // A
-            }
-        }
+        // Convert using the color space the session actually configured
+        // (see color_metadata.h / RecorderConfig::color) rather than a
+        // hard-coded assumption — the encoder always writes BT.709-tagged
+        // output with the user-selected range, so the readback must match.
+        PlanarYuv420Frame yuvSrc;
+        yuvSrc.y_plane = y_plane;
+        yuvSrc.y_stride_bytes = mapped.RowPitch;
+        yuvSrc.uv_plane = uv_plane;
+        yuvSrc.uv_stride_bytes = mapped.RowPitch;
+        yuvSrc.width = encodeWidth;
+        yuvSrc.height = encodeHeight;
+        yuvSrc.bits_per_sample = tenBit ? 10u : 8u;
+
+        YuvToBgraParams colorParams;
+        colorParams.matrix = m_state.config.color.matrix;
+        colorParams.range = m_state.config.color.range;
+
+        ConvertYuv420ToBgra(yuvSrc, colorParams, bgra.data(), encodeWidth * 4u);
 
         d3dContext->Unmap(snapshotStagingTex.get(), 0);
 
         if (pending_cb)
             pending_cb(true, encodeWidth, encodeHeight, std::move(bgra), {});
+    };
+
+    // --- Live WYSIWYG preview tap (Strand 3 slice 1) ---
+    // Throttled to ~30 Hz and zero-cost when no callback is registered (a
+    // single std::function bool-check before any GPU work). The staging ring
+    // (see preview_staging_ring.h) lets Map() read back a copy submitted on
+    // the PREVIOUS publish tick, so it resolves immediately instead of
+    // stalling on the newest, possibly still in-flight copy; the published
+    // frame therefore carries the ring's per-slot timestamp (one tick old),
+    // never the current tick's PTS.
+    //
+    // The CPU YUV->BGRA conversion runs inline on VideoThread rather than on
+    // a separate worker thread. Deliberate, pragmatic choice: the conversion
+    // is integer fixed-point (see yuv_to_bgra.cpp) and the destination
+    // buffer is reused across ticks, so at the ~30 Hz throttle rate this is
+    // a small, bounded, measured per-tick cost (see the slice benchmark).
+    // Handing it to a worker thread would remove that cost from VideoThread
+    // entirely, but adds cross-thread lifetime/synchronization for the
+    // source buffer that this throttled cadence does not need.
+    PreviewStagingRing previewStagingRing;
+    bool previewStagingReady = false;
+    int previewInitFailures = 0;
+    constexpr int kPreviewMaxInitFailures = 3; // give up for the session after this many
+    bool previewCallbackFaulted = false;       // one-shot log guard for throwing callbacks
+    PreviewPublishGate previewGate(kPreviewMinIntervalNs);
+    PreviewFrame previewFrame; // persistent: bgra buffer reused across ticks
+
+    auto publishPreviewIfDue = [&](int32_t slot_idx, uint64_t pts_ns) {
+        if (!m_state.preview_frame_callback)
+            return; // unregistered -- zero cost beyond this check
+        if (previewInitFailures >= kPreviewMaxInitFailures)
+            return; // staging init failed repeatedly -- preview disabled for this session
+
+        if (!previewGate.ShouldPublish(pts_ns))
+            return;
+
+        if (!previewStagingReady) {
+            D3D11_TEXTURE2D_DESC srcDesc{};
+            nv12Textures[slot_idx]->GetDesc(&srcDesc);
+            previewStagingReady = previewStagingRing.Initialize(d3dDevice.get(), srcDesc);
+            if (!previewStagingReady) {
+                ++previewInitFailures;
+                if (previewInitFailures == kPreviewMaxInitFailures) {
+                    logging::log(logging::LogLevel::Warn, "video_thread",
+                                 "preview staging ring init failed repeatedly; preview disabled for this session", {});
+                }
+                return;
+            }
+        }
+
+        previewStagingRing.Submit(d3dContext.get(), nv12Textures[slot_idx].get(), pts_ns);
+
+        const uint8_t* mapped_data = nullptr;
+        uint32_t mapped_pitch = 0;
+        uint64_t mapped_pts_ns = 0;
+        if (!previewStagingRing.TryReadReady(d3dContext.get(), &mapped_data, &mapped_pitch, &mapped_pts_ns))
+            return; // ring not primed / copy still in flight -- next tick will have data
+
+        // RAII: the slot is unmapped even if buffer sizing or the app
+        // callback throws (otherwise the preview would be dead for the rest
+        // of the session, or the exception would escape VideoThread::Run and
+        // std::terminate).
+        PreviewRingReadGuard readGuard(previewStagingRing, d3dContext.get());
+
+        try {
+            previewFrame.width = encodeWidth;
+            previewFrame.height = encodeHeight;
+            previewFrame.stride_bytes = encodeWidth * 4u;
+            previewFrame.timestamp_ns = mapped_pts_ns; // one-tick-old frame => its own PTS
+            previewFrame.bgra.resize(static_cast<size_t>(previewFrame.stride_bytes) * encodeHeight);
+
+            PlanarYuv420Frame yuvSrc;
+            yuvSrc.y_plane = mapped_data;
+            yuvSrc.y_stride_bytes = mapped_pitch;
+            yuvSrc.uv_plane = mapped_data + static_cast<size_t>(mapped_pitch) * encodeHeight;
+            yuvSrc.uv_stride_bytes = mapped_pitch;
+            yuvSrc.width = encodeWidth;
+            yuvSrc.height = encodeHeight;
+            yuvSrc.bits_per_sample = tenBit ? 10u : 8u;
+
+            YuvToBgraParams colorParams;
+            colorParams.matrix = m_state.config.color.matrix;
+            colorParams.range = m_state.config.color.range;
+
+            ConvertYuv420ToBgra(yuvSrc, colorParams, previewFrame.bgra.data(), previewFrame.stride_bytes);
+
+            m_state.preview_frame_callback(previewFrame);
+        } catch (...) {
+            // The callback contract says it must not throw (see
+            // recorder_session.h); a bad_alloc from resize lands here too.
+            // Drop this frame; recording continues unaffected.
+            if (!previewCallbackFaulted) {
+                previewCallbackFaulted = true;
+                logging::log(logging::LogLevel::Warn, "video_thread",
+                             "preview publish threw (callback or allocation); frame dropped", {});
+            }
+        }
     };
 
     if (m_state.config.cfr) {
@@ -1791,6 +1876,8 @@ void VideoThread::Run() {
                             }
                             // Capture frame snapshot on real (non-duplicate) frames.
                             performSnapshotIfRequested(slot);
+                            // Live preview tap on real (non-duplicate) frames (throttled internally).
+                            publishPreviewIfDue(slot, pts_ns);
                             frameWritten = true;
                         }
                     }
@@ -2056,6 +2143,8 @@ void VideoThread::Run() {
                         if (SUCCEEDED(hr)) {
                             // Capture frame snapshot on real frames (VFR path).
                             performSnapshotIfRequested(slot);
+                            // Live preview tap on real frames (VFR path; throttled internally).
+                            publishPreviewIfDue(slot, framePts_ns);
 
                             // Arm a split boundary for this submission (see CFR path).
                             maybeArmSplit(framePts_ns);

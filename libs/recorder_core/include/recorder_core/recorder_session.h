@@ -189,6 +189,44 @@ struct CompletedSegment {
 using SegmentCallback = std::function<void(const CompletedSegment&)>;
 
 // ---------------------------------------------------------------------------
+// PreviewFrame — throttled WYSIWYG preview tap (Strand 3 slice 1)
+// ---------------------------------------------------------------------------
+
+// One composed video frame surfaced from the live encode pipeline for the
+// in-app preview while recording. Unlike FrameSnapshotCallback (a one-shot
+// request), this is a repeating feed throttled to roughly 30 Hz — see
+// SetPreviewFrameCallback. UI-agnostic: raw BGRA pixels only, no Qt types.
+struct PreviewFrame {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    // Row pitch of `bgra` in bytes; always >= width * 4. May exceed width * 4
+    // if the source buffer this frame was copied from is padded.
+    uint32_t stride_bytes = 0;
+    // Encode timestamp (PTS) of THIS frame's pixels, nanoseconds, same clock
+    // basis as the muxed video track (CFR frame index * frame interval for
+    // CFR sessions, capture-relative for VFR). The preview readback is one
+    // publish tick behind the encoder (see preview_staging_ring.h), so this
+    // is typically ~33 ms older than the newest encoded frame — but it is
+    // always the correct PTS for the pixels it accompanies.
+    uint64_t timestamp_ns = 0;
+    // B8G8R8A8, row-major, top-down, `stride_bytes` per row. Alpha is always
+    // opaque (255).
+    std::vector<uint8_t> bgra;
+};
+
+// Invoked SYNCHRONOUSLY from VideoThread at most ~30 Hz, only for frames
+// that were actually newly composed (never for CFR-duplicated/skipped
+// ticks). Because the call runs inline in the encode loop, implementations
+// must return quickly (copy/queue the data and return — do not render or
+// block inside the callback) and are expected not to throw; a thrown
+// exception is caught by the engine, logged once, and the frame is dropped.
+// The referenced PreviewFrame (including its pixel buffer) is only valid
+// for the duration of the call and is reused for the next frame. Leaving
+// the callback unset disables the tap at zero cost (a single bool check per
+// composed frame).
+using PreviewFrameCallback = std::function<void(const PreviewFrame&)>;
+
+// ---------------------------------------------------------------------------
 // OpusFrameDuration — configurable Opus frame size (ADR 0019)
 // ---------------------------------------------------------------------------
 
@@ -508,6 +546,17 @@ class RecorderSession {
     // frozen snapshot (Completed/Failed) when Record() returns. Must be set before
     // calling Record(). Optional: leaving it unset disables diagnostics with no cost.
     void SetDiagnosticsCallback(DiagnosticsCallback cb);
+
+    // Register a live WYSIWYG preview-frame callback invoked synchronously
+    // from VideoThread at most ~30 Hz while recording, only for
+    // actually-composed frames (never CFR duplicate ticks). Must be set
+    // before calling Record(): the callback is captured at Record() start,
+    // so setting or clearing it while a recording is running has NO effect
+    // until the next Record(). Optional: leaving it unset disables the
+    // preview tap at zero cost (one bool check per composed frame). See
+    // PreviewFrameCallback for the callback-side contract (return fast,
+    // don't throw, don't retain the frame reference).
+    void SetPreviewFrameCallback(PreviewFrameCallback cb);
 
     // Request a one-shot BGRA frame snapshot from the next composed video frame.
     // The callback fires from VideoThread with (success, width, height, bgra_bytes, error).
