@@ -24,7 +24,6 @@ enum class VisualWebcamState;
 
 namespace ui::widgets {
 class CameraPreview;
-class ExoCheckBox;
 class ExoToggle;
 class SectionRuleHeader;
 } // namespace ui::widgets
@@ -96,16 +95,9 @@ class WebcamPage : public QWidget {
     QTimer* preview_watchdog_ = nullptr;
     bool preview_frame_seen_ = false;
 
-    // Overlay position (simple sliders 0–100% for MVP)
-    QSlider* pos_x_slider_ = nullptr;
-    QSlider* pos_y_slider_ = nullptr;
-    QSlider* size_w_slider_ = nullptr;
-    QSlider* size_h_slider_ = nullptr;
-    QLabel* pos_x_label_ = nullptr;
-    QLabel* pos_y_label_ = nullptr;
-    QLabel* size_w_label_ = nullptr;
-    QLabel* size_h_label_ = nullptr;
-    ui::widgets::ExoCheckBox* aspect_lock_check_ = nullptr;
+    // SETTINGS-HONESTY-R1: overlay position/size + aspect-lock sliders/checkbox
+    // removed (dead UI scaffolding -- MVP excludes overlay placement, AGENTS.md).
+    // current_settings_.overlay / .aspect_ratio_locked carry the values directly.
 
     // Chroma key
     ui::widgets::ExoToggle* chroma_toggle_ = nullptr;

@@ -3,7 +3,6 @@
 #include "../ui/theme/ExoSnapMetrics.h"
 #include "../ui/widgets/CameraPreview.h"
 #include "../ui/widgets/ComboBoxWheelFilter.h"
-#include "../ui/widgets/ExoCheckBox.h"
 #include "../ui/widgets/ExoToggle.h"
 #include "../ui/widgets/SectionRuleHeader.h"
 #if defined(EXOSNAP_ENABLE_VISUAL_TEST_HARNESS)
@@ -158,37 +157,15 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
         layout->addWidget(card);
     }
 
-    // ---- Overlay Placement (not in MVP — widgets created for data binding, not added to layout) ----
-    {
-        auto addSliderRow = [&](const QString& label, QSlider*& slider, QLabel*& valueLabel, int defVal) {
-            auto* row = new QWidget(content);
-            auto* rl = new QHBoxLayout(row);
-            rl->setContentsMargins(0, 0, 0, 0);
-            rl->setSpacing(8);
-            rl->addWidget(makeLabel(label, "videoKvKey", row), 1);
-            slider = new QSlider(Qt::Horizontal, row);
-            slider->setRange(0, 100);
-            slider->setValue(defVal);
-            slider->setFixedWidth(160);
-            valueLabel = makeLabel(pct(defVal), "videoKvKey", row);
-            valueLabel->setFixedWidth(36);
-            valueLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-            rl->addWidget(slider);
-            rl->addWidget(valueLabel);
-            // not added to layout — overlay placement not available in MVP
-            row->hide();
-        };
-
-        addSliderRow(QStringLiteral("X Position"), pos_x_slider_, pos_x_label_, 0);
-        addSliderRow(QStringLiteral("Y Position"), pos_y_slider_, pos_y_label_, 0);
-        addSliderRow(QStringLiteral("Width"), size_w_slider_, size_w_label_, 25);
-        addSliderRow(QStringLiteral("Height"), size_h_slider_, size_h_label_, 25);
-
-        aspect_lock_check_ = new ui::widgets::ExoCheckBox(QStringLiteral("Lock aspect ratio"), content);
-        aspect_lock_check_->setChecked(true);
-        aspect_lock_check_->hide();
-        // not added to layout
-    }
+    // Overlay placement (X/Y/W/H + aspect-lock) is not in MVP (AGENTS.md: "MVP
+    // excludes overlay/HUD work"). A prior slice left four hidden QSliders + an
+    // ExoCheckBox around purely as programmatic storage for WebcamSettings::overlay /
+    // aspect_ratio_locked (applySettings() wrote into them, collectSettings() read
+    // them back) -- never shown, never user-editable (SETTINGS-HONESTY-R1 audit).
+    // Removed: current_settings_ already carries the identical values (it was kept
+    // in lockstep in applySettings(), and collectSettings() already fell back to it
+    // whenever a widget was null), so collectSettings() now reads it directly with
+    // no behavior change -- and one fewer indirection to keep in sync by hand.
 
     // ---- Chroma Key card ----
     {
@@ -304,30 +281,6 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
     connect(softness_slider_, &QSlider::valueChanged, this, &WebcamPage::onSoftnessChanged);
     connect(spill_slider_, &QSlider::valueChanged, this, &WebcamPage::onSpillReductionChanged);
 
-    // Overlay sliders are wired for programmatic sync (e.g. applySettings). Their rows are
-    // not in the main layout so the user cannot interact with them directly.
-    auto wireSlider = [this](QSlider* slider, QLabel* lbl) {
-        connect(slider, &QSlider::valueChanged, this, [this, slider, lbl](int v) {
-            lbl->setText(pct(v));
-            if (!suppress_signals_) {
-                const WebcamSettings s = collectSettings();
-                current_settings_ = s;
-                emit settingsChanged(s);
-            }
-        });
-    };
-    wireSlider(pos_x_slider_, pos_x_label_);
-    wireSlider(pos_y_slider_, pos_y_label_);
-    wireSlider(size_w_slider_, size_w_label_);
-    wireSlider(size_h_slider_, size_h_label_);
-    connect(aspect_lock_check_, &ui::widgets::ExoCheckBox::toggled, this, [this](bool locked) {
-        if (!suppress_signals_) {
-            current_settings_ = collectSettings();
-            current_settings_.aspect_ratio_locked = locked;
-            emit settingsChanged(current_settings_);
-        }
-    });
-
     // Live frames arrive on the main thread (WebcamService marshals via the
     // event loop). Guard with a QPointer so a frame in flight after the page is
     // destroyed is safely dropped.
@@ -408,16 +361,9 @@ void WebcamPage::applySettings(const WebcamSettings& settings) {
         }
     }
 
-    if (pos_x_slider_)
-        pos_x_slider_->setValue(static_cast<int>(sanitized_settings.overlay.x_norm * 100));
-    if (pos_y_slider_)
-        pos_y_slider_->setValue(static_cast<int>(sanitized_settings.overlay.y_norm * 100));
-    if (size_w_slider_)
-        size_w_slider_->setValue(static_cast<int>(sanitized_settings.overlay.w_norm * 100));
-    if (size_h_slider_)
-        size_h_slider_->setValue(static_cast<int>(sanitized_settings.overlay.h_norm * 100));
-    if (aspect_lock_check_)
-        aspect_lock_check_->setChecked(sanitized_settings.aspect_ratio_locked);
+    // Overlay position/size + aspect-lock: no UI to sync (MVP excludes overlay
+    // placement) -- current_settings_ above already carries the sanitized values;
+    // collectSettings() reads them straight back from there.
 
     if (chroma_toggle_)
         chroma_toggle_->setChecked(sanitized_settings.chroma_key.enabled);
@@ -526,16 +472,6 @@ void WebcamPage::setRecordingControlsLocked(bool locked) {
     refresh_btn_->setEnabled(!locked);
 
     enable_toggle_->setEnabled(true);
-    if (pos_x_slider_)
-        pos_x_slider_->setEnabled(true);
-    if (pos_y_slider_)
-        pos_y_slider_->setEnabled(true);
-    if (size_w_slider_)
-        size_w_slider_->setEnabled(true);
-    if (size_h_slider_)
-        size_h_slider_->setEnabled(true);
-    if (aspect_lock_check_)
-        aspect_lock_check_->setEnabled(true);
     if (chroma_toggle_)
         chroma_toggle_->setEnabled(true);
     if (chroma_green_btn_)
@@ -827,13 +763,13 @@ WebcamSettings WebcamPage::collectSettings() const {
     s.height = (res.size() >= 2) ? res[1].toInt() : 720;
     s.fps = 30;
 
-    s.overlay.x_norm = pos_x_slider_ ? pos_x_slider_->value() / 100.0f : current_settings_.overlay.x_norm;
-    s.overlay.y_norm = pos_y_slider_ ? pos_y_slider_->value() / 100.0f : current_settings_.overlay.y_norm;
-    s.overlay.w_norm = size_w_slider_ ? size_w_slider_->value() / 100.0f : current_settings_.overlay.w_norm;
-    s.overlay.h_norm = size_h_slider_ ? size_h_slider_->value() / 100.0f : current_settings_.overlay.h_norm;
+    // Overlay position/size + aspect-lock: no UI control exists yet (MVP excludes
+    // overlay placement, AGENTS.md) -- these pass through unedited from whatever was
+    // last applied (preset/default), the same value a hidden, never-shown slider
+    // would have echoed back.
+    s.overlay = current_settings_.overlay;
     s.overlay_user_placed = current_settings_.overlay_user_placed;
-    s.aspect_ratio_locked =
-        aspect_lock_check_ ? aspect_lock_check_->isChecked() : current_settings_.aspect_ratio_locked;
+    s.aspect_ratio_locked = current_settings_.aspect_ratio_locked;
 
     s.chroma_key.enabled = chroma_toggle_ ? chroma_toggle_->isChecked() : current_settings_.chroma_key.enabled;
     s.chroma_key.color_mode = current_settings_.chroma_key.color_mode;
