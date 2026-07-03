@@ -32,6 +32,7 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
+#include <QShowEvent>
 #include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -472,6 +473,14 @@ void DiagnosticsPage::setHasLastRecording(bool has_last_recording) {
     has_last_recording_ = has_last_recording;
     if (open_last_report_btn_)
         open_last_report_btn_->setEnabled(has_last_recording_);
+}
+
+void DiagnosticsPage::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    // Review F4: ask MainWindow for the current last-recording gate on every show,
+    // so the "Open last report" link cannot stay stale if the recording result
+    // settled after the most recent chrome-state push.
+    emit lastRecordingGateRefreshRequested();
 }
 
 void DiagnosticsPage::applyExpertVisibility() {

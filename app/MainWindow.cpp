@@ -250,8 +250,9 @@ QString UpdateChannelToString(update::UpdateChannel channel) {
 
 // SETTINGS-HONESTY-R1: map the persisted/UI developer log-level string ("Off" |
 // "Error" | "Warning" | "Info" | "Debug") to AppLog's filter (nullopt = "Off",
-// i.e. record nothing). Unknown/legacy values fall back to Info rather than
-// silently going fully silent.
+// i.e. record nothing). Unknown/legacy values fall back to Debug (record
+// everything, review F1) so a corrupt or stale key can never silently narrow
+// support diagnostics below what main always recorded.
 std::optional<diagnostics::LogSeverity> DeveloperLogLevelFromString(const QString& level) {
     if (level.compare(QStringLiteral("Off"), Qt::CaseInsensitive) == 0)
         return std::nullopt;
@@ -259,9 +260,9 @@ std::optional<diagnostics::LogSeverity> DeveloperLogLevelFromString(const QStrin
         return diagnostics::LogSeverity::Error;
     if (level.compare(QStringLiteral("Warning"), Qt::CaseInsensitive) == 0)
         return diagnostics::LogSeverity::Warning;
-    if (level.compare(QStringLiteral("Debug"), Qt::CaseInsensitive) == 0)
-        return diagnostics::LogSeverity::Debug;
-    return diagnostics::LogSeverity::Info;
+    if (level.compare(QStringLiteral("Info"), Qt::CaseInsensitive) == 0)
+        return diagnostics::LogSeverity::Info;
+    return diagnostics::LogSeverity::Debug;
 }
 
 ResizeZone resizeZoneFromLocalPoint(const QPoint& local, const QSize& size, bool maximized) {
@@ -4318,6 +4319,12 @@ void MainWindow::buildDiagnosticsPage() {
         if (!record_page_ || !record_page_->hasCompletedRecording())
             return;
         navigateToEditExportPage(record_page_->currentEditContext());
+    });
+    // Review F4: re-push the gate on every page show, so the link cannot stay stale
+    // if last_succeeded settled after the most recent chrome-state event.
+    connect(diagnostics_page_, &DiagnosticsPage::lastRecordingGateRefreshRequested, this, [this]() {
+        if (record_page_ && diagnostics_page_)
+            diagnostics_page_->setHasLastRecording(record_page_->hasCompletedRecording());
     });
     // Seed the initial gate state (record_page_ is always valid; see above).
     diagnostics_page_->setHasLastRecording(record_page_->hasCompletedRecording());

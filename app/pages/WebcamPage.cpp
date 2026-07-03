@@ -211,14 +211,17 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
         mr->addStretch(1);
         cl->addWidget(mode_row);
 
-        // Sliders: Tolerance, Softness, Spill Reduction
-        auto addChromaSlider = [&](const QString& label, QSlider*& slider, QLabel*& valueLabel, int def) {
+        // Sliders: Tolerance, Softness, Spill Reduction. objectNames (review F6) let
+        // tests address a specific slider instead of relying on child-traversal order.
+        auto addChromaSlider = [&](const QString& label, const QString& object_name, QSlider*& slider,
+                                   QLabel*& valueLabel, int def) {
             auto* r = new QWidget(card);
             auto* rl2 = new QHBoxLayout(r);
             rl2->setContentsMargins(0, 0, 0, 0);
             rl2->setSpacing(8);
             rl2->addWidget(makeLabel(label, "videoKvKey", r), 1);
             slider = new QSlider(Qt::Horizontal, r);
+            slider->setObjectName(object_name);
             slider->setRange(0, 100);
             slider->setValue(def);
             slider->setFixedWidth(160);
@@ -229,9 +232,12 @@ WebcamPage::WebcamPage(QWidget* parent) : QWidget(parent) {
             rl2->addWidget(valueLabel);
             cl->addWidget(r);
         };
-        addChromaSlider(QStringLiteral("Tolerance"), tolerance_slider_, tolerance_label_, 40);
-        addChromaSlider(QStringLiteral("Softness"), softness_slider_, softness_label_, 15);
-        addChromaSlider(QStringLiteral("Spill Reduction"), spill_slider_, spill_label_, 30);
+        addChromaSlider(QStringLiteral("Tolerance"), QStringLiteral("chromaToleranceSlider"), tolerance_slider_,
+                        tolerance_label_, 40);
+        addChromaSlider(QStringLiteral("Softness"), QStringLiteral("chromaSoftnessSlider"), softness_slider_,
+                        softness_label_, 15);
+        addChromaSlider(QStringLiteral("Spill Reduction"), QStringLiteral("chromaSpillSlider"), spill_slider_,
+                        spill_label_, 30);
 
         layout->addWidget(card);
     }

@@ -131,9 +131,12 @@ TEST(AppSettingsTiersStoreTest, SettingsVersion_BumpedTo16) {
     EXPECT_EQ(raw.value(QStringLiteral("settings_version")).toInt(), 18);
 }
 
-TEST(AppSettingsTiersStoreTest, DeveloperLogLevel_DefaultIsInfo) {
+TEST(AppSettingsTiersStoreTest, DeveloperLogLevel_DefaultIsDebug) {
+    // Review F1 (product decision): ship default is "Debug" (record everything) --
+    // main recorded all severities before this control was wired, and Debug lines
+    // are exactly what support cases need. Narrowing is an explicit user choice.
     PersistedAppSettings settings;
-    EXPECT_EQ(settings.developer_log_level, QStringLiteral("Info"));
+    EXPECT_EQ(settings.developer_log_level, QStringLiteral("Debug"));
 }
 
 TEST(AppSettingsTiersStoreTest, DeveloperLogLevel_SaveAndLoad_RoundTrips) {
@@ -142,14 +145,14 @@ TEST(AppSettingsTiersStoreTest, DeveloperLogLevel_SaveAndLoad_RoundTrips) {
 
     AppSettingsStore store(QDir(temp_dir.path()).filePath(QStringLiteral("settings.ini")));
     PersistedAppSettings settings;
-    settings.developer_log_level = QStringLiteral("Debug");
+    settings.developer_log_level = QStringLiteral("Warning"); // non-default value
     store.Save(settings);
 
     const PersistedAppSettings loaded = store.Load();
-    EXPECT_EQ(loaded.developer_log_level, QStringLiteral("Debug"));
+    EXPECT_EQ(loaded.developer_log_level, QStringLiteral("Warning"));
 }
 
-TEST(AppSettingsTiersStoreTest, DeveloperLogLevel_MissingKey_DefaultsToInfo) {
+TEST(AppSettingsTiersStoreTest, DeveloperLogLevel_MissingKey_DefaultsToDebug) {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString path = QDir(temp_dir.path()).filePath(QStringLiteral("settings.ini"));
@@ -166,7 +169,7 @@ TEST(AppSettingsTiersStoreTest, DeveloperLogLevel_MissingKey_DefaultsToInfo) {
 
     AppSettingsStore store(path);
     const PersistedAppSettings loaded = store.Load();
-    EXPECT_EQ(loaded.developer_log_level, QStringLiteral("Info"));
+    EXPECT_EQ(loaded.developer_log_level, QStringLiteral("Debug"));
 }
 
 TEST(AppSettingsTiersStoreTest, MissingSettingsTiersGroup_DefaultsToFalse) {
@@ -382,23 +385,35 @@ TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_HasFiveRealLevels_No
         EXPECT_NE(combo->itemText(i), QStringLiteral("Trace"));
 }
 
-TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_DefaultsToInfo) {
+TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_DefaultsToDebug) {
+    // Review F1: ship default is Debug (record everything); see the store test above.
     ConfigPage page(output_defaults_, video_defaults_);
-    page.setExpertModeEnabled(true);
-    auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
-    ASSERT_NE(combo, nullptr);
-    EXPECT_EQ(combo->currentData().toString(), QStringLiteral("Info"));
-}
-
-TEST_F(SettingsTiersTest, ConfigPage_SetDeveloperLogLevel_BeforeCardBuilt_AppliesOnBuild) {
-    // setDeveloperLogLevel must be safe to call before the lazily-built Developer
-    // card exists, and the pending value must be applied once it IS built.
-    ConfigPage page(output_defaults_, video_defaults_);
-    page.setDeveloperLogLevel(QStringLiteral("Debug"));
     page.setExpertModeEnabled(true);
     auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
     ASSERT_NE(combo, nullptr);
     EXPECT_EQ(combo->currentData().toString(), QStringLiteral("Debug"));
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_SetDeveloperLogLevel_BeforeCardBuilt_AppliesOnBuild) {
+    // setDeveloperLogLevel must be safe to call before the lazily-built Developer
+    // card exists, and the pending value must be applied once it IS built. Probe with
+    // a NON-default value ("Warning") so the assertion cannot pass vacuously.
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setDeveloperLogLevel(QStringLiteral("Warning"));
+    page.setExpertModeEnabled(true);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_EQ(combo->currentData().toString(), QStringLiteral("Warning"));
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_HasConsequenceTooltip) {
+    // Review F3: raising the level silently drops lines from support diagnostics;
+    // the combo must carry a tooltip that names that consequence.
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_TRUE(combo->toolTip().contains(QStringLiteral("hides lower-severity lines")));
 }
 
 TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_ChangeEmitsSignal) {

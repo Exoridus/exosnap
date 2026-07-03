@@ -482,7 +482,7 @@ class ConfigPage : public QWidget {
     // current value string ("Off"|"Error"|"Warning"|"Info"|"Debug"); it is applied to
     // the combo on build (lazy) or immediately if already built (setDeveloperLogLevel).
     QComboBox* developer_log_level_combo_ = nullptr;
-    QString developer_log_level_ = QStringLiteral("Info");
+    QString developer_log_level_ = QStringLiteral("Debug");
 
     // PS-PHASE-C: Embedded hotkeys panel — v10: single-width card in the LEFT column.
     ui::widgets::HotkeysSettingsPanel* hotkeys_settings_panel_ = nullptr;

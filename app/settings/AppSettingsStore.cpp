@@ -114,9 +114,9 @@ PersistedAppSettings AppSettingsStore::Load() const {
     settings.endGroup();
 
     settings.beginGroup(QStringLiteral("developer"));
-    // SETTINGS-HONESTY-R1: developer log-level filter (default "Info").
-    // Pre-1.0: no migration; missing key defaults to "Info".
-    persisted.developer_log_level = settings.value(QStringLiteral("log_level"), QStringLiteral("Info")).toString();
+    // SETTINGS-HONESTY-R1: developer log-level filter (default "Debug" = record
+    // everything, review F1). Pre-1.0: no migration; missing key defaults to "Debug".
+    persisted.developer_log_level = settings.value(QStringLiteral("log_level"), QStringLiteral("Debug")).toString();
     settings.endGroup();
 
     return persisted;

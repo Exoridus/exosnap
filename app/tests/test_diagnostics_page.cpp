@@ -207,6 +207,17 @@ TEST_F(DiagnosticsPageTest, OpenLastReportLink_ClickEmitsSignalWhenEnabled) {
     EXPECT_EQ(count, 1);
 }
 
+TEST_F(DiagnosticsPageTest, ShowEvent_RequestsLastRecordingGateRefresh) {
+    // Review F4: every showEvent must ask MainWindow to re-push the last-recording
+    // gate, so the "Open last report" link cannot stay stale when last_succeeded
+    // settled after the most recent chrome-state event.
+    DiagnosticsPage page;
+    int count = 0;
+    QObject::connect(&page, &DiagnosticsPage::lastRecordingGateRefreshRequested, [&]() { ++count; });
+    page.show();
+    EXPECT_GE(count, 1);
+}
+
 // ---- Phase D: Readiness verdicts (suite-diag.jsx clear/issues/blocked) ------
 
 TEST_F(DiagnosticsPageTest, VerdictClearShowsReadyPillAndPassTileTone) {

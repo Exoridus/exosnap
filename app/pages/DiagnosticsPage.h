@@ -97,9 +97,18 @@ class DiagnosticsPage : public QWidget {
     // handler re-checks the same gate before routing.
     void openLastReportRequested();
 
+    // Review F4: emitted on every showEvent so MainWindow re-pushes the current
+    // last-recording gate (setHasLastRecording). Covers the timing residue where
+    // last_succeeded flips after the most recent chrome-state event -- the page
+    // stays ignorant of recording state; it only asks to be refreshed.
+    void lastRecordingGateRefreshRequested();
+
   private slots:
     void onRunCheck();
     void onExportReport();
+
+  protected:
+    void showEvent(QShowEvent* event) override;
 
   private:
     void refreshOverview();

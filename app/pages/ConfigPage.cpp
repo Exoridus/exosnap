@@ -4581,8 +4581,12 @@ void ConfigPage::buildDeveloperCard() {
         dev_layout->setContentsMargins(18, 14, 18, 14);
         dev_layout->setSpacing(M::kSpaceSm);
         dev_layout->addWidget(makeCardTitle(QStringLiteral("Developer"), developer_card_, QStringLiteral("bug")));
+        // SETTINGS-HONESTY-R1 (review F2): the old hint ("not persisted between
+        // sessions") became false once the log level was genuinely wired + persisted.
         dev_layout->addWidget(
-            makeHint(QStringLiteral("Expert debug controls — not persisted between sessions."), developer_card_));
+            makeHint(QStringLiteral("Expert debug controls. The logging level is persisted across sessions; "
+                                    "profiling markers are planned."),
+                     developer_card_));
 
         // SETTINGS-HONESTY-R1: log level, genuinely wired to AppLog::setMinSeverity
         // (via MainWindow) and persisted (AppSettingsStore::developer_log_level).
@@ -4607,10 +4611,15 @@ void ConfigPage::buildDeveloperCard() {
             log_level_combo->addItem(QStringLiteral("Warning"), QStringLiteral("Warning"));
             log_level_combo->addItem(QStringLiteral("Info"), QStringLiteral("Info"));
             log_level_combo->addItem(QStringLiteral("Debug"), QStringLiteral("Debug"));
+            // Review F3: name the consequence — raising the level drops lines from
+            // support diagnostics, which is exactly the surprise a user should see coming.
+            log_level_combo->setToolTip(
+                QStringLiteral("Raising this hides lower-severity lines from the in-app log and session log "
+                               "file — support diagnostics may be incomplete."));
             developer_log_level_combo_ = log_level_combo;
             {
                 const int idx = log_level_combo->findData(developer_log_level_);
-                log_level_combo->setCurrentIndex(idx >= 0 ? idx : 3); // fallback: Info
+                log_level_combo->setCurrentIndex(idx >= 0 ? idx : 4); // fallback: Debug (record everything)
             }
             connect(log_level_combo, &QComboBox::currentIndexChanged, this, [this](int index) {
                 if (!developer_log_level_combo_)
