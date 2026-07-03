@@ -399,6 +399,7 @@ TEST(RecommendationEngineTest, Generate_EmptyNoFlag) {
     config.container = capability::Container::Matroska;
     config.video_codec = capability::VideoCodec::Av1Nvenc;
     config.audio_codec = capability::AudioCodec::Opus;
+    config.color_range = capability::ColorRange::Limited; // Full would fire rec.color.range
 
     RecommendationEngine engine(caps, config, 0, 0, true);
     auto checklist = engine.Generate();
@@ -907,8 +908,9 @@ TEST(RecommendationEngineTest, RecProfileCodec_WebmAv1OnlyConfiguredAv1_DoesNotF
 
 TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
     auto codes = RecommendationEngine::GetAllRecommendationCodes();
-    // v0.8.0-D added rec.009 (audio/container compat) and rec.010 (video/container compat) — expect 10 codes now.
-    EXPECT_EQ(codes.size(), 10u);
+    // v0.8.0-D added rec.009 (audio/container compat) and rec.010 (video/container compat); the
+    // color-range compatibility guard added rec.color.range — expect 11 codes now.
+    EXPECT_EQ(codes.size(), 11u);
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.001"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.005"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.006"), codes.end());
@@ -916,6 +918,98 @@ TEST(RecommendationEngineTest, GetAllRecommendationCodes_ReturnsExpected) {
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.008"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.009"), codes.end());
     EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.010"), codes.end());
+    EXPECT_NE(std::find(codes.begin(), codes.end(), "rec.color.range"), codes.end());
+}
+
+// --- rec.color.range: Full color range warns about players that render it too dark ---
+
+TEST(RecommendationEngineTest, RecColorRange_Full_FiresNoticeWithAutoFix) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Matroska;
+    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+    config.color_range = capability::ColorRange::Full;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    const auto checklist = engine.Generate();
+
+    const auto it = std::find_if(checklist.results.begin(), checklist.results.end(),
+                                 [](const DiagnosticResult& r) { return r.id == "rec.color.range"; });
+    ASSERT_NE(it, checklist.results.end()) << "rec.color.range must fire when Full range is configured";
+    EXPECT_EQ(it->severity, DiagnosticSeverity::Notice);
+    ASSERT_TRUE(it->fix_action.has_value());
+    EXPECT_EQ(it->fix_action->id, "fix.color.range");
+    EXPECT_EQ(it->fix_action->safety, FixAction::Safety::Auto);
+    EXPECT_TRUE(it->fix_action->reversible);
+    EXPECT_EQ(it->fix_action->label, "Switch to Limited");
+    EXPECT_EQ(it->fix_action->changes_summary, "Colour range: Full -> Limited");
+    EXPECT_TRUE(checklist.has_notice);
+}
+
+// Pins the UI→engine propagation chain that was silently broken: MainWindow's
+// formatSettingsChanged handler used ad-hoc per-field copies that dropped
+// color_range (and bit_depth), so a Full selection in the Expert combo never
+// reached output_settings_ — the recording stayed on the old range and
+// rec.color.range could never fire from a combo change. The handler now routes
+// through MergeFormatSelection; this test drives the same merge → UserConfig →
+// engine chain the app uses.
+TEST(RecommendationEngineTest, MergeFormatSelection_FullRange_ReachesEngineAndFires) {
+    // Live settings as MainWindow holds them (Limited: nothing to report).
+    OutputSettingsModel live;
+    live.container = capability::Container::Matroska;
+    live.video_codec = capability::VideoCodec::Av1Nvenc;
+    live.audio_codec = capability::AudioCodec::Opus;
+    live.color_range = capability::ColorRange::Limited;
+    live.bit_depth = capability::BitDepth::Bit8;
+
+    // The formatSettingsChanged payload after the user picks Full (+ 10-bit) in
+    // the Expert combos (ConfigPage emits its full format_settings_).
+    OutputSettingsModel incoming = live;
+    incoming.color_range = capability::ColorRange::Full;
+    incoming.bit_depth = capability::BitDepth::Bit10;
+
+    MergeFormatSelection(live, incoming);
+    EXPECT_EQ(live.color_range, capability::ColorRange::Full)
+        << "MergeFormatSelection must carry color_range into the live output settings";
+    EXPECT_EQ(live.bit_depth, capability::BitDepth::Bit10)
+        << "MergeFormatSelection must carry bit_depth into the live output settings";
+
+    // Same downstream path the app takes: live settings → UserRecorderConfig → engine.
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+    const VideoSettingsModel video;
+    const capability::UserRecorderConfig cfg = UserConfigFromSettings(live, video);
+    EXPECT_EQ(cfg.color_range, capability::ColorRange::Full);
+
+    RecommendationEngine engine(caps, cfg, 0, 0, true);
+    const auto checklist = engine.Generate();
+    EXPECT_TRUE(std::any_of(checklist.results.begin(), checklist.results.end(), [](const DiagnosticResult& r) {
+        return r.id == "rec.color.range";
+    })) << "A Full selection merged from the format editor must reach the pre-flight check";
+}
+
+TEST(RecommendationEngineTest, RecColorRange_Limited_DoesNotFire) {
+    capability::CapabilitySet caps;
+    caps.video_codecs[capability::VideoCodec::Av1Nvenc] = {capability::SupportLevel::Available, ""};
+    caps.audio_codecs[capability::AudioCodec::Opus] = {capability::SupportLevel::Available, ""};
+
+    capability::UserRecorderConfig config;
+    config.container = capability::Container::Matroska;
+    config.video_codec = capability::VideoCodec::Av1Nvenc;
+    config.audio_codec = capability::AudioCodec::Opus;
+    config.color_range = capability::ColorRange::Limited;
+
+    RecommendationEngine engine(caps, config, 0, 0, true);
+    const auto checklist = engine.Generate();
+
+    EXPECT_TRUE(std::none_of(checklist.results.begin(), checklist.results.end(), [](const DiagnosticResult& r) {
+        return r.id == "rec.color.range";
+    })) << "rec.color.range must stay silent when Limited range is configured";
 }
 
 // ─── REC-R10: Active output config → ValidateConfig wiring ───────────────────

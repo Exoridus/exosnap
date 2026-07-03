@@ -73,8 +73,10 @@ inline const QString kVideoCodec = QStringLiteral("Video compression codec for t
 inline const QString kVideoBitDepth =
     QStringLiteral("8-bit is universal \xC2\xB7 10-bit needs HEVC or AV1 (smoother gradients, larger files)");
 inline const QString kVideoColorRange =
-    QStringLiteral("Full = native screen precision, best for direct playback \xC2\xB7 Limited = broadcast "
-                   "standard, safest for editors/players that ignore the range flag");
+    QStringLiteral("Limited is compatible with every player. Full keeps marginally more tonal detail, but some "
+                   "common players (notably VLC) ignore the range flag and expand as Limited, so Full-range "
+                   "recordings look too dark there \xE2\x80\x94 only choose Full if your whole playback chain "
+                   "honours it.");
 inline const QString kFrameTiming =
     QStringLiteral("CFR = constant frame rate for editor compatibility \xC2\xB7 VFR = variable");
 inline const QString kFramePacing =

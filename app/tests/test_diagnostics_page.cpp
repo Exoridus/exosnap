@@ -713,6 +713,46 @@ TEST_F(DiagnosticsPageTest, TipsOnlyConfigStaysReadyWithTipChipAndNoCards) {
     EXPECT_EQ(visible_cards, 0) << "Tier-3 tips must not render issue cards";
 }
 
+TEST_F(DiagnosticsPageTest, ColorRangeFull_IsTipNotCard_VerdictStaysReady) {
+    // rec.color.range ("Full range looks dark in players that ignore the flag") is a
+    // Tier-3 compatibility/optimisation tip, not a measured problem — it must bundle into
+    // the tip chip, never render an issue card, and never turn the verdict amber.
+    DiagnosticsPage page;
+    capability::CapabilitySet caps = capability::CapabilityBuilder::BuildStaticValidatedBaseline();
+    OutputSettingsModel output;
+    output.container = capability::Container::Matroska;
+    output.video_codec = capability::VideoCodec::Av1Nvenc;
+    output.audio_codec = capability::AudioCodec::Opus;
+    output.color_range = capability::ColorRange::Full;
+    VideoSettingsModel video;
+    capability::AudioUiState audio;
+    page.setDiagnosticData(caps, output, video, audio, "MKV AV1 Opus Full", "Start/Stop: Alt+F9", "", true);
+
+    QPushButton* run = FindButton(page, QStringLiteral("Run Check"));
+    ASSERT_NE(run, nullptr);
+    run->click();
+
+    // Verdict stays READY.
+    bool pill_ready = false;
+    for (auto* lbl : page.findChildren<QLabel*>())
+        if (lbl->property("labelRole").toString() == QLatin1String("profileStatusBadge") &&
+            lbl->text() == QStringLiteral("READY"))
+            pill_ready = true;
+    EXPECT_TRUE(pill_ready) << "Full colour range is a Tier-3 tip and must not turn the verdict amber";
+
+    // The tip is bundled in the chip…
+    auto* chip = page.findChild<QWidget*>(QStringLiteral("diagTipChip"));
+    ASSERT_NE(chip, nullptr);
+    EXPECT_FALSE(chip->isHidden()) << "Tip chip must be visible when the color-range tip fires";
+
+    // …and there are NO issue cards.
+    int visible_cards = 0;
+    for (auto* frame : page.findChildren<QFrame*>())
+        if (frame->property("panelRole").toString() == QLatin1String("issueCard"))
+            ++visible_cards;
+    EXPECT_EQ(visible_cards, 0) << "rec.color.range must not render an issue card";
+}
+
 TEST_F(DiagnosticsPageTest, BlockerShowsCardInSimpleViewAndBlocksVerdict) {
     // MP4 + FLAC is a hard container incompatibility → Tier-1 blocker. The card must
     // be visible in the Simple (default, expert=false) view and the verdict must gate.

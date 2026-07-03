@@ -79,7 +79,10 @@ Invalid combinations are not offered.
 ## Video color pipeline (0.7.0)
 
 - **BT.709 color metadata** is written to all MKV and MP4 outputs.
-- **Y'CbCr color range** is selectable per preset: Full (default) or Limited.
+- **Y'CbCr color range** is selectable per preset: Full or Limited, behind Expert mode
+  (Settings → Video). Some common players (notably VLC) ignore the range flag and expand
+  as Limited, so Full-range recordings can look too dark in those players; Diagnostics surfaces
+  a compatibility notice with a one-click fix when Full is selected.
 - **10-bit video output (P010)** is available for HEVC Main10 and AV1 in 10-bit
   mode. This is **SDR-only**: no HDR10 transfer curve (PQ/HLG), no HDR metadata,
   and no wide color gamut. The 10-bit path increases color precision in SDR

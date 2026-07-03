@@ -53,6 +53,9 @@ static capability::UserRecorderConfig MakeBasicConfig() {
     config.container = capability::Container::Matroska;
     config.video_codec = capability::VideoCodec::Av1Nvenc;
     config.audio_codec = capability::AudioCodec::Opus;
+    // Explicit: keep the filesystem fixtures isolated from rec.color.range
+    // (a Full range would add an unrelated Notice to the checklist).
+    config.color_range = capability::ColorRange::Limited;
     return config;
 }
 
@@ -251,8 +254,8 @@ TEST(FilesystemChecksRecommendationTest, Fat32_Plus_HardDiskStop_Fat32RemainsNot
 
 TEST(FilesystemChecksRecommendationTest, GetAllRecommendationCodes_IncludesRec008) {
     const auto codes = RecommendationEngine::GetAllRecommendationCodes();
-    // rec.001–rec.008 + the 0.8.0 incident catalog rec.009/rec.010 → 10 codes.
-    EXPECT_EQ(codes.size(), 10u);
+    // rec.001–rec.008 + the 0.8.0 incident catalog rec.009/rec.010 + rec.color.range → 11 codes.
+    EXPECT_EQ(codes.size(), 11u);
     const bool has_rec008 = std::find(codes.begin(), codes.end(), "rec.008") != codes.end();
     EXPECT_TRUE(has_rec008);
 }

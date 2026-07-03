@@ -50,6 +50,9 @@ static capability::UserRecorderConfig MakeBasicConfig() {
     config.container = capability::Container::Matroska;
     config.video_codec = capability::VideoCodec::Av1Nvenc;
     config.audio_codec = capability::AudioCodec::Opus;
+    // Explicit: keep the disk-guard fixtures isolated from rec.color.range
+    // (a Full range would add an unrelated Notice and taint has_notice checks).
+    config.color_range = capability::ColorRange::Limited;
     return config;
 }
 

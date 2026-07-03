@@ -117,7 +117,8 @@ bool isOptimisationTip(const std::string& id) {
     return id == "rec.002"              // MKV survives a crash better than MP4
            || id == "rec.profile.codec" // GPU can record a better codec
            || id == "rec.009"           // Opus in MP4 won't play everywhere
-           || id == "rec.008";          // FAT32 4 GB single-file limit
+           || id == "rec.008"           // FAT32 4 GB single-file limit
+           || id == "rec.color.range";  // Full range looks dark in players that ignore the flag
 }
 
 int fixKind(const diagnostics::FixAction& fa) {

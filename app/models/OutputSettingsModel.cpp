@@ -208,4 +208,15 @@ const wchar_t* SplitSizeModeName(SplitSizeMode mode) noexcept {
     return L"Off";
 }
 
+void MergeFormatSelection(OutputSettingsModel& live, const OutputSettingsModel& incoming) {
+    live.container = incoming.container;
+    live.video_codec = incoming.video_codec;
+    live.audio_codec = incoming.audio_codec;
+    live.bit_depth = incoming.bit_depth;
+    live.color_range = incoming.color_range;
+    live.output_folder = incoming.output_folder;
+    live.naming_pattern = incoming.naming_pattern;
+    live.resolution = incoming.resolution;
+}
+
 } // namespace exosnap

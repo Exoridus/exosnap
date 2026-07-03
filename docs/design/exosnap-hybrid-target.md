@@ -356,7 +356,7 @@ Bottleneck indicator displayed above the pipeline.
 | Audio loopback | WASAPI device count |
 | Application audio isolation | Supported / unsupported |
 | Output path | Writable / blocked |
-| Color space | BT.709 / full range |
+| Color space | BT.709 / limited range (default; full is expert opt-in) |
 
 Pass/warn/fail with icon + count summary.
 

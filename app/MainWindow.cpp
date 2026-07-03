@@ -3913,12 +3913,10 @@ void MainWindow::buildConfigPage() {
     connect(config_page_, &ConfigPage::formatSettingsChanged, this, [this](const OutputSettingsModel& settings) {
         if (applying_preset_)
             return;
-        output_settings_.container = settings.container;
-        output_settings_.video_codec = settings.video_codec;
-        output_settings_.audio_codec = settings.audio_codec;
-        output_settings_.output_folder = settings.output_folder;
-        output_settings_.naming_pattern = settings.naming_pattern;
-        output_settings_.resolution = settings.resolution;
+        // ONE merge function (unit-tested) instead of ad-hoc field copies: the old
+        // per-field copy silently dropped color_range and bit_depth, so those combo
+        // selections never reached output_settings_ (and thus never the recording).
+        MergeFormatSelection(output_settings_, settings);
         record_page_->setOutputSettings(output_settings_);
         const bool dirty = preset_registry_.IsSelectedDirty(captureLiveConfig());
         if (config_page_)
@@ -4197,6 +4195,10 @@ void MainWindow::buildDiagnosticsPage() {
                 // rec.009 Notice (Opus-in-MP4): switch audio to AAC and reconcile.
                 output_settings_.audio_codec = capability::AudioCodec::AacMf;
                 ReconcileContainerCodecs(output_settings_);
+            } else if (fix_id == QStringLiteral("fix.color.range")) {
+                // rec.color.range Notice: Full range is crushed/too dark in players that ignore
+                // the range flag (e.g. VLC). Switch to Limited, the compatible-everywhere choice.
+                output_settings_.color_range = capability::ColorRange::Limited;
             } else {
                 return; // unknown auto fix — no-op
             }

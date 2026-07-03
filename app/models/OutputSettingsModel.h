@@ -97,6 +97,16 @@ struct OutputSettingsModel {
     static OutputSettingsModel Defaults();
 };
 
+// Merges the format-editor-owned fields of a ConfigPage::formatSettingsChanged payload
+// into the live output settings. MainWindow's handler routes through this ONE function
+// so a model field can never again be dropped silently on the way to output_settings_
+// (color_range and bit_depth were lost exactly that way: the combo emitted them but the
+// field-by-field copy in the handler ignored them, so the recording never saw the
+// selection). NOTE: split is deliberately not merged here yet — the pre-existing handler
+// never carried it and changing split-flow behavior is out of scope for this fix; see
+// the open P2 note in the PR/ADR trail.
+void MergeFormatSelection(OutputSettingsModel& live, const OutputSettingsModel& incoming);
+
 [[nodiscard]] std::optional<recorder_core::FrameSize> PresetOutputSize(OutputResolutionMode mode) noexcept;
 [[nodiscard]] const wchar_t* OutputResolutionModeName(OutputResolutionMode mode) noexcept;
 [[nodiscard]] const wchar_t* OutputFitModeName(recorder_core::OutputFitMode mode) noexcept;

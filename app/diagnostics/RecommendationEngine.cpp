@@ -74,6 +74,7 @@ DiagnosticChecklist RecommendationEngine::Generate() const {
     checkMp4CrashResilience(checklist);
     checkCodecAvailability(checklist);
     checkRecommendedCodec(checklist);
+    checkColorRange(checklist);
     checkOutputDriveSpace(checklist);
     checkOutputFilesystem(checklist);
     checkProfileSupport(checklist);
@@ -273,6 +274,35 @@ void RecommendationEngine::checkRecommendedCodec(DiagnosticChecklist& checklist)
     fa.safety = FixAction::Safety::Auto; // config-only, reversible
     fa.reversible = true;
     fa.changes_summary = "Video codec: " + current_label + " -> " + best_label;
+    r.fix_action = fa;
+    checklist.has_notice = true;
+    checklist.results.push_back(std::move(r));
+}
+
+void RecommendationEngine::checkColorRange(DiagnosticChecklist& checklist) const {
+    // rec.color.range: Full (0-255) colour range is a technically valid, expert-only choice,
+    // but widely-used players (e.g. VLC) ignore the range flag and always expand the picture
+    // as Limited (16-235), so Full-range recordings can appear crushed/too dark there. Limited
+    // is the industry-standard, compatible-everywhere choice (matching OBS et al.) and is the
+    // recommended pick unless the whole downstream playback/edit chain is known to honour Full.
+    if (config_.color_range != capability::ColorRange::Full) {
+        return;
+    }
+    DiagnosticResult r = MakeResult(
+        "rec.color.range", DiagnosticGroup::Recommendation, DiagnosticSeverity::Notice, "Full color range is set",
+        "Common players such as VLC display full-range video too dark. Limited is the compatible choice.",
+        "The recording is configured with Full (0-255) colour range. Several widely-used players, "
+        "including VLC, ignore the range flag and always expand playback as Limited (16-235), so "
+        "Full-range recordings can look crushed or too dark in those players. Limited range decodes "
+        "correctly everywhere, including players that do read the range flag.",
+        "Colour range: Full",
+        "Switch to Limited colour range for compatibility with players that ignore the range flag.");
+    FixAction fa;
+    fa.id = "fix.color.range";
+    fa.label = "Switch to Limited";
+    fa.safety = FixAction::Safety::Auto; // config-only, reversible
+    fa.reversible = true;
+    fa.changes_summary = "Colour range: Full -> Limited";
     r.fix_action = fa;
     checklist.has_notice = true;
     checklist.results.push_back(std::move(r));
@@ -648,8 +678,8 @@ void RecommendationEngine::checkDiskWriteStall(DiagnosticChecklist& checklist) c
 }
 
 std::vector<std::string> RecommendationEngine::GetAllRecommendationCodes() {
-    return {"rec.001", "rec.002", "rec.003", "rec.004", "rec.005",
-            "rec.006", "rec.007", "rec.008", "rec.009", "rec.010"};
+    return {"rec.001", "rec.002", "rec.003", "rec.004", "rec.005",        "rec.006",
+            "rec.007", "rec.008", "rec.009", "rec.010", "rec.color.range"};
 }
 
 } // namespace exosnap::diagnostics

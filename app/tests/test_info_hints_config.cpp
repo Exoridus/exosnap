@@ -198,6 +198,17 @@ TEST_F(InfoHintsConfigTest, ConfigPage_SplitRecording_HasInfoHint) {
     EXPECT_GE(count, 1) << "Split recording setting must have an InfoHint (inside the Advanced expander)";
 }
 
+// Colour range (fmt_expert_section_) is constructed eagerly (unlike the lazily-built
+// Advanced/Audio expert subtrees), but the row lives behind Expert mode; enable it
+// explicitly so the assertion never depends on incidental build-order behaviour.
+TEST_F(InfoHintsConfigTest, ConfigPage_VideoColorRange_HasInfoHint) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+
+    const int count = CountHintsWithText(page, ui::hints::kVideoColorRange);
+    EXPECT_GE(count, 1) << "Colour range setting must have an InfoHint (inside the Expert Video section)";
+}
+
 TEST_F(InfoHintsConfigTest, ConfigPage_InfoHints_AreAllFocusable) {
     ConfigPage page(output_defaults_, video_defaults_);
 

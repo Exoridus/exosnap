@@ -252,3 +252,32 @@ default view and an **Expert** toggle that reveals depth rather than a second mo
   (planned) until their flows land. Tier-3 classification is a curated id list in `DiagnosticsPage`
   (`isOptimisationTip`) — moving tiering into the engine model is a candidate follow-up. The verdict
   counts only Tier-1 + Tier-2; Tier-3 tips never turn it amber (tips-only = READY).
+
+## Delivered — Slice: color-range compatibility guard (`rec.color.range`, 2026-07-03)
+
+- **New Tier-3 check.** `RecommendationEngine::checkColorRange` fires `rec.color.range` (Notice)
+  whenever `UserRecorderConfig::color_range == ColorRange::Full`: several widely-used players
+  (VLC among them) ignore the Matroska/MP4 color-range flag and always expand playback as Limited,
+  so Full-range recordings look crushed/too dark there. Silent when Limited is selected. Ships with
+  an `Auto`, reversible `fix.color.range` FixAction (config-only: Full → Limited), dispatched in
+  `MainWindow::buildDiagnosticsPage`'s `applyFixActionRequested` handler next to
+  `fix.audio.opus_to_aac` / `fix.profile.codec.best`.
+- **Tier-3, not Tier-2.** `rec.color.range` is a capability/config "better, but it runs" call, not a
+  measured problem, so it was added to the `isOptimisationTip` curated id list alongside
+  `rec.002`/`rec.profile.codec`/`rec.009`/`rec.008` — it bundles into the tip chip and never turns
+  the verdict amber.
+- **UI control unchanged.** The Colour range combo already existed in `ConfigPage` (0.7.0 wave) and
+  was already Expert-gated (`fmt_expert_section_`, visible only when `expert_mode_enabled_`); this
+  slice only updated its `InfoHintIcon` copy (`SettingsHintText::kVideoColorRange`) to name the VLC
+  compatibility tradeoff instead of presenting Full/Limited as an even choice. No default changed
+  here — the Full→Limited default flip is a separate, parallel engine-signaling slice.
+- **Propagation fix (review finding).** `MainWindow`'s `formatSettingsChanged` handler copied the
+  payload field-by-field and silently dropped `color_range` and `bit_depth` — the Expert combo
+  selections never reached `output_settings_` (only startup load and preset-apply wrote them), so a
+  combo-selected Full range was ignored by the recording and could never trigger this check. The
+  handler now routes through the unit-tested `MergeFormatSelection()`
+  (`app/models/OutputSettingsModel.{h,cpp}`), which carries both fields. Behavior change: a 10-bit
+  combo selection now actually records 10-bit (P010) instead of being silently ignored until a
+  preset round-trip. Known P2 (pre-existing, out of scope here): the same handler never carried
+  `split` either — Settings split edits reach the live mirror only via preset apply/startup;
+  `MergeFormatSelection` documents this, and a follow-up should decide whether split joins the merge.
