@@ -6,6 +6,7 @@
 #include <QVector>
 
 #include <functional>
+#include <optional>
 
 namespace exosnap::diagnostics {
 
@@ -54,6 +55,17 @@ class AppLog final : public QObject {
     [[nodiscard]] static QString severityKey(LogSeverity severity);
     [[nodiscard]] static QString formatEntry(const LogEntry& entry);
     [[nodiscard]] static bool exportHistoryToFile(const QString& path, QString* error = nullptr);
+
+    // SETTINGS-HONESTY-R1: developer log-level filter (Settings > Advanced > Developer
+    // card). Controls which severities are recorded into the in-app Logs history and the
+    // session log file. nullopt means "Off" (nothing is recorded); otherwise the value is
+    // the minimum severity (inclusive) that gets recorded. Default (and resetForTesting())
+    // is LogSeverity::Debug, i.e. record everything -- unaffected until MainWindow applies
+    // the persisted developer log-level at startup. Independent of Qt's message-handler
+    // forwarding to any previously-installed handler (and the QtFatalMsg abort), which
+    // always still runs regardless of this filter.
+    static void setMinSeverity(std::optional<LogSeverity> min_severity);
+    [[nodiscard]] static std::optional<LogSeverity> minSeverity();
 
     // Test support: resets process-local state without writing synthetic entries.
     static void resetForTesting(int max_entries = kDefaultMaxEntries);

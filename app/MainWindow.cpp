@@ -248,6 +248,22 @@ QString UpdateChannelToString(update::UpdateChannel channel) {
     return channel == update::UpdateChannel::Preview ? QStringLiteral("Preview") : QStringLiteral("Stable");
 }
 
+// SETTINGS-HONESTY-R1: map the persisted/UI developer log-level string ("Off" |
+// "Error" | "Warning" | "Info" | "Debug") to AppLog's filter (nullopt = "Off",
+// i.e. record nothing). Unknown/legacy values fall back to Info rather than
+// silently going fully silent.
+std::optional<diagnostics::LogSeverity> DeveloperLogLevelFromString(const QString& level) {
+    if (level.compare(QStringLiteral("Off"), Qt::CaseInsensitive) == 0)
+        return std::nullopt;
+    if (level.compare(QStringLiteral("Error"), Qt::CaseInsensitive) == 0)
+        return diagnostics::LogSeverity::Error;
+    if (level.compare(QStringLiteral("Warning"), Qt::CaseInsensitive) == 0)
+        return diagnostics::LogSeverity::Warning;
+    if (level.compare(QStringLiteral("Debug"), Qt::CaseInsensitive) == 0)
+        return diagnostics::LogSeverity::Debug;
+    return diagnostics::LogSeverity::Info;
+}
+
 ResizeZone resizeZoneFromLocalPoint(const QPoint& local, const QSize& size, bool maximized) {
     if (maximized)
         return ResizeZone::None;
@@ -448,6 +464,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), recovery_service_
 
     // ---- Load reduced AppSettingsStore (hotkeys + window geometry only) ----
     persisted_settings_ = settings_store_.Load();
+    // SETTINGS-HONESTY-R1: narrow AppLog's recording filter to the persisted developer
+    // log-level now that it is known. AppLog::init() (above) already ran with the
+    // "record everything" default, so early-startup entries are unaffected.
+    diagnostics::AppLog::setMinSeverity(DeveloperLogLevelFromString(persisted_settings_.developer_log_level));
     // ADR 0033: sync the present provider opt-in from the persisted setting now
     // that the settings store has been loaded. The provider was constructed with
     // opt_in=false; SetOptIn kicks off the ETW session when elevation allows it.
@@ -3953,6 +3973,17 @@ void MainWindow::buildConfigPage() {
     connect(config_page_, &ConfigPage::audioSeparateExpanderChanged, this, [this](bool expanded) {
         persisted_settings_.audio_separate_expander_expanded = expanded;
         settings_store_.Save(persisted_settings_);
+    });
+
+    // SETTINGS-HONESTY-R1: Developer card log-level combo — genuinely wired (was a
+    // UI-only stub). Seed from the persisted value, persist + apply on change.
+    config_page_->setDeveloperLogLevel(persisted_settings_.developer_log_level);
+    connect(config_page_, &ConfigPage::developerLogLevelChanged, this, [this](const QString& level) {
+        diagnostics::AppLog::info(QStringLiteral("settings"),
+                                  QStringLiteral("Developer log level changed to %1").arg(level));
+        persisted_settings_.developer_log_level = level;
+        settings_store_.Save(persisted_settings_);
+        diagnostics::AppLog::setMinSeverity(DeveloperLogLevelFromString(level));
     });
 
     // ---- Format / preset / video / audio / webcam signal connects ----

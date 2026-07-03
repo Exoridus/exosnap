@@ -4584,7 +4584,13 @@ void ConfigPage::buildDeveloperCard() {
         dev_layout->addWidget(
             makeHint(QStringLiteral("Expert debug controls — not persisted between sessions."), developer_card_));
 
-        // Log level (UI stub — not wired to any backend)
+        // SETTINGS-HONESTY-R1: log level, genuinely wired to AppLog::setMinSeverity
+        // (via MainWindow) and persisted (AppSettingsStore::developer_log_level).
+        // Controls which severities land in the in-app Logs page + session log file.
+        // "Trace" was dropped from the original 6-item stub: AppLog only has four
+        // severities (Debug/Info/Warning/Error); inventing a fifth would mean adding a
+        // LogSeverity nothing in the app actually emits, so the combo is honest about
+        // what levels exist instead.
         {
             auto* row = new QFrame(developer_card_);
             row->setProperty("panelRole", "compactRow");
@@ -4593,15 +4599,35 @@ void ConfigPage::buildDeveloperCard() {
             rl->setSpacing(M::kSpaceXs);
             rl->addWidget(makeFieldLabel(QStringLiteral("Developer logging level"), row));
             auto* log_level_combo = new QComboBox(row);
+            log_level_combo->setObjectName(QStringLiteral("developerLogLevelCombo"));
             log_level_combo->setMinimumWidth(220);
             log_level_combo->setMaximumWidth(320);
-            log_level_combo->addItems({"Off", "Error", "Warning", "Info", "Debug", "Trace"});
-            log_level_combo->setCurrentIndex(3);
+            log_level_combo->addItem(QStringLiteral("Off"), QStringLiteral("Off"));
+            log_level_combo->addItem(QStringLiteral("Error"), QStringLiteral("Error"));
+            log_level_combo->addItem(QStringLiteral("Warning"), QStringLiteral("Warning"));
+            log_level_combo->addItem(QStringLiteral("Info"), QStringLiteral("Info"));
+            log_level_combo->addItem(QStringLiteral("Debug"), QStringLiteral("Debug"));
+            developer_log_level_combo_ = log_level_combo;
+            {
+                const int idx = log_level_combo->findData(developer_log_level_);
+                log_level_combo->setCurrentIndex(idx >= 0 ? idx : 3); // fallback: Info
+            }
+            connect(log_level_combo, &QComboBox::currentIndexChanged, this, [this](int index) {
+                if (!developer_log_level_combo_)
+                    return;
+                const QString level = developer_log_level_combo_->itemData(index).toString();
+                if (level.isEmpty())
+                    return;
+                developer_log_level_ = level;
+                emit developerLogLevelChanged(level);
+            });
             rl->addWidget(log_level_combo);
             dev_layout->addWidget(row);
         }
 
-        // NVTX profiling markers (UI stub — not wired to any backend)
+        // NVTX profiling markers: no NVTX infrastructure exists anywhere in the app
+        // (no headers, no instrumentation calls) — honestly disabled + tooltip rather
+        // than building speculative NVTX plumbing for a control nothing else uses yet.
         {
             auto* row = new QFrame(developer_card_);
             row->setProperty("panelRole", "compactRow");
@@ -4610,6 +4636,9 @@ void ConfigPage::buildDeveloperCard() {
             rl->setSpacing(M::kSpaceXs);
             rl->addWidget(makeFieldLabel(QStringLiteral("Profiling"), row));
             auto* nvtx_check = new ui::widgets::ExoCheckBox(QStringLiteral("Enable NVTX / profiling markers"), row);
+            nvtx_check->setObjectName(QStringLiteral("nvtxProfilingCheck"));
+            nvtx_check->setEnabled(false);
+            nvtx_check->setToolTip(QStringLiteral("Profiling markers are planned for a future build."));
             rl->addWidget(nvtx_check);
             dev_layout->addWidget(row);
         }
@@ -4849,6 +4878,17 @@ void ConfigPage::setPresentDiagnosticsOptIn(bool on) {
         const QSignalBlocker blocker(present_diag_check_);
         present_diag_check_->setOn(on);
     }
+}
+
+void ConfigPage::setDeveloperLogLevel(const QString& level) {
+    developer_log_level_ = level;
+    if (!developer_log_level_combo_)
+        return; // Developer card not built yet (lazy) -- applied on buildDeveloperCard().
+    const int idx = developer_log_level_combo_->findData(level);
+    if (idx < 0)
+        return;
+    const QSignalBlocker blocker(developer_log_level_combo_);
+    developer_log_level_combo_->setCurrentIndex(idx);
 }
 
 void ConfigPage::setThemeId(const QString& theme_id) {

@@ -213,6 +213,47 @@ TEST_F(LogsPageTest, FiltersImplementAllInfoAndIssuesSemantics) {
     EXPECT_FALSE(page.copyText().contains(QStringLiteral("[INFO]")));
 }
 
+// ---- SETTINGS-HONESTY-R1: developer log-level filter (AppLog::setMinSeverity) ----
+//
+// The Settings > Advanced > Developer card's log-level combo used to be a UI-only
+// stub with no backing filter at all. These tests exercise the real filter directly
+// (LogsPage / MainWindow wiring is exercised separately in test_settings_tiers.cpp).
+
+TEST_F(LogsPageTest, MinSeverity_DefaultRecordsEverything) {
+    // resetForTesting() (called by SetUp via ResetLog()) must reset the filter back
+    // to "record everything" so it never leaks between tests or affects unrelated
+    // behavior until something explicitly narrows it (mirrors production startup,
+    // where AppLog::init() runs before the persisted developer log-level is known).
+    EXPECT_EQ(AppLog::minSeverity(), LogSeverity::Debug);
+    SeedAllLevels();
+    EXPECT_EQ(AppLog::history().size(), 4);
+}
+
+TEST_F(LogsPageTest, MinSeverity_WarningAndAbove_SuppressesDebugAndInfo) {
+    AppLog::setMinSeverity(LogSeverity::Warning);
+    SeedAllLevels();
+
+    const QVector<LogEntry> history = AppLog::history();
+    ASSERT_EQ(history.size(), 2);
+    EXPECT_EQ(history[0].severity, LogSeverity::Warning);
+    EXPECT_EQ(history[1].severity, LogSeverity::Error);
+}
+
+TEST_F(LogsPageTest, MinSeverity_Off_RecordsNothing) {
+    AppLog::setMinSeverity(std::nullopt);
+    SeedAllLevels();
+
+    EXPECT_TRUE(AppLog::history().isEmpty());
+}
+
+TEST_F(LogsPageTest, MinSeverity_GetterRoundTrips) {
+    AppLog::setMinSeverity(LogSeverity::Error);
+    EXPECT_EQ(AppLog::minSeverity(), LogSeverity::Error);
+
+    AppLog::setMinSeverity(std::nullopt);
+    EXPECT_EQ(AppLog::minSeverity(), std::nullopt);
+}
+
 TEST_F(LogsPageTest, SearchIsCaseInsensitiveAndMatchesCategoryAndMessage) {
     AppLog::info(QStringLiteral("Webcam"), QStringLiteral("frame ready"));
     AppLog::warning(QStringLiteral("Preview"), QStringLiteral("WEBCAM overlay unavailable"));

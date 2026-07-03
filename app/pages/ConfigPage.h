@@ -126,6 +126,11 @@ class ConfigPage : public QWidget {
     // persisted settings (no signal emitted).
     void setPresentDiagnosticsOptIn(bool on);
     void setThemeId(const QString& theme_id);
+    // SETTINGS-HONESTY-R1: seeds the Developer card's log-level combo from the
+    // persisted value. One of "Off"|"Error"|"Warning"|"Info"|"Debug". Safe to call
+    // before the (lazily built) Developer card exists -- the value is remembered and
+    // applied once the combo is constructed. No signal emitted.
+    void setDeveloperLogLevel(const QString& level);
 
     // Drives the visible Updates card (ADR 0034 Phase A). state is one of
     // "checking" | "uptodate" | "available" | "error". When "available",
@@ -154,6 +159,9 @@ class ConfigPage : public QWidget {
 
     // SETTINGS-TIERS-R1: emitted when Expert mode changes via the toggle button.
     void expertModeChanged(bool enabled);
+    // SETTINGS-HONESTY-R1: emitted when the Developer card's log-level combo changes.
+    // MainWindow persists the value and applies it via AppLog::setMinSeverity.
+    void developerLogLevelChanged(const QString& level);
     // Emitted when the output-split expander is toggled.
     void outputSplitExpanderChanged(bool expanded);
     // Emitted when the audio-separate expander is toggled.
@@ -469,6 +477,12 @@ class ConfigPage : public QWidget {
     bool developer_card_built_ = false;
     int developer_insert_index_ = -1;
     QWidget* left_col_ = nullptr;
+    // SETTINGS-HONESTY-R1: developer log-level combo, genuinely wired to
+    // AppLog::setMinSeverity via MainWindow. developer_log_level_ is the pending/
+    // current value string ("Off"|"Error"|"Warning"|"Info"|"Debug"); it is applied to
+    // the combo on build (lazy) or immediately if already built (setDeveloperLogLevel).
+    QComboBox* developer_log_level_combo_ = nullptr;
+    QString developer_log_level_ = QStringLiteral("Info");
 
     // PS-PHASE-C: Embedded hotkeys panel — v10: single-width card in the LEFT column.
     ui::widgets::HotkeysSettingsPanel* hotkeys_settings_panel_ = nullptr;

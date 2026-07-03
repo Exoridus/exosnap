@@ -127,8 +127,46 @@ TEST(AppSettingsTiersStoreTest, SettingsVersion_BumpedTo16) {
     store.Save(settings);
 
     QSettings raw(path, QSettings::IniFormat);
-    // ELEVATION-FOUNDATION-R1: version bumped 16 → 17 (present_diagnostics_optin).
-    EXPECT_EQ(raw.value(QStringLiteral("settings_version")).toInt(), 17);
+    // SETTINGS-HONESTY-R1: version bumped 17 → 18 (developer_log_level).
+    EXPECT_EQ(raw.value(QStringLiteral("settings_version")).toInt(), 18);
+}
+
+TEST(AppSettingsTiersStoreTest, DeveloperLogLevel_DefaultIsInfo) {
+    PersistedAppSettings settings;
+    EXPECT_EQ(settings.developer_log_level, QStringLiteral("Info"));
+}
+
+TEST(AppSettingsTiersStoreTest, DeveloperLogLevel_SaveAndLoad_RoundTrips) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    AppSettingsStore store(QDir(temp_dir.path()).filePath(QStringLiteral("settings.ini")));
+    PersistedAppSettings settings;
+    settings.developer_log_level = QStringLiteral("Debug");
+    store.Save(settings);
+
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_EQ(loaded.developer_log_level, QStringLiteral("Debug"));
+}
+
+TEST(AppSettingsTiersStoreTest, DeveloperLogLevel_MissingKey_DefaultsToInfo) {
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString path = QDir(temp_dir.path()).filePath(QStringLiteral("settings.ini"));
+
+    // Write a file without the [developer] group (simulates a pre-existing settings
+    // file from before this slice).
+    {
+        QSettings s(path, QSettings::IniFormat);
+        s.beginGroup(QStringLiteral("overlay"));
+        s.setValue(QStringLiteral("show_recording_overlay"), true);
+        s.endGroup();
+        s.sync();
+    }
+
+    AppSettingsStore store(path);
+    const PersistedAppSettings loaded = store.Load();
+    EXPECT_EQ(loaded.developer_log_level, QStringLiteral("Info"));
 }
 
 TEST(AppSettingsTiersStoreTest, MissingSettingsTiersGroup_DefaultsToFalse) {
@@ -322,6 +360,74 @@ TEST_F(SettingsTiersTest, ConfigPage_AudioSeparateTogglesInSourceRows) {
     ASSERT_NE(sys_check, nullptr);
     auto* app_check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("settingsAudioAppCheck"));
     ASSERT_NE(app_check, nullptr);
+}
+
+// ---- SETTINGS-HONESTY-R1: Developer card (log level genuinely wired, NVTX honest-disabled) ----
+
+TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_HasFiveRealLevels_NoTrace) {
+    // AppLog only has four severities (Debug/Info/Warning/Error); "Off" is the fifth
+    // (fully-suppressed) option. The former stub combo also offered "Trace", which
+    // doesn't correspond to anything AppLog can emit -- it must not survive the wiring.
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true); // lazily builds the Developer card
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
+    ASSERT_NE(combo, nullptr);
+    ASSERT_EQ(combo->count(), 5);
+    EXPECT_EQ(combo->itemData(0).toString(), QStringLiteral("Off"));
+    EXPECT_EQ(combo->itemData(1).toString(), QStringLiteral("Error"));
+    EXPECT_EQ(combo->itemData(2).toString(), QStringLiteral("Warning"));
+    EXPECT_EQ(combo->itemData(3).toString(), QStringLiteral("Info"));
+    EXPECT_EQ(combo->itemData(4).toString(), QStringLiteral("Debug"));
+    for (int i = 0; i < combo->count(); ++i)
+        EXPECT_NE(combo->itemText(i), QStringLiteral("Trace"));
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_DefaultsToInfo) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_EQ(combo->currentData().toString(), QStringLiteral("Info"));
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_SetDeveloperLogLevel_BeforeCardBuilt_AppliesOnBuild) {
+    // setDeveloperLogLevel must be safe to call before the lazily-built Developer
+    // card exists, and the pending value must be applied once it IS built.
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setDeveloperLogLevel(QStringLiteral("Debug"));
+    page.setExpertModeEnabled(true);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
+    ASSERT_NE(combo, nullptr);
+    EXPECT_EQ(combo->currentData().toString(), QStringLiteral("Debug"));
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_DeveloperLogLevelCombo_ChangeEmitsSignal) {
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+    auto* combo = page.findChild<QComboBox*>(QStringLiteral("developerLogLevelCombo"));
+    ASSERT_NE(combo, nullptr);
+
+    QString last_level;
+    int count = 0;
+    QObject::connect(&page, &ConfigPage::developerLogLevelChanged, [&](const QString& level) {
+        ++count;
+        last_level = level;
+    });
+
+    combo->setCurrentIndex(combo->findData(QStringLiteral("Error")));
+    EXPECT_EQ(count, 1);
+    EXPECT_EQ(last_level, QStringLiteral("Error"));
+}
+
+TEST_F(SettingsTiersTest, ConfigPage_NvtxProfilingCheck_HonestlyDisabledWithTooltip) {
+    // No NVTX infrastructure exists in the app -- the control must stay disabled with
+    // a "planned" tooltip rather than pretending to work.
+    ConfigPage page(output_defaults_, video_defaults_);
+    page.setExpertModeEnabled(true);
+    auto* check = page.findChild<ui::widgets::ExoCheckBox*>(QStringLiteral("nvtxProfilingCheck"));
+    ASSERT_NE(check, nullptr);
+    EXPECT_FALSE(check->isEnabled());
+    EXPECT_FALSE(check->toolTip().isEmpty());
 }
 
 // ---- PS-PHASE-C: Hotkeys card, expert controls, search pill gating ----
