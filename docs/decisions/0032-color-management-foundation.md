@@ -111,3 +111,131 @@ RTX 5070 Ti / NVENC):
   chosen (the model already supports it).
 - CaptureFrame (snapshot) is not implemented for 10-bit (the NV12→BGRA readback
   assumes 8-bit); it fails cleanly and does not affect the encode path.
+
+## Update — NVENC bitstream color signaling (fix/color-range-signaling)
+
+A real AV1+Opus+MKV recording measured with ffprobe showed `color_range=tv`
+(studio) and `color_space`/`color_transfer`/`color_primaries=unknown`, despite
+the default config being Full range / BT.709 — recordings looked dark/washed
+out in every player. Root cause: `nvenc_encoder.cpp` never populated the
+per-codec bitstream color fields (`NV_ENC_CONFIG_H264/HEVC_VUI_PARAMETERS` for
+H.264/HEVC, `NV_ENC_CONFIG_AV1::{colorPrimaries,transferCharacteristics,
+matrixCoefficients,colorRange}` for AV1), so the encoded bitstream itself
+carried no color description, even though the Matroska `Colour` element (this
+ADR, above) was already correctly written from the same `ColorMetadata`.
+
+This is **not cosmetic for AV1**: verified empirically (real NVENC encode on an
+RTX 5070 Ti, plus `mkvpropedit` container-only retagging experiments) that
+ffmpeg/most decoders derive `color_range`/matrix/primaries/transfer for AV1
+**exclusively from the bitstream sequence header**, ignoring a correctly
+tagged Matroska `Colour` element outright. For H.264 the container tag is
+honored as a fallback when the bitstream is untagged, but signaling at the
+bitstream level is still correct practice and is what the NVENC SDK exposes
+for exactly this purpose.
+
+Fix: `ApplyColorMetadataToNvenc(NV_ENC_CONFIG&, VideoCodec, const
+ColorMetadata&)` (pure, GPU-free, unit-tested) maps `RecorderConfig::color` —
+the same single source of truth already driving the `VideoProcessor`
+conversion and the Matroska `Colour` element — onto the codec-specific NVENC
+fields, called from `NvencEncoder::FetchPresetConfig()` after `SetColor()` is
+wired from `video_thread.cpp`. No signaling-unrelated behavior changed; no new
+UI; HDR fields (BT.2020/PQ/mastering metadata) round-trip through the same
+generic mapping without further type churn, consistent with this ADR's
+original design. (The default *range* value did change — see the next update.)
+
+**Known, separate, pre-existing gap (not part of this fix):** the AV1 track's
+Matroska `CodecPrivate` (`codec_private.cpp::DeriveAv1CodecPrivate`) has only
+ever written the 4-byte `AV1CodecConfigurationRecord` header — it does not
+embed the sequence-header OBU (`configOBUs`), unlike a spec-conformant av1C
+(verified: a real ffmpeg-muxed AV1-in-MKV file carries a 16-20 byte
+CodecPrivate, header + seq-header OBU; ours is always exactly 4 bytes). The
+sequence header (now carrying correct color info after this fix) is only ever
+present **in-band**, in whichever frame(s) NVENC repeats it in (first frame at
+minimum; `repeatSeqHdr` is left at the preset default). Tools that decode/parse
+packets (ffprobe, all real players) see the fix correctly; tools that read only
+`CodecPrivate`/extradata without decoding a frame (e.g. `ffmpeg -bsf:v
+av1_metadata` for retagging already-recorded files) do not, and may fail
+outright (`Invalid data`) because the extradata isn't a valid av1C at all, not
+because of anything color-related. Filed as a follow-up; out of scope here
+under the no-scope-creep rule (it is a general AV1 CodecPrivate conformance gap,
+independent of color truth, and requires restructuring a fixed-4-byte field to
+a variable-length one end-to-end).
+
+## Update — default Y'CbCr range flipped Full -> Limited (fix/color-range-signaling)
+
+**Decision reversed:** the 0.7.0 update above deliberately made Full (0-255)
+the default, reasoning that truthful tagging plus a driver-honoured conversion
+would let players display it correctly. A follow-up controlled comparison
+(identical AV1 pixel content, once tagged `pc`/full and once `tv`/limited)
+showed this assumption does not hold for the player the product's users
+actually use: **VLC ignores the range flag entirely and always applies
+limited->full expansion**, regardless of what the bitstream or container says.
+A Full-range recording is therefore *permanently* crushed/dark in VLC — no
+amount of correct signaling fixes it, because the flag is never read. This is
+also the documented reason the rest of the consumer screen-recording/streaming
+ecosystem (OBS included) encodes limited by default: player compatibility in
+practice outweighs the theoretical precision advantage of full range, because
+so much of the installed player base either ignores the range flag or
+defaults to assuming limited when in doubt.
+
+**New default: Limited (16-235, broadcast/studio).** Full remains fully
+supported as an explicit opt-in for pipelines/players known to honour the
+range flag (e.g. a controlled NLE workflow). This is a pure default-value
+change, not a capability change — both values were, and remain, valid for
+every codec/container combination (never gated). Changed in exactly four
+places (the operative defaults, verified by tracing the config flow rather
+than assumed):
+
+- `app/models/OutputSettingsModel.h` (`OutputSettingsModel::color_range`) — the
+  actual UI/preset-facing default; everything else derives from this.
+- `libs/capability/include/capability/user_config.h`
+  (`UserRecorderConfig::color_range`) — the default for direct engine API
+  consumers that bypass the preset/UI layer.
+- `libs/recorder_core/include/recorder_core/color_metadata.h`
+  (`ColorMetadata::range`, and thus `ColorMetadata::Sdr709()`) — technically
+  inert for the normal flow (`capability::translation.cpp`'s
+  `ToRecorderCoreConfig` always sets `core_config.color.range` explicitly from
+  `UserRecorderConfig::color_range`, never leaving the struct default in
+  place), but kept in sync for any direct `recorder_core` consumer (tests,
+  `tools/probes/probe_record`) that constructs a default `ColorMetadata`
+  without going through `capability`.
+- `libs/recorder_core/src/yuv_to_bgra.h` (`YuvToBgraParams::range`) — likewise
+  inert in production (`video_thread.cpp`'s CaptureFrame and live-preview call
+  sites always explicitly assign `.range` from the live session config before
+  converting — verified, not assumed), kept in sync for consistency.
+
+`translation.cpp`'s range ternary and `video_thread.cpp`'s VideoProcessor
+`fullRange` boolean both already read the *live config value* rather than a
+hardcoded constant, so they need no code change — flipping the upstream
+default automatically flips the `VideoProcessorSetOutputColorSpace1` studio/
+full selection and the NVENC/Matroska tagging in lockstep, exactly as this
+ADR's single-source-of-truth design intended.
+
+**Persistence — schema 20 with a targeted migration (orchestrator product
+decision after adversarial review):** `color_range` is a persisted TOML preset
+field (`RecordingPresetStore`, key `output.color_range`, introduced schema 18)
+that is **always written explicitly** on save and never re-seeded from code
+defaults on load. Left alone, every existing preset — including the built-in
+default preset — would therefore carry a materialized `"full"` from the old
+code default and the dark-recordings bug would persist for 100% of existing
+users. Aggravating factor: because of the ConfigPage hydration bug (fixed in
+this branch), the colour-range combo always displayed "Full (PC)" regardless
+of the stored value, so an *informed* Full choice could never have existed —
+a stored `"full"` under schema ≤19 is provably the old default, not a user
+decision.
+
+Therefore `kPresetSchemaVersion` 19 → 20 with a **targeted field migration**
+instead of the usual full reset: `Load()` accepts schema-19 files, rewrites
+`color_range == "full"` to `"limited"` (one-shot; persisted as schema 20 on
+the next save), and preserves everything else — user presets survive. A
+schema-20 file with an explicit `"full"` is a deliberate post-flip opt-in and
+is respected. Schemas older than 19 keep the pre-existing full-reset
+behavior. The pre-1.0 "incompatible data resets" policy was deliberately NOT
+applied here because nothing is structurally incompatible — a reset would
+destroy user presets to fix a single field whose correct value is precisely
+derivable.
+
+**Consequence:** every newly created default-profile recording going forward
+is limited-range end-to-end (VideoProcessor output, NVENC bitstream, Matroska
+Colour tag) — verified by updated unit tests. Full remains one dropdown
+selection away and is tagged with equal truthfulness (this ADR's core fix).

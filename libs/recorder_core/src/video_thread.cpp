@@ -529,6 +529,14 @@ void VideoThread::Run() {
         nvenc.SetBitDepth(m_state.config.bit_depth);
         nvenc.SetQualityPreset(m_state.config.nvenc_quality_preset);
         nvenc.SetRateControl(m_state.config.nvenc_rate_control, m_state.config.nvenc_bitrate_kbps);
+        // Color signaling (fix for color-range-signaling bug): the encoded
+        // bitstream itself must carry the same color description as the
+        // VideoProcessor conversion below and the Matroska Colour element
+        // (mux_thread.cpp), otherwise players/ffprobe that read color info from
+        // the bitstream (all of them for AV1 — verified; container tags are
+        // ignored) see an untagged/wrong-range stream regardless of correct
+        // container tagging.
+        nvenc.SetColor(m_state.config.color);
 
         std::string err;
         if (!nvenc.Open(d3dDevice.get(), err)) {
@@ -652,11 +660,16 @@ void VideoThread::Run() {
         // could encode to subtly different colors on different GPUs and the
         // container carried no color tags at all. Pin the input to full-range
         // RGB (the desktop composite) and the YUV output to BT.709 with the
-        // user-selected quantization range — Full (0-255, the native precision
-        // of screen content, the default) or Limited (studio 16-235, broadcast
-        // standard). The output range here MUST match the range the container is
-        // tagged with (see color_metadata.h / RecorderConfig::color), so the same
-        // config value drives both; otherwise there is a black-level mismatch.
+        // user-selected quantization range — Limited (studio 16-235, broadcast
+        // standard, the default as of fix/color-range-signaling — common
+        // consumer players ignore the range flag and always expand limited to
+        // full, so Full-range recordings look permanently crushed there) or
+        // Full (0-255, native screen precision, opt-in). The output range here
+        // MUST match the range the container/bitstream is tagged with (see
+        // color_metadata.h / RecorderConfig::color), so the same config value
+        // drives both; otherwise there is a black-level mismatch. `fullRange`
+        // is read from the live config, not hardcoded, so it always follows
+        // the current default/selection automatically.
         const bool fullRange = m_state.config.color.range != ColorRange::Limited;
         if (videoContext1) {
             // Preferred path: explicit DXGI colour spaces. Input is the desktop's

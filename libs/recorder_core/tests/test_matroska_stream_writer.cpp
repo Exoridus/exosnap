@@ -559,10 +559,13 @@ TEST_F(StreamWriterTest, EmptySession_FinalizesValidContainer) {
     EXPECT_EQ(CountCuePoints(d), 0);
 }
 
-// Color metadata (ADR 0032): the video track carries an SDR BT.709 full-range
-// 8-bit Colour element by default (Full is the PC/screen-content default for
-// 0.7.0), so the file is no longer color-ambiguous and no HDR sub-elements are
-// emitted.
+// Color metadata (ADR 0032; default flipped Full->Limited by
+// fix/color-range-signaling): the video track carries an SDR BT.709
+// limited-range 8-bit Colour element by default, so the file is no longer
+// color-ambiguous and no HDR sub-elements are emitted. Limited is the default
+// because common consumer players (verified: VLC) ignore the range flag
+// entirely and always expand limited->full — a Full-range recording looked
+// permanently crushed/dark there regardless of correct tagging.
 TEST_F(StreamWriterTest, WritesBt709ColourElementByDefault) {
     MatroskaStreamWriter w;
     ASSERT_TRUE(w.Open(MakeConfig(tmp_, /*h264=*/false, /*opus=*/true)));
@@ -586,10 +589,42 @@ TEST_F(StreamWriterTest, WritesBt709ColourElementByDefault) {
     EXPECT_EQ(ReadUInt(d, *primaries), 1u); // BT.709
     EXPECT_EQ(ReadUInt(d, *transfer), 1u);  // BT.709
     EXPECT_EQ(ReadUInt(d, *matrix), 1u);    // BT.709
-    EXPECT_EQ(ReadUInt(d, *range), 2u);     // full range (PC default for 0.7.0)
+    EXPECT_EQ(ReadUInt(d, *range), 1u);     // studio/limited range (the current default)
     EXPECT_EQ(ReadUInt(d, *bits), 8u);
     EXPECT_EQ(FindColourChild(colour, 0x55BCULL), nullptr) << "MaxCLL must be absent for SDR";
     EXPECT_EQ(FindColourChild(colour, 0x55BDULL), nullptr) << "MaxFALL must be absent for SDR";
+}
+
+// Color-range-signaling fix: Full range (0-255) remains available as an
+// explicit opt-in and must still round-trip correctly — Matrix/Primaries/
+// Transfer stay BT.709, only Range changes to 2 (full). This is the other
+// half of the SDR range selector's two valid states (Limited/default is
+// covered above).
+TEST_F(StreamWriterTest, WritesBt709ColourElementForFullRangeOption) {
+    auto cfg = MakeConfig(tmp_, /*h264=*/false, /*opus=*/true);
+    cfg.color.range = recorder_core::ColorRange::Full;
+
+    MatroskaStreamWriter w;
+    ASSERT_TRUE(w.Open(cfg));
+    FeedSeconds(w, 1.0, 30, 64);
+    ASSERT_TRUE(w.Finalize());
+
+    const auto d = ReadFile(tmp_);
+    const auto colour = VideoColourChildren(d);
+    ASSERT_FALSE(colour.empty()) << "video track has no Colour element";
+
+    const EbmlNode* primaries = FindColourChild(colour, 0x55BBULL);
+    const EbmlNode* transfer = FindColourChild(colour, 0x55BAULL);
+    const EbmlNode* matrix = FindColourChild(colour, 0x55B1ULL);
+    const EbmlNode* range = FindColourChild(colour, 0x55B9ULL);
+    ASSERT_NE(primaries, nullptr);
+    ASSERT_NE(transfer, nullptr);
+    ASSERT_NE(matrix, nullptr);
+    ASSERT_NE(range, nullptr);
+    EXPECT_EQ(ReadUInt(d, *primaries), 1u); // BT.709 — must not change with range
+    EXPECT_EQ(ReadUInt(d, *transfer), 1u);  // BT.709 — must not change with range
+    EXPECT_EQ(ReadUInt(d, *matrix), 1u);    // BT.709 — must not change with range
+    EXPECT_EQ(ReadUInt(d, *range), 2u);     // full range (Matroska Range=2)
 }
 
 // Non-default color values (including HDR10 light levels) round-trip into the

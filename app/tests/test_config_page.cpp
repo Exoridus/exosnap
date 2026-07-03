@@ -2090,7 +2090,10 @@ TEST_F(ConfigPageTest, S7_CodecChangeToH264_ResetsTenBitToEight) {
     EXPECT_EQ(depth->currentData().toInt(), static_cast<int>(capability::BitDepth::Bit8));
 }
 
-// Colour range (0.7.0): the combo exists with Full / Limited items and defaults to Full.
+// Colour range: the combo exists with Full / Limited items and defaults to
+// Limited (fix/color-range-signaling — common consumer players ignore the
+// range flag and always expand limited->full, so Full looked permanently
+// crushed there; Full remains available as an opt-in).
 TEST_F(ConfigPageTest, ColorRangeControl_ExistsWithFullAndLimited) {
     ConfigPage page(output_defaults_, video_defaults_);
 
@@ -2098,8 +2101,8 @@ TEST_F(ConfigPageTest, ColorRangeControl_ExistsWithFullAndLimited) {
     ASSERT_NE(range, nullptr);
     EXPECT_GE(range->findData(static_cast<int>(capability::ColorRange::Full)), 0);
     EXPECT_GE(range->findData(static_cast<int>(capability::ColorRange::Limited)), 0);
-    // Default is Full.
-    EXPECT_EQ(range->currentData().toInt(), static_cast<int>(capability::ColorRange::Full));
+    // Default is Limited.
+    EXPECT_EQ(range->currentData().toInt(), static_cast<int>(capability::ColorRange::Limited));
 }
 
 // Selecting Limited emits the colour range in the model; it is never codec-gated

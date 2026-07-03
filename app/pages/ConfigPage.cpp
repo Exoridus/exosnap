@@ -2384,6 +2384,11 @@ ConfigPage::ConfigPage(const OutputSettingsModel& initial_settings, const VideoS
     }
     applyAudioConfigurationState();
     updateFormatDisplay();
+    // Seed the colour-range combo from the model at construction. Without this
+    // the combo silently showed item 0 ("Full (PC)") regardless of the model —
+    // a latent hydration bug masked while the model default happened to BE
+    // Full; exposed when the default flipped to Limited (fix/color-range-signaling).
+    updateVideoColorRangeControl();
     updateExampleFilename();
     updateQualitySegmentSelection();
     updateFrameRateSelection();

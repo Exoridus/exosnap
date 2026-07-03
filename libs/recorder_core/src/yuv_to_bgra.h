@@ -23,9 +23,14 @@
 namespace recorder_core {
 
 // The subset of ColorMetadata that affects the YUV<->RGB matrix.
+// NOTE: both call sites (video_thread.cpp CaptureFrame + live preview tap)
+// always explicitly assign `.range` from the session's live ColorMetadata
+// before calling ConvertYuv420ToBgra, so this member default is never actually
+// relied upon in production — kept in sync with ColorMetadata's default
+// (fix/color-range-signaling) purely for hygiene/consistency.
 struct YuvToBgraParams {
     MatrixCoefficients matrix = MatrixCoefficients::Bt709;
-    ColorRange range = ColorRange::Full;
+    ColorRange range = ColorRange::Limited;
 };
 
 // Describes one planar 4:2:0 YUV frame to convert:

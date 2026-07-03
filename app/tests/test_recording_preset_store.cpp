@@ -227,17 +227,44 @@ TEST(RecordingPresetStore, VideoBitDepthPersists_DefaultEightBit) {
 }
 
 // ===========================================================================
-// Colour range persists (0.7.0, schema 18)
+// Colour range persists (introduced schema 18; default flipped Full->Limited
+// with the schema-20 migration by fix/color-range-signaling — see ADR 0032)
 // ===========================================================================
 
-// Default preset round-trips as Full range (the 0.7.0 default).
-TEST(RecordingPresetStore, ColorRangePersists_DefaultFull) {
+// Default preset round-trips as Limited range (the current default).
+TEST(RecordingPresetStore, ColorRangePersists_DefaultLimited) {
     const QString path = UniqueTempPath();
 
     RecordingPreset p;
     p.id = GeneratePresetId();
     p.name = "Default range";
-    p.config = MakeDefaultPreset().config; // Full by default
+    p.config = MakeDefaultPreset().config; // Limited by default
+
+    {
+        RecordingPresetStore store(path);
+        store.Save({p}, p.id, p.id);
+    }
+
+    {
+        RecordingPresetStore store(path);
+        const PersistedPresetState state = store.Load();
+        EXPECT_FALSE(state.was_reset);
+        ASSERT_EQ(state.presets.size(), 1u);
+        EXPECT_EQ(state.presets[0].config.output.color_range, capability::ColorRange::Limited);
+    }
+
+    CleanupFile(path);
+}
+
+// An explicit Full selection (the opt-in) survives the TOML round-trip too.
+TEST(RecordingPresetStore, ColorRangePersists_Full) {
+    const QString path = UniqueTempPath();
+
+    RecordingPreset p;
+    p.id = GeneratePresetId();
+    p.name = "Full range";
+    p.config = MakeDefaultPreset().config;
+    p.config.output.color_range = capability::ColorRange::Full;
 
     {
         RecordingPresetStore store(path);
@@ -255,28 +282,179 @@ TEST(RecordingPresetStore, ColorRangePersists_DefaultFull) {
     CleanupFile(path);
 }
 
-// An explicit Limited selection survives the TOML round-trip (and schema is 18).
-TEST(RecordingPresetStore, ColorRangePersists_Limited) {
+// ===========================================================================
+// Schema v19 -> v20 colour-range migration (fix/color-range-signaling)
+//
+// Under schema <=19 "full" was the MATERIALIZED old code default, not an
+// informed user choice (the colour-range combo had a hydration bug and always
+// displayed "Full (PC)" regardless of the stored value), so Load() rewrites
+// schema-19 color_range=="full" to "limited" instead of resetting the store.
+// A schema-20 file with explicit "full" is a deliberate post-flip opt-in and
+// is respected.
+// ===========================================================================
+
+namespace {
+
+// Minimal single-preset TOML with parametrized schema version and colour range.
+QString MakeSinglePresetToml(int schema_version, const QString& color_range) {
+    return QStringLiteral("schema_version = %1\n"
+                          "selected_id = \"preset.migrate0011\"\n"
+                          "default_id  = \"preset.migrate0011\"\n"
+                          "\n"
+                          "[[presets]]\n"
+                          "id   = \"preset.migrate0011\"\n"
+                          "name = \"User Preset\"\n"
+                          "countdown_seconds = 0\n"
+                          "[presets.capture]\n"
+                          "kind = \"display\"\n"
+                          "display_key = \"\"\n"
+                          "window_key  = \"\"\n"
+                          "has_region  = false\n"
+                          "region_x = 0\n"
+                          "region_y = 0\n"
+                          "region_w = 0\n"
+                          "region_h = 0\n"
+                          "region_display_key = \"\"\n"
+                          "[presets.output]\n"
+                          "folder = \"\"\n"
+                          "naming_pattern = \"\"\n"
+                          "container = \"mkv\"\n"
+                          "video_codec = \"av1\"\n"
+                          "color_range = \"%2\"\n"
+                          "audio_codec = \"opus\"\n"
+                          "resolution_mode = \"native\"\n"
+                          "custom_width = 0\n"
+                          "custom_height = 0\n"
+                          "fit_mode = \"contain\"\n"
+                          "split_mode = \"off\"\n"
+                          "split_custom_minutes = 30\n"
+                          "[presets.video]\n"
+                          "quality = \"balanced\"\n"
+                          "rate_control = \"cq\"\n"
+                          "bitrate_kbps = 20000\n"
+                          "cfr = true\n"
+                          "capture_cursor = true\n"
+                          "frame_rate_num = 60\n"
+                          "frame_rate_den = 1\n"
+                          "[presets.audio]\n"
+                          "target_kind = \"display\"\n"
+                          "mic_channel_mode = \"auto\"\n"
+                          "selected_mic_device_id = \"\"\n"
+                          "mic_gain_linear = 1.0\n"
+                          "has_window_pid = false\n"
+                          "window_pid = 0\n"
+                          "audio_bitrate_kbps = 160\n"
+                          "opus_frame_duration = \"20ms\"\n"
+                          "opus_complexity = 10\n"
+                          "sources = []\n"
+                          "[presets.webcam]\n"
+                          "enabled = false\n"
+                          "device_id = \"\"\n"
+                          "width = 1280\n"
+                          "height = 720\n"
+                          "fps = 30\n"
+                          "overlay_x = 0.0\n"
+                          "overlay_y = 0.0\n"
+                          "overlay_w = 0.25\n"
+                          "overlay_h = 0.25\n"
+                          "overlay_user_placed = false\n"
+                          "aspect_ratio_locked = true\n"
+                          "mirror = false\n"
+                          "[presets.webcam.chroma_key]\n"
+                          "enabled = false\n"
+                          "color_mode = \"green\"\n"
+                          "custom_r = 0\n"
+                          "custom_g = 255\n"
+                          "custom_b = 0\n"
+                          "tolerance = 0.4\n"
+                          "softness = 0.15\n"
+                          "spill = 0.3\n")
+        .arg(schema_version)
+        .arg(color_range);
+}
+
+} // namespace
+
+// A schema-19 file with the materialized old default ("full") loads WITHOUT a
+// reset (user presets preserved) and the colour range is migrated to Limited.
+TEST(RecordingPresetStore, MigrationV19_MaterializedFullBecomesLimited) {
     const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(19, QStringLiteral("full"))));
 
-    RecordingPreset p;
-    p.id = GeneratePresetId();
-    p.name = "Limited range";
-    p.config = MakeDefaultPreset().config;
-    p.config.output.color_range = capability::ColorRange::Limited;
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+    EXPECT_FALSE(state.was_reset) << "schema-19 files must migrate, not reset";
+    ASSERT_EQ(state.presets.size(), 1u);
+    EXPECT_EQ(state.presets[0].id, "preset.migrate0011");
+    EXPECT_EQ(state.presets[0].name, "User Preset");
+    EXPECT_EQ(state.presets[0].config.output.color_range, capability::ColorRange::Limited)
+        << "materialized old-default \"full\" must be rewritten to Limited";
 
-    {
-        RecordingPresetStore store(path);
-        store.Save({p}, p.id, p.id);
-    }
+    CleanupFile(path);
+}
 
-    {
-        RecordingPresetStore store(path);
-        const PersistedPresetState state = store.Load();
-        EXPECT_FALSE(state.was_reset);
-        ASSERT_EQ(state.presets.size(), 1u);
-        EXPECT_EQ(state.presets[0].config.output.color_range, capability::ColorRange::Limited);
-    }
+// A schema-19 file with "limited" stays Limited (nothing to migrate).
+TEST(RecordingPresetStore, MigrationV19_LimitedStaysLimited) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(19, QStringLiteral("limited"))));
+
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+    EXPECT_FALSE(state.was_reset);
+    ASSERT_EQ(state.presets.size(), 1u);
+    EXPECT_EQ(state.presets[0].config.output.color_range, capability::ColorRange::Limited);
+
+    CleanupFile(path);
+}
+
+// A schema-20 (current) file with explicit "full" is a deliberate post-flip
+// opt-in and must be respected — the migration only applies to schema 19.
+TEST(RecordingPresetStore, MigrationV20_ExplicitFullRespected) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(kPresetSchemaVersion, QStringLiteral("full"))));
+
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+    EXPECT_FALSE(state.was_reset);
+    ASSERT_EQ(state.presets.size(), 1u);
+    EXPECT_EQ(state.presets[0].config.output.color_range, capability::ColorRange::Full)
+        << "explicit Full under the current schema is a deliberate opt-in and must survive";
+
+    CleanupFile(path);
+}
+
+// Idempotence: migrated state saved back (as schema 20) and reloaded stays
+// Limited — the migration is one-shot and a second load changes nothing.
+TEST(RecordingPresetStore, MigrationV19_IdempotentAfterSaveReload) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(19, QStringLiteral("full"))));
+
+    RecordingPresetStore store(path);
+    const PersistedPresetState migrated = store.Load();
+    ASSERT_EQ(migrated.presets.size(), 1u);
+    ASSERT_EQ(migrated.presets[0].config.output.color_range, capability::ColorRange::Limited);
+
+    // Persist the migrated state (writes the current schema version).
+    store.Save(migrated.presets, migrated.selected_id, migrated.default_id);
+
+    const PersistedPresetState reloaded = store.Load();
+    EXPECT_FALSE(reloaded.was_reset);
+    ASSERT_EQ(reloaded.presets.size(), 1u);
+    EXPECT_EQ(reloaded.presets[0].id, "preset.migrate0011");
+    EXPECT_EQ(reloaded.presets[0].config.output.color_range, capability::ColorRange::Limited);
+
+    CleanupFile(path);
+}
+
+// Schema versions older than 19 still take the full-reset path (the targeted
+// migration deliberately covers only 19 -> 20).
+TEST(RecordingPresetStore, MigrationV18_StillResets) {
+    const QString path = UniqueTempPath();
+    ASSERT_TRUE(WriteTomlString(path, MakeSinglePresetToml(18, QStringLiteral("full"))));
+
+    RecordingPresetStore store(path);
+    const PersistedPresetState state = store.Load();
+    EXPECT_TRUE(state.was_reset);
 
     CleanupFile(path);
 }
@@ -1062,10 +1240,13 @@ TEST(RecordingPresetStore, MalformedToml_Load_ReturnsReset_NoCrash) {
 TEST(RecordingPresetStore, OldSchemaVersion_Load_ReturnsReset) {
     const QString path = UniqueTempPath();
 
+    // kPresetSchemaVersion - 2 (= 18): genuinely below the migration floor.
+    // (kPresetSchemaVersion - 1 = 19 no longer resets — it takes the targeted
+    // colour-range migration path instead; covered by the Migration* tests.)
     const QString toml = QStringLiteral("schema_version = %1\n"
                                         "selected_id = \"preset.default\"\n"
                                         "default_id  = \"preset.default\"\n")
-                             .arg(kPresetSchemaVersion - 1);
+                             .arg(kPresetSchemaVersion - 2);
 
     ASSERT_TRUE(WriteTomlString(path, toml));
 

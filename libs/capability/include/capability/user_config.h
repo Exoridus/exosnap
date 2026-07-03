@@ -14,8 +14,15 @@ struct UserRecorderConfig {
     AudioCodec audio_codec = AudioCodec::Opus;
     ChromaSubsampling chroma = ChromaSubsampling::Cs420;
     BitDepth bit_depth = BitDepth::Bit8;
-    // Y'CbCr quantization range (0.7.0). Full (0-255) by default — never gated.
-    ColorRange color_range = ColorRange::Full;
+    // Y'CbCr quantization range. Limited (16-235, broadcast) is the default as of
+    // fix/color-range-signaling: a controlled A/B comparison showed common
+    // consumer players (VLC) ignore the bitstream/container range flag entirely
+    // and always apply limited->full expansion, so a Full-range recording is
+    // permanently crushed/dark there regardless of correct tagging — the same
+    // reason OBS and the rest of the consumer-video ecosystem encode limited by
+    // default. Full (0-255, native screen precision) remains available as an
+    // opt-in for pipelines that are known to honour the range flag. Never gated.
+    ColorRange color_range = ColorRange::Limited;
     uint32_t output_width = 0;
     uint32_t output_height = 0;
     uint32_t frame_rate_num = 60;

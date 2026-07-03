@@ -490,9 +490,10 @@ static std::string BuildTestMkvWithColor(const std::string& path, const ColorMet
 // ---------------------------------------------------------------------------
 // Test 6: MP4 color tags — the remuxer faithfully carries the source MKV's
 //         configured Y'CbCr range end-to-end (it is config-agnostic). A
-//         full-range tagged MKV (the 0.7.0 default) yields color_range=pc
-//         (AVCOL_RANGE_JPEG) in the MP4; a limited-range MKV yields
-//         color_range=tv (AVCOL_RANGE_MPEG). Primaries/transfer/matrix stay 709.
+//         full-range tagged MKV (the opt-in) yields color_range=pc
+//         (AVCOL_RANGE_JPEG) in the MP4; a limited-range MKV (the default,
+//         fix/color-range-signaling) yields color_range=tv (AVCOL_RANGE_MPEG).
+//         Primaries/transfer/matrix stay 709.
 // ---------------------------------------------------------------------------
 TEST_F(RemuxerTest, Mp4ColorTagsFromTaggedMkv) {
     struct Case {
@@ -501,8 +502,8 @@ TEST_F(RemuxerTest, Mp4ColorTagsFromTaggedMkv) {
         const char* label;
     };
     const Case cases[] = {
-        {ColorRange::Full, AVCOL_RANGE_JPEG, "full"},       // 0.7.0 default — pc
-        {ColorRange::Limited, AVCOL_RANGE_MPEG, "limited"}, // tv
+        {ColorRange::Full, AVCOL_RANGE_JPEG, "full"},       // opt-in — pc
+        {ColorRange::Limited, AVCOL_RANGE_MPEG, "limited"}, // default — tv
     };
 
     for (const auto& c : cases) {

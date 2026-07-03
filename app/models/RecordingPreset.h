@@ -15,8 +15,21 @@ namespace exosnap {
 
 // ---------------------------------------------------------------------------
 // Schema version — bump when the persisted format changes incompatibly.
+//
+// v20 (fix/color-range-signaling): default colour range flipped Full ->
+// Limited. Schema-19 files are NOT reset — they load through a targeted
+// field migration: color_range=="full" is rewritten to "limited", because
+// under schema <=19 "full" was the materialized old code default, never an
+// informed user choice (the ConfigPage combo had a hydration bug and always
+// displayed "Full (PC)" regardless of the model, so a deliberate Full
+// selection could not exist). A schema-20 file with explicit "full" is a
+// deliberate post-flip opt-in and is respected. See ADR 0032.
 // ---------------------------------------------------------------------------
-inline constexpr int kPresetSchemaVersion = 19;
+inline constexpr int kPresetSchemaVersion = 20;
+
+// Highest schema version that loads via targeted migration instead of a full
+// reset (see RecordingPresetStore::Load). Files older than this still reset.
+inline constexpr int kPresetSchemaMigratableFrom = 19;
 
 // Default PiP inset (bottom-right corner), as a fraction of the frame edge.
 inline constexpr float kDefaultPipInsetNorm = 0.03f;

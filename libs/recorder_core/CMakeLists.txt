@@ -475,6 +475,17 @@ exosnap_add_gtest(
 target_include_directories(test_nvenc_rc_params PRIVATE src
     "${CMAKE_SOURCE_DIR}/third_party/nvidia")
 
+# test_nvenc_color_config: pure unit tests for ApplyColorMetadataToNvenc
+# (fix for color-range-signaling bug — no GPU needed).
+exosnap_add_gtest(
+    NAME test_nvenc_color_config
+    TEST_PREFIX recorder_core.
+    SOURCES tests/test_nvenc_color_config.cpp
+    LIBRARIES recorder_core
+)
+target_include_directories(test_nvenc_color_config PRIVATE src
+    "${CMAKE_SOURCE_DIR}/third_party/nvidia")
+
 exosnap_add_gtest(
     NAME test_mic_channel_mapping
     TEST_PREFIX recorder_core.

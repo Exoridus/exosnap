@@ -16,6 +16,7 @@
 #include "nvEncodeAPI.h"
 
 #include <recorder_core/codec_types.h>
+#include <recorder_core/color_metadata.h>
 
 namespace recorder_core {
 
@@ -23,6 +24,21 @@ struct EncodedVideoPacket;
 
 // NVENC error helpers
 const char* NvencStatusName(NVENCSTATUS st) noexcept;
+
+// ---------------------------------------------------------------------------
+// ApplyColorMetadataToNvenc — pure, testable mapping from ColorMetadata to the
+// NVENC bitstream-level color signaling fields (fix for color-range-signaling
+// bug: without this the AV1/H.264/HEVC bitstream itself carries no color
+// description, and — critically for AV1 — ffmpeg/most decoders derive
+// color_range/matrix/primaries/transfer from the BITSTREAM, not the Matroska
+// container Colour element, so an untagged bitstream shows up as
+// color_range=tv (studio) + unknown matrix/primaries/transfer even though the
+// container is tagged correctly. H.264/HEVC VUI use ITU-T Annex E flag/value
+// semantics (videoFullRangeFlag: 0=limited/1=full); AV1's NV_ENC_CONFIG_AV1
+// colorRange uses the same 0=studio/1=full convention. No GPU/NVENC session
+// required — operates on a plain NV_ENC_CONFIG value.
+// ---------------------------------------------------------------------------
+void ApplyColorMetadataToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, const ColorMetadata& color) noexcept;
 
 // ---------------------------------------------------------------------------
 // RcParams — pure value type for NVENC rate-control parameters.
@@ -93,6 +109,16 @@ class NvencEncoder {
     void SetRateControl(RateControlMode mode, uint32_t bitrate_kbps) noexcept {
         m_rateControlMode = mode;
         m_bitrate_kbps = bitrate_kbps;
+    }
+
+    // Set the color description that must be signaled in the encoded bitstream
+    // (VUI for H.264/HEVC, NV_ENC_CONFIG_AV1 color fields for AV1). Must be
+    // called before FetchPresetConfig(). Defaults to ColorMetadata::Sdr709().
+    // This is the SAME ColorMetadata driving the VideoProcessor conversion
+    // (video_thread.cpp) and the Matroska Colour element (matroska_stream_writer.cpp)
+    // so all three writer paths agree — see color_metadata.h.
+    void SetColor(const ColorMetadata& color) noexcept {
+        m_color = color;
     }
 
     // Set keyframe interval in seconds. Must be called before InitEncoder().
@@ -182,6 +208,7 @@ class NvencEncoder {
     NvencQualityPreset m_qualityPreset = NvencQualityPreset::Balanced;
     RateControlMode m_rateControlMode = RateControlMode::ConstantQuality;
     uint32_t m_bitrate_kbps = 20000;
+    ColorMetadata m_color = ColorMetadata::Sdr709();
     float m_keyframeIntervalSecs = 2.0f; // default 2 s — matches pre-0.9.0 hardcoded value
 
     // P6 for H.264 (synchronous), P4 for AV1 (P6 AV1 has internal pipeline depth

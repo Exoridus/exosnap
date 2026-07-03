@@ -1015,9 +1015,12 @@ PersistedPresetState RecordingPresetStore::Load() const {
     }
     const toml::table& doc = *maybe_doc;
 
-    // Version check.
+    // Version check. Schema 19 loads via a targeted field migration (see
+    // below) instead of a full reset — user presets are preserved. Anything
+    // else that is not the current version still resets.
     const int64_t schema_version = TomlInt(doc["schema_version"], -1);
-    if (schema_version != kPresetSchemaVersion) {
+    const bool migrate_v19_color_range = (schema_version == kPresetSchemaMigratableFrom);
+    if (schema_version != kPresetSchemaVersion && !migrate_v19_color_range) {
         return MakeResetState();
     }
 
@@ -1045,7 +1048,19 @@ PersistedPresetState RecordingPresetStore::Load() const {
             continue; // Duplicate id — drop later occurrence.
         }
         seen_ids.insert(raw.id);
-        accepted.push_back(SanitizePreset(raw));
+        RecordingPreset sanitized = SanitizePreset(raw);
+        // v19 -> v20 migration (fix/color-range-signaling): under schema <=19
+        // "full" was the materialized old code default — never an informed
+        // user choice (the colour-range combo had a hydration bug and always
+        // displayed "Full (PC)" regardless of the stored value). Rewrite it to
+        // the new Limited default; an explicit "limited" (the only value a
+        // user could have deliberately produced a difference with) is kept.
+        // One-shot: the store is written back as schema 20 on the next Save,
+        // after which an explicit "full" is a respected opt-in.
+        if (migrate_v19_color_range && sanitized.config.output.color_range == capability::ColorRange::Full) {
+            sanitized.config.output.color_range = capability::ColorRange::Limited;
+        }
+        accepted.push_back(std::move(sanitized));
     }
 
     // No valid items → reset.

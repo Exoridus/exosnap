@@ -31,6 +31,13 @@ class NvencVideoEncoder : public IVideoEncoder {
         m_nvenc.SetRateControl(mode, bitrate_kbps);
     }
 
+    // Set the color description to signal in the encoded bitstream (VUI for
+    // H.264/HEVC, AV1 color_config for AV1) before Configure(). See
+    // NvencEncoder::SetColor.
+    void SetColor(const ColorMetadata& color) noexcept {
+        m_nvenc.SetColor(color);
+    }
+
     // Set keyframe interval in seconds before Configure().
     // Controls gopLength and idrPeriod: gopLength = round(secs * fps).
     // Default 2.0 s — matches the pre-0.9.0 hardcoded value.

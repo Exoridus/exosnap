@@ -243,10 +243,12 @@ TEST(RecordingPreset, NormalizedEquals_BitDepthDifference_NotEqual) {
     EXPECT_FALSE(ConfigDirtyEquivalent(a, b));
 }
 
-// The default preset uses Full colour range (0.7.0 default), and Full is preserved
-// through sanitize regardless of codec (colour range is never capability-gated).
-TEST(RecordingPreset, Sanitize_ColorRange_DefaultIsFull_AndPreservedForAllCodecs) {
-    EXPECT_EQ(MakeDefaultPreset().config.output.color_range, capability::ColorRange::Full);
+// The default preset uses Limited colour range (fix/color-range-signaling: common
+// consumer players ignore the range flag and always expand limited->full, so Full
+// looked permanently crushed there), and either range is preserved through
+// sanitize regardless of codec (colour range is never capability-gated).
+TEST(RecordingPreset, Sanitize_ColorRange_DefaultIsLimited_AndPreservedForAllCodecs) {
+    EXPECT_EQ(MakeDefaultPreset().config.output.color_range, capability::ColorRange::Limited);
 
     for (const auto codec :
          {capability::VideoCodec::H264Nvenc, capability::VideoCodec::HevcNvenc, capability::VideoCodec::Av1Nvenc}) {

@@ -49,21 +49,25 @@ enum class MatrixCoefficients : uint8_t {
 // 0 = unspecified, 1 = broadcast/studio (16-235), 2 = full (0-255).
 enum class ColorRange : uint8_t {
     Unspecified = 0,
-    Limited = 1, // studio range (16-235) — broadcast standard; safest for editors
-    Full = 2,    // full range (0-255) — native screen precision; the SDR default
+    Limited = 1, // studio range (16-235) — broadcast standard; the SDR default
+                 // (fix/color-range-signaling: player-compatibility, see ADR 0032)
+    Full = 2,    // full range (0-255) — native screen precision; opt-in
 };
 
 // Complete color description attached to the video track. The defaults describe
-// SDR Rec.709 full-range 8-bit. Full range (0-255) is the native precision of
-// PC/screen content — the desktop composite is full-range RGB, so converting to
-// full-range YUV avoids the quantization loss of the 16-235 studio mapping. The
-// range is user-selectable (Full is the default; Limited is available for players
-// and editors that assume broadcast range and ignore the range flag).
+// SDR Rec.709 limited-range 8-bit. Limited (16-235, broadcast/studio) is the
+// default (fix/color-range-signaling): a controlled comparison showed common
+// consumer players (VLC) ignore the range flag entirely and always apply
+// limited->full expansion, so a Full-range recording is permanently
+// crushed/dark there regardless of correct tagging — the same reason OBS and
+// the rest of the consumer-video ecosystem encode limited by default. The
+// range is user-selectable; Full (0-255, native screen precision) remains
+// available as an opt-in for pipelines known to honour the range flag.
 struct ColorMetadata {
     ColorPrimaries primaries = ColorPrimaries::Bt709;
     TransferCharacteristics transfer = TransferCharacteristics::Bt709;
     MatrixCoefficients matrix = MatrixCoefficients::Bt709;
-    ColorRange range = ColorRange::Full;
+    ColorRange range = ColorRange::Limited;
     uint32_t bits_per_channel = 8;
 
     // True once any HDR field below is meaningful. SDR recordings leave this
@@ -73,8 +77,8 @@ struct ColorMetadata {
     uint32_t max_content_light_level = 0;       // MaxCLL, cd/m^2
     uint32_t max_frame_average_light_level = 0; // MaxFALL, cd/m^2
 
-    // SDR Rec.709, full-range 8-bit (the default). Callers that want studio range
-    // override range to ColorRange::Limited after constructing this.
+    // SDR Rec.709, limited-range 8-bit (the default). Callers that want full
+    // range override range to ColorRange::Full after constructing this.
     [[nodiscard]] static ColorMetadata Sdr709() noexcept {
         return ColorMetadata{};
     }

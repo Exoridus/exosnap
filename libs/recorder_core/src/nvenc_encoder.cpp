@@ -126,6 +126,58 @@ std::string BuildInitDiagString(const NV_ENC_INITIALIZE_PARAMS& p, const NV_ENC_
 } // namespace
 
 // ---------------------------------------------------------------------------
+// ApplyColorMetadataToNvenc
+// ---------------------------------------------------------------------------
+//
+// Root cause of the color-range-signaling bug (measured on a real AV1+Opus+MKV
+// recording): NVENC's H.264/HEVC VUI and AV1 color_config fields were never
+// populated, so the bitstream itself carried no color description. This is
+// benign for H.264/HEVC in Matroska (ffmpeg's demuxer falls back to the
+// container Colour element when the bitstream is untagged — verified
+// empirically), but AV1 is NOT: ffmpeg's AV1 parser derives color_range /
+// color_space / color_transfer / color_primaries EXCLUSIVELY from the AV1
+// sequence header's color_config, ignoring the container tag entirely even
+// when it is present and correct. An untagged AV1 bitstream reproduces the
+// exact measured symptom: color_range=tv (studio) and matrix/primaries/transfer
+// = unknown, regardless of what the Matroska Colour element says. Populating
+// these fields from the same ColorMetadata that drives the VideoProcessor
+// conversion and the container tags closes the gap for all three codecs.
+void ApplyColorMetadataToNvenc(NV_ENC_CONFIG& cfg, VideoCodec codec, const ColorMetadata& color) noexcept {
+    // Matches the fullRange rule already used for the VideoProcessor output
+    // color space in video_thread.cpp: only ColorRange::Limited is treated as
+    // studio range; Unspecified defaults to full (never produced by
+    // translation.cpp today, but kept consistent defensively).
+    const bool fullRange = (color.range != ColorRange::Limited);
+    const auto primaries = static_cast<NV_ENC_VUI_COLOR_PRIMARIES>(color.primaries);
+    const auto transfer = static_cast<NV_ENC_VUI_TRANSFER_CHARACTERISTIC>(color.transfer);
+    const auto matrix = static_cast<NV_ENC_VUI_MATRIX_COEFFS>(color.matrix);
+
+    if (codec == VideoCodec::Av1Nvenc) {
+        auto& av1 = cfg.encodeCodecConfig.av1Config;
+        av1.colorPrimaries = primaries;
+        av1.transferCharacteristics = transfer;
+        av1.matrixCoefficients = matrix;
+        // AV1 colorRange convention: 0 = studio swing, 1 = full swing.
+        av1.colorRange = fullRange ? 1u : 0u;
+        return;
+    }
+
+    // H.264 and HEVC share the identical VUI parameters layout
+    // (NV_ENC_CONFIG_HEVC_VUI_PARAMETERS is a typedef of the H.264 struct).
+    NV_ENC_CONFIG_H264_VUI_PARAMETERS& vui = (codec == VideoCodec::HevcNvenc)
+                                                 ? cfg.encodeCodecConfig.hevcConfig.hevcVUIParameters
+                                                 : cfg.encodeCodecConfig.h264Config.h264VUIParameters;
+    vui.videoSignalTypePresentFlag = 1;
+    vui.videoFormat = NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED;
+    // ITU-T Annex E videoFullRangeFlag convention: 0 = limited, 1 = full.
+    vui.videoFullRangeFlag = fullRange ? 1u : 0u;
+    vui.colourDescriptionPresentFlag = 1;
+    vui.colourPrimaries = primaries;
+    vui.transferCharacteristics = transfer;
+    vui.colourMatrix = matrix;
+}
+
+// ---------------------------------------------------------------------------
 // NvencStatusName
 // ---------------------------------------------------------------------------
 
@@ -550,6 +602,12 @@ bool NvencEncoder::FetchPresetConfig(std::string& out_error) {
         if (tenBit)
             m_encodeConfig.profileGUID = NV_ENC_AV1_PROFILE_MAIN_GUID;
     }
+
+    // Color signaling (fix for color-range-signaling bug): populate the
+    // codec-specific bitstream color fields from the same ColorMetadata that
+    // drives the VideoProcessor conversion and the Matroska Colour element, so
+    // the bitstream is never color-ambiguous. See ApplyColorMetadataToNvenc.
+    ApplyColorMetadataToNvenc(m_encodeConfig, m_codec, m_color);
 
     // Apply canonical rate-control via the pure, testable ComputeNvencRcParams helper.
     // NVENC SDK field names: rcParams.rateControlMode / constQP / averageBitRate / maxBitRate.

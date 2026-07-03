@@ -82,10 +82,15 @@ struct OutputSettingsModel {
     // valid for HEVC / AV1 (gated by capability::QueryCombo and reconciled in
     // SanitizePresetConfig — forced back to Bit8 for H.264 / unsupported combos).
     capability::BitDepth bit_depth = capability::BitDepth::Bit8;
-    // Y'CbCr quantization range (0.7.0). Full (0-255, native screen precision) by
-    // default; Limited (16-235, broadcast) is the safe choice for editors/players
-    // that ignore the range flag. Always valid for every codec/container — never gated.
-    capability::ColorRange color_range = capability::ColorRange::Full;
+    // Y'CbCr quantization range. Limited (16-235, broadcast) is the default as of
+    // fix/color-range-signaling: common consumer players (verified: VLC) ignore
+    // the range flag entirely and always apply limited->full expansion, so a
+    // Full-range recording looks permanently crushed/dark there regardless of
+    // correct tagging — the same reason OBS and the rest of the consumer-video
+    // ecosystem encode limited by default. Full (0-255, native screen precision)
+    // remains available as an opt-in for pipelines known to honour the range
+    // flag. Always valid for every codec/container — never gated.
+    capability::ColorRange color_range = capability::ColorRange::Limited;
     OutputResolutionSettings resolution;
     SplitRecordingSettings split;
 
