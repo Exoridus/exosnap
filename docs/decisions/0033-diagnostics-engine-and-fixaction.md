@@ -278,6 +278,12 @@ default view and an **Expert** toggle that reveals depth rather than a second mo
   handler now routes through the unit-tested `MergeFormatSelection()`
   (`app/models/OutputSettingsModel.{h,cpp}`), which carries both fields. Behavior change: a 10-bit
   combo selection now actually records 10-bit (P010) instead of being silently ignored until a
-  preset round-trip. Known P2 (pre-existing, out of scope here): the same handler never carried
-  `split` either — Settings split edits reach the live mirror only via preset apply/startup;
-  `MergeFormatSelection` documents this, and a follow-up should decide whether split joins the merge.
+  preset round-trip. **RESOLVED (settings-honesty pass, 2026-07-03):** the former Known-P2 note
+  above — that the same handler never carried `split` either — is fixed. `MergeFormatSelection`
+  now merges `.split` too, so a live edit of the Output Split card (mode / custom minutes / size
+  mode / custom MB) reaches `output_settings_` immediately instead of only via preset-apply or
+  startup. Consumption is unchanged: split is still read once, at recording start
+  (`RecordingCoordinator::SetOutputSettings`), so "a split change applies from the next recording"
+  remains the correct, intentional semantics — only the live-mirror gap is closed. Red-proof test:
+  `SplitSizeSettingsTest.MergeFormatSelection_CarriesSplitSettings`
+  (`app/tests/test_output_settings.cpp`).

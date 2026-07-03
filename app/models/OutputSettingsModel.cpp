@@ -217,6 +217,7 @@ void MergeFormatSelection(OutputSettingsModel& live, const OutputSettingsModel& 
     live.output_folder = incoming.output_folder;
     live.naming_pattern = incoming.naming_pattern;
     live.resolution = incoming.resolution;
+    live.split = incoming.split;
 }
 
 } // namespace exosnap

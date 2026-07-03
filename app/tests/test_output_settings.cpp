@@ -1000,6 +1000,42 @@ TEST(SplitSizeSettingsTest, SizeSplitOffPropagatesZeroViaCoordinator) {
     EXPECT_EQ(split.size_bytes, 0ull);
 }
 
+// SETTINGS-HONESTY-R1 (red-proof): MainWindow's formatSettingsChanged handler routes
+// every live ConfigPage format-editor field through MergeFormatSelection() into the
+// output_settings_ MainWindow holds (see OutputSettingsModel.h/.cpp). A live edit of
+// the Settings > Output Split card (mode / custom minutes / size mode / custom MB)
+// reaches ConfigPage::format_settings_ and is emitted via formatSettingsChanged, but
+// MergeFormatSelection did not carry `.split` — so the live edit never reached
+// output_settings_ (only preset-apply/startup loaded it), and a recording started
+// right after a split edit silently used the OLD split configuration. Without the
+// `.split` line in MergeFormatSelection, this test fails: `live.split` stays at its
+// pre-merge Off/default values instead of picking up `incoming.split`.
+TEST(SplitSizeSettingsTest, MergeFormatSelection_CarriesSplitSettings) {
+    OutputSettingsModel live = OutputSettingsModel::Defaults();
+    live.split.mode = SplitRecordingMode::Off;
+    live.split.size_mode = SplitSizeMode::Off;
+
+    OutputSettingsModel incoming = live;
+    incoming.split.mode = SplitRecordingMode::Custom;
+    incoming.split.custom_minutes = 42;
+    incoming.split.size_mode = SplitSizeMode::Custom;
+    incoming.split.custom_size_mb = 777;
+
+    MergeFormatSelection(live, incoming);
+
+    EXPECT_EQ(live.split.mode, SplitRecordingMode::Custom)
+        << "MergeFormatSelection must carry a live split-mode edit into output_settings_";
+    EXPECT_EQ(live.split.custom_minutes, 42u);
+    EXPECT_EQ(live.split.size_mode, SplitSizeMode::Custom);
+    EXPECT_EQ(live.split.custom_size_mb, 777u);
+
+    // Same downstream path the app takes at recording start (RecordingCoordinator::Start).
+    RecordingCoordinator coordinator;
+    coordinator.SetOutputSettings(live);
+    const auto split = coordinator.SplitSettings();
+    EXPECT_EQ(split.size_bytes, 777ull * 1024ull * 1024ull);
+}
+
 // ── EXOSNAP_OUTPUT_DIR override (DF-HISTORY) ─────────────────────────────────
 //
 // When EXOSNAP_OUTPUT_DIR is set to a non-empty path, EffectiveOutputFolder()
